@@ -468,7 +468,8 @@ if [ "$(uname)" = Darwin ]; then
   send key down
   send key escape
   page_says ' field - ' "escape in the composition didn't cancel it"
-  sed -n "$((n + 1)),\$p" "$log" | grep -q "before the page: \(zap or \)\?arrange\$\|^browser: arrange $tab Selected\|^browser: tab $tab arrange off\$" &&
+  sed -n "$((n + 1)),\$p" "$log" | grep -q -e "before the page: \(zap or \)\?arrange\$" \
+    -e "^browser: arrange $tab Selected" -e "^browser: tab $tab arrange off\$" &&
     fail "Arrange took a key from the composition: $(sed -n "$((n + 1)),\$p" "$log" | grep 'arrange' | tail -4)"
   send type nihongo
   send key space
@@ -485,10 +486,10 @@ fi
 exec 3>&-
 quit
 
-# Safari's engine, on the Mac from macOS 14, shows a page the core's Arrange can't reach: the card
-# offers no Arrange there, and ↑, ↓, ⌘Z and escape are the page's with the page focused, and the
-# UI's with the UI focused, as with the mode off. The checks' streaming host (main.rs) opens the
-# page there from its first load.
+# Safari's engine, on the Mac from macOS 14, shows a page the core's Boosts and Arrange can't reach:
+# the command bar offers no Boost of the site there, though it has one from above (#2955), and ↑, ↓,
+# ⌘Z and escape are the page's with the page focused, and the UI's with the UI focused, as with the
+# mode off. The checks' streaming host (main.rs) opens the page there from its first load.
 safari=
 if [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   forget_engine_sites
@@ -504,13 +505,16 @@ if [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 1
     fail "the fixture page didn't draw with the streaming host"
   grep -q ' engine chromium at -$' "$log" && fail "the streaming host's page opened in Chromium, not Safari's engine"
   tab=$(grep '^browser: title [0-9]* scheme ' "$log" | tail -1 | cut -d' ' -f3)
-  bar_command edit-boost "Edit Boost" "edit boost"
-  expect "^browser: boost card $tab offers no Arrange in Safari's engine\$" \
-    "the Boost's card offered Arrange over Safari's engine's page"
-  expect "^browser: boost card $tab at " "Edit Boost drew no card over Safari's engine's page"
-  ../tools/window-screenshot.sh "$pid" "$out/mini-bar-safari-card.png" || fail "no window to capture"
-  # The page keeps the keyboard as the card opens, and escape there is the page's with neither Zap
-  # nor Arrange on, so the card stays open through the keys below, as it would over Chromium's.
+  send key l cmd
+  expect '^browser: command bar shown$' "⌘L didn't open the command bar"
+  send type boost
+  expect '^browser: command bar commands "boost": ' "the command bar found nothing for boost"
+  offers=$(grep '^browser: command bar commands "boost": ' "$log" | tail -1)
+  echo "$offers" | grep -q 'New Boost\|Edit Boost' &&
+    fail "the command bar offered a Boost over Safari's engine's page: $offers"
+  send key escape
+  expect '^browser: command bar hidden$' "escape didn't close the command bar"
+  grep -q "^browser: boost card $tab opened\$" "$log" && fail "a Boost's card opened over Safari's engine's page"
   send click $page_point
   page_says ' at [0-9-]*,[0-9-]*$' "the click didn't reach Safari's engine's page"
   send state
@@ -549,6 +553,5 @@ echo "ok: in the mode the bar sat over things at the page's top, bottom and righ
   "resize, and stayed with ilo's window, $stacked, where the UI put it."
 [ -z "$composing" ] || echo "ok: Japanese input in a field on the page kept ↓ and escape while it" \
   "composed with Arrange on, and the mode had escape again once it committed."
-[ -z "$safari" ] || echo "ok: over Safari's engine's page the Boost's card offered no Arrange, and" \
-  "↑, ↓, ⌘Z and escape went to the page with it focused and to the UI with the UI. Windows:" \
-  "$out/mini-bar-safari-card.png"
+[ -z "$safari" ] || echo "ok: over Safari's engine's page the command bar offered no Boost of the" \
+  "site, and ↑, ↓, ⌘Z and escape went to the page with it focused and to the UI with the UI."

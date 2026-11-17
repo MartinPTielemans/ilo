@@ -14,6 +14,9 @@
   app/check/openbox.xml. On X11 the driver presses keys through the X server as a hand does, so
   Openbox, under Xvfb, would take that key before the app (#2721). Only openbox.xml is read: a
   key that KWin or sway takes isn't caught here, and a step that loses one there is a finding.
+- No pattern in a run has a "$" just before "\\|". BSD grep, the Mac's, reads that "$" as a
+  dollar sign, not the line's end, so that half of the choice never matches there while GNU's
+  matches it on Linux (#2676). A choice keeps its anchors outside it, as "^\\(A\\|B\\)$".
 
 Run from anywhere in the checkout. Prints each finding and exits 1 if there are any.
 """
@@ -295,9 +298,25 @@ def openbox_takes():
     return found
 
 
+# --- Anchors in a choice ---------------------------------------------------------------------
+
+
+def dollar_before_choice():
+    found = []
+    for path in tracked(*RUNS):
+        for n, (line, code) in enumerate(run_lines(path)):
+            # A here document's lines are another language's, and a comment's are prose.
+            if code.strip() and re.search(r"\$\\\|", line):
+                found.append((path, n + 1, "a \"$\" before \"\\|\": the Mac's grep, BSD's, reads it "
+                              "as a dollar sign, so that half never matches there though GNU's "
+                              "does on Linux. Keep the anchors outside the choice, as "
+                              "\"^\\(A\\|B\\)$\""))
+    return found
+
+
 def main():
     found = (unread_markers() + bare_sleeps() + quiet_after_send() + run_places() +
-             openbox_takes())
+             openbox_takes() + dollar_before_choice())
     for path, line, message in found:
         print(f"::error file={path},line={line}::{message}")
     print(f"{len(found)} found")

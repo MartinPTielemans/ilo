@@ -194,6 +194,8 @@ struct Session {
     drag: Option<Bounds<Pixels>>,
     /// What the user chose, which the menu shows at.
     chosen: Option<Bounds<Pixels>>,
+    /// The menu's row under the pointer, lit with the Space's accent.
+    lit: Option<Action>,
     /// The picture asked for of what's chosen, and what to do with it once it comes.
     pending: Option<(u64, Action)>,
     /// Whether the menu offers Save to Library: not in a private window.
@@ -445,6 +447,7 @@ fn start_now(
             press,
             drag: None,
             chosen: None,
+            lit: None,
             pending: None,
             library,
             look,
@@ -965,10 +968,32 @@ impl Capture {
             return cx.notify();
         };
         session.chosen = Some(chosen);
+        session.lit = None;
         self.host.camera(false);
         // check.sh reads this line.
         log!("browser: capture chose {}", describe(chosen));
         cx.notify();
+    }
+
+    /// Lights the menu's row for `action` as the pointer comes onto it, and puts it out as the
+    /// pointer leaves it for none.
+    fn light(&mut self, action: Action, hovered: bool, cx: &mut Context<Self>) {
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        let lit = match hovered {
+            true => Some(action),
+            false => session.lit.filter(|lit| *lit != action),
+        };
+        if lit != session.lit {
+            session.lit = lit;
+            // check.sh reads this line.
+            log!(
+                "browser: capture menu lit {}",
+                lit.map_or("nothing", Action::name)
+            );
+            cx.notify();
+        }
     }
 
     fn run(&mut self, action: Action, cx: &mut Context<Self>) {
@@ -985,12 +1010,14 @@ impl Capture {
         log!("browser: capture run {}", action.name());
         if action == Action::Retake {
             session.chosen = None;
+            session.lit = None;
             session.hover = None;
             session.marks.clear();
             self.host.camera(true);
             return cx.notify();
         }
         if action == Action::Edit {
+            session.lit = None;
             session.editing = Some(Editing {
                 tool: Tool::Pen,
                 colour: MARK_COLOURS[0],
@@ -1147,16 +1174,18 @@ impl Capture {
         &self,
         origin: Point<Pixels>,
         rows: Vec<Option<Action>>,
+        lit: Option<Action>,
         look: Look,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let palette = look.palette();
         let highlight = look.highlight;
-        // A row of ilo's menu: the Space's accent under the pointer, with the label solved on it.
-        let row = |id: &'static str| {
+        // A row of ilo's menu: the Space's accent under the pointer, with its title and glyph in
+        // the label solved on it, as menu.rs lights a row. Lit from state, not a hover style,
+        // since a hover's text colour never reaches the title (#3137).
+        let row = |action: Action| {
             div()
-                .id(id)
-                .group(id)
+                .id(action.name())
                 .h(px(ROW))
                 .mx(px(PADDING))
                 .px(px(ROW_X))
@@ -1164,8 +1193,13 @@ impl Capture {
                 .items_center()
                 .gap(px(GAP))
                 .rounded(px(ROW_RADIUS))
-                .hover(|style| style.bg(highlight.fill).text_color(highlight.label))
+                .when(lit == Some(action), |row| {
+                    row.bg(highlight.fill).text_color(highlight.label)
+                })
                 .active(|style| style.bg(highlight.pressed))
+                .on_hover(cx.listener(move |capture, hovered: &bool, _, cx| {
+                    capture.light(action, *hovered, cx)
+                }))
         };
         let line = || {
             div()
@@ -1184,15 +1218,17 @@ impl Capture {
         };
         let rows: Vec<_> = (rows.into_iter())
             .map(|row_| match row_ {
-                Some(action) => row(action.name())
+                Some(action) => row(action)
                     .on_click(cx.listener(move |capture, _, _, cx| capture.run(action, cx)))
                     .child(
                         svg()
                             .path(action.glyph())
                             .size(px(GLYPH))
                             .flex_none()
-                            .text_color(rgba(palette.secondary))
-                            .group_hover(action.name(), |style| style.text_color(highlight.label)),
+                            .text_color(match lit == Some(action) {
+                                true => highlight.label,
+                                false => rgba(palette.secondary),
+                            }),
                     )
                     .child(action.label())
                     .into_any_element(),
@@ -1201,8 +1237,10 @@ impl Capture {
             .collect();
         // Arc's field, as a row tinted the menu's line colour. Its words are the label's, as the
         // secondary colour falls under 4.5:1 on the tint in the dark look.
-        let field = row(Action::SendTo.name())
-            .bg(rgba(palette.line))
+        let field = row(Action::SendTo)
+            .when(lit != Some(Action::SendTo), |field| {
+                field.bg(rgba(palette.line))
+            })
             .on_click(cx.listener(|capture, _, _, cx| capture.run(Action::SendTo, cx)))
             .child(Action::SendTo.label());
         div()
@@ -1366,7 +1404,7 @@ impl Capture {
             .filter(|_| session.editing.is_none())
             .map(|chosen| {
                 let origin = session.menu_origin(chosen);
-                self.menu(origin, session.rows().collect(), look, cx)
+                self.menu(origin, session.rows().collect(), session.lit, look, cx)
             });
         let bar = session
             .chosen

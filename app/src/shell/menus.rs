@@ -490,8 +490,9 @@ impl Shell {
     ) {
         let look = self.menu_look();
         self.menu_open = true;
-        // The name row says so after this if the menu is its own.
+        // The name row and the menu control say so after this if the menu is their own.
         self.name_menu = false;
+        self.app_menu = false;
         let shell = cx.weak_entity();
         self.browser.context_menu(
             entries,
@@ -502,6 +503,7 @@ impl Shell {
                 shell
                     .update(cx, |shell, cx| {
                         shell.menu_open = false;
+                        shell.app_menu = false;
                         chosen(index, shell, cx);
                         shell.settle_recent_downloads(cx);
                     })
@@ -1774,6 +1776,41 @@ impl Shell {
             }),
             cx,
         );
+    }
+
+    /// The menu control's menu, off the Mac (#3148): what the Mac's menu bar holds under ilo's
+    /// name, Settings… first, with the menu bar's titles and keys. It opens above the control,
+    /// its left edge on the plate's, so the control and the + stay in sight; over the page if it
+    /// reaches there, as it's a window of its own.
+    pub(super) fn app_menu(&mut self, cx: &mut Context<Self>) {
+        let Some(frame) = (self.button_frames.borrow())
+            .get(super::footer::MENU_CONTROL)
+            .copied()
+        else {
+            return;
+        };
+        let keys = user_keys(cx);
+        let command = |title, command| {
+            let entry = MenuEntry::new(title, true).shortcut(command, keys);
+            let action: MenuAction = Box::new(move |shell, cx| shell.run(command, "footer", cx));
+            (entry, action)
+        };
+        let line = || -> (MenuEntry, MenuAction) { (MenuEntry::line(), Box::new(|_, _| {})) };
+        let items = vec![
+            command("Settings…", Command::Settings),
+            command("Import from Other Browsers…", Command::Import),
+            command("Privacy Policy", Command::PrivacyPolicy),
+            line(),
+            command(concat!("About ", env!("APP_NAME")), Command::About),
+            line(),
+            command(concat!("Quit ", env!("APP_NAME")), Command::Quit),
+        ];
+        let entries: Vec<MenuEntry> = items.iter().map(|(entry, _)| entry.clone()).collect();
+        let foot = frame.top() - gpui::px(crate::menu::FROM_CONTROL);
+        let at = gpui::point(frame.left(), foot - gpui::px(crate::menu::height(&entries)));
+        self.show_menu(items, at, None, cx);
+        self.app_menu = self.menu_open;
+        cx.notify();
     }
 }
 

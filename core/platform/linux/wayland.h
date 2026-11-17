@@ -102,10 +102,6 @@ void AnswerClipboardRequests();
 // window_views.cc.
 void FloatPictureInPictureBubbles();
 
-// Where DevTools docked in a page of |widget|'s window show, the first pane's with them, and the
-// page beside them, from its content's top-left (bc_window_devtools). In window_views.cc.
-std::optional<std::pair<gfx::Rect, gfx::Rect>> DevToolsFrames(views::Widget* widget);
-
 }  // namespace browser_core::platform
 
 #endif  // BROWSER_CORE_PLATFORM_LINUX_WAYLAND_H_

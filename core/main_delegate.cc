@@ -34,6 +34,7 @@
 #include "browser_core/device_chooser.h"
 #include "browser_core/crash_reports.h"
 #include "browser_core/downloads.h"
+#include "browser_core/board.h"
 #include "browser_core/boosts.h"
 #include "browser_core/developer_mode.h"
 #include "browser_core/drm_request.h"
@@ -84,6 +85,7 @@
 #include "chrome/common/profiler/main_thread_stack_sampling_profiler.h"
 #include "components/keep_alive_registry/keep_alive_types.h"
 #include "components/keep_alive_registry/scoped_keep_alive.h"
+#include "components/performance_manager/public/features.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/overlay_window.h"
 #include "content/public/browser/video_picture_in_picture_window_controller.h"
@@ -261,6 +263,7 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
     Arrange::RegisterProfilePrefs();
     RegisterAdBlockPrefs();
     RegisterWebRtc();
+    RegisterBoards();
     widevine::Start();
   }
 
@@ -680,7 +683,7 @@ std::optional<int> MainDelegate::BasicStartupComplete() {
     command_line->AppendSwitch(switches::kNoFirstRun);
     command_line->AppendSwitch(switches::kNoDefaultBrowserCheck);
     // A pinned tab the user closes unloads in place, keeping its tab and the id the app knows it by.
-    // Chrome's own discards, under memory pressure, then keep theirs too.
+    // A discard of Chrome's own then keeps theirs too.
     std::string features = command_line->GetSwitchValueASCII(switches::kEnableFeatures);
     features += features.empty() ? "" : ",";
     // And a page asks to share the screen only from a click or a key, as the spec and the other two
@@ -699,11 +702,15 @@ std::optional<int> MainDelegate::BasicStartupComplete() {
     std::string disabled = command_line->GetSwitchValueASCII(switches::kDisableFeatures);
     disabled += disabled.empty() ? "" : ",";
     // And a new extension isn't pinned, as on 156, unless the browser imported from pinned it (the
-    // app's import/extensions.rs): Chromium 157 pins each one as it's installed.
+    // app's import/extensions.rs): Chromium 157 pins each one as it's installed. And Chrome's urgent
+    // discarding, on the Mac and Windows, doesn't let a page go when memory is short by Chrome's
+    // checks alone, which keep neither a call that only listens, an agent's tab nor a page that asks
+    // before it's left: the core's own listener picks by its checks (idle_unload.cc).
     command_line->AppendSwitchASCII(
         switches::kDisableFeatures,
         disabled + features::kClearSessionStorageDiskStateOnStartup.name + "," +
-            features::kExtensionsPinnedByDefault.name);
+            features::kExtensionsPinnedByDefault.name + "," +
+            performance_manager::features::kUrgentPageDiscarding.name);
     // Blink's eye in a password field, Chrome's on Windows: it shows only once the user types into
     // the empty field, and goes, masking it again, as the field loses focus or is filled in or set
     // by the page, so a saved password is never shown. The core blurs a tab's page each time the

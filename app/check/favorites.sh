@@ -25,7 +25,7 @@
 # at most from a list saved before there was a most, and with 12 a row dragged over the tiles stays
 # a row and a pinned tab's menu dims Add to Favorites.
 
-# Favorites, from the served page with example.org above it.
+# Favorites, from the served page with two.html above it.
 serve
 log="$out/favorites.log"
 step=0
@@ -53,7 +53,7 @@ tile="114 114"
 tiled_row() {
   echo "100 $(($(row "$1" | cut -d' ' -f2) + 55))"
 }
-open_from_bar example.org
+open_from_bar "http://localhost:$port/two.html"
 b=$tab
 expect_tabs "$b $a" "$b" "after opening a tab"
 # A Today tab's menu is Arc's, which has no Add to Favorites, and the bottom row's dims Archive Tabs
@@ -162,7 +162,7 @@ expect "^browser: selected $b\( in .*\)\{0,1\}\$" \
 switch "1 cmd" "$a"
 # Away from its URL, a double-click on the tile goes back there.
 tab=$a
-go_from_bar example.com
+go_from_bar "http://localhost:$port/one.html"
 expect "^browser: page $a away 1\$" "the favorite at another page didn't read as away from its URL"
 send doubleclick $tile
 expect '^browser: command back-to-pinned-url via favorite$' \

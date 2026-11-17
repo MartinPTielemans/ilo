@@ -4,7 +4,11 @@
 # them, blocks the host's pages, and the tab shows a warning in the page's place, which never
 # reached the server. Its Open anyway, pressed from the keyboard, opens the page, and the host's
 # pages for a while after. A pop-up filter closes the tab a page's link opens, before its page
-# reaches the server, as uBlock Origin does. A private window blocks a script a filter names, as
+# reaches the server, as uBlock Origin does, and the app never lists it: a page's pop-up waits for
+# the filters' answer about its address, not for its page (#2806), and the core logs how long after
+# the click it was listed and how long it waited. window.open() with no address and a middle click
+# are listed at once, and the tab window.open() opens with no address is blocked once it's sent on
+# to such a page (#2839). A private window blocks a script a filter names, as
 # its profile's requests go through the same engine (#2111's private windows gate). A filter on a
 # response's header (#2758) fails a script whose response has it before the page runs any of it,
 # and a redirect's response too, whose target is never asked for. My filters uBlock Origin kept, as
@@ -21,16 +25,37 @@ if ! engine_has ../core/native_ad_block.cc ../core/ad_block.cc; then
 fi
 serve
 printf '%s' '<title>the blocked page</title>' > "$out/site/blocked.html"
-# A page that's all a link to a pop-up, which a click anywhere on it opens in a new tab. Its title
-# says when it has drawn, as Blink drops a press before a page's first frame, and when it has the
-# press.
+# A page that's all a link to a pop-up but for a strip down its left edge, so a click anywhere but
+# there opens it in a new tab. Its title says when it has drawn, as Blink drops a press before a
+# page's first frame, when it has the press, when it loses the keyboard and each key it gets.
 printf '%s' '<title>the opener</title>
-<a id=link href="popup.html" target="_blank" style="position:fixed;inset:0">a pop-up</a>
+<a id=link href="popup.html" target="_blank" style="position:fixed;inset:0 0 0 100px">a pop-up</a>
 <script>
 link.onmousedown = () => document.title = "the opener pressed";
+onblur = () => document.title = "the opener blurred";
+onkeydown = event => document.title = "the opener has " + event.key;
 requestAnimationFrame(() => requestAnimationFrame(() => document.title = "the opener ready"));
 </script>' > "$out/site/opener.html"
 printf '%s' '<title>the pop-up</title>' > "$out/site/popup.html"
+# Pages whose click opens a tab the filters let through: a link's, to /held, whose page comes only
+# once the run lets it, and window.open()'s. And window.open() with no address, sent on to the
+# pop-up after. Each says in its title when it has drawn and when it has the press, as the opener.
+said() {
+  printf '<script>
+onmousedown = () => document.title = "%s pressed";
+requestAnimationFrame(() => requestAnimationFrame(() => document.title = "%s ready"));
+</script>' "$1" "$1"
+}
+printf '%s' '<title>the held opener</title>
+<a href="held" target="_blank" style="position:fixed;inset:0">a pop-up let through</a>' \
+  > "$out/site/opener-held.html"
+said "the held opener" >> "$out/site/opener-held.html"
+printf '%s' '<title>the script opener</title>
+<script>onclick = () => open("held")</script>' > "$out/site/opener-open.html"
+said "the script opener" >> "$out/site/opener-open.html"
+printf '%s' '<title>the blank opener</title>
+<script>onclick = () => { open("").location = "popup.html" }</script>' > "$out/site/opener-blank.html"
+said "the blank opener" >> "$out/site/opener-blank.html"
 # Three scripts: a's response has the filter's header, b's another value, and c is where a
 # redirect with the header goes. Its title names those that ran.
 printf '%s' '<title>headers</title>
@@ -124,6 +149,7 @@ expect "^browser: title $tab the opener ready\$" "the opener page didn't draw"
 # activation the page sends it on the press, on another pipe (#2510). So the release waits for the
 # page to have the press, as a hand's comes some 100 ms after it.
 send press $page_point
+pressed=$step
 expect "^browser: title $tab the opener pressed\$" "the opener page didn't take the press on its link"
 send release $page_point
 expect "^browser: ad block closed a pop-up at ${site}popup.html\$" \
@@ -138,6 +164,112 @@ for _ in $(seq 30); do
 done
 [ "$(today)" = "$tab" ] || fail "the pop-up's tab stayed: Today is \"$(today)\""
 grep -q '/popup\.html' "$out/site.log" && fail "the pop-up's page reached the server"
+# The page that opened it keeps the keyboard throughout, through the hold too, which at some 5 ms
+# is too short to type into: no other view took it, or the page would have blurred, and a key
+# after the tab closed reaches it. On Windows content's focus of the held pop-up can still move the
+# keyboard from the opener to the browser window itself as the pop-up opens, before the filters
+# answer: the opener blurs, and the key after reaches no page. Both are known under #2806, and only
+# once the opener blurred.
+blurred=
+if since "$pressed" | grep -q "^browser: title $tab the opener blurred\$"; then
+  windows ||
+    fail "the page that opened the pop-up the filter closed lost the keyboard: $(since "$pressed" | grep -e '^browser: drive' -e "^browser: title $tab " | tr '\n' ' ')"
+  blurred=1
+  echo "skip: the opener keeping the keyboard while the filter closes its pop-up, known under" \
+    "#2806: on Windows the keyboard went from the opener to the browser window as the pop-up" \
+    "opened: $(since "$pressed" | grep '^browser: drive: focuses ' | tr '\n' ' ')"
+fi
+send key x
+if [ -n "$blurred" ]; then
+  await "^browser: title $tab the opener has x\$" ||
+    echo "skip: a key after the filter closed the pop-up reaching the opener, known under #2806:" \
+      "on Windows the opener blurred and never got the keyboard back, which is in $key, on $focus"
+  # A press on the page, in its strip off the link, as a user would make to go on, gives it the
+  # keyboard back, so the hold below runs on Windows too.
+  send press 280 400
+  send release 280 400
+  send key y
+  expect "^browser: title $tab the opener has y\$" \
+    "a press on the opener, off its link, didn't give it the keyboard back after the filter closed its pop-up: the keyboard is in $key, on $focus"
+else
+  expect "^browser: title $tab the opener has x\$" \
+    "a key after the pop-up filter closed the link's tab didn't reach the page that opened it: the keyboard is in $key, on $focus"
+fi
+# Opens a pop-up from tab $1's page, titled $2, once it has drawn, with a press it has had and its
+# release, as the opener above.
+open_from() {
+  expect "^browser: title $1 $2 ready\$" "the $2 page didn't draw"
+  send press $page_point
+  expect "^browser: title $1 $2 pressed\$" "the $2 page didn't take the press"
+  send release $page_point
+}
+# The pop-up hold, on an engine with it (#2806).
+held_said=". This engine is from before the pop-up hold"
+if engine_has ../core/popup_hold.cc ../core/native_ad_block.cc; then
+  # The filters answer before the app hears of the tab, which it never lists or shows.
+  held=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep '^browser: \(today\|selected\) ' |
+    grep -v "^browser: \(today\|selected\) $tab\$" || true)
+  [ -z "$held" ] || fail "the app listed or showed the pop-up's tab before it closed: $held"
+
+  # A pop-up they let through is listed at their answer, before its page comes: /held answers only
+  # once held.go is there.
+  rm -f "$out/site/held.go"
+  go_from_bar "${site#http://}opener-held.html"
+  open_from "$tab" "the held opener"
+  expect "^browser: tab [0-9]* opened by $tab in the foreground\$" \
+    "the tab the link opened wasn't listed while its page hadn't come: the hold waits for more than the filters' answer"
+  link_tab=$(sed -n "/^browser: drive $step: /,\$s/^browser: tab \([0-9]*\) opened by $tab in the foreground\$/\1/p" "$log" | head -1)
+  # The site logs a request as it comes, and its answer's line only once it's sent.
+  grep -q '"GET /held HTTP' "$out/site.log" && fail "/held answered before the run let it"
+  link_cost=$(sed -n "s/^browser: tab $link_tab listed +\([0-9.]*\) ms after the press in tab $tab\$/\1/p" "$log")
+  link_held=$(sed -n "s/^browser: pop-up $link_tab held \([0-9.]*\) ms\$/\1/p" "$log")
+  [ -n "$link_cost" ] && [ -n "$link_held" ] ||
+    fail "the core didn't say how long the link's tab took and how long it was held: $(grep "^browser: \(tab\|pop-up\) $link_tab " "$log" | head -4 | tr '\n' ' ')"
+  touch "$out/site/held.go"
+  expect "^browser: title $link_tab held\$" "the link's pop-up the filters let through didn't load"
+  # Its page has the keyboard: the hold kept content from focusing it (#2806), so the app's focus,
+  # as it shows the tab, is the one it takes.
+  send key x
+  expect "^browser: title $link_tab held has x\$" \
+    "a key after the link's pop-up the filters let through loaded didn't reach its page: the keyboard is in $key, on $focus"
+
+  # window.open() to an address they let through, timed the same way. Its page comes at once now.
+  go_from_bar "${site#http://}opener-open.html"
+  open_from "$link_tab" "the script opener"
+  expect "^browser: tab [0-9]* opened by $link_tab in the foreground\$" "window.open()'s tab wasn't listed"
+  open_tab=$(sed -n "/^browser: drive $step: /,\$s/^browser: tab \([0-9]*\) opened by $link_tab in the foreground\$/\1/p" "$log" | head -1)
+  open_cost=$(sed -n "s/^browser: tab $open_tab listed +\([0-9.]*\) ms after the press in tab $link_tab\$/\1/p" "$log")
+  open_held=$(sed -n "s/^browser: pop-up $open_tab held \([0-9.]*\) ms\$/\1/p" "$log")
+  [ -n "$open_cost" ] && [ -n "$open_held" ] ||
+    fail "the core didn't say how long window.open()'s tab took and how long it was held: $(grep "^browser: \(tab\|pop-up\) $open_tab " "$log" | head -4 | tr '\n' ' ')"
+  expect "^browser: title $open_tab held\$" "window.open()'s pop-up the filters let through didn't load"
+
+  # window.open() with no address is listed at once, not held, and closes once sent to a page a
+  # pop-up filter names, as the filters judge the first page it's sent to (#2839).
+  go_from_bar "${site#http://}opener-blank.html"
+  open_from "$open_tab" "the blank opener"
+  expect "^browser: tab [0-9]* opened by $open_tab in the foreground\$" \
+    "window.open() with no address wasn't listed at once"
+  blank_tab=$(sed -n "/^browser: drive $step: /,\$s/^browser: tab \([0-9]*\) opened by $open_tab in the foreground\$/\1/p" "$log" | head -1)
+  sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q "^browser: pop-up $blank_tab held " &&
+    fail "window.open() with no address was held"
+  expect "^browser: tab $blank_tab closed\$" \
+    "window.open()'s tab didn't close once sent to the page a pop-up filter names"
+
+  # A middle click on the link the filter names opens the user's tab, behind and listed at once.
+  # The tab in front once window.open()'s closed is the app's to choose, so the log says which, and
+  # the steps after go on in it.
+  go_from_bar "${site#http://}opener.html"
+  expect "^browser: title [0-9]* the opener ready\$" "the opener page didn't draw again"
+  tab=$(sed -n "/^browser: drive $step: /,\$s/^browser: title \([0-9]*\) the opener ready\$/\1/p" "$log" | head -1)
+  send middleclick $page_point
+  expect "^browser: tab [0-9]* opened by $tab in the background\$" \
+    "the tab a middle click opened wasn't listed at once"
+  held_said=", and the app never listed it. A link's pop-up the filters let through was listed \
+$link_cost ms after the click, held $link_held ms, before its page came; window.open()'s \
+$open_cost ms, held $open_held ms. window.open() with no address and a middle click were listed at \
+once"
+fi
 
 # The header filter: only b runs. a reached the server, as its header comes only with its answer.
 go_from_bar "${site#http://}headers.html"
@@ -149,6 +281,26 @@ whose x-ad is 1 goes"
 served '/headed?x-ad=1&n=a' "a's request never reached the server"
 grep -q '/headed?n=c' "$out/site.log" &&
   fail "the redirect whose response has the header went on to c"
+# A pop-up window.open() opens with no address commits about:blank at once, and the filters still
+# judge the first page it's sent to (#2839): sent on to the page a pop-up filter names, its tab
+# closes before that page reaches the server. The press first, as the opener's above.
+printf '%s' '<title>the empty opener</title>
+<script>
+onclick = () => { open("").location = "popup.html?empty" };
+onmousedown = () => document.title = "the empty opener pressed";
+requestAnimationFrame(() => requestAnimationFrame(() => document.title = "the empty opener ready"));
+</script>' > "$out/site/opener-empty.html"
+go_from_bar "${site#http://}opener-empty.html"
+expect "^browser: title $tab the empty opener ready\$" "the empty opener page didn't draw"
+send press $page_point
+expect "^browser: title $tab the empty opener pressed\$" "the empty opener page didn't take the press"
+send release $page_point
+expect "^browser: \(ad block closed a pop-up at ${site}popup.html?empty\|loaded [0-9]* ${site}popup.html?empty\)\$" \
+  "the tab window.open() opened with no address, sent on to the page a pop-up filter names, neither closed nor loaded it"
+grep -q "^browser: loaded [0-9]* ${site}popup.html?empty\$" "$log" &&
+  fail "the tab window.open() opened with no address loaded the page a pop-up filter names, sent on to it after its about:blank"
+expect '^browser: tab [0-9]* closed$' "the empty pop-up's tab didn't close"
+grep -q '/popup\.html?empty' "$out/site.log" && fail "the empty pop-up's page reached the server"
 # A private window's profile blocks too: its requests go through the same engine, with the same
 # filters, though it has a profile of its own.
 send key n cmd shift
@@ -218,7 +370,9 @@ if filters != "/carried-ad.js":
 
 echo "ok: a host a list names on a line of its own never reached the server: the tab showed the" \
   "warning, whose Open anyway, from the keyboard, opened the page. A pop-up filter closed the tab" \
-  "a link opened before its page reached the server. A header filter failed a script and a" \
+  "a link opened before its page reached the server$held_said. A pop-up filter also" \
+  "closed the tab window.open() opened with no address, once sent on to the page it names. A" \
+  "header filter failed a script and a" \
   "redirect by their responses' header. In a private window, a script a filter names never" \
   "reached the server. A filter uBlock Origin kept in its own storage blocked with the browser's" \
   "own engine on that profile's next launch, given no filters, and stayed as its My filters, with" \
