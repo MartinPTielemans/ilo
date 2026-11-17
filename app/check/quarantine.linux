@@ -4,7 +4,7 @@
 # As on Windows, only the memory rows at 10 and 20 tabs fail perf's gate (check/perf.sh), and they
 # come out once ilo is within 10 % of Chrome's on Linux, uBlock Origin's process gone with #2111.
 perf #2138 2026-11-11 ilo took more than 10 % over Chrome on this runner: memory,
-keys@wayland #3154 2026-11-16 a composition typed right after ⌘L didn't go to the command bar
 profiles@wayland #3159 2026-11-16 the driver can't do "type nihongo"
 adblock@wayland #3159 2026-11-17 the driver can't do "insert
 links@wayland #3159 2026-11-17 the driver can't do "insert
+peek-motion@wayland #2640 2026-11-17 a frame shows Peek's resting frame outside its card, or the window's page undimmed inside it

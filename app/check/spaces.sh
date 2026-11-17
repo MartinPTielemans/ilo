@@ -543,9 +543,13 @@ library_to "swipe $swipe_point -12 0 10" swipe hidden
 fi
 library_to "wheel $swipe_point 1" wheel shown
 # Its Spaces section is as wide as its two cards, 216 + 264 a Space as Arc's, unless that would
-# leave the page less than 56, as Arc 1.171's. The section's button is the third of six, with
-# Agents (#1080) and Boosts (#695) last, 100 apart and centred 5 above the window's middle, 56 in.
-send click 56 $((${content#*x} / 2 - 55))
+# leave the page less than 56, as Arc 1.171's. The section's button is clicked at its middle,
+# where the column's line says it drew it, so a section added to the column doesn't move the click.
+read -r bx by bw bh << EOF
+$(grep '^browser: library button spaces at ' "$log" | tail -1 | cut -d' ' -f6-)
+EOF
+[ -n "$bh" ] || fail "the Library's column said nothing of where it drew the Spaces button"
+send click $((bx + bw / 2)) $((by + bh / 2))
 expect '^browser: library section spaces$' "a click on Spaces didn't show the Library's Spaces"
 spaces_wide=$((216 + 264 * 2))
 [ $spaces_wide -gt $((${content%x*} - 56)) ] && spaces_wide=$((${content%x*} - 56))

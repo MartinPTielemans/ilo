@@ -92,6 +92,11 @@ void OverlayTakesKeyboard(views::Widget* widget, bool takes);
 // caret at |caret|, in DIPs from the window's top left, or none is (bc_window_ui_text_input).
 void SetUITextInput(views::Widget* widget, std::optional<gfx::Rect> caret);
 
+// Under Wayland, the input method composes for the field of the app's that the keys typed in
+// |widget|'s page are held for (held_keys), from |hold| until the hold ends, |claimed| by the field
+// or not (UITextInput::HoldForPage). On X11 the hold has the keys the input method gets.
+void HoldPageComposition(views::Widget* widget, bool hold, bool claimed);
+
 // A window of the app's own on |surface|, a toplevel on Chromium's connection such as Settings,
 // composes through the core's input method for its windows, its focused field's caret at |caret|,
 // in DIPs from the surface's top left, or none is focused (bc_app_window_text_input). What it

@@ -16,7 +16,8 @@
 # added in My filters hides an element, and its Remove shows it again. A private window blocks
 # too. The app ships the version ublock.ini pins, trusting no site, YouTube neither,
 # and launched again on the same profile, it blocks there too, from each launch's first page, which
-# the core holds until uBlock Origin is ready. The browser's own engine, which blocks in its place
+# the core holds until uBlock Origin is ready. Turned off in Chrome's extensions page, it blocks
+# again at the next launch, as Settings says (#3063). The browser's own engine, which blocks in its place
 # with --ad-block-engine=native (#2111), never loads, nor keeps anything in the profile.
 # Where the browser's own is the default, Settings' Block with uBlock Origin goes back to the
 # extension at the next launch and forward again, and the browser's own leaves its storage as it was.
@@ -410,6 +411,48 @@ for n in 2 3 4; do
     fail "no window to capture"
   [ "$n" = 4 ] || quit
 done
+# Settings › Ad blocking decides at each launch, whatever Chrome saved uBlock Origin off for
+# (#3063): the user's switch in Chrome's extensions page, or a reload a quit cut short. A load
+# keeps the reasons, and launch's own look at the setting can come before the load, so the core
+# looks again at each one. Turned off there with Ad blocking on, it blocks again at the next launch.
+# An engine without this tree's core turns it on only when launch's look comes after the load.
+if engine_has ../core/ad_block.cc; then
+  before=$(today)
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+  send type "chrome://extensions/?id=$ublock"
+  send key return
+  expect "^browser: loaded [0-9]* chrome://extensions/?id=$ublock\$" \
+    "Chrome's extensions page didn't open on uBlock Origin"
+  # The page focuses the back arrow as it shows. Next is the reload button an extension loaded
+  # from a folder has, then the switch.
+  send key tab
+  send key tab
+  send key space
+  send key w cmd
+  expect "^browser: today $before\$" "⌘W didn't close Chrome's extensions page"
+  send click $page_point
+  reload_until "ad script loaded, element shown" \
+    "turned off in Chrome's extensions page, uBlock Origin still blocked the ad"
+  quit
+  log="$out/adblock-launch-5.log"
+  step=0
+  BROWSER_DRIVE=1 BROWSER_URL="$ads?5" BROWSER_PROFILE_DIR="$profile_dir" \
+    "$browser" --ad-block-filters="$filters" --ad-block-lists="$lists" < "$out/drive" > "$log" 2>&1 &
+  pid=$!
+  exec 3> "$out/drive"
+  await "^browser: loaded [0-9]* $ads?5\$" ||
+    fail "launched after uBlock Origin was turned off in Chrome's extensions page, the app didn't load the ad page"
+  tab=$(sed -n "s|^browser: loaded \([0-9]*\) $ads?5\$|\1|p" "$log" | head -1)
+  await "^browser: title $tab ad script " ||
+    fail "launched after uBlock Origin was turned off in Chrome's extensions page, the ad page didn't report"
+  send click $page_point
+  reload_until "$blocked" \
+    "launched again after uBlock Origin was turned off in Chrome's extensions page, with Ad blocking on in Settings, it stayed off"
+  relaunched=" Turned off in Chrome's extensions page, it blocked again at the next launch, as Settings says."
+else
+  relaunched=" The engine's ad blocking core isn't this tree's, so the run didn't turn uBlock Origin off in Chrome's extensions page and launch again."
+fi
 quit
 # uBlock Origin blocks unless --ad-block-engine=native, and then the browser's own engine never
 # loads, compiles or downloads a list, nor keeps anything in the profile.
@@ -502,4 +545,4 @@ for engine in native ublock; do
 done
 [ -d "$store" ] || fail "uBlock Origin's storage went with the way back"
 
-echo "ok: a new profile blocks ads from its first page, with uBlock Origin in no extension list: My filters given through its managed settings block the page's ad script and hide its ad; its own lists take fbclid out of an address. The Site Controls' shield, the action row's last tile, says it blocked $blocked_count on the page, and turns it off for the site and on again, reloading the page and counting it afresh, and Settings › Ad Blocking lists the site while it's off, with a Turn On that lets it block there again; its switch turns it off everywhere, taking it out of the Site Controls, and on again. A rule added in My filters hides an element, and its Remove shows it again; uBlock filters – Annoyances, switched on from Settings' search, is fetched and blocks its script. A private window blocks too, and uBlock Origin ships at ublock.ini's $pinned_version without the timers that woke an idle browser, trusting no site, YouTube neither. The browser's own engine never loaded. Launched again three times, the existing profile blocks from each first page. With the browser's own as the default, Block with uBlock Origin goes back to the extension, which blocks after the restart the row offers, its storage as the browser's own left it, and turned off goes forward again. The first launch blocked within $first_block s. Windows: $out/adblock-blocked.png, $out/adblock-off-for-site.png, $out/adblock-off-sites.png, $out/adblock-settings.png, $out/adblock-my-filters.png, $out/adblock-list-on.png, $out/adblock-private.png, $out/adblock-existing.png, $out/adblock-way-back-before-light.png, $out/adblock-way-back-before-dark.png, $out/adblock-way-back-chosen-light.png, $out/adblock-way-back-chosen-dark.png, $out/adblock-way-back-ublock-chosen.png"
+echo "ok: a new profile blocks ads from its first page, with uBlock Origin in no extension list: My filters given through its managed settings block the page's ad script and hide its ad; its own lists take fbclid out of an address. The Site Controls' shield, the action row's last tile, says it blocked $blocked_count on the page, and turns it off for the site and on again, reloading the page and counting it afresh, and Settings › Ad Blocking lists the site while it's off, with a Turn On that lets it block there again; its switch turns it off everywhere, taking it out of the Site Controls, and on again. A rule added in My filters hides an element, and its Remove shows it again; uBlock filters – Annoyances, switched on from Settings' search, is fetched and blocks its script. A private window blocks too, and uBlock Origin ships at ublock.ini's $pinned_version without the timers that woke an idle browser, trusting no site, YouTube neither. The browser's own engine never loaded. Launched again three times, the existing profile blocks from each first page.$relaunched With the browser's own as the default, Block with uBlock Origin goes back to the extension, which blocks after the restart the row offers, its storage as the browser's own left it, and turned off goes forward again. The first launch blocked within $first_block s. Windows: $out/adblock-blocked.png, $out/adblock-off-for-site.png, $out/adblock-off-sites.png, $out/adblock-settings.png, $out/adblock-my-filters.png, $out/adblock-list-on.png, $out/adblock-private.png, $out/adblock-existing.png, $out/adblock-way-back-before-light.png, $out/adblock-way-back-before-dark.png, $out/adblock-way-back-chosen-light.png, $out/adblock-way-back-chosen-dark.png, $out/adblock-way-back-ublock-chosen.png"
