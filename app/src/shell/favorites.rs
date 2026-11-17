@@ -415,15 +415,23 @@ impl Shell {
         let Row::Tab(tab) = row else {
             return;
         };
-        // A closed folder with tabs has its preview, which names it, in place of the tooltip.
-        if !self.is_folder(tab) || !self.previewed(tab).is_empty() {
+        // A closed folder with tabs has its preview, which names it, in place of the tooltip, but
+        // a Live Folder's says how old its rows are.
+        let live = self.live_source(tab).is_some();
+        if !self.is_folder(tab) || (!live && !self.previewed(tab).is_empty()) {
             return;
         }
         let (name, title) = (self.folder_name(tab), FOLDER_TITLE_X);
+        let age = self.live_age(tab);
         let busy = self.dragging().is_some() || self.menu_row.is_some();
         let frame = self.tip_frames.borrow().get(&tab).copied();
         let tip = (hovered && !busy)
-            .then(|| tooltip::text_for(&name).map(Tip::named))
+            .then(|| {
+                tooltip::text_for(&name).map(|name| match age {
+                    Some(age) => Tip::detailed(name, age.into()),
+                    None => Tip::named(name),
+                })
+            })
             .flatten()
             .zip(frame)
             .map(|(text, frame)| (text, Anchor::titled(frame, title, self.viewport)));

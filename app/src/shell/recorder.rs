@@ -13,6 +13,7 @@ use gpui::{App, Bounds, Pixels, Point, RenderImage, SharedString, Size, WeakEnti
 
 use crate::theme::Appearance;
 
+use super::live_folders::LiveSource;
 use super::{
     Answer, BarSpace, BarTab, Browser, DownloadAction, MediaAction, MenuBar, MenuEntry, PageReply,
     ShownPageDialog, browser::WindowButton,
@@ -104,6 +105,10 @@ pub(super) struct Recorder {
     pub(super) option_off: Cell<bool>,
     /// The user turned link previews off.
     pub(super) previews_off: Cell<bool>,
+    /// The user turned link cards off.
+    pub(super) link_cards_off: Cell<bool>,
+    /// How many link cards it was asked for.
+    link_cards_asked: Cell<u64>,
     /// The window's own buttons as the system says it draws them, once their window shows them.
     pub(super) window_buttons: Cell<Option<super::WindowButtonGeometry>>,
     /// The Spaces it was asked to show, in order.
@@ -114,6 +119,8 @@ pub(super) struct Recorder {
     pub(super) arranged: Cell<Option<crate::boosts::Arranged>>,
     /// Whether the core refuses Arrange, as on a page that isn't http(s).
     pub(super) arrange_refused: Cell<bool>,
+    /// Whether the core refuses to make a Live Folder, as in a Space it can't fill one in.
+    pub(super) live_refused: Cell<bool>,
     /// The tab Arrange's mini bar shows for and what its press runs, while it shows.
     #[allow(clippy::type_complexity)]
     pub(super) mini_bar: RefCell<Option<(u64, crate::mini_bar::OnPress)>>,
@@ -506,6 +513,25 @@ impl Browser for Recorder {
         self.edit(format!("delete folder {folder}"));
     }
 
+    fn create_live_folder(&self, space: u64, source: LiveSource, name: &str, _: &mut App) -> u64 {
+        if self.live_refused.get() {
+            return 0;
+        }
+        let made = self.make();
+        self.edit(format!("live folder {made} {space} {source:?} {name}"));
+        made
+    }
+
+    fn end_live_folder(&self, folder: u64, _: &mut App) {
+        self.edit(format!("end live folder {folder}"));
+    }
+
+    fn fetch_live_folder(&self, folder: u64, source: LiveSource, refresh: bool, _: &mut App) {
+        self.record(format!(
+            "fetch live folder {folder} {source:?} refresh {refresh}"
+        ));
+    }
+
     fn separate(&self, tab: u64, _: &mut App) {
         self.edit(format!("separate {tab}"));
     }
@@ -698,6 +724,17 @@ impl Browser for Recorder {
 
     fn link_previews(&self) -> bool {
         !self.previews_off.get()
+    }
+
+    fn link_cards(&self) -> bool {
+        !self.link_cards_off.get()
+    }
+
+    /// Each card asked for is numbered from 1, as the core numbers them.
+    fn link_card(&self, tab: u64) -> u64 {
+        self.record(format!("link card {tab}"));
+        self.link_cards_asked.set(self.link_cards_asked.get() + 1);
+        self.link_cards_asked.get()
     }
 
     fn close_preview(&self, over: u64, _: &mut App) -> bool {
@@ -1473,6 +1510,10 @@ impl Browser for Recorder {
 
     fn set_sidebar_right(&self, right: bool, _: &mut App) {
         self.record(format!("sidebar right {right}"))
+    }
+
+    fn set_window_buttons_right(&self, right: bool, _: &mut App) {
+        self.record(format!("window buttons right {right}"))
     }
 
     fn little_drawn(&self, _: &mut App) {

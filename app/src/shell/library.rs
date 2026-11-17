@@ -4243,6 +4243,7 @@ mod tests {
             folders,
             shown: 0,
             peeked: Vec::new(),
+            live_rooms: Default::default(),
         }
     }
 

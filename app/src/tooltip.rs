@@ -9,9 +9,9 @@ use std::{rc::Rc, sync::Arc, time::Duration};
 use web_time::Instant;
 
 use gpui::{
-    App, Bounds, Context, Div, FontWeight, Global, Pixels, Rgba, SharedString, Size, Task, TextRun,
-    TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind,
-    WindowOptions, WindowTextSystem, div, font, point, prelude::*, px, rgb, size,
+    App, Bounds, Context, Div, FontWeight, Global, Pixels, Point, Rgba, SharedString, Size, Task,
+    TextRun, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle,
+    WindowKind, WindowOptions, WindowTextSystem, div, font, point, prelude::*, px, rgb, size,
 };
 
 /// How long the pointer rests on a tile, row or button, from its last move, before its tooltip
@@ -30,6 +30,7 @@ use crate::tokens::tooltip::HEIGHT;
 /// Its window, wide enough for a long name, which truncates past it.
 pub use crate::tokens::tooltip::WINDOW_WIDTH;
 pub use crate::tokens::tooltip::{BUTTON_X, BUTTON_Y};
+use crate::tokens::tooltip::{DETAIL, DETAIL_GAP};
 pub const WINDOW_HEIGHT: f32 = HEIGHT;
 /// Round at half its height, but the corner at what it names, which is nearly square.
 const RADIUS: f32 = HEIGHT / 2.;
@@ -75,6 +76,8 @@ pub trait Host {
 pub struct Tip {
     pub text: SharedString,
     pub keys: Vec<SharedString>,
+    /// Said of it after the name, quieter, as a Live Folder's rows' age (#2979), or empty.
+    pub detail: SharedString,
 }
 
 impl Tip {
@@ -83,6 +86,15 @@ impl Tip {
         Tip {
             text,
             keys: Vec::new(),
+            detail: SharedString::default(),
+        }
+    }
+
+    /// A name with something said of it after.
+    pub fn detailed(text: SharedString, detail: SharedString) -> Self {
+        Tip {
+            detail,
+            ..Tip::named(text)
         }
     }
 }
@@ -287,7 +299,10 @@ pub(crate) fn text_width(
 /// How `tip` lays out: its text, then a chip for each key, as wide as its glyph and its padding
 /// but no less than square.
 fn measure(tip: &Tip, system: &WindowTextSystem) -> Layout {
-    let text = text_width(&tip.text, TEXT_SIZE, FontWeight::SEMIBOLD, system);
+    let mut text = text_width(&tip.text, TEXT_SIZE, FontWeight::SEMIBOLD, system);
+    if !tip.detail.is_empty() {
+        text += DETAIL_GAP + text_width(&tip.detail, TEXT_SIZE, FontWeight::NORMAL, system);
+    }
     let chips: Vec<f32> = (tip.keys.iter())
         .map(|key| {
             let glyph = text_width(key, CHIP_TEXT_SIZE, FontWeight::SEMIBOLD, system);
@@ -328,9 +343,20 @@ impl Global for TooltipWindow {}
 /// Opens the tooltip's window, hidden, for `host` to show over the browser window, ahead of time
 /// as the toast's is.
 pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<Tooltip>> {
+    open_at(host, point(px(0.), px(0.)), false, cx)
+}
+
+/// Opens it at `origin` on screen, and on screen if `show`, as the preview does to show it alone
+/// where its host can't move it.
+pub fn open_at(
+    host: Rc<dyn Host>,
+    origin: Point<Pixels>,
+    show: bool,
+    cx: &mut App,
+) -> Option<WindowHandle<Tooltip>> {
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::new(
-            point(px(0.), px(0.)),
+            origin,
             size(
                 px(WINDOW_WIDTH + 2. * WINDOW_MARGIN),
                 px(WINDOW_HEIGHT + 2. * WINDOW_MARGIN),
@@ -342,7 +368,7 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<Tooltip>> {
             traffic_light_position: None,
         }),
         kind: WindowKind::Floating,
-        show: false,
+        show,
         focus: false,
         is_movable: false,
         is_resizable: false,
@@ -479,9 +505,13 @@ impl Tooltip {
 /// How the log names `tip`: its text, then its keys as a menu shows them, Ctrl+Shift+L off the Mac.
 fn label(tip: &Tip) -> String {
     let joint = if crate::shell::OFF_THE_MAC { "+" } else { "" };
-    match tip.keys.is_empty() {
+    let named = match tip.keys.is_empty() {
         true => tip.text.to_string(),
         false => format!("{} {}", tip.text, tip.keys.join(joint)),
+    };
+    match tip.detail.is_empty() {
+        true => named,
+        false => format!("{named} · {}", tip.detail),
     }
 }
 
@@ -507,7 +537,16 @@ impl Render for Tooltip {
             .text_color(rgb(PAPER))
             // Untruncated, it's as wide as it shaped, and a box that wide could round under it.
             .when(layout.truncated, |text| text.w(px(layout.text)).truncate())
-            .child(tip.text);
+            .child(tip.text)
+            .when(!tip.detail.is_empty(), |text| {
+                text.child(
+                    div()
+                        .ml(px(DETAIL_GAP))
+                        .font_weight(FontWeight::NORMAL)
+                        .text_color(rgb(PAPER).opacity(DETAIL))
+                        .child(tip.detail),
+                )
+            });
         let chip_top = (HEIGHT - CHIP_BODY) / 2.;
         let chips = tip
             .keys

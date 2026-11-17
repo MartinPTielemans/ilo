@@ -2,6 +2,7 @@
 //! answers.
 
 use super::*;
+use browser::shell::LiveSource;
 use std::time::Instant;
 
 /// A window's shell's requests, as calls to the core. The core reports back once each call has
@@ -184,6 +185,20 @@ impl Browser for Engine {
 
     fn delete_folder(&self, folder: u64, _: &mut App) {
         unsafe { bc::bc_folder_delete(folder) };
+    }
+
+    fn create_live_folder(&self, space: u64, source: LiveSource, name: &str, _: &mut App) -> u64 {
+        let name = CString::new(name).unwrap_or_default();
+        unsafe { bc::bc_folder_live_create(space, spaces::live_source(source), name.as_ptr()) }
+    }
+
+    fn end_live_folder(&self, folder: u64, _: &mut App) {
+        unsafe { bc::bc_folder_live_end(folder) };
+    }
+
+    // The core knows what fills the folder, so `source` only names it to the app.
+    fn fetch_live_folder(&self, folder: u64, _: LiveSource, refresh: bool, _: &mut App) {
+        unsafe { bc::bc_folder_live_fetch(folder, refresh) };
     }
 
     fn separate(&self, tab: u64, _: &mut App) {
@@ -1421,6 +1436,11 @@ impl Browser for Engine {
         unsafe { platform::host_set_sidebar_right(self.ui_view, right) };
     }
 
+    #[cfg(target_os = "windows")]
+    fn set_window_buttons_right(&self, right: bool, _: &mut App) {
+        unsafe { platform::host_set_window_buttons_right(self.ui_view, right) };
+    }
+
     fn little_drawn(&self, _: &mut App) {
         unsafe { platform::host_grow_little_window(self.ui_view) };
     }
@@ -1783,6 +1803,14 @@ impl Browser for Engine {
             Some((tip, anchor)) => tooltip::hover(self.window, tip, anchor, cx),
             None => tooltip::dismiss(cx),
         }
+    }
+
+    fn link_cards(&self) -> bool {
+        crate::link_cards::on()
+    }
+
+    fn link_card(&self, tab: u64) -> u64 {
+        crate::link_cards::ask(tab)
     }
 
     fn link_target(
