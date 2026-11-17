@@ -2,24 +2,86 @@
 
 /// Chromium's arguments from the app's `own` switches and the arguments the process was `given`,
 /// its program first. The switches given come after the app's, so they override them: Chromium
-/// keeps a repeated switch's last value.
+/// keeps a repeated switch's last value. The feature lists are the exception: the app's and the
+/// given ones are joined into one switch each, so a launcher's own list, as the Flatpak's Cobalt
+/// gives, doesn't turn the app's back off (#3158).
 ///
 /// On the Mac the app starts Chromium (`bc_main`) with all of them: the program, the switches, and
 /// the pages and files it was given. On Windows and Linux Chromium has `started` with the given
 /// arguments, and the core adds what the app returns to them (`BC_APP_ENTRY`), so there it's the
 /// switches alone: the program, or a page given, would be one more argument there, which Chromium
-/// reads as a link from another app to open (#911).
+/// reads as a link from another app to open (#911). The core adds the joined lists after the given
+/// ones, so they're the ones Chromium keeps.
 pub fn chromium_args(given: Vec<String>, own: Vec<String>, started: bool) -> Vec<String> {
     let mut given = given.into_iter();
     let program = given.next();
-    if !started {
-        return program.into_iter().chain(own).chain(given).collect();
-    }
+    let mut given: Vec<String> = given.collect();
     // Chromium reads what follows a bare "--" as arguments, never switches.
-    let switches = given
-        .take_while(|arg| arg != "--")
-        .filter(|arg| is_switch(arg));
-    own.into_iter().chain(switches).collect()
+    let after = given.split_off(
+        given
+            .iter()
+            .position(|arg| arg == "--")
+            .unwrap_or(given.len()),
+    );
+    if started {
+        given.retain(|arg| is_switch(arg));
+        return join_feature_lists(own.into_iter().chain(given));
+    }
+    program
+        .into_iter()
+        .chain(join_feature_lists(own.into_iter().chain(given)))
+        .chain(after)
+        .collect()
+}
+
+/// The feature lists Chromium reads, each of which it keeps only the last of.
+const FEATURE_LISTS: [&str; 2] = ["enable-features", "disable-features"];
+
+/// `args` with each feature list's switches joined into one, where the first was, its features in
+/// order and each once.
+fn join_feature_lists(args: impl IntoIterator<Item = String>) -> Vec<String> {
+    let args: Vec<String> = args.into_iter().collect();
+    let mut joined: [Vec<&str>; 2] = Default::default();
+    for arg in &args {
+        if let Some((list, features)) = feature_list(arg) {
+            for feature in features.split(',').filter(|feature| !feature.is_empty()) {
+                if !joined[list].contains(&feature) {
+                    joined[list].push(feature);
+                }
+            }
+        }
+    }
+    let mut placed = [false; 2];
+    let mut out = Vec::with_capacity(args.len());
+    for arg in &args {
+        match feature_list(arg) {
+            Some((list, _)) if placed[list] => {}
+            Some((list, _)) => {
+                placed[list] = true;
+                if !joined[list].is_empty() {
+                    out.push(format!(
+                        "--{}={}",
+                        FEATURE_LISTS[list],
+                        joined[list].join(",")
+                    ));
+                }
+            }
+            None => out.push(arg.clone()),
+        }
+    }
+    out
+}
+
+/// Which of FEATURE_LISTS `arg` gives, and its features, as Chromium reads the switch.
+fn feature_list(arg: &str) -> Option<(usize, &str)> {
+    let name = ["--", "-"]
+        .iter()
+        .chain(if cfg!(windows) { &["/"][..] } else { &[] })
+        .find_map(|prefix| arg.strip_prefix(prefix))?;
+    FEATURE_LISTS
+        .iter()
+        .enumerate()
+        .find_map(|(list, switch)| Some((list, name.strip_prefix(switch)?.strip_prefix('=')?)))
 }
 
 /// Whether Chromium reads `arg` as a switch: "--name", "-name", or on Windows "/name" too
@@ -212,6 +274,67 @@ mod tests {
     fn after_a_bare_double_dash_nothing_is_a_switch() {
         let given = strings(&["/opt/ilo/chrome", "--", "--not-a-switch.html"]);
         assert!(chromium_args(given, vec![], true).is_empty());
+    }
+
+    #[test]
+    fn a_launchers_feature_lists_join_the_apps_own() {
+        // As the Flatpak's Cobalt gives them (#3158): Chromium would keep only the last.
+        let own = strings(&[
+            "--user-data-dir=/profile",
+            "--disable-features=LinkCopiedToast,TabHoverCardImages",
+            "--enable-features=PartitionAllocAdaptiveMemoryReclaimInterval",
+        ]);
+        let given = strings(&[
+            "/app/ilo/chrome",
+            "--disable-features=WebAssemblyTrapHandler,LinkCopiedToast",
+            "--disable-features=DesktopPWAsRunOnOsLogin",
+            "--enable-features=WebRtcPipeWireCamera",
+            "--ozone-platform=wayland",
+        ]);
+        assert_eq!(
+            chromium_args(given, own, true),
+            strings(&[
+                "--user-data-dir=/profile",
+                "--disable-features=LinkCopiedToast,TabHoverCardImages,WebAssemblyTrapHandler,\
+                 DesktopPWAsRunOnOsLogin",
+                "--enable-features=PartitionAllocAdaptiveMemoryReclaimInterval,WebRtcPipeWireCamera",
+                "--ozone-platform=wayland",
+            ]),
+        );
+    }
+
+    #[test]
+    fn an_empty_feature_list_adds_nothing() {
+        let own = strings(&["--disable-features=LinkCopiedToast"]);
+        let given = strings(&[
+            "/opt/ilo/chrome",
+            "--disable-features=",
+            "--enable-features=",
+        ]);
+        assert_eq!(
+            chromium_args(given, own, true),
+            strings(&["--disable-features=LinkCopiedToast"]),
+        );
+    }
+
+    #[test]
+    fn on_the_mac_a_feature_list_after_a_bare_double_dash_is_a_page() {
+        let own = strings(&["--disable-features=LinkCopiedToast"]);
+        let given = strings(&[
+            "/Applications/ilo.app/Contents/MacOS/ilo",
+            "--disable-features=TranslateToast",
+            "--",
+            "--disable-features=page.html",
+        ]);
+        assert_eq!(
+            chromium_args(given, own, false),
+            strings(&[
+                "/Applications/ilo.app/Contents/MacOS/ilo",
+                "--disable-features=LinkCopiedToast,TranslateToast",
+                "--",
+                "--disable-features=page.html",
+            ]),
+        );
     }
 
     #[test]

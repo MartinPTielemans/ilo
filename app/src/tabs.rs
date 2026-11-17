@@ -380,6 +380,7 @@ pub(crate) unsafe extern "C" fn tab_state_changed(
         media_video: state.media_video,
         developer_mode: state.developer_mode,
     };
+    browser::title_log::page(tab, &page.url);
     if unsafe { bc::bc_tab_window(tab) } == 0 {
         update_app(|cx| link_preview::set_url(tab, page.url.clone(), cx));
     }
@@ -394,7 +395,7 @@ pub(crate) unsafe extern "C" fn tab_title_changed(
     let title = unsafe { CStr::from_ptr(title) }
         .to_string_lossy()
         .into_owned();
-    log!("browser: title {tab} {title}");
+    browser::title_log::title(tab, &title);
     update_shells(|shell, cx| shell.set_title(tab, title.clone().into(), cx));
 }
 
@@ -511,6 +512,7 @@ pub(crate) unsafe extern "C" fn tab_opened(
 // the shell hears of it from space_changed instead, and Site Controls once that update is over.
 pub(crate) unsafe extern "C" fn tab_closed(_: *mut c_void, tab: bc::bc_id) {
     log!("browser: tab {tab} closed");
+    browser::title_log::closed(tab);
     find_bar::forget(tab);
     offer::forget(tab);
     if let Some(cx) = CX.with_borrow(Clone::clone) {

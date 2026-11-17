@@ -9,7 +9,8 @@
 # extensions run puts there, which Chrome installs from. "a" asks to manage windows on all the
 # displays, a permission with no question from macOS, and puts the answer in the title. Keys with
 # ⌘, ⌃ or ⌥ are the browser's. /wait is a page that never comes, /slow text that comes after a
-# second, and /held one that comes once the run has made held.go in the site's folder. login.html is a login form, its username field
+# second, and /held one that comes once the run has made held.go in the site's folder, whose title
+# then names each key it gets. login.html is a login form, its username field
 # across the page's top half and its password field across the bottom, that posts to /login,
 # which sends the browser on to welcome.html, as a site that took the login would.
 # signup.html is the same form asking for a new password, which posts to /signup, as /login.
@@ -280,10 +281,18 @@ onkeydown = e => {
 };
 </script>' > "$out/site/clear.html"
 # Three plain pages the clear run opens, copies, closes and reopens, which it once loaded from live
-# sites that a runner can't always reach (#3144).
-for page in one two three; do
-  printf '<title>Clear %s</title><p style="font:24px system-ui">%s</p>' "$page" "$page" \
-    > "$out/site/clear-$page.html"
+# sites that a runner can't always reach (#3144). A run sources this file, so the loop's name is
+# one no run keeps: as $page it took the page window and windows had set before serve.
+for clear_page in one two three; do
+  printf '<title>Clear %s</title><p style="font:24px system-ui">%s</p>' \
+    "$clear_page" "$clear_page" > "$out/site/clear-$clear_page.html"
+done
+# Three plain pages for the runs that need only a page to be there, which they once loaded from live
+# sites that a runner can't always reach (#3144). Their text is well inside the page, where a run
+# that tells a page from an empty page area looks (switch-frames).
+for plain_page in One Two Three; do
+  printf '<title>%s</title><h1 style="font:bold 64px system-ui;margin:80px">%s</h1>' \
+    "$plain_page" "$plain_page" > "$out/site/$(echo "$plain_page" | tr A-Z a-z).html"
 done
 # Pages that ask for a key system as soon as they load, Widevine, which ilo can't play, and ClearKey,
 # which it can. Each puts "asked" in its title once the request is answered, either way. Widevine's
@@ -503,7 +512,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             # Every request waiting is let go at once, so one Chrome asked for ahead is no matter.
             while not os.path.exists(sys.argv[1] + "/held.go"):
                 time.sleep(0.05)
-            body = b"<title>held</title>"
+            body = (b"<title>held</title><script>"
+                    b"onkeydown = event => document.title = \"held has \" + event.key</script>")
             self.send_response(200)
             self.send_header("Content-Type", "text/html")
             self.send_header("Content-Length", str(len(body)))

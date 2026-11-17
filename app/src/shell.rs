@@ -35,6 +35,8 @@ mod access;
 mod agent_bar;
 mod agent_pointer;
 mod agent_question;
+#[cfg(test)]
+mod app_menu_tests;
 mod arrange;
 mod assets;
 #[cfg(test)]
@@ -48,6 +50,8 @@ mod battery;
 mod beside;
 #[cfg(test)]
 mod blank_tests;
+#[cfg(test)]
+mod board_title_tests;
 mod boost;
 mod browser;
 mod by_site;
@@ -1439,6 +1443,10 @@ pub struct Shell {
     /// •••, and whether the menu up is the one it opened, which keeps them while it's up.
     name_hovered: bool,
     name_menu: bool,
+    /// Whether the footer has the menu control, off the Mac, where there's no menu bar to hold
+    /// ilo's menu (#3148), and whether the menu up is the one it opened, which keeps it pressed.
+    menu_control: bool,
+    app_menu: bool,
     /// The Space and whether its pinned rows were collapsed when last drawn, and when they last
     /// changed there, for the chevron's turn.
     pinned_seen: Option<(u64, bool)>,
@@ -1940,6 +1948,8 @@ pub struct Shell {
     tab_row_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The icon each tile drew last, for the line check.sh waits on once one changes.
     tile_icons_drawn: Rc<RefCell<HashMap<u64, SharedString>>>,
+    /// Where each Space's dot in the switcher was drawn last, for the line check.sh clicks it by.
+    space_dots_drawn: Rc<RefCell<HashMap<u64, (i32, i32)>>>,
     name_row_before: Option<Bounds<Pixels>>,
     /// The Space with no icon the icon picker shows for, whose name row holds the icon's place
     /// with a placeholder until the picker closes, and the watch on the picker that tells it so.
@@ -2045,6 +2055,8 @@ impl Shell {
             caret_drawn: Rc::default(),
             name_hovered: false,
             name_menu: false,
+            menu_control: OFF_THE_MAC,
+            app_menu: false,
             pinned_seen: None,
             pinned_turn: None,
             split_folds: HashMap::new(),
@@ -2270,6 +2282,7 @@ impl Shell {
             name_row_drawn: Rc::default(),
             tab_row_drawn: Rc::default(),
             tile_icons_drawn: Rc::default(),
+            space_dots_drawn: Rc::default(),
             name_row_before: None,
             icon_placeholder: None,
             card_picker: None,
@@ -4619,6 +4632,12 @@ impl Render for Shell {
         let task_area = self.task_area_element(cx);
         self.breath.arm(cx);
         div()
+            .id("shell")
+            // Where the keyboard rests with no control or page holding it, an assistive app reads
+            // the window by its title, not as an unnamed one (#3151).
+            .when(self.a11y, |shell| {
+                shell.role(Role::Pane).aria_label(self.window_title.clone())
+            })
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle)
             // The Edit menu's Undo and Redo, which a field of ours takes for itself first.
@@ -4915,6 +4934,7 @@ impl Shell {
             .children(self.download_bin(cx))
             .children(self.archive_flights())
             .children((!self.one_space()).then(|| self.plus_button(cx)))
+            .children(self.menu_control.then(|| self.menu_button(cx)))
             .children(self.switcher(cx))
             .child(self.press_listener())
             .children(self.paging_frame(started))

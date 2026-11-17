@@ -1421,6 +1421,21 @@ fn an_agent_chooses_an_option_by_its_text(cx: &mut TestAppContext) {
         missed.text
     );
 
+    // A line break in the option goes to the core as it was asked, and the answer says it on one
+    // line.
+    let choose = json!({ "tab": 20, "ref": "e1", "option": "5\n1" });
+    let answer = call(&agents, "claude-code", "select", choose, cx);
+    let (.., text) = browser.pages.borrow().last().cloned().unwrap();
+    assert_eq!(text, "5\n1");
+    let missed = page_done(&agents, &browser, answer, answered(None), cx);
+    assert!(
+        missed
+            .text
+            .starts_with("Chose “5 1” in the combobox “Status”. It doesn't"),
+        "{}",
+        missed.text
+    );
+
     let pages = browser.pages.borrow().len();
     for wrong in [
         json!({ "tab": 20, "ref": "e1" }),
@@ -1458,7 +1473,8 @@ fn an_agent_chooses_an_option_by_its_text(cx: &mut TestAppContext) {
     );
 
     let pages = browser.pages.borrow().len();
-    let paying = json!({ "tab": 20, "ref": "e2", "option": "Pay now" });
+    // The user's question says the option on one line, its line break a space.
+    let paying = json!({ "tab": 20, "ref": "e2", "option": "Pay\u{2028}now" });
     let _answer = call(&agents, "claude-code", "select", paying, cx);
     let question = browser
         .asked
@@ -4861,6 +4877,43 @@ mod tasks {
         );
     }
 
+    /// A step that chose an option with a line break in it says it on one line, as the card's
+    /// status and the trace's title are a line each.
+    #[gpui::test]
+    fn a_chosen_options_line_break_makes_no_second_line_of_the_step(cx: &mut TestAppContext) {
+        let (agents, browser) = ready(None, cx);
+        let agent = start(&agents, "Use the coupon", cx);
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Working
+        });
+        browser
+            .tabs
+            .borrow_mut()
+            .push((30, 100, "Shop", "https://shop.example/basket"));
+        let snapshot = json!({ "tab": 30 });
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "snapshot",
+            snapshot,
+            Some(shop_tree()),
+            cx,
+        );
+        let choose = json!({ "tab": 30, "ref": "e1", "option": "SPRING\n10" });
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "select",
+            choose,
+            Some(shop_tree()),
+            cx,
+        );
+        let status = card_of(&agents, cx).status.to_string();
+        assert_eq!(status, "Step 2 · Chose “SPRING 10” in “Coupon”");
+    }
+
     /// A task's calls are its conversation's trace, each titled by what it did and opening to what
     /// it saw or why it failed. What it typed shows, but never what it typed into a password
     /// field, though the field refused it.
@@ -6219,3 +6272,35 @@ fn an_agent_sorts_its_own_today_tabs_by_site(cx: &mut TestAppContext) {
 }
 
 mod holds;
+
+/// An agent's http:// is never one the user typed (#2417): open_tab and navigate hand the core the
+/// address as the agent wrote it through `open_tab` and `navigate`, bc_agent_open_tab's and
+/// bc_agent_navigate's, which take no typed text, so the core never sets
+/// url_typed_with_http_scheme for it and HTTPS-First still tries it over https first.
+#[gpui::test]
+fn an_agents_http_address_is_never_a_typed_one(cx: &mut TestAppContext) {
+    let (agents, browser, _configs) = connected(cx);
+    let answer = call(
+        &agents,
+        "claude-code",
+        "open_tab",
+        json!({ "url": "http://plain.example.com/" }),
+        cx,
+    );
+    assert!(!page_done(&agents, &browser, answer, shop_tree(), cx).error);
+    let (tab, _, _, opened) = *browser.tabs.borrow().last().unwrap();
+    assert_eq!((tab, opened), (30, "http://plain.example.com/"));
+
+    let answer = call(
+        &agents,
+        "claude-code",
+        "navigate",
+        json!({ "url": "http://other.example.com/" }),
+        cx,
+    );
+    assert!(!page_done(&agents, &browser, answer, shop_tree(), cx).error);
+    assert_eq!(
+        *browser.navigated.borrow(),
+        [(30, "http://other.example.com/".to_string())]
+    );
+}
