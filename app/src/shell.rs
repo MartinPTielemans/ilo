@@ -4621,6 +4621,12 @@ impl Render for Shell {
         let task_area = self.task_area_element(cx);
         self.breath.arm(cx);
         div()
+            .id("shell")
+            // Where the keyboard rests with no control or page holding it, an assistive app reads
+            // the window by its title, not as an unnamed one (#3151).
+            .when(self.a11y, |shell| {
+                shell.role(Role::Pane).aria_label(self.window_title.clone())
+            })
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle)
             // The Edit menu's Undo and Redo, which a field of ours takes for itself first.
