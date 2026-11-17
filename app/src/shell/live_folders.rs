@@ -516,9 +516,9 @@ impl Shell {
             return;
         }
         let kind = match &answer {
-            LiveAnswer::Items(_) => "items",
-            LiveAnswer::SignedOut => "signed out",
-            LiveAnswer::Failed => "failed",
+            LiveAnswer::Items(items) => format!("items {}", items.len()),
+            LiveAnswer::SignedOut => "signed out".into(),
+            LiveAnswer::Failed => "failed".into(),
         };
         // check.sh reads this line.
         log!("browser: live folder {folder} answered {kind}");

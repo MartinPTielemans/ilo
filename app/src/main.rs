@@ -1153,6 +1153,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         ad_block_page: Some(ad_block_host::ad_block_page),
         ad_block_hide: Some(ad_block_host::ad_block_hide),
         tab_shown_in: Some(tab_shown_in),
+        folder_live_answered: Some(spaces::folder_live_answered),
         ..Default::default()
     };
     (args, host)

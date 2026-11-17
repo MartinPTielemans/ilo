@@ -187,15 +187,19 @@ impl Browser for Engine {
         unsafe { bc::bc_folder_delete(folder) };
     }
 
-    // The core's half, which keeps a folder live and fetches its lists, rides the core batch after
-    // 1115-1116 (#2979). Until it's in, no folder is live, so nothing asks for a fetch.
-    fn create_live_folder(&self, _: u64, _: LiveSource, _: &str, _: &mut App) -> u64 {
-        0
+    fn create_live_folder(&self, space: u64, source: LiveSource, name: &str, _: &mut App) -> u64 {
+        let name = CString::new(name).unwrap_or_default();
+        unsafe { bc::bc_folder_live_create(space, spaces::live_source(source), name.as_ptr()) }
     }
 
-    fn end_live_folder(&self, _: u64, _: &mut App) {}
+    fn end_live_folder(&self, folder: u64, _: &mut App) {
+        unsafe { bc::bc_folder_live_end(folder) };
+    }
 
-    fn fetch_live_folder(&self, _: u64, _: LiveSource, _: bool, _: &mut App) {}
+    // The core knows what fills the folder, so `source` only names it to the app.
+    fn fetch_live_folder(&self, folder: u64, _: LiveSource, refresh: bool, _: &mut App) {
+        unsafe { bc::bc_folder_live_fetch(folder, refresh) };
+    }
 
     fn separate(&self, tab: u64, _: &mut App) {
         unsafe { bc::bc_tab_separate(tab) };
