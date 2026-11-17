@@ -2054,6 +2054,15 @@ void SetUITextInput(views::Widget* widget, std::optional<gfx::Rect> caret) {
   }
 }
 
+void HoldPageComposition(views::Widget* widget, bool hold, bool claimed) {
+  if (!OnWayland()) {
+    return;
+  }
+  if (WindowViews* views = ViewsOf(widget)) {
+    views->ui_text_input().HoldForPage(hold, claimed);
+  }
+}
+
 void SetAppWindowTextInput(void* surface, std::optional<gfx::Rect> caret) {
   // On X11 a window of the app's own has an input method of its own.
   if (!OnWayland()) {
