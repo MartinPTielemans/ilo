@@ -571,12 +571,18 @@ impl Render for FindBar {
             Some((selected, matches)) => format!("{selected} of {matches}"),
             None => String::new(),
         };
+        // The Mac's AccessKit announces a live region's value, and Windows' and Linux's its name,
+        // so the name has the count too (#3236).
+        let name = match said.is_empty() {
+            true => "Matches".to_string(),
+            false => format!("Matches, {said}"),
+        };
         let status = div()
             .id("matches")
             .when(a11y, |status| {
                 status
                     .role(Role::Status)
-                    .aria_label("Matches")
+                    .aria_label(name)
                     .aria_value(said)
                     .a11y_synthetic_children(|builder| builder.parent_node().set_live(Live::Polite))
             })

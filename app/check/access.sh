@@ -195,7 +195,8 @@ else
     send key escape
     expect '^browser: menu closed$' "escape didn't close the tab's menu"
 
-    # The find bar's buttons say what they do, and its count is the status Matches.
+    # The find bar's buttons say what they do, and its count is the status Matches, its name
+    # saying the count too, which Orca and NVDA announce (#3236).
     found="$out/access-find.txt"
     if windows; then
       # check/find.sh, which drives the find bar, isn't one of Windows' runs yet.
@@ -206,7 +207,7 @@ else
       send type VoiceOver
       expect '^browser: find bar drew "VoiceOver" 1/1$' "⌘F and typing didn't find VoiceOver on the page"
       read_tree '"Find Next"' > "$found"
-      grep -q ' "Matches"' "$found" || fail "the find bar's count isn't called Matches: $found"
+      grep -q ' "Matches, 1 of 1"' "$found" || fail "the find bar's count isn't called Matches, 1 of 1: $found"
       for name in Previous Next Close; do
         grep -q " $button \"$name\"" "$found" || fail "the find bar's $name isn't a button: $found"
       done
