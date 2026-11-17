@@ -422,10 +422,18 @@ pub trait Browser {
     /// Opens a new document in the notes service `space`'s profile picks, in a tab at the top of
     /// its Today tabs, as a new tab opens, or in a split view with `beside`, on its right.
     fn new_note(&self, space: u64, beside: Option<u64>, cx: &mut App);
-    /// Makes a Board in `space`'s profile (`crate::boards`): its folder, off the main thread, then
-    /// a pinned tab of `space` at its page, which `opened` gets to name. Nothing where the profile
-    /// keeps no folder.
-    fn new_board(&self, space: u64, opened: Box<dyn FnOnce(u64, &mut App)>, cx: &mut App);
+    /// Makes Board `id` in `space`'s profile (`crate::boards`): its folder, off the main thread,
+    /// then with `capture`, capture mode's PNG, puts that on it (whose word comes in
+    /// `capture::board_answered`), then a pinned tab of `space` at its page, which `opened` gets to
+    /// name. Nothing where the profile keeps no folder.
+    fn new_board(
+        &self,
+        space: u64,
+        id: String,
+        capture: Option<Vec<u8>>,
+        opened: Box<dyn FnOnce(u64, &mut App)>,
+        cx: &mut App,
+    );
     /// Opens Chromium's search engines page in a tab of the Space shown, for its profile's site
     /// searches. The user's: agents open no pages outside http(s) (AGENTS.md).
     fn site_search_settings(&self, cx: &mut App);
