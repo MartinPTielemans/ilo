@@ -323,6 +323,8 @@ expect '^browser: command bar shown$' "⌘L didn't open the command bar in the L
 send insert "data:text/html,<title>little</title>A page in Little ilo"
 send key return
 expect "^browser: extension actions $popup[^ ]* $clicked" "the Little ilo window didn't list the pinned actions"
+# The list comes a frame before the bar draws it, and a click before then lands on the title (#3163).
+expect "^browser: little bar drew actions $popup $clicked\$" "the Little ilo bar didn't draw the pinned actions"
 # Logged as the window first drew its bar, before its page.
 await '^browser: little bar title ends at ' || fail "the Little ilo window's bar didn't say where its title ends"
 read -r end_x end_y << EOF

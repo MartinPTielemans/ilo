@@ -1168,9 +1168,21 @@ impl Browser for Recorder {
         self.notes.borrow_mut().push((space, beside));
     }
 
-    fn new_board(&self, space: u64, opened: Box<dyn FnOnce(u64, &mut App)>, cx: &mut App) {
+    fn new_board(
+        &self,
+        space: u64,
+        _: String,
+        capture: Option<Vec<u8>>,
+        opened: Box<dyn FnOnce(u64, &mut App)>,
+        cx: &mut App,
+    ) {
         let tab = 900 + self.boards.borrow().len() as u64;
         self.boards.borrow_mut().push(space);
+        if capture.is_some() {
+            self.calls
+                .borrow_mut()
+                .push(format!("new board {space} with a capture"));
+        }
         // As the engine's, once the folder's made: after the update New Board runs in.
         cx.defer(move |cx| opened(tab, cx));
     }

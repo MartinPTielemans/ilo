@@ -366,8 +366,9 @@ from urllib.parse import urlsplit
 recorded, starts, watched, hides, shown, table, baseline = sys.argv[1:]
 # Each request: its address, when it went, and whether the ad blocker blocked it or answered it
 # with a stand-in, an extension's resource it redirected the request to. Its later events come by
-# its id, which a later request can take again, once a renderer's process id comes back: an id sent
-# again to an http(s) address, not as a redirect, is a new request.
+# its id, which a later request can take again, once a renderer's process id comes back. An id sent
+# again as a redirect to an address not http(s) is a stand-in; sent again any other way, it's a
+# later request's, as a later page's data: one is, and its answer isn't the first's (#3288).
 requests = []
 live = {}
 for line in open(recorded, encoding="utf-8"):
@@ -378,6 +379,8 @@ for line in open(recorded, encoding="utf-8"):
         requests.append(live[event["id"]])
     elif not request:
         continue
+    elif event["event"] == "sent" and not event.get("redirect"):
+        del live[event["id"]]
     elif event["event"] == "sent" and not event["url"].startswith("http"):
         request["how"] = "stand-in"
     elif event["event"] == "failed" and request and "BLOCKED_BY_CLIENT" in event["error"]:

@@ -1079,7 +1079,7 @@ height=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: lay
   sed 's/^browser: layout content [0-9]*x\([0-9]*\),.*/\1/')
 post click 204 $((height - 25))
 add=$(plus_adds | cut -d, -f1)
-plus="New Space…, New Folder…, New Split View, New Note, \\(New Boost…, \\)\\{0,1\\}$(plus_adds)"
+plus="New Space…, New Folder…, New Split View, New Board, New Note, \\(New Boost…, \\)\\{0,1\\}$(plus_adds)"
 expect "^browser: menu shown $(cased "$plus")\$" \
   "the +'s menu didn't end with $(plus_adds)"
 ../tools/window-screenshot.sh "$pid" "$out/plus-add.png" || fail "no window to capture"
