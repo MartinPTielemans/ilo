@@ -504,9 +504,12 @@ function spot(card) {
   const x0 = cx - card.w / 2, y0 = cy - card.h / 2;
   const free = (x, y) => !cards.some((other) => other.kind !== "stroke" &&
     Math.abs(other.x - x) < step && Math.abs(other.y - y) < step);
+  // Each place is rounded before it's tried, as a card is kept at whole pixels: a view an odd
+  // number of pixels across would otherwise find a step from a card's place a half pixel short.
   for (let k = 0; k < RUN * RUN; k++) {
-    const down = k % RUN, x = x0 + (down + Math.floor(k / RUN)) * step, y = y0 + down * step;
-    if (free(x, y)) return [Math.round(x), Math.round(y)];
+    const down = k % RUN;
+    const x = Math.round(x0 + (down + Math.floor(k / RUN)) * step), y = Math.round(y0 + down * step);
+    if (free(x, y)) return [x, y];
   }
   return [Math.round(x0), Math.round(y0)];
 }
