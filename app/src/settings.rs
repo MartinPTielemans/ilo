@@ -2198,8 +2198,23 @@ impl Settings {
         );
         let toggle_keys = shell::keystroke_label("cmd-s");
         let side = if right { "right" } else { "left" };
+        let top_bar = self.toggle("top bar", "Top bar", off(TOP_BAR), set_top_bar, accent, cx);
+        let top_bar_keys = shell::keystroke_label("shift-cmd-d");
+        let top_bar = setting(
+            look,
+            "Top bar",
+            Some(
+                format!(
+                    "The URL field and the sidebar's buttons in a row across the window's top, \
+                     the page under it. {top_bar_keys} turns it on and off."
+                )
+                .into(),
+            ),
+            vec![top_bar],
+        );
         let mut hidden = vec![
             position,
+            top_bar,
             setting(
                 look,
                 "Show the hidden sidebar at the window's edge",
@@ -5033,6 +5048,9 @@ const DOCK_ICON_PLAIN: &str = "plain-dock-icon";
 /// never synced.
 const SIDEBAR_RIGHT: &str = "sidebar-right";
 
+/// Top bar, there while it's on (#3160): this device's, as Sidebar position is, and never synced.
+const TOP_BAR: &str = "top-bar";
+
 fn off(name: &str) -> bool {
     std::path::Path::new(&format!("{}/{name}", crate::profile_dir())).exists()
 }
@@ -5049,6 +5067,7 @@ fn set_off(name: &str, is_off: bool) {
 pub fn read_switches(cx: &mut App) {
     cx.set_global(shell::SidebarEdge(!off(NO_EDGE_REVEAL)));
     cx.set_global(shell::SidebarRight(off(SIDEBAR_RIGHT)));
+    cx.set_global(shell::TopBar(off(TOP_BAR)));
     browser::dock_dot::set_plain(off(DOCK_ICON_PLAIN), cx);
 }
 
@@ -5062,6 +5081,14 @@ pub fn sidebar_right_kept() -> bool {
 pub fn set_sidebar_right(right: bool, cx: &mut App) {
     set_off(SIDEBAR_RIGHT, right);
     cx.set_global(shell::SidebarRight(right));
+    cx.refresh_windows();
+}
+
+/// Turns Top bar on or off: kept on this device, and every window follows at once, as each reads
+/// it as it draws.
+pub fn set_top_bar(on: bool, cx: &mut App) {
+    set_off(TOP_BAR, on);
+    cx.set_global(shell::TopBar(on));
     cx.refresh_windows();
 }
 
