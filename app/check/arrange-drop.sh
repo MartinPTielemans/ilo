@@ -162,9 +162,10 @@ expect "browser: tab $tab arrange on\$" "the card's Arrange didn't turn the mode
 # While the card is carried the page already titles where it would go (#3273), so the page has to
 # say it after a move that came once the drop's answer did: a title written before the release
 # can't name that move, and the page titles only once the settle's motion has ended. The move to
-# where it's pressed first makes sure the page didn't already say the release's place.
+# where it's pressed first makes sure the page didn't already say that place. The move after goes a
+# point right of where it let go: one to where the pointer already is reaches no page.
 drop() {
-  pressed="$2,$3" let_go="$4,$5"
+  pressed="$2,$3" after="$(($4 + 1)),$5"
   set -- "$1" $(page_at $2 $3) $(page_at $4 $5) "$6" "$7" "$8" "$9"
   send move $2 $3
   page_says " over $pressed at " "$8: the page didn't hear the pointer move to $1"
@@ -195,8 +196,8 @@ drop() {
     page_says "^$before" "$8: ⌘Z didn't take back what letting go landed after the refusal"
     dropped="$dropped $8, but letting go there landed it all the same (#3003), which ⌘Z took back,"
   else
-    send move $4 $5
-    page_says "^$7.* over $let_go at " "$8: letting go didn't leave what it previewed"
+    send move $(($4 + 1)) $5
+    page_says "^$7.* over $after at " "$8: letting go didn't leave what it previewed"
     ../tools/window-screenshot.sh "$pid" "$out/arrange-drop-$9.png" || fail "no window to capture"
     dropped="$dropped $8,"
     if [ "$6" != Refused ]; then
