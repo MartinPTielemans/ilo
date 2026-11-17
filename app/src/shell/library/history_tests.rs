@@ -832,3 +832,44 @@ fn the_arrows_ring_historys_rows(cx: &mut TestAppContext) {
     cx.simulate_input("m");
     assert_eq!(ringed(&shell, cx), None, "typing left the ring on a row");
 }
+
+/// What ⌘Z, ⌘F and ⌘W each did, as History's field holds the keyboard after `before`: the calls
+/// to the browser, whether the Library stayed open and what has the keyboard.
+fn window_shortcuts(before: &str, cx: &mut TestAppContext) -> Vec<String> {
+    use gpui::Focusable;
+    let (shell, host, cx) = history(vec![closed(5, "news", at(9, 15), false)], cx);
+    cx.update(|_, cx| crate::shell::commands::bind_keys(cx));
+    next_frame(cx);
+    let (first, _) = one_ask(&host);
+    answer(&shell, first, vec![page("mail", at(9, 14))], false, cx);
+    made(&host);
+    let search = shell.read_with(cx, |shell, cx| {
+        shell.library.as_ref().unwrap().search.focus_handle(cx)
+    });
+    cx.update(|window, cx| window.focus(&search, cx));
+    cx.run_until_parked();
+    if !before.is_empty() {
+        cx.simulate_keystrokes(before);
+        assert!(ringed(&shell, cx).is_some(), "{before} rang no row");
+    }
+    let mut did = Vec::new();
+    for key in ["cmd-z", "cmd-f", "cmd-w"] {
+        cx.simulate_keystrokes(key);
+        let open = shell.read_with(cx, |shell, _| shell.library_open);
+        let field = cx.update(|window, _| search.is_focused(window));
+        did.push(format!(
+            "{key}: {:?}, Library open {open}, field focused {field}",
+            made(&host)
+        ));
+    }
+    did
+}
+
+/// The ring takes only ↓, ↑ and Return: the window's shortcuts do with a row ringed what they do
+/// without one.
+#[gpui::test]
+fn the_rows_ring_leaves_the_windows_shortcuts_as_they_are(cx: &mut TestAppContext) {
+    let without = window_shortcuts("", cx);
+    let with = window_shortcuts("down", cx);
+    assert_eq!(with, without);
+}
