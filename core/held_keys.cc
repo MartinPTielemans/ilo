@@ -16,7 +16,6 @@
 #include "base/timer/timer.h"
 #include "browser_core/host.h"
 #include "browser_core/tab.h"
-#include "build/build_config.h"
 #include "components/input/native_web_keyboard_event.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_widget_host.h"
@@ -25,11 +24,6 @@
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/input/web_keyboard_event.h"
 #include "third_party/blink/public/mojom/input/input_event_result.mojom-shared.h"
-
-#if BUILDFLAG(IS_LINUX)
-#include "browser_core/platform/linux/wayland.h"
-#include "browser_core/window.h"
-#endif
 
 namespace browser_core::held_keys {
 
@@ -140,26 +134,12 @@ State& Held() {
   return *state;
 }
 
-// An input method composes past the hold, which has only keys: under Wayland, what it composes
-// while |tab|'s keys are held goes to the field they're held for, or back to the page.
-void HoldComposition(bc_id tab, bool hold, bool claimed) {
-#if BUILDFLAG(IS_LINUX)
-  if (Window* window = Window::Showing(tab); window && window->widget()) {
-    platform::HoldPageComposition(window->widget(), hold, claimed);
-  }
-#endif
-}
-
-// Ends the hold, |claimed| by the field it was for or not. Returns the page whose keys were held
-// and the presses.
-std::pair<bc_id, std::vector<input::NativeWebKeyboardEvent>> End(bool claimed) {
+// Ends the hold. Returns the page whose keys were held and the presses.
+std::pair<bc_id, std::vector<input::NativeWebKeyboardEvent>> End() {
   State& held = Held();
   held.timer.Stop();
   held.answer.Forget();
   held.down.clear();
-  if (held.tab) {
-    HoldComposition(held.tab, false, claimed);
-  }
   return {std::exchange(held.tab, 0), std::move(held.keys)};
 }
 
@@ -180,7 +160,7 @@ void Unclaimed() {
   if (!Held().tab) {
     return;
   }
-  auto [tab, keys] = End(/*claimed=*/false);
+  auto [tab, keys] = End();
   if (const auto unclaimed = Host().held_keys_unclaimed) {
     unclaimed(Host().context);
   }
@@ -227,7 +207,6 @@ void Hold(bool in_core) {
   held.in_core = in_core;
   held.answer.Await(WidgetOf(held.tab), {g_asking.key->TimeStamp(), g_asking.key->dom_code});
   held.timer.Start(FROM_HERE, kHoldFor, base::BindOnce(&Unclaimed));
-  HoldComposition(held.tab, true, false);
 }
 
 bool Holds(bc_id tab, const input::NativeWebKeyboardEvent& event) {
@@ -260,13 +239,13 @@ void Answered(bc_id tab, const input::NativeWebKeyboardEvent& key, bool used) {
   held.answer.Forget();
   if (!held.in_core) {
     // The field opens, and the host holds the keys for it from here.
-    End(/*claimed=*/true);
+    End();
   }
   // Otherwise they're held until the field has the keyboard (Give), or for kHoldFor.
 }
 
 void Give(void (*take)(void* context, const bc_key* keys, size_t count), void* context) {
-  auto [tab, keys] = End(/*claimed=*/true);
+  auto [tab, keys] = End();
   if (keys.empty() || !take) {
     return;
   }

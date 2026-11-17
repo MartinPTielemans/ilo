@@ -10,8 +10,8 @@ name: Flatpak
 
 on:
   # Branches only: an engine release's tag, pushed with the owner's token, starts nothing here. Also
-  # the check runs its steps do (Sign in, Policies, and Paste once #3083 adds it) and sync-account's
-  # server, which change apart from the packaging (#3059).
+  # the check runs its steps do (Sign in, Policies, Paste and Page menu) and sync-account's server,
+  # which change apart from the packaging (#3059).
   push:
     branches: ['**']
     paths:
@@ -22,6 +22,7 @@ on:
       - app/check/ilo-server.sh
       - app/check/policies.sh
       - app/check/paste.sh
+      - app/check/page-menu.sh
   workflow_dispatch:
   workflow_call:
     inputs:
@@ -249,6 +250,26 @@ jobs:
           path: |
             app/build/paste-x11
             app/build/paste-wayland
+          if-no-files-found: ignore
+
+      # A link's Copy Link Address in the sandbox, by check.sh's page-menu run: the browser goes on,
+      # which it does only while the app's own feature list, Link copied's toast off among them,
+      # outlasts the one Cobalt gives Chromium (#3158).
+      - name: Page menu
+        id: page-menu
+        if: ${{ steps.engine.outputs.found == 'true' && !inputs.release }}
+        working-directory: app
+        env:
+          LANG: en_US.UTF-8
+        run: |
+          XDG_RUNTIME_DIR=$(mktemp -d) BROWSER_FLATPAK=1 BROWSER_XVFB=1 \
+            dbus-run-session -- ./check.sh page-menu
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() && steps.page-menu.outcome != 'skipped' }}
+        with:
+          name: ilo-flatpak-page-menu
+          path: app/build/check
           if-no-files-found: ignore
 
       - uses: actions/upload-artifact@v4

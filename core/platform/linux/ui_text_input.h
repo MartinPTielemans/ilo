@@ -33,12 +33,6 @@ class UITextInput : public ui::TextInputClient {
   void SetCaret(std::optional<gfx::Rect> caret);
   // Whether the keys are the UI's or an overlay's of it, rather than a page's.
   void SetKeyboard(bool ui);
-  // While the app holds the keys typed in the page for a field of its own (held_keys), the input
-  // method, which composes past the hold, composes here if it composed for the page's field: what
-  // it composes and commits is kept for the UI's field until that has the keys and its caret. The
-  // hold ends |claimed| as the field takes the keys, else the page gets the input method back with
-  // what was kept, as it gets the keys held.
-  void HoldForPage(bool hold, bool claimed);
   // Whether the input method's client is the UI's field.
   bool attached() const { return attached_; }
 
@@ -85,30 +79,12 @@ class UITextInput : public ui::TextInputClient {
   void Detach();
   void Composed(const std::u16string& text);
   void Committed(const std::u16string& text);
-  // Whether the UI's field has the keys and its caret, so what's composed goes to it.
-  bool ToField() const { return caret_.has_value() && keyboard_; }
-  // Gives the UI's field what was kept for it while the page's keys were held.
-  void GiveKept();
-  // Ends a hold no field took: the page has the input method back, with what was kept.
-  void EndHold();
-
-  enum class Hold {
-    kNone,
-    // The page's answer to the shortcut is awaited.
-    kAnswer,
-    // The field took the keys, and its caret is awaited.
-    kCaret,
-  };
 
   raw_ptr<views::Widget> widget_;
   std::optional<gfx::Rect> caret_;
   bool keyboard_ = false;
   bool attached_ = false;
-  Hold hold_ = Hold::kNone;
   std::u16string composition_;
-  // While held, what was committed, and whether the composition is still the field's to be told.
-  std::u16string kept_;
-  bool composition_kept_ = false;
   // The page's field the input method composed for before, and the page's window, which has it
   // back if it still has the focus: an overlay lends the keys without taking the page's focus.
   base::WeakPtr<ui::TextInputClient> page_;

@@ -396,6 +396,9 @@ impl Shell {
                     .accessibility_id(Self::folder_access_id(folder))
                     .aria_label(self.folder_name(folder))
                     .aria_expanded(open)
+                    .when(self.keyed == Some(folder), |row| {
+                        row.aria_active_descendant()
+                    })
                     .a11y_synthetic_children(|builder| {
                         let node = builder.parent_node();
                         node.set_role_description("folder");
@@ -409,6 +412,8 @@ impl Shell {
                 .accessibility_id(Self::tab_access_id(tab))
                 .aria_label(self.tab_label(tab))
                 .aria_selected(selected)
+                // The ring's row, read as Focus Sidebar's arrows move it (#3151).
+                .when(self.keyed == Some(tab), |row| row.aria_active_descendant())
                 .pressed_by_mouse_down(true, true),
         }
     }
