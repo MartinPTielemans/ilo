@@ -213,11 +213,11 @@ drop R2 400 190 140 190 Trades 'dl L1,R2,L3 dr R1,L2,R3 ' 'a card on a wrapped c
 drop L1 140 70 400 130 Settles 'dl L2,L3 dr R1,L1,R2,R3 ' 'a wrapped card in the gap under the other column'"'"'s card settles' 3
 drop R2 400 190 140 130 Settles 'dl L1,R2,L2,L3 dr R1,R3 ' 'a card in the gap of the column that wraps its cards settles' 4
 drop L1 140 70 600 90 Refused "$before" 'a card that can'"'"'t be 120 wide is refused in the narrow column' 5
-# Down its own column: while a card is lifted its column closes its gap (#3028), so the gap between
-# the two under it is at 120 to 140, and it settles there, in a column that wraps its cards too
-# (#3003).
-drop R1 400 70 400 130 Settles 'dl L1,L2,L3 dr R2,R1,R3 ' 'a card in its own column'"'"'s gap settles there' 12
-drop L1 140 70 140 130 Settles 'dl L2,L1,L3 dr R1,R2,R3 ' 'a wrapped card in its own column'"'"'s gap settles there' 13
+# Down its own column: while a card is lifted nothing in its column moves (#3028), so the gap
+# under it, at 120 to 140, is its own place, and the one between the two under it is at 240 to 260.
+# It settles there, in a column that wraps its cards too (#3003).
+drop R1 400 70 400 250 Settles 'dl L1,L2,L3 dr R2,R1,R3 ' 'a card in its own column'"'"'s gap settles there' 12
+drop L1 140 70 140 250 Settles 'dl L2,L1,L3 dr R1,R2,R3 ' 'a wrapped card in its own column'"'"'s gap settles there' 13
 # The block that scrolls sideways where it stands, carried by its empty part under its line.
 drop CB 140 445 400 130 Settles 'dl L1,L2,L3 dr R1,CB,R2,R3 dn N1,N2 dj J1,J2 dc C2 ' 'the scrolling block settles in a place of its width' 6
 drop CB 140 445 400 190 Trades 'dl L1,L2,L3 dr R1,CB,R3 dn N1,N2 dj J1,J2 dc R2,C2 ' 'the scrolling block trades with a card of its width' 7
@@ -229,8 +229,8 @@ drop K1 300 425 600 260 Settles 'dl L1,L2,L3 dr R1,R2,R3 dn N1,N2 dj J1,K1,J2 dc
   'a class-less card in the gap of a class-less column settles' 9
 drop K1 300 425 600 295 Trades 'dl L1,L2,L3 dr R1,R2,R3 dn N1,N2 dj J1,K1 dc CB,C2 dk J2,K2,PT ' \
   'a class-less card on a class-less card trades' 10
-# The paragraph's middle, right of its line of words and its button. While K1 is lifted, its column
-# closes its gap with it (#3028), so the paragraph is 20 pt higher: 560 is its middle either way.
+# The paragraph's middle, right of its line of words and its button. Before #3028 a lift closed its
+# column's gap with it, so the paragraph was 20 pt higher: 560 is its middle either way.
 drop K1 300 425 480 560 Trades 'dl L1,L2,L3 dr R1,R2,R3 dn N1,N2 dj J1,J2 dc CB,C2 dk PT,K2,K1 ' \
   'a card on a paragraph with a button in it trades rather than settling among its words' 11
 
