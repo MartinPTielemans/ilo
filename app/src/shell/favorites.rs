@@ -506,6 +506,9 @@ impl Shell {
                     .accessibility_id(format!("tile-{tab}"))
                     .aria_label(self.tab_label(tab))
                     .aria_selected(selected)
+                    .when(self.keyed == Some(tab), |tile| {
+                        tile.aria_active_descendant()
+                    })
                     .pressed_by_mouse_down(false, true)
             })
             .h(px(TILE_HEIGHT))

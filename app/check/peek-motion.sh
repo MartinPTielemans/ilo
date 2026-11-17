@@ -93,6 +93,7 @@ film() {
   ../tools/window-frames.sh "$pid" 60 "$stop" 0 0 "$width" "$height" "$frames/$1-flat" \
     "$frames/$1" > "$frames/$1.txt" 2> "$frames/$1-capture.log" &
   capture=$!
+  capturing "$capture" "$stop"
   for _ in $(seq 600); do
     grep -q '^capturing' "$frames/$1.txt" 2> /dev/null && return 0
     kill -0 "$capture" 2> /dev/null || break

@@ -1940,6 +1940,8 @@ pub struct Shell {
     tab_row_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The icon each tile drew last, for the line check.sh waits on once one changes.
     tile_icons_drawn: Rc<RefCell<HashMap<u64, SharedString>>>,
+    /// Where each Space's dot in the switcher was drawn last, for the line check.sh clicks it by.
+    space_dots_drawn: Rc<RefCell<HashMap<u64, (i32, i32)>>>,
     name_row_before: Option<Bounds<Pixels>>,
     /// The Space with no icon the icon picker shows for, whose name row holds the icon's place
     /// with a placeholder until the picker closes, and the watch on the picker that tells it so.
@@ -2269,6 +2271,7 @@ impl Shell {
             name_row_drawn: Rc::default(),
             tab_row_drawn: Rc::default(),
             tile_icons_drawn: Rc::default(),
+            space_dots_drawn: Rc::default(),
             name_row_before: None,
             icon_placeholder: None,
             card_picker: None,
@@ -4618,6 +4621,12 @@ impl Render for Shell {
         let task_area = self.task_area_element(cx);
         self.breath.arm(cx);
         div()
+            .id("shell")
+            // Where the keyboard rests with no control or page holding it, an assistive app reads
+            // the window by its title, not as an unnamed one (#3151).
+            .when(self.a11y, |shell| {
+                shell.role(Role::Pane).aria_label(self.window_title.clone())
+            })
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle)
             // The Edit menu's Undo and Redo, which a field of ours takes for itself first.

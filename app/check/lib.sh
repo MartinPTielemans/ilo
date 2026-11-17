@@ -124,9 +124,39 @@ fail() {
   fi
   # What the window showed, for a failure the log doesn't explain, as on CI.
   if [ -n "${pid:-}" ] && [ -n "${out:-}" ] && kill -0 "$pid" 2>/dev/null; then
+    end_captures
     ../tools/window-screenshot.sh "$pid" "$out/failed.png" > /dev/null 2>&1 || true
   fi
   exit 1
+}
+# The window's captures the run has going, "<pid> <stop file>" a line (capturing).
+captures=
+# Notes that the process $1 captures the window, tools/window-frames.sh until the file $2 appears or
+# tools/window-record.sh. On the Mac a still taken while another capture goes ends that one
+# (ReplayKit's -5814), or hangs in ScreenCaptureKit (#3191), so a failure ends them before its
+# picture.
+capturing() {
+  captures="$captures$1 ${2:-}
+"
+}
+# Ends the captures still going: each with its stop file if it has one, else at once, and at once if
+# it hasn't ended 5 s after its file.
+end_captures() {
+  # A here-document, not a pipe, so the loop runs in this shell and can wait for its own jobs.
+  while read -r capturer stop_file; do
+    [ -n "$capturer" ] && kill -0 "$capturer" 2> /dev/null || continue
+    if [ -n "$stop_file" ]; then
+      touch "$stop_file"
+      for _ in $(seq 50); do
+        kill -0 "$capturer" 2> /dev/null || break
+        sleep 0.1
+      done
+    fi
+    kill "$capturer" 2> /dev/null || true
+    wait "$capturer" 2> /dev/null || true
+  done <<CAPTURES
+$captures
+CAPTURES
 }
 # The app ended by itself.
 gone() {
@@ -774,6 +804,7 @@ record() {
   for try in 1 2; do
     ../tools/window-record.sh "$pid" "$2" "$recording" > "$out/$1-record.log" 2>&1 &
     recorder=$!
+    capturing "$recorder"
     for _ in $(seq 300); do
       grep -q '^recording$' "$out/$1-record.log" && return 0
       kill -0 "$recorder" 2> /dev/null || break
