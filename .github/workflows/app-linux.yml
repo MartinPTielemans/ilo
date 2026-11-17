@@ -134,9 +134,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BASE: ${{ github.event.pull_request.base.sha || 'main' }}
           HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        # Compare names at most 300 files, all on its first page, and says nothing when it stops
+        # there; its later pages hold only commits (#3202). So the tests are skipped only on a list
+        # known whole: under 300 files, from a first page that has every commit.
         run: |
-          files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/compare/$BASE...$HEAD" --jq '.files[].filename')
-          if grep -qE '^app/(patches/gpui-linux-embedded\.patch$|platform/linux/)' <<< "$files"; then
+          if ! compare=$(gh api "repos/$GITHUB_REPOSITORY/compare/$BASE...$HEAD" \
+            --jq '"\(.files | length) \(.commits | length) \(.total_commits)", .files[].filename'); then
+            echo "Compare didn't answer, so the tests run."
+            echo "changed=1" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          read -r files commits total <<< "$compare"
+          if [ "$files" -ge 300 ] || [ "$commits" -lt "$total" ]; then
+            echo "Compare named $files files and $commits of $total commits, a list that may be cut short, so the tests run."
+            echo "changed=1" >> "$GITHUB_OUTPUT"
+          elif tail -n +2 <<< "$compare" | grep -qE '^app/(patches/gpui-linux-embedded\.patch$|platform/linux/)'; then
             echo "changed=1" >> "$GITHUB_OUTPUT"
           fi
       - name: GPUI's Linux tests
