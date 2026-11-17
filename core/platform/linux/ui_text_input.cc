@@ -47,15 +47,81 @@ void UITextInput::SetCaret(std::optional<gfx::Rect> caret) {
 
 void UITextInput::SetKeyboard(bool ui) {
   keyboard_ = ui;
+  // The field that took the keys went before its caret came.
+  if (!ui && hold_ == Hold::kCaret) {
+    EndHold();
+    return;
+  }
   Update();
 }
 
+void UITextInput::HoldForPage(bool hold, bool claimed) {
+  if (hold) {
+    ui::InputMethod* ime = widget_->GetInputMethod();
+    ui::TextInputClient* page = ime ? ime->GetTextInputClient() : nullptr;
+    // A page with no field focused gets the keys themselves, which the hold has. One composing
+    // keeps the input method too: the page would commit its composition as it lost it, which v3
+    // can't reset, so the composition would carry on here and the page would get it twice.
+    if (attached_ || !page || page->GetTextInputType() == ui::TEXT_INPUT_TYPE_NONE ||
+        page->HasCompositionText()) {
+      return;
+    }
+    hold_ = Hold::kAnswer;
+    Update();
+    return;
+  }
+  if (hold_ == Hold::kNone) {
+    return;
+  }
+  if (claimed && keyboard_ && !caret_) {
+    hold_ = Hold::kCaret;
+    return;
+  }
+  EndHold();
+}
+
+void UITextInput::EndHold() {
+  hold_ = Hold::kNone;
+  if (ToField()) {
+    Update();
+    return;
+  }
+  base::WeakPtr<ui::TextInputClient> page = page_;
+  // The composition goes to the page committed. Giving the input method's client back to the
+  // page disables and enables the text input, which resets the input method, and resets Chromium's
+  // own (ResetContext), so neither has a composition left to finish: one set in the page would be
+  // replaced by the next, and the user's text lost with it.
+  const std::u16string text = std::exchange(kept_, std::u16string()) +
+                              std::exchange(composition_, std::u16string());
+  composition_kept_ = false;
+  Update();
+  ui::InputMethod* ime = widget_->GetInputMethod();
+  if (!text.empty() && page && ime && ime->GetTextInputClient() == page.get()) {
+    page->InsertText(text, ui::TextInputClient::InsertTextCursorBehavior::kMoveCursorAfterText);
+  }
+}
+
 void UITextInput::Update() {
-  const bool wanted = caret_.has_value() && keyboard_;
+  if (hold_ != Hold::kNone && ToField()) {
+    hold_ = Hold::kNone;
+  }
+  const bool wanted = ToField() || hold_ != Hold::kNone;
   if (wanted && !attached_) {
     Attach();
   } else if (!wanted && attached_) {
     Detach();
+  }
+  if (attached_ && ToField()) {
+    GiveKept();
+  }
+}
+
+void UITextInput::GiveKept() {
+  if (!kept_.empty()) {
+    Committed(std::exchange(kept_, std::u16string()));
+  }
+  if (std::exchange(composition_kept_, false)) {
+    Composed(composition_);
   }
 }
 
@@ -143,13 +209,19 @@ base::WeakPtr<ui::TextInputClient> UITextInput::AsWeakPtr() {
 
 void UITextInput::SetCompositionText(const ui::CompositionText& composition) {
   composition_ = composition.text;
-  Composed(composition_);
+  if (ToField()) {
+    Composed(composition_);
+  } else {
+    composition_kept_ = true;
+  }
 }
 
 size_t UITextInput::ConfirmCompositionText(bool) {
   const size_t length = composition_.size();
   if (length) {
-    Committed(std::exchange(composition_, std::u16string()));
+    // InsertText clears composition_ first, so it gets the text by value.
+    InsertText(std::exchange(composition_, std::u16string()),
+               InsertTextCursorBehavior::kMoveCursorAfterText);
   }
   return length;
 }
@@ -157,26 +229,36 @@ size_t UITextInput::ConfirmCompositionText(bool) {
 void UITextInput::ClearCompositionText() {
   if (!composition_.empty()) {
     composition_.clear();
-    Composed(composition_);
+    if (ToField()) {
+      Composed(composition_);
+    } else {
+      composition_kept_ = false;
+    }
   }
 }
 
 void UITextInput::InsertText(const std::u16string& text, InsertTextCursorBehavior) {
   composition_.clear();
-  Committed(text);
+  if (ToField()) {
+    Committed(text);
+  } else {
+    kept_ += text;
+    composition_kept_ = false;
+  }
 }
 
 void UITextInput::InsertChar(const ui::KeyEvent& event) {
   // A key the input method let through reaches the app's UI as a key too, which types it; only
   // the character it committed for a key it took (VKEY_PROCESSKEY) is the UI's to insert here.
   if (event.key_code() == ui::VKEY_PROCESSKEY && event.GetCharacter()) {
-    composition_.clear();
-    Committed(std::u16string(1, event.GetCharacter()));
+    InsertText(std::u16string(1, event.GetCharacter()),
+               InsertTextCursorBehavior::kMoveCursorAfterText);
   }
 }
 
 ui::TextInputType UITextInput::GetTextInputType() const {
-  return caret_ ? ui::TEXT_INPUT_TYPE_TEXT : ui::TEXT_INPUT_TYPE_NONE;
+  // Held for the field, it's one before the field has its caret.
+  return caret_ || hold_ != Hold::kNone ? ui::TEXT_INPUT_TYPE_TEXT : ui::TEXT_INPUT_TYPE_NONE;
 }
 
 ui::TextInputMode UITextInput::GetTextInputMode() const {
