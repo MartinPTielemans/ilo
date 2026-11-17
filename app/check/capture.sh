@@ -10,7 +10,8 @@
 # Escape and a second ⇧⌘2 leave capture mode and give the page the keyboard back. File › Capture
 # Full Page copies a picture of the whole long page, past its view. Capture in Portrait Mode's card
 # picks White, and its Capture copies the page on it. A drag takes the rectangle dragged, and a
-# click outside capture mode and a resize leave it.
+# click outside capture mode and a resize leave it. Add to Board's Boards open beside the menu, and
+# one puts the box's picture into the Board's arrivals; a full Board's refusal says what to do.
 
 # The line saying the PNG was copied to the run's own pasteboard, and the toast's buttons after it.
 # On Linux check.sh runs in a display of its own, whose clipboard is the run's, and there's no share
@@ -33,6 +34,24 @@ page='data:text/html;charset=utf-8,<title>loading</title>
   style="position:absolute;left:20px;top:20px;font:24px system-ui">a link</a>
 <script>requestAnimationFrame(() => setTimeout(() => document.title = "ready"));</script>'
 log="$out/capture.log"
+# Two Boards of the profile's, made on disk as New Board makes them, for Add to Board (#3073):
+# Kyoto trip, changed last so it's listed first, and Reading list, whose arrivals hold the most a
+# Board may have waiting, 100 stored files' names, so the core refuses it a capture.
+boards="$profile_dir/Default/Boards"
+kyoto="$boards/$(printf 'd%.0s' $(seq 32))"
+reading="$boards/$(printf 'e%.0s' $(seq 32))"
+mkdir -p "$kyoto" "$reading"
+printf 'Kyoto trip\n' > "$kyoto/name"
+printf 'Reading list\n' > "$reading/name"
+empty='{"version": 1, "camera": {"x": 0, "y": 0, "zoom": 1}, "cards": []}'
+printf '%s' "$empty" > "$kyoto/board.json"
+printf '%s' "$empty" > "$reading/board.json"
+touch -t 202001010000 "$reading/board.json"
+i=0
+while [ $i -lt 100 ]; do
+  printf '%064x.png\n' $i
+  i=$((i + 1))
+done > "$reading/arrived"
 step=0
 rm -f "$saved" "$launch_frame"
 BROWSER_DRIVE=1 BROWSER_URL="$page" "$browser" < "$out/drive" > "$log" 2>&1 &
@@ -397,12 +416,79 @@ capture_look() {
   send key escape
   expect '^browser: capture left (escape)$' "escape didn't leave capture mode in the $1 look"
 }
+# Add to Board (#3073), in the $1 look: the row after Retake, 374 down or 398 on the Mac, under
+# Messages, opens the profile's Boards beside the menu, OVERLAP over its right edge with the first
+# level with it, the last changed first. Add to Board stays lit with the Board under the pointer.
+# A click on Kyoto trip puts the box's picture into its arrivals, as a stored file its page reads,
+# and the toast says so; Reading list, with 100 waiting, is refused and its toast says what to do.
+# No log line names a Board.
+board_look() {
+  if [ "$(uname)" = Darwin ]; then add_row=398; else add_row=374; fi
+  arrived=0
+  [ ! -f "$kyoto/arrived" ] || arrived=$(wc -l < "$kyoto/arrived")
+  capture_mode page
+  expect '^browser: capture boards listed$' "capture mode didn't list the profile's Boards in the $1 look"
+  light_box "the pointer over the box didn't light it for Add to Board in the $1 look"
+  send click $(in_page 400 250)
+  expect '^browser: capture chose 300 200 200 100$' \
+    "a click on the box didn't take it for Add to Board in the $1 look"
+  send move $(in_page 406 $add_row)
+  expect '^browser: capture boards shown$' "the pointer on Add to Board didn't open its Boards in the $1 look"
+  expect '^browser: capture menu lit add-to-board$' \
+    "the pointer on Add to Board didn't light it in the $1 look"
+  send move $(in_page 560 $add_row)
+  expect '^browser: capture menu lit board$' \
+    "the pointer on the first Board, level with Add to Board, didn't light it in the $1 look"
+  none_since '^browser: capture boards hidden$' ||
+    fail "the Boards closed on the pointer's way into them in the $1 look"
+  ../tools/window-screenshot.sh "$pid" "$out/capture-board-menu-$1.png" || fail "no window to capture"
+  send click $(in_page 560 $add_row)
+  expect '^browser: capture run board$' "a click on Kyoto trip didn't run Add to Board in the $1 look"
+  expect '^browser: capture left (board)$' "capture mode didn't leave after Add to Board in the $1 look"
+  expect 'browser: board arrived$' "the core didn't put the picture in Kyoto trip's arrivals in the $1 look"
+  expect '^browser: capture board arrived$' "the app didn't hear the picture arrived in the $1 look"
+  expect '^browser: toast shown Added to a Board$' "Add to Board's toast didn't show in the $1 look"
+  expect '^browser: toast settled$' "Add to Board's toast didn't settle in the $1 look"
+  ../tools/window-screenshot.sh "$pid" "$out/capture-board-added-$1.png" || fail "no window to capture"
+  [ "$(wc -l < "$kyoto/arrived")" -eq $((arrived + 1)) ] ||
+    fail "Kyoto trip's arrivals didn't gain the picture in the $1 look: $(wc -l < "$kyoto/arrived") lines, $arrived before"
+  name=$(tail -1 "$kyoto/arrived")
+  case "$name" in
+    *.png) ;;
+    *) fail "Kyoto trip's last arrival isn't a stored PNG's name: $name" ;;
+  esac
+  [ "$(head -c 4 "$kyoto/files/$name" | od -An -tx1 | tr -d ' \n')" = 89504e47 ] ||
+    fail "Kyoto trip's arrival $name isn't a PNG in its files"
+
+  capture_mode page
+  expect '^browser: capture boards listed$' "capture mode didn't list the Boards again in the $1 look"
+  light_box "the pointer over the box didn't light it for the full Board in the $1 look"
+  send click $(in_page 400 250)
+  expect '^browser: capture chose 300 200 200 100$' "a click on the box didn't take it for the full Board"
+  send move $(in_page 406 $add_row)
+  expect '^browser: capture boards shown$' "the pointer on Add to Board didn't open its Boards again"
+  send move $(in_page 560 $((add_row + 24)))
+  expect '^browser: capture menu lit board$' "the pointer on Reading list didn't light it in the $1 look"
+  send click $(in_page 560 $((add_row + 24)))
+  expect '^browser: capture left (board)$' "capture mode didn't leave after Add to Board, full, in the $1 look"
+  expect '^browser: capture board refused$' "the full Board wasn't refused the picture in the $1 look"
+  expect '^browser: toast shown A Board has no room \[open, copy\]$' \
+    "the full Board's refusal didn't show its toast with Open and Copy in the $1 look"
+  expect '^browser: toast settled$' "the full Board's toast didn't settle in the $1 look"
+  ../tools/window-screenshot.sh "$pid" "$out/capture-board-refused-$1.png" || fail "no window to capture"
+  [ "$(wc -l < "$reading/arrived")" -eq 100 ] || fail "the full Board's arrivals changed"
+  [ ! -d "$reading/files" ] || fail "the full Board stored the picture it refused: $(ls "$reading/files")"
+  ! grep -q 'Kyoto\|Reading list' "$log" ||
+    fail "a log line names a Board: $(grep 'Kyoto\|Reading list' "$log" | head -1)"
+}
 was=$(tone)
 capture_look "$was"
+board_look "$was"
 if [ "$was" = light ]; then other=Dark light=false; else other=Light light=true; fi
 send menu "$(cased "Appearance › $other")"
 expect "^browser: window light $light\$" "View › Appearance › $other didn't change its look"
 capture_look "$(tone)"
+board_look "$(tone)"
 send menu "$(cased 'Appearance › Automatic')"
 expect "^browser: window light $([ "$was" = light ] && echo true || echo false)\$" \
   "View › Appearance › Automatic didn't give the window its look back"
@@ -559,5 +645,7 @@ echo "ok: capture. The box's picture is $size, the full page's $full, Portrait M
   "$out/media-empty-narrow-dark.png, $out/media-empty-wide-light.png," \
   "$out/media-empty-wide-dark.png, $out/capture-pill-light.png, $out/capture-menu-light.png," \
   "$out/capture-pill-dark.png, $out/capture-menu-dark.png, $out/capture-dragged.png, $out/capture-cmd-dragged.png," \
+  "$out/capture-board-menu-light.png, $out/capture-board-added-light.png, $out/capture-board-refused-light.png," \
+  "$out/capture-board-menu-dark.png, $out/capture-board-added-dark.png, $out/capture-board-refused-dark.png," \
   "$out/capture-portrait-card.png.${on_desktop:-}" \
   "A drag took a rectangle, and a click outside and a resize left capture mode."

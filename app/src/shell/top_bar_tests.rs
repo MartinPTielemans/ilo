@@ -11,8 +11,13 @@ use gpui::{
 };
 
 use super::commands::{SHORTCUTS, ShellHandle, bar_commands};
-use super::{CARD_INSET, Command, Folders, Page, Shell, SidebarRight, TopBar, recorder::Recorder};
-use crate::tokens::shell::{TOP_BAR, URL_FIELD_HEIGHT};
+use super::{
+    CARD_INSET, Command, Folders, Page, Shell, SidebarRight, TopBar, WINDOW_BUTTONS,
+    recorder::Recorder,
+};
+use crate::tokens::shell::{TOP_BAR, URL_FIELD_HEIGHT, WINDOWS_BUTTON_PLATE};
+
+const WINDOWS: bool = cfg!(target_os = "windows");
 
 const WIDTH: f32 = 1000.;
 const HEIGHT: f32 = 700.;
@@ -119,21 +124,29 @@ fn on_the_card_starts_under_the_bar_and_off_nothing_moved(cx: &mut TestAppContex
     );
 }
 
-/// The field is in the bar, from the sidebar's edge to the card's right edge and centred on the
-/// header's line, and stays there with the sidebar hidden. With the sidebar on the right it's the
-/// left's mirrored.
+/// The field is in the bar, from the sidebar's edge to the card's right edge, or on Windows to the
+/// window's buttons there, and centred on the header's line, and stays there with the sidebar
+/// hidden. With the sidebar on the right it's the left's mirrored.
 #[gpui::test]
 fn the_field_is_in_the_bar_with_the_sidebar_shown_or_hidden(cx: &mut TestAppContext) {
     let (shell, cx, _) = window(cx);
     bar(true, &shell, cx);
     let width = shell.read_with(cx, |shell, _| shell.width());
     let shown = field(&shell, cx);
+    // Windows' buttons, minimize at WINDOW_BUTTONS' last place from the corner.
+    let buttons = match WINDOWS {
+        true => WINDOW_BUTTONS[2].0 + WINDOWS_BUTTON_PLATE / 2.,
+        false => 0.,
+    };
     let expected = Bounds::new(
         point(px(width), px((TOP_BAR - URL_FIELD_HEIGHT) / 2.)),
-        size(px(WIDTH - CARD_INSET - width), px(URL_FIELD_HEIGHT)),
+        size(
+            px(WIDTH - buttons - CARD_INSET - width),
+            px(URL_FIELD_HEIGHT),
+        ),
     );
     assert_eq!(shown, expected);
-    assert_eq!(shown.right(), laid(&shell, cx).right());
+    assert_eq!(shown.right(), laid(&shell, cx).right() - px(buttons));
 
     hide_sidebar(&shell, cx);
     assert_eq!(
@@ -148,6 +161,42 @@ fn the_field_is_in_the_bar_with_the_sidebar_shown_or_hidden(cx: &mut TestAppCont
     let right = field(&shell, cx);
     assert_eq!(right.left(), px(CARD_INSET));
     assert_eq!(right.right(), px(WIDTH - width));
+}
+
+/// On Windows the bar has the window's buttons at its right end, where Windows has them, drawn by
+/// the window whether the sidebar shows or not, and the host offers Snap layouts there. With the
+/// sidebar on the right they're in its column again, as they are with the bar off. The Mac's and
+/// Linux's never move.
+#[gpui::test]
+fn on_windows_the_window_buttons_go_to_the_bars_end(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx);
+    host.take();
+    let at_end = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell.read_with(cx, |shell, _| shell.buttons_at_bar_end())
+    };
+    let told = |right: bool, host: &Recorder| {
+        host.take()
+            .contains(&format!("window buttons right {right}"))
+    };
+
+    bar(true, &shell, cx);
+    assert_eq!(at_end(&shell, cx), WINDOWS);
+    assert_eq!(told(true, &host), WINDOWS);
+    hide_sidebar(&shell, cx);
+    assert_eq!(at_end(&shell, cx), WINDOWS);
+    assert!(shell.read_with(cx, |shell, _| shell.window_buttons_shown()));
+
+    cx.update(|_, cx| cx.set_global(SidebarRight(true)));
+    draw(&shell, cx);
+    assert!(!at_end(&shell, cx));
+    assert_eq!(told(false, &host), WINDOWS);
+
+    cx.update(|_, cx| cx.set_global(SidebarRight(false)));
+    draw(&shell, cx);
+    assert_eq!(told(true, &host), WINDOWS);
+    bar(false, &shell, cx);
+    assert!(!at_end(&shell, cx));
+    assert_eq!(told(false, &host), WINDOWS);
 }
 
 /// A click on the bar's field opens the command bar over the field, as a click on the sidebar's

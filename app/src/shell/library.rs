@@ -1,6 +1,6 @@
 //! The Library, which slides in from the left over the sidebar and pushes the card right without
-//! resizing it (Arc): a column of its sections, Media, Downloads, Spaces, History, Agents and
-//! Boosts, and beside it the section's list, newest first under day headings, with a search field
+//! resizing it (Arc): a column of its sections, Media, Downloads, Spaces, Boards, History, Agents
+//! and Boosts, and beside it the section's list, newest first under day headings, with a search field
 //! over it, or for Spaces a card for each (docs/ux-spec.md › Archive and Downloads).
 
 use std::{
@@ -92,6 +92,8 @@ use crate::tokens::shell::library::SECTION_LABEL_Y;
 use crate::tokens::shell::library::SECTION_RADIUS;
 use crate::tokens::shell::library::SECTION_WIDTH;
 use crate::tokens::shell::library::SECTION_X;
+use crate::tokens::shell::library::SECTIONS_BOTTOM;
+use crate::tokens::shell::library::SECTIONS_TOP;
 use crate::tokens::shell::library::TITLE_CAP;
 use crate::tokens::shell::library::TITLE_LINE;
 use crate::tokens::shell::library::TITLE_SIZE;
@@ -198,7 +200,9 @@ pub struct Archived {
     pub little: bool,
 }
 
+mod board_list;
 mod history_list;
+pub(super) mod keys;
 pub use history_list::Visited;
 use history_list::{History, Pointed, history_text, history_when};
 
@@ -383,6 +387,8 @@ pub(super) enum Section {
     Agents,
     /// The window's profile's Boosts (#695).
     Boosts,
+    /// The window's profile's Boards (#3073).
+    Boards,
 }
 
 impl Section {
@@ -394,6 +400,7 @@ impl Section {
             Section::Archive => "archive",
             Section::Agents => "agents",
             Section::Boosts => "boosts",
+            Section::Boards => "boards",
         }
     }
 }
@@ -427,6 +434,9 @@ impl Space {
 /// The open Library, until it has closed.
 pub(super) struct Library {
     search: Entity<TextInput>,
+    /// Spaces' keyboard, which has no search field, and the card its ring is on, by its Space.
+    cards: gpui::FocusHandle,
+    keyed_card: Option<u64>,
     /// The search the list shows, to skip notes from the field that leave its text as it was.
     query: String,
     items: Vec<Item>,
@@ -514,6 +524,8 @@ enum Item {
     PastStep(usize, usize),
     /// The Boost at this index of `Shell::boost_list`.
     Boost(usize),
+    /// The Board at this index of `Shell::board_list`.
+    Board(usize),
     /// The download at this index of `Shell::downloads`.
     Download(usize),
     /// A row of Media's tiles, from its left.
@@ -932,6 +944,30 @@ impl Shell {
         }
     }
 
+    /// The gap between the sections' buttons and how far below Arc's place, 5 above the column's
+    /// middle, they start: Arc's gap and place while the window has room, and in a shorter window,
+    /// as seven buttons need at 800 tall, under the heading's caps, with the gaps closing before
+    /// they'd reach the back button.
+    pub(super) fn sections_fit(&self) -> (f32, f32) {
+        let shown = [
+            Section::Spaces,
+            Section::Boards,
+            Section::Archive,
+            Section::Agents,
+            Section::Boosts,
+        ];
+        let count = 2. + shown.iter().filter(|each| self.has_section(**each)).count() as f32;
+        let height = f32::from(self.viewport.height);
+        if height <= 0. {
+            return (SECTION_GAP, 0.);
+        }
+        let room = height - SECTIONS_TOP - SECTIONS_BOTTOM - count * SECTION_HEIGHT;
+        let gap = (room / (count - 1.)).clamp(0., SECTION_GAP);
+        let stack = count * SECTION_HEIGHT + (count - 1.) * gap;
+        let top = (height - stack) / 2. - 5.;
+        (gap, (SECTIONS_TOP - top).max(0.))
+    }
+
     /// Opens the Library on its Spaces, for the preview, which has no pointer to pick it with.
     pub fn show_spaces(&mut self, cx: &mut Context<Self>) {
         self.view_section(Section::Spaces, cx);
@@ -973,6 +1009,7 @@ impl Shell {
             Section::Archive => "Search History…",
             Section::Agents => "Search Agents…",
             Section::Boosts => "Search Boosts…",
+            Section::Boards => "Search Boards…",
         };
         let search = cx.new(|cx| {
             TextInput::new(placeholder, cx)
@@ -997,6 +1034,8 @@ impl Shell {
             steps_all: Vec::new(),
             drawn: Rc::default(),
             _search: observe,
+            cards: cx.focus_handle(),
+            keyed_card: None,
         });
         // check.sh waits for these lines.
         log!("browser: library section {}", section.name());
@@ -1035,13 +1074,7 @@ impl Shell {
             );
             cx.on_next_frame(window, |shell, _, cx| shell.library_drawn(cx));
         }
-        // The search field goes with the Library, so the keyboard goes back to the shell.
-        if !self.library_open
-            && let Some(library) = &self.library
-            && library.search.focus_handle(cx).is_focused(window)
-        {
-            window.focus(&self.focus_handle, cx);
-        }
+        self.step_library_keys(window, cx);
         if self.library.is_none() {
             self.library_resize = None;
         }
@@ -1096,6 +1129,10 @@ impl Shell {
         }
         if self.section == Section::Boosts && self.library.is_some() {
             self.read_boosts(cx);
+        }
+        // Not as the search changes: the list it searches is the one read.
+        if changed && self.section == Section::Boards && self.library.is_some() {
+            self.read_boards(cx);
         }
         if self.section == Section::Archive && self.library.is_some() {
             self.ask_visited(cx);
@@ -1234,6 +1271,10 @@ impl Shell {
             Section::Boosts => (self.boost_list.iter().enumerate())
                 .filter(|(_, boost)| query.is_empty() || found(&boost.site))
                 .map(|(index, _)| (Item::Boost(index), 0.))
+                .collect(),
+            Section::Boards => (self.board_list.iter().enumerate())
+                .filter(|(_, board)| query.is_empty() || found(&board.name.clone().into()))
+                .map(|(index, board)| (Item::Board(index), board.changed))
                 .collect(),
             Section::Downloads => (self.downloads.iter().enumerate())
                 .filter(|(_, each)| query.is_empty() || found(&each.name) || found(&each.url))
@@ -1640,6 +1681,8 @@ impl Shell {
             (Section::Agents, false) => "No tasks match.",
             (Section::Boosts, true) => "New Boost makes one for the page shown.",
             (Section::Boosts, false) => "No Boosts match.",
+            (Section::Boards, true) => "New Board makes one, from the + menu.",
+            (Section::Boards, false) => "No Boards match.",
             (Section::Downloads, true) => "Files you download show here.",
             (Section::Downloads, false) => "No downloads match.",
             (Section::Media, true) => "Saved captures and downloaded media show here.",
@@ -1659,17 +1702,24 @@ impl Shell {
         };
         // The selected section's glyph has the Space's accent, as in Arc, where it reads there.
         let color = Hsla::from(self.palette.section_glyph);
+        let (gap, lower) = self.sections_fit();
         let sections = div()
             .flex()
             .flex_col()
-            .gap(px(SECTION_GAP))
-            // Arc's buttons sit 5 above the column's middle.
+            .gap(px(gap))
+            // Arc's buttons sit 5 above the column's middle, and lower where the heading needs it.
             .mb(px(10.))
+            .mt(px(2. * lower))
             .child(self.section_button(Section::Media, color, cx))
             .child(self.section_button(Section::Downloads, color, cx))
             .children(
                 self.has_section(Section::Spaces)
                     .then(|| self.section_button(Section::Spaces, color, cx)),
+            )
+            // Ours: after Spaces, as both are what the user made; Arc's Easels aren't recorded.
+            .children(
+                self.has_section(Section::Boards)
+                    .then(|| self.section_button(Section::Boards, color, cx)),
             )
             .children(
                 self.has_section(Section::Archive)
@@ -1971,7 +2021,7 @@ impl Shell {
             true => (0., COLUMN_WIDTH),
             false => (COLUMN_WIDTH, 0.),
         };
-        div()
+        let cards = div()
             .id("library-spaces")
             .absolute()
             .left(px(left))
@@ -1999,7 +2049,8 @@ impl Shell {
                 }),
             )
             .children(self.space_drop_line(Along::Cards))
-            .child(self.space_drop_listener(Along::Cards, cx))
+            .child(self.space_drop_listener(Along::Cards, cx));
+        self.with_card_keys(cards, cx)
     }
 
     /// A Space's card: its name's field over the rows the sidebar would show, in its colour. A
@@ -2118,7 +2169,7 @@ impl Shell {
                     .size(px(URL_BUTTON_GLYPH))
                     .text_color(palette.glyph(NAV)),
             );
-        div()
+        let card = div()
             .id(("space-card", id))
             .flex_none()
             .w(px(CARD_WIDTH))
@@ -2160,7 +2211,8 @@ impl Shell {
             .child(field)
             .child(div().children(rows))
             .child(more)
-            .child(self.card_handle(id, &palette, cx))
+            .child(self.card_handle(id, &palette, cx));
+        self.card_keyed(card, id, space.name.clone())
     }
 
     /// The handle at the card's foot, on the •••'s line and as far in from the card's left (Arc),
@@ -2510,6 +2562,7 @@ impl Shell {
             Item::PastSite(site) => return self.past_site_item(site, cx),
             Item::PastStep(past, step) => return self.past_step_item(past, step, cx),
             Item::Boost(boost) => return self.boost_item(boost, cx),
+            Item::Board(board) => return self.board_item(board, cx),
             Item::Download(download) => return self.download_item(download, cx),
             Item::Media(row) => return self.media_row(row, window, cx),
         };
@@ -3576,6 +3629,7 @@ impl Shell {
             Section::Archive => ("icons/rotate-ccw-clock.svg", "History"),
             Section::Agents => ("icons/square-mouse-pointer.svg", "Agents"),
             Section::Boosts => ("icons/paintbrush.svg", "Boosts"),
+            Section::Boards => ("icons/presentation.svg", "Boards"),
         };
         div()
             .id(label)
@@ -4144,6 +4198,8 @@ pub(super) fn of(received: i64, total: i64) -> String {
 #[cfg(test)]
 mod agents_tests;
 #[cfg(test)]
+mod board_tests;
+#[cfg(test)]
 mod drag_tests;
 #[cfg(test)]
 mod history_tests;
@@ -4189,6 +4245,7 @@ mod tests {
             folders,
             shown: 0,
             peeked: Vec::new(),
+            live_rooms: Default::default(),
         }
     }
 
@@ -4374,8 +4431,8 @@ mod tests {
         });
         cx.run_until_parked();
         let height = cx.update(|window, _| f32::from(window.viewport_size().height));
-        // The fourth button, Archived Tabs, the column's six centred 5 above its middle, 100 apart.
-        let section = point(px(SECTION_X + SECTION_WIDTH / 2.), px(height / 2. + 45.));
+        // The fifth button, History, the column's seven centred 5 above its middle, 100 apart.
+        let section = point(px(SECTION_X + SECTION_WIDTH / 2.), px(height / 2. + 95.));
         let menu = |cx: &mut gpui::VisualTestContext| {
             cx.simulate_mouse_down(section, MouseButton::Right, Modifiers::none());
             cx.simulate_mouse_up(section, MouseButton::Right, Modifiers::none());

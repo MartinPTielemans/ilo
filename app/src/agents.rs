@@ -2693,7 +2693,7 @@ impl Agents {
                 Ok(()) => self.browser.close_tab(&agent, tab, true, cx),
                 Err(why) => return self.refuse(act_of(&agent, call, tab, reply), &site, &why, cx),
             };
-            return self.closed(&agent, tab, true, closed, &site, reply, cx);
+            return self.closed(&agent, call, tab, true, closed, &site, reply, cx);
         }
         if action == "request" {
             let left = requests.into();
@@ -3236,14 +3236,15 @@ impl Agents {
         if discarded {
             closed = self.browser.close_tab(agent, tab, true, cx);
         }
-        self.closed(agent, tab, discarded, closed, &site, reply, cx);
+        self.closed(agent, call, tab, discarded, closed, &site, reply, cx);
     }
 
-    /// Answers the agent's close of `tab` on `site` with what happened, and logs it.
+    /// Answers the agent's close `call` of `tab` on `site` with what happened, and logs it.
     #[allow(clippy::too_many_arguments)]
     fn closed(
         &mut self,
         agent: &str,
+        call: u64,
         tab: u64,
         discarded: bool,
         closed: Closed,
@@ -3279,6 +3280,12 @@ impl Agents {
         );
         if closed == Closed::Closed {
             self.opened.remove(&tab);
+        }
+        // Its card's line says the page had a say, not that the close failed.
+        match closed {
+            Closed::Asks => self.close_ended(agent, call, tools::Close::Kept),
+            Closed::Closed if discarded => self.close_ended(agent, call, tools::Close::Discarded),
+            _ => {}
         }
         cx.notify();
         _ = reply.send(match answer {

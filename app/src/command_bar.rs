@@ -434,6 +434,7 @@ fn command_glyph(command: shell::Command) -> &'static str {
         Command::ViewHistory => "icons/rotate-ccw-clock.svg",
         Command::ClearBrowsingData => "icons/brush-cleaning.svg",
         Command::NewNote | Command::NewNoteSplit => "icons/file.svg",
+        Command::NewBoard | Command::ViewBoards => "icons/presentation.svg",
         Command::Settings | Command::SiteSearchSettings => "icons/settings.svg",
         Command::KeyboardShortcuts => "icons/keyboard.svg",
         Command::About => "icons/info.svg",
@@ -2745,6 +2746,7 @@ impl CommandBar {
                 let tip = Tip {
                     text: REMOVE_NAME.into(),
                     keys: remove_keys(),
+                    detail: SharedString::default(),
                 };
                 self.host
                     .tooltip(Some((tip, Anchor::under(frame, window))), cx);

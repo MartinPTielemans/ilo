@@ -3,7 +3,7 @@
 # their things at different depths and where a thing already scrolls sideways where it stands. A
 # rest on a card's middle in another column trades with the card, however deep either column wraps
 # its cards. A rest in a column's gap settles at the nearest card's edge, in a column that wraps its
-# cards one box deeper too. One that can't be as narrow as its place is refused. A block that
+# cards one box deeper too, and so does one in the carried card's own column's gap. One that can't be as narrow as its place is refused. A block that
 # scrolls sideways settles and trades between places of its own width, and is refused only in a
 # narrower one. On markup with no classes, a card under the rest trades and a column's gap settles,
 # though both are plain boxes of plain boxes. A paragraph with a button in it, beside the carried
@@ -12,7 +12,8 @@
 
 serve
 # The title says, for each column, the things drawn in it from the top by name, once nothing
-# moves, and where a press landed.
+# moves, where the pointer last moved and where a press landed. The page hears a move only while no
+# button is down, so a move after letting go marks a title written once the drop has settled.
 printf '%s' '<!doctype html><meta charset="utf-8"><title>-</title>
 <style>
 body { margin: 0; height: 100vh; font: 12px/14px sans-serif; background: rgb(243, 245, 246) }
@@ -68,12 +69,15 @@ section { box-sizing: border-box; background: rgb(217, 226, 230) }
 </div>
 </div>
 <script>
-let at = "-";
+let over = "-", at = "-";
+addEventListener("mousemove", (event) => { over = Math.round(event.clientX) + "," + Math.round(event.clientY); });
 addEventListener("mousedown", (event) => { at = Math.round(event.clientX) + "," + Math.round(event.clientY); });
 const cols = ["dl", "dr", "dn", "dj", "dc", "dk"].map((id) => document.getElementById(id));
 // Where the things of each column start, from the top: the code and class-less columns are under
-// the left and right ones, and the narrow class-less one under the narrow one.
-const band = { dl: [0, 380], dr: [0, 380], dn: [0, 180], dj: [180, 380], dc: [380, 1e4], dk: [380, 1e4] };
+// the left and right ones, from 400, and the narrow class-less one under the narrow one. A fourth
+// card settled in the left or right column keeps a gap above it as the others do (#3030), so it
+// starts at 380 and is still in that column.
+const band = { dl: [0, 400], dr: [0, 400], dn: [0, 180], dj: [180, 380], dc: [400, 1e4], dk: [400, 1e4] };
 function column(col) {
   const c = col.getBoundingClientRect(), [top, bottom] = band[col.id];
   return [...document.querySelectorAll("[aria-label]")].filter((t) => {
@@ -86,7 +90,7 @@ let said;
 setInterval(() => {
   // Not while the things move: only where they come to rest.
   if (document.getAnimations().some((x) => x.playState === "running")) return;
-  const now = cols.map((col) => col.id + " " + column(col)).join(" ") + " at " + at;
+  const now = cols.map((col) => col.id + " " + column(col)).join(" ") + " over " + over + " at " + at;
   if (now !== said) document.title = said = now;
 }, 100);
 </script>' > "$out/site/arrange-drop.html"
@@ -108,7 +112,7 @@ pid=$!
 exec 3> "$out/drive"
 await_load
 await "^browser: boost shown $host " || fail "the app didn't give the core the site's Boost"
-await "^browser: title [0-9]* ${before}at -\$" || fail "the fixture page didn't draw"
+await "^browser: title [0-9]* ${before}over [0-9,-]* at -\$" || fail "the fixture page didn't draw"
 tab=$(grep '^browser: title [0-9]* dl ' "$log" | tail -1 | cut -d' ' -f3)
 said() { grep "^browser: title $tab " "$log" | tail -1 | cut -d' ' -f4-; }
 # Waits for the page to say $1, as a pattern over its title, and fails with $2.
@@ -155,8 +159,17 @@ expect "browser: tab $tab arrange on\$" "the card's Arrange didn't turn the mode
 # (Trades or Settles), or be refused there (Refused), and lets go there. What the page then says
 # matches $7: for a refusal, the page as it was. $8 says the case, for the messages. A refusal
 # shows no preview: the rest finds the drop doesn't fit, and the step stays Carrying, Refused.
+# While the card is carried the page already titles where it would go (#3273), so the page has to
+# say it after a move that came once the drop's answer did: a title written before the release
+# can't name that move, and the page titles only once the settle's motion has ended. The move to
+# where it's pressed first makes sure the page didn't already say the place of the move after,
+# the page's empty part: not where it let go, as a move to where the pointer already is reaches no
+# page, and the selection's mini bar can be over that place.
 drop() {
+  pressed="$2,$3"
   set -- "$1" $(page_at $2 $3) $(page_at $4 $5) "$6" "$7" "$8" "$9"
+  send move $2 $3
+  page_says " over $pressed at " "$8: the page didn't hear the pointer move to $1"
   send press $2 $3
   send dragto $2 $(($3 + 6))
   expect "^browser: arrange $tab Carrying .* $1\$" "$8: a press on $1 and 6 pt didn't lift it"
@@ -184,7 +197,9 @@ drop() {
     page_says "^$before" "$8: ⌘Z didn't take back what letting go landed after the refusal"
     dropped="$dropped $8, but letting go there landed it all the same (#3003), which ⌘Z took back,"
   else
-    page_says "^$7" "$8: letting go didn't leave what it previewed"
+    send move $(page_at 600 600)
+    # $7 ends in a space, as the page's columns are followed by " over".
+    page_says "^$7.*over 600,600 at " "$8: letting go didn't leave what it previewed"
     ../tools/window-screenshot.sh "$pid" "$out/arrange-drop-$9.png" || fail "no window to capture"
     dropped="$dropped $8,"
     if [ "$6" != Refused ]; then
@@ -211,6 +226,11 @@ drop R2 400 190 140 190 Trades 'dl L1,R2,L3 dr R1,L2,R3 ' 'a card on a wrapped c
 drop L1 140 70 400 130 Settles 'dl L2,L3 dr R1,L1,R2,R3 ' 'a wrapped card in the gap under the other column'"'"'s card settles' 3
 drop R2 400 190 140 130 Settles 'dl L1,R2,L2,L3 dr R1,R3 ' 'a card in the gap of the column that wraps its cards settles' 4
 drop L1 140 70 600 90 Refused "$before" 'a card that can'"'"'t be 120 wide is refused in the narrow column' 5
+# Down its own column: while a card is lifted its column closes its gap (#3028), so the gap between
+# the two under it is at 120 to 140, and it settles there, in a column that wraps its cards too
+# (#3003).
+drop R1 400 70 400 130 Settles 'dl L1,L2,L3 dr R2,R1,R3 ' 'a card in its own column'"'"'s gap settles there' 12
+drop L1 140 70 140 130 Settles 'dl L2,L1,L3 dr R1,R2,R3 ' 'a wrapped card in its own column'"'"'s gap settles there' 13
 # The block that scrolls sideways where it stands, carried by its empty part under its line.
 drop CB 140 445 400 130 Settles 'dl L1,L2,L3 dr R1,CB,R2,R3 dn N1,N2 dj J1,J2 dc C2 ' 'the scrolling block settles in a place of its width' 6
 drop CB 140 445 400 190 Trades 'dl L1,L2,L3 dr R1,CB,R3 dn N1,N2 dj J1,J2 dc R2,C2 ' 'the scrolling block trades with a card of its width' 7

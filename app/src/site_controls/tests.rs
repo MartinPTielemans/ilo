@@ -81,6 +81,9 @@ impl Host for Recorder {
     fn turn_on_arrangement(&self, tab: u64) {
         self.push(format!("turn on arrangement {tab}"));
     }
+    fn set_recent(&self, tab: u64, on: bool, _: &mut App) {
+        self.push(format!("recent {tab} {on}"));
+    }
     fn run(&self, run: Run, tab: u64, _: &mut App) {
         let run = match run {
             Run::Command(command) => format!("{command:?}"),
@@ -174,6 +177,7 @@ fn site() -> Site {
         boost: None,
         arrangement_misfits: None,
         arrangement_off: None,
+        recent: None,
     }
 }
 
@@ -983,6 +987,24 @@ fn two_switches_or_more_are_tiles(cx: &mut TestAppContext) {
     // The third's line has no second tile.
     panel.click((174., 148.5));
     assert!(panel.calls().is_empty());
+}
+
+/// A GitHub page's switch for what's recent in its cards (#3074) is a strip alone, which turns it
+/// off and on again, kept as the user left it.
+#[gpui::test]
+fn the_recent_switch_turns_the_sites_cards_rows_off_and_on(cx: &mut TestAppContext) {
+    let mut panel = Panel::new(
+        cx,
+        Site {
+            recent: Some(true),
+            ..site()
+        },
+    );
+    panel.calls();
+    panel.click(STRIP);
+    assert_eq!(panel.calls(), [format!("recent {TAB} false")]);
+    panel.click(STRIP);
+    assert_eq!(panel.calls(), [format!("recent {TAB} true")]);
 }
 
 /// A value a policy set shows, but isn't the user's to change.

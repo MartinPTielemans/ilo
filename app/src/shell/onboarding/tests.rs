@@ -238,16 +238,17 @@ fn the_intro_goes_on_after_a_timer_that_wakes_it_early(cx: &mut TestAppContext) 
     let (shell, cx, _) = first_window(cx);
     started(&shell, cx);
     later(&shell, cx, INTRO_END - 0.5);
-    // The timer ends, while the flow's clock has half a second to go.
-    cx.executor().advance_clock(Duration::from_secs(1));
-    cx.run_until_parked();
-    assert_eq!(step(&shell, cx), Some(Step::Intro));
-    // The half second passes, and only a timer wakes the window.
+    // The hold's timer is set for the half second left; the flow's clock falls half a second
+    // behind it, as a timer that ends early leaves it.
     shell.update(cx, |shell, _| {
         let onboarding = shell.onboarding.as_mut().expect("the flow shows");
-        onboarding.since -= Duration::from_secs_f32(0.5);
+        onboarding.since += Duration::from_secs_f32(0.5);
     });
-    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.executor().advance_clock(Duration::from_secs_f32(0.75));
+    cx.run_until_parked();
+    assert_eq!(step(&shell, cx), Some(Step::Intro));
+    // What's left passes, and only the timer the woken frame set wakes the window.
+    cx.executor().advance_clock(Duration::from_secs_f32(0.5));
     cx.run_until_parked();
     assert_eq!(step(&shell, cx), Some(Step::Import));
 }
