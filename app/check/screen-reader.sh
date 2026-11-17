@@ -4,9 +4,10 @@
 # page's own content. NVDA follows the keyboard's focus, as JAWS and Narrator do, so it says what
 # Windows tells it took the focus. It writes each thing it would say to its log, with the key it
 # heard before, so the run's record, screen-reader-speech.txt, is what each key made NVDA say, and
-# screen-reader-focus.txt is what UI Automation and the window manager had focused after it. On
-# the onboarding it judges: each step and each Tab through one has NVDA say something, with UI
-# Automation's focus off GPUI's unnamed root. Past it, it records.
+# screen-reader-focus.txt is what UI Automation and the window manager had focused after it. It
+# judges the onboarding and the sidebar: each step, each Tab through one, F6 from the page and the
+# arrows down the rows have NVDA say something, with UI Automation's focus off GPUI's unnamed root
+# and, in the sidebar, on the ringed row. Elsewhere it records.
 # NVDA's portable copy (GPL) is fetched from NV Access' release on GitHub, its checksum pinned, into
 # the hosted runner's temporary folder, and never installed: with NVDA_DIR naming a portable copy,
 # the run uses that instead. Off a hosted Windows runner, and without NVDA_DIR, it skips.
@@ -157,14 +158,19 @@ spoken() {
   done
   if [ -n "$judging" ]; then
     tail -n "+$((heard + 1))" "$nvda_log" | grep -q '^Speaking ' ||
-      fail "NVDA said nothing after $1, on the onboarding: $nvda_log"
+      fail "NVDA said nothing after $1: $nvda_log"
   fi
   focused "$1"
   if [ -n "$judging" ] &&
     tail -n 4 "$focus_file" | grep -q '^UI Automation focus: Window "", framework AccessKit'; then
-    fail "UI Automation's focus stayed on ilo's unnamed root after $1, on the onboarding: $focus_file"
+    fail "UI Automation's focus stayed on ilo's unnamed root after $1: $focus_file"
   fi
   heard=$(wc -l < "$nvda_log")
+}
+# The sidebar's row called $1 has UI Automation's focus after $2, as GPUI's tree names it.
+on_row() {
+  tail -n 4 "$focus_file" | grep -q "^UI Automation focus: [A-Za-z ]* \"$1\", framework AccessKit" ||
+    fail "UI Automation's focus isn't on the sidebar's $1 row after $2: $focus_file"
 }
 # A key the driver sends as a hand's, as NVDA hears it.
 press() {
@@ -237,6 +243,39 @@ press tab
 press down
 press down
 press tab shift
+# Out of the page into the sidebar with F6, Focus Sidebar, and along its rows: each is read by its
+# name, with UI Automation's focus on GPUI's node for it, not Chromium's window (#3151). A second
+# tab first, at the top of Today, so ↓ has the first page's row to go to.
+press t cmd
+heard=$(wc -l < "$nvda_log")
+send type 'data:text/html,<title>Second</title><p>Second</p>'
+spoken "typed a second page's address"
+press return
+expect '^browser: loaded' "the second page didn't load"
+spoken "the second page loaded"
+heard=$(wc -l < "$nvda_log")
+send click $page_point
+spoken "a click on the second page"
+judging=1
+press f6
+on_row Second f6
+press down
+on_row Reading down
+press up
+on_row Second up
+judging=
+# What the rest of the UI says, not judged yet: a row's menu, the Library and Settings.
+press f10 shift
+press down
+press escape
+press l cmd shift
+press tab
+press tab
+press escape
+press , cmd
+press tab
+press tab
+press escape
 exec 3>&-
 quit
 nvda_quit
