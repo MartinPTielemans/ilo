@@ -630,6 +630,39 @@ text-size = 11.0
 secondary = 0.6
 primary = 1.0
 
+[link-card]
+# ⇧ on a link grows its plate into a card of what the page says about itself (#3080), in the hover
+# card's look (its radius, rim, padding, picture radius, text inset and ground), as the owner saw it
+# mocked: wide enough for three lines of a description of about 50 characters and, for most links,
+# the plate's whole address, which stays its last row.
+width = 320.0
+# The picture's box keeps Open Graph's 1200 × 630.
+picture-ratio = 0.525
+# The title at body size, two lines at most; the description at small, three at most; at these
+# alphas of the ink, raised to the overlay's floor.
+title-lines = 2
+desc-lines = 3
+desc-line = 15.0
+desc = 0.66
+desc-gap = 2.0
+# The address row, the plate's, under the text.
+row-gap = 4.0
+row-bottom = 2.0
+# Before the site a redirect landed on: →, this far from either side.
+lands-gap = 6.0
+# Loading: two bars in the title's place, the ink at the ground's twice, at these shares of the text's
+# width, this far apart.
+bar-title = 10.0
+bar-desc = 8.0
+bar-title-share = 0.78
+bar-desc-share = 0.5
+bar-gap = 8.0
+# Failed: Lucide's circle-alert at the title's size, this far before the words.
+alert-gap = 6.0
+# The window's room above the plate, which the tallest card fits: a picture, two lines of title,
+# three of description and the row.
+room = 300.0
+
 [menu]
 # ilo's own context menu (ours, #331): 24 pt rows of 13 pt text in an opaque panel, Ink-2 in a dark
 # window and Paper-0 in a light one.
@@ -1493,6 +1526,10 @@ windows-close-hovered = 0xc42b1c
 # URL field does, so the page has the room under the row the header leaves. The buttons are the
 # header's, their glyphs Lucide's at 18, whose 1.69 pt stroke matches the header glyphs' 1.75.
 little-bar = 46.0
+# Top bar (#3160), off by default: the header's row widened across the window, Little ilo's bar's
+# height, its buttons where they are in the sidebar. The URL field moves into it, centred on its
+# line, from the sidebar's edge to the card's right edge, and the card starts under it.
+top-bar = 46.0
 little-glyph = 18.0
 # Open in <Space> ⌘O | ⌄ ends the bar (Arc 1.168, measured by an outside reverse-engineering,
 # *interim*, #1407), in ilo's look: the words in the body size at medium, its key dimmer after them,
@@ -1861,6 +1898,12 @@ import-hold = 0.6
 # and lines between rows.
 opt-in-width = 420.0
 opt-in-line = 18.0
+# The search engine step's list, in the opt-ins' box: a row each, this tall, of a radio's dot and
+# the engine's name after it. The dot is a ring in the ink, and the one picked is filled in the
+# signal green around a paper centre.
+engine-row = 40.0
+engine-dot = 16.0
+engine-dot-center = 6.0
 
 [shell.import]
 # Ours (#1673): while an import runs, each Space it makes is a card in its own colours, under the

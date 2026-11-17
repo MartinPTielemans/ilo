@@ -1752,6 +1752,14 @@ impl Browser for Engine {
         }
     }
 
+    fn link_cards(&self) -> bool {
+        crate::link_cards::on()
+    }
+
+    fn link_card(&self, tab: u64) -> u64 {
+        crate::link_cards::ask(tab)
+    }
+
     fn link_target(
         &self,
         plate: Option<(link_target::Plate, Bounds<Pixels>, link_target::Side)>,
@@ -1931,6 +1939,10 @@ impl Browser for Engine {
         settings::set_sidebar_right(right, cx);
     }
 
+    fn keep_top_bar(&self, on: bool, cx: &mut App) {
+        settings::set_top_bar(on, cx);
+    }
+
     fn shortcuts(&self, cx: &mut App) {
         settings::show_shortcuts(cx);
     }
@@ -2104,6 +2116,14 @@ impl Browser for Engine {
 
     fn make_default_browser(&self, _: &mut App) {
         unsafe { platform::host_make_default_browser(settings::default_browser_answered) };
+    }
+
+    fn search_engines(&self, space: u64) -> (Vec<(SharedString, SharedString)>, SharedString) {
+        settings::search_engines(unsafe { bc::bc_space_profile(space) }).unwrap_or_default()
+    }
+
+    fn set_search_engine(&self, space: u64, keyword: &str, name: &str, _: &mut App) {
+        settings::set_search_engine(unsafe { bc::bc_space_profile(space) }, keyword, name);
     }
 
     fn welcome_window(&self, cx: &mut App) {

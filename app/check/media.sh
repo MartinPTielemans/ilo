@@ -1324,9 +1324,20 @@ document.title = "ready";
   expect "^browser: title $w floating\$" "the video playing with sound didn't float as a switch hid it"
   expect '^browser: handover mini player on screen ' \
     "the core didn't time the Mini Player's first frame after the switch"
-  on_screen=$(grep '^browser: handover mini player on screen ' "$log" | tail -1 |
-    sed 's/.* +\([0-9.]*\) ms.*/\1/')
-  echo "the Mini Player was on screen $on_screen ms after the switch"
+  # The line's time is when the UI thread heard the frame was presented, and its detail when it
+  # was (#3181): the bar is on the frame, and the UI thread's lateness only reports, as a stall
+  # there holds the arriving page's frame too. An engine from before #3181 says only the first.
+  on_screen=$(grep '^browser: handover mini player on screen ' "$log" | tail -1)
+  heard=$(echo "$on_screen" | sed 's/.* +\([0-9.]*\) ms.*/\1/')
+  on_screen=$(echo "$on_screen" | sed -n 's/.*, presented at \([0-9.]*\) ms)$/\1/p')
+  if [ -n "$on_screen" ]; then
+    late=$(awk -v heard="$heard" -v shown="$on_screen" 'BEGIN { printf "%.1f", heard - shown }')
+    echo "the Mini Player was on screen $on_screen ms after the switch, and the browser heard" \
+      "$late ms later"
+  else
+    on_screen=$heard
+    echo "the Mini Player was on screen by $on_screen ms after the switch, when the browser heard"
+  fi
   # A hosted runner is a slower machine shared with other jobs, where GitHub's Mac took 0.7 s to
   # put the window's first frame on screen, so there the time only reports, as perf.sh's targets
   # do, and the check VMs keep the bar.

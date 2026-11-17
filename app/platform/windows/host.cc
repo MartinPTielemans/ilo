@@ -135,6 +135,13 @@ std::string ClassName(HWND hwnd) {
   return name;
 }
 
+// Whether |hwnd| is a tab's dialog of browser window |root|: a window of Chromium's own that
+// |root| owns (PageDialogsInOwnWindow in the core), not one of the app's.
+bool TabDialogOf(HWND hwnd, HWND root) {
+  return hwnd && root && GetWindow(hwnd, GW_OWNER) == root && !host_floating_name(hwnd) &&
+         ClassName(hwnd).rfind("Chrome_WidgetWin_", 0) == 0;
+}
+
 // What check.sh calls the floating window |hwnd|, for the focus area's lines.
 const char* FloatingName(HWND hwnd) {
   const char* name = host_floating_name(hwnd);
@@ -526,6 +533,19 @@ LRESULT CALLBACK FloatingProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpa
         // on it, so this one takes the keyboard back as the window has it (#1363).
         if (floating->keyboard && to && to == GetWindow(hwnd, GW_OWNER) && !Pressed()) {
           LogIn("focus", "%s takes the keyboard back", FloatingName(hwnd));
+          break;
+        }
+        // Chromium activates a tab's dialog, a window of its own, as it first shows: nor is that the
+        // user leaving, and it takes the keyboard back from the dialog, as the Mac's overlays do.
+        // A dialog never gets the keyboard from this, an agent's tab's included (#3242).
+        if (floating->keyboard && !Pressed() && TabDialogOf(to, GetWindow(hwnd, GW_OWNER))) {
+          LogIn("focus", "%s takes the keyboard back from a tab's dialog", FloatingName(hwnd));
+          Later([hwnd, to] {
+            if (IsWindowVisible(hwnd) && GetForegroundWindow() == to) {
+              SetForegroundWindow(hwnd);
+              SetFocus(hwnd);
+            }
+          });
           break;
         }
         floating->keyboard = false;
@@ -4844,6 +4864,9 @@ void host_show_link_target(void* ui_view, double left, double top, double fade) 
 void host_hide_link_target(double fade) {
   FadeOut(g_link_target, fade, MaybeStopWatchingPointer);
 }
+
+// Windows blend with what's under them, so the room round an overlay's outline shows through.
+void host_outline_overlay(void*, double, double, double, double, double) {}
 
 bool host_mouse_down(void) {
   return Pressed();

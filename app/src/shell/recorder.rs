@@ -68,6 +68,8 @@ pub(super) struct Recorder {
     pub(super) default_browser: Cell<bool>,
     /// The system it says it runs on, the Mac unless a test says.
     pub(super) os: Cell<Option<crate::default_browser::Os>>,
+    /// The search engines and the default's keyword, as `search_engines` answers.
+    pub(super) search_engines: RefCell<(Vec<(SharedString, SharedString)>, SharedString)>,
     /// Where the pointer is in the window, as `pointer` answers.
     pub(super) pointer: Cell<Option<Point<Pixels>>>,
     /// The window over the page draws opaque, as `over_page_blends` answers.
@@ -102,6 +104,10 @@ pub(super) struct Recorder {
     pub(super) option_off: Cell<bool>,
     /// The user turned link previews off.
     pub(super) previews_off: Cell<bool>,
+    /// The user turned link cards off.
+    pub(super) link_cards_off: Cell<bool>,
+    /// How many link cards it was asked for.
+    link_cards_asked: Cell<u64>,
     /// The window's own buttons as the system says it draws them, once their window shows them.
     pub(super) window_buttons: Cell<Option<super::WindowButtonGeometry>>,
     /// The Spaces it was asked to show, in order.
@@ -694,6 +700,17 @@ impl Browser for Recorder {
 
     fn link_previews(&self) -> bool {
         !self.previews_off.get()
+    }
+
+    fn link_cards(&self) -> bool {
+        !self.link_cards_off.get()
+    }
+
+    /// Each card asked for is numbered from 1, as the core numbers them.
+    fn link_card(&self, tab: u64) -> u64 {
+        self.record(format!("link card {tab}"));
+        self.link_cards_asked.set(self.link_cards_asked.get() + 1);
+        self.link_cards_asked.get()
     }
 
     fn close_preview(&self, over: u64, _: &mut App) -> bool {
@@ -1904,6 +1921,14 @@ impl Browser for Recorder {
 
     fn os(&self) -> crate::default_browser::Os {
         self.os.get().unwrap_or(crate::default_browser::Os::Mac)
+    }
+
+    fn search_engines(&self, _: u64) -> (Vec<(SharedString, SharedString)>, SharedString) {
+        self.search_engines.borrow().clone()
+    }
+
+    fn set_search_engine(&self, space: u64, keyword: &str, _: &str, _: &mut App) {
+        self.record(format!("search engine {space} {keyword}"))
     }
 
     fn crash_reports(&self, _: &App) -> Option<bool> {
