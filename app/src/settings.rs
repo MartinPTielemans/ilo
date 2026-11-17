@@ -886,13 +886,29 @@ fn chosen_time(times: &[(&'static str, f64)], seconds: f64) -> (SharedString, Op
 
 /// The search engines `profile`'s default is picked from, each its keyword and name, and the
 /// keyword of the default, or None while it loads or a policy or an extension picks it.
-fn search_engines(profile: u64) -> Option<(Vec<(SharedString, SharedString)>, SharedString)> {
+pub(crate) fn search_engines(
+    profile: u64,
+) -> Option<(Vec<(SharedString, SharedString)>, SharedString)> {
     let engines = crate::name(bc::bc_profile_search_engines, profile);
     let engines: Vec<(SharedString, SharedString)> = (engines.lines())
         .filter_map(|line| line.split_once('\t'))
         .map(|(keyword, name)| (keyword.to_string().into(), name.to_string().into()))
         .collect();
     (!engines.is_empty()).then(|| (engines, crate::name(bc::bc_profile_search_engine, profile)))
+}
+
+/// The keyword of the engine a profile searches with until the user picks one: DuckDuckGo, which
+/// the core puts in the place of the engine ungoogled-chromium removed
+/// (engine/patches/ours/chromium-search-default-duckduckgo.patch).
+const FALLBACK_ENGINE: &str = "duckduckgo.com";
+
+/// Makes the engine of `keyword`, named `name`, `profile`'s default, as Settings' pop-up and the
+/// first launch's step do.
+pub(crate) fn set_search_engine(profile: u64, keyword: &str, name: &str) {
+    // check.sh waits for this line.
+    log!("browser: profile {profile} searches with {name}");
+    let keyword = CString::new(keyword).unwrap_or_default();
+    unsafe { bc::bc_profile_set_search_engine(profile, keyword.as_ptr()) };
 }
 
 /// Where `profile`'s downloads go, with ~ for the home folder, or None while it loads.
@@ -3118,23 +3134,25 @@ impl Settings {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
+        // The engine ilo searches with until the user picks one is marked, as Page zoom's 100% is.
         let items: Vec<MenuEntry> = (engines.iter().enumerate())
-            .map(|(index, (_, name))| {
+            .map(|(index, (keyword, name))| {
                 let on = Some(index) == chosen;
+                let name = match keyword.as_str() {
+                    FALLBACK_ENGINE => format!("{name} (default)").into(),
+                    _ => name.clone(),
+                };
                 MenuEntry {
                     checked: on,
                     over: on,
-                    ..MenuEntry::named(name.clone(), true)
+                    ..MenuEntry::named(name, true)
                 }
             })
             .collect();
         let settings = cx.weak_entity();
         let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
             if let Some((keyword, name)) = picked.and_then(|index| engines.get(index)) {
-                // check.sh waits for this line.
-                log!("browser: profile {profile} searches with {name}");
-                let keyword = CString::new(keyword.as_str()).unwrap_or_default();
-                unsafe { bc::bc_profile_set_search_engine(profile, keyword.as_ptr()) };
+                set_search_engine(profile, keyword, name);
             }
             settings.update(cx, |settings, cx| settings.chose(cx)).ok();
         });

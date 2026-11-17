@@ -2106,6 +2106,14 @@ impl Browser for Engine {
         unsafe { platform::host_make_default_browser(settings::default_browser_answered) };
     }
 
+    fn search_engines(&self, space: u64) -> (Vec<(SharedString, SharedString)>, SharedString) {
+        settings::search_engines(unsafe { bc::bc_space_profile(space) }).unwrap_or_default()
+    }
+
+    fn set_search_engine(&self, space: u64, keyword: &str, name: &str, _: &mut App) {
+        settings::set_search_engine(unsafe { bc::bc_space_profile(space) }, keyword, name);
+    }
+
     fn welcome_window(&self, cx: &mut App) {
         let id = self.window;
         cx.defer(move |cx| {
