@@ -11,8 +11,10 @@
 # turn, a turn's ten calls answered at once, which logs the turns and how long they took. A page
 # that hasn't come once an action has waited for it is still loading, as the answer says. A tab
 # its page opens, by a link or window.open, goes in its Space, behind, and the click's answer names
-# it. A page with fields gives its prose and none of their values: typed, filled in or a password, in its
-# text and in its outline, and the agent can't type into the password field. It types into another.
+# it. A page with fields gives its prose and none of their values in its text. Its outline gives
+# the page's own values and the agent's own typing, and of the rest only that they're filled: the
+# user's typing, a script's fill as autofill's is, a card's and a password's. The agent can't type
+# into the password field. It types into another, whose line then holds what it typed (#2355).
 # A frame nested two sites deep, one the page adds after its load and one it fills by posting a
 # form into it are in the page's outline and text too, an empty helper frame is in neither, and a
 # click two frames deep lands. A skip link in a frame, off the page until it's focused, is focused
@@ -124,7 +126,11 @@ printf '%s' 'for (const style of ["position: fixed; left: 40vw; top: 76vh", "dis
   frame.src = chrome.runtime.getURL("shown.html");
   frame.style = style + "; width: 25vw; height: 15vh; border: 0";
   document.body.append(frame);
-}' > "$extension/withheld.js"
+}
+const changed = document.querySelector("[aria-label=\"Extension changed\"]");
+changed.addEventListener("input", () => {
+  if (changed.value.length == 6) changed.value += "█";
+});' > "$extension/withheld.js"
 printf '%s' '<!doctype html><meta charset=utf-8><style>
 body { margin: 0; background: #fff; color: #f00; font: 60vh/1 monospace;
   -webkit-text-stroke: 0.1em #f00; overflow: hidden }
@@ -744,8 +750,10 @@ painted(() => document.title = "fields");
     case "$read" in *"$secret"*) fail "reading the fields page gave a field's value, $secret" ;; esac
   done
 
-  # The outline names the fields by ref, the password field off limits, and gives no value. A
-  # select's line names its options, the page's own, and never which one is chosen (#2355).
+  # The outline names the fields by ref and the password field off limits. A field shows what it
+  # holds only where that's the page's own, as the note's text and the select's option marked
+  # selected are, and of any other only that it's filled. A select's line names its options, the
+  # page's own (#2355).
   outline=$(call snapshot "{\"tab\":$agent_tab}")
   printf '%s\n' "$outline" > "$out/mcp-outline.txt"
   case "$outline" in
@@ -753,15 +761,26 @@ painted(() => document.title = "fields");
     *) fail "the fields page's outline was: $outline" ;;
   esac
   for secret in $secrets; do
-    [ "$secret" = chosen-by-ada ] && continue
+    case $secret in note-by-ada | chosen-by-ada) continue ;; esac
     case "$outline" in *"$secret"*) fail "the fields page's outline gave a field's value, $secret" ;; esac
   done
+  ref_of() { printf '%s\n' "$outline" | sed -n "s/.*- $1 \"$2\" \[\(e[0-9]*\)\].*/\1/p" | head -1; }
+  line_of() { printf '%s\n' "$outline" | grep -- "- $1 \"$2\" \["; }
+  for field in Name Email Card; do
+    case "$(line_of textbox $field)" in
+      *'] (filled)') ;;
+      *) fail "the $field field's line didn't say only that it was filled: $(line_of textbox $field)" ;;
+    esac
+  done
+  case "$(line_of textbox Note)" in
+    *'] (holds "note-by-ada")') ;;
+    *) fail "the note's line didn't hold the page's own text: $(line_of textbox Note)" ;;
+  esac
   chosen=$(printf '%s\n' "$outline" | grep 'chosen-by-ada')
   case "$chosen" in
-    *'- combobox [e'*'(options: "Pick one", "chosen-by-ada")') ;;
-    *) fail "the select's line didn't name just its options: $chosen" ;;
+    *'- combobox [e'*'] (holds "chosen-by-ada") (options: "Pick one", "chosen-by-ada")') ;;
+    *) fail "the select's line didn't hold its option marked selected and name its options: $chosen" ;;
   esac
-  ref_of() { printf '%s\n' "$outline" | sed -n "s/.*- $1 \"$2\" \[\(e[0-9]*\)\].*/\1/p" | head -1; }
   password=$(ref_of textbox Password)
   refused=$(call type "{\"tab\":$agent_tab,\"ref\":\"$password\",\"text\":\"by-the-agent\"}")
   case "$refused" in
@@ -775,7 +794,11 @@ painted(() => document.title = "fields");
     "Typed into “Note”."*) ;;
     *) fail "typing into the note answered: $typed" ;;
   esac
-  case "$typed" in *by-the-agent*) fail "the outline gave what the agent typed" ;; esac
+  # What changed in the outline is the note, which holds the agent's typing with the page's text.
+  case "$typed" in
+    *'- textbox "Note" [e'*'] (holds "'*by-the-agent*'")'*) ;;
+    *) fail "typing into the note didn't answer with what the note holds now: $typed" ;;
+  esac
   await_log "^browser: title $agent_tab noted\$" "the agent's typing didn't reach the field"
   # The page watched from its card has its pointer: at the note it typed into, ringed and
   # tagged with the note's ref, over the page in the window the mouse goes through. It goes a
@@ -951,14 +974,17 @@ painted(() => document.title = "choose");
   status=$(ref_of combobox Status)
   priority=$(ref_of combobox Priority)
   case "$outline" in
-    *"- combobox \"Status\" [$status] (options: \"Open\", \"Pending\", \"Closed\")"*) ;;
+    *"- combobox \"Status\" [$status] (holds \"Open\") (options: \"Open\", \"Pending\", \"Closed\")"*) ;;
     *) fail "the select's line didn't name its options: $(printf '%s\n' "$outline" | grep Status)" ;;
   esac
   [ -n "$status" ] && [ -n "$priority" ] ||
     fail "the choosing page's fields had the refs '$status' and '$priority'"
   # A picker whose list is its child (aria-owns), as Chromium's tree has it, shows its options with
-  # refs, and still not what's in its field (#2355).
-  case "$outline" in *Ber-by-ada*) fail "the picker's line gave what its field holds" ;; esac
+  # refs, and what's in its field, the page's own value (#2355).
+  case "$outline" in
+    *'- combobox "City" [e'*'] (holds "Ber-by-ada")'*) ;;
+    *) fail "the picker's line didn't hold the page's own value: $(printf '%s\n' "$outline" | grep City)" ;;
+  esac
   bern=$(ref_of option Bern)
   case "$outline" in
     *"- combobox \"City\" [e"*"- listbox \"Cities\" [e"*"- option \"Berlin\" [e"*"- option \"Bern\" [$bern]"*) ;;
@@ -1472,12 +1498,14 @@ CARD
   send key w cmd
   expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 
-  # The agent's picture of a page withholds what its outline does of a field: a field holding what
-  # the agent typed and is unchanged shows it, as does the page's own value, by the markup or in a
-  # read-only field; any other field with something in it is painted over, so a field filled by the
-  # page's script, as the user's typing or a password manager's fill would be, one the agent typed
-  # into that changed since, a password field the page made a text field and a card's field, in a
-  # frame of another site and half out of view too. Each field's text is red blocks: a field shown
+  # The agent's picture of a page withholds what its outline does of a field, by one rule: a field
+  # holding what the agent typed and is unchanged shows it, as does the page's own value, by the
+  # markup or in a read-only or disabled field; any other field with something in it is painted
+  # over and its line says only that it's filled, so a field filled by the page's script, as the
+  # user's typing or a password manager's fill would be, one the agent typed into that the page or
+  # an extension changed since, which says it's not as the agent typed it, a password field the
+  # page made a text field and one it made a password again, a card's field and a one-time code's,
+  # even with the agent's own typing, in a frame of another site and half out of view too (#2355). Each field's text is red blocks: a field shown
   # has red in the picture, and one withheld has none. The check's extension puts two frames of its
   # own with red text in the page, one over it and one in its flow below the fields, which the
   # outline leaves out, so the picture has no red there either. The site's frame has a rule of its
@@ -1509,6 +1537,12 @@ button { position: absolute; left: 70vw; top: 50vh }
 <input aria-label='Shown password' type=password value='██████' style='left: 26vw; top: 20vh'>
 <input aria-label=Card autocomplete=cc-number value='██████' style='left: 50vw; top: 20vh'>
 <textarea aria-label=Note style='left: 74vw; top: 20vh'>██████</textarea>
+<input aria-label='One-time code' autocomplete=one-time-code style='left: 2vw; top: 33vh; height: 5vh; font-size: 4vh'>
+<input aria-label='Card typed' autocomplete='cc-number' style='left: 26vw; top: 33vh; height: 5vh; font-size: 4vh'>
+<input aria-label='Extension changed' style='left: 50vw; top: 33vh; height: 5vh; font-size: 4vh'>
+<select aria-label='Moved select' style='position: absolute; left: 74vw; top: 33vh'><option selected>First<option>Second</select>
+<input aria-label=Disabled disabled value='██████' style='left: 74vw; top: 58vh'>
+<input aria-label='Toggled back' type=password value='██████' style='left: 74vw; top: 76vh'>
 <iframe id=site src=http://127.0.0.1:$port/withheld-inner.html></iframe>
 <button onclick='document.querySelector(\"[aria-label=Changed]\").value += \"█\"'>Change</button>
 <input aria-label=Below style='left: 2vw; top: 94vh'>
@@ -1518,6 +1552,9 @@ button { position: absolute; left: 70vw; top: 50vh }
 const field = label => document.querySelector('[aria-label=\"' + label + '\"]');
 for (const label of ['Filled', 'Fixed', 'Below']) field(label).value = '██████';
 field('Shown password').type = 'text';
+field('Toggled back').type = 'text';
+field('Toggled back').type = 'password';
+field('Moved select').selectedIndex = 1;
 let ready = 0;
 const shown = () => ++ready == 4 && (document.title = 'fields');
 painted(shown);
@@ -1527,7 +1564,7 @@ addEventListener('message', event =>
   outline=$(call open_tab "{\"url\":\"localhost:$port/withheld.html\"}")
   fields_tab=$(printf '%s\n' "$outline" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
   await_log "^browser: title $fields_tab fields\$" "the page with fields didn't paint"
-  for label in Typed Changed; do
+  for label in Typed Changed 'One-time code' 'Card typed' 'Extension changed'; do
     ref=$(ref_of textbox "$label")
     typed=$(call type "{\"tab\":$fields_tab,\"ref\":\"$ref\",\"text\":\"██████\"}")
     case "$typed" in "error: "*) fail "typing into $label answered: $typed" ;; esac
@@ -1537,6 +1574,33 @@ addEventListener('message', event =>
     "Clicked button “Change”."*) ;;
     *) fail "clicking Change answered: $clicked" ;;
   esac
+  outline=$(call snapshot "{\"tab\":$fields_tab}")
+  printf '%s\n' "$outline" > "$out/mcp-withheld-outline.txt"
+  # Each field's line ends as $2 says, a password's after it says it's off limits.
+  seen_line() {
+    line=$(printf '%s\n' "$outline" | grep -- "- [a-z]* \"$1\" \[e[0-9]*\]" | head -1)
+    case "$line" in
+      *"] $2" | *"] (password: off limits) $2") ;;
+      *) fail "the outline's line for $1 didn't end with $2: $line" ;;
+    esac
+  }
+  seen_line Typed '(holds "██████")'
+  seen_line Changed '(filled, not as you typed it)'
+  seen_line 'Extension changed' '(filled, not as you typed it)'
+  seen_line Filled '(filled)'
+  seen_line Default '(holds "██████")'
+  seen_line Fixed '(holds "██████")'
+  seen_line Disabled '(disabled) (holds "██████")'
+  seen_line 'Shown password' '(filled)'
+  seen_line 'Toggled back' '(filled)'
+  seen_line Card '(filled)'
+  seen_line 'Card typed' '(filled)'
+  seen_line 'One-time code' '(filled)'
+  seen_line Note '(holds "██████")'
+  seen_line 'Frame default' '(holds "██████")'
+  seen_line 'Frame filled' '(filled)'
+  seen_line Below '(filled)'
+  seen_line 'Moved select' '(filled) (options: "First", "Second")'
   mcp "$(request screenshot "{\"tab\":$fields_tab}")" | python3 -I -c '
 import base64, json, sys
 content = json.load(sys.stdin)["result"]["content"][0]
@@ -1585,6 +1649,11 @@ PY
   see_field Fixed 3 22 21 30 shown
   see_field "Shown password" 27 22 45 30 withheld
   see_field Card 51 22 69 30 withheld
+  see_field "One-time code" 3 34 21 37 withheld
+  see_field "Card typed" 27 34 45 37 withheld
+  see_field "Extension changed" 51 34 69 37 withheld
+  see_field Disabled 75 60 93 68 shown
+  see_field "Toggled back" 75 78 93 86 withheld
   see_field Note 75 22 93 30 shown
   see_field "Frame default" 6 44 28 54 shown
   see_field "Frame filled" 36 44 58 54 withheld

@@ -585,6 +585,20 @@ impl Walk<'_> {
             for state in &states {
                 line.push_str(&format!(" ({state})"));
             }
+            // What a field holds, where the core can name its source as the agent's own typing,
+            // unchanged, or the page's own value, and else only whether it holds anything: never
+            // the user's typing, autofill's or a password manager's fill, or a password's, a card's
+            // or a one-time code's contents, as in the agent's pictures (#2355).
+            if let Some(holds) = node.get("holds").and_then(Value::as_str) {
+                let holds = holds.split_whitespace().collect::<Vec<_>>().join(" ");
+                line.push_str(&format!(" (holds \"{}\")", clip(&holds, HOLDS_SHOWN)));
+            }
+            match node.get("contents").and_then(Value::as_str) {
+                Some("empty") => line.push_str(" (empty)"),
+                Some("filled") => line.push_str(" (filled)"),
+                Some("changed") => line.push_str(" (filled, not as you typed it)"),
+                _ => {}
+            }
             // A native select's choices, the page's own: the core leaves out which one is chosen.
             let choices = node.get("choices").and_then(Value::as_array);
             let choices: Vec<_> = choices
@@ -648,6 +662,10 @@ pub fn clip(text: &str, chars: usize) -> String {
         None => text.into(),
     }
 }
+
+/// How many characters of what a field holds its line shows: enough to check a form's answers,
+/// while a long text's line stays a line.
+const HOLDS_SHOWN: usize = 200;
 
 /// How many of a select's choices its line names: enough for any form's, while a country list's
 /// says how many more there are, which `select` finds by name.
@@ -782,6 +800,47 @@ mod tests {
             "name": { "value": name },
             "childIds": children,
         })
+    }
+
+    /// A field's line says what it holds where the core gives it, and else only whether it holds
+    /// anything, and whether that's no longer what the agent typed (#2355).
+    #[test]
+    fn a_fields_line_says_what_it_holds_or_only_whether_its_filled() {
+        let mut nodes = vec![
+            node("1", "RootWebArea", "Form", &["2", "3", "4", "5", "6", "7"]),
+            node("2", "textbox", "Name", &[]),
+            node("3", "textbox", "Email", &[]),
+            node("4", "textbox", "Password", &[]),
+            node("5", "textbox", "Notes", &[]),
+            node("6", "textbox", "Phone", &[]),
+            node("7", "textbox", "City", &[]),
+        ];
+        for node in &mut nodes {
+            node["backendDOMNodeId"] =
+                json!(node["nodeId"].as_str().unwrap().parse::<i64>().unwrap());
+        }
+        nodes[1]["holds"] = json!("Jane Doe");
+        nodes[2]["contents"] = json!("filled");
+        nodes[3]["contents"] = json!("filled");
+        nodes[3]["password"] = json!(true);
+        nodes[4]["holds"] = json!(format!("First line\n\nsecond {}", "x".repeat(300)));
+        nodes[5]["contents"] = json!("empty");
+        nodes[6]["contents"] = json!("changed");
+        let outline = outline(&tab(), &nodes, &mut Refs::default(), None).text();
+        for line in [
+            "- textbox \"Name\" [e1] (holds \"Jane Doe\")\n",
+            "- textbox \"Email\" [e2] (filled)\n",
+            "- textbox \"Password\" [e3] (password: off limits) (filled)\n",
+            "- textbox \"Phone\" [e5] (empty)\n",
+            "- textbox \"City\" [e6] (filled, not as you typed it)",
+        ] {
+            assert!(outline.contains(line), "{line} in {outline}");
+        }
+        assert!(
+            outline.contains("(holds \"First line second xxx"),
+            "{outline}"
+        );
+        assert!(outline.contains("x…\")\n"), "{outline}");
     }
 
     /// A native select's line names its choices, the page's own, as the core gives them without
