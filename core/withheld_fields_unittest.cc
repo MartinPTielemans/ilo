@@ -118,7 +118,7 @@ TEST(WithheldFieldsTest, ItsBoxInThePicture) {
   EXPECT_TRUE(InPicture(gfx::RectF(10, 20, 50, 30), 1, area, gfx::Size(400, 200)).IsEmpty());
 }
 
-// The hatch leaves nothing of the text, keeps the field's background and paints nothing outside.
+// The hatch leaves nothing of the text, is greys only and paints nothing outside.
 TEST(WithheldFieldsTest, TheHatchHidesTheText) {
   for (const int scale : {1, 2}) {
     SkBitmap picture;
@@ -137,13 +137,44 @@ TEST(WithheldFieldsTest, TheHatchHidesTheText) {
           ASSERT_EQ(color, SK_ColorWHITE) << x << "," << y;
           continue;
         }
-        // Greys of the white background only: no red left.
+        // Greys only: no red left.
         ASSERT_EQ(SkColorGetR(color), SkColorGetG(color)) << x << "," << y;
+        ASSERT_EQ(SkColorGetG(color), SkColorGetB(color)) << x << "," << y;
         stripes += color != SK_ColorWHITE;
       }
     }
     // Stripes cover a fair part of the box, so it reads as filled, not blank.
     EXPECT_GT(stripes, box.size().GetArea() / 8);
+  }
+}
+
+// A withheld field pictures the same whatever it shows: text away from its corners or drawn to
+// them, in any colour, on a light field or a dark one.
+TEST(WithheldFieldsTest, TheHatchIsTheSameWhateverTheFieldHolds) {
+  for (const int scale : {1, 2}) {
+    const gfx::Rect box(20 * scale, 20 * scale, 120 * scale, 30 * scale);
+    const auto pictured = [&](SkColor field, SkColor text, int inset) {
+      SkBitmap picture;
+      picture.allocN32Pixels(200 * scale, 100 * scale);
+      picture.eraseColor(SK_ColorWHITE);
+      picture.erase(field, SkIRect::MakeXYWH(box.x(), box.y(), box.width(), box.height()));
+      picture.erase(text, SkIRect::MakeXYWH(box.x() + inset, box.y() + inset,
+                                            box.width() - 2 * inset, box.height() - 2 * inset));
+      Hatch(picture, {box}, static_cast<float>(scale));
+      return picture;
+    };
+    const SkBitmap first = pictured(SK_ColorWHITE, SK_ColorRED, 6 * scale);
+    const std::vector<SkBitmap> others = {pictured(SK_ColorWHITE, SK_ColorRED, 0),
+                                          pictured(SK_ColorWHITE, SK_ColorBLUE, 0),
+                                          pictured(SK_ColorBLACK, SK_ColorWHITE, 6 * scale),
+                                          pictured(SK_ColorBLACK, SK_ColorWHITE, 0)};
+    for (const SkBitmap& other : others) {
+      for (int y = 0; y < first.height(); ++y) {
+        for (int x = 0; x < first.width(); ++x) {
+          ASSERT_EQ(first.getColor(x, y), other.getColor(x, y)) << x << "," << y;
+        }
+      }
+    }
   }
 }
 
