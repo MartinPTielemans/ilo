@@ -87,6 +87,7 @@ await_load
 await '^browser: title [0-9]* ready$' || fail "the Spaces test page didn't draw"
 first=$(space)
 await "^browser: spaces $first\$" || fail "the app didn't start with one Space"
+dots_window=$(grep -m1 '^browser: window opened ' "$log" | cut -d' ' -f4)
 a=$(today)
 send click $page_point
 if [ "$active" != 1 ]; then
@@ -95,11 +96,9 @@ if [ "$active" != 1 ]; then
   echo "skip: Spaces. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi
-# The switcher's dots are centred under the sidebar, 25 above the window's bottom.
 send layout
 content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
   sed 's/^browser: layout content \([0-9]*x[0-9]*\),.*/\1/')
-dots_y=$((${content#*x} - 25))
 
 # The first launch's Space is the browser's only one, "Space 1" with no icon, which Arc 1.171
 # counts as unnamed and hides the name row of, what's under it rising 39. The runs keep the row
@@ -238,6 +237,18 @@ lost_keyboard() {
   grep '^browser: field lost the keyboard' "$log" | tail -1 | grep . || echo "it never lost it"
 }
 
+# Where the first window's switcher last drew Space $1's dot, "x y": each window's footer logs each
+# place it draws one, as what else it holds, such as the menu control off the Mac, moves the dots
+# (#3175).
+dot() {
+  for _ in $(seq 100); do
+    sed -n "s/^browser: switcher dot $1 in window $dots_window at //p" "$log" | tail -1 | grep . &&
+      return 0
+    sleep 0.1
+  done
+  fail "the switcher didn't draw Space $1's dot"
+}
+
 # $1 is the driver's key or click, $2 the command it runs, $3 where the UI hears it from, and $4
 # the Space it shows, with its tab $5.
 show_space() {
@@ -266,19 +277,24 @@ send click $sidebar_point
 show_space "key 1 ctrl" select-space ui "$first" "$a"
 show_space "key right alt cmd" next-space ui "$second" "$b"
 show_space "key left alt cmd" previous-space ui "$first" "$a"
-show_space "click 131 $dots_y" select-space sidebar "$second" "$b"
-show_space "click 97 $dots_y" select-space sidebar "$first" "$a"
+show_space "click $(dot "$second")" select-space sidebar "$second" "$b"
+show_space "click $(dot "$first")" select-space sidebar "$first" "$a"
 ../tools/window-screenshot.sh "$pid" "$out/spaces.png" || fail "no window to capture"
 
 # A dot dragged along the switcher moves its Space: the second's let go before the first's goes
 # first, and ⌘Z puts it back. Held there, its copy is at the pointer and the line before the first
 # (#1580). A drag with one move, as a flick, moves it too.
-send press 131 $dots_y
-send dragto 125 $dots_y
+at=$(dot "$second")
+second_x=${at% *}
+dot_y=${at#* }
+first_x=$(dot "$first")
+first_x=${first_x% *}
+send press "$at"
+send dragto $((second_x - 6)) "$dot_y"
 expect "^browser: drag space $second\$" "the second Space's dot didn't come away with the pointer"
-send dragto 70 $dots_y
+send dragto $((first_x - 27)) "$dot_y"
 ../tools/window-screenshot.sh "$pid" "$out/space-drag.png" || fail "no window to capture"
-send release 70 $dots_y
+send release $((first_x - 27)) "$dot_y"
 expect "^browser: dropped space $second after 0\$" "the second Space's dot let go before the first's didn't move it"
 expect "^browser: spaces $second $first\$" "the second Space didn't go first"
 send key z cmd
@@ -286,7 +302,7 @@ expect '^browser: command undo via \(ui\|page\)$' "⌘Z didn't undo the Space's 
 expect "^browser: spaces $first $second\$" "⌘Z didn't put the Spaces back in their order"
 # Until the dots have glided back, the second's is still drawn under the first's place (#2026).
 expect '^browser: spaces settled$' "the dots didn't settle after ⌘Z"
-send drag 97 $dots_y 160 $dots_y
+send drag "$first_x" "$dot_y" $((second_x + 29)) "$dot_y"
 expect "^browser: dropped space $first after $second\$" "the first Space's dot flicked past the second's didn't move it"
 expect "^browser: spaces $second $first\$" "the first Space didn't go last"
 send key z cmd
@@ -361,10 +377,10 @@ send key w cmd
 expect_tabs "$a" "$a" "after closing the tab over the page"
 expect "^browser: title $a visible " "the tab shown again isn't visible"
 ran_hidden "the tab shown again ran frames while hidden, other than its picture's"
-show_space "click 131 $dots_y" select-space sidebar "$second" "$b"
+show_space "click $(dot "$second")" select-space sidebar "$second" "$b"
 expect "^browser: title $a hidden\$" "the tab in the Space not shown isn't hidden"
 hidden_quiet "the tab in the Space not shown ran frames while hidden, other than its picture's"
-show_space "click 97 $dots_y" select-space sidebar "$first" "$a"
+show_space "click $(dot "$first")" select-space sidebar "$first" "$a"
 expect "^browser: title $a visible " "the tab in the Space shown again isn't visible"
 ran_hidden "the tab in the Space shown again ran frames while hidden, other than its picture's"
 # A Space shows its last-used tab again: with two in Today and the lower one shown, a switch away
@@ -373,8 +389,8 @@ open_from_bar example.org
 c=$tab
 send click "$(row 1)"
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" "a click on the lower row didn't show tab $a"
-show_space "click 131 $dots_y" select-space sidebar "$second" "$b"
-send click 97 $dots_y
+show_space "click $(dot "$second")" select-space sidebar "$second" "$b"
+send click "$(dot "$first")"
 expect '^browser: command select-space via sidebar$' "the first Space's dot didn't run select-space"
 expect "^browser: space $first in " "the first Space's dot didn't show it"
 # The swipes below would catch a page still sliding in, so it settles here: once the next command
@@ -409,7 +425,7 @@ expect "^browser: dragged $c to space $second today\$" "a row let go in the next
 send key z cmd
 expect '^browser: command undo via \(ui\|page\)$' "⌘Z didn't undo the drag to the next Space"
 expect "^browser: today $b\$" "⌘Z didn't take the dragged tab back: \"$(today)\""
-send click 97 $dots_y
+send click "$(dot "$first")"
 expect '^browser: command select-space via sidebar$' "the first Space's dot didn't run select-space"
 expect "^browser: space $first in " "the first Space's dot didn't show it"
 expect_tabs "$c $a" "$a" "after ⌘Z put the dragged tab back"
@@ -1371,7 +1387,7 @@ expect '^browser: rename cancelled$' \
 # Deleting a Space with tabs asks first, in a dialog over the window, and a click around it cancels.
 # Return deletes the Space once the dialog has gone. Its tabs close with it, and ⇧⌘T reopens them
 # here.
-post rightclick 131 $dots_y
+post rightclick "$(dot "$second")"
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $profile, \
 New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a right-click on a dot didn't show its Space's menu"
@@ -1384,7 +1400,7 @@ expect '^browser: dialog hidden$' "the dialog didn't go"
 send state
 [ "$key" = BrowserCoreNSWindow ] || fail "the window didn't get the keyboard back: $key has it"
 none_since '^browser: spaces' || fail "a click around the dialog deleted the Space"
-post rightclick 131 $dots_y
+post rightclick "$(dot "$second")"
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $profile, \
 New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a right-click on a dot didn't show its Space's menu"
@@ -1419,7 +1435,7 @@ expect "^browser: settled space $second\$" "the Space ⌘Z brought back didn't s
 # of Work's pinned tabs and its tab the top of Work's Today, shows Work and deletes the Space, and a
 # toast offers the Undo. ⌘Z brings the Space back where it was, with its tab, and shows it (#1400).
 t=$(today)
-post rightclick 131 $dots_y
+post rightclick "$(dot "$second")"
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $profile, \
 New Folder…, Export “reading 日本語” into Folder › Work, \
 Export “reading 日本語” into Folder › reading 日本語 (disabled), Export as Markdown…, Manage Spaces…, \
@@ -1444,7 +1460,7 @@ expect "^browser: space $second\( in .*\)\{0,1\}\$" "⌘Z didn't show the export
 expect "^browser: today $t\$" "⌘Z didn't put the exported Space's tab back: Today is \"$(today)\""
 expect "^browser: settled space $second\$" "the exported Space ⌘Z brought back didn't settle"
 # Deleted again, its tab reopens here with ⇧⌘T, and ⌘Z brings back the Space without it.
-post rightclick 131 $dots_y
+post rightclick "$(dot "$second")"
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $profile, \
 New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a right-click on a dot didn't show its Space's menu"
@@ -1478,7 +1494,7 @@ expect '^browser: window opened [0-9]' "⌘N didn't open a window"
 other=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
 new_window_bar
 send window 1
-post rightclick 131 $dots_y
+post rightclick "$(dot "$second")"
 # ⌘Z brought the Space back with its theme.
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $empty_profile, \
 New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
@@ -1533,7 +1549,7 @@ none_since '^browser: library hidden$' || fail "the drag back onto the first car
 send key escape
 expect '^browser: library hidden$' "escape didn't close the Library after the cards' drags"
 # Empty, it goes without asking, and says so too.
-post rightclick 131 $dots_y
+post rightclick "$(dot "$second")"
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $empty_profile, \
 New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a right-click on a dot didn't show its Space's menu"

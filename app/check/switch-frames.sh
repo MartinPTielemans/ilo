@@ -35,8 +35,6 @@ content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: la
   sed 's/^browser: layout content \([0-9]*x[0-9]*\),.*/\1/')
 width=${content%x*}
 height=${content#*x}
-# The switcher's dots are centred under the sidebar, 25 above the window's bottom.
-dots_y=$((height - 25))
 send menu New Space…
 expect "^browser: spaces $first [0-9]*\$" "New Space didn't make a second Space"
 second=$(grep '^browser: spaces' "$log" | tail -1 | cut -d' ' -f4)
@@ -90,11 +88,11 @@ for i in 1 2 3 4; do
 done
 for i in 1 2; do
   mark "dot2 $i"
-  send click 131 $dots_y
+  send click "$(sed -n "s/^browser: switcher dot $second in window [0-9]* at //p" "$log" | tail -1)"
   expect "^browser: space $second in " "the second dot didn't show the second Space"
   sleep 0.7
   mark "dot1 $i"
-  send click 97 $dots_y
+  send click "$(sed -n "s/^browser: switcher dot $first in window [0-9]* at //p" "$log" | tail -1)"
   expect "^browser: space $first in " "the first dot didn't show the first Space"
   sleep 0.7
 done
