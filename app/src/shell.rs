@@ -50,6 +50,8 @@ mod battery;
 mod beside;
 #[cfg(test)]
 mod blank_tests;
+#[cfg(test)]
+mod board_title_tests;
 mod boost;
 mod browser;
 mod by_site;
