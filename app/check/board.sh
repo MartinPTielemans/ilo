@@ -171,9 +171,11 @@ expect '^browser: private window opened [0-9]* profile [0-9]*$' "⇧⌘N didn't 
 # A new window opens on its command bar, where ⌘L would close it.
 expect '^browser: command bar shown$' "the private window didn't open on its command bar"
 send type "new board"
-expect '^browser: command bar commands "new board": ' "the private window's command bar found nothing for \"new board\""
-! grep '^browser: command bar commands "new board": ' "$log" | tail -1 | grep -q ': New Board' ||
-  fail "a private window's command bar offers New Board"
+# Its list for "new board" is there to read; a commands line is written only when a command matches.
+expect '^browser: command bar lists "new board": ' "the private window's command bar listed nothing for \"new board\""
+offered=$(sed -n "/^browser: drive $step: /,\$p" "$log" |
+  grep '^browser: command bar \(commands\|lists\) "new board": ' | grep 'New Board' | head -1)
+[ -z "$offered" ] || fail "a private window's command bar offers New Board: $offered"
 send key escape
 send key t cmd
 expect '^browser: command bar shown$' "⌘T didn't open the private window's command bar"
