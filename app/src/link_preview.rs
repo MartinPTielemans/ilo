@@ -918,9 +918,12 @@ impl LinkPreview {
             "closing"
         };
         log!("browser: link preview {what} ({why})");
-        // A page under the window that shows leaves in the card's frames first (render), while it
-        // still has the keyboard, as laying it out takes it.
-        shown.releasing = how == Leave::Close && shown.cut && why != "dismissed";
+        // A page under the window laid out where it rests leaves in the card's frames first
+        // (render), while it still has the keyboard, as laying it out takes it: once the hole has
+        // opened over it, and before, where an Esc as the card lands finds it under the plate
+        // (#3319).
+        let laid = self.host.page_under() && shown.placed == page_in(card(shown.page));
+        shown.releasing = how == Leave::Close && laid && why != "dismissed";
         // And the card holds at rest until it has, as shrinking would show it round the card, or
         // the window's page in it where the page left with the hole (#2640).
         shown.held = shown.releasing;
