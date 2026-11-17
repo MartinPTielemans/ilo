@@ -7,8 +7,8 @@ use std::{
 use gpui::{Bounds, TestAppContext, point, px, size};
 
 use super::{
-    DELAY, GRACE, HEIGHT, Host, MARGIN, NEAR, PAD_X, Plate, RELEASE_POLL, Side, Target,
-    WINDOW_WIDTH, near, place, plate, window_left, window_top,
+    DELAY, GRACE, HEIGHT, Host, MARGIN, NEAR, PAD_X, Plate, RADIUS, RELEASE_POLL, Side, Target,
+    WINDOW_HEIGHT, WINDOW_MARGIN, WINDOW_WIDTH, near, place, plate, window_left, window_top,
 };
 use crate::palette::Palette;
 
@@ -184,11 +184,13 @@ fn the_plates_window_stays_inside_a_card_wider_than_it_from_either_corner() {
     }
 }
 
-/// What the plate asks of its window, and a mouse button the test holds down or lets go.
+/// What the plate asks of its window, and a mouse button the test holds down or lets go. The
+/// outlines its window tells are apart, as each frame that draws differently tells one.
 #[derive(Default)]
 struct Recorder {
     asked: RefCell<Vec<String>>,
     pressed: Cell<bool>,
+    outlines: RefCell<Vec<(Bounds<gpui::Pixels>, f32)>>,
 }
 
 impl Host for Recorder {
@@ -215,6 +217,10 @@ impl Host for Recorder {
 
     fn card_cancel(&self, card: u64) {
         self.asked.borrow_mut().push(format!("card {card} cancel"));
+    }
+
+    fn outline(&self, _: &mut gpui::Window, frame: Bounds<gpui::Pixels>, radius: f32) {
+        self.outlines.borrow_mut().push((frame, radius));
     }
 }
 
@@ -381,6 +387,57 @@ fn a_card_loads_after_the_plates_delay_then_shows_its_page_and_picture(cx: &mut 
     assert_eq!(card_state(cx), Some((5, "page, picture waiting", true)));
     fetched(cx, 200, "image/png", &png());
     assert_eq!(card_state(cx), Some((5, "page with picture", true)));
+}
+
+#[gpui::test]
+fn the_window_tells_the_outline_it_draws_the_plate_then_the_card_as_it_grows(
+    cx: &mut TestAppContext,
+) {
+    let host = asked(cx);
+    // The plate, at the window's bottom left past its margin, with the plate's corners.
+    let bottom = WINDOW_MARGIN + WINDOW_HEIGHT;
+    let plate = Bounds::new(
+        point(px(WINDOW_MARGIN), px(bottom - HEIGHT)),
+        size(px(120.), px(HEIGHT)),
+    );
+    assert_eq!(host.outlines.take(), vec![(plate, RADIUS)]);
+    // A frame that draws the same tells nothing.
+    cx.update(|cx| cx.refresh_windows());
+    cx.run_until_parked();
+    assert_eq!(host.outlines.take(), vec![]);
+    // The card the plate grew into, at the same corner, each of its states once, as each is taller.
+    let mut heights = Vec::new();
+    let mut card_told = || {
+        let told = host.outlines.take();
+        assert_eq!(told.len(), 1, "one outline a state: {told:?}");
+        let (frame, radius) = told[0];
+        assert_eq!(radius, crate::tokens::hover_card::RADIUS);
+        assert_eq!(
+            (frame.left(), frame.bottom()),
+            (px(WINDOW_MARGIN), px(bottom))
+        );
+        assert_eq!(frame.size.width, px(crate::tokens::link_card::WIDTH));
+        heights.push(f32::from(frame.size.height));
+    };
+    after(cx, &host, DELAY);
+    card_told();
+    fetched(
+        cx,
+        200,
+        "text/html",
+        b"<title>Docs</title><meta property='og:image' content='/i.png'>",
+    );
+    card_told();
+    fetched(cx, 200, "image/png", &png());
+    card_told();
+    assert!(
+        heights[0] > HEIGHT && heights[2] > heights[1],
+        "the card's outline didn't grow from the plate's: {heights:?}"
+    );
+    // Esc takes the card, and the window tells the plate's outline again.
+    assert!(cx.update(super::close_card));
+    cx.run_until_parked();
+    assert_eq!(host.outlines.take(), vec![(plate, RADIUS)]);
 }
 
 #[gpui::test]
