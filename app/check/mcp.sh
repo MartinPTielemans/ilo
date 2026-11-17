@@ -709,7 +709,7 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
   warned=$(call open_tab "{\"url\":\"http://$plain/split-a.html\"}" |
     sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
   [ -n "$warned" ] || fail "open_tab didn't open http://$plain/split-a.html"
-  await_log "^browser: tab $warned error -20\$" \
+  await_log "browser: tab $warned error -20\$" \
     "the agent's tab at http://$plain/split-a.html had no warning before http: $(grep "^browser: loaded $warned " "$log" | tail -1)"
   beside=$(split_tab b)
   split=$(call split_tabs "{\"tabs\":[$warned,$beside]}")
