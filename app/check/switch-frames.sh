@@ -169,12 +169,25 @@ for i in 1 2; do
   expect "^browser: selected $c in " "a click on example.com's row didn't show it"
   sleep 0.7
 done
-# ⌃Tab as a hand types it, ⌃ going up after the Tab: that ends the walk it starts, so the next goes
-# back to the tab it left. The driver's key holds ⌃ only for its own key and never says it went up,
-# and while ⌃ is held a second Tab opens the Recent Tabs Switcher instead (Arc).
+# ⌃Tab as a hand's quick one types it, which the pictures are for: ⌃ goes up just after the Tab, so
+# it switches once, on the press, shows nothing over the page, and ends the walk it starts, so the
+# next goes back to the tab it left. The driver's key holds ⌃ only for its own key, so flags lets it
+# go. The key is posted, flags straight behind it, as the driver runs its commands in order: a send's
+# wait for the key's line took long enough that ⌃, held past [tab-switcher.motion] delay (0.16 s),
+# showed the Recent Tabs Switcher in half the goes. What the key did is read from its step, $tapped,
+# as the switch's lines can come before flags' own.
 ctrl_tab() {
-  send key tab ctrl
+  post key tab ctrl
+  tapped=$step
   send flags
+  grep -q "^browser: drive $tapped: can't do that" "$log" && fail "the driver can't do ⌃Tab"
+  [ -n "${first_tap:-}" ] || first_tap=$tapped
+}
+# None of the ⌃Tabs since the first held ⌃ long enough to show the Recent Tabs Switcher, whose
+# window over the page would be in the pictures and take the keyboard from the browser window.
+quick_ctrl_tabs() {
+  none_since '^browser: tab switcher lists ' "$first_tap" ||
+    fail "a quick ⌃Tab $1 showed the Recent Tabs Switcher, as ⌃ went up after its delay"
 }
 if [ -n "$held" ]; then
   mark "ctrl2 moving"
@@ -187,7 +200,7 @@ if [ -n "$held" ]; then
   mark ctrltabs
   for i in 1 2 3 4 5 6 7 8 9 10; do
     ctrl_tab
-    expect "^browser: selected [0-9][0-9]* in " "⌃Tab $i in a run of them didn't show a tab"
+    expect "^browser: selected [0-9][0-9]* in " "⌃Tab $i in a run of them didn't show a tab" "$tapped"
   done
   # The last switch's page in the pictures for as long as each switch before had.
   sleep 0.7
@@ -196,6 +209,7 @@ mark stop
 touch "$stop"
 wait "$capture" || fail "the window's pictures failed: $(tail -1 "$out/switch-frames-capture.log")"
 if [ -n "$held" ]; then
+  quick_ctrl_tabs "in the pictures"
   leaving="^browser: switch's pages let go left the window"
   # The pages let go since the let-go at step $went have left the window, leaving the page shown,
   # after step $2 began, or the step wasn't within the 250 ms, which a slow Mac can take to send.
@@ -206,9 +220,13 @@ if [ -n "$held" ]; then
       $0 ~ step { sent = 1 } $0 ~ leaving { exit !sent }' ||
       echo "skip: switch-frames' $1, which came after the page left had left the window"
   }
-  # The core's let-go of the page the last switch left, as the page it shows has drawn.
+  # The core's let-go of the page the last switch left, as the page it shows has drawn, looked for
+  # from the step $2 if given, the ⌃Tab's key: expect_soon looks from the last command sent.
   let_go() {
+    sent=$step
+    step=${2:-$step}
     expect_soon '^browser: switch let the page it left go ' "$1 didn't let the page it left go"
+    step=$sent
     went=$step
   }
   went=$step
@@ -223,8 +241,8 @@ if [ -n "$held" ]; then
   send move $page_point
   expect "^browser: title $shown moved [0-9]*\$" "a pointer move over the page area didn't reach the page shown"
   ctrl_tab
-  expect "^browser: selected $other in " "⌃Tab didn't show the other page that moves"
-  let_go "⌃Tab with the pointer over the page area"
+  expect "^browser: selected $other in " "⌃Tab didn't show the other page that moves" "$tapped"
+  let_go "⌃Tab with the pointer over the page area" "$tapped"
   turned=$step
   send move $(echo $page_point | awk '{ print $1 + 10, $2 + 10 }')
   expect "^browser: title $other moved [0-9]*\$" "a pointer move just after ⌃Tab didn't reach the page shown"
@@ -232,8 +250,8 @@ if [ -n "$held" ]; then
     fail "a pointer move just after ⌃Tab reached the page it let go too"
   left "after a pointer move" "$step"
   ctrl_tab
-  expect "^browser: selected $shown in " "⌃Tab didn't show the first page that moves again"
-  let_go "⌃Tab back"
+  expect "^browser: selected $shown in " "⌃Tab didn't show the first page that moves again" "$tapped"
+  let_go "⌃Tab back" "$tapped"
   send click $((width - 110)) $((height - 60)) shift
   expect '^browser: link preview shown$' "⇧-click just after a switch didn't open the link in Peek"
   left "with Peek open" "$step"
@@ -289,6 +307,7 @@ if [ -n "$held" ]; then
   send key 2 ctrl
   expect "^browser: space $second in " "⌃2 didn't show the second Space"
   let_go "⌃2 before the quit"
+  quick_ctrl_tabs "after the pictures"
 fi
 exec 3>&-
 quit
