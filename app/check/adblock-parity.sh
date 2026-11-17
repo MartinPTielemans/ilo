@@ -18,7 +18,9 @@
 #     its blocked addresses, host and path, are held to this run's instead (#2111);
 #   - 3 or more elements' selectors on a site, or 10 in the run, whose every element the baseline's
 #     run hid and some of which this run shows, as an ad's box the engine's hiding missed. Each
-#     selector is an element's tag, id and classes, read 8 s after the load (cdp.py's hidden);
+#     selector is an element's tag, id and classes, read 8 s after the load (cdp.py's hidden), and
+#     counts only where the baseline's blocker hid it by its own style sheet, not the page by its
+#     own, as a video player its controls before it plays (#3268);
 #   - a site this run breaks, or a wall uBlock Origin kept away: text under half the baseline's,
 #     where two loads of a page with the same engine differ by a seventh at most, or 70% of the
 #     viewport covered by an element fixed in place, a wall or a modal, where the baseline's page
@@ -435,8 +437,11 @@ for i, s in enumerate(sites):
     # What the baseline hid all of and this run shows, as cdp.py's hidden says, or None where
     # there's no saying: no baseline's file for the site, or no look at it.
     hid = os.path.join(hides, re.sub("[^A-Za-z0-9]", "_", s["url"]) + ".json")
-    s["missed"] = (sorted(json.load(open(hid, encoding="utf-8"))["missed"])
-                   if baseline and os.path.exists(hid) else None)
+    look = json.load(open(hid, encoding="utf-8")) if os.path.exists(hid) else {}
+    s["missed"] = sorted(look["missed"]) if baseline and look else None
+    # The selectors the blocker's own style sheet hid, as cdp.py's hidden tells them from the
+    # page's own hidden parts (#3268).
+    s["blocker_hid"] = len(look.get("blocker", []))
     # DataDome's captcha, which a site shows a runner it takes for a bot, over the page in place:
     # a bot check as Cloudflare's is, with no title to tell it by (#2111).
     s["bot"] = s["bot"] or any(h.endswith("captcha-delivery.com") for h in s["allowed"])
@@ -532,6 +537,12 @@ if len(missed) >= 10 and not site_missed:
     worse.append(f"{len(missed)} selectors the baseline hid all of showed: "
                  + ", ".join(f"{m} on {url}" for url, m in missed))
 loaded = [s for s in sites if s["loaded"]]
+# Each blocker hides something on these sites. None hidden, where they loaded, is the telling
+# apart broken, which would leave the gate blind to every element an engine fails to hide.
+blocker_hid = sum(s["blocker_hid"] for s in sites)
+if loaded and not blocker_hid:
+    worse.append("no site had an element the blocker's style sheet hid, by DevTools' matched "
+                 "styles: cdp.py's hidden can't tell the blocker's hiding from the page's")
 times = sorted(int(s["load_ms"]) for s in loaded)
 median = times[len(times) // 2] if times else 0
 # The worse sites go first, on one line, since the run's FAIL line, the summary's row and a
@@ -541,6 +552,7 @@ if worse:
 print(f"{len(loaded)} of {len(sites)} sites loaded, in {median} ms at the median; "
       f"{sum(s['blocked_n'] for s in sites)} requests blocked and "
       f"{sum(s['standin_n'] for s in sites)} given a stand-in, of {sum(s['requests'] for s in sites)}"
+      + f"; {blocker_hid} selectors hidden by the blocker's style sheet"
       + (f"; {len(missed)} selectors the baseline hid all of showed" if baseline else "")
       + "".join(f"; {s['url']}'s video {video_said(s['video'])}" for s in sites if s["video"])
       + (f"; not compared, as a bot check stood in: {', '.join(unchecked)}" if unchecked else ""))
