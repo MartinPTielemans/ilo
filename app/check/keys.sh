@@ -13,7 +13,8 @@
 # in a new tab has the keyboard: its autofocused field gets what's typed, and ⌘T opens the bar
 # again. While ⌘T's is open, "New Tab" has the selected plate. Keys typed right after ⌘T, ⌘L or ⌘F,
 # from the page or the UI, wait for the bar it opens, however late the page answers ⌘L, and land in
-# its field, a composition too, and a page that keeps ⌘F gets them after it. Japanese input composes
+# its field, a composition too, and a page that keeps ⌘F gets them after it, as one that keeps ⌘L
+# late gets once what was composed while it was held. Japanese input composes
 # and commits in the page and in the command bar, where return and escape go to the input method
 # while it composes. Korean composes a syllable at a time in the page, where backspace takes a
 # letter off and return commits and goes on, on the Mac and on Windows, and on the Mac in the bar,
@@ -46,11 +47,12 @@ page='data:text/html,<title>loading</title>
 requestAnimationFrame(() => setTimeout(() => document.title = "ready"));
 text.oninput = () => document.title = "value " + text.value;
 // Like Google Docs, the page keeps ⌘F. It answers ⌘L late, as a busy page can, past the 0.4 s
-// the keys typed after it were once held for. No number sign: it would end this data URL.
+// the keys typed after it were once held for, and keeps it too while its field says "keep".
+// No number sign: it would end this data URL.
 addEventListener("keydown", e => {
   if (!e.'"$cmd_key"') return;
   document.title = "page saw cmd-" + e.key;
-  if (e.key == "f") e.preventDefault();
+  if (e.key == "f" || e.key == "l" && text.value == "keep") e.preventDefault();
   for (const until = performance.now() + (e.key == "l" ? 700 : 0); performance.now() < until;);
 }, true);
 addEventListener("keydown", e => {
@@ -351,10 +353,16 @@ elif windows; then
   # (#1784).
   echo "skip: composing right after Ctrl+L: Microsoft's Japanese IME composes in the page the keys the host holds for the bar (#1784)."
 else
+  # The page answers ⌘L 0.7 s late, so the composition comes while the keys are held for the bar,
+  # which shows after it.
   send $ime
   typed_after l nihongo
+  typed=$step
   expect "^browser: command bar drew \"$preedit\"\$" \
     "a composition typed right after ⌘L didn't go to the command bar: $(drew 'command bar')"
+  [ "$(grep -n "^browser: drive $typed done" "$log" | cut -d: -f1)" -lt \
+    "$(grep -n '^browser: command bar shown$' "$log" | tail -1 | cut -d: -f1)" ] ||
+    fail "the composition after ⌘L was typed once the command bar showed, not while ⌘L was held"
   send state
   [ "$marked" = "$preedit_marked" ] || fail "the command bar didn't take all of the composition: marked $marked"
   send key escape
@@ -362,6 +370,55 @@ else
   expect '^browser: command bar hidden$' "escape didn't close the command bar"
   send ime off
   in_browser RenderWidgetHostViewCocoa "after the command bar closed"
+  # A page that keeps ⌘L, answering as late, keeps what was composed while it was held, once.
+  send key a cmd
+  send type keep
+  expect '^browser: title [0-9]* value keep$' "the page didn't take \"keep\""
+  send $ime
+  typed_after l nihongo
+  kept=$step
+  expect "^browser: title [0-9]* value keep$preedit\$" \
+    "the page that kept ⌘L didn't get the composition typed while it was held: $(grep '^browser: title' "$log" | tail -1)"
+  # Under Wayland the page gets it committed, as handing the page the input method back resets it:
+  # nothing is left for Return to commit, which would be the textarea's.
+  [ -n "${WAYLAND_DISPLAY:-}" ] || send key return
+  send ime off
+  send type x
+  expect "^browser: title [0-9]* value keep${preedit}x\$" \
+    "the page that kept ⌘L lost or doubled the composition typed while it was held: $(grep '^browser: title' "$log" | tail -1)"
+  ! sed -n "/^browser: drive $kept done/,\$p" "$log" | grep -q '^browser: command bar shown$' ||
+    fail "the page kept ⌘L, but the command bar opened"
+  # A composition the page has open as it keeps ⌘F stays the page's, committed once. The core
+  # moves the input method during a hold under Wayland alone.
+  if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    send $ime
+    send type nihongo
+    expect "^browser: title [0-9]* value keep${preedit}x$preedit\$" "the page didn't show the composition"
+    post key f cmd
+    send key return
+    send ime off
+    send type z
+    expect "^browser: title [0-9]* value keep${preedit}x${preedit}z\$" \
+      "the page that kept ⌘F lost or doubled the composition it had open: $(grep '^browser: title' "$log" | tail -1)"
+    # One letter composed while ⌘L is held goes in committed too: the next composition, cancelled
+    # here, comes after it rather than replacing it.
+    send key a cmd
+    send type keep
+    expect '^browser: title [0-9]* value keep$' "the page didn't take \"keep\""
+    send $ime
+    typed_after l n
+    expect '^browser: title [0-9]* value keepn$' \
+      "the page that kept ⌘L didn't get the letter composed while it was held: $(grep '^browser: title' "$log" | tail -1)"
+    send type ihongo
+    send key escape
+    send ime off
+    send type x
+    expect '^browser: title [0-9]* value keepnx$' \
+      "the next composition replaced the letter the page that kept ⌘L got: $(grep '^browser: title' "$log" | tail -1)"
+  fi
+  send key a cmd
+  send type y
+  expect '^browser: title [0-9]* value y$' "⌘A in the page didn't select all"
 fi
 # Korean right after ⌘L: the bar composes 안녕하세요, its 요 still composing, and one escape
 # commits it and closes the bar, as a Korean input method passes the key on. Not on Windows, where
@@ -1150,5 +1207,5 @@ exec 3>&-
 await '^browser: warn before quitting off$' ||
   fail "Quit, and don't ask again didn't turn the warning off"
 exited
-echo "ok: focus follows clicks, typing reaches the focused side, reserved shortcuts skip the page and the others reach it first, ⌘Q asks first in the dialog, and escape keeps the browser and Quit, and don't ask again quits, the command bar takes the keyboard and gives it back, a held escape that closes it doesn't repeat into the page, keys typed right after ⌘T, ⌘L and ⌘F land in the bar they open from both sides, a composition too, and reach a page that keeps ⌘F after it, with New Tab's plate while ⌘T's is open, goes to a host over https and searches for words, names docs.new typed and opens it in a new tab, and a page it opens in a new tab has the keyboard, its autofocused field and the browser's shortcuts too, Japanese input composes in both, on the Mac Korean composes a syllable at a time in both, and on Windows in the page, and the Edit menu undoes, redoes and selects in the page, ⌘Y opens the history page from both sides, Settings › Shortcuts' search finds New Tab by name and ⌘T's rows by their keys, and the rows of the commands it lacked, and New Tab rebound to ⌃⌘T there stays reserved from both sides while ⌘T runs nothing, until ↺ gives it back, About ilo shows Settings' About tab with Settings key and again with About showing, Shortcuts lists the sidebar's commands and Focus Sidebar given ⌃⌘K there gives the sidebar the keyboard from the page until escape, Go to Space 1 given ⌃⌘1 there shows the first Space while ⌃1 runs nothing, Include Favorites in ⌘1–⌘8 off has ⌘1 show the first tab that isn't a favorite, Last Tab Goes to the Ninth Tab has ⌘9 count the ninth tab and Restore Defaults has it show the last again, a second ⌘F at once runs Find after the page kept the first, Prefer ilo on Find from a right-click on its keys has ⌘F run it before the page sees it and Prefer Websites gives the page it first again, and a killed page's renderer leaves the browser running and ⌘R loads the page again. Windows: $out/quit.png, $out/command-bar.png, $out/search.png, $out/new-document.png, $out/ime.png, $out/shortcuts-search.png, $out/shortcuts-rows.png, $out/shortcuts.png, $out/about.png, $out/shortcuts-sidebar.png, $out/shortcuts-favorites.png, $out/shortcuts-prefer.png"
+echo "ok: focus follows clicks, typing reaches the focused side, reserved shortcuts skip the page and the others reach it first, ⌘Q asks first in the dialog, and escape keeps the browser and Quit, and don't ask again quits, the command bar takes the keyboard and gives it back, a held escape that closes it doesn't repeat into the page, keys typed right after ⌘T, ⌘L and ⌘F land in the bar they open from both sides, a composition too, and reach a page that keeps ⌘F after it, and a composition once a page that keeps ⌘L late, with New Tab's plate while ⌘T's is open, goes to a host over https and searches for words, names docs.new typed and opens it in a new tab, and a page it opens in a new tab has the keyboard, its autofocused field and the browser's shortcuts too, Japanese input composes in both, on the Mac Korean composes a syllable at a time in both, and on Windows in the page, and the Edit menu undoes, redoes and selects in the page, ⌘Y opens the history page from both sides, Settings › Shortcuts' search finds New Tab by name and ⌘T's rows by their keys, and the rows of the commands it lacked, and New Tab rebound to ⌃⌘T there stays reserved from both sides while ⌘T runs nothing, until ↺ gives it back, About ilo shows Settings' About tab with Settings key and again with About showing, Shortcuts lists the sidebar's commands and Focus Sidebar given ⌃⌘K there gives the sidebar the keyboard from the page until escape, Go to Space 1 given ⌃⌘1 there shows the first Space while ⌃1 runs nothing, Include Favorites in ⌘1–⌘8 off has ⌘1 show the first tab that isn't a favorite, Last Tab Goes to the Ninth Tab has ⌘9 count the ninth tab and Restore Defaults has it show the last again, a second ⌘F at once runs Find after the page kept the first, Prefer ilo on Find from a right-click on its keys has ⌘F run it before the page sees it and Prefer Websites gives the page it first again, and a killed page's renderer leaves the browser running and ⌘R loads the page again. Windows: $out/quit.png, $out/command-bar.png, $out/search.png, $out/new-document.png, $out/ime.png, $out/shortcuts-search.png, $out/shortcuts-rows.png, $out/shortcuts.png, $out/about.png, $out/shortcuts-sidebar.png, $out/shortcuts-favorites.png, $out/shortcuts-prefer.png"
 echo "$launch_bar"

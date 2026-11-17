@@ -82,7 +82,7 @@
 
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
+    collections::{BTreeSet, HashMap},
     ffi::{CString, c_int, c_uint, c_void},
     io::BufRead,
     rc::Rc,
@@ -167,11 +167,17 @@ pub fn start() {
 /// Runs command `n`, `line`, and again 10 ms on while it asks to be (`again`), until `until`.
 fn attempt(n: u64, line: String, until: Option<Instant>) {
     RETRY_UNTIL.set(until);
+    RUNNING.set(n);
+    UNDONE.with_borrow_mut(|undone| undone.insert(n));
     let done = run(&line);
     RETRY_UNTIL.set(None);
     if !done {
         if let Some(until) = AGAIN.take() {
             after(10, Box::new(move || attempt(n, line, Some(until))));
+            return;
+        }
+        if AFTER_DONE.take() {
+            WAITING.with_borrow_mut(|waiting| waiting.push((n, line)));
             return;
         }
         log!("browser: drive {n}: can't do that");
@@ -306,8 +312,31 @@ fn settle(n: u64) {
                 "browser: drive {n} done, key {key}, focus {focus}, active {}, marked {marked}",
                 active as u8
             );
+            UNDONE.with_borrow_mut(|undone| undone.remove(&n));
+            let ready = WAITING.with_borrow_mut(|waiting| {
+                let first = UNDONE.with_borrow(|undone| undone.first().copied());
+                let (ready, still) = std::mem::take(waiting)
+                    .into_iter()
+                    .partition(|(m, _)| first.is_none_or(|first| first >= *m));
+                *waiting = still;
+                ready
+            });
+            for (m, line) in ready {
+                attempt(m, line, None);
+            }
         }));
     }));
+}
+
+/// Has the command running, which can't yet, run again once every command before it is done,
+/// when it returns: true, unless they are already.
+pub(super) fn after_earlier_done() -> bool {
+    let running = RUNNING.get();
+    let waits = UNDONE.with_borrow(|undone| undone.first().is_some_and(|first| *first < running));
+    if waits {
+        AFTER_DONE.set(true);
+    }
+    waits
 }
 
 /// Runs `then` once each browser window has drawn its next frame, as AppKit has by the time the
@@ -370,6 +399,12 @@ thread_local! {
     static RETRY_UNTIL: Cell<Option<Instant>> = const { Cell::new(None) };
     /// That the command running asked to run again, and until when.
     static AGAIN: Cell<Option<Instant>> = const { Cell::new(None) };
+    /// The command running, the commands started and not yet reported done, and those waiting
+    /// for the ones before them to be (`after_earlier_done`).
+    static RUNNING: Cell<u64> = const { Cell::new(0) };
+    static UNDONE: RefCell<BTreeSet<u64>> = const { RefCell::new(BTreeSet::new()) };
+    static AFTER_DONE: Cell<bool> = const { Cell::new(false) };
+    static WAITING: RefCell<Vec<(u64, String)>> = const { RefCell::new(Vec::new()) };
     /// A key's second press, which the app's answer to the first page key presses (`press_again`).
     static PRESS_AGAIN: Cell<Option<Box<dyn FnOnce() -> Option<()>>>> = const { Cell::new(None) };
     /// The window a press went to, which gets the drag's events until the release, as the X
@@ -1340,6 +1375,14 @@ pub(super) fn ime_key(key: &str, state: u16) -> Option<bool> {
     // Under Wayland, the activates and deactivates sway sent since the last key come first: the
     // composition may have gone with them, and then Return and Escape are plain keys.
     if crate::drive_wayland::on() {
+        // A letter that starts a composition waits for the commands before it to be done, as a ⌘L
+        // sent with no wait: Chromium reads that key on this thread only once this command
+        // returns, and sway resets the input method as the hold moves it from the page after
+        // that. Composed in that gap, which a person's typing doesn't fit in, the letters would
+        // be reset under the field that showed them.
+        if letter && !composing && after_earlier_done() {
+            return None;
+        }
         crate::drive_wayland::sync();
         if COMPOSITION.with_borrow(Option::is_none) && !letter {
             return Some(false);
