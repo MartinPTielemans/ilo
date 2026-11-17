@@ -1025,6 +1025,9 @@ constexpr char16_t kScript[] =
           const k = slot.next || slot.prev || slot.parent;
           const prop = k === slot.parent ? (row ? 'min-width' : 'min-height')
             : k === slot.next ? (row ? 'margin-left' : 'margin-top') : row ? 'margin-right' : 'margin-bottom';
+          // A margin a layout pass placed on it for the carried thing's own change goes with that
+          // change, so the room it keeps adds to the page's own margin.
+          if (placed.get(k)?.has(prop)) { unset(k, prop); placed.get(k).delete(prop); }
           const base = k === slot.parent ? (row ? rect(k).width : rect(k).height) : parseFloat(getComputedStyle(k).getPropertyValue(prop)) || 0;
           // Out of flow, it leaves one gap fewer in a track spaced by gap, so a neighbour keeping
           // its room keeps that gap too, and nothing after it moves up (#3028). The room in its
