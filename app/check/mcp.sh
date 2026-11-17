@@ -1108,6 +1108,9 @@ painted(() => document.title = "spaces");
     fail "choosing an option the select hasn't, with two spaces and a no-break space, answered: $missed"
   last=$(sed -n "s/^browser: title $spaces_tab //p" "$log" | tail -1)
   [ "$last" = "branch 2" ] || fail "a missed option changed the page, to $last"
+  # Closed, as the conversation pictures each tab the agent keeps, and one more would put the
+  # sign-in page's picture below the window's bottom, where the check's click can't reach it.
+  call close_tab "{\"tab\":$spaces_tab}" > /dev/null
 
   # Choice tiles whose radios the page hid, with display: none and named by a label's "for" or
   # inside it, show as those radios, named by the label's text and with which is chosen, and a
@@ -1618,10 +1621,13 @@ input, textarea { position: absolute; box-sizing: border-box; width: 40%; height
 <script src="painted.js"></script>
 <script>document.querySelector("[aria-label=\"Frame filled\"]").value = "██████";
 painted(() => parent.postMessage("painted", "*"));</script>' > "$out/site/withheld-inner.html"
+  # The fields keep some of their background inside their border, as most pages' do: a withheld
+  # field's hatch takes the colour its corners show, and text filling a field to its corners, as
+  # Linux's full blocks do, made the hatch red, which reads as the text shown.
   printf '%s' "<!doctype html><meta charset=utf-8><title>loading</title><style>
 body { margin: 0; background: #fff }
 input, textarea { position: absolute; box-sizing: border-box; width: 20vw; height: 12vh; margin: 0;
-  padding: 0; border: 2px solid #888; background: #fff; color: #f00; font: 9vh/1 monospace;
+  padding: 0.5vh 1vw; border: 2px solid #888; background: #fff; color: #f00; font: 9vh/1 monospace;
   -webkit-text-stroke: 0.1em #f00; resize: none; overflow: hidden }
 #site { position: absolute; left: 2vw; top: 40vh; width: 60vw; height: 30vh; border: 0 }
 button { position: absolute; left: 70vw; top: 50vh }
