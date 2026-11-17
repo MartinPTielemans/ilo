@@ -564,7 +564,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
         if self.path.startswith("/api/"):
             # Logged as "POST <host><path> cookie <cookies sorted, or none> body <body>", in one
-            # write as GET's is, so a line another request logs at once can't land inside it.
+            # write as GET lines are, so no line another request logs at once lands inside it.
             cookies = sorted(c.strip() for c in self.headers.get("Cookie", "").split(";") if c.strip())
             sys.stdout.write(" ".join(["POST", self.headers.get("Host", "") + self.path, "cookie",
                 "; ".join(cookies) or "none", "body", body.decode()]) + "\n")
