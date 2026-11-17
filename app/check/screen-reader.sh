@@ -5,10 +5,10 @@
 # Windows tells it took the focus. It writes each thing it would say to its log, with the key it
 # heard before, so the run's record, screen-reader-speech.txt, is what each key made NVDA say, and
 # screen-reader-focus.txt is what UI Automation and the window manager had focused after it. It
-# judges the onboarding, the sidebar and the command bar: each step, each Tab through one, F6 from
-# the page and the arrows down the rows have NVDA say something, with UI Automation's focus off
-# GPUI's unnamed root and, in the sidebar, on the ringed row; ↓ in the bar has it say the suggestion
-# selected and where it stands. Elsewhere it records.
+# judges the onboarding, the sidebar and the command bar: each step, each Tab through one, Tab
+# from the window, F6 from the page and the arrows down the rows have NVDA say something, with UI
+# Automation's focus off GPUI's unnamed root and, in the sidebar, on the ringed row; ↓ in the bar
+# has it say the suggestion selected and where it stands. Elsewhere it records.
 # NVDA's portable copy (GPL) is fetched from NV Access' release on GitHub, its checksum pinned, into
 # the hosted runner's temporary folder, and never installed: with NVDA_DIR naming a portable copy,
 # the run uses that instead. Off a hosted Windows runner, and without NVDA_DIR, it skips.
@@ -242,7 +242,12 @@ spoken "typed a page's address"
 press return
 expect '^browser: loaded' "the page didn't load"
 spoken "the page loaded"
+# The window holds the keyboard here, the page not having it (#3239), and Tab rings the tab
+# shown's row, read by its name (#3237).
+judging=1
 press tab
+on_row Reading tab
+judging=
 press tab
 press down
 press down
