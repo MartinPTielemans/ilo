@@ -3,7 +3,7 @@
 # their things at different depths and where a thing already scrolls sideways where it stands. A
 # rest on a card's middle in another column trades with the card, however deep either column wraps
 # its cards. A rest in a column's gap settles at the nearest card's edge, in a column that wraps its
-# cards one box deeper too. One that can't be as narrow as its place is refused. A block that
+# cards one box deeper too, and so does one in the carried card's own column's gap. One that can't be as narrow as its place is refused. A block that
 # scrolls sideways settles and trades between places of its own width, and is refused only in a
 # narrower one. On markup with no classes, a card under the rest trades and a column's gap settles,
 # though both are plain boxes of plain boxes. A paragraph with a button in it, beside the carried
@@ -211,6 +211,11 @@ drop R2 400 190 140 190 Trades 'dl L1,R2,L3 dr R1,L2,R3 ' 'a card on a wrapped c
 drop L1 140 70 400 130 Settles 'dl L2,L3 dr R1,L1,R2,R3 ' 'a wrapped card in the gap under the other column'"'"'s card settles' 3
 drop R2 400 190 140 130 Settles 'dl L1,R2,L2,L3 dr R1,R3 ' 'a card in the gap of the column that wraps its cards settles' 4
 drop L1 140 70 600 90 Refused "$before" 'a card that can'"'"'t be 120 wide is refused in the narrow column' 5
+# Down its own column: while a card is lifted its column closes its gap (#3028), so the gap between
+# the two under it is at 120 to 140, and it settles there, in a column that wraps its cards too
+# (#3003).
+drop R1 400 70 400 130 Settles 'dl L1,L2,L3 dr R2,R1,R3 ' 'a card in its own column'"'"'s gap settles there' 12
+drop L1 140 70 140 130 Settles 'dl L2,L1,L3 dr R1,R2,R3 ' 'a wrapped card in its own column'"'"'s gap settles there' 13
 # The block that scrolls sideways where it stands, carried by its empty part under its line.
 drop CB 140 445 400 130 Settles 'dl L1,L2,L3 dr R1,CB,R2,R3 dn N1,N2 dj J1,J2 dc C2 ' 'the scrolling block settles in a place of its width' 6
 drop CB 140 445 400 190 Trades 'dl L1,L2,L3 dr R1,CB,R3 dn N1,N2 dj J1,J2 dc R2,C2 ' 'the scrolling block trades with a card of its width' 7
