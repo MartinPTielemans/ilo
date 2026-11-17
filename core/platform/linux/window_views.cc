@@ -1721,6 +1721,12 @@ void PassPointerThrough(views::Widget* widget) {
   }
 }
 
+base::ScopedClosureRunner WatchOutlineMoves(views::Widget*,
+                                            base::RepeatingCallback<void(const gfx::Point&)>) {
+  // The window manager or compositor moves a window, and the core runs no move loop of its own.
+  return base::ScopedClosureRunner();
+}
+
 bool PageDialogsInOwnWindow() {
   // Chrome's default, which hasn't been looked at here.
   return false;
