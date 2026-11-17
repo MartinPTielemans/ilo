@@ -142,7 +142,6 @@ impl Shell {
             // page the user doesn't hold never gets the keyboard from a key in the UI.
             Some(Before::Page) if self.shows_agents_page() => {
                 window.focus(&self.focus_handle, cx);
-                // check.sh reads this line.
                 log!("browser: library kept the keyboard from an agent's page");
             }
             Some(Before::Page) => {
