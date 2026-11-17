@@ -960,9 +960,9 @@ typedef struct bc_host {
   bool (*tab_key_unhandled)(void* context, bc_id tab, const bc_key* key);
   // Tab in the tab's page went past its last control (|reverse| false), or ⇧Tab before its first
   // (true), where Chrome moves the keyboard to its toolbar. Return true if the app took the
-  // keyboard; false leaves it to Chromium. Asked only for the tab a user's window shows, never for
-  // one in an agent's Space or one no window shows: there the keyboard and the user's view stay as
-  // they are.
+  // keyboard; false leaves it in the page, which goes on from its other end at the next Tab. Asked
+  // only for a tab a user's window shows, never for an agent's (one in its Space the user doesn't
+  // hold) or one no window shows: their page keeps the keyboard, and the user's stays where it is.
   bool (*tab_focus_leaving)(void* context, bc_id tab, bool reverse);
   // The left button went down on the tab's page with the BC_MODIFIER_ flags |modifiers| held, one
   // at least, at |x|,|y| in the page's view from its top-left, before the page gets it. Return true
