@@ -47,8 +47,9 @@ grep -q 'shelves over the sink' "$folder/board.json" ||
   fail "the Board's file doesn't hold the note typed: $(head -c 300 "$folder/board.json")"
 # 1a: the page wrote its own Board and no other.
 [ "$(ls "$boards")" = "$id" ] || fail "the profile's Boards aren't only $id: $(ls "$boards" | tr '\n' ' ')"
-# Nothing of what the user wrote is logged.
-! grep -q 'shelves\|kitchen' "$log" || fail "the log says what the Board holds: $(grep 'shelves\|kitchen' "$log" | head -1)"
+# Nothing of what the user wrote is logged, past the driver's own echo of the keys it typed.
+written=$(grep -v '^browser: drive [0-9]*: ' "$log" | grep 'shelves\|kitchen' | head -1)
+[ -z "$written" ] || fail "the log says what the Board holds: $written"
 ../tools/window-screenshot.sh "$pid" "$out/board.png" || fail "no window to capture"
 
 # Library › Boards lists it.
