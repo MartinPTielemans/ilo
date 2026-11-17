@@ -58,6 +58,7 @@ addEventListener("keydown", e => {
   '"$alone"'
 });
 </script>'
+serve
 log="$out/keys.log"
 step=0
 # The user's keys, which a failed run may have left changed.
@@ -902,12 +903,12 @@ edit_url_over_search() {
   expect '^browser: command bar shown$' "⌘L didn't open the command bar, again once the search's page came"
 }
 edit_url_over_search
-send type example.com
+send type "http://localhost:$port/one.html"
 ../tools/window-screenshot.sh "$pid" "$out/command-bar.png" || fail "no window to capture"
 send key return
-expect '^browser: command bar go https*://example.com/$' "return in the command bar didn't go to what was typed: $(grep '^browser: command bar go' "$log" | tail -1)"
+expect "^browser: command bar go http://localhost:$port/one.html\$" "return in the command bar didn't go to what was typed: $(grep '^browser: command bar go' "$log" | tail -1)"
 expect '^browser: command bar hidden$' "going somewhere didn't close the command bar"
-expect '^browser: loaded [0-9]* https://example.com/$' "the page didn't load what was typed in the command bar"
+expect "^browser: loaded [0-9]* http://localhost:$port/one.html\$" "the page didn't load what was typed in the command bar"
 send state
 in_browser RenderWidgetHostViewCocoa "after the command bar loaded a page"
 # Words that name no page are a search, with DuckDuckGo until the user picks an engine. In a tab of
@@ -941,7 +942,6 @@ send key w cmd
 expect "^browser: today $before\$" "⌘W didn't close the docs.new tab"
 # A page the bar opens in a new tab has the keyboard, so its field autofocused gets what's typed
 # and the browser's shortcuts reach the UI, with no click in it first (#428, where X11 lost them).
-serve
 send key t cmd
 expect '^browser: command bar shown$' "⌘T didn't open the command bar"
 send type "${site}autofocus.html"
