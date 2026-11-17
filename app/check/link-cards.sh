@@ -57,7 +57,7 @@ spki=$(openssl x509 -in "$out/link-cards.pem" -pubkey -noout | openssl pkey -pub
 
 # The page with the links, each a band across it: to the card's page, to the private server, and
 # to a redirect to the private server. It sets a cookie for its host, and its title says each key
-# it gets, so the run sees the ⇧ reach it and the Esc not.
+# it gets with a count, so a second ⇧ shows as the first did and the run sees the Esc never comes.
 : > "$out/link-cards-public.log"
 rm -f "$out/link-cards-slow.go"
 rm -f "$out/link-cards-public.port"
@@ -81,7 +81,8 @@ pages = {
 <a href="https://cards.test/bare.html" style="{band}">A page that says nothing</a>
 <a href="https://cards.test/slow.html" style="{band}">A slow page</a>
 <script>
-onkeydown = (event) => document.title = "key " + event.key;
+let keys = 0;
+onkeydown = (event) => document.title = "key " + event.key + " " + ++keys;
 requestAnimationFrame(() => requestAnimationFrame(() =>
   document.title = document.cookie.includes("seen=1") ? "ready" : "no cookie"));
 </script>""".encode()),
@@ -178,7 +179,7 @@ card() {
   expect "^browser: link target ${2#https://}\$" "$3: resting on the link showed no link target for $2"
   expect '^browser: link target window shown$' "$3: the link target's window didn't show"
   send flags shift
-  expect "^browser: title $tab key Shift\$" "$3: the page didn't get the ⇧, which a shift-click needs"
+  expect "^browser: title $tab key Shift [0-9]*\$" "$3: the page didn't get the ⇧, which a shift-click needs"
   send flags
 }
 
@@ -202,8 +203,8 @@ asked=$(grep -E '^/(page.html|share.png) ' "$out/link-cards-public.log")
 send key escape
 expect '^browser: link card closed$' "a page: Esc didn't take the card"
 send key z
-expect "^browser: title $tab key z\$" "a page: the key after Esc didn't reach the page"
-! sed -n "/^browser: drive $shift_step: /,\$p" "$log" | grep -q "^browser: title $tab key Escape\$" ||
+expect "^browser: title $tab key z [0-9]*\$" "a page: the key after Esc didn't reach the page"
+! sed -n "/^browser: drive $shift_step: /,\$p" "$log" | grep -q "^browser: title $tab key Escape [0-9]*\$" ||
   fail "a page: the page got the Esc that took the card"
 ! sed -n "/^browser: drive $shift_step: /,\$p" "$log" | grep -q '^browser: link target hidden$' ||
   fail "a page: Esc took the plate with the card"
