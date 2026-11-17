@@ -267,6 +267,9 @@ class Window : public web_modal::WebContentsModalDialogHost,
   void Select(bc_id tab);
   // Gives the page shown the keyboard, from the UI if it has it (bc_window_focus_page).
   void GiveKeyboardToPage();
+  // The same at the page's first control, or its |last|, as Tab or ⇧Tab into it from Chrome's
+  // toolbar gives it (bc_window_focus_page_end).
+  void GiveKeyboardToPageEnd(bool last);
   // An overlay of the app's took the window's keyboard, or gave it back
   // (bc_window_overlay_takes_keyboard).
   void OverlayTakesKeyboard(bool takes);

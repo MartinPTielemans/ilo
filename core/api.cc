@@ -1496,6 +1496,12 @@ void bc_window_focus_page(bc_id window_id) {
   }
 }
 
+void bc_window_focus_page_end(bc_id window_id, bool last) {
+  if (browser_core::Window* window = browser_core::Window::FromId(window_id)) {
+    window->GiveKeyboardToPageEnd(last);
+  }
+}
+
 bc_id bc_window_clear(bc_id window_id) {
   browser_core::Window* window = browser_core::Window::FromId(window_id);
   return window ? window->Clear() : 0;

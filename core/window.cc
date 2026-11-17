@@ -3337,6 +3337,14 @@ void Window::GiveKeyboardToPage() {
   FocusPageSoon();
 }
 
+void Window::GiveKeyboardToPageEnd(bool last) {
+  GiveKeyboardToPage();
+  // GiveKeyboardToPage focused the page now if it could; the posted focus after keeps its control.
+  if (shown_ && widget_->IsActive()) {
+    Tab::FocusPageEnd(shown_.get(), last);
+  }
+}
+
 void Window::OverlayTakesKeyboard(bool takes) {
   if (takes) {
     selected_under_overlay_ = selected_;
