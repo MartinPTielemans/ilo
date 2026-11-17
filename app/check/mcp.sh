@@ -1551,7 +1551,74 @@ const expected = "日本語 😀👩‍👩‍👧 é";
   type_and_see Expiry '1229' '12/29'
   type_and_see Suggest 'abc' '3 abc'
   type_and_see Long "$(printf 'abcdefghij%.0s' $(seq 500))" '5000 true'
-  type_and_see Busy "$(printf '0123456789%.0s' $(seq 200))" '2000 true'
+  # PROBE #3285, on a proof branch only, never a PR: the user's new tabs and tab switches in their
+  # own window, first with no agent job, then while the agent types into Busy.
+  printf '%s' '<!doctype html><meta charset=utf-8><title>loading</title><p id=t>probe</p><script>
+const id = location.search.slice(1);
+const at = (t) => Math.round(Date.now() - performance.now() + t);
+new PerformanceObserver((list) => { for (const e of list.getEntries()) if (e.name == "first-contentful-paint") document.title = `${id} fcp ${at(e.startTime)}`; }).observe({ type: "paint", buffered: true });
+let shown = 0;
+document.addEventListener("visibilitychange", () => { if (document.visibilityState == "visible") { const n = ++shown; requestAnimationFrame(() => requestAnimationFrame(() => document.title = `${id} shown ${n} ${Date.now()}`)); } });
+</script>' > "$out/site/probe.html"
+  probe_stamp() {
+    if [ -n "${EPOCHREALTIME:-}" ]; then
+      stamp=$EPOCHREALTIME; stamp_us=${stamp#*[.,]}; stamp="${stamp%[.,]*}${stamp_us%???}"
+    else
+      stamp=$(perl -MTime::HiRes=time -e 'printf "%d\n", time * 1000')
+    fi
+  }
+  user_probe() {
+    : > "$out/probe-$1-newtab"; : > "$out/probe-$1-switch"; : > "$out/probe-$1-core"
+    for n in 1 2 3 4; do
+      send key t cmd
+      expect '^browser: command bar shown$' "probe: ⌘T didn't open the command bar"
+      send type "${site}probe.html?$1$n"
+      probe_stamp
+      typed=$stamp
+      send key return
+      expect_late "^browser: title [0-9]* $1$n fcp " "probe: $1$n didn't paint"
+      painted=$(sed -n "s/^browser: title [0-9]* $1$n fcp //p" "$log" | tail -1)
+      echo $((painted - typed)) >> "$out/probe-$1-newtab"
+    done
+    for k in 2 3 4 1 2 3 4 1; do
+      probe_stamp
+      pressed=$stamp
+      send key "$k" cmd
+      expect "^browser: selected [0-9]* in " "probe: ⌘$k didn't switch tabs"
+      since=$(sed -n "/^browser: drive $step: /,\$p" "$log")
+      shown_tab=$(echo "$since" | sed -n 's/^browser: selected \([0-9]*\) in .*/\1/p' | head -1)
+      echo "$since" | sed -n 's/^browser: selected [0-9]* in \([0-9.]*\) ms$/\1/p' | head -1 >> "$out/probe-$1-core"
+      expect "^browser: title $shown_tab [^ ]* shown " "probe: tab $shown_tab didn't say it was shown after ⌘$k"
+      title=$(sed -n "/^browser: drive $step: /,\$p" "$log" | sed -n "s/^browser: title $shown_tab [^ ]* shown [0-9]* \([0-9]*\)$/\1/p" | tail -1)
+      echo $((title - pressed)) >> "$out/probe-$1-switch"
+    done
+    for _ in 1 2 3 4; do send key w cmd; done
+    probe_stamp
+    probe_end=$stamp
+  }
+  probe_line() {
+    for kind in newtab switch core; do
+      printf 'probe %s %s: %s\n' "$1" "$kind" "$(sort -n "$out/probe-$1-$kind" | tr '\n' ' ')" | tee -a "$out/mcp-typing.txt"
+    done
+  }
+  user_probe idle
+  probe_line idle
+  field=$(ref_of textbox Busy)
+  probe_stamp
+  started=$stamp
+  request type "{\"tab\":$typing_tab,\"ref\":\"$field\",\"text\":\"$(printf '0123456789%.0s' $(seq 200))\"}" >&4
+  user_probe busy
+  probe_line busy
+  typed=$(perl -e 'alarm 180; exec @ARGV' sh -c 'read -r line && printf "%s\n" "$line"' <&5) ||
+    fail "probe: the browser didn't answer Busy's type"
+  probe_stamp
+  printf 'probe Busy answered in %s ms; the user probe ended %s ms after the type began\n' \
+    "$((stamp - started))" "$((probe_end - started))" | tee -a "$out/mcp-typing.txt"
+  for _ in $(seq 30); do
+    grep -q "^browser: title $typing_tab busy 2000 true\$" "$log" && break
+    sleep 0.1
+  done
+  grep -q "^browser: title $typing_tab busy 2000 true\$" "$log" || typing_wrong="$typing_wrong; Busy came out wrong"
   grep -q "^browser: title $typing_tab sent " "$log" && typing_wrong="$typing_wrong; a line break sent the composer's message"
   [ -z "$typing_wrong" ] || fail "the agent's typing came out wrong${typing_wrong}"
   call close_tab "{\"tab\":$typing_tab}" > /dev/null
