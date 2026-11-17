@@ -184,7 +184,7 @@ BROWSER_DRIVE=1 BROWSER_MOTION=full BROWSER_URL="$yours" \
   "$browser" --load-extension="$(app_path "$extension")" \
   --enable-tracing='toplevel,input,benchmark,devtools,devtools.timeline,disabled-by-default-devtools.timeline,blink,cc,viz,gpu,renderer.scheduler,latency' \
   --trace-startup-record-mode=record-continuously --trace-buffer-size-in-kb=1000000 \
-  --enable-tracing-format=json --trace-startup-file="$trace_3285" < "$out/drive" > "$log" 2>&1 &
+  --enable-tracing-format=json --trace-startup-file="$(app_path "$trace_3285")" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
