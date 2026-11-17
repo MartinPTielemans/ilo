@@ -1079,8 +1079,9 @@ painted(() => document.title = "spaces");
   [ -n "$account" ] && [ -n "$branch" ] ||
     fail "the page of names with Unicode spaces had the refs '$account' and '$branch'"
   shown='"Alpha 1234", "Bravo 5678 (closed)", "Charlie 9012 (open)"'
+  # It holds its first option, the page's own with none marked selected, before its options.
   case "$outline" in
-    *"- combobox \"Account\" [$account] (options: $shown)"*) ;;
+    *"- combobox \"Account\" [$account] (holds \"Alpha 1234\") (options: $shown)"*) ;;
     *) fail "the select's line didn't name its options with one space each, as select takes them: $(printf '%s\n' "$outline" | grep Account)" ;;
   esac
   # choose TEXT TITLE REF NAME: select's TEXT in the field REF answers that it holds TEXT, and the
