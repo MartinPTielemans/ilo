@@ -109,6 +109,22 @@ TEST(MiniPlayerReleaseTest, AThrowStillReadsAsOne) {
   EXPECT_EQ(MiniPlayerLastMove(DragLeft(start), released), gfx::Vector2dF(-40, 0));
 }
 
+TEST(MiniPlayerReleaseTest, TheWindowLandingAfterTheReleaseDoesntThrowIt) {
+  // With window contents off, the window moves once as the loop ends, heard after the release's
+  // input time. Where its DIPs round a point off the outline's, it's a move newer than the release.
+  const base::TimeTicks start = base::TimeTicks() + base::Seconds(10);
+  const base::TimeTicks released = start + base::Milliseconds(400);
+  std::vector<MiniPlayerMove> moves = DragLeft(start);
+  moves.push_back({released + base::Milliseconds(5), gfx::Point(1161, 250)});
+  // It counts, over the time since the last move older than the window: a point in 200 ms.
+  EXPECT_NEAR(MiniPlayerReleaseVelocity(moves, released).x(), 1 / 0.2, 0.01);
+  EXPECT_EQ(MiniPlayerLastMove(moves, released), gfx::Vector2dF(1, 0));
+  EXPECT_EQ(MiniPlayerRest(gfx::Rect(1161, 250, 345, 194),
+                           MiniPlayerReleaseVelocity(moves, released),
+                           MiniPlayerLastMove(moves, released), kWorkArea),
+            std::nullopt);
+}
+
 TEST(MiniPlayerReleaseTest, WithNoMoveThatOldItsFromTheFirst) {
   const base::TimeTicks start = base::TimeTicks() + base::Seconds(10);
   const std::vector<MiniPlayerMove> flick = {
