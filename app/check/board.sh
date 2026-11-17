@@ -109,10 +109,11 @@ written=$(grep -v '^browser: drive [0-9]*: ' "$log" | grep 'shelves\|kitchen\|pa
 [ -z "$written" ] || fail "the log says what the Board holds: $written"
 
 # 1c: a Board whose note's text is markup, and a link to javascript:, runs neither: each would
-# take the page to #ran, which its page line would say, as a Board's title is never logged.
-marked=$(printf 'b%.0s' $(seq 32))
-mkdir -p "$boards/$marked"
-cat > "$boards/$marked/board.json" <<'EOF'
+# take the page to #ran, which its page line would say, as a Board's title is never logged. Its id
+# isn't in $marked, where send keeps the driver's marked text.
+markup=$(printf 'b%.0s' $(seq 32))
+mkdir -p "$boards/$markup"
+cat > "$boards/$markup/board.json" <<'EOF'
 {"version": 1, "camera": {"x": 0, "y": 0, "zoom": 1}, "cards": [
  {"id": "a", "kind": "note", "x": 80, "y": 80, "w": 240, "text": "<img src=x onerror=\"location.hash='ran'\">"},
  {"id": "b", "kind": "link", "x": 360, "y": 80, "w": 280, "h": 52, "url": "javascript:location.hash='ran'", "title": "ran"}
@@ -120,10 +121,10 @@ cat > "$boards/$marked/board.json" <<'EOF'
 EOF
 send key t cmd
 expect '^browser: command bar shown$' "⌘T didn't open the command bar"
-send insert "chrome://board/$marked"
+send insert "chrome://board/$markup"
 send key return
-expect "^browser: loaded [0-9]* chrome://board/$marked\$" "the Board with markup didn't load"
-! grep -q "^browser: page [0-9]* .* chrome://board/$marked#ran\$" "$log" ||
+expect "^browser: loaded [0-9]* chrome://board/$markup\$" "the Board with markup didn't load"
+! grep -q "^browser: page [0-9]* .* chrome://board/$markup#ran\$" "$log" ||
   fail "a Board's note's markup or its javascript: link ran"
 ../tools/window-screenshot.sh "$pid" "$out/board-markup.png" || fail "no window to capture"
 
