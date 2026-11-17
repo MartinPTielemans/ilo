@@ -5,7 +5,8 @@
 //! return shows the ringed card's Space, as a click on it does. Escape still closes the Library,
 //! as neither binds it. A swipe or a click on the Library moves no keyboard. Closed by its key, a
 //! section's or Escape, the Library gives the keyboard back to whoever had it as it opened, the
-//! page or the UI (#3313); closed any other way, to the window.
+//! page or the UI (#3313), unless the page shown since is an agent's; closed any other way, to the
+//! window.
 
 use gpui::{
     App, Context, Focusable, KeyBinding, Role, Stateful, Window, actions, div, prelude::*, px,
@@ -117,6 +118,13 @@ impl Shell {
             return;
         }
         match before.filter(|_| back) {
+            // The tab shown may have changed since, by a key for another tab or Space: an agent's
+            // page the user doesn't hold never gets the keyboard from a key in the UI.
+            Some(Before::Page) if self.shows_agents_page() => {
+                window.focus(&self.focus_handle, cx);
+                // check.sh reads this line.
+                log!("browser: library kept the keyboard from an agent's page");
+            }
             Some(Before::Page) => {
                 window.focus(&self.focus_handle, cx);
                 self.browser.focus_page(cx);
@@ -126,6 +134,14 @@ impl Shell {
             Some(Before::Ui(before)) => window.focus(&before, cx),
             None => window.focus(&self.focus_handle, cx),
         }
+    }
+
+    /// Whether the core shows an agent's page, or a task's watched is still drawn: agents' Spaces
+    /// are never the window's own, so only those are theirs. The Library's key closes the task's
+    /// area as it closes, while the core still shows the task's page, so the window keeps the
+    /// keyboard, a page the user holds from the agent too.
+    fn shows_agents_page(&self) -> bool {
+        self.task_core != 0 || self.agent_page().is_some()
     }
 
     /// Spaces' cards, taking their keys while they have the keyboard. An assistive app reads them
@@ -432,6 +448,30 @@ mod tests {
                 .map(|library| library.search.read(cx).text().to_string())
         });
         assert_eq!(text.as_deref(), Some("ex"));
+    }
+
+    /// A key for another tab can show another of the user's pages while the Library is open, and
+    /// the Library's key then gives that page the keyboard. An agent's page watched is task_area's
+    /// test.
+    #[gpui::test]
+    fn the_page_shown_since_gets_the_keyboard(cx: &mut TestAppContext) {
+        let (shell, host, cx) = window(Section::Archive, cx);
+        shell.update(cx, |shell, cx| {
+            shell.set_tabs(
+                1,
+                Vec::new(),
+                vec![10, 11],
+                Vec::new(),
+                Folders::default(),
+                cx,
+            );
+        });
+        run_from(&shell, Command::ViewLibrary, "page", cx);
+        shell.update(cx, |shell, cx| shell.set_selected(11, cx));
+        cx.run_until_parked();
+        host.take();
+        run(&shell, Command::ViewLibrary, cx);
+        assert!(host.take().contains(&"focus page".to_owned()));
     }
 
     /// Opened by a swipe, or set open as the gesture does, the Library leaves the keyboard where
