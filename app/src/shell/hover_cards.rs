@@ -97,7 +97,8 @@ impl Shell {
         let Row::Tab(folder) = row else {
             return;
         };
-        if !self.is_folder(folder) {
+        // A Live Folder's tooltip says how old its rows are in place of a preview.
+        if !self.is_folder(folder) || self.live_source(folder).is_some() {
             return;
         }
         if !hovered {

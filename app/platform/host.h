@@ -645,6 +645,13 @@ void host_show_link_target(void* ui_view, double left, double top, double fade);
 // Fades the link target's window out over |fade| seconds, then hides it.
 void host_hide_link_target(double fade);
 
+// The overlay window of |overlay_view| drew only inside the frame at (|left|, |top|), |width| by
+// |height| points in its content, with corners of |radius|. Where windows can't blend with what's
+// under them, as under X11 with no compositor, the host cuts the window to it, so the room it
+// keeps round it shows what's under it rather than black. Elsewhere it does nothing.
+void host_outline_overlay(void* overlay_view, double left, double top, double width, double height,
+                          double radius);
+
 // Whether a mouse button is down now, over any window, the page's included, which the UI doesn't
 // hear the presses of. The link target's window waits for the release to show, move or hide.
 bool host_mouse_down(void);

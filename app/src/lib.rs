@@ -138,6 +138,7 @@ pub mod import;
 pub mod launch;
 pub mod launch_picture;
 pub mod lazy_window;
+pub mod link_card;
 pub mod link_preview;
 pub mod link_rules;
 pub mod link_target;
