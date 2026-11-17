@@ -1988,9 +1988,10 @@ $(grep 'browser: agent .*download' "$log" | tail -3)"
   fi
   # A site the user always allows downloads from, whose page's download link the agent clicks with
   # another app in front below (#3183). A .docx, which the check's server sends as a file, where a
-  # .txt would open as a page.
+  # .txt would open as a page. The link opens a tab, which the download closes at once, as many
+  # sites' do: before #3104 that tab's window show asked the compositor to bring ilo forward.
   printf 'notes\n' > "$out/site/notes.docx"
-  printf '%s' '<!doctype html><title>Notes</title><a href="notes.docx" download>Notes</a>' \
+  printf '%s' '<!doctype html><title>Notes</title><a href="notes.docx" target=_blank>Notes</a>' \
     > "$out/site/notes.html"
   file="{\"url\":\"saved.localhost:$port/notes.docx\"}"
   wants='^browser: agent mcp-client asks [0-9]*: download notes\.docx from saved\.localhost$'
