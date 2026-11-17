@@ -722,6 +722,9 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
     thumbnail='^browser: task page in its thumbnail$'
     before=$(grep -c "$back" "$log" || true)
     shrunk=$(grep -c "$thumbnail" "$log" || true)
+    # A page there can have the keyboard, as the one a press in the split view focused on X11,
+    # and keeps Escape: a click on the sidebar gives the UI the keyboard, as the user's would.
+    send click $sidebar_point
     send key escape
     await_more "$back" "$before" || fail "Escape didn't step back to Pages from $1"
     await_more "$thumbnail" "$shrunk" || fail "$1 didn't go back into its picture"
