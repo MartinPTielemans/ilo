@@ -90,13 +90,14 @@ new PerformanceObserver((list) => {
   for (const e of list.getEntries()) if (e.startTime >= since) longest = Math.max(longest, e.duration);
 }).observe({ type, buffered: true });
 document.getElementById("mark").addEventListener("click", () => { since = performance.now(); longest = 0; mark++; });
-const top = (id) => document.getElementById(id).getBoundingClientRect().top;
+// Not "top": a script declaring window.top again is refused whole, and its title never comes.
+const topOf = (id) => document.getElementById(id).getBoundingClientRect().top;
 let now, still = 0, said;
 setInterval(() => {
   if (document.getAnimations().some((x) => x.playState === "running")) return;
-  const first = ["t0", "t100", "t200", "t299"].sort((x, y) => top(x) - top(y))[0];
+  const first = ["t0", "t100", "t200", "t299"].sort((x, y) => topOf(x) - topOf(y))[0];
   const was = now;
-  now = "first " + first + " pair " + (top("t100") < top("t200") ? "t100,t200" : "t200,t100") +
+  now = "first " + first + " pair " + (topOf("t100") < topOf("t200") ? "t100,t200" : "t200,t100") +
     " view " + innerWidth + "x" + innerHeight + " mark " + mark;
   if (now !== was) { still = 0; return; }
   if (++still < 5) return;
