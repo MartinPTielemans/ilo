@@ -16,7 +16,10 @@ use web_time::Instant;
 use gpui::{
     AnyElement, Bounds, ClickEvent, Context, Entity, KeyboardButton, KeyboardClickEvent,
     KeystrokeEvent, MouseButton, PathBuilder, Pixels, Rgba, SharedString, Subscription, Window,
-    canvas, div, fill, point, prelude::*, px, rgb, size,
+    accesskit::{Role, Toggled},
+    canvas, div, fill, point,
+    prelude::*,
+    px, rgb, size,
 };
 
 use super::{
@@ -27,9 +30,9 @@ use super::{
 use crate::account::{self, Account, AccountEvent, Status};
 use crate::default_browser::{self, Os};
 use crate::import::{Corner, Guide, ImportEvent, ImportView, Look};
-use crate::settings_rows::{SLIDE, group, stop_switch};
+use crate::settings_rows::{SLIDE, group, named_button, stop_switch};
 use crate::theme::Theme;
-use crate::theme_picker::SWATCHES;
+use crate::theme_picker::{SWATCHES, swatch_name};
 use crate::tokens::palette::{INK, PAPER};
 use crate::tokens::settings::PADDING;
 use crate::tokens::shell::onboarding::BUTTON_GAP;
@@ -1003,10 +1006,21 @@ impl Shell {
             .flex()
             .items_center()
             .justify_center();
+        // A screen reader reads the step shown as a dialog called by its title, with its line, and
+        // the step leaving under it, still drawn as it slides, as nothing.
+        let named = self.a11y
+            && (self.onboarding.as_ref()).is_some_and(|onboarding| onboarding.step == step);
         if step == Step::Intro {
             let drawn = Drawn::at(t, still);
             return layer.child(
                 div()
+                    .id("onboarding-intro")
+                    .when(named, |intro| {
+                        intro
+                            .role(Role::Dialog)
+                            .aria_label(env!("APP_NAME"))
+                            .aria_description("a good tool.")
+                    })
                     .flex()
                     .flex_col()
                     .items_center()
@@ -1063,7 +1077,7 @@ impl Shell {
                 .onboarding
                 .as_ref()
                 .and_then(|onboarding| onboarding.picked);
-            swatch_row(picked, colors, cx)
+            swatch_row(picked, colors, self.a11y, cx)
         });
         let chip = |keys: String, fill: Rgba| {
             div()
@@ -1109,9 +1123,11 @@ impl Shell {
         });
         let drawn = (self.onboarding.as_ref())
             .map(|onboarding| (onboarding.button.clone(), onboarding.settled));
+        let said = (title.clone(), line.clone());
         let button = (!button.is_empty()).then(|| {
             div()
                 .id("onboarding-continue")
+                .when(self.a11y, |control| named_button(control, button.clone()))
                 .relative()
                 .mt(px(BUTTON_GAP))
                 .h(px(BUTTON_HEIGHT))
@@ -1139,6 +1155,14 @@ impl Shell {
         });
         layer.child(
             div()
+                .id(("onboarding-step", step as usize))
+                .when(named, |content| {
+                    let (title, line) = said;
+                    content
+                        .role(Role::Dialog)
+                        .aria_label(title)
+                        .aria_description(line)
+                })
                 .flex()
                 .flex_col()
                 .items_center()
@@ -1304,6 +1328,9 @@ impl Shell {
             .child("esc");
         div()
             .id("onboarding-skip")
+            .when(self.a11y, |control| {
+                named_button(control, if back { "Back" } else { "Skip" })
+            })
             .absolute()
             .right(px(SKIP_MARGIN))
             .bottom(px(SKIP_MARGIN))
@@ -1371,14 +1398,18 @@ fn opt_in_frame(
 
 /// The theme picker's swatches in a row, the one picked ringed in the ink, each with a hairline
 /// edge so the lightest still reads on Paper.
+/// A screen reader reads them as one choice, a radio button each called by its colour.
 fn swatch_row(
     picked: Option<usize>,
     colors: Colors,
+    a11y: bool,
     cx: &mut Context<Shell>,
 ) -> impl IntoElement + use<> {
     // Each swatch's ring and the gap inside it, on both sides.
     let ringed = SWATCH + 4. * SWATCH_RING;
     div()
+        .id("onboarding-swatches")
+        .when(a11y, |row| row.role(Role::RadioGroup).aria_label("Colour"))
         .mt(px(SWATCH_GAP))
         .flex()
         .gap(px(SWATCH_PITCH - ringed))
@@ -1388,8 +1419,18 @@ fn swatch_row(
             } else {
                 colors.ink(0.)
             };
+            let toggled = match picked == Some(index) {
+                true => Toggled::True,
+                false => Toggled::False,
+            };
             div()
                 .id(("onboarding-swatch", index))
+                .when(a11y, |swatch| {
+                    swatch
+                        .role(Role::RadioButton)
+                        .aria_label(swatch_name(color))
+                        .aria_toggled(toggled)
+                })
                 .p(px(SWATCH_RING))
                 .rounded_full()
                 .border(px(SWATCH_RING))
