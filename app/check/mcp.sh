@@ -1680,17 +1680,22 @@ addEventListener("beforeunload", event => { if (dirty) event.preventDefault() })
     printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p'
     printf '%s\n' "$opened" | sed -n "s/.*- $2 \"$3\" \[\(e[0-9]*\)\].*/\1/p" | head -1
   }
-  # The close of $1 answered after the core asked its page and heard $2, with its one log entry
-  # $3 after that, and no leave dialog.
+  # The close of $1 answered after the core asked its page and heard $2, with its one activity-log
+  # entry, "close_tab localhost" and $3, after that, and no leave dialog. The core's "agent
+  # activity" line is the permission check's, at the call, before the page is asked.
   asked_page() {
     asked=$(grep -n "browser: agent close $1 asks its page\$" "$log" | tail -1 | cut -d: -f1)
     [ -n "$asked" ] || fail "the close of tab $1 didn't ask its page"
     heard=$(grep -n "browser: agent close $1 answered $2\$" "$log" | tail -1 | cut -d: -f1)
     [ -n "$heard" ] || fail "the core didn't answer the close of tab $1 with $2"
-    await_log "^browser: agent activity mcp-client $1 $3" "the close of tab $1 wasn't logged"
-    entry=$(grep -n "^browser: agent activity mcp-client $1 $3" "$log" | tail -1 | cut -d: -f1)
+    await_log "^browser: agent logged mcp-client close_tab localhost$3" \
+      "the close of tab $1 wasn't logged"
+    entry=$(grep -n "^browser: agent logged mcp-client close_tab localhost$3" "$log" | tail -1 |
+      cut -d: -f1)
     [ -n "$entry" ] && [ "$entry" -gt "$heard" ] ||
       fail "the close of tab $1 wasn't logged once its page answered"
+    [ "$(sed -n "$asked,\$p" "$log" | grep -c '^browser: agent logged mcp-client close_tab ')" = 1 ] ||
+      fail "the close of tab $1 was logged more than once"
     grep -q "^browser: page $1 dialog [^n]" "$log" && fail "closing tab $1 showed a dialog"
     return 0
   }
@@ -1702,7 +1707,7 @@ addEventListener("beforeunload", event => { if (dirty) event.preventDefault() })
   archived=$(sed -n 's/^browser: archive \([0-9]*\) tabs$/\1/p' "$log" | tail -1)
   closed=$(call close_tab "{\"tab\":$quiet}")
   [ "$closed" = "Closed tab $quiet." ] || fail "closing a page whose handler doesn't ask answered: $closed"
-  asked_page "$quiet" 0 close_tab
+  asked_page "$quiet" 0 '$'
   grep -q "^browser: tab $quiet closed\$" "$log" || fail "the core didn't tell of the closed tab"
   call list_tabs '{}' | grep -q "^. $quiet  " && fail "list_tabs listed the closed tab"
   [ "$(sed -n 's/^browser: archive \([0-9]*\) tabs$/\1/p' "$log" | tail -1)" = "$archived" ] ||
@@ -1713,7 +1718,7 @@ addEventListener("beforeunload", event => { if (dirty) event.preventDefault() })
   untouched=$1
   closed=$(call close_tab "{\"tab\":$untouched}")
   [ "$closed" = "Closed tab $untouched." ] || fail "closing a page no one clicked in answered: $closed"
-  asked_page "$untouched" 0 close_tab
+  asked_page "$untouched" 0 '$'
   # Once the agent clicked in it, it asks: the tab stays, and the answer says why. With discard it's
   # asked again, and the agent's own tab closes without saving (#1447).
   set -- $(open_with leave.html button Note)
@@ -1724,7 +1729,7 @@ addEventListener("beforeunload", event => { if (dirty) event.preventDefault() })
     "error: Tab $leaving stays open: its page asks before it's left"*"discard: true"*) ;;
     *) fail "closing a page that asks before it's left answered: $kept" ;;
   esac
-  asked_page "$leaving" 3 "close_tab refused: Tab $leaving stays open"
+  asked_page "$leaving" 3 " refused: Tab $leaving stays open"
   call list_tabs '{}' | grep -q "^. $leaving  " || fail "a close that kept the tab took it out"
   closed=$(call close_tab "{\"tab\":$leaving,\"discard\":true}")
   case "$closed" in
@@ -1746,7 +1751,7 @@ addEventListener("beforeunload", event => { if (dirty) event.preventDefault() })
     "error: Tab $form stays open: its page asks before it's left"*) ;;
     *) fail "closing a form the agent typed in answered: $kept" ;;
   esac
-  asked_page "$form" 3 "close_tab refused: Tab $form stays open"
+  asked_page "$form" 3 " refused: Tab $form stays open"
   closed=$(call close_tab "{\"tab\":$form,\"discard\":true}")
   [ "$closed" = "Closed tab $form without saving." ] || fail "discarding the form answered: $closed"
   grep -q "^browser: page $form dialog [^n]" "$log" && fail "closing the form showed a dialog"
