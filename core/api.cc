@@ -447,19 +447,24 @@ void bc_window_ui_text_input(bc_id id, bool focused, double x, double y, double 
 #endif
 }
 
-// Declared in browser_core.h by the header batch that takes it.
-extern "C" BC_EXPORT void bc_app_window_text_input(void* surface, bc_id window, bool focused,
-                                                   double x, double y, double height) {
+// Declared in browser_core.h by the header batch that takes them.
+extern "C" BC_EXPORT void bc_app_window_text_input(void* surface, bool focused, double x, double y,
+                                                   double height) {
 #if BUILDFLAG(IS_LINUX)
   if (!surface) {
     return;
   }
-  views::Widget* widget = window ? OpenWidget(window) : nullptr;
   std::optional<gfx::Rect> caret;
-  if (widget && focused) {
+  if (focused) {
     caret = gfx::ToEnclosingRect(gfx::RectF(x, y, 0, height));
   }
-  browser_core::platform::SetAppWindowTextInput(surface, widget, caret);
+  browser_core::platform::SetAppWindowTextInput(surface, caret);
+#endif
+}
+
+extern "C" BC_EXPORT void bc_app_window_text_input_end(void* surface) {
+#if BUILDFLAG(IS_LINUX)
+  browser_core::platform::EndAppWindowTextInput(surface);
 #endif
 }
 

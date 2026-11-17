@@ -93,10 +93,15 @@ void OverlayTakesKeyboard(views::Widget* widget, bool takes);
 void SetUITextInput(views::Widget* widget, std::optional<gfx::Rect> caret);
 
 // A window of the app's own on |surface|, a toplevel on Chromium's connection such as Settings,
-// composes through |widget|'s input method, its focused field's caret at |caret|, in DIPs from the
-// surface's top left, or none is focused. A null |widget| ends it (bc_app_window_text_input). In
-// window_views.cc. Nothing off Wayland.
-void SetAppWindowTextInput(void* surface, views::Widget* widget, std::optional<gfx::Rect> caret);
+// composes through the core's input method for its windows, its focused field's caret at |caret|,
+// in DIPs from the surface's top left, or none is focused (bc_app_window_text_input). What it
+// composes goes to window 0 only from the input method's own events, never during the app's call,
+// so the app gives each to the field it has focused as it comes; the app keeps what a field showed
+// composed as it loses the focus, and the core drops its composition then. In window_views.cc.
+// Nothing off Wayland.
+void SetAppWindowTextInput(void* surface, std::optional<gfx::Rect> caret);
+// It no longer does (bc_app_window_text_input_end).
+void EndAppWindowTextInput(void* surface);
 
 // Chromium's text input, entering |surface|, gives |widget|'s window its focus, without the window
 // becoming active, or with a null |widget| no longer. Nothing off Wayland.

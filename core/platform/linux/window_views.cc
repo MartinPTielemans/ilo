@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/callback_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
@@ -27,6 +28,7 @@
 #include "browser_core/platform/linux/wayland.h"
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
+#include "chrome/browser/lifetime/termination_notification.h"
 #include "chrome/browser/picture_in_picture/auto_picture_in_picture_tab_helper.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
 #include "chrome/browser/ui/views/native_widget_factory.h"
@@ -313,34 +315,36 @@ x11::Rectangle XRectangle(const gfx::Rect& rect) {
           static_cast<uint16_t>(rect.width()), static_cast<uint16_t>(rect.height())};
 }
 
-// bc_app_window_text_input's windows of the app's own, each composing through a browser window's
-// input method. A surface is only compared, never used.
-struct AppWindowTextInput {
-  uintptr_t surface;
-  raw_ptr<views::Widget> widget;
+// bc_app_window_text_input's input method: a widget never shown, whose input method composes for
+// the fields of the app's own windows and has no other client, so no page, and no tab an agent
+// drives, can take what the user composes there. Chromium's text input gives its window the
+// text-input focus for any of their surfaces, without making it active.
+struct AppWindowComposer {
+  std::unique_ptr<views::Widget> widget;
   std::unique_ptr<UITextInput> input;
+  // Each window's surface, only compared, never used, and the one whose field has the focus.
+  std::vector<uintptr_t> surfaces;
+  uintptr_t focused = 0;
+  // Quitting ends them before the widget's connection goes.
+  base::CallbackListSubscription terminating;
 };
 
-std::vector<AppWindowTextInput>& AppWindowTextInputs() {
-  static base::NoDestructor<std::vector<AppWindowTextInput>> all;
-  return *all;
+std::unique_ptr<AppWindowComposer>& Composer() {
+  static base::NoDestructor<std::unique_ptr<AppWindowComposer>> composer;
+  return *composer;
 }
 
-// What |entry|'s field composed is committed to it, and its surface composes through the window no
-// longer, before either goes.
-void EndAppWindowTextInput(AppWindowTextInput& entry) {
-  entry.input->SetKeyboard(false);
-  ComposeThroughWindow(reinterpret_cast<void*>(entry.surface), nullptr);
-}
-
-void EndAppWindowTextInputs(views::Widget* widget) {
-  auto& all = AppWindowTextInputs();
-  for (AppWindowTextInput& entry : all) {
-    if (entry.widget == widget) {
-      EndAppWindowTextInput(entry);
-    }
+void EndAppWindowTextInputs() {
+  std::unique_ptr<AppWindowComposer> composer = std::move(Composer());
+  if (!composer) {
+    return;
   }
-  std::erase_if(all, [widget](const AppWindowTextInput& entry) { return entry.widget == widget; });
+  composer->input->SetCaret(std::nullopt);
+  for (uintptr_t surface : composer->surfaces) {
+    ComposeThroughWindow(reinterpret_cast<void*>(surface), nullptr);
+  }
+  composer->input.reset();
+  composer->widget.reset();
 }
 
 class WindowViews : public views::WidgetObserver,
@@ -931,7 +935,6 @@ class WindowViews : public views::WidgetObserver,
 
   void OnWidgetDestroying(views::Widget*) override {
     ui_text_input_.SetKeyboard(false);
-    EndAppWindowTextInputs(widget_);
     x11_observation_.Reset();
     children_events_ = x11::ScopedEventSelector();
     focus_observation_.Reset();
@@ -1851,41 +1854,63 @@ void SetUITextInput(views::Widget* widget, std::optional<gfx::Rect> caret) {
   }
 }
 
-void SetAppWindowTextInput(void* surface, views::Widget* widget, std::optional<gfx::Rect> caret) {
+void SetAppWindowTextInput(void* surface, std::optional<gfx::Rect> caret) {
   // On X11 a window of the app's own has an input method of its own.
   if (!OnWayland()) {
     return;
   }
-  auto& all = AppWindowTextInputs();
-  const uintptr_t key = reinterpret_cast<uintptr_t>(surface);
-  auto it = std::ranges::find(all, key, &AppWindowTextInput::surface);
-  if (it != all.end() && it->widget != widget) {
-    EndAppWindowTextInput(*it);
-    all.erase(it);
-    it = all.end();
+  std::unique_ptr<AppWindowComposer>& composer = Composer();
+  if (!composer) {
+    composer = std::make_unique<AppWindowComposer>();
+    composer->widget = std::make_unique<views::Widget>();
+    views::Widget::InitParams params(views::Widget::InitParams::CLIENT_OWNS_WIDGET,
+                                     views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
+    params.bounds = gfx::Rect(1, 1);
+    // A window of Chromium's own with its own input method: Chromium makes its surface a toplevel
+    // only to show it, which nothing does.
+    params.native_widget = new views::DesktopNativeWidgetAura(composer->widget.get());
+    composer->widget->Init(std::move(params));
+    composer->input = std::make_unique<UITextInput>(composer->widget.get(), /*app_window=*/true);
+    // It composes only while the compositor gives one of the surfaces the keys, which Chromium's
+    // text input follows.
+    composer->input->SetKeyboard(true);
+    composer->terminating =
+        browser_shutdown::AddAppTerminatingCallback(base::BindOnce(&EndAppWindowTextInputs));
   }
-  if (!widget || !ViewsOf(widget)) {
-    return;
+  const uintptr_t key = reinterpret_cast<uintptr_t>(surface);
+  if (!std::ranges::contains(composer->surfaces, key)) {
+    composer->surfaces.push_back(key);
+    ComposeThroughWindow(surface, composer->widget.get());
   }
   if (caret) {
-    // One window of the app's has the keys at a time, so compositions come back for window 0
-    // (bc_app_window_text_input). Another focused first has what it composed committed to it,
-    // posted ahead of anything this one composes, which only an input method's later event brings.
-    for (AppWindowTextInput& other : all) {
-      if (other.surface != key) {
-        other.input->SetCaret(std::nullopt);
-      }
+    if (composer->focused != key) {
+      // Another window's field had the focus: the app keeps what it showed composed, and the input
+      // method starts afresh here.
+      composer->input->SetCaret(std::nullopt);
+      composer->focused = key;
     }
+    composer->input->SetCaret(caret);
+  } else if (composer->focused == key) {
+    composer->focused = 0;
+    composer->input->SetCaret(std::nullopt);
   }
-  if (it == all.end()) {
-    all.push_back({key, widget, std::make_unique<UITextInput>(widget, /*app_window=*/true)});
-    it = std::prev(all.end());
-    ComposeThroughWindow(surface, widget);
-    // The input method composes for it only while the compositor gives its surface the keys,
-    // which Chromium's text input follows.
-    it->input->SetKeyboard(true);
+}
+
+void EndAppWindowTextInput(void* surface) {
+  std::unique_ptr<AppWindowComposer>& composer = Composer();
+  const uintptr_t key = reinterpret_cast<uintptr_t>(surface);
+  if (!composer || !std::ranges::contains(composer->surfaces, key)) {
+    return;
   }
-  it->input->SetCaret(caret);
+  if (composer->focused == key) {
+    composer->focused = 0;
+    composer->input->SetCaret(std::nullopt);
+  }
+  ComposeThroughWindow(surface, nullptr);
+  std::erase(composer->surfaces, key);
+  if (composer->surfaces.empty()) {
+    EndAppWindowTextInputs();
+  }
 }
 
 std::optional<gfx::Rect> DialogFrame(views::Widget* widget) {

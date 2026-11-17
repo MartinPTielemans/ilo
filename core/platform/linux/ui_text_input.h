@@ -24,8 +24,9 @@ namespace browser_core::platform {
 
 class UITextInput : public ui::TextInputClient {
  public:
-  // With |app_window|, the field is in a window of the app's own that composes through |widget|'s
-  // input method (bc_app_window_text_input), and what it composes goes to window 0.
+  // With |app_window|, the field is in a window of the app's own, which composes through |widget|'s
+  // input method (bc_app_window_text_input). What it composes goes to window 0 as the input method
+  // sends it, and what it showed composed is the app's to keep as it loses the focus.
   explicit UITextInput(views::Widget* widget, bool app_window = false);
   UITextInput(const UITextInput&) = delete;
   UITextInput& operator=(const UITextInput&) = delete;

@@ -27,14 +27,6 @@ aura::Window* FocusedWindowIn(views::Widget* widget) {
   return client ? client->GetFocusedWindow() : nullptr;
 }
 
-// What an app's window composed, to window 0 (bc_app_window_text_input): it needs no UITextInput,
-// which may be gone by the time it's told.
-void CommitToAppWindow(const std::u16string& text) {
-  if (Host().ui_committed) {
-    Host().ui_committed(Host().context, 0, base::UTF16ToUTF8(text).c_str());
-  }
-}
-
 }  // namespace
 
 UITextInput::UITextInput(views::Widget* widget, bool app_window)
@@ -91,13 +83,13 @@ void UITextInput::Attach() {
 void UITextInput::Detach() {
   attached_ = false;
   // What the UI's field composed stays in it, as a page's field keeps it losing the focus. Told
-  // after the call that detached it, which may be the app's own.
-  if (!composition_.empty()) {
-    std::u16string text = std::exchange(composition_, std::u16string());
+  // after the call that detached it, which may be the app's own. An app's window keeps it itself:
+  // a commit told later would come for window 0 once the app has focused another field.
+  std::u16string text = std::exchange(composition_, std::u16string());
+  if (!text.empty() && !app_window_) {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, app_window_ ? base::BindOnce(&CommitToAppWindow, std::move(text))
-                               : base::BindOnce(&UITextInput::Committed,
-                                                weak_factory_.GetWeakPtr(), std::move(text)));
+        FROM_HERE,
+        base::BindOnce(&UITextInput::Committed, weak_factory_.GetWeakPtr(), std::move(text)));
   }
   ui::InputMethod* ime = widget_->GetInputMethod();
   // A page that took the focus took the input method already.
@@ -129,14 +121,14 @@ void UITextInput::Composed(const std::u16string& text) {
 }
 
 void UITextInput::Committed(const std::u16string& text) {
-  if (app_window_) {
-    CommitToAppWindow(text);
-    return;
-  }
   if (!Host().ui_committed) {
     return;
   }
   const std::string utf8 = base::UTF16ToUTF8(text);
+  if (app_window_) {
+    Host().ui_committed(Host().context, 0, utf8.c_str());
+    return;
+  }
   for (Window* window : Window::All()) {
     if (window->widget() == widget_) {
       Host().ui_committed(Host().context, window->id(), utf8.c_str());
