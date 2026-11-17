@@ -1043,7 +1043,7 @@ index 8164bc1564..ed7d01d6c4 100644
      #[test]
      fn test_keyboard_mapper() {
 diff --git a/crates/gpui_windows/src/platform.rs b/crates/gpui_windows/src/platform.rs
-index 095e009e23..bbb5dcc35d 100644
+index 095e009e23..f18d176e74 100644
 --- a/crates/gpui_windows/src/platform.rs
 +++ b/crates/gpui_windows/src/platform.rs
 @@ -20,7 +20,10 @@ use windows::{
@@ -1372,7 +1372,34 @@ index 095e009e23..bbb5dcc35d 100644
          });
  
          Ok(Box::new(window))
-@@ -1253,21 +1422,11 @@ impl WindowsPlatformInner {
+@@ -1231,6 +1400,26 @@ impl WindowsPlatformInner {
+     }
+ 
+     fn handle_display_change(&self, handle: HWND) -> Option<isize> {
++        // Windows broadcasts this to top-level windows alone, so a child window, such as the view
++        // an embedder shows in a window of its own, doesn't hear it. After the display adapter
++        // restarts, the device is stale until something presents on it, and a window shows
++        // nothing until then, so each shown window draws once: its present has Windows remove the
++        // device, and the removal wakes the recovery (#2536, #2983).
++        if let Some(all_windows) = self.raw_window_handles.upgrade() {
++            for window in all_windows.read().iter() {
++                unsafe {
++                    if IsWindowVisible(window.as_raw()).as_bool() {
++                        PostMessageW(
++                            Some(window.as_raw()),
++                            WM_GPUI_FORCE_UPDATE_WINDOW,
++                            WPARAM(self.validation_number),
++                            LPARAM(0),
++                        )
++                        .log_err();
++                    }
++                }
++            }
++        }
+         // Broadcasts can be delivered while the app is mid-update, e.g. inside a
+         // COM call, so report the change from the message loop instead.
+         unsafe {
+@@ -1253,21 +1442,11 @@ impl WindowsPlatformInner {
          Some(0)
      }
  
@@ -1398,7 +1425,7 @@ index 095e009e23..bbb5dcc35d 100644
          Some(0)
      }
  
-@@ -1409,7 +1568,7 @@ impl WindowsPlatformInner {
+@@ -1409,7 +1588,7 @@ impl WindowsPlatformInner {
  impl Drop for WindowsPlatform {
      fn drop(&mut self) {
          if let Some(stop) = self.vsync_stop.borrow_mut().take() {
@@ -1407,7 +1434,7 @@ index 095e009e23..bbb5dcc35d 100644
          }
          unsafe {
              if let Some(notification) = self.suspend_resume_notification.borrow_mut().take() {
-@@ -1637,10 +1796,43 @@ fn file_save_dialog(
+@@ -1637,10 +1816,43 @@ fn file_save_dialog(
  
  fn load_icon() -> Result<HICON> {
      let module = unsafe { GetModuleHandleW(None).context("unable to get module handle")? };
@@ -1452,7 +1479,7 @@ index 095e009e23..bbb5dcc35d 100644
              IMAGE_ICON,
              0,
              0,
-@@ -1763,6 +1955,8 @@ fn handle_gpu_device_lost(
+@@ -1763,6 +1975,8 @@ fn handle_gpu_device_lost(
              }
          }
      }
@@ -1461,7 +1488,7 @@ index 095e009e23..bbb5dcc35d 100644
      Ok(())
  }
  
-@@ -1980,3 +2174,52 @@ mod tests {
+@@ -1980,3 +2194,52 @@ mod tests {
          );
      }
  }

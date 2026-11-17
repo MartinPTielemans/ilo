@@ -9,6 +9,7 @@
 # change is saved in the site's .arrange.json as it happens. Last, a settle then a trade of the
 # thing it's kept by: the run asserts the order the core gives, known under #2975, and reports what
 # a press on Wide picks, known under #2981, rather than failing on it.
+# A carry to the page's bare background with no key held is no change: only ⌘ floats a thing.
 # Reloaded, the page shows the arrangement, and the run measures whether its first frame already
 # did, in arrange-first-frame.txt, and says which in its summary rather than failing: a flash there
 # is what would bring a renderer hook at document start (#2347's slice 2 plan). Edited outside ilo,
@@ -182,15 +183,22 @@ EOF
 # thing at ($1 $2), its box centred there: the core sends the box at rest, where the thing lands,
 # not partway through its landing (#3008).
 landed_bar() {
+  first=
   for _ in $(seq 100); do
-    first=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: mini bar at ')
+    # The bar is placed a frame after the drop is logged, so no line yet is a wait, not a failure:
+    # under set -e grep's status 1 would end the run unsaid (#2974's race).
+    first=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: mini bar at ' ||
+      true)
     [ -n "$first" ] && break
+    kill -0 "$pid" 2> /dev/null || gone
     sleep 0.1
   done
+  [ -n "$first" ] ||
+    fail "$3: no mini bar was placed in 10 s after the drop; the log ends: $(tail -5 "$log")"
   read -r ox oy ow oh << EOF
 $(echo "$first" | cut -d' ' -f10-13)
 EOF
-  [ -n "$oh" ] || fail "$3: the UI placed no mini bar after the drop"
+  [ -n "$oh" ] || fail "$3: the mini bar's line has no box: $first"
   dx=$((ox + ow / 2 - $1)) dy=$((oy + oh / 2 - $2))
   [ ${dx#-} -le 1 ] && [ ${dy#-} -le 1 ] || fail "$3: $first"
 }
@@ -298,21 +306,43 @@ picks 1 Beta
 picks 0 Gamma
 
 # A fit refusal: the wide section at the side's edge, where it doesn't fit, and nothing changes.
-# Known under #3003: the edge, the gap between Side and Note, is the side's middle, and the core
-# trades Wide with the side itself, kept as it's let go. The run asserts that as the core gives it
-# today, reports it, and takes it back with ⌘Z, as it takes the float back below, so the steps
-# after it start from the page before it. Once the core refuses there, the run says so.
+# Known under #3003, in two shapes. On main's core the edge, the gap between Side and Note, is the
+# side's middle, and the core trades Wide with the side itself, kept as it's let go. On the
+# batch's core the rest refuses, but the release lands the settle the move showed before it,
+# between Side and Note, and saves it. The run asserts each as the core gives it, reports it, and
+# takes it back with ⌘Z, as it takes the float back below, so the steps after it start from the
+# page before it. Once the core refuses there and saves nothing, the run says so. A refusal shows
+# no preview: the rest finds the drop doesn't fit, and the step stays Carrying, Refused.
 carry $(slot 3) $(side_edge)
-expect "^browser: arrange $tab Preview " "a rest at the side's edge showed no drop"
+expect "^browser: arrange $tab \(Preview\|Carrying Refused\) " \
+  "a rest at the side's edge showed no drop and no refusal"
 ../tools/window-screenshot.sh "$pid" "$out/arrange-refused.png" || fail "no window to capture"
-preview=$(grep "^browser: arrange $tab Preview " "$log" | tail -1 | cut -d' ' -f5)
+preview=$(grep "^browser: arrange $tab \(Preview\|Carrying Refused\) " "$log" | tail -1 |
+  cut -d' ' -f5)
 send release $(side_edge)
 expect "^browser: arrange $tab Selected " "letting go where the thing doesn't fit left no selection"
 case "$preview" in
   Refused)
-    shows 'c,b,a,w side s,n hidden - float -' "the refused drop changed the page"
-    [ "$(changes)" = 1 ] || fail "the refused drop was saved: $(changes) changes"
-    refusal="the rest where Wide doesn't fit refused it, so #3003's known row is a line to remove"
+    # The core logs a release's save before its selection, so once Selected is in, a settle the
+    # release landed is in the log too.
+    if sed -n "/^browser: drive $step: /,\$p" "$log" |
+      grep "^browser: arrange $tab Selected Settles " > /dev/null; then
+      expect "browser: tab $tab arrange saved 2 changes\$" \
+        "the release after the refusal settled Wide but the core didn't save it"
+      shows 'c,b,a,w side s,n hidden - float -' \
+        "the settle the release landed after the refusal didn't read as #3003 has it on the batch"
+      kept 2 "the settle the release landed after the refusal wasn't saved"
+      send key z cmd
+      expect "browser: tab $tab arrange saved 1 changes\$" "⌘Z didn't reach the mode"
+      shows 'c,b,a,w side s,n hidden - float -' "⌘Z didn't take back the settle after the refusal"
+      kept 1 "⌘Z's step back wasn't saved"
+      refusal="the rest where Wide doesn't fit refused it, but letting go there settled it between"
+      refusal="$refusal Side and Note all the same, which ⌘Z took back"
+    else
+      shows 'c,b,a,w side s,n hidden - float -' "the refused drop changed the page"
+      [ "$(changes)" = 1 ] || fail "the refused drop was saved: $(changes) changes"
+      refusal="the rest where Wide doesn't fit refused it, so #3003's known row is a line to remove"
+    fi
     ;;
   Trades)
     expect "browser: tab $tab arrange saved 2 changes\$" "the core didn't save the trade with the side"
@@ -328,8 +358,37 @@ case "$preview" in
   *) fail "a rest where the thing doesn't fit didn't refuse it: $preview" ;;
 esac
 
+# The page's bare background, where it has no block, is no place: carried there with no key held,
+# the note goes back where it was, and the foot bar says so rather than naming ⌘ (#3017).
+carry $(side_slot 1) $(page_at 300 760)
+for _ in $(seq 50); do
+  carried=$(grep -E "^browser: arrange $tab (Pointing|Carrying|Preview|Selected) " "$log" | tail -1 |
+    cut -d' ' -f4-5)
+  [ "$carried" = "Carrying None" ] && break
+  sleep 0.1
+done
+[ "$carried" = "Carrying None" ] || fail "a carry to the bare page with no key held wasn't no change: $carried"
+# The foot bar's last line, as an earlier step of the carry may have said it.
+for _ in $(seq 50); do
+  foot=$(grep "^browser: arrange $tab foot bar: " "$log" | tail -1 | cut -d' ' -f6-)
+  case "$foot" in "Let go where it goes"*) break ;; esac
+  sleep 0.1
+done
+case "$foot" in
+  "Let go where it goes"*) ;;
+  *) fail "the foot bar didn't say a drop on the bare page goes nowhere: it says $foot" ;;
+esac
+send release $(page_at 300 760)
+expect "^browser: arrange $tab Selected None selected complementary Note\$" \
+  "letting go on the bare page with no key held didn't leave the note as it was"
+shows 'c,b,a,w side s,n hidden - float -' "letting go on the bare page with no key held moved the note"
+[ "$(changes)" = 1 ] || fail "letting go on the bare page with no key held was saved: $(changes) changes"
+
 # A float: the note carried with ⌘ held stays where it's let go, over the page, and the mini bar's
 # pin, its first button, turns it between staying on screen and scrolling with the page.
+# ⌘ stays down from the press to the release, as a hand's does: Windows' real input lets a
+# command's keys go as it ends (#3109), and the page then reads the carry with no key held.
+send flags cmd
 carry $(side_slot 1) $(page_at 300 760) cmd
 # A float shows no preview, as the thing carried is already where it lands: the core says Floats
 # from the lift on.
@@ -359,6 +418,8 @@ pin_said "the foot bar didn't say how the float is pinned"
 pinned=$pin pinned_words=$words
 shows "c,b,a,w side s hidden - float n:$pinned" "the page doesn't draw the float as the core pins it"
 ../tools/window-screenshot.sh "$pid" "$out/arrange-floats.png" || fail "no window to capture"
+# ⌘ goes once the float's lines since its release are read, before the mini bar is pressed.
+send flags
 # The pin pressed: the UI asks the core to turn it, the core's answer comes, then the page.
 turn_pin() {
   local ask=$turn
