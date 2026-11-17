@@ -246,6 +246,17 @@ source_set("archive_rule") {
   deps = [ "//base" ]
 }
 
+# What a Live Folder asks GitHub and what it takes from the answer, apart so
+# browser_core_unittests tests the rule alone (#2979).
+source_set("live_folder_rule") {
+  sources = [
+    "live_folder_rule.cc",
+    "live_folder_rule.h",
+  ]
+  deps = [ "//base" ]
+  public_deps = [ "//url" ]
+}
+
 # When a tab may arrange and how giving one to an agent ends Arrange first, apart so
 # browser_core_unittests tests the rule alone.
 source_set("arrange_rule") {
@@ -523,6 +534,8 @@ source_set("browser_core") {
     "link_preview.h",
     "link_target.cc",
     "link_target.h",
+    "live_folder.cc",
+    "live_folder.h",
     "main_delegate.cc",
     "main_delegate.h",
     "mini_player.cc",
@@ -611,6 +624,7 @@ source_set("browser_core") {
     ":ad_block_page",
     ":archive_rule",
     ":arrange_rule",
+    ":live_folder_rule",
     ":pinned_url",
     ":arrangement",
     ":ax_text",
@@ -919,6 +933,7 @@ test("browser_core_unittests") {
     "ad_block_off_sites_unittest.cc",
     "archive_rule_unittest.cc",
     "arrange_rule_unittest.cc",
+    "live_folder_rule_unittest.cc",
     "pinned_url_unittest.cc",
     "arrangement_unittest.cc",
     "ax_text_unittest.cc",
@@ -963,6 +978,7 @@ test("browser_core_unittests") {
     ":ad_block_off_sites",
     ":archive_rule",
     ":arrange_rule",
+    ":live_folder_rule",
     ":pinned_url",
     ":arrangement",
     ":ax_text",
