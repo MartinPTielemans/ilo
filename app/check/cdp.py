@@ -63,11 +63,12 @@ takes a command a line on its standard input:
                   writes to FILE, as JSON, the attached page's elements at display: none from a
                   style sheet, as the ad blocker's hiding would be, each as the selector its tag,
                   id and classes make, with the elements that selector takes in the page and
-                  those of them shown, and those a blocker's injected style sheet hides, not the
-                  page's own (#3268); and with BASE, an earlier run's FILE for the same site, the
-                  selectors its blocker hid none of whose elements were shown then and some are
-                  now. Logs "cdp: hidden SELECTORS ELEMENTS SHOWN blocker SELECTORS missed
-                  SELECTORS ELEMENTS in MS ms"
+                  those of them shown, and of those it hid all of, which a blocker's injected
+                  style sheet hides and which the page hid itself (#3268); and with BASE, an
+                  earlier run's FILE for the same site, its selectors none of whose elements were
+                  shown then, the page's own aside, and some are now. Logs "cdp: hidden SELECTORS
+                  ELEMENTS SHOWN blocker SELECTORS page SELECTORS missed SELECTORS ELEMENTS in MS
+                  ms"
   requests FILE   records each request the attached page and its frames make from now on, a JSON
                   line each in FILE: "sent" with its id, address and wall time in ms, and
                   "redirect": true where it's a redirect of the request before it, "failed"
@@ -598,56 +599,107 @@ def count(selectors):
     return json.loads(evaluate("%s(%s)" % (COUNT, json.dumps(selectors))) or "{}")
 
 
+# Marks up to 6 elements at display: none of each of the selectors given, in the order the
+# selectors come, with their index, and says each marked element's index in the document's order.
+MARK = """((selectors) => {
+  selectors.forEach((selector, i) => {
+    let found;
+    try { found = document.querySelectorAll(selector); } catch (e) { return; }
+    let marked = 0;
+    for (const element of found) {
+      if (getComputedStyle(element).display !== "none") continue;
+      element.setAttribute("data-parity-hidden", i);
+      if (++marked === 6) break;
+    }
+  });
+  return [...document.querySelectorAll("[data-parity-hidden]")].map((e) => +e.dataset.parityHidden);
+})"""
+# Whether each marked element, in the document's order, matches any of the selector lists given.
+MATCHES = """((lists) => [...document.querySelectorAll("[data-parity-hidden]")].map((element) =>
+  lists.some((list) => { try { return element.matches(list); } catch (e) { return false; } })))"""
+UNMARK = """(() => {
+  for (const element of document.querySelectorAll("[data-parity-hidden]")) {
+    element.removeAttribute("data-parity-hidden");
+  }
+})()"""
+
+
 def hides_none(rule):
     return any(p["name"] == "display" and p["value"].replace("!important", "").strip() == "none"
                and not p.get("disabled") and p.get("parsedOk", True)
                for p in rule["style"].get("cssProperties", []))
 
 
-def blocker_hid(selectors):
-    """Those of SELECTORS with an element a stylesheet the page didn't load hides, one DevTools
-    calls injected: the browser's own engine's (core/ad_block_page_agent.cc) and uBlock Origin's,
-    its procedural filters' too, which hide by an attribute and a rule. A part the page hides
-    itself, as a player's controls before it plays, is the page's (#3268)."""
+def whose(selectors, budget=15):
+    """Of SELECTORS, those a blocker hid and those the page hid itself, as two lists. A blocker's
+    hiding is a style sheet the page didn't load, one DevTools calls injected: the browser's own
+    engine's (core/ad_block_page_agent.cc) and uBlock Origin's, its procedural filters' too, which
+    hide by an attribute and a rule. The page's own is an element at display: none that no such
+    rule hides, as a player's controls before it plays (#3268). A selector is the page's only
+    where every element looked at is, and one not told apart in BUDGET seconds is neither, so it
+    counts as the blocker's would."""
+    began = time.monotonic()
+    owners = evaluate("%s(%s)" % (MARK, json.dumps(selectors))) or []
     call("DOM.enable", {}, session)
     call("CSS.enable", {}, session)
     root = call("DOM.getDocument", {"depth": 0}, session)["root"]["nodeId"]
-    hid = []
-    for selector in selectors:
-        found = call("DOM.querySelectorAll", {"nodeId": root, "selector": selector}, session,
-                     quiet=True)
-        # The first few, as a selector's elements are hidden alike and some pages have hundreds.
-        for node in (found or {}).get("nodeIds", [])[:10]:
+    nodes = (call("DOM.querySelectorAll", {"nodeId": root, "selector": "[data-parity-hidden]"},
+                  session, quiet=True) or {}).get("nodeIds", [])
+    said = [None] * len(nodes)
+    # The blocker's rules found so far, their selector lists, which say for every marked element
+    # at once where it's the blocker's: most of a page's hiding is a few of its rules.
+    lists = []
+    if len(nodes) == len(owners):
+        for k, node in enumerate(nodes):
+            if said[k] or time.monotonic() - began > budget:
+                continue
             styles = call("CSS.getMatchedStylesForNode", {"nodeId": node}, session, quiet=True)
-            if any(m["rule"].get("origin") == "injected" and hides_none(m["rule"])
-                   for m in (styles or {}).get("matchedCSSRules", [])):
-                hid.append(selector)
-                break
+            if styles is None:
+                continue
+            rules = [m["rule"] for m in styles.get("matchedCSSRules", []) if hides_none(m["rule"])]
+            theirs = [r["selectorList"]["text"] for r in rules if r.get("origin") == "injected"]
+            if not theirs:
+                said[k] = "page"
+                continue
+            said[k] = "blocker"
+            new = [text for text in theirs if text not in lists]
+            if new:
+                lists += new
+                for i, hit in enumerate(evaluate("%s(%s)" % (MATCHES, json.dumps(lists))) or []):
+                    if hit and i < len(said):
+                        said[i] = "blocker"
+    evaluate(UNMARK)
     # Each would send an event a change of the page's from here on.
     call("CSS.disable", {}, session)
     call("DOM.disable", {}, session)
-    return hid
+    told = {}
+    for owner, verdict in zip(owners, said):
+        told.setdefault(selectors[owner], []).append(verdict)
+    blocker = sorted(s for s, v in told.items() if "blocker" in v)
+    page = sorted(s for s, v in told.items() if all(x == "page" for x in v))
+    return blocker, page
 
 
 def hidden(path, base):
     began = time.monotonic()
-    now = evaluate(HIDDEN_NOW) or []
-    found = {"hidden": count(now), "blocker": blocker_hid(now)}
+    found = {"hidden": count(evaluate(HIDDEN_NOW) or [])}
+    # Only a selector none of whose elements show can be one a later run misses.
+    found["blocker"], found["page"] = whose([s for s, (_, shown) in found["hidden"].items()
+                                             if not shown])
     before = json.load(open(base, encoding="utf-8")) if base else {"hidden": {}}
-    # What the earlier run's blocker hid all of and this one shows some of. A selector whose
-    # elements were partly shown then, as a column's, is the page's own layout, which changes from
-    # load to load; and one the page hid itself, its own (#3268). An earlier run's file from
-    # before blockers were told apart says nothing of whose, so all it hid counts.
-    theirs = set(before.get("blocker", before["hidden"]))
-    found["missed"] = {selector: shown for selector, (_, shown) in count(list(theirs)).items()
-                       if shown and before["hidden"].get(selector, [0, 1])[1] == 0}
+    # What the earlier run hid all of and this one shows some of. A selector whose elements were
+    # partly shown then, as a column's, is the page's own layout, which changes from load to load,
+    # and so is one the page hid itself then (#3268).
+    page = set(before.get("page", []))
+    found["missed"] = {selector: shown for selector, (_, shown) in count(list(before["hidden"])).items()
+                       if shown and not before["hidden"][selector][1] and selector not in page}
     found["ms"] = int((time.monotonic() - began) * 1000)
     with open(path, "w", encoding="utf-8") as out:
         json.dump(found, out)
-    return "%d %d %d blocker %d missed %d %d in %d ms" % (
+    return "%d %d %d blocker %d page %d missed %d %d in %d ms" % (
         len(found["hidden"]), sum(n for n, _ in found["hidden"].values()),
         sum(shown for _, shown in found["hidden"].values()), len(found["blocker"]),
-        len(found["missed"]), sum(found["missed"].values()), found["ms"])
+        len(found["page"]), len(found["missed"]), sum(found["missed"].values()), found["ms"])
 
 
 for line in sys.stdin:
