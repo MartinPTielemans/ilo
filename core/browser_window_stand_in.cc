@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/task/single_thread_task_runner.h"
 #include "browser_core/held_keys.h"
 #include "build/build_config.h"
@@ -592,6 +593,10 @@ content::KeyboardEventProcessingResult BrowserWindowStandIn::PreHandleKeyboardEv
     const input::NativeWebKeyboardEvent& event) {
   content::WebContents* contents =
       browser_ ? browser_->GetTabStripModel()->GetActiveWebContents() : nullptr;
+  // probe-3230: never merged. The stage and the key's code alone.
+  LOG(ERROR) << "probe-3230 pre-handle type " << static_cast<int>(event.GetType()) << " code "
+             << event.windows_key_code << " tab "
+             << (contents ? static_cast<long long>(Tab::IdOf(contents)) : 0LL);
   // Typed after a shortcut that opens a field of the app's, for the field.
   if (contents && held_keys::Holds(Tab::IdOf(contents), event)) {
     return content::KeyboardEventProcessingResult::HANDLED;

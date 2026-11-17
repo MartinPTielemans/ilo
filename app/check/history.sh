@@ -424,6 +424,12 @@ requestAnimationFrame(() => requestAnimationFrame(() => document.title = "beside
   # Mac never asks the app about a key typed in the warning, so only the menu's shortcuts work
   # there (#3230).
   if [ "$(uname)" = Darwin ]; then
+    # probe-3230, never merged: keys typed in the warning, for the core's probe lines; the step goes on as skipped.
+    send key 1 ctrl shift
+    probe_keys=$step
+    send key x
+    send state
+    echo "probe-3230: ⌃⇧1 and x sent to the warning from drive $probe_keys, the keyboard in $key, on $focus"
     echo "skip: Go to Pane (⌃⇧1, ⌃⇧2) on Chrome's warning before http in a split: the Mac never asks the app about a key typed in the warning (#3230)."
   else
     send key 1 ctrl shift

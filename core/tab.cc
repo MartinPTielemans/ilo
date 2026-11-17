@@ -531,6 +531,11 @@ bool Tab::AskAppAboutKey(bool (*callback)(void*, bc_id, const bc_key*),
                          bc_id tab,
                          const input::NativeWebKeyboardEvent& event,
                          bool editing) {
+  // probe-3230: never merged. The stage and the key's code alone.
+  LOG(ERROR) << "probe-3230 ask app "
+             << (callback && callback == Host().tab_key_before_page ? "before" : "unhandled")
+             << " tab " << tab << " type " << static_cast<int>(event.GetType()) << " code "
+             << event.windows_key_code << " skip " << event.skip_if_unhandled;
   if (!callback || event.GetType() != blink::WebInputEvent::Type::kRawKeyDown ||
       event.skip_if_unhandled) {
     return false;

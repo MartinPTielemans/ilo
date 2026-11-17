@@ -5,6 +5,7 @@
 
 #include "base/functional/bind.h"
 #include "base/location.h"
+#include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
@@ -74,6 +75,16 @@ class DialogKeys : public ui::EventHandler, public views::WidgetObserver {
 
   // ui::EventHandler:
   void OnKeyEvent(ui::KeyEvent* event) override {
+    // probe-3230: never merged. The stage and the key's code alone, nothing a field holds.
+    {
+      content::WebContents* shown = ShownPage(window_);
+      LOG(ERROR) << "probe-3230 dialog key "
+                 << (event->phase() == ui::EP_PRETARGET ? "pre" : "post") << " type "
+                 << static_cast<int>(event->type()) << " code " << event->key_code() << " char "
+                 << event->is_char() << " handled " << event->handled() << " keeps "
+                 << DialogKeeps(*event) << " shown page "
+                 << (shown ? static_cast<long long>(Tab::IdOf(shown)) : 0LL);
+    }
     // A page's keys are asked about as they go down, not as the characters they type.
     if (event->type() != ui::EventType::kKeyPressed || event->is_char() || DialogKeeps(*event)) {
       return;
@@ -200,6 +211,8 @@ void Watch(views::Widget* window) {
         dialog->widget_delegate()->GetModalType() != ui::mojom::ModalType::kChild) {
       continue;
     }
+    // probe-3230: never merged.
+    LOG(ERROR) << "probe-3230 dialog watched";
     Watched().emplace(dialog, std::make_unique<DialogKeys>(dialog, window));
   }
 }
