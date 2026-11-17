@@ -1256,7 +1256,9 @@ constexpr char16_t kScript[] =
         carry.x = a.x;
         carry.y = a.y;
         ghost(a.x, a.y);
-        carry.drop = dropAt(a.x, a.y, !!a.free);
+        // Judged on the page at rest: while it moves to show or take back a drop, what's drawn under
+        // the pointer is neither where things were nor where they'll be (#3228).
+        carry.drop = still(() => dropAt(a.x, a.y, !!a.free));
         draw();
         return state();
       },
@@ -1281,7 +1283,7 @@ constexpr char16_t kScript[] =
         let saved = null;
         if (!mode.previewing) {
           c.x = a.x; c.y = a.y;
-          c.drop = dropAt(a.x, a.y, !!a.free);
+          c.drop = still(() => dropAt(a.x, a.y, !!a.free));
         }
         const d = c.drop;
         const keep = mode.previewing;
