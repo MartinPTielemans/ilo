@@ -19,8 +19,8 @@
 #   - 3 or more elements' selectors on a site, or 10 in the run, whose every element the baseline's
 #     run hid and some of which this run shows, as an ad's box the engine's hiding missed. Each
 #     selector is an element's tag, id and classes, read 8 s after the load (cdp.py's hidden), and
-#     counts only where the baseline's blocker hid it by its own style sheet, not the page by its
-#     own, as a video player its controls before it plays (#3268);
+#     doesn't count where the baseline's page hid it itself, by no rule of its blocker's style
+#     sheet, as a video player its controls before it plays (#3268);
 #   - a site this run breaks, or a wall uBlock Origin kept away: text under half the baseline's,
 #     where two loads of a page with the same engine differ by a seventh at most, or 70% of the
 #     viewport covered by an element fixed in place, a wall or a modal, where the baseline's page
@@ -219,7 +219,9 @@ look_hidden() {
   [ ! -s "$before_hides/$name" ] || before=" $(app_path "$before_hides/$name")"
   asked=$(grep -c '^cdp: hidden ' "$cdp_log" || true)
   echo "hidden $(app_path "$PWD/$hides/$name")$before" >&5
-  for _ in $(seq 100); do
+  # Telling the blocker's hiding from the page's asks DevTools about elements one by one, up to
+  # 15 s on a site.
+  for _ in $(seq 300); do
     [ "$(grep -c '^cdp: hidden ' "$cdp_log" || true)" -gt "$asked" ] && return
     sleep 0.1
   done
@@ -439,9 +441,10 @@ for i, s in enumerate(sites):
     hid = os.path.join(hides, re.sub("[^A-Za-z0-9]", "_", s["url"]) + ".json")
     look = json.load(open(hid, encoding="utf-8")) if os.path.exists(hid) else {}
     s["missed"] = sorted(look["missed"]) if baseline and look else None
-    # The selectors the blocker's own style sheet hid, as cdp.py's hidden tells them from the
-    # page's own hidden parts (#3268).
+    # The selectors the blocker's own style sheet hid and those the page hid itself, as cdp.py's
+    # hidden tells them apart (#3268).
     s["blocker_hid"] = len(look.get("blocker", []))
+    s["page_hid"] = len(look.get("page", []))
     # DataDome's captcha, which a site shows a runner it takes for a bot, over the page in place:
     # a bot check as Cloudflare's is, with no title to tell it by (#2111).
     s["bot"] = s["bot"] or any(h.endswith("captcha-delivery.com") for h in s["allowed"])
@@ -552,7 +555,8 @@ if worse:
 print(f"{len(loaded)} of {len(sites)} sites loaded, in {median} ms at the median; "
       f"{sum(s['blocked_n'] for s in sites)} requests blocked and "
       f"{sum(s['standin_n'] for s in sites)} given a stand-in, of {sum(s['requests'] for s in sites)}"
-      + f"; {blocker_hid} selectors hidden by the blocker's style sheet"
+      + f"; {blocker_hid} selectors hidden by the blocker's style sheet and "
+        f"{sum(s['page_hid'] for s in sites)} by the page's own"
       + (f"; {len(missed)} selectors the baseline hid all of showed" if baseline else "")
       + "".join(f"; {s['url']}'s video {video_said(s['video'])}" for s in sites if s["video"])
       + (f"; not compared, as a bot check stood in: {', '.join(unchecked)}" if unchecked else ""))
