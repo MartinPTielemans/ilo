@@ -1184,6 +1184,26 @@ fn open(cx: &mut App) {
                 settings.follow_appearance(window, cx)
             })
             .detach();
+            // A show's "settings drew" waits for the platform to report the window on screen
+            // (#3270). The line says, when it doesn't come, whether a report came and whether the
+            // window had a screen then; the frame asked here doesn't rely on a frame already asked.
+            cx.observe_window_visibility(window, |_: &mut Settings, visibility, window, cx| {
+                log!(
+                    "browser: settings visibility {} screen {}",
+                    if visibility.is_visible() {
+                        "visible"
+                    } else {
+                        "hidden"
+                    },
+                    if window.display(cx).is_some() {
+                        "yes"
+                    } else {
+                        "no"
+                    }
+                );
+                cx.notify();
+            })
+            .detach();
             cx.observe_global_in::<shell::AppAppearance>(window, |settings, window, cx| {
                 settings.follow_appearance(window, cx)
             })
