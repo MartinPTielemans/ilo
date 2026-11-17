@@ -16,6 +16,8 @@ if [ "$(uname)" = Linux ]; then
   ffmpeg -nostdin -loglevel error -y -f x11grab -draw_mouse 0 -framerate 60 -i "$DISPLAY" \
     -t "$2" -c:v libx264 -preset ultrafast -pix_fmt yuv420p -progress "$progress" "$3" &
   recorder=$!
+  # Ended, it ends its recording: a check that fails ends it before its own picture (#3191).
+  trap 'kill "$recorder" 2>/dev/null; rm -f "$progress"; exit 143' TERM INT
   # ffmpeg reports its frames each half second, the first report once it has written some.
   until grep -q '^frame=[1-9]' "$progress"; do
     kill -0 "$recorder" 2>/dev/null || break
@@ -27,7 +29,8 @@ if [ "$(uname)" = Linux ]; then
   rm -f "$progress"
   exit "$status"
 fi
-PID="$1" SECONDS_LONG="$2" OUT="$3" swift - <<'SWIFT'
+# The recording is this process, so ending it ends the recording (#3191).
+PID="$1" SECONDS_LONG="$2" OUT="$3" exec swift - <<'SWIFT'
 import Foundation
 import ScreenCaptureKit
 
