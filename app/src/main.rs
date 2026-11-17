@@ -909,6 +909,14 @@ fn profile_dir() -> String {
 /// was `given`, and the callbacks.
 fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
     let profile = profile_dir();
+    // The Flatpak's sandbox has no cameras: Chromium reaches one through PipeWire and the Camera
+    // portal, which asks the user, rather than through a grant of every device (#3166). Without a
+    // portal it falls back to the devices it can see, so it's off outside the sandbox only to keep
+    // a native install as Chrome is.
+    #[cfg(target_os = "linux")]
+    let portal_camera = flatpak::in_flatpak();
+    #[cfg(not(target_os = "linux"))]
+    let portal_camera = false;
     let mut args: Vec<String> = vec![
         format!("--user-data-dir={profile}"),
         // Chrome would copy the app bundle to check its signature against, which an
@@ -942,6 +950,8 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
                 ",AperitifHelpers"
             } else if cfg!(target_os = "windows") {
                 ",TabModalUsesDesktopWidget"
+            } else if portal_camera {
+                ",WebRtcPipeWireCamera"
             } else {
                 ""
             }

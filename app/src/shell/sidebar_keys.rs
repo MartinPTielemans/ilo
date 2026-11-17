@@ -11,7 +11,8 @@
 use std::{cell::Cell, rc::Rc, time::Duration};
 
 use gpui::{
-    App, Bounds, Context, KeyBinding, Pixels, Window, actions, canvas, div, point, prelude::*, px,
+    App, Bounds, Context, KeyBinding, Pixels, Role, Window, actions, canvas, div, point,
+    prelude::*, px,
 };
 
 use super::{Command, Shell, commands::Run};
@@ -222,8 +223,17 @@ impl Shell {
     }
 
     /// The sidebar's element, taking its keys while it has the keyboard.
-    pub(super) fn with_keys(&self, sidebar: gpui::Div, cx: &mut Context<Self>) -> gpui::Div {
+    /// An assistive app reads it as the sidebar, and, as it has the keyboard, the ringed row.
+    pub(super) fn with_keys(
+        &self,
+        sidebar: gpui::Div,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
         sidebar
+            .id("sidebar")
+            .when(self.a11y, |sidebar| {
+                sidebar.role(Role::Group).aria_label("Sidebar")
+            })
             .key_context(CONTEXT)
             .track_focus(&self.sidebar_keys)
             .on_action(cx.listener(|shell, _: &KeyUp, _, cx| shell.key_step(false, cx)))

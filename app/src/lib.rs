@@ -169,6 +169,7 @@ pub mod tab_switcher;
 pub mod text_input;
 pub mod theme;
 pub mod theme_picker;
+pub mod title_log;
 pub mod toast;
 pub mod tokens;
 pub mod tooltip;

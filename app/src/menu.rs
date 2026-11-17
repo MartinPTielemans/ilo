@@ -376,6 +376,16 @@ fn clamped(origin: Point<Pixels>, size: (f32, f32), area: Bounds<Pixels>) -> Poi
     point(px(x), px(y))
 }
 
+/// How tall the menu of `entries` is, without its submenus, as `lay_out` stacks its rows and lines,
+/// so a control can open it with its foot where it wants.
+pub(crate) fn height(entries: &[MenuEntry]) -> f32 {
+    let top = (entries.iter()).filter(|entry| entry.parent.is_none() && !entry.alternate);
+    let rows: f32 = top
+        .map(|entry| if entry.title.is_empty() { LINE } else { ROW })
+        .sum();
+    PADDING + rows + PADDING
+}
+
 /// Lays `entries` out as a menu with its top left at `at`, flipping up or left where `area` has
 /// no room below or to the right, as AppKit's does, with each submenu beside the row that opens
 /// it, flipping left and sliding up to fit.

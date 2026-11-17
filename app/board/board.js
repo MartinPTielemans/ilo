@@ -820,6 +820,18 @@ function say(text, briefly = false) {
   }
 }
 
+// |path|'s text from the host, or null. Blink's fetch() takes no chrome: address, so it's a GET
+// the old way.
+function read(path) {
+  return new Promise((done) => {
+    const request = new XMLHttpRequest();
+    request.open("GET", path);
+    request.onload = () => done(request.status === 200 ? request.responseText : null);
+    request.onerror = () => done(null);
+    request.send();
+  });
+}
+
 async function open_() {
   useTool("select");
   const answer = id ? await send("hello") : "missing";
@@ -829,17 +841,19 @@ async function open_() {
     listeners.set("board-free", () => location.reload());
     return;
   }
-  const response = await fetch(`/${id}/board.json`).catch(() => null);
-  if (response?.ok) {
-    try {
-      const board = JSON.parse(await response.text());
-      cards = Array.isArray(board.cards) ? board.cards : [];
-      camera = { x: 0, y: 0, zoom: 1, ...board.camera };
-    } catch {
-      // A file that doesn't parse is never written over.
-      return say("This Board's file can't be read.");
-    }
+  // Every Board has its file from the start (app/src/boards.rs), so one that can't be read (over
+  // the host's 4 MiB, or not parsing) is never written over.
+  // Only an object is a Board: 5, [] or null parse, but would read as an empty one.
+  const text = await read(`/${id}/board.json`);
+  let board = null;
+  try {
+    board = JSON.parse(text);
+  } catch {}
+  if (!board || typeof board !== "object" || Array.isArray(board)) {
+    return say("This Board's file can't be read.");
   }
+  cards = Array.isArray(board.cards) ? board.cards : [];
+  camera = { x: 0, y: 0, zoom: 1, ...board.camera };
   writable = true;
   $("#note").hidden = true;
   moveCamera(false);

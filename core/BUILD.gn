@@ -246,15 +246,26 @@ source_set("archive_rule") {
   deps = [ "//base" ]
 }
 
-# A Board's folder: its names, the pictures it keeps and its writes, apart so browser_core_unittests
-# tests them alone (#3073).
-source_set("board_store") {
+# What a Live Folder asks GitHub and what it takes from the answer, apart so
+# browser_core_unittests tests the rule alone (#2979).
+source_set("live_folder_rule") {
   sources = [
-    "board_store.cc",
-    "board_store.h",
+    "live_folder_rule.cc",
+    "live_folder_rule.h",
   ]
   deps = [ "//base" ]
-  public_deps = [ "//crypto" ]
+  public_deps = [ "//url" ]
+}
+
+# Which tabs' hover cards ask a site what's recent, and what each is answered, apart so
+# browser_core_unittests tests the rule alone (#3074).
+source_set("tab_recent_rule") {
+  sources = [
+    "tab_recent_rule.cc",
+    "tab_recent_rule.h",
+  ]
+  deps = [ "//url" ]
+  public_deps = [ ":live_folder_rule" ]
 }
 
 # When a tab may arrange and how giving one to an agent ends Arrange first, apart so
@@ -265,6 +276,17 @@ source_set("arrange_rule") {
     "arrange_rule.h",
   ]
   deps = [ "//base" ]
+}
+
+# A Board's folder: its names, the pictures it keeps and its writes, apart so browser_core_unittests
+# tests them alone (#3073).
+source_set("board_store") {
+  sources = [
+    "board_store.cc",
+    "board_store.h",
+  ]
+  deps = [ "//base" ]
+  public_deps = [ "//crypto" ]
 }
 
 # What a window's removals take out of a profile's history and put back, apart so
@@ -291,6 +313,19 @@ source_set("typed_http") {
   ]
   deps = [
     "//base",
+    "//url",
+  ]
+}
+
+# What a link card asks for and refuses, apart so browser_core_unittests tests the rules alone.
+source_set("link_card_rule") {
+  sources = [
+    "link_card_rule.cc",
+    "link_card_rule.h",
+  ]
+  deps = [
+    "//base",
+    "//net",
     "//url",
   ]
 }
@@ -337,6 +372,16 @@ source_set("mini_player_place") {
   ]
 }
 
+# The sheet a Boost's page takes with its Space's colours, apart so browser_core_unittests tests it
+# alone.
+source_set("boost_colors") {
+  sources = [
+    "boost_colors.cc",
+    "boost_colors.h",
+  ]
+  deps = [ "//base" ]
+}
+
 # Whether a Boost's script runs: the record of the one the user turned on, and its copy, apart so
 # browser_core_unittests tests the rule alone.
 source_set("boost_script") {
@@ -369,6 +414,16 @@ source_set("split_view") {
     "split_view.cc",
     "split_view.h",
   ]
+}
+
+# A page's pop-up's report to the app, held for the native ad blocker's pop-up filters, apart so
+# browser_core_unittests tests the hold alone.
+source_set("popup_hold") {
+  sources = [
+    "popup_hold.cc",
+    "popup_hold.h",
+  ]
+  deps = [ "//base" ]
 }
 
 # An agent's download, held until the user answers, apart so browser_core_unittests tests the hold
@@ -524,8 +579,12 @@ source_set("browser_core") {
     "leave_dialog.h",
     "link_preview.cc",
     "link_preview.h",
+    "link_card.cc",
+    "link_card.h",
     "link_target.cc",
     "link_target.h",
+    "live_folder.cc",
+    "live_folder.h",
     "main_delegate.cc",
     "main_delegate.h",
     "mini_player.cc",
@@ -598,6 +657,8 @@ source_set("browser_core") {
     "system_engine.h",
     "tab.cc",
     "tab.h",
+    "tab_recent.cc",
+    "tab_recent.h",
     "trace.cc",
     "webrtc.cc",
     "webrtc.h",
@@ -614,16 +675,20 @@ source_set("browser_core") {
     ":ad_block_page",
     ":archive_rule",
     ":arrange_rule",
-    ":board_store",
+    ":live_folder_rule",
     ":pinned_url",
+    ":tab_recent_rule",
     ":arrangement",
+    ":board_store",
     ":ax_text",
+    ":boost_colors",
     ":boost_script",
     ":drm_request",
     ":history_removal",
     ":idle_check",
     ":mini_player_place",
     ":other_tabs",
+    ":popup_hold",
     ":search_default",
     ":select_choices",
     ":agent_download_hold",
@@ -635,6 +700,7 @@ source_set("browser_core") {
     ":sync_guard",
     ":sync_keys",
     ":sync_spaces_newer",
+    ":link_card_rule",
     ":typed_http",
     ":typing_keys",
     ":window_frames",
@@ -923,11 +989,13 @@ test("browser_core_unittests") {
     "ad_block_off_sites_unittest.cc",
     "archive_rule_unittest.cc",
     "arrange_rule_unittest.cc",
-    "board_store_unittest.cc",
+    "live_folder_rule_unittest.cc",
     "pinned_url_unittest.cc",
     "arrangement_unittest.cc",
+    "board_store_unittest.cc",
     "ax_text_unittest.cc",
     "agent_download_hold_unittest.cc",
+    "boost_colors_unittest.cc",
     "boost_script_unittest.cc",
     # The removals the Library's History and the command bar undo on ⌘Z, on a history service.
     "history_removal_unittest.cc",
@@ -935,12 +1003,14 @@ test("browser_core_unittests") {
 
     # The engine's patch to leveldb's cache, through leveldb's own API.
     "leveldb_cache_unittest.cc",
+    "link_card_rule_unittest.cc",
     "mini_player_place_unittest.cc",
 
     # The engine patch that gives a history match its last visit, which the core's suggestions
     # read.
     "omnibox_last_visit_unittest.cc",
     "other_tabs_unittest.cc",
+    "popup_hold_unittest.cc",
     "search_default_unittest.cc",
     "select_choices_unittest.cc",
     "sidebar_backups_unittest.cc",
@@ -956,6 +1026,7 @@ test("browser_core_unittests") {
     "sync_spaces_newer_unittest.cc",
     "sync_updates_unittest.cc",
     "system_stores_unittest.cc",
+    "tab_recent_rule_unittest.cc",
     "typed_http_unittest.cc",
     "typing_keys_unittest.cc",
     "window_frames_unittest.cc",
@@ -967,16 +1038,20 @@ test("browser_core_unittests") {
     ":ad_block_off_sites",
     ":archive_rule",
     ":arrange_rule",
-    ":board_store",
+    ":live_folder_rule",
     ":pinned_url",
+    ":tab_recent_rule",
     ":arrangement",
+    ":board_store",
     ":ax_text",
     ":agent_download_hold",
+    ":boost_colors",
     ":boost_script",
     ":history_removal",
     ":idle_check",
     ":mini_player_place",
     ":other_tabs",
+    ":popup_hold",
     ":search_default",
     ":select_choices",
     ":sidebar_backups",
@@ -987,6 +1062,7 @@ test("browser_core_unittests") {
     ":sync_guard",
     ":sync_keys",
     ":sync_spaces_newer",
+    ":link_card_rule",
     ":typed_http",
     ":typing_keys",
     ":window_frames",

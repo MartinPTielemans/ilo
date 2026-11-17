@@ -104,7 +104,8 @@ class DialogKeys : public ui::EventHandler, public views::WidgetObserver {
 
   // The page |page| took the keyboard: if this dialog shows over it, the dialog takes it back, as
   // Chrome's dialog manager does on a key or wheel the page ignored. A click the page ignores isn't
-  // reported, and on the Mac AppKit makes the clicked page view first responder all the same.
+  // reported, and on the Mac AppKit makes the clicked page view first responder all the same, as
+  // Windows gives a pane's HWND the keyboard (platform/win/window_views.cc).
   void PageFocused(content::WebContents* page) {
     if (!dialog_->IsVisible() || ShownPage(window_) != page) {
       return;

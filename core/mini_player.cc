@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
@@ -15,11 +16,13 @@
 #include "base/no_destructor.h"
 #include "base/scoped_observation.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "browser_core/hooks.h"
 #include "browser_core/mini_player_place.h"
+#include "browser_core/platform/window_views.h"
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
 #include "build/build_config.h"
@@ -29,6 +32,7 @@
 #include "chrome/browser/ui/views/overlay/video_overlay_window_views.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
+#include "components/viz/common/frame_timing_details.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/compositor/compositor.h"
@@ -108,12 +112,36 @@ void GiveKeyboardBack(views::Widget* window) {
 #endif
 
 // Tells the windows as the Mini Player takes the keyboard, which on Linux can come after the window
-// that let it go asked whether it had (MiniPlayerHasKeyboard).
-class KeyboardWatch : public views::WidgetObserver {
+// that let it go asked whether it had (MiniPlayerHasKeyboard). And logs it showing, and its first
+// frame on screen, on the clock of the tab switch that floated it (LogHandover).
+class MiniPlayerWatch : public views::WidgetObserver {
  public:
   void Watch(views::Widget* widget) {
     observation_.Reset();
     observation_.Observe(widget);
+  }
+
+  void OnWidgetVisibilityChanged(views::Widget* widget, bool visible) override {
+    if (!visible) {
+      return;
+    }
+    // check.sh reads these lines.
+    const std::string size = widget->GetWindowBoundsInScreen().size().ToString();
+    LogHandover("mini player shows", size);
+    if (ui::Compositor* compositor = widget->GetCompositor()) {
+      compositor->RequestSuccessfulPresentationTimeForNextFrame(base::BindOnce(
+          [](const std::string& size, const viz::FrameTimingDetails& timing) {
+            // The time is when this ran on the UI thread. Beside it, when the frame was
+            // presented, so a UI thread late to run it shows apart from a late frame (#3181).
+            std::string detail = size;
+            if (const std::optional<base::TimeDelta> presented =
+                    SinceHandoverClicked(timing.presentation_feedback.timestamp)) {
+              detail += base::StringPrintf(", presented at %.1f ms", presented->InMillisecondsF());
+            }
+            LogHandover("mini player on screen", detail);
+          },
+          size));
+    }
   }
 
   void OnWidgetActivationChanged(views::Widget* widget, bool active) override {
@@ -136,8 +164,8 @@ class KeyboardWatch : public views::WidgetObserver {
   base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{this};
 };
 
-KeyboardWatch& Watching() {
-  static base::NoDestructor<KeyboardWatch> watch;
+MiniPlayerWatch& Watching() {
+  static base::NoDestructor<MiniPlayerWatch> watch;
   return *watch;
 }
 
@@ -145,10 +173,14 @@ KeyboardWatch& Watching() {
 // (app/src/shell.rs).
 constexpr base::TimeDelta kReleaseHistory = base::Milliseconds(100);
 
-// Where a Mini Player was each time its move loop moved it, for the speed it's let go at.
+// Where a Mini Player was each time its move loop moved it, for the speed it's let go at. Where the
+// loop moves only its outline, and the window at the release, it's where the outline was (#3062).
 class MoveWatch : public views::WidgetObserver {
  public:
-  explicit MoveWatch(views::Widget* widget) {
+  explicit MoveWatch(views::Widget* widget)
+      : outline_(platform::WatchOutlineMoves(
+            widget,
+            base::BindRepeating(&MoveWatch::Moved, base::Unretained(this)))) {
     Moved(widget->GetWindowBoundsInScreen().origin());
     observation_.Observe(widget);
   }
@@ -199,6 +231,7 @@ class MoveWatch : public views::WidgetObserver {
 
   std::vector<Move> moves_;
   base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{this};
+  base::ScopedClosureRunner outline_;
 };
 
 // Settles a Mini Player let go onto its rest, on the spring its release starts, moving it a frame
@@ -609,10 +642,12 @@ void LaidOut(VideoOverlayWindowViews* window) {
     rim->layer()->SetFillsBoundsOpaquely(false);
     rim->SetCanProcessEventsWithinSubtree(false);
     rim->SetBorder(views::CreateRoundedRectBorder(1, kCornerRadius, kRim));
-    // One flat scrim, rather than Chrome's and its gradients at the top and bottom.
+    // One flat scrim, rather than Chrome's and its gradients at the top and bottom. The gradients'
+    // views lose their backgrounds rather than being hidden, since the controls' fade shows each
+    // view it fades in (#2881).
     window->GetControlsScrimView()->SetBackground(views::CreateSolidBackground(kScrim));
-    window->GetControlsTopScrimView()->SetVisible(false);
-    window->GetControlsBottomScrimView()->SetVisible(false);
+    window->GetControlsTopScrimView()->SetBackground(nullptr);
+    window->GetControlsBottomScrimView()->SetBackground(nullptr);
   }
   const gfx::Size size = window->GetBounds().size();
   rim->SetBoundsRect(gfx::Rect(size));

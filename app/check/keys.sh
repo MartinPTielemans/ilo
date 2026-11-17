@@ -58,6 +58,7 @@ addEventListener("keydown", e => {
   '"$alone"'
 });
 </script>'
+serve
 log="$out/keys.log"
 step=0
 # The user's keys, which a failed run may have left changed.
@@ -273,7 +274,8 @@ fi
 # The driver's scripted input method stands in for Japanese input, which is system-wide. On Windows
 # it's Microsoft's Japanese IME itself, where the runner has it (check-windows.yml installs it for
 # this run): the driver's ime ja sends the keys through Windows' input queue, and "nihongo"
-# composes にほんご, as a user's typing does.
+# composes にほんご, as a user's typing does. Under Wayland the driver is sway's input method, so
+# what it composes goes to the page's field as an fcitx5's would; on X11 it can't reach a page.
 composed=日本語
 ime="ime on" preedit=nihongo preedit_marked=0,7
 japanese=
@@ -282,8 +284,8 @@ if windows; then
     2> /dev/null | grep -qi 03B5835F-F03C-411B-9CE2-AA23E1171E36 && japanese=1
   [ -z "$japanese" ] || { ime="ime ja"; preedit=にほんご; preedit_marked=0,4; }
 fi
-if [ "$(uname)" = Linux ]; then
-  echo "skip: composing in a page: the Linux driver types plain keys there; check/ime.sh covers it with a real input method."
+if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+  echo "skip: composing in a page: on X11 the Linux driver types plain keys there; check/ime.sh covers it with a real input method."
   composed=
 elif windows && [ -z "$japanese" ]; then
   echo "skip: composing in a page: the runner has no Japanese IME, and the Windows driver's own input method composes in the UI's fields alone."
@@ -338,8 +340,8 @@ for shortcut in t l; do
   expect '^browser: command bar hidden$' "escape didn't close the command bar"
   in_browser RenderWidgetHostViewCocoa "after the command bar closed"
 done
-if [ "$(uname)" = Linux ]; then
-  echo "skip: composing right after ⌘L: the Linux driver types plain keys in a page."
+if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+  echo "skip: composing right after ⌘L: on X11 the Linux driver types plain keys in a page."
 elif windows && [ -z "$japanese" ]; then
   echo "skip: composing right after ⌘L: the runner has no Japanese IME, and the Windows driver's own composes in the UI's fields alone, not in a page."
 elif windows; then
@@ -901,12 +903,12 @@ edit_url_over_search() {
   expect '^browser: command bar shown$' "⌘L didn't open the command bar, again once the search's page came"
 }
 edit_url_over_search
-send type example.com
+send type "http://localhost:$port/one.html"
 ../tools/window-screenshot.sh "$pid" "$out/command-bar.png" || fail "no window to capture"
 send key return
-expect '^browser: command bar go https*://example.com/$' "return in the command bar didn't go to what was typed: $(grep '^browser: command bar go' "$log" | tail -1)"
+expect "^browser: command bar go http://localhost:$port/one.html\$" "return in the command bar didn't go to what was typed: $(grep '^browser: command bar go' "$log" | tail -1)"
 expect '^browser: command bar hidden$' "going somewhere didn't close the command bar"
-expect '^browser: loaded [0-9]* https://example.com/$' "the page didn't load what was typed in the command bar"
+expect "^browser: loaded [0-9]* http://localhost:$port/one.html\$" "the page didn't load what was typed in the command bar"
 send state
 in_browser RenderWidgetHostViewCocoa "after the command bar loaded a page"
 # Words that name no page are a search, with DuckDuckGo until the user picks an engine. In a tab of
@@ -940,7 +942,6 @@ send key w cmd
 expect "^browser: today $before\$" "⌘W didn't close the docs.new tab"
 # A page the bar opens in a new tab has the keyboard, so its field autofocused gets what's typed
 # and the browser's shortcuts reach the UI, with no click in it first (#428, where X11 lost them).
-serve
 send key t cmd
 expect '^browser: command bar shown$' "⌘T didn't open the command bar"
 send type "${site}autofocus.html"

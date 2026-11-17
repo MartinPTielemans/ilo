@@ -23,7 +23,7 @@ until = sys.argv[2] if len(sys.argv) > 2 else ""
 ROOT = "/org/a11y/atspi/accessible/root"
 ACCESSIBLE = "org.a11y.atspi.Accessible"
 # AT-SPI's state numbers, a bit each in two words.
-ACTIVE, COLLAPSED, EXPANDABLE, EXPANDED, SELECTED = 1, 5, 9, 10, 23
+ACTIVE, CHECKED, COLLAPSED, EXPANDABLE, EXPANDED, SELECTED = 1, 4, 5, 9, 10, 23
 # AT-SPI's role names by number, as at-spi2-core's atspi_role_get_name gives them: AccessKit has
 # no GetRoleName.
 ROLES = [
@@ -119,6 +119,8 @@ def line(name, item, depth):
     on = lambda state: states[state // 32] >> state % 32 & 1
     if on(SELECTED):
         words.append("selected")
+    if on(CHECKED):
+        words.append("checked")
     if on(EXPANDED):
         words.append("expanded")
     elif on(EXPANDABLE) or on(COLLAPSED):

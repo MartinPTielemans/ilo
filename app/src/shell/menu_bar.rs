@@ -196,8 +196,7 @@ impl Shell {
             tab => self.title(tab),
         };
         if title != self.window_title {
-            // check.sh reads this line.
-            log!("browser: window title {title}");
+            crate::title_log::window(self.selected, &title);
             self.browser.set_window_title(&title, cx);
             self.window_title = title;
         }

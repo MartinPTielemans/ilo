@@ -56,7 +56,9 @@
 #include "browser_core/host.h"
 #include "browser_core/idle_unload.h"
 #include "browser_core/install_question.h"
+#include "browser_core/link_card.h"
 #include "browser_core/link_target.h"
+#include "browser_core/live_folder.h"
 #include "browser_core/main_delegate.h"
 #include "browser_core/notes.h"
 #include "browser_core/page_dialog.h"
@@ -78,6 +80,7 @@
 #include "browser_core/sync.h"
 #include "browser_core/system_engine.h"
 #include "browser_core/tab.h"
+#include "browser_core/tab_recent.h"
 #include "browser_core/typed_http.h"
 #include "browser_core/webrtc.h"
 #include "browser_core/widevine.h"
@@ -332,7 +335,7 @@ bool bc_window_dialog(bc_id id, bc_rect* frame) {
 }
 
 bool bc_window_devtools(bc_id id, bc_rect* devtools, bc_rect* page) {
-#if BUILDFLAG(IS_LINUX)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
   views::Widget* widget = OpenWidget(id);
   const auto frames = widget ? browser_core::platform::DevToolsFrames(widget) : std::nullopt;
   if (!frames) {
@@ -796,6 +799,20 @@ void bc_agent_request(const char* agent,
                                  body && size ? std::string(body, size) : std::string());
 }
 
+uint64_t bc_tab_link_card(bc_id tab) {
+  return browser_core::StartLinkCard(tab);
+}
+
+void bc_link_card_picture(uint64_t card, const char* url) {
+  if (url) {
+    browser_core::AskLinkCardPicture(card, url);
+  }
+}
+
+void bc_link_card_cancel(uint64_t card) {
+  browser_core::CancelLinkCard(card);
+}
+
 bc_id bc_space_profile(bc_id id) {
   browser_core::Space* space = browser_core::Space::FromId(id);
   return space ? browser_core::ProfileId(space->profile()) : 0;
@@ -1175,6 +1192,37 @@ void bc_folder_delete(bc_id folder) {
   if (browser_core::Space* space = browser_core::Space::HoldingFolder(folder)) {
     space->DeleteFolder(folder);
   }
+}
+
+bc_id bc_folder_live_create(bc_id id, int source, const char* name) {
+  browser_core::Space* space = browser_core::Space::FromId(id);
+  // Refused here, not only left out of the app's menu: the lists are the user's account's.
+  if (!space || !space->TakesLiveFolder(source)) {
+    return 0;
+  }
+  const bc_id folder = space->AddFolder(name ? name : "", 0, SIZE_MAX);
+  space->SetFolderLive(folder, source);
+  return folder;
+}
+
+int bc_folder_live(bc_id folder) {
+  browser_core::Space* space = browser_core::Space::HoldingFolder(folder);
+  return space ? space->FolderLive(folder) : 0;
+}
+
+void bc_folder_live_end(bc_id folder) {
+  browser_core::DropLiveFolderFetch(folder);
+  if (browser_core::Space* space = browser_core::Space::HoldingFolder(folder)) {
+    space->SetFolderLive(folder, 0);
+  }
+}
+
+void bc_folder_live_fetch(bc_id folder, bool refresh) {
+  browser_core::FetchLiveFolder(folder, refresh);
+}
+
+void bc_tab_recent_fetch(bc_id tab) {
+  browser_core::FetchTabRecent(tab);
 }
 
 void bc_tab_forget_page(bc_id id) {
@@ -2366,6 +2414,10 @@ void bc_tab_set_developer_mode(bc_id id, bool on) {
 
 void bc_profile_set_boost(bc_id profile, const char* site, const char* css) {
   browser_core::Boosts::Set(profile, site ? site : "", css ? css : "");
+}
+
+void bc_space_set_boost_colors(bc_id space, const bc_boost_colors* colors) {
+  browser_core::Boosts::SetSpaceColors(space, colors);
 }
 
 namespace {
