@@ -1940,8 +1940,15 @@ CARD
   call navigate "{\"tab\":$opened_tab,\"url\":\"localhost:$port/welcome.html\"}" > /dev/null
   await_log "^browser: title $opened_tab welcome\$" "the welcome page didn't load in the agent's tab"
   take_over "to save a login"
+  login_loaded="^browser: page $opened_tab back [0-9]* forward 0 loading 0 http://localhost:$port/login\\.html\$"
+  login_loads=$(grep -c "$login_loaded" "$log" || true)
   go_from_bar "localhost:$port/login.html"
   expect "^browser: title $opened_tab login\$" "the login page didn't load in the tab the user holds"
+  # The page names itself once painted, which can be before its load ends, and a login typed then
+  # brought no offer to save it: the click and the keys go once the load has ended, as a person's
+  # would come after it.
+  await_more "$login_loaded" "$login_loads" ||
+    fail "the login page didn't finish loading in the tab the user holds: $(grep "^browser: page $opened_tab " "$log" | tail -2 | tr '\n' ' ')"
   send click 600 60
   send key a cmd
   send type check@example.test
