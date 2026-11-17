@@ -1100,6 +1100,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         tab_element_box: Some(tab_element_box),
         tab_link_target: Some(tab_link_target),
         tab_captured: Some(tab_captured),
+        board_capture_added: Some(board_capture_added),
         trace_recorded: Some(trace_recorded),
         tab_pictured: Some(tab_pictured),
         window_suggestions: Some(window_suggestions),

@@ -518,7 +518,7 @@ if [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 1
   send click $page_point
   page_says ' at [0-9-]*,[0-9-]*$' "the click didn't reach Safari's engine's page"
   send state
-  in_browser WKWebView "after a click on Safari's engine's page"
+  in_browser BrowserCoreWebView "after a click on Safari's engine's page"
   for each in "up ArrowUp" "down ArrowDown" "z,cmd z" "escape Escape"; do
     chord=${each% *} seen=${each#* }
     n=$(wc -l < "$log")

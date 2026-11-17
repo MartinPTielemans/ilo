@@ -134,6 +134,11 @@ impl Shell {
             .into_any_element()
     }
 
+    /// Shows Board `id`, as a click on its row in Library › Boards does: capture's toast's Open.
+    pub fn open_board(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.open_listed_board(id, cx);
+    }
+
     /// A click on a Board's row shows the window's tab of it, if it has one, and otherwise opens
     /// it in a new tab named as its row was.
     pub(super) fn open_listed_board(&mut self, id: &str, cx: &mut Context<Self>) {
