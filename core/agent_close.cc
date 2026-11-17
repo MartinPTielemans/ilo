@@ -11,7 +11,9 @@
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "browser_core/agent_close_rule.h"
+#include "browser_core/agent_session.h"
 #include "browser_core/host.h"
+#include "browser_core/space.h"
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
 #include "content/public/browser/web_contents.h"
@@ -55,6 +57,8 @@ class AgentClose : public content::WebContentsObserver {
 
  private:
   void Do(AgentCloseAsk::Step step);
+  // The core's own close, after a crash or the deadline: it looks again at whose the tab is.
+  static void CloseNow(bc_id tab);
 
   // content::WebContentsObserver:
   void BeforeUnloadFired(bool proceed) override;
@@ -83,9 +87,8 @@ void AgentClose::Do(AgentCloseAsk::Step step) {
   // Each posted: content is telling its observers, and this may be inside the agent's call, which
   // the answer never is.
   if (step.close) {
-    LOG(ERROR) << "browser: agent close " << tab_ << " closes without its handlers";
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(&Window::CloseTab, tab_, /*discard=*/true));
+        FROM_HERE, base::BindOnce(&AgentClose::CloseNow, tab_));
   }
   if (!step.answer) {
     return;
@@ -96,6 +99,30 @@ void AgentClose::Do(AgentCloseAsk::Step step) {
                                                               base::BindOnce(&Answer, tab, answer));
   // Deletes this.
   Asking().erase(tab);
+}
+
+// static
+void AgentClose::CloseNow(bc_id tab) {
+  auto asking = Asking().find(tab);
+  if (asking == Asking().end()) {
+    return;
+  }
+  AgentClose* close = asking->second.get();
+  const Space* space = Space::Holding(tab);
+  const bool users = IsHeld(tab) || !space || !space->agent() || space->IsPinned(tab);
+  AgentCloseAsk::Step step = close->ask_.Closing(users);
+  if (!step.close) {
+    close->Do(step);
+    return;
+  }
+  LOG(ERROR) << "browser: agent close " << tab << " closes without its handlers";
+  // Its page going answers, and deletes |close|, within the call.
+  Window::CloseTab(tab, /*discard=*/true);
+  asking = Asking().find(tab);
+  if (asking != Asking().end()) {
+    close = asking->second.get();
+    close->Do(close->ask_.StillThere());
+  }
 }
 
 void AgentClose::BeforeUnloadFired(bool proceed) {
@@ -128,7 +155,8 @@ int AgentCloseTab(bc_id tab, bool discard) {
     // what it holds, and the tab is gone before the agent hears it closed (#1447, #1449). Its going
     // answers a close that was asking.
     Window::CloseTab(tab, /*discard=*/true);
-    return BC_AGENT_CLOSED;
+    // A tab being dragged between windows stays.
+    return Tab::FromId(tab) ? BC_AGENT_CLOSE_REFUSED : BC_AGENT_CLOSED;
   }
   LOG(ERROR) << "browser: agent close " << tab << " asks its page";
   Asking()[tab] = std::make_unique<AgentClose>(tab, contents);

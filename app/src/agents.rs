@@ -3334,8 +3334,8 @@ impl Agents {
             )),
             Closed::Refused => Err("The tab isn't in the agent's own Space.".into()),
             Closed::Stays | Closed::Pending => Err(format!(
-                "Tab {tab} stays open: it went to another page, or was unloaded, before its page \
-                 answered."
+                "Tab {tab} stays open: before its page answered, it went to another page, was \
+                 unloaded, or the user took it over or pinned it."
             )),
         };
         let logged = if discarded {

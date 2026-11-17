@@ -69,7 +69,23 @@ TEST(AgentCloseRuleTest, ACrashOrTheDeadlineClosesTheTab) {
     AgentCloseAsk::Step step = crashed ? ask.RendererGone() : ask.TimedOut();
     EXPECT_TRUE(step.close);
     EXPECT_FALSE(step.answer);
+    AgentCloseAsk::Step closing = ask.Closing(/*users=*/false);
+    EXPECT_TRUE(closing.close);
+    EXPECT_FALSE(closing.answer);
     EXPECT_EQ(ask.PageGone(/*tab_stays=*/false).answer, Answer::kClosed);
+  }
+}
+
+// A tab the user took over or pinned while its page was asked is theirs: a crash or the deadline
+// leaves it open, and the agent hears it stays.
+TEST(AgentCloseRuleTest, ACrashOrTheDeadlineLeavesATabThatBecameTheUsers) {
+  for (bool crashed : {true, false}) {
+    AgentCloseAsk ask;
+    ASSERT_TRUE((crashed ? ask.RendererGone() : ask.TimedOut()).close);
+    AgentCloseAsk::Step closing = ask.Closing(/*users=*/true);
+    EXPECT_FALSE(closing.close);
+    EXPECT_EQ(closing.answer, Answer::kStays);
+    EXPECT_FALSE(ask.PageGone(/*tab_stays=*/false).answer);
   }
 }
 
@@ -78,6 +94,36 @@ TEST(AgentCloseRuleTest, AnAgreedCloseThatHangsClosesAtTheDeadline) {
   AgentCloseAsk ask;
   ask.PageAnswered(/*proceed=*/true);
   EXPECT_TRUE(ask.TimedOut().close);
+  EXPECT_TRUE(ask.Closing(/*users=*/false).close);
+}
+
+// Once the page agreed, Chromium is closing the tab, so a tab that became the user's meanwhile goes
+// too, at the deadline if its unload handlers hang.
+TEST(AgentCloseRuleTest, AnAgreedCloseGoesOnThoughTheTabBecameTheUsers) {
+  AgentCloseAsk ask;
+  ask.PageAnswered(/*proceed=*/true);
+  ASSERT_TRUE(ask.TimedOut().close);
+  EXPECT_TRUE(ask.Closing(/*users=*/true).close);
+  EXPECT_EQ(ask.PageGone(/*tab_stays=*/false).answer, Answer::kClosed);
+}
+
+// A close the window didn't carry out, as of a tab between windows, is answered at once: it stays.
+TEST(AgentCloseRuleTest, ACloseThatDidntHappenIsAnsweredStays) {
+  AgentCloseAsk ask;
+  ASSERT_TRUE(ask.TimedOut().close);
+  ASSERT_TRUE(ask.Closing(/*users=*/false).close);
+  EXPECT_EQ(ask.StillThere().answer, Answer::kStays);
+  EXPECT_FALSE(ask.PageGone(/*tab_stays=*/false).answer);
+}
+
+// The page answered while the core's close waited its turn: the answer stands.
+TEST(AgentCloseRuleTest, AnAnswerBeforeTheCoresCloseStands) {
+  AgentCloseAsk ask;
+  ASSERT_TRUE(ask.TimedOut().close);
+  ASSERT_EQ(ask.PageAnswered(/*proceed=*/false).answer, Answer::kAsks);
+  AgentCloseAsk::Step closing = ask.Closing(/*users=*/false);
+  EXPECT_FALSE(closing.close);
+  EXPECT_FALSE(closing.answer);
 }
 
 }  // namespace

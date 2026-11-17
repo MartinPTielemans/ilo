@@ -32,11 +32,17 @@ class AgentCloseAsk {
   // Another page committed in the tab before its page answered.
   Step Navigated();
   // Its renderer ended, so nothing on the page can ask: it closes, as a user's close of a crashed
-  // tab does.
+  // tab does, once Closing() says so.
   Step RendererGone();
   // No answer in the time the core gives one: it closes, as Chromium closes a page whose handler
-  // hangs.
+  // hangs, once Closing() says so.
   Step TimedOut();
+  // The core is about to close it, after RendererGone() or TimedOut(): a tab that is by then the
+  // user's, taken over or pinned, only the user closes, unless its page had agreed, as Chromium is
+  // then closing it already.
+  Step Closing(bool users);
+  // The core asked for the close and the tab is still there, as when it was between windows.
+  Step StillThere();
   // Its page went: with the tab, or, if |tab_stays|, unloaded while the tab stays.
   Step PageGone(bool tab_stays);
 

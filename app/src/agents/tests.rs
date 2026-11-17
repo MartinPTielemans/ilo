@@ -2842,7 +2842,8 @@ fn a_tab_that_changed_meanwhile_stays(cx: &mut TestAppContext) {
     assert!(kept.error);
     assert_eq!(
         kept.text,
-        "Tab 30 stays open: it went to another page, or was unloaded, before its page answered."
+        "Tab 30 stays open: before its page answered, it went to another page, was unloaded, \
+         or the user took it over or pinned it."
     );
 }
 

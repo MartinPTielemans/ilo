@@ -37,6 +37,20 @@ AgentCloseAsk::Step AgentCloseAsk::TimedOut() {
   return {.close = !answered_};
 }
 
+AgentCloseAsk::Step AgentCloseAsk::Closing(bool users) {
+  if (answered_) {
+    return {};
+  }
+  if (users && !agreed_) {
+    return Answering(Answer::kStays);
+  }
+  return {.close = true};
+}
+
+AgentCloseAsk::Step AgentCloseAsk::StillThere() {
+  return Answering(Answer::kStays);
+}
+
 AgentCloseAsk::Step AgentCloseAsk::PageGone(bool tab_stays) {
   return Answering(tab_stays ? Answer::kStays : Answer::kClosed);
 }

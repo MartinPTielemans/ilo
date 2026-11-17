@@ -1274,7 +1274,8 @@ typedef struct bc_host {
   // once for each pending |tab|, whatever happened meanwhile: BC_AGENT_CLOSED once the tab is gone,
   // by that close or any other; BC_AGENT_CLOSE_ASKS if its page asked to stay; or
   // BC_AGENT_CLOSE_REFUSED if it stays for another reason. Within a few seconds at most: a page
-  // that doesn't answer is closed, as Chromium closes one whose handler hangs.
+  // that doesn't answer, or whose renderer crashed, is closed, as Chromium closes one whose handler
+  // hangs, unless the user took its tab over or pinned it meanwhile.
   void (*agent_close_answered)(void* context, bc_id tab, int answer);
   // On Linux and Windows, the browser is quitting, or with |last_private| the last window of a
   // private profile closing, with |count| downloads running, which it would cancel: ask the user
@@ -1767,7 +1768,8 @@ BC_EXPORT bool bc_agent_navigate(const char* agent, bc_id tab, const char* url);
 // The tab closed: it's gone, and tab_closed told of it.
 #define BC_AGENT_CLOSED 0
 // The tab isn't in the agent's Space, or the user holds it. As agent_close_answered's answer: it
-// stays for another reason, as it went to another page or its page was unloaded meanwhile.
+// stays for another reason, as it went to another page, its page was unloaded, or the user took it
+// over or pinned it meanwhile.
 #define BC_AGENT_CLOSE_REFUSED 1
 // The user pinned the tab, which only the user closes.
 #define BC_AGENT_CLOSE_PINNED 2
@@ -1786,7 +1788,9 @@ BC_EXPORT bool bc_agent_navigate(const char* agent, bc_id tab, const char* url);
 // BC_AGENT_CLOSE_PENDING again, covered by that one answer. |discard| closes it at once without its
 // handlers, one pending too, and what it held unsaved is lost. Returns a BC_AGENT_CLOSE value.
 // Agent code calls it after bc_agent_may_act, asks without |discard| first, and asks the user
-// before it discards a page that asked to stay that the agent didn't open.
+// before it discards a page that asked to stay that the agent didn't open. A page that agreed to
+// close goes though the user takes its tab over or pins it before it's gone, as Chromium is closing
+// it by then.
 BC_EXPORT int bc_agent_close_tab(const char* agent, bc_id tab, bool discard);
 
 // Copies up to |capacity| of the tabs of the Space of the agent with the id |agent| into |tabs|, its
