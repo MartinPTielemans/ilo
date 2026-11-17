@@ -286,6 +286,7 @@ impl Shell {
                     Tip {
                         text: name.into(),
                         keys,
+                        detail: SharedString::default(),
                     },
                     anchor,
                 )

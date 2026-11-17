@@ -230,6 +230,8 @@ pub struct Traced {
     /// Why it failed, as its call's answer said.
     pub error: Option<SharedString>,
     pub picture: Option<Arc<gpui::Image>>,
+    /// How a close ended when its page had a say.
+    pub close: Option<tools::Close>,
 }
 
 /// The page the user was on when they asked, which goes as its address and title only.
@@ -1214,6 +1216,7 @@ impl Agents {
                     ended: Some(now),
                     error: None,
                     picture: None,
+                    close: None,
                 });
             }
             Out::Ended(None) => {
@@ -1685,6 +1688,7 @@ impl Agents {
             ended,
             error: None,
             picture: None,
+            close: None,
         });
         // Its first step: it's under way, and what it wrote before it was said along the way.
         task.waiting = None;
@@ -1746,6 +1750,21 @@ impl Agents {
         });
         step.picture = image.and_then(|image| picture(&image));
         cx.notify();
+    }
+
+    /// `agent`'s close `call` ended as its page had a say, which its line says once answered.
+    pub(super) fn close_ended(&mut self, agent: &str, call: u64, close: tools::Close) {
+        let Some(key) = self.tracer(agent, call) else {
+            return;
+        };
+        let Some(task) = self.task_mut(&key) else {
+            return;
+        };
+        let step =
+            (task.trace.iter_mut().rev()).find(|step| step.call == call && step.ended.is_none());
+        if let Some(step) = step {
+            step.close = Some(close);
+        }
     }
 
     /// A client said hello: the name its sessions' cards show. One the user connected in
@@ -2687,9 +2706,11 @@ fn together(gathered: Vec<Gathered<'_>>) -> Vec<Together<'_>> {
         let did = &step.did;
         let groups = (did.tab.is_some() || did.tool == "open_tab")
             && !matches!(did.tool.as_str(), "thought" | "ask" | "list_tabs");
+        // Closes join only those their pages answered alike.
         let like = |line: &Together| {
             matches!(line, Together::Steps(steps)
-                if steps[0].1.did.tool == did.tool && steps[0].1.did.target == did.target)
+                if steps[0].1.did.tool == did.tool && steps[0].1.did.target == did.target
+                    && steps[0].1.close == step.close)
         };
         let on_tab = |line: &Together| matches!(line, Together::Steps(steps) if steps.iter().any(|(_, each)| each.did.tab == did.tab));
         let joins = (lines.len() > from && groups)
@@ -2720,6 +2741,19 @@ fn trace_step(steps: &[(usize, &Traced)]) -> TraceStep {
     let took = step
         .ended
         .map(|ended| ended.saturating_duration_since(step.started));
+    // A page that asked to stay answered the agent: its tab is open, and nothing failed.
+    let close = step.close.filter(|_| step.ended.is_some());
+    if let Some(close) = close {
+        return TraceStep {
+            key,
+            glyph: tools::step_glyph(&step.did.tool),
+            title: tools::close_title(&step.did, close).into(),
+            description: "".into(),
+            running: false,
+            failed: false,
+            opens: Opens::Nothing,
+        };
+    }
     let description = match (&step.error, took) {
         (Some(error), _) => tools::reason(error),
         // A wait's title says its time.
@@ -2771,6 +2805,22 @@ fn trace_group(steps: &[(usize, &Traced)]) -> TraceStep {
         .collect();
     let count = tabs.len();
     let running = tabs.iter().filter(|tab| tab.running).count();
+    // Closes their pages answered alike, as `together` joins them.
+    if let (0, Some(close)) = (running, first.close) {
+        let did = tools::Did {
+            site: format!("{count} tabs"),
+            ..first.did.clone()
+        };
+        return TraceStep {
+            key,
+            glyph: tools::step_glyph(&did.tool),
+            title: tools::close_title(&did, close).into(),
+            description: "".into(),
+            running: false,
+            failed: false,
+            opens: Opens::Steps(tabs),
+        };
+    }
     let failed = tabs.iter().filter(|tab| tab.failed).count();
     let tense = match (running, failed) {
         (1.., _) => tools::Tense::Now,

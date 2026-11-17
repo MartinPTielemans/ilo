@@ -498,8 +498,9 @@ impl Shell {
     }
 
     fn window_buttons_drawn(&self) -> WindowButtons {
-        // A Little ilo window's are over its bar, where the window's own go.
-        if self.little.is_some() {
+        // A Little ilo window's are over its bar, where the window's own go, as are Windows' at the
+        // top bar's end, which nothing covers.
+        if self.little.is_some() || self.buttons_at_bar_end() {
             return WindowButtons {
                 window: true,
                 library: false,

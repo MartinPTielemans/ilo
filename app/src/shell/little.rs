@@ -133,6 +133,7 @@ impl Shell {
             folders: Default::default(),
             shown: 0,
             peeked: Vec::new(),
+            live_rooms: Default::default(),
         }];
         if let Some(look) = look {
             shell.take_look(look.name, look.color, look.theme, look.icon);

@@ -679,6 +679,39 @@ text-size = 11.0
 secondary = 0.6
 primary = 1.0
 
+[link-card]
+# ⇧ on a link grows its plate into a card of what the page says about itself (#3080), in the hover
+# card's look (its radius, rim, padding, picture radius, text inset and ground), as the owner saw it
+# mocked: wide enough for three lines of a description of about 50 characters and, for most links,
+# the plate's whole address, which stays its last row.
+width = 320.0
+# The picture's box keeps Open Graph's 1200 × 630.
+picture-ratio = 0.525
+# The title at body size, two lines at most; the description at small, three at most; at these
+# alphas of the ink, raised to the overlay's floor.
+title-lines = 2
+desc-lines = 3
+desc-line = 15.0
+desc = 0.66
+desc-gap = 2.0
+# The address row, the plate's, under the text.
+row-gap = 4.0
+row-bottom = 2.0
+# Before the site a redirect landed on: →, this far from either side.
+lands-gap = 6.0
+# Loading: two bars in the title's place, the ink at the ground's twice, at these shares of the text's
+# width, this far apart.
+bar-title = 10.0
+bar-desc = 8.0
+bar-title-share = 0.78
+bar-desc-share = 0.5
+bar-gap = 8.0
+# Failed: Lucide's circle-alert at the title's size, this far before the words.
+alert-gap = 6.0
+# The window's room above the plate, which the tallest card fits: a picture, two lines of title,
+# three of description and the row.
+room = 300.0
+
 [menu]
 # ilo's own context menu (ours, #331): 24 pt rows of 13 pt text in an opaque panel, Ink-2 in a dark
 # window and Paper-0 in a light one.
@@ -1842,6 +1875,22 @@ bin-up = 12.0
 # The least a plate may be wide, in a card too narrow for the half it is.
 min-width = 160.0
 
+[shell.live-folder]
+# A Live Folder (#2979): a folder its profile's GitHub pull requests fill. Its two lists' headings,
+# "Review requests" and "Created by me", are this tall, at text's small size, semibold, in
+# `secondary`, as a menu's header is, starting this far in from their rows' plates (ours: the
+# measured app's folder wasn't recorded).
+heading-height = 22.0
+heading-x = 10.0
+# A draft's glyph and title are dimmed to this.
+draft = 0.55
+# After a refresh that failed, a mark this wide sits on the folder's glyph's bottom right corner,
+# on the sidebar's fill, with the circled ! in it.
+failed-mark = 9.0
+# Closed, the folder's row ends with how many review requests wait, this far in from its plate's
+# end.
+count-end = 12.0
+
 [shell.new-space]
 # The circle: across, its white ring, and the line of the sidebar's colour inside the ring.
 circle = 30.0
@@ -2748,6 +2797,10 @@ chip-lip = 2.0
 chip-radius = 6.0
 chip-padding = 3.0
 chip-after-text = 8.0
+# What's said of it after the name, as a Live Folder's rows' age: this far after it, in the
+# regular weight, the text's colour at this (ours, #2979's mock).
+detail-gap = 6.0
+detail = 0.7
 chip-gap = 3.5
 chip-text-size = 11.0
 # Arc's, measured at full opacity, are indigo: the plate #090C4B, the text #E2E5FF, the chips

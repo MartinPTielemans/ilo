@@ -4974,6 +4974,9 @@ void host_hide_link_target(double fade) {
       completionHandler:gone];
 }
 
+// Windows blend with what's under them, so the room round an overlay's outline shows through.
+void host_outline_overlay(void*, double, double, double, double, double) {}
+
 bool host_mouse_down(void) {
   return NSEvent.pressedMouseButtons != 0;
 }

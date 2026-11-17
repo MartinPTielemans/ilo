@@ -2746,6 +2746,7 @@ impl CommandBar {
                 let tip = Tip {
                     text: REMOVE_NAME.into(),
                     keys: remove_keys(),
+                    detail: SharedString::default(),
                 };
                 self.host
                     .tooltip(Some((tip, Anchor::under(frame, window))), cx);

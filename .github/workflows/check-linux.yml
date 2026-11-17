@@ -50,12 +50,14 @@ permissions:
   contents: read
 
 env:
-  # The runs that pass on X11 so far.
+  # The runs that pass on X11 so far. live-folder-site asks GitHub, so it's here and not Wayland's:
+  # each X11 run with this list (nights, trains, a dispatch naming none) trips if its signed-out
+  # answer changes shape (#2979).
   LINUX_RUNS: >-
     tabs window find agents spaces crash profiles private blank quit mcp appearance access history
     load preview import adblock adblock-lists adblock-cosmetic adblock-page passkeys onboarding links relaunch
     split extensions capture popup pinned about windows dialogs trouble cards passwords updates
-    restore favorites keys clear media store adblock-live widevine sync sync-account sync-devices
+    restore favorites keys clear media store adblock-live live-folder-site widevine sync sync-account sync-devices
     sync-extensions little devices pair notifications calls battery battery-os idle handback
     update-checks
     webrtc tab-drag count ranking everyday hosts policies translate pictures boosts rules
