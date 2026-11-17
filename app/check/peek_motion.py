@@ -6,7 +6,8 @@
 content, named for the seconds since 1970 they were asked for (tools/window-frames.sh). The page
 rests at <page>, in points from the content's top left, growing from <from>. Prints a line a frame
 and a verdict for each motion; exits 1 if a frame shows Peek's page outside the card, 2 if the
-frames can't tell yet, as when none was taken mid-motion or the dim isn't drawn blended.
+frames can't tell yet, as when none was taken mid-motion, the dim isn't drawn blended, or
+more than LEFT_OUT filmings of a motion stopped before its dim reached its rest.
 
 Each frame says where the motion is itself. The dim over the window's page darkens it linearly as
 the preview opens and closes, so a point of the window's page outside the card, D, gives the
@@ -28,6 +29,9 @@ RIM = 1.0
 # Inside the resting frame by this share of its size from the far corner, and the scale's margin
 # either side of where the card reaches it, against a frame read between two of the app's.
 IN, MARGIN = 0.05, 0.04
+# The filmings of one motion whose dim fell short of its rest that are left out before the motion
+# is unread: past it the screen trailed on too many to pass on the few read.
+LEFT_OUT = 2
 
 
 def read_png(path, last=None):
@@ -115,12 +119,15 @@ def main():
     failed = unreadable = blended = False
     base = None
     caught_in = {"open": 0, "close": 0}
+    filmed_in = {"open": 0, "close": 0}
+    left_out = {"open": 0, "close": 0}
     filmed = sorted(
         (name for name in os.listdir(folder)
          if name.split("-")[0] in caught_in and name.split("-")[-1].isdigit()),
         key=lambda name: (int(name.split("-")[-1]), name != "open-" + name.split("-")[-1]))
     for filming in filmed:
         motion = filming.split("-")[0]
+        filmed_in[motion] += 1
         names = sorted(os.listdir(os.path.join(folder, filming)))
         if not names:
             print("%s: no frames" % filming)
@@ -147,10 +154,12 @@ def main():
         dims = [max(0.0, min(1.0, (g0 - dd[1]) / ((g0 - DIM) * DIM_OPACITY))) for _, _, dd, _ in rows]
         # Left out, rather than leaving the run unread: on Wayland the screen can trail the app's
         # word that the card has settled, which stops an open's filming, most on a first open. The
-        # motion is still unread if no other filming of it caught the card moving, below.
+        # motion is still unread past LEFT_OUT of them, or if no filming of it caught the card
+        # moving, below.
         if max(dims) < 0.8:
             print("%s: the dim never reached its rest at D (%.2f at most), so this filming can't say "
                   "where the motion is and is left out" % (filming, max(dims)))
+            left_out[motion] += 1
             continue
         blended = True
         caught = wrong = 0
@@ -187,8 +196,16 @@ def main():
         else:
             print("%s: %d frames mid-motion show the window's page at P, outside the card"
                   % (filming, caught))
+    print("left out: %d of %d filmings, dim short of rest (opens %d of %d, closes %d of %d)" % (
+        sum(left_out.values()), sum(filmed_in.values()), left_out["open"], filmed_in["open"],
+        left_out["close"], filmed_in["close"]))
     if not blended:
         print("the dim isn't drawn blended here: no filming saw it reach its rest at D")
+    for motion, out in left_out.items():
+        if out > LEFT_OUT:
+            print("%s: %d filmings left out, more than %d, so the few read can't stand for the rest"
+                  % (motion, out, LEFT_OUT))
+            unreadable = True
     for motion, caught in caught_in.items():
         if not caught:
             print("%s: no frame caught the card moving short of P, so none says what's outside it"

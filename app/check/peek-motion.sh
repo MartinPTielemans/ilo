@@ -197,4 +197,4 @@ if [ -n "$covers" ] || [ "$late" != 0 ]; then
 $(echo "$covers" | awk '{ a[NR] = $1 } END { if (NR) printf "%s ms at the median and %s ms at most", a[int((NR + 1) / 2)], a[NR] }'); \
 the wait ran out $late times"
 fi
-echo "ok: Peek grows from the link and shrinks back into it with only its card on screen: each frame shows the window's page at a point of Peek's resting frame until the card reaches it and once it has left, never undimmed inside the card, and its page was resized once at most, to its resting size. Its sizes: $(tail -1 "$frames/sizes.txt"). Frames: build/check/peek-frames, read in build/check/peek-motion.txt"
+echo "ok: Peek grows from the link and shrinks back into it with only its card on screen: each frame shows the window's page at a point of Peek's resting frame until the card reaches it and once it has left, never undimmed inside the card, and its page was resized once at most, to its resting size. Its sizes: $(tail -1 "$frames/sizes.txt"). Frames: build/check/peek-frames, read in build/check/peek-motion.txt; $(grep '^left out: ' "$out/peek-motion.txt" | tail -1)"
