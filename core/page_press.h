@@ -33,6 +33,8 @@ class PagePresses : public content::WebContentsObserver,
   void Hook(content::RenderWidgetHost* widget);
   void Unhook();
   bool OnMouse(content::RenderWidgetHost* widget, const blink::WebMouseEvent& event);
+  // Focuses the pane of a press left to a page that ignores it under its tab's dialog.
+  void FocusPane();
   // The press taken ends at |at|; returns whether the app kept it.
   bool End(const gfx::PointF& at);
 

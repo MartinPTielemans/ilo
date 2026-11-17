@@ -5,8 +5,8 @@
 # tab's row shows its page's favicon, and keeps it until the next page has loaded without one. A
 # host typed in the command bar goes over https first, then http, or from Chromium 157 Chrome's
 # warning before http, whose dialog has the keyboard and still lets ⌘L, ⌘T and ⌘W reach the app,
-# and leaves a page split beside it the click into it and the typing after, and a local one over
-# http. One typed with http:// loads over http as written, with no https try and no warning, as in
+# and leaves a page split beside it the click into it and the typing after, and shows with the
+# keyboard on a click on its own pane's page, which never hears it, and a local one over http. One typed with http:// loads over http as written, with no https try and no warning, as in
 # Chrome's address bar. Only what the user typed counts: an agent's open_tab
 # and navigate, and a link, to an http:// address, are tried over https first, and the agent's tab
 # at its warning leaves the user's window the keyboard. A right-click on reload lists Reload, Hard
@@ -383,7 +383,8 @@ ran_on_warning() {
 # A page beside the warning in a split keeps a click into it and the typing after. On X11 a tab's
 # dialog takes the keyboard back after a focus change that leaves no view focused (#2926), and a
 # page is no view: the click into the page beside it was at risk of sending its keys to the warning
-# in the other pane. The warning is clicked first, so it has had the keyboard.
+# in the other pane. The warning is clicked first, so it has had the keyboard. Then a click on the
+# warned pane's page focuses that pane and shows its warning, which escape takes back.
 if [ "$major" -ge 157 ]; then
   printf '%s' '<title>beside</title>
 <input id=field style="position:fixed;inset:0;font-size:40px" oninput="document.title = `beside has ${field.value}`">
@@ -434,10 +435,40 @@ requestAnimationFrame(() => requestAnimationFrame(() => document.title = "beside
     "typing after a click on the page beside $warned_tab's warning before http didn't reach that page: the keyboard is in $key, on $focus: $(since "$clicked" | grep -e '^browser: drive' -e "^browser: title $beside " | tail -6 | tr '\n' ' ')"
   since "$clicked" | grep -q "^browser: title $beside beside blurred\$" &&
     fail "the page beside $warned_tab's warning before http lost the keyboard after the click into it: $(since "$clicked" | grep -e '^browser: drive' -e "^browser: title $beside " | tail -6 | tr '\n' ' ')"
+  # A click on the warned pane's page, below its hidden warning, focuses that pane, and the warning
+  # shows with the keyboard. The page under it ignores input while the warning's up, so the press
+  # never reached it, and nothing focused the pane (#3196); the click still mustn't reach that page.
+  pane=$(echo "$panes" | sed -n 2p)
+  pane_x=${pane%%,*} pane_y=${pane#*,}
+  pane_y=${pane_y%% *} pane_h=${pane#*x}
+  send click $((pane_x + 100)) $((pane_y + pane_h - 60))
+  pressed=$step
+  expect "^browser: selected $warned_tab\$" \
+    "a click on $warned_tab's page below its warning before http, beside a page in a split, didn't focus its pane: $(since "$pressed" | grep -e '^browser: drive' -e '^browser: selected' -e "^browser: title $beside " | tail -6 | tr '\n' ' ')"
+  expect "^browser: title $beside beside blurred\$" "the page beside kept the keyboard after a click on $warned_tab's page below its warning before http"
+  for _ in $(seq 50); do
+    send layout
+    sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q '^browser: layout child ' && break
+    sleep 0.1
+  done
+  warning_box
+  send state
+  [ "$key" = NativeWidgetMacNSWindow ] ||
+    fail "a click on $warned_tab's page below its warning before http focused its pane, but the warning at $warning didn't take the keyboard: it's in $key, on $focus"
+  send key z
+  send state
+  since "$pressed" | grep -q "^browser: title $beside beside has xyz\$" &&
+    fail "a key after a click on $warned_tab's page below its warning before http reached the page beside it"
+  since "$pressed" | grep -q "^browser: page $warned_tab back [01] forward [01] loading 1 " &&
+    fail "a click on $warned_tab's page below its warning before http reached the page under the warning: $(since "$pressed" | grep "^browser: page $warned_tab " | tail -3 | tr '\n' ' ')"
+  # Escape is the warning's Go back, which loads the new tab page where there's no page to go back to.
+  send key escape
+  expect "^browser: page $warned_tab back [01] forward [01] loading 1 " \
+    "escape on Chrome's warning before http, after a click below it focused its pane, didn't go back: the keyboard is in $key, on $focus"
   send key w cmd
-  expect "^browser: tab $beside closed\$" "⌘W didn't close the pane beside $warned_tab's warning before http"
-  expect "^browser: panes $warned_tab\$" "⌘W on the pane beside the warning didn't leave $warned_tab alone"
-  tab=$warned_tab
+  expect "^browser: tab $warned_tab closed\$" "⌘W didn't close $warned_tab's pane after its warning before http went back"
+  expect "^browser: panes $beside\$" "⌘W on $warned_tab's pane didn't leave the page beside it alone"
+  tab=$beside
 fi
 if [ "$major" -ge 157 ]; then
   warned
