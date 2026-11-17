@@ -591,8 +591,12 @@ if [ "$major" -ge 157 ]; then
   upgraded "$tab" "$barred" "the link followed with the command bar open"
   expect "^browser: loaded $tab chrome-error://chromewebdata/\$" \
     "Chrome's warning before http for $barred didn't load under the command bar"
-  if [ "$(uname)" = Darwin ]; then
-    echo "skip: the command bar keeping every key as Chrome's warning before http first shows under it: on the Mac the warning's own window takes the keyboard and the bar closes (#3209)."
+  if [ "$(uname)" = Darwin ] || windows; then
+    case $(uname) in
+      Darwin) issue=3209 os="the Mac" ;;
+      *) issue=3242 os=Windows ;;
+    esac
+    echo "skip: the command bar keeping every key as Chrome's warning before http first shows under it: on $os the warning's own window takes the keyboard and the bar closes (#$issue)."
     # The warning's window takes the keyboard just after it loads; the next ⌘L waits for that.
     for _ in $(seq 50); do
       send state
