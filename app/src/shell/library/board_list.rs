@@ -12,7 +12,7 @@ use gpui::{
 
 use super::{
     ARCHIVED_FAVICON_X, ARCHIVED_LEFT, ARCHIVED_PITCH, ARCHIVED_PLATE, ARCHIVED_RADIUS,
-    ARCHIVED_RIGHT, Edit, FAVICON_SIZE, MenuEntry, SECONDARY, STATE_HOVERED, STATE_PRESSED,
+    ARCHIVED_RIGHT, Edit, FAVICON_SIZE, Item, MenuEntry, SECONDARY, STATE_HOVERED, STATE_PRESSED,
     Section, Shell, What,
     history_list::{history_text, history_when},
 };
@@ -96,6 +96,7 @@ impl Shell {
             .child(
                 div()
                     .id(("board", index))
+                    .map(|plate| self.library_row(plate, Item::Board(index), 0, ARCHIVED_RADIUS))
                     .size_full()
                     .relative()
                     .flex()
