@@ -128,8 +128,10 @@ printf '%s' 'for (const style of ["position: fixed; left: 40vw; top: 76vh", "dis
   document.body.append(frame);
 }
 const changed = document.querySelector("[aria-label=\"Extension changed\"]");
-changed.addEventListener("input", () => {
-  if (changed.value.length == 6) changed.value += "█";
+addEventListener("message", event => {
+  if (event.data != "extension, change") return;
+  changed.value += "█";
+  postMessage("extension changed", "*");
 });
 for (const label of ["Copied", "Copied note"]) {
   const field = document.querySelector("[aria-label=\"" + label + "\"]");
@@ -1575,7 +1577,7 @@ button { position: absolute; left: 70vw; top: 50vh }
 <input aria-label=Disabled disabled value='██████' style='left: 74vw; top: 58vh'>
 <input aria-label='Toggled back' type=password value='██████' style='left: 74vw; top: 76vh'>
 <iframe id=site src=http://127.0.0.1:$port/withheld-inner.html></iframe>
-<button onclick='document.querySelector(\"[aria-label=Changed]\").value += \"█\"'>Change</button>
+<button onclick='document.querySelector(\"[aria-label=Changed]\").value += \"█\"; postMessage(\"extension, change\", \"*\")'>Change</button>
 <input aria-label=Below style='left: 2vw; top: 94vh'>
 <div style='height: 76vh'></div>
 <script src=painted.js></script>
@@ -1593,6 +1595,7 @@ const shown = () => ++ready == 4 && (document.title = 'fields');
 painted(shown);
 addEventListener('message', event =>
   (event.data == 'painted' || event.data == 'extension painted') && shown());
+addEventListener('message', event => event.data == 'extension changed' && (document.title = 'changed'));
 </script>" > "$out/site/withheld.html"
   outline=$(call open_tab "{\"url\":\"localhost:$port/withheld.html\"}")
   fields_tab=$(printf '%s\n' "$outline" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
@@ -1607,6 +1610,7 @@ addEventListener('message', event =>
     "Clicked button “Change”."*) ;;
     *) fail "clicking Change answered: $clicked" ;;
   esac
+  await_log "^browser: title $fields_tab changed\$" "the check's extension didn't change its field"
   outline=$(call snapshot "{\"tab\":$fields_tab}")
   printf '%s\n' "$outline" > "$out/mcp-withheld-outline.txt"
   # Each field's line ends as $2 says, a password's after it says it's off limits.
