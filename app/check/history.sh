@@ -156,9 +156,10 @@ done
 # https fails, Chromium 156 falls back to http, and from 157, whose HTTPS-First balanced mode is on
 # by default, Chrome's "Connection is not secure" warning comes instead, at the http address, with
 # ERR_BLOCKED_BY_CLIENT, until the user continues to the site. The check's server answers a TLS
-# handshake as a bad request.
+# handshake as a bad request, which it names by where spaces fall in the handshake's random bytes:
+# a bad request version, a bad HTTP/0.9 request type or bad request syntax.
 tls() {
-  grep -a -c 'code 400, message Bad request' "$out/site.log" || true
+  grep -a -c 'code 400, message Bad ' "$out/site.log" || true
 }
 await '^browser: settings about Version .*, on Chromium [0-9]' ||
   fail "the engine's version wasn't said"
