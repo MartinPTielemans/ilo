@@ -2242,17 +2242,28 @@ server.serve_forever()
     exec 3> "$out/drive"
     await '^browser: restored in ' || fail "Google: the third launch didn't bring the Spaces back"
     await '^browser: UI shown at ' || fail "Google: the third launch didn't show its UI"
-    engines_menu
-    no_google "Google: a relaunch brought Google back after it was deleted"
-    expect_listed=$(engines_listed)
-    case "$expect_listed" in
-      *"DuckDuckGo (default) (checked)"*) ;;
-      *) fail "Google: the relaunch didn't keep DuckDuckGo: $expect_listed" ;;
-    esac
-    send key escape
-    expect '^browser: menu closed$' "Google: escape didn't close the Search engine menu"
-    exec 3>&-
-    quit
+    # The page first, as in the second launch: Settings shown while another app is in front, as a
+    # relaunch on Windows finds the runner's console, stays behind the browser window that the
+    # first press brings in front, and its click lands in the page.
+    await '^browser: title [0-9]* searched nothing$' || fail "Google: the third launch didn't bring the run's page back"
+    send click $page_point
+    if [ "$active" != 1 ]; then
+      exec 3>&-
+      quit
+      echo "skip: Google staying gone on a relaunch. Browser wasn't the active app, so the page ignored the click."
+    else
+      engines_menu
+      no_google "Google: a relaunch brought Google back after it was deleted"
+      expect_listed=$(engines_listed)
+      case "$expect_listed" in
+        *"DuckDuckGo (default) (checked)"*) ;;
+        *) fail "Google: the relaunch didn't keep DuckDuckGo: $expect_listed" ;;
+      esac
+      send key escape
+      expect '^browser: menu closed$' "Google: escape didn't close the Search engine menu"
+      exec 3>&-
+      quit
+    fi
   fi
   exec 5>&-
   wait "$helper" 2>/dev/null || true
