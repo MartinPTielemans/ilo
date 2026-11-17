@@ -3,7 +3,7 @@
 #include <utility>
 
 #include "base/containers/adapters.h"
-#include "base/strings/string_util.h"
+#include "browser_core/ax_text.h"
 
 namespace browser_core {
 
@@ -40,9 +40,7 @@ std::map<std::string, std::vector<std::string>> SelectChoices(const base::ListVa
       steps.pop_back();
       if (IsRole(*each, "option")) {
         const std::string* name = each->FindStringByDottedPath("name.value");
-        std::string shown =
-            name ? base::CollapseWhitespaceASCII(*name, /*trim_sequences_with_line_breaks=*/true)
-                 : std::string();
+        std::string shown = name ? OneSpaced(*name) : std::string();
         if (!shown.empty()) {
           names.push_back(std::move(shown));
         }

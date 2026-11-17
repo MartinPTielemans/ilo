@@ -23,13 +23,17 @@ TEST(WithheldFieldsTest, WhatTheAgentSees) {
   typed.typed = u"Ada";
   EXPECT_FALSE(Withheld(typed));
 
+  EXPECT_EQ(SeenOf(typed), Seen::kValue);
+
   // Its typing, changed since by the user or anything else.
   FieldFacts edited = Holding(u"Ada Lovelace");
   edited.typed = u"Ada";
   EXPECT_TRUE(Withheld(edited));
+  EXPECT_EQ(SeenOf(edited), Seen::kChanged);
 
   // The user's typing, which the core can't tell from a password manager's fill.
   EXPECT_TRUE(Withheld(Holding(u"ada@example.com")));
+  EXPECT_EQ(SeenOf(Holding(u"ada@example.com")), Seen::kFilled);
 
   // What autofill filled, even the agent's own value or the page's default.
   FieldFacts autofilled = Holding(u"Ada");
@@ -37,16 +41,34 @@ TEST(WithheldFieldsTest, WhatTheAgentSees) {
   autofilled.typed = u"Ada";
   autofilled.markup = u"Ada";
   EXPECT_TRUE(Withheld(autofilled));
+  EXPECT_EQ(SeenOf(autofilled), Seen::kFilled);
 
-  // The page's own value, as its markup has it.
+  // The page's own choice, a select's option its markup marks selected.
   FieldFacts page_default = Holding(u"Netherlands");
+  page_default.select = true;
   page_default.markup = u"Netherlands";
   EXPECT_FALSE(Withheld(page_default));
+  EXPECT_EQ(SeenOf(page_default), Seen::kValue);
+
+  // An input's or a textarea's markup never counts: the core can't tell it's what filled the
+  // field.
+  FieldFacts copied = Holding(u"ada@example.com");
+  copied.markup = u"ada@example.com";
+  EXPECT_TRUE(Withheld(copied));
+  EXPECT_EQ(SeenOf(copied), Seen::kFilled);
 
   // A read-only or disabled field, which nobody but the page fills.
   FieldFacts fixed = Holding(u"Order 1234");
   fixed.fixed = true;
   EXPECT_FALSE(Withheld(fixed));
+  EXPECT_EQ(SeenOf(fixed), Seen::kValue);
+
+  // The agent's typing put back to the page's default reads as the page's.
+  FieldFacts restored = Holding(u"Netherlands");
+  restored.select = true;
+  restored.markup = u"Netherlands";
+  restored.typed = u"Belgium";
+  EXPECT_EQ(SeenOf(restored), Seen::kValue);
 
   // A password field the page made a text field, as a "show password" button does, and a card's
   // or one-time code's field: always, even holding the agent's typing or the page's default.
@@ -56,20 +78,52 @@ TEST(WithheldFieldsTest, WhatTheAgentSees) {
   shown_password.markup = u"hunter2";
   shown_password.fixed = true;
   EXPECT_TRUE(Withheld(shown_password));
+  EXPECT_EQ(SeenOf(shown_password), Seen::kFilled);
+  // A secret field changed since the agent typed it reads filled, never "not as you typed it",
+  // which would say it once held the agent's typing.
+  shown_password.value = u"hunter3";
+  EXPECT_EQ(SeenOf(shown_password), Seen::kFilled);
+  EXPECT_TRUE(SecretAutocomplete("current-password"));
+  EXPECT_TRUE(SecretAutocomplete("section-login New-Password"));
   EXPECT_TRUE(SecretAutocomplete("cc-number"));
   EXPECT_TRUE(SecretAutocomplete("section-pay billing CC-CSC"));
   EXPECT_TRUE(SecretAutocomplete("one-time-code"));
   EXPECT_FALSE(SecretAutocomplete("email"));
   EXPECT_FALSE(SecretAutocomplete("off"));
+  EXPECT_FALSE(SecretAutocomplete("username"));
 
   // An empty field has nothing to withhold.
   EXPECT_FALSE(Withheld(Holding(u"")));
+  EXPECT_EQ(SeenOf(Holding(u"")), Seen::kEmpty);
+}
+
+// Only a field that may show what it holds is worth asking the page about.
+TEST(WithheldFieldsTest, OnlyAFieldThatMayShowIsDescribed) {
+  FieldFacts typed = Holding(u"Ada");
+  typed.typed = u"Ada";
+  FieldFacts fixed = Holding(u"Order 1234");
+  fixed.fixed = true;
+  FieldFacts select = Holding(u"Netherlands");
+  select.select = true;
+  for (const FieldFacts& field : {typed, fixed, select}) {
+    EXPECT_TRUE(CouldShow(field));
+  }
+  FieldFacts password = typed;
+  password.secret = true;
+  FieldFacts autofilled = select;
+  autofilled.autofilled = true;
+  FieldFacts empty = select;
+  empty.value.clear();
+  for (const FieldFacts& field : {Holding(u"ada@example.com"), password, autofilled, empty}) {
+    EXPECT_FALSE(CouldShow(field));
+  }
 }
 
 // Point's picture hatches every value, as its text and the note's panel send none: the page's
 // default, a read-only field's and the agent's own typing too, which a screenshot shows.
 TEST(WithheldFieldsTest, PointsPictureHatchesEveryValue) {
   FieldFacts page_default = Holding(u"Netherlands");
+  page_default.select = true;
   page_default.markup = u"Netherlands";
   FieldFacts fixed = Holding(u"Order 1234");
   fixed.fixed = true;

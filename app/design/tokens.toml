@@ -28,9 +28,14 @@ rim = 0x0000002E
 rim-dark = 0xFFFFFF1A
 shadow = 0x00000033
 shadow-dark = 0x00000066
-# The selection's ring and the chosen tool.
-ring = 0x5B5BD6
-ring-dark = 0x8B8BF0
+# The chosen tool's, size's and width's plate: the ink at 9 %, as the mocks', with its glyph in
+# ilo's accent, [palette]'s no-theme-accent, which copy-board.sh writes as --accent for it and the
+# selection's ring.
+chosen = 0x16140F17
+chosen-dark = 0xF3F0E817
+# A button's plate under the pointer, the ink at 6 %, lighter than the chosen one's, as the mocks'.
+hover = 0x16140F0F
+hover-dark = 0xF3F0E80F
 # The tools' and the zoom's bars, over the canvas.
 bar = 0xF3F0E8
 bar-dark = 0x1F1D17

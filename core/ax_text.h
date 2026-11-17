@@ -46,6 +46,13 @@ bool Has(const base::DictValue& node, std::string_view property);
 // What a node of the tree holds, as text: a field's value, or a number field's number.
 std::optional<std::string> ValueOf(const base::DictValue& node);
 
+// |text| as the outline shows a name: each run of white space one space, and none at either end.
+// White space is Unicode's, a no-break space as much as a space, and a run with a line break in it
+// is a space too. The app's outline collapses names the same way (name in app/src/agents/page.rs),
+// so a name it shows is one select finds, and one select's error lists is one it takes (#3190).
+std::string OneSpaced(std::string_view text);
+std::u16string OneSpaced(std::u16string_view text);
+
 }  // namespace browser_core
 
 #endif  // BROWSER_CORE_AX_TEXT_H_

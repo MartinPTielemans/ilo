@@ -535,11 +535,16 @@ impl Shell {
 
     /// New Board: the Board's tab opens pinned, its row's name in a field, as New Folder's is.
     pub(super) fn new_board(&mut self, cx: &mut Context<Self>) {
+        self.new_board_with(crate::boards::new_id(), None, cx);
+    }
+
+    /// New Board as Board `id`, with `capture`, capture mode's New Board's PNG, on it.
+    pub fn new_board_with(&mut self, id: String, capture: Option<Vec<u8>>, cx: &mut Context<Self>) {
         let shell = cx.entity().downgrade();
         let opened = Box::new(move |tab, cx: &mut App| {
             shell.update(cx, |shell, cx| shell.name_board(tab, cx)).ok();
         });
-        self.browser.new_board(self.space, opened, cx);
+        self.browser.new_board(self.space, id, capture, opened, cx);
     }
 
     /// Shows the new Board's row with its name in a field, all selected, to type another over.

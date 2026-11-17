@@ -27,17 +27,28 @@ constexpr SkColor kStripeColor = SkColorSetRGB(0xA6, 0xA6, 0xA6);
 
 }  // namespace
 
-bool Withheld(const FieldFacts& field) {
+Seen SeenOf(const FieldFacts& field) {
   if (field.value.empty()) {
-    return false;
+    return Seen::kEmpty;
   }
   if (field.secret || field.autofilled) {
-    return true;
+    return Seen::kFilled;
   }
-  if (field.typed && *field.typed == field.value) {
-    return false;
+  if ((field.typed && *field.typed == field.value) || field.fixed ||
+      (field.select && field.markup == field.value)) {
+    return Seen::kValue;
   }
-  return !field.fixed && field.markup != field.value;
+  return field.typed ? Seen::kChanged : Seen::kFilled;
+}
+
+bool CouldShow(const FieldFacts& field) {
+  return !field.value.empty() && !field.secret && !field.autofilled &&
+         (field.typed || field.fixed || field.select);
+}
+
+bool Withheld(const FieldFacts& field) {
+  const Seen seen = SeenOf(field);
+  return seen == Seen::kFilled || seen == Seen::kChanged;
 }
 
 bool Hatches(const FieldFacts& field, Hatched hatched) {
@@ -49,6 +60,7 @@ bool SecretAutocomplete(std::string_view autocomplete) {
        base::SplitStringPiece(autocomplete, base::kWhitespaceASCII, base::TRIM_WHITESPACE,
                               base::SPLIT_WANT_NONEMPTY)) {
     if (base::StartsWith(token, "cc-", base::CompareCase::INSENSITIVE_ASCII) ||
+        base::EndsWith(token, "password", base::CompareCase::INSENSITIVE_ASCII) ||
         base::EqualsCaseInsensitiveASCII(token, "one-time-code")) {
       return true;
     }
