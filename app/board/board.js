@@ -843,14 +843,17 @@ async function open_() {
   }
   // Every Board has its file from the start (app/src/boards.rs), so one that can't be read (over
   // the host's 4 MiB, or not parsing) is never written over.
+  // Only an object is a Board: 5, [] or null parse, but would read as an empty one.
   const text = await read(`/${id}/board.json`);
+  let board = null;
   try {
-    const board = JSON.parse(text);
-    cards = Array.isArray(board.cards) ? board.cards : [];
-    camera = { x: 0, y: 0, zoom: 1, ...board.camera };
-  } catch {
+    board = JSON.parse(text);
+  } catch {}
+  if (!board || typeof board !== "object" || Array.isArray(board)) {
     return say("This Board's file can't be read.");
   }
+  cards = Array.isArray(board.cards) ? board.cards : [];
+  camera = { x: 0, y: 0, zoom: 1, ...board.camera };
   writable = true;
   $("#note").hidden = true;
   moveCamera(false);
