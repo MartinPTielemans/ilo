@@ -1345,9 +1345,15 @@ class OutlineMoves : public ui::HWNDMessageFilter {
       // (DesktopWindowTreeHostWin::GetWindowBoundsInScreen) once it's there: by the display
       // nearest it, where the window isn't yet.
       proposed_ = gfx::Rect(*reinterpret_cast<const RECT*>(l_param));
+      LOG(ERROR) << "browser: probe moving " << proposed_->origin().ToString() << " tick "
+                 << ::GetTickCount() << " msgtime " << ::GetMessageTime() << " age "
+                 << (base::TimeTicks::Now() - InputTime()).InMilliseconds() << " ms";
       moved_.Run(display::win::GetScreenWin()->ScreenToDIPRect(nullptr, *proposed_).origin(),
                  InputTime());
     } else if (message == WM_EXITSIZEMOVE) {
+      LOG(ERROR) << "browser: probe exit tick " << ::GetTickCount() << " msgtime "
+                 << ::GetMessageTime() << " age "
+                 << (base::TimeTicks::Now() - InputTime()).InMilliseconds() << " ms";
       // The loop took the button's release from the queue last.
       if (let_go_) {
         std::move(let_go_).Run(InputTime());

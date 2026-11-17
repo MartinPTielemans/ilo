@@ -202,6 +202,8 @@ class MoveWatch : public views::WidgetObserver {
 
  private:
   void Moved(const gfx::Point& at, base::TimeTicks when) {
+    LOG(ERROR) << "browser: probe moved " << at.ToString() << " "
+               << (base::TimeTicks::Now() - when).InMilliseconds() << " ms ago";
     if (moves_.empty()) {
       moves_.push_back({when, at});
     } else if (moves_.back().at != at) {
@@ -209,7 +211,21 @@ class MoveWatch : public views::WidgetObserver {
       moves_.push_back({std::max(when, moves_.back().when), at});
     }
   }
-  void LetGoAt(base::TimeTicks when) { released_ = when; }
+  void LetGoAt(base::TimeTicks when) {
+    LOG(ERROR) << "browser: probe let go " << (base::TimeTicks::Now() - when).InMilliseconds()
+               << " ms ago";
+    released_ = when;
+  }
+
+ public:
+  void LogMoves(base::TimeTicks released) const {
+    for (const MiniPlayerMove& move : moves_) {
+      LOG(ERROR) << "browser: probe move " << move.at.ToString() << " "
+                 << (move.when - released).InMilliseconds() << " ms from the release";
+    }
+  }
+
+ private:
 
   std::vector<MiniPlayerMove> moves_;
   std::optional<base::TimeTicks> released_;
@@ -490,6 +506,7 @@ bool OnEvent(VideoOverlayWindowViews* window, ui::Event* event) {
                             views::Widget::MoveLoopEscapeBehavior::kDontHide);
         // The loop returns as the button comes up.
         if (moved) {
+          watch.LogMoves(watch.Released());
           LetGo(moved.get(), watch, watch.Released());
 #if BUILDFLAG(IS_MAC)
           GiveKeyboardBack(moved.get());
