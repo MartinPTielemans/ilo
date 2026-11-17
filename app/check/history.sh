@@ -419,33 +419,65 @@ requestAnimationFrame(() => requestAnimationFrame(() => document.title = "beside
   send state
   [ "$key" = NativeWidgetMacNSWindow ] ||
     fail "a click on Chrome's warning before http at $warning, beside a page in a split, didn't give it the keyboard: $key, $focus"
+  # Go to Pane 1 and 2, with the warning's keyboard, reach the UI as its other shortcuts do, and
+  # move the focus between the panes, the warning hiding and showing again with it (#3214). The
+  # Mac never asks the app about a key typed in the warning, so only the menu's shortcuts work
+  # there (#3230).
   if [ "$(uname)" = Darwin ]; then
-    echo "skip: a click on the page beside a warning in a split focusing its pane, and the typing after: on the Mac the click that makes the window key is lost to the page, and the warning keeps the keyboard (#3210). Nothing else focuses that pane while the warning has the keyboard, as Go to Pane isn't in the menu bar (#3214)."
-    # The warned pane is still the focused one, so ⌘W, from the menu bar, closes it.
-    send key w cmd
-    expect "^browser: tab $warned_tab closed\$" "⌘W didn't close the focused pane, $warned_tab's, with its warning before http"
-    expect "^browser: panes $beside\$" "⌘W on $warned_tab's pane didn't leave the page beside it alone"
-    tab=$beside
+    echo "skip: Go to Pane (⌃⇧1, ⌃⇧2) on Chrome's warning before http in a split: the Mac never asks the app about a key typed in the warning (#3230)."
   else
-    # The page beside it, on the left.
-    pane=$(echo "$panes" | sed -n 1p)
-    pane_x=${pane%%,*} pane_y=${pane#*,}
-    pane_y=${pane_y%% *}
-    send click $((pane_x + 100)) $((pane_y + 100))
-    clicked=$step
-    expect "^browser: selected $beside\$" "a click on the page beside $warned_tab's warning before http didn't focus its pane"
-    # A task the focus change posted has run once a step after it has.
+    send key 1 ctrl shift
+    shortcut=$step
+    expect "^browser: selected $beside in [0-9.]* ms\$" \
+      "Go to Pane 1 (⌃⇧1) on $warned_tab's warning before http, in a split, didn't focus the pane beside it: $(since "$shortcut" | grep -e '^browser: drive' -e '^browser: command ' -e '^browser: selected' | tail -4 | tr '\n' ' ')"
+    since "$shortcut" | grep -q '^browser: command focus-pane via ' ||
+      fail "⌃⇧1 on $warned_tab's warning before http focused the pane beside it, but not as Go to Pane 1: $(since "$shortcut" | grep '^browser: command ' | tr '\n' ' ')"
+    send key 2 ctrl shift
+    expect "^browser: selected $warned_tab in [0-9.]* ms\$" \
+      "Go to Pane 2 (⌃⇧2), after ⌃⇧1 on its warning before http, didn't focus $warned_tab's pane again: $(since "$shortcut" | grep -e '^browser: drive' -e '^browser: command ' -e '^browser: selected' | tail -4 | tr '\n' ' ')"
+  fi
+  for _ in $(seq 50); do
+    send layout
+    sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q '^browser: layout child ' && break
+    sleep 0.1
+  done
+  warning_box
+  send click $((warning_x + warning_width / 2)) $((warning_y + 8))
+  send state
+  [ "$key" = NativeWidgetMacNSWindow ] ||
+    fail "a click on Chrome's warning before http at $warning, shown again by Go to Pane 2, didn't give it the keyboard: $key, $focus"
+  # The page beside it, on the left. On the Mac the press is the window's first click while the
+  # warning's window has the keyboard, which reaches the page as elsewhere (#3210).
+  pane=$(echo "$panes" | sed -n 1p)
+  pane_x=${pane%%,*} pane_y=${pane#*,}
+  pane_y=${pane_y%% *}
+  send click $((pane_x + 100)) $((pane_y + 100))
+  clicked=$step
+  expect "^browser: selected $beside\$" "a click on the page beside $warned_tab's warning before http didn't focus its pane"
+  # A task the focus change posted has run once a step after it has.
+  send state
+  send key x
+  send key y
+  expect "^browser: title $beside beside has xy\$" \
+    "typing after a click on the page beside $warned_tab's warning before http didn't reach that page: the keyboard is in $key, on $focus: $(since "$clicked" | grep -e '^browser: drive' -e "^browser: title $beside " | tail -6 | tr '\n' ' ')"
+  since "$clicked" | grep -q "^browser: title $beside beside blurred\$" &&
+    fail "the page beside $warned_tab's warning before http lost the keyboard after the click into it: $(since "$clicked" | grep -e '^browser: drive' -e "^browser: title $beside " | tail -6 | tr '\n' ' ')"
+  send key w cmd
+  expect "^browser: tab $beside closed\$" "⌘W didn't close the pane beside $warned_tab's warning before http"
+  expect "^browser: panes $warned_tab\$" "⌘W on the pane beside the warning didn't leave $warned_tab alone"
+  tab=$warned_tab
+  # On the Mac the warning isn't shown again once the pane beside it closes: the page under it is
+  # bare and has the keyboard, and drops every key, ilo's shortcuts with them (#3233). A click on
+  # the sidebar gives the UI the keyboard, as the user's would, and the steps after load the warning
+  # again from the command bar.
+  if [ "$(uname)" = Darwin ]; then
     send state
-    send key x
-    send key y
-    expect "^browser: title $beside beside has xy\$" \
-      "typing after a click on the page beside $warned_tab's warning before http didn't reach that page: the keyboard is in $key, on $focus: $(since "$clicked" | grep -e '^browser: drive' -e "^browser: title $beside " | tail -6 | tr '\n' ' ')"
-    since "$clicked" | grep -q "^browser: title $beside beside blurred\$" &&
-      fail "the page beside $warned_tab's warning before http lost the keyboard after the click into it: $(since "$clicked" | grep -e '^browser: drive' -e "^browser: title $beside " | tail -6 | tr '\n' ' ')"
-    send key w cmd
-    expect "^browser: tab $beside closed\$" "⌘W didn't close the pane beside $warned_tab's warning before http"
-    expect "^browser: panes $warned_tab\$" "⌘W on the pane beside the warning didn't leave $warned_tab alone"
-    tab=$warned_tab
+    if [ "$key" != NativeWidgetMacNSWindow ]; then
+      send layout
+      echo "skip: Chrome's warning before http shown again with the keyboard once the pane beside it closes, on the Mac: the keyboard is in $key, on $focus, and the window's children are$(since | sed -n 's/^browser: layout child / /p' | tr '\n' ',') (#3233)."
+      send click $sidebar_point
+      in_browser AccessKitSubclassOfGPUIView "a click on the sidebar beside $warned_tab's page, alone again after ⌘W closed the pane beside it"
+    fi
   fi
 fi
 if [ "$major" -ge 157 ]; then
