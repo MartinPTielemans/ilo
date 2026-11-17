@@ -156,16 +156,12 @@ class PaneKeyboard : public aura::client::FocusChangeObserver,
                      public ui::HWNDMessageFilter,
                      public views::WidgetObserver {
  public:
-  // |took_keyboard| runs each time the slot's HWND takes the keyboard, and |pressed_elsewhere|
-  // says whether the window is giving it back to the pane for a press on the UI or another pane.
-  PaneKeyboard(views::Widget* widget,
-               base::RepeatingClosure took_keyboard,
-               base::RepeatingCallback<bool()> pressed_elsewhere)
+  // |took_keyboard| runs each time the slot's HWND takes the keyboard.
+  PaneKeyboard(views::Widget* widget, base::RepeatingClosure took_keyboard)
       : widget_(widget),
         hwnd_(views::HWNDForWidget(widget)),
         client_(aura::client::GetFocusClient(widget->GetNativeView())),
-        took_keyboard_(std::move(took_keyboard)),
-        pressed_elsewhere_(std::move(pressed_elsewhere)) {
+        took_keyboard_(std::move(took_keyboard)) {
     if (client_) {
       client_->AddObserver(this);
     }
@@ -181,11 +177,8 @@ class PaneKeyboard : public aura::client::FocusChangeObserver,
   void OnWindowFocused(aura::Window* gained_focus, aura::Window*) override {
     // A click on a page whose tab shows a dialog focuses the pane here, as the page, ignoring input
     // under the dialog, won't take it, and every key the pane then has is lost: the dialog takes
-    // the keyboard back, as on the Mac (#2625). Not as the window gives the pane the keyboard back
-    // for a press elsewhere: the dialog then took it from the UI the user pressed (#2910).
-    if (!pressed_elsewhere_.Run()) {
-      dialog_keys::PageViewFocused(gained_focus);
-    }
+    // the keyboard back, as on the Mac (#2625).
+    dialog_keys::PageViewFocused(gained_focus);
     const bool take =
         gained_focus && GetFocus() != hwnd_ && GetActiveWindow() == GetAncestor(hwnd_, GA_ROOT);
     VLOG(1) << "pane " << hwnd_ << " focuses " << Describe(gained_focus)
@@ -286,7 +279,6 @@ class PaneKeyboard : public aura::client::FocusChangeObserver,
   HWND hwnd_;
   raw_ptr<aura::client::FocusClient> client_;
   base::RepeatingClosure took_keyboard_;
-  base::RepeatingCallback<bool()> pressed_elsewhere_;
   bool taking_ = false;
   base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{this};
   base::WeakPtrFactory<PaneKeyboard> weak_factory_{this};
@@ -407,11 +399,14 @@ bool Tapped(HWND root) {
 
 }  // namespace alt_taps
 
-// Which window a press activating a browser window went to. Windows sends it WM_MOUSEACTIVATE
-// first, and a thread's WH_CALLWNDPROC hook sees that whichever window answers it: the window
-// under a page's content is content's own, which answers it without passing it on to the pane
-// (LegacyRenderWidgetHostHWND::OnMouseActivate). The hook is set only while a browser window is
-// in the back, as only a press bringing one forward is asked about.
+// Which window a press activating a browser window went to. Windows tells each of the pressed
+// window's parents with WM_PARENTNOTIFY first, then sends it WM_MOUSEACTIVATE, and a thread's
+// WH_CALLWNDPROC hook sees both whichever window answers them: the window under a page's content
+// is content's own, which answers WM_MOUSEACTIVATE without passing it on to the pane
+// (LegacyRenderWidgetHostHWND::OnMouseActivate), and the UI's holder focuses the UI on hearing of
+// its press (host.cc), which activates the window before WM_MOUSEACTIVATE comes. The window's own
+// WM_PARENTNOTIFY, which names no child, is the last. The hook is set only while a browser window
+// is in the back, as only a press bringing one forward is asked about.
 namespace presses {
 
 HHOOK g_hook = nullptr;
@@ -420,14 +415,27 @@ HWND g_pressed = nullptr;
 
 LRESULT CALLBACK Sent(int code, WPARAM own, LPARAM sent) {
   const auto* message = reinterpret_cast<const CWPSTRUCT*>(sent);
-  if (code == HC_ACTION && message->message == WM_MOUSEACTIVATE) {
+  if (code != HC_ACTION) {
+    return CallNextHookEx(nullptr, code, own, sent);
+  }
+  const UINT told = LOWORD(message->wParam);
+  if (message->message == WM_MOUSEACTIVATE ||
+      (message->message == WM_PARENTNOTIFY &&
+       (told == WM_LBUTTONDOWN || told == WM_RBUTTONDOWN || told == WM_MBUTTONDOWN ||
+        told == WM_XBUTTONDOWN) &&
+       GetAncestor(message->hwnd, GA_ROOT) != message->hwnd)) {
     g_pressed = message->hwnd;
   }
   return CallNextHookEx(nullptr, code, own, sent);
 }
 
-// A browser window went to the back.
-void Wait() {
+// |root|, a browser window, went to the back. A press in it the hook heard while another window
+// was in the back is forgotten: it came while |root| was in front, so it brought nothing forward,
+// and |root| coming back by the keyboard or the taskbar would read it as its own.
+void Wait(HWND root) {
+  if (g_pressed && GetAncestor(g_pressed, GA_ROOT) == root) {
+    g_pressed = nullptr;
+  }
   if (g_waiting++ == 0) {
     g_pressed = nullptr;
     g_hook = SetWindowsHookExW(WH_CALLWNDPROC, Sent, nullptr, GetCurrentThreadId());
@@ -550,8 +558,7 @@ class WindowViews : public views::WidgetObserver,
       slot.keyboard = std::make_unique<PaneKeyboard>(
           slot.widget.get(),
           base::BindRepeating(&WindowViews::PaneTookKeyboard, base::Unretained(this),
-                              slot.widget.get()),
-          base::BindRepeating(&WindowViews::GivingBackForPressElsewhere, base::Unretained(this)));
+                              slot.widget.get()));
     }
     return slot.widget.get();
   }
@@ -565,13 +572,6 @@ class WindowViews : public views::WidgetObserver,
   // pane is a host of its own, whose window the dialog doesn't belong to (#2855).
   void PaneTookKeyboard(views::Widget* holder) {
     set_ui_holds_for_page(false);
-    // Not as a press elsewhere, on the UI or another pane, activates the window: the window gives
-    // the pane the keyboard back for a moment first (FilterMessage), and the dialog taking it then
-    // took it from the UI the user pressed. Coming back by the keyboard or the taskbar, the pane
-    // keeps it, so the dialog takes it, wherever the pointer is.
-    if (giving_back_for_press_elsewhere_) {
-      return;
-    }
     for (Window* window : Window::All()) {
       if (window->widget() != widget_) {
         continue;
@@ -582,8 +582,6 @@ class WindowViews : public views::WidgetObserver,
       }
     }
   }
-
-  bool GivingBackForPressElsewhere() const { return giving_back_for_press_elsewhere_; }
 
   // The window's child |hwnd| is or is in, the UI's or a pane's, or null if it's none of them.
   HWND ChildHolding(HWND hwnd) const {
@@ -892,12 +890,13 @@ class WindowViews : public views::WidgetObserver,
       had_keyboard_ = focus && IsChild(hwnd, focus) ? focus : nullptr;
       pressed_ = nullptr;
       if (!std::exchange(in_back_, true)) {
-        presses::Wait();
+        presses::Wait(hwnd);
       }
     } else if (message == WM_ACTIVATE) {
-      // By a press (WA_CLICKACTIVE), on the UI or a pane, or by the keyboard or the taskbar.
-      HWND pressed = presses::Pressed(hwnd);
-      pressed_ = LOWORD(w_param) == WA_CLICKACTIVE ? ChildHolding(pressed) : nullptr;
+      // By a press, on the UI or a pane, or by the keyboard or the taskbar. Not always
+      // WA_CLICKACTIVE: a press on the UI activates the window from inside its holder's SetFocus
+      // (WM_PARENTNOTIFY), before Windows sends WM_MOUSEACTIVATE (#2910).
+      pressed_ = ChildHolding(presses::Pressed(hwnd));
       if (std::exchange(in_back_, false)) {
         presses::StopWaiting();
       }
@@ -905,10 +904,12 @@ class WindowViews : public views::WidgetObserver,
       HWND from = reinterpret_cast<HWND>(w_param);
       HWND had = std::exchange(had_keyboard_, nullptr);
       HWND pressed = std::exchange(pressed_, nullptr);
+      // Not for a press elsewhere, on the UI or another pane, which takes the keyboard itself: a
+      // tab's dialog in the pane took it from the pane then, from the UI the user pressed (#2910).
+      // Coming back by the keyboard or the taskbar, or by a press on that pane, the pane takes it
+      // back, and a dialog there takes it from the pane, wherever the pointer is.
       if (had && from != hwnd && !(from && IsChild(hwnd, from)) && IsChild(hwnd, had) &&
-          IsWindowVisible(had)) {
-        base::AutoReset<bool> elsewhere(&giving_back_for_press_elsewhere_,
-                                        pressed && pressed != ChildHolding(had));
+          IsWindowVisible(had) && !(pressed && pressed != ChildHolding(had))) {
         SetFocus(had);
       }
     } else if (message == WM_SIZE) {
@@ -975,8 +976,6 @@ class WindowViews : public views::WidgetObserver,
   HWND pressed_ = nullptr;
   // Between going to the back and coming forward, while presses::Wait() counts it.
   bool in_back_ = false;
-  // While the window gives the keyboard back to a pane that had it, for a press elsewhere.
-  bool giving_back_for_press_elsewhere_ = false;
   // The DPI the last WM_DPICHANGED carried, 0 before one comes (Scale).
   UINT dpi_ = 0;
   bool minimized_ = false;
