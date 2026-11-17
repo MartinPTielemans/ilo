@@ -1931,6 +1931,10 @@ impl Browser for Engine {
         settings::set_sidebar_right(right, cx);
     }
 
+    fn keep_top_bar(&self, on: bool, cx: &mut App) {
+        settings::set_top_bar(on, cx);
+    }
+
     fn shortcuts(&self, cx: &mut App) {
         settings::show_shortcuts(cx);
     }

@@ -1493,6 +1493,10 @@ windows-close-hovered = 0xc42b1c
 # URL field does, so the page has the room under the row the header leaves. The buttons are the
 # header's, their glyphs Lucide's at 18, whose 1.69 pt stroke matches the header glyphs' 1.75.
 little-bar = 46.0
+# Top bar (#3160), off by default: the header's row widened across the window, Little ilo's bar's
+# height, its buttons where they are in the sidebar. The URL field moves into it, centred on its
+# line, from the sidebar's edge to the card's right edge, and the card starts under it.
+top-bar = 46.0
 little-glyph = 18.0
 # Open in <Space> ⌘O | ⌄ ends the bar (Arc 1.168, measured by an outside reverse-engineering,
 # *interim*, #1407), in ilo's look: the words in the body size at medium, its key dimmer after them,
