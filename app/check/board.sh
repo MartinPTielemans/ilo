@@ -4,10 +4,12 @@
 # where the first note's field takes the keys typed next. The page saves the note a second later,
 # in its own Board's folder alone, and no log line says what the note or the name is. Library ›
 # Boards lists it. Renamed while open, opened from the command bar by the start of its name,
-# unpinned, archived and reopened, it's still only "(a Board)" in the log, never its name. A Board whose file holds markup in a note's text and a javascript: link runs
-# neither. A Board's file over 4 MB opens, and a change to it isn't saved: the page says so in a
-# note in its top corner, captured. A private window has no New Board, and a Board's address there
-# shows "This Board isn't here.", captured. Japanese input as the first keys is the hosted Mac's.
+# unpinned, archived and reopened, it's still only "(a Board)" in the log, never its name, and the
+# reopened page reads its file: a change keeps the note. A Board whose file holds markup in a
+# note's text and a javascript: link runs neither. A Board's file over 4 MiB, which the host
+# doesn't read, says so and is never written over, captured. A private window has no New Board,
+# and a Board's address there shows "This Board isn't here.", captured. Japanese input as the
+# first keys is the hosted Mac's.
 
 log="$out/board.log"
 step=0
@@ -105,6 +107,18 @@ grep -q "^browser: title $board (a Board)\$" "$log" ||
   fail "the reopened Board's title line doesn't say \"(a Board)\": $(grep "^browser: title $board " "$log" | tail -1)"
 written=$(grep -v '^browser: drive [0-9]*: ' "$log" | grep 'shelves\|kitchen\|pantry' | head -1)
 [ -z "$written" ] || fail "the log says what the Board holds: $written"
+# The reopened page read its file: a pan, which it saves, keeps the note. A page that couldn't
+# read it would have nothing to write over it but nothing.
+saves=$(grep -c 'browser: board saved$' "$log")
+send scroll 640 400 40 5
+for _ in $(seq 50); do
+  [ "$(grep -c 'browser: board saved$' "$log")" -gt "$saves" ] && break
+  sleep 0.1
+done
+[ "$(grep -c 'browser: board saved$' "$log")" -gt "$saves" ] ||
+  fail "a pan on the reopened Board wasn't saved: $(grep 'browser: board ' "$log" | tail -1)"
+grep -q 'shelves over the sink' "$folder/board.json" ||
+  fail "the reopened Board's save lost its note: $(head -c 300 "$folder/board.json")"
 
 # 1c: a Board whose note's text is markup, and a link to javascript:, runs neither: each would
 # take the page to #ran, which its page line would say, as a Board's title is never logged. Its id
@@ -126,31 +140,30 @@ expect "^browser: loaded [0-9]* chrome://board/$markup\$" "the Board with markup
   fail "a Board's note's markup or its javascript: link ran"
 ../tools/window-screenshot.sh "$pid" "$out/board-markup.png" || fail "no window to capture"
 
-# A Board's file over 4 MB opens, and a change isn't saved: the page says so in its corner.
+# A Board's file over 4 MiB, which the host doesn't read, says so, and a pan doesn't write over it.
+# Other Boards save as a hover card's picture shows them, so the file is what's compared.
 large=$(printf 'c%.0s' $(seq 32))
 mkdir -p "$boards/$large"
-python3 -I - "$boards/$large/board.json" <<'PYEOF'
+python3 -I - "$boards/$large/board.json" <<'PYEOF2'
 import json, sys
 cards = [{"id": "a", "kind": "note", "x": 80, "y": 140, "w": 240, "text": "A note"},
          {"id": "z", "kind": "note", "x": 90000, "y": 90000, "w": 200, "text": "x" * 4300000}]
 json.dump({"version": 1, "camera": {"x": 0, "y": 0, "zoom": 1}, "cards": cards}, open(sys.argv[1], "w"))
-PYEOF
-before=$(wc -c < "$boards/$large/board.json")
+PYEOF2
+before=$(cksum < "$boards/$large/board.json")
 send key t cmd
 expect '^browser: command bar shown$' "⌘T didn't open the command bar"
 send insert "chrome://board/$large"
 send key return
-expect "^browser: loaded [0-9]* chrome://board/$large\$" "the Board over 4 MB didn't load"
-# A pan is a change, which the page saves a second after the camera rests.
+expect "^browser: loaded [0-9]* chrome://board/$large\$" "the Board over 4 MiB didn't load"
 send scroll 640 400 40 5
-saves=$(grep -c 'browser: board saved$' "$log")
 for _ in $(seq 30); do
   # The window a save would come in: the camera's rest (0.2 s) and the page's second after it.
   sleep 0.1
 done
-[ "$(grep -c 'browser: board saved$' "$log")" = "$saves" ] || fail "the Board over 4 MB was saved"
-[ "$(wc -c < "$boards/$large/board.json")" = "$before" ] || fail "the Board's file over 4 MB changed"
-../tools/window-screenshot.sh "$pid" "$out/board-refused.png" || fail "no window to capture"
+[ "$(cksum < "$boards/$large/board.json")" = "$before" ] ||
+  fail "the Board's file over 4 MiB was written over: $(wc -c < "$boards/$large/board.json") bytes"
+../tools/window-screenshot.sh "$pid" "$out/board-unread.png" || fail "no window to capture"
 
 # 4: a private window has no New Board, and a Board's address there finds no Board.
 send key n cmd shift
@@ -171,6 +184,6 @@ expect "^browser: loaded [0-9]* chrome://board/$id\$" "the Board's address didn'
 quit
 echo "ok: New Board made $id, its name kept and its note saved in its folder alone, unlogged;" \
   "Library › Boards listed it; renamed, found by the bar, archived and reopened, the log said" \
-  "only \"(a Board)\"; markup and a javascript: link ran nothing; a Board over 4 MB" \
-  "wasn't saved; a private window had no New Board. Windows: $out/board.png" \
-  "$out/board-markup.png $out/board-refused.png $out/board-private.png"
+  "only \"(a Board)\", and its next save kept the note; markup and a javascript: link ran" \
+  "nothing; a Board over 4 MiB wasn't written over; a private window had no New Board." \
+  "Windows: $out/board.png $out/board-markup.png $out/board-unread.png $out/board-private.png"

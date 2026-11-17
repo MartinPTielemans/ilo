@@ -38,8 +38,12 @@ pub fn dir(profile: &Path) -> PathBuf {
     profile.join("Boards")
 }
 
-/// Makes Board `id`'s folder in `profile`'s, which the host reads as the Board being there. It
-/// blocks, so it runs off the main thread.
+/// An empty Board's file, as its page writes one.
+const EMPTY: &str = r#"{"version":1,"camera":{"x":0,"y":0,"zoom":1},"cards":[]}"#;
+
+/// Makes Board `id`'s folder in `profile`'s, which the host reads as the Board being there, with an
+/// empty Board's file in it. Every Board has its file from the start, so a page that can't read one
+/// knows the file is there and never writes over it. It blocks, so it runs off the main thread.
 pub fn make(profile: &Path, id: &str) -> io::Result<PathBuf> {
     if !is_id(id) {
         return Err(io::Error::new(
@@ -49,6 +53,15 @@ pub fn make(profile: &Path, id: &str) -> io::Result<PathBuf> {
     }
     let folder = dir(profile).join(id);
     std::fs::create_dir_all(&folder)?;
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(folder.join("board.json"));
+    match file {
+        Ok(mut file) => io::Write::write_all(&mut file, EMPTY.as_bytes())?,
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error),
+    }
     Ok(folder)
 }
 
@@ -203,8 +216,13 @@ mod tests {
         let made = make(&profile, &id).unwrap();
         assert_eq!(made, profile.join("Boards").join(&id));
         assert!(made.is_dir());
-        // Again is the same folder, as a second New Board never meets one.
+        let file = made.join("board.json");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), EMPTY);
+        // Again is the same folder, as a second New Board never meets one, and its file isn't
+        // written over.
+        std::fs::write(&file, "kept").unwrap();
         assert_eq!(make(&profile, &id).unwrap(), made);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "kept");
         assert!(make(&profile, "../outside").is_err());
         std::fs::remove_dir_all(&profile).unwrap();
     }
