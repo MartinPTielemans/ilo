@@ -21,6 +21,7 @@
 #include "browser_core/ad_block.h"
 #include "browser_core/address_import.h"
 #include "browser_core/agent_autofill.h"
+#include "browser_core/agent_close.h"
 #include "browser_core/agent_page.h"
 #include "browser_core/agent_request.h"
 #include "browser_core/agent_session.h"
@@ -620,13 +621,7 @@ int bc_agent_close_tab(const char* agent, bc_id tab, bool discard) {
   if (browser_core::Space::Holding(tab)->IsPinned(tab)) {
     return BC_AGENT_CLOSE_PINNED;
   }
-  if (!discard && closing->AsksBeforeLeaving()) {
-    return BC_AGENT_CLOSE_ASKS;
-  }
-  // Without its unload handlers either way: no frame asks before it's left, or the agent said to
-  // lose what it holds, and the tab is gone before the agent hears it closed (#1447, #1449).
-  browser_core::Window::CloseTab(tab, /*discard=*/true);
-  return BC_AGENT_CLOSED;
+  return browser_core::AgentCloseTab(tab, discard);
 }
 
 bool bc_tab_take_back(bc_id tab) {
