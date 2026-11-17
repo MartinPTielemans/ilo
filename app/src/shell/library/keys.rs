@@ -224,7 +224,10 @@ mod tests {
     ) -> (Entity<Shell>, Rc<Recorder>, &mut VisualTestContext) {
         let host = Rc::new(Recorder::default());
         let browser = host.clone();
-        cx.update(bind_keys);
+        cx.update(|cx| {
+            bind_keys(cx);
+            crate::text_input::bind_keys(cx);
+        });
         let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
         cx.update(|window, _| window.activate_window());
         cx.simulate_a11y_activation();
@@ -361,6 +364,74 @@ mod tests {
         run(&shell, Command::ViewLibrary, cx);
         assert!(!host.take().contains(&"focus page".to_owned()));
         assert!(root_keyed(&shell, cx));
+    }
+
+    /// The archive's tabs `ids`, for a Library opened on History.
+    fn archive(shell: &Entity<Shell>, ids: &[u64], cx: &mut VisualTestContext) {
+        let tab = |id: u64| crate::shell::Archived {
+            id,
+            url: format!("https://{id}.example/").into(),
+            title: "".into(),
+            archived: 0.,
+            little: false,
+        };
+        let tabs = ids.iter().map(|id| tab(*id)).collect();
+        shell.update(cx, |shell, cx| shell.set_archive(tabs, cx));
+        cx.run_until_parked();
+    }
+
+    /// Opened by its key, the Library's empty search field has the keyboard, and ⌘Z after Clear
+    /// Archive brings the tabs back, as its toast offers, and ⇧⌘Z clears them again (#3306).
+    #[gpui::test]
+    fn z_in_the_empty_field_undoes_clear_archive(cx: &mut TestAppContext) {
+        let (shell, host, cx) = window(Section::Archive, cx);
+        archive(&shell, &[7, 8], cx);
+        cx.simulate_keystrokes("cmd-shift-l");
+        shell.update(cx, |shell, _| {
+            shell.library_motion = None;
+            shell.sidebar_fade = None;
+        });
+        cx.run_until_parked();
+        assert_eq!(keyed(cx), (Role::TextInput, "Search History".into()));
+        shell.update(cx, |shell, cx| shell.clear_archive(cx));
+        let (_, _, confirmed) = host
+            .confirming
+            .borrow_mut()
+            .take()
+            .expect("Clear Archive asked");
+        cx.update(|_, cx| confirmed(cx));
+        cx.run_until_parked();
+        assert_eq!(host.take_edits(), ["archive clear as 9001"]);
+        assert_eq!(keyed(cx), (Role::TextInput, "Search History".into()));
+        cx.simulate_keystrokes("cmd-z");
+        assert_eq!(host.take_edits(), ["undo archive remove 9001"]);
+        cx.simulate_keystrokes("cmd-shift-z");
+        assert_eq!(host.take_edits(), ["archive clear as 9002"]);
+    }
+
+    /// With text in the Library's search field, ⌘Z stops at the field, so typing never undoes
+    /// what's out of sight, here a tab deleted from the archive before the search.
+    #[gpui::test]
+    fn z_with_text_in_the_field_undoes_nothing(cx: &mut TestAppContext) {
+        let (shell, host, cx) = window(Section::Archive, cx);
+        archive(&shell, &[7, 8], cx);
+        run(&shell, Command::ViewLibrary, cx);
+        shell.update(cx, |shell, cx| shell.delete_archived(7, cx));
+        assert_eq!(host.take_edits(), ["archive remove 7 as 9001"]);
+        cx.simulate_input("ex");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("cmd-z");
+        assert!(
+            host.take_edits().is_empty(),
+            "⌘Z with text in the field undid the delete"
+        );
+        let text = shell.read_with(cx, |shell, cx| {
+            shell
+                .library
+                .as_ref()
+                .map(|library| library.search.read(cx).text().to_string())
+        });
+        assert_eq!(text.as_deref(), Some("ex"));
     }
 
     /// Opened by a swipe, or set open as the gesture does, the Library leaves the keyboard where

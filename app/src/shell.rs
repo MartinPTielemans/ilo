@@ -1498,6 +1498,8 @@ pub struct Shell {
     fields_drawn: Rc<RefCell<HashMap<u64, bool>>>,
     /// Where the Library's empty line was last laid out, for its log line.
     empty_drawn: Rc<RefCell<String>>,
+    /// Where each of the Library's section buttons was last drawn, for its log line.
+    buttons_drawn: Rc<RefCell<HashMap<&'static str, Bounds<Pixels>>>>,
     /// The line under the favorites, shown while the list is past its top, and the one at its
     /// foot, while rows are hidden under it.
     top_edge: swipe::EdgeLine,
@@ -2138,6 +2140,7 @@ impl Shell {
             card_press_closes: false,
             fields_drawn: Rc::default(),
             empty_drawn: Rc::default(),
+            buttons_drawn: Rc::default(),
             top_edge: Default::default(),
             foot_edge: Default::default(),
             list_measured: Default::default(),

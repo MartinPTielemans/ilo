@@ -1050,6 +1050,22 @@ impl Shell {
         self.filter(true, cx);
     }
 
+    /// ⌘Z, or ⇧⌘Z unless `undoing`, in the Library's search field: while it's empty, nothing typed
+    /// there could seem to be what the key undoes, so it's the window's step, the one the toast
+    /// offers after Clear Archive or Delete from Archive (#3306). With text in it, the key goes on
+    /// to the field, which keeps it from undoing what's out of sight.
+    fn step_past_search(&mut self, undoing: bool, cx: &mut Context<Self>) {
+        let empty = (self.library.as_ref())
+            .is_some_and(|library| library.search.read(cx).text().is_empty());
+        if empty {
+            match undoing {
+                true => self.undo(cx),
+                false => self.redo(cx),
+            };
+            cx.stop_propagation();
+        }
+    }
+
     /// Closes the Library at once, as a page goes full screen.
     pub(super) fn close_library_now(&mut self) {
         self.library = None;
@@ -1828,6 +1844,13 @@ impl Shell {
                     window.focus(&search.focus_handle(cx), cx);
                 }),
             )
+            // Ahead of the field, which ends ⌘Z and ⇧⌘Z as it has no undo of its own.
+            .capture_action(cx.listener(|shell, _: &crate::text_input::Undo, _, cx| {
+                shell.step_past_search(true, cx)
+            }))
+            .capture_action(cx.listener(|shell, _: &crate::text_input::Redo, _, cx| {
+                shell.step_past_search(false, cx)
+            }))
             .text_size(px(text::BODY))
             .text_color(self.palette.text(FORM_TEXT))
             .child(
@@ -3631,6 +3654,26 @@ impl Shell {
             Section::Boosts => ("icons/paintbrush.svg", "Boosts"),
             Section::Boards => ("icons/presentation.svg", "Boards"),
         };
+        // check.sh clicks where this says the button is drawn, so a section added to the column
+        // moves no check's click. Said once the column is at rest, not each frame it slides.
+        let (drawn, name) = (self.buttons_drawn.clone(), section.name());
+        let at_rest = !self.library_moving() && self.library_resize.is_none();
+        let log_drawn = canvas(
+            move |bounds, _, _| {
+                if at_rest && drawn.borrow_mut().insert(name, bounds) != Some(bounds) {
+                    log!(
+                        "browser: library button {name} at {} {} {} {}",
+                        f32::from(bounds.origin.x).round(),
+                        f32::from(bounds.origin.y).round(),
+                        f32::from(bounds.size.width).round(),
+                        f32::from(bounds.size.height).round(),
+                    );
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .size_full();
         div()
             .id(label)
             .relative()
@@ -3683,6 +3726,7 @@ impl Shell {
                     .text_color(self.palette.text(SECTION_LABEL))
                     .child(label),
             )
+            .child(log_drawn)
     }
 
     /// A download's row: its file's icon, its name over where it is, and while it runs, a bar. A
@@ -4430,9 +4474,11 @@ mod tests {
             shell.sidebar_fade = None;
         });
         cx.run_until_parked();
-        let height = cx.update(|window, _| f32::from(window.viewport_size().height));
-        // The fifth button, History, the column's seven centred 5 above its middle, 100 apart.
-        let section = point(px(SECTION_X + SECTION_WIDTH / 2.), px(height / 2. + 95.));
+        // History's button at its middle, where its log line says the column drew it.
+        let section = shell.read_with(cx, |shell, _| {
+            shell.buttons_drawn.borrow()["archive"].center()
+        });
+        assert_eq!(section.x, px(SECTION_X + SECTION_WIDTH / 2.));
         let menu = |cx: &mut gpui::VisualTestContext| {
             cx.simulate_mouse_down(section, MouseButton::Right, Modifiers::none());
             cx.simulate_mouse_up(section, MouseButton::Right, Modifiers::none());
