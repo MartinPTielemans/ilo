@@ -917,6 +917,11 @@ impl Blocker {
         wanted
     }
 
+    /// The last engine loaded, without waiting for the first: for the main thread, which mustn't.
+    pub fn loaded(&self) -> Option<Arc<Engine>> {
+        self.state.lock().unwrap().engine.clone()
+    }
+
     /// The engine to ask now: the last one loaded, or after launch, the first, waited for up to
     /// FIRST_WAIT. None lets the request go.
     pub fn engine(&self) -> Option<Arc<Engine>> {

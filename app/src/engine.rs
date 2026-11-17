@@ -2,6 +2,7 @@
 //! answers.
 
 use super::*;
+use browser::shell::LiveSource;
 use std::time::Instant;
 
 /// A window's shell's requests, as calls to the core. The core reports back once each call has
@@ -186,6 +187,20 @@ impl Browser for Engine {
         unsafe { bc::bc_folder_delete(folder) };
     }
 
+    fn create_live_folder(&self, space: u64, source: LiveSource, name: &str, _: &mut App) -> u64 {
+        let name = CString::new(name).unwrap_or_default();
+        unsafe { bc::bc_folder_live_create(space, spaces::live_source(source), name.as_ptr()) }
+    }
+
+    fn end_live_folder(&self, folder: u64, _: &mut App) {
+        unsafe { bc::bc_folder_live_end(folder) };
+    }
+
+    // The core knows what fills the folder, so `source` only names it to the app.
+    fn fetch_live_folder(&self, folder: u64, _: LiveSource, refresh: bool, _: &mut App) {
+        unsafe { bc::bc_folder_live_fetch(folder, refresh) };
+    }
+
     fn separate(&self, tab: u64, _: &mut App) {
         unsafe { bc::bc_tab_separate(tab) };
     }
@@ -279,6 +294,11 @@ impl Browser for Engine {
 
     fn back_to_pinned_url(&self, tab: u64, _: &mut App) {
         unsafe { bc::bc_tab_back_to_pinned_url(tab) };
+    }
+
+    fn navigate(&self, tab: u64, url: &str, _: &mut App) {
+        let url = CString::new(url).unwrap_or_default();
+        unsafe { bc::bc_tab_navigate(tab, url.as_ptr()) };
     }
 
     fn set_muted(&self, tab: u64, muted: bool, _: &mut App) {
@@ -1013,6 +1033,50 @@ impl Browser for Engine {
         }
     }
 
+    fn new_board(
+        &self,
+        space: u64,
+        id: String,
+        capture: Option<Vec<u8>>,
+        opened: Box<dyn FnOnce(u64, &mut App)>,
+        cx: &mut App,
+    ) {
+        let profile = unsafe { bc::bc_space_profile(space) };
+        let Some(folder) = bar_picks_host::folder(profile) else {
+            return;
+        };
+        let window = self.window;
+        let made = cx.background_spawn({
+            let id = id.clone();
+            async move { browser::boards::make(&folder, &id) }
+        });
+        cx.spawn(async move |cx| {
+            if let Err(error) = made.await {
+                log!("browser: new board {id} failed: {error}");
+                return;
+            }
+            // The capture is in the Board before a page of it opened after this reads it.
+            if let Some(png) = capture {
+                capture_host::put_on_board(profile, &id, &png);
+            }
+            // Its page opens once the folder is there, so the host finds the Board at its hello.
+            cx.update(|cx| {
+                let tab = open_tab_behind(window, &browser::boards::url(&id), false);
+                if tab == 0 {
+                    return;
+                }
+                unsafe {
+                    bc::bc_tab_set_pinned(tab, true);
+                    bc::bc_window_select(window, tab);
+                }
+                // check/board.sh reads this line.
+                log!("browser: new board {id} tab {tab}");
+                opened(tab, cx);
+            });
+        })
+        .detach();
+    }
+
     fn site_search_settings(&self, _: &mut App) {
         open_tab(self.window, "chrome://settings/searchEngines");
     }
@@ -1388,6 +1452,11 @@ impl Browser for Engine {
         unsafe { platform::host_set_sidebar_right(self.ui_view, right) };
     }
 
+    #[cfg(target_os = "windows")]
+    fn set_window_buttons_right(&self, right: bool, _: &mut App) {
+        unsafe { platform::host_set_window_buttons_right(self.ui_view, right) };
+    }
+
     fn little_drawn(&self, _: &mut App) {
         unsafe { platform::host_grow_little_window(self.ui_view) };
     }
@@ -1752,6 +1821,14 @@ impl Browser for Engine {
         }
     }
 
+    fn link_cards(&self) -> bool {
+        crate::link_cards::on()
+    }
+
+    fn link_card(&self, tab: u64) -> u64 {
+        crate::link_cards::ask(tab)
+    }
+
     fn link_target(
         &self,
         plate: Option<(link_target::Plate, Bounds<Pixels>, link_target::Side)>,
@@ -1898,6 +1975,10 @@ impl Browser for Engine {
 
     fn tab_switcher(&self, ask: browser::tab_switcher::Ask, cx: &mut App) {
         browser::tab_switcher::ask(ask, cx);
+    }
+
+    fn fetch_recent(&self, tab: u64, _: &mut App) {
+        recent_host::fetch(self.window, tab);
     }
 
     fn card_picture(&self, tab: u64, scale: f32, cx: &mut App) {

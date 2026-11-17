@@ -58,6 +58,7 @@ fn card(tab: u64, pictured: bool) -> Card {
         panes: Vec::new(),
         focused: tab,
         ring: gpui::black(),
+        recent: None,
     }
 }
 
@@ -73,6 +74,8 @@ fn rest_in(cx: &mut TestAppContext, told: &Told, window: u64, card: Card) {
             Event::Shown => format!("shown {tab}"),
             Event::Act(action) => format!("{} {tab}", action.label()),
             Event::Pointer(on) => format!("pointer {} {tab}", on as u8),
+            Event::Open(row, opening) => format!("open #{} {} {tab}", row.number, opening.label()),
+            Event::SignIn => format!("sign in {tab}"),
         })
     });
     let anchor = row(card.tab);
@@ -503,6 +506,30 @@ fn the_tab_shown_has_no_picture_box(cx: &mut TestAppContext) {
     cx.update(|cx| answered(request, Some(picture(528, 352)), cx));
     rest_on(cx, &told, card(1, false));
     assert_eq!(after(cx, &host, DWELL), [shown(1, height(0.))]);
+}
+
+/// What's recent's box is the headings over three rows whatever the answer, so one replacing the
+/// rows' places on an open card doesn't move it, and only the stale line makes it taller.
+#[test]
+fn whats_recents_box_keeps_its_height_but_for_the_stale_line() {
+    let with = |recent: Recent| {
+        let mut card = card(1, true);
+        card.recent = Some(recent);
+        box_height(&card, None)
+    };
+    let rows = |stale: Option<&str>| Recent::Rows {
+        rows: Vec::new(),
+        stale: stale.map(SharedString::from),
+    };
+    let loading = with(Recent::Loading);
+    for answered in [rows(None), Recent::SignedOut, Recent::Unreachable] {
+        assert_eq!(with(answered), loading);
+    }
+    assert_eq!(
+        with(rows(Some("Couldn't refresh"))),
+        loading + RECENT_HEADING
+    );
+    assert!(loading + RECENT_HEADING <= INNER * PICTURE_MOST);
 }
 
 #[test]

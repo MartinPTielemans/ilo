@@ -2874,6 +2874,13 @@ std::map<HWND, bool>& WindowButtonsShown() {
   return shown;
 }
 
+// The browser windows whose buttons are at the right with the sidebar on the left
+// (host_set_window_buttons_right).
+std::set<HWND>& ButtonsRight() {
+  static std::set<HWND> right;
+  return right;
+}
+
 // How far down the top edge resizes, as thick as Windows' resize border on the other edges.
 int TopEdge(HWND root) {
   const UINT dpi = GetDpiForWindow(root);
@@ -2922,11 +2929,11 @@ int FrameHit(HWND root, POINT at) {
   }
   // Maximize, the second of shell.rs's WINDOW_BUTTONS in Windows' order (windows_buttons), 43
   // from the left and window-button-y (24) down, its plate windows-button-plate (22) across
-  // (design/tokens.toml): kept in step with them. With the sidebar on the right the group is
-  // there, close at the corner, and maximize 43 from the right.
+  // (design/tokens.toml): kept in step with them. With the sidebar on the right, or the top bar
+  // on, the group is at the right, close at the corner, and maximize 43 from the right.
   const double scale = Scale(root);
-  const double across = SidebarRight().count(root) ? client.right / scale - at.x / scale
-                                                   : at.x / scale;
+  const bool right = SidebarRight().count(root) || ButtonsRight().count(root);
+  const double across = right ? client.right / scale - at.x / scale : at.x / scale;
   auto shown = WindowButtonsShown().find(root);
   if (shown != WindowButtonsShown().end() && shown->second && std::abs(across - 43) <= 11 &&
       std::abs(at.y / scale - 24) <= 11) {
@@ -3159,6 +3166,7 @@ LRESULT CALLBACK FrameProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam
       }
       WindowButtonsShown().erase(hwnd);
       SidebarRight().erase(hwnd);
+      ButtonsRight().erase(hwnd);
       FrameUi().erase(hwnd);
       std::erase_if(LittleViews(), [hwnd](HWND view) {
         return !IsWindow(view) || GetAncestor(view, GA_ROOT) == hwnd;
@@ -4865,6 +4873,9 @@ void host_hide_link_target(double fade) {
   FadeOut(g_link_target, fade, MaybeStopWatchingPointer);
 }
 
+// Windows blend with what's under them, so the room round an overlay's outline shows through.
+void host_outline_overlay(void*, double, double, double, double, double) {}
+
 bool host_mouse_down(void) {
   return Pressed();
 }
@@ -5157,6 +5168,18 @@ void host_set_sidebar_right(void* ui_view, bool right) {
     SidebarRight().insert(root);
   } else {
     SidebarRight().erase(root);
+  }
+}
+
+void host_set_window_buttons_right(void* ui_view, bool right) {
+  HWND root = Root(ui_view);
+  if (!root) {
+    return;
+  }
+  if (right) {
+    ButtonsRight().insert(root);
+  } else {
+    ButtonsRight().erase(root);
   }
 }
 

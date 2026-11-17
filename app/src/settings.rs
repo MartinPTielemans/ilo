@@ -216,6 +216,7 @@ const SHORTCUTS: &[(&str, &[(&str, Keys)])] = &[
             ("Open in Main Window", Keys::Of(Command::OpenInMainWindow)),
             ("New Incognito Window", Keys::Of(Command::NewPrivateWindow)),
             ("New Note", Keys::Of(Command::NewNote)),
+            ("New Board", Keys::Of(Command::NewBoard)),
             ("Open Command Bar", Keys::Of(Command::EditUrl)),
             ("Search Tabs", Keys::Of(Command::SearchTabs)),
             ("Archive Tab", Keys::Of(Command::CloseTab)),
@@ -325,6 +326,7 @@ const SHORTCUTS: &[(&str, &[(&str, Keys)])] = &[
             ("Clear Archive", Keys::Of(Command::ClearArchive)),
             ("View Downloads", Keys::Of(Command::ViewDownloads)),
             ("View Media", Keys::Of(Command::ViewMedia)),
+            ("View Boards", Keys::Of(Command::ViewBoards)),
             ("View History", Keys::Of(Command::ViewHistory)),
             ("Clear Browsing Data", Keys::Of(Command::ClearBrowsingData)),
         ],
@@ -2321,6 +2323,51 @@ impl Settings {
 
     /// Features: ilo's own tools, each its glyph, its name, its ways in and its switch, and its
     /// own settings under it.
+    /// Links: the cards ⇧ shows of a link in a page, then where a link from another app opens.
+    fn links(&self, accent: Rgba, cx: &mut Context<Self>) -> Page {
+        let shift = if cfg!(target_os = "macos") {
+            "⇧"
+        } else {
+            "Shift"
+        };
+        let cards = self.toggle(
+            "link cards",
+            "Link cards",
+            crate::link_cards::on(),
+            set_link_cards,
+            accent,
+            cx,
+        );
+        // The privacy page's line, as the switch's (#3080).
+        let cards = setting(
+            &self.look,
+            "Link cards",
+            Some(
+                format!(
+                    "Press {shift} on a link to see its page's title, description and picture, \
+                     asked without your cookies."
+                )
+                .into(),
+            ),
+            vec![cards],
+        );
+        let rules = self
+            .links
+            .clone()
+            .map(|links| Block::View(links.into_any_element()));
+        Page::new(
+            Section::Links,
+            "What a link in a page shows, and where a link from another app opens.",
+            [
+                Block::Rows(vec![cards]),
+                Block::Heading("From other apps".into()),
+            ]
+            .into_iter()
+            .chain(rules)
+            .collect(),
+        )
+    }
+
     fn features(&self, profiles: &[Profile], accent: Rgba, cx: &mut Context<Self>) -> Page {
         let look = &self.look;
         let mac = cfg!(target_os = "macos");
@@ -2436,6 +2483,25 @@ impl Settings {
             ),
             vec![previews],
         );
+        let recent = self.toggle(
+            "recent in hover cards",
+            "What's recent in hover cards",
+            browser::recent::on(cx),
+            set_recent,
+            accent,
+            cx,
+        );
+        let recent = feature(
+            look,
+            "icons/git-pull-request.svg",
+            "What's recent in hover cards",
+            Some(
+                "A pinned GitHub tab's or favorite's card shows your open pull requests, \
+                 asked of GitHub with your own sign-in as you rest on it."
+                    .into(),
+            ),
+            vec![recent],
+        );
         let mini_player = unsafe { bc::bc_auto_picture_in_picture() };
         let mini_player = self.toggle(
             "mini player",
@@ -2529,13 +2595,16 @@ impl Settings {
             Some(boosts_line.into()),
             vec![boosts],
         );
-        let mut blocks = vec![
-            Block::Rows(little),
-            Block::Rows(vec![peek]),
+        let mut blocks = vec![Block::Rows(little), Block::Rows(vec![peek])];
+        // Not before this build's core can ask a site, where the switch would turn nothing off.
+        if browser::recent::REACHED {
+            blocks.push(Block::Rows(vec![recent]));
+        }
+        blocks.extend([
             Block::Rows(vec![mini_player]),
             Block::Rows(vec![boosts]),
             Block::Rows(note),
-        ];
+        ]);
         if self.widevine.read(cx).shown() {
             blocks.push(Block::Rows(vec![self.widevine_row(cx)]));
         }
@@ -4870,6 +4939,10 @@ fn set_little_in_menu_bar(on: bool, _: &mut App) {
     crate::set_little_in_menu_bar(on);
 }
 
+fn set_link_cards(on: bool, cx: &mut App) {
+    crate::link_cards::set_on(on, cx);
+}
+
 fn set_sign_in_close(on: bool, cx: &mut App) {
     crate::sign_in_close::set_sign_in_close(on, cx);
 }
@@ -5062,6 +5135,10 @@ fn set_mini_player(on: bool, _: &mut App) {
 /// profile directory while it's off, as the core keeps no settings of the app's own.
 const NO_EDGE_REVEAL: &str = "no-edge-reveal";
 const DOCK_ICON_PLAIN: &str = "plain-dock-icon";
+/// What's recent in hover cards, off (#3074); and the sites Site Controls turned it off for, a line
+/// each.
+const NO_RECENT: &str = "no-recent-in-cards";
+const RECENT_SITES_OFF: &str = "recent-off-sites";
 /// Sidebar position, there while it's Right (#2375): this device's, as the other switches are, and
 /// never synced.
 const SIDEBAR_RIGHT: &str = "sidebar-right";
@@ -5087,6 +5164,39 @@ pub fn read_switches(cx: &mut App) {
     cx.set_global(shell::SidebarRight(off(SIDEBAR_RIGHT)));
     cx.set_global(shell::TopBar(off(TOP_BAR)));
     browser::dock_dot::set_plain(off(DOCK_ICON_PLAIN), cx);
+    browser::recent::set_switches(!off(NO_RECENT), recent_sites_off(), cx);
+}
+
+fn recent_sites_off() -> HashSet<SharedString> {
+    std::fs::read_to_string(format!("{}/{RECENT_SITES_OFF}", crate::profile_dir()))
+        .unwrap_or_default()
+        .lines()
+        .filter(|site| !site.is_empty())
+        .map(|site| SharedString::from(site.to_string()))
+        .collect()
+}
+
+/// Off, every profile's kept rows go with it, and no card asks again until it's back on.
+fn set_recent(on: bool, cx: &mut App) {
+    set_off(NO_RECENT, !on);
+    browser::recent::set_on(on, cx);
+}
+
+/// Site Controls' switch for `site` (#3074), kept on this device as General's is.
+pub fn set_recent_site(site: &str, on: bool, cx: &mut App) {
+    browser::recent::set_site_on(site, on, cx);
+    let mut sites: Vec<_> = cx
+        .global::<browser::recent::Recents>()
+        .sites_off
+        .iter()
+        .cloned()
+        .collect();
+    sites.sort();
+    let path = format!("{}/{RECENT_SITES_OFF}", crate::profile_dir());
+    _ = match sites.is_empty() {
+        true => std::fs::remove_file(path),
+        false => std::fs::write(path, sites.join("\n") + "\n"),
+    };
 }
 
 /// Whether Sidebar position is kept as Right, for the launch, before the windows read it.
@@ -5712,18 +5822,7 @@ impl Settings {
                 Some(agents) => self.agents(&agents, accent, cx),
                 None => Page::new(Section::Agents, "", Vec::new()),
             },
-            Section::Links => {
-                let links = self
-                    .links
-                    .clone()
-                    .map(|links| Block::View(links.into_any_element()));
-                Page::new(
-                    Section::Links,
-                    "Where a link from another app opens. Rules run from the top, and the first \
-                     match wins.",
-                    links.into_iter().collect(),
-                )
-            }
+            Section::Links => self.links(accent, cx),
             Section::Shortcuts => self.shortcuts(accent, cx),
             Section::Profiles => {
                 let profiles = profiles();

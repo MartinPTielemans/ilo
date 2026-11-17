@@ -117,6 +117,7 @@ mod popovers;
 #[cfg(target_os = "linux")]
 #[path = "../platform/linux/previews.rs"]
 mod previews;
+mod recent_host;
 #[cfg(target_os = "linux")]
 #[path = "../platform/linux/reduce_motion.rs"]
 mod reduce_motion;
@@ -159,6 +160,7 @@ mod agent_events;
 use agent_events::*;
 mod links;
 use links::*;
+mod link_cards;
 mod little_ilo;
 mod sign_in_close;
 use little_ilo::*;
@@ -236,6 +238,18 @@ fn log_key(key: *const bc::bc_key, when: &str, route: &str) {
     );
 }
 
+/// ⇧ alone on a link, outside a field, grows its plate into the link's card (#3080), and the page
+/// still gets the ⇧, which a shift-click on the link needs; Esc takes a card that shows, and the
+/// page doesn't get it. Some(true) for the Esc kept, None for any other key.
+fn link_card_key(tab: bc::bc_id, key: &bc::bc_key) -> Option<bool> {
+    let name = unsafe { CStr::from_ptr(key.key) };
+    if name == c"Shift" && key.modifiers & !bc::BC_MODIFIER_SHIFT == 0 && !key.editing {
+        update_tab_window(tab, |shell, cx| shell.ask_link_card(tab, cx));
+    }
+    let cx = CX.with_borrow(Clone::clone)?;
+    (name == c"Escape" && cx.update(link_target::close_card)).then_some(true)
+}
+
 /// Whether ilo keeps `key` from the page that has it, and where it went.
 fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static str) {
     // Read at each of the page's keys, whichever way it goes, so the next knows the one before.
@@ -251,6 +265,9 @@ fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static st
     update_app(hover_card::close);
     // The page has the keyboard, so the sidebar's ring of Focus Sidebar has gone stale.
     update_tab_window(tab, |shell, cx| shell.leave_keys("page", cx));
+    if let Some(kept) = link_card_key(tab, unsafe { &*key }) {
+        return (kept, "link card");
+    }
     if let Some(lost) = link_preview_key(tab, key, true) {
         return (lost, "link preview");
     }
@@ -1083,10 +1100,12 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         tab_element_box: Some(tab_element_box),
         tab_link_target: Some(tab_link_target),
         tab_captured: Some(tab_captured),
+        board_capture_added: Some(board_capture_added),
         trace_recorded: Some(trace_recorded),
         tab_pictured: Some(tab_pictured),
         window_suggestions: Some(window_suggestions),
         tab_key_before_page: Some(tab_key_before_page),
+        link_card_fetched: Some(link_cards::link_card_fetched),
         tab_key_unhandled: Some(tab_key_unhandled),
         tab_press_before_page: Some(tab_press_before_page),
         tab_press_moved: Some(tab_press_moved),
@@ -1153,6 +1172,8 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         ad_block_page: Some(ad_block_host::ad_block_page),
         ad_block_hide: Some(ad_block_host::ad_block_hide),
         tab_shown_in: Some(tab_shown_in),
+        tab_recent_answered: Some(recent_host::tab_recent_answered),
+        folder_live_answered: Some(spaces::folder_live_answered),
         ..Default::default()
     };
     (args, host)

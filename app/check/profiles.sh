@@ -134,7 +134,7 @@ name_point="100 112"
 tiled_name="100 159"
 post rightclick $name_point
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, Set Profile › Default, \
-Set Profile › Profile 2 (checked), Set Profile › New Profile, New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+Set Profile › Profile 2 (checked), Set Profile › New Profile, New Folder…, Live Folders › GitHub Pull Requests, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "the empty Space's menu didn't offer its profiles"
 ../tools/window-screenshot.sh "$pid" "$out/profile-menu.png" || fail "no window to capture"
 send choose Default
@@ -143,7 +143,7 @@ expect "^browser: favorites $a\$" "the first profile's favorite didn't show in i
 post rightclick $tiled_name
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, Set Profile › Default (checked), \
 Set Profile › Profile 2, Set Profile › New Profile, Set Profile › Delete “Profile 2”, \
-New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+New Folder…, Live Folders › GitHub Pull Requests, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "the menu didn't offer the unused profile back"
 send choose Profile 2
 expect "^browser: profiled space $second $work\$" "Profile 2 didn't take the Space again"
@@ -187,7 +187,7 @@ fi
 post rightclick $name_point
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, Set Profile › Default (disabled), \
 Set Profile › Profile 2 (checked), Set Profile › New Profile (disabled), \
-New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+New Folder…, Live Folders › GitHub Pull Requests, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "the menu of a Space with a tab offered another profile"
 own=$((step + 1))
 send choose Profile 2
@@ -674,7 +674,7 @@ post rightclick $tiled_name
 # The Space is now the lone one, and unnamed, so its menu also offers to hide its name row.
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, Hide Space Header, \
 Set Profile › Default (checked), Set Profile › personal, Set Profile › New Profile, Set Profile › Delete “personal”, \
-New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space (disabled)")\$" \
+New Folder…, Live Folders › GitHub Pull Requests, ${into}Export as Markdown…, Manage Spaces…, Delete Space (disabled)")\$" \
   "the menu didn't offer to delete the unused profile by the name Settings gave it"
 post choose Delete “personal”
 expect '^browser: dialog shown Delete “personal”?$' "Delete didn't ask before deleting the profile"
