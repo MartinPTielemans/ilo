@@ -180,8 +180,14 @@ yours='data:text/html,<title>-</title><textarea id=f style="position:fixed;inset
  onfocus="document.title=`yours focused`" onblur="document.title=`yours left`"
  oninput="document.title=`yours typed `+f.value"></textarea>
 <script>requestAnimationFrame(()=>requestAnimationFrame(()=>document.title="yours"))</script>'
+# A host of the check's server with no https, where an agent's tab comes to Chrome's warning before
+# http. The profile remembers a host that fell back to http, so each run names a new one, as
+# history.sh's $plain.
+serve
+plain="mcp-plain-$(date +%s).example.com"
 BROWSER_DRIVE=1 BROWSER_MOTION=full BROWSER_URL="$yours" \
-  "$browser" --load-extension="$(app_path "$extension")" < "$out/drive" > "$log" 2>&1 &
+  "$browser" --load-extension="$(app_path "$extension")" \
+  --host-resolver-rules="MAP $plain 127.0.0.1:$port" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
@@ -692,6 +698,118 @@ for split_tab in $split_a $split_b $split_c; do
   closed=$(call close_tab "{\"tab\":$split_tab}")
   case "$closed" in "Closed tab $split_tab."*) ;; *) fail "closing the split view's page answered: $closed" ;; esac
 done
+# An agent's tab at Chrome's warning before http, in the agent's split view, watched from the
+# conversation, where its split's pages share the watched page's place. The warning shown doesn't
+# take the user's keyboard. Once the user's click gives it the keyboard, a press in the page beside
+# it takes the keyboard to that page, and never to an agent's dialog: on the Mac that press gives
+# the keyboard back to the browser window (#3212).
+if [ "$driven" = 1 ]; then
+  await '^browser: settings about Version .*, on Chromium [0-9]' || fail "the engine's version wasn't said"
+  major=$(sed -n 's/^browser: settings about .*on Chromium \([0-9]*\)\..*/\1/p' "$log" | head -1)
+fi
+if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
+  warned=$(call open_tab "{\"url\":\"http://$plain/split-a.html\"}" |
+    sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  [ -n "$warned" ] || fail "open_tab didn't open http://$plain/split-a.html"
+  await_log "browser: tab $warned error -20\$" \
+    "the agent's tab at http://$plain/split-a.html had no warning before http: $(grep "^browser: loaded $warned " "$log" | tail -1)"
+  beside=$(split_tab b)
+  split=$(call split_tabs "{\"tabs\":[$warned,$beside]}")
+  [ "$split" = "Tab $warned's split view, left to right: $warned, $beside." ] ||
+    fail "split_tabs with the tab at the warning answered: $split"
+  # Escape steps back to Pages from the page watched, $1, which goes back into its picture before a
+  # click on another picture can watch it.
+  to_pages() {
+    back='^browser: task page [0-9]* back$'
+    thumbnail='^browser: task page in its thumbnail$'
+    before=$(grep -c "$back" "$log" || true)
+    shrunk=$(grep -c "$thumbnail" "$log" || true)
+    # A page there can have the keyboard, as the one a press in the split view focused on X11,
+    # and keeps Escape: a click on the sidebar gives the UI the keyboard, as the user's would.
+    send click $sidebar_point
+    send key escape
+    await_more "$back" "$before" || fail "Escape didn't step back to Pages from $1"
+    await_more "$thumbnail" "$shrunk" || fail "$1 didn't go back into its picture"
+  }
+  to_pages "tab $agent_tab"
+  watch "$warned"
+  for _ in $(seq 50); do
+    send layout
+    since | grep -q '^browser: layout child ' && break
+    sleep 0.1
+  done
+  laid=$(since | grep -m1 '^browser: layout')
+  warning=$(since | sed -n 's/^browser: layout child //p' | head -1)
+  [ -n "$warning" ] || fail "the agent's tab $warned, watched in its split view, showed no warning before http: $laid"
+  # Linux's driver lists the pages the shell lays out, and the task area lays out a watched split
+  # as one, which the core divides: the capture shows its panes there.
+  if [ "$(uname)" = Linux ]; then
+    echo "skip: mcp: the watched split view's two pages in the layout, on Linux: the driver lists the shell's one frame for them. $out/agent-split-warning.png shows them."
+  else
+    panes=$(echo "$laid" | grep -o 'WebContentsViewCocoa [0-9,]* [0-9x]*' | sed 's/^WebContentsViewCocoa //')
+    [ "$(echo "$panes" | wc -l)" -eq 2 ] ||
+      fail "watching tab $warned didn't show its split view's two pages: $laid"
+  fi
+  ../tools/window-screenshot.sh "$pid" "$out/agent-split-warning.png" || fail "no window to capture"
+  send state
+  if [ "$key" = NativeWidgetMacNSWindow ]; then
+    [ "$(uname)" = Darwin ] ||
+      fail "the agent's warning before http, watched in its split view, took the user's keyboard as it showed: $key, $focus"
+    echo "skip: mcp: the user's keyboard staying where it was as an agent's warning before http shows in a watched split view, on the Mac: the warning took it as the watch showed it (#3240)."
+  fi
+  warning_x=${warning%%,*} warning_y=${warning#*,}
+  warning_y=${warning_y%% *} warning_size=${warning#* }
+  warning_width=${warning_size%%x*} warning_height=${warning_size#*x}
+  presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
+  send click $((warning_x + warning_width / 2)) $((warning_y + 8))
+  warning_clicked=$step
+  send state
+  [ "$key" = NativeWidgetMacNSWindow ] ||
+    fail "a click on the agent's warning before http at $warning, watched in its split view, didn't give it the keyboard: $key, $focus"
+  # The page beside, to the right of the warning's, as split_tabs put them.
+  other="$((warning_x + warning_width + 100)) $((warning_y + warning_height + 100))"
+  send click $other
+  pressed=$step
+  send state
+  [ "$key" = BrowserCoreNSWindow ] ||
+    fail "a press in the page beside the agent's warning before http left the keyboard in $key, on $focus: $(since "$pressed" | grep -e '^browser: drive' -e '^browser: agent' | tail -6 | tr '\n' ' ')"
+  ../tools/window-screenshot.sh "$pid" "$out/agent-split-pressed.png" || fail "no window to capture"
+  # The press takes over the tab pressed, and ⌘↩ hands it back. It takes over the tab watched
+  # instead, or on X11 the click on the warning already took that one and the press beside takes
+  # none (#3243), while the area goes on to show the tab pressed. So each tab the two clicks took
+  # over is watched again and handed back there, with the UI given the keyboard by a click on the
+  # sidebar: on the Mac the warning takes it as its page shows (#3240).
+  send state
+  taken=$(since "$warning_clicked" | sed -n 's/^browser: agent page pressed in \([0-9]*\)$/\1/p' |
+    sort -u | tr '\n' ' ')
+  taken=${taken% }
+  [ -n "$taken" ] ||
+    fail "neither the click on the agent's warning before http nor the press beside it took over a tab: $(since "$warning_clicked" | grep -e '^browser: drive' -e '^browser: agent' | tail -8 | tr '\n' ' ')"
+  if [ "$taken" = "$beside" ]; then
+    hand_back_pressed "$presses"
+    shown="the split view"
+  else
+    echo "skip: mcp: a press in the other pane of a watched agent split taking over the tab pressed: the clicks on the warning and beside it took over tab $taken, not $beside (#3243)."
+    shown="tab $beside"
+    for tab in $taken; do
+      to_pages "$shown"
+      watch "$tab"
+      send click $sidebar_point
+      send key return cmd
+      await_log "^browser: agent mcp-client handed back $tab\$" \
+        "⌘↩ didn't hand back tab $tab, which a click on the split view took over"
+      shown="tab $tab"
+    done
+  fi
+  to_pages "$shown"
+  for split_tab in $warned $beside; do
+    closed=$(call close_tab "{\"tab\":$split_tab}")
+    case "$closed" in "Closed tab $split_tab."*) ;; *) fail "closing the split view's page answered: $closed" ;; esac
+  done
+  watch "$agent_tab"
+else
+  echo "skip: mcp: an agent's warning before http in its split view, watched. Browser wasn't the active app, or the engine is before 157."
+fi
 
 if [ "$driven" = 1 ]; then
   # The core lists the agent's Space alone: its tab, and not the user's Wikipedia tab in theirs.
@@ -2100,8 +2218,15 @@ CARD
   call navigate "{\"tab\":$opened_tab,\"url\":\"localhost:$port/welcome.html\"}" > /dev/null
   await_log "^browser: title $opened_tab welcome\$" "the welcome page didn't load in the agent's tab"
   take_over "to save a login"
+  login_loaded="^browser: page $opened_tab back [0-9]* forward 0 loading 0 http://localhost:$port/login\\.html\$"
+  login_loads=$(grep -c "$login_loaded" "$log" || true)
   go_from_bar "localhost:$port/login.html"
   expect "^browser: title $opened_tab login\$" "the login page didn't load in the tab the user holds"
+  # The page names itself once painted, which can be before its load ends, and a login typed then
+  # brought no offer to save it: the click and the keys go once the load has ended, as a person's
+  # would come after it.
+  await_more "$login_loaded" "$login_loads" ||
+    fail "the login page didn't finish loading in the tab the user holds: $(grep "^browser: page $opened_tab " "$log" | tail -2 | tr '\n' ' ')"
   send click 600 60
   send key a cmd
   send type check@example.test
