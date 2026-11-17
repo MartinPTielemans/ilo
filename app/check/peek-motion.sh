@@ -157,14 +157,14 @@ round() {
 # for its covering frame to be on screen (#2640), it goes on to 24 rounds, as #2640 asks.
 resized=
 rounds=8
-[ -z "${WAYLAND_DISPLAY:-}" ] || rounds=24
+[ -z "${WAYLAND_DISPLAY:-}" ] || rounds=36
 for n in $(seq $rounds); do
   round $n
   # shellcheck disable=SC2086 # numbers: x y w h from x y
   python3 -I check/peek_motion.py "$frames" "$width" $(echo "$rest" | sed 's/ from / /') \
     > "$out/peek-motion.txt" 2>&1 && status=0 || status=$?
   case $status in
-  0) [ $rounds = 24 ] || break ;;
+  0) [ $rounds = 36 ] || break ;;
   2) ! grep -q "isn't drawn blended" "$out/peek-motion.txt" || break ;;
   *) break ;;
   esac
