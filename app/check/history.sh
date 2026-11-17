@@ -466,6 +466,24 @@ requestAnimationFrame(() => requestAnimationFrame(() => document.title = "beside
   expect "^browser: tab $beside closed\$" "⌘W didn't close the pane beside $warned_tab's warning before http"
   expect "^browser: panes $warned_tab\$" "⌘W on the pane beside the warning didn't leave $warned_tab alone"
   tab=$warned_tab
+  # On the Mac the page under the warning keeps the keyboard once the pane beside it closes, and
+  # drops ilo's shortcuts (#3233). A click on the warning gives it back, as the user's would.
+  if [ "$(uname)" = Darwin ]; then
+    send state
+    if [ "$key" != NativeWidgetMacNSWindow ]; then
+      echo "skip: the warning before http taking the keyboard back once the pane beside it closes, on the Mac: it's in $key, on $focus (#3233)."
+      for _ in $(seq 50); do
+        send layout
+        since | grep -q '^browser: layout child ' && break
+        sleep 0.1
+      done
+      warning_box
+      send click $((warning_x + warning_width / 2)) $((warning_y + 8))
+      send state
+      [ "$key" = NativeWidgetMacNSWindow ] ||
+        fail "a click on Chrome's warning before http at $warning, alone again after ⌘W closed the pane beside it, didn't give it the keyboard: $key, $focus"
+    fi
+  fi
 fi
 if [ "$major" -ge 157 ]; then
   warned
