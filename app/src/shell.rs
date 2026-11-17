@@ -4629,6 +4629,7 @@ impl Render for Shell {
             })
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle)
+            .on_action(cx.listener(Self::tab_in))
             // The Edit menu's Undo and Redo, which a field of ours takes for itself first.
             .on_action(cx.listener(|shell, _: &crate::text_input::Undo, _, cx| {
                 shell.undo(cx);
