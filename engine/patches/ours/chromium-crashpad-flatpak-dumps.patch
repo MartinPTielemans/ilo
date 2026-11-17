@@ -4,7 +4,10 @@ still lets the handler read a process that named it its ptracer through /proc: i
 thread's stack pointer and program counter. When ptrace is refused, the handler stops the process
 with SIGSTOP, as ptrace would hold it, reads it there, and lets it go on. The crashing thread's whole
 context comes from the client, as it always has; the other threads have their stacks and where they
-were, but no other registers. Renderers, which zypak starts in a pid namespace of their own, can't
+were, but no other registers. Without ptrace there's no thread's TLS address to end its stack at, so a
+stack is taken for at most 8 MiB, Linux's default stack limit, from its stack pointer: the readable
+mappings merged above one can reach gigabytes, and the browser's dump passed the 4 GiB a minidump's
+offsets hold and wasn't written. Renderers, which zypak starts in a pid namespace of their own, can't
 name the handler, whose pid means nothing there, so in the Flatpak they allow any ptracer instead,
 before their sandbox engages. Outside the Flatpak nothing changes.
 
@@ -105,6 +108,25 @@ before their sandbox engages. Outside the Flatpak nothing changes.
  
  #if BUILDFLAG(IS_CHROMEOS)
    // An optional UNIX timestamp passed to us from Chrome.
+--- a/third_party/crashpad/crashpad/snapshot/linux/process_reader_linux.cc
++++ b/third_party/crashpad/crashpad/snapshot/linux/process_reader_linux.cc
+@@ -205,6 +205,16 @@ void ProcessReaderLinux::Thread::InitializeStackFromSP(
+       tls_address < stack_end) {
+     stack_region_size = tls_address - stack_region_address;
+   }
++
++  // browser_core: a thread read without ptrace, as in the Flatpak (direct_ptrace_connection.cc),
++  // has no TLS address to end its stack at, and the readable mappings merged above its stack can
++  // reach gigabytes, past the 4 GiB a minidump's offsets can hold, so no dump was written. Its
++  // stack is taken for at most Linux's default stack limit from its stack pointer, which holds the
++  // whole of any stack within that limit, as Chromium's threads' are, the crashing thread's too.
++  constexpr LinuxVMSize kStackWithoutTLS = 8 * 1024 * 1024;
++  if (!thread_info.thread_specific_data_address) {
++    stack_region_size = std::min(stack_region_size, kStackWithoutTLS);
++  }
+ }
+ 
+ ProcessReaderLinux::Module::Module()
 --- a/third_party/crashpad/crashpad/util/linux/direct_ptrace_connection.cc
 +++ b/third_party/crashpad/crashpad/util/linux/direct_ptrace_connection.cc
 @@ -14,8 +14,20 @@

@@ -577,9 +577,11 @@ if [ -n "$yours_step" ]; then
   shown=$(sed -n "/^browser: drive $yours_step: /,\$p" "$log" | grep '^browser: selected ' |
     grep -v "^browser: selected $user_tab\( in .*\)\{0,1\}\$" | head -1)
   [ -z "$shown" ] || fail "the agent's work showed another tab in the user's window: $shown"
-  if windows; then
-    # Quarantined: there a click of the agent's that opens a tab takes the keyboard (#2225).
-    echo "skip: mcp: the user's keyboard through the agent's work on Windows (#2225)"
+  if windows && ! engine_has ../core/window.cc; then
+    # An engine from before the core stopped showing the window for an agent's page's tab, which
+    # on Windows gave the window itself the keyboard (#2225).
+    echo "skip: mcp: the user's keyboard through the agent's work on Windows: the engine is from" \
+      "before the core kept the window as it was for an agent's page's tab (#2225)"
   else
     [ "$key $focus" = "$yours_key $yours_focus" ] ||
       fail "the agent's work took the keyboard from $yours_key, on $yours_focus, to $key, on $focus"
