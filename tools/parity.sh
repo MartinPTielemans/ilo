@@ -17,7 +17,8 @@
 # Settings › Agents' Model menu for Claude, Sonnet chosen, and for Codex, on Default, Default naming
 # its model, light and dark (#2455), and the safe-start card at the sidebar's foot, light and dark,
 # and in the narrowest sidebar with ad blocking off (#2345), and the footer's menu control, which
-# only Linux and Windows draw, at rest and with its menu open above it, light and dark (#3148). The
+# only Linux and Windows draw, at rest and with its menu open above it, light and dark (#3148), and
+# the top bar, with the sidebar on the left and on the right (#3160). The
 # preview's Linux host places no window, so sway puts Site Controls and the icon picker in the
 # middle rather than where the Mac's host would.
 # It reports: a screen that won't capture is a gap in the sheet and a line on stderr, never a
@@ -63,6 +64,8 @@ screens=(
   "app-menu-rest-dark|drawn at|PREVIEW_APPEARANCE=dark"
   "app-menu-light|menu shown|PREVIEW_APPEARANCE=light PREVIEW_CLICK=170,775"
   "app-menu-dark|menu shown|PREVIEW_APPEARANCE=dark PREVIEW_CLICK=170,775"
+  "top-bar|drawn at|PREVIEW_TOP_BAR=1"
+  "top-bar-right|drawn at|PREVIEW_TOP_BAR=1 PREVIEW_SIDEBAR_RIGHT=1"
 )
 case $(uname -s) in
   MINGW* | MSYS*) systems=(windows) drag= ;;
