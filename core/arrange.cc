@@ -243,6 +243,13 @@ constexpr char16_t kScript[] =
       set(el, 'width', px(Math.max(0, w - edge)));
     }
     const rect = (el) => el.getBoundingClientRect();
+    // How far what |el| holds runs out of its box sideways: a code block or a carousel that scrolls
+    // does where it stands.
+    const over = (el) => Math.max(0, el.scrollWidth - el.clientWidth);
+    // Whether |el|, given |width|, runs out of it: its box comes out wider, by its own min-width or
+    // what it holds, or what it holds runs out of its box further than |was|, its overrun where it
+    // stood.
+    const overruns = (el, width, was) => rect(el).width > width + 1 || over(el) > was + 1;
     // Where an absolutely placed element measures from, found by putting it at 0, 0 and looking:
     // offsetParent misses the containing blocks contain, transform and filter make.
     function origin(el) {
@@ -495,6 +502,30 @@ constexpr char16_t kScript[] =
       return { el, parent, axis, prev, next, r: rect(el), pr: rect(parent), prevR: prev && rect(prev), nextR: next && rect(next) };
     }
     const roomless = (axis) => axis === 'table' || axis === 'grid' || axis === 'inline';
+    // What the parent of the place |sl| follows along the place's axis, and where it ends: the last
+    // box in flow before it, its own sibling or an ancestor's, or the other thing's place when that
+    // thing is it. A room opened before the place's own moves that, and the place with it (#2990),
+    // while a margin collapsing through the parent, as the room's keeper's can, doesn't. One beside
+    // the parent, as a column's in a row, says nothing of where it starts, so the row's own lead
+    // does, as a room opened above the row moves its columns.
+    function leadOf(sl, skip) {
+      const row = sl.axis === 'row';
+      const start = (r) => (row ? r.left : r.top), end = (r) => (row ? r.right : r.bottom);
+      for (let p = sl.parent; p && p !== document.body; p = p.parentElement) {
+        if (/absolute|fixed/.test(getComputedStyle(p).position)) return null;
+        const at = start(rect(p));
+        for (let q = p.previousElementSibling; q; q = q.previousElementSibling) {
+          const mine = skip.includes(q);
+          if ((!mine && lifted.has(q)) || !q.getClientRects().length ||
+            /absolute|fixed/.test(getComputedStyle(q).position)) continue;
+          // One beside it, as columns in a row are, doesn't place it along the axis.
+          if (end(rect(q)) > at + 0.5) break;
+          // The other thing's place is a room, which ends where what goes in it does.
+          return { el: q, end: end(rect(q)), place: mine };
+        }
+      }
+      return null;
+    }
 
     // Settle: out of flow where it stood, which closes its place, and drawn before or after |ref|
     // at its width, whose room a margin on |ref| keeps.
@@ -504,12 +535,20 @@ constexpr char16_t kScript[] =
       const before = !!c.before;
       const side = before ? 'margin-top' : 'margin-bottom';
       if (s.m0 == null) s.m0 = parseFloat(getComputedStyle(ref)[before ? 'marginTop' : 'marginBottom']) || 0;
+      // Its own overrun where the site lays it out, measured while none of ours is on it.
+      if (s.over0 == null || !saved.has(el)) s.over0 = over(el);
       set(el, 'position', 'absolute');
       set(el, 'margin', '0');
       // Measured with the element out of its place and |ref|'s margin as the page has it.
       set(ref, side, px(s.m0));
       const r0 = rect(ref);
       setWidth(el, r0.width);
+      if (overruns(el, r0.width, s.over0)) {
+        restore(el);
+        restore(ref);
+        s.misfit = 'fit';
+        return;
+      }
       set(el, 'z-index', '1');
       const h = rect(el).height;
       let y;
@@ -545,8 +584,22 @@ constexpr char16_t kScript[] =
       restore(el);
       restore(ref);
       const skip = [el, ref];
+      const was = new Map([[el, over(el)], [ref, over(ref)]]);
       const sa = slotOf(el, skip), sb = slotOf(ref, skip);
       if (roomless(sa.axis) || roomless(sb.axis)) { s.misfit = 'room'; s.keepers = []; return; }
+      for (const sl of [sa, sb]) if (!sl.prev) sl.lead = leadOf(sl, skip);
+      // Where the other thing's place ends once its room is open, which is first, as it's earlier on
+      // the page: where what goes in it ends. Along another axis than |axis|, it says nothing.
+      const placeEnd = (el, axis) => {
+        const sl = el === sa.el ? sa : sb, g = groups.find((x) => x.slots.includes(sl));
+        if (!g || !g.roomStart || g.axis !== axis) return null;
+        let at = g.roomStart() + g.before;
+        for (const [i, each] of g.slots.entries()) {
+          if (each === sl) return at + each.inMain;
+          at += each.inMain + (g.inner[i] || 0);
+        }
+        return null;
+      };
       sa.incoming = ref;
       sb.incoming = el;
       const keepers = (s.keepers = []);
@@ -590,9 +643,12 @@ constexpr char16_t kScript[] =
         const after = g.next ? start(last.nextR) - end(last.r) : 0;
         const sum = (a) => a.reduce((t, x) => t + x, 0);
         const want = before + sum(g.slots.map((sl) => sl.inMain)) + sum(inner) + after;
-        // Where the room starts: after the place before it, or where the first place was. Not
-        // the parent's edge, which a margin collapsing through it moves.
-        const anchor = start(firstSlot.r) - before;
+        // Where the room starts: after the place before it, or where the first place was, as far
+        // on as a room opened before this one moved what its parent follows. Not the parent's
+        // edge, which a margin collapsing through it moves.
+        const lead = firstSlot.lead;
+        const leadNow = lead && (lead.place ? placeEnd(lead.el, g.axis) : end(rect(lead.el)));
+        const anchor = start(firstSlot.r) - before + (leadNow == null ? 0 : leadNow - lead.end);
         const roomStart = () => (g.prev ? end(rect(g.prev)) : anchor);
         g.roomStart = roomStart;
         g.before = before;
@@ -641,8 +697,7 @@ constexpr char16_t kScript[] =
           at += sl.inMain + (g.inner[i] || 0);
         });
       }
-      const over = (m) => Math.max(0, m.scrollWidth - m.clientWidth);
-      if (over(el) > 1 || over(ref) > 1) {
+      if ([sa, sb].some((sl) => overruns(sl.incoming, sl.r.width, was.get(sl.incoming)))) {
         restore(el);
         restore(ref);
         for (const k of keepers) restore(k);
@@ -698,7 +753,10 @@ constexpr char16_t kScript[] =
             if (carry && involves(s.c, carry.el)) continue;
             resolve(s);
             place(s);
-            for (const el of [s.el, s.ref]) {
+            // A trade gives both things a fixed width, so their places' boxes say when those
+            // change, as a narrower window makes them.
+            const places = s.c.kind === 'trade' ? [s.el && s.el.parentElement, s.ref && s.ref.parentElement] : [];
+            for (const el of [s.el, s.ref, ...places]) {
               if (el && !watched.has(el)) { watched.add(el); ro.observe(el); }
             }
           }
@@ -708,7 +766,7 @@ constexpr char16_t kScript[] =
         busy = false;
       }
     }
-    const watched = new WeakSet();
+    let watched = new WeakSet();
     const ro = new ResizeObserver(() => later());
     const mo = new MutationObserver((records) => {
       if (busy) return;
@@ -735,6 +793,8 @@ constexpr char16_t kScript[] =
       on = false;
       mo.disconnect();
       ro.disconnect();
+      // Disconnected, it watches nothing: the next start observes each again.
+      watched = new WeakSet();
       removeEventListener('resize', onResize);
       if (scrolling) { scrolling = false; removeEventListener('scroll', onScroll, { capture: true }); }
     }
@@ -830,6 +890,47 @@ constexpr char16_t kScript[] =
     }
     const shown = (el) => el.getClientRects().length > 0 && (!el.checkVisibility || el.checkVisibility({ visibilityProperty: true }));
 
+    // The thing in |t|'s track nearest |x|, |y| along it, and whether the drop is before it; null if
+    // |t| lays out no things in a line.
+    function nearest(t, x, y) {
+      const things = [...t.children].filter((k) => k !== mode.marks.host && shown(k) &&
+        !/absolute|fixed/.test(getComputedStyle(k).position) && !lifted.has(k));
+      if (!things.length) return null;
+      // A track lays out blocks or flex items. A paragraph with a link or a button in it is running
+      // text, whose things are its words, though a button reads as a block of its own.
+      if (!/flex/.test(getComputedStyle(t).display) &&
+        ([...t.childNodes].some((n) => n.nodeType === Node.TEXT_NODE && n.data.trim()) ||
+          things.some((k) => /^inline/.test(getComputedStyle(k).display)))) return null;
+      const axis = slotOf(things[0], []).axis;
+      if (axis !== 'column' && axis !== 'row') return null;
+      const row = axis === 'row', at = row ? x : y;
+      let best = null;
+      for (const k of things) {
+        const r = rect(k), start = row ? r.left : r.top, end = row ? r.right : r.bottom;
+        const d = at < start ? start - at : at > end ? at - end : 0;
+        if (!best || d < best.d) best = { ref: k, before: at < (start + end) / 2, d };
+      }
+      return best;
+    }
+    // Whether the block |t| under a rest is a track the carried |el| goes in rather than a thing it
+    // trades with: it's beside one of |el|'s ancestors, as #side is beside the column Wide is in
+    // (#3003); or it holds things like |el|, as a column that wraps its cards in one more box does.
+    // A card in another column is neither, however deep either column wraps its things: it holds
+    // its own words. A site's header beside the column is a track too, so a rest in its gaps goes
+    // beside its logo or its nav, as the preview shows first.
+    // Two elements are alike by tag and class. A tag says little without a class, so class-less
+    // ones are alike only when their children are, two levels down: a card of two lines isn't a
+    // column of two cards.
+    const shape = (e, n) => e.localName + '.' + e.className +
+      (n ? '(' + [...e.children].map((k) => shape(k, n - 1)).join(',') + ')' : '');
+    const like = (a, b) => a.localName === b.localName && a.className === b.className &&
+      (a.className !== '' || shape(a, 2) === shape(b, 2));
+    const trackFor = (t, el) => {
+      // A block like the carried thing is a thing to trade with, whatever it holds.
+      if (like(t, el)) return false;
+      const p = t.parentElement;
+      return (!!p && p !== el.parentElement && p.contains(el)) || [...t.children].some((c) => like(c, el));
+    };
     // Where a drop at |x|, |y| lands, for the carried element.
     function dropAt(x, y, free) {
       const el = carry.el, f = carry.from;
@@ -842,8 +943,18 @@ constexpr char16_t kScript[] =
         if (d !== 'inline' && d !== 'contents' && (r.width >= 16 || r.height >= 16) && t !== mode.marks.host) break;
         t = t.parentElement;
       }
+      // Where the page has no block of its own, there's no place: only the free key floats it.
       if (!t || t === document.body || t === document.documentElement || t.contains(el) || el.contains(t)) {
-        return { change: CHANGE.FLOATS };
+        return { change: CHANGE.NONE };
+      }
+      // A track, such as the gap between two of its things, is no thing to trade with: the drop is
+      // at its nearest thing's edge (#3003). A card is a thing, with its own words and gaps.
+      const near = trackFor(t, el) ? nearest(t, x, y) : null;
+      if (near) {
+        const slot = slotOf(near.ref, [el]);
+        if (roomless(slot.axis)) return { change: CHANGE.REFUSED, why: WHY.DOESNT_FIT, ref: near.ref };
+        return { change: CHANGE.SETTLES, before: near.before, ref: near.ref, axis: slot.axis,
+          prev: near.before ? slot.prev : near.ref, next: near.before ? near.ref : slot.next };
       }
       const slot = slotOf(t, [el]);
       const row = slot.axis === 'row', r = rect(t);

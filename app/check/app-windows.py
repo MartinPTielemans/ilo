@@ -8,17 +8,19 @@ told WM_ENDSESSION, the hidden ones first, and it fails if one refuses (#1990). 
 state and whether it's a browser window, minimized (IsIconic) or the one in front
 (GetForegroundWindow). `icon PID ICO` checks that each window of the process the taskbar and
 Alt+Tab show has the .ico's image for its big and small icons, read as the shell reads them, and
-prints them (#1350). `cover PID ilo|away|behind [FRONT]` opens a window of another app in front
-of the process's browser window, over its lower half, with the foreground in ilo's window or in a
-window away from it, or with behind between ilo's window with the foreground and its others, as a
-window another app opens behind the one the user is in (#1689), says "cover <handle>, foreground
-<ilo|away|other>" and keeps it until it's ended
-(#1419), or with FRONT until that file exists, when it brings the browser window to the front, as
-a click on its taskbar button does, and ends (#1365). `foreground PID [TITLE]` gives the
+prints them (#1350). `cover PID ilo|away|behind|aside [FRONT]` opens a window of another app in
+front of the process's browser window, over its lower half, with the foreground in ilo's window or
+in a window away from it, or with behind between ilo's window with the foreground and its others, as
+a window another app opens behind the one the user is in (#1689), or with aside only the window
+away from it, with the foreground, says "cover <handle>, foreground <ilo|away|other>" and keeps it
+until it's ended (#1419), or with FRONT until that file exists, when it brings the browser window to
+the front, as a click on its taskbar button does, or if the file says "press", presses and lets go
+the mouse's button where the pointer is, as a hand's click on ilo's window from another app does
+(#2910), and ends (#1365). `foreground PID [TITLE]` gives the
 foreground to the process's browser window in front, or to its window titled TITLE (#2114).
 `dialogs PID [cancel]` prints each dialog shown of the process and the processes it started, with
 its title, and with cancel ends each as its Cancel button does (#2512).
-Usage: app-windows.py close|end-session|list|icon PID [front|ICO], cover PID ilo|away|behind [FRONT], foreground PID [TITLE] or dialogs PID [cancel]"""
+Usage: app-windows.py close|end-session|list|icon PID [front|ICO], cover PID ilo|away|behind|aside [FRONT], foreground PID [TITLE] or dialogs PID [cancel]"""
 
 import ctypes
 import ctypes.wintypes as w
@@ -286,9 +288,9 @@ def cover(pid, foreground, front_file):
         return hwnd
 
     middle = (frame.top + frame.bottom) // 2
-    cover = show("cover", frame.left, middle, frame.right - frame.left, frame.bottom - middle,
-                 False)
-    if foreground == "away":
+    cover = None if foreground == "aside" else show(
+        "cover", frame.left, middle, frame.right - frame.left, frame.bottom - middle, False)
+    if foreground in ("away", "aside"):
         # Beside ilo's window where the screen has room, so it's over none of it.
         screen = (user32.GetSystemMetrics(0), user32.GetSystemMetrics(1))
         size = (160, 120)
@@ -300,7 +302,8 @@ def cover(pid, foreground, front_file):
             at = (frame.left, frame.bottom + 20)
         else:
             at = (screen[0] - size[0], 0)
-        show("away", at[0], at[1], size[0], size[1], True)
+        away = show("away", at[0], at[1], size[0], size[1], True)
+        cover = cover or away
     # ilo's window goes under the cover, rather than the cover over it, as Windows keeps a window
     # that doesn't have the foreground from going over the window that has it.
     if foreground == "behind":
@@ -308,7 +311,7 @@ def cover(pid, foreground, front_file):
         user32.SetWindowPos(cover, in_front, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE)
         for hwnd in reversed([hwnd for hwnd in shown if hwnd != in_front]):
             user32.SetWindowPos(hwnd, cover, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE)
-    else:
+    elif foreground != "aside":
         user32.SetWindowPos(browser, cover, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE)
     # Until it's ended, or the browser's process ends, so it's never over a later run's windows.
     SYNCHRONIZE, INFINITE, QS_ALLINPUT, PM_REMOVE = 0x100000, 0xFFFFFFFF, 0x4FF, 1
@@ -333,11 +336,37 @@ def cover(pid, foreground, front_file):
                                            100 if front_file else INFINITE,
                                            QS_ALLINPUT) in (1, WAIT_TIMEOUT):
         if front_file and os.path.exists(front_file):
-            user32.SetForegroundWindow(w.HWND(browser))
+            with open(front_file) as said:
+                press = said.read().strip() == "press"
+            if press:
+                # Real input, as a hand's: Windows activates the window under the pointer.
+                MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP = 0x2, 0x4
+                clicks = (INPUT * 2)(INPUT(type=0, mi=MOUSEINPUT(dwFlags=MOUSEEVENTF_LEFTDOWN)),
+                                     INPUT(type=0, mi=MOUSEINPUT(dwFlags=MOUSEEVENTF_LEFTUP)))
+                if user32.SendInput(2, clicks, ctypes.sizeof(INPUT)) != 2:
+                    sys.exit("couldn't press where the pointer is")
+            else:
+                user32.SetForegroundWindow(w.HWND(browser))
             return
         while user32.PeekMessageW(ctypes.byref(message), None, 0, 0, PM_REMOVE):
             user32.TranslateMessage(ctypes.byref(message))
             user32.DispatchMessageW(ctypes.byref(message))
+
+
+class MOUSEINPUT(ctypes.Structure):
+    _fields_ = [
+        ("dx", w.LONG),
+        ("dy", w.LONG),
+        ("mouseData", w.DWORD),
+        ("dwFlags", w.DWORD),
+        ("time", w.DWORD),
+        ("dwExtraInfo", ctypes.c_size_t),
+    ]
+
+
+# The mouse's member of INPUT's union, its largest, so the size is SendInput's.
+class INPUT(ctypes.Structure):
+    _fields_ = [("type", w.DWORD), ("mi", MOUSEINPUT)]
 
 
 class PROCESSENTRY32W(ctypes.Structure):
@@ -423,7 +452,7 @@ def main():
     if command == "icon":
         sys.exit(0 if check_icons(pid, sys.argv[3]) else 1)
     if command == "cover":
-        if sys.argv[3] not in ("ilo", "away", "behind"):
+        if sys.argv[3] not in ("ilo", "away", "behind", "aside"):
             sys.exit(__doc__.splitlines()[-1])
         cover(pid, sys.argv[3], sys.argv[4] if len(sys.argv) == 5 else None)
         return
