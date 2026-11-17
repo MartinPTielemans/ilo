@@ -286,14 +286,13 @@ none_since "^browser: window $first shows" || fail "⇧↩ changed what the firs
   fail "no window to capture"
 
 # From the first window, the Switch to Tab row for that page brings its window forward, and the
-# first window keeps its own page. "localh" is the start of the page's URL.
+# first window keeps its own page. "localh" is the start of the page's URL. Chromium's first row
+# for it is a search, so the bar doesn't complete it as it did "example", and the run waits for
+# the tab's row instead.
 send window 1
 send key t cmd
 expect '^browser: command bar shown$' "⌘T in the first window didn't open the command bar"
 send type localh
-expect '^browser: command bar completes "localh" with "ost' \
-  "the command bar didn't complete \"localh\""
-send key backspace
 suggested="^browser: command bar suggestions \"localh\" in .* ms: .*http://localhost:$port/one.html tab $c"
 expect "$suggested" "the command bar didn't suggest the tab ⇧↩'s window shows"
 for _ in 1 2 3 4 5 6 7 8; do
