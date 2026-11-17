@@ -17,6 +17,8 @@ struct Recorder {
     /// Whether the page is on screen where it's laid out at once, with no word from the core, as
     /// on Windows.
     shown_at_once: Cell<bool>,
+    /// Whether it says when the frame the window draws is on screen, as Wayland's does.
+    says_drawn: Cell<bool>,
 }
 
 impl Recorder {
@@ -56,6 +58,12 @@ impl Host for Recorder {
     }
     fn shown_at_once(&self) -> bool {
         self.shown_at_once.get()
+    }
+    fn when_drawn(&self, tab: u64) -> bool {
+        if self.says_drawn.get() {
+            self.push(format!("when drawn {tab}"));
+        }
+        self.says_drawn.get()
     }
     fn release(&self) {
         self.push("release".into());
@@ -428,6 +436,73 @@ fn where_the_core_never_says_the_close_holds_without_waiting(cx: &mut TestAppCon
     assert!(!waiting(&mut shown));
     let calls = shown.calls();
     assert_eq!(calls[calls.len() - 3..], ["hide", "close 7", CLOSED]);
+}
+
+/// Where the host says when the window's frame is on screen (Wayland's), the page leaves once the
+/// frame that closed the hole over it is, rather than the frame after: a compositor that waits for
+/// the GPU to finish that frame can show the window's without the page first (#2640).
+#[gpui::test]
+fn the_page_leaves_once_the_frame_covering_it_is_on_screen(cx: &mut TestAppContext) {
+    let mut shown = covered_at_rest(cx);
+    shown.keys("escape");
+    frame(&mut shown);
+    frame(&mut shown);
+    frame(&mut shown);
+    let drawn = shown.drawn();
+    assert!(drawn.iter().all(|call| call != OUT_OF_SIGHT), "{drawn:?}");
+    let asked = drawn.iter().filter(|call| *call == "when drawn 7").count();
+    assert_eq!(
+        asked, 1,
+        "asked for a frame other than the one closing the hole: {drawn:?}"
+    );
+    // The page leaves as the host says, in the frame that draws.
+    shown.cx.cx.update(|cx| cover_shown(TAB, cx));
+    let drawn = shown.drawn();
+    assert_eq!(
+        drawn[drawn.len() - 2..],
+        [OUT_OF_SIGHT, "release"],
+        "{drawn:?}"
+    );
+    there(&mut shown, LEFT);
+    let calls = shown.calls();
+    assert_eq!(calls[calls.len() - 3..], ["hide", "close 7", CLOSED]);
+}
+
+/// And if the host never says, as for a window with nothing on screen, the page leaves 150 ms on,
+/// so the close never hangs on it.
+#[gpui::test]
+fn the_wait_for_the_frame_covering_the_page_runs_out(cx: &mut TestAppContext) {
+    let mut shown = covered_at_rest(cx);
+    shown.keys("escape");
+    frame(&mut shown);
+    frame(&mut shown);
+    shown.drawn();
+    advance(&mut shown, 0.149);
+    let drawn = shown.drawn();
+    assert!(drawn.iter().all(|call| call != OUT_OF_SIGHT), "{drawn:?}");
+    advance(&mut shown, 0.001);
+    let drawn = shown.drawn();
+    assert_eq!(
+        drawn[drawn.len() - 2..],
+        [OUT_OF_SIGHT, "release"],
+        "{drawn:?}"
+    );
+}
+
+/// A preview at rest with its page showing through the hole, on a host that says when the
+/// window's frame is on screen.
+fn covered_at_rest(cx: &mut TestAppContext) -> Shown {
+    let host = Recorder::default();
+    host.under.set(true);
+    host.says_drawn.set(true);
+    let mut shown = Shown::on(host, cx);
+    shown.calls();
+    rest(&mut shown);
+    frame(&mut shown);
+    frame(&mut shown);
+    there(&mut shown, AT_REST);
+    assert_eq!(shown.drawn(), [NO_HOLE, PLACED, NO_HOLE, HOLE]);
+    shown
 }
 
 /// Under Reduce Motion the card fades in where it rests, and the page waits out of sight for it
