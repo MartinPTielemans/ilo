@@ -890,9 +890,26 @@ class WindowViews : public views::WidgetObserver,
   // and X11 it never has it (#1961, #2060). The window has it back with an xdg-activation token,
   // once each time the Mini Player shows: a click in it later gives it the keys. Posted, as the
   // compositor tells the Mini Player it has the keyboard after telling the window it lost it.
+  //
+  // A link preview's page has the keyboard through the focus client, which views never sees, so
+  // as the window lost activation views stored the page under it, and focused that once the
+  // window was active again, sending the preview's keys to it (#2858). The preview's page has the
+  // keyboard back instead, as the Mac's window makes the preview's key again. Each side asks that
+  // the preview still shows: the note outlives a preview that closed with the keyboard, and the
+  // page under it would lose its keys to a cleared view with no preview to take them.
+  //
   // A bubble of Chromium's taking the keys under Wayland deactivates the window too, and its going
   // activates it again (UILendsToBubble).
   void OnWidgetActivationChanged(views::Widget*, bool active) override {
+    const bool preview = preview_had_keyboard_ && PreviewShows();
+    if (!active && preview) {
+      if (views::FocusManager* focus = widget_->GetFocusManager()) {
+        focus->SetStoredFocusView(nullptr);
+      }
+    }
+    if (active && preview) {
+      PreviewTakesBackKeyboard();
+    }
     if (!OnWayland()) {
       if (active) {
         PostFocusDialog();
@@ -900,7 +917,7 @@ class WindowViews : public views::WidgetObserver,
       return;
     }
     if (active) {
-      if (std::exchange(ui_lent_to_bubble_, false) && !ui_has_keyboard_) {
+      if (std::exchange(ui_lent_to_bubble_, false) && !ui_has_keyboard_ && !preview) {
         UITakesKeyboard();
       }
       return;
@@ -946,8 +963,9 @@ class WindowViews : public views::WidgetObserver,
 
   void FocusDialog() {
     views::FocusManager* focus = widget_->GetFocusManager();
+    // A link preview's page that has the keyboard keeps it: views never sees it focused.
     if (!focus || focus->GetFocusedView() || ui_has_keyboard_ || overlay_has_keyboard_ ||
-        !widget_->IsActive()) {
+        (preview_had_keyboard_ && PreviewShows()) || !widget_->IsActive()) {
       return;
     }
     // Chrome shows the dialog of the selected tab alone.
@@ -960,6 +978,19 @@ class WindowViews : public views::WidgetObserver,
         first->RequestFocus();
       }
       return;
+    }
+  }
+
+  bool PreviewShows() const {
+    return preview_.page && preview_.holder && preview_.holder->IsVisible();
+  }
+
+  // The link preview's page has the keyboard again, if nothing else took it.
+  void PreviewTakesBackKeyboard() {
+    aura::client::FocusClient* client = aura::client::GetFocusClient(content());
+    aura::Window* focused = client ? client->GetFocusedWindow() : nullptr;
+    if (client && !ui_has_keyboard_ && (!focused || focused == content())) {
+      client->FocusWindow(preview_.page);
     }
   }
 
@@ -1052,6 +1083,12 @@ class WindowViews : public views::WidgetObserver,
       PostFocusDialog();
     } else if (gained_focus) {
       PostFocusDialogView();
+    }
+    // The focus goes to none as the window loses activation, and to the window's own as it's active
+    // again, before the widget hears it (DesktopNativeWidgetAura::HandleActivationChanged), so
+    // neither says the preview's page let it go.
+    if (gained_focus && gained_focus != content()) {
+      preview_had_keyboard_ = preview_.holder && preview_.holder->Contains(gained_focus);
     }
     if (gained_focus && gained_focus != content()) {
       // Not the bubble's loan: the window focuses its page again as it's active once more, before
@@ -1462,6 +1499,9 @@ class WindowViews : public views::WidgetObserver,
   // A window of Chromium's own has the keyboard the UI or a page had, and gives it back as it goes.
   bool ui_lent_ = false;
   aura::WindowTracker page_lent_;
+  // Whether the link preview's page had the keyboard last, which it has back as the window is
+  // active again (OnWidgetActivationChanged).
+  bool preview_had_keyboard_ = false;
   // Under Wayland, a bubble of Chromium's has the keyboard the UI had (UILendsToBubble).
   bool ui_lent_to_bubble_ = false;
   // On Wayland, the page that gave its focus to the window while an overlay has the keyboard.
