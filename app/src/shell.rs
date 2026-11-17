@@ -1658,6 +1658,8 @@ pub struct Shell {
     sidebar_hidden: bool,
     /// Whether the window's own buttons show (`window_buttons_shown`).
     window_buttons: bool,
+    /// Whether the host has them at the bar's end (`buttons_at_bar_end`).
+    buttons_at_bar_end: bool,
     /// The window's own buttons as the system draws them, once it has said, which the copies
     /// drawn in their place match.
     window_button_geometry: Option<WindowButtonGeometry>,
@@ -2199,6 +2201,7 @@ impl Shell {
             full_screen_timing: None,
             sidebar_hidden: false,
             window_buttons: true,
+            buttons_at_bar_end: false,
             window_button_geometry: None,
             sidebar_width,
             resize: None,
@@ -4684,6 +4687,11 @@ impl Render for Shell {
             self.window_buttons = window_buttons;
             self.browser.show_window_buttons(window_buttons, cx);
         }
+        let at_bar_end = self.buttons_at_bar_end();
+        if at_bar_end != self.buttons_at_bar_end {
+            self.buttons_at_bar_end = at_bar_end;
+            self.browser.set_window_buttons_right(at_bar_end, cx);
+        }
         // AppKit's say how they're drawn once they show, out of full screen, as at rest.
         if self.window_button_geometry.is_none() && window_buttons {
             self.window_button_geometry = self.browser.window_button_geometry(cx);
@@ -5502,7 +5510,10 @@ impl Shell {
                     .left(px(column))
                     .w(px(self.width()))
                     .h(px(crate::tokens::shell::TOP_BAR))
-                    .child(self.window_buttons(px(self.width()), cx))
+                    .children(
+                        (!self.buttons_at_bar_end())
+                            .then(|| self.window_buttons(px(self.width()), cx)),
+                    )
                     .children(self.nav_buttons(cx))
             }))
             .child(self.reveal_listener(cx))
@@ -5528,7 +5539,7 @@ impl Shell {
     fn window_buttons(&self, across: Pixels, cx: &mut Context<Self>) -> AnyElement {
         let right = self.right;
         if cfg!(target_os = "windows") {
-            return self.windows_buttons(right, cx);
+            return self.windows_buttons(right || self.buttons_at_bar_end(), cx);
         }
         let zoom = if self.maximized {
             "icons/window-restore.svg"

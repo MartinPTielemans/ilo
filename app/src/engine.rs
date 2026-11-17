@@ -1403,6 +1403,11 @@ impl Browser for Engine {
         unsafe { platform::host_set_sidebar_right(self.ui_view, right) };
     }
 
+    #[cfg(target_os = "windows")]
+    fn set_window_buttons_right(&self, right: bool, _: &mut App) {
+        unsafe { platform::host_set_window_buttons_right(self.ui_view, right) };
+    }
+
     fn little_drawn(&self, _: &mut App) {
         unsafe { platform::host_grow_little_window(self.ui_view) };
     }
