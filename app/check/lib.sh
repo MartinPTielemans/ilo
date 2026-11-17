@@ -633,8 +633,22 @@ exited_without() {
 }
 # Settings has drawn its tab $1, or whichever it shows, since the last command, on showing or on a
 # change of tab: until it has, a click in it finds nothing to land on (#1101, #1133).
+# Its failure names the platform's last report of the window on screen since the command, which is
+# what a show's line waits on (#3270).
 settings_drew() {
-  expect "^browser: settings drew ${1:-.*}\$" "Settings didn't draw ${1:-its tab}"
+  local drew="^browser: settings drew ${1:-.*}\$" seen=
+  wait_begins
+  for _ in $(seq 100); do
+    logged "$drew" && return 0
+    exited_without "$drew" "Settings didn't draw ${1:-its tab}"
+    sleep 0.1
+  done
+  ran_out "$drew" "$step"
+  seen=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep '^browser: settings visibility ' | tail -1)
+  if [ -n "$seen" ]; then
+    fail "Settings didn't draw ${1:-its tab}; the last report of its window since the command: ${seen#browser: settings }"
+  fi
+  fail "Settings didn't draw ${1:-its tab}; no report of its window's visibility came since the command"
 }
 # Where Settings last drew its control $1, "x y" for clickkey, once it has: it logs each place it
 # draws one ("browser: settings $1 at x y"). That can be a frame from before the state a run just

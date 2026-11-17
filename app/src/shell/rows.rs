@@ -33,6 +33,7 @@ use super::{
     access::{Accessible, NEW_TAB},
     drag::in_sidebar,
     return_mark::Bitmap,
+    sidebar_keys,
 };
 use crate::{
     icon_picker::{self, Subject},
@@ -293,6 +294,7 @@ impl Shell {
         };
         let ring = match row {
             Row::Tab(tab) if !ghost => self.keyed_ring(tab, PLATE_RADIUS),
+            Row::NewTab => self.keyed_ring(sidebar_keys::NEW_TAB, PLATE_RADIUS),
             _ => None,
         };
         let chosen = matches!(row, Row::Tab(tab) if self.chosen.contains(&tab)) && !selected;
@@ -388,7 +390,12 @@ impl Shell {
         selected: bool,
     ) -> gpui::Stateful<gpui::Div> {
         match row {
-            Row::NewTab => element.accessibility_id(NEW_TAB).button_named("New Tab"),
+            Row::NewTab => element
+                .accessibility_id(NEW_TAB)
+                .button_named("New Tab")
+                .when(self.keyed == Some(sidebar_keys::NEW_TAB), |row| {
+                    row.aria_active_descendant()
+                }),
             Row::Tab(folder) if self.is_folder_anywhere(folder) => {
                 let open = self.folder_open(folder);
                 element
