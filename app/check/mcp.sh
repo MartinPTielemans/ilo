@@ -1626,7 +1626,7 @@ addEventListener('message', event => event.data == 'extension changed' && (docum
   seen_line 'Extension changed' '(filled, not as you typed it)'
   seen_line Filled '(filled)'
   seen_line Default '(filled)'
-  seen_line Fixed '(holds "██████")'
+  seen_line Fixed '(read-only) (holds "██████")'
   seen_line Disabled '(disabled) (holds "██████")'
   seen_line 'Shown password' '(filled)'
   seen_line 'Toggled back' '(filled)'
@@ -1649,7 +1649,7 @@ if content["type"] != "image":
 open(sys.argv[1], "wb").write(base64.b64decode(content["data"]))' "$out/agent-fields.jpg" ||
     fail "the screenshot of the page with fields answered no picture"
   # The share of red pixels between ($1, $2) and ($3, $4), as hundredths of the picture's width
-  # and height, in %; pixel leaves the picture as a BMP.
+  # and height, in %, and their count; pixel leaves the picture as a BMP.
   pixel "$out/agent-fields.jpg" 0 0 > /dev/null
   reds() {
     python3 -I - "$out/pixel.bmp" "$@" << 'PY'
@@ -1666,13 +1666,13 @@ for y in range(int(y0 * abs(height)), int(y1 * abs(height))):
         b, g, r = data[offset + row * stride + x * bits // 8:][:3]
         red += r > 160 and g < 100 and b < 100
         total += 1
-print(red * 100 // max(total, 1))
+print(red * 100 // max(total, 1), red)
 PY
   }
   # A field's inside, $1 between ($2, $3) and ($4, $5), clear of its border: $6, shown with red,
   # or withheld with none.
   see_field() {
-    share=$(reds "$2" "$3" "$4" "$5")
+    share=$(reds "$2" "$3" "$4" "$5" | cut -d' ' -f1)
     echo "$1: $share% red" >> "$out/mcp-pictured.txt"
     if [ "$6" = shown ]; then
       [ "$share" -ge 10 ] ||
@@ -1703,9 +1703,13 @@ PY
   see_field Below 3 95 21 99 withheld
   see_field "Extension frame over the page" 41 77 64 90 withheld
   see_field "Extension frame in the page" 3 77 26 90 withheld
-  # The user's typing on the fields page, in fields whose page keeps their markup in step.
+  # The user's typing on the fields page, in fields whose page keeps their markup in step: no red
+  # pixel at all, as a line of text is too small a share of the picture to count as one.
   pixel "$out/agent-typed.jpg" 0 0 > /dev/null
-  see_field "User's typing, copied to the markup" 0 0 100 100 withheld
+  typed_red=$(reds 0 0 100 100 | cut -d' ' -f2)
+  echo "User's typing, copied to the markup: $typed_red red pixels" >> "$out/mcp-pictured.txt"
+  [ "$typed_red" -eq 0 ] ||
+    fail "the agent's picture showed the user's typing, which it may not: $typed_red red pixels"
   call close_tab "{\"tab\":$fields_tab}" > /dev/null
 
   # It opens a page in its Space, clicks its link, scrolls a long page and takes a screenshot.
