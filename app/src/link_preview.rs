@@ -526,9 +526,9 @@ struct Preview {
     /// Whether the hole has closed over a page under the window that's leaving, which it leaves
     /// the frame after, or once that frame is on screen where the host can say.
     covered: bool,
-    /// Whether the page waits for the frame that closed the hole over it to be on screen, and
+    /// Since when the page waits for the frame that closed the hole over it to be on screen, and
     /// that wait's limit, a one-shot dropped as the host says.
-    covering: bool,
+    covering: Option<Instant>,
     _covering: Option<Task<()>>,
     /// Whether the card holds at rest as it closes, until a page under the window has left.
     held: bool,
@@ -606,18 +606,19 @@ impl Preview {
             return false;
         }
         let tab = self.tab;
-        self.covering = true;
+        self.covering = Some(Instant::now());
         self._covering = Some(cx.spawn(async move |preview, cx| {
             cx.background_executor().timer(SHOWN_WAIT).await;
             preview
                 .update(cx, |preview, cx| {
                     let waited = preview.preview.as_mut();
-                    let Some(shown) = waited.filter(|shown| shown.tab == tab && shown.covering)
+                    let Some(shown) =
+                        waited.filter(|shown| shown.tab == tab && shown.covering.is_some())
                     else {
                         return;
                     };
                     log!("browser: link preview cover not shown in 150 ms");
-                    shown.covering = false;
+                    shown.covering = None;
                     cx.notify();
                 })
                 .ok();
@@ -777,7 +778,7 @@ pub fn show(
             _wait: None,
             releasing: false,
             covered: false,
-            covering: false,
+            covering: None,
             _covering: None,
             held: false,
             logged: None,
@@ -838,8 +839,13 @@ pub fn page_shown(tab: u64, page: Bounds<Pixels>, cx: &mut App) {
 pub fn cover_shown(tab: u64, cx: &mut App) {
     update(cx, |preview, _, cx| {
         let shown = preview.preview.as_mut();
-        if let Some(shown) = shown.filter(|shown| shown.tab == tab && shown.covering) {
-            shown.covering = false;
+        let Some(shown) = shown.filter(|shown| shown.tab == tab) else {
+            return;
+        };
+        if let Some(since) = shown.covering.take() {
+            // The hold the close takes for it, which check/peek-motion.sh reports.
+            let ms = since.elapsed().as_secs_f64() * 1000.;
+            log!("browser: link preview cover shown in {ms:.1} ms");
             shown._covering = None;
             cx.notify();
         }
@@ -1178,7 +1184,7 @@ impl Render for LinkPreview {
                         }
                         (none, false)
                     }
-                    (Some(Leave::Close), false) if shown.covering => (none, false),
+                    (Some(Leave::Close), false) if shown.covering.is_some() => (none, false),
                     _ => {
                         if how.is_none() || shown.releasing {
                             leave_to = Some(out_of_sight(rest));
