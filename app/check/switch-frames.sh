@@ -5,9 +5,18 @@
 # GitHub's hosted Mac (#1438). A burst of the window's pictures (tools/window-frames.sh) looks at
 # the page area in each: one flat colour is no page. Its pages are never flat, the first striped and
 # the others example.com's and example.org's text on their backgrounds.
+# On the Mac a page a switch lets go stays in the window, out of sight, until 250 ms after the last
+# let-go, as taking it out at once left the page area empty for a frame (#2248). With an engine
+# whose core does that, the second Space has two pages that move, a background scrolling under
+# their stripes, which the Space switches show, and ten ⌃Tabs back to back between them show a page
+# throughout too. Then the pages let go leave the window together, leaving only the page shown, and
+# in those 250 ms a pointer move after a ⌃Tab, with the pointer resting over the page area, reaches
+# only the page shown, a click and a key reach the page shown, ⌘L opens the command bar, ⇧-click
+# opens a link in Peek, full screen keeps the page shown, the tab of a page let go closes, and a
+# quit ends the app.
 # The pictures need the Mac's ScreenCaptureKit, check.sh's Xvfb or tools/headless.sh's sway session
 # on Linux, or a CI runner's screen on Windows; elsewhere the run says it can't take them.
-page="data:text/html,<title>ready</title><body style=\"margin:0;height:100vh;background:repeating-linear-gradient(45deg,%23cc3333 0 24px,%23ffffff 24px 48px)\">"
+page="data:text/html,<title>ready</title><body onkeydown=\"document.title='key '+event.key\" style=\"margin:0;height:100vh;background:repeating-linear-gradient(45deg,%23cc3333 0 24px,%23ffffff 24px 48px)\">"
 log="$out/switch-frames.log"
 frames="$out/switch-frames.txt"
 marks="$out/switch-marks.txt"
@@ -22,6 +31,25 @@ await_load
 await '^browser: title [0-9]* ready$' || fail "the striped page didn't draw"
 first=$(space)
 a=$(today)
+# Whether the engine keeps the pages let go, from the line its core logs as they leave, in the
+# library the running app mapped: a dev engine's dylibs can stay in build/ after a Release build,
+# which the app doesn't load, and a check VM's guest has the app but no core. With the dev engine
+# the core is in libchrome_dll.dylib, else in the framework's own library.
+held=
+if [ "$(uname)" = Darwin ]; then
+  mapped=$(lsof -p "$pid" -Fn 2> /dev/null | sed -n 's/^n//p')
+  engine_library=$(printf '%s\n' "$mapped" | grep -m1 '/libchrome_dll\.dylib$') ||
+    engine_library=$(printf '%s\n' "$mapped" |
+      grep -m1 -E '/Contents/Frameworks/[^/]*Framework\.framework/Versions/[^/]*/[^/]*Framework$') ||
+    fail "the app ($pid) has mapped neither libchrome_dll.dylib nor its framework's library, so whether its engine keeps the pages let go is unknown"
+fi
+if [ "$(uname)" = Darwin ] &&
+  LC_ALL=C grep -qaF "switch's pages let go left the window" "$engine_library"; then
+  held=1
+elif [ "$(uname)" = Darwin ]; then
+  echo "skip: switch-frames' steps for the 250 ms after a let-go: this engine takes the page a" \
+    "switch left out of the window at once (#2248)."
+fi
 send click $page_point
 if [ "$active" != 1 ]; then
   exec 3>&-
@@ -40,6 +68,40 @@ second=$(grep '^browser: spaces' "$log" | tail -1 | cut -d' ' -f4)
 send type frames
 send key return
 open_from_bar example.org
+o=$tab
+if [ -n "$held" ]; then
+  # The page that moves, with a link to itself in its bottom right 200 by 100 for Peek, which is
+  # the card's bottom right, 10 in from the window's edges. It counts the pointer's moves in its
+  # title.
+  serve
+  printf '%s' '<title>loading</title><style>
+@keyframes scroll { to { background-position: 96px 0, 0 0 } }
+body { margin: 0; height: 100vh; animation: scroll 0.5s linear infinite;
+  background: repeating-linear-gradient(-45deg, #3355cc 0 24px, transparent 24px 48px),
+    linear-gradient(90deg, #ffffff, #ffcc33) }
+a { position: fixed; right: 0; bottom: 0; width: 200px; height: 100px; font: 24px system-ui }
+</style><a href="switch-moving.html?peek">Peek</a>
+<script>
+let moves = 0;
+onmousemove = () => document.title = "moved " + ++moves;
+requestAnimationFrame(() => requestAnimationFrame(() => document.title = "moving"));
+</script>' > "$out/site/switch-moving.html"
+  # Opens the page that moves at $1 from the command bar, as $tab.
+  open_moving() {
+    before=$(today)
+    send key t cmd
+    expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+    send type "${site}switch-moving.html$1"
+    send key return
+    expect "^browser: today [0-9][0-9]* $before\$" "the page that moves didn't open at the top of Today"
+    tab=$(today | cut -d' ' -f1)
+    expect "^browser: title $tab moving\$" "the page that moves didn't draw"
+  }
+  open_moving "?one"
+  m=$tab
+  open_moving "?two"
+  n=$tab
+fi
 send key 1 ctrl
 expect "^browser: space $first in " "⌃1 didn't show the first Space"
 open_from_bar example.com
@@ -105,11 +167,153 @@ for i in 1 2; do
   expect "^browser: selected $c in " "a click on example.com's row didn't show it"
   sleep 0.7
 done
+# ⌃Tab as a hand's quick one types it, which the pictures are for: ⌃ goes up just after the Tab, so
+# it switches once, on the press, shows nothing over the page, and ends the walk it starts, so the
+# next goes back to the tab it left. The driver's key holds ⌃ only for its own key, so flags lets it
+# go. The key is posted, flags straight behind it, as the driver runs its commands in order: a send's
+# wait for the key's line took long enough that ⌃, held past [tab-switcher.motion] delay (0.16 s),
+# showed the Recent Tabs Switcher in half the goes. What the key did is read from its step, $tapped,
+# as the switch's lines can come before flags' own.
+ctrl_tab() {
+  post key tab ctrl
+  tapped=$step
+  send flags
+  grep -q "^browser: drive $tapped: can't do that" "$log" && fail "the driver can't do ⌃Tab"
+  [ -n "${first_tap:-}" ] || first_tap=$tapped
+}
+# None of the ⌃Tabs since the first held ⌃ long enough to show the Recent Tabs Switcher, whose
+# window over the page would be in the pictures and take the keyboard from the browser window.
+quick_ctrl_tabs() {
+  none_since '^browser: tab switcher lists ' "$first_tap" ||
+    fail "a quick ⌃Tab $1 showed the Recent Tabs Switcher, as ⌃ went up after its delay"
+}
+if [ -n "$held" ]; then
+  mark "ctrl2 moving"
+  send key 2 ctrl
+  expect "^browser: space $second in " "⌃2 didn't show the second Space"
+  # Its page in the pictures for as long as each switch before had.
+  sleep 0.7
+  # One mark for the ten, as each alone is too short for enough pictures. Each lets ⌃ go, so they go
+  # back and forth between the Space's two tabs shown last, the pages that move.
+  mark ctrltabs
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    ctrl_tab
+    expect "^browser: selected [0-9][0-9]* in " "⌃Tab $i in a run of them didn't show a tab" "$tapped"
+  done
+  # The last switch's page in the pictures for as long as each switch before had.
+  sleep 0.7
+fi
 mark stop
 touch "$stop"
 wait "$capture" || fail "the window's pictures failed: $(tail -1 "$out/switch-frames-capture.log")"
+if [ -n "$held" ]; then
+  quick_ctrl_tabs "in the pictures"
+  leaving="^browser: switch's pages let go left the window"
+  # The pages let go since the let-go at step $went have left the window, leaving the page shown,
+  # after step $2 began, or the step wasn't within the 250 ms, which a slow Mac can take to send.
+  left() {
+    expect "$leaving, 1 views in it\$" "the pages let go didn't leave the window $1, or others stayed" \
+      "$went"
+    since "$went" | awk -v step="^browser: drive $2: " -v leaving="$leaving" '
+      $0 ~ step { sent = 1 } $0 ~ leaving { exit !sent }' ||
+      echo "skip: switch-frames' $1, which came after the page left had left the window"
+  }
+  # The core's let-go of the page the last switch left, as the page it shows has drawn, looked for
+  # from the step $2 if given, the ⌃Tab's key: expect_soon looks from the last command sent.
+  let_go() {
+    sent=$step
+    step=${2:-$step}
+    expect_soon '^browser: switch let the page it left go ' "$1 didn't let the page it left go"
+    step=$sent
+    went=$step
+  }
+  went=$step
+  left "after the ⌃Tabs" "$step"
+  # The page shown last: one of the two that move.
+  shown=$(grep '^browser: selected ' "$log" | tail -1 | cut -d' ' -f3)
+  other=$m
+  [ "$shown" != "$m" ] || other=$n
+  # With the pointer resting over the page area, the move after a ⌃Tab reaches the page it shows,
+  # and not the page it let go, still in the window. Two pages taking the pointer, setting the
+  # cursor each, would show for the 250 ms.
+  send move $page_point
+  expect "^browser: title $shown moved [0-9]*\$" "a pointer move over the page area didn't reach the page shown"
+  ctrl_tab
+  expect "^browser: selected $other in " "⌃Tab didn't show the other page that moves" "$tapped"
+  let_go "⌃Tab with the pointer over the page area" "$tapped"
+  turned=$step
+  send move $(echo $page_point | awk '{ print $1 + 10, $2 + 10 }')
+  expect "^browser: title $other moved [0-9]*\$" "a pointer move just after ⌃Tab didn't reach the page shown"
+  none_since "^browser: title $shown moved " "$turned" ||
+    fail "a pointer move just after ⌃Tab reached the page it let go too"
+  left "after a pointer move" "$step"
+  ctrl_tab
+  expect "^browser: selected $shown in " "⌃Tab didn't show the first page that moves again" "$tapped"
+  let_go "⌃Tab back" "$tapped"
+  send click $((width - 110)) $((height - 60)) shift
+  expect '^browser: link preview shown$' "⇧-click just after a switch didn't open the link in Peek"
+  left "with Peek open" "$step"
+  send key escape
+  expect '^browser: link preview closing (escape)$' "Esc didn't close Peek"
+  send key 1 ctrl
+  expect "^browser: space $first in " "⌃1 didn't show the first Space"
+  send click $(row 1)
+  expect "^browser: selected $a in " "a click on the striped page's row didn't show it"
+  let_go "a click on the striped page's row"
+  send click $page_point
+  send key k
+  expect "^browser: title $a key k\$" "a key just after a switch didn't reach the page shown"
+  left "after a click and a key in the page shown" $((went + 1))
+  send key 2 ctrl
+  expect "^browser: space $second in " "⌃2 didn't show the second Space"
+  let_go "⌃2"
+  send key l cmd
+  expect '^browser: command bar shown$' "⌘L just after a switch didn't open the command bar"
+  left "after ⌘L" "$step"
+  send key escape
+  expect '^browser: command bar hidden$' "escape didn't close the command bar"
+  send key 1 ctrl
+  expect "^browser: space $first in " "⌃1 didn't show the first Space"
+  let_go "⌃1"
+  # Full screen is a Space of its own. AppKit says the window has entered or left it before macOS
+  # has slid there or back, and until then its transition window is over the browser window and
+  # takes the clicks (#2248). Left before the slide in has ended, macOS slides there and back after
+  # (#889), so each step waits for its slide.
+  send fullscreen
+  entered=$step
+  expect '^browser: window entered full screen$' "the window didn't go full screen just after a switch"
+  expect '^browser: desktop space changed$' "the window's full-screen Space didn't come forward" \
+    "$entered"
+  left "in full screen" "$entered"
+  send fullscreen
+  exited=$step
+  expect '^browser: window left full screen$' "the window didn't leave full screen"
+  expect '^browser: desktop space changed$' "the desktop's Space didn't come back after full screen" \
+    "$exited"
+  # The striped page, shown again while it's let go, and example.com's tab, closed while its page is
+  # let go: the window lets it go without it.
+  send click $(row 0)
+  expect "^browser: selected $c in " "a click on example.com's row didn't show it"
+  let_go "a click on example.com's row"
+  send click $(row 1)
+  expect "^browser: selected $a in " "a click on the striped page's row didn't show it"
+  let_go "a click on the striped page's row"
+  send middleclick $(row 0)
+  expect "^browser: tab $c closed\$" "a middle-click on example.com's row didn't close its tab"
+  left "as its tab closed" "$step"
+  # A quit with the page a switch let go still in the window.
+  send key 2 ctrl
+  expect "^browser: space $second in " "⌃2 didn't show the second Space"
+  let_go "⌃2 before the quit"
+  quick_ctrl_tabs "after the pictures"
+fi
 exec 3>&-
 quit
+if [ -n "$held" ]; then
+  if since "$went" | grep -q "$leaving"; then
+    echo "skip: switch-frames' quit just after a switch, which came after the page left had left the window"
+  fi
+fi
 # A picture shows the window at a moment between when it was asked for and when it came back, so it
 # goes with the last switch begun by when it came back: one taken across a switch's start, as a
 # blank there would be, is that switch's, and says how far each side of its start it reached.
@@ -169,3 +373,8 @@ cat "$out/switch-frames-summary.txt"
 [ "$status" = 0 ] ||
   fail "the page area showed no page through a switch: $(grep '^problem: ' "$out/switch-frames-summary.txt" | cut -c10- | paste -sd';' -), its pictures in $out/switch-flat"
 echo "ok: every Space and tab switch showed a page in the page area at every picture"
+[ -z "$held" ] ||
+  echo "ok: on the Mac, ten ⌃Tabs back to back and switches to a page that moves showed a page" \
+    "throughout, the pages let go left the window together leaving the page shown, and in the" \
+    "250 ms after a let-go a pointer move reached only the page shown, and a click, a key, ⌘L," \
+    "Peek, full screen, closing a tab and a quit worked"
