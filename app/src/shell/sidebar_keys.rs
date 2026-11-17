@@ -11,7 +11,8 @@
 use std::{cell::Cell, rc::Rc, time::Duration};
 
 use gpui::{
-    App, Bounds, Context, KeyBinding, Pixels, Window, actions, canvas, div, point, prelude::*, px,
+    App, Bounds, Context, KeyBinding, Pixels, Role, Window, actions, canvas, div, point,
+    prelude::*, px,
 };
 
 use super::{Command, Shell, commands::Run};
@@ -27,7 +28,9 @@ const ATTENTION: Duration = Duration::from_millis(2500);
 
 actions!(
     sidebar_keys,
-    [KeyUp, KeyDown, KeyShow, KeyLeave, KeyOpen, KeyOut, KeyMenu]
+    [
+        KeyUp, KeyDown, KeyShow, KeyLeave, KeyOpen, KeyOut, KeyMenu, TabIn
+    ]
 );
 
 pub(super) fn bind(cx: &mut App) {
@@ -41,6 +44,8 @@ pub(super) fn bind(cx: &mut App) {
         // The context menu's keys on Windows and Linux, which a Mac keyboard has only the first of.
         KeyBinding::new("shift-f10", KeyMenu, Some(CONTEXT)),
         KeyBinding::new("menu", KeyMenu, Some(CONTEXT)),
+        KeyBinding::new("tab", TabIn, Some(super::KEY_CONTEXT)),
+        KeyBinding::new("shift-tab", TabIn, Some(super::KEY_CONTEXT)),
     ]);
 }
 
@@ -59,6 +64,16 @@ impl Shell {
         self.browser.focus_ui(cx);
         self.focus_keys = true;
         self.key_row(row, cx);
+    }
+
+    /// Tab and Shift+Tab with the window itself holding the keyboard, no field, row or page
+    /// having it, ring a row as Focus Sidebar does. Otherwise they'd go nowhere, and the first
+    /// keys a screen-reader user tries would say nothing (#3237).
+    pub(super) fn tab_in(&mut self, _: &TabIn, window: &mut Window, cx: &mut Context<Self>) {
+        if self.onboarding.is_some() || !self.focus_handle.is_focused(window) {
+            return cx.propagate();
+        }
+        self.run(Command::FocusSidebar, "tab", cx);
     }
 
     fn key_row(&mut self, row: u64, cx: &mut Context<Self>) {
@@ -222,8 +237,17 @@ impl Shell {
     }
 
     /// The sidebar's element, taking its keys while it has the keyboard.
-    pub(super) fn with_keys(&self, sidebar: gpui::Div, cx: &mut Context<Self>) -> gpui::Div {
+    /// An assistive app reads it as the sidebar, and, as it has the keyboard, the ringed row.
+    pub(super) fn with_keys(
+        &self,
+        sidebar: gpui::Div,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
         sidebar
+            .id("sidebar")
+            .when(self.a11y, |sidebar| {
+                sidebar.role(Role::Group).aria_label("Sidebar")
+            })
             .key_context(CONTEXT)
             .track_focus(&self.sidebar_keys)
             .on_action(cx.listener(|shell, _: &KeyUp, _, cx| shell.key_step(false, cx)))
@@ -346,6 +370,24 @@ mod tests {
     fn ringed(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> (Option<u64>, Option<u64>) {
         let drawn = |shell: &Shell| shell.keyed_drawn.get().map(|(tab, _)| tab);
         shell.read_with(cx, |shell, _| (shell.keyed, drawn(shell)))
+    }
+
+    /// With the window itself holding the keyboard, Tab and Shift+Tab ring the tab shown's row as
+    /// Focus Sidebar does, so a screen reader has a named row to say (#3237). Once the ring has the
+    /// keyboard Tab leaves it where it is.
+    #[gpui::test]
+    fn tab_from_the_window_rings_the_tab_shown(cx: &mut TestAppContext) {
+        for key in ["tab", "shift-tab"] {
+            let (shell, cx, host) = window(cx);
+            cx.simulate_keystrokes(key);
+            cx.run_until_parked();
+            assert_eq!(ringed(&shell, cx), (Some(20), Some(20)), "{key}");
+            assert!(host.take().contains(&"focus ui".to_owned()), "{key}");
+            cx.simulate_keystrokes("down");
+            cx.simulate_keystrokes(key);
+            cx.run_until_parked();
+            assert_eq!(ringed(&shell, cx), (Some(21), Some(21)), "{key} again");
+        }
     }
 
     /// Focus Sidebar rings the tab shown's row, the arrows move the ring over the rows, stopping at

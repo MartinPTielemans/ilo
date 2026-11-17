@@ -49,8 +49,9 @@ On Linux the same two hold, and Wayland adds a third. The zygote starts every pr
 - Ardia's React Native UI measures 40 ms per tab switch against Chrome's 8 ms (`docs/perf/vs-browsers.md` in mantrakp04/ardia). Hot-path UI must not run in a JavaScript runtime.
 - Pages render in Chromium's native views, not off-screen, keeping Chrome's compositing, latency, video overlays and battery life.
 - GPUI can't draw over a native view, so anything floating over the page (command bar, menus, Peek) is a borderless child window, as Chrome's bubbles are.
+- A Board (#3073) is the one page of the browser's own, `chrome://board`: a canvas of cards is a document, not hot-path UI. No other surface becomes a page by this without its own line here.
 
-Settled by the Phase 1 spikes (`spikes/gpui-cef/` and `spikes/gpui-ardia/` at 91ddfe6, since removed). On CEF and Ardia's engine, GPUI runs inside Chromium's run loop, and focus, the browser's shortcuts with the page focused, IME composition, the command bar over the page, resize and full screen work across the boundary. A long page scrolls at 120 fps with GPUI in the window.
+Settled by the Phase 1 spikes (at 91ddfe6, since removed): GPUI runs inside Chromium's run loop, and focus, the browser's shortcuts with the page focused, IME composition, the command bar over the page, resize and full screen work across the boundary. A long page scrolls at 120 fps with GPUI in the window.
 
 Revisit if an engine or GPUI change breaks run-loop sharing or input across the boundary unpatchably. The fallback is Views (C++): as cross-platform, without these integration risks.
 
@@ -103,7 +104,6 @@ Why:
 
 - Every current option fails an agent working beside a human. Headless Playwright has no logins and is flagged as a bot; so are cloud browsers, which also take the data off the machine. Remote-debugging the user's Chrome is fragile and insecure, and Chrome 136 blocks it on the default profile.
 - Owning the Chromium core layer (decision 3) makes this possible; Spaces (decision 5) are the natural unit of isolation.
-- It sets us apart from Ardia and other Arc-style browsers.
 - People want to hand over a task from where they are, without a terminal, and many already pay for Claude or Codex. Their own CLI costs them nothing more, needs no AI service of ilo's, and keeps one path, so every agent rule lives once in the core.
 
 Revisit asking from ilo if Anthropic or OpenAI stop other apps running their CLIs on a subscription; ilo then takes the vendor's sign-in program where there is one, or the user's API key.
@@ -111,7 +111,6 @@ Revisit asking from ilo if Anthropic or OpenAI stop other apps running their CLI
 Consequences now:
 
 - The core exposes one API to both the UI and agents; agents aren't a bolt-on.
-- "Agent Space" is a kind of Space in the data model from the start.
 - The main risk is prompt injection from page content. Permissions and confirmations limit the damage without solving it, so confirmation UI and the activity log ship with the MCP server, never after.
 
 ## 9. Crash reports: opt-in, to Sentry (EU region)

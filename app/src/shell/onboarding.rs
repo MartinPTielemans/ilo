@@ -16,7 +16,10 @@ use web_time::Instant;
 use gpui::{
     AnyElement, Bounds, ClickEvent, Context, Entity, KeyboardButton, KeyboardClickEvent,
     KeystrokeEvent, MouseButton, PathBuilder, Pixels, Rgba, SharedString, Subscription, Window,
-    canvas, div, fill, point, prelude::*, px, rgb, size,
+    accesskit::{Role, Toggled},
+    canvas, div, fill, point,
+    prelude::*,
+    px, rgb, size,
 };
 
 use super::{
@@ -27,9 +30,9 @@ use super::{
 use crate::account::{self, Account, AccountEvent, Status};
 use crate::default_browser::{self, Os};
 use crate::import::{Corner, Guide, ImportEvent, ImportView, Look};
-use crate::settings_rows::{SLIDE, group, stop_switch};
+use crate::settings_rows::{SLIDE, group, named_button, ring, stop_switch};
 use crate::theme::Theme;
-use crate::theme_picker::SWATCHES;
+use crate::theme_picker::{SWATCHES, swatch_name};
 use crate::tokens::palette::{INK, PAPER};
 use crate::tokens::settings::PADDING;
 use crate::tokens::shell::onboarding::BUTTON_GAP;
@@ -42,6 +45,9 @@ use crate::tokens::shell::onboarding::CHIP_GAP;
 use crate::tokens::shell::onboarding::CHIP_HEIGHT;
 use crate::tokens::shell::onboarding::CHIP_INSET;
 use crate::tokens::shell::onboarding::CHIP_RADIUS;
+use crate::tokens::shell::onboarding::ENGINE_DOT;
+use crate::tokens::shell::onboarding::ENGINE_DOT_CENTER;
+use crate::tokens::shell::onboarding::ENGINE_ROW;
 use crate::tokens::shell::onboarding::IMPORT_HOLD;
 use crate::tokens::shell::onboarding::IMPORT_SURFACE;
 use crate::tokens::shell::onboarding::IMPORT_WIDTH;
@@ -80,6 +86,9 @@ pub(super) enum Step {
     Favorites,
     /// Asks the system to open links with ilo; left out when it already does.
     DefaultBrowser,
+    /// The first profile's search engine, from Settings' list; left out when it comes while the
+    /// core has none to offer, as while a policy picks it.
+    SearchEngine,
     /// The first Space's colour, from the theme picker's swatches.
     Color,
     /// Signing in to sync: Settings › Sync's view (crate::account); left out in a build that names
@@ -89,11 +98,12 @@ pub(super) enum Step {
     OptIns,
 }
 
-const STEPS: [Step; 7] = [
+const STEPS: [Step; 8] = [
     Step::Intro,
     Step::Import,
     Step::Favorites,
     Step::DefaultBrowser,
+    Step::SearchEngine,
     Step::Color,
     Step::Account,
     Step::OptIns,
@@ -156,6 +166,7 @@ impl Step {
             Step::Import => "import",
             Step::Favorites => "favorites",
             Step::DefaultBrowser => "default-browser",
+            Step::SearchEngine => "search-engine",
             Step::Color => "color",
             Step::Account => "account",
             Step::OptIns => "opt-ins",
@@ -197,6 +208,14 @@ impl Step {
                 let title = concat!("Make ", env!("APP_NAME"), " your default browser.");
                 return (title, line.into(), button);
             }
+            // The engine that searches until one is picked is already the filled dot, so the line
+            // needn't name it.
+            Step::SearchEngine => (
+                "Pick a search engine.",
+                "What you type that isn't an address searches with it. You can change it later in \
+                 Settings.",
+                "Continue",
+            ),
             Step::Color => (
                 "Pick a colour for your first Space.",
                 "The window takes it. Each Space can have its own, from its name in the sidebar.",
@@ -330,6 +349,12 @@ pub(super) struct Onboarding {
     pub(super) step: Step,
     /// The swatch picked at the colour step, if one is.
     pub(super) picked: Option<usize>,
+    /// The search engines offered, each its keyword and name, and the profile's default's keyword,
+    /// read until the core has them: a new profile's load after the flow starts.
+    engines: (Vec<(SharedString, SharedString)>, SharedString),
+    /// The engine picked at its step, the default's until the user moves it. Nothing is set until
+    /// Continue.
+    engine: Option<usize>,
     /// The system it runs on, for the default browser's step.
     os: Os,
     /// The opt-in switch last turned, and when, for its knob's slide.
@@ -338,6 +363,14 @@ pub(super) struct Onboarding {
     slid: bool,
     /// ⇥ put the keyboard on the opt-ins' switches, which it leaves with them (onboarding_layer).
     on_switches: bool,
+    /// The step shown holds the keyboard while nothing in it does, so an assistive app, which
+    /// follows the keyboard, reads each step by its title and line as it comes (#3151).
+    focus: gpui::FocusHandle,
+    /// ⇥'s stops at the step's button and at its corner's Skip or Back, which ↩ and Space press.
+    continue_stop: gpui::FocusHandle,
+    skip_stop: gpui::FocusHandle,
+    /// The step that last took the keyboard as it came.
+    focused_step: Option<Step>,
     /// Where the opt-ins' rows and switches are drawn (opt_in_frame).
     frames: Frames,
     /// Where the step's button is drawn, once the step has settled (button_frame).
@@ -392,6 +425,10 @@ impl Shell {
             !view.is_empty() || view.running().is_some()
         });
         let default_browser = self.browser.is_default_browser();
+        // A new profile's engines load after the flow starts, so the step is planned before the
+        // core has them, and onboarding_next reads them until it does.
+        let engines = self.browser.search_engines(self.space);
+        let engine = (engines.0.iter()).position(|(keyword, _)| *keyword == engines.1);
         let opt_ins = !self.opt_ins(cx).is_empty();
         let account = self.signing(cx);
         let steps: Vec<Step> = STEPS
@@ -401,6 +438,7 @@ impl Shell {
                 // An import begun brings it in (import_event).
                 Step::Favorites => false,
                 Step::DefaultBrowser => !default_browser,
+                Step::SearchEngine => true,
                 Step::Account => account.is_some(),
                 Step::OptIns => opt_ins,
                 _ => true,
@@ -415,10 +453,16 @@ impl Shell {
             steps,
             step: Step::Intro,
             picked: None,
+            engines,
+            engine,
             os: self.browser.os(),
             switched: None,
             slid: false,
             on_switches: false,
+            focus: cx.focus_handle(),
+            continue_stop: cx.focus_handle().tab_stop(true),
+            skip_stop: cx.focus_handle().tab_stop(true),
+            focused_step: None,
             frames: Frames::default(),
             button: Rc::default(),
             since: Instant::now(),
@@ -516,6 +560,9 @@ impl Shell {
         // The core reads the account after the flow may have started, and it can be signed in by
         // then.
         let signed_in = !signed_out(&account::synced(cx));
+        let engines = (self.onboarding.as_ref())
+            .filter(|o| o.engines.0.is_empty() && o.steps.contains(&Step::SearchEngine))
+            .map(|_| self.browser.search_engines(self.space));
         let Some(onboarding) = self.onboarding.as_mut().filter(|o| o.ending.is_none()) else {
             return;
         };
@@ -536,7 +583,17 @@ impl Shell {
                 .steps
                 .retain(|&each| each != Step::Account || each == step);
         }
+        if let Some(engines) = engines {
+            onboarding.engine = (engines.0.iter()).position(|(keyword, _)| *keyword == engines.1);
+            onboarding.engines = engines;
+        }
         let at = onboarding.steps.iter().position(|&each| each == step);
+        // With none to offer when its turn comes, the search engine's step is left out.
+        if at.and_then(|at| onboarding.steps.get(at + 1)) == Some(&Step::SearchEngine)
+            && onboarding.engines.0.is_empty()
+        {
+            onboarding.steps.retain(|&each| each != Step::SearchEngine);
+        }
         match at.and_then(|at| onboarding.steps.get(at + 1)).copied() {
             Some(next) => {
                 let elapsed = onboarding.since.elapsed().as_secs_f32();
@@ -601,6 +658,18 @@ impl Shell {
             }
             (Step::DefaultBrowser, _) if default_browser::offers(onboarding.os, false) => {
                 self.browser.make_default_browser(cx)
+            }
+            // Only a pick that isn't the default already: the default stays the core's fallback,
+            // which a recommended policy outranks, rather than becoming the user's choice.
+            (Step::SearchEngine, _) => {
+                let (engines, default) = &onboarding.engines;
+                let picked = (onboarding.engine)
+                    .and_then(|at| engines.get(at))
+                    .filter(|(keyword, _)| keyword != default);
+                if let Some((keyword, name)) = picked.cloned() {
+                    self.browser
+                        .set_search_engine(self.space, &keyword, &name, cx);
+                }
             }
             (Step::Favorites, _) => {
                 let (ticked, space) = (self.favorites_ticked(cx), self.space);
@@ -736,6 +805,15 @@ impl Shell {
     }
 
     /// Picks swatch `index` at the colour step.
+    /// Picks the search engine at `index`, which sets nothing until Continue.
+    fn onboarding_pick_engine(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some(onboarding) = self.onboarding.as_mut() {
+            let last = onboarding.engines.0.len().saturating_sub(1);
+            onboarding.engine = Some(index.min(last));
+            cx.notify();
+        }
+    }
+
     fn onboarding_pick(&mut self, index: usize, cx: &mut Context<Self>) {
         if let Some(onboarding) = self.onboarding.as_mut() {
             onboarding.picked = Some(index.min(SWATCHES.len() - 1));
@@ -752,7 +830,9 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some((step, picked)) = self.onboarding.as_ref().map(|o| (o.step, o.picked)) else {
+        let Some((step, picked, engine)) =
+            (self.onboarding.as_ref()).map(|o| (o.step, o.picked, o.engine))
+        else {
             return;
         };
         let key = &event.keystroke;
@@ -776,6 +856,13 @@ impl Shell {
             (Step::Color, "left") => {
                 self.onboarding_pick(picked.map_or(SWATCHES.len(), |at| at.max(1)) - 1, cx)
             }
+            // ↑ and ↓ move the engine's pick, as they do the import's list's.
+            (Step::SearchEngine, "down") => {
+                self.onboarding_pick_engine(engine.map_or(0, |at| at + 1), cx)
+            }
+            (Step::SearchEngine, "up") => {
+                self.onboarding_pick_engine(engine.map_or(0, |at| at.saturating_sub(1)), cx)
+            }
             // ↩ is the import's button for the state its view shows, and ↑ ↓ move its list's pick.
             (Step::Import, "enter") if !key.modifiers.modified() => {
                 self.onboarding_continue("return", window, cx)
@@ -787,11 +874,12 @@ impl Shell {
                 }
             }
             (Step::Import, _) => {}
-            // ⇥ and ⇧⇥ go along the opt-ins' switches, the window's only stops; Space turns the one
-            // the keyboard is on, as Settings' does, and ↩ stays Continue (#2985).
-            (Step::OptIns, "tab") => {
+            // ⇥ and ⇧⇥ go along the step's stops: the swatches, the opt-ins' switches, its button
+            // and Skip, the window's only stops. Space turns the switch the keyboard is on, as
+            // Settings' does, and ↩ stays Continue there (#2985).
+            (_, "tab") => {
                 if let Some(onboarding) = self.onboarding.as_mut() {
-                    onboarding.on_switches = true;
+                    onboarding.on_switches = step == Step::OptIns;
                 }
                 if key.modifiers.shift {
                     window.focus_prev(cx)
@@ -799,11 +887,19 @@ impl Shell {
                     window.focus_next(cx)
                 }
             }
-            (_, "enter") if !key.modifiers.modified() => {
+            // On the button or Skip, ↩ is that one's press, its click.
+            (_, "enter") if !key.modifiers.modified() && !self.onboarding_stop_keyed(window) => {
                 self.onboarding_continue("return", window, cx)
             }
             _ => {}
         }
+    }
+
+    /// The keyboard is on the step's button or its Skip, which take ↩ and Space as their press.
+    fn onboarding_stop_keyed(&self, window: &Window) -> bool {
+        (self.onboarding.as_ref()).is_some_and(|onboarding| {
+            onboarding.continue_stop.is_focused(window) || onboarding.skip_stop.is_focused(window)
+        })
     }
 
     /// The flow over the whole window while it shows, stepping its motion; none otherwise, at no
@@ -817,7 +913,13 @@ impl Shell {
         // The switches go with their step, and a keyboard left on one would leave the shell's own
         // keys, ⌘T among them, with nowhere to go off the Mac, so it goes back to the shell.
         let left = onboarding.step != Step::OptIns || onboarding.ending.is_some();
-        if left && std::mem::take(&mut onboarding.on_switches) {
+        // So do the step and its stops as the flow ends.
+        let held = onboarding.focus.is_focused(window)
+            || onboarding.continue_stop.is_focused(window)
+            || onboarding.skip_stop.is_focused(window);
+        if (left && std::mem::take(&mut onboarding.on_switches))
+            || (onboarding.ending.is_some() && held)
+        {
             window.focus(&self.focus_handle, cx);
         }
         // A page shown covers it, so it has ended.
@@ -852,6 +954,22 @@ impl Shell {
         if window.is_visible() && !std::mem::replace(&mut onboarding.keyboard, true) {
             let browser = self.browser.clone();
             cx.defer(move |cx| browser.focus_ui(cx));
+        }
+        // Each step takes the keyboard as it comes, from the window or from the step before, so an
+        // assistive app reads it; never from a field that has it.
+        let resting = window.focused(cx).is_none_or(|focus| {
+            focus == self.focus_handle
+                || focus == onboarding.focus
+                || focus == onboarding.continue_stop
+                || focus == onboarding.skip_stop
+        });
+        if onboarding.keyboard
+            && onboarding.ending.is_none()
+            && resting
+            && onboarding.focused_step != Some(onboarding.step)
+        {
+            onboarding.focused_step = Some(onboarding.step);
+            window.focus(&onboarding.focus, cx);
         }
         let still = cx.reduce_motion();
         let elapsed = onboarding.since.elapsed().as_secs_f32();
@@ -1003,10 +1121,25 @@ impl Shell {
             .flex()
             .items_center()
             .justify_center();
+        // A screen reader reads the step shown as a dialog called by its title, with its line, and
+        // the step leaving under it, still drawn as it slides, as nothing.
+        let named = self.a11y
+            && (self.onboarding.as_ref()).is_some_and(|onboarding| onboarding.step == step);
         if step == Step::Intro {
             let drawn = Drawn::at(t, still);
             return layer.child(
                 div()
+                    .id("onboarding-intro")
+                    .when_some(
+                        (self.onboarding.as_ref()).map(|onboarding| onboarding.focus.clone()),
+                        |intro, focus| intro.track_focus(&focus),
+                    )
+                    .when(named, |intro| {
+                        intro
+                            .role(Role::Dialog)
+                            .aria_label(env!("APP_NAME"))
+                            .aria_description("a good tool.")
+                    })
                     .flex()
                     .flex_col()
                     .items_center()
@@ -1025,6 +1158,7 @@ impl Shell {
             .map_or(Os::Mac, |onboarding| onboarding.os);
         let (title, line, button) = step.message(os);
         let switches = (step == Step::OptIns).then(|| self.opt_in_rows(colors, cx));
+        let engines = (step == Step::SearchEngine).then(|| self.engine_rows(colors, cx));
         let favorites = (step == Step::Favorites)
             .then(|| self.favorite_tiles(colors, window, cx))
             .flatten();
@@ -1063,7 +1197,7 @@ impl Shell {
                 .onboarding
                 .as_ref()
                 .and_then(|onboarding| onboarding.picked);
-            swatch_row(picked, colors, cx)
+            swatch_row(picked, colors, self.a11y, cx)
         });
         let chip = |keys: String, fill: Rgba| {
             div()
@@ -1109,9 +1243,24 @@ impl Shell {
         });
         let drawn = (self.onboarding.as_ref())
             .map(|onboarding| (onboarding.button.clone(), onboarding.settled));
+        let said = (title.clone(), line.clone());
+        // Only the step shown's: the one leaving, drawn under it, has none.
+        let stops = (self.onboarding.as_ref())
+            .filter(|onboarding| onboarding.step == step)
+            .map(|onboarding| {
+                (
+                    onboarding.continue_stop.clone(),
+                    onboarding.skip_stop.clone(),
+                )
+            });
         let button = (!button.is_empty()).then(|| {
             div()
                 .id("onboarding-continue")
+                .when(self.a11y, |control| named_button(control, button.clone()))
+                .when_some(stops.clone(), |control, (stop, _)| {
+                    control.track_focus(&stop).focus_from_keys_only()
+                })
+                .focus_visible(ring(look.ink))
                 .relative()
                 .mt(px(BUTTON_GAP))
                 .h(px(BUTTON_HEIGHT))
@@ -1137,8 +1286,20 @@ impl Shell {
                 ))
                 .children(drawn.map(|(at, settled)| button_frame(at, settled)))
         });
+        let focus = (self.onboarding.as_ref())
+            .filter(|onboarding| onboarding.step == step)
+            .map(|onboarding| onboarding.focus.clone());
         layer.child(
             div()
+                .id(("onboarding-step", step as usize))
+                .when_some(focus, |content, focus| content.track_focus(&focus))
+                .when(named, |content| {
+                    let (title, line) = said;
+                    content
+                        .role(Role::Dialog)
+                        .aria_label(title)
+                        .aria_description(line)
+                })
                 .flex()
                 .flex_col()
                 .items_center()
@@ -1160,6 +1321,7 @@ impl Shell {
                 )
                 .children(swatches)
                 .children(switches)
+                .children(engines)
                 .children(favorites)
                 .children(import)
                 .children(button)
@@ -1238,6 +1400,80 @@ impl Shell {
             .child(group(&look, rows))
     }
 
+    /// The search engines offered in the opt-ins' box, a row each of a radio's dot and the engine's
+    /// name, the one picked filled in the green and its name medium. A click on a row picks it, and
+    /// the list is one stop for ⇥, its arrows moving the pick, as the swatches are.
+    fn engine_rows(&self, colors: Colors, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let Some(onboarding) = self.onboarding.as_ref() else {
+            return div().into_any_element();
+        };
+        let surface = colors.ground.blend(colors.ink(IMPORT_SURFACE));
+        let look = Look::on(surface, colors.ink(1.), rgb(SIGNAL));
+        let a11y = self.a11y;
+        let rows = (onboarding.engines.0.iter().enumerate()).map(|(index, (_, name))| {
+            let on = onboarding.engine == Some(index);
+            let dot = div()
+                .flex_none()
+                .size(px(ENGINE_DOT))
+                .rounded_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .map(|dot| match on {
+                    true => dot.bg(rgb(SIGNAL)).child(
+                        div()
+                            .size(px(ENGINE_DOT_CENTER))
+                            .rounded_full()
+                            .bg(rgb(PAPER)),
+                    ),
+                    false => dot.border_1().border_color(colors.ink(QUIET)),
+                });
+            let toggled = match on {
+                true => Toggled::True,
+                false => Toggled::False,
+            };
+            let row = div()
+                .id(("onboarding-engine", index))
+                .when(a11y, |row| {
+                    row.role(Role::RadioButton)
+                        .aria_label(name.clone())
+                        .aria_toggled(toggled)
+                        .when(on, |row| row.aria_active_descendant())
+                })
+                .h(px(ENGINE_ROW))
+                .px(px(PADDING))
+                .flex()
+                .items_center()
+                .gap(px(PADDING))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(
+                    cx.listener(move |shell, _, _, cx| shell.onboarding_pick_engine(index, cx)),
+                )
+                .child(dot)
+                .child(
+                    div()
+                        .when(on, |name| name.font_weight(gpui::FontWeight::MEDIUM))
+                        .child(name.clone()),
+                );
+            div().child(row)
+        });
+        div()
+            .id("onboarding-engines")
+            .when(a11y, |list| {
+                list.role(Role::RadioGroup).aria_label("Search engine")
+            })
+            .tab_index(0)
+            .focus_from_keys_only()
+            .rounded(px(crate::tokens::radius::ROW))
+            .focus_visible(ring(colors.ink(1.)))
+            .mt(px(BUTTON_GAP))
+            .w(px(OPT_IN_WIDTH))
+            .text_size(px(crate::tokens::text::BODY))
+            .text_color(look.ink)
+            .child(group(&look, rows))
+            .into_any_element()
+    }
+
     /// The favorites offered, as the import view's tiles at its width, on the flow's ground, a
     /// click ticking or unticking one. Tiles like the favorites they become say where they go.
     fn favorite_tiles(
@@ -1302,8 +1538,17 @@ impl Shell {
             .rounded(px(CHIP_RADIUS))
             .bg(colors.ink(SKIP_CHIP))
             .child("esc");
+        let stop = (self.onboarding.as_ref()).map(|onboarding| onboarding.skip_stop.clone());
         div()
             .id("onboarding-skip")
+            .when(self.a11y, |control| {
+                named_button(control, if back { "Back" } else { "Skip" })
+            })
+            .when_some(stop, |control, stop| {
+                control.track_focus(&stop).focus_from_keys_only()
+            })
+            .rounded(px(CHIP_RADIUS))
+            .focus_visible(ring(colors.ink(1.)))
             .absolute()
             .right(px(SKIP_MARGIN))
             .bottom(px(SKIP_MARGIN))
@@ -1371,14 +1616,23 @@ fn opt_in_frame(
 
 /// The theme picker's swatches in a row, the one picked ringed in the ink, each with a hairline
 /// edge so the lightest still reads on Paper.
+/// A screen reader reads them as one choice, a radio button each called by its colour.
 fn swatch_row(
     picked: Option<usize>,
     colors: Colors,
+    a11y: bool,
     cx: &mut Context<Shell>,
 ) -> impl IntoElement + use<> {
     // Each swatch's ring and the gap inside it, on both sides.
     let ringed = SWATCH + 4. * SWATCH_RING;
     div()
+        .id("onboarding-swatches")
+        .when(a11y, |row| row.role(Role::RadioGroup).aria_label("Colour"))
+        // One stop, the arrows going along it, with the swatch picked read as they move.
+        .tab_index(0)
+        .focus_from_keys_only()
+        .rounded_full()
+        .focus_visible(ring(colors.ink(1.)))
         .mt(px(SWATCH_GAP))
         .flex()
         .gap(px(SWATCH_PITCH - ringed))
@@ -1388,8 +1642,21 @@ fn swatch_row(
             } else {
                 colors.ink(0.)
             };
+            let toggled = match picked == Some(index) {
+                true => Toggled::True,
+                false => Toggled::False,
+            };
             div()
                 .id(("onboarding-swatch", index))
+                .when(a11y, |swatch| {
+                    swatch
+                        .role(Role::RadioButton)
+                        .aria_label(swatch_name(color))
+                        .aria_toggled(toggled)
+                        .when(picked == Some(index), |swatch| {
+                            swatch.aria_active_descendant()
+                        })
+                })
                 .p(px(SWATCH_RING))
                 .rounded_full()
                 .border(px(SWATCH_RING))
