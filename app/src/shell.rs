@@ -122,6 +122,8 @@ mod side_tests;
 mod space_order_tests;
 mod task_cards;
 #[cfg(test)]
+mod top_bar_tests;
+#[cfg(test)]
 mod undo_tests;
 #[cfg(test)]
 mod window_move_tests;
@@ -155,6 +157,7 @@ mod swipe;
 mod task_area;
 mod themes;
 mod tile_theme;
+mod top_bar;
 mod trace;
 mod translate;
 mod trouble;
@@ -215,7 +218,7 @@ pub use rows::LoneSpaceHeader;
 use rows::{Breath, UNLOAD};
 use scaled::scaled;
 pub use side_panel::SidePanel;
-pub use sidebar::{SidebarEdge, SidebarRight, edge_reveals, sidebar_right};
+pub use sidebar::{SidebarEdge, SidebarRight, TopBar, edge_reveals, sidebar_right, top_bar};
 use swap::{ARROW_DOWN, Swapped, Swaps};
 pub use themes::{AppAppearance, app_appearance};
 use tile_theme::TileTheme;
@@ -1912,6 +1915,8 @@ pub struct Shell {
     /// Whether the sidebar is on the window's right, as `SidebarRight` said as the window last
     /// drew (`Shell::right`).
     right: bool,
+    /// Whether Top bar is on, as `TopBar` said as the window last drew (`Shell::bar_on`).
+    top_bar: bool,
     forced_tone: Option<Tone>,
     /// What lies under the tint where nothing else does: the preview's, whose window has no
     /// material and shows the desktop through the tint, as the app's never does (#3033).
@@ -2287,6 +2292,7 @@ impl Shell {
             clean_links: cx.try_global::<CleanLinksOn>().is_none_or(|on| on.0),
             lone_header: false,
             right: false,
+            top_bar: false,
             forced_tone: None,
             ground: None,
             window_active: true,
@@ -2707,7 +2713,7 @@ impl Shell {
 
     /// The focused page's left edge, and how far its right and top edges are in from the card's,
     /// as the host takes them.
-    fn focused_pane_corner(&self) -> (f32, f32, f32) {
+    pub(super) fn focused_pane_corner(&self) -> (f32, f32, f32) {
         let (frame, _) = self.page_frame(self.viewport);
         let panes = self.panes(self.selected);
         let focused = panes
@@ -2719,7 +2725,7 @@ impl Shell {
         (
             f32::from(pane.left()),
             f32::from(frame.right() - pane.right()),
-            f32::from(pane.top() - frame.top()),
+            f32::from(pane.top() - frame.top()) + self.bar_drop(),
         )
     }
 
@@ -4313,6 +4319,10 @@ impl Render for Shell {
         if right != self.right {
             self.set_sidebar_right(right, cx);
         }
+        let top_bar = sidebar::top_bar(cx) && self.little.is_none();
+        if top_bar != self.top_bar {
+            self.set_top_bar(top_bar, cx);
+        }
         self.full_screen_step("drawn", window.viewport_size());
         self.shape_safe_start(cx);
         self.step_opening(window, cx);
@@ -4703,6 +4713,7 @@ impl Render for Shell {
             .children(self.side_panel(cx))
             .children(under)
             .children(sidebar)
+            .children(self.top_bar_row(cx))
             .children(over)
             .children(edge)
             .children(own_buttons)
@@ -4849,7 +4860,12 @@ impl Shell {
             .top_0()
             .bottom_0()
             .w(px(self.width()))
-            .children(self.nav_buttons(cx));
+            .children(
+                (!self.bar_on())
+                    .then(|| self.nav_buttons(cx))
+                    .into_iter()
+                    .flatten(),
+            );
         let leaving = self
             .leaving_form
             .as_ref()
@@ -4888,7 +4904,7 @@ impl Shell {
                     .left_0()
                     .w(px(self.width()));
                 sidebar
-                    .child(self.with_page(self.url_field(cx)))
+                    .children((!self.bar_on()).then(|| self.with_page(self.url_field(cx))))
                     .children(self.scroll_edge_line().map(|line| self.with_page(line)))
                     .children(self.foot_edge_line().map(|line| self.with_page(line)))
                     .child(self.space_pages(cx))
@@ -5332,17 +5348,36 @@ impl Shell {
                 div()
                     .absolute()
                     .left(px(left))
-                    .top(px(REVEAL_INSET))
+                    .top(px(match self.bar_on() {
+                        true => crate::tokens::shell::TOP_BAR,
+                        false => REVEAL_INSET,
+                    }))
                     .bottom(px(REVEAL_INSET))
                     .w(px(self.width()))
                     .rounded(px(REVEAL_RADIUS))
                     .border(px(0.5))
                     .border_color(self.palette.faint(REVEAL_BORDER))
                     .bg(self.gradient(Some(self.palette.underlay.into())))
-                    .child(self.window_buttons(px(self.width()), cx))
+                    .children((!self.bar_on()).then(|| self.window_buttons(px(self.width()), cx)))
                     .child(self.sidebar(cx).left_0())
                     .child(self.scroll_listener(false, cx)),
             )
+            // Its window spans the bar's end over the sidebar's column, so it draws the bar's
+            // buttons and the window's where the bar has them, and they take its clicks.
+            .children(self.bar_on().then(|| {
+                let column = match self.right {
+                    true => span - self.width(),
+                    false => 0.,
+                };
+                div()
+                    .absolute()
+                    .top_0()
+                    .left(px(column))
+                    .w(px(self.width()))
+                    .h(px(crate::tokens::shell::TOP_BAR))
+                    .child(self.window_buttons(px(self.width()), cx))
+                    .children(self.nav_buttons(cx))
+            }))
             .child(self.reveal_listener(cx))
             .into_any_element();
         self.breath.arm(cx);

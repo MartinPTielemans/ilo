@@ -629,6 +629,12 @@ pub trait Browser {
         cx.set_global(super::SidebarRight(right));
         cx.refresh_windows();
     }
+    /// The user turned Top bar on or off from a menu, the command bar or its key: kept on this
+    /// device, and every window follows.
+    fn keep_top_bar(&self, on: bool, cx: &mut App) {
+        cx.set_global(super::TopBar(on));
+        cx.refresh_windows();
+    }
     /// A Little ilo window's UI has drawn its first frame on screen, where its opening grows from
     /// (host_grow_little_window).
     fn little_drawn(&self, cx: &mut App);
