@@ -170,8 +170,8 @@ done
 # 4: a private window has no New Board, and a Board's address there finds no Board.
 send key n cmd shift
 expect '^browser: private window opened [0-9]* profile [0-9]*$' "⇧⌘N didn't open a private window"
-send key l cmd
-expect '^browser: command bar shown$' "⌘L didn't open the private window's command bar"
+# A new window opens on its command bar, where ⌘L would close it.
+expect '^browser: command bar shown$' "the private window didn't open on its command bar"
 send type "new board"
 expect '^browser: command bar commands "new board": ' "the private window's command bar found nothing for \"new board\""
 ! grep '^browser: command bar commands "new board": ' "$log" | tail -1 | grep -q ': New Board' ||
