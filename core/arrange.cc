@@ -526,7 +526,17 @@ constexpr char16_t kScript[] =
           reversed: flex && /reverse/.test(pcs.flexDirection) };
         lists.set(parent, l);
         for (const k of parent.children) {
-          if ((mode && k === mode.marks.host) || (carry && k === carry.el)) continue;
+          if (mode && k === mode.marks.host) continue;
+          if (carry && k === carry.el) {
+            // Its room is a place in the list, so a settle beside it stays where it went and what's
+            // after it stays after its room (#2975). It's never moved or measured: it's the ghost.
+            if (carry.lifted && carry.room != null) {
+              const e = { el: k, list: l, moved: false, carried: true, by: null, kind: '', geo: boxOf(carry.from, pr) };
+              entries.set(k, e);
+              l.items.push(e);
+            }
+            continue;
+          }
           if (/absolute|fixed/.test(getComputedStyle(k).position)) continue;
           const r = drawn(k) ? rect(k) : null;
           const e = { el: k, list: l, moved: false, by: null, kind: '', geo: r && boxOf(r, pr) };
@@ -560,7 +570,7 @@ constexpr char16_t kScript[] =
           take(a);
           const at = l.items.indexOf(b) + (c.before ? 0 : 1);
           // Beside a hidden anchor, the place's own box: the drawn place it's at, or the last.
-          const r = l.slots[Math.min(l.items.slice(0, at).filter((e) => e.geo).length, l.slots.length - 1)];
+          const r = l.slots[Math.min(l.items.slice(0, at).filter((e) => e.geo && !e.carried).length, l.slots.length - 1)];
           const geo = b.geo || (r && boxOf(r, l.pr));
           if (!geo) { refuse(s); continue; }
           Object.assign(a, { list: l, moved: true, by: s, kind: 'settle', geo });
@@ -651,18 +661,17 @@ constexpr char16_t kScript[] =
       const pcs = getComputedStyle(l.parent);
       const gapAt = (i) => (i < gaps.length ? gaps[i] : gaps.length ? gaps[gaps.length - 1]
         : parseFloat(row ? pcs.columnGap : pcs.rowGap) || 0);
-      l.shown = l.items.filter((e) => drawn(e.el));
-      const lengths = l.shown.map((e) => length(rect(e.el)));
+      l.shown = l.items.filter((e) => e.carried || drawn(e.el));
+      const lengths = l.shown.map((e) => (e.carried ? carry.room : length(rect(e.el))));
       let at = S.length ? start(S[0]) - start(l.pr) : 0;
       l.offs = lengths.map((n, i) => { const o = at; at += n + gapAt(i); return o; });
       // Where the parent starts: as far from where it did as its lead has moved, or as the parent
       // itself has where it has none. Fixed before any margin of ours, as one collapsing through the
       // parent moves the parent with the thing.
       const base = start(l.pr) + (l.lead ? end(rect(l.lead.el)) - l.lead.end : start(rect(l.parent)) - start(l.pr));
-      const keeper = carry && carry.keeper;
       const prop = row ? 'margin-left' : 'margin-top';
       l.shown.forEach((e, i) => {
-        if (e.moved || e.el === keeper) return;
+        if (e.moved || e.carried) return;
         // A margin that collapses with its neighbour's moves the thing by less, so it's measured
         // until the thing is at its place.
         let d = base + l.offs[i] - start(rect(e.el));
@@ -675,7 +684,7 @@ constexpr char16_t kScript[] =
         }
       });
       const n = l.shown.length - 1, pr = rect(l.parent);
-      if (n >= 0 && l.shown[n].moved) {
+      if (n >= 0 && (l.shown[n].moved || l.shown[n].carried)) {
         const need = base - start(pr) + l.offs[n] + lengths[n] + (S.length ? end(l.pr) - end(S[S.length - 1]) : 0);
         if (need > length(pr) + 0.5) put(l.parent, row ? 'min-width' : 'min-height', px(need - edgeOf(l.parent, row)));
       }
@@ -742,6 +751,12 @@ constexpr char16_t kScript[] =
         if (!s.el || (refOf(s.c) && !s.ref)) skip.add(s);
         else if (s.ref && (s.el.contains(s.ref) || s.ref.contains(s.el))) { s.nest = true; skip.add(s); }
       }
+      // Where a change places a thing in the carried thing's list, the pass measures the page without
+      // the carry's room, which its place in the list then holds; else the keeper's margin keeps it.
+      const keeper = carry && carry.lifted && carry.keeper, home = keeper && carry.el.parentElement;
+      const keep = home && now.some((s) => !skip.has(s) && ((s.ref && s.ref.parentElement === home) ||
+        (s.c.kind === 'trade' && s.el.parentElement === home))) ? carry.keep : null;
+      if (keep) unset(keeper, keep.prop);
       // The element it goes beside may come later: hidden, keeping its room, until it does or the
       // hold ends, so a late page shows a gap rather than its own layout.
       const held = performance.now() < holdUntil ? now.filter((s) => s.el && refOf(s.c) && !s.ref) : [];
@@ -756,6 +771,7 @@ constexpr char16_t kScript[] =
         for (const s of bad) { s.misfit = 'fit'; skip.add(s); }
       }
       for (const s of now) if (!skip.has(s)) s.applied = true;
+      if (keep && !((p && p.realized) || []).some((l) => l.items.some((e) => e.carried))) set(keeper, keep.prop, keep.value);
       for (const l of (p && p.realized) || []) {
         watch(l.parent);
         for (const e of l.items) watch(e.el);
@@ -1008,10 +1024,13 @@ constexpr char16_t kScript[] =
           const prop = k === slot.parent ? (row ? 'min-width' : 'min-height')
             : k === slot.next ? (row ? 'margin-left' : 'margin-top') : row ? 'margin-right' : 'margin-bottom';
           const base = k === slot.parent ? (row ? rect(k).width : rect(k).height) : parseFloat(getComputedStyle(k).getPropertyValue(prop)) || 0;
-          set(k, prop, px(k === slot.parent ? base : base + room));
+          const value = px(k === slot.parent ? base : base + room);
+          set(k, prop, value);
           // The carry's room, never taken back by a layout pass.
           if (placed.has(k)) placed.get(k).delete(prop);
           carry.keeper = k;
+          carry.keep = { prop, value };
+          carry.room = room;
         }
         set(el, 'position', 'fixed');
         set(el, 'box-sizing', 'border-box');
@@ -1036,6 +1055,7 @@ constexpr char16_t kScript[] =
       restore(carry.el);
       if (carry.keeper) restore(carry.keeper);
       carry.keeper = null;
+      carry.keep = null;
       carry.lifted = false;
     }
     function preview() {
@@ -1199,7 +1219,12 @@ constexpr char16_t kScript[] =
       },
       down(a) {
         if (!mode) return state();
-        const el = mode.base === at(a.x, a.y) && mode.pointed ? mode.pointed : at(a.x, a.y);
+        // What ↑ and ↓ picked from the thing under the pointer, else that thing. The press is over
+        // it from then on, so a move back onto the thing an earlier move was over takes it, not a
+        // pick a press made elsewhere since.
+        const under = at(a.x, a.y);
+        const el = mode.base === under && mode.pointed ? mode.pointed : under;
+        mode.base = under;
         mode.selected = null;
         mode.refused = el && !shown(el) ? WHY.NOT_SHOWN : 0;
         mode.press = el && !mode.refused ? { el, x: a.x, y: a.y } : null;
