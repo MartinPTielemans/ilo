@@ -990,6 +990,70 @@ painted(() => document.title = "choose");
   last=$(sed -n "s/^browser: title $choose_tab //p" "$log" | tail -1)
   [ "$last" = "priority High" ] || fail "a missed option changed the page, to $last"
 
+  # A name with a no-break space beside a space, or with any other of Unicode's spaces, is one
+  # space in the outline, and select takes it as the outline shows it, in a select and in a page's
+  # own dropdown. A miss echoes what was asked as it was asked, and its options as the outline
+  # shows them (#3190).
+  printf '%s' '<script src="painted.js"></script>
+<label for=account>Account</label>
+<select id=account><option>Alpha 1234<option>Bravo 5678&nbsp; (closed)
+<option>Charlie&#x3000;9012&#x2003;&#x202F;(open)</select>
+<span id=branch-label>Branch</span>
+<div id=branch role=combobox tabindex=0 aria-labelledby=branch-label aria-controls=branches
+  aria-expanded=false>None</div>
+<ul id=branches role=listbox aria-label=Branches hidden>
+<li role=option>Alpha 1234<li role=option>Bravo 5678&nbsp; (closed)
+<li role=option>Echo&#x2007;&#x205F;12&#x1680;(open)
+</ul>
+<script>
+account.onchange = () => document.title = "account " + account.selectedIndex;
+const show = open => { branches.hidden = !open; branch.ariaExpanded = open; };
+branch.onclick = () => show(branches.hidden);
+branches.onclick = event => {
+  branch.textContent = event.target.textContent;
+  show(false);
+  document.title = "branch " + [...branches.children].indexOf(event.target);
+};
+painted(() => document.title = "spaces");
+</script>' > "$out/site/spaces.html"
+  opened=$(call open_tab "{\"url\":\"localhost:$port/spaces.html\"}")
+  spaces_tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  [ -n "$spaces_tab" ] || fail "opening the page of names with Unicode spaces answered: $opened"
+  await_log "^browser: title $spaces_tab spaces\$" "the page of names with Unicode spaces didn't paint"
+  outline=$(call snapshot "{\"tab\":$spaces_tab}")
+  printf '%s\n' "$outline" > "$out/mcp-spaces.txt"
+  account=$(ref_of combobox Account)
+  branch=$(ref_of combobox Branch)
+  [ -n "$account" ] && [ -n "$branch" ] ||
+    fail "the page of names with Unicode spaces had the refs '$account' and '$branch'"
+  shown='"Alpha 1234", "Bravo 5678 (closed)", "Charlie 9012 (open)"'
+  case "$outline" in
+    *"- combobox \"Account\" [$account] (options: $shown)"*) ;;
+    *) fail "the select's line didn't name its options with one space each, as select takes them: $(printf '%s\n' "$outline" | grep Account)" ;;
+  esac
+  # choose TEXT TITLE REF NAME: select's TEXT in the field REF answers that it holds TEXT, and the
+  # page's title becomes TITLE.
+  choose() {
+    chose=$(call select "{\"tab\":$spaces_tab,\"ref\":\"$3\",\"option\":\"$1\"}")
+    case "$chose" in
+      "The combobox “$4” now holds “$1”."*) ;;
+      *) fail "choosing “$1” in $4, as the outline names it, answered: $chose" ;;
+    esac
+    await_log "^browser: title $spaces_tab $2\$" "choosing “$1” in $4 didn't reach the page"
+  }
+  choose "Bravo 5678 (closed)" "account 1" "$account" Account
+  choose "Charlie 9012 (open)" "account 2" "$account" Account
+  choose "Bravo 5678 (closed)" "branch 1" "$branch" Branch
+  choose "Echo 12 (open)" "branch 2" "$branch" Branch
+  # Two spaces and a no-break space, which match no option, come back as they were sent.
+  nbsp=$(printf '\302\240')
+  missed=$(call select "{\"tab\":$spaces_tab,\"ref\":\"$account\",\"option\":\"Bravo  5678\\u00a0(gone)\"}")
+  options="Its options are “Alpha 1234”, “Bravo 5678 (closed)”, “Charlie 9012 (open)”."
+  [ "$missed" = "error: There's no option “Bravo  5678$nbsp(gone)” there. $options" ] ||
+    fail "choosing an option the select hasn't, with two spaces and a no-break space, answered: $missed"
+  last=$(sed -n "s/^browser: title $spaces_tab //p" "$log" | tail -1)
+  [ "$last" = "branch 2" ] || fail "a missed option changed the page, to $last"
+
   # Choice tiles whose radios the page hid, with display: none and named by a label's "for" or
   # inside it, show as those radios, named by the label's text and with which is chosen, and a
   # click on one by its ref chooses it. A label with no control stays text (#2355).

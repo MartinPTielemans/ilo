@@ -136,8 +136,7 @@ bool IsDisabled(const base::Value& node) {
 // A node's name, as the page shows it, its runs of spaces one.
 std::string NameOf(const base::DictValue& node) {
   const std::string* name = node.FindStringByDottedPath("name.value");
-  return name ? base::CollapseWhitespaceASCII(*name, /*trim_sequences_with_line_breaks=*/true)
-              : std::string();
+  return name ? OneSpaced(*name) : std::string();
 }
 
 // A name as it compares in any case, as "Open" and "OPEN" do.
@@ -178,9 +177,7 @@ std::string ChildText(const base::DictValue& node) {
 // spaces one.
 std::u16string LabelOf(const base::DictValue& option) {
   const std::optional<std::string> label = AttributeOf(option, "label");
-  return base::CollapseWhitespace(
-      base::UTF8ToUTF16(label && !label->empty() ? *label : ChildText(option)),
-      /*trim_sequences_with_line_breaks=*/true);
+  return OneSpaced(base::UTF8ToUTF16(label && !label->empty() ? *label : ChildText(option)));
 }
 
 // A described field's value in the page's markup: an input's value attribute, a textarea's text,
@@ -998,8 +995,8 @@ void AgentPage::PressInView() {
 }
 
 void AgentPage::Choose(const base::ListValue& nodes, const std::vector<std::string>& frames) {
-  const std::string want =
-      base::CollapseWhitespaceASCII(job_->text, /*trim_sequences_with_line_breaks=*/true);
+  // What was asked is matched as the outline shows names, and echoed as it was asked.
+  const std::string want = OneSpaced(job_->text);
   if (want.empty()) {
     Fail("Choosing needs an element and an option.");
     return;
@@ -1120,8 +1117,8 @@ void AgentPage::Choose(const base::ListValue& nodes, const std::vector<std::stri
   const std::vector<const Option*>& matches = exact.empty() ? folded : exact;
   if (matches.size() != 1) {
     constexpr size_t kListed = 50;
-    std::string why = matches.empty() ? "There's no option “" + want + "” there."
-                                      : "Several options are named “" + want + "”.";
+    std::string why = matches.empty() ? "There's no option “" + job_->text + "” there."
+                                      : "Several options are named “" + job_->text + "”.";
     why += " Its options are ";
     for (size_t each = 0; each < options.size() && each < kListed; ++each) {
       std::string name;
@@ -1140,7 +1137,7 @@ void AgentPage::Choose(const base::ListValue& nodes, const std::vector<std::stri
   }
   const Option& option = *matches.front();
   if (Has(*option.node, "disabled")) {
-    Fail("The option “" + want + "” is disabled.");
+    Fail("The option “" + job_->text + "” is disabled.");
     return;
   }
   chosen_ = ElementOf(*option.node).value_or(0);
@@ -1158,7 +1155,7 @@ void AgentPage::Choose(const base::ListValue& nodes, const std::vector<std::stri
     return;
   }
   if (!chosen_) {
-    Fail("The option “" + want + "” can't be clicked. Take a new snapshot.");
+    Fail("The option “" + job_->text + "” can't be clicked. Take a new snapshot.");
     return;
   }
   job_->element = chosen_;
@@ -1231,9 +1228,7 @@ bool AgentPage::Shows(const base::ListValue& nodes) {
     // What a field holds is never told: only whether it's the option the agent chose. A
     // dropdown's button may show it as its name instead.
     const std::string* value = dict->FindStringByDottedPath("value.value");
-    const std::string held =
-        value ? base::CollapseWhitespaceASCII(*value, /*trim_sequences_with_line_breaks=*/true)
-              : std::string();
+    const std::string held = value ? OneSpaced(*value) : std::string();
     if (Folded(held) == chosen || Folded(NameOf(*dict)) == chosen) {
       return true;
     }
@@ -2009,7 +2004,7 @@ void AgentPage::Withhold(std::unique_ptr<Withholding> withholding,
     // A select's value is its option's label, as the tree reads it, its runs of spaces one.
     const std::string* name = node->FindString("nodeName");
     if (name && *name == "SELECT") {
-      facts.value = base::CollapseWhitespace(facts.value, /*trim_sequences_with_line_breaks=*/true);
+      facts.value = OneSpaced(facts.value);
     }
   } else {
     // One that couldn't be read is withheld.

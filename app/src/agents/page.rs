@@ -632,7 +632,9 @@ fn role(node: &Value) -> &str {
         .unwrap_or_default()
 }
 
-/// The node's name, its runs of white space one space.
+/// The node's name, its runs of white space one space. White space is Unicode's, a no-break
+/// space's too, and the core's `select` matches names by the same rule (`OneSpaced` in
+/// core/ax_text.cc), so a name shown here is one it finds (#3190).
 fn name(node: &Value) -> String {
     let name = node
         .pointer("/name/value")
@@ -782,6 +784,39 @@ mod tests {
             "name": { "value": name },
             "childIds": children,
         })
+    }
+
+    /// Unicode's white space, each code point the core's `OneSpaced` collapses: its test
+    /// (`ANameIsOneSpacedAsTheOutlineShowsItWhateverItsSpaces` in core/ax_text_unittest.cc) has
+    /// the same list, so the outline and `select` can't part on a name again (#3190).
+    const UNICODE_WHITE_SPACE: [char; 25] = [
+        '\u{0009}', '\u{000A}', '\u{000B}', '\u{000C}', '\u{000D}', '\u{0020}', '\u{0085}',
+        '\u{00A0}', '\u{1680}', '\u{2000}', '\u{2001}', '\u{2002}', '\u{2003}', '\u{2004}',
+        '\u{2005}', '\u{2006}', '\u{2007}', '\u{2008}', '\u{2009}', '\u{200A}', '\u{2028}',
+        '\u{2029}', '\u{202F}', '\u{205F}', '\u{3000}',
+    ];
+
+    /// A name's white space, a no-break space beside a space or any other of Unicode's, is one
+    /// space in the outline, as `select` matches it, and what isn't white space stays.
+    #[test]
+    fn names_lose_unicode_white_space_as_select_does() {
+        let named = |text: &str| name(&node("1", "option", text, &[]));
+        for space in UNICODE_WHITE_SPACE {
+            assert!(space.is_whitespace(), "{space:?} isn't Rust's white space");
+            assert_eq!(
+                named(&format!("Bravo 5678{space} (closed)")),
+                "Bravo 5678 (closed)"
+            );
+            assert_eq!(named(&format!("Bravo{space}5678")), "Bravo 5678");
+            assert_eq!(named(&format!("{space}Bravo{space}{space}")), "Bravo");
+        }
+        // No other character is: the list is all of Rust's white space, as it's all of Chromium's.
+        let others = (0..=0x10FFFF_u32)
+            .filter_map(char::from_u32)
+            .filter(|c| c.is_whitespace() && !UNICODE_WHITE_SPACE.contains(c));
+        assert_eq!(others.collect::<Vec<_>>(), Vec::<char>::new());
+        assert_eq!(named("Open\r\n  now"), "Open now");
+        assert_eq!(named("a\u{200B}b\u{2060}c"), "a\u{200B}b\u{2060}c");
     }
 
     /// A native select's line names its choices, the page's own, as the core gives them without
