@@ -101,7 +101,7 @@ send layout
 height=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
   sed 's/^browser: layout content [0-9]*x\([0-9]*\),.*/\1/')
 post click 204 $((height - 25))
-plus=$(cased "New Space…, New Folder…, New Split View, New Note, Edit Boost…")
+plus=$(cased "New Space…, New Folder…, New Split View, New Board, New Note, Edit Boost…")
 expect "^browser: menu shown $plus\(, .*\)\{0,1\}\$" "the +'s menu didn't offer Edit Boost…"
 expect '^browser: menu drawn ' "the +'s menu didn't draw"
 ../tools/window-screenshot.sh "$pid" "$out/boost-plus-menu.png" || fail "no window to capture"
@@ -194,10 +194,11 @@ expect '^browser: boost editor height 496$' "the card didn't shrink as Advanced 
 send key escape
 expect '^browser: boost editor dismissed$' "escape didn't close the Boost editor"
 
-# Window › View Boosts…, after View Media… as Arc's, opens Library › Boosts, and closes it there.
+# Window › View Boosts…, after View Media… as Arc's, with ilo's View Boards… between them, opens
+# Library › Boosts, and closes it there.
 send menubar Window
-expect '^browser: menu bar Window: .*, View Media…, View Boosts…, ' \
-  "Window has no View Boosts… after View Media…"
+expect '^browser: menu bar Window: .*, View Media…, View Boards…, View Boosts…, ' \
+  "Window has no View Boosts… after View Media… and View Boards…"
 send menu 'View Boosts…'
 expect '^browser: command view-boosts via ui$' "Window › View Boosts… didn't run"
 expect '^browser: library section boosts$' "View Boosts… didn't open the Library on Boosts"
