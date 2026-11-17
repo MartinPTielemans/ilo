@@ -23,7 +23,8 @@
 # video of it (#2979), on Wayland, the footer's menu control, which only Linux and Windows draw, at
 # rest and with its menu open above it, light and dark (#3148), the top bar, with the sidebar on
 # the left and on the right (#3160), and Library › Boards, light and dark, a Board's row's menu,
-# and the protected-media note, whose card a Board's refused save follows in the page (#3073). The
+# and the protected-media note, whose card a Board's refused save follows in the page (#3073),
+# and the keyboard's ring on Library › Boards' second row, light and dark (#3238). The
 # preview's Linux host places no window, so sway puts Site Controls, the icon picker and the
 # tooltip in the middle rather than where the Mac's host would.
 # It reports: a screen that won't capture is a gap in the sheet and a line on stderr, never a
@@ -89,6 +90,8 @@ screens=(
   "library-boards-light|library boards|PREVIEW_LIBRARY=boards PREVIEW_APPEARANCE=light"
   "library-boards-dark|library boards|PREVIEW_LIBRARY=boards PREVIEW_APPEARANCE=dark"
   "library-boards-menu|menu shown|PREVIEW_LIBRARY=boards PREVIEW_MENU=180,111"
+  "library-row-ring-light|library row ring at|PREVIEW_LIBRARY=boards PREVIEW_LIBRARY_ROW=2 PREVIEW_APPEARANCE=light"
+  "library-row-ring-dark|library row ring at|PREVIEW_LIBRARY=boards PREVIEW_LIBRARY_ROW=2 PREVIEW_APPEARANCE=dark"
   "drm-note|drm note|PREVIEW_DRM=1"
 )
 case $(uname -s) in

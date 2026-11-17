@@ -3297,6 +3297,21 @@ fn main() {
                             }
                         })
                         .ok();
+                    // PREVIEW_LIBRARY_ROW=n rings the list's nth row, as ↓ n times from the field
+                    // does, once the Library has drawn its rows.
+                    let rows = std::env::var("PREVIEW_LIBRARY_ROW").ok();
+                    if let Some(rows) = rows.and_then(|rows| rows.parse().ok()) {
+                        window
+                            .update(cx, |_, window, cx| {
+                                let shell = cx.entity();
+                                window.on_next_frame(move |_, cx| {
+                                    shell.update(cx, |shell, cx| {
+                                        shell.preview_ring_library_row(rows, cx)
+                                    })
+                                });
+                            })
+                            .ok();
+                    }
                 }
                 Ok(window)
                     if update
