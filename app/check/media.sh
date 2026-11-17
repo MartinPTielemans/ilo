@@ -1049,7 +1049,16 @@ else
     expect 'browser: mini player pressed at ' \
       "a press off its controls didn't reach the Mini Player with the outline drag"
     send pip dragto $((pw / 8 - 10)) $((ph / 2))
-    send pip dragto $((pw / 8 - 200)) $((ph / 2))
+    expect 'browser: mini player moving from ' \
+      "a drag didn't start moving the Mini Player with the outline drag"
+    # The move loop starts a moment after the drag passes its threshold, and moves the outline only
+    # for moves of the pointer it hears: a jump made before it started reaches it with the release,
+    # as a throw. A hand goes on moving, so the pointer goes on in steps once it has started.
+    sleep 0.3
+    for x in 50 100 150 200; do
+      send pip dragto $((pw / 8 - x)) $((ph / 2))
+      sleep 0.05
+    done
     sleep 0.2
     send pip release $((pw / 8 - 200)) $((ph / 2))
     drag_full_windows "${drag_full:-1}"
