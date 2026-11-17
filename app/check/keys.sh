@@ -13,12 +13,14 @@
 # in a new tab has the keyboard: its autofocused field gets what's typed, and ⌘T opens the bar
 # again. While ⌘T's is open, "New Tab" has the selected plate. Keys typed right after ⌘T, ⌘L or ⌘F,
 # from the page or the UI, wait for the bar it opens, however late the page answers ⌘L, and land in
-# its field, a composition too, and a page that keeps ⌘F gets them after it. Japanese input composes
-# and commits in the page and in the command bar, where return and escape go to the input method
-# while it composes. Korean composes a syllable at a time in the page, where backspace takes a
-# letter off and return commits and goes on, on the Mac and on Windows, and on the Mac in the bar,
-# where escape commits and closes it (#2457). The Edit menu's Undo, Redo and Select All reach the
-# focused page. ⌘Y opens the history page from the page and the UI. A page whose renderer crashes
+# its field, a composition too, and a page that keeps ⌘F gets them after it. On Windows, Japanese
+# and Korean typed right after Ctrl+L in a page that keeps it compose there, and Japanese typed for
+# the bar doesn't reach the page (#1784). Japanese input composes and commits in the page and in
+# the command bar, where return and escape go to the input method while it composes. Korean
+# composes a syllable at a time in the page, where backspace takes a letter off and return commits
+# and goes on, on the Mac and on Windows, and on the Mac in the bar, where escape commits and closes
+# it (#2457). The Edit menu's Undo, Redo and Select All reach the focused page. ⌘Y opens the
+# history page from the page and the UI. A page whose renderer crashes
 # leaves the browser running, and ⌘R loads it again. Settings › Shortcuts lists every command the
 # user can give keys, and
 # gives New Tab ⌃⌘T, which stays reserved and reaches
@@ -45,12 +47,13 @@ page='data:text/html,<title>loading</title>
 <script>
 requestAnimationFrame(() => setTimeout(() => document.title = "ready"));
 text.oninput = () => document.title = "value " + text.value;
-// Like Google Docs, the page keeps ⌘F. It answers ⌘L late, as a busy page can, past the 0.4 s
-// the keys typed after it were once held for. No number sign: it would end this data URL.
+// Like Google Docs, the page keeps ⌘F, and ⌘L once its field ends with "keep", as a web terminal
+// does. It answers ⌘L late, as a busy page can, past the 0.4 s the keys typed after it were once
+// held for. No number sign: it would end this data URL.
 addEventListener("keydown", e => {
   if (!e.'"$cmd_key"') return;
   document.title = "page saw cmd-" + e.key;
-  if (e.key == "f") e.preventDefault();
+  if (e.key == "f" || (e.key == "l" && text.value.endsWith("keep"))) e.preventDefault();
   for (const until = performance.now() + (e.key == "l" ? 700 : 0); performance.now() < until;);
 }, true);
 addEventListener("keydown", e => {
@@ -240,6 +243,25 @@ grep -q '^browser: command \(back\|forward\) via page$' "$log" && fail "⌘← o
 # input method, and on Windows Microsoft's Korean IME, where the runner has it (check-windows.yml
 # installs it for this run). It goes before Japanese: on the runner, a thread switching away from
 # Microsoft's Japanese IME never returns, a plain window's too (#2474).
+# Ctrl+L in a page that keeps it, once its field ends with "keep", then "$2" typed at once with
+# the IME $1 on: the host holds the keys until the page has answered, and they compose "$3" in the
+# page, with no bar shown. Return then commits it and the IME goes off.
+page_keeps_ctrl_l() {
+  send key a cmd
+  send type keep
+  expect '^browser: title [0-9]* value keep$' "the page didn't get \"keep\""
+  send ime "$1"
+  from=$((step + 1))
+  post key l cmd
+  send type "$2"
+  expect "^browser: title [0-9]* value keep$3\$" \
+    "$1 typed right after Ctrl+L in a page that keeps it didn't compose $3 there: $(grep '^browser: title' "$log" | tail -1)"
+  logged '^browser: held [0-9]* key events for BrowserCoreNSWindow$' "$from" ||
+    fail "the host held none of the keys typed right after Ctrl+L, so the step proves nothing"
+  ! logged '^browser: command bar shown$' "$from" || fail "a page that keeps Ctrl+L opened the command bar"
+  send key return
+  send ime off
+}
 korean=
 if [ "$(uname)" = Linux ]; then
   echo "skip: Korean in a page: the Linux driver types plain keys there; check/ime.sh covers it with fcitx5's Hangul engine."
@@ -266,6 +288,16 @@ if [ -n "$korean" ]; then
   send type x
   expect '^browser: title [0-9]* value abcd한글 x$' \
     "return didn't commit 한글 and go on to the page: $(grep '^browser: title' "$log" | tail -1)"
+  send key a cmd
+  send type abcd
+  expect '^browser: title [0-9]* value abcd$' "⌘A in the page didn't select all"
+fi
+# Korean typed right after Ctrl+L in a page that keeps it, as a web terminal does: no bar opens,
+# and the keys held for one compose in the page as typed, through TSF's keystroke manager. Here,
+# as Japanese is never left once on (#2474). Not elsewhere yet: the Mac and Linux hold no keys
+# from TSF.
+if windows && [ -n "$korean" ]; then
+  page_keeps_ctrl_l ko dkssudgktpdy 안녕하세요
   send key a cmd
   send type abcd
   expect '^browser: title [0-9]* value abcd$' "⌘A in the page didn't select all"
@@ -345,11 +377,31 @@ if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
 elif windows && [ -z "$japanese" ]; then
   echo "skip: composing right after ⌘L: the runner has no Japanese IME, and the Windows driver's own composes in the UI's fields alone, not in a page."
 elif windows; then
-  # The host holds the keys typed until the bar has the keyboard (host.cc's HoldKeys), but
-  # Microsoft's IME composes them in the page before the hold sees them, and a repost of a key
-  # passes the IME by. TSF's keystroke manager doesn't hand held keys to it in the bar either
-  # (#1784).
-  echo "skip: composing right after Ctrl+L: Microsoft's Japanese IME composes in the page the keys the host holds for the bar (#1784)."
+  # The host holds the keys typed until the bar has the keyboard (host.cc's HoldKeys), with TSF's
+  # focus off the page meanwhile. The bar's window is IMM32's, which TSF's keystroke manager has no
+  # document for, so the keys held reach it as plain letters, and only those typed after it has
+  # the keyboard compose (#1784). A page that keeps Ctrl+L gets them through the keystroke manager.
+  echo "skip: composing right after Ctrl+L in the command bar: on Windows the keys held for it reach it as plain letters, and only those typed after compose (#1784)."
+  # None of it composes in the page, though, which is the worse place for it.
+  send $ime
+  from=$((step + 1))
+  typed_after l nihongo
+  expect '^browser: command bar drew ".*ご"$' \
+    "Japanese typed right after Ctrl+L didn't reach the command bar: $(drew 'command bar')"
+  ! logged '^browser: title [0-9]* value ' "$from" ||
+    fail "Japanese typed right after Ctrl+L for the command bar reached the page: $(grep '^browser: title' "$log" | tail -1)"
+  # Microsoft's IME takes an escape or two to close its predictions and its composition.
+  for _ in 1 2 3; do
+    logged '^browser: command bar hidden$' "$from" && break
+    send key escape
+  done
+  send ime off
+  expect '^browser: command bar hidden$' "escape didn't close the command bar" "$from"
+  in_browser RenderWidgetHostViewCocoa "after the command bar closed"
+  page_keeps_ctrl_l ja nihongo "$preedit"
+  send key a cmd
+  send type y
+  expect '^browser: title [0-9]* value y$' "Ctrl+A in the page didn't select all"
 else
   send $ime
   typed_after l nihongo
@@ -365,7 +417,7 @@ else
 fi
 # Korean right after ⌘L: the bar composes 안녕하세요, its 요 still composing, and one escape
 # commits it and closes the bar, as a Korean input method passes the key on. Not on Windows, where
-# the IME composes in the page the keys the host holds for the bar (#1784).
+# the keys held for the bar reach it as plain letters (#1784).
 if [ "$(uname)" != Linux ] && ! windows; then
   send ime ko
   typed_after l dkssudgktpdy
@@ -378,7 +430,7 @@ if [ "$(uname)" != Linux ] && ! windows; then
   send ime off
   in_browser RenderWidgetHostViewCocoa "after the command bar closed"
 elif windows; then
-  echo "skip: Korean composing right after Ctrl+L: Microsoft's IME composes in the page the keys the host holds for the bar (#1784)."
+  echo "skip: Korean composing right after Ctrl+L in the command bar: on Windows the keys held for it reach it as plain letters, and only those typed after compose (#1784)."
 else
   echo "skip: Korean composing right after ⌘L: the Linux driver's input method composes Japanese alone."
 fi
@@ -1150,5 +1202,5 @@ exec 3>&-
 await '^browser: warn before quitting off$' ||
   fail "Quit, and don't ask again didn't turn the warning off"
 exited
-echo "ok: focus follows clicks, typing reaches the focused side, reserved shortcuts skip the page and the others reach it first, ⌘Q asks first in the dialog, and escape keeps the browser and Quit, and don't ask again quits, the command bar takes the keyboard and gives it back, a held escape that closes it doesn't repeat into the page, keys typed right after ⌘T, ⌘L and ⌘F land in the bar they open from both sides, a composition too, and reach a page that keeps ⌘F after it, with New Tab's plate while ⌘T's is open, goes to a host over https and searches for words, names docs.new typed and opens it in a new tab, and a page it opens in a new tab has the keyboard, its autofocused field and the browser's shortcuts too, Japanese input composes in both, on the Mac Korean composes a syllable at a time in both, and on Windows in the page, and the Edit menu undoes, redoes and selects in the page, ⌘Y opens the history page from both sides, Settings › Shortcuts' search finds New Tab by name and ⌘T's rows by their keys, and the rows of the commands it lacked, and New Tab rebound to ⌃⌘T there stays reserved from both sides while ⌘T runs nothing, until ↺ gives it back, About ilo shows Settings' About tab with Settings key and again with About showing, Shortcuts lists the sidebar's commands and Focus Sidebar given ⌃⌘K there gives the sidebar the keyboard from the page until escape, Go to Space 1 given ⌃⌘1 there shows the first Space while ⌃1 runs nothing, Include Favorites in ⌘1–⌘8 off has ⌘1 show the first tab that isn't a favorite, Last Tab Goes to the Ninth Tab has ⌘9 count the ninth tab and Restore Defaults has it show the last again, a second ⌘F at once runs Find after the page kept the first, Prefer ilo on Find from a right-click on its keys has ⌘F run it before the page sees it and Prefer Websites gives the page it first again, and a killed page's renderer leaves the browser running and ⌘R loads the page again. Windows: $out/quit.png, $out/command-bar.png, $out/search.png, $out/new-document.png, $out/ime.png, $out/shortcuts-search.png, $out/shortcuts-rows.png, $out/shortcuts.png, $out/about.png, $out/shortcuts-sidebar.png, $out/shortcuts-favorites.png, $out/shortcuts-prefer.png"
+echo "ok: focus follows clicks, typing reaches the focused side, reserved shortcuts skip the page and the others reach it first, ⌘Q asks first in the dialog, and escape keeps the browser and Quit, and don't ask again quits, the command bar takes the keyboard and gives it back, a held escape that closes it doesn't repeat into the page, keys typed right after ⌘T, ⌘L and ⌘F land in the bar they open from both sides, a composition too, and reach a page that keeps ⌘F after it, with New Tab's plate while ⌘T's is open, goes to a host over https and searches for words, names docs.new typed and opens it in a new tab, and a page it opens in a new tab has the keyboard, its autofocused field and the browser's shortcuts too, Japanese input composes in both, on the Mac Korean composes a syllable at a time in both, and on Windows in the page, on Windows Japanese and Korean typed right after Ctrl+L in a page that keeps it compose there and Japanese typed for the bar stays out of the page, and the Edit menu undoes, redoes and selects in the page, ⌘Y opens the history page from both sides, Settings › Shortcuts' search finds New Tab by name and ⌘T's rows by their keys, and the rows of the commands it lacked, and New Tab rebound to ⌃⌘T there stays reserved from both sides while ⌘T runs nothing, until ↺ gives it back, About ilo shows Settings' About tab with Settings key and again with About showing, Shortcuts lists the sidebar's commands and Focus Sidebar given ⌃⌘K there gives the sidebar the keyboard from the page until escape, Go to Space 1 given ⌃⌘1 there shows the first Space while ⌃1 runs nothing, Include Favorites in ⌘1–⌘8 off has ⌘1 show the first tab that isn't a favorite, Last Tab Goes to the Ninth Tab has ⌘9 count the ninth tab and Restore Defaults has it show the last again, a second ⌘F at once runs Find after the page kept the first, Prefer ilo on Find from a right-click on its keys has ⌘F run it before the page sees it and Prefer Websites gives the page it first again, and a killed page's renderer leaves the browser running and ⌘R loads the page again. Windows: $out/quit.png, $out/command-bar.png, $out/search.png, $out/new-document.png, $out/ime.png, $out/shortcuts-search.png, $out/shortcuts-rows.png, $out/shortcuts.png, $out/about.png, $out/shortcuts-sidebar.png, $out/shortcuts-favorites.png, $out/shortcuts-prefer.png"
 echo "$launch_bar"
