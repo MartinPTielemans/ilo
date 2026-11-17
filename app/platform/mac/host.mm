@@ -3832,7 +3832,8 @@ void host_add_site_controls(void* view, void (*dismissed)(void)) {
                         HostIsMenuWindow(window)) {
                       return;
                     }
-                    if (BrowserOf(window) == g_site_controls_over) {
+                    if (BrowserOf(window) == g_site_controls_over ||
+                        IsTabDialogOf(window, g_site_controls_over)) {
                       [g_site_controls makeKeyWindow];
                     } else {
                       DismissSiteControls();
@@ -4004,7 +4005,8 @@ void* host_add_link_preview(void* view, void (*dismissed)(void)) {
                     window == g_link_preview || !g_link_preview.visible) {
                   return;
                 }
-                if (BrowserOf(window) == g_link_preview_over) {
+                if (BrowserOf(window) == g_link_preview_over ||
+                    IsTabDialogOf(window, g_link_preview_over)) {
                   [g_link_preview makeKeyWindow];
                 } else {
                   DismissLinkPreview();
@@ -4141,7 +4143,8 @@ void host_add_capture(void* view, void (*dismissed)(void)) {
                         HostIsMenuWindow(window)) {
                       return;
                     }
-                    if (BrowserOf(window) == g_capture_over) {
+                    if (BrowserOf(window) == g_capture_over ||
+                        IsTabDialogOf(window, g_capture_over)) {
                       [g_capture makeKeyWindow];
                     } else {
                       DismissCapture();
