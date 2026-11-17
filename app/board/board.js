@@ -453,13 +453,11 @@ async function land() {
   }
 }
 async function landArrivals() {
-  const response = await fetch(`/${id}/arrived`).catch(() => null);
-  if (!response?.ok) return;
-  const names = (await response.text()).split("\n").filter(Boolean);
+  const names = ((await read(`/${id}/arrived`)) || "").split("\n").filter(Boolean);
   if (!names.length) return;
   const landed = [];
   for (const file of names) {
-    const blob = await fetch(`/${id}/files/${file}`).then((r) => (r.ok ? r.blob() : null), () => null);
+    const blob = await read(`/${id}/files/${file}`, "blob");
     let bitmap;
     try {
       bitmap = blob && (await createImageBitmap(blob));
@@ -899,13 +897,14 @@ function say(text, briefly = false) {
   }
 }
 
-// |path|'s text from the host, or null. Blink's fetch() takes no chrome: address, so it's a GET
-// the old way.
-function read(path) {
+// |path| from the host as |type| ("text" or "blob"), or null. Blink's fetch() takes no chrome:
+// address, so it's a GET the old way.
+function read(path, type = "text") {
   return new Promise((done) => {
     const request = new XMLHttpRequest();
     request.open("GET", path);
-    request.onload = () => done(request.status === 200 ? request.responseText : null);
+    request.responseType = type;
+    request.onload = () => done(request.status === 200 ? request.response : null);
     request.onerror = () => done(null);
     request.send();
   });
