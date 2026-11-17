@@ -62,7 +62,6 @@ impl Shell {
             library.keyed_card = None;
         }
         if let Some(card) = library.keyed_card.filter(|_| asked) {
-            // check.sh waits for this line.
             log!("browser: library card keyed {card}");
         }
         // The field and cards go with the Library, so the window takes the keyboard back, as
@@ -136,7 +135,6 @@ impl Shell {
         };
         if let Some(&next) = next {
             library.keyed_card = Some(next);
-            // check.sh waits for this line.
             log!("browser: library card keyed {next}");
             cx.notify();
         }
