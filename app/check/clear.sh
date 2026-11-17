@@ -1205,13 +1205,13 @@ elif [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   send click $page_point
   expect "^browser: title $tab pressed 1\$" "a click didn't reach Safari's engine's page"
   send state
-  in_browser WKWebView "after a click on Safari's engine's page"
+  in_browser BrowserCoreWebView "after a click on Safari's engine's page"
   for shortcut in "t new-tab" "l edit-url"; do
     page_shortcut $shortcut
     expect '^browser: command bar shown$' "$shortcut over Safari's engine didn't open the command bar"
     send key escape
     expect '^browser: command bar hidden$' "escape didn't close the command bar over Safari's engine"
-    in_browser WKWebView "after the command bar over Safari's engine closed"
+    in_browser BrowserCoreWebView "after the command bar over Safari's engine closed"
   done
   # A click in the page closes the bar before it's dispatched, so the page counts it and the next,
   # as Chromium's does above.
@@ -1221,7 +1221,7 @@ elif [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   expect '^browser: command bar hidden$' "a click on Safari's engine's page didn't close the command bar"
   expect "^browser: title $tab pressed 2\$" \
     "the click that closed the bar didn't reach Safari's engine's page: $(grep "^browser: title $tab " "$log" | tail -1)"
-  in_browser WKWebView "after a click on Safari's engine's page closed the command bar"
+  in_browser BrowserCoreWebView "after a click on Safari's engine's page closed the command bar"
   send click $page_point
   expect "^browser: title $tab pressed 3\$" \
     "the click after the bar closed didn't reach Safari's engine's page: $(grep "^browser: title $tab " "$log" | tail -1)"
@@ -1258,7 +1258,7 @@ elif [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
     expect '^browser: toast shown To exit full screen, press ⎋\.' \
       "the window full screen over Safari's engine didn't say how to leave"
     send state
-    in_browser WKWebView "with the window full screen over Safari's engine"
+    in_browser BrowserCoreWebView "with the window full screen over Safari's engine"
     send key escape
     first=$step
     send key escape
