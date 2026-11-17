@@ -16,10 +16,11 @@
 # its field, a composition too, and a page that keeps ⌘F gets them after it. On Windows, Japanese
 # and Korean typed right after Ctrl+L in a page that keeps it compose there, and Japanese typed for
 # the bar doesn't reach the page (#1784). Japanese input composes and commits in the page and in
-# the command bar, where return and escape go to the input method while it composes. Korean composes a syllable at a time in the page, where backspace takes a
-# letter off and return commits and goes on, on the Mac and on Windows, and on the Mac in the bar,
-# where escape commits and closes it (#2457). The Edit menu's Undo, Redo and Select All reach the
-# focused page. ⌘Y opens the history page from the page and the UI. A page whose renderer crashes
+# the command bar, where return and escape go to the input method while it composes. Korean
+# composes a syllable at a time in the page, where backspace takes a letter off and return commits
+# and goes on, on the Mac and on Windows, and on the Mac in the bar, where escape commits and closes
+# it (#2457). The Edit menu's Undo, Redo and Select All reach the focused page. ⌘Y opens the
+# history page from the page and the UI. A page whose renderer crashes
 # leaves the browser running, and ⌘R loads it again. Settings › Shortcuts lists every command the
 # user can give keys, and
 # gives New Tab ⌃⌘T, which stays reserved and reaches
