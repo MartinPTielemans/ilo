@@ -2308,7 +2308,9 @@ impl Agents {
                     true => element.role.clone(),
                     false => format!("{} {}", element.role, label(element)),
                 };
-                let chose = format!("“{}”", page::clip(&option, 60));
+                // A line of the question the user may be asked, as of the answer, so a line break
+                // in it is a space there.
+                let chose = format!("“{}”", page::clip(&page::one_line(&option), 60));
                 act.note = format!("Chose {chose} in the {}.", act.field);
                 act.what = format!("choose {chose} in {} on {host}", label(element));
                 // As a click on the field or the option would.
