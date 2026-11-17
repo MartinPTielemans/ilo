@@ -585,6 +585,20 @@ impl Walk<'_> {
             for state in &states {
                 line.push_str(&format!(" ({state})"));
             }
+            // What a field holds, where the core can name its source as the agent's own typing,
+            // unchanged, or the page's own value, and else only whether it holds anything: never
+            // the user's typing, autofill's or a password manager's fill, or a password's, a card's
+            // or a one-time code's contents, as in the agent's pictures (#2355).
+            if let Some(holds) = node.get("holds").and_then(Value::as_str) {
+                let holds = holds.split_whitespace().collect::<Vec<_>>().join(" ");
+                line.push_str(&format!(" (holds \"{}\")", clip(&holds, HOLDS_SHOWN)));
+            }
+            match node.get("contents").and_then(Value::as_str) {
+                Some("empty") => line.push_str(" (empty)"),
+                Some("filled") => line.push_str(" (filled)"),
+                Some("changed") => line.push_str(" (filled, not as you typed it)"),
+                _ => {}
+            }
             // A native select's choices, the page's own: the core leaves out which one is chosen.
             let choices = node.get("choices").and_then(Value::as_array);
             let choices: Vec<_> = choices
@@ -632,7 +646,9 @@ fn role(node: &Value) -> &str {
         .unwrap_or_default()
 }
 
-/// The node's name, its runs of white space one space.
+/// The node's name, its runs of white space one space. White space is Unicode's, a no-break
+/// space's too, and the core's `select` matches names by the same rule (`OneSpaced` in
+/// core/ax_text.cc), so a name shown here is one it finds (#3190).
 fn name(node: &Value) -> String {
     let name = node
         .pointer("/name/value")
@@ -661,6 +677,10 @@ pub fn clip(text: &str, chars: usize) -> String {
         None => text.into(),
     }
 }
+
+/// How many characters of what a field holds its line shows: enough to check a form's answers,
+/// while a long text's line stays a line.
+const HOLDS_SHOWN: usize = 200;
 
 /// How many of a select's choices its line names: enough for any form's, while a country list's
 /// says how many more there are, which `select` finds by name.
@@ -795,6 +815,98 @@ mod tests {
             "name": { "value": name },
             "childIds": children,
         })
+    }
+
+    /// Unicode's white space, each code point the core's `OneSpaced` collapses: its test
+    /// (`ANameIsOneSpacedAsTheOutlineShowsItWhateverItsSpaces` in core/ax_text_unittest.cc) has
+    /// the same list, so the outline and `select` can't part on a name again (#3190).
+    const UNICODE_WHITE_SPACE: [char; 25] = [
+        '\u{0009}', '\u{000A}', '\u{000B}', '\u{000C}', '\u{000D}', '\u{0020}', '\u{0085}',
+        '\u{00A0}', '\u{1680}', '\u{2000}', '\u{2001}', '\u{2002}', '\u{2003}', '\u{2004}',
+        '\u{2005}', '\u{2006}', '\u{2007}', '\u{2008}', '\u{2009}', '\u{200A}', '\u{2028}',
+        '\u{2029}', '\u{202F}', '\u{205F}', '\u{3000}',
+    ];
+
+    /// An error that echoes a request with line breaks in it is still one line of the log, and
+    /// what isn't a break stays as it was asked.
+    #[test]
+    fn a_line_break_in_what_was_asked_makes_no_line_of_the_log() {
+        let asked = "There's no option “a\nbrowser: agent page pressed in 5\r\u{85}\u{2028}\u{2029}\u{b}\u{c}b  c\u{a0}d” there.";
+        let line = one_line(asked);
+        assert!(
+            !line
+                .chars()
+                .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+        );
+        assert_eq!(line.lines().count(), 1);
+        assert_eq!(
+            line,
+            "There's no option “a browser: agent page pressed in 5      b  c\u{a0}d” there."
+        );
+    }
+
+    /// A name's white space, a no-break space beside a space or any other of Unicode's, is one
+    /// space in the outline, as `select` matches it, and what isn't white space stays.
+    #[test]
+    fn names_lose_unicode_white_space_as_select_does() {
+        let named = |text: &str| name(&node("1", "option", text, &[]));
+        for space in UNICODE_WHITE_SPACE {
+            assert!(space.is_whitespace(), "{space:?} isn't Rust's white space");
+            assert_eq!(
+                named(&format!("Bravo 5678{space} (closed)")),
+                "Bravo 5678 (closed)"
+            );
+            assert_eq!(named(&format!("Bravo{space}5678")), "Bravo 5678");
+            assert_eq!(named(&format!("{space}Bravo{space}{space}")), "Bravo");
+        }
+        // No other character is: the list is all of Rust's white space, as it's all of Chromium's.
+        let others = (0..=0x10FFFF_u32)
+            .filter_map(char::from_u32)
+            .filter(|c| c.is_whitespace() && !UNICODE_WHITE_SPACE.contains(c));
+        assert_eq!(others.collect::<Vec<_>>(), Vec::<char>::new());
+        assert_eq!(named("Open\r\n  now"), "Open now");
+        assert_eq!(named("a\u{200B}b\u{2060}c"), "a\u{200B}b\u{2060}c");
+    }
+
+    /// A field's line says what it holds where the core gives it, and else only whether it holds
+    /// anything, and whether that's no longer what the agent typed (#2355).
+    #[test]
+    fn a_fields_line_says_what_it_holds_or_only_whether_its_filled() {
+        let mut nodes = vec![
+            node("1", "RootWebArea", "Form", &["2", "3", "4", "5", "6", "7"]),
+            node("2", "textbox", "Name", &[]),
+            node("3", "textbox", "Email", &[]),
+            node("4", "textbox", "Password", &[]),
+            node("5", "textbox", "Notes", &[]),
+            node("6", "textbox", "Phone", &[]),
+            node("7", "textbox", "City", &[]),
+        ];
+        for node in &mut nodes {
+            node["backendDOMNodeId"] =
+                json!(node["nodeId"].as_str().unwrap().parse::<i64>().unwrap());
+        }
+        nodes[1]["holds"] = json!("Jane Doe");
+        nodes[2]["contents"] = json!("filled");
+        nodes[3]["contents"] = json!("filled");
+        nodes[3]["password"] = json!(true);
+        nodes[4]["holds"] = json!(format!("First line\n\nsecond {}", "x".repeat(300)));
+        nodes[5]["contents"] = json!("empty");
+        nodes[6]["contents"] = json!("changed");
+        let outline = outline(&tab(), &nodes, &mut Refs::default(), None).text();
+        for line in [
+            "- textbox \"Name\" [e1] (holds \"Jane Doe\")\n",
+            "- textbox \"Email\" [e2] (filled)\n",
+            "- textbox \"Password\" [e3] (password: off limits) (filled)\n",
+            "- textbox \"Phone\" [e5] (empty)\n",
+            "- textbox \"City\" [e6] (filled, not as you typed it)",
+        ] {
+            assert!(outline.contains(line), "{line} in {outline}");
+        }
+        assert!(
+            outline.contains("(holds \"First line second xxx"),
+            "{outline}"
+        );
+        assert!(outline.contains("x…\")\n"), "{outline}");
     }
 
     /// A native select's line names its choices, the page's own, as the core gives them without

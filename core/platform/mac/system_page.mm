@@ -4,6 +4,7 @@
 #import <WebKit/WebKit.h>
 #include <dlfcn.h>
 #include <objc/message.h>
+#include <objc/runtime.h>
 #include <stdio.h>
 
 #include <memory>
@@ -311,11 +312,14 @@ std::optional<std::vector<uint8_t>> SrgbPng(NSImage* image) {
 // The view the window shows in the tab's pane, holding the WebKit page. A page full screen leaves
 // it for WebKit's own window and comes back, while this stays in the core's window. AppKit offers
 // it every key equivalent in the window before the page has it, as Chromium's page hands the
-// browser's shortcuts over (AGENTS.md › Keyboard with the page focused).
+// browser's shortcuts over (AGENTS.md › Keyboard with the page focused). Escape isn't one, so the
+// page's own view asks it about escape as it gets it (PageWebViewClass).
 @interface BrowserCoreSystemPageView : NSView {
  @public
   browser_core::platform::SystemPageMac* _owner;
 }
+// Whether the app keeps the page's escape `event` from it.
+- (BOOL)keepsEscapeFromPage:(NSEvent*)event;
 @end
 
 // WebKit's delegates, which tell the page's C++ side.
@@ -325,6 +329,44 @@ std::optional<std::vector<uint8_t>> SrgbPng(NSImage* image) {
   browser_core::platform::SystemPageMac* _owner;
 }
 @end
+
+namespace {
+
+using KeyDown = void (*)(id, SEL, NSEvent*);
+// WKWebView's own keyDown:.
+KeyDown g_web_key_down = nullptr;
+
+// Escape goes from AppKit straight to the page's keyDown:, never offered as a key equivalent, so
+// the app is asked about it there, before WebKit has it, as Chromium's page asks about every key.
+// WebKit takes the page's view out of the holder for a page's own full screen, whose window has
+// escape for itself.
+void PageKeyDown(NSView* web, SEL selector, NSEvent* event) {
+  NSView* holder = web.superview;
+  if ([holder isKindOfClass:[BrowserCoreSystemPageView class]] &&
+      [static_cast<BrowserCoreSystemPageView*>(holder) keepsEscapeFromPage:event]) {
+    return;
+  }
+  g_web_key_down(web, selector, event);
+}
+
+// WKWebView with that keyDown:, made as the first page is, as the core never links WebKit.
+Class PageWebViewClass() {
+  static Class const page_class = []() -> Class {
+    Class web = WebKitClass(@"WKWebView");
+    Class page = web ? objc_allocateClassPair(web, "BrowserCoreWebView", 0) : Nil;
+    if (!page) {
+      return web;
+    }
+    g_web_key_down =
+        reinterpret_cast<KeyDown>(class_getMethodImplementation(web, @selector(keyDown:)));
+    class_addMethod(page, @selector(keyDown:), reinterpret_cast<IMP>(PageKeyDown), "v@:@");
+    objc_registerClassPair(page);
+    return page;
+  }();
+  return page_class;
+}
+
+}  // namespace
 
 namespace browser_core::platform {
 
@@ -339,7 +381,7 @@ class SystemPageMac : public SystemPage {
     config.preferences.elementFullscreenEnabled = YES;
     // No site-safety lookups with Apple's service, as Chromium's pages make none (#2322).
     config.preferences.fraudulentWebsiteWarningEnabled = NO;
-    web_ = [[WebKitClass(@"WKWebView") alloc] initWithFrame:NSZeroRect configuration:config];
+    web_ = [[PageWebViewClass() alloc] initWithFrame:NSZeroRect configuration:config];
     web_.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     web_.allowsMagnification = YES;
     if (@available(macOS 13.3, *)) {
@@ -569,6 +611,11 @@ class SystemPageMac : public SystemPage {
     return delegate_->SystemPageKey(key, before_page, web_.inputContext != nil);
   }
 
+  bool Composing() {
+    return [web_ respondsToSelector:@selector(hasMarkedText)] &&
+           [static_cast<id>(web_) hasMarkedText];
+  }
+
   bool Focused() {
     NSResponder* responder = view_.window.firstResponder;
     return [responder isKindOfClass:[NSView class]] &&
@@ -670,6 +717,16 @@ class SystemPageMac : public SystemPage {
   _sentKey = event.keyCode;
   _sentFlags = flags;
   return [super performKeyEquivalent:event];
+}
+
+- (BOOL)keepsEscapeFromPage:(NSEvent*)event {
+  // Escape alone, the one the app uses: ⌘ and ⌃ chords come as key equivalents. An input
+  // method's composition has it first, to cancel.
+  constexpr unsigned short kEscape = 0x35;
+  const NSEventModifierFlags chord =
+      NSEventModifierFlagCommand | NSEventModifierFlagControl | NSEventModifierFlagOption;
+  return _owner && event.keyCode == kEscape && !(event.modifierFlags & chord) &&
+         _owner->Focused() && !_owner->Composing() && _owner->Key(event, /*before_page=*/true);
 }
 
 // A click in the page, for the split view's focus. The page's view takes the event itself, so it's

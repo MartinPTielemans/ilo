@@ -123,6 +123,15 @@ pub trait Browser {
     fn over_page_blends(&self) -> bool;
     /// Loads a pinned tab's pinned URL, unless it's there already.
     fn back_to_pinned_url(&self, tab: u64, cx: &mut App);
+    /// Loads `url` in `tab`, as a row of what's recent on its card does (#3074).
+    fn navigate(&self, _tab: u64, _url: &str, _cx: &mut App) {}
+    /// Whether the core can ask a site what's recent for a tab's card (#3074).
+    fn recent_reached(&self) -> bool {
+        crate::recent::REACHED
+    }
+    /// Asks the core what's recent on `tab`'s site, which it answers to `Shell::recent_answered`
+    /// once, at most once each two minutes per profile from the site, else from what it kept.
+    fn fetch_recent(&self, _tab: u64, _cx: &mut App) {}
     /// Mutes `tab`, or unmutes it.
     fn set_muted(&self, tab: u64, muted: bool, cx: &mut App);
     /// Has the page sharing a tab share `tab` in its place.
@@ -413,6 +422,18 @@ pub trait Browser {
     /// Opens a new document in the notes service `space`'s profile picks, in a tab at the top of
     /// its Today tabs, as a new tab opens, or in a split view with `beside`, on its right.
     fn new_note(&self, space: u64, beside: Option<u64>, cx: &mut App);
+    /// Makes Board `id` in `space`'s profile (`crate::boards`): its folder, off the main thread,
+    /// then with `capture`, capture mode's PNG, puts that on it (whose word comes in
+    /// `capture::board_answered`), then a pinned tab of `space` at its page, which `opened` gets to
+    /// name. Nothing where the profile keeps no folder.
+    fn new_board(
+        &self,
+        space: u64,
+        id: String,
+        capture: Option<Vec<u8>>,
+        opened: Box<dyn FnOnce(u64, &mut App)>,
+        cx: &mut App,
+    );
     /// Opens Chromium's search engines page in a tab of the Space shown, for its profile's site
     /// searches. The user's: agents open no pages outside http(s) (AGENTS.md).
     fn site_search_settings(&self, cx: &mut App);

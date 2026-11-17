@@ -11,6 +11,60 @@
 # Timings, springs and other motion stay in the code, as the design file has no motion, except a
 # surface's `motion` table, which design sync leaves out: seconds, and points for distances.
 
+[board]
+# A Board's page (#3073), which copy-board.sh writes as CSS custom properties, `--<key>`, each
+# `-dark` key the same property in dark mode: a colour as #rrggbb(aa), a `-share` as a percentage,
+# any other number in px. The values are the mocks' the owner chose (#3073).
+canvas = 0xFBF9F4
+canvas-dark = 0x131313
+ink = 0x16140F
+ink-dark = 0xF3F0E8
+ink-soft = 0x16140F99
+ink-soft-dark = 0xF3F0E899
+# A note's and a link's plate.
+plate = 0xFFFFFF
+plate-dark = 0x2A2720
+rim = 0x0000002E
+rim-dark = 0xFFFFFF1A
+shadow = 0x00000033
+shadow-dark = 0x00000066
+# The chosen tool's, size's and width's plate: the ink at 9 %, as the mocks', with its glyph in
+# ilo's accent, [palette]'s no-theme-accent, which copy-board.sh writes as --accent for it and the
+# selection's ring.
+chosen = 0x16140F17
+chosen-dark = 0xF3F0E817
+# A button's plate under the pointer, the ink at 6 %, lighter than the chosen one's, as the mocks'.
+hover = 0x16140F0F
+hover-dark = 0xF3F0E80F
+# The tools' and the zoom's bars, over the canvas.
+bar = 0xF3F0E8
+bar-dark = 0x1F1D17
+# A note's fills and the pen's colours, by name. A fill is its swatch this much over the plate.
+fill-sand = 0xF0EAE5
+fill-pink = 0xE59EBA
+fill-plum = 0x9E749B
+fill-red = 0xE1676F
+fill-orange = 0xEF8C63
+fill-yellow = 0xF2D46C
+fill-green = 0x73E49B
+fill-blue = 0x7EB6D5
+fill-slate = 0x656786
+fill-share = 0.3
+fill-share-dark = 0.22
+card-radius = 12.0
+bar-radius = 16.0
+note-s = 13.0
+note-m = 15.0
+# The size a title takes: a note with no fill, at L.
+note-l = 28.0
+# A refused save's note: a page question's card (shell.permission), in the page's top corner, at
+# the tools' inset, as wide as the URL field.
+notice-inset = 16.0
+notice-width = 260.0
+notice-padding = 12.0
+notice-text = 13.0
+notice-line = 18.0
+
 [boost-editor]
 # A Boost's editor without code (#695, ours as the owner approved it on 2026-11-10): the theme
 # picker's card, as wide and with its arrow, radius and field's look (`theme-picker`), over a
@@ -547,6 +601,24 @@ glyph = 16.0
 glyph-alpha = 0.7
 # The popover level's rim, as the tooltip's.
 rim = 0.5
+# A pinned tab's or favorite's card on a site with rows (#3074) has them in the picture's box, as
+# tall as the lists' headings and three rows in every state, and one heading taller with the line
+# saying they're stale: the folder preview's rows, the box's padding in from its sides
+# at the radius concentric with it, 12 - 4, under the lists' headings this tall, in small semibold
+# type at the host's alpha. The headings and the rows' glyphs' ink are on the card's text column.
+# A draft's ink is at this share of its row's. Loading, each row's places are bars at this alpha of
+# the ink, the title's over the detail's, these long and tall.
+recent-heading = 22.0
+# A heading's text sits this far over its rows.
+recent-heading-under = 3.0
+recent-row-radius = 8.0
+recent-draft = 0.55
+recent-bar = 0.08
+recent-title-bar = 150.0
+recent-detail-bar = 90.0
+recent-title-bar-height = 9.0
+recent-detail-bar-height = 7.0
+recent-bar-gap = 6.0
 
 [folder-preview]
 # Resting on a closed folder shows a searchable list of its tabs beside its row (Arc's Folder
@@ -1703,6 +1775,11 @@ section-glyph-unselected = 0.6
 section-hovered = 0.05
 # Between two sections' buttons, 100 apart.
 section-gap = 20.0
+# Ours: where the buttons may reach in a window too short for Arc's place, as seven need at 800
+# tall: the first starts no higher than 74, 8 under the heading's caps, and the last ends 8 above
+# the back button.
+sections-top = 74.0
+sections-bottom = 48.0
 # The plate under the selected section and the search field.
 library-plate = 0.09
 # The back button, at the column's bottom.

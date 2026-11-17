@@ -77,7 +77,12 @@ pub(crate) unsafe extern "C" fn agent_page_done(
         .into_owned();
     // check.sh reads this line.
     match error {
-        true => log!("browser: agent page {tab} {request} error: {text}"),
+        // What an agent asked comes back in an error as it was asked, so it's kept to one line
+        // of a bounded length here (#3204).
+        true => log!(
+            "browser: agent page {tab} {request} error: {}",
+            browser::agents::page::clip(&browser::agents::page::one_line(&text), 10_000)
+        ),
         false => log!("browser: agent page {tab} {request} {}", text.len()),
     }
     agents_core::update(move |agents, cx| agents.page_done(request, text, error, cx));

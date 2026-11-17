@@ -375,6 +375,9 @@ pub(super) struct Onboarding {
     frames: Frames,
     /// Where the step's button is drawn, once the step has settled (button_frame).
     pub(super) button: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// GPUI's clock, which the flow's motion and the intro's hold are timed by: the real one in the
+    /// app, and in a test the one its timers run on, so the two never part (#3248).
+    clock: gpui::BackgroundExecutor,
     /// When the step came, which its motion runs from.
     pub(super) since: Instant,
     /// The step before, leaving as this one comes, and how far into it it was when it left.
@@ -396,6 +399,13 @@ pub(super) struct Onboarding {
     /// The daily usage count's switch as turned at the opt-ins step, None while untouched: it's
     /// set as the step is left (onboarding_next), so turned on and off again it sends nothing.
     count: Option<bool>,
+}
+
+impl Onboarding {
+    /// Seconds since `at` on the flow's clock.
+    fn secs_since(&self, at: Instant) -> f32 {
+        self.clock.now().saturating_duration_since(at).as_secs_f32()
+    }
 }
 
 impl Shell {
@@ -465,7 +475,8 @@ impl Shell {
             focused_step: None,
             frames: Frames::default(),
             button: Rc::default(),
-            since: Instant::now(),
+            clock: cx.background_executor().clone(),
+            since: cx.background_executor().now(),
             leaving: None,
             ending: None,
             light: appearance.and_then(|name| match name {
@@ -596,14 +607,14 @@ impl Shell {
         }
         match at.and_then(|at| onboarding.steps.get(at + 1)).copied() {
             Some(next) => {
-                let elapsed = onboarding.since.elapsed().as_secs_f32();
+                let elapsed = onboarding.secs_since(onboarding.since);
                 onboarding.leaving = Some((step, elapsed));
                 onboarding.step = next;
-                onboarding.since = Instant::now();
+                onboarding.since = onboarding.clock.now();
                 onboarding.settled = false;
                 log!("browser: onboarding step {}", next.name());
             }
-            None => onboarding.ending = Some(Instant::now()),
+            None => onboarding.ending = Some(onboarding.clock.now()),
         }
         if let Some(on) = count.filter(|&on| self.browser.daily_count(cx) != Some(on)) {
             // check.sh reads this line; the first count, with first set, goes from here.
@@ -795,7 +806,7 @@ impl Shell {
             OptIn::Agents => browser.set_agents(!on, cx),
         });
         if let Some(onboarding) = self.onboarding.as_mut() {
-            onboarding.switched = Some((opt_in, Instant::now()));
+            onboarding.switched = Some((opt_in, onboarding.clock.now()));
             onboarding.slid = false;
             if opt_in == OptIn::DailyCount {
                 onboarding.count = Some(!on);
@@ -925,7 +936,7 @@ impl Shell {
         // A page shown covers it, so it has ended.
         let ended = onboarding
             .ending
-            .is_some_and(|at| at.elapsed().as_secs_f32() >= END_FADE);
+            .is_some_and(|at| onboarding.secs_since(at) >= END_FADE);
         if ended || self.selected != 0 {
             self.onboarding = None;
             // check.sh waits for this line.
@@ -972,7 +983,7 @@ impl Shell {
             window.focus(&onboarding.focus, cx);
         }
         let still = cx.reduce_motion();
-        let elapsed = onboarding.since.elapsed().as_secs_f32();
+        let elapsed = onboarding.secs_since(onboarding.since);
         let step = onboarding.step;
         let came = match step {
             Step::Intro => Drawn::at(elapsed, still).done(),
@@ -992,10 +1003,10 @@ impl Shell {
             onboarding.leaving = None;
         }
         // Frames while something moves; the intro's hold waits on a timer instead.
-        let ending = onboarding.ending.map(|at| at.elapsed().as_secs_f32());
+        let ending = onboarding.ending.map(|at| onboarding.secs_since(at));
         let sliding = onboarding
             .switched
-            .is_some_and(|(_, at)| at.elapsed().as_secs_f32() < SLIDE);
+            .is_some_and(|(_, at)| onboarding.secs_since(at) < SLIDE);
         // check.sh captures a turned switch on this line, with its knob at the end of its slide.
         if let Some((opt_in, _)) = onboarding.switched
             && !sliding
@@ -1336,7 +1347,9 @@ impl Shell {
         let Some(onboarding) = self.onboarding.as_ref() else {
             return div();
         };
-        let switched = onboarding.switched;
+        let switched = onboarding
+            .switched
+            .map(|(turned, at)| (turned, onboarding.secs_since(at)));
         // Where they're drawn is kept once the step has come, not while it slides in.
         let settled = onboarding.step == Step::OptIns && onboarding.settled;
         let frames = onboarding.frames.clone();
@@ -1345,9 +1358,7 @@ impl Shell {
         let look = Look::on(surface, colors.ink(1.), rgb(SIGNAL));
         let rows = self.opt_ins(cx).into_iter().map(|(opt_in, on)| {
             let slid = match switched {
-                Some((turned, at)) if turned == opt_in => {
-                    (at.elapsed().as_secs_f32() / SLIDE).min(1.)
-                }
+                Some((turned, since)) if turned == opt_in => (since / SLIDE).min(1.),
                 _ => 1.,
             };
             let (name, sentence) = opt_in.words();

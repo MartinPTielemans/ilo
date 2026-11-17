@@ -107,6 +107,77 @@ impl capture::Host for CaptureHost {
         let found = unsafe { platform::host_desktop_picture(context, desktop_png) };
         (found && !png.is_empty()).then_some(png)
     }
+
+    fn read_boards(&self, tab: u64) {
+        let Some(folder) = bar_picks_host::folder(unsafe { bc::bc_tab_profile(tab) }) else {
+            return;
+        };
+        update_app_later(move |cx| {
+            // It reads the disk, so off the main thread.
+            let listed = cx.background_spawn(async move { browser::boards::list(&folder) });
+            cx.spawn(async move |cx| {
+                let boards = (listed.await.into_iter())
+                    .map(|board| capture::Board {
+                        id: board.id,
+                        name: board.name.into(),
+                    })
+                    .collect();
+                cx.update(|cx| capture::boards_listed(tab, boards, cx));
+            })
+            .detach();
+        });
+    }
+
+    fn new_board(&self, _: u64, id: &str, png: &[u8]) {
+        let (id, png) = (id.to_owned(), png.to_vec());
+        update_app_later(move |cx| {
+            if let Some(shell) = front_shell() {
+                shell
+                    .update(cx, |shell, cx| shell.new_board_with(id, Some(png), cx))
+                    .ok();
+            }
+        });
+    }
+
+    fn add_to_board(&self, tab: u64, board: &capture::Board, png: &[u8]) -> bool {
+        put_on_board(unsafe { bc::bc_tab_profile(tab) }, &board.id, png)
+    }
+
+    fn open_board(&self, id: &str) {
+        let id = id.to_owned();
+        update_app_later(move |cx| {
+            if let Some(shell) = front_shell() {
+                shell.update(cx, |shell, cx| shell.open_board(&id, cx)).ok();
+            }
+        });
+    }
+}
+
+/// The front window's shell.
+fn front_shell() -> Option<WeakEntity<Shell>> {
+    WINDOWS.with_borrow(|windows| windows.first().map(|window| window.shell.clone()))
+}
+
+/// Puts `png`, capture mode's, onto `profile`'s Board `id`. Returns whether the core will try, and
+/// then it answers in `board_capture_added`.
+pub(crate) fn put_on_board(profile: u64, id: &str, png: &[u8]) -> bool {
+    let Ok(id) = CString::new(id) else {
+        return false;
+    };
+    unsafe { bc::bc_board_add_capture(profile, id.as_ptr(), png.as_ptr(), png.len()) }
+}
+
+/// Whether a capture put on `profile`'s Board `id` arrived there.
+pub(crate) unsafe extern "C" fn board_capture_added(
+    _: *mut c_void,
+    _: bc::bc_id,
+    id: *const c_char,
+    arrived: bool,
+) {
+    let id = unsafe { CStr::from_ptr(id) }.to_string_lossy().into_owned();
+    update_app_later(move |cx| {
+        capture::board_answered(capture::BoardAnswer { id: &id, arrived }, cx)
+    });
 }
 
 /// Takes the desktop picture's PNG into the Vec at `context`.

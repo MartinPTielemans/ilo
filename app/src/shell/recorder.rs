@@ -79,6 +79,8 @@ pub(super) struct Recorder {
     /// answer.
     pub(super) safe_start: Cell<bool>,
     pub(super) ad_blocking: Cell<bool>,
+    /// The core can ask a site what's recent for a card, as `recent_reached` answers (#3074).
+    pub(super) recent_reached: Cell<bool>,
     /// The build updates itself, as `updates` answers, and how often Check for Updates ran.
     pub(super) updates: Cell<bool>,
     pub(super) checked_for_updates: Cell<usize>,
@@ -190,6 +192,8 @@ pub(super) struct Recorder {
     pub(super) bar_open: Cell<bool>,
     /// Each New Note: the Space whose profile's service it opens, and the tab it splits with.
     pub(super) notes: RefCell<Vec<(u64, Option<u64>)>>,
+    /// The Spaces New Board made a Board in. Each opens as tab 900 and on.
+    pub(super) boards: RefCell<Vec<u64>>,
     /// How many times Site Search Settings opened.
     pub(super) site_search_settings: Cell<usize>,
     /// Each of Settings, About, Import and Quit the app asked for, in order.
@@ -587,6 +591,18 @@ impl Browser for Recorder {
 
     fn back_to_pinned_url(&self, tab: u64, _: &mut App) {
         self.record(format!("back to pinned url {tab}"))
+    }
+
+    fn navigate(&self, tab: u64, url: &str, _: &mut App) {
+        self.record(format!("navigate {tab} {url}"))
+    }
+
+    fn recent_reached(&self) -> bool {
+        self.recent_reached.get()
+    }
+
+    fn fetch_recent(&self, tab: u64, _: &mut App) {
+        self.record(format!("fetch recent {tab}"))
     }
 
     fn set_muted(&self, tab: u64, muted: bool, _: &mut App) {
@@ -1150,6 +1166,25 @@ impl Browser for Recorder {
     fn view_history(&self, _: &mut App) {}
     fn new_note(&self, space: u64, beside: Option<u64>, _: &mut App) {
         self.notes.borrow_mut().push((space, beside));
+    }
+
+    fn new_board(
+        &self,
+        space: u64,
+        _: String,
+        capture: Option<Vec<u8>>,
+        opened: Box<dyn FnOnce(u64, &mut App)>,
+        cx: &mut App,
+    ) {
+        let tab = 900 + self.boards.borrow().len() as u64;
+        self.boards.borrow_mut().push(space);
+        if capture.is_some() {
+            self.calls
+                .borrow_mut()
+                .push(format!("new board {space} with a capture"));
+        }
+        // As the engine's, once the folder's made: after the update New Board runs in.
+        cx.defer(move |cx| opened(tab, cx));
     }
 
     fn open_page(&self, url: &str, _: &mut App) {

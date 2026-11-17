@@ -355,7 +355,10 @@ source_set("select_choices") {
     "select_choices.cc",
     "select_choices.h",
   ]
-  deps = [ "//base" ]
+  deps = [
+    ":ax_text",
+    "//base",
+  ]
 }
 
 # Where a video's Mini Player first shows, apart so browser_core_unittests tests the rule alone.

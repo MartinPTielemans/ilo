@@ -546,6 +546,56 @@ impl Fake {
     }
 }
 
+/// PREVIEW_LIBRARY=boards: four made-up Boards in a profile folder of their own, two with a
+/// picture, changed hours to a week ago, the last never named.
+fn preview_boards_folder() -> Option<std::path::PathBuf> {
+    (std::env::var("PREVIEW_LIBRARY").ok()? == "boards").then_some(())?;
+    static FOLDER: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+    FOLDER
+        .get_or_init(|| {
+            let folder =
+                std::env::temp_dir().join(format!("ilo-preview-boards-{}", std::process::id()));
+            let now = std::time::SystemTime::now();
+            let hours = |hours: u64| now - std::time::Duration::from_secs(hours * 3600);
+            let boards = [
+                ("Kitchen ideas", Some([0xf2, 0xc9, 0x4c]), hours(2)),
+                ("Trip to Lisbon", Some([0x6f, 0xa8, 0xdc]), hours(26)),
+                ("Launch sketches", None, hours(74)),
+                ("", None, hours(170)),
+            ];
+            for (index, (name, colour, changed)) in boards.into_iter().enumerate() {
+                let id = format!("{index:x}").repeat(32);
+                let board = browser::boards::make(&folder, &id).ok()?;
+                let json = board.join("board.json");
+                std::fs::write(&json, "{}").ok()?;
+                std::fs::File::options()
+                    .write(true)
+                    .open(&json)
+                    .ok()?
+                    .set_modified(changed)
+                    .ok()?;
+                if !name.is_empty() {
+                    browser::boards::write_name(&folder, &id, name).ok()?;
+                }
+                if let Some([r, g, b]) = colour {
+                    // A Board's picture as its page saves it: cards on the page's ground.
+                    let thumb = image::RgbaImage::from_fn(96, 96, |x, y| {
+                        let card = (12..44).contains(&x) && (14..50).contains(&y)
+                            || (52..86).contains(&x) && (34..78).contains(&y);
+                        image::Rgba(if card {
+                            [r, g, b, 255]
+                        } else {
+                            [246, 244, 240, 255]
+                        })
+                    });
+                    thumb.save(board.join("thumb.png")).ok()?;
+                }
+            }
+            Some(folder)
+        })
+        .clone()
+}
+
 /// PREVIEW_BOOST_CARD=list, nofit or changed: the Boost of the first tab's site, its CSS and an
 /// arrangement of four changes in a profile folder of its own, the last that no longer fits with
 /// nofit, and off as it changed outside ilo with changed.
@@ -572,7 +622,7 @@ fn preview_boost_folder() -> Option<std::path::PathBuf> {
 
 impl Browser for Fake {
     fn profile_folder(&self, _: u64) -> Option<std::path::PathBuf> {
-        preview_boost_folder()
+        preview_boost_folder().or_else(preview_boards_folder)
     }
 
     fn set_arrangement(&self, _: u64, _: &str, _: &str) -> browser::boosts::Arranged {
@@ -1476,6 +1526,15 @@ impl Browser for Fake {
     fn view_history(&self, _: &mut App) {}
     fn open_page(&self, _: &str, _: &mut App) {}
     fn new_note(&self, _: u64, _: Option<u64>, _: &mut App) {}
+    fn new_board(
+        &self,
+        _: u64,
+        _: String,
+        _: Option<Vec<u8>>,
+        _: Box<dyn FnOnce(u64, &mut App)>,
+        _: &mut App,
+    ) {
+    }
     fn site_search_settings(&self, _: &mut App) {}
 
     fn clear_browsing_data(&self, _: &mut App) {}
@@ -2018,8 +2077,34 @@ impl Browser for Fake {
         }
     }
 
-    // The hover card's window is the app's too, and there's no engine to picture a page.
-    fn hover_card(&self, _: browser::hover_card::Hover, _: &mut App) {}
+    // The hover card's window is the app's too, and there's no engine to picture a page, but for
+    // PREVIEW_RECENT's card, which shows in a window of its own beside its row, as the app's does.
+    fn hover_card(&self, hover: browser::hover_card::Hover, cx: &mut App) {
+        preview_card(hover, cx);
+    }
+
+    fn recent_reached(&self) -> bool {
+        preview_recent().is_some()
+    }
+
+    // PREVIEW_RECENT's made-up answer, a moment after the card shows, as the site's would come.
+    fn fetch_recent(&self, tab: u64, cx: &mut App) {
+        let Some(answers) = preview_recent().map(|state| recent_answers(&state)) else {
+            return;
+        };
+        let shell = self.shell.clone();
+        cx.spawn(async move |cx| {
+            for answer in answers {
+                cx.background_executor()
+                    .timer(Duration::from_millis(600))
+                    .await;
+                shell
+                    .update(cx, |shell, cx| shell.recent_answered(tab, answer, cx))
+                    .ok();
+            }
+        })
+        .detach();
+    }
 
     // And the folder preview's.
     fn folder_preview(&self, _: browser::folder_preview::Ask, _: &mut App) {}
@@ -2706,6 +2791,10 @@ fn main() {
             if std::env::var_os("PREVIEW_SIDEBAR_RIGHT").is_some() {
                 cx.set_global(shell::SidebarRight(true));
             }
+            // PREVIEW_RECENT's cards have both switches on, as Settings keeps them by default.
+            if preview_recent().is_some() {
+                browser::recent::set_switches(true, Default::default(), cx);
+            }
             // PREVIEW_TOP_BAR=1 starts with Settings' Top bar on.
             if std::env::var_os("PREVIEW_TOP_BAR").is_some() {
                 cx.set_global(shell::TopBar(true));
@@ -2921,6 +3010,11 @@ fn main() {
                     }
                     for (index, (title, url)) in TABS.iter().enumerate() {
                         let tab = index as u64 + 1;
+                        // PREVIEW_RECENT's pinned tab is on GitHub, for its card's rows.
+                        let (title, url) = match index == 0 && preview_recent().is_some() {
+                            true => (&"Pull requests", &"https://github.com/pulls"),
+                            false => (title, url),
+                        };
                         shell.set_title(tab, (*title).into(), cx);
                         let page = Page {
                             url: (*url).into(),
@@ -3192,7 +3286,7 @@ fn main() {
             let shell_window = window.as_ref().ok().copied();
             match window {
                 // PREVIEW_LIBRARY=1 opens the Library, and PREVIEW_LIBRARY=downloads, =spaces,
-                // =history or =agents opens it there; =rename opens its Spaces with the first card's
+                // =history, =agents or =boards opens it there; =rename opens its Spaces with the first card's
                 // name in its field.
                 Ok(window) if std::env::var_os("PREVIEW_LIBRARY").is_some() => {
                     window
@@ -3202,6 +3296,7 @@ fn main() {
                                 Ok("spaces") => shell.show_spaces(cx),
                                 Ok("agents") => shell.show_agents(cx),
                                 Ok("history") => shell.show_visited(cx),
+                                Ok("boards") => shell.run(Command::ViewBoards, "preview", cx),
                                 Ok("rename") => {
                                     shell.show_spaces(cx);
                                     shell.preview_rename_card(window, cx);
@@ -3736,6 +3831,94 @@ thread_local! {
         const { std::cell::Cell::new(None) };
 }
 
+/// PREVIEW_RECENT=rows, none, draft, signedout, failed, stale or loading: what the site answers a
+/// pinned GitHub tab's or favorite's card (#3074), made up, with both switches on. Stale is rows,
+/// then a failed ask; loading never answers.
+fn preview_recent() -> Option<String> {
+    std::env::var("PREVIEW_RECENT").ok()
+}
+
+fn recent_answers(state: &str) -> Vec<browser::recent::Answer> {
+    use browser::recent::{Answer, List, Row};
+    let row = |list, repo: &str, number, title: &str, draft| Row {
+        list,
+        repo: repo.to_string().into(),
+        number,
+        title: title.to_string().into(),
+        draft,
+    };
+    let rows = vec![
+        row(
+            List::Review,
+            "acme/web",
+            482,
+            "Cache the search index per branch",
+            false,
+        ),
+        row(
+            List::Review,
+            "acme/api",
+            1093,
+            "Retry uploads after a dropped connection",
+            false,
+        ),
+        row(
+            List::Created,
+            "acme/web",
+            488,
+            "Draw the sidebar's rows from one list",
+            state == "draft",
+        ),
+    ];
+    let answered = now() - 25. * 60. * 1000.;
+    match state {
+        "rows" | "draft" => vec![Answer::Rows { rows, answered }],
+        "none" => vec![Answer::Rows {
+            rows: Vec::new(),
+            answered,
+        }],
+        "signedout" => vec![Answer::SignedOut],
+        "failed" => vec![Answer::Failed],
+        "stale" => vec![Answer::Rows { rows, answered }, Answer::Failed],
+        _ => Vec::new(),
+    }
+}
+
+thread_local! {
+    /// Whether PREVIEW_RECENT's card window has opened.
+    static CARD_OPEN: Cell<bool> = const { Cell::new(false) };
+}
+
+/// The card's window stays where it opened: the preview has no host to move or hide it.
+struct PreviewCard;
+
+impl browser::hover_card::Host for PreviewCard {
+    fn show(&self, _: u64, _: f32, _: f32, _: f32, _: f32) {}
+    fn hide(&self) {}
+}
+
+/// With PREVIEW_RECENT, the first card asked for opens its window beside its row, at its tallest,
+/// which a card with rows always is, and every card goes to it.
+fn preview_card(hover: browser::hover_card::Hover, cx: &mut App) {
+    use browser::hover_card::{self as card, Hover};
+    if preview_recent().is_none() {
+        return;
+    }
+    if let Hover::Rest(rest) = &hover
+        && !CARD_OPEN.get()
+    {
+        let tall = card::height(card::INNER * browser::tokens::hover_card::PICTURE_MOST);
+        let (left, top) = card::place(rest.anchor, tall);
+        let margin = browser::elevation::WINDOW_MARGIN;
+        let origin = PREVIEW_ORIGIN.get() + point(px(left - margin), px(top - margin));
+        if card::open_at(Rc::new(PreviewCard), origin, true, cx).is_some() {
+            CARD_OPEN.set(true);
+            log!("preview: hover card window at {left} {top}");
+        }
+    }
+    card::hover(hover, cx);
+}
+
 struct PreviewMiniBar;
 
 impl mini_bar::Host for PreviewMiniBar {
@@ -3959,6 +4142,7 @@ impl site_controls::Host for PreviewSiteControls {
 
     fn set_boost(&self, _: u64, _: bool) {}
     fn turn_on_arrangement(&self, _: u64) {}
+    fn set_recent(&self, _: u64, _: bool, _: &mut App) {}
 
     fn run(&self, _: site_controls::Run, _: u64, _: &mut App) {}
 
@@ -4051,6 +4235,12 @@ fn preview_site() -> Site {
             .then(|| "1 change no longer fits".into()),
         arrangement_off: (std::env::var("PREVIEW_ARRANGEMENT").as_deref() == Ok("changed"))
             .then(|| "Changed outside ilo, off".into()),
+        // PREVIEW_RECENT=on or off: the switch for what's recent in the site's cards (#3074).
+        recent: match std::env::var("PREVIEW_RECENT").as_deref() {
+            Ok("on") => Some(true),
+            Ok("off") => Some(false),
+            _ => None,
+        },
     }
 }
 

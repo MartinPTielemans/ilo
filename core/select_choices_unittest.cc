@@ -62,5 +62,16 @@ TEST(SelectChoicesTest, WhatsUnderAnotherFieldIsNeverAChoice) {
   EXPECT_TRUE(SelectChoices(nodes).empty());
 }
 
+TEST(SelectChoicesTest, AnOptionsNameIsOneSpacedAsTheOutlineShowsNamesNoBreakSpacesToo) {
+  base::ListValue nodes;
+  nodes.Append(Node("1", "", "RootWebArea", "Form", {"2"}));
+  nodes.Append(Node("2", "1", "combobox", "Account", {"3"}));
+  nodes.Append(Node("3", "2", "MenuListPopup", "", {"4", "5"}));
+  nodes.Append(Node("4", "3", "option", "Bravo 5678\u00A0 (closed)"));
+  nodes.Append(Node("5", "3", "option", "\u3000Charlie\u2003\n9012"));
+  EXPECT_EQ(SelectChoices(nodes)["2"],
+            (std::vector<std::string>{"Bravo 5678 (closed)", "Charlie 9012"}));
+}
+
 }  // namespace
 }  // namespace browser_core
