@@ -1061,6 +1061,11 @@ typedef struct bc_host {
                        size_t size,
                        int width,
                        int height);
+  // What became of the capture bc_board_add_capture put into |profile|'s Board |id| when it
+  // returned true: |arrived| if it's in the Board, waiting for its page, else the Board refused it
+  // (its folder gone, 100 pictures already waiting, or the disk wouldn't take it) and nothing of it
+  // was kept. Once for each call that returned true, in the order of the calls.
+  void (*board_capture_added)(void* context, bc_id profile, const char* id, bool arrived);
   // The user chose Open Link in New Window or Open Link in Incognito Window in the page menu of a
   // tab in |window|. Open |url| in a window as ⌘N's, or with |private_window| in a private one in
   // |profile|'s session, as ⇧⌘N's. A link from a private window asks for a private one either way,
@@ -3049,6 +3054,16 @@ BC_EXPORT void bc_tab_translate_revert(bc_id tab);
 // Ends what bc_tab_element_at and bc_tab_capture began: drops their questions and lets go of the
 // page's DevTools, so a page that isn't being captured pays nothing.
 BC_EXPORT void bc_tab_capture_end(bc_id tab);
+
+// Puts |png|, a capture tab_captured gave, |size| bytes, into the profile's Board |id| (a Board's
+// folder the app made, Boards/<id>/ in bc_profile_dir) as a picture of its own, for the Board's page
+// to make a card of: when it next opens, or at once if it's open. Returns whether it will try: not
+// for a profile that isn't loaded (none is loaded for it) or keeps no Boards (a private window's, a
+// guest's), an id that isn't 32 lowercase hex digits, or bytes that aren't a PNG of at most 50 MB.
+// Once it has tried, board_capture_added says whether the picture is in the Board. It's there
+// before a page of the Board opened after this call reads it. The user's: agents get none, as a
+// Board and what's on it are the user's alone.
+BC_EXPORT bool bc_board_add_capture(bc_id profile, const char* id, const uint8_t* png, size_t size);
 
 // Answers to the question tab_permission_asked put: the site may, now and whenever it asks again;
 // it may not, now or again; or not now, and it may ask again.
