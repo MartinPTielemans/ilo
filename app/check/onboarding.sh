@@ -256,6 +256,15 @@ esac
 expect '^browser: onboarding step color settled$' "dark: the colour step didn't come"
 send key right
 capture_step dark-color
+# Proof only (#3218): the keyboard's ring on the swatches, then on Continue, then back.
+send key tab
+send state
+capture_step dark-color-tab1
+send key tab
+send state
+capture_step dark-color-tab2
+send key tab shift
+send state
 send key return
 expect '^browser: onboarding picked color f0eae5$' "dark: → and Return didn't pick the first swatch"
 expect '^browser: onboarding left color via return$' "dark: Return didn't leave the colour step"
