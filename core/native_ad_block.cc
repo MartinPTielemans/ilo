@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
 #include <functional>
 #include <iterator>
 #include <map>
@@ -37,6 +38,7 @@
 #include "browser_core/ad_block_page.mojom.h"
 #include "browser_core/agent_autofill.h"
 #include "browser_core/host.h"
+#include "browser_core/popup_hold.h"
 #include "browser_core/public/browser_core.h"
 #include "browser_core/space.h"
 #include "browser_core/tab.h"
@@ -45,6 +47,7 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/navigation_throttle.h"
 #include "content/public/browser/navigation_throttle_registry.h"
@@ -856,6 +859,108 @@ struct Warned : public content::WebContentsUserData<Warned> {
 
 WEB_CONTENTS_USER_DATA_KEY_IMPL(Warned);
 
+// Runs |gone| once the page it watches goes.
+class GoneWatch : public content::WebContentsObserver {
+ public:
+  GoneWatch(content::WebContents* contents, base::OnceClosure gone)
+      : content::WebContentsObserver(contents), gone_(std::move(gone)) {}
+  void WebContentsDestroyed() override {
+    Observe(nullptr);
+    if (gone_) {
+      std::move(gone_).Run();
+    }
+  }
+  // Runs nothing from now on.
+  void Stop() {
+    Observe(nullptr);
+    gone_.Reset();
+  }
+
+ private:
+  base::OnceClosure gone_;
+};
+
+// A tab a page opened, with the pop-up filters' answer about its first address and its report to
+// the app, which waits for that answer while HoldsPopup holds it (popup_hold.h, #2806). Every way
+// that answer can fail to come lets the report go: its first navigation ends without one, its
+// page goes, or its opener goes before the filters were asked.
+class PopupHeld : public content::WebContentsUserData<PopupHeld>,
+                  public content::WebContentsObserver {
+ public:
+  explicit PopupHeld(content::WebContents* contents)
+      : content::WebContentsUserData<PopupHeld>(*contents),
+        content::WebContentsObserver(contents) {}
+
+  // Holds the tab, as its tab strip gets it, until the answer, and watches |opener| till then.
+  // Its page takes no input till then, the keyboard among it. Content focuses a page it opens for
+  // a link with a target or window.open() (WebContentsImpl::CreateNewWindow, chrome::Navigate),
+  // and on Windows that took the keyboard from the page that opened it, for a tab never listed or
+  // shown: keys went nowhere the user could see, and on after the filters closed it (#2806). The
+  // Mac's and Linux's runs show the opener keeping the keyboard as the pop-up opens, so this
+  // changes nothing there. A page ignoring input is one WebContentsViewAura won't focus. Once the
+  // filters let it load, the app lists it and gives it the keyboard as any tab it shows.
+  void Hold(content::WebContents* opener) {
+    hold.Hold();
+    if (hold.holding()) {
+      no_input_.emplace(web_contents()->IgnoreInputEvents(std::nullopt));
+    }
+    if (hold.holding() && opener) {
+      opener_ = std::make_unique<GoneWatch>(
+          opener, base::BindOnce(&PopupHeld::OpenerGone, base::Unretained(this)));
+    }
+  }
+  void OpenerGone() {
+    hold.OpenerGone();
+    Settled();
+  }
+  void Asking() { hold.Asking(); }
+  void Decided(bool closes) {
+    hold.Decided(closes);
+    Settled();
+  }
+  void Ended() {
+    hold.Ended();
+    Settled();
+  }
+
+  // content::WebContentsObserver:
+  void DidFinishNavigation(content::NavigationHandle* navigation) override {
+    if (navigation->IsInPrimaryMainFrame()) {
+      Ended();
+    }
+  }
+  void PrimaryMainFrameRenderProcessGone(base::TerminationStatus status) override { Ended(); }
+
+  PopupHold hold;
+
+ private:
+  // Once nothing is held, nothing more is watched.
+  void Settled() {
+    if (hold.holding()) {
+      return;
+    }
+    no_input_.reset();
+    Observe(nullptr);
+    if (opener_) {
+      // Deleted after, as this may be inside its call.
+      opener_->Stop();
+      base::SequencedTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE, std::move(opener_));
+    }
+  }
+
+  friend class content::WebContentsUserData<PopupHeld>;
+  std::unique_ptr<GoneWatch> opener_;
+  std::optional<content::WebContents::ScopedIgnoreInputEvents> no_input_;
+  WEB_CONTENTS_USER_DATA_KEY_DECL();
+};
+
+WEB_CONTENTS_USER_DATA_KEY_IMPL(PopupHeld);
+
+PopupHeld& PopupHeldFor(content::WebContents* contents) {
+  PopupHeld::CreateForWebContents(contents);
+  return *PopupHeld::FromWebContents(contents);
+}
+
 // The page a blocked page shows in its place, in the look of the core's error page (error_page.cc):
 // its host, its address, the way back where there is one, and Open anyway, which lets its host
 // through for kLetThrough, as uBlock Origin's warning does. Only the user |can_open| it: an agent's
@@ -962,6 +1067,13 @@ class PageThrottle : public content::NavigationThrottle {
   explicit PageThrottle(content::NavigationThrottleRegistry& registry)
       : content::NavigationThrottle(registry),
         page_of_tab_(!registry.GetNavigationHandle().GetParentFrameOrOuterDocument()) {}
+  // A pop-up whose navigation went before the filters answered, as when its page sends it on,
+  // gets no answer.
+  ~PageThrottle() override {
+    if (PopupHeld* held = held_ ? PopupHeld::FromWebContents(held_.get()) : nullptr) {
+      held->Ended();
+    }
+  }
 
   // content::NavigationThrottle:
   ThrottleCheckResult WillStartRequest() override { return Ask(/*started=*/true); }
@@ -985,13 +1097,25 @@ class PageThrottle : public content::NavigationThrottle {
     const GURL& url = navigation->GetURL();
     bool checking = false;
     if (page_of_tab_) {
-      if (AdBlockingOffAt(navigation->GetWebContents()->GetBrowserContext(), url)) {
+      content::WebContents* contents = navigation->GetWebContents();
+      PopupHeld* held = PopupHeld::FromWebContents(contents);
+      if (AdBlockingOffAt(contents->GetBrowserContext(), url)) {
+        if (held) {
+          held->Ended();
+        }
         page_ = Page();
         return PROCEED;
       }
       const std::optional<GURL> opener = Opener();
       const bool warns = !LetThroughNow(url, started);
       checking = opener || warns;
+      // The tab's report waits for this answer, which may come before its tab strip has it.
+      if (opener) {
+        PopupHeldFor(contents).Asking();
+        held_ = contents->GetWeakPtr();
+      } else if (held) {
+        held->Ended();
+      }
       if (checking) {
         // First on the sequence, so it doesn't wait behind what the page hides.
         Sequence()->PostTaskAndReplyWithResult(
@@ -1008,10 +1132,12 @@ class PageThrottle : public content::NavigationThrottle {
   // The address of the page that opened this tab, while the tab has shown nothing else, as uBlock
   // Origin asks its pop-up filters about a tab a page opens, with or without window.opener, and
   // about each address it's sent on to. None from a site the user turned ad blocking off on.
+  // Nothing else is the tab's initial entry, which the about:blank that window.open() with no
+  // address commits at once keeps, though it ends the controller's initial navigation (#2839).
   std::optional<GURL> Opener() {
     content::WebContents* contents = navigation_handle()->GetWebContents();
-    if (!contents->GetController().IsInitialNavigation() ||
-        !contents->HasLiveOriginalOpenerChain()) {
+    content::NavigationEntry* shown = contents->GetController().GetLastCommittedEntry();
+    if (!shown || !shown->IsInitialEntry() || !contents->HasLiveOriginalOpenerChain()) {
       return std::nullopt;
     }
     const GURL opener = contents->GetFirstWebContentsInLiveOriginalOpenerChain()
@@ -1063,11 +1189,14 @@ class PageThrottle : public content::NavigationThrottle {
     if (asked != asked_) {
       return;
     }
+    content::WebContents* contents = navigation_handle()->GetWebContents();
+    if (PopupHeld* held = PopupHeld::FromWebContents(contents)) {
+      held->Decided(decision == Decision::kClose);
+    }
     if (decision == Decision::kLoad) {
       Resume();
       return;
     }
-    content::WebContents* contents = navigation_handle()->GetWebContents();
     if (decision == Decision::kClose) {
       // After the navigation goes, which closing the tab now would take with it mid-call.
       base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
@@ -1113,6 +1242,8 @@ class PageThrottle : public content::NavigationThrottle {
   std::optional<Page> page_;
   int asked_ = 0;
   bool waiting_ = false;
+  // The tab whose report this navigation holds, while the pop-up filters are asked about it.
+  base::WeakPtr<content::WebContents> held_;
   base::WeakPtrFactory<PageThrottle> weak_factory_{this};
 };
 
@@ -1136,6 +1267,49 @@ void UseNativeAdBlock(const base::FilePath& folder,
     base::StrAppend(&files, {list.AsUTF8Unsafe(), "\n"});
   }
   host.ad_block_use(host.context, folder.AsUTF8Unsafe().c_str(), files.c_str(), filters.c_str());
+}
+
+void HoldPopup(content::WebContents* popup,
+               content::WebContents* opener,
+               const GURL& url,
+               bool in_front,
+               bool agent) {
+  content::BrowserContext* profile = popup->GetBrowserContext();
+  const GURL& from = opener->GetPrimaryMainFrame()->GetLastCommittedURL();
+  const PopupOpen open = {
+      .page_made = true,
+      .in_front = in_front,
+      .agent = agent,
+      .judged = url.SchemeIsHTTPOrHTTPS() && from.SchemeIsHTTPOrHTTPS(),
+      .filtering = NativeAdBlock() && g_on.load(std::memory_order_relaxed) &&
+                   !AdBlockingOffAt(profile, from) && !AdBlockingOffAt(profile, url),
+  };
+  if (HoldsPopup(open)) {
+    PopupHeldFor(popup).Hold(opener);
+  }
+}
+
+bool HoldPopupReport(content::WebContents* contents, base::OnceClosure report) {
+  PopupHeld* held = PopupHeld::FromWebContents(contents);
+  if (!held) {
+    return false;
+  }
+  // Posted at the answer, which comes inside a navigation's call. The log says what the hold
+  // cost the tab: how long after the report would have gone it went.
+  const base::TimeTicks kept = base::TimeTicks::Now();
+  return held->hold.Report(base::BindOnce(
+      [](base::OnceClosure report, base::TimeTicks kept, bc_id tab) {
+        base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+            FROM_HERE, base::BindOnce(
+                           [](base::OnceClosure report, base::TimeTicks kept, bc_id tab) {
+                             fprintf(stderr, "browser: pop-up %llu held %.2f ms\n",
+                                     static_cast<unsigned long long>(tab),
+                                     (base::TimeTicks::Now() - kept).InMillisecondsF());
+                             std::move(report).Run();
+                           },
+                           std::move(report), kept, tab));
+      },
+      std::move(report), kept, Tab::IdOf(contents)));
 }
 
 void SetNativeAdBlockOn(bool on) {

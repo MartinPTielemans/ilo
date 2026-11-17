@@ -34,6 +34,7 @@
 #include "browser_core/idle_unload.h"
 #include "browser_core/install_question.h"
 #include "browser_core/mini_player.h"
+#include "browser_core/native_ad_block.h"
 #include "browser_core/password_offer.h"
 #include "browser_core/platform/window_views.h"
 #include "browser_core/profiles.h"
@@ -931,6 +932,16 @@ void Window::AdjustNavigate(NavigateParams& params) {
   const bc_id source_id = source ? Tab::IdOf(params.source_contents) : 0;
   const Space* source_space = source ? Space::Holding(source_id) : nullptr;
   const bool for_agent = source_space && source_space->agent() && !Showing(source_id);
+  // A tab content made for the page, a link's with a target or window.open()'s, waits for the
+  // ad blocker's pop-up filters before the app hears of it, so one they close is never listed
+  // (#2806). Blink sends a link clicked with ⌘, ⇧ or the middle button as the user's, through
+  // OpenURL, and Chrome makes that tab itself, as for the link menu and the command bar.
+  if (source && params.contents_to_insert) {
+    HoldPopup(params.contents_to_insert.get(), params.source_contents, params.url,
+              params.disposition == WindowOpenDisposition::NEW_FOREGROUND_TAB ||
+                  params.disposition == WindowOpenDisposition::NEW_POPUP,
+              source_space && source_space->agent());
+  }
   window->agent_opener_ = 0;
   if (for_agent && (params.disposition == WindowOpenDisposition::NEW_FOREGROUND_TAB ||
                     params.disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB ||
@@ -3057,6 +3068,14 @@ void Window::OnTabStripModelChanged(TabStripModel* tab_strip_model,
   const std::optional<bc_rect> popup = std::exchange(popup_, std::nullopt);
   const bool popup_placed = std::exchange(popup_placed_, false);
   for (const TabStripModelChange::ContentsWithIndex& inserted : change.GetInsert()->contents) {
+    // A tab opened in front from a window of Chromium's that has the keyboard, as an extension's
+    // popup's button or link does, gives the keyboard to its page once the window is active again,
+    // not back to the UI or page that lent it, which a page focused while the window isn't active
+    // can't take (FocusPage).
+    if (tab_strip_model->active_index() == inserted.index && !widget_->IsActive() &&
+        platform::EndKeyboardLoans(widget_.get())) {
+      page_had_keyboard_ = true;
+    }
     tabs::TabInterface* opener = tab_strip_model->GetOpenerOfTabAt(inserted.index);
     bc_id opened_by = agent_opener;
     if (!opened_by && opener) {
@@ -3392,8 +3411,27 @@ void Window::ReportTabOpened(bc_id tab,
                              std::optional<bc_rect> popup,
                              bool popup_placed) {
   // A popup can close itself at once.
-  if (!Tab::FromId(tab)) {
+  content::WebContents* contents = Tab::FromId(tab);
+  if (!contents) {
     return;
+  }
+  // A page's pop-up waits for the ad blocker's pop-up filters, which may close it (#2806).
+  if (HoldPopupReport(contents, base::BindOnce(&Window::ReportTabOpened, weak_factory_.GetWeakPtr(),
+                                               tab, opener, foreground, split_with, popup,
+                                               popup_placed))) {
+    return;
+  }
+  // How long after the press in its page a tab a page opened is listed, which the pop-up hold adds
+  // to. Within 3 s, as one later came from something else.
+  content::WebContents* opened_by = opener ? Tab::FromId(opener) : nullptr;
+  const Tab* pressed = opened_by ? Tab::FromWebContents(opened_by) : nullptr;
+  if (pressed && !pressed->last_press_at().is_null()) {
+    const base::TimeDelta since = base::TimeTicks::Now() - pressed->last_press_at();
+    if (since < base::Seconds(3)) {
+      fprintf(stderr, "browser: tab %llu listed +%.2f ms after the press in tab %llu\n",
+              static_cast<unsigned long long>(tab), since.InMillisecondsF(),
+              static_cast<unsigned long long>(opener));
+    }
   }
   if (Space* space = SpaceForOpened(opener)) {
     space->Add(tab, opener, foreground);

@@ -692,6 +692,9 @@ max-width = 320.0
 overlap = 4.0
 # How far inside the screen's work area a menu stays.
 edge = 8.0
+# How far a menu a control opens lies off the control's plate, so the plate shows whole beside it:
+# the panel's own padding (ours, #3148; the Space menu opens at the pointer, on its dot).
+from-control = 4.0
 # The panel is on the popover elevation (#317), with its own rim, which reads in both looks.
 dark-fill = 0x2a27_20ff
 dark-rim = 0xffff_ff1f
