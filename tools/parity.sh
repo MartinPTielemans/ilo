@@ -23,9 +23,10 @@
 # video of it (#2979), on Wayland, the footer's menu control, which only Linux and Windows draw, at
 # rest and with its menu open above it, light and dark (#3148), the top bar, with the sidebar on
 # the left and on the right (#3160), and Library › Boards, light and dark, a Board's row's menu,
-# and the protected-media note, whose card a Board's refused save follows in the page (#3073). The
-# preview's Linux host places no window, so sway puts Site Controls, the icon picker and the
-# tooltip in the middle rather than where the Mac's host would.
+# and the protected-media note, whose card a Board's refused save follows in the page (#3073), and
+# the keyboard's ring on New Tab's row in an empty Space, light and dark (#3151). The preview's
+# Linux host places no window, so sway puts Site Controls, the icon picker and the tooltip in the
+# middle rather than where the Mac's host would.
 # It reports: a screen that won't capture is a gap in the sheet and a line on stderr, never a
 # failure.
 # Usage: tools/parity.sh <preview> <output directory>
@@ -90,6 +91,8 @@ screens=(
   "library-boards-dark|library boards|PREVIEW_LIBRARY=boards PREVIEW_APPEARANCE=dark"
   "library-boards-menu|menu shown|PREVIEW_LIBRARY=boards PREVIEW_MENU=180,111"
   "drm-note|drm note|PREVIEW_DRM=1"
+  "new-tab-ring-light|sidebar ring 0 at|PREVIEW_EMPTY=new PREVIEW_FOCUS_SIDEBAR=1 PREVIEW_APPEARANCE=light"
+  "new-tab-ring-dark|sidebar ring 0 at|PREVIEW_EMPTY=new PREVIEW_FOCUS_SIDEBAR=1 PREVIEW_APPEARANCE=dark"
 )
 case $(uname -s) in
   MINGW* | MSYS*) systems=(windows) drag= ;;
