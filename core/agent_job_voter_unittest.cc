@@ -1,5 +1,6 @@
 #include "browser_core/agent_job_voter.h"
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -165,6 +166,202 @@ TEST_F(AgentJobVoterTest, ATabClosedMidJobTakesItsVote) {
   voter_->JobStarted(next_page.get());
   EXPECT_EQ(tab.process->GetPriority(), Priority::kUserVisible);
   voter_->JobEnded(next_page.get());
+}
+
+base::WeakPtr<const performance_manager::PageNode> PageOf(
+    const performance_manager::PageNodeImpl* page) {
+  return static_cast<const performance_manager::PageNode*>(page)->GetWeakPtr();
+}
+
+// The user's page that loads, in a renderer of its own, beside the agent's job's.
+class UserLoadTest : public AgentJobVoterTest {
+ public:
+  void SetUp() override {
+    AgentJobVoterTest::SetUp();
+    job_ = std::make_unique<MockSinglePageInSingleProcessGraph>(graph());
+    users_ = std::make_unique<MockSinglePageInSingleProcessGraph>(graph());
+    voter_->JobStarted(job_->page.get());
+  }
+
+  void TearDown() override {
+    if (job_->page.get()) {
+      voter_->JobEnded(job_->page.get());
+    }
+    users_.reset();
+    job_.reset();
+    AgentJobVoterTest::TearDown();
+  }
+
+ protected:
+  bool JobLifted() const { return job_->process->GetPriority() == Priority::kUserVisible; }
+
+  // The user's selected tab starts loading |navigation|.
+  void StartShown(UserLoad& load, int64_t navigation = 1) {
+    load.Started(navigation, PageOf(users_->page.get()), /*shown=*/true, /*agents=*/false);
+  }
+
+  std::unique_ptr<MockSinglePageInSingleProcessGraph> job_;
+  std::unique_ptr<MockSinglePageInSingleProcessGraph> users_;
+};
+
+// The page the user is looking at loads: the job's page has no vote until its first visually
+// non-empty paint, then has it back.
+TEST_F(UserLoadTest, ALoadTheUserSeesTakesTheVoteUntilItPaints) {
+  UserLoad load;
+  EXPECT_TRUE(JobLifted());
+
+  StartShown(load);
+  EXPECT_TRUE(load.counts());
+  EXPECT_EQ(job_->process->GetPriority(), Priority::kBestEffort);
+
+  load.Painted();
+  EXPECT_FALSE(load.counts());
+  EXPECT_TRUE(JobLifted());
+}
+
+// A load that never paints ends as it stops loading.
+TEST_F(UserLoadTest, TheLoadEndsAsItStops) {
+  UserLoad load;
+  StartShown(load);
+  load.Stopped();
+  EXPECT_TRUE(JobLifted());
+}
+
+// A navigation that commits nothing, as a download or one the user stopped, ends the load. One
+// that commits goes on counting until the page paints.
+TEST_F(UserLoadTest, ANavigationThatCommitsNothingEndsTheLoad) {
+  UserLoad load;
+  StartShown(load, 1);
+  load.Finished(1, /*committed=*/true);
+  EXPECT_FALSE(JobLifted());
+  load.Painted();
+
+  StartShown(load, 2);
+  load.Finished(2, /*committed=*/false);
+  EXPECT_TRUE(JobLifted());
+}
+
+// A navigation the user replaced with another finishes without committing; the new one still
+// counts.
+TEST_F(UserLoadTest, AReplacedNavigationDoesntEndTheNextOnesLoad) {
+  UserLoad load;
+  StartShown(load, 1);
+  StartShown(load, 2);
+  load.Finished(1, /*committed=*/false);
+  EXPECT_TRUE(load.counts());
+  EXPECT_FALSE(JobLifted());
+
+  load.Finished(2, /*committed=*/false);
+  EXPECT_TRUE(JobLifted());
+}
+
+// A tab closed mid-load ends its load, and so does its page going from the graph first.
+TEST_F(UserLoadTest, ATabClosedMidLoadEndsIt) {
+  {
+    UserLoad load;
+    StartShown(load);
+    load.Closed();
+    EXPECT_TRUE(JobLifted());
+  }
+  {
+    UserLoad load;
+    StartShown(load);
+  }
+  EXPECT_TRUE(JobLifted());
+
+  UserLoad load;
+  StartShown(load);
+  EXPECT_FALSE(JobLifted());
+  users_->frame.reset();
+  users_->page.reset();
+  EXPECT_TRUE(JobLifted());
+  load.Painted();
+  EXPECT_TRUE(JobLifted());
+}
+
+// A background tab of the user's, such as a page reloading itself, never takes the vote.
+TEST_F(UserLoadTest, ABackgroundTabsLoadDoesntCount) {
+  UserLoad load;
+  for (int navigation = 1; navigation <= 3; ++navigation) {
+    load.Started(navigation, PageOf(users_->page.get()), /*shown=*/false, /*agents=*/false);
+    EXPECT_FALSE(load.counts());
+    EXPECT_TRUE(JobLifted());
+    load.Painted();
+  }
+}
+
+// A tab opened in front may start its navigation before it's shown: the load counts from then
+// until it paints. A tab the user leaves mid-load stops counting.
+TEST_F(UserLoadTest, ALoadCountsWhileItsTabIsShown) {
+  UserLoad load;
+  load.Started(1, PageOf(users_->page.get()), /*shown=*/false, /*agents=*/false);
+  EXPECT_TRUE(JobLifted());
+
+  load.Shown(true);
+  EXPECT_FALSE(JobLifted());
+
+  load.Shown(false);
+  EXPECT_TRUE(JobLifted());
+
+  load.Shown(true);
+  load.Painted();
+  EXPECT_TRUE(JobLifted());
+
+  // Shown again once its load is over, it doesn't count.
+  load.Shown(false);
+  load.Shown(true);
+  EXPECT_TRUE(JobLifted());
+}
+
+// An agent's tab never counts, even shown and while the user acts in it.
+TEST_F(UserLoadTest, AnAgentsTabNeverCounts) {
+  UserLoad load;
+  load.Started(1, PageOf(users_->page.get()), /*shown=*/true, /*agents=*/true);
+  EXPECT_FALSE(load.counts());
+  EXPECT_TRUE(JobLifted());
+}
+
+// Two of the user's loads: the vote comes back once both end.
+TEST_F(UserLoadTest, TheVoteComesBackWhenEveryLoadHasEnded) {
+  MockSinglePageInSingleProcessGraph other(graph());
+  UserLoad first;
+  UserLoad second;
+  StartShown(first);
+  second.Started(1, PageOf(other.page.get()), /*shown=*/true, /*agents=*/false);
+
+  first.Painted();
+  EXPECT_FALSE(JobLifted());
+  second.Painted();
+  EXPECT_TRUE(JobLifted());
+}
+
+// A job that starts during the user's load is lifted once the load ends, and one that ends during
+// it isn't lifted again.
+TEST_F(UserLoadTest, AJobStartingOrEndingMidLoadFollowsTheCount) {
+  MockSinglePageInSingleProcessGraph next(graph());
+  UserLoad load;
+  StartShown(load);
+
+  voter_->JobStarted(next.page.get());
+  EXPECT_EQ(next.process->GetPriority(), Priority::kBestEffort);
+  voter_->JobEnded(job_->page.get());
+
+  load.Painted();
+  EXPECT_EQ(next.process->GetPriority(), Priority::kUserVisible);
+  EXPECT_EQ(job_->process->GetPriority(), Priority::kBestEffort);
+
+  voter_->JobEnded(next.page.get());
+}
+
+// The job's tab closes during the user's load: its page took its vote along, and the load's end
+// gives none back to it, which the voting system's check that no vote outlives its page would stop.
+TEST_F(UserLoadTest, AJobsTabClosedMidLoadGetsNoVoteBack) {
+  UserLoad load;
+  StartShown(load);
+  job_->frame.reset();
+  job_->page.reset();
+  load.Painted();
+  EXPECT_EQ(job_->process->GetPriority(), Priority::kBestEffort);
 }
 
 }  // namespace

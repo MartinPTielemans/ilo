@@ -14,6 +14,7 @@
 #include "base/scoped_observation.h"
 #include "base/task/cancelable_task_tracker.h"
 #include "base/time/time.h"
+#include "browser_core/agent_job_voter.h"
 #include "browser_core/platform/system_page.h"
 #include "browser_core/public/browser_core.h"
 #include "browser_core/session.h"
@@ -312,6 +313,7 @@ class Tab : public content::WebContentsObserver,
   void DidFinishNavigation(content::NavigationHandle* navigation) override;
   void DidStartLoading() override;
   void DidStopLoading() override;
+  void DidFirstVisuallyNonEmptyPaint() override;
   void NavigationEntriesDeleted() override;
   void DidFinishLoad(content::RenderFrameHost* frame, const GURL& url) override;
   void RenderFrameHostChanged(content::RenderFrameHost* old_host,
@@ -428,6 +430,8 @@ class Tab : public content::WebContentsObserver,
   // the last launch saved it with.
   scoped_refptr<content::SessionStorageNamespaceHandle> storage_;
   bool unloading_ = false;
+  // A load the user is looking at, which an agent's job steps aside for.
+  UserLoad user_load_;
   std::string name_;
   std::string icon_;
   // bc_tab_set_volume's, from 0 to 1.

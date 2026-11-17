@@ -65,6 +65,7 @@
 #include "components/infobars/core/infobar.h"
 #include "components/input/native_web_keyboard_event.h"
 #include "components/keyed_service/core/service_access_type.h"
+#include "components/performance_manager/public/performance_manager.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/dom_storage_context.h"
 #include "content/public/browser/favicon_status.h"
@@ -78,6 +79,7 @@
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/storage_partition.h"
+#include "content/public/browser/visibility.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "content/public/browser/web_contents_view_delegate.h"
@@ -1217,6 +1219,11 @@ void Tab::DidStartNavigation(content::NavigationHandle* navigation) {
     // that scrolls the same page keeps it.
     if (!navigation->IsSameDocument()) {
       ReportLinkTarget(GURL());
+      const Space* space = Space::Holding(id_);
+      user_load_.Started(
+          navigation->GetNavigationId(),
+          performance_manager::PerformanceManager::GetPrimaryPageNodeForWebContents(web_contents()),
+          web_contents()->GetVisibility() == content::Visibility::VISIBLE, space && space->agent());
     }
   }
 }
@@ -1225,6 +1232,7 @@ void Tab::DidFinishNavigation(content::NavigationHandle* navigation) {
   if (!navigation->IsInPrimaryMainFrame()) {
     return;
   }
+  user_load_.Finished(navigation->GetNavigationId(), navigation->HasCommitted());
   if (navigation->HasCommitted() && !navigation->IsSameDocument()) {
     net_error_ = navigation->IsErrorPage() ? navigation->GetNetErrorCode() : 0;
     if (net_error_) {
@@ -1253,7 +1261,12 @@ void Tab::DidStartLoading() {
 }
 
 void Tab::DidStopLoading() {
+  user_load_.Stopped();
   StateChanged();
+}
+
+void Tab::DidFirstVisuallyNonEmptyPaint() {
+  user_load_.Painted();
 }
 
 void Tab::NavigationEntriesDeleted() {
@@ -1603,6 +1616,7 @@ void Tab::DidUpdateAudioMutingState(bool muted) {
 }
 
 void Tab::OnVisibilityChanged(content::Visibility visibility) {
+  user_load_.Shown(visibility == content::Visibility::VISIBLE);
   // As Chrome loads a restored tab once it's shown. Posted: the page view is being shown now.
   if (visibility == content::Visibility::VISIBLE && waiting_) {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
@@ -1899,6 +1913,7 @@ void Tab::CaptureChanged(content::WebContents* contents) {
 }
 
 void Tab::WebContentsDestroyed() {
+  user_load_.Closed();
   // The driver is the page's too, and may go before the tab does, as may its infobars.
   favicon_observation_.Reset();
   infobar_observation_.Reset();
