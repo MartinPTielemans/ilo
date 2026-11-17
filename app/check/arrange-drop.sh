@@ -72,8 +72,10 @@ let at = "-";
 addEventListener("mousedown", (event) => { at = Math.round(event.clientX) + "," + Math.round(event.clientY); });
 const cols = ["dl", "dr", "dn", "dj", "dc", "dk"].map((id) => document.getElementById(id));
 // Where the things of each column start, from the top: the code and class-less columns are under
-// the left and right ones, and the narrow class-less one under the narrow one.
-const band = { dl: [0, 380], dr: [0, 380], dn: [0, 180], dj: [180, 380], dc: [380, 1e4], dk: [380, 1e4] };
+// the left and right ones, from 400, and the narrow class-less one under the narrow one. A fourth
+// card settled in the left or right column keeps a gap above it as the others do (#3030), so it
+// starts at 380 and is still in that column.
+const band = { dl: [0, 400], dr: [0, 400], dn: [0, 180], dj: [180, 380], dc: [400, 1e4], dk: [400, 1e4] };
 function column(col) {
   const c = col.getBoundingClientRect(), [top, bottom] = band[col.id];
   return [...document.querySelectorAll("[aria-label]")].filter((t) => {
