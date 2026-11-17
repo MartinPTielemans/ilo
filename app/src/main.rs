@@ -673,6 +673,17 @@ unsafe extern "C" fn agent_download(_: *mut c_void, d: *const bc::bc_agent_downl
     agents_core::update(move |agents, cx| agents.download_ended(id, end, cx));
 }
 
+/// What an agent's close that asked the tab's page came to (#3256).
+unsafe extern "C" fn agent_close_answered(_: *mut c_void, tab: u64, answer: c_int) {
+    use browser::agents::Closed;
+    let closed = match answer as u32 {
+        bc::BC_AGENT_CLOSED => Closed::Closed,
+        bc::BC_AGENT_CLOSE_ASKS => Closed::Asks,
+        _ => Closed::Stays,
+    };
+    agents_core::update(move |agents, cx| agents.close_answered(tab, closed, cx));
+}
+
 /// The core's answer to an agent's HTTP request (bc_agent_request).
 unsafe extern "C" fn agent_request_done(
     _: *mut c_void,
@@ -1136,6 +1147,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         agent_page_element: Some(agent_page_element),
         agent_download: Some(agent_download),
         agent_request_done: Some(agent_request_done),
+        agent_close_answered: Some(agent_close_answered),
         window_downloads_question: Some(window_downloads_question),
         archive_note_changed: Some(archive_note_changed),
         #[cfg(target_os = "linux")]
