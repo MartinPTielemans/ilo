@@ -25,11 +25,11 @@ if ! engine_has ../core/native_ad_block.cc ../core/ad_block.cc; then
 fi
 serve
 printf '%s' '<title>the blocked page</title>' > "$out/site/blocked.html"
-# A page that's all a link to a pop-up but for a strip down its left edge, so a click anywhere but
-# there opens it in a new tab. Its title says when it has drawn, as Blink drops a press before a
-# page's first frame, when it has the press, when it loses the keyboard and each key it gets.
+# A page that's all a link to a pop-up, which a click anywhere on it opens in a new tab. Its title
+# says when it has drawn, as Blink drops a press before a page's first frame, when it has the
+# press, when it loses the keyboard and each key it gets.
 printf '%s' '<title>the opener</title>
-<a id=link href="popup.html" target="_blank" style="position:fixed;inset:0 0 0 100px">a pop-up</a>
+<a id=link href="popup.html" target="_blank" style="position:fixed;inset:0">a pop-up</a>
 <script>
 link.onmousedown = () => document.title = "the opener pressed";
 onblur = () => document.title = "the opener blurred";
@@ -166,33 +166,13 @@ done
 grep -q '/popup\.html' "$out/site.log" && fail "the pop-up's page reached the server"
 # The page that opened it keeps the keyboard throughout, through the hold too, which at some 5 ms
 # is too short to type into: no other view took it, or the page would have blurred, and a key
-# after the tab closed reaches it. On Windows the pop-up's page still starts loading before its
-# tab closes and takes the keyboard from the opener, which never gets it back, so the key after
-# reaches no page: both known under #2806, and only once the opener blurred.
-blurred=
-if since "$pressed" | grep -q "^browser: title $tab the opener blurred\$"; then
-  windows ||
-    fail "the page that opened the pop-up the filter closed lost the keyboard: $(since "$pressed" | grep -e '^browser: drive' -e "^browser: title $tab " | tr '\n' ' ')"
-  blurred=1
-  echo "skip: the opener keeping the keyboard while the filter closes its pop-up, known under" \
-    "#2806: on Windows the pop-up's page starts loading before its tab closes and blurs the opener"
-fi
+# after the tab closed reaches it. On Windows content's focus of the pop-up, held out of the
+# window, has nowhere to go (#2806).
+since "$pressed" | grep -q "^browser: title $tab the opener blurred\$" &&
+  fail "the page that opened the pop-up the filter closed lost the keyboard: $(since "$pressed" | grep -e '^browser: drive' -e "^browser: title $tab " | tr '\n' ' ')"
 send key x
-if [ -n "$blurred" ]; then
-  await "^browser: title $tab the opener has x\$" ||
-    echo "skip: a key after the filter closed the pop-up reaching the opener, known under #2806:" \
-      "on Windows the opener blurred and never got the keyboard back, which is in $key, on $focus"
-  # A press on the page, in its strip off the link, as a user would make to go on, gives it the
-  # keyboard back, so the hold below runs on Windows too.
-  send press 280 400
-  send release 280 400
-  send key y
-  expect "^browser: title $tab the opener has y\$" \
-    "a press on the opener, off its link, didn't give it the keyboard back after the filter closed its pop-up: the keyboard is in $key, on $focus"
-else
-  expect "^browser: title $tab the opener has x\$" \
-    "a key after the pop-up filter closed the link's tab didn't reach the page that opened it: the keyboard is in $key, on $focus"
-fi
+expect "^browser: title $tab the opener has x\$" \
+  "a key after the pop-up filter closed the link's tab didn't reach the page that opened it: the keyboard is in $key, on $focus"
 # Opens a pop-up from tab $1's page, titled $2, once it has drawn, with a press it has had and its
 # release, as the opener above.
 open_from() {

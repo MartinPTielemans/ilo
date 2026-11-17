@@ -8,6 +8,7 @@
 #include "base/files/important_file_writer.h"
 #include "base/memory/ptr_util.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/string_view_util.h"
 
@@ -132,6 +133,82 @@ bool SaveThumb(const base::FilePath& board, base::span<const uint8_t> png) {
          base::DirectoryExists(board) &&
          base::ImportantFileWriter::WriteFileAtomically(
              board.Append(FILE_PATH_LITERAL("thumb.png")), base::as_string_view(png));
+}
+
+std::optional<std::string> AddFile(const base::FilePath& board, base::span<const uint8_t> bytes) {
+  std::unique_ptr<FileAdd> add = FileAdd::Start(board, bytes.size());
+  return add && add->Append(bytes) ? add->Finish() : std::nullopt;
+}
+
+namespace {
+
+base::FilePath ArrivedFile(const base::FilePath& board) {
+  return board.Append(FILE_PATH_LITERAL("arrived"));
+}
+
+bool SaveArrived(const base::FilePath& board, const std::vector<std::string>& names) {
+  std::string lines;
+  for (const std::string& name : names) {
+    lines += name + "\n";
+  }
+  return base::ImportantFileWriter::WriteFileAtomically(ArrivedFile(board), lines);
+}
+
+bool CanArrive(const base::FilePath& board) {
+  return !board.empty() && base::DirectoryExists(board) && Arrived(board).size() < kMaxArrived;
+}
+
+}  // namespace
+
+std::optional<std::string> AddArrival(const base::FilePath& board,
+                                      base::span<const uint8_t> bytes) {
+  if (!CanArrive(board)) {
+    return std::nullopt;
+  }
+  std::optional<std::string> name = AddFile(board, bytes);
+  return name && Arrive(board, *name) ? name : std::nullopt;
+}
+
+bool Arrive(const base::FilePath& board, std::string_view name) {
+  if (board.empty() || FileImage(name) == Image::kNone || !base::DirectoryExists(board)) {
+    return false;
+  }
+  std::vector<std::string> names = Arrived(board);
+  if (names.size() >= kMaxArrived) {
+    return false;
+  }
+  names.emplace_back(name);
+  return SaveArrived(board, names);
+}
+
+std::vector<std::string> Arrived(const base::FilePath& board) {
+  std::string lines;
+  // A line is a name of some 70 bytes: a file far past kMaxArrived of them isn't one of ours.
+  if (board.empty() ||
+      !base::ReadFileToStringWithMaxSize(ArrivedFile(board), &lines, kMaxArrived * 128)) {
+    return {};
+  }
+  std::vector<std::string> names;
+  for (std::string_view line :
+       base::SplitStringPiece(lines, "\n", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY)) {
+    if (FileImage(line) != Image::kNone && names.size() < kMaxArrived) {
+      names.emplace_back(line);
+    }
+  }
+  return names;
+}
+
+bool TakeArrived(const base::FilePath& board, const std::vector<std::string>& names) {
+  if (board.empty() || !base::DirectoryExists(board)) {
+    return false;
+  }
+  std::vector<std::string> left = Arrived(board);
+  for (const std::string& name : names) {
+    if (auto taken = std::ranges::find(left, name); taken != left.end()) {
+      left.erase(taken);
+    }
+  }
+  return SaveArrived(board, left);
 }
 
 // static

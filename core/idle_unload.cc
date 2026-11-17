@@ -1,5 +1,6 @@
 #include "browser_core/idle_unload.h"
 
+#include <cstdint>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -43,53 +44,44 @@ constexpr base::TimeDelta kUnloadAfter = base::Hours(2);
 // Whether check.sh aged the tabs, and waits for each check's line.
 bool g_aged = false;
 
-// Whether |tab| may let go of its page now without the user losing anything: what they typed, a
-// sound, a call, a page that asks before it's left, or one an agent may be working in out of sight.
-bool MayUnload(const Tab& tab, DiscardReason reason) {
+// What the core knows of |tab| for MayUnload (idle_check.h). It stops looking once a fact keeps the
+// tab, so Chrome's checks run only for a page nothing else keeps.
+UnloadFacts FactsOf(const Tab& tab, DiscardReason reason) {
+  UnloadFacts facts;
   content::WebContents* contents = tab.web_contents();
   const Space* space = Space::Holding(tab.id());
-  // Not one a window shows, or has a picture of while another shows it, nor a private window's,
-  // whose session ends with it anyway.
-  if (!contents || Window::Showing(tab.id()) || Window::Picturing(tab.id()) || !tab.profile() ||
-      tab.profile()->IsOffTheRecord() || (space && space->agent())) {
-    return false;
+  facts.closing = !contents;
+  facts.shown = Window::Showing(tab.id()) || Window::Picturing(tab.id());
+  facts.private_window = !tab.profile() || tab.profile()->IsOffTheRecord();
+  facts.agents = space && space->agent();
+  facts.system_page = tab.system_page();
+  facts.has_page = Tab::Loaded(tab.id());
+  if (!facts.has_page || !MayUnload(facts)) {
+    return facts;
   }
-  // Chrome's checks can't see into the system's engine's page, which may be playing or hold what
-  // the user typed.
-  if (tab.system_page()) {
-    return false;
-  }
-  // Nothing loaded, as a tab opened behind and not yet shown, or one Chrome unloaded in place: no
-  // page to lose, and none for Chrome's checks.
-  if (!Tab::Loaded(tab.id())) {
-    return true;
-  }
-  if (DevToolsWindow::GetInstanceForInspectedWebContents(contents)) {
-    return false;
-  }
-  // Its page would never get to ask.
-  bool asks = false;
-  contents->ForEachRenderFrameHost([&asks](content::RenderFrameHost* frame) {
-    asks = asks || frame->GetSuddenTerminationDisablerState(
-                       blink::mojom::SuddenTerminationDisablerType::kBeforeUnloadHandler);
+  facts.devtools_open = DevToolsWindow::GetInstanceForInspectedWebContents(contents) != nullptr;
+  contents->ForEachRenderFrameHost([&facts](content::RenderFrameHost* frame) {
+    facts.asks_before_leaving =
+        facts.asks_before_leaving ||
+        frame->GetSuddenTerminationDisablerState(
+            blink::mojom::SuddenTerminationDisablerType::kBeforeUnloadHandler);
   });
-  if (asks) {
-    return false;
+  if (!MayUnload(facts)) {
+    return facts;
   }
-  // Chrome's checks for its Memory Saver: sound now or lately, capturing, picture-in-picture, typed
-  // form text, a device connected, an extension keeping it, and for |reason| PROACTIVE a page that
-  // shows notifications or works in the background.
+  // Chrome's checks for its Memory Saver, and for |reason| PROACTIVE a page that shows
+  // notifications or works in the background too.
   DiscardEligibilityPolicy* policy =
       DiscardEligibilityPolicy::GetFromGraph(PerformanceManager::GetGraph());
   base::WeakPtr<performance_manager::PageNode> page =
       PerformanceManager::GetPrimaryPageNodeForWebContents(contents);
   if (!policy || !page) {
-    return false;
+    facts.chrome_keeps = true;
+    return facts;
   }
-  // A call is never let go, even one that takes no camera, microphone or screen and makes no sound,
-  // such as one listening alone, which Chrome's checks would let go (#686).
-  if (page->UsesWebRTC()) {
-    return false;
+  facts.in_call = page->UsesWebRTC();
+  if (facts.in_call) {
+    return facts;
   }
   std::vector<CannotDiscardReason> reasons;
   policy->CanDiscardWithCustomRecentVisibilityWindow(
@@ -97,7 +89,8 @@ bool MayUnload(const Tab& tab, DiscardReason reason) {
   // Each profile's Browser keeps an active tab no window need show. Whether one shows it is the
   // core's to say, above.
   std::erase(reasons, CannotDiscardReason::kActiveTab);
-  return reasons.empty();
+  facts.chrome_keeps = !reasons.empty();
+  return facts;
 }
 
 // The core as a check sees it.
@@ -124,7 +117,7 @@ class CoreHost : public IdleCheck::Host {
   }
   void Unload(uint64_t id) override {
     Tab* tab = Tab::Get(id);
-    if (tab && MayUnload(*tab, DiscardReason::PROACTIVE)) {
+    if (tab && MayUnload(FactsOf(*tab, DiscardReason::PROACTIVE))) {
       tab->Unload();
     }
   }
@@ -141,8 +134,10 @@ IdleCheck& Check() {
   return *check;
 }
 
-// Unloads the tab unseen longest, whatever its age, each time the system says memory is short:
-// one a notification, as Chrome's urgent discarding does, and macOS notifies again while it lasts.
+// Unloads the page of the tab unseen longest that has one, whatever its age, each time the system
+// says memory is short (PickUnderPressure): one a notification, as Chrome's urgent discarding does,
+// which the core turns off (main_delegate.cc), and macOS notifies again while it lasts. It runs only
+// when the system's notification comes, with no timer of its own.
 class PressureListener : public base::MemoryPressureListener {
  public:
   PressureListener() = default;
@@ -153,15 +148,16 @@ class PressureListener : public base::MemoryPressureListener {
         browser_shutdown::IsTryingToQuit()) {
       return;
     }
-    Tab* oldest = nullptr;
-    for (Tab* tab : Tab::All()) {
-      if ((!oldest || tab->last_seen() < oldest->last_seen()) &&
-          MayUnload(*tab, DiscardReason::URGENT)) {
-        oldest = tab;
-      }
+    std::vector<std::pair<uint64_t, base::Time>> tabs;
+    for (const Tab* tab : Tab::All()) {
+      tabs.emplace_back(tab->id(), tab->last_seen());
     }
-    if (oldest) {
-      oldest->Unload();
+    std::optional<uint64_t> pick = PickUnderPressure(std::move(tabs), [](uint64_t id) {
+      const Tab* tab = Tab::Get(id);
+      return tab ? FactsOf(*tab, DiscardReason::URGENT) : UnloadFacts{.closing = true};
+    });
+    if (Tab* tab = pick ? Tab::Get(*pick) : nullptr) {
+      tab->Unload();
     }
   }
 
