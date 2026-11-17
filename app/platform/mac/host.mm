@@ -357,6 +357,15 @@ Browser* BrowserOf(NSWindow* window) {
   return nullptr;
 }
 
+// Whether |window| is a dialog Chromium shows over a tab in |browser|'s window, such as Chrome's
+// warning before http or a page's alert. On the Mac it's a window of its own, but it's part of the
+// browser window: taking the keyboard isn't the user leaving an overlay, and while it has the
+// keyboard a click on the window's pages is still an ordinary click (#3209, #3210).
+static bool IsTabDialogOf(NSWindow* window, Browser* browser) {
+  return browser && window && window.parentWindow == browser->window &&
+         [window isKindOfClass:NSClassFromString(@"NativeWidgetMacNSWindow")];
+}
+
 // The browser window in front, else the first still open.
 Browser* FrontBrowser() {
   for (NSWindow* window in NSApp.orderedWindows) {
@@ -483,6 +492,9 @@ Browser* g_dialog_over;
 NSWindow* g_dialog;
 NSView* g_dialog_view;
 bool g_dialog_shown = false;
+// When the app last became the active one, in the system's uptime, as events' timestamps are: a
+// press from before it is the one that activated the app.
+NSTimeInterval g_active_since = 0;
 // What the dialog covers, as insets from the browser window's content edges: none for all of it,
 // or a tab's card for a page's dialog, which keeps them as the window resizes.
 NSEdgeInsets g_dialog_insets;
@@ -829,6 +841,7 @@ void WatchMainWindow() {
                       object:nil
                        queue:nil
                   usingBlock:^(NSNotification*) {
+                    g_active_since = NSProcessInfo.processInfo.systemUptime;
                     LevelOver(NSApp.mainWindow, true);
                     TellMain(NSApp.mainWindow, true);
                   }];
@@ -2070,6 +2083,21 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
                                                 break;
                                               }
                                               if (event.window == each->window) {
+                                                // A press on the window while its tab's dialog
+                                                // has the keyboard: the window takes it first, so
+                                                // the press lands as AppKit's first click wouldn't,
+                                                // and a page in another pane hears it and focuses
+                                                // its pane, as on Linux and Windows (#3210). A
+                                                // press that activated the app stays a first click.
+                                                if (NSApp.isActive &&
+                                                    event.timestamp > g_active_since &&
+                                                    !each->window.keyWindow &&
+                                                    IsTabDialogOf(NSApp.keyWindow, each.get())) {
+                                                  fprintf(stderr,
+                                                          "browser: a press takes the keyboard "
+                                                          "from its window's tab dialog\n");
+                                                  [each->window makeKeyWindow];
+                                                }
                                                 each->find_bar_keyboard = false;
                                                 each->offer_keyboard = false;
                                                 if (each->find_bar.keyWindow ||
@@ -2852,7 +2880,11 @@ void host_add_overlay(int index, void* overlay_view, double radius, void (*dismi
                     } else if (each->shown) {
                       // What took the keyboard, for the next time an overlay is shown and deaf
                       // (#1314): the release build's log is stderr alone.
-                      if (browser == each->over) {
+                      if (browser == each->over || IsTabDialogOf(window, each->over)) {
+                        // A tab's dialog that shows under it, as a page's link comes to Chrome's
+                        // warning, is its window's too: the overlay keeps every key, and when it
+                        // closes the keyboard goes where it would have, the dialog's included
+                        // (#3209).
                         fprintf(stderr,
                                 "browser: %s takes the keyboard back from its window's %s\n",
                                 each->name, ClassName(window.firstResponder));
@@ -3099,8 +3131,7 @@ void host_show_overlay(int index,
     overlay->shown = true;
     overlay->over = browser;
     NSWindow* key = NSApp.keyWindow;
-    const bool chromium = [key isKindOfClass:NSClassFromString(@"NativeWidgetMacNSWindow")];
-    overlay->keyboard_from = chromium && key.parentWindow == browser->window ? key : nil;
+    overlay->keyboard_from = IsTabDialogOf(key, browser) ? key : nil;
     HoldKeys(overlay->window);
   }
   // The window still holds what it drew when it last closed, such as the previous query. It goes
