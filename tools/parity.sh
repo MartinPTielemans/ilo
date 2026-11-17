@@ -19,11 +19,12 @@
 # and in the narrowest sidebar with ad blocking off (#2345), a Live Folder of made-up pull
 # requests, open light and dark, closed with its count, signed out and after a failed refresh,
 # light and dark, with its tooltip then, the Space's menu with Live Folders open, light and dark,
-# the folder's menu, and in the narrowest sidebar, and frames of a press on its row, 4 s in, for a video of it (#2979), and the
-# footer's menu control, which only Linux and Windows draw, at rest and with its menu open above
-# it, light and dark (#3148), on Wayland. The preview's Linux host places no window, so sway puts
-# Site Controls, the icon picker and the tooltip in the middle rather than where the Mac's host
-# would.
+# the folder's menu, and in the narrowest sidebar, and frames of a press on its row, 4 s in, for a
+# video of it (#2979), on Wayland, and the footer's menu control, which only Linux and Windows draw,
+# at rest and with its menu open above it, light and dark (#3148), and the top bar, with the
+# sidebar on the left and on the right (#3160). The preview's Linux host places no window, so sway
+# puts Site Controls, the icon picker and the tooltip in the middle rather than where the Mac's
+# host would.
 # It reports: a screen that won't capture is a gap in the sheet and a line on stderr, never a
 # failure.
 # Usage: tools/parity.sh <preview> <output directory>
@@ -82,6 +83,8 @@ screens=(
   "live-folder-states-light|live folder 9000 answered|PREVIEW_LIVE_FOLDER=states PREVIEW_APPEARANCE=light"
   "live-folder-states-dark|live folder 9000 answered|PREVIEW_LIVE_FOLDER=states PREVIEW_APPEARANCE=dark"
   "live-folder-press|selected 9001|PREVIEW_LIVE_FOLDER=open PREVIEW_APPEARANCE=light PREVIEW_PRESS=100,553"
+  "top-bar|drawn at|PREVIEW_TOP_BAR=1"
+  "top-bar-right|drawn at|PREVIEW_TOP_BAR=1 PREVIEW_SIDEBAR_RIGHT=1"
 )
 case $(uname -s) in
   MINGW* | MSYS*) systems=(windows) drag= ;;

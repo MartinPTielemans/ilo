@@ -69,6 +69,8 @@ pub(super) struct Recorder {
     pub(super) default_browser: Cell<bool>,
     /// The system it says it runs on, the Mac unless a test says.
     pub(super) os: Cell<Option<crate::default_browser::Os>>,
+    /// The search engines and the default's keyword, as `search_engines` answers.
+    pub(super) search_engines: RefCell<(Vec<(SharedString, SharedString)>, SharedString)>,
     /// Where the pointer is in the window, as `pointer` answers.
     pub(super) pointer: Cell<Option<Point<Pixels>>>,
     /// The window over the page draws opaque, as `over_page_blends` answers.
@@ -1926,6 +1928,14 @@ impl Browser for Recorder {
 
     fn os(&self) -> crate::default_browser::Os {
         self.os.get().unwrap_or(crate::default_browser::Os::Mac)
+    }
+
+    fn search_engines(&self, _: u64) -> (Vec<(SharedString, SharedString)>, SharedString) {
+        self.search_engines.borrow().clone()
+    }
+
+    fn set_search_engine(&self, space: u64, keyword: &str, _: &str, _: &mut App) {
+        self.record(format!("search engine {space} {keyword}"))
     }
 
     fn crash_reports(&self, _: &App) -> Option<bool> {

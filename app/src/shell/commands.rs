@@ -171,6 +171,8 @@ pub enum Command {
     /// Moves the sidebar to the window's other side, Settings' Sidebar position, in every window.
     /// The command bar's alone, with no key (#2375).
     MoveSidebar,
+    /// Turns Top bar on or off, Settings' Top bar, in every window (#3160).
+    ToggleTopBar,
     /// Turns Developer Mode on or off for the page's site.
     ToggleDeveloperMode,
     /// Opens Chrome's extensions page in a new tab.
@@ -383,6 +385,8 @@ pub(super) const SHORTCUTS: &[(&str, Command, bool)] = &[
     // keeps it. Off the Mac it would be Alt+D, Chrome's, so it has none there.
     ("ctrl-d", Command::ToggleDeveloperMode, false),
     ("cmd-s", Command::ToggleSidebar, false),
+    // Unreserved as ⌘S is, so a page that keeps it, as vscode.dev's Run and Debug, still gets it.
+    ("shift-cmd-d", Command::ToggleTopBar, false),
     // Chrome's key for moving the keyboard out of the page, unreserved as Chrome's is, as Arc's ⌘.
     // is Stop Loading here.
     ("f6", Command::FocusSidebar, false),
@@ -433,6 +437,16 @@ const DONT_STAY_ON_TOP: &str = "Don't Stay On Top";
 /// The command bar's rows for Sidebar position, of which it lists the one that would move it.
 const SIDEBAR_TO_RIGHT: &str = "Move Sidebar to the Right";
 const SIDEBAR_TO_LEFT: &str = "Move Sidebar to the Left";
+pub(super) const SHOW_TOP_BAR: &str = "Show Top Bar";
+pub(super) const HIDE_TOP_BAR: &str = "Hide Top Bar";
+
+/// Top bar's item in a menu and its row in the command bar, by whether it's on.
+pub(super) fn top_bar_title(on: bool) -> &'static str {
+    match on {
+        true => HIDE_TOP_BAR,
+        false => SHOW_TOP_BAR,
+    }
+}
 
 /// The page's Developer Mode's rows in the command bar, of which it lists the one that would change
 /// it (Arc's, in sentence case).
@@ -699,6 +713,16 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         SIDEBAR_TO_LEFT,
         Command::MoveSidebar,
         &["side", "position", "left", "right"],
+    ),
+    (
+        SHOW_TOP_BAR,
+        Command::ToggleTopBar,
+        &["toolbar", "address bar", "url bar"],
+    ),
+    (
+        HIDE_TOP_BAR,
+        Command::ToggleTopBar,
+        &["toolbar", "address bar", "url bar"],
     ),
     (
         trace::RECORD,
@@ -1269,6 +1293,7 @@ impl Command {
             Command::RecordTrace => "record-trace",
             Command::StayOnTop => "stay-on-top",
             Command::MoveSidebar => "move-sidebar",
+            Command::ToggleTopBar => "toggle-top-bar",
             Command::ToggleDeveloperMode => "toggle-developer-mode",
             Command::ManageExtensions => "manage-extensions",
             Command::AddExtension => "add-extension",
@@ -1725,6 +1750,7 @@ impl Shell {
                     .browser
                     .keep_sidebar_right(!super::sidebar_right(cx), cx);
             }
+            Command::ToggleTopBar => return self.browser.keep_top_bar(!self.top_bar, cx),
             Command::ToggleDeveloperMode => {
                 let on = !self.page(self.selected).developer_mode;
                 return self.browser.set_developer_mode(self.selected, on, cx);
@@ -2343,6 +2369,7 @@ impl Shell {
             | Command::RecordTrace
             | Command::StayOnTop
             | Command::MoveSidebar
+            | Command::ToggleTopBar
             | Command::ReportProblem
             | Command::CopyBuildInfo
             | Command::HelpCenter
@@ -2423,6 +2450,7 @@ impl Shell {
                 };
                 (name == to).then_some(name)
             }
+            Command::ToggleTopBar => (name == top_bar_title(self.top_bar)).then_some(name),
             _ => Some(name),
         }
     }

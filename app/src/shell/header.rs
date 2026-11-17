@@ -424,6 +424,10 @@ impl Shell {
 
     /// The URL field's box in the window, while the docked sidebar shows it.
     pub(super) fn url_field_bounds(&self) -> Option<Bounds<Pixels>> {
+        // The bar's is there whenever the bar is, the sidebar hidden too.
+        if self.bar_on() {
+            return Some(self.bar_field_bounds());
+        }
         let docked = !self.page_fullscreen && !self.sidebar_hidden && self.sidebar_motion.is_none();
         (docked && self.form().is_none() && self.library.is_none()).then(|| {
             Bounds::new(
@@ -755,7 +759,7 @@ impl Shell {
             .absolute()
             .top(px(URL_FIELD_TOP))
             .left(px(PLATE_INSET))
-            .w(px(self.width() - 2. * PLATE_INSET))
+            .w(px(self.field_width()))
             .h(px(URL_FIELD_HEIGHT))
             .flex()
             .items_center()
@@ -770,6 +774,15 @@ impl Shell {
             .on_click(cx.listener(|shell, _, _, cx| {
                 shell.clicked_bar_target(Command::EditUrl, "sidebar", cx)
             }))
+            // In the bar, its right-click is the bar's, which its press keeps from the bar under it.
+            .when(self.bar_on(), |field| {
+                field.on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(|shell, event: &MouseDownEvent, _, cx| {
+                        shell.top_bar_menu(event.position, cx)
+                    }),
+                )
+            })
             .bg(self.palette.plate(URL_FIELD))
             // It brightens under the pointer as a tile does, from the same white 0.10 (ours).
             .hover(|style| style.bg(self.palette.plate(TILE_HOVERED)))
@@ -795,7 +808,7 @@ impl Shell {
     /// Site Controls or DevTools button while they take clicks, a pinned extension's action, or
     /// the field.
     pub(super) fn field_part_at(&self, x: f32) -> AtRest {
-        let width = self.width() - 2. * PLATE_INSET;
+        let width = self.field_width();
         let (shown, overflow) = self.shown_actions();
         let actions = (shown + overflow as usize) as f32 * URL_BUTTON_SIZE;
         if actions > 0. && x >= width - URL_BUTTON_INSET - actions {
