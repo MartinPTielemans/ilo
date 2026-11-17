@@ -26,6 +26,13 @@ Kept Leave(bool agent_tab, bool shown, base::FunctionRef<bool()> ask_app);
 // The word the core's log line uses for |kept|.
 const char* Name(Kept kept);
 
+// The user's Tab or ⇧Tab from the app's ring into the page a window shows, as
+// bc_window_focus_page_end: |give| gives that page the keyboard at an end, moving its focused
+// element. Not an agent's tab the user doesn't hold, whose page keeps its focus as the agent left
+// it: a click there gives it the keyboard only as the same press takes the tab over from the agent
+// (the app's page press), which a key from the ring doesn't. Returns whether it gave it.
+bool Enter(bool agent_tab, base::FunctionRef<void()> give);
+
 }  // namespace browser_core::focus_leaving_rule
 
 #endif  // BROWSER_CORE_FOCUS_LEAVING_RULE_H_

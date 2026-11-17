@@ -46,5 +46,19 @@ TEST(FocusLeavingRule, NorATabNoWindowShows) {
   EXPECT_EQ(asked, 0);
 }
 
+TEST(FocusLeavingRule, TabFromTheRingGivesTheUsersPageTheKeyboard) {
+  int given = 0;
+  EXPECT_TRUE(Enter(/*agent_tab=*/false, [&] { ++given; }));
+  EXPECT_EQ(given, 1);
+}
+
+TEST(FocusLeavingRule, ButNeverAnAgentsTabTheUserDoesntHold) {
+  // Watched in its Space, where a click takes it over first: the page's focused element stays
+  // where the agent left it, and the user's keyboard isn't put in a page the agent acts in.
+  int given = 0;
+  EXPECT_FALSE(Enter(/*agent_tab=*/true, [&] { ++given; }));
+  EXPECT_EQ(given, 0);
+}
+
 }  // namespace
 }  // namespace browser_core::focus_leaving_rule

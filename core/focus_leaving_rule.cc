@@ -12,6 +12,14 @@ Kept Leave(bool agent_tab, bool shown, base::FunctionRef<bool()> ask_app) {
   return ask_app() ? Kept::kByApp : Kept::kByPage;
 }
 
+bool Enter(bool agent_tab, base::FunctionRef<void()> give) {
+  if (agent_tab) {
+    return false;
+  }
+  give();
+  return true;
+}
+
 const char* Name(Kept kept) {
   switch (kept) {
     case Kept::kByApp:
