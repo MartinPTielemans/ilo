@@ -4908,9 +4908,31 @@ mod tasks {
         page: Option<String>,
         cx: &mut TestAppContext,
     ) -> ToolResult {
+        traced_by(
+            agents,
+            agent,
+            tool,
+            arguments,
+            cx,
+            |answer, cx| match page {
+                Some(text) => page_done(agents, browser, answer, text, cx),
+                None => answer.recv().unwrap(),
+            },
+        )
+    }
+
+    /// `traced`, with `answer` taking the call's reply: for a call the core answers later.
+    fn traced_by(
+        agents: &Entity<Agents>,
+        agent: &str,
+        tool: &str,
+        arguments: Value,
+        cx: &mut TestAppContext,
+        answer: impl FnOnce(mpsc::Receiver<ToolResult>, &mut TestAppContext) -> ToolResult,
+    ) -> ToolResult {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let id = NEXT.fetch_add(1, Ordering::Relaxed);
-        let (reply, answer) = mpsc::channel();
+        let (reply, receiver) = mpsc::channel();
         let at = std::time::Instant::now();
         let call = Call {
             id,
@@ -4921,10 +4943,7 @@ mod tasks {
             at,
         };
         agents.update(cx, |agents, cx| agents.handle(Event::Call(call), cx));
-        let result = match page {
-            Some(text) => page_done(agents, browser, answer, text, cx),
-            None => answer.recv().unwrap(),
-        };
+        let result = answer(receiver, cx);
         let error = result.error.then(|| result.text.clone());
         let at = std::time::Instant::now();
         let answered = Event::Answered {
@@ -5144,6 +5163,87 @@ mod tasks {
         );
     }
 
+    /// A close the page asked to stay through reads as the tab left open, not as a failure, with
+    /// why joined to it, and the discard after it as closed without saving, among a plain close's
+    /// line (#3256).
+    #[gpui::test]
+    fn a_close_the_page_kept_reads_as_kept_not_failed(cx: &mut TestAppContext) {
+        use crate::agents::task::{Line, Opens, TraceItem};
+        let (agents, browser) = ready(None, cx);
+        let agent = start(&agents, "Tidy my tabs", cx);
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Working
+        });
+        // The agent opens the draft, and the basket is another tab in its Space.
+        let url = json!({ "url": "https://docs.example/draft" });
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "open_tab",
+            url,
+            Some(shop_tree()),
+            cx,
+        );
+        let (draft, space, ..) = *browser.tabs.borrow().last().unwrap();
+        let basket = draft + 1;
+        let shop = (basket, space, "Shop", "https://shop.example/basket");
+        browser.tabs.borrow_mut().push(shop);
+        browser.asks.borrow_mut().insert(draft);
+        let basket = json!({ "tab": basket });
+        assert!(!traced(&agents, &browser, &agent, "close_tab", basket, None, cx).error);
+        // The core asks the draft's page, a discard too, and the page answers from a task of its
+        // own that it asks to stay.
+        let mut asked = |arguments: Value, cx: &mut TestAppContext| {
+            traced_by(&agents, &agent, "close_tab", arguments, cx, |answer, cx| {
+                page_answers(&agents, &browser, draft, Closed::Asks, cx);
+                answer.recv().unwrap()
+            })
+        };
+        assert!(
+            asked(json!({ "tab": draft }), cx).error,
+            "the page asked to stay"
+        );
+        let discard = asked(json!({ "tab": draft, "discard": true }), cx);
+        assert_eq!(discard.text, format!("Closed tab {draft} without saving."));
+
+        let conversation =
+            agents.read_with(cx, |agents, cx| agents.conversation(&agent, cx).unwrap());
+        let [Line::Trace(trace)] = conversation.lines.as_slice() else {
+            panic!("{:?}", conversation.lines)
+        };
+        let closes: Vec<_> = (trace.items.iter())
+            .filter_map(|item| match item {
+                TraceItem::Step(step)
+                    if step.title.starts_with("Closed") || step.title.starts_with("Left") =>
+                {
+                    Some(step)
+                }
+                _ => None,
+            })
+            .collect();
+        let lines: Vec<_> = (closes.iter())
+            .map(|step| (step.title.as_ref(), step.description.as_ref(), step.failed))
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                ("Closed shop.example", "", false),
+                // The reason after a dot, in the title's ink, as History joins a row's parts.
+                (
+                    "Left docs.example open · asked to stay: unsaved changes",
+                    "",
+                    false
+                ),
+                ("Closed docs.example without saving", "", false),
+            ]
+        );
+        assert!(
+            matches!(closes[1].opens, Opens::Nothing),
+            "it opened to what the agent was told"
+        );
+    }
+
     /// An open's line titles its site alone and opens to its whole address.
     #[gpui::test]
     fn an_open_line_titles_its_site_and_opens_to_its_address(cx: &mut TestAppContext) {
@@ -5213,6 +5313,7 @@ mod tasks {
             ended: Some(now),
             error: Some("Timed out waiting for the page.".into()),
             picture: None,
+            close: None,
         };
         let lines = fold(&[], &[failed], true, false, None);
         let [Line::Trace(trace)] = lines.as_slice() else {
@@ -5380,6 +5481,7 @@ mod tasks {
             ended: ended.map(at),
             error: None,
             picture: None,
+            close: None,
         };
         let mut messages = vec![message(Who::User, "Museum hours", 0)];
         let mut trace = vec![step("open_tab", 1, 1, Some(3))];
@@ -5448,6 +5550,7 @@ mod tasks {
             ended: Some(at(3)),
             error: None,
             picture: None,
+            close: None,
         }];
         let mut messages = vec![
             message(Who::User, "Museum hours", 0),
@@ -5484,6 +5587,7 @@ mod tasks {
             ended: Some(at(seconds + 1)),
             error: None,
             picture: None,
+            close: None,
         };
         let messages = [Message {
             who: Who::User,

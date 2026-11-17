@@ -710,8 +710,6 @@ pub extern "C" fn host_show_link_target(ui_view: *mut c_void, left: f64, top: f6
     find(Kind::LinkTarget, |float| {
         (float.left, float.top) = (left, top)
     });
-    // check.sh reads this line: which side it's on, out of the pointer's way.
-    browser::log!("browser: link target window at {left} {top}");
     fade_in(
         Kind::LinkTarget,
         ui_view,
@@ -739,6 +737,39 @@ fn link_pointer(at: Point<Pixels>) {
 pub extern "C" fn host_hide_link_target(fade: f64) {
     gpui_linux::watch_pointer_over(std::ptr::null_mut(), None);
     fade_out(Kind::LinkTarget, fade);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn host_outline_overlay(
+    overlay_view: *mut c_void,
+    left: f64,
+    top: f64,
+    width: f64,
+    height: f64,
+    radius: f64,
+) {
+    // Where windows blend, the room round the outline is clear already.
+    if gpui_linux::overlays_blend() {
+        return;
+    }
+    let (left, top, radius) = (left as f32, top as f32, radius as f32);
+    let (right, bottom) = (left + width as f32, top + height as f32);
+    let corners = [(left, top), (right, top), (right, bottom), (left, bottom)];
+    gpui_linux::set_overlay_outline(overlay_view, &corners.map(|(x, y)| (x, y, radius)));
+    // An outline applies from the overlay's next show or move, so one that shows, as the link
+    // target does while its card grows, moves where it is to take it now.
+    let shown = FLOATS.with_borrow(|floats| {
+        (floats.iter())
+            .find(|float| float.view == overlay_view && !float.over.is_null())
+            .map(|float| (float.kind, float.over))
+    });
+    if let Some((kind, over)) = shown
+        && let Some(bounds) = bounds(kind, over)
+    {
+        gpui_linux::move_overlay(overlay_view, bounds, self::radius(kind, bounds));
+    }
+    // check.sh reads this: that the window was cut to what it drew.
+    browser::log!("browser: overlay outline {left} {top} {width} {height} {radius}");
 }
 
 #[unsafe(no_mangle)]

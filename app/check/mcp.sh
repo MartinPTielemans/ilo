@@ -11,8 +11,10 @@
 # turn, a turn's ten calls answered at once, which logs the turns and how long they took. A page
 # that hasn't come once an action has waited for it is still loading, as the answer says. A tab
 # its page opens, by a link or window.open, goes in its Space, behind, and the click's answer names
-# it. A page with fields gives its prose and none of their values: typed, filled in or a password, in its
-# text and in its outline, and the agent can't type into the password field. It types into another.
+# it. A page with fields gives its prose and none of their values in its text. Its outline gives
+# the page's own values and the agent's own typing, and of the rest only that they're filled: the
+# user's typing, a script's fill as autofill's is, a card's and a password's. The agent can't type
+# into the password field. It types into another, whose line then holds what it typed (#2355).
 # A frame nested two sites deep, one the page adds after its load and one it fills by posting a
 # form into it are in the page's outline and text too, an empty helper frame is in neither, and a
 # click two frames deep lands. A skip link in a frame, off the page until it's focused, is focused
@@ -126,6 +128,17 @@ printf '%s' 'for (const style of ["position: fixed; left: 40vw; top: 76vh", "dis
   frame.src = chrome.runtime.getURL("shown.html");
   frame.style = style + "; width: 25vw; height: 15vh; border: 0";
   document.body.append(frame);
+}
+const changed = document.querySelector("[aria-label=\"Extension changed\"]");
+addEventListener("message", event => {
+  if (event.data != "extension, change") return;
+  changed.value += "█";
+  postMessage("extension changed", "*");
+});
+for (const label of ["Copied", "Copied note"]) {
+  const field = document.querySelector("[aria-label=\"" + label + "\"]");
+  field.value = "██████";
+  field.dispatchEvent(new Event("input", { bubbles: true }));
 }' > "$extension/withheld.js"
 printf '%s' '<!doctype html><meta charset=utf-8><style>
 body { margin: 0; background: #fff; color: #f00; font: 60vh/1 monospace;
@@ -705,7 +718,9 @@ if [ "$driven" = 1 ]; then
   # head, read before them, wouldn't say, and it has painted (painted.js, site.sh).
   printf '%s' '<script src="painted.js"></script>
 <p style="position:relative;z-index:1;pointer-events:none">Fields for the agents check.</p>
-<label>Name <input id=typed style="position:fixed;inset:0;width:100%;height:100%"></label>
+<label>Name <input id=typed style="position:fixed;inset:0;width:100%;height:100%;color:#f00"></label>
+<label>Draft <textarea id=draft
+  style="position:fixed;top:0;right:0;width:25%;height:15%;z-index:2;color:#f00"></textarea></label>
 <label>Password <input id=password type=password></label>
 <label>Email <input id=email autocomplete=email></label>
 <label>Card <input id=card autocomplete=cc-number value=4111111111111111></label>
@@ -715,7 +730,14 @@ if [ "$driven" = 1 ]; then
 <script>
 password.value = "hunter2-by-ada";
 email.value = "ada@example.com";
-typed.oninput = () => document.title = "typed";
+typed.oninput = () => {
+  typed.setAttribute("value", typed.value);
+  document.title = "typed";
+};
+draft.oninput = () => {
+  draft.textContent = draft.value;
+  document.title = "drafted";
+};
 // A form'"'"'s Send on ⌘↩ or Ctrl+Enter, which would keep Hand Back'"'"'s key from ilo (#1080).
 onkeydown = (e) => {
   if (e.key == "Enter" && (e.metaKey || e.ctrlKey)) {
@@ -736,6 +758,9 @@ painted(() => document.title = "fields");
   [ "$focus" = RenderWidgetHostViewCocoa ] || fail "a click on the fields page left focus on $focus"
   send type typed-by-ada
   expect "^browser: title $agent_tab typed\$" "typing didn't reach the page's field"
+  send key tab
+  send type drafted-by-ada
+  expect "^browser: title $agent_tab drafted\$" "typing didn't reach the page's textarea"
   # The page keeps ⌘↩ as its form's Send, so Hand Back's key reaches ilo before it (#1080).
   hand_back_pressed "$presses"
   grep -q "^browser: title $agent_tab sent\$" "$log" &&
@@ -746,30 +771,48 @@ painted(() => document.title = "fields");
     *"Fields for the agents check."*) ;;
     *) fail "reading the fields page didn't give its prose: $read" ;;
   esac
-  secrets="typed-by-ada hunter2-by-ada ada@example.com 4111111111111111 note-by-ada editable-by-ada
-    chosen-by-ada"
+  secrets="typed-by-ada drafted-by-ada hunter2-by-ada ada@example.com 4111111111111111 note-by-ada
+    editable-by-ada chosen-by-ada"
   for secret in $secrets; do
     case "$read" in *"$secret"*) fail "reading the fields page gave a field's value, $secret" ;; esac
   done
 
-  # The outline names the fields by ref, the password field off limits, and gives no value. A
-  # select's line names its options, the page's own, and never which one is chosen (#2355).
+  # The outline names the fields by ref and the password field off limits. A field shows what it
+  # holds only where that's the page's own, as the select's option marked selected is, and of any
+  # other only that it's filled: the user's typing, in a field whose page keeps its markup in step
+  # with what it holds too, and an input's or a textarea's text from the markup, which the core
+  # can't tell from that. A select's line names its options, the page's own (#2355).
   outline=$(call snapshot "{\"tab\":$agent_tab}")
   printf '%s\n' "$outline" > "$out/mcp-outline.txt"
   case "$outline" in
-    "Tab $agent_tab: typed"*"Fields for the agents check."*"(password: off limits)"*) ;;
+    "Tab $agent_tab: drafted"*"Fields for the agents check."*"(password: off limits)"*) ;;
     *) fail "the fields page's outline was: $outline" ;;
   esac
   for secret in $secrets; do
-    [ "$secret" = chosen-by-ada ] && continue
+    case $secret in chosen-by-ada) continue ;; esac
     case "$outline" in *"$secret"*) fail "the fields page's outline gave a field's value, $secret" ;; esac
   done
+  ref_of() { printf '%s\n' "$outline" | sed -n "s/.*- $1 \"$2\" \[\(e[0-9]*\)\].*/\1/p" | head -1; }
+  line_of() { printf '%s\n' "$outline" | grep -- "- $1 \"$2\" \["; }
+  for field in Name Draft Email Card Note; do
+    case "$(line_of textbox $field)" in
+      *'] (filled)') ;;
+      *) fail "the $field field's line didn't say only that it was filled: $(line_of textbox $field)" ;;
+    esac
+  done
+  # Its picture paints over the user's typing in both, whose text is red: none is left.
+  mcp "$(request screenshot "{\"tab\":$agent_tab}")" | python3 -I -c '
+import base64, json, sys
+content = json.load(sys.stdin)["result"]["content"][0]
+if content["type"] != "image":
+    sys.exit(content.get("text", "no picture"))
+open(sys.argv[1], "wb").write(base64.b64decode(content["data"]))' "$out/agent-typed.jpg" ||
+    fail "the screenshot of the fields page answered no picture"
   chosen=$(printf '%s\n' "$outline" | grep 'chosen-by-ada')
   case "$chosen" in
-    *'- combobox [e'*'(options: "Pick one", "chosen-by-ada")') ;;
-    *) fail "the select's line didn't name just its options: $chosen" ;;
+    *'- combobox [e'*'] (holds "chosen-by-ada") (options: "Pick one", "chosen-by-ada")') ;;
+    *) fail "the select's line didn't hold its option marked selected and name its options: $chosen" ;;
   esac
-  ref_of() { printf '%s\n' "$outline" | sed -n "s/.*- $1 \"$2\" \[\(e[0-9]*\)\].*/\1/p" | head -1; }
   password=$(ref_of textbox Password)
   refused=$(call type "{\"tab\":$agent_tab,\"ref\":\"$password\",\"text\":\"by-the-agent\"}")
   case "$refused" in
@@ -783,7 +826,11 @@ painted(() => document.title = "fields");
     "Typed into “Note”."*) ;;
     *) fail "typing into the note answered: $typed" ;;
   esac
-  case "$typed" in *by-the-agent*) fail "the outline gave what the agent typed" ;; esac
+  # What changed in the outline is the note, which holds the agent's typing with the page's text.
+  case "$typed" in
+    *'- textbox "Note" [e'*'] (holds "'*by-the-agent*'")'*) ;;
+    *) fail "typing into the note didn't answer with what the note holds now: $typed" ;;
+  esac
   await_log "^browser: title $agent_tab noted\$" "the agent's typing didn't reach the field"
   # The page watched from its card has its pointer: at the note it typed into, ringed and
   # tagged with the note's ref, over the page in the window the mouse goes through. It goes a
@@ -959,14 +1006,19 @@ painted(() => document.title = "choose");
   status=$(ref_of combobox Status)
   priority=$(ref_of combobox Priority)
   case "$outline" in
-    *"- combobox \"Status\" [$status] (options: \"Open\", \"Pending\", \"Closed\")"*) ;;
+    *"- combobox \"Status\" [$status] (holds \"Open\") (options: \"Open\", \"Pending\", \"Closed\")"*) ;;
     *) fail "the select's line didn't name its options: $(printf '%s\n' "$outline" | grep Status)" ;;
   esac
   [ -n "$status" ] && [ -n "$priority" ] ||
     fail "the choosing page's fields had the refs '$status' and '$priority'"
   # A picker whose list is its child (aria-owns), as Chromium's tree has it, shows its options with
-  # refs, and still not what's in its field (#2355).
-  case "$outline" in *Ber-by-ada*) fail "the picker's line gave what its field holds" ;; esac
+  # refs. Its field is an input, whose text from the markup reads only as filled (#2355).
+  city=$(printf '%s\n' "$outline" | grep -- '- combobox "City" \[')
+  case "$city" in
+    *Ber-by-ada*) fail "the picker's line gave its input's text from the markup: $city" ;;
+    *'] (filled)' | *'] (expanded) (filled)') ;;
+    *) fail "the picker's line didn't say only that it was filled: $city" ;;
+  esac
   bern=$(ref_of option Bern)
   case "$outline" in
     *"- combobox \"City\" [e"*"- listbox \"Cities\" [e"*"- option \"Berlin\" [e"*"- option \"Bern\" [$bern]"*) ;;
@@ -997,6 +1049,74 @@ painted(() => document.title = "choose");
     fail "choosing an option the select hasn't answered: $missed"
   last=$(sed -n "s/^browser: title $choose_tab //p" "$log" | tail -1)
   [ "$last" = "priority High" ] || fail "a missed option changed the page, to $last"
+
+  # A name with a no-break space beside a space, or with any other of Unicode's spaces, is one
+  # space in the outline, and select takes it as the outline shows it, in a select and in a page's
+  # own dropdown. A miss echoes what was asked as it was asked, and its options as the outline
+  # shows them (#3190).
+  printf '%s' '<script src="painted.js"></script>
+<label for=account>Account</label>
+<select id=account><option>Alpha 1234<option>Bravo 5678&nbsp; (closed)
+<option>Charlie&#x3000;9012&#x2003;&#x202F;(open)</select>
+<span id=branch-label>Branch</span>
+<div id=branch role=combobox tabindex=0 aria-labelledby=branch-label aria-controls=branches
+  aria-expanded=false>None</div>
+<ul id=branches role=listbox aria-label=Branches hidden>
+<li role=option>Alpha 1234<li role=option>Bravo 5678&nbsp; (closed)
+<li role=option>Echo&#x2007;&#x205F;12&#x1680;(open)
+</ul>
+<script>
+account.onchange = () => document.title = "account " + account.selectedIndex;
+const show = open => { branches.hidden = !open; branch.ariaExpanded = open; };
+branch.onclick = () => show(branches.hidden);
+branches.onclick = event => {
+  branch.textContent = event.target.textContent;
+  show(false);
+  document.title = "branch " + [...branches.children].indexOf(event.target);
+};
+painted(() => document.title = "spaces");
+</script>' > "$out/site/spaces.html"
+  opened=$(call open_tab "{\"url\":\"localhost:$port/spaces.html\"}")
+  spaces_tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  [ -n "$spaces_tab" ] || fail "opening the page of names with Unicode spaces answered: $opened"
+  await_log "^browser: title $spaces_tab spaces\$" "the page of names with Unicode spaces didn't paint"
+  outline=$(call snapshot "{\"tab\":$spaces_tab}")
+  printf '%s\n' "$outline" > "$out/mcp-spaces.txt"
+  account=$(ref_of combobox Account)
+  branch=$(ref_of combobox Branch)
+  [ -n "$account" ] && [ -n "$branch" ] ||
+    fail "the page of names with Unicode spaces had the refs '$account' and '$branch'"
+  shown='"Alpha 1234", "Bravo 5678 (closed)", "Charlie 9012 (open)"'
+  # It holds its first option, the page's own with none marked selected, before its options.
+  case "$outline" in
+    *"- combobox \"Account\" [$account] (holds \"Alpha 1234\") (options: $shown)"*) ;;
+    *) fail "the select's line didn't name its options with one space each, as select takes them: $(printf '%s\n' "$outline" | grep Account)" ;;
+  esac
+  # choose TEXT TITLE REF NAME: select's TEXT in the field REF answers that it holds TEXT, and the
+  # page's title becomes TITLE.
+  choose() {
+    chose=$(call select "{\"tab\":$spaces_tab,\"ref\":\"$3\",\"option\":\"$1\"}")
+    case "$chose" in
+      "The combobox “$4” now holds “$1”."*) ;;
+      *) fail "choosing “$1” in $4, as the outline names it, answered: $chose" ;;
+    esac
+    await_log "^browser: title $spaces_tab $2\$" "choosing “$1” in $4 didn't reach the page"
+  }
+  choose "Bravo 5678 (closed)" "account 1" "$account" Account
+  choose "Charlie 9012 (open)" "account 2" "$account" Account
+  choose "Bravo 5678 (closed)" "branch 1" "$branch" Branch
+  choose "Echo 12 (open)" "branch 2" "$branch" Branch
+  # Two spaces and a no-break space, which match no option, come back as they were sent.
+  nbsp=$(printf '\302\240')
+  missed=$(call select "{\"tab\":$spaces_tab,\"ref\":\"$account\",\"option\":\"Bravo  5678\\u00a0(gone)\"}")
+  options="Its options are “Alpha 1234”, “Bravo 5678 (closed)”, “Charlie 9012 (open)”."
+  [ "$missed" = "error: There's no option “Bravo  5678$nbsp(gone)” there. $options" ] ||
+    fail "choosing an option the select hasn't, with two spaces and a no-break space, answered: $missed"
+  last=$(sed -n "s/^browser: title $spaces_tab //p" "$log" | tail -1)
+  [ "$last" = "branch 2" ] || fail "a missed option changed the page, to $last"
+  # Closed, as the conversation pictures each tab the agent keeps, and one more would put the
+  # sign-in page's picture below the window's bottom, where the check's click can't reach it.
+  call close_tab "{\"tab\":$spaces_tab}" > /dev/null
 
   # Choice tiles whose radios the page hid, with display: none and named by a label's "for" or
   # inside it, show as those radios, named by the label's text and with which is chosen, and a
@@ -1480,13 +1600,19 @@ CARD
   send key w cmd
   expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 
-  # The agent's picture of a page withholds what its outline does of a field: a field holding what
-  # the agent typed and is unchanged shows it, as does the page's own value, by the markup or in a
-  # read-only field; any other field with something in it is painted over, so a field filled by the
-  # page's script, as the user's typing or a password manager's fill would be, one the agent typed
-  # into that changed since, a password field the page made a text field and a card's field, in a
-  # frame of another site and half out of view too. Each field's text is red blocks: a field shown
-  # has red in the picture, and one withheld has none. The check's extension puts two frames of its
+  # The agent's picture of a page withholds what its outline does of a field, by one rule: a field
+  # holding what the agent typed and is unchanged shows it, as does the page's own value, a
+  # select's option its markup marks selected or a read-only or disabled field's; any other field
+  # with something in it is painted over and its line says only that it's filled, so a field filled
+  # by the page's script, as the user's typing or a password manager's fill would be, an input's
+  # value and a textarea's text from the markup, which the core can't tell from those, and fields
+  # whose page keeps their markup in step with what they hold, filled by the check's extension as a
+  # fill would be (the user's typing in such fields is the fields page's), one the agent typed into
+  # that the page or an extension changed since, which says it's not as the agent typed it, a
+  # password field the page made a text field and one it made a password again, a card's field and
+  # a one-time code's, even with the agent's own typing, in a frame of another site and half out of
+  # view too (#2355). Each field's text is red blocks: a field shown has red in the picture, and one
+  # withheld has none. The check's extension puts two frames of its
   # own with red text in the page, one over it and one in its flow below the fields, which the
   # outline leaves out, so the picture has no red there either. The site's frame has a rule of its
   # own, as one for every iframe would place the extension's too.
@@ -1501,10 +1627,13 @@ input, textarea { position: absolute; box-sizing: border-box; width: 40%; height
 <script src="painted.js"></script>
 <script>document.querySelector("[aria-label=\"Frame filled\"]").value = "██████";
 painted(() => parent.postMessage("painted", "*"));</script>' > "$out/site/withheld-inner.html"
+  # The fields keep some of their background inside their border, as most pages' do: a withheld
+  # field's hatch takes the colour its corners show, and text filling a field to its corners, as
+  # Linux's full blocks do, made the hatch red, which reads as the text shown.
   printf '%s' "<!doctype html><meta charset=utf-8><title>loading</title><style>
 body { margin: 0; background: #fff }
 input, textarea { position: absolute; box-sizing: border-box; width: 20vw; height: 12vh; margin: 0;
-  padding: 0; border: 2px solid #888; background: #fff; color: #f00; font: 9vh/1 monospace;
+  padding: 0.5vh 1vw; border: 2px solid #888; background: #fff; color: #f00; font: 9vh/1 monospace;
   -webkit-text-stroke: 0.1em #f00; resize: none; overflow: hidden }
 #site { position: absolute; left: 2vw; top: 40vh; width: 60vw; height: 30vh; border: 0 }
 button { position: absolute; left: 70vw; top: 50vh }
@@ -1517,8 +1646,17 @@ button { position: absolute; left: 70vw; top: 50vh }
 <input aria-label='Shown password' type=password value='██████' style='left: 26vw; top: 20vh'>
 <input aria-label=Card autocomplete=cc-number value='██████' style='left: 50vw; top: 20vh'>
 <textarea aria-label=Note style='left: 74vw; top: 20vh'>██████</textarea>
+<input aria-label='One-time code' autocomplete=one-time-code style='left: 2vw; top: 33vh; height: 5vh; font-size: 4vh'>
+<input aria-label='Card typed' autocomplete='cc-number' style='left: 26vw; top: 33vh; height: 5vh; font-size: 4vh'>
+<input aria-label='Extension changed' style='left: 50vw; top: 33vh; height: 5vh; font-size: 4vh'>
+<select aria-label='Moved select' style='position: absolute; left: 74vw; top: 33vh'><option selected>First<option>Second</select>
+<input aria-label=Copied style='left: 2vw; top: 71vh; height: 4vh; font-size: 3vh'>
+<textarea aria-label='Copied note' style='left: 26vw; top: 71vh; height: 4vh; font-size: 3vh'></textarea>
+<select aria-label='Default select' style='position: absolute; left: 50vw; top: 71vh; width: 20vw; height: 4vh; appearance: none; margin: 0; padding: 0; border: 2px solid #888; background: #fff; color: #f00; font: 3vh/1 monospace'><option>First<option selected>██████</select>
+<input aria-label=Disabled disabled value='██████' style='left: 74vw; top: 58vh'>
+<input aria-label='Toggled back' type=password value='██████' style='left: 74vw; top: 76vh'>
 <iframe id=site src=http://127.0.0.1:$port/withheld-inner.html></iframe>
-<button onclick='document.querySelector(\"[aria-label=Changed]\").value += \"█\"'>Change</button>
+<button onclick='document.querySelector(\"[aria-label=Changed]\").value += \"█\"; postMessage(\"extension, change\", \"*\")'>Change</button>
 <input aria-label=Below style='left: 2vw; top: 94vh'>
 <div style='height: 76vh'></div>
 <script src=painted.js></script>
@@ -1526,16 +1664,22 @@ button { position: absolute; left: 70vw; top: 50vh }
 const field = label => document.querySelector('[aria-label=\"' + label + '\"]');
 for (const label of ['Filled', 'Fixed', 'Below']) field(label).value = '██████';
 field('Shown password').type = 'text';
+field('Toggled back').type = 'text';
+field('Toggled back').type = 'password';
+field('Moved select').selectedIndex = 1;
+field('Copied').oninput = event => event.target.setAttribute('value', event.target.value);
+field('Copied note').oninput = event => event.target.textContent = event.target.value;
 let ready = 0;
 const shown = () => ++ready == 4 && (document.title = 'fields');
 painted(shown);
 addEventListener('message', event =>
   (event.data == 'painted' || event.data == 'extension painted') && shown());
+addEventListener('message', event => event.data == 'extension changed' && (document.title = 'changed'));
 </script>" > "$out/site/withheld.html"
   outline=$(call open_tab "{\"url\":\"localhost:$port/withheld.html\"}")
   fields_tab=$(printf '%s\n' "$outline" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
   await_log "^browser: title $fields_tab fields\$" "the page with fields didn't paint"
-  for label in Typed Changed; do
+  for label in Typed Changed 'One-time code' 'Card typed' 'Extension changed'; do
     ref=$(ref_of textbox "$label")
     typed=$(call type "{\"tab\":$fields_tab,\"ref\":\"$ref\",\"text\":\"██████\"}")
     case "$typed" in "error: "*) fail "typing into $label answered: $typed" ;; esac
@@ -1545,6 +1689,37 @@ addEventListener('message', event =>
     "Clicked button “Change”."*) ;;
     *) fail "clicking Change answered: $clicked" ;;
   esac
+  await_log "^browser: title $fields_tab changed\$" "the check's extension didn't change its field"
+  outline=$(call snapshot "{\"tab\":$fields_tab}")
+  printf '%s\n' "$outline" > "$out/mcp-withheld-outline.txt"
+  # Each field's line ends as $2 says, a password's after it says it's off limits.
+  seen_line() {
+    line=$(printf '%s\n' "$outline" | grep -- "- [a-z]* \"$1\" \[e[0-9]*\]" | head -1)
+    case "$line" in
+      *"] $2" | *"] (password: off limits) $2") ;;
+      *) fail "the outline's line for $1 didn't end with $2: $line" ;;
+    esac
+  }
+  seen_line Typed '(holds "██████")'
+  seen_line Changed '(filled, not as you typed it)'
+  seen_line 'Extension changed' '(filled, not as you typed it)'
+  seen_line Filled '(filled)'
+  seen_line Default '(filled)'
+  seen_line Fixed '(read-only) (holds "██████")'
+  seen_line Disabled '(disabled) (holds "██████")'
+  seen_line 'Shown password' '(filled)'
+  seen_line 'Toggled back' '(filled)'
+  seen_line Card '(filled)'
+  seen_line 'Card typed' '(filled)'
+  seen_line 'One-time code' '(filled)'
+  seen_line Note '(filled)'
+  seen_line Copied '(filled)'
+  seen_line 'Copied note' '(filled)'
+  seen_line 'Frame default' '(filled)'
+  seen_line 'Frame filled' '(filled)'
+  seen_line Below '(filled)'
+  seen_line 'Moved select' '(filled) (options: "First", "Second")'
+  seen_line 'Default select' '(holds "██████") (options: "First", "██████")'
   mcp "$(request screenshot "{\"tab\":$fields_tab}")" | python3 -I -c '
 import base64, json, sys
 content = json.load(sys.stdin)["result"]["content"][0]
@@ -1553,7 +1728,7 @@ if content["type"] != "image":
 open(sys.argv[1], "wb").write(base64.b64decode(content["data"]))' "$out/agent-fields.jpg" ||
     fail "the screenshot of the page with fields answered no picture"
   # The share of red pixels between ($1, $2) and ($3, $4), as hundredths of the picture's width
-  # and height, in %; pixel leaves the picture as a BMP.
+  # and height, in %, and their count; pixel leaves the picture as a BMP.
   pixel "$out/agent-fields.jpg" 0 0 > /dev/null
   reds() {
     python3 -I - "$out/pixel.bmp" "$@" << 'PY'
@@ -1570,13 +1745,13 @@ for y in range(int(y0 * abs(height)), int(y1 * abs(height))):
         b, g, r = data[offset + row * stride + x * bits // 8:][:3]
         red += r > 160 and g < 100 and b < 100
         total += 1
-print(red * 100 // max(total, 1))
+print(red * 100 // max(total, 1), red)
 PY
   }
   # A field's inside, $1 between ($2, $3) and ($4, $5), clear of its border: $6, shown with red,
   # or withheld with none.
   see_field() {
-    share=$(reds "$2" "$3" "$4" "$5")
+    share=$(reds "$2" "$3" "$4" "$5" | cut -d' ' -f1)
     echo "$1: $share% red" >> "$out/mcp-pictured.txt"
     if [ "$6" = shown ]; then
       [ "$share" -ge 10 ] ||
@@ -1589,16 +1764,31 @@ PY
   see_field Typed 3 4 21 12 shown
   see_field Changed 27 4 45 12 withheld
   see_field Filled 51 4 69 12 withheld
-  see_field Default 75 4 93 12 shown
+  see_field Default 75 4 93 12 withheld
   see_field Fixed 3 22 21 30 shown
   see_field "Shown password" 27 22 45 30 withheld
   see_field Card 51 22 69 30 withheld
-  see_field Note 75 22 93 30 shown
-  see_field "Frame default" 6 44 28 54 shown
+  see_field "One-time code" 3 34 21 37 withheld
+  see_field "Card typed" 27 34 45 37 withheld
+  see_field "Extension changed" 51 34 69 37 withheld
+  see_field Disabled 75 60 93 68 shown
+  see_field "Toggled back" 75 78 93 86 withheld
+  see_field Note 75 22 93 30 withheld
+  see_field Copied 3 72 21 74 withheld
+  see_field "Copied note" 27 72 45 74 withheld
+  see_field "Default select" 51 72 65 74 shown
+  see_field "Frame default" 6 44 28 54 withheld
   see_field "Frame filled" 36 44 58 54 withheld
   see_field Below 3 95 21 99 withheld
   see_field "Extension frame over the page" 41 77 64 90 withheld
   see_field "Extension frame in the page" 3 77 26 90 withheld
+  # The user's typing on the fields page, in fields whose page keeps their markup in step: no red
+  # pixel at all, as a line of text is too small a share of the picture to count as one.
+  pixel "$out/agent-typed.jpg" 0 0 > /dev/null
+  typed_red=$(reds 0 0 100 100 | cut -d' ' -f2)
+  echo "User's typing, copied to the markup: $typed_red red pixels" >> "$out/mcp-pictured.txt"
+  [ "$typed_red" -eq 0 ] ||
+    fail "the agent's picture showed the user's typing, which it may not: $typed_red red pixels"
   call close_tab "{\"tab\":$fields_tab}" > /dev/null
 
   # It opens a page in its Space, clicks its link, scrolls a long page and takes a screenshot.
@@ -2014,9 +2204,14 @@ CARD
     read -r qx qy qw qh <<CARD
 $(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
 CARD
-    # Allow Once and Never share the row above Always Allow, Never at the left.
-    case "$1" in Once) x=$((qw * 3 / 4)) ;; Never) x=$((qw / 4)) ;; esac
-    send click $((qx + x)) $((qy + qh - 26 - 36))
+    # Allow Once and Never share the row above Always Allow, Never at the left. A button is 28
+    # high and 8 from the next row.
+    case "$1" in
+      Once) x=$((qw * 3 / 4)) y=$((qh - 26 - 36)) ;;
+      Never) x=$((qw / 4)) y=$((qh - 26 - 36)) ;;
+      Always) x=$((qw / 2)) y=$((qh - 26)) ;;
+    esac
+    send click $((qx + x)) $((qy + y))
     await_log "^browser: agent mcp-client answered $q $1\$" "$1 didn't answer the download"
     downloaded=$(next_answer) || fail "the browser didn't answer the download's open_tab"
     downloaded=$(printf '%s\n' "$downloaded" | answered "the download's open_tab")
@@ -2061,6 +2256,25 @@ $(grep 'browser: agent .*download' "$log" | tail -3)"
       fail "the opened tab's refused download left a file: $(ls -A "$out/downloads" | tr '\n' ' ')"
     # Left open: the agent is at work in it, which the session's end below ends.
   fi
+  # A site the user always allows downloads from, whose page's download link the agent clicks with
+  # another app in front below (#3183). A .docx, which the check's server sends as a file, where a
+  # .txt would open as a page. The link opens a tab, which the download closes at once, as many
+  # sites' do: before #3104 that tab's window show asked the compositor to bring ilo forward.
+  printf 'notes\n' > "$out/site/notes.docx"
+  printf '%s' '<!doctype html><title>Notes</title><a href="notes.docx" target=_blank>Notes</a>' \
+    > "$out/site/notes.html"
+  file="{\"url\":\"saved.localhost:$port/notes.docx\"}"
+  wants='^browser: agent mcp-client asks [0-9]*: download notes\.docx from saved\.localhost$'
+  answer_download Always
+  case "$downloaded" in
+    "Downloaded notes.docx "*) ;;
+    *) fail "the download answered with Always Allow: $downloaded" ;;
+  esac
+  saved_page=$(call open_tab "{\"url\":\"saved.localhost:$port/notes.html\"}")
+  notes_tab=$(printf '%s\n' "$saved_page" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  notes_ref=$(printf '%s\n' "$saved_page" | sed -n 's/.*- link "Notes" \[\(e[0-9]*\)\].*/\1/p' | head -1)
+  [ -n "$notes_tab" ] && [ -n "$notes_ref" ] ||
+    fail "the agent's tab of the site it may download from didn't open with its link: $saved_page"
 
   # A bank's site asks first, in a card in the window, and Allow Once opens it.
   bank="{\"url\":\"bank.localhost:$port/fields.html\"}"
@@ -2208,6 +2422,45 @@ if [ "$driven" = 1 ]; then
     grep -q '^cover .*, foreground away$' "$out/cover-needs.log" ||
       fail "another app didn't take the foreground: $(cat "$out/cover-needs.log")"
     background=windows
+  fi
+  # An agent's download in its own Space, from a click in its page on a site the user always
+  # allows, while another app's window has the keyboard: ilo's window neither asks to come forward
+  # nor takes the keyboard (#3183), and the download is in the downloads area and the activity log
+  # all the same. Under Wayland sway marks a window that asks to come forward urgent, and says so.
+  if [ -n "$background" ]; then
+    logged='^browser: agent logged mcp-client download saved\.localhost$'
+    logs=$(grep -c "$logged" "$log" || true)
+    lists=$(grep -c '^browser: downloads [0-9]*$' "$log" || true)
+    flying=$(grep -c '^browser: download flying ' "$log" || true)
+    # Not $marked, which send state sets to the driver's marked window.
+    urgent_marks=$(grep -c '^browser: window [0-9]* urgent on$' "$log" || true)
+    # Its link's ref afresh, as the client reconnected since.
+    saved_page=$(call snapshot "{\"tab\":$notes_tab}")
+    notes_ref=$(printf '%s\n' "$saved_page" | sed -n 's/.*- link "Notes" \[\(e[0-9]*\)\].*/\1/p' | head -1)
+    [ -n "$notes_ref" ] || fail "the agent's tab of the site it may download from has no link: $saved_page"
+    call click "{\"tab\":$notes_tab,\"ref\":\"$notes_ref\"}" > /dev/null
+    await_more "$logged" "$logs" ||
+      fail "the agent's download with another app in front isn't in the activity log: $(grep 'browser: agent .*download' "$log" | tail -3 | tr '\n' ' ')"
+    await_more '^browser: downloads [0-9]*$' "$lists" ||
+      fail "the agent's download with another app in front isn't in the downloads area: $(grep '^browser: download' "$log" | tail -3 | tr '\n' ' ')"
+    await_log '^browser: download [0-9]* done notes' "the agent's download with another app in front didn't finish"
+    if [ "$(grep -c '^browser: download flying ' "$log")" -gt "$flying" ]; then
+      await_log '^browser: download landed ' "the agent's download's icon didn't land in the bin"
+    fi
+    send state
+    [ "$active" = 0 ] ||
+      fail "the agent's download took the keyboard from the other app's window: it's in $key, on $focus"
+    [ "$(grep -c '^browser: window [0-9]* urgent on$' "$log" || true)" = "$urgent_marks" ] ||
+      fail "the agent's download marked ilo's window urgent"
+    # Sway marks a window urgent when it asks to come forward while another has the keyboard, and
+    # keeps the mark until the window has the keyboard, so its tree says whether ilo's asked.
+    if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+      asked=$(swaymsg -t get_tree | jq -r --argjson pid "$(app_pid)" \
+        '.. | objects | select(.pid? == $pid and ((.urgent // false) or (.focused // false)))
+          | "\(.app_id) \(.name) urgent \(.urgent) focused \(.focused)"')
+      [ -z "$asked" ] ||
+        fail "the agent's download asked for ilo's window to come forward, as sway's tree says: $(printf '%s' "$asked" | tr '\n' ' ')"
+    fi
   fi
   counted() { grep -c "$1" "$log" || true; }
   ones=$(counted '^browser: needs you 1$')

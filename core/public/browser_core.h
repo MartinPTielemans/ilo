@@ -1228,8 +1228,9 @@ typedef struct bc_host {
   // most once a launch, and never twice for a report.
   void (*crash_report_offered)(void* context);
   // On Linux under Wayland, while a text field of the app's UI in |window| has the keys
-  // (bc_window_ui_text_input): the input method composes |text| there, shown underlined at the
-  // caret, or stops composing with |text| empty.
+  // (bc_window_ui_text_input), or with |window| 0 a field of the app's own window that composes
+  // through the core's input method (bc_app_window_text_input): the input method composes |text|
+  // there, shown underlined at the caret, or stops composing with |text| empty.
   void (*ui_composed)(void* context, bc_id window, const char* text);
   // As ui_composed: the input method commits |text| in place of what it composed.
   void (*ui_committed)(void* context, bc_id window, const char* text);
@@ -1610,6 +1611,25 @@ BC_EXPORT void bc_window_toggle_maximized(bc_id window);
 // page's field does.
 BC_EXPORT void bc_window_ui_text_input(bc_id window, bool focused, double x, double y,
                                        double height);
+
+// A window of the app's own, not a browser window, such as Settings, whose text fields compose
+// through the core's input method. |surface| is its native surface, and |focused| says whether one
+// of its fields is focused while it has the keys, the caret at |x|, |y| in points from the
+// surface's top left, |height| high. A window the core never shows holds that input method for
+// these windows alone, so no page, and no tab an agent drives, takes what the user composes there.
+// It comes back as ui_composed and ui_committed for window 0, only from the input method's own
+// events, never during a call of the app's, so the app gives each to the field it has focused as
+// it comes, a commit with no composition before it too. When a field loses the focus, the app says
+// so in the same turn, before another takes it in this window or another, and keeps what the field
+// shows composed as typed: the core drops its composition then, and nothing comes for that field
+// after. Only the Linux core under Wayland acts on it, where the compositor gives the process one
+// input method and |surface| is a wl_surface on the connection bc_wayland_display gives; the Mac's
+// and Windows' return at once.
+BC_EXPORT void bc_app_window_text_input(void* surface, bool focused, double x, double y,
+                                        double height);
+
+// Ends bc_app_window_text_input for |surface|, before it goes. Quitting ends them all.
+BC_EXPORT void bc_app_window_text_input_end(void* surface);
 
 // During tab_key_before_page: holds the keys typed in the tab's page after the one asked about,
 // which opens a field of the app's, such as ⌃L's address field. A shortcut the page gets first

@@ -295,6 +295,22 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../../assets/icons/gift.svg"),
     ),
     (
+        "icons/git-merge.svg",
+        include_bytes!("../../assets/icons/git-merge.svg"),
+    ),
+    (
+        "icons/git-pull-request.svg",
+        include_bytes!("../../assets/icons/git-pull-request.svg"),
+    ),
+    (
+        "icons/git-pull-request-closed.svg",
+        include_bytes!("../../assets/icons/git-pull-request-closed.svg"),
+    ),
+    (
+        "icons/git-pull-request-draft.svg",
+        include_bytes!("../../assets/icons/git-pull-request-draft.svg"),
+    ),
+    (
         "icons/glasses.svg",
         include_bytes!("../../assets/icons/glasses.svg"),
     ),
@@ -369,6 +385,10 @@ const ICONS: &[(&str, &[u8])] = &[
     (
         "icons/loading.svg",
         include_bytes!("../../assets/icons/loading.svg"),
+    ),
+    (
+        "icons/log-in.svg",
+        include_bytes!("../../assets/icons/log-in.svg"),
     ),
     (
         "icons/lock-open.svg",
@@ -529,6 +549,10 @@ const ICONS: &[(&str, &[u8])] = &[
     (
         "icons/plus.svg",
         include_bytes!("../../assets/icons/plus.svg"),
+    ),
+    (
+        "icons/presentation.svg",
+        include_bytes!("../../assets/icons/presentation.svg"),
     ),
     (
         "icons/printer.svg",

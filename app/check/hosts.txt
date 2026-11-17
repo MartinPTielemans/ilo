@@ -6,6 +6,9 @@
 # the user does or turns on, or that only the prod build asks, so the run fails if it asks it: the
 # page and this file name the same hosts.
 
+# A link card (#3080) asks a link's page and its picture only for the user's ⇧ on that link, and
+# nothing in this run presses it, so no host here comes from a card.
+
 # The run's own server.
 127.0.0.1         the run's own pages
 localhost         the run's own pages
