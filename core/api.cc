@@ -53,6 +53,7 @@
 #include "browser_core/host.h"
 #include "browser_core/idle_unload.h"
 #include "browser_core/install_question.h"
+#include "browser_core/link_card.h"
 #include "browser_core/link_target.h"
 #include "browser_core/live_folder.h"
 #include "browser_core/main_delegate.h"
@@ -793,6 +794,20 @@ void bc_agent_request(const char* agent,
   browser_core::SendAgentRequest(*contents, request, method ? method : "", url ? url : "",
                                  headers ? headers : "",
                                  body && size ? std::string(body, size) : std::string());
+}
+
+uint64_t bc_tab_link_card(bc_id tab) {
+  return browser_core::StartLinkCard(tab);
+}
+
+void bc_link_card_picture(uint64_t card, const char* url) {
+  if (url) {
+    browser_core::AskLinkCardPicture(card, url);
+  }
+}
+
+void bc_link_card_cancel(uint64_t card) {
+  browser_core::CancelLinkCard(card);
 }
 
 bc_id bc_space_profile(bc_id id) {

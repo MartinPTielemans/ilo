@@ -1462,6 +1462,21 @@ typedef struct bc_host {
   // core logs none of them. The user's alone: agents get none.
   void (*tab_recent_answered)(void* context, bc_id tab, int answer, int64_t answered,
                               const bc_live_item* items, size_t count);
+  // What |card|'s fetch (bc_tab_link_card, bc_link_card_picture) came to, from a task of its own,
+  // once a call, never after bc_link_card_cancel: |status| is the answer's HTTP code, a net error
+  // below 0, or a BC_LINK_CARD_ refusal, and |url| the address it ended at after redirects, "" if
+  // nothing was asked. For a page, |bytes| are its first |size| up to the end of its head or a
+  // mebibyte; for its picture, all of it. None for a refusal, an answer outside 200–299, or one
+  // that isn't a page or an image the app decodes, whose |mime| says what it was. |mime| is the
+  // answer's type, with ";charset=" and its charset when the server named one, or "" when no answer
+  // started. They last only for the call.
+  void (*link_card_fetched)(void* context,
+                            uint64_t card,
+                            int status,
+                            const char* url,
+                            const char* mime,
+                            const uint8_t* bytes,
+                            size_t size);
 } bc_host;
 
 // Runs Chromium in this process with these arguments (Chromium's switches) and returns its exit
@@ -3930,6 +3945,37 @@ BC_EXPORT void bc_folder_move_to_space(bc_id folder, bc_id space);
 // for a web link (tab_page_menu): the app leaves it out while it opens no link preview there, and
 // chosen, the core asks tab_link_to_preview. Negative, as Chrome's commands are all positive.
 #define BC_PAGE_MENU_PREVIEW_LINK (-1)
+
+// A link card (#3080): what the page behind a link says about itself, its title, description and
+// picture, for the app to show over the page. The user's alone: agents get none.
+//
+// For the user's press of ⇧ alone on a link in |tab|'s page, outside a field, while the app shows
+// the link's target. The core waits 150 ms, the link target's own delay, and a key, a mouse press
+// or a wheel in the tab's page, the page navigating or the tab closing within it ends the card with
+// net::ERR_ABORTED. Then it asks the link's page once, on the profile's network, as no page and no
+// user: without cookies, a client certificate, a sign-in or a referrer, sharing no cache or
+// connection with the user's browsing, keeping nothing but HSTS and Alt-Svc, http(s) only on every
+// hop and at most 5 redirects, never through a proxy and never to an address on a private network.
+// Returns the card's id, then link_card_fetched with it; or 0, asking nothing, while the pointer is
+// on no http(s) link in |tab|, or |tab| is in an agent's Space. A new card cancels the one before.
+BC_EXPORT uint64_t bc_tab_link_card(bc_id tab);
+
+// Asks |url|, the picture |card|'s page named, under the same rules, then link_card_fetched with
+// |card| once more. Nothing for a card cancelled or ended.
+BC_EXPORT void bc_link_card_picture(uint64_t card, const char* url);
+
+// Stops |card|'s wait or fetch: link_card_fetched never comes for it again.
+BC_EXPORT void bc_link_card_cancel(uint64_t card);
+
+// link_card_fetched's refusals, each below every net error.
+// The link or a redirect went to an address on a private network: loopback, private or link-local.
+#define BC_LINK_CARD_PRIVATE (-20001)
+// The profile's proxy would carry the fetch, past which the core can't see the address.
+#define BC_LINK_CARD_PROXY (-20002)
+// A redirect to an address that isn't http(s), or a sixth one.
+#define BC_LINK_CARD_REDIRECT (-20003)
+// The picture is over 2 MiB.
+#define BC_LINK_CARD_TOO_BIG (-20004)
 
 #ifdef __cplusplus
 }
