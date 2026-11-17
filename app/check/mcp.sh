@@ -178,8 +178,14 @@ yours='data:text/html,<title>-</title><textarea id=f style="position:fixed;inset
  onfocus="document.title=`yours focused`" onblur="document.title=`yours left`"
  oninput="document.title=`yours typed `+f.value"></textarea>
 <script>requestAnimationFrame(()=>requestAnimationFrame(()=>document.title="yours"))</script>'
+# A host of the check's server with no https, where an agent's tab comes to Chrome's warning before
+# http. The profile remembers a host that fell back to http, so each run names a new one, as
+# history.sh's $plain.
+serve
+plain="mcp-plain-$(date +%s).example.com"
 BROWSER_DRIVE=1 BROWSER_MOTION=full BROWSER_URL="$yours" \
-  "$browser" --load-extension="$(app_path "$extension")" < "$out/drive" > "$log" 2>&1 &
+  "$browser" --load-extension="$(app_path "$extension")" \
+  --host-resolver-rules="MAP $plain 127.0.0.1:$port" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
@@ -690,6 +696,83 @@ for split_tab in $split_a $split_b $split_c; do
   closed=$(call close_tab "{\"tab\":$split_tab}")
   case "$closed" in "Closed tab $split_tab."*) ;; *) fail "closing the split view's page answered: $closed" ;; esac
 done
+# An agent's tab at Chrome's warning before http, in the agent's split view, watched from the
+# conversation, where its split's pages share the watched page's place. The warning shown doesn't
+# take the user's keyboard. Once the user's click gives it the keyboard, a press in the page beside
+# it takes the keyboard to that page, and never to an agent's dialog: on the Mac that press gives
+# the keyboard back to the browser window (#3212).
+if [ "$driven" = 1 ]; then
+  await '^browser: settings about Version .*, on Chromium [0-9]' || fail "the engine's version wasn't said"
+  major=$(sed -n 's/^browser: settings about .*on Chromium \([0-9]*\)\..*/\1/p' "$log" | head -1)
+fi
+if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
+  warned=$(call open_tab "{\"url\":\"http://$plain/split-a.html\"}" |
+    sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  [ -n "$warned" ] || fail "open_tab didn't open http://$plain/split-a.html"
+  await_log "^browser: tab $warned error -20\$" \
+    "the agent's tab at http://$plain/split-a.html had no warning before http: $(grep "^browser: loaded $warned " "$log" | tail -1)"
+  beside=$(split_tab b)
+  split=$(call split_tabs "{\"tabs\":[$warned,$beside]}")
+  [ "$split" = "Tab $warned's split view, left to right: $warned, $beside." ] ||
+    fail "split_tabs with the tab at the warning answered: $split"
+  back="^browser: task page $agent_tab back\$"
+  before=$(grep -c "$back" "$log" || true)
+  send key escape
+  await_more "$back" "$before" || fail "Escape didn't step back to Pages from tab $agent_tab"
+  watch "$warned"
+  for _ in $(seq 50); do
+    send layout
+    since | grep -q '^browser: layout child ' && break
+    sleep 0.1
+  done
+  laid=$(since | grep -m1 '^browser: layout')
+  warning=$(since | sed -n 's/^browser: layout child //p' | head -1)
+  [ -n "$warning" ] || fail "the agent's tab $warned, watched in its split view, showed no warning before http: $laid"
+  panes=$(echo "$laid" | grep -o 'WebContentsViewCocoa [0-9,]* [0-9x]*' | sed 's/^WebContentsViewCocoa //')
+  [ "$(echo "$panes" | wc -l)" -eq 2 ] ||
+    fail "watching tab $warned didn't show its split view's two pages: $laid"
+  ../tools/window-screenshot.sh "$pid" "$out/agent-split-warning.png" || fail "no window to capture"
+  send state
+  [ "$key" != NativeWidgetMacNSWindow ] ||
+    fail "the agent's warning before http, watched in its split view, took the user's keyboard as it showed: $key, $focus"
+  warning_x=${warning%%,*} warning_y=${warning#*,}
+  warning_y=${warning_y%% *} warning_width=${warning#* }
+  warning_width=${warning_width%%x*}
+  presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
+  send click $((warning_x + warning_width / 2)) $((warning_y + 8))
+  send state
+  [ "$key" = NativeWidgetMacNSWindow ] ||
+    fail "a click on the agent's warning before http at $warning, watched in its split view, didn't give it the keyboard: $key, $focus"
+  # The pane the warning isn't over, as it's over its own page.
+  other=
+  while read -r at size; do
+    pane_x=${at%%,*} pane_y=${at#*,} pane_width=${size%%x*}
+    if [ "$warning_x" -lt "$pane_x" ] || [ "$warning_x" -ge $((pane_x + pane_width)) ]; then
+      other="$((pane_x + 100)) $((pane_y + 100))"
+    fi
+  done <<PANES
+$panes
+PANES
+  [ -n "$other" ] || fail "neither of the split view's pages, $(echo $panes), is beside the warning at $warning"
+  send click $other
+  pressed=$step
+  send state
+  [ "$key" = BrowserCoreNSWindow ] ||
+    fail "a press in the page beside the agent's warning before http left the keyboard in $key, on $focus: $(since "$pressed" | grep -e '^browser: drive' -e '^browser: agent' | tail -6 | tr '\n' ' ')"
+  hand_back_pressed "$presses"
+  ../tools/window-screenshot.sh "$pid" "$out/agent-split-pressed.png" || fail "no window to capture"
+  back="^browser: task page $warned back\$"
+  before=$(grep -c "$back" "$log" || true)
+  send key escape
+  await_more "$back" "$before" || fail "Escape didn't step back to Pages from tab $warned"
+  for split_tab in $warned $beside; do
+    closed=$(call close_tab "{\"tab\":$split_tab}")
+    case "$closed" in "Closed tab $split_tab."*) ;; *) fail "closing the split view's page answered: $closed" ;; esac
+  done
+  watch "$agent_tab"
+else
+  echo "skip: mcp: an agent's warning before http in its split view, watched. Browser wasn't the active app, or the engine is before 157."
+fi
 
 if [ "$driven" = 1 ]; then
   # The core lists the agent's Space alone: its tab, and not the user's Wikipedia tab in theirs.
