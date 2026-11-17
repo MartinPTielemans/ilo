@@ -69,13 +69,14 @@ nvda_quit() {
 }
 
 speech="$out/screen-reader-speech.txt"
-focus="$out/screen-reader-focus.txt"
+# Not $focus, which send sets.
+focus_file="$out/screen-reader-focus.txt"
 : > "$speech"
-: > "$focus"
+: > "$focus_file"
 # What has focus by UI Automation, by the window manager and by MSAA, after step $1.
 focused() {
-  echo "== $1" >> "$focus"
-  python3 -I - "$(cat "/proc/$pid/winpid")" >> "$focus" 2>&1 << 'PYTHON' || true
+  echo "== $1" >> "$focus_file"
+  python3 -I - "$(cat "/proc/$pid/winpid")" >> "$focus_file" 2>&1 << 'PYTHON' || true
 import ctypes
 import ctypes.wintypes as w
 import sys
@@ -191,7 +192,8 @@ press tab shift
 press down
 press down
 press up
-press t ctrl
+# ⌃T as the driver names it, the Mac's ⌘.
+press t cmd
 heard=$(wc -l < "$nvda_log")
 send type 'data:text/html,<title>Reading</title><h1>Heading</h1><p>Text<a%20href=#a>Link</a><button>Button</button>'
 spoken "typed a page's address"
