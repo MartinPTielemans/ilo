@@ -1354,7 +1354,8 @@ void Window::CloseTab(bc_id tab, bool discard) {
   }
   content::WebContents* contents = Tab::FromId(tab);
   tabs::TabInterface* in = contents ? tabs::TabInterface::MaybeGetFromContents(contents) : nullptr;
-  if (!in) {
+  // A tab being dragged between windows has none for that moment, and stays.
+  if (!in || !in->GetBrowserWindowInterface()) {
     return;
   }
   TabStripModel* tabs = in->GetBrowserWindowInterface()->GetTabStripModel();
