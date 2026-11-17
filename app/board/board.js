@@ -959,9 +959,8 @@ async function open_() {
 
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden" && writable) save().then(saveThumb);
-  // What came while its tab wasn't showing lands at the centre of the view shown, on its first
-  // frame: on Linux the event comes before the view has the size it's shown at.
-  else requestAnimationFrame(() => land());
+  // What came while its tab wasn't showing lands now, at the centre of the view shown.
+  else land();
 });
 
 open_();
