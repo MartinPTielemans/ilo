@@ -195,7 +195,8 @@ press up
 # ⌃T as the driver names it, the Mac's ⌘.
 press t cmd
 heard=$(wc -l < "$nvda_log")
-send type 'data:text/html,<title>Reading</title><h1>Heading</h1><p>Text<a%20href=#a>Link</a><button>Button</button>'
+# A # would end the page's markup and begin its fragment, so the link's is %23.
+send type 'data:text/html,<title>Reading</title><h1>Heading</h1><p>Text<a%20href=%23a>Link</a><button>Button</button>'
 spoken "typed a page's address"
 press return
 expect '^browser: loaded' "the page didn't load"
