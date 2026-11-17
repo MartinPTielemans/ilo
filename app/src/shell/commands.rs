@@ -1494,11 +1494,38 @@ pub fn menu_item(name: impl Into<SharedString>, command: Command) -> MenuItem {
 }
 
 impl Shell {
+    /// Opens the command bar on the tab the URL field shows, or as for a new one with none.
+    pub(super) fn edit_url(&mut self, from: &str, cx: &mut Context<Self>) {
+        self.set_new_tab(false, cx);
+        let tab = self.field_tab();
+        let editing = (tab != 0).then(|| (tab, self.url(tab)));
+        self.set_bar_over_card(editing.is_none(), cx);
+        // A click on the URL field opens the bar over the field, and ⌘L centred (Arc). In a Little
+        // ilo window a click on its bar's title opens it compact over the title, and the keys
+        // inside the window.
+        let field = match self.little_field_bounds(cx) {
+            Some(title) if from == "little bar" => Some(title),
+            Some(_) => {
+                let (bar, shown) = (self.little_bar_bounds(), self.shown_urls());
+                return self
+                    .browser
+                    .command_bar_in(editing, shown, self.bar_tabs(cx), bar, cx);
+            }
+            None if from == "sidebar" => self.url_field_bounds(),
+            None => None,
+        };
+        let shown = self.shown_urls();
+        self.browser
+            .command_bar(editing, shown, self.bar_tabs(cx), field, cx);
+    }
+
     /// Runs a browser command and logs it. `from` says which side had the key: GPUI's bindings
     /// ("ui"), the browser handing it back ("page"), or the sidebar.
     pub fn run(&mut self, command: Command, from: &str, cx: &mut Context<Self>) {
         // check.sh waits for these lines.
         log!("browser: command {} via {from}", command.name());
+        // A command after a ⌘L still waiting for the tab shown next is the one the user wants.
+        self.edit_url_waits = None;
         if self.one_space() && !private_runs(command) {
             return;
         }
@@ -1561,34 +1588,13 @@ impl Shell {
                 self.set_bar_over_card(true, cx);
                 return self.browser.search_tabs(self.open_tabs(cx), cx);
             }
-            Command::EditUrl => {
-                self.set_new_tab(false, cx);
-                let tab = self.field_tab();
-                let editing = (tab != 0).then(|| (tab, self.url(tab)));
-                self.set_bar_over_card(editing.is_none(), cx);
-                // A click on the URL field opens the bar over the field, and ⌘L centred (Arc). In a
-                // Little ilo window a click on its bar's title opens it compact over the title, and
-                // the keys inside the window.
-                let field = match self.little_field_bounds(cx) {
-                    Some(title) if from == "little bar" => Some(title),
-                    Some(_) => {
-                        let (bar, shown) = (self.little_bar_bounds(), self.shown_urls());
-                        return self.browser.command_bar_in(
-                            editing,
-                            shown,
-                            self.bar_tabs(cx),
-                            bar,
-                            cx,
-                        );
-                    }
-                    None if from == "sidebar" => self.url_field_bounds(),
-                    None => None,
-                };
-                let shown = self.shown_urls();
-                return self
-                    .browser
-                    .command_bar(editing, shown, self.bar_tabs(cx), field, cx);
+            // The tab shown closed and the core hasn't said which shows next, which the bar edits
+            // then, as the closed one's ↩ would load nothing (#2953).
+            Command::EditUrl if self.field_tab() != 0 && !self.tab_open(self.field_tab()) => {
+                self.edit_url_waits = Some(from.to_string());
+                return;
             }
+            Command::EditUrl => return self.edit_url(from, cx),
             // A Little ilo window's page closes with it (Arc).
             Command::CloseTab if self.little.is_some() => {
                 if !self.browser.close_other_window(cx) {
@@ -2866,6 +2872,67 @@ mod tests {
         });
         assert!(host.followed_tabs.take().is_empty());
         assert!(!shell.read_with(cx, |shell, _| shell.new_tab));
+    }
+
+    /// ⌘L in the moment after the tab shown closes, before the window shows the next, opens the
+    /// bar on the tab shown next, which ↩ then loads, in the order the core reports them (#2953).
+    #[gpui::test]
+    fn edit_url_as_the_tab_shown_closes_edits_the_one_shown_next(cx: &mut gpui::TestAppContext) {
+        use std::rc::Rc;
+
+        use crate::shell::{Folders, Page, recorder::Recorder};
+
+        let host = Rc::new(Recorder::default());
+        let browser = host.clone();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+        let today = |shell: &mut Shell, tabs: Vec<u64>, cx: &mut Context<Shell>| {
+            shell.set_tabs(1, Vec::new(), tabs, Vec::new(), Folders::default(), cx);
+        };
+        shell.update(cx, |shell, cx| {
+            let space = (1, "One".into(), None, 1, "".into(), "".into(), "".into());
+            shell.set_spaces(vec![space], cx);
+            today(shell, vec![4, 6, 7, 8], cx);
+            for tab in [4, 6, 7, 8] {
+                let page = Page {
+                    url: format!("https://{tab}.test/").into(),
+                    ..Page::default()
+                };
+                shell.set_page(tab, page, cx);
+            }
+            shell.set_space(1, cx);
+            shell.set_selected(8, cx);
+            // The pop-up's tab closes, and ⌘L comes before the window shows the tab before it.
+            today(shell, vec![4, 6, 7], cx);
+            shell.run(Command::EditUrl, "ui", cx);
+        });
+        assert!(
+            host.bar_edits.take().is_empty(),
+            "the bar waits for the tab shown next"
+        );
+        shell.update(cx, |shell, cx| shell.set_selected(7, cx));
+        assert_eq!(host.bar_edits.take(), [Some(7)]);
+
+        // With the tab shown open, ⌘L opens the bar on it at once.
+        shell.update(cx, |shell, cx| shell.run(Command::EditUrl, "ui", cx));
+        assert_eq!(host.bar_edits.take(), [Some(7)]);
+
+        // A command after the ⌘L is the one the user wants: ⌘T's bar stays, and the tab shown next
+        // opens no other over it.
+        shell.update(cx, |shell, cx| {
+            today(shell, vec![4, 6], cx);
+            shell.run(Command::EditUrl, "ui", cx);
+            shell.run(Command::NewTab, "ui", cx);
+            shell.set_selected(6, cx);
+        });
+        assert_eq!(host.bar_edits.take(), [None], "only ⌘T's bar opened");
+
+        // The Space left empty shows no tab, and the bar opens as for none.
+        shell.update(cx, |shell, cx| {
+            today(shell, Vec::new(), cx);
+            shell.run(Command::EditUrl, "ui", cx);
+            shell.set_selected(0, cx);
+        });
+        assert_eq!(host.bar_edits.take(), [None]);
     }
 
     /// The bar finds Site Search Settings by its name or by Chrome's, and it opens the search

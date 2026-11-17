@@ -12,6 +12,12 @@
 //! whose the core says they are. Every window floats (tools/headless.sh), so sway stacks them as a
 //! desktop does, and moves and sizes them as it's told. Drags from another app come from a client
 //! of the driver's own, as another app's do (drive_drags.rs).
+//!
+//! drive.rs's scripted input method, and insert, are sway's input method for the seat
+//! (`zwp_input_method_v2`), made so by the first of them: sway gives what it composes and commits
+//! to the text input of the surface with the keys, as it would an fcitx5's, so which field takes it
+//! is the compositor's and the app's to say. sway has one input method per seat, so with another
+//! already bound the driver refuses and says so, rather than post into a field.
 
 use std::{
     cell::{Cell, RefCell},
@@ -23,12 +29,15 @@ use std::{
 };
 
 use browser::log;
-use gpui::{Keystroke, Modifiers};
 use serde_json::Value;
 use wayland_client::{
     Connection, Dispatch, EventQueue, QueueHandle, delegate_noop,
     globals::{GlobalListContents, registry_queue_init},
     protocol::{wl_pointer, wl_registry, wl_seat::WlSeat},
+};
+use wayland_protocols_misc::zwp_input_method_v2::client::{
+    zwp_input_method_manager_v2::ZwpInputMethodManagerV2,
+    zwp_input_method_v2::{self, ZwpInputMethodV2},
 };
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
     zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1,
@@ -68,6 +77,10 @@ struct Session {
     pointer: ZwlrVirtualPointerV1,
     keyboard: ZwpVirtualKeyboardV1,
     keymap: xkb::Keymap,
+    seat: WlSeat,
+    /// sway's input methods, if it has them, and the driver's, once made (`input_method`).
+    input_methods: Option<ZwpInputMethodManagerV2>,
+    input_method: Option<ZwpInputMethodV2>,
     /// The size of sway's layout, which the pointer's absolute positions are in.
     extent: (f64, f64),
     started: Instant,
@@ -92,6 +105,32 @@ delegate_noop!(State: ZwlrVirtualPointerManagerV1);
 delegate_noop!(State: ZwlrVirtualPointerV1);
 delegate_noop!(State: ZwpVirtualKeyboardManagerV1);
 delegate_noop!(State: ZwpVirtualKeyboardV1);
+delegate_noop!(State: ZwpInputMethodManagerV2);
+
+impl Dispatch<ZwpInputMethodV2, ()> for State {
+    fn event(
+        _: &mut Self,
+        _: &ZwpInputMethodV2,
+        event: zwp_input_method_v2::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwp_input_method_v2::Event::Activate => IM_PENDING.set(Some(true)),
+            zwp_input_method_v2::Event::Deactivate => IM_PENDING.set(Some(false)),
+            zwp_input_method_v2::Event::Done => {
+                IM_FRESH.set(false);
+                if let Some(active) = IM_PENDING.take() {
+                    IM_ACTIVE.set(active);
+                }
+                IM_DONES.set(IM_DONES.get().wrapping_add(1));
+            }
+            zwp_input_method_v2::Event::Unavailable => IM_UNAVAILABLE.set(true),
+            _ => {}
+        }
+    }
+}
 
 thread_local! {
     static SESSION: RefCell<Option<Session>> = const { RefCell::new(None) };
@@ -114,6 +153,15 @@ thread_local! {
     static PIP_HELD: Cell<Option<(f64, f64, [f64; 4])>> = const { Cell::new(None) };
     /// The output `display add` plugged in, which `display remove` takes out.
     static ADDED: RefCell<Option<String>> = const { RefCell::new(None) };
+    /// The driver's input method: whether a text input has it active, as of its last `done` and as
+    /// that `done` will make it, how many `done`s it has had, which each commit names, and whether
+    /// sway said the seat has another.
+    static IM_ACTIVE: Cell<bool> = const { Cell::new(false) };
+    static IM_PENDING: Cell<Option<bool>> = const { Cell::new(None) };
+    static IM_DONES: Cell<u32> = const { Cell::new(0) };
+    static IM_UNAVAILABLE: Cell<bool> = const { Cell::new(false) };
+    /// Whether the input method is new and sway hasn't told it its state yet.
+    static IM_FRESH: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Makes the driver's pointer and keyboard under Wayland, before the app's windows, so Chromium
@@ -191,6 +239,8 @@ fn open() -> Result<Session, String> {
     let keyboards: ZwpVirtualKeyboardManagerV1 = globals
         .bind(&handle, 1..=1, ())
         .map_err(|e| e.to_string())?;
+    // Bound only; the input method itself is made when a run first types through it.
+    let input_methods: Option<ZwpInputMethodManagerV2> = globals.bind(&handle, 1..=1, ()).ok();
     let pointer = pointers.create_virtual_pointer(Some(&seat), &handle, ());
     let keyboard = keyboards.create_virtual_keyboard(&seat, &handle, ());
     let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
@@ -218,6 +268,9 @@ fn open() -> Result<Session, String> {
         pointer,
         keyboard,
         keymap,
+        seat,
+        input_methods,
+        input_method: None,
         extent,
         started: Instant::now(),
     })
@@ -973,9 +1026,9 @@ fn repeat_info() -> (u32, u32) {
         .unwrap_or((600, 25))
 }
 
-/// The surface where drive.rs's scripted input method composes, as the compositor's would:
-/// Settings' with sway's focus, or the browser window's while its UI or an overlay over it has the
-/// keys. Not while a page has them, whose input method is Chromium's.
+/// The surface whose GPUI field the done line reads the composition of: Settings' with sway's
+/// focus, or the browser window's while its UI or an overlay over it has the keys. Not while a page
+/// has them, whose composition is Chromium's, as on the Mac.
 pub(crate) fn ime_surface() -> Option<*mut c_void> {
     if focused_settings(&ours()).is_some() {
         return settings_window::shown();
@@ -987,8 +1040,8 @@ pub(crate) fn ime_surface() -> Option<*mut c_void> {
     WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.id == id).map(|w| w.ui_view))
 }
 
-/// Presses and releases `key` with the modifiers `state`, or composes it in the UI's field while
-/// drive.rs's scripted input method types, as drive.rs's key does.
+/// Presses and releases `key` with the modifiers `state`, or composes it while drive.rs's
+/// scripted input method types, as drive.rs's key does.
 fn key(key: &str, state: u16) -> Option<()> {
     if drive::ime_key(key, state | FLAGS.get())? {
         return Some(());
@@ -996,43 +1049,91 @@ fn key(key: &str, state: u16) -> Option<()> {
     key_events(key, state, &[true, false])
 }
 
-/// Commits `text` to the field of the UI, Settings or the overlay with the keys, as drive.rs's
-/// insert does.
-fn insert(text: &str) -> Option<()> {
-    // A page with the keys gets the text typed, as drive.rs's insert types it there: its field is
-    // Chromium's, which no GPUI keystroke reaches.
-    if keyboard().1 == "RenderWidgetHostViewCocoa" {
-        return text
-            .chars()
-            .try_for_each(|c| key_events(&c.to_string(), 0, &[true, false]));
-    }
-    let nodes = ours();
-    let view = match gpui_linux::shown_keyboard_overlay() {
-        Some(view) => view,
-        None if focused_settings(&nodes).is_some() => settings_window::shown()?,
-        None => {
-            let id = driven_id()?;
-            WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.id == id).map(|w| w.ui_view))?
+/// Makes the driver sway's input method for the seat, the first time, and has sway's latest state
+/// of it. None, saying why, when sway has none to give or the seat has another already, as an
+/// fcitx5 would be: the driver doesn't take its place, or post into a field instead.
+pub(crate) fn input_method() -> Option<()> {
+    let made = SESSION.with_borrow_mut(|session| {
+        let session = session.as_mut()?;
+        if session.input_method.is_none() {
+            let Some(manager) = &session.input_methods else {
+                return Some(Err("sway offers no zwp_input_method_manager_v2"));
+            };
+            IM_UNAVAILABLE.set(false);
+            IM_FRESH.set(true);
+            let handle = session.queue.handle();
+            session.input_method = Some(manager.get_input_method(&session.seat, &handle, ()));
         }
-    };
-    let cx = CX.with_borrow(Clone::clone)?;
-    let typed = Keystroke {
-        modifiers: Modifiers::default(),
-        key: String::new(),
-        key_char: Some(text.to_string()),
-    };
-    cx.update(|cx| {
-        let handle = cx.windows().into_iter().find(|handle| {
-            handle
-                .update(cx, |_, window, _| crate::ns_view(window))
-                .is_ok_and(|each| each == view)
-        })?;
-        handle
-            .update(cx, |_, window, cx| window.dispatch_keystroke(typed, cx))
-            .ok()
+        session.queue.roundtrip(&mut State).ok()?;
+        if IM_UNAVAILABLE.get() {
+            session.input_method.take()?.destroy();
+            return Some(Err("the seat has another input method"));
+        }
+        Some(Ok(()))
+    });
+    match made? {
+        Ok(()) => Some(()),
+        Err(why) => {
+            log!("browser: drive refuses to be sway's input method: {why}");
+            None
+        }
+    }
+}
+
+/// Sends what `pending` sets of the input method's state, and the commit that has sway give it to
+/// the text input it's active for. False, saying so, when none has it active: no field there takes
+/// text from an input method. An input method the command has just made waits for sway's first
+/// state of it, which comes once the text input with the keys has heard of it and enabled itself
+/// again; until then the command runs again (drive::again).
+fn input_method_commit(pending: impl FnOnce(&ZwpInputMethodV2)) -> bool {
+    if input_method().is_none() {
+        return false;
+    }
+    if !IM_ACTIVE.get() {
+        if !(IM_FRESH.get() && drive::again()) {
+            log!("browser: drive's input method isn't active: no text input has the keys");
+        }
+        return false;
+    }
+    with_session(|session, _| {
+        let input_method = session.input_method.as_ref()?;
+        pending(input_method);
+        input_method.commit(IM_DONES.get());
+        Some(())
     })
-    .filter(|&typed| typed)
-    .map(drop)
+    .flatten()
+    .is_some()
+}
+
+/// Composes `text` through the input method, with `selected`, in UTF-16 as GPUI has it, as its
+/// cursor, or ends the composition with `text` empty, as an input method cancelling does.
+pub(crate) fn compose(text: &str, selected: Option<std::ops::Range<usize>>) -> bool {
+    let at = |utf16: usize| {
+        let mut units = 0;
+        let byte = text.char_indices().find_map(|(byte, c)| {
+            let here = units >= utf16;
+            units += c.len_utf16();
+            here.then_some(byte)
+        });
+        byte.unwrap_or(text.len()) as i32
+    };
+    input_method_commit(|input_method| {
+        if !text.is_empty() {
+            let selected = selected.unwrap_or(text.len()..text.len());
+            input_method.set_preedit_string(text.into(), at(selected.start), at(selected.end));
+        }
+    })
+}
+
+/// Commits `text` through the input method, in place of what it composed.
+pub(crate) fn commit(text: &str) -> bool {
+    input_method_commit(|input_method| input_method.commit_string(text.into()))
+}
+
+/// Commits `text` to the field with the keys through the input method, a page's or the UI's, as
+/// drive.rs's insert does.
+fn insert(text: &str) -> Option<()> {
+    commit(text).then_some(())
 }
 
 /// A turn of the wheel by `notches` along `axis` at (`x`, `y`) in sway's layout, down or right
