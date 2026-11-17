@@ -5,7 +5,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use gpui::{Entity, Focusable, Modifiers, TestAppContext, VisualTestContext, point, px};
+use gpui::{
+    Entity, Focusable, Modifiers, TestAppContext, VisualTestContext,
+    accesskit::{Role, Toggled},
+    point, px,
+};
 
 use super::{Drawn, END_FADE, INTRO_END, OptIn, STEP_MOTION, STILL_END, STILL_FADE, Step};
 use crate::account::{self, State, Status};
@@ -405,6 +409,86 @@ fn the_colour_picked_is_the_first_spaces(cx: &mut TestAppContext) {
     assert!(
         calls.contains(&format!("space theme 1 {theme}")),
         "{calls:?}"
+    );
+}
+
+/// The roles and names a screen reader has of what the tree holds, once one asks.
+fn read(cx: &mut VisualTestContext) -> Vec<(Role, String, Option<Toggled>)> {
+    let tree = cx.a11y_tree().expect("GPUI built a tree");
+    let named = tree.nodes.iter().filter_map(|(_, node)| {
+        let label = node.label()?.to_string();
+        Some((node.role(), label, node.toggled()))
+    });
+    named.collect()
+}
+
+/// A screen reader reads each step as a dialog called by its title, its line said after, and
+/// each control on it by its role and name: the button, Skip, and the colours as one choice
+/// that says which is picked (#3151). The step sliding out is in the tree as nothing.
+#[gpui::test]
+fn a_screen_reader_reads_each_steps_title_and_controls(cx: &mut TestAppContext) {
+    let (shell, cx, _) = first_window(cx);
+    cx.simulate_a11y_activation();
+    started(&shell, cx);
+    let dialogs = |said: &[(Role, String, Option<Toggled>)]| {
+        let dialogs = said.iter().filter(|(role, ..)| *role == Role::Dialog);
+        dialogs.map(|(_, name, _)| name.clone()).collect::<Vec<_>>()
+    };
+    assert_eq!(dialogs(&read(cx)), [env!("APP_NAME")], "the intro");
+
+    skip_to(&shell, cx, Step::Color);
+    let said = read(cx);
+    assert_eq!(
+        dialogs(&said),
+        ["Pick a colour for your first Space."],
+        "the step it went on to only, as the one before slides out"
+    );
+    let line = cx
+        .a11y_tree()
+        .unwrap()
+        .nodes
+        .into_iter()
+        .find_map(|(_, node)| {
+            (node.role() == Role::Dialog).then(|| node.description().map(str::to_string))
+        });
+    assert!(
+        line.flatten()
+            .is_some_and(|line| line.starts_with("The window takes it.")),
+        "its line is said after its title"
+    );
+    for button in ["Continue", "Skip"] {
+        assert!(
+            said.contains(&(Role::Button, button.into(), None)),
+            "no button {button}: {said:?}"
+        );
+    }
+    assert!(
+        said.iter()
+            .any(|(role, name, _)| *role == Role::RadioGroup && name == "Colour")
+    );
+    let colours = |said: &[(Role, String, Option<Toggled>)]| {
+        let swatches = said.iter().filter(|(role, ..)| *role == Role::RadioButton);
+        swatches
+            .map(|(_, name, on)| (name.clone(), *on))
+            .collect::<Vec<_>>()
+    };
+    let unpicked = colours(&said);
+    assert_eq!(unpicked.len(), SWATCHES.len(), "a radio button a colour");
+    assert!(
+        unpicked.iter().all(|(_, on)| *on == Some(Toggled::False)),
+        "none picked yet"
+    );
+    cx.simulate_keystrokes("right");
+    let picked = colours(&read(cx));
+    assert_eq!(
+        picked[0],
+        (unpicked[0].0.clone(), Some(Toggled::True)),
+        "→ picks the first"
+    );
+    assert!(
+        picked[1..]
+            .iter()
+            .all(|(_, on)| *on == Some(Toggled::False))
     );
 }
 
