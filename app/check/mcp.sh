@@ -178,8 +178,13 @@ yours='data:text/html,<title>-</title><textarea id=f style="position:fixed;inset
  onfocus="document.title=`yours focused`" onblur="document.title=`yours left`"
  oninput="document.title=`yours typed `+f.value"></textarea>
 <script>requestAnimationFrame(()=>requestAnimationFrame(()=>document.title="yours"))</script>'
+# proof-3285: a trace of the run, kept continuously, so its end holds the Long and Busy calls.
+trace_3285="$PWD/$out/trace-3285.json"
 BROWSER_DRIVE=1 BROWSER_MOTION=full BROWSER_URL="$yours" \
-  "$browser" --load-extension="$(app_path "$extension")" < "$out/drive" > "$log" 2>&1 &
+  "$browser" --load-extension="$(app_path "$extension")" \
+  --enable-tracing='toplevel,input,benchmark,devtools,devtools.timeline,disabled-by-default-devtools.timeline,blink,cc,viz,gpu,renderer.scheduler,latency' \
+  --trace-startup-record-mode=record-continuously --trace-buffer-size-in-kb=1000000 \
+  --enable-tracing-format=json --trace-startup-file="$trace_3285" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
@@ -1432,6 +1437,13 @@ const expected = "日本語 😀👩‍👩‍👧 é";
   type_and_see Suggest 'abc' '3 abc'
   type_and_see Long "$(printf 'abcdefghij%.0s' $(seq 500))" '5000 true'
   type_and_see Busy "$(printf '0123456789%.0s' $(seq 200))" '2000 true'
+  # proof-3285: the run ends here, quitting so Chrome writes the trace, which the artifact keeps.
+  echo "proof-3285: Long and Busy typed: $(grep '^Long\|^Busy' "$out/mcp-typing.txt" | tr '\n' ' ')"
+  exec 3>&-
+  quit 60
+  [ -s "$trace_3285" ] || fail "proof-3285: the app didn't write its trace"
+  echo "proof-3285: trace $(wc -c < "$trace_3285") bytes"
+  exit 0
   grep -q "^browser: title $typing_tab sent " "$log" && typing_wrong="$typing_wrong; a line break sent the composer's message"
   [ -z "$typing_wrong" ] || fail "the agent's typing came out wrong${typing_wrong}"
   call close_tab "{\"tab\":$typing_tab}" > /dev/null
