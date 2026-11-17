@@ -282,6 +282,28 @@ expect "browser: tab $tab arrange saved 0 changes\$" "the core didn't save Put b
 shows "$own" "Put back didn't take the settle back"
 kept 0 "Put back didn't take the change back"
 
+# A release as the page moves lands where the pointer is (#3228): Alpha rests on Gamma's middle,
+# which shows a trade, then goes to the edge under Beta and is let go at once, so the release comes
+# in the first frame of the trade's preview going back. Judged on the page as drawn then, it did
+# nothing or traded; judged on the page at rest, it settles there as any release there does.
+carry $(slot 0) $(slot 2)
+expect "^browser: arrange $tab Preview Trades " "a rest on Gamma's middle didn't show a trade"
+send dragto $(slot_edge 1)
+send release $(slot_edge 1)
+expect "^browser: arrange $tab Selected Settles selected section Alpha\$" \
+  "letting go at the edge under Beta as a trade's preview on Gamma went back didn't settle Alpha"
+expect "browser: tab $tab arrange saved 1 changes\$" "the core didn't save the settle let go as the page moved"
+shows 'b,a,c,w side s,n hidden - float -' \
+  "letting go at the edge under Beta as a trade's preview on Gamma went back didn't settle Alpha there"
+send click $(slot 1)
+expect "^browser: arrange $tab Selected [A-Z][a-z]* selected section Alpha\$" \
+  "a click didn't select Alpha, settled under Beta as the page moved"
+bar_over $(slot 1) "the UI placed no mini bar over Alpha"
+press_mini_bar last "put back"
+expect "browser: tab $tab arrange saved 0 changes\$" "the core didn't save Put back"
+shows "$own" "Put back didn't take the settle let go as the page moved back"
+kept 0 "Put back didn't take the change back"
+
 # Trade: the third let go on the first's middle, and the two trade places.
 carry $(slot 2) $(slot 0)
 expect "^browser: arrange $tab Preview Trades " "a rest on a thing's middle didn't show a trade"
