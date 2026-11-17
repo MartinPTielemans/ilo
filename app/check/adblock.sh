@@ -424,7 +424,9 @@ if engine_has ../core/ad_block.cc; then
   send key return
   expect "^browser: loaded [0-9]* chrome://extensions/?id=$ublock\$" \
     "Chrome's extensions page didn't open on uBlock Origin"
-  # Its first control is the back arrow, which the page focuses as it shows, then the switch.
+  # The page focuses the back arrow as it shows. Next is the reload button an extension loaded
+  # from a folder has, then the switch.
+  send key tab
   send key tab
   send key space
   send key w cmd
