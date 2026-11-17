@@ -958,6 +958,12 @@ typedef struct bc_host {
   // The tab's page didn't keep a key, such as ⌘F on a page without a find of its own. Return true
   // if the app used it; otherwise the window's menus get it, as ⌘M does on the Mac.
   bool (*tab_key_unhandled)(void* context, bc_id tab, const bc_key* key);
+  // Tab in the tab's page went past its last control (|reverse| false), or ⇧Tab before its first
+  // (true), where Chrome moves the keyboard to its toolbar. Return true if the app took the
+  // keyboard; false leaves it to Chromium. Asked only for the tab a user's window shows, never for
+  // one in an agent's Space or one no window shows: there the keyboard and the user's view stay as
+  // they are.
+  bool (*tab_focus_leaving)(void* context, bc_id tab, bool reverse);
   // The left button went down on the tab's page with the BC_MODIFIER_ flags |modifiers| held, one
   // at least, at |x|,|y| in the page's view from its top-left, before the page gets it. Return true
   // to take the press: its moves come to tab_press_moved and its release to tab_press_released, and
@@ -2368,6 +2374,11 @@ BC_EXPORT void bc_window_select(bc_id window, bc_id tab);
 // when the page shown before left with it, so that page takes it as bc_window_select's would, unless
 // a click in the UI comes first. The user's: agents get none.
 BC_EXPORT void bc_window_focus_page(bc_id window);
+
+// Gives the page the window shows the keyboard at its first control (|last| false) or its last
+// (true), as Tab or ⇧Tab into a page from Chrome's toolbar does, wherever in the window the
+// keyboard was. The user's: agents get none.
+BC_EXPORT void bc_window_focus_page_end(bc_id window, bool last);
 
 // Clears the Space the window shows: closes its Today tabs but those any window shows, as
 // bc_tab_close does, for bc_window_undo_clear to bring back. While it shows every Today tab, a tab
