@@ -45,6 +45,9 @@ use crate::tokens::shell::onboarding::CHIP_GAP;
 use crate::tokens::shell::onboarding::CHIP_HEIGHT;
 use crate::tokens::shell::onboarding::CHIP_INSET;
 use crate::tokens::shell::onboarding::CHIP_RADIUS;
+use crate::tokens::shell::onboarding::ENGINE_DOT;
+use crate::tokens::shell::onboarding::ENGINE_DOT_CENTER;
+use crate::tokens::shell::onboarding::ENGINE_ROW;
 use crate::tokens::shell::onboarding::IMPORT_HOLD;
 use crate::tokens::shell::onboarding::IMPORT_SURFACE;
 use crate::tokens::shell::onboarding::IMPORT_WIDTH;
@@ -83,6 +86,9 @@ pub(super) enum Step {
     Favorites,
     /// Asks the system to open links with ilo; left out when it already does.
     DefaultBrowser,
+    /// The first profile's search engine, from Settings' list; left out when it comes while the
+    /// core has none to offer, as while a policy picks it.
+    SearchEngine,
     /// The first Space's colour, from the theme picker's swatches.
     Color,
     /// Signing in to sync: Settings › Sync's view (crate::account); left out in a build that names
@@ -92,11 +98,12 @@ pub(super) enum Step {
     OptIns,
 }
 
-const STEPS: [Step; 7] = [
+const STEPS: [Step; 8] = [
     Step::Intro,
     Step::Import,
     Step::Favorites,
     Step::DefaultBrowser,
+    Step::SearchEngine,
     Step::Color,
     Step::Account,
     Step::OptIns,
@@ -159,6 +166,7 @@ impl Step {
             Step::Import => "import",
             Step::Favorites => "favorites",
             Step::DefaultBrowser => "default-browser",
+            Step::SearchEngine => "search-engine",
             Step::Color => "color",
             Step::Account => "account",
             Step::OptIns => "opt-ins",
@@ -200,6 +208,14 @@ impl Step {
                 let title = concat!("Make ", env!("APP_NAME"), " your default browser.");
                 return (title, line.into(), button);
             }
+            // The engine that searches until one is picked is already the filled dot, so the line
+            // needn't name it.
+            Step::SearchEngine => (
+                "Pick a search engine.",
+                "What you type that isn't an address searches with it. You can change it later in \
+                 Settings.",
+                "Continue",
+            ),
             Step::Color => (
                 "Pick a colour for your first Space.",
                 "The window takes it. Each Space can have its own, from its name in the sidebar.",
@@ -333,6 +349,12 @@ pub(super) struct Onboarding {
     pub(super) step: Step,
     /// The swatch picked at the colour step, if one is.
     pub(super) picked: Option<usize>,
+    /// The search engines offered, each its keyword and name, and the profile's default's keyword,
+    /// read until the core has them: a new profile's load after the flow starts.
+    engines: (Vec<(SharedString, SharedString)>, SharedString),
+    /// The engine picked at its step, the default's until the user moves it. Nothing is set until
+    /// Continue.
+    engine: Option<usize>,
     /// The system it runs on, for the default browser's step.
     os: Os,
     /// The opt-in switch last turned, and when, for its knob's slide.
@@ -403,6 +425,10 @@ impl Shell {
             !view.is_empty() || view.running().is_some()
         });
         let default_browser = self.browser.is_default_browser();
+        // A new profile's engines load after the flow starts, so the step is planned before the
+        // core has them, and onboarding_next reads them until it does.
+        let engines = self.browser.search_engines(self.space);
+        let engine = (engines.0.iter()).position(|(keyword, _)| *keyword == engines.1);
         let opt_ins = !self.opt_ins(cx).is_empty();
         let account = self.signing(cx);
         let steps: Vec<Step> = STEPS
@@ -412,6 +438,7 @@ impl Shell {
                 // An import begun brings it in (import_event).
                 Step::Favorites => false,
                 Step::DefaultBrowser => !default_browser,
+                Step::SearchEngine => true,
                 Step::Account => account.is_some(),
                 Step::OptIns => opt_ins,
                 _ => true,
@@ -426,6 +453,8 @@ impl Shell {
             steps,
             step: Step::Intro,
             picked: None,
+            engines,
+            engine,
             os: self.browser.os(),
             switched: None,
             slid: false,
@@ -531,6 +560,9 @@ impl Shell {
         // The core reads the account after the flow may have started, and it can be signed in by
         // then.
         let signed_in = !signed_out(&account::synced(cx));
+        let engines = (self.onboarding.as_ref())
+            .filter(|o| o.engines.0.is_empty() && o.steps.contains(&Step::SearchEngine))
+            .map(|_| self.browser.search_engines(self.space));
         let Some(onboarding) = self.onboarding.as_mut().filter(|o| o.ending.is_none()) else {
             return;
         };
@@ -551,7 +583,17 @@ impl Shell {
                 .steps
                 .retain(|&each| each != Step::Account || each == step);
         }
+        if let Some(engines) = engines {
+            onboarding.engine = (engines.0.iter()).position(|(keyword, _)| *keyword == engines.1);
+            onboarding.engines = engines;
+        }
         let at = onboarding.steps.iter().position(|&each| each == step);
+        // With none to offer when its turn comes, the search engine's step is left out.
+        if at.and_then(|at| onboarding.steps.get(at + 1)) == Some(&Step::SearchEngine)
+            && onboarding.engines.0.is_empty()
+        {
+            onboarding.steps.retain(|&each| each != Step::SearchEngine);
+        }
         match at.and_then(|at| onboarding.steps.get(at + 1)).copied() {
             Some(next) => {
                 let elapsed = onboarding.since.elapsed().as_secs_f32();
@@ -616,6 +658,18 @@ impl Shell {
             }
             (Step::DefaultBrowser, _) if default_browser::offers(onboarding.os, false) => {
                 self.browser.make_default_browser(cx)
+            }
+            // Only a pick that isn't the default already: the default stays the core's fallback,
+            // which a recommended policy outranks, rather than becoming the user's choice.
+            (Step::SearchEngine, _) => {
+                let (engines, default) = &onboarding.engines;
+                let picked = (onboarding.engine)
+                    .and_then(|at| engines.get(at))
+                    .filter(|(keyword, _)| keyword != default);
+                if let Some((keyword, name)) = picked.cloned() {
+                    self.browser
+                        .set_search_engine(self.space, &keyword, &name, cx);
+                }
             }
             (Step::Favorites, _) => {
                 let (ticked, space) = (self.favorites_ticked(cx), self.space);
@@ -751,6 +805,15 @@ impl Shell {
     }
 
     /// Picks swatch `index` at the colour step.
+    /// Picks the search engine at `index`, which sets nothing until Continue.
+    fn onboarding_pick_engine(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some(onboarding) = self.onboarding.as_mut() {
+            let last = onboarding.engines.0.len().saturating_sub(1);
+            onboarding.engine = Some(index.min(last));
+            cx.notify();
+        }
+    }
+
     fn onboarding_pick(&mut self, index: usize, cx: &mut Context<Self>) {
         if let Some(onboarding) = self.onboarding.as_mut() {
             onboarding.picked = Some(index.min(SWATCHES.len() - 1));
@@ -767,7 +830,9 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some((step, picked)) = self.onboarding.as_ref().map(|o| (o.step, o.picked)) else {
+        let Some((step, picked, engine)) =
+            (self.onboarding.as_ref()).map(|o| (o.step, o.picked, o.engine))
+        else {
             return;
         };
         let key = &event.keystroke;
@@ -790,6 +855,13 @@ impl Shell {
             (Step::Color, "right") => self.onboarding_pick(picked.map_or(0, |at| at + 1), cx),
             (Step::Color, "left") => {
                 self.onboarding_pick(picked.map_or(SWATCHES.len(), |at| at.max(1)) - 1, cx)
+            }
+            // ↑ and ↓ move the engine's pick, as they do the import's list's.
+            (Step::SearchEngine, "down") => {
+                self.onboarding_pick_engine(engine.map_or(0, |at| at + 1), cx)
+            }
+            (Step::SearchEngine, "up") => {
+                self.onboarding_pick_engine(engine.map_or(0, |at| at.saturating_sub(1)), cx)
             }
             // ↩ is the import's button for the state its view shows, and ↑ ↓ move its list's pick.
             (Step::Import, "enter") if !key.modifiers.modified() => {
@@ -1086,6 +1158,7 @@ impl Shell {
             .map_or(Os::Mac, |onboarding| onboarding.os);
         let (title, line, button) = step.message(os);
         let switches = (step == Step::OptIns).then(|| self.opt_in_rows(colors, cx));
+        let engines = (step == Step::SearchEngine).then(|| self.engine_rows(colors, cx));
         let favorites = (step == Step::Favorites)
             .then(|| self.favorite_tiles(colors, window, cx))
             .flatten();
@@ -1248,6 +1321,7 @@ impl Shell {
                 )
                 .children(swatches)
                 .children(switches)
+                .children(engines)
                 .children(favorites)
                 .children(import)
                 .children(button)
@@ -1324,6 +1398,80 @@ impl Shell {
             .text_size(px(crate::tokens::text::BODY))
             .text_color(look.ink)
             .child(group(&look, rows))
+    }
+
+    /// The search engines offered in the opt-ins' box, a row each of a radio's dot and the engine's
+    /// name, the one picked filled in the green and its name medium. A click on a row picks it, and
+    /// the list is one stop for ⇥, its arrows moving the pick, as the swatches are.
+    fn engine_rows(&self, colors: Colors, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let Some(onboarding) = self.onboarding.as_ref() else {
+            return div().into_any_element();
+        };
+        let surface = colors.ground.blend(colors.ink(IMPORT_SURFACE));
+        let look = Look::on(surface, colors.ink(1.), rgb(SIGNAL));
+        let a11y = self.a11y;
+        let rows = (onboarding.engines.0.iter().enumerate()).map(|(index, (_, name))| {
+            let on = onboarding.engine == Some(index);
+            let dot = div()
+                .flex_none()
+                .size(px(ENGINE_DOT))
+                .rounded_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .map(|dot| match on {
+                    true => dot.bg(rgb(SIGNAL)).child(
+                        div()
+                            .size(px(ENGINE_DOT_CENTER))
+                            .rounded_full()
+                            .bg(rgb(PAPER)),
+                    ),
+                    false => dot.border_1().border_color(colors.ink(QUIET)),
+                });
+            let toggled = match on {
+                true => Toggled::True,
+                false => Toggled::False,
+            };
+            let row = div()
+                .id(("onboarding-engine", index))
+                .when(a11y, |row| {
+                    row.role(Role::RadioButton)
+                        .aria_label(name.clone())
+                        .aria_toggled(toggled)
+                        .when(on, |row| row.aria_active_descendant())
+                })
+                .h(px(ENGINE_ROW))
+                .px(px(PADDING))
+                .flex()
+                .items_center()
+                .gap(px(PADDING))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(
+                    cx.listener(move |shell, _, _, cx| shell.onboarding_pick_engine(index, cx)),
+                )
+                .child(dot)
+                .child(
+                    div()
+                        .when(on, |name| name.font_weight(gpui::FontWeight::MEDIUM))
+                        .child(name.clone()),
+                );
+            div().child(row)
+        });
+        div()
+            .id("onboarding-engines")
+            .when(a11y, |list| {
+                list.role(Role::RadioGroup).aria_label("Search engine")
+            })
+            .tab_index(0)
+            .focus_from_keys_only()
+            .rounded(px(crate::tokens::radius::ROW))
+            .focus_visible(ring(colors.ink(1.)))
+            .mt(px(BUTTON_GAP))
+            .w(px(OPT_IN_WIDTH))
+            .text_size(px(crate::tokens::text::BODY))
+            .text_color(look.ink)
+            .child(group(&look, rows))
+            .into_any_element()
     }
 
     /// The favorites offered, as the import view's tiles at its width, on the flow's ground, a

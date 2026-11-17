@@ -17,10 +17,11 @@
 # Settings › Agents' Model menu for Claude, Sonnet chosen, and for Codex, on Default, Default naming
 # its model, light and dark (#2455), and the safe-start card at the sidebar's foot, light and dark,
 # and in the narrowest sidebar with ad blocking off (#2345), the footer's menu control, which only
-# Linux and Windows draw, at rest and with its menu open above it, light and dark (#3148), Library ›
-# Boards, light and dark, and a Board's row's menu, and the protected-media note, whose card a
-# Board's refused save follows in the page (#3073). The preview's Linux host places no window, so
-# sway puts Site Controls and the icon picker in the middle rather than where the Mac's host would.
+# Linux and Windows draw, at rest and with its menu open above it, light and dark (#3148), the top
+# bar, with the sidebar on the left and on the right (#3160), Library › Boards, light and dark, and
+# a Board's row's menu, and the protected-media note, whose card a Board's refused save follows in
+# the page (#3073). The preview's Linux host places no window, so sway puts Site Controls and the
+# icon picker in the middle rather than where the Mac's host would.
 # It reports: a screen that won't capture is a gap in the sheet and a line on stderr, never a
 # failure.
 # Usage: tools/parity.sh <preview> <output directory>
@@ -64,6 +65,8 @@ screens=(
   "app-menu-rest-dark|drawn at|PREVIEW_APPEARANCE=dark"
   "app-menu-light|menu shown|PREVIEW_APPEARANCE=light PREVIEW_CLICK=170,775"
   "app-menu-dark|menu shown|PREVIEW_APPEARANCE=dark PREVIEW_CLICK=170,775"
+  "top-bar|drawn at|PREVIEW_TOP_BAR=1"
+  "top-bar-right|drawn at|PREVIEW_TOP_BAR=1 PREVIEW_SIDEBAR_RIGHT=1"
   "library-boards-light|library boards|PREVIEW_LIBRARY=boards PREVIEW_APPEARANCE=light"
   "library-boards-dark|library boards|PREVIEW_LIBRARY=boards PREVIEW_APPEARANCE=dark"
   "library-boards-menu|menu shown|PREVIEW_LIBRARY=boards PREVIEW_MENU=180,111"

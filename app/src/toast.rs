@@ -703,7 +703,8 @@ impl Render for Toast {
                 }
             })
             .collect();
-        // What it says, which VoiceOver says as it comes, wherever its cursor is.
+        // What it says, which a screen reader says as it comes, wherever its cursor is: the Mac's
+        // AccessKit announces a live region's value, and Windows' and Linux's its name (#3236).
         let said = match &shown.key {
             Some((key, rest)) => format!("{} {key} {rest}", shown.text),
             None => shown.text.to_string(),
@@ -713,6 +714,7 @@ impl Render for Toast {
             .when(a11y, |toast| {
                 toast
                     .role(Role::Status)
+                    .aria_label(said.clone())
                     .aria_value(said)
                     .a11y_synthetic_children(|builder| builder.parent_node().set_live(Live::Polite))
             })

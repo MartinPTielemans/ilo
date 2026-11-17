@@ -496,3 +496,24 @@ fn under_reduce_motion_the_toast_only_fades_in(cx: &mut TestAppContext) {
     assert_eq!(f32::from(plate.origin.y), TOP);
     assert_eq!(f32::from(plate.size.height), HEIGHT);
 }
+
+/// A screen reader says what the toast says as it comes, from a polite live region: VoiceOver from
+/// its value, and NVDA and Orca from its name, so it has both (#3236).
+#[gpui::test]
+fn a_screen_reader_hears_what_the_toast_says(cx: &mut TestAppContext) {
+    use gpui::accesskit::Role;
+    open_toast(cx);
+    let window = cx.update(|cx| cx.global::<ToastWindow>().0);
+    let mut toast = gpui::VisualTestContext::from_window(window.into(), cx);
+    toast.simulate_a11y_activation();
+    show_deleted(cx);
+    draw(cx);
+    let tree = toast.a11y_tree().expect("GPUI built a tree");
+    let status = tree
+        .nodes
+        .iter()
+        .find(|(_, node)| node.role() == Role::Status)
+        .map(|(_, node)| (node.live(), node.label(), node.value()));
+    let said = Some("Space deleted! Use ⌘Z to undo.");
+    assert_eq!(status, Some((Some(Live::Polite), said, said)));
+}
