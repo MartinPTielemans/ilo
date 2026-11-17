@@ -7,6 +7,8 @@ use std::sync::LazyLock;
 
 use gpui::App;
 
+use crate::dialog::{Field, Question, Return, Tone};
+
 use crate::updates::{self, Updater};
 
 /// Where a new issue is filed: a default service URL, which a fork changes (branding/issues).
@@ -60,11 +62,46 @@ impl BuildInfo {
         lines.join("\n")
     }
 
+    /// Report a Problem…'s sheet: what happened, in the user's words, over these details, which
+    /// Continue fills a new issue with. Everything stays editable in GitHub's form, and nothing
+    /// leaves until the user submits it there (#2458).
+    pub fn report(&self) -> Question {
+        Question {
+            icon: None,
+            message: "Report a Problem".into(),
+            detail: concat!(
+                "Continue opens a new issue on GitHub with these details. Nothing is sent until ",
+                "you submit it there, and you can change any of it first."
+            )
+            .into(),
+            list: self
+                .text()
+                .lines()
+                .map(|line| (line.to_owned().into(), Vec::new()))
+                .collect(),
+            action: "Continue".into(),
+            cancel: "Cancel".into(),
+            tone: Tone::Accent,
+            also: None,
+            fields: vec![Field {
+                placeholder: "What happened?".into(),
+                text: "".into(),
+                secure: false,
+            }],
+            check: None,
+            on_return: Return::Action,
+        }
+    }
+
     /// A new issue at `new_issue` on the bug report form, its version, Chromium, operating system,
     /// system and this system's install fields filled with these
-    /// (.github/ISSUE_TEMPLATE/bug_report.yml's ids).
-    pub fn issue_url(&self, new_issue: &str) -> String {
+    /// (.github/ISSUE_TEMPLATE/bug_report.yml's ids), and its title with `title` unless empty.
+    pub fn issue_url(&self, new_issue: &str, title: &str) -> String {
         let mut fields = vec![("template", "bug_report.yml".to_owned())];
+        let title = title.trim();
+        if !title.is_empty() {
+            fields.push(("title", title.to_owned()));
+        }
         fields.push(("version", self.version.clone()));
         fields.extend(self.engine.clone().map(|engine| ("chromium", engine)));
         fields.push(("platform", PLATFORM.to_owned()));
@@ -416,12 +453,12 @@ mod tests {
             ..made_up()
         };
         assert!(!info.text().contains("Chromium"));
-        assert!(!info.issue_url(NEW_ISSUE).contains("chromium="));
+        assert!(!info.issue_url(NEW_ISSUE, "").contains("chromium="));
     }
 
     #[test]
     fn fills_the_bug_reports_fields() {
-        let url = made_up().issue_url("https://github.com/o/r/issues/new");
+        let url = made_up().issue_url("https://github.com/o/r/issues/new", "");
         assert_eq!(
             url,
             format!(
@@ -429,6 +466,35 @@ mod tests {
                  &chromium=156.0.7600.12&platform={PLATFORM}&os=macOS%2015.1%2C%20Apple%20M2%20Pro"
             )
         );
+    }
+
+    /// What the user typed in the sheet titles the issue, trimmed and escaped, and nothing typed
+    /// leaves the title to GitHub's form (#2458).
+    #[test]
+    fn titles_the_issue_with_what_happened() {
+        let new = "https://github.com/o/r/issues/new";
+        let titled = made_up().issue_url(new, "  Tabs & Spaces vanish ");
+        assert!(titled.starts_with(&format!(
+            "{new}?template=bug_report.yml&title=Tabs%20%26%20Spaces%20vanish&version="
+        )));
+        assert!(!made_up().issue_url(new, "   ").contains("title="));
+    }
+
+    /// The sheet lists every detail Continue fills the issue with, one a line as Copy Build Info
+    /// copies them, under one field for what happened, which ↩ continues from (#2458).
+    #[test]
+    fn the_sheet_shows_what_the_issue_is_filled_with() {
+        let info = BuildInfo {
+            setup: Some("Flatpak, Wayland, Hyprland".into()),
+            ..made_up()
+        };
+        let sheet = info.report();
+        let listed: Vec<&str> = sheet.list.iter().map(|(line, _)| line.as_ref()).collect();
+        assert_eq!(listed, info.text().lines().collect::<Vec<_>>());
+        assert_eq!(listed.len(), 5);
+        assert_eq!(sheet.fields.len(), 1);
+        assert_eq!(sheet.fields[0].text.as_ref(), "");
+        assert_eq!(sheet.on_return, Return::Action);
     }
 
     /// Linux's and Windows's install go in the form's field for that system, and Copy Build Info
@@ -441,7 +507,7 @@ mod tests {
         };
         let field = if cfg!(windows) { "windows" } else { "linux" };
         assert!(
-            info.issue_url(NEW_ISSUE)
+            info.issue_url(NEW_ISSUE, "")
                 .ends_with(&format!("&{field}=Flatpak%2C%20Wayland%2C%20Hyprland")),
         );
         assert!(
