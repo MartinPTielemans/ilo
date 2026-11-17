@@ -294,15 +294,34 @@ watch_video() {
     sleep 0.5
   done
   echo "$watched $ad $played ${met:-$state}" >> "$videos"
-  asked=$(grep -c '^cdp: probe ' "$cdp_log" || true)
-  echo "probe https://www.youtube.com/watch" >&5
-  for _ in $(seq 50); do
-    [ "$(grep -c '^cdp: probe ' "$cdp_log" || true)" -gt "$asked" ] && break
+  probe_page watch https://www.youtube.com/watch "states ${states#>}; met ${met:-none}; played $played; "
+}
+# PROBE (#3272, never merged): asks cdp.py WORD about the page at PREFIX and waits for its line.
+ask_probe() {
+  asked=$(grep -c "^cdp: $1 " "$cdp_log" || true)
+  echo "$1 $2" >&5
+  for _ in $(seq 100); do
+    [ "$(grep -c "^cdp: $1 " "$cdp_log" || true)" -gt "$asked" ] && break
     sleep 0.1
   done
-  said=$(grep '^cdp: probe ' "$cdp_log" | tail -1)
-  injected=$(sed -n "/^browser: drive $from: /,\$p" "$log" | grep '^browser: probe scriptlets ' | tail -1)
-  echo "probe watch $n ${engine:-ublock}: states ${states#>}; met ${met:-none}; played $played; ${said#cdp: probe }; ${injected:-no scriptlet line}"
+  said=$(grep "^cdp: $1 " "$cdp_log" | tail -1)
+  said=${said#cdp: $1 }
+}
+# PROBE (#3272, never merged): KIND's line, home or watch, with the renderer's pid against the last
+# home page's, and the scriptlets the native engine gave this load.
+probe_page() {
+  ask_probe probe "$2"
+  probed=$said
+  ask_probe renderer "$2"
+  renderer=$said against=
+  if [ "$1" = home ]; then
+    home_renderer=$renderer
+  elif [ -n "${home_renderer:-}" ]; then
+    if [ "$renderer" = "$home_renderer" ]; then against=" (same as the home page's)"; else
+      against=" (new; the home page's was $home_renderer)"; fi
+  fi
+  injected=$(sed -n "/^browser: drive $from: /,\$p" "$log" | grep "^browser: probe scriptlets $1 " | tail -1)
+  echo "probe $1 $n ${engine:-ublock}: $3$probed; renderer $renderer${against:-}; ${injected:-no scriptlet line}"
 }
 # Each site: when Return went, in ms since the epoch, then the site, then the load's time and what
 # loaded, or "none" for a load that didn't come within 45 s, then "bot-check" where Cloudflare's
@@ -333,6 +352,7 @@ while read -r url <&4; do
     # adblock-cost, which has no time for it, gives no site the look a watch page gets.
     case $url in
       https://www.youtube.com/watch*) [ -n "${ADBLOCK_PARITY_NO_CAPTURE:-}" ] || watch_video "$url" ;;
+      https://www.youtube.com/) from=$step && probe_page home https://www.youtube.com/ "" ;;
     esac
     # Ads load after the page does, from its scripts. adblock-cost, whose two passes have to fit a
     # run's 20 minutes on Windows' Check, needs no pictures, so it waits only after the last site,

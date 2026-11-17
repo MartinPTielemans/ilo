@@ -106,9 +106,11 @@ Usage: cdp.py IN OUT [PAGE] | cdp.py --socket URL [PAGE]
 import base64
 import json
 import os
+import shutil
 import socket
 import struct
 import sys
+import tempfile
 import threading
 import time
 
@@ -557,8 +559,14 @@ PROBE = """(() => {
   const p = document.getElementById("movie_player");
   const live = p && typeof p.getPlayerResponse === "function" ? p.getPlayerResponse() : null;
   const m = window.__iloProbe;
-  return "initial " + count(window.ytInitialPlayerResponse) + "; player " + count(live) + "; injected " +
-    (m ? "scripts-before " + m.scripts + " initial-then " + m.initial + " at " + m.at + " ms" : "none");
+  // A document a same-document navigation reached keeps its first load's navigation entry.
+  const entry = performance.getEntriesByType("navigation")[0];
+  const first = entry ? new URL(entry.name).pathname : "";
+  const here = location.pathname;
+  const doc = !entry ? "no navigation entry" : first === here ? "new document" :
+    "same document, from " + (first === "/" ? "the home page" : "another page");
+  return doc + "; initial " + count(window.ytInitialPlayerResponse) + "; player " + count(live) + "; injected " +
+    (m ? "for " + m.page + " scripts-before " + m.scripts + " initial-then " + m.initial + " at " + m.at + " ms" : "none");
 })()"""
 
 
@@ -567,6 +575,26 @@ def probe(prefix):
     value = on and call("Runtime.evaluate", {"expression": PROBE, "returnByValue": True},
                         on).get("result", {}).get("value")
     return value or "-"
+
+
+def renderer(prefix):
+    """PROBE (#3272, never merged): the pid of the renderer holding the main frame at PREFIX, from
+    the frames a trace starts with; nothing else of the trace is read."""
+    call("Tracing.start", {"traceConfig": {"recordMode": "recordUntilFull",
+                                           "includedCategories": ["disabled-by-default-devtools.timeline"]},
+                           "transferMode": "ReturnAsStream", "streamFormat": "json"})
+    path = os.path.join(tempfile.mkdtemp(), "renderer.json")
+    trace_end(path)
+    with open(path, encoding="utf-8") as f:
+        trace = json.load(f)
+    shutil.rmtree(os.path.dirname(path))
+    found = []
+    for event in trace.get("traceEvents", trace if isinstance(trace, list) else []):
+        if event.get("name") == "TracingStartedInBrowser":
+            for frame in event.get("args", {}).get("data", {}).get("frames", []):
+                if not frame.get("parent") and frame.get("url", "").startswith(prefix):
+                    found.append(str(frame.get("processId")))
+    return ",".join(found) or "unknown"
 
 
 def content():
@@ -796,6 +824,8 @@ for line in sys.stdin:
         log("video " + video(words[1]))
     elif words[:1] == ["probe"] and len(words) == 2:
         log("probe " + probe(words[1]))
+    elif words[:1] == ["renderer"] and len(words) == 2:
+        log("renderer " + renderer(words[1]))
     elif words[:1] == ["hidden"] and len(words) in (2, 3) and session:
         log("hidden " + hidden(words[1], words[2] if len(words) == 3 else None))
     elif words[:1] == ["requests"] and len(words) == 2 and session and not recording:

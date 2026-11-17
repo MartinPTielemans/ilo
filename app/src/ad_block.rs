@@ -549,7 +549,14 @@ pub fn page(engine: &Engine, url: &str) -> String {
     let mut resources = engine.rules.url_cosmetic_resources(url);
     // PROBE (#3272, never merged): the watch page's scriptlets by name, and a marker that says
     // whether they ran and what the page had run before them.
-    if url.starts_with("https://www.youtube.com/watch") {
+    if url.starts_with("https://www.youtube.com/") {
+        let kind = if url.starts_with("https://www.youtube.com/watch") {
+            "watch"
+        } else if url == "https://www.youtube.com/" {
+            "home"
+        } else {
+            "other"
+        };
         let names: Vec<String> = (resources.injected_script.split("try {\n").skip(1))
             .map(|call| {
                 let name: String = call
@@ -564,13 +571,14 @@ pub fn page(engine: &Engine, url: &str) -> String {
             })
             .collect();
         crate::log!(
-            "browser: probe scriptlets {}: {}",
+            "browser: probe scriptlets {} {}: {}",
+            kind,
             names.len(),
             names.join(",")
         );
         resources.injected_script = format!(
-            "window.__iloProbe = {{ scripts: document.scripts.length, initial: typeof window.ytInitialPlayerResponse, at: Math.round(performance.now()) }};\n{}",
-            resources.injected_script
+            "window.__iloProbe = {{ page: \"{}\", scripts: document.scripts.length, initial: typeof window.ytInitialPlayerResponse, at: Math.round(performance.now()) }};\n{}",
+            kind, resources.injected_script
         );
     }
     let sorted = |set: std::collections::HashSet<String>| {
