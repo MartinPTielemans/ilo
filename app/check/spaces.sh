@@ -66,6 +66,7 @@ document.onvisibilitychange = () => {
   }
 };
 </script>'
+serve
 log="$out/spaces.log"
 step=0
 # X11 sends a touchpad's scrolling with no start or end, so two fingers never page there (#554):
@@ -87,6 +88,8 @@ await_load
 await '^browser: title [0-9]* ready$' || fail "the Spaces test page didn't draw"
 first=$(space)
 await "^browser: spaces $first\$" || fail "the app didn't start with one Space"
+# The app can say which window opened after its page has loaded (#3180).
+await '^browser: window opened [0-9]' || fail "the app didn't say which window opened"
 dots_window=$(grep -m1 '^browser: window opened ' "$log" | cut -d' ' -f4)
 a=$(today)
 send click $page_point
@@ -106,7 +109,7 @@ content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: la
 # which puts New Tab, under the divider, 39 above where it was. Show Space Header brings the row
 # back for the steps after (#1400).
 post rightclick $(row 3)
-expect "^browser: menu shown $(cased 'New Tab, New Folder…, Change Space Icon…, Rename Space…, Edit Theme Color…, Hide Space Header'), " \
+expect "^browser: menu shown $(cased 'New Tab, New Folder…, Show Top Bar, Change Space Icon…, Rename Space…, Edit Theme Color…, Hide Space Header'), " \
   "the lone unnamed Space's menu didn't offer Hide Space Header after Edit Theme Color…"
 send choose "$(cased 'Hide Space Header')"
 expect '^browser: space header hidden$' "Hide Space Header didn't hide the name row"
@@ -201,12 +204,12 @@ expect '^browser: space form gone$' "the form didn't leave after Create"
 send key t cmd
 expect '^browser: command new-tab via ui$' "⌘T in the new Space didn't reach the UI"
 expect '^browser: command bar shown$' "⌘T in the new Space didn't open the command bar"
-send type example.com
+send type "http://localhost:$port/one.html"
 send key return
-expect '^browser: today [0-9][0-9]*$' "the tab for example.com didn't open in the new Space"
+expect '^browser: today [0-9][0-9]*$' "the tab for one.html didn't open in the new Space"
 b=$(today)
 expect "^browser: selected $b\$" "the new Space's tab wasn't shown"
-expect "^browser: loaded $b https://example.com/\$" "example.com didn't load in the new Space's tab"
+expect "^browser: loaded $b http://localhost:$port/one.html\$" "one.html didn't load in the new Space's tab"
 
 # Opens the command bar with ⌘T and types $1, and once the core's rows are in among the bar's,
 # captures it in $3 if given and picks the row named $2 with ↓ and ↩, checking that it ran.
@@ -370,7 +373,7 @@ ran_hidden() {
   ran:*) fail "$1: $state" ;;
   esac
 }
-open_from_bar example.org
+open_from_bar "http://localhost:$port/two.html"
 expect "^browser: title $a hidden\$" "the tab behind the one shown isn't hidden"
 hidden_quiet "the tab behind the one shown ran frames while hidden, other than its picture's"
 send key w cmd
@@ -385,7 +388,7 @@ expect "^browser: title $a visible " "the tab in the Space shown again isn't vis
 ran_hidden "the tab in the Space shown again ran frames while hidden, other than its picture's"
 # A Space shows its last-used tab again: with two in Today and the lower one shown, a switch away
 # and back shows the lower one, not the top one.
-open_from_bar example.org
+open_from_bar "http://localhost:$port/two.html"
 c=$tab
 send click "$(row 1)"
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" "a click on the lower row didn't show tab $a"
@@ -578,7 +581,7 @@ expect "^browser: library field $second at rest drawn\$" "the pointer leaving th
 # the colour it was given, and leaves the Library open on the Space shown.
 post rightclick 524 $((${content#*x} / 2))
 card_menu="^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $profile, \
-New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$"
+New Folder…, Live Folders › GitHub Pull Requests, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$"
 expect "$card_menu" "a right-click on the second Space's card didn't show its menu"
 none_since '^browser: library space ' || fail "a right-click on a card showed its Space"
 send dismiss
@@ -945,9 +948,11 @@ show_space "key 1 ctrl" select-space ui "$first" "$a"
 expect "^browser: settled space $first\$" "the first Space's page didn't settle"
 
 # A right-click on the sidebar's empty space, three rows under the Space's one Today row, shows
-# New Tab, New Folder… and the Space's menu, and New Tab opens the command bar, as ⌘T does.
+# New Tab, New Folder…, Show Top Bar and the Space's menu, and New Tab opens the command bar, as ⌘T
+# does.
 post rightclick $(row 3)
-expect "^browser: menu shown $(cased "New Tab, New Folder…, Change Space Icon…, Rename Space…, $colors, $profile, \
+expect "^browser: menu shown $(cased "New Tab, New Folder…, Show Top Bar, Change Space Icon…, Rename Space…, $colors, $profile, \
+Live Folders › GitHub Pull Requests, \
 ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a right-click under the Space's rows didn't show New Tab, New Folder… and the Space's menu"
 ../tools/window-screenshot.sh "$pid" "$out/space-empty-menu.png" || fail "no window to capture"
@@ -961,7 +966,7 @@ expect '^browser: command bar hidden$' "escape didn't close the command bar New 
 name_point="100 112"
 post rightclick $name_point
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, $profile, \
-New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+New Folder…, Live Folders › GitHub Pull Requests, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a right-click on the Space's name didn't show its menu"
 ../tools/window-screenshot.sh "$pid" "$out/space-menu.png" || fail "no window to capture"
 send dismiss
@@ -977,7 +982,7 @@ for holder in ui page; do
   send move $edit_point
   send click $edit_point
   expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, $profile, \
-New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+New Folder…, Live Folders › GitHub Pull Requests, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
     "a click on the … didn't show the Space's menu, the $holder holding the keyboard"
   expect '^browser: menu drawn ' "the Space's menu from a click on the … didn't come on screen ($holder)"
   ../tools/window-screenshot.sh "$pid" "$out/space-edit-click-$holder.png" || fail "no window to capture"
@@ -1023,7 +1028,7 @@ for how in tap press rightclick; do
       ;;
   esac
   expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, $profile, \
-New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+New Folder…, Live Folders › GitHub Pull Requests, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
     "a $how on the sidebar out over the page didn't show the Space's menu"
   expect '^browser: menu drawn ' "the Space's menu from a $how on the sidebar out didn't come on screen"
   if [ $how = press ]; then send release $reveal_edit; fi
@@ -1081,7 +1086,7 @@ for where in second-window full-screen; do
   ../tools/window-screenshot.sh "$pid" "$out/space-edit-$where-before.png" || fail "no window to capture"
   send click $edit_point
   shown="^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, $profile, \
-New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$"
+New Folder…, Live Folders › GitHub Pull Requests, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$"
   for _ in $(seq 100); do logged "$shown" && break; sleep 0.1; done
   # The issue asks whether a second click works when the first does nothing.
   if ! logged "$shown"; then
@@ -1107,7 +1112,7 @@ send window 1
 send move $edit_point
 send press $edit_point
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, $profile, \
-New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+New Folder…, Live Folders › GitHub Pull Requests, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a press on the … at the end of the Space's name didn't show its menu"
 expect '^browser: menu drawn ' "the Space's menu from the … didn't come on screen"
 send release $edit_point
@@ -1159,7 +1164,7 @@ expect '^browser: rename cancelled$' \
 # and the menu offers Remove Icon only once there is an icon.
 post rightclick $name_point
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, $profile, \
-New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+New Folder…, Live Folders › GitHub Pull Requests, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a right-click on the Space's name didn't offer Change Icon…"
 send choose "$(cased 'Change Space Icon…')"
 expect "^browser: icon picker for $first on icon\$" "Change Icon… didn't open the icon picker"
@@ -1174,7 +1179,7 @@ expect '^browser: icon picker hidden$' "escape didn't close the icon picker"
 none_since '^browser: iconed space' || fail "escape in the icon picker gave the Space an icon"
 post rightclick $name_point
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, $profile, \
-New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+New Folder…, Live Folders › GitHub Pull Requests, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a right-click on the Space's name offered Remove Icon without an icon"
 send choose "$(cased 'Change Space Icon…')"
 expect '^browser: icon picker shown$' "Change Icon… didn't show the icon picker"
@@ -1207,7 +1212,7 @@ expect '^browser: icon picker hidden$' "an emoji picked on the Emoji tab didn't 
 # takes the icon away.
 post rightclick $name_point
 expect "^browser: menu shown $(cased "Change Space Icon…, Remove Icon, Rename Space…, $colors, $profile, \
-New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" "a right-click on the Space's name didn't offer Remove Icon"
+New Folder…, Live Folders › GitHub Pull Requests, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" "a right-click on the Space's name didn't offer Remove Icon"
 send choose "$(cased 'Change Space Icon…')"
 expect "^browser: icon picker for $first on emoji\$" \
   "Change Icon… didn't open the picker on the Emoji tab for a Space with an emoji"
@@ -1242,7 +1247,7 @@ expect '^browser: icon picker hidden$' "the icon picker's trash didn't close it"
 # Remove Icon in the menu does the same.
 post rightclick $name_point
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, $profile, \
-New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+New Folder…, Live Folders › GitHub Pull Requests, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "the Space's menu offered Remove Icon after the trash"
 send choose "$(cased 'Change Space Icon…')"
 expect '^browser: icon picker shown$' "Change Icon… didn't show the icon picker"
@@ -1252,7 +1257,7 @@ expect "^browser: iconed space $first glyph:bolt\$" \
   "a click on a glyph didn't become the Space's icon"
 post rightclick $name_point
 expect "^browser: menu shown $(cased "Change Space Icon…, Remove Icon, Rename Space…, $colors, $profile, \
-New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" "a right-click on the Space's name didn't offer Remove Icon"
+New Folder…, Live Folders › GitHub Pull Requests, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" "a right-click on the Space's name didn't offer Remove Icon"
 send choose "$(cased 'Remove Icon')"
 expect "^browser: iconed space $first none\$" "Remove Icon didn't take the Space's icon away"
 # Edit Theme Color… in the Space's menu opens the theme picker too. A swatch is the Space's colour,
@@ -1265,7 +1270,7 @@ expect "^browser: iconed space $first none\$" "Remove Icon didn't take the Space
 # frame where it was.
 post rightpress $name_point
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, $profile, \
-New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+New Folder…, Live Folders › GitHub Pull Requests, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a right-click on the Space's name didn't offer Edit Theme Color…"
 send rightrelease $name_point
 send order
@@ -1369,7 +1374,7 @@ expect '^browser: theme picker hidden$' "a click outside the theme picker didn't
 # menu offers it no more.
 post rightclick $name_point
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $profile, \
-New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+New Folder…, Live Folders › GitHub Pull Requests, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a right-click on the Space's name didn't offer Remove Theme Color"
 send choose "$(cased 'Remove Theme Color')"
 expect "^browser: colored space $first none\$" \
@@ -1378,7 +1383,7 @@ expect "^browser: themed space $first none\$" \
   "Remove Theme Color didn't take the Space's theme away"
 post rightclick $name_point
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, $profile, \
-New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+New Folder…, Live Folders › GitHub Pull Requests, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "the Space's menu offered Remove Theme Color without a colour"
 send choose Rename Space…
 send key escape
@@ -1389,7 +1394,7 @@ expect '^browser: rename cancelled$' \
 # here.
 post rightclick "$(dot "$second")"
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $profile, \
-New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+New Folder…, Live Folders › GitHub Pull Requests, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a right-click on a dot didn't show its Space's menu"
 post choose Delete Space
 expect '^browser: dialog shown Delete “reading 日本語”?$' "Delete Space didn't ask first"
@@ -1402,7 +1407,7 @@ send state
 none_since '^browser: spaces' || fail "a click around the dialog deleted the Space"
 post rightclick "$(dot "$second")"
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $profile, \
-New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+New Folder…, Live Folders › GitHub Pull Requests, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a right-click on a dot didn't show its Space's menu"
 post choose Delete Space
 expect '^browser: dialog settled$' "Delete Space didn't ask again"
@@ -1429,7 +1434,7 @@ for _ in $(seq 15); do logged '^browser: toast hidden$' && break; sleep 0.1; don
 logged '^browser: toast hidden$' || fail "the toast still said to use ⌘Z after ⌘Z"
 expect "^browser: spaces $first $second\$" "⌘Z didn't bring the Space back where it was"
 expect "^browser: space $second\( in .*\)\{0,1\}\$" "⌘Z didn't show the Space it brought back"
-expect "^browser: loaded [0-9]* https://example.com/\$" "the Space came back without its tab"
+expect "^browser: loaded [0-9]* http://localhost:$port/one.html\$" "the Space came back without its tab"
 expect "^browser: settled space $second\$" "the Space ⌘Z brought back didn't settle"
 # Export “reading 日本語” into Folder › Work, its own dimmed, makes the Space a folder at the bottom
 # of Work's pinned tabs and its tab the top of Work's Today, shows Work and deletes the Space, and a
@@ -1437,7 +1442,8 @@ expect "^browser: settled space $second\$" "the Space ⌘Z brought back didn't s
 t=$(today)
 post rightclick "$(dot "$second")"
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $profile, \
-New Folder…, Export “reading 日本語” into Folder › Work, \
+New Folder…, Live Folders › GitHub Pull Requests, \
+Export “reading 日本語” into Folder › Work, \
 Export “reading 日本語” into Folder › reading 日本語 (disabled), Export as Markdown…, Manage Spaces…, \
 Delete Space")\$" "a right-click on a dot didn't offer Export into Folder › Work"
 ../tools/window-screenshot.sh "$pid" "$out/space-export-menu.png" || fail "no window to capture"
@@ -1462,7 +1468,7 @@ expect "^browser: settled space $second\$" "the exported Space ⌘Z brought back
 # Deleted again, its tab reopens here with ⇧⌘T, and ⌘Z brings back the Space without it.
 post rightclick "$(dot "$second")"
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $profile, \
-New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+New Folder…, Live Folders › GitHub Pull Requests, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a right-click on a dot didn't show its Space's menu"
 post choose Delete Space
 expect '^browser: dialog shown Delete “reading 日本語”?$' "the Space came back without its name"
@@ -1475,7 +1481,7 @@ send key t cmd shift
 # the export's ⌘Z showed it.
 expect '^browser: command reopen-closed-tab via \(ui\|page\)$' "⇧⌘T didn't reach the browser"
 expect "^browser: today [0-9]* $a\$" "⇧⌘T didn't reopen the deleted Space's tab here: Today is \"$(today)\""
-expect "^browser: loaded $(today | cut -d' ' -f1) https://example.com/\$" \
+expect "^browser: loaded $(today | cut -d' ' -f1) http://localhost:$port/one.html\$" \
   "the reopened tab didn't load its page"
 send key z cmd
 expect "^browser: spaces $first $second\$" "⌘Z after ⇧⌘T didn't bring the Space back"
@@ -1484,7 +1490,7 @@ expect '^browser: today $' "⌘Z brought back the tab ⇧⌘T had reopened: Toda
 # Each window keeps its own ⌘Z: with a Space deleted in this window and the archive cleared in a
 # second one, the second window's ⌘Z brings back the archive and not the Space, and this one's the
 # Space and not the archive.
-open_from_bar example.org
+open_from_bar "http://localhost:$port/two.html"
 send key w cmd
 expect '^browser: today $' "⌘W didn't take the tab out of Today: Today is \"$(today)\""
 expect '^browser: archive [1-9][0-9]* tabs$' "⌘W didn't archive the tab"
@@ -1497,7 +1503,7 @@ send window 1
 post rightclick "$(dot "$second")"
 # ⌘Z brought the Space back with its theme.
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $empty_profile, \
-New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+New Folder…, Live Folders › GitHub Pull Requests, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a right-click on a dot in the first window didn't show its Space's menu"
 send choose Delete Space
 expect "^browser: spaces $first\$" "Delete in the first window didn't delete the Space"
@@ -1551,7 +1557,7 @@ expect '^browser: library hidden$' "escape didn't close the Library after the ca
 # Empty, it goes without asking, and says so too.
 post rightclick "$(dot "$second")"
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $empty_profile, \
-New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+New Folder…, Live Folders › GitHub Pull Requests, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a right-click on a dot didn't show its Space's menu"
 send choose Delete Space
 expect "^browser: spaces $first\$" "Delete didn't delete the empty Space"
@@ -1560,7 +1566,7 @@ expect "$deleted" "the toast didn't say the empty Space went"
 # The last Space can't go.
 post rightclick $name_point
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, $profile, \
-New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space (disabled)")\$" \
+New Folder…, Live Folders › GitHub Pull Requests, ${into}Export as Markdown…, Manage Spaces…, Delete Space (disabled)")\$" \
   "the last Space's menu offered Delete"
 send choose Rename Space…
 send key escape

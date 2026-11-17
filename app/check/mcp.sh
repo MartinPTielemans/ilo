@@ -4,7 +4,7 @@
 # gets nowhere without the agent's token. Its first call makes its Space, which no window lists, and
 # its first call that acts on a tab starts its card, one for all its connections. It may list and read
 # only the tabs there: its list leaves out the user's tab, a read of the user's tab is refused, with
-# an activity-log entry, and a read of example.com, opened in its Space, gives the page's text. A
+# an activity-log entry, and a read of the check's agent.html, opened in its Space, gives the page's text. A
 # link to an app (ms-word:) opens nothing and asks nothing, the tab staying on its page, and the
 # click's answer names the scheme. Ten
 # cases, each the same form in a tab of its own the user isn't looking at, move to Closed a step a
@@ -527,9 +527,13 @@ sessions=$(grep -c '^browser: session session-[0-9]* of agent mcp-client as chec
 [ "$sessions" = 1 ] || fail "the client's two connections had $sessions cards, not one"
 session=$(sed -n 's/^browser: session \(session-[0-9]*\) of agent mcp-client as check$/\1/p' "$log")
 await_log "^browser: task plate task-${session#session-} at " "the client's card wasn't drawn"
-opened=$(call open_tab '{"url":"example.com"}')
+# The agent's own page, with text to read and a link to follow, once a live site's (#3144).
+printf '%s' '<!doctype html><title>Agent page</title><h1>Agent page</h1>
+<p>A page of the check for the agent to read.</p><p><a href="two.html">Two</a></p>' \
+  > "$out/site/agent.html"
+opened=$(call open_tab "{\"url\":\"localhost:$port/agent.html\"}")
 agent_tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
-[ -n "$agent_tab" ] || fail "open_tab example.com answered: $opened"
+[ -n "$agent_tab" ] || fail "open_tab agent.html answered: $opened"
 # An agent's tab opens muted, until the user unmutes it or keeps it (#1080).
 await_log "^browser: page $agent_tab audible 0 muted 1\$" "the agent's tab didn't open muted"
 # Its page's picture in the card's conversation, once it shows: "x y width height".
@@ -571,9 +575,11 @@ if [ -n "$yours_step" ]; then
   shown=$(sed -n "/^browser: drive $yours_step: /,\$p" "$log" | grep '^browser: selected ' |
     grep -v "^browser: selected $user_tab\( in .*\)\{0,1\}\$" | head -1)
   [ -z "$shown" ] || fail "the agent's work showed another tab in the user's window: $shown"
-  if windows; then
-    # Quarantined: there a click of the agent's that opens a tab takes the keyboard (#2225).
-    echo "skip: mcp: the user's keyboard through the agent's work on Windows (#2225)"
+  if windows && ! engine_has ../core/window.cc; then
+    # An engine from before the core stopped showing the window for an agent's page's tab, which
+    # on Windows gave the window itself the keyboard (#2225).
+    echo "skip: mcp: the user's keyboard through the agent's work on Windows: the engine is from" \
+      "before the core kept the window as it was for an agent's page's tab (#2225)"
   else
     [ "$key $focus" = "$yours_key $yours_focus" ] ||
       fail "the agent's work took the keyboard from $yours_key, on $yours_focus, to $key, on $focus"
@@ -676,14 +682,14 @@ if [ "$driven" = 1 ]; then
   # The core lists the agent's Space alone: its tab, and not the user's Wikipedia tab in theirs.
   listed=$(call list_tabs '{}')
   case "$listed" in
-    *"$agent_tab  Example Domain  https://example.com/"*) ;;
+    *"$agent_tab  Agent page  http://localhost:$port/agent.html"*) ;;
     *) fail "list_tabs didn't list the agent's tab: $listed" ;;
   esac
   printf '%s\n' "$listed" | grep -q "^. $user_tab  " &&
     fail "list_tabs listed the user's tab in another Space: $listed"
   read=$(call read_page "{\"tab\":$agent_tab}")
   case "$read" in
-    "Tab $agent_tab: Example Domain"*"for use in documentation examples"*) ;;
+    "Tab $agent_tab: Agent page"*"for the agent to read"*) ;;
     *) fail "reading the agent's tab answered: $read" ;;
   esac
   await_log "^browser: agent activity mcp-client $agent_tab read_page\$" "the read didn't reach the activity log"
@@ -1594,9 +1600,9 @@ PY
   call close_tab "{\"tab\":$fields_tab}" > /dev/null
 
   # It opens a page in its Space, clicks its link, scrolls a long page and takes a screenshot.
-  opened=$(call open_tab '{"url":"example.com"}')
+  opened=$(call open_tab "{\"url\":\"localhost:$port/agent.html\"}")
   case "$opened" in
-    "Opened tab "*"URL: https://example.com/"*) ;;
+    "Opened tab "*"URL: http://localhost:$port/agent.html"*) ;;
     *) fail "open_tab answered: $opened" ;;
   esac
   opened_tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
@@ -1621,17 +1627,17 @@ PY
   link=$(printf '%s\n' "$opened" | sed -n 's/.*- link "[^"]*" \[\(e[0-9]*\)\].*/\1/p' | head -1)
   clicked=$(call click "{\"tab\":$opened_tab,\"ref\":\"$link\"}")
   case "$clicked" in
-    "Clicked link"*"iana.org"*) ;;
-    *) fail "clicking example.com's link answered: $clicked" ;;
+    "Clicked link"*"two.html"*) ;;
+    *) fail "clicking agent.html's link answered: $clicked" ;;
   esac
   # Back to a page it saw before, whose entry kept its title, the tab's row takes that title again
   # (#1469).
-  titles=$(grep -c "^browser: title $opened_tab Example Domain\$" "$log" || true)
+  titles=$(grep -c "^browser: title $opened_tab Agent page\$" "$log" || true)
   went=$(call navigate "{\"tab\":$opened_tab,\"url\":\"back\"}")
-  case "$went" in "Went back."*"Example Domain"*) ;; *) fail "navigate back answered: $went" ;; esac
-  await_more "^browser: title $opened_tab Example Domain\$" "$titles" ||
-    fail "back on example.com, the tab kept the title of the page it left: $(grep "^browser: title $opened_tab " "$log" | tail -1)"
-  # example.com is shorter than the view, where a scroll says nothing moved (#1445), so the tab
+  case "$went" in "Went back."*"Agent page"*) ;; *) fail "navigate back answered: $went" ;; esac
+  await_more "^browser: title $opened_tab Agent page\$" "$titles" ||
+    fail "back on agent.html, the tab kept the title of the page it left: $(grep "^browser: title $opened_tab " "$log" | tail -1)"
+  # agent.html is shorter than the view, where a scroll says nothing moved (#1445), so the tab
   # goes on to a page taller than the view, whose heading the steps below wait for, and a scroll
   # down, the steps' scroll up and the one after Hand Back each move it.
   printf '%s' '<title>Long page</title><h1>Example Domain</h1>
@@ -1643,7 +1649,7 @@ PY
   picture=$(call screenshot "{\"tab\":$opened_tab}")
   case "$picture" in "image/jpeg "[1-9]*) ;; *) fail "screenshot answered: $picture" ;; esac
   # close_tab closes a tab of its own, which stays out of the user's archive (#1408).
-  opened=$(call open_tab '{"url":"example.com"}')
+  opened=$(call open_tab "{\"url\":\"localhost:$port/agent.html\"}")
   closing=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
   archived=$(sed -n 's/^browser: archive \([0-9]*\) tabs$/\1/p' "$log" | tail -1)
   closed=$(call close_tab "{\"tab\":$closing}")
@@ -1677,7 +1683,7 @@ PY
 
   # It pins a tab of its own, which list_tabs says it pinned, unpins it, pins it again and removes
   # it, to the archive. The user's tab isn't its to pin.
-  opened=$(call open_tab '{"url":"example.com"}')
+  opened=$(call open_tab "{\"url\":\"localhost:$port/agent.html\"}")
   pinning=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
   pinned=$(call pin_tab "{\"tab\":$pinning}")
   case "$pinned" in
@@ -1759,7 +1765,7 @@ CARD
   read -r sx sy sw _ <<STRIP
 $(grep "^browser: task strip $opened_tab at " "$log" | tail -1 | cut -d' ' -f6-)
 STRIP
-  # In the page, above the strip, where nothing on example.com takes the click. On X11 the host
+  # In the page, above the strip, where nothing on the page takes the click. On X11 the host
   # hears the display's own presses, which the driver's press makes; elsewhere its click is one.
   if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
     send handclick $((sx + sw / 2)) $((sy - 120))

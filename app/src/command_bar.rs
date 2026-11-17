@@ -408,6 +408,7 @@ fn command_glyph(command: shell::Command) -> &'static str {
         Command::FlipSplit => "icons/arrow-left-right.svg",
         Command::ToggleSidebar => "icons/panel-left.svg",
         Command::MoveSidebar => "icons/panel-right.svg",
+        Command::ToggleTopBar => "icons/panel-top.svg",
         Command::CapturePortion | Command::CaptureFullPage => "icons/camera.svg",
         Command::CapturePortrait | Command::CapturePortraitNow => "icons/image.svg",
         Command::SavePage => "icons/save.svg",
@@ -2744,6 +2745,7 @@ impl CommandBar {
                 let tip = Tip {
                     text: REMOVE_NAME.into(),
                     keys: remove_keys(),
+                    detail: SharedString::default(),
                 };
                 self.host
                     .tooltip(Some((tip, Anchor::under(frame, window))), cx);
@@ -3306,7 +3308,8 @@ impl CommandBar {
 
 impl CommandBar {
     /// A live region that says the selected row as it changes, a polite one, so typing's echo
-    /// comes first.
+    /// comes first. The Mac's AccessKit announces a region's value, and Windows' and Linux's its
+    /// name, so it has both (#3236).
     fn announcer(&self) -> impl IntoElement + use<> {
         div()
             .id("selected-suggestion")
@@ -3314,7 +3317,7 @@ impl CommandBar {
             .size_0()
             .role(Role::Status)
             .when_some(self.announced(), |announcer, said| {
-                announcer.aria_value(said)
+                announcer.aria_label(said.clone()).aria_value(said)
             })
             .a11y_synthetic_children(|builder| builder.parent_node().set_live(Live::Polite))
     }

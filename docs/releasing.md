@@ -56,6 +56,8 @@ From that squash until the release's branch is cut at its version commit, main t
 
    `--cleanup=verbatim` keeps the notes' `##` headings, which git's default cleanup strips as comment lines.
 
+   The notes needn't say who contributed: the draft's body ends with GitHub's list of the people whose first pull request is in the release, which the updater's text and the site's changelog don't have. The run's summary shows the list, a try's too.
+
    A quarantined line that is a bug a user can meet goes in the notes' Known gaps, and a check's own flake doesn't. The release run's summary lists both.
 
    A lightweight tag fails the run, since the notes come from the message. Running the workflow by hand before the tag exists tries the release: it builds everything, its notes say it isn't for publishing, and it makes no release.

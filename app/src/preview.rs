@@ -32,8 +32,8 @@ use browser::palette::{self, Palette, Tone};
 use browser::settings_card::Card;
 use browser::shell::{
     self, Archived, BarTab, Browser, Command, Download, DownloadAction, DownloadState, Folders,
-    Match, MediaAction, MenuBar, MenuEntry, Page, Shell, SpaceEntry, Split, Trouble, Visited,
-    Volume, WindowButton,
+    LiveAnswer, LiveItem, LiveList, LiveSource, Match, MediaAction, MenuBar, MenuEntry, Page,
+    PullState, Shell, SpaceEntry, Split, Trouble, Visited, Volume, WindowButton,
 };
 use browser::site_controls::{self, Connection, Permission, Site, Value};
 use browser::theme::{Appearance, Theme};
@@ -50,6 +50,8 @@ thread_local! {
     static PREVIEW_ORIGIN: Cell<Point<Pixels>> = Cell::new(point(px(0.), px(0.)));
     /// Whether the dialog's window has opened, the first time the preview asks something.
     static DIALOG_OPEN: Cell<bool> = const { Cell::new(false) };
+    /// Whether the tooltip's window has opened, where the first tooltip asked for hangs.
+    static TOOLTIP_OPEN: Cell<bool> = const { Cell::new(false) };
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -294,6 +296,78 @@ const DOWNLOADS: [(&str, &str, i64, i64, DownloadState, bool, f64); 6] = [
 const RUNNING: DownloadState = DownloadState::Running;
 const PAUSED: DownloadState = DownloadState::Paused;
 const DONE: DownloadState = DownloadState::Done;
+
+/// What the preview's Live Folder fetches, as PREVIEW_LIVE_FOLDER asks: made-up pull requests,
+/// the mock's (#2979), or with `signed-out` that answer. With `failed`, the next fetch fails.
+fn live_stand_in() -> LiveAnswer {
+    if std::env::var("PREVIEW_LIVE_FOLDER").as_deref() == Ok("signed-out") {
+        return LiveAnswer::SignedOut;
+    }
+    let item = |list, repo: &str, number, title: &str, state| LiveItem {
+        list,
+        repo: repo.to_string().into(),
+        number,
+        title: title.to_string().into(),
+        state,
+    };
+    use LiveList::{Created, ReviewRequests};
+    use PullState::{Draft, Open};
+    LiveAnswer::Items(vec![
+        item(
+            ReviewRequests,
+            "quill/editor",
+            412,
+            "Keep ⌘L in the split's own field",
+            Open,
+        ),
+        item(
+            ReviewRequests,
+            "harbor/web",
+            88,
+            "Cache favicons per profile",
+            Open,
+        ),
+        item(
+            Created,
+            "lantern/browser",
+            2961,
+            "Recent tabs switcher on a held ⌃Tab",
+            Open,
+        ),
+        item(
+            Created,
+            "lantern/browser",
+            2990,
+            "Idle check for Live Folders",
+            Draft,
+        ),
+        item(
+            Created,
+            "harbor/timetables",
+            57,
+            "Parse the ferry timetable's winter page",
+            Open,
+        ),
+    ])
+}
+
+/// The tabs PREVIEW_LIVE_FOLDER=states opens in the Live Folder, at their items' URLs: #2961,
+/// selected, and #57, merged since, so it has left the lists and its tab is a plain one.
+const LIVE_TABS: [(u64, &str, &str); 2] = [
+    (
+        9001,
+        "Recent tabs switcher on a held ⌃Tab · lantern/browser#2961",
+        "https://github.com/lantern/browser/pull/2961",
+    ),
+    (
+        9002,
+        "Parse the ferry timetable's winter page · harbor/timetables#57",
+        "https://github.com/harbor/timetables/pull/57",
+    ),
+];
+
+/// The preview's Live Folder's id, past every tab and folder it makes up.
+const LIVE_FOLDER: u64 = 9000;
 
 /// Reports the Space shown with `today` as its Today tabs.
 fn set_today(shell: &mut Shell, today: Vec<u64>, cx: &mut gpui::Context<Shell>) {
@@ -652,8 +726,29 @@ impl Browser for Fake {
     }
 
     // The preview's window has no host to take a drop.
-    fn open_at(&self, _: &[String], _: bool, _: u64, _: usize, _: &mut App) -> u64 {
-        0
+    // A Live Folder's row pressed: its item's tab opens in the folder and shows, as the core does.
+    fn open_at(&self, urls: &[String], _: bool, folder: u64, index: usize, cx: &mut App) -> u64 {
+        let pressed = LIVE_TABS
+            .iter()
+            .find(|(_, _, url)| urls.first().is_some_and(|each| each == url));
+        let Some(&(tab, title, url)) = pressed else {
+            return 0;
+        };
+        self.later(cx, move |shell, cx| {
+            let (mut pinned, mut folders) = (shell.pinned().to_vec(), shell.folders());
+            pinned.insert(pinned_at(&pinned, &folders, folder, index), tab);
+            folders.parents.insert(tab, folder);
+            let (today, splits) = (shell.today().to_vec(), shell.splits());
+            shell.set_tabs(shell.space(), pinned, today, splits, folders, cx);
+            shell.set_title(tab, title.into(), cx);
+            let page = Page {
+                url: url.into(),
+                ..Default::default()
+            };
+            shell.set_page(tab, page, cx);
+            shell.set_selected(tab, cx);
+        });
+        tab
     }
 
     fn open_behind(&self, _: &[String], _: bool, _: u64, _: usize, _: &mut App) {}
@@ -679,6 +774,57 @@ impl Browser for Fake {
     fn rename_folder(&self, folder: u64, name: &str, cx: &mut App) {
         let name: SharedString = name.to_string().into();
         self.change_folder(folder, cx, move |entry| entry.0 = name);
+    }
+
+    fn create_live_folder(&self, _: u64, source: LiveSource, name: &str, cx: &mut App) -> u64 {
+        let id = self.next_id.get();
+        self.next_id.set(id + 1);
+        let name: SharedString = name.to_string().into();
+        self.later(cx, move |shell, cx| {
+            let (mut pinned, mut folders) = (shell.pinned().to_vec(), shell.folders());
+            pinned.push(id);
+            folders.folders.insert(id, (name, true));
+            folders.live.insert(id, source);
+            let (today, splits) = (shell.today().to_vec(), shell.splits());
+            shell.set_tabs(shell.space(), pinned, today, splits, folders, cx);
+        });
+        id
+    }
+
+    fn end_live_folder(&self, folder: u64, cx: &mut App) {
+        self.later(cx, move |shell, cx| {
+            let mut folders = shell.folders();
+            folders.live.remove(&folder);
+            let (pinned, today) = (shell.pinned().to_vec(), shell.today().to_vec());
+            let splits = shell.splits();
+            shell.set_tabs(shell.space(), pinned, today, splits, folders, cx);
+        });
+    }
+
+    // The stand-in for the core's fetch: the mock's made-up pull requests, or with
+    // PREVIEW_LIVE_FOLDER=signed-out or failed, that answer.
+    fn fetch_live_folder(&self, folder: u64, _: LiveSource, _: bool, cx: &mut App) {
+        let answer = live_stand_in();
+        let mode = std::env::var("PREVIEW_LIVE_FOLDER").unwrap_or_default();
+        let now = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH);
+        let now = now.unwrap_or_default().as_millis() as i64;
+        self.later(cx, move |shell, cx| match (mode.as_str(), answer) {
+            // The rows came 12 minutes ago; the refresh now didn't.
+            ("failed", answer) => {
+                shell.set_live_answer(folder, answer, now - 12 * 60 * 1000, cx);
+                shell.set_live_answer(folder, LiveAnswer::Failed, now, cx);
+            }
+            // The answer before had no #412, so it's new, and #57 has merged since, so this one
+            // has left it out.
+            ("states", LiveAnswer::Items(items)) => {
+                let before = items.iter().filter(|item| item.number != 412);
+                let before = LiveAnswer::Items(before.cloned().collect());
+                let after = items.into_iter().filter(|item| item.number != 57);
+                shell.set_live_answer(folder, before, now, cx);
+                shell.set_live_answer(folder, LiveAnswer::Items(after.collect()), now, cx);
+            }
+            (_, answer) => shell.set_live_answer(folder, answer, now, cx),
+        });
     }
 
     fn set_folder_icon(&self, folder: u64, icon: &str, cx: &mut App) {
@@ -843,8 +989,9 @@ impl Browser for Fake {
         0
     }
 
-    fn pinned_url(&self, _: u64) -> String {
-        String::new()
+    fn pinned_url(&self, tab: u64) -> String {
+        let live = LIVE_TABS.iter().find(|&&(each, ..)| each == tab);
+        live.map(|(_, _, url)| url.to_string()).unwrap_or_default()
     }
 
     fn set_pinned_url(&self, _: u64, _: &str, _: &mut App) {}
@@ -1847,10 +1994,31 @@ impl Browser for Fake {
     // The toast is a window over the page, which the preview has neither of.
     fn hang_note(&self, _: u64, _: bool, _: &mut App) {}
 
-    // The tooltip's window is the app's, over the page, which the preview has neither of.
-    fn tooltip(&self, _: Option<(browser::tooltip::Tip, browser::tooltip::Anchor)>, _: &mut App) {}
+    // The tooltip's window is the app's, over the page, which the preview has neither of, but with
+    // PREVIEW_HOVER the preview opens it on its own, for its look, where the first tooltip asked for
+    // hangs, as the preview's host can't move one.
+    fn tooltip(
+        &self,
+        tip: Option<(browser::tooltip::Tip, browser::tooltip::Anchor)>,
+        cx: &mut App,
+    ) {
+        if let Some((_, anchor)) = &tip
+            && std::env::var_os("PREVIEW_HOVER").is_some()
+            && !TOOLTIP_OPEN.replace(true)
+        {
+            use browser::tooltip::{WINDOW_HEIGHT, WINDOW_WIDTH};
+            let (left, top) = browser::tooltip::place(*anchor, (WINDOW_WIDTH, WINDOW_HEIGHT));
+            let margin = browser::elevation::WINDOW_MARGIN;
+            let at = point(px(left - margin), px(top - margin));
+            browser::tooltip::open_at(Rc::new(PreviewTooltip), PREVIEW_ORIGIN.get() + at, true, cx);
+        }
+        match tip {
+            Some((tip, anchor)) => browser::tooltip::hover(0, tip, anchor, cx),
+            None => browser::tooltip::dismiss(cx),
+        }
+    }
 
-    // So is the hover card's, and there's no engine to picture a page.
+    // The hover card's window is the app's too, and there's no engine to picture a page.
     fn hover_card(&self, _: browser::hover_card::Hover, _: &mut App) {}
 
     // And the folder preview's.
@@ -1942,6 +2110,19 @@ impl Browser for Fake {
     // So the onboarding shows its step for it.
     fn is_default_browser(&self) -> bool {
         false
+    }
+
+    // The US's list as the core gives it, Google last, so the onboarding shows its step.
+    fn search_engines(&self, _: u64) -> (Vec<(SharedString, SharedString)>, SharedString) {
+        let engines = [
+            ("duckduckgo.com", "DuckDuckGo"),
+            ("search.brave.com", "Brave"),
+            ("bing.com", "Microsoft Bing"),
+            ("ecosia.org", "Ecosia"),
+            ("google.com", "Google"),
+        ];
+        let engines = engines.map(|(keyword, name)| (keyword.into(), name.into()));
+        (engines.to_vec(), "duckduckgo.com".into())
     }
 
     fn crash_reports(&self, _: &App) -> Option<bool> {
@@ -2525,6 +2706,10 @@ fn main() {
             if std::env::var_os("PREVIEW_SIDEBAR_RIGHT").is_some() {
                 cx.set_global(shell::SidebarRight(true));
             }
+            // PREVIEW_TOP_BAR=1 starts with Settings' Top bar on.
+            if std::env::var_os("PREVIEW_TOP_BAR").is_some() {
+                cx.set_global(shell::TopBar(true));
+            }
             // PREVIEW_UPDATE=ready or =available shows the update banner on a made-up 0.1.5, opened
             // as under the pointer with =ready-open or =available-open, and PREVIEW_UPDATE_CHECKS=off
             // as with the updater's automatic checks off.
@@ -2785,6 +2970,36 @@ fn main() {
                         ..Split::default()
                     };
                     shell.set_tabs(first_space, pinned, today, vec![split], folders, cx);
+                    // PREVIEW_LIVE_FOLDER=open, closed, signed-out, failed or states adds a Live Folder of
+                    // pull requests after the pinned tabs, as the Space's menu makes one (#2979).
+                    if let Ok(live) = std::env::var("PREVIEW_LIVE_FOLDER") {
+                        let made = LIVE_FOLDER;
+                        let mut folders = shell.folders();
+                        folders
+                            .folders
+                            .insert(made, ("Pull Requests".into(), live != "closed"));
+                        folders.live.insert(made, LiveSource::PullRequests);
+                        let mut pinned = shell.pinned().to_vec();
+                        pinned.push(made);
+                        if live == "states" {
+                            for (tab, ..) in LIVE_TABS {
+                                pinned.push(tab);
+                                folders.parents.insert(tab, made);
+                            }
+                        }
+                        let (today, splits) = (shell.today().to_vec(), shell.splits());
+                        shell.set_tabs(first_space, pinned, today, splits, folders, cx);
+                        if live == "states" {
+                            for (tab, title, url) in LIVE_TABS {
+                                shell.set_title(tab, title.into(), cx);
+                                let page = Page {
+                                    url: url.into(),
+                                    ..Default::default()
+                                };
+                                shell.set_page(tab, page, cx);
+                            }
+                        }
+                    }
                     let reading: Vec<u64> = (folder + 1..).take(READING.len()).collect();
                     let (pinned, today) = (reading[..1].to_vec(), reading[1..].to_vec());
                     shell.set_tabs(
@@ -2875,6 +3090,10 @@ fn main() {
                         (None, _) if agent.is_some() => shell.set_selected(reading[0], cx),
                         (None, Some(&tab)) => shell.set_selected(tab, cx),
                         (None, None) => shell.set_selected(1, cx),
+                    }
+                    // A Live Folder's tab is the one selected, as the mock's #2961 is.
+                    if std::env::var("PREVIEW_LIVE_FOLDER").as_deref() == Ok("states") {
+                        shell.set_selected(LIVE_TABS[0].0, cx);
                     }
                     // PREVIEW_TRANSLATE=<language> says the made-up pages are in that language,
                     // so the URL field offers to translate them.
@@ -3230,6 +3449,21 @@ fn main() {
                     preview_menu(shell.into(), bounds, &what, gpui::MouseButton::Right, cx);
                 }
             }
+            // PREVIEW_HOVER=<x>,<y> rests the pointer there in the window, as on a folder's row, and
+            // shows the tooltip that brings in a window of its own, which sway places on Wayland.
+            if let Ok(what) = std::env::var("PREVIEW_HOVER") {
+                if let Some(shell) = shell_window {
+                    preview_hover(shell.into(), &what, cx);
+                }
+            }
+            // PREVIEW_PRESS=<x>,<y>[,<ms>] presses there in the window, as on a Live Folder's row,
+            // half a second in or <ms> in, and takes the pointer off the sidebar after, so no row
+            // is hovered.
+            if let Ok(what) = std::env::var("PREVIEW_PRESS") {
+                if let Some(shell) = shell_window {
+                    preview_press(shell.into(), &what, cx);
+                }
+            }
             // PREVIEW_CLICK=<x>,<y> clicks there in the window, as on an archived tab's row.
             if let Ok(what) = std::env::var("PREVIEW_CLICK") {
                 if let Some(shell) = shell_window {
@@ -3308,6 +3542,96 @@ fn preview_menu(
             })
             .ok();
         press_keys(window, keys, cx).await;
+    })
+    .detach();
+}
+
+struct PreviewTooltip;
+
+impl browser::tooltip::Host for PreviewTooltip {
+    fn show(&self, _: browser::tooltip::Over, _: f32, _: f32) {}
+
+    fn hide(&self) {}
+}
+
+/// Moves the pointer to `what`, an x and a y in the shell's window, once its rows are drawn, and
+/// once the tooltip's window that the first move opened is on screen, off onto the page and back:
+/// its coming ends the tooltip it came for, as the pointer leaving on X11 and the row's hover read
+/// again on Windows, and only coming onto the row again asks for it.
+fn preview_hover(shell: gpui::AnyWindowHandle, what: &str, cx: &mut App) {
+    let mut parts = what.split(',').map(|part| part.trim().parse::<f32>().ok());
+    let (Some(Some(x)), Some(Some(y))) = (parts.next(), parts.next()) else {
+        return;
+    };
+    let page = f32::from(PREVIEW_AREA.get().width) - 10.;
+    cx.spawn(async move |cx| {
+        for (wait, x) in [(500, x), (300, page), (100, x)] {
+            cx.background_executor()
+                .timer(Duration::from_millis(wait))
+                .await;
+            let moved = gpui::MouseMoveEvent {
+                position: point(px(x), px(y)),
+                pressed_button: None,
+                modifiers: gpui::Modifiers::default(),
+            };
+            shell
+                .update(cx, |_, window, cx| {
+                    window.dispatch_event(gpui::PlatformInput::MouseMove(moved), cx)
+                })
+                .ok();
+        }
+    })
+    .detach();
+}
+
+fn preview_press(shell: gpui::AnyWindowHandle, what: &str, cx: &mut App) {
+    let mut parts = what.split(',').map(|part| part.trim().parse::<f32>().ok());
+    let (Some(Some(x)), Some(Some(y))) = (parts.next(), parts.next()) else {
+        return;
+    };
+    // Once the folder's rows are drawn, whose boxes the press finds, or later, for frames of it.
+    let after = parts.next().flatten().map_or(500, |ms| ms as u64);
+    let page = f32::from(PREVIEW_AREA.get().width) - 10.;
+    cx.spawn(async move |cx| {
+        cx.background_executor()
+            .timer(Duration::from_millis(after))
+            .await;
+        let (position, modifiers) = (point(px(x), px(y)), gpui::Modifiers::default());
+        let button = gpui::MouseButton::Left;
+        let events = [
+            gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                position,
+                pressed_button: None,
+                modifiers,
+            }),
+            gpui::PlatformInput::MouseDown(gpui::MouseDownEvent {
+                button,
+                position,
+                modifiers,
+                click_count: 1,
+                first_mouse: false,
+            }),
+            gpui::PlatformInput::MouseUp(gpui::MouseUpEvent {
+                button,
+                position,
+                modifiers,
+                click_count: 1,
+            }),
+            gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                position: point(px(page), px(y)),
+                pressed_button: None,
+                modifiers,
+            }),
+        ];
+        // tools/parity.sh times the press's frames from this line.
+        log!("browser: preview press");
+        shell
+            .update(cx, |_, window, cx| {
+                for event in events {
+                    window.dispatch_event(event, cx);
+                }
+            })
+            .ok();
     })
     .detach();
 }

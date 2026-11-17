@@ -7,7 +7,9 @@
 # gives the first Space the swatch picked, and the last step leaves the flow for the first Space's
 # welcome with the command bar up and a line under it. The default browser's step shows only while
 # ilo isn't the default, and is skipped everywhere but a Linux CI VM, where its button makes ilo
-# the default for a moment, so the run never changes a desk's. The opt-ins' shows always, with
+# the default for a moment, so the run never changes a desk's. The search engine's comes after it
+# with the profile's list: Esc sets none, and the dark pass's ↓ and Return set the engine after the
+# default, as Settings' pop-up does. The opt-ins' shows always, with
 # the agents' switch, as every build has their server, and the daily count's, off, as the run
 # names an endpoint; the dark pass turns the agents' on in its new profile and sees their server
 # start, and turns the count's on and off again from the keyboard. The account's comes between
@@ -104,6 +106,7 @@ for each in $steps; do
 done
 expect '^browser: onboarding done$' "light: the flow didn't end after its last step"
 grep -q '^browser: onboarding picked color ' "$log" && fail "light: Esc at the colour step gave the Space one"
+grep -q '^browser: profile [0-9]* searches with ' "$log" && fail "light: Esc at the search engine step set one"
 expect '^browser: command new-tab via onboarding$' "light: the flow didn't end with the command bar"
 expect '^browser: command bar shown$' "light: the command bar didn't come up after the flow"
 capture_step light-in
@@ -251,6 +254,16 @@ case " $steps " in
       [ "$(uname)" != Linux ] || [ -z "${GITHUB_ACTIONS:-}" ] ||
         echo "skip: onboarding's default browser button. The VM has no xdg-settings."
     fi
+    ;;
+esac
+case " $steps " in
+  *" search-engine "*)
+    expect '^browser: onboarding step search-engine settled$' "dark: the search engine step didn't come"
+    capture_step dark-search-engine
+    send key down
+    send key return
+    expect '^browser: profile [0-9]* searches with ' "dark: ↓ and Return didn't set the engine after the default"
+    expect '^browser: onboarding left search-engine via return$' "dark: Return didn't leave the search engine step"
     ;;
 esac
 expect '^browser: onboarding step color settled$' "dark: the colour step didn't come"

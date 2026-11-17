@@ -16,10 +16,15 @@
 # over the page's bottom, as pointing's, whose keys read as this system's menus write them (#2380),
 # Settings › Agents' Model menu for Claude, Sonnet chosen, and for Codex, on Default, Default naming
 # its model, light and dark (#2455), and the safe-start card at the sidebar's foot, light and dark,
-# and in the narrowest sidebar with ad blocking off (#2345), and the footer's menu control, which
-# only Linux and Windows draw, at rest and with its menu open above it, light and dark (#3148). The
-# preview's Linux host places no window, so sway puts Site Controls and the icon picker in the
-# middle rather than where the Mac's host would.
+# and in the narrowest sidebar with ad blocking off (#2345), a Live Folder of made-up pull
+# requests, open light and dark, closed with its count, signed out and after a failed refresh,
+# light and dark, with its tooltip then, the Space's menu with Live Folders open, light and dark,
+# the folder's menu, and in the narrowest sidebar, and frames of a press on its row, 4 s in, for a
+# video of it (#2979), on Wayland, and the footer's menu control, which only Linux and Windows draw,
+# at rest and with its menu open above it, light and dark (#3148), and the top bar, with the
+# sidebar on the left and on the right (#3160). The preview's Linux host places no window, so sway
+# puts Site Controls, the icon picker and the tooltip in the middle rather than where the Mac's
+# host would.
 # It reports: a screen that won't capture is a gap in the sheet and a line on stderr, never a
 # failure.
 # Usage: tools/parity.sh <preview> <output directory>
@@ -63,6 +68,23 @@ screens=(
   "app-menu-rest-dark|drawn at|PREVIEW_APPEARANCE=dark"
   "app-menu-light|menu shown|PREVIEW_APPEARANCE=light PREVIEW_CLICK=170,775"
   "app-menu-dark|menu shown|PREVIEW_APPEARANCE=dark PREVIEW_CLICK=170,775"
+  "live-folder-light|live folder 9000 answered|PREVIEW_LIVE_FOLDER=open PREVIEW_APPEARANCE=light"
+  "live-folder-dark|live folder 9000 answered|PREVIEW_LIVE_FOLDER=open PREVIEW_APPEARANCE=dark"
+  "live-folder-closed|live folder 9000 answered|PREVIEW_LIVE_FOLDER=closed"
+  "live-folder-signed-out|live folder 9000 answered|PREVIEW_LIVE_FOLDER=signed-out"
+  "live-folder-signed-out-dark|live folder 9000 answered|PREVIEW_LIVE_FOLDER=signed-out PREVIEW_APPEARANCE=dark"
+  "live-folder-failed|live folder 9000 answered failed|PREVIEW_LIVE_FOLDER=failed"
+  "live-folder-failed-dark|live folder 9000 answered failed|PREVIEW_LIVE_FOLDER=failed PREVIEW_APPEARANCE=dark"
+  "live-folder-tooltip|tooltip drawn|PREVIEW_LIVE_FOLDER=failed PREVIEW_HOVER=90,386"
+  "live-folder-space-menu|menu submenu Live .olders drawn|PREVIEW_LIVE_FOLDER=open PREVIEW_MENU=40,221,l,right"
+  "live-folder-space-menu-dark|menu submenu Live .olders drawn|PREVIEW_LIVE_FOLDER=open PREVIEW_APPEARANCE=dark PREVIEW_MENU=40,221,l,right"
+  "live-folder-menu|menu shown|PREVIEW_LIVE_FOLDER=open PREVIEW_MENU=90,386"
+  "live-folder-narrow|live folder 9000 answered|PREVIEW_LIVE_FOLDER=open PREVIEW_SIDEBAR=164"
+  "live-folder-states-light|live folder 9000 answered|PREVIEW_LIVE_FOLDER=states PREVIEW_APPEARANCE=light"
+  "live-folder-states-dark|live folder 9000 answered|PREVIEW_LIVE_FOLDER=states PREVIEW_APPEARANCE=dark"
+  "live-folder-press|selected 9001|PREVIEW_LIVE_FOLDER=open PREVIEW_APPEARANCE=light PREVIEW_PRESS=100,553"
+  "top-bar|drawn at|PREVIEW_TOP_BAR=1"
+  "top-bar-right|drawn at|PREVIEW_TOP_BAR=1 PREVIEW_SIDEBAR_RIGHT=1"
 )
 case $(uname -s) in
   MINGW* | MSYS*) systems=(windows) drag= ;;
@@ -109,6 +131,39 @@ for screen in "${screens[@]}"; do
     tiles+=(-label "$name, $system" "$png")
   done
 done
+# The frames: grim as fast as it goes once the folder's rows are still, to 2 s after the press,
+# which the preview logs, named by the ms since the first, with the press's ms in press. A press
+# before the first frame, or none in 10 s, is no capture, never frames that missed it.
+if [ "${systems[0]}" = wayland ]; then
+  frames=$out/wayland/live-folder-press-frames
+  mkdir -p "$frames"
+  # shellcheck disable=SC2016 # headless.sh runs it, with LOG its program's log.
+  grab='set -e
+    ms() { date +%s%3N; }
+    ! grep -q "^browser: preview press$" "$LOG" || { echo "pressed before the first frame" >&2; exit 1; }
+    start=$(ms) pressed= n=0
+    while [ -z "$pressed" ] || [ $(($(ms) - pressed)) -lt 2000 ]; do
+      [ $(($(ms) - start)) -lt 10000 ] || { echo "no press in 10 s" >&2; exit 1; }
+      grim "$FRAMES/frame-$n.png"
+      echo "$n $(ms)" >> "$FRAMES/times"
+      n=$((n + 1))
+      [ -n "$pressed" ] || ! grep -q "^browser: preview press$" "$LOG" || pressed=$(ms)
+    done
+    [ "$n" -gt 1 ] && [ "$(head -1 "$FRAMES/times" | cut -d" " -f2)" -lt "$pressed" ] ||
+      { echo "no frame before the press" >&2; exit 1; }
+    first=$(head -1 "$FRAMES/times" | cut -d" " -f2)
+    while read -r i at; do
+      mv "$FRAMES/frame-$i.png" "$FRAMES/$(printf %05d $((at - first))).png"
+    done < "$FRAMES/times"
+    echo $((pressed - first)) > "$FRAMES/press"
+    rm "$FRAMES/times"'
+  if ! (export PREVIEW_SIZE=1280x800 PREVIEW_LIVE_FOLDER=open PREVIEW_APPEARANCE=light \
+    PREVIEW_PRESS=100,553,4000 FRAMES="$frames" &&
+    timeout 90 "$here/headless.sh" --moving 400 --then "$grab" "$frames/start.png" \
+      'live folder 9000 answered' "$preview" > "$out/wayland/live-folder-press-frames.log" 2>&1); then
+    missing+=("wayland/live-folder-press-frames")
+  fi
+fi
 "${montage[@]}" -font "$face" -pointsize 20 -fill white -background '#101010' -tile 2x \
   -geometry +12+12 "${tiles[@]}" "$out/sheet.png"
 echo "$out/sheet.png"

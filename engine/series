@@ -91,6 +91,7 @@ ours/chromium-shared-dictionary-wal.patch
 ours/chromium-scrollbar-thumb-fast-corner.patch
 ours/chromium-link-alt-click-threshold.patch
 ours/chromium-toast-no-anchor.patch
+ours/chromium-core-tab-dialog-behind.patch
 # mac/: applied only to the Mac's tree (setup.sh and build.sh say so), after the rest.
 mac/chromium-crashpad-mac-handler.patch
 mac/chromium-crashpad-mac-async-start.patch

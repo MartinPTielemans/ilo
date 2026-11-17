@@ -1421,6 +1421,21 @@ fn an_agent_chooses_an_option_by_its_text(cx: &mut TestAppContext) {
         missed.text
     );
 
+    // A line break in the option goes to the core as it was asked, and the answer says it on one
+    // line.
+    let choose = json!({ "tab": 20, "ref": "e1", "option": "5\n1" });
+    let answer = call(&agents, "claude-code", "select", choose, cx);
+    let (.., text) = browser.pages.borrow().last().cloned().unwrap();
+    assert_eq!(text, "5\n1");
+    let missed = page_done(&agents, &browser, answer, answered(None), cx);
+    assert!(
+        missed
+            .text
+            .starts_with("Chose “5 1” in the combobox “Status”. It doesn't"),
+        "{}",
+        missed.text
+    );
+
     let pages = browser.pages.borrow().len();
     for wrong in [
         json!({ "tab": 20, "ref": "e1" }),
@@ -1458,7 +1473,8 @@ fn an_agent_chooses_an_option_by_its_text(cx: &mut TestAppContext) {
     );
 
     let pages = browser.pages.borrow().len();
-    let paying = json!({ "tab": 20, "ref": "e2", "option": "Pay now" });
+    // The user's question says the option on one line, its line break a space.
+    let paying = json!({ "tab": 20, "ref": "e2", "option": "Pay\u{2028}now" });
     let _answer = call(&agents, "claude-code", "select", paying, cx);
     let question = browser
         .asked
@@ -4861,6 +4877,43 @@ mod tasks {
         );
     }
 
+    /// A step that chose an option with a line break in it says it on one line, as the card's
+    /// status and the trace's title are a line each.
+    #[gpui::test]
+    fn a_chosen_options_line_break_makes_no_second_line_of_the_step(cx: &mut TestAppContext) {
+        let (agents, browser) = ready(None, cx);
+        let agent = start(&agents, "Use the coupon", cx);
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Working
+        });
+        browser
+            .tabs
+            .borrow_mut()
+            .push((30, 100, "Shop", "https://shop.example/basket"));
+        let snapshot = json!({ "tab": 30 });
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "snapshot",
+            snapshot,
+            Some(shop_tree()),
+            cx,
+        );
+        let choose = json!({ "tab": 30, "ref": "e1", "option": "SPRING\n10" });
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "select",
+            choose,
+            Some(shop_tree()),
+            cx,
+        );
+        let status = card_of(&agents, cx).status.to_string();
+        assert_eq!(status, "Step 2 · Chose “SPRING 10” in “Coupon”");
+    }
+
     /// A task's calls are its conversation's trace, each titled by what it did and opening to what
     /// it saw or why it failed. What it typed shows, but never what it typed into a password
     /// field, though the field refused it.
@@ -4958,6 +5011,78 @@ mod tasks {
         );
     }
 
+    /// A close the page asked to stay through reads as the tab left open, not as a failure, and the
+    /// discard after it as closed without saving, among a plain close's line (#3256).
+    #[gpui::test]
+    fn a_close_the_page_kept_reads_as_kept_not_failed(cx: &mut TestAppContext) {
+        use crate::agents::task::{Line, Opens, TraceItem};
+        let (agents, browser) = ready(None, cx);
+        let agent = start(&agents, "Tidy my tabs", cx);
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Working
+        });
+        // The agent opens the draft, and the basket is another tab in its Space.
+        let url = json!({ "url": "https://docs.example/draft" });
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "open_tab",
+            url,
+            Some(shop_tree()),
+            cx,
+        );
+        let (draft, space, ..) = *browser.tabs.borrow().last().unwrap();
+        let basket = draft + 1;
+        let shop = (basket, space, "Shop", "https://shop.example/basket");
+        browser.tabs.borrow_mut().push(shop);
+        browser.asks.borrow_mut().insert(draft);
+        let mut close =
+            |arguments: Value| traced(&agents, &browser, &agent, "close_tab", arguments, None, cx);
+        assert!(!close(json!({ "tab": basket })).error);
+        assert!(
+            close(json!({ "tab": draft })).error,
+            "the page asked to stay"
+        );
+        let discard = close(json!({ "tab": draft, "discard": true }));
+        assert_eq!(discard.text, format!("Closed tab {draft} without saving."));
+
+        let conversation =
+            agents.read_with(cx, |agents, cx| agents.conversation(&agent, cx).unwrap());
+        let [Line::Trace(trace)] = conversation.lines.as_slice() else {
+            panic!("{:?}", conversation.lines)
+        };
+        let closes: Vec<_> = (trace.items.iter())
+            .filter_map(|item| match item {
+                TraceItem::Step(step)
+                    if step.title.starts_with("Closed") || step.title.starts_with("Left") =>
+                {
+                    Some(step)
+                }
+                _ => None,
+            })
+            .collect();
+        let lines: Vec<_> = (closes.iter())
+            .map(|step| (step.title.as_ref(), step.description.as_ref(), step.failed))
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                ("Closed shop.example", "", false),
+                (
+                    "Left docs.example open",
+                    "asked to stay: unsaved changes",
+                    false
+                ),
+                ("Closed docs.example without saving", "", false),
+            ]
+        );
+        assert!(
+            matches!(closes[1].opens, Opens::Nothing),
+            "it opened to what the agent was told"
+        );
+    }
+
     /// An open's line titles its site alone and opens to its whole address.
     #[gpui::test]
     fn an_open_line_titles_its_site_and_opens_to_its_address(cx: &mut TestAppContext) {
@@ -5027,6 +5152,7 @@ mod tasks {
             ended: Some(now),
             error: Some("Timed out waiting for the page.".into()),
             picture: None,
+            close: None,
         };
         let lines = fold(&[], &[failed], true, false, None);
         let [Line::Trace(trace)] = lines.as_slice() else {
@@ -5194,6 +5320,7 @@ mod tasks {
             ended: ended.map(at),
             error: None,
             picture: None,
+            close: None,
         };
         let mut messages = vec![message(Who::User, "Museum hours", 0)];
         let mut trace = vec![step("open_tab", 1, 1, Some(3))];
@@ -5262,6 +5389,7 @@ mod tasks {
             ended: Some(at(3)),
             error: None,
             picture: None,
+            close: None,
         }];
         let mut messages = vec![
             message(Who::User, "Museum hours", 0),
@@ -5298,6 +5426,7 @@ mod tasks {
             ended: Some(at(seconds + 1)),
             error: None,
             picture: None,
+            close: None,
         };
         let messages = [Message {
             who: Who::User,

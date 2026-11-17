@@ -137,20 +137,20 @@ expect '^browser: library shown$' "⇧⌘J didn't open the Library"
 send key j cmd shift
 expect '^browser: library hidden$' "⇧⌘J again didn't close the Library"
 # Tab a goes to two pages and back to the first, so it has pages to go forward to.
-go_from_bar example.com
-expect_page example.com 1 0 "after loading a page"
-go_from_bar example.org
-expect_page example.org 1 0 "after loading another"
+go_from_bar "http://localhost:$port/one.html"
+expect_page "http://localhost:$port/one.html" 1 0 "after loading a page"
+go_from_bar "http://localhost:$port/two.html"
+expect_page "http://localhost:$port/two.html" 1 0 "after loading another"
 history_key left back page
-expect_page example.com 1 1 "after going back"
+expect_page "http://localhost:$port/one.html" 1 1 "after going back"
 history_key left back page
 expect "^browser: page $a back 0 forward 1 loading 0 $site\$" \
   "tab a didn't go back to the first page"
-open_from_bar example.net
+open_from_bar "http://localhost:$port/three.html"
 c=$tab
-open_from_bar example.org
+open_from_bar "http://localhost:$port/two.html"
 send key w cmd
-expect_tabs "$c $a" "$c" "after ⌘W closed the tab for example.org"
+expect_tabs "$c $a" "$c" "after ⌘W closed the tab for two.html"
 send menu New Space…
 expect "^browser: spaces $first [0-9]*\$" "New Space didn't make a second Space"
 second=$(grep '^browser: spaces' "$log" | tail -1 | cut -d' ' -f4)
@@ -159,14 +159,14 @@ send key return
 expect "^browser: create space $second reading list\$" "return didn't name the Space"
 send key t cmd
 expect '^browser: command bar shown$' "⌘T in the new Space didn't open the command bar"
-send type example.com
+send type "http://localhost:$port/one.html"
 send key return
-expect '^browser: today [0-9][0-9]*$' "the tab for example.com didn't open in the new Space"
+expect '^browser: today [0-9][0-9]*$' "the tab for one.html didn't open in the new Space"
 e=$(today)
-expect "^browser: loaded $e https://example.com/\$" "example.com didn't load in the new Space's tab"
+expect "^browser: loaded $e http://localhost:$port/one.html\$" "one.html didn't load in the new Space's tab"
 post rightclick 100 112
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, $profile, \
-New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+New Folder…, Live Folders › GitHub Pull Requests, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "the Space's menu didn't offer its theme"
 # The theme picker's pink swatch, and + for a second colour, which a relaunch brings back.
 choose_drawn "$(cased 'Edit Theme Color…')"
@@ -186,7 +186,7 @@ expect '^browser: theme picker hidden$' "escape didn't close the theme picker"
 # search and picked with ↩, which a relaunch brings back.
 post rightclick 100 112
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $profile, \
-New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" "the Space's menu didn't offer Change Icon…"
+New Folder…, Live Folders › GitHub Pull Requests, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" "the Space's menu didn't offer Change Icon…"
 choose_drawn "$(cased 'Change Space Icon…')"
 expect "^browser: icon picker for $second on icon\$" "Change Icon… didn't open the icon picker"
 expect '^browser: icon picker shown$' "Change Icon… didn't show the icon picker"
@@ -269,7 +269,7 @@ post choose Quit
 exec 3>&-
 exited
 
-# Launched again, the app shows the first Space with the tab for example.net, and tab a under it
+# Launched again, the app shows the first Space with the tab for three.html, and tab a under it
 # at the served page, unloaded.
 log="$out/restored.log"
 step=0
@@ -300,9 +300,9 @@ await '^browser: today [0-9]* [0-9]*$' || fail "the first Space didn't come back
 c=$(today | cut -d' ' -f1)
 a=$(today | cut -d' ' -f2)
 await "^browser: selected $c\$" || fail "the first Space didn't show the tab it showed last"
-await "^browser: loaded $c https://example.net/\$" || fail "the tab shown didn't load"
+await "^browser: loaded $c http://localhost:$port/three.html\$" || fail "the tab shown didn't load"
 await "^browser: title $c news\$" || fail "the tab came back without its name"
-grep -q "^browser: title $c Example Domain\$" "$log" &&
+grep -q "^browser: title $c Three\$" "$log" &&
   fail "the tab's page's title took its name's place"
 await "^browser: page $c icon 🦊\$" || fail "the tab came back without its icon"
 await "^browser: page $a back 0 forward 1 loading 0 $site\$" ||
@@ -311,9 +311,9 @@ await "^browser: title $a ready\$" || fail "tab a didn't come back with its titl
 await "^browser: favicon $a [1-9][0-9]* bytes\$" || fail "tab a didn't come back with its favicon"
 grep -q "^browser: loaded $a " "$log" && fail "tab a loaded without being shown"
 grep -q "browser: tab $a without its page\$" "$log" || fail "tab a came back with a page, unshown"
-await '^browser: page [0-9]* back 0 forward 0 loading 0 https://example.com/$' ||
-  fail "the second Space's tab didn't come back at example.com"
-e=$(grep -m1 '^browser: page [0-9]* back 0 forward 0 loading 0 https://example.com/$' "$log" | cut -d' ' -f3)
+await "^browser: page [0-9]* back 0 forward 0 loading 0 http://localhost:$port/one.html\$" ||
+  fail "the second Space's tab didn't come back at one.html"
+e=$(grep -m1 "^browser: page [0-9]* back 0 forward 0 loading 0 http://localhost:$port/one.html\$" "$log" | cut -d' ' -f3)
 grep -q "^browser: loaded $e " "$log" && fail "the second Space's tab loaded without being shown"
 ../tools/window-screenshot.sh "$pid" "$out/restored.png" || fail "no window to capture"
 await '^browser: archive 1 tabs$' || fail "the relaunch didn't bring back the archived tab"
@@ -349,7 +349,7 @@ choose_drawn Rename…
 expect "^browser: rename tab $c\$" "Rename… didn't turn the tab's title into a field"
 send key backspace
 send key return
-expect "^browser: title $c Example Domain\$" \
+expect "^browser: title $c Three\$" \
   "taking the name out didn't give the tab back its page's title"
 # A conversion in the picker's search is the input method's, ↩ included, and once committed it
 # finds no emoji, so ↩ picks nothing. Escape closes the picker with the icon as it was.
@@ -417,11 +417,11 @@ archived_preview() {
   press_archived
   expect '^browser: archived [0-9][0-9]* in preview$' "a click on the archived tab didn't preview it"
   none_since '^browser: restore archived' || fail "a click on the archived tab restored it at once"
-  expect '^browser: link preview [1-9][0-9]* https://example.org/$' \
+  expect "^browser: link preview [1-9][0-9]* http://localhost:$port/two.html\$" \
     "the archived tab's preview didn't open at its page"
-  p=$(grep '^browser: link preview [1-9][0-9]* https://example.org/$' "$log" | tail -1 | cut -d' ' -f4)
+  p=$(grep "^browser: link preview [1-9][0-9]* http://localhost:$port/two.html\$" "$log" | tail -1 | cut -d' ' -f4)
   expect '^browser: link preview settled$' "the archived tab's preview didn't settle"
-  expect "^browser: loaded $p https://example.org/\$" "the archived tab's preview didn't load its page"
+  expect "^browser: loaded $p http://localhost:$port/two.html\$" "the archived tab's preview didn't load its page"
   ../tools/window-screenshot.sh "$pid" "$out/archive-preview-$1.png" || fail "no window to capture"
 }
 archived_preview dark
@@ -442,7 +442,7 @@ expect "^browser: today $p $c $a\$" \
 expect "^browser: selected $p\$" "the tab from the archive isn't shown"
 expect '^browser: archive 0 tabs$' "the tab kept from the preview stayed in the archive"
 expect '^browser: library hidden$' "keeping the archived tab's preview didn't close the Library"
-grep -q "^browser: loaded $p https://example.org/\$" "$log" ||
+grep -q "^browser: loaded $p http://localhost:$port/two.html\$" "$log" ||
   fail "the tab from the archive isn't at its page"
 send menu "Appearance › Automatic"
 send click $page_point
@@ -595,11 +595,11 @@ fi
 send click $page_point
 tab=$a
 history_key right forward page
-expect_page example.com 1 1 "going forward in tab a's restored history"
+expect_page "http://localhost:$port/one.html" 1 1 "going forward in tab a's restored history"
 send key 2 ctrl
 expect "^browser: space $second in " "⌃2 didn't show the second Space"
 expect_tabs "$e" "$e" "in the second Space"
-expect "^browser: loaded $e https://example.com/\$" "the second Space's tab didn't load once shown"
+expect "^browser: loaded $e http://localhost:$port/one.html\$" "the second Space's tab didn't load once shown"
 # Restored from the second Space, the tab archived from the first goes back there, as Arc's does,
 # and the window shows it there (#696). A ⌘-click restores it at once, without a preview.
 send menu "View Archive…"
@@ -629,9 +629,9 @@ expect '^browser: library shown$' "View Archive… in the second Space didn't op
 press_archived
 expect '^browser: archived [0-9][0-9]* in preview$' \
   "a click on the archived tab in the second Space didn't preview it"
-expect '^browser: link preview [1-9][0-9]* https://example.org/$' \
+expect "^browser: link preview [1-9][0-9]* http://localhost:$port/two.html\$" \
   "the archived tab's preview in the second Space didn't open at its page"
-p=$(grep '^browser: link preview [1-9][0-9]* https://example.org/$' "$log" | tail -1 | cut -d' ' -f4)
+p=$(grep "^browser: link preview [1-9][0-9]* http://localhost:$port/two.html\$" "$log" | tail -1 | cut -d' ' -f4)
 expect '^browser: link preview settled$' "the archived tab's preview in the second Space didn't settle"
 send key return cmd
 expect "^browser: link preview kept $p\$" "⌘↩ didn't keep the archived tab's preview in the second Space"
@@ -646,7 +646,7 @@ expect '^browser: archive 0 tabs$' "the tab kept from the preview in the second 
 expect '^browser: library hidden$' "keeping the archived tab's preview didn't close the Library"
 ../tools/window-screenshot.sh "$pid" "$out/archive-kept-to-space.png" || fail "no window to capture"
 # The preview may still be loading as it's kept, so this waits for its load.
-await "^browser: loaded $p https://example.org/\$" ||
+await "^browser: loaded $p http://localhost:$port/two.html\$" ||
   fail "the tab kept from the preview in the second Space isn't at its page"
 send key w cmd
 expect_tabs "$c $a" "$c" "after closing the tab kept in its Space"
@@ -675,14 +675,14 @@ await '^browser: spaces [0-9]* [0-9]*$' || fail "closing the window didn't keep 
 second=$(grep '^browser: spaces' "$log" | tail -1 | cut -d' ' -f4)
 await "^browser: space $second\$" || fail "the launch after closing the window didn't show the second Space"
 await '^browser: today [0-9]*$' || fail "the second Space didn't come back with its tab"
-await "^browser: loaded $(today) https://example.com/\$" || fail "the second Space's tab didn't load"
-await '^browser: page [0-9]* back 1 forward 1 loading 0 https://example.com/$' ||
+await "^browser: loaded $(today) http://localhost:$port/one.html\$" || fail "the second Space's tab didn't load"
+await "^browser: page [0-9]* back 1 forward 1 loading 0 http://localhost:$port/one.html\$" ||
   fail "tab a didn't keep the page it went forward to"
 # The window was left full screen before the close, so it doesn't come back so.
 grep -q '^browser: window entered full screen$' "$log" && fail "the window came back full screen after it quit windowed"
 # Tab a is unloaded in the middle of its history, with Back and Forward on. Shown, and with its
 # page perhaps still loading, ⌘← goes back to the page before and ⌘→ forward over the pages after.
-a=$(grep -m1 '^browser: page [0-9]* back 1 forward 1 loading 0 https://example.com/$' "$log" | cut -d' ' -f3)
+a=$(grep -m1 "^browser: page [0-9]* back 1 forward 1 loading 0 http://localhost:$port/one.html\$" "$log" | cut -d' ' -f3)
 grep -q "^browser: page $a unloaded 1\$" "$log" || fail "tab a didn't come back unloaded"
 grep -q "^browser: loaded $a " "$log" && fail "tab a loaded without being shown"
 send key 1 ctrl
@@ -694,10 +694,10 @@ expect "^browser: page $a back 0 forward 1 loading 0 $site\$" \
 expect "^browser: loaded $a $site\$" "Back on the restored tab didn't load the page before"
 send key right cmd
 expect "^browser: command forward via " "⌘→ on the restored tab didn't reach the UI"
-expect "^browser: page $a back 1 forward 1 loading 0 https://example.com/\$" \
+expect "^browser: page $a back 1 forward 1 loading 0 http://localhost:$port/one.html\$" \
   "Forward didn't come back to the page it left"
 send key right cmd
-expect "^browser: page $a back 1 forward 0 loading 0 https://example.org/\$" \
+expect "^browser: page $a back 1 forward 0 loading 0 http://localhost:$port/two.html\$" \
   "Forward didn't reach the last page of the restored history"
 # The Space shown at the quit is the one the launch below whose session ends opens its tab in, and
 # the count it checks is the second Space's tab and the new one.
@@ -827,7 +827,7 @@ l=$(today)
 send scroll $page_point 40 10
 expect "^browser: title $l scrolled [1-9][0-9]*\$" "the long page didn't scroll"
 scrolled=$(date +%s)
-open_from_bar example.com
+open_from_bar "http://localhost:$port/one.html"
 # Chrome sends a page's scroll to the browser a second after it changes, for the quit to save.
 wait=$((scrolled + 2 - $(date +%s)))
 [ "$wait" -le 0 ] || sleep "$wait"
@@ -842,7 +842,7 @@ await '^browser: restored in ' || fail "the launch after scrolling didn't restor
 await '^browser: today [0-9]* [0-9]*$' || fail "the Space didn't come back with its two tabs"
 shown=$(today | cut -d' ' -f1)
 l=$(today | cut -d' ' -f2)
-await "^browser: loaded $shown https://example.com/\$" || fail "the tab shown didn't load"
+await "^browser: loaded $shown http://localhost:$port/one.html\$" || fail "the tab shown didn't load"
 grep -q "browser: tab $l without its page\$" "$log" || fail "the tab not shown came back with a page"
 grep -q "browser: tab $l has its page\$" "$log" && fail "the tab not shown got its page"
 switch "2 cmd" "$l"
@@ -980,7 +980,7 @@ await_load
 p=$(today)
 send key d cmd
 expect "^browser: pinned $p\$" "⌘D didn't pin the tab"
-open_from_bar example.com
+open_from_bar "http://localhost:$port/one.html"
 send key n cmd
 expect '^browser: window opened [0-9]*$' "⌘N didn't open a second window"
 new_window_bar
