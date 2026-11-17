@@ -447,6 +447,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         ".crx": "application/x-chrome-extension",
     }
 
+    # Each request logged in printable ASCII alone. Older Pythons wrote a request line as it came,
+    # so a TLS hello the browser sent to this port put NUL bytes in site.log, and grep then
+    # took the file for binary and printed none of its lines (#3314).
+    def log_message(self, format, *args):
+        message = "".join(c if " " <= c <= "~" else "\\x%02x" % ord(c) for c in format % args)
+        sys.stderr.write("%s - - [%s] %s\n"
+                         % (self.address_string(), self.log_date_time_string(), message))
+
     def do_GET(self):
         agent = self.headers.get("User-Agent", "")
         cookies = sorted(c.strip() for c in self.headers.get("Cookie", "").split(";") if c.strip())
@@ -563,10 +571,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def do_POST(self):
         body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
         if self.path.startswith("/api/"):
-            # Logged as "POST <host><path> cookie <cookies sorted, or none> body <body>".
+            # Logged as "POST <host><path> cookie <cookies sorted, or none> body <body>", in one
+            # write as GET lines are, so no line another request logs at once lands inside it.
             cookies = sorted(c.strip() for c in self.headers.get("Cookie", "").split(";") if c.strip())
-            print("POST", self.headers.get("Host", "") + self.path, "cookie",
-                  "; ".join(cookies) or "none", "body", body.decode())
+            sys.stdout.write(" ".join(["POST", self.headers.get("Host", "") + self.path, "cookie",
+                "; ".join(cookies) or "none", "body", body.decode()]) + "\n")
             body = b"{\"id\":8," + body[1:]
             self.send_response(201)
             self.send_header("Content-Type", "application/json")
