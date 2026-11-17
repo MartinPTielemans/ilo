@@ -10,7 +10,7 @@
 # the network and GitHub, so check.sh runs it only when named: ./check.sh live-folder-site, and
 # Check on Linux in each X11 run of its default list (each night's, each train's on main, and a
 # dispatch that names no runs). It never signs in: the signed-in answer needs an account, which is
-# the owner's.
+# the owner's. Then the app sits idle past the core's two minutes and must ask nothing more.
 
 # Until the core's fetch is in this tree, and in the engine linked, a Live Folder asks nothing.
 if [ ! -f ../core/live_folder.cc ] || ! engine_has ../core/live_folder.cc ../core/live_folder_rule.cc; then
@@ -42,6 +42,15 @@ if await "^browser: live folder $folder answered "; then
   answer=$(grep "^browser: live folder $folder answered " "$log" | head -1 | sed 's/.* answered //')
 fi
 ../tools/window-screenshot.sh "$pid" "$out/live-folder-site.png" || fail "no window to capture"
+# Idle: with the folder there and nothing done, the app asks nothing more. The core lets an ask
+# through to the site once each two minutes, so a poll would show by then: the run waits past them.
+if [ "$answer" = "signed out" ]; then
+  asks=$(grep -c "^browser: live folder $folder fetch on " "$log")
+  sleep 130
+  again=$(grep "^browser: live folder $folder fetch on " "$log" | tail -n +$((asks + 1)) | head -3)
+  [ -z "$again" ] || fail "the idle app asked for the folder's lists again: $again"
+  echo "ok: the idle app asked nothing for its Live Folder in 130 s"
+fi
 exec 3>&-
 quit
 if [ "$answer" != "signed out" ]; then
