@@ -642,19 +642,21 @@ pub enum Close {
     Discarded,
 }
 
-/// A close's title once its page had a say: "Left maat.pt open", "Closed maat.pt without saving".
+/// A close's title once its page had a say: "Left maat.pt open · asked to stay: unsaved changes",
+/// "Closed maat.pt without saving". The reason joins the title as History joins a row's parts, in
+/// one ink, since the trace's note and title draw alike at the text's floor.
 pub fn close_title(did: &Did, close: Close) -> String {
     let site = match did.site.is_empty() {
         true => "a tab",
         false => did.site.as_str(),
     };
     match close {
-        Close::Kept => format!("Left {site} open"),
+        Close::Kept => format!("Left {site} open · {KEPT}"),
         Close::Discarded => format!("Closed {site} without saving"),
     }
 }
 
-/// What a line the page kept open says after its title.
+/// Why a line the page kept open is open.
 pub const KEPT: &str = "asked to stay: unsaved changes";
 
 /// A step's title, in one sentence: "Opening gulbenkian.pt", "Read maat.pt",

@@ -5011,8 +5011,9 @@ mod tasks {
         );
     }
 
-    /// A close the page asked to stay through reads as the tab left open, not as a failure, and the
-    /// discard after it as closed without saving, among a plain close's line (#3256).
+    /// A close the page asked to stay through reads as the tab left open, not as a failure, with
+    /// why joined to it, and the discard after it as closed without saving, among a plain close's
+    /// line (#3256).
     #[gpui::test]
     fn a_close_the_page_kept_reads_as_kept_not_failed(cx: &mut TestAppContext) {
         use crate::agents::task::{Line, Opens, TraceItem};
@@ -5069,9 +5070,10 @@ mod tasks {
             lines,
             [
                 ("Closed shop.example", "", false),
+                // The reason after a dot, in the title's ink, as History joins a row's parts.
                 (
-                    "Left docs.example open",
-                    "asked to stay: unsaved changes",
+                    "Left docs.example open · asked to stay: unsaved changes",
+                    "",
                     false
                 ),
                 ("Closed docs.example without saving", "", false),
