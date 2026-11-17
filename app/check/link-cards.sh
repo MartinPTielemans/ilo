@@ -81,8 +81,11 @@ pages = {
 <a href="https://cards.test/bare.html" style="{band}">A page that says nothing</a>
 <a href="https://cards.test/slow.html" style="{band}">A slow page</a>
 <script>
-let keys = 0;
+let keys = 0, presses = 0;
 onkeydown = (event) => document.title = "key " + event.key + " " + ++keys;
+// A press says so, and a click follows no link: the run clicks where the plate window is.
+onmousedown = () => document.title = "pressed " + ++presses;
+onclick = (event) => event.preventDefault();
 requestAnimationFrame(() => requestAnimationFrame(() =>
   document.title = document.cookie.includes("seen=1") ? "ready" : "no cookie"));
 </script>""".encode()),
@@ -241,6 +244,21 @@ expect '^browser: link card loading$' \
 touch "$out/link-cards-slow.go"
 expect '^browser: link card page$' "a slow page: its card didn't show the page once it came"
 
+# The plate alone, once Esc took the card, and a click in its window's room above it, which the
+# card grows into and nothing paints while the plate shows: the click reaches the page under it,
+# as the window lets the pointer through. Where windows can't blend, the window is cut to the plate
+# (#3096).
+send key escape
+expect '^browser: link card closed$' "a slow page: Esc didn't take the card"
+../tools/window-screenshot.sh "$pid" "$out/link-card-plate.png" > /dev/null 2>&1 || true
+at=$(grep '^browser: link target window at ' "$log" | tail -1 | sed 's/^browser: link target window at //')
+[ -n "$at" ] || fail "the UI didn't say where the link target's window is"
+room_x=$(printf '%s\n' "$at" | awk '{ printf "%d", $1 + 40 }')
+room_y=$(printf '%s\n' "$at" | awk '{ printf "%d", $2 + 40 }')
+send click "$room_x" "$room_y"
+expect "^browser: title $tab pressed [0-9]*\$" \
+  "a click at $room_x $room_y, in the link target's room above its plate (its window at $at), didn't reach the page under it"
+
 exec 3>&-
 quit
-echo "link cards: a page's card with its picture, asked without cookie, referrer or certificate; a private address and a redirect to one refused unasked; a page with no picture, one that says nothing, and one loading"
+echo "link cards: a page's card with its picture, asked without cookie, referrer or certificate; a private address and a redirect to one refused unasked; a page with no picture, one that says nothing, and one loading; and a click in the plate's room reaching the page"
