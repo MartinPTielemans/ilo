@@ -1934,9 +1934,14 @@ CARD
     read -r qx qy qw qh <<CARD
 $(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
 CARD
-    # Allow Once and Never share the row above Always Allow, Never at the left.
-    case "$1" in Once) x=$((qw * 3 / 4)) ;; Never) x=$((qw / 4)) ;; esac
-    send click $((qx + x)) $((qy + qh - 26 - 36))
+    # Allow Once and Never share the row above Always Allow, Never at the left. A button is 28
+    # high and 8 from the next row.
+    case "$1" in
+      Once) x=$((qw * 3 / 4)) y=$((qh - 26 - 36)) ;;
+      Never) x=$((qw / 4)) y=$((qh - 26 - 36)) ;;
+      Always) x=$((qw / 2)) y=$((qh - 26)) ;;
+    esac
+    send click $((qx + x)) $((qy + y))
     await_log "^browser: agent mcp-client answered $q $1\$" "$1 didn't answer the download"
     downloaded=$(next_answer) || fail "the browser didn't answer the download's open_tab"
     downloaded=$(printf '%s\n' "$downloaded" | answered "the download's open_tab")
@@ -1981,6 +1986,23 @@ $(grep 'browser: agent .*download' "$log" | tail -3)"
       fail "the opened tab's refused download left a file: $(ls -A "$out/downloads" | tr '\n' ' ')"
     # Left open: the agent is at work in it, which the session's end below ends.
   fi
+  # A site the user always allows downloads from, whose page's download link the agent clicks with
+  # another app in front below (#3183).
+  printf 'notes\n' > "$out/site/notes.txt"
+  printf '%s' '<!doctype html><title>Notes</title><a href="notes.txt" download>Notes</a>' \
+    > "$out/site/notes.html"
+  file="{\"url\":\"saved.localhost:$port/notes.txt\"}"
+  wants='^browser: agent mcp-client asks [0-9]*: download notes\.txt from saved\.localhost$'
+  answer_download Always
+  case "$downloaded" in
+    "Downloaded notes.txt "*) ;;
+    *) fail "the download answered with Always Allow: $downloaded" ;;
+  esac
+  saved_page=$(call open_tab "{\"url\":\"saved.localhost:$port/notes.html\"}")
+  notes_tab=$(printf '%s\n' "$saved_page" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  notes_ref=$(printf '%s\n' "$saved_page" | sed -n 's/.*- link "Notes" \[\(e[0-9]*\)\].*/\1/p' | head -1)
+  [ -n "$notes_tab" ] && [ -n "$notes_ref" ] ||
+    fail "the agent's tab of the site it may download from didn't open with its link: $saved_page"
 
   # A bank's site asks first, in a card in the window, and Allow Once opens it.
   bank="{\"url\":\"bank.localhost:$port/fields.html\"}"
@@ -2128,6 +2150,64 @@ if [ "$driven" = 1 ]; then
     grep -q '^cover .*, foreground away$' "$out/cover-needs.log" ||
       fail "another app didn't take the foreground: $(cat "$out/cover-needs.log")"
     background=windows
+  fi
+  # An agent's download in its own Space, from a click in its page on a site the user always
+  # allows, while another app's window has the keyboard: ilo's window neither asks to come forward
+  # nor takes the keyboard (#3183), and the download is in the downloads area and the activity log
+  # all the same. Under Wayland sway marks a window that asks to come forward urgent, and says so.
+  if [ -n "$background" ]; then
+    sway_events=
+    if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+      swaymsg -r -m -t subscribe '["window"]' > "$out/agent-download-sway.log" 2>&1 &
+      sway_events=$!
+      for _ in $(seq 50); do
+        grep -q '"success": *true' "$out/agent-download-sway.log" && break
+        sleep 0.1
+      done
+      grep -q '"success": *true' "$out/agent-download-sway.log" ||
+        fail "sway didn't take the subscription to its windows' events: $(cat "$out/agent-download-sway.log")"
+    fi
+    logged='^browser: agent logged mcp-client download saved\.localhost$'
+    logs=$(grep -c "$logged" "$log" || true)
+    lists=$(grep -c '^browser: downloads [0-9]*$' "$log" || true)
+    flying=$(grep -c '^browser: download flying ' "$log" || true)
+    marked=$(grep -c '^browser: window [0-9]* urgent on$' "$log" || true)
+    # Its link's ref afresh, as the client reconnected since.
+    saved_page=$(call snapshot "{\"tab\":$notes_tab}")
+    notes_ref=$(printf '%s\n' "$saved_page" | sed -n 's/.*- link "Notes" \[\(e[0-9]*\)\].*/\1/p' | head -1)
+    [ -n "$notes_ref" ] || fail "the agent's tab of the site it may download from has no link: $saved_page"
+    call click "{\"tab\":$notes_tab,\"ref\":\"$notes_ref\"}" > /dev/null
+    await_more "$logged" "$logs" ||
+      fail "the agent's download with another app in front isn't in the activity log: $(grep 'browser: agent .*download' "$log" | tail -3 | tr '\n' ' ')"
+    await_more '^browser: downloads [0-9]*$' "$lists" ||
+      fail "the agent's download with another app in front isn't in the downloads area: $(grep '^browser: download' "$log" | tail -3 | tr '\n' ' ')"
+    await_log '^browser: download [0-9]* done notes' "the agent's download with another app in front didn't finish"
+    if [ "$(grep -c '^browser: download flying ' "$log")" -gt "$flying" ]; then
+      await_log '^browser: download landed ' "the agent's download's icon didn't land in the bin"
+    fi
+    send state
+    [ "$active" = 0 ] ||
+      fail "the agent's download took the keyboard from the other app's window: it's in $key, on $focus"
+    [ "$(grep -c '^browser: window [0-9]* urgent on$' "$log")" = "$marked" ] ||
+      fail "the agent's download marked ilo's window urgent"
+    if [ -n "$sway_events" ]; then
+      kill "$sway_events" 2> /dev/null
+      wait "$sway_events" 2> /dev/null || true
+      asked=$(python3 -I -c '
+import json, sys
+for line in open(sys.argv[1], encoding="utf-8"):
+    try:
+        event = json.loads(line)
+    except ValueError:
+        continue
+    window = event.get("container") or {}
+    if window.get("pid") == int(sys.argv[2]) and (
+            event.get("change") == "focus" or window.get("urgent")):
+        print(event.get("change"), window.get("app_id"), "urgent" if window.get("urgent") else "")' \
+        "$out/agent-download-sway.log" "$(app_pid)")
+      [ -z "$asked" ] ||
+        fail "the agent's download asked for ilo's window to come forward, as sway says: $(printf '%s' "$asked" | tr '\n' ' ')"
+    fi
   fi
   counted() { grep -c "$1" "$log" || true; }
   ones=$(counted '^browser: needs you 1$')
