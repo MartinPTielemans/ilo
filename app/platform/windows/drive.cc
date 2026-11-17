@@ -2942,6 +2942,17 @@ LRESULT CALLBACK WatchKeyboard(int code, WPARAM wparam, LPARAM lparam) {
 LRESULT CALLBACK WatchZoom(int code, WPARAM wparam, LPARAM lparam) {
   static std::map<HWND, bool> zoomed;
   const auto* sent = reinterpret_cast<CWPRETSTRUCT*>(lparam);
+  // Probe for #3164: each show and hide of a window a browser window owns, and the front window after.
+  if (code == HC_ACTION && sent->message == WM_WINDOWPOSCHANGED && GetWindow(sent->hwnd, GW_OWNER)) {
+    const auto* pos = reinterpret_cast<const WINDOWPOS*>(sent->lParam);
+    if (pos->flags & (SWP_SHOWWINDOW | SWP_HIDEWINDOW)) {
+      fprintf(stderr, "browser: drive: probe %s %s%s, owner %s, front %s\n",
+              pos->flags & SWP_SHOWWINDOW ? "shows" : "hides", Describe(sent->hwnd).c_str(),
+              pos->flags & SWP_NOACTIVATE ? " without activating" : "",
+              Describe(GetWindow(sent->hwnd, GW_OWNER)).c_str(),
+              Describe(GetForegroundWindow()).c_str());
+    }
+  }
   if (code == HC_ACTION && sent->message == WM_SIZE &&
       (sent->wParam == SIZE_MAXIMIZED || sent->wParam == SIZE_RESTORED) &&
       GetAncestor(sent->hwnd, GA_ROOT) == sent->hwnd &&
