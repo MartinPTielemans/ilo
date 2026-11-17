@@ -205,6 +205,15 @@ press tab
 press down
 press down
 press tab shift
+# The same keys with the page holding the keyboard, given it by a click as a sighted user's is.
+heard=$(wc -l < "$nvda_log")
+send click $page_point
+spoken "a click on the page"
+press tab
+press tab
+press down
+press down
+press tab shift
 exec 3>&-
 quit
 nvda_quit
