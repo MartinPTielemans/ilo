@@ -408,6 +408,31 @@ in_order "after ⌘W" '^browser: link preview closing (cmd-w)$' "^browser: tab $
 none_since '^browser: command close-tab' || fail "⌘W in the preview closed the tab behind"
 none_since "^browser: page $a unloaded 1\$" || fail "⌘W in the preview unloaded the pinned tab"
 
+# On X11, with another app active over ilo and then ilo again, the preview's page still has the keys:
+# Chromium's views restored them to the pinned tab's page under it, where ⌘↩ opened that page's
+# focused link (#2858).
+if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && ! sway_xwayland; then
+  open_preview "for another app"
+  rm -f "$out/other-in"
+  mkfifo "$out/other-in"
+  python3 -I check/other-window.py < "$out/other-in" > "$out/other-window.log" 2>&1 &
+  other_app=$!
+  exec 7> "$out/other-in"
+  for _ in $(seq 50); do grep -q '^[0-9]' "$out/other-window.log" && break; sleep 0.1; done
+  xdotool windowactivate --sync "$(head -1 "$out/other-window.log")" 2> /dev/null ||
+    fail "another app's window didn't open and take the keyboard: $(cat "$out/other-window.log")"
+  send state
+  [ "$active" = 0 ] || fail "another app's window over the preview left ilo active"
+  exec 7>&-
+  wait "$other_app" 2> /dev/null || true
+  send window 1
+  [ "$active" = 1 ] || fail "ilo wasn't active again after another app's window went"
+  send key w cmd
+  in_order "after another app, ⌘W" '^browser: link preview closing (cmd-w)$' "^browser: tab $p closed\$"
+  none_since '^browser: command close-tab' ||
+    fail "⌘W once ilo was active again after another app went to the page under the preview (#2858)"
+fi
+
 # ⌘Z reopens the preview closed last over the pinned tab, at its page, growing from its link as it
 # draws. Esc closes it again, and ⇧⌘T reopens it too, as no tab has closed since.
 reopened() {
@@ -568,7 +593,7 @@ none_since "^browser: loaded $a " || fail "the link a rule sent loaded in the pi
 
 exec 3>&-
 quit
-echo "ok: ⇧-click on a Today tab's link and $in_peek in its menu open it in a preview, with no tab opened. A link to another site in a pinned tab or a favorite opens in a preview over the window, which Esc, a click on the dim and ⌘W close, with its page, leaving the tab and the page behind as they were, ⇧⌘C copies the address of, and ⌘↩ keeps as the top Today tab, shown, without loading it again. ⌘Z reopens a closed one over its tab, and so does ⇧⌘T. A Google Meet link opens as a tab of the Space shown instead. With the Settings switch off, the link goes in the pinned tab, ⇧-click opens it in a new tab and its menu has no $in_peek, and back on, a link rule to another Space sends it there as a tab instead. Resting on its keep button shows Open as Tab and its key in a tooltip over it. Windows: $out/preview-shift-click.png, $out/preview-menu.png, $out/preview-menu-chosen.png, $out/preview-open.png, $out/preview-light.png, $out/preview-dark.png, $out/preview-tooltip.png, $out/preview-kept.png, $out/preview-reopened.png, $out/preview-meeting.png, $out/preview-ruled.png"
+echo "ok: ⇧-click on a Today tab's link and $in_peek in its menu open it in a preview, with no tab opened. A link to another site in a pinned tab or a favorite opens in a preview over the window, which Esc, a click on the dim and ⌘W close, on X11 after another app was active too, with its page, leaving the tab and the page behind as they were, ⇧⌘C copies the address of, and ⌘↩ keeps as the top Today tab, shown, without loading it again. ⌘Z reopens a closed one over its tab, and so does ⇧⌘T. A Google Meet link opens as a tab of the Space shown instead. With the Settings switch off, the link goes in the pinned tab, ⇧-click opens it in a new tab and its menu has no $in_peek, and back on, a link rule to another Space sends it there as a tab instead. Resting on its keep button shows Open as Tab and its key in a tooltip over it. Windows: $out/preview-shift-click.png, $out/preview-menu.png, $out/preview-menu-chosen.png, $out/preview-open.png, $out/preview-light.png, $out/preview-dark.png, $out/preview-tooltip.png, $out/preview-kept.png, $out/preview-reopened.png, $out/preview-meeting.png, $out/preview-ruled.png"
 echo "  The first preview's first frame came $first_frame after the click reached the UI."
 ! windows || echo "  Its card held its page where the core showed it, and $scaled: $(tr '\n' ' ' < "$out/preview-frames.txt")"
 [ "$(uname)" != Linux ] || [ -z "${WAYLAND_DISPLAY:-}" ] || echo "  Under Wayland, $scaled."
