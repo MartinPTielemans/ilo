@@ -182,6 +182,8 @@ card() {
   expect "^browser: link target ${2#https://}\$" "$3: resting on the link showed no link target for $2"
   expect '^browser: link target window shown$' "$3: the link target's window didn't show"
   send flags shift
+  # The card can answer before the ⇧'s release is sent, so its waits read from the press on.
+  shifted=$step
   expect "^browser: title $tab key Shift [0-9]*\$" "$3: the page didn't get the ⇧, which a shift-click needs"
   send flags
 }
@@ -190,7 +192,7 @@ card() {
 record link-card 3
 card "$page_link" "https://cards.test/page.html" "a page"
 shift_step=$step
-expect '^browser: link card page with picture$' "a page: ⇧ on its link showed no card with its picture"
+expect '^browser: link card page with picture$' "a page: ⇧ on its link showed no card with its picture" "$shifted"
 recorded
 grep -q "^/page.html " "$out/link-cards-public.log" || fail "a page: the server logged no request for the card's page"
 grep -q "^/share.png " "$out/link-cards-public.log" || fail "a page: the server logged no request for its picture"
@@ -213,13 +215,13 @@ expect "^browser: title $tab key z [0-9]*\$" "a page: the key after Esc didn't r
   fail "a page: Esc took the plate with the card"
 
 card "$private_link" "http://127.0.0.1:$private_port/direct" "a private address"
-expect '^browser: link card failed$' "a private address: ⇧ on its link didn't show the card's refusal"
+expect '^browser: link card failed$' "a private address: ⇧ on its link didn't show the card's refusal" "$shifted"
 [ ! -s "$out/link-cards-private.log" ] ||
   fail "a private address: the private server got a card's request: $(tr '\n' ' ' < "$out/link-cards-private.log")"
 ../tools/window-screenshot.sh "$pid" "$out/link-card-private.png" > /dev/null 2>&1 || true
 
 card "$hop_link" "https://cards.test/hop" "a redirect"
-expect '^browser: link card failed$' "a redirect: ⇧ on its link didn't show the card's refusal"
+expect '^browser: link card failed$' "a redirect: ⇧ on its link didn't show the card's refusal" "$shifted"
 grep -q '^/hop ' "$out/link-cards-public.log" || fail "a redirect: the public server logged no request for /hop"
 [ ! -s "$out/link-cards-private.log" ] ||
   fail "a redirect: the private server got a card's request: $(tr '\n' ' ' < "$out/link-cards-private.log")"
@@ -227,19 +229,19 @@ grep -q '^/hop ' "$out/link-cards-public.log" || fail "a redirect: the public se
 
 card "$plain_link" "https://cards.test/plain.html" "a page with no picture"
 expect '^browser: link card page$' \
-  "a page with no picture: ⇧ on its link showed no card of its words"
+  "a page with no picture: ⇧ on its link showed no card of its words" "$shifted"
 ../tools/window-screenshot.sh "$pid" "$out/link-card-plain.png" > /dev/null 2>&1 || true
 
 card "$bare_link" "https://cards.test/bare.html" "a page that says nothing"
 # With no title or description, the card says the page doesn't say what it is, as a refusal does.
 expect '^browser: link card failed$' \
-  "a page that says nothing: ⇧ on its link didn't show the card saying so"
+  "a page that says nothing: ⇧ on its link didn't show the card saying so" "$shifted"
 ../tools/window-screenshot.sh "$pid" "$out/link-card-bare.png" > /dev/null 2>&1 || true
 
 # The slow page answers only once link-cards-slow.go is there, so the card waits, loading.
 card "$slow_link" "https://cards.test/slow.html" "a slow page"
 expect '^browser: link card loading$' \
-  "a slow page: ⇧ on its link showed no loading card while its page hadn't come"
+  "a slow page: ⇧ on its link showed no loading card while its page hadn't come" "$shifted"
 ../tools/window-screenshot.sh "$pid" "$out/link-card-loading.png" > /dev/null 2>&1 || true
 touch "$out/link-cards-slow.go"
 expect '^browser: link card page$' "a slow page: its card didn't show the page once it came"
