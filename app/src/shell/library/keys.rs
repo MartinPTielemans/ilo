@@ -7,18 +7,31 @@
 //! section's or Escape, the Library gives the keyboard back to whoever had it as it opened, the
 //! page or the UI (#3313), unless the page shown since is an agent's; closed any other way, to the
 //! window.
+//!
+//! From the field, down and up ring the list's rows as the command bar's keys go over its
+//! suggestions, wrapping at the ends, and return does what a click on the ringed row does. The
+//! field keeps the keyboard, to go on typing, so the ringed row is said as the bar's selected one
+//! is: an option of the list, selected, and a polite live region with its name and where it
+//! stands. Media's tiles are each a stop, in reading order, as left and right are the field's.
+//! Headings, Agents' Clear and a past task's sites aren't rows to open, so the ring passes them.
 
 use gpui::{
-    App, Context, Focusable, KeyBinding, Role, Stateful, Window, actions, div, prelude::*, px,
+    App, Bounds, Context, Focusable, KeyBinding, Modifiers, Pixels, Role, SharedString, Stateful,
+    Window, accesskit::Live, actions, canvas, div, point, prelude::*, px,
 };
 
-use super::{Section, Shell};
+use super::{DownloadAction, DownloadState, Item, Medium, Section, Shell};
 use crate::tokens::shell::{KEYED, KEYED_RING, library::CARD_RADIUS};
 
 /// Spaces' key context while its cards have the keyboard.
 const CARDS: &str = "LibraryCards";
+/// The search field's, whose keys go over the list's rows.
+pub(super) const ROWS: &str = "LibraryRows";
 
-actions!(library_keys, [CardLeft, CardRight, CardShow]);
+actions!(
+    library_keys,
+    [CardLeft, CardRight, CardShow, RowDown, RowUp, RowOpen]
+);
 
 /// The Library's keyboard, between the command that opens it and its close.
 #[derive(Default)]
@@ -44,6 +57,9 @@ pub(in crate::shell) fn bind(cx: &mut App) {
         KeyBinding::new("left", CardLeft, Some(CARDS)),
         KeyBinding::new("right", CardRight, Some(CARDS)),
         KeyBinding::new("enter", CardShow, Some(CARDS)),
+        KeyBinding::new("down", RowDown, Some(ROWS)),
+        KeyBinding::new("up", RowUp, Some(ROWS)),
+        KeyBinding::new("enter", RowOpen, Some(ROWS)),
     ]);
 }
 
@@ -103,6 +119,10 @@ impl Shell {
             }
         } else if library.keyed_card.is_some() && !cards.is_focused(window) {
             library.keyed_card = None;
+        }
+        // A click elsewhere ends the rows' ring, as the field's keys move it.
+        if library.keyed_row.is_some() && !search.is_focused(window) {
+            library.keyed_row = None;
         }
         if let Some(card) = library.keyed_card.filter(|_| asked) {
             log!("browser: library card keyed {card}");
@@ -189,6 +209,311 @@ impl Shell {
                     .border_color(self.palette.plate(KEYED)),
             )
         })
+    }
+
+    /// The search field, taking the keys that go over the list's rows.
+    pub(super) fn with_row_keys(
+        &self,
+        field: Stateful<gpui::Div>,
+        cx: &mut Context<Self>,
+    ) -> Stateful<gpui::Div> {
+        field
+            .key_context(ROWS)
+            .on_action(cx.listener(|shell, _: &RowDown, _, cx| shell.row_step(true, cx)))
+            .on_action(cx.listener(|shell, _: &RowUp, _, cx| shell.row_step(false, cx)))
+            .on_action(cx.listener(|shell, _: &RowOpen, _, cx| shell.row_open(cx)))
+    }
+
+    /// The rows the ring goes over, in order: each by its line in the list and, in Media, its
+    /// tile's column.
+    fn row_stops(&self) -> Vec<(usize, usize)> {
+        let Some(library) = &self.library else {
+            return Vec::new();
+        };
+        let mut stops = Vec::new();
+        for (line, item) in library.items.iter().enumerate() {
+            match item {
+                Item::Heading(_) | Item::Clear | Item::PastSite(_) => {}
+                Item::PastStep(past, step) => {
+                    if self.past_step_opens(*past, *step) {
+                        stops.push((line, 0));
+                    }
+                }
+                Item::Media(tiles) => stops.extend(
+                    (tiles.iter().enumerate())
+                        .filter(|(_, tile)| tile.is_some())
+                        .map(|(column, _)| (line, column)),
+                ),
+                _ => stops.push((line, 0)),
+            }
+        }
+        stops
+    }
+
+    /// Whether the step at `step` of the past task at `past` opens to show what it did.
+    pub(super) fn past_step_opens(&self, past: usize, step: usize) -> bool {
+        (self.agent_history.get(past))
+            .and_then(|past| past.steps.get(step))
+            .is_some_and(|each| !each.url.is_empty())
+    }
+
+    /// Down or up from the field: rings the next row or the one before, wrapping at the ends as the
+    /// command bar's keys do, from the first or the last while none is ringed.
+    fn row_step(&mut self, down: bool, cx: &mut Context<Self>) {
+        let stops = self.row_stops();
+        let Some(library) = &mut self.library else {
+            return;
+        };
+        if stops.is_empty() {
+            return cx.propagate();
+        }
+        let count = stops.len();
+        let at = (library.keyed_row).and_then(|keyed| stops.iter().position(|&stop| stop == keyed));
+        let next = match (at, down) {
+            (Some(at), true) => (at + 1) % count,
+            (Some(at), false) => (at + count - 1) % count,
+            (None, true) => 0,
+            (None, false) => count - 1,
+        };
+        let (line, column) = stops[next];
+        library.keyed_row = Some((line, column));
+        library.list.scroll_to_reveal_item(line);
+        // check.sh waits for this line.
+        log!("browser: library row keyed {line} {column}");
+        cx.notify();
+    }
+
+    /// Rings the list's `rows`th row as ↓ from the field does, for the preview, once the list
+    /// has rows: whether it had.
+    pub fn preview_ring_library_row(&mut self, rows: usize, cx: &mut Context<Self>) -> bool {
+        if self.row_stops().is_empty() {
+            return false;
+        }
+        for _ in 0..rows {
+            self.row_step(true, cx);
+        }
+        true
+    }
+
+    /// Whether the ring is on `item`'s row, or on its tile at `column` in Media.
+    pub(super) fn row_keyed(&self, item: Item, column: usize) -> bool {
+        self.library.as_ref().is_some_and(|library| {
+            library
+                .keyed_row
+                .is_some_and(|(line, at)| at == column && library.items.get(line) == Some(&item))
+        })
+    }
+
+    /// A row of the list, or a tile of Media's, as an assistive app reads it, an option of the
+    /// list named as the live region names it, selected while the ring is on it, which then draws.
+    pub(super) fn library_row(
+        &self,
+        row: Stateful<gpui::Div>,
+        item: Item,
+        column: usize,
+        radius: f32,
+    ) -> Stateful<gpui::Div> {
+        let keyed = self.row_keyed(item, column);
+        let name = self.a11y.then(|| self.row_name(item, column));
+        let drawn = (self.library.as_ref()).map(|library| library.row_drawn.clone());
+        row.when_some(name, |row, name| {
+            row.role(Role::ListBoxOption)
+                .aria_label(name)
+                .aria_selected(keyed)
+        })
+        .when(keyed, |row| {
+            let log_drawn = canvas(
+                |_, _, _| {},
+                move |bounds: Bounds<Pixels>, _, _, _| {
+                    let Some(drawn) = &drawn else {
+                        return;
+                    };
+                    if drawn.replace(Some(bounds)) != Some(bounds) {
+                        // tools/parity.sh waits for this line.
+                        log!(
+                            "browser: library row ring at {:.0} {:.0} {:.0} {:.0}",
+                            f32::from(bounds.origin.x),
+                            f32::from(bounds.origin.y),
+                            f32::from(bounds.size.width),
+                            f32::from(bounds.size.height)
+                        );
+                    }
+                },
+            )
+            .size_full();
+            row.child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .rounded(px(radius))
+                    .border(px(KEYED_RING))
+                    .border_color(self.palette.plate(KEYED))
+                    .child(log_drawn),
+            )
+        })
+    }
+
+    /// What a screen reader says for the row at `item`, or its tile at `column`: its title, or
+    /// its address or name where it has none.
+    fn row_name(&self, item: Item, column: usize) -> SharedString {
+        let titled = |title: &SharedString, or: &SharedString| match title.is_empty() {
+            true => or.clone(),
+            false => title.clone(),
+        };
+        let library = self.library.as_ref();
+        let name = match item {
+            Item::Tab(tab) => self
+                .archive
+                .get(tab)
+                .map(|tab| titled(&tab.title, &tab.url)),
+            Item::Visit(page) => (library.and_then(|library| library.history.pages.get(page)))
+                .map(|visit| titled(&visit.page.title, &visit.page.url)),
+            Item::Task(task) => {
+                (self.archived_tasks.get(task)).map(|task| titled(&task.title, &task.asked))
+            }
+            Item::Past(past) => {
+                (self.agent_history.get(past)).map(|past| past.title.clone().into())
+            }
+            Item::PastHead(_) => Some("Back".into()),
+            Item::PastStep(past, step) => self.past_step_title(past, step).map(Into::into),
+            Item::Boost(boost) => self.boost_list.get(boost).map(|boost| boost.site.clone()),
+            Item::Board(board) => {
+                (self.board_list.get(board)).map(|board| board.name.clone().into())
+            }
+            Item::Download(download) => {
+                (self.downloads.get(download)).map(|each| each.name.clone())
+            }
+            Item::Media(tiles) => match tiles.get(column).copied().flatten() {
+                Some(Medium::Capture(index)) => {
+                    self.captures.get(index).map(|each| each.name.clone())
+                }
+                Some(Medium::Download(index)) => {
+                    self.downloads.get(index).map(|each| each.name.clone())
+                }
+                None => None,
+            },
+            Item::Heading(_) | Item::Clear | Item::PastSite(_) => None,
+        };
+        name.unwrap_or_default()
+    }
+
+    /// What the live region says as the ring moves: the ringed row's name and where it stands
+    /// among the rows, as the command bar's says its selected suggestion.
+    pub(super) fn row_said(&self) -> Option<String> {
+        let keyed = self.library.as_ref()?.keyed_row?;
+        let stops = self.row_stops();
+        let at = stops.iter().position(|&stop| stop == keyed)?;
+        let library = self.library.as_ref()?;
+        let item = *library.items.get(keyed.0)?;
+        Some(format!(
+            "{}, {} of {}",
+            self.row_name(item, keyed.1),
+            at + 1,
+            stops.len()
+        ))
+    }
+
+    /// A live region that says the ringed row as the ring moves, a polite one, as the command
+    /// bar's says its selected suggestion: the field keeps the keyboard, so a screen reader would
+    /// say nothing of the row otherwise.
+    pub(super) fn rows_announcer(&self) -> impl IntoElement + use<> {
+        let said = self.row_said();
+        div()
+            .id("library-row-said")
+            .absolute()
+            .size_0()
+            .role(Role::Status)
+            .when_some(said, |announcer, said| {
+                announcer.aria_label(said.clone()).aria_value(said)
+            })
+            .a11y_synthetic_children(|builder| builder.parent_node().set_live(Live::Polite))
+    }
+
+    /// Return from the field: does what a click on the ringed row does, and ends the ring.
+    fn row_open(&mut self, cx: &mut Context<Self>) {
+        let Some(library) = &mut self.library else {
+            return;
+        };
+        let Some((line, column)) = library.keyed_row.take() else {
+            return cx.propagate();
+        };
+        let Some(item) = library.items.get(line).copied() else {
+            return;
+        };
+        let bounds = library.row_drawn.take();
+        // Where a click on it would be: Peek grows from there, and a menu opens under it.
+        let at = bounds.map(|bounds| bounds.center()).unwrap_or_default();
+        let under = bounds
+            .map(|bounds| point(bounds.left(), bounds.bottom()))
+            .unwrap_or_default();
+        // check.sh waits for this line.
+        log!("browser: library row opened {line} {column}");
+        cx.notify();
+        match item {
+            Item::Tab(tab) => {
+                if let Some(id) = self.archive.get(tab).map(|tab| tab.id) {
+                    self.open_archived(id, at, Modifiers::none(), cx);
+                }
+            }
+            Item::Visit(page) => {
+                let url = (self.library.as_ref())
+                    .and_then(|library| library.history.pages.get(page))
+                    .map(|visit| visit.page.url.clone());
+                if let Some(url) = url {
+                    self.open_visited(url, at, Modifiers::none(), cx);
+                }
+            }
+            Item::Task(task) => {
+                if let Some(agent) = self.archived_tasks.get(task).map(|task| task.agent.clone()) {
+                    self.restore_archived_task(agent, cx);
+                }
+            }
+            Item::Past(past) => {
+                if let Some(id) = self.agent_history.get(past).map(|past| past.id.clone()) {
+                    self.open_past_task(&id, cx);
+                }
+            }
+            Item::PastHead(_) => self.close_past_task(cx),
+            Item::PastStep(_, step) => self.open_past_step(step, false, cx),
+            Item::Boost(boost) => {
+                if let Some(site) = self.boost_list.get(boost).map(|boost| boost.site.clone()) {
+                    self.boost_menu(site, under, cx);
+                }
+            }
+            Item::Board(board) => {
+                if let Some(id) = self.board_list.get(board).map(|board| board.id.clone()) {
+                    self.open_listed_board(&id, cx);
+                }
+            }
+            Item::Download(download) => {
+                let Some(each) = self.downloads.get(download) else {
+                    return;
+                };
+                let (id, held, state) = (each.id, each.held, each.state);
+                // As a click on its row: a held file's choices are in its menu.
+                if held {
+                    self.download_menu(id, under, cx);
+                } else if state == DownloadState::Done {
+                    self.act_on_download(id, DownloadAction::Open, "row", cx);
+                    self.hide_recent_downloads(cx);
+                }
+            }
+            Item::Media(tiles) => {
+                let path = match tiles.get(column).copied().flatten() {
+                    Some(Medium::Capture(index)) => {
+                        self.captures.get(index).map(|each| each.path.clone())
+                    }
+                    Some(Medium::Download(index)) => {
+                        self.downloads.get(index).map(|each| each.path.clone())
+                    }
+                    None => None,
+                };
+                if let Some(path) = path {
+                    self.open_media(&path, cx);
+                }
+            }
+            Item::Heading(_) | Item::Clear | Item::PastSite(_) => {}
+        }
     }
 
     /// Moves the ring to the next card along or back, stopping at the ends.
@@ -302,6 +627,34 @@ mod tests {
             .find(|(id, _)| *id == tree.focus)
             .expect("something has the keyboard");
         (node.role(), node.label().unwrap_or_default().to_string())
+    }
+
+    /// The ring goes over each row that opens, in the list's order, and over Media's tiles in
+    /// reading order, past headings, Agents' Clear and a past task's sites, wrapping at the ends.
+    #[gpui::test]
+    fn the_rows_ring_goes_in_reading_order(cx: &mut TestAppContext) {
+        use crate::shell::library::{Item, Medium};
+        let (shell, _, cx) = window(Section::Media, cx);
+        run(&shell, Command::ViewLibrary, cx);
+        let went = shell.update(cx, |shell, cx| {
+            let library = shell.library.as_mut().unwrap();
+            let tile = |index| Some(Medium::Capture(index));
+            library.items = vec![
+                Item::Heading("Today"),
+                Item::Clear,
+                Item::Media([tile(0), tile(1), tile(2)]),
+                Item::PastSite(0),
+                Item::Media([tile(3), None, None]),
+            ];
+            library.keyed_row = None;
+            let mut went = Vec::new();
+            for down in [true, true, true, true, true, false] {
+                shell.row_step(down, cx);
+                went.push(shell.library.as_ref().unwrap().keyed_row.unwrap());
+            }
+            went
+        });
+        assert_eq!(went, [(2, 0), (2, 1), (2, 2), (4, 0), (2, 0), (4, 0)]);
     }
 
     /// The Library's key gives History's search field the keyboard, taking it from the page, and

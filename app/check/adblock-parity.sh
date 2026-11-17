@@ -264,7 +264,8 @@ look_content() {
 videos="$dir/videos.txt"
 : > "$videos"
 watch_video() {
-  site=$1 ad=no-ad played=none pressed= since=$(date +%s)
+  # Not site, the check's server, which a later pass in the same shell builds its pages on.
+  watched=$1 ad=no-ad played=none pressed= since=$(date +%s)
   while [ $(($(date +%s) - since)) -lt 30 ]; do
     # The seconds, playing or paused, ad or no-ad, refused or -.
     set -- $(video https://www.youtube.com/watch)
@@ -282,7 +283,7 @@ watch_video() {
     fi
     sleep 0.5
   done
-  echo "$site $ad $played" >> "$videos"
+  echo "$watched $ad $played" >> "$videos"
 }
 # Each site: when Return went, in ms since the epoch, then the site, then the load's time and what
 # loaded, or "none" for a load that didn't come within 45 s, then "bot-check" where Cloudflare's
@@ -575,7 +576,8 @@ if worse:
     sys.exit(1)
 PY
 echo "$run: $(cat "$result")$memory. Per site: $dir/sites.tsv"
-# uBlock Origin's, for adblock-native's to compare with in a check of its own.
+# uBlock Origin's, for adblock-native's to compare with in the same check, or a later one that
+# names it in ADBLOCK_PARITY_BASELINE.
 if [ "$engine" = ublock ]; then
   cp "$dir/sites.tsv" build/adblock-parity-sites.tsv
   rm -rf build/adblock-parity-hidden build/adblock-parity-lists

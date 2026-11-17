@@ -4,7 +4,10 @@
 #define BROWSER_CORE_MINI_PLAYER_PLACE_H_
 
 #include <optional>
+#include <vector>
 
+#include "base/time/time.h"
+#include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/geometry/vector2d_f.h"
@@ -19,6 +22,45 @@ inline constexpr int kMiniPlayerInset = 10;
 // move went further than kMiniPlayerThrowMove points (Dia 1.53.0 bin).
 inline constexpr float kMiniPlayerThrowSpeed = 350;
 inline constexpr float kMiniPlayerThrowMove = 6;
+
+// How far back from a release its speed is taken, as the Space pages' swipe takes it
+// (app/src/shell.rs).
+inline constexpr base::TimeDelta kMiniPlayerReleaseHistory = base::Milliseconds(100);
+
+// Where a Mini Player's move loop put it, and when.
+struct MiniPlayerMove {
+  base::TimeTicks when;
+  gfx::Point at;
+
+  friend bool operator==(const MiniPlayerMove&, const MiniPlayerMove&) = default;
+};
+
+// A Mini Player's moves in its move loop, oldest first, from the window's own bounds or, where the
+// loop moves only an outline of the window, the outline's. That loop leaves the window where it
+// was until the release, and Windows tells its bounds again at each of the outline's moves, so
+// once the outline is heard the window's are no longer where the user has it (#3062).
+class MiniPlayerMoves {
+ public:
+  void Window(const gfx::Point& at, base::TimeTicks when);
+  void Outline(const gfx::Point& at, base::TimeTicks when);
+  const std::vector<MiniPlayerMove>& moves() const { return moves_; }
+
+ private:
+  void Add(const gfx::Point& at, base::TimeTicks when);
+
+  std::vector<MiniPlayerMove> moves_;
+  bool outline_ = false;
+};
+
+// Its speed in points a second as it's let go at |released| after |moves|, oldest first: its travel
+// since the last move older than kMiniPlayerReleaseHistory, over the time since, so a rest before
+// the release slows it. With no move that old, since the first.
+gfx::Vector2dF MiniPlayerReleaseVelocity(const std::vector<MiniPlayerMove>& moves,
+                                         base::TimeTicks released);
+
+// Its last move, if it came within kMiniPlayerReleaseHistory of the release.
+gfx::Vector2dF MiniPlayerLastMove(const std::vector<MiniPlayerMove>& moves,
+                                  base::TimeTicks released);
 
 // A release this near its place along a side, kMiniPlayerInset in, catches it there (ours, #2099).
 inline constexpr int kMiniPlayerCatch = 40;
