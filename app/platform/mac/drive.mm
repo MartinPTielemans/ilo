@@ -732,6 +732,11 @@ bool Key(NSWindow* window,
   if ((flags & NSEventModifierFlagShift) && key.size() == 1 && key[0] >= 'a' && key[0] <= 'z') {
     characters = characters.uppercaseString;
   }
+  // And with a digit as what ⇧ makes of it on the US layout, so ⌃⇧1 isn't the menu's ⌃1 (#3214).
+  if ((flags & NSEventModifierFlagShift) && key.size() == 1 && key[0] >= '0' && key[0] <= '9') {
+    static constexpr char kShifted[] = ")!@#$%^&*(";
+    characters = [NSString stringWithFormat:@"%c", kShifted[key[0] - '0']];
+  }
   // The keyboard marks arrow keys as function and keypad keys, and the keys above them as function
   // keys.
   if (key == "up" || key == "down" || key == "left" || key == "right") {
