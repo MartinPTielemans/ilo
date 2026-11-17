@@ -2932,6 +2932,26 @@ LRESULT CALLBACK WatchKeyboard(int code, WPARAM wparam, LPARAM lparam) {
             code == HCBT_ACTIVATE ? "activates" : "focuses", Utf8(ClassOf(hwnd)).c_str(),
             Describe(root).c_str(), Utf8(ClassOf(root)).c_str(), Utf8(title).c_str(),
             IsWindowVisible(root) ? 1 : 0, Describe(GetWindow(root, GW_OWNER)).c_str());
+    // Probe for #3164: the call that activates a hidden window, as module and offset, which the
+    // engine's symbols name.
+    if (code == HCBT_ACTIVATE && !IsWindowVisible(root)) {
+      void* frames[62];
+      const USHORT count = CaptureStackBackTrace(0, 62, frames, nullptr);
+      for (USHORT i = 0; i < count; ++i) {
+        HMODULE module = nullptr;
+        wchar_t path[MAX_PATH] = L"?";
+        if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                   GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               static_cast<LPCWSTR>(frames[i]), &module)) {
+          GetModuleFileNameW(module, path, MAX_PATH);
+        }
+        const wchar_t* file = wcsrchr(path, L'\\');
+        fprintf(stderr, "browser: drive: probe stack %u %s+0x%llx\n", static_cast<unsigned>(i),
+                Utf8(file ? file + 1 : path).c_str(),
+                static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(frames[i]) -
+                                                reinterpret_cast<uintptr_t>(module)));
+      }
+    }
   }
   return CallNextHookEx(nullptr, code, wparam, lparam);
 }
