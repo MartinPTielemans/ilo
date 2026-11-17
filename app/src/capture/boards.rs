@@ -12,7 +12,8 @@ pub(super) const LISTED: usize = 10;
 /// The safe triangle ends after the pointer rests this long in it, as menu.rs's does.
 const SAFE_TIMEOUT: Duration = Duration::from_millis(300);
 /// A Board takes no more while this many captures wait to land on it, which they do when it opens.
-const REFUSED: &str = "has too many captures waiting. Open it, then add this again.";
+/// It's the core's `board::kMaxArrived` (core/board_store.h), which refuses the next one.
+pub(super) const MOST_WAITING: usize = 100;
 /// What the log says of the toasts that name a Board, in place of their words.
 const ADDED: &str = "Added to a Board";
 const NO_ROOM: &str = "A Board has no room";
@@ -457,7 +458,10 @@ impl Capture {
                 }),
             }
         };
-        let text = format!("{} {REFUSED}", board.name);
+        let text = format!(
+            "{} has {MOST_WAITING} new captures you haven't seen. Open it, then add this again.",
+            board.name
+        );
         let buttons = vec![open, copy];
         cx.defer(move |cx| toast::show_logged_as(&text, NO_ROOM, buttons, TOAST_TIME, cx));
     }
