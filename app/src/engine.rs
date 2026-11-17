@@ -1033,6 +1033,39 @@ impl Browser for Engine {
         }
     }
 
+    fn new_board(&self, space: u64, opened: Box<dyn FnOnce(u64, &mut App)>, cx: &mut App) {
+        let profile = unsafe { bc::bc_space_profile(space) };
+        let Some(folder) = bar_picks_host::folder(profile) else {
+            return;
+        };
+        let (id, window) = (browser::boards::new_id(), self.window);
+        let made = cx.background_spawn({
+            let id = id.clone();
+            async move { browser::boards::make(&folder, &id) }
+        });
+        cx.spawn(async move |cx| {
+            if let Err(error) = made.await {
+                log!("browser: new board {id} failed: {error}");
+                return;
+            }
+            // Its page opens once the folder is there, so the host finds the Board at its hello.
+            cx.update(|cx| {
+                let tab = open_tab_behind(window, &browser::boards::url(&id), false);
+                if tab == 0 {
+                    return;
+                }
+                unsafe {
+                    bc::bc_tab_set_pinned(tab, true);
+                    bc::bc_window_select(window, tab);
+                }
+                // check/board.sh reads this line.
+                log!("browser: new board {id} tab {tab}");
+                opened(tab, cx);
+            });
+        })
+        .detach();
+    }
+
     fn site_search_settings(&self, _: &mut App) {
         open_tab(self.window, "chrome://settings/searchEngines");
     }

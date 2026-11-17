@@ -546,6 +546,56 @@ impl Fake {
     }
 }
 
+/// PREVIEW_LIBRARY=boards: four made-up Boards in a profile folder of their own, two with a
+/// picture, changed hours to a week ago, the last never named.
+fn preview_boards_folder() -> Option<std::path::PathBuf> {
+    (std::env::var("PREVIEW_LIBRARY").ok()? == "boards").then_some(())?;
+    static FOLDER: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+    FOLDER
+        .get_or_init(|| {
+            let folder =
+                std::env::temp_dir().join(format!("ilo-preview-boards-{}", std::process::id()));
+            let now = std::time::SystemTime::now();
+            let hours = |hours: u64| now - std::time::Duration::from_secs(hours * 3600);
+            let boards = [
+                ("Kitchen ideas", Some([0xf2, 0xc9, 0x4c]), hours(2)),
+                ("Trip to Lisbon", Some([0x6f, 0xa8, 0xdc]), hours(26)),
+                ("Launch sketches", None, hours(74)),
+                ("", None, hours(170)),
+            ];
+            for (index, (name, colour, changed)) in boards.into_iter().enumerate() {
+                let id = format!("{index:x}").repeat(32);
+                let board = browser::boards::make(&folder, &id).ok()?;
+                let json = board.join("board.json");
+                std::fs::write(&json, "{}").ok()?;
+                std::fs::File::options()
+                    .write(true)
+                    .open(&json)
+                    .ok()?
+                    .set_modified(changed)
+                    .ok()?;
+                if !name.is_empty() {
+                    browser::boards::write_name(&folder, &id, name).ok()?;
+                }
+                if let Some([r, g, b]) = colour {
+                    // A Board's picture as its page saves it: cards on the page's ground.
+                    let thumb = image::RgbaImage::from_fn(96, 96, |x, y| {
+                        let card = (12..44).contains(&x) && (14..50).contains(&y)
+                            || (52..86).contains(&x) && (34..78).contains(&y);
+                        image::Rgba(if card {
+                            [r, g, b, 255]
+                        } else {
+                            [246, 244, 240, 255]
+                        })
+                    });
+                    thumb.save(board.join("thumb.png")).ok()?;
+                }
+            }
+            Some(folder)
+        })
+        .clone()
+}
+
 /// PREVIEW_BOOST_CARD=list, nofit or changed: the Boost of the first tab's site, its CSS and an
 /// arrangement of four changes in a profile folder of its own, the last that no longer fits with
 /// nofit, and off as it changed outside ilo with changed.
@@ -572,7 +622,7 @@ fn preview_boost_folder() -> Option<std::path::PathBuf> {
 
 impl Browser for Fake {
     fn profile_folder(&self, _: u64) -> Option<std::path::PathBuf> {
-        preview_boost_folder()
+        preview_boost_folder().or_else(preview_boards_folder)
     }
 
     fn set_arrangement(&self, _: u64, _: &str, _: &str) -> browser::boosts::Arranged {
@@ -1476,6 +1526,7 @@ impl Browser for Fake {
     fn view_history(&self, _: &mut App) {}
     fn open_page(&self, _: &str, _: &mut App) {}
     fn new_note(&self, _: u64, _: Option<u64>, _: &mut App) {}
+    fn new_board(&self, _: u64, _: Box<dyn FnOnce(u64, &mut App)>, _: &mut App) {}
     fn site_search_settings(&self, _: &mut App) {}
 
     fn clear_browsing_data(&self, _: &mut App) {}
@@ -3227,7 +3278,7 @@ fn main() {
             let shell_window = window.as_ref().ok().copied();
             match window {
                 // PREVIEW_LIBRARY=1 opens the Library, and PREVIEW_LIBRARY=downloads, =spaces,
-                // =history or =agents opens it there; =rename opens its Spaces with the first card's
+                // =history, =agents or =boards opens it there; =rename opens its Spaces with the first card's
                 // name in its field.
                 Ok(window) if std::env::var_os("PREVIEW_LIBRARY").is_some() => {
                     window
@@ -3237,6 +3288,7 @@ fn main() {
                                 Ok("spaces") => shell.show_spaces(cx),
                                 Ok("agents") => shell.show_agents(cx),
                                 Ok("history") => shell.show_visited(cx),
+                                Ok("boards") => shell.run(Command::ViewBoards, "preview", cx),
                                 Ok("rename") => {
                                     shell.show_spaces(cx);
                                     shell.preview_rename_card(window, cx);

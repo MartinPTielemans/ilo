@@ -192,6 +192,8 @@ pub(super) struct Recorder {
     pub(super) bar_open: Cell<bool>,
     /// Each New Note: the Space whose profile's service it opens, and the tab it splits with.
     pub(super) notes: RefCell<Vec<(u64, Option<u64>)>>,
+    /// The Spaces New Board made a Board in. Each opens as tab 900 and on.
+    pub(super) boards: RefCell<Vec<u64>>,
     /// How many times Site Search Settings opened.
     pub(super) site_search_settings: Cell<usize>,
     /// Each of Settings, About, Import and Quit the app asked for, in order.
@@ -1164,6 +1166,13 @@ impl Browser for Recorder {
     fn view_history(&self, _: &mut App) {}
     fn new_note(&self, space: u64, beside: Option<u64>, _: &mut App) {
         self.notes.borrow_mut().push((space, beside));
+    }
+
+    fn new_board(&self, space: u64, opened: Box<dyn FnOnce(u64, &mut App)>, cx: &mut App) {
+        let tab = 900 + self.boards.borrow().len() as u64;
+        self.boards.borrow_mut().push(space);
+        // As the engine's, once the folder's made: after the update New Board runs in.
+        cx.defer(move |cx| opened(tab, cx));
     }
 
     fn open_page(&self, url: &str, _: &mut App) {
