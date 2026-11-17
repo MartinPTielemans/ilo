@@ -5,8 +5,9 @@
 # tab's row shows its page's favicon, and keeps it until the next page has loaded without one. A
 # host typed in the command bar goes over https first, then http, or from Chromium 157 Chrome's
 # warning before http, whose dialog has the keyboard and still lets ⌘L, ⌘T and ⌘W reach the app,
-# and a local one over http. One typed with http:// loads over http as written, with no https try
-# and no warning, as in Chrome's address bar. Only what the user typed counts: an agent's open_tab
+# and leaves a page split beside it the click into it and the typing after, and a local one over
+# http. One typed with http:// loads over http as written, with no https try and no warning, as in
+# Chrome's address bar. Only what the user typed counts: an agent's open_tab
 # and navigate, and a link, to an http:// address, are tried over https first, and the agent's tab
 # at its warning leaves the user's window the keyboard. A right-click on reload lists Reload, Hard
 # Reload and Clear Site Data and Reload, the last deleting the site's cookies, storage and cache,
@@ -379,6 +380,56 @@ ran_on_warning() {
   since | grep -q "^browser: command $1 via $route\$" ||
     fail "$2 on Chrome's warning before http ran $1 $(since | sed -n "s/^browser: command $1 //p"), not via $route"
 }
+# A page beside the warning in a split keeps a click into it and the typing after. On X11 a tab's
+# dialog takes the keyboard back after a focus change that leaves no view focused (#2926), and a
+# page is no view: the click into the page beside it was at risk of sending its keys to the warning
+# in the other pane. The warning's pane is clicked first, so the warning has had the keyboard.
+if [ "$major" -ge 157 ]; then
+  printf '%s' '<title>beside</title>
+<input id=field style="position:fixed;inset:0;font-size:40px" oninput="document.title = `beside has ${field.value}`">
+<script>
+onblur = () => document.title = "beside blurred";
+requestAnimationFrame(() => requestAnimationFrame(() => document.title = "beside ready"));
+</script>' > "$out/site/beside.html"
+  warned
+  warned_tab=$tab
+  send menu Add Split View
+  expect '^browser: command add-split via ' "Add Split View didn't run over Chrome's warning before http"
+  expect '^browser: command bar shown$' "Add Split View didn't open the command bar over Chrome's warning before http"
+  send type "$nearby:$port/beside.html"
+  send key return
+  expect "^browser: splits .*$warned_tab+[0-9][0-9]*" \
+    "$nearby:$port/beside.html didn't open beside $warned_tab's warning before http: $(grep '^browser: splits' "$log" | tail -1)"
+  beside=$(grep '^browser: splits' "$log" | tail -1 | grep -o "$warned_tab+[0-9]*" | cut -d+ -f2)
+  expect "^browser: title $beside beside ready\$" "the page beside $warned_tab's warning before http didn't draw"
+  warning_box
+  send click $((warning_x + warning_width / 2)) $((warning_y + 8))
+  send state
+  [ "$key" = NativeWidgetMacNSWindow ] ||
+    fail "a click on Chrome's warning before http at $warning, beside a page in a split, didn't give it the keyboard: $key, $focus"
+  send layout
+  pane=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
+    grep -o 'WebContentsViewCocoa [0-9,]* [0-9x]*' | sed -n 2p)
+  [ -n "$pane" ] || fail "the layout showed no second page beside $warned_tab's warning before http"
+  pane=${pane#WebContentsViewCocoa }
+  pane_x=${pane%%,*} pane_y=${pane#*,}
+  pane_y=${pane_y%% *}
+  send click $((pane_x + 100)) $((pane_y + 100))
+  clicked=$step
+  expect "^browser: selected $beside\$" "a click on the page beside $warned_tab's warning before http didn't focus its pane"
+  # A task the focus change posted has run once a step after it has.
+  send state
+  send key x
+  send key y
+  expect "^browser: title $beside beside has xy\$" \
+    "typing after a click on the page beside $warned_tab's warning before http didn't reach that page: the keyboard is in $key, on $focus: $(since "$clicked" | grep -e '^browser: drive' -e "^browser: title $beside " | tail -6 | tr '\n' ' ')"
+  since "$clicked" | grep -q "^browser: title $beside beside blurred\$" &&
+    fail "the page beside $warned_tab's warning before http lost the keyboard after the click into it: $(since "$clicked" | grep -e '^browser: drive' -e "^browser: title $beside " | tail -6 | tr '\n' ' ')"
+  send key w cmd
+  expect "^browser: tab $beside closed\$" "⌘W didn't close the pane beside $warned_tab's warning before http"
+  expect "^browser: panes $warned_tab\$" "⌘W on the pane beside the warning didn't leave $warned_tab alone"
+  tab=$warned_tab
+fi
 if [ "$major" -ge 157 ]; then
   warned
   send key t cmd
