@@ -3,8 +3,10 @@
 //! where it is, as the command bar's field does. Spaces has no field: a ring goes on its first
 //! card instead, as Focus Sidebar's does on a row, left and right move it along the cards and
 //! return shows the ringed card's Space, as a click on it does. Escape still closes the Library,
-//! as neither binds it. A swipe or a click on the Library moves no keyboard, and the keyboard goes
-//! back to the window as the Library closes.
+//! as neither binds it. A swipe or a click on the Library moves no keyboard. Closed by its key, a
+//! section's or Escape, the Library gives the keyboard back to whoever had it as it opened, the
+//! page or the UI (#3313), unless the page shown since is an agent's; closed any other way, to the
+//! window.
 //!
 //! From the field, down and up ring the list's rows as the command bar's keys go over its
 //! suggestions, wrapping at the ends, and return does what a click on the ringed row does. The
@@ -31,6 +33,25 @@ actions!(
     [CardLeft, CardRight, CardShow, RowDown, RowUp, RowOpen]
 );
 
+/// The Library's keyboard, between the command that opens it and its close.
+#[derive(Default)]
+pub(in crate::shell) struct LibraryKeys {
+    /// A command opened the Library or showed a section: its field or first card takes the
+    /// keyboard on the next frame.
+    asked: bool,
+    /// It opened the Library, and whether its key came from the page.
+    opened: Option<bool>,
+    /// Who had the keyboard as the Library took it.
+    before: Option<Before>,
+    /// Its key, a section's or Escape closed it.
+    back: bool,
+}
+
+enum Before {
+    Page,
+    Ui(gpui::FocusHandle),
+}
+
 pub(in crate::shell) fn bind(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("left", CardLeft, Some(CARDS)),
@@ -44,26 +65,48 @@ pub(in crate::shell) fn bind(cx: &mut App) {
 
 impl Shell {
     /// Runs a command that opens the Library or shows one of its sections, whose field or first
-    /// card then takes the keyboard.
+    /// card then takes the keyboard, or closes it. `from` is where its key came from (`run`).
     pub(in crate::shell) fn library_command(
         &mut self,
+        from: &str,
         cx: &mut Context<Self>,
         run: impl FnOnce(&mut Self, &mut Context<Self>),
     ) {
+        let open = self.library_open;
         run(self, cx);
-        self.library_keys = self.library_open;
+        let keys = &mut self.library_keys;
+        keys.asked = self.library_open;
+        if !open && self.library_open {
+            keys.opened = Some(from == "page");
+        }
+        keys.back = open && !self.library_open;
+    }
+
+    /// Escape closes the Library, giving the keyboard back as its key does.
+    pub(in crate::shell) fn escape_library(&mut self, cx: &mut Context<Self>) {
+        self.library_keys.back = true;
+        self.set_library(false, cx);
     }
 
     /// Before the frame's drawn: gives the section shown the keyboard a command asked for, ends
-    /// Spaces' ring once something else has the keyboard, and gives the window it back as the
+    /// Spaces' ring once something else has the keyboard, and gives the keyboard back as the
     /// Library closes.
     pub(super) fn step_library_keys(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let first = self.spaces.first().map(|space| space.id);
         let Some(library) = &mut self.library else {
             return;
         };
-        let asked = std::mem::take(&mut self.library_keys) && self.library_open;
+        let keys = &mut self.library_keys;
+        let asked = std::mem::take(&mut keys.asked) && self.library_open;
         let (search, cards) = (library.search.focus_handle(cx), library.cards.clone());
+        // Who has the keyboard as the Library takes it: the page, if the key came from it, as
+        // GPUI's focus doesn't see the page's, else the UI's focus.
+        if let Some(from_page) = keys.opened.take().filter(|_| asked) {
+            keys.before = match from_page {
+                true => Some(Before::Page),
+                false => window.focused(cx).map(Before::Ui),
+            };
+        }
         if asked {
             // The page may have the keyboard.
             self.browser.focus_ui(cx);
@@ -84,12 +127,40 @@ impl Shell {
         if let Some(card) = library.keyed_card.filter(|_| asked) {
             log!("browser: library card keyed {card}");
         }
-        // The field and cards go with the Library, so the window takes the keyboard back, as
-        // before it took it, where Tab rings the sidebar. Not the page: a row's click may be
-        // opening another.
-        if !self.library_open && (search.is_focused(window) || cards.is_focused(window)) {
-            window.focus(&self.focus_handle, cx);
+        if self.library_open {
+            return;
         }
+        // The field and cards go with the Library. Its key or Escape gives the keyboard back to
+        // whoever had it. Otherwise the window takes it, where Tab rings the sidebar, and not the
+        // page: a click on a row may be opening another, and a click elsewhere took it already.
+        let LibraryKeys { before, back, .. } = std::mem::take(&mut self.library_keys);
+        if !(search.is_focused(window) || cards.is_focused(window)) {
+            return;
+        }
+        match before.filter(|_| back) {
+            // The tab shown may have changed since, by a key for another tab or Space: an agent's
+            // page the user doesn't hold never gets the keyboard from a key in the UI.
+            Some(Before::Page) if self.shows_agents_page() => {
+                window.focus(&self.focus_handle, cx);
+                log!("browser: library kept the keyboard from an agent's page");
+            }
+            Some(Before::Page) => {
+                window.focus(&self.focus_handle, cx);
+                self.browser.focus_page(cx);
+                // check.sh reads this line.
+                log!("browser: library gave the keyboard back to the page");
+            }
+            Some(Before::Ui(before)) => window.focus(&before, cx),
+            None => window.focus(&self.focus_handle, cx),
+        }
+    }
+
+    /// Whether the core shows an agent's page, or a task's watched is still drawn: agents' Spaces
+    /// are never the window's own, so only those are theirs. The Library's key closes the task's
+    /// area as it closes, while the core still shows the task's page, so the window keeps the
+    /// keyboard, a page the user holds from the agent too.
+    fn shows_agents_page(&self) -> bool {
+        self.task_core != 0 || self.agent_page().is_some()
     }
 
     /// Spaces' cards, taking their keys while they have the keyboard. An assistive app reads them
@@ -525,12 +596,26 @@ mod tests {
     }
 
     fn run(shell: &Entity<Shell>, command: Command, cx: &mut VisualTestContext) {
+        run_from(shell, command, "test", cx);
+    }
+
+    /// Runs `command` for a key from `from`, "page" for one the page handed back.
+    fn run_from(shell: &Entity<Shell>, command: Command, from: &str, cx: &mut VisualTestContext) {
         shell.update(cx, |shell, cx| {
-            shell.run(command, "test", cx);
-            shell.library_motion = None;
-            shell.sidebar_fade = None;
+            shell.run(command, from, cx);
+            settle(shell);
         });
         cx.run_until_parked();
+    }
+
+    /// The Library's motion and the sidebar's fade at their ends.
+    fn settle(shell: &mut Shell) {
+        shell.library_motion = None;
+        shell.sidebar_fade = None;
+    }
+
+    fn root_keyed(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> bool {
+        cx.update(|window, cx| shell.read(cx).focus_handle.is_focused(window))
     }
 
     /// What has the keyboard, as a screen reader reads it: its role and name, or, inside it, the
@@ -582,8 +667,71 @@ mod tests {
         run(&shell, Command::ViewDownloads, cx);
         assert_eq!(keyed(cx), (Role::TextInput, "Search Downloads".into()));
         run(&shell, Command::ViewLibrary, cx);
-        let root = cx.update(|window, cx| shell.read(cx).focus_handle.is_focused(window));
-        assert!(root, "the window didn't take the keyboard back");
+        assert!(
+            root_keyed(&shell, cx),
+            "the window didn't take the keyboard back"
+        );
+    }
+
+    /// Opened by its key from the page, the Library gives the page the keyboard back as its key or
+    /// a section's closes it, or Escape does, and the window's UI lets it go (#3313).
+    #[gpui::test]
+    fn the_page_gets_the_keyboard_back_as_a_key_closes_the_library(cx: &mut TestAppContext) {
+        let (shell, host, cx) = window(Section::Archive, cx);
+        let focused_page = |host: &Recorder| host.take().contains(&"focus page".to_owned());
+        run_from(&shell, Command::ViewDownloads, "page", cx);
+        assert_eq!(keyed(cx), (Role::TextInput, "Search Downloads".into()));
+        // Another section's key keeps the Library open, and the page's turn for the keyboard.
+        run(&shell, Command::ViewArchive, cx);
+        assert!(
+            !focused_page(&host),
+            "the page took it while the Library was open"
+        );
+        run(&shell, Command::ViewArchive, cx);
+        assert!(
+            focused_page(&host),
+            "a section's key didn't give the page it back"
+        );
+        assert!(root_keyed(&shell, cx), "the field kept the UI's keyboard");
+
+        run_from(&shell, Command::ViewLibrary, "page", cx);
+        run(&shell, Command::ViewLibrary, cx);
+        assert!(
+            focused_page(&host),
+            "the Library's key didn't give the page it back"
+        );
+
+        run_from(&shell, Command::ViewLibrary, "page", cx);
+        assert_eq!(keyed(cx), (Role::TextInput, "Search History".into()));
+        cx.simulate_keystrokes("escape");
+        shell.update(cx, |shell, _| settle(shell));
+        cx.run_until_parked();
+        assert!(
+            !shell.read_with(cx, |shell, _| shell.library_open),
+            "escape left it open"
+        );
+        assert!(focused_page(&host), "escape didn't give the page it back");
+    }
+
+    /// Closed as a click closes it, the Library opened from the page gives the window the
+    /// keyboard: the click went where the user wants it. Opened from the UI, its key gives the UI
+    /// the keyboard back, never the page.
+    #[gpui::test]
+    fn a_click_or_the_uis_key_never_gives_the_page_the_keyboard(cx: &mut TestAppContext) {
+        let (shell, host, cx) = window(Section::Archive, cx);
+        run_from(&shell, Command::ViewLibrary, "page", cx);
+        shell.update(cx, |shell, cx| {
+            shell.set_library(false, cx);
+            settle(shell);
+        });
+        cx.run_until_parked();
+        assert!(!host.take().contains(&"focus page".to_owned()));
+        assert!(root_keyed(&shell, cx));
+
+        run_from(&shell, Command::ViewLibrary, "ui", cx);
+        run(&shell, Command::ViewLibrary, cx);
+        assert!(!host.take().contains(&"focus page".to_owned()));
+        assert!(root_keyed(&shell, cx));
     }
 
     /// The archive's tabs `ids`, for a Library opened on History.
@@ -652,6 +800,30 @@ mod tests {
                 .map(|library| library.search.read(cx).text().to_string())
         });
         assert_eq!(text.as_deref(), Some("ex"));
+    }
+
+    /// A key for another tab can show another of the user's pages while the Library is open, and
+    /// the Library's key then gives that page the keyboard. An agent's page watched is task_area's
+    /// test.
+    #[gpui::test]
+    fn the_page_shown_since_gets_the_keyboard(cx: &mut TestAppContext) {
+        let (shell, host, cx) = window(Section::Archive, cx);
+        shell.update(cx, |shell, cx| {
+            shell.set_tabs(
+                1,
+                Vec::new(),
+                vec![10, 11],
+                Vec::new(),
+                Folders::default(),
+                cx,
+            );
+        });
+        run_from(&shell, Command::ViewLibrary, "page", cx);
+        shell.update(cx, |shell, cx| shell.set_selected(11, cx));
+        cx.run_until_parked();
+        host.take();
+        run(&shell, Command::ViewLibrary, cx);
+        assert!(host.take().contains(&"focus page".to_owned()));
     }
 
     /// Opened by a swipe, or set open as the gesture does, the Library leaves the keyboard where

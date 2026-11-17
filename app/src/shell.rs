@@ -1828,8 +1828,9 @@ pub struct Shell {
     /// While the Library's width goes to another section's: the width it left, and when.
     library_resize: Option<(f32, Instant)>,
     /// The Library's search field takes the keyboard on the next frame, as the Library opens or
-    /// shows another section, so a screen reader, which follows it, says where it is (#3238).
-    library_keys: bool,
+    /// shows another section, so a screen reader, which follows it, says where it is (#3238), and
+    /// who had it gets it back as the Library closes by key (#3313).
+    library_keys: library::keys::LibraryKeys,
     /// While the card moves for the Library on its own: how far out it started (`library_out`),
     /// how fast, and when.
     library_motion: Option<(f32, f32, Instant)>,
@@ -2295,7 +2296,7 @@ impl Shell {
             library: None,
             library_open: false,
             library_resize: None,
-            library_keys: false,
+            library_keys: Default::default(),
             library_motion: None,
             sidebar_fade: None,
             card_strip: Default::default(),
