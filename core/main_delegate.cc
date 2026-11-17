@@ -38,6 +38,7 @@
 #include "browser_core/boosts.h"
 #include "browser_core/developer_mode.h"
 #include "browser_core/drm_request.h"
+#include "browser_core/focus_leaving.h"
 #include "browser_core/hooks.h"
 #include "browser_core/host.h"
 #include "browser_core/install_question.h"
@@ -424,6 +425,13 @@ class ContentBrowserClient : public ChromeContentBrowserClient {
         network_context_params->persist_session_cookies) {
       network_context_params->restore_old_session_cookies = true;
     }
+  }
+
+  // Chrome's, answering as Tab leaves a tab's page at either end (focus_leaving.h).
+  std::unique_ptr<content::WebContentsViewDelegate> GetWebContentsViewDelegate(
+      content::WebContents* web_contents) override {
+    return AnswerFocusLeaving(
+        web_contents, ChromeContentBrowserClient::GetWebContentsViewDelegate(web_contents));
   }
 
   // Every video's Picture in Picture window is the core's, which shows it at its media card while
