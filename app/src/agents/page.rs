@@ -643,6 +643,19 @@ fn name(node: &Value) -> String {
     name.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// `text` as one line of a log, each character that could break it a space, so a line break in
+/// what an agent asked, which an error echoes as it was asked, can't make a line of its own.
+pub fn one_line(text: &str) -> String {
+    text.chars()
+        .map(
+            |c| match c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') {
+                true => ' ',
+                false => c,
+            },
+        )
+        .collect()
+}
+
 /// `text`, cut at `chars` characters.
 pub fn clip(text: &str, chars: usize) -> String {
     match text.char_indices().nth(chars) {
@@ -795,6 +808,24 @@ mod tests {
         '\u{2005}', '\u{2006}', '\u{2007}', '\u{2008}', '\u{2009}', '\u{200A}', '\u{2028}',
         '\u{2029}', '\u{202F}', '\u{205F}', '\u{3000}',
     ];
+
+    /// An error that echoes a request with line breaks in it is still one line of the log, and
+    /// what isn't a break stays as it was asked.
+    #[test]
+    fn a_line_break_in_what_was_asked_makes_no_line_of_the_log() {
+        let asked = "There's no option “a\nbrowser: agent page pressed in 5\r\u{85}\u{2028}\u{2029}\u{b}\u{c}b  c\u{a0}d” there.";
+        let line = one_line(asked);
+        assert!(
+            !line
+                .chars()
+                .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+        );
+        assert_eq!(line.lines().count(), 1);
+        assert_eq!(
+            line,
+            "There's no option “a browser: agent page pressed in 5      b  c\u{a0}d” there."
+        );
+    }
 
     /// A name's white space, a no-break space beside a space or any other of Unicode's, is one
     /// space in the outline, as `select` matches it, and what isn't white space stays.
