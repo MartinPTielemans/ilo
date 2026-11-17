@@ -442,7 +442,7 @@ index 98a13f304c..22267df7e8 100644
  
  #[inline]
 diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
-index 08f91bd626..dca73547ee 100644
+index 08f91bd626..b00b39331a 100644
 --- a/crates/gpui_windows/src/events.rs
 +++ b/crates/gpui_windows/src/events.rs
 @@ -28,6 +28,7 @@ pub(crate) const WM_GPUI_FORCE_UPDATE_WINDOW: u32 = WM_USER + 5;
@@ -469,7 +469,7 @@ index 08f91bd626..dca73547ee 100644
              WM_NCMOUSEMOVE => self.handle_nc_mouse_move_msg(handle, lparam),
              // Treat double click as a second single click, since we track the double clicks ourselves.
              // If you don't interact with any elements, this will fall through to the windows default
-@@ -146,11 +148,18 @@ impl WindowsWindowInner {
+@@ -146,11 +148,19 @@ impl WindowsWindowInner {
              }
              WM_MOUSEWHEEL => self.handle_mouse_wheel_msg(handle, wparam, lparam),
              WM_MOUSEHWHEEL => self.handle_mouse_horizontal_wheel_msg(handle, wparam, lparam),
@@ -484,11 +484,12 @@ index 08f91bd626..dca73547ee 100644
              WM_IME_STARTCOMPOSITION => self.handle_ime_position(handle),
              WM_IME_COMPOSITION => self.handle_ime_composition(handle, lparam),
 +            WM_IME_ENDCOMPOSITION => self.handle_ime_end_composition(),
++            WM_SETFOCUS => self.handle_set_focus_msg(handle),
 +            WM_KILLFOCUS => self.handle_kill_focus_msg(handle),
              WM_SETCURSOR => self.handle_set_cursor(handle, lparam),
              WM_SETTINGCHANGE => self.handle_system_settings_changed(handle, wparam, lparam),
              WM_INPUTLANGCHANGE => self.handle_input_language_changed(),
-@@ -159,6 +168,7 @@ impl WindowsWindowInner {
+@@ -159,6 +169,7 @@ impl WindowsWindowInner {
              WM_GETOBJECT => self.handle_wm_getobject(wparam, lparam),
              WM_GPUI_CURSOR_STYLE_CHANGED
              | WM_GPUI_FORCE_UPDATE_WINDOW
@@ -496,7 +497,7 @@ index 08f91bd626..dca73547ee 100644
              | WM_GPUI_GPU_DEVICE_LOST => self.handle_gpui_events(handle, msg, wparam, lparam),
              _ => None,
          };
-@@ -169,7 +179,7 @@ impl WindowsWindowInner {
+@@ -169,7 +180,7 @@ impl WindowsWindowInner {
          }
      }
  
@@ -505,7 +506,7 @@ index 08f91bd626..dca73547ee 100644
          let origin = logical_point(
              lparam.signed_loword() as f32,
              lparam.signed_hiword() as f32,
-@@ -315,6 +325,19 @@ impl WindowsWindowInner {
+@@ -315,6 +326,19 @@ impl WindowsWindowInner {
          self.draw_window(handle, false)
      }
  
@@ -525,7 +526,7 @@ index 08f91bd626..dca73547ee 100644
      fn handle_close_msg(&self) -> Option<isize> {
          let mut callback = self.state.callbacks.should_close.take()?;
          let should_close = callback();
-@@ -381,8 +404,28 @@ impl WindowsWindowInner {
+@@ -381,8 +405,28 @@ impl WindowsWindowInner {
          if handled { Some(0) } else { Some(1) }
      }
  
@@ -555,7 +556,7 @@ index 08f91bd626..dca73547ee 100644
          // The next window's `WM_SETCURSOR` picks its own cursor, so we just clear
          // the flag for tight `is_cursor_visible()` semantics.
          self.state.cursor_visible.store(true, Ordering::Relaxed);
-@@ -413,7 +456,14 @@ impl WindowsWindowInner {
+@@ -413,7 +457,14 @@ impl WindowsWindowInner {
      // It's a known bug that you can't trigger `ctrl-shift-0`. See:
      // https://superuser.com/questions/1455762/ctrl-shift-number-key-combination-has-stopped-working-for-a-few-numbers
      pub(crate) fn handle_keydown_msg(&self, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
@@ -571,7 +572,7 @@ index 08f91bd626..dca73547ee 100644
              wparam,
              lparam,
              &self.state,
-@@ -424,19 +474,56 @@ impl WindowsWindowInner {
+@@ -424,19 +475,56 @@ impl WindowsWindowInner {
                      prefer_character_input,
                  })
              },
@@ -639,7 +640,7 @@ index 08f91bd626..dca73547ee 100644
      }
  
      fn handle_keyup_msg(&self, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
-@@ -710,6 +797,72 @@ impl WindowsWindowInner {
+@@ -710,6 +798,97 @@ impl WindowsWindowInner {
          }
      }
  
@@ -695,7 +696,32 @@ index 08f91bd626..dca73547ee 100644
 +
 +    /// The keyboard leaving the window commits what the input method composes, as Chromium's
 +    /// fields and AppKit's do, so the text the user saw stays.
++    fn handle_set_focus_msg(&self, handle: HWND) -> Option<isize> {
++        self.update_embedded_a11y_focus(handle, true);
++        None
++    }
++
++    /// Windows activates only top-level windows, so a window embedded in another's never gets
++    /// WM_ACTIVATE: it has the keyboard from WM_SETFOCUS to WM_KILLFOCUS, and that's when
++    /// AccessKit hears it's focused, or UI Automation never reports its focused node. Only
++    /// AccessKit's adapter hears it: the window's own active state stays its host's.
++    fn update_embedded_a11y_focus(&self, handle: HWND, focused: bool) {
++        if !is_embedded(handle) {
++            return;
++        }
++        let events = self
++            .state
++            .a11y
++            .try_borrow_mut()
++            .ok()
++            .and_then(|mut a11y| a11y.as_mut()?.adapter.update_window_focus_state(focused));
++        if let Some(events) = events {
++            events.raise();
++        }
++    }
++
 +    fn handle_kill_focus_msg(&self, handle: HWND) -> Option<isize> {
++        self.update_embedded_a11y_focus(handle, false);
 +        if let Some(ctx) = ImeContext::get(handle) {
 +            unsafe {
 +                let _ = ImmNotifyIME(*ctx, NI_COMPOSITIONSTR, CPS_COMPLETE, 0);
@@ -712,7 +738,7 @@ index 08f91bd626..dca73547ee 100644
      fn handle_ime_composition(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
          let ctx = ImeContext::get(handle)?;
          self.handle_ime_composition_inner(*ctx, lparam)
-@@ -933,7 +1086,35 @@ impl WindowsWindowInner {
+@@ -933,7 +1112,35 @@ impl WindowsWindowInner {
          Some(0)
      }
  
@@ -749,7 +775,7 @@ index 08f91bd626..dca73547ee 100644
          let new_monitor = unsafe { MonitorFromWindow(handle, MONITOR_DEFAULTTONULL) };
          if new_monitor.is_invalid() {
              log::error!("No monitor detected!");
-@@ -944,12 +1125,21 @@ impl WindowsWindowInner {
+@@ -944,12 +1151,21 @@ impl WindowsWindowInner {
          Some(0)
      }
  
@@ -776,7 +802,7 @@ index 08f91bd626..dca73547ee 100644
      }
  
      fn handle_hit_test_msg(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
-@@ -1021,6 +1211,12 @@ impl WindowsWindowInner {
+@@ -1021,6 +1237,12 @@ impl WindowsWindowInner {
      }
  
      fn handle_nc_mouse_move_msg(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
@@ -789,7 +815,7 @@ index 08f91bd626..dca73547ee 100644
          self.start_tracking_mouse(handle, TME_LEAVE | TME_NONCLIENT);
          self.restore_cursor_after_hide();
  
-@@ -1306,6 +1502,7 @@ impl WindowsWindowInner {
+@@ -1306,6 +1528,7 @@ impl WindowsWindowInner {
          match message {
              WM_GPUI_CURSOR_STYLE_CHANGED => self.handle_cursor_changed(lparam),
              WM_GPUI_FORCE_UPDATE_WINDOW => self.draw_window(handle, true),
@@ -797,7 +823,7 @@ index 08f91bd626..dca73547ee 100644
              WM_GPUI_GPU_DEVICE_LOST => self.handle_device_lost(lparam),
              _ => unreachable!(),
          }
-@@ -1335,6 +1532,8 @@ impl WindowsWindowInner {
+@@ -1335,6 +1558,8 @@ impl WindowsWindowInner {
  
      fn handle_dm_pointer_hit_test(&self, wparam: WPARAM) -> Option<isize> {
          self.state.direct_manipulation.on_pointer_hit_test(wparam);
@@ -806,7 +832,7 @@ index 08f91bd626..dca73547ee 100644
          None
      }
  
-@@ -1347,16 +1546,28 @@ impl WindowsWindowInner {
+@@ -1347,16 +1572,28 @@ impl WindowsWindowInner {
              }
              // Validate the region so a nested message pump doesn't keep
              // re-dispatching WM_PAINT for the still-invalid region in a busy
@@ -837,7 +863,7 @@ index 08f91bd626..dca73547ee 100644
  
          let events = self.state.direct_manipulation.drain_events();
          if !events.is_empty() {
-@@ -1823,3 +2034,70 @@ fn notify_frame_changed(handle: HWND) {
+@@ -1823,3 +2060,70 @@ fn notify_frame_changed(handle: HWND) {
          .log_err();
      }
  }
@@ -1541,6 +1567,22 @@ index 095e009e23..f18d176e74 100644
 +    let thread = EARLY.lock().ok()?.take()?;
 +    thread.join().ok()
 +}
+diff --git a/crates/gpui_windows/src/util.rs b/crates/gpui_windows/src/util.rs
+index b3badd84d1..f8f03ee987 100644
+--- a/crates/gpui_windows/src/util.rs
++++ b/crates/gpui_windows/src/util.rs
+@@ -60,6 +60,11 @@ impl HiLoWord for LPARAM {
+     }
+ }
+ 
++/// Whether the window is a child of a window something else owns, as `open_next_window_in` makes.
++pub(crate) fn is_embedded(hwnd: HWND) -> bool {
++    (unsafe { get_window_long(hwnd, GWL_STYLE) } as u32) & WS_CHILD.0 != 0
++}
++
+ pub(crate) unsafe fn get_window_long(hwnd: HWND, nindex: WINDOW_LONG_PTR_INDEX) -> isize {
+     #[cfg(target_pointer_width = "64")]
+     unsafe {
 diff --git a/crates/gpui_windows/src/vsync.rs b/crates/gpui_windows/src/vsync.rs
 index 5121c41b61..8f35f1ab32 100644
 --- a/crates/gpui_windows/src/vsync.rs
@@ -1651,7 +1693,7 @@ index 5121c41b61..8f35f1ab32 100644
      fn successful_compositor_wait_reports_native_callback() {
          let provider = VSyncProvider {
 diff --git a/crates/gpui_windows/src/window.rs b/crates/gpui_windows/src/window.rs
-index c467101fc8..6977a8c79d 100644
+index c467101fc8..19559292df 100644
 --- a/crates/gpui_windows/src/window.rs
 +++ b/crates/gpui_windows/src/window.rs
 @@ -2,6 +2,7 @@
@@ -1873,3 +1915,17 @@ index c467101fc8..6977a8c79d 100644
      fn render_to_image(&self, scene: &Scene) -> anyhow::Result<image::RgbaImage> {
          self.state
              .renderer
+@@ -1079,7 +1155,12 @@ impl PlatformWindow for WindowsWindow {
+ 
+     fn a11y_init(&self, callbacks: gpui::A11yCallbacks) {
+         let action_handler = A11yActionHandler(callbacks.action);
+-        let is_focused = unsafe { GetForegroundWindow() } == self.0.hwnd;
++        // An embedded window is focused while it has the keyboard; see `update_embedded_a11y_focus`.
++        let is_focused = if is_embedded(self.0.hwnd) {
++            self.0.hwnd == unsafe { GetFocus() }
++        } else {
++            self.0.hwnd == unsafe { GetForegroundWindow() }
++        };
+ 
+         let adapter = accesskit_windows::Adapter::new(
+             accesskit_windows::HWND(self.0.hwnd.0),

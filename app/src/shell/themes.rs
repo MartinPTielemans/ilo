@@ -97,7 +97,14 @@ impl Shell {
             Appearance::Automatic => None,
         };
         self.system_tone = self.forced_tone.or(chosen).unwrap_or(system);
-        self.window_active = window.is_window_active();
+        let active = window.is_window_active();
+        // Its Live Folders ask once this frame is drawn, not inside render. Deferred, not a
+        // next-frame callback: that asks for a frame of its own, and on Linux one asked for as
+        // the ⌘T bar closes held the new tab's page about 300 ms (#3004).
+        if active && !self.window_active {
+            cx.defer_in(window, |shell, _, cx| shell.live_window_active(cx));
+        }
+        self.window_active = active;
         if self.window_watches.is_empty() {
             self.window_watches = vec![
                 cx.observe_window_appearance(window, |_, _, cx| cx.notify()),

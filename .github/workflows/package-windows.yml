@@ -15,6 +15,9 @@ on:
     branches: ['**']
     paths:
       - app/platform/windows/package/**
+      # A Board's page, which package.sh copies in with copy-board.sh.
+      - app/board/**
+      - app/copy-board.sh
       - app/branding/windows-store.ini
       - app/branding/winget.ini
       - app/fetch-ublock.sh

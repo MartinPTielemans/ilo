@@ -3,7 +3,7 @@
 # their things at different depths and where a thing already scrolls sideways where it stands. A
 # rest on a card's middle in another column trades with the card, however deep either column wraps
 # its cards. A rest in a column's gap settles at the nearest card's edge, in a column that wraps its
-# cards one box deeper too. One that can't be as narrow as its place is refused. A block that
+# cards one box deeper too, and so does one in the carried card's own column's gap. One that can't be as narrow as its place is refused. A block that
 # scrolls sideways settles and trades between places of its own width, and is refused only in a
 # narrower one. On markup with no classes, a card under the rest trades and a column's gap settles,
 # though both are plain boxes of plain boxes. A paragraph with a button in it, beside the carried
@@ -72,8 +72,10 @@ let at = "-";
 addEventListener("mousedown", (event) => { at = Math.round(event.clientX) + "," + Math.round(event.clientY); });
 const cols = ["dl", "dr", "dn", "dj", "dc", "dk"].map((id) => document.getElementById(id));
 // Where the things of each column start, from the top: the code and class-less columns are under
-// the left and right ones, and the narrow class-less one under the narrow one.
-const band = { dl: [0, 380], dr: [0, 380], dn: [0, 180], dj: [180, 380], dc: [380, 1e4], dk: [380, 1e4] };
+// the left and right ones, from 400, and the narrow class-less one under the narrow one. A fourth
+// card settled in the left or right column keeps a gap above it as the others do (#3030), so it
+// starts at 380 and is still in that column.
+const band = { dl: [0, 400], dr: [0, 400], dn: [0, 180], dj: [180, 380], dc: [400, 1e4], dk: [400, 1e4] };
 function column(col) {
   const c = col.getBoundingClientRect(), [top, bottom] = band[col.id];
   return [...document.querySelectorAll("[aria-label]")].filter((t) => {
@@ -211,6 +213,11 @@ drop R2 400 190 140 190 Trades 'dl L1,R2,L3 dr R1,L2,R3 ' 'a card on a wrapped c
 drop L1 140 70 400 130 Settles 'dl L2,L3 dr R1,L1,R2,R3 ' 'a wrapped card in the gap under the other column'"'"'s card settles' 3
 drop R2 400 190 140 130 Settles 'dl L1,R2,L2,L3 dr R1,R3 ' 'a card in the gap of the column that wraps its cards settles' 4
 drop L1 140 70 600 90 Refused "$before" 'a card that can'"'"'t be 120 wide is refused in the narrow column' 5
+# Down its own column: while a card is lifted its column closes its gap (#3028), so the gap between
+# the two under it is at 120 to 140, and it settles there, in a column that wraps its cards too
+# (#3003).
+drop R1 400 70 400 130 Settles 'dl L1,L2,L3 dr R2,R1,R3 ' 'a card in its own column'"'"'s gap settles there' 12
+drop L1 140 70 140 130 Settles 'dl L2,L1,L3 dr R1,R2,R3 ' 'a wrapped card in its own column'"'"'s gap settles there' 13
 # The block that scrolls sideways where it stands, carried by its empty part under its line.
 drop CB 140 445 400 130 Settles 'dl L1,L2,L3 dr R1,CB,R2,R3 dn N1,N2 dj J1,J2 dc C2 ' 'the scrolling block settles in a place of its width' 6
 drop CB 140 445 400 190 Trades 'dl L1,L2,L3 dr R1,CB,R3 dn N1,N2 dj J1,J2 dc R2,C2 ' 'the scrolling block trades with a card of its width' 7

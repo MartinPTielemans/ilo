@@ -318,6 +318,7 @@ navigator.requestMediaKeySystemAccess("org.w3.clearkey", [{
 # A page that names the engine showing it: Safari's sends Safari's user agent, without Chrome's name.
 # A text field covers it, so a click anywhere in it lands there, and the field's title says what it
 # did: a press, counted, its value, what ⌘A selected and ⌘C copied, and a committed composition.
+# It keeps escape, counting each.
 printf '%s' '<title>loading</title>
 <input id=f style="position:fixed;left:0;top:0;width:100%;height:100%;box-sizing:border-box">
 <script>
@@ -329,6 +330,8 @@ f.oninput = e => e.isComposing || (document.title = "value " + f.value);
 f.onselect = document.onselectionchange = () => selected() && (document.title = "select " + selected());
 oncopy = () => document.title = "copy " + selected();
 f.addEventListener("compositionend", e => document.title = "committed " + e.data);
+let escapes = 0;
+onkeydown = e => { if (e.key == "Escape") { e.preventDefault(); document.title = "escape " + ++escapes; } };
 </script>' > "$out/site/engine.html"
 # The session page, whose title says the engine showing it and which of the check's values its
 # script finds, in this order, or none: the cookies h, hw, n, p and w, and the localStorage items
