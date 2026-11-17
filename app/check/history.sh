@@ -423,12 +423,12 @@ requestAnimationFrame(() => requestAnimationFrame(() => document.title = "beside
   # move the focus between the panes, the warning hiding and showing again with it (#3214).
   send key 1 ctrl shift
   shortcut=$step
-  expect "^browser: selected $beside\$" \
+  expect "^browser: selected $beside in [0-9.]* ms\$" \
     "Go to Pane 1 (⌃⇧1) on $warned_tab's warning before http, in a split, didn't focus the pane beside it: $(since "$shortcut" | grep -e '^browser: drive' -e '^browser: command ' -e '^browser: selected' | tail -4 | tr '\n' ' ')"
   since "$shortcut" | grep -q '^browser: command focus-pane via ' ||
     fail "⌃⇧1 on $warned_tab's warning before http focused the pane beside it, but not as Go to Pane 1: $(since "$shortcut" | grep '^browser: command ' | tr '\n' ' ')"
   send key 2 ctrl shift
-  expect "^browser: selected $warned_tab\$" \
+  expect "^browser: selected $warned_tab in [0-9.]* ms\$" \
     "Go to Pane 2 (⌃⇧2), after ⌃⇧1 on its warning before http, didn't focus $warned_tab's pane again: $(since "$shortcut" | grep -e '^browser: drive' -e '^browser: command ' -e '^browser: selected' | tail -4 | tr '\n' ' ')"
   for _ in $(seq 50); do
     send layout
