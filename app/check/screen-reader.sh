@@ -4,8 +4,9 @@
 # page's own content. NVDA follows the keyboard's focus, as JAWS and Narrator do, so it says what
 # Windows tells it took the focus. It writes each thing it would say to its log, with the key it
 # heard before, so the run's record, screen-reader-speech.txt, is what each key made NVDA say, and
-# screen-reader-focus.txt is what UI Automation and the window manager had focused after it. It
-# records and doesn't judge yet: it fails only when NVDA can't start.
+# screen-reader-focus.txt is what UI Automation and the window manager had focused after it. On
+# the onboarding it judges: each step and each Tab through one has NVDA say something, with UI
+# Automation's focus off GPUI's unnamed root. Past it, it records.
 # NVDA's portable copy (GPL) is fetched from NV Access' release on GitHub, its checksum pinned, into
 # the hosted runner's temporary folder, and never installed: with NVDA_DIR naming a portable copy,
 # the run uses that instead. Off a hosted Windows runner, and without NVDA_DIR, it skips.
@@ -64,9 +65,14 @@ done
 # Without its own log, NVDA's default one, in the temporary folder, says why.
 grep -q 'NVDA initialized' "$nvda_log" 2> /dev/null ||
   fail "NVDA didn't start: $(tail -5 "$nvda_log" "$(cygpath -u "${TEMP:-/tmp}")/nvda.log" 2> /dev/null)"
+# Once, from the run's end or from the cleanup after a failure the run judged.
+nvda_on=1
 nvda_quit() {
+  [ -n "$nvda_on" ] || return 0
+  nvda_on=
   "$nvda_dir/nvda.exe" -q > /dev/null 2>&1 || true
 }
+run_undo=nvda_quit
 
 speech="$out/screen-reader-speech.txt"
 # Not $focus, which send sets.
@@ -139,14 +145,25 @@ except Exception as error:
 PYTHON
 }
 # Waits up to 5 s for NVDA to say something after the key or launch it last heard, so the next
-# step's key comes after what this one made it say. Silence is what's recorded, never a failure.
+# step's key comes after what this one made it say. While $judging is set, as on the onboarding's
+# steps and Tab through them (#3151), silence fails, and so does UI Automation's focus left on
+# GPUI's unnamed root, where a reader has nothing to say.
 heard=0
+judging=
 spoken() {
   for _ in $(seq 50); do
     tail -n "+$((heard + 1))" "$nvda_log" | grep -q '^Speaking ' && break
     sleep 0.1
   done
+  if [ -n "$judging" ]; then
+    tail -n "+$((heard + 1))" "$nvda_log" | grep -q '^Speaking ' ||
+      fail "NVDA said nothing after $1, on the onboarding: $nvda_log"
+  fi
   focused "$1"
+  if [ -n "$judging" ] &&
+    tail -n 4 "$focus_file" | grep -q '^UI Automation focus: Window "", framework AccessKit'; then
+    fail "UI Automation's focus stayed on ilo's unnamed root after $1, on the onboarding: $focus_file"
+  fi
   heard=$(wc -l < "$nvda_log")
 }
 # A key the driver sends as a hand's, as NVDA hears it.
@@ -166,6 +183,7 @@ BROWSER_IMPORT_HOME=$(cygpath -aw "$out/screen-reader-home") BROWSER_DRIVE=1 BRO
 pid=$!
 exec 3> "$out/drive"
 await '^browser: onboarding step intro settled$' || fail "the onboarding's intro didn't draw"
+judging=1
 spoken launch
 await '^browser: onboarding left intro ' || fail "the intro didn't go on by itself"
 await '^browser: onboarding step [a-z-]* settled$' || fail "no step came after the intro"
@@ -173,12 +191,16 @@ spoken "$(grep '^browser: onboarding step [a-z-]* settled$' "$log" | tail -1 | c
 press tab
 press tab
 press tab shift
+# An arrow on a button has nothing new to say.
+judging=
 press down
+judging=1
 # On through the steps as Esc goes, each one's speech recorded as it comes.
 for _ in $(seq 10); do
   grep -q '^browser: onboarding done$' "$log" && break
   press escape
 done
+judging=
 expect '^browser: command bar shown$' "the command bar didn't come up after the onboarding"
 spoken "command bar after the onboarding"
 heard=$(wc -l < "$nvda_log")
