@@ -164,7 +164,12 @@ void host_add_menu_window(void* view,
                     if (!g_shown || window == g_window) {
                       return;
                     }
-                    if (window == g_browser_window || window == g_parent) {
+                    // A tab's dialog is its browser window's too, such as Chrome's warning
+                    // showing under the menu (#3209).
+                    const bool tab_dialog =
+                        window.parentWindow == g_browser_window &&
+                        [window isKindOfClass:NSClassFromString(@"NativeWidgetMacNSWindow")];
+                    if (window == g_browser_window || window == g_parent || tab_dialog) {
                       [g_window makeKeyWindow];
                     } else {
                       Dismiss(false);
