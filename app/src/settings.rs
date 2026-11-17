@@ -886,13 +886,29 @@ fn chosen_time(times: &[(&'static str, f64)], seconds: f64) -> (SharedString, Op
 
 /// The search engines `profile`'s default is picked from, each its keyword and name, and the
 /// keyword of the default, or None while it loads or a policy or an extension picks it.
-fn search_engines(profile: u64) -> Option<(Vec<(SharedString, SharedString)>, SharedString)> {
+pub(crate) fn search_engines(
+    profile: u64,
+) -> Option<(Vec<(SharedString, SharedString)>, SharedString)> {
     let engines = crate::name(bc::bc_profile_search_engines, profile);
     let engines: Vec<(SharedString, SharedString)> = (engines.lines())
         .filter_map(|line| line.split_once('\t'))
         .map(|(keyword, name)| (keyword.to_string().into(), name.to_string().into()))
         .collect();
     (!engines.is_empty()).then(|| (engines, crate::name(bc::bc_profile_search_engine, profile)))
+}
+
+/// The keyword of the engine a profile searches with until the user picks one: DuckDuckGo, which
+/// the core puts in the place of the engine ungoogled-chromium removed
+/// (engine/patches/ours/chromium-search-default-duckduckgo.patch).
+const FALLBACK_ENGINE: &str = "duckduckgo.com";
+
+/// Makes the engine of `keyword`, named `name`, `profile`'s default, as Settings' pop-up and the
+/// first launch's step do.
+pub(crate) fn set_search_engine(profile: u64, keyword: &str, name: &str) {
+    // check.sh waits for this line.
+    log!("browser: profile {profile} searches with {name}");
+    let keyword = CString::new(keyword).unwrap_or_default();
+    unsafe { bc::bc_profile_set_search_engine(profile, keyword.as_ptr()) };
 }
 
 /// Where `profile`'s downloads go, with ~ for the home folder, or None while it loads.
@@ -2198,8 +2214,23 @@ impl Settings {
         );
         let toggle_keys = shell::keystroke_label("cmd-s");
         let side = if right { "right" } else { "left" };
+        let top_bar = self.toggle("top bar", "Top bar", off(TOP_BAR), set_top_bar, accent, cx);
+        let top_bar_keys = shell::keystroke_label("shift-cmd-d");
+        let top_bar = setting(
+            look,
+            "Top bar",
+            Some(
+                format!(
+                    "The URL field and the sidebar's buttons in a row across the window's top, \
+                     the page under it. {top_bar_keys} turns it on and off."
+                )
+                .into(),
+            ),
+            vec![top_bar],
+        );
         let mut hidden = vec![
             position,
+            top_bar,
             setting(
                 look,
                 "Show the hidden sidebar at the window's edge",
@@ -3140,23 +3171,25 @@ impl Settings {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
+        // The engine ilo searches with until the user picks one is marked, as Page zoom's 100% is.
         let items: Vec<MenuEntry> = (engines.iter().enumerate())
-            .map(|(index, (_, name))| {
+            .map(|(index, (keyword, name))| {
                 let on = Some(index) == chosen;
+                let name = match keyword.as_str() {
+                    FALLBACK_ENGINE => format!("{name} (default)").into(),
+                    _ => name.clone(),
+                };
                 MenuEntry {
                     checked: on,
                     over: on,
-                    ..MenuEntry::named(name.clone(), true)
+                    ..MenuEntry::named(name, true)
                 }
             })
             .collect();
         let settings = cx.weak_entity();
         let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
             if let Some((keyword, name)) = picked.and_then(|index| engines.get(index)) {
-                // check.sh waits for this line.
-                log!("browser: profile {profile} searches with {name}");
-                let keyword = CString::new(keyword.as_str()).unwrap_or_default();
-                unsafe { bc::bc_profile_set_search_engine(profile, keyword.as_ptr()) };
+                set_search_engine(profile, keyword, name);
             }
             settings.update(cx, |settings, cx| settings.chose(cx)).ok();
         });
@@ -5059,6 +5092,9 @@ const RECENT_SITES_OFF: &str = "recent-off-sites";
 /// never synced.
 const SIDEBAR_RIGHT: &str = "sidebar-right";
 
+/// Top bar, there while it's on (#3160): this device's, as Sidebar position is, and never synced.
+const TOP_BAR: &str = "top-bar";
+
 fn off(name: &str) -> bool {
     std::path::Path::new(&format!("{}/{name}", crate::profile_dir())).exists()
 }
@@ -5075,6 +5111,7 @@ fn set_off(name: &str, is_off: bool) {
 pub fn read_switches(cx: &mut App) {
     cx.set_global(shell::SidebarEdge(!off(NO_EDGE_REVEAL)));
     cx.set_global(shell::SidebarRight(off(SIDEBAR_RIGHT)));
+    cx.set_global(shell::TopBar(off(TOP_BAR)));
     browser::dock_dot::set_plain(off(DOCK_ICON_PLAIN), cx);
     browser::recent::set_switches(!off(NO_RECENT), recent_sites_off(), cx);
 }
@@ -5121,6 +5158,14 @@ pub fn sidebar_right_kept() -> bool {
 pub fn set_sidebar_right(right: bool, cx: &mut App) {
     set_off(SIDEBAR_RIGHT, right);
     cx.set_global(shell::SidebarRight(right));
+    cx.refresh_windows();
+}
+
+/// Turns Top bar on or off: kept on this device, and every window follows at once, as each reads
+/// it as it draws.
+pub fn set_top_bar(on: bool, cx: &mut App) {
+    set_off(TOP_BAR, on);
+    cx.set_global(shell::TopBar(on));
     cx.refresh_windows();
 }
 

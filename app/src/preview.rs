@@ -1970,6 +1970,19 @@ impl Browser for Fake {
         false
     }
 
+    // The US's list as the core gives it, Google last, so the onboarding shows its step.
+    fn search_engines(&self, _: u64) -> (Vec<(SharedString, SharedString)>, SharedString) {
+        let engines = [
+            ("duckduckgo.com", "DuckDuckGo"),
+            ("search.brave.com", "Brave"),
+            ("bing.com", "Microsoft Bing"),
+            ("ecosia.org", "Ecosia"),
+            ("google.com", "Google"),
+        ];
+        let engines = engines.map(|(keyword, name)| (keyword.into(), name.into()));
+        (engines.to_vec(), "duckduckgo.com".into())
+    }
+
     fn crash_reports(&self, _: &App) -> Option<bool> {
         Some(self.opt_ins.get().0)
     }
@@ -2554,6 +2567,10 @@ fn main() {
             // PREVIEW_RECENT's cards have both switches on, as Settings keeps them by default.
             if preview_recent().is_some() {
                 browser::recent::set_switches(true, Default::default(), cx);
+            }
+            // PREVIEW_TOP_BAR=1 starts with Settings' Top bar on.
+            if std::env::var_os("PREVIEW_TOP_BAR").is_some() {
+                cx.set_global(shell::TopBar(true));
             }
             // PREVIEW_UPDATE=ready or =available shows the update banner on a made-up 0.1.5, opened
             // as under the pointer with =ready-open or =available-open, and PREVIEW_UPDATE_CHECKS=off
