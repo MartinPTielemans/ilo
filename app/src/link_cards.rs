@@ -38,7 +38,7 @@ thread_local! {
 /// ⇧ on the link the pointer is on in `tab`'s page: the card's id, or 0 if the core asked
 /// nothing.
 pub(crate) fn ask(tab: u64) -> u64 {
-    let card = core::tab_link_card(tab);
+    let card = unsafe { bc::bc_tab_link_card(tab) };
     if card != 0 {
         let profile = unsafe { bc::bc_tab_profile(tab) };
         // A new card cancels the one before, so only the newest needs its profile.
@@ -74,19 +74,18 @@ pub(crate) fn picture(card: u64, picture: &str, page: &str) -> bool {
     let Ok(picture) = CString::new(picture) else {
         return false;
     };
-    core::link_card_picture(card, &picture);
+    unsafe { bc::bc_link_card_picture(card, picture.as_ptr()) };
     true
 }
 
 /// The card is gone: the core stops its wait or fetch.
 pub(crate) fn cancel(card: u64) {
     PROFILES.with_borrow_mut(|profiles| profiles.remove(&card));
-    core::link_card_cancel(card);
+    unsafe { bc::bc_link_card_cancel(card) };
 }
 
 /// What `card`'s fetch came to (bc_host's link_card_fetched), copied for the card, which reads it
 /// off the main thread.
-#[allow(dead_code)] // Until bc_host has it, with #3085's header.
 pub(crate) unsafe extern "C" fn link_card_fetched(
     _: *mut c_void,
     card: u64,
@@ -114,16 +113,11 @@ pub(crate) unsafe extern "C" fn link_card_fetched(
     update_app_later(move |cx| link_target::card_fetched(card, status, url, mime, bytes, cx));
 }
 
-/// The core's calls, which come with #3085's header and the engines built from it: until then the
-/// core asks nothing, so ⇧ shows no card.
-mod core {
-    use std::ffi::CStr;
-
-    pub(super) fn tab_link_card(_tab: u64) -> u64 {
-        0
-    }
-
-    pub(super) fn link_card_picture(_card: u64, _url: &CStr) {}
-
-    pub(super) fn link_card_cancel(_card: u64) {}
-}
+// The app's copies of the core's refusals, which its tests read without the engine, are the core's.
+const _: () = {
+    use browser::link_card::outcome;
+    assert!(outcome::PRIVATE == bc::BC_LINK_CARD_PRIVATE);
+    assert!(outcome::PROXY == bc::BC_LINK_CARD_PROXY);
+    assert!(outcome::REDIRECT == bc::BC_LINK_CARD_REDIRECT);
+    assert!(outcome::TOO_BIG == bc::BC_LINK_CARD_TOO_BIG);
+};
