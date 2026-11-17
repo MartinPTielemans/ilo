@@ -2,6 +2,7 @@
 
 #import <AppKit/AppKit.h>
 #import <QuartzCore/QuartzCore.h>
+#include <objc/runtime.h>
 
 #include <cmath>
 #include <cstdio>
@@ -148,11 +149,42 @@ constexpr base::TimeDelta kGoneAfter = base::Milliseconds(250);
   if (monitor) {
     return;
   }
+  // And each change of a window's occlusion, Chromium's checker's or the window server's, with what
+  // the checker then holds: whether it marks the window occluded, and whether it passes over the
+  // window as one in a full-screen transition, from AppKit's will until its did.
+  [NSNotificationCenter.defaultCenter
+      addObserverForName:NSWindowDidChangeOcclusionStateNotification
+                  object:nil
+                   queue:nil
+              usingBlock:^(NSNotification* notification) {
+                NSWindow* window = notification.object;
+                if (![window.contentView isKindOfClass:BridgedContentView.class]) {
+                  return;
+                }
+                fprintf(stderr, "browser: window occlusion changed by %s, %s\n",
+                        notification.userInfo.count ? "Chromium's checker" : "the window server",
+                        [BrowserCoreWindowView occlusionOf:window].UTF8String);
+              }];
   monitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown
                                                   handler:^NSEvent*(NSEvent* event) {
                                                     [BrowserCoreWindowView logKey:event];
                                                     return event;
                                                   }];
+}
+
++ (NSString*)occlusionOf:(NSWindow*)window {
+  Class<BrowserCoreOcclusionChecker> checker = NSClassFromString(@"WebContentsOcclusionCheckerMac");
+  id shared = [checker sharedInstance];
+  // The checker's own ivar, weak, which object_getIvar reads as such.
+  Ivar ivar =
+      class_getInstanceVariable(checker, "_windowReceivingFullscreenTransitionNotifications");
+  id transitioning = ivar && shared ? object_getIvar(shared, ivar) : nil;
+  return [NSString
+      stringWithFormat:@"marked occluded %d, window server visible %d, checker passes over it %d",
+                       [window respondsToSelector:@selector(isOccluded)] &&
+                           [static_cast<id<BrowserCoreOccludedWindow>>(window) isOccluded],
+                       (window.occlusionState & NSWindowOcclusionStateVisible) != 0,
+                       transitioning == window];
 }
 
 + (void)logKey:(NSEvent*)event {
@@ -216,6 +248,10 @@ constexpr base::TimeDelta kGoneAfter = base::Milliseconds(250);
           window ? NSStringFromClass(window.class).UTF8String : "nil",
           static_cast<unsigned long>(holder.going.count),
           static_cast<unsigned long>(holder.leaving.count));
+  if (window) {
+    fprintf(stderr, "browser: key's window %s\n",
+            [BrowserCoreWindowView occlusionOf:window.parentWindow ?: window].UTF8String);
+  }
 }
 
 - (void)letLeavingGo {
