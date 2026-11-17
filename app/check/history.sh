@@ -402,16 +402,29 @@ requestAnimationFrame(() => requestAnimationFrame(() => document.title = "beside
     "$nearby:$port/beside.html didn't open beside $warned_tab's warning before http: $(grep '^browser: splits' "$log" | tail -1)"
   beside=$(grep '^browser: splits' "$log" | tail -1 | grep -o "$warned_tab+[0-9]*" | cut -d+ -f2)
   expect "^browser: title $beside beside ready\$" "the page beside $warned_tab's warning before http didn't draw"
+  # The panes, left and right. A warning shows only while its pane is the focused one, so a click
+  # on the warned pane's page, below its warning, focuses it first.
+  send layout
+  panes=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
+    grep -o 'WebContentsViewCocoa [0-9,]* [0-9x]*' | sed 's/^WebContentsViewCocoa //')
+  [ "$(echo "$panes" | wc -l)" -eq 2 ] ||
+    fail "the layout didn't show two pages beside each other: $(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout')"
+  pane=$(echo "$panes" | sed -n 1p)
+  pane_x=${pane%%,*} pane_y=${pane#*,}
+  pane_y=${pane_y%% *} pane_h=${pane#*x}
+  send click $((pane_x + 100)) $((pane_y + pane_h - 60))
+  expect "^browser: selected $warned_tab\$" "a click on $warned_tab's page below its warning before http didn't focus its pane"
+  for _ in $(seq 50); do
+    send layout
+    sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q '^browser: layout child ' && break
+    sleep 0.1
+  done
   warning_box
   send click $((warning_x + warning_width / 2)) $((warning_y + 8))
   send state
   [ "$key" = NativeWidgetMacNSWindow ] ||
     fail "a click on Chrome's warning before http at $warning, beside a page in a split, didn't give it the keyboard: $key, $focus"
-  send layout
-  pane=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
-    grep -o 'WebContentsViewCocoa [0-9,]* [0-9x]*' | sed -n 2p)
-  [ -n "$pane" ] || fail "the layout showed no second page beside $warned_tab's warning before http"
-  pane=${pane#WebContentsViewCocoa }
+  pane=$(echo "$panes" | sed -n 2p)
   pane_x=${pane%%,*} pane_y=${pane#*,}
   pane_y=${pane_y%% *}
   send click $((pane_x + 100)) $((pane_y + 100))
