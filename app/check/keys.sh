@@ -50,7 +50,7 @@ text.oninput = () => document.title = "value " + text.value;
 addEventListener("keydown", e => {
   if (!e.'"$cmd_key"') return;
   document.title = "page saw cmd-" + e.key;
-  if (e.key == "f") e.preventDefault();
+  if (e.key == "f" || (e.key == "l" && text.value.endsWith("keep"))) e.preventDefault();
   for (const until = performance.now() + (e.key == "l" ? 700 : 0); performance.now() < until;);
 }, true);
 addEventListener("keydown", e => {
@@ -345,11 +345,47 @@ if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
 elif windows && [ -z "$japanese" ]; then
   echo "skip: composing right after ⌘L: the runner has no Japanese IME, and the Windows driver's own composes in the UI's fields alone, not in a page."
 elif windows; then
-  # The host holds the keys typed until the bar has the keyboard (host.cc's HoldKeys), but
-  # Microsoft's IME composes them in the page before the hold sees them, and a repost of a key
-  # passes the IME by. TSF's keystroke manager doesn't hand held keys to it in the bar either
-  # (#1784).
-  echo "skip: composing right after Ctrl+L: Microsoft's Japanese IME composes in the page the keys the host holds for the bar (#1784)."
+  # Probe for #1784, not for merge: the hold gives TSF's focus to an empty document, and the
+  # release hands the held keys to TSF's keystroke manager once TSF's focus is back, posting what
+  # it doesn't eat. Both cases run and are recorded, neither fails the run.
+  soft() {
+    for _ in $(seq 50); do
+      tail -n "+$((${2:-0} + 1))" "$log" | grep -q "$1" && return 0
+      sleep 0.1
+    done
+    return 1
+  }
+  title() { grep '^browser: title' "$log" | tail -1; }
+  before_l=$(wc -l < "$log")
+  send $ime
+  typed_after l nihongo
+  soft '^browser: the input method took ' "$before_l" || echo "probe 1784 bar: no took line"
+  soft "^browser: command bar drew \"$preedit\"\$" "$before_l" || true
+  send state
+  echo "probe 1784 bar: $(tail -n "+$((before_l + 1))" "$log" | grep -E '^browser: (held|the input method took|probe 1784)' | tr '\n' '|')"
+  echo "probe 1784 bar: drew $(drew 'command bar'), marked $marked, page $(title)"
+  for _ in 1 2 3; do
+    tail -n "+$((before_l + 1))" "$log" | grep -q '^browser: command bar hidden$' && break
+    send key escape
+  done
+  send ime off
+  soft '^browser: command bar hidden$' "$before_l" || fail "three escapes didn't close the command bar"
+  send key a cmd
+  send type keep
+  expect '^browser: title [0-9]* value keep$' "the page didn't get \"keep\""
+  before_l=$(wc -l < "$log")
+  send $ime
+  typed_after l nihongo
+  soft '^browser: the input method took ' "$before_l" || echo "probe 1784 page: no took line"
+  soft "^browser: title [0-9]* value keep$preedit\$" "$before_l" || true
+  send state
+  echo "probe 1784 page: $(tail -n "+$((before_l + 1))" "$log" | grep -E '^browser: (held|the input method took|probe 1784|command bar shown)' | tr '\n' '|')"
+  echo "probe 1784 page: $(title), marked $marked, key $key, focus $focus"
+  send key return
+  send ime off
+  send key a cmd
+  send type y
+  expect '^browser: title [0-9]* value y$' "Ctrl+A in the page didn't select all"
 else
   send $ime
   typed_after l nihongo

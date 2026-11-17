@@ -12,6 +12,8 @@
 #include <commctrl.h>
 #include <commdlg.h>
 #include <dwmapi.h>
+#include <imm.h>
+#include <msctf.h>
 #include <shellapi.h>
 #include <shlobj.h>
 #include <shlwapi.h>
@@ -1780,12 +1782,171 @@ HHOOK g_held_hook = nullptr;
 UINT_PTR g_hold_timer = 0;
 constexpr UINT kHoldKeysMs = 1000;
 
-// Gives the keys held to the window that now has the keyboard, unless they wait for another bar.
-void ReleaseKeys(HWND from) {
-  if ((from && g_keys_for && from != g_keys_for) || !g_holding_keys) {
+// The UI thread's TSF thread manager, which Chromium's pages and the IME use, or null. The thread
+// has one once Chromium or the IME made it, which CoCreateInstance then hands back.
+ITfThreadMgr* ThreadManager() {
+  static ITfThreadMgr* manager = [] {
+    // CLSID_TF_ThreadMgr.
+    const CLSID thread_manager = {
+        0x529a9e6b, 0x6587, 0x4f23, {0xab, 0x9e, 0x9c, 0x7d, 0x68, 0x3e, 0x3c, 0x50}};
+    ITfThreadMgr* made = nullptr;
+    CoCreateInstance(thread_manager, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&made));
+    return made;
+  }();
+  return manager;
+}
+
+// A TSF document with nothing in it, which has TSF's focus while a hold lasts, so the IME composes
+// nothing in the page meanwhile.
+ITfDocumentMgr* EmptyDocument() {
+  static ITfDocumentMgr* empty = [] {
+    ITfDocumentMgr* made = nullptr;
+    if (ITfThreadMgr* manager = ThreadManager()) {
+      manager->CreateDocumentMgr(&made);
+    }
+    return made;
+  }();
+  return empty;
+}
+
+// The window with the keyboard as a hold began, whose input method composes nothing until it ends:
+// an IME takes a key before the hold sees it, so what's typed for a bar would compose in the page
+// (#1784). Its IMM context and TSF document, taken away from it meanwhile.
+struct Detached {
+  HWND window = nullptr;
+  HIMC context = nullptr;
+  ITfDocumentMgr* document = nullptr;
+  bool tsf = false;
+  // The document TSF's focus was on, the page's, which an association changes only as a window
+  // gets the keyboard, so the hold gives TSF's focus to an empty one of its own meanwhile.
+  ITfDocumentMgr* focused = nullptr;
+};
+Detached g_detached;
+
+// Takes |window|'s input method away, so the keys come raw to the hold: its TSF document, which a
+// page's is, as Chromium's windows take IMM's context away for TSF, and its IMM context, which
+// GPUI's is. Each goes back as it was (ReattachInputMethod).
+void DetachInputMethod(HWND window) {
+  if (!window || g_detached.window) {
+    return;
+  }
+  g_detached.window = window;
+  g_detached.context = ImmAssociateContext(window, nullptr);
+  if (ITfThreadMgr* manager = ThreadManager()) {
+    g_detached.tsf = SUCCEEDED(manager->AssociateFocus(window, nullptr, &g_detached.document));
+    ITfDocumentMgr* empty = EmptyDocument();
+    if (empty && SUCCEEDED(manager->GetFocus(&g_detached.focused)) && g_detached.focused) {
+      manager->SetFocus(empty);
+    }
+  }
+}
+
+// Gives the window its input method back.
+void ReattachInputMethod() {
+  Detached detached = std::exchange(g_detached, {});
+  if (!detached.window) {
+    return;
+  }
+  if (IsWindow(detached.window)) {
+    if (detached.tsf) {
+      ITfDocumentMgr* none = nullptr;
+      ThreadManager()->AssociateFocus(detached.window, detached.document, &none);
+      if (none) {
+        none->Release();
+      }
+    }
+    ImmAssociateContext(detached.window, detached.context);
+    // Still the window with the keyboard, as a page that kept the shortcut is: its document gets
+    // TSF's focus back. A bar that took the keyboard has TSF's focus on its own already.
+    if (detached.focused && GetFocus() == detached.window) {
+      ThreadManager()->SetFocus(detached.focused);
+    }
+  }
+  if (detached.document) {
+    detached.document->Release();
+  }
+  if (detached.focused) {
+    detached.focused->Release();
+  }
+}
+
+// Hands |held| to the input method of the window with the keyboard, through TSF's keystroke
+// manager, which gives a key to the text service on this thread directly, as the input queue
+// would, so the IME composes it there; or posts it to |to| as typed, where it takes none.
+bool GiveHeldKey(const MSG& held, HWND to) {
+  static ITfKeystrokeMgr* keystrokes = [] {
+    ITfKeystrokeMgr* manager = nullptr;
+    if (ITfThreadMgr* threads = ThreadManager()) {
+      threads->QueryInterface(IID_PPV_ARGS(&manager));
+    }
+    return manager;
+  }();
+  const bool down = held.message == WM_KEYDOWN || held.message == WM_SYSKEYDOWN;
+  BOOL eaten = FALSE;
+  if (keystrokes) {
+    if (down) {
+      keystrokes->TestKeyDown(held.wParam, held.lParam, &eaten);
+      if (eaten) {
+        keystrokes->KeyDown(held.wParam, held.lParam, &eaten);
+      }
+    } else {
+      keystrokes->TestKeyUp(held.wParam, held.lParam, &eaten);
+      if (eaten) {
+        keystrokes->KeyUp(held.wParam, held.lParam, &eaten);
+      }
+    }
+  }
+  if (!eaten) {
+    PostMessageW(to, held.message, held.wParam, held.lParam);
+  }
+  fprintf(stderr, "browser: probe 1784 key %s vk 0x%02x %s\n", down ? "down" : "up",
+          static_cast<unsigned>(held.wParam), eaten ? "eaten" : "posted");
+  return eaten != FALSE;
+}
+
+// The window the keys held go to once TSF's focus is on its document (GiveHeldKeysOnceFocused),
+// the hold lasting until then, or null.
+HWND g_giving_to = nullptr;
+
+// Gives the keys held to |g_giving_to| once TSF's focus has left the hold's empty document for
+// that window's, which TSF moves to it a moment after the focus change, checked each 10 ms |tries|
+// times. The hold lasts until then, so keys typed meanwhile go after those held before.
+void GiveHeldKeysOnceFocused(int tries) {
+  ITfDocumentMgr* focused = nullptr;
+  if (ITfThreadMgr* manager = ThreadManager()) {
+    manager->GetFocus(&focused);
+  }
+  const bool empty = focused && focused == EmptyDocument();
+  if (focused) {
+    focused->Release();
+  }
+  if (empty && tries > 0) {
+    After(0.01, [tries] { GiveHeldKeysOnceFocused(tries - 1); });
     return;
   }
   g_holding_keys = false;
+  HWND to = std::exchange(g_giving_to, nullptr);
+  {
+    wchar_t name[64] = {};
+    GetClassNameW(GetFocus(), name, std::size(name));
+    fprintf(stderr,
+            "browser: probe 1784 giving to %s with the keyboard %ls, TSF on the empty document %d, "
+            "%d tries left\n",
+            to == GetFocus() ? "the window" : "another window", name, empty ? 1 : 0, tries);
+  }
+  size_t taken = 0;
+  for (const MSG& key : std::exchange(g_held_keys, {})) {
+    taken += GiveHeldKey(key, to);
+  }
+  // check.sh reads this line.
+  fprintf(stderr, "browser: the input method took %zu of the held key events\n", taken);
+}
+
+// Gives the keys held to the window that now has the keyboard, unless they wait for another bar.
+void ReleaseKeys(HWND from) {
+  if ((from && g_keys_for && from != g_keys_for) || !g_holding_keys || g_giving_to) {
+    return;
+  }
   if (g_hold_timer) {
     KillTimer(nullptr, g_hold_timer);
     g_hold_timer = 0;
@@ -1799,10 +1960,13 @@ void ReleaseKeys(HWND from) {
     fprintf(stderr, "browser: held %zu key events for %s\n", g_held_keys.size(),
             to_bar ? "GPUIPanel" : "BrowserCoreNSWindow");
   }
-  for (const MSG& held : g_held_keys) {
-    PostMessageW(to, held.message, held.wParam, held.lParam);
+  ReattachInputMethod();
+  if (g_held_keys.empty()) {
+    g_holding_keys = false;
+    return;
   }
-  g_held_keys.clear();
+  g_giving_to = to;
+  GiveHeldKeysOnceFocused(50);
 }
 
 void CALLBACK HoldTimedOut(HWND, UINT, UINT_PTR id, DWORD) {
@@ -1841,6 +2005,7 @@ void HoldKeys(HWND window) {
   g_holding_keys = true;
   g_keys_for = window;
   g_hold_timer = SetTimer(nullptr, 0, kHoldKeysMs, HoldTimedOut);
+  DetachInputMethod(GetFocus());
 }
 
 // A held Escape's repeats reach only the window its press went to, as on the Mac (host.mm's
