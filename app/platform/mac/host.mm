@@ -357,10 +357,10 @@ Browser* BrowserOf(NSWindow* window) {
   return nullptr;
 }
 
-// Whether |window| is a dialog Chromium shows over a tab in |browser|'s window, such as Chrome's
-// warning before http or a page's alert. On the Mac it's a window of its own, but it's part of the
-// browser window: taking the keyboard isn't the user leaving an overlay, and while it has the
-// keyboard a click on the window's pages is still an ordinary click (#3209, #3210).
+// Whether |window| is a dialog of Chromium's views over a tab in |browser|'s window, such as
+// Chrome's warning before http or the passkey dialog. On the Mac it's a window of its own, but it's
+// part of the browser window: taking the keyboard isn't the user leaving an overlay, and while it
+// has the keyboard a click on the window's pages is still an ordinary click (#3209, #3210).
 static bool IsTabDialogOf(NSWindow* window, Browser* browser) {
   return browser && window && window.parentWindow == browser->window &&
          [window isKindOfClass:NSClassFromString(@"NativeWidgetMacNSWindow")];
