@@ -8,8 +8,9 @@
 # judges the onboarding, the sidebar and the command bar: each step, each Tab through one, Tab
 # from the window in an empty Space and with a page, F6 from the page and the arrows down the rows
 # have NVDA say something, with UI Automation's focus off GPUI's unnamed root and, in the sidebar,
-# on the ringed row; ↓ in the bar has it say the suggestion selected and where it stands, and ⇧Tab
-# from a page's first control keeps the keyboard in ilo's window. Elsewhere it records.
+# on the ringed row; ↓ in the bar has it say the suggestion selected and where it stands, ⇧Tab from
+# a page's first control keeps the keyboard in ilo's window, and the Library's key has it on the
+# Library's search field. Elsewhere it records.
 # NVDA's portable copy (GPL) is fetched from NV Access' release on GitHub, its checksum pinned, into
 # the hosted runner's temporary folder, and never installed: with NVDA_DIR naming a portable copy,
 # the run uses that instead. Off a hosted Windows runner, and without NVDA_DIR, it skips.
@@ -293,11 +294,17 @@ on_row Reading down
 press up
 on_row Second up
 judging=
-# What the rest of the UI says, not judged yet: a row's menu, the Library and Settings.
+# What the rest of the UI says, not judged yet: a row's menu and Settings.
 press f10 shift
 press down
 press escape
+# The Library's key gives its search field, History's here, the keyboard, read by its name, where
+# it said only the window's before (#3238).
+judging=1
 press l cmd shift
+tail -n 4 "$focus_file" | grep -q '^UI Automation focus: [A-Za-z ]* "Search History", framework AccessKit' ||
+  fail "UI Automation's focus isn't on the Library's search field after ⇧⌃L: $focus_file"
+judging=
 press tab
 press tab
 press escape

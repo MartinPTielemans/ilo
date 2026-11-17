@@ -1478,6 +1478,7 @@ pub fn bind_keys(cx: &mut App) {
     translate::bind(cx);
     boost::bind(cx);
     sidebar_keys::bind(cx);
+    super::library::keys::bind(cx);
 }
 
 /// The command bar is about to put `tab` in a split view with `with`: the pages shown take back the
@@ -1818,7 +1819,10 @@ impl Shell {
             Command::AddSplit => return self.add_pane(cx),
             Command::NewNote => return self.browser.new_note(self.space, None, cx),
             Command::NewBoard => return self.new_board(cx),
-            Command::ViewBoards => return self.view_section(Section::Boards, cx),
+            Command::ViewBoards => {
+                return self
+                    .library_command(cx, |shell, cx| shell.view_section(Section::Boards, cx));
+            }
             Command::NewNoteSplit => {
                 let with = self.selected;
                 if with != 0 && !self.split_full(with, cx) {
@@ -1867,13 +1871,31 @@ impl Shell {
             Command::FocusPane(index) => return self.focus_pane_at(index, cx),
             Command::ToggleSidebar => return self.toggle_sidebar(cx),
             Command::Appearance(appearance) => return self.set_app_appearance(appearance, cx),
-            Command::ViewLibrary => return self.set_library(!self.library_open, cx),
-            Command::ViewArchive => return self.view_section(Section::Archive, cx),
-            Command::ViewDownloads => return self.view_section(Section::Downloads, cx),
-            Command::ViewMedia => return self.view_section(Section::Media, cx),
-            Command::ViewAgents => return self.view_section(Section::Agents, cx),
+            Command::ViewLibrary => {
+                return self
+                    .library_command(cx, |shell, cx| shell.set_library(!shell.library_open, cx));
+            }
+            Command::ViewArchive => {
+                return self
+                    .library_command(cx, |shell, cx| shell.view_section(Section::Archive, cx));
+            }
+            Command::ViewDownloads => {
+                return self
+                    .library_command(cx, |shell, cx| shell.view_section(Section::Downloads, cx));
+            }
+            Command::ViewMedia => {
+                return self
+                    .library_command(cx, |shell, cx| shell.view_section(Section::Media, cx));
+            }
+            Command::ViewAgents => {
+                return self
+                    .library_command(cx, |shell, cx| shell.view_section(Section::Agents, cx));
+            }
             Command::NewBoost | Command::EditBoost => return self.open_boost(cx),
-            Command::ViewBoosts => return self.view_section(Section::Boosts, cx),
+            Command::ViewBoosts => {
+                return self
+                    .library_command(cx, |shell, cx| shell.view_section(Section::Boosts, cx));
+            }
             Command::ClearArchive => return self.clear_archive(cx),
             Command::NewSpace => return self.new_space(cx),
             Command::RenameSpace => return self.rename_space(self.space, cx),

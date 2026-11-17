@@ -1,15 +1,17 @@
 # check.sh runs this at 690.
 # A Board (#3073). New Board's key makes one in the Space's profile, a pinned tab whose row's name
 # is there to type over; ↩ keeps the name in the Board's folder and gives the page the keyboard,
-# where the first note's field takes the keys typed next. The page saves the note a second later,
-# in its own Board's folder alone, and no log line says what the note or the name is. Library ›
-# Boards lists it. Renamed while open, opened from the command bar by the start of its name,
-# unpinned, archived and reopened, it's still only "(a Board)" in the log, never its name, and the
-# reopened page reads its file: a change keeps the note. A Board whose file holds markup in a
-# note's text and a javascript: link runs neither. A Board's file over 4 MiB, which the host
-# doesn't read, says so and is never written over, captured, as is one holding [] rather than a
-# Board. A private window has no New Board, and a Board's address there shows "This Board isn't
-# here.", captured. Japanese input as the first keys is the hosted Mac's.
+# where the first note's field takes the keys typed next. The page saves the note a second later, in
+# its own Board's folder alone, and no log line says what the note or the name is. Library › Boards
+# lists it. Renamed while open, opened from the command bar by the start of its name, unpinned,
+# archived and reopened, it's still only "(a Board)" in the log, never its name, and the reopened
+# page reads its file: a change keeps the note. A Board whose file holds markup in a note's text and
+# a javascript: link runs neither. A picture waiting in a Board's arrivals lands as a card when the
+# Board opens, and leaves the list once the card is saved; one that comes while its tab isn't
+# showing lands when it's shown, a step from the first, both captured. A Board's file over 4 MiB,
+# which the host doesn't read, says so and is never written over, captured, as is one holding []
+# rather than a Board. A private window has no New Board, and a Board's address there shows "This
+# Board isn't here.", captured. Japanese input as the first keys is the hosted Mac's.
 
 log="$out/board.log"
 step=0
@@ -140,6 +142,76 @@ expect "^browser: loaded [0-9]* chrome://board/$markup\$" "the Board with markup
   fail "a Board's note's markup or its javascript: link ran"
 ../tools/window-screenshot.sh "$pid" "$out/board-markup.png" || fail "no window to capture"
 
+# A picture waiting in a Board's arrivals lands as a card when it opens: the page saves the card,
+# then the core takes it off the list.
+landing=$(printf 'f%.0s' $(seq 32))
+mkdir -p "$boards/$landing/files"
+echo '{"version": 1, "camera": {"x": 0, "y": 0, "zoom": 1}, "cards": []}' > "$boards/$landing/board.json"
+# Puts a 64 × 40 picture, green as much as $1, in the landing Board's files and its name on its
+# arrivals, ending its line with \n as the core does, which Python on Windows would write as \r\n.
+# Bash 3.2 misreads a here-document inside $(), so the name is read back from the list.
+put_picture() {
+  python3 -I - "$boards/$landing/files" "$1" >> "$boards/$landing/arrived" <<'PYEOF'
+import hashlib, os, struct, sys, zlib
+w, h = 64, 40
+rows = b"".join(b"\0" + bytes((40, int(sys.argv[2]), 98)) * w for _ in range(h))
+chunk = lambda kind, data: struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) + \
+    chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
+name = hashlib.sha256(png).hexdigest() + ".png"
+open(os.path.join(sys.argv[1], name), "wb").write(png)
+sys.stdout.buffer.write((name + "\n").encode())
+PYEOF
+}
+# Waits for the core to take the landing Board's arrivals off its list; $1 says what didn't happen.
+taken_off() {
+  for _ in $(seq 50); do
+    [ -s "$boards/$landing/arrived" ] || return 0
+    sleep 0.1
+  done
+  fail "$1: the list still holds $(cat "$boards/$landing/arrived")"
+}
+put_picture 120
+first=$(tail -1 "$boards/$landing/arrived")
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+send insert "chrome://board/$landing"
+send key return
+expect "^browser: loaded [0-9]* chrome://board/$landing\$" "the Board with a picture waiting didn't load"
+landing_tab=$(grep "^browser: loaded [0-9]* chrome://board/$landing\$" "$log" | tail -1 | cut -d' ' -f3)
+# The tab it opened over hides and saves its own Board too, so the list's emptying says this one
+# saved its card: the page tells the core it took them only after.
+taken_off "the picture that was waiting wasn't taken off the Board's arrivals when it opened"
+grep -q "\"kind\":\"picture\".*\"file\":\"$first\"" "$boards/$landing/board.json" ||
+  fail "the Board's file has no card of the picture that was waiting: $(head -c 300 "$boards/$landing/board.json")"
+../tools/window-screenshot.sh "$pid" "$out/board-landed.png" || fail "no window to capture"
+
+# One that comes while the Board's tab isn't showing lands when it's shown, on visibilitychange, at
+# the centre of its view: a step down and right of the first, which is there.
+n=$(echo $(pinned) $(today) | tr ' ' '\n' | grep -nx "$board" | cut -d: -f1)
+switch "$n cmd" "$board"
+put_picture 160
+second=$(tail -1 "$boards/$landing/arrived")
+n=$(echo $(pinned) $(today) | tr ' ' '\n' | grep -nx "$landing_tab" | cut -d: -f1)
+switch "$n cmd" "$landing_tab"
+taken_off "the picture that came while the Board's tab wasn't showing wasn't taken when it was shown"
+# What's wrong, if anything, goes to a file: under set -e a failing python3 would end the check
+# without fail's line.
+python3 -I - "$boards/$landing/board.json" "$first" "$second" > "$out/board-landed.why" <<'PYEOF'
+import json, sys
+cards = {card.get("file"): card for card in json.load(open(sys.argv[1]))["cards"]}
+a, b = cards.get(sys.argv[2]), cards.get(sys.argv[3])
+if not b:
+    print("the Board's file has no card of the picture that came while its tab wasn't showing")
+elif (b["x"] - a["x"], b["y"] - a["y"]) != (24, 24):
+    print("the second picture landed %d, %d from the first, not a step (24, 24) down and right; "
+          "the Board's pictures: %s" % (b["x"] - a["x"], b["y"] - a["y"], ", ".join(
+              "%s at %d, %d" % (card["file"][:8], card["x"], card["y"])
+              for card in json.load(open(sys.argv[1]))["cards"] if card.get("kind") == "picture")))
+PYEOF
+[ ! -s "$out/board-landed.why" ] || fail "$(cat "$out/board-landed.why")"
+../tools/window-screenshot.sh "$pid" "$out/board-landed-shown.png" || fail "no window to capture"
+
 # A Board's file over 4 MiB, which the host doesn't read, says so, and a pan doesn't write over it.
 # Other Boards save as a hover card's picture shows them, so the file is what's compared.
 large=$(printf 'c%.0s' $(seq 32))
@@ -203,6 +275,8 @@ quit
 echo "ok: New Board made $id, its name kept and its note saved in its folder alone, unlogged;" \
   "Library › Boards listed it; renamed, found by the bar, archived and reopened, the log said" \
   "only \"(a Board)\", and its next save kept the note; markup and a javascript: link ran" \
-  "nothing; a Board over 4 MiB and one holding [] weren't written over; a private window" \
-  "had no New Board." \
-  "Windows: $out/board.png $out/board-markup.png $out/board-unread.png $out/board-private.png"
+  "nothing; a waiting picture landed as a card and left the arrivals, and one that came while" \
+  "its tab wasn't showing landed a step from it when shown; a Board over 4 MiB and one" \
+  "holding [] weren't written over; a private window had no New Board." \
+  "Windows: $out/board.png $out/board-markup.png $out/board-landed.png" \
+  "$out/board-landed-shown.png $out/board-unread.png $out/board-private.png"
