@@ -756,6 +756,18 @@ pub extern "C" fn host_outline_overlay(
     let (right, bottom) = (left + width as f32, top + height as f32);
     let corners = [(left, top), (right, top), (right, bottom), (left, bottom)];
     gpui_linux::set_overlay_outline(overlay_view, &corners.map(|(x, y)| (x, y, radius)));
+    // An outline applies from the overlay's next show or move, so one that shows, as the link
+    // target does while its card grows, moves where it is to take it now.
+    let shown = FLOATS.with_borrow(|floats| {
+        (floats.iter())
+            .find(|float| float.view == overlay_view && !float.over.is_null())
+            .map(|float| (float.kind, float.over))
+    });
+    if let Some((kind, over)) = shown
+        && let Some(bounds) = bounds(kind, over)
+    {
+        gpui_linux::move_overlay(overlay_view, bounds, self::radius(kind, bounds));
+    }
     // check.sh reads this: that the window was cut to what it drew.
     browser::log!("browser: overlay outline {left} {top} {width} {height} {radius}");
 }
