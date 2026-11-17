@@ -631,9 +631,15 @@ def hides_none(rule, important=False):
                for p in rule["style"].get("cssProperties", []))
 
 
-# Blink's own rules that set display: none !important (html.css), which DevTools reports as a
-# blocker's are, with origin user-agent. Its -internal- ones are left out by that word.
+# Blink's own rules that set display: none !important, which DevTools reports with origin
+# user-agent, as it does a blocker's. They were read from every style sheet Blink gives a page, as
+# third_party/blink/public/blink_resources.grd and core/css/css_default_style_sheets.cc name them,
+# at Chromium 156.0.8078.79 and 157.0.8103.78: html.css has these two, and -internal- ones that
+# the word leaves out, as fullscreen.css, capability_element.css and media_controls'
+# mediaControls.css have. Another major may add one, so a browser of a major not in
+# BLINKS_READ fails the run until its sheets are read the same way.
 BLINKS = {"audio:not([controls])", 'input[type="hidden" i]'}
+BLINKS_READ = {156, 157}
 
 
 def blockers(rules):
@@ -700,6 +706,10 @@ def whose(selectors, budget=15):
 def hidden(path, base):
     began = time.monotonic()
     found = {"hidden": count(evaluate(HIDDEN_NOW) or [])}
+    product = call("Browser.getVersion")["product"]
+    major = product.partition("/")[2].partition(".")[0]
+    if not major.isdigit() or int(major) not in BLINKS_READ:
+        found["blinks_unread"] = product
     # Only a selector none of whose elements show can be one a later run misses.
     found["blocker"], found["page"] = whose([s for s, (_, shown) in found["hidden"].items()
                                              if not shown])
