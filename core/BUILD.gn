@@ -48,8 +48,8 @@ source_set("error_page") {
   deps = [ "//base" ]
 }
 
-# What keeps DuckDuckGo a profile's default and not its choice, apart from the browser's code so its
-# test links without the browser.
+# What keeps DuckDuckGo a profile's default and not its choice, and Google a choice and never the
+# default, apart from the browser's code so its test links without the browser.
 source_set("search_default") {
   sources = [
     "search_default.cc",
