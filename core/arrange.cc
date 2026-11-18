@@ -1637,6 +1637,7 @@ void Arrange::End(bool tell) {
   pressed_ = false;
   scrolling_ = false;
   move_.reset();
+  pointer_.reset();
   told_.reset();
   rest_.Stop();
   settle_.Stop();
@@ -1829,6 +1830,8 @@ bool Arrange::OnMouse(content::RenderWidgetHost* widget, const blink::WebMouseEv
                               .Set("x", at.x() / zoom)
                               .Set("y", at.y() / zoom)
                               .Set("free", (event.GetModifiers() & kFreeKey) != 0);
+  const bool still = pointer_ == point;
+  pointer_ = point.Clone();
   switch (event.GetType()) {
     case Type::kMouseDown:
       if (!left) {
@@ -1842,6 +1845,9 @@ bool Arrange::OnMouse(content::RenderWidgetHost* widget, const blink::WebMouseEv
       Run("down", std::move(point), base::BindOnce(&Arrange::Answered, weak_factory_.GetWeakPtr()));
       return true;
     case Type::kMouseMove:
+      if (still) {
+        return pressed_;
+      }
       // Moves without a press still reach the page, which the outline follows.
       move_ = std::move(point);
       if (!moving_) {

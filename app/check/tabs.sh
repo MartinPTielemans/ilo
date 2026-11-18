@@ -767,30 +767,40 @@ expect_tabs "$b" "$b" "after closing the bottom tab"
 # app answers the first, its tab started and its renderer starting: a quick second press on a busy
 # machine comes then, before the tasks the first posted, among them the one that focuses the tab's
 # page, and went to the pane the page before left, where nothing heard it (#1519).
+# Whether the second press comes in that race is the runner's: Chromium may run the task focusing
+# the page before it reads the press, which then reaches the page and comes back as the first did.
+# Both tabs come back either way, but only a press in the race proves #1519's fix, so the step
+# goes again from the same tabs until one is, up to 5 times (#3382).
 if [ "$(uname)" = Linux ]; then
-  send key t cmd shift again
-  logged '^browser: drive pressed again$' || fail "the driver didn't press ⇧⌘T again as the app answered the first"
-  for _ in $(seq 100); do
-    [ "$(since $step | grep -c '^browser: command reopen-closed-tab via page$')" -ge 2 ] && break
-    sleep 0.1
+  for try in 1 2 3 4 5; do
+    send key t cmd shift again
+    pressed=$step
+    logged '^browser: drive pressed again$' || fail "the driver didn't press ⇧⌘T again as the app answered the first"
+    for _ in $(seq 100); do
+      [ "$(since $step | grep -c '^browser: command reopen-closed-tab via page$')" -ge 2 ] && break
+      sleep 0.1
+    done
+    [ "$(since $step | grep -c '^browser: command reopen-closed-tab via page$')" -ge 2 ] ||
+      fail "the second of two quick ⇧⌘T didn't reach the UI: Today is \"$(today)\""
+    expect "^browser: today [0-9][0-9]* $b [0-9][0-9]*\$" \
+      "two quick ⇧⌘T didn't reopen both tabs where they were: Today is \"$(today)\""
+    raced=0
+    logged '^browser: key for tab [0-9]*, with no page view to hear it, to the browser$' "$pressed" && raced=1
+    top=$(today | cut -d' ' -f1)
+    bottom=$(today | cut -d' ' -f3)
+    # Closed again, so the run goes on as it was, or the step goes again as it began.
+    shown=$(grep '^browser: selected ' "$log" | tail -1 | cut -d' ' -f3)
+    [ "$shown" = "$bottom" ] || switch "9 cmd" "$bottom"
+    send key w cmd
+    expect "^browser: today $top $b\$" "⌘W didn't close the bottom tab ⇧⌘T reopened"
+    shown=$(grep '^browser: selected ' "$log" | tail -1 | cut -d' ' -f3)
+    [ "$shown" = "$top" ] || switch "1 cmd" "$top"
+    send key w cmd
+    expect_tabs "$b" "$b" "after closing the tabs two quick ⇧⌘T reopened"
+    [ "$raced" = 1 ] && break
+    [ "$try" -lt 5 ] ||
+      fail "in each of 5 tries the second ⇧⌘T came once the reopened tab's page had the keyboard, so the check missed #1519's race"
   done
-  [ "$(since $step | grep -c '^browser: command reopen-closed-tab via page$')" -ge 2 ] ||
-    fail "the second of two quick ⇧⌘T didn't reach the UI: Today is \"$(today)\""
-  logged '^browser: key for tab [0-9]*, with no page view to hear it, to the browser$' ||
-    fail "the second ⇧⌘T came once the reopened tab's page had the keyboard, so the check missed #1519's race"
-  expect "^browser: today [0-9][0-9]* $b [0-9][0-9]*\$" \
-    "two quick ⇧⌘T didn't reopen both tabs where they were: Today is \"$(today)\""
-  top=$(today | cut -d' ' -f1)
-  bottom=$(today | cut -d' ' -f3)
-  # Closed again, so the run goes on as it was.
-  shown=$(grep '^browser: selected ' "$log" | tail -1 | cut -d' ' -f3)
-  [ "$shown" = "$bottom" ] || switch "9 cmd" "$bottom"
-  send key w cmd
-  expect "^browser: today $top $b\$" "⌘W didn't close the bottom tab ⇧⌘T reopened"
-  shown=$(grep '^browser: selected ' "$log" | tail -1 | cut -d' ' -f3)
-  [ "$shown" = "$top" ] || switch "1 cmd" "$top"
-  send key w cmd
-  expect_tabs "$b" "$b" "after closing the tabs two quick ⇧⌘T reopened"
 fi
 send key w cmd
 expect_tabs " *" 0 "after closing the last tab"
