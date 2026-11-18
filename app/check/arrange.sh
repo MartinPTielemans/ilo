@@ -7,8 +7,8 @@
 # takes back the last change, the mini bar's Hide is Zap's rule, which ⌘Z takes back, and its Put
 # back on a traded thing takes the trade back. The mini bar goes with Hide and with the mode. Each
 # change is saved in the site's .arrange.json as it happens. Last, a settle then a trade of the
-# thing it's kept by: the run asserts the order the core gives, known under #2975, and reports what
-# a press on Wide picks, known under #2981, rather than failing on it.
+# thing it went beside: each thing takes the other's place in the order the settle left (#2975),
+# and a press then picks the thing drawn there (#2981).
 # A carry to the page's bare background with no key held is no change: only ⌘ floats a thing.
 # Reloaded, the page shows the arrangement, and the run measures whether its first frame already
 # did, in arrange-first-frame.txt, and says which in its summary rather than failing: a flash there
@@ -26,8 +26,8 @@
 serve
 # The page says in its title where its things are, each time that changes: the column's and the
 # side's in their order down the page, those hidden, those floating off both with their position,
-# where the last click before the mode landed in the page, and the column as its first frame drew
-# it. Six things: four sections in the column, 120 tall and 20 apart from 40 down, the last too
+# where the last click before the mode landed in the page, the column as its first frame drew it,
+# and the space between each two things in the column. Six things: four sections in the column, 120 tall and 20 apart from 40 down, the last too
 # wide for the side, which holds two boxes, from 600 across.
 printf '%s' '<!doctype html><meta charset="utf-8"><title>-</title>
 <style>
@@ -60,6 +60,12 @@ const down = (list) =>
   list.sort((x, y) => x.getBoundingClientRect().top - y.getBoundingClientRect().top)
     .map((thing) => thing.id).join(",") || "-";
 const column = (main) => down(shown().filter((thing) => on(thing, main ? "col" : "side")));
+// The space between each two things in the column, down the page, as its gap keeps it (#3030).
+const gaps = () => {
+  const rs = shown().filter((thing) => on(thing, "col")).map((thing) => thing.getBoundingClientRect())
+    .sort((x, y) => x.top - y.top);
+  return rs.slice(1).map((r, i) => Math.round(r.top - rs[i].bottom)).join(",") || "-";
+};
 let at = "-";
 let first = "-";
 let said;
@@ -70,7 +76,7 @@ setInterval(() => {
   const floating = shown().filter(floats)
     .map((thing) => thing.id + ":" + getComputedStyle(thing).position).join(",") || "-";
   const now = "col " + column(true) + " side " + column(false) + " hidden " + hidden +
-    " float " + floating + " at " + at + " first " + first;
+    " float " + floating + " at " + at + " first " + first + " gaps " + gaps();
   if (now !== said) document.title = said = now;
 }, 100);
 </script>' > "$out/site/arrange.html"
@@ -269,6 +275,12 @@ landed_bar $(slot 1) "the mini bar wasn't first placed over Alpha where it settl
 expect "browser: tab $tab arrange saved 1 changes\$" "the core didn't save the settle"
 shows 'b,a,c,w side s,n hidden - float -' "the settle didn't move the thing under the second"
 kept 1 "the settle wasn't saved"
+# Each gap as the column had it, under the settled thing too (#3030).
+for _ in $(seq 100); do
+  case "$(said)" in *" gaps 20,20,20") break ;; esac
+  sleep 0.1
+done
+case "$(said)" in *" gaps 20,20,20") ;; *) fail "the settle didn't keep the column's 20 pt gaps: the page says $(said)" ;; esac
 ../tools/window-screenshot.sh "$pid" "$out/arrange-settled.png" || fail "no window to capture"
 
 # Put back, the mini bar's last button on a thing with a change, takes that change back: Alpha,
@@ -280,6 +292,54 @@ bar_over $(slot 1) "the UI placed no mini bar over Alpha"
 press_mini_bar last "put back"
 expect "browser: tab $tab arrange saved 0 changes\$" "the core didn't save Put back"
 shows "$own" "Put back didn't take the settle back"
+kept 0 "Put back didn't take the change back"
+
+# A preview that goes back leaves the carried thing a ghost again, its room kept (#3189): Alpha
+# rests on Gamma's middle, which shows a trade, then at the edge under Beta, which shows the settle
+# with Alpha landed there, and settles there when let go. Were Alpha left where the trade's preview
+# put it, its room would go with it: Gamma would move up to the edge, and Alpha settle after it.
+carry $(slot 0) $(slot 2)
+expect "^browser: arrange $tab Preview Trades " "a rest on Gamma's middle didn't show a trade"
+send dragto $(slot_edge 1)
+expect "^browser: arrange $tab Preview Settles " \
+  "a rest at the edge under Beta, after a trade's preview on Gamma, didn't show a settle"
+shows 'b,a,c,w side s,n hidden - float -' \
+  "the settle's preview under Beta, after a trade's preview on Gamma, didn't show Alpha landed there"
+send release $(slot_edge 1)
+expect "^browser: arrange $tab Selected Settles selected " \
+  "letting go at the edge under Beta, after a trade's preview on Gamma, didn't settle"
+expect "browser: tab $tab arrange saved 1 changes\$" "the core didn't save the settle after a trade's preview"
+shows 'b,a,c,w side s,n hidden - float -' \
+  "letting go at the edge under Beta, after a trade's preview on Gamma, didn't settle Alpha there"
+send click $(slot 1)
+expect "^browser: arrange $tab Selected [A-Z][a-z]* selected section Alpha\$" \
+  "a click didn't select Alpha, settled under Beta after a trade's preview"
+bar_over $(slot 1) "the UI placed no mini bar over Alpha"
+press_mini_bar last "put back"
+expect "browser: tab $tab arrange saved 0 changes\$" "the core didn't save Put back"
+shows "$own" "Put back didn't take the settle after a trade's preview back"
+kept 0 "Put back didn't take the change back"
+
+# A release as the page moves lands where the pointer is (#3228): Alpha rests on Gamma's middle,
+# which shows a trade, then goes to the edge under Beta and is let go at once, so the release comes
+# in the first frame of the trade's preview going back. Judged on the page as drawn then, it did
+# nothing or traded; judged on the page at rest, it settles there as any release there does.
+carry $(slot 0) $(slot 2)
+expect "^browser: arrange $tab Preview Trades " "a rest on Gamma's middle didn't show a trade"
+send dragto $(slot_edge 1)
+send release $(slot_edge 1)
+expect "^browser: arrange $tab Selected Settles selected section Alpha\$" \
+  "letting go at the edge under Beta as a trade's preview on Gamma went back didn't settle Alpha"
+expect "browser: tab $tab arrange saved 1 changes\$" "the core didn't save the settle let go as the page moved"
+shows 'b,a,c,w side s,n hidden - float -' \
+  "letting go at the edge under Beta as a trade's preview on Gamma went back didn't settle Alpha there"
+send click $(slot 1)
+expect "^browser: arrange $tab Selected [A-Z][a-z]* selected section Alpha\$" \
+  "a click didn't select Alpha, settled under Beta as the page moved"
+bar_over $(slot 1) "the UI placed no mini bar over Alpha"
+press_mini_bar last "put back"
+expect "browser: tab $tab arrange saved 0 changes\$" "the core didn't save Put back"
+shows "$own" "Put back didn't take the settle let go as the page moved back"
 kept 0 "Put back didn't take the change back"
 
 # Trade: the third let go on the first's middle, and the two trade places.
@@ -305,58 +365,25 @@ picks 2 Alpha
 picks 1 Beta
 picks 0 Gamma
 
-# A fit refusal: the wide section at the side's edge, where it doesn't fit, and nothing changes.
-# Known under #3003, in two shapes. On main's core the edge, the gap between Side and Note, is the
-# side's middle, and the core trades Wide with the side itself, kept as it's let go. On the
-# batch's core the rest refuses, but the release lands the settle the move showed before it,
-# between Side and Note, and saves it. The run asserts each as the core gives it, reports it, and
-# takes it back with ⌘Z, as it takes the float back below, so the steps after it start from the
-# page before it. Once the core refuses there and saves nothing, the run says so. A refusal shows
-# no preview: the rest finds the drop doesn't fit, and the step stays Carrying, Refused.
+# A fit refusal: the wide section at the side's edge, where it doesn't fit. The rest finds the drop
+# doesn't fit and shows no preview, the step staying Carrying, Refused, and letting go there lands
+# nothing: the thing stays selected where it was and nothing is saved (#3003).
 carry $(slot 3) $(side_edge)
 expect "^browser: arrange $tab \(Preview\|Carrying Refused\) " \
   "a rest at the side's edge showed no drop and no refusal"
 ../tools/window-screenshot.sh "$pid" "$out/arrange-refused.png" || fail "no window to capture"
 preview=$(grep "^browser: arrange $tab \(Preview\|Carrying Refused\) " "$log" | tail -1 |
   cut -d' ' -f5)
+[ "$preview" = Refused ] || fail "a rest where the thing doesn't fit didn't refuse it: $preview"
 send release $(side_edge)
 expect "^browser: arrange $tab Selected " "letting go where the thing doesn't fit left no selection"
-case "$preview" in
-  Refused)
-    # The core logs a release's save before its selection, so once Selected is in, a settle the
-    # release landed is in the log too.
-    if sed -n "/^browser: drive $step: /,\$p" "$log" |
-      grep "^browser: arrange $tab Selected Settles " > /dev/null; then
-      expect "browser: tab $tab arrange saved 2 changes\$" \
-        "the release after the refusal settled Wide but the core didn't save it"
-      shows 'c,b,a,w side s,n hidden - float -' \
-        "the settle the release landed after the refusal didn't read as #3003 has it on the batch"
-      kept 2 "the settle the release landed after the refusal wasn't saved"
-      send key z cmd
-      expect "browser: tab $tab arrange saved 1 changes\$" "⌘Z didn't reach the mode"
-      shows 'c,b,a,w side s,n hidden - float -' "⌘Z didn't take back the settle after the refusal"
-      kept 1 "⌘Z's step back wasn't saved"
-      refusal="the rest where Wide doesn't fit refused it, but letting go there settled it between"
-      refusal="$refusal Side and Note all the same, which ⌘Z took back"
-    else
-      shows 'c,b,a,w side s,n hidden - float -' "the refused drop changed the page"
-      [ "$(changes)" = 1 ] || fail "the refused drop was saved: $(changes) changes"
-      refusal="the rest where Wide doesn't fit refused it, so #3003's known row is a line to remove"
-    fi
-    ;;
-  Trades)
-    expect "browser: tab $tab arrange saved 2 changes\$" "the core didn't save the trade with the side"
-    shows 'b,c,s,a,n side b,c,s,a,n hidden - float w:absolute' \
-      "the trade of Wide with the side didn't put the side in the column, as #3003 has it today"
-    kept 2 "the trade with the side wasn't saved"
-    send key z cmd
-    expect "browser: tab $tab arrange saved 1 changes\$" "⌘Z didn't reach the mode"
-    shows 'c,b,a,w side s,n hidden - float -' "⌘Z didn't take back the trade with the side"
-    kept 1 "⌘Z's step back wasn't saved"
-    refusal="a rest where Wide doesn't fit traded it with the side, which ⌘Z took back"
-    ;;
-  *) fail "a rest where the thing doesn't fit didn't refuse it: $preview" ;;
-esac
+# The core logs a release's save before its selection, so once Selected is in, a drop the release
+# landed is in the log too.
+landed=$(sed -n "/^browser: drive $step: /,\$p" "$log" |
+  grep "^browser: arrange $tab Selected \(Settles\|Trades\) " | tail -1)
+[ -z "$landed" ] || fail "letting go where the rest refused Wide landed a drop all the same: $landed"
+shows 'c,b,a,w side s,n hidden - float -' "the refused drop changed the page"
+[ "$(changes)" = 1 ] || fail "the refused drop was saved: $(changes) changes"
 
 # The page's bare background, where it has no block, is no place: carried there with no key held,
 # the note goes back where it was, and the foot bar says so rather than naming ⌘ (#3017).
@@ -492,12 +519,9 @@ expect "^browser: arrange $tab off\$" "escape didn't end the mode"
 expect "browser: tab $tab arrange off\$" "the core didn't end the mode"
 mini_bar_went "escape ended the mode"
 
-# Known under #2975 and #2981, last, as the run reports and doesn't fail on them. #2975: a settle is
-# kept by the thing it was let go beside, Gamma, so a trade of Gamma with Beta takes Alpha along,
-# ahead of Gamma; the order is asserted as the core gives it today, and changes with #2975's fix.
-# #2981: the settle and the trade both style Gamma and undo each other's styles on each layout pass,
-# so a press where Wide is drawn hasn't picked Wide (43728216309, 43729257766); the run reports what
-# it picks.
+# A settle, then a trade of the thing it went beside: the arrangement is an order, so Gamma and Beta
+# swap places in the order the settle left, and Alpha stays where it went (#2975). Each thing is
+# styled once a pass, so a press where Wide is drawn picks Wide (#2981).
 start_arranging
 carry $(slot 0) $(slot_edge 1)
 expect "^browser: arrange $tab Preview Settles " "a rest at an edge didn't show a settle"
@@ -508,8 +532,8 @@ carry $(slot 2) $(slot 0)
 expect "^browser: arrange $tab Preview Trades " "a rest on a thing's middle didn't show a trade"
 send release $(slot 0)
 expect "browser: tab $tab arrange saved 2 changes\$" "the core didn't save the trade"
-shows 'a,c,b,w side s,n hidden - float -' \
-  "the trade of the settle's Gamma didn't leave Alpha ahead of Gamma, as #2975 has it today"
+shows 'c,a,b,w side s,n hidden - float -' \
+  "the trade of Gamma with Beta after the settle didn't swap the two where the settle left them (#2975)"
 kept 2 "the settle and the trade weren't saved"
 ../tools/window-screenshot.sh "$pid" "$out/arrange-2975.png" || fail "no window to capture"
 send press $(slot 3)
@@ -520,11 +544,8 @@ for _ in $(seq 50); do
   sleep 0.1
 done
 send release $(slot 3)
-case "$pointed" in
-  "section Wide") wide="a press on Wide picked Wide" ;;
-  "" | -) wide="a press where Wide is drawn picked nothing" ;;
-  *) wide="a press where Wide is drawn picked $pointed" ;;
-esac
+[ "$pointed" = "section Wide" ] ||
+  fail "after the settle and the trade, a press where Wide is drawn picked ${pointed:-nothing}, not Wide (#2981)"
 send key escape
 expect "^browser: arrange $tab off\$" "escape didn't end the mode"
 expect "browser: tab $tab arrange off\$" "the core didn't end the mode"
@@ -542,7 +563,7 @@ case "$(said)" in
   "col $kept_column side s,n hidden - float - at - first "*) ;;
   *) fail "the reloaded page didn't place the arrangement: $(said)" ;;
 esac
-first=$(said | sed 's/.* first //')
+first=$(said | sed 's/.* first \([^ ]*\) gaps .*/\1/')
 if [ "$first" = "$kept_column" ]; then
   first_frame="its first frame already showed it"
 else
@@ -626,9 +647,9 @@ echo "ok: from the Boost card's Arrange, a click picked a thing with the page ta
   "which a click picked each thing where it was drawn, was carried where it didn't fit, and with" \
   "⌘ floated one, whose pin turned it to scroll with the page and back. ⌘Z took the float back," \
   "Hide was Zap's rule, which ⌘Z took back, and Put back on a traded thing took the trade back." \
-  "$went Each change was saved in $host.arrange.json. Known under #2975: a trade of the thing" \
-  "a settle is kept by left a,c,b,w. Known under #2981: after it, $wide. Known under #3003:" \
-  "$refusal. Reloaded, the page" \
+  "$went Each change was saved in $host.arrange.json. A settle then a trade of the thing it" \
+  "went beside swapped the two in the settle's order, and a press after picked Wide. Letting go" \
+  "where Wide didn't fit landed nothing and saved nothing. Reloaded, the page" \
   "placed the arrangement, and" \
   "$first_frame." \
   "Edited outside ilo it stayed off, and Site Controls' Turn On kept it. A private window's page" \

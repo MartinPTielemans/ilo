@@ -273,8 +273,8 @@ fn in_full_screen_the_side_moves_the_edge(cx: &mut TestAppContext) {
 
 /// Open on the right, the Library takes the sidebar's side, list then sections, so the sections
 /// stay at the window's edge: the card's edge meets the list's, the empty list's line is drawn in
-/// the list, and a right-click on Archived Tabs, the fourth button, is heard where the left's is
-/// mirrored. Back on the left, the button is where it was.
+/// the list, and a right-click on Archived Tabs is heard where the column says it drew the button,
+/// the left's mirrored, as check.sh clicks it. Back on the left, the button is where it was.
 #[gpui::test]
 fn on_the_right_the_library_s_columns_swap(cx: &mut TestAppContext) {
     let (shell, cx, host) = window(cx);
@@ -300,8 +300,12 @@ fn on_the_right_the_library_s_columns_swap(cx: &mut TestAppContext) {
         x >= library && x + across <= WIDTH - COLUMN_WIDTH,
         "the empty line isn't in the list: {drawn}"
     );
-    // The column's buttons are centred 5 above its middle, 100 apart.
-    let archive = |x: f32| point(px(x), px(700. / 2. + 45.));
+    // Where the column last drew History's button, which its log line says, at its middle.
+    let archive = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell.read_with(cx, |shell, _| {
+            shell.buttons_drawn.borrow()["archive"].center()
+        })
+    };
     let menu = |at, cx: &mut VisualTestContext| {
         host.menus.borrow_mut().clear();
         cx.simulate_mouse_down(at, MouseButton::Right, Modifiers::none());
@@ -311,13 +315,19 @@ fn on_the_right_the_library_s_columns_swap(cx: &mut TestAppContext) {
         titles.iter().any(|(title, _)| title == "Clear Archive")
     };
     let middle = SECTION_X + SECTION_WIDTH / 2.;
-    assert!(
-        menu(archive(WIDTH - middle), cx),
-        "no Clear Archive on the right"
+    let right = archive(&shell, cx);
+    assert_eq!(
+        right.x,
+        px(WIDTH - middle),
+        "History isn't mirrored on the right"
     );
+    assert!(menu(right, cx), "no Clear Archive on the right");
     side(false, &shell, cx);
-    assert!(
-        menu(archive(middle), cx),
-        "no Clear Archive back on the left"
+    let left = archive(&shell, cx);
+    assert_eq!(
+        (left.x, left.y),
+        (px(middle), right.y),
+        "History moved coming back to the left"
     );
+    assert!(menu(left, cx), "no Clear Archive back on the left");
 }

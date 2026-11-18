@@ -21,7 +21,7 @@
 # 10 in along it. The next shows where it was left, after a relaunch too, and coming back to its
 # tab's window from another window, or from another app with a menu open, puts it back in the tab. A
 # video playing with sound floats as a tab switch hides it, its Mini Player on screen within 250 ms
-# of the switch.
+# of the switch, its first frame at the size it was placed at.
 # A page asks to share the screen only from a click or a key: asked with neither, its promise is
 # refused, and nothing is shared (decision 12).
 # Chromium's fake camera and microphone stand in for real ones, and the share takes the tab titled
@@ -1357,9 +1357,31 @@ document.title = "ready";
   expect "^browser: title $w floating\$" "the video playing with sound didn't float as a switch hid it"
   expect '^browser: handover mini player on screen ' \
     "the core didn't time the Mini Player's first frame after the switch"
-  on_screen=$(grep '^browser: handover mini player on screen ' "$log" | tail -1 |
-    sed 's/.* +\([0-9.]*\) ms.*/\1/')
-  echo "the Mini Player was on screen $on_screen ms after the switch"
+  # The line's time is when the UI thread heard the frame was presented, and its detail when it
+  # was (#3181): the bar is on the frame, and the UI thread's lateness only reports, as a stall
+  # there holds the arriving page's frame too. An engine from before #3181 says only the first.
+  on_screen=$(grep '^browser: handover mini player on screen ' "$log" | tail -1)
+  # Its first frame is at the size the core last placed it at, which the line says as the frame is
+  # presented: one taken as it showed read 345x194 for a window Chrome had grown to 587x330 in the
+  # same task, for its automatic Picture in Picture question (#2822).
+  sizes=$(awk '/browser: mini player placed at /{ placed = $(NF-6) "x" $(NF-5) }
+    /^browser: handover mini player on screen /{
+      match($0, /\([0-9]+x[0-9]+/); framed = substr($0, RSTART + 1, RLENGTH - 1); at = placed
+    }
+    END { print at " " framed }' "$log")
+  [ "${sizes% *}" = "${sizes#* }" ] ||
+    fail "the Mini Player's first frame was ${sizes#* }, not ${sizes% *} as the core last placed it"
+  echo "the Mini Player's first frame was ${sizes#* }, as the core last placed it"
+  heard=$(echo "$on_screen" | sed 's/.* +\([0-9.]*\) ms.*/\1/')
+  on_screen=$(echo "$on_screen" | sed -n 's/.*, presented at \([0-9.]*\) ms)$/\1/p')
+  if [ -n "$on_screen" ]; then
+    late=$(awk -v heard="$heard" -v shown="$on_screen" 'BEGIN { printf "%.1f", heard - shown }')
+    echo "the Mini Player was on screen $on_screen ms after the switch, and the browser heard" \
+      "$late ms later"
+  else
+    on_screen=$heard
+    echo "the Mini Player was on screen by $on_screen ms after the switch, when the browser heard"
+  fi
   # A hosted runner is a slower machine shared with other jobs, where GitHub's Mac took 0.7 s to
   # put the window's first frame on screen, so there the time only reports, as perf.sh's targets
   # do, and the check VMs keep the bar.
@@ -1375,6 +1397,9 @@ else
 fi
 exec 3>&-
 quit
+# Its server stops with it, as the runs after it in the call start their own (#3345).
+kill "$tls" 2> /dev/null || true
+tls= tls_port=
 
 # Chrome's origin, its word on whose video this is, shows beside the ×, on its row, clear of it, of
 # back to its tab and of the "–", at each size the Mini Player had, from the smallest it opens at

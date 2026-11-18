@@ -9,8 +9,9 @@ use gpui::{
 };
 
 use crate::{
-    hover_card::{Action, Event},
+    hover_card::{Action, Event, Opening},
     icon_picker::{self, Picked, Recents, Subject},
+    recent::{self, Answer, List, Recent, Row as RecentRow},
     shell::hover_cards::PICTURE_HIDDEN,
     shell::{Folders, Page, Row, Shell, recorder::Recorder},
     theme_picker,
@@ -658,4 +659,200 @@ fn a_hidden_sidebar_stays_out_while_the_pointer_is_on_a_row_s_card(cx: &mut Test
         (false, true),
         "off both, onto the page"
     );
+}
+
+/// `with_tabs` with the pinned tab 1, the Today tab 3 and the favorite 10 on GitHub, the core able
+/// to ask a site, and both switches on (#3074).
+fn on_github(
+    cx: &mut TestAppContext,
+) -> (gpui::Entity<Shell>, &mut VisualTestContext, Rc<Recorder>) {
+    let (shell, cx, host) = with_tabs(cx);
+    host.recent_reached.set(true);
+    cx.update(|_, cx| recent::set_switches(true, Default::default(), cx));
+    shell.update(cx, |shell, cx| {
+        for tab in [1, 3, 10] {
+            let url = "https://github.com/pulls".into();
+            shell.set_page(
+                tab,
+                Page {
+                    url,
+                    ..Default::default()
+                },
+                cx,
+            );
+        }
+    });
+    cx.run_until_parked();
+    host.take();
+    (shell, cx, host)
+}
+
+/// What the shell asks of the core as `tab`'s card shows.
+fn asked_on_show(
+    shell: &gpui::Entity<Shell>,
+    cx: &mut VisualTestContext,
+    host: &Recorder,
+    tab: u64,
+) -> Vec<String> {
+    rest_on(shell, cx, host, tab);
+    let rest = host.card.borrow().clone().unwrap();
+    cx.update(|_, cx| (rest.events)(tab, Event::Shown, cx));
+    cx.run_until_parked();
+    let asked = host.take();
+    asked
+        .into_iter()
+        .filter(|call| call.starts_with("fetch recent"))
+        .collect()
+}
+
+fn pull(number: u64) -> RecentRow {
+    RecentRow {
+        list: List::Review,
+        repo: "acme/web".into(),
+        number,
+        title: "Fix the sidebar".into(),
+        draft: false,
+    }
+}
+
+#[gpui::test]
+fn only_a_pinned_tab_or_favorite_on_github_asks_whats_recent(cx: &mut TestAppContext) {
+    let (shell, cx, host) = on_github(cx);
+    assert_eq!(asked_on_show(&shell, cx, &host, 1), ["fetch recent 1"]);
+    assert_eq!(asked_on_show(&shell, cx, &host, 10), ["fetch recent 10"]);
+    assert!(
+        asked_on_show(&shell, cx, &host, 3).is_empty(),
+        "a Today tab"
+    );
+    // Site Controls' switch off, Settings' off, or a core that can't ask: no card asks.
+    cx.update(|_, cx| recent::set_site_on("github.com", false, cx));
+    assert!(asked_on_show(&shell, cx, &host, 1).is_empty());
+    cx.update(|_, cx| {
+        recent::set_site_on("github.com", true, cx);
+        recent::set_on(false, cx);
+    });
+    assert!(asked_on_show(&shell, cx, &host, 1).is_empty());
+    cx.update(|_, cx| recent::set_on(true, cx));
+    host.recent_reached.set(false);
+    assert!(asked_on_show(&shell, cx, &host, 1).is_empty());
+}
+
+#[gpui::test]
+fn the_cards_rows_are_the_sites_answer_until_the_switch_goes_off(cx: &mut TestAppContext) {
+    let (shell, cx, host) = on_github(cx);
+    let shown = |cx: &mut VisualTestContext| {
+        rest_on(&shell, cx, &host, 1);
+        host.card.borrow().clone().unwrap().card.recent
+    };
+    assert_eq!(shown(cx), Some(Recent::Loading));
+    shell.update(cx, |shell, cx| {
+        let rows = vec![pull(482)];
+        shell.recent_answered(1, Answer::Rows { rows, answered: 0. }, cx)
+    });
+    match shown(cx) {
+        Some(Recent::Rows { rows, stale: None }) => assert_eq!(rows[0].0, pull(482)),
+        other => panic!("{other:?}"),
+    }
+    // The favorite on the same profile shows them too, without asking again first.
+    rest_on(&shell, cx, &host, 10);
+    let favorite = host.card.borrow().clone().unwrap().card.recent;
+    assert!(
+        matches!(favorite, Some(Recent::Rows { .. })),
+        "{favorite:?}"
+    );
+    // Off, they go; back on, the card waits for a new answer.
+    cx.update(|_, cx| recent::set_on(false, cx));
+    assert_eq!(shown(cx), None);
+    cx.update(|_, cx| recent::set_on(true, cx));
+    assert_eq!(shown(cx), Some(Recent::Loading));
+}
+
+/// A row opens in the pinned tab, behind it (⌘), or beside the page shown (⌥); signed out, the
+/// card's click goes to GitHub's sign-in in the tab.
+#[gpui::test]
+fn a_row_opens_in_the_tab_behind_it_or_beside_the_page(cx: &mut TestAppContext) {
+    let (shell, cx, host) = on_github(cx);
+    rest_on(&shell, cx, &host, 1);
+    let rest = host.card.borrow().clone().unwrap();
+    let opens = |cx: &mut VisualTestContext, event: Event| {
+        cx.update(|_, cx| (rest.events)(1, event, cx));
+        cx.run_until_parked();
+        let asked = host.take();
+        asked
+            .into_iter()
+            .filter(|call| {
+                ["navigate", "open", "select", "focus page"]
+                    .iter()
+                    .any(|asked| call.starts_with(asked))
+            })
+            .collect::<Vec<_>>()
+    };
+    let url = "https://github.com/acme/web/pull/482";
+    assert_eq!(
+        opens(cx, Event::Open(pull(482), Opening::Behind)),
+        [format!("open behind {url} false 0 0")]
+    );
+    assert_eq!(
+        opens(cx, Event::Open(pull(482), Opening::Beside)),
+        [format!("open split {url} 2 false false")]
+    );
+    // In the tab, which shows with its page focused, as a click on its row does.
+    assert_eq!(
+        opens(cx, Event::Open(pull(482), Opening::Here)),
+        [
+            format!("navigate 1 {url}"),
+            "select 1".into(),
+            "focus page".into()
+        ]
+    );
+    assert_eq!(
+        opens(cx, Event::SignIn),
+        ["navigate 1 https://github.com/login", "focus page"],
+        "the tab is shown already"
+    );
+}
+
+/// An agent's Space and a private window ask the site nothing, nor show rows, whatever their tabs.
+#[gpui::test]
+fn no_card_asks_in_an_agents_space_or_a_private_window(cx: &mut TestAppContext) {
+    let (shell, vcx, host) = on_github(cx);
+    shell.update(vcx, |shell, cx| {
+        let agents = (
+            1,
+            "Work".into(),
+            None,
+            1,
+            "".into(),
+            "claude".into(),
+            "".into(),
+        );
+        shell.set_spaces(vec![agents], cx);
+    });
+    vcx.run_until_parked();
+    host.take();
+    assert!(asked_on_show(&shell, vcx, &host, 1).is_empty());
+    assert_eq!(host.card.borrow().clone().unwrap().card.recent, None);
+
+    let host = Rc::new(Recorder::default());
+    host.recent_reached.set(true);
+    let browser = host.clone();
+    let (shell, cx) =
+        cx.add_window_view(|_, cx| Shell::private_window(browser, 9, "Private".into(), 1, cx));
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(9, vec![20], vec![21], Vec::new(), Folders::default(), cx);
+        let url = "https://github.com/pulls".into();
+        shell.set_page(
+            20,
+            Page {
+                url,
+                ..Default::default()
+            },
+            cx,
+        );
+        shell.set_selected(21, cx);
+    });
+    cx.run_until_parked();
+    host.take();
+    assert!(asked_on_show(&shell, cx, &host, 20).is_empty());
+    assert_eq!(host.card.borrow().clone().unwrap().card.recent, None);
 }

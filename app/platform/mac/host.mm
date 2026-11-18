@@ -357,6 +357,15 @@ Browser* BrowserOf(NSWindow* window) {
   return nullptr;
 }
 
+// Whether |window| is a dialog of Chromium's views over a tab in |browser|'s window, such as
+// Chrome's warning before http or the passkey dialog. On the Mac it's a window of its own, but it's
+// part of the browser window: taking the keyboard isn't the user leaving an overlay, and while it
+// has the keyboard a click on the window's pages is still an ordinary click (#3209, #3210).
+static bool IsTabDialogOf(NSWindow* window, Browser* browser) {
+  return browser && window && window.parentWindow == browser->window &&
+         [window isKindOfClass:NSClassFromString(@"NativeWidgetMacNSWindow")];
+}
+
 // The browser window in front, else the first still open.
 Browser* FrontBrowser() {
   for (NSWindow* window in NSApp.orderedWindows) {
@@ -483,6 +492,9 @@ Browser* g_dialog_over;
 NSWindow* g_dialog;
 NSView* g_dialog_view;
 bool g_dialog_shown = false;
+// When the app last became the active one, in the system's uptime, as events' timestamps are: a
+// press from before it is the one that activated the app.
+NSTimeInterval g_active_since = 0;
 // What the dialog covers, as insets from the browser window's content edges: none for all of it,
 // or a tab's card for a page's dialog, which keeps them as the window resizes.
 NSEdgeInsets g_dialog_insets;
@@ -829,6 +841,7 @@ void WatchMainWindow() {
                       object:nil
                        queue:nil
                   usingBlock:^(NSNotification*) {
+                    g_active_since = NSProcessInfo.processInfo.systemUptime;
                     LevelOver(NSApp.mainWindow, true);
                     TellMain(NSApp.mainWindow, true);
                   }];
@@ -2070,6 +2083,21 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
                                                 break;
                                               }
                                               if (event.window == each->window) {
+                                                // A press on the window while its tab's dialog
+                                                // has the keyboard: the window takes it first, so
+                                                // the press lands as AppKit's first click wouldn't,
+                                                // and a page in another pane hears it and focuses
+                                                // its pane, as on Linux and Windows (#3210). A
+                                                // press that activated the app stays a first click.
+                                                if (NSApp.isActive &&
+                                                    event.timestamp > g_active_since &&
+                                                    !each->window.keyWindow &&
+                                                    IsTabDialogOf(NSApp.keyWindow, each.get())) {
+                                                  fprintf(stderr,
+                                                          "browser: a press takes the keyboard "
+                                                          "from its window's tab dialog\n");
+                                                  [each->window makeKeyWindow];
+                                                }
                                                 each->find_bar_keyboard = false;
                                                 each->offer_keyboard = false;
                                                 if (each->find_bar.keyWindow ||
@@ -2198,6 +2226,12 @@ size_t host_screens(double* frames, size_t count) {
 NSPoint g_driven_pointer;
 bool g_driven_pointer_known = false;
 
+// The pointer on screen: the driven one in a driven run, which NSEvent.mouseLocation doesn't see,
+// so an overlay shown under it takes its clicks as under a hand's (#3387).
+static NSPoint Pointer() {
+  return g_driven_pointer_known ? g_driven_pointer : NSEvent.mouseLocation;
+}
+
 bool host_app_icon(const char* bundle_id, size_t size, uint8_t* rgba) {
   @autoreleasepool {
     NSWorkspace* workspace = NSWorkspace.sharedWorkspace;
@@ -2233,7 +2267,7 @@ bool host_app_icon(const char* bundle_id, size_t size, uint8_t* rgba) {
 }
 
 bool host_pointer(double* x, double* y) {
-  const NSPoint point = g_driven_pointer_known ? g_driven_pointer : NSEvent.mouseLocation;
+  const NSPoint point = Pointer();
   *x = point.x;
   // AppKit's y runs up from the bottom of the main display, the core's down from its top.
   *y = NSHeight(NSScreen.screens.firstObject.frame) - point.y;
@@ -2852,7 +2886,11 @@ void host_add_overlay(int index, void* overlay_view, double radius, void (*dismi
                     } else if (each->shown) {
                       // What took the keyboard, for the next time an overlay is shown and deaf
                       // (#1314): the release build's log is stderr alone.
-                      if (browser == each->over) {
+                      if (browser == each->over || IsTabDialogOf(window, each->over)) {
+                        // A tab's dialog that shows under it, as a page's link comes to Chrome's
+                        // warning, is its window's too: the overlay keeps every key, and when it
+                        // closes the keyboard goes where it would have, the dialog's included
+                        // (#3209).
                         fprintf(stderr,
                                 "browser: %s takes the keyboard back from its window's %s\n",
                                 each->name, ClassName(window.firstResponder));
@@ -3099,8 +3137,7 @@ void host_show_overlay(int index,
     overlay->shown = true;
     overlay->over = browser;
     NSWindow* key = NSApp.keyWindow;
-    const bool chromium = [key isKindOfClass:NSClassFromString(@"NativeWidgetMacNSWindow")];
-    overlay->keyboard_from = chromium && key.parentWindow == browser->window ? key : nil;
+    overlay->keyboard_from = IsTabDialogOf(key, browser) ? key : nil;
     HoldKeys(overlay->window);
   }
   // The window still holds what it drew when it last closed, such as the previous query. It goes
@@ -3801,7 +3838,8 @@ void host_add_site_controls(void* view, void (*dismissed)(void)) {
                         HostIsMenuWindow(window)) {
                       return;
                     }
-                    if (BrowserOf(window) == g_site_controls_over) {
+                    if (BrowserOf(window) == g_site_controls_over ||
+                        IsTabDialogOf(window, g_site_controls_over)) {
                       [g_site_controls makeKeyWindow];
                     } else {
                       DismissSiteControls();
@@ -3973,7 +4011,8 @@ void* host_add_link_preview(void* view, void (*dismissed)(void)) {
                     window == g_link_preview || !g_link_preview.visible) {
                   return;
                 }
-                if (BrowserOf(window) == g_link_preview_over) {
+                if (BrowserOf(window) == g_link_preview_over ||
+                    IsTabDialogOf(window, g_link_preview_over)) {
                   [g_link_preview makeKeyWindow];
                 } else {
                   DismissLinkPreview();
@@ -4110,7 +4149,8 @@ void host_add_capture(void* view, void (*dismissed)(void)) {
                         HostIsMenuWindow(window)) {
                       return;
                     }
-                    if (BrowserOf(window) == g_capture_over) {
+                    if (BrowserOf(window) == g_capture_over ||
+                        IsTabDialogOf(window, g_capture_over)) {
                       [g_capture makeKeyWindow];
                     } else {
                       DismissCapture();
@@ -4351,13 +4391,13 @@ void host_toast_takes_clicks(bool takes) {
                                                               return event;
                                                             }];
   }
-  PlaceToastClicks(NSEvent.mouseLocation);
+  PlaceToastClicks(Pointer());
 }
 
 void host_set_toast_plate(double x, double y, double width, double height) {
   g_toast_plate = NSMakeRect(x, y, width, height);
   if (g_toast_takes) {
-    PlaceToastClicks(NSEvent.mouseLocation);
+    PlaceToastClicks(Pointer());
   }
 }
 
@@ -4525,7 +4565,7 @@ void host_show_mini_bar(void* ui_view, double x, double y, double width, double 
                                                   return event;
                                                 }];
     }
-    PlaceMiniBarClicks(NSEvent.mouseLocation);
+    PlaceMiniBarClicks(Pointer());
     if (g_mini_bar.parentWindow != browser->window) {
       AddOver(browser->window, g_mini_bar);
       RaiseOverlays(browser, g_mini_bar);
@@ -4832,7 +4872,7 @@ void host_show_hover_card(void* ui_view, double left, double top, double width, 
       RaiseOverlays(browser, g_card);
     }
     WatchCard();
-    PlaceCardClicks(NSEvent.mouseLocation);
+    PlaceCardClicks(Pointer());
     // check.sh waits for this line, and for the UI's "hover card settled" before a capture.
     fprintf(stderr, "browser: hover card window shown\n");
   });
@@ -4973,6 +5013,9 @@ void host_hide_link_target(double fade) {
       }
       completionHandler:gone];
 }
+
+// Windows blend with what's under them, so the room round an overlay's outline shows through.
+void host_outline_overlay(void*, double, double, double, double, double) {}
 
 bool host_mouse_down(void) {
   return NSEvent.pressedMouseButtons != 0;

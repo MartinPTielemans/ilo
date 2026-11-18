@@ -353,6 +353,11 @@ __weak NSWindow* g_pip;
 NSPoint g_pip_held_at;
 bool g_pip_held = false;
 
+// Whether the last key was a ⌃Tab walk's, or one of its later keys with ⌃, such as ⌃→. A left
+// click then comes with ⌃, as a hand holds ⌃ through a click on the switcher's row (#3340) and as
+// the other OSes' drivers keep it. Other input, flags and a key without ⌃ end it.
+bool g_walk_ctrl = false;
+
 // +[NSEvent mouseLocation], which Chromium's move loop moves a window by, and AppKit's own: while
 // pip holds the Mini Player, the driver's pointer, as the loop would follow a hand's.
 NSPoint (*g_mouse_location)(id, SEL);
@@ -731,6 +736,11 @@ bool Key(NSWindow* window,
   // the menu's key equivalents by it.
   if ((flags & NSEventModifierFlagShift) && key.size() == 1 && key[0] >= 'a' && key[0] <= 'z') {
     characters = characters.uppercaseString;
+  }
+  // And with a digit as what ⇧ makes of it on the US layout, so ⌃⇧1 isn't the menu's ⌃1 (#3214).
+  if ((flags & NSEventModifierFlagShift) && key.size() == 1 && key[0] >= '0' && key[0] <= '9') {
+    static constexpr char kShifted[] = ")!@#$%^&*(";
+    characters = [NSString stringWithFormat:@"%c", kShifted[key[0] - '0']];
   }
   // The keyboard marks arrow keys as function and keypad keys, and the keys above them as function
   // keys.
@@ -1441,6 +1451,21 @@ bool Run(const std::string& line, void (^done)(void)) {
   std::istringstream words(line);
   std::string action;
   words >> action;
+  // Input but a left click or a key ends a ⌃Tab walk's ⌃ (g_walk_ctrl); key and flags see to it
+  // themselves.
+  static const char* const kInput[] = {
+      "pip",         "click",        "rightclick",    "middleclick",    "doubleclick",
+      "clickkey",    "sideclick",    "rightclickkey", "doubleclickkey", "drag",
+      "dragkey",     "dragover",     "dragdrop",      "dragleave",      "press",
+      "dragto",      "release",      "rightpress",    "rightdragto",    "rightrelease",
+      "move",        "scroll",       "scrollkey",     "swipe",          "pageswipe",
+      "wheel",       "keydown",      "keyup",         "type",           "ime",
+      "insert",      "choose",       "dismiss",       "savepanel"};
+  const bool click = action == "click" || action == "clickkey";
+  for (const char* input : kInput) {
+    g_walk_ctrl = g_walk_ctrl && (click || action != input);
+  }
+  const NSEventModifierFlags walk = g_walk_ctrl ? NSEventModifierFlagControl : 0;
   if (action == "pip") {
     NSWindow* pip = g_pip_held ? g_pip : MiniPlayer();
     if (!pip) {
@@ -1658,7 +1683,7 @@ bool Run(const std::string& line, void (^done)(void)) {
               frame.origin.x, frame.origin.y, frame.size.width, frame.size.height);
     }
     Convert(window, target, &x, &y);
-    Click(target, x, y, 1, Modifiers(words));
+    Click(target, x, y, 1, Modifiers(words) | walk);
     done();
     return true;
   }
@@ -1667,7 +1692,7 @@ bool Run(const std::string& line, void (^done)(void)) {
     if (!NSApp.keyWindow || !(words >> x >> y)) {
       return false;
     }
-    Click(NSApp.keyWindow, x, y, 1);
+    Click(NSApp.keyWindow, x, y, 1, walk);
     done();
     return true;
   }
@@ -2447,6 +2472,8 @@ bool Run(const std::string& line, void (^done)(void)) {
       words >> key;
     }
     NSEventModifierFlags flags = Modifiers(words);
+    g_walk_ctrl = action == "key" && (flags & NSEventModifierFlagControl) &&
+                  (key == "tab" || g_walk_ctrl);
     if (action == "flags") {
       // Each modifier that changed as its left key reports it, one at a time as a hand's: Chromium
       // names a page's key by its code, so ⇧ alone reaches a page as Shift (#3097). With none

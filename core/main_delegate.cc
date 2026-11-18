@@ -24,6 +24,7 @@
 #include "base/time/time.h"
 #include "browser_core/ad_block.h"
 #include "browser_core/agent_autofill.h"
+#include "browser_core/agent_job_voter.h"
 #include "browser_core/agent_page.h"
 #include "browser_core/arrange.h"
 #include "browser_core/auto_archive.h"
@@ -38,6 +39,7 @@
 #include "browser_core/boosts.h"
 #include "browser_core/developer_mode.h"
 #include "browser_core/drm_request.h"
+#include "browser_core/focus_leaving.h"
 #include "browser_core/hooks.h"
 #include "browser_core/host.h"
 #include "browser_core/install_question.h"
@@ -292,6 +294,7 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
     }
     sync::Start();
     WatchBatterySaver();
+    AddAgentJobVoter();
     // Once the Spaces the last launch saved are read, and so once the run loop is running.
     LoadSession(base::BindOnce([] {
       if (g_host.started) {
@@ -424,6 +427,13 @@ class ContentBrowserClient : public ChromeContentBrowserClient {
         network_context_params->persist_session_cookies) {
       network_context_params->restore_old_session_cookies = true;
     }
+  }
+
+  // Chrome's, answering as Tab leaves a tab's page at either end (focus_leaving.h).
+  std::unique_ptr<content::WebContentsViewDelegate> GetWebContentsViewDelegate(
+      content::WebContents* web_contents) override {
+    return AnswerFocusLeaving(
+        web_contents, ChromeContentBrowserClient::GetWebContentsViewDelegate(web_contents));
   }
 
   // Every video's Picture in Picture window is the core's, which shows it at its media card while

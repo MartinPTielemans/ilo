@@ -230,6 +230,9 @@ class AgentPage : public content::WebContentsObserver,
   void ReadFields(std::unique_ptr<Withholding> withholding, size_t next);
   void Cover(std::unique_ptr<Withholding> withholding, size_t next);
   void NextField(std::unique_ptr<Withholding> withholding, size_t next);
+  // Describes the field |element|, with a textarea's text and a select's options, for what
+  // AddDescribed reads of it, or none if it can't be read.
+  void DescribeField(int64_t element, Reply then);
   void Withhold(std::unique_ptr<Withholding> withholding,
                 size_t next,
                 const base::DictValue* described);
@@ -244,9 +247,9 @@ class AgentPage : public content::WebContentsObserver,
             std::optional<gfx::RectF> box,
             void (AgentPage::*go_on)(std::unique_ptr<Withholding>, size_t),
             size_t next);
-  // Keeps what the agent's typing or choosing left in |element|, from the tree read after it
-  // settled, so a field shows it only while it still holds exactly that.
-  void KeepTyped(const base::ListValue& nodes, int64_t element);
+  // Keeps what the agent typed or chose in |element|, |sent|, so the field shows it only while it
+  // holds exactly that.
+  void KeepTyped(int64_t element, std::u16string sent);
 
   // The tree, as bc_agent_page answers it: the main frame's, with each frame agents may see under
   // the element it's in.
@@ -277,10 +280,17 @@ class AgentPage : public content::WebContentsObserver,
   // The first control of the |kind|s from |kind| on that |scope|'s elements have, with |id| if
   // the label names one.
   void FindChoice(int slot, int scope, std::optional<std::string> id, size_t kind, ChoiceThen then);
-  // Marks the text fields in |fields| that are for passwords, one at a time, then answers.
+  // Marks the text fields in |fields| that are for passwords, one at a time, then reads the
+  // contents of those that hold something.
   void CheckPasswords(base::ListValue nodes,
                       std::vector<int64_t> fields,
                       std::set<int64_t> passwords);
+  // Describes each field in |filled| that holds something from |next| on, one at a time, then
+  // answers with the tree, each field as SeenOf has an agent see it, in its pictures too.
+  void ReadContents(base::ListValue nodes,
+                    std::set<int64_t> passwords,
+                    std::vector<std::pair<int64_t, FieldFacts>> filled,
+                    size_t next);
   void Answer(std::string text, bool error);
   void Fail(std::string why);
   // Gives the answer kept while a download started, as none took its action.
@@ -373,8 +383,8 @@ class AgentPage : public content::WebContentsObserver,
   std::vector<Target> targets_;
   // The frames the snapshot running reads.
   std::vector<Frame> frames_;
-  // What the agent's typing or choosing left in each element it typed in or chose in, as the field
-  // read once the page settled, until the page's document changes.
+  // What the agent typed or chose in each element it typed in or chose in, until the page's
+  // document changes or the session ends. In memory alone, to compare with, and never logged.
   std::map<int64_t, std::u16string> typed_;
   // Whether the job hears of the page's requests, and waits for them to end.
   bool listening_ = false;
@@ -402,6 +412,8 @@ class AgentPage : public content::WebContentsObserver,
   std::unique_ptr<WheelWatch> wheel_;
   // Keeps the page drawing while it's hidden, for the agent's input and screenshots.
   base::ScopedClosureRunner drawing_;
+  // Lifts the page's renderer out of the background while the job running works in it (#3285).
+  base::ScopedClosureRunner working_;
   // Whether an agent acts on the page, from its first action until its session ends, and how many
   // pictures are under way, so a page only pictured lets DevTools go after.
   bool acted_ = false;
@@ -419,12 +431,21 @@ class AgentPage : public content::WebContentsObserver,
 // in pages, is never an agent's.
 bool IsWebFrame(content::RenderFrameHost* frame);
 
+// What an agent's outline shows of a field: SeenOf's answer, with what it holds for Seen::kValue.
+struct FieldShown {
+  Seen seen = Seen::kFilled;
+  std::string value;
+};
+
 // What a page's accessibility tree, as DevTools' Accessibility.getFullAXTree gives it, may show
 // an agent: each node without its value, and without the nodes under a field, where Chromium puts
 // what was typed or filled into it, but for a combobox's own list of options, and with
-// "password": true on the nodes in |passwords|. A native select has "choices", its options' names
-// (select_choices.h).
-base::ListValue AgentTree(base::ListValue nodes, const std::set<int64_t>& passwords);
+// "password": true on the nodes in |passwords|. A field in |contents| has "holds", what it holds,
+// for Seen::kValue, and else "contents": "empty", "filled" or "changed". A native select has
+// "choices", its options' names (select_choices.h).
+base::ListValue AgentTree(base::ListValue nodes,
+                          const std::set<int64_t>& passwords,
+                          const std::map<int64_t, FieldShown>& contents);
 
 // The labels in a page's tree that no node in it is named after, at most |most|: those whose
 // control isn't in the tree, as a radio or checkbox hidden with display: none isn't.

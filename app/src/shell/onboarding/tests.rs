@@ -238,16 +238,17 @@ fn the_intro_goes_on_after_a_timer_that_wakes_it_early(cx: &mut TestAppContext) 
     let (shell, cx, _) = first_window(cx);
     started(&shell, cx);
     later(&shell, cx, INTRO_END - 0.5);
-    // The timer ends, while the flow's clock has half a second to go.
-    cx.executor().advance_clock(Duration::from_secs(1));
-    cx.run_until_parked();
-    assert_eq!(step(&shell, cx), Some(Step::Intro));
-    // The half second passes, and only a timer wakes the window.
+    // The hold's timer is set for the half second left; the flow's clock falls half a second
+    // behind it, as a timer that ends early leaves it.
     shell.update(cx, |shell, _| {
         let onboarding = shell.onboarding.as_mut().expect("the flow shows");
-        onboarding.since -= Duration::from_secs_f32(0.5);
+        onboarding.since += Duration::from_secs_f32(0.5);
     });
-    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.executor().advance_clock(Duration::from_secs_f32(0.75));
+    cx.run_until_parked();
+    assert_eq!(step(&shell, cx), Some(Step::Intro));
+    // What's left passes, and only the timer the woken frame set wakes the window.
+    cx.executor().advance_clock(Duration::from_secs_f32(0.5));
     cx.run_until_parked();
     assert_eq!(step(&shell, cx), Some(Step::Import));
 }
@@ -1649,4 +1650,128 @@ fn a_screen_reader_follows_the_keyboard_through_each_step(cx: &mut TestAppContex
         .iter()
         .any(|call| call.starts_with("space color 1 "));
     assert!(!colored, "as Skip, keeping the Space's colour");
+}
+
+/// A host offering three engines, DuckDuckGo the default and Google last, as the core lists them.
+fn with_engines(host: &Recorder) {
+    let engines = [
+        ("duckduckgo.com", "DuckDuckGo"),
+        ("bing.com", "Bing"),
+        ("google.com", "Google"),
+    ];
+    *host.search_engines.borrow_mut() = (
+        engines
+            .iter()
+            .map(|&(keyword, name)| (keyword.into(), name.into()))
+            .collect(),
+        "duckduckgo.com".into(),
+    );
+}
+
+/// The engine picked at the search engine step, if one is.
+fn engine(shell: &Entity<Shell>, cx: &VisualTestContext) -> Option<usize> {
+    shell.read_with(cx, |shell, _| {
+        shell.onboarding.as_ref().and_then(|o| o.engine)
+    })
+}
+
+/// The step comes after Make Default with the default picked, and the arrows move the pick. Nothing
+/// is set until Continue: Skip after a moved pick leaves the profile's engine as it was, Continue
+/// on the default sets none either, as it stays the core's fallback, and Continue on another
+/// sets that one.
+#[gpui::test]
+fn the_search_engine_step_sets_nothing_until_continue(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    with_engines(&host);
+    let set = |calls: Vec<String>| {
+        (calls.into_iter())
+            .filter(|call| call.starts_with("search engine "))
+            .collect::<Vec<_>>()
+    };
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::DefaultBrowser);
+    cx.simulate_keystrokes("escape");
+    assert_eq!(step(&shell, cx), Some(Step::SearchEngine));
+    assert_eq!(engine(&shell, cx), Some(0), "the default is picked");
+    cx.simulate_keystrokes("down down down");
+    assert_eq!(engine(&shell, cx), Some(2), "↓ stops at the last");
+    cx.simulate_keystrokes("up");
+    assert_eq!(engine(&shell, cx), Some(1));
+    host.take();
+    cx.simulate_keystrokes("escape");
+    assert_eq!(step(&shell, cx), Some(Step::Color));
+    assert_eq!(set(host.take()), Vec::<String>::new(), "Skip sets nothing");
+
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::SearchEngine);
+    host.take();
+    cx.simulate_keystrokes("enter");
+    assert_eq!(step(&shell, cx), Some(Step::Color));
+    assert_eq!(
+        set(host.take()),
+        Vec::<String>::new(),
+        "the default stays unset"
+    );
+
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::SearchEngine);
+    cx.simulate_keystrokes("down down");
+    host.take();
+    cx.simulate_keystrokes("enter");
+    assert_eq!(set(host.take()), ["search engine 1 google.com"]);
+}
+
+/// With no engines to offer, as while a policy picks the default, the step is left out.
+#[gpui::test]
+fn no_engines_leaves_the_search_engine_step_out(cx: &mut TestAppContext) {
+    let (shell, cx, _) = first_window(cx);
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::DefaultBrowser);
+    cx.simulate_keystrokes("escape");
+    assert_eq!(step(&shell, cx), Some(Step::Color));
+}
+
+/// A new profile's engines load after the flow starts: the step is planned, and its list is the
+/// one the core has when the step comes.
+#[gpui::test]
+fn engines_loaded_after_the_start_come_with_their_step(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    started(&shell, cx);
+    assert!(steps(&shell, cx).contains(&Step::SearchEngine));
+    with_engines(&host);
+    skip_to(&shell, cx, Step::SearchEngine);
+    assert_eq!(step(&shell, cx), Some(Step::SearchEngine));
+    assert_eq!(engine(&shell, cx), Some(0), "the default is picked");
+}
+
+/// A screen reader has the engines as one choice called Search engine, a radio button each by its
+/// name, the one picked checked.
+#[gpui::test]
+fn a_screen_reader_reads_the_engines_as_one_choice(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    with_engines(&host);
+    cx.simulate_a11y_activation();
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::SearchEngine);
+    let said = read(cx);
+    assert!(
+        said.contains(&(Role::Dialog, "Pick a search engine.".into(), None)),
+        "{said:?}"
+    );
+    assert!(
+        said.iter()
+            .any(|(role, name, _)| *role == Role::RadioGroup && name == "Search engine")
+    );
+    let engines: Vec<_> = (said.iter())
+        .filter(|(role, ..)| *role == Role::RadioButton)
+        .map(|(_, name, on)| (name.as_str(), *on))
+        .collect();
+    assert_eq!(
+        engines,
+        [
+            ("DuckDuckGo", Some(Toggled::True)),
+            ("Bing", Some(Toggled::False)),
+            ("Google", Some(Toggled::False)),
+        ]
+    );
 }

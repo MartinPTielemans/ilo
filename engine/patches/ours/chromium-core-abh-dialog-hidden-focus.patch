@@ -1,0 +1,37 @@
+Focuses the warning before http's button on Windows only while the warning
+shows. Chrome focuses it as the dialog is made, even for a tab that isn't
+showing, whose dialog the tab dialog manager shows inactive and hides at once.
+The core gives a tab's dialog a window of its own on Windows alone
+(PageDialogsInOwnWindow), and focusing a view in a hidden window activates it
+there, so an agent's tab at the warning took the keyboard from the user's
+window (#3164). The inactive show already stores the button for the dialog's
+activation, which focuses it as the tab comes forward. On Linux and the Mac
+Chrome's focus stays: on Linux a click on the warning once it shows gives the
+keyboard to the button focused here, and without it the click left the
+keyboard in the UI.
+
+--- a/chrome/browser/ssl/ask_before_http_dialog_controller.cc
++++ b/chrome/browser/ssl/ask_before_http_dialog_controller.cc
+@@ -254,7 +254,21 @@
+   // Explicitly call RequestFocus() to ensure initially focused view is focused.
+   views::View* focused_view = model_host->GetInitiallyFocusedView();
+   CHECK(focused_view);
+-  focused_view->RequestFocus();
++  // browser_core: on Windows, only while the dialog shows. A dialog of a tab
++  // that isn't showing was shown inactive, which stored this view for its
++  // activation, and hidden. The core gives a tab's dialog a window of its own
++  // on Windows alone, and focusing a view in it activates that hidden window,
++  // so it took the keyboard from the window the user was in (#3164). Elsewhere
++  // Chrome's focus stays: on Linux a click on the dialog once it shows gives
++  // the keyboard to the view focused here, and without it the click left the
++  // keyboard in the UI.
++  bool focus = true;
++#if BUILDFLAG(IS_WIN)
++  focus = dialog_widget_->IsVisible();
++#endif
++  if (focus) {
++    focused_view->RequestFocus();
++  }
+ #else
+   current_dialog_model_ = dialog_model.get();
+   ui::ModalDialogWrapper::ShowTabModal(std::move(dialog_model), window);

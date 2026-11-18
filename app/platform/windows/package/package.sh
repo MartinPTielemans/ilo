@@ -64,9 +64,10 @@ if [ -z "$alone" ]; then
   rm -f "$stage/app/chrome.dll.lib" "$stage/app/.from"
 fi
 cp "$dll" "$bridge" "$here/Assets/ilo.ico" "$stage/app/"
-# uBlock Origin beside chrome.exe, where the core loads it, and the licences About opens, as
-# build.sh puts them beside the engine.
+# uBlock Origin and a Board's page beside chrome.exe, where the core loads them, and the licences
+# About opens, as build.sh puts them beside the engine.
 cp -R "$("$app/fetch-ublock.sh")" "$stage/app/ublock"
+"$app/copy-board.sh" "$stage/app/board"
 "$app/../tools/licences.sh" "$stage/app" "$app/windows/Cargo.toml" \
   "$(rustc -vV | sed -n 's/^host: //p')" --features prod
 

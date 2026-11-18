@@ -22,6 +22,8 @@ use crate::{
 
 /// How long a picker waits for the name row it points at to stop moving.
 const PICKER_WAIT: Duration = Duration::from_secs(2);
+/// A new Board's name until the user types one: the product's.
+const BOARD: &str = "Board";
 
 impl Shell {
     /// Shows the Space with its name in a field, all selected, to type a new one over.
@@ -531,6 +533,42 @@ impl Shell {
         }
     }
 
+    /// New Board: the Board's tab opens pinned, its row's name in a field, as New Folder's is.
+    pub(super) fn new_board(&mut self, cx: &mut Context<Self>) {
+        self.new_board_with(crate::boards::new_id(), None, cx);
+    }
+
+    /// New Board as Board `id`, with `capture`, capture mode's New Board's PNG, on it.
+    pub fn new_board_with(&mut self, id: String, capture: Option<Vec<u8>>, cx: &mut Context<Self>) {
+        let shell = cx.entity().downgrade();
+        let opened = Box::new(move |tab, cx: &mut App| {
+            shell.update(cx, |shell, cx| shell.name_board(tab, cx)).ok();
+        });
+        self.browser.new_board(self.space, id, capture, opened, cx);
+    }
+
+    /// Shows the new Board's row with its name in a field, all selected, to type another over.
+    pub(super) fn name_board(&mut self, tab: u64, cx: &mut Context<Self>) {
+        log!("browser: name board {tab}");
+        let name = cx.new(|cx| {
+            TextInput::new("Board name", cx)
+                .placeholder_color(self.palette.text(FORM_PLACEHOLDER))
+                .with_text(BOARD.into())
+        });
+        self.renaming = Some(Renaming {
+            opened: field_opens(),
+            naming: Naming::Tab(tab),
+            name,
+            in_library: false,
+            _watches: Vec::new(),
+        });
+        self.board_named = Some(tab);
+        self.dock(cx);
+        self.browser.focus_ui(cx);
+        self.focus_renaming = true;
+        cx.notify();
+    }
+
     /// Puts the new profile's name in the New Space form's Profile row, all selected, to type
     /// another over, as Finder's New Folder does.
     pub(super) fn name_profile(
@@ -665,6 +703,17 @@ impl Shell {
             Naming::Profile(_) => {
                 self.focus_form = renaming.name.focus_handle(cx).is_focused(window);
             }
+            // A Board New Board just made, its name kept or left with ↩ or esc, gives its page
+            // the keyboard, where its first note's field waits for the first key (#3073's
+            // condition 13). A press that took the keyboard elsewhere leaves it there.
+            Naming::Tab(tab) if self.board_named.take() == Some(tab) => {
+                let keys = renaming.name.focus_handle(cx).is_focused(window);
+                window.focus(&self.focus_handle, cx);
+                if keys && tab == self.selected {
+                    log!("browser: board {tab} has the keyboard");
+                    self.browser.focus_page(cx);
+                }
+            }
             _ => window.focus(&self.focus_handle, cx),
         }
         cx.notify();
@@ -689,6 +738,9 @@ impl Shell {
             .child(renaming.name.clone())
     }
 }
+
+#[cfg(test)]
+mod folder_tests;
 
 #[cfg(test)]
 mod leave_tests;

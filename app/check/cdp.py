@@ -49,11 +49,12 @@ takes a command a line on its standard input:
                   last at an address starting with PREFIX matches SELECTOR, in its shadow trees
                   too, or none for no such page: a WebUI page shows what Chrome did by its
                   controls' attributes, as a disabled menu
-  video PREFIX    logs "cdp: video SECONDS playing|paused ad|no-ad refused|-", or "cdp: video
-                  none" for no such page or no video in it: how far the first video in the page
-                  opened last at an address starting with PREFIX has played, whether it's paused,
-                  whether its player shows an ad, and refused where Chrome kept it from starting,
-                  as YouTube's player says
+  video PREFIX    logs "cdp: video SECONDS playing|paused ad|no-ad refused|cued|STATE", or "cdp:
+                  video none" for no such page or no video in it: how far the first video in the
+                  page opened last at an address starting with PREFIX has played, whether it's
+                  paused, whether its player shows an ad, and refused where Chrome kept it from
+                  starting, cued where it waits for play, or else the player's state, as
+                  YouTube's player says, - with no player
   content         logs "cdp: content TEXT IMAGES COVER", or "cdp: content none" for no page: the
                   attached page's shown text, in characters, its shown pictures at least 50 px a
                   side, and the percent of the viewport the largest element fixed in place over
@@ -63,16 +64,22 @@ takes a command a line on its standard input:
                   writes to FILE, as JSON, the attached page's elements at display: none from a
                   style sheet, as the ad blocker's hiding would be, each as the selector its tag,
                   id and classes make, with the elements that selector takes in the page and
-                  those of them shown; and with BASE, an earlier run's FILE for the same site, its
-                  selectors none of whose elements were shown then and some are now.
-                  Logs "cdp: hidden SELECTORS ELEMENTS SHOWN missed SELECTORS ELEMENTS in MS ms"
+                  those of them shown, and of those it hid all of, which a blocker's style
+                  sheet hides and which the page hid itself (#3268); and with BASE, an
+                  earlier run's FILE for the same site, its selectors none of whose elements were
+                  shown then, the page's own aside, and some are now. Logs "cdp: hidden SELECTORS
+                  ELEMENTS SHOWN blocker SELECTORS page SELECTORS missed SELECTORS ELEMENTS
+                  untold ELEMENTS SELECTORS gone ELEMENTS in MS ms", untold those not told apart
+                  in 40 s, and gone those of them the page removed before their ask was answered
   requests FILE   records each request the attached page and its frames make from now on, a JSON
                   line each in FILE: "sent" with its id, address and wall time in ms, and
-                  "redirect": true where it's a redirect of the request before it, "failed"
+                  "redirect": true where it's a redirect of the request before it, and
+                  "document": true where it's the page's own, its top frame's, "failed"
                   with its id and Chromium's error, as net::ERR_BLOCKED_BY_CLIENT for an ad
-                  blocker's, and "answered" with its id for a response from no server, network
-                  cache or service worker, as the browser's own ad blocker's stand-in is, then
-                  logs "cdp: recording requests"
+                  blocker's, "answered" with its id for a response from no server, network
+                  cache or service worker, as the browser's own ad blocker's stand-in is, and
+                  "document" with its id, HTTP status and address for the page's own response,
+                  then logs "cdp: recording requests"
 For perf's Chrome on the same runner (check/perf.sh), which has no driver of its own:
   titles          logs "cdp: title TARGET TITLE" for each page's title now, then each time a page's
                   changes, where perf's page stamps its paint and each time it's shown. DevTools
@@ -205,7 +212,8 @@ def log_title(info):
         log("title %s %s" % (info["targetId"], info["title"]))
 
 
-def call(method, params=None, session=None):
+def call(method, params=None, session=None, quiet=False):
+    """METHOD's result; with QUIET, None where it fails, as a node gone from the page since."""
     global sent
     with lock:
         sent += 1
@@ -219,8 +227,32 @@ def call(method, params=None, session=None):
         answered.wait_for(lambda: number in replies)
         reply = replies.pop(number)
     if "error" in reply:
+        if quiet:
+            return None
         raise SystemExit("cdp: %s failed: %s" % (method, reply["error"]))
     return reply["result"]
+
+
+def calls(method, many, session):
+    """METHOD's result for each of MANY's params, None where one fails. They're sent together and
+    the browser answers them in turn, matched by id, so asking N costs no N round trips (#3335)."""
+    global sent
+    numbers = []
+    for params in many:
+        with lock:
+            sent += 1
+            numbers.append(sent)
+        message = {"id": numbers[-1], "method": method, "params": params}
+        if session:
+            message["sessionId"] = session
+        with sending:
+            send(json.dumps(message).encode())
+    results = []
+    with answered:
+        for number in numbers:
+            answered.wait_for(lambda: number in replies)
+            results.append(replies.pop(number).get("result"))
+    return results
 
 
 def post(method, params, session):
@@ -232,6 +264,12 @@ def post(method, params, session):
     with sending:
         send(json.dumps({"id": number, "method": method, "params": params,
                          "sessionId": session}).encode())
+
+
+def top_document(params):
+    """Whether a request's event is the attached page's own document, its top frame's, whose id is
+    the page's target id."""
+    return params.get("type") == "Document" and params.get("frameId") == attached
 
 
 def record(message):
@@ -251,10 +289,17 @@ def record(message):
         # are a renderer's process id and a count, and the OS gives a later process the same id.
         if "redirectResponse" in params:
             line["redirect"] = True
+        if top_document(params):
+            line["document"] = True
     elif method == "Network.loadingFailed":
         line = {"event": "failed", "id": params["requestId"], "error": params["errorText"]}
     elif method == "Network.responseReceived":
         response = params["response"]
+        if top_document(params):
+            # The page's own answer, so a page that didn't load says whether its server refused it.
+            recording.write(json.dumps({"event": "document", "id": params["requestId"],
+                                        "status": response["status"], "url": response["url"]})
+                            + "\n")
         kept = ("fromDiskCache", "fromServiceWorker", "fromPrefetchCache", "fromEarlyHints")
         if response.get("remoteIPAddress") or any(response.get(key) for key in kept):
             return True
@@ -494,7 +539,8 @@ def ask(prefix, script, selector):
 # ad, and whether Chrome refused to start it, as YouTube's says with classes on the player round
 # it. Refused, the player has asked to play, as playing-mode says, and has the data to, but the
 # video is still paused and has never started, as Chrome lets a page start a video with sound only
-# once the user has acted on it.
+# once the user has acted on it. Cued, the player has the video and waits for play to be pressed,
+# as its state 5 says (#3272). Otherwise the player's state, as a number, or - with no player.
 VIDEO = """(() => {
   const video = document.querySelector("video");
   if (!video) return "";
@@ -504,8 +550,11 @@ VIDEO = """(() => {
   const refused = player && player.classList.contains("playing-mode") &&
     player.classList.contains("unstarted-mode") && video.paused &&
     video.readyState === HTMLMediaElement.HAVE_ENOUGH_DATA;
+  const state = player && typeof player.getPlayerState === "function" ?
+    String(player.getPlayerState()) : "-";
+  const cued = state === "5" && video.paused;
   return video.currentTime.toFixed(1) + (video.paused ? " paused" : " playing") +
-         (ad ? " ad" : " no-ad") + (refused ? " refused" : " -");
+         (ad ? " ad" : " no-ad") + (refused ? " refused" : cued ? " cued" : " " + state);
 })()"""
 
 
@@ -549,8 +598,8 @@ def content():
 # style sheet, where an ad blocker's hiding would be: not those with neither id nor class, as
 # their selector would take in the page's every such element, nor those under one, nor those the
 # page hides itself with an inline style or the hidden attribute. Which of them the ad blocker
-# hid can't be told here: an extension's injected sheets and the browser's user ones never come
-# to DevTools, not even as rules a node matches, so a run is held to another's on the same site.
+# hid can't be told here: an extension's injected sheets and the browser's user ones aren't among
+# the page's style sheets, so whose() asks for the rules each element matches.
 HIDDEN_NOW = """(() => {
   const kept = new Set(["SCRIPT", "STYLE", "TEMPLATE", "HEAD", "META", "LINK", "TITLE",
                         "NOSCRIPT", "BR", "PARAM", "SOURCE", "TRACK"]);
@@ -593,21 +642,166 @@ def count(selectors):
     return json.loads(evaluate("%s(%s)" % (COUNT, json.dumps(selectors))) or "{}")
 
 
+# Marks up to 6 elements at display: none of each of the selectors given, in the order the
+# selectors come, with their index, and says each marked element's index in the document's order.
+MARK = """((selectors) => {
+  selectors.forEach((selector, i) => {
+    let found;
+    try { found = document.querySelectorAll(selector); } catch (e) { return; }
+    let marked = 0;
+    for (const element of found) {
+      if (getComputedStyle(element).display !== "none") continue;
+      element.setAttribute("data-parity-hidden", i);
+      if (++marked === 6) break;
+    }
+  });
+  return [...document.querySelectorAll("[data-parity-hidden]")].map((e) => +e.dataset.parityHidden);
+})"""
+# Whether each marked element, in the document's order, matches any of the selector lists given.
+MATCHES = """((lists) => [...document.querySelectorAll("[data-parity-hidden]")].map((element) =>
+  lists.some((list) => { try { return element.matches(list); } catch (e) { return false; } })))"""
+UNMARK = """(() => {
+  for (const element of document.querySelectorAll("[data-parity-hidden]")) {
+    element.removeAttribute("data-parity-hidden");
+  }
+})()"""
+
+
+def hides_none(rule, important=False):
+    return any(p["name"] == "display" and p["value"].replace("!important", "").strip() == "none"
+               and not p.get("disabled") and p.get("parsedOk", True)
+               and (not important or p.get("important") or "!important" in p["value"])
+               for p in rule["style"].get("cssProperties", []))
+
+
+# Blink's own rules that set display: none !important, which DevTools reports with origin
+# user-agent, as it does a blocker's. They were read from every style sheet Blink gives a page, as
+# third_party/blink/public/blink_resources.grd and core/css/css_default_style_sheets.cc name them,
+# at Chromium 156.0.8078.79 and 157.0.8103.78: html.css has these two, and -internal- ones that
+# the word leaves out, as fullscreen.css, capability_element.css and media_controls'
+# mediaControls.css have. Another major may add one, so a browser of a major not in
+# BLINKS_READ fails the run until its sheets are read the same way.
+BLINKS = {"audio:not([controls])", 'input[type="hidden" i]'}
+BLINKS_READ = {156, 157}
+
+
+def blockers(rules):
+    """The selector lists of RULES, those matched for an element, that are a blocker's: not from
+    a style sheet of the page's, and setting display: none !important, as the native engine's
+    (core/native_ad_block.cc) and uBlock Origin's do. Blink matches a sheet injected as the
+    user's, as both are, without the sheet, so DevTools gives its rules origin user-agent rather
+    than injected, as Blink's own; its own that hide as !important are named in BLINKS."""
+    return [r["selectorList"]["text"] for r in rules
+            if r.get("origin") in ("injected", "user-agent") and hides_none(r, important=True)
+            and r["selectorList"]["text"] not in BLINKS and "-internal-" not in r["selectorList"]["text"]]
+
+
+# How many of whose() asks go to the browser together: enough that it's never waiting on the
+# check, few enough that a blocker's rule found in one says the next wave's answers already. The
+# browser answers them one at a time, up to 0.4 s each on a page of many rules, so a wave's also
+# what the budget can run over by (#3335).
+WAVE = 8
+
+
+def whose(selectors, budget=40):
+    """Of SELECTORS, those a blocker hid and those the page hid itself, as two lists, then how many
+    marked elements and selectors weren't told apart when BUDGET ended, and how many of those
+    elements the page removed before their ask was answered. It asks until every marked
+    element is told, so only a page of many hidden parts and style rules takes long: Chromium
+    answers each ask in turn, cold, up to 0.4 s on Windows, about 35 s for a YouTube watch page
+    there (#3335). A blocker's
+    hiding is a rule from a style sheet the page didn't load, as blockers() tells it: the
+    browser's own engine's (core/ad_block_page_agent.cc) and uBlock Origin's, their procedural
+    filters' too, which hide by an attribute and a rule. The page's own is an element at display: none that no such
+    rule hides, as a player's controls before it plays (#3268). A selector is the page's only
+    where every element looked at is, and one not told apart in BUDGET seconds is neither, so it
+    counts as the blocker's would. Each selector's first element is asked about before any
+    selector's second, so a page's many hidden parts get the most selectors an answer, and a
+    selector one of whose elements is the blocker's is the blocker's, so its others aren't asked."""
+    began = time.monotonic()
+    owners = evaluate("%s(%s)" % (MARK, json.dumps(selectors))) or []
+    call("DOM.enable", {}, session)
+    call("CSS.enable", {}, session)
+    root = call("DOM.getDocument", {"depth": 0}, session)["root"]["nodeId"]
+    nodes = (call("DOM.querySelectorAll", {"nodeId": root, "selector": "[data-parity-hidden]"},
+                  session, quiet=True) or {}).get("nodeIds", [])
+    said = [None] * len(nodes)
+    # The blocker's rules found so far, their selector lists, which say for every marked element
+    # at once where it's the blocker's: most of a page's hiding is a few of its rules.
+    lists = []
+    if len(nodes) == len(owners):
+        # Each marked element's place among its selector's, the order they're asked about in.
+        nth, seen = [], {}
+        for owner in owners:
+            nth.append(seen.get(owner, 0))
+            seen[owner] = nth[-1] + 1
+        order = sorted(range(len(nodes)), key=lambda k: (nth[k], k))
+        # The selectors an element of which is the blocker's, which nothing more can change.
+        settled = set()
+        while time.monotonic() - began <= budget:
+            wave = [k for k in order if said[k] is None and owners[k] not in settled][:WAVE]
+            if not wave:
+                break
+            asked = set(wave)
+            order = [k for k in order if k not in asked]
+            found = False
+            for k, styles in zip(wave, calls("CSS.getMatchedStylesForNode",
+                                             [{"nodeId": nodes[k]} for k in wave], session)):
+                if styles is None:
+                    # An ask for a node the page has removed since it was marked fails.
+                    said[k] = "gone"
+                    continue
+                rules = [m["rule"] for m in styles.get("matchedCSSRules", []) if hides_none(m["rule"])]
+                theirs = blockers(rules)
+                said[k] = "blocker" if theirs else "page"
+                new = [text for text in theirs if text not in lists]
+                lists += new
+                found = found or bool(new)
+            if found:
+                for i, hit in enumerate(evaluate("%s(%s)" % (MATCHES, json.dumps(lists))) or []):
+                    if hit and i < len(said):
+                        said[i] = "blocker"
+            settled.update(owner for owner, verdict in zip(owners, said) if verdict == "blocker")
+    evaluate(UNMARK)
+    # Each would send an event a change of the page's from here on.
+    call("CSS.disable", {}, session)
+    call("DOM.disable", {}, session)
+    told = {}
+    for owner, verdict in zip(owners, said):
+        told.setdefault(selectors[owner], []).append(verdict)
+    blocker = sorted(s for s, v in told.items() if "blocker" in v)
+    page = sorted(s for s, v in told.items() if all(x == "page" for x in v))
+    untold = [s for s, v in told.items() if (None in v or "gone" in v) and "blocker" not in v]
+    # A blocker's selector's elements left unasked aren't untold: their selector is told.
+    gone = sum(told[s].count("gone") for s in untold)
+    return blocker, page, [sum(told[s].count(None) for s in untold) + gone, len(untold), gone]
+
+
 def hidden(path, base):
     began = time.monotonic()
     found = {"hidden": count(evaluate(HIDDEN_NOW) or [])}
-    before = json.load(open(base, encoding="utf-8"))["hidden"] if base else {}
+    product = call("Browser.getVersion")["product"]
+    major = product.partition("/")[2].partition(".")[0]
+    if not major.isdigit() or int(major) not in BLINKS_READ:
+        found["blinks_unread"] = product
+    # Only a selector none of whose elements show can be one a later run misses.
+    found["blocker"], found["page"], found["untold"] = whose([s for s, (_, shown) in found["hidden"].items()
+                                             if not shown])
+    before = json.load(open(base, encoding="utf-8")) if base else {"hidden": {}}
     # What the earlier run hid all of and this one shows some of. A selector whose elements were
-    # partly shown then, as a column's, is the page's own layout, which changes from load to load.
-    found["missed"] = {selector: shown for selector, (_, shown) in count(list(before)).items()
-                       if shown and not before[selector][1]}
+    # partly shown then, as a column's, is the page's own layout, which changes from load to load,
+    # and so is one the page hid itself then (#3268).
+    page = set(before.get("page", []))
+    found["missed"] = {selector: shown for selector, (_, shown) in count(list(before["hidden"])).items()
+                       if shown and not before["hidden"][selector][1] and selector not in page}
     found["ms"] = int((time.monotonic() - began) * 1000)
     with open(path, "w", encoding="utf-8") as out:
         json.dump(found, out)
-    return "%d %d %d missed %d %d in %d ms" % (
+    return "%d %d %d blocker %d page %d missed %d %d untold %d %d gone %d in %d ms" % (
         len(found["hidden"]), sum(n for n, _ in found["hidden"].values()),
-        sum(shown for _, shown in found["hidden"].values()),
-        len(found["missed"]), sum(found["missed"].values()), found["ms"])
+        sum(shown for _, shown in found["hidden"].values()), len(found["blocker"]),
+        len(found["page"]), len(found["missed"]), sum(found["missed"].values()),
+        found["untold"][0], found["untold"][1], found["untold"][2], found["ms"])
 
 
 for line in sys.stdin:

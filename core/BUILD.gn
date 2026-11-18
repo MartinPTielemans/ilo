@@ -48,8 +48,8 @@ source_set("error_page") {
   deps = [ "//base" ]
 }
 
-# What keeps DuckDuckGo a profile's default and not its choice, apart from the browser's code so its
-# test links without the browser.
+# What keeps DuckDuckGo a profile's default and not its choice, and Google a choice and never the
+# default, apart from the browser's code so its test links without the browser.
 source_set("search_default") {
   sources = [
     "search_default.cc",
@@ -278,6 +278,16 @@ source_set("arrange_rule") {
   deps = [ "//base" ]
 }
 
+# Who answers as Tab leaves a page at either end, apart so browser_core_unittests tests the rule
+# alone (#3220).
+source_set("focus_leaving_rule") {
+  sources = [
+    "focus_leaving_rule.cc",
+    "focus_leaving_rule.h",
+  ]
+  deps = [ "//base" ]
+}
+
 # A Board's folder: its names, the pictures it keeps and its writes, apart so browser_core_unittests
 # tests them alone (#3073).
 source_set("board_store") {
@@ -355,7 +365,10 @@ source_set("select_choices") {
     "select_choices.cc",
     "select_choices.h",
   ]
-  deps = [ "//base" ]
+  deps = [
+    ":ax_text",
+    "//base",
+  ]
 }
 
 # Where a video's Mini Player first shows, apart so browser_core_unittests tests the rule alone.
@@ -424,6 +437,28 @@ source_set("popup_hold") {
     "popup_hold.h",
   ]
   deps = [ "//base" ]
+}
+
+# An agent's page's vote in Chromium's priority voting while its job works, apart so
+# browser_core_unittests tests it on a graph alone.
+source_set("agent_job_voter") {
+  sources = [
+    "agent_job_voter.cc",
+    "agent_job_voter.h",
+  ]
+  deps = [
+    "//base",
+    "//components/performance_manager",
+  ]
+}
+
+# What an agent's close of a tab whose page has a beforeunload handler answers, apart so
+# browser_core_unittests tests the rule alone (#3256).
+source_set("agent_close_rule") {
+  sources = [
+    "agent_close_rule.cc",
+    "agent_close_rule.h",
+  ]
 }
 
 # An agent's download, held until the user answers, apart so browser_core_unittests tests the hold
@@ -502,6 +537,8 @@ source_set("browser_core") {
     "address_import.h",
     "agent_autofill.cc",
     "agent_autofill.h",
+    "agent_close.cc",
+    "agent_close.h",
     "agent_page.cc",
     "agent_page.h",
     "agent_request.cc",
@@ -561,6 +598,8 @@ source_set("browser_core") {
     "favorites.h",
     "find.cc",
     "find.h",
+    "focus_leaving.cc",
+    "focus_leaving.h",
     "held_keys.cc",
     "held_keys.h",
     "hooks.h",
@@ -675,6 +714,7 @@ source_set("browser_core") {
     ":ad_block_page",
     ":archive_rule",
     ":arrange_rule",
+    ":focus_leaving_rule",
     ":live_folder_rule",
     ":pinned_url",
     ":tab_recent_rule",
@@ -688,10 +728,12 @@ source_set("browser_core") {
     ":idle_check",
     ":mini_player_place",
     ":other_tabs",
+    ":agent_close_rule",
     ":popup_hold",
     ":search_default",
     ":select_choices",
     ":agent_download_hold",
+    ":agent_job_voter",
     ":sidebar_backups",
     ":system_stores",
     ":site_searches",
@@ -989,12 +1031,15 @@ test("browser_core_unittests") {
     "ad_block_off_sites_unittest.cc",
     "archive_rule_unittest.cc",
     "arrange_rule_unittest.cc",
+    "focus_leaving_rule_unittest.cc",
     "live_folder_rule_unittest.cc",
     "pinned_url_unittest.cc",
     "arrangement_unittest.cc",
     "board_store_unittest.cc",
     "ax_text_unittest.cc",
+    "agent_close_rule_unittest.cc",
     "agent_download_hold_unittest.cc",
+    "agent_job_voter_unittest.cc",
     "boost_colors_unittest.cc",
     "boost_script_unittest.cc",
     # The removals the Library's History and the command bar undo on ⌘Z, on a history service.
@@ -1038,13 +1083,16 @@ test("browser_core_unittests") {
     ":ad_block_off_sites",
     ":archive_rule",
     ":arrange_rule",
+    ":focus_leaving_rule",
     ":live_folder_rule",
     ":pinned_url",
     ":tab_recent_rule",
     ":arrangement",
     ":board_store",
     ":ax_text",
+    ":agent_close_rule",
     ":agent_download_hold",
+    ":agent_job_voter",
     ":boost_colors",
     ":boost_script",
     ":history_removal",
@@ -1074,6 +1122,8 @@ test("browser_core_unittests") {
     "//components/history/core/test",
     "//components/omnibox/browser",
     "//components/omnibox/browser:test_support",
+    "//components/performance_manager",
+    "//components/performance_manager/test_support",
     "//components/prefs",
     "//components/prefs:test_support",
     "//components/search_engines",

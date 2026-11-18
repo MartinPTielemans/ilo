@@ -56,6 +56,20 @@ pub fn sidebar_right(cx: &gpui::App) -> bool {
     cx.try_global::<SidebarRight>().is_some_and(|right| right.0)
 }
 
+/// Settings › Tabs & Sidebar's Top bar, off by default (#3160): the header's row widens across the
+/// window's top and the URL field moves into it, the card under it. This device's, not synced, as
+/// Sidebar position is, and every window follows at once. A view preference: agents have no call
+/// to change it.
+#[derive(Clone, Copy)]
+pub struct TopBar(pub bool);
+
+impl gpui::Global for TopBar {}
+
+/// Whether Top bar is on.
+pub fn top_bar(cx: &gpui::App) -> bool {
+    cx.try_global::<TopBar>().is_some_and(|on| on.0)
+}
+
 /// `x` across a window `width` wide, measured from the sidebar's side: itself on the left, from the
 /// right edge on the right. Its own inverse.
 pub(super) fn from_side(right: bool, width: f32, x: f32) -> f32 {
@@ -484,8 +498,9 @@ impl Shell {
     }
 
     fn window_buttons_drawn(&self) -> WindowButtons {
-        // A Little ilo window's are over its bar, where the window's own go.
-        if self.little.is_some() {
+        // A Little ilo window's are over its bar, where the window's own go, as are Windows' at the
+        // top bar's end, which nothing covers.
+        if self.little.is_some() || self.buttons_at_bar_end() {
             return WindowButtons {
                 window: true,
                 library: false,
@@ -496,7 +511,8 @@ impl Shell {
             self.library_open,
             self.library_moving(),
             self.library_at_rest(),
-            !self.sidebar_hidden && self.sidebar_motion.is_none(),
+            // The bar keeps them while the sidebar is hidden, as it keeps the header's buttons.
+            self.bar_on() || (!self.sidebar_hidden && self.sidebar_motion.is_none()),
         )
     }
 

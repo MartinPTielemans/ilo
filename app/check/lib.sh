@@ -633,8 +633,22 @@ exited_without() {
 }
 # Settings has drawn its tab $1, or whichever it shows, since the last command, on showing or on a
 # change of tab: until it has, a click in it finds nothing to land on (#1101, #1133).
+# Its failure names the platform's last report of the window on screen since the command, which is
+# what a show's line waits on (#3270).
 settings_drew() {
-  expect "^browser: settings drew ${1:-.*}\$" "Settings didn't draw ${1:-its tab}"
+  local drew="^browser: settings drew ${1:-.*}\$" seen=
+  wait_begins
+  for _ in $(seq 100); do
+    logged "$drew" && return 0
+    exited_without "$drew" "Settings didn't draw ${1:-its tab}"
+    sleep 0.1
+  done
+  ran_out "$drew" "$step"
+  seen=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep '^browser: settings visibility ' | tail -1)
+  if [ -n "$seen" ]; then
+    fail "Settings didn't draw ${1:-its tab}; the last report of its window since the command: ${seen#browser: settings }"
+  fi
+  fail "Settings didn't draw ${1:-its tab}; no report of its window's visibility came since the command"
 }
 # Where Settings last drew its control $1, "x y" for clickkey, once it has: it logs each place it
 # draws one ("browser: settings $1 at x y"). That can be a frame from before the state a run just
@@ -1177,6 +1191,82 @@ served() {
   sent=
   [ -z "${3:-}" ] || sent=": $(grep -- "$3" "$out/site.log" | head -2 | tr '\n' ' ')"
   fail "$2$sent"
+}
+# Starts a server of the run's own for the hosts $3…, which its launches mustn't reach on the
+# internet (#3144), answering any path with the page $2, over https and plain http on one port, as
+# the bar may go to a page over either. A launch reaches it with the flags
+# --host-resolver-rules="$tls_rules" --ignore-certificate-errors-spki-list="$tls_key", $tls_key
+# being its certificate's key, and the app learns of none of it. Each request is a "$1: METHOD URL"
+# line in $1-tls.log, and any other line there is the server's trouble. The run stops it with
+# kill "$tls", and cleanup does after a failure.
+serve_tls() {
+  local name=$1 page=$2 sans= host
+  shift 2
+  [ -z "${tls:-}" ] || fail "$name's https server started while another of the run's still served"
+  for host in "$@"; do
+    sans="${sans:+$sans,}DNS:$host"
+  done
+  # Git Bash would pass the subject to Windows' openssl as a path under its own folder (#872).
+  MSYS2_ARG_CONV_EXCL=/CN= openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=$1" \
+    -addext "subjectAltName=$sans" -keyout "$out/$name-tls.key" -out "$out/$name-tls.pem" 2> /dev/null ||
+    fail "openssl didn't make $name's certificate"
+  tls_key=$(openssl x509 -in "$out/$name-tls.pem" -pubkey -noout | openssl pkey -pubin -outform der |
+    openssl dgst -sha256 -binary | base64)
+  expr "$tls_key" : '[A-Za-z0-9+/]\{43\}=$' > /dev/null ||
+    fail "openssl gave \"$tls_key\" as $name's certificate's key, not a SHA-256 in base64"
+  printf '%s' "$page" > "$out/$name-tls.html"
+  rm -f "$out/$name-tls.port"
+  mkfifo "$out/$name-tls.port"
+  python3 -I -u -c '
+import http.server, socket, socketserver, ssl, sys
+name, page = sys.argv[3], open(sys.argv[4], "rb").read()
+tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+tls.load_cert_chain(sys.argv[1], sys.argv[2])
+class Handler(http.server.BaseHTTPRequestHandler):
+    # A connection that opens with a TLS handshake record is https, and any other plain http.
+    def setup(self):
+        self.scheme = "http"
+        try:
+            if self.request.recv(1, socket.MSG_PEEK) == b"\x16":
+                self.request = tls.wrap_socket(self.request, server_side=True)
+                self.scheme = "https"
+        except OSError as error:
+            print("handshake failed: %s" % error, file=sys.stderr, flush=True)
+            raise
+        super().setup()
+    def parse_request(self):
+        parsed = super().parse_request()
+        if parsed:
+            host = self.headers.get("Host", "")
+            print("%s: %s %s://%s%s" % (name, self.command, self.scheme, host, self.path),
+                  file=sys.stderr, flush=True)
+        return parsed
+    def answer(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(page)))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(page)
+    do_GET = do_POST = do_HEAD = answer
+    def log_message(self, *args):
+        pass
+# TCPServer, as site.sh binds: HTTPServer looks 127.0.0.1 up by name, 35 s on the hosted Mac.
+server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Handler)
+# As bytes: text stdout on Windows ends a line with \r, which the driver typed as return (#1196).
+sys.stdout.buffer.write(b"%d\n" % server.server_address[1])
+sys.stdout.close()
+server.serve_forever()
+' "$out/$name-tls.pem" "$out/$name-tls.key" "$name" "$out/$name-tls.html" > "$out/$name-tls.port" \
+    2> "$out/$name-tls.log" 3>&- 4>&- 5>&- &
+  tls=$!
+  tls_port=
+  read -r tls_port < "$out/$name-tls.port" || true
+  [ -n "$tls_port" ] || fail "$name's https server didn't start: $(cat "$out/$name-tls.log")"
+  tls_rules=
+  for host in "$@"; do
+    tls_rules="${tls_rules:+$tls_rules, }MAP $host 127.0.0.1:$tls_port"
+  done
 }
 # The colour at ($2, $3), as fractions of the width and height, in the capture $1: "r g b".
 pixel() {

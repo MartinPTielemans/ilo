@@ -165,12 +165,13 @@ impl Shell {
                 )
             })
             .child(glyph);
-        scaled_from_middle(button, self.nav_scale(x))
+        scaled_from_middle(button, self.nav_scale(x, cx.background_executor().now()))
     }
 
-    /// The pointer pressed the header button at `x`, which runs `command`.
+    /// The pointer pressed the header button at `x`, which runs `command`. Its times are the
+    /// executor's, as the timer for its menu is, so a test's clock moves the two together (#3373).
     fn hold_nav(&mut self, x: f32, command: Command, cx: &mut Context<Self>) {
-        let pressed = Instant::now();
+        let pressed = cx.background_executor().now();
         self.held_nav = Some(HeldNav {
             x,
             command,
@@ -184,30 +185,30 @@ impl Shell {
     /// The pointer let go of the header button it pressed, or its menu took the press over.
     pub(super) fn let_go_nav(&mut self, cx: &mut Context<Self>) {
         if let Some(held) = self.held_nav.as_mut().filter(|held| held.let_go.is_none()) {
-            held.let_go = Some(Instant::now());
+            held.let_go = Some(cx.background_executor().now());
             cx.notify();
         }
     }
 
     /// How small the header button at `x` is drawn, plate and glyph: smaller while it's held,
     /// growing back from where it is once it's let go, as a row's plate does.
-    pub(super) fn nav_scale(&self, x: f32) -> f32 {
+    pub(super) fn nav_scale(&self, x: f32, now: Instant) -> f32 {
         let Some(held) = self.held_nav.as_ref().filter(|held| held.x == x) else {
             return 1.;
         };
-        1. - (1. - NAV_PRESS_SCALE) * held_depth(held.pressed, held.let_go, Instant::now())
+        1. - (1. - NAV_PRESS_SCALE) * held_depth(held.pressed, held.let_go, now)
     }
 
     /// Lets the held header button go once it has grown back, and asks for the next frame only
     /// while it's shrinking or growing, so a button at rest costs no frames.
-    pub(super) fn step_held_nav(&mut self, window: &mut Window) {
+    pub(super) fn step_held_nav(&mut self, window: &mut Window, cx: &App) {
         let Some(held) = &mut self.held_nav else {
             return;
         };
         let name = held.command.name();
         match (
             held.let_go,
-            held_depth(held.pressed, held.let_go, Instant::now()),
+            held_depth(held.pressed, held.let_go, cx.background_executor().now()),
         ) {
             (Some(_), 0.) => {
                 // check.sh waits for these lines.
@@ -286,6 +287,7 @@ impl Shell {
                     Tip {
                         text: name.into(),
                         keys,
+                        detail: SharedString::default(),
                     },
                     anchor,
                 )
@@ -423,6 +425,10 @@ impl Shell {
 
     /// The URL field's box in the window, while the docked sidebar shows it.
     pub(super) fn url_field_bounds(&self) -> Option<Bounds<Pixels>> {
+        // The bar's is there whenever the bar is, the sidebar hidden too.
+        if self.bar_on() {
+            return Some(self.bar_field_bounds());
+        }
         let docked = !self.page_fullscreen && !self.sidebar_hidden && self.sidebar_motion.is_none();
         (docked && self.form().is_none() && self.library.is_none()).then(|| {
             Bounds::new(
@@ -543,8 +549,8 @@ impl Shell {
         self.url_words(self.field_tab(), url, shown)
     }
 
-    /// What a URL field showing `tab`, at `url`, says, in its colour: the page's host, its whole
-    /// URL in Developer Mode, as Chrome's Always Show Full URLs has it, or with no tab, the command
+    /// What a URL field showing `tab`, at `url`, says, in its colour: the page's host, "Board" for
+    /// a Board's, its whole URL in Developer Mode, as Chrome's Always Show Full URLs has it, or with no tab, the command
     /// bar's placeholder, `shown` of the way in.
     pub(super) fn url_words(&self, tab: u64, url: &str, shown: f32) -> (SharedString, Hsla) {
         if tab == 0 {
@@ -554,6 +560,8 @@ impl Shell {
         }
         let words = match self.extension_name(url) {
             Some(name) => name,
+            // A Board's address is an id, which says nothing; the row has its name.
+            None if crate::boards::id_in(url).is_some() => "Board".into(),
             None if self.page(tab).developer_mode => url.to_string().into(),
             None => host(url).to_string().into(),
         };
@@ -754,7 +762,7 @@ impl Shell {
             .absolute()
             .top(px(URL_FIELD_TOP))
             .left(px(PLATE_INSET))
-            .w(px(self.width() - 2. * PLATE_INSET))
+            .w(px(self.field_width()))
             .h(px(URL_FIELD_HEIGHT))
             .flex()
             .items_center()
@@ -769,6 +777,15 @@ impl Shell {
             .on_click(cx.listener(|shell, _, _, cx| {
                 shell.clicked_bar_target(Command::EditUrl, "sidebar", cx)
             }))
+            // In the bar, its right-click is the bar's, which its press keeps from the bar under it.
+            .when(self.bar_on(), |field| {
+                field.on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(|shell, event: &MouseDownEvent, _, cx| {
+                        shell.top_bar_menu(event.position, cx)
+                    }),
+                )
+            })
             .bg(self.palette.plate(URL_FIELD))
             // It brightens under the pointer as a tile does, from the same white 0.10 (ours).
             .hover(|style| style.bg(self.palette.plate(TILE_HOVERED)))
@@ -794,7 +811,7 @@ impl Shell {
     /// Site Controls or DevTools button while they take clicks, a pinned extension's action, or
     /// the field.
     pub(super) fn field_part_at(&self, x: f32) -> AtRest {
-        let width = self.width() - 2. * PLATE_INSET;
+        let width = self.field_width();
         let (shown, overflow) = self.shown_actions();
         let actions = (shown + overflow as usize) as f32 * URL_BUTTON_SIZE;
         if actions > 0. && x >= width - URL_BUTTON_INSET - actions {

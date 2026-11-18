@@ -21,6 +21,7 @@
 #include "browser_core/ad_block.h"
 #include "browser_core/address_import.h"
 #include "browser_core/agent_autofill.h"
+#include "browser_core/agent_close.h"
 #include "browser_core/agent_page.h"
 #include "browser_core/agent_request.h"
 #include "browser_core/agent_session.h"
@@ -453,6 +454,27 @@ void bc_window_ui_text_input(bc_id id, bool focused, double x, double y, double 
 #endif
 }
 
+// Declared in browser_core.h by the header batch that takes them.
+extern "C" BC_EXPORT void bc_app_window_text_input(void* surface, bool focused, double x, double y,
+                                                   double height) {
+#if BUILDFLAG(IS_LINUX)
+  if (!surface) {
+    return;
+  }
+  std::optional<gfx::Rect> caret;
+  if (focused) {
+    caret = gfx::ToEnclosingRect(gfx::RectF(x, y, 0, height));
+  }
+  browser_core::platform::SetAppWindowTextInput(surface, caret);
+#endif
+}
+
+extern "C" BC_EXPORT void bc_app_window_text_input_end(void* surface) {
+#if BUILDFLAG(IS_LINUX)
+  browser_core::platform::EndAppWindowTextInput(surface);
+#endif
+}
+
 void bc_hold_keys(bool in_core) {
   browser_core::held_keys::Hold(in_core);
 }
@@ -620,13 +642,7 @@ int bc_agent_close_tab(const char* agent, bc_id tab, bool discard) {
   if (browser_core::Space::Holding(tab)->IsPinned(tab)) {
     return BC_AGENT_CLOSE_PINNED;
   }
-  if (!discard && closing->AsksBeforeLeaving()) {
-    return BC_AGENT_CLOSE_ASKS;
-  }
-  // Without its unload handlers either way: no frame asks before it's left, or the agent said to
-  // lose what it holds, and the tab is gone before the agent hears it closed (#1447, #1449).
-  browser_core::Window::CloseTab(tab, /*discard=*/true);
-  return BC_AGENT_CLOSED;
+  return browser_core::AgentCloseTab(tab, discard);
 }
 
 bool bc_tab_take_back(bc_id tab) {
@@ -1472,6 +1488,12 @@ void bc_window_select(bc_id window_id, bc_id tab) {
 void bc_window_focus_page(bc_id window_id) {
   if (browser_core::Window* window = browser_core::Window::FromId(window_id)) {
     window->GiveKeyboardToPage();
+  }
+}
+
+void bc_window_focus_page_end(bc_id window_id, bool last) {
+  if (browser_core::Window* window = browser_core::Window::FromId(window_id)) {
+    window->GiveKeyboardToPageEnd(last);
   }
 }
 

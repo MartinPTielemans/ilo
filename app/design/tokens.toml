@@ -11,6 +11,60 @@
 # Timings, springs and other motion stay in the code, as the design file has no motion, except a
 # surface's `motion` table, which design sync leaves out: seconds, and points for distances.
 
+[board]
+# A Board's page (#3073), which copy-board.sh writes as CSS custom properties, `--<key>`, each
+# `-dark` key the same property in dark mode: a colour as #rrggbb(aa), a `-share` as a percentage,
+# any other number in px. The values are the mocks' the owner chose (#3073).
+canvas = 0xFBF9F4
+canvas-dark = 0x131313
+ink = 0x16140F
+ink-dark = 0xF3F0E8
+ink-soft = 0x16140F99
+ink-soft-dark = 0xF3F0E899
+# A note's and a link's plate.
+plate = 0xFFFFFF
+plate-dark = 0x2A2720
+rim = 0x0000002E
+rim-dark = 0xFFFFFF1A
+shadow = 0x00000033
+shadow-dark = 0x00000066
+# The chosen tool's, size's and width's plate: the ink at 9 %, as the mocks', with its glyph in
+# ilo's accent, [palette]'s no-theme-accent, which copy-board.sh writes as --accent for it and the
+# selection's ring.
+chosen = 0x16140F17
+chosen-dark = 0xF3F0E817
+# A button's plate under the pointer, the ink at 6 %, lighter than the chosen one's, as the mocks'.
+hover = 0x16140F0F
+hover-dark = 0xF3F0E80F
+# The tools' and the zoom's bars, over the canvas.
+bar = 0xF3F0E8
+bar-dark = 0x1F1D17
+# A note's fills and the pen's colours, by name. A fill is its swatch this much over the plate.
+fill-sand = 0xF0EAE5
+fill-pink = 0xE59EBA
+fill-plum = 0x9E749B
+fill-red = 0xE1676F
+fill-orange = 0xEF8C63
+fill-yellow = 0xF2D46C
+fill-green = 0x73E49B
+fill-blue = 0x7EB6D5
+fill-slate = 0x656786
+fill-share = 0.3
+fill-share-dark = 0.22
+card-radius = 12.0
+bar-radius = 16.0
+note-s = 13.0
+note-m = 15.0
+# The size a title takes: a note with no fill, at L.
+note-l = 28.0
+# A refused save's note: a page question's card (shell.permission), in the page's top corner, at
+# the tools' inset, as wide as the URL field.
+notice-inset = 16.0
+notice-width = 260.0
+notice-padding = 12.0
+notice-text = 13.0
+notice-line = 18.0
+
 [boost-editor]
 # A Boost's editor without code (#695, ours as the owner approved it on 2026-11-10): the theme
 # picker's card, as wide and with its arrow, radius and field's look (`theme-picker`), over a
@@ -547,6 +601,24 @@ glyph = 16.0
 glyph-alpha = 0.7
 # The popover level's rim, as the tooltip's.
 rim = 0.5
+# A pinned tab's or favorite's card on a site with rows (#3074) has them in the picture's box, as
+# tall as the lists' headings and three rows in every state, and one heading taller with the line
+# saying they're stale: the folder preview's rows, the box's padding in from its sides
+# at the radius concentric with it, 12 - 4, under the lists' headings this tall, in small semibold
+# type at the host's alpha. The headings and the rows' glyphs' ink are on the card's text column.
+# A draft's ink is at this share of its row's. Loading, each row's places are bars at this alpha of
+# the ink, the title's over the detail's, these long and tall.
+recent-heading = 22.0
+# A heading's text sits this far over its rows.
+recent-heading-under = 3.0
+recent-row-radius = 8.0
+recent-draft = 0.55
+recent-bar = 0.08
+recent-title-bar = 150.0
+recent-detail-bar = 90.0
+recent-title-bar-height = 9.0
+recent-detail-bar-height = 7.0
+recent-bar-gap = 6.0
 
 [folder-preview]
 # Resting on a closed folder shows a searchable list of its tabs beside its row (Arc's Folder
@@ -629,6 +701,39 @@ rim = 0.5
 text-size = 11.0
 secondary = 0.6
 primary = 1.0
+
+[link-card]
+# ⇧ on a link grows its plate into a card of what the page says about itself (#3080), in the hover
+# card's look (its radius, rim, padding, picture radius, text inset and ground), as the owner saw it
+# mocked: wide enough for three lines of a description of about 50 characters and, for most links,
+# the plate's whole address, which stays its last row.
+width = 320.0
+# The picture's box keeps Open Graph's 1200 × 630.
+picture-ratio = 0.525
+# The title at body size, two lines at most; the description at small, three at most; at these
+# alphas of the ink, raised to the overlay's floor.
+title-lines = 2
+desc-lines = 3
+desc-line = 15.0
+desc = 0.66
+desc-gap = 2.0
+# The address row, the plate's, under the text.
+row-gap = 4.0
+row-bottom = 2.0
+# Before the site a redirect landed on: →, this far from either side.
+lands-gap = 6.0
+# Loading: two bars in the title's place, the ink at the ground's twice, at these shares of the text's
+# width, this far apart.
+bar-title = 10.0
+bar-desc = 8.0
+bar-title-share = 0.78
+bar-desc-share = 0.5
+bar-gap = 8.0
+# Failed: Lucide's circle-alert at the title's size, this far before the words.
+alert-gap = 6.0
+# The window's room above the plate, which the tallest card fits: a picture, two lines of title,
+# three of description and the row.
+room = 300.0
 
 [menu]
 # ilo's own context menu (ours, #331): 24 pt rows of 13 pt text in an opaque panel, Ink-2 in a dark
@@ -1493,6 +1598,10 @@ windows-close-hovered = 0xc42b1c
 # URL field does, so the page has the room under the row the header leaves. The buttons are the
 # header's, their glyphs Lucide's at 18, whose 1.69 pt stroke matches the header glyphs' 1.75.
 little-bar = 46.0
+# Top bar (#3160), off by default: the header's row widened across the window, Little ilo's bar's
+# height, its buttons where they are in the sidebar. The URL field moves into it, centred on its
+# line, from the sidebar's edge to the card's right edge, and the card starts under it.
+top-bar = 46.0
 little-glyph = 18.0
 # Open in <Space> ⌘O | ⌄ ends the bar (Arc 1.168, measured by an outside reverse-engineering,
 # *interim*, #1407), in ilo's look: the words in the body size at medium, its key dimmer after them,
@@ -1666,6 +1775,11 @@ section-glyph-unselected = 0.6
 section-hovered = 0.05
 # Between two sections' buttons, 100 apart.
 section-gap = 20.0
+# Ours: where the buttons may reach in a window too short for Arc's place, as seven need at 800
+# tall: the first starts no higher than 74, 8 under the heading's caps, and the last ends 8 above
+# the back button.
+sections-top = 74.0
+sections-bottom = 48.0
 # The plate under the selected section and the search field.
 library-plate = 0.09
 # The back button, at the column's bottom.
@@ -1784,6 +1898,22 @@ bin-up = 12.0
 # The least a plate may be wide, in a card too narrow for the half it is.
 min-width = 160.0
 
+[shell.live-folder]
+# A Live Folder (#2979): a folder its profile's GitHub pull requests fill. Its two lists' headings,
+# "Review requests" and "Created by me", are this tall, at text's small size, semibold, in
+# `secondary`, as a menu's header is, starting this far in from their rows' plates (ours: the
+# measured app's folder wasn't recorded).
+heading-height = 22.0
+heading-x = 10.0
+# A draft's glyph and title are dimmed to this.
+draft = 0.55
+# After a refresh that failed, a mark this wide sits on the folder's glyph's bottom right corner,
+# on the sidebar's fill, with the circled ! in it.
+failed-mark = 9.0
+# Closed, the folder's row ends with how many review requests wait, this far in from its plate's
+# end.
+count-end = 12.0
+
 [shell.new-space]
 # The circle: across, its white ring, and the line of the sidebar's colour inside the ring.
 circle = 30.0
@@ -1861,6 +1991,12 @@ import-hold = 0.6
 # and lines between rows.
 opt-in-width = 420.0
 opt-in-line = 18.0
+# The search engine step's list, in the opt-ins' box: a row each, this tall, of a radio's dot and
+# the engine's name after it. The dot is a ring in the ink, and the one picked is filled in the
+# signal green around a paper centre.
+engine-row = 40.0
+engine-dot = 16.0
+engine-dot-center = 6.0
 
 [shell.import]
 # Ours (#1673): while an import runs, each Space it makes is a card in its own colours, under the
@@ -2684,6 +2820,10 @@ chip-lip = 2.0
 chip-radius = 6.0
 chip-padding = 3.0
 chip-after-text = 8.0
+# What's said of it after the name, as a Live Folder's rows' age: this far after it, in the
+# regular weight, the text's colour at this (ours, #2979's mock).
+detail-gap = 6.0
+detail = 0.7
 chip-gap = 3.5
 chip-text-size = 11.0
 # Arc's, measured at full opacity, are indigo: the plate #090C4B, the text #E2E5FF, the chips

@@ -7,7 +7,7 @@
 //! at the same inset and radius. The bar's row is the main window's header row, its buttons the
 //! header's, and the favicon stands where the header's first button does.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 use gpui::{
     App, Bounds, Context, Entity, FontWeight, MouseButton, Pixels, Point, SharedString, Window,
@@ -54,6 +54,9 @@ pub(super) struct Little {
     pub(super) sent: Vec<u64>,
     /// Where its bar's title went in its last draw, at whose end its extensions' buttons are.
     pub(super) title: Cell<Option<Bounds<Pixels>>>,
+    /// The extensions' buttons its bar last drew, which check.sh waits for before it clicks one:
+    /// the core's list of them comes a frame before the bar draws it (#3163).
+    drew_actions: RefCell<Option<String>>,
     /// Whether it's about to close by itself, as a sign-in's page another app opened ends (#2327).
     closing: bool,
 }
@@ -117,6 +120,7 @@ impl Shell {
             picker_at: Cell::new(None),
             sent: Vec::new(),
             title: Cell::new(None),
+            drew_actions: RefCell::new(None),
             closing: false,
         });
         shell.spaces = vec![Space {
@@ -133,6 +137,7 @@ impl Shell {
             folders: Default::default(),
             shown: 0,
             peeked: Vec::new(),
+            live_rooms: Default::default(),
         }];
         if let Some(look) = look {
             shell.take_look(look.name, look.color, look.theme, look.icon);
@@ -559,6 +564,17 @@ impl Shell {
         // The pinned extensions' buttons end the title, as they end the URL field in the sidebar,
         // the title giving up their room.
         let (shown, overflow) = self.shown_actions();
+        if let Some(little) = &self.little {
+            let ids = (self.extension_actions.iter().take(shown))
+                .map(|action| action.id.as_ref())
+                .chain(overflow.then_some("more"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            if little.drew_actions.borrow().as_deref() != Some(ids.as_str()) {
+                log!("browser: little bar drew actions {ids}");
+                little.drew_actions.replace(Some(ids));
+            }
+        }
         let actions = px((shown + overflow as usize) as f32 * URL_BUTTON_SIZE);
         let bounds = Bounds::new(row.origin, size(row.size.width - actions, row.size.height));
         let end = self.little_end(cx);
@@ -795,6 +811,7 @@ pub(super) fn little_runs(command: Command) -> bool {
                     | Command::SortBySite
                     | Command::ToggleSidebar
                     | Command::MoveSidebar
+                    | Command::ToggleTopBar
                     | Command::AddSplit
                     // A private window's Library has its session's downloads; a Little ilo
                     // window has no Library at all.

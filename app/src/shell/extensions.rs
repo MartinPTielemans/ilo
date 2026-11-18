@@ -15,8 +15,8 @@ use crate::site_controls;
 
 use super::{
     Command, MenuAction, MenuEntry, NAV, NAV_HOVERED, NAV_RADIUS, NAV_SIZE, PLATE_INSET, PRESSED,
-    Shell, URL_BUTTON_GLYPH, URL_BUTTON_INSET, URL_BUTTON_SIZE, URL_FIELD_TEXT_X, URL_FIELD_TOP,
-    UserKeys, user_keys, written_as,
+    Shell, URL_BUTTON_GLYPH, URL_BUTTON_INSET, URL_BUTTON_SIZE, URL_FIELD_TEXT_X, UserKeys,
+    user_keys, written_as,
 };
 
 use crate::tokens::shell::extensions::ACTION_DIMMED;
@@ -454,10 +454,11 @@ impl Shell {
                 size(px(URL_BUTTON_SIZE), px(URL_BUTTON_SIZE)),
             );
         }
-        let end = self.column_x() + self.width() - PLATE_INSET - URL_BUTTON_INSET;
+        let field = self.field_frame();
+        let end = f32::from(field.right()) - URL_BUTTON_INSET;
         let left = end - (shown + overflow as usize - index) as f32 * URL_BUTTON_SIZE;
         Bounds::new(
-            point(px(left), px(URL_FIELD_TOP + URL_BUTTON_INSET)),
+            point(px(left), field.top() + px(URL_BUTTON_INSET)),
             size(px(URL_BUTTON_SIZE), px(URL_BUTTON_SIZE)),
         )
     }
