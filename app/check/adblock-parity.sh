@@ -620,9 +620,11 @@ if baseline:
             # looks like, so it's never excused: a real one is an issue to file for the site.
             del unchecked[s["url"]]
             page_was, page = named[s["url"]], contents[s["url"]]
-            worse.append(f"{s['url']} showed a Turnstile check in this run alone, {page['text']} "
-                         f"characters and {page['images']} pictures, where the baseline's run had "
-                         f"none and showed {page_was.get('text') or 'no count of'} characters and "
+            pictures = "one picture" if page["images"] else "no picture"
+            worse.append(f"{s['url']} showed a Turnstile check in this run alone, with "
+                         f"{page['text']} characters of text and {pictures}, "
+                         f"where the baseline's run had none and showed "
+                         f"{page_was.get('text') or 'no count of'} characters and "
                          f"{page_was.get('images') or 'no count of'} pictures")
             continue
         elif s["bot"] and not was_bot:
