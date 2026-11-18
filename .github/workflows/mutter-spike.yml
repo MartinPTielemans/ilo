@@ -70,9 +70,10 @@ jobs:
             return 1
           }
 
-          # case <name> <display> <state: none|maximized|fullscreen>
+          # case <name> <display> <state: none|maximized|fullscreen> [trace]: with trace, the relaunch
+          # logs its Wayland requests and events (WAYLAND_DEBUG=1, the client's side).
           relaunch_case() {
-            name=$1 display=$2 state=$3
+            name=$1 display=$2 state=$3 trace=${4:+1}
             dir=$out/$name-profile
             rm -rf "$dir"
             mkdir -p "$dir/Default"
@@ -104,7 +105,7 @@ jobs:
           PY
             cp "$dir/Spaces.json" "$out/$name-Spaces.json"
             start=$SECONDS
-            env -u DISPLAY WAYLAND_DISPLAY="$display" BROWSER_PROFILE_DIR="$dir" \
+            env -u DISPLAY ${trace:+WAYLAND_DEBUG=1} WAYLAND_DISPLAY="$display" BROWSER_PROFILE_DIR="$dir" \
               "$app" < /dev/null > "$log2" 2>&1 &
             pid=$!
             until_true "grep -q '^browser: first frame at' '$log2' || ! kill -0 $pid 2>/dev/null" 90
@@ -138,7 +139,8 @@ jobs:
           mutter=$!
           until_true "[ -S '$XDG_RUNTIME_DIR/ilo-mutter' ]" 30 || { cat "$out/mutter.log"; exit 1; }
           # Ten maximized relaunches under mutter, to tell never from rarely, and full screen twice.
-          for i in $(seq 10); do relaunch_case mutter-maximized-$i ilo-mutter maximized; done
+          relaunch_case mutter-maximized-1 ilo-mutter maximized trace
+          for i in $(seq 2 10); do relaunch_case mutter-maximized-$i ilo-mutter maximized; done
           for i in 1 2; do relaunch_case mutter-fullscreen-$i ilo-mutter fullscreen; done
           kill "$mutter"; wait "$mutter" 2>/dev/null
 
@@ -150,7 +152,8 @@ jobs:
           sway=$!
           until_true "ls '$XDG_RUNTIME_DIR' | grep -q '^wayland-[0-9]*\$'" 30 || { cat "$out/sway.log"; exit 1; }
           display=$(ls "$XDG_RUNTIME_DIR" | grep -m1 '^wayland-[0-9]*$')
-          for i in 1 2 3; do relaunch_case sway-maximized-$i "$display" maximized; done
+          for i in 1 2; do relaunch_case sway-maximized-$i "$display" maximized trace; done
+          relaunch_case sway-maximized-3 "$display" maximized
           kill "$sway"; wait "$sway" 2>/dev/null
           cat "$out/summary.txt"
       - if: ${{ !cancelled() }}
