@@ -229,6 +229,28 @@ def call(method, params=None, session=None, quiet=False):
     return reply["result"]
 
 
+def calls(method, many, session):
+    """METHOD's result for each of MANY's params, None where one fails. They're sent together and
+    the browser answers them in turn, matched by id, so asking N costs no N round trips (#3335)."""
+    global sent
+    numbers = []
+    for params in many:
+        with lock:
+            sent += 1
+            numbers.append(sent)
+        message = {"id": numbers[-1], "method": method, "params": params}
+        if session:
+            message["sessionId"] = session
+        with sending:
+            send(json.dumps(message).encode())
+    results = []
+    with answered:
+        for number in numbers:
+            answered.wait_for(lambda: number in replies)
+            results.append(replies.pop(number).get("result"))
+    return results
+
+
 def post(method, params, session):
     """Sends a command whose reply nothing waits for, from the thread that reads the replies."""
     global sent
@@ -653,6 +675,11 @@ def blockers(rules):
             and r["selectorList"]["text"] not in BLINKS and "-internal-" not in r["selectorList"]["text"]]
 
 
+# How many of whose() asks go to the browser together: enough that it's never waiting on the
+# check, few enough that a blocker's rule found in one says the next wave's answers already.
+WAVE = 32
+
+
 def whose(selectors, budget=15):
     """Of SELECTORS, those a blocker hid and those the page hid itself, as two lists. A blocker's
     hiding is a rule from a style sheet the page didn't load, as blockers() tells it: the
@@ -660,7 +687,8 @@ def whose(selectors, budget=15):
     filters' too, which hide by an attribute and a rule. The page's own is an element at display: none that no such
     rule hides, as a player's controls before it plays (#3268). A selector is the page's only
     where every element looked at is, and one not told apart in BUDGET seconds is neither, so it
-    counts as the blocker's would."""
+    counts as the blocker's would. Each selector's first element is asked about before any
+    selector's second, so a page's many hidden parts get the most selectors an answer."""
     began = time.monotonic()
     owners = evaluate("%s(%s)" % (MARK, json.dumps(selectors))) or []
     call("DOM.enable", {}, session)
@@ -673,21 +701,30 @@ def whose(selectors, budget=15):
     # at once where it's the blocker's: most of a page's hiding is a few of its rules.
     lists = []
     if len(nodes) == len(owners):
-        for k, node in enumerate(nodes):
-            if said[k] or time.monotonic() - began > budget:
-                continue
-            styles = call("CSS.getMatchedStylesForNode", {"nodeId": node}, session, quiet=True)
-            if styles is None:
-                continue
-            rules = [m["rule"] for m in styles.get("matchedCSSRules", []) if hides_none(m["rule"])]
-            theirs = blockers(rules)
-            if not theirs:
-                said[k] = "page"
-                continue
-            said[k] = "blocker"
-            new = [text for text in theirs if text not in lists]
-            if new:
+        # Each marked element's place among its selector's, the order they're asked about in.
+        nth, seen = [], {}
+        for owner in owners:
+            nth.append(seen.get(owner, 0))
+            seen[owner] = nth[-1] + 1
+        order = sorted(range(len(nodes)), key=lambda k: (nth[k], k))
+        while time.monotonic() - began <= budget:
+            wave = [k for k in order if said[k] is None][:WAVE]
+            if not wave:
+                break
+            asked = set(wave)
+            order = [k for k in order if k not in asked]
+            found = False
+            for k, styles in zip(wave, calls("CSS.getMatchedStylesForNode",
+                                             [{"nodeId": nodes[k]} for k in wave], session)):
+                if styles is None:
+                    continue
+                rules = [m["rule"] for m in styles.get("matchedCSSRules", []) if hides_none(m["rule"])]
+                theirs = blockers(rules)
+                said[k] = "blocker" if theirs else "page"
+                new = [text for text in theirs if text not in lists]
                 lists += new
+                found = found or bool(new)
+            if found:
                 for i, hit in enumerate(evaluate("%s(%s)" % (MATCHES, json.dumps(lists))) or []):
                     if hit and i < len(said):
                         said[i] = "blocker"
