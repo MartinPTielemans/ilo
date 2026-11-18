@@ -230,8 +230,11 @@ send type "attic"
 send key return
 expect "^browser: board $attic_tab has the keyboard\$" "↩ on the second Board's name didn't give its page the keyboard"
 gets_nothing "$attic_tab" "New Board made"
-# Library › Boards opens it again once its tab is archived: ↓ rings a row, ↩ opens its Board, and
-# the one with a tab, pantry's, is only shown, so ↓ again rings the other.
+# Library › Boards opens it again once its tab is archived, from Today, as ⌘W on a pinned tab keeps
+# it: ↓ rings a row, ↩ opens its Board, and the one with a tab, pantry's, is only shown, so ↓ again
+# rings the other.
+send key d cmd
+expect "^browser: today\( [0-9]*\)* $attic_tab\( [0-9]*\)*\$" "⌘D didn't move the second Board's tab into Today: Today is \"$(today)\""
 send key w cmd
 expect "^browser: tab $attic_tab closed\$" "⌘W didn't archive the second Board's tab"
 for downs in 1 2; do
