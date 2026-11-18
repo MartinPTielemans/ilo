@@ -33,13 +33,16 @@
 # A host or address neither run requested counts for neither, as the ads a site serves change from
 # load to load. A site that's still Cloudflare's bot check 8 s after it loads gets one more go. If
 # the check still stands in either run, DataDome's captcha loaded over the page, the site sent
-# the run on to Google's unusual-traffic page, or the site's own wall stood in, which loads
-# Turnstile's widget and shows under 500 characters and at most one picture (#3383), the site
-# isn't compared. The result names it and what stood in, as a bot check has no ads to block, and
-# where only one of the two runs got a bot check, which. On a YouTube watch page
-# the run reads the player from the load on, to say whether an ad showed before the video played
-# 5 s, and it fails where the baseline's played with no ad and this run's showed one or didn't
-# play. It needs the network and the sites, so it runs only when named: ./check.sh adblock-parity.
+# the run on to Google's unusual-traffic page, or the site's own wall stood in, a page that shows
+# under 500 characters and at most one picture and loaded Turnstile's widget, which the run's
+# blocker let through (#3383), the site isn't compared. The result names it and what stood in, as
+# a bot check has no ads to block, and where only one of the two runs got a bot check, which. A
+# Turnstile check is told by how little the page shows, as a page the blocker broke would be, so
+# one in this run alone fails it, and a widget the blocker blocked makes none. On a YouTube watch
+# page the run reads the player from the load on, to say whether an ad showed before the video
+# played 5 s, and it fails where the baseline's played with no ad and this run's showed one or
+# didn't play. It needs the network and the sites, so it runs only when named:
+# ./check.sh adblock-parity.
 # Both engines block with one copy of each list, downloaded once by the baseline's run.
 # It leaves adblock-parity/sites.tsv, a capture a site, the requests recorded, in hidden/ what
 # each site hid, and in lists/ the lists it blocked with, which a run with uBlock Origin copies
@@ -513,6 +516,7 @@ def why_not(mine):
     return f"its page at {at} had no answer"
 
 
+TURNSTILE = "a Turnstile check"
 for i, s in enumerate(sites):
     s["video"] = videos.get(s["url"])
     end = sites[i + 1]["at"] if i + 1 < len(sites) else float("inf")
@@ -546,12 +550,12 @@ for i, s in enumerate(sites):
         s["bot"] = "DataDome's captcha"
     # A site's own wall built on Cloudflare's Turnstile, as vimeo's "Verify to continue" is, which
     # keeps the site's title. Real pages load Turnstile too, so it takes a page that is little
-    # but the wall: no real page of the fifty comes near so little (#3383).
+    # but the wall: no real page of the fifty comes near so little (#3383). Only a widget the
+    # blocker let through: one it blocked, the user couldn't pass either.
     shows = contents.get(s["url"])
     if (not s["bot"] and shows and shows["text"] < 500 and shows["images"] <= 1 and
-            any(a.startswith("challenges.cloudflare.com/turnstile/")
-                for a in s["allowed_at"] | s["blocked_at"])):
-        s["bot"] = "a Turnstile check"
+            any(a.startswith("challenges.cloudflare.com/turnstile/") for a in s["allowed_at"])):
+        s["bot"] = TURNSTILE
 
 def video_cell(video):
     if not video:
@@ -604,6 +608,16 @@ if baseline:
         was_bot = len(b) > 8 and b[8] == "1"
         if was_bot and not s["bot"]:
             unchecked[s["url"]] = "a bot check in the baseline's run alone; this run had none"
+        elif s["bot"] == TURNSTILE and not was_bot:
+            # Told by how little the page shows, which is what a page this run's blocker broke
+            # looks like, so it's never excused: a real one is an issue to file for the site.
+            del unchecked[s["url"]]
+            page_was, page = named[s["url"]], contents[s["url"]]
+            worse.append(f"{s['url']} showed a Turnstile check in this run alone, {page['text']} "
+                         f"characters and {page['images']} pictures, where the baseline's run had "
+                         f"none and showed {page_was.get('text') or 'no count of'} characters and "
+                         f"{page_was.get('images') or 'no count of'} pictures")
+            continue
         elif s["bot"] and not was_bot:
             unchecked[s["url"]] = f"{s['bot']} in this run alone; the baseline's run had none"
         if s["url"] in unchecked:
