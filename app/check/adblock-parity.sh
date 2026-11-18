@@ -32,12 +32,17 @@
 #     whether it works.
 # A host or address neither run requested counts for neither, as the ads a site serves change from
 # load to load. A site that's still Cloudflare's bot check 8 s after it loads gets one more go. If
-# the check still stands in either run, DataDome's captcha loaded over the page, or the site sent
-# the run on to Google's unusual-traffic page, the site isn't compared, and the result names it
-# and what stood in, as a bot check has no ads to block. On a YouTube watch page
-# the run reads the player from the load on, to say whether an ad showed before the video played
-# 5 s, and it fails where the baseline's played with no ad and this run's showed one or didn't
-# play. It needs the network and the sites, so it runs only when named: ./check.sh adblock-parity.
+# the check still stands in either run, DataDome's captcha loaded over the page, the site sent
+# the run on to Google's unusual-traffic page, or the site's own wall stood in, a page that shows
+# under 500 characters and at most one picture and loaded Turnstile's widget, which the run's
+# blocker let through (#3383), the site isn't compared. The result names it and what stood in, as
+# a bot check has no ads to block, and where only one of the two runs got a bot check, which. A
+# Turnstile check is told by how little the page shows, as a page the blocker broke would be, so
+# one in this run alone fails it, and a widget the blocker blocked makes none. On a YouTube watch
+# page the run reads the player from the load on, to say whether an ad showed before the video
+# played 5 s, and it fails where the baseline's played with no ad and this run's showed one or
+# didn't play. It needs the network and the sites, so it runs only when named:
+# ./check.sh adblock-parity.
 # Both engines block with one copy of each list, downloaded once by the baseline's run.
 # It leaves adblock-parity/sites.tsv, a capture a site, the requests recorded, in hidden/ what
 # each site hid, and in lists/ the lists it blocked with, which a run with uBlock Origin copies
@@ -280,17 +285,20 @@ look_content() {
 # says, gets k, YouTube's play key, once, as a user's press of play, and so does a cued video,
 # which waits for that press (#3272). Before the player has asked to play, the key would start the
 # video, and the player's own start would then pause it. What got it playing is "refused" or
-# "cued", which got the press, or else the player's state when last read, as cdp.py says it.
+# "cued", which got the press, or else the player's state when last read, as cdp.py says it,
+# with why that reading wasn't pressed: only printed, as nothing compares it (#3272).
 videos="$dir/videos.txt"
 : > "$videos"
 watch_video() {
   # Not site, the check's server, which a later pass in the same shell builds its pages on.
-  watched=$1 ad=no-ad played=none met= state=- since=$(date +%s)
+  watched=$1 ad=no-ad played=none met= state=- why= since=$(date +%s)
   while [ $(($(date +%s) - since)) -lt 30 ]; do
-    # The seconds, playing or paused, ad or no-ad, then refused, cued or the player's state.
+    # The seconds, playing or paused, ad or no-ad, then refused, cued or the player's state, and
+    # after a state why it isn't refused.
     set -- $(video https://www.youtube.com/watch)
-    if [ $# = 4 ]; then
+    if [ $# -ge 4 ]; then
       state=$4
+      why=$(echo "$*" | cut -d' ' -f5-)
       case $4 in
         refused | cued)
           if [ -z "$met" ]; then
@@ -308,7 +316,8 @@ watch_video() {
     fi
     sleep 0.5
   done
-  echo "$watched $ad $played ${met:-$state}" >> "$videos"
+  if [ -n "$met" ]; then why=; fi
+  echo "$watched $ad $played ${met:-$state} $why" >> "$videos"
 }
 # Each site: when Return went, in ms since the epoch, then the site, then the load's time and what
 # loaded, or "none" for a load that didn't come within 45 s, then "bot-check" where Cloudflare's
@@ -459,9 +468,9 @@ for line in open(starts, encoding="utf-8"):
 # A watch page's video: "ad" or "no-ad", the seconds it played or none, then what got it playing.
 videos = {}
 for line in open(watched, encoding="utf-8"):
-    url, ad, played, met = line.split()
+    url, ad, played, met, *why = line.split()
     videos[url] = {"ad": ad == "ad", "played": None if played == "none" else float(played),
-                   "met": met}
+                   "met": met, "why": why}
 
 # What a site's page showed: its text's characters, its pictures, and whether it was covered.
 contents = {}
@@ -491,8 +500,19 @@ def video_said(video):
     if met and plays(video):
         return f"{said}, by itself with no press"
     if met:
-        return f"{said}, neither refused nor cued, so not pressed, its state {STATES.get(met, met)}"
+        said = f"{said}, neither refused nor cued, so not pressed, its state {STATES.get(met, met)}"
+        return said + why_said(video.get("why"))
     return said
+
+
+# Why a reading wasn't pressed, as cdp.py's words after the state give it (#3272): whether the
+# player asked to play, whether it still says unstarted, the video's readyState, and the page.
+def why_said(why):
+    if not why or len(why) != 6:
+        return ""
+    asked, unstarted, _, data, visibility, focus = why
+    return (f", asked to play {'yes' if asked == 'asked' else 'no'}, unstarted "
+            f"{'yes' if unstarted == 'unstarted' else 'no'}, data {data}, page {visibility}, {focus}")
 
 
 def why_not(mine):
@@ -518,6 +538,7 @@ def why_not(mine):
     return f"its page at {at} had no answer"
 
 
+TURNSTILE = "a Turnstile check"
 for i, s in enumerate(sites):
     s["video"] = videos.get(s["url"])
     end = sites[i + 1]["at"] if i + 1 < len(sites) else float("inf")
@@ -549,6 +570,14 @@ for i, s in enumerate(sites):
     # a bot check as Cloudflare's is, with no title to tell it by (#2111).
     if not s["bot"] and any(h.endswith("captcha-delivery.com") for h in s["allowed"]):
         s["bot"] = "DataDome's captcha"
+    # A site's own wall built on Cloudflare's Turnstile, as vimeo's "Verify to continue" is, which
+    # keeps the site's title. Real pages load Turnstile too, so it takes a page that is little
+    # but the wall: no real page of the fifty comes near so little (#3383). Only a widget the
+    # blocker let through: one it blocked, the user couldn't pass either.
+    shows = contents.get(s["url"])
+    if (not s["bot"] and shows and shows["text"] < 500 and shows["images"] <= 1 and
+            any(a.startswith("challenges.cloudflare.com/turnstile/") for a in s["allowed_at"])):
+        s["bot"] = TURNSTILE
 
 def video_cell(video):
     if not video:
@@ -596,8 +625,25 @@ if baseline:
         b = before.get(s["url"])
         if not b:
             continue
-        if len(b) > 8 and b[8] == "1" and not s["bot"]:
-            unchecked[s["url"]] = "a bot check in the baseline's run"
+        # Where only one run got a bot check, which one, so a page this run's blocker emptied
+        # can't pass as one.
+        was_bot = len(b) > 8 and b[8] == "1"
+        if was_bot and not s["bot"]:
+            unchecked[s["url"]] = "a bot check in the baseline's run alone; this run had none"
+        elif s["bot"] == TURNSTILE and not was_bot:
+            # Told by how little the page shows, which is what a page this run's blocker broke
+            # looks like, so it's never excused: a real one is an issue to file for the site.
+            del unchecked[s["url"]]
+            page_was, page = named[s["url"]], contents[s["url"]]
+            pictures = "one picture" if page["images"] else "no picture"
+            worse.append(f"{s['url']} showed a Turnstile check in this run alone, with "
+                         f"{page['text']} characters of text and {pictures}, "
+                         f"where the baseline's run had none and showed "
+                         f"{page_was.get('text') or 'no count of'} characters and "
+                         f"{page_was.get('images') or 'no count of'} pictures")
+            continue
+        elif s["bot"] and not was_bot:
+            unchecked[s["url"]] = f"{s['bot']} in this run alone; the baseline's run had none"
         if s["url"] in unchecked:
             continue
         if b[1] == "1" and not s["loaded"]:

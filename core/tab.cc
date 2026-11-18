@@ -24,6 +24,7 @@
 #include "browser_core/card_video.h"
 #include "browser_core/dialog_keys.h"
 #include "browser_core/favorites.h"
+#include "browser_core/focus_leaving.h"
 #include "browser_core/held_keys.h"
 #include "browser_core/host.h"
 #include "browser_core/link_target.h"
@@ -543,7 +544,7 @@ void Tab::FocusPage(content::WebContents* contents) {
 // static
 void Tab::FocusPageEnd(content::WebContents* contents, bool last) {
   if (Tab* tab = FromWebContents(contents); tab && tab->system_page_) {
-    tab->system_page_->Focus();
+    tab->system_page_->FocusEnd(last);
   } else {
     contents->FocusThroughTabTraversal(last);
   }
@@ -1175,6 +1176,10 @@ bool Tab::SystemPageKey(const input::NativeWebKeyboardEvent& event,
                         bool editing) {
   return AskAppAboutKey(before_page ? Host().tab_key_before_page : Host().tab_key_unhandled, id_,
                         event, editing);
+}
+
+bool Tab::SystemPageFocusLeft(bool reverse) {
+  return FocusLeftPage(web_contents(), reverse);
 }
 
 void Tab::SystemPageClicked() {
