@@ -2518,8 +2518,20 @@ mod tests {
                 shell.set_tabs(1, vec![5, 6], vec![2], Vec::new(), folded(!open), cx)
             });
             cx.run_until_parked();
-            let turn = shell.read_with(cx, |shell, _| shell.pinned_turn);
-            assert!(turn.is_some_and(|start| start.elapsed().as_secs_f32() < PINNED_TURN));
+            // On the list's clock, which a test holds, so the runner's speed can't end the turn
+            // (#3468); moving that clock past it does.
+            let turning = |cx: &mut VisualTestContext| {
+                shell.read_with(cx, |shell, _| {
+                    shell.pinned_turn.map(|start| shell.since(start))
+                })
+            };
+            assert!(turning(cx).is_some_and(|t| t < PINNED_TURN), "at {at:?}");
+            cx.executor()
+                .advance_clock(Duration::from_secs_f32(PINNED_TURN));
+            // The next frame, which the turn asked for, finds it done.
+            shell.update(cx, |_, cx| cx.notify());
+            cx.run_until_parked();
+            assert_eq!(turning(cx), None, "at {at:?}");
         }
         assert!(
             shell.read_with(cx, |shell, _| shell.renaming.is_none()),
