@@ -1837,6 +1837,11 @@ base::ScopedClosureRunner WatchOutlineMoves(views::Widget*,
   return base::ScopedClosureRunner();
 }
 
+std::optional<base::TimeTicks> PointerEventTime() {
+  // No move loop of the core's runs here.
+  return std::nullopt;
+}
+
 bool PageDialogsInOwnWindow() {
   // Chrome's default, which hasn't been looked at here.
   return false;
