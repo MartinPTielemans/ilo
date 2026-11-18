@@ -416,7 +416,8 @@ private struct PageBar: View {
 
 /// The page's three controls: the tabs, the site's name, and the page's actions. While the page
 /// is read it's a small pill with the site's name, which a tap makes whole again. A swipe along
-/// it goes to the tab beside this one, and a swipe up takes the page to the Space.
+/// it goes to the tab beside this one, a swipe up takes the page to the Space, and a swipe down
+/// tucks the bar to its small pill, for a page that doesn't scroll and so never shrinks it.
 private struct PagePill: View {
   let tab: WebTab
   /// How far under the bar's place the small pill sits.
@@ -431,8 +432,12 @@ private struct PagePill: View {
   @State private var drag: CGFloat = 0
   /// Which swipe the finger on the bar is making, once its first movement has said.
   @State private var axis: SpacePull.Axis?
-  /// Where the finger was when its swipe up began.
+  /// Where the finger was when its swipe up or down began.
   @State private var origin: CGFloat = 0
+  /// How far a finger swiping down has taken the bar to its small pill: 0 whole, 1 small.
+  @State private var tuck: CGFloat = 0
+  /// How wide the whole bar is, which the bar under a finger is measured from.
+  @State private var width: CGFloat = 0
   /// Whether a finger is on the bar: a swipe the system takes away never ends, it only stops.
   @GestureState private var touching = false
   /// The site's name as the whole bar lays it out, which the small pill is cut to.
@@ -440,44 +445,51 @@ private struct PagePill: View {
 
   var body: some View {
     let shrunk = tab.barHidden
+    // How small the bar is drawn: all the way once it's shrunk, and under a finger as far as that's gone.
+    let small = shrunk ? 1 : tuck
     ZStack(alignment: .bottom) {
       if reduceMotion {
         // Nothing travels: one size fades into the other.
-        pill(shrunk: false).opacity(shrunk ? 0 : 1)
-        pill(shrunk: true).opacity(shrunk ? 1 : 0)
+        pill(shrunk: false, small: 0).opacity(1 - small)
+        pill(shrunk: true, small: 1).opacity(small)
       } else {
-        pill(shrunk: shrunk)
+        pill(shrunk: shrunk, small: small)
       }
     }
     .frame(maxWidth: .infinity)
+    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     .frame(height: Bar.height, alignment: .bottom)
     .animation(reduceMotion ? Motion.quick : Motion.sheet, value: shrunk)
     .onChange(of: touching) {
       guard !touching else { return }
       // A swipe that ends says so itself, with the finger's speed, and that comes first whichever
-      // of the two is told first. Only one taken away mid-swipe is left for here: the page is let
-      // go where it is, the name where it was.
+      // of the two is told first. Only one taken away mid-swipe is left for here: the page and
+      // the bar are let go where they are, the name where it was.
       Task { @MainActor in
         guard !touching, let axis else { return }
         self.axis = nil
         if axis == .up { lift.ended(0) }
+        if axis == .down { settle(0) }
         withAnimation(Motion.settle) { drag = 0 }
       }
     }
   }
 
-  private func pill(shrunk: Bool) -> some View {
-    let radius = shrunk ? Bar.small / 2 : Bar.round
+  /// The bar `small` of the way to its pill: 0 whole, 1 the pill. `shrunk` says which of the two
+  /// it is to a touch, and under a finger it's still the bar.
+  private func pill(shrunk: Bool, small: CGFloat) -> some View {
+    let between = { (whole: CGFloat, pill: CGFloat) in whole + (pill - whole) * small }
+    let radius = between(Bar.round, Bar.small / 2)
     return Color.clear
-      .frame(maxWidth: shrunk ? nameWidth * Bar.smallLabel + 20 : .infinity)
-      .frame(height: shrunk ? Bar.small : Bar.height)
+      .frame(maxWidth: small > 0 && width > 0 ? between(width, nameWidth * Bar.smallLabel + 20) : .infinity)
+      .frame(height: between(Bar.height, Bar.small))
       .overlay {
         HostLabel(url: tab.url)
-          .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { if !shrunk { nameWidth = $0 } }
+          .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { if small == 0 { nameWidth = $0 } }
           // The name keeps the width it had, so it shrinks whole and isn't cut again.
-          .frame(width: shrunk ? nameWidth : nil)
-          .padding(.horizontal, shrunk ? 0 : 49)
-          .scaleEffect(shrunk ? Bar.smallLabel : 1)
+          .frame(width: small > 0 ? nameWidth : nil)
+          .padding(.horizontal, between(49, 0))
+          .scaleEffect(between(1, Bar.smallLabel))
           .offset(x: drag)
           .scaled(17, Bar.labelWeight)
           .foregroundStyle(palette.glassText)
@@ -488,6 +500,7 @@ private struct PagePill: View {
           .accessibilityAction { tapped(shrunk: shrunk) }
           .accessibilityAction(named: "Next Tab") { step(1) }
           .accessibilityAction(named: "Previous Tab") { step(-1) }
+          .accessibilityAction(named: shrunk ? "Show the Bar" : "Hide the Bar") { shrunk ? tab.growBar() : tab.tuckBar() }
       }
       .overlay {
         HStack(spacing: 10) {
@@ -506,7 +519,8 @@ private struct PagePill: View {
         }
         .padding(.horizontal, 10)
         .fixedSize(horizontal: false, vertical: true)
-        .opacity(shrunk ? 0 : 1)
+        // Gone by halfway, before the pill is too narrow to hold them.
+        .opacity(max(0, 1 - small * 2))
       }
       .overlay(alignment: .bottomLeading) {
         // How far the page has loaded, along the pill's foot.
@@ -534,7 +548,7 @@ private struct PagePill: View {
       .onTapGesture { tapped(shrunk: shrunk) }
       .gesture(swipe, isEnabled: !shrunk)
       .padding(.vertical, shrunk ? -10 : 0)
-      .offset(x: shrunk ? aside : 0, y: shrunk ? drop : 0)
+      .offset(x: between(0, aside), y: between(0, drop))
   }
 
   /// A tap on the small pill brings the bar back; one on the bar's name opens the field.
@@ -547,23 +561,24 @@ private struct PagePill: View {
   }
 
   /// A swipe along the site's name goes to the tab beside this one. Against the last tab the
-  /// name pulls and comes back. A swipe up takes the page to the Space, under the finger. Which
-  /// it is, the first movement says, and it stays that.
+  /// name pulls and comes back. A swipe up takes the page to the Space, under the finger, and a
+  /// swipe down the bar to its small pill. Which it is, the first movement says, and it stays that.
   private var swipe: some Gesture {
     DragGesture(minimumDistance: SpacePull.slop, coordinateSpace: .global)
       .updating($touching) { _, touching, _ in touching = true }
       .onChanged { value in
         if axis == nil {
           axis = SpacePull.axis(of: value.translation)
-          if axis == .up {
-            origin = value.translation.height
-            lift.began()
-          }
+          if axis == .up || axis == .down { origin = value.translation.height }
+          if axis == .up { lift.began() }
         }
         switch axis {
         case .up: lift.moved(value.translation.height - origin)
         case .sideways: drag = Motion.resist(value.translation.width, over: 160)
-        case .down, nil: break
+        case .down:
+          // The bar's top stays under the finger: it has `fall` to go to the pill's.
+          withAnimation(Motion.finger) { tuck = min(1, max(0, (value.translation.height - origin) / fall)) }
+        case nil: break
         }
       }
       .onEnded { value in
@@ -576,11 +591,28 @@ private struct PagePill: View {
           if abs(value.predictedEndTranslation.width) > 90 {
             step(value.predictedEndTranslation.width < 0 ? 1 : -1)
           }
-        case .down, nil:
+        case .down:
+          settle(value.velocity.height)
+        case nil:
           break
         }
         withAnimation(Motion.settle) { drag = 0 }
       }
+  }
+
+  /// How far the bar's top comes down to be the small pill's.
+  private var fall: CGFloat {
+    Bar.height - Bar.small + drop
+  }
+
+  /// A bar let go of on its way down, at `velocity` points a second: on to the small pill, as
+  /// scrolling the page makes it, or back whole.
+  private func settle(_ velocity: CGFloat) {
+    let tucks = BarShrink.tucks(progress: tuck, velocity: velocity)
+    withAnimation(reduceMotion ? Motion.quick : tucks ? Motion.sheet : Motion.settle) {
+      if tucks { tab.tuckBar() }
+      tuck = 0
+    }
   }
 
   private func step(_ offset: Int) {

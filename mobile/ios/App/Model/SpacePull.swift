@@ -8,7 +8,7 @@ nonisolated enum SpacePull {
     case up
     /// Along the bar: the tab beside this one.
     case sideways
-    /// Down, which nothing answers.
+    /// Down: the bar goes to its small pill.
     case down
   }
 

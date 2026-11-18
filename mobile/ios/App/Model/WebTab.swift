@@ -46,6 +46,8 @@ final class WebTab: NSObject, Identifiable {
   @ObservationIgnored private var reloadedAfterCrash = false
   @ObservationIgnored private var writes = NavigationWrites()
   @ObservationIgnored private var shrink = BarShrink()
+  /// The home indicator's band under the page, once the page has been in a window.
+  @ObservationIgnored private var band: CGFloat = 0
   @ObservationIgnored private let swipe: PageSwipe
   /// What the user typed into the page and hasn't sent.
   @ObservationIgnored private var unsent = Unsent()
@@ -69,9 +71,11 @@ final class WebTab: NSObject, Identifiable {
     // Sites send their in-app pages to a web view that doesn't say it's a browser.
     let version = UIDevice.current.systemVersion.split(separator: ".").prefix(2).joined(separator: ".")
     configuration.applicationNameForUserAgent = "Version/\(version) Mobile/15E148 Safari/604.1"
-    webView = WKWebView(frame: .zero, configuration: configuration)
+    let page = PageWebView(frame: .zero, configuration: configuration)
+    webView = page
     swipe = PageSwipe(webView: webView) { [weak browser] in browser?.settings.swipeAnywhere ?? false }
     super.init()
+    page.seated = { [weak self] in self?.seated() }
     PageScripts.add(to: webView.configuration, handler: PageMessages(tab: self))
 
     webView.navigationDelegate = self
@@ -81,8 +85,7 @@ final class WebTab: NSObject, Identifiable {
     // Ads, trackers and cookie notices don't load, unless the user said so for the page's site.
     Blocker.shared.attach(webView)
     // The bar floats over the page's foot, so the page ends above it.
-    webView.scrollView.contentInset.bottom = Bar.height + Bar.gap
-    webView.scrollView.verticalScrollIndicatorInsets.bottom = Bar.height + Bar.gap
+    fitBar()
     observations.append(
       webView.scrollView.observe(\.contentOffset) { [weak self] _, _ in
         MainActor.assumeIsolated { self?.scrolled() }
@@ -286,21 +289,63 @@ final class WebTab: NSObject, Identifiable {
     if barHidden { barHidden = false }
   }
 
-  /// What the small pill covers of the page's foot, over the home indicator's band.
-  private var smallFoot: CGFloat {
-    max(Bar.gap, Bar.smallFoot(band: webView.safeAreaInsets.bottom) + Bar.small + Bar.gap - webView.safeAreaInsets.bottom)
+  /// A swipe down on the bar makes it the small pill, on a page that scrolls or one that doesn't.
+  func tuckBar() {
+    shrink.tuck(at: webView.scrollView.contentOffset.y + webView.scrollView.adjustedContentInset.top)
+    if !barHidden { barHidden = true }
   }
 
-  /// The page ends above the bar, whichever size it is.
+  /// The page is in a window, or the window's edges moved. The band under the page is the
+  /// window's, which holds still while the page comes out of its card: the web view's own grows
+  /// with every frame of that, and each change lays the page out again.
+  private func seated() {
+    guard let window = webView.window, window.safeAreaInsets.bottom != band else { return }
+    band = window.safeAreaInsets.bottom
+    fitBar()
+  }
+
+  /// What the small pill covers of the page's foot, over the home indicator's band.
+  private var smallFoot: CGFloat {
+    max(Bar.gap, Bar.smallFoot(band: band) + Bar.small + Bar.gap - band)
+  }
+
+  /// The page ends above the bar, whichever size it is, and is laid out above it too: what a page
+  /// fixes to its foot, or fits to the screen's height, stands clear of the bar. The web view
+  /// keeps the whole screen, so what scrolls still shows through the bar.
   private func fitBar() {
-    let foot = barHidden ? smallFoot : Bar.height + Bar.gap
+    let whole = Bar.height + Bar.gap
+    let foot = barHidden ? smallFoot : whole
     webView.scrollView.contentInset.bottom = foot
     webView.scrollView.verticalScrollIndicatorInsets.bottom = foot
+    // WebKit measures these from the web view's own foot, under the home indicator.
+    let most = UIEdgeInsets(top: 0, left: 0, bottom: whole + band, right: 0)
+    if most != webView.maximumViewportInset {
+      // A page's small viewport is the one over the whole bar, its large one the one over the pill.
+      webView.setMinimumViewportInset(UIEdgeInsets(top: 0, left: 0, bottom: smallFoot + band, right: 0), maximumViewportInset: most)
+    }
+    // No more than the bar covers: WebKit gives a tap under this to no link or button.
+    let covered = UIEdgeInsets(top: 0, left: 0, bottom: foot + band, right: 0)
+    if covered != webView.obscuredContentInsets { webView.obscuredContentInsets = covered }
   }
 
   @objc private func pulled(_ refresh: UIRefreshControl) {
     reload()
     refresh.endRefreshing()
+  }
+}
+
+/// A tab's web view, which says when it's put in a window and when the screen's edges may have moved.
+private final class PageWebView: WKWebView {
+  var seated: () -> Void = {}
+
+  override func didMoveToWindow() {
+    super.didMoveToWindow()
+    seated()
+  }
+
+  override func safeAreaInsetsDidChange() {
+    super.safeAreaInsetsDidChange()
+    seated()
   }
 }
 
