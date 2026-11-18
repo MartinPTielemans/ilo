@@ -43,6 +43,7 @@ fn shell_with(
     cx: &mut TestAppContext,
     first: Vec<Card>,
 ) -> (Entity<Shell>, Rc<Recorder>, &mut VisualTestContext) {
+    hold_clock();
     let host = Rc::new(Recorder::default());
     let browser = host.clone();
     let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
@@ -103,7 +104,18 @@ fn plates(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> String {
 
 /// Long after now, when anything that moved has stopped.
 fn later() -> Instant {
-    Instant::now() + Duration::from_secs(5)
+    super::clock() + Duration::from_secs(5)
+}
+
+/// Holds the foot's clock still at the real now. Each step's motion then starts and is read at the
+/// same instant, however long the runner takes between them, until `tick` moves it on (#3462).
+fn hold_clock() {
+    super::set_clock(Instant::now());
+}
+
+/// Moves the foot's clock on by `seconds`.
+fn tick(seconds: f32) {
+    super::set_clock(super::clock() + Duration::from_secs_f32(seconds));
 }
 
 /// The agent's question takes a second line when it needs one, and nothing else does. Its chips
@@ -414,6 +426,11 @@ fn a_dismissed_task_comes_back(cx: &mut TestAppContext) {
             .count()
     });
     assert_eq!(leaving, 1, "it went at once");
+    // Once its fold has had its time, the next frame drops it.
+    tick(super::GROW.max(super::FADE));
+    draw(&shell, cx);
+    let left = shell.read_with(cx, |shell, _| shell.foot.plates.len());
+    assert_eq!(left, 0, "its plate stayed once it had folded");
 
     shell.update(cx, |shell, cx| shell.reopen_closed(cx));
     assert!(host.take().contains(&"task task-1 Restore".to_string()));
@@ -513,7 +530,7 @@ fn the_chips_act(cx: &mut TestAppContext) {
         (shell.foot.opening.is_none(), shell.foot.ghosts.len())
     });
     assert_eq!(flying, (true, 2));
-    assert!(shell.read_with(cx, |shell, _| shell.foot_moving(Instant::now())));
+    assert!(shell.read_with(cx, |shell, _| shell.foot_moving(super::clock())));
 }
 
 /// With motion reduced, a plate comes at its height at once and fades in, its dot holds still on
@@ -526,7 +543,7 @@ fn with_motion_reduced_the_foot_crossfades(cx: &mut TestAppContext) {
         shell.set_task_cards(vec![card(1, Dot::Working)], cx)
     });
     draw(&shell, cx);
-    let now = Instant::now();
+    let now = super::clock();
     shell.read_with(cx, |shell, _| {
         let plate = &shell.foot.plates[0];
         assert_eq!(plate.height.at(now), HEIGHT, "it grew");
@@ -541,7 +558,7 @@ fn with_motion_reduced_the_foot_crossfades(cx: &mut TestAppContext) {
         assert!(
             face.status
                 .going(
-                    Instant::now(),
+                    super::clock(),
                     crate::tokens::shell::task::motion::CROSSFADE
                 )
                 .is_some()
@@ -581,7 +598,7 @@ fn an_idle_foot_draws_nothing(cx: &mut TestAppContext) {
     draw(&shell, cx);
     shell.read_with(cx, |shell, _| {
         assert!(!shell.foot_live());
-        assert!(shell.foot_moving(Instant::now()), "the tick didn't draw in");
+        assert!(shell.foot_moving(super::clock()), "the tick didn't draw in");
         assert!(!shell.foot_moving(later()));
     });
 }
@@ -592,6 +609,7 @@ fn with_task_spaces(
     cx: &mut TestAppContext,
     first: Vec<Card>,
 ) -> (Entity<Shell>, Rc<Recorder>, &mut VisualTestContext) {
+    hold_clock();
     let host = Rc::new(Recorder::default());
     for card in &first {
         host.space_agents
@@ -664,7 +682,7 @@ fn fold_due(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
             .foot
             .folds
             .iter_mut()
-            .for_each(|(_, at)| *at = Instant::now())
+            .for_each(|(_, at)| *at = super::clock())
     });
     draw(shell, cx);
 }
@@ -712,7 +730,7 @@ fn a_finished_task_folds_into_the_archive_once_seen(cx: &mut TestAppContext) {
             .foot
             .folds
             .first()
-            .map(|(_, at)| at.saturating_duration_since(Instant::now()))
+            .map(|(_, at)| at.saturating_duration_since(super::clock()))
     });
     let wait = wait.expect("it didn't fold").as_secs_f32();
     assert!(
@@ -722,7 +740,7 @@ fn a_finished_task_folds_into_the_archive_once_seen(cx: &mut TestAppContext) {
     assert!(dismissed(&host).is_empty(), "it folded at once");
     fold_due(&shell, cx);
     assert_eq!(dismissed(&host), ["task task-1 Dismiss"]);
-    let now = Instant::now();
+    let now = super::clock();
     shell.read_with(cx, |shell, _| {
         let plate = shell
             .foot
@@ -898,7 +916,7 @@ fn with_motion_reduced_a_folded_task_fades(cx: &mut TestAppContext) {
     shell.update(cx, |shell, cx| {
         shell.set_task_cards(cards(&[(2, Dot::Done)]), cx)
     });
-    let now = Instant::now();
+    let now = super::clock();
     shell.read_with(cx, |shell, _| {
         let plate = shell
             .foot
