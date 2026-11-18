@@ -171,6 +171,8 @@ pub enum Command {
     /// Moves the sidebar to the window's other side, Settings' Sidebar position, in every window.
     /// The command bar's alone, with no key (#2375).
     MoveSidebar,
+    /// Turns Top bar on or off, Settings' Top bar, in every window (#3160).
+    ToggleTopBar,
     /// Turns Developer Mode on or off for the page's site.
     ToggleDeveloperMode,
     /// Opens Chrome's extensions page in a new tab.
@@ -227,6 +229,8 @@ pub enum Command {
     EditBoost,
     /// Opens the Library on the profile's Boosts, or closes it there.
     ViewBoosts,
+    /// Opens the Library on the profile's Boards, or closes it there.
+    ViewBoards,
     /// Opens the command bar over a new pane beside the pages shown, for a split view.
     AddSplit,
     /// Opens a new document in the notes service the Space's profile picks (`crate::notes`), in a
@@ -234,6 +238,9 @@ pub enum Command {
     NewNote,
     /// The same, in a split view with the tab shown.
     NewNoteSplit,
+    /// Makes a Board in the Space's profile and opens it in a pinned tab, with its row's name in
+    /// a field to type over, as New Folder names a folder (#3073).
+    NewBoard,
     /// Closes the split view's focused page.
     CloseSplitPane,
     /// Takes the split view's focused page out of it, to show alone.
@@ -383,6 +390,8 @@ pub(super) const SHORTCUTS: &[(&str, Command, bool)] = &[
     // keeps it. Off the Mac it would be Alt+D, Chrome's, so it has none there.
     ("ctrl-d", Command::ToggleDeveloperMode, false),
     ("cmd-s", Command::ToggleSidebar, false),
+    // Unreserved as ⌘S is, so a page that keeps it, as vscode.dev's Run and Debug, still gets it.
+    ("shift-cmd-d", Command::ToggleTopBar, false),
     // Chrome's key for moving the keyboard out of the page, unreserved as Chrome's is, as Arc's ⌘.
     // is Stop Loading here.
     ("f6", Command::FocusSidebar, false),
@@ -395,6 +404,7 @@ pub(super) const SHORTCUTS: &[(&str, Command, bool)] = &[
     ("ctrl-shift-=", Command::AddSplit, false),
     ("ctrl-shift-+", Command::AddSplit, false),
     ("ctrl-shift-n", Command::NewNote, false),
+    ("ctrl-shift-e", Command::NewBoard, false),
     ("ctrl-shift--", Command::CloseSplitPane, false),
     ("ctrl-shift-_", Command::CloseSplitPane, false),
     ("ctrl-shift-]", Command::NextPane, false),
@@ -433,6 +443,16 @@ const DONT_STAY_ON_TOP: &str = "Don't Stay On Top";
 /// The command bar's rows for Sidebar position, of which it lists the one that would move it.
 const SIDEBAR_TO_RIGHT: &str = "Move Sidebar to the Right";
 const SIDEBAR_TO_LEFT: &str = "Move Sidebar to the Left";
+pub(super) const SHOW_TOP_BAR: &str = "Show Top Bar";
+pub(super) const HIDE_TOP_BAR: &str = "Hide Top Bar";
+
+/// Top bar's item in a menu and its row in the command bar, by whether it's on.
+pub(super) fn top_bar_title(on: bool) -> &'static str {
+    match on {
+        true => HIDE_TOP_BAR,
+        false => SHOW_TOP_BAR,
+    }
+}
 
 /// The page's Developer Mode's rows in the command bar, of which it lists the one that would change
 /// it (Arc's, in sentence case).
@@ -635,6 +655,16 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         Command::NewNoteSplit,
         &["document", "side by side"],
     ),
+    (
+        "New Board",
+        Command::NewBoard,
+        &["canvas", "whiteboard", "moodboard", "easel", "sketch"],
+    ),
+    (
+        "View Boards…",
+        Command::ViewBoards,
+        &["canvas", "whiteboard", "moodboard", "easel", "sketch"],
+    ),
     ("Toggle Sidebar", Command::ToggleSidebar, &["hide", "show"]),
     (
         "Automatic Appearance",
@@ -699,6 +729,16 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         SIDEBAR_TO_LEFT,
         Command::MoveSidebar,
         &["side", "position", "left", "right"],
+    ),
+    (
+        SHOW_TOP_BAR,
+        Command::ToggleTopBar,
+        &["toolbar", "address bar", "url bar"],
+    ),
+    (
+        HIDE_TOP_BAR,
+        Command::ToggleTopBar,
+        &["toolbar", "address bar", "url bar"],
     ),
     (
         trace::RECORD,
@@ -1269,6 +1309,7 @@ impl Command {
             Command::RecordTrace => "record-trace",
             Command::StayOnTop => "stay-on-top",
             Command::MoveSidebar => "move-sidebar",
+            Command::ToggleTopBar => "toggle-top-bar",
             Command::ToggleDeveloperMode => "toggle-developer-mode",
             Command::ManageExtensions => "manage-extensions",
             Command::AddExtension => "add-extension",
@@ -1300,6 +1341,8 @@ impl Command {
             Command::AddSplit => "add-split",
             Command::NewNote => "new-note",
             Command::NewNoteSplit => "new-note-split",
+            Command::NewBoard => "new-board",
+            Command::ViewBoards => "view-boards",
             Command::CloseSplitPane => "close-split-pane",
             Command::SeparatePane => "separate-pane",
             Command::SeparateSplit => "separate-split",
@@ -1435,6 +1478,7 @@ pub fn bind_keys(cx: &mut App) {
     translate::bind(cx);
     boost::bind(cx);
     sidebar_keys::bind(cx);
+    super::library::keys::bind(cx);
 }
 
 /// The command bar is about to put `tab` in a split view with `with`: the pages shown take back the
@@ -1476,11 +1520,38 @@ pub fn menu_item(name: impl Into<SharedString>, command: Command) -> MenuItem {
 }
 
 impl Shell {
+    /// Opens the command bar on the tab the URL field shows, or as for a new one with none.
+    pub(super) fn edit_url(&mut self, from: &str, cx: &mut Context<Self>) {
+        self.set_new_tab(false, cx);
+        let tab = self.field_tab();
+        let editing = (tab != 0).then(|| (tab, self.url(tab)));
+        self.set_bar_over_card(editing.is_none(), cx);
+        // A click on the URL field opens the bar over the field, and ⌘L centred (Arc). In a Little
+        // ilo window a click on its bar's title opens it compact over the title, and the keys
+        // inside the window.
+        let field = match self.little_field_bounds(cx) {
+            Some(title) if from == "little bar" => Some(title),
+            Some(_) => {
+                let (bar, shown) = (self.little_bar_bounds(), self.shown_urls());
+                return self
+                    .browser
+                    .command_bar_in(editing, shown, self.bar_tabs(cx), bar, cx);
+            }
+            None if from == "sidebar" => self.url_field_bounds(),
+            None => None,
+        };
+        let shown = self.shown_urls();
+        self.browser
+            .command_bar(editing, shown, self.bar_tabs(cx), field, cx);
+    }
+
     /// Runs a browser command and logs it. `from` says which side had the key: GPUI's bindings
     /// ("ui"), the browser handing it back ("page"), or the sidebar.
     pub fn run(&mut self, command: Command, from: &str, cx: &mut Context<Self>) {
         // check.sh waits for these lines.
         log!("browser: command {} via {from}", command.name());
+        // A command after a ⌘L still waiting for the tab shown next is the one the user wants.
+        self.edit_url_waits = None;
         if self.one_space() && !private_runs(command) {
             return;
         }
@@ -1531,6 +1602,9 @@ impl Shell {
         }
         let target = match command {
             Command::NewTab => {
+                // The page it opens is where the user's going, so the ring ends, as return on a
+                // tab's row ends it, and Tab from the window rings that page's row (#3151).
+                self.leave_keys("new tab", cx);
                 self.set_new_tab(true, cx);
                 self.set_bar_over_card(true, cx);
                 let shown = self.shown_urls();
@@ -1543,34 +1617,13 @@ impl Shell {
                 self.set_bar_over_card(true, cx);
                 return self.browser.search_tabs(self.open_tabs(cx), cx);
             }
-            Command::EditUrl => {
-                self.set_new_tab(false, cx);
-                let tab = self.field_tab();
-                let editing = (tab != 0).then(|| (tab, self.url(tab)));
-                self.set_bar_over_card(editing.is_none(), cx);
-                // A click on the URL field opens the bar over the field, and ⌘L centred (Arc). In a
-                // Little ilo window a click on its bar's title opens it compact over the title, and
-                // the keys inside the window.
-                let field = match self.little_field_bounds(cx) {
-                    Some(title) if from == "little bar" => Some(title),
-                    Some(_) => {
-                        let (bar, shown) = (self.little_bar_bounds(), self.shown_urls());
-                        return self.browser.command_bar_in(
-                            editing,
-                            shown,
-                            self.bar_tabs(cx),
-                            bar,
-                            cx,
-                        );
-                    }
-                    None if from == "sidebar" => self.url_field_bounds(),
-                    None => None,
-                };
-                let shown = self.shown_urls();
-                return self
-                    .browser
-                    .command_bar(editing, shown, self.bar_tabs(cx), field, cx);
+            // The tab shown closed and the core hasn't said which shows next, which the bar edits
+            // then, as the closed one's ↩ would load nothing (#2953).
+            Command::EditUrl if self.field_tab() != 0 && !self.tab_open(self.field_tab()) => {
+                self.edit_url_waits = Some(from.to_string());
+                return;
             }
+            Command::EditUrl => return self.edit_url(from, cx),
             // A Little ilo window's page closes with it (Arc).
             Command::CloseTab if self.little.is_some() => {
                 if !self.browser.close_other_window(cx) {
@@ -1690,7 +1743,7 @@ impl Shell {
             }
             // Escape closes the Library, after a picker over it, which has the keyboard, has
             // closed (the owner, #1074; Arc's doesn't).
-            Command::Stop if self.library_open => return self.set_library(false, cx),
+            Command::Stop if self.library_open => return self.escape_library(cx),
             // Escape leaves full screen when there's no load to stop, as the note there says.
             Command::Stop if self.full_screen && !self.page_fullscreen => {
                 if !self.page(self.selected).loading {
@@ -1719,6 +1772,7 @@ impl Shell {
                     .browser
                     .keep_sidebar_right(!super::sidebar_right(cx), cx);
             }
+            Command::ToggleTopBar => return self.browser.keep_top_bar(!self.top_bar, cx),
             Command::ToggleDeveloperMode => {
                 let on = !self.page(self.selected).developer_mode;
                 return self.browser.set_developer_mode(self.selected, on, cx);
@@ -1764,6 +1818,12 @@ impl Shell {
             Command::Quit => return self.browser.quit(cx),
             Command::AddSplit => return self.add_pane(cx),
             Command::NewNote => return self.browser.new_note(self.space, None, cx),
+            Command::NewBoard => return self.new_board(cx),
+            Command::ViewBoards => {
+                return self.library_command(from, cx, |shell, cx| {
+                    shell.view_section(Section::Boards, cx)
+                });
+            }
             Command::NewNoteSplit => {
                 let with = self.selected;
                 if with != 0 && !self.split_full(with, cx) {
@@ -1812,13 +1872,36 @@ impl Shell {
             Command::FocusPane(index) => return self.focus_pane_at(index, cx),
             Command::ToggleSidebar => return self.toggle_sidebar(cx),
             Command::Appearance(appearance) => return self.set_app_appearance(appearance, cx),
-            Command::ViewLibrary => return self.set_library(!self.library_open, cx),
-            Command::ViewArchive => return self.view_section(Section::Archive, cx),
-            Command::ViewDownloads => return self.view_section(Section::Downloads, cx),
-            Command::ViewMedia => return self.view_section(Section::Media, cx),
-            Command::ViewAgents => return self.view_section(Section::Agents, cx),
+            Command::ViewLibrary => {
+                return self.library_command(from, cx, |shell, cx| {
+                    shell.set_library(!shell.library_open, cx)
+                });
+            }
+            Command::ViewArchive => {
+                return self.library_command(from, cx, |shell, cx| {
+                    shell.view_section(Section::Archive, cx)
+                });
+            }
+            Command::ViewDownloads => {
+                return self.library_command(from, cx, |shell, cx| {
+                    shell.view_section(Section::Downloads, cx)
+                });
+            }
+            Command::ViewMedia => {
+                return self
+                    .library_command(from, cx, |shell, cx| shell.view_section(Section::Media, cx));
+            }
+            Command::ViewAgents => {
+                return self.library_command(from, cx, |shell, cx| {
+                    shell.view_section(Section::Agents, cx)
+                });
+            }
             Command::NewBoost | Command::EditBoost => return self.open_boost(cx),
-            Command::ViewBoosts => return self.view_section(Section::Boosts, cx),
+            Command::ViewBoosts => {
+                return self.library_command(from, cx, |shell, cx| {
+                    shell.view_section(Section::Boosts, cx)
+                });
+            }
             Command::ClearArchive => return self.clear_archive(cx),
             Command::NewSpace => return self.new_space(cx),
             Command::RenameSpace => return self.rename_space(self.space, cx),
@@ -2315,6 +2398,8 @@ impl Shell {
             | Command::RenameSpace
             | Command::EditTheme
             | Command::ExportSpace
+            | Command::NewBoard
+            | Command::ViewBoards
             | Command::ViewLibrary
             | Command::ViewArchive
             | Command::ClearArchive
@@ -2337,6 +2422,7 @@ impl Shell {
             | Command::RecordTrace
             | Command::StayOnTop
             | Command::MoveSidebar
+            | Command::ToggleTopBar
             | Command::ReportProblem
             | Command::CopyBuildInfo
             | Command::HelpCenter
@@ -2417,6 +2503,7 @@ impl Shell {
                 };
                 (name == to).then_some(name)
             }
+            Command::ToggleTopBar => (name == top_bar_title(self.top_bar)).then_some(name),
             _ => Some(name),
         }
     }
@@ -2557,6 +2644,9 @@ pub(super) fn private_runs(command: Command) -> bool {
             // The service's document needs the profile's sign-in, which a private window hasn't.
             | Command::NewNote
             | Command::NewNoteSplit
+            // A Board is a folder of the profile's, and a private window keeps none.
+            | Command::NewBoard
+            | Command::ViewBoards
     )
 }
 
@@ -2841,6 +2931,67 @@ mod tests {
         });
         assert!(host.followed_tabs.take().is_empty());
         assert!(!shell.read_with(cx, |shell, _| shell.new_tab));
+    }
+
+    /// ⌘L in the moment after the tab shown closes, before the window shows the next, opens the
+    /// bar on the tab shown next, which ↩ then loads, in the order the core reports them (#2953).
+    #[gpui::test]
+    fn edit_url_as_the_tab_shown_closes_edits_the_one_shown_next(cx: &mut gpui::TestAppContext) {
+        use std::rc::Rc;
+
+        use crate::shell::{Folders, Page, recorder::Recorder};
+
+        let host = Rc::new(Recorder::default());
+        let browser = host.clone();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+        let today = |shell: &mut Shell, tabs: Vec<u64>, cx: &mut Context<Shell>| {
+            shell.set_tabs(1, Vec::new(), tabs, Vec::new(), Folders::default(), cx);
+        };
+        shell.update(cx, |shell, cx| {
+            let space = (1, "One".into(), None, 1, "".into(), "".into(), "".into());
+            shell.set_spaces(vec![space], cx);
+            today(shell, vec![4, 6, 7, 8], cx);
+            for tab in [4, 6, 7, 8] {
+                let page = Page {
+                    url: format!("https://{tab}.test/").into(),
+                    ..Page::default()
+                };
+                shell.set_page(tab, page, cx);
+            }
+            shell.set_space(1, cx);
+            shell.set_selected(8, cx);
+            // The pop-up's tab closes, and ⌘L comes before the window shows the tab before it.
+            today(shell, vec![4, 6, 7], cx);
+            shell.run(Command::EditUrl, "ui", cx);
+        });
+        assert!(
+            host.bar_edits.take().is_empty(),
+            "the bar waits for the tab shown next"
+        );
+        shell.update(cx, |shell, cx| shell.set_selected(7, cx));
+        assert_eq!(host.bar_edits.take(), [Some(7)]);
+
+        // With the tab shown open, ⌘L opens the bar on it at once.
+        shell.update(cx, |shell, cx| shell.run(Command::EditUrl, "ui", cx));
+        assert_eq!(host.bar_edits.take(), [Some(7)]);
+
+        // A command after the ⌘L is the one the user wants: ⌘T's bar stays, and the tab shown next
+        // opens no other over it.
+        shell.update(cx, |shell, cx| {
+            today(shell, vec![4, 6], cx);
+            shell.run(Command::EditUrl, "ui", cx);
+            shell.run(Command::NewTab, "ui", cx);
+            shell.set_selected(6, cx);
+        });
+        assert_eq!(host.bar_edits.take(), [None], "only ⌘T's bar opened");
+
+        // The Space left empty shows no tab, and the bar opens as for none.
+        shell.update(cx, |shell, cx| {
+            today(shell, Vec::new(), cx);
+            shell.run(Command::EditUrl, "ui", cx);
+            shell.set_selected(0, cx);
+        });
+        assert_eq!(host.bar_edits.take(), [None]);
     }
 
     /// The bar finds Site Search Settings by its name or by Chrome's, and it opens the search
@@ -3141,6 +3292,67 @@ mod tests {
             host.notes.borrow().len(),
             2,
             "a private window opened a note"
+        );
+    }
+
+    /// New Board, from ⌃⇧E, the command bar or the + menu, makes a Board in the Space shown and
+    /// puts its row's name in a field, "Board" all selected, to type over. A private window keeps
+    /// no Boards, so it neither offers nor runs it (#3073's condition 4).
+    #[gpui::test]
+    fn new_board_names_its_row_and_a_private_window_makes_none(cx: &mut gpui::TestAppContext) {
+        use std::rc::Rc;
+
+        use gpui::{AppContext as _, point, px};
+
+        use crate::shell::{Browser, Naming};
+
+        assert_eq!(
+            UserKeys::default().command_for("ctrl-shift-e", false),
+            Some(Command::NewBoard)
+        );
+        let (shell, host) = shell_with_today(cx, vec![10]);
+        shell.update(cx, |shell, cx| {
+            assert!(shell.offers(Command::NewBoard));
+            shell.run(Command::NewBoard, "keys", cx);
+        });
+        cx.run_until_parked();
+        shell.update(cx, |shell, cx| {
+            let renaming = shell
+                .renaming
+                .as_ref()
+                .expect("no field for the Board's name");
+            assert!(matches!(renaming.naming, Naming::Tab(900)));
+            let field = renaming.name.read(cx);
+            assert_eq!((field.text(), field.selection()), ("Board", 0..5));
+            shell.plus_menu(point(px(100.), px(700.)), cx);
+        });
+        let titles: Vec<String> = host
+            .menus
+            .borrow()
+            .last()
+            .unwrap()
+            .iter()
+            .map(|(title, _)| title.to_string())
+            .collect();
+        let split = titles.iter().position(|title| title == "New Split View");
+        assert_eq!(
+            titles.iter().position(|title| title == "New Board"),
+            split.map(|at| at + 1),
+            "New Board isn't after New Split View: {titles:?}"
+        );
+        assert_eq!(host.boards.borrow().len(), 1);
+
+        let browser: Rc<dyn Browser> = host.clone();
+        let private = cx.new(|cx| Shell::private_window(browser, 1, "Incognito".into(), 1, cx));
+        private.update(cx, |shell, cx| {
+            assert!(!shell.offers(Command::NewBoard));
+            assert_eq!(shell.bar_name("New Board", Command::NewBoard, cx), None);
+            shell.run(Command::NewBoard, "keys", cx);
+        });
+        assert_eq!(
+            host.boards.borrow().len(),
+            1,
+            "a private window made a Board"
         );
     }
 

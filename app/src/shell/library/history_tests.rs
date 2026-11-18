@@ -754,3 +754,122 @@ fn row_times_follow_the_systems_clock() {
     assert_eq!(history_when(week, starts, false), "Tue 21:05");
     assert_eq!(history_when(at(1, 14), starts, true), "1 Nov");
 }
+
+/// What the Library's row ring is on, as `items` names it.
+fn ringed(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Option<String> {
+    let line = shell
+        .read_with(cx, |shell, _| shell.library.as_ref()?.keyed_row)?
+        .0;
+    items(shell, cx).get(line).cloned()
+}
+
+/// ↓ and ↑ from History's search field ring its rows as the command bar's keys go over its
+/// suggestions: past the day headings, wrapping at the ends, the ringed row an option of the list,
+/// selected, and said with where it stands. Return opens it as a click does; typing ends the ring.
+#[gpui::test]
+fn the_arrows_ring_historys_rows(cx: &mut TestAppContext) {
+    use gpui::Focusable;
+    let (shell, host, cx) = history(vec![closed(5, "news", at(9, 15), false)], cx);
+    cx.update(|_, cx| crate::shell::commands::bind_keys(cx));
+    cx.simulate_a11y_activation();
+    next_frame(cx);
+    let (first, _) = one_ask(&host);
+    let pages = vec![page("mail", at(9, 14)), page("docs", at(8, 10))];
+    answer(&shell, first, pages, false, cx);
+    made(&host);
+    let search = shell.read_with(cx, |shell, cx| {
+        shell.library.as_ref().unwrap().search.focus_handle(cx)
+    });
+    cx.update(|window, cx| window.focus(&search, cx));
+    cx.run_until_parked();
+    assert_eq!(ringed(&shell, cx), None);
+    let mut went = Vec::new();
+    for key in ["down", "down", "down", "down", "up"] {
+        cx.simulate_keystrokes(key);
+        went.push(ringed(&shell, cx).unwrap_or_default());
+    }
+    let went: Vec<&str> = went.iter().map(String::as_str).collect();
+    assert_eq!(
+        went,
+        [
+            "closed news",
+            "visited mail",
+            "visited docs",
+            "closed news",
+            "visited docs"
+        ]
+    );
+
+    let tree = cx.a11y_tree().expect("GPUI built a tree");
+    let node = |role: gpui::Role, label: &str| {
+        (tree.nodes.iter())
+            .map(|(_, node)| node)
+            .find(|node| node.role() == role && node.label().as_deref() == Some(label))
+            .cloned()
+    };
+    let option = node(gpui::Role::ListBoxOption, "docs").expect("docs's row is an option");
+    assert_eq!(option.is_selected(), Some(true));
+    let news = node(gpui::Role::ListBoxOption, "news").expect("news's row is an option");
+    assert_ne!(news.is_selected(), Some(true));
+    assert!(
+        node(gpui::Role::Status, "docs, 3 of 3").is_some(),
+        "the live region didn't say the ringed row"
+    );
+
+    cx.simulate_keystrokes("up enter");
+    let made = made(&host);
+    assert_eq!(made.len(), 1, "made {made:?}");
+    let peek = format!("open preview over 10 {} from ", url("mail"));
+    assert!(made[0].starts_with(&peek), "made {made:?}");
+    assert_eq!(
+        ringed(&shell, cx),
+        None,
+        "the ring outlived its row's opening"
+    );
+
+    cx.simulate_keystrokes("down");
+    assert!(ringed(&shell, cx).is_some());
+    cx.simulate_input("m");
+    assert_eq!(ringed(&shell, cx), None, "typing left the ring on a row");
+}
+
+/// What ⌘Z, ⌘F and ⌘W each did, as History's field holds the keyboard after `before`: the calls
+/// to the browser, whether the Library stayed open and what has the keyboard.
+fn window_shortcuts(before: &str, cx: &mut TestAppContext) -> Vec<String> {
+    use gpui::Focusable;
+    let (shell, host, cx) = history(vec![closed(5, "news", at(9, 15), false)], cx);
+    cx.update(|_, cx| crate::shell::commands::bind_keys(cx));
+    next_frame(cx);
+    let (first, _) = one_ask(&host);
+    answer(&shell, first, vec![page("mail", at(9, 14))], false, cx);
+    made(&host);
+    let search = shell.read_with(cx, |shell, cx| {
+        shell.library.as_ref().unwrap().search.focus_handle(cx)
+    });
+    cx.update(|window, cx| window.focus(&search, cx));
+    cx.run_until_parked();
+    if !before.is_empty() {
+        cx.simulate_keystrokes(before);
+        assert!(ringed(&shell, cx).is_some(), "{before} rang no row");
+    }
+    let mut did = Vec::new();
+    for key in ["cmd-z", "cmd-f", "cmd-w"] {
+        cx.simulate_keystrokes(key);
+        let open = shell.read_with(cx, |shell, _| shell.library_open);
+        let field = cx.update(|window, _| search.is_focused(window));
+        did.push(format!(
+            "{key}: {:?}, Library open {open}, field focused {field}",
+            made(&host)
+        ));
+    }
+    did
+}
+
+/// The ring takes only ↓, ↑ and Return: the window's shortcuts do with a row ringed what they do
+/// without one.
+#[gpui::test]
+fn the_rows_ring_leaves_the_windows_shortcuts_as_they_are(cx: &mut TestAppContext) {
+    let without = window_shortcuts("", cx);
+    let with = window_shortcuts("down", cx);
+    assert_eq!(with, without);
+}

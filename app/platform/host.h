@@ -271,6 +271,14 @@ void host_set_overlay_elevation(int overlay,
                                 double shadow_radius,
                                 double shadow_drop);
 
+// Windows' alone: the UI draws the shadow of the panel in |view|'s window, an overlay's, the find
+// bar's or the offer's, itself, |above|, |sides| and |below| points past the panel, as the menus
+// draw theirs, since Windows' own shadow comes only with its own corner (#2988). The host shows the
+// panel where it's asked, the window that much bigger round it, and lets clicks in that margin
+// through to what's under it, as clicks outside the panel. The Mac's and Linux's hosts draw it in a
+// window under the panel. Call it after the window is added.
+void host_set_shadow_margin(void* view, double above, double sides, double below);
+
 // Makes the window of |overlay_view| the |overlay| (one of the HOST_ overlays above), which
 // floats over a browser window when shown, for UI that has to draw over the page, translucent over
 // a blur of what's behind it, with a shadow, in a rounded shape of |radius|. It starts hidden.
@@ -637,6 +645,13 @@ void host_show_link_target(void* ui_view, double left, double top, double fade);
 // Fades the link target's window out over |fade| seconds, then hides it.
 void host_hide_link_target(double fade);
 
+// The overlay window of |overlay_view| drew only inside the frame at (|left|, |top|), |width| by
+// |height| points in its content, with corners of |radius|. Where windows can't blend with what's
+// under them, as under X11 with no compositor, the host cuts the window to it, so the room it
+// keeps round it shows what's under it rather than black. Elsewhere it does nothing.
+void host_outline_overlay(void* overlay_view, double left, double top, double width, double height,
+                          double radius);
+
 // Whether a mouse button is down now, over any window, the page's included, which the UI doesn't
 // hear the presses of. The link target's window waits for the release to show, move or hide.
 bool host_mouse_down(void);
@@ -700,6 +715,10 @@ bool host_window_restored_frame(void* ui_view, double* x, double* y, double* wid
 // Maximizes |ui_view|'s window on the screen of the frame it has, which it then un-maximizes to, as
 // a window comes back when it quit maximized (bc_saved_window_maximized).
 void host_maximize_window(void* ui_view);
+// Puts |ui_view|'s window's minimize, maximize and close at its right corner with the sidebar on
+// the left, as the top bar has them (#3160), or back with the sidebar. The UI draws them; the frame
+// offers Snap layouts over maximize where they are.
+void host_set_window_buttons_right(void* ui_view, bool right);
 #endif
 
 // Makes the window of |reveal_view| the sidebar reveal of |ui_view|'s window, which shows over its

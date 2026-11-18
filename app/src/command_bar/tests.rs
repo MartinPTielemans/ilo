@@ -525,12 +525,12 @@ impl Bar {
     /// the host makes it: the input row, and with rows, to the list's foot and the space under it.
     fn drawn_over_field(&mut self) -> f32 {
         let asked = self.asked_height();
-        self.cx.simulate_resize(size(px(FIELD_WIDTH), px(asked)));
+        self.cx.simulate_resize(window(FIELD_WIDTH, asked));
         self.cx.run_until_parked();
         (self.window)
             .read_with(&self.cx.cx, |bar, _| match bar.rows.is_empty() {
                 true => FIELD_INPUT,
-                false => f32::from(bar.scroll.bounds().bottom()) + LIST_END,
+                false => f32::from(bar.scroll.bounds().bottom()) - room().above + LIST_END,
             })
             .unwrap()
     }
@@ -561,7 +561,7 @@ impl Bar {
                 *menu.borrow_mut() = Some((items, chosen));
             })))
         });
-        let at = point(px(200.), px(HEIGHT / 2.));
+        let at = at(200., HEIGHT / 2.);
         self.cx
             .simulate_mouse_down(at, MouseButton::Right, Modifiers::none());
         self.cx
@@ -592,11 +592,10 @@ impl Bar {
     /// Moves the pointer onto row `index`, with the window at its height for five rows, as the
     /// host makes it.
     fn point_at(&mut self, index: usize) {
-        self.cx
-            .simulate_resize(size(px(WIDTH), px(height(ROWS_SHOWN))));
+        self.cx.simulate_resize(window(WIDTH, height(ROWS_SHOWN)));
         let y = height(0) + LINE + LIST_TOP + (index as f32 + 0.5) * ROW_HEIGHT;
         self.cx
-            .simulate_mouse_move(point(px(200.), px(y)), None, Modifiers::none());
+            .simulate_mouse_move(at(200., y), None, Modifiers::none());
         self.cx.run_until_parked();
     }
 
@@ -631,7 +630,23 @@ impl Bar {
 fn remove_button(index: usize) -> gpui::Point<gpui::Pixels> {
     let x = WIDTH - LIST_X - PLATE_INSET - ROW_END - 3. - ICON_BOX / 2.;
     let y = height(0) + LINE + LIST_TOP + (index as f32 + 0.5) * ROW_HEIGHT;
-    point(px(x), px(y))
+    at(x, y)
+}
+
+/// The room the bar's window keeps round it, where it draws its own shadow (#2988), and none where
+/// it doesn't.
+fn room() -> crate::elevation::Reach {
+    ROOM.panel_margin()
+}
+
+/// The point `x`, `y` in the bar, in its window.
+fn at(x: f32, y: f32) -> gpui::Point<gpui::Pixels> {
+    point(px(x + room().sides), px(y + room().above))
+}
+
+/// The bar's window, as the host makes it, round a bar `width` by `height`.
+fn window(width: f32, height: f32) -> gpui::Size<gpui::Pixels> {
+    room().around(size(px(width), px(height)))
 }
 
 /// A row for a page from the profile's history, which ⇧⌦ can take out.
@@ -1067,10 +1082,11 @@ fn the_remove_button_names_itself_and_its_key(cx: &mut TestAppContext) {
     );
     let (top, bottom) = (row - ICON_BOX / 2., row + ICON_BOX / 2.);
     assert!((anchor.top - top).abs() < 1. && (anchor.bottom - bottom).abs() < 1.);
+    let shown = window(WIDTH, height(ROWS_SHOWN));
     assert_eq!(
         anchor.window,
-        (WIDTH, height(ROWS_SHOWN)),
-        "it isn't kept inside the bar"
+        (f32::from(shown.width), f32::from(shown.height)),
+        "it isn't kept inside the bar's window"
     );
 
     // Off the button onto its row, the tooltip goes.
@@ -2788,7 +2804,8 @@ fn space_puts_new_space_first(cx: &mut TestAppContext) {
 }
 
 /// The hidden words: "duplicate" finds New Window after Duplicate Current Tab, as Arc's does with
-/// a page, and "hide" Collapse Pinned Tabs and Toggle Sidebar after Hide Sidebar.
+/// a page, and "hide" Collapse Pinned Tabs and Toggle Sidebar after Hide Sidebar and Hide Top Bar,
+/// which this host lists whether the bar is on or not.
 #[gpui::test]
 fn a_hidden_word_finds_its_command(cx: &mut TestAppContext) {
     let mut bar = Bar::with_commands(cx);
@@ -2804,6 +2821,7 @@ fn a_hidden_word_finds_its_command(cx: &mut TestAppContext) {
     let expected = [
         "Hide Sidebar ⌘S".to_string(),
         search("hide"),
+        "Hide Top Bar ⇧⌘D".into(),
         "Collapse Pinned Tabs".into(),
         "Toggle Sidebar ⌘S".into(),
     ];
@@ -2882,8 +2900,7 @@ fn a_site_completing_puts_every_command_after_the_suggestions(cx: &mut TestAppCo
 #[gpui::test]
 fn the_list_scrolls_to_keep_the_selection_in_view(cx: &mut TestAppContext) {
     let mut bar = Bar::with_commands(cx);
-    bar.cx
-        .simulate_resize(size(px(WIDTH), px(height(ROWS_SHOWN))));
+    bar.cx.simulate_resize(window(WIDTH, height(ROWS_SHOWN)));
     type_and_suggest(
         &mut bar,
         "c",
@@ -2907,17 +2924,18 @@ fn the_list_scrolls_to_keep_the_selection_in_view(cx: &mut TestAppContext) {
     assert_eq!(bar.plates().0, 8);
     // A frame, for the list to scroll.
     bar.cx
-        .simulate_resize(size(px(WIDTH), px(height(ROWS_SHOWN) + 1.)));
+        .simulate_resize(window(WIDTH, height(ROWS_SHOWN) + 1.));
     bar.cx.run_until_parked();
     assert!(in_view(&mut bar, 8));
     assert!(!in_view(&mut bar, 0));
 }
 
-/// VoiceOver finds the keyboard in a text field called what its placeholder says, and the rows in
-/// a list of suggestions with the selected one marked. As the keys move the selection while the
-/// field keeps the keyboard, a polite live region says the row and where it stands.
+/// A screen reader finds the keyboard in a text field called what its placeholder says, and the
+/// rows in a list of suggestions with the selected one marked. As the keys move the selection while
+/// the field keeps the keyboard, a polite live region says the row and where it stands, as its
+/// value for VoiceOver and as its name for NVDA and Orca (#3236).
 #[gpui::test]
-fn voiceover_hears_the_selected_row_as_the_keys_move_it(cx: &mut TestAppContext) {
+fn a_screen_reader_hears_the_selected_row_as_the_keys_move_it(cx: &mut TestAppContext) {
     use gpui::accesskit::{Live, Role};
     let mut bar = Bar::new(cx);
     bar.cx.simulate_a11y_activation();
@@ -2966,8 +2984,8 @@ fn voiceover_hears_the_selected_row_as_the_keys_move_it(cx: &mut TestAppContext)
     );
     let status = &nodes(Role::Status)[0].1;
     assert_eq!(
-        (status.live(), status.value()),
-        (Some(Live::Polite), Some("do, 1 of 2"))
+        (status.live(), status.value(), status.label()),
+        (Some(Live::Polite), Some("do, 1 of 2"), Some("do, 1 of 2"))
     );
 
     bar.keys("down");
@@ -2977,10 +2995,8 @@ fn voiceover_hears_the_selected_row_as_the_keys_move_it(cx: &mut TestAppContext)
         .iter()
         .find(|(_, node)| node.role() == Role::Status)
         .unwrap();
-    assert_eq!(
-        status.1.value(),
-        Some("Docs, docs.test, Switch to Tab, 2 of 2")
-    );
+    let said = Some("Docs, docs.test, Switch to Tab, 2 of 2");
+    assert_eq!((status.1.value(), status.1.label()), (said, said));
 }
 
 /// ilo's menu's window, which shows nothing in a test.
@@ -3007,7 +3023,7 @@ fn the_inputs_menu_is_ilos_and_pastes_and_goes(cx: &mut TestAppContext) {
     let mut bar = Bar::new(cx);
     bar.type_text("something else");
     let right_click = |bar: &mut Bar| {
-        let at = point(px(200.), px(HEIGHT / 2.));
+        let at = at(200., HEIGHT / 2.);
         bar.cx
             .simulate_mouse_down(at, MouseButton::Right, Modifiers::none());
         bar.cx

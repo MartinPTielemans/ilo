@@ -33,6 +33,7 @@ use super::{
     access::{Accessible, NEW_TAB},
     drag::in_sidebar,
     return_mark::Bitmap,
+    sidebar_keys,
 };
 use crate::{
     icon_picker::{self, Subject},
@@ -40,7 +41,7 @@ use crate::{
     space_icon::has_icon,
     tokens::shell::{
         DROP_SLOT_INSET, HOST_LINE, HOST_TITLE_LINE, NAME_HIDDEN, NAME_HIDDEN_UNDER_FAVORITES,
-        SEGMENT_MARK_GAP, SPACE_PROFILE_GAP,
+        SEGMENT_MARK_GAP, SPACE_PROFILE_GAP, live_folder::COUNT_END as LIVE_COUNT_END,
     },
     tokens::text,
     tooltip::{Anchor, Tip},
@@ -293,6 +294,7 @@ impl Shell {
         };
         let ring = match row {
             Row::Tab(tab) if !ghost => self.keyed_ring(tab, PLATE_RADIUS),
+            Row::NewTab => self.keyed_ring(sidebar_keys::NEW_TAB, PLATE_RADIUS),
             _ => None,
         };
         let chosen = matches!(row, Row::Tab(tab) if self.chosen.contains(&tab)) && !selected;
@@ -388,7 +390,12 @@ impl Shell {
         selected: bool,
     ) -> gpui::Stateful<gpui::Div> {
         match row {
-            Row::NewTab => element.accessibility_id(NEW_TAB).button_named("New Tab"),
+            Row::NewTab => element
+                .accessibility_id(NEW_TAB)
+                .button_named("New Tab")
+                .when(self.keyed == Some(sidebar_keys::NEW_TAB), |row| {
+                    row.aria_active_descendant()
+                }),
             Row::Tab(folder) if self.is_folder_anywhere(folder) => {
                 let open = self.folder_open(folder);
                 element
@@ -396,6 +403,9 @@ impl Shell {
                     .accessibility_id(Self::folder_access_id(folder))
                     .aria_label(self.folder_name(folder))
                     .aria_expanded(open)
+                    .when(self.keyed == Some(folder), |row| {
+                        row.aria_active_descendant()
+                    })
                     .a11y_synthetic_children(|builder| {
                         let node = builder.parent_node();
                         node.set_role_description("folder");
@@ -409,6 +419,8 @@ impl Shell {
                 .accessibility_id(Self::tab_access_id(tab))
                 .aria_label(self.tab_label(tab))
                 .aria_selected(selected)
+                // The ring's row, read as Focus Sidebar's arrows move it (#3151).
+                .when(self.keyed == Some(tab), |row| row.aria_active_descendant())
                 .pressed_by_mouse_down(true, true),
         }
     }
@@ -537,10 +549,35 @@ impl Shell {
             None => title(&self.palette, self.folder_name(folder), false).pr(px(TITLE_END_INSET)),
         };
         let renaming = renaming.is_some();
+        let live = self.live_source(folder);
+        // Closed, a Live Folder's row ends with the review requests waiting in it.
+        let waiting = live
+            .filter(|_| !open && !renaming)
+            .map(|_| self.live_waiting(folder))
+            .filter(|&waiting| waiting > 0);
+        let label = match waiting {
+            Some(waiting) => div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .items_center()
+                .child(label.flex_1().min_w_0())
+                .child(
+                    div()
+                        .flex_none()
+                        .mr(px(LIVE_COUNT_END - TITLE_END_INSET))
+                        .text_size(px(text::SMALL))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(self.palette.text(SECONDARY))
+                        .child(waiting.to_string()),
+                ),
+            None => label,
+        };
         let emoji_icon = self.folder_icon(folder);
-        let icon = match has_icon(&emoji_icon) {
-            true => emoji(emoji_icon),
-            false => self
+        let icon = match (live, has_icon(&emoji_icon)) {
+            (Some(source), _) => self.live_glyph(folder, source),
+            (None, true) => emoji(emoji_icon),
+            (None, false) => self
                 .swaps
                 .glyph(
                     Swapped::Folder(folder),
@@ -821,7 +858,8 @@ impl Shell {
         }
     }
 
-    /// What stands for `tab`: the emoji the user gave it, else its page's favicon.
+    /// What stands for `tab`: the emoji the user gave it, else its page's favicon, or a Board's
+    /// glyph, as its page has none.
     pub(super) fn tab_icon(&self, tab: u64) -> AnyElement {
         self.tab_icon_in(&self.palette, tab)
     }
@@ -830,6 +868,15 @@ impl Shell {
     pub(super) fn tab_icon_in(&self, palette: &Palette, tab: u64) -> AnyElement {
         match self.tabs.get(&tab) {
             Some(each) if has_icon(&each.page.icon) => emoji(each.page.icon.clone()),
+            Some(each)
+                if each.favicon.is_none() && crate::boards::id_in(&each.page.url).is_some() =>
+            {
+                svg()
+                    .path("icons/presentation.svg")
+                    .size(px(FAVICON_DRAWN))
+                    .text_color(palette.text(SECONDARY))
+                    .into_any_element()
+            }
             each => favicon(palette, each.and_then(|each| each.favicon.clone())),
         }
     }
@@ -1418,8 +1465,16 @@ impl Shell {
             self.title(tab)
         };
         let bright = Some(Row::Tab(tab)) == self.selected_row() || page.developer_mode;
+        // A tab opened from a Live Folder is its item's row: its title and place, and its state's
+        // glyph, merged or closed too, while the tab stays.
+        let item = self.live_item_of(tab).filter(|_| !back).cloned();
+        let label = item.as_ref().map_or(label, |item| item.title.clone());
         let title = title(&self.palette, label, bright);
-        let title = match self.host_line(tab) {
+        let host = item
+            .as_ref()
+            .map(|item| item.place())
+            .or_else(|| self.host_line(tab));
+        let title = match host {
             Some(host) => with_host(&self.palette, title, host),
             None => title,
         };
@@ -1455,13 +1510,18 @@ impl Shell {
                 .when(!hovered, |label| label.children(self.status_dot(tab))),
         };
         let renaming = renaming.is_some();
-        let icon = match back {
-            true => svg()
+        let icon = match (back, &item) {
+            (true, _) => svg()
                 .path("icons/arrow-left.svg")
                 .size(px(FAVICON_DRAWN))
                 .text_color(self.palette.glyph(NAV))
                 .into_any_element(),
-            false => {
+            (false, Some(item)) => svg()
+                .path(item.state.glyph())
+                .size(px(FAVICON_DRAWN))
+                .text_color(self.palette.text(SECONDARY))
+                .into_any_element(),
+            (false, None) => {
                 let bitmap = self.tab_bitmap_in(&self.palette, tab);
                 self.with_return_mark(
                     &self.palette,
@@ -2139,7 +2199,7 @@ pub(super) fn capture_glyph(page: &Page) -> Option<&'static str> {
 }
 
 /// A row's title with its host under it, the two centred in the row together.
-fn with_host(palette: &Palette, title: gpui::Div, host: SharedString) -> gpui::Div {
+pub(super) fn with_host(palette: &Palette, title: gpui::Div, host: SharedString) -> gpui::Div {
     let host = div()
         .truncate()
         .text_size(px(text::SMALL))
@@ -2520,6 +2580,7 @@ mod tests {
             "Set Profile",
             "—",
             "New Folder…",
+            "Live Folders",
             "—",
             "Export as Markdown…",
             "—",

@@ -13,6 +13,7 @@ use gpui::{App, Bounds, Pixels, Point, RenderImage, SharedString, Size, WeakEnti
 
 use crate::theme::Appearance;
 
+use super::live_folders::LiveSource;
 use super::{
     Answer, BarSpace, BarTab, Browser, DownloadAction, MediaAction, MenuBar, MenuEntry, PageReply,
     ShownPageDialog, browser::WindowButton,
@@ -68,6 +69,8 @@ pub(super) struct Recorder {
     pub(super) default_browser: Cell<bool>,
     /// The system it says it runs on, the Mac unless a test says.
     pub(super) os: Cell<Option<crate::default_browser::Os>>,
+    /// The search engines and the default's keyword, as `search_engines` answers.
+    pub(super) search_engines: RefCell<(Vec<(SharedString, SharedString)>, SharedString)>,
     /// Where the pointer is in the window, as `pointer` answers.
     pub(super) pointer: Cell<Option<Point<Pixels>>>,
     /// The window over the page draws opaque, as `over_page_blends` answers.
@@ -76,6 +79,8 @@ pub(super) struct Recorder {
     /// answer.
     pub(super) safe_start: Cell<bool>,
     pub(super) ad_blocking: Cell<bool>,
+    /// The core can ask a site what's recent for a card, as `recent_reached` answers (#3074).
+    pub(super) recent_reached: Cell<bool>,
     /// The build updates itself, as `updates` answers, and how often Check for Updates ran.
     pub(super) updates: Cell<bool>,
     pub(super) checked_for_updates: Cell<usize>,
@@ -102,6 +107,10 @@ pub(super) struct Recorder {
     pub(super) option_off: Cell<bool>,
     /// The user turned link previews off.
     pub(super) previews_off: Cell<bool>,
+    /// The user turned link cards off.
+    pub(super) link_cards_off: Cell<bool>,
+    /// How many link cards it was asked for.
+    link_cards_asked: Cell<u64>,
     /// The window's own buttons as the system says it draws them, once their window shows them.
     pub(super) window_buttons: Cell<Option<super::WindowButtonGeometry>>,
     /// The Spaces it was asked to show, in order.
@@ -112,6 +121,8 @@ pub(super) struct Recorder {
     pub(super) arranged: Cell<Option<crate::boosts::Arranged>>,
     /// Whether the core refuses Arrange, as on a page that isn't http(s).
     pub(super) arrange_refused: Cell<bool>,
+    /// Whether the core refuses to make a Live Folder, as in a Space it can't fill one in.
+    pub(super) live_refused: Cell<bool>,
     /// The tab Arrange's mini bar shows for and what its press runs, while it shows.
     #[allow(clippy::type_complexity)]
     pub(super) mini_bar: RefCell<Option<(u64, crate::mini_bar::OnPress)>>,
@@ -181,8 +192,12 @@ pub(super) struct Recorder {
     pub(super) bar_open: Cell<bool>,
     /// Each New Note: the Space whose profile's service it opens, and the tab it splits with.
     pub(super) notes: RefCell<Vec<(u64, Option<u64>)>>,
+    /// The Spaces New Board made a Board in. Each opens as tab 900 and on.
+    pub(super) boards: RefCell<Vec<u64>>,
     /// How many times Site Search Settings opened.
     pub(super) site_search_settings: Cell<usize>,
+    /// Each of Settings, About, Import and Quit the app asked for, in order.
+    pub(super) app_asks: RefCell<Vec<&'static str>>,
     pub(super) clear_browsing_data: Cell<usize>,
     /// Each profile's folder, which the test makes.
     pub(super) profile_folders: RefCell<HashMap<u64, std::path::PathBuf>>,
@@ -500,6 +515,25 @@ impl Browser for Recorder {
         self.edit(format!("delete folder {folder}"));
     }
 
+    fn create_live_folder(&self, space: u64, source: LiveSource, name: &str, _: &mut App) -> u64 {
+        if self.live_refused.get() {
+            return 0;
+        }
+        let made = self.make();
+        self.edit(format!("live folder {made} {space} {source:?} {name}"));
+        made
+    }
+
+    fn end_live_folder(&self, folder: u64, _: &mut App) {
+        self.edit(format!("end live folder {folder}"));
+    }
+
+    fn fetch_live_folder(&self, folder: u64, source: LiveSource, refresh: bool, _: &mut App) {
+        self.record(format!(
+            "fetch live folder {folder} {source:?} refresh {refresh}"
+        ));
+    }
+
     fn separate(&self, tab: u64, _: &mut App) {
         self.edit(format!("separate {tab}"));
     }
@@ -557,6 +591,18 @@ impl Browser for Recorder {
 
     fn back_to_pinned_url(&self, tab: u64, _: &mut App) {
         self.record(format!("back to pinned url {tab}"))
+    }
+
+    fn navigate(&self, tab: u64, url: &str, _: &mut App) {
+        self.record(format!("navigate {tab} {url}"))
+    }
+
+    fn recent_reached(&self) -> bool {
+        self.recent_reached.get()
+    }
+
+    fn fetch_recent(&self, tab: u64, _: &mut App) {
+        self.record(format!("fetch recent {tab}"))
     }
 
     fn set_muted(&self, tab: u64, muted: bool, _: &mut App) {
@@ -692,6 +738,17 @@ impl Browser for Recorder {
 
     fn link_previews(&self) -> bool {
         !self.previews_off.get()
+    }
+
+    fn link_cards(&self) -> bool {
+        !self.link_cards_off.get()
+    }
+
+    /// Each card asked for is numbered from 1, as the core numbers them.
+    fn link_card(&self, tab: u64) -> u64 {
+        self.record(format!("link card {tab}"));
+        self.link_cards_asked.set(self.link_cards_asked.get() + 1);
+        self.link_cards_asked.get()
     }
 
     fn close_preview(&self, over: u64, _: &mut App) -> bool {
@@ -1111,6 +1168,25 @@ impl Browser for Recorder {
         self.notes.borrow_mut().push((space, beside));
     }
 
+    fn new_board(
+        &self,
+        space: u64,
+        _: String,
+        capture: Option<Vec<u8>>,
+        opened: Box<dyn FnOnce(u64, &mut App)>,
+        cx: &mut App,
+    ) {
+        let tab = 900 + self.boards.borrow().len() as u64;
+        self.boards.borrow_mut().push(space);
+        if capture.is_some() {
+            self.calls
+                .borrow_mut()
+                .push(format!("new board {space} with a capture"));
+        }
+        // As the engine's, once the folder's made: after the update New Board runs in.
+        cx.defer(move |cx| opened(tab, cx));
+    }
+
     fn open_page(&self, url: &str, _: &mut App) {
         self.opened_pages.borrow_mut().push(url.to_owned());
     }
@@ -1460,6 +1536,10 @@ impl Browser for Recorder {
 
     fn set_sidebar_right(&self, right: bool, _: &mut App) {
         self.record(format!("sidebar right {right}"))
+    }
+
+    fn set_window_buttons_right(&self, right: bool, _: &mut App) {
+        self.record(format!("window buttons right {right}"))
     }
 
     fn little_drawn(&self, _: &mut App) {
@@ -1813,11 +1893,15 @@ impl Browser for Recorder {
         }
     }
 
-    fn settings(&self, _: &mut App) {}
+    fn settings(&self, _: &mut App) {
+        self.app_asks.borrow_mut().push("settings");
+    }
 
     fn shortcuts(&self, _: &mut App) {}
 
-    fn about(&self, _: &mut App) {}
+    fn about(&self, _: &mut App) {
+        self.app_asks.borrow_mut().push("about");
+    }
 
     fn updates(&self) -> bool {
         self.updates.get()
@@ -1828,7 +1912,9 @@ impl Browser for Recorder {
             .set(self.checked_for_updates.get() + 1);
     }
 
-    fn import(&self, _: &mut App) {}
+    fn import(&self, _: &mut App) {
+        self.app_asks.borrow_mut().push("import");
+    }
 
     fn passwords(&self, space: u64, _: &mut App) {
         self.record(format!("passwords {space}"));
@@ -1874,7 +1960,9 @@ impl Browser for Recorder {
 
     fn jump_to_selection(&self, _: u64, _: &mut App) {}
 
-    fn quit(&self, _: &mut App) {}
+    fn quit(&self, _: &mut App) {
+        self.app_asks.borrow_mut().push("quit");
+    }
 
     fn new_window(&self, _: &mut App) {
         self.record("new window".into())
@@ -1894,6 +1982,14 @@ impl Browser for Recorder {
 
     fn os(&self) -> crate::default_browser::Os {
         self.os.get().unwrap_or(crate::default_browser::Os::Mac)
+    }
+
+    fn search_engines(&self, _: u64) -> (Vec<(SharedString, SharedString)>, SharedString) {
+        self.search_engines.borrow().clone()
+    }
+
+    fn set_search_engine(&self, space: u64, keyword: &str, _: &str, _: &mut App) {
+        self.record(format!("search engine {space} {keyword}"))
     }
 
     fn crash_reports(&self, _: &App) -> Option<bool> {

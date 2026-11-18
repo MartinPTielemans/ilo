@@ -5,14 +5,18 @@ use std::{
     time::{Duration, Instant},
 };
 
-use gpui::{Entity, Focusable, Modifiers, TestAppContext, VisualTestContext, point, px};
+use gpui::{
+    Entity, Focusable, Modifiers, TestAppContext, VisualTestContext,
+    accesskit::{Role, Toggled},
+    point, px,
+};
 
 use super::{Drawn, END_FADE, INTRO_END, OptIn, STEP_MOTION, STILL_END, STILL_FADE, Step};
 use crate::account::{self, State, Status};
 use crate::import::ImportEvent;
 use crate::shell::{Folders, Shell, commands::Command, recorder::Recorder};
 use crate::theme::Theme;
-use crate::theme_picker::SWATCHES;
+use crate::theme_picker::{SWATCHES, swatch_name};
 use crate::tokens::shell::onboarding::{IMPORT_HOLD, SKIP_MARGIN};
 
 /// A drawn shell showing one Space with no tab shown, as at a new profile's first launch, with the
@@ -234,16 +238,17 @@ fn the_intro_goes_on_after_a_timer_that_wakes_it_early(cx: &mut TestAppContext) 
     let (shell, cx, _) = first_window(cx);
     started(&shell, cx);
     later(&shell, cx, INTRO_END - 0.5);
-    // The timer ends, while the flow's clock has half a second to go.
-    cx.executor().advance_clock(Duration::from_secs(1));
-    cx.run_until_parked();
-    assert_eq!(step(&shell, cx), Some(Step::Intro));
-    // The half second passes, and only a timer wakes the window.
+    // The hold's timer is set for the half second left; the flow's clock falls half a second
+    // behind it, as a timer that ends early leaves it.
     shell.update(cx, |shell, _| {
         let onboarding = shell.onboarding.as_mut().expect("the flow shows");
-        onboarding.since -= Duration::from_secs_f32(0.5);
+        onboarding.since += Duration::from_secs_f32(0.5);
     });
-    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.executor().advance_clock(Duration::from_secs_f32(0.75));
+    cx.run_until_parked();
+    assert_eq!(step(&shell, cx), Some(Step::Intro));
+    // What's left passes, and only the timer the woken frame set wakes the window.
+    cx.executor().advance_clock(Duration::from_secs_f32(0.5));
     cx.run_until_parked();
     assert_eq!(step(&shell, cx), Some(Step::Import));
 }
@@ -405,6 +410,86 @@ fn the_colour_picked_is_the_first_spaces(cx: &mut TestAppContext) {
     assert!(
         calls.contains(&format!("space theme 1 {theme}")),
         "{calls:?}"
+    );
+}
+
+/// The roles and names a screen reader has of what the tree holds, once one asks.
+fn read(cx: &mut VisualTestContext) -> Vec<(Role, String, Option<Toggled>)> {
+    let tree = cx.a11y_tree().expect("GPUI built a tree");
+    let named = tree.nodes.iter().filter_map(|(_, node)| {
+        let label = node.label()?.to_string();
+        Some((node.role(), label, node.toggled()))
+    });
+    named.collect()
+}
+
+/// A screen reader reads each step as a dialog called by its title, its line said after, and
+/// each control on it by its role and name: the button, Skip, and the colours as one choice
+/// that says which is picked (#3151). The step sliding out is in the tree as nothing.
+#[gpui::test]
+fn a_screen_reader_reads_each_steps_title_and_controls(cx: &mut TestAppContext) {
+    let (shell, cx, _) = first_window(cx);
+    cx.simulate_a11y_activation();
+    started(&shell, cx);
+    let dialogs = |said: &[(Role, String, Option<Toggled>)]| {
+        let dialogs = said.iter().filter(|(role, ..)| *role == Role::Dialog);
+        dialogs.map(|(_, name, _)| name.clone()).collect::<Vec<_>>()
+    };
+    assert_eq!(dialogs(&read(cx)), [env!("APP_NAME")], "the intro");
+
+    skip_to(&shell, cx, Step::Color);
+    let said = read(cx);
+    assert_eq!(
+        dialogs(&said),
+        ["Pick a colour for your first Space."],
+        "the step it went on to only, as the one before slides out"
+    );
+    let line = cx
+        .a11y_tree()
+        .unwrap()
+        .nodes
+        .into_iter()
+        .find_map(|(_, node)| {
+            (node.role() == Role::Dialog).then(|| node.description().map(str::to_string))
+        });
+    assert!(
+        line.flatten()
+            .is_some_and(|line| line.starts_with("The window takes it.")),
+        "its line is said after its title"
+    );
+    for button in ["Continue", "Skip"] {
+        assert!(
+            said.contains(&(Role::Button, button.into(), None)),
+            "no button {button}: {said:?}"
+        );
+    }
+    assert!(
+        said.iter()
+            .any(|(role, name, _)| *role == Role::RadioGroup && name == "Colour")
+    );
+    let colours = |said: &[(Role, String, Option<Toggled>)]| {
+        let swatches = said.iter().filter(|(role, ..)| *role == Role::RadioButton);
+        swatches
+            .map(|(_, name, on)| (name.clone(), *on))
+            .collect::<Vec<_>>()
+    };
+    let unpicked = colours(&said);
+    assert_eq!(unpicked.len(), SWATCHES.len(), "a radio button a colour");
+    assert!(
+        unpicked.iter().all(|(_, on)| *on == Some(Toggled::False)),
+        "none picked yet"
+    );
+    cx.simulate_keystrokes("right");
+    let picked = colours(&read(cx));
+    assert_eq!(
+        picked[0],
+        (unpicked[0].0.clone(), Some(Toggled::True)),
+        "→ picks the first"
+    );
+    assert!(
+        picked[1..]
+            .iter()
+            .all(|(_, on)| *on == Some(Toggled::False))
     );
 }
 
@@ -683,9 +768,11 @@ fn tab_and_space_turn_each_opt_in_switch(cx: &mut TestAppContext) {
         [
             "Send a daily usage count",
             "Send crash reports",
-            "Let agents use the browser"
+            "Let agents use the browser",
+            "Continue",
+            "Skip"
         ],
-        "the stops ⇥ goes along"
+        "the stops ⇥ goes along, the step's buttons too, as a screen reader's user finds them (#3151)"
     );
     cx.update(|window, cx| window.blur(cx));
     host.take();
@@ -700,9 +787,9 @@ fn tab_and_space_turn_each_opt_in_switch(cx: &mut TestAppContext) {
         let said: Vec<String> = said.into_iter().map(str::to_string).collect();
         assert_eq!(host.take(), said, "Space on switch {at}");
     }
-    // Round to the first, and back to the last.
-    cx.simulate_keystrokes("tab");
-    cx.simulate_keystrokes("shift-tab");
+    // Round past Continue and Skip to the first, and back to the last switch.
+    cx.simulate_keystrokes("tab tab tab");
+    cx.simulate_keystrokes("shift-tab shift-tab shift-tab");
     press("space", cx);
     assert_eq!(
         offered(&shell, cx),
@@ -711,7 +798,7 @@ fn tab_and_space_turn_each_opt_in_switch(cx: &mut TestAppContext) {
             (OptIn::CrashReports, true),
             (OptIn::Agents, false),
         ],
-        "⇧⇥ from the first went back to the last"
+        "⇧⇥ from the first went back past the buttons to the last switch"
     );
 }
 
@@ -1493,4 +1580,198 @@ fn return_imports_open_tabs(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_button_imports_open_tabs(cx: &mut TestAppContext) {
     imports_open_tabs_on(Press::Click, cx);
+}
+
+/// What has the keyboard, as a screen reader reads it: its role and name. Inside a stop with an
+/// active one, as the colours have, that one.
+fn keyed(cx: &mut VisualTestContext) -> Option<(Role, String)> {
+    let tree = cx.a11y_tree().expect("GPUI built a tree");
+    let (_, node) = tree.nodes.iter().find(|(id, _)| *id == tree.focus)?;
+    Some((node.role(), node.label().unwrap_or_default().to_string()))
+}
+
+/// A key pressed and let go, as a keyboard sends it: Space and Return click on the release.
+fn press(key: &'static str, cx: &mut VisualTestContext) {
+    cx.simulate_keystrokes(key);
+    let keystroke = gpui::Keystroke::parse(key).unwrap();
+    cx.update(|window, cx| {
+        window.dispatch_event(
+            gpui::PlatformInput::KeyUp(gpui::KeyUpEvent { keystroke }),
+            cx,
+        );
+    });
+    cx.run_until_parked();
+}
+
+/// The keyboard rests on each step as it comes, so a screen reader, which follows it, reads the
+/// step by its title. ⇥ goes along the step's stops, each read by its name, the colours' saying
+/// the one picked as the arrows move, and ↩ on Skip is Skip's press alone (#3151).
+#[gpui::test]
+fn a_screen_reader_follows_the_keyboard_through_each_step(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    cx.simulate_a11y_activation();
+    started(&shell, cx);
+    let dialog = |name: &str| Some((Role::Dialog, name.to_string()));
+    assert_eq!(keyed(cx), dialog(env!("APP_NAME")), "the intro");
+
+    skip_to(&shell, cx, Step::DefaultBrowser);
+    cx.simulate_keystrokes("tab tab");
+    assert_eq!(keyed(cx), Some((Role::Button, "Skip".into())));
+    press("enter", cx);
+    assert_eq!(
+        step(&shell, cx),
+        Some(Step::Color),
+        "↩ on Skip skipped one step"
+    );
+    assert_eq!(
+        keyed(cx),
+        dialog("Pick a colour for your first Space."),
+        "the step it went on to has the keyboard"
+    );
+    cx.simulate_keystrokes("tab");
+    assert_eq!(keyed(cx), Some((Role::RadioGroup, "Colour".into())));
+    cx.simulate_keystrokes("right");
+    let first = swatch_name(SWATCHES[0]).to_string();
+    assert_eq!(
+        keyed(cx),
+        Some((Role::RadioButton, first)),
+        "→ picks the first, which it reads"
+    );
+    cx.simulate_keystrokes("tab");
+    assert_eq!(keyed(cx), Some((Role::Button, "Continue".into())));
+    cx.simulate_keystrokes("tab");
+    assert_eq!(keyed(cx), Some((Role::Button, "Skip".into())));
+    host.take();
+    press("enter", cx);
+    let ending = shell.read_with(cx, |shell, _| shell.onboarding.as_ref().unwrap().ending);
+    assert!(ending.is_some(), "↩ on Skip left the last step");
+    let colored = host
+        .take()
+        .iter()
+        .any(|call| call.starts_with("space color 1 "));
+    assert!(!colored, "as Skip, keeping the Space's colour");
+}
+
+/// A host offering three engines, DuckDuckGo the default and Google last, as the core lists them.
+fn with_engines(host: &Recorder) {
+    let engines = [
+        ("duckduckgo.com", "DuckDuckGo"),
+        ("bing.com", "Bing"),
+        ("google.com", "Google"),
+    ];
+    *host.search_engines.borrow_mut() = (
+        engines
+            .iter()
+            .map(|&(keyword, name)| (keyword.into(), name.into()))
+            .collect(),
+        "duckduckgo.com".into(),
+    );
+}
+
+/// The engine picked at the search engine step, if one is.
+fn engine(shell: &Entity<Shell>, cx: &VisualTestContext) -> Option<usize> {
+    shell.read_with(cx, |shell, _| {
+        shell.onboarding.as_ref().and_then(|o| o.engine)
+    })
+}
+
+/// The step comes after Make Default with the default picked, and the arrows move the pick. Nothing
+/// is set until Continue: Skip after a moved pick leaves the profile's engine as it was, Continue
+/// on the default sets none either, as it stays the core's fallback, and Continue on another
+/// sets that one.
+#[gpui::test]
+fn the_search_engine_step_sets_nothing_until_continue(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    with_engines(&host);
+    let set = |calls: Vec<String>| {
+        (calls.into_iter())
+            .filter(|call| call.starts_with("search engine "))
+            .collect::<Vec<_>>()
+    };
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::DefaultBrowser);
+    cx.simulate_keystrokes("escape");
+    assert_eq!(step(&shell, cx), Some(Step::SearchEngine));
+    assert_eq!(engine(&shell, cx), Some(0), "the default is picked");
+    cx.simulate_keystrokes("down down down");
+    assert_eq!(engine(&shell, cx), Some(2), "↓ stops at the last");
+    cx.simulate_keystrokes("up");
+    assert_eq!(engine(&shell, cx), Some(1));
+    host.take();
+    cx.simulate_keystrokes("escape");
+    assert_eq!(step(&shell, cx), Some(Step::Color));
+    assert_eq!(set(host.take()), Vec::<String>::new(), "Skip sets nothing");
+
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::SearchEngine);
+    host.take();
+    cx.simulate_keystrokes("enter");
+    assert_eq!(step(&shell, cx), Some(Step::Color));
+    assert_eq!(
+        set(host.take()),
+        Vec::<String>::new(),
+        "the default stays unset"
+    );
+
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::SearchEngine);
+    cx.simulate_keystrokes("down down");
+    host.take();
+    cx.simulate_keystrokes("enter");
+    assert_eq!(set(host.take()), ["search engine 1 google.com"]);
+}
+
+/// With no engines to offer, as while a policy picks the default, the step is left out.
+#[gpui::test]
+fn no_engines_leaves_the_search_engine_step_out(cx: &mut TestAppContext) {
+    let (shell, cx, _) = first_window(cx);
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::DefaultBrowser);
+    cx.simulate_keystrokes("escape");
+    assert_eq!(step(&shell, cx), Some(Step::Color));
+}
+
+/// A new profile's engines load after the flow starts: the step is planned, and its list is the
+/// one the core has when the step comes.
+#[gpui::test]
+fn engines_loaded_after_the_start_come_with_their_step(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    started(&shell, cx);
+    assert!(steps(&shell, cx).contains(&Step::SearchEngine));
+    with_engines(&host);
+    skip_to(&shell, cx, Step::SearchEngine);
+    assert_eq!(step(&shell, cx), Some(Step::SearchEngine));
+    assert_eq!(engine(&shell, cx), Some(0), "the default is picked");
+}
+
+/// A screen reader has the engines as one choice called Search engine, a radio button each by its
+/// name, the one picked checked.
+#[gpui::test]
+fn a_screen_reader_reads_the_engines_as_one_choice(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    with_engines(&host);
+    cx.simulate_a11y_activation();
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::SearchEngine);
+    let said = read(cx);
+    assert!(
+        said.contains(&(Role::Dialog, "Pick a search engine.".into(), None)),
+        "{said:?}"
+    );
+    assert!(
+        said.iter()
+            .any(|(role, name, _)| *role == Role::RadioGroup && name == "Search engine")
+    );
+    let engines: Vec<_> = (said.iter())
+        .filter(|(role, ..)| *role == Role::RadioButton)
+        .map(|(_, name, on)| (name.as_str(), *on))
+        .collect();
+    assert_eq!(
+        engines,
+        [
+            ("DuckDuckGo", Some(Toggled::True)),
+            ("Bing", Some(Toggled::False)),
+            ("Google", Some(Toggled::False)),
+        ]
+    );
 }

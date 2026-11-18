@@ -376,6 +376,16 @@ fn clamped(origin: Point<Pixels>, size: (f32, f32), area: Bounds<Pixels>) -> Poi
     point(px(x), px(y))
 }
 
+/// How tall the menu of `entries` is, without its submenus, as `lay_out` stacks its rows and lines,
+/// so a control can open it with its foot where it wants.
+pub(crate) fn height(entries: &[MenuEntry]) -> f32 {
+    let top = (entries.iter()).filter(|entry| entry.parent.is_none() && !entry.alternate);
+    let rows: f32 = top
+        .map(|entry| if entry.title.is_empty() { LINE } else { ROW })
+        .sum();
+    PADDING + rows + PADDING
+}
+
 /// Lays `entries` out as a menu with its top left at `at`, flipping up or left where `area` has
 /// no room below or to the right, as AppKit's does, with each submenu beside the row that opens
 /// it, flipping left and sliding up to fit.
@@ -537,7 +547,12 @@ pub(crate) struct Tracking {
 }
 
 /// Whether `at` is inside the triangle `a`, `b`, `c`.
-fn in_triangle(at: Point<Pixels>, a: Point<Pixels>, b: Point<Pixels>, c: Point<Pixels>) -> bool {
+pub(crate) fn in_triangle(
+    at: Point<Pixels>,
+    a: Point<Pixels>,
+    b: Point<Pixels>,
+    c: Point<Pixels>,
+) -> bool {
     let cross = |p: Point<Pixels>, q: Point<Pixels>, r: Point<Pixels>| {
         f32::from(q.x - p.x) * f32::from(r.y - p.y) - f32::from(q.y - p.y) * f32::from(r.x - p.x)
     };

@@ -354,6 +354,27 @@ jobs:
           sudo killall tccd || true
           launchctl kickstart -k "gui/$(id -u)/com.apple.tccd"
           killall replayd || true
+          # A runner has refused a job's every capture though granted, ScreenCaptureKit's -3801,
+          # which failed its first check as "no window to capture" (#2963). One listing, as
+          # tools/window-screenshot.sh starts with, says so here, as the runner's fault.
+          cat > "$RUNNER_TEMP/list-windows.swift" <<'SWIFT'
+          import ScreenCaptureKit
+          do {
+            _ = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
+            print("ScreenCaptureKit lists the windows on screen")
+          } catch {
+            print(error)
+            exit((error as NSError).code == -3801 ? 3 : 1)
+          }
+          SWIFT
+          refused=0
+          said=$(swift "$RUNNER_TEMP/list-windows.swift" 2>&1) || refused=$?
+          echo "$said"
+          if [ "$refused" = 3 ]; then
+            echo "::error::the runner refused screen capture after its grants (ScreenCaptureKit's -3801), a runner fault, not a check's (#2963)"
+            exit 1
+          fi
+          [ "$refused" = 0 ] || echo "::warning::ScreenCaptureKit's listing failed, but not with -3801: $said"
 
       # Each run alone, so one failing doesn't hide the rest, and each keeps its own build/check.
       # Each of the job's share of check.sh's runs gets a line in its results, done or skipped, which

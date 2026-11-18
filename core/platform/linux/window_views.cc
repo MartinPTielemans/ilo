@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/callback_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
@@ -27,6 +28,7 @@
 #include "browser_core/platform/linux/wayland.h"
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
+#include "chrome/browser/lifetime/termination_notification.h"
 #include "chrome/browser/picture_in_picture/auto_picture_in_picture_tab_helper.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
 #include "chrome/browser/ui/views/native_widget_factory.h"
@@ -335,6 +337,38 @@ std::vector<gfx::Rect> Without(const gfx::Rect& whole, const std::vector<gfx::Re
 x11::Rectangle XRectangle(const gfx::Rect& rect) {
   return {static_cast<int16_t>(rect.x()), static_cast<int16_t>(rect.y()),
           static_cast<uint16_t>(rect.width()), static_cast<uint16_t>(rect.height())};
+}
+
+// bc_app_window_text_input's input method: a widget never shown, whose input method composes for
+// the fields of the app's own windows and has no other client, so no page, and no tab an agent
+// drives, can take what the user composes there. Chromium's text input gives its window the
+// text-input focus for any of their surfaces, without making it active.
+struct AppWindowComposer {
+  std::unique_ptr<views::Widget> widget;
+  std::unique_ptr<UITextInput> input;
+  // Each window's surface, only compared, never used, and the one whose field has the focus.
+  std::vector<uintptr_t> surfaces;
+  uintptr_t focused = 0;
+  // Quitting ends them before the widget's connection goes.
+  base::CallbackListSubscription terminating;
+};
+
+std::unique_ptr<AppWindowComposer>& Composer() {
+  static base::NoDestructor<std::unique_ptr<AppWindowComposer>> composer;
+  return *composer;
+}
+
+void EndAppWindowTextInputs() {
+  std::unique_ptr<AppWindowComposer> composer = std::move(Composer());
+  if (!composer) {
+    return;
+  }
+  composer->input->SetCaret(std::nullopt);
+  for (uintptr_t surface : composer->surfaces) {
+    ComposeThroughWindow(reinterpret_cast<void*>(surface), nullptr);
+  }
+  composer->input.reset();
+  composer->widget.reset();
 }
 
 class WindowViews : public views::WidgetObserver,
@@ -726,6 +760,10 @@ class WindowViews : public views::WidgetObserver,
     if (takes) {
       return;
     }
+    // A tab's dialog that took aura's focus while the overlay had the keyboard (FocusDialogView).
+    if (OnWayland()) {
+      PostFocusDialogView();
+    }
     const x11::Window focus = OnWayland() ? x11::Window::None : InputFocus();
     if (ui_ != x11::Window::None && !ui_has_keyboard_ && IsWithin(focus, ui_)) {
       UITakesKeyboard();
@@ -886,9 +924,26 @@ class WindowViews : public views::WidgetObserver,
   // and X11 it never has it (#1961, #2060). The window has it back with an xdg-activation token,
   // once each time the Mini Player shows: a click in it later gives it the keys. Posted, as the
   // compositor tells the Mini Player it has the keyboard after telling the window it lost it.
+  //
+  // A link preview's page has the keyboard through the focus client, which views never sees, so
+  // as the window lost activation views stored the page under it, and focused that once the
+  // window was active again, sending the preview's keys to it (#2858). The preview's page has the
+  // keyboard back instead, as the Mac's window makes the preview's key again. Each side asks that
+  // the preview still shows: the note outlives a preview that closed with the keyboard, and the
+  // page under it would lose its keys to a cleared view with no preview to take them.
+  //
   // A bubble of Chromium's taking the keys under Wayland deactivates the window too, and its going
   // activates it again (UILendsToBubble).
   void OnWidgetActivationChanged(views::Widget*, bool active) override {
+    const bool preview = preview_had_keyboard_ && PreviewShows();
+    if (!active && preview) {
+      if (views::FocusManager* focus = widget_->GetFocusManager()) {
+        focus->SetStoredFocusView(nullptr);
+      }
+    }
+    if (active && preview) {
+      PreviewTakesBackKeyboard();
+    }
     if (!OnWayland()) {
       if (active) {
         PostFocusDialog();
@@ -896,7 +951,7 @@ class WindowViews : public views::WidgetObserver,
       return;
     }
     if (active) {
-      if (std::exchange(ui_lent_to_bubble_, false) && !ui_has_keyboard_) {
+      if (std::exchange(ui_lent_to_bubble_, false) && !ui_has_keyboard_ && !preview) {
         UITakesKeyboard();
       }
       return;
@@ -942,8 +997,9 @@ class WindowViews : public views::WidgetObserver,
 
   void FocusDialog() {
     views::FocusManager* focus = widget_->GetFocusManager();
+    // A link preview's page that has the keyboard keeps it: views never sees it focused.
     if (!focus || focus->GetFocusedView() || ui_has_keyboard_ || overlay_has_keyboard_ ||
-        !widget_->IsActive()) {
+        (preview_had_keyboard_ && PreviewShows()) || !widget_->IsActive()) {
       return;
     }
     // Chrome shows the dialog of the selected tab alone.
@@ -956,6 +1012,19 @@ class WindowViews : public views::WidgetObserver,
         first->RequestFocus();
       }
       return;
+    }
+  }
+
+  bool PreviewShows() const {
+    return preview_.page && preview_.holder && preview_.holder->IsVisible();
+  }
+
+  // The link preview's page has the keyboard again, if nothing else took it.
+  void PreviewTakesBackKeyboard() {
+    aura::client::FocusClient* client = aura::client::GetFocusClient(content());
+    aura::Window* focused = client ? client->GetFocusedWindow() : nullptr;
+    if (client && !ui_has_keyboard_ && (!focused || focused == content())) {
+      client->FocusWindow(preview_.page);
     }
   }
 
@@ -990,6 +1059,10 @@ class WindowViews : public views::WidgetObserver,
   }
 
   void OnWidgetDestroying(views::Widget*) override {
+    // The views outlive the widget (AllWindowViews), so what they posted for it goes with it: on
+    // X11 a window closing is activated and focused as it goes, and the focus it posted ran on its
+    // freed focus manager (#3088).
+    weak_factory_.InvalidateWeakPtrs();
     ui_text_input_.SetKeyboard(false);
     x11_observation_.Reset();
     children_events_ = x11::ScopedEventSelector();
@@ -1042,6 +1115,14 @@ class WindowViews : public views::WidgetObserver,
   void OnWindowFocused(aura::Window* gained_focus, aura::Window* lost_focus) override {
     if (gained_focus && !OnWayland()) {
       PostFocusDialog();
+    } else if (gained_focus) {
+      PostFocusDialogView();
+    }
+    // The focus goes to none as the window loses activation, and to the window's own as it's active
+    // again, before the widget hears it (DesktopNativeWidgetAura::HandleActivationChanged), so
+    // neither says the preview's page let it go.
+    if (gained_focus && gained_focus != content()) {
+      preview_had_keyboard_ = preview_.holder && preview_.holder->Contains(gained_focus);
     }
     if (gained_focus && gained_focus != content()) {
       // Not the bubble's loan: the window focuses its page again as it's active once more, before
@@ -1063,6 +1144,36 @@ class WindowViews : public views::WidgetObserver,
       base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
           FROM_HERE,
           base::BindOnce(&WindowViews::PageTakesBackKeyboard, weak_factory_.GetWeakPtr()));
+    }
+  }
+
+  // Under Wayland a tab's dialog shown again with its tab, as the tab in front of it closes, has
+  // aura's focus with none of its views focused: Chrome focuses the view it stored as the tab went
+  // behind (WebContents::RestoreFocus), which the core doesn't, and views gives a key only to the
+  // focused view, so every key was lost, ilo's shortcuts too (#3167). Its first view takes the
+  // focus. On X11 FocusDialog does, as it does after every focus change with no view focused, and
+  // it alone has #2926's case, with aura's focus on the window or the page beside the dialog: this
+  // looks only at a dialog that has aura's focus. Posted, not while the focus client tells of the
+  // change, and not while the UI or an overlay has the keyboard: the first view may be a field,
+  // which would take the input method from the overlay's. The overlay letting go asks again.
+  void PostFocusDialogView() {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&WindowViews::FocusDialogView, weak_factory_.GetWeakPtr()));
+  }
+
+  void FocusDialogView() {
+    views::FocusManager* focus = widget_->GetFocusManager();
+    aura::client::FocusClient* client = aura::client::GetFocusClient(content());
+    aura::Window* focused = client ? client->GetFocusedWindow() : nullptr;
+    views::Widget* dialog = focused ? views::Widget::GetWidgetForNativeView(focused) : nullptr;
+    if (!focus || focus->GetFocusedView() || ui_has_keyboard_ || overlay_has_keyboard_ ||
+        !dialog || dialog == widget_.get() || dialog->GetTopLevelWidget() != widget_.get() ||
+        dialog->IsClosed() || !dialog->IsVisible() || !dialog->widget_delegate() ||
+        dialog->widget_delegate()->GetModalType() != ui::mojom::ModalType::kChild) {
+      return;
+    }
+    if (views::View* first = dialog->widget_delegate()->GetInitiallyFocusedView()) {
+      first->RequestFocus();
     }
   }
 
@@ -1422,6 +1533,9 @@ class WindowViews : public views::WidgetObserver,
   // A window of Chromium's own has the keyboard the UI or a page had, and gives it back as it goes.
   bool ui_lent_ = false;
   aura::WindowTracker page_lent_;
+  // Whether the link preview's page had the keyboard last, which it has back as the window is
+  // active again (OnWidgetActivationChanged).
+  bool preview_had_keyboard_ = false;
   // Under Wayland, a bubble of Chromium's has the keyboard the UI had (UILendsToBubble).
   bool ui_lent_to_bubble_ = false;
   // On Wayland, the page that gave its focus to the window while an overlay has the keyboard.
@@ -1717,6 +1831,12 @@ void PassPointerThrough(views::Widget* widget) {
   }
 }
 
+base::ScopedClosureRunner WatchOutlineMoves(views::Widget*,
+                                            base::RepeatingCallback<void(const gfx::Point&)>) {
+  // The window manager or compositor moves a window, and the core runs no move loop of its own.
+  return base::ScopedClosureRunner();
+}
+
 bool PageDialogsInOwnWindow() {
   // Chrome's default, which hasn't been looked at here.
   return false;
@@ -1931,6 +2051,74 @@ void SetUITextInput(views::Widget* widget, std::optional<gfx::Rect> caret) {
   if (WindowViews* views = ViewsOf(widget)) {
     views->ui_text_input().SetCaret(caret);
     views->UITextInputChanged();
+  }
+}
+
+void HoldPageComposition(views::Widget* widget, bool hold, bool claimed) {
+  if (!OnWayland()) {
+    return;
+  }
+  if (WindowViews* views = ViewsOf(widget)) {
+    views->ui_text_input().HoldForPage(hold, claimed);
+  }
+}
+
+void SetAppWindowTextInput(void* surface, std::optional<gfx::Rect> caret) {
+  // On X11 a window of the app's own has an input method of its own.
+  if (!OnWayland()) {
+    return;
+  }
+  std::unique_ptr<AppWindowComposer>& composer = Composer();
+  if (!composer) {
+    composer = std::make_unique<AppWindowComposer>();
+    composer->widget = std::make_unique<views::Widget>();
+    views::Widget::InitParams params(views::Widget::InitParams::CLIENT_OWNS_WIDGET,
+                                     views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
+    params.bounds = gfx::Rect(1, 1);
+    // A window of Chromium's own with its own input method: Chromium makes its surface a toplevel
+    // only to show it, which nothing does.
+    params.native_widget = new views::DesktopNativeWidgetAura(composer->widget.get());
+    composer->widget->Init(std::move(params));
+    composer->input = std::make_unique<UITextInput>(composer->widget.get(), /*app_window=*/true);
+    // It composes only while the compositor gives one of the surfaces the keys, which Chromium's
+    // text input follows.
+    composer->input->SetKeyboard(true);
+    composer->terminating =
+        browser_shutdown::AddAppTerminatingCallback(base::BindOnce(&EndAppWindowTextInputs));
+  }
+  const uintptr_t key = reinterpret_cast<uintptr_t>(surface);
+  if (!std::ranges::contains(composer->surfaces, key)) {
+    composer->surfaces.push_back(key);
+    ComposeThroughWindow(surface, composer->widget.get());
+  }
+  if (caret) {
+    if (composer->focused != key) {
+      // Another window's field had the focus: the app keeps what it showed composed, and the input
+      // method starts afresh here.
+      composer->input->SetCaret(std::nullopt);
+      composer->focused = key;
+    }
+    composer->input->SetCaret(caret);
+  } else if (composer->focused == key) {
+    composer->focused = 0;
+    composer->input->SetCaret(std::nullopt);
+  }
+}
+
+void EndAppWindowTextInput(void* surface) {
+  std::unique_ptr<AppWindowComposer>& composer = Composer();
+  const uintptr_t key = reinterpret_cast<uintptr_t>(surface);
+  if (!composer || !std::ranges::contains(composer->surfaces, key)) {
+    return;
+  }
+  if (composer->focused == key) {
+    composer->focused = 0;
+    composer->input->SetCaret(std::nullopt);
+  }
+  ComposeThroughWindow(surface, nullptr);
+  std::erase(composer->surfaces, key);
+  if (composer->surfaces.empty()) {
+    EndAppWindowTextInputs();
   }
 }
 

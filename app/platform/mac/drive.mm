@@ -33,8 +33,8 @@
 //                                         repeat the keyboard sends while it's held, to the key
 //                                         window then, as a held key's repeats go
 //   keyup <key>                           <key> let go
-//   flags [cmd] [shift] [alt] [ctrl]      the modifiers held from now, as a modifier key going
-//                                         down or up; key holds them only for its own key
+//   flags [cmd] [shift] [alt] [ctrl]      the modifiers held from now, as each changed one's own
+//                                         key going down or up; key holds them only for its own key
 //   type <text>                           lowercase letters, dots and spaces
 //   insert <text>                         commits <text>, any characters, to the key window's
 //                                         text input, as the character palette does for an emoji.
@@ -192,6 +192,9 @@
 //   agentopen <agent> <url>               the agent opens <url> in a tab of its Space, as its
 //                                         MCP tool does, logging "browser: agent <agent> opened
 //                                         <tab>"
+//   agentnavigate <agent> <tab> <url>     the agent loads <url> in its tab, as its MCP tool's
+//                                         navigate does, logging "browser: agent <agent>
+//                                         navigated <tab>: <0|1>", whether the core took it
 //   agentmayact <agent> <tab> [action]    logs whether the agent may do the action, "navigate" if none,
 //                                         to the tab, as "browser: agent <agent> may act on
 //                                         <tab>: <0|1>", and if not "browser: agent <agent>
@@ -728,6 +731,11 @@ bool Key(NSWindow* window,
   // the menu's key equivalents by it.
   if ((flags & NSEventModifierFlagShift) && key.size() == 1 && key[0] >= 'a' && key[0] <= 'z') {
     characters = characters.uppercaseString;
+  }
+  // And with a digit as what ⇧ makes of it on the US layout, so ⌃⇧1 isn't the menu's ⌃1 (#3214).
+  if ((flags & NSEventModifierFlagShift) && key.size() == 1 && key[0] >= '0' && key[0] <= '9') {
+    static constexpr char kShifted[] = ")!@#$%^&*(";
+    characters = [NSString stringWithFormat:@"%c", kShifted[key[0] - '0']];
   }
   // The keyboard marks arrow keys as function and keypad keys, and the keys above them as function
   // keys.
@@ -2016,6 +2024,18 @@ bool Run(const std::string& line, void (^done)(void)) {
     done();
     return true;
   }
+  if (action == "agentnavigate") {
+    std::string agent, url;
+    bc_id tab;
+    if (!(words >> agent >> tab >> url)) {
+      return false;
+    }
+    const bool went = bc_agent_navigate(agent.c_str(), tab, url.c_str());
+    fprintf(stderr, "browser: agent %s navigated %llu: %d\n", agent.c_str(),
+            (unsigned long long)tab, went ? 1 : 0);
+    done();
+    return true;
+  }
   if (action == "agentmayact") {
     std::string agent;
     bc_id tab;
@@ -2433,18 +2453,40 @@ bool Run(const std::string& line, void (^done)(void)) {
     }
     NSEventModifierFlags flags = Modifiers(words);
     if (action == "flags") {
-      // As the left ⌃ key would report it.
-      [NSApp postEvent:[NSEvent keyEventWithType:NSEventTypeFlagsChanged
-                                        location:NSZeroPoint
-                                   modifierFlags:flags
-                                       timestamp:NSProcessInfo.processInfo.systemUptime
-                                    windowNumber:key_window.windowNumber
-                                         context:nil
-                                      characters:@""
-                     charactersIgnoringModifiers:@""
-                                       isARepeat:NO
-                                         keyCode:59]
-               atStart:NO];
+      // Each modifier that changed as its left key reports it, one at a time as a hand's: Chromium
+      // names a page's key by its code, so ⇧ alone reaches a page as Shift (#3097). With none
+      // changed, one event still goes, as the left ⌃'s, which runs send to read the keyboard's
+      // place.
+      static NSEventModifierFlags held = 0;
+      // Carbon's kVK_Control, kVK_Shift, kVK_Option and kVK_Command.
+      constexpr unsigned short kControl = 59;
+      const std::pair<NSEventModifierFlags, unsigned short> keys[] = {
+          {NSEventModifierFlagControl, kControl},
+          {NSEventModifierFlagShift, 56},
+          {NSEventModifierFlagOption, 58},
+          {NSEventModifierFlagCommand, 55}};
+      auto post = [&](unsigned short code) {
+        [NSApp postEvent:[NSEvent keyEventWithType:NSEventTypeFlagsChanged
+                                          location:NSZeroPoint
+                                     modifierFlags:held
+                                         timestamp:NSProcessInfo.processInfo.systemUptime
+                                      windowNumber:key_window.windowNumber
+                                           context:nil
+                                        characters:@""
+                       charactersIgnoringModifiers:@""
+                                         isARepeat:NO
+                                           keyCode:code]
+                 atStart:NO];
+      };
+      if (held == flags) {
+        post(kControl);
+      }
+      for (const auto& [modifier, code] : keys) {
+        if ((held ^ flags) & modifier) {
+          held ^= modifier;
+          post(code);
+        }
+      }
     } else if (!Key(key_window, key, flags)) {
       return false;
     }

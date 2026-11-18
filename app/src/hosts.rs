@@ -185,6 +185,13 @@ impl site_controls::Host for SiteControlsHost {
         });
     }
 
+    fn set_recent(&self, tab: u64, on: bool, cx: &mut App) {
+        let shell = tab_window(tab, cx).and_then(|window| window.shell.upgrade());
+        if let Some(site) = shell.and_then(|shell| shell.read(cx).recent_site(tab)) {
+            crate::settings::set_recent_site(site, on, cx);
+        }
+    }
+
     fn turn_on_arrangement(&self, tab: u64) {
         update_app_later(move |cx| {
             if let Some(shell) = tab_window(tab, cx).and_then(|window| window.shell.upgrade()) {
@@ -739,6 +746,8 @@ impl link_target::Host for LinkTargetHost {
         let Some(view) = ui_view_of(window) else {
             return;
         };
+        // check.sh reads this line: where the window is, the card's room above the plate included.
+        log!("browser: link target window at {left} {top}");
         let fade = link_target::FADE_IN.as_secs_f64();
         unsafe { platform::host_show_link_target(view, left.into(), top.into(), fade) };
     }
@@ -747,8 +756,29 @@ impl link_target::Host for LinkTargetHost {
         unsafe { platform::host_hide_link_target(link_target::FADE_OUT.as_secs_f64()) };
     }
 
+    fn outline(&self, window: &mut Window, frame: Bounds<Pixels>, radius: f32) {
+        let view = crate::browser_windows::ns_view(window);
+        let (left, top) = (
+            f32::from(frame.left()).into(),
+            f32::from(frame.top()).into(),
+        );
+        let (width, height) = (
+            f32::from(frame.size.width).into(),
+            f32::from(frame.size.height).into(),
+        );
+        unsafe { platform::host_outline_overlay(view, left, top, width, height, radius.into()) };
+    }
+
     fn pressed(&self) -> bool {
         unsafe { platform::host_mouse_down() }
+    }
+
+    fn card_picture(&self, card: u64, url: &str, page: &str) -> bool {
+        crate::link_cards::picture(card, url, page)
+    }
+
+    fn card_cancel(&self, card: u64) {
+        crate::link_cards::cancel(card)
     }
 }
 

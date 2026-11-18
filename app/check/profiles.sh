@@ -134,7 +134,7 @@ name_point="100 112"
 tiled_name="100 159"
 post rightclick $name_point
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, Set Profile › Default, \
-Set Profile › Profile 2 (checked), Set Profile › New Profile, New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+Set Profile › Profile 2 (checked), Set Profile › New Profile, New Folder…, Live Folders › GitHub Pull Requests, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "the empty Space's menu didn't offer its profiles"
 ../tools/window-screenshot.sh "$pid" "$out/profile-menu.png" || fail "no window to capture"
 send choose Default
@@ -143,7 +143,7 @@ expect "^browser: favorites $a\$" "the first profile's favorite didn't show in i
 post rightclick $tiled_name
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, Set Profile › Default (checked), \
 Set Profile › Profile 2, Set Profile › New Profile, Set Profile › Delete “Profile 2”, \
-New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+New Folder…, Live Folders › GitHub Pull Requests, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "the menu didn't offer the unused profile back"
 send choose Profile 2
 expect "^browser: profiled space $second $work\$" "Profile 2 didn't take the Space again"
@@ -187,7 +187,7 @@ fi
 post rightclick $name_point
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, Set Profile › Default (disabled), \
 Set Profile › Profile 2 (checked), Set Profile › New Profile (disabled), \
-New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+New Folder…, Live Folders › GitHub Pull Requests, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "the menu of a Space with a tab offered another profile"
 own=$((step + 1))
 send choose Profile 2
@@ -490,8 +490,10 @@ expect "^browser: download folder of profile $work $(printf '%s\n' "$work_downlo
   "Change… didn't set the second profile's download folder: $(grep '^browser: download folder' "$log" | tail -1)"
 # Each profile picks its search engine and archive time, the first keeping its own.
 post clickkey $(drawn "search engine $work")
-expect '^browser: menu shown .*DuckDuckGo (checked)' \
-  "the second profile's Search engine didn't show the engines, with DuckDuckGo chosen"
+# DuckDuckGo is marked as the engine a profile searches with until one is picked.
+expect '^browser: menu shown .*DuckDuckGo (default) (checked)' \
+  "the second profile's Search engine didn't show the engines, with DuckDuckGo chosen and marked the default"
+../tools/window-screenshot.sh "$pid" "$out/settings-search-engines.png" || fail "no window to capture"
 send choose Microsoft Bing
 expect "^browser: profile $work searches with Microsoft Bing\$" "choosing Bing didn't set the second profile's"
 send clickkey $(drawn "toolbar Tabs & Sidebar")
@@ -672,7 +674,7 @@ post rightclick $tiled_name
 # The Space is now the lone one, and unnamed, so its menu also offers to hide its name row.
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, Hide Space Header, \
 Set Profile › Default (checked), Set Profile › personal, Set Profile › New Profile, Set Profile › Delete “personal”, \
-New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space (disabled)")\$" \
+New Folder…, Live Folders › GitHub Pull Requests, ${into}Export as Markdown…, Manage Spaces…, Delete Space (disabled)")\$" \
   "the menu didn't offer to delete the unused profile by the name Settings gave it"
 post choose Delete “personal”
 expect '^browser: dialog shown Delete “personal”?$' "Delete didn't ask before deleting the profile"
@@ -712,7 +714,7 @@ send layout
 height=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
   sed 's/^browser: layout content [0-9]*x\([0-9]*\),.*/\1/')
 post click 204 $((height - 25))
-expect "^browser: menu shown $(cased 'New Space…, New Folder…, New Split View (disabled), New Note'), " \
+expect "^browser: menu shown $(cased 'New Space…, New Folder…, New Split View (disabled), New Board, New Note'), " \
   "the footer's + didn't offer New Note"
 send choose "$(cased 'New Note')"
 expect '^browser: new note https://notion\.new$' "the footer's New Note didn't open a new Notion page"

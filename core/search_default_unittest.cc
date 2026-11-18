@@ -11,9 +11,11 @@
 #include "components/search_engines/search_engines_pref_names.h"
 #include "components/search_engines/search_engines_test_environment.h"
 #include "components/search_engines/search_engines_test_util.h"
+#include "components/search_engines/template_url.h"
 #include "components/search_engines/template_url_data.h"
 #include "components/search_engines/template_url_data_util.h"
 #include "components/search_engines/template_url_prepopulate_data.h"
+#include "components/search_engines/template_url_service.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "components/variations/scoped_variations_ids_provider.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -37,6 +39,14 @@ class SearchDefaultTest : public testing::Test {
 
   sync_preferences::TestingPrefServiceSyncable* prefs() { return &environment_.pref_service(); }
   DefaultSearchManager* manager() { return manager_.get(); }
+
+  // The profile's engines, loaded.
+  TemplateURLService* engines() {
+    TemplateURLService* engines = environment_.template_url_service();
+    engines->Load();
+    return engines;
+  }
+  const TemplateURL* Google() { return engines()->GetTemplateURLForKeyword(u"google.com"); }
 
   // The default's keyword and where it comes from.
   std::string Default(DefaultSearchManager::Source* source) {
@@ -138,6 +148,66 @@ TEST_F(SearchDefaultTest, LaterChoiceOfDuckDuckGoIsKept) {
   DefaultSearchManager::Source source;
   EXPECT_EQ(Default(&source), "duckduckgo.com");
   EXPECT_EQ(source, DefaultSearchManager::FROM_USER);
+}
+
+TEST_F(SearchDefaultTest, GoogleSearchesWithNothingElse) {
+  const TemplateURLData google = GoogleChoice();
+  EXPECT_EQ(google.url(), "https://www.google.com/search?q={searchTerms}");
+  EXPECT_TRUE(google.suggestions_url.empty());
+  EXPECT_TRUE(google.favicon_url.is_empty());
+  EXPECT_TRUE(google.image_url.empty());
+  EXPECT_TRUE(google.new_tab_url.empty());
+  EXPECT_TRUE(google.alternate_urls.empty());
+  EXPECT_TRUE(google.search_intent_params.empty());
+  EXPECT_EQ(google.prepopulate_id, 0);
+}
+
+TEST_F(SearchDefaultTest, GoogleIsNeverTheDefault) {
+  AddGoogleChoice(prefs(), engines());
+  ASSERT_TRUE(Google());
+  EXPECT_TRUE(IsGoogleChoice(*Google()));
+  EXPECT_NE(engines()->GetDefaultSearchProvider(), Google());
+  DefaultSearchManager::Source source;
+  EXPECT_EQ(Default(&source), "duckduckgo.com");
+  EXPECT_EQ(source, DefaultSearchManager::FROM_FALLBACK);
+  EXPECT_FALSE(prefs()->GetUserPrefValue(DefaultSearchManager::kDefaultSearchProviderDataPrefName));
+}
+
+TEST_F(SearchDefaultTest, RecommendedPolicyOutranksTheDefaultWithGoogle) {
+  AddGoogleChoice(prefs(), engines());
+  SetPolicy("recommended", /*mandatory=*/false);
+  DefaultSearchManager::Source source;
+  EXPECT_EQ(Default(&source), "recommended");
+  EXPECT_EQ(source, DefaultSearchManager::FROM_POLICY_RECOMMENDED);
+}
+
+TEST_F(SearchDefaultTest, ChoiceOfGoogleIsKept) {
+  manager()->SetUserSelectedDefaultSearchEngine(GoogleChoice());
+  ForgetPickedDefault(prefs());
+  DefaultSearchManager::Source source;
+  EXPECT_EQ(Default(&source), "google.com");
+  EXPECT_EQ(source, DefaultSearchManager::FROM_USER);
+}
+
+TEST_F(SearchDefaultTest, RemovedGoogleStaysRemoved) {
+  AddGoogleChoice(prefs(), engines());
+  ASSERT_TRUE(Google());
+  engines()->Remove(Google());
+  AddGoogleChoice(prefs(), engines());
+  EXPECT_FALSE(Google());
+}
+
+TEST_F(SearchDefaultTest, UsersOwnGoogleIsKept) {
+  TemplateURLData own;
+  own.SetShortName(u"Mine");
+  own.SetKeyword(u"google.com");
+  own.SetURL("https://www.google.com/own?q={searchTerms}");
+  own.safe_for_autoreplace = false;
+  engines()->Add(std::make_unique<TemplateURL>(own));
+  AddGoogleChoice(prefs(), engines());
+  ASSERT_TRUE(Google());
+  EXPECT_EQ(Google()->short_name(), u"Mine");
+  EXPECT_FALSE(IsGoogleChoice(*Google()));
 }
 
 }  // namespace

@@ -479,6 +479,7 @@ fn a_keys_chip_is_square_unless_its_name_is_wider(cx: &mut TestAppContext) {
     let keys = |keys: &[&str]| Tip {
         text: "View Library".into(),
         keys: keys.iter().map(|key| key.to_string().into()).collect(),
+        detail: SharedString::default(),
     };
     let glyphs = measured(cx, &keys(&["⇧", "⌘", "L"]));
     assert!(glyphs.chips.iter().all(|&(_, width)| width == CHIP));
@@ -495,6 +496,7 @@ fn the_log_names_the_keys_as_a_menu_does() {
     let tip = Tip {
         text: "View Library".into(),
         keys: vec!["⇧".into(), "⌘".into(), "L".into()],
+        detail: SharedString::default(),
     };
     assert_eq!(label(&tip), "View Library ⇧⌘L");
     assert_eq!(label(&Tip::named("Docs".into())), "Docs");

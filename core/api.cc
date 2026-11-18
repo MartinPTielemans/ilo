@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -19,6 +21,7 @@
 #include "browser_core/ad_block.h"
 #include "browser_core/address_import.h"
 #include "browser_core/agent_autofill.h"
+#include "browser_core/agent_close.h"
 #include "browser_core/agent_page.h"
 #include "browser_core/agent_request.h"
 #include "browser_core/agent_session.h"
@@ -28,6 +31,7 @@
 #include "browser_core/arrangement.h"
 #include "browser_core/auto_archive.h"
 #include "browser_core/battery_saver.h"
+#include "browser_core/board.h"
 #include "browser_core/boosts.h"
 #include "browser_core/autofill_data.h"
 #include "browser_core/autofill_offer.h"
@@ -53,7 +57,9 @@
 #include "browser_core/host.h"
 #include "browser_core/idle_unload.h"
 #include "browser_core/install_question.h"
+#include "browser_core/link_card.h"
 #include "browser_core/link_target.h"
+#include "browser_core/live_folder.h"
 #include "browser_core/main_delegate.h"
 #include "browser_core/notes.h"
 #include "browser_core/page_dialog.h"
@@ -75,6 +81,7 @@
 #include "browser_core/sync.h"
 #include "browser_core/system_engine.h"
 #include "browser_core/tab.h"
+#include "browser_core/tab_recent.h"
 #include "browser_core/typed_http.h"
 #include "browser_core/webrtc.h"
 #include "browser_core/widevine.h"
@@ -447,6 +454,27 @@ void bc_window_ui_text_input(bc_id id, bool focused, double x, double y, double 
 #endif
 }
 
+// Declared in browser_core.h by the header batch that takes them.
+extern "C" BC_EXPORT void bc_app_window_text_input(void* surface, bool focused, double x, double y,
+                                                   double height) {
+#if BUILDFLAG(IS_LINUX)
+  if (!surface) {
+    return;
+  }
+  std::optional<gfx::Rect> caret;
+  if (focused) {
+    caret = gfx::ToEnclosingRect(gfx::RectF(x, y, 0, height));
+  }
+  browser_core::platform::SetAppWindowTextInput(surface, caret);
+#endif
+}
+
+extern "C" BC_EXPORT void bc_app_window_text_input_end(void* surface) {
+#if BUILDFLAG(IS_LINUX)
+  browser_core::platform::EndAppWindowTextInput(surface);
+#endif
+}
+
 void bc_hold_keys(bool in_core) {
   browser_core::held_keys::Hold(in_core);
 }
@@ -614,13 +642,7 @@ int bc_agent_close_tab(const char* agent, bc_id tab, bool discard) {
   if (browser_core::Space::Holding(tab)->IsPinned(tab)) {
     return BC_AGENT_CLOSE_PINNED;
   }
-  if (!discard && closing->AsksBeforeLeaving()) {
-    return BC_AGENT_CLOSE_ASKS;
-  }
-  // Without its unload handlers either way: no frame asks before it's left, or the agent said to
-  // lose what it holds, and the tab is gone before the agent hears it closed (#1447, #1449).
-  browser_core::Window::CloseTab(tab, /*discard=*/true);
-  return BC_AGENT_CLOSED;
+  return browser_core::AgentCloseTab(tab, discard);
 }
 
 bool bc_tab_take_back(bc_id tab) {
@@ -791,6 +813,20 @@ void bc_agent_request(const char* agent,
   browser_core::SendAgentRequest(*contents, request, method ? method : "", url ? url : "",
                                  headers ? headers : "",
                                  body && size ? std::string(body, size) : std::string());
+}
+
+uint64_t bc_tab_link_card(bc_id tab) {
+  return browser_core::StartLinkCard(tab);
+}
+
+void bc_link_card_picture(uint64_t card, const char* url) {
+  if (url) {
+    browser_core::AskLinkCardPicture(card, url);
+  }
+}
+
+void bc_link_card_cancel(uint64_t card) {
+  browser_core::CancelLinkCard(card);
 }
 
 bc_id bc_space_profile(bc_id id) {
@@ -1172,6 +1208,37 @@ void bc_folder_delete(bc_id folder) {
   if (browser_core::Space* space = browser_core::Space::HoldingFolder(folder)) {
     space->DeleteFolder(folder);
   }
+}
+
+bc_id bc_folder_live_create(bc_id id, int source, const char* name) {
+  browser_core::Space* space = browser_core::Space::FromId(id);
+  // Refused here, not only left out of the app's menu: the lists are the user's account's.
+  if (!space || !space->TakesLiveFolder(source)) {
+    return 0;
+  }
+  const bc_id folder = space->AddFolder(name ? name : "", 0, SIZE_MAX);
+  space->SetFolderLive(folder, source);
+  return folder;
+}
+
+int bc_folder_live(bc_id folder) {
+  browser_core::Space* space = browser_core::Space::HoldingFolder(folder);
+  return space ? space->FolderLive(folder) : 0;
+}
+
+void bc_folder_live_end(bc_id folder) {
+  browser_core::DropLiveFolderFetch(folder);
+  if (browser_core::Space* space = browser_core::Space::HoldingFolder(folder)) {
+    space->SetFolderLive(folder, 0);
+  }
+}
+
+void bc_folder_live_fetch(bc_id folder, bool refresh) {
+  browser_core::FetchLiveFolder(folder, refresh);
+}
+
+void bc_tab_recent_fetch(bc_id tab) {
+  browser_core::FetchTabRecent(tab);
 }
 
 void bc_tab_forget_page(bc_id id) {
@@ -2230,6 +2297,29 @@ void bc_tab_capture_end(bc_id id) {
   }
 }
 
+bool bc_board_add_capture(bc_id profile, const char* id, const uint8_t* png, size_t size) {
+  if (!id || !png || size == 0) {
+    return false;
+  }
+  // Only a loaded profile's: ProfileFor gives the start profile for one that isn't.
+  const std::string dir = browser_core::ProfileDir(profile);
+  Profile* loaded = dir.empty() ? nullptr : browser_core::ProfileFor(dir);
+  if (!loaded || browser_core::DirOf(loaded) != dir) {
+    return false;
+  }
+  auto added = base::BindOnce(
+      [](bc_id profile, std::string id, bool arrived) {
+        if (browser_core::Host().board_capture_added) {
+          browser_core::Host().board_capture_added(browser_core::Host().context, profile,
+                                                   id.c_str(), arrived);
+        }
+      },
+      profile, std::string(id));
+  // SAFETY: the app passes the PNG tab_captured gave it, |size| bytes.
+  return browser_core::AddCapture(loaded, id, UNSAFE_BUFFERS(base::span<const uint8_t>(png, size)),
+                                  std::move(added));
+}
+
 void bc_tab_answer_permission(bc_id id, int answer) {
   browser_core::PermissionQuestion::Answer(id, answer);
 }
@@ -2340,6 +2430,10 @@ void bc_tab_set_developer_mode(bc_id id, bool on) {
 
 void bc_profile_set_boost(bc_id profile, const char* site, const char* css) {
   browser_core::Boosts::Set(profile, site ? site : "", css ? css : "");
+}
+
+void bc_space_set_boost_colors(bc_id space, const bc_boost_colors* colors) {
+  browser_core::Boosts::SetSpaceColors(space, colors);
 }
 
 namespace {

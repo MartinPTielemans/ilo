@@ -26,7 +26,7 @@ Not raw Chromium and not all of Helium.
 - De-Googling Chromium touches hundreds of call sites every release; ungoogled-chromium has done it for a decade.
 - Helium is a product on top of ungoogled-chromium. Ardia, built on Helium, needs about 15 skipped patches, 10 that undo Helium and a guard stage (`docs/engine-build.md` in mantrakp04/ardia). We cherry-pick from Helium instead.
 - One fewer upstream gets us Chromium's security fixes sooner.
-- The Chrome Web Store is the one Google service we bring back: extensions are a requirement (decision 1), and ungoogled-chromium breaks installing and updating them from it, which `engine/patches/ours/chromium-extensions-web-store.patch` restores. The browser talks to the store directly, not through a proxy as Helium does, and with no store extension installed, only on the store's own page. `engine/README.md` lists when and what it sends. Besides the next entry's security updates, nothing else of Google's comes back: no Safe Browsing, sync or metrics, and the component updater fetches only decision 7's module.
+- We bring back the Chrome Web Store: extensions are required (decision 1), and ungoogled-chromium breaks installing and updating them, which `engine/patches/ours/chromium-extensions-web-store.patch` restores. The browser talks to the store directly, not via Helium's proxy, and only on its own page until a store extension is installed. `engine/README.md` lists what it sends. Besides the next entry's security updates and Google's search, which only the user picks, with no suggest URL, nothing of Google's comes back: no Safe Browsing, sync or metrics, and the component updater fetches only decision 7's module.
 - We take back one thing ungoogled-chromium removes: the updates that stop the browser trusting what's known to be bad (certificate revocations, the root store, Google's malware verdicts on extensions). Without them a revoked certificate or malicious extension stays trusted until the next release. Ardia's patches fetch them from Google with identifying fields stripped; `engine/README.md` lists what's fetched and sent.
 
 Revisit if cherry-picking from Helium costs more per release than taking its whole series.
@@ -49,8 +49,9 @@ On Linux the same two hold, and Wayland adds a third. The zygote starts every pr
 - Ardia's React Native UI measures 40 ms per tab switch against Chrome's 8 ms (`docs/perf/vs-browsers.md` in mantrakp04/ardia). Hot-path UI must not run in a JavaScript runtime.
 - Pages render in Chromium's native views, not off-screen, keeping Chrome's compositing, latency, video overlays and battery life.
 - GPUI can't draw over a native view, so anything floating over the page (command bar, menus, Peek) is a borderless child window, as Chrome's bubbles are.
+- A Board (#3073) is the one page of the browser's own, `chrome://board`: a canvas of cards is a document, not hot-path UI. No other surface becomes a page by this without its own line here.
 
-Settled by the Phase 1 spikes (`spikes/gpui-cef/` and `spikes/gpui-ardia/` at 91ddfe6, since removed). On CEF and Ardia's engine, GPUI runs inside Chromium's run loop, and focus, the browser's shortcuts with the page focused, IME composition, the command bar over the page, resize and full screen work across the boundary. A long page scrolls at 120 fps with GPUI in the window.
+Settled by the Phase 1 spikes (at 91ddfe6, since removed): GPUI runs inside Chromium's run loop, and focus, the browser's shortcuts with the page focused, IME composition, the command bar over the page, resize and full screen work across the boundary. A long page scrolls at 120 fps with GPUI in the window.
 
 Revisit if an engine or GPUI change breaks run-loop sharing or input across the boundary unpatchably. The fallback is Views (C++): as cross-platform, without these integration risks.
 
@@ -103,7 +104,6 @@ Why:
 
 - Every current option fails an agent working beside a human. Headless Playwright has no logins and is flagged as a bot; so are cloud browsers, which also take the data off the machine. Remote-debugging the user's Chrome is fragile and insecure, and Chrome 136 blocks it on the default profile.
 - Owning the Chromium core layer (decision 3) makes this possible; Spaces (decision 5) are the natural unit of isolation.
-- It sets us apart from Ardia and other Arc-style browsers.
 - People want to hand over a task from where they are, without a terminal, and many already pay for Claude or Codex. Their own CLI costs them nothing more, needs no AI service of ilo's, and keeps one path, so every agent rule lives once in the core.
 
 Revisit asking from ilo if Anthropic or OpenAI stop other apps running their CLIs on a subscription; ilo then takes the vendor's sign-in program where there is one, or the user's API key.
@@ -111,7 +111,6 @@ Revisit asking from ilo if Anthropic or OpenAI stop other apps running their CLI
 Consequences now:
 
 - The core exposes one API to both the UI and agents; agents aren't a bolt-on.
-- "Agent Space" is a kind of Space in the data model from the start.
 - The main risk is prompt injection from page content. Permissions and confirmations limit the damage without solving it, so confirmation UI and the activity log ship with the MCP server, never after.
 
 ## 9. Crash reports: opt-in, to Sentry (EU region)

@@ -25,7 +25,7 @@
 # at most from a list saved before there was a most, and with 12 a row dragged over the tiles stays
 # a row and a pinned tab's menu dims Add to Favorites.
 
-# Favorites, from the served page with example.org above it.
+# Favorites, from the served page with two.html above it.
 serve
 log="$out/favorites.log"
 step=0
@@ -53,7 +53,7 @@ tile="114 114"
 tiled_row() {
   echo "100 $(($(row "$1" | cut -d' ' -f2) + 55))"
 }
-open_from_bar example.org
+open_from_bar "http://localhost:$port/two.html"
 b=$tab
 expect_tabs "$b $a" "$b" "after opening a tab"
 # A Today tab's menu is Arc's, which has no Add to Favorites, and the bottom row's dims Archive Tabs
@@ -162,7 +162,7 @@ expect "^browser: selected $b\( in .*\)\{0,1\}\$" \
 switch "1 cmd" "$a"
 # Away from its URL, a double-click on the tile goes back there.
 tab=$a
-go_from_bar example.com
+go_from_bar "http://localhost:$port/one.html"
 expect "^browser: page $a away 1\$" "the favorite at another page didn't read as away from its URL"
 send doubleclick $tile
 expect '^browser: command back-to-pinned-url via favorite$' \
@@ -516,6 +516,7 @@ expect "^browser: selected $x\( in .*\)\{0,1\}\$" "a click on the first Today ro
 none_since '^browser: dragged' "$let_go" || fail "a tile's drag escape put back dropped it"
 send click $(tiled_row 1) alt
 expect "^browser: splits $x+$y\$" "⌥-click on the second Today row didn't split it with the first"
+split=$step
 # The ⌥-click focused the right pane, which has the row's width, so the drag presses the left one's
 # favicon, folded at the row's start (#2340), and the split shows focused there.
 send drag 24 $(tiled_row 0 | cut -d' ' -f2) 180 112
@@ -528,6 +529,8 @@ expect '^browser: tiles settled$' "the tiles didn't settle after the split's dro
 ../tools/window-screenshot.sh "$pid" "$out/favorite-split-tile.png" || fail "no window to capture"
 # Its right page, three quarters across the card the sidebar leaves.
 width=$(grep '^browser: drawn at' "$log" | tail -1 | sed 's/^browser: drawn at \([0-9]*\).*/\1/')
+# The right page, restored unloaded, loads on the ⌥-click; a click as it commits doesn't focus it.
+expect "^browser: loaded $y " "the split's right page didn't load" "$split"
 # The pointer goes there first, as a real one does: the Mac's click alone doesn't tell GPUI the
 # pointer left the tile, and resting on it again below would then be no new hover.
 send move $((228 + (width - 238) * 3 / 4)) 400

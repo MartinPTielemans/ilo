@@ -280,6 +280,20 @@ onkeydown = e => {
   }
 };
 </script>' > "$out/site/clear.html"
+# Three plain pages the clear run opens, copies, closes and reopens, which it once loaded from live
+# sites that a runner can't always reach (#3144). A run sources this file, so the loop's name is
+# one no run keeps: as $page it took the page window and windows had set before serve.
+for clear_page in one two three; do
+  printf '<title>Clear %s</title><p style="font:24px system-ui">%s</p>' \
+    "$clear_page" "$clear_page" > "$out/site/clear-$clear_page.html"
+done
+# Three plain pages for the runs that need only a page to be there, which they once loaded from live
+# sites that a runner can't always reach (#3144). Their text is well inside the page, where a run
+# that tells a page from an empty page area looks (switch-frames).
+for plain_page in One Two Three; do
+  printf '<title>%s</title><h1 style="font:bold 64px system-ui;margin:80px">%s</h1>' \
+    "$plain_page" "$plain_page" > "$out/site/$(echo "$plain_page" | tr A-Z a-z).html"
+done
 # Pages that ask for a key system as soon as they load, Widevine, which ilo can't play, and ClearKey,
 # which it can. Each puts "asked" in its title once the request is answered, either way. Widevine's
 # is asked from a promise, so the title comes in an engine with no request, as Safari's may have none
@@ -304,6 +318,7 @@ navigator.requestMediaKeySystemAccess("org.w3.clearkey", [{
 # A page that names the engine showing it: Safari's sends Safari's user agent, without Chrome's name.
 # A text field covers it, so a click anywhere in it lands there, and the field's title says what it
 # did: a press, counted, its value, what ⌘A selected and ⌘C copied, and a committed composition.
+# It keeps escape, counting each.
 printf '%s' '<title>loading</title>
 <input id=f style="position:fixed;left:0;top:0;width:100%;height:100%;box-sizing:border-box">
 <script>
@@ -315,6 +330,8 @@ f.oninput = e => e.isComposing || (document.title = "value " + f.value);
 f.onselect = document.onselectionchange = () => selected() && (document.title = "select " + selected());
 oncopy = () => document.title = "copy " + selected();
 f.addEventListener("compositionend", e => document.title = "committed " + e.data);
+let escapes = 0;
+onkeydown = e => { if (e.key == "Escape") { e.preventDefault(); document.title = "escape " + ++escapes; } };
 </script>' > "$out/site/engine.html"
 # The session page, whose title says the engine showing it and which of the check's values its
 # script finds, in this order, or none: the cookies h, hw, n, p and w, and the localStorage items
@@ -429,6 +446,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         **http.server.SimpleHTTPRequestHandler.extensions_map,
         ".crx": "application/x-chrome-extension",
     }
+
+    # Each request logged in printable ASCII alone. Older Pythons wrote a request line as it came,
+    # so a TLS hello the browser sent to this port put NUL bytes in site.log, and grep then
+    # took the file for binary and printed none of its lines (#3314).
+    def log_message(self, format, *args):
+        message = "".join(c if " " <= c <= "~" else "\\x%02x" % ord(c) for c in format % args)
+        sys.stderr.write("%s - - [%s] %s\n"
+                         % (self.address_string(), self.log_date_time_string(), message))
 
     def do_GET(self):
         agent = self.headers.get("User-Agent", "")
@@ -546,10 +571,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def do_POST(self):
         body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
         if self.path.startswith("/api/"):
-            # Logged as "POST <host><path> cookie <cookies sorted, or none> body <body>".
+            # Logged as "POST <host><path> cookie <cookies sorted, or none> body <body>", in one
+            # write as GET lines are, so no line another request logs at once lands inside it.
             cookies = sorted(c.strip() for c in self.headers.get("Cookie", "").split(";") if c.strip())
-            print("POST", self.headers.get("Host", "") + self.path, "cookie",
-                  "; ".join(cookies) or "none", "body", body.decode())
+            sys.stdout.write(" ".join(["POST", self.headers.get("Host", "") + self.path, "cookie",
+                "; ".join(cookies) or "none", "body", body.decode()]) + "\n")
             body = b"{\"id\":8," + body[1:]
             self.send_response(201)
             self.send_header("Content-Type", "application/json")

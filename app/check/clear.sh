@@ -123,9 +123,9 @@ case "$drawn_height" in
   [0-9]*) field_point="600 $((drawn_height - 40))" ;;
   *) fail "the driver didn't say how tall the window is: $drawn_height" ;;
 esac
-open_from_bar example.com
+open_from_bar "${site}clear-one.html"
 b=$tab
-open_from_bar example.org
+open_from_bar "${site}clear-two.html"
 c=$tab
 switch "3 cmd" "$a"
 send key d cmd
@@ -154,7 +154,7 @@ share_from_url_toast() {
   [ -z "$then" ] || $then
   send click $share
   expect '^browser: toast button share$' "a click on Share at $share on ⇧⌘C's toast, $what, didn't take"
-  expect '^browser: share https://example.org/$' "Share on ⇧⌘C's toast, $what, didn't share the page"
+  expect "^browser: share ${site}clear-two.html\$" "Share on ⇧⌘C's toast, $what, didn't share the page"
 }
 url_toast_capture() {
   ../tools/window-screenshot.sh "$pid" "$out/url-toast.png" || fail "no window to capture"
@@ -164,8 +164,8 @@ url_toast_capture() {
 # run copies to a pasteboard of its own, never the clipboard.
 send key c cmd shift
 expect '^browser: command copy-url via page$' "⇧⌘C with the page focused didn't reach the UI"
-expect '^browser: copied https://example.org/$' "⇧⌘C didn't copy the tab's URL"
-clipboard_holds https://example.org/ ||
+expect "^browser: copied ${site}clear-two.html\$" "⇧⌘C didn't copy the tab's URL"
+clipboard_holds "${site}clear-two.html" ||
   fail "⇧⌘C left the clipboard holding \"$(WAYLAND_DISPLAY="$BROWSER_HEADLESS" wl-paste -n)\""
 # The toast says so, 8 inside the card's top right corner.
 expect "$url_toast" "⇧⌘C's toast didn't say it copied the URL, with Share where there's a share sheet"
@@ -180,7 +180,7 @@ fi
 send click $sidebar_point
 send key c cmd shift alt
 expect '^browser: command copy-markdown-link via ui$' "⌥⇧⌘C with the UI focused didn't run"
-expect '^browser: copied \[Example Domain](https://example.org/)$' \
+expect "^browser: copied \\[Clear two](${site}clear-two.html)\$" \
   "⌥⇧⌘C didn't copy a Markdown link to the tab"
 # Its toast comes where the last one went from under the pointer, which is on the sidebar now, so
 # it isn't hovered and leaves on time (#2076).
@@ -188,7 +188,7 @@ expect '^browser: toast shown Copied URL as Markdown' "⌥⇧⌘C showed no toas
 expect '^browser: toast settled$' "⌥⇧⌘C's toast didn't settle"
 none_since '^browser: toast hovered true$' ||
   fail "⌥⇧⌘C's toast, where ⇧⌘C's went from under the pointer, took the pointer on the sidebar as on it"
-clipboard_holds '[Example Domain](https://example.org/)' ||
+clipboard_holds "[Clear two](${site}clear-two.html)" ||
   fail "⌥⇧⌘C left the clipboard holding \"$(WAYLAND_DISPLAY="$BROWSER_HEADLESS" wl-paste -n)\""
 
 # ⌥⌘V, from the UI and the page, and the command bar's Paste URL as New Tab open the copied link in
@@ -201,14 +201,14 @@ expect '^browser: pasted no URL$' "⌥⌘V with a Markdown link copied didn't op
 none_since '^browser: loaded ' || fail "⌥⌘V opened a page for a Markdown link"
 send key c cmd shift
 expect '^browser: command copy-url via ui$' "⇧⌘C with the UI focused didn't reach the UI"
-expect '^browser: copied https://example.org/$' "⇧⌘C from the UI didn't copy the tab's URL"
+expect "^browser: copied ${site}clear-two.html\$" "⇧⌘C from the UI didn't copy the tab's URL"
 expect "$url_toast" "⇧⌘C from the UI showed no toast"
 share_from_url_toast "from the UI"
 bar_command paste-url-as-tab "Paste URL as New Tab" "paste url"
 expect "^browser: today [0-9][0-9]* $rows\$" \
   "Paste URL as New Tab didn't open a tab at the top of Today: \"$(today)\""
 p=$(today | cut -d' ' -f1)
-expect "^browser: loaded $p https://example.org/\$" \
+expect "^browser: loaded $p ${site}clear-two.html\$" \
   "Paste URL as New Tab didn't open the link copied"
 send click $page_point
 send key v cmd alt
@@ -217,7 +217,7 @@ expect '^browser: command paste-url-as-tab via page$' \
 expect "^browser: today [0-9][0-9]* $p $rows\$" \
   "⌥⌘V didn't open a tab at the top of Today: \"$(today)\""
 q=$(today | cut -d' ' -f1)
-expect "^browser: loaded $q https://example.org/\$" "⌥⌘V didn't open the link copied"
+expect "^browser: loaded $q ${site}clear-two.html\$" "⌥⌘V didn't open the link copied"
 ../tools/window-screenshot.sh "$pid" "$out/pasted-url.png" || fail "no window to capture"
 # The tab copied from is shown again, and a middle-click on each pasted tab's row closes it, the
 # lower first, so the other stays put. The pinned tab's row above Today puts Today's top at row 1.
@@ -240,7 +240,7 @@ expect '^browser: sidebar tools shown$' "Clear and the URL field's button didn't
 send click $copy_point
 expect '^browser: command copy-url via sidebar$' \
   "a click on the URL field's button didn't run Copy URL"
-expect '^browser: copied https://example.org/$' "the URL field's button didn't copy the tab's URL"
+expect "^browser: copied ${site}clear-two.html\$" "the URL field's button didn't copy the tab's URL"
 none_since '^browser: command edit-url' ||
   fail "a click on the URL field's button opened the command bar"
 # It says so with ⇧⌘C's toast, and with a checkmark in its glyph's place for 2 s, which draws
@@ -263,7 +263,7 @@ expect '^browser: sidebar tools hidden$' "Clear and the URL field's button didn'
 
 # ⇧⌘K with the page focused closes the Today tabs but the one shown, here the middle of three,
 # without showing or loading another.
-open_from_bar example.net
+open_from_bar "${site}clear-three.html"
 x=$tab
 switch "3 cmd" "$c"
 send click $page_point
@@ -284,7 +284,7 @@ expect '^browser: command undo via page$' "⌘Z with the page focused didn't und
 expect "^browser: today [0-9][0-9]* $c [0-9][0-9]*\$" \
   "Undo didn't put the tabs back around the one shown: Today is \"$(today)\""
 b=$(today | cut -d' ' -f3)
-expect "^browser: page $b back 0 forward 0 loading 0 https://example.com/\$" \
+expect "^browser: page $b back 0 forward 0 loading 0 ${site}clear-one.html\$" \
   "the bottom tab didn't come back at its page"
 expect "^browser: page $b unloaded 1\$" "the tab Undo brought back came back loaded"
 none_since '^browser: selected' || fail "Undo showed another tab"
@@ -336,7 +336,7 @@ expect '^browser: command reopen-closed-tab via ui$' "⇧⌘T with the UI focuse
 expect "^browser: today [0-9][0-9]*\$" "⇧⌘T didn't reopen the tab Clear closed: Today is \"$(today)\""
 d=$(today)
 expect "^browser: selected $d\$" "⇧⌘T didn't show the tab it reopened"
-expect "^browser: loaded $d https://example.org/\$" "the reopened tab didn't load its page"
+expect "^browser: loaded $d ${site}clear-two.html\$" "the reopened tab didn't load its page"
 
 # With the one Today tab shown, Clear has an arrow before it, lights up under the pointer, and
 # closes that tab too, showing the pinned one. ⌘Z brings it back, shown, with the arrow.
@@ -356,16 +356,16 @@ expect '^browser: command undo via ui$' "⌘Z after clearing the last Today tab 
 expect "^browser: today [0-9][0-9]*\$" "⌘Z didn't bring back the last Today tab: Today is \"$(today)\""
 d=$(today)
 expect "^browser: selected $d\$" "⌘Z didn't show the last Today tab again"
-expect "^browser: loaded $d https://example.org/\$" "the last Today tab didn't load once shown"
+expect "^browser: loaded $d ${site}clear-two.html\$" "the last Today tab didn't load once shown"
 expect '^browser: clear arrow 1$' "Clear's arrow didn't come back with the last Today tab"
 ../tools/window-screenshot.sh "$pid" "$out/clear-arrow-undone.png" || fail "no window to capture"
 
 # ⇧⌘T with the page focused puts a tab back where it was, with its history.
-open_from_bar example.net
+open_from_bar "${site}clear-three.html"
 e=$tab
-go_from_bar example.org
-expect_page example.org 1 0 "after going on from example.net"
-open_from_bar example.com
+go_from_bar "${site}clear-two.html"
+expect_page "${site}clear-two.html" 1 0 "after going on from clear-three.html"
+open_from_bar "${site}clear-one.html"
 f=$tab
 switch "3 cmd" "$e"
 # Muted, it comes back muted.
@@ -397,7 +397,7 @@ tab=$e
 expect "^browser: selected $e\$" "⇧⌘T didn't show the tab it reopened"
 expect "^browser: page $e audible 0 muted 1\$" "⇧⌘T didn't keep the tab muted"
 expect "^browser: page $e icon 🌟\$" "⇧⌘T didn't keep the tab's icon"
-expect_page example.org 1 0 "after ⇧⌘T"
+expect_page "${site}clear-two.html" 1 0 "after ⇧⌘T"
 ../tools/window-screenshot.sh "$pid" "$out/reopen.png" || fail "no window to capture"
 
 # After Clear, ⇧⌘T reopens the tab it closed last, the top one, and ⌘Z with the UI focused brings
@@ -434,12 +434,12 @@ expect_lists "$a" "$t $e [0-9][0-9]* $d" "after Duplicate"
 tab=$(today | cut -d' ' -f3)
 expect "^browser: selected $tab\$" "Duplicate didn't show the copy"
 expect "^browser: page $tab icon 🌟\$" "Duplicate didn't copy the tab's icon"
-expect_page example.org 1 0 "the copy Duplicate made"
+expect_page "${site}clear-two.html" 1 0 "the copy Duplicate made"
 # The window is titled by the tab shown, which the Window menu lists it by. The menu bar names its
 # items as Arc's, by what they'd do now. Edit has Paste and Match Style, which no check chooses,
 # then Paste URL as New Tab.
 send title
-expect '^browser: key window titled Example Domain$' "the window isn't titled by the tab shown"
+expect '^browser: key window titled Clear two$' "the window isn't titled by the tab shown"
 maybe='\( (disabled)\)\{0,1\}'
 send menubar Edit
 expect "^browser: menu bar Edit: .*, Paste$maybe, Paste and Match Style$maybe, Paste URL as New Tab$maybe, Select All" \
@@ -664,9 +664,13 @@ expect '^browser: remove archived [0-9][0-9]*$' "Delete from Archive didn't run"
 expect "^browser: archive $((archived - 1)) tabs\$" "Delete from Archive didn't take the tab out"
 none_since '^browser: library hidden$' || fail "Delete from Archive closed the Library"
 # A right-click on the Archived Tabs section offers Clear Archive, as Arc's does, which asks as
-# the menu's does, and ⌘Z brings the tabs back. It's the fourth of six, with Agents (#1080) and
-# Boosts (#695) last, 100 apart and centred 5 above the column's middle.
-archive_section="56 $((height / 2 + 45))"
+# the menu's does, and ⌘Z brings the tabs back. Its button is clicked at its middle, where the
+# column's line says it drew it, so a section added to the column doesn't move the click.
+read -r bx by bw bh << EOF
+$(grep '^browser: library button archive at ' "$log" | tail -1 | cut -d' ' -f6-)
+EOF
+[ -n "$bh" ] || fail "the Library's column said nothing of where it drew the Archived Tabs button"
+archive_section="$((bx + bw / 2)) $((by + bh / 2))"
 post rightclick $archive_section
 expect "^browser: menu shown $(cased 'Clear Archive')\$" \
   "a right-click on the Archived Tabs section didn't offer Clear Archive"
@@ -726,7 +730,7 @@ send click $page_point
 send key a
 asks "${site%/}" "the page's question didn't come"
 ../tools/window-screenshot.sh "$pid" "$out/question.png" || fail "no window to capture"
-open_from_bar example.net
+open_from_bar "${site}clear-three.html"
 expect "^browser: page $r asks nothing\$" "showing another tab didn't take the page's question down"
 switch "$(($(pinned | wc -w) + 2)) cmd" "$r"
 asks "${site%/}" "showing the asking tab again didn't bring its question back"
@@ -1205,13 +1209,13 @@ elif [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   send click $page_point
   expect "^browser: title $tab pressed 1\$" "a click didn't reach Safari's engine's page"
   send state
-  in_browser WKWebView "after a click on Safari's engine's page"
+  in_browser BrowserCoreWebView "after a click on Safari's engine's page"
   for shortcut in "t new-tab" "l edit-url"; do
     page_shortcut $shortcut
     expect '^browser: command bar shown$' "$shortcut over Safari's engine didn't open the command bar"
     send key escape
     expect '^browser: command bar hidden$' "escape didn't close the command bar over Safari's engine"
-    in_browser WKWebView "after the command bar over Safari's engine closed"
+    in_browser BrowserCoreWebView "after the command bar over Safari's engine closed"
   done
   # A click in the page closes the bar before it's dispatched, so the page counts it and the next,
   # as Chromium's does above.
@@ -1221,7 +1225,7 @@ elif [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   expect '^browser: command bar hidden$' "a click on Safari's engine's page didn't close the command bar"
   expect "^browser: title $tab pressed 2\$" \
     "the click that closed the bar didn't reach Safari's engine's page: $(grep "^browser: title $tab " "$log" | tail -1)"
-  in_browser WKWebView "after a click on Safari's engine's page closed the command bar"
+  in_browser BrowserCoreWebView "after a click on Safari's engine's page closed the command bar"
   send click $page_point
   expect "^browser: title $tab pressed 3\$" \
     "the click after the bar closed didn't reach Safari's engine's page: $(grep "^browser: title $tab " "$log" | tail -1)"
@@ -1248,6 +1252,30 @@ elif [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   expect "^browser: title $tab value 日本語x\$" \
     "return in Safari's engine's text field did more than commit: $(grep "^browser: title $tab " "$log" | tail -1)"
   ../tools/window-screenshot.sh "$pid" "$out/engine-ime.png" || fail "no window to capture"
+  # Escape in full screen goes to Safari's engine's page first, as it does to Chromium's (window.sh):
+  # the page keeps the first, and a second at once leaves anyway, before the page sees it (#2965).
+  # A held one goes the same way, as the key's repeats.
+  if engine_has ../core/platform/mac/system_page.mm; then
+    send fullscreen
+    expect '^browser: window entered full screen$' "the window didn't go full screen over Safari's engine"
+    # An escape before the shell hears of full screen is no press it counts.
+    expect '^browser: toast shown To exit full screen, press ⎋\.' \
+      "the window full screen over Safari's engine didn't say how to leave"
+    send state
+    in_browser BrowserCoreWebView "with the window full screen over Safari's engine"
+    send key escape
+    first=$step
+    send key escape
+    expect "^browser: title $tab escape 1\$" \
+      "Safari's engine's page didn't get the first of two escapes in full screen" "$first"
+    expect '^browser: escape twice leaves full screen$' \
+      "a second escape at once over Safari's engine didn't leave full screen: $(since "$first" | grep -e '^browser: \[keys\]' -e "^browser: title $tab " | tr '\n' ' ')" "$first"
+    expect '^browser: window left full screen$' "escape twice over Safari's engine didn't take the window out of full screen"
+    none_since "^browser: title $tab escape 2\$" "$first" ||
+      fail "the second escape that left full screen reached Safari's engine's page too"
+  else
+    echo "skip: escape twice in full screen over Safari's engine: the engine linked was built without core/platform/mac/system_page.mm as it is here."
+  fi
   # ⌘W from the page closes the tab, and the site kept opens in Safari's engine in the next one shown.
   page_shortcut w close-tab
   expect '^browser: selected [1-9]' "⌘W over Safari's engine showed no tab"

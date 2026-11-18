@@ -545,6 +545,41 @@ typedef struct bc_agent_response {
   const char* error;
 } bc_agent_response;
 
+// What fills a Live Folder (bc_folder_live_create, #2979): 0 for a plain folder.
+// The pull requests waiting on the review of the user signed in to GitHub in the Space's profile,
+// and their own open ones.
+#define BC_LIVE_PULL_REQUESTS 1
+
+// How a Live Folder's fetch ended (folder_live_answered).
+// With its rows, perhaps none.
+#define BC_LIVE_ANSWERED 0
+// Nobody is signed in to the site in the Space's profile.
+#define BC_LIVE_SIGNED_OUT 1
+// Offline, a redirect off the site, an answer that wasn't the site's or was too big, or one past
+// the 30 s a request is given. The rows the app has stay.
+#define BC_LIVE_FAILED 2
+
+// The list a Live Folder's row is in.
+#define BC_LIVE_REVIEW_REQUESTS 0
+#define BC_LIVE_CREATED 1
+
+// A pull request's state. The lists are of open ones, so one merged or closed leaves them.
+#define BC_LIVE_OPEN 0
+#define BC_LIVE_DRAFT 1
+
+// A row of a Live Folder's answer. The strings are UTF-8 and last only for the call.
+typedef struct bc_live_item {
+  // A BC_LIVE_REVIEW_REQUESTS or BC_LIVE_CREATED.
+  int list;
+  // Its repository, as "owner/name", whose address the app makes with |number|.
+  const char* repo;
+  uint32_t number;
+  // Its title, plain text: no markup, which the core takes out.
+  const char* title;
+  // A BC_LIVE_OPEN or BC_LIVE_DRAFT.
+  int state;
+} bc_live_item;
+
 // Why an agent's session with a tab ended (agent_session_ended).
 // Its client disconnected (bc_agent_disconnected).
 #define BC_AGENT_SESSION_DISCONNECTED 0
@@ -1026,6 +1061,11 @@ typedef struct bc_host {
                        size_t size,
                        int width,
                        int height);
+  // What became of the capture bc_board_add_capture put into |profile|'s Board |id| when it
+  // returned true: |arrived| if it's in the Board, waiting for its page, else the Board refused it
+  // (its folder gone, 100 pictures already waiting, or the disk wouldn't take it) and nothing of it
+  // was kept. Once for each call that returned true, in the order of the calls.
+  void (*board_capture_added)(void* context, bc_id profile, const char* id, bool arrived);
   // The user chose Open Link in New Window or Open Link in Incognito Window in the page menu of a
   // tab in |window|. Open |url| in a window as ⌘N's, or with |private_window| in a private one in
   // |profile|'s session, as ⇧⌘N's. A link from a private window asks for a private one either way,
@@ -1188,8 +1228,9 @@ typedef struct bc_host {
   // most once a launch, and never twice for a report.
   void (*crash_report_offered)(void* context);
   // On Linux under Wayland, while a text field of the app's UI in |window| has the keys
-  // (bc_window_ui_text_input): the input method composes |text| there, shown underlined at the
-  // caret, or stops composing with |text| empty.
+  // (bc_window_ui_text_input), or with |window| 0 a field of the app's own window that composes
+  // through the core's input method (bc_app_window_text_input): the input method composes |text|
+  // there, shown underlined at the caret, or stops composing with |text| empty.
   void (*ui_composed)(void* context, bc_id window, const char* text);
   // As ui_composed: the input method commits |text| in place of what it composed.
   void (*ui_committed)(void* context, bc_id window, const char* text);
@@ -1230,6 +1271,13 @@ typedef struct bc_host {
   // The answer to bc_agent_request's |request|, from a task of its own. It never has the answer's
   // headers, so no Set-Cookie reaches the app.
   void (*agent_request_done)(void* context, uint64_t request, const bc_agent_response* response);
+  // What a bc_agent_close_tab that returned BC_AGENT_CLOSE_PENDING came to, from a task of its own,
+  // once for each pending |tab|, whatever happened meanwhile: BC_AGENT_CLOSED once the tab is gone,
+  // by that close or any other; BC_AGENT_CLOSE_ASKS if its page asked to stay; or
+  // BC_AGENT_CLOSE_REFUSED if it stays for another reason. Within a few seconds at most: a page
+  // that doesn't answer, or whose renderer crashed, is closed, as Chromium closes one whose handler
+  // hangs, unless the user took its tab over or pinned it meanwhile.
+  void (*agent_close_answered)(void* context, bc_id tab, int answer);
   // On Linux and Windows, the browser is quitting, or with |last_private| the last window of a
   // private profile closing, with |count| downloads running, which it would cancel: ask the user
   // over |window|, and answer with bc_window_answer_downloads. A window asks one at a time. The Mac
@@ -1412,6 +1460,36 @@ typedef struct bc_host {
   // that one's. Never on Windows, where the app opens and closes the hole without waiting for it,
   // nor on the Mac, where the page is in the app's view, over what it draws.
   void (*tab_shown_in)(void* context, bc_id tab, bc_rect frame);
+  // The answer to the Live Folder's bc_folder_live_fetch: a BC_LIVE_ answer, with |items|, review
+  // requests first, only with BC_LIVE_ANSWERED. |answered| is when the site gave it, in
+  // milliseconds since the Unix epoch: up to two minutes ago for an answer the core kept. Once an
+  // ask, never for one the core refused. The items last only for the call, and the core logs none
+  // of them. The user's alone: agents get none.
+  void (*folder_live_answered)(void* context, bc_id folder, int answer, int64_t answered,
+                               const bc_live_item* items, size_t count);
+  // The answer to bc_tab_recent_fetch, in folder_live_answered's order: a BC_LIVE_ answer, with
+  // |items|, review requests first, only with BC_LIVE_ANSWERED. |answered| is when the site gave
+  // it, in milliseconds since the Unix epoch: up to two minutes ago for an answer the core kept.
+  // Once an ask, never for one the core refused, nor for a tab that closed, stopped being pinned
+  // or a favorite, or left the site while it waited. The items last only for the call, and the
+  // core logs none of them. The user's alone: agents get none.
+  void (*tab_recent_answered)(void* context, bc_id tab, int answer, int64_t answered,
+                              const bc_live_item* items, size_t count);
+  // What |card|'s fetch (bc_tab_link_card, bc_link_card_picture) came to, from a task of its own,
+  // once a call, never after bc_link_card_cancel: |status| is the answer's HTTP code, a net error
+  // below 0, or a BC_LINK_CARD_ refusal, and |url| the address it ended at after redirects, "" if
+  // nothing was asked. For a page, |bytes| are its first |size| up to the end of its head or a
+  // mebibyte; for its picture, all of it. None for a refusal, an answer outside 200–299, or one
+  // that isn't a page or an image the app decodes, whose |mime| says what it was. |mime| is the
+  // answer's type, with ";charset=" and its charset when the server named one, or "" when no answer
+  // started. They last only for the call.
+  void (*link_card_fetched)(void* context,
+                            uint64_t card,
+                            int status,
+                            const char* url,
+                            const char* mime,
+                            const uint8_t* bytes,
+                            size_t size);
 } bc_host;
 
 // Runs Chromium in this process with these arguments (Chromium's switches) and returns its exit
@@ -1533,6 +1611,25 @@ BC_EXPORT void bc_window_toggle_maximized(bc_id window);
 // page's field does.
 BC_EXPORT void bc_window_ui_text_input(bc_id window, bool focused, double x, double y,
                                        double height);
+
+// A window of the app's own, not a browser window, such as Settings, whose text fields compose
+// through the core's input method. |surface| is its native surface, and |focused| says whether one
+// of its fields is focused while it has the keys, the caret at |x|, |y| in points from the
+// surface's top left, |height| high. A window the core never shows holds that input method for
+// these windows alone, so no page, and no tab an agent drives, takes what the user composes there.
+// It comes back as ui_composed and ui_committed for window 0, only from the input method's own
+// events, never during a call of the app's, so the app gives each to the field it has focused as
+// it comes, a commit with no composition before it too. When a field loses the focus, the app says
+// so in the same turn, before another takes it in this window or another, and keeps what the field
+// shows composed as typed: the core drops its composition then, and nothing comes for that field
+// after. Only the Linux core under Wayland acts on it, where the compositor gives the process one
+// input method and |surface| is a wl_surface on the connection bc_wayland_display gives; the Mac's
+// and Windows' return at once.
+BC_EXPORT void bc_app_window_text_input(void* surface, bool focused, double x, double y,
+                                        double height);
+
+// Ends bc_app_window_text_input for |surface|, before it goes. Quitting ends them all.
+BC_EXPORT void bc_app_window_text_input_end(void* surface);
 
 // During tab_key_before_page: holds the keys typed in the tab's page after the one asked about,
 // which opens a field of the app's, such as ⌃L's address field. A shortcut the page gets first
@@ -1687,21 +1784,33 @@ BC_EXPORT bc_id bc_agent_open_tab(const char* agent, const char* url);
 // returns whether it does: never another URL. Agent code calls it after bc_agent_may_act.
 BC_EXPORT bool bc_agent_navigate(const char* agent, bc_id tab, const char* url);
 
-// What bc_agent_close_tab did.
+// What bc_agent_close_tab did, and what agent_close_answered says a pending close came to.
 // The tab closed: it's gone, and tab_closed told of it.
 #define BC_AGENT_CLOSED 0
-// The tab isn't in the agent's Space, or the user holds it.
+// The tab isn't in the agent's Space, or the user holds it. As agent_close_answered's answer: it
+// stays for another reason, as it went to another page, its page was unloaded, or the user took it
+// over or pinned it meanwhile.
 #define BC_AGENT_CLOSE_REFUSED 1
 // The user pinned the tab, which only the user closes.
 #define BC_AGENT_CLOSE_PINNED 2
-// Its page may ask before it's left, as one with unsaved changes does, and |discard| was false.
+// Its page asked to stay, as one with unsaved changes does: only ever agent_close_answered's
+// answer, as the page's own.
 #define BC_AGENT_CLOSE_ASKS 3
+// The core is asking the page, which answers later through agent_close_answered: only ever
+// bc_agent_close_tab's return, never an answer.
+#define BC_AGENT_CLOSE_PENDING 4
 
 // Closes |tab|, in the Space of the agent with the id |agent|, for the agent, never with a dialog:
-// as the "Leave site?" dialog shows the tab, it would take the user's focus. A page that may ask
-// before it's left stays open, unless |discard|, which closes it without its unload handlers, and
-// what it held unsaved is lost. Returns a BC_AGENT_CLOSE value. Agent code calls it after
-// bc_agent_may_act, and asks the user first before it discards a page the agent didn't open.
+// as the "Leave site?" dialog shows the tab, it would take the user's focus. A page with no
+// beforeunload handler closes in the call. One with a handler is asked as a user's close asks it,
+// without the dialog, and the call returns BC_AGENT_CLOSE_PENDING: agent_close_answered says, once
+// and never inside this call, whether it closed or stays. A close of a tab already pending returns
+// BC_AGENT_CLOSE_PENDING again, covered by that one answer. |discard| closes it at once without its
+// handlers, one pending too, and what it held unsaved is lost. Returns a BC_AGENT_CLOSE value.
+// Agent code calls it after bc_agent_may_act, asks without |discard| first, and asks the user
+// before it discards a page that asked to stay that the agent didn't open. A page that agreed to
+// close goes though the user takes its tab over or pins it before it's gone, as Chromium is closing
+// it by then.
 BC_EXPORT int bc_agent_close_tab(const char* agent, bc_id tab, bool discard);
 
 // Copies up to |capacity| of the tabs of the Space of the agent with the id |agent| into |tabs|, its
@@ -1972,6 +2081,33 @@ BC_EXPORT size_t bc_space_theme(bc_id space, char* theme, size_t capacity);
 // comes; empty takes the theme away. Then spaces_changed.
 BC_EXPORT void bc_space_set_theme(bc_id space, const char* theme);
 
+// The colours of a Space that its tabs' Boosts read (bc_space_set_boost_colors), each 0xRRGGBB in
+// sRGB.
+typedef struct bc_boost_colors {
+  // --ilo-space-background: the window's colour at its top left, opaque.
+  uint32_t background;
+  // --ilo-space-text: the window's text.
+  uint32_t text;
+  // --ilo-space-accent: the Space's accent.
+  uint32_t accent;
+  // --ilo-space-accent-text: the text that reads on the accent.
+  uint32_t accent_text;
+} bc_boost_colors;
+
+// Gives the Space's colours to Boosts (docs/ux-spec.md › Boosts), so a Boost's CSS can match a
+// site to the sidebar with var(). The core writes them as ilo's own custom properties, values
+// only, at the root of the Boost's own sheet, and only for a Boost whose CSS names one of them
+// (--ilo-space-): the site's own scripts can read them there, so a page with no Boost, or a Boost
+// that doesn't use them, tells its site nothing. A frame another site's page holds gets none. A tab
+// moved to another Space, or a favorite whose window shows another, takes that Space's with no
+// reload. A tab in an agent's Space gets none. A private window shows its original's Boosts, and
+// its pages get the colours the app gives its Space, which must not differ from one user to the
+// next: the app gives a private window's Space no theme and dark, the same for everyone.
+// The core doesn't keep them across a relaunch: the app gives them again at launch and as the
+// theme or the appearance changes, and a Space deleted takes its own away. Null takes them away.
+// The user's: agents get no path to them, as to a Boost.
+BC_EXPORT void bc_space_set_boost_colors(bc_id space, const bc_boost_colors* colors);
+
 // Deletes the Space, unless it's the last, and returns whether it will. A window showing it shows
 // the Space before it, else the one after it. Its tabs close, and it goes with the last of them; a
 // page that keeps its tab open keeps the Space until it closes. Its Today tabs reopen with
@@ -2035,6 +2171,43 @@ BC_EXPORT void bc_folder_move(bc_id folder, bc_id to, size_t index);
 // Deletes the folder, leaving what was in it where it was, in the folder that held it. Then
 // space_changed.
 BC_EXPORT void bc_folder_delete(bc_id folder);
+
+// Makes an open Live Folder named |name| at the bottom of the Space's pinned tabs, filled from
+// |source|, a BC_LIVE_ source, once the app asks (bc_folder_live_fetch). Returns it, or 0, making
+// none, for an agent's Space, a private window's, a source the core doesn't know, or one the Space
+// has a folder of already. Kept across a quit, on this device: the folder syncs as a plain one.
+// Then space_changed.
+BC_EXPORT bc_id bc_folder_live_create(bc_id space, int source, const char* name);
+
+// What fills the folder, a BC_LIVE_ source, or 0 for a plain folder or none. A duplicate is plain,
+// and so is a Live Folder moved to a Space bc_folder_live_create would make none in: an agent's,
+// or one that has a Live Folder of its source already.
+BC_EXPORT int bc_folder_live(bc_id folder);
+
+// Makes the Live Folder a plain one, the tabs opened from it staying in it. A fetch under way
+// answers nothing. Then space_changed.
+BC_EXPORT void bc_folder_live_end(bc_id folder);
+
+// Asks for the Live Folder's lists on its Space's profile's own session: the site's cookies, which
+// neither the app nor an agent sees. The site and what's asked of it are the core's; the app gives
+// neither. Answers with folder_live_answered, once, never inside this call. Does nothing for a
+// plain folder, one in an agent's Space or a private window, or one waiting on an answer. The core
+// never fetches on its own, and never again on a failure: when to ask is the app's. How often is
+// the core's: it asks the site at most once each two minutes for a profile, however many ask, and
+// inside that answers what the site last gave. A |refresh|, the user's Refresh alone, asks inside
+// the two minutes too, but joins a fetch under way (#3074).
+BC_EXPORT void bc_folder_live_fetch(bc_id folder, bool refresh);
+
+// Asks what's recent on the site of a pinned tab or a favorite, for its hover card, on its
+// profile's own session, as bc_folder_live_fetch asks for a Live Folder: today the open pull
+// requests of the user signed in to GitHub, for a tab whose committed page is on
+// https://github.com. The site and what's asked of it are the core's; the app gives the tab alone.
+// Answers with tab_recent_answered, once, never inside this call. Does nothing for a tab that isn't
+// pinned or a favorite, one on another site, one in an agent's Space or a private window, or one
+// waiting on an answer. The core never asks on its own; the app asks as the user rests on the tab.
+// It asks the site at most once each two minutes for a profile, with that profile's Live Folder,
+// and inside that answers what the site last gave. No agent tool reaches it (#3074).
+BC_EXPORT void bc_tab_recent_fetch(bc_id tab);
 
 // Where the favorites are kept, as the user chose: who shows the same ones above their own tabs. A
 // favorite is a site, and each profile that shows it has a tab of its own for it, in no Space,
@@ -2920,6 +3093,16 @@ BC_EXPORT void bc_tab_translate_revert(bc_id tab);
 // Ends what bc_tab_element_at and bc_tab_capture began: drops their questions and lets go of the
 // page's DevTools, so a page that isn't being captured pays nothing.
 BC_EXPORT void bc_tab_capture_end(bc_id tab);
+
+// Puts |png|, a capture tab_captured gave, |size| bytes, into the profile's Board |id| (a Board's
+// folder the app made, Boards/<id>/ in bc_profile_dir) as a picture of its own, for the Board's page
+// to make a card of: when it next opens, or at once if it's open. Returns whether it will try: not
+// for a profile that isn't loaded (none is loaded for it) or keeps no Boards (a private window's, a
+// guest's), an id that isn't 32 lowercase hex digits, or bytes that aren't a PNG of at most 50 MB.
+// Once it has tried, board_capture_added says whether the picture is in the Board. It's there
+// before a page of the Board opened after this call reads it. The user's: agents get none, as a
+// Board and what's on it are the user's alone.
+BC_EXPORT bool bc_board_add_capture(bc_id profile, const char* id, const uint8_t* png, size_t size);
 
 // Answers to the question tab_permission_asked put: the site may, now and whenever it asks again;
 // it may not, now or again; or not now, and it may ask again.
@@ -3816,6 +3999,37 @@ BC_EXPORT void bc_folder_move_to_space(bc_id folder, bc_id space);
 // for a web link (tab_page_menu): the app leaves it out while it opens no link preview there, and
 // chosen, the core asks tab_link_to_preview. Negative, as Chrome's commands are all positive.
 #define BC_PAGE_MENU_PREVIEW_LINK (-1)
+
+// A link card (#3080): what the page behind a link says about itself, its title, description and
+// picture, for the app to show over the page. The user's alone: agents get none.
+//
+// For the user's press of ⇧ alone on a link in |tab|'s page, outside a field, while the app shows
+// the link's target. The core waits 150 ms, the link target's own delay, and a key, a mouse press
+// or a wheel in the tab's page, the page navigating or the tab closing within it ends the card with
+// net::ERR_ABORTED. Then it asks the link's page once, on the profile's network, as no page and no
+// user: without cookies, a client certificate, a sign-in or a referrer, sharing no cache or
+// connection with the user's browsing, keeping nothing but HSTS and Alt-Svc, http(s) only on every
+// hop and at most 5 redirects, never through a proxy and never to an address on a private network.
+// Returns the card's id, then link_card_fetched with it; or 0, asking nothing, while the pointer is
+// on no http(s) link in |tab|, or |tab| is in an agent's Space. A new card cancels the one before.
+BC_EXPORT uint64_t bc_tab_link_card(bc_id tab);
+
+// Asks |url|, the picture |card|'s page named, under the same rules, then link_card_fetched with
+// |card| once more. Nothing for a card cancelled or ended.
+BC_EXPORT void bc_link_card_picture(uint64_t card, const char* url);
+
+// Stops |card|'s wait or fetch: link_card_fetched never comes for it again.
+BC_EXPORT void bc_link_card_cancel(uint64_t card);
+
+// link_card_fetched's refusals, each below every net error.
+// The link or a redirect went to an address on a private network: loopback, private or link-local.
+#define BC_LINK_CARD_PRIVATE (-20001)
+// The profile's proxy would carry the fetch, past which the core can't see the address.
+#define BC_LINK_CARD_PROXY (-20002)
+// A redirect to an address that isn't http(s), or a sixth one.
+#define BC_LINK_CARD_REDIRECT (-20003)
+// The picture is over 2 MiB.
+#define BC_LINK_CARD_TOO_BIG (-20004)
 
 #ifdef __cplusplus
 }

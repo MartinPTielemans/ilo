@@ -25,6 +25,9 @@ finish-args:
   - --talk-name=org.freedesktop.secrets
   - --talk-name=org.freedesktop.Notifications
   - --talk-name=org.freedesktop.ScreenSaver
+  # MPRIS, for media keys and the desktop's media controls. The engine asks for
+  # org.mpris.MediaPlayer2.chromium.instance<pid>, as Flathub's Chromium and Chrome do.
+  - --own-name=org.mpris.MediaPlayer2.chromium.*
   # Import from other browsers reads only these profile folders, read-only, copying each
   # database to a temporary file first, so a browser that's running keeps its own untouched.
   # Chrome, as installed, as a Flatpak.

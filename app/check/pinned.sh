@@ -55,9 +55,9 @@ if [ "$active" != 1 ]; then
   echo "skip: pinned tabs. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi
-open_from_bar example.com
+open_from_bar "http://localhost:$port/one.html"
 b=$tab
-open_from_bar example.org
+open_from_bar "http://localhost:$port/two.html"
 c=$tab
 expect_tabs "$c $b $a" "$c" "after opening two tabs"
 send key d cmd
@@ -164,7 +164,7 @@ send click $(pinned_close 0)
 expect "^browser: selected $c in " "a click where an unloaded pinned tab's − was didn't show the tab"
 none_since '^browser: command close-tab' || fail "an unloaded pinned tab showed its −"
 none_since '^browser: command remove-tab' || fail "a second click on the − removed the pinned tab"
-expect "^browser: loaded $c https://example.org/\$" "the pinned tab didn't load once shown"
+expect "^browser: loaded $c http://localhost:$port/two.html\$" "the pinned tab didn't load once shown"
 # Shown, its − unloads it too and shows the tab shown before it.
 expect "^browser: hover tab $c close − favicon none\$" "the pinned tab shown didn't draw −"
 send click $(pinned_close 0)
@@ -174,7 +174,7 @@ expect "^browser: selected $a in " "the − on a pinned tab didn't show the tab 
 [ "$(pinned)" = "$c $a" ] || fail "the − took the pinned tab's row: pinned tabs are \"$(pinned)\""
 send click $(pinned_row 0)
 expect "^browser: selected $c in " "a click on the unloaded pinned tab didn't show it"
-expect "^browser: loaded $c https://example.org/\$" "the pinned tab didn't load once shown"
+expect "^browser: loaded $c http://localhost:$port/two.html\$" "the pinned tab didn't load once shown"
 # A middle-click on a row closes its tab as its − does, which unloads a pinned one.
 send middleclick $(pinned_row 1)
 expect '^browser: command close-tab via sidebar$' "a middle-click on a pinned tab didn't run Close Tab"
@@ -231,7 +231,7 @@ none_since '^browser: loaded' || fail "⌘Z loaded the pinned tab it brought bac
 # swap with it: from here $c is the pinned tab, the served page, and $a the Today tab.
 send click $(pinned_row 0)
 expect "^browser: selected $c in " "a click on the unloaded pinned tab didn't show it"
-expect "^browser: loaded $c https://example.org/\$" "the unloaded pinned tab didn't load once shown"
+expect "^browser: loaded $c http://localhost:$port/two.html\$" "the unloaded pinned tab didn't load once shown"
 send key d cmd
 expect_lists "$a" "$c" "after ⌘D on a pinned tab"
 unpinned=$c
@@ -420,13 +420,13 @@ send click $(pinned_row 0)
 expect "^browser: selected $c in " "a click on the pinned tab didn't show it"
 # An address typed into it opens in a tab it opened, at the top of Today, shown, and the pinned tab
 # keeps its page. Closing that tab shows the pinned one again, its opener.
-go_from_bar example.com
+go_from_bar "http://localhost:$port/one.html"
 expect "^browser: tab [0-9]* opened by $c in the foreground\$" \
   "an address typed into the pinned tab didn't open a tab of its own"
 typed=$(grep '^browser: tab [0-9]* opened by' "$log" | tail -1 | cut -d' ' -f3)
 expect_lists "$c" "$typed $a" "after an address typed into the pinned tab"
 expect "^browser: selected $typed\( in .*\)\{0,1\}\$" "the tab an address typed into the pinned tab opened wasn't shown"
-expect "^browser: loaded $typed https://example.com/\$" "the address typed into the pinned tab didn't load in its tab"
+expect "^browser: loaded $typed http://localhost:$port/one.html\$" "the address typed into the pinned tab didn't load in its tab"
 none_since "^browser: loaded $c " || fail "the address typed into the pinned tab loaded in it"
 send key w cmd
 expect "^browser: tab $typed closed\$" "⌘W didn't close the tab the pinned tab opened"
@@ -459,7 +459,7 @@ await '^browser: today [0-9][0-9]*$' || fail "the Today tab didn't come back"
 c=$(pinned)
 a=$(today)
 await "^browser: selected $a\$" || fail "the relaunch didn't show the tab shown last"
-await "^browser: loaded $a https://example.org/\$" || fail "the tab shown didn't load"
+await "^browser: loaded $a http://localhost:$port/two.html\$" || fail "the tab shown didn't load"
 await "^browser: page $c back 1 forward 0 loading 0 ${site}notes.txt\$" ||
   fail "the pinned tab didn't come back at its page: $(grep "^browser: page $c" "$log" | tail -1)"
 await "^browser: page $c unloaded 1\$" || fail "the pinned tab didn't come back unloaded"
@@ -703,7 +703,7 @@ bar_command export-space "Export Space as Markdown…" export
 expect "^browser: exported 2 links to .*/space.md\$" \
   "Export Space as Markdown… didn't save the Space's two links"
 exported=$(sed -e '1s/^# .*/#/' -e 's/\[.*\](/[](/' "$out/space.md")
-[ "$exported" = "$(printf '#\n\n## Pinned\n\n- work\n  - []('"$site"')\n\n## Today\n\n- [](https://example.org/)')" ] ||
+[ "$exported" = "$(printf '#\n\n## Pinned\n\n- work\n  - []('"$site"')\n\n## Today\n\n- []('"http://localhost:$port/two.html"')')" ] ||
   fail "the Space wasn't saved as its folder, then its Today tab: $exported"
 # Expand All Folders opens it again, and Collapse All Folders closes it for the launch that follows.
 bar_command expand-folders "Expand All Folders" "expand all"
@@ -940,10 +940,10 @@ expect '^browser: command collapse-pinned via ui$' "View › Collapse Pinned Tab
 expect "^browser: outline -\\[$e $c\\]\$" "Collapse Pinned Tabs didn't collapse the pinned rows: $(outline)"
 
 # Focus Sidebar, on F6 unless the user gives it another key, gives the sidebar the keyboard and rings
-# the tab shown's row, the first ⌘1 counts. ↑ there stays, past the collapsed pinned rows, ↓ moves
-# the ring down, and return shows the ringed tab with its page holding the keyboard. From the View
-# menu, a key in the page clicked ends the ring, and escape gives the page the keyboard back
-# without showing another tab.
+# the tab shown's row, the first ⌘1 counts. ↑ there goes to New Tab's row and stays there, past
+# the collapsed pinned rows, ↓ moves the ring down, and return shows the ringed tab with its page
+# holding the keyboard. From the View menu, a key in the page clicked ends the ring, and escape
+# gives the page the keyboard back without showing another tab.
 bar_command focus-sidebar "Focus Sidebar" "focus sidebar"
 expect "^browser: sidebar keyed $t\$" "Focus Sidebar didn't ring the tab shown's row"
 expect "^browser: sidebar ring $t at " "the ring wasn't drawn round the tab shown's row"
@@ -952,10 +952,13 @@ settled
 ../tools/window-screenshot.sh "$pid" "$out/sidebar-keyed.png" || fail "no window to capture"
 up=$((step + 1))
 send key up
+expect '^browser: sidebar keyed 0$' "↑ from Today's first row didn't ring New Tab's"
+send key up
+send key down
 send key down
 expect "^browser: sidebar keyed $d\$" "↓ didn't move the ring to the next row"
-[ "$(since "$up" | grep -c '^browser: sidebar keyed')" = 1 ] ||
-  fail "↑ from the first row moved the ring, onto a collapsed row"
+[ "$(since "$up" | grep -c '^browser: sidebar keyed')" = 3 ] ||
+  fail "↑ from New Tab's row moved the ring, onto a collapsed row"
 expect "^browser: sidebar ring $d at " "the ring wasn't drawn round the next row"
 ../tools/window-screenshot.sh "$pid" "$out/sidebar-keyed-down.png" || fail "no window to capture"
 send key return
@@ -1076,7 +1079,7 @@ height=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: lay
   sed 's/^browser: layout content [0-9]*x\([0-9]*\),.*/\1/')
 post click 204 $((height - 25))
 add=$(plus_adds | cut -d, -f1)
-plus="New Space…, New Folder…, New Split View, New Note, \\(New Boost…, \\)\\{0,1\\}$(plus_adds)"
+plus="New Space…, New Folder…, New Split View, New Board, New Note, \\(New Boost…, \\)\\{0,1\\}$(plus_adds)"
 expect "^browser: menu shown $(cased "$plus")\$" \
   "the +'s menu didn't end with $(plus_adds)"
 ../tools/window-screenshot.sh "$pid" "$out/plus-add.png" || fail "no window to capture"

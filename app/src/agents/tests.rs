@@ -41,9 +41,11 @@ struct Made {
     /// The tasks' Spaces made, and the Spaces deleted.
     task_spaces: RefCell<Vec<u64>>,
     deleted: RefCell<Vec<u64>>,
-    /// The tabs the user pinned, and those whose page asks before it's left.
+    /// The tabs the user pinned, and those whose page has a beforeunload handler, which a close
+    /// asks, and how many times the core was asked to close each.
     pinned: RefCell<HashSet<u64>>,
     asks: RefCell<HashSet<u64>>,
+    closes: RefCell<Vec<(u64, bool)>>,
     /// The downloads the agents answered for the user, and whether each goes on.
     downloads: RefCell<Vec<(u64, bool)>>,
     /// The HTTP requests the agents sent: the tab, the request and what it sent.
@@ -299,8 +301,9 @@ impl Browser for Made {
         if self.pinned.borrow().contains(&tab) {
             return Closed::Pinned;
         }
+        self.closes.borrow_mut().push((tab, discard));
         if !discard && self.asks.borrow().contains(&tab) {
-            return Closed::Asks;
+            return Closed::Pending;
         }
         self.tabs.borrow_mut().retain(|each| each.0 != tab);
         Closed::Closed
@@ -1421,6 +1424,21 @@ fn an_agent_chooses_an_option_by_its_text(cx: &mut TestAppContext) {
         missed.text
     );
 
+    // A line break in the option goes to the core as it was asked, and the answer says it on one
+    // line.
+    let choose = json!({ "tab": 20, "ref": "e1", "option": "5\n1" });
+    let answer = call(&agents, "claude-code", "select", choose, cx);
+    let (.., text) = browser.pages.borrow().last().cloned().unwrap();
+    assert_eq!(text, "5\n1");
+    let missed = page_done(&agents, &browser, answer, answered(None), cx);
+    assert!(
+        missed
+            .text
+            .starts_with("Chose “5 1” in the combobox “Status”. It doesn't"),
+        "{}",
+        missed.text
+    );
+
     let pages = browser.pages.borrow().len();
     for wrong in [
         json!({ "tab": 20, "ref": "e1" }),
@@ -1458,7 +1476,8 @@ fn an_agent_chooses_an_option_by_its_text(cx: &mut TestAppContext) {
     );
 
     let pages = browser.pages.borrow().len();
-    let paying = json!({ "tab": 20, "ref": "e2", "option": "Pay now" });
+    // The user's question says the option on one line, its line break a space.
+    let paying = json!({ "tab": 20, "ref": "e2", "option": "Pay\u{2028}now" });
     let _answer = call(&agents, "claude-code", "select", paying, cx);
     let question = browser
         .asked
@@ -2647,20 +2666,41 @@ fn an_agent_closes_only_its_own_tabs(cx: &mut TestAppContext) {
     assert_eq!(tools::describe(&entry.0), "Closed a tab");
 }
 
-/// A page that asks before it's left stays open, and the answer says why: the agent's own tab
-/// closes with discard, and the log says it was without saving (#1447).
-#[gpui::test]
-fn an_agent_discards_only_a_page_it_opened(cx: &mut TestAppContext) {
-    let (agents, browser, _) = connected(cx);
+/// The core answers a close that asked `tab`'s page with `closed`, from a task of its own, as the
+/// core's agent_close_answered does: the tab goes if it closed.
+fn page_answers(
+    agents: &Entity<Agents>,
+    browser: &Made,
+    tab: u64,
+    closed: Closed,
+    cx: &mut TestAppContext,
+) {
+    if closed == Closed::Closed {
+        browser.tabs.borrow_mut().retain(|each| each.0 != tab);
+    }
+    agents.update(cx, |agents, cx| agents.close_answered(tab, closed, cx));
+}
+
+/// The agent's own tab at docs.example, whose page has a beforeunload handler: 30.
+fn opened_with_handler(agents: &Entity<Agents>, browser: &Made, cx: &mut TestAppContext) {
     let opened = call(
-        &agents,
+        agents,
         "claude-code",
         "open_tab",
         json!({ "url": "docs.example" }),
         cx,
     );
-    _ = page_done(&agents, &browser, opened, shop_tree(), cx);
+    _ = page_done(agents, browser, opened, shop_tree(), cx);
     browser.asks.borrow_mut().insert(30);
+}
+
+/// A page whose handler asks to stay stays open, and the answer, which waits for the page, says
+/// why; the log has the close once the page answered. With discard, the agent's own tab is asked
+/// again and closes without saving, the log saying so, and the user isn't asked (#1447, #3256).
+#[gpui::test]
+fn an_agent_discards_only_a_page_it_opened(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    opened_with_handler(&agents, &browser, cx);
 
     let kept = call(
         &agents,
@@ -2669,6 +2709,14 @@ fn an_agent_discards_only_a_page_it_opened(cx: &mut TestAppContext) {
         json!({ "tab": 30 }),
         cx,
     );
+    assert!(kept.try_recv().is_err(), "answered before the page did");
+    assert!(
+        log(&agents, "claude-code", cx)
+            .iter()
+            .all(|entry| entry.0 != "close_tab"),
+        "logged the close before the page answered"
+    );
+    page_answers(&agents, &browser, 30, Closed::Asks, cx);
     let kept = kept.recv().unwrap();
     assert!(kept.error);
     assert_eq!(
@@ -2680,11 +2728,16 @@ fn an_agent_discards_only_a_page_it_opened(cx: &mut TestAppContext) {
         browser.tabs.borrow().iter().any(|tab| tab.0 == 30),
         "a refused close closed it"
     );
+    assert_eq!(log(&agents, "claude-code", cx)[0].0, "close_tab");
 
     let discard = json!({ "tab": 30, "discard": true });
-    let closed = call(&agents, "claude-code", "close_tab", discard, cx)
-        .recv()
-        .unwrap();
+    let closed = call(&agents, "claude-code", "close_tab", discard, cx);
+    assert!(
+        closed.try_recv().is_err(),
+        "the discard didn't ask the page"
+    );
+    page_answers(&agents, &browser, 30, Closed::Asks, cx);
+    let closed = closed.recv().unwrap();
     assert!(!closed.error);
     assert_eq!(closed.text, "Closed tab 30 without saving.");
     assert!(browser.tabs.borrow().iter().all(|tab| tab.0 != 30));
@@ -2701,8 +2754,101 @@ fn an_agent_discards_only_a_page_it_opened(cx: &mut TestAppContext) {
     );
 }
 
-/// In a tab the agent didn't open, what's unsaved may be the user's: discard asks them first, and
-/// only their yes closes it.
+/// A page whose handler doesn't ask closes at the first call, discard or not, with nothing lost
+/// and no question to the user, even in a tab the agent didn't open.
+#[gpui::test]
+fn a_page_that_doesnt_ask_closes_at_the_first_call(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    for each in (browser.tabs.borrow_mut().iter_mut()).filter(|each| each.0 == 10) {
+        each.1 = 2;
+    }
+    browser.asks.borrow_mut().insert(10);
+    let discard = json!({ "tab": 10, "discard": true });
+    let closed = call(&agents, "claude-code", "close_tab", discard, cx);
+    page_answers(&agents, &browser, 10, Closed::Closed, cx);
+    let closed = closed.recv().unwrap();
+    assert!(!closed.error);
+    assert_eq!(closed.text, "Closed tab 10.");
+    assert_eq!(*browser.closes.borrow(), [(10, false)]);
+    assert_eq!(*browser.asked.borrow(), None, "asked the user");
+    let entry = log(&agents, "claude-code", cx).remove(0);
+    assert_eq!(
+        entry,
+        ("close_tab".into(), "en.wikipedia.org".into(), "".into())
+    );
+}
+
+/// A second close while the page is asked waits for the same answer, with no second ask of the
+/// page's own: each close has its entry in the log. A discard of the agent's own tab meanwhile
+/// closes it at once, and the close waiting hears it closed.
+#[gpui::test]
+fn closes_while_the_page_is_asked_share_its_answer(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    opened_with_handler(&agents, &browser, cx);
+    let first = call(
+        &agents,
+        "claude-code",
+        "close_tab",
+        json!({ "tab": 30 }),
+        cx,
+    );
+    let second = call(
+        &agents,
+        "claude-code",
+        "close_tab",
+        json!({ "tab": 30 }),
+        cx,
+    );
+    page_answers(&agents, &browser, 30, Closed::Asks, cx);
+    for answer in [first, second] {
+        let answer = answer.recv().unwrap();
+        assert!(answer.error);
+        assert!(answer.text.starts_with("Tab 30 stays open: its page asks"));
+    }
+    let closes = log(&agents, "claude-code", cx);
+    assert_eq!(closes.iter().filter(|e| e.0 == "close_tab").count(), 2);
+
+    let waiting = call(
+        &agents,
+        "claude-code",
+        "close_tab",
+        json!({ "tab": 30 }),
+        cx,
+    );
+    let discard = json!({ "tab": 30, "discard": true });
+    let discarded = call(&agents, "claude-code", "close_tab", discard, cx)
+        .recv()
+        .unwrap();
+    assert_eq!(discarded.text, "Closed tab 30 without saving.");
+    assert!(waiting.try_recv().is_err(), "answered before the core did");
+    page_answers(&agents, &browser, 30, Closed::Closed, cx);
+    assert_eq!(waiting.recv().unwrap().text, "Closed tab 30.");
+}
+
+/// A tab that went to another page before its page answered stays, and the answer says so.
+#[gpui::test]
+fn a_tab_that_changed_meanwhile_stays(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    opened_with_handler(&agents, &browser, cx);
+    let kept = call(
+        &agents,
+        "claude-code",
+        "close_tab",
+        json!({ "tab": 30 }),
+        cx,
+    );
+    page_answers(&agents, &browser, 30, Closed::Stays, cx);
+    let kept = kept.recv().unwrap();
+    assert!(kept.error);
+    assert_eq!(
+        kept.text,
+        "Tab 30 stays open: before its page answered, it went to another page, was unloaded, \
+         or the user took it over or pinned it."
+    );
+}
+
+/// In a tab the agent didn't open, what's unsaved may be the user's: once the page asked to stay,
+/// discard asks them first, and only their yes closes it.
 #[gpui::test]
 fn discarding_a_page_the_user_gave_asks_them(cx: &mut TestAppContext) {
     let (agents, browser, _) = connected(cx);
@@ -2719,6 +2865,8 @@ fn discarding_a_page_the_user_gave_asks_them(cx: &mut TestAppContext) {
     let discard = json!({ "tab": 10, "discard": true });
 
     let refused = call(&agents, "claude-code", "close_tab", discard.clone(), cx);
+    assert_eq!(*browser.asked.borrow(), None, "asked before the page did");
+    page_answers(&agents, &browser, 10, Closed::Asks, cx);
     let question = browser
         .asked
         .borrow()
@@ -2745,6 +2893,7 @@ fn discarding_a_page_the_user_gave_asks_them(cx: &mut TestAppContext) {
     );
 
     let closed = call(&agents, "claude-code", "close_tab", discard, cx);
+    page_answers(&agents, &browser, 10, Closed::Asks, cx);
     let question = browser
         .asked
         .borrow()
@@ -4759,9 +4908,31 @@ mod tasks {
         page: Option<String>,
         cx: &mut TestAppContext,
     ) -> ToolResult {
+        traced_by(
+            agents,
+            agent,
+            tool,
+            arguments,
+            cx,
+            |answer, cx| match page {
+                Some(text) => page_done(agents, browser, answer, text, cx),
+                None => answer.recv().unwrap(),
+            },
+        )
+    }
+
+    /// `traced`, with `answer` taking the call's reply: for a call the core answers later.
+    fn traced_by(
+        agents: &Entity<Agents>,
+        agent: &str,
+        tool: &str,
+        arguments: Value,
+        cx: &mut TestAppContext,
+        answer: impl FnOnce(mpsc::Receiver<ToolResult>, &mut TestAppContext) -> ToolResult,
+    ) -> ToolResult {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let id = NEXT.fetch_add(1, Ordering::Relaxed);
-        let (reply, answer) = mpsc::channel();
+        let (reply, receiver) = mpsc::channel();
         let at = std::time::Instant::now();
         let call = Call {
             id,
@@ -4772,10 +4943,7 @@ mod tasks {
             at,
         };
         agents.update(cx, |agents, cx| agents.handle(Event::Call(call), cx));
-        let result = match page {
-            Some(text) => page_done(agents, browser, answer, text, cx),
-            None => answer.recv().unwrap(),
-        };
+        let result = answer(receiver, cx);
         let error = result.error.then(|| result.text.clone());
         let at = std::time::Instant::now();
         let answered = Event::Answered {
@@ -4859,6 +5027,43 @@ mod tasks {
             0,
             "a stopped card asks for nothing"
         );
+    }
+
+    /// A step that chose an option with a line break in it says it on one line, as the card's
+    /// status and the trace's title are a line each.
+    #[gpui::test]
+    fn a_chosen_options_line_break_makes_no_second_line_of_the_step(cx: &mut TestAppContext) {
+        let (agents, browser) = ready(None, cx);
+        let agent = start(&agents, "Use the coupon", cx);
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Working
+        });
+        browser
+            .tabs
+            .borrow_mut()
+            .push((30, 100, "Shop", "https://shop.example/basket"));
+        let snapshot = json!({ "tab": 30 });
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "snapshot",
+            snapshot,
+            Some(shop_tree()),
+            cx,
+        );
+        let choose = json!({ "tab": 30, "ref": "e1", "option": "SPRING\n10" });
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "select",
+            choose,
+            Some(shop_tree()),
+            cx,
+        );
+        let status = card_of(&agents, cx).status.to_string();
+        assert_eq!(status, "Step 2 · Chose “SPRING 10” in “Coupon”");
     }
 
     /// A task's calls are its conversation's trace, each titled by what it did and opening to what
@@ -4958,6 +5163,87 @@ mod tasks {
         );
     }
 
+    /// A close the page asked to stay through reads as the tab left open, not as a failure, with
+    /// why joined to it, and the discard after it as closed without saving, among a plain close's
+    /// line (#3256).
+    #[gpui::test]
+    fn a_close_the_page_kept_reads_as_kept_not_failed(cx: &mut TestAppContext) {
+        use crate::agents::task::{Line, Opens, TraceItem};
+        let (agents, browser) = ready(None, cx);
+        let agent = start(&agents, "Tidy my tabs", cx);
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Working
+        });
+        // The agent opens the draft, and the basket is another tab in its Space.
+        let url = json!({ "url": "https://docs.example/draft" });
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "open_tab",
+            url,
+            Some(shop_tree()),
+            cx,
+        );
+        let (draft, space, ..) = *browser.tabs.borrow().last().unwrap();
+        let basket = draft + 1;
+        let shop = (basket, space, "Shop", "https://shop.example/basket");
+        browser.tabs.borrow_mut().push(shop);
+        browser.asks.borrow_mut().insert(draft);
+        let basket = json!({ "tab": basket });
+        assert!(!traced(&agents, &browser, &agent, "close_tab", basket, None, cx).error);
+        // The core asks the draft's page, a discard too, and the page answers from a task of its
+        // own that it asks to stay.
+        let mut asked = |arguments: Value, cx: &mut TestAppContext| {
+            traced_by(&agents, &agent, "close_tab", arguments, cx, |answer, cx| {
+                page_answers(&agents, &browser, draft, Closed::Asks, cx);
+                answer.recv().unwrap()
+            })
+        };
+        assert!(
+            asked(json!({ "tab": draft }), cx).error,
+            "the page asked to stay"
+        );
+        let discard = asked(json!({ "tab": draft, "discard": true }), cx);
+        assert_eq!(discard.text, format!("Closed tab {draft} without saving."));
+
+        let conversation =
+            agents.read_with(cx, |agents, cx| agents.conversation(&agent, cx).unwrap());
+        let [Line::Trace(trace)] = conversation.lines.as_slice() else {
+            panic!("{:?}", conversation.lines)
+        };
+        let closes: Vec<_> = (trace.items.iter())
+            .filter_map(|item| match item {
+                TraceItem::Step(step)
+                    if step.title.starts_with("Closed") || step.title.starts_with("Left") =>
+                {
+                    Some(step)
+                }
+                _ => None,
+            })
+            .collect();
+        let lines: Vec<_> = (closes.iter())
+            .map(|step| (step.title.as_ref(), step.description.as_ref(), step.failed))
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                ("Closed shop.example", "", false),
+                // The reason after a dot, in the title's ink, as History joins a row's parts.
+                (
+                    "Left docs.example open · asked to stay: unsaved changes",
+                    "",
+                    false
+                ),
+                ("Closed docs.example without saving", "", false),
+            ]
+        );
+        assert!(
+            matches!(closes[1].opens, Opens::Nothing),
+            "it opened to what the agent was told"
+        );
+    }
+
     /// An open's line titles its site alone and opens to its whole address.
     #[gpui::test]
     fn an_open_line_titles_its_site_and_opens_to_its_address(cx: &mut TestAppContext) {
@@ -5027,6 +5313,7 @@ mod tasks {
             ended: Some(now),
             error: Some("Timed out waiting for the page.".into()),
             picture: None,
+            close: None,
         };
         let lines = fold(&[], &[failed], true, false, None);
         let [Line::Trace(trace)] = lines.as_slice() else {
@@ -5194,6 +5481,7 @@ mod tasks {
             ended: ended.map(at),
             error: None,
             picture: None,
+            close: None,
         };
         let mut messages = vec![message(Who::User, "Museum hours", 0)];
         let mut trace = vec![step("open_tab", 1, 1, Some(3))];
@@ -5262,6 +5550,7 @@ mod tasks {
             ended: Some(at(3)),
             error: None,
             picture: None,
+            close: None,
         }];
         let mut messages = vec![
             message(Who::User, "Museum hours", 0),
@@ -5298,6 +5587,7 @@ mod tasks {
             ended: Some(at(seconds + 1)),
             error: None,
             picture: None,
+            close: None,
         };
         let messages = [Message {
             who: Who::User,
@@ -6219,3 +6509,35 @@ fn an_agent_sorts_its_own_today_tabs_by_site(cx: &mut TestAppContext) {
 }
 
 mod holds;
+
+/// An agent's http:// is never one the user typed (#2417): open_tab and navigate hand the core the
+/// address as the agent wrote it through `open_tab` and `navigate`, bc_agent_open_tab's and
+/// bc_agent_navigate's, which take no typed text, so the core never sets
+/// url_typed_with_http_scheme for it and HTTPS-First still tries it over https first.
+#[gpui::test]
+fn an_agents_http_address_is_never_a_typed_one(cx: &mut TestAppContext) {
+    let (agents, browser, _configs) = connected(cx);
+    let answer = call(
+        &agents,
+        "claude-code",
+        "open_tab",
+        json!({ "url": "http://plain.example.com/" }),
+        cx,
+    );
+    assert!(!page_done(&agents, &browser, answer, shop_tree(), cx).error);
+    let (tab, _, _, opened) = *browser.tabs.borrow().last().unwrap();
+    assert_eq!((tab, opened), (30, "http://plain.example.com/"));
+
+    let answer = call(
+        &agents,
+        "claude-code",
+        "navigate",
+        json!({ "url": "http://other.example.com/" }),
+        cx,
+    );
+    assert!(!page_done(&agents, &browser, answer, shop_tree(), cx).error);
+    assert_eq!(
+        *browser.navigated.borrow(),
+        [(30, "http://other.example.com/".to_string())]
+    );
+}

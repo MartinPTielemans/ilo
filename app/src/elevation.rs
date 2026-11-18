@@ -1,9 +1,13 @@
 //! The three elevation levels every overlay takes (#317). Each is one recipe: a rim inside the
 //! surface's edge, the outline round the outside and a drop shadow, with the values in
 //! `design/tokens.toml` under `[elevation]`. A surface GPUI draws takes `shadow()` and `rim()`;
-//! one the host draws a shadow window for takes `host_shadow()`.
+//! one the host draws a shadow window for takes `host_shadow()`, and on Windows draws its shadow
+//! in its own window with `in_window()`.
 
-use gpui::{BoxShadow, Hsla, Rgba, point, px, rgba};
+use gpui::{
+    AnyElement, BoxShadow, Hsla, IntoElement, ParentElement as _, Pixels, Rgba, Size, Styled, div,
+    point, px, rgba,
+};
 
 use crate::palette::Palette;
 use crate::tokens::elevation as t;
@@ -21,6 +25,13 @@ pub enum Level {
 
 /// How far a window that draws a popover's shadow itself reaches past what it holds.
 pub const WINDOW_MARGIN: f32 = t::WINDOW_MARGIN;
+
+/// Whether a panel the host floats in a window of its own size, the command bar, the tab switcher,
+/// the find bar and the offer, draws its level's shadow itself, in a margin round it in that window,
+/// as the menus do: on Windows, whose own shadow comes only with its own corner, rounder or squarer
+/// than the panel's, which left a sliver of the window round it (#2988). The Mac's and Linux's
+/// hosts draw it in a window under the panel.
+pub const PANEL_SHADOW_IN_WINDOW: bool = cfg!(target_os = "windows");
 
 /// What the host's shadow window draws, in Core Animation's terms.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -168,6 +179,70 @@ impl Level {
             below: sides + y,
             sides,
         }
+    }
+
+    /// The margin a panel at this level leaves round itself in its window for its shadow, in whole
+    /// points, which the host leaves room for (host_set_shadow_margin): its reach where it draws its
+    /// own shadow (`PANEL_SHADOW_IN_WINDOW`), else none.
+    pub fn panel_margin(self) -> Reach {
+        self.margin_if(PANEL_SHADOW_IN_WINDOW)
+    }
+
+    fn margin_if(self, in_window: bool) -> Reach {
+        let reach = self.reach();
+        match in_window {
+            true => Reach {
+                above: reach.above.ceil(),
+                below: reach.below.ceil(),
+                sides: reach.sides.ceil(),
+            },
+            false => Reach {
+                above: 0.,
+                below: 0.,
+                sides: 0.,
+            },
+        }
+    }
+
+    /// `panel`, a surface at this level that fills what its window holds, in the margin its shadow
+    /// draws in, with that shadow, where it draws its own (`PANEL_SHADOW_IN_WINDOW`).
+    pub fn in_window(self, panel: impl IntoElement + Styled) -> AnyElement {
+        self.in_room_of(self, panel)
+    }
+
+    /// As `in_window`, in the margin `room` leaves, a level whose shadow reaches as far as this
+    /// one's at least: a panel that shows at two levels keeps the larger's room in one window.
+    pub fn in_room_of(self, room: Level, panel: impl IntoElement + Styled) -> AnyElement {
+        self.in_window_if(PANEL_SHADOW_IN_WINDOW, room, panel)
+    }
+
+    fn in_window_if(
+        self,
+        in_window: bool,
+        room: Level,
+        panel: impl IntoElement + Styled,
+    ) -> AnyElement {
+        if !in_window {
+            return panel.into_any_element();
+        }
+        let margin = room.margin_if(true);
+        div()
+            .size_full()
+            .pt(px(margin.above))
+            .px(px(margin.sides))
+            .pb(px(margin.below))
+            .child(panel.shadow(self.shadow()))
+            .into_any_element()
+    }
+}
+
+impl Reach {
+    /// The size of a window that holds a panel `size` big with this margin round it.
+    pub fn around(self, size: Size<Pixels>) -> Size<Pixels> {
+        gpui::size(
+            size.width + px(2. * self.sides),
+            size.height + px(self.above + self.below),
+        )
     }
 }
 

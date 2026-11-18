@@ -1,17 +1,28 @@
 # ilo's Flatpak (tools/flatpak.sh) from the prod build on the prebuilt Linux engine, as an artifact,
 # then installed and started on X11 in Xvfb to see that its first window draws.
 # Run it by hand to build from a branch whose packaging didn't change. release.yml calls it for a
-# release's Flatpak, the `ilo-flatpak` artifact, and its crash reports' symbols.
+# release's Flatpak, the `ilo-flatpak` artifact, and its crash reports' symbols, and check-linux.yml
+# beside its shards, on main each night and after each merge train.
 # A push or a run by hand whose core/public/browser_core.h no published Linux engine has is
 # skipped, as nothing can run it, as check-linux.yml skips it (#882). A release fails instead: it
 # needs its commit's engine.
 name: Flatpak
 
 on:
-  # Branches only: an engine release's tag, pushed with the owner's token, starts nothing here.
+  # Branches only: an engine release's tag, pushed with the owner's token, starts nothing here. Also
+  # the check runs its steps do (Sign in, Policies, Paste and Page menu) and sync-account's server,
+  # which change apart from the packaging (#3059).
   push:
     branches: ['**']
-    paths: [app/platform/linux/flatpak/**, tools/flatpak.sh, .github/workflows/flatpak.yml]
+    paths:
+      - app/platform/linux/flatpak/**
+      - tools/flatpak.sh
+      - .github/workflows/flatpak.yml
+      - app/check/sync-account.sh
+      - app/check/ilo-server.sh
+      - app/check/policies.sh
+      - app/check/paste.sh
+      - app/check/page-menu.sh
   workflow_dispatch:
   workflow_call:
     inputs:
@@ -137,6 +148,26 @@ jobs:
           cat ilo.log
           grep -q "browser: UI shown" ilo.log
 
+      # A crash of each kind of process leaves a minidump in the sandbox (#2454), once the engine
+      # has the patch that reads a crashed process without ptrace, which Flatpak's seccomp refuses.
+      - name: Crash dumps
+        if: ${{ steps.engine.outputs.found == 'true' && !inputs.release }}
+        run: |
+          engine=$(engine/fetch.sh commit)
+          if ! git cat-file -e "$engine:engine/patches/ours/chromium-crashpad-flatpak-dumps.patch" 2> /dev/null; then
+            echo "::notice::Skipped crash dumps: the engine (${engine:0:12}) predates the patch for them."
+            exit 0
+          fi
+          dbus-run-session -- xvfb-run -a -s '-screen 0 1280x800x24' \
+            tools/flatpak-crashes.sh app/build/flatpak-crashes
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() && steps.engine.outputs.found == 'true' && !inputs.release }}
+        with:
+          name: ilo-flatpak-crashes
+          path: app/build/flatpak-crashes
+          if-no-files-found: ignore
+
       # The Flatpak signs in to sync as the build does, by check.sh's sync-account run, driven in its
       # sandbox (BROWSER_FLATPAK), on an ilo-server of the run's own, on SQLite with a throwaway
       # account, never the hosted one, at the commit check-linux.yml builds. Not in a release,
@@ -160,7 +191,7 @@ jobs:
       - if: ${{ steps.server.outcome == 'success' }}
         uses: ./.github/actions/apt-install
         with:
-          packages: xdotool openbox xauth
+          packages: xdotool openbox xauth xclip
 
       - name: Sign in
         if: ${{ steps.server.outcome == 'success' }}
@@ -206,6 +237,58 @@ jobs:
         if: ${{ always() && steps.policies.outcome != 'skipped' }}
         with:
           name: ilo-flatpak-policies
+          path: app/build/check
+          if-no-files-found: ignore
+
+      # What another app copies pastes into the UI's fields in the sandbox (#2463), by check.sh's
+      # paste run: under Xvfb on X11, and in a headless sway session on Wayland, where the sandbox
+      # gives the app no X11. Each leg's files are moved aside, as each run starts build/check anew.
+      - if: ${{ steps.engine.outputs.found == 'true' && !inputs.release }}
+        uses: ./.github/actions/apt-install
+        with:
+          packages: xdotool openbox xauth xclip sway grim xwayland wl-clipboard
+      - name: Paste
+        id: paste
+        if: ${{ steps.engine.outputs.found == 'true' && !inputs.release }}
+        working-directory: app
+        env:
+          LANG: en_US.UTF-8
+        run: |
+          status=0
+          XDG_RUNTIME_DIR=$(mktemp -d) BROWSER_FLATPAK=1 BROWSER_XVFB=1 \
+            dbus-run-session -- ./check.sh paste || status=1
+          [ ! -d build/check ] || mv build/check build/paste-x11
+          XDG_RUNTIME_DIR=$(mktemp -d) BROWSER_FLATPAK=1 BROWSER_WAYLAND=1 \
+            dbus-run-session -- ./check.sh paste || status=1
+          [ ! -d build/check ] || mv build/check build/paste-wayland
+          exit $status
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() && steps.paste.outcome != 'skipped' }}
+        with:
+          name: ilo-flatpak-paste
+          path: |
+            app/build/paste-x11
+            app/build/paste-wayland
+          if-no-files-found: ignore
+
+      # A link's Copy Link Address in the sandbox, by check.sh's page-menu run: the browser goes on,
+      # which it does only while the app's own feature list, Link copied's toast off among them,
+      # outlasts the one Cobalt gives Chromium (#3158).
+      - name: Page menu
+        id: page-menu
+        if: ${{ steps.engine.outputs.found == 'true' && !inputs.release }}
+        working-directory: app
+        env:
+          LANG: en_US.UTF-8
+        run: |
+          XDG_RUNTIME_DIR=$(mktemp -d) BROWSER_FLATPAK=1 BROWSER_XVFB=1 \
+            dbus-run-session -- ./check.sh page-menu
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() && steps.page-menu.outcome != 'skipped' }}
+        with:
+          name: ilo-flatpak-page-menu
           path: app/build/check
           if-no-files-found: ignore
 

@@ -151,6 +151,9 @@ unsafe extern "C" {
         shadow_radius: f64,
         shadow_drop: f64,
     );
+    // Windows' alone, as the Mac's and Linux's hosts draw a panel's shadow under it.
+    #[cfg(target_os = "windows")]
+    pub fn host_set_shadow_margin(view: *mut c_void, above: f64, sides: f64, below: f64);
     pub fn host_set_overlay_shape(overlay: c_int, corners: *const f64, count: usize);
     pub fn host_set_overlay_radius(overlay: c_int, radius: f64);
     pub fn host_set_overlay_growth(overlay: c_int, x: f64, y: f64);
@@ -236,6 +239,8 @@ unsafe extern "C" {
     ) -> bool;
     #[cfg(target_os = "windows")]
     pub fn host_maximize_window(ui_view: *mut c_void);
+    #[cfg(target_os = "windows")]
+    pub fn host_set_window_buttons_right(ui_view: *mut c_void, right: bool);
     pub fn host_add_reveal(
         ui_view: *mut c_void,
         reveal_view: *mut c_void,
@@ -429,6 +434,14 @@ unsafe extern "C" {
     );
     pub fn host_show_link_target(ui_view: *mut c_void, left: f64, top: f64, fade: f64);
     pub fn host_hide_link_target(fade: f64);
+    pub fn host_outline_overlay(
+        overlay_view: *mut c_void,
+        left: f64,
+        top: f64,
+        width: f64,
+        height: f64,
+        radius: f64,
+    );
     pub fn host_mouse_down() -> bool;
     #[cfg(target_os = "macos")]
     pub fn host_keep_keychain_key() -> bool;

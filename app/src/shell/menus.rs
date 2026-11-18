@@ -6,7 +6,7 @@ use std::sync::Arc;
 use gpui::{App, Context, Hsla, Image, Pixels, Point, Rgba, SharedString, rgb};
 
 use super::{
-    Command, FavoritesScope, MAX_PANES, Page, ProfileChoice, Row, Shell, UserKeys,
+    Command, FavoritesScope, LiveSource, MAX_PANES, Page, ProfileChoice, Row, Shell, UserKeys,
     commands::markdown_text,
     files,
     undo::{Prop, Value},
@@ -322,7 +322,10 @@ impl Shell {
             }),
         )];
         // A private window's Space has no folders, and nothing to change.
-        if !self.one_space() {
+        if self.one_space() {
+            items.push((MenuEntry::line(), Box::new(|_, _| {})));
+            items.push(self.top_bar_item(cx));
+        } else {
             let new_folder =
                 MenuEntry::new("New Folder…", true).shortcut(Command::NewFolder, user_keys(cx));
             items.push((
@@ -332,6 +335,9 @@ impl Shell {
                     shell.run(Command::NewFolder, "sidebar", cx)
                 }),
             ));
+            items.push((MenuEntry::line(), Box::new(|_, _| {})));
+            // The window's view, by the sidebar's own items and before the Space's.
+            items.push(self.top_bar_item(cx));
             items.push((MenuEntry::line(), Box::new(|_, _| {})));
             // Its Profile submenu's items name their parent by where it is, now further down.
             let after = items.len();
@@ -345,6 +351,17 @@ impl Shell {
             );
         }
         items
+    }
+
+    /// Show Top Bar or Hide Top Bar, by whether it's on, with its key: in the sidebar's empty
+    /// space's menu, and the whole of the bar's own, where the way out is seen (#3160).
+    pub(super) fn top_bar_item(&self, cx: &App) -> (MenuEntry, MenuAction) {
+        let title = super::commands::top_bar_title(self.top_bar);
+        let entry = MenuEntry::new(title, true).shortcut(Command::ToggleTopBar, user_keys(cx));
+        (
+            entry,
+            Box::new(|shell, cx| shell.run(Command::ToggleTopBar, "sidebar", cx)),
+        )
     }
 
     /// The Space's menu's items, for its name, its dot and the sidebar's empty space, in Arc
@@ -395,6 +412,26 @@ impl Shell {
                     shell.run(Command::NewFolder, "space menu", cx)
                 }),
             ));
+        }
+        // Each source, ticked while the Space has its folder, which unticking deletes.
+        let live = self.offers_live_folders(space);
+        if live {
+            let at = items.len();
+            items.push((MenuEntry::new("Live Folders", true), Box::new(|_, _| {})));
+            for source in LiveSource::ALL {
+                let has = self.live_folder_of(space, source).is_some();
+                items.push((
+                    MenuEntry::new(source.menu_title(), true)
+                        .checked(has)
+                        .under(at),
+                    Box::new(move |shell, cx| {
+                        log!("browser: command live-folder via space menu");
+                        shell.toggle_live_folder(space, source, cx)
+                    }),
+                ));
+            }
+        }
+        if new_folder || live {
             items.push((MenuEntry::line(), Box::new(|_, _| {})));
         }
         // Every one of the user's Spaces, its own dimmed as Arc's is, while one can take it.
@@ -470,8 +507,9 @@ impl Shell {
     ) {
         let look = self.menu_look();
         self.menu_open = true;
-        // The name row says so after this if the menu is its own.
+        // The name row and the menu control say so after this if the menu is their own.
         self.name_menu = false;
+        self.app_menu = false;
         let shell = cx.weak_entity();
         self.browser.context_menu(
             entries,
@@ -482,6 +520,7 @@ impl Shell {
                 shell
                     .update(cx, |shell, cx| {
                         shell.menu_open = false;
+                        shell.app_menu = false;
                         chosen(index, shell, cx);
                         shell.settle_recent_downloads(cx);
                     })
@@ -762,6 +801,8 @@ impl Shell {
             self.chosen_menu(keys)
         } else if self.favorites.contains(&tab) {
             self.favorite_menu(keys, tab)
+        } else if self.live_source(tab).is_some() {
+            self.live_folder_menu(tab)
         } else if self.is_folder(tab) {
             self.folder_menu(tab)
         } else if self.panes(tab).len() > 1 {
@@ -914,6 +955,35 @@ impl Shell {
         }
         items.extend([line(), copy, line(), close]);
         items
+    }
+
+    /// A Live Folder's menu: Refresh, which the floor doesn't hold back, and the way back to a
+    /// plain folder (#2979's spike).
+    fn live_folder_menu(&self, folder: u64) -> Vec<(MenuEntry, &'static str, MenuAction)> {
+        vec![
+            (
+                MenuEntry::new("Refresh", true),
+                "refresh-live-folder",
+                Box::new(move |shell, cx| shell.refresh_live_folder(folder, cx)),
+            ),
+            (MenuEntry::line(), "", Box::new(|_, _| {})),
+            (
+                MenuEntry::new("Rename Folder", true),
+                "rename-folder",
+                Box::new(move |shell, cx| shell.rename_folder(folder, cx)),
+            ),
+            (
+                MenuEntry::new("Convert to Folder", true),
+                "convert-live-folder",
+                Box::new(move |shell, cx| shell.convert_live_folder(folder, cx)),
+            ),
+            (MenuEntry::line(), "", Box::new(|_, _| {})),
+            (
+                MenuEntry::new("Delete Folder", true).destructive(),
+                "delete-folder",
+                Box::new(move |shell, cx| shell.delete_folder_now(folder, cx)),
+            ),
+        ]
     }
 
     /// A folder's menu, as Arc's.
@@ -1675,6 +1745,7 @@ impl Shell {
             ("New Space…", Command::NewSpace),
             ("New Folder…", Command::NewFolder),
             ("New Split View", Command::AddSplit),
+            ("New Board", Command::NewBoard),
         ];
         // Off in Settings › Features, it has no item.
         if self.new_note {
@@ -1723,6 +1794,41 @@ impl Shell {
             }),
             cx,
         );
+    }
+
+    /// The menu control's menu, off the Mac (#3148): what the Mac's menu bar holds under ilo's
+    /// name, Settings… first, with the menu bar's titles and keys. It opens above the control,
+    /// its left edge on the plate's, so the control and the + stay in sight; over the page if it
+    /// reaches there, as it's a window of its own.
+    pub(super) fn app_menu(&mut self, cx: &mut Context<Self>) {
+        let Some(frame) = (self.button_frames.borrow())
+            .get(super::footer::MENU_CONTROL)
+            .copied()
+        else {
+            return;
+        };
+        let keys = user_keys(cx);
+        let command = |title, command| {
+            let entry = MenuEntry::new(title, true).shortcut(command, keys);
+            let action: MenuAction = Box::new(move |shell, cx| shell.run(command, "footer", cx));
+            (entry, action)
+        };
+        let line = || -> (MenuEntry, MenuAction) { (MenuEntry::line(), Box::new(|_, _| {})) };
+        let items = vec![
+            command("Settings…", Command::Settings),
+            command("Import from Other Browsers…", Command::Import),
+            command("Privacy Policy", Command::PrivacyPolicy),
+            line(),
+            command(concat!("About ", env!("APP_NAME")), Command::About),
+            line(),
+            command(concat!("Quit ", env!("APP_NAME")), Command::Quit),
+        ];
+        let entries: Vec<MenuEntry> = items.iter().map(|(entry, _)| entry.clone()).collect();
+        let foot = frame.top() - gpui::px(crate::menu::FROM_CONTROL);
+        let at = gpui::point(frame.left(), foot - gpui::px(crate::menu::height(&entries)));
+        self.show_menu(items, at, None, cx);
+        self.app_menu = self.menu_open;
+        cx.notify();
     }
 }
 

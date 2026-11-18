@@ -50,17 +50,19 @@ permissions:
   contents: read
 
 env:
-  # The runs that pass on X11 so far.
+  # The runs that pass on X11 so far. live-folder-site asks GitHub, so it's here and not Wayland's:
+  # each X11 run with this list (nights, trains, a dispatch naming none) trips if its signed-out
+  # answer changes shape (#2979).
   LINUX_RUNS: >-
     tabs window find agents spaces crash profiles private blank quit mcp appearance access history
     load preview import adblock adblock-lists adblock-cosmetic adblock-page passkeys onboarding links relaunch
     split extensions capture popup pinned about windows dialogs trouble cards passwords updates
-    restore favorites keys clear media store adblock-live widevine sync sync-account sync-devices
+    restore favorites keys clear media store adblock-live live-folder-site widevine sync sync-account sync-devices
     sync-extensions little devices pair notifications calls battery battery-os idle handback
     update-checks
     webrtc tab-drag count ranking everyday hosts policies translate pictures boosts rules
     switch-frames foot-bar later-launch peek-motion safe-start mini-bar page-menu arrange-card
-    arrange arrange-trade paste
+    arrange arrange-trade arrange-drop arrange-order paste
   # The runs that pass on Wayland so far, in the headless sway session.
   WAYLAND_RUNS: >-
     load keys tabs popup history spaces agents profiles restore relaunch find pinned clear split
@@ -72,7 +74,7 @@ env:
     window windows
     media pictures boosts links notifications switch-frames foot-bar peek-motion rules later-launch
     safe-start mini-bar page-menu arrange-card
-    arrange arrange-trade paste
+    arrange arrange-trade arrange-drop arrange-order paste
   # The runs that don't apply to Linux, a line each with why, which the summary gives. They're
   # skipped even when named.
   LINUX_SKIPS: |
@@ -476,10 +478,12 @@ jobs:
           for run in $RUNS; do
             start=$SECONDS
             status=0
-            # The updates run builds a Flatpak first, and perf measures Chrome beside the app.
+            # The updates run builds a Flatpak first, perf measures Chrome beside the app, and a lone
+            # adblock-native makes uBlock Origin's pass of the 50 sites before its own (#3260).
             limit=20m
             [ "$run" != updates ] || limit=45m
             [ "$run" != perf ] || limit=40m
+            [ "$run" != adblock-native ] || limit=40m
             timeout "$limit" ./check.sh "$run" > "$dir/$run.log" 2>&1 || status=$?
             [ ! -d build/check ] || mv build/check "$dir/$run"
             pkill -9 -f "$PWD/build/Browser/" || true
@@ -768,10 +772,25 @@ jobs:
           pattern: check-linux-*
           delete-merged: true
 
+  # ilo's Flatpak, built, started and signed in to sync in its sandbox (flatpak.yml), beside the
+  # shards. Its own trigger is its packaging's paths, which the app's and the checks' changes that
+  # break it don't touch, so four of its runs failed unseen (#3059). With the default runs or all
+  # alone, so a run asked for by name doesn't pay its 20 min, and on the default X11 leg alone, as
+  # the report is, so a train's sway, KWin and Wayland legs don't build and sign in the same bundle
+  # again: its own steps cover the sessions they need. With no engine it skips, as a shard does.
+  flatpak:
+    needs: gate
+    if: needs.gate.outputs.check == 'true' && (inputs.runs == '' || inputs.runs == 'all') && inputs.session != 'sway' && inputs.session != 'kwin' && inputs.session != 'wayland'
+    name: Flatpak
+    uses: ./.github/workflows/flatpak.yml
+    with:
+      release: false
+
   # The default runs' verdict on main, the night's or a train's, keeps the workflow's issue: a
   # dispatched run reports too, as its pass is the only one the night won't repeat on that commit.
+  # The Flatpak failing fails it too, and the issue names its job and step.
   report:
-    needs: [gate, check]
+    needs: [gate, check, flatpak]
     if: ${{ always() && needs.gate.outputs.check == 'true' && github.ref == 'refs/heads/main' && github.repository == 'MartinPTielemans/ilo' && inputs.runs == '' && inputs.session != 'sway' && inputs.session != 'kwin' && inputs.session != 'wayland' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -789,6 +808,8 @@ jobs:
             app/check
       - env:
           GH_TOKEN: ${{ github.token }}
-          RESULT: ${{ needs.check.result }}
+          # The check's, unless it passed and the Flatpak didn't: then the Flatpak's, failure or
+          # cancelled.
+          RESULT: ${{ needs.check.result == 'success' && needs.flatpak.result != 'success' && needs.flatpak.result || needs.check.result }}
           FOUND: ${{ needs.check.outputs.found }}
         run: .github/scripts/main-check.sh report "$RESULT" "$FOUND"
