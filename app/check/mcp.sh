@@ -1861,7 +1861,8 @@ red = total = 0
 for y in range(int(y0 * abs(height)), int(y1 * abs(height))):
     row = y if height < 0 else abs(height) - 1 - y
     for x in range(int(x0 * width), int(x1 * width)):
-        b, g, r = data[offset + row * stride + x * bits // 8:][:3]
+        start = offset + row * stride + x * bits // 8
+        b, g, r = data[start:start + 3]
         red += r > 160 and g < 100 and b < 100
         total += 1
 print(red * 100 // max(total, 1), red)
