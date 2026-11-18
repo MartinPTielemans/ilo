@@ -1,0 +1,27 @@
+<!doctype html>
+<title>start</title>
+<audio src="tone.wav" loop></audio>
+<script>
+// A player as a music site makes one: what plays, named for the system, and its actions handled.
+const audio = document.querySelector("audio");
+const track = (title, artist) => new MediaMetadata({
+  title, artist, album: "Album " + artist.slice(-1),
+  artwork: [{src: "/art-" + title.slice(-1) + ".png", sizes: "96x96", type: "image/png"}],
+});
+navigator.mediaSession.metadata = track("Track A", "Artist A");
+for (const action of ["play", "pause", "nexttrack", "previoustrack", "seekto", "stop"]) {
+  navigator.mediaSession.setActionHandler(action, () => {
+    document.title = "action " + action;
+    if (action == "nexttrack") {
+      navigator.mediaSession.metadata = track("Track B", "Artist B");
+      audio.src = "tone2.wav";
+      audio.play();
+    } else if (action == "play") {
+      audio.play();
+    } else if (action == "pause") {
+      audio.pause();
+    }
+  });
+}
+audio.play().then(() => document.title = "playing", e => document.title = "refused " + e.name);
+</script>
