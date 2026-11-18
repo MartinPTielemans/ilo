@@ -308,6 +308,29 @@ static NSString* const kWatch =
                    self->_web.title);
              }];
   }];
+  // 2b. An action the page doesn't handle, from the browser's world, and WebKit's title and artist
+  // again, now its Now Playing session is active.
+  [steps addObject:^{
+    [self inWorld:WKContentWorld.pageWorld
+              run:@"navigator.mediaSession.setActionHandler('previoustrack', null), 'cleared'"
+             then:^(id cleared) {
+               [self inWorld:World()
+                         run:@"try { navigator.mediaSession.callActionHandler({action: "
+                              "'previoustrack'}); 'returned' } catch (e) { 'threw ' + e.name }"
+                        then:^(id result) {
+                          Log(@"2b previous track, which the page doesn't handle, from the browser's "
+                              @"world: %@; the page's title %@",
+                              result, self->_web.title);
+                        }];
+             }];
+    SEL ask = NSSelectorFromString(@"_nowPlayingMediaTitleAndArtist:");
+    if ([self->_web respondsToSelector:ask]) {
+      void (^answer)(NSString*, NSString*) = ^(NSString* title, NSString* artist) {
+        Log(@"2b _nowPlayingMediaTitleAndArtist: title %@, artist %@", title, artist);
+      };
+      ((void (*)(id, SEL, id))objc_msgSend)(self->_web, ask, answer);
+    }
+  }];
   // 3. Pause and play through the media element, from the browser's world.
   [steps addObject:^{
     [self inWorld:World()
@@ -339,8 +362,12 @@ static NSString* const kWatch =
       return;
     }
     Log(@"5b asking _playPredominantOrNowPlayingMediaSession:");
+    // Whether it goes through the page's play handler, which titles the page "action play".
     void (^done)(BOOL) = ^(BOOL success) {
-      Log(@"5b _playPredominantOrNowPlayingMediaSession: answered %d", success);
+      [self after:0.5 run:^{
+        Log(@"5b _playPredominantOrNowPlayingMediaSession: answered %d; the page's title %@",
+            success, self->_web.title);
+      }];
     };
     ((void (*)(id, SEL, id))objc_msgSend)(self->_web, play, done);
   }];
@@ -352,7 +379,10 @@ static NSString* const kWatch =
     }
     Log(@"5c asking _pauseNowPlayingMediaSession:");
     void (^done)(BOOL) = ^(BOOL success) {
-      Log(@"5c _pauseNowPlayingMediaSession: answered %d", success);
+      [self after:0.5 run:^{
+        Log(@"5c _pauseNowPlayingMediaSession: answered %d; the page's title %@", success,
+            self->_web.title);
+      }];
     };
     ((void (*)(id, SEL, id))objc_msgSend)(self->_web, pause, done);
   }];
