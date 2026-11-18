@@ -580,13 +580,21 @@ if [ "$major" -ge 157 ]; then
   # pane the warning took it back from.
   if windows; then
     send key f6
+    f6=$step
     expect '^browser: sidebar keyed ' "F6 from Chrome's warning before http didn't ring the tab's row"
-    # The warning takes the keyboard in a task posted as the pane gets it, run before the next step.
     send state
     in_browser AccessKitSubclassOfGPUIView "after F6 over Chrome's warning before http"
     send key tab
     expect '^browser: ring gave the page its first control$' \
       "Tab from the ring didn't go into the page under Chrome's warning before http"
+    # The warning takes the keyboard back in tasks posted as the pane gets it. Those F6 left were
+    # posted before Tab's, so once Tab's has run, any of F6's has too, and none came before the
+    # ring gave the page the keyboard.
+    expect '^browser: tab dialog took the keyboard back$' \
+      "the page under Chrome's warning before http, given the keyboard by the ring, didn't give it to the warning"
+    [ "$(since "$f6" | sed '/^browser: ring gave the page its first control$/q' |
+      grep -c '^browser: tab dialog took the keyboard back$')" = 0 ] ||
+      fail "Chrome's warning before http took the keyboard back from the ring F6 gave it"
     send state
     [ "$key" = NativeWidgetMacNSWindow ] ||
       fail "Tab from the ring into the page under Chrome's warning before http gave the keyboard to $key, on $focus, not to the warning"

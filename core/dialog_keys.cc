@@ -1,5 +1,6 @@
 #include "browser_core/dialog_keys.h"
 
+#include <cstdio>
 #include <map>
 #include <memory>
 
@@ -126,6 +127,7 @@ class DialogKeys : public ui::EventHandler, public views::WidgetObserver {
                 }
               }
               dialog->Activate();
+              fprintf(stderr, "browser: tab dialog took the keyboard back\n");
             },
             dialog_->GetWeakPtr(), window_->GetWeakPtr()));
   }
