@@ -17,10 +17,49 @@ nonisolated final class Loopback: @unchecked Sendable {
     var status = 200
     var headers: [String: String] = [:]
     var body = Data()
+    /// Keeps the body's end back until a test says, as a slow file's is.
+    var held: Held?
+
+    /// A file to keep, under a name: what a link to a download answers with.
+    static func file(_ name: String, _ body: Data, type: String = "application/octet-stream", held: Held? = nil) -> Response {
+      Response(headers: ["Content-Type": type, "Content-Disposition": "attachment; filename=\"\(name)\""], body: body, held: held)
+    }
 
     static func html(_ body: String, headers: [String: String] = [:]) -> Response {
       let page = "<!doctype html><meta name=viewport content='width=device-width'>" + body
       return Response(headers: headers.merging(["Content-Type": "text/html; charset=utf-8"]) { mine, _ in mine }, body: Data(page.utf8))
+    }
+  }
+
+  /// The first bytes of a body go at once; the rest when the gate opens, or the connection is
+  /// dropped then, as a network that went away drops it.
+  struct Held: Sendable {
+    var first: Int
+    var gate: Gate
+    var drops = false
+  }
+
+  /// Opened once by a test, to let what waits on it go on.
+  final class Gate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isOpen = false
+    private var waiting: [@Sendable () -> Void] = []
+
+    func open() {
+      let work = lock.withLock {
+        isOpen = true
+        defer { waiting = [] }
+        return waiting
+      }
+      work.forEach { $0() }
+    }
+
+    func whenOpen(_ work: @escaping @Sendable () -> Void) {
+      let now = lock.withLock {
+        if !isOpen { waiting.append(work) }
+        return isOpen
+      }
+      if now { work() }
     }
   }
 
@@ -81,7 +120,15 @@ nonisolated final class Loopback: @unchecked Sendable {
     guard let response = answer(request) else { return connection.cancel() }
     var head = "HTTP/1.1 \(response.status) OK\r\nContent-Length: \(response.body.count)\r\nConnection: close\r\n"
     for (name, value) in response.headers { head += "\(name): \(value)\r\n" }
-    connection.send(content: Data((head + "\r\n").utf8) + response.body, completion: .contentProcessed { _ in connection.cancel() })
+    guard let held = response.held else {
+      return connection.send(content: Data((head + "\r\n").utf8) + response.body, completion: .contentProcessed { _ in connection.cancel() })
+    }
+    let rest = response.body.dropFirst(held.first)
+    connection.send(content: Data((head + "\r\n").utf8) + response.body.prefix(held.first), completion: .contentProcessed { _ in })
+    held.gate.whenOpen {
+      if held.drops { return connection.cancel() }
+      connection.send(content: Data(rest), completion: .contentProcessed { _ in connection.cancel() })
+    }
   }
 
   /// Reads one request: its head, then as much body as the head says there is.
@@ -117,7 +164,15 @@ nonisolated final class Loopback: @unchecked Sendable {
     account: PhoneAccount(account: FixtureAccount(signedIn: false), directory: directory.appending(path: "phone")),
     settings: Settings(defaults: UserDefaults(suiteName: "path-tests-\(UUID().uuidString)")!),
     cache: TabCache(directory: directory.appending(path: "tabs")),
-    favicons: Favicons(directory: directory.appending(path: "favicons")))
+    favicons: Favicons(directory: directory.appending(path: "favicons")),
+    downloads: testDownloads(in: directory))
+}
+
+/// A downloads list of a test's own: its folder, its file and its parts under `directory`.
+@MainActor func testDownloads(in directory: URL) -> Downloads {
+  Downloads(
+    folder: directory.appending(path: "files"), record: directory.appending(path: "downloads/list.json"),
+    parts: directory.appending(path: "parts"))
 }
 
 /// Waits for something a page or the network brings about, and says whether it came.

@@ -1,4 +1,5 @@
 import IloSync
+import QuickLook
 import SwiftUI
 
 @main
@@ -10,7 +11,9 @@ struct IloApp: App {
   init() {
     let phone = makeAccount()
     _phone = State(initialValue: phone)
-    _browser = State(initialValue: Browser(account: phone, settings: Settings(), cache: TabCache(), favicons: Favicons(), history: makeHistory()))
+    _browser = State(
+      initialValue: Browser(
+        account: phone, settings: Settings(), cache: TabCache(), favicons: Favicons(), downloads: Downloads(), history: makeHistory()))
   }
 
   var body: some Scene {
@@ -115,6 +118,9 @@ private struct BrowserScreen: View {
       BottomSheet(isPresented: browser.sheet == .history, ground: .solid, headroom: Listed.headroom, dismiss: { browser.sheet = nil }) {
         HistorySheet(history: browser.history)
       }
+      BottomSheet(isPresented: browser.sheet == .downloads, dismiss: { browser.sheet = nil }) {
+        DownloadsSheet()
+      }
       BottomSheet(isPresented: browser.sheet == .signIn, ground: .solid, dismiss: { browser.sheet = nil }) {
         SignInSheet()
       }
@@ -176,11 +182,14 @@ private struct BrowserScreen: View {
       case .notice, .resend: Text("")
       }
     }
-    .sheet(isPresented: Binding(get: { browser.downloaded != nil }, set: { if !$0 { browser.downloaded = nil } })) {
-      if let file = browser.downloaded {
-        FileSheet(file: file)
-          .presentationDetents([.medium, .large])
-      }
+    // A file ending is felt, wherever its button is.
+    .sensoryFeedback(.impact(weight: .light), trigger: browser.downloads.ended)
+    .quickLookPreview($browser.looking)
+    .sheet(isPresented: Binding(get: { browser.pass != nil }, set: { if !$0 { browser.pass = nil } })) {
+      if let file = browser.pass { PassSheet(file: file) }
+    }
+    .sheet(isPresented: Binding(get: { browser.copying != nil }, set: { if !$0 { browser.copying = nil } })) {
+      if let file = browser.copying { CopyPicker(file: file) }
     }
     .sheet(isPresented: Binding(get: { browser.shared != nil }, set: { if !$0 { browser.shared = nil } })) {
       if let link = browser.shared {
@@ -199,15 +208,4 @@ private struct BrowserScreen: View {
     case .resend, nil: ""
     }
   }
-}
-
-/// The system's sheet for a finished download, or for a link: save it, open it, send it on.
-private struct FileSheet: UIViewControllerRepresentable {
-  let file: URL
-
-  func makeUIViewController(context: Context) -> UIActivityViewController {
-    UIActivityViewController(activityItems: [file], applicationActivities: nil)
-  }
-
-  func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }

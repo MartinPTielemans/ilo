@@ -521,7 +521,7 @@ private final class LocalSite: Sendable {
       account: PhoneAccount(account: FixtureAccount(signedIn: false), directory: directory.appending(path: "phone")),
       settings: Settings(defaults: UserDefaults(suiteName: "history-tests-\(UUID().uuidString)")!),
       cache: TabCache(directory: directory.appending(path: "tabs")),
-      favicons: Favicons(directory: directory.appending(path: "favicons")), history: history)
+      favicons: Favicons(directory: directory.appending(path: "favicons")), downloads: testDownloads(in: directory), history: history)
     tab = WebTab(id: "tab", role: .today, browser: browser)
     site = try LocalSite([
       "/tea": .page(title: "Tea"), "/bread": .page(title: "Bread"),

@@ -77,6 +77,13 @@ import os
     let modes = Bundle.main.object(forInfoDictionaryKey: "UIBackgroundModes") as? [String] ?? []
     #expect(modes.contains("audio"))
   }
+
+  /// Both, or the Files app doesn't show the app's folder under On My iPhone, and a downloaded
+  /// file is out of every other app's reach.
+  @Test(arguments: ["UIFileSharingEnabled", "LSSupportsOpeningDocumentsInPlace"])
+  func `the folder downloads are kept in is one the Files app shows`(key: String) {
+    #expect(Bundle.main.object(forInfoDictionaryKey: key) as? Bool == true)
+  }
 }
 
 /// A window a page's script opens, as a sign-in or a payment does.
@@ -239,10 +246,12 @@ import os
     }
     #expect(asked == name)
     browser.answer(true)
-    #expect(await eventually { browser.downloaded != nil })
-    let file = try #require(browser.downloaded)
-    #expect(file.lastPathComponent == name)
-    #expect(try String(contentsOf: file, encoding: .utf8) == holds)
+    #expect(await eventually { browser.downloads.list.first?.state == .done })
+    let row = try #require(browser.downloads.list.first)
+    #expect(row.name == name)
+    // A file the page made has no address to ask again.
+    #expect(row.source == nil)
+    #expect(try String(contentsOf: browser.downloads.file(of: row), encoding: .utf8) == holds)
     #expect(await page.shows("/files"))
     #expect(page.failure == nil)
   }
@@ -254,9 +263,9 @@ import os
     _ = await page.run(Self.blob)
     #expect(await eventually { browser.prompt != nil })
     browser.answer(false)
-    #expect(await eventually { page.downloadsRunning == 0 })
     try await Task.sleep(for: .milliseconds(300))
-    #expect(browser.downloaded == nil)
+    #expect(browser.downloads.list.isEmpty)
+    #expect(browser.downloads.mark == .none)
     #expect(browser.prompt == nil)
     #expect(await page.shows("/files"))
   }

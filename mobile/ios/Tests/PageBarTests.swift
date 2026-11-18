@@ -72,7 +72,7 @@ import WebKit
       account: PhoneAccount(account: FixtureAccount(signedIn: false), directory: directory.appending(path: "phone")),
       settings: Settings(defaults: UserDefaults(suiteName: "bar-tests-\(UUID().uuidString)")!),
       cache: TabCache(directory: directory.appending(path: "tabs")),
-      favicons: Favicons(directory: directory.appending(path: "favicons")))
+      favicons: Favicons(directory: directory.appending(path: "favicons")), downloads: testDownloads(in: directory))
   }
 
   /// A page that doesn't scroll, with a foot fixed to the screen's and a box as tall as the page

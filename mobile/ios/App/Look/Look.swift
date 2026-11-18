@@ -53,6 +53,8 @@ nonisolated struct Palette: Equatable, Sendable {
   static let closePlate = Color(hex: 0x1E2026, opacity: 0.62)
   /// Over the Space while a page is held above it.
   static let dim = Color(hex: 0x0A0E14, opacity: 0.35)
+  /// What went wrong, and what deletes: the tokens' red, darker on a light ground.
+  var alarm: Color { Color(hex: dark ? 0xE1676F : 0xC9414B) }
 }
 
 extension EnvironmentValues {
@@ -133,6 +135,25 @@ nonisolated enum Dock {
     if tiles <= 0 { return .none }
     return .fixed(min(2, (tiles + across - 1) / across))
   }
+}
+
+/// A download's ring: on the button that leads to the list, and at a running row's end.
+nonisolated enum Ring {
+  /// The line on a button the bar's height, and on a row's.
+  static let width: CGFloat = 2.8
+  static let rowWidth: CGFloat = 2.5
+  /// In from its button's edge.
+  static let inset: CGFloat = 1
+  static let row: CGFloat = 34
+  /// What its track has of the colour written on it.
+  static let track = 0.16
+  /// How long a finished file's tick stands.
+  static let tick = Duration.seconds(2)
+  /// Once round, while a file's size isn't known.
+  static let turn = 1.1
+  /// How far a swiped row shows its Delete, and how far past it a swipe deletes by itself.
+  static let swipe: CGFloat = 104
+  static let swipeThrough: CGFloat = 220
 }
 
 /// The text column every list keeps: icons start 24 in and titles 56.

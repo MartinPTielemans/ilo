@@ -17,10 +17,24 @@ struct ActionSheet: View {
     VStack(spacing: 0) {
       SheetRow(symbol: "clock", title: "History") { browser.sheet = .history }
       ReadingRows(tab: tab)
-      BlockingRow(tab: tab)
-      SheetRow(symbol: "desktopcomputer", title: tab.wantsDesktopSite ? "Request mobile site" : "Request desktop site") {
-        tab.requestDesktopSite(!tab.wantsDesktopSite)
-        browser.sheet = nil
+      if tab.isPDF {
+        // A document has nothing to block and no other site to ask for: its rows keep it.
+        SheetRow(symbol: "folder", title: "Save to Files") {
+          if let url = tab.url { browser.downloads.save(url, from: tab.webView) }
+          browser.sheet = nil
+        }
+        SheetRow(symbol: "printer", title: "Print") {
+          browser.sheet = nil
+          Task {
+            if let file = await browser.copy(of: tab) { Printing.print(file, named: tab.title) }
+          }
+        }
+      } else {
+        BlockingRow(tab: tab)
+        SheetRow(symbol: "desktopcomputer", title: tab.wantsDesktopSite ? "Request mobile site" : "Request desktop site") {
+          tab.requestDesktopSite(!tab.wantsDesktopSite)
+          browser.sheet = nil
+        }
       }
       SheetRow(symbol: isFavourite ? "star.fill" : "star", title: isFavourite ? "Remove from favourites" : "Add to favourites") {
         guard let url = tab.url else { return }
@@ -59,8 +73,17 @@ struct ActionSheet: View {
         }
         .sensoryFeedback(.success, trigger: copied)
         if let url = tab.url {
-          ShareLink(item: url) {
-            BigLabel(symbol: "square.and.arrow.up", title: "Share")
+          if tab.isPDF {
+            // A document is sent as the file it is, not as a link to it.
+            Button {
+              Task { browser.shared = await browser.copy(of: tab) ?? url }
+            } label: {
+              BigLabel(symbol: "square.and.arrow.up", title: "Share")
+            }
+          } else {
+            ShareLink(item: url) {
+              BigLabel(symbol: "square.and.arrow.up", title: "Share")
+            }
           }
         }
       }
@@ -251,6 +274,11 @@ struct SettingsSheet: View {
           browser.sheet = .history
         } label: {
           BigLabel(symbol: "clock", title: "History")
+        }
+        Button {
+          browser.sheet = .downloads
+        } label: {
+          BigLabel(symbol: "arrow.down.to.line", title: "Downloads")
         }
       }
       .buttonStyle(PressStyle())

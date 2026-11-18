@@ -373,7 +373,7 @@ private func newHistory() -> History {
     return Browser(
       account: PhoneAccount(account: FixtureAccount(signedIn: true), directory: directory), settings: Settings(defaults: defaults),
       cache: TabCache(directory: directory.appending(path: "tabs")), favicons: Favicons(directory: directory.appending(path: "favicons")),
-      history: history)
+      downloads: testDownloads(in: directory), history: history)
   }
 
   private func visit(_ url: URL, _ title: String = "") -> Visit {
@@ -451,7 +451,8 @@ private func newHistory() -> History {
     let defaults = try #require(UserDefaults(suiteName: "history-screen-tests-\(UUID().uuidString)"))
     let browser = Browser(
       account: PhoneAccount(account: FixtureAccount(signedIn: true), directory: directory), settings: Settings(defaults: defaults),
-      cache: TabCache(directory: directory.appending(path: "tabs")), favicons: Favicons(directory: directory.appending(path: "favicons")))
+      cache: TabCache(directory: directory.appending(path: "tabs")), favicons: Favicons(directory: directory.appending(path: "favicons")),
+      downloads: testDownloads(in: directory))
     #expect(await browser.pages(matching: "tool").isEmpty)
   }
 }

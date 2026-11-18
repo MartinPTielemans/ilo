@@ -52,7 +52,8 @@ struct SpaceScreen: View {
           }
           SearchBar(
             query: $query, site: $site, focused: $focused, fieldOff: account.spaces.isEmpty, docked: true,
-            menu: { browser.sheet = .settings }, submit: submit
+            // While a file has begun or ended since the list was looked at, the chevron leads there.
+            menu: { browser.sheet = browser.downloads.news ? .downloads : .settings }, submit: submit
           )
           .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { browser.places.bar = $0 }
         }
@@ -192,16 +193,21 @@ struct SearchBar: View {
       field(open: open)
         .fieldGlass(open: open, apart: !docked && !open && menu != nil, docked: docked) { if !fieldOff { focused.wrappedValue = true } }
       if docked, !open, let menu {
+        // The files' progress rides on it: a ring while they come, a tick as one ends, and the
+        // ring whole until the list has been looked at.
+        let mark = browser.downloads.mark
         Button(action: menu) {
-          Image(systemName: "chevron.up")
+          MarkGlyph(mark: mark, ticking: browser.downloads.ticking, resting: "chevron.up")
             .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(palette.glassText)
+            .foregroundStyle(mark == .trouble ? palette.alarm : palette.glassText)
             .frame(width: Dock.field, height: Dock.field)
             .background(palette.dockFill, in: .circle)
+            .overlay { MarkRing(mark: mark, size: Dock.field, waits: true).foregroundStyle(palette.glassText) }
             .contentShape(.circle)
         }
         .buttonStyle(PressStyle())
-        .accessibilityLabel("Settings")
+        .accessibilityLabel(browser.downloads.news ? "Downloads" : "Settings")
+        .accessibilityValue(mark.spoken)
         .transition(.opacity)
       }
     }
