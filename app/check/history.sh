@@ -6,9 +6,10 @@
 # host typed in the command bar goes over https first, then http, or from Chromium 157 Chrome's
 # warning before http, whose dialog has the keyboard and still lets ⌘L, ⌘T and ⌘W reach the app,
 # also one shown again as the tab in front closes, and leaves the command bar every key as it shows,
-# and leaves a page split beside it the click into it and the typing after, and a local one over
-# http. One typed with http:// loads over http as written, with no https try and no warning, as in
-# Chrome's address bar. Only what the user typed counts: an agent's open_tab
+# and leaves a page split beside it the click into it and the typing after, and shows with the
+# keyboard on a click on its own pane's page, which never hears it, and a local one over http. One
+# typed with http:// loads over http as written, with no https try and no warning, as in Chrome's
+# address bar. Only what the user typed counts: an agent's open_tab
 # and navigate, and a link, to an http:// address, are tried over https first, and the agent's tab
 # at its warning leaves the user's window the keyboard. A right-click on reload lists Reload, Hard
 # Reload and Clear Site Data and Reload, the last deleting the site's cookies, storage and cache,
@@ -407,7 +408,8 @@ ran_on_warning() {
 # A page beside the warning in a split keeps a click into it and the typing after. On X11 a tab's
 # dialog takes the keyboard back after a focus change that leaves no view focused (#2926), and a
 # page is no view: the click into the page beside it was at risk of sending its keys to the warning
-# in the other pane. The warning is clicked first, so it has had the keyboard.
+# in the other pane. The warning is clicked first, so it has had the keyboard. Then a click on the
+# warned pane's page focuses that pane and shows its warning with the keyboard.
 if [ "$major" -ge 157 ]; then
   printf '%s' '<title>beside</title>
 <input id=field style="position:fixed;inset:0;font-size:40px" oninput="document.title = `beside has ${field.value}`">
@@ -492,21 +494,50 @@ requestAnimationFrame(() => requestAnimationFrame(() => document.title = "beside
     "typing after a click on the page beside $warned_tab's warning before http didn't reach that page: the keyboard is in $key, on $focus: $(since "$clicked" | grep -e '^browser: drive' -e "^browser: title $beside " | tail -6 | tr '\n' ' ')"
   since "$clicked" | grep -q "^browser: title $beside beside blurred\$" &&
     fail "the page beside $warned_tab's warning before http lost the keyboard after the click into it: $(since "$clicked" | grep -e '^browser: drive' -e "^browser: title $beside " | tail -6 | tr '\n' ' ')"
+  # A click on the warned pane's page, below its hidden warning, focuses that pane, and the warning
+  # shows with the keyboard. The page under it ignores input while the warning's up, so the press
+  # never reached it, and nothing focused the pane (#3196); the click still mustn't reach that page.
+  pane=$(echo "$panes" | sed -n 2p)
+  pane_x=${pane%%,*} pane_y=${pane#*,}
+  pane_y=${pane_y%% *} pane_h=${pane#*x}
+  send click $((pane_x + 100)) $((pane_y + pane_h - 60))
+  pressed=$step
+  expect "^browser: selected $warned_tab\$" \
+    "a click on $warned_tab's page below its warning before http, beside a page in a split, didn't focus its pane: $(since "$pressed" | grep -e '^browser: drive' -e '^browser: selected' -e "^browser: title $beside " | tail -6 | tr '\n' ' ')"
+  expect "^browser: title $beside beside blurred\$" "the page beside kept the keyboard after a click on $warned_tab's page below its warning before http"
+  for _ in $(seq 50); do
+    send layout
+    sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q '^browser: layout child ' && break
+    sleep 0.1
+  done
+  warning_box
+  send state
+  [ "$key" = NativeWidgetMacNSWindow ] ||
+    fail "a click on $warned_tab's page below its warning before http focused its pane, but the warning at $warning didn't take the keyboard: it's in $key, on $focus"
+  send key z
+  send state
+  since "$pressed" | grep -q "^browser: title $beside beside has xyz\$" &&
+    fail "a key after a click on $warned_tab's page below its warning before http reached the page beside it"
+  since "$pressed" | grep -q "^browser: page $warned_tab back [01] forward [01] loading 1 " &&
+    fail "a click on $warned_tab's page below its warning before http reached the page under the warning: $(since "$pressed" | grep "^browser: page $warned_tab " | tail -3 | tr '\n' ' ')"
+  # The page beside it again, for the ⌘W that closes it.
+  pane=$(echo "$panes" | sed -n 1p)
+  pane_x=${pane%%,*} pane_y=${pane#*,}
+  pane_y=${pane_y%% *}
+  send click $((pane_x + 100)) $((pane_y + 100))
+  expect "^browser: selected $beside\$" "a click on the page beside $warned_tab's warning before http, after the warned pane's, didn't focus its pane again"
   send key w cmd
   expect "^browser: tab $beside closed\$" "⌘W didn't close the pane beside $warned_tab's warning before http"
   expect "^browser: panes $warned_tab\$" "⌘W on the pane beside the warning didn't leave $warned_tab alone"
   tab=$warned_tab
-  # On the Mac the warning isn't shown again once the pane beside it closes: the page under it is
-  # bare and has the keyboard, and drops every key, ilo's shortcuts with them (#3233). A click on
-  # the sidebar gives the UI the keyboard, as the user's would, and the steps after load the warning
-  # again from the command bar.
+  # On the Mac the warning, a window of its own, shows again with the keyboard once the pane beside
+  # it closes. Without it the page under it is bare and has the keyboard, and drops every key, ilo's
+  # shortcuts with them (#3233). The steps after press ⌘L from here.
   if [ "$(uname)" = Darwin ]; then
     send state
     if [ "$key" != NativeWidgetMacNSWindow ]; then
       send layout
-      echo "skip: Chrome's warning before http shown again with the keyboard once the pane beside it closes, on the Mac: the keyboard is in $key, on $focus, and the window's children are$(since | sed -n 's/^browser: layout child / /p' | tr '\n' ',') (#3233)."
-      send click $sidebar_point
-      in_browser AccessKitSubclassOfGPUIView "a click on the sidebar beside $warned_tab's page, alone again after ⌘W closed the pane beside it"
+      fail "Chrome's warning before http wasn't shown again with the keyboard once ⌘W closed the pane beside it: the keyboard is in $key, on $focus, and the window's children are$(since | sed -n 's/^browser: layout child / /p' | tr '\n' ',')"
     fi
   fi
 fi

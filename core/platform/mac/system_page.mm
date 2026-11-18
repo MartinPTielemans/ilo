@@ -322,6 +322,17 @@ std::optional<std::vector<uint8_t>> SrgbPng(NSImage* image) {
 - (BOOL)keepsEscapeFromPage:(NSEvent*)event;
 @end
 
+// One of the two key views either side of the page's own, where Tab past its last control and ⇧Tab
+// before its first land. Without WebKit's private delegate method, WebKit hands focus leaving the
+// page to the window's key view loop (WebViewImpl::takeFocus), whose next view after the page's,
+// with none of these, is the page's own again. Nobody stays on one: each passes the keyboard on as
+// it gets it, has no size to click, and is out of the accessibility tree.
+@interface BrowserCorePageEndView : NSView {
+ @public
+  browser_core::platform::SystemPageMac* _owner;
+}
+@end
+
 // WebKit's delegates, which tell the page's C++ side.
 @interface BrowserCoreWebKitDelegate
     : NSObject <WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler> {
@@ -404,6 +415,13 @@ class SystemPageMac : public SystemPage {
     view_->_owner = this;
     web_.frame = view_.bounds;
     [view_ addSubview:web_];
+    before_ = [[BrowserCorePageEndView alloc] initWithFrame:NSZeroRect];
+    after_ = [[BrowserCorePageEndView alloc] initWithFrame:NSZeroRect];
+    before_->_owner = after_->_owner = this;
+    [view_ addSubview:before_];
+    [view_ addSubview:after_];
+    before_.nextKeyView = web_;
+    web_.nextKeyView = after_;
     for (NSString* key in ObservedKeys(web_)) {
       [web_ addObserver:delegates_ forKeyPath:key options:0 context:nullptr];
     }
@@ -420,6 +438,7 @@ class SystemPageMac : public SystemPage {
                              contentWorld:PageWorld()];
     delegates_->_owner = nullptr;
     view_->_owner = nullptr;
+    before_->_owner = after_->_owner = nullptr;
     // Out of full screen and Picture in Picture, whose windows would keep the page.
     [web_ closeAllMediaPresentationsWithCompletionHandler:^{
     }];
@@ -431,10 +450,12 @@ class SystemPageMac : public SystemPage {
     WKWebView* web = web_;
     BrowserCoreSystemPageView* view = view_;
     BrowserCoreWebKitDelegate* delegates = delegates_;
+    NSArray<NSView*>* ends = @[ before_, after_ ];
     dispatch_async(dispatch_get_main_queue(), ^{
       [web self];
       [view self];
       [delegates self];
+      [ends self];
     });
   }
 
@@ -445,6 +466,24 @@ class SystemPageMac : public SystemPage {
     NSWindow* window = view_.window;
     if (window && web_.window == window) {
       [window makeFirstResponder:web_];
+    }
+  }
+
+  void FocusEnd(bool last) override {
+    NSWindow* window = view_.window;
+    if (!window || web_.window != window) {
+      return;
+    }
+    // The page focuses its first or last control as it becomes first responder from the key view
+    // loop going that way (WebViewImpl::becomeFirstResponder), and does nothing while it stays
+    // first responder, so it gives that up first.
+    if (Focused()) {
+      [window makeFirstResponder:nil];
+    }
+    if (last) {
+      [window selectKeyViewPrecedingView:after_];
+    } else {
+      [window selectKeyViewFollowingView:before_];
     }
   }
 
@@ -622,6 +661,26 @@ class SystemPageMac : public SystemPage {
            [static_cast<NSView*>(responder) isDescendantOf:web_];
   }
 
+  // Whether the page is in the view its window shows, and not in WebKit's own full screen window,
+  // where Tab past its ends goes round the page as before.
+  bool Holds() { return web_.superview == view_; }
+
+  // The key view before the page, or after it, became first responder going |direction|. It
+  // passes the keyboard on once AppKit's call that gave it returns, as nothing should change the
+  // first responder inside becomeFirstResponder: the main run loop runs a block queued for its
+  // modes right after the call out that queued it, before the turn ends and the frame is drawn, so
+  // no frame shows neither the page nor the app with the keyboard.
+  void EndReached(BrowserCorePageEndView* end, NSSelectionDirection direction) {
+    const bool before = end == before_;
+    base::WeakPtr<SystemPageMac> page = weak_factory_.GetWeakPtr();
+    CFRunLoopPerformBlock(CFRunLoopGetMain(), kCFRunLoopCommonModes, ^{
+      if (page) {
+        page->PassOn(before, direction);
+      }
+    });
+    CFRunLoopWakeUp(CFRunLoopGetMain());
+  }
+
   // The content process went: crashed, or killed for memory. WebKit shows nothing until a load.
   void Gone() {
     // An error, as Chromium's tab's is.
@@ -643,6 +702,29 @@ class SystemPageMac : public SystemPage {
         forMainFrameOnly:NO
           inContentWorld:PageWorld()];
     [web_.configuration.userContentController addUserScript:script];
+  }
+
+  void PassOn(bool before, NSSelectionDirection direction) {
+    NSWindow* window = view_.window;
+    if (!window || window.firstResponder != (before ? before_ : after_)) {
+      return;
+    }
+    if (direction == NSDirectSelection) {
+      [window makeFirstResponder:web_];
+      return;
+    }
+    // From the page: past its last control onto the view after it, or before its first onto the
+    // view before. The app takes the keyboard there, or the page has it again from its other end,
+    // as WebKit's own loop had it.
+    if (before == (direction == NSSelectingPrevious)) {
+      if (!delegate_->SystemPageFocusLeft(/*reverse=*/before) ||
+          window.firstResponder == (before ? before_ : after_)) {
+        FocusEnd(/*last=*/before);
+      }
+      return;
+    }
+    // From outside the page, through the window's key view loop: into it at that end.
+    FocusEnd(/*last=*/!before);
   }
 
   void Leave(const GURL& url) {
@@ -667,6 +749,9 @@ class SystemPageMac : public SystemPage {
   const raw_ptr<Delegate> delegate_;
   WKWebView* __strong web_;
   BrowserCoreSystemPageView* __strong view_;
+  // The key views before and after the page's.
+  BrowserCorePageEndView* __strong before_;
+  BrowserCorePageEndView* __strong after_;
   BrowserCoreWebKitDelegate* __strong delegates_;
   // What the first load loads, once Start has the page's storage in place.
   GURL first_url_;
@@ -740,6 +825,35 @@ class SystemPageMac : public SystemPage {
     _owner->ClickedSoon();
   }
   return hit;
+}
+
+@end
+
+@implementation BrowserCorePageEndView
+
+- (BOOL)acceptsFirstResponder {
+  return _owner && _owner->Holds();
+}
+
+// AppKit's key view loop selects only a view that says it can be one, with the system's Keyboard
+// navigation on or off.
+- (BOOL)canBecomeKeyView {
+  return _owner && _owner->Holds();
+}
+
+- (BOOL)becomeFirstResponder {
+  if (_owner) {
+    _owner->EndReached(self, self.window.keyViewSelectionDirection);
+  }
+  return YES;
+}
+
+- (BOOL)isAccessibilityElement {
+  return NO;
+}
+
+- (NSView*)hitTest:(NSPoint)point {
+  return nil;
 }
 
 @end
