@@ -1,6 +1,7 @@
 # Fails a branch or pull request with a commit that has no Signed-off-by line, the Developer
-# Certificate of Origin's sign-off (CONTRIBUTING.md#sign-off). It reads commit messages through the
-# API, so it never checks out or runs the pull request's code.
+# Certificate of Origin's sign-off (CONTRIBUTING.md#sign-off), a line crediting an AI tool, or a
+# title that isn't a conventional commit (#3392). It reads commit messages through the API, so it
+# never checks out or runs the pull request's code.
 name: DCO
 
 on:
@@ -47,17 +48,44 @@ jobs:
 
             // A merge commit, such as GitHub's Update branch makes, brings in commits checked on
             // their own.
+            const own = commits.filter((c) => c.parents.length < 2);
             const signedOff = /^Signed-off-by: \S.* <[^<>\s]+@[^<>\s]+>\s*$/m;
-            const missing = commits.filter(
-              (c) => c.parents.length < 2 && !signedOff.test(c.commit.message),
-            );
-            core.info(`${commits.length} commits, ${missing.length} without a sign-off.`);
-            if (missing.length > 0) {
-              for (const c of missing) {
-                core.error(`${c.sha.slice(0, 10)} ${c.commit.message.split("\n")[0]}`);
+            const aiTool = /\b(claude|anthropic|openai|codex|copilot|cursor|chatgpt|gpt|gemini|devin)\b/i;
+            const credit = /^(co-authored-by:|\W*generated (with|by)\b)/i;
+            // The template's types, and check and spike, which main uses; a diag or wip commit
+            // stays on a probe branch.
+            const title =
+              /^((feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert|check|spike)(\([^()]+\))?!?: \S|Revert ")/;
+            const rules = [
+              {
+                breaks: (m) => !signedOff.test(m),
+                what: "no Signed-off-by line",
+                fix: "`git rebase --signoff <base>` adds yours to every commit (CONTRIBUTING.md#sign-off)",
+              },
+              {
+                breaks: (m) => m.split("\n").some((l) => credit.test(l) && aiTool.test(l)),
+                what: 'a Co-Authored-By or "Generated with" line naming an AI tool',
+                fix: "authorship is human (CONTRIBUTING.md#sign-off): reword the commit without the line",
+              },
+              {
+                breaks: (m) => !title.test(m.split("\n")[0]),
+                what: "a title that isn't a conventional commit",
+                fix:
+                  "reword it as type(scope): the outcome in plain language, with a type of feat, fix, " +
+                  "docs, style, refactor, perf, test, build, ci, chore, revert, check or spike",
+              },
+            ];
+            let broken = 0;
+            for (const rule of rules) {
+              const found = own.filter((c) => rule.breaks(c.commit.message));
+              for (const c of found) {
+                core.error(`${c.sha.slice(0, 10)} "${c.commit.message.split("\n")[0]}": ${rule.what}. To fix: ${rule.fix}.`);
               }
+              broken += found.length;
+            }
+            core.info(`${commits.length} commits, ${broken} problems.`);
+            if (broken > 0) {
               core.setFailed(
-                "Each commit needs a Signed-off-by line (CONTRIBUTING.md#sign-off). " +
-                  "`git rebase --signoff <base>` adds yours to every commit; then push the branch again.",
+                "A commit above breaks a commit rule. Fix each as its line says, then push the branch again.",
               );
             }
