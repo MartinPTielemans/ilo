@@ -17,6 +17,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
+#include "browser_core/agent_autofill.h"
 #include "browser_core/arrange.h"
 #include "browser_core/autofill_menu.h"
 #include "browser_core/boosts.h"
@@ -65,6 +66,7 @@
 #include "components/infobars/core/infobar.h"
 #include "components/input/native_web_keyboard_event.h"
 #include "components/keyed_service/core/service_access_type.h"
+#include "components/performance_manager/public/performance_manager.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/dom_storage_context.h"
 #include "content/public/browser/favicon_status.h"
@@ -78,6 +80,7 @@
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/storage_partition.h"
+#include "content/public/browser/visibility.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "content/public/browser/web_contents_view_delegate.h"
@@ -423,7 +426,14 @@ void Tab::Attach(content::WebContents* contents) {
   PageTranslate::CreateForWebContents(contents, id_);
   ObserveHelpers();
   // A tab is often made with its first page already on its way, before anything observes it, so
-  // the app hears it's loading now rather than once the page commits.
+  // the app hears it's loading now rather than once the page commits, and a load the user looks at
+  // counts from now: a tab typed in the command bar starts loading in Navigate, before the core
+  // makes its Tab, and never told of that navigation's start (#3285).
+  if (contents->IsLoading() || contents->GetController().GetPendingEntry()) {
+    user_load_.Joined(
+        performance_manager::PerformanceManager::GetPrimaryPageNodeForWebContents(contents),
+        contents->GetVisibility() == content::Visibility::VISIBLE, IsAgentTab(contents));
+  }
   ReportStateSoon();
 }
 
@@ -451,6 +461,10 @@ void Tab::ObserveHelpers() {
   }
   // Edit › AutoFill opens Chrome's dropdown at the field its page's focus is in.
   AutofillMenu::Watch(contents);
+  // The URL field's key, from the first page on: a tab typed in the command bar or opened from a
+  // link starts its first navigation before the core makes its Tab, so DidStartNavigation's watch
+  // would come only with its second page (#3348).
+  PasswordOffer::WatchKey(contents);
   if (auto* translate = PageTranslate::FromWebContents(contents)) {
     translate->ObserveDriver();
   }
@@ -523,6 +537,15 @@ void Tab::FocusPage(content::WebContents* contents) {
     tab->system_page_->Focus();
   } else {
     contents->Focus();
+  }
+}
+
+// static
+void Tab::FocusPageEnd(content::WebContents* contents, bool last) {
+  if (Tab* tab = FromWebContents(contents); tab && tab->system_page_) {
+    tab->system_page_->Focus();
+  } else {
+    contents->FocusThroughTabTraversal(last);
   }
 }
 
@@ -1217,6 +1240,11 @@ void Tab::DidStartNavigation(content::NavigationHandle* navigation) {
     // that scrolls the same page keeps it.
     if (!navigation->IsSameDocument()) {
       ReportLinkTarget(GURL());
+      user_load_.Started(
+          navigation->GetNavigationId(),
+          performance_manager::PerformanceManager::GetPrimaryPageNodeForWebContents(web_contents()),
+          web_contents()->GetVisibility() == content::Visibility::VISIBLE,
+          IsAgentTab(web_contents()));
     }
   }
 }
@@ -1225,6 +1253,7 @@ void Tab::DidFinishNavigation(content::NavigationHandle* navigation) {
   if (!navigation->IsInPrimaryMainFrame()) {
     return;
   }
+  user_load_.Finished(navigation->GetNavigationId(), navigation->HasCommitted());
   if (navigation->HasCommitted() && !navigation->IsSameDocument()) {
     net_error_ = navigation->IsErrorPage() ? navigation->GetNetErrorCode() : 0;
     if (net_error_) {
@@ -1253,7 +1282,12 @@ void Tab::DidStartLoading() {
 }
 
 void Tab::DidStopLoading() {
+  user_load_.Stopped();
   StateChanged();
+}
+
+void Tab::DidFirstVisuallyNonEmptyPaint() {
+  user_load_.Painted();
 }
 
 void Tab::NavigationEntriesDeleted() {
@@ -1603,6 +1637,7 @@ void Tab::DidUpdateAudioMutingState(bool muted) {
 }
 
 void Tab::OnVisibilityChanged(content::Visibility visibility) {
+  user_load_.Shown(visibility == content::Visibility::VISIBLE, IsAgentTab(web_contents()));
   // As Chrome loads a restored tab once it's shown. Posted: the page view is being shown now.
   if (visibility == content::Visibility::VISIBLE && waiting_) {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
@@ -1899,6 +1934,7 @@ void Tab::CaptureChanged(content::WebContents* contents) {
 }
 
 void Tab::WebContentsDestroyed() {
+  user_load_.Closed();
   // The driver is the page's too, and may go before the tab does, as may its infobars.
   favicon_observation_.Reset();
   infobar_observation_.Reset();

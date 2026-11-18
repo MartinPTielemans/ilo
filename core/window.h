@@ -169,7 +169,8 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // it waited, and still shows its Space, shows it.
   static void TabsArrived(const std::vector<bc_id>& tabs);
   // Closes |tab| as the user does: its page gets its unload handlers, which may keep it open. With
-  // |discard|, they don't run, so nothing asks, and it's gone before this returns.
+  // |discard|, they don't run, so nothing asks, and it's gone before this returns, unless it's being
+  // dragged between windows, when it stays.
   static void CloseTab(bc_id tab, bool discard = false);
   // Keeps nothing of |tab|'s page, |url|, as it closes while still there: it isn't archived or
   // among the tabs ReopenClosedTab reopens (bc_tab_forget_page).
@@ -267,6 +268,10 @@ class Window : public web_modal::WebContentsModalDialogHost,
   void Select(bc_id tab);
   // Gives the page shown the keyboard, from the UI if it has it (bc_window_focus_page).
   void GiveKeyboardToPage();
+  // The same at the page's first control, or its |last|, as Tab or ⇧Tab into it from Chrome's
+  // toolbar gives it (bc_window_focus_page_end). Not to an agent's tab the user doesn't hold
+  // (focus_leaving_rule::Enter).
+  void GiveKeyboardToPageEnd(bool last);
   // An overlay of the app's took the window's keyboard, or gave it back
   // (bc_window_overlay_takes_keyboard).
   void OverlayTakesKeyboard(bool takes);

@@ -958,6 +958,12 @@ typedef struct bc_host {
   // The tab's page didn't keep a key, such as ⌘F on a page without a find of its own. Return true
   // if the app used it; otherwise the window's menus get it, as ⌘M does on the Mac.
   bool (*tab_key_unhandled)(void* context, bc_id tab, const bc_key* key);
+  // Tab in the tab's page went past its last control (|reverse| false), or ⇧Tab before its first
+  // (true), where Chrome moves the keyboard to its toolbar. Return true if the app took the
+  // keyboard; false leaves it in the page, which goes on from its other end at the next Tab. Asked
+  // only for a tab a user's window shows, never for an agent's (one in its Space the user doesn't
+  // hold) or one no window shows: their page keeps the keyboard, and the user's stays where it is.
+  bool (*tab_focus_leaving)(void* context, bc_id tab, bool reverse);
   // The left button went down on the tab's page with the BC_MODIFIER_ flags |modifiers| held, one
   // at least, at |x|,|y| in the page's view from its top-left, before the page gets it. Return true
   // to take the press: its moves come to tab_press_moved and its release to tab_press_released, and
@@ -1271,6 +1277,13 @@ typedef struct bc_host {
   // The answer to bc_agent_request's |request|, from a task of its own. It never has the answer's
   // headers, so no Set-Cookie reaches the app.
   void (*agent_request_done)(void* context, uint64_t request, const bc_agent_response* response);
+  // What a bc_agent_close_tab that returned BC_AGENT_CLOSE_PENDING came to, from a task of its own,
+  // once for each pending |tab|, whatever happened meanwhile: BC_AGENT_CLOSED once the tab is gone,
+  // by that close or any other; BC_AGENT_CLOSE_ASKS if its page asked to stay; or
+  // BC_AGENT_CLOSE_REFUSED if it stays for another reason. Within a few seconds at most: a page
+  // that doesn't answer, or whose renderer crashed, is closed, as Chromium closes one whose handler
+  // hangs, unless the user took its tab over or pinned it meanwhile.
+  void (*agent_close_answered)(void* context, bc_id tab, int answer);
   // On Linux and Windows, the browser is quitting, or with |last_private| the last window of a
   // private profile closing, with |count| downloads running, which it would cancel: ask the user
   // over |window|, and answer with bc_window_answer_downloads. A window asks one at a time. The Mac
@@ -1777,21 +1790,33 @@ BC_EXPORT bc_id bc_agent_open_tab(const char* agent, const char* url);
 // returns whether it does: never another URL. Agent code calls it after bc_agent_may_act.
 BC_EXPORT bool bc_agent_navigate(const char* agent, bc_id tab, const char* url);
 
-// What bc_agent_close_tab did.
+// What bc_agent_close_tab did, and what agent_close_answered says a pending close came to.
 // The tab closed: it's gone, and tab_closed told of it.
 #define BC_AGENT_CLOSED 0
-// The tab isn't in the agent's Space, or the user holds it.
+// The tab isn't in the agent's Space, or the user holds it. As agent_close_answered's answer: it
+// stays for another reason, as it went to another page, its page was unloaded, or the user took it
+// over or pinned it meanwhile.
 #define BC_AGENT_CLOSE_REFUSED 1
 // The user pinned the tab, which only the user closes.
 #define BC_AGENT_CLOSE_PINNED 2
-// Its page may ask before it's left, as one with unsaved changes does, and |discard| was false.
+// Its page asked to stay, as one with unsaved changes does: only ever agent_close_answered's
+// answer, as the page's own.
 #define BC_AGENT_CLOSE_ASKS 3
+// The core is asking the page, which answers later through agent_close_answered: only ever
+// bc_agent_close_tab's return, never an answer.
+#define BC_AGENT_CLOSE_PENDING 4
 
 // Closes |tab|, in the Space of the agent with the id |agent|, for the agent, never with a dialog:
-// as the "Leave site?" dialog shows the tab, it would take the user's focus. A page that may ask
-// before it's left stays open, unless |discard|, which closes it without its unload handlers, and
-// what it held unsaved is lost. Returns a BC_AGENT_CLOSE value. Agent code calls it after
-// bc_agent_may_act, and asks the user first before it discards a page the agent didn't open.
+// as the "Leave site?" dialog shows the tab, it would take the user's focus. A page with no
+// beforeunload handler closes in the call. One with a handler is asked as a user's close asks it,
+// without the dialog, and the call returns BC_AGENT_CLOSE_PENDING: agent_close_answered says, once
+// and never inside this call, whether it closed or stays. A close of a tab already pending returns
+// BC_AGENT_CLOSE_PENDING again, covered by that one answer. |discard| closes it at once without its
+// handlers, one pending too, and what it held unsaved is lost. Returns a BC_AGENT_CLOSE value.
+// Agent code calls it after bc_agent_may_act, asks without |discard| first, and asks the user
+// before it discards a page that asked to stay that the agent didn't open. A page that agreed to
+// close goes though the user takes its tab over or pins it before it's gone, as Chromium is closing
+// it by then.
 BC_EXPORT int bc_agent_close_tab(const char* agent, bc_id tab, bool discard);
 
 // Copies up to |capacity| of the tabs of the Space of the agent with the id |agent| into |tabs|, its
@@ -2368,6 +2393,12 @@ BC_EXPORT void bc_window_select(bc_id window, bc_id tab);
 // when the page shown before left with it, so that page takes it as bc_window_select's would, unless
 // a click in the UI comes first. The user's: agents get none.
 BC_EXPORT void bc_window_focus_page(bc_id window);
+
+// Gives the page the window shows the keyboard at its first control (|last| false) or its last
+// (true), as Tab or ⇧Tab into a page from Chrome's toolbar does, wherever in the window the
+// keyboard was. Does nothing for an agent's tab (one in its Space the user doesn't hold): the
+// keyboard stays where it was, and so does the page's focused element. The user's: agents get none.
+BC_EXPORT void bc_window_focus_page_end(bc_id window, bool last);
 
 // Clears the Space the window shows: closes its Today tabs but those any window shows, as
 // bc_tab_close does, for bc_window_undo_clear to bring back. While it shows every Today tab, a tab

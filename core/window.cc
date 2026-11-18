@@ -23,6 +23,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
+#include "browser_core/agent_autofill.h"
 #include "browser_core/agent_session.h"
 #include "browser_core/archive.h"
 #include "browser_core/auto_archive.h"
@@ -31,6 +32,7 @@
 #include "browser_core/dialog_keys.h"
 #include "browser_core/extensions.h"
 #include "browser_core/favorites.h"
+#include "browser_core/focus_leaving_rule.h"
 #include "browser_core/host.h"
 #include "browser_core/idle_unload.h"
 #include "browser_core/install_question.h"
@@ -1354,7 +1356,8 @@ void Window::CloseTab(bc_id tab, bool discard) {
   }
   content::WebContents* contents = Tab::FromId(tab);
   tabs::TabInterface* in = contents ? tabs::TabInterface::MaybeGetFromContents(contents) : nullptr;
-  if (!in) {
+  // A tab being dragged between windows has none for that moment, and stays.
+  if (!in || !in->GetBrowserWindowInterface()) {
     return;
   }
   TabStripModel* tabs = in->GetBrowserWindowInterface()->GetTabStripModel();
@@ -3335,6 +3338,24 @@ void Window::GiveKeyboardToPage() {
   platform::ReleaseKeyboard(widget_.get());
   FocusPage();
   FocusPageSoon();
+}
+
+void Window::GiveKeyboardToPageEnd(bool last) {
+  if (!shown_) {
+    return;
+  }
+  const bool given = focus_leaving_rule::Enter(IsAgentTab(shown_.get()), [&] {
+    GiveKeyboardToPage();
+    // GiveKeyboardToPage focused the page now if it could; the posted focus after keeps its
+    // control.
+    if (widget_->IsActive()) {
+      Tab::FocusPageEnd(shown_.get(), last);
+    }
+  });
+  if (!given) {
+    fprintf(stderr, "browser: window %llu kept the keyboard from agent's tab %llu\n",
+            static_cast<unsigned long long>(id_), static_cast<unsigned long long>(selected_));
+  }
 }
 
 void Window::OverlayTakesKeyboard(bool takes) {

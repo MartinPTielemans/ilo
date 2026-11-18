@@ -33,6 +33,7 @@ use super::{
     access::{Accessible, NEW_TAB},
     drag::in_sidebar,
     return_mark::Bitmap,
+    sidebar_keys,
 };
 use crate::{
     icon_picker::{self, Subject},
@@ -135,14 +136,14 @@ impl Shell {
             .map(|space| (space.id, space.folders.pinned_shut));
         match (self.pinned_seen, seen) {
             (Some((was_in, was)), Some((space, shut))) if was_in == space && was != shut => {
-                self.pinned_turn = Some(Instant::now());
+                self.pinned_turn = Some(self.clock.now());
             }
             (Some((was_in, _)), Some((space, _))) if was_in != space => self.pinned_turn = None,
             _ => {}
         }
         self.pinned_seen = seen;
         if let Some(start) = self.pinned_turn {
-            if start.elapsed().as_secs_f32() < PINNED_TURN {
+            if self.since(start) < PINNED_TURN {
                 window.request_animation_frame();
             } else {
                 self.pinned_turn = None;
@@ -187,9 +188,7 @@ impl Shell {
         )
         .absolute()
         .size_full();
-        let t = (self.pinned_turn).map_or(1., |start| {
-            (start.elapsed().as_secs_f32() / PINNED_TURN).min(1.)
-        });
+        let t = (self.pinned_turn).map_or(1., |start| (self.since(start) / PINNED_TURN).min(1.));
         let turned = cubic_bezier(0.42, 0., 0.58, 1., t);
         let turned = if shut { turned } else { 1. - turned };
         let glyph = svg()
@@ -293,6 +292,7 @@ impl Shell {
         };
         let ring = match row {
             Row::Tab(tab) if !ghost => self.keyed_ring(tab, PLATE_RADIUS),
+            Row::NewTab => self.keyed_ring(sidebar_keys::NEW_TAB, PLATE_RADIUS),
             _ => None,
         };
         let chosen = matches!(row, Row::Tab(tab) if self.chosen.contains(&tab)) && !selected;
@@ -388,7 +388,12 @@ impl Shell {
         selected: bool,
     ) -> gpui::Stateful<gpui::Div> {
         match row {
-            Row::NewTab => element.accessibility_id(NEW_TAB).button_named("New Tab"),
+            Row::NewTab => element
+                .accessibility_id(NEW_TAB)
+                .button_named("New Tab")
+                .when(self.keyed == Some(sidebar_keys::NEW_TAB), |row| {
+                    row.aria_active_descendant()
+                }),
             Row::Tab(folder) if self.is_folder_anywhere(folder) => {
                 let open = self.folder_open(folder);
                 element
@@ -441,7 +446,7 @@ impl Shell {
             .find(|&&(old, _)| old == row)
             .filter(|_| selected);
         left.map(|(_, start)| {
-            let t = (start.elapsed().as_secs_f32() / SELECTED_UNHOVER).min(1.);
+            let t = (self.since(*start) / SELECTED_UNHOVER).min(1.);
             1. - cubic_bezier(0., 0., 0.58, 1., t)
         })
     }

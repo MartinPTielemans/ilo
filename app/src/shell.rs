@@ -113,6 +113,7 @@ mod new_space;
 mod new_window;
 mod onboarding;
 mod page_dialog;
+mod page_ends;
 mod page_menu;
 mod page_motion;
 mod pair;
@@ -1498,6 +1499,8 @@ pub struct Shell {
     fields_drawn: Rc<RefCell<HashMap<u64, bool>>>,
     /// Where the Library's empty line was last laid out, for its log line.
     empty_drawn: Rc<RefCell<String>>,
+    /// Where each of the Library's section buttons was last drawn, for its log line.
+    buttons_drawn: Rc<RefCell<HashMap<&'static str, Bounds<Pixels>>>>,
     /// The line under the favorites, shown while the list is past its top, and the one at its
     /// foot, while rows are hidden under it.
     top_edge: swipe::EdgeLine,
@@ -1532,6 +1535,11 @@ pub struct Shell {
     sidebar_keys: FocusHandle,
     focus_keys: bool,
     keyed_drawn: Rc<Cell<Option<(u64, Bounds<Pixels>)>>>,
+    /// The stop of the strip under a task's page watched whose ring the keys move instead of a
+    /// row's, with the sidebar's focus, and where the ring's last Tab into a page came from
+    /// (page_ends.rs, #3220).
+    keyed_strip: Option<page_ends::StripStop>,
+    page_ends: page_ends::PageEnds,
     /// The tab Close and Keep Pinned showed, whose row has the ring for a moment, and the timer
     /// that takes it off.
     attention: Option<(u64, Task<()>)>,
@@ -1826,8 +1834,9 @@ pub struct Shell {
     /// While the Library's width goes to another section's: the width it left, and when.
     library_resize: Option<(f32, Instant)>,
     /// The Library's search field takes the keyboard on the next frame, as the Library opens or
-    /// shows another section, so a screen reader, which follows it, says where it is (#3238).
-    library_keys: bool,
+    /// shows another section, so a screen reader, which follows it, says where it is (#3238), and
+    /// who had it gets it back as the Library closes by key (#3313).
+    library_keys: library::keys::LibraryKeys,
     /// While the card moves for the Library on its own: how far out it started (`library_out`),
     /// how fast, and when.
     library_motion: Option<(f32, f32, Instant)>,
@@ -2137,6 +2146,7 @@ impl Shell {
             card_press_closes: false,
             fields_drawn: Rc::default(),
             empty_drawn: Rc::default(),
+            buttons_drawn: Rc::default(),
             top_edge: Default::default(),
             foot_edge: Default::default(),
             list_measured: Default::default(),
@@ -2154,6 +2164,8 @@ impl Shell {
             sidebar_keys: cx.focus_handle(),
             focus_keys: false,
             keyed_drawn: Rc::default(),
+            keyed_strip: None,
+            page_ends: Default::default(),
             attention: None,
             tools_on: false,
             tools_fade: None,
@@ -2292,7 +2304,7 @@ impl Shell {
             library: None,
             library_open: false,
             library_resize: None,
-            library_keys: false,
+            library_keys: Default::default(),
             library_motion: None,
             sidebar_fade: None,
             card_strip: Default::default(),
@@ -4223,7 +4235,7 @@ impl Shell {
     /// Eases the selected row back from its hover fill once the pointer or its menu has left it.
     fn unhover(&mut self, row: Row) {
         if Some(row) == self.selected_row() {
-            self.unhovered.push((row, Instant::now()));
+            self.unhovered.push((row, self.clock.now()));
         }
     }
 
@@ -4381,7 +4393,7 @@ impl Shell {
         self.closing
             .retain(|row| row_spring(since(row.start)).is_some());
         self.unhovered
-            .retain(|(_, start)| start.elapsed().as_secs_f32() < SELECTED_UNHOVER);
+            .retain(|&(_, start)| since(start) < SELECTED_UNHOVER);
         if self.slides.is_empty() {
             self.opened
                 .take_if(|opened| opened.done(since(opened.start)).is_none());
@@ -4623,7 +4635,7 @@ impl Render for Shell {
         self.step_retip(cx);
         self.step_drag_shape(window, cx);
         self.step_held_row(window);
-        self.step_held_nav(window);
+        self.step_held_nav(window, cx);
         self.step_space_slides(window);
         self.step_form_going(cx);
         // The window that draws the list measures it: with the sidebar hidden that's the reveal's,
@@ -4781,7 +4793,14 @@ impl Render for Shell {
             })
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle)
-            .on_action(cx.listener(Self::tab_in))
+            .on_action(cx.listener(|shell, _: &sidebar_keys::TabIn, window, cx| {
+                shell.tab_in(false, window, cx)
+            }))
+            .on_action(
+                cx.listener(|shell, _: &sidebar_keys::BackTabIn, window, cx| {
+                    shell.tab_in(true, window, cx)
+                }),
+            )
             // The Edit menu's Undo and Redo, which a field of ours takes for itself first.
             .on_action(cx.listener(|shell, _: &crate::text_input::Undo, _, cx| {
                 shell.undo(cx);
@@ -5448,7 +5467,7 @@ impl Shell {
         self.step_retip(cx);
         self.step_drag_shape(window, cx);
         self.step_held_row(window);
-        self.step_held_nav(window);
+        self.step_held_nav(window, cx);
         self.step_space_slides(window);
         self.step_form_going(cx);
         self.step_scroll_edge(window, cx);

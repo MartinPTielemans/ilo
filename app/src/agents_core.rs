@@ -222,7 +222,7 @@ impl Browser for Core {
         match unsafe { bc::bc_agent_close_tab(agent.as_ptr(), tab, discard) } as u32 {
             bc::BC_AGENT_CLOSED => agents::Closed::Closed,
             bc::BC_AGENT_CLOSE_PINNED => agents::Closed::Pinned,
-            bc::BC_AGENT_CLOSE_ASKS => agents::Closed::Asks,
+            bc::BC_AGENT_CLOSE_PENDING => agents::Closed::Pending,
             _ => agents::Closed::Refused,
         }
     }

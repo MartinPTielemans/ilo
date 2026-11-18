@@ -24,6 +24,11 @@ if ! engine_has ../core/native_ad_block.cc ../core/ad_block.cc; then
   exit 0
 fi
 serve
+# The site's log from here on: an earlier run in the same call, as history's held link, logs to it too.
+site_from=$(($(wc -l < "$out/site.log") + 1))
+site_since() {
+  tail -n +"$site_from" "$out/site.log"
+}
 printf '%s' '<title>the blocked page</title>' > "$out/site/blocked.html"
 # A page that's all a link to a pop-up but for a strip down its left edge, so a click anywhere but
 # there opens it in a new tab. Its title says when it has drawn, as Blink drops a press before a
@@ -87,7 +92,7 @@ tab=$(today | cut -d' ' -f1)
 # No command is sent yet, so the wait reads the whole log.
 await "^browser: title $tab Page blocked\$" ||
   fail "the listed page didn't show the warning: $(grep "^browser: title $tab " "$log" | tail -1)"
-grep -q '/blocked\.html' "$out/site.log" && fail "the listed page reached the server"
+site_since | grep -q '/blocked\.html' && fail "the listed page reached the server"
 # A page gets no press or key before its first frame: Blink drops them, as it shows nothing to
 # press yet, and the title comes before that frame. So the run captures the window until the
 # warning shows, as dark marks on its card's middle that the blank page before it hasn't (#2840).
@@ -163,38 +168,16 @@ for _ in $(seq 30); do
   sleep 0.1
 done
 [ "$(today)" = "$tab" ] || fail "the pop-up's tab stayed: Today is \"$(today)\""
-grep -q '/popup\.html' "$out/site.log" && fail "the pop-up's page reached the server"
+site_since | grep -q '/popup\.html' && fail "the pop-up's page reached the server"
 # The page that opened it keeps the keyboard throughout, through the hold too, which at some 5 ms
 # is too short to type into: no other view took it, or the page would have blurred, and a key
-# after the tab closed reaches it. On Windows content's focus of the held pop-up can still move the
-# keyboard from the opener to the browser window itself as the pop-up opens, before the filters
-# answer: the opener blurs, and the key after reaches no page. Both are known under #2806, and only
-# once the opener blurred.
-blurred=
-if since "$pressed" | grep -q "^browser: title $tab the opener blurred\$"; then
-  windows ||
-    fail "the page that opened the pop-up the filter closed lost the keyboard: $(since "$pressed" | grep -e '^browser: drive' -e "^browser: title $tab " | tr '\n' ' ')"
-  blurred=1
-  echo "skip: the opener keeping the keyboard while the filter closes its pop-up, known under" \
-    "#2806: on Windows the keyboard went from the opener to the browser window as the pop-up" \
-    "opened: $(since "$pressed" | grep '^browser: drive: focuses ' | tr '\n' ' ')"
-fi
+# after the tab closed reaches it. On Windows, the pop-up's tab once showed the browser window
+# again, which moved the keyboard to the window itself (#2806).
+since "$pressed" | grep -q "^browser: title $tab the opener blurred\$" &&
+  fail "the page that opened the pop-up the filter closed lost the keyboard: $(since "$pressed" | grep -e '^browser: drive' -e "^browser: title $tab " | tr '\n' ' ')"
 send key x
-if [ -n "$blurred" ]; then
-  await "^browser: title $tab the opener has x\$" ||
-    echo "skip: a key after the filter closed the pop-up reaching the opener, known under #2806:" \
-      "on Windows the opener blurred and never got the keyboard back, which is in $key, on $focus"
-  # A press on the page, in its strip off the link, as a user would make to go on, gives it the
-  # keyboard back, so the hold below runs on Windows too.
-  send press 280 400
-  send release 280 400
-  send key y
-  expect "^browser: title $tab the opener has y\$" \
-    "a press on the opener, off its link, didn't give it the keyboard back after the filter closed its pop-up: the keyboard is in $key, on $focus"
-else
-  expect "^browser: title $tab the opener has x\$" \
-    "a key after the pop-up filter closed the link's tab didn't reach the page that opened it: the keyboard is in $key, on $focus"
-fi
+expect "^browser: title $tab the opener has x\$" \
+  "a key after the pop-up filter closed the link's tab didn't reach the page that opened it: the keyboard is in $key, on $focus"
 # Opens a pop-up from tab $1's page, titled $2, once it has drawn, with a press it has had and its
 # release, as the opener above.
 open_from() {
@@ -220,7 +203,7 @@ if engine_has ../core/popup_hold.cc ../core/native_ad_block.cc; then
     "the tab the link opened wasn't listed while its page hadn't come: the hold waits for more than the filters' answer"
   link_tab=$(sed -n "/^browser: drive $step: /,\$s/^browser: tab \([0-9]*\) opened by $tab in the foreground\$/\1/p" "$log" | head -1)
   # The site logs a request as it comes, and its answer's line only once it's sent.
-  grep -q '"GET /held HTTP' "$out/site.log" && fail "/held answered before the run let it"
+  site_since | grep -q '"GET /held HTTP' && fail "/held answered before the run let it"
   link_cost=$(sed -n "s/^browser: tab $link_tab listed +\([0-9.]*\) ms after the press in tab $tab\$/\1/p" "$log")
   link_held=$(sed -n "s/^browser: pop-up $link_tab held \([0-9.]*\) ms\$/\1/p" "$log")
   [ -n "$link_cost" ] && [ -n "$link_held" ] ||
@@ -279,7 +262,7 @@ ran=$(grep "^browser: title $tab ran" "$log" | tail -1 | sed "s/^browser: title 
 \"$ran\", where only b, whose x-ad header is 0, should run; a's is 1, and c is where a redirect \
 whose x-ad is 1 goes"
 served '/headed?x-ad=1&n=a' "a's request never reached the server"
-grep -q '/headed?n=c' "$out/site.log" &&
+site_since | grep -q '/headed?n=c' &&
   fail "the redirect whose response has the header went on to c"
 # A pop-up window.open() opens with no address commits about:blank at once, and the filters still
 # judge the first page it's sent to (#2839): sent on to the page a pop-up filter names, its tab
@@ -300,7 +283,7 @@ expect "^browser: \(ad block closed a pop-up at ${site}popup.html?empty\|loaded 
 grep -q "^browser: loaded [0-9]* ${site}popup.html?empty\$" "$log" &&
   fail "the tab window.open() opened with no address loaded the page a pop-up filter names, sent on to it after its about:blank"
 expect '^browser: tab [0-9]* closed$' "the empty pop-up's tab didn't close"
-grep -q '/popup\.html?empty' "$out/site.log" && fail "the empty pop-up's page reached the server"
+site_since | grep -q '/popup\.html?empty' && fail "the empty pop-up's page reached the server"
 # A private window's profile blocks too: its requests go through the same engine, with the same
 # filters, though it has a profile of its own.
 send key n cmd shift
@@ -316,7 +299,7 @@ private_tab=$(sed -n "s|^browser: loaded \([0-9]*\) ${site}ad.html\$|\1|p" "$log
 expect "^browser: title $private_tab ad script " "the private window's ad page didn't say"
 grep -q "^browser: title $private_tab ad script blocked\$" "$log" ||
   fail "the private window didn't block the page's script: $(grep "^browser: title $private_tab " "$log" | tail -1)"
-grep -q '/check-ad\.js' "$out/site.log" && fail "the private window's script reached the server"
+site_since | grep -q '/check-ad\.js' && fail "the private window's script reached the server"
 ../tools/window-screenshot.sh "$pid" "$out/adblock-page-private.png" all ||
   fail "no window to capture"
 

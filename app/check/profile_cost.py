@@ -9,6 +9,9 @@
   profile_cost.py kinds SNAP         the number of processes by kind
   profile_cost.py count SNAP KIND    the number of processes of KIND
   profile_cost.py trace FILE         the profile-loading spans in a JSON startup trace, by profile
+  profile_cost.py active DIR [P...]  the profiles Chrome's Local State under DIR lists as active at
+                                     its last quit, which it loads before its first window; with
+                                     profiles P, lists those instead, as a crash may leave it
 """
 
 import base64
@@ -114,6 +117,18 @@ def trace(path):
         print(f"{(e['ts'] - start) / 1000:9.1f} ms  {dur:7.1f} ms  {e['name']} {path}".rstrip())
 
 
+def active(data_dir, given):
+    path = os.path.join(data_dir, "Local State")
+    with open(path) as f:
+        state = json.load(f)
+    if given:
+        state.setdefault("profile", {})["last_active_profiles"] = given
+        with open(path, "w") as f:
+            json.dump(state, f)
+        return
+    print(" ".join(state.get("profile", {}).get("last_active_profiles", [])))
+
+
 def main():
     command = sys.argv[1]
     if command == "spaces":
@@ -126,6 +141,8 @@ def main():
         kinds(sys.argv[2])
     elif command == "trace":
         trace(sys.argv[2])
+    elif command == "active":
+        active(sys.argv[2], sys.argv[3:])
 
 
 main()

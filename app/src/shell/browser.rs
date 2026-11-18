@@ -624,6 +624,10 @@ pub trait Browser {
     /// Gives the page shown the keyboard, from the UI if it has it, now or once a page still
     /// loading has a view, unless the UI takes it back first.
     fn focus_page(&self, cx: &mut App);
+    /// Gives the page shown the keyboard at its first control, or its last if `last`, as Tab or
+    /// Shift+Tab into it does (#3220). The core does nothing for an agent's tab the user doesn't
+    /// hold.
+    fn focus_page_end(&self, last: bool, cx: &mut App);
     /// Lays the page out at `frame` in the window, with corners of `radius`
     /// (`Shell::page_frame`). A split view's pages share it.
     fn lay_out_page(&self, frame: Bounds<Pixels>, radius: f32, cx: &mut App);
@@ -813,6 +817,8 @@ pub trait Browser {
     );
     /// Takes the toast away if it has an Undo button, as the undo it offered has been done.
     fn hide_undo_toast(&self, cx: &mut App);
+    /// Whether a toast that offers the undo, by its button or its key, shows and isn't leaving.
+    fn undo_toast_showing(&self, cx: &App) -> bool;
     /// Gives the Edit menu's Undo and Redo the titles of what they'd undo and redo, plain Undo and
     /// Redo for `None`, which a page's own undo and redo are.
     fn set_edit_titles(&self, undo: Option<&str>, redo: Option<&str>, cx: &mut App);

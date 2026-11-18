@@ -940,10 +940,10 @@ expect '^browser: command collapse-pinned via ui$' "View › Collapse Pinned Tab
 expect "^browser: outline -\\[$e $c\\]\$" "Collapse Pinned Tabs didn't collapse the pinned rows: $(outline)"
 
 # Focus Sidebar, on F6 unless the user gives it another key, gives the sidebar the keyboard and rings
-# the tab shown's row, the first ⌘1 counts. ↑ there stays, past the collapsed pinned rows, ↓ moves
-# the ring down, and return shows the ringed tab with its page holding the keyboard. From the View
-# menu, a key in the page clicked ends the ring, and escape gives the page the keyboard back
-# without showing another tab.
+# the tab shown's row, the first ⌘1 counts. ↑ there goes to New Tab's row and stays there, past
+# the collapsed pinned rows, ↓ moves the ring down, and return shows the ringed tab with its page
+# holding the keyboard. From the View menu, a key in the page clicked ends the ring, and escape
+# gives the page the keyboard back without showing another tab.
 bar_command focus-sidebar "Focus Sidebar" "focus sidebar"
 expect "^browser: sidebar keyed $t\$" "Focus Sidebar didn't ring the tab shown's row"
 expect "^browser: sidebar ring $t at " "the ring wasn't drawn round the tab shown's row"
@@ -952,10 +952,13 @@ settled
 ../tools/window-screenshot.sh "$pid" "$out/sidebar-keyed.png" || fail "no window to capture"
 up=$((step + 1))
 send key up
+expect '^browser: sidebar keyed 0$' "↑ from Today's first row didn't ring New Tab's"
+send key up
+send key down
 send key down
 expect "^browser: sidebar keyed $d\$" "↓ didn't move the ring to the next row"
-[ "$(since "$up" | grep -c '^browser: sidebar keyed')" = 1 ] ||
-  fail "↑ from the first row moved the ring, onto a collapsed row"
+[ "$(since "$up" | grep -c '^browser: sidebar keyed')" = 3 ] ||
+  fail "↑ from New Tab's row moved the ring, onto a collapsed row"
 expect "^browser: sidebar ring $d at " "the ring wasn't drawn round the next row"
 ../tools/window-screenshot.sh "$pid" "$out/sidebar-keyed-down.png" || fail "no window to capture"
 send key return
