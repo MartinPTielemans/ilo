@@ -532,7 +532,10 @@ if [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 1
   # Tab past the page's last control, and ⇧Tab before its first, ring the tab's row as on
   # Chromium's page, and the same key from the ring gives the page that control again (#3359). The
   # field is the page's one control, so each way leaves from it and comes back to it, and what's
-  # typed after says it has the keyboard. Each key comes once the last one's line has, no wait.
+  # typed after says it has the keyboard. Tab into a field selects its text, in WebKit as in every
+  # browser (FocusController focuses with SelectionRestorationMode::SelectAll), so the letter
+  # typed after takes the place of the one before: a field that kept its old focus would have both.
+  # Each key comes once the last one's line has, no wait.
   # $1 is the key's name, $2 its driver keys, $3 the end the page is left at, $4 the control the
   # ring gives back, and $5 a letter for the field.
   out_and_back() {
@@ -548,14 +551,12 @@ if [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 1
       grep -c '^browser: \(sidebar keyed\|strip keyed\|ring gave the page\) ' | grep -qx 1 ||
       fail "the ring moved on from the tab's row by itself after $1 out of Safari's engine's page"
     send type $5
-    page_says " field $typed$5 " "$1 from the ring didn't give Safari's engine's page its field"
-    typed=$typed$5
+    page_says " field $5 " "$1 from the ring didn't give Safari's engine's page its field, its text selected"
   }
   send click $page_point
   send key tab
   send type a
   page_says ' field a ' "Tab in Safari's engine's page didn't focus its field"
-  typed=a
   out_and_back Tab tab end first b
   out_and_back ⇧Tab "tab shift" start last c
   send click $sidebar_point
