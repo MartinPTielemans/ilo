@@ -15,10 +15,21 @@
 # holding [] shows its file in the system's file manager from its note's button, last of the steps;
 # after it, that the page the bar's ↩ loaded over a Board had the keyboard is judged. Japanese
 # input as the first keys is the hosted Mac's.
+# An agent gets nothing of a Board, wherever the user opens one: one New Board made, one opened from
+# Library › Boards, and one whose address the user typed into the agent's own tab, taken over. Its
+# list_tabs leaves each out, read_page, snapshot, screenshot and click on it are refused as on a tab
+# not its own, each refusal in the activity log, and nothing logged names the Board.
 
 log="$out/board.log"
 step=0
 rm -f "$saved" "$launch_frame"
+# An MCP client's token, saved with Settings › Agents on, which the app reads as it starts. The file
+# goes once the server is up, so a run that stops early leaves the next checks' agents off.
+serve
+agents_file="$profile_dir/Agents"
+token=$(python3 -I -c 'import secrets; print(secrets.token_hex(32))')
+printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}]}' "$token" > "$agents_file"
+chmod 600 "$agents_file"
 # Showing the file on Linux, with no file manager on the bus, falls to xdg-open, which tries
 # $BROWSER before the runner's own browsers: true ends it there, so none stays on the display.
 opener=${BROWSER:-}
@@ -28,6 +39,14 @@ BROWSER=$opener BROWSER_DRIVE=1 BROWSER_URL='data:text/html,<title>ready</title>
 pid=$!
 exec 3> "$out/drive"
 await_load
+case "$(uname -s)" in
+  MINGW* | MSYS*) on='^browser: agents server on \\\\\.\\pipe\\.*-agents-[0-9a-f]*$' ;;
+  *) on='^browser: agents server on /.*/Agents\.sock$' ;;
+esac
+await "$on" || fail "the saved switch didn't start the agents' server"
+rm -f "$agents_file"
+socket=$(grep '^browser: agents server on' "$log" | tail -1 | sed 's/^browser: agents server on //')
+if windows; then bridge="$app/mcp-bridge.exe"; else bridge="$(dirname "$browser")/mcp-bridge"; fi
 
 # New Board, from its key.
 send key e ctrl shift
@@ -157,6 +176,179 @@ expect '^browser: command back via ' "⌘left on the page the bar loaded over th
 back_via=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep '^browser: command back via ' |
   head -1 | cut -d' ' -f5)
 expect "^browser: loaded $board chrome://board/$id\$" "back didn't bring the Board again"
+
+# 1d: an agent gets nothing of a Board. The client is the bridge on two pipes, as mcp's and rules'.
+rm -f "$out/board-in" "$out/board-out"
+mkfifo "$out/board-in" "$out/board-out"
+if windows; then
+  BROWSER_AGENT_TOKEN=$token windows_bridge "$bridge" "$socket" "$out/board-in" "$out/board-out" \
+    2>> "$out/board-bridge.log" &
+else
+  BROWSER_AGENT_TOKEN=$token "$bridge" "$socket" < "$out/board-in" > "$out/board-out" \
+    2>> "$out/board-bridge.log" &
+fi
+bridge_pid=$!
+exec 4> "$out/board-in" 5< "$out/board-out"
+# The bridge's next line within 30 s, read by perl under its own alarm, as mcp's next_answer (#3286).
+next_answer() {
+  perl -e 'alarm shift; my $line = "";
+    while (sysread STDIN, my $byte, 1) { $line .= $byte; last if $byte eq "\n" }
+    print $line; exit($line =~ /\n\z/ ? 0 : 1)' 30 <&5
+}
+rpc=0
+# Calls the tool $1 with the arguments $2 and prints its answer's text, after "error: " if it's an
+# error, or a picture's type and size.
+call() {
+  rpc=$((rpc + 1))
+  printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":$rpc,\"method\":\"tools/call\",\"params\":{\"name\":\"$1\",\"arguments\":$2}}" >&4
+  answer=$(next_answer) || fail "the browser didn't answer the agent's $1 $2"
+  printf '%s\n' "$answer" | python3 -I -c '
+import json, sys
+result = json.load(sys.stdin)["result"]
+content = result["content"][0]
+if content["type"] == "image":
+    print(content["mimeType"], len(content["data"]))
+else:
+    print(("error: " if result.get("isError") else "") + content["text"])' ||
+    fail "the browser answered the agent's $1 $2 with: $answer"
+}
+# Waits for more lines than $2 matching $1.
+await_more() {
+  for _ in $(seq 300); do
+    [ "$(grep -c "$1" "$log" || true)" -gt "$2" ] && return 0
+    kill -0 "$pid" 2> /dev/null || fail "the app exited"
+    sleep 0.1
+  done
+  return 1
+}
+printf '%s\n' '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"check","version":"1"}}}' >&4
+next_answer > "$out/board-initialize.json" || fail "the browser didn't answer the agent's initialize"
+printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}' >&4
+# The agent's own page, in its Space.
+printf '%s' '<!doctype html><title>Agent page</title><p>A page of the check for the agent.</p>' \
+  > "$out/site/board-agent.html"
+opened=$(call open_tab "{\"url\":\"localhost:$port/board-agent.html\"}")
+agent_tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+[ -n "$agent_tab" ] || fail "the agent's open_tab answered: $opened"
+not_its='error: The tab isn'"'"'t in the agent'"'"'s own Space.'
+# The agent gets nothing of the Board tab $1, $2 as the run says how it was opened: list_tabs
+# leaves it out, and read_page, snapshot, screenshot and click on it are refused, each in the
+# activity log, whose lines say only "board" of it.
+gets_nothing() {
+  listed=$(call list_tabs '{}')
+  printf '%s\n' "$listed" | grep -q "^. $agent_tab  " ||
+    [ "$1" = "$agent_tab" ] || fail "the agent's list_tabs lost its own tab: $listed"
+  if printf '%s\n' "$listed" | grep -q "^. $1  \|chrome://board\|pantry\|attic\|cellar"; then
+    fail "the agent's list_tabs listed the Board $2: $listed"
+  fi
+  for tool in read_page snapshot screenshot click; do
+    case $tool in
+      click) arguments="{\"tab\":$1,\"ref\":\"e1\"}" ;;
+      *) arguments="{\"tab\":$1}" ;;
+    esac
+    refused="^browser: agent logged mcp-client $tool [a-z]* refused: The tab isn't in the agent's own Space\.\$"
+    entries=$(grep -c "$refused" "$log" || true)
+    got=$(call "$tool" "$arguments")
+    [ "$got" = "$not_its" ] || fail "the agent's $tool on the Board $2 answered: $got"
+    await_more "$refused" "$entries" ||
+      fail "the agent's $tool on the Board $2 isn't refused in the activity log: $(grep "^browser: agent logged mcp-client $tool " "$log" | tail -1)"
+  done
+}
+
+# New Board makes its Board in the Space the window shows, the user's: a window never shows an
+# agent's Space as its own (#1080).
+send key e ctrl shift
+expect '^browser: new board [0-9a-f]\{32\} tab [0-9]*$' "⌃⇧E made no second Board"
+attic=$(grep '^browser: new board [0-9a-f]\{32\} tab ' "$log" | tail -1)
+attic_id=$(echo "$attic" | cut -d' ' -f4)
+attic_tab=$(echo "$attic" | cut -d' ' -f6)
+expect "^browser: name board $attic_tab\$" "the second Board's row didn't offer its name to type over"
+send type "attic"
+send key return
+expect "^browser: board $attic_tab has the keyboard\$" "↩ on the second Board's name didn't give its page the keyboard"
+gets_nothing "$attic_tab" "New Board made"
+# Library › Boards opens it again once its tab is archived, from Today, as ⌘W on a pinned tab keeps
+# it: ↓ rings a row, ↩ opens its Board, and the one with a tab, pantry's, is only shown, so ↓ again
+# rings the other.
+send key d cmd
+expect "^browser: today\( [0-9]*\)* $attic_tab\( [0-9]*\)*\$" "⌘D didn't move the second Board's tab into Today: Today is \"$(today)\""
+send key w cmd
+expect "^browser: tab $attic_tab closed\$" "⌘W didn't archive the second Board's tab"
+for downs in 1 2; do
+  bar_command view-boards "View Boards…" "view boards"
+  expect '^browser: library shown$' "View Boards… didn't open the Library"
+  # The list logs its count only when it changes, which it may have done while the Library was closed.
+  listed=$(grep '^browser: library boards [0-9]*$' "$log" | tail -1)
+  [ "$listed" = 'browser: library boards 2' ] || fail "Library › Boards didn't list the two Boards; its last count line: ${listed:-none}"
+  for _ in $(seq "$downs"); do
+    send key down
+    expect '^browser: library row keyed ' "↓ in Library › Boards rang no row"
+  done
+  send key return
+  expect '^browser: library board [0-9a-f]\{32\} \(shown\|opened\)$' "↩ on a Board's row in Library › Boards did nothing"
+  grep -q "^browser: library board $attic_id opened\$" "$log" && break
+done
+expect "^browser: loaded [0-9]* chrome://board/$attic_id\$" "Library › Boards didn't open the archived Board"
+attic_tab=$(grep "^browser: loaded [0-9]* chrome://board/$attic_id\$" "$log" | tail -1 | cut -d' ' -f3)
+gets_nothing "$attic_tab" "opened from Library › Boards"
+
+# The user takes the agent's tab over from its page, watched in the conversation, and types a
+# Board's address into it: the tab, in the agent's Space and handed back, still gives the agent
+# nothing. The Board is one with no tab, open or archived, so the bar loads it rather than going to
+# a tab of it.
+cellar=$(printf 'c%.0s' $(seq 32))
+mkdir -p "$boards/$cellar"
+printf '%s' cellar > "$boards/$cellar/name"
+printf '%s' '{"version": 1, "camera": {"x": 0, "y": 0, "zoom": 1}, "cards": []}' > "$boards/$cellar/board.json"
+session=$(sed -n 's/^browser: session \(session-[0-9]*\) of agent mcp-client as check$/\1/p' "$log" | tail -1)
+[ -n "$session" ] || fail "the agent's open_tab started no card: $(grep '^browser: session ' "$log" | tail -1)"
+# The bar's Take Over is for the tab the agent is at work in, which it is once it reads it.
+own=$(call read_page "{\"tab\":$agent_tab}")
+case "$own" in "Tab $agent_tab: "*) ;; *) fail "reading the agent's own tab answered: $own" ;; esac
+await "^browser: agent mcp-client at work in $agent_tab\$" || fail "the agent's read of its own tab didn't put it at work there"
+send state
+if [ "$active" = 1 ]; then
+  await "^browser: task plate task-${session#session-} at " || fail "the agent's card wasn't drawn"
+  read -r px py pw ph <<PLATE
+$(grep "^browser: task plate task-${session#session-} at " "$log" | tail -1 | cut -d' ' -f6-)
+PLATE
+  send click $((px + pw / 2)) $((py + ph / 2))
+  expect "^browser: task $session shown\$" "a click on the agent's card didn't show its conversation"
+  await '^browser: task pages at ' || fail "the conversation's header drew no Pages"
+  read -r gx gy gw gh <<CHIP
+$(grep '^browser: task pages at ' "$log" | tail -1 | cut -d' ' -f5-)
+CHIP
+  send click $((gx + gw / 2)) $((gy + gh / 2))
+  expect "^browser: task $session shows pages\$" "a click on Pages didn't show the grid"
+  await "^browser: task picture $agent_tab at " || fail "the conversation didn't picture the agent's tab $agent_tab"
+  read -r wx wy ww wh <<PICTURE
+$(grep "^browser: task picture $agent_tab at " "$log" | tail -1 | cut -d' ' -f6-)
+PICTURE
+  send click $((wx + ww / 2)) $((wy + wh / 2))
+  expect "^browser: task page $agent_tab in place\$" "a click on the agent's tab's picture didn't watch it"
+  send key return cmd
+  expect "^browser: agent mcp-client taken over in $agent_tab\$" "⌘↩ on the agent's page, watched, didn't take it over"
+  go_from_bar "chrome://board/$cellar"
+  expect "^browser: loaded $agent_tab chrome://board/$cellar\$" \
+    "a Board's address typed in the agent's tab didn't load there: $(grep '^browser: loaded ' "$log" | tail -1)"
+  ../tools/window-screenshot.sh "$pid" "$out/board-agent-tab.png" || fail "no window to capture"
+  send key return cmd
+  expect "^browser: agent mcp-client handed back $agent_tab\$" "⌘↩ didn't hand the agent's tab back"
+  gets_nothing "$agent_tab" "typed into the agent's own tab"
+else
+  echo "skip: board: a Board typed into the agent's own tab. Watching it takes clicks, and Browser wasn't the active app."
+fi
+written=$(grep -v '^browser: drive [0-9]*: ' "$log" | grep 'shelves\|kitchen\|pantry\|attic\|cellar' | head -1)
+[ -z "$written" ] || fail "the log says what a Board holds or its name: $written"
+exec 4>&- 5<&-
+for _ in $(seq 100); do kill -0 "$bridge_pid" 2> /dev/null || break; sleep 0.1; done
+rm -f "$agents_file" "$out/board-in" "$out/board-out"
+# Back to the first Board, by its place in the sidebar, for the steps after these.
+n=$(echo $(pinned) $(today) | tr ' ' '\n' | grep -nx "$board" | cut -d: -f1)
+[ -n "$n" ] || fail "the first Board's tab $board isn't in the sidebar: pinned \"$(pinned)\", Today \"$(today)\""
+# From the task area, which ⌘N leaves first, the line has no Space after it.
+send key "$n" cmd
+expect "^browser: selected $board\( in .*\)\{0,1\}\$" "⌘$n didn't show the first Board's tab $board of \"$(today)\""
 
 # 1c: a Board whose note's text is markup, and a link to javascript:, runs neither: each would
 # take the page to #ran, which its page line would say, as a Board's title is never logged. Its id
@@ -331,10 +523,13 @@ expect 'browser: board shows its file$' \
 quit
 echo "ok: New Board made $id, its name kept and its note saved in its folder alone, unlogged;" \
   "Library › Boards listed it; renamed, found by the bar, archived and reopened, the log said" \
-  "only \"(a Board)\", and its next save kept the note; markup and a javascript: link ran" \
+  "only \"(a Board)\", and its next save kept the note; an agent got nothing of a Board made," \
+  "opened from the Library or typed into its own tab, each refusal logged without a name;" \
+  "markup and a javascript: link ran" \
   "nothing; a waiting picture landed as a card and left the arrivals, and one that came while" \
   "its tab wasn't showing landed a step from it when shown; a Board over 4 MiB and one" \
   "holding [] weren't written over, and the one holding [] showed its file; a private window had" \
   "no New Board; the page loaded over a Board from the bar had the keyboard." \
   "Windows: $out/board.png $out/board-markup.png $out/board-landed.png" \
-  "$out/board-landed-shown.png $out/board-unread.png $out/board-private.png"
+  "$out/board-landed-shown.png $out/board-unread.png $out/board-private.png" \
+  "$([ -f "$out/board-agent-tab.png" ] && echo "$out/board-agent-tab.png")"
