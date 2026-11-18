@@ -998,17 +998,27 @@ mod tests {
         cx.simulate_keystrokes("ctrl-shift-2 ctrl-shift-[ ctrl-shift-] cmd-t cmd-l");
         assert_eq!(
             ran.take(),
-            [Command::FocusPane(1), Command::PreviousPane, Command::NextPane]
+            [
+                Command::FocusPane(1),
+                Command::PreviousPane,
+                Command::NextPane
+            ]
         );
         // As the Mac's window and X11 hear ⌃⇧2 and ⌃⇧], the shift in the character.
         cx.simulate_keystrokes("ctrl-@ ctrl-} ctrl-!");
         assert_eq!(
             ran.take(),
-            [Command::FocusPane(1), Command::NextPane, Command::FocusPane(0)]
+            [
+                Command::FocusPane(1),
+                Command::NextPane,
+                Command::FocusPane(0)
+            ]
         );
         // A pane key the user moves follows there too.
         cx.update(|_, cx| {
-            change_keys(cx, |user| user.set(Command::NextPane, keys(&["ctrl-shift-k"])))
+            change_keys(cx, |user| {
+                user.set(Command::NextPane, keys(&["ctrl-shift-k"]))
+            })
         })
         .unwrap();
         cx.simulate_keystrokes("ctrl-shift-] ctrl-shift-k");

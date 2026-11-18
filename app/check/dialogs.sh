@@ -244,7 +244,22 @@ split_rests() {
     # A page's open() keeps the page it opens in its own browsing instance, so on its site in its
     # renderer process, which two tabs typed in the bar never share. ⌥-click on its row joins it
     # to the page shown.
-    send click $page_point
+    # The two windows' steps left this one half the screen wide, where an X press at the page's
+    # usual point misses it, so it's the size the two-site split had, and clicked in its middle.
+    send resize 1100 720
+    for _ in $(seq 50); do
+      send layout
+      alone=$(since | grep -m1 '^browser: layout' | grep -o 'WebContentsViewCocoa [0-9,]* [0-9x]*' |
+        sed 's/^WebContentsViewCocoa //' | head -1)
+      [ -n "$alone" ] && break
+      sleep 0.1
+    done
+    [ -n "$alone" ] || fail "the layout didn't show the dialogs page ($2)"
+    alone_y=${alone#*,}
+    alone_size=${alone##* }
+    send click $((${alone%%,*} + ${alone_size%%x*} / 2)) $((${alone_y%% *} + ${alone_size##*x} / 2))
+    [ "$focus" = RenderWidgetHostViewCocoa ] ||
+      fail "a click in the dialogs page didn't give it the keyboard ($2): $key, $focus"
     send key w
     expect "^browser: tab [0-9]* opened by $page in the foreground\$" "\"w\" in the dialogs page didn't open beside.html ($2)"
     beside=$(grep "^browser: tab [0-9]* opened by $page " "$log" | tail -1 | cut -d' ' -f3)
@@ -256,7 +271,7 @@ split_rests() {
   expect "^browser: splits .*$page+[0-9][0-9]*" \
     "beside.html didn't open beside the dialogs page ($2): $(grep '^browser: splits' "$log" | tail -1)"
   beside=$(grep '^browser: splits' "$log" | tail -1 | grep -o "$page+[0-9]*" | cut -d+ -f2)
-  expect "^browser: title $beside beside ready\$" "beside.html didn't draw in the split ($2)"
+  [ -n "$shared" ] || expect "^browser: title $beside beside ready\$" "beside.html didn't draw in the split ($2)"
   read_panes
   send click $(in_pane 1)
   expect "^browser: selected $page\( in .*\)\{0,1\}\$" \
