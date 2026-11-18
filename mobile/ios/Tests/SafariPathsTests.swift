@@ -70,6 +70,13 @@ import os
     let sentence = Bundle.main.object(forInfoDictionaryKey: key) as? String ?? ""
     #expect(sentence.count > 20)
   }
+
+  /// Without it iOS stops a page's sound the moment the app leaves the screen. The audio
+  /// session is WebKit's to set, to playback while a page plays, so the app sets none.
+  @Test func `a page's sound may go on when the app leaves the screen`() {
+    let modes = Bundle.main.object(forInfoDictionaryKey: "UIBackgroundModes") as? [String] ?? []
+    #expect(modes.contains("audio"))
+  }
 }
 
 /// A window a page's script opens, as a sign-in or a payment does.

@@ -59,6 +59,10 @@
 	<string>A page you opened asked to use the microphone.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>ilo saves the pictures you choose to your photo library.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
