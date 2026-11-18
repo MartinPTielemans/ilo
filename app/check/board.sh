@@ -645,7 +645,8 @@ board=$(grep '^browser: command bar puts tab [0-9]* first$' "$log" | tail -1 | c
 send key return
 expect "^browser: command bar switch to tab $board\$" "↩ on the Board's row didn't switch to its tab after the relaunch"
 expect "^browser: loaded $board chrome://board/$id\$" "the Board's tab didn't load its Board after the relaunch"
-saves=$(grep -c 'browser: board saved$' "$log")
+# None yet in the relaunch's log, where grep -c's status 1 would end the check under set -e.
+saves=$(grep -c 'browser: board saved$' "$log" || true)
 send scroll 640 400 40 5
 saved_after "$saves" "a pan on the Board after the relaunch wasn't saved"
 grep -q 'shelves over the sink' "$folder/board.json" ||
