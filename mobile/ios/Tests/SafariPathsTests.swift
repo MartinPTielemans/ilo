@@ -70,3 +70,85 @@ import WebKit
     #expect(sentence.count > 20)
   }
 }
+
+/// A window a page's script opens, as a sign-in or a payment does.
+@Suite(.serialized, .timeLimit(.minutes(2))) @MainActor struct WindowTests {
+  /// A made-up sign-in: the page waits to hear from the window it opens, which says who signed
+  /// in and closes itself.
+  private func site() async throws -> Loopback {
+    try await Loopback { request in
+      switch request.path {
+      case "/account":
+        .html("<title>Signed out</title><script>addEventListener('message', said => { document.title = 'Signed in as ' + said.data })</script>")
+      case "/unasked":
+        .html("<title>Unasked</title><script>window.unasked = window.open('/sign-in')</script>")
+      default:
+        .html("<title>Sign in</title>")
+      }
+    }
+  }
+
+  @Test func `a window a page opens is a tab in front that answers its opener, and closing itself goes back`() async throws {
+    let server = try await site()
+    let browser = testBrowser()
+    browser.openNew(server.url("/account"))
+    let page = try #require(browser.page)
+    #expect(await eventually { await page.shows("/account") })
+    let space = try #require(browser.currentSpace)
+    let before = browser.account.today(in: space.id).count
+
+    #expect(await page.run("window.signIn = window.open('/sign-in'); return window.signIn !== null") as? Bool == true)
+    let window = try #require(browser.page)
+    #expect(window !== page)
+    #expect(browser.account.today(in: space.id).count == before + 1)
+    #expect(await eventually { await window.shows("/sign-in") })
+    #expect(await window.run("return window.opener !== null") as? Bool == true)
+
+    _ = await window.run("opener.postMessage('ann', location.origin); window.close()")
+    #expect(await eventually { browser.page === page })
+    #expect(browser.account.today(in: space.id).count == before)
+    #expect(await eventually { await page.run("return document.title") as? String == "Signed in as ann" })
+    #expect(await page.run("return window.signIn.closed") as? Bool == true)
+  }
+
+  @Test func `a window opened empty is a tab its opener writes into`() async throws {
+    let server = try await site()
+    let browser = testBrowser()
+    browser.openNew(server.url("/account"))
+    let page = try #require(browser.page)
+    #expect(await eventually { await page.shows("/account") })
+
+    let wrote = await page.run("const made = window.open(''); made.document.write('<title>Written</title>'); return made.document.title")
+    #expect(wrote as? String == "Written")
+    let window = try #require(browser.page)
+    #expect(window !== page)
+    #expect(await eventually { window.title == "Written" })
+  }
+
+  @Test func `a window no tap asked for stays blocked`() async throws {
+    let server = try await site()
+    let browser = testBrowser()
+    browser.openNew(server.url("/unasked"))
+    let page = try #require(browser.page)
+    #expect(await eventually { await page.shows("/unasked") })
+    let space = try #require(browser.currentSpace)
+
+    #expect(await page.run("return window.unasked === null") as? Bool == true)
+    #expect(browser.page === page)
+    #expect(browser.account.today(in: space.id).count == 1)
+    #expect(server.requests(to: "/sign-in") == 0)
+  }
+
+  @Test func `a page that isn't on screen opens no window`() async throws {
+    let server = try await site()
+    let browser = testBrowser()
+    browser.openNew(server.url("/account"))
+    let behind = try #require(browser.page)
+    #expect(await eventually { await behind.shows("/account") })
+    browser.openNew(server.url("/other"))
+    let front = try #require(browser.page)
+
+    #expect(await behind.run("return window.open('/sign-in') === null") as? Bool == true)
+    #expect(browser.page === front)
+  }
+}

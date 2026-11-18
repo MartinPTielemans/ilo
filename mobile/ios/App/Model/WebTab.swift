@@ -42,6 +42,9 @@ final class WebTab: NSObject, Identifiable {
   }
 
   @ObservationIgnored weak var browser: Browser?
+  /// The tab whose page opened this one as a window: the page it speaks to, and the one in front
+  /// again when it closes itself.
+  @ObservationIgnored private(set) weak var opener: WebTab?
   @ObservationIgnored private var observations: [NSKeyValueObservation] = []
   @ObservationIgnored private var reloadedAfterCrash = false
   @ObservationIgnored private var writes = NavigationWrites()
@@ -61,16 +64,25 @@ final class WebTab: NSObject, Identifiable {
   private var downloads: [ObjectIdentifier: URL] = [:]
   var downloadsRunning: Int { downloads.count }
 
-  init(id: String, role: Role, browser: Browser) {
+  /// A tab that loads what it's told to, or the `window` a page of the `opener` tab opened, which
+  /// WebKit loads itself and joins to that page only in a web view made as it says.
+  init(id: String, role: Role, browser: Browser, window: WKWebViewConfiguration? = nil, opener: WebTab? = nil) {
     self.id = id
     self.role = role
     self.browser = browser
+    self.opener = opener
 
-    let configuration = WKWebViewConfiguration()
-    configuration.allowsInlineMediaPlayback = true
-    // Sites send their in-app pages to a web view that doesn't say it's a browser.
-    let version = UIDevice.current.systemVersion.split(separator: ".").prefix(2).joined(separator: ".")
-    configuration.applicationNameForUserAgent = "Version/\(version) Mobile/15E148 Safari/604.1"
+    let configuration = window ?? WKWebViewConfiguration()
+    if window != nil {
+      // WebKit's copy of the opener's, with the opener's scripts and the handlers that hear
+      // them: a window has its own.
+      configuration.userContentController = WKUserContentController()
+    } else {
+      configuration.allowsInlineMediaPlayback = true
+      // Sites send their in-app pages to a web view that doesn't say it's a browser.
+      let version = UIDevice.current.systemVersion.split(separator: ".").prefix(2).joined(separator: ".")
+      configuration.applicationNameForUserAgent = "Version/\(version) Mobile/15E148 Safari/604.1"
+    }
     let page = PageWebView(frame: .zero, configuration: configuration)
     webView = page
     swipe = PageSwipe(webView: webView) { [weak browser] in browser?.settings.swipeAnywhere ?? false }
@@ -529,12 +541,22 @@ extension WebTab: WKUIDelegate {
     _ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for action: WKNavigationAction,
     windowFeatures: WKWindowFeatures
   ) -> WKWebView? {
+    // A window a script opened is its page's to speak to and to close, so WebKit makes its page.
+    guard action.navigationType == .linkActivated else {
+      return browser?.opensWindow(at: action.request.url, from: self, with: configuration)?.webView
+    }
+    // A link the user followed opens without its tracking parameters, as one in the page does,
+    // in a tab that knows nothing of this one.
     if let url = action.request.url, ["http", "https"].contains(url.scheme?.lowercased()) {
-      // A link the user followed opens without its tracking parameters, as one in the page does.
-      let followed = action.navigationType == .linkActivated
-      browser?.opensWindow(followed ? Blocker.shared.withoutTracking(url) ?? url : url, from: self)
+      browser?.opensWindow(Blocker.shared.withoutTracking(url) ?? url, from: self)
     }
     return nil
+  }
+
+  /// The page closed its own window, which WebKit lets one do that a script opened, or that has
+  /// been nowhere else.
+  func webViewDidClose(_ webView: WKWebView) {
+    browser?.closedItself(self)
   }
 
   // MARK: A long press

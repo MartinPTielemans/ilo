@@ -135,9 +135,9 @@ extension WebTab {
     try? await webView.callAsyncJavaScript(script, contentWorld: .page)
   }
 
-  /// Whether the page that's showing is the one at `path`, loaded.
+  /// Whether the page that's showing is the one at `path`, loaded. The page says so itself: the
+  /// web view names an address before the page at it has replaced the one before.
   func shows(_ path: String) async -> Bool {
-    guard webView.url?.path() == path else { return false }
-    return await run("return document.readyState") as? String == "complete"
+    await run("return document.readyState === 'complete' ? location.pathname : ''") as? String == path
   }
 }

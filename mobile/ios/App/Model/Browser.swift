@@ -1,6 +1,7 @@
 import IloSync
 import Observation
 import UIKit
+import WebKit
 
 /// Something a page wants that the user answers first.
 struct Prompt: Identifiable {
@@ -305,7 +306,9 @@ final class Browser {
       page.settle(finished: true)
       takePicture(of: page)
     }
-    for id in live.show(tab.id, holding: Set(tabs.values.filter(\.holdsText).map(\.id))) { unload(id) }
+    // A page that opened a window keeps its web view while the window has one to speak to.
+    let openers = Set(tabs.values.compactMap { $0.opener?.id })
+    for id in live.show(tab.id, keeping: openers, holding: Set(tabs.values.filter(\.holdsText).map(\.id))) { unload(id) }
     sheet = nil
     searchingPage = false
     peek = nil
@@ -394,6 +397,51 @@ final class Browser {
     } else if !peeks(url, from: tab) {
       slide = 0
       openNew(url)
+    }
+  }
+
+  /// A page's script opened a window, as a sign-in or a payment does: a Today tab in front, or a
+  /// Peek if it leaves a pinned tab's site, made with WebKit's `configuration` so that its page
+  /// and the one that opened it can speak to each other. WebKit loads it. None for a page that
+  /// isn't on screen, or for another app's address.
+  func opensWindow(at url: URL?, from tab: WebTab, with configuration: WKWebViewConfiguration) -> WebTab? {
+    guard tab === page || tab === peek, let space = currentSpace else { return nil }
+    // A window opened empty, for its opener to write into or send somewhere.
+    let blank = url.map { $0.absoluteString.isEmpty || $0.scheme?.lowercased() == "about" } ?? true
+    let address = blank ? URL(string: "about:blank")! : url!
+    guard blank || ["http", "https"].contains(address.scheme?.lowercased()) else { return nil }
+    if tab.role == .peek {
+      // A Peek is one page over its tab, and goes there itself.
+      if !blank { tab.load(address) }
+      return nil
+    }
+    if case .pinned(let home) = tab.role, !blank, !Site.same(home, address) {
+      let peek = WebTab(id: "peek", role: .peek, browser: self, window: configuration, opener: tab)
+      self.peek = peek
+      return peek
+    }
+    let node = account.openToday(url: address, title: "", in: space.id)
+    let window = WebTab(id: node.id, role: .today, browser: self, window: configuration, opener: tab)
+    tabs[node.id] = window
+    slide = 0
+    show(window, from: nil)
+    return window
+  }
+
+  /// A page closed its own window, as a sign-in's does once it's done. A Today tab goes, and if
+  /// it was in front the page that opened it is again; a Peek closes. A pinned tab is the user's
+  /// to remove, and stays.
+  func closedItself(_ tab: WebTab) {
+    if tab === peek { return closePeek() }
+    guard tab.role == .today, tabs[tab.id] === tab else { return }
+    let open = pageOpen
+    let back = shown == tab.id ? tab.opener : nil
+    close(tab.id)
+    if let back, tabs[back.id] === back {
+      // Back the way the window came.
+      slide = -1
+      show(back, from: nil)
+      pageOpen = open
     }
   }
 
