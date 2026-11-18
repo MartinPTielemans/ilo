@@ -415,7 +415,8 @@ for line in open(recorded, encoding="utf-8"):
     event = json.loads(line)
     request = live.get(event["id"])
     if event["event"] == "sent" and event["url"].startswith("http") and not event.get("redirect"):
-        live[event["id"]] = {"url": event["url"], "at": event["at"], "how": "allowed"}
+        live[event["id"]] = {"url": event["url"], "at": event["at"], "how": "allowed",
+                             "document": event.get("document", False)}
         requests.append(live[event["id"]])
     elif not request:
         continue
@@ -423,8 +424,15 @@ for line in open(recorded, encoding="utf-8"):
         del live[event["id"]]
     elif event["event"] == "sent" and not event["url"].startswith("http"):
         request["how"] = "stand-in"
-    elif event["event"] == "failed" and request and "BLOCKED_BY_CLIENT" in event["error"]:
-        request["how"] = "blocked"
+    elif event["event"] == "sent":
+        # Where a redirect sent it, for the page's own request that fails before any answer.
+        request["to"] = event["url"]
+    elif event["event"] == "document":
+        request["status"], request["to"] = event["status"], event["url"]
+    elif event["event"] == "failed":
+        request["error"] = event["error"]
+        if "BLOCKED_BY_CLIENT" in event["error"]:
+            request["how"] = "blocked"
     elif event["event"] == "answered" and request and request["how"] == "allowed":
         request["how"] = "stand-in"
 
@@ -474,6 +482,29 @@ def video_said(video):
     return said
 
 
+def why_not(mine):
+    """Why a site's page didn't load, by its own last request: a refusal from the site's server, as
+    a rate limit or a bot wall sends, isn't the engine's, but stays a red all the same (#3347)."""
+    pages = [r for r in mine if r["document"]]
+    if not pages:
+        return "it never asked for its page"
+    page = pages[-1]
+    # The address it ended at, without its query, which can carry a visit's own.
+    parts = urlsplit(page.get("to", page["url"]))
+    at = f"{parts.scheme}://{parts.netloc}{parts.path}"
+    status, error = page.get("status"), page.get("error", "")
+    if "BLOCKED_BY_CLIENT" in error:
+        return f"the blocker blocked its page at {at}"
+    if status and status >= 400:
+        return f"the site refused it, HTTP {status} at {at}"
+    if status:
+        then = f" then failed with {error}" if error else ""
+        return f"its page answered HTTP {status} at {at}{then}"
+    if error:
+        return f"it failed with {error} before any answer at {at}"
+    return f"its page at {at} had no answer"
+
+
 for i, s in enumerate(sites):
     s["video"] = videos.get(s["url"])
     end = sites[i + 1]["at"] if i + 1 < len(sites) else float("inf")
@@ -489,6 +520,7 @@ for i, s in enumerate(sites):
     # Where the run both blocked and let through a host's requests, those it blocked.
     s["split"] = sorted(a for a in s["blocked_at"] if a.split("/")[0] in s["allowed"])
     s["blocked_n"] = sum(r["how"] == "blocked" for r in mine)
+    s["failed"] = "" if s["loaded"] else why_not(mine)
     s["standin_n"] = sum(r["how"] == "stand-in" for r in mine)
     # What the baseline hid all of and this run shows, as cdp.py's hidden says, or None where
     # there's no saying: no baseline's file for the site, or no look at it.
@@ -524,7 +556,7 @@ def content_cells(content):
 
 with open(table, "w", encoding="utf-8") as out:
     out.write("site\tloaded\tload_ms\trequests\tblocked\tstand_ins\tblocked_hosts\tallowed_hosts"
-              "\tbot_check\tvideo\tmissed\tsplit_blocked\ttext\timages\tcover\n")
+              "\tbot_check\tvideo\tmissed\tsplit_blocked\ttext\timages\tcover\tfailed\n")
     for s in sites:
         out.write("\t".join([s["url"], "1" if s["loaded"] else "0", s["load_ms"], str(s["requests"]),
                              str(s["blocked_n"]), str(s["standin_n"]), ",".join(s["blocked"]),
@@ -532,9 +564,10 @@ with open(table, "w", encoding="utf-8") as out:
                              video_cell(s["video"]),
                              "" if s["missed"] is None else str(len(s["missed"])),
                              " ".join(s["split"])]
-                            + content_cells(contents.get(s["url"]))) + "\n")
+                            + content_cells(contents.get(s["url"])) + [s["failed"]]) + "\n")
 
 worse = []
+refused = []
 site_missed = False
 # A site that was a bot check in this run or the baseline's, which an older table
 # doesn't say.
@@ -554,7 +587,14 @@ if baseline:
         if s["url"] in unchecked:
             continue
         if b[1] == "1" and not s["loaded"]:
-            worse.append(f"{s['url']} loaded with the baseline and doesn't now")
+            # The rest of a page that didn't load says nothing more.
+            worse.append(f"{s['url']} loaded with the baseline and doesn't now: {s['failed']}")
+            continue
+        if b[1] == "0" and s["loaded"] and named[s["url"]].get("failed"):
+            # The same blindness the other way round: the baseline has nothing of the site's to
+            # hold this run to.
+            refused.append(f"{s['url']} loads now, where the baseline's didn't: "
+                           f"{named[s['url']]['failed']}")
         was = video_of(named[s["url"]].get("video", ""))
         if plays(was) and s["video"] and s["video"]["ad"]:
             worse.append(f"{s['url']} showed an ad before its video, where the baseline's "
@@ -621,7 +661,8 @@ print(f"{len(loaded)} of {len(sites)} sites loaded, in {median} ms at the median
         f"{sum(s['page_hid'] for s in sites)} by the page's own"
       + (f"; {len(missed)} selectors the baseline hid all of showed" if baseline else "")
       + "".join(f"; {s['url']}'s video {video_said(s['video'])}" for s in sites if s["video"])
-      + (f"; not compared, as a bot check stood in: {', '.join(unchecked)}" if unchecked else ""))
+      + (f"; not compared, as a bot check stood in: {', '.join(unchecked)}" if unchecked else "")
+      + "".join(f"; {r}" for r in refused))
 if worse:
     sys.exit(1)
 PY

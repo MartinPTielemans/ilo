@@ -72,11 +72,13 @@ takes a command a line on its standard input:
                   untold ELEMENTS SELECTORS in MS ms", untold those not told apart in 15 s
   requests FILE   records each request the attached page and its frames make from now on, a JSON
                   line each in FILE: "sent" with its id, address and wall time in ms, and
-                  "redirect": true where it's a redirect of the request before it, "failed"
+                  "redirect": true where it's a redirect of the request before it, and
+                  "document": true where it's the page's own, its top frame's, "failed"
                   with its id and Chromium's error, as net::ERR_BLOCKED_BY_CLIENT for an ad
-                  blocker's, and "answered" with its id for a response from no server, network
-                  cache or service worker, as the browser's own ad blocker's stand-in is, then
-                  logs "cdp: recording requests"
+                  blocker's, "answered" with its id for a response from no server, network
+                  cache or service worker, as the browser's own ad blocker's stand-in is, and
+                  "document" with its id, HTTP status and address for the page's own response,
+                  then logs "cdp: recording requests"
 For perf's Chrome on the same runner (check/perf.sh), which has no driver of its own:
   titles          logs "cdp: title TARGET TITLE" for each page's title now, then each time a page's
                   changes, where perf's page stamps its paint and each time it's shown. DevTools
@@ -263,6 +265,12 @@ def post(method, params, session):
                          "sessionId": session}).encode())
 
 
+def top_document(params):
+    """Whether a request's event is the attached page's own document, its top frame's, whose id is
+    the page's target id."""
+    return params.get("type") == "Document" and params.get("frameId") == attached
+
+
 def record(message):
     """Records a request's event for requests, and attaches to each frame the page gets in a
     process of its own, an ad's often, to record its requests too. True for what it took."""
@@ -280,10 +288,17 @@ def record(message):
         # are a renderer's process id and a count, and the OS gives a later process the same id.
         if "redirectResponse" in params:
             line["redirect"] = True
+        if top_document(params):
+            line["document"] = True
     elif method == "Network.loadingFailed":
         line = {"event": "failed", "id": params["requestId"], "error": params["errorText"]}
     elif method == "Network.responseReceived":
         response = params["response"]
+        if top_document(params):
+            # The page's own answer, so a page that didn't load says whether its server refused it.
+            recording.write(json.dumps({"event": "document", "id": params["requestId"],
+                                        "status": response["status"], "url": response["url"]})
+                            + "\n")
         kept = ("fromDiskCache", "fromServiceWorker", "fromPrefetchCache", "fromEarlyHints")
         if response.get("remoteIPAddress") or any(response.get(key) for key in kept):
             return True
