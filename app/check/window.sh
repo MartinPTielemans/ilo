@@ -1902,6 +1902,8 @@ if [ "$(uname)" = Linux ] && [ -n "${SWAYSOCK:-}" ]; then
   send move 400 300
   reveal_at_edge "the pointer at the tiled window's edge didn't bring the sidebar out"
   ../tools/window-screenshot.sh "$pid" "$out/tiled-reveal.png" || fail "no window to capture"
+  # Across the sidebar out and off it, as a hand goes: the driver's pointer jumps.
+  send move 200 300
   send move 600 300
   expect '^browser: reveal hidden$' "the pointer leaving the tiled window's sidebar out didn't send it away"
   # held <x> <dx>: $at, the driven window's frame after a press at <x> and a drag by <dx>.
@@ -1933,6 +1935,7 @@ if [ "$(uname)" = Linux ] && [ -n "${SWAYSOCK:-}" ]; then
   send move $((right - 1)) 306
   expect '^browser: reveal shown$' "the pointer at the tiled window's right edge didn't bring the sidebar out"
   ../tools/window-screenshot.sh "$pid" "$out/tiled-reveal-right.png" || fail "no window to capture"
+  send move $((right - 200)) 300
   send move $((right - 600)) 300
   expect '^browser: reveal hidden$' "the pointer leaving the sidebar out on the right didn't send it away"
   send key t cmd
