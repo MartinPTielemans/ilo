@@ -76,7 +76,8 @@ nonisolated enum SummaryOffer: Equatable, Sendable {
     }
     switch model {
     case .ready: self = readsLanguage ? .offered : .hidden
-    case .downloading: self = .explained("Summaries arrive once the phone has its model, which is still downloading.")
+    // Whose model and whose download, since nothing in ilo starts it or hurries it.
+    case .downloading: self = .explained("Summaries use Apple Intelligence's model, which iOS is still downloading by itself.")
     case .turnedOff: self = .explained("Summaries are made by Apple Intelligence, which is off in Settings.")
     case .absent: self = .hidden
     }
