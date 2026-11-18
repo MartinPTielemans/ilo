@@ -239,7 +239,10 @@ send key w cmd
 expect "^browser: tab $attic_tab closed\$" "⌘W didn't archive the second Board's tab"
 for downs in 1 2; do
   bar_command view-boards "View Boards…" "view boards"
-  expect '^browser: library boards 2$' "Library › Boards didn't list the two Boards"
+  expect '^browser: library shown$' "View Boards… didn't open the Library"
+  # The list logs its count only when it changes, which it may have done while the Library was closed.
+  listed=$(grep '^browser: library boards [0-9]*$' "$log" | tail -1)
+  [ "$listed" = 'browser: library boards 2' ] || fail "Library › Boards didn't list the two Boards; its last count line: ${listed:-none}"
   for _ in $(seq "$downs"); do
     send key down
     expect '^browser: library row keyed ' "↓ in Library › Boards rang no row"
