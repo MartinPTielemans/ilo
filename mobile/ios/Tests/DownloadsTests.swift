@@ -355,6 +355,9 @@ import os
     downloads.save(server.url("/quiet.pdf"), from: page.webView, listed: false)
     #expect(await eventually { downloads.list.first?.state == .done })
     #expect(exists(downloads.folder.appending(path: "quiet.pdf")))
+    // Where it came from isn't held either, so Retry, which asks with ordinary tabs' cookies, isn't offered.
+    #expect(downloads.list.first?.source == nil)
+    #expect(downloads.list.first?.canRetry == false)
     await downloads.settled()
 
     let again = testDownloads(in: directory)

@@ -16,7 +16,8 @@ nonisolated struct Download: Identifiable, Codable, Equatable, Sendable {
   let id: UUID
   /// The file's name in the folder.
   var name: String
-  /// Where it came from, which Retry asks again. None for a file a page made itself.
+  /// Where it came from, which Retry asks again. None for a file a page made itself, and for a
+  /// private tab's: Retry asks through the list's own web view, with the cookies of ordinary tabs.
   var source: URL?
   var started: Date
   /// The whole file's size, once it's known.
@@ -171,7 +172,8 @@ final class Downloads: NSObject {
   func save(_ url: URL, from webView: WKWebView, listed: Bool = true) {
     let last = url.lastPathComponent
     let row = Download(
-      id: UUID(), name: free(Self.clean(last.isEmpty || last == "/" ? Site.name(of: url) : last)), source: url, started: .now,
+      id: UUID(), name: free(Self.clean(last.isEmpty || last == "/" ? Site.name(of: url) : last)), source: listed ? url : nil,
+      started: .now,
       state: .running)
     list.append(row)
     if !listed { unlisted.insert(row.id) }
@@ -196,7 +198,7 @@ final class Downloads: NSObject {
   }
 
   private func start(_ request: URLRequest, for id: UUID, from webView: WKWebView, renames: Bool, listed: Bool) {
-    requests[id] = request
+    if listed { requests[id] = request }
     Task {
       let download = await webView.startDownload(using: request)
       // Stopped or deleted before it began.
@@ -423,7 +425,8 @@ extension Downloads: WKDownloadDelegate {
       if let size { list[index].size = size }
       name = list[index].name
     } else {
-      let source = download.originalRequest?.url.flatMap { ["http", "https"].contains($0.scheme?.lowercased()) ? $0 : nil }
+      let source =
+        flight.listed ? download.originalRequest?.url.flatMap { ["http", "https"].contains($0.scheme?.lowercased()) ? $0 : nil } : nil
       name = free(Self.clean(suggestedFilename))
       list.append(Download(id: id, name: name, source: source, started: .now, size: size, state: .running))
       if !flight.listed { unlisted.insert(id) }
