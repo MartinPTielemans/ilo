@@ -1186,8 +1186,10 @@ pub(super) enum StripChip {
 /// The strip's chips, in order, each with its look: Hand Back while the user holds the page,
 /// `held`; Stop while its task works or waits; Open once it's done and left the user the page, if
 /// it did. A press in the page takes it over, and ⌘↩ still does, so Take Over shows only while the
-/// ring is in the strip, `keyed`, as the ring's own stop: a key from the ring never takes the page
-/// over (#3220, #1080). It comes before Stop, which stays where it is, the words giving it room.
+/// ring is on one of the task's stops, `keyed`: its card, back, the page, Take Over or Stop, so it
+/// is there before the ring reaches it. It's the ring's own stop, as a key from the ring never
+/// takes the page over (#3220, #1080). It comes before Stop, which stays where it is, the words
+/// giving it room.
 /// Quiet until the agent needs the user: only while its card waits on them is Hand Back, the
 /// answer it waits for, the one primary.
 pub(super) fn strip_chips(
