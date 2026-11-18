@@ -27,10 +27,21 @@ use crate::tokens::shell::{KEYED, KEYED_RING, library::CARD_RADIUS};
 const CARDS: &str = "LibraryCards";
 /// The search field's, whose keys go over the list's rows.
 pub(super) const ROWS: &str = "LibraryRows";
+/// The Library's own, round all of it, where Tab goes over its controls.
+const PANEL: &str = "Library";
 
 actions!(
     library_keys,
-    [CardLeft, CardRight, CardShow, RowDown, RowUp, RowOpen]
+    [
+        CardLeft,
+        CardRight,
+        CardShow,
+        RowDown,
+        RowUp,
+        RowOpen,
+        NextStop,
+        PreviousStop
+    ]
 );
 
 /// The Library's keyboard, between the command that opens it and its close.
@@ -60,6 +71,8 @@ pub(in crate::shell) fn bind(cx: &mut App) {
         KeyBinding::new("down", RowDown, Some(ROWS)),
         KeyBinding::new("up", RowUp, Some(ROWS)),
         KeyBinding::new("enter", RowOpen, Some(ROWS)),
+        KeyBinding::new("tab", NextStop, Some(PANEL)),
+        KeyBinding::new("shift-tab", PreviousStop, Some(PANEL)),
     ]);
 }
 
@@ -208,6 +221,57 @@ impl Shell {
                     .border_color(self.palette.plate(KEYED)),
             )
         })
+    }
+
+    /// The Library, where Tab and Shift+Tab go over its controls in reading order and round
+    /// again: the section buttons, Back, the search field or Spaces' cards, Filter and the list's
+    /// buttons. The rows are the field's, on ↓ and ↑, as the command bar's suggestions are.
+    pub(super) fn with_stops(&self, panel: gpui::Div, cx: &mut Context<Self>) -> gpui::Div {
+        panel
+            .key_context(PANEL)
+            .on_action(cx.listener(|_, _: &NextStop, window, cx| window.focus_next(cx)))
+            .on_action(cx.listener(|_, _: &PreviousStop, window, cx| window.focus_prev(cx)))
+    }
+
+    /// One of the Library's controls as a Tab stop, read by `name`, ringed while the keys have
+    /// it. Return and Space press it, as a click does.
+    pub(super) fn stop(
+        &self,
+        control: Stateful<gpui::Div>,
+        name: SharedString,
+    ) -> Stateful<gpui::Div> {
+        control
+            .when(self.a11y, |control| {
+                crate::settings_rows::named_button(control, name)
+            })
+            .tab_index(0)
+            .focus_from_keys_only()
+            .focus_visible(self.stop_ring())
+    }
+
+    /// The ring round a control the keys have, the rows' and cards' colour, inside its edge.
+    pub(super) fn stop_ring(&self) -> impl FnOnce(gpui::StyleRefinement) -> gpui::StyleRefinement {
+        let color = self.palette.plate(KEYED);
+        move |style| {
+            style.shadow(vec![gpui::BoxShadow {
+                color,
+                offset: point(px(0.), px(0.)),
+                blur_radius: px(0.),
+                spread_radius: px(KEYED_RING),
+                inset: true,
+            }])
+        }
+    }
+
+    /// Tab or Shift+Tab from the window while the Library is open, as after a click on it: the
+    /// keyboard goes where the Library's key puts it, its field or Spaces' first card.
+    pub(in crate::shell) fn tab_into_library(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.library_open || self.library.is_none() {
+            return false;
+        }
+        self.library_keys.asked = true;
+        cx.notify();
+        true
     }
 
     /// The search field, taking the keys that go over the list's rows.
@@ -711,6 +775,82 @@ mod tests {
             "escape left it open"
         );
         assert!(focused_page(&host), "escape didn't give the page it back");
+    }
+
+    /// Tab goes over the Library's controls in reading order and round again: from the field to
+    /// the section buttons, each a tab of the Sections list, and on to Back and the field, and
+    /// Shift+Tab goes the other way. ↓ moves along the sections, and Return shows the one the keys
+    /// are on, which keeps them (#3238).
+    #[gpui::test]
+    fn tab_goes_over_the_librarys_controls(cx: &mut TestAppContext) {
+        let (shell, _, cx) = window(Section::Archive, cx);
+        run(&shell, Command::ViewLibrary, cx);
+        assert_eq!(keyed(cx), (Role::TextInput, "Search History".into()));
+        cx.simulate_keystrokes("shift-tab");
+        assert_eq!(keyed(cx), (Role::Button, "Back".into()));
+        cx.simulate_keystrokes("tab");
+        assert_eq!(keyed(cx), (Role::TextInput, "Search History".into()));
+        cx.simulate_keystrokes("tab");
+        assert_eq!(keyed(cx), (Role::Tab, "Media".into()));
+        cx.simulate_keystrokes("up");
+        assert_eq!(
+            keyed(cx),
+            (Role::Tab, "Media".into()),
+            "↑ left the first section"
+        );
+        cx.simulate_keystrokes("down");
+        assert_eq!(keyed(cx), (Role::Tab, "Downloads".into()));
+        // Pressed and let go, as a keyboard sends it: Return clicks on the release.
+        cx.simulate_keystrokes("enter");
+        let keystroke = gpui::Keystroke::parse("enter").unwrap();
+        cx.update(|window, cx| {
+            use gpui::InputEvent as _;
+            window.dispatch_event(gpui::KeyUpEvent { keystroke }.to_platform_input(), cx);
+        });
+        shell.update(cx, |shell, _| settle(shell));
+        cx.run_until_parked();
+        assert_eq!(
+            shell.read_with(cx, |shell, _| shell.section),
+            Section::Downloads
+        );
+        assert_eq!(keyed(cx), (Role::Tab, "Downloads".into()));
+        cx.simulate_keystrokes("shift-tab");
+        assert_eq!(keyed(cx), (Role::Tab, "Media".into()));
+        cx.simulate_keystrokes("shift-tab");
+        assert_eq!(keyed(cx), (Role::TextInput, "Search Downloads".into()));
+        // Escape closes the Library from any of its stops, not only the field.
+        cx.simulate_keystrokes("tab");
+        assert_eq!(keyed(cx), (Role::Tab, "Media".into()));
+        cx.simulate_keystrokes("escape");
+        shell.update(cx, |shell, _| settle(shell));
+        cx.run_until_parked();
+        assert!(
+            !shell.read_with(cx, |shell, _| shell.library_open),
+            "escape from a section left the Library open"
+        );
+    }
+
+    /// Opened by a click, the Library leaves the keyboard with the window, and Tab or Shift+Tab
+    /// from there goes to its field, where its key puts it, not to the sidebar under it.
+    #[gpui::test]
+    fn tab_from_the_window_goes_into_the_open_library(cx: &mut TestAppContext) {
+        let (shell, host, cx) = window(Section::Archive, cx);
+        shell.update(cx, |shell, cx| {
+            shell.set_library(true, cx);
+            settle(shell);
+        });
+        cx.run_until_parked();
+        assert!(root_keyed(&shell, cx));
+        cx.simulate_keystrokes("tab");
+        assert_eq!(keyed(cx), (Role::TextInput, "Search History".into()));
+        assert!(
+            !host.take().iter().any(|call| call.contains("sidebar")),
+            "Tab rang the sidebar under the Library"
+        );
+        cx.update(|window, cx| window.focus(&shell.read(cx).focus_handle.clone(), cx));
+        cx.run_until_parked();
+        cx.simulate_keystrokes("shift-tab");
+        assert_eq!(keyed(cx), (Role::TextInput, "Search History".into()));
     }
 
     /// Closed as a click closes it, the Library opened from the page gives the window the
