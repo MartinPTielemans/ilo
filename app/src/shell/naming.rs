@@ -740,6 +740,9 @@ impl Shell {
 }
 
 #[cfg(test)]
+mod folder_tests;
+
+#[cfg(test)]
 mod leave_tests;
 
 #[cfg(test)]
