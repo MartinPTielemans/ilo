@@ -51,6 +51,7 @@ use browser::tokens::find_bar::INSET;
 use browser::tokens::find_bar::NOT_FOUND;
 use browser::tokens::find_bar::PLACEHOLDER;
 use browser::tokens::find_bar::TEXT;
+use browser::tokens::find_bar::TEXT_LINE;
 use browser::tokens::text;
 
 /// A tab's find in page, as the core reports it.
@@ -648,7 +649,7 @@ impl Render for FindBar {
                         .bg(rgb(FILL))
                         .text_color(rgb(TEXT))
                         .text_size(px(text::BODY))
-                        .line_height(px(18.))
+                        .line_height(px(TEXT_LINE))
                         .child(search)
                         .child(
                             div()

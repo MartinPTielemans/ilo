@@ -70,6 +70,7 @@ use crate::tokens::command_bar::ICON_BOX_X;
 use crate::tokens::command_bar::ICON_SIZE;
 use crate::tokens::command_bar::INPUT_ICON;
 use crate::tokens::command_bar::INPUT_ICON_X;
+use crate::tokens::command_bar::INPUT_LINE;
 use crate::tokens::command_bar::INPUT_TEXT;
 use crate::tokens::command_bar::INPUT_TEXT_X;
 use crate::tokens::command_bar::PLATE_INSET;
@@ -3479,7 +3480,7 @@ impl Render for CommandBar {
                                 .pr(px(HINT_END))
                                 .gap(px(text_x - icon_x - icon))
                                 .text_size(px(text_size))
-                                .line_height(px(23.))
+                                .line_height(px(INPUT_LINE))
                                 .child(self.input_icon(cx))
                                 .when_some(self.mode_name(), |line, name| {
                                     let page = self.ask.as_ref().and_then(|ask| ask.page.as_ref());
