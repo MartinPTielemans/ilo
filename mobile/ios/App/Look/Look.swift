@@ -222,7 +222,7 @@ nonisolated enum Listed {
 nonisolated enum Motion {
   /// A page growing out of its card and back, and anything else a tap moves a long way.
   static let page = Animation.spring(response: 0.42, dampingFraction: 0.88)
-  static let sheet = Animation.spring(response: 0.34, dampingFraction: 1)
+  static let sheet = Animation.spring(response: sheetResponse, dampingFraction: 1)
   /// What a finger let go of, settling.
   static let settle = Animation.spring(response: settleResponse, dampingFraction: settleDamping)
   static let quick = Animation.easeOut(duration: quickDuration)
@@ -230,6 +230,10 @@ nonisolated enum Motion {
   static let settleResponse = 0.3
   static let settleDamping = 0.8
   static let quickDuration = 0.18
+  static let sheetResponse = 0.34
+  /// How long `sheet` takes to come to rest: what waits for the page's bar to have changed size
+  /// waits this long.
+  static let sheetRest = Spring(response: sheetResponse, dampingRatio: 1).settlingDuration
   /// The keyboard's own rise, for what rides on it.
   static let keyboard = Animation.interpolatingSpring(mass: 3, stiffness: 1000, damping: 500)
 

@@ -63,6 +63,43 @@ import WebKit
   }
 }
 
+/// When a page is laid out for its bar's new size.
+@Suite struct BarRestTests {
+  @Test func `the page is laid out for the bar's new size once the bar has got there, and once only`() {
+    var rest = BarRest()
+    let before = rest.fits(scrolling: false)
+    rest.changed()
+    let onTheWay = rest.fits(scrolling: false)
+    rest.rested()
+    let there = rest.fits(scrolling: false)
+    let again = rest.fits(scrolling: false)
+    #expect([before, onTheWay, there, again] == [false, false, true, false])
+  }
+
+  @Test func `a page that scrolls keeps its layout until it stops, however long the bar has been at rest`() {
+    var rest = BarRest()
+    rest.changed()
+    rest.rested()
+    let scrolling = rest.fits(scrolling: true)
+    let stillScrolling = rest.fits(scrolling: true)
+    let stopped = rest.fits(scrolling: false)
+    #expect([scrolling, stillScrolling, stopped] == [false, false, true])
+  }
+
+  @Test func `a bar that turns back on its way is waited for, and the page laid out once for where it ends`() {
+    var rest = BarRest()
+    rest.changed()
+    // The page stops under the finger while the bar is still on its way, and the bar turns back.
+    let onTheWay = rest.fits(scrolling: false)
+    rest.changed()
+    let turnedBack = rest.fits(scrolling: false)
+    rest.rested()
+    let there = rest.fits(scrolling: false)
+    let again = rest.fits(scrolling: false)
+    #expect([onTheWay, turnedBack, there, again] == [false, false, true, false])
+  }
+}
+
 /// A page under the bar, as WebKit lays it out: in a window, as the app shows it.
 @Suite(.serialized, .timeLimit(.minutes(2))) @MainActor struct PageUnderBarTests {
   private let directory = URL.temporaryDirectory.appending(path: "bar-tests-\(UUID().uuidString)")
@@ -147,7 +184,11 @@ import WebKit
 
     tab.tuckBar()
     #expect(tab.barHidden)
-    // The page has the room the bar gave up, and still ends above the pill.
+    // With the bar on its way, what scrolls ends above the pill already, and the page keeps the
+    // layout it had: a new one would land in the middle of the bar's motion.
+    #expect(tab.webView.scrollView.contentInset.bottom < Bar.height)
+    #expect(tab.webView.obscuredContentInsets.bottom == Bar.height + Bar.gap + band)
+    // Once the bar is there, the page has the room it gave up, and still ends above the pill.
     for id in ["foot", "tall"] {
       var at = try await foot(of: id, in: tab)
       for _ in 0..<200 where at <= whole {
@@ -161,6 +202,8 @@ import WebKit
 
     tab.growBar()
     #expect(!tab.barHidden)
+    #expect(tab.webView.scrollView.contentInset.bottom == Bar.height + Bar.gap)
+    #expect(tab.webView.obscuredContentInsets.bottom < Bar.height + Bar.gap + band)
     for id in ["foot", "tall"] {
       #expect(try await settled(id, above: whole, in: tab) <= whole)
     }
