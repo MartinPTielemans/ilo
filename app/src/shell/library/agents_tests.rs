@@ -287,7 +287,8 @@ fn a_past_request_opens_to_what_it_sent(cx: &mut TestAppContext) {
     cx.simulate_a11y_activation();
     cx.run_until_parked();
     let title = "Sent POST /anything to httpbin.org";
-    let (request, node) = named(cx, Role::Button, title).expect("the request is a button");
+    let (request, node) =
+        named(cx, Role::ListBoxOption, title).expect("the request is a row of the list");
     assert_eq!(node.is_expanded(), Some(false));
     let tree = cx.a11y_tree().expect("GPUI built a tree");
     let opens = tree
@@ -297,15 +298,18 @@ fn a_past_request_opens_to_what_it_sent(cx: &mut TestAppContext) {
     assert_eq!(opens.count(), 1, "a step that sent nothing opens");
     cx.simulate_a11y_action(request, Action::Click);
     cx.run_until_parked();
-    let (_, node) = named(cx, Role::Button, title).expect("the request is a button");
+    let (_, node) =
+        named(cx, Role::ListBoxOption, title).expect("the request is a row of the list");
     assert_eq!(node.is_expanded(), Some(true));
     let (all, _) = named(cx, Role::Button, "Show all 10 lines").expect("ten lines take Show all");
     cx.simulate_a11y_action(all, Action::Click);
     cx.run_until_parked();
     assert!(named(cx, Role::Button, "Show all 10 lines").is_none());
-    let (request, _) = named(cx, Role::Button, title).expect("the request is a button");
+    let (request, _) =
+        named(cx, Role::ListBoxOption, title).expect("the request is a row of the list");
     cx.simulate_a11y_action(request, Action::Click);
     cx.run_until_parked();
-    let (_, node) = named(cx, Role::Button, title).expect("the request is a button");
+    let (_, node) =
+        named(cx, Role::ListBoxOption, title).expect("the request is a row of the list");
     assert_eq!(node.is_expanded(), Some(false));
 }

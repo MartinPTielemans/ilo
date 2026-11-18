@@ -1228,8 +1228,9 @@ typedef struct bc_host {
   // most once a launch, and never twice for a report.
   void (*crash_report_offered)(void* context);
   // On Linux under Wayland, while a text field of the app's UI in |window| has the keys
-  // (bc_window_ui_text_input): the input method composes |text| there, shown underlined at the
-  // caret, or stops composing with |text| empty.
+  // (bc_window_ui_text_input), or with |window| 0 a field of the app's own window that composes
+  // through the core's input method (bc_app_window_text_input): the input method composes |text|
+  // there, shown underlined at the caret, or stops composing with |text| empty.
   void (*ui_composed)(void* context, bc_id window, const char* text);
   // As ui_composed: the input method commits |text| in place of what it composed.
   void (*ui_committed)(void* context, bc_id window, const char* text);
@@ -1270,6 +1271,13 @@ typedef struct bc_host {
   // The answer to bc_agent_request's |request|, from a task of its own. It never has the answer's
   // headers, so no Set-Cookie reaches the app.
   void (*agent_request_done)(void* context, uint64_t request, const bc_agent_response* response);
+  // What a bc_agent_close_tab that returned BC_AGENT_CLOSE_PENDING came to, from a task of its own,
+  // once for each pending |tab|, whatever happened meanwhile: BC_AGENT_CLOSED once the tab is gone,
+  // by that close or any other; BC_AGENT_CLOSE_ASKS if its page asked to stay; or
+  // BC_AGENT_CLOSE_REFUSED if it stays for another reason. Within a few seconds at most: a page
+  // that doesn't answer, or whose renderer crashed, is closed, as Chromium closes one whose handler
+  // hangs, unless the user took its tab over or pinned it meanwhile.
+  void (*agent_close_answered)(void* context, bc_id tab, int answer);
   // On Linux and Windows, the browser is quitting, or with |last_private| the last window of a
   // private profile closing, with |count| downloads running, which it would cancel: ask the user
   // over |window|, and answer with bc_window_answer_downloads. A window asks one at a time. The Mac
@@ -1604,6 +1612,25 @@ BC_EXPORT void bc_window_toggle_maximized(bc_id window);
 BC_EXPORT void bc_window_ui_text_input(bc_id window, bool focused, double x, double y,
                                        double height);
 
+// A window of the app's own, not a browser window, such as Settings, whose text fields compose
+// through the core's input method. |surface| is its native surface, and |focused| says whether one
+// of its fields is focused while it has the keys, the caret at |x|, |y| in points from the
+// surface's top left, |height| high. A window the core never shows holds that input method for
+// these windows alone, so no page, and no tab an agent drives, takes what the user composes there.
+// It comes back as ui_composed and ui_committed for window 0, only from the input method's own
+// events, never during a call of the app's, so the app gives each to the field it has focused as
+// it comes, a commit with no composition before it too. When a field loses the focus, the app says
+// so in the same turn, before another takes it in this window or another, and keeps what the field
+// shows composed as typed: the core drops its composition then, and nothing comes for that field
+// after. Only the Linux core under Wayland acts on it, where the compositor gives the process one
+// input method and |surface| is a wl_surface on the connection bc_wayland_display gives; the Mac's
+// and Windows' return at once.
+BC_EXPORT void bc_app_window_text_input(void* surface, bool focused, double x, double y,
+                                        double height);
+
+// Ends bc_app_window_text_input for |surface|, before it goes. Quitting ends them all.
+BC_EXPORT void bc_app_window_text_input_end(void* surface);
+
 // During tab_key_before_page: holds the keys typed in the tab's page after the one asked about,
 // which opens a field of the app's, such as ⌃L's address field. A shortcut the page gets first
 // comes back to the app only after the keys typed behind it reached the page, and they belong in
@@ -1757,21 +1784,33 @@ BC_EXPORT bc_id bc_agent_open_tab(const char* agent, const char* url);
 // returns whether it does: never another URL. Agent code calls it after bc_agent_may_act.
 BC_EXPORT bool bc_agent_navigate(const char* agent, bc_id tab, const char* url);
 
-// What bc_agent_close_tab did.
+// What bc_agent_close_tab did, and what agent_close_answered says a pending close came to.
 // The tab closed: it's gone, and tab_closed told of it.
 #define BC_AGENT_CLOSED 0
-// The tab isn't in the agent's Space, or the user holds it.
+// The tab isn't in the agent's Space, or the user holds it. As agent_close_answered's answer: it
+// stays for another reason, as it went to another page, its page was unloaded, or the user took it
+// over or pinned it meanwhile.
 #define BC_AGENT_CLOSE_REFUSED 1
 // The user pinned the tab, which only the user closes.
 #define BC_AGENT_CLOSE_PINNED 2
-// Its page may ask before it's left, as one with unsaved changes does, and |discard| was false.
+// Its page asked to stay, as one with unsaved changes does: only ever agent_close_answered's
+// answer, as the page's own.
 #define BC_AGENT_CLOSE_ASKS 3
+// The core is asking the page, which answers later through agent_close_answered: only ever
+// bc_agent_close_tab's return, never an answer.
+#define BC_AGENT_CLOSE_PENDING 4
 
 // Closes |tab|, in the Space of the agent with the id |agent|, for the agent, never with a dialog:
-// as the "Leave site?" dialog shows the tab, it would take the user's focus. A page that may ask
-// before it's left stays open, unless |discard|, which closes it without its unload handlers, and
-// what it held unsaved is lost. Returns a BC_AGENT_CLOSE value. Agent code calls it after
-// bc_agent_may_act, and asks the user first before it discards a page the agent didn't open.
+// as the "Leave site?" dialog shows the tab, it would take the user's focus. A page with no
+// beforeunload handler closes in the call. One with a handler is asked as a user's close asks it,
+// without the dialog, and the call returns BC_AGENT_CLOSE_PENDING: agent_close_answered says, once
+// and never inside this call, whether it closed or stays. A close of a tab already pending returns
+// BC_AGENT_CLOSE_PENDING again, covered by that one answer. |discard| closes it at once without its
+// handlers, one pending too, and what it held unsaved is lost. Returns a BC_AGENT_CLOSE value.
+// Agent code calls it after bc_agent_may_act, asks without |discard| first, and asks the user
+// before it discards a page that asked to stay that the agent didn't open. A page that agreed to
+// close goes though the user takes its tab over or pins it before it's gone, as Chromium is closing
+// it by then.
 BC_EXPORT int bc_agent_close_tab(const char* agent, bc_id tab, bool discard);
 
 // Copies up to |capacity| of the tabs of the Space of the agent with the id |agent| into |tabs|, its

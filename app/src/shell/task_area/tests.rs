@@ -1112,3 +1112,28 @@ fn only_what_needs_the_user_has_a_primary() {
         "at work, Stop alone and quiet: a press in the page takes it over"
     );
 }
+
+/// The Library opened by its key from the page, then a task's page watched: the Library's key
+/// closing it gives the window the keyboard, never the agent's page (#3313).
+#[gpui::test]
+fn a_key_closing_the_library_never_gives_an_agents_page_the_keyboard(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    let library = |shell: &Entity<Shell>, from: &str, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| {
+            shell.run(Command::ViewLibrary, from, cx);
+            shell.library_motion = None;
+            shell.sidebar_fade = None;
+        });
+        draw(shell, cx);
+    };
+    library(&shell, "page", cx);
+    watching(&shell, &host, cx);
+    assert!(shell.read_with(cx, |shell, _| shell.library_open));
+    library(&shell, "ui", cx);
+    assert!(
+        !host.take().contains(&"focus page".to_owned()),
+        "the agent's page got it"
+    );
+    let root = cx.update(|window, cx| shell.read(cx).focus_handle.is_focused(window));
+    assert!(root, "the field kept the UI's keyboard");
+}

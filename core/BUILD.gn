@@ -48,8 +48,8 @@ source_set("error_page") {
   deps = [ "//base" ]
 }
 
-# What keeps DuckDuckGo a profile's default and not its choice, apart from the browser's code so its
-# test links without the browser.
+# What keeps DuckDuckGo a profile's default and not its choice, and Google a choice and never the
+# default, apart from the browser's code so its test links without the browser.
 source_set("search_default") {
   sources = [
     "search_default.cc",
@@ -355,7 +355,10 @@ source_set("select_choices") {
     "select_choices.cc",
     "select_choices.h",
   ]
-  deps = [ "//base" ]
+  deps = [
+    ":ax_text",
+    "//base",
+  ]
 }
 
 # Where a video's Mini Player first shows, apart so browser_core_unittests tests the rule alone.
@@ -424,6 +427,15 @@ source_set("popup_hold") {
     "popup_hold.h",
   ]
   deps = [ "//base" ]
+}
+
+# What an agent's close of a tab whose page has a beforeunload handler answers, apart so
+# browser_core_unittests tests the rule alone (#3256).
+source_set("agent_close_rule") {
+  sources = [
+    "agent_close_rule.cc",
+    "agent_close_rule.h",
+  ]
 }
 
 # An agent's download, held until the user answers, apart so browser_core_unittests tests the hold
@@ -502,6 +514,8 @@ source_set("browser_core") {
     "address_import.h",
     "agent_autofill.cc",
     "agent_autofill.h",
+    "agent_close.cc",
+    "agent_close.h",
     "agent_page.cc",
     "agent_page.h",
     "agent_request.cc",
@@ -688,6 +702,7 @@ source_set("browser_core") {
     ":idle_check",
     ":mini_player_place",
     ":other_tabs",
+    ":agent_close_rule",
     ":popup_hold",
     ":search_default",
     ":select_choices",
@@ -994,6 +1009,7 @@ test("browser_core_unittests") {
     "arrangement_unittest.cc",
     "board_store_unittest.cc",
     "ax_text_unittest.cc",
+    "agent_close_rule_unittest.cc",
     "agent_download_hold_unittest.cc",
     "boost_colors_unittest.cc",
     "boost_script_unittest.cc",
@@ -1044,6 +1060,7 @@ test("browser_core_unittests") {
     ":arrangement",
     ":board_store",
     ":ax_text",
+    ":agent_close_rule",
     ":agent_download_hold",
     ":boost_colors",
     ":boost_script",

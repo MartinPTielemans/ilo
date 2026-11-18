@@ -106,6 +106,14 @@ fn place(view: *mut c_void, shown: &Shown) {
     );
 }
 
+/// Runs `presented` once the frame the preview's window draws now is on screen, where the
+/// compositor says when one is (Wayland's): false, and nothing to run, where it can't or while the
+/// preview doesn't show.
+pub(crate) fn when_presented(presented: impl FnOnce() + 'static) -> bool {
+    let view = PREVIEW.with_borrow(|preview| preview.shown.map(|_| preview.view));
+    view.is_some_and(|view| gpui_linux::when_overlay_presented(view, presented))
+}
+
 /// The user left the preview: a click in its page, as GPUI hears the browser window's too, or
 /// another window or app. It stays, as its page has the keyboard.
 fn left(_: *mut c_void) {}

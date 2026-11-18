@@ -154,6 +154,7 @@ impl Shell {
                             folders: Folders::default(),
                             shown: 0,
                             peeked: Vec::new(),
+                            live_rooms: Default::default(),
                         }
                     }
                 }
@@ -717,6 +718,7 @@ impl Shell {
             | Command::RecordTrace
             | Command::StayOnTop
             | Command::MoveSidebar
+            | Command::ToggleTopBar
             | Command::TaskManager
             | Command::Settings
             | Command::KeyboardShortcuts
