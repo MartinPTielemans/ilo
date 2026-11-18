@@ -2292,6 +2292,9 @@ impl command_bar::Host for PreviewBar {
     fn set_height(&self, _: f32) {}
     fn hide(&self) {}
     fn focus_page(&self) {}
+    fn agents_page(&self, _: &App) -> bool {
+        false
+    }
     fn dismiss(&self) {}
     fn take_keyboard(&self) {}
     fn commands(&self, text: &str, cx: &App) -> Vec<shell::BarCommand> {
@@ -5728,6 +5731,9 @@ mod web {
             self.later_root(|root, window, cx| root.close(false, window, cx));
         }
         fn focus_page(&self) {}
+        fn agents_page(&self, _: &App) -> bool {
+            false
+        }
         fn dismiss(&self) {
             self.later_root(|root, window, cx| root.close(true, window, cx));
         }

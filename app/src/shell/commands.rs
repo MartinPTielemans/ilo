@@ -1514,6 +1514,16 @@ pub fn task_page_shown(tab: u64, cx: &App) -> bool {
     shell.is_some_and(|shell| shell.read(cx).task_page_live() == Some(tab))
 }
 
+/// Whether the window's page, or one the command bar opens there, is an agent's: while a task's area
+/// is up, whose page is the task's or opens under it, or in an agent's Space.
+pub fn agents_page_shown(cx: &App) -> bool {
+    let shell = key_shell(cx).and_then(|shell| shell.upgrade());
+    shell.is_some_and(|shell| {
+        let shell = shell.read(cx);
+        shell.task_area.is_some() || !shell.browser.space_agent(shell.space).is_empty()
+    })
+}
+
 /// A menu item that runs `command`, showing its shortcut.
 pub fn menu_item(name: impl Into<SharedString>, command: Command) -> MenuItem {
     MenuItem::action(name, Run(command))

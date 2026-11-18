@@ -528,6 +528,9 @@ pub trait Host {
     /// Gives the page the browser window shows the keyboard, once the bar has hidden over the page
     /// it went to.
     fn focus_page(&self);
+    /// Whether the page the bar goes to would be an agent's: a task's page the window shows in
+    /// place, or a tab in an agent's Space, neither of which takes the user's keyboard (#3164).
+    fn agents_page(&self, cx: &App) -> bool;
     /// Hides the bar's window as the user leaves it without choosing anything.
     fn dismiss(&self);
     /// Gives the bar's window the keyboard back, which it found it hasn't while it shows, unless
@@ -2490,6 +2493,11 @@ impl CommandBar {
     }
 
     fn go(&mut self, _: &Go, _: &mut Window, cx: &mut Context<Self>) {
+        // ↩ while an input method composes is its own, to commit with, as AppKit's and Windows'
+        // take it before the bar: one that passes it on doesn't make the bar go with half a word.
+        if self.input.read(cx).composing() {
+            return;
+        }
         // A task isn't logged: it's the user's words.
         if self.ask.is_some() {
             return self.run_ask(self.selected, cx);
@@ -2507,9 +2515,13 @@ impl CommandBar {
         {
             // check.sh reads this line.
             log!("browser: command bar reloads tab {tab}");
+            let users = !self.host.agents_page(cx);
             self.close();
             self.host.reload(tab);
-            return self.host.focus_page();
+            if users {
+                self.host.focus_page();
+            }
+            return;
         }
         // Before anything is typed, that's one of the Space's tabs.
         if self.chosen().is_some() {
@@ -2555,12 +2567,16 @@ impl CommandBar {
     fn go_to_typed(&self, url: &str, typed: &str, cx: &mut App) {
         // check.sh reads this line.
         log!("browser: command bar go {url}");
+        // Asked before the page shows, which can take the window out of a task's area.
+        let users = !self.host.agents_page(cx);
         self.show_page(url, typed, cx);
         self.close();
         // The page takes the keyboard, as Chrome's address bar gives it, wherever it was before the
         // bar opened, such as in the UI over a Board. Chrome gives it only while its window is
         // active, which on the Mac and Windows the bar's own window was until it hid (#3453).
-        self.host.focus_page();
+        if users {
+            self.host.focus_page();
+        }
     }
 
     /// ⌘↩: opens where ↩ would go in a tab behind the one shown, at the top of Today, and the bar
