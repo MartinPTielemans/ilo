@@ -80,6 +80,10 @@ class SystemPage {
     // The page's protected video is kept off the screen: the display connection's protection
     // (HDCP) isn't enough for a key it has. The page says so, so the page can say it falsely.
     virtual void SystemPageOutputRestricted() = 0;
+    // The icon of the document that committed last, as its server sent it, from its own
+    // <link rel=icon>, else its site's /favicon.ico. Empty once it's known to have none. Nothing
+    // has decoded it.
+    virtual void SystemPageIcon(const GURL& icon_url, std::vector<uint8_t> bytes) = 0;
 
    protected:
     virtual ~Delegate() = default;

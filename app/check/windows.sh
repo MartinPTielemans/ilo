@@ -18,9 +18,10 @@
 # same way, and the window it left draws WebKit's picture of it, which the core gives from a task of
 # its own (#364: an answer inside the call that asked aborted the browser). Its page asks Apple's
 # site-safety service about no site, as Chromium's ask none, and its tab's row shows the favicon of
-# the page it's at in either engine, none where Chromium knows none for the site. A heavy page and
-# a light one move between two windows every way a page moves, and the run says how long each stage
-# of a move takes.
+# the page it's at in either engine: in Safari's, none for a page whose site has none, and the
+# page's own, which the profile keeps once and doesn't write again when the page loads again. A
+# heavy page and a light one move between two windows every way a page moves, and the run says how
+# long each stage of a move takes.
 
 # The page counts in its title from its first frame, so a page that reloaded would count from 1
 # again. "o" in it opens a tab under it, as a link to a new tab does. Its beforeunload handler,
@@ -391,7 +392,23 @@ if [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   expect "^browser: title $d engine safari\$" "the site kept for Safari's engine opened in Chromium"
   expect "^browser: favicon $d 0 bytes\$" \
     "the page in Safari's engine kept the favicon of the page before: $(grep "^browser: favicon $d " "$log" | tail -1)"
-  webkit_moved=", a page in Safari's engine, turned on in the Site Controls, moves to another window and back, and the window it left draws WebKit's picture of it, and its tab's favicon is its page's in either engine, none where Chromium knows none for the site"
+  # A page there with an icon of its own shows it: WebKit loads it, Chromium's decoder reads it,
+  # and the profile keeps it, once. The profile knew none for the site, so the icon is the page's.
+  go_from_bar "127.0.0.1:$port/icon.html"
+  expect "^browser: title $d icon safari\$" "the icon page left Safari's engine"
+  expect "^browser: favicon $d [1-9][0-9]* bytes\$" "the page in Safari's engine didn't show its own icon"
+  expect "^browser: tab $d icon kept\$" "the profile didn't keep the icon of the page in Safari's engine"
+  # Loaded again, it finds its icon kept, which it shows at once, and writes nothing.
+  go_from_bar "127.0.0.1:$port/icon.html"
+  expect "^browser: title $d icon safari\$" "the icon page left Safari's engine"
+  expect "^browser: favicon $d [1-9][0-9]* bytes\$" "the icon kept for the site didn't show at the commit"
+  expect "^browser: tab $d icon already kept\$" "the page's icon wasn't found kept"
+  none_since "^browser: tab $d icon kept\$" || fail "the icon kept for the page was written again"
+  # A page of the site with none of its own shows the site's, as the profile keeps it.
+  go_from_bar "127.0.0.1:$port/engine.html?after"
+  expect "^browser: title $d engine safari\$" "the site kept for Safari's engine opened in Chromium"
+  expect "^browser: favicon $d [1-9][0-9]* bytes\$" "the site's icon, kept, didn't show on its page without one"
+  webkit_moved=", a page in Safari's engine, turned on in the Site Controls, moves to another window and back, and the window it left draws WebKit's picture of it, and its tab's favicon is its page's in either engine, none where the page and the profile know none, its own from WebKit, which the profile keeps once for the site"
 fi
 
 # A heavy page shaped like a video grid and a light one move between two windows, twice with the
