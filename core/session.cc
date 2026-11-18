@@ -1247,6 +1247,10 @@ class Saver : public base::ImportantFileWriter::BackgroundDataSerializer {
   // At logout, restart or SIGTERM, Chrome writes what it must and exits without waiting for the
   // writer's sequence, so the Spaces are written here, as it allows.
   void OnClosingAll(bool closing) {
+    // After Chrome's ProfileManager, whose callback came first, saved its list.
+    if (closing) {
+      ForgetActiveProfiles();
+    }
     if (!closing || kept_ ||
         browser_shutdown::GetShutdownType() != browser_shutdown::ShutdownType::kEndSession) {
       return;

@@ -14,7 +14,9 @@
 # Spaces it doesn't show have loaded, and each of them arrives after. An extension still starts in
 # each profile, its Space never shown, as each profile's uBlock Origin does. ⌃2 sent the moment the
 # window is on screen shows the second profile's Space, while its profile may still be loading, and
-# its tab's page paints once it's in; what that first switch costs is in the results. With 4
+# its tab's page paints once it's in; what that first switch costs is in the results. A quit leaves
+# Chrome no profile to load before the window, and a profile Chrome lists anyway, as a crash leaves
+# it, still arrives once (#3349). With 4
 # profiles, a quit the moment the window is on screen, during the late loads, ends clean. Linux's
 # numbers only, so it runs only when named.
 
@@ -46,6 +48,8 @@ say() {
 }
 # An engine without #2500's core loads every profile before the window, and logs no arrivals.
 late_loads=
+# The late profiles Chrome lists as active at launch, which load before the window (pc_arrivals).
+early=
 if engine_has ../core/session.cc ../core/profiles.cc ../core/tab.cc ../core/window.cc; then
   late_loads=1
 fi
@@ -113,7 +117,8 @@ pc_arrived() {
   sed -n "s/.*browser: profile $1 arrived at \([0-9]*\)$/\1/p" "$log" | head -1
 }
 # Says when each of the n-1 late profiles arrived, as $1, and with #2500's core checks that each
-# arrived, after the window came on screen.
+# arrived, after the window came on screen unless Chrome loaded it first, as it does those $early
+# lists.
 pc_arrivals() {
   local shown_at at line
   [ "$n" -gt 1 ] || return 0
@@ -129,6 +134,7 @@ pc_arrivals() {
     fi
     say "$1: Profile $i arrived $((at - launched)) ms after the launch"
     line=$(grep -n "browser: profile Profile $i arrived at" "$log" | head -1 | cut -d: -f1)
+    case " $early " in *" Profile $i "*) continue ;; esac
     [ "$line" -gt "$shown_at" ] || fail "Profile $i arrived before the window came on screen"
   done
   [ -n "$late_loads" ] || say "$1: the engine loads every profile before the window"
@@ -196,6 +202,16 @@ for n in 1 2 4; do
     # The second profile's Space the moment the window is on screen, its profile maybe still
     # loading: the Space shows at once, and its tab's page once the profile is in.
     name="p$n-first-switch"
+    # The last round showed the second profile's Space, so Chrome listed its profile as active at
+    # the quit, and would load it before the window; the core clears the list as the quit starts
+    # (#3349). A crash leaves it, so it's put back for this launch: Profile 1 loads before the
+    # window then, and arrives all the same.
+    if [ -n "$late_loads" ]; then
+      listed=$(python3 -I check/profile_cost.py active "$dir")
+      case " $listed " in *" Profile "*) fail "the quit left Chrome profiles to load before the window: $listed" ;; esac
+      python3 -I check/profile_cost.py active "$dir" Default "Profile 1"
+      early="Profile 1"
+    fi
     pc_launch "$dir" "$name" ""
     pc_on_screen
     pc_space 2
@@ -206,6 +222,9 @@ for n in 1 2 4; do
     at=$(pc_arrived "Profile 1")
     [ -z "$at" ] || say "$name: Profile 1 arrived $((at - sent)) ms after ⌃2"
     pc_arrivals "$name"
+    arrivals=$(grep -c 'browser: profile Profile 1 arrived at' "$log" || true)
+    [ -z "$late_loads" ] || [ "$arrivals" = 1 ] || fail "$name: Profile 1 arrived $arrivals times, not once"
+    early=
     pc_space 1
     sleep 2
     pc_quit
