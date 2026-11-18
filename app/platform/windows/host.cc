@@ -1475,6 +1475,11 @@ Floating g_hud;
 double g_hud_right = 0, g_hud_top = 0, g_hud_margin = 0;
 Floating g_drop_targets;
 Floating g_dialog;
+// Whether the dialog covers part of its window, as a page's does its tab's card or pane.
+bool g_dialog_part = false;
+// The browser window whose page beside a page's dialog in a split view the user pressed: it keeps
+// the keyboard it took for that page, until the dialog is pressed or shown anew (#3231).
+HWND g_dialog_lent = nullptr;
 Floating g_site_controls;
 
 // The link preview (platform/host.h), as Linux's (link_preview_window.rs): its window, the dim and
@@ -2188,7 +2193,7 @@ HWND KeepsKeyboard(HWND root) {
   HWND keeps = nullptr;
   for (auto& [hwnd, floating] : FloatingByHwnd()) {
     if (Shows(floating->life) && IsWindowVisible(hwnd) && GetWindow(hwnd, GW_OWNER) == root &&
-        (floating == &g_dialog || (floating->keyboard && !keeps))) {
+        (floating == &g_dialog ? root != g_dialog_lent : floating->keyboard && !keeps)) {
       keeps = hwnd;
     }
   }
@@ -3800,6 +3805,9 @@ bool IsButtonDown(UINT message) {
 // browser window itself, or a child of it; the wheel's messages aren't presses.
 void PagePressedAt(HWND hwnd, POINT screen) {
   const HWND root = hwnd ? GetAncestor(hwnd, GA_ROOT) : nullptr;
+  if (root && root == g_dialog.hwnd) {
+    g_dialog_lent = nullptr;
+  }
   void* ui_view = g_page_pressed ? UiViewOf(root) : nullptr;
   if (!ui_view) {
     return;
@@ -3807,6 +3815,14 @@ void PagePressedAt(HWND hwnd, POINT screen) {
   const HWND ui = Hwnd(ui_view);
   if (hwnd == ui || IsChild(ui, hwnd) || (hwnd == root && FrameHit(root, screen))) {
     return;
+  }
+  // The page beside a page's dialog in a split view, which covers its own pane alone: its window
+  // keeps the keyboard it takes for the page (KeepsKeyboard), so the press focuses that pane as a
+  // press in a page without a dialog does (#3231).
+  if (g_dialog_part && g_dialog.hwnd && IsWindowVisible(g_dialog.hwnd) &&
+      GetWindow(g_dialog.hwnd, GW_OWNER) == root) {
+    g_dialog_lent = root;
+    fprintf(stderr, "browser: a press in the pane beside takes the keyboard from the dialog\n");
   }
   g_page_pressed(ui_view);
 }
@@ -4256,6 +4272,10 @@ void host_add_dialog(void* dialog_view) {
 static HWND g_dialog_asking = nullptr;
 
 void host_show_dialog(void* ui_view, double x, double y, double width, double height) {
+  if (!g_dialog.hwnd || !IsWindowVisible(g_dialog.hwnd)) {
+    g_dialog_lent = nullptr;
+  }
+  g_dialog_part = width > 0;
   // Without a rect, it covers all of the window.
   if (width <= 0) {
     x = y = 0;
@@ -4284,6 +4304,7 @@ void host_show_dialog(void* ui_view, double x, double y, double width, double he
 
 void host_hide_dialog(void) {
   Hide(g_dialog);
+  g_dialog_lent = nullptr;
   // Answered or gone before the user came to it, it asks no more.
   if (g_dialog_asking && IsWindow(g_dialog_asking) && GetForegroundWindow() != g_dialog_asking) {
     FLASHWINFO stop{sizeof stop, g_dialog_asking, FLASHW_STOP, 0, 0};

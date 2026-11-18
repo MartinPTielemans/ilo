@@ -1,6 +1,6 @@
 //! A page's own dialogs, such as its alert(), which the core reports for each tab in place of
-//! Chrome's: the tab shown asks with the browser's dialog over its card, and the others' wait
-//! until their tab shows again (docs/ux-spec.md › Page dialogs).
+//! Chrome's: the tab shown asks with the browser's dialog over its card, or its pane in a split
+//! view, and the others' wait until their tab shows again (docs/ux-spec.md › Page dialogs).
 
 use std::fmt;
 
@@ -125,7 +125,9 @@ impl Shell {
             .map(|dialog| (self.selected, dialog))
             .or_else(|| self.little_sent_asks());
         let wanted = match (asked, self.page_laid) {
-            (Some((tab, dialog)), Some(over)) => Some((tab, dialog.clone(), over)),
+            (Some((tab, dialog)), Some(laid)) => {
+                Some((tab, dialog.clone(), self.pane_laid(tab, laid)))
+            }
             _ => None,
         };
         let key = wanted
@@ -136,6 +138,23 @@ impl Shell {
         }
         self.page_dialog_shown = Some(key);
         self.browser.show_page_dialog(wanted, cx);
+    }
+
+    /// Where `tab`'s page is in the page area `laid`: its pane in a split view, as Chrome shows a
+    /// tab's dialog over its own page, so the page beside stays usable (#3231), else all of it.
+    fn pane_laid(&self, tab: u64, laid: (Bounds<Pixels>, f32)) -> (Bounds<Pixels>, f32) {
+        let panes = self.panes(self.selected);
+        let Some(index) = panes.iter().position(|&pane| pane == tab) else {
+            return laid;
+        };
+        if panes.len() < 2 {
+            return laid;
+        }
+        let (stacked, shares) = (self.stacked(self.selected), self.shares(self.selected));
+        (
+            super::panes::pane_frames(laid.0, panes.len(), stacked, &shares)[index],
+            laid.1,
+        )
     }
 }
 
