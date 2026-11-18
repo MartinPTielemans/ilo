@@ -74,6 +74,8 @@
 #include "chrome/browser/ui/navigator/browser_navigator.h"
 #include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/navigator/browser_navigator_params_utils.h"
+#include "chrome/browser/ui/tabs/public/tab_dialog_manager.h"
+#include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -760,6 +762,42 @@ void Window::OnPageClicked(bc_id tab) {
     if (window->selected_ != tab && std::ranges::contains(window->panes_, tab)) {
       window->Select(tab);
     }
+  }
+}
+
+// static
+void Window::PagePressed(content::WebContents* contents) {
+  // A user's tab costs the one IsAgentTab, and the app isn't asked.
+  if (!Host().tab_page_pressed || !IsAgentTab(contents)) {
+    return;
+  }
+  const bc_id tab = Tab::IdOf(contents);
+  if (Showing(tab)) {
+    Host().tab_page_pressed(Host().context, tab);
+  }
+}
+
+// static
+void Window::DialogPressed(views::Widget* window, views::Widget* dialog) {
+  for (auto& [id, each] : Windows()) {
+    if (each->widget() != window) {
+      continue;
+    }
+    // In a split view the dialog may be over the page beside the one focused.
+    for (bc_id tab : each->panes_) {
+      content::WebContents* contents = Tab::FromId(tab);
+      if (!IsAgentTab(contents)) {
+        continue;
+      }
+      tabs::TabInterface* model = tabs::TabInterface::MaybeGetFromContents(contents);
+      tabs::TabFeatures* features = model ? model->GetTabFeatures() : nullptr;
+      tabs::TabDialogManager* dialogs = features ? features->tab_dialog_manager() : nullptr;
+      if (dialogs && dialogs->IsDialogManaged(dialog)) {
+        PagePressed(contents);
+        return;
+      }
+    }
+    return;
   }
 }
 

@@ -578,10 +578,9 @@ PICTURE
   await_more "^browser: task page $1 in place\$" "$placed" ||
     fail "tab $1's page didn't come to rest in place"
 }
-# A click in an agent's page takes it over (#1080), where the driver's click reaches the host as a
-# hand's does: the Mac, Windows and Wayland, and not X11's sent click. After clicks that are there
-# for the page's focus, not to take it, ⌘↩ hands back what one took. $1 is how many presses the log
-# had before them. The press reaches the window a turn after the click, which the state waits for.
+# A click in an agent's page takes it over (#1080). After clicks that are there for the page's
+# focus, not to take it, ⌘↩ hands back what one took. $1 is how many presses the log had before
+# them. The press reaches the window a turn after the click, which the state waits for.
 hand_back_pressed() {
   send state
   [ "$(grep -c '^browser: agent page pressed in ' "$log" || true)" = "$1" ] && return
@@ -2187,13 +2186,8 @@ CARD
   read -r sx sy sw _ <<STRIP
 $(grep "^browser: task strip $opened_tab at " "$log" | tail -1 | cut -d' ' -f6-)
 STRIP
-  # In the page, above the strip, where nothing on the page takes the click. On X11 the host
-  # hears the display's own presses, which the driver's press makes; elsewhere its click is one.
-  if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
-    send handclick $((sx + sw / 2)) $((sy - 120))
-  else
-    send click $((sx + sw / 2)) $((sy - 120))
-  fi
+  # In the page, above the strip, where nothing on the page takes the click.
+  send click $((sx + sw / 2)) $((sy - 120))
   await_log "^browser: agent page pressed in $opened_tab\$" "a press in the agent's page didn't reach the strip"
   await_log "^browser: agent mcp-client taken over in $opened_tab\$" "a press in the agent's page didn't take it over"
   ../tools/window-screenshot.sh "$pid" "$out/agent-driving.png" || fail "no window to capture"
