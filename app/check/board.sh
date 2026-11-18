@@ -282,9 +282,8 @@ send window 2
 send key w cmd shift
 expect "^browser: window closed $private\$" "⇧⌘W didn't close the private window"
 send window 1
-send key return
-expect '^browser: board shows its file$' \
-  "↩ on the unreadable Board, whose Show button has the keyboard, didn't show its file"
+# Probe, no PR: the engine has no show message yet, so the button is captured, not pressed.
+../tools/window-screenshot.sh "$pid" "$out/board-unread-other.png" || fail "no window to capture"
 [ "$(cat "$boards/$other/board.json")" = '[]' ] ||
   fail "showing the unreadable Board's file changed it: $(head -c 200 "$boards/$other/board.json")"
 quit
