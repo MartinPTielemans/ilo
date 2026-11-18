@@ -216,6 +216,7 @@ const SHORTCUTS: &[(&str, &[(&str, Keys)])] = &[
             ("Open in Main Window", Keys::Of(Command::OpenInMainWindow)),
             ("New Incognito Window", Keys::Of(Command::NewPrivateWindow)),
             ("New Note", Keys::Of(Command::NewNote)),
+            ("New Board", Keys::Of(Command::NewBoard)),
             ("Open Command Bar", Keys::Of(Command::EditUrl)),
             ("Search Tabs", Keys::Of(Command::SearchTabs)),
             ("Archive Tab", Keys::Of(Command::CloseTab)),
@@ -325,6 +326,7 @@ const SHORTCUTS: &[(&str, &[(&str, Keys)])] = &[
             ("Clear Archive", Keys::Of(Command::ClearArchive)),
             ("View Downloads", Keys::Of(Command::ViewDownloads)),
             ("View Media", Keys::Of(Command::ViewMedia)),
+            ("View Boards", Keys::Of(Command::ViewBoards)),
             ("View History", Keys::Of(Command::ViewHistory)),
             ("Clear Browsing Data", Keys::Of(Command::ClearBrowsingData)),
         ],
@@ -886,13 +888,29 @@ fn chosen_time(times: &[(&'static str, f64)], seconds: f64) -> (SharedString, Op
 
 /// The search engines `profile`'s default is picked from, each its keyword and name, and the
 /// keyword of the default, or None while it loads or a policy or an extension picks it.
-fn search_engines(profile: u64) -> Option<(Vec<(SharedString, SharedString)>, SharedString)> {
+pub(crate) fn search_engines(
+    profile: u64,
+) -> Option<(Vec<(SharedString, SharedString)>, SharedString)> {
     let engines = crate::name(bc::bc_profile_search_engines, profile);
     let engines: Vec<(SharedString, SharedString)> = (engines.lines())
         .filter_map(|line| line.split_once('\t'))
         .map(|(keyword, name)| (keyword.to_string().into(), name.to_string().into()))
         .collect();
     (!engines.is_empty()).then(|| (engines, crate::name(bc::bc_profile_search_engine, profile)))
+}
+
+/// The keyword of the engine a profile searches with until the user picks one: DuckDuckGo, which
+/// the core puts in the place of the engine ungoogled-chromium removed
+/// (engine/patches/ours/chromium-search-default-duckduckgo.patch).
+const FALLBACK_ENGINE: &str = "duckduckgo.com";
+
+/// Makes the engine of `keyword`, named `name`, `profile`'s default, as Settings' pop-up and the
+/// first launch's step do.
+pub(crate) fn set_search_engine(profile: u64, keyword: &str, name: &str) {
+    // check.sh waits for this line.
+    log!("browser: profile {profile} searches with {name}");
+    let keyword = CString::new(keyword).unwrap_or_default();
+    unsafe { bc::bc_profile_set_search_engine(profile, keyword.as_ptr()) };
 }
 
 /// Where `profile`'s downloads go, with ~ for the home folder, or None while it loads.
@@ -1166,6 +1184,26 @@ fn open(cx: &mut App) {
             .detach();
             cx.observe_window_appearance(window, |settings: &mut Settings, window, cx| {
                 settings.follow_appearance(window, cx)
+            })
+            .detach();
+            // A show's "settings drew" waits for the platform to report the window on screen
+            // (#3270). The line says, when it doesn't come, whether a report came and whether the
+            // window had a screen then; the frame asked here doesn't rely on a frame already asked.
+            cx.observe_window_visibility(window, |_: &mut Settings, visibility, window, cx| {
+                log!(
+                    "browser: settings visibility {} screen {}",
+                    if visibility.is_visible() {
+                        "visible"
+                    } else {
+                        "hidden"
+                    },
+                    if window.display(cx).is_some() {
+                        "yes"
+                    } else {
+                        "no"
+                    }
+                );
+                cx.notify();
             })
             .detach();
             cx.observe_global_in::<shell::AppAppearance>(window, |settings, window, cx| {
@@ -2198,8 +2236,23 @@ impl Settings {
         );
         let toggle_keys = shell::keystroke_label("cmd-s");
         let side = if right { "right" } else { "left" };
+        let top_bar = self.toggle("top bar", "Top bar", off(TOP_BAR), set_top_bar, accent, cx);
+        let top_bar_keys = shell::keystroke_label("shift-cmd-d");
+        let top_bar = setting(
+            look,
+            "Top bar",
+            Some(
+                format!(
+                    "The URL field and the sidebar's buttons in a row across the window's top, \
+                     the page under it. {top_bar_keys} turns it on and off."
+                )
+                .into(),
+            ),
+            vec![top_bar],
+        );
         let mut hidden = vec![
             position,
+            top_bar,
             setting(
                 look,
                 "Show the hidden sidebar at the window's edge",
@@ -2290,6 +2343,51 @@ impl Settings {
 
     /// Features: ilo's own tools, each its glyph, its name, its ways in and its switch, and its
     /// own settings under it.
+    /// Links: the cards ⇧ shows of a link in a page, then where a link from another app opens.
+    fn links(&self, accent: Rgba, cx: &mut Context<Self>) -> Page {
+        let shift = if cfg!(target_os = "macos") {
+            "⇧"
+        } else {
+            "Shift"
+        };
+        let cards = self.toggle(
+            "link cards",
+            "Link cards",
+            crate::link_cards::on(),
+            set_link_cards,
+            accent,
+            cx,
+        );
+        // The privacy page's line, as the switch's (#3080).
+        let cards = setting(
+            &self.look,
+            "Link cards",
+            Some(
+                format!(
+                    "Press {shift} on a link to see its page's title, description and picture, \
+                     asked without your cookies."
+                )
+                .into(),
+            ),
+            vec![cards],
+        );
+        let rules = self
+            .links
+            .clone()
+            .map(|links| Block::View(links.into_any_element()));
+        Page::new(
+            Section::Links,
+            "What a link in a page shows, and where a link from another app opens.",
+            [
+                Block::Rows(vec![cards]),
+                Block::Heading("From other apps".into()),
+            ]
+            .into_iter()
+            .chain(rules)
+            .collect(),
+        )
+    }
+
     fn features(&self, profiles: &[Profile], accent: Rgba, cx: &mut Context<Self>) -> Page {
         let look = &self.look;
         let mac = cfg!(target_os = "macos");
@@ -2405,6 +2503,25 @@ impl Settings {
             ),
             vec![previews],
         );
+        let recent = self.toggle(
+            "recent in hover cards",
+            "What's recent in hover cards",
+            browser::recent::on(cx),
+            set_recent,
+            accent,
+            cx,
+        );
+        let recent = feature(
+            look,
+            "icons/git-pull-request.svg",
+            "What's recent in hover cards",
+            Some(
+                "A pinned GitHub tab's or favorite's card shows your open pull requests, \
+                 asked of GitHub with your own sign-in as you rest on it."
+                    .into(),
+            ),
+            vec![recent],
+        );
         let mini_player = unsafe { bc::bc_auto_picture_in_picture() };
         let mini_player = self.toggle(
             "mini player",
@@ -2498,13 +2615,16 @@ impl Settings {
             Some(boosts_line.into()),
             vec![boosts],
         );
-        let mut blocks = vec![
-            Block::Rows(little),
-            Block::Rows(vec![peek]),
+        let mut blocks = vec![Block::Rows(little), Block::Rows(vec![peek])];
+        // Not before this build's core can ask a site, where the switch would turn nothing off.
+        if browser::recent::REACHED {
+            blocks.push(Block::Rows(vec![recent]));
+        }
+        blocks.extend([
             Block::Rows(vec![mini_player]),
             Block::Rows(vec![boosts]),
             Block::Rows(note),
-        ];
+        ]);
         if self.widevine.read(cx).shown() {
             blocks.push(Block::Rows(vec![self.widevine_row(cx)]));
         }
@@ -3118,23 +3238,25 @@ impl Settings {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
+        // The engine ilo searches with until the user picks one is marked, as Page zoom's 100% is.
         let items: Vec<MenuEntry> = (engines.iter().enumerate())
-            .map(|(index, (_, name))| {
+            .map(|(index, (keyword, name))| {
                 let on = Some(index) == chosen;
+                let name = match keyword.as_str() {
+                    FALLBACK_ENGINE => format!("{name} (default)").into(),
+                    _ => name.clone(),
+                };
                 MenuEntry {
                     checked: on,
                     over: on,
-                    ..MenuEntry::named(name.clone(), true)
+                    ..MenuEntry::named(name, true)
                 }
             })
             .collect();
         let settings = cx.weak_entity();
         let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
             if let Some((keyword, name)) = picked.and_then(|index| engines.get(index)) {
-                // check.sh waits for this line.
-                log!("browser: profile {profile} searches with {name}");
-                let keyword = CString::new(keyword.as_str()).unwrap_or_default();
-                unsafe { bc::bc_profile_set_search_engine(profile, keyword.as_ptr()) };
+                set_search_engine(profile, keyword, name);
             }
             settings.update(cx, |settings, cx| settings.chose(cx)).ok();
         });
@@ -4837,6 +4959,10 @@ fn set_little_in_menu_bar(on: bool, _: &mut App) {
     crate::set_little_in_menu_bar(on);
 }
 
+fn set_link_cards(on: bool, cx: &mut App) {
+    crate::link_cards::set_on(on, cx);
+}
+
 fn set_sign_in_close(on: bool, cx: &mut App) {
     crate::sign_in_close::set_sign_in_close(on, cx);
 }
@@ -5029,9 +5155,16 @@ fn set_mini_player(on: bool, _: &mut App) {
 /// profile directory while it's off, as the core keeps no settings of the app's own.
 const NO_EDGE_REVEAL: &str = "no-edge-reveal";
 const DOCK_ICON_PLAIN: &str = "plain-dock-icon";
+/// What's recent in hover cards, off (#3074); and the sites Site Controls turned it off for, a line
+/// each.
+const NO_RECENT: &str = "no-recent-in-cards";
+const RECENT_SITES_OFF: &str = "recent-off-sites";
 /// Sidebar position, there while it's Right (#2375): this device's, as the other switches are, and
 /// never synced.
 const SIDEBAR_RIGHT: &str = "sidebar-right";
+
+/// Top bar, there while it's on (#3160): this device's, as Sidebar position is, and never synced.
+const TOP_BAR: &str = "top-bar";
 
 fn off(name: &str) -> bool {
     std::path::Path::new(&format!("{}/{name}", crate::profile_dir())).exists()
@@ -5049,7 +5182,41 @@ fn set_off(name: &str, is_off: bool) {
 pub fn read_switches(cx: &mut App) {
     cx.set_global(shell::SidebarEdge(!off(NO_EDGE_REVEAL)));
     cx.set_global(shell::SidebarRight(off(SIDEBAR_RIGHT)));
+    cx.set_global(shell::TopBar(off(TOP_BAR)));
     browser::dock_dot::set_plain(off(DOCK_ICON_PLAIN), cx);
+    browser::recent::set_switches(!off(NO_RECENT), recent_sites_off(), cx);
+}
+
+fn recent_sites_off() -> HashSet<SharedString> {
+    std::fs::read_to_string(format!("{}/{RECENT_SITES_OFF}", crate::profile_dir()))
+        .unwrap_or_default()
+        .lines()
+        .filter(|site| !site.is_empty())
+        .map(|site| SharedString::from(site.to_string()))
+        .collect()
+}
+
+/// Off, every profile's kept rows go with it, and no card asks again until it's back on.
+fn set_recent(on: bool, cx: &mut App) {
+    set_off(NO_RECENT, !on);
+    browser::recent::set_on(on, cx);
+}
+
+/// Site Controls' switch for `site` (#3074), kept on this device as General's is.
+pub fn set_recent_site(site: &str, on: bool, cx: &mut App) {
+    browser::recent::set_site_on(site, on, cx);
+    let mut sites: Vec<_> = cx
+        .global::<browser::recent::Recents>()
+        .sites_off
+        .iter()
+        .cloned()
+        .collect();
+    sites.sort();
+    let path = format!("{}/{RECENT_SITES_OFF}", crate::profile_dir());
+    _ = match sites.is_empty() {
+        true => std::fs::remove_file(path),
+        false => std::fs::write(path, sites.join("\n") + "\n"),
+    };
 }
 
 /// Whether Sidebar position is kept as Right, for the launch, before the windows read it.
@@ -5062,6 +5229,14 @@ pub fn sidebar_right_kept() -> bool {
 pub fn set_sidebar_right(right: bool, cx: &mut App) {
     set_off(SIDEBAR_RIGHT, right);
     cx.set_global(shell::SidebarRight(right));
+    cx.refresh_windows();
+}
+
+/// Turns Top bar on or off: kept on this device, and every window follows at once, as each reads
+/// it as it draws.
+pub fn set_top_bar(on: bool, cx: &mut App) {
+    set_off(TOP_BAR, on);
+    cx.set_global(shell::TopBar(on));
     cx.refresh_windows();
 }
 
@@ -5667,18 +5842,7 @@ impl Settings {
                 Some(agents) => self.agents(&agents, accent, cx),
                 None => Page::new(Section::Agents, "", Vec::new()),
             },
-            Section::Links => {
-                let links = self
-                    .links
-                    .clone()
-                    .map(|links| Block::View(links.into_any_element()));
-                Page::new(
-                    Section::Links,
-                    "Where a link from another app opens. Rules run from the top, and the first \
-                     match wins.",
-                    links.into_iter().collect(),
-                )
-            }
+            Section::Links => self.links(accent, cx),
             Section::Shortcuts => self.shortcuts(accent, cx),
             Section::Profiles => {
                 let profiles = profiles();

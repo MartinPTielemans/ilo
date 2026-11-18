@@ -664,9 +664,13 @@ expect '^browser: remove archived [0-9][0-9]*$' "Delete from Archive didn't run"
 expect "^browser: archive $((archived - 1)) tabs\$" "Delete from Archive didn't take the tab out"
 none_since '^browser: library hidden$' || fail "Delete from Archive closed the Library"
 # A right-click on the Archived Tabs section offers Clear Archive, as Arc's does, which asks as
-# the menu's does, and ⌘Z brings the tabs back. It's the fourth of six, with Agents (#1080) and
-# Boosts (#695) last, 100 apart and centred 5 above the column's middle.
-archive_section="56 $((height / 2 + 45))"
+# the menu's does, and ⌘Z brings the tabs back. Its button is clicked at its middle, where the
+# column's line says it drew it, so a section added to the column doesn't move the click.
+read -r bx by bw bh << EOF
+$(grep '^browser: library button archive at ' "$log" | tail -1 | cut -d' ' -f6-)
+EOF
+[ -n "$bh" ] || fail "the Library's column said nothing of where it drew the Archived Tabs button"
+archive_section="$((bx + bw / 2)) $((by + bh / 2))"
 post rightclick $archive_section
 expect "^browser: menu shown $(cased 'Clear Archive')\$" \
   "a right-click on the Archived Tabs section didn't offer Clear Archive"
@@ -1205,13 +1209,13 @@ elif [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   send click $page_point
   expect "^browser: title $tab pressed 1\$" "a click didn't reach Safari's engine's page"
   send state
-  in_browser WKWebView "after a click on Safari's engine's page"
+  in_browser BrowserCoreWebView "after a click on Safari's engine's page"
   for shortcut in "t new-tab" "l edit-url"; do
     page_shortcut $shortcut
     expect '^browser: command bar shown$' "$shortcut over Safari's engine didn't open the command bar"
     send key escape
     expect '^browser: command bar hidden$' "escape didn't close the command bar over Safari's engine"
-    in_browser WKWebView "after the command bar over Safari's engine closed"
+    in_browser BrowserCoreWebView "after the command bar over Safari's engine closed"
   done
   # A click in the page closes the bar before it's dispatched, so the page counts it and the next,
   # as Chromium's does above.
@@ -1221,7 +1225,7 @@ elif [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   expect '^browser: command bar hidden$' "a click on Safari's engine's page didn't close the command bar"
   expect "^browser: title $tab pressed 2\$" \
     "the click that closed the bar didn't reach Safari's engine's page: $(grep "^browser: title $tab " "$log" | tail -1)"
-  in_browser WKWebView "after a click on Safari's engine's page closed the command bar"
+  in_browser BrowserCoreWebView "after a click on Safari's engine's page closed the command bar"
   send click $page_point
   expect "^browser: title $tab pressed 3\$" \
     "the click after the bar closed didn't reach Safari's engine's page: $(grep "^browser: title $tab " "$log" | tail -1)"
@@ -1248,6 +1252,30 @@ elif [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   expect "^browser: title $tab value 日本語x\$" \
     "return in Safari's engine's text field did more than commit: $(grep "^browser: title $tab " "$log" | tail -1)"
   ../tools/window-screenshot.sh "$pid" "$out/engine-ime.png" || fail "no window to capture"
+  # Escape in full screen goes to Safari's engine's page first, as it does to Chromium's (window.sh):
+  # the page keeps the first, and a second at once leaves anyway, before the page sees it (#2965).
+  # A held one goes the same way, as the key's repeats.
+  if engine_has ../core/platform/mac/system_page.mm; then
+    send fullscreen
+    expect '^browser: window entered full screen$' "the window didn't go full screen over Safari's engine"
+    # An escape before the shell hears of full screen is no press it counts.
+    expect '^browser: toast shown To exit full screen, press ⎋\.' \
+      "the window full screen over Safari's engine didn't say how to leave"
+    send state
+    in_browser BrowserCoreWebView "with the window full screen over Safari's engine"
+    send key escape
+    first=$step
+    send key escape
+    expect "^browser: title $tab escape 1\$" \
+      "Safari's engine's page didn't get the first of two escapes in full screen" "$first"
+    expect '^browser: escape twice leaves full screen$' \
+      "a second escape at once over Safari's engine didn't leave full screen: $(since "$first" | grep -e '^browser: \[keys\]' -e "^browser: title $tab " | tr '\n' ' ')" "$first"
+    expect '^browser: window left full screen$' "escape twice over Safari's engine didn't take the window out of full screen"
+    none_since "^browser: title $tab escape 2\$" "$first" ||
+      fail "the second escape that left full screen reached Safari's engine's page too"
+  else
+    echo "skip: escape twice in full screen over Safari's engine: the engine linked was built without core/platform/mac/system_page.mm as it is here."
+  fi
   # ⌘W from the page closes the tab, and the site kept opens in Safari's engine in the next one shown.
   page_shortcut w close-tab
   expect '^browser: selected [1-9]' "⌘W over Safari's engine showed no tab"

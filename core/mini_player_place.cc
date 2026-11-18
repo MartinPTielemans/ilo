@@ -134,6 +134,51 @@ std::optional<gfx::Rect> MiniPlayerRest(const gfx::Rect& let_go,
   return rest;
 }
 
+void MiniPlayerMoves::Window(const gfx::Point& at, base::TimeTicks when) {
+  if (!outline_) {
+    Add(at, when);
+  }
+}
+
+void MiniPlayerMoves::Outline(const gfx::Point& at, base::TimeTicks when) {
+  outline_ = true;
+  Add(at, when);
+}
+
+void MiniPlayerMoves::Add(const gfx::Point& at, base::TimeTicks when) {
+  if (moves_.empty() || moves_.back().at != at) {
+    moves_.push_back({when, at});
+  }
+}
+
+gfx::Vector2dF MiniPlayerReleaseVelocity(const std::vector<MiniPlayerMove>& moves,
+                                         base::TimeTicks released) {
+  if (moves.empty()) {
+    return gfx::Vector2dF();
+  }
+  const MiniPlayerMove* from = &moves.front();
+  for (const MiniPlayerMove& move : moves) {
+    if (move.when <= released - kMiniPlayerReleaseHistory) {
+      from = &move;
+    }
+  }
+  const double seconds = (released - from->when).InSecondsF();
+  if (seconds <= 0) {
+    return gfx::Vector2dF();
+  }
+  const gfx::Vector2d moved = moves.back().at - from->at;
+  return gfx::Vector2dF(moved.x() / seconds, moved.y() / seconds);
+}
+
+gfx::Vector2dF MiniPlayerLastMove(const std::vector<MiniPlayerMove>& moves,
+                                  base::TimeTicks released) {
+  if (moves.size() < 2 || moves.back().when < released - kMiniPlayerReleaseHistory) {
+    return gfx::Vector2dF();
+  }
+  const gfx::Vector2d moved = moves.back().at - moves[moves.size() - 2].at;
+  return gfx::Vector2dF(moved.x(), moved.y());
+}
+
 gfx::Vector2dF MiniPlayerSpring(const gfx::Vector2dF& offset,
                                 const gfx::Vector2dF& velocity,
                                 double seconds) {

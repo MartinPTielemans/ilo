@@ -10,7 +10,8 @@ use std::time::Duration;
 
 use crate::dock_dot::QUIET;
 use crate::folder_preview::{self, Ask, Item};
-use crate::hover_card::{Action, Anchor, Card, Event, Hover, Icon, Rest};
+use crate::hover_card::{Action, Anchor, Card, Event, Hover, Icon, Opening, Rest};
+use crate::recent::{self, Answer};
 use crate::space_icon::has_icon;
 use crate::{icon_picker, theme_picker};
 
@@ -42,6 +43,7 @@ impl Shell {
         let Some(card) = self.card(tab).filter(|_| !busy) else {
             return;
         };
+        let card = self.with_recent(card, cx);
         let Some(frame) = self.tip_frame(tab) else {
             return;
         };
@@ -95,7 +97,8 @@ impl Shell {
         let Row::Tab(folder) = row else {
             return;
         };
-        if !self.is_folder(folder) {
+        // A Live Folder's tooltip says how old its rows are in place of a preview.
+        if !self.is_folder(folder) || self.live_source(folder).is_some() {
             return;
         }
         if !hovered {
@@ -215,8 +218,93 @@ impl Shell {
     /// waits for it shows it as it is now (#1452).
     pub(super) fn card_changed(&self, tab: u64, cx: &mut App) {
         if let Some(card) = self.card(tab) {
+            let card = self.with_recent(card, cx);
             self.browser.hover_card(Hover::Changed(card), cx);
         }
+    }
+
+    /// `card` with what's recent on its tab's site, where it has rows.
+    fn with_recent(&self, card: Card, cx: &App) -> Card {
+        let recent = self.recent_profile(card.tab, cx).map(|profile| {
+            let (now, today) = (now(), self.browser.day_starts()[0]);
+            recent::shown(profile, |at| age(at, now, today), cx)
+        });
+        Card { recent, ..card }
+    }
+
+    /// The profile whose answers `tab`'s card shows, for a tab whose card has what's recent on its
+    /// site (#3074): a pinned tab or a favorite alone, not a split, whose page is on a site with
+    /// rows that neither switch turned off, in a Space of the user's in a window that keeps its
+    /// tabs, while the core can ask. The core asks the same of the tab itself.
+    fn recent_profile(&self, tab: u64, cx: &App) -> Option<u64> {
+        let space = self.shown_space()?;
+        let kept = self.pinned().contains(&tab) || self.favorites.contains(&tab);
+        let alone = self.panes(tab).len() <= 1 && self.favorite_split(tab).is_none();
+        let site = recent::source(&self.page(tab).url)?;
+        let ours = space.agent.is_empty() && !self.one_space();
+        (self.browser.recent_reached() && kept && alone && ours && recent::shows(site, cx))
+            .then_some(space.profile)
+    }
+
+    /// The site whose cards' rows `tab`'s page is on, for a pinned tab or favorite of the user's.
+    pub fn recent_site(&self, tab: u64) -> Option<&'static str> {
+        let kept = self.pinned().contains(&tab) || self.favorites.contains(&tab);
+        let ours = self.shown_space()?.agent.is_empty() && !self.one_space();
+        (self.browser.recent_reached() && kept && ours)
+            .then(|| recent::source(&self.page(tab).url))
+            .flatten()
+    }
+
+    /// Site Controls' switch for `tab`'s site: on or not, none while Settings' is off.
+    pub fn recent_switch(&self, tab: u64, cx: &App) -> Option<bool> {
+        let site = self.recent_site(tab).filter(|_| recent::on(cx))?;
+        Some(recent::shows(site, cx))
+    }
+
+    /// The core's answer for `tab`'s card: kept for its profile, and the card shows it if it's up.
+    pub fn recent_answered(&mut self, tab: u64, answer: Answer, cx: &mut Context<Self>) {
+        let Some(profile) = self.recent_profile(tab, cx) else {
+            return;
+        };
+        // check.sh reads this line, which says nothing of the rows.
+        let said = match &answer {
+            Answer::Rows { rows, .. } => format!("{} rows", rows.len()),
+            Answer::SignedOut => "signed out".into(),
+            Answer::Failed => "failed".into(),
+        };
+        log!("browser: tab {tab} recent {said}");
+        recent::keep(profile, answer, cx);
+        self.card_changed(tab, cx);
+    }
+
+    /// A row of what's recent on `tab`'s card was clicked: it opens in the tab, which leaves its
+    /// pinned address and shows its way back, behind it, or beside the page.
+    fn open_recent(
+        &mut self,
+        tab: u64,
+        row: recent::Row,
+        opening: Opening,
+        cx: &mut Context<Self>,
+    ) {
+        log!("browser: command recent-{} via hover card", opening.label());
+        if let Some(profile) = self.recent_profile(tab, cx) {
+            recent::opened(profile, &row, cx);
+        }
+        let url = row.url();
+        match opening {
+            Opening::Behind => self.browser.open_behind(&[url], false, 0, 0, cx),
+            Opening::Beside if self.selected != 0 && self.selected != tab => self
+                .browser
+                .open_split_at(&url, self.selected, false, false, cx),
+            _ => self.navigate_shown(tab, &url, cx),
+        }
+    }
+
+    /// Loads `url` in `tab`, and shows it with the page focused, as a click on its row would.
+    fn navigate_shown(&mut self, tab: u64, url: &str, cx: &mut Context<Self>) {
+        self.browser.navigate(tab, url, cx);
+        self.select(tab, cx);
+        self.browser.focus_page(cx);
     }
 
     /// What `tab`'s card shows, if it has one. A favorite split's tile has one too, its pages
@@ -260,6 +348,7 @@ impl Shell {
             panes: panes.iter().map(|&pane| (pane, icon_of(pane))).collect(),
             focused,
             ring: self.palette.accent.into(),
+            recent: None,
         })
     }
 
@@ -303,6 +392,10 @@ impl Shell {
             // split's. A page Battery Saver froze keeps the picture it had: taking one again would
             // thaw it.
             Event::Shown => {
+                // Only the user's rest asks the site, and the core floors how often.
+                if self.recent_profile(tab, cx).is_some() {
+                    self.browser.fetch_recent(tab, cx);
+                }
                 for tab in self.panes(tab) {
                     if self.tabs.contains_key(&tab)
                         && !self.on_screen(tab)
@@ -344,6 +437,11 @@ impl Shell {
                     }
                     Action::ShareInstead => self.browser.share_instead(tab, cx),
                 }
+            }
+            Event::Open(row, opening) => self.open_recent(tab, row, opening, cx),
+            Event::SignIn => {
+                log!("browser: command recent-sign-in via hover card");
+                self.navigate_shown(tab, "https://github.com/login", cx);
             }
         }
     }

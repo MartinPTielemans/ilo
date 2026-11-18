@@ -318,6 +318,7 @@ navigator.requestMediaKeySystemAccess("org.w3.clearkey", [{
 # A page that names the engine showing it: Safari's sends Safari's user agent, without Chrome's name.
 # A text field covers it, so a click anywhere in it lands there, and the field's title says what it
 # did: a press, counted, its value, what ⌘A selected and ⌘C copied, and a committed composition.
+# It keeps escape, counting each.
 printf '%s' '<title>loading</title>
 <input id=f style="position:fixed;left:0;top:0;width:100%;height:100%;box-sizing:border-box">
 <script>
@@ -329,6 +330,8 @@ f.oninput = e => e.isComposing || (document.title = "value " + f.value);
 f.onselect = document.onselectionchange = () => selected() && (document.title = "select " + selected());
 oncopy = () => document.title = "copy " + selected();
 f.addEventListener("compositionend", e => document.title = "committed " + e.data);
+let escapes = 0;
+onkeydown = e => { if (e.key == "Escape") { e.preventDefault(); document.title = "escape " + ++escapes; } };
 </script>' > "$out/site/engine.html"
 # The session page, whose title says the engine showing it and which of the check's values its
 # script finds, in this order, or none: the cookies h, hw, n, p and w, and the localStorage items
@@ -443,6 +446,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         **http.server.SimpleHTTPRequestHandler.extensions_map,
         ".crx": "application/x-chrome-extension",
     }
+
+    # Each request logged in printable ASCII alone. Older Pythons wrote a request line as it came,
+    # so a TLS hello the browser sent to this port put NUL bytes in site.log, and grep then
+    # took the file for binary and printed none of its lines (#3314).
+    def log_message(self, format, *args):
+        message = "".join(c if " " <= c <= "~" else "\\x%02x" % ord(c) for c in format % args)
+        sys.stderr.write("%s - - [%s] %s\n"
+                         % (self.address_string(), self.log_date_time_string(), message))
 
     def do_GET(self):
         agent = self.headers.get("User-Agent", "")
@@ -560,10 +571,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def do_POST(self):
         body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
         if self.path.startswith("/api/"):
-            # Logged as "POST <host><path> cookie <cookies sorted, or none> body <body>".
+            # Logged as "POST <host><path> cookie <cookies sorted, or none> body <body>", in one
+            # write as GET lines are, so no line another request logs at once lands inside it.
             cookies = sorted(c.strip() for c in self.headers.get("Cookie", "").split(";") if c.strip())
-            print("POST", self.headers.get("Host", "") + self.path, "cookie",
-                  "; ".join(cookies) or "none", "body", body.decode())
+            sys.stdout.write(" ".join(["POST", self.headers.get("Host", "") + self.path, "cookie",
+                "; ".join(cookies) or "none", "body", body.decode()]) + "\n")
             body = b"{\"id\":8," + body[1:]
             self.send_response(201)
             self.send_header("Content-Type", "application/json")

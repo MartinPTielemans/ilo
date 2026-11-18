@@ -29,7 +29,7 @@
 # name and all. A row let go with ⌥ held leaves a copy of its tab there, which ⌘Z closes, and
 # ⌥-click on the shown tab's own row splits it with a copy.
 
-# Split view, from the served page with example.org beside it.
+# Split view, from the served page with two.html beside it.
 serve
 log="$out/split.log"
 step=0
@@ -137,8 +137,7 @@ bar=$(grep '^browser: command bar at ' "$log" | tail -1 | cut -d' ' -f5-)
 [ "$bar" = "$over_pane" ] ||
   fail "the tab menu's command bar opened at $bar, not over the pane at $over_pane as the bar's own does"
 send type exa
-# With example.org in the history, from a run before this one in the same check, it completes in
-# place as typed.
+# The bar draws what was typed, and any completion the history gives it after.
 expect '^browser: command bar drew "exa[^"]*"$' "the tab menu's command bar didn't take typing"
 ../tools/window-screenshot.sh "$pid" "$out/split-tab-menu.png" || fail "no window to capture"
 send key escape
@@ -276,13 +275,13 @@ send click $page_point
 send key + ctrl
 expect '^browser: command add-split via page$' "⌃+ with the page focused didn't reach the UI"
 expect '^browser: command bar shown$' "⌃+ didn't open the command bar"
-send type example.org
+send type "http://localhost:$port/two.html"
 send key return
-expect "^browser: splits $a+[0-9][0-9]*\$" "example.org didn't open beside the page: \"$(splits)\""
+expect "^browser: splits $a+[0-9][0-9]*\$" "two.html didn't open beside the page: \"$(splits)\""
 b=$(splits | cut -d+ -f2)
 expect "^browser: selected $b\$" "the new pane isn't focused"
 expect "^browser: panes $a $b\$" "the window doesn't show both panes"
-expect "^browser: loaded $b https://example.org/\$" "example.org didn't load in the new pane"
+expect "^browser: loaded $b http://localhost:$port/two.html\$" "two.html didn't load in the new pane"
 read_keyboard
 [ "$keyboard" = "$right" ] ||
   fail "the new pane's page doesn't have the keyboard: ${keyboard:-none} has it"
@@ -344,7 +343,7 @@ over_left=$toast
 # focused last, and a click on its right segment shows that pane focused. The left pane has the
 # row, so the right one is its favicon at the row's end, 190 to 220 of the 228 pt sidebar (#2340):
 # the click's press comes before a frame draws the row's ✕ under the pointer.
-open_from_bar example.net
+open_from_bar "http://localhost:$port/three.html"
 c=$tab
 expect "^browser: today $c $a $b\$" "the new tab isn't above the split: Today is \"$(today)\""
 send key 2 cmd
@@ -486,7 +485,7 @@ c=$(today | cut -d' ' -f1)
 await "^browser: selected $b\$" || fail "the relaunch didn't focus the pane focused last"
 await "^browser: panes $a $b\$" || fail "the relaunch didn't show both panes"
 await "^browser: loaded $a $site\$" || fail "the split's top page didn't load"
-await "^browser: loaded $b https://example.org/\$" || fail "the split's bottom page didn't load"
+await "^browser: loaded $b http://localhost:$port/two.html\$" || fail "the split's bottom page didn't load"
 read_pages
 [ "$pages" = "$resized" ] ||
   fail "the relaunch didn't show the panes stacked at the heights they were dragged to: $pages"
@@ -541,13 +540,13 @@ beside=alt
 ! windows || beside=winalt
 send key t cmd
 expect '^browser: command bar shown$' "⌘T didn't open the command bar"
-send type example.net
+send type "http://localhost:$port/three.html"
 send key return $beside
 expect "^browser: splits $b+[0-9][0-9]*\$" \
-  "⌥↩ didn't open example.net beside the page: \"$(splits)\""
+  "⌥↩ didn't open three.html beside the page: \"$(splits)\""
 d=$(splits | cut -d+ -f2)
 expect "^browser: panes $b $d\$" "⌥↩ didn't show the page and its new pane"
-expect "^browser: loaded $d https://example.net/\$" "example.net didn't load in the new pane"
+expect "^browser: loaded $d http://localhost:$port/three.html\$" "three.html didn't load in the new pane"
 send key w cmd
 expect "^browser: tab $d closed\$" "⌘W didn't close the focused pane"
 expect "^browser: panes $b\$" "⌘W on a pane didn't leave the page beside it alone"
@@ -561,7 +560,7 @@ expect "^browser: splits $b+[0-9][0-9]*\$" \
 e=$(splits | cut -d+ -f2)
 expect "^browser: selected $e\( in .*\)\{0,1\}\$" "the pane ⇧⌘T brought back isn't focused"
 expect "^browser: panes $b $e\$" "the window doesn't show the pane ⇧⌘T brought back"
-expect "^browser: loaded $e https://example.net/\$" "the pane ⇧⌘T brought back didn't load"
+expect "^browser: loaded $e http://localhost:$port/three.html\$" "the pane ⇧⌘T brought back didn't load"
 # Flip Split View swaps the panes, and Move Pane Right moves the focused one back to the right.
 bar_command flip-split "Flip Split View" "flip split"
 expect "^browser: splits $e+$b\$" "Flip Split View didn't swap the split's pages: \"$(splits)\""
@@ -738,7 +737,7 @@ row_of() {
 # (ours: Arc's preview wasn't recorded).
 bar_command separate-split "Separate All Tabs" "separate all"
 expect '^browser: splits $' "Separate All Tabs didn't end the stacked split: \"$(splits)\""
-open_from_bar example.net
+open_from_bar "http://localhost:$port/three.html"
 f=$tab
 onto=$(today | cut -d' ' -f2)
 dragged=$(today | cut -d' ' -f3)
@@ -823,7 +822,7 @@ expect '^browser: splits [0-9][0-9]*+[0-9][0-9]* [0-9][0-9]*+[0-9][0-9]*$' \
 expect "^browser: renamed split [0-9][0-9]* planning\$" "Duplicate didn't copy the split's name"
 # A row dragged with ⌥ held as it's let go stays, and a copy of its tab goes where it's let go,
 # shown, which ⌘Z closes (#690; ours: Arc's wasn't recorded).
-open_from_bar example.com
+open_from_bar "http://localhost:$port/one.html"
 c=$tab
 rows=$(today)
 y=$(row 2 | cut -d' ' -f2)

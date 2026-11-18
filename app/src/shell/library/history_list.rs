@@ -17,8 +17,8 @@ use web_time::Instant;
 
 use super::{
     ARCHIVED_FAVICON_X, ARCHIVED_LEFT, ARCHIVED_PITCH, ARCHIVED_PLATE, ARCHIVED_RADIUS,
-    ARCHIVED_RIGHT, ARCHIVED_TEXT_X, MenuEntry, Only, SECONDARY, STATE_HOVERED, STATE_PRESSED,
-    Section, Shell, UNSELECTED_TITLE, favicon, host, text, text_line,
+    ARCHIVED_RIGHT, ARCHIVED_TEXT_X, Item, MenuEntry, Only, SECONDARY, STATE_HOVERED,
+    STATE_PRESSED, Section, Shell, UNSELECTED_TITLE, favicon, host, text, text_line,
 };
 use crate::agent_history::{self, Past};
 use crate::shell::access::Accessible;
@@ -497,6 +497,7 @@ impl Shell {
             .child(
                 div()
                     .id(("visited", index))
+                    .map(|plate| self.library_row(plate, Item::Visit(index), 0, ARCHIVED_RADIUS))
                     .size_full()
                     .relative()
                     .flex()
@@ -541,7 +542,7 @@ impl Shell {
     /// A click on a visited page's row opens it in Peek, growing from the row at `at`, as a closed
     /// tab's does, so a click means one thing down the list; Open as Tab keeps it. ⌘-click, or a
     /// page Peek can't show, opens it at once.
-    fn open_visited(
+    pub(super) fn open_visited(
         &mut self,
         url: SharedString,
         at: Point<Pixels>,

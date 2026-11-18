@@ -25,7 +25,7 @@ pub(in crate::shell) fn shell_with(
 }
 
 /// Where in the window `tab`'s row is, down its middle.
-pub(super) fn row_y(shell: &Shell, tab: u64) -> f32 {
+pub(in crate::shell) fn row_y(shell: &Shell, tab: u64) -> f32 {
     shell.drawn_list_top() + shell.layout()[&Slot::Tab(tab)] + ROW_HEIGHT / 2.
 }
 
