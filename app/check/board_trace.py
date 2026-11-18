@@ -6,8 +6,11 @@
       so a run that alternates two kinds of switch reads them apart. A switch to a page not yet
       loaded is left out, and one cut off before its frame is "incomplete".
   board_trace.py ui TRACE
-      The browser's UI thread (CrBrowserMain) in the toplevel category: its longest task in ms, the
-      task's name and where it was posted from, and how many tasks it ran, "MS NAME FROM COUNT".
+      The browser's UI thread (CrBrowserMain) in the toplevel category: its longest task in ms and
+      where it was posted from, then the Board's own, those taking a WebUI page's message (each
+      slice's chrome.send) or posted from browser_core/board, their longest, how many and their
+      sum, "MS FROM BOARD_MS BOARD_FROM BOARD_COUNT BOARD_SUM". The longest of all can be another's
+      in the same window, such as the ad blocker's extension writing its storage.
   board_trace.py since STAMP LOG PATTERN
       For each line of LOG holding PATTERN, the ms from STAMP, Unix ms, to the time in the line's
       Chromium prefix, "[pid:tid:MMDD/HHMMSS.ffffff:ERROR:...]", which is local time with no year.
@@ -49,16 +52,32 @@ def ui(events):
             and event.get("args", {}).get("name") == "CrBrowserMain"}
     if not main:
         sys.exit("the trace names no CrBrowserMain thread")
-    tasks = [event for event in events
-             if (event.get("pid"), event.get("tid")) in main and event.get("ph") == "X"
-             and "toplevel" in event.get("cat", "").split(",") and "dur" in event]
+    on_main = [event for event in events
+               if (event.get("pid"), event.get("tid")) in main and event.get("ph") == "X"
+               and "dur" in event]
+    tasks = [event for event in on_main if "toplevel" in event.get("cat", "").split(",")]
     if not tasks:
         sys.exit("the trace has no toplevel task on CrBrowserMain")
+    webui = [event["ts"] for event in on_main if event.get("name") == "Receive mojo message"
+             and event.get("args", {}).get("chrome_mojo_event_info", {}).get("mojo_interface_tag")
+             == "content.mojom.WebUIHost"]
+
+    def posted(event):
+        args = event.get("args", {})
+        return str(args.get("src_func") or args.get("src_file") or "-").replace(" ", "_")
+
+    def boards(event):
+        if "browser_core/board" in str(event.get("args", {}).get("src_file", "")):
+            return True
+        return any(event["ts"] <= at <= event["ts"] + event["dur"] for at in webui)
+
     longest = max(tasks, key=lambda event: event["dur"])
-    args = longest.get("args", {})
-    posted = args.get("src_func") or args.get("src_file") or "-"
-    print("%.1f %s %s %d" % (longest["dur"] / 1000, longest.get("name", "-").replace(" ", "_"),
-                             str(posted).replace(" ", "_"), len(tasks)))
+    own = [event for event in tasks if boards(event)]
+    if not own:
+        sys.exit("the trace has no task of the Board's on CrBrowserMain")
+    board = max(own, key=lambda event: event["dur"])
+    print("%.1f %s %.1f %s %d %.1f" % (longest["dur"] / 1000, posted(longest), board["dur"] / 1000,
+                                       posted(board), len(own), sum(e["dur"] for e in own) / 1000))
 
 
 def since(stamp, log, pattern):
