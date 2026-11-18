@@ -55,6 +55,11 @@ extern "C" void browser_fade(void* hwnd, double from, double to, double seconds)
 // the window shows unfaded, and the host still hides it once its fade would have ended.
 extern "C" void browser_fade_none(void*, double, double, double) {}
 #pragma comment(linker, "/alternatename:browser_fade=browser_fade_none")
+// The core's (core/public/browser_core.h), from the chrome that runs the app. The preview has no
+// core, so there the linker takes this instead, as for the fade.
+extern "C" void bc_window_focus_page(uint64_t window);
+extern "C" void bc_window_focus_page_none(uint64_t) {}
+#pragma comment(linker, "/alternatename:bc_window_focus_page=bc_window_focus_page_none")
 // What check.sh calls a window the host floats over a browser window (below).
 extern "C" const char* host_floating_name(void* hwnd);
 // The app's (src/logging.rs), in the browser and the preview: whether BROWSER_LOG turns on |area|.
@@ -1372,11 +1377,46 @@ void AppActivating(bool active, DWORD thread) {
   }
 }
 
+// The core's id for each browser window, by its UI's view (host_window_opened).
+std::map<void*, uint64_t>& WindowIds() {
+  static std::map<void*, uint64_t> ids;
+  return ids;
+}
+
+// A window of ours hid. A tab's dialog that hides with the keyboard, as Chrome hides one when its
+// pane loses the focus, gives it to the page its browser window shows, where the keys that hid it
+// meant it to go, as on Linux: Chromium hides a window without activating another
+// (HWNDMessageHandler::Hide), where SW_HIDE would, so the hidden dialog stayed the active window and
+// the keys after went to it unheard, as Go to Pane 2 after Go to Pane 1 from Chrome's warning before
+// http did (#3330). The activation alone gives the UI the keyboard.
+void CALLBACK WindowHid(HWINEVENTHOOK, DWORD, HWND hwnd, LONG object, LONG child, DWORD, DWORD) {
+  if (object != OBJID_WINDOW || child != CHILDID_SELF || !hwnd || GetForegroundWindow() != hwnd ||
+      IsWindowVisible(hwnd)) {
+    return;
+  }
+  HWND root = GetWindow(hwnd, GW_OWNER);
+  if (!TabDialogOf(hwnd, root) || !UiViewOf(root) || !IsWindowVisible(root) || IsIconic(root)) {
+    return;
+  }
+  // check.sh reads this line.
+  fprintf(stderr, "browser: a tab's dialog hid with the keyboard, which goes to its window\n");
+  SetForegroundWindow(root);
+  if (auto id = WindowIds().find(UiViewOf(root)); id != WindowIds().end()) {
+    bc_window_focus_page(id->second);
+  }
+}
+
 void WatchForeground() {
   static HWINEVENTHOOK hook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND,
                                               nullptr, ForegroundChanged, 0, 0,
                                               WINEVENT_OUTOFCONTEXT);
   (void)hook;
+  // Our own windows' alone, which only hide as the UI thread runs, so it hears them at its next
+  // message, as it goes back to its loop.
+  static HWINEVENTHOOK hid =
+      SetWinEventHook(EVENT_OBJECT_HIDE, EVENT_OBJECT_HIDE, nullptr, WindowHid,
+                      GetCurrentProcessId(), 0, WINEVENT_OUTOFCONTEXT);
+  (void)hid;
 }
 
 Floating g_overlays[6];
@@ -3724,11 +3764,6 @@ void host_watch_key_window(void (*changed)(void* ui_view)) {
 // The window is Chromium's, which goes full screen through the core (bc_window_toggle_full_screen),
 // and the app hears of it as the window's bounds change, as on Linux.
 void host_watch_full_screen(void (*)(void*, bool)) {}
-
-static std::map<void*, uint64_t>& WindowIds() {
-  static std::map<void*, uint64_t> ids;
-  return ids;
-}
 
 void host_window_opened(void* ui_view, uint64_t window) {
   WindowIds()[ui_view] = window;
