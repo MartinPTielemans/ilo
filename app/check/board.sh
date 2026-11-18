@@ -371,20 +371,36 @@ expect '^browser: command new-board via ' "the File menu's New Board didn't run 
 made loft "the File menu"
 loft=$made_folder
 # Japanese input as the Board's first keys: it composes in the first note's field and the note
-# keeps what was committed.
+# keeps what was committed. The driver's input method is the Mac's and sway's; on Windows it's
+# Microsoft's Japanese IME where the runner has it, as keys.sh finds, and on X11 the Linux driver
+# types plain keys into a page. Where there's none, the first note is plain text.
+ime="ime on"
+if windows; then
+  ime=
+  powershell.exe -NoProfile -NonInteractive -Command "(Get-WinUserLanguageList).InputMethodTips" \
+    2> /dev/null | grep -qi 03B5835F-F03C-411B-9CE2-AA23E1171E36 && ime="ime ja"
+fi
+[ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && ime=
 saves=$(grep -c 'browser: board saved$' "$log")
-send ime on
-send type nihongo
-send key space
-send key return
-send ime off
-saved_after "$saves" "the note typed in Japanese wasn't saved"
+if [ -n "$ime" ]; then
+  send $ime
+  send type nihongo
+  send key space
+  send key return
+  send ime off
+  note=日本語
+else
+  echo "skip: Japanese typed into a Board's note: the runner has no input method that reaches a page here; check/ime.sh covers one."
+  send type "a loft note"
+  note="a loft note"
+fi
+saved_after "$saves" "the Board's first note, $note, wasn't saved"
 for _ in $(seq 20); do
-  grep -q '日本語' "$loft/board.json" && break
+  grep -q "$note" "$loft/board.json" && break
   sleep 0.1
 done
-grep -q '日本語' "$loft/board.json" ||
-  fail "the Board's note didn't keep the Japanese committed in it: $(head -c 300 "$loft/board.json")"
+grep -q "$note" "$loft/board.json" ||
+  fail "the Board's note didn't keep $note: $(head -c 300 "$loft/board.json")"
 # The page's own keys while it has the keyboard: escape leaves the note, ⌘A takes every card, ⌘C
 # and ⌘V copy it to a second one, and ⌘Z takes the paste back, each saved. ⌘− and ⌘0 zoom the
 # canvas, which the Board keeps, not the browser's page.
@@ -430,6 +446,9 @@ send choose "$(cased 'New Board')"
 expect '^browser: command new-board via ' "the + menu's New Board didn't run New Board"
 made porch "the sidebar's +"
 porch=$tab
+# Escape leaves the note's field for the page itself: in a text field on the Mac, ⌃⇧E is the text
+# system's select to the end of the line, which the field keeps.
+send key escape
 send key e ctrl shift
 expect '^browser: command new-board via ' "⌃⇧E with a Board's page focused didn't run New Board"
 made shed "⌃⇧E with a Board's page focused"
