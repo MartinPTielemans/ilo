@@ -1061,6 +1061,55 @@ mod tests {
         assert!(!shell.read_with(&cx, |shell, _| shell.sidebar_hidden));
     }
 
+    /// With the UI's keyboard in the browser window, as after a click on the sidebar, a key whose
+    /// shift makes a symbol is heard as the platform gives it: ⌃⇧2 as ⌃@ on the Mac, the shift
+    /// taken into the character, and as Alt+@ under X11, which is the Mac's ⌃@ here.
+    #[gpui::test]
+    fn shifted_symbol_keys_from_the_ui_run_as_the_platform_hears_them(cx: &mut TestAppContext) {
+        use crate::shell::drag::detents::shell_with;
+
+        let ran: Rc<RefCell<Vec<Command>>> = Rc::default();
+        let runs = ran.clone();
+        cx.update(|cx| {
+            cx.bind_keys(key_bindings(cx));
+            cx.on_action(move |run: &Run, _| runs.borrow_mut().push(run.0));
+        });
+        let (shell, _) = shell_with(cx, &[], &[1, 2], Default::default());
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |window, cx| {
+                let focus = shell.read(cx).focus_handle.clone();
+                window.focus(&focus, cx);
+                shell.clone()
+            })
+        });
+        let mut cx = VisualTestContext::from_window(window.unwrap().into(), cx);
+        cx.simulate_resize(gpui::size(gpui::px(1000.), gpui::px(700.)));
+        cx.run_until_parked();
+        cx.simulate_keystrokes("ctrl-shift-2 ctrl-@ ctrl-! ctrl-} ctrl-{ ctrl-+ ctrl-_ cmd-} cmd-{");
+        assert_eq!(
+            ran.take(),
+            [
+                Command::FocusPane(1),
+                Command::FocusPane(1),
+                Command::FocusPane(0),
+                Command::NextPane,
+                Command::PreviousPane,
+                Command::AddSplit,
+                Command::CloseSplitPane,
+                Command::NextTab,
+                Command::PreviousTab,
+            ]
+        );
+        // The menus still show the key with shift.
+        let shown = cx.update(|_, cx| {
+            let keymap = cx.key_bindings();
+            let keymap = keymap.borrow();
+            let binding = keymap.bindings_for_action(&Run(Command::FocusPane(1))).next();
+            binding.map(|binding| binding.keystrokes()[0].inner().unparse(OperatingSystem::Mac))
+        });
+        assert_eq!(shown.as_deref(), Some("ctrl-shift-2"));
+    }
+
     /// ⌃D in a text field of the UI deletes forward, as in any Mac field, and toggles nothing;
     /// with the UI's keyboard anywhere else it toggles Developer Mode.
     #[gpui::test]

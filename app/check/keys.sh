@@ -919,6 +919,12 @@ send click $page_point
 in_browser RenderWidgetHostViewCocoa "after a click on the page"
 send key f6
 expect '^browser: sidebar keyed ' "F6 with the page focused didn't give the sidebar the keyboard"
+# With the UI's keyboard, a key whose shift makes a symbol comes with the shift taken into it, as
+# ⌃⇧2 is ⌃@, and still runs its command, as with the page's (no split is needed to hear it).
+send key 2 ctrl shift
+expect '^browser: command focus-pane via ui$' "⌃⇧2 with the sidebar's keyboard didn't run Go to Pane 2"
+send key ] ctrl shift
+expect '^browser: command next-pane via ui$' "⌃⇧] with the sidebar's keyboard didn't run Next Pane"
 send key escape
 expect '^browser: sidebar keys left by escape$' "escape didn't take F6's sidebar keyboard away"
 in_browser RenderWidgetHostViewCocoa "after escape left the sidebar F6 gave the keyboard"
