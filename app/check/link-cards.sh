@@ -10,6 +10,9 @@
 # link to it, nor for a redirect from the public server to it. Each card's look is captured as
 # link-card-<case>.png: a page with its picture, with none, with nothing in its head, still
 # loading, and refused; and the plate growing into it as link-card.mp4 where the OS records.
+# Off in Settings › Links, and in an agent's Space, ⇧ asks nothing: no card shows, and the server
+# gets no request for the link. The agent is an MCP client on the bridge, as mcp.sh's, whose page
+# the user watches from its card and takes over with a click, so the page gets the ⇧.
 # Needs the core's link card (#3085), which a checkout without core/link_card.cc doesn't have.
 
 if [ ! -f ../core/link_card.cc ]; then
@@ -19,6 +22,14 @@ fi
 log="$out/link-cards.log"
 step=0
 rm -f "$saved"
+# Settings › Links' switch is kept off as this file, which an earlier run's end may have left.
+cards_off="$profile_dir/link-cards-off"
+rm -f "$cards_off"
+# The agent's token, which Settings › Agents keeps, on from the launch as mcp.sh's.
+agents_file="$(dirname "$saved")/Agents"
+token=$(python3 -I -c 'import secrets; print(secrets.token_hex(32))')
+printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}]}' "$token" > "$agents_file"
+chmod 600 "$agents_file"
 
 # The private server, which only logs: a card must never reach it.
 : > "$out/link-cards-private.log"
@@ -45,7 +56,7 @@ server.serve_forever()
 private_server=$!
 read -r private_port < "$out/link-cards-private.port" || true
 [ -n "$private_port" ] || fail "the private server didn't start: $(cat "$out/link-cards-private.err")"
-trap 'cleanup; kill $private_server $public_server 2> /dev/null || true' EXIT
+trap 'cleanup; kill $private_server $public_server 2> /dev/null || true; rm -f "$agents_file" "$cards_off"' EXIT
 
 # The public server's certificate, made for this run and taken by its key alone.
 MSYS2_ARG_CONV_EXCL=/CN= openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=cards.test \
@@ -261,6 +272,139 @@ send click "$room_x" "$room_y"
 expect "^browser: title $tab pressed [0-9]*\$" \
   "a click at $room_x $room_y, in the link target's room above its plate (its window at $at), didn't reach the page under it"
 
+# How many requests the public server logged for the path $1.
+asked() { grep -c "^$1 " "$out/link-cards-public.log" || true; }
+
+# Off in Settings › Links, ⇧ on a link asks nothing: the app says so as the ⇧ comes, no card
+# shows, and the server gets no request for the link's page, which the end of the run reads.
+send menu Settings…
+expect '^browser: settings shown ' "Settings… didn't show Settings"
+settings_drew
+send clickkey $(drawn "toolbar Links")
+expect '^browser: settings tab Links$' "a click on Links didn't show its tab"
+settings_drew Links
+click_in_sight "switch link cards"
+expect '^browser: link cards off$' "a click on Settings › Links' Link cards didn't turn it off"
+../tools/window-screenshot.sh "$pid" "$out/link-cards-off.png" > /dev/null 2>&1 || true
+send key w cmd
+expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+send click 600 560
+expect "^browser: title $tab pressed [0-9]*\$" "the cards' page didn't get the click back from Settings"
+bare_asked=$(asked /bare.html)
+off_step=$step
+send move $bare_link
+expect '^browser: link target cards.test/bare.html$' "Link cards off: resting on a link showed no link target"
+expect '^browser: link target window shown$' "Link cards off: the link target's window didn't show"
+send flags shift
+off_shifted=$step
+expect "^browser: title $tab key Shift [0-9]*\$" "Link cards off: the page didn't get the ⇧"
+expect '^browser: link card not asked: off$' \
+  "Link cards off: ⇧ on a link with its plate showing didn't say the cards are off" "$off_shifted"
+send flags
+! sed -n "/^browser: drive $off_step: /,\$p" "$log" | grep '^browser: link card \(loading\|page\|failed\)' ||
+  fail "Link cards off: ⇧ on a link showed a card"
+# Turned on again, ⇧ shows the card as before.
+send menu Settings…
+expect '^browser: settings shown ' "Settings… didn't show Settings"
+settings_drew
+if [ "$(sed -n 's/^browser: settings shown //p' "$log" | tail -1)" != Links ]; then
+  send clickkey $(drawn "toolbar Links")
+  expect '^browser: settings tab Links$' "a click on Links didn't show its tab"
+  settings_drew Links
+fi
+click_in_sight "switch link cards"
+expect '^browser: link cards on$' "a second click on Link cards' switch didn't turn it on"
+send key w cmd
+expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+send click 600 560
+expect "^browser: title $tab pressed [0-9]*\$" "the cards' page didn't get the click back from Settings"
+card "$page_link" "https://cards.test/page.html" "Link cards on again"
+expect '^browser: link card page with picture$' "Link cards on again: ⇧ on a link showed no card" "$shifted"
+send key escape
+expect '^browser: link card closed$' "Link cards on again: Esc didn't take the card"
+
+# An agent's tab with the same page, opened by an MCP client on the bridge.
+case "$(uname -s)" in
+  MINGW* | MSYS*) on='^browser: agents server on \\\\\.\\pipe\\.*-agents-[0-9a-f]*$' ;;
+  *) on='^browser: agents server on /.*/Agents\.sock$' ;;
+esac
+await "$on" || fail "the saved Agents switch didn't start the agents server"
+socket=$(grep '^browser: agents server on' "$log" | tail -1 | sed 's/^browser: agents server on //')
+if windows; then bridge="$app/mcp-bridge.exe"; else bridge="$(dirname "$browser")/mcp-bridge"; fi
+rm -f "$out/link-cards-in" "$out/link-cards-out"
+mkfifo "$out/link-cards-in" "$out/link-cards-out"
+if windows; then
+  BROWSER_AGENT_TOKEN=$token windows_bridge "$bridge" "$socket" "$out/link-cards-in" \
+    "$out/link-cards-out" 2> "$out/link-cards-bridge.log" &
+else
+  BROWSER_AGENT_TOKEN=$token "$bridge" "$socket" < "$out/link-cards-in" > "$out/link-cards-out" \
+    2> "$out/link-cards-bridge.log" &
+fi
+exec 4> "$out/link-cards-in" 5< "$out/link-cards-out"
+# Sends the JSON-RPC request $1 and prints the bridge's answer, a line read under perl's alarm, as
+# mcp.sh's next_answer does, within 30 s.
+answer() {
+  printf '%s\n' "$1" >&4
+  perl -e 'alarm shift; my $line = "";
+    while (sysread STDIN, my $byte, 1) { $line .= $byte; last if $byte eq "\n" }
+    print $line; exit($line =~ /\n\z/ ? 0 : 1)' 30 <&5 ||
+    fail "the agents server didn't answer $1; the bridge said: $(cat "$out/link-cards-bridge.log")"
+}
+answer '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"check","version":"1"}}}' > /dev/null
+printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}' >&4
+opened=$(answer '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"open_tab","arguments":{"url":"https://cards.test/index.html"}}}')
+agent_tab=$(printf '%s\n' "$opened" | sed -n 's/.*Opened tab \([0-9]*\)\..*/\1/p')
+[ -n "$agent_tab" ] || fail "the agent's open_tab answered: $opened"
+await "^browser: title $agent_tab ready\$" || fail "the agent's tab didn't draw the page with the links"
+# Its card, then its conversation's Pages, then its page's picture, which watches it in place.
+await '^browser: session session-[0-9]* of agent mcp-client as check$' ||
+  fail "the agent's open_tab made no card"
+session=$(sed -n 's/^browser: session \(session-[0-9]*\) of agent mcp-client as check$/\1/p' "$log" | tail -1)
+await "^browser: task plate task-${session#session-} at " || fail "the agent's card wasn't drawn"
+read -r px py pw ph <<PLATE
+$(grep "^browser: task plate task-${session#session-} at " "$log" | tail -1 | cut -d' ' -f6-)
+PLATE
+send click $((px + pw / 2)) $((py + ph / 2))
+expect "^browser: task $session shown\$" "a click on the agent's card didn't show its conversation"
+await '^browser: task pages at ' || fail "the agent's conversation drew no Pages"
+read -r gx gy gw gh <<CHIP
+$(grep '^browser: task pages at ' "$log" | tail -1 | cut -d' ' -f5-)
+CHIP
+send click $((gx + gw / 2)) $((gy + gh / 2))
+expect "^browser: task $session shows pages\$" "a click on Pages didn't show the agent's pages"
+await "^browser: task picture $agent_tab at " || fail "the agent's conversation didn't picture its tab"
+read -r wx wy ww wh <<PICTURE
+$(grep "^browser: task picture $agent_tab at " "$log" | tail -1 | cut -d' ' -f6-)
+PICTURE
+send click $((wx + ww / 2)) $((wy + wh / 2))
+expect "^browser: task $session page $agent_tab\$" "a click on the agent's page's picture didn't watch it"
+expect "^browser: task page $agent_tab in place\$" "the agent's page didn't come to rest in place"
+# A click in it gives it the keyboard, taking it over where the press reaches the host; the page
+# stays the agent's Space's either way.
+send click 600 520
+expect "^browser: title $agent_tab pressed [0-9]*\$" "the agent's page didn't get the click"
+plain_asked=$(asked /plain.html)
+agent_step=$step
+send move $plain_link
+expect '^browser: link target cards.test/plain.html$' \
+  "an agent's page: resting on its link showed no link target"
+expect '^browser: link target window shown$' "an agent's page: the link target's window didn't show"
+send flags shift
+agent_shifted=$step
+expect "^browser: title $agent_tab key Shift [0-9]*\$" "an agent's page: the page didn't get the ⇧"
+expect '^browser: link card not asked: refused$' \
+  "an agent's page: ⇧ on a link with its plate showing asked the core for a card" "$agent_shifted"
+send flags
+! sed -n "/^browser: drive $agent_step: /,\$p" "$log" | grep '^browser: link card \(loading\|page\|failed\)' ||
+  fail "an agent's page: ⇧ on a link showed a card"
+../tools/window-screenshot.sh "$pid" "$out/link-cards-agent.png" > /dev/null 2>&1 || true
+
+exec 4>&- 5<&-
 exec 3>&-
 quit
-echo "link cards: a page's card with its picture, asked without cookie, referrer or certificate; a private address and a redirect to one refused unasked; a page with no picture, one that says nothing, and one loading; and a click in the plate's room reaching the page"
+# Long after either ⇧, neither link's page was asked.
+[ "$(asked /bare.html)" = "$bare_asked" ] ||
+  fail "Link cards off: the server got a request for the link's page: $(grep '^/bare.html ' "$out/link-cards-public.log")"
+[ "$(asked /plain.html)" = "$plain_asked" ] ||
+  fail "an agent's page: the server got a request for the link's page: $(grep '^/plain.html ' "$out/link-cards-public.log")"
+echo "link cards: a page's card with its picture, asked without cookie, referrer or certificate; a private address and a redirect to one refused unasked; a page with no picture, one that says nothing, and one loading; a click in the plate's room reaching the page; and none asked off in Settings › Links, back on turned on, or in an agent's Space, its page watched and taken over"

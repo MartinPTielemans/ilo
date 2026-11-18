@@ -136,11 +136,18 @@ impl Shell {
         let Some(link) = self.link.as_ref().filter(|link| link.tab == tab) else {
             return false;
         };
-        if !self.browser.link_cards() || link_target::card_for(&link.target, cx) {
+        if !self.browser.link_cards() {
+            // check.sh reads this line.
+            log!("browser: link card not asked: off");
+            return false;
+        }
+        if link_target::card_for(&link.target, cx) {
             return false;
         }
         let card = self.browser.link_card(tab);
         if card == 0 {
+            // The core asked nothing, as for a page in an agent's Space. check.sh reads this line.
+            log!("browser: link card not asked: refused");
             return false;
         }
         link_target::card_asked(card, link.target.clone(), cx);
