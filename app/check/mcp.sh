@@ -648,7 +648,8 @@ fi
 # and separates one, each through the core's split calls and checked by its rules, with its entry
 # in the activity log. A tab of the user's is refused, and the split stays as it was.
 for page in a b c; do
-  printf '%s' "<title>Split $page</title><p>Split page $page</p>" > "$out/site/split-$page.html"
+  printf '%s' "<title>Split $page</title><p>Split page $page</p>
+<button onclick=\"document.title = 'pressed'\">Press $page</button>" > "$out/site/split-$page.html"
 done
 split_tab() {
   call open_tab "{\"url\":\"localhost:$port/split-$1.html\"}" |
@@ -699,6 +700,42 @@ refused=$(call separate_tab "{\"tab\":$user_tab}")
   fail "separating the user's tab answered: $refused"
 await_log "^browser: agent activity mcp-client $user_tab separate_tab refused: The tab isn't in the agent's own Space\.\$" \
   "the refused separate didn't reach the activity log"
+# The agent's own click in its page, as the window watches it, isn't the user's press: it comes
+# through DevTools, as the user's would reach the page, and takes nothing over (#3243). The same
+# for the page beside it in its watched split view. Its next action then isn't refused.
+if [ "$driven" = 1 ]; then
+  # Escape steps back to Pages from the page watched, the sidebar first given the keyboard.
+  pages_again() {
+    back='^browser: task page [0-9]* back$'
+    before=$(grep -c "$back" "$log" || true)
+    send click $sidebar_point
+    send key escape
+    await_more "$back" "$before" || fail "Escape didn't step back to Pages from $1"
+  }
+  pages_again "tab $agent_tab"
+  watch "$split_a"
+  presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
+  agent_clicks=$step
+  for tab in $split_a $split_c; do
+    ref=$(call snapshot "{\"tab\":$tab}" | sed -n 's/.*- button "Press [ac]" \[\(e[0-9]*\)\].*/\1/p' | head -1)
+    [ -n "$ref" ] || fail "the snapshot of the split view's tab $tab had no Press button"
+    clicked=$(call click "{\"tab\":$tab,\"ref\":\"$ref\"}")
+    case "$clicked" in "error: "*) fail "the agent's click in its watched split view's tab $tab answered: $clicked" ;; esac
+    await_log "^browser: title $tab pressed\$" "the agent's click in tab $tab didn't reach its page"
+    scrolled=$(call scroll "{\"tab\":$tab}")
+    case "$scrolled" in
+      "error: "*) fail "after its own click in tab $tab, watched in its split view, the agent's scroll answered: $scrolled" ;;
+    esac
+  done
+  send state
+  [ "$(grep -c '^browser: agent page pressed in ' "$log" || true)" = "$presses" ] ||
+    fail "the agent's own clicks in its watched split view reached the app as the user's press: $(since "$agent_clicks" | grep '^browser: agent' | tail -6 | tr '\n' ' ')"
+  since "$agent_clicks" | grep -q -e "^browser: agent mcp-client taken over in $split_a\$" \
+    -e "^browser: agent mcp-client taken over in $split_c\$" &&
+    fail "the agent's own click in its watched split view took its tab over"
+  pages_again "the split view"
+  watch "$agent_tab"
+fi
 # The split views' pages close, so the conversation's grid has the pages the steps after it count on.
 for split_tab in $split_a $split_b $split_c; do
   closed=$(call close_tab "{\"tab\":$split_tab}")

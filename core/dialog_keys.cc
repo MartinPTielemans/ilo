@@ -110,6 +110,12 @@ class DialogKeys : public ui::EventHandler, public views::WidgetObserver {
       Window::DialogPressed(window_, dialog_);
     }
   }
+  // A finger on a touch screen, which views gives the dialog as a touch, not a mouse press.
+  void OnTouchEvent(ui::TouchEvent* event) override {
+    if (event->type() == ui::EventType::kTouchPressed && event->phase() == ui::EP_PRETARGET) {
+      Window::DialogPressed(window_, dialog_);
+    }
+  }
 
   // The page |page| took the keyboard: if this dialog shows over it, the dialog takes it back, as
   // Chrome's dialog manager does on a key or wheel the page ignored. A click the page ignores isn't
