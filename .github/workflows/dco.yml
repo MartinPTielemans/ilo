@@ -50,8 +50,20 @@ jobs:
             // their own.
             const own = commits.filter((c) => c.parents.length < 2);
             const signedOff = /^Signed-off-by: \S.* <[^<>\s]+@[^<>\s]+>\s*$/m;
-            const aiTool = /\b(claude|anthropic|openai|codex|copilot|cursor|chatgpt|gpt|gemini|devin)\b/i;
-            const credit = /^(co-authored-by:|\W*generated (with|by)\b)/i;
+            // A tool's Co-Authored-By is told by what only a tool has: its maker's address, a bot's
+            // GitHub address, or a name that is the tool's own fixed trailer. A person called
+            // Claude or Devin, with an address of their own, passes.
+            const coAuthor = /^co-authored-by:\s*([^<]*?)\s*(?:<([^<>\s]*)>)?\s*$/i;
+            const toolAddress =
+              /@(?:[\w-]+\.)*(?:anthropic\.com|openai\.com|cursor\.com|cognition\.ai)$|^(?:\d+\+)?(?:copilot|[\w-]+\[bot\])@users\.noreply\.github\.com$/i;
+            const toolName =
+              /^(?:claude code|claude (?:opus|sonnet|haiku|fable)\b.*|(?:github )?copilot|cursor agent|devin ai|chatgpt)$/i;
+            const toolCredit = (l) => {
+              const m = coAuthor.exec(l);
+              return m !== null && (toolAddress.test(m[2] || "") || toolName.test(m[1]));
+            };
+            // Nobody signs as generated, so any tool's name there will do.
+            const generated = /^\W*generated (with|by)\b.*\b(claude|anthropic|openai|codex|copilot|cursor|chatgpt|gpt|gemini|devin)\b/i;
             // The template's types, and check and spike, which main uses; a diag or wip commit
             // stays on a probe branch.
             const title =
@@ -63,7 +75,7 @@ jobs:
                 fix: "`git rebase --signoff <base>` adds yours to every commit (CONTRIBUTING.md#sign-off)",
               },
               {
-                breaks: (m) => m.split("\n").some((l) => credit.test(l) && aiTool.test(l)),
+                breaks: (m) => m.split("\n").some((l) => toolCredit(l) || generated.test(l)),
                 what: 'a Co-Authored-By or "Generated with" line naming an AI tool',
                 fix: "authorship is human (CONTRIBUTING.md#sign-off): reword the commit without the line",
               },
