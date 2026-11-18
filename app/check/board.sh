@@ -627,7 +627,7 @@ expect "^browser: loaded [0-9]* chrome://board/$id\$" "the Board's address didn'
 ../tools/window-screenshot.sh "$pid" "$out/board-private.png" || fail "no window to capture"
 
 # 1b: a Board kept across a relaunch. Its tab comes back named, the bar finds it by the start of its
-# name, and its page reads its file: a pan saves it with its note. The Japanese note's is kept too.
+# name, and its page reads its file: a pan saves it with its note. The first note's is kept too.
 exec 3>&-
 quit
 log="$out/board-restored.log"
@@ -651,8 +651,8 @@ send scroll 640 400 40 5
 saved_after "$saves" "a pan on the Board after the relaunch wasn't saved"
 grep -q 'shelves over the sink' "$folder/board.json" ||
   fail "the Board's save after the relaunch lost its note: $(head -c 300 "$folder/board.json")"
-grep -q '日本語' "$loft/board.json" ||
-  fail "the Japanese note's Board lost it across the relaunch: $(head -c 300 "$loft/board.json")"
+grep -q "$note" "$loft/board.json" ||
+  fail "the first note's Board lost it across the relaunch, \"$note\": $(head -c 300 "$loft/board.json")"
 written=$(grep -v '^browser: drive [0-9]*: ' "$log" | grep 'shelves\|kitchen\|pantry\|日本語\|loft' | head -1)
 [ -z "$written" ] || fail "the relaunch's log says what a Board holds or its name: $written"
 quit
