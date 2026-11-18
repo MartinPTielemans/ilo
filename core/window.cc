@@ -1876,8 +1876,9 @@ void Window::Show(content::WebContents* contents, const gfx::Rect& frame) {
   // Chrome hides a tab's dialog as the tab leaves the front, and shows it again only as its page
   // goes from hidden to visible. A pane of a split stays visible while another has the focus, so
   // its dialog, as Chrome's warning before http, shows again here as its pane takes the focus
-  // (#3196, #3233). Only then: showing a dialog gives it the keyboard.
-  if (newly_shown) {
+  // (#3196, #3233). Only then: showing a dialog gives it the keyboard. Never an agent's tab's,
+  // which never takes the user's keyboard (#3164): a watched one's dialog shows as Chrome shows it.
+  if (newly_shown && !IsAgentTab(contents)) {
     tabs::TabFeatures* features = tabs::TabInterface::GetFromContents(contents)->GetTabFeatures();
     if (tabs::TabDialogManager* dialogs = features ? features->tab_dialog_manager() : nullptr;
         dialogs && dialogs->UpdateDialogVisibility()) {
