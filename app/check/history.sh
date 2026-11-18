@@ -319,6 +319,15 @@ stored "$nearby" "1 1 1" "Clear Site Data and Reload on 127.0.0.1 lost $nearby's
 # bar in the user's window: an agent's tab never takes the user's keyboard, as its warning took it
 # on Windows (#3164).
 agent_steps() {
+  # The agent's warning is its tab's, which no window shows: it isn't shown in the user's window
+  # either, as Chrome keeps a tab's dialog hidden while its tab is (#3164).
+  no_agent_dialog() {
+    [ "$major" -ge 157 ] || return 0
+    send layout
+    shown=$(since | sed -n 's/^browser: layout child //p' | head -1)
+    [ -z "$shown" ] ||
+      fail "the agent's warning before http, after $1 in its own Space, showed at $shown in the user's window, which shows the user's tab: $(since | grep '^browser: layout' | tr '\n' ' ')"
+  }
   send agentspace claude-code Claude Code
   expect '^browser: made space [1-9][0-9]* for agent claude-code$' "the driver didn't make the agent's Space"
   before=$(tls)
@@ -326,11 +335,13 @@ agent_steps() {
   expect '^browser: agent claude-code opened [1-9][0-9]*$' "the agent didn't open http://$agent_opened/"
   agent_tab=$(sed -n 's/^browser: agent claude-code opened \([0-9]*\)$/\1/p' "$log" | tail -1)
   upgraded "$agent_tab" "$agent_opened" "the agent's open_tab"
+  no_agent_dialog "its open_tab"
   before=$(tls)
   send agentnavigate claude-code "$agent_tab" "http://$agent_moved/"
   expect "^browser: agent claude-code navigated $agent_tab: 1\$" \
     "the core didn't take the agent's navigate to http://$agent_moved/"
   upgraded "$agent_tab" "$agent_moved" "the agent's navigate"
+  no_agent_dialog "its navigate"
   agent_at="at Chrome's warning before http"
   [ "$major" -ge 157 ] || agent_at="loaded over http"
   send key l cmd

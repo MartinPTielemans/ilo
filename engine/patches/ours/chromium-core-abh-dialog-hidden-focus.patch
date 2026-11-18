@@ -1,0 +1,27 @@
+Focuses the warning before http's button only while the warning shows. Chrome
+focuses it as the dialog is made, even for a tab that isn't showing, whose
+dialog the tab dialog manager shows inactive and hides at once. The core gives
+a tab's dialog a window of its own on Windows (PageDialogsInOwnWindow), and
+focusing a view in a hidden window activates it there, so an agent's tab at
+the warning took the keyboard from the user's window (#3164). The inactive
+show already stores the button for the dialog's activation, which focuses it
+as the tab comes forward.
+
+--- a/chrome/browser/ssl/ask_before_http_dialog_controller.cc
++++ b/chrome/browser/ssl/ask_before_http_dialog_controller.cc
+@@ -254,7 +254,14 @@
+   // Explicitly call RequestFocus() to ensure initially focused view is focused.
+   views::View* focused_view = model_host->GetInitiallyFocusedView();
+   CHECK(focused_view);
+-  focused_view->RequestFocus();
++  // browser_core: only while the dialog shows. A dialog of a tab that isn't
++  // showing was shown inactive, which stored this view for its activation, and
++  // hidden. Focusing a view in it activates its hidden window on Windows, where
++  // the dialog is a window of its own, so it took the keyboard from the window
++  // the user was in (#3164).
++  if (dialog_widget_->IsVisible()) {
++    focused_view->RequestFocus();
++  }
+ #else
+   current_dialog_model_ = dialog_model.get();
+   ui::ModalDialogWrapper::ShowTabModal(std::move(dialog_model), window);
