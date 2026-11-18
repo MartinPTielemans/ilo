@@ -137,9 +137,9 @@ jobs:
             --wayland-display ilo-mutter > "$out/mutter.log" 2>&1 &
           mutter=$!
           until_true "[ -S '$XDG_RUNTIME_DIR/ilo-mutter' ]" 30 || { cat "$out/mutter.log"; exit 1; }
-          relaunch_case mutter-normal ilo-mutter none
-          relaunch_case mutter-maximized ilo-mutter maximized
-          relaunch_case mutter-fullscreen ilo-mutter fullscreen
+          # Ten maximized relaunches under mutter, to tell never from rarely, and full screen twice.
+          for i in $(seq 10); do relaunch_case mutter-maximized-$i ilo-mutter maximized; done
+          for i in 1 2; do relaunch_case mutter-fullscreen-$i ilo-mutter fullscreen; done
           kill "$mutter"; wait "$mutter" 2>/dev/null
 
           # sway, headless, as tools/headless.sh starts it, for the same maximized relaunch.
@@ -150,7 +150,7 @@ jobs:
           sway=$!
           until_true "ls '$XDG_RUNTIME_DIR' | grep -q '^wayland-[0-9]*\$'" 30 || { cat "$out/sway.log"; exit 1; }
           display=$(ls "$XDG_RUNTIME_DIR" | grep -m1 '^wayland-[0-9]*$')
-          relaunch_case sway-maximized "$display" maximized
+          for i in 1 2 3; do relaunch_case sway-maximized-$i "$display" maximized; done
           kill "$sway"; wait "$sway" 2>/dev/null
           cat "$out/summary.txt"
       - if: ${{ !cancelled() }}
