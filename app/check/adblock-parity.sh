@@ -285,17 +285,20 @@ look_content() {
 # says, gets k, YouTube's play key, once, as a user's press of play, and so does a cued video,
 # which waits for that press (#3272). Before the player has asked to play, the key would start the
 # video, and the player's own start would then pause it. What got it playing is "refused" or
-# "cued", which got the press, or else the player's state when last read, as cdp.py says it.
+# "cued", which got the press, or else the player's state when last read, as cdp.py says it,
+# with why that reading wasn't pressed: only printed, as nothing compares it (#3272).
 videos="$dir/videos.txt"
 : > "$videos"
 watch_video() {
   # Not site, the check's server, which a later pass in the same shell builds its pages on.
-  watched=$1 ad=no-ad played=none met= state=- since=$(date +%s)
+  watched=$1 ad=no-ad played=none met= state=- why= since=$(date +%s)
   while [ $(($(date +%s) - since)) -lt 30 ]; do
-    # The seconds, playing or paused, ad or no-ad, then refused, cued or the player's state.
+    # The seconds, playing or paused, ad or no-ad, then refused, cued or the player's state, and
+    # after a state why it isn't refused.
     set -- $(video https://www.youtube.com/watch)
-    if [ $# = 4 ]; then
+    if [ $# -ge 4 ]; then
       state=$4
+      why=$(echo "$*" | cut -d' ' -f5-)
       case $4 in
         refused | cued)
           if [ -z "$met" ]; then
@@ -313,7 +316,8 @@ watch_video() {
     fi
     sleep 0.5
   done
-  echo "$watched $ad $played ${met:-$state}" >> "$videos"
+  if [ -n "$met" ]; then why=; fi
+  echo "$watched $ad $played ${met:-$state} $why" >> "$videos"
 }
 # Each site: when Return went, in ms since the epoch, then the site, then the load's time and what
 # loaded, or "none" for a load that didn't come within 45 s, then "bot-check" where Cloudflare's
@@ -464,9 +468,9 @@ for line in open(starts, encoding="utf-8"):
 # A watch page's video: "ad" or "no-ad", the seconds it played or none, then what got it playing.
 videos = {}
 for line in open(watched, encoding="utf-8"):
-    url, ad, played, met = line.split()
+    url, ad, played, met, *why = line.split()
     videos[url] = {"ad": ad == "ad", "played": None if played == "none" else float(played),
-                   "met": met}
+                   "met": met, "why": why}
 
 # What a site's page showed: its text's characters, its pictures, and whether it was covered.
 contents = {}
@@ -496,8 +500,19 @@ def video_said(video):
     if met and plays(video):
         return f"{said}, by itself with no press"
     if met:
-        return f"{said}, neither refused nor cued, so not pressed, its state {STATES.get(met, met)}"
+        said = f"{said}, neither refused nor cued, so not pressed, its state {STATES.get(met, met)}"
+        return said + why_said(video.get("why"))
     return said
+
+
+# Why a reading wasn't pressed, as cdp.py's words after the state give it (#3272): whether the
+# player asked to play, whether it still says unstarted, the video's readyState, and the page.
+def why_said(why):
+    if not why or len(why) != 6:
+        return ""
+    asked, unstarted, _, data, visibility, focus = why
+    return (f", asked to play {'yes' if asked == 'asked' else 'no'}, unstarted "
+            f"{'yes' if unstarted == 'unstarted' else 'no'}, data {data}, page {visibility}, {focus}")
 
 
 def why_not(mine):
