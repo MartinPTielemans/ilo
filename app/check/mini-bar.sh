@@ -529,6 +529,33 @@ if [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 1
     sed -n "$((n + 1)),\$p" "$log" | grep 'before the page: ' | grep -qv 'before the page: page$' &&
       fail "${chord%,*} in Safari's engine's page went elsewhere: $(sed -n "$((n + 1)),\$p" "$log" | grep 'before the page' | tail -2)"
   done
+  # A record for #3359, never a pass or a fail: whether F6, Chrome's key out of a page, and the
+  # command bar's Focus Sidebar take the keyboard from Safari's engine's page to the sidebar's ring.
+  # Arrow $2 after way $1 says which has the keyboard: it moves the ring, as ↑ always does to New
+  # Tab's row, or the page sees it, which its line shows only when its last key was another.
+  where_keys_went() {
+    send key "$2"
+    expect "^browser: sidebar keyed \|^browser: title $tab .* key Arrow" "$2 after $1 went nowhere"
+    if logged '^browser: sidebar keyed '; then
+      echo "record: $1 -> the ring has the keyboard, as $2 moved it; key $key, focus $focus"
+      send key escape
+      expect '^browser: sidebar keys left by escape$' "escape didn't take the ring away after $1"
+    else
+      echo "record: $1 -> Safari's engine's page has the keyboard, as it saw $2; key $key, focus $focus"
+    fi
+    sed -n "$((n + 1)),\$p" "$log" | grep -e '^browser: command ' -e '^browser: sidebar ' -e 'before the page: ' |
+      sed 's/^/record:   /'
+  }
+  send click $page_point
+  n=$(wc -l < "$log")
+  send key f6
+  where_keys_went "F6 on the page" up
+  send click $page_point
+  send key escape
+  page_says " key Escape " "Safari's engine's page didn't see escape before Focus Sidebar"
+  n=$(wc -l < "$log")
+  bar_command focus-sidebar "Focus Sidebar" "focus sidebar"
+  where_keys_went "the command bar's Focus Sidebar from the page" up
   send click $sidebar_point
   n=$(wc -l < "$log")
   for chord in up down "z cmd" escape; do
