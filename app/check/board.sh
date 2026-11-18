@@ -5,13 +5,14 @@
 # its own Board's folder alone, and no log line says what the note or the name is. Library › Boards
 # lists it. Renamed while open, opened from the command bar by the start of its name, unpinned,
 # archived and reopened, it's still only "(a Board)" in the log, never its name, and the reopened
-# page reads its file: a change keeps the note. A Board whose file holds markup in a note's text and
-# a javascript: link runs neither. A picture waiting in a Board's arrivals lands as a card when the
-# Board opens, and leaves the list once the card is saved; one that comes while its tab isn't
-# showing lands when it's shown, a step from the first, both captured. A Board's file over 4 MiB,
-# which the host doesn't read, says so and is never written over, captured, as is one holding []
-# rather than a Board. A private window has no New Board, and a Board's address there shows "This
-# Board isn't here.", captured. Japanese input as the first keys is the hosted Mac's.
+# page reads its file: a change keeps the note. Reloaded, and left for a web page, it leaves the
+# browser running. A Board whose file holds markup in a note's text and a javascript: link runs
+# neither. A picture waiting in a Board's arrivals lands as a card when the Board opens, and leaves
+# the list once the card is saved; one that comes while its tab isn't showing lands when it's shown,
+# a step from the first, both captured. A Board's file over 4 MiB, which the host doesn't read, says
+# so and is never written over, captured, as is one holding [] rather than a Board. A private window
+# has no New Board, and a Board's address there shows "This Board isn't here.", captured. Japanese
+# input as the first keys is the hosted Mac's.
 
 log="$out/board.log"
 step=0
@@ -121,6 +122,19 @@ done
   fail "a pan on the reopened Board wasn't saved: $(grep 'browser: board ' "$log" | tail -1)"
 grep -q 'shelves over the sink' "$folder/board.json" ||
   fail "the reopened Board's save lost its note: $(head -c 300 "$folder/board.json")"
+
+# A reload of the Board, and a load away from it to a web page, drop what its page had on its way
+# and leave the browser running (#3427); back brings the Board again for the steps after.
+send key r cmd
+expect "^browser: loaded $board chrome://board/$id\$" "⌘R didn't load the Board again"
+serve
+send key l cmd
+expect '^browser: command bar shown$' "⌘L on the Board didn't open the command bar"
+send type "${site}page.html"
+send key return
+expect "^browser: loaded $board ${site}page.html\$" "the Board's tab didn't load the page typed in the bar"
+history_key left back page
+expect "^browser: loaded $board chrome://board/$id\$" "back didn't bring the Board again"
 
 # 1c: a Board whose note's text is markup, and a link to javascript:, runs neither: each would
 # take the page to #ran, which its page line would say, as a Board's title is never logged. Its id

@@ -362,7 +362,7 @@ class BoardHandler : public content::WebUIMessageHandler {
   void OnJavascriptDisallowed() override {
     weak_factory_.InvalidateWeakPtrs();
     if (!writes_.is_null()) {
-      writes_.AsyncCall(&Writes::Drop);
+      writes_.AsyncCall(base::IgnoreResult(&Writes::Drop));
     }
   }
 
@@ -470,7 +470,7 @@ class BoardHandler : public content::WebUIMessageHandler {
     // A wall against a page that goes wrong, not the budget: by now the UI thread has carried the
     // slice. The write it was part of goes.
     if (args[1].GetBlob().size() > board::kSlice) {
-      writes_.AsyncCall(&Writes::Drop);
+      writes_.AsyncCall(base::IgnoreResult(&Writes::Drop));
       Answer(args[0].Clone(), base::Value(false));
       return;
     }
