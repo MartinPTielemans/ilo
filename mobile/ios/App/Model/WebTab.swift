@@ -45,6 +45,15 @@ final class WebTab: NSObject, Identifiable {
   @ObservationIgnored private var observations: [NSKeyValueObservation] = []
   @ObservationIgnored private var reloadedAfterCrash = false
   @ObservationIgnored private var writes = NavigationWrites()
+  /// The phone's history, which this tab's pages are written to. A private tab, when the phone
+  /// has them, is made with none: `reached` is a page's only way into history, so nothing a
+  /// private tab opens has a way in, whatever else of the tab comes to tell history something.
+  @ObservationIgnored private let history: History?
+  @ObservationIgnored private var visits = VisitWrites()
+  /// The visit written for the page the tab is on, whose title follows the page's.
+  @ObservationIgnored private var visit: Int64?
+  /// Where the page is in the tab's own back and forward list.
+  @ObservationIgnored private var entry: WKBackForwardListItem?
   @ObservationIgnored private var shrink = BarShrink()
   /// The home indicator's band under the page, once the page has been in a window.
   @ObservationIgnored private var band: CGFloat = 0
@@ -65,6 +74,7 @@ final class WebTab: NSObject, Identifiable {
     self.id = id
     self.role = role
     self.browser = browser
+    history = browser.history
 
     let configuration = WKWebViewConfiguration()
     configuration.allowsInlineMediaPlayback = true
@@ -112,6 +122,7 @@ final class WebTab: NSObject, Identifiable {
     observe(\.title) { tab, view in
       tab.title = view.title ?? ""
       tab.settle(finished: false)
+      tab.titled()
     }
     observe(\.estimatedProgress) { $0.progress = $1.estimatedProgress }
     observe(\.canGoBack) { $0.canGoBack = $1.canGoBack }
@@ -131,11 +142,13 @@ final class WebTab: NSObject, Identifiable {
       })
   }
 
-  /// Loads an address: one the user `entered`, or the tab's own.
-  func load(_ url: URL, entered: Bool = false) {
+  /// Loads an address: one the user `entered`, or the tab's own. `typed` is an address they
+  /// wrote out in the search field, as against a search, a link or a tile.
+  func load(_ url: URL, entered: Bool = false, typed: Bool = false) {
     failure = nil
     if entered { writes.enter() } else { writes.own() }
     unsent.load(entered: entered)
+    visits.load(typed: typed)
     webView.load(URLRequest(url: url))
   }
 
@@ -143,10 +156,15 @@ final class WebTab: NSObject, Identifiable {
   func restore(_ state: Data, else url: URL) {
     writes.own()
     unsent.load(entered: false)
+    visits.restore()
     webView.interactionState = state
     // A state that took has a page to be on, which WebKit loads by itself: loading it here too
     // would add the page to its own history at every return.
-    if webView.backForwardList.currentItem == nil { load(url) }
+    if webView.backForwardList.currentItem == nil {
+      load(url)
+      // Loaded by hand, and still the page the tab was on coming back: no visit.
+      visits.restore()
+    }
   }
 
 
@@ -162,6 +180,7 @@ final class WebTab: NSObject, Identifiable {
     if webView.url == nil, let url {
       writes.own()
       unsent.load(entered: false)
+      visits.load(typed: false)
       webView.load(URLRequest(url: url))
     } else {
       webView.reload()
@@ -213,6 +232,27 @@ final class WebTab: NSObject, Identifiable {
     committed = now
     writes.move()
     swipe.arrived()
+    let inPlace = webView.backForwardList.currentItem === entry
+    entry = webView.backForwardList.currentItem
+    // The title is the page's own already, or soon will be.
+    if let page = visits.move(to: now, inPlace: inPlace) { reached(page, title: title) }
+  }
+
+  // MARK: History
+
+  /// Writes a page reached to the phone's history, which is this tab's only word to it but the
+  /// page's title.
+  private func reached(_ page: VisitWrites.Reached, title: String) {
+    visit = history?.visited(page.url, title: title, typed: page.typed)
+  }
+
+  /// The page said its title, or changed it, and its visit takes it. Looked at afterwards, as an
+  /// address WebKit said changed just before is: a page that draws its own views moves and then
+  /// says its title, which is the new view's.
+  private func titled() {
+    Task {
+      if let visit { history?.titled(visit, title) }
+    }
   }
 
   // MARK: Typed text
@@ -403,6 +443,7 @@ extension WebTab: WKNavigationDelegate {
         }
       writes.ask(cause)
       unsent.ask(cause == .reload ? .reload : .leaves)
+      visits.ask(reload: cause == .reload)
     }
     return (.allow, preferences)
   }
@@ -430,6 +471,7 @@ extension WebTab: WKNavigationDelegate {
     isLoading = true
     writes.start()
     unsent.start()
+    visits.start()
   }
 
   func webView(_ webView: WKWebView, didReceiveServerRedirectForProvisionalNavigation navigation: WKNavigation!) {
@@ -444,18 +486,24 @@ extension WebTab: WKNavigationDelegate {
     writes.commit()
     keep(unsent.commit())
     swipe.arrived()
+    entry = webView.backForwardList.currentItem
+    // Written now, when the page is known, without a title: the one still showing is the page
+    // before's, and this page's follows when it says it.
+    if let page = visits.commit(at: webView.url) { reached(page, title: "") }
   }
 
   func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
     reloadedAfterCrash = false
     isLoading = false
     settle(finished: true)
+    titled()
     putBackTyped()
     browser?.finished(self)
   }
 
   func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
     writes.fail()
+    visits.fail()
     fail(error)
   }
 

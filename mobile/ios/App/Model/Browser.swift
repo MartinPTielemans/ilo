@@ -54,6 +54,8 @@ final class Browser {
   let settings: Settings
   let cache: TabCache
   let favicons: Favicons
+  /// The phone's history, which each tab made here writes its pages to. None keeps none.
+  @ObservationIgnored let history: History?
   @ObservationIgnored let places = Places()
 
   /// The Space on screen.
@@ -92,11 +94,12 @@ final class Browser {
   /// The time iOS gives the account to send what changed after the app leaves the screen.
   @ObservationIgnored private var sending = UIBackgroundTaskIdentifier.invalid
 
-  init(account: any IloAccount, settings: Settings, cache: TabCache, favicons: Favicons) {
+  init(account: any IloAccount, settings: Settings, cache: TabCache, favicons: Favicons, history: History? = nil) {
     self.account = account
     self.settings = settings
     self.cache = cache
     self.favicons = favicons
+    self.history = history
     space = settings.space
     wantsKeyboard = settings.keyboardOnLaunch
     (account as? PhoneAccount)?.joined = { [weak self] in self?.joined($0) }
@@ -137,20 +140,23 @@ final class Browser {
     show(tab, from: places.frames[node.id].map { Zoom(rect: $0, ontoCard: node.kind == .today) })
   }
 
-  /// Opens an address as a new Today tab of the Space on screen.
-  func openNew(_ url: URL, title: String = "") {
+  /// Opens an address as a new Today tab of the Space on screen. `typed` is one written out in
+  /// the search field.
+  func openNew(_ url: URL, title: String = "", typed: Bool = false) {
     guard let space = currentSpace else { return }
     let node = account.openToday(url: url, title: title, in: space.id)
-    show(make(node, at: url, entered: true), from: nil)
+    show(make(node, at: url, entered: true, typed: typed), from: nil)
   }
 
   /// What return does in the field: on the Space, a new tab; over a page, that page goes there.
   func go(_ destination: Destination) {
+    // An address is typed. A search is the field's own address for the words, which nobody wrote.
+    let typed = if case .page = destination { true } else { false }
     if searchingPage, let page {
       searchingPage = false
-      page.load(destination.url, entered: true)
+      page.load(destination.url, entered: true, typed: typed)
     } else {
-      openNew(destination.url)
+      openNew(destination.url, typed: typed)
     }
   }
 
@@ -276,7 +282,7 @@ final class Browser {
   }
 
   /// A web view for a tab: one the user just asked for by `entered` address, or the account's.
-  private func make(_ node: SyncedNode, at url: URL, entered: Bool) -> WebTab {
+  private func make(_ node: SyncedNode, at url: URL, entered: Bool, typed: Bool = false) -> WebTab {
     let tab = WebTab(id: node.id, role: node.kind == .pin ? .pinned(home: url) : .today, browser: self)
     tabs[node.id] = tab
     Task {
@@ -285,7 +291,7 @@ final class Browser {
       if let saved = await cache.saved(of: node.id), saved.url == url {
         tab.restore(saved.state, else: url)
       } else {
-        tab.load(url, entered: entered)
+        tab.load(url, entered: entered, typed: typed)
       }
     }
     return tab

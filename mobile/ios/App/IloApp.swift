@@ -10,7 +10,7 @@ struct IloApp: App {
   init() {
     let phone = makeAccount()
     _phone = State(initialValue: phone)
-    _browser = State(initialValue: Browser(account: phone, settings: Settings(), cache: TabCache(), favicons: Favicons()))
+    _browser = State(initialValue: Browser(account: phone, settings: Settings(), cache: TabCache(), favicons: Favicons(), history: makeHistory()))
   }
 
   var body: some Scene {
@@ -46,6 +46,17 @@ func makeAccount() -> PhoneAccount {
       secrets: KeychainSecretStore(service: Bundle.main.bundleIdentifier ?? "app.ilo.browser.ios"),
       state: FileStateStore(directory: URL.applicationSupportDirectory.appending(path: "Sync"))),
     directory: URL.applicationSupportDirectory.appending(path: "Phone"))
+}
+
+/// The one place the phone's history is made, in a file of its own among the app's.
+func makeHistory() -> History {
+  #if DEBUG
+    if ProcessInfo.processInfo.arguments.contains("-fixture") {
+      // What a made-up account browses stays out of the real history's file, as its tabs do.
+      return History(store: HistoryStore(file: URL.temporaryDirectory.appending(path: "FixturePhone/history.sqlite")))
+    }
+  #endif
+  return History(store: HistoryStore(file: URL.applicationSupportDirectory.appending(path: "History/history.sqlite")))
 }
 
 /// The browser, at once: signed in or not, there's a Space to open pages in.
