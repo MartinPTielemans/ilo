@@ -550,14 +550,15 @@ send flags
 expect "^browser: selected $c in " "letting go of ⌃ on $c didn't show it"
 [ "$(switches_since "$from")" = 2 ] ||
   fail "⌃Tab twice switched $(switches_since "$from") times, not twice: on the first press and as ⌃ went up"
-# A press on a row shows its tab, a.
+# A press on a row shows its tab, a, and the tab the walk passed through, b, doesn't count as shown
+# (#3114), so ⌃⇧Tab goes back to it. The press keeps the walk's ⌃ held, as a hand's does (#3340),
+# and waits for the switcher to draw its rows.
 send key tab ctrl
 expect "^browser: tab switcher lists $c $b $a selected $b\$" \
   "⌃Tab held didn't list $c, $b and $a with $b selected: $(grep '^browser: tab switcher lists ' "$log" | tail -1)"
-if windows; then
-  # Windows' driver brings the browser window in front before a real press, which takes the
-  # keyboard from the switcher and closes it, so the press would land on the page.
-  echo "skip: a press on the switcher's row on Windows, as the driver activates the browser window first"
+expect '^browser: tab switcher drawn$' "the switcher's window didn't draw a frame"
+if [ "$(uname)" = Darwin ]; then
+  echo "skip: a press on the switcher's row on the Mac, where a real ⌃-click is a right click and doesn't pick the row (#3360)"
   held_key right
   expect "^browser: tab switcher selected $a\$" "→ didn't select $a"
   send flags
@@ -582,16 +583,6 @@ expect "^browser: selected $a in " "letting go of ⌃ on $a didn't show it"
 send click $sidebar_point
 switch "tab ctrl" "$c"
 expect '^browser: command recent-tab via ui$' "⌃Tab with the UI focused didn't reach the UI"
-send flags
-# A click ends the walk too. With the switcher shown, a click on a row ends it on the row's tab
-# alone, and the tab the walk passed through doesn't count as shown (#3114), so ⌃⇧Tab goes back
-# to it. The run waits for the switcher, which comes while ⌃ stays held, as the driver's next
-# command could come before or after its delay (#3340).
-switch "tab ctrl" "$a"
-expect '^browser: tab switcher shown$' "⌃Tab held didn't show the switcher"
-send click $(row 1)
-expect "^browser: selected $b in " "a click on the second row didn't show its tab"
-switch "tab ctrl shift" "$a"
 send flags
 send click 100 154
 expect '^browser: command new-tab via sidebar$' "a click on \"+ New Tab\" didn't run New Tab"
