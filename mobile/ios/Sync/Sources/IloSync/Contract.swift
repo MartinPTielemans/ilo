@@ -125,6 +125,9 @@ public protocol IloAccount: AnyObject, Observable {
   /// A Space's Today tabs in the sidebar's order, newest first.
   func today(in space: String) -> [SyncedNode]
   func node(_ id: String) -> SyncedNode?
+  /// Whether a Today tab is this phone's alone, which no other device has: one at an address
+  /// the account doesn't take.
+  func isOnlyHere(_ id: String) -> Bool
 
   /// The default server's address, which the sign-in screen offers.
   static var defaultServer: URL { get }
@@ -203,4 +206,9 @@ public protocol IloPasswords: AnyObject {
   func logins(for page: URL) -> [SavedLogin]
   /// A login's password, decrypted for this call and kept nowhere.
   func password(for login: SavedLogin) throws -> String
+}
+
+extension IloAccount {
+  /// An account's tabs are every device's unless it says otherwise.
+  public func isOnlyHere(_ id: String) -> Bool { false }
 }

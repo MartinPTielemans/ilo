@@ -603,6 +603,8 @@ final class IntegrationTests: XCTestCase {
     // A tab of the phone alone moves on the phone alone, and is the account's where it was
     // moved to once it's at a page the account takes.
     let local = phone.openToday(url: URL(string: "file:///etc/hosts")!, title: "Hosts", in: desk.work)
+    XCTAssertTrue(phone.isOnlyHere(local.id))
+    XCTAssertFalse(phone.isOnlyHere(desk.second))
     XCTAssertEqual(phone.move(local.id, to: desk.home)?.id, local.id)
     XCTAssertEqual(phone.today(in: desk.home).map(\.id), [local.id, desk.second, desk.first])
     XCTAssertEqual(phone.today(in: desk.work), [])
@@ -610,6 +612,7 @@ final class IntegrationTests: XCTestCase {
     await phone.refresh()
     XCTAssertEqual(commits.all.count, sent)
     phone.updateToday(local.id, url: URL(string: "https://example.org/hosts")!, title: "Hosts")
+    XCTAssertFalse(phone.isOnlyHere(local.id))
     await settled(phone)
     all = try await desk.computer.entities()
     XCTAssertEqual(all[local.id]?.entity.space, desk.home)

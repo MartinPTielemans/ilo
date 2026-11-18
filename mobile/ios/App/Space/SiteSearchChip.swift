@@ -7,7 +7,7 @@ extension Browser {
   var siteSearches: [SiteSearch] {
     var mine = settings.favourites.compactMap { $0.url.host() }
     if let space = currentSpace {
-      mine += (account.allPinned(in: space.id) + account.today(in: space.id)).compactMap { $0.url?.host() }
+      mine += (account.allPinned(in: space.id) + today(in: space.id)).compactMap { $0.url?.host() }
     }
     return SiteSearch.ordered(SiteSearch.builtIn, mine: mine)
   }
@@ -17,7 +17,7 @@ extension Browser {
     guard let space = currentSpace else { return [] }
     let typed = typed.trimmingCharacters(in: .whitespaces).lowercased()
     var seen: Set<String> = []
-    return (account.today(in: space.id) + account.allPinned(in: space.id))
+    return (today(in: space.id) + account.allPinned(in: space.id))
       .compactMap { site.query(of: $0.url) }
       .filter { query in
         let lower = query.lowercased()

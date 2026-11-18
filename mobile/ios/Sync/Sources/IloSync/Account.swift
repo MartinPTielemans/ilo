@@ -453,4 +453,8 @@ public final class Account: IloAccount {
   public func node(_ id: String) -> SyncedNode? {
     nodes[id]
   }
+
+  public func isOnlyHere(_ id: String) -> Bool {
+    state.local?[id] != nil
+  }
 }

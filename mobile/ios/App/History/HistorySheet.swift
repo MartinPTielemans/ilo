@@ -237,6 +237,9 @@ struct DayRows<Item: Identifiable, Label: View>: View {
   var older: () -> Void = {}
   let pick: (Item) -> Void
   let forget: (Item) -> Void
+  /// What a row's swipe does, in a word and a symbol: it forgets a page unless the list says
+  /// otherwise.
+  var action: (Item) -> (word: String, symbol: String) = { _ in ("Forget", "trash") }
   @ViewBuilder var label: (Item) -> Label
 
   @Environment(\.palette) private var palette
@@ -264,9 +267,11 @@ struct DayRows<Item: Identifiable, Label: View>: View {
         }
         ForEach(days.reversed(), id: \.start) { day in
           ForEach(day.rows.reversed()) { item in
+            let action = action(item)
             SwipedAside(
               isAside: swiped == item.id,
               stand: { aside in swiped = aside ? item.id : swiped == item.id ? nil : swiped },
+              word: action.word, symbol: action.symbol,
               forget: { drop(item) }
             ) {
               Button {
@@ -275,7 +280,7 @@ struct DayRows<Item: Identifiable, Label: View>: View {
                 label(item)
               }
               .buttonStyle(RowStyle())
-              .accessibilityAction(named: "Forget") { drop(item) }
+              .accessibilityAction(named: Text(action.word)) { drop(item) }
             }
             .upright()
             // VoiceOver reads from the foot as the eye does, the latest row first.
@@ -349,11 +354,13 @@ extension View {
   }
 }
 
-/// A row a swipe draws aside, to the button that forgets its page. Let go most of the way across,
-/// it forgets the page by itself.
+/// A row a swipe draws aside, to the button that forgets its page, or does what the list says
+/// in its `word`. Let go most of the way across, it does that by itself.
 private struct SwipedAside<Row: View>: View {
   let isAside: Bool
   let stand: (Bool) -> Void
+  let word: String
+  let symbol: String
   let forget: () -> Void
   @ViewBuilder var row: Row
 
@@ -370,9 +377,9 @@ private struct SwipedAside<Row: View>: View {
         if aside > 0 {
           Button(action: forget) {
             HStack(spacing: 6) {
-              Image(systemName: "trash")
+              Image(systemName: symbol)
                 .font(.system(size: 14, weight: .semibold))
-              Text("Forget")
+              Text(word)
                 .scaled(14, .semibold, relativeTo: .footnote)
                 .lineLimit(1)
             }

@@ -58,7 +58,7 @@ final class Browser {
     case history
     /// The files the phone has downloaded, and the ones on their way.
     case downloads
-    /// The Today tabs that left this phone's Spaces.
+    /// The Today tabs this phone's Spaces don't show.
     case archive
     /// The dock's tiles past its two rows.
     case more
@@ -73,7 +73,7 @@ final class Browser {
   /// The phone's history, which each tab made here writes its pages to. None keeps none.
   @ObservationIgnored let history: History?
   let downloads: Downloads
-  /// The Today tabs that left this phone's Spaces. None keeps none, and lets none go by itself.
+  /// The Today tabs this phone's Spaces don't show. None keeps none, and lets none go by itself.
   let archive: Archive?
   @ObservationIgnored let places = Places()
 
@@ -167,7 +167,14 @@ final class Browser {
   func open(_ node: SyncedNode) {
     guard node.kind != .folder, let url = node.url else { return }
     let tab = tabs[node.id] ?? make(node, at: url, entered: false)
-    if node.kind == .today { account.sawToday(node.id) }
+    if node.kind == .today {
+      // One that waited in the archive is in its Space again, seen now for every device.
+      if settings.awayTabs.contains(node.id) {
+        settings.awayTabs.remove(node.id)
+        archive?.back(node.id)
+      }
+      account.sawToday(node.id)
+    }
     space = node.space
     show(tab, from: places.frames[node.id].map { Zoom(rect: $0, ontoCard: node.kind == .today) })
   }
@@ -219,20 +226,20 @@ final class Browser {
   /// The tab of the Space on screen that's at an address: a Today tab there now, or a tab pinned there.
   func tab(at url: URL) -> SyncedNode? {
     guard let space = currentSpace else { return nil }
-    return (account.today(in: space.id) + account.allPinned(in: space.id)).first { $0.kind != .folder && $0.url == url }
+    return (today(in: space.id) + account.allPinned(in: space.id)).first { $0.kind != .folder && $0.url == url }
   }
 
   /// The tabs of the Space on screen that match what's typed, best first.
   func tabs(matching query: String) -> [SyncedNode] {
     guard let space = currentSpace else { return [] }
-    return Matches.rank(query, in: account.today(in: space.id) + account.allPinned(in: space.id))
+    return Matches.rank(query, in: today(in: space.id) + account.allPinned(in: space.id))
   }
 
   /// The pages of history that match what's typed, newest first, for the search field: three at
   /// the most, and none that's open in the Space on screen, which shows as its tab.
   func pages(matching query: String) async -> [Visit] {
     guard let history, let space = currentSpace, !query.trimmingCharacters(in: .whitespaces).isEmpty else { return [] }
-    let open = Set((account.today(in: space.id) + account.allPinned(in: space.id)).compactMap(\.url))
+    let open = Set((today(in: space.id) + account.allPinned(in: space.id)).compactMap(\.url))
     // As many more as could be left out for being open.
     let found = (try? await history.store.search(query, limit: Self.historyMatches + open.count)) ?? []
     return Array(found.filter { !open.contains($0.url) }.prefix(Self.historyMatches))
@@ -281,7 +288,7 @@ final class Browser {
   /// The Today tab `offset` after this one in its Space, for a swipe along the bar.
   func step(_ offset: Int) -> Bool {
     guard let shown, let space = currentSpace else { return false }
-    let today = account.today(in: space.id)
+    let today = self.today(in: space.id)
     guard let index = today.firstIndex(where: { $0.id == shown }), today.indices.contains(index + offset) else { return false }
     slide = offset
     open(today[index + offset])
@@ -294,8 +301,10 @@ final class Browser {
     let node = byUser ? archivable(id) : nil
     forget(id)
     account.closeToday(id)
-    // Kept only once it has left: one a newer ilo made stays in its Space, and isn't in both.
-    if let node, account.node(id) == nil { archive?.keep(node, .closed) }
+    guard account.node(id) == nil else { return }
+    if settings.awayTabs.contains(id) { settings.awayTabs.remove(id) }
+    // Kept only once it has left: one a newer ilo made stays where it is, and isn't in both.
+    if let node { archive?.keep(node) }
   }
 
   /// Lets go of everything the phone keeps for a tab that's leaving.
@@ -321,48 +330,99 @@ final class Browser {
     return node
   }
 
-  /// Sends to the archive the Today tabs no device has shown for as long as the setting says,
-  /// counted as the computer counts: from the last showing the account has of each. The tab on
-  /// screen stays, and so does one whose page is playing, which waits another turn.
+  /// A Space's Today tabs as this phone shows them: the account's, without those that wait in
+  /// the archive. Everything that speaks of a Space's open tabs reads them here.
+  func today(in space: String) -> [SyncedNode] {
+    let away = settings.awayTabs
+    let today = account.today(in: space)
+    return away.isEmpty ? today : today.filter { !away.contains($0.id) }
+  }
+
+  /// Works out which Today tabs this phone's Spaces don't show: those no device has shown for
+  /// as long as the setting says, counted as the computer counts, from the last showing the
+  /// account has of each. The tab on screen stays, and so does one whose page is playing, which
+  /// waits another turn. One looked at since, on any device, is back in its Space.
   ///
-  /// Each goes by being closed in the account, which is the only way the computers know, so it
-  /// leaves them too. It runs after a refresh, when the app comes to the front, and never on a
-  /// timer: an idle phone isn't woken to tidy.
+  /// A tab of the account stays the account's: it only waits in the archive here, and each
+  /// computer goes on archiving by its own setting. The account can't say which tabs a
+  /// computer has on screen, so a close from here would take a tab from under one. A tab of
+  /// this phone alone has nowhere else to wait, and is closed.
+  ///
+  /// It runs after a refresh, when the app comes to the front, and when the setting changes,
+  /// never on a timer and never as the Space is drawn: an idle phone isn't woken to tidy, and
+  /// no card leaves from under a finger.
   func archiveUnseen(now: Date = .now) async {
-    guard let archive, let after = settings.archiveAfter.interval, listsEveryTab else { return }
+    guard let archive, listsEveryTab else { return }
     // What the account couldn't fetch may be a showing on another device, an hour ago.
     guard account.problem == nil else { return }
     await archive.loaded()
-    let due = account.spaces.flatMap { account.today(in: $0.id) }.filter { node in
-      guard let seen = node.seen else { return false }
-      return now.timeIntervalSince(seen) >= after
-    }
-    var gone = 0
-    for id in due.map(\.id) where id != shown {
-      if let tab = tabs[id], await tab.isPlaying() {
-        account.sawToday(id)
-        continue
+    var due: [SyncedNode] = []
+    var closed = 0
+    // With Never none is due, and those that waited come back.
+    if let after = settings.archiveAfter.interval {
+      let unseen = account.spaces.flatMap { account.today(in: $0.id) }.filter { node in
+        guard let seen = node.seen else { return false }
+        return now.timeIntervalSince(seen) >= after
       }
-      // Asking the page took a moment, in which the user may have opened the tab or closed it.
-      guard id != shown, let node = archivable(id) else { continue }
-      account.closeToday(id)
-      // One a newer ilo made isn't this one's to close, and stays as it is.
-      guard account.node(id) == nil else { continue }
-      forget(id)
-      if archive.keep(node, .unseen, at: now) { gone += 1 }
+      for id in unseen.map(\.id) where id != shown {
+        if let tab = tabs[id], await tab.isPlaying() {
+          account.sawToday(id)
+          continue
+        }
+        // Asking the page took a moment, in which the user may have opened the tab or closed it.
+        guard id != shown, let node = archivable(id) else { continue }
+        guard account.isOnlyHere(id) else {
+          due.append(node)
+          continue
+        }
+        account.closeToday(id)
+        guard account.node(id) == nil else { continue }
+        forget(id)
+        if archive.keep(node, at: now) { closed += 1 }
+      }
     }
+    // With no account open its tabs didn't close: they're no longer this phone's to list.
+    let ofAccount = (account as? PhoneAccount)?.showsAccount ?? true
+    let left = archive.follow(due, closed: { ofAccount && self.account.node($0) == nil }, at: now)
+    for id in left {
+      // Its web view goes; what brings its page back stays, for when the tab does.
+      live.remove(id)
+      unload(id)
+      places.frames[id] = nil
+      if last == id { last = nil }
+    }
+    let away = Set(due.map(\.id))
+    if away != settings.awayTabs { settings.awayTabs = away }
     archive.prune(now: now)
-    settings.archivedUnseen(gone)
+    settings.archivedUnseen(closed + left.count)
   }
 
-  /// Puts an archived tab back in the Space it was in, or the one on screen if that's gone, as
-  /// a new Today tab there, and opens it.
+  /// Brings a tab back from the archive and opens it. One that waited there is the same tab,
+  /// in its Space again and seen now, which every device hears. One that's closed is a new
+  /// Today tab of the Space it was in, or of the one on screen if that's gone.
   func restore(_ tab: ArchivedTab) {
-    guard let archive, let space = account.spaces.first(where: { $0.id == tab.space }) ?? currentSpace, archive.take(tab) else { return }
+    guard let archive else { return }
+    if let id = tab.node, let node = account.node(id), node.kind == .today {
+      guard archive.take(tab) else { return }
+      slide = 0
+      return open(node)
+    }
+    guard let space = account.spaces.first(where: { $0.id == tab.space }) ?? currentSpace, archive.take(tab) else { return }
     let node = account.openToday(url: tab.url, title: tab.title, in: space.id)
     slide = 0
     self.space = space.id
     show(make(node, at: tab.url, entered: false), from: nil)
+  }
+
+  /// What a row's swipe does in the archive. A closed tab is forgotten. One that waits there is
+  /// still open in the account, so this closes it, by the user's hand, there as on its card,
+  /// and the row is the record of that.
+  func discard(_ tab: ArchivedTab) {
+    if let id = tab.node {
+      close(id)
+    } else {
+      archive?.forget(tab)
+    }
   }
 
   /// A Today tab that stops being shown was seen until now, as the computer has it.
@@ -740,5 +800,7 @@ final class Browser {
     cache.prune(keeping: [])
     await account.signOut()
     space = account.spaces.first?.id
+    // The account's tabs that waited in the archive went with it.
+    await archiveUnseen()
   }
 }

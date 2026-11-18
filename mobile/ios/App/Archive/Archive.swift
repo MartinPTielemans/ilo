@@ -2,8 +2,8 @@ import Foundation
 import IloSync
 import Observation
 
-/// How long a Today tab waits unseen before it goes to the archive: the computer's own choices,
-/// in the seconds its core keeps them as (ARCHIVE_AFTER in app/src/settings.rs).
+/// How long a Today tab waits unseen before this phone's Spaces stop showing it: the computer's
+/// own choices, in the seconds its core keeps them as (ARCHIVE_AFTER in app/src/settings.rs).
 nonisolated enum ArchiveAfter: Double, CaseIterable, Identifiable, Sendable {
   case hours12 = 43_200
   case hours24 = 86_400
@@ -30,35 +30,28 @@ nonisolated enum ArchiveAfter: Double, CaseIterable, Identifiable, Sendable {
   }
 }
 
-/// A Today tab that left one of this phone's Spaces, as the archive keeps it.
+/// A Today tab that left one of this phone's Spaces, as the archive lists it.
 nonisolated struct ArchivedTab: Codable, Identifiable, Equatable, Sendable {
-  /// How it left, which its row says at its end.
-  enum Way: String, Codable, Sendable {
-    /// Nobody looked at it for as long as the setting says.
-    case unseen
-    /// Closed on this phone.
-    case closed
-
-    var word: String {
-      switch self {
-      case .unseen: "Unseen"
-      case .closed: "Closed"
-      }
-    }
-  }
-
   var id = UUID()
   var url: URL
   /// The page's own title, empty if it never said one.
   var title: String
   /// The Space it was in, which it goes back to.
   var space: String
+  /// When it left its Space here, or when it was closed.
   var date: Date
-  var way: Way
+  /// The account's tab this is, while the account has it: one that only waits here, open as
+  /// ever on every other device. None for a tab that's closed, which this is the record of.
+  var node: String?
 
   /// What a row calls the page: its title, or its site's name without one.
   var label: String {
     title.isEmpty ? Site.name(of: url) : title
+  }
+
+  /// What its row says at its end: whether the tab is still open, only unseen, or closed.
+  var word: String {
+    node == nil ? "Closed" : "Unseen"
   }
 }
 
@@ -86,12 +79,14 @@ nonisolated struct ArchiveDay: Identifiable, Equatable, Sendable {
   }
 }
 
-/// The phone's archive: the Today tabs that left its Spaces here, by going unseen too long or by
-/// being closed, each with the way back. It's this phone's own, in a file among the app's, and
-/// never the account's: a computer keeps an archive of its own the same way.
+/// The phone's archive: the Today tabs its Spaces don't show, each with the way back. A tab of
+/// the account that nobody has looked at for as long as the setting says waits here for as long
+/// as the account has it, open as ever on every other device: what a device shows of the account
+/// is that device's choice, and each computer archives by its own setting. A tab that's closed
+/// is kept 30 days. It's this phone's own, in a file among the app's, and never the account's.
 @Observable
 final class Archive {
-  /// How long a tab is kept, and how many at the most, as the computer's archive has it
+  /// How long a closed tab is kept, and how many at the most, as the computer's archive has it
   /// (core/archive.cc).
   nonisolated static let keptFor: TimeInterval = 30 * 24 * 3600
   nonisolated static let most = 500
@@ -131,16 +126,63 @@ final class Archive {
     url.map(Visit.keeps) ?? false
   }
 
-  /// Keeps a Today tab as it leaves its Space, and says whether it did.
-  @discardableResult func keep(_ node: SyncedNode, _ way: ArchivedTab.Way, at date: Date = .now) -> Bool {
+  /// Keeps a Today tab that's closed, and says whether it did. One that waited here is its
+  /// record from now.
+  @discardableResult func keep(_ node: SyncedNode, at date: Date = .now) -> Bool {
     guard node.kind == .today, let url = node.url, Self.keeps(url) else { return false }
-    tabs.insert(ArchivedTab(url: url, title: node.title, space: node.space, date: date, way: way), at: 0)
+    tabs.removeAll { $0.node == node.id }
+    tabs.insert(ArchivedTab(url: url, title: node.title, space: node.space, date: date), at: 0)
     prune(now: date)
     write()
     return true
   }
 
-  /// Takes a tab out for good, as it goes back to its Space. False for one that's gone already.
+  /// Lists the account's Today tabs that are `due` to wait here, and returns those new to the
+  /// list. One listed before that isn't due any more was looked at since, on some device, and
+  /// is back in its Space. One that `closed` says left the account is the record of it from now.
+  @discardableResult func follow(_ due: [SyncedNode], closed: (String) -> Bool, at date: Date = .now) -> [String] {
+    var new = Dictionary(due.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    var kept: [ArchivedTab] = []
+    for var tab in tabs {
+      if let id = tab.node {
+        if let node = new.removeValue(forKey: id) {
+          // As the account has it now.
+          tab.url = node.url ?? tab.url
+          tab.title = node.title
+          tab.space = node.space
+        } else if closed(id) {
+          tab.node = nil
+          tab.date = date
+        } else {
+          continue
+        }
+      }
+      kept.append(tab)
+    }
+    let added = due.compactMap { node in
+      new[node.id].flatMap(\.url).map { ArchivedTab(url: $0, title: node.title, space: node.space, date: date, node: node.id) }
+    }
+    kept = (added + kept).sorted { $0.date > $1.date }
+    if kept != tabs {
+      tabs = kept
+      write()
+    }
+    return added.compactMap(\.node)
+  }
+
+  /// A tab that waited here is in its Space again.
+  func back(_ node: String) {
+    guard tabs.contains(where: { $0.node == node }) else { return }
+    tabs.removeAll { $0.node == node }
+    write()
+  }
+
+  /// Whether any tab here is closed, which is what the trash forgets.
+  var hasClosed: Bool {
+    tabs.contains { $0.node == nil }
+  }
+
+  /// Takes a tab out of the list, as it goes back to its Space. False for one that's gone already.
   func take(_ tab: ArchivedTab) -> Bool {
     guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return false }
     tabs.remove(at: index)
@@ -164,8 +206,9 @@ final class Archive {
     forget { $0.id == tab.id }
   }
 
-  func forgetEverything() {
-    forget { _ in true }
+  /// Forgets the closed tabs. One that only waits here is still open, and stays.
+  func forgetClosed() {
+    forget { $0.node == nil }
   }
 
   /// Puts back what was last forgotten, each at its own time.
@@ -191,10 +234,18 @@ final class Archive {
     }
   }
 
-  /// Lets go of what's been kept its 30 days, and of the oldest past the most kept.
+  /// Lets go of the closed tabs kept their 30 days, and of the oldest past the most kept. One
+  /// that waits here stays for as long as the account has it, or nothing on the phone would
+  /// lead to it.
   func prune(now: Date = .now) {
     let oldest = now.addingTimeInterval(-Self.keptFor)
-    let kept = Array(tabs.filter { $0.date >= oldest }.prefix(Self.most))
+    var closed = 0
+    let kept = tabs.filter { tab in
+      guard tab.node == nil else { return true }
+      guard tab.date >= oldest, closed < Self.most else { return false }
+      closed += 1
+      return true
+    }
     guard kept.count != tabs.count else { return }
     tabs = kept
     write()

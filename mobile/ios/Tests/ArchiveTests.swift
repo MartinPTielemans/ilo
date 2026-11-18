@@ -30,8 +30,12 @@ private func date(_ day: Int, _ hour: Int = 12) -> Date {
   var problem: String?
   /// Tabs a newer ilo made, which this one can't close.
   var newer: Set<String> = []
+  /// Tabs of this phone alone, which no other device has.
+  var own: Set<String> = []
   /// Every showing noted, in order.
   var noted: [String] = []
+  /// Every close asked for, in order.
+  var closes: [String] = []
   let email = ""
   let server = SeenAccount.defaultServer
   let isSyncing = false
@@ -45,6 +49,7 @@ private func date(_ day: Int, _ hour: Int = 12) -> Date {
   }
   func today(in space: String) -> [SyncedNode] { nodes.filter { $0.space == space && $0.kind == .today } }
   func node(_ id: String) -> SyncedNode? { nodes.first { $0.id == id } }
+  func isOnlyHere(_ id: String) -> Bool { own.contains(id) }
 
   func beginSignIn(server: URL) -> SignInPage { SignInPage(url: server, redirect: server) }
   func finishSignIn(redirect: URL) async throws {}
@@ -73,6 +78,7 @@ private func date(_ day: Int, _ hour: Int = 12) -> Date {
     if let index = nodes.firstIndex(where: { $0.id == id }) { nodes[index].seen = .now }
   }
   func closeToday(_ id: String) {
+    closes.append(id)
     if newer.contains(id) {
       problem = "A newer ilo made this."
     } else {
@@ -103,26 +109,71 @@ private func newDirectory() -> URL {
 private let then = date(10)
 
 @Suite @MainActor struct ArchiveUnseenTests {
-  @Test func `a Today tab nobody has seen for as long as the setting says leaves the account for the archive`() async {
+  @Test func `a tab a sleeping computer still shows leaves this phone's Space for the archive, and stays in the account`() async {
     let account = SeenAccount()
+    // Yesterday evening: the last the account heard from the computer that has it on screen.
     let old = account.tab("/old", seen: then, title: "Old")
     let fresh = account.tab("/fresh", seen: then.addingTimeInterval(hour))
     let (browser, archive) = browser(on: account)
 
     // A minute short of the default's twelve hours, nothing goes.
     await browser.archiveUnseen(now: then.addingTimeInterval(12 * hour - 60))
-    #expect(account.nodes.count == 2)
+    #expect(browser.today(in: "work").count == 2)
     #expect(archive.tabs.isEmpty)
 
     let now = then.addingTimeInterval(12 * hour)
     await browser.archiveUnseen(now: now)
-    #expect(account.node(old.id) == nil)
-    #expect(account.node(fresh.id) != nil)
-    #expect(archive.tabs.map(\.url) == [page("https://example.org/old")])
+    #expect(browser.today(in: "work").map(\.id) == [fresh.id])
+    #expect(archive.tabs.map(\.node) == [old.id])
+    #expect(archive.tabs.first?.url == page("https://example.org/old"))
     #expect(archive.tabs.first?.title == "Old")
     #expect(archive.tabs.first?.space == "work")
-    #expect(archive.tabs.first?.way == .unseen)
+    #expect(archive.tabs.first?.word == "Unseen")
     #expect(archive.tabs.first?.date == now)
+    // The account has it as it was: no close was asked for, and nothing was written.
+    #expect(account.node(old.id)?.seen == then)
+    #expect(account.nodes.count == 2)
+    #expect(account.closes.isEmpty)
+    #expect(account.noted.isEmpty)
+  }
+
+  @Test func `what speaks of a Space's open tabs leaves out the ones that wait`() async {
+    let account = SeenAccount()
+    let old = account.tab("/old", seen: then, title: "Old notes")
+    let fresh = account.tab("/fresh", seen: then.addingTimeInterval(11 * hour), title: "Fresh notes")
+    let (browser, _) = browser(on: account)
+    #expect(Set(browser.tabs(matching: "notes").map(\.id)) == [old.id, fresh.id])
+
+    await browser.archiveUnseen(now: then.addingTimeInterval(12 * hour))
+    #expect(browser.today(in: "work").map(\.id) == [fresh.id])
+    #expect(browser.tabs(matching: "notes").map(\.id) == [fresh.id])
+    #expect(browser.tab(at: page("https://example.org/old")) == nil)
+    #expect(browser.tab(at: page("https://example.org/fresh"))?.id == fresh.id)
+    #expect(browser.settings.awayTabs == [old.id])
+  }
+
+  @Test func `a tab looked at on another device since is back in its Space, and listed once when it waits again`() async {
+    let account = SeenAccount()
+    let tab = account.tab("/old", seen: then, title: "Old")
+    let (browser, archive) = browser(on: account)
+    let morning = then.addingTimeInterval(12 * hour)
+    await browser.archiveUnseen(now: morning)
+    #expect(browser.today(in: "work").isEmpty)
+
+    // A computer shows it, which the account hears.
+    account.nodes[0].seen = morning.addingTimeInterval(hour)
+    await browser.archiveUnseen(now: morning.addingTimeInterval(2 * hour))
+    #expect(browser.today(in: "work").map(\.id) == [tab.id])
+    #expect(archive.tabs.isEmpty)
+    #expect(browser.settings.awayTabs.isEmpty)
+
+    // Unseen again for as long, it waits again, and a check after that lists it no second time.
+    await browser.archiveUnseen(now: morning.addingTimeInterval(13 * hour))
+    await browser.archiveUnseen(now: morning.addingTimeInterval(14 * hour))
+    #expect(browser.today(in: "work").isEmpty)
+    #expect(archive.tabs.map(\.node) == [tab.id])
+    #expect(archive.tabs.first?.date == morning.addingTimeInterval(13 * hour))
+    #expect(account.closes.isEmpty)
   }
 
   @Test func `the setting is how long a tab waits, in every Space`() async {
@@ -135,23 +186,40 @@ private let then = date(10)
     await browser.archiveUnseen(now: then.addingTimeInterval(6 * day))
     #expect(archive.tabs.isEmpty)
     await browser.archiveUnseen(now: then.addingTimeInterval(7 * day))
-    #expect(account.nodes.isEmpty)
+    #expect(browser.today(in: "work").isEmpty)
+    #expect(browser.today(in: "home").isEmpty)
     #expect(Set(archive.tabs.map(\.space)) == ["work", "home"])
+    #expect(account.nodes.count == 2)
+
+    // A longer wait brings back those that haven't waited that long.
+    browser.settings.archiveAfter = .days30
+    await browser.archiveUnseen(now: then.addingTimeInterval(7 * day))
+    #expect(browser.today(in: "work").count == 1)
+    #expect(browser.today(in: "home").count == 1)
+    #expect(archive.tabs.isEmpty)
   }
 
-  @Test func `with Never no tab goes by itself, and one the user closes is still kept`() async {
+  @Test func `with Never no tab goes by itself, those that waited come back, and one the user closes is still kept`() async {
     let account = SeenAccount()
     let tab = account.tab("/kept", seen: then)
     let (browser, archive) = browser(on: account)
     browser.settings.archiveAfter = .never
 
     await browser.archiveUnseen(now: then.addingTimeInterval(400 * day))
-    #expect(account.nodes.count == 1)
+    #expect(browser.today(in: "work").count == 1)
+    #expect(archive.tabs.isEmpty)
+
+    browser.settings.archiveAfter = .hours12
+    await browser.archiveUnseen(now: then.addingTimeInterval(400 * day))
+    #expect(browser.today(in: "work").isEmpty)
+    browser.settings.archiveAfter = .never
+    await browser.archiveUnseen(now: then.addingTimeInterval(400 * day))
+    #expect(browser.today(in: "work").map(\.id) == [tab.id])
     #expect(archive.tabs.isEmpty)
 
     browser.close(tab.id)
     #expect(account.nodes.isEmpty)
-    #expect(archive.tabs.map(\.way) == [.closed])
+    #expect(archive.tabs.map(\.word) == ["Closed"])
   }
 
   @Test func `pinned tabs never go, nor a tab with no showing noted, nor one at an address that isn't a web page's`() async {
@@ -163,38 +231,98 @@ private let then = date(10)
       SyncedNode(id: "today:login", kind: .today, space: "work", url: page("https://someone:word@example.org/"), title: "", seen: then),
     ]
     account.tab("/unnoted", seen: nil)
+    // Not one of this phone alone either, which would be closed.
+    account.own = ["today:file", "today:login"]
     let (browser, archive) = browser(on: account)
 
     await browser.archiveUnseen(now: then.addingTimeInterval(400 * day))
     #expect(account.nodes.count == 5)
+    #expect(browser.today(in: "work").count == 3)
     #expect(archive.tabs.isEmpty)
   }
 
-  @Test func `nothing goes while the account couldn't be read`() async {
+  @Test func `nothing changes while the account couldn't be read`() async {
     let account = SeenAccount()
-    account.tab("/old", seen: then)
-    account.problem = "The server couldn't be reached."
+    let waiting = account.tab("/waiting", seen: then)
     let (browser, archive) = browser(on: account)
-
     await browser.archiveUnseen(now: then.addingTimeInterval(day))
-    #expect(account.nodes.count == 1)
-    #expect(archive.tabs.isEmpty)
+    #expect(archive.tabs.map(\.node) == [waiting.id])
+
+    // What it would say of either may be an hour old.
+    account.problem = "The server couldn't be reached."
+    account.nodes[0].seen = then.addingTimeInterval(2 * day)
+    account.tab("/old", seen: then)
+    await browser.archiveUnseen(now: then.addingTimeInterval(3 * day))
+    #expect(archive.tabs.map(\.node) == [waiting.id])
+    #expect(browser.today(in: "work").map(\.url) == [page("https://example.org/old")])
   }
 
-  @Test func `a tab a newer ilo made stays in its Space and out of the archive`() async {
+  @Test func `a tab a newer ilo made waits as any other, and no check asks the account to close one`() async throws {
     let account = SeenAccount()
     let theirs = account.tab("/newer", seen: then)
     account.newer = [theirs.id]
     let (browser, archive) = browser(on: account)
 
     await browser.archiveUnseen(now: then.addingTimeInterval(day))
+    await browser.archiveUnseen(now: then.addingTimeInterval(2 * day))
+    #expect(archive.tabs.map(\.node) == [theirs.id])
+    // The check wrote nothing, so there's nothing for the account to refuse and complain of.
+    #expect(account.closes.isEmpty)
+    #expect(account.problem == nil)
+
+    // The user's own close of it is refused, as on its card: it stays the account's, and waits on.
+    browser.discard(try #require(archive.tabs.first))
     #expect(account.node(theirs.id) != nil)
+    #expect(archive.tabs.map(\.node) == [theirs.id])
+    #expect(browser.today(in: "work").isEmpty)
+  }
+
+  @Test func `a tab that waits and is closed on a computer is kept as closed from then, for thirty days`() async {
+    let account = SeenAccount()
+    let tab = account.tab("/old", seen: then, title: "Old")
+    let (browser, archive) = browser(on: account)
+    await browser.archiveUnseen(now: then.addingTimeInterval(day))
+
+    // It waits for as long as the account has it, however long that is.
+    await browser.archiveUnseen(now: then.addingTimeInterval(90 * day))
+    #expect(archive.tabs.map(\.node) == [tab.id])
+
+    // A computer archives it by its own setting, which closes it in the account.
+    account.nodes = []
+    let closed = then.addingTimeInterval(91 * day)
+    await browser.archiveUnseen(now: closed)
+    #expect(archive.tabs.map(\.title) == ["Old"])
+    #expect(archive.tabs.first?.node == nil)
+    #expect(archive.tabs.first?.word == "Closed")
+    #expect(archive.tabs.first?.date == closed)
+    #expect(browser.settings.awayTabs.isEmpty)
+
+    await browser.archiveUnseen(now: closed.addingTimeInterval(Archive.keptFor + 1))
     #expect(archive.tabs.isEmpty)
-    // Nor when the user closes it.
-    browser.close(theirs.id)
-    #expect(account.node(theirs.id) != nil)
+  }
+
+  @Test func `the swipe on a tab that waits closes it in the account, and its row is the record of that`() async throws {
+    let account = SeenAccount()
+    let old = account.tab("/old", seen: then, title: "Old")
+    let (browser, archive) = browser(on: account)
+    await browser.archiveUnseen(now: then.addingTimeInterval(day))
+    #expect(account.node(old.id) != nil)
+
+    browser.discard(try #require(archive.tabs.first))
+    #expect(account.node(old.id) == nil)
+    #expect(account.closes == [old.id])
+    #expect(archive.tabs.map(\.title) == ["Old"])
+    #expect(archive.tabs.first?.node == nil)
+    #expect(archive.tabs.first?.word == "Closed")
+    // A close isn't a forgetting: there's nothing to undo, and the row is the way back.
+    #expect(archive.forgotten == nil)
+    #expect(browser.settings.awayTabs.isEmpty)
+
+    // The swipe on a closed tab's row forgets it.
+    browser.discard(try #require(archive.tabs.first))
     #expect(archive.tabs.isEmpty)
-    #expect(browser.settings.archiveNote == 0)
+    #expect(archive.forgotten != nil)
+    #expect(account.closes == [old.id])
   }
 
   @Test func `a browser that keeps no archive lets no tab go`() async {
@@ -207,14 +335,15 @@ private let then = date(10)
       downloads: testDownloads(in: directory))
 
     await browser.archiveUnseen(now: then.addingTimeInterval(day))
-    #expect(account.nodes.count == 1)
+    #expect(browser.today(in: "work").count == 1)
   }
 
-  @Test func `the phone's own tabs go the same way, while no account is signed in`() async {
+  @Test func `the phone's own tabs have nowhere else to wait, and are closed and kept, while no account is signed in`() async {
     let directory = newDirectory()
     let phone = PhoneAccount(account: FixtureAccount(signedIn: false), directory: directory.appending(path: "phone"))
     let opened = Date.now
     let tab = phone.openToday(url: page("https://example.org/own"), title: "Own", in: PhoneAccount.space.id)
+    #expect(phone.isOnlyHere(tab.id))
     let (browser, archive) = browser(on: phone, in: directory)
 
     await browser.archiveUnseen(now: opened.addingTimeInterval(11 * hour))
@@ -223,9 +352,43 @@ private let then = date(10)
     #expect(phone.node(tab.id) == nil)
     #expect(archive.tabs.map(\.title) == ["Own"])
     #expect(archive.tabs.first?.space == PhoneAccount.space.id)
+    #expect(archive.tabs.first?.node == nil)
+    #expect(archive.tabs.first?.word == "Closed")
+    #expect(browser.settings.awayTabs.isEmpty)
+    #expect(browser.settings.archiveNote == 1)
   }
 
-  @Test func `coming to the front sends what's due to the archive`() async {
+  @Test func `a tab of this phone alone in an account's Space is closed and kept, and the account's beside it waits`() async {
+    let account = SeenAccount()
+    let own = account.tab("/own", seen: then, title: "Own")
+    let shared = account.tab("/shared", seen: then, title: "Shared")
+    account.own = [own.id]
+    let (browser, archive) = browser(on: account)
+
+    let now = then.addingTimeInterval(day)
+    await browser.archiveUnseen(now: now)
+    #expect(account.closes == [own.id])
+    #expect(account.nodes.map(\.id) == [shared.id])
+    #expect(Set(archive.tabs.map(\.word)) == ["Closed", "Unseen"])
+    #expect(archive.tabs.first { $0.title == "Own" }?.node == nil)
+    #expect(archive.tabs.first { $0.title == "Shared" }?.node == shared.id)
+    #expect(browser.settings.archiveNote == 2)
+  }
+
+  @Test func `an account's tabs on a signed-in phone wait rather than close`() async {
+    let directory = newDirectory()
+    let phone = PhoneAccount(account: FixtureAccount(signedIn: true), directory: directory.appending(path: "phone"))
+    #expect(!phone.isOnlyHere("today:1"))
+    let (browser, archive) = browser(on: phone, in: directory)
+    phone.sawToday("today:1")
+
+    await browser.archiveUnseen(now: Date.now.addingTimeInterval(13 * hour))
+    #expect(phone.node("today:1") != nil)
+    #expect(archive.tabs.map(\.node) == ["today:1"])
+    #expect(browser.today(in: "work").map(\.id) == ["today:2", "today:3"])
+  }
+
+  @Test func `coming to the front works out which tabs wait`() async {
     let account = SeenAccount()
     account.tab("/old", seen: Date.now.addingTimeInterval(-13 * hour))
     account.tab("/fresh", seen: Date.now.addingTimeInterval(-hour))
@@ -233,18 +396,19 @@ private let then = date(10)
 
     browser.foreground()
     #expect(await eventually { archive.tabs.count == 1 })
-    #expect(account.nodes.map(\.url) == [page("https://example.org/fresh")])
+    #expect(browser.today(in: "work").map(\.url) == [page("https://example.org/fresh")])
+    #expect(account.nodes.count == 2)
   }
 
-  @Test func `the first tabs to go by themselves are counted for the note, until it's answered`() async {
+  @Test func `the first tabs to go by themselves are counted for the note, once each, until it's answered`() async {
     let account = SeenAccount()
     account.tab("/a", seen: then)
     account.tab("/b", seen: then)
-    let (browser, _) = browser(on: account)
+    let (browser, archive) = browser(on: account)
 
     await browser.archiveUnseen(now: then.addingTimeInterval(day))
     #expect(browser.settings.archiveNote == 2)
-    // More go before it's answered: one note says them all.
+    // More go before it's answered: one note says them all, and none that waited already again.
     account.tab("/c", seen: then)
     await browser.archiveUnseen(now: then.addingTimeInterval(day))
     #expect(browser.settings.archiveNote == 3)
@@ -254,7 +418,7 @@ private let then = date(10)
     // After that tabs go quietly.
     account.tab("/d", seen: then)
     await browser.archiveUnseen(now: then.addingTimeInterval(day))
-    #expect(account.nodes.isEmpty)
+    #expect(archive.tabs.count == 4)
     #expect(browser.settings.archiveNote == 0)
   }
 }
@@ -306,12 +470,12 @@ private let then = date(10)
     account.tab("/behind", seen: then)
 
     await browser.archiveUnseen(now: Date.now.addingTimeInterval(400 * day))
-    #expect(account.nodes.map(\.id) == [tab.id])
+    #expect(browser.today(in: "work").map(\.id) == [tab.id])
     #expect(archive.tabs.map(\.url.path) == ["/behind"])
     #expect(browser.page === tab)
   }
 
-  @Test func `a tab whose page is playing stays, seen now, and goes once it has stopped`() async throws {
+  @Test func `a tab whose page is playing stays, seen now, and waits once it has stopped`() async throws {
     let server = try await server()
     let account = SeenAccount()
     let (browser, archive) = browser(on: account)
@@ -330,16 +494,17 @@ private let then = date(10)
 
     let noted = account.noted.count
     await browser.archiveUnseen(now: Date.now.addingTimeInterval(13 * hour))
-    #expect(account.node(tab.id) != nil)
+    #expect(browser.today(in: "work").map(\.id) == [tab.id])
     #expect(archive.tabs.isEmpty)
     #expect(account.noted.count == noted + 1)
 
     _ = await tab.run("document.querySelector('audio').pause()")
     #expect(await eventually { await !tab.isPlaying() })
     await browser.archiveUnseen(now: Date.now.addingTimeInterval(13 * hour))
-    #expect(account.node(tab.id) == nil)
+    #expect(browser.today(in: "work").isEmpty)
+    #expect(account.node(tab.id) != nil)
     #expect(archive.tabs.map(\.url.path) == ["/playing"])
-    #expect(archive.tabs.first?.way == .unseen)
+    #expect(archive.tabs.first?.node == tab.id)
   }
 
   @Test func `a page that stops being shown was seen until then`() async throws {
@@ -380,7 +545,7 @@ private let then = date(10)
     let closed = try #require(browser.page)
     browser.close(closed.id)
     #expect(archive.tabs.map(\.title) == ["Closed by hand"])
-    #expect(archive.tabs.first?.way == .closed)
+    #expect(archive.tabs.first?.word == "Closed")
     #expect(archive.tabs.first?.space == "work")
 
     browser.openNew(server.url("/itself"))
@@ -390,7 +555,7 @@ private let then = date(10)
     #expect(archive.tabs.count == 1)
   }
 
-  @Test func `an archived tab opens again as a Today tab of the Space it was in`() async throws {
+  @Test func `a tab that waits comes back as the same tab, seen now for every device, and opens`() async throws {
     let server = try await server()
     let account = SeenAccount()
     account.nodes = [
@@ -399,34 +564,87 @@ private let then = date(10)
     ]
     let (browser, archive) = browser(on: account)
     await browser.archiveUnseen(now: then.addingTimeInterval(day))
-    #expect(account.nodes.isEmpty)
+    #expect(browser.today(in: "home").isEmpty)
     #expect(browser.currentSpace?.id == "work")
     browser.sheet = .archive
 
     let back = try #require(archive.tabs.first { $0.title == "Back" })
     browser.restore(back)
     #expect(archive.tabs.map(\.title) == ["Other"])
-    let node = try #require(account.today(in: "home").first)
-    #expect(node.url == server.url("/back"))
-    #expect(node.title == "Back")
+    // The same tab, not a new one: the account has the two it had, and heard of the showing.
+    #expect(account.nodes.map(\.id) == ["today:back", "today:other"])
+    #expect(account.noted == ["today:back"])
+    #expect(try #require(account.node("today:back")?.seen) > then)
+    #expect(browser.today(in: "home").map(\.id) == ["today:back"])
     // Its Space is the one on screen now, with its page up and the list out of the way.
     #expect(browser.currentSpace?.id == "home")
     #expect(browser.sheet == nil)
     let tab = try #require(browser.page)
-    #expect(tab.id == node.id)
+    #expect(tab.id == "today:back")
     #expect(await eventually { await tab.shows("/back") })
 
     // A second tap on a row that has gone opens nothing more.
     browser.restore(back)
-    #expect(account.nodes.count == 1)
+    #expect(account.nodes.count == 2)
+    #expect(account.noted == ["today:back"])
+
+    // It's in its Space at the next check too, which finds it seen.
+    browser.leave()
+    browser.left(tab.id)
+    await browser.archiveUnseen(now: then.addingTimeInterval(day))
+    #expect(browser.today(in: "home").map(\.id) == ["today:back"])
+    #expect(archive.tabs.map(\.title) == ["Other"])
   }
 
-  @Test func `a tab whose Space is gone comes back in the one on screen`() async throws {
+  @Test func `a tab that leaves for the archive gives up its web view, and comes back at its page`() async throws {
+    let server = try await server()
+    let account = SeenAccount()
+    let (browser, archive) = browser(on: account)
+    browser.openNew(server.url("/held"))
+    browser.opened()
+    let held = try #require(browser.page)
+    #expect(await eventually { await held.shows("/held") })
+    browser.leave()
+    browser.left(held.id)
+
+    await browser.archiveUnseen(now: Date.now.addingTimeInterval(13 * hour))
+    #expect(browser.today(in: "work").isEmpty)
+    #expect(account.node(held.id) != nil)
+
+    browser.restore(try #require(archive.tabs.first))
+    let again = try #require(browser.page)
+    #expect(again.id == held.id)
+    #expect(again !== held)
+    #expect(await eventually { await again.shows("/held") })
+  }
+
+  @Test func `a closed tab opens again as a new Today tab of the Space it was in`() async throws {
+    let server = try await server()
+    let account = SeenAccount()
+    account.nodes = [SyncedNode(id: "today:closed", kind: .today, space: "home", url: server.url("/closed"), title: "Closed", seen: then)]
+    let (browser, archive) = browser(on: account)
+    browser.close("today:closed")
+    #expect(account.nodes.isEmpty)
+    #expect(browser.currentSpace?.id == "work")
+
+    browser.restore(try #require(archive.tabs.first))
+    #expect(archive.tabs.isEmpty)
+    let node = try #require(account.today(in: "home").first)
+    #expect(node.id != "today:closed")
+    #expect(node.url == server.url("/closed"))
+    #expect(node.title == "Closed")
+    #expect(browser.currentSpace?.id == "home")
+    let tab = try #require(browser.page)
+    #expect(tab.id == node.id)
+    #expect(await eventually { await tab.shows("/closed") })
+  }
+
+  @Test func `a closed tab whose Space is gone comes back in the one on screen`() async throws {
     let server = try await server()
     let account = SeenAccount()
     account.nodes = [SyncedNode(id: "today:gone", kind: .today, space: "home", url: server.url("/gone"), title: "", seen: then)]
     let (browser, archive) = browser(on: account)
-    await browser.archiveUnseen(now: then.addingTimeInterval(day))
+    browser.close("today:gone")
     account.spaces.removeAll { $0.id == "home" }
 
     browser.restore(try #require(archive.tabs.first))
@@ -446,26 +664,48 @@ private let then = date(10)
 
   @Test func `only Today tabs at a web page's address are kept`() {
     let archive = archive()
-    #expect(archive.keep(node("/a"), .closed))
-    #expect(!archive.keep(SyncedNode(id: "pin", kind: .pin, space: "work", url: page("https://example.org/pin")), .closed))
-    #expect(!archive.keep(SyncedNode(id: "today:x", kind: .today, space: "work", url: page("about:blank"), title: ""), .closed))
-    #expect(!archive.keep(SyncedNode(id: "today:y", kind: .today, space: "work", url: page("https://me:secret@example.org/"), title: ""), .closed))
+    #expect(archive.keep(node("/a")))
+    #expect(!archive.keep(SyncedNode(id: "pin", kind: .pin, space: "work", url: page("https://example.org/pin"))))
+    #expect(!archive.keep(SyncedNode(id: "today:x", kind: .today, space: "work", url: page("about:blank"), title: "")))
+    #expect(!archive.keep(SyncedNode(id: "today:y", kind: .today, space: "work", url: page("https://me:secret@example.org/"), title: "")))
     #expect(archive.tabs.map(\.url.path) == ["/a"])
   }
 
-  @Test func `the newest is first, and a row is called by its title, or its site without one`() {
+  @Test func `the newest is first, and a row is called by its title, or its site without one, and says whether it's closed`() {
     let archive = archive()
-    archive.keep(node("/first", title: "First"), .closed, at: date(10, 9))
-    archive.keep(node("/second"), .unseen, at: date(10, 10))
+    archive.keep(node("/first", title: "First"), at: date(10, 9))
+    archive.follow([node("/second")], closed: { _ in false }, at: date(10, 10))
     #expect(archive.tabs.map(\.label) == ["example.org", "First"])
-    #expect(archive.tabs.map(\.way.word) == ["Unseen", "Closed"])
+    #expect(archive.tabs.map(\.word) == ["Unseen", "Closed"])
+    #expect(archive.hasClosed)
+  }
+
+  @Test func `following lists what's due once, takes back what isn't, and keeps as closed what left the account`() {
+    let archive = archive()
+    let stays = node("/stays", title: "Stays"), seen = node("/seen"), closed = node("/closed")
+    #expect(archive.follow([stays, seen, closed], closed: { _ in false }, at: date(10, 9)) == [stays.id, seen.id, closed.id])
+    #expect(!archive.hasClosed)
+
+    // The one that stays is as the account has it now.
+    var renamed = stays
+    renamed.title = "Renamed"
+    #expect(archive.follow([renamed], closed: { $0 == closed.id }, at: date(11, 9)).isEmpty)
+    #expect(archive.tabs.map(\.url.path) == ["/closed", "/stays"])
+    #expect(archive.tabs.map(\.node) == [nil, stays.id])
+    #expect(archive.tabs.map(\.date) == [date(11, 9), date(10, 9)])
+    #expect(archive.tabs.last?.title == "Renamed")
+
+    // Closing one that waits makes its row the record, not a second one.
+    archive.keep(renamed, at: date(11, 10))
+    #expect(archive.tabs.map(\.url.path) == ["/stays", "/closed"])
+    #expect(archive.tabs.allSatisfy { $0.node == nil })
   }
 
   @Test func `days read up from the foot: the latest day and the latest tab last`() {
     let archive = archive()
-    archive.keep(node("/a"), .closed, at: date(9, 9))
-    archive.keep(node("/b"), .closed, at: date(9, 20))
-    archive.keep(node("/c"), .closed, at: date(10, 8))
+    archive.keep(node("/a"), at: date(9, 9))
+    archive.keep(node("/b"), at: date(9, 20))
+    archive.keep(node("/c"), at: date(10, 8))
     let days = ArchiveDay.days(of: archive.tabs, calendar: utc)
     #expect(days.map(\.start) == [utc.startOfDay(for: date(9)), utc.startOfDay(for: date(10))])
     #expect(days.map { $0.tabs.map(\.url.path) } == [["/a", "/b"], ["/c"]])
@@ -473,8 +713,8 @@ private let then = date(10)
 
   @Test func `the words searched for are all in a tab's title or address, whatever their capitals and accents`() {
     let archive = archive()
-    archive.keep(node("/wiki/lisbon", title: "Flights to Lisbon"), .closed)
-    archive.keep(node("/cafe", title: "Café menu"), .closed)
+    archive.keep(node("/wiki/lisbon", title: "Flights to Lisbon"))
+    archive.keep(node("/cafe", title: "Café menu"))
     #expect(archive.found("LISBON flights").map(\.url.path) == ["/wiki/lisbon"])
     #expect(archive.found("cafe").map(\.url.path) == ["/cafe"])
     #expect(archive.found("example.org").count == 2)
@@ -484,9 +724,9 @@ private let then = date(10)
 
   @Test func `a forgotten tab comes back with Undo, at its own place`() {
     let archive = archive()
-    archive.keep(node("/a"), .closed, at: date(10, 9))
-    archive.keep(node("/b"), .closed, at: date(10, 10))
-    archive.keep(node("/c"), .closed, at: date(10, 11))
+    archive.keep(node("/a"), at: date(10, 9))
+    archive.keep(node("/b"), at: date(10, 10))
+    archive.keep(node("/c"), at: date(10, 11))
     archive.forget(archive.tabs[1])
     #expect(archive.tabs.map(\.url.path) == ["/c", "/a"])
     #expect(archive.forgotten != nil)
@@ -496,69 +736,76 @@ private let then = date(10)
     #expect(archive.forgotten == nil)
   }
 
-  @Test func `clearing forgets every tab, and Undo brings them all back`() {
+  @Test func `the trash forgets the closed tabs and leaves those that wait, and Undo brings them back`() {
     let archive = archive()
-    archive.keep(node("/a"), .closed, at: date(10, 9))
-    archive.keep(node("/b"), .unseen, at: date(10, 10))
-    archive.forgetEverything()
-    #expect(archive.tabs.isEmpty)
+    archive.keep(node("/a"), at: date(10, 9))
+    archive.follow([node("/waits")], closed: { _ in false }, at: date(10, 10))
+    archive.keep(node("/b"), at: date(10, 11))
+    archive.forgetClosed()
+    #expect(archive.tabs.map(\.url.path) == ["/waits"])
+    #expect(!archive.hasClosed)
     archive.undo()
-    #expect(archive.tabs.map(\.url.path) == ["/b", "/a"])
+    #expect(archive.tabs.map(\.url.path) == ["/b", "/waits", "/a"])
   }
 
   @Test func `Undo is offered for a while, and then what was forgotten is gone`() async {
     let archive = Archive(file: newDirectory().appending(path: "list.json"), undoLasts: .milliseconds(20))
-    archive.keep(node("/a"), .closed)
+    archive.keep(node("/a"))
     archive.forget(archive.tabs[0])
     #expect(await eventually { archive.forgotten == nil })
     archive.undo()
     #expect(archive.tabs.isEmpty)
   }
 
-  @Test func `a tab is kept thirty days`() {
+  @Test func `a closed tab is kept thirty days, and one that waits for as long as it does`() {
     let archive = archive()
-    archive.keep(node("/old"), .closed, at: date(1))
-    archive.keep(node("/new"), .closed, at: date(20))
+    archive.follow([node("/waits")], closed: { _ in false }, at: date(1))
+    archive.keep(node("/old"), at: date(1))
+    archive.keep(node("/new"), at: date(20))
     archive.prune(now: date(1).addingTimeInterval(Archive.keptFor))
-    #expect(archive.tabs.count == 2)
+    #expect(archive.tabs.count == 3)
     archive.prune(now: date(1).addingTimeInterval(Archive.keptFor + 1))
-    #expect(archive.tabs.map(\.url.path) == ["/new"])
+    #expect(archive.tabs.map(\.url.path) == ["/new", "/waits"])
   }
 
-  @Test func `past the most kept, the oldest go`() {
+  @Test func `past the most kept, the oldest closed tabs go`() {
     let archive = archive()
+    archive.follow([node("/waits")], closed: { _ in false }, at: date(9))
     for index in 0...Archive.most {
-      archive.keep(node("/\(index)"), .closed, at: date(10).addingTimeInterval(TimeInterval(index)))
+      archive.keep(node("/\(index)"), at: date(10).addingTimeInterval(TimeInterval(index)))
     }
-    #expect(archive.tabs.count == Archive.most)
+    #expect(archive.tabs.count == Archive.most + 1)
     #expect(archive.tabs.first?.url.path == "/\(Archive.most)")
-    #expect(archive.tabs.last?.url.path == "/1")
+    #expect(archive.tabs.map(\.url.path).suffix(2) == ["/1", "/waits"])
   }
 
   @Test func `the archive is in its file when the app starts again`() async {
     let directory = newDirectory()
     let first = archive(in: directory)
-    first.keep(node("/a", title: "A", space: "home"), .unseen, at: date(10, 9))
-    first.keep(node("/b"), .closed, at: date(10, 10))
+    let waits = node("/a", title: "A", space: "home")
+    first.follow([waits], closed: { _ in false }, at: date(10, 9))
+    first.keep(node("/b"), at: date(10, 10))
+    first.keep(node("/c"), at: date(10, 11))
     first.forget(first.tabs[0])
     await first.written()
 
     let second = archive(in: directory)
     await second.loaded()
     #expect(second.tabs == first.tabs)
-    #expect(second.tabs.map(\.title) == ["A"])
-    #expect(second.tabs.first?.space == "home")
-    #expect(second.tabs.first?.way == .unseen)
+    #expect(second.tabs.map(\.url.path) == ["/b", "/a"])
+    #expect(second.tabs.last?.title == "A")
+    #expect(second.tabs.last?.space == "home")
+    #expect(second.tabs.map(\.node) == [nil, waits.id])
   }
 
   @Test func `what's kept before the file is read goes in front of it`() async {
     let directory = newDirectory()
     let first = archive(in: directory)
-    first.keep(node("/before"), .closed, at: date(10, 9))
+    first.keep(node("/before"), at: date(10, 9))
     await first.written()
 
     let second = archive(in: directory)
-    second.keep(node("/meanwhile"), .closed, at: date(10, 10))
+    second.keep(node("/meanwhile"), at: date(10, 10))
     await second.loaded()
     #expect(second.tabs.map(\.url.path) == ["/meanwhile", "/before"])
     await second.written()
@@ -582,6 +829,14 @@ private let then = date(10)
   @Test func `the choices are the computer's, the shortest first and Never last`() {
     #expect(ArchiveAfter.allCases.map(\.title) == ["12 hours", "24 hours", "7 days", "30 days", "Never"])
     #expect(ArchiveAfter.allCases.map(\.interval) == [12 * hour, 24 * hour, 7 * day, 30 * day, nil])
+  }
+
+  @Test func `the tabs that wait are kept by their ids, so the Space is right when the app starts again`() throws {
+    let suite = "archive-tests-\(UUID().uuidString)"
+    let settings = Settings(defaults: try #require(UserDefaults(suiteName: suite)))
+    #expect(settings.awayTabs.isEmpty)
+    settings.awayTabs = ["today:a", "today:b"]
+    #expect(Settings(defaults: try #require(UserDefaults(suiteName: suite))).awayTabs == ["today:a", "today:b"])
   }
 
   @Test func `the note's answer is kept`() throws {

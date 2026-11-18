@@ -1,8 +1,10 @@
 import SwiftUI
 
 /// The phone's archive in a sheet from the foot, read as history is: the tabs that left today
-/// at the foot, older days above, over the field that searches them and the trash that clears
-/// them. A tap puts a tab back in its Space and opens it.
+/// at the foot, older days above, over the field that searches them and the trash that forgets
+/// the closed ones. A tap puts a tab back in its Space and opens it. A row's swipe forgets a
+/// closed tab; for one that only waits here, still open in the account, it closes it there, as
+/// its card's close button would, and the row is the record of that.
 struct ArchiveSheet: View {
   /// A browser that keeps no archive has none to show.
   let archive: Archive?
@@ -10,10 +12,10 @@ struct ArchiveSheet: View {
   @Environment(Browser.self) private var browser
   /// The words in the field.
   @State private var query = ""
-  /// The row swiped aside, which shows its Forget button. One at a time.
+  /// The row swiped aside, which shows its button. One at a time.
   @State private var swiped: ArchivedTab.ID?
   @State private var asksEverything = false
-  /// Goes up when forgetting or an Undo changes the rows, which the list animates.
+  /// Goes up when forgetting, closing or an Undo changes the rows, which the list animates.
   @State private var changes = 0
 
   var body: some View {
@@ -31,28 +33,32 @@ struct ArchiveSheet: View {
         DayRows(
           days: days.map { ListedDay(start: $0.start, rows: $0.tabs) }, kept: (archive.tabs.count, all.count), changes: changes,
           nothing: "Nothing in the archive matches", swiped: $swiped, order: { $0.date.timeIntervalSince1970 }, pick: pick,
-          forget: { archive.forget($0) }
+          forget: forget,
+          action: { $0.node == nil ? ("Forget", "trash") : ("Close", "xmark") }
         ) { tab in
-          HistoryLabel(url: tab.url, title: tab.title, label: tab.label, when: tab.way.word)
+          HistoryLabel(url: tab.url, title: tab.title, label: tab.label, when: tab.word)
         }
         // In a row's room over the field: forgetting a tab leaves the sheet as tall as it was.
         if archive.forgotten != nil { undoChip(archive) }
         ListFoot(query: $query, prompt: "Search the archive") {
-          Button {
-            asksEverything = true
-          } label: {
-            TrashPlate(label: "Clear the archive")
-          }
-          .buttonStyle(PressStyle())
-          .confirmationDialog("Clear the archive?", isPresented: $asksEverything, titleVisibility: .visible) {
-            Button("Clear Archive", role: .destructive) { archive.forgetEverything() }
-            Button("Cancel", role: .cancel) {}
-          } message: {
-            Text("This phone forgets every tab it has archived. Your open tabs stay.")
+          // There while there's a closed tab to forget: the tabs that wait here are still open.
+          if archive.hasClosed {
+            Button {
+              asksEverything = true
+            } label: {
+              TrashPlate(label: "Forget closed tabs")
+            }
+            .buttonStyle(PressStyle())
+            .confirmationDialog("Forget closed tabs?", isPresented: $asksEverything, titleVisibility: .visible) {
+              Button("Forget Closed Tabs", role: .destructive) { archive.forgetClosed() }
+              Button("Cancel", role: .cancel) {}
+            } message: {
+              Text("This phone forgets the tabs marked Closed. Unseen tabs stay.")
+            }
           }
         }
       } else {
-        NothingYet(kept: "Tabs you close, and tabs nobody has looked at for a while, are kept here for 30 days.")
+        NothingYet(kept: "Tabs nobody has looked at for a while wait here, and tabs you close are kept for 30 days.")
         if let archive, archive.forgotten != nil { undoChip(archive) }
       }
     }
@@ -74,6 +80,14 @@ struct ArchiveSheet: View {
     .frame(maxWidth: .infinity)
     .frame(height: Listed.row)
     .transition(.opacity)
+  }
+
+  private func forget(_ tab: ArchivedTab) {
+    browser.discard(tab)
+    // Forgetting says so with its Undo. A close has none: the row stays, as closed.
+    guard tab.node != nil else { return }
+    changes += 1
+    AccessibilityNotification.Announcement("Closed").post()
   }
 
   private func pick(_ tab: ArchivedTab) {
@@ -123,15 +137,16 @@ struct ArchiveSetting: View {
     // The shortest wait at the top, as the computer lists them.
     .menuOrder(.fixed)
     .buttonStyle(RowStyle())
-    // A shorter wait takes the tabs that have waited that long already, as the computer's does.
+    // A shorter wait takes the tabs that have waited that long already, as the computer's does,
+    // and a longer one brings back those that haven't.
     .onChange(of: settings.archiveAfter) {
       Task { await browser.archiveUnseen() }
     }
   }
 }
 
-/// The note over the dock the first time tabs go to the archive by themselves: how many, and the
-/// way to them. It shows once, until it's followed or put away.
+/// The note over the dock the first time tabs leave the Spaces for the archive by themselves: how
+/// many, and the way to them. It shows once, until it's followed or put away.
 struct ArchiveNote: View {
   /// The list is about to come up: the Space's field lets go of the keyboard, which would
   /// leave the list three rows.

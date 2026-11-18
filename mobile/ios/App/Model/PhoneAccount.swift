@@ -101,6 +101,11 @@ final class PhoneAccount: IloAccount {
     return tabs.today.first { $0.id == id }.map { node($0, .today) } ?? tabs.pinned.first { $0.id == id }.map { node($0, .pin) }
   }
 
+  func isOnlyHere(_ id: String) -> Bool {
+    // The phone's own Space is on no other device.
+    showsAccount ? account.isOnlyHere(id) : tabs.today.contains { $0.id == id }
+  }
+
   // The engine's own for the protocol; the sheet asks `standardServer` and `words`, which are
   // those of the account this one holds.
   static var defaultServer: URL { Account.defaultServer }
