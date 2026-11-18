@@ -2,3 +2,7 @@
 # open (check/quarantine.sh says how). A line lasts 14 days:
 # <run> #<issue> <YYYY-MM-DD> [<its FAIL line's start, as the summary shows it>]
 switch-frames #2248 2026-11-10 the page area showed no page through a switch
+# A page the command bar's ↩ loads doesn't get the keyboard when the UI had it (#3453): the Board
+# that board's ⌘T opens never gives its Show button the keyboard, and the claim judged last.
+board #3453 2026-11-18 ↩ on the unreadable Board, whose Show button has the keyboard, didn't show its file
+board #3453 2026-11-18 the page the bar's ↩ loaded over a Board didn't have the keyboard

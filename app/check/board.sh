@@ -5,16 +5,19 @@
 # its own Board's folder alone, and no log line says what the note or the name is. Library › Boards
 # lists it. Renamed while open, opened from the command bar by the start of its name, unpinned,
 # archived and reopened, it's still only "(a Board)" in the log, never its name, and the reopened
-# page reads its file: a change keeps the note. A Board whose file holds markup in a note's text and
-# a javascript: link runs neither. A picture waiting in a Board's arrivals lands as a card when the
-# Board opens, and leaves the list once the card is saved; one that comes while its tab isn't
-# showing lands when it's shown, a step from the first, both captured. A Board's file over 4 MiB,
-# which the host doesn't read, says so and is never written over, captured, as is one holding []
-# rather than a Board. A private window has no New Board, and a Board's address there shows "This
-# Board isn't here.", captured. New Board from the File menu, the sidebar's +, the command bar, and
-# its key with a Board's page and with the sidebar holding the keyboard, each makes one. Japanese
-# input as a Board's first keys is its note; ⌘C, ⌘V and ⌘Z in the page copy, paste and undo cards,
-# and ⌘− zooms the canvas, not the page, each saved. Relaunched, the Board comes back with its note.
+# page reads its file: a change keeps the note. Reloaded, and left for a web page, it leaves the
+# browser running. A Board whose file holds markup in a note's text and a javascript: link runs
+# neither. A picture waiting in a Board's arrivals lands as a card when the Board opens, and leaves
+# the list once the card is saved; one that comes while its tab isn't showing lands when it's shown,
+# a step from the first, both captured. A Board's file over 4 MiB, which the host doesn't read, says
+# so and is never written over, captured, as is one holding [] rather than a Board. A private window
+# has no New Board, and a Board's address there shows "This Board isn't here.", captured. New Board
+# from the File menu, the sidebar's +, the command bar, and its key with a Board's page and with
+# the sidebar holding the keyboard, each makes one. Japanese input as a Board's first keys is its
+# note; ⌘C, ⌘V and ⌘Z in the page copy, paste and undo cards, and ⌘− zooms the canvas, not the
+# page, each saved. Relaunched, the Board comes back with its note. The Board holding [] then shows
+# its file in the system's file manager from its note's button, last of the steps; after it, that
+# the page the bar's ↩ loaded over a Board had the keyboard is judged.
 # An agent gets nothing of a Board, wherever the user opens one: one New Board made, one opened from
 # Library › Boards, and one whose address the user typed into the agent's own tab, taken over. Its
 # list_tabs leaves each out, read_page, snapshot, screenshot and click on it are refused as on a tab
@@ -30,7 +33,11 @@ agents_file="$profile_dir/Agents"
 token=$(python3 -I -c 'import secrets; print(secrets.token_hex(32))')
 printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}]}' "$token" > "$agents_file"
 chmod 600 "$agents_file"
-BROWSER_DRIVE=1 BROWSER_URL='data:text/html,<title>ready</title>' "$browser" \
+# Showing the file on Linux, with no file manager on the bus, falls to xdg-open, which tries
+# $BROWSER before the runner's own browsers: true ends it there, so none stays on the display.
+opener=${BROWSER:-}
+[ "$(uname)" != Linux ] || opener=true
+BROWSER=$opener BROWSER_DRIVE=1 BROWSER_URL='data:text/html,<title>ready</title>' "$browser" \
   < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
@@ -150,6 +157,28 @@ done
   fail "a pan on the reopened Board wasn't saved: $(grep 'browser: board ' "$log" | tail -1)"
 grep -q 'shelves over the sink' "$folder/board.json" ||
   fail "the reopened Board's save lost its note: $(head -c 300 "$folder/board.json")"
+
+# A reload of the Board, and a load away from it to a web page, drop what its page had on its way
+# and leave the browser running (#3427); back brings the Board again for the steps after. ⌘← goes
+# back from the page or the UI, wherever the bar's ↩ left the keyboard, so this claims nothing about
+# who has it: which side heard it is judged after the last step (#3453), so a miss there ends no
+# step before it.
+send key r cmd
+expect "^browser: loaded $board chrome://board/$id\$" "⌘R didn't load the Board again"
+serve
+send key l cmd
+expect '^browser: command bar shown$' "⌘L on the Board didn't open the command bar"
+send type "${site}page.html"
+send key return
+expect "^browser: loaded $board ${site}page.html\$" "the Board's tab didn't load the page typed in the bar"
+# Where the ↩ left the keyboard, as the driver says it: the key window and the view with focus.
+went=$(grep "^browser: drive $step done, " "$log" | tail -1 |
+  sed 's/^[^,]*, \(key [^,]*, focus [^,]*\),.*/\1/')
+send key left cmd
+expect '^browser: command back via ' "⌘left on the page the bar loaded over the Board didn't run back"
+back_via=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep '^browser: command back via ' |
+  head -1 | cut -d' ' -f5)
+expect "^browser: loaded $board chrome://board/$id\$" "back didn't bring the Board again"
 
 # 1d: an agent gets nothing of a Board. The client is the bridge on two pipes, as mcp's and rules'.
 rm -f "$out/board-in" "$out/board-out"
@@ -567,7 +596,8 @@ PYEOF
 [ ! -s "$out/board-landed.why" ] || fail "$(cat "$out/board-landed.why")"
 ../tools/window-screenshot.sh "$pid" "$out/board-landed-shown.png" || fail "no window to capture"
 
-# A Board's file over 4 MiB, which the host doesn't read, says so, and a pan doesn't write over it.
+# A Board's file over 4 MiB, which the host doesn't read, says so with a button to show the file,
+# captured, and a pan doesn't write over it.
 # Other Boards save as a hover card's picture shows them, so the file is what's compared.
 large=$(printf 'c%.0s' $(seq 32))
 mkdir -p "$boards/$large"
@@ -626,6 +656,13 @@ send insert "chrome://board/$id"
 send key return
 expect "^browser: loaded [0-9]* chrome://board/$id\$" "the Board's address didn't load in the private window"
 ../tools/window-screenshot.sh "$pid" "$out/board-private.png" || fail "no window to capture"
+private=$(grep '^browser: private window opened ' "$log" | tail -1 | cut -d' ' -f5)
+
+# The private window closes before the relaunch, which brings back only the regular one.
+send window 2
+send key w cmd shift
+expect "^browser: window closed $private\$" "⇧⌘W didn't close the private window"
+send window 1
 
 # 1b: a Board kept across a relaunch. Its tab comes back named, the bar finds it by the start of its
 # name, and its page reads its file: a pan saves it with its note. The first note's is kept too.
@@ -633,7 +670,8 @@ exec 3>&-
 quit
 log="$out/board-restored.log"
 step=0
-BROWSER_DRIVE=1 "$browser" < "$out/drive" > "$log" 2>&1 &
+# As at the first launch, $BROWSER ends xdg-open for the file shown last.
+BROWSER=$opener BROWSER_DRIVE=1 "$browser" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await '^browser: restored in ' || fail "the relaunch didn't restore the Spaces"
@@ -657,6 +695,26 @@ grep -q "$note" "$loft/board.json" ||
 written=$(grep -v '^browser: drive [0-9]*: ' "$log" | grep 'shelves\|kitchen\|pantry\|日本語\|loft' | head -1)
 [ -z "$written" ] || fail "the relaunch's log says what a Board holds or its name: $written"
 ../tools/window-screenshot.sh "$pid" "$out/board-relaunched.png" || fail "no window to capture"
+# #3224: the Board holding [] offers its file in the system's file manager, its button with the
+# keyboard, and that leaves the file as it was. Last, after the relaunch, as the Finder and
+# Explorer take the keyboard from the app. The bar goes to the Board's tab, which loads it, and its
+# page gives the button the keyboard.
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar after the relaunch"
+send insert "chrome://board/$other"
+send key return
+expect "^browser: loaded [0-9]* chrome://board/$other\$" "the Board whose file holds [] didn't load after the relaunch"
+send key return
+# The core's line has Chromium's prefix.
+expect 'browser: board shows its file$' \
+  "↩ on the unreadable Board, whose Show button has the keyboard, didn't show its file"
+[ "$(cat "$boards/$other/board.json")" = '[]' ] ||
+  fail "showing the unreadable Board's file changed it: $(head -c 200 "$boards/$other/board.json")"
+# #3453: the page the bar's ↩ loaded over the Board had the keyboard, so ⌘← there went to the page
+# first, as on any page. Judged here, after the file manager, from what was heard then.
+[ "$back_via" = page ] ||
+  fail "the page the bar's ↩ loaded over a Board didn't have the keyboard: ⌘left ran back via\
+ $back_via, the ↩ having left $went"
 quit
 echo "ok: New Board made $id, its name kept and its note saved in its folder alone, unlogged;" \
   "Library › Boards listed it; renamed, found by the bar, archived and reopened, the log said" \
@@ -668,7 +726,8 @@ echo "ok: New Board made $id, its name kept and its note saved in its folder alo
   "nothing; a waiting picture landed as a card and left the arrivals, and one that came while" \
   "its tab wasn't showing landed a step from it when shown; a Board over 4 MiB and one" \
   "holding [] weren't written over; a private window had no New Board; after a relaunch the" \
-  "Board came back, found by its name, and its next save kept its note." \
+  "Board came back, found by its name, and its next save kept its note; the one holding [] showed" \
+  "its file; the page loaded over a Board from the bar had the keyboard." \
   "Windows: $out/board.png $out/board-markup.png $out/board-landed.png" \
   "$out/board-landed-shown.png $out/board-unread.png $out/board-private.png" \
   "$([ -f "$out/board-agent-tab.png" ] && echo "$out/board-agent-tab.png")"

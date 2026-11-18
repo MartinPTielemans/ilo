@@ -153,7 +153,7 @@ thread_local! {
     static LAST_CLICK: Cell<Option<(Instant, f64, f64, u32)>> = const { Cell::new(None) };
     /// Where in sway's layout the pointer was last put.
     static POINTER: Cell<Option<(f64, f64)>> = const { Cell::new(None) };
-    /// A press on the Mini Player: where in it, and its content's frame then.
+    /// A press on the Mini Player, or a browser window's edge: where in it, and its frame then.
     static PIP_HELD: Cell<Option<(f64, f64, [f64; 4])>> = const { Cell::new(None) };
     /// The output `display add` plugged in, which `display remove` takes out.
     static ADDED: RefCell<Option<String>> = const { RefCell::new(None) };
@@ -1632,6 +1632,14 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
         "layout" => layout(),
         "scales" => scales(),
         "pip" => mini_player_command(words),
+        // hold press, hold dragto and hold release <x> <y>: as pip's, on the driven browser window,
+        // for its edges, which sway resizes it from with the display's pointer.
+        "hold" => (|| {
+            let step = words.next()?;
+            let (x, y) = drive::point(&mut words)?;
+            let (_, node) = driven()?;
+            hold_window(&node, "held", step, x, y)
+        })(),
         "display" => match words.next() {
             Some("add") => {
                 (|| display_add(words.next()?.parse().ok()?, words.next()?.parse().ok()?))()
@@ -1700,11 +1708,21 @@ fn mini_player_command<'a>(mut words: impl Iterator<Item = &'a str>) -> Option<(
             let axis = wl_pointer::Axis::VerticalScroll;
             wheel(pip.x + x, pip.y + y, axis, notches, state)
         }
+        "press" | "dragto" | "release" => hold_window(&pip, "pip", action, x, y),
+        _ => None,
+    }
+}
+
+/// <what> press, dragto and release <x> <y> on sway's window `node`, at points from its top-left
+/// corner as it was at the press: the display's pointer, which sway moves or sizes the window with,
+/// as a hand's. The release logs where the drag left the window, as "browser: <what> at".
+fn hold_window(node: &Node, what: &str, action: &str, x: f64, y: f64) -> Option<()> {
+    match action {
         "press" => {
-            let (at_x, at_y) = (pip.x + x, pip.y + y);
+            let (at_x, at_y) = (node.x + x, node.y + y);
             first_press(at_x, at_y, BTN_LEFT, false);
             motion(at_x, at_y)?;
-            PIP_HELD.set(Some((x, y, [pip.x, pip.y, pip.width, pip.height])));
+            PIP_HELD.set(Some((x, y, [node.x, node.y, node.width, node.height])));
             with_modifiers(0, || button(BTN_LEFT, true))
         }
         "dragto" | "release" => {
@@ -1716,12 +1734,9 @@ fn mini_player_command<'a>(mut words: impl Iterator<Item = &'a str>) -> Option<(
             // the drag's threshold, so a move sent before then is lost to it: a hand that drags
             // keeps moving, a point back and forth till sway has started, or 1 s.
             let frame_of = |node: Node| [node.x, node.y, node.width, node.height];
+            let now = || ours().into_iter().find(|each| each.id == node.id);
             // Asked after each move, as the point back puts it where it was if sway started there.
-            let taken = || {
-                (ours().into_iter())
-                    .find(|node| node.id == pip.id)
-                    .is_none_or(|now| frame_of(now) != start)
-            };
+            let taken = || now().is_none_or(|now| frame_of(now) != start);
             if to != (left + held_x, top + held_y) && !taken() {
                 for _ in 0..20 {
                     std::thread::sleep(Duration::from_millis(50));
@@ -1738,8 +1753,8 @@ fn mini_player_command<'a>(mut words: impl Iterator<Item = &'a str>) -> Option<(
             }
             PIP_HELD.set(None);
             with_modifiers(0, || button(BTN_LEFT, false))?;
-            let [x, y, width, height] = frame_of(mini_player()?);
-            log!("browser: pip at {x:.0} {y:.0} {width:.0} {height:.0}");
+            let [x, y, width, height] = frame_of(now()?);
+            log!("browser: {what} at {x:.0} {y:.0} {width:.0} {height:.0}");
             Some(())
         }
         _ => None,

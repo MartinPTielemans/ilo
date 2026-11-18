@@ -17,9 +17,10 @@
 # which the Site Controls turn on for a page that asks for Widevine, moves to another window the
 # same way, and the window it left draws WebKit's picture of it, which the core gives from a task of
 # its own (#364: an answer inside the call that asked aborted the browser). Its page asks Apple's
-# site-safety service about no site, as Chromium's ask none. A heavy page and a light
-# one move between two windows every way a page moves, and the run says how long each stage of a
-# move takes.
+# site-safety service about no site, as Chromium's ask none, and its tab's row shows the favicon of
+# the page it's at in either engine, none where Chromium knows none for the site. A heavy page and
+# a light one move between two windows every way a page moves, and the run says how long each stage
+# of a move takes.
 
 # The page counts in its title from its first frame, so a page that reloaded would count from 1
 # again. "o" in it opens a tab under it, as a link to a new tab does. Its beforeunload handler,
@@ -379,7 +380,18 @@ if [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   expect "^browser: window $first page elsewhere 0\$" \
     "the first window wasn't told it shows Safari's engine's page again"
   send window 1
-  webkit_moved=", a page in Safari's engine, turned on in the Site Controls, moves to another window and back, and the window it left draws WebKit's picture of it"
+  # The tab's row shows its page's favicon in either engine. Back in Chromium at a page with one,
+  # it shows it. Then at the site kept for Safari's engine, which Chromium knows no favicon for, it
+  # shows none, not the page's before (#3431).
+  go_from_bar "localhost:$port/index.html"
+  expect "^browser: tab $d back to Chromium for http://localhost:$port/index.html\$" \
+    "another site didn't take the drm page's tab back to Chromium"
+  expect "^browser: favicon $d [1-9][0-9]* bytes\$" "the page back in Chromium didn't show its favicon"
+  go_from_bar "127.0.0.1:$port/engine.html"
+  expect "^browser: title $d engine safari\$" "the site kept for Safari's engine opened in Chromium"
+  expect "^browser: favicon $d 0 bytes\$" \
+    "the page in Safari's engine kept the favicon of the page before: $(grep "^browser: favicon $d " "$log" | tail -1)"
+  webkit_moved=", a page in Safari's engine, turned on in the Site Controls, moves to another window and back, and the window it left draws WebKit's picture of it, and its tab's favicon is its page's in either engine, none where Chromium knows none for the site"
 fi
 
 # A heavy page shaped like a video grid and a light one move between two windows, twice with the

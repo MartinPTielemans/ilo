@@ -583,6 +583,27 @@ class WindowViews : public views::WidgetObserver,
     }
   }
 
+  // The HWND of the pane showing the window's selected page, or null while that page has no view
+  // in a shown pane, as while it loads.
+  HWND ShownPane() {
+    for (Window* window : Window::All()) {
+      if (window->widget() != widget_) {
+        continue;
+      }
+      content::WebContents* shown = Tab::FromId(window->selected());
+      if (!shown) {
+        return nullptr;
+      }
+      for (Slot& slot : panes_) {
+        if (slot.widget && slot.widget->GetNativeView()->Contains(shown->GetNativeView())) {
+          HWND pane = views::HWNDForWidget(slot.widget.get());
+          return IsWindowVisible(pane) ? pane : nullptr;
+        }
+      }
+    }
+    return nullptr;
+  }
+
   // The window's child |hwnd| is or is in, the UI's or a pane's, or null if it's none of them.
   HWND ChildHolding(HWND hwnd) const {
     if (!hwnd || !IsChild(window(), hwnd)) {
@@ -1369,6 +1390,11 @@ void PassPointerThrough(views::Widget* widget) {
   new PassThrough(widget);
 }
 
+std::optional<base::TimeTicks> PointerEventTime() {
+  // A message's time is the tick count's, 10 to 16 ms a step, as coarse as a throw's moves.
+  return std::nullopt;
+}
+
 bool PageDialogsInOwnWindow() {
   // Aura would draw it in the window's HWND, under the UI's and the pages' child HWNDs.
   return true;
@@ -1401,7 +1427,19 @@ bool KeyboardForPage(views::Widget* widget) {
 void ReleaseKeyboard(views::Widget* widget) {
   if (WindowViews* views = ViewsOf(widget)) {
     views->set_ui_holds_for_page(false);
-    SetFocus(views->window());
+    // Straight to the shown page's pane, so Windows tells of no focus on the window before the
+    // page's own: NVDA takes 40–55 ms over the window's, and takes the page's two that come in
+    // that time as one, the control's, which its browse mode then ignores (#3396). To the window
+    // itself, which KeyboardForPage counts as the page's, while the page has no view shown yet or
+    // the window isn't the active one, or is minimized, where Windows keeps it on the window. And
+    // while the pane has it already, as its DevTools may: the pane gives it up and the page takes
+    // it back, as before.
+    const HWND window = views->window();
+    const HWND pane =
+        GetActiveWindow() == window && !IsIconic(window) ? views->ShownPane() : nullptr;
+    const HWND focus = GetFocus();
+    const bool pane_has = focus && (focus == pane || IsChild(pane, focus));
+    SetFocus(pane && !pane_has ? pane : window);
   }
 }
 

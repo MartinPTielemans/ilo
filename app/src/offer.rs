@@ -41,6 +41,7 @@ pub const RIGHT: f32 = shell::CARD_INSET + 8.;
 pub const TOP: f32 = shell::CARD_INSET + 8.;
 use crate::elevation::Level;
 use crate::menu::Closed;
+use crate::tokens::offer::BODY_LINE;
 use crate::tokens::offer::BUTTON_GAP;
 use crate::tokens::offer::BUTTON_HEIGHT;
 use crate::tokens::offer::BUTTON_X;
@@ -581,7 +582,7 @@ impl Render for OfferPrompt {
                     .border_color(Level::Popover.rim_in(&palette))
                     .text_color(palette.text(TITLE))
                     .text_size(px(text::BODY))
-                    .line_height(px(18.))
+                    .line_height(px(BODY_LINE))
                     .child(
                         div()
                             .line_height(px(TITLE_LINE))
