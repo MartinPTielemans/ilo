@@ -456,8 +456,6 @@ mod tests {
     fn tab_out_of_the_page_rings_its_row_and_back_in(cx: &mut TestAppContext) {
         for (reverse, back, end) in [(false, "shift-tab", "last"), (true, "tab", "first")] {
             let (shell, cx, host) = window(cx);
-            crate::shell::page_ends::forget_tab_copy();
-            crate::shell::page_ends::page_tab_pressed();
             let took = shell.update(cx, |shell, cx| shell.tab_focus_leaving(20, reverse, cx));
             cx.run_until_parked();
             assert!(took, "the app didn't take the keyboard");
@@ -469,86 +467,13 @@ mod tests {
             assert_eq!(host.take(), ["focus ui"]);
             let focused = cx.update(|window, cx| shell.read(cx).sidebar_keys.is_focused(window));
             assert!(focused, "the ring hasn't the keyboard");
-            // GPUI hears no copy of the page's keys here, as on the Mac, Windows and X11, so the
-            // next Tab goes back in however soon it comes.
+            // No copy of the page's Tab reaches the ring on any OS, Wayland included: GPUI reads
+            // its own with the page's, while the page has the keys, and drops it. So the next Tab
+            // goes back in however soon it comes.
             cx.simulate_keystrokes(back);
             cx.run_until_parked();
             assert_eq!(host.take(), [format!("focus page {end}")]);
         }
-    }
-
-    /// The page had the keyboard and a Tab press, which GPUI hears too under Wayland, at one of
-    /// three points: before the page has it, between the page and the leave, or after the leave;
-    /// or never, as when GPUI holds it for an overlay, and only its release comes.
-    fn leave_with_the_copy<'a>(
-        cx: &'a mut TestAppContext,
-        copy: &str,
-    ) -> (Entity<Shell>, &'a mut VisualTestContext, Rc<Recorder>) {
-        let (shell, cx, host) = window(cx);
-        shell.update(cx, |shell, _| shell.page_ends.copies = true);
-        cx.update(|window, cx| window.blur(cx));
-        crate::shell::page_ends::forget_tab_copy();
-        if copy == "before the page" {
-            cx.simulate_keystrokes("tab");
-        }
-        crate::shell::page_ends::page_tab_pressed();
-        if copy == "before the leave" {
-            cx.simulate_keystrokes("tab");
-        }
-        cx.run_until_parked();
-        host.take();
-        let took = shell.update(cx, |shell, cx| shell.tab_focus_leaving(20, false, cx));
-        cx.run_until_parked();
-        assert!(took, "{copy}: the app didn't take the keyboard");
-        assert_eq!(ringed(&shell, cx), (Some(20), Some(20)), "{copy}");
-        assert_eq!(host.take(), ["focus ui"], "{copy}");
-        if copy == "after the leave" {
-            cx.simulate_keystrokes("tab");
-            cx.run_until_parked();
-            assert!(host.take().is_empty(), "the copy went into the page");
-            assert_eq!(
-                ringed(&shell, cx),
-                (Some(20), Some(20)),
-                "the copy moved the ring"
-            );
-        }
-        (shell, cx, host)
-    }
-
-    /// Under Wayland GPUI's copy of the page's Tab never moves the ring the leave rang, wherever it
-    /// comes, and after that Tab's release the next press goes into the page 10 ms later, as at
-    /// any speed, with or without a copy: the press tells them apart, not the time (#3220).
-    #[gpui::test]
-    fn the_pages_own_tab_never_moves_the_ring_and_the_next_press_does(cx: &mut TestAppContext) {
-        for copy in [
-            "after the leave",
-            "before the leave",
-            "before the page",
-            "never",
-        ] {
-            let (_shell, cx, host) = leave_with_the_copy(cx, copy);
-            cx.simulate_event(gpui::KeyUpEvent {
-                keystroke: gpui::Keystroke::parse("tab").unwrap(),
-            });
-            cx.executor().advance_clock(Duration::from_millis(10));
-            cx.simulate_keystrokes("tab");
-            cx.run_until_parked();
-            assert_eq!(host.take(), ["focus page first"], "{copy}");
-        }
-    }
-
-    /// Under Wayland a held Tab's repeats come after GPUI heard its press, so they go on as
-    /// presses do, the first into the page, as a held Tab goes on through Chrome's toolbar.
-    #[gpui::test]
-    fn a_held_tabs_repeats_go_on_past_its_copy(cx: &mut TestAppContext) {
-        let (_shell, cx, host) = leave_with_the_copy(cx, "after the leave");
-        cx.simulate_event(gpui::KeyDownEvent {
-            keystroke: gpui::Keystroke::parse("tab").unwrap(),
-            is_held: true,
-            prefer_character_input: false,
-        });
-        cx.run_until_parked();
-        assert_eq!(host.take(), ["focus page first"]);
     }
 
     /// A page with nothing to focus hands the ring's Tab straight back: the ring stays on the row
