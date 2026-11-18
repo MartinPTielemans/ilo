@@ -265,6 +265,10 @@ printf '%s' cellar > "$boards/$cellar/name"
 printf '%s' '{"version": 1, "camera": {"x": 0, "y": 0, "zoom": 1}, "cards": []}' > "$boards/$cellar/board.json"
 session=$(sed -n 's/^browser: session \(session-[0-9]*\) of agent mcp-client as check$/\1/p' "$log" | tail -1)
 [ -n "$session" ] || fail "the agent's open_tab started no card: $(grep '^browser: session ' "$log" | tail -1)"
+# The bar's Take Over is for the tab the agent is at work in, which it is once it reads it.
+own=$(call read_page "{\"tab\":$agent_tab}")
+case "$own" in "Tab $agent_tab: "*) ;; *) fail "reading the agent's own tab answered: $own" ;; esac
+await "^browser: agent mcp-client at work in $agent_tab\$" || fail "the agent's read of its own tab didn't put it at work there"
 send state
 if [ "$active" = 1 ]; then
   await "^browser: task plate task-${session#session-} at " || fail "the agent's card wasn't drawn"
