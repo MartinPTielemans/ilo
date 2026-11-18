@@ -55,7 +55,9 @@ final class Finished: NSObject, SCRecordingOutputDelegate {
 }
 
 // A stream can end by itself before it's stopped, and then stopping it says only that it had
-// (-3808, #2280), so this says why it ended and when, a line check.sh's FAIL carries.
+// (-3808, #2280), so this says why it ended and when, a line check.sh's FAIL or skip carries. The
+// recording ends with it: one the system stops as it's being stopped gets no finish, and stopping
+// it no error, so nothing else would end the wait for it (#3417).
 final class Ended: NSObject, SCStreamDelegate {
   var began: Date?
   var planned = 0.0
@@ -63,8 +65,7 @@ final class Ended: NSObject, SCStreamDelegate {
     let when = began.map {
       String(format: "%.1f s into %.1f s", Date().timeIntervalSince($0), planned)
     } ?? "before its first frame"
-    let line = "the stream ended by itself \(when): \(error)\n"
-    FileHandle.standardError.write(Data(line.utf8))
+    fail("the stream ended by itself \(when): \(error)")
   }
 }
 
@@ -108,7 +109,14 @@ ended.began = Date()
 print("recording")
 fflush(stdout)
 try await Task.sleep(for: .seconds(seconds))
-// The file is complete only once the recording output says so, after the stream stops.
+// The file is complete only once the recording output says so, after the stream stops. That takes
+// well under a second, so one that hasn't come in 5 s isn't coming, and the caller hears why rather
+// than waiting with the helper (#3417).
+do {
+  let late = String(format: "no recordingOutputDidFinishRecording came in 5 s after stopCapture, "
+    + "at the end of its %.1f s recording", seconds)
+  DispatchQueue.global().asyncAfter(deadline: .now() + 5) { fail(late) }
+}
 await withCheckedContinuation { continuation in
   finished.done = continuation
   stream.stopCapture { error in
