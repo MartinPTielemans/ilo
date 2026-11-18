@@ -1575,6 +1575,13 @@ impl Browser for Recorder {
         self.record("window move".into())
     }
 
+    fn start_window_resize(&self, right: bool, _: &mut App) {
+        self.record(format!(
+            "window resize {}",
+            if right { "right" } else { "left" }
+        ))
+    }
+
     fn window_maximized(&self) -> bool {
         false
     }

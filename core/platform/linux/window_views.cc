@@ -648,12 +648,12 @@ class WindowViews : public views::WidgetObserver,
         slot.bottom_corners_only ? gfx::RoundedCornersF(0, 0, r, r) : gfx::RoundedCornersF(r));
   }
 
-  // Lets the UI show, and take the clicks, but where the pages shown are and in the band at the
-  // window's edges that resizes it, whose presses Chromium's hit test takes (wayland.cc).
+  // Lets the UI show, and take the clicks, but where the pages shown are and in Chromium's parts of
+  // the band at the window's edges that resizes it, whose presses its hit test takes (wayland.cc).
   void ShowThrough() {
     const float scale = ScaleOf(widget_);
-    const int edge = static_cast<int>(std::lround(ResizeEdgeOf(widget_) * scale));
     const gfx::Size pixels = ContentPixelsOf(widget_);
+    const std::vector<gfx::Rect> bands = ResizeBandsOf(widget_, pixels, scale);
     std::vector<const Slot*> shown;
     auto add = [&](const Slot& slot) {
       if (slot.holder && slot.page && slot.holder->IsVisible()) {
@@ -670,14 +670,7 @@ class WindowViews : public views::WidgetObserver,
       for (const Slot* slot : shown) {
         region.push_back(gfx::ToEnclosingRect(gfx::ScaleRect(ShownFrame(*slot), scale)));
       }
-      if (edge) {
-        const int w = pixels.width();
-        const int h = pixels.height();
-        region.push_back(gfx::Rect(0, 0, w, edge));
-        region.push_back(gfx::Rect(0, h - edge, w, edge));
-        region.push_back(gfx::Rect(0, edge, edge, h - 2 * edge));
-        region.push_back(gfx::Rect(w - edge, edge, edge, h - 2 * edge));
-      }
+      region.insert(region.end(), bands.begin(), bands.end());
       // No rects is the whole surface; one empty rect is none of it.
       if (region.empty()) {
         region.emplace_back();
@@ -708,10 +701,9 @@ class WindowViews : public views::WidgetObserver,
       }
     }
     std::vector<gfx::Rect> bounding = Without(gfx::Rect(pixels), holes);
-    // The band takes no input in the UI's window, so it goes to the browser window under it, still
-    // showing the UI.
-    gfx::Rect input(pixels);
-    input.Inset(gfx::Insets(edge));
+    // Chromium's parts of the band take no input in the UI's window, so it goes to the browser
+    // window under it, still showing the UI.
+    std::vector<gfx::Rect> input = Without(gfx::Rect(pixels), bands);
     // Only when it changes: the pages are laid out again for a colour or a step of the UI's motion
     // that leaves them where they are.
     if (bounding == ui_bounding_ && input == ui_input_) {
@@ -721,8 +713,12 @@ class WindowViews : public views::WidgetObserver,
     for (const gfx::Rect& rect : bounding) {
       rectangles.push_back(XRectangle(rect));
     }
+    std::vector<x11::Rectangle> input_rectangles;
+    for (const gfx::Rect& rect : input) {
+      input_rectangles.push_back(XRectangle(rect));
+    }
     ui_bounding_ = std::move(bounding);
-    ui_input_ = input;
+    ui_input_ = std::move(input);
     x11::Shape& shape = x11::Connection::Get()->shape();
     shape.Rectangles(x11::Shape::RectanglesRequest{
         .operation = x11::Shape::So::Set,
@@ -736,7 +732,7 @@ class WindowViews : public views::WidgetObserver,
         .destination_kind = x11::Shape::Sk::Input,
         .ordering = x11::ClipOrdering::Unsorted,
         .destination_window = ui_,
-        .rectangles = {XRectangle(input)},
+        .rectangles = std::move(input_rectangles),
     });
   }
 
@@ -1519,7 +1515,7 @@ class WindowViews : public views::WidgetObserver,
   std::vector<gfx::Rect> input_region_;
   // On X11, the shape and input shape last given the UI's window, in pixels (ShowThrough).
   std::vector<gfx::Rect> ui_bounding_;
-  gfx::Rect ui_input_;
+  std::vector<gfx::Rect> ui_input_;
   // Whether the window manager's state for the window last said full screen.
   bool window_manager_full_screen_ = false;
   bool ui_has_keyboard_ = false;
@@ -1943,6 +1939,22 @@ void StartMove(views::Widget* widget, std::optional<gfx::Point> press) {
     }
   }
   handler->DispatchHostWindowDragMovement(HTCAPTION, pointer);
+}
+
+void StartResize(views::Widget* widget, bool right) {
+  ui::PlatformWindow* platform_window = PlatformWindowOf(widget);
+  ui::WmMoveResizeHandler* handler = ui::GetWmMoveResizeHandler(*platform_window);
+  if (!handler) {
+    return;
+  }
+  // As StartMove's: X11's window manager wants where the pointer is, a compositor the press.
+  gfx::Point pointer;
+  if (!OnWayland()) {
+    if (auto reply = x11::Connection::Get()->QueryPointer({XWindowOf(widget)}).Sync()) {
+      pointer = gfx::Point(reply->root_x, reply->root_y);
+    }
+  }
+  handler->DispatchHostWindowDragMovement(right ? HTRIGHT : HTLEFT, pointer);
 }
 
 void UITakesKeyboard(views::Widget* widget, bool until_page) {
