@@ -557,18 +557,10 @@ send key tab ctrl
 expect "^browser: tab switcher lists $c $b $a selected $b\$" \
   "⌃Tab held didn't list $c, $b and $a with $b selected: $(grep '^browser: tab switcher lists ' "$log" | tail -1)"
 expect '^browser: tab switcher drawn$' "the switcher's window didn't draw a frame"
-if [ "$(uname)" = Darwin ]; then
-  echo "skip: a press on the switcher's row on the Mac, where a real ⌃-click is a right click and doesn't pick the row (#3360)"
-  held_key right
-  expect "^browser: tab switcher selected $a\$" "→ didn't select $a"
-  send flags
-  expect "^browser: selected $a in " "letting go of ⌃ on $a didn't show it"
-else
-  send clickkey $(switcher_row 2)
-  expect "^browser: tab switcher chose $a\$" "a press on the switcher's third row didn't choose $a"
-  expect "^browser: selected $a in " "a press on the switcher's row didn't show $a"
-  send flags
-fi
+send clickkey $(switcher_row 2)
+expect "^browser: tab switcher chose $a\$" "a press on the switcher's third row didn't choose $a"
+expect "^browser: selected $a in " "a press on the switcher's row didn't show $a"
+send flags
 # ⌃⇧Tab starts from the tab shown longest ago, and goes back.
 send key tab ctrl shift
 expect "^browser: selected $b in " "⌃⇧Tab didn't show $b, the tab shown longest ago"
