@@ -3104,6 +3104,28 @@ fn an_agent_splits_only_its_own_tabs(cx: &mut TestAppContext) {
     assert!(checked.iter().any(|each| each == "separate_tab"));
 }
 
+/// Every tool an agent or a task can call says what it did in the activity log in words of its
+/// own, not describe's fallback, so a new tool can't land with no entry beside it (#3392).
+#[test]
+fn every_tool_has_an_activity_log_entry() {
+    let mut names = tools::names("claude-code");
+    names.extend(tools::names("task-1"));
+    // The log names an action as the core's entry does, which is the tool's name but for select's
+    // (agents.rs).
+    let logged = |name: &str| match name {
+        "select" => "select_option".to_string(),
+        name => name.to_string(),
+    };
+    let missing: Vec<_> = (names.iter())
+        .filter(|name| tools::describe(&logged(name)) == "Acted")
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "these tools have no words in the activity log; give each its line in tools::describe: \
+         {missing:?}"
+    );
+}
+
 /// Take Back All Tabs, in the agent's Space's menu, takes over each tab there the user doesn't
 /// hold, which the agent is refused until the user hands it back.
 #[gpui::test]
