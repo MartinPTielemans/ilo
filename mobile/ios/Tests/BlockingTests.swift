@@ -140,7 +140,7 @@ import WebKit
     let phone = PhoneAccount(account: FixtureAccount(signedIn: false), directory: directory)
     let browser = Browser(
       account: phone, settings: Settings(defaults: defaults), cache: TabCache(directory: directory.appending(path: "tabs")),
-      favicons: Favicons())
+      favicons: Favicons(), downloads: testDownloads(in: directory))
     let space = PhoneAccount.space.id
     let page = try #require(URL(string: "https://example.invalid/a?utm_source=mail"))
     let node = phone.openToday(url: page, title: "", in: space)

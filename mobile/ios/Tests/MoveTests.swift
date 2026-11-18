@@ -16,7 +16,8 @@ import Testing
     let defaults = try #require(UserDefaults(suiteName: "move-tests-\(UUID().uuidString)"))
     return Browser(
       account: PhoneAccount(account: account, directory: directory), settings: Settings(defaults: defaults),
-      cache: TabCache(directory: directory.appending(path: "tabs")), favicons: Favicons(directory: directory.appending(path: "favicons")))
+      cache: TabCache(directory: directory.appending(path: "tabs")), favicons: Favicons(directory: directory.appending(path: "favicons")),
+      downloads: testDownloads(in: directory))
   }
 
   /// A pinned tab at a blank page, last in Work.

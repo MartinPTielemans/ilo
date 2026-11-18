@@ -610,19 +610,16 @@ private struct Miscounting: ReadingModel {
   }
 
   @Test func `the bar shows what the page has a use for, never more than two, the most pressing first`() {
-    func pick(article: Bool = false, translatable: Bool = false, translated: Bool = false, downloading: Bool = false, downloaded: Bool = false)
-      -> [ContextButton]
-    {
-      ContextButton.pick(
-        isArticle: article, translatable: translatable, translated: translated, downloading: downloading, downloaded: downloaded)
+    func pick(article: Bool = false, translatable: Bool = false, translated: Bool = false, downloads: Bool = false) -> [ContextButton] {
+      ContextButton.pick(isArticle: article, translatable: translatable, translated: translated, downloads: downloads)
     }
     #expect(pick().isEmpty)
     #expect(pick(article: true) == [.reader])
     #expect(pick(article: true, translatable: true) == [.translate(on: false), .reader])
     #expect(pick(article: true, translated: true) == [.translate(on: true), .reader])
-    #expect(pick(article: true, translatable: true, downloading: true) == [.downloading, .translate(on: false)])
-    #expect(pick(article: true, downloading: true, downloaded: true) == [.downloading, .reader])
-    #expect(pick(downloaded: true) == [.downloaded])
+    #expect(pick(article: true, translatable: true, downloads: true) == [.downloads, .translate(on: false)])
+    #expect(pick(article: true, downloads: true) == [.downloads, .reader])
+    #expect(pick(downloads: true) == [.downloads])
   }
 
   @Test func `a page is translated into the user's first language, unless they read the page's`() {
@@ -651,31 +648,6 @@ private struct Miscounting: ReadingModel {
     #expect(configuration.urlCache == nil)
     #expect(configuration.urlCredentialStorage == nil)
     #expect(!ReaderPictures.request(for: URL(string: "https://example.org/boat.jpg")!).httpShouldHandleCookies)
-  }
-
-  @Test func `a finished download is within reach of the tab it ran in, and of no other`() {
-    let file = URL(filePath: "/tmp/boat.pdf")
-    var kept = FinishedDownload()
-    // The system's sheet for a file that ran in no tab on screen keeps nothing.
-    #expect(kept.closed(file) == nil)
-    kept.ended(file, in: "a")
-    #expect(kept.file(in: "a") == nil)
-    let first = kept.closed(file)
-    #expect(first != nil)
-    #expect(kept.file(in: "a") == file)
-    #expect(kept.file(in: "b") == nil)
-    // Another tab going elsewhere leaves it; opened again, it outlasts its first while.
-    kept.left("b")
-    #expect(kept.file(in: "a") == file)
-    let second = kept.closed(file)
-    kept.expire(first ?? 0)
-    #expect(kept.file(in: "a") == file)
-    kept.expire(second ?? 0)
-    #expect(kept.file(in: "a") == nil)
-    kept.ended(file, in: "a")
-    _ = kept.closed(file)
-    kept.left("a")
-    #expect(kept.file(in: "a") == nil)
   }
 
   @Test func `the Reader's text size stops at its ends`() {
@@ -710,7 +682,7 @@ private struct NeverAnswering: ReadingModel {
       account: PhoneAccount(account: FixtureAccount(signedIn: false), directory: directory.appending(path: "phone")),
       settings: Settings(defaults: UserDefaults(suiteName: "reading-tests-\(UUID().uuidString)")!),
       cache: TabCache(directory: directory.appending(path: "tabs")),
-      favicons: Favicons(directory: directory.appending(path: "favicons")))
+      favicons: Favicons(directory: directory.appending(path: "favicons")), downloads: testDownloads(in: directory))
   }
 
   private static let prose =

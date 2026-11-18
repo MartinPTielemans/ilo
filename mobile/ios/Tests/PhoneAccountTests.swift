@@ -304,7 +304,7 @@ import Testing
     let defaults = try #require(UserDefaults(suiteName: "phone-tests-\(UUID().uuidString)"))
     return Browser(
       account: phone, settings: Settings(defaults: defaults), cache: TabCache(directory: directory.appending(path: "tabs")),
-      favicons: Favicons(directory: directory.appending(path: "favicons")))
+      favicons: Favicons(directory: directory.appending(path: "favicons")), downloads: testDownloads(in: directory))
   }
 
   var typed: TypedText {

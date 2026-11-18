@@ -45,9 +45,6 @@ final class Reading {
   /// reload can start and end between two frames, and leaves the same tab at the same address.
   private(set) var loads = 0
 
-  /// A download that finished a moment ago, for the tab it ran in.
-  private var kept = FinishedDownload()
-
   /// Which reading of which page the article is: the name is the one the page's script holds
   /// its blocks under, so a document that came after it doesn't answer to it.
   @ObservationIgnored private var read: (tab: String, url: URL, name: String)?
@@ -72,7 +69,6 @@ final class Reading {
     hear(tab)
     // A load on its way leaves this document, so nothing read of it is offered while it goes.
     guard !tab.isLoading else {
-      kept.left(tab.id)
       forget()
       return
     }
@@ -80,7 +76,6 @@ final class Reading {
       // The same address may be another document now, after a reload, or the same one redrawn.
       if read.url == url, await tab.holds(read.name) { return }
       guard !Task.isCancelled else { return }
-      if read.url != url { kept.left(tab.id) }
     }
     forget()
     await take(tab, at: url)
@@ -286,27 +281,6 @@ final class Reading {
     reader.tab.follow(url)
   }
 
-  // MARK: Downloads
-
-  /// The file of a download that just finished in this tab, to open again.
-  func downloaded(in tab: WebTab) -> URL? {
-    kept.file(in: tab.id)
-  }
-
-  /// A download that ran in this tab has its file.
-  func downloadEnded(_ file: URL, in tab: WebTab) {
-    kept.ended(file, in: tab.id)
-  }
-
-  /// A download's sheet has closed. Its file stays a tap away for a while, or until its tab moves on.
-  func finished(_ file: URL) {
-    guard let turn = kept.closed(file) else { return }
-    Task {
-      try? await Task.sleep(for: .seconds(90))
-      kept.expire(turn)
-    }
-  }
-
   // MARK: Translation
 
   /// Translates the page where it stands, or puts its own words back.
@@ -365,50 +339,6 @@ final class Reading {
     guard translation?.isOn == true, let web = translating?.webView else { return }
     _ = try? await web.callAsyncJavaScript(
       TranslateScript.apply, arguments: ["id": block, "text": text], in: nil, contentWorld: ArticleScript.world)
-  }
-}
-
-/// A download that finished a moment ago, within reach of the tab it ran in and of no other.
-nonisolated struct FinishedDownload: Equatable, Sendable {
-  private var tab: String?
-  private var file: URL?
-  /// The system's sheet for it has closed, so the bar offers it again.
-  private var offered = false
-  private var turn = 0
-
-  /// A download that ran in `tab` has its file.
-  mutating func ended(_ file: URL, in tab: String) {
-    self.tab = tab
-    self.file = file
-    offered = false
-  }
-
-  /// The system's sheet for a file closed. Answers the turn to let it go by, if it's kept.
-  mutating func closed(_ file: URL) -> Int? {
-    guard self.file == file else { return nil }
-    offered = true
-    turn += 1
-    return turn
-  }
-
-  /// The while a file is kept for is over, unless it was shown again since.
-  mutating func expire(_ turn: Int) {
-    if turn == self.turn { letGo() }
-  }
-
-  /// The tab's page went elsewhere, and its download with it.
-  mutating func left(_ tab: String) {
-    if self.tab == tab { letGo() }
-  }
-
-  private mutating func letGo() {
-    tab = nil
-    file = nil
-    offered = false
-  }
-
-  func file(in tab: String) -> URL? {
-    offered && self.tab == tab ? file : nil
   }
 }
 

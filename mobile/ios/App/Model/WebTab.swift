@@ -63,11 +63,10 @@ final class WebTab: NSObject, Identifiable {
   var committedURL: URL? { committed }
   /// What the page said of its sign-in form.
   let loginState = LoginState()
-  /// Where each download in flight is being written. Observed, for the bar to show one running.
-  private var downloads: [ObjectIdentifier: URL] = [:]
-  /// Downloads of a file a page made itself, which the user hasn't been asked about yet.
-  @ObservationIgnored private var unasked: Set<ObjectIdentifier> = []
-  var downloadsRunning: Int { downloads.count }
+  /// Whether the page is a PDF: a file to save and to print, and no site's page to block on.
+  private(set) var isPDF = false
+  /// What kind of file the load on its way answered with.
+  @ObservationIgnored private var answered: String?
 
   /// A tab that loads what it's told to, or the `window` a page of the `opener` tab opened, which
   /// WebKit loads itself and joins to that page only in a web view made as it says.
@@ -459,24 +458,36 @@ extension WebTab: WKNavigationDelegate {
 
   func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse) async -> WKNavigationResponsePolicy {
     let disposition = (response.response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Disposition") ?? ""
-    if response.canShowMIMEType, !disposition.lowercased().hasPrefix("attachment") { return .allow }
+    if response.canShowMIMEType, !disposition.lowercased().hasPrefix("attachment") {
+      if response.isForMainFrame { answered = response.response.mimeType?.lowercased() }
+      return .allow
+    }
     guard response.isForMainFrame else { return .cancel }
     let name = response.response.suggestedFilename ?? "file"
     return await browser?.ask(.download(name: name), from: self) == true ? .download : .cancel
   }
 
+  // A download is the list's from here, not this tab's: it goes on when the tab closes.
+
   func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
-    download.delegate = self
-    if !["http", "https"].contains(navigationAction.request.url?.scheme?.lowercased()) { unasked.insert(ObjectIdentifier(download)) }
+    // A file the page made itself hasn't been asked about yet: its name comes with the download.
+    let made = !["http", "https"].contains(navigationAction.request.url?.scheme?.lowercased())
+    browser?.downloads.take(
+      download,
+      asks: made ? { [weak self] name in
+        guard let self, let browser = self.browser else { return false }
+        return await browser.ask(.download(name: name), from: self)
+      } : nil)
   }
 
   func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
-    download.delegate = self
+    browser?.downloads.take(download)
   }
 
   func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
     failure = nil
     failed = nil
+    answered = nil
     shrink.grow()
     barHidden = false
     isLoading = true
@@ -492,6 +503,8 @@ extension WebTab: WKNavigationDelegate {
   func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
     failure = nil
     failed = nil
+    // A page brought back whole from memory answers nothing, and is never a PDF.
+    isPDF = answered == "application/pdf"
     committed = webView.url
     loginState.committed()
     writes.commit()
@@ -679,31 +692,6 @@ extension WebTab: WKUIDelegate {
     type: WKMediaCaptureType
   ) async -> WKPermissionDecision {
     .prompt
-  }
-}
-
-extension WebTab: WKDownloadDelegate {
-  func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String) async -> URL? {
-    if unasked.remove(ObjectIdentifier(download)) != nil, await browser?.ask(.download(name: suggestedFilename), from: self) != true {
-      // No destination is the download called off.
-      return nil
-    }
-    let folder = URL.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
-    try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-    let file = folder.appending(path: suggestedFilename)
-    downloads[ObjectIdentifier(download)] = file
-    return file
-  }
-
-  func downloadDidFinish(_ download: WKDownload) {
-    if let file = downloads.removeValue(forKey: ObjectIdentifier(download)) { browser?.downloaded(file) }
-  }
-
-  func download(_ download: WKDownload, didFailWithError error: any Error, resumeData: Data?) {
-    unasked.remove(ObjectIdentifier(download))
-    // One the user called off never had a file.
-    guard downloads.removeValue(forKey: ObjectIdentifier(download)) != nil else { return }
-    browser?.tell("The download didn't finish. \(error.localizedDescription)")
   }
 }
 

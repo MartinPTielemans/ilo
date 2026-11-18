@@ -54,6 +54,8 @@ struct Zoom: Equatable {
 final class Browser {
   enum Sheet: Equatable {
     case actions, settings, signIn
+    /// The files the phone has downloaded, and the ones on their way.
+    case downloads
     /// The dock's tiles past its two rows.
     case more
     /// A pinned folder's tabs.
@@ -64,6 +66,7 @@ final class Browser {
   let settings: Settings
   let cache: TabCache
   let favicons: Favicons
+  let downloads: Downloads
   @ObservationIgnored let places = Places()
 
   /// The Space on screen.
@@ -91,11 +94,15 @@ final class Browser {
   /// The search field over the page.
   var searchingPage = false
   private(set) var prompt: Prompt?
-  /// A finished download, for the system's sheet to save or open.
-  var downloaded: URL?
+  /// A downloaded file open in Quick Look.
+  var looking: URL?
+  /// A pass, in Wallet's own sheet for adding one.
+  var pass: URL?
+  /// A file to copy somewhere else in Files, in the system's picker of places.
+  var copying: URL?
   /// What the user has typed in answer to a page's question.
   var typed = ""
-  /// A link the user chose to share, for the system's sheet to send on.
+  /// A link the user chose to share, or a file, for the system's sheet to send on.
   var shared: URL?
   /// Launch puts the keyboard up, once.
   var wantsKeyboard: Bool
@@ -106,11 +113,12 @@ final class Browser {
   /// The time iOS gives the account to send what changed after the app leaves the screen.
   @ObservationIgnored private var sending = UIBackgroundTaskIdentifier.invalid
 
-  init(account: any IloAccount, settings: Settings, cache: TabCache, favicons: Favicons) {
+  init(account: any IloAccount, settings: Settings, cache: TabCache, favicons: Favicons, downloads: Downloads) {
     self.account = account
     self.settings = settings
     self.cache = cache
     self.favicons = favicons
+    self.downloads = downloads
     space = settings.space
     wantsKeyboard = settings.keyboardOnLaunch
     (account as? PhoneAccount)?.joined = { [weak self] in self?.joined($0) }
@@ -493,8 +501,24 @@ final class Browser {
     prompt = Prompt(kind: .notice(text), host: "") { _ in }
   }
 
-  func downloaded(_ file: URL) {
-    downloaded = file
+  // MARK: Files
+
+  /// Opens a downloaded file: a pass in Wallet's own sheet for adding one; what Quick Look shows
+  /// in Quick Look, which has the system's Add for a calendar file and a contact; and anything
+  /// else in the system's sheet, to hand to an app that opens it.
+  func open(_ file: URL) {
+    switch FileKind.of(file) {
+    case .pass: pass = file
+    case .looked: looking = file
+    case .other: shared = file
+    }
+  }
+
+  /// Share on an open PDF sends the file, not its link, and Print prints it: a copy is fetched
+  /// first, as the page was.
+  func copy(of tab: WebTab) async -> URL? {
+    guard let url = tab.url else { return nil }
+    return await downloads.copy(of: url, from: tab.webView)
   }
 
   // MARK: The app coming and going
@@ -504,6 +528,7 @@ final class Browser {
     if let page, pageOpen { takePicture(of: page) }
     for tab in tabs.values { save(tab) }
     settings.leftPage(pageOpen ? shown : nil)
+    downloads.leftScreen()
     send()
   }
 
@@ -525,6 +550,7 @@ final class Browser {
   }
 
   func foreground() {
+    downloads.cameBack()
     Task {
       await account.refresh()
       prune()
