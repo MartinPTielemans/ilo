@@ -990,11 +990,12 @@ check_reveal() {
 }
 # reveal_at_edge <what> [from]: the pointer comes onto the window's edge and moves along it, and the
 # sidebar comes out, which is looked for from the first move, or from command <from>: the wait the
-# pointer starts at the edge can be over before the next move is sent.
+# pointer starts at the edge can be over before the next move is sent. At x 0, where a hand pushed
+# to the edge is (#3219).
 reveal_at_edge() {
   local from=${2:-$((step + 1))}
-  send move 3 300
-  send move 3 306
+  send move 0 300
+  send move 0 306
   expect '^browser: reveal shown$' "$1" "$from"
 }
 send key s cmd
@@ -1002,11 +1003,11 @@ toggle ui hidden "⌘S before the reveal"
 send move 400 300
 # The pointer has to move a few points up or down at the edge and stay a moment: one jumping
 # there, or passing it, doesn't bring the sidebar out.
-send move 3 300
+send move 0 300
 none_while '^browser: reveal waits$' || fail "the pointer jumping to the window's edge brought the sidebar out"
 step=$((step + 1))
 passed=$step
-echo "move 3 306" >&3
+echo "move 0 306" >&3
 send move 400 300
 # Over the page the shell hears no moves on Linux and Windows, as the page is Chromium's window, but
 # it hears the pointer leave its own for it, which ends the wait (Shell::leave_listener).
@@ -1061,9 +1062,9 @@ send key s cmd
 toggle ui hidden "⌘S with the edge off"
 send move 400 300
 from=$((step + 1))
-send move 3 300
-send move 3 306
-send move 3 312
+send move 0 300
+send move 0 306
+send move 0 312
 # Past the wait the edge would have before the sidebar came out.
 sleep 1
 ! sed -n "/^browser: drive $from: /,\$p" "$log" | grep -q '^browser: reveal \(waits\|shown\)$' ||
@@ -1775,8 +1776,8 @@ else
   send window 1 behind
   behind=$step
   send move 400 300
-  send move 3 300
-  send move 3 306
+  send move 0 300
+  send move 0 306
   ../tools/window-screenshot.sh "$pid" "$out/reveal-behind.png" all || fail "no window to capture"
   # The window's wait starts as the pointer moves in its edge, logged then, so none by the time the
   # driver brings it forward means it never started.
