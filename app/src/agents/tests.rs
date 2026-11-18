@@ -1073,8 +1073,9 @@ fn an_agents_tab_yet_to_commit_its_first_page_is_the_cores_to_wait_for(cx: &mut 
     }
 }
 
-/// A tab of the user's, in their own Space, gets the answer any tab not the agent's gets, whatever
-/// its page: refusing it for being off the web would tell the agent what the user has open.
+/// A tab of the user's, in their own Space, gets the core's answer for any tab not the agent's,
+/// whatever its page: refusing it for being off the web would tell the agent what the user has
+/// open.
 #[gpui::test]
 fn a_users_tab_off_the_web_is_answered_as_any_tab_not_the_agents(cx: &mut TestAppContext) {
     for url in [
@@ -1099,6 +1100,11 @@ fn a_users_tab_off_the_web_is_answered_as_any_tab_not_the_agents(cx: &mut TestAp
                 answer.recv().unwrap(),
                 ToolResult::error(NOT_ITS_SPACE),
                 "{tool} on a user's tab at {url}"
+            );
+            // The core's answer, which its activity log has.
+            assert!(
+                browser.checked.borrow_mut().drain(..).next().is_some(),
+                "{tool} on a user's tab at {url} didn't ask the core"
             );
         }
     }
