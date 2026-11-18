@@ -526,6 +526,9 @@ pub trait Host {
     fn set_height(&self, height: f32);
     /// Hides the bar's window once the user has chosen something in it.
     fn hide(&self);
+    /// Gives the page the browser window shows the keyboard, once the bar has hidden over the page
+    /// it went to.
+    fn focus_page(&self);
     /// Hides the bar's window as the user leaves it without choosing anything.
     fn dismiss(&self);
     /// Gives the bar's window the keyboard back, which it found it hasn't while it shows, unless
@@ -2506,7 +2509,8 @@ impl CommandBar {
             // check.sh reads this line.
             log!("browser: command bar reloads tab {tab}");
             self.close();
-            return self.host.reload(tab);
+            self.host.reload(tab);
+            return self.host.focus_page();
         }
         // Before anything is typed, that's one of the Space's tabs.
         if self.chosen().is_some() {
@@ -2554,6 +2558,10 @@ impl CommandBar {
         log!("browser: command bar go {url}");
         self.show_page(url, typed, cx);
         self.close();
+        // The page takes the keyboard, as Chrome's address bar gives it, wherever it was before the
+        // bar opened, such as in the UI over a Board. Chrome gives it only while its window is
+        // active, which on the Mac and Windows the bar's own window was until it hid (#3453).
+        self.host.focus_page();
     }
 
     /// ⌘↩: opens where ↩ would go in a tab behind the one shown, at the top of Today, and the bar
