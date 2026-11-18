@@ -84,6 +84,11 @@ pub(crate) unsafe extern "C" fn tab_key_before_page(
     if browser::agents::pressing_key() {
         return false;
     }
+    // Under Wayland GPUI hears this press too, which the ring tells from a Tab of its own.
+    #[cfg(target_os = "linux")]
+    if unsafe { CStr::from_ptr((*key).key) }.to_bytes() == b"Tab" {
+        shell::page_tab_pressed();
+    }
     let cx = CX.with_borrow(Clone::clone);
     shell::page_key_answer(cx.as_ref(), || {
         #[cfg(target_os = "linux")]

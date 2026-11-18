@@ -1478,6 +1478,7 @@ pub fn bind_keys(cx: &mut App) {
     translate::bind(cx);
     boost::bind(cx);
     sidebar_keys::bind(cx);
+    super::page_ends::bind(cx);
     super::library::keys::bind(cx);
 }
 

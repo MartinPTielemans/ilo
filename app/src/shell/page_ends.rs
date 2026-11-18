@@ -9,10 +9,10 @@
 //! (Little ilo, the top bar, a hidden sidebar, full screen, the Library, a page another window or
 //! Peek shows) the app doesn't take the keyboard, and the page wraps.
 
-use std::time::Duration;
+use std::{cell::Cell, time::Duration};
 use web_time::Instant;
 
-use gpui::{Context, Role, SharedString, Stateful, div, prelude::*, px};
+use gpui::{App, Context, Role, SharedString, Stateful, div, prelude::*, px};
 
 use super::{
     Shell,
@@ -36,10 +36,61 @@ pub(super) enum StripStop {
     Open,
 }
 
-/// One key's press, shorter than a keyboard's repeat delay: a Tab the page hands back that the
-/// ring's keys get too, as GPUI has every key under Wayland, or a page with nothing to focus
-/// handing back the Tab that went into it.
+/// One key's press, shorter than a keyboard's repeat delay: a page with nothing to focus handing
+/// straight back the Tab that went into it, which it answers with no key of its own between.
 const SAME_PRESS: Duration = Duration::from_millis(200);
+
+/// Under Wayland GPUI hears every key the page gets as well (gpui_linux), so the Tab that leaves
+/// the page can reach the ring a second time: GPUI's copy of it. The copy is told by the press
+/// itself, never by time: it's the first Tab GPUI hears go down after the page had one, before
+/// GPUI hears Tab go up, and a person's next press always comes after that release.
+#[derive(Clone, Copy, Default)]
+struct TabCopy {
+    /// The page had a Tab press since GPUI last heard Tab go up.
+    page: bool,
+    /// GPUI heard Tab go down since it last heard it go up.
+    heard: bool,
+}
+
+thread_local! {
+    static TAB_COPY: Cell<TabCopy> = const { Cell::new(TabCopy { page: false, heard: false }) };
+}
+
+/// The page had a Tab press, which under Wayland GPUI hears too (keys.rs).
+pub fn page_tab_pressed() {
+    TAB_COPY.set(TabCopy {
+        page: true,
+        ..TAB_COPY.get()
+    });
+}
+
+/// A test's start, with no press under way.
+#[cfg(test)]
+pub(super) fn forget_tab_copy() {
+    TAB_COPY.set(TabCopy::default());
+}
+
+/// GPUI heard Tab go up: that press is over, and the next Tab is a press of its own.
+pub(super) fn tab_released() {
+    TAB_COPY.set(TabCopy::default());
+}
+
+/// GPUI's copy of the page's Tab goes no further than here once it would move the ring
+/// (`tab_heard`), before any binding has it.
+pub(super) fn bind(cx: &mut App) {
+    cx.intercept_keystrokes(|event, window, cx| {
+        if event.keystroke.key != "tab" {
+            return;
+        }
+        let Some(Some(shell)) = window.root::<Shell>() else {
+            return;
+        };
+        if shell.update(cx, |shell, _| shell.tab_heard()) {
+            cx.stop_propagation();
+        }
+    })
+    .detach();
+}
 
 #[cfg(test)]
 thread_local! {
@@ -71,7 +122,20 @@ fn stop_drawn(stop: StripStop) -> Option<gpui::AnyElement> {
 #[derive(Default)]
 pub(super) struct PageEnds {
     pub(super) entered: Option<(Instant, Option<StripStop>, u64)>,
-    pub(super) left: Option<Instant>,
+    /// The tab whose page the keyboard last left for the ring.
+    left: Option<u64>,
+    /// GPUI hears the page's keys too, as under Wayland alone: elsewhere no copy of the page's Tab
+    /// reaches the ring, and nothing is dropped as one.
+    pub(super) copies: bool,
+}
+
+impl PageEnds {
+    pub(super) fn new(cx: &App) -> Self {
+        Self {
+            copies: cx.compositor_name() == "Wayland",
+            ..Self::default()
+        }
+    }
 }
 
 impl Shell {
@@ -95,7 +159,15 @@ impl Shell {
             }
             return true;
         }
-        self.page_ends.left = Some(Instant::now());
+        self.page_ends.left = Some(tab);
+        // Which comes first under Wayland, the leave or GPUI's copy of its Tab, for the runs' logs.
+        let copy = TAB_COPY.get();
+        if self.page_ends.copies && copy.page {
+            log!(
+                "browser: tab {tab} left its page {} GPUI heard its Tab",
+                if copy.heard { "after" } else { "before" }
+            );
+        }
         let stops = self.ring_stops();
         let at = stops.iter().position(|&stop| stop == Some(StripStop::Page));
         let next = at.map(|at| match reverse {
@@ -117,15 +189,6 @@ impl Shell {
             (None, Some(stop)) => Some(stop),
             (None, None) => return cx.propagate(),
         };
-        // The page's own Tab, which rang this stop as it left the page.
-        if self
-            .page_ends
-            .left
-            .take()
-            .is_some_and(|at| at.elapsed() < SAME_PRESS)
-        {
-            return;
-        }
         let stops = self.ring_stops();
         let Some(at) = stops.iter().position(|&stop| stop == here) else {
             return self.key_ring_start(cx);
@@ -320,6 +383,26 @@ impl Shell {
             && self.library.is_none()
             && self.onboarding.is_none();
         shown && room
+    }
+
+    /// GPUI heard Tab go down, a repeat or not. Says whether it's GPUI's copy of the page's own
+    /// press, under Wayland, with the ring keyed by that press's leave, which it never moves. A held
+    /// Tab's repeats come after GPUI heard its press, so they go on as presses do, around the ring
+    /// and into the page, as a held Tab goes on through Chrome's toolbar.
+    pub(super) fn tab_heard(&mut self) -> bool {
+        let copy = TAB_COPY.get();
+        TAB_COPY.set(TabCopy {
+            heard: true,
+            ..copy
+        });
+        let ringed = self.keyed.is_some() || self.keyed_strip.is_some();
+        if !(self.page_ends.copies && copy.page && !copy.heard && ringed) {
+            return false;
+        }
+        // check.sh reads this line.
+        let tab = self.page_ends.left.unwrap_or(self.selected);
+        log!("browser: tab {tab} ring took the page's own Tab");
+        true
     }
 
     fn enter_page(&mut self, reverse: bool, from: Option<StripStop>, cx: &mut Context<Self>) {

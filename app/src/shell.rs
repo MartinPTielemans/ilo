@@ -132,6 +132,7 @@ mod undo_tests;
 #[cfg(test)]
 mod window_move_tests;
 pub use conversation::{bind_keys as bind_conversation_keys, send_agents};
+pub use page_ends::page_tab_pressed;
 mod picture;
 mod recent_downloads;
 mod recent_tabs;
@@ -2165,7 +2166,7 @@ impl Shell {
             focus_keys: false,
             keyed_drawn: Rc::default(),
             keyed_strip: None,
-            page_ends: Default::default(),
+            page_ends: page_ends::PageEnds::new(cx),
             attention: None,
             tools_on: false,
             tools_fade: None,
@@ -4793,6 +4794,13 @@ impl Render for Shell {
             })
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle)
+            // Wherever the keys are in the window: under Wayland Tab's release ends the wait for
+            // GPUI's copy of the page's Tab (page_ends.rs).
+            .capture_key_up(|event: &gpui::KeyUpEvent, _, _| {
+                if event.keystroke.key == "tab" {
+                    page_ends::tab_released();
+                }
+            })
             .on_action(cx.listener(|shell, _: &sidebar_keys::TabIn, window, cx| {
                 shell.tab_in(false, window, cx)
             }))
