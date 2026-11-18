@@ -1397,6 +1397,10 @@ impl Browser for Engine {
         unsafe { bc::bc_window_focus_page(self.window) };
     }
 
+    fn focus_page_end(&self, last: bool, _: &mut App) {
+        unsafe { bc::bc_window_focus_page_end(self.window, last) };
+    }
+
     fn lay_out_page(&self, frame: Bounds<Pixels>, radius: f32, _: &mut App) {
         set_page_frame(self.window, (frame, radius));
     }

@@ -1856,6 +1856,8 @@ impl Browser for Fake {
 
     fn focus_page(&self, _: &mut App) {}
 
+    fn focus_page_end(&self, _: bool, _: &mut App) {}
+
     // There's no page, and the window's buttons stay where GPUI put them.
     // The site lays its frame out under the canvas there.
     fn lay_out_page(&self, _frame: Bounds<Pixels>, _radius: f32, _: &mut App) {
@@ -2462,6 +2464,75 @@ fn task_space(id: u64) -> SpaceEntry {
     )
 }
 
+/// PREVIEW_TASK_RING=<stop> (with PREVIEW_TASKS=open) watches the working task's page, and
+/// rings the stop named, as Tab from the window does: none, card, back, page, take-over or stop
+/// (#3220).
+fn preview_task_ring(shell: WeakEntity<Shell>, cx: &mut App) {
+    let Ok(stop) = std::env::var("PREVIEW_TASK_RING") else {
+        return;
+    };
+    // Tabs after the strip's first stop, the task's card.
+    let tabs = match stop.as_str() {
+        "card" => Some(0),
+        "back" => Some(1),
+        "page" => Some(2),
+        "take-over" => Some(3),
+        "stop" => Some(4),
+        _ => None,
+    };
+    let tab = FIRST_TASK + 300;
+    let agent: SharedString = format!("task-{FIRST_TASK}").into();
+    cx.spawn(async move |cx| {
+        // After the conversation the card's click opens.
+        cx.background_executor()
+            .timer(Duration::from_millis(300))
+            .await;
+        shell
+            .update(cx, |shell, cx| {
+                let none = Folders::default();
+                shell.set_tabs(FIRST_TASK, Vec::new(), vec![tab], Vec::new(), none, cx);
+                shell.set_title(tab, "Seats · Saturday".into(), cx);
+                let url = "https://tickets.example/seats".into();
+                let page = Page {
+                    url,
+                    ..Default::default()
+                };
+                shell.set_page(tab, page, cx);
+                shell.watch_task_page(tab, Bounds::default(), None, cx);
+                shell.set_space(FIRST_TASK, cx);
+                shell.set_selected(tab, cx);
+                let status = browser::agents::Status {
+                    agent: agent.clone(),
+                    name: "Claude".into(),
+                    space: FIRST_TASK,
+                    doing: "Clicking “Tickets”".into(),
+                    held: Vec::new(),
+                };
+                shell.set_agent_status(vec![status], cx);
+                shell.agent_acted(agent, tab, cx);
+            })
+            .ok();
+        // Once the page is in place, which is when the ring reaches it.
+        cx.background_executor()
+            .timer(Duration::from_millis(900))
+            .await;
+        shell
+            .update(cx, |shell, cx| {
+                if let Some(tabs) = tabs {
+                    shell.tab_into_strip(false, cx);
+                    for _ in 0..tabs {
+                        shell.key_tab(false, cx);
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        // A capture of the strip starts once this is logged.
+        eprintln!("preview: task ring on {stop}");
+    })
+    .detach();
+}
+
 /// The tasks' cards, each asked in `home`.
 fn task_cards(home: u64) -> Vec<TaskCard> {
     let card = |(at, (title, status, dot)): (u64, (&str, &str, Dot))| TaskCard {
@@ -2488,6 +2559,12 @@ fn task_cards(home: u64) -> Vec<TaskCard> {
         command: None,
     };
     let mut cards: Vec<TaskCard> = (FIRST_TASK..).zip(TASKS).map(card).collect();
+    // PREVIEW_TASK_STEP=long gives the working task a step line too long for a narrow window's
+    // strip.
+    if std::env::var("PREVIEW_TASK_STEP").as_deref() == Ok("long") {
+        cards[0].status =
+            "Step 3 · Comparing the seats in rows 12 to 18 for two on the aisle".into();
+    }
     // Newest first, as the Agents send them.
     cards.reverse();
     cards
@@ -3245,6 +3322,7 @@ fn main() {
                                 shown
                                     .update(cx, |shell, cx| shell.show_task(agent.into(), cx))
                                     .ok();
+                                preview_task_ring(shown, cx);
                             });
                         }
                     }
