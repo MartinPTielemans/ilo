@@ -219,10 +219,20 @@ look_hidden() {
   [ ! -s "$before_hides/$name" ] || before=" $(app_path "$before_hides/$name")"
   asked=$(grep -c '^cdp: hidden ' "$cdp_log" || true)
   echo "hidden $(app_path "$PWD/$hides/$name")$before" >&5
-  # Telling the blocker's hiding from the page's asks DevTools about elements one by one, up to
-  # 15 s on a site.
+  # Telling the blocker's hiding from the page's asks DevTools about elements, many at a time, up
+  # to 15 s on a site.
   for _ in $(seq 300); do
-    [ "$(grep -c '^cdp: hidden ' "$cdp_log" || true)" -gt "$asked" ] && return
+    if [ "$(grep -c '^cdp: hidden ' "$cdp_log" || true)" -gt "$asked" ]; then
+      # Where the 15 s ended first, so a site drifting over it shows before it turns a run red.
+      untold=$(grep '^cdp: hidden ' "$cdp_log" | tail -1 |
+        sed -n 's/.* untold \([0-9]*\) \([0-9]*\) in .*/\1 \2/p')
+      case $untold in
+        '' | '0 0') ;;
+        *) echo "$run: $1: ${untold% *} hidden elements, of ${untold#* } selectors, weren't told" \
+             "apart in the 15 s, so they count as the blocker's" ;;
+      esac
+      return
+    fi
     sleep 0.1
   done
   fail "cdp.py didn't say what $1 hid: it said $(tail -1 "$cdp_log")"
@@ -363,23 +373,24 @@ done 4< check/adblock-sites.txt
 # Without pictures, the last site's ads, which load after its page does, get the 8 s here alone.
 [ -z "${ADBLOCK_PARITY_NO_CAPTURE:-}" ] || sleep 8
 [ -s "$starts" ] || fail "no site opened"
-# The most memory a process took, in MB.
-peak() {
-  if windows; then
-    ID=$1 powershell.exe -NoProfile -NonInteractive -Command '$p = Get-Process -Id $env:ID;
-      "$([math]::Round($p.PeakWorkingSet64 / 1MB))"' | tr -d '\r'
-  else
-    awk '/^VmHWM:/ { print int($2 / 1024) }' "/proc/$1/status"
-  fi
-}
 python3 -I check/usage.py snap "$procs" "$dir/memory.json" kinds || fail "the browser's memory didn't read"
 summed=$(python3 -I check/usage.py memory "$dir/memory.json")
 memory=". Its processes held ${summed% *} MiB, ${summed#* } processes ($(python3 -I check/usage.py kinds "$dir/memory.json"))"
 echo "${summed% *}" > "$dir/memory.txt"
+# The most the browser's process and uBlock Origin's took, from the same snapshot, which finds
+# them by their own ids on each OS: Windows' Get-Process takes no id the shell gives (#3315).
 if ! [ "$(uname)" = Darwin ]; then
-  memory="$memory; the browser's process at most $(peak "$pid") MB"
-  ublock=$(pgrep -f "$procs.*--extension-process" | head -1)
-  [ -z "$ublock" ] || memory="$memory, uBlock Origin's at most $(peak "$ublock") MB"
+  peak=$(python3 -I check/usage.py peak "$dir/memory.json" browser)
+  if [ -n "$peak" ]; then
+    memory="$memory; the browser's process at most $peak MiB"
+  else
+    memory="$memory; the browser's process's peak wasn't read"
+  fi
+  # An extension's process is uBlock Origin's only in its own pass.
+  owner="an extension's"
+  [ "$engine" != ublock ] || owner="uBlock Origin's"
+  peak=$(python3 -I check/usage.py peak "$dir/memory.json" extension)
+  [ -z "$peak" ] || memory="$memory, $owner at most $peak MiB"
 fi
 exec 3>&- 5>&-
 quit
