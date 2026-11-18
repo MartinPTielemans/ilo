@@ -69,7 +69,7 @@ takes a command a line on its standard input:
                   earlier run's FILE for the same site, its selectors none of whose elements were
                   shown then, the page's own aside, and some are now. Logs "cdp: hidden SELECTORS
                   ELEMENTS SHOWN blocker SELECTORS page SELECTORS missed SELECTORS ELEMENTS
-                  untold ELEMENTS SELECTORS in MS ms", untold those not told apart in 15 s
+                  untold ELEMENTS SELECTORS in MS ms", untold those not told apart in 40 s
   requests FILE   records each request the attached page and its frames make from now on, a JSON
                   line each in FILE: "sent" with its id, address and wall time in ms, and
                   "redirect": true where it's a redirect of the request before it, and
@@ -702,9 +702,12 @@ def blockers(rules):
 WAVE = 8
 
 
-def whose(selectors, budget=15):
+def whose(selectors, budget=40):
     """Of SELECTORS, those a blocker hid and those the page hid itself, as two lists, then how many
-    marked elements and selectors weren't told apart when BUDGET ended. A blocker's
+    marked elements and selectors weren't told apart when BUDGET ended. It asks until every marked
+    element is told, so only a page of many hidden parts and style rules takes long: Chromium
+    answers each ask in turn, cold, up to 0.4 s on Windows, about 35 s for a YouTube watch page
+    there (#3335). A blocker's
     hiding is a rule from a style sheet the page didn't load, as blockers() tells it: the
     browser's own engine's (core/ad_block_page_agent.cc) and uBlock Origin's, their procedural
     filters' too, which hide by an attribute and a rule. The page's own is an element at display: none that no such
