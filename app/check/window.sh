@@ -21,13 +21,14 @@
 # sidebar below the rows opens a new tab. ⌘S, with the page or the UI focused, and the sidebar
 # button hide the sidebar and the window's buttons, and the card takes its place, through a resize;
 # ⌘S brings them back, and the core hears the page moves for each motion and is still after it. The
-# pointer kept at the window's edge brings the hidden sidebar out, and one passing it doesn't. A tab
-# opened with the sidebar hidden says so in a toast, a second one bumps it, and a click on it
-# brings the sidebar back. The sidebar's edge drags its width between 164 and 500, stopping at
-# them, and dragged on past half the narrowest it hides the sidebar, keeping its width; a
-# double-click on it puts the width back. A page that hasn't drawn yet shows black, or white with
-# View › Appearance on Light, and with the window widened, the space a page hasn't drawn at its new
-# size shows the page's own background. In a check VM, the sidebar over grey backdrops is Dia's composite,
+# pointer kept at the window's edge brings the hidden sidebar out, and one passing it doesn't, from
+# the right edge too with the sidebar put on the right. A tab opened with the sidebar hidden says
+# so in a toast, a second one bumps it, and a click on it brings the sidebar back. The sidebar's
+# edge drags its width between 164 and 500, stopping at them, and dragged on past half the
+# narrowest it hides the sidebar, keeping its width; a double-click on it puts the width back. A
+# page that hasn't drawn yet shows black, or white with View › Appearance on Light, and with
+# the window widened, the space a page hasn't drawn at its new size shows the page's own
+# background. In a check VM, the sidebar over grey backdrops is Dia's composite,
 # dark and then light, with the Mac's appearance, and View › Appearance turns the light window dark
 # and back. On the Mac, the Dock icon's dot takes the Space's color, and stays green with its switch
 # in Settings › General off; on Windows, the taskbar button's dot does, read off a check VM's screen.
@@ -1122,6 +1123,31 @@ settings_drew "Tabs & Sidebar"
 in_sight "switch edge reveals sidebar" || fail "Settings didn't draw the edge's switch"
 send clickkey $at
 expect '^browser: edge reveals sidebar on$' "a click on the edge's switch didn't turn it on again"
+# The sidebar on the right, picked in Settings as a user does, comes out from the window's last
+# column, where on Linux the band at the right edge is the UI's too (#3219). Back on the left after.
+in_sight "sidebar position option Right" || fail "Settings didn't draw Right's drawing"
+send clickkey $at
+expect '^browser: sidebar on the right$' "a click on Right's drawing didn't move the sidebar"
+send key w cmd
+expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+send layout
+right=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
+  sed 's/^browser: layout content \([0-9]*\)x.*/\1/')
+send key s cmd
+expect '^browser: sidebar hidden$' "⌘S didn't hide the sidebar on the right"
+send move $((right - 400)) 300
+send move $((right - 1)) 300
+send move $((right - 1)) 306
+expect '^browser: reveal shown$' "the pointer at the window's right edge didn't bring the sidebar out"
+../tools/window-screenshot.sh "$pid" "$out/sidebar-reveal-right.png" || fail "no window to capture"
+send key s cmd
+expect '^browser: sidebar shown$' "⌘S with the sidebar out on the right didn't dock it"
+send menu Settings…
+expect '^browser: settings shown Tabs & Sidebar$' "Settings… didn't show Tabs & Sidebar again"
+settings_drew "Tabs & Sidebar"
+in_sight "sidebar position option Left" || fail "Settings didn't draw Left's drawing"
+send clickkey $at
+expect '^browser: sidebar on the left$' "a click on Left's drawing didn't move the sidebar back"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 # ⌥ pressed and let go alone brings the hidden sidebar out with the pointer over the page, which
@@ -1879,4 +1905,4 @@ fi
 exec 3>&-
 quit
 echo "edge: $edge"
-echo "ok: the page view keeps its margins and the window's buttons stay at Arc's through a resize and full screen, widened, $gap, full screen says how to leave and a page's doesn't, a full-screen page takes the window with it and escape or the page leaving brings both back, the page resized once each way, the green button takes a full-screen page out with the window and brings back the sidebar and the card, from where the page's full screen takes the window again, ${displays:+$displays, }the command bar opens in full screen and keeps the keyboard when a page commits under it, then gives it to the new page. Drags on the window's background move it and drags on its controls don't. A double-click on the header $zoom, and one on the empty sidebar opens a new tab. ⌘S from the page and the UI, and the sidebar button, hide the sidebar and the window's buttons, the card takes its place through a resize, and ⌘S brings them back. The pointer kept at the window's edge brings the hidden sidebar out over the page, one passing it doesn't, and the pointer past it sends it away, and the sidebar button and ⌘S dock it from there. ⌥ pressed alone, with the UI or the page focused, brings the hidden sidebar out and sends it away again, and ⌥ held with ⌘ or a key doesn't. A tab opened with the sidebar hidden says so in a toast, a second one bumps it, and a click on it brings the sidebar back. The sidebar's edge drags its width between 164 and 500, hides it dragged on past the narrowest, and a double-click puts it back. A page that hasn't drawn shows black or white as websites are told the appearance is:${unpainted_seen%,}. Page full screen, ms from the page's request, median of 6 going in, 3 leaving by the page, 3 by escape: going in ${enter_ms}leaving ${exit_ms}by escape ${escape_ms%, }. Scrolling: $timing. Material: $material. Dock icon: $dock. Windows: $out/fullscreen-note.png, $out/fullscreen.png, $out/page-fullscreen.png, $out/green-button.png, $out/green-button-again.png, ${display_shots:-}$out/sidebar-hidden.png, $out/sidebar-reveal.png, $out/sidebar-option.png, $out/new-tab-toast.png, $out/sidebar-wide.png, $out/sidebar-narrow.png, $out/before-paint-light.png, $out/before-paint-dark.png, $out/resize-gap.png${light_shots:-}${dock_shots:-}"
+echo "ok: the page view keeps its margins and the window's buttons stay at Arc's through a resize and full screen, widened, $gap, full screen says how to leave and a page's doesn't, a full-screen page takes the window with it and escape or the page leaving brings both back, the page resized once each way, the green button takes a full-screen page out with the window and brings back the sidebar and the card, from where the page's full screen takes the window again, ${displays:+$displays, }the command bar opens in full screen and keeps the keyboard when a page commits under it, then gives it to the new page. Drags on the window's background move it and drags on its controls don't. A double-click on the header $zoom, and one on the empty sidebar opens a new tab. ⌘S from the page and the UI, and the sidebar button, hide the sidebar and the window's buttons, the card takes its place through a resize, and ⌘S brings them back. The pointer kept at the window's edge brings the hidden sidebar out over the page, one passing it doesn't, and the pointer past it sends it away, and the sidebar button and ⌘S dock it from there. With the sidebar put on the right in Settings, the pointer at the window's last column brings it out there. ⌥ pressed alone, with the UI or the page focused, brings the hidden sidebar out and sends it away again, and ⌥ held with ⌘ or a key doesn't. A tab opened with the sidebar hidden says so in a toast, a second one bumps it, and a click on it brings the sidebar back. The sidebar's edge drags its width between 164 and 500, hides it dragged on past the narrowest, and a double-click puts it back. A page that hasn't drawn shows black or white as websites are told the appearance is:${unpainted_seen%,}. Page full screen, ms from the page's request, median of 6 going in, 3 leaving by the page, 3 by escape: going in ${enter_ms}leaving ${exit_ms}by escape ${escape_ms%, }. Scrolling: $timing. Material: $material. Dock icon: $dock. Windows: $out/fullscreen-note.png, $out/fullscreen.png, $out/page-fullscreen.png, $out/green-button.png, $out/green-button-again.png, ${display_shots:-}$out/sidebar-hidden.png, $out/sidebar-reveal.png, $out/sidebar-reveal-right.png, $out/sidebar-option.png, $out/new-tab-toast.png, $out/sidebar-wide.png, $out/sidebar-narrow.png, $out/before-paint-light.png, $out/before-paint-dark.png, $out/resize-gap.png${light_shots:-}${dock_shots:-}"
