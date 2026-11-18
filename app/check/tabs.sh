@@ -583,11 +583,15 @@ send click $sidebar_point
 switch "tab ctrl" "$c"
 expect '^browser: command recent-tab via ui$' "⌃Tab with the UI focused didn't reach the UI"
 send flags
-# A click ends the walk too.
+# A click ends the walk too. With the switcher shown, a click on a row ends it on the row's tab
+# alone, and the tab the walk passed through doesn't count as shown (#3114), so ⌃⇧Tab goes back
+# to it. The run waits for the switcher, which comes while ⌃ stays held, as the driver's next
+# command could come before or after its delay (#3340).
 switch "tab ctrl" "$a"
+expect '^browser: tab switcher shown$' "⌃Tab held didn't show the switcher"
 send click $(row 1)
 expect "^browser: selected $b in " "a click on the second row didn't show its tab"
-switch "tab ctrl shift" "$c"
+switch "tab ctrl shift" "$a"
 send flags
 send click 100 154
 expect '^browser: command new-tab via sidebar$' "a click on \"+ New Tab\" didn't run New Tab"
