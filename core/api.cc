@@ -2979,6 +2979,14 @@ void bc_window_start_move(bc_id id) {
 #endif
 }
 
+void bc_window_start_resize(bc_id id, bool right) {
+#if BUILDFLAG(IS_LINUX)
+  if (views::Widget* widget = OpenWidget(id)) {
+    browser_core::platform::StartResize(widget, right);
+  }
+#endif
+}
+
 bool bc_window_is_maximized(bc_id id) {
 #if BUILDFLAG(IS_LINUX)
   views::Widget* widget = OpenWidget(id);

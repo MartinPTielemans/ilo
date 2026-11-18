@@ -11,6 +11,7 @@
 #include "base/containers/span.h"
 #include "base/functional/callback_forward.h"
 #include "base/functional/callback_helpers.h"
+#include "base/time/time.h"
 #include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/native_ui_types.h"
@@ -134,6 +135,11 @@ void PassPointerThrough(views::Widget* widget);
 // window moves as it's dragged, as with that setting on and on the Mac, it never runs.
 base::ScopedClosureRunner WatchOutlineMoves(views::Widget* widget,
                                             base::RepeatingCallback<void(const gfx::Point&)> moved);
+
+// When the system says the pointer event the UI thread is handling now happened, or none where it
+// can't say. A move loop's moves and its release are timed by it, so a throw is measured as the
+// pointer moved, not as a busy UI thread got to it, which reads a throw as a rest (#3415).
+std::optional<base::TimeTicks> PointerEventTime();
 
 // Whether a page's dialog, such as Chrome's passkey dialog, needs a native window of its own to
 // show over the pages, rather than being drawn in the window's own.

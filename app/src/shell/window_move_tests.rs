@@ -97,3 +97,24 @@ fn a_press_moves_the_window_once_the_pointer_goes_past_drag_start() {
     assert!(moves_window(Some(press), to(0., -4.)));
     assert!(!moves_window(None, to(20., 0.)), "nothing pressed");
 }
+
+/// On Linux the UI has the band inside the window's left and right edges, between Chromium's
+/// corners, so a press there resizes the window from that edge rather than moving it, and one just
+/// past the band is the window's background again (#3219).
+#[cfg(target_os = "linux")]
+#[gpui::test]
+fn a_press_in_the_band_at_a_side_resizes_from_that_side(cx: &mut TestAppContext) {
+    let (cx, host) = window(cx);
+    let width = cx.update(|window, _| window.viewport_size().width);
+    let resized = |host: &Recorder| {
+        (host.take().into_iter())
+            .filter(|call| call.starts_with("window resize") || call == "window move")
+            .collect::<Vec<_>>()
+    };
+    press(cx, point(px(1.), px(300.)), 1);
+    assert_eq!(resized(&host), ["window resize left"]);
+    press(cx, point(width - px(1.), px(300.)), 1);
+    assert_eq!(resized(&host), ["window resize right"]);
+    press(cx, point(width - px(5.), px(300.)), 1);
+    assert_eq!(resized(&host), Vec::<String>::new());
+}

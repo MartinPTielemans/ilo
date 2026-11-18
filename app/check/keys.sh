@@ -332,6 +332,15 @@ elif windows && [ -z "$japanese" ]; then
   echo "skip: composing in a page: the runner has no Japanese IME, and the Windows driver's own input method composes in the UI's fields alone."
   composed=
 else
+  # On Windows the field has the keyboard back from the ring first, so Japanese composes right after
+  # the handback, which gives the page's pane the keyboard straight, and the pane tells the input
+  # method before the page's view takes focus (#3396).
+  if windows; then
+    send key tab shift
+    expect '^browser: sidebar keyed ' "⇧Tab from the page's field didn't ring the tab's row"
+    send key tab
+    expect '^browser: ring gave the page its first control$' "Tab from the ring didn't give the page's field back the keyboard"
+  fi
   send $ime
   send type nihongo
   expect "^browser: title [0-9]* value abcd$preedit\$" "the page didn't show the composition"
