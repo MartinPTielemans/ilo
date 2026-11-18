@@ -2144,6 +2144,10 @@ impl crate::account::Host for Account {
         crate::account::Activity::default()
     }
 
+    fn open_sync_details(&self, _: &mut App) {
+        self.calls.borrow_mut().push("open sync details".into());
+    }
+
     fn delete_account(&self) {
         self.calls.borrow_mut().push("delete account".into());
     }

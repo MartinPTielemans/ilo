@@ -633,8 +633,23 @@ impl account::Host for CoreAccount {
         unsafe { bc::bc_sync_read_activity(&mut activity) };
         let mut day_starts = [0.; 4];
         unsafe { platform::host_day_starts(day_starts.as_mut_ptr()) };
+        let kind = match activity.refused_kind as u32 {
+            bc::BC_SYNC_KIND_SPACES => account::Kind::Spaces,
+            bc::BC_SYNC_KIND_BOOKMARKS => account::Kind::Bookmarks,
+            bc::BC_SYNC_KIND_PASSWORDS => account::Kind::Passwords,
+            bc::BC_SYNC_KIND_OPEN_TABS => account::Kind::OpenTabs,
+            bc::BC_SYNC_KIND_SETTINGS => account::Kind::Settings,
+            bc::BC_SYNC_KIND_EXTENSIONS => account::Kind::Extensions,
+            _ => account::Kind::Other,
+        };
         let trouble = match activity.trouble as u32 {
-            bc::BC_SYNC_TROUBLE_UNREACHABLE => Some(account::Trouble::Unreachable),
+            bc::BC_SYNC_TROUBLE_OFFLINE => Some(account::Trouble::Offline),
+            bc::BC_SYNC_TROUBLE_SERVER => Some(account::Trouble::ServerError),
+            bc::BC_SYNC_TROUBLE_REFUSED => Some(account::Trouble::Refused {
+                kind,
+                count: activity.refused.max(0) as u32,
+            }),
+            bc::BC_SYNC_TROUBLE_SIGN_IN => Some(account::Trouble::SignIn),
             bc::BC_SYNC_TROUBLE_THROTTLED => Some(account::Trouble::Throttled),
             bc::BC_SYNC_TROUBLE_STOPPED => Some(account::Trouble::Stopped),
             bc::BC_SYNC_TROUBLE_UPDATE => Some(account::Trouble::Update),
@@ -652,7 +667,14 @@ impl account::Host for CoreAccount {
         account::Activity {
             synced: account::synced_when(activity.last_synced, day_starts).into(),
             trouble,
+            since: account::since_when(activity.since, day_starts).into(),
         }
+    }
+
+    fn open_sync_details(&self, cx: &mut App) {
+        let profile = crate::ids(bc::bc_profiles).first().copied().unwrap_or(0);
+        crate::open_in_users_window(profile, "chrome://sync-internals");
+        hide(cx);
     }
 
     fn delete_account(&self) {
