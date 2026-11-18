@@ -794,13 +794,17 @@ typedef struct bc_sync_device {
   bool current;
 } bc_sync_device;
 
-// What stops sync from keeping up with the server, in bc_sync_activity.
+// What stops sync from keeping up with the server, in bc_sync_activity. Sync tries again by itself
+// after OFFLINE, SERVER, REFUSED and SIGN_IN, and they count only once they last: three sync
+// cycles in a row failed, or two minutes of cycles did and none went through. The core decides
+// that as each cycle ends, with no timer, and until then the activity is the last good cycle's, so
+// a network change or a wake from sleep that fails a cycle shows nothing.
 #define BC_SYNC_TROUBLE_NONE 0
-// Its last try couldn't reach the server, or the server answered with an error. It tries again by
-// itself.
-#define BC_SYNC_TROUBLE_UNREACHABLE 1
+// There's no connection to the server: the network is down, or the server's address doesn't
+// answer.
+#define BC_SYNC_TROUBLE_OFFLINE 1
 // The server asked this device to wait before it syncs again, as one does when an account commits
-// more than it allows. It tries again once the wait is over.
+// more than it allows. It tries again once the wait is over. It shows from the cycle that's told.
 #define BC_SYNC_TROUBLE_THROTTLED 2
 // Sync stopped after an error it doesn't recover from while the browser runs.
 #define BC_SYNC_TROUBLE_STOPPED 3
@@ -808,6 +812,24 @@ typedef struct bc_sync_device {
 // this one can't read whole, so this device stopped syncing them, rather than write over what it
 // can't read, until it's updated. The rest still syncs.
 #define BC_SYNC_TROUBLE_UPDATE 4
+// The server answered, with an error rather than what was asked.
+#define BC_SYNC_TROUBLE_SERVER 5
+// The server took the cycle but refused some of this device's changes, |refused| of them, to
+// |refused_kind|. The rest still syncs.
+#define BC_SYNC_TROUBLE_REFUSED 6
+// The server no longer takes this device's sign-in. When it refuses the device's account itself,
+// the core signs out with BC_SYNC_PROBLEM_REMOVED instead.
+#define BC_SYNC_TROUBLE_SIGN_IN 7
+
+// A kind of data sync carries, in bc_sync_activity, as Settings names it.
+#define BC_SYNC_KIND_SPACES 0
+#define BC_SYNC_KIND_BOOKMARKS 1
+#define BC_SYNC_KIND_PASSWORDS 2
+#define BC_SYNC_KIND_OPEN_TABS 3
+#define BC_SYNC_KIND_SETTINGS 4
+#define BC_SYNC_KIND_EXTENSIONS 5
+// More than one kind, or one Settings doesn't name, as the account's list of devices.
+#define BC_SYNC_KIND_OTHER 6
 
 // How sync is keeping up with the server, as Settings › Sync says while it shows.
 typedef struct bc_sync_activity {
@@ -816,6 +838,14 @@ typedef struct bc_sync_activity {
   double last_synced;
   // A BC_SYNC_TROUBLE_ value.
   int trouble;
+  // With BC_SYNC_TROUBLE_OFFLINE, SERVER, REFUSED or SIGN_IN, when the first cycle of the ones that
+  // failed in a row ended, in milliseconds since the Unix epoch; else 0. This launch's: a trouble
+  // starts again with the browser.
+  double since;
+  // With BC_SYNC_TROUBLE_REFUSED, how many changes the last cycle had refused, and a BC_SYNC_KIND_
+  // value for them. Never which ones: the line names the kind, never an item. Else 0.
+  int refused;
+  int refused_kind;
 } bc_sync_activity;
 
 // What the app gives the core when it starts Chromium. Any callback may be null, and a string it's
@@ -1311,8 +1341,9 @@ typedef struct bc_host {
   // bc_profile_add_addresses added |added| addresses to |profile|'s, once for each call that
   // returned true, in order.
   void (*addresses_added)(void* context, bc_id profile, size_t added);
-  // The browser's account changed, or was first read, once the browser has started. The user's
-  // alone: agents hear none.
+  // The browser's account changed, or was first read, once the browser has started, or a sync
+  // cycle ended that changed what bc_sync_read_activity reads. A cycle that changes nothing tells
+  // nothing. The user's alone: agents hear none.
   void (*sync_changed)(void* context, const bc_sync_state* state);
   // Another device asks to be added to the account: ask the user over the front window whether
   // to, showing its code, and answer with bc_sync_answer_pairing. It comes only once the core has
@@ -3962,7 +3993,7 @@ BC_EXPORT void bc_sync_read_devices(void);
 BC_EXPORT void bc_sync_remove_device(const char* id);
 
 // Reads how sync is keeping up with the server into |activity|, with BC_SYNC_ON, else zero. Read
-// as Settings shows it: nothing tells the app as it changes, which would wake it at each sync.
+// as Settings shows it, and again at sync_changed while it does.
 BC_EXPORT void bc_sync_read_activity(bc_sync_activity* activity);
 
 // Turns syncing |what|, a BC_SYNC_ value of bc_sync_choose's, on or off for this device, with
