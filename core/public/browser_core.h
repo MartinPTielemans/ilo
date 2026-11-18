@@ -973,6 +973,10 @@ typedef struct bc_host {
   // The press taken ended, at |x|,|y|. Return false to hand it back: the page gets the press and
   // its release, as a click, such as ⇧⌘'s on a link.
   bool (*tab_press_released)(void* context, bc_id tab, double x, double y);
+  // A mouse button went down on the page of an agent's tab (one in its Space the user doesn't hold)
+  // that a window shows, or on its dialog, such as Chrome's warning before http. The page or the
+  // dialog still gets the press. Not asked for a user's tab.
+  void (*tab_page_pressed)(void* context, bc_id tab);
   // Zap (bc_tab_boost_zap) took a left press on the tab's page: |selector| is a CSS selector for
   // what was under it, for the app to add to the site's Boost, or null for the body or nothing.
   void (*tab_boost_zapped)(void* context, bc_id tab, const char* selector);
