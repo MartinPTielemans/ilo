@@ -941,12 +941,15 @@ send type y
 expect '^browser: title [0-9]* value .*y$' "Tab from the ring didn't give the page's field the keyboard"
 # On Windows, Japanese composes there too, once Tab from the ring has given the page's pane the
 # keyboard straight, and the pane has told the input method before the page's view took focus
-# (#3396). Return commits it.
+# (#3396). Space converts it and Return commits it, as above: with hiragana committed unconverted,
+# another window took the click on the page below, the IME's by every sign.
 if windows && [ -n "$japanese" ]; then
   send $ime
   send type nihongo
   expect "^browser: title [0-9]* value .*y$preedit\$" \
     "Japanese typed after Tab from the ring didn't compose $preedit in the page: $(grep '^browser: title' "$log" | tail -1)"
+  send key space
+  expect '^browser: title [0-9]* value .*y日本語$' "the page didn't show the conversion after Tab from the ring"
   send key return
   send ime off
 fi
