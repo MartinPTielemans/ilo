@@ -301,7 +301,8 @@ send key w cmd shift
 expect "^browser: window closed $private\$" "⇧⌘W didn't close the private window"
 send window 1
 send key return
-expect '^browser: board shows its file$' \
+# The core's line has Chromium's prefix.
+expect 'browser: board shows its file$' \
   "↩ on the unreadable Board, whose Show button has the keyboard, didn't show its file"
 [ "$(cat "$boards/$other/board.json")" = '[]' ] ||
   fail "showing the unreadable Board's file changed it: $(head -c 200 "$boards/$other/board.json")"
