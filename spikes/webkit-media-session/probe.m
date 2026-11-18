@@ -8,6 +8,7 @@
 #import <Cocoa/Cocoa.h>
 #import <MediaPlayer/MediaPlayer.h>
 #import <WebKit/WebKit.h>
+#import <objc/message.h>
 #import <objc/runtime.h>
 
 static CFAbsoluteTime started;
@@ -58,7 +59,58 @@ static NSString* const kWatch =
   NSURL* _url;
   int _messages;
   int _audioChanges;
+  int _sessionChanges;
+  int _metadataCalls;
   BOOL _playing;
+}
+
+// An object's class and each of its properties' values, for WebKit's own types.
+- (NSString*)describe:(id)object {
+  if (!object) {
+    return @"nil";
+  }
+  NSMutableArray* parts = [NSMutableArray arrayWithObject:NSStringFromClass([object class])];
+  unsigned count = 0;
+  objc_property_t* properties = class_copyPropertyList([object class], &count);
+  for (unsigned i = 0; i < count; i++) {
+    NSString* name = @(property_getName(properties[i]));
+    id value = nil;
+    @try {
+      value = [object valueForKey:name];
+    } @catch (NSException* exception) {
+      value = [@"(unreadable: " stringByAppendingFormat:@"%@)", exception.name];
+    }
+    NSString* text = [value description];
+    [parts addObject:[NSString stringWithFormat:@"%@=%@", name,
+                                                 text.length > 80 ? [NSString stringWithFormat:@"%@ of %lu chars",
+                                                                    NSStringFromClass([value class]),
+                                                                    (unsigned long)text.length]
+                                                                  : text]];
+  }
+  free(properties);
+  return [parts componentsJoinedByString:@" "];
+}
+
+// The private calls on Now Playing: their type encodings, and the metadata class's properties.
+- (void)describeNowPlayingCalls {
+  for (NSString* name in @[
+         @"_setNowPlayingMetadataObserver:", @"_nowPlayingMediaTitleAndArtist:",
+         @"_requestActiveNowPlayingSessionInfo:", @"_hasActiveNowPlayingSession",
+         @"_pauseNowPlayingMediaSession:", @"_playPredominantOrNowPlayingMediaSession:"
+       ]) {
+    Method method = class_getInstanceMethod([WKWebView class], NSSelectorFromString(name));
+    Log(@"SPI %@ %s", name, method ? method_getTypeEncoding(method) : "absent");
+  }
+  Class metadata = NSClassFromString(@"_WKNowPlayingMetadata");
+  NSMutableArray* names = [NSMutableArray array];
+  unsigned count = 0;
+  objc_property_t* properties = metadata ? class_copyPropertyList(metadata, &count) : NULL;
+  for (unsigned i = 0; i < count; i++) {
+    [names addObject:[NSString stringWithFormat:@"%s (%s)", property_getName(properties[i]),
+                                                property_getAttributes(properties[i])]];
+  }
+  free(properties);
+  Log(@"_WKNowPlayingMetadata %@", metadata ? [names componentsJoinedByString:@", "] : @"absent");
 }
 
 - (instancetype)initWithURL:(NSURL*)url {
@@ -86,6 +138,21 @@ static NSString* const kWatch =
   if (observable) {
     [_web addObserver:self forKeyPath:@"_isPlayingAudio" options:0 context:nil];
   }
+  [self describeNowPlayingCalls];
+  if ([_web respondsToSelector:NSSelectorFromString(@"_hasActiveNowPlayingSession")]) {
+    [_web addObserver:self forKeyPath:@"_hasActiveNowPlayingSession" options:0 context:nil];
+  }
+  // WebKit's own report of what plays, as Safari shows it, with no script in the page.
+  SEL observe = NSSelectorFromString(@"_setNowPlayingMetadataObserver:");
+  if ([_web respondsToSelector:observe]) {
+    __weak Probe* weak = self;
+    void (^observer)(id) = ^(id metadata) {
+      Probe* probe = weak;
+      probe->_metadataCalls++;
+      Log(@"now playing metadata observer: %@", [probe describe:metadata]);
+    };
+    ((void (*)(id, SEL, id))objc_msgSend)(_web, observe, observer);
+  }
   _window = [[NSWindow alloc] initWithContentRect:NSMakeRect(40, 40, 480, 320)
                                         styleMask:NSWindowStyleMaskTitled
                                           backing:NSBackingStoreBuffered
@@ -93,7 +160,7 @@ static NSString* const kWatch =
   _window.contentView = _web;
   [_window orderFrontRegardless];
   [_web loadRequest:[NSURLRequest requestWithURL:_url]];
-  [self after:60 run:^{
+  [self after:120 run:^{
     Log(@"FAIL: ran out of time");
     exit(1);
   }];
@@ -170,8 +237,12 @@ static NSString* const kWatch =
                       ofObject:(id)object
                         change:(NSDictionary*)change
                        context:(void*)context {
-  _audioChanges++;
-  Log(@"_isPlayingAudio %@", [_web valueForKey:@"_isPlayingAudio"]);
+  if ([keyPath isEqualToString:@"_isPlayingAudio"]) {
+    _audioChanges++;
+  } else {
+    _sessionChanges++;
+  }
+  Log(@"%@ %@", keyPath, [_web valueForKey:keyPath]);
 }
 
 - (void)webView:(WKWebView*)web didFinishNavigation:(WKNavigation*)navigation {
@@ -213,6 +284,19 @@ static NSString* const kWatch =
                Log(@"1 playing: callActionHandler in the page's world: %@", result);
              }];
   }];
+  // 1b. WebKit's own title and artist of what plays, asked.
+  [steps addObject:^{
+    SEL ask = NSSelectorFromString(@"_nowPlayingMediaTitleAndArtist:");
+    if (![self->_web respondsToSelector:ask]) {
+      Log(@"1b _nowPlayingMediaTitleAndArtist: absent");
+      return;
+    }
+    Log(@"1b asking _nowPlayingMediaTitleAndArtist:");
+    void (^answer)(NSString*, NSString*) = ^(NSString* title, NSString* artist) {
+      Log(@"1b _nowPlayingMediaTitleAndArtist: title %@, artist %@", title, artist);
+    };
+    ((void (*)(id, SEL, id))objc_msgSend)(self->_web, ask, answer);
+  }];
   // 2. The page's next track handler, from the browser's world, where it has callActionHandler.
   [steps addObject:^{
     [self inWorld:World()
@@ -247,6 +331,31 @@ static NSString* const kWatch =
       [self playbackState:@"5 after pauseAll" then:nil];
     }];
   }];
+  // 5b. WebKit's own play and pause of the page's Now Playing session, as Safari's are.
+  [steps addObject:^{
+    SEL play = NSSelectorFromString(@"_playPredominantOrNowPlayingMediaSession:");
+    if (![self->_web respondsToSelector:play]) {
+      Log(@"5b _playPredominantOrNowPlayingMediaSession: absent");
+      return;
+    }
+    Log(@"5b asking _playPredominantOrNowPlayingMediaSession:");
+    void (^done)(BOOL) = ^(BOOL success) {
+      Log(@"5b _playPredominantOrNowPlayingMediaSession: answered %d", success);
+    };
+    ((void (*)(id, SEL, id))objc_msgSend)(self->_web, play, done);
+  }];
+  [steps addObject:^{
+    SEL pause = NSSelectorFromString(@"_pauseNowPlayingMediaSession:");
+    if (![self->_web respondsToSelector:pause]) {
+      Log(@"5c _pauseNowPlayingMediaSession: absent");
+      return;
+    }
+    Log(@"5c asking _pauseNowPlayingMediaSession:");
+    void (^done)(BOOL) = ^(BOOL success) {
+      Log(@"5c _pauseNowPlayingMediaSession: answered %d", success);
+    };
+    ((void (*)(id, SEL, id))objc_msgSend)(self->_web, pause, done);
+  }];
   // 6. The page changes its metadata with no media event: the browser's world hears nothing, and
   // a read sees it.
   [steps addObject:^{
@@ -263,7 +372,9 @@ static NSString* const kWatch =
              then:nil];
   }];
   [steps addObject:^{
-    Log(@"6 metadata set by the page alone: %d messages since the play", self->_messages);
+    Log(@"6 metadata set by the page alone: %d messages since the play, %d metadata observer calls "
+        @"in all",
+        self->_messages, self->_metadataCalls);
     [self inWorld:World() run:@"iloPost('read'), 'read'" then:nil];
   }];
   // 7. Sound from an element the document doesn't hold, as some players make.
@@ -286,10 +397,13 @@ static NSString* const kWatch =
   // 8. Nothing plays: what arrives in 5 s.
   [steps addObject:^{
     self->_messages = 0;
-    int changes = self->_audioChanges;
+    int changes = self->_audioChanges, sessions = self->_sessionChanges,
+        calls = self->_metadataCalls;
     [self after:5 run:^{
-      Log(@"8 nothing playing for 5 s: %d messages, %d _isPlayingAudio changes", self->_messages,
-          self->_audioChanges - changes);
+      Log(@"8 nothing playing for 5 s: %d messages, %d _isPlayingAudio changes, %d "
+          @"_hasActiveNowPlayingSession changes, %d metadata observer calls",
+          self->_messages, self->_audioChanges - changes, self->_sessionChanges - sessions,
+          self->_metadataCalls - calls);
     }];
   }];
   [steps addObject:^{

@@ -9,7 +9,7 @@ if [ "$(uname)" = Darwin ]; then
   log="$spike/probe.log"
   : > "$log"
   cp ../spikes/webkit-media-session/index.html "$spike/"
-  # Two looped tones, 2 s each.
+  # Two looped tones, 30 s each, long enough for WebKit to count them as Now Playing.
   python3 -I -c '
 import math, struct, sys, wave
 for name, pitch in (("tone.wav", 440), ("tone2.wav", 660)):
@@ -18,7 +18,7 @@ for name, pitch in (("tone.wav", 440), ("tone2.wav", 660)):
         out.setsampwidth(2)
         out.setframerate(22050)
         out.writeframes(b"".join(struct.pack("<h", int(8000 * math.sin(2 * math.pi * pitch * i / 22050)))
-                                 for i in range(22050 * 2)))
+                                 for i in range(22050 * 30)))
 ' "$spike"
   clang -fobjc-arc -Wall -framework Cocoa -framework WebKit -framework MediaPlayer \
     -o "$spike/probe" ../spikes/webkit-media-session/probe.m 2> "$spike/build.log" ||
@@ -30,10 +30,11 @@ for name, pitch in (("tone.wav", 440), ("tone2.wav", 660)):
     curl -sf "http://127.0.0.1:$spike_port/index.html" > /dev/null && break
     sleep 0.1
   done
-  "$spike/probe" "http://localhost:$spike_port/index.html" > "$log" 2>&1
-  probed=$?
-  kill "$spike_server" 2> /dev/null
-  wait "$spike_server" 2> /dev/null
+  # The runs go under set -e, so a status the probe or the stopped server ends with is kept.
+  probed=0
+  "$spike/probe" "http://localhost:$spike_port/index.html" > "$log" 2>&1 || probed=$?
+  kill "$spike_server" 2> /dev/null || true
+  wait "$spike_server" 2> /dev/null || true
   cat "$log"
   [ "$probed" = 0 ] || fail "the probe exited $probed"
   echo "ok: the WebKit media probe ran; its answers are the webkit-media lines above"
