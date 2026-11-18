@@ -459,16 +459,17 @@ n=$(echo $(pinned) $(today) | tr ' ' '\n' | grep -nx "$porch" | cut -d: -f1)
 switch "$n cmd" "$porch"
 archive "the sidebar's +"
 
-# The command bar finds New Board, and New Board's key with the bar's field focused runs it too.
+# The command bar finds New Board, and New Board's key with the sidebar holding the keyboard runs
+# it too.
 bar_command new-board "New Board" "new board"
 made barn "the command bar"
 archive "the command bar"
-send key l cmd
-expect '^browser: command bar shown$' "⌘L didn't open the command bar"
+send key f6
+expect '^browser: sidebar keyed ' "F6 with the page focused didn't give the sidebar the keyboard"
 send key e ctrl shift
-expect '^browser: command new-board via ' "⌃⇧E with the command bar's field focused didn't run New Board"
-made deck "⌃⇧E with the command bar's field focused"
-archive "⌃⇧E with the command bar's field focused"
+expect '^browser: command new-board via ' "⌃⇧E with the sidebar holding the keyboard didn't run New Board"
+made deck "⌃⇧E with the sidebar holding the keyboard"
+archive "⌃⇧E with the sidebar holding the keyboard"
 written=$(grep -v '^browser: drive [0-9]*: ' "$log" | grep '日本語\|loft\|porch\|shed\|barn\|deck' | head -1)
 [ -z "$written" ] || fail "the log says what a Board holds or its name: $written"
 n=$(echo $(pinned) $(today) | tr ' ' '\n' | grep -nx "$board" | cut -d: -f1)
