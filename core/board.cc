@@ -33,6 +33,7 @@
 #include "base/threading/sequence_bound.h"
 #include "base/values.h"
 #include "browser_core/board_store.h"
+#include "chrome/browser/platform_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/favicon_source.h"
 #include "components/favicon_base/favicon_url_parser.h"
@@ -321,6 +322,7 @@ std::string_view IdIn(const GURL& url) {
 //   slice(id, ArrayBuffer) => whether it was taken; the page sends the next once answered
 //   done(id) => a picture's stored name, "" for the others, or false
 //   taken(id, [name...]) => whether the arrivals named are out of the Board's arrivals
+//   show(id) => whether its Board's file was shown in the system's file manager
 // And it tells the page "board-arrived" when a picture came into its Board's arrivals while it's
 // open, which it reads at <id>/arrived.
 class BoardHandler : public content::WebUIMessageHandler {
@@ -342,6 +344,7 @@ class BoardHandler : public content::WebUIMessageHandler {
     on("slice", &BoardHandler::Slice);
     on("done", &BoardHandler::Done);
     on("taken", &BoardHandler::Taken);
+    on("show", &BoardHandler::Show);
   }
 
   // The page that writes |board|, if one is open.
@@ -513,6 +516,24 @@ class BoardHandler : public content::WebUIMessageHandler {
     writes_.AsyncCall(&Writes::Take)
         .WithArgs(std::move(names))
         .Then(base::BindOnce(&BoardHandler::Answered, weak_factory_.GetWeakPtr(), args[0].Clone()));
+  }
+
+  // A Board whose file the page can't read offers the user its file in the system's file manager
+  // to copy out or mend, as it never writes over it (#3224): selected in the Finder and Explorer,
+  // its folder on Linux. Only the page that holds the Board, as its writes.
+  void Show(const base::ListValue& args) {
+    if (args.empty()) {
+      return;
+    }
+    if (!Writer()) {
+      Answer(args[0].Clone(), base::Value(false));
+      return;
+    }
+    platform_util::ShowItemInFolder(Profile::FromWebUI(web_ui()),
+                                    board_.Append(FILE_PATH_LITERAL("board.json")));
+    // check.sh reads this line. A Board's id and name stay out of it.
+    LOG(ERROR) << "browser: board shows its file";
+    Answer(args[0].Clone(), base::Value(true));
   }
 
   void Answered(base::Value id, bool taken) { Answer(std::move(id), base::Value(taken)); }
