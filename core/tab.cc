@@ -1195,7 +1195,7 @@ void Tab::SystemPageIconDecoded(int document,
   }
   // Sized for each of the screen's scales, as Chrome's favicon handler sizes a page's.
   float score = 0;
-  const gfx::ImageSkia image = favicon_base::CreateFaviconImageSkia(
+  const gfx::ImageSkia image = CreateFaviconImageSkia(
       {bitmap}, {gfx::Size(bitmap.width(), bitmap.height())}, gfx::kFaviconSize, &score);
   std::optional<std::vector<uint8_t>> png;
   if (!image.isNull()) {
