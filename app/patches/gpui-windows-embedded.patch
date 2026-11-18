@@ -442,7 +442,7 @@ index 98a13f304c..22267df7e8 100644
  
  #[inline]
 diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
-index 08f91bd626..3305076c9d 100644
+index 08f91bd626..e4e0e5bc8c 100644
 --- a/crates/gpui_windows/src/events.rs
 +++ b/crates/gpui_windows/src/events.rs
 @@ -1,4 +1,4 @@
@@ -630,12 +630,15 @@ index 08f91bd626..3305076c9d 100644
  
          // Always return 0 to indicate that the message was handled, so we could properly handle `ModifiersChanged` event.
          Some(0)
-@@ -413,7 +480,22 @@ impl WindowsWindowInner {
+@@ -413,7 +480,25 @@ impl WindowsWindowInner {
      // It's a known bug that you can't trigger `ctrl-shift-0`. See:
      // https://superuser.com/questions/1455762/ctrl-shift-number-key-combination-has-stopped-working-for-a-few-numbers
      pub(crate) fn handle_keydown_msg(&self, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
 -        let Some(input) = handle_key_event(
-+        // A held key is translated as one GPUI didn't take, and its `WM_CHAR` waits behind it.
++        // A held key is translated as one GPUI didn't take, and its `WM_CHAR` waits behind it as
++        // text of its own, typed even if GPUI then takes the key. Only GPUI's own loop comes here,
++        // never an embedder's (`translate_accelerator`), so in ilo only the preview can, and only
++        // inside a loop a callback runs.
 +        let handled = matches!(
 +            self.dispatch_keydown(wparam, lparam, |_| {}),
 +            Some(Handed::Now(result)) if !result.propagate
@@ -654,7 +657,7 @@ index 08f91bd626..3305076c9d 100644
              wparam,
              lparam,
              &self.state,
-@@ -424,19 +506,57 @@ impl WindowsWindowInner {
+@@ -424,19 +509,57 @@ impl WindowsWindowInner {
                      prefer_character_input,
                  })
              },
@@ -724,7 +727,7 @@ index 08f91bd626..3305076c9d 100644
      }
  
      fn handle_keyup_msg(&self, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
-@@ -445,20 +565,12 @@ impl WindowsWindowInner {
+@@ -445,20 +568,12 @@ impl WindowsWindowInner {
          }) else {
              return Some(1);
          };
@@ -747,7 +750,7 @@ index 08f91bd626..3305076c9d 100644
              input_handler.replace_text_in_range(None, &input);
          });
  
-@@ -473,9 +585,6 @@ impl WindowsWindowInner {
+@@ -473,9 +588,6 @@ impl WindowsWindowInner {
      ) -> Option<isize> {
          unsafe { SetCapture(handle) };
  
@@ -757,7 +760,7 @@ index 08f91bd626..3305076c9d 100644
          let x = lparam.signed_loword();
          let y = lparam.signed_hiword();
          let physical_point = point(DevicePixels(x as i32), DevicePixels(y as i32));
-@@ -489,10 +598,7 @@ impl WindowsWindowInner {
+@@ -489,10 +601,7 @@ impl WindowsWindowInner {
              click_count,
              first_mouse: false,
          });
@@ -769,7 +772,7 @@ index 08f91bd626..3305076c9d 100644
      }
  
      fn handle_mouse_up_msg(
-@@ -503,9 +609,6 @@ impl WindowsWindowInner {
+@@ -503,9 +612,6 @@ impl WindowsWindowInner {
      ) -> Option<isize> {
          unsafe { ReleaseCapture().log_err() };
  
@@ -779,7 +782,7 @@ index 08f91bd626..3305076c9d 100644
          let x = lparam.signed_loword() as f32;
          let y = lparam.signed_hiword() as f32;
          let click_count = self.state.click_state.current_count.get();
-@@ -517,10 +620,7 @@ impl WindowsWindowInner {
+@@ -517,10 +623,7 @@ impl WindowsWindowInner {
              modifiers: current_modifiers(),
              click_count,
          });
@@ -791,7 +794,7 @@ index 08f91bd626..3305076c9d 100644
      }
  
      fn handle_xbutton_msg(
-@@ -546,9 +646,6 @@ impl WindowsWindowInner {
+@@ -546,9 +649,6 @@ impl WindowsWindowInner {
      ) -> Option<isize> {
          let modifiers = current_modifiers();
  
@@ -801,7 +804,7 @@ index 08f91bd626..3305076c9d 100644
          let scale_factor = self.state.scale_factor.get();
          let wheel_scroll_amount = match modifiers.shift {
              true => self
-@@ -586,10 +683,7 @@ impl WindowsWindowInner {
+@@ -586,10 +686,7 @@ impl WindowsWindowInner {
              touch_phase: TouchPhase::Moved,
              source: ScrollSource::Pointer,
          });
@@ -813,7 +816,7 @@ index 08f91bd626..3305076c9d 100644
      }
  
      fn handle_mouse_horizontal_wheel_msg(
-@@ -598,9 +692,6 @@ impl WindowsWindowInner {
+@@ -598,9 +695,6 @@ impl WindowsWindowInner {
          wparam: WPARAM,
          lparam: LPARAM,
      ) -> Option<isize> {
@@ -823,7 +826,7 @@ index 08f91bd626..3305076c9d 100644
          let scale_factor = self.state.scale_factor.get();
          let wheel_scroll_chars = self
              .system_settings()
-@@ -625,10 +716,7 @@ impl WindowsWindowInner {
+@@ -625,10 +719,7 @@ impl WindowsWindowInner {
              touch_phase: TouchPhase::Moved,
              source: ScrollSource::Pointer,
          });
@@ -835,7 +838,7 @@ index 08f91bd626..3305076c9d 100644
      }
  
      fn retrieve_caret_position(&self) -> Option<POINT> {
-@@ -710,6 +798,97 @@ impl WindowsWindowInner {
+@@ -710,6 +801,97 @@ impl WindowsWindowInner {
          }
      }
  
@@ -933,7 +936,7 @@ index 08f91bd626..3305076c9d 100644
      fn handle_ime_composition(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
          let ctx = ImeContext::get(handle)?;
          self.handle_ime_composition_inner(*ctx, lparam)
-@@ -720,16 +899,16 @@ impl WindowsWindowInner {
+@@ -720,16 +902,16 @@ impl WindowsWindowInner {
          if lparam == 0 {
              // Japanese IME may send this message with lparam = 0, which indicates that
              // there is no composition string.
@@ -954,7 +957,7 @@ index 08f91bd626..3305076c9d 100644
                  })?;
              }
              if lparam & GCS_COMPSTR.0 > 0 {
-@@ -744,12 +923,9 @@ impl WindowsWindowInner {
+@@ -744,12 +926,9 @@ impl WindowsWindowInner {
                          };
                          pos..pos
                      });
@@ -970,7 +973,7 @@ index 08f91bd626..3305076c9d 100644
                  })?;
              }
              if lparam & (GCS_RESULTSTR.0 | GCS_COMPSTR.0) > 0 {
-@@ -811,14 +987,10 @@ impl WindowsWindowInner {
+@@ -811,14 +990,10 @@ impl WindowsWindowInner {
              this.state.last_reported_modifiers.set(None);
              this.state.last_reported_capslock.set(None);
  
@@ -989,7 +992,7 @@ index 08f91bd626..3305076c9d 100644
          }
  
          self.executor
-@@ -933,7 +1105,35 @@ impl WindowsWindowInner {
+@@ -933,7 +1108,35 @@ impl WindowsWindowInner {
          Some(0)
      }
  
@@ -1026,7 +1029,7 @@ index 08f91bd626..3305076c9d 100644
          let new_monitor = unsafe { MonitorFromWindow(handle, MONITOR_DEFAULTTONULL) };
          if new_monitor.is_invalid() {
              log::error!("No monitor detected!");
-@@ -944,12 +1144,21 @@ impl WindowsWindowInner {
+@@ -944,12 +1147,21 @@ impl WindowsWindowInner {
          Some(0)
      }
  
@@ -1053,7 +1056,7 @@ index 08f91bd626..3305076c9d 100644
      }
  
      fn handle_hit_test_msg(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
-@@ -1021,10 +1230,15 @@ impl WindowsWindowInner {
+@@ -1021,10 +1233,15 @@ impl WindowsWindowInner {
      }
  
      fn handle_nc_mouse_move_msg(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
@@ -1070,7 +1073,7 @@ index 08f91bd626..3305076c9d 100644
          let scale_factor = self.state.scale_factor.get();
  
          let mut cursor_point = POINT {
-@@ -1037,10 +1251,10 @@ impl WindowsWindowInner {
+@@ -1037,10 +1254,10 @@ impl WindowsWindowInner {
              pressed_button: None,
              modifiers: current_modifiers(),
          });
@@ -1085,7 +1088,7 @@ index 08f91bd626..3305076c9d 100644
      }
  
      fn handle_nc_mouse_down_msg(
-@@ -1050,7 +1264,7 @@ impl WindowsWindowInner {
+@@ -1050,7 +1267,7 @@ impl WindowsWindowInner {
          wparam: WPARAM,
          lparam: LPARAM,
      ) -> Option<isize> {
@@ -1094,7 +1097,7 @@ index 08f91bd626..3305076c9d 100644
              let scale_factor = self.state.scale_factor.get();
              let mut cursor_point = POINT {
                  x: lparam.signed_loword().into(),
-@@ -1067,14 +1281,10 @@ impl WindowsWindowInner {
+@@ -1067,14 +1284,10 @@ impl WindowsWindowInner {
                  click_count,
                  first_mouse: false,
              });
@@ -1111,7 +1114,7 @@ index 08f91bd626..3305076c9d 100644
  
          // Since these are handled in handle_nc_mouse_up_msg we must prevent the default window proc
          if button == MouseButton::Left {
-@@ -1097,7 +1307,7 @@ impl WindowsWindowInner {
+@@ -1097,7 +1310,7 @@ impl WindowsWindowInner {
          wparam: WPARAM,
          lparam: LPARAM,
      ) -> Option<isize> {
@@ -1120,7 +1123,7 @@ index 08f91bd626..3305076c9d 100644
              let scale_factor = self.state.scale_factor.get();
  
              let mut cursor_point = POINT {
-@@ -1111,13 +1321,9 @@ impl WindowsWindowInner {
+@@ -1111,13 +1324,9 @@ impl WindowsWindowInner {
                  modifiers: current_modifiers(),
                  click_count: 1,
              });
@@ -1135,7 +1138,7 @@ index 08f91bd626..3305076c9d 100644
          }
  
          let last_pressed = self.state.nc_button_pressed.take();
-@@ -1306,6 +1512,7 @@ impl WindowsWindowInner {
+@@ -1306,6 +1515,7 @@ impl WindowsWindowInner {
          match message {
              WM_GPUI_CURSOR_STYLE_CHANGED => self.handle_cursor_changed(lparam),
              WM_GPUI_FORCE_UPDATE_WINDOW => self.draw_window(handle, true),
@@ -1143,7 +1146,7 @@ index 08f91bd626..3305076c9d 100644
              WM_GPUI_GPU_DEVICE_LOST => self.handle_device_lost(lparam),
              _ => unreachable!(),
          }
-@@ -1335,6 +1542,8 @@ impl WindowsWindowInner {
+@@ -1335,6 +1545,8 @@ impl WindowsWindowInner {
  
      fn handle_dm_pointer_hit_test(&self, wparam: WPARAM) -> Option<isize> {
          self.state.direct_manipulation.on_pointer_hit_test(wparam);
@@ -1152,7 +1155,7 @@ index 08f91bd626..3305076c9d 100644
          None
      }
  
-@@ -1347,25 +1556,32 @@ impl WindowsWindowInner {
+@@ -1347,25 +1559,32 @@ impl WindowsWindowInner {
              }
              // Validate the region so a nested message pump doesn't keep
              // re-dispatching WM_PAINT for the still-invalid region in a busy
@@ -1194,7 +1197,7 @@ index 08f91bd626..3305076c9d 100644
          }
  
          let force_render = force_render || self.state.force_render_pending.take();
-@@ -1455,6 +1671,90 @@ impl WindowsWindowInner {
+@@ -1455,6 +1674,90 @@ impl WindowsWindowInner {
          }
      }
  
@@ -1285,7 +1288,7 @@ index 08f91bd626..3305076c9d 100644
      fn with_input_handler<F, R>(&self, f: F) -> Option<R>
      where
          F: FnOnce(&mut PlatformInputHandler) -> R,
-@@ -1478,6 +1778,25 @@ impl WindowsWindowInner {
+@@ -1478,6 +1781,25 @@ impl WindowsWindowInner {
      }
  }
  
@@ -1311,7 +1314,7 @@ index 08f91bd626..3305076c9d 100644
  struct ImeContext {
      hwnd: HWND,
      himc: HIMC,
-@@ -1823,3 +2142,67 @@ fn notify_frame_changed(handle: HWND) {
+@@ -1823,3 +2145,67 @@ fn notify_frame_changed(handle: HWND) {
          .log_err();
      }
  }
@@ -1514,7 +1517,7 @@ index 8164bc1564..ed7d01d6c4 100644
      #[test]
      fn test_keyboard_mapper() {
 diff --git a/crates/gpui_windows/src/platform.rs b/crates/gpui_windows/src/platform.rs
-index 095e009e23..f18d176e74 100644
+index 095e009e23..75a70ba04e 100644
 --- a/crates/gpui_windows/src/platform.rs
 +++ b/crates/gpui_windows/src/platform.rs
 @@ -20,7 +20,10 @@ use windows::{
@@ -1843,7 +1846,21 @@ index 095e009e23..f18d176e74 100644
          });
  
          Ok(Box::new(window))
-@@ -1231,6 +1400,26 @@ impl WindowsPlatformInner {
+@@ -1163,7 +1332,12 @@ impl WindowsPlatformInner {
+     }
+ 
+     fn translate_accelerator(&self, msg: &MSG) -> bool {
+-        if msg.message != WM_KEYDOWN && msg.message != WM_SYSKEYDOWN {
++        // Under an embedder a window takes its keys as its loop dispatches them, where they're
++        // already translated (`handle_embedded_keydown_msg`). Taken here too, as the foreground
++        // tasks' drain would, a key went to GPUI twice, and a held one was handed on twice.
++        if (msg.message != WM_KEYDOWN && msg.message != WM_SYSKEYDOWN)
++            || EMBEDDED.load(std::sync::atomic::Ordering::Relaxed)
++        {
+             return false;
+         }
+ 
+@@ -1231,6 +1405,26 @@ impl WindowsPlatformInner {
      }
  
      fn handle_display_change(&self, handle: HWND) -> Option<isize> {
@@ -1870,7 +1887,7 @@ index 095e009e23..f18d176e74 100644
          // Broadcasts can be delivered while the app is mid-update, e.g. inside a
          // COM call, so report the change from the message loop instead.
          unsafe {
-@@ -1253,21 +1442,11 @@ impl WindowsPlatformInner {
+@@ -1253,21 +1447,11 @@ impl WindowsPlatformInner {
          Some(0)
      }
  
@@ -1896,7 +1913,7 @@ index 095e009e23..f18d176e74 100644
          Some(0)
      }
  
-@@ -1409,7 +1588,7 @@ impl WindowsPlatformInner {
+@@ -1409,7 +1593,7 @@ impl WindowsPlatformInner {
  impl Drop for WindowsPlatform {
      fn drop(&mut self) {
          if let Some(stop) = self.vsync_stop.borrow_mut().take() {
@@ -1905,7 +1922,7 @@ index 095e009e23..f18d176e74 100644
          }
          unsafe {
              if let Some(notification) = self.suspend_resume_notification.borrow_mut().take() {
-@@ -1637,10 +1816,43 @@ fn file_save_dialog(
+@@ -1637,10 +1821,43 @@ fn file_save_dialog(
  
  fn load_icon() -> Result<HICON> {
      let module = unsafe { GetModuleHandleW(None).context("unable to get module handle")? };
@@ -1950,7 +1967,7 @@ index 095e009e23..f18d176e74 100644
              IMAGE_ICON,
              0,
              0,
-@@ -1763,6 +1975,8 @@ fn handle_gpu_device_lost(
+@@ -1763,6 +1980,8 @@ fn handle_gpu_device_lost(
              }
          }
      }
@@ -1959,7 +1976,7 @@ index 095e009e23..f18d176e74 100644
      Ok(())
  }
  
-@@ -1980,3 +2194,52 @@ mod tests {
+@@ -1980,3 +2199,52 @@ mod tests {
          );
      }
  }
