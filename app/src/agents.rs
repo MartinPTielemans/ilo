@@ -1186,13 +1186,13 @@ impl Agents {
 
     /// The core's answer to the read `request`: the page's text, or None if it had none.
     pub fn text_read(&mut self, request: u64, text: Option<String>, cx: &mut Context<Self>) {
-        let Some((_, tab, reply)) = self.reading.remove(&request) else {
+        let Some((agent, tab, reply)) = self.reading.remove(&request) else {
             return;
         };
         // Read once it loaded, as the page tools look once they've acted: the tab may have gone
         // somewhere agents may not, and the core reads any page. Loaded, a page still on the empty
         // start page is no web page either, as the core's page tools find.
-        let refused = self.browser.off_limits(tab, cx);
+        let refused = self.off_limits(&agent, tab, cx);
         let tab = self.browser.tab(tab, cx);
         let refused = refused.or_else(|| (!is_web(&tab.url)).then_some(NOT_WEB_PAGE));
         _ = reply.send(match (text, refused) {
@@ -1548,7 +1548,7 @@ impl Agents {
                 if let Some(why) = self
                     .held
                     .contains_key(&tab)
-                    .then(|| self.browser.off_limits(tab, cx))
+                    .then(|| self.off_limits(&agent, tab, cx))
                     .flatten()
                 {
                     let site = site(&self.browser.tab(tab, cx).url);
@@ -1597,7 +1597,7 @@ impl Agents {
                 };
                 let host = site(&self.browser.tab(tab, cx).url);
                 // Before the request is read, so its answer says nothing of a page off limits.
-                if let Some(why) = self.browser.off_limits(tab, cx) {
+                if let Some(why) = self.off_limits(&agent, tab, cx) {
                     self.note(&agent, "request", &host, why);
                     cx.notify();
                     _ = reply.send(ToolResult::error(why));
@@ -2224,7 +2224,7 @@ impl Agents {
     ) {
         let host = site(&self.browser.tab(tab, cx).url);
         // Before its ref is looked up, so an outline's refs say nothing of a page off limits.
-        if let Some(why) = self.browser.off_limits(tab, cx) {
+        if let Some(why) = self.off_limits(agent, tab, cx) {
             self.note(agent, tool, &host, why);
             _ = reply.send(ToolResult::error(why));
             return;
@@ -3239,10 +3239,20 @@ impl Agents {
     /// The core's answer to whether `agent` may do `action` to `tab` (Browser::may_act), but never
     /// for a tab that's off limits, whatever its Space (`off_limits`).
     fn may_act(&self, agent: &str, tab: u64, action: &str, cx: &mut App) -> Result<(), String> {
-        if let Some(why) = self.browser.off_limits(tab, cx) {
+        if let Some(why) = self.off_limits(agent, tab, cx) {
             return Err(why.into());
         }
         self.browser.may_act(agent, tab, action, cx)
+    }
+
+    /// Why `agent` may not see or act on `tab` for its page (`off_limits`), or None. A tab of
+    /// another Space gets the core's answer for any tab not the agent's, so it says nothing of the
+    /// user's page.
+    fn off_limits(&self, agent: &str, tab: u64, cx: &App) -> Option<&'static str> {
+        let why = self.browser.off_limits(tab, cx)?;
+        let space = self.browser.space_of(tab, cx);
+        let own = space != 0 && space == self.browser.agent_space(agent);
+        Some(if own { why } else { NOT_ITS_SPACE })
     }
 
     /// The tabs of `space` an agent sees: none off limits, as `may_act` refuses those.

@@ -1073,6 +1073,37 @@ fn an_agents_tab_yet_to_commit_its_first_page_is_the_cores_to_wait_for(cx: &mut 
     }
 }
 
+/// A tab of the user's, in their own Space, gets the answer any tab not the agent's gets, whatever
+/// its page: refusing it for being off the web would tell the agent what the user has open.
+#[gpui::test]
+fn a_users_tab_off_the_web_is_answered_as_any_tab_not_the_agents(cx: &mut TestAppContext) {
+    for url in [
+        "chrome://settings/passwords",
+        "file:///home/user/plan.txt",
+        "data:text/html,words",
+    ] {
+        let (agents, browser, _) = connected(cx);
+        browser.tabs.borrow_mut().push((31, 1, "Passwords", url));
+        for (tool, arguments) in [
+            ("read_page", json!({ "tab": 31 })),
+            ("snapshot", json!({ "tab": 31 })),
+            (
+                "request",
+                json!({ "tab": 31, "url": "https://example.org/" }),
+            ),
+            ("close_tab", json!({ "tab": 31 })),
+        ] {
+            let answer = call(&agents, "claude-code", tool, arguments, cx);
+            cx.run_until_parked();
+            assert_eq!(
+                answer.recv().unwrap(),
+                ToolResult::error(NOT_ITS_SPACE),
+                "{tool} on a user's tab at {url}"
+            );
+        }
+    }
+}
+
 /// Once read, a page still on the empty start page is no web page, as the core's page tools find,
 /// and a tab that became a Board meanwhile is answered as a Board is everywhere else.
 #[gpui::test]
