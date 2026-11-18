@@ -1,7 +1,7 @@
 # check.sh runs this at 695, only when named.
-# A Board's numbers (#3073), a run of their own so board keeps to its time. A Board of 2,000 notes,
-# each some 1.5 KB of text, a little over 3 MB of the 4 MiB a Board's file may hold, opens beside two
-# plain pages, and:
+# A Board's numbers (#3073), a run of their own so board keeps to its time. A Board of 2,000
+# notes, each some 1.5 KB of text, a little over 3 MB of the 4 MiB a Board's file may hold, opens
+# beside two plain pages, and:
 # - Tab switches, by Chrome's measure: DevTools traces 10 round trips between the two plain pages,
 #   then 10 between a plain page and the Board, and board_trace.py reads TabSwitching::Latency's
 #   spans, from the tab strip's change to the first frame presented, against the 16 ms gate. Each
@@ -9,11 +9,13 @@
 #   its span off before its frame.
 # - Memory, summed over the browser's processes as perf's is: with the two plain pages, with the
 #   Board shown, and with it in the background.
-# - Adding a picture, dragged over the Board as a file from another app and dropped: a 1 MB PNG and one just under the 50 MB a
-#   picture may be, three of each, each traced alone. The UI thread's longest task from the drop to
-#   the Board saved, as the page writes the file in 256 KiB slices to the Board's own sequence, and
-#   the add's time from the drop to the core's "board added" line: for the big one, its file and
-#   then the small copy the page draws from.
+# - Adding a picture, dragged over the Board as a file from another app and dropped: a 1 MB PNG and
+#   one just under the 50 MB a picture may be, three of each, each traced alone. The UI thread's
+#   longest task from the drop to the Board saved, of the Board's own (its page's messages, each
+#   256 KiB slice of the file it writes to the Board's own sequence, and what the core posts for
+#   them) and of any, which can be another's in the same window; and the add's time from the drop
+#   to the core's "board added" line: for the big one, its file and then the small copy the page
+#   draws from.
 # Numbers over the gate are findings, said in the run's lines, not failures: the run fails only
 # when a number can't be read.
 
@@ -232,8 +234,9 @@ for kind in small big; do
     board_traced toplevel "add-$kind-$n.json" board_add "$scratch/$kind.png" "$n" "$kind" "$files"
     python3 -I check/board_trace.py ui "$dir/add-$kind-$n.json" > "$dir/add-$kind-$n.ui" ||
       fail "the UI thread's tasks in add-$kind-$n.json didn't read"
-    read -r longest name from count < "$dir/add-$kind-$n.ui"
-    echo "board-perf: add $kind $n: UI thread's longest task $longest ms ($name from $from, of $count);" \
+    read -r longest from own own_from own_count own_sum < "$dir/add-$kind-$n.ui"
+    echo "board-perf: add $kind $n: UI thread's longest task of the Board's $own ms (from $own_from;" \
+      "$own_count tasks, $own_sum ms in all), of any $longest ms (from $from);" \
       "board added at $(tr '\n' ' ' < "$dir/add-$kind-$n" | sed 's/ $//' | sed 's/ / and /') ms from the drop"
   done
 done
