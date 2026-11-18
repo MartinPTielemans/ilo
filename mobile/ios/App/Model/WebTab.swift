@@ -537,6 +537,38 @@ extension WebTab: WKUIDelegate {
     return nil
   }
 
+  // MARK: A long press
+
+  func webView(_ webView: WKWebView, contextMenuConfigurationFor element: WKContextMenuElementInfo) async -> UIContextMenuConfiguration? {
+    let link = element.linkURL
+    // Another app's address, such as mailto: or tel:, keeps the menu the system has for it.
+    if let link, !["http", "https"].contains(link.scheme?.lowercased()) { return nil }
+    return UIContextMenuConfiguration(actionProvider: { [weak self] suggested in
+      PressMenu.menu(link: link, suggested: suggested) { choice in
+        if let link { self?.chose(choice, for: link) }
+      }
+    })
+  }
+
+  /// A tap on the pressed link's preview opens it here, as the menu's Open does.
+  func webView(
+    _ webView: WKWebView, contextMenuForElement element: WKContextMenuElementInfo,
+    willCommitWithAnimator animator: any UIContextMenuInteractionCommitAnimating
+  ) {
+    guard let link = element.linkURL else { return }
+    animator.addCompletion { [weak self] in self?.chose(.open, for: link) }
+  }
+
+  /// Does what the user chose for a pressed link, which opens without its tracking parameters.
+  func chose(_ choice: PressMenu.Choice, for link: URL) {
+    switch choice {
+    case .open: follow(link)
+    case .openInNewTab: browser?.openBehind(Blocker.shared.withoutTracking(link, from: webView.url) ?? link)
+    case .copy: UIPasteboard.general.url = link
+    case .share: browser?.shared = link
+    }
+  }
+
   func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo) async {
     _ = await browser?.ask(.says(message), from: self)
   }

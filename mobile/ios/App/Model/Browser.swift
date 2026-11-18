@@ -83,6 +83,8 @@ final class Browser {
   private(set) var prompt: Prompt?
   /// A finished download, for the system's sheet to save or open.
   var downloaded: URL?
+  /// A link the user chose to share, for the system's sheet to send on.
+  var shared: URL?
   /// Launch puts the keyboard up, once.
   var wantsKeyboard: Bool
 
@@ -142,6 +144,13 @@ final class Browser {
     guard let space = currentSpace else { return }
     let node = account.openToday(url: url, title: title, in: space.id)
     show(make(node, at: url, entered: true), from: nil)
+  }
+
+  /// Opens an address as a new Today tab of the Space on screen, behind the page that's up: its
+  /// card is in the Space, and its page loads when it's opened.
+  func openBehind(_ url: URL) {
+    guard let space = currentSpace else { return }
+    account.openToday(url: url, title: "", in: space.id)
   }
 
   /// What return does in the field: on the Space, a new tab; over a page, that page goes there.

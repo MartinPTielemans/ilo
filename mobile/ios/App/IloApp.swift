@@ -145,6 +145,12 @@ private struct BrowserScreen: View {
           .presentationDetents([.medium, .large])
       }
     }
+    .sheet(isPresented: Binding(get: { browser.shared != nil }, set: { if !$0 { browser.shared = nil } })) {
+      if let link = browser.shared {
+        FileSheet(file: link)
+          .presentationDetents([.medium, .large])
+      }
+    }
   }
 
   private func title(of prompt: Prompt?) -> String {
@@ -158,7 +164,7 @@ private struct BrowserScreen: View {
   }
 }
 
-/// The system's sheet for a finished download: save it, open it, send it on.
+/// The system's sheet for a finished download, or for a link: save it, open it, send it on.
 private struct FileSheet: UIViewControllerRepresentable {
   let file: URL
 
