@@ -5321,9 +5321,25 @@ void host_hide_reveal(void* ui_view) {
   MaybeStopWatchingPointer();
 }
 
+namespace {
+void ShowOverlay();  // Below, with the dot.
+}  // namespace
+
 void host_add_settings(void* settings_view) {
   g_settings.hwnd = Hwnd(settings_view);
   ShowWindow(g_settings.hwnd, SW_HIDE);
+  // Settings has a taskbar button of its own, which carries the dot as the browser windows' do
+  // (#3326). Explorer makes the button a moment after the window shows, and says so.
+  SetWindowSubclass(
+      g_settings.hwnd,
+      [](HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam, UINT_PTR, DWORD_PTR) -> LRESULT {
+        static const UINT button_made = RegisterWindowMessageW(L"TaskbarButtonCreated");
+        if (message == button_made) {
+          ShowOverlay();
+        }
+        return DefSubclassProc(hwnd, message, wparam, lparam);
+      },
+      1, 0);
 }
 
 void host_show_settings(void) {
@@ -5377,9 +5393,10 @@ void host_detent(void) {}
 // gives each window's taskbar button its overlay once the windows are up.
 void host_dock_dot_launch(const char*) {}
 
-// Gives each browser window's taskbar button an overlay dot in |color| (0xRRGGBB), or ilo's green
-// without |colored|, the counterpart of the Mac's Dock dot. One colour for the app, as the Dock has
-// one icon; the taskbar makes its own copy, so the icon is freed after.
+// Gives each browser window's taskbar button, and Settings' while it shows, an overlay dot in
+// |color| (0xRRGGBB), or ilo's green without |colored|, the counterpart of the Mac's Dock dot. One
+// colour for the app, as the Dock has one icon; the taskbar makes its own copy, so the icon is freed
+// after.
 // While tasks wait for the user, the dot carries their count (host_needs_you_badge).
 namespace {
 uint32_t g_dot_color = kIloGreen;
@@ -5399,6 +5416,9 @@ void ShowOverlay() {
       taskbar->SetOverlayIcon(GetAncestor(view, GA_ROOT), dot,
                               g_waiting > 0 ? described.c_str() : L"Space");
     }
+  }
+  if (g_settings.hwnd && IsWindowVisible(g_settings.hwnd)) {
+    taskbar->SetOverlayIcon(g_settings.hwnd, dot, g_waiting > 0 ? described.c_str() : L"Space");
   }
   if (dot) {
     DestroyIcon(dot);
