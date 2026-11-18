@@ -310,7 +310,9 @@ rm -f "$agents_file" "$out/board-in" "$out/board-out"
 # Back to the first Board, by its place in the sidebar, for the steps after these.
 n=$(echo $(pinned) $(today) | tr ' ' '\n' | grep -nx "$board" | cut -d: -f1)
 [ -n "$n" ] || fail "the first Board's tab $board isn't in the sidebar: pinned \"$(pinned)\", Today \"$(today)\""
-switch "$n cmd" "$board"
+# From the task area, which ⌘N leaves first, the line has no Space after it.
+send key "$n" cmd
+expect "^browser: selected $board\( in .*\)\{0,1\}\$" "⌘$n didn't show the first Board's tab $board of \"$(today)\""
 
 # 1c: a Board whose note's text is markup, and a link to javascript:, runs neither: each would
 # take the page to #ran, which its page line would say, as a Board's title is never logged. Its id
