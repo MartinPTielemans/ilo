@@ -58,6 +58,8 @@ final class Browser {
     case history
     /// The files the phone has downloaded, and the ones on their way.
     case downloads
+    /// The Today tabs that left this phone's Spaces.
+    case archive
     /// The dock's tiles past its two rows.
     case more
     /// A pinned folder's tabs.
@@ -71,6 +73,8 @@ final class Browser {
   /// The phone's history, which each tab made here writes its pages to. None keeps none.
   @ObservationIgnored let history: History?
   let downloads: Downloads
+  /// The Today tabs that left this phone's Spaces. None keeps none, and lets none go by itself.
+  let archive: Archive?
   @ObservationIgnored let places = Places()
 
   /// The Space on screen.
@@ -117,8 +121,12 @@ final class Browser {
   /// The time iOS gives the account to send what changed after the app leaves the screen.
   @ObservationIgnored private var sending = UIBackgroundTaskIdentifier.invalid
 
-  init(account: any IloAccount, settings: Settings, cache: TabCache, favicons: Favicons, downloads: Downloads, history: History? = nil) {
+  init(
+    account: any IloAccount, settings: Settings, cache: TabCache, favicons: Favicons, downloads: Downloads, history: History? = nil,
+    archive: Archive? = nil
+  ) {
     self.account = account
+    self.archive = archive
     self.settings = settings
     self.cache = cache
     self.favicons = favicons
@@ -250,6 +258,7 @@ final class Browser {
     guard let page else { return }
     page.settle(finished: true)
     takePicture(of: page)
+    seenUntilNow(page)
     cover = nil
     sheet = nil
     searchingPage = false
@@ -279,7 +288,18 @@ final class Browser {
     return true
   }
 
-  func close(_ id: String) {
+  /// Closes a Today tab. One the user closed is kept in the archive; a window that closed itself,
+  /// as a sign-in's does with a code in its address, leaves nothing to open again.
+  func close(_ id: String, byUser: Bool = true) {
+    let node = byUser ? archivable(id) : nil
+    forget(id)
+    account.closeToday(id)
+    // Kept only once it has left: one a newer ilo made stays in its Space, and isn't in both.
+    if let node, account.node(id) == nil { archive?.keep(node, .closed) }
+  }
+
+  /// Lets go of everything the phone keeps for a tab that's leaving.
+  private func forget(_ id: String) {
     if shown == id {
       shown = nil
       pageOpen = false
@@ -289,7 +309,70 @@ final class Browser {
     live.remove(id)
     cache.forget(id)
     places.frames[id] = nil
-    account.closeToday(id)
+  }
+
+  // MARK: The archive
+
+  /// The Today tab the archive may keep, by its id: one the account lists. A tab outside the
+  /// account, as a private one will be, isn't in its list, so it's never archived and never
+  /// listed.
+  private func archivable(_ id: String) -> SyncedNode? {
+    guard let node = account.node(id), node.kind == .today, Archive.keeps(node.url) else { return nil }
+    return node
+  }
+
+  /// Sends to the archive the Today tabs no device has shown for as long as the setting says,
+  /// counted as the computer counts: from the last showing the account has of each. The tab on
+  /// screen stays, and so does one whose page is playing, which waits another turn.
+  ///
+  /// Each goes by being closed in the account, which is the only way the computers know, so it
+  /// leaves them too. It runs after a refresh, when the app comes to the front, and never on a
+  /// timer: an idle phone isn't woken to tidy.
+  func archiveUnseen(now: Date = .now) async {
+    guard let archive, let after = settings.archiveAfter.interval, listsEveryTab else { return }
+    // What the account couldn't fetch may be a showing on another device, an hour ago.
+    guard account.problem == nil else { return }
+    await archive.loaded()
+    let due = account.spaces.flatMap { account.today(in: $0.id) }.filter { node in
+      guard let seen = node.seen else { return false }
+      return now.timeIntervalSince(seen) >= after
+    }
+    var gone = 0
+    for id in due.map(\.id) where id != shown {
+      if let tab = tabs[id], await tab.isPlaying() {
+        account.sawToday(id)
+        continue
+      }
+      // Asking the page took a moment, in which the user may have opened the tab or closed it.
+      guard id != shown, let node = archivable(id) else { continue }
+      account.closeToday(id)
+      // One a newer ilo made isn't this one's to close, and stays as it is.
+      guard account.node(id) == nil else { continue }
+      forget(id)
+      if archive.keep(node, .unseen, at: now) { gone += 1 }
+    }
+    archive.prune(now: now)
+    settings.archivedUnseen(gone)
+  }
+
+  /// Puts an archived tab back in the Space it was in, or the one on screen if that's gone, as
+  /// a new Today tab there, and opens it.
+  func restore(_ tab: ArchivedTab) {
+    guard let archive, let space = account.spaces.first(where: { $0.id == tab.space }) ?? currentSpace, archive.take(tab) else { return }
+    let node = account.openToday(url: tab.url, title: tab.title, in: space.id)
+    slide = 0
+    self.space = space.id
+    show(make(node, at: tab.url, entered: false), from: nil)
+  }
+
+  /// A Today tab that stops being shown was seen until now, as the computer has it.
+  private func seenUntilNow(_ tab: WebTab) {
+    if tab.role == .today { account.sawToday(tab.id) }
+  }
+
+  /// Whether the tabs the account lists are every tab the phone has.
+  private var listsEveryTab: Bool {
+    (account as? PhoneAccount)?.listsEveryTab ?? (account.phase == .ready)
   }
 
   /// Pins the Today tab on screen, or unpins the pinned one. Either way it keeps its web view.
@@ -382,6 +465,7 @@ final class Browser {
     if let page, page !== tab {
       page.settle(finished: true)
       takePicture(of: page)
+      seenUntilNow(page)
     }
     // A page that opened a window keeps its web view while the window has one to speak to.
     let openers = Set(tabs.values.compactMap { $0.opener?.id })
@@ -513,7 +597,7 @@ final class Browser {
     guard tab.role == .today, tabs[tab.id] === tab else { return }
     let open = pageOpen
     let back = shown == tab.id ? tab.opener : nil
-    close(tab.id)
+    close(tab.id, byUser: false)
     if let back, tabs[back.id] === back {
       // Back the way the window came.
       slide = -1
@@ -575,7 +659,10 @@ final class Browser {
 
   /// The app is leaving the screen, and may not come back as this process.
   func background() {
-    if let page, pageOpen { takePicture(of: page) }
+    if let page, pageOpen {
+      takePicture(of: page)
+      seenUntilNow(page)
+    }
     for tab in tabs.values { save(tab) }
     settings.leftPage(pageOpen ? shown : nil)
     downloads.leftScreen()
@@ -604,13 +691,14 @@ final class Browser {
     Task {
       await account.refresh()
       prune()
+      await archiveUnseen()
     }
   }
 
   /// Lets go of what's kept for tabs the account no longer has, such as ones closed elsewhere.
   private func prune() {
     // While an account is half open the list read is the phone's own, and its tabs aren't in it.
-    guard (account as? PhoneAccount)?.listsEveryTab ?? (account.phase == .ready) else { return }
+    guard listsEveryTab else { return }
     var ids: Set<String> = []
     func collect(_ space: String, _ folder: String?) {
       for node in account.pinned(in: space, folder: folder) {

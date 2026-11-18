@@ -44,6 +44,8 @@ struct SpaceScreen: View {
       VStack(spacing: 0) {
         SpaceDots()
 
+        if !typing { ArchiveNote { focused = false } }
+
         // One glass, and plain fills on it: the offer, the pinned tabs, the field and its button.
         VStack(spacing: 0) {
           if !typing {

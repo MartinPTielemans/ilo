@@ -8,6 +8,9 @@ nonisolated struct PhoneTabs: Codable, Equatable, Sendable {
     var id: String
     var url: URL
     var title: String
+    /// When the phone last showed it, which the archive counts from as it does for the
+    /// account's. None for a pinned tab, which never goes.
+    var seen: Date?
   }
 
   /// Newest first, as a Space's Today tabs are.
@@ -42,9 +45,15 @@ final class PhoneAccount: IloAccount {
     self.account = account
     file = directory.appending(path: "tabs.json")
     try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    tabs = (try? Data(contentsOf: file)).flatMap { try? JSONDecoder().decode(PhoneTabs.self, from: $0) } ?? PhoneTabs()
+    var kept = (try? Data(contentsOf: file)).flatMap { try? JSONDecoder().decode(PhoneTabs.self, from: $0) } ?? PhoneTabs()
+    // A tab kept before the phone noted showings is as old as the day it began to.
+    let unseen = kept.today.indices.filter { kept.today[$0].seen == nil }
+    let now = Date.now
+    for index in unseen { kept.today[index].seen = now }
+    tabs = kept
     // Ready with no Space yet isn't open: the phone's own Space stays until the first comes.
     showsAccount = account.phase == .ready && !account.spaces.isEmpty
+    if !unseen.isEmpty { save() }
     // Tabs still here beside an open account are a join that was cut short.
     if showsAccount { join() }
     watch()
@@ -135,7 +144,7 @@ final class PhoneAccount: IloAccount {
 
   @discardableResult func openToday(url: URL, title: String, in space: String) -> SyncedNode {
     if showsAccount { return account.openToday(url: url, title: title, in: space) }
-    let tab = PhoneTabs.Tab(id: "today:" + UUID().uuidString.lowercased(), url: url, title: title)
+    let tab = PhoneTabs.Tab(id: "today:" + UUID().uuidString.lowercased(), url: url, title: title, seen: .now)
     tabs.today.insert(tab, at: 0)
     save()
     return node(tab, .today)
@@ -154,8 +163,13 @@ final class PhoneAccount: IloAccount {
   }
 
   func sawToday(_ id: String) {
-    // The phone's own tabs keep no time they were seen, so showing one writes nothing.
-    if showsAccount { account.sawToday(id) }
+    if showsAccount { return account.sawToday(id) }
+    // Noted an hour on from the last time, as the account's is: a look at a tab isn't a write.
+    let now = Date.now
+    guard let index = tabs.today.firstIndex(where: { $0.id == id }), now.timeIntervalSince(tabs.today[index].seen ?? .distantPast) >= 3600
+    else { return }
+    tabs.today[index].seen = now
+    save()
   }
 
   func closeToday(_ id: String) {
@@ -171,6 +185,7 @@ final class PhoneAccount: IloAccount {
     var tab = tabs.today.remove(at: index)
     // As the account does it: the tab keeps its key and loses the "today:" before it.
     tab.id = String(id.dropFirst("today:".count))
+    tab.seen = nil
     tabs.pinned.append(tab)
     save()
     return node(tab, .pin)
@@ -181,6 +196,7 @@ final class PhoneAccount: IloAccount {
     guard let index = tabs.pinned.firstIndex(where: { $0.id == id }) else { return nil }
     var tab = tabs.pinned.remove(at: index)
     tab.id = "today:" + id
+    tab.seen = .now
     tabs.today.insert(tab, at: 0)
     save()
     return node(tab, .today)
@@ -199,7 +215,7 @@ final class PhoneAccount: IloAccount {
   // MARK: Following the account
 
   private func node(_ tab: PhoneTabs.Tab, _ kind: SyncedNode.Kind) -> SyncedNode {
-    SyncedNode(id: tab.id, kind: kind, space: Self.space.id, url: tab.url, title: tab.title)
+    SyncedNode(id: tab.id, kind: kind, space: Self.space.id, url: tab.url, title: tab.title, seen: tab.seen)
   }
 
   private func save() {

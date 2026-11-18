@@ -242,6 +242,8 @@ struct SettingsSheet: View {
       }
       .buttonStyle(RowStyle())
 
+      ArchiveSetting()
+
       Toggle(isOn: $settings.keyboardOnLaunch) {
         RowLabel(title: "Open keyboard on launch") {
           Image(systemName: "keyboard")
