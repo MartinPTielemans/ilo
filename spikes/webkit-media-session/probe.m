@@ -64,6 +64,7 @@ static NSString* const kWatch =
   BOOL _playing;
   // The detached run: the page's music is an Audio no document holds, and the page is muted.
   BOOL _detached;
+  BOOL _muted;
 }
 
 // An object's class and each of its properties' values, for WebKit's own types.
@@ -115,10 +116,11 @@ static NSString* const kWatch =
   Log(@"_WKNowPlayingMetadata %@", metadata ? [names componentsJoinedByString:@", "] : @"absent");
 }
 
-- (instancetype)initWithURL:(NSURL*)url detached:(BOOL)detached {
+- (instancetype)initWithURL:(NSURL*)url detached:(BOOL)detached muted:(BOOL)muted {
   if ((self = [super init])) {
     _url = url;
     _detached = detached;
+    _muted = muted;
   }
   return self;
 }
@@ -137,7 +139,7 @@ static NSString* const kWatch =
   _web = [[WKWebView alloc] initWithFrame:NSMakeRect(0, 0, 480, 320) configuration:config];
   _web.navigationDelegate = self;
   // Muted from the start, as the app's checks run each page (--mute-audio).
-  if (_detached) {
+  if (_muted) {
     SEL mute = NSSelectorFromString(@"_setPageMuted:");
     if ([_web respondsToSelector:mute]) {
       ((void (*)(id, SEL, NSUInteger))objc_msgSend)(_web, mute, 1);
@@ -351,6 +353,22 @@ static NSString* const kWatch =
   [steps addObject:^{
     ask(@"d7", @"_playPredominantOrNowPlayingMediaSession:");
   }];
+  [steps addObject:^{
+    [self->_web pauseAllMediaPlaybackWithCompletionHandler:^{
+      [self after:0.5 run:^{
+        state(@"d8 pauseAllMediaPlayback");
+      }];
+    }];
+  }];
+  [steps addObject:^{
+    [self inWorld:World()
+              run:@"navigator.mediaSession.callActionHandler({action: 'play'}), 'called'"
+             then:^(id result) {
+               [self after:0.5 run:^{
+                 state([NSString stringWithFormat:@"d9 play from the browser's world %@", result]);
+               }];
+             }];
+  }];
   next();
 }
 
@@ -549,13 +567,14 @@ int main(int argc, const char* argv[]) {
   @autoreleasepool {
     started = CFAbsoluteTimeGetCurrent();
     if (argc < 2) {
-      fprintf(stderr, "usage: probe <page url> [detached]\n");
+      fprintf(stderr, "usage: probe <page url> [detached|unmuted]\n");
       return 2;
     }
     [NSApplication sharedApplication];
     [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
     Probe* probe = [[Probe alloc] initWithURL:[NSURL URLWithString:@(argv[1])]
-                                         detached:argc > 2 && !strcmp(argv[2], "detached")];
+                                         detached:argc > 2
+                                            muted:argc > 2 && strcmp(argv[2], "unmuted") != 0];
     dispatch_async(dispatch_get_main_queue(), ^{
       [probe start];
     });

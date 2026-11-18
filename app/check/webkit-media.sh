@@ -33,10 +33,15 @@ for name, pitch in (("tone.wav", 440), ("tone2.wav", 660)):
   # The runs go under set -e, so a status the probe or the stopped server ends with is kept.
   probed=0
   "$spike/probe" "http://localhost:$spike_port/index.html" > "$log" 2>&1 || probed=$?
-  # Then music no document holds, on a muted page, as the app's media check plays it.
+  # Then music no document holds, on a muted page, as the app's media check plays it, and the same
+  # unmuted, with play and pause handlers, and in the document.
   detached=0
-  "$spike/probe" "http://localhost:$spike_port/detached.html" detached > "$spike/probe-detached.log" 2>&1 ||
-    detached=$?
+  for variant in "detached.html detached" "detached.html unmuted" "detached.html?handlers detached" \
+    "detached.html?attach detached"; do
+    echo "webkit-media: === ${variant}" >> "$spike/probe-detached.log"
+    "$spike/probe" "http://localhost:$spike_port/${variant% *}" "${variant#* }" >> "$spike/probe-detached.log" 2>&1 ||
+      detached=$?
+  done
   kill "$spike_server" 2> /dev/null || true
   wait "$spike_server" 2> /dev/null || true
   cat "$log" "$spike/probe-detached.log"

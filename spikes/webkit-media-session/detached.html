@@ -3,11 +3,16 @@
 <title>start</title>
 <script>
 // As the app's media check's music: an Audio no document holds, named, with a previous and a next
-// track and no play or pause handler.
+// track and no play or pause handler. ?attach puts it in the document, ?handlers gives it both.
 const music = window.music = new Audio("tone.wav");
+if (location.search == "?attach") document.documentElement.append(music);
+if (location.search == "?handlers") {
+  navigator.mediaSession.setActionHandler("play", () => { document.title = "action play"; music.play(); });
+  navigator.mediaSession.setActionHandler("pause", () => { document.title = "action pause"; music.pause(); });
+}
 music.loop = true;
-music.onplaying = () => document.title = "playing";
-music.onpause = () => document.title = "paused";
+music.onplaying = () => document.title = document.title.startsWith("action") ? document.title + ", playing" : "playing";
+music.onpause = () => document.title = document.title.startsWith("action") ? document.title + ", paused" : "paused";
 navigator.mediaSession.metadata = new MediaMetadata({title: "Quiet", artist: "Check"});
 navigator.mediaSession.setActionHandler("previoustrack", () => document.title = "previous track");
 navigator.mediaSession.setActionHandler("nexttrack", () => document.title = "next track");
