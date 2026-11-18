@@ -137,6 +137,8 @@ actor HistoryStore {
   /// each address once, as its newest visit that matches, newest first. Capitals and accents
   /// don't count. It reads every visit, which a phone's history is small enough for.
   func search(_ text: String, limit: Int = 5) throws -> [Visit] {
+    // A search asked for as someone types is given up when the next letter comes, before it reads.
+    try Task.checkCancellation()
     let words = Visit.folded(text).split(whereSeparator: \.isWhitespace).prefix(8).map(String.init)
     guard !words.isEmpty else { return [] }
     let each = words.indices.map { "(instr(fold(title), ?\($0 + 1)) > 0 OR instr(fold(url), ?\($0 + 1)) > 0)" }
@@ -157,27 +159,47 @@ actor HistoryStore {
 
   // MARK: Forgetting
 
+  // Each answers with the visits it forgot, which is all an Undo has to put back: once the
+  // caller lets go of them, nothing of them is left.
+
   /// Forgets a page: every visit to its address.
-  func forget(_ url: URL) throws {
+  @discardableResult func forget(_ url: URL) throws -> [Visit] {
     try forget("DELETE FROM visits WHERE url = ?1", [.text(url.absoluteString)])
   }
 
   /// Forgets every visit made from the start of `range` up to its end.
-  func forget(_ range: Range<Date>) throws {
+  @discardableResult func forget(_ range: Range<Date>) throws -> [Visit] {
     try forget(
       "DELETE FROM visits WHERE time >= ?1 AND time < ?2", [.number(Visit.time(of: range.lowerBound)), .number(Visit.time(of: range.upperBound))])
   }
 
   /// Forgets every visit. The phone keeps its name.
-  func forgetEverything() throws {
+  @discardableResult func forgetEverything() throws -> [Visit] {
     try forget("DELETE FROM visits", [])
   }
 
-  private func forget(_ sql: String, _ values: [Database.Value]) throws {
+  private func forget(_ sql: String, _ values: [Database.Value]) throws -> [Visit] {
     let database = try open()
-    try database.run(sql, values)
+    let forgotten = try database.rows(sql + " RETURNING url, title, time, typed, device", values, Self.visit).compactMap(\.self)
     // The log beside the file still has what was deleted, until it's written back and emptied.
     try database.script("PRAGMA wal_checkpoint(TRUNCATE);")
+    return forgotten
+  }
+
+  /// Puts back visits a forgetting answered with, each as it was: its page, title, time and
+  /// device. All of them or none.
+  func restore(_ visits: [Visit]) throws {
+    let database = try open()
+    try database.script("BEGIN")
+    do {
+      for visit in visits {
+        try write(visit.url, title: visit.title, at: visit.time, typed: visit.typed, by: visit.device)
+      }
+      try database.script("COMMIT")
+    } catch {
+      try? database.script("ROLLBACK")
+      throw error
+    }
   }
 }
 

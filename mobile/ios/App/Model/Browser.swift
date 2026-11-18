@@ -44,6 +44,8 @@ struct Zoom: Equatable {
 final class Browser {
   enum Sheet: Equatable {
     case actions, settings, signIn
+    /// The phone's history.
+    case history
     /// The dock's tiles past its two rows.
     case more
     /// A pinned folder's tabs.
@@ -162,6 +164,48 @@ final class Browser {
 
   func opened() {
     pageOpen = true
+  }
+
+  // MARK: History
+
+  /// The most pages of history the search field shows over the tabs it finds.
+  static let historyMatches = 3
+
+  /// The tab of the Space on screen that's at an address: a Today tab there now, or a tab pinned there.
+  func tab(at url: URL) -> SyncedNode? {
+    guard let space = currentSpace else { return nil }
+    return (account.today(in: space.id) + account.allPinned(in: space.id)).first { $0.kind != .folder && $0.url == url }
+  }
+
+  /// The tabs of the Space on screen that match what's typed, best first.
+  func tabs(matching query: String) -> [SyncedNode] {
+    guard let space = currentSpace else { return [] }
+    return Matches.rank(query, in: account.today(in: space.id) + account.allPinned(in: space.id))
+  }
+
+  /// The pages of history that match what's typed, newest first, for the search field: three at
+  /// the most, and none that's open in the Space on screen, which shows as its tab.
+  func pages(matching query: String) async -> [Visit] {
+    guard let history, let space = currentSpace, !query.trimmingCharacters(in: .whitespaces).isEmpty else { return [] }
+    let open = Set((account.today(in: space.id) + account.allPinned(in: space.id)).compactMap(\.url))
+    // As many more as could be left out for being open.
+    let found = (try? await history.store.search(query, limit: Self.historyMatches + open.count)) ?? []
+    return Array(found.filter { !open.contains($0.url) }.prefix(Self.historyMatches))
+  }
+
+  /// Goes back to a page of history: to its tab if the Space on screen has it open. If not, the
+  /// page under the search field goes there, as it does to an address typed, and anywhere else
+  /// it's a new tab of the Space on screen.
+  func revisit(_ visit: Visit) {
+    slide = 0
+    if let open = tab(at: visit.url) {
+      self.open(open)
+    } else if searchingPage, let page {
+      searchingPage = false
+      page.load(visit.url, entered: true)
+    } else {
+      openNew(visit.url, title: visit.title)
+    }
   }
 
   /// Starts back to the Space: the page shrinks to where its card is now.

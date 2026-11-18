@@ -11,6 +11,8 @@ final class Favicons {
   @ObservationIgnored private var asked: Set<String> = []
   /// Hosts whose page has said which icon is theirs, which beats /favicon.ico.
   @ObservationIgnored private var told: Set<String> = []
+  /// Hosts already looked for on disk alone.
+  @ObservationIgnored private var recalled: Set<String> = []
   @ObservationIgnored private let directory: URL
   @ObservationIgnored private let session: URLSession
 
@@ -37,6 +39,12 @@ final class Favicons {
     } else if let guess = URL(string: "/favicon.ico", relativeTo: url)?.absoluteURL {
       await fetch(guess, for: host)
     }
+  }
+
+  /// Finds the icon of a site been to, from disk alone: reading history asks no site for anything.
+  func recall(for url: URL?) async {
+    guard let host = url?.host(), icons[host] == nil, recalled.insert(host).inserted else { return }
+    if let icon = await Self.read(file(host)), icons[host] == nil { icons[host] = icon }
   }
 
   /// A loaded page linked to its icon.

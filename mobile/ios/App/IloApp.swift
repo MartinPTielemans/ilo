@@ -89,7 +89,7 @@ private struct BrowserScreen: View {
     let page = browser.page
     ZStack {
       SpaceScreen()
-        .modifier(UnderSignIn(up: browser.sheet == .signIn))
+        .modifier(UnderFieldSheet(up: browser.sheet == .signIn || browser.sheet == .history))
         .accessibilityHidden(browser.pageOpen)
 
       if let page {
@@ -111,6 +111,9 @@ private struct BrowserScreen: View {
       }
       BottomSheet(isPresented: browser.sheet == .more, dismiss: { browser.sheet = nil }) {
         MoreSheet()
+      }
+      BottomSheet(isPresented: browser.sheet == .history, ground: .solid, headroom: Listed.headroom, dismiss: { browser.sheet = nil }) {
+        HistorySheet(history: browser.history)
       }
       BottomSheet(isPresented: browser.sheet == .signIn, ground: .solid, dismiss: { browser.sheet = nil }) {
         SignInSheet()

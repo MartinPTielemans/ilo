@@ -47,6 +47,8 @@ nonisolated struct Palette: Equatable, Sendable {
   var shadow: Color { .black.opacity(dark ? 0.35 : 0.14) }
   /// Under a card's picture.
   var cardShadow: Color { .black.opacity(dark ? 0.22 : 0.12) }
+  /// What takes something away for good: forgetting a page.
+  var red: Color { Color(hex: dark ? 0xE1676F : 0xC9414B) }
   /// The close button on a card's picture, which may be any colour.
   static let closePlate = Color(hex: 0x1E2026, opacity: 0.62)
   /// Over the Space while a page is held above it.
@@ -139,6 +141,21 @@ nonisolated enum Column {
   static let inset: CGFloat = 12
   static let icon: CGFloat = 20
   static let gap: CGFloat = 12
+}
+
+/// A list that's read in a sheet, as history is: rows under day headings, over a field at its foot.
+nonisolated enum Listed {
+  /// A row with something at its end, as a match in the search field is.
+  static let row: CGFloat = 50
+  /// A day's heading, with the room over it that sets the days apart.
+  static let heading: CGFloat = 36
+  /// Above a sheet as tall as the screen.
+  static let headroom: CGFloat = 44
+  /// How far a swiped row stands aside for its button, and the gap between the two.
+  static let swipe: CGFloat = 104
+  static let swipeGap: CGFloat = 8
+  /// How much of a row's width a swipe goes before letting go forgets the page.
+  static let fullSwipe: CGFloat = 0.6
 }
 
 nonisolated enum Motion {

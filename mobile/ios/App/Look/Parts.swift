@@ -6,6 +6,9 @@ struct SiteIcon: View {
   let label: String
   var emoji = ""
   var size: CGFloat = 20
+  /// Whether a site whose icon isn't kept is asked for it. A page of history's isn't: the icon
+  /// kept from when it was open, or a letter.
+  var asks = true
 
   @Environment(Favicons.self) private var favicons
 
@@ -30,7 +33,13 @@ struct SiteIcon: View {
     }
     .frame(width: size, height: size)
     .accessibilityHidden(true)
-    .task(id: url?.host()) { await favicons.find(for: url) }
+    .task(id: url?.host()) {
+      if asks {
+        await favicons.find(for: url)
+      } else {
+        await favicons.recall(for: url)
+      }
+    }
   }
 
   private var letter: String {
@@ -161,6 +170,8 @@ struct PlateButtonStyle: ButtonStyle {
 struct BottomSheet<Content: View>: View {
   let isPresented: Bool
   var ground = SheetGround.plain
+  /// Kept clear above a sheet that grows as tall as the screen, so what it rose over still shows.
+  var headroom: CGFloat = 0
   let dismiss: () -> Void
   @ViewBuilder var content: Content
 
@@ -192,6 +203,7 @@ struct BottomSheet<Content: View>: View {
         .frame(maxWidth: .infinity)
         .foregroundStyle(palette.text)
         .sheetGround(ground)
+        .padding(.top, headroom)
         .offset(y: pull > 0 ? pull : Motion.resist(pull))
         .gesture(Pull(moved: { pull = $0 }, ended: release))
         .transition(.move(edge: .bottom))

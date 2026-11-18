@@ -2,7 +2,8 @@ import IloSync
 import SwiftUI
 
 /// What typing finds, stacked up from the field: the row right above it is what return does, the
-/// address or a search, and over that the Space's tabs that match, the best nearest.
+/// address or a search, over that the Space's tabs that match, the best nearest, and over those
+/// the pages of history that match, the latest nearest.
 struct SearchResults: View {
   let query: String
   /// The site whose own search the field has turned into: then the rows are searches on it,
@@ -13,9 +14,18 @@ struct SearchResults: View {
 
   @Environment(Browser.self) private var browser
   @Environment(\.palette) private var palette
+  /// The pages of history that match, newest first, which the store finds a moment after the tabs.
+  @State private var past: [Visit] = []
+
+  /// What the history matches are for: asked again when any of it changes.
+  private struct Asked: Equatable {
+    var query: String
+    var space: String?
+    var onSite: Bool
+  }
 
   var body: some View {
-    let matches = site == nil ? matches : []
+    let matches = site == nil ? browser.tabs(matching: query) : []
     let destination = Destination(query, on: site, engine: browser.settings.searchEngine)
     GeometryReader { room in
       ScrollView(.vertical) {
@@ -35,6 +45,15 @@ struct SearchResults: View {
               }
               .buttonStyle(RowStyle())
             }
+          }
+          ForEach(past.reversed()) { visit in
+            Button {
+              browser.revisit(visit)
+            } label: {
+              HistoryLabel(visit: visit, when: HistoryWords.day(visit.date, now: .now, calendar: .current))
+            }
+            .buttonStyle(RowStyle())
+            .accessibilityHint("Opens the page from history")
           }
           ForEach(matches.reversed()) { node in
             Button {
@@ -65,12 +84,12 @@ struct SearchResults: View {
       .scrollBounceBehavior(.basedOnSize)
       .scrollIndicators(.hidden)
     }
-  }
-
-  private var matches: [SyncedNode] {
-    guard let space = browser.currentSpace else { return [] }
-    let account = browser.account
-    return Matches.rank(query, in: account.today(in: space.id) + account.allPinned(in: space.id))
+    .task(id: Asked(query: query, space: browser.currentSpace?.id, onSite: site != nil)) {
+      // A site's own search has its past searches there instead.
+      let found = site == nil ? await browser.pages(matching: query) : []
+      // Words typed since have an answer of their own on its way.
+      if !Task.isCancelled { past = found }
+    }
   }
 }
 

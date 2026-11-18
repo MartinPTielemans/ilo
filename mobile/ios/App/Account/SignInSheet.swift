@@ -400,10 +400,10 @@ struct OverKeyboard: ViewModifier {
   }
 }
 
-/// Keeps what's under the sign-in sheet where it was while the sheet rides the keyboard, and
-/// until a keyboard the sheet leaves behind has gone: one still on its way out would squeeze
+/// Keeps what's under a sheet with a field in it where it was while the sheet rides the keyboard,
+/// and until a keyboard the sheet leaves behind has gone: one still on its way out would squeeze
 /// the Space for a moment.
-struct UnderSignIn: ViewModifier {
+struct UnderFieldSheet: ViewModifier {
   /// Whether the sheet is up.
   let up: Bool
   @State private var keyboardUp = false
