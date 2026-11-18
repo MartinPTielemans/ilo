@@ -796,9 +796,11 @@ typedef struct bc_sync_device {
 
 // What stops sync from keeping up with the server, in bc_sync_activity. Sync tries again by itself
 // after OFFLINE, SERVER, REFUSED and SIGN_IN, and they count only once they last: three sync
-// cycles in a row failed, or two minutes of cycles did and none went through. The core decides
-// that as each cycle ends, with no timer, and until then the activity is the last good cycle's, so
-// a network change or a wake from sleep that fails a cycle shows nothing.
+// cycles in a row failed, or two minutes of cycles did and none went through, each starting within
+// sync's longest wait between tries after the one before. The core decides that as each cycle ends,
+// with no timer, and until then the activity is the last good cycle's, so a network change or a
+// wake from sleep that fails a cycle shows nothing, a cycle before the sleep and one after it
+// being no run.
 #define BC_SYNC_TROUBLE_NONE 0
 // There's no connection to the server: the network is down, or the server's address doesn't
 // answer.
@@ -1342,8 +1344,9 @@ typedef struct bc_host {
   // returned true, in order.
   void (*addresses_added)(void* context, bc_id profile, size_t added);
   // The browser's account changed, or was first read, once the browser has started, or a sync
-  // cycle ended that changed what bc_sync_read_activity reads. A cycle that changes nothing tells
-  // nothing. The user's alone: agents hear none.
+  // cycle ended that changed what bc_sync_read_activity reads: each cycle that goes through, as it
+  // moves last_synced, and a failed one only as it changes the trouble shown. The user's alone:
+  // agents hear none.
   void (*sync_changed)(void* context, const bc_sync_state* state);
   // Another device asks to be added to the account: ask the user over the front window whether
   // to, showing its code, and answer with bc_sync_answer_pairing. It comes only once the core has
