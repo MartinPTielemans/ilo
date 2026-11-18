@@ -128,7 +128,15 @@ send key r cmd shift
 expect '^browser: command force-reload via ui$' "⇧⌘R didn't run force-reload"
 expect "^browser: loaded $tab https://example.org/\$" "⇧⌘R didn't load the page again"
 # The button is stop until the page says it has stopped loading, a little after its load (#1114).
-expect '^browser: nav shows reload$' "the stop button didn't turn back into reload"
+# A press hits the button drawn last, and a reload from the run's own server can start and end
+# between two frames, drawing no stop at all (#3362): so once the page has stopped loading, the
+# click waits until the last button drawn is reload, whether or not a stop came before it.
+expect_page example.org 1 0 "after ⇧⌘R"
+for _ in $(seq 100); do
+  [ "$(last 'nav shows')" = reload ] && break
+  sleep 0.1
+done
+[ "$(last 'nav shows')" = reload ] || fail "the stop button didn't turn back into reload"
 send click $reload_button
 expect '^browser: command reload via sidebar$' "a click on reload didn't reload"
 expect "^browser: loaded $tab https://example.org/\$" "a click on reload didn't load the page again"
@@ -324,6 +332,15 @@ stored "$nearby" "1 1 1" "Clear Site Data and Reload on 127.0.0.1 lost $nearby's
 # bar in the user's window: an agent's tab never takes the user's keyboard, as its warning took it
 # on Windows (#3164).
 agent_steps() {
+  # The agent's warning is its tab's, which no window shows: it isn't shown in the user's window
+  # either, as Chrome keeps a tab's dialog hidden while its tab is (#3164).
+  no_agent_dialog() {
+    [ "$major" -ge 157 ] || return 0
+    send layout
+    shown=$(since | sed -n 's/^browser: layout child //p' | head -1)
+    [ -z "$shown" ] ||
+      fail "the agent's warning before http, after $1 in its own Space, showed at $shown in the user's window, which shows the user's tab: $(since | grep '^browser: layout' | tr '\n' ' ')"
+  }
   send agentspace claude-code Claude Code
   expect '^browser: made space [1-9][0-9]* for agent claude-code$' "the driver didn't make the agent's Space"
   before=$(tls)
@@ -331,11 +348,13 @@ agent_steps() {
   expect '^browser: agent claude-code opened [1-9][0-9]*$' "the agent didn't open http://$agent_opened/"
   agent_tab=$(sed -n 's/^browser: agent claude-code opened \([0-9]*\)$/\1/p' "$log" | tail -1)
   upgraded "$agent_tab" "$agent_opened" "the agent's open_tab"
+  no_agent_dialog "its open_tab"
   before=$(tls)
   send agentnavigate claude-code "$agent_tab" "http://$agent_moved/"
   expect "^browser: agent claude-code navigated $agent_tab: 1\$" \
     "the core didn't take the agent's navigate to http://$agent_moved/"
   upgraded "$agent_tab" "$agent_moved" "the agent's navigate"
+  no_agent_dialog "its navigate"
   agent_at="at Chrome's warning before http"
   [ "$major" -ge 157 ] || agent_at="loaded over http"
   send key l cmd

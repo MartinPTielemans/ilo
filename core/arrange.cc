@@ -1290,8 +1290,12 @@ constexpr char16_t kScript[] =
         const c = carry;
         let saved = null;
         if (!mode.previewing) {
+          // A rest that found the drop doesn't fit holds it refused until the pointer moves on, so
+          // letting go there lands nothing, not the drop the move showed before it (#3003).
+          const held = c.drop && c.drop.change === CHANGE.REFUSED && c.rest &&
+            Math.hypot(a.x - c.rest.x, a.y - c.rest.y) < LIFT;
           c.x = a.x; c.y = a.y;
-          c.drop = still(() => dropAt(a.x, a.y, !!a.free));
+          if (!held) c.drop = still(() => dropAt(a.x, a.y, !!a.free));
         }
         const d = c.drop;
         const keep = mode.previewing;
