@@ -205,6 +205,8 @@ send key x
 send key y
 expect "^browser: title $beside beside has xy\$" \
   "typing after a click on the page beside the alert, in a split, didn't reach that page: the keyboard is in $key, on $focus: $(since "$clicked" | grep -e '^browser: drive' -e "^browser: title $beside " -e '^browser: dialog' | tail -6 | tr '\n' ' ')"
+# Once the withdrawn alert has left, so the click is on the page, not on the alert leaving.
+expect '^browser: dialog hidden$' "the alert withdrawn from its pane didn't finish leaving" "$clicked"
 send click $(in_pane 1)
 expect "^browser: selected $page\( in .*\)\{0,1\}\$" "a click on the alert's pane didn't focus it again"
 expect '^browser: dialog shown .* says$' "the alert didn't come back with its pane's focus"
