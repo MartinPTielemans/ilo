@@ -38,7 +38,7 @@ final class WebTab: NSObject, Identifiable {
   /// Scrolling down the page shrinks the bar to a small pill with the site's name, and the page
   /// gets the room.
   private(set) var barHidden = false {
-    didSet { if barHidden != oldValue { fitBar() } }
+    didSet { if barHidden != oldValue { barChanged() } }
   }
 
   @ObservationIgnored weak var browser: Browser?
@@ -52,6 +52,10 @@ final class WebTab: NSObject, Identifiable {
   @ObservationIgnored private var failed: (url: URL, users: Bool)?
   @ObservationIgnored private var writes = NavigationWrites()
   @ObservationIgnored private var shrink = BarShrink()
+  /// The page waits for the bar to be done changing size, and for its own scrolling, before it's
+  /// laid out for the bar's new size.
+  @ObservationIgnored private var rest = BarRest()
+  @ObservationIgnored private var resting: Task<Void, Never>?
   /// The home indicator's band under the page, once the page has been in a window.
   @ObservationIgnored private var band: CGFloat = 0
   @ObservationIgnored private let swipe: PageSwipe
@@ -103,6 +107,9 @@ final class WebTab: NSObject, Identifiable {
     Blocker.shared.attach(webView)
     // The bar floats over the page's foot, so the page ends above it.
     fitBar()
+    fitPage()
+    // The page hears when its scrolling stops.
+    webView.scrollView.delegate = self
     observations.append(
       webView.scrollView.observe(\.contentOffset) { [weak self] _, _ in
         MainActor.assumeIsolated { self?.scrolled() }
@@ -331,9 +338,32 @@ final class WebTab: NSObject, Identifiable {
   /// window's, which holds still while the page comes out of its card: the web view's own grows
   /// with every frame of that, and each change lays the page out again.
   private func seated() {
-    guard let window = webView.window, window.safeAreaInsets.bottom != band else { return }
+    guard let window = webView.window else { return }
+    // A page taken off the screen while it scrolled may not have heard the scrolling stop.
+    settlePage(scrolling: webView.scrollView.isDragging || webView.scrollView.isDecelerating)
+    guard window.safeAreaInsets.bottom != band else { return }
     band = window.safeAreaInsets.bottom
     fitBar()
+    fitPage()
+  }
+
+  /// The bar sets off for its other size. What scrolls ends above it from the start, which costs
+  /// the page nothing; the page is laid out for it once it's there.
+  private func barChanged() {
+    fitBar()
+    rest.changed()
+    resting?.cancel()
+    resting = Task { [weak self] in
+      try? await Task.sleep(for: .seconds(Motion.sheetRest))
+      guard !Task.isCancelled, let self else { return }
+      rest.rested()
+      settlePage(scrolling: webView.scrollView.isDragging || webView.scrollView.isDecelerating)
+    }
+  }
+
+  /// Lays the page out for the bar's size if it has changed, and neither it nor the page moves.
+  private func settlePage(scrolling: Bool) {
+    if rest.fits(scrolling: scrolling) { fitPage() }
   }
 
   /// What the small pill covers of the page's foot, over the home indicator's band.
@@ -341,14 +371,19 @@ final class WebTab: NSObject, Identifiable {
     max(Bar.gap, Bar.smallFoot(band: band) + Bar.small + Bar.gap - band)
   }
 
-  /// The page ends above the bar, whichever size it is, and is laid out above it too: what a page
-  /// fixes to its foot, or fits to the screen's height, stands clear of the bar. The web view
-  /// keeps the whole screen, so what scrolls still shows through the bar.
+  /// What scrolls ends above the bar, whichever size it is.
   private func fitBar() {
-    let whole = Bar.height + Bar.gap
-    let foot = barHidden ? smallFoot : whole
+    let foot = barHidden ? smallFoot : Bar.height + Bar.gap
     webView.scrollView.contentInset.bottom = foot
     webView.scrollView.verticalScrollIndicatorInsets.bottom = foot
+  }
+
+  /// The page is laid out above the bar too: what it fixes to its foot, or fits to the screen's
+  /// height, stands clear of the bar. The web view keeps the whole screen, so what scrolls still
+  /// shows through the bar. WebKit lays the page out again at once for each new inset.
+  private func fitPage() {
+    let whole = Bar.height + Bar.gap
+    let foot = barHidden ? smallFoot : whole
     // WebKit measures these from the web view's own foot, under the home indicator.
     let most = UIEdgeInsets(top: 0, left: 0, bottom: whole + band, right: 0)
     if most != webView.maximumViewportInset {
@@ -389,6 +424,16 @@ private final class PageWebView: WKWebView {
   override func safeAreaInsetsDidChange() {
     super.safeAreaInsetsDidChange()
     seated()
+  }
+}
+
+extension WebTab: UIScrollViewDelegate {
+  func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+    if !decelerate { settlePage(scrolling: false) }
+  }
+
+  func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+    settlePage(scrolling: false)
   }
 }
 
