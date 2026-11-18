@@ -86,7 +86,7 @@ impl Shell {
         if self.onboarding.is_some() || !self.focus_handle.is_focused(window) {
             return cx.propagate();
         }
-        if self.tab_into_strip(reverse, cx) {
+        if self.tab_into_library(cx) || self.tab_into_strip(reverse, cx) {
             return;
         }
         self.run(Command::FocusSidebar, "tab", cx);
