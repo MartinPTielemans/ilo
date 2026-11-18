@@ -54,6 +54,8 @@ struct Zoom: Equatable {
 final class Browser {
   enum Sheet: Equatable {
     case actions, settings, signIn
+    /// The phone's history.
+    case history
     /// The dock's tiles past its two rows.
     case more
     /// A pinned folder's tabs.
@@ -64,6 +66,8 @@ final class Browser {
   let settings: Settings
   let cache: TabCache
   let favicons: Favicons
+  /// The phone's history, which each tab made here writes its pages to. None keeps none.
+  @ObservationIgnored let history: History?
   @ObservationIgnored let places = Places()
 
   /// The Space on screen.
@@ -106,11 +110,12 @@ final class Browser {
   /// The time iOS gives the account to send what changed after the app leaves the screen.
   @ObservationIgnored private var sending = UIBackgroundTaskIdentifier.invalid
 
-  init(account: any IloAccount, settings: Settings, cache: TabCache, favicons: Favicons) {
+  init(account: any IloAccount, settings: Settings, cache: TabCache, favicons: Favicons, history: History? = nil) {
     self.account = account
     self.settings = settings
     self.cache = cache
     self.favicons = favicons
+    self.history = history
     space = settings.space
     wantsKeyboard = settings.keyboardOnLaunch
     (account as? PhoneAccount)?.joined = { [weak self] in self?.joined($0) }
@@ -151,11 +156,12 @@ final class Browser {
     show(tab, from: places.frames[node.id].map { Zoom(rect: $0, ontoCard: node.kind == .today) })
   }
 
-  /// Opens an address as a new Today tab of the Space on screen.
-  func openNew(_ url: URL, title: String = "") {
+  /// Opens an address as a new Today tab of the Space on screen. `typed` is one written out in
+  /// the search field.
+  func openNew(_ url: URL, title: String = "", typed: Bool = false) {
     guard let space = currentSpace else { return }
     let node = account.openToday(url: url, title: title, in: space.id)
-    show(make(node, at: url, entered: true), from: nil)
+    show(make(node, at: url, entered: true, typed: typed), from: nil)
   }
 
   /// Opens an address as a new Today tab of the Space on screen, behind the page that's up: its
@@ -175,16 +181,60 @@ final class Browser {
 
   /// What return does in the field: on the Space, a new tab; over a page, that page goes there.
   func go(_ destination: Destination) {
+    // An address is typed. A search is the field's own address for the words, which nobody wrote.
+    let typed = if case .page = destination { true } else { false }
     if searchingPage, let page {
       searchingPage = false
-      page.load(destination.url, entered: true)
+      page.load(destination.url, entered: true, typed: typed)
     } else {
-      openNew(destination.url)
+      openNew(destination.url, typed: typed)
     }
   }
 
   func opened() {
     pageOpen = true
+  }
+
+  // MARK: History
+
+  /// The most pages of history the search field shows over the tabs it finds.
+  static let historyMatches = 3
+
+  /// The tab of the Space on screen that's at an address: a Today tab there now, or a tab pinned there.
+  func tab(at url: URL) -> SyncedNode? {
+    guard let space = currentSpace else { return nil }
+    return (account.today(in: space.id) + account.allPinned(in: space.id)).first { $0.kind != .folder && $0.url == url }
+  }
+
+  /// The tabs of the Space on screen that match what's typed, best first.
+  func tabs(matching query: String) -> [SyncedNode] {
+    guard let space = currentSpace else { return [] }
+    return Matches.rank(query, in: account.today(in: space.id) + account.allPinned(in: space.id))
+  }
+
+  /// The pages of history that match what's typed, newest first, for the search field: three at
+  /// the most, and none that's open in the Space on screen, which shows as its tab.
+  func pages(matching query: String) async -> [Visit] {
+    guard let history, let space = currentSpace, !query.trimmingCharacters(in: .whitespaces).isEmpty else { return [] }
+    let open = Set((account.today(in: space.id) + account.allPinned(in: space.id)).compactMap(\.url))
+    // As many more as could be left out for being open.
+    let found = (try? await history.store.search(query, limit: Self.historyMatches + open.count)) ?? []
+    return Array(found.filter { !open.contains($0.url) }.prefix(Self.historyMatches))
+  }
+
+  /// Goes back to a page of history: to its tab if the Space on screen has it open. If not, the
+  /// page under the search field goes there, as it does to an address typed, and anywhere else
+  /// it's a new tab of the Space on screen.
+  func revisit(_ visit: Visit) {
+    slide = 0
+    if let open = tab(at: visit.url) {
+      self.open(open)
+    } else if searchingPage, let page {
+      searchingPage = false
+      page.load(visit.url, entered: true)
+    } else {
+      openNew(visit.url, title: visit.title)
+    }
   }
 
   /// Starts back to the Space: the page shrinks to where its card is now.
@@ -305,7 +355,7 @@ final class Browser {
   }
 
   /// A web view for a tab: one the user just asked for by `entered` address, or the account's.
-  private func make(_ node: SyncedNode, at url: URL, entered: Bool) -> WebTab {
+  private func make(_ node: SyncedNode, at url: URL, entered: Bool, typed: Bool = false) -> WebTab {
     let tab = WebTab(id: node.id, role: node.kind == .pin ? .pinned(home: url) : .today, browser: self)
     tabs[node.id] = tab
     Task {
@@ -314,7 +364,7 @@ final class Browser {
       if let saved = await cache.saved(of: node.id), saved.url == url {
         tab.restore(saved.state, else: url)
       } else {
-        tab.load(url, entered: entered)
+        tab.load(url, entered: entered, typed: typed)
       }
     }
     return tab

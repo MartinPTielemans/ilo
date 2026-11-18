@@ -15,6 +15,7 @@ struct ActionSheet: View {
     let isFavourite = settings.isFavourite(tab.url)
     let isPinned = tab.role != .today
     VStack(spacing: 0) {
+      SheetRow(symbol: "clock", title: "History") { browser.sheet = .history }
       ReadingRows(tab: tab)
       BlockingRow(tab: tab)
       SheetRow(symbol: "desktopcomputer", title: tab.wantsDesktopSite ? "Request mobile site" : "Request desktop site") {
@@ -235,6 +236,24 @@ struct SettingsSheet: View {
       }
       .tint(palette.accent)
       .padding(.trailing, Column.inset)
+
+      Rectangle()
+        .fill(palette.text.opacity(0.12))
+        .frame(height: 1)
+        .padding(.horizontal, Column.inset)
+        .padding(.top, 8)
+        .padding(.bottom, 12)
+
+      // What the phone keeps, as big buttons nearest the thumb. Each takes an even share of the
+      // row, so the next one joins by being added.
+      HStack(spacing: 8) {
+        Button {
+          browser.sheet = .history
+        } label: {
+          BigLabel(symbol: "clock", title: "History")
+        }
+      }
+      .buttonStyle(PressStyle())
     }
     .padding(.bottom, 4)
   }

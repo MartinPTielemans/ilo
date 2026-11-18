@@ -10,7 +10,7 @@ struct IloApp: App {
   init() {
     let phone = makeAccount()
     _phone = State(initialValue: phone)
-    _browser = State(initialValue: Browser(account: phone, settings: Settings(), cache: TabCache(), favicons: Favicons()))
+    _browser = State(initialValue: Browser(account: phone, settings: Settings(), cache: TabCache(), favicons: Favicons(), history: makeHistory()))
   }
 
   var body: some Scene {
@@ -48,6 +48,17 @@ func makeAccount() -> PhoneAccount {
     directory: URL.applicationSupportDirectory.appending(path: "Phone"))
 }
 
+/// The one place the phone's history is made, in a file of its own among the app's.
+func makeHistory() -> History {
+  #if DEBUG
+    if ProcessInfo.processInfo.arguments.contains("-fixture") {
+      // What a made-up account browses stays out of the real history's file, as its tabs do.
+      return History(store: HistoryStore(file: URL.temporaryDirectory.appending(path: "FixturePhone/history.sqlite")))
+    }
+  #endif
+  return History(store: HistoryStore(file: URL.applicationSupportDirectory.appending(path: "History/history.sqlite")))
+}
+
 /// The browser, at once: signed in or not, there's a Space to open pages in.
 private struct RootView: View {
   @Environment(Browser.self) private var browser
@@ -78,7 +89,7 @@ private struct BrowserScreen: View {
     let page = browser.page
     ZStack {
       SpaceScreen()
-        .modifier(UnderSignIn(up: browser.sheet == .signIn))
+        .modifier(UnderFieldSheet(up: browser.sheet == .signIn || browser.sheet == .history))
         .accessibilityHidden(browser.pageOpen)
 
       if let page {
@@ -100,6 +111,9 @@ private struct BrowserScreen: View {
       }
       BottomSheet(isPresented: browser.sheet == .more, dismiss: { browser.sheet = nil }) {
         MoreSheet()
+      }
+      BottomSheet(isPresented: browser.sheet == .history, ground: .solid, headroom: Listed.headroom, dismiss: { browser.sheet = nil }) {
+        HistorySheet(history: browser.history)
       }
       BottomSheet(isPresented: browser.sheet == .signIn, ground: .solid, dismiss: { browser.sheet = nil }) {
         SignInSheet()
