@@ -345,8 +345,11 @@ made() {
   [ "$(cat "$made_folder/name" 2> /dev/null)" = "$1" ] ||
     fail "the name of the Board made from $2 wasn't kept in its folder: $(cat "$made_folder/name" 2> /dev/null)"
 }
-# The Board's tab $tab archived, so the sidebar's places stay few for the steps after.
+# The Board's tab $tab archived, from Today, as ⌘W keeps a pinned tab, so the sidebar's places stay
+# few for the steps after.
 archive() {
+  send key d cmd
+  expect "^browser: today\( [0-9]*\)* $tab\( [0-9]*\)*\$" "⌘D didn't move the Board's tab $tab, made from $1, into Today: Today is \"$(today)\""
   send key w cmd
   expect "^browser: tab $tab closed\$" "⌘W didn't archive the Board's tab $tab, made from $1"
 }
