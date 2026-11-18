@@ -451,6 +451,10 @@ void Tab::ObserveHelpers() {
   }
   // Edit › AutoFill opens Chrome's dropdown at the field its page's focus is in.
   AutofillMenu::Watch(contents);
+  // The URL field's key, from the first page on: a tab typed in the command bar or opened from a
+  // link starts its first navigation before the core makes its Tab, so DidStartNavigation's watch
+  // would come only with its second page (#3348).
+  PasswordOffer::WatchKey(contents);
   if (auto* translate = PageTranslate::FromWebContents(contents)) {
     translate->ObserveDriver();
   }
