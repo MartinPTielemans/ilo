@@ -18,7 +18,11 @@
 log="$out/board.log"
 step=0
 rm -f "$saved" "$launch_frame"
-BROWSER_DRIVE=1 BROWSER_URL='data:text/html,<title>ready</title>' "$browser" \
+# Showing the file on Linux, with no file manager on the bus, falls to xdg-open, which tries
+# $BROWSER before the runner's own browsers: true ends it there, so none stays on the display.
+opener=${BROWSER:-}
+[ "$(uname)" != Linux ] || opener=true
+BROWSER=$opener BROWSER_DRIVE=1 BROWSER_URL='data:text/html,<title>ready</title>' "$browser" \
   < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
