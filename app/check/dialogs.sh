@@ -154,6 +154,8 @@ expect '^browser: dialog shown .* says$' "the alert didn't come back with its ta
 expect '^browser: dialog settled$' "the alert didn't settle again"
 send key return
 expect "^browser: page $page dialog answered accept\$" "↩ didn't answer the alert that came back"
+# Gone first: on X11 Add Split View, from the menu while the answered alert was leaving, ran nothing.
+expect '^browser: dialog hidden$' "the alert that came back didn't leave once answered"
 
 # In a split view an alert covers its own pane alone, as Chrome's do, where it covered both (#3231).
 # A click on the page beside it lands there, focusing that pane, and the typing after reaches that
