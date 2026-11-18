@@ -200,7 +200,31 @@ fn bindings_of(key: &str, action: Box<dyn Action>, cx: &App) -> Vec<KeyBinding> 
         let action = action.boxed_clone();
         KeyBinding::load(&key, action, Some(context.clone()), false, None, cx).ok()
     };
-    pressed_as(key).into_iter().filter_map(load).collect()
+    let pressed = pressed_as(key);
+    // GPUI hears a key whose shift makes a symbol with the shift taken into it, as ⌃⇧2 is ⌃@ on
+    // the Mac and Alt+@ under X11, where a page hands the browser the key with shift. The binding
+    // with shift comes first, so the menus show it.
+    let unshifted: Vec<String> = pressed
+        .iter()
+        .filter_map(|key| without_shift(key))
+        .collect();
+    pressed
+        .into_iter()
+        .chain(unshifted)
+        .filter_map(load)
+        .collect()
+}
+
+/// `key` without its shift, when what it presses with shift is a symbol shift makes, as
+/// ctrl-shift-@ is typed ctrl-@.
+fn without_shift(key: &str) -> Option<String> {
+    let (held, character) = key.rsplit_once('-')?;
+    let shifted = character.chars().count() == 1 && "~!@#$%^&*()_+{}|:\"<>?".contains(character);
+    let held: Vec<&str> = held.split('-').collect();
+    (shifted && held.contains(&"shift")).then(|| {
+        let held = held.into_iter().filter(|&each| each != "shift");
+        held.chain([character]).collect::<Vec<_>>().join("-")
+    })
 }
 
 /// Off the Mac, as on Linux and Windows, the keys SHORTCUTS writes the Mac's way are pressed with
@@ -1085,7 +1109,9 @@ mod tests {
         let mut cx = VisualTestContext::from_window(window.unwrap().into(), cx);
         cx.simulate_resize(gpui::size(gpui::px(1000.), gpui::px(700.)));
         cx.run_until_parked();
-        cx.simulate_keystrokes("ctrl-shift-2 ctrl-@ ctrl-! ctrl-} ctrl-{ ctrl-+ ctrl-_ cmd-} cmd-{");
+        cx.simulate_keystrokes(
+            "ctrl-shift-2 ctrl-@ ctrl-! ctrl-} ctrl-{ ctrl-+ ctrl-_ cmd-} cmd-{",
+        );
         assert_eq!(
             ran.take(),
             [
@@ -1104,8 +1130,14 @@ mod tests {
         let shown = cx.update(|_, cx| {
             let keymap = cx.key_bindings();
             let keymap = keymap.borrow();
-            let binding = keymap.bindings_for_action(&Run(Command::FocusPane(1))).next();
-            binding.map(|binding| binding.keystrokes()[0].inner().unparse(OperatingSystem::Mac))
+            let binding = keymap
+                .bindings_for_action(&Run(Command::FocusPane(1)))
+                .next();
+            binding.map(|binding| {
+                binding.keystrokes()[0]
+                    .inner()
+                    .unparse(OperatingSystem::Mac)
+            })
         });
         assert_eq!(shown.as_deref(), Some("ctrl-shift-2"));
     }
