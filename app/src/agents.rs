@@ -197,6 +197,10 @@ pub trait Browser {
     fn agent_tabs(&self, agent: &str, cx: &App) -> Vec<TabInfo>;
     /// `tab`'s title and URL.
     fn tab(&self, tab: u64, cx: &App) -> TabInfo;
+    /// Why no agent may see or act on `tab`, even in its own Space, or None (`off_limits`).
+    fn off_limits(&self, tab: u64, cx: &App) -> Option<&'static str> {
+        off_limits(&self.tab(tab, cx).url, "")
+    }
     /// The Space that has `tab`, or 0 if none does: it closed, or is closing.
     fn space_of(&self, tab: u64, cx: &App) -> u64;
     /// Asks the core whether the agent may do `action` to `tab` (bc_agent_may_act): nothing, or
@@ -1187,6 +1191,9 @@ impl Agents {
         };
         let tab = self.browser.tab(tab, cx);
         _ = reply.send(match text {
+            // Read once it loaded, as the page tools look once they've acted: the tab may have gone
+            // somewhere agents may not, and the core reads any page.
+            Some(_) if !is_web(&tab.url) => ToolResult::error(NOT_WEB_PAGE),
             Some(text) => ToolResult::text(tools::page_text(&tab, &text)),
             None => ToolResult::error(
                 "The tab has no page loaded: it loads once the user shows it. Try another tab.",
@@ -1249,7 +1256,9 @@ impl Agents {
             "list_tabs" => {
                 // Its first call makes its Space, which the core then lists.
                 self.space(&agent, cx);
-                let tabs = self.browser.agent_tabs(&agent, cx);
+                let tabs: Vec<TabInfo> = (self.browser.agent_tabs(&agent, cx).into_iter())
+                    .filter(|tab| self.browser.off_limits(tab.id, cx).is_none())
+                    .collect();
                 self.note(&agent, "list_tabs", "", "");
                 cx.notify();
                 let mine: Vec<u64> = (self.pins.iter())
@@ -1531,6 +1540,19 @@ impl Agents {
                 let Some(tab) = self.tab_for(&agent, &arguments, &reply, cx) else {
                     return;
                 };
+                // It asks for the tab back without the core's check, which may_act's would add. A
+                // tab the user doesn't hold gets NOT_HELD, which says nothing of its page.
+                if let Some(why) = self
+                    .held
+                    .contains_key(&tab)
+                    .then(|| self.browser.off_limits(tab, cx))
+                    .flatten()
+                {
+                    let site = site(&self.browser.tab(tab, cx).url);
+                    self.note(&agent, "ask_for_tab", &site, why);
+                    _ = reply.send(ToolResult::error(why));
+                    return;
+                }
                 let why = arguments
                     .get("reason")
                     .and_then(Value::as_str)
@@ -1571,6 +1593,13 @@ impl Agents {
                     return;
                 };
                 let host = site(&self.browser.tab(tab, cx).url);
+                // Before the request is read, so its answer says nothing of a page off limits.
+                if let Some(why) = self.browser.off_limits(tab, cx) {
+                    self.note(&agent, "request", &host, why);
+                    cx.notify();
+                    _ = reply.send(ToolResult::error(why));
+                    return;
+                }
                 let requests = match request::parse(&arguments, &self.browser.tab(tab, cx).url) {
                     Ok(requests) => requests,
                     Err(request::Wrong::Refused(why)) => {
@@ -2191,6 +2220,12 @@ impl Agents {
         cx: &mut Context<Self>,
     ) {
         let host = site(&self.browser.tab(tab, cx).url);
+        // Before its ref is looked up, so an outline's refs say nothing of a page off limits.
+        if let Some(why) = self.browser.off_limits(tab, cx) {
+            self.note(agent, tool, &host, why);
+            _ = reply.send(ToolResult::error(why));
+            return;
+        }
         let string = |name: &str| {
             arguments
                 .get(name)
@@ -2421,8 +2456,7 @@ impl Agents {
         let space = self.browser.agent_space(&act.agent);
         if act.tab != 0
             && !self
-                .browser
-                .space_tabs(space, cx)
+                .tabs_seen(space, cx)
                 .iter()
                 .any(|tab| tab.id == act.tab)
         {
@@ -2707,7 +2741,7 @@ impl Agents {
         // The user said yes to closing a page the agent didn't open without saving.
         if action == "discard_tab" {
             let site = site(&self.browser.tab(tab, cx).url);
-            let closed = match self.browser.may_act(&agent, tab, "close_tab", cx) {
+            let closed = match self.may_act(&agent, tab, "close_tab", cx) {
                 Ok(()) => self.browser.close_tab(&agent, tab, true, cx),
                 Err(why) => return self.refuse(act_of(&agent, call, tab, reply), &site, &why, cx),
             };
@@ -2896,7 +2930,7 @@ impl Agents {
             return finish(sending, false);
         };
         let (agent, tab) = (sending.agent.clone(), sending.tab);
-        let checked = self.browser.may_act(&agent, tab, "request", cx);
+        let checked = self.may_act(&agent, tab, "request", cx);
         let site = site(&self.browser.tab(tab, cx).url);
         let refused = checked.as_ref().err().map_or("", String::as_str);
         self.note_request(&agent, &site, &next, refused);
@@ -3073,7 +3107,8 @@ impl Agents {
         reply: mpsc::Sender<ToolResult>,
         cx: &mut Context<Self>,
     ) {
-        let today = (self.browser.agent_tabs(agent, cx).into_iter()).filter(|tab| !tab.pinned);
+        let today = (self.browser.agent_tabs(agent, cx).into_iter())
+            .filter(|tab| !tab.pinned && self.browser.off_limits(tab.id, cx).is_none());
         let mut rows: Vec<(u64, usize, Option<String>)> = Vec::new();
         for tab in today {
             let split = self.browser.split(tab.id, cx);
@@ -3121,17 +3156,17 @@ impl Agents {
     ) {
         let pinned = self.browser.tab(tab, cx).pinned;
         let theirs = pinned && self.pins.get(&tab).is_none_or(|by| by != agent);
-        let checked = self.browser.may_act(agent, tab, action, cx).and_then(|()| {
-            match (action, pinned, theirs) {
-                ("pin_tab", _, _) => Ok(()),
-                (_, false, _) => Err(format!("Tab {tab} isn't pinned.")),
-                (_, true, true) => Err(format!(
-                    "The user pinned tab {tab}, so only they {} it.",
-                    action.trim_end_matches("_tab")
-                )),
-                (_, true, false) => Ok(()),
-            }
-        });
+        let checked =
+            self.may_act(agent, tab, action, cx)
+                .and_then(|()| match (action, pinned, theirs) {
+                    ("pin_tab", _, _) => Ok(()),
+                    (_, false, _) => Err(format!("Tab {tab} isn't pinned.")),
+                    (_, true, true) => Err(format!(
+                        "The user pinned tab {tab}, so only they {} it.",
+                        action.trim_end_matches("_tab")
+                    )),
+                    (_, true, false) => Ok(()),
+                });
         let site = site(&self.browser.tab(tab, cx).url);
         self.note(
             agent,
@@ -3198,6 +3233,22 @@ impl Agents {
     }
 
     /// As `act`, for what the core checks as `action` and the log names `logged`.
+    /// The core's answer to whether `agent` may do `action` to `tab` (Browser::may_act), but never
+    /// for a tab that's off limits, whatever its Space (`off_limits`).
+    fn may_act(&self, agent: &str, tab: u64, action: &str, cx: &mut App) -> Result<(), String> {
+        if let Some(why) = self.browser.off_limits(tab, cx) {
+            return Err(why.into());
+        }
+        self.browser.may_act(agent, tab, action, cx)
+    }
+
+    /// The tabs of `space` an agent sees: none off limits, as `may_act` refuses those.
+    fn tabs_seen(&self, space: u64, cx: &App) -> Vec<TabInfo> {
+        (self.browser.space_tabs(space, cx).into_iter())
+            .filter(|tab| self.browser.off_limits(tab.id, cx).is_none())
+            .collect()
+    }
+
     fn act_as(
         &mut self,
         agent: &str,
@@ -3207,7 +3258,7 @@ impl Agents {
         reply: &mpsc::Sender<ToolResult>,
         cx: &mut Context<Self>,
     ) -> bool {
-        let checked = self.browser.may_act(agent, tab, action, cx);
+        let checked = self.may_act(agent, tab, action, cx);
         let site = site(&self.browser.tab(tab, cx).url);
         let refused = checked.as_ref().err().map_or("", String::as_str);
         self.note(agent, logged, &site, refused);
@@ -3237,7 +3288,7 @@ impl Agents {
         cx: &mut Context<Self>,
     ) {
         let site = site(&self.browser.tab(tab, cx).url);
-        if let Err(why) = self.browser.may_act(agent, tab, "close_tab", cx) {
+        if let Err(why) = self.may_act(agent, tab, "close_tab", cx) {
             return self.refuse(act_of(agent, call, tab, reply), &site, &why, cx);
         }
         // The agent's own tab, discarded while its page is asked, doesn't wait for the page.
@@ -3389,7 +3440,7 @@ impl Agents {
     /// The tab the agent used last, if it's still in its Space, else its first.
     fn default_tab(&mut self, agent: &str, cx: &mut Context<Self>) -> Option<u64> {
         let space = self.space(agent, cx);
-        let tabs = self.browser.space_tabs(space, cx);
+        let tabs = self.tabs_seen(space, cx);
         let last = self.current.get(agent).copied();
         (last.filter(|last| tabs.iter().any(|tab| tab.id == *last)))
             .or_else(|| tabs.first().map(|tab| tab.id))
@@ -3737,6 +3788,11 @@ const NO_FILES: &str = "Agents can't open files; ask the user if you need it.";
 const DOWNLOAD_WAIT: Duration = Duration::from_secs(30);
 /// Why an agent can't open a page that isn't on the web.
 const WEB_ONLY: &str = "Agents may open only http and https pages.";
+/// Why an agent can't read a page that isn't on the web, in the core's words (AgentPage::NotWebPage).
+const NOT_WEB_PAGE: &str =
+    "The tab's page isn't an http or https page, the only pages agents may use.";
+/// The core's refusal of a tab not in the agent's Space (bc_agent_may_act).
+const NOT_ITS_SPACE: &str = "The tab isn't in the agent's own Space.";
 /// Why an agent can't type into a password field.
 const PASSWORDS: &str = "Password fields are off limits to agents: signing in is the user's to do. \
     Hand them the tab with hand_off.";
@@ -3744,6 +3800,22 @@ const PASSWORDS: &str = "Password fields are off limits to agents: signing in is
 const UNSHOWN: &str = "It doesn't show it as chosen, so the page may have changed it back.";
 /// What the user reads in the bar of a tab whose page asked for their passkey.
 const PASSKEY: &str = "The page asks for your passkey. Sign in, then hand the tab back.";
+
+/// Why no agent may see or act on a tab showing `url`, or pinned to `pinned`, even in its own
+/// Space, or None. A Board's tab, by either, is the user's alone, as a Board and what's on it are,
+/// so the refusal is the one for a tab not the agent's. A page that isn't http(s), such as the
+/// browser's own or a file, is one agents never use: no title, address, text or picture of it
+/// reaches one. A tab with no page yet is its pinned URL's.
+pub fn off_limits(url: &str, pinned: &str) -> Option<&'static str> {
+    if crate::boards::id_in(url).is_some() || crate::boards::id_in(pinned).is_some() {
+        return Some(NOT_ITS_SPACE);
+    }
+    let web = match url.is_empty() {
+        true => is_web(pinned),
+        false => is_web(url),
+    };
+    (!web).then_some(NOT_WEB_PAGE)
+}
 
 fn is_web(url: &str) -> bool {
     url.starts_with("https://") || url.starts_with("http://")
