@@ -198,8 +198,8 @@ fn bindings_of(key: &str, command: Command, action: Box<dyn Action>, cx: &App) -
         false => &[KEY_CONTEXT],
     };
     let mut bindings = Vec::new();
-    for context in contexts {
-        let Ok(context) = KeyBindingContextPredicate::parse(context) else {
+    for &context_name in contexts {
+        let Ok(context) = KeyBindingContextPredicate::parse(context_name) else {
             continue;
         };
         let context = std::rc::Rc::new(context);
@@ -207,9 +207,28 @@ fn bindings_of(key: &str, command: Command, action: Box<dyn Action>, cx: &App) -
             let action = action.boxed_clone();
             KeyBinding::load(&key, action, Some(context.clone()), false, None, cx).ok()
         };
-        bindings.extend(pressed_as(key).into_iter().filter_map(load));
+        let mut keys = pressed_as(key);
+        // A view of ours with the keyboard hears ⌃⇧2 as ⌃@, the shift taken into the character,
+        // where the page hands the browser the key with shift, so the dialog's window binds both.
+        if context_name == crate::dialog::KEY_CONTEXT {
+            let unshifted: Vec<String> = keys.iter().filter_map(|key| without_shift(key)).collect();
+            keys.extend(unshifted);
+        }
+        bindings.extend(keys.into_iter().filter_map(load));
     }
     bindings
+}
+
+/// `key` without its shift, when what it presses with shift is a character shift makes, as
+/// ctrl-shift-@ is typed ctrl-@.
+fn without_shift(key: &str) -> Option<String> {
+    let (held, character) = key.rsplit_once('-')?;
+    let shifted = character.chars().count() == 1 && "~!@#$%^&*()_+{}|:\"<>?".contains(character);
+    let held: Vec<&str> = held.split('-').collect();
+    (shifted && held.contains(&"shift")).then(|| {
+        let held = held.into_iter().filter(|&each| each != "shift");
+        held.chain([character]).collect::<Vec<_>>().join("-")
+    })
 }
 
 /// Off the Mac, as on Linux and Windows, the keys SHORTCUTS writes the Mac's way are pressed with
@@ -980,6 +999,12 @@ mod tests {
         assert_eq!(
             ran.take(),
             [Command::FocusPane(1), Command::PreviousPane, Command::NextPane]
+        );
+        // As the Mac's window and X11 hear ⌃⇧2 and ⌃⇧], the shift in the character.
+        cx.simulate_keystrokes("ctrl-@ ctrl-} ctrl-!");
+        assert_eq!(
+            ran.take(),
+            [Command::FocusPane(1), Command::NextPane, Command::FocusPane(0)]
         );
         // A pane key the user moves follows there too.
         cx.update(|_, cx| {
