@@ -434,6 +434,10 @@ requestAnimationFrame(() => requestAnimationFrame(() => document.title = "beside
       "Go to Pane 1 (⌃⇧1) on $warned_tab's warning before http, in a split, didn't focus the pane beside it: $(since "$shortcut" | grep -e '^browser: drive' -e '^browser: command ' -e '^browser: selected' | tail -4 | tr '\n' ' ')"
     since "$shortcut" | grep -q '^browser: command focus-pane via ' ||
       fail "⌃⇧1 on $warned_tab's warning before http focused the pane beside it, but not as Go to Pane 1: $(since "$shortcut" | grep '^browser: command ' | tr '\n' ' ')"
+    # The warning hides as its pane loses the focus. On Windows it had the keyboard, which the host
+    # gives the browser window, as Chromium hides a window without activating another (#3330).
+    ! windows || expect "^browser: a tab's dialog hid with the keyboard, which goes to its window\$" \
+      "the warning before http hid after Go to Pane 1 with the keyboard, which its window didn't get"
     send key 2 ctrl shift
     expect "^browser: selected $warned_tab in [0-9.]* ms\$" \
       "Go to Pane 2 (⌃⇧2), after ⌃⇧1 on its warning before http, didn't focus $warned_tab's pane again: $(since "$shortcut" | grep -e '^browser: drive' -e '^browser: command ' -e '^browser: selected' | tail -4 | tr '\n' ' ')"
