@@ -43,6 +43,15 @@ final class TabCache {
     Task { await Self.write(picture, to: file) }
   }
 
+  /// Lets go of a tab's picture alone, when its page gave way to something the picture isn't of.
+  func forgetPicture(of id: String) {
+    pictures[id] = nil
+    // Nothing reads back the file that's on its way out.
+    asked.insert(id)
+    let file = file(id, "jpg")
+    Task { await Self.remove([file]) }
+  }
+
   func keep(_ saved: Saved, of id: String) {
     let file = file(id, "state")
     Task { await Self.write(saved, to: file) }

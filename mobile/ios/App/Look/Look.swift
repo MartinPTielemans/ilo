@@ -101,6 +101,40 @@ nonisolated enum PrivateMark {
   static let fieldPaper = 0.12
 }
 
+/// What stands in a page's place when it can't be shown, and a site's question for a name and
+/// password: words at the foot, over the bar.
+nonisolated enum States {
+  static let title: CGFloat = 24
+  static let text: CGFloat = 16
+  /// The address, and a certificate's facts.
+  static let mono: CGFloat = 13
+  static let lineGap: CGFloat = 4
+  static let textGap: CGFloat = 8
+  /// Over the address or the facts, and between the facts and their rule.
+  static let factsGap: CGFloat = 12
+  /// Over the first button, and between two.
+  static let buttonGap: CGFloat = 24
+  static let between: CGFloat = 8
+  /// Around the Details chip, whose plate stands 7 inside what a finger gets: 16 over it, 12 under.
+  static let chipGap: CGFloat = 9
+  static let underChip: CGFloat = 5
+  static let overBar: CGFloat = 16
+  /// Under a line of the sign-in sheet.
+  static let noteGap: CGFloat = 12
+  /// The broken lock, before the site's name on the bar and on a card.
+  static let brokenLock = "lock.slash"
+  static let onBar: CGFloat = 12
+  /// On a card, in a picture's place: the state's glyph on a plate, as a private tab's is.
+  static let onCard = PrivateMark.onCard
+  static let plate = PrivateMark.plate
+  static let plateRadius = PrivateMark.plateRadius
+  /// A swipe back from a state: how far a finger goes before it's one, how far across it must
+  /// get, and how near the edge it starts when swipes are the edge's alone.
+  static let swipe: CGFloat = 24
+  static let swipeAcross: CGFloat = 80
+  static let swipeEdge: CGFloat = 28
+}
+
 /// The bar at the foot of every screen.
 nonisolated enum Bar {
   static let height: CGFloat = 52

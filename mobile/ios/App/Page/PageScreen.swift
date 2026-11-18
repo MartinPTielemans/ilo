@@ -314,7 +314,7 @@ struct WebPage: View {
     WebViewHost(webView: tab.webView)
       .overlay {
         if let failure = tab.failure {
-          FailurePage(failure: failure, tab: tab, foot: foot)
+          StatePage(failure: failure, tab: tab, foot: foot)
         } else if tab.isPrivate, !tab.hasPage {
           // A new private tab says what it is, once, where its page will be.
           PrivateWords()
@@ -344,46 +344,14 @@ private struct WebViewHost: UIViewRepresentable {
   }
 }
 
-/// A page that didn't load says so plainly, with the way to try again above the bar.
-private struct FailurePage: View {
-  let failure: PageFailure
-  let tab: WebTab
-  let foot: CGFloat
-
-  @Environment(\.palette) private var palette
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      Spacer()
-      Text(failure.title)
-        .scaled(24, .semibold, relativeTo: .title2)
-      Text(failure.reason)
-        .scaled(16, relativeTo: .callout)
-        .foregroundStyle(palette.soft)
-      if let url = tab.url {
-        Text(url.absoluteString)
-          .scaled(13, design: .monospaced, relativeTo: .footnote)
-          .foregroundStyle(palette.soft)
-          .lineLimit(2)
-          .padding(.top, 4)
-      }
-      Button("Try Again") { tab.reload() }
-        .buttonStyle(PlateButtonStyle())
-        .padding(.top, 16)
-    }
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .padding(.horizontal, Column.side + Column.inset)
-    .padding(.bottom, foot + 16)
-    .foregroundStyle(palette.text)
-    .background { Ground() }
-  }
-}
-
-/// What the bar calls the page: its site, marked when the connection isn't encrypted. A private
-/// tab's has the one glyph before it, at both of the bar's sizes.
+/// What the bar calls the page: its site, marked when the connection isn't encrypted or its
+/// certificate isn't one the phone trusts. A private tab's has the one glyph before it, at both
+/// of the bar's sizes.
 struct HostLabel: View {
   let url: URL?
   var isPrivate = false
+  /// Over a certificate the phone doesn't trust: one it stopped at, or one the user went on past.
+  var distrusted = false
 
   /// What a tab is called by its site, or a private tab with no page yet by what it is.
   static func name(of url: URL?, isPrivate: Bool) -> String {
@@ -397,10 +365,10 @@ struct HostLabel: View {
           .font(.system(size: PrivateMark.onBar, weight: .semibold))
           .accessibilityLabel("Private")
       }
-      if url?.scheme == "http" {
-        Image(systemName: "lock.slash")
-          .font(.system(size: 12, weight: .semibold))
-          .accessibilityLabel("Not secure")
+      if distrusted || url?.scheme == "http" {
+        Image(systemName: States.brokenLock)
+          .font(.system(size: States.onBar, weight: .semibold))
+          .accessibilityLabel(distrusted ? "Certificate not trusted" : "Not secure")
       }
       Text(Self.name(of: url, isPrivate: isPrivate))
         .lineLimit(1)
@@ -513,7 +481,7 @@ private struct PagePill: View {
       .frame(maxWidth: small > 0 && width > 0 ? between(width, nameWidth * Bar.smallLabel + 20) : .infinity)
       .frame(height: between(Bar.height, Bar.small))
       .overlay {
-        HostLabel(url: tab.url, isPrivate: tab.isPrivate)
+        HostLabel(url: tab.url, isPrivate: tab.isPrivate, distrusted: tab.distrusted)
           .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { if small == 0 { nameWidth = $0 } }
           // The name keeps the width it had, so it shrinks whole and isn't cut again.
           .frame(width: small > 0 ? nameWidth : nil)
@@ -700,7 +668,7 @@ private struct PeekSheet: View {
 
       Pill(tinted: true) {
         RoundButton(symbol: "xmark", label: "Close") { browser.closePeek() }
-        HostLabel(url: peek.url)
+        HostLabel(url: peek.url, distrusted: peek.distrusted)
           .frame(maxWidth: .infinity)
         Button("Open as tab", action: keep)
           .scaled(14, .semibold, relativeTo: .footnote)

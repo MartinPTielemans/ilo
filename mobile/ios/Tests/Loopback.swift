@@ -70,10 +70,21 @@ nonisolated final class Loopback: @unchecked Sendable {
   /// What each request gets. Nothing is a connection closed with no answer.
   private let answer: @Sendable (Request) -> Response?
   var port: UInt16 { listener.port?.rawValue ?? 0 }
+  /// Whether it speaks TLS, with a certificate a test made.
+  private let secure: Bool
 
-  init(_ answer: @escaping @Sendable (Request) -> Response?) async throws {
+  /// With an `identity`, the server speaks TLS and proves itself with it.
+  init(identity: SecIdentity? = nil, _ answer: @escaping @Sendable (Request) -> Response?) async throws {
     self.answer = answer
-    let parameters = NWParameters.tcp
+    let parameters: NWParameters
+    if let identity, let local = sec_identity_create(identity) {
+      let tls = NWProtocolTLS.Options()
+      sec_protocol_options_set_local_identity(tls.securityProtocolOptions, local)
+      parameters = NWParameters(tls: tls)
+    } else {
+      parameters = .tcp
+    }
+    secure = identity != nil
     parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: .any)
     let listener = try NWListener(using: parameters)
     self.listener = listener
@@ -102,8 +113,9 @@ nonisolated final class Loopback: @unchecked Sendable {
     listener.cancel()
   }
 
-  func url(_ path: String) -> URL {
-    URL(string: "http://127.0.0.1:\(port)\(path)")!
+  /// An address here, by the machine's number or by another `host` that means this machine.
+  func url(_ path: String, host: String = "127.0.0.1") -> URL {
+    URL(string: "\(secure ? "https" : "http")://\(host):\(port)\(path)")!
   }
 
   /// Every request so far, in the order they came.

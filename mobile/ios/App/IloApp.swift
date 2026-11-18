@@ -143,6 +143,7 @@ private struct BrowserScreen: View {
         SignInSheet()
       }
       .modifier(OverKeyboard())
+      SiteSignInLayer()
       ReadingLayer()
       // Where a question asked at the foot of the screen comes from.
       Color.clear
