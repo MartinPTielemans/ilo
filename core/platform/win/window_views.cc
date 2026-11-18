@@ -1369,6 +1369,11 @@ void PassPointerThrough(views::Widget* widget) {
   new PassThrough(widget);
 }
 
+std::optional<base::TimeTicks> PointerEventTime() {
+  // A message's time is the tick count's, 10 to 16 ms a step, as coarse as a throw's moves.
+  return std::nullopt;
+}
+
 bool PageDialogsInOwnWindow() {
   // Aura would draw it in the window's HWND, under the UI's and the pages' child HWNDs.
   return true;
