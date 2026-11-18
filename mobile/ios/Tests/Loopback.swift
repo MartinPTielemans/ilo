@@ -122,7 +122,9 @@ nonisolated final class Loopback: @unchecked Sendable {
 
 /// Waits for something a page or the network brings about, and says whether it came.
 @MainActor func eventually(_ came: @MainActor () async -> Bool) async -> Bool {
-  for _ in 0..<1000 {
+  // Half a minute at most: CI's iOS 27 simulator takes ten seconds over a page that an iOS 26
+  // one loads in a third of one, and what came is answered at once either way.
+  for _ in 0..<3000 {
     if await came() { return true }
     try? await Task.sleep(for: .milliseconds(10))
   }

@@ -421,7 +421,8 @@ import os
     let page = try await page(in: browser)
 
     let answer = Task { await page.run("return prompt('Your name?', 'Ann') === null") as? Bool }
-    #expect(await eventually { browser.prompt != nil })
+    // Not gone on without: the page waits for its answer for as long as nobody gives one.
+    try #require(await eventually { browser.prompt != nil })
     browser.answer(false)
     #expect(await answer.value == true)
   }

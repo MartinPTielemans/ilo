@@ -147,10 +147,15 @@ import WebKit
     let tab = WebTab(id: node.id, role: .today, browser: browser)
     tab.webView.loadHTMLString(
       "<a id=out target=_blank href='https://example.invalid/b?utm_source=news&id=7'>Out</a>", baseURL: page)
-    for _ in 0..<200 where tab.webView.isLoading { try await Task.sleep(for: .milliseconds(25)) }
+    // The link is asked for, not the load's end: a slow simulator is still loading long after a fast one is done.
+    try #require(
+      await eventually {
+        (try? await tab.webView.callAsyncJavaScript("return document.getElementById('out') != null", in: nil, contentWorld: .page))
+          as? Bool == true
+      })
 
     _ = try await tab.webView.callAsyncJavaScript("document.getElementById('out').click()", in: nil, contentWorld: .page)
-    for _ in 0..<200 where phone.today(in: space).count < 2 { try await Task.sleep(for: .milliseconds(25)) }
+    _ = await eventually { phone.today(in: space).count == 2 }
     #expect(phone.today(in: space).map(\.url?.absoluteString) == ["https://example.invalid/b?id=7", page.absoluteString])
     #expect(tab.webView.url == page)
     #expect(!tab.webView.isLoading)
