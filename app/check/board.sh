@@ -210,10 +210,11 @@ gets_nothing() {
       click) arguments="{\"tab\":$1,\"ref\":\"e1\"}" ;;
       *) arguments="{\"tab\":$1}" ;;
     esac
-    entries=$(grep -c "^browser: agent logged mcp-client $tool " "$log" || true)
+    refused="^browser: agent logged mcp-client $tool [a-z]* refused: The tab isn't in the agent's own Space\.\$"
+    entries=$(grep -c "$refused" "$log" || true)
     got=$(call "$tool" "$arguments")
     [ "$got" = "$not_its" ] || fail "the agent's $tool on the Board $2 answered: $got"
-    await_more "^browser: agent logged mcp-client $tool [a-z]* refused: The tab isn't in the agent's own Space\.\$" "$entries" ||
+    await_more "$refused" "$entries" ||
       fail "the agent's $tool on the Board $2 isn't refused in the activity log: $(grep "^browser: agent logged mcp-client $tool " "$log" | tail -1)"
   done
 }
