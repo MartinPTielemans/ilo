@@ -4227,7 +4227,7 @@ impl Shell {
     /// Eases the selected row back from its hover fill once the pointer or its menu has left it.
     fn unhover(&mut self, row: Row) {
         if Some(row) == self.selected_row() {
-            self.unhovered.push((row, Instant::now()));
+            self.unhovered.push((row, self.clock.now()));
         }
     }
 
@@ -4385,7 +4385,7 @@ impl Shell {
         self.closing
             .retain(|row| row_spring(since(row.start)).is_some());
         self.unhovered
-            .retain(|(_, start)| start.elapsed().as_secs_f32() < SELECTED_UNHOVER);
+            .retain(|&(_, start)| since(start) < SELECTED_UNHOVER);
         if self.slides.is_empty() {
             self.opened
                 .take_if(|opened| opened.done(since(opened.start)).is_none());
@@ -4627,7 +4627,7 @@ impl Render for Shell {
         self.step_retip(cx);
         self.step_drag_shape(window, cx);
         self.step_held_row(window);
-        self.step_held_nav(window);
+        self.step_held_nav(window, cx);
         self.step_space_slides(window);
         self.step_form_going(cx);
         // The window that draws the list measures it: with the sidebar hidden that's the reveal's,
@@ -5452,7 +5452,7 @@ impl Shell {
         self.step_retip(cx);
         self.step_drag_shape(window, cx);
         self.step_held_row(window);
-        self.step_held_nav(window);
+        self.step_held_nav(window, cx);
         self.step_space_slides(window);
         self.step_form_going(cx);
         self.step_scroll_edge(window, cx);
