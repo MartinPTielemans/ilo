@@ -1364,6 +1364,9 @@ else
 fi
 exec 3>&-
 quit
+# Its server stops with it, as the runs after it in the call start their own (#3345).
+kill "$tls" 2> /dev/null || true
+tls= tls_port=
 
 # Chrome's origin, its word on whose video this is, shows beside the ×, on its row, clear of it, of
 # back to its tab and of the "–", at each size the Mini Player had, from the smallest it opens at
