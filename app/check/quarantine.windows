@@ -9,3 +9,8 @@ trouble #2676 2026-11-13 the run didn't end at the first column
 # narrow column's refused card in arrange-drop. The Mac and Linux refuse there and land nothing.
 arrange #3379 2026-11-18 letting go where the rest refused Wide landed a drop all the same
 arrange-drop #3379 2026-11-18 a card that can't be 120 wide is refused in the narrow column: letting go where the rest refused landed a drop all the same
+# Tab or ⇧Tab from the ring back onto the control the page left from has NVDA say the page and its
+# line but not that control at times, with the keyboard on it (#3396): NVDA's browse mode skips a
+# focus event on the page's last control as the keyboard comes in from outside. These two steps alone.
+screen-reader #3396 2026-11-18 NVDA didn't say the page's first control after Tab from the ring
+screen-reader #3396 2026-11-18 NVDA didn't say the page's last control after ⇧Tab from the ring
