@@ -434,6 +434,7 @@ grep -q '"zoom": *0\.8[,}]' "$loft/board.json" ||
   fail "⌘− in the Board didn't zoom its canvas out: $(head -c 200 "$loft/board.json")"
 send key 0 cmd
 grep -q "^browser: zoom $tab " "$log" && fail "⌘− or ⌘0 in the Board zoomed the browser's page: $(grep "^browser: zoom $tab " "$log" | tail -1)"
+../tools/window-screenshot.sh "$pid" "$out/board-first-note.png" || fail "no window to capture"
 archive "the File menu"
 
 # The sidebar's + offers New Board, and New Board's key from the Board's page makes another.
@@ -655,6 +656,7 @@ grep -q "$note" "$loft/board.json" ||
   fail "the first note's Board lost it across the relaunch, \"$note\": $(head -c 300 "$loft/board.json")"
 written=$(grep -v '^browser: drive [0-9]*: ' "$log" | grep 'shelves\|kitchen\|pantry\|日本語\|loft' | head -1)
 [ -z "$written" ] || fail "the relaunch's log says what a Board holds or its name: $written"
+../tools/window-screenshot.sh "$pid" "$out/board-relaunched.png" || fail "no window to capture"
 quit
 echo "ok: New Board made $id, its name kept and its note saved in its folder alone, unlogged;" \
   "Library › Boards listed it; renamed, found by the bar, archived and reopened, the log said" \
