@@ -44,7 +44,6 @@
 #include <vector>
 
 #include "../host.h"
-#include "browser_core.h"
 
 // UrlCreateFromPathW, for the files dragged onto the UI.
 #pragma comment(lib, "shlwapi.lib")
@@ -56,6 +55,11 @@ extern "C" void browser_fade(void* hwnd, double from, double to, double seconds)
 // the window shows unfaded, and the host still hides it once its fade would have ended.
 extern "C" void browser_fade_none(void*, double, double, double) {}
 #pragma comment(linker, "/alternatename:browser_fade=browser_fade_none")
+// The core's (core/public/browser_core.h), from the chrome that runs the app. The preview has no
+// core, so there the linker takes this instead, as for the fade.
+extern "C" void bc_window_focus_page(uint64_t window);
+extern "C" void bc_window_focus_page_none(uint64_t) {}
+#pragma comment(linker, "/alternatename:bc_window_focus_page=bc_window_focus_page_none")
 // What check.sh calls a window the host floats over a browser window (below).
 extern "C" const char* host_floating_name(void* hwnd);
 // The app's (src/logging.rs), in the browser and the preview: whether BROWSER_LOG turns on |area|.
