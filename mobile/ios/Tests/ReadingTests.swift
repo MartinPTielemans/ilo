@@ -710,12 +710,13 @@ private struct NeverAnswering: ReadingModel {
   /// Puts a new document in the tab, at the same address each time, and waits for it to load.
   private func show(_ html: String, mark: String, in tab: WebTab) async {
     tab.webView.loadHTMLString(html, baseURL: story)
-    // The new document is there once the page answers with its mark.
-    while (try? await tab.webView.callAsyncJavaScript("return document.documentElement.dataset.mark || ''", contentWorld: .defaultClient))
-      as? String != mark
-    {
-      await Task.yield()
-    }
+    // The new document is there once the page answers with its mark. The wait has an end of its
+    // own, so a load that never comes fails here, and no faster than a hundred asks a second.
+    #expect(
+      await eventually {
+        (try? await tab.webView.callAsyncJavaScript("return document.documentElement.dataset.mark || ''", contentWorld: .defaultClient))
+          as? String == mark
+      })
     while tab.isLoading { await changed { tab.isLoading } }
   }
 
