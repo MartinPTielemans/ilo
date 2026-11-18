@@ -10,6 +10,7 @@
 #include "base/no_destructor.h"
 #include "base/scoped_observation.h"
 #include "base/task/single_thread_task_runner.h"
+#include "browser_core/platform/keyboard.h"
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
 #include "build/build_config.h"
@@ -74,8 +75,19 @@ class DialogKeys : public ui::EventHandler, public views::WidgetObserver {
 
   // ui::EventHandler:
   void OnKeyEvent(ui::KeyEvent* event) override {
-    // A page's keys are asked about as they go down, not as the characters they type.
-    if (event->type() != ui::EventType::kKeyPressed || event->is_char() || DialogKeeps(*event)) {
+    if (event->type() != ui::EventType::kKeyPressed) {
+      return;
+    }
+    // A page's keys are asked about as they go down, not as the characters they type. On the Mac a
+    // key AppKit made text comes as its character alone, so it's asked about as the key (#3230).
+    std::unique_ptr<ui::KeyEvent> pressed;
+#if BUILDFLAG(IS_MAC)
+    if (event->is_char()) {
+      pressed = platform::KeyBehindCharacter(*event);
+    }
+#endif
+    const ui::KeyEvent& down = pressed ? *pressed : *event;
+    if (down.is_char() || DialogKeeps(down)) {
       return;
     }
     const bool before = event->phase() == ui::EP_PRETARGET;
@@ -86,7 +98,7 @@ class DialogKeys : public ui::EventHandler, public views::WidgetObserver {
     if (!page || !page->GetDelegate()) {
       return;
     }
-    const input::NativeWebKeyboardEvent key(*event);
+    const input::NativeWebKeyboardEvent key(down);
     if (before) {
       const content::KeyboardEventProcessingResult result =
           page->GetDelegate()->PreHandleKeyboardEvent(page, key);
