@@ -214,6 +214,15 @@ tone() {
 capture() {
   ../tools/window-screenshot.sh "$pid" "$out/dialog-$1.png" || fail "no window to capture"
 }
+# The driver's scripted input method composes in a page on the Mac, and under Wayland as sway's
+# input method; on Windows it's Microsoft's Japanese IME, where the runner has it. On X11 the Linux
+# driver can't reach a page's (keys.sh says the same).
+ime="ime on"
+japanese=
+if windows; then
+  powershell.exe -NoProfile -NonInteractive -Command "(Get-WinUserLanguageList).InputMethodTips" \
+    2> /dev/null | grep -qi 03B5835F-F03C-411B-9CE2-AA23E1171E36 && japanese=1 && ime="ime ja"
+fi
 split_rests() {
   send menu Add Split View
   expect '^browser: command add-split via ' "Add Split View didn't run ($2)"
@@ -248,19 +257,27 @@ split_rests() {
     capture "alert-split-$2-rest-$each"
   done
   # Japanese input composes in the page beside, and its commit is that page's.
-  send ime on
-  send type nihongo
-  send key space
-  send key return
-  send ime off
-  expect "^browser: title $beside beside has xy日本語\$" \
-    "Japanese input in the page beside the resting alert didn't reach it ($2): marked $marked, the keyboard in $key, on $focus"
+  typed=xy
+  if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+    echo "skip: Japanese input in the page beside the resting alert ($2): on X11 the Linux driver types plain keys in a page; check/ime.sh composes in pages with a real input method."
+  elif windows && [ -z "$japanese" ]; then
+    echo "skip: Japanese input in the page beside the resting alert ($2): the runner has no Japanese IME, and the Windows driver's own composes in the UI's fields alone."
+  else
+    send $ime
+    send type nihongo
+    send key space
+    send key return
+    send ime off
+    typed=xy日本語
+    expect "^browser: title $beside beside has $typed\$" \
+      "Japanese input in the page beside the resting alert didn't reach it ($2): marked $marked, the keyboard in $key, on $focus"
+  fi
   # Through a resize the keys stay with the page beside, the alert at rest over its pane.
   send resize 1100 720
   resized=$step
   read_panes
   send key z
-  expect "^browser: title $beside beside has xy日本語z\$" \
+  expect "^browser: title $beside beside has ${typed}z\$" \
     "after a resize the page beside the resting alert lost the keys ($2): the keyboard is in $key, on $focus"
   stayed "the alert left its pane at rest ($2)" "$clicked"
   # A click on the resting card's body, above OK, focuses its pane and brings it live, unanswered.
@@ -279,7 +296,7 @@ split_rests() {
   expect "^browser: selected $beside\( in .*\)\{0,1\}\$" "⌃⇧2 from the alert didn't focus the pane beside ($2)"
   expect '^browser: dialog at rest$' "⌃⇧2 from the alert didn't rest it ($2)"
   send key q
-  expect "^browser: title $beside beside has xy日本語zq\$" \
+  expect "^browser: title $beside beside has ${typed}zq\$" \
     "after ⌃⇧2 from the alert the page beside didn't have the keys ($2): the keyboard is in $key, on $focus"
   send key 1 ctrl shift
   expect "^browser: selected $page\( in .*\)\{0,1\}\$" "⌃⇧1 didn't focus the alert's pane ($2)"
