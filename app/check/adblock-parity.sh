@@ -32,9 +32,11 @@
 #     whether it works.
 # A host or address neither run requested counts for neither, as the ads a site serves change from
 # load to load. A site that's still Cloudflare's bot check 8 s after it loads gets one more go. If
-# the check still stands in either run, DataDome's captcha loaded over the page, or the site sent
-# the run on to Google's unusual-traffic page, the site isn't compared, and the result names it
-# and what stood in, as a bot check has no ads to block. On a YouTube watch page
+# the check still stands in either run, DataDome's captcha loaded over the page, the site sent
+# the run on to Google's unusual-traffic page, or the site's own wall stood in, which loads
+# Turnstile's widget and shows under 500 characters and at most one picture (#3383), the site
+# isn't compared. The result names it and what stood in, as a bot check has no ads to block, and
+# where only one of the two runs got a bot check, which. On a YouTube watch page
 # the run reads the player from the load on, to say whether an ad showed before the video played
 # 5 s, and it fails where the baseline's played with no ad and this run's showed one or didn't
 # play. It needs the network and the sites, so it runs only when named: ./check.sh adblock-parity.
@@ -549,6 +551,14 @@ for i, s in enumerate(sites):
     # a bot check as Cloudflare's is, with no title to tell it by (#2111).
     if not s["bot"] and any(h.endswith("captcha-delivery.com") for h in s["allowed"]):
         s["bot"] = "DataDome's captcha"
+    # A site's own wall built on Cloudflare's Turnstile, as vimeo's "Verify to continue" is, which
+    # keeps the site's title. Real pages load Turnstile too, so it takes a page that is little
+    # but the wall: no real page of the fifty comes near so little (#3383).
+    shows = contents.get(s["url"])
+    if (not s["bot"] and shows and shows["text"] < 500 and shows["images"] <= 1 and
+            any(a.startswith("challenges.cloudflare.com/turnstile/")
+                for a in s["allowed_at"] | s["blocked_at"])):
+        s["bot"] = "a Turnstile check"
 
 def video_cell(video):
     if not video:
@@ -596,8 +606,13 @@ if baseline:
         b = before.get(s["url"])
         if not b:
             continue
-        if len(b) > 8 and b[8] == "1" and not s["bot"]:
-            unchecked[s["url"]] = "a bot check in the baseline's run"
+        # Where only one run got a bot check, which one, so a page this run's blocker emptied
+        # can't pass as one.
+        was_bot = len(b) > 8 and b[8] == "1"
+        if was_bot and not s["bot"]:
+            unchecked[s["url"]] = "a bot check in the baseline's run alone; this run had none"
+        elif s["bot"] and not was_bot:
+            unchecked[s["url"]] = f"{s['bot']} in this run alone; the baseline's run had none"
         if s["url"] in unchecked:
             continue
         if b[1] == "1" and not s["loaded"]:
