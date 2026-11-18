@@ -54,7 +54,9 @@ takes a command a line on its standard input:
                   page opened last at an address starting with PREFIX has played, whether it's
                   paused, whether its player shows an ad, and refused where Chrome kept it from
                   starting, cued where it waits for play, or else the player's state, as
-                  YouTube's player says, - with no player
+                  YouTube's player says, - with no player, then why it isn't refused: "asked"
+                  or "unasked", "unstarted" or "started", as the player's classes say, "data"
+                  and the video's readyState, "visible" or "hidden", "focused" or "unfocused"
   content         logs "cdp: content TEXT IMAGES COVER", or "cdp: content none" for no page: the
                   attached page's shown text, in characters, its shown pictures at least 50 px a
                   side, and the percent of the viewport the largest element fixed in place over
@@ -540,7 +542,9 @@ def ask(prefix, script, selector):
 # it. Refused, the player has asked to play, as playing-mode says, and has the data to, but the
 # video is still paused and has never started, as Chrome lets a page start a video with sound only
 # once the user has acted on it. Cued, the player has the video and waits for play to be pressed,
-# as its state 5 says (#3272). Otherwise the player's state, as a number, or - with no player.
+# as its state 5 says (#3272). Otherwise the player's state, as a number, or - with no player,
+# then what of refused's test the reading met, and whether the page was shown and had the keyboard,
+# as YouTube starts no video in a hidden page: why it wasn't pressed (#3272).
 VIDEO = """(() => {
   const video = document.querySelector("video");
   if (!video) return "";
@@ -553,8 +557,12 @@ VIDEO = """(() => {
   const state = player && typeof player.getPlayerState === "function" ?
     String(player.getPlayerState()) : "-";
   const cued = state === "5" && video.paused;
+  const has = (name) => Boolean(player && player.classList.contains(name));
+  const why = " " + (has("playing-mode") ? "asked" : "unasked") +
+    " " + (has("unstarted-mode") ? "unstarted" : "started") + " data " + video.readyState +
+    " " + document.visibilityState + " " + (document.hasFocus() ? "focused" : "unfocused");
   return video.currentTime.toFixed(1) + (video.paused ? " paused" : " playing") +
-         (ad ? " ad" : " no-ad") + (refused ? " refused" : cued ? " cued" : " " + state);
+         (ad ? " ad" : " no-ad") + (refused ? " refused" : cued ? " cued" : " " + state + why);
 })()"""
 
 
