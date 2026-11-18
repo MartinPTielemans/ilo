@@ -96,6 +96,11 @@ impl Browser for Core {
         }
     }
 
+    fn off_limits(&self, tab: u64, cx: &App) -> Option<&'static str> {
+        // A pinned tab not yet loaded has no page, only the URL it's pinned to.
+        agents::off_limits(&self.tab(tab, cx).url, &name(bc::bc_tab_pinned_url, tab))
+    }
+
     fn space_of(&self, tab: u64, cx: &App) -> u64 {
         let mut spaces = ids(bc::bc_spaces).into_iter();
         (spaces.find(|&space| self.space_tab_ids(space, cx).contains(&tab))).unwrap_or(0)
