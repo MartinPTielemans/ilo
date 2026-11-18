@@ -429,11 +429,14 @@ pub fn open_at(
     }
 }
 
+/// The key context at the root of the dialog's window.
+pub const KEY_CONTEXT: &str = "Dialog";
+
 fn bind_keys(cx: &mut App) {
     cx.bind_keys([
-        KeyBinding::new("enter", Confirm, Some("Dialog")),
-        KeyBinding::new("escape", Cancel, Some("Dialog")),
-        KeyBinding::new("tab", NextField, Some("Dialog")),
+        KeyBinding::new("enter", Confirm, Some(KEY_CONTEXT)),
+        KeyBinding::new("escape", Cancel, Some(KEY_CONTEXT)),
+        KeyBinding::new("tab", NextField, Some(KEY_CONTEXT)),
     ]);
 }
 
@@ -1219,7 +1222,7 @@ impl Render for Dialog {
         let a11y = window.is_a11y_active();
         let root = div()
             .id("dialog-window")
-            .key_context("Dialog")
+            .key_context(KEY_CONTEXT)
             .track_focus(&self.focus)
             .size_full()
             .font_family(crate::face::UI);

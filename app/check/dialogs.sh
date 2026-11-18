@@ -266,11 +266,13 @@ split_rests() {
     send $ime
     send type nihongo
     send key space
+    # The page shows the conversion before return commits it, as keys.sh reads it; the z typed
+    # after the resize says the commit was the page's and did nothing more.
+    expect "^browser: title $beside beside has xy日本語\$" \
+      "Japanese input in the page beside the resting alert didn't reach it ($2): marked $marked, the keyboard in $key, on $focus"
     send key return
     send ime off
     typed=xy日本語
-    expect "^browser: title $beside beside has $typed\$" \
-      "Japanese input in the page beside the resting alert didn't reach it ($2): marked $marked, the keyboard in $key, on $focus"
   fi
   # Through a resize the keys stay with the page beside, the alert at rest over its pane.
   send resize 1100 720
