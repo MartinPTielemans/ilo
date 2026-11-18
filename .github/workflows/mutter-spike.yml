@@ -1,0 +1,161 @@
+# Spike for #3464, never merged: does a relaunch of a window that quit maximized, or full screen,
+# end the browser process under GNOME's compositor, mutter, on Wayland (#3456)? On main's published
+# Linux engine, with the app built from this commit. Each case launches once to save its Spaces,
+# marks the saved window's state, launches again and says whether that launch reached its first
+# frame or how its process ended. The same maximized case runs under headless sway as well.
+name: Mutter relaunch spike
+
+on:
+  push:
+    branches: ['check/relaunch-mutter-3464-1']
+
+permissions:
+  contents: read
+
+jobs:
+  spike:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/apt-install
+        with:
+          packages: >-
+            libclang-dev libfontconfig-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev
+            libvulkan1 mesa-vulkan-drivers libegl1 libgl1-mesa-dri mutter dbus-daemon sway
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            app/target
+          key: check-linux-${{ hashFiles('app/Cargo.lock', 'app/linux/Cargo.lock', 'app/setup.sh', 'app/patches/**') }}
+          restore-keys: |
+            check-linux-
+            app-linux-
+      - run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sudo sysctl -w kernel.core_pattern=core
+          printf 'pcm.!default { type null }\n' > ~/.asoundrc
+          echo "engine: $(../engine/fetch.sh)"
+          rustup update stable --no-self-update && ./setup.sh && ./build.sh
+      - name: Relaunches
+        env:
+          LANG: en_US.UTF-8
+          BROWSER_ONBOARDING: skip
+        run: |
+          # A launch that ends badly is what's read, so no step ends the script.
+          set +e
+          out=$RUNNER_TEMP/spike
+          mkdir -p "$out"
+          XDG_RUNTIME_DIR=$(mktemp -d)
+          chmod 700 "$XDG_RUNTIME_DIR"
+          export XDG_RUNTIME_DIR
+          app=$PWD/build/Browser/chrome
+          echo "engine: $(../engine/fetch.sh)" | tee "$out/summary.txt"
+          mutter --version | tee -a "$out/summary.txt"
+          sway --version | tee -a "$out/summary.txt"
+
+          # Polls $1 (a shell test) every 0.1 s for up to $2 s.
+          until_true() {
+            for _ in $(seq $(($2 * 10))); do
+              eval "$1" && return 0
+              sleep 0.1
+            done
+            return 1
+          }
+
+          # case <name> <display> <state: none|maximized|fullscreen>
+          relaunch_case() {
+            name=$1 display=$2 state=$3
+            dir=$out/$name-profile
+            rm -rf "$dir"
+            mkdir -p "$dir/Default"
+            log1=$out/$name-first.log log2=$out/$name-relaunch.log
+            env -u DISPLAY WAYLAND_DISPLAY="$display" BROWSER_PROFILE_DIR="$dir" \
+              BROWSER_URL='data:text/html,<title>spike</title>' "$app" < /dev/null > "$log1" 2>&1 &
+            pid=$!
+            saved_window='python3 -I -c "import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get(\"windows\") else 1)" "$dir/Spaces.json" 2>/dev/null'
+            if ! until_true "grep -q '^browser: first frame at' '$log1' && $saved_window" 90; then
+              echo "$name: the first launch didn't draw and save a window" | tee -a "$out/summary.txt"
+              kill -9 "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+              return
+            fi
+            kill -TERM "$pid"
+            until_true "! kill -0 $pid 2>/dev/null" 30 || kill -9 "$pid"
+            wait "$pid" 2>/dev/null
+            pkill -9 -f "$PWD/build/Browser/" || true
+            python3 -I - "$dir/Spaces.json" "$state" <<'PY'
+          import json, sys
+          path, state = sys.argv[1], sys.argv[2]
+          saved = json.load(open(path))
+          for window in saved["windows"]:
+              window.pop("maximized", None)
+              window.pop("fullscreen", None)
+              if state != "none":
+                  window[state] = True
+          json.dump(saved, open(path, "w"))
+          print("windows:", json.dumps(saved["windows"]))
+          PY
+            cp "$dir/Spaces.json" "$out/$name-Spaces.json"
+            start=$SECONDS
+            env -u DISPLAY WAYLAND_DISPLAY="$display" BROWSER_PROFILE_DIR="$dir" \
+              "$app" < /dev/null > "$log2" 2>&1 &
+            pid=$!
+            until_true "grep -q '^browser: first frame at' '$log2' || ! kill -0 $pid 2>/dev/null" 90
+            if kill -0 "$pid" 2>/dev/null && grep -q '^browser: first frame at' "$log2"; then
+              # Alive at its first frame; still alive 5 s on is read too, for a trap after it.
+              until_true "! kill -0 $pid 2>/dev/null" 5
+              if kill -0 "$pid" 2>/dev/null; then
+                result="reached its first frame, alive 5 s after"
+              else
+                wait "$pid"; result="reached its first frame, then ended with status $?"
+              fi
+              kill -TERM "$pid" 2>/dev/null
+              until_true "! kill -0 $pid 2>/dev/null" 30 || kill -9 "$pid"
+              wait "$pid" 2>/dev/null
+            elif kill -0 "$pid" 2>/dev/null; then
+              result="no first frame in 90 s, still running"
+              kill -9 "$pid"; wait "$pid" 2>/dev/null
+            else
+              wait "$pid"; status=$?
+              result="ended with status $status before its first frame (about $((SECONDS - start)) s after it started)"
+            fi
+            pkill -9 -f "$PWD/build/Browser/" || true
+            echo "$name ($state): $result" | tee -a "$out/summary.txt"
+            grep -m3 -E 'Check failed|CHECK|Trace/breakpoint|SIGTRAP|xdg_surface|Received signal' "$log2" |
+              sed "s/^/  $name: /" | tee -a "$out/summary.txt" || true
+          }
+
+          # mutter, headless on Wayland alone, with one virtual monitor.
+          dbus-run-session -- mutter --headless --wayland --no-x11 --virtual-monitor 1280x800 \
+            --wayland-display ilo-mutter > "$out/mutter.log" 2>&1 &
+          mutter=$!
+          until_true "[ -S '$XDG_RUNTIME_DIR/ilo-mutter' ]" 30 || { cat "$out/mutter.log"; exit 1; }
+          relaunch_case mutter-normal ilo-mutter none
+          relaunch_case mutter-maximized ilo-mutter maximized
+          relaunch_case mutter-fullscreen ilo-mutter fullscreen
+          kill "$mutter"; wait "$mutter" 2>/dev/null
+
+          # sway, headless, as tools/headless.sh starts it, for the same maximized relaunch.
+          printf 'output HEADLESS-1 resolution 1280x800\n' > "$out/sway.conf"
+          before=$(ls "$XDG_RUNTIME_DIR")
+          WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_LIBINPUT_NO_DEVICES=1 \
+            sway -c "$out/sway.conf" > "$out/sway.log" 2>&1 &
+          sway=$!
+          until_true "ls '$XDG_RUNTIME_DIR' | grep -q '^wayland-[0-9]*\$'" 30 || { cat "$out/sway.log"; exit 1; }
+          display=$(ls "$XDG_RUNTIME_DIR" | grep -m1 '^wayland-[0-9]*$')
+          relaunch_case sway-maximized "$display" maximized
+          kill "$sway"; wait "$sway" 2>/dev/null
+          cat "$out/summary.txt"
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutter-spike
+          path: ${{ runner.temp }}/spike
+          retention-days: 7
