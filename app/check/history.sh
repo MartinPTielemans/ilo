@@ -52,12 +52,17 @@ page='data:text/html,<title>loading</title>
 log="$out/history.log"
 step=0
 rm -f "$saved" "$launch_frame"
+# The example.com and example.org pages the steps go back and forward between come from a server of
+# the run's own, which a runner always reaches (#3144). Neither has a favicon, as example.com has none.
+serve_tls example '<meta charset=utf-8><link rel=icon href="data:,"><title>Example Domain</title>
+<h1>Example Domain</h1>' example.com example.org
 BROWSER_DRIVE=1 BROWSER_URL="$page" "$browser" \
   --host-resolver-rules="MAP stuck.test 127.0.0.1:$(cat "$out/port"), \
 MAP $plain 127.0.0.1:$port, MAP $nearby 127.0.0.1:$port, \
 MAP $written 127.0.0.1:$port, MAP $agent_opened 127.0.0.1:$port, \
 MAP $agent_moved 127.0.0.1:$port, MAP $linked 127.0.0.1:$port, \
-MAP $barred 127.0.0.1:$port" < "$out/drive" > "$log" 2>&1 &
+MAP $barred 127.0.0.1:$port, $tls_rules" --ignore-certificate-errors-spki-list="$tls_key" \
+  < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
@@ -445,6 +450,10 @@ requestAnimationFrame(() => requestAnimationFrame(() => document.title = "beside
       "Go to Pane 1 (⌃⇧1) on $warned_tab's warning before http, in a split, didn't focus the pane beside it: $(since "$shortcut" | grep -e '^browser: drive' -e '^browser: command ' -e '^browser: selected' | tail -4 | tr '\n' ' ')"
     since "$shortcut" | grep -q '^browser: command focus-pane via ' ||
       fail "⌃⇧1 on $warned_tab's warning before http focused the pane beside it, but not as Go to Pane 1: $(since "$shortcut" | grep '^browser: command ' | tr '\n' ' ')"
+    # The warning hides as its pane loses the focus. On Windows it had the keyboard, which the host
+    # gives the browser window, as Chromium hides a window without activating another (#3330).
+    ! windows || expect "^browser: a tab's dialog hid with the keyboard, which goes to its window\$" \
+      "the warning before http hid after Go to Pane 1 with the keyboard, which its window didn't get"
     send key 2 ctrl shift
     expect "^browser: selected $warned_tab in [0-9.]* ms\$" \
       "Go to Pane 2 (⌃⇧2), after ⌃⇧1 on its warning before http, didn't focus $warned_tab's pane again: $(since "$shortcut" | grep -e '^browser: drive' -e '^browser: command ' -e '^browser: selected' | tail -4 | tr '\n' ' ')"
@@ -732,4 +741,15 @@ agent_steps
 exec 3>&-
 quit
 kill "$stuck"
+kill "$tls" 2> /dev/null || true
+tls=
+# Each example.com and example.org page the launch loaded came from the run's server; the hosts
+# under example.com that lead to the check's own aren't these.
+examples=$(sed -n 's|^browser: loaded [0-9]* \(https\{0,1\}://example\.[a-z]*/.*\)$|\1|p' "$log" | sort -u)
+[ -n "$examples" ] || fail "the launch loaded no example.com or example.org page"
+for url in $examples; do
+  grep -qxF "example: GET $url" "$out/example-tls.log" ||
+    fail "$url loaded, but not from the run's server: $(grep -v '^example: ' "$out/example-tls.log" | tail -3)"
+done
+echo "ok: the example.com and example.org pages the launch loaded came from the run's own server: $(echo $examples)"
 echo "ok: ⌘← ⌘→ and the header's buttons go back and forward, with the page or the UI focused, and so does a swipe over the page but not over the sidebar; reload and force reload load the page again; ⌘., escape and the stop button stop a load; the row keeps a page's favicon until the next page has loaded without one; a host typed in the command bar goes over https first and then http, or from Chromium 157 Chrome's warning before http, where ⌘L, ⌘T and ⌘W reach the UI and escape closes the command bar alone, ⌘L still opens it after ⌘W closed a warned tab over another, and the bar keeps Return as a warning first shows under it, and a local one goes over http at once; a link and an agent's open_tab and navigate to http:// go over https first, and ⌘L still opens the command bar with the agent's tab at its last load; a right-click on reload lists Reload, Hard Reload and Clear Site Data and Reload, which each reload, the last with the site's cookie, localStorage and IndexedDB gone and another site's kept. Windows: $out/history.png, $out/loading.png, $out/reload-menu-dark.png, $out/reload-menu-light.png"
