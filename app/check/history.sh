@@ -574,6 +574,23 @@ if [ "$major" -ge 157 ]; then
     [ "$key" = NativeWidgetMacNSWindow ] ||
       fail "the command bar closing over Chrome's warning before http gave the keyboard to $key, on $focus, not back to the warning"
   fi
+  # F6 over Chrome's warning before http rings the tab's row, and Tab from there goes into the page
+  # under the warning, whose taking the keyboard hands it to the warning. The warning took it back
+  # from the ring, as F6 activating the window focused the page first (#3443). Windows alone, whose
+  # pane the warning took it back from.
+  if windows; then
+    send key f6
+    expect '^browser: sidebar keyed ' "F6 from Chrome's warning before http didn't ring the tab's row"
+    # The warning takes the keyboard in a task posted as the pane gets it, run before the next step.
+    send state
+    in_browser AccessKitSubclassOfGPUIView "after F6 over Chrome's warning before http"
+    send key tab
+    expect '^browser: ring gave the page its first control$' \
+      "Tab from the ring didn't go into the page under Chrome's warning before http"
+    send state
+    [ "$key" = NativeWidgetMacNSWindow ] ||
+      fail "Tab from the ring into the page under Chrome's warning before http gave the keyboard to $key, on $focus, not to the warning"
+  fi
   # A click on the page beside the warning: the page drops it, but on the Mac AppKit gives the
   # page's view the keyboard all the same, where every key is dropped. The core gives it back to
   # the warning (dialog_keys.cc), so the second ⌘T, next, still opens the bar (#2625).

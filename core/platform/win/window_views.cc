@@ -177,8 +177,14 @@ class PaneKeyboard : public aura::client::FocusChangeObserver,
   void OnWindowFocused(aura::Window* gained_focus, aura::Window*) override {
     // A click on a page whose tab shows a dialog focuses the pane here, as the page, ignoring input
     // under the dialog, won't take it, and every key the pane then has is lost: the dialog takes
-    // the keyboard back, as on the Mac (#2625).
-    dialog_keys::PageViewFocused(gained_focus);
+    // the keyboard back, as on the Mac (#2625). Only if the pane still has the keyboard on the next
+    // turn: activating the window focuses its page first, and F6 then gives the sidebar the
+    // keyboard, which the dialog took back from it (#3443).
+    if (gained_focus) {
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE,
+          base::BindOnce(&PaneKeyboard::PageFocusedWithKeyboard, weak_factory_.GetWeakPtr()));
+    }
     const bool take =
         gained_focus && GetFocus() != hwnd_ && GetActiveWindow() == GetAncestor(hwnd_, GA_ROOT);
     VLOG(1) << "pane " << hwnd_ << " focuses " << Describe(gained_focus)
@@ -266,6 +272,12 @@ class PaneKeyboard : public aura::client::FocusChangeObserver,
   bool HasKeyboard() const {
     HWND focus = GetFocus();
     return focus && (focus == hwnd_ || IsChild(hwnd_, focus));
+  }
+
+  void PageFocusedWithKeyboard() {
+    if (client_ && HasKeyboard()) {
+      dialog_keys::PageViewFocused(client_->GetFocusedWindow());
+    }
   }
 
   void LetGoWithoutKeyboard() {
@@ -572,6 +584,18 @@ class WindowViews : public views::WidgetObserver,
   // pane is a host of its own, whose window the dialog doesn't belong to (#2855).
   void PaneTookKeyboard(views::Widget* holder) {
     set_ui_holds_for_page(false);
+    // On the next turn, if the pane still has the keyboard, as PaneKeyboard's focus (#3443).
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&WindowViews::PaneKeptKeyboard, weak_factory_.GetWeakPtr(),
+                                  holder->GetWeakPtr()));
+  }
+
+  void PaneKeptKeyboard(base::WeakPtr<views::Widget> holder) {
+    const HWND pane = holder ? views::HWNDForWidget(holder.get()) : nullptr;
+    const HWND focus = GetFocus();
+    if (!pane || !focus || (focus != pane && !IsChild(pane, focus))) {
+      return;
+    }
     for (Window* window : Window::All()) {
       if (window->widget() != widget_) {
         continue;
