@@ -1189,13 +1189,16 @@ impl Agents {
         let Some((_, tab, reply)) = self.reading.remove(&request) else {
             return;
         };
+        // Read once it loaded, as the page tools look once they've acted: the tab may have gone
+        // somewhere agents may not, and the core reads any page. Loaded, a page still on the empty
+        // start page is no web page either, as the core's page tools find.
+        let refused = self.browser.off_limits(tab, cx);
         let tab = self.browser.tab(tab, cx);
-        _ = reply.send(match text {
-            // Read once it loaded, as the page tools look once they've acted: the tab may have gone
-            // somewhere agents may not, and the core reads any page.
-            Some(_) if !is_web(&tab.url) => ToolResult::error(NOT_WEB_PAGE),
-            Some(text) => ToolResult::text(tools::page_text(&tab, &text)),
-            None => ToolResult::error(
+        let refused = refused.or_else(|| (!is_web(&tab.url)).then_some(NOT_WEB_PAGE));
+        _ = reply.send(match (text, refused) {
+            (Some(_), Some(why)) => ToolResult::error(why),
+            (Some(text), None) => ToolResult::text(tools::page_text(&tab, &text)),
+            (None, _) => ToolResult::error(
                 "The tab has no page loaded: it loads once the user shows it. Try another tab.",
             ),
         });
@@ -3805,16 +3808,23 @@ const PASSKEY: &str = "The page asks for your passkey. Sign in, then hand the ta
 /// Space, or None. A Board's tab, by either, is the user's alone, as a Board and what's on it are,
 /// so the refusal is the one for a tab not the agent's. A page that isn't http(s), such as the
 /// browser's own or a file, is one agents never use: no title, address, text or picture of it
-/// reaches one. A tab with no page yet is its pinned URL's.
+/// reaches one. A tab with no page yet is its pinned URL's. One with no address at all, or only
+/// the empty start page's, hasn't committed its first page and holds nothing of anyone's: the core
+/// waits for that page and checks it then, as it does for every page action.
 pub fn off_limits(url: &str, pinned: &str) -> Option<&'static str> {
     if crate::boards::id_in(url).is_some() || crate::boards::id_in(pinned).is_some() {
         return Some(NOT_ITS_SPACE);
     }
-    let web = match url.is_empty() {
-        true => is_web(pinned),
-        false => is_web(url),
-    };
-    (!web).then_some(NOT_WEB_PAGE)
+    let url = if url.is_empty() { pinned } else { url };
+    if url.is_empty() || is_start_page(url) {
+        return None;
+    }
+    (!is_web(url)).then_some(NOT_WEB_PAGE)
+}
+
+/// The empty page a tab or popup starts on before its first page commits.
+fn is_start_page(url: &str) -> bool {
+    url.split(['#', '?']).next() == Some("about:blank")
 }
 
 fn is_web(url: &str) -> bool {
@@ -3828,11 +3838,24 @@ pub fn random_token() -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// A URL's host, without "www.", for the log.
+/// A URL's host, without "www.", for the log. Only a web page's host names its site: another
+/// page's address can hold a file's path or an extension's id, so for one the log says only what
+/// kind of page it is.
 pub fn site(url: &str) -> String {
-    let Some((_, rest)) = url.split_once("://") else {
+    let Some((scheme, rest)) = url.split_once("://") else {
         return String::new();
     };
+    if !matches!(scheme, "http" | "https") {
+        let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
+        return match scheme {
+            "chrome" if matches!(host, "board" | "settings") => host,
+            "chrome" => "browser",
+            "file" => "file",
+            "chrome-extension" => "extension",
+            _ => "page",
+        }
+        .to_string();
+    }
     let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
     let host = host.rsplit_once('@').map_or(host, |(_, host)| host);
     let host = match host.split_once(']') {
