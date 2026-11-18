@@ -3322,6 +3322,16 @@ fn run_command(line: &str) -> Option<()> {
             Some(())
         }
         "pip" => mini_player_command(words),
+        // hold press, hold dragto and hold release <x> <y>: as pip's, on the driven browser window,
+        // for its edges, which the window manager resizes it from with the display's pointer.
+        "hold" => {
+            let step = words.next()?;
+            let (x, y) = point(&mut words)?;
+            match step {
+                "press" | "dragto" | "release" => hold_window(driven()?.window, "held", step, x, y),
+                _ => None,
+            }
+        }
         _ => None,
     }
 }
@@ -3373,7 +3383,7 @@ fn mini_player_command<'a>(mut words: impl Iterator<Item = &'a str>) -> Option<(
     };
     let (x, y) = point(&mut words)?;
     if let "press" | "dragto" | "release" = action {
-        return hold_mini_player(window, action, x, y);
+        return hold_window(window, "pip", action, x, y);
     }
     let at = target_in(window, x, y)?;
     match action {
@@ -3397,8 +3407,9 @@ fn mini_player_command<'a>(mut words: impl Iterator<Item = &'a str>) -> Option<(
 
 /// pip press, pip dragto and pip release <x> <y>, at points where the window was at the press: the
 /// display's own pointer, through XTest. Sent events can't move it, as the window manager moves it
-/// with the pointer the X server has, as a hand moves it.
-fn hold_mini_player(window: xproto::Window, step: &str, x: f64, y: f64) -> Option<()> {
+/// with the pointer the X server has, as a hand moves it. hold's are the same on a browser window.
+/// The release logs where the drag left the window, as "browser: <what> at".
+fn hold_window(window: xproto::Window, what: &str, step: &str, x: f64, y: f64) -> Option<()> {
     let server = server()?;
     let (connection, root) = &*server;
     let fake = |kind: u8, button: u8, (x, y): (i16, i16)| xtest_event(kind, button, x, y);
@@ -3411,7 +3422,7 @@ fn hold_mini_player(window: xproto::Window, step: &str, x: f64, y: f64) -> Optio
         // another window's.
         let under = connection.query_pointer(*root).ok()?.reply().ok()?.child;
         if !within(connection, window, under) {
-            log!("browser: pip press: another window is over the Mini Player there");
+            log!("browser: {what} press: another window is over it there");
             return fake(xproto::MOTION_NOTIFY_EVENT, 0, back);
         }
         first_press(at, 1, false);
@@ -3463,7 +3474,7 @@ fn hold_mini_player(window: xproto::Window, step: &str, x: f64, y: f64) -> Optio
     }
     // Where the drag left it, as the last frame the window manager gave it may have come before.
     let [left, top, width, height] = frame(window)?;
-    log!("browser: pip at {left:.0} {top:.0} {width:.0} {height:.0}");
+    log!("browser: {what} at {left:.0} {top:.0} {width:.0} {height:.0}");
     fake(xproto::MOTION_NOTIFY_EVENT, 0, held.back)
 }
 
