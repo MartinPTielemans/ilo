@@ -72,6 +72,9 @@ class SystemPage {
     virtual bool SystemPageKey(const input::NativeWebKeyboardEvent& event,
                                bool before_page,
                                bool editing) = 0;
+    // Tab went past the page's last control, or ⇧Tab (|reverse|) before its first. Returns
+    // whether the app took the keyboard; if not, the page has it again at its other end.
+    virtual bool SystemPageFocusLeft(bool reverse) = 0;
     // A click in the page.
     virtual void SystemPageClicked() = 0;
     // The page's protected video is kept off the screen: the display connection's protection
@@ -123,6 +126,8 @@ class SystemPage {
   virtual gfx::NativeView view() = 0;
   // Gives the page the keyboard.
   virtual void Focus() = 0;
+  // Gives the page the keyboard at its first control, or its |last|, as Tab or ⇧Tab into it does.
+  virtual void FocusEnd(bool last) = 0;
 
   // Starts the page's first load, which |storage| goes into: each origin's items are set before
   // the scripts of its first document in that load run. A Load before it changes what it loads.
