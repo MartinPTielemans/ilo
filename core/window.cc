@@ -127,6 +127,49 @@ std::map<bc_id, std::unique_ptr<Window>>& Windows() {
   return *windows;
 }
 
+// Keeps an agent's tab's dialog, such as Chrome's warning before http, from taking the user's
+// keyboard while its page joins a window. Chrome shows a tab's dialog again, and activates it, as
+// its page goes from hidden to visible within that, and a watched agent's tab never takes the
+// user's keyboard (#3164, #3240). Then the dialog can take the keyboard as it could before, so a
+// click on it gives it the keyboard. The dialog may close while it's held, so it's held weakly.
+class AgentDialogHold {
+ public:
+  explicit AgentDialogHold(content::WebContents* contents) {
+    tabs::TabInterface* tab = tabs::TabInterface::MaybeGetFromContents(contents);
+    tabs::TabFeatures* features = tab ? tab->GetTabFeatures() : nullptr;
+    tabs::TabDialogManager* dialogs = features ? features->tab_dialog_manager() : nullptr;
+    if (!dialogs) {
+      return;
+    }
+    // A page coming from another window has its dialog over that one until Chrome moves it.
+    for (const auto& [id, window] : Windows()) {
+      views::Widget* parent = window->widget();
+      if (!parent) {
+        continue;
+      }
+      for (views::Widget* child : views::Widget::GetAllChildWidgets(parent->GetNativeView())) {
+        if (dialogs->IsDialogManaged(child) && child->widget_delegate()) {
+          could_ = child->widget_delegate()->CanActivate();
+          child->widget_delegate()->SetCanActivate(false);
+          dialog_ = child->GetWeakPtr();
+          return;
+        }
+      }
+    }
+  }
+  AgentDialogHold(const AgentDialogHold&) = delete;
+  AgentDialogHold& operator=(const AgentDialogHold&) = delete;
+  ~AgentDialogHold() {
+    if (dialog_ && !dialog_->IsClosed() && dialog_->widget_delegate()) {
+      dialog_->widget_delegate()->SetCanActivate(could_);
+    }
+  }
+
+ private:
+  base::WeakPtr<views::Widget> dialog_;
+  bool could_ = true;
+};
+
 // The windows' ids, the most recently active first.
 std::vector<bc_id>& Order() {
   static base::NoDestructor<std::vector<bc_id>> order;
@@ -2005,7 +2048,16 @@ void Window::LayOutPage() {
   if (panel_page && !side_panel_frame_.IsEmpty() && !(shown_ && shown_->IsFullscreen())) {
     panel = platform::SidePanelPage{panel_page->GetNativeView(), side_panel_frame_};
   }
+  // Only an agent's tab's dialog is held: a user's tab's, beside an agent's in a split too, shows
+  // as Chrome shows it.
+  std::vector<std::unique_ptr<AgentDialogHold>> held;
+  for (content::WebContents* contents : shown) {
+    if (IsAgentTab(contents)) {
+      held.push_back(std::make_unique<AgentDialogHold>(contents));
+    }
+  }
   platform::ShowPages(widget_.get(), panes, page_corner_radius_, focused, focus_color_, panel);
+  held.clear();
   if (panel_page != side_panel_laid_out_.get()) {
     side_panel_laid_out_ = panel_page ? panel_page->GetWeakPtr() : nullptr;
     ReportSidePanelSoon();

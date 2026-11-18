@@ -174,6 +174,12 @@ MiniPlayerWatch& Watching() {
   return *watch;
 }
 
+// When the pointer event being handled happened, as the system says, or else now: a busy UI thread
+// gets to a throw's last move and its release late, and times taken then read it as a rest (#3415).
+[[maybe_unused]] base::TimeTicks PointerTime() {
+  return platform::PointerEventTime().value_or(base::TimeTicks::Now());
+}
+
 // Where a Mini Player was each time its move loop moved it, for the speed it's let go at. Where the
 // loop moves only its outline, and the window at the release, it's where the outline was (#3062).
 class MoveWatch : public views::WidgetObserver {
@@ -182,7 +188,7 @@ class MoveWatch : public views::WidgetObserver {
       : outline_(platform::WatchOutlineMoves(
             widget,
             base::BindRepeating(&MoveWatch::OutlineMoved, base::Unretained(this)))) {
-    moves_.Window(widget->GetWindowBoundsInScreen().origin(), base::TimeTicks::Now());
+    moves_.Window(widget->GetWindowBoundsInScreen().origin(), PointerTime());
     observation_.Observe(widget);
   }
 
@@ -195,12 +201,12 @@ class MoveWatch : public views::WidgetObserver {
 
   // views::WidgetObserver:
   void OnWidgetBoundsChanged(views::Widget* widget, const gfx::Rect& bounds) override {
-    moves_.Window(bounds.origin(), base::TimeTicks::Now());
+    moves_.Window(bounds.origin(), PointerTime());
   }
   void OnWidgetDestroying(views::Widget* widget) override { observation_.Reset(); }
 
  private:
-  void OutlineMoved(const gfx::Point& at) { moves_.Outline(at, base::TimeTicks::Now()); }
+  void OutlineMoved(const gfx::Point& at) { moves_.Outline(at, PointerTime()); }
 
   MiniPlayerMoves moves_;
   base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{this};
@@ -478,9 +484,9 @@ bool OnEvent(VideoOverlayWindowViews* window, ui::Event* event) {
         MoveWatch watch(window);
         window->RunMoveLoop(press.OffsetFromOrigin(), views::Widget::MoveLoopSource::kMouse,
                             views::Widget::MoveLoopEscapeBehavior::kDontHide);
-        // The loop returns as the button comes up.
+        // The loop returns as the button comes up, with that event the one being handled.
         if (moved) {
-          LetGo(moved.get(), watch, base::TimeTicks::Now());
+          LetGo(moved.get(), watch, PointerTime());
 #if BUILDFLAG(IS_MAC)
           GiveKeyboardBack(moved.get());
 #endif

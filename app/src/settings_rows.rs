@@ -23,9 +23,9 @@ use crate::tokens::settings::{
     CONTROL_HOVERED_LIGHT, CONTROL_LIGHT, CONTROL_PADDING, CONTROL_PRESSED, CONTROL_PRESSED_LIGHT,
     CONTROL_RADIUS, DETAIL, DETAIL_LINE, DETAIL_TOP, END_GAP, GLYPH, GLYPH_OFF, GLYPH_ON,
     GLYPH_PLATE, GLYPH_PLATE_FILL, GLYPH_PLATE_GAP, GROUP, GROUP_LIGHT, HEADING, KNOB, KNOB_ALPHA,
-    KNOB_INSET, KNOB_SHADOW, LINE, NAME, NAME_OFF, ON_CONTROL, ON_DETAIL, ON_HOVERED, ON_LINE,
-    ON_PRESSED, ON_SWITCH_OFF, PADDING, RESTORE_RADIUS, ROW_HEIGHT, ROW_X, SWITCH_HEIGHT,
-    SWITCH_OFF, SWITCH_OFF_LIGHT, SWITCH_WIDTH,
+    KNOB_INSET, KNOB_SHADOW, KNOB_SHADOW_BLUR, KNOB_SHADOW_Y, LINE, NAME, NAME_OFF, ON_CONTROL,
+    ON_DETAIL, ON_HOVERED, ON_LINE, ON_PRESSED, ON_SWITCH_OFF, PADDING, RESTORE_RADIUS, ROW_HEIGHT,
+    ROW_X, SWITCH_HEIGHT, SWITCH_OFF, SWITCH_OFF_LIGHT, SWITCH_WIDTH,
 };
 use crate::tokens::settings::{SENT_CHEVRON, SENT_GAP, SENT_INDENT, SENT_LABEL, SENT_LINES};
 use crate::tokens::shell::{KEYED, KEYED_RING};
@@ -600,8 +600,8 @@ pub fn switch(look: &Look, on: bool, slid: f32, accent: Rgba) -> impl IntoElemen
     let way = if on { slid } else { 1. - slid };
     let shadow = BoxShadow {
         color: rgba(KNOB_SHADOW).into(),
-        offset: point(px(0.), px(1.)),
-        blur_radius: px(2.),
+        offset: point(px(0.), px(KNOB_SHADOW_Y)),
+        blur_radius: px(KNOB_SHADOW_BLUR),
         spread_radius: px(0.),
         inset: false,
     };
