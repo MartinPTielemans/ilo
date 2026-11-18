@@ -57,3 +57,16 @@ import WebKit
     #expect(UIPasteboard.general.url == link)
   }
 }
+
+/// What the app's Info.plist promises iOS, read from the app the tests run in.
+@Suite struct InfoTests {
+  /// iOS stops an app that asks for one of these without a sentence saying why.
+  @Test(arguments: [
+    "NSCameraUsageDescription", "NSMicrophoneUsageDescription", "NSLocationWhenInUseUsageDescription",
+    "NSPhotoLibraryAddUsageDescription", "NSLocalNetworkUsageDescription", "NSFaceIDUsageDescription",
+  ])
+  func `everything a page can make iOS ask the user has its sentence`(key: String) {
+    let sentence = Bundle.main.object(forInfoDictionaryKey: key) as? String ?? ""
+    #expect(sentence.count > 20)
+  }
+}

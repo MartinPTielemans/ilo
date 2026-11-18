@@ -51,10 +51,14 @@
 	<string>ilo asks for Face ID before it fills in a saved password.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>A page you opened asked to use the camera.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>A page you opened is on your own network, such as a router's or a printer's.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>A page you opened asked where you are.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>A page you opened asked to use the microphone.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>ilo saves the pictures you choose to your photo library.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
