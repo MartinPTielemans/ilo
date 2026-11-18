@@ -53,6 +53,13 @@ for _ in $(seq 50); do
 done
 [ "$(cat "$folder/name" 2>/dev/null)" = kitchen ] ||
   fail "the Board's name wasn't kept in its folder: $(cat "$folder/name" 2>/dev/null)"
+# The page has the keyboard before it has loaded, and keys typed then are lost.
+for _ in $(seq 100); do
+  grep "^browser: page $board " "$log" | tail -1 | grep -q " loading 0 chrome://board/$id\$" && break
+  sleep 0.1
+done
+grep "^browser: page $board " "$log" | tail -1 | grep -q " loading 0 chrome://board/$id\$" ||
+  fail "the new Board's page didn't finish loading: $(grep "^browser: page $board " "$log" | tail -1)"
 send type "shelves over the sink"
 expect 'browser: board saved$' "the note typed in the new Board wasn't saved"
 grep -q 'shelves over the sink' "$folder/board.json" ||
