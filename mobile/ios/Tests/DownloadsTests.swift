@@ -49,7 +49,7 @@ import os
     page.webView.load(URLRequest(url: server.url(path)))
     #expect(await eventually { browser.prompt != nil })
     browser.answer(true)
-    #expect(await eventually { browser.downloads.list.count == had + 1 })
+    #expect(await downloaded { browser.downloads.list.count == had + 1 })
   }
 
   private func exists(_ file: URL) -> Bool {
@@ -73,7 +73,7 @@ import os
     #expect(downloads.list.isEmpty)
     browser.answer(true)
 
-    #expect(await eventually { downloads.list.first?.state == .done })
+    #expect(await downloaded { downloads.list.first?.state == .done })
     let row = try #require(downloads.list.first)
     #expect(row.name == "boat.pdf")
     #expect(row.source == server.url("/boat.pdf"))
@@ -128,7 +128,7 @@ import os
     #expect(!exists(downloads.folder.appending(path: "boat.pdf")))
 
     gate.open()
-    #expect(await eventually { downloads.list.first?.state == .done })
+    #expect(await downloaded { downloads.list.first?.state == .done })
     #expect(downloads.received[id] == nil)
     #expect(downloads.running == 0)
     #expect(try Data(contentsOf: downloads.folder.appending(path: "boat.pdf")) == Self.boat)
@@ -157,7 +157,7 @@ import os
 
     downloads.retry(id)
     #expect(downloads.list.first?.state == .running)
-    #expect(await eventually { downloads.list.first?.state == .done })
+    #expect(await downloaded { downloads.list.first?.state == .done })
     #expect(downloads.list.count == 1)
     #expect(downloads.list.first?.id == id)
     #expect(server.requests(to: "/boat.pdf") == 2)
@@ -185,7 +185,7 @@ import os
     downloads.looked()
 
     gate.open()
-    #expect(await eventually { downloads.list.first?.state != .running })
+    #expect(await downloaded { downloads.list.first?.state != .running })
     #expect(downloads.list.first?.state == .failed("Lost connection"))
     #expect(downloads.list.first?.canRetry == true)
     #expect(downloads.mark == .trouble)
@@ -195,7 +195,7 @@ import os
     #expect(downloads.mark == .none)
 
     downloads.retry(id)
-    #expect(await eventually { downloads.list.first?.state == .done })
+    #expect(await downloaded { downloads.list.first?.state == .done })
     #expect(try Data(contentsOf: downloads.folder.appending(path: "boat.pdf")) == Self.boat)
   }
 
@@ -211,9 +211,9 @@ import os
     await fetch("/boat.pdf", from: server, on: page, in: browser)
     #expect(downloads.list.map(\.name) == ["boat.pdf", "boat 2.pdf"])
     gate.open()
-    #expect(await eventually { downloads.list.allSatisfy { $0.state == .done } })
+    #expect(await downloaded { downloads.list.allSatisfy { $0.state == .done } })
     await fetch("/boat.pdf", from: server, on: page, in: browser)
-    #expect(await eventually { downloads.list.allSatisfy { $0.state == .done } })
+    #expect(await downloaded { downloads.list.allSatisfy { $0.state == .done } })
 
     #expect(downloads.list.map(\.name) == ["boat.pdf", "boat 2.pdf", "boat 3.pdf"])
     for row in downloads.list {
@@ -234,7 +234,7 @@ import os
     let downloads = browser.downloads
     let page = try await page(in: browser, on: server)
     await fetch("/boat.pdf", from: server, on: page, in: browser)
-    #expect(await eventually { downloads.list.first?.state == .done })
+    #expect(await downloaded { downloads.list.first?.state == .done })
     let file = downloads.folder.appending(path: "boat.pdf")
     #expect(exists(file))
 
@@ -267,7 +267,7 @@ import os
     let downloads = browser.downloads
     let page = try await page(in: browser, on: server)
     await fetch("/boat.pdf", from: server, on: page, in: browser)
-    #expect(await eventually { downloads.list.first?.state == .done })
+    #expect(await downloaded { downloads.list.first?.state == .done })
     await fetch("/slow.zip", from: server, on: page, in: browser)
     await downloads.settled()
 
@@ -285,7 +285,7 @@ import os
     // Only the address is left of what was asked: it's asked again, with no tab at all.
     gate.open()
     again.retry(try #require(again.list.last?.id))
-    #expect(await eventually { again.list.last?.state == .done })
+    #expect(await downloaded { again.list.last?.state == .done })
     #expect(try Data(contentsOf: again.folder.appending(path: "slow.zip")) == Self.boat)
     await again.settled()
     let third = testDownloads(in: directory)
@@ -307,7 +307,7 @@ import os
     #expect(browser.page == nil)
     #expect(downloads.list.first?.state == .running)
     gate.open()
-    #expect(await eventually { downloads.list.first?.state == .done })
+    #expect(await downloaded { downloads.list.first?.state == .done })
     #expect(try Data(contentsOf: downloads.folder.appending(path: "boat.pdf")) == Self.boat)
   }
 
@@ -324,7 +324,7 @@ import os
     downloads.save(server.url("/timetable.pdf"), from: page.webView)
     // Its row is there from the tap.
     #expect(downloads.list.first?.state == .running)
-    #expect(await eventually { downloads.list.first?.state == .done })
+    #expect(await downloaded { downloads.list.first?.state == .done })
     #expect(downloads.list.first?.name == "timetable.pdf")
     #expect(try Data(contentsOf: downloads.folder.appending(path: "timetable.pdf")) == Self.paper)
     #expect(browser.prompt == nil)
@@ -353,7 +353,7 @@ import os
     #expect(await eventually { page.isPDF })
 
     downloads.save(server.url("/quiet.pdf"), from: page.webView, listed: false)
-    #expect(await eventually { downloads.list.first?.state == .done })
+    #expect(await downloaded { downloads.list.first?.state == .done })
     #expect(exists(downloads.folder.appending(path: "quiet.pdf")))
     // Where it came from isn't held either, so Retry, which asks with ordinary tabs' cookies, isn't offered.
     #expect(downloads.list.first?.source == nil)
@@ -372,7 +372,7 @@ import os
     let downloads = browser.downloads
     let page = try await page(in: browser, on: server)
     await fetch("/boat.pdf", from: server, on: page, in: browser)
-    #expect(await eventually { downloads.list.first?.state == .done })
+    #expect(await downloaded { downloads.list.first?.state == .done })
 
     downloads.prune()
     #expect(downloads.list.count == 1)

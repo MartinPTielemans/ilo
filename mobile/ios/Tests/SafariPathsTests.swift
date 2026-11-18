@@ -250,7 +250,7 @@ import os
     }
     #expect(asked == name)
     browser.answer(true)
-    #expect(await eventually { browser.downloads.list.first?.state == .done })
+    #expect(await downloaded { browser.downloads.list.first?.state == .done })
     let row = try #require(browser.downloads.list.first)
     #expect(row.name == name)
     // A file the page made has no address to ask again.

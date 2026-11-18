@@ -270,7 +270,7 @@ import WebKit
     secret.webView.load(URLRequest(url: server.url("/boat.pdf")))
     #expect(await eventually { browser.prompt != nil })
     browser.answer(true)
-    #expect(await eventually { downloads.list.first?.state == .done })
+    #expect(await downloaded { downloads.list.first?.state == .done })
     #expect(downloads.list.map(\.name) == ["boat.pdf"])
     #expect(FileManager.default.fileExists(atPath: downloads.folder.appending(path: "boat.pdf").path))
     await downloads.settled()

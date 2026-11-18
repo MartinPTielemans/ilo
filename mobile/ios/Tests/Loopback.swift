@@ -176,14 +176,21 @@ nonisolated final class Loopback: @unchecked Sendable {
 }
 
 /// Waits for something a page or the network brings about, and says whether it came.
-@MainActor func eventually(_ came: @MainActor () async -> Bool) async -> Bool {
+@MainActor func eventually(seconds: Int = 30, _ came: @MainActor () async -> Bool) async -> Bool {
   // Half a minute at most: CI's iOS 27 simulator takes ten seconds over a page that an iOS 26
   // one loads in a third of one, and what came is answered at once either way.
-  for _ in 0..<3000 {
+  for _ in 0..<seconds * 100 {
     if await came() { return true }
     try? await Task.sleep(for: .milliseconds(10))
   }
   return false
+}
+
+/// Waits for what a download brings to its list, and says whether it came.
+@MainActor func downloaded(_ came: @MainActor () async -> Bool) async -> Bool {
+  // Two minutes: after the yes, the list has the file in 26 ms on a Mac's simulator, and CI's has
+  // taken over half a minute to start a run's first downloads.
+  await eventually(seconds: 120, came)
 }
 
 extension WebTab {
