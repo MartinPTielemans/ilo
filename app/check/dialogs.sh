@@ -3,8 +3,9 @@
 # captured while it's up: alert(), confirm() and prompt() from the served page's keys. ↩ answers
 # OK, with what was typed in a prompt, and Esc Cancel, and the page puts the answer in its title.
 # The confirm's Cancel and OK are captured with the pointer on each. An alert goes with its tab
-# and comes back with it. Leaving a page whose beforeunload handler asks says "Leave site?": Esc
-# stays, and on X11 ⌘L the moment it has closed opens the command bar (#1711), and ↩ leaves. A site's HTTP sign-in asks for a username and password: Esc shows the page
+# and comes back with it. In a split view it covers its own pane, and the page beside keeps a
+# click and the typing after (#3231). Leaving a page whose beforeunload handler asks says "Leave
+# site?": Esc stays, and on X11 ⌘L the moment it has closed opens the command bar (#1711), and ↩ leaves. A site's HTTP sign-in asks for a username and password: Esc shows the page
 # the site sends without them, and ↩ signs in, with the password in no log. A link to another app
 # asks first, and ↩ there opens nothing. The pointer on and off a link 20 times shows and hides the
 # link target each time, with the command bar and a tab's menu opened and closed between, and the
@@ -153,6 +154,69 @@ expect '^browser: dialog shown .* says$' "the alert didn't come back with its ta
 expect '^browser: dialog settled$' "the alert didn't settle again"
 send key return
 expect "^browser: page $page dialog answered accept\$" "↩ didn't answer the alert that came back"
+
+# In a split view an alert covers its own pane alone, as Chrome's do, where it covered both (#3231).
+# A click on the page beside it lands there, focusing that pane, and the typing after reaches that
+# page. The alert goes with its pane's focus, and a click on its pane brings it back with the keys.
+printf '%s' '<title>beside</title>
+<input id=field style="position:fixed;inset:0;font-size:40px" oninput="document.title = `beside has ${field.value}`">
+<script>
+requestAnimationFrame(() => requestAnimationFrame(() => document.title = "beside ready"));
+</script>' > "$out/site/beside.html"
+send menu Add Split View
+expect '^browser: command add-split via ' "Add Split View didn't run"
+expect '^browser: command bar shown$' "Add Split View didn't open the command bar"
+send type "http://localhost:$port/beside.html"
+send key return
+expect "^browser: splits .*$page+[0-9][0-9]*" \
+  "beside.html didn't open beside the dialogs page: $(grep '^browser: splits' "$log" | tail -1)"
+beside=$(grep '^browser: splits' "$log" | tail -1 | grep -o "$page+[0-9]*" | cut -d+ -f2)
+expect "^browser: title $beside beside ready\$" "beside.html didn't draw in the split"
+# The pages' frames in the window, left first, once both are laid out.
+for _ in $(seq 50); do
+  send layout
+  panes=$(since | grep -m1 '^browser: layout' | grep -o 'WebContentsViewCocoa [0-9,]* [0-9x]*' |
+    sed 's/^WebContentsViewCocoa //')
+  [ "$(echo "$panes" | wc -l)" -eq 2 ] && break
+  sleep 0.1
+done
+[ "$(echo "$panes" | wc -l)" -eq 2 ] ||
+  fail "the layout didn't show two pages beside each other: $(since | grep -m1 '^browser: layout')"
+# A point 100 in from the top left of pane $1.
+in_pane() {
+  pane=$(echo "$panes" | sed -n "$1p")
+  pane_y=${pane#*,}
+  echo "$((${pane%%,*} + 100)) $((${pane_y%% *} + 100))"
+}
+send click $(in_pane 1)
+expect "^browser: selected $page\( in .*\)\{0,1\}\$" "a click on the dialogs page's pane didn't focus it"
+ask a Alert alert-split
+send click $(in_pane 2)
+clicked=$step
+expect "^browser: selected $beside\( in .*\)\{0,1\}\$" \
+  "a click on the page beside the alert, in a split, didn't focus its pane, the alert covering it: $(since "$clicked" | grep -e '^browser: drive' -e '^browser: selected' -e '^browser: dialog' | tail -6 | tr '\n' ' ')"
+[ "$(uname)" = Linux ] ||
+  expect '^browser: a press in the pane beside takes the keyboard from the dialog$' \
+    "the click on the page beside the alert didn't take the keyboard from it" "$clicked"
+expect '^browser: dialog withdrawn$' "the alert stayed up with its pane no longer focused"
+send key x
+send key y
+expect "^browser: title $beside beside has xy\$" \
+  "typing after a click on the page beside the alert, in a split, didn't reach that page: the keyboard is in $key, on $focus: $(since "$clicked" | grep -e '^browser: drive' -e "^browser: title $beside " -e '^browser: dialog' | tail -6 | tr '\n' ' ')"
+send click $(in_pane 1)
+expect "^browser: selected $page\( in .*\)\{0,1\}\$" "a click on the alert's pane didn't focus it again"
+expect '^browser: dialog shown .* says$' "the alert didn't come back with its pane's focus"
+expect '^browser: dialog settled$' "the alert didn't settle again over its pane"
+send key return
+expect "^browser: page $page dialog answered accept\$" \
+  "↩ didn't answer the alert back over its pane: the keyboard is in $key, on $focus"
+# The page beside closes, leaving the dialogs page the card's.
+send click $(in_pane 2)
+expect "^browser: selected $beside\( in .*\)\{0,1\}\$" "a click on the page beside didn't focus it"
+send key w cmd
+expect "^browser: tab $beside closed\$" "⌘W didn't close the page beside the dialogs page"
+expect "^browser: selected $page\( in .*\)\{0,1\}\$" \
+  "closing the page beside it didn't leave the dialogs page shown: $(since | grep -e '^browser: selected' -e '^browser: splits' | tail -3 | tr '\n' ' ')"
 
 # ↩ doesn't open the app, so a key the page timed can't.
 send click $page_point
@@ -543,7 +607,9 @@ fi
 exec 3>&-
 quit
 echo "ok: a page's alert, confirm and prompt ask over its card, answer with ↩ and Esc, and an alert"
-echo "  comes back with its tab. The confirm's Cancel and OK show the pointer on them. Leave site?"
+echo "  comes back with its tab. In a split view it covers its own pane, the page beside takes a"
+echo "  click and the keys after, and it comes back with its pane: $out/dialog-alert-split.png. The"
+echo "  confirm's Cancel and OK show the pointer on them. Leave site?"
 echo "  stays with Esc and leaves with ↩. A site's sign-in cancels with Esc and signs in with ↩, and"
 echo "  the password reaches no log. A link to Maps asks, and ↩ opens nothing. The link target shows"
 echo "  and hides 20 times, between the command bar and a tab's menu, with no panic."

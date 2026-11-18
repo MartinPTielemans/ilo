@@ -6,7 +6,7 @@ use std::rc::Rc;
 use gpui::{Entity, TestAppContext, VisualTestContext};
 
 use super::{DialogKind, PageDialog, PageReply};
-use crate::shell::{Folders, Page, Shell, recorder::Recorder};
+use crate::shell::{Folders, Page, Shell, Split, recorder::Recorder};
 
 /// A window on one Space of tabs 10 and 20, showing 10, drawn.
 fn window(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext, Rc<Recorder>) {
@@ -171,4 +171,48 @@ fn a_window_coming_to_the_front_takes_back_anothers_dialog(cx: &mut TestAppConte
     shell.update(cx, |shell, cx| shell.became_key(cx));
     cx.run_until_parked();
     assert_eq!(dialogs(&host), ["page dialog none"]);
+}
+
+#[gpui::test]
+fn in_a_split_the_dialog_covers_its_own_pane(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx);
+    shell.update(cx, |shell, cx| {
+        let split = Split {
+            tabs: vec![10, 20],
+            ..Default::default()
+        };
+        shell.set_tabs(
+            1,
+            Vec::new(),
+            vec![10, 20],
+            vec![split],
+            Folders::default(),
+            cx,
+        );
+        shell.set_selected(10, cx);
+    });
+    cx.run_until_parked();
+    host.take();
+    ask(&shell, cx, 10, Some(prompt(1)));
+    assert_eq!(dialogs(&host), ["page dialog 10 1"]);
+    let (laid, over) = shell.read_with(cx, |shell, _| {
+        let over = shell
+            .page_dialog_shown
+            .flatten()
+            .expect("no dialog shown")
+            .2;
+        (shell.page_laid.expect("no page laid out"), over)
+    });
+    // The left pane alone, so the page beside, on the right, stays usable (#3231).
+    assert_eq!(over.0.left(), laid.0.left());
+    assert_eq!(
+        (over.0.top(), over.0.bottom()),
+        (laid.0.top(), laid.0.bottom())
+    );
+    assert!(over.0.right() < laid.0.center().x, "{over:?} in {laid:?}");
+    // A click on the page beside focuses its pane, and the dialog goes with its pane's focus.
+    select(&shell, cx, 20);
+    assert_eq!(dialogs(&host), ["page dialog none"]);
+    select(&shell, cx, 10);
+    assert_eq!(dialogs(&host), ["page dialog 10 1"]);
 }

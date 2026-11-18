@@ -498,6 +498,9 @@ NSTimeInterval g_active_since = 0;
 // What the dialog covers, as insets from the browser window's content edges: none for all of it,
 // or a tab's card for a page's dialog, which keeps them as the window resizes.
 NSEdgeInsets g_dialog_insets;
+// The user pressed the page in the pane beside a page's dialog in a split view: the browser window
+// keeps the keyboard it took for that page, until the dialog takes it again (#3231).
+bool g_dialog_lent = false;
 
 // The Site Controls' window and view, the browser they show over, and where their top left goes
 // there. Released, they're on screen only for the motion of their leaving, and take no clicks.
@@ -2112,6 +2115,24 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
                                                     hitTest:event.locationInWindow];
                                                 if (hit && [hit isDescendantOf:content] &&
                                                     ![hit isDescendantOf:each->ui_view]) {
+                                                  // The page in the pane beside a page's dialog,
+                                                  // which covers its own pane alone: the window
+                                                  // takes the keyboard first, so the press lands
+                                                  // and focuses that pane, as a press in a page
+                                                  // without a dialog does (#3231).
+                                                  if (g_dialog_shown &&
+                                                      g_dialog_over == each.get() &&
+                                                      g_dialog.keyWindow &&
+                                                      !NSEdgeInsetsEqual(g_dialog_insets,
+                                                                         NSEdgeInsetsZero) &&
+                                                      NSApp.isActive &&
+                                                      event.timestamp > g_active_since) {
+                                                    g_dialog_lent = true;
+                                                    fprintf(stderr,
+                                                            "browser: a press in the pane beside "
+                                                            "takes the keyboard from the dialog\n");
+                                                    [each->window makeKeyWindow];
+                                                  }
                                                   if (g_ui_keyboard_left) {
                                                     g_ui_keyboard_left(
                                                         (__bridge void*)each->ui_view);
@@ -3749,7 +3770,10 @@ void host_add_dialog(void* dialog_view) {
                   object:nil
                    queue:nil
               usingBlock:^(NSNotification* notification) {
-                if (g_dialog_shown && notification.object != g_dialog &&
+                if (notification.object == g_dialog) {
+                  g_dialog_lent = false;
+                }
+                if (g_dialog_shown && !g_dialog_lent && notification.object != g_dialog &&
                     !HostIsMenuWindow(notification.object) &&
                     (NSEdgeInsetsEqual(g_dialog_insets, NSEdgeInsetsZero) ||
                      notification.object == g_dialog_over->window)) {
@@ -3775,6 +3799,7 @@ void host_show_dialog(void* ui_view, double x, double y, double width, double he
     return;
   }
   g_dialog_shown = true;
+  g_dialog_lent = false;
   g_dialog_over = browser;
   // After the UI's update that asked, since the window draws here: at its frame, before it shows,
   // since it keeps the last frame it drew.
@@ -3796,6 +3821,7 @@ void host_hide_dialog(void) {
     return;
   }
   g_dialog_shown = false;
+  g_dialog_lent = false;
   Browser* browser = g_dialog_over;
   // Unless another window took the keyboard, such as from a page's dialog.
   const bool key = g_dialog.isKeyWindow || !NSApp.keyWindow;
