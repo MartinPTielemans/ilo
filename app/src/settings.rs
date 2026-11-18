@@ -672,6 +672,7 @@ impl account::Host for CoreAccount {
     }
 
     fn open_sync_details(&self, cx: &mut App) {
+        // The account syncs the profile the core started with, the first bc_profiles gives.
         let profile = crate::ids(bc::bc_profiles).first().copied().unwrap_or(0);
         crate::open_in_users_window(profile, "chrome://sync-internals");
         hide(cx);
