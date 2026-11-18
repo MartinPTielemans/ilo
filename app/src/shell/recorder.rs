@@ -1496,6 +1496,13 @@ impl Browser for Recorder {
         self.record("focus page".into())
     }
 
+    fn focus_page_end(&self, last: bool, _: &mut App) {
+        self.record(format!(
+            "focus page {}",
+            if last { "last" } else { "first" }
+        ))
+    }
+
     fn lay_out_page(&self, _: Bounds<Pixels>, _: f32, _: &mut App) {
         self.page_events.borrow_mut().push("layout");
     }

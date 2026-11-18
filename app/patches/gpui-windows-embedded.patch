@@ -442,9 +442,15 @@ index 98a13f304c..22267df7e8 100644
  
  #[inline]
 diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
-index 08f91bd626..b00b39331a 100644
+index 08f91bd626..e4e0e5bc8c 100644
 --- a/crates/gpui_windows/src/events.rs
 +++ b/crates/gpui_windows/src/events.rs
+@@ -1,4 +1,4 @@
+-use std::{cell::Cell, rc::Rc, sync::atomic::Ordering};
++use std::{cell::Cell, collections::VecDeque, rc::Rc, sync::atomic::Ordering};
+ 
+ use anyhow::Context as _;
+ use gpui_util::ResultExt;
 @@ -28,6 +28,7 @@ pub(crate) const WM_GPUI_FORCE_UPDATE_WINDOW: u32 = WM_USER + 5;
  pub(crate) const WM_GPUI_KEYBOARD_LAYOUT_CHANGED: u32 = WM_USER + 6;
  pub(crate) const WM_GPUI_GPU_DEVICE_LOST: u32 = WM_USER + 7;
@@ -453,7 +459,49 @@ index 08f91bd626..b00b39331a 100644
  
  const SIZE_MOVE_LOOP_TIMER_ID: usize = 1;
  
-@@ -103,13 +104,14 @@ impl WindowsWindowInner {
+@@ -77,6 +78,41 @@ impl Drop for DrawWindowGuard<'_> {
+     }
+ }
+ 
++/// Whether a window is handing input to its callback, and what came meanwhile, which a message
++/// loop nested in the callback delivers, as a browser engine's can (#3358). Dropped, a press made
++/// a click do nothing and a key a keystroke, so it's held as the Mac (#2658) and Linux hold it.
++#[derive(Default)]
++pub(crate) struct InputHeld {
++    busy: bool,
++    queue: VecDeque<Held>,
++}
++
++enum Held {
++    /// Input, with the text a key down's translation queued, typed where its `WM_CHAR` would have
++    /// been once the key's handed on.
++    Input(PlatformInput, Option<String>),
++    /// A change from an input method or a `WM_CHAR` to the field that had the keys when it came.
++    Text(Option<FocusId>, Box<dyn FnOnce(&mut PlatformInputHandler)>),
++}
++
++/// What became of input handed to the window (`hand_on`).
++pub(crate) enum Handed {
++    Now(DispatchEventResult),
++    /// It waits behind the input the callback is handling.
++    Held,
++}
++
++impl Handed {
++    /// The window procedure's answer: 0 where GPUI took the input or will, else 1.
++    fn answer(handed: Option<Self>) -> Option<isize> {
++        match handed {
++            Some(Handed::Now(result)) if result.propagate => Some(1),
++            None => Some(1),
++            _ => Some(0),
++        }
++    }
++}
++
+ impl WindowsWindowInner {
+     pub(crate) fn handle_msg(
+         self: &Rc<Self>,
+@@ -103,13 +139,14 @@ impl WindowsWindowInner {
              WM_TIMER => self.handle_timer_msg(handle, wparam),
              WM_NCCALCSIZE => self.handle_calc_client_size(handle, wparam, lparam),
              WM_DPICHANGED => self.handle_dpi_changed_msg(handle, wparam, lparam),
@@ -469,7 +517,7 @@ index 08f91bd626..b00b39331a 100644
              WM_NCMOUSEMOVE => self.handle_nc_mouse_move_msg(handle, lparam),
              // Treat double click as a second single click, since we track the double clicks ourselves.
              // If you don't interact with any elements, this will fall through to the windows default
-@@ -146,11 +148,19 @@ impl WindowsWindowInner {
+@@ -146,11 +183,19 @@ impl WindowsWindowInner {
              }
              WM_MOUSEWHEEL => self.handle_mouse_wheel_msg(handle, wparam, lparam),
              WM_MOUSEHWHEEL => self.handle_mouse_horizontal_wheel_msg(handle, wparam, lparam),
@@ -489,7 +537,7 @@ index 08f91bd626..b00b39331a 100644
              WM_SETCURSOR => self.handle_set_cursor(handle, lparam),
              WM_SETTINGCHANGE => self.handle_system_settings_changed(handle, wparam, lparam),
              WM_INPUTLANGCHANGE => self.handle_input_language_changed(),
-@@ -159,6 +169,7 @@ impl WindowsWindowInner {
+@@ -159,6 +204,7 @@ impl WindowsWindowInner {
              WM_GETOBJECT => self.handle_wm_getobject(wparam, lparam),
              WM_GPUI_CURSOR_STYLE_CHANGED
              | WM_GPUI_FORCE_UPDATE_WINDOW
@@ -497,7 +545,7 @@ index 08f91bd626..b00b39331a 100644
              | WM_GPUI_GPU_DEVICE_LOST => self.handle_gpui_events(handle, msg, wparam, lparam),
              _ => None,
          };
-@@ -169,7 +180,7 @@ impl WindowsWindowInner {
+@@ -169,7 +215,7 @@ impl WindowsWindowInner {
          }
      }
  
@@ -506,7 +554,7 @@ index 08f91bd626..b00b39331a 100644
          let origin = logical_point(
              lparam.signed_loword() as f32,
              lparam.signed_hiword() as f32,
-@@ -315,6 +326,19 @@ impl WindowsWindowInner {
+@@ -315,6 +361,19 @@ impl WindowsWindowInner {
          self.draw_window(handle, false)
      }
  
@@ -526,8 +574,25 @@ index 08f91bd626..b00b39331a 100644
      fn handle_close_msg(&self) -> Option<isize> {
          let mut callback = self.state.callbacks.should_close.take()?;
          let should_close = callback();
-@@ -381,8 +405,28 @@ impl WindowsWindowInner {
-         if handled { Some(0) } else { Some(1) }
+@@ -351,9 +410,6 @@ impl WindowsWindowInner {
+         self.start_tracking_mouse(handle, TME_LEAVE);
+         self.restore_cursor_after_hide();
+ 
+-        let Some(mut func) = self.state.callbacks.input.take() else {
+-            return Some(1);
+-        };
+         let scale_factor = self.state.scale_factor.get();
+ 
+         let pressed_button = match MODIFIERKEYS_FLAGS(wparam.loword() as u32) {
+@@ -375,14 +431,28 @@ impl WindowsWindowInner {
+             pressed_button,
+             modifiers: current_modifiers(),
+         });
+-        let handled = !func(input).propagate;
+-        self.state.callbacks.input.set(Some(func));
+-
+-        if handled { Some(0) } else { Some(1) }
++        Handed::answer(self.hand_on(input))
      }
  
 -    fn handle_mouse_leave_msg(&self) -> Option<isize> {
@@ -536,43 +601,63 @@ index 08f91bd626..b00b39331a 100644
 +        // As on Linux, the pointer leaving for a page's window is a move to outside the window, so
 +        // nothing GPUI drew stays under it, and the exit its views listen for. A drag holding the
 +        // capture still hears where the pointer is.
-+        if unsafe { GetCapture() } != handle
-+            && let Some(mut func) = self.state.callbacks.input.take()
-+        {
++        if unsafe { GetCapture() } != handle {
 +            let position = point(px(-1.), px(-1.));
 +            let modifiers = current_modifiers();
-+            func(PlatformInput::MouseMove(MouseMoveEvent {
++            self.hand_on(PlatformInput::MouseMove(MouseMoveEvent {
 +                position,
 +                pressed_button: None,
 +                modifiers,
 +            }));
-+            func(PlatformInput::MouseExited(MouseExitEvent {
++            self.hand_on(PlatformInput::MouseExited(MouseExitEvent {
 +                position,
 +                pressed_button: None,
 +                modifiers,
 +            }));
-+            self.state.callbacks.input.set(Some(func));
 +        }
          // The next window's `WM_SETCURSOR` picks its own cursor, so we just clear
          // the flag for tight `is_cursor_visible()` semantics.
          self.state.cursor_visible.store(true, Ordering::Relaxed);
-@@ -413,7 +457,14 @@ impl WindowsWindowInner {
+@@ -401,10 +471,7 @@ impl WindowsWindowInner {
+         let input = handle_key_event(wparam, lparam, &self.state, |keystroke, _| {
+             PlatformInput::KeyUp(KeyUpEvent { keystroke })
+         })?;
+-        let mut func = self.state.callbacks.input.take()?;
+-
+-        func(input);
+-        self.state.callbacks.input.set(Some(func));
++        self.hand_on(input)?;
+ 
+         // Always return 0 to indicate that the message was handled, so we could properly handle `ModifiersChanged` event.
+         Some(0)
+@@ -413,7 +480,25 @@ impl WindowsWindowInner {
      // It's a known bug that you can't trigger `ctrl-shift-0`. See:
      // https://superuser.com/questions/1455762/ctrl-shift-number-key-combination-has-stopped-working-for-a-few-numbers
      pub(crate) fn handle_keydown_msg(&self, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
 -        let Some(input) = handle_key_event(
-+        let handled = self
-+            .dispatch_keydown(wparam, lparam)
-+            .is_some_and(|result| !result.propagate);
++        // A held key is translated as one GPUI didn't take, and its `WM_CHAR` waits behind it as
++        // text of its own, typed even if GPUI then takes the key. Only GPUI's own loop comes here,
++        // never an embedder's (`translate_accelerator`), so in ilo only the preview can, and only
++        // inside a loop a callback runs.
++        let handled = matches!(
++            self.dispatch_keydown(wparam, lparam, |_| {}),
++            Some(Handed::Now(result)) if !result.propagate
++        );
 +        if handled { Some(0) } else { Some(1) }
 +    }
 +
-+    fn dispatch_keydown(&self, wparam: WPARAM, lparam: LPARAM) -> Option<DispatchEventResult> {
++    /// Hands on a key down, telling `then` what became of it before what came behind it goes on.
++    fn dispatch_keydown(
++        &self,
++        wparam: WPARAM,
++        lparam: LPARAM,
++        then: impl FnOnce(&Handed),
++    ) -> Option<Handed> {
 +        let input = handle_key_event(
              wparam,
              lparam,
              &self.state,
-@@ -424,19 +475,56 @@ impl WindowsWindowInner {
+@@ -424,19 +509,57 @@ impl WindowsWindowInner {
                      prefer_character_input,
                  })
              },
@@ -586,15 +671,18 @@ index 08f91bd626..b00b39331a 100644
 -
 -        let handled = !func(input).propagate;
 -
+-        self.state.callbacks.input.set(Some(func));
 +        )?;
 +        let key_down = matches!(input, PlatformInput::KeyDown(_));
-+        let mut func = self.state.callbacks.input.take()?;
-+        let result = func(input);
-         self.state.callbacks.input.set(Some(func));
-+        if result.later && key_down {
-+            self.state.held_key_text.borrow_mut().push_back(None);
-+        }
-+        Some(result)
++        self.hand_on_then(input, |handed| {
++            if let Handed::Now(result) = handed
++                && result.later
++                && key_down
++            {
++                self.state.held_key_text.borrow_mut().push_back(None);
++            }
++            then(handed);
++        })
 +    }
  
 -        if handled { Some(0) } else { Some(1) }
@@ -610,37 +698,147 @@ index 08f91bd626..b00b39331a 100644
 +        if self.handle_input_mode_key(handle, wparam) {
 +            return Some(0);
 +        }
-+        let Some(result) = self
-+            .dispatch_keydown(wparam, lparam)
-+            .filter(|result| !result.propagate)
-+        else {
-+            return None;
-+        };
-+        let mut msg = MSG::default();
-+        let mut typed = Vec::new();
-+        unsafe {
-+            while PeekMessageW(&mut msg, Some(handle), WM_CHAR, WM_DEADCHAR, PM_REMOVE).as_bool() {
-+                if msg.message == WM_CHAR {
-+                    typed.push(msg.wParam.0 as u16);
++        // Taken before what came behind the key goes on, which may be keys that type too.
++        let handed = self.dispatch_keydown(wparam, lparam, |handed| match handed {
++            Handed::Now(result) if !result.propagate => {
++                let typed = take_typed(handle);
++                // A key that goes later types what its translation queued now, if nothing takes
++                // it then.
++                if result.later
++                    && let Some(text) = self.state.held_key_text.borrow_mut().back_mut()
++                {
++                    *text = typed;
 +                }
 +            }
-+            while PeekMessageW(&mut msg, Some(handle), WM_SYSCHAR, WM_SYSDEADCHAR, PM_REMOVE)
-+                .as_bool()
-+            {}
++            Handed::Now(_) => {}
++            Handed::Held => {
++                let typed = take_typed(handle);
++                if let Some(Held::Input(PlatformInput::KeyDown(_), text)) =
++                    self.state.held_input.borrow_mut().queue.back_mut()
++                {
++                    *text = typed;
++                }
++            }
++        });
++        match handed? {
++            Handed::Now(result) if result.propagate => None,
++            _ => Some(0),
 +        }
-+        // A key that goes later types what its translation queued now, if nothing takes it then.
-+        if result.later
-+            && let Some(text) = self.state.held_key_text.borrow_mut().back_mut()
-+        {
-+            *text = String::from_utf16(&typed)
-+                .ok()
-+                .filter(|text| !text.is_empty() && !text.chars().any(char::is_control));
-+        }
-+        Some(0)
      }
  
      fn handle_keyup_msg(&self, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
-@@ -710,6 +798,97 @@ impl WindowsWindowInner {
+@@ -445,20 +568,12 @@ impl WindowsWindowInner {
+         }) else {
+             return Some(1);
+         };
+-
+-        let Some(mut func) = self.state.callbacks.input.take() else {
+-            return Some(1);
+-        };
+-
+-        let handled = !func(input).propagate;
+-        self.state.callbacks.input.set(Some(func));
+-
+-        if handled { Some(0) } else { Some(1) }
++        Handed::answer(self.hand_on(input))
+     }
+ 
+     fn handle_char_msg(&self, wparam: WPARAM) -> Option<isize> {
+         let input = self.parse_char_message(wparam)?;
+-        self.with_input_handler(|input_handler| {
++        self.input_text(move |input_handler| {
+             input_handler.replace_text_in_range(None, &input);
+         });
+ 
+@@ -473,9 +588,6 @@ impl WindowsWindowInner {
+     ) -> Option<isize> {
+         unsafe { SetCapture(handle) };
+ 
+-        let Some(mut func) = self.state.callbacks.input.take() else {
+-            return Some(1);
+-        };
+         let x = lparam.signed_loword();
+         let y = lparam.signed_hiword();
+         let physical_point = point(DevicePixels(x as i32), DevicePixels(y as i32));
+@@ -489,10 +601,7 @@ impl WindowsWindowInner {
+             click_count,
+             first_mouse: false,
+         });
+-        let handled = !func(input).propagate;
+-        self.state.callbacks.input.set(Some(func));
+-
+-        if handled { Some(0) } else { Some(1) }
++        Handed::answer(self.hand_on(input))
+     }
+ 
+     fn handle_mouse_up_msg(
+@@ -503,9 +612,6 @@ impl WindowsWindowInner {
+     ) -> Option<isize> {
+         unsafe { ReleaseCapture().log_err() };
+ 
+-        let Some(mut func) = self.state.callbacks.input.take() else {
+-            return Some(1);
+-        };
+         let x = lparam.signed_loword() as f32;
+         let y = lparam.signed_hiword() as f32;
+         let click_count = self.state.click_state.current_count.get();
+@@ -517,10 +623,7 @@ impl WindowsWindowInner {
+             modifiers: current_modifiers(),
+             click_count,
+         });
+-        let handled = !func(input).propagate;
+-        self.state.callbacks.input.set(Some(func));
+-
+-        if handled { Some(0) } else { Some(1) }
++        Handed::answer(self.hand_on(input))
+     }
+ 
+     fn handle_xbutton_msg(
+@@ -546,9 +649,6 @@ impl WindowsWindowInner {
+     ) -> Option<isize> {
+         let modifiers = current_modifiers();
+ 
+-        let Some(mut func) = self.state.callbacks.input.take() else {
+-            return Some(1);
+-        };
+         let scale_factor = self.state.scale_factor.get();
+         let wheel_scroll_amount = match modifiers.shift {
+             true => self
+@@ -586,10 +686,7 @@ impl WindowsWindowInner {
+             touch_phase: TouchPhase::Moved,
+             source: ScrollSource::Pointer,
+         });
+-        let handled = !func(input).propagate;
+-        self.state.callbacks.input.set(Some(func));
+-
+-        if handled { Some(0) } else { Some(1) }
++        Handed::answer(self.hand_on(input))
+     }
+ 
+     fn handle_mouse_horizontal_wheel_msg(
+@@ -598,9 +695,6 @@ impl WindowsWindowInner {
+         wparam: WPARAM,
+         lparam: LPARAM,
+     ) -> Option<isize> {
+-        let Some(mut func) = self.state.callbacks.input.take() else {
+-            return Some(1);
+-        };
+         let scale_factor = self.state.scale_factor.get();
+         let wheel_scroll_chars = self
+             .system_settings()
+@@ -625,10 +719,7 @@ impl WindowsWindowInner {
+             touch_phase: TouchPhase::Moved,
+             source: ScrollSource::Pointer,
+         });
+-        let handled = !func(event).propagate;
+-        self.state.callbacks.input.set(Some(func));
+-
+-        if handled { Some(0) } else { Some(1) }
++        Handed::answer(self.hand_on(event))
+     }
+ 
+     fn retrieve_caret_position(&self) -> Option<POINT> {
+@@ -710,6 +801,97 @@ impl WindowsWindowInner {
          }
      }
  
@@ -686,7 +884,7 @@ index 08f91bd626..b00b39331a 100644
 +    /// An input method that ends its composition without a result, as one cancelled by Esc can,
 +    /// leaves nothing marked, as Chromium's fields do.
 +    fn handle_ime_end_composition(&self) -> Option<isize> {
-+        self.with_input_handler(|input_handler| {
++        self.input_text(|input_handler| {
 +            if input_handler.marked_text_range().is_some() {
 +                input_handler.replace_text_in_range(None, "");
 +            }
@@ -727,7 +925,7 @@ index 08f91bd626..b00b39331a 100644
 +                let _ = ImmNotifyIME(*ctx, NI_COMPOSITIONSTR, CPS_COMPLETE, 0);
 +            }
 +        }
-+        self.with_input_handler(|input_handler| {
++        self.input_text(|input_handler| {
 +            if input_handler.marked_text_range().is_some() {
 +                input_handler.unmark_text();
 +            }
@@ -738,7 +936,63 @@ index 08f91bd626..b00b39331a 100644
      fn handle_ime_composition(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
          let ctx = ImeContext::get(handle)?;
          self.handle_ime_composition_inner(*ctx, lparam)
-@@ -933,7 +1112,35 @@ impl WindowsWindowInner {
+@@ -720,16 +902,16 @@ impl WindowsWindowInner {
+         if lparam == 0 {
+             // Japanese IME may send this message with lparam = 0, which indicates that
+             // there is no composition string.
+-            self.with_input_handler(|input_handler| {
++            self.input_text(|input_handler| {
+                 input_handler.replace_text_in_range(None, "");
+             })?;
+             Some(0)
+         } else {
+             if lparam & GCS_RESULTSTR.0 > 0 {
+                 let comp_result = parse_ime_composition_string(ctx, GCS_RESULTSTR)?;
+-                self.with_input_handler(|input_handler| {
+-                    input_handler
+-                        .replace_text_in_range(None, &String::from_utf16_lossy(&comp_result));
++                let comp_result = String::from_utf16_lossy(&comp_result);
++                self.input_text(move |input_handler| {
++                    input_handler.replace_text_in_range(None, &comp_result);
+                 })?;
+             }
+             if lparam & GCS_COMPSTR.0 > 0 {
+@@ -744,12 +926,9 @@ impl WindowsWindowInner {
+                         };
+                         pos..pos
+                     });
+-                self.with_input_handler(|input_handler| {
+-                    input_handler.replace_and_mark_text_in_range(
+-                        None,
+-                        &String::from_utf16_lossy(&comp_string),
+-                        caret_pos,
+-                    );
++                let comp_string = String::from_utf16_lossy(&comp_string);
++                self.input_text(move |input_handler| {
++                    input_handler.replace_and_mark_text_in_range(None, &comp_string, caret_pos);
+                 })?;
+             }
+             if lparam & (GCS_RESULTSTR.0 | GCS_COMPSTR.0) > 0 {
+@@ -811,14 +990,10 @@ impl WindowsWindowInner {
+             this.state.last_reported_modifiers.set(None);
+             this.state.last_reported_capslock.set(None);
+ 
+-            if let Some(mut func) = this.state.callbacks.input.take() {
+-                let input = PlatformInput::ModifiersChanged(ModifiersChangedEvent {
+-                    modifiers: current_modifiers(),
+-                    capslock: current_capslock(),
+-                });
+-                func(input);
+-                this.state.callbacks.input.set(Some(func));
+-            }
++            this.hand_on(PlatformInput::ModifiersChanged(ModifiersChangedEvent {
++                modifiers: current_modifiers(),
++                capslock: current_capslock(),
++            }));
+         }
+ 
+         self.executor
+@@ -933,7 +1108,35 @@ impl WindowsWindowInner {
          Some(0)
      }
  
@@ -775,7 +1029,7 @@ index 08f91bd626..b00b39331a 100644
          let new_monitor = unsafe { MonitorFromWindow(handle, MONITOR_DEFAULTTONULL) };
          if new_monitor.is_invalid() {
              log::error!("No monitor detected!");
-@@ -944,12 +1151,21 @@ impl WindowsWindowInner {
+@@ -944,12 +1147,21 @@ impl WindowsWindowInner {
          Some(0)
      }
  
@@ -802,7 +1056,7 @@ index 08f91bd626..b00b39331a 100644
      }
  
      fn handle_hit_test_msg(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
-@@ -1021,6 +1237,12 @@ impl WindowsWindowInner {
+@@ -1021,10 +1233,15 @@ impl WindowsWindowInner {
      }
  
      fn handle_nc_mouse_move_msg(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
@@ -815,7 +1069,76 @@ index 08f91bd626..b00b39331a 100644
          self.start_tracking_mouse(handle, TME_LEAVE | TME_NONCLIENT);
          self.restore_cursor_after_hide();
  
-@@ -1306,6 +1528,7 @@ impl WindowsWindowInner {
+-        let mut func = self.state.callbacks.input.take()?;
+         let scale_factor = self.state.scale_factor.get();
+ 
+         let mut cursor_point = POINT {
+@@ -1037,10 +1254,10 @@ impl WindowsWindowInner {
+             pressed_button: None,
+             modifiers: current_modifiers(),
+         });
+-        let handled = !func(input).propagate;
+-        self.state.callbacks.input.set(Some(func));
+-
+-        if handled { Some(0) } else { None }
++        match self.hand_on(input)? {
++            Handed::Now(result) if result.propagate => None,
++            _ => Some(0),
++        }
+     }
+ 
+     fn handle_nc_mouse_down_msg(
+@@ -1050,7 +1267,7 @@ impl WindowsWindowInner {
+         wparam: WPARAM,
+         lparam: LPARAM,
+     ) -> Option<isize> {
+-        if let Some(mut func) = self.state.callbacks.input.take() {
++        {
+             let scale_factor = self.state.scale_factor.get();
+             let mut cursor_point = POINT {
+                 x: lparam.signed_loword().into(),
+@@ -1067,14 +1284,10 @@ impl WindowsWindowInner {
+                 click_count,
+                 first_mouse: false,
+             });
+-            let handled = !func(input).propagate;
+-            self.state.callbacks.input.set(Some(func));
+-
+-            if handled {
++            if Handed::answer(self.hand_on(input)) == Some(0) {
+                 return Some(0);
+             }
+-        } else {
+-        };
++        }
+ 
+         // Since these are handled in handle_nc_mouse_up_msg we must prevent the default window proc
+         if button == MouseButton::Left {
+@@ -1097,7 +1310,7 @@ impl WindowsWindowInner {
+         wparam: WPARAM,
+         lparam: LPARAM,
+     ) -> Option<isize> {
+-        if let Some(mut func) = self.state.callbacks.input.take() {
++        {
+             let scale_factor = self.state.scale_factor.get();
+ 
+             let mut cursor_point = POINT {
+@@ -1111,13 +1324,9 @@ impl WindowsWindowInner {
+                 modifiers: current_modifiers(),
+                 click_count: 1,
+             });
+-            let handled = !func(input).propagate;
+-            self.state.callbacks.input.set(Some(func));
+-
+-            if handled {
++            if Handed::answer(self.hand_on(input)) == Some(0) {
+                 return Some(0);
+             }
+-        } else {
+         }
+ 
+         let last_pressed = self.state.nc_button_pressed.take();
+@@ -1306,6 +1515,7 @@ impl WindowsWindowInner {
          match message {
              WM_GPUI_CURSOR_STYLE_CHANGED => self.handle_cursor_changed(lparam),
              WM_GPUI_FORCE_UPDATE_WINDOW => self.draw_window(handle, true),
@@ -823,7 +1146,7 @@ index 08f91bd626..b00b39331a 100644
              WM_GPUI_GPU_DEVICE_LOST => self.handle_device_lost(lparam),
              _ => unreachable!(),
          }
-@@ -1335,6 +1558,8 @@ impl WindowsWindowInner {
+@@ -1335,6 +1545,8 @@ impl WindowsWindowInner {
  
      fn handle_dm_pointer_hit_test(&self, wparam: WPARAM) -> Option<isize> {
          self.state.direct_manipulation.on_pointer_hit_test(wparam);
@@ -832,7 +1155,7 @@ index 08f91bd626..b00b39331a 100644
          None
      }
  
-@@ -1347,16 +1572,28 @@ impl WindowsWindowInner {
+@@ -1347,25 +1559,32 @@ impl WindowsWindowInner {
              }
              // Validate the region so a nested message pump doesn't keep
              // re-dispatching WM_PAINT for the still-invalid region in a busy
@@ -862,8 +1185,136 @@ index 08f91bd626..b00b39331a 100644
 +        }
  
          let events = self.state.direct_manipulation.drain_events();
-         if !events.is_empty() {
-@@ -1823,3 +2060,70 @@ fn notify_frame_changed(handle: HWND) {
+-        if !events.is_empty() {
+-            if let Some(mut func) = self.state.callbacks.input.take() {
+-                for event in events {
+-                    func(event);
+-                }
+-                self.state.callbacks.input.set(Some(func));
+-            }
++        for event in events {
++            self.hand_on(event);
+         }
+ 
+         let force_render = force_render || self.state.force_render_pending.take();
+@@ -1455,6 +1674,90 @@ impl WindowsWindowInner {
+         }
+     }
+ 
++    /// Hands `input` to the window's input callback, then what came while it was out, in order.
++    /// Input a message loop nested in the callback delivers waits if it's a press, a release or a
++    /// key, or comes behind one (`gpui::HeldInput::waits`); other input is dropped as before, and
++    /// so is input before the window has a callback. `None` where it's dropped.
++    pub(crate) fn hand_on(&self, input: PlatformInput) -> Option<Handed> {
++        self.hand_on_then(input, |_| {})
++    }
++
++    /// `hand_on`, telling `then` what became of `input` before what came behind it goes on.
++    fn hand_on_then(&self, input: PlatformInput, then: impl FnOnce(&Handed)) -> Option<Handed> {
++        {
++            let mut held = self.state.held_input.borrow_mut();
++            if held.busy {
++                if !gpui::HeldInput::waits(&input, !held.queue.is_empty()) {
++                    return None;
++                }
++                held.queue.push_back(Held::Input(input, None));
++                drop(held);
++                then(&Handed::Held);
++                return Some(Handed::Held);
++            }
++        }
++        let mut func = self.state.callbacks.input.take()?;
++        self.state.held_input.borrow_mut().busy = true;
++        let handed = Handed::Now(func(input));
++        then(&handed);
++        self.hand_on_held(&mut func);
++        self.state.callbacks.input.set(Some(func));
++        Some(handed)
++    }
++
++    /// Hands on what's held, in order. The window stays busy until the last, so nothing that comes
++    /// meanwhile overtakes what's held.
++    fn hand_on_held(&self, func: &mut Box<dyn FnMut(PlatformInput) -> DispatchEventResult>) {
++        loop {
++            let held = {
++                let mut held_input = self.state.held_input.borrow_mut();
++                let held = held_input.queue.pop_front();
++                held_input.busy = held.is_some();
++                held
++            };
++            match held {
++                None => return,
++                Some(Held::Input(input, text)) => {
++                    let key_down = matches!(input, PlatformInput::KeyDown(_));
++                    let result = func(input);
++                    if key_down && result.later {
++                        // GPUI holds the key in turn, and asks what it types as it hands it on.
++                        self.state.held_key_text.borrow_mut().push_back(text);
++                    } else if key_down
++                        && result.propagate
++                        && let Some(text) = text
++                    {
++                        self.with_input_handler(|handler| {
++                            handler.replace_text_in_range(None, &text)
++                        });
++                    }
++                }
++                Some(Held::Text(focus, change)) => {
++                    self.with_input_handler(|handler| {
++                        if handler.focus_id() == focus {
++                            change(handler);
++                        }
++                    });
++                }
++            }
++        }
++    }
++
++    /// `change` to the text field with the keys, now, or behind the input held, so text that
++    /// comes after a key never goes ahead of it. `None` without a field.
++    fn input_text(&self, change: impl FnOnce(&mut PlatformInputHandler) + 'static) -> Option<()> {
++        let mut held = self.state.held_input.borrow_mut();
++        if held.queue.is_empty() {
++            drop(held);
++            return self.with_input_handler(change);
++        }
++        let handler = self.state.input_handler.take()?;
++        let focus = handler.focus_id();
++        self.state.input_handler.set(Some(handler));
++        held.queue.push_back(Held::Text(focus, Box::new(change)));
++        Some(())
++    }
++
+     fn with_input_handler<F, R>(&self, f: F) -> Option<R>
+     where
+         F: FnOnce(&mut PlatformInputHandler) -> R,
+@@ -1478,6 +1781,25 @@ impl WindowsWindowInner {
+     }
+ }
+ 
++/// Takes the characters the translation of the key `handle` has now queued, as text to type, if
++/// any: an embedder's message loop translates a key before dispatching it.
++fn take_typed(handle: HWND) -> Option<String> {
++    let mut msg = MSG::default();
++    let mut typed = Vec::new();
++    unsafe {
++        while PeekMessageW(&mut msg, Some(handle), WM_CHAR, WM_DEADCHAR, PM_REMOVE).as_bool() {
++            if msg.message == WM_CHAR {
++                typed.push(msg.wParam.0 as u16);
++            }
++        }
++        while PeekMessageW(&mut msg, Some(handle), WM_SYSCHAR, WM_SYSDEADCHAR, PM_REMOVE).as_bool()
++        {}
++    }
++    String::from_utf16(&typed)
++        .ok()
++        .filter(|text| !text.is_empty() && !text.chars().any(char::is_control))
++}
++
+ struct ImeContext {
+     hwnd: HWND,
+     himc: HIMC,
+@@ -1823,3 +2145,67 @@ fn notify_frame_changed(handle: HWND) {
          .log_err();
      }
  }
@@ -921,18 +1372,15 @@ index 08f91bd626..b00b39331a 100644
 +    let Some(window) = window_from_hwnd(HWND(hwnd)) else {
 +        return false;
 +    };
-+    let Some(mut func) = window.state.callbacks.input.take() else {
-+        return false;
-+    };
-+    func(PlatformInput::Scroll(ScrollEvent {
-+        position: logical_point(x, y, window.state.scale_factor.get()),
-+        delta: ScrollDelta::Pixels(delta),
-+        modifiers: current_modifiers(),
-+        touch_phase,
-+        source: ScrollSource::Pointer,
-+    }));
-+    window.state.callbacks.input.set(Some(func));
-+    true
++    window
++        .hand_on(PlatformInput::Scroll(ScrollEvent {
++            position: logical_point(x, y, window.state.scale_factor.get()),
++            delta: ScrollDelta::Pixels(delta),
++            modifiers: current_modifiers(),
++            touch_phase,
++            source: ScrollSource::Pointer,
++        }))
++        .is_some()
 +}
 diff --git a/crates/gpui_windows/src/gpui_windows.rs b/crates/gpui_windows/src/gpui_windows.rs
 index e7a45a034d..559f8e96f4 100644
@@ -1069,7 +1517,7 @@ index 8164bc1564..ed7d01d6c4 100644
      #[test]
      fn test_keyboard_mapper() {
 diff --git a/crates/gpui_windows/src/platform.rs b/crates/gpui_windows/src/platform.rs
-index 095e009e23..f18d176e74 100644
+index 095e009e23..75a70ba04e 100644
 --- a/crates/gpui_windows/src/platform.rs
 +++ b/crates/gpui_windows/src/platform.rs
 @@ -20,7 +20,10 @@ use windows::{
@@ -1398,7 +1846,21 @@ index 095e009e23..f18d176e74 100644
          });
  
          Ok(Box::new(window))
-@@ -1231,6 +1400,26 @@ impl WindowsPlatformInner {
+@@ -1163,7 +1332,12 @@ impl WindowsPlatformInner {
+     }
+ 
+     fn translate_accelerator(&self, msg: &MSG) -> bool {
+-        if msg.message != WM_KEYDOWN && msg.message != WM_SYSKEYDOWN {
++        // Under an embedder a window takes its keys as its loop dispatches them, where they're
++        // already translated (`handle_embedded_keydown_msg`). Taken here too, as the foreground
++        // tasks' drain would, a key went to GPUI twice, and a held one was handed on twice.
++        if (msg.message != WM_KEYDOWN && msg.message != WM_SYSKEYDOWN)
++            || EMBEDDED.load(std::sync::atomic::Ordering::Relaxed)
++        {
+             return false;
+         }
+ 
+@@ -1231,6 +1405,26 @@ impl WindowsPlatformInner {
      }
  
      fn handle_display_change(&self, handle: HWND) -> Option<isize> {
@@ -1425,7 +1887,7 @@ index 095e009e23..f18d176e74 100644
          // Broadcasts can be delivered while the app is mid-update, e.g. inside a
          // COM call, so report the change from the message loop instead.
          unsafe {
-@@ -1253,21 +1442,11 @@ impl WindowsPlatformInner {
+@@ -1253,21 +1447,11 @@ impl WindowsPlatformInner {
          Some(0)
      }
  
@@ -1451,7 +1913,7 @@ index 095e009e23..f18d176e74 100644
          Some(0)
      }
  
-@@ -1409,7 +1588,7 @@ impl WindowsPlatformInner {
+@@ -1409,7 +1593,7 @@ impl WindowsPlatformInner {
  impl Drop for WindowsPlatform {
      fn drop(&mut self) {
          if let Some(stop) = self.vsync_stop.borrow_mut().take() {
@@ -1460,7 +1922,7 @@ index 095e009e23..f18d176e74 100644
          }
          unsafe {
              if let Some(notification) = self.suspend_resume_notification.borrow_mut().take() {
-@@ -1637,10 +1816,43 @@ fn file_save_dialog(
+@@ -1637,10 +1821,43 @@ fn file_save_dialog(
  
  fn load_icon() -> Result<HICON> {
      let module = unsafe { GetModuleHandleW(None).context("unable to get module handle")? };
@@ -1505,7 +1967,7 @@ index 095e009e23..f18d176e74 100644
              IMAGE_ICON,
              0,
              0,
-@@ -1763,6 +1975,8 @@ fn handle_gpu_device_lost(
+@@ -1763,6 +1980,8 @@ fn handle_gpu_device_lost(
              }
          }
      }
@@ -1514,7 +1976,7 @@ index 095e009e23..f18d176e74 100644
      Ok(())
  }
  
-@@ -1980,3 +2194,52 @@ mod tests {
+@@ -1980,3 +2199,52 @@ mod tests {
          );
      }
  }
@@ -1693,7 +2155,7 @@ index 5121c41b61..8f35f1ab32 100644
      fn successful_compositor_wait_reports_native_callback() {
          let provider = VSyncProvider {
 diff --git a/crates/gpui_windows/src/window.rs b/crates/gpui_windows/src/window.rs
-index c467101fc8..19559292df 100644
+index c467101fc8..e04cf46754 100644
 --- a/crates/gpui_windows/src/window.rs
 +++ b/crates/gpui_windows/src/window.rs
 @@ -2,6 +2,7 @@
@@ -1723,7 +2185,7 @@ index c467101fc8..19559292df 100644
  pub(crate) struct WindowsWindow(pub Rc<WindowsWindowInner>);
  
  impl std::ops::Deref for WindowsWindow {
-@@ -55,9 +68,13 @@ pub struct WindowsWindowState {
+@@ -55,9 +68,15 @@ pub struct WindowsWindowState {
  
      pub callbacks: Callbacks,
      pub frame_signal: Arc<PlatformFrameSignal>,
@@ -1734,10 +2196,12 @@ index c467101fc8..19559292df 100644
 +    /// What each key down GPUI holds (`DispatchEventResult::later`) types if nothing takes it, in
 +    /// order: the characters its translation queued, which it can't make again later (#2672).
 +    pub held_key_text: RefCell<VecDeque<Option<String>>>,
++    /// What comes while the window's input callback is out (`hand_on` in events.rs).
++    pub(crate) held_input: RefCell<InputHeld>,
      pub last_reported_modifiers: Cell<Option<Modifiers>>,
      pub last_reported_capslock: Cell<Option<Capslock>>,
      pub hovered: Cell<bool>,
-@@ -170,9 +187,11 @@ impl WindowsWindowState {
+@@ -170,9 +189,12 @@ impl WindowsWindowState {
              min_size,
              callbacks,
              frame_signal: Arc::new(PlatformFrameSignal::new()),
@@ -1746,10 +2210,11 @@ index c467101fc8..19559292df 100644
              ime_enabled: Cell::new(true),
              pending_surrogate: Cell::new(pending_surrogate),
 +            held_key_text: RefCell::default(),
++            held_input: RefCell::default(),
              last_reported_modifiers: Cell::new(last_reported_modifiers),
              last_reported_capslock: Cell::new(last_reported_capslock),
              hovered: Cell::new(hovered),
-@@ -489,7 +508,18 @@ impl WindowsWindow {
+@@ -489,7 +511,18 @@ impl WindowsWindow {
                  .unwrap_or(""),
          );
  
@@ -1769,7 +2234,7 @@ index c467101fc8..19559292df 100644
              (WS_EX_TOOLWINDOW | WS_EX_TOPMOST, WINDOW_STYLE(0x0))
          } else {
              let mut dwstyle = WS_SYSMENU;
-@@ -510,6 +540,11 @@ impl WindowsWindow {
+@@ -510,6 +543,11 @@ impl WindowsWindow {
  
              (dwexstyle, dwstyle)
          };
@@ -1781,7 +2246,7 @@ index c467101fc8..19559292df 100644
          if !disable_direct_composition {
              dwexstyle |= WS_EX_NOREDIRECTIONBITMAP;
          }
-@@ -528,9 +563,9 @@ impl WindowsWindow {
+@@ -528,9 +566,9 @@ impl WindowsWindow {
              handle,
              hide_title_bar,
              display,
@@ -1794,7 +2259,7 @@ index c467101fc8..19559292df 100644
              min_size: params.window_min_size,
              executor,
              current_cursor,
-@@ -546,17 +581,29 @@ impl WindowsWindow {
+@@ -546,17 +584,29 @@ impl WindowsWindow {
              draw_coordinator,
              parent_hwnd,
          };
@@ -1829,7 +2294,7 @@ index c467101fc8..19559292df 100644
                  None,
                  Some(hinstance.into()),
                  Some(&context as *const _ as *const _),
-@@ -569,6 +616,14 @@ impl WindowsWindow {
+@@ -569,6 +619,14 @@ impl WindowsWindow {
          let hwnd = creation_result?;
          let this = this.unwrap();
  
@@ -1844,7 +2309,7 @@ index c467101fc8..19559292df 100644
          register_drag_drop(&this)?;
          set_non_rude_hwnd(hwnd, true);
          configure_dwm_dark_mode(hwnd, appearance);
-@@ -582,6 +637,11 @@ impl WindowsWindow {
+@@ -582,6 +640,11 @@ impl WindowsWindow {
              }
              unsafe { SetWindowPlacement(hwnd, &placement)? };
          } else {
@@ -1856,7 +2321,7 @@ index c467101fc8..19559292df 100644
              this.state.initial_placement.set(Some(WindowOpenStatus {
                  placement,
                  state: WindowOpenState::Windowed,
-@@ -623,7 +683,8 @@ impl Drop for WindowsWindow {
+@@ -623,7 +686,8 @@ impl Drop for WindowsWindow {
                  this.dialog_owner.when_idle().await;
                  let handle = this.hwnd;
                  unsafe {
@@ -1866,7 +2331,7 @@ index c467101fc8..19559292df 100644
                      DestroyWindow(handle).log_err();
                  }
              })
-@@ -718,6 +779,10 @@ impl PlatformWindow for WindowsWindow {
+@@ -718,6 +782,10 @@ impl PlatformWindow for WindowsWindow {
          self.state.input_handler.take()
      }
  
@@ -1877,7 +2342,7 @@ index c467101fc8..19559292df 100644
      fn prompt(
          &self,
          level: PromptLevel,
-@@ -924,7 +989,12 @@ impl PlatformWindow for WindowsWindow {
+@@ -924,7 +992,12 @@ impl PlatformWindow for WindowsWindow {
                  set_window_composition_attribute(hwnd, None, 0);
              }
              WindowBackgroundAppearance::Transparent => {
@@ -1891,7 +2356,7 @@ index c467101fc8..19559292df 100644
              }
              WindowBackgroundAppearance::Blurred => {
                  set_window_composition_attribute(hwnd, Some((0, 0, 0, 0)), 4);
-@@ -968,7 +1038,14 @@ impl PlatformWindow for WindowsWindow {
+@@ -968,7 +1041,14 @@ impl PlatformWindow for WindowsWindow {
          self.state.is_fullscreen()
      }
  
@@ -1907,7 +2372,7 @@ index c467101fc8..19559292df 100644
          self.state.callbacks.request_frame.set(Some(callback));
      }
  
-@@ -1041,7 +1118,6 @@ impl PlatformWindow for WindowsWindow {
+@@ -1041,7 +1121,6 @@ impl PlatformWindow for WindowsWindow {
              .log_err();
      }
  
@@ -1915,7 +2380,7 @@ index c467101fc8..19559292df 100644
      fn render_to_image(&self, scene: &Scene) -> anyhow::Result<image::RgbaImage> {
          self.state
              .renderer
-@@ -1079,7 +1155,12 @@ impl PlatformWindow for WindowsWindow {
+@@ -1079,7 +1158,12 @@ impl PlatformWindow for WindowsWindow {
  
      fn a11y_init(&self, callbacks: gpui::A11yCallbacks) {
          let action_handler = A11yActionHandler(callbacks.action);
@@ -1929,3 +2394,15 @@ index c467101fc8..19559292df 100644
  
          let adapter = accesskit_windows::Adapter::new(
              accesskit_windows::HWND(self.0.hwnd.0),
+@@ -1146,10 +1230,7 @@ struct WindowsDragDropHandler(pub Rc<WindowsWindowInner>);
+ 
+ impl WindowsDragDropHandler {
+     fn handle_drag_drop(&self, input: PlatformInput) {
+-        if let Some(mut func) = self.0.state.callbacks.input.take() {
+-            func(input);
+-            self.0.state.callbacks.input.set(Some(func));
+-        }
++        self.0.hand_on(input);
+     }
+ }
+ 

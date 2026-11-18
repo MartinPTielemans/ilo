@@ -28,7 +28,8 @@
 # the UI from both sides, while ⌘T no longer runs it, and its ↺ gives ⌘T back. About ilo shows
 # Settings' About tab, with Settings key and with About already showing. The Shortcuts tab lists
 # the sidebar's commands, and Focus Sidebar given ⌃⌘K there takes the keyboard from the page, as
-# its own F6 does once Restore Defaults gives it back. Go to Space 1 given ⌃⌘1 there shows the
+# its own F6 does once Restore Defaults gives it back. Tab past the page's last control rings its
+# tab's row, and Tab or ⇧Tab from the ring gives the page its first or last control. Go to Space 1 given ⌃⌘1 there shows the
 # first Space, and ⌃1 no longer does. Include Favorites in ⌘1–⌘8 turned off there has ⌘1 show the
 # first tab that isn't a favorite, and Last Tab Goes to the Ninth Tab has ⌘9 count as ⌘1 does,
 # until Restore Defaults, after which ⌘9 shows the last tab. A shortcut the page keeps, ⌘F here,
@@ -45,6 +46,7 @@ alone='if (["Shift", "Control", "Alt", "Meta"].includes(e.key)) document.title =
 [ "$(uname)" = Darwin ] || alone=
 page='data:text/html,<title>loading</title>
 <textarea id=text autofocus style="font:24px system-ui;width:95%25;height:90vh"></textarea>
+<button onfocus="document.title = %27page focus end%27">End</button>
 <script>
 requestAnimationFrame(() => setTimeout(() => document.title = "ready"));
 text.oninput = () => document.title = "value " + text.value;
@@ -911,6 +913,42 @@ expect '^browser: sidebar keyed ' "F6 with the page focused didn't give the side
 send key escape
 expect '^browser: sidebar keys left by escape$' "escape didn't take F6's sidebar keyboard away"
 in_browser RenderWidgetHostViewCocoa "after escape left the sidebar F6 gave the keyboard"
+
+# Tab past the page's last control rings the shown tab's row, and Tab from the ring gives the
+# page its first control, ⇧Tab before the first and back its last, so the keyboard always has a
+# place (#3220). Each Tab comes as soon as the last one's line, with no wait: no copy of the page's
+# Tab reaches the ring, under Wayland either, as the ring staying on the row until the next Tab
+# shows, so the ring drops none.
+# The ring is on the row the leave rang, from the leave's step $1 until the Tab from it.
+ring_stayed() {
+  sed -n "/^browser: drive $1: /,/^browser: drive $step: /p" "$log" |
+    grep -c '^browser: \(sidebar keyed\|strip keyed\|ring gave the page\) ' | grep -qx 1 ||
+    fail "the ring moved on from the tab's row by itself after $2"
+}
+send click $page_point
+send key tab
+expect '^browser: title [0-9]* page focus end$' "Tab from the field didn't reach the page's button"
+send key tab
+expect '^browser: sidebar keyed ' "Tab past the page's last control didn't ring the tab's row"
+row=$(since | sed -n 's/^browser: sidebar keyed \([0-9]*\)$/\1/p' | head -1)
+expect "^browser: sidebar ring $row at " "Tab past the page's last control didn't draw the row's ring"
+left=$step
+../tools/window-screenshot.sh "$pid" "$out/page-end-row.png" || fail "no window to capture"
+send key tab
+expect '^browser: ring gave the page its first control$' "Tab from the ring didn't go into the page"
+ring_stayed $left "Tab past the page's last control"
+send type y
+expect '^browser: title [0-9]* value .*y$' "Tab from the ring didn't give the page's field the keyboard"
+send key tab shift
+expect '^browser: sidebar keyed ' "⇧Tab before the page's first control didn't ring the tab's row"
+row=$(since | sed -n 's/^browser: sidebar keyed \([0-9]*\)$/\1/p' | head -1)
+expect "^browser: sidebar ring $row at " "⇧Tab before the page's first control didn't draw the row's ring"
+left=$step
+../tools/window-screenshot.sh "$pid" "$out/page-start-row.png" || fail "no window to capture"
+send key tab shift
+expect '^browser: ring gave the page its last control$' "⇧Tab from the ring didn't go into the page"
+ring_stayed $left "⇧Tab before the page's first control"
+expect '^browser: title [0-9]* page focus end$' "⇧Tab from the ring didn't give the page's button the keyboard"
 
 # A shortcut the page keeps, as this one keeps ⌘F, runs ilo's command on a second press at once,
 # as Arc's does. Prefer ilo, from a right-click on Find's keys in Settings › Shortcuts, has ⌘F

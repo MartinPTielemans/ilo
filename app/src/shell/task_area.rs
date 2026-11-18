@@ -38,7 +38,9 @@ use crate::tokens::shell::permission::LINE;
 use crate::tokens::shell::task::STATUS;
 use crate::tokens::shell::task_area::{BACK, BACK_GLYPH, GAP, PAGE_ROOM, PRIMARY_KEY, STRIP};
 use crate::tokens::text;
-use crate::tokens::toast::{CHIP_FILL, CHIP_GAP, CHIP_GLYPH, CHIP_HEIGHT, CHIP_RADIUS};
+use crate::tokens::toast::{CHIP_FILL, CHIP_GAP, CHIP_GLYPH, CHIP_HEIGHT, CHIP_RADIUS, CHIP_X};
+
+use super::page_ends::StripStop;
 
 /// What the page area shows of a task, at most one per window.
 pub(super) struct TaskArea {
@@ -911,6 +913,16 @@ impl Shell {
             .into_any_element()
     }
 
+    /// The dot of the task whose page the strip is under.
+    pub(super) fn task_strip_dot(&self) -> Option<Dot> {
+        self.task_card_shown().map(|card| card.dot)
+    }
+
+    /// The agent of the task whose page the strip is under.
+    pub(super) fn task_strip_agent(&self) -> Option<SharedString> {
+        self.task_card_shown().map(|card| card.agent.clone())
+    }
+
     /// The card of the task the page area shows.
     fn task_card_shown(&self) -> Option<&Card> {
         let agent = self.talk_in(self.task_open()?)?;
@@ -1013,31 +1025,47 @@ impl Shell {
         let dot = card.map(|card| card.dot);
         let open = self.task_strip_open(tab);
         let held = matches!(bar, Some(Bar::Held { .. }));
-        let chips: Vec<_> =
-            (strip_chips(held, dot, open.is_some()).into_iter())
-                .map(|(chip, look)| match chip {
-                    StripChip::HandBack => {
-                        strip_chip(palette, "task-hand-back", "Hand Back", take_over(cx), look)
-                            .on_click(cx.listener(|shell, _, _, cx| shell.agent_bar_primary(cx)))
-                    }
-                    StripChip::Stop => {
-                        strip_chip(palette, "task-stop", "Stop", Some(stop_keys()), look)
-                            .on_click(act(agent.clone(), TaskAction::Stop, cx))
-                    }
-                    StripChip::Open => {
-                        let words = open.clone().unwrap_or_default();
-                        let agent = agent.clone();
-                        strip_chip(palette, "task-open", words, None, look)
-                            .child(self.strip_open_listener())
-                            .on_click(cx.listener(move |shell, _, _, cx| {
-                                cx.stop_propagation();
-                                let from = shell.foot.strip_open.get();
-                                log!("browser: command open-task-pages via strip");
-                                shell.open_task_pages(agent.clone(), Some(tab), from, cx);
-                            }))
-                    }
-                })
-                .collect();
+        let keyed = self.keyed_strip.is_some();
+        let chips: Vec<_> = (strip_chips(held, dot, open.is_some(), keyed).into_iter())
+            .map(|(chip, look)| match chip {
+                // A click while it shows does what its key does, as Take Over is on screen.
+                StripChip::TakeOver => self.strip_stop(
+                    strip_chip(palette, "task-take-over", "Take Over", take_over(cx), look)
+                        .on_click(cx.listener(|shell, _, _, cx| shell.agent_bar_primary(cx))),
+                    StripStop::TakeOver,
+                    "Take Over".into(),
+                    CHIP_RADIUS,
+                ),
+                StripChip::HandBack => self.strip_stop(
+                    strip_chip(palette, "task-hand-back", "Hand Back", take_over(cx), look)
+                        .on_click(cx.listener(|shell, _, _, cx| shell.agent_bar_primary(cx))),
+                    StripStop::HandBack,
+                    "Hand Back".into(),
+                    CHIP_RADIUS,
+                ),
+                StripChip::Stop => self.strip_stop(
+                    strip_chip(palette, "task-stop", "Stop", Some(stop_keys()), look)
+                        .on_click(act(agent.clone(), TaskAction::Stop, cx)),
+                    StripStop::Stop,
+                    "Stop".into(),
+                    CHIP_RADIUS,
+                ),
+                StripChip::Open => {
+                    let words = open.clone().unwrap_or_default();
+                    let label = SharedString::from(words.clone());
+                    let agent = agent.clone();
+                    let chip = strip_chip(palette, "task-open", words, None, look)
+                        .child(self.strip_open_listener())
+                        .on_click(cx.listener(move |shell, _, _, cx| {
+                            cx.stop_propagation();
+                            let from = shell.foot.strip_open.get();
+                            log!("browser: command open-task-pages via strip");
+                            shell.open_task_pages(agent.clone(), Some(tab), from, cx);
+                        }));
+                    self.strip_stop(chip, StripStop::Open, label, CHIP_RADIUS)
+                }
+            })
+            .collect();
         // Only a strip whose agent needs the user is heavier, as its card is.
         let needs_you = dot == Some(Dot::Waiting);
         let glyph = card.map(|card| self.task_glyph(&card.agent, card.dot));
@@ -1061,6 +1089,13 @@ impl Shell {
                     .with_transformation(Transformation::rotate(Radians(FRAC_PI_2)))
                     .text_color(palette.text(SECONDARY)),
             );
+        let back = self.strip_stop(
+            back,
+            StripStop::Back,
+            "Back to the conversation".into(),
+            NAV_RADIUS,
+        );
+        let page_name = self.strip_page_name(tab, &title, &detail);
         let detail = (!detail.is_empty()).then(|| format!(" · {detail}"));
         div()
             .id("task-strip")
@@ -1078,31 +1113,54 @@ impl Shell {
             .line_height(px(LINE))
             .child(card_listener("task strip", &self.task_strip_drawn, tab))
             .child(back)
-            .children(glyph)
             .child(
-                div()
-                    .flex_1()
-                    .min_w(px(0.))
-                    .flex()
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_color(palette.text(TITLE))
-                            .font_weight(match needs_you {
-                                true => FontWeight::SEMIBOLD,
-                                false => FontWeight::MEDIUM,
-                            })
-                            .child(title),
-                    )
-                    .children(detail.map(|detail| {
-                        div()
-                            .min_w(px(0.))
-                            .truncate()
-                            .text_color(palette.text(if needs_you { TITLE } else { STATUS }))
-                            .child(detail)
-                    })),
+                // The page's stop holds the agent's dot and the words, with a chip's room round
+                // them, given back on its left so the dot stays where it is beside Back.
+                self.strip_stop(
+                    div()
+                        .id("task-words")
+                        .flex_1()
+                        .min_w(px(0.))
+                        .h(px(CHIP_HEIGHT))
+                        .px(px(CHIP_X))
+                        .ml(px(-CHIP_X))
+                        .flex()
+                        .items_center()
+                        .gap(px(GAP))
+                        .children(glyph)
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .flex()
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .child(
+                                    div()
+                                        .flex_none()
+                                        .text_color(palette.text(TITLE))
+                                        .font_weight(match needs_you {
+                                            true => FontWeight::SEMIBOLD,
+                                            false => FontWeight::MEDIUM,
+                                        })
+                                        .child(title),
+                                )
+                                .children(detail.map(|detail| {
+                                    div()
+                                        .min_w(px(0.))
+                                        .truncate()
+                                        .text_color(palette.text(if needs_you {
+                                            TITLE
+                                        } else {
+                                            STATUS
+                                        }))
+                                        .child(detail)
+                                })),
+                        ),
+                    StripStop::Page,
+                    page_name,
+                    CHIP_RADIUS,
+                ),
             )
             .child(
                 div()
@@ -1119,6 +1177,7 @@ impl Shell {
 /// A chip of the strip under a page watched.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum StripChip {
+    TakeOver,
     HandBack,
     Stop,
     Open,
@@ -1126,14 +1185,27 @@ pub(super) enum StripChip {
 
 /// The strip's chips, in order, each with its look: Hand Back while the user holds the page,
 /// `held`; Stop while its task works or waits; Open once it's done and left the user the page, if
-/// it did. A press in the page takes it over, and ⌘↩ still does, so there's no Take Over (#1080).
+/// it did. A press in the page takes it over, and ⌘↩ still does, so Take Over shows only while the
+/// ring is on one of the task's stops, `keyed`: its card, back, the page, Take Over or Stop, so it
+/// is there before the ring reaches it. It's the ring's own stop, as a key from the ring never
+/// takes the page over (#3220, #1080). It comes before Stop, which stays where it is, the words
+/// giving it room.
 /// Quiet until the agent needs the user: only while its card waits on them is Hand Back, the
 /// answer it waits for, the one primary.
-pub(super) fn strip_chips(held: bool, dot: Option<Dot>, open: bool) -> Vec<(StripChip, Look)> {
+pub(super) fn strip_chips(
+    held: bool,
+    dot: Option<Dot>,
+    open: bool,
+    keyed: bool,
+) -> Vec<(StripChip, Look)> {
     match (held, dot) {
         (true, Some(Dot::Waiting)) => vec![(StripChip::HandBack, Look::Primary)],
         (true, _) => vec![(StripChip::HandBack, Look::Quiet)],
-        (false, Some(Dot::Working | Dot::Waiting)) => vec![(StripChip::Stop, Look::Quiet)],
+        (false, Some(Dot::Working | Dot::Waiting)) => keyed
+            .then_some((StripChip::TakeOver, Look::Quiet))
+            .into_iter()
+            .chain([(StripChip::Stop, Look::Quiet)])
+            .collect(),
         (false, Some(Dot::Done)) if open => vec![(StripChip::Open, Look::Quiet)],
         _ => Vec::new(),
     }

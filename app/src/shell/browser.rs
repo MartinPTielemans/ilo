@@ -624,6 +624,10 @@ pub trait Browser {
     /// Gives the page shown the keyboard, from the UI if it has it, now or once a page still
     /// loading has a view, unless the UI takes it back first.
     fn focus_page(&self, cx: &mut App);
+    /// Gives the page shown the keyboard at its first control, or its last if `last`, as Tab or
+    /// Shift+Tab into it does (#3220). The core does nothing for an agent's tab the user doesn't
+    /// hold.
+    fn focus_page_end(&self, last: bool, cx: &mut App);
     /// Lays the page out at `frame` in the window, with corners of `radius`
     /// (`Shell::page_frame`). A split view's pages share it.
     fn lay_out_page(&self, frame: Bounds<Pixels>, radius: f32, cx: &mut App);
