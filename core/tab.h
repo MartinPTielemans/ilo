@@ -342,6 +342,7 @@ class Tab : public content::WebContentsObserver,
   bool SystemPageKey(const input::NativeWebKeyboardEvent& event,
                      bool before_page,
                      bool editing) override;
+  bool SystemPageFocusLeft(bool reverse) override;
   void SystemPageClicked() override;
   void SystemPageOutputRestricted() override;
 
