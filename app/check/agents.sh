@@ -46,9 +46,13 @@ with open(sys.argv[1], "w", encoding="utf-8") as file:
 PY
 agents_file="$(dirname "$saved")/Agents"
 printf '{"on":false,"agents":[],"grants":{"claude-code":{"check-allowed.example":"always"}}}' > "$agents_file"
-# The user's tab, as the first run opens none.
+# The user's tab, as the first run opens none, from a server of the run's own, which a runner
+# always reaches (#3144).
+serve_tls wikipedia '<meta charset=utf-8><link rel=icon href="data:,"><title>Arc (web browser)</title>
+<h1>Arc (web browser)</h1>' en.wikipedia.org
 BROWSER_DRIVE=1 BROWSER_URL='https://en.wikipedia.org/wiki/Arc_(web_browser)' \
-  "$browser" < "$out/drive" > "$log" 2>&1 &
+  "$browser" --host-resolver-rules="$tls_rules" --ignore-certificate-errors-spki-list="$tls_key" \
+  < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
@@ -154,6 +158,11 @@ send menu 'View Agents…'
 expect '^browser: library hidden$' "View Agents… didn't close the Library"
 rm -f "$history_file" "$agents_file"
 quit
+kill "$tls" 2> /dev/null || true
+tls=
+loaded=$(grep '^browser: loaded' "$log" | cut -d' ' -f4- | head -1)
+grep -qxF "wikipedia: GET $loaded" "$out/wikipedia-tls.log" ||
+  fail "the user's tab, $loaded, didn't come from the run's server: $(grep -v '^wikipedia: ' "$out/wikipedia-tls.log" | tail -3)"
 
 # Launched again, the user's Space comes back alone: quit deletes the agent's Space, as it does a
 # task's, or the launch does, as for one a crash left.
@@ -622,7 +631,7 @@ PY
   tasks_found="; on Windows the task agents find claude.exe and codex.cmd, then claude.cmd and codex.exe, off the PATH, each signed in, Codex's models listed, a task from ⌘T starts on each and its CLI gets its instructions whole and the first message, and no console window shows"
 fi
 if [ "$driven" = 1 ]; then
-  echo "ok: $made, the switcher and ⌃1 to ⌃9, as a task's does, refuses an agent the user's tab, ad blocking, passwords, DevTools, a profile's settings and any action agents lack, with why in the activity log, and comes back as no Space of the user's$session_page$connected$tasks_found"
+  echo "ok: $made, the switcher and ⌃1 to ⌃9, as a task's does, refuses an agent the user's tab, ad blocking, passwords, DevTools, a profile's settings and any action agents lack, with why in the activity log, and comes back as no Space of the user's$session_page$connected$tasks_found. The user's tab came from the run's own server."
 else
-  echo "ok: $made and the switcher, as a task's does, refuses an agent the user's tab and what agents lack, with why in the activity log, and comes back as no Space of the user's$connected$tasks_found. skip: ⌃2 and ⌃3, and a past task's page. Browser wasn't the active app, so the page ignored the click."
+  echo "ok: $made and the switcher, as a task's does, refuses an agent the user's tab and what agents lack, with why in the activity log, and comes back as no Space of the user's$connected$tasks_found. The user's tab came from the run's own server. skip: ⌃2 and ⌃3, and a past task's page. Browser wasn't the active app, so the page ignored the click."
 fi

@@ -78,10 +78,10 @@ log="$out/tabs.log"
 trace="$PWD/$out/trace.json"
 step=0
 rm -f "$saved" "$launch_frame"
-# The example.com and example.org pages the steps open come from a server of the run's own, which a
-# runner always reaches (#3144).
+# The example.com and example.org pages the steps open, and DuckDuckGo's for the searches, come from
+# a server of the run's own, which a runner always reaches (#3144).
 serve_tls example '<meta charset=utf-8><link rel=icon href="data:,"><title>Example Domain</title>
-<h1>Example Domain</h1>' example.com '*.example.com' example.org
+<h1>Example Domain</h1>' example.com '*.example.com' example.org duckduckgo.com
 # shellcheck disable=SC2086 # the record mode, or nothing
 BROWSER_DRIVE=1 BROWSER_URL="$page" "$browser" --enable-tracing="$trace_categories" $trace_mode \
   --enable-tracing-format=json --trace-startup-file="$trace" \
@@ -1758,14 +1758,17 @@ exec 3>&-
 quit 30
 kill "$tls" 2> /dev/null || true
 tls=
-# Each example.com and example.org page the launch loaded came from the run's server.
-examples=$(sed -n 's|^browser: loaded [0-9]* \(https\{0,1\}://[a-z.]*example\.[a-z]*/.*\)$|\1|p' "$log" | sort -u)
+# Each example.com, example.org and DuckDuckGo page the launch loaded came from the run's server.
+examples=$(grep -E '^browser: loaded [0-9]+ https?://([a-z.]*example\.[a-z]+|duckduckgo\.com)/' "$log" |
+  cut -d' ' -f4- | sort -u)
 [ -n "$examples" ] || fail "the launch loaded no example.com or example.org page"
-for url in $examples; do
+while read -r url; do
   grep -qxF "example: GET $url" "$out/example-tls.log" ||
     fail "$url loaded, but not from the run's server: $(grep -v '^example: ' "$out/example-tls.log" | tail -3)"
-done
-echo "ok: the example.com and example.org pages the launch loaded came from the run's own server: $(echo $examples)"
+done << EOF
+$examples
+EOF
+echo "ok: the example.com, example.org and DuckDuckGo pages the launch loaded came from the run's own server: $(echo "$examples" | tr '\n' ' ')"
 
 app_ms=$(sed -n 's/^browser: selected [0-9]* in \([0-9.]*\) ms$/\1/p' "$log" | summary)
 [ -s "$trace" ] || fail "the app didn't write its trace"
@@ -1879,7 +1882,8 @@ settings_general() {
 # A search's page has to commit for history to have it, and DuckDuckGo may never answer a runner
 # (#1875), so the steps that need one search the run's own server, in a launch of its own with a new
 # profile. The search for dogs above goes to DuckDuckGo, as the navigation's own line says
-# (searching in lib.sh), which needs no answer. Settings' Search engine lists the engines Chrome
+# (searching in lib.sh), which needs no answer. This launch's DuckDuckGo is the run's own server too,
+# with the same page as the run's search. Settings' Search engine lists the engines Chrome
 # offers and the one it uses, so a site search the user adds is set as Chrome's users set it: Add on
 # Chromium's search engines page, from the bar's Site Search Settings, and Make default in its
 # menu. The page's controls are Chromium's WebUI, which takes keys through its shadow trees, so
@@ -1895,7 +1899,9 @@ printf '%s' '<title>loading</title>
 const query = new URLSearchParams(location.search).get("q");
 requestAnimationFrame(() => setTimeout(() => document.title = "searched " + query));
 </script>' > "$out/site/search.html"
-start_with_cdp "${site}search.html?q=nothing" "$(app_path "$PWD/$out/search-profile")" ""
+serve_tls duckduckgo "$(cat "$out/site/search.html")" duckduckgo.com
+start_with_cdp "${site}search.html?q=nothing" "$(app_path "$PWD/$out/search-profile")" "" \
+  --host-resolver-rules="$tls_rules" --ignore-certificate-errors-spki-list="$tls_key"
 await_load
 await '^browser: title [0-9]* searched nothing$' || fail "the run's search page didn't draw"
 send click $page_point
@@ -2019,6 +2025,17 @@ fi
 exec 5>&-
 wait "$helper" 2>/dev/null || true
 helper=
+kill "$tls" 2> /dev/null || true
+tls=
+# What DuckDuckGo was asked in this launch, the run's server answered.
+searches=$(grep -E '^browser: loaded [0-9]+ https?://duckduckgo\.com/' "$log" | cut -d' ' -f4- | sort -u || true)
+while read -r url; do
+  [ -n "$url" ] || continue
+  grep -qxF "duckduckgo: GET $url" "$out/duckduckgo-tls.log" ||
+    fail "$url loaded, but not from the run's server: $(grep -v '^duckduckgo: ' "$out/duckduckgo-tls.log" | tail -3)"
+done << EOF
+$searches
+EOF
 # Google's search, which the core adds once to each profile as a choice only (decision 2,
 # core/search_default.h), on a new profile of its own in three launches. Its first launch's search
 # engine step opens on DuckDuckGo, the default, so Return there sets nothing. Settings lists Google

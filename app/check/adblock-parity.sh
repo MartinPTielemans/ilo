@@ -219,10 +219,20 @@ look_hidden() {
   [ ! -s "$before_hides/$name" ] || before=" $(app_path "$before_hides/$name")"
   asked=$(grep -c '^cdp: hidden ' "$cdp_log" || true)
   echo "hidden $(app_path "$PWD/$hides/$name")$before" >&5
-  # Telling the blocker's hiding from the page's asks DevTools about elements one by one, up to
-  # 15 s on a site.
+  # Telling the blocker's hiding from the page's asks DevTools about elements, many at a time, up
+  # to 15 s on a site.
   for _ in $(seq 300); do
-    [ "$(grep -c '^cdp: hidden ' "$cdp_log" || true)" -gt "$asked" ] && return
+    if [ "$(grep -c '^cdp: hidden ' "$cdp_log" || true)" -gt "$asked" ]; then
+      # Where the 15 s ended first, so a site drifting over it shows before it turns a run red.
+      untold=$(grep '^cdp: hidden ' "$cdp_log" | tail -1 |
+        sed -n 's/.* untold \([0-9]*\) \([0-9]*\) in .*/\1 \2/p')
+      case $untold in
+        '' | '0 0') ;;
+        *) echo "$run: $1: ${untold% *} hidden elements, of ${untold#* } selectors, weren't told" \
+             "apart in the 15 s, so they count as the blocker's" ;;
+      esac
+      return
+    fi
     sleep 0.1
   done
   fail "cdp.py didn't say what $1 hid: it said $(tail -1 "$cdp_log")"
@@ -254,26 +264,33 @@ look_content() {
     fail "cdp.py didn't say what $1 shows: it said $(tail -1 "$cdp_log")"
   echo "$1 $(grep '^cdp: content ' "$cdp_log" | tail -1 | cut -d' ' -f3-)" >> "$contents"
 }
-# A watch page's line in $videos: the site, "ad" if its player showed an ad or "no-ad", and the
-# seconds its video played, or none for no video, as YouTube's bot check has none. An ad plays
-# before the video does, so the player is read each half second from the load until the video
-# has played 5 s, or for 30 s. Chrome lets a page start a video with sound only once the user has
-# acted on it, so a video whose start Chrome refused, as YouTube's player says, gets k, YouTube's
-# play key, once, as a user's press of play. Before the player has asked to play, the key would
-# start the video, and the player's own start would then pause it.
+# A watch page's line in $videos: the site, "ad" if its player showed an ad or "no-ad", the
+# seconds its video played, or none for no video, as YouTube's bot check has none, then what got
+# it playing. An ad plays before the video does, so the player is read each half second from the
+# load until the video has played 5 s, or for 30 s. Chrome lets a page start a video with sound
+# only once the user has acted on it, so a video whose start Chrome refused, as YouTube's player
+# says, gets k, YouTube's play key, once, as a user's press of play, and so does a cued video,
+# which waits for that press (#3272). Before the player has asked to play, the key would start the
+# video, and the player's own start would then pause it. What got it playing is "refused" or
+# "cued", which got the press, or else the player's state when last read, as cdp.py says it.
 videos="$dir/videos.txt"
 : > "$videos"
 watch_video() {
   # Not site, the check's server, which a later pass in the same shell builds its pages on.
-  watched=$1 ad=no-ad played=none pressed= since=$(date +%s)
+  watched=$1 ad=no-ad played=none met= state=- since=$(date +%s)
   while [ $(($(date +%s) - since)) -lt 30 ]; do
-    # The seconds, playing or paused, ad or no-ad, refused or -.
+    # The seconds, playing or paused, ad or no-ad, then refused, cued or the player's state.
     set -- $(video https://www.youtube.com/watch)
     if [ $# = 4 ]; then
-      if [ "$4" = refused ] && [ -z "$pressed" ]; then
-        send key k
-        pressed=1
-      fi
+      state=$4
+      case $4 in
+        refused | cued)
+          if [ -z "$met" ]; then
+            send key k
+            met=$4
+          fi
+          ;;
+      esac
       if [ "$3" = ad ]; then
         ad=ad
       else
@@ -283,7 +300,7 @@ watch_video() {
     fi
     sleep 0.5
   done
-  echo "$watched $ad $played" >> "$videos"
+  echo "$watched $ad $played ${met:-$state}" >> "$videos"
 }
 # Each site: when Return went, in ms since the epoch, then the site, then the load's time and what
 # loaded, or "none" for a load that didn't come within 45 s, then "bot-check" where Cloudflare's
@@ -356,23 +373,24 @@ done 4< check/adblock-sites.txt
 # Without pictures, the last site's ads, which load after its page does, get the 8 s here alone.
 [ -z "${ADBLOCK_PARITY_NO_CAPTURE:-}" ] || sleep 8
 [ -s "$starts" ] || fail "no site opened"
-# The most memory a process took, in MB.
-peak() {
-  if windows; then
-    ID=$1 powershell.exe -NoProfile -NonInteractive -Command '$p = Get-Process -Id $env:ID;
-      "$([math]::Round($p.PeakWorkingSet64 / 1MB))"' | tr -d '\r'
-  else
-    awk '/^VmHWM:/ { print int($2 / 1024) }' "/proc/$1/status"
-  fi
-}
 python3 -I check/usage.py snap "$procs" "$dir/memory.json" kinds || fail "the browser's memory didn't read"
 summed=$(python3 -I check/usage.py memory "$dir/memory.json")
 memory=". Its processes held ${summed% *} MiB, ${summed#* } processes ($(python3 -I check/usage.py kinds "$dir/memory.json"))"
 echo "${summed% *}" > "$dir/memory.txt"
+# The most the browser's process and uBlock Origin's took, from the same snapshot, which finds
+# them by their own ids on each OS: Windows' Get-Process takes no id the shell gives (#3315).
 if ! [ "$(uname)" = Darwin ]; then
-  memory="$memory; the browser's process at most $(peak "$pid") MB"
-  ublock=$(pgrep -f "$procs.*--extension-process" | head -1)
-  [ -z "$ublock" ] || memory="$memory, uBlock Origin's at most $(peak "$ublock") MB"
+  peak=$(python3 -I check/usage.py peak "$dir/memory.json" browser)
+  if [ -n "$peak" ]; then
+    memory="$memory; the browser's process at most $peak MiB"
+  else
+    memory="$memory; the browser's process's peak wasn't read"
+  fi
+  # An extension's process is uBlock Origin's only in its own pass.
+  owner="an extension's"
+  [ "$engine" != ublock ] || owner="uBlock Origin's"
+  peak=$(python3 -I check/usage.py peak "$dir/memory.json" extension)
+  [ -z "$peak" ] || memory="$memory, $owner at most $peak MiB"
 fi
 exec 3>&- 5>&-
 quit
@@ -397,7 +415,8 @@ for line in open(recorded, encoding="utf-8"):
     event = json.loads(line)
     request = live.get(event["id"])
     if event["event"] == "sent" and event["url"].startswith("http") and not event.get("redirect"):
-        live[event["id"]] = {"url": event["url"], "at": event["at"], "how": "allowed"}
+        live[event["id"]] = {"url": event["url"], "at": event["at"], "how": "allowed",
+                             "document": event.get("document", False)}
         requests.append(live[event["id"]])
     elif not request:
         continue
@@ -405,8 +424,15 @@ for line in open(recorded, encoding="utf-8"):
         del live[event["id"]]
     elif event["event"] == "sent" and not event["url"].startswith("http"):
         request["how"] = "stand-in"
-    elif event["event"] == "failed" and request and "BLOCKED_BY_CLIENT" in event["error"]:
-        request["how"] = "blocked"
+    elif event["event"] == "sent":
+        # Where a redirect sent it, for the page's own request that fails before any answer.
+        request["to"] = event["url"]
+    elif event["event"] == "document":
+        request["status"], request["to"] = event["status"], event["url"]
+    elif event["event"] == "failed":
+        request["error"] = event["error"]
+        if "BLOCKED_BY_CLIENT" in event["error"]:
+            request["how"] = "blocked"
     elif event["event"] == "answered" and request and request["how"] == "allowed":
         request["how"] = "stand-in"
 
@@ -417,11 +443,12 @@ for line in open(starts, encoding="utf-8"):
     ok = load_ms != "none" and not landed.startswith("chrome-error:")
     sites.append({"at": int(started), "url": url, "loaded": ok, "load_ms": load_ms if ok else "",
                   "bot": "bot-check" in rest})
-# A watch page's video: "ad" or "no-ad", then the seconds it played or none.
+# A watch page's video: "ad" or "no-ad", the seconds it played or none, then what got it playing.
 videos = {}
 for line in open(watched, encoding="utf-8"):
-    url, ad, played = line.split()
-    videos[url] = {"ad": ad == "ad", "played": None if played == "none" else float(played)}
+    url, ad, played, met = line.split()
+    videos[url] = {"ad": ad == "ad", "played": None if played == "none" else float(played),
+                   "met": met}
 
 # What a site's page showed: its text's characters, its pictures, and whether it was covered.
 contents = {}
@@ -435,10 +462,47 @@ def plays(video):
     return bool(video) and not video["ad"] and (video["played"] or 0) >= 5
 
 
+# YouTube's player states, as its getPlayerState gives them.
+STATES = {"-1": "unstarted", "0": "ended", "1": "playing", "2": "paused", "3": "buffering",
+          "-": "unknown"}
+
+
 def video_said(video):
     if video["played"] is None:
         return "had no video"
-    return (f"played {video['played']:.1f} s" + (" after an ad" if video["ad"] else " with no ad"))
+    said = f"played {video['played']:.1f} s" + (" after an ad" if video["ad"] else " with no ad")
+    # Which the run met, for #3272: a baseline's table doesn't say.
+    met = video.get("met")
+    if met in ("refused", "cued"):
+        return f"{said}, {met} and pressed play"
+    if met and plays(video):
+        return f"{said}, by itself with no press"
+    if met:
+        return f"{said}, neither refused nor cued, so not pressed, its state {STATES.get(met, met)}"
+    return said
+
+
+def why_not(mine):
+    """Why a site's page didn't load, by its own last request: a refusal from the site's server, as
+    a rate limit or a bot wall sends, isn't the engine's, but stays a red all the same (#3347)."""
+    pages = [r for r in mine if r["document"]]
+    if not pages:
+        return "it never asked for its page"
+    page = pages[-1]
+    # The address it ended at, without its query, which can carry a visit's own.
+    parts = urlsplit(page.get("to", page["url"]))
+    at = f"{parts.scheme}://{parts.netloc}{parts.path}"
+    status, error = page.get("status"), page.get("error", "")
+    if "BLOCKED_BY_CLIENT" in error:
+        return f"the blocker blocked its page at {at}"
+    if status and status >= 400:
+        return f"the site refused it, HTTP {status} at {at}"
+    if status:
+        then = f" then failed with {error}" if error else ""
+        return f"its page answered HTTP {status} at {at}{then}"
+    if error:
+        return f"it failed with {error} before any answer at {at}"
+    return f"its page at {at} had no answer"
 
 
 for i, s in enumerate(sites):
@@ -456,6 +520,7 @@ for i, s in enumerate(sites):
     # Where the run both blocked and let through a host's requests, those it blocked.
     s["split"] = sorted(a for a in s["blocked_at"] if a.split("/")[0] in s["allowed"])
     s["blocked_n"] = sum(r["how"] == "blocked" for r in mine)
+    s["failed"] = "" if s["loaded"] else why_not(mine)
     s["standin_n"] = sum(r["how"] == "stand-in" for r in mine)
     # What the baseline hid all of and this run shows, as cdp.py's hidden says, or None where
     # there's no saying: no baseline's file for the site, or no look at it.
@@ -491,7 +556,7 @@ def content_cells(content):
 
 with open(table, "w", encoding="utf-8") as out:
     out.write("site\tloaded\tload_ms\trequests\tblocked\tstand_ins\tblocked_hosts\tallowed_hosts"
-              "\tbot_check\tvideo\tmissed\tsplit_blocked\ttext\timages\tcover\n")
+              "\tbot_check\tvideo\tmissed\tsplit_blocked\ttext\timages\tcover\tfailed\n")
     for s in sites:
         out.write("\t".join([s["url"], "1" if s["loaded"] else "0", s["load_ms"], str(s["requests"]),
                              str(s["blocked_n"]), str(s["standin_n"]), ",".join(s["blocked"]),
@@ -499,9 +564,10 @@ with open(table, "w", encoding="utf-8") as out:
                              video_cell(s["video"]),
                              "" if s["missed"] is None else str(len(s["missed"])),
                              " ".join(s["split"])]
-                            + content_cells(contents.get(s["url"]))) + "\n")
+                            + content_cells(contents.get(s["url"])) + [s["failed"]]) + "\n")
 
 worse = []
+refused = []
 site_missed = False
 # A site that was a bot check in this run or the baseline's, which an older table
 # doesn't say.
@@ -521,7 +587,14 @@ if baseline:
         if s["url"] in unchecked:
             continue
         if b[1] == "1" and not s["loaded"]:
-            worse.append(f"{s['url']} loaded with the baseline and doesn't now")
+            # The rest of a page that didn't load says nothing more.
+            worse.append(f"{s['url']} loaded with the baseline and doesn't now: {s['failed']}")
+            continue
+        if b[1] == "0" and s["loaded"] and named[s["url"]].get("failed"):
+            # The same blindness the other way round: the baseline has nothing of the site's to
+            # hold this run to.
+            refused.append(f"{s['url']} loads now, where the baseline's didn't: "
+                           f"{named[s['url']]['failed']}")
         was = video_of(named[s["url"]].get("video", ""))
         if plays(was) and s["video"] and s["video"]["ad"]:
             worse.append(f"{s['url']} showed an ad before its video, where the baseline's "
@@ -588,7 +661,8 @@ print(f"{len(loaded)} of {len(sites)} sites loaded, in {median} ms at the median
         f"{sum(s['page_hid'] for s in sites)} by the page's own"
       + (f"; {len(missed)} selectors the baseline hid all of showed" if baseline else "")
       + "".join(f"; {s['url']}'s video {video_said(s['video'])}" for s in sites if s["video"])
-      + (f"; not compared, as a bot check stood in: {', '.join(unchecked)}" if unchecked else ""))
+      + (f"; not compared, as a bot check stood in: {', '.join(unchecked)}" if unchecked else "")
+      + "".join(f"; {r}" for r in refused))
 if worse:
     sys.exit(1)
 PY

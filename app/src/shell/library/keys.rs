@@ -777,8 +777,9 @@ mod tests {
         assert_eq!(host.take_edits(), ["archive clear as 9002"]);
     }
 
-    /// With text in the Library's search field, ⌘Z stops at the field, so typing never undoes
-    /// what's out of sight, here a tab deleted from the archive before the search.
+    /// With text in the Library's search field and no toast offering it, ⌘Z stops at the field,
+    /// so typing never undoes what's out of sight, here a tab deleted from the archive before the
+    /// search, once the toast that offered its undo has gone.
     #[gpui::test]
     fn z_with_text_in_the_field_undoes_nothing(cx: &mut TestAppContext) {
         let (shell, host, cx) = window(Section::Archive, cx);
@@ -788,6 +789,8 @@ mod tests {
         assert_eq!(host.take_edits(), ["archive remove 7 as 9001"]);
         cx.simulate_input("ex");
         cx.run_until_parked();
+        // The toast's time is up.
+        host.undo_toast.borrow_mut().take();
         cx.simulate_keystrokes("cmd-z");
         assert!(
             host.take_edits().is_empty(),
@@ -824,6 +827,38 @@ mod tests {
         host.take();
         run(&shell, Command::ViewLibrary, cx);
         assert!(host.take().contains(&"focus page".to_owned()));
+    }
+
+    /// Searched for and deleted from the archive, a tab comes back with ⌘Z while the toast that
+    /// offers it shows, with the search's text still in the field: the toast is in sight and
+    /// promises the key (#3307). ⇧⌘Z, which no toast offers, still stops at the field.
+    #[gpui::test]
+    fn z_with_text_in_the_field_undoes_what_the_toast_offers(cx: &mut TestAppContext) {
+        let (shell, host, cx) = window(Section::Archive, cx);
+        archive(&shell, &[7, 8], cx);
+        run(&shell, Command::ViewLibrary, cx);
+        cx.simulate_input("ex");
+        cx.run_until_parked();
+        shell.update(cx, |shell, cx| shell.delete_archived(7, cx));
+        assert_eq!(host.take_edits(), ["archive remove 7 as 9001"]);
+        assert!(
+            host.undo_toast.borrow().is_some(),
+            "no toast offered the undo"
+        );
+        cx.simulate_keystrokes("cmd-z");
+        assert_eq!(host.take_edits(), ["undo archive remove 9001"]);
+        cx.simulate_keystrokes("cmd-shift-z");
+        assert!(
+            host.take_edits().is_empty(),
+            "⇧⌘Z with text in the field did the delete again"
+        );
+        let text = shell.read_with(cx, |shell, cx| {
+            shell
+                .library
+                .as_ref()
+                .map(|library| library.search.read(cx).text().to_string())
+        });
+        assert_eq!(text.as_deref(), Some("ex"));
     }
 
     /// Opened by a swipe, or set open as the gesture does, the Library leaves the keyboard where
