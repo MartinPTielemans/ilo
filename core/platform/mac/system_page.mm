@@ -7,6 +7,7 @@
 #include <objc/runtime.h>
 #include <stdio.h>
 
+#include <cstdlib>
 #include <memory>
 #include <optional>
 #include <string>
@@ -456,6 +457,7 @@ class SystemPageMac : public SystemPage {
     delegates_->_owner = this;
     web_.navigationDelegate = delegates_;
     web_.UIDelegate = delegates_;
+    SetIconDelegate(delegates_);
     [web_.configuration.userContentController addScriptMessageHandler:delegates_
                                                           contentWorld:PageWorld()
                                                                   name:kOutputRestricted];
@@ -485,6 +487,8 @@ class SystemPageMac : public SystemPage {
     }
     web_.navigationDelegate = nil;
     web_.UIDelegate = nil;
+    SetIconDelegate(nil);
+    ForgetIcons();
     [web_.configuration.userContentController
         removeScriptMessageHandlerForName:kOutputRestricted
                              contentWorld:PageWorld()];
@@ -903,6 +907,124 @@ class SystemPageMac : public SystemPage {
                        weak_factory_.GetWeakPtr(), std::move(call)));
   }
 
+  // WebKit's icon loading, not public. WebKit loads no icon for a page without its delegate.
+  void SetIconDelegate(id delegate) {
+    SEL set = NSSelectorFromString(@"_setIconLoadingDelegate:");
+    if ([web_ respondsToSelector:set]) {
+      reinterpret_cast<void (*)(id, SEL, id)>(objc_msgSend)(web_, set, delegate);
+    }
+  }
+
+  // Answers WebKit for the icons it offered and nothing loaded, as each answer is owed once.
+  void ForgetIcons() {
+    for (IconOffer& offer : icon_offers_) {
+      offer.answer(nil);
+    }
+    icon_offers_.clear();
+  }
+
+ public:
+  // A new document committed: what WebKit offered for the last one is no longer the page's.
+  void IconsGone() {
+    ForgetIcons();
+    ++icon_document_;
+    icon_offered_ = false;
+  }
+
+  // An icon WebKit offers the document, as its load event starts: its <link rel=icon>s and touch
+  // icons, else its site's /favicon.ico. Of the favicons, SVG aside, the one whose declared size is
+  // nearest the row's 32 pixels loads, once the document's offers are in. Undeclared counts as 16,
+  // a favicon's own.
+  void IconOffered(id parameters, void (^answer)(void (^)(NSData*))) {
+    id url = IconParameter(parameters, @"url");
+    id type = IconParameter(parameters, @"iconType");
+    id mime = IconParameter(parameters, @"mimeType");
+    id size = IconParameter(parameters, @"size");
+    const bool svg = ([mime isKindOfClass:[NSString class]] &&
+                      [static_cast<NSString*>(mime) containsString:@"svg"]) ||
+                     ([url isKindOfClass:[NSURL class]] &&
+                      [[static_cast<NSURL*>(url).pathExtension lowercaseString] isEqual:@"svg"]);
+    // WKLinkIconTypeFavicon is 0; touch icons are the others.
+    if (![url isKindOfClass:[NSURL class]] || ![type isKindOfClass:[NSNumber class]] ||
+        [static_cast<NSNumber*>(type) integerValue] != 0 || svg) {
+      answer(nil);
+      return;
+    }
+    const int declared =
+        [size isKindOfClass:[NSNumber class]] ? [static_cast<NSNumber*>(size) intValue] : 16;
+    icon_offered_ = true;
+    icon_offers_.push_back({net::GURLWithNSURL(url), std::abs(declared - 32), answer});
+    if (icon_offers_.size() == 1) {
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, base::BindOnce(&SystemPageMac::LoadIcon, weak_factory_.GetWeakPtr()));
+    }
+  }
+
+  // The document finished loading, or failed to after its commit. With nothing offered, it has no
+  // icon.
+  void IconsDone() {
+    if (!icon_offered_) {
+      icon_offered_ = true;
+      TellIcon(GURL(), {});
+    }
+  }
+
+ private:
+  struct IconOffer {
+    GURL url;
+    int distance;
+    void (^__strong answer)(void (^)(NSData*));
+  };
+
+  static id IconParameter(id parameters, NSString* name) {
+    return [parameters respondsToSelector:NSSelectorFromString(name)]
+               ? [parameters valueForKey:name]
+               : nil;
+  }
+
+  void LoadIcon() {
+    if (icon_offers_.empty()) {
+      return;
+    }
+    std::vector<IconOffer> offers = std::move(icon_offers_);
+    icon_offers_.clear();
+    size_t best = 0;
+    for (size_t i = 1; i < offers.size(); ++i) {
+      if (offers[i].distance < offers[best].distance) {
+        best = i;
+      }
+    }
+    for (size_t i = 0; i < offers.size(); ++i) {
+      if (i != best) {
+        offers[i].answer(nil);
+      }
+    }
+    base::WeakPtr<SystemPageMac> page = weak_factory_.GetWeakPtr();
+    const int document = icon_document_;
+    const GURL url = offers[best].url;
+    offers[best].answer(^(NSData* data) {
+      if (!page || page->icon_document_ != document) {
+        return;
+      }
+      // An icon is small. One over a megabyte isn't decoded, and the page has none.
+      constexpr NSUInteger kMaxIconBytes = 1024 * 1024;
+      if (!data.length || data.length > kMaxIconBytes) {
+        page->TellIcon(url, {});
+        return;
+      }
+      const uint8_t* bytes = static_cast<const uint8_t*>(data.bytes);
+      page->TellIcon(url, std::vector<uint8_t>(bytes, bytes + data.length));
+    });
+  }
+
+  void TellIcon(const GURL& url, std::vector<uint8_t> bytes) {
+    Soon(base::BindOnce(
+        [](const GURL& url, std::vector<uint8_t> bytes, Delegate* delegate) {
+          delegate->SystemPageIcon(url, std::move(bytes));
+        },
+        url, std::move(bytes)));
+  }
+
   const raw_ptr<Delegate> delegate_;
   WKWebView* __strong web_;
   BrowserCoreSystemPageView* __strong view_;
@@ -913,6 +1035,11 @@ class SystemPageMac : public SystemPage {
   // What the first load loads, once Start has the page's storage in place.
   GURL first_url_;
   bool started_ = false;
+  // The icons WebKit offered the document that committed last, counted by icon_document_, until
+  // one loads, and whether it offered any.
+  std::vector<IconOffer> icon_offers_;
+  int icon_document_ = 0;
+  bool icon_offered_ = false;
   // The first load's storage script is in place.
   bool seeding_ = false;
   // The page a link the user followed in the main frame left, until its answer comes.
@@ -1084,8 +1211,20 @@ class SystemPageMac : public SystemPage {
 
 - (void)webView:(WKWebView*)web didCommitNavigation:(WKNavigation*)navigation {
   if (_owner) {
+    _owner->IconsGone();
     _owner->Committed();
   }
+}
+
+// WebKit's _WKIconLoadingDelegate, not public. Each offer is answered once, nil to load nothing.
+- (void)webView:(WKWebView*)web
+    shouldLoadIconWithParameters:(id)parameters
+               completionHandler:(void (^)(void (^)(NSData*)))completionHandler {
+  if (!_owner) {
+    completionHandler(nil);
+    return;
+  }
+  _owner->IconOffered(parameters, completionHandler);
 }
 
 // The main frame's document and what it loads have finished loading, as Chromium's DidFinishLoad
@@ -1093,6 +1232,7 @@ class SystemPageMac : public SystemPage {
 - (void)webView:(WKWebView*)web didFinishNavigation:(WKNavigation*)navigation {
   if (_owner) {
     _owner->Loaded();
+    _owner->IconsDone();
   }
 }
 
@@ -1102,6 +1242,7 @@ class SystemPageMac : public SystemPage {
             withError:(NSError*)error {
   if (_owner) {
     _owner->Seeded();
+    _owner->IconsDone();
   }
 }
 
