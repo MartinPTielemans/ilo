@@ -1664,6 +1664,12 @@ impl Browser for Recorder {
             .set(self.undo_toasts_hidden.get() + 1);
     }
 
+    /// Its Undo button's toast shows until it's hidden, or a test takes `undo_toast` as its time
+    /// running out.
+    fn undo_toast_showing(&self, _: &App) -> bool {
+        self.undo_toast.borrow().is_some()
+    }
+
     fn in_front(&self) -> bool {
         !self.behind.get()
     }

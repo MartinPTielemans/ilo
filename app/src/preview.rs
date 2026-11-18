@@ -2030,6 +2030,10 @@ impl Browser for Fake {
 
     fn hide_undo_toast(&self, _: &mut App) {}
 
+    fn undo_toast_showing(&self, _: &App) -> bool {
+        false
+    }
+
     fn in_front(&self) -> bool {
         true
     }
