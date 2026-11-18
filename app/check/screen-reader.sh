@@ -6,13 +6,13 @@
 # heard before, so the run's record, screen-reader-speech.txt, is what each key made NVDA say, and
 # screen-reader-focus.txt is what UI Automation and the window manager had focused after it. It
 # judges the onboarding, the sidebar and the command bar: each step, each Tab through one, Tab
-# from the window in an empty Space and with a page, F6 from the page and the arrows down the rows
-# have NVDA say something, with UI Automation's focus off GPUI's unnamed root and, in the sidebar,
-# on the ringed row; ↓ in the bar has it say the suggestion selected and where it stands, ⇧Tab from
-# a page's first control and Tab past its last ring the tab shown's row, and Tab and ⇧Tab from the
-# ring have it say the page's first and last control, and the Library's key has it on the
-# Library's search field, where ↓ has it say the row ringed and where it stands and Tab has it on
-# the Library's sections. Elsewhere it records.
+# from the window in an empty Space, F6 from the page and the arrows down the rows have NVDA say
+# something, with UI Automation's focus off GPUI's unnamed root and, in the sidebar, on the ringed
+# row; Tab in the page ⌃T's ↩ loads has it say the page's first control; ↓ in the bar has it say
+# the suggestion selected and where it stands, ⇧Tab from a page's first control and Tab past its
+# last ring the tab shown's row, and Tab and ⇧Tab from the ring have it say the page's first and
+# last control, and the Library's key has it on the Library's search field, where ↓ has it say the
+# row ringed and where it stands and Tab has it on the Library's sections. Elsewhere it records.
 # NVDA's portable copy (GPL) is fetched from NV Access' release on GitHub, its checksum pinned, into
 # the hosted runner's temporary folder, and never installed: with NVDA_DIR naming a portable copy,
 # the run uses that instead. Off a hosted Windows runner, and without NVDA_DIR, it skips.
@@ -252,11 +252,14 @@ spoken "typed a page's address"
 press return
 expect '^browser: loaded' "the page didn't load"
 spoken "the page loaded"
-# The window holds the keyboard here, the page not having it (#3239), and Tab rings the tab
-# shown's row, read by its name (#3237).
+# ⌃T's ↩ gives the page it loads the keyboard (#3239), so Tab has NVDA say the page's first
+# control, the link, and ⇧Tab from the link rings the tab shown's row, read by its name (#3237).
 judging=1
+at=$(wc -l < "$nvda_log")
 press tab
-on_row Reading tab
+says "$at" "'Link', 'link'" "Tab in the page ⌃T's ↩ loaded didn't have NVDA say its first control"
+press tab shift
+on_row Reading "⇧Tab from the first control of the page ⌃T's ↩ loaded"
 judging=
 press tab
 press down
