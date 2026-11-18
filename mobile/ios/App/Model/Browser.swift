@@ -709,6 +709,27 @@ final class Browser {
     show(peek, from: nil)
   }
 
+  // MARK: Page states
+
+  /// The certificates the user went on past in a tab that isn't private, until ilo quits.
+  let exceptions = CertificateExceptions()
+
+  /// A tab's page gave way to what's wrong with it, so the picture kept of the page goes.
+  func stateBegan(in tab: WebTab) {
+    if tab.role == .today { cache.forgetPicture(of: tab.id) }
+  }
+
+  /// What a tab's card shows in a picture's place while its page is in a state.
+  func state(of id: String) -> PageState? {
+    tabs[id]?.pageState
+  }
+
+  /// The tab whose question for a name and password is up: the page in front, with nothing over it.
+  var signingIn: WebTab? {
+    guard pageOpen, sheet == nil, !searchingPage, prompt == nil, let tab = peek ?? page, tab.signIn != nil else { return nil }
+    return tab
+  }
+
   // MARK: What the web views report
 
   /// The user went somewhere in a Today tab, which the account's other devices follow. A pinned

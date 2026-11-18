@@ -151,6 +151,9 @@ struct TabsGlyph: View {
 
 /// A button beside or above the main one, on a plate.
 struct PlateButtonStyle: ButtonStyle {
+  /// For the one that goes on past a warning.
+  var warns = false
+
   @Environment(\.palette) private var palette
 
   func makeBody(configuration: Configuration) -> some View {
@@ -158,7 +161,7 @@ struct PlateButtonStyle: ButtonStyle {
       .scaled(17, .medium)
       .lineLimit(1)
       .minimumScaleFactor(0.75)
-      .foregroundStyle(palette.text)
+      .foregroundStyle(warns ? palette.alarm : palette.text)
       .padding(.horizontal, 12)
       .frame(maxWidth: .infinity, minHeight: Bar.height)
       .background(palette.plate.opacity(configuration.isPressed ? 1.6 : 1), in: .rect(cornerRadius: Bar.radius, style: .continuous))

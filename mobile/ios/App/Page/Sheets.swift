@@ -45,6 +45,13 @@ struct ActionSheet: View {
         }
       } else {
         BlockingRow(tab: tab)
+        if tab.exception != nil, tab.failure == nil {
+          // The way back from Visit Anyway, listed while a page that came in by it is up.
+          SheetRow(symbol: States.brokenLock, title: "Stop trusting this site") {
+            tab.stopTrusting()
+            browser.sheet = nil
+          }
+        }
         SheetRow(symbol: "desktopcomputer", title: tab.wantsDesktopSite ? "Request mobile site" : "Request desktop site") {
           tab.requestDesktopSite(!tab.wantsDesktopSite)
           browser.sheet = nil
@@ -115,7 +122,7 @@ struct ActionSheet: View {
       Pill(tinted: true, floats: false) {
         RoundButton(symbol: "arrow.left", label: "Back", dimmed: !tab.canGoBack) { tab.webView.goBack() }
         RoundButton(symbol: "arrow.right", label: "Forward", dimmed: !tab.canGoForward) { tab.webView.goForward() }
-        HostLabel(url: tab.url, isPrivate: isPrivate)
+        HostLabel(url: tab.url, isPrivate: isPrivate, distrusted: tab.distrusted)
           .frame(maxWidth: .infinity)
         // The name stays centred between two buttons and one.
         Color.clear.frame(width: 34)

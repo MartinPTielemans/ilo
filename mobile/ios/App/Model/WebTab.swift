@@ -6,6 +6,8 @@ import WebKit
 nonisolated struct PageFailure: Equatable, Sendable {
   var title: String
   var reason: String
+  /// The certificate the phone doesn't trust, when that's why: only then is there a way on.
+  var certificate: CertificateFault?
 }
 
 /// A tab with a web view: a Today tab's, a pinned tab's own, a Peek's, or a private tab's.
@@ -44,6 +46,10 @@ final class WebTab: NSObject, Identifiable {
   /// The page's own colour, which the status bar's band takes.
   private(set) var ground: UIColor = .systemBackground
   private(set) var failure: PageFailure?
+  /// The certificate the page on screen was let in with, past a warning. The bar marks it.
+  private(set) var exception: CertificateException?
+  /// A site's question for a name and password, which waits for the user while the tab is open.
+  private(set) var signIn: SiteSignIn?
   private(set) var wantsDesktopSite = false
   /// Scrolling down the page shrinks the bar to a small pill with the site's name, and the page
   /// gets the room.
@@ -60,6 +66,22 @@ final class WebTab: NSObject, Identifiable {
   /// The address that didn't load, and whether going there was the user's doing. The web view
   /// is still at the page before it.
   @ObservationIgnored private var failed: (url: URL, users: Bool)?
+  /// The address being tried again, whose failure stays up until the try has an answer.
+  @ObservationIgnored private var again: URL?
+  /// The address the load under way was for.
+  @ObservationIgnored private var asked: URL?
+  /// Whether WebKit put an empty page in the place of an address it won't ask for, and the page
+  /// that was up before it did.
+  @ObservationIgnored private var turnedAway = false
+  @ObservationIgnored private var before: WKBackForwardListItem?
+  /// Counts the loads that started or failed, so what's read of a failure is said of that one only.
+  @ObservationIgnored private var attempt = 0
+  /// The trusts the phone turned down for the load on its way, by server.
+  @ObservationIgnored private var refused: [Server: SecTrust] = [:]
+  /// The certificates this tab may go on past: the browser's, or a private tab's own, gone with it.
+  @ObservationIgnored let exceptions: CertificateExceptions
+  /// The name last given at a door, for the sheet that asks again after a wrong answer.
+  @ObservationIgnored private var given: (door: SiteSignIn.Door, name: String)?
   @ObservationIgnored private var writes = NavigationWrites()
   /// The phone's history, which this tab's pages are written to. A private tab is made with
   /// none: `reached` is a page's only way into history, so nothing a private tab opens has a way
@@ -105,6 +127,7 @@ final class WebTab: NSObject, Identifiable {
     self.browser = browser
     self.opener = opener
     history = role == .private ? nil : browser.history
+    exceptions = role == .private ? CertificateExceptions() : browser.exceptions
     // A window is its opener's to write into, and has a page from the start.
     hasPage = window != nil
 
@@ -160,6 +183,8 @@ final class WebTab: NSObject, Identifiable {
     #endif
 
     observe(\.url) { tab, view in
+      // The empty page WebKit shows for an address it won't ask for isn't where the tab is.
+      if tab.turnedAway, view.url?.scheme == "about" { return }
       tab.url = view.url
       // WebKit may say an address changed before it says a navigation began, so what kind of
       // change it was is looked at afterwards.
@@ -191,7 +216,7 @@ final class WebTab: NSObject, Identifiable {
   /// Loads an address: one the user `entered`, or the tab's own. `typed` is an address they
   /// wrote out in the search field, as against a search, a link or a tile.
   func load(_ url: URL, entered: Bool = false, typed: Bool = false) {
-    failure = nil
+    if again != url { failure = nil }
     if entered { writes.enter() } else { writes.own() }
     unsent.load(entered: entered)
     visits.load(typed: typed)
@@ -218,22 +243,98 @@ final class WebTab: NSObject, Identifiable {
   /// WebKit says a page is loading, which it says of a page it brought back until the next one
   /// starts: that state would load the page once more, as a new one after it.
   var state: Data? {
-    webView.isLoading ? nil : webView.interactionState as? Data
+    // Nor of the empty page in the place of one WebKit wouldn't ask for: the state before stays.
+    webView.isLoading || turnedAway ? nil : webView.interactionState as? Data
   }
 
+  /// Loads the page again, or tries again the one that didn't load. What's said of a failure
+  /// stays up meanwhile: the answer replaces it, a page or the same words.
   func reload() {
-    failure = nil
     if let failed, failed.url != webView.url {
+      again = failed.url
       // The web view's own reload would bring back the page before the one that didn't load.
       load(failed.url, entered: failed.users)
     } else if webView.url == nil, let url {
+      failure = nil
       writes.own()
       unsent.load(entered: false)
       visits.load(typed: false)
       webView.load(URLRequest(url: url))
     } else {
+      again = failure == nil ? nil : webView.url
       webView.reload()
     }
+  }
+
+  // MARK: A page that didn't load
+
+  /// Whether leaving what didn't load shows a page: the one the web view is still on, or the
+  /// one before it.
+  var canLeaveFailure: Bool {
+    if turnedAway { return before != nil }
+    if let failed, webView.url != nil, failed.url != webView.url { return true }
+    return webView.canGoBack
+  }
+
+  /// Goes back from what didn't load. A load that never arrived left the web view on the page
+  /// before it, which is shown again without a load.
+  func leaveFailure() {
+    if turnedAway {
+      // Past the empty pages, however many tries left one each.
+      if let before { webView.go(to: before) }
+    } else if let failed, webView.url != nil, failed.url != webView.url {
+      failure = nil
+      self.failed = nil
+      url = webView.url
+    } else if webView.canGoBack {
+      webView.goBack()
+    }
+  }
+
+  /// Trusts the certificate the facts on screen are of, at this address, and tries again. A
+  /// server that sends another one meanwhile is turned down as before.
+  func visitAnyway() {
+    guard let fault = failure?.certificate else { return }
+    exceptions.trust(fault.exception)
+    reload()
+  }
+
+  /// Takes back Visit Anyway for the page on screen and loads it again: the warning stands in
+  /// its place, whether WebKit asks the server for its certificate again or not.
+  func stopTrusting() {
+    guard let exception else { return }
+    exceptions.stop(exception)
+    webView.reload()
+  }
+
+  /// Whether the bar shows the broken lock: over a certificate the phone doesn't trust, said
+  /// so or gone on past.
+  var distrusted: Bool { exception != nil || failure?.certificate != nil }
+
+  /// What the tab's card shows in a picture's place.
+  var pageState: PageState? {
+    if let failure { return failure.certificate == nil ? .failed : .distrusted }
+    return signIn == nil ? nil : .signIn
+  }
+
+  // MARK: A site that asks for a name and password
+
+  /// Answers the site with what the user typed. The credential lasts the session, in WebKit's
+  /// memory: never the Keychain's, never the account's. A sheet left over from a question
+  /// that's gone answers nothing.
+  func answer(_ request: SiteSignIn, name: String, password: String) {
+    guard signIn === request else { return }
+    signIn = nil
+    given = (request.door, name)
+    request.give(.useCredential, URLCredential(user: name, password: password, persistence: .forSession))
+  }
+
+  /// The user said no: the site goes on without, and shows what it shows to anyone.
+  func cancelSignIn() {
+    guard let request = signIn else { return }
+    signIn = nil
+    given = nil
+    request.give(.performDefaultHandling)
   }
 
   /// The Safari this system's WebKit came with, as a site reads it.
@@ -294,7 +395,7 @@ final class WebTab: NSObject, Identifiable {
 
   /// The address changed. With no navigation on its way or just committed, a script changed it.
   private func moved() {
-    guard let now = webView.url, now != committed, !webView.isLoading else { return }
+    guard !turnedAway, let now = webView.url, now != committed, !webView.isLoading else { return }
     committed = now
     writes.move()
     swipe.arrived()
@@ -600,8 +701,21 @@ extension WebTab: WKNavigationDelegate {
   }
 
   func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-    failure = nil
-    failed = nil
+    // Another try at what failed keeps its words up until it has an answer.
+    if again == nil || again != webView.url {
+      failure = nil
+      failed = nil
+      turnedAway = false
+    }
+    // Another try at an address WebKit turned away starts from an empty page, not the page before.
+    if !turnedAway { before = webView.backForwardList.currentItem }
+    asked = webView.url
+    again = nil
+    attempt += 1
+    refused = [:]
+    // A question left from the page before has nobody to answer to.
+    signIn?.give(.cancelAuthenticationChallenge)
+    signIn = nil
     answered = nil
     shrink.grow()
     barHidden = false
@@ -617,8 +731,21 @@ extension WebTab: WKNavigationDelegate {
   }
 
   func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
-    failure = nil
+    // An address WebKit won't ask for, such as one on a port it keeps pages from, comes as an
+    // empty page and no error: said as the failure it is, at the address that was asked for.
+    if let asked, ["http", "https"].contains(asked.scheme?.lowercased()), webView.url?.scheme == "about" {
+      visits.fail()
+      turnedAway = true
+      refused = [:]
+      attempt += 1
+      swipe.arrived()
+      url = asked
+      failed = (asked, writes.fail())
+      return show(.unopened)
+    }
     failed = nil
+    given = nil
+    mark()
     // A page brought back whole from memory answers nothing, and is never a PDF.
     isPDF = answered == "application/pdf"
     committed = webView.url
@@ -636,6 +763,9 @@ extension WebTab: WKNavigationDelegate {
   func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
     reloadedAfterCrash = false
     isLoading = false
+    // The empty page in a turned-away address's place is nothing to settle, title or keep.
+    if turnedAway { return }
+    refused = [:]
     settle(finished: true)
     titled()
     putBackTyped()
@@ -654,41 +784,117 @@ extension WebTab: WKNavigationDelegate {
   private func fail(_ error: any Error, users: Bool = false) {
     isLoading = false
     swipe.arrived()
+    let turnedDown = refused
+    refused = [:]
     let error = error as NSError
     // A load the user or a newer load stopped, or one that became a download, isn't a failure.
     if error.domain == NSURLErrorDomain, error.code == NSURLErrorCancelled { return }
     if error.domain == "WebKitErrorDomain", error.code == 102 { return }
-    if let address = error.userInfo[NSURLErrorFailingURLErrorKey] as? URL {
+    attempt += 1
+    let address = error.userInfo[NSURLErrorFailingURLErrorKey] as? URL
+    if let address {
       url = address
       failed = (address, users)
     }
-    failure = PageFailure(error)
+    // A certificate the phone turned down for the page itself is said with its facts, which
+    // are read off the main thread. A part of a page that was turned down never comes here.
+    if PageFailure.isCertificate(error), let address, let host = address.host(), let trust = turnedDown[Server(host: host, port: address.port ?? 443)] {
+      let attempt = attempt
+      Task {
+        let fault = await Certificates.fault(of: ServerTrust(trust), host: host, port: address.port ?? 443)
+        guard attempt == self.attempt else { return }
+        show(fault.map { PageFailure(distrusted: $0) } ?? PageFailure(error))
+      }
+    } else {
+      show(PageFailure(error))
+    }
+  }
+
+  /// Puts what's wrong in the page's place. The card's picture goes: it's of the page before.
+  private func show(_ failure: PageFailure) {
+    self.failure = failure
+    browser?.stateBegan(in: self)
+  }
+
+  /// Marks a page that came in past a warning, and puts the warning back over one whose way in
+  /// the user took back: WebKit asks nothing again of a server it still holds a connection to.
+  private func mark() {
+    exception = nil
+    guard let url = webView.url, url.scheme == "https", let host = url.host(), exceptions.knows(host: host, port: url.port ?? 443),
+      let trust = webView.serverTrust
+    else {
+      failure = nil
+      return
+    }
+    // A warning that's up stays up until the certificate is read, off the main thread.
+    if failure?.certificate == nil { failure = nil }
+    let attempt = attempt
+    Task {
+      let fault = await Certificates.fault(of: ServerTrust(trust), host: host, port: url.port ?? 443)
+      guard committed == url else { return }
+      if let fault, exceptions.trusts(fault.exception) {
+        exception = fault.exception
+      } else if let fault, exceptions.marks(fault.exception) {
+        return show(PageFailure(distrusted: fault))
+      }
+      if attempt == self.attempt, failure?.certificate != nil { failure = nil }
+    }
   }
 
   func webView(
-    _ webView: WKWebView, respondTo challenge: URLAuthenticationChallenge
-  ) async -> (URLSession.AuthChallengeDisposition, URLCredential?) {
-    switch challenge.protectionSpace.authenticationMethod {
-    case NSURLAuthenticationMethodHTTPBasic, NSURLAuthenticationMethodHTTPDigest, NSURLAuthenticationMethodNTLM,
-      NSURLAuthenticationMethodNegotiate:
-      // ilo has no way to give a password yet. Only the page's own address may say so in its
-      // place: a part of a page that asks is left without.
-      if challenge.protectionSpace.host == webView.url?.host() {
-        failure = PageFailure(
-          title: "This page asks for a password",
-          reason: "\(challenge.protectionSpace.host) wants a username and password before it shows anything, and ilo can't give one yet.")
+    _ webView: WKWebView, didReceive challenge: URLAuthenticationChallenge,
+    completionHandler: @escaping @MainActor @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+  ) {
+    respond(to: challenge, ChallengeAnswer(completionHandler))
+  }
+
+  /// Answers a challenge, once. A certificate the phone turns down stays turned down unless the
+  /// user went on past that very one here; a name and password are the user's to give.
+  func respond(to challenge: URLAuthenticationChallenge, _ answer: ChallengeAnswer) {
+    let space = challenge.protectionSpace
+    switch space.authenticationMethod {
+    case NSURLAuthenticationMethodServerTrust:
+      guard let trust = space.serverTrust else { return answer.give(.performDefaultHandling) }
+      let server = Server(host: space.host, port: space.port)
+      guard exceptions.knows(host: server.host, port: server.port) else {
+        refused[server] = trust
+        return answer.give(.performDefaultHandling)
       }
-      return (.cancelAuthenticationChallenge, nil)
+      Task {
+        let sent = await Certificates.exception(for: ServerTrust(trust), host: server.host, port: server.port)
+        if let sent, exceptions.trusts(sent) {
+          answer.give(.useCredential, URLCredential(trust: trust))
+        } else {
+          refused[server] = trust
+          answer.give(.performDefaultHandling)
+        }
+      }
+    case NSURLAuthenticationMethodHTTPBasic, NSURLAuthenticationMethodHTTPDigest, NSURLAuthenticationMethodNTLM:
+      ask(challenge, answer)
+    case NSURLAuthenticationMethodNegotiate:
+      // A ticket isn't a name and password: the site's next way of asking, if it has one, is.
+      answer.give(.rejectProtectionSpace)
     default:
-      // A certificate the system doesn't trust fails the load, which says why. Never waved through.
-      return (.performDefaultHandling, nil)
+      answer.give(.performDefaultHandling)
     }
+  }
+
+  /// Puts a site's question for a name and password to the user, as a state of this tab.
+  private func ask(_ challenge: URLAuthenticationChallenge, _ answer: ChallengeAnswer) {
+    let door = SiteSignIn.Door(challenge.protectionSpace)
+    if let signIn {
+      // The same door asking again shares the answer; another one goes on without.
+      if signIn.door == door { signIn.add(answer) } else { answer.give(.performDefaultHandling) }
+      return
+    }
+    let name = given.flatMap { $0.door == door ? $0.name : nil } ?? ""
+    signIn = SiteSignIn(challenge, on: webView.url, name: name, answer: answer)
   }
 
   func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
     isLoading = false
     if reloadedAfterCrash {
-      failure = PageFailure(title: "This page stopped", reason: "It stopped twice in a row. Reload to try it again.")
+      show(PageFailure(title: "This page stopped", reason: "It stopped twice in a row. Try again to load it afresh."))
     } else {
       reloadedAfterCrash = true
       webView.reload()
@@ -819,30 +1025,74 @@ extension WebTab: WKUIDelegate {
   }
 }
 
+/// A server, as a certificate is sent by one: a host and a port.
+nonisolated struct Server: Hashable, Sendable {
+  let host: String
+  let port: Int
+
+  init(host: String, port: Int) {
+    self.host = host.lowercased()
+    self.port = port
+  }
+}
+
+/// What a tab's card shows where a picture of its page would be.
+nonisolated enum PageState: Equatable, Sendable {
+  case failed, distrusted, signIn
+}
+
 extension PageFailure {
-  init(_ error: NSError) {
-    let certificate = [
+  /// Whether a load failed over the server's certificate.
+  /// An address no page can come from, whatever answers there.
+  static let unopened = PageFailure(title: "This address can't be opened", reason: "Check it in the bar.")
+
+  static func isCertificate(_ error: NSError) -> Bool {
+    let codes = [
       NSURLErrorSecureConnectionFailed, NSURLErrorServerCertificateHasBadDate, NSURLErrorServerCertificateUntrusted,
       NSURLErrorServerCertificateHasUnknownRoot, NSURLErrorServerCertificateNotYetValid,
-      NSURLErrorClientCertificateRejected, NSURLErrorClientCertificateRequired,
     ]
+    return error.domain == NSURLErrorDomain && codes.contains(error.code)
+  }
+
+  /// A certificate the phone doesn't trust, said before its facts are asked for.
+  init(distrusted fault: CertificateFault) {
+    self.init(
+      title: "This connection isn't private",
+      reason:
+        "\(fault.exception.host) couldn't prove it is who it says, so ilo didn't load it. Someone between you and the site could read or change what you see.",
+      certificate: fault)
+  }
+
+  /// A load that failed, in words of what the user can do about it. Never the system's own
+  /// words for it, which name codes and servers.
+  init(_ error: NSError) {
     guard error.domain == NSURLErrorDomain else {
-      self.init(title: "This page didn't load", reason: error.localizedDescription)
+      self.init(title: "This page didn't load", reason: "Something went wrong on the way. Try again.")
       return
     }
     switch error.code {
     case NSURLErrorNotConnectedToInternet, NSURLErrorDataNotAllowed, NSURLErrorInternationalRoamingOff:
-      self.init(title: "You're offline", reason: "The page will load once the phone is back on a network.")
+      self.init(title: "You're offline", reason: "Try again once the phone is back on a network.")
     case NSURLErrorCannotFindHost, NSURLErrorDNSLookupFailed:
-      self.init(title: "No site at this address", reason: "Nothing answers to that name. Check the spelling.")
+      self.init(title: "No site at this address", reason: "Nothing answers to that name. Check its spelling in the bar.")
     case NSURLErrorTimedOut:
-      self.init(title: "The site took too long", reason: "It didn't answer in time. It may be down, or the network slow.")
-    case let code where certificate.contains(code):
+      self.init(title: "The site took too long", reason: "It didn't answer in time. It may be down, or the network slow. Try again in a moment.")
+    case NSURLErrorCannotConnectToHost:
+      self.init(title: "The site isn't answering", reason: "Nothing there took the connection. It may be down. Try again later.")
+    case NSURLErrorNetworkConnectionLost:
+      self.init(title: "The connection was lost", reason: "It dropped while the page was on its way. Try again.")
+    case NSURLErrorHTTPTooManyRedirects:
+      self.init(title: "The site sends you in circles", reason: "It passed the page on too many times to load it. Try again later.")
+    case NSURLErrorBadURL, NSURLErrorUnsupportedURL:
+      self = .unopened
+    case NSURLErrorClientCertificateRejected, NSURLErrorClientCertificateRequired:
+      self.init(title: "The site wants a certificate from you", reason: "ilo has none to give it, so the page can't load here.")
+    case _ where Self.isCertificate(error):
       self.init(
-        title: "This connection isn't private",
-        reason: "The site couldn't prove it is who it says, so ilo didn't load it. \(error.localizedDescription)")
+        title: "A secure connection couldn't be made",
+        reason: "ilo didn't load the page, since what you send could be read on its way. Try again, or check the address in the bar.")
     default:
-      self.init(title: "This page didn't load", reason: error.localizedDescription)
+      self.init(title: "This page didn't load", reason: "Something went wrong on the way. Try again.")
     }
   }
 }

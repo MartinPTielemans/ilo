@@ -235,7 +235,9 @@ private struct PageCard: View {
       .frame(height: Card.pictureHeight)
       .frame(maxWidth: .infinity)
       .overlay(alignment: .top) {
-        if let picture = cache.picture(of: node.id) {
+        if let state = browser.state(of: node.id) {
+          StateCard(state: state)
+        } else if let picture = cache.picture(of: node.id) {
           Image(uiImage: picture)
             .resizable()
             .aspectRatio(contentMode: .fill)
