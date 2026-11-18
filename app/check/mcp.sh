@@ -30,7 +30,9 @@
 # and so are keys while its frame has the keyboard, each with an activity-log entry, and its
 # listeners don't hear the agent's keys or typing. Neither the agent's click nor its ArrowDown and
 # Enter in a login field opens or accepts Chrome's suggestion of a saved login. Its keys, typed or
-# pressed, go to the page alone, and Escape the page doesn't keep runs no Stop of ilo's. Where it
+# pressed, go to the page alone, and Escape the page doesn't keep runs no Stop of ilo's. Its Tab
+# past its page's last control stays in its page, whose next Tab starts it over, and never reaches
+# the user's ring. Where it
 # acts in the page watched, its pointer and a
 # ring with the element's ref show it. It opens a page, clicks its link, goes back, where the tab
 # takes the page's title again, scrolls, takes a screenshot and closes a tab, pins a tab of its own, unpins it and removes it. A close asks a page with a beforeunload
@@ -1481,6 +1483,36 @@ addEventListener("keydown", event => event.key == "Escape" && (document.title = 
   closed=$(call close_tab "{\"tab\":$keys_tab}")
   case "$closed" in "Closed tab $keys_tab."*) ;; *) fail "closing the keys page answered: $closed" ;; esac
 
+  # Its Tab past its page's last control stays in the page: the core asks the app only of a
+  # user's tab, so the user's ring and keyboard don't move (#3220).
+  printf '%s' '<script src="painted.js"></script><input id=start aria-label="First field">
+<input id=last aria-label="Last field">
+<script>
+let focused = 0;
+start.onfocus = () => document.title = "start focused " + ++focused;
+last.onfocus = () => document.title = "last focused";
+painted(() => document.title = "end");
+</script>' > "$out/site/end.html"
+  outline=$(call open_tab "{\"url\":\"localhost:$port/end.html\"}")
+  end_tab=$(printf '%s\n' "$outline" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  [ -n "$end_tab" ] || fail "open_tab of the end page answered: $outline"
+  await_log "^browser: title $end_tab end\$" "the end page didn't paint"
+  rings=$(grep -c '^browser: sidebar keyed \|^browser: strip keyed \|^browser: tab [0-9]* focus left its page.*kept by the app$' "$log" || true)
+  call press_key "{\"tab\":$end_tab,\"key\":\"Tab\"}" > /dev/null
+  await_log "^browser: title $end_tab start focused 1\$" "the agent's Tab didn't reach its page's field"
+  call press_key "{\"tab\":$end_tab,\"key\":\"Tab\"}" > /dev/null
+  await_log "^browser: title $end_tab last focused\$" "the agent's second Tab didn't reach the last field"
+  call press_key "{\"tab\":$end_tab,\"key\":\"Tab\"}" > /dev/null
+  await_log "^browser: tab $end_tab focus left its page at the end, kept by the agent's page\$" \
+    "the agent's Tab past its page's last control wasn't kept in its page"
+  # Kept, the page has the keyboard with nothing in it focused, so its next Tab starts it over.
+  call press_key "{\"tab\":$end_tab,\"key\":\"Tab\"}" > /dev/null
+  await_log "^browser: title $end_tab start focused 2\$" \
+    "the agent's Tab after its page's end didn't give it its first control again"
+  [ "$(grep -c '^browser: sidebar keyed \|^browser: strip keyed \|^browser: tab [0-9]* focus left its page.*kept by the app$' "$log" || true)" = "$rings" ] ||
+    fail "the agent's Tab past its page's end reached the user's ring"
+  call close_tab "{\"tab\":$end_tab}" > /dev/null
+
   # Its typing is keys, as a keyboard's, so a field's own key handlers filter and format it as they
   # do a user's, and a line break never sends or submits: a chat composer whose Enter sends gets
   # the agent's lines as one unsent message. Text that isn't one key arrives exact, with no
@@ -1861,7 +1893,8 @@ red = total = 0
 for y in range(int(y0 * abs(height)), int(y1 * abs(height))):
     row = y if height < 0 else abs(height) - 1 - y
     for x in range(int(x0 * width), int(x1 * width)):
-        b, g, r = data[offset + row * stride + x * bits // 8:][:3]
+        start = offset + row * stride + x * bits // 8
+        b, g, r = data[start:start + 3]
         red += r > 160 and g < 100 and b < 100
         total += 1
 print(red * 100 // max(total, 1), red)

@@ -9,7 +9,8 @@
 # from the window in an empty Space and with a page, F6 from the page and the arrows down the rows
 # have NVDA say something, with UI Automation's focus off GPUI's unnamed root and, in the sidebar,
 # on the ringed row; ↓ in the bar has it say the suggestion selected and where it stands, ⇧Tab from
-# a page's first control keeps the keyboard in ilo's window, and the Library's key has it on the
+# a page's first control and Tab past its last ring the tab shown's row, and Tab and ⇧Tab from the
+# ring have it say the page's first and last control, and the Library's key has it on the
 # Library's search field, where ↓ has it say the row ringed and where it stands. Elsewhere it
 # records.
 # NVDA's portable copy (GPL) is fetched from NV Access' release on GitHub, its checksum pinned, into
@@ -269,11 +270,22 @@ press tab
 press down
 press down
 press tab shift
-# ⇧Tab again, from the page's first control, the link: the keyboard stays in ilo's window, as
-# Chrome's goes to its own controls, never to another app's (#3220). Where in it is recorded.
+# ⇧Tab again, from the page's first control, the link, rings the tab shown's row, read by its
+# name, and Tab from the ring has NVDA say the link; Tab past the last control, the button, rings
+# the row again, and ⇧Tab from it has NVDA say the button (#3220).
+judging=1
 press tab shift
-tail -n 4 "$focus_file" | grep -q "^foreground window: .* (ilo's)$" ||
-  fail "⇧Tab from the page's first control took the keyboard out of ilo's window: $focus_file"
+on_row Reading "⇧Tab from the page's first control"
+at=$(wc -l < "$nvda_log")
+press tab
+says "$at" "Link" "NVDA didn't say the page's first control after Tab from the ring"
+press tab
+press tab
+on_row Reading "Tab past the page's last control"
+at=$(wc -l < "$nvda_log")
+press tab shift
+says "$at" "Button" "NVDA didn't say the page's last control after ⇧Tab from the ring"
+judging=
 # Out of the page into the sidebar with F6, Focus Sidebar, and along its rows: each is read by its
 # name, with UI Automation's focus on GPUI's node for it, not Chromium's window (#3151). A second
 # tab first, at the top of Today, so ↓ has the first page's row to go to.
