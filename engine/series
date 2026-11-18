@@ -93,6 +93,7 @@ ours/chromium-link-alt-click-threshold.patch
 ours/chromium-toast-no-anchor.patch
 ours/chromium-core-tab-dialog-behind.patch
 ours/chromium-wayland-embedder-text-input.patch
+ours/chromium-core-abh-dialog-hidden-focus.patch
 # mac/: applied only to the Mac's tree (setup.sh and build.sh say so), after the rest.
 mac/chromium-crashpad-mac-handler.patch
 mac/chromium-crashpad-mac-async-start.patch
