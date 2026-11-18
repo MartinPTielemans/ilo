@@ -1362,8 +1362,15 @@ black_space() {
   expect '^browser: theme picker hidden$' "escape didn't close the theme picker"
   send move $page_point
 }
-material="not measured outside a check VM"
-if [ "$(sysctl -n kern.hv_vmm_present)" = 1 ]; then
+# Windows' and Linux's windows have no material under the UI, whose tint is the window's look, so
+# there's none to measure there, and kern.hv_vmm_present is the Mac's alone (#3327).
+if [ "$(uname)" = Linux ]; then
+  material="none on Linux, whose window has no material under the UI"
+elif windows; then
+  material="none on Windows, whose window has no material under the UI"
+elif [ "$(sysctl -n kern.hv_vmm_present)" != 1 ]; then
+  material="not measured outside a check VM"
+else
   # Black is neutral, so the field's gradient is faint and known: stops at 0.06 in dark and 0.09
   # in light, from black at the top to 0.25 · 255 at the bottom.
   black_space
