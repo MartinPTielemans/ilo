@@ -69,7 +69,7 @@ takes a command a line on its standard input:
                   earlier run's FILE for the same site, its selectors none of whose elements were
                   shown then, the page's own aside, and some are now. Logs "cdp: hidden SELECTORS
                   ELEMENTS SHOWN blocker SELECTORS page SELECTORS missed SELECTORS ELEMENTS
-                  untold ELEMENTS SELECTORS in MS ms", untold those not told apart in 15 s
+                  untold ELEMENTS SELECTORS in MS ms", untold those not told apart in 40 s
   requests FILE   records each request the attached page and its frames make from now on, a JSON
                   line each in FILE: "sent" with its id, address and wall time in ms, and
                   "redirect": true where it's a redirect of the request before it, and
@@ -696,20 +696,26 @@ def blockers(rules):
 
 
 # How many of whose() asks go to the browser together: enough that it's never waiting on the
-# check, few enough that a blocker's rule found in one says the next wave's answers already.
-WAVE = 32
+# check, few enough that a blocker's rule found in one says the next wave's answers already. The
+# browser answers them one at a time, up to 0.4 s each on a page of many rules, so a wave's also
+# what the budget can run over by (#3335).
+WAVE = 8
 
 
-def whose(selectors, budget=15):
+def whose(selectors, budget=40):
     """Of SELECTORS, those a blocker hid and those the page hid itself, as two lists, then how many
-    marked elements and selectors weren't told apart when BUDGET ended. A blocker's
+    marked elements and selectors weren't told apart when BUDGET ended. It asks until every marked
+    element is told, so only a page of many hidden parts and style rules takes long: Chromium
+    answers each ask in turn, cold, up to 0.4 s on Windows, about 35 s for a YouTube watch page
+    there (#3335). A blocker's
     hiding is a rule from a style sheet the page didn't load, as blockers() tells it: the
     browser's own engine's (core/ad_block_page_agent.cc) and uBlock Origin's, their procedural
     filters' too, which hide by an attribute and a rule. The page's own is an element at display: none that no such
     rule hides, as a player's controls before it plays (#3268). A selector is the page's only
     where every element looked at is, and one not told apart in BUDGET seconds is neither, so it
     counts as the blocker's would. Each selector's first element is asked about before any
-    selector's second, so a page's many hidden parts get the most selectors an answer."""
+    selector's second, so a page's many hidden parts get the most selectors an answer, and a
+    selector one of whose elements is the blocker's is the blocker's, so its others aren't asked."""
     began = time.monotonic()
     owners = evaluate("%s(%s)" % (MARK, json.dumps(selectors))) or []
     call("DOM.enable", {}, session)
@@ -728,8 +734,10 @@ def whose(selectors, budget=15):
             nth.append(seen.get(owner, 0))
             seen[owner] = nth[-1] + 1
         order = sorted(range(len(nodes)), key=lambda k: (nth[k], k))
+        # The selectors an element of which is the blocker's, which nothing more can change.
+        settled = set()
         while time.monotonic() - began <= budget:
-            wave = [k for k in order if said[k] is None][:WAVE]
+            wave = [k for k in order if said[k] is None and owners[k] not in settled][:WAVE]
             if not wave:
                 break
             asked = set(wave)
@@ -749,6 +757,7 @@ def whose(selectors, budget=15):
                 for i, hit in enumerate(evaluate("%s(%s)" % (MATCHES, json.dumps(lists))) or []):
                     if hit and i < len(said):
                         said[i] = "blocker"
+            settled.update(owner for owner, verdict in zip(owners, said) if verdict == "blocker")
     evaluate(UNMARK)
     # Each would send an event a change of the page's from here on.
     call("CSS.disable", {}, session)
@@ -759,7 +768,8 @@ def whose(selectors, budget=15):
     blocker = sorted(s for s, v in told.items() if "blocker" in v)
     page = sorted(s for s, v in told.items() if all(x == "page" for x in v))
     untold = [s for s, v in told.items() if None in v and "blocker" not in v]
-    return blocker, page, [said.count(None), len(untold)]
+    # A blocker's selector's elements left unasked aren't untold: their selector is told.
+    return blocker, page, [sum(told[s].count(None) for s in untold), len(untold)]
 
 
 def hidden(path, base):
