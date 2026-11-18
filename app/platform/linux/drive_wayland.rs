@@ -144,6 +144,9 @@ thread_local! {
     /// The modifiers flags holds, and those the last key went with, as drive.rs keeps them.
     static FLAGS: Cell<u16> = const { Cell::new(0) };
     static KEY_FLAGS: Cell<u16> = const { Cell::new(0) };
+    /// Whether the Control the last key left is a ⌃Tab walk's, which a click keeps, as drive.rs's
+    /// WALK (#3340).
+    static WALK: Cell<bool> = const { Cell::new(false) };
     /// Whether the key held since the last key's events has been held to a repeat (`repeat`).
     static REPEATED: Cell<bool> = const { Cell::new(false) };
     /// The last press: when, where in sway's layout, and its button.
@@ -841,6 +844,12 @@ fn held() -> u16 {
     FLAGS.get() | KEY_FLAGS.get() & CONTROL
 }
 
+/// The Control a click `action` keeps: a ⌃Tab walk's (WALK), for a left click, as a hand's.
+fn walk_control(action: &str) -> u16 {
+    let kept = matches!(action, "click" | "clickkey") && WALK.get();
+    if kept { CONTROL } else { 0 }
+}
+
 /// The pointer to (`x`, `y`) in sway's layout, unless that's in another app's window or off the
 /// screen. Just outside one of the app's, it's sway's to take, as a press at the border it resizes
 /// windows by (#1572).
@@ -916,6 +925,7 @@ fn first_press(x: f64, y: f64, which: u32, again: bool) {
 fn with_modifiers(state: u16, events: impl FnOnce() -> Option<()>) -> Option<()> {
     hold(state | FLAGS.get())?;
     KEY_FLAGS.set(KEY_FLAGS.get() & !CONTROL);
+    WALK.set(false);
     let done = events();
     hold(held())?;
     done
@@ -990,6 +1000,8 @@ fn key_events(key: &str, state: u16, kinds: &[bool]) -> Option<()> {
     REPEATED.set(false);
     let state = state | FLAGS.get();
     KEY_FLAGS.set(state & (CONTROL | ALT | SHIFT));
+    // The walk's keys after its ⌃Tab, such as an arrow with Control, keep it.
+    WALK.set(state & CONTROL != 0 && (key == "tab" || WALK.get()));
     hold(state | if shift { SHIFT } else { 0 })?;
     with_session(|session, time| {
         for &press in kinds {
@@ -1349,7 +1361,13 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
                 "middleclick" => BTN_MIDDLE,
                 _ => BTN_LEFT,
             };
-            click(x, y, which, drive::click_modifiers(words), false)?;
+            click(
+                x,
+                y,
+                which,
+                drive::click_modifiers(words) | walk_control(action),
+                false,
+            )?;
             if action == "doubleclick" {
                 click(x, y, BTN_LEFT, 0, true)?;
             }
@@ -1387,7 +1405,7 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
                 return settings_click((x, y), (left + x, top + y), which, double);
             }
             let (x, y) = (left + x, top + y);
-            click(x, y, which, 0, false)?;
+            click(x, y, which, walk_control(action), false)?;
             if action == "doubleclickkey" {
                 click(x, y, BTN_LEFT, 0, true)?;
             }
@@ -1497,6 +1515,7 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
         "flags" => (|| {
             let to = drive::modifiers(words);
             FLAGS.set(FLAGS.get() | KEY_FLAGS.take());
+            WALK.set(false);
             for (mask, code) in MODIFIER_KEYS {
                 let held = FLAGS.get();
                 let press = match (held & mask != 0, to & mask != 0) {
