@@ -353,6 +353,99 @@ __weak NSWindow* g_pip;
 NSPoint g_pip_held_at;
 bool g_pip_held = false;
 
+// #3354's probe, only while `pip move` is the last driver command: what the move reached, and
+// what the Mini Player's window heard and did after it, each as a "browser: pip probe" line.
+bool g_pip_probe_track = false;
+NSTimeInterval g_pip_probe_at = 0;
+id g_pip_probe_monitor;
+id g_pip_probe_moved;
+id g_pip_probe_resized;
+id g_pip_probe_resigned;
+
+double PipProbeMs() {
+  return (NSProcessInfo.processInfo.systemUptime - g_pip_probe_at) * 1000;
+}
+
+void EndPipProbe() {
+  if (g_pip_probe_monitor) {
+    [NSEvent removeMonitor:g_pip_probe_monitor];
+    g_pip_probe_monitor = nil;
+  }
+  NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
+  if (g_pip_probe_moved) {
+    [center removeObserver:g_pip_probe_moved];
+    g_pip_probe_moved = nil;
+  }
+  if (g_pip_probe_resized) {
+    [center removeObserver:g_pip_probe_resized];
+    g_pip_probe_resized = nil;
+  }
+  if (g_pip_probe_resigned) {
+    [center removeObserver:g_pip_probe_resigned];
+    g_pip_probe_resigned = nil;
+  }
+}
+
+void StartPipProbe(NSWindow* pip) {
+  EndPipProbe();
+  g_pip_probe_at = NSProcessInfo.processInfo.systemUptime;
+  const NSRect frame = pip.frame;
+  fprintf(stderr, "browser: pip probe window %ld at %.0f,%.0f %.0fx%.0f, key %d, main %d\n",
+          (long)pip.windowNumber, frame.origin.x, frame.origin.y, frame.size.width,
+          frame.size.height, pip.keyWindow, pip.mainWindow);
+  __weak NSWindow* weak = pip;
+  g_pip_probe_monitor = [NSEvent
+      addLocalMonitorForEventsMatchingMask:NSEventMaskMouseEntered | NSEventMaskMouseExited |
+                                           NSEventMaskMouseMoved
+                                   handler:^NSEvent*(NSEvent* event) {
+                                     NSWindow* window = weak;
+                                     if (!window || event.window != window) {
+                                       return event;
+                                     }
+                                     const char* type =
+                                         event.type == NSEventTypeMouseEntered  ? "entered"
+                                         : event.type == NSEventTypeMouseExited ? "exited"
+                                                                                : "moved";
+                                     const char* owner =
+                                         event.type == NSEventTypeMouseMoved
+                                             ? "-"
+                                             : NSStringFromClass([event.trackingArea.owner class])
+                                                   .UTF8String;
+                                     fprintf(stderr,
+                                             "browser: pip probe %s at %.0f,%.0f for %s +%.0f ms\n",
+                                             type, event.locationInWindow.x,
+                                             NSHeight(window.frame) - event.locationInWindow.y,
+                                             owner, PipProbeMs());
+                                     return event;
+                                   }];
+  NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
+  g_pip_probe_moved =
+      [center addObserverForName:NSWindowDidMoveNotification
+                          object:pip
+                           queue:nil
+                      usingBlock:^(NSNotification* note) {
+                        const NSRect at = ((NSWindow*)note.object).frame;
+                        fprintf(stderr, "browser: pip probe moved to %.0f,%.0f +%.0f ms\n",
+                                at.origin.x, at.origin.y, PipProbeMs());
+                      }];
+  g_pip_probe_resized =
+      [center addObserverForName:NSWindowDidResizeNotification
+                          object:pip
+                           queue:nil
+                      usingBlock:^(NSNotification* note) {
+                        const NSRect at = ((NSWindow*)note.object).frame;
+                        fprintf(stderr, "browser: pip probe resized to %.0fx%.0f +%.0f ms\n",
+                                at.size.width, at.size.height, PipProbeMs());
+                      }];
+  g_pip_probe_resigned = [center addObserverForName:NSWindowDidResignKeyNotification
+                                             object:pip
+                                              queue:nil
+                                         usingBlock:^(NSNotification*) {
+                                           fprintf(stderr, "browser: pip probe resigned key +%.0f ms\n",
+                                                   PipProbeMs());
+                                         }];
+}
+
 // +[NSEvent mouseLocation], which Chromium's move loop moves a window by, and AppKit's own: while
 // pip holds the Mini Player, the driver's pointer, as the loop would follow a hand's.
 NSPoint (*g_mouse_location)(id, SEL);
@@ -632,8 +725,18 @@ void TrackMove(NSView* view, NSEvent* move, NSView* hit) {
                   (options & NSTrackingActiveInKeyWindow && view.window.keyWindow) ||
                   (options & NSTrackingActiveWhenFirstResponder &&
                    view.window.firstResponder == view);
-    if (options & NSTrackingMouseMoved && active && NSPointInRect(at, rect) &&
-        area.owner != hit && [area.owner respondsToSelector:@selector(mouseMoved:)]) {
+    const bool handed = options & NSTrackingMouseMoved && active && NSPointInRect(at, rect) &&
+                        area.owner != hit &&
+                        [area.owner respondsToSelector:@selector(mouseMoved:)];
+    if (g_pip_probe_track) {
+      fprintf(stderr,
+              "browser: pip probe area of %s owned by %s, options %lx, active %d, pointer in %d, "
+              "handed %d\n",
+              NSStringFromClass([view class]).UTF8String,
+              NSStringFromClass([area.owner class]).UTF8String, (unsigned long)options, active,
+              NSPointInRect(at, rect), handed);
+    }
+    if (handed) {
       [area.owner mouseMoved:move];
     }
   }
@@ -691,6 +794,14 @@ void MoveIn(NSWindow* target, double x, double y) {
   NSView* hit =
       [content hitTest:[content.superview convertPoint:move.locationInWindow fromView:nil]];
   Pointed(target, move.locationInWindow);
+  if (g_pip_probe_track) {
+    fprintf(stderr, "browser: pip probe hit %s, %s the content view %s\n",
+            NSStringFromClass([hit class]).UTF8String,
+            hit == content                 ? "is"
+            : [hit isDescendantOf:content] ? "under"
+                                           : "outside",
+            NSStringFromClass([content class]).UTF8String);
+  }
   [hit mouseMoved:move];
   TrackMove(content, move, hit);
   [NSApp postEvent:move atStart:NO];
@@ -1446,6 +1557,8 @@ bool Run(const std::string& line, void (^done)(void)) {
   std::istringstream words(line);
   std::string action;
   words >> action;
+  // #3354's probe lives until the command after its pip move.
+  EndPipProbe();
   if (action == "pip") {
     NSWindow* pip = g_pip_held ? g_pip : MiniPlayer();
     if (!pip) {
@@ -1470,7 +1583,10 @@ bool Run(const std::string& line, void (^done)(void)) {
       return false;
     }
     if (step == "move") {
+      StartPipProbe(pip);
+      g_pip_probe_track = true;
       MoveIn(pip, x, y);
+      g_pip_probe_track = false;
       done();
       return true;
     }
