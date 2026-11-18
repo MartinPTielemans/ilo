@@ -3880,6 +3880,15 @@ BC_EXPORT void bc_window_set_side_panel_width(bc_id window, double width);
 // down, as a drag on a title bar does. Called on the drag's first move.
 BC_EXPORT void bc_window_start_move(bc_id window);
 
+// On Linux: has the window manager or compositor resize |window| from its left edge, or with
+// |right| its right one, while the button pressed there is down. While the window isn't maximized
+// or full screen, a band 3 points wide inside each edge resizes it. Chromium takes the pointer in
+// the band along the top and bottom and in the corners, 16 points along an edge. The UI has the
+// left and right bands between the corners: it hears the pointer there, as the hidden sidebar's
+// edge needs, shows the resize cursor, and calls this on a press. Nothing on the Mac and Windows,
+// whose resize areas are outside the window's content.
+BC_EXPORT void bc_window_start_resize(bc_id window, bool right);
+
 // On Linux, where the UI draws the window's buttons: whether |window| is maximized, which its third
 // button shows, as restore rather than maximize. The UI asks as the window's bounds change, as
 // maximizing and restoring change them.

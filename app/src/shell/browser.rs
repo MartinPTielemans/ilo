@@ -696,6 +696,9 @@ pub trait Browser {
     /// On Linux, has the browser window follow the pointer, on a drag's first move over the
     /// window's background, as GPUI's own move can't: its window is inside the browser window.
     fn start_window_move(&self, cx: &mut App);
+    /// On Linux, has the browser window resize from its left edge, or with `right` its right one,
+    /// after a press in the band there that the core leaves to the UI.
+    fn start_window_resize(&self, right: bool, cx: &mut App);
     /// On Linux, whether the browser window is maximized, which the third window button the UI
     /// draws shows. False on the Mac, where AppKit draws that button.
     fn window_maximized(&self) -> bool;

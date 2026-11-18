@@ -1523,6 +1523,17 @@ impl Browser for Engine {
         crate::drive::window_move_asked();
     }
 
+    fn start_window_resize(&self, right: bool, _: &mut App) {
+        // Only Linux's UI has a band to resize from: the Mac's and Windows' resize areas are
+        // outside the window's content, the system's.
+        #[cfg(target_os = "linux")]
+        unsafe {
+            bc::bc_window_start_resize(self.window, right)
+        };
+        #[cfg(not(target_os = "linux"))]
+        let _ = right;
+    }
+
     fn window_maximized(&self) -> bool {
         #[cfg(target_os = "windows")]
         return unsafe { platform::host_window_maximized(self.ui_view) };
