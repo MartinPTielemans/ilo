@@ -1498,6 +1498,8 @@ pub struct Shell {
     fields_drawn: Rc<RefCell<HashMap<u64, bool>>>,
     /// Where the Library's empty line was last laid out, for its log line.
     empty_drawn: Rc<RefCell<String>>,
+    /// Where each of the Library's section buttons was last drawn, for its log line.
+    buttons_drawn: Rc<RefCell<HashMap<&'static str, Bounds<Pixels>>>>,
     /// The line under the favorites, shown while the list is past its top, and the one at its
     /// foot, while rows are hidden under it.
     top_edge: swipe::EdgeLine,
@@ -1826,8 +1828,9 @@ pub struct Shell {
     /// While the Library's width goes to another section's: the width it left, and when.
     library_resize: Option<(f32, Instant)>,
     /// The Library's search field takes the keyboard on the next frame, as the Library opens or
-    /// shows another section, so a screen reader, which follows it, says where it is (#3238).
-    library_keys: bool,
+    /// shows another section, so a screen reader, which follows it, says where it is (#3238), and
+    /// who had it gets it back as the Library closes by key (#3313).
+    library_keys: library::keys::LibraryKeys,
     /// While the card moves for the Library on its own: how far out it started (`library_out`),
     /// how fast, and when.
     library_motion: Option<(f32, f32, Instant)>,
@@ -2137,6 +2140,7 @@ impl Shell {
             card_press_closes: false,
             fields_drawn: Rc::default(),
             empty_drawn: Rc::default(),
+            buttons_drawn: Rc::default(),
             top_edge: Default::default(),
             foot_edge: Default::default(),
             list_measured: Default::default(),
@@ -2292,7 +2296,7 @@ impl Shell {
             library: None,
             library_open: false,
             library_resize: None,
-            library_keys: false,
+            library_keys: Default::default(),
             library_motion: None,
             sidebar_fade: None,
             card_strip: Default::default(),

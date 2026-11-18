@@ -2968,7 +2968,8 @@ fn main() {
                     browser.report_archive(cx);
                     browser.report_downloads(cx);
                     // PREVIEW_EMPTY=1 shows no page, as a fresh ⌘N window does; =reading does so in the
-                    // second Space, for its colour, and =private in a private window with no tabs.
+                    // second Space, for its colour, =private in a private window with no tabs, and =new
+                    // in a Space with no tabs and no favorites, as a new user's after the onboarding.
                     // PREVIEW_WELCOME=1 shows no page with the first run's welcome, and
                     // PREVIEW_ONBOARDING=1, =light or =dark the onboarding over it first.
                     let onboarding = std::env::var("PREVIEW_ONBOARDING").ok();
@@ -3176,6 +3177,19 @@ fn main() {
                             );
                             shell.set_selected(0, cx);
                         }
+                        (Some("new"), _) => {
+                            shell.set_favorites(Vec::new(), cx);
+                            let none = Folders::default();
+                            shell.set_tabs(
+                                first_space,
+                                Vec::new(),
+                                Vec::new(),
+                                Vec::new(),
+                                none,
+                                cx,
+                            );
+                            shell.set_selected(0, cx);
+                        }
                         (Some("reading"), _) => {
                             shell.set_space(first_space + 1, cx);
                             shell.set_selected(0, cx);
@@ -3305,6 +3319,16 @@ fn main() {
                             }
                         })
                         .ok();
+                    // PREVIEW_LIBRARY_ROW=n rings the list's nth row, as ↓ n times from the field
+                    // does, once the Library has drawn its rows.
+                    let rows = std::env::var("PREVIEW_LIBRARY_ROW").ok();
+                    if let Some(rows) = rows.and_then(|rows| rows.parse().ok()) {
+                        window
+                            .update(cx, |_, window, cx| {
+                                ring_library_row(cx.entity(), rows, 120, window)
+                            })
+                            .ok();
+                    }
                 }
                 Ok(window)
                     if update
@@ -3428,6 +3452,17 @@ fn main() {
                         cx,
                     );
                 }
+            }
+            // PREVIEW_FOCUS_SIDEBAR=1 gives the sidebar the keyboard, as Tab from the window does, its
+            // ring on the tab shown's row, or New Tab's in an empty Space (#3151).
+            if let Some(shell) =
+                shell_window.filter(|_| std::env::var_os("PREVIEW_FOCUS_SIDEBAR").is_some())
+            {
+                shell
+                    .update(cx, |shell, _, cx| {
+                        shell.run(Command::FocusSidebar, "preview", cx)
+                    })
+                    .ok();
             }
             // PREVIEW_BOOST_CARD opens the Boost card of the tab shown (preview_boost_folder).
             if let Some(shell) =
@@ -3976,6 +4011,21 @@ impl menu::Host for PreviewMenu {
     fn show(&self, _: Bounds<Pixels>, _: &[Bounds<Pixels>]) {}
 
     fn hide(&self) {}
+}
+
+/// Rings the Library's `rows`th row at the first frame its list has rows, trying `frames` more.
+fn ring_library_row(
+    shell: gpui::Entity<Shell>,
+    rows: usize,
+    frames: usize,
+    window: &mut gpui::Window,
+) {
+    window.on_next_frame(move |window, cx| {
+        let rang = shell.update(cx, |shell, cx| shell.preview_ring_library_row(rows, cx));
+        if !rang && frames > 0 {
+            ring_library_row(shell, rows, frames - 1, window);
+        }
+    });
 }
 
 /// The icon picker over the preview's window, whose host can't move it: it opened where it's to be.

@@ -4,7 +4,7 @@
 //! over it, or for Spaces a card for each (docs/ux-spec.md › Archive and Downloads).
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     hash::{DefaultHasher, Hash, Hasher},
     rc::Rc,
     sync::Arc,
@@ -12,9 +12,9 @@ use std::{
 use web_time::Instant;
 
 use gpui::{
-    AnyElement, ClickEvent, Context, DispatchPhase, Div, DragMoveEvent, Entity, Focusable,
+    AnyElement, Bounds, ClickEvent, Context, DispatchPhase, Div, DragMoveEvent, Entity, Focusable,
     FontWeight, HitboxBehavior, Hsla, Image, ListAlignment, ListState, Modifiers, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, Point, RenderImage,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, Point, RenderImage, Role,
     SharedString, Stateful, StyledText, Subscription, WeakEntity, Window, canvas, div, img,
     linear_color_stop, linear_gradient, list, prelude::*, px, relative, svg,
 };
@@ -392,6 +392,19 @@ pub(super) enum Section {
 }
 
 impl Section {
+    /// What its button says, and what an assistive app calls its list.
+    fn title(self) -> &'static str {
+        match self {
+            Section::Media => "Media",
+            Section::Downloads => "Downloads",
+            Section::Spaces => "Spaces",
+            Section::Archive => "History",
+            Section::Agents => "Agents",
+            Section::Boosts => "Boosts",
+            Section::Boards => "Boards",
+        }
+    }
+
     fn name(self) -> &'static str {
         match self {
             Section::Media => "media",
@@ -437,6 +450,10 @@ pub(super) struct Library {
     /// Spaces' keyboard, which has no search field, and the card its ring is on, by its Space.
     cards: gpui::FocusHandle,
     keyed_card: Option<u64>,
+    /// The row the field's keys ring, by its line in `items` and, in Media, its tile's column, and
+    /// where it was last drawn, for return to open it from there as a click does.
+    keyed_row: Option<(usize, usize)>,
+    row_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The search the list shows, to skip notes from the field that leave its text as it was.
     query: String,
     items: Vec<Item>,
@@ -500,6 +517,15 @@ impl Only {
         menu.extend([None, Some(Only::Visited)]);
         menu
     }
+}
+
+/// Where the ring goes as the list's lines change under it: the same line, where it is now, else
+/// none.
+fn rekeyed(library: &Library, items: &[Item]) -> Option<(usize, usize)> {
+    let (line, column) = library.keyed_row?;
+    let item = library.items.get(line)?;
+    let at = items.iter().position(|each| each == item)?;
+    Some((at, column))
 }
 
 /// A line of the section's list.
@@ -1036,6 +1062,8 @@ impl Shell {
             _search: observe,
             cards: cx.focus_handle(),
             keyed_card: None,
+            keyed_row: None,
+            row_drawn: Rc::default(),
         });
         // check.sh waits for these lines.
         log!("browser: library section {}", section.name());
@@ -1048,6 +1076,22 @@ impl Shell {
             log!("browser: library spaces {count} wide {width}");
         }
         self.filter(true, cx);
+    }
+
+    /// ⌘Z, or ⇧⌘Z unless `undoing`, in the Library's search field: while it's empty, nothing typed
+    /// there could seem to be what the key undoes, so it's the window's step, the one the toast
+    /// offers after Clear Archive or Delete from Archive (#3306). With text in it, the key goes on
+    /// to the field, which keeps it from undoing what's out of sight.
+    fn step_past_search(&mut self, undoing: bool, cx: &mut Context<Self>) {
+        let empty = (self.library.as_ref())
+            .is_some_and(|library| library.search.read(cx).text().is_empty());
+        if empty {
+            match undoing {
+                true => self.undo(cx),
+                false => self.redo(cx),
+            };
+            cx.stop_propagation();
+        }
     }
 
     /// Closes the Library at once, as a page goes full screen.
@@ -1148,6 +1192,8 @@ impl Shell {
         // A search goes back to the list, to find in it.
         if query != library.query {
             library.opened = None;
+            // As the command bar's selection goes back to the top as the text changes.
+            library.keyed_row = None;
         }
         if self.section == Section::Agents
             && let Some(id) = library.opened.clone()
@@ -1198,6 +1244,7 @@ impl Shell {
                     );
                     if items != library.items {
                         library.list.reset(items.len());
+                        library.keyed_row = rekeyed(library, &items);
                         library.items = items;
                     }
                     library.query = query;
@@ -1343,6 +1390,7 @@ impl Shell {
             library.items = items;
         } else if items != library.items {
             library.list.reset(items.len());
+            library.keyed_row = rekeyed(library, &items);
             library.items = items;
         }
         library.query = query;
@@ -1828,6 +1876,13 @@ impl Shell {
                     window.focus(&search.focus_handle(cx), cx);
                 }),
             )
+            // Ahead of the field, which ends ⌘Z and ⇧⌘Z as it has no undo of its own.
+            .capture_action(cx.listener(|shell, _: &crate::text_input::Undo, _, cx| {
+                shell.step_past_search(true, cx)
+            }))
+            .capture_action(cx.listener(|shell, _: &crate::text_input::Redo, _, cx| {
+                shell.step_past_search(false, cx)
+            }))
             .text_size(px(text::BODY))
             .text_color(self.palette.text(FORM_TEXT))
             .child(
@@ -1840,6 +1895,7 @@ impl Shell {
                     .text_color(self.palette.text(SEARCH_PLACEHOLDER)),
             )
             .child(library.search.clone());
+        let field = self.with_row_keys(field, cx);
         let filter = filtered.then(|| {
             let label = match self.archive_only() {
                 Only::All => "Filter",
@@ -1909,8 +1965,13 @@ impl Shell {
         } else {
             let item =
                 cx.processor(|shell, index, window, cx| shell.archive_item(index, window, cx));
-            list(library.list.clone(), item)
+            let label = self.section.title();
+            div()
                 .size_full()
+                .id("library-rows")
+                .when(self.a11y, |rows| rows.role(Role::ListBox).aria_label(label))
+                .child(list(library.list.clone(), item).size_full())
+                .children(self.a11y.then(|| self.rows_announcer()))
                 .into_any_element()
         };
         // On the right it comes out from behind the card, which shows none of it past its edge,
@@ -2566,6 +2627,7 @@ impl Shell {
             Item::Download(download) => return self.download_item(download, cx),
             Item::Media(row) => return self.media_row(row, window, cx),
         };
+        let row = Item::Tab(tab);
         let Some(tab) = self.archive.get(tab) else {
             return div().into_any_element();
         };
@@ -2622,6 +2684,7 @@ impl Shell {
             .child(
                 div()
                     .id(("archived", id))
+                    .map(|plate| self.library_row(plate, row, 0, ARCHIVED_RADIUS))
                     .size_full()
                     .relative()
                     .flex()
@@ -2682,6 +2745,7 @@ impl Shell {
             .child(
                 div()
                     .id(("archived-task", task_number(&agent)))
+                    .map(|plate| self.library_row(plate, Item::Task(index), 0, ARCHIVED_RADIUS))
                     .size_full()
                     .relative()
                     .rounded(px(ARCHIVED_RADIUS))
@@ -2814,6 +2878,7 @@ impl Shell {
             .child(
                 div()
                     .id(("past-task", index))
+                    .map(|plate| self.library_row(plate, Item::Past(index), 0, ARCHIVED_RADIUS))
                     .group(group)
                     .size_full()
                     .relative()
@@ -2923,6 +2988,7 @@ impl Shell {
         });
         let back = div()
             .id("past-back")
+            .map(|back| self.library_row(back, Item::PastHead(index), 0, ARCHIVED_RADIUS))
             .absolute()
             .left(px(ARCHIVED_FAVICON_X + FAVICON_SIZE / 2. - 12.))
             .top(px((ARCHIVED_PLATE - 24.) / 2.))
@@ -3032,13 +3098,9 @@ impl Shell {
     /// A step of the past task, in the words Settings › Agents' activity log has, over when it
     /// came and why it was refused, if it was. A request opens, as it does there, to show where it
     /// went and what it sent (#2326).
-    fn past_step_item(&mut self, index: usize, step: usize, cx: &mut Context<Self>) -> AnyElement {
-        let Some(past) = self.agent_history.get(index) else {
-            return div().into_any_element();
-        };
-        let Some(each) = past.steps.get(step) else {
-            return div().into_any_element();
-        };
+    /// The step at `step` of the past task at `past`, as its row says what the agent did.
+    fn past_step_title(&self, past: usize, step: usize) -> Option<String> {
+        let each = self.agent_history.get(past)?.steps.get(step)?;
         let did = crate::agents::tools::Did {
             tool: each.action.clone(),
             site: each.site.clone(),
@@ -3049,12 +3111,24 @@ impl Shell {
             true => crate::agents::tools::Tense::Done,
             false => crate::agents::tools::Tense::Failed,
         };
+        Some(crate::agents::tools::step_title(&did, tense))
+    }
+
+    fn past_step_item(&mut self, index: usize, step: usize, cx: &mut Context<Self>) -> AnyElement {
+        let Some(past) = self.agent_history.get(index) else {
+            return div().into_any_element();
+        };
+        let Some(each) = past.steps.get(step) else {
+            return div().into_any_element();
+        };
+        let Some(title) = self.past_step_title(index, step) else {
+            return div().into_any_element();
+        };
         let when = crate::agents::local_time(each.at);
         let under = match each.refused.is_empty() {
             true => when,
             false => format!("{when} · Refused: {}", each.refused),
         };
-        let title = crate::agents::tools::step_title(&did, tense);
         let key = (past.id.clone(), step);
         let opens = !each.url.is_empty();
         let (opened, all) = match &self.library {
@@ -3104,8 +3178,7 @@ impl Shell {
             .id(("past-step", step))
             .relative()
             .children(drawn)
-            .role(gpui::accesskit::Role::Button)
-            .aria_label(title)
+            .map(|head| self.library_row(head, Item::PastStep(index, step), 0, ARCHIVED_RADIUS))
             .aria_expanded(opened)
             .on_click(cx.listener(move |shell, _, _, cx| shell.open_past_step(step, false, cx)));
         let part = opened.then(|| {
@@ -3211,6 +3284,7 @@ impl Shell {
             .child(
                 div()
                     .id(("boost", index))
+                    .map(|plate| self.library_row(plate, Item::Boost(index), 0, ARCHIVED_RADIUS))
                     .size_full()
                     .relative()
                     .rounded(px(ARCHIVED_RADIUS))
@@ -3375,22 +3449,23 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let tiles: Vec<_> =
-            row.iter()
-                .flatten()
-                .filter_map(|&medium| {
-                    let (id, path, name) = match medium {
-                        Medium::Capture(index) => self.captures.get(index).map(|each| {
-                            (capture_id(&each.path), each.path.clone(), each.name.clone())
-                        }),
-                        Medium::Download(index) => self
-                            .downloads
-                            .get(index)
-                            .map(|each| (each.id, each.path.clone(), each.name.clone())),
-                    }?;
-                    Some(self.media_tile(id, path, name, window, cx))
-                })
-                .collect();
+        let line = Item::Media(row);
+        let tiles: Vec<_> = (row.iter().enumerate())
+            .filter_map(|(column, medium)| Some((column, (*medium)?)))
+            .filter_map(|(column, medium)| {
+                let (id, path, name) = match medium {
+                    Medium::Capture(index) => self
+                        .captures
+                        .get(index)
+                        .map(|each| (capture_id(&each.path), each.path.clone(), each.name.clone())),
+                    Medium::Download(index) => self
+                        .downloads
+                        .get(index)
+                        .map(|each| (each.id, each.path.clone(), each.name.clone())),
+                }?;
+                Some(self.media_tile(id, path, name, (line, column), window, cx))
+            })
+            .collect();
         div()
             .pl(px(ARCHIVED_LEFT))
             .pr(px(ARCHIVED_RIGHT))
@@ -3406,6 +3481,7 @@ impl Shell {
         id: u64,
         path: SharedString,
         name: SharedString,
+        (line, column): (Item, usize),
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -3442,6 +3518,7 @@ impl Shell {
         let shown = self.palette.plate(STATE_HOVERED);
         div()
             .id(("media", id))
+            .map(|tile| self.library_row(tile, line, column, MEDIA_RADIUS))
             .relative()
             .flex_none()
             .size(px(MEDIA_TILE))
@@ -3622,15 +3699,36 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let selected = section == self.section;
-        let (glyph, label) = match section {
-            Section::Media => ("icons/image.svg", "Media"),
-            Section::Downloads => ("icons/arrow-down-to-line.svg", "Downloads"),
-            Section::Spaces => ("icons/spaces.svg", "Spaces"),
-            Section::Archive => ("icons/rotate-ccw-clock.svg", "History"),
-            Section::Agents => ("icons/square-mouse-pointer.svg", "Agents"),
-            Section::Boosts => ("icons/paintbrush.svg", "Boosts"),
-            Section::Boards => ("icons/presentation.svg", "Boards"),
+        let label = section.title();
+        let glyph = match section {
+            Section::Media => "icons/image.svg",
+            Section::Downloads => "icons/arrow-down-to-line.svg",
+            Section::Spaces => "icons/spaces.svg",
+            Section::Archive => "icons/rotate-ccw-clock.svg",
+            Section::Agents => "icons/square-mouse-pointer.svg",
+            Section::Boosts => "icons/paintbrush.svg",
+            Section::Boards => "icons/presentation.svg",
         };
+        // check.sh clicks where this says the button is drawn, so a section added to the column
+        // moves no check's click. Said once the column is at rest, not each frame it slides.
+        let (drawn, name) = (self.buttons_drawn.clone(), section.name());
+        let at_rest = !self.library_moving() && self.library_resize.is_none();
+        let log_drawn = canvas(
+            move |bounds, _, _| {
+                if at_rest && drawn.borrow_mut().insert(name, bounds) != Some(bounds) {
+                    log!(
+                        "browser: library button {name} at {} {} {} {}",
+                        f32::from(bounds.origin.x).round(),
+                        f32::from(bounds.origin.y).round(),
+                        f32::from(bounds.size.width).round(),
+                        f32::from(bounds.size.height).round(),
+                    );
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .size_full();
         div()
             .id(label)
             .relative()
@@ -3683,6 +3781,7 @@ impl Shell {
                     .text_color(self.palette.text(SECTION_LABEL))
                     .child(label),
             )
+            .child(log_drawn)
     }
 
     /// A download's row: its file's icon, its name over where it is, and while it runs, a bar. A
@@ -3731,6 +3830,7 @@ impl Shell {
             .py(px((ARCHIVED_PITCH - ARCHIVED_PLATE) / 2.))
             .child(
                 self.download_row(div().id(("download", id)), id, "row", cx)
+                    .map(|plate| self.library_row(plate, Item::Download(index), 0, ARCHIVED_RADIUS))
                     .block_mouse_except_scroll()
                     .size_full()
                     .relative()
@@ -4430,9 +4530,11 @@ mod tests {
             shell.sidebar_fade = None;
         });
         cx.run_until_parked();
-        let height = cx.update(|window, _| f32::from(window.viewport_size().height));
-        // The fifth button, History, the column's seven centred 5 above its middle, 100 apart.
-        let section = point(px(SECTION_X + SECTION_WIDTH / 2.), px(height / 2. + 95.));
+        // History's button at its middle, where its log line says the column drew it.
+        let section = shell.read_with(cx, |shell, _| {
+            shell.buttons_drawn.borrow()["archive"].center()
+        });
+        assert_eq!(section.x, px(SECTION_X + SECTION_WIDTH / 2.));
         let menu = |cx: &mut gpui::VisualTestContext| {
             cx.simulate_mouse_down(section, MouseButton::Right, Modifiers::none());
             cx.simulate_mouse_up(section, MouseButton::Right, Modifiers::none());

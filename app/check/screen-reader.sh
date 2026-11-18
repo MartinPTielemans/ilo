@@ -6,11 +6,12 @@
 # heard before, so the run's record, screen-reader-speech.txt, is what each key made NVDA say, and
 # screen-reader-focus.txt is what UI Automation and the window manager had focused after it. It
 # judges the onboarding, the sidebar and the command bar: each step, each Tab through one, Tab
-# from the window, F6 from the page and the arrows down the rows have NVDA say something, with UI
-# Automation's focus off GPUI's unnamed root and, in the sidebar, on the ringed row; ↓ in the bar
-# has it say the suggestion selected and where it stands, ⇧Tab from a page's first control keeps
-# the keyboard in ilo's window, and the Library's key has it on the Library's search field.
-# Elsewhere it records.
+# from the window in an empty Space and with a page, F6 from the page and the arrows down the rows
+# have NVDA say something, with UI Automation's focus off GPUI's unnamed root and, in the sidebar,
+# on the ringed row; ↓ in the bar has it say the suggestion selected and where it stands, ⇧Tab from
+# a page's first control keeps the keyboard in ilo's window, and the Library's key has it on the
+# Library's search field, where ↓ has it say the row ringed and where it stands. Elsewhere it
+# records.
 # NVDA's portable copy (GPL) is fetched from NV Access' release on GitHub, its checksum pinned, into
 # the hosted runner's temporary folder, and never installed: with NVDA_DIR naming a portable copy,
 # the run uses that instead. Off a hosted Windows runner, and without NVDA_DIR, it skips.
@@ -229,7 +230,12 @@ at=$(wc -l < "$nvda_log")
 press down
 says "$at" ", [0-9]* of [0-9]*'" "NVDA didn't say the suggestion ↓ selected in the command bar"
 press escape
+# The Space the onboarding leaves has no tabs, and Tab rings New Tab's row, read as a button by
+# its name, where it said nothing before (#3151).
+judging=1
 press tab
+on_row "New Tab" tab
+judging=
 press tab
 press tab shift
 press down
@@ -299,7 +305,14 @@ judging=1
 press l cmd shift
 tail -n 4 "$focus_file" | grep -q '^UI Automation focus: [A-Za-z ]* "Search History", framework AccessKit' ||
   fail "UI Automation's focus isn't on the Library's search field after ⇧⌃L: $focus_file"
+# ↓ from the field rings History's first row, this run's pages, and NVDA says it and where it
+# stands, as it says the command bar's selected suggestion, while the field keeps the keyboard.
+before=$heard
+press down
+grep -q '^browser: library row keyed ' "$log" || fail "↓ from History's field rang no row: $log"
+says "$before" ', 1 of [0-9]' "NVDA didn't say History's ringed row and where it stands after ↓"
 judging=
+press up
 press tab
 press tab
 press escape

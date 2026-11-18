@@ -18,7 +18,9 @@
 #     its blocked addresses, host and path, are held to this run's instead (#2111);
 #   - 3 or more elements' selectors on a site, or 10 in the run, whose every element the baseline's
 #     run hid and some of which this run shows, as an ad's box the engine's hiding missed. Each
-#     selector is an element's tag, id and classes, read 8 s after the load (cdp.py's hidden);
+#     selector is an element's tag, id and classes, read 8 s after the load (cdp.py's hidden), and
+#     doesn't count where the baseline's page hid it itself, by no rule of its blocker's style
+#     sheet, as a video player its controls before it plays (#3268);
 #   - a site this run breaks, or a wall uBlock Origin kept away: text under half the baseline's,
 #     where two loads of a page with the same engine differ by a seventh at most, or 70% of the
 #     viewport covered by an element fixed in place, a wall or a modal, where the baseline's page
@@ -217,7 +219,9 @@ look_hidden() {
   [ ! -s "$before_hides/$name" ] || before=" $(app_path "$before_hides/$name")"
   asked=$(grep -c '^cdp: hidden ' "$cdp_log" || true)
   echo "hidden $(app_path "$PWD/$hides/$name")$before" >&5
-  for _ in $(seq 100); do
+  # Telling the blocker's hiding from the page's asks DevTools about elements one by one, up to
+  # 15 s on a site.
+  for _ in $(seq 300); do
     [ "$(grep -c '^cdp: hidden ' "$cdp_log" || true)" -gt "$asked" ] && return
     sleep 0.1
   done
@@ -262,7 +266,8 @@ look_content() {
 videos="$dir/videos.txt"
 : > "$videos"
 watch_video() {
-  site=$1 ad=no-ad played=none met= state=- since=$(date +%s)
+  # Not site, the check's server, which a later pass in the same shell builds its pages on.
+  watched=$1 ad=no-ad played=none met= state=- since=$(date +%s)
   while [ $(($(date +%s) - since)) -lt 30 ]; do
     # The seconds, playing or paused, ad or no-ad, then refused, cued or the player's state.
     set -- $(video https://www.youtube.com/watch)
@@ -285,7 +290,7 @@ watch_video() {
     fi
     sleep 0.5
   done
-  echo "$site $ad $played ${met:-$state}" >> "$videos"
+  echo "$watched $ad $played ${met:-$state}" >> "$videos"
 }
 # Each site: when Return went, in ms since the epoch, then the site, then the load's time and what
 # loaded, or "none" for a load that didn't come within 45 s, then "bot-check" where Cloudflare's
@@ -321,6 +326,23 @@ while read -r url <&4; do
     # run's 20 minutes on Windows' Check, needs no pictures, so it waits only after the last site,
     # and gives a bot check no second go.
     [ -n "${ADBLOCK_PARITY_NO_CAPTURE:-}" ] || sleep 8
+    # A page can send itself on once it has loaded, as dailymail.co.uk does to dailymail.com,
+    # which then loads itself again (#3309). DevTools asked about the page meanwhile waits on the
+    # page being replaced, and the next site would take its last load for its own. So the site's
+    # page is the one its tab ends on: a tab loading again is waited on to its last load, within
+    # the same 45 s from Return. The load's time stays the first's, the one the user waited on.
+    if [ "$loaded" != none ] && [ -z "${ADBLOCK_PARITY_NO_CAPTURE:-}" ]; then
+      while sed -n "/^browser: drive $step: /,\$p" "$log" | grep "^browser: page $tab " | tail -1 |
+        grep -q ' loading 1 '; do
+        [ $(($(ms) - started)) -lt 45000 ] || fail "$url loaded (${loaded#* }) and was loading again \
+45 s after Return: $(sed -n "/^browser: drive $step: /,\$p" "$log" |
+          grep "^browser: \(page\|loaded\) $tab " | tail -3 | tr '\n' ';')"
+        kill -0 "$pid" 2> /dev/null || gone
+        sleep 0.1
+      done
+      line=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep "^browser: loaded $tab " | tail -1)
+      loaded="${loaded%% *} ${line#browser: loaded $tab }"
+    fi
     # The tab's title now: its last line, as the browser logs a title only when it changes, so a
     # second go to the same check logs none.
     title=$(grep "^browser: title $tab " "$log" | tail -1)
@@ -460,8 +482,13 @@ for i, s in enumerate(sites):
     # What the baseline hid all of and this run shows, as cdp.py's hidden says, or None where
     # there's no saying: no baseline's file for the site, or no look at it.
     hid = os.path.join(hides, re.sub("[^A-Za-z0-9]", "_", s["url"]) + ".json")
-    s["missed"] = (sorted(json.load(open(hid, encoding="utf-8"))["missed"])
-                   if baseline and os.path.exists(hid) else None)
+    look = json.load(open(hid, encoding="utf-8")) if os.path.exists(hid) else {}
+    s["missed"] = sorted(look["missed"]) if baseline and look else None
+    # The selectors the blocker's own style sheet hid and those the page hid itself, as cdp.py's
+    # hidden tells them apart (#3268).
+    s["blocker_hid"] = len(look.get("blocker", []))
+    s["page_hid"] = len(look.get("page", []))
+    s["blinks_unread"] = look.get("blinks_unread")
     # DataDome's captcha, which a site shows a runner it takes for a bot, over the page in place:
     # a bot check as Cloudflare's is, with no title to tell it by (#2111).
     s["bot"] = s["bot"] or any(h.endswith("captcha-delivery.com") for h in s["allowed"])
@@ -557,6 +584,19 @@ if len(missed) >= 10 and not site_missed:
     worse.append(f"{len(missed)} selectors the baseline hid all of showed: "
                  + ", ".join(f"{m} on {url}" for url, m in missed))
 loaded = [s for s in sites if s["loaded"]]
+# Each blocker hides something on these sites. None hidden, where they loaded, is the telling
+# apart broken, which would leave the gate blind to every element an engine fails to hide.
+blocker_hid = sum(s["blocker_hid"] for s in sites)
+if loaded and not blocker_hid:
+    worse.append("no site had an element the blocker's style sheet hid, by DevTools' matched "
+                 "styles: cdp.py's hidden can't tell the blocker's hiding from the page's")
+# A Chromium whose own hiding rules haven't been read would count a new one as the blocker's.
+unread = sorted({s["blinks_unread"] for s in sites if s["blinks_unread"]})
+if unread:
+    worse.append(f"the browser is {', '.join(unread)}, and Blink's own display: none !important "
+                 "rules were read only for the majors in cdp.py's BLINKS_READ: read its style "
+                 "sheets as the comment over BLINKS says, or a rule of Blink's counts as the "
+                 "blocker's")
 times = sorted(int(s["load_ms"]) for s in loaded)
 median = times[len(times) // 2] if times else 0
 # The worse sites go first, on one line, since the run's FAIL line, the summary's row and a
@@ -566,6 +606,8 @@ if worse:
 print(f"{len(loaded)} of {len(sites)} sites loaded, in {median} ms at the median; "
       f"{sum(s['blocked_n'] for s in sites)} requests blocked and "
       f"{sum(s['standin_n'] for s in sites)} given a stand-in, of {sum(s['requests'] for s in sites)}"
+      + f"; {blocker_hid} selectors hidden by the blocker's style sheet and "
+        f"{sum(s['page_hid'] for s in sites)} by the page's own"
       + (f"; {len(missed)} selectors the baseline hid all of showed" if baseline else "")
       + "".join(f"; {s['url']}'s video {video_said(s['video'])}" for s in sites if s["video"])
       + (f"; not compared, as a bot check stood in: {', '.join(unchecked)}" if unchecked else ""))
@@ -573,7 +615,8 @@ if worse:
     sys.exit(1)
 PY
 echo "$run: $(cat "$result")$memory. Per site: $dir/sites.tsv"
-# uBlock Origin's, for adblock-native's to compare with in a check of its own.
+# uBlock Origin's, for adblock-native's to compare with in the same check, or a later one that
+# names it in ADBLOCK_PARITY_BASELINE.
 if [ "$engine" = ublock ]; then
   cp "$dir/sites.tsv" build/adblock-parity-sites.tsv
   rm -rf build/adblock-parity-hidden build/adblock-parity-lists

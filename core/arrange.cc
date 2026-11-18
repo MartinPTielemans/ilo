@@ -1025,8 +1025,16 @@ constexpr char16_t kScript[] =
           const k = slot.next || slot.prev || slot.parent;
           const prop = k === slot.parent ? (row ? 'min-width' : 'min-height')
             : k === slot.next ? (row ? 'margin-left' : 'margin-top') : row ? 'margin-right' : 'margin-bottom';
+          // A margin a layout pass placed on it for the carried thing's own change goes with that
+          // change, so the room it keeps adds to the page's own margin.
+          if (placed.get(k)?.has(prop)) { unset(k, prop); placed.get(k).delete(prop); }
           const base = k === slot.parent ? (row ? rect(k).width : rect(k).height) : parseFloat(getComputedStyle(k).getPropertyValue(prop)) || 0;
-          const value = px(k === slot.parent ? base : base + room);
+          // Out of flow, it leaves one gap fewer in a track spaced by gap, so a neighbour keeping
+          // its room keeps that gap too, and nothing after it moves up (#3028). The room in its
+          // list is its own length, as the list puts the gaps between its places.
+          const pcs = getComputedStyle(slot.parent);
+          const gap = /flex|grid/.test(pcs.display) ? parseFloat(row ? pcs.columnGap : pcs.rowGap) || 0 : 0;
+          const value = px(k === slot.parent ? base : base + room + gap);
           set(k, prop, value);
           // The carry's room, never taken back by a layout pass.
           if (placed.has(k)) placed.get(k).delete(prop);

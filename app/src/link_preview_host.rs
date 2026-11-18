@@ -64,6 +64,18 @@ impl link_preview::Host for LinkPreviewHost {
         cfg!(target_os = "windows")
     }
 
+    fn when_drawn(&self, tab: u64) -> bool {
+        #[cfg(target_os = "linux")]
+        return link_preview_window::when_presented(move || {
+            update_app_later(move |cx| link_preview::cover_shown(tab, cx));
+        });
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = tab;
+            false
+        }
+    }
+
     fn release(&self) {
         unsafe { platform::host_release_link_preview() };
         // The window's page has the keyboard back from the preview's, which goes, or no page has

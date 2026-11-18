@@ -28,8 +28,10 @@
 # keyword, searches with that engine alone until ⌫ leaves, ↩ on a sum's row copies its result, and a
 # right-click in its field shows the field's menu, with Paste and Go. Site Search Settings opens
 # Chromium's search engines page, where a site search added for the run's own server and made the
-# default is the one Settings' Search engine shows chosen, until it picks DuckDuckGo back. The
-# command bar's tests, in src/command_bar/tests.rs, have the rest of its keys and what the menu's
+# default is the one Settings' Search engine shows chosen, until it picks DuckDuckGo back. A new
+# profile's onboarding opens on DuckDuckGo and its Search engine lists Google last, whose pick asks
+# Google's hosts, the run's own server here, for the search alone, and which stays gone once
+# Chromium's page deletes it. The command bar's tests, in src/command_bar/tests.rs, have the rest of its keys and what the menu's
 # items do. A tab's menu walks by its keys past lines and dimmed items, selects by typing, opens a
 # submenu by → and by the pointer, which crosses a row on its way there without taking it, picks
 # what a press-drag-release ends on and closes on a click outside. A tab unseen for 2 hours lets go
@@ -76,9 +78,15 @@ log="$out/tabs.log"
 trace="$PWD/$out/trace.json"
 step=0
 rm -f "$saved" "$launch_frame"
+# The example.com and example.org pages the steps open come from a server of the run's own, which a
+# runner always reaches (#3144).
+serve_tls example '<meta charset=utf-8><link rel=icon href="data:,"><title>Example Domain</title>
+<h1>Example Domain</h1>' example.com '*.example.com' example.org
 # shellcheck disable=SC2086 # the record mode, or nothing
 BROWSER_DRIVE=1 BROWSER_URL="$page" "$browser" --enable-tracing="$trace_categories" $trace_mode \
-  --enable-tracing-format=json --trace-startup-file="$trace" < "$out/drive" > "$log" 2>&1 &
+  --enable-tracing-format=json --trace-startup-file="$trace" \
+  --host-resolver-rules="$tls_rules" --ignore-certificate-errors-spki-list="$tls_key" \
+  < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
@@ -1748,6 +1756,16 @@ exec 3>&-
 # Chrome writes the trace before it quits, once every process has started tracing or 10 s have
 # passed, so a renderer that closed early can hold the quit that long.
 quit 30
+kill "$tls" 2> /dev/null || true
+tls=
+# Each example.com and example.org page the launch loaded came from the run's server.
+examples=$(sed -n 's|^browser: loaded [0-9]* \(https\{0,1\}://[a-z.]*example\.[a-z]*/.*\)$|\1|p' "$log" | sort -u)
+[ -n "$examples" ] || fail "the launch loaded no example.com or example.org page"
+for url in $examples; do
+  grep -qxF "example: GET $url" "$out/example-tls.log" ||
+    fail "$url loaded, but not from the run's server: $(grep -v '^example: ' "$out/example-tls.log" | tail -3)"
+done
+echo "ok: the example.com and example.org pages the launch loaded came from the run's own server: $(echo $examples)"
 
 app_ms=$(sed -n 's/^browser: selected [0-9]* in \([0-9.]*\) ms$/\1/p' "$log" | summary)
 [ -s "$trace" ] || fail "the app didn't write its trace"
@@ -1817,6 +1835,47 @@ else
   exec 3>&-
   quit
 fi
+# Whether what has the keyboard in Chromium's search engines page matches the selector $1, or is
+# in what does.
+settings_focus() {
+  asked=$(grep -c '^cdp: focus-within ' "$cdp_log" || true)
+  echo "focus-within chrome://settings/ $1" >&5
+  for _ in $(seq 50); do
+    [ "$(grep -c '^cdp: focus-within ' "$cdp_log" || true)" -gt "$asked" ] && break
+    sleep 0.1
+  done
+  grep '^cdp: focus-within ' "$cdp_log" | tail -1 | grep -q ' yes$'
+}
+# Whether an element in the page matches the selector $1, shadow trees included.
+settings_has() {
+  asked=$(grep -c '^cdp: has ' "$cdp_log" || true)
+  echo "has chrome://settings/ $1" >&5
+  for _ in $(seq 50); do
+    [ "$(grep -c '^cdp: has ' "$cdp_log" || true)" -gt "$asked" ] && break
+    sleep 0.1
+  done
+  grep '^cdp: has ' "$cdp_log" | tail -1 | grep -q ' yes$'
+}
+# Tab until $1 has the keyboard, failing with $2 after 80 presses: the page's every row has its
+# own buttons.
+tab_to() {
+  for _ in $(seq 80); do
+    settings_focus "$1" && return 0
+    send key tab
+  done
+  settings_focus "$1" || fail "$2 in 80 presses of Tab: $(grep '^cdp: focus-within ' "$cdp_log" | tail -1)"
+}
+# Shows Settings' General, where Settings opens on the section it showed last.
+settings_general() {
+  send menu Settings…
+  expect '^browser: settings shown ' "Settings… didn't show Settings"
+  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' General$'; then
+    settings_drew
+    send clickkey $(drawn "toolbar General")
+    expect '^browser: settings tab General$' "a click on General didn't show its section"
+  fi
+  settings_drew General
+}
 # A search's page has to commit for history to have it, and DuckDuckGo may never answer a runner
 # (#1875), so the steps that need one search the run's own server, in a launch of its own with a new
 # profile. The search for dogs above goes to DuckDuckGo, as the navigation's own line says
@@ -1845,47 +1904,6 @@ if [ "$active" != 1 ]; then
   quit
   echo "skip: a search with the run's own engine. Browser wasn't the active app, so the page ignored the click."
 else
-  # Whether what has the keyboard in Chromium's search engines page matches the selector $1, or is
-  # in what does.
-  settings_focus() {
-    asked=$(grep -c '^cdp: focus-within ' "$cdp_log" || true)
-    echo "focus-within chrome://settings/ $1" >&5
-    for _ in $(seq 50); do
-      [ "$(grep -c '^cdp: focus-within ' "$cdp_log" || true)" -gt "$asked" ] && break
-      sleep 0.1
-    done
-    grep '^cdp: focus-within ' "$cdp_log" | tail -1 | grep -q ' yes$'
-  }
-  # Whether an element in the page matches the selector $1, shadow trees included.
-  settings_has() {
-    asked=$(grep -c '^cdp: has ' "$cdp_log" || true)
-    echo "has chrome://settings/ $1" >&5
-    for _ in $(seq 50); do
-      [ "$(grep -c '^cdp: has ' "$cdp_log" || true)" -gt "$asked" ] && break
-      sleep 0.1
-    done
-    grep '^cdp: has ' "$cdp_log" | tail -1 | grep -q ' yes$'
-  }
-  # Tab until $1 has the keyboard, failing with $2 after 80 presses: the page's every row has its
-  # own buttons.
-  tab_to() {
-    for _ in $(seq 80); do
-      settings_focus "$1" && return 0
-      send key tab
-    done
-    settings_focus "$1" || fail "$2 in 80 presses of Tab: $(grep '^cdp: focus-within ' "$cdp_log" | tail -1)"
-  }
-  # Shows Settings' General, where Settings opens on the section it showed last.
-  settings_general() {
-    send menu Settings…
-    expect '^browser: settings shown ' "Settings… didn't show Settings"
-    if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' General$'; then
-      settings_drew
-      send clickkey $(drawn "toolbar General")
-      expect '^browser: settings tab General$' "a click on General didn't show its section"
-    fi
-    settings_drew General
-  }
   bar_command site-search-settings "Site Search Settings" "site search"
   expect '^browser: loaded [0-9]* chrome://settings/searchEngines$' \
     "Site Search Settings didn't open Chromium's search engines page: $(grep '^browser: loaded' "$log" | tail -1)"
@@ -2001,6 +2019,231 @@ fi
 exec 5>&-
 wait "$helper" 2>/dev/null || true
 helper=
+# Google's search, which the core adds once to each profile as a choice only (decision 2,
+# core/search_default.h), on a new profile of its own in three launches. Its first launch's search
+# engine step opens on DuckDuckGo, the default, so Return there sets nothing. Settings lists Google
+# last, with DuckDuckGo chosen; picking it there makes ↩ in ⌘T's bar search
+# https://www.google.com/search?q=… and nothing else of Google's, typing included, since the
+# engine has no suggest URL. A second launch picks DuckDuckGo again and deletes Google on
+# Chromium's search engines page, and a third finds it gone from Settings' list. Google's hosts go
+# to an https server of the run's own, as ranking.sh's GitHub does, which logs each request, so
+# nothing reaches Google and whatever the browser asks of it shows. The security components'
+# downloads from www.google.com, which come on their own, are off in these launches. An engine
+# built before the core added Google skips the step.
+if ! engine_has ../core/search_default.cc ../core/search.cc; then
+  echo "skip: Google's search engine. The engine linked was built before the core offered it (core/search_default.cc)."
+else
+  google_profile="$PWD/$out/google-profile"
+  rm -rf "$google_profile" "$out/google-home"
+  # An empty home, so the first launch's import step finds no browser of the runner's.
+  mkdir -p "$out/google-home"
+  # Its page, for any path, puts the search in its title once drawn, and names its own icon, so no
+  # /favicon.ico is asked.
+  serve_tls google '<meta charset=utf-8><link rel=icon href="data:,"><title>loading</title><script>
+requestAnimationFrame(() => setTimeout(() => document.title = "google " +
+  new URLSearchParams(location.search).get("q")));</script>' www.google.com google.com '*.google.com'
+  google_key=$tls_key
+  google_rules=$tls_rules
+  # The engines Settings' Search engine lists, as it last showed them.
+  engines_listed() {
+    grep '^browser: menu shown ' "$log" | tail -1 | sed 's/^browser: menu shown //'
+  }
+  # Opens Settings' General and the profile's Search engine there, setting $profile.
+  engines_menu() {
+    settings_general
+    drawn 'search engine [0-9]*' > /dev/null || fail "Google: Settings didn't draw the profile's Search engine"
+    profile=$(sed -n 's/^browser: settings search engine \([0-9]*\) at .*/\1/p' "$log" | tail -1)
+    in_sight "search engine $profile" ||
+      fail "Google: Settings drew the profile's Search engine, but not in the card's sight once scrolled to it"
+    post clickkey $at
+    expect '^browser: menu shown ' "Google: the profile's Search engine didn't open its engines"
+  }
+  # The engines listed have no Google, or fail with $1.
+  no_google() {
+    case ", $(engines_listed)," in
+      *", Google,"* | *", Google (checked),"*) fail "$1: $(engines_listed)" ;;
+    esac
+  }
+
+  # The first launch: the onboarding, Settings' list and a search.
+  log="$out/tabs-google.log"
+  step=0
+  BROWSER_ONBOARDING=light BROWSER_IMPORT_HOME="$(app_path "$PWD/$out/google-home")" \
+    BROWSER_PROFILE_DIR="$(app_path "$google_profile")" BROWSER_DRIVE=1 "$browser" \
+    --host-resolver-rules="$google_rules" --ignore-certificate-errors-spki-list="$google_key" \
+    --disable-component-update < "$out/drive" > "$log" 2>&1 &
+  pid=$!
+  exec 3> "$out/drive"
+  await '^browser: onboarding step intro settled$' || fail "Google: the new profile's first launch didn't play the onboarding"
+  steps=$(grep -m1 '^browser: onboarding steps ' "$log" | cut -d' ' -f4-)
+  case " $steps " in
+    *" search-engine "*) ;;
+    *) fail "Google: the new profile's first launch had no search engine step: '$steps'" ;;
+  esac
+  # The intro goes on by itself, before any key is sent, so the step after it is waited for in the
+  # whole log, and each later one after the key that left the one before, as count.sh does.
+  await '^browser: onboarding left intro via time$' || fail "Google: the intro didn't go on by itself"
+  for each in $steps; do
+    [ "$each" = intro ] && continue
+    if [ "$step" = 0 ]; then
+      await "^browser: onboarding step $each settled\$" || fail "Google: the $each step didn't come"
+    else
+      expect "^browser: onboarding step $each settled\$" "Google: the $each step didn't come"
+    fi
+    if [ "$each" = search-engine ]; then
+      ../tools/window-screenshot.sh "$pid" "$out/search-engine-step-google.png" || fail "no window to capture"
+      send key return
+      expect '^browser: onboarding left search-engine via return$' "Google: Return didn't leave the search engine step"
+      # Return sets the engine picked unless it's the default, so a line here is a step that
+      # opened on another, such as Google.
+      none_since '^browser: profile [0-9]* searches with ' ||
+        fail "Google: Return as the search engine step opened set an engine, so it hadn't DuckDuckGo picked: $(grep '^browser: profile [0-9]* searches with ' "$log" | tail -1)"
+    else
+      send key escape
+      expect "^browser: onboarding left $each via escape\$" "Google: Esc didn't leave the $each step"
+    fi
+  done
+  expect '^browser: onboarding done$' "Google: the flow didn't end after its last step"
+  expect '^browser: command bar shown$' "Google: the command bar didn't come up after the flow"
+  send key escape
+  expect '^browser: command bar hidden$' "Google: escape didn't close the command bar"
+  engines_menu
+  case ", $(engines_listed)" in
+    *", DuckDuckGo (default) (checked),"*", Google") ;;
+    *) fail "Google: a new profile's Search engine didn't list Google last, with DuckDuckGo chosen as the default: $(engines_listed)" ;;
+  esac
+  case ", $(engines_listed)" in
+    *", Google"*", Google"*) fail "Google: a new profile's Search engine listed Google twice: $(engines_listed)" ;;
+  esac
+  ../tools/window-screenshot.sh "$pid" "$out/search-engine-google.png" || fail "no window to capture"
+  send choose Google
+  expect "^browser: profile $profile searches with Google\$" "Google: choosing Google didn't set the profile's engine"
+  send key w cmd
+  expect '^browser: settings hidden$' "Google: ⌘W didn't hide Settings"
+  send key t cmd
+  expect '^browser: command bar shown$' "Google: ⌘T didn't open the command bar"
+  send type pelicans
+  google_search='https://www\.google\.com/search?q=pelicans'
+  expect "^browser: command bar suggestions \"pelicans\" in [0-9.]* ms: $google_search\\([ ,]\\|\$\\)" \
+    "Google: the bar's first row for \"pelicans\" wasn't Google's search: $(grep '^browser: command bar suggestions' "$log" | tail -1)"
+  send key return
+  expect "^browser: command bar go $google_search\$" \
+    "Google: ↩ didn't search Google: $(grep '^browser: command bar go' "$log" | tail -1)"
+  await '^browser: title [0-9]* google pelicans$' ||
+    fail "Google: the search didn't draw the run's page for www.google.com: $(grep '^browser: page [0-9]* trouble' "$log" | tail -1) $(grep -v '^google: ' "$out/google-tls.log" | tail -3)"
+  google_tab=$(sed -n 's/^browser: title \([0-9]*\) google pelicans$/\1/p' "$log" | tail -1)
+  # Closed, so the next launches bring back no tab of Google's that would ask it again.
+  send key w cmd
+  expect "^browser: tab $google_tab closed\$" "Google: ⌘W didn't close the search's tab"
+  exec 3>&-
+  quit
+
+  # The second launch: DuckDuckGo again, and Google deleted on Chromium's search engines page.
+  log="$out/tabs-google-delete.log"
+  cdp_log="$out/tabs-google-cdp.log"
+  step=0
+  scratch=$(mktemp -d)
+  start_with_cdp "${site}search.html?q=nothing" "$(app_path "$google_profile")" "" \
+    --host-resolver-rules="$google_rules" --ignore-certificate-errors-spki-list="$google_key" \
+    --disable-component-update
+  await_load
+  await '^browser: title [0-9]* searched nothing$' || fail "Google: the run's page didn't draw"
+  send click $page_point
+  if [ "$active" != 1 ]; then
+    exec 3>&-
+    quit
+    echo "skip: deleting Google's search engine. Browser wasn't the active app, so the page ignored the click."
+  else
+    engines_menu
+    expect "^browser: menu shown .*, Google (checked)\$" "Google: the relaunch didn't keep Google picked: $(engines_listed)"
+    send choose "DuckDuckGo (default)"
+    expect "^browser: profile $profile searches with DuckDuckGo\$" "Google: choosing DuckDuckGo didn't set the profile's engine"
+    send key w cmd
+    expect '^browser: settings hidden$' "Google: ⌘W didn't hide Settings"
+    bar_command site-search-settings "Site Search Settings" "site search"
+    expect '^browser: loaded [0-9]* chrome://settings/searchEngines$' \
+      "Google: Site Search Settings didn't open Chromium's search engines page: $(grep '^browser: loaded' "$log" | tail -1)"
+    # Its menu's label is "… Google", where the site searches the core adds name Google Drive and
+    # the like. Site searches past the first few are in a collapsed list, which Tab reaches as its
+    # expand button first.
+    menu='.icon-more-vert[aria-label$=Google]'
+    found=
+    for _ in $(seq 200); do
+      settings_focus "$menu" && found=1 && break
+      ! settings_focus 'cr-expand-button:not([expanded])' || send key space
+      send key tab
+    done
+    [ -n "$found" ] ||
+      fail "Google: Tab didn't reach Google's menu on Chromium's search engines page in 200 presses: $(grep '^cdp: focus-within ' "$cdp_log" | tail -1)"
+    send key space
+    # Chrome's menu has Delete, or Delete among Edit and Turn off where its newer page is on.
+    for _ in $(seq 10); do
+      settings_focus '#delete,#deleteOption' && break
+      send key down
+    done
+    settings_focus '#delete,#deleteOption' || fail "Google: its menu on Chromium's search engines page didn't reach Delete"
+    ../tools/window-screenshot.sh "$pid" "$out/search-engine-google-delete.png" || fail "no window to capture"
+    send key space
+    for _ in $(seq 50); do
+      settings_has "$menu" || break
+      ! settings_has 'cr-dialog[open]' ||
+        fail "Google: Delete asked to confirm, which an engine the user could add doesn't, on Chromium's search engines page"
+      sleep 0.1
+    done
+    ! settings_has "$menu" || fail "Google: Delete on Chromium's search engines page left Google listed"
+    send key w cmd
+    engines_menu
+    no_google "Google: Settings still listed Google once Chromium's page deleted it"
+    send key escape
+    expect '^browser: menu closed$' "Google: escape didn't close the Search engine menu"
+    exec 3>&-
+    quit
+
+    # The third launch: Google stays gone, never added again.
+    log="$out/tabs-google-gone.log"
+    step=0
+    BROWSER_PROFILE_DIR="$(app_path "$google_profile")" BROWSER_DRIVE=1 "$browser" \
+      --host-resolver-rules="$google_rules" --ignore-certificate-errors-spki-list="$google_key" \
+      --disable-component-update < "$out/drive" > "$log" 2>&1 &
+    pid=$!
+    exec 3> "$out/drive"
+    await '^browser: restored in ' || fail "Google: the third launch didn't bring the Spaces back"
+    await '^browser: UI shown at ' || fail "Google: the third launch didn't show its UI"
+    # The page first, as in the second launch: Settings shown while another app is in front, as a
+    # relaunch on Windows finds the runner's console, stays behind the browser window that the
+    # first press brings in front, and its click lands in the page.
+    await '^browser: title [0-9]* searched nothing$' || fail "Google: the third launch didn't bring the run's page back"
+    send click $page_point
+    if [ "$active" != 1 ]; then
+      exec 3>&-
+      quit
+      echo "skip: Google staying gone on a relaunch. Browser wasn't the active app, so the page ignored the click."
+    else
+      engines_menu
+      no_google "Google: a relaunch brought Google back after it was deleted"
+      expect_listed=$(engines_listed)
+      case "$expect_listed" in
+        *"DuckDuckGo (default) (checked)"*) ;;
+        *) fail "Google: the relaunch didn't keep DuckDuckGo: $expect_listed" ;;
+      esac
+      send key escape
+      expect '^browser: menu closed$' "Google: escape didn't close the Search engine menu"
+      exec 3>&-
+      quit
+    fi
+  fi
+  exec 5>&-
+  wait "$helper" 2>/dev/null || true
+  helper=
+  kill "$tls" 2> /dev/null || true
+  tls=
+  # The whole step asked Google's hosts for the search alone: no suggestion as "pelicans" was
+  # typed, nothing on a launch, nothing from Chromium's page.
+  requests=$(grep '^google: ' "$out/google-tls.log" || true)
+  [ "$requests" = "google: GET https://www.google.com/search?q=pelicans" ] ||
+    fail "Google: its hosts were asked for more than the search, or not for it: $(printf '%s' "$requests" | tr '\n' ';')"
+  echo "ok: Google's search engine, on a new profile: the first launch's step opens on DuckDuckGo, Settings lists Google last with DuckDuckGo chosen, its pick searches https://www.google.com/search?q=… and asks Google for nothing else, and once Chromium's search engines page deletes it a relaunch doesn't bring it back. Windows: $out/search-engine-step-google.png, $out/search-engine-google.png, $out/search-engine-google-delete.png"
+fi
 # Sort Today Tabs by Site, from the command bar, puts the served page's tabs together at each
 # site's first tab's place, 127.0.0.1 and localhost being two sites of one server, records the rows
 # sliding there, light and dark, and the Tabs menu shows it dimmed once they're together, as does

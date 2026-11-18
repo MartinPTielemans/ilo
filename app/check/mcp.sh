@@ -33,8 +33,10 @@
 # pressed, go to the page alone, and Escape the page doesn't keep runs no Stop of ilo's. Where it
 # acts in the page watched, its pointer and a
 # ring with the element's ref show it. It opens a page, clicks its link, goes back, where the tab
-# takes the page's title again, scrolls, takes a screenshot and closes a tab, pins a tab of its own, unpins it and removes it, and a page that asks before it's left stays open, with no
-# dialog, until the agent discards it. Its download asks first, and Allow Once downloads the
+# takes the page's title again, scrolls, takes a screenshot and closes a tab, pins a tab of its own, unpins it and removes it. A close asks a page with a beforeunload
+# handler first, with no dialog: one whose handler doesn't ask closes at the first call, as does
+# one that asks no one clicked in, and one the agent clicked or typed in stays open until the agent
+# discards it. Its download asks first, and Allow Once downloads the
 # file, which the answer names, and Never leaves none. It sends requests to its tab's site, carrying a session it
 # never sees, and a change asks every time, in a card whose Allow sends it and Deny doesn't. Settings
 # › Agents opens each request to where it went and what it sent, or that the denied one wasn't. A bank's site asks first, in a card whose Allow Once opens it. Always Allow
@@ -178,8 +180,14 @@ yours='data:text/html,<title>-</title><textarea id=f style="position:fixed;inset
  onfocus="document.title=`yours focused`" onblur="document.title=`yours left`"
  oninput="document.title=`yours typed `+f.value"></textarea>
 <script>requestAnimationFrame(()=>requestAnimationFrame(()=>document.title="yours"))</script>'
+# A host of the check's server with no https, where an agent's tab comes to Chrome's warning before
+# http. The profile remembers a host that fell back to http, so each run names a new one, as
+# history.sh's $plain.
+serve
+plain="mcp-plain-$(date +%s).example.com"
 BROWSER_DRIVE=1 BROWSER_MOTION=full BROWSER_URL="$yours" \
-  "$browser" --load-extension="$(app_path "$extension")" < "$out/drive" > "$log" 2>&1 &
+  "$browser" --load-extension="$(app_path "$extension")" \
+  --host-resolver-rules="MAP $plain 127.0.0.1:$port" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
@@ -690,6 +698,118 @@ for split_tab in $split_a $split_b $split_c; do
   closed=$(call close_tab "{\"tab\":$split_tab}")
   case "$closed" in "Closed tab $split_tab."*) ;; *) fail "closing the split view's page answered: $closed" ;; esac
 done
+# An agent's tab at Chrome's warning before http, in the agent's split view, watched from the
+# conversation, where its split's pages share the watched page's place. The warning shown doesn't
+# take the user's keyboard. Once the user's click gives it the keyboard, a press in the page beside
+# it takes the keyboard to that page, and never to an agent's dialog: on the Mac that press gives
+# the keyboard back to the browser window (#3212).
+if [ "$driven" = 1 ]; then
+  await '^browser: settings about Version .*, on Chromium [0-9]' || fail "the engine's version wasn't said"
+  major=$(sed -n 's/^browser: settings about .*on Chromium \([0-9]*\)\..*/\1/p' "$log" | head -1)
+fi
+if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
+  warned=$(call open_tab "{\"url\":\"http://$plain/split-a.html\"}" |
+    sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  [ -n "$warned" ] || fail "open_tab didn't open http://$plain/split-a.html"
+  await_log "browser: tab $warned error -20\$" \
+    "the agent's tab at http://$plain/split-a.html had no warning before http: $(grep "^browser: loaded $warned " "$log" | tail -1)"
+  beside=$(split_tab b)
+  split=$(call split_tabs "{\"tabs\":[$warned,$beside]}")
+  [ "$split" = "Tab $warned's split view, left to right: $warned, $beside." ] ||
+    fail "split_tabs with the tab at the warning answered: $split"
+  # Escape steps back to Pages from the page watched, $1, which goes back into its picture before a
+  # click on another picture can watch it.
+  to_pages() {
+    back='^browser: task page [0-9]* back$'
+    thumbnail='^browser: task page in its thumbnail$'
+    before=$(grep -c "$back" "$log" || true)
+    shrunk=$(grep -c "$thumbnail" "$log" || true)
+    # A page there can have the keyboard, as the one a press in the split view focused on X11,
+    # and keeps Escape: a click on the sidebar gives the UI the keyboard, as the user's would.
+    send click $sidebar_point
+    send key escape
+    await_more "$back" "$before" || fail "Escape didn't step back to Pages from $1"
+    await_more "$thumbnail" "$shrunk" || fail "$1 didn't go back into its picture"
+  }
+  to_pages "tab $agent_tab"
+  watch "$warned"
+  for _ in $(seq 50); do
+    send layout
+    since | grep -q '^browser: layout child ' && break
+    sleep 0.1
+  done
+  laid=$(since | grep -m1 '^browser: layout')
+  warning=$(since | sed -n 's/^browser: layout child //p' | head -1)
+  [ -n "$warning" ] || fail "the agent's tab $warned, watched in its split view, showed no warning before http: $laid"
+  # Linux's driver lists the pages the shell lays out, and the task area lays out a watched split
+  # as one, which the core divides: the capture shows its panes there.
+  if [ "$(uname)" = Linux ]; then
+    echo "skip: mcp: the watched split view's two pages in the layout, on Linux: the driver lists the shell's one frame for them. $out/agent-split-warning.png shows them."
+  else
+    panes=$(echo "$laid" | grep -o 'WebContentsViewCocoa [0-9,]* [0-9x]*' | sed 's/^WebContentsViewCocoa //')
+    [ "$(echo "$panes" | wc -l)" -eq 2 ] ||
+      fail "watching tab $warned didn't show its split view's two pages: $laid"
+  fi
+  ../tools/window-screenshot.sh "$pid" "$out/agent-split-warning.png" || fail "no window to capture"
+  send state
+  if [ "$key" = NativeWidgetMacNSWindow ]; then
+    [ "$(uname)" = Darwin ] ||
+      fail "the agent's warning before http, watched in its split view, took the user's keyboard as it showed: $key, $focus"
+    echo "skip: mcp: the user's keyboard staying where it was as an agent's warning before http shows in a watched split view, on the Mac: the warning took it as the watch showed it (#3240)."
+  fi
+  warning_x=${warning%%,*} warning_y=${warning#*,}
+  warning_y=${warning_y%% *} warning_size=${warning#* }
+  warning_width=${warning_size%%x*} warning_height=${warning_size#*x}
+  presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
+  send click $((warning_x + warning_width / 2)) $((warning_y + 8))
+  warning_clicked=$step
+  send state
+  [ "$key" = NativeWidgetMacNSWindow ] ||
+    fail "a click on the agent's warning before http at $warning, watched in its split view, didn't give it the keyboard: $key, $focus"
+  # The page beside, to the right of the warning's, as split_tabs put them.
+  other="$((warning_x + warning_width + 100)) $((warning_y + warning_height + 100))"
+  send click $other
+  pressed=$step
+  send state
+  [ "$key" = BrowserCoreNSWindow ] ||
+    fail "a press in the page beside the agent's warning before http left the keyboard in $key, on $focus: $(since "$pressed" | grep -e '^browser: drive' -e '^browser: agent' | tail -6 | tr '\n' ' ')"
+  ../tools/window-screenshot.sh "$pid" "$out/agent-split-pressed.png" || fail "no window to capture"
+  # The press takes over the tab pressed, and ⌘↩ hands it back. It takes over the tab watched
+  # instead, or on X11 the click on the warning already took that one and the press beside takes
+  # none (#3243), while the area goes on to show the tab pressed. So each tab the two clicks took
+  # over is watched again and handed back there, with the UI given the keyboard by a click on the
+  # sidebar: on the Mac the warning takes it as its page shows (#3240).
+  send state
+  taken=$(since "$warning_clicked" | sed -n 's/^browser: agent page pressed in \([0-9]*\)$/\1/p' |
+    sort -u | tr '\n' ' ')
+  taken=${taken% }
+  [ -n "$taken" ] ||
+    fail "neither the click on the agent's warning before http nor the press beside it took over a tab: $(since "$warning_clicked" | grep -e '^browser: drive' -e '^browser: agent' | tail -8 | tr '\n' ' ')"
+  if [ "$taken" = "$beside" ]; then
+    hand_back_pressed "$presses"
+    shown="the split view"
+  else
+    echo "skip: mcp: a press in the other pane of a watched agent split taking over the tab pressed: the clicks on the warning and beside it took over tab $taken, not $beside (#3243)."
+    shown="tab $beside"
+    for tab in $taken; do
+      to_pages "$shown"
+      watch "$tab"
+      send click $sidebar_point
+      send key return cmd
+      await_log "^browser: agent mcp-client handed back $tab\$" \
+        "⌘↩ didn't hand back tab $tab, which a click on the split view took over"
+      shown="tab $tab"
+    done
+  fi
+  to_pages "$shown"
+  for split_tab in $warned $beside; do
+    closed=$(call close_tab "{\"tab\":$split_tab}")
+    case "$closed" in "Closed tab $split_tab."*) ;; *) fail "closing the split view's page answered: $closed" ;; esac
+  done
+  watch "$agent_tab"
+else
+  echo "skip: mcp: an agent's warning before http in its split view, watched. Browser wasn't the active app, or the engine is before 157."
+fi
 
 if [ "$driven" = 1 ]; then
   # The core lists the agent's Space alone: its tab, and not the user's Wikipedia tab in theirs.
@@ -1523,8 +1643,8 @@ addEventListener("message", (event) => {
     *) fail "request answered: $sent" ;;
   esac
   case "$sent" in *s3cret* | *tok-*) fail "the request's answer held the session: $sent" ;; esac
-  grep -q "^GET chromium localhost:$port/api/me cookie .*api=s3cret$port" "$out/site.log" ||
-    fail "the agent's request didn't carry the tab's session"
+  served "^GET chromium localhost:$port/api/me cookie .*api=s3cret$port" \
+    "the agent's request didn't carry the tab's session" "^GET chromium localhost:$port/api/me "
   await_log "^browser: agent activity mcp-client $frames_tab request\$" \
     "the request didn't reach the activity log"
   changes='^browser: agent mcp-client asks [0-9]*: make a change on localhost$'
@@ -1553,9 +1673,10 @@ CARD
     'POST /api/items → 201 application/json'*'{"id":8,"title":"Milk"}') ;;
     *) fail "the allowed change answered: $changed" ;;
   esac
-  # Its body on its own, as the session may hold other cookies of localhost's, such as profiles'.
-  grep "$posted" "$out/site.log" | grep -q ' body {"title":"Milk"}$' ||
-    fail "the allowed change didn't reach the site with the tab's session"
+  # Awaited, not read once: a read just after the answer missed a line the site had logged (#3314).
+  # The session may hold other cookies of localhost's, such as profiles', before the body.
+  served "$posted.*body {\"title\":\"Milk\"}\$" \
+    "the allowed change didn't reach the site with the tab's session" "^POST "
   change Dismiss 1
   [ "$changed" = "error: The user said no: you can't make a change on localhost. Don't try again." ] ||
     fail "the denied change answered: $changed"
@@ -1851,25 +1972,103 @@ PY
   printf '%s\n' "$listed" | grep -q "^. $closing  " && fail "list_tabs listed the closed tab"
   [ "$(sed -n 's/^browser: archive \([0-9]*\) tabs$/\1/p' "$log" | tail -1)" = "$archived" ] ||
     fail "the tab the agent closed went in the user's archive"
-  # A page that asks before it's left stays open, and the answer says why, with no dialog: with
-  # discard, the agent's own tab closes without saving (#1447).
-  printf '%s\n' '<!doctype html><title>Leave</title><p>Unsaved changes.</p>
+  # A close asks a page with a beforeunload handler as the user's close does, and the answer
+  # waits for it (#3256). Chromium lets a handler ask only in a frame that was clicked or typed in,
+  # so the agent's click or typing first, as the user's would. Never a leave dialog, and each close
+  # has one activity-log entry, written as the page answered, after the core's line.
+  printf '%s\n' '<!doctype html><title>Quiet</title><button>Note</button>
+<script>addEventListener("beforeunload", () => {})</script>' > "$out/site/quiet.html"
+  printf '%s\n' '<!doctype html><title>Leave</title><p>Unsaved changes.</p><button>Note</button>
 <script>addEventListener("beforeunload", event => event.preventDefault())</script>' > "$out/site/leave.html"
-  opened=$(call open_tab "{\"url\":\"localhost:$port/leave.html\"}")
-  leaving=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  printf '%s\n' '<!doctype html><title>Form</title><label>Note <input></label>
+<script>let dirty = false; addEventListener("input", () => dirty = true);
+addEventListener("beforeunload", event => { if (dirty) event.preventDefault() })</script>' > "$out/site/form.html"
+  # Opens $1 in a tab of the agent's own, and prints its id, then the ref of its "$2" "$3".
+  open_with() {
+    opened=$(call open_tab "{\"url\":\"localhost:$port/$1\"}")
+    printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p'
+    printf '%s\n' "$opened" | sed -n "s/.*- $2 \"$3\" \[\(e[0-9]*\)\].*/\1/p" | head -1
+  }
+  # The close of $1 answered after the core asked its page and heard $2, with its one activity-log
+  # entry, "close_tab localhost" and $3, after that, and no leave dialog. The core's "agent
+  # activity" line is the permission check's, at the call, before the page is asked.
+  asked_page() {
+    asked=$(grep -n "browser: agent close $1 asks its page\$" "$log" | tail -1 | cut -d: -f1)
+    [ -n "$asked" ] || fail "the close of tab $1 didn't ask its page"
+    heard=$(grep -n "browser: agent close $1 answered $2\$" "$log" | tail -1 | cut -d: -f1)
+    [ -n "$heard" ] || fail "the core didn't answer the close of tab $1 with $2"
+    await_log "^browser: agent logged mcp-client close_tab localhost$3" \
+      "the close of tab $1 wasn't logged"
+    entry=$(grep -n "^browser: agent logged mcp-client close_tab localhost$3" "$log" | tail -1 |
+      cut -d: -f1)
+    [ -n "$entry" ] && [ "$entry" -gt "$heard" ] ||
+      fail "the close of tab $1 wasn't logged once its page answered"
+    [ "$(sed -n "$asked,\$p" "$log" | grep -c '^browser: agent logged mcp-client close_tab ')" = 1 ] ||
+      fail "the close of tab $1 was logged more than once"
+    grep -q "^browser: page $1 dialog [^n]" "$log" && fail "closing tab $1 showed a dialog"
+    return 0
+  }
+  # A handler that doesn't ask: the first call closes the tab, as the core closes any, out of the
+  # agent's list and out of the user's archive.
+  set -- $(open_with quiet.html button Note)
+  quiet=$1
+  call click "{\"tab\":$quiet,\"ref\":\"$2\"}" > /dev/null
+  archived=$(sed -n 's/^browser: archive \([0-9]*\) tabs$/\1/p' "$log" | tail -1)
+  closed=$(call close_tab "{\"tab\":$quiet}")
+  [ "$closed" = "Closed tab $quiet." ] || fail "closing a page whose handler doesn't ask answered: $closed"
+  asked_page "$quiet" 0 '$'
+  grep -q "^browser: tab $quiet closed\$" "$log" || fail "the core didn't tell of the closed tab"
+  call list_tabs '{}' | grep -q "^. $quiet  " && fail "list_tabs listed the closed tab"
+  [ "$(sed -n 's/^browser: archive \([0-9]*\) tabs$/\1/p' "$log" | tail -1)" = "$archived" ] ||
+    fail "the tab the agent closed went in the user's archive"
+  # A handler that asks, in a page no one clicked or typed in, can't: it closes as the user's
+  # close of it would, without a dialog.
+  set -- $(open_with leave.html button Note)
+  untouched=$1
+  closed=$(call close_tab "{\"tab\":$untouched}")
+  [ "$closed" = "Closed tab $untouched." ] || fail "closing a page no one clicked in answered: $closed"
+  asked_page "$untouched" 0 '$'
+  # Once the agent clicked in it, it asks: the tab stays, and the answer says why. With discard it's
+  # asked again, and the agent's own tab closes without saving (#1447).
+  set -- $(open_with leave.html button Note)
+  leaving=$1
+  call click "{\"tab\":$leaving,\"ref\":\"$2\"}" > /dev/null
   kept=$(call close_tab "{\"tab\":$leaving}")
   case "$kept" in
     "error: Tab $leaving stays open: its page asks before it's left"*"discard: true"*) ;;
     *) fail "closing a page that asks before it's left answered: $kept" ;;
   esac
+  asked_page "$leaving" 3 " refused: Tab $leaving stays open"
   call list_tabs '{}' | grep -q "^. $leaving  " || fail "a close that kept the tab took it out"
   closed=$(call close_tab "{\"tab\":$leaving,\"discard\":true}")
   case "$closed" in
     "Closed tab $leaving without saving."*) ;;
     *) fail "discarding the agent's own tab answered: $closed" ;;
   esac
+  [ "$(grep -c "browser: agent close $leaving asks its page\$" "$log")" = 2 ] ||
+    fail "the discard didn't ask the page first"
+  # The activity log has it as a discard, once, after the page was asked again. The permission
+  # check's "agent activity" line at the call names the tool, close_tab.
+  await_log "^browser: agent logged mcp-client discard_tab localhost\$" \
+    "the discard didn't reach the activity log"
+  asked=$(grep -n "browser: agent close $leaving asks its page\$" "$log" | tail -1 | cut -d: -f1)
+  [ "$(sed -n "$asked,\$p" "$log" | grep -c '^browser: agent logged mcp-client discard_tab localhost$')" = 1 ] ||
+    fail "the discard wasn't logged once after its page was asked"
   call list_tabs '{}' | grep -q "^. $leaving  " && fail "list_tabs listed the discarded tab"
   grep -q "^browser: page $leaving dialog [^n]" "$log" && fail "closing the leaving page showed a dialog"
+  # A form the agent typed in asks, as one the user typed in would.
+  set -- $(open_with form.html textbox Note)
+  form=$1
+  call type "{\"tab\":$form,\"ref\":\"$2\",\"text\":\"by-the-agent\"}" > /dev/null
+  kept=$(call close_tab "{\"tab\":$form}")
+  case "$kept" in
+    "error: Tab $form stays open: its page asks before it's left"*) ;;
+    *) fail "closing a form the agent typed in answered: $kept" ;;
+  esac
+  asked_page "$form" 3 " refused: Tab $form stays open"
+  closed=$(call close_tab "{\"tab\":$form,\"discard\":true}")
+  [ "$closed" = "Closed tab $form without saving." ] || fail "discarding the form answered: $closed"
+  grep -q "^browser: page $form dialog [^n]" "$log" && fail "closing the form showed a dialog"
 
   # It pins a tab of its own, which list_tabs says it pinned, unpins it, pins it again and removes
   # it, to the archive. The user's tab isn't its to pin.
@@ -2020,8 +2219,15 @@ CARD
   call navigate "{\"tab\":$opened_tab,\"url\":\"localhost:$port/welcome.html\"}" > /dev/null
   await_log "^browser: title $opened_tab welcome\$" "the welcome page didn't load in the agent's tab"
   take_over "to save a login"
+  login_loaded="^browser: page $opened_tab back [0-9]* forward 0 loading 0 http://localhost:$port/login\\.html\$"
+  login_loads=$(grep -c "$login_loaded" "$log" || true)
   go_from_bar "localhost:$port/login.html"
   expect "^browser: title $opened_tab login\$" "the login page didn't load in the tab the user holds"
+  # The page names itself once painted, which can be before its load ends, and a login typed then
+  # brought no offer to save it: the click and the keys go once the load has ended, as a person's
+  # would come after it.
+  await_more "$login_loaded" "$login_loads" ||
+    fail "the login page didn't finish loading in the tab the user holds: $(grep "^browser: page $opened_tab " "$log" | tail -2 | tr '\n' ' ')"
   send click 600 60
   send key a cmd
   send type check@example.test
@@ -2600,7 +2806,7 @@ quit
 trap cleanup EXIT
 rm -f "$agents_file" "$out/mcp-in" "$out/mcp-out"
 if [ "$driven" = 1 ]; then
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), the tabs its page opens kept in its Space, behind$opened_said, without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, pins, unpins and removes its own tab but not the user's, sends requests to its tab's site with the tab's session it never sees, a change asking each time, each opening in Settings › Agents to where it went and what it sent or didn't, keeps one whose page asks before it's left until it discards it, with no dialog, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, opens its tabs muted, is refused a tab the user took over with a press in its page until they hand it back and Keep answers its ask, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, its download asks first and answers with the file, a refused one leaving none, a bank's site asks first until Always Allow, which Settings › Agents lists$needs_said, and off takes the socket away; an action waits for its element and its page to settle ($settle), a tab's id from before a relaunch is refused as such, and a launch after the window quit in its Space shows the page it opens; a screenshot of a tab just opened out of sight answers ($fresh_picture), and with the UI holding the keyboard with its picture"
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), the tabs its page opens kept in its Space, behind$opened_said, without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, pins, unpins and removes its own tab but not the user's, sends requests to its tab's site with the tab's session it never sees, a change asking each time, each opening in Settings › Agents to where it went and what it sent or didn't, asks a page's beforeunload handler first, with no dialog, closing one that doesn't ask at the first call and keeping one the agent clicked or typed in that asks until it discards it, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, opens its tabs muted, is refused a tab the user took over with a press in its page until they hand it back and Keep answers its ask, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, its download asks first and answers with the file, a refused one leaving none, a bank's site asks first until Always Allow, which Settings › Agents lists$needs_said, and off takes the socket away; an action waits for its element and its page to settle ($settle), a tab's id from before a relaunch is refused as such, and a launch after the window quit in its Space shows the page it opens; a screenshot of a tab just opened out of sight answers ($fresh_picture), and with the UI holding the keyboard with its picture"
 else
   echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own and is refused the user's tab, is answered that a link to an app opens nothing, its tab staying on its page, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), and its actions wait for their element and their page to settle ($settle), and the tabs its page opens are kept in its Space, behind$opened_said. A tab's id from before a relaunch is refused as such. skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
 fi

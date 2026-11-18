@@ -478,10 +478,12 @@ jobs:
           for run in $RUNS; do
             start=$SECONDS
             status=0
-            # The updates run builds a Flatpak first, and perf measures Chrome beside the app.
+            # The updates run builds a Flatpak first, perf measures Chrome beside the app, and a lone
+            # adblock-native makes uBlock Origin's pass of the 50 sites before its own (#3260).
             limit=20m
             [ "$run" != updates ] || limit=45m
             [ "$run" != perf ] || limit=40m
+            [ "$run" != adblock-native ] || limit=40m
             timeout "$limit" ./check.sh "$run" > "$dir/$run.log" 2>&1 || status=$?
             [ ! -d build/check ] || mv build/check "$dir/$run"
             pkill -9 -f "$PWD/build/Browser/" || true

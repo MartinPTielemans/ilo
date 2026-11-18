@@ -22,7 +22,8 @@ if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && [ "${BROWSER_HEADL
   exit 0
 fi
 # Under KWin a frame shows Peek's page where it rests, outside its card, when its page presents
-# after the hole moves (#2640); the fix waits on its engine (#2715).
+# after the hole moves (#2640). Wayland's close waits for the frame covering it to be on screen,
+# which KWin on X11 has no way to say.
 if [ "${BROWSER_XVFB:-}" = kwin ]; then
   echo "skip: peek-motion, under KWin: a frame shows Peek's resting frame outside its card (#2640)."
   exit 0
@@ -151,14 +152,22 @@ round() {
 
 # A screen copy can take longer than a motion (Windows' took 260 ms at a time on GitHub's runner),
 # so it opens and closes Peek again until a frame has caught each motion mid-way, eight times at
-# most, and fails at once on a frame that shows Peek's resting frame outside its card.
+# most, and fails at once on a frame that shows Peek's resting frame outside its card. On Wayland,
+# where a close showed the window's page undimmed in the card once in 36 before the close waited
+# for its covering frame to be on screen (#2640), it goes on to 24 rounds, as #2640 asks.
 resized=
-for n in 1 2 3 4 5 6 7 8; do
+rounds=8
+[ -z "${WAYLAND_DISPLAY:-}" ] || rounds=24
+for n in $(seq $rounds); do
   round $n
   # shellcheck disable=SC2086 # numbers: x y w h from x y
   python3 -I check/peek_motion.py "$frames" "$width" $(echo "$rest" | sed 's/ from / /') \
     > "$out/peek-motion.txt" 2>&1 && status=0 || status=$?
-  [ $status = 2 ] && ! grep -q "isn't drawn blended" "$out/peek-motion.txt" || break
+  case $status in
+  0) [ -n "${WAYLAND_DISPLAY:-}" ] || break ;;
+  2) ! grep -q "isn't drawn blended" "$out/peek-motion.txt" || break ;;
+  *) break ;;
+  esac
 done
 [ "$(today)" = "$a" ] || fail "Peek opened a tab: Today is \"$(today)\""
 exec 3>&-
@@ -171,7 +180,21 @@ case $status in
    fi
    echo "skip: peek-motion, as the frames can't say where the card is here: $(grep -v '^open-\|^close-' "$out/peek-motion.txt" | tail -1)"
    exit 0 ;;
-*) fail "a frame shows Peek's resting frame outside its card, or the window's page undimmed inside it: $(grep 'FAIL' "$out/peek-motion.txt" | tr '\n' ' ')" ;;
+*) # Named by what the wrong frames show, as each has its own issue: the window's page in the card
+   # is #2640's, Peek's page outside it #3319's.
+   wrong=$(grep 'FAIL' "$out/peek-motion.txt" | tr '\n' ' ')
+   if grep -q "WRONG: the window's page shows undimmed inside the card" "$out/peek-motion.txt"; then
+     fail "a frame shows the window's page undimmed inside Peek's card: $wrong"
+   fi
+   fail "a frame shows Peek's resting frame outside its card: $wrong" ;;
 esac
 [ -z "$resized" ] || fail "Peek's page was resized more than once, or not to its resting size: it $resized"
-echo "ok: Peek grows from the link and shrinks back into it with only its card on screen: each frame shows the window's page at a point of Peek's resting frame until the card reaches it and once it has left, never undimmed inside the card, and its page was resized once at most, to its resting size. Its sizes: $(tail -1 "$frames/sizes.txt"). Frames: build/check/peek-frames, read in build/check/peek-motion.txt"
+# How long each close held Peek's page for the frame covering it, where the host says (Wayland's).
+covers=$(sed -n 's/^browser: link preview cover shown in \([0-9.]*\) ms$/\1/p' "$log" | sort -n)
+late=$(grep -c '^browser: link preview cover not shown in ' "$log" || true)
+if [ -n "$covers" ] || [ "$late" != 0 ]; then
+  echo "note: $(echo "$covers" | grep -c .) closes held Peek's page for their covering frame, \
+$(echo "$covers" | awk '{ a[NR] = $1 } END { if (NR) printf "%s ms at the median and %s ms at most", a[int((NR + 1) / 2)], a[NR] }'); \
+the wait ran out $late times"
+fi
+echo "ok: Peek grows from the link and shrinks back into it with only its card on screen: each frame shows the window's page at a point of Peek's resting frame until the card reaches it and once it has left, never undimmed inside the card, and its page was resized once at most, to its resting size. Its sizes: $(tail -1 "$frames/sizes.txt"). Frames: build/check/peek-frames, read in build/check/peek-motion.txt; $(grep '^left out: ' "$out/peek-motion.txt" | tail -1)"
