@@ -1529,11 +1529,12 @@ elif windows; then
   # Explorer draws the button, where no capture of ours can take it, so a check VM's run copies the
   # taskbar off its screen (check-windows.yml) and reads the dot there by its colour, as UI
   # Automation lists no task buttons: ilo's green in a Space without a colour, blue in a blue Space,
-  # green with the switch off and blue again on, each time at the same button's place.
+  # green with the switch off and blue again on, each time at the same button's place. Settings'
+  # window has a button of its own while it shows, which carries the dot too (#3326).
   read_dot=
   [ -z "${GITHUB_ACTIONS:-}" ] || read_dot=1
-  # The middle of the dot in $2 (rrggbb) in the BMP $1, "x y", where the dot in $3 isn't; nothing
-  # without one.
+  # The middle of each dot in $2 (rrggbb) in the BMP $1, "x y" a line, where the dot in $3 isn't;
+  # nothing without one.
   dot_at() {
     python3 -I - "$@" << 'PY'
 import struct, sys
@@ -1552,33 +1553,43 @@ for y in range(abs(height)):
             found.append((x, y))
         elif rgb == other:
             others.append((x, y))
-if found:
-    cx = sorted(x for x, _ in found)[len(found) // 2]
-    cy = sorted(y for _, y in found)[len(found) // 2]
+# A dot is the pixels in its colour with no gap wider than 12 across them.
+dots = []
+for x, y in sorted(found):
+    if dots and x - dots[-1][-1][0] <= 12:
+        dots[-1].append((x, y))
+    else:
+        dots.append([(x, y)])
+for dot in dots:
+    cx = sorted(x for x, _ in dot)[len(dot) // 2]
+    cy = sorted(y for _, y in dot)[len(dot) // 2]
     def near(points):
         return sum(abs(x - cx) <= 12 and abs(y - cy) <= 12 for x, y in points)
-    if near(found) >= 20 and near(others) < 5:
+    if near(dot) >= 20 and near(others) < 5:
         print(cx, cy)
 PY
   }
-  # Where the taskbar shows the dot in $1 and not the one in $2, from its copy saved at
-  # $out/taskbar-$3.png, in $dot. Explorer redraws the overlay a moment after it's given.
+  # Where the taskbar shows $4 dots (1 without it) in $1 and none in $2, from its copy saved at
+  # $out/taskbar-$3.png, in $dot, "x y" a line. Explorer redraws an overlay a moment after it's
+  # given, and makes Settings' button a moment after the window shows.
   taskbar_dot() {
     for _ in $(seq 20); do
       screen_png $taskbar "$out/taskbar-$3.png" ||
         fail "PowerShell didn't copy the taskbar off the screen"
       to_bmp "$out/taskbar-$3.png" "$out/taskbar.bmp" || fail "PowerShell couldn't read $3's copy"
       dot=$(dot_at "$out/taskbar.bmp" "$1" "$2")
-      [ -z "$dot" ] || return 0
+      [ -n "$dot" ] && [ "$(echo "$dot" | wc -l)" -ge "${4:-1}" ] && return 0
       sleep 0.25
     done
     return 1
   }
-  # Whether "x y" in $dot is within 2 pixels of $1's.
+  # Whether a dot in $dot is within 2 pixels of "x y" in $1; with $2, whether one isn't.
   same_place() {
-    set -- $1 $dot
-    [ $(($1 - $3)) -le 2 ] && [ $(($3 - $1)) -le 2 ] && [ $(($2 - $4)) -le 2 ] &&
-      [ $(($4 - $2)) -le 2 ]
+    echo "$dot" | awk -v at="$1" -v away="${2:-}" 'BEGIN { split(at, a, " ") } {
+      dx = $1 - a[1]; dy = $2 - a[2]
+      near = dx <= 2 && dx >= -2 && dy <= 2 && dy >= -2
+      if (away == "" ? near : !near) found = 1
+    } END { exit !found }'
   }
   if [ -n "$read_dot" ]; then
     # The taskbar's left, top, right and bottom on the screen, from UI Automation, in pixels.
@@ -1622,17 +1633,25 @@ public static extern bool SetProcessDPIAware();
   expect '^browser: dock icon color off$' "a click on the taskbar button's switch didn't turn it off"
   ../tools/window-screenshot.sh "$pid" "$out/taskbar-dot-switch.png" all || fail "no window to capture"
   if [ -n "$read_dot" ]; then
-    taskbar_dot 0b8045 7eb6d5 off ||
-      fail "the taskbar button's dot with its switch off isn't ilo's green 0b8045 in a blue Space"
-    same_place "$green_at" || fail "the dot with its switch off is at $dot, not at $green_at"
+    taskbar_dot 0b8045 7eb6d5 off 2 ||
+      fail "the taskbar buttons' dots with the switch off, the browser window's and Settings', aren't both ilo's green 0b8045 in a blue Space: $(echo $dot)"
+    same_place "$green_at" || fail "the dots with the switch off are at $(echo $dot), none at $green_at"
+    same_place "$green_at" away ||
+      fail "Settings' taskbar button has no dot of its own beside the browser window's at $green_at: $(echo $dot)"
+    settings_dot=$(echo "$dot" | awk -v at="$green_at" 'BEGIN { split(at, a, " ") } {
+      dx = $1 - a[1]; dy = $2 - a[2]
+      if (dx > 2 || dx < -2 || dy > 2 || dy < -2) { print; exit }
+    }')
   fi
   send clickkey $at
   expect '^browser: dock icon color on$' \
     "a click on the taskbar button's switch didn't turn it on again"
   if [ -n "$read_dot" ]; then
-    taskbar_dot 7eb6d5 0b8045 on ||
-      fail "the taskbar button's dot with its switch on again isn't the blue Space's 7eb6d5"
-    same_place "$green_at" || fail "the dot back on is at $dot, not at $green_at"
+    taskbar_dot 7eb6d5 0b8045 on 2 ||
+      fail "the taskbar buttons' dots with the switch on again, the browser window's and Settings', aren't both the blue Space's 7eb6d5: $(echo $dot)"
+    same_place "$green_at" || fail "the dots back on are at $(echo $dot), none at $green_at"
+    same_place "$green_at" away ||
+      fail "Settings' taskbar button has no dot of its own back on, beside the browser window's at $green_at: $(echo $dot)"
   fi
   send key w cmd
   expect '^browser: settings hidden$' "Ctrl+W didn't hide Settings"
@@ -1644,7 +1663,7 @@ public static extern bool SetProcessDPIAware();
     expect "^browser: menu shown $(cased 'Change Space Icon…')" "a right-click on the Space's name showed no menu"
     send choose "$(cased 'Remove Theme Color')"
     expect '^browser: colored space [0-9]* none$' "Remove Theme Color didn't take the blue away"
-    dock="the taskbar button's dot read off the screen at $green_at: 0b8045 in a Space without a colour, 7eb6d5 in a blue Space, 0b8045 with its switch off in Settings and 7eb6d5 on again"
+    dock="the taskbar button's dot read off the screen at $green_at: 0b8045 in a Space without a colour, 7eb6d5 in a blue Space, 0b8045 with its switch off in Settings and 7eb6d5 on again, Settings' own button carrying the same dot at $settings_dot"
     dock_shots="$dock_shots, $out/taskbar-green.png, $out/taskbar-blue.png, $out/taskbar-off.png, $out/taskbar-on.png"
   else
     echo "skip: the taskbar button's dot in the Space's color: only a check VM's run copies the taskbar off its screen, so only its switch is checked."
