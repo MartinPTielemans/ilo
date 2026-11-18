@@ -916,28 +916,39 @@ in_browser RenderWidgetHostViewCocoa "after escape left the sidebar F6 gave the 
 
 # Tab past the page's last control rings the shown tab's row, and Tab from the ring gives the
 # page its first control, ⇧Tab before the first and back its last, so the keyboard always has a
-# place (#3220). Under Wayland GPUI hears the page's Tab too, and its copy of the press that left
-# never moves the ring; the driver's release ends that press, so the next Tab is the ring's.
+# place (#3220). Each Tab comes as soon as the last one's line, with no wait: no copy of the page's
+# Tab reaches the ring, under Wayland either, as the ring staying on the row until the next Tab
+# shows, so the ring drops none.
+# The ring is on the row the leave rang, from the leave's step $1 until the Tab from it.
+ring_stayed() {
+  sed -n "/^browser: drive $1: /,/^browser: drive $step: /p" "$log" |
+    grep -c '^browser: \(sidebar keyed\|strip keyed\|ring gave the page\) ' | grep -qx 1 ||
+    fail "the ring moved on from the tab's row by itself after $2"
+}
 send click $page_point
-ends=$(wc -l < "$log")
 send key tab
 expect '^browser: title [0-9]* page focus end$' "Tab from the field didn't reach the page's button"
 send key tab
 expect '^browser: sidebar keyed ' "Tab past the page's last control didn't ring the tab's row"
+row=$(since | sed -n 's/^browser: sidebar keyed \([0-9]*\)$/\1/p' | head -1)
+expect "^browser: sidebar ring $row at " "Tab past the page's last control didn't draw the row's ring"
+left=$step
 ../tools/window-screenshot.sh "$pid" "$out/page-end-row.png" || fail "no window to capture"
 send key tab
 expect '^browser: ring gave the page its first control$' "Tab from the ring didn't go into the page"
+ring_stayed $left "Tab past the page's last control"
 send type y
 expect '^browser: title [0-9]* value .*y$' "Tab from the ring didn't give the page's field the keyboard"
 send key tab shift
 expect '^browser: sidebar keyed ' "⇧Tab before the page's first control didn't ring the tab's row"
+row=$(since | sed -n 's/^browser: sidebar keyed \([0-9]*\)$/\1/p' | head -1)
+expect "^browser: sidebar ring $row at " "⇧Tab before the page's first control didn't draw the row's ring"
+left=$step
 ../tools/window-screenshot.sh "$pid" "$out/page-start-row.png" || fail "no window to capture"
 send key tab shift
 expect '^browser: ring gave the page its last control$' "⇧Tab from the ring didn't go into the page"
+ring_stayed $left "⇧Tab before the page's first control"
 expect '^browser: title [0-9]* page focus end$' "⇧Tab from the ring didn't give the page's button the keyboard"
-# Which came first under Wayland at each leave, it or GPUI's copy of its Tab, for the PR's record.
-sed -n "$((ends + 1)),\$p" "$log" | grep -e ' GPUI heard its Tab$' -e " ring took the page's own Tab$" |
-  sed 's/^/order: /'
 
 # A shortcut the page keeps, as this one keeps ⌘F, runs ilo's command on a second press at once,
 # as Arc's does. Prefer ilo, from a right-click on Find's keys in Settings › Shortcuts, has ⌘F
