@@ -78,9 +78,15 @@ log="$out/tabs.log"
 trace="$PWD/$out/trace.json"
 step=0
 rm -f "$saved" "$launch_frame"
+# The example.com and example.org pages the steps open, and DuckDuckGo's for the searches, come from
+# a server of the run's own, which a runner always reaches (#3144).
+serve_tls example '<meta charset=utf-8><link rel=icon href="data:,"><title>Example Domain</title>
+<h1>Example Domain</h1>' example.com '*.example.com' example.org duckduckgo.com
 # shellcheck disable=SC2086 # the record mode, or nothing
 BROWSER_DRIVE=1 BROWSER_URL="$page" "$browser" --enable-tracing="$trace_categories" $trace_mode \
-  --enable-tracing-format=json --trace-startup-file="$trace" < "$out/drive" > "$log" 2>&1 &
+  --enable-tracing-format=json --trace-startup-file="$trace" \
+  --host-resolver-rules="$tls_rules" --ignore-certificate-errors-spki-list="$tls_key" \
+  < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
@@ -1750,6 +1756,19 @@ exec 3>&-
 # Chrome writes the trace before it quits, once every process has started tracing or 10 s have
 # passed, so a renderer that closed early can hold the quit that long.
 quit 30
+kill "$tls" 2> /dev/null || true
+tls=
+# Each example.com, example.org and DuckDuckGo page the launch loaded came from the run's server.
+examples=$(grep -E '^browser: loaded [0-9]+ https?://([a-z.]*example\.[a-z]+|duckduckgo\.com)/' "$log" |
+  cut -d' ' -f4- | sort -u)
+[ -n "$examples" ] || fail "the launch loaded no example.com or example.org page"
+while read -r url; do
+  grep -qxF "example: GET $url" "$out/example-tls.log" ||
+    fail "$url loaded, but not from the run's server: $(grep -v '^example: ' "$out/example-tls.log" | tail -3)"
+done << EOF
+$examples
+EOF
+echo "ok: the example.com, example.org and DuckDuckGo pages the launch loaded came from the run's own server: $(echo "$examples" | tr '\n' ' ')"
 
 app_ms=$(sed -n 's/^browser: selected [0-9]* in \([0-9.]*\) ms$/\1/p' "$log" | summary)
 [ -s "$trace" ] || fail "the app didn't write its trace"
@@ -1863,7 +1882,8 @@ settings_general() {
 # A search's page has to commit for history to have it, and DuckDuckGo may never answer a runner
 # (#1875), so the steps that need one search the run's own server, in a launch of its own with a new
 # profile. The search for dogs above goes to DuckDuckGo, as the navigation's own line says
-# (searching in lib.sh), which needs no answer. Settings' Search engine lists the engines Chrome
+# (searching in lib.sh), which needs no answer. This launch's DuckDuckGo is the run's own server too,
+# with the same page as the run's search. Settings' Search engine lists the engines Chrome
 # offers and the one it uses, so a site search the user adds is set as Chrome's users set it: Add on
 # Chromium's search engines page, from the bar's Site Search Settings, and Make default in its
 # menu. The page's controls are Chromium's WebUI, which takes keys through its shadow trees, so
@@ -1879,7 +1899,9 @@ printf '%s' '<title>loading</title>
 const query = new URLSearchParams(location.search).get("q");
 requestAnimationFrame(() => setTimeout(() => document.title = "searched " + query));
 </script>' > "$out/site/search.html"
-start_with_cdp "${site}search.html?q=nothing" "$(app_path "$PWD/$out/search-profile")" ""
+serve_tls duckduckgo "$(cat "$out/site/search.html")" duckduckgo.com
+start_with_cdp "${site}search.html?q=nothing" "$(app_path "$PWD/$out/search-profile")" "" \
+  --host-resolver-rules="$tls_rules" --ignore-certificate-errors-spki-list="$tls_key"
 await_load
 await '^browser: title [0-9]* searched nothing$' || fail "the run's search page didn't draw"
 send click $page_point
@@ -2003,6 +2025,17 @@ fi
 exec 5>&-
 wait "$helper" 2>/dev/null || true
 helper=
+kill "$tls" 2> /dev/null || true
+tls=
+# What DuckDuckGo was asked in this launch, the run's server answered.
+searches=$(grep -E '^browser: loaded [0-9]+ https?://duckduckgo\.com/' "$log" | cut -d' ' -f4- | sort -u || true)
+while read -r url; do
+  [ -n "$url" ] || continue
+  grep -qxF "duckduckgo: GET $url" "$out/duckduckgo-tls.log" ||
+    fail "$url loaded, but not from the run's server: $(grep -v '^duckduckgo: ' "$out/duckduckgo-tls.log" | tail -3)"
+done << EOF
+$searches
+EOF
 # Google's search, which the core adds once to each profile as a choice only (decision 2,
 # core/search_default.h), on a new profile of its own in three launches. Its first launch's search
 # engine step opens on DuckDuckGo, the default, so Return there sets nothing. Settings lists Google
@@ -2021,62 +2054,13 @@ else
   rm -rf "$google_profile" "$out/google-home"
   # An empty home, so the first launch's import step finds no browser of the runner's.
   mkdir -p "$out/google-home"
-  # Git Bash would pass the subject to Windows' openssl as a path under its own folder (#872).
-  MSYS2_ARG_CONV_EXCL=/CN= openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=www.google.com \
-    -addext subjectAltName=DNS:www.google.com,DNS:google.com,DNS:*.google.com \
-    -keyout "$out/google-tls.key" -out "$out/google-tls.pem" 2> /dev/null ||
-    fail "openssl didn't make Google's certificate"
-  google_key=$(openssl x509 -in "$out/google-tls.pem" -pubkey -noout | openssl pkey -pubin -outform der |
-    openssl dgst -sha256 -binary | base64)
-  expr "$google_key" : '[A-Za-z0-9+/]\{43\}=$' > /dev/null ||
-    fail "openssl gave \"$google_key\" as the certificate's key, not a SHA-256 in base64"
-  rm -f "$out/google-tls.port"
-  mkfifo "$out/google-tls.port"
-  # Each request it gets is a "google: METHOD PATH" line in google-tls.log. Its page, for any path,
-  # puts the search in its title once drawn, and names its own icon, so no /favicon.ico is asked.
-  python3 -I -u -c '
-import http.server, socketserver, ssl, sys
-class Handler(http.server.BaseHTTPRequestHandler):
-    def parse_request(self):
-        parsed = super().parse_request()
-        if parsed:
-            print("google: %s %s" % (self.command, self.path), file=sys.stderr, flush=True)
-        return parsed
-    def answer(self):
-        body = (b"<meta charset=utf-8><link rel=icon href=\"data:,\"><title>loading</title><script>"
-                b"requestAnimationFrame(() => setTimeout(() => document.title = \"google \" +"
-                b" new URLSearchParams(location.search).get(\"q\")));</script>")
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        if self.command != "HEAD":
-            self.wfile.write(body)
-    do_GET = do_POST = do_HEAD = answer
-    def log_message(self, *args):
-        pass
-# TCPServer, as site.sh binds: HTTPServer looks 127.0.0.1 up by name, 35 s on the hosted Mac.
-class Server(socketserver.ThreadingTCPServer):
-    def get_request(self):
-        try:
-            return super().get_request()
-        except OSError as error:
-            print("handshake failed: %s" % error, file=sys.stderr, flush=True)
-            raise
-server = Server(("127.0.0.1", 0), Handler)
-tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-tls.load_cert_chain(sys.argv[1], sys.argv[2])
-server.socket = tls.wrap_socket(server.socket, server_side=True)
-# As bytes: text stdout on Windows ends a line with \r, which the driver typed as return (#1196).
-sys.stdout.buffer.write(b"%d\n" % server.server_address[1])
-sys.stdout.close()
-server.serve_forever()
-' "$out/google-tls.pem" "$out/google-tls.key" > "$out/google-tls.port" \
-    2> "$out/google-tls.log" 3>&- 4>&- 5>&- &
-  tls=$!
-  read -r google_port < "$out/google-tls.port" || true
-  [ -n "$google_port" ] || fail "Google's https server didn't start: $(cat "$out/google-tls.log")"
-  google_rules="MAP google.com 127.0.0.1:$google_port, MAP *.google.com 127.0.0.1:$google_port"
+  # Its page, for any path, puts the search in its title once drawn, and names its own icon, so no
+  # /favicon.ico is asked.
+  serve_tls google '<meta charset=utf-8><link rel=icon href="data:,"><title>loading</title><script>
+requestAnimationFrame(() => setTimeout(() => document.title = "google " +
+  new URLSearchParams(location.search).get("q")));</script>' www.google.com google.com '*.google.com'
+  google_key=$tls_key
+  google_rules=$tls_rules
   # The engines Settings' Search engine lists, as it last showed them.
   engines_listed() {
     grep '^browser: menu shown ' "$log" | tail -1 | sed 's/^browser: menu shown //'
@@ -2273,7 +2257,7 @@ server.serve_forever()
   # The whole step asked Google's hosts for the search alone: no suggestion as "pelicans" was
   # typed, nothing on a launch, nothing from Chromium's page.
   requests=$(grep '^google: ' "$out/google-tls.log" || true)
-  [ "$requests" = "google: GET /search?q=pelicans" ] ||
+  [ "$requests" = "google: GET https://www.google.com/search?q=pelicans" ] ||
     fail "Google: its hosts were asked for more than the search, or not for it: $(printf '%s' "$requests" | tr '\n' ';')"
   echo "ok: Google's search engine, on a new profile: the first launch's step opens on DuckDuckGo, Settings lists Google last with DuckDuckGo chosen, its pick searches https://www.google.com/search?q=… and asks Google for nothing else, and once Chromium's search engines page deletes it a relaunch doesn't bring it back. Windows: $out/search-engine-step-google.png, $out/search-engine-google.png, $out/search-engine-google-delete.png"
 fi

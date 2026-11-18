@@ -98,6 +98,9 @@ class Tab : public content::WebContentsObserver,
   static gfx::NativeView PageViewOf(content::WebContents* contents);
   // Gives |contents|'s page the keyboard.
   static void FocusPage(content::WebContents* contents);
+  // Focuses |contents|'s first control, or its |last|. The other engine's page takes the keyboard
+  // where it had it, as WebKit has no public way to focus an end.
+  static void FocusPageEnd(content::WebContents* contents, bool last);
   // Asks the app, through |callback|, about a key going down in |tab|'s page, whose focused element
   // takes text if |editing|. Returns whether the app used it.
   static bool AskAppAboutKey(bool (*callback)(void*, bc_id, const bc_key*),

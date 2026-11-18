@@ -14,7 +14,7 @@
 # check's folder, on the Mac with macOS's quarantine flag, a new one's icon flies
 # from the pointer into a bin on the Library button, recorded with the recent downloads coming and
 # going, none of those a relaunch reads does, and ⇧⌘J opens the Library on Downloads, which lists
-# them. While one runs, the button keeps
+# them, and again closes it, giving the page the keyboard back. While one runs, the button keeps
 # its name and resting on it shows the running one with the finished one. With one running, ⌘Q
 # asks first: Continue Downloading shows the Library's Downloads, and Quit quits, cancelling it.
 # After the relaunch, Remove from List and Clear List take them off the list and keep their files.
@@ -136,6 +136,9 @@ expect '^browser: library shown$' "⇧⌘J didn't open the Library"
 ../tools/window-screenshot.sh "$pid" "$out/downloads.png" || fail "no window to capture"
 send key j cmd shift
 expect '^browser: library hidden$' "⇧⌘J again didn't close the Library"
+# The page had the keyboard as ⇧⌘J opened the Library, so it has it back (#3313).
+expect '^browser: library gave the keyboard back to the page$' \
+  "⇧⌘J closing the Library didn't give the page the keyboard back"
 # Tab a goes to two pages and back to the first, so it has pages to go forward to.
 go_from_bar "http://localhost:$port/one.html"
 expect_page "http://localhost:$port/one.html" 1 0 "after loading a page"

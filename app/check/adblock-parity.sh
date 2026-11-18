@@ -254,26 +254,33 @@ look_content() {
     fail "cdp.py didn't say what $1 shows: it said $(tail -1 "$cdp_log")"
   echo "$1 $(grep '^cdp: content ' "$cdp_log" | tail -1 | cut -d' ' -f3-)" >> "$contents"
 }
-# A watch page's line in $videos: the site, "ad" if its player showed an ad or "no-ad", and the
-# seconds its video played, or none for no video, as YouTube's bot check has none. An ad plays
-# before the video does, so the player is read each half second from the load until the video
-# has played 5 s, or for 30 s. Chrome lets a page start a video with sound only once the user has
-# acted on it, so a video whose start Chrome refused, as YouTube's player says, gets k, YouTube's
-# play key, once, as a user's press of play. Before the player has asked to play, the key would
-# start the video, and the player's own start would then pause it.
+# A watch page's line in $videos: the site, "ad" if its player showed an ad or "no-ad", the
+# seconds its video played, or none for no video, as YouTube's bot check has none, then what got
+# it playing. An ad plays before the video does, so the player is read each half second from the
+# load until the video has played 5 s, or for 30 s. Chrome lets a page start a video with sound
+# only once the user has acted on it, so a video whose start Chrome refused, as YouTube's player
+# says, gets k, YouTube's play key, once, as a user's press of play, and so does a cued video,
+# which waits for that press (#3272). Before the player has asked to play, the key would start the
+# video, and the player's own start would then pause it. What got it playing is "refused" or
+# "cued", which got the press, or else the player's state when last read, as cdp.py says it.
 videos="$dir/videos.txt"
 : > "$videos"
 watch_video() {
   # Not site, the check's server, which a later pass in the same shell builds its pages on.
-  watched=$1 ad=no-ad played=none pressed= since=$(date +%s)
+  watched=$1 ad=no-ad played=none met= state=- since=$(date +%s)
   while [ $(($(date +%s) - since)) -lt 30 ]; do
-    # The seconds, playing or paused, ad or no-ad, refused or -.
+    # The seconds, playing or paused, ad or no-ad, then refused, cued or the player's state.
     set -- $(video https://www.youtube.com/watch)
     if [ $# = 4 ]; then
-      if [ "$4" = refused ] && [ -z "$pressed" ]; then
-        send key k
-        pressed=1
-      fi
+      state=$4
+      case $4 in
+        refused | cued)
+          if [ -z "$met" ]; then
+            send key k
+            met=$4
+          fi
+          ;;
+      esac
       if [ "$3" = ad ]; then
         ad=ad
       else
@@ -283,7 +290,7 @@ watch_video() {
     fi
     sleep 0.5
   done
-  echo "$watched $ad $played" >> "$videos"
+  echo "$watched $ad $played ${met:-$state}" >> "$videos"
 }
 # Each site: when Return went, in ms since the epoch, then the site, then the load's time and what
 # loaded, or "none" for a load that didn't come within 45 s, then "bot-check" where Cloudflare's
@@ -319,6 +326,23 @@ while read -r url <&4; do
     # run's 20 minutes on Windows' Check, needs no pictures, so it waits only after the last site,
     # and gives a bot check no second go.
     [ -n "${ADBLOCK_PARITY_NO_CAPTURE:-}" ] || sleep 8
+    # A page can send itself on once it has loaded, as dailymail.co.uk does to dailymail.com,
+    # which then loads itself again (#3309). DevTools asked about the page meanwhile waits on the
+    # page being replaced, and the next site would take its last load for its own. So the site's
+    # page is the one its tab ends on: a tab loading again is waited on to its last load, within
+    # the same 45 s from Return. The load's time stays the first's, the one the user waited on.
+    if [ "$loaded" != none ] && [ -z "${ADBLOCK_PARITY_NO_CAPTURE:-}" ]; then
+      while sed -n "/^browser: drive $step: /,\$p" "$log" | grep "^browser: page $tab " | tail -1 |
+        grep -q ' loading 1 '; do
+        [ $(($(ms) - started)) -lt 45000 ] || fail "$url loaded (${loaded#* }) and was loading again \
+45 s after Return: $(sed -n "/^browser: drive $step: /,\$p" "$log" |
+          grep "^browser: \(page\|loaded\) $tab " | tail -3 | tr '\n' ';')"
+        kill -0 "$pid" 2> /dev/null || gone
+        sleep 0.1
+      done
+      line=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep "^browser: loaded $tab " | tail -1)
+      loaded="${loaded%% *} ${line#browser: loaded $tab }"
+    fi
     # The tab's title now: its last line, as the browser logs a title only when it changes, so a
     # second go to the same check logs none.
     title=$(grep "^browser: title $tab " "$log" | tail -1)
@@ -400,11 +424,12 @@ for line in open(starts, encoding="utf-8"):
     ok = load_ms != "none" and not landed.startswith("chrome-error:")
     sites.append({"at": int(started), "url": url, "loaded": ok, "load_ms": load_ms if ok else "",
                   "bot": "bot-check" in rest})
-# A watch page's video: "ad" or "no-ad", then the seconds it played or none.
+# A watch page's video: "ad" or "no-ad", the seconds it played or none, then what got it playing.
 videos = {}
 for line in open(watched, encoding="utf-8"):
-    url, ad, played = line.split()
-    videos[url] = {"ad": ad == "ad", "played": None if played == "none" else float(played)}
+    url, ad, played, met = line.split()
+    videos[url] = {"ad": ad == "ad", "played": None if played == "none" else float(played),
+                   "met": met}
 
 # What a site's page showed: its text's characters, its pictures, and whether it was covered.
 contents = {}
@@ -418,10 +443,24 @@ def plays(video):
     return bool(video) and not video["ad"] and (video["played"] or 0) >= 5
 
 
+# YouTube's player states, as its getPlayerState gives them.
+STATES = {"-1": "unstarted", "0": "ended", "1": "playing", "2": "paused", "3": "buffering",
+          "-": "unknown"}
+
+
 def video_said(video):
     if video["played"] is None:
         return "had no video"
-    return (f"played {video['played']:.1f} s" + (" after an ad" if video["ad"] else " with no ad"))
+    said = f"played {video['played']:.1f} s" + (" after an ad" if video["ad"] else " with no ad")
+    # Which the run met, for #3272: a baseline's table doesn't say.
+    met = video.get("met")
+    if met in ("refused", "cued"):
+        return f"{said}, {met} and pressed play"
+    if met and plays(video):
+        return f"{said}, by itself with no press"
+    if met:
+        return f"{said}, neither refused nor cued, so not pressed, its state {STATES.get(met, met)}"
+    return said
 
 
 for i, s in enumerate(sites):
