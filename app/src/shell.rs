@@ -113,6 +113,7 @@ mod new_space;
 mod new_window;
 mod onboarding;
 mod page_dialog;
+mod page_ends;
 mod page_menu;
 mod page_motion;
 mod pair;
@@ -1534,6 +1535,11 @@ pub struct Shell {
     sidebar_keys: FocusHandle,
     focus_keys: bool,
     keyed_drawn: Rc<Cell<Option<(u64, Bounds<Pixels>)>>>,
+    /// The stop of the strip under a task's page watched whose ring the keys move instead of a
+    /// row's, with the sidebar's focus, and where the ring's last Tab into a page came from
+    /// (page_ends.rs, #3220).
+    keyed_strip: Option<page_ends::StripStop>,
+    page_ends: page_ends::PageEnds,
     /// The tab Close and Keep Pinned showed, whose row has the ring for a moment, and the timer
     /// that takes it off.
     attention: Option<(u64, Task<()>)>,
@@ -2158,6 +2164,8 @@ impl Shell {
             sidebar_keys: cx.focus_handle(),
             focus_keys: false,
             keyed_drawn: Rc::default(),
+            keyed_strip: None,
+            page_ends: Default::default(),
             attention: None,
             tools_on: false,
             tools_fade: None,
@@ -4785,7 +4793,14 @@ impl Render for Shell {
             })
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle)
-            .on_action(cx.listener(Self::tab_in))
+            .on_action(cx.listener(|shell, _: &sidebar_keys::TabIn, window, cx| {
+                shell.tab_in(false, window, cx)
+            }))
+            .on_action(
+                cx.listener(|shell, _: &sidebar_keys::BackTabIn, window, cx| {
+                    shell.tab_in(true, window, cx)
+                }),
+            )
             // The Edit menu's Undo and Redo, which a field of ours takes for itself first.
             .on_action(cx.listener(|shell, _: &crate::text_input::Undo, _, cx| {
                 shell.undo(cx);

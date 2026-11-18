@@ -1856,6 +1856,8 @@ impl Browser for Fake {
 
     fn focus_page(&self, _: &mut App) {}
 
+    fn focus_page_end(&self, _: bool, _: &mut App) {}
+
     // There's no page, and the window's buttons stay where GPUI put them.
     // The site lays its frame out under the canvas there.
     fn lay_out_page(&self, _frame: Bounds<Pixels>, _radius: f32, _: &mut App) {
@@ -2456,6 +2458,75 @@ fn task_space(id: u64) -> SpaceEntry {
         "Claude".into(),
         "".into(),
     )
+}
+
+/// PREVIEW_TASK_RING=<stop> (with PREVIEW_TASKS=open) watches the working task's page, and
+/// rings the stop named, as Tab from the window does: none, row, back, page, take-over or stop
+/// (#3220).
+fn preview_task_ring(shell: WeakEntity<Shell>, cx: &mut App) {
+    let Ok(stop) = std::env::var("PREVIEW_TASK_RING") else {
+        return;
+    };
+    // Tabs after the strip's first stop, Back; the row is the one before it.
+    let tabs = match stop.as_str() {
+        "back" => Some(0),
+        "page" => Some(1),
+        "take-over" => Some(2),
+        "stop" => Some(3),
+        "row" => Some(4),
+        _ => None,
+    };
+    let tab = FIRST_TASK + 300;
+    let agent: SharedString = format!("task-{FIRST_TASK}").into();
+    cx.spawn(async move |cx| {
+        // After the conversation the card's click opens.
+        cx.background_executor()
+            .timer(Duration::from_millis(300))
+            .await;
+        shell
+            .update(cx, |shell, cx| {
+                let none = Folders::default();
+                shell.set_tabs(FIRST_TASK, Vec::new(), vec![tab], Vec::new(), none, cx);
+                shell.set_title(tab, "Seats · Saturday".into(), cx);
+                let url = "https://tickets.example/seats".into();
+                let page = Page {
+                    url,
+                    ..Default::default()
+                };
+                shell.set_page(tab, page, cx);
+                shell.watch_task_page(tab, Bounds::default(), None, cx);
+                shell.set_space(FIRST_TASK, cx);
+                shell.set_selected(tab, cx);
+                let status = browser::agents::Status {
+                    agent: agent.clone(),
+                    name: "Claude".into(),
+                    space: FIRST_TASK,
+                    doing: "Clicking “Tickets”".into(),
+                    held: Vec::new(),
+                };
+                shell.set_agent_status(vec![status], cx);
+                shell.agent_acted(agent, tab, cx);
+            })
+            .ok();
+        // Once the page is in place, which is when the ring reaches it.
+        cx.background_executor()
+            .timer(Duration::from_millis(900))
+            .await;
+        shell
+            .update(cx, |shell, cx| {
+                if let Some(tabs) = tabs {
+                    shell.tab_into_strip(false, cx);
+                    for _ in 0..tabs {
+                        shell.key_tab(false, cx);
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        // A capture of the strip starts once this is logged.
+        eprintln!("preview: task ring on {stop}");
+    })
+    .detach();
 }
 
 /// The tasks' cards, each asked in `home`.
@@ -3241,6 +3312,7 @@ fn main() {
                                 shown
                                     .update(cx, |shell, cx| shell.show_task(agent.into(), cx))
                                     .ok();
+                                preview_task_ring(shown, cx);
                             });
                         }
                     }

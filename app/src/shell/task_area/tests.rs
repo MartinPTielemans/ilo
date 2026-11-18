@@ -1087,7 +1087,7 @@ fn only_what_needs_the_user_has_a_primary() {
     }
 
     let primaries = |held, dot, open| -> Vec<StripChip> {
-        (strip_chips(held, dot, open).into_iter())
+        (strip_chips(held, dot, open, false).into_iter())
             .filter(|(_, look)| *look == Look::Primary)
             .map(|(chip, _)| chip)
             .collect()
@@ -1107,10 +1107,153 @@ fn only_what_needs_the_user_has_a_primary() {
         assert!(primaries(held, dot, open).is_empty(), "{what}");
     }
     assert_eq!(
-        strip_chips(false, Some(Dot::Working), false),
+        strip_chips(false, Some(Dot::Working), false, false),
         [(StripChip::Stop, Look::Quiet)],
         "at work, Stop alone and quiet: a press in the page takes it over"
     );
+    assert_eq!(
+        strip_chips(false, Some(Dot::Working), false, true),
+        [
+            (StripChip::TakeOver, Look::Quiet),
+            (StripChip::Stop, Look::Quiet)
+        ],
+        "with the ring in the strip, Take Over is a stop of its own, before Stop"
+    );
+    assert_eq!(
+        strip_chips(true, Some(Dot::Working), false, true),
+        [(StripChip::HandBack, Look::Quiet)],
+        "a page the user holds has no Take Over"
+    );
+}
+
+/// An agent's page watched, which the user doesn't hold: the ring goes over the strip in its own
+/// order, the row, back, the page, Take Over and Stop, and never into the page. The page's stop
+/// names it as the agent's, Return on it does nothing, and Return on Take Over takes it over, as
+/// ⌘↩ does (#3220).
+#[gpui::test]
+fn the_ring_never_enters_an_agents_page(cx: &mut TestAppContext) {
+    use crate::agents::task::{Card, Dot};
+    use crate::shell::page_ends::StripStop;
+    let (shell, host, cx) = shell_with_task(cx);
+    still(cx);
+    let card = Card {
+        agent: "task-1".into(),
+        home: 1,
+        space: 3,
+        name: "Claude".into(),
+        replies: true,
+        title: "Find a flight".into(),
+        status: "Clicking “Tickets”".into(),
+        asks: false,
+        dot: Dot::Working,
+        answers: Vec::new(),
+        question: None,
+        open: Vec::new(),
+        retry: false,
+        command: None,
+    };
+    shell.update(cx, |shell, cx| {
+        shell.set_task_cards(vec![card], cx);
+        shell.show_task("task-1".into(), cx);
+    });
+    let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
+    assert!(shell.update(cx, |shell, cx| shell.watch_task_page(30, thumb, None, cx)));
+    core_shows_task(&shell, cx, 30);
+    shell.update(cx, |shell, cx| {
+        let status = Status {
+            agent: "task-1".into(),
+            name: "Claude".into(),
+            space: 3,
+            doing: "Clicking “Tickets”".into(),
+            held: Vec::new(),
+        };
+        shell.set_agent_status(vec![status], cx);
+        shell.agent_acted("task-1".into(), 30, cx);
+    });
+    // Tab with the window's keyboard rings the strip, staying with the page watched.
+    assert!(shell.update(cx, |shell, cx| shell.tab_into_strip(false, cx)));
+    draw(&shell, cx);
+    host.take();
+    let at = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell.read_with(cx, |shell, _| (shell.keyed.is_some(), shell.keyed_strip))
+    };
+    let tab = |reverse: bool, shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| shell.key_tab(reverse, cx));
+        draw(shell, cx);
+        at(shell, cx)
+    };
+    assert_eq!(at(&shell, cx), (false, Some(StripStop::Back)));
+    let went: Vec<_> = (0..5).map(|_| tab(false, &shell, cx)).collect();
+    assert_eq!(
+        went,
+        [
+            (false, Some(StripStop::Page)),
+            (false, Some(StripStop::TakeOver)),
+            (false, Some(StripStop::Stop)),
+            (true, None),
+            (false, Some(StripStop::Back)),
+        ]
+    );
+    tab(true, &shell, cx);
+    assert_eq!(tab(true, &shell, cx), (false, Some(StripStop::Stop)));
+    assert_eq!(tab(true, &shell, cx), (false, Some(StripStop::TakeOver)));
+    assert_eq!(tab(true, &shell, cx), (false, Some(StripStop::Page)));
+    let calls = host.take();
+    assert!(
+        !calls.iter().any(|call| call.starts_with("focus page")),
+        "the ring gave the agent's page the keyboard: {calls:?}"
+    );
+    let name = shell.read_with(cx, |shell, _| {
+        let (title, detail) = shell.task_strip_words(30);
+        shell.strip_page_name(30, &title, &detail)
+    });
+    assert!(name.starts_with("Claude's page"), "{name}");
+    assert!(name.ends_with("Take Over to use it yourself."), "{name}");
+    shell.update(cx, |shell, cx| shell.key_strip_show(StripStop::Page, cx));
+    assert!(
+        host.take().is_empty(),
+        "Return on the page's stop did something"
+    );
+    shell.update(cx, |shell, cx| {
+        shell.key_strip_show(StripStop::TakeOver, cx)
+    });
+    assert_eq!(
+        host.take().first().map(String::as_str),
+        Some("take over task-1 30")
+    );
+}
+
+/// A page the user holds is theirs: Tab from the ring's back goes into it, and Tab out of it
+/// rings the strip's next stop, Hand Back, the UI taking the keyboard.
+#[gpui::test]
+fn a_held_task_page_takes_tab_as_the_users_does(cx: &mut TestAppContext) {
+    use crate::shell::page_ends::StripStop;
+    let (shell, host, cx) = shell_with_task(cx);
+    watching(&shell, &host, cx);
+    shell.update(cx, |shell, cx| {
+        let status = Status {
+            agent: "task-1".into(),
+            name: "Claude".into(),
+            space: 3,
+            doing: "".into(),
+            held: vec![(30, "".into())],
+        };
+        shell.set_agent_status(vec![status], cx);
+    });
+    assert!(shell.update(cx, |shell, cx| shell.tab_into_strip(false, cx)));
+    draw(&shell, cx);
+    host.take();
+    shell.update(cx, |shell, cx| shell.key_tab(false, cx));
+    draw(&shell, cx);
+    assert_eq!(host.take(), ["focus page first"]);
+    // Later than the press that went in, which a page with nothing to focus hands back.
+    let took = shell.update(cx, |shell, cx| {
+        shell.page_ends.entered = None;
+        shell.tab_focus_leaving(30, false, cx)
+    });
+    assert!(took, "the app didn't take the keyboard from the held page");
+    let stop = shell.read_with(cx, |shell, _| shell.keyed_strip);
+    assert_eq!(stop, Some(StripStop::HandBack));
 }
 
 /// The Library opened by its key from the page, then a task's page watched: the Library's key
