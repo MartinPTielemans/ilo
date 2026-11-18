@@ -47,6 +47,9 @@ final class WebTab: NSObject, Identifiable {
   @ObservationIgnored private(set) weak var opener: WebTab?
   @ObservationIgnored private var observations: [NSKeyValueObservation] = []
   @ObservationIgnored private var reloadedAfterCrash = false
+  /// The address that didn't load, and whether going there was the user's doing. The web view
+  /// is still at the page before it.
+  @ObservationIgnored private var failed: (url: URL, users: Bool)?
   @ObservationIgnored private var writes = NavigationWrites()
   @ObservationIgnored private var shrink = BarShrink()
   /// The home indicator's band under the page, once the page has been in a window.
@@ -174,7 +177,10 @@ final class WebTab: NSObject, Identifiable {
 
   func reload() {
     failure = nil
-    if webView.url == nil, let url {
+    if let failed, failed.url != webView.url {
+      // The web view's own reload would bring back the page before the one that didn't load.
+      load(failed.url, entered: failed.users)
+    } else if webView.url == nil, let url {
       writes.own()
       unsent.load(entered: false)
       webView.load(URLRequest(url: url))
@@ -459,6 +465,7 @@ extension WebTab: WKNavigationDelegate {
 
   func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
     failure = nil
+    failed = nil
     shrink.grow()
     barHidden = false
     isLoading = true
@@ -473,6 +480,7 @@ extension WebTab: WKNavigationDelegate {
 
   func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
     failure = nil
+    failed = nil
     committed = webView.url
     loginState.committed()
     writes.commit()
@@ -489,22 +497,24 @@ extension WebTab: WKNavigationDelegate {
   }
 
   func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
-    writes.fail()
-    fail(error)
+    fail(error, users: writes.fail())
   }
 
   func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) {
     fail(error)
   }
 
-  private func fail(_ error: any Error) {
+  private func fail(_ error: any Error, users: Bool = false) {
     isLoading = false
     swipe.arrived()
     let error = error as NSError
     // A load the user or a newer load stopped, or one that became a download, isn't a failure.
     if error.domain == NSURLErrorDomain, error.code == NSURLErrorCancelled { return }
     if error.domain == "WebKitErrorDomain", error.code == 102 { return }
-    if let address = error.userInfo[NSURLErrorFailingURLErrorKey] as? URL { url = address }
+    if let address = error.userInfo[NSURLErrorFailingURLErrorKey] as? URL {
+      url = address
+      failed = (address, users)
+    }
     failure = PageFailure(error)
   }
 

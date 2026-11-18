@@ -1,6 +1,7 @@
 import Testing
 import UIKit
 import WebKit
+import os
 
 @testable import ilo
 
@@ -299,5 +300,57 @@ import WebKit
     page.reload()
     #expect(await eventually { server.requests(to: "/page") == 2 })
     #expect(browser.prompt == nil)
+  }
+}
+
+/// Try Again on a page that didn't load.
+@Suite(.serialized, .timeLimit(.minutes(2))) @MainActor struct TryAgainTests {
+  /// A site whose `/broken` hangs up without an answer while it's `down`.
+  private func site(_ down: OSAllocatedUnfairLock<Bool>) async throws -> Loopback {
+    try await Loopback { request in
+      if request.path == "/broken", down.withLock({ $0 }) { return nil }
+      return .html("<title>\(request.path)</title>")
+    }
+  }
+
+  @Test func `Try Again asks for the address that failed, not the page before it`() async throws {
+    let down = OSAllocatedUnfairLock(initialState: true)
+    let server = try await site(down)
+    let browser = testBrowser()
+    browser.openNew(server.url("/first"))
+    let page = try #require(browser.page)
+    #expect(await eventually { await page.shows("/first") })
+
+    page.load(server.url("/broken"), entered: true)
+    #expect(await eventually { page.failure != nil })
+    #expect(page.url == server.url("/broken"))
+    let before = server.requests(to: "/first")
+    let tries = server.requests(to: "/broken")
+
+    down.withLock { $0 = false }
+    page.reload()
+    #expect(await eventually { await page.shows("/broken") })
+    #expect(page.failure == nil)
+    #expect(server.requests(to: "/first") == before)
+    #expect(server.requests(to: "/broken") == tries + 1)
+
+    // With the page up, a reload is the page's own again.
+    page.reload()
+    #expect(await eventually { server.requests(to: "/broken") == tries + 2 })
+    #expect(server.requests(to: "/first") == before)
+  }
+
+  @Test func `Try Again on a tab's first page asks for that page`() async throws {
+    let down = OSAllocatedUnfairLock(initialState: true)
+    let server = try await site(down)
+    let browser = testBrowser()
+    browser.openNew(server.url("/broken"))
+    let page = try #require(browser.page)
+    #expect(await eventually { page.failure != nil })
+
+    down.withLock { $0 = false }
+    page.reload()
+    #expect(await eventually { await page.shows("/broken") })
+    #expect(page.failure == nil)
   }
 }

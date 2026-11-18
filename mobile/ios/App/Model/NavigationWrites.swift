@@ -73,10 +73,12 @@ nonisolated struct NavigationWrites {
     asked = nil
   }
 
-  /// The navigation on its way didn't load.
-  mutating func fail() {
+  /// The navigation on its way didn't load. Says whether it was the user's, for another try at
+  /// it to be theirs too.
+  @discardableResult mutating func fail() -> Bool {
+    defer { users = false }
     loading = false
-    users = false
+    return users
   }
 
   /// A page committed. One the user didn't ask for, before the one they did had its title, is
