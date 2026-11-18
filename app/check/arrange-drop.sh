@@ -181,31 +181,22 @@ drop() {
   fi
   send release $4 $5
   expect "^browser: arrange $tab " "$8: letting go didn't change the mode's state"
-  # Known under #3003: on the batch's core, letting go where the rest refused lands the drop the
-  # move found before the refusal, as arrange's own refusal has it. The run takes that as the core
-  # gives it, reports it and takes it back with ⌘Z, so the next case starts from the page as it was.
-  # Once the core lands nothing there, the run says so.
-  landed=
+  # Letting go where the rest refused lands nothing and leaves the thing selected where it was
+  # (#3003).
   if [ "$6" = Refused ]; then
     expect "^browser: arrange $tab Selected " "$8: letting go where it doesn't fit left no selection"
     landed=$(sed -n "/^browser: drive $step: /,\$p" "$log" |
       grep "^browser: arrange $tab Selected \(Settles\|Trades\) " | tail -1)
+    [ -z "$landed" ] || fail "$8: letting go where the rest refused landed a drop all the same: $landed"
   fi
-  if [ -n "$landed" ]; then
-    ../tools/window-screenshot.sh "$pid" "$out/arrange-drop-$9.png" || fail "no window to capture"
+  send move $(page_at 600 600)
+  # $7 ends in a space, as the page's columns are followed by " over".
+  page_says "^$7.*over 600,600 at " "$8: letting go didn't leave what it previewed"
+  ../tools/window-screenshot.sh "$pid" "$out/arrange-drop-$9.png" || fail "no window to capture"
+  dropped="$dropped $8,"
+  if [ "$6" != Refused ]; then
     send key z cmd
-    page_says "^$before" "$8: ⌘Z didn't take back what letting go landed after the refusal"
-    dropped="$dropped $8, but letting go there landed it all the same (#3003), which ⌘Z took back,"
-  else
-    send move $(page_at 600 600)
-    # $7 ends in a space, as the page's columns are followed by " over".
-    page_says "^$7.*over 600,600 at " "$8: letting go didn't leave what it previewed"
-    ../tools/window-screenshot.sh "$pid" "$out/arrange-drop-$9.png" || fail "no window to capture"
-    dropped="$dropped $8,"
-    if [ "$6" != Refused ]; then
-      send key z cmd
-      page_says "^$before" "$8: ⌘Z didn't take it back"
-    fi
+    page_says "^$before" "$8: ⌘Z didn't take it back"
   fi
   # The selection ends, so its mini bar covers nothing the next press needs. A refusal may have
   # left none.
