@@ -23,18 +23,10 @@ class FocusLeavingDelegate : public content::WebContentsViewDelegate {
       : contents_(contents), chrome_(std::move(chrome)) {}
 
   bool TakeFocus(bool reverse) override {
-    Tab* tab = Tab::FromWebContents(contents_);
-    if (!tab) {
+    if (!Tab::FromWebContents(contents_)) {
       return chrome_->TakeFocus(reverse);
     }
-    const bc_id id = tab->id();
-    const focus_leaving_rule::Kept kept =
-        focus_leaving_rule::Leave(IsAgentTab(contents_), Window::Showing(id) != nullptr, [&] {
-          return Host().tab_focus_leaving && Host().tab_focus_leaving(Host().context, id, reverse);
-        });
-    fprintf(stderr, "browser: tab %llu focus left its page at the %s, kept by the %s\n",
-            static_cast<unsigned long long>(id), reverse ? "start" : "end",
-            focus_leaving_rule::Name(kept));
+    FocusLeftPage(contents_, reverse);
     // Answered, so neither Chrome's delegate nor, on the Mac, the window's key view loop moves it.
     return true;
   }
@@ -75,6 +67,22 @@ class FocusLeavingDelegate : public content::WebContentsViewDelegate {
 };
 
 }  // namespace
+
+bool FocusLeftPage(content::WebContents* contents, bool reverse) {
+  const Tab* tab = Tab::FromWebContents(contents);
+  if (!tab) {
+    return false;
+  }
+  const bc_id id = tab->id();
+  const focus_leaving_rule::Kept kept =
+      focus_leaving_rule::Leave(IsAgentTab(contents), Window::Showing(id) != nullptr, [&] {
+        return Host().tab_focus_leaving && Host().tab_focus_leaving(Host().context, id, reverse);
+      });
+  fprintf(stderr, "browser: tab %llu focus left its page at the %s, kept by the %s\n",
+          static_cast<unsigned long long>(id), reverse ? "start" : "end",
+          focus_leaving_rule::Name(kept));
+  return kept == focus_leaving_rule::Kept::kByApp;
+}
 
 std::unique_ptr<content::WebContentsViewDelegate> AnswerFocusLeaving(
     content::WebContents* contents,

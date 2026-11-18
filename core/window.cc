@@ -74,6 +74,8 @@
 #include "chrome/browser/ui/navigator/browser_navigator.h"
 #include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/navigator/browser_navigator_params_utils.h"
+#include "chrome/browser/ui/tabs/public/tab_dialog_manager.h"
+#include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -1858,6 +1860,7 @@ void Window::Show(content::WebContents* contents, const gfx::Rect& frame) {
     }
   }
   panes_ = std::move(panes);
+  const bool newly_shown = shown_.get() != contents;
   shown_ = contents->GetWeakPtr();
   SetLetGo(false);
   page_frame_ = frame;
@@ -1869,6 +1872,18 @@ void Window::Show(content::WebContents* contents, const gfx::Rect& frame) {
   // wait for its new size: the app lays them out once it has it (LeaveFullScreen).
   if (!platform::PagesHeldForResize(widget_.get())) {
     LayOutPage();
+  }
+  // Chrome hides a tab's dialog as the tab leaves the front, and shows it again only as its page
+  // goes from hidden to visible. A pane of a split stays visible while another has the focus, so
+  // its dialog, as Chrome's warning before http, shows again here as its pane takes the focus
+  // (#3196, #3233). Only then: showing a dialog gives it the keyboard. Never an agent's tab's,
+  // which never takes the user's keyboard (#3164): a watched one's dialog shows as Chrome shows it.
+  if (newly_shown && !IsAgentTab(contents)) {
+    tabs::TabFeatures* features = tabs::TabInterface::GetFromContents(contents)->GetTabFeatures();
+    if (tabs::TabDialogManager* dialogs = features ? features->tab_dialog_manager() : nullptr;
+        dialogs && dialogs->UpdateDialogVisibility()) {
+      dialogs->UpdateModalDialogBounds();
+    }
   }
   if (freed) {
     LogHandover("giver let go", Handing(id_, freed));
