@@ -115,6 +115,9 @@ expect '^browser: command bar shown$' "⌘T didn't open the command bar"
 send insert 'data:text/html,<title>away</title>'
 send key return
 expect '^browser: loaded [0-9]* data:text/html,<title>away</title>$' "the page to leave the Board for didn't load"
+# The page ↩ went to has the keyboard, which the UI had over the Board (#3453).
+send state
+in_browser RenderWidgetHostViewCocoa "after ↩ in ⌘T's bar over a Board"
 send key t cmd
 expect '^browser: command bar shown$' "⌘T didn't open the command bar"
 send type pant
@@ -156,10 +159,9 @@ grep -q 'shelves over the sink' "$folder/board.json" ||
   fail "the reopened Board's save lost its note: $(head -c 300 "$folder/board.json")"
 
 # A reload of the Board, and a load away from it to a web page, drop what its page had on its way
-# and leave the browser running (#3427); back brings the Board again for the steps after. ⌘← goes
-# back from the page or the UI, wherever the bar's ↩ left the keyboard, so this claims nothing about
-# who has it: which side heard it is judged after the last step (#3453), so a miss there ends no
-# step before it.
+# and leave the browser running (#3427); back brings the Board again for the steps after. The page
+# the bar's ↩ loaded over the Board has the keyboard, so ⌘← there goes to the page first, as on any
+# page (#3453).
 send key r cmd
 expect "^browser: loaded $board chrome://board/$id\$" "⌘R didn't load the Board again"
 serve
@@ -168,13 +170,11 @@ expect '^browser: command bar shown$' "⌘L on the Board didn't open the command
 send type "${site}page.html"
 send key return
 expect "^browser: loaded $board ${site}page.html\$" "the Board's tab didn't load the page typed in the bar"
-# Where the ↩ left the keyboard, as the driver says it: the key window and the view with focus.
-went=$(grep "^browser: drive $step done, " "$log" | tail -1 |
-  sed 's/^[^,]*, \(key [^,]*, focus [^,]*\),.*/\1/')
+send state
+in_browser RenderWidgetHostViewCocoa "after ↩ in ⌘L's bar over a Board"
 send key left cmd
-expect '^browser: command back via ' "⌘left on the page the bar loaded over the Board didn't run back"
-back_via=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep '^browser: command back via ' |
-  head -1 | cut -d' ' -f5)
+expect '^browser: command back via page$' \
+  "the page the bar's ↩ loaded over a Board didn't have the keyboard: ⌘left didn't run back via page"
 expect "^browser: loaded $board chrome://board/$id\$" "back didn't bring the Board again"
 
 # 1d: an agent gets nothing of a Board. The client is the bridge on two pipes, as mcp's and rules'.
@@ -515,11 +515,6 @@ expect 'browser: board shows its file$' \
   "↩ on the unreadable Board, whose Show button has the keyboard, didn't show its file"
 [ "$(cat "$boards/$other/board.json")" = '[]' ] ||
   fail "showing the unreadable Board's file changed it: $(head -c 200 "$boards/$other/board.json")"
-# #3453: the page the bar's ↩ loaded over the Board had the keyboard, so ⌘← there went to the page
-# first, as on any page. Judged here, after the file manager, from what was heard then.
-[ "$back_via" = page ] ||
-  fail "the page the bar's ↩ loaded over a Board didn't have the keyboard: ⌘left ran back via\
- $back_via, the ↩ having left $went"
 quit
 echo "ok: New Board made $id, its name kept and its note saved in its folder alone, unlogged;" \
   "Library › Boards listed it; renamed, found by the bar, archived and reopened, the log said" \

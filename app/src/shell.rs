@@ -182,9 +182,10 @@ use clean_link::clean_link;
 use commands::ShellHandle;
 pub use commands::{
     BAR_ROWS, BAR_TABS_SHOWN, BarCommand, BarSpace, BarTab, CancelName, Command, CreateSpace,
-    KEY_CONTEXT, KeepName, Match, Run, STAY_ON_TOP, bar_commands, bind_keys, copy_from_bar,
-    copy_url_of_preview, find_commands, key_name, keystroke_keys, keystroke_label, menu_item,
-    pane_added, run_from_bar, shown_tab, task_page_shown, window_became_key, with_named_rows,
+    KEY_CONTEXT, KeepName, Match, Run, STAY_ON_TOP, agents_page_shown, bar_commands, bind_keys,
+    copy_from_bar, copy_url_of_preview, find_commands, key_name, keystroke_keys, keystroke_label,
+    menu_item, pane_added, run_from_bar, shown_tab, task_page_shown, window_became_key,
+    with_named_rows,
 };
 pub use display_face::display_text;
 pub use drag::{WindowDragEnd, dropped_urls};

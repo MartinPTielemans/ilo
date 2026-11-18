@@ -18,6 +18,10 @@ use crate::text_input::{self, Chosen, FieldMenu, korean};
 #[derive(Default)]
 struct Recorder {
     calls: RefCell<Vec<String>>,
+    /// What the bar had asked of the host each time it gave the page the keyboard.
+    page_keyboard: RefCell<Vec<String>>,
+    /// The page the bar goes to is an agent's.
+    agents_page: std::cell::Cell<bool>,
     /// What the user typed for each load, which the core reads for an http address written out.
     typed: RefCell<Vec<String>>,
     /// What the core was asked to suggest for, the text and whether it may complete it.
@@ -156,6 +160,15 @@ impl Host for Recorder {
 
     fn hide(&self) {
         self.record("hide".into());
+    }
+
+    fn focus_page(&self) {
+        let before = self.calls.borrow().join(", ");
+        self.page_keyboard.borrow_mut().push(before);
+    }
+
+    fn agents_page(&self, _: &App) -> bool {
+        self.agents_page.get()
     }
 
     fn dismiss(&self) {
@@ -460,6 +473,12 @@ impl Bar {
     /// What the bar asked of the host since the last time.
     fn calls(&self) -> Vec<String> {
         self.host.calls.take()
+    }
+
+    /// What the bar had asked of the host each time it gave the page the keyboard since the last
+    /// time.
+    fn page_keyboard(&self) -> Vec<String> {
+        self.host.page_keyboard.take()
     }
 
     /// What the user typed for each load since the last time.
@@ -1388,6 +1407,35 @@ fn the_input_method_composes_and_commits_in_the_bar(cx: &mut TestAppContext) {
     bar.input_method(|input, window, cx| input.unmark_text(window, cx));
     assert!(!bar.composing());
     assert_eq!(bar.input(), ("ねこ".into(), 6..6));
+}
+
+/// ↩ that commits Japanese the input method composes is the input method's: the bar stays open with
+/// the text committed, and nothing loads or gives a page the keyboard, or the text, until the next
+/// ↩. A platform that passes the ↩ on while it still composes does the same.
+#[gpui::test]
+fn return_committing_japanese_stays_in_the_bar(cx: &mut TestAppContext) {
+    let mut bar = Bar::new(cx);
+    bar.edit("https://example.org/", None);
+    bar.type_text("にほん");
+    bar.calls();
+    bar.compose("にほんご");
+    bar.keys("enter");
+    assert!(bar.is_open(), "↩ while composing closed the bar");
+    assert_eq!(bar.calls(), Vec::<String>::new(), "↩ while composing went");
+    assert!(
+        bar.page_keyboard().is_empty(),
+        "↩ while composing gave the page the keyboard"
+    );
+    bar.input_method(|input, window, cx| input.replace_text_in_range(None, "日本語", window, cx));
+    assert!(bar.is_open());
+    assert_eq!(bar.calls(), Vec::<String>::new());
+    assert!(bar.page_keyboard().is_empty());
+    bar.keys("enter");
+    assert_eq!(
+        bar.page_keyboard(),
+        [format!("navigate 1 {}, hide", search("にほん日本語"))],
+        "↩ after the commit"
+    );
 }
 
 /// `key` pressed and released as Wayland's platform hands it to the window: down, then its
@@ -2492,6 +2540,72 @@ fn each_load_says_what_was_typed(cx: &mut TestAppContext) {
     );
     bar.keys("enter");
     assert_eq!(bar.typed(), ["http://exa"], "↩ on a completion");
+}
+
+/// ↩ that goes to a page gives it the keyboard once the bar has hidden, as Chrome's address bar
+/// does, wherever the keyboard was before the bar opened: in the page, or in the UI, as over a
+/// Board (#3453) or a window with no page (#3239). A pick that shows a tab already open, or copies,
+/// leaves it.
+#[gpui::test]
+fn return_gives_the_page_it_goes_to_the_keyboard(cx: &mut TestAppContext) {
+    let mut bar = Bar::new(cx);
+    bar.edit("chrome://board/1", None);
+    bar.type_text("example.org");
+    bar.keys("enter");
+    assert_eq!(
+        bar.page_keyboard(),
+        ["navigate 1 https://example.org/, hide"],
+        "a page loaded in the tab shown"
+    );
+    bar.calls();
+    bar.edit("https://example.org/", None);
+    bar.keys("enter");
+    assert_eq!(
+        bar.page_keyboard(),
+        ["hide, reload 1"],
+        "the page loaded again"
+    );
+    bar.calls();
+    let mut bar = Bar::new(cx);
+    bar.type_text("example.com");
+    bar.keys("enter");
+    assert_eq!(
+        bar.page_keyboard(),
+        ["open https://example.com/, hide"],
+        "a page in a new tab"
+    );
+    bar.calls();
+    bar.edit("https://example.com/", None);
+    bar.type_text("docs.new");
+    bar.suggest("docs.new", vec![page("https://docs.new/")]);
+    bar.keys("enter");
+    assert_eq!(
+        bar.page_keyboard(),
+        ["open https://docs.new/, hide"],
+        "a new document from a tab's URL, in a new tab"
+    );
+    bar.calls();
+    let mut bar = Bar::with_tabs(cx, vec![tab(4, "https://a.test/")]);
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["select 4", "hide"]);
+    assert!(bar.page_keyboard().is_empty(), "a tab already open");
+
+    // An agent's page loads, and the keyboard stays where it was.
+    let mut bar = Bar::new(cx);
+    bar.host.agents_page.set(true);
+    bar.edit("https://agent.test/", None);
+    bar.type_text("example.org");
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["navigate 1 https://example.org/", "hide"]);
+    bar.edit("https://agent.test/", None);
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["hide", "reload 1"]);
+    let mut bar = Bar::new(cx);
+    bar.host.agents_page.set(true);
+    bar.type_text("example.com");
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["open https://example.com/", "hide"]);
+    assert!(bar.page_keyboard().is_empty(), "an agent's page");
 }
 
 /// ↩ on the URL ⌘L opened the bar on loads the page again, as Arc's does; typed over, it goes
