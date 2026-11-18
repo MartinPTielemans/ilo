@@ -3508,7 +3508,8 @@ impl Shell {
             }
             _ => log!("browser: selected {tab}"),
         }
-        let hidden = self.panes(self.selected);
+        let before = self.selected;
+        let hidden = self.panes(before);
         self.selected = tab;
         self.show_in_space(tab, cx);
         self.scroll_to_row(tab);
@@ -3535,11 +3536,17 @@ impl Shell {
         }
         // The command bar open over the Space before lists this one's tabs and suggestions now, so
         // a pick never goes to the other or its profile (Arc).
+        // Another tab of this Space shown by a shortcut while the bar has the keyboard leaves ⌘L's
+        // bar editing a tab that isn't shown, so its pick opens a new tab (#3428).
         let follows = std::mem::take(&mut self.bar_follows) && self.browser.command_bar_open(cx);
-        let new_tab = follows
-            && self
-                .browser
-                .command_bar_follows(self.bar_tabs(cx), self.open_tabs(cx), cx);
+        let new_tab = if follows {
+            self.browser
+                .command_bar_follows(self.bar_tabs(cx), self.open_tabs(cx), cx)
+        } else {
+            tab != before
+                && self.browser.command_bar_open(cx)
+                && self.browser.command_bar_tab_shown(tab, cx)
+        };
         self.set_new_tab(new_tab, cx);
         self.set_bar_over_card(new_tab, cx);
         self.adding_pane = None;

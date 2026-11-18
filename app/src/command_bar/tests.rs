@@ -494,6 +494,14 @@ impl Bar {
         opens
     }
 
+    /// The window shows `tab`, another of its Space's, as a shortcut pressed in the bar can.
+    /// Returns whether the bar's pick opens a new tab now.
+    fn show_tab(&mut self, tab: u64) -> bool {
+        let opens = self.cx.cx.update(|cx| tab_shown(tab, cx));
+        self.cx.run_until_parked();
+        opens
+    }
+
     /// The browser's shortcut for `command`, pressed while the bar has the keyboard.
     fn run(&mut self, command: shell::Command) {
         self.cx.dispatch_action(shell::Run(command));
@@ -2741,6 +2749,49 @@ fn the_url_bar_of_the_space_before_opens_a_new_tab(cx: &mut TestAppContext) {
     assert_eq!(bar.input().0, "example.org");
     bar.keys("enter");
     assert_eq!(bar.calls(), ["open https://example.org/", "hide"]);
+}
+
+/// ⌘L's bar edited tab 1, and a browser shortcut pressed in it showed another tab: ↩ opens a new
+/// tab, never loading in the tab the user left (#3428), as after another Space. What's typed stays,
+/// and the URL it opened on goes. On the tab it edits still shown, ↩ loads there; ⌘T's bar opens a
+/// new tab anyway; a new pane's bar goes, as its split view isn't shown.
+#[gpui::test]
+fn the_url_bar_of_a_tab_no_longer_shown_opens_a_new_tab(cx: &mut TestAppContext) {
+    let mut bar = Bar::new(cx);
+    bar.edit("https://example.com/", None);
+    assert!(bar.show_tab(2));
+    assert_eq!(bar.input(), (String::new(), 0..0));
+    bar.type_text("example.org");
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["open https://example.org/", "hide"]);
+
+    let mut bar = Bar::new(cx);
+    bar.edit("https://example.com/", None);
+    bar.type_text("example.org");
+    assert!(bar.show_tab(2));
+    assert_eq!(bar.input().0, "example.org");
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["open https://example.org/", "hide"]);
+
+    let mut bar = Bar::new(cx);
+    bar.edit("https://example.com/", None);
+    assert!(!bar.show_tab(1));
+    bar.type_text("example.org");
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["navigate 1 https://example.org/", "hide"]);
+
+    let mut bar = Bar::new(cx);
+    assert!(!bar.show_tab(2));
+    bar.type_text("example.org");
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["open https://example.org/", "hide"]);
+
+    let mut bar = Bar::new(cx);
+    let pane = Bounds::new(point(px(400.), px(10.)), size(px(400.), px(600.)));
+    let card = Bounds::new(point(px(10.), px(10.)), size(px(800.), px(600.)));
+    bar.cx.cx.update(|cx| show_split(3, pane, card, cx));
+    assert!(!bar.show_tab(2));
+    assert_eq!(bar.calls(), ["dismiss"]);
 }
 
 /// A site search leaves for the new profile, whose engines may differ; Search Tabs lists the open

@@ -1152,39 +1152,49 @@ pub fn space_shown(tabs: Vec<shell::BarTab>, open_tabs: Vec<shell::BarTab>, cx: 
                 cx.defer(move |cx| host.asking(true, cx));
                 return matches!(bar.target, Target::NewTab);
             }
-            let mut text = bar.input.read(cx).text().to_string();
-            if let Target::Tab(_) = bar.target {
-                bar.target = Target::NewTab;
-                if text == bar.page {
-                    text.clear();
-                }
-                bar.page.clear();
-            }
-            if bar.commands.is_some() {
-                // Which commands do something now is the shell's to say, once out of its update.
-                cx.defer(move |cx| {
-                    later
-                        .update(cx, |bar, window, cx| bar.list_commands(text, window, cx))
-                        .ok();
-                });
-            } else if matches!(bar.target, Target::Tabs) {
-                bar.name_tabs(text, window, cx);
-            } else {
-                // A completion from the profile before goes with its rows.
-                let typed = bar.typed(cx);
-                let text = if bar.completion.is_empty() {
-                    text
-                } else {
-                    typed
-                };
-                let caret = text.len();
-                let shown = text.clone().into();
-                bar.input
-                    .update(cx, |input, cx| input.set_text(shown, caret, window, cx));
-                bar.ask_for(text, window, cx);
-            }
+            bar.retarget(later, window, cx);
             cx.notify();
             matches!(bar.target, Target::NewTab)
+        })
+        .unwrap_or(false)
+}
+
+/// The window the bar shows over shows `tab`, another tab of its Space, as a browser shortcut can
+/// while the bar has the keyboard. ⌘L's bar edited the tab before, which isn't shown now, so its
+/// pick opens a new tab, as after another Space, and never loads where the user can't see it
+/// (#3428). A new pane's bar goes, as its split view isn't shown. Returns whether a bar that
+/// edited a tab opens a new tab now.
+pub fn tab_shown(tab: u64, cx: &mut App) -> bool {
+    let Some(bar_window) = cx.try_global::<CommandBarWindow>().cloned() else {
+        return false;
+    };
+    let later = bar_window.clone();
+    bar_window
+        .update(cx, |bar, window, cx| {
+            if !bar.open.get() {
+                return false;
+            }
+            match bar.target {
+                Target::Tab(edited) if edited != tab => {}
+                Target::Beside(with) if with != tab => {
+                    // The shell is in an update, which its dismissal would update again.
+                    bar.open.set(false);
+                    let host = bar.host.clone();
+                    cx.defer(move |_| host.dismiss());
+                    return false;
+                }
+                _ => return false,
+            }
+            log!("browser: command bar follows the tab shown");
+            if bar.ask.is_some() {
+                // An ask goes on, and its task opens where asks do.
+                bar.target = Target::NewTab;
+                bar.page.clear();
+            } else {
+                bar.retarget(later, window, cx);
+            }
+            cx.notify();
+            true
         })
         .unwrap_or(false)
 }
@@ -1673,6 +1683,42 @@ impl CommandBar {
     /// Search Tabs' tabs or a Spaces menu's Spaces.
     fn lists_own(&self) -> bool {
         matches!(self.target, Target::Tabs | Target::Spaces)
+    }
+
+    /// The tab it edited isn't shown now, so its pick opens a new tab, with what's typed kept and
+    /// the URL it opened on gone, and it asks again for the text.
+    fn retarget(&mut self, later: CommandBarWindow, window: &mut Window, cx: &mut Context<Self>) {
+        let mut text = self.input.read(cx).text().to_string();
+        if let Target::Tab(_) = self.target {
+            self.target = Target::NewTab;
+            if text == self.page {
+                text.clear();
+            }
+            self.page.clear();
+        }
+        if self.commands.is_some() {
+            // Which commands do something now is the shell's to say, once out of its update.
+            cx.defer(move |cx| {
+                later
+                    .update(cx, |bar, window, cx| bar.list_commands(text, window, cx))
+                    .ok();
+            });
+        } else if matches!(self.target, Target::Tabs) {
+            self.name_tabs(text, window, cx);
+        } else {
+            // A completion from the profile before goes with its rows.
+            let typed = self.typed(cx);
+            let text = if self.completion.is_empty() {
+                text
+            } else {
+                typed
+            };
+            let caret = text.len();
+            let shown = text.clone().into();
+            self.input
+                .update(cx, |input, cx| input.set_text(shown, caret, window, cx));
+            self.ask_for(text, window, cx);
+        }
     }
 
     fn lists_spaces(&self) -> bool {
