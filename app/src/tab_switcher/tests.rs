@@ -80,10 +80,11 @@ impl Switcher {
     /// GPUI's window.
     fn press(&self, at: usize, button: MouseButton, modifiers: Modifiers, cx: &mut TestAppContext) {
         let mut visual = VisualTestContext::from_window(self.window.into(), cx);
-        // As tall as its rows, as the host makes it.
-        visual.simulate_resize(size(px(WIDTH), px(height(3))));
-        let y = LIST_X + (at as f32 + 0.5) * ROW_HEIGHT;
-        visual.simulate_mouse_down(point(px(WIDTH / 2.), px(y)), button, modifiers);
+        // As tall as its rows, as the host makes it, with the room on Windows for its own shadow.
+        let room = Level::Modal.panel_margin();
+        visual.simulate_resize(room.around(size(px(WIDTH), px(height(3)))));
+        let y = room.above + LIST_X + (at as f32 + 0.5) * ROW_HEIGHT;
+        visual.simulate_mouse_down(point(px(room.sides + WIDTH / 2.), px(y)), button, modifiers);
         visual.run_until_parked();
     }
 
