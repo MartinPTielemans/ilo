@@ -998,8 +998,53 @@ reveal_at_edge() {
   send move 0 306
   expect '^browser: reveal shown$' "$1" "$from"
 }
+# On Linux the band 3 in from the window's left and right edges resizes it, and between the
+# corners it's the UI's, which hears the pointer there for the hidden sidebar (#3219).
+if [ "$(uname)" = Linux ]; then
+  # The cursor over it is the one Chromium's band showed, w-resize: the display's pointer there,
+  # drawn into a capture, isn't the arrow it is 20 further in, over the same empty sidebar.
+  # cursor_crop <x> <y> <name>: the 24 by 24 under the display's pointer from its hotspot down.
+  cursor_crop() {
+    send warp "$1" "$2"
+    POINTER=1 ../tools/window-screenshot.sh "$pid" "$out/$3.png" || fail "no window to capture"
+    scale=$(magick identify -format '%w' "$out/$3.png" | awk -v width="$width" '{ print $1 / width }')
+    magick "$out/$3.png" -crop "$(echo "$1 $2 $scale" |
+      awk '{ printf "24x24+%d+%d", $1 * $3, ($2 - 4) * $3 }')" +repage "$out/$3-crop.png" ||
+      fail "ImageMagick couldn't crop $3.png"
+  }
+  cursor_crop 1 300 band-cursor
+  cursor_crop 21 300 sidebar-cursor
+  send warp
+  differ=$(magick compare -metric AE -fuzz 15% "$out/band-cursor-crop.png" \
+    "$out/sidebar-cursor-crop.png" null: 2>&1 | cut -d' ' -f1)
+  [ "${differ%.*}" -gt 20 ] 2> /dev/null ||
+    fail "the cursor in the band at the window's left edge is the arrow ($differ pixels apart, band-cursor.png)"
+fi
 send key s cmd
 toggle ui hidden "⌘S before the reveal"
+if [ "$(uname)" = Linux ]; then
+  # A press in the band at the left edge and a drag sizes the window from there, as a hand's
+  # does, its right edge kept: in by 40, then back out. With the sidebar hidden, a straight press
+  # and drag has no move along the edge, so the sidebar stays in.
+  # sized <dx> <what>: the drag from x 1 by <dx> left the window's left edge <dx> further right.
+  sized() {
+    send order
+    was=$(grep '^browser: frame window 1 ' "$log" | tail -1 | cut -d' ' -f5-)
+    send hold press 1 300
+    send hold dragto $((1 + $1 / 4)) 300
+    send hold dragto $((1 + $1)) 300
+    send hold release $((1 + $1)) 300
+    now=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: held at ' | cut -d' ' -f4-)
+    echo "$was $now" | awk -v dx="$1" '{ exit !($5 >= $1 + dx - 2 && $5 <= $1 + dx + 2 &&
+      $6 == $2 && $7 >= $3 - dx - 2 && $7 <= $3 - dx + 2 && $8 == $4) }' ||
+      fail "$2 didn't size the window from its left edge: $was, then ${now:-no frame}"
+  }
+  from=$((step + 1))
+  sized 40 "a drag in from the band at the window's left edge"
+  sized -40 "a drag out from the band at the window's left edge"
+  ! sed -n "/^browser: drive $from: /,\$p" "$log" | grep -q '^browser: reveal \(waits\|shown\)$' ||
+    fail "a press and drag in the band at the window's left edge brought the sidebar out"
+fi
 send move 400 300
 # The pointer has to move a few points up or down at the edge and stay a moment: one jumping
 # there, or passing it, doesn't bring the sidebar out.
