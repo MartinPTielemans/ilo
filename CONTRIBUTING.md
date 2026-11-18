@@ -55,7 +55,7 @@ Agree on the problem and the scope first:
 
 Settled decisions stay settled. One reopens only with the evidence its entry in
 [docs/decisions.md](docs/decisions.md) names, and some are off the table: Electron as the
-product, WebKit or Gecko as ilo's engine, and closed source.
+product, WebKit or Gecko as the desktop's engine, and closed source.
 
 ## One problem per PR
 
@@ -127,4 +127,4 @@ Speed is the product. A change that regresses a hot path's benchmark in `docs/ro
 
 ## Portability
 
-No Swift, Objective-C or Metal outside `platform/mac/`. Core code must compile on Linux.
+No Swift, Objective-C or Metal outside `platform/mac/` and the iPhone app's `mobile/ios`. Core code must compile on Linux.
