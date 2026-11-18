@@ -1,0 +1,15 @@
+# Turns filter lists into WebKit's content-blocking rules for ilo on the iPhone, at build time
+# (../build.sh). It's the engine the desktop blocks with, at the version app/Cargo.toml pins.
+[package]
+name = "ilo-content-rules"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+
+[workspace]
+
+[dependencies]
+# Brave's adblock-rust, MPL-2.0. Keep the version app/Cargo.toml has.
+adblock = { version = "=0.13.5", default-features = false, features = ["content-blocking", "embedded-domain-resolver", "full-regex-handling", "css-validation"] }
+serde_json = "1"
