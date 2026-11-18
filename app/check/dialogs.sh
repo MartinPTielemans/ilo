@@ -207,6 +207,9 @@ expect "^browser: title $beside beside has xy\$" \
   "typing after a click on the page beside the alert, in a split, didn't reach that page: the keyboard is in $key, on $focus: $(since "$clicked" | grep -e '^browser: drive' -e "^browser: title $beside " -e '^browser: dialog' | tail -6 | tr '\n' ' ')"
 # Once the withdrawn alert has left, so the click is on the page, not on the alert leaving.
 expect '^browser: dialog hidden$' "the alert withdrawn from its pane didn't finish leaving" "$clicked"
+# What the user sees of a page waiting on its alert while the page beside has the keys.
+../tools/window-screenshot.sh "$pid" "$out/dialog-alert-split-withdrawn.png" ||
+  fail "no window to capture"
 send click $(in_pane 1)
 expect "^browser: selected $page\( in .*\)\{0,1\}\$" "a click on the alert's pane didn't focus it again"
 expect '^browser: dialog shown .* says$' "the alert didn't come back with its pane's focus"
@@ -612,8 +615,9 @@ exec 3>&-
 quit
 echo "ok: a page's alert, confirm and prompt ask over its card, answer with ↩ and Esc, and an alert"
 echo "  comes back with its tab. In a split view it covers its own pane, the page beside takes a"
-echo "  click and the keys after, and it comes back with its pane: $out/dialog-alert-split.png. The"
-echo "  confirm's Cancel and OK show the pointer on them. Leave site?"
+echo "  click and the keys after, and it comes back with its pane: $out/dialog-alert-split.png,"
+echo "  withdrawn in $out/dialog-alert-split-withdrawn.png. The confirm's Cancel and OK show the"
+echo "  pointer on them. Leave site?"
 echo "  stays with Esc and leaves with ↩. A site's sign-in cancels with Esc and signs in with ↩, and"
 echo "  the password reaches no log. A link to Maps asks, and ↩ opens nothing. The link target shows"
 echo "  and hides 20 times, between the command bar and a tab's menu, with no panic."
