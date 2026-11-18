@@ -47,7 +47,9 @@ struct ContextButtons: View {
     HStack(spacing: Bar.gap) {
       ForEach(buttons, id: \.self) { button in
         plate(button)
-          .transition(reduceMotion ? .opacity : .besideBar)
+          // Glass appears and goes by itself, and a scale over it is drawn off screen each
+          // frame, so a button only fades.
+          .transition(.opacity)
       }
     }
     .barShown(!tab.barHidden)
@@ -103,7 +105,7 @@ struct ContextButtons: View {
   }
 }
 
-/// A button's plate, a square of the bar's own height, colour and corners.
+/// A button's plate: glass in a circle of the bar's own height and colour.
 private struct Plate: ViewModifier {
   /// Lit while what the button turns on is on.
   let lit: Bool

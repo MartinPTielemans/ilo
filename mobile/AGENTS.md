@@ -31,12 +31,12 @@ It's native Swift in `mobile/ios`, and paths below start there. This file adds t
 - **Everything touched is within thumb reach, at the foot.** Nothing tappable sits at the top, where one hand doesn't reach.
 - **A phone surface is designed for the phone**, never the desktop's sidebar made small.
 - **Mock it first**, at real scale among its neighbours, before building.
-- **Liquid Glass on iOS 26, plain fills on iOS 18 to 25.** Every `#available(iOS 26, *)` for the look is in `App/Look/Glass.swift`, so a view asks it for its ground and never checks the iOS itself.
+- **One look, in Liquid Glass.** Every glass in the app is made in `App/Look/Glass.swift`, and a view asks it for its ground.
 - **Smooth motion outranks glass**, since glass that changes is drawn again, off screen, each frame. Glass keeps its value, tint and shape while anything animates, is never interactive, never fades or scales, and takes only the built-in shapes.
 
 ## Verifying
 
-Xcode 27.1, for iOS 18.0 and later. `ilo.xcodeproj` and `Blocking/Rules` aren't in the tree.
+Xcode 27.1, for iOS 26.0 and later. `ilo.xcodeproj` and `Blocking/Rules` aren't in the tree.
 
 ```sh
 cd mobile/ios
@@ -51,7 +51,7 @@ xcodebuild -project ilo.xcodeproj -scheme ilo -configuration Release \
 
 - **Done** is both test suites green, the Release compile, and a look at it running, in light and in dark, through the device tools.
 - **Read the skipped count.** IloSync's tests start an ilo-server of their own from `~/.cache/ilo-ios-spike/ilo-server-target/release/ilo-server` and skip without it. Report a skip, not a pass.
-- **CI runs the same three** (`.github/workflows/mobile-ios.yml`) for a change to `mobile/` or to what the phone reads of the desktop's. The app's run on iOS 27 simulators alone: the iOS 18 to 25 fills are yours to look at. IloSync's run with GitHub's `macos-26` Swift, an earlier one than Xcode 27.1's, so the package keeps to what its manifest's 6.0 allows.
+- **CI runs the same three** (`.github/workflows/mobile-ios.yml`) for a change to `mobile/` or to what the phone reads of the desktop's. The app's run on iOS 27 simulators alone: iOS 26, the oldest it runs on, is yours to run. IloSync's run with GitHub's `macos-26` Swift, an earlier one than Xcode 27.1's, so the package keeps to what its manifest's 6.0 allows.
 - **`ci_scripts/ci_post_clone.sh` makes the rules and the project** in CI, and is the script Xcode Cloud runs after it clones. A tool or a made file the build comes to need goes there.
 - **A PR that changes only `mobile/`** starts none of the desktop's jobs and needs none of its Mac runs or trains: a green Check is its gate.
 

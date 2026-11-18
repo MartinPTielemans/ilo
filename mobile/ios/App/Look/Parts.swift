@@ -94,7 +94,7 @@ struct RoundButton: View {
   let symbol: String
   let label: String
   var dimmed = false
-  /// At a pill's end, where in glass it's a circle of its own beside the pill.
+  /// At a pill's end, where it's a glass circle of its own beside the pill.
   var apart = false
   let action: () -> Void
 
@@ -137,21 +137,6 @@ struct TabsGlyph: View {
         .offset(x: 3, y: -0.5)
     }
     .frame(width: 34, height: 34)
-  }
-}
-
-/// The one button a screen is there for, in the Space's colour.
-struct MainButtonStyle: ButtonStyle {
-  @Environment(\.palette) private var palette
-  @Environment(\.isEnabled) private var isEnabled
-
-  func makeBody(configuration: Configuration) -> some View {
-    configuration.label
-      .scaled(17, .semibold)
-      .foregroundStyle(Palette.ink)
-      .frame(maxWidth: .infinity, minHeight: Bar.height)
-      .background(palette.accent.opacity(configuration.isPressed ? 0.8 : 1), in: .rect(cornerRadius: Bar.radius, style: .continuous))
-      .opacity(isEnabled ? 1 : 0.4)
   }
 }
 

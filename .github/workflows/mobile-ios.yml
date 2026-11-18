@@ -8,7 +8,7 @@
 # macos-26, a released image. The app needs Xcode 27's SDK, which of GitHub's free runners only the
 # xcode-27 image has, a preview still on 2026-11-18, whose queue GitHub doesn't promise: macos-26
 # stops at Xcode 26.6. Never xcode-27-xlarge, a larger runner, which is paid. That image's
-# simulators are iOS 27's alone, so nothing here runs the plain fills iOS 18 to 25 draw. When
+# simulators are iOS 27's alone, so nothing here runs the app on iOS 26, the oldest it runs on. When
 # macOS 27's image leaves preview, its label goes in the app job's runs-on.
 # It signs nothing, sends nothing to Apple and holds no secret: a TestFlight build is uploaded by
 # hand, until Xcode Cloud is connected for it (mobile/AGENTS.md), which has the certificates these

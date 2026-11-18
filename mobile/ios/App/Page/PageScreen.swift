@@ -525,7 +525,7 @@ private struct PagePill: View {
       }
       .clipShape(.rect(cornerRadius: radius, style: .continuous))
       // After the clip: glass draws its own edge and shadow outside its shape.
-      .barGlass(tinted: true, radius: radius, small: shrunk)
+      .barGlass(tinted: true)
       .dynamicTypeSize(...DynamicTypeSize.accessibility1)
       // The small pill is touched over more than it shows: a thumb's width and height.
       .padding(.horizontal, shrunk ? 24 : 0)

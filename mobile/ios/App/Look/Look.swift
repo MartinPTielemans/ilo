@@ -66,8 +66,6 @@ nonisolated enum Bar {
   static let radius: CGFloat = 18
   /// The page's bar while the page is read: a pill with the site's name.
   static let small: CGFloat = 24
-  /// The small pill at 12 pt of the bar's 17.
-  static let smallScale: CGFloat = 12.0 / 17
   /// How far the small pill sits over the screen's foot: just clear of the home indicator, which
   /// lies in the lower half of its `band`.
   static func smallFoot(band: CGFloat) -> CGFloat {

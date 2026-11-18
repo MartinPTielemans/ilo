@@ -58,7 +58,7 @@ nonisolated enum ModelState: Equatable, Sendable {
   case downloading
   /// The phone could run it, and Apple Intelligence is off in Settings.
   case turnedOff
-  /// Not on this phone at all: an older iOS, or a phone that can't run it.
+  /// Not on this phone at all: it can't run one.
   case absent
 }
 

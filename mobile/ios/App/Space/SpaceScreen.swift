@@ -38,7 +38,9 @@ struct SpaceScreen: View {
           .transition(.opacity)
       }
     }
-    .foot {
+    // What the Space is touched by, at its foot, and the grid scrolls on under it. An inset, not
+    // the system's bar: a field in that one never tells SwiftUI it has the focus.
+    .safeAreaInset(edge: .bottom, spacing: 0) {
       VStack(spacing: 0) {
         SpaceDots()
 

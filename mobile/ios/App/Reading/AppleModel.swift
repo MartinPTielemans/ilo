@@ -6,7 +6,6 @@ import FoundationModels
 
 /// A point as the model writes it. The passage comes first, so the point is written about a
 /// passage the model has already chosen.
-@available(iOS 26.0, *)
 @Generable
 nonisolated struct WrittenPoint {
   @Guide(description: "The number in square brackets of the one passage this point mostly came from.")
@@ -15,7 +14,6 @@ nonisolated struct WrittenPoint {
   var text: String
 }
 
-@available(iOS 26.0, *)
 @Generable
 nonisolated struct WrittenSummary {
   @Guide(description: "The main points, the most important first.", .count(2...5))
@@ -25,7 +23,6 @@ nonisolated struct WrittenSummary {
 /// An answer as the model writes it. Whether it answered comes last, as its verdict on what it
 /// has just written: asked first, it has been seen to say yes and then write that the page
 /// doesn't say.
-@available(iOS 26.0, *)
 @Generable
 nonisolated struct WrittenAnswer {
   @Guide(description: "The number in square brackets of the one passage that answers the question, or 0 if none does.")
@@ -36,7 +33,6 @@ nonisolated struct WrittenAnswer {
   var answered: Bool
 }
 
-@available(iOS 26.0, *)
 nonisolated struct AppleModel: ReadingModel {
   private let model = SystemLanguageModel.default
 
@@ -126,7 +122,6 @@ enum ReadingModels {
     #if DEBUG
       if let pretended = StandInModel.pretended { return pretended }
     #endif
-    guard #available(iOS 26.0, *) else { return .absent }
     switch SystemLanguageModel.default.availability {
     case .available: return .ready
     case .unavailable(.modelNotReady): return .downloading
@@ -139,7 +134,7 @@ enum ReadingModels {
     #if DEBUG
       if StandInModel.pretended == .ready { return StandInModel(pace: .milliseconds(30)) }
     #endif
-    guard #available(iOS 26.0, *), SystemLanguageModel.default.isAvailable else { return nil }
+    guard SystemLanguageModel.default.isAvailable else { return nil }
     return AppleModel()
   }
 
@@ -148,7 +143,7 @@ enum ReadingModels {
     #if DEBUG
       if StandInModel.pretended != nil { return true }
     #endif
-    guard #available(iOS 26.0, *), let code = language?.languageCode else { return false }
+    guard let code = language?.languageCode else { return false }
     return SystemLanguageModel.default.supportedLanguages.contains { $0.languageCode == code }
   }
 

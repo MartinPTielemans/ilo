@@ -240,12 +240,18 @@ private struct Miscounting: ReadingModel {
     let later = try #require(article.blocks.first { $0.text.hasPrefix("Paragraph 24.") })
     let arguments: [String: Any] = ["reading": "test", "block": later.id, "at": "start", "smooth": false, "mark": false]
     #expect(try await web.callAsyncJavaScript(ArticleScript.show, arguments: arguments, in: nil, contentWorld: ArticleScript.world) as? Bool == true)
-    // The scroll reaches the page a moment after it's asked for, so wait for the page to say so.
+    // The scroll reaches the page a moment after it's asked for, and its first event can come
+    // before it's gone far, so wait for the page to say it's past 100.
     let scrolled = """
       await new Promise(done => {
-        if (window.scrollY > 100) return done();
-        addEventListener('scroll', done, { once: true });
+        const far = () => {
+          if (window.scrollY <= 100) return;
+          removeEventListener('scroll', far);
+          done();
+        };
+        addEventListener('scroll', far);
         setTimeout(done, 5000);
+        far();
       });
       return window.scrollY > 100;
       """
