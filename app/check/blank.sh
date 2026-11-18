@@ -66,7 +66,8 @@ scale = width / float(sys.argv[2])
 stride = (bits * width + 31) // 32 * 4
 def at(x, y):
     row = y if height < 0 else abs(height) - 1 - y
-    b, g, r = data[offset + row * stride + x * bits // 8:][:3]
+    start = offset + row * stride + x * bits // 8
+    b, g, r = data[start:start + 3]
     return r + g + b
 def first_ink(top, bottom):
     ys = range(int(top * scale), int(bottom * scale))
