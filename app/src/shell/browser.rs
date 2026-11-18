@@ -915,6 +915,10 @@ pub trait Browser {
     /// `tabs` from it, or `open_tabs` for Search Tabs, and its profile's suggestions (decision 5).
     /// Returns whether its pick opens a new tab, for New Tab to keep its plate.
     fn command_bar_follows(&self, tabs: Vec<BarTab>, open_tabs: Vec<BarTab>, cx: &mut App) -> bool;
+    /// The window shows `tab`, another of its Space's: the command bar, if it shows over this
+    /// window and edited the tab before, opens a new tab with its pick (#3428). Returns whether it
+    /// does, for New Tab to take the plate.
+    fn command_bar_tab_shown(&self, tab: u64, cx: &mut App) -> bool;
     /// Opens the command bar over `pane`, a new pane in the card at `card`, for a page to show
     /// there in a split view with `with`.
     fn split_bar(&self, with: u64, pane: Bounds<Pixels>, card: Bounds<Pixels>, cx: &mut App);

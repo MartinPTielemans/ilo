@@ -1904,6 +1904,10 @@ impl Browser for Engine {
         self.window == front().0 && command_bar::space_shown(tabs, open_tabs, cx)
     }
 
+    fn command_bar_tab_shown(&self, tab: u64, cx: &mut App) -> bool {
+        self.window == front().0 && command_bar::tab_shown(tab, cx)
+    }
+
     fn split_bar(&self, with: u64, pane: Bounds<Pixels>, card: Bounds<Pixels>, cx: &mut App) {
         with_overlays(move |cx| command_bar::show_split(with, pane, card, cx), cx);
     }
