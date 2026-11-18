@@ -1429,4 +1429,72 @@ if [ -n "$looked" ]; then
   [ -z "$bad" ] || fail "the Mini Player's origin or its \"–\" was over its buttons: $bad"
 fi
 
-echo "ok: a tab in a call marks its row with the camera, then the screen while it shares a tab, the tab it shares shows the screen too, another tab's Share This Tab Instead moves the share there, and the marks go when the call ends; a call floats while its tab is hidden, unless its Site Controls or Settings turn that off, and its window moves by its top bar and sizes from its corner; music playing out of sight has a player that pauses it, skips back, sets its volume from a drawer, floats it in Picture in Picture, shows its tab and goes on ×, and a private window's music has one there alone; the Cast card opens from View and the page menu and closes on ×; a video's menu floats it in Picture in Picture, 10 in from the top right of the screen, where a scroll or a drag moves it, Ctrl with a scroll sizes it and a double-click shows its tab, the next shows where the last was left, after a relaunch too, and coming back to its tab's window from another window, or from another app with a menu open, puts it back in the tab."
+# Music in Safari's engine has a player too, on the Mac from macOS 14: the checks' streaming host
+# (main.rs) opens the call page there from its first load. Its title and artist come from the
+# page's metadata, its previous and next are there as the page names its track, and its buttons
+# play, pause and skip through the page's own handlers. Nothing floats from it, as its video isn't
+# Chromium's. Back in Chromium, the tab has no player (#3432).
+webkit_player=
+if [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
+  forget_engine_sites
+  log="$out/media-safari.log"
+  step=0
+  rm -f "$saved" "$launch_frame"
+  BROWSER_DRIVE=1 BROWSER_STREAMING_TEST_HOST=127.0.0.1 BROWSER_URL="${site}call.html" \
+    "$browser" < "$out/drive" > "$log" 2>&1 &
+  pid=$!
+  exec 3> "$out/drive"
+  await_load
+  await '^browser: title [0-9]* ready$' || fail "the call page didn't draw in Safari's engine"
+  grep -q '^browser: system engine loaded for ' "$log" ||
+    fail "the streaming host's call page opened in Chromium, not Safari's engine"
+  a=$(today | cut -d' ' -f1)
+  send click $page_point
+  if [ "$active" = 1 ]; then
+    send key m
+    expect "^browser: title $a playing\$" "m in Safari's engine's page didn't play its silence"
+    expect "^browser: page $a media 1 playing 1 previous 1 next 1 pip 0 Quiet\$" \
+      "the music in Safari's engine had no player's controls: $(grep "^browser: page $a media " "$log" | tail -1)"
+    # The page opens a tab and shows it, so the music plays out of sight.
+    send key o
+    expect "^browser: today \($a [0-9][0-9]*\|[0-9][0-9]* $a\)\$" "the page in Safari's engine didn't open a tab"
+    b=$(today | tr ' ' '\n' | grep -vx "$a")
+    expect "^browser: media players $a\$" "the tab playing in Safari's engine out of sight had no player"
+    player_at 33 "the player of Safari's engine's music wasn't drawn 33 tall at rest"
+    send click $((mx + mw / 2)) $((my + mh / 2))
+    expect '^browser: command media-pause via player$' "the player's pause didn't take the click"
+    expect "^browser: title $a paused\$" "the player's pause didn't pause the music in Safari's engine"
+    expect "^browser: page $a media 1 playing 0 previous 1 next 1 pip 0 Quiet\$" \
+      "the player didn't show the music in Safari's engine paused"
+    expect '^browser: media stack open$' "the stack didn't open under the pointer"
+    player_at '6[56]' "the open stack's front card wasn't 65.5 tall"
+    control_y=$((my + mh - 17))
+    send click "$(control_x 1)" $control_y
+    expect '^browser: command media-previous via player$' "the player's previous didn't take the click"
+    expect "^browser: title $a previous track\$" "the player's previous didn't reach the page's handler in Safari's engine"
+    send click "$(control_x 3)" $control_y
+    expect '^browser: command media-next via player$' "the player's next didn't take the click"
+    expect "^browser: title $a next track\$" "the player's next didn't reach the page's handler in Safari's engine"
+    send click "$(control_x 2)" $control_y
+    expect "^browser: title $a playing\$" "the player's play didn't play the music in Safari's engine again"
+    expect "^browser: page $a media 1 playing 1 previous 1 next 1 pip 0 Quiet\$" \
+      "the player didn't show the music in Safari's engine playing again"
+    ../tools/window-screenshot.sh "$pid" "$out/media-player-safari.png" || fail "no window to capture"
+    # Its tab shown and taken to another site goes back to Chromium, and has no player.
+    shown "$a"
+    go_from_bar "localhost:$port/call.html"
+    expect "^browser: tab $a back to Chromium for http://localhost:$port/call.html\$" \
+      "another site didn't take the music's tab back to Chromium"
+    expect "^browser: page $a media 0 " "the tab back in Chromium kept the player of Safari's engine's music"
+    shown "$b"
+    none_since "^browser: media players [0-9]" || fail "the tab back in Chromium had a player"
+    webkit_player="; music in Safari's engine has a player too, named from the page, whose pause, previous, next and play reach the page, and none once its tab is back in Chromium"
+  else
+    echo "skip: media's player for Safari's engine. Browser wasn't the active app, so the page ignored the click."
+  fi
+  exec 3>&-
+  quit
+  forget_engine_sites
+fi
+
+echo "ok: a tab in a call marks its row with the camera, then the screen while it shares a tab, the tab it shares shows the screen too, another tab's Share This Tab Instead moves the share there, and the marks go when the call ends; a call floats while its tab is hidden, unless its Site Controls or Settings turn that off, and its window moves by its top bar and sizes from its corner; music playing out of sight has a player that pauses it, skips back, sets its volume from a drawer, floats it in Picture in Picture, shows its tab and goes on ×, and a private window's music has one there alone; the Cast card opens from View and the page menu and closes on ×; a video's menu floats it in Picture in Picture, 10 in from the top right of the screen, where a scroll or a drag moves it, Ctrl with a scroll sizes it and a double-click shows its tab, the next shows where the last was left, after a relaunch too, and coming back to its tab's window from another window, or from another app with a menu open, puts it back in the tab$webkit_player."
