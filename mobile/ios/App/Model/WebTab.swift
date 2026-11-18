@@ -88,6 +88,7 @@ final class WebTab: NSObject, Identifiable {
     swipe = PageSwipe(webView: webView) { [weak browser] in browser?.settings.swipeAnywhere ?? false }
     super.init()
     page.seated = { [weak self] in self?.seated() }
+    page.searches = { [weak self] in Task { await self?.searchSelection() } }
     PageScripts.add(to: webView.configuration, handler: PageMessages(tab: self))
 
     webView.navigationDelegate = self
@@ -349,6 +350,17 @@ final class WebTab: NSObject, Identifiable {
 /// A tab's web view, which says when it's put in a window and when the screen's edges may have moved.
 private final class PageWebView: WKWebView {
   var seated: () -> Void = {}
+  /// Searches the web for the text that's selected.
+  var searches: () -> Void = {}
+
+  override func buildMenu(with builder: any UIMenuBuilder) {
+    super.buildMenu(with: builder)
+    guard let lookup = builder.menu(for: .lookup) else { return }
+    let ours = SelectionMenu.lookup(lookup.children) { [weak self] in self?.searches() }
+    // Out first: a command is in one menu only.
+    builder.remove(menu: .lookup)
+    builder.insertSibling(ours, beforeMenu: .learn)
+  }
 
   override func didMoveToWindow() {
     super.didMoveToWindow()
@@ -582,6 +594,30 @@ extension WebTab: WKUIDelegate {
   }
 
   /// Does what the user chose for a pressed link, which opens without its tracking parameters.
+  // MARK: Selected text
+
+  /// The text selected in the page, or in a field of it.
+  func selection() async -> String {
+    let script = """
+      const field = document.activeElement
+      const text = String(getSelection())
+      if (text || !field || typeof field.selectionStart !== 'number') return text
+      return field.value.substring(field.selectionStart, field.selectionEnd)
+      """
+    if let text = try? await webView.callAsyncJavaScript(script, in: nil, contentWorld: .defaultClient) as? String, !text.isEmpty {
+      return text
+    }
+    // A selection in a frame of the page, which the page's own script can't read.
+    let content = webView.scrollView.subviews.lazy.compactMap { $0 as? any UITextInput }.first
+    return content.flatMap { input in input.selectedTextRange.flatMap { input.text(in: $0) } } ?? ""
+  }
+
+  /// Searches the web for the selected text in a new tab, as the menu over it offers.
+  func searchSelection() async {
+    let text = await selection().trimmingCharacters(in: .whitespacesAndNewlines)
+    if !text.isEmpty { browser?.search(text, from: self) }
+  }
+
   func chose(_ choice: PressMenu.Choice, for link: URL) {
     switch choice {
     case .open: follow(link)

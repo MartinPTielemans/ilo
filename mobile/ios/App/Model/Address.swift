@@ -6,7 +6,7 @@ nonisolated struct SearchEngine: Identifiable, Hashable, Sendable {
   let id: String
   let name: String
   /// The results page's address, up to the query.
-  private let prefix: String
+  let prefix: String
 
   func search(_ query: String) -> URL {
     var allowed = CharacterSet.urlQueryAllowed

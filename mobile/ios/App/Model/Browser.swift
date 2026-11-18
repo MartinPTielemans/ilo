@@ -154,6 +154,14 @@ final class Browser {
     account.openToday(url: url, title: "", in: space.id)
   }
 
+  /// Searches the web for text the user selected in a page, in a new tab in front, with their
+  /// search engine.
+  func search(_ text: String, from tab: WebTab) {
+    guard tab === page || tab === peek else { return }
+    slide = 0
+    openNew(settings.searchEngine.search(text))
+  }
+
   /// What return does in the field: on the Space, a new tab; over a page, that page goes there.
   func go(_ destination: Destination) {
     if searchingPage, let page {

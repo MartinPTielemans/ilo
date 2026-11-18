@@ -152,3 +152,55 @@ import WebKit
     #expect(browser.page === front)
   }
 }
+
+/// The menu over selected text.
+@Suite(.serialized, .timeLimit(.minutes(2))) @MainActor struct SelectionMenuTests {
+  @Test func `Search Web is ilo's, after Look Up and Translate, which stay the system's`() throws {
+    let system = ["_define:", "_translate:"].map { UICommand(title: $0, action: Selector($0)) }
+    var searched = 0
+    let menu = SelectionMenu.lookup(system) { searched += 1 }
+
+    #expect(menu.identifier != .lookup)
+    #expect(menu.children.dropLast().map { ($0 as? UICommand)?.action } == system.map(\.action))
+    let search = try #require(menu.children.last as? UIAction)
+    #expect(search.title == "Search Web")
+    search.performWithSender(nil, target: nil)
+    #expect(searched == 1)
+  }
+
+  @Test func `searching for selected text opens the user's search engine in a new tab`() async throws {
+    let server = try await Loopback { request in
+      request.path.hasPrefix("/search") ? .html("<title>Results</title>") : .html("<title>Words</title><p id=words>made-up words</p><input id=field value='typed text here'>")
+    }
+    let browser = testBrowser()
+    browser.settings.searchEngine = SearchEngine(id: "loopback", name: "Loopback", prefix: server.url("/search?q=").absoluteString)
+    browser.openNew(server.url("/words"))
+    let page = try #require(browser.page)
+    #expect(await eventually { await page.shows("/words") })
+
+    _ = await page.run("getSelection().selectAllChildren(document.getElementById('words'))")
+    #expect(await page.selection() == "made-up words")
+    await page.searchSelection()
+    let results = try #require(browser.page)
+    #expect(results !== page)
+    #expect(await eventually { server.requests(to: "/search?q=made-up%20words") == 1 })
+
+    // Text selected in a field isn't the page's selection, and is searched for all the same.
+    browser.openNew(server.url("/words"))
+    let second = try #require(browser.page)
+    #expect(await eventually { await second.shows("/words") })
+    _ = await second.run("getSelection().removeAllRanges(); const field = document.getElementById('field'); field.focus(); field.setSelectionRange(0, 5)")
+    #expect(await second.selection() == "typed")
+  }
+
+  @Test func `nothing selected searches for nothing`() async throws {
+    let server = try await Loopback { _ in .html("<title>Words</title><p>made-up words</p>") }
+    let browser = testBrowser()
+    browser.openNew(server.url("/words"))
+    let page = try #require(browser.page)
+    #expect(await eventually { await page.shows("/words") })
+
+    await page.searchSelection()
+    #expect(browser.page === page)
+  }
+}
