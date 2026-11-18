@@ -9,10 +9,11 @@
 # from the window in an empty Space and with a page, F6 from the page and the arrows down the rows
 # have NVDA say something, with UI Automation's focus off GPUI's unnamed root and, in the sidebar,
 # on the ringed row; ↓ in the bar has it say the suggestion selected and where it stands, ⇧Tab from
-# a page's first control and Tab past its last ring the tab shown's row, and Tab and ⇧Tab from the
-# ring have it say the page's first and last control, and the Library's key has it on the
-# Library's search field, where ↓ has it say the row ringed and where it stands. Elsewhere it
-# records.
+# a page's first control and Tab past its last ring the tab shown's row, Tab from the ring into a
+# page that hasn't had the keyboard has it say the page's first control, Tab and ⇧Tab from the ring
+# back into the page have it say the page and leave the keyboard on its first and last control,
+# and the Library's key has it on the Library's search field, where ↓ has it say the row ringed
+# and where it stands. Elsewhere it records.
 # NVDA's portable copy (GPL) is fetched from NV Access' release on GitHub, its checksum pinned, into
 # the hosted runner's temporary folder, and never installed: with NVDA_DIR naming a portable copy,
 # the run uses that instead. Off a hosted Windows runner, and without NVDA_DIR, it skips.
@@ -185,6 +186,20 @@ says() {
   done
   fail "$3: $nvda_log"
 }
+# Whether NVDA says $2 within 5 s of the log's line $1, counted in $back_said and never a fail. Back
+# onto the control the page last had, NVDA says it only when the control's focus event reaches it
+# in a cycle after the page's own (#3396). It keeps one focus event a cycle, the latest, and on a
+# document entered from outside it ignores one for the control focused there last, by design.
+back_said=0
+says_maybe() {
+  for _ in $(seq 50); do
+    if tail -n "+$(($1 + 1))" "$nvda_log" | grep -q "^Speaking .*$2"; then
+      back_said=$((back_said + 1))
+      return 0
+    fi
+    sleep 0.1
+  done
+}
 # A key the driver sends as a hand's, as NVDA hears it.
 press() {
   heard=$(wc -l < "$nvda_log")
@@ -257,8 +272,12 @@ spoken "the page loaded"
 judging=1
 press tab
 on_row Reading tab
-judging=
+# Tab from the ring into the page, which hasn't had the keyboard, has NVDA say its first control,
+# the link, as the control's name and role.
+at=$(wc -l < "$nvda_log")
 press tab
+says "$at" "'Link', 'link'" "NVDA didn't say the page's first control after Tab from the ring the first time"
+judging=
 press down
 press down
 press tab shift
@@ -272,22 +291,32 @@ press down
 press down
 press tab shift
 # ⇧Tab again, from the page's first control, the link, rings the tab shown's row, read by its
-# name, and Tab from the ring has NVDA say the link; Tab past the last control, the button, rings
-# the row again, and ⇧Tab from it has NVDA say the button (#3220). Each as the focused control's
-# name and role, as the document's line NVDA reads on entering the page names both as well.
+# name, and Tab from the ring has NVDA say the page with the keyboard back on the link; Tab past
+# the last control, the button, rings the row again, and ⇧Tab from it has NVDA say the page with
+# the keyboard back on the button (#3220). Each comes back onto the control the page left from,
+# which NVDA says only at times (#3396, says_maybe), so a note counts it, and the next key shows
+# where the keyboard is: Tab from the link has NVDA say the button, and Tab from the button rings
+# the row. UI Automation can't: it has Chromium's window, not the control.
 judging=1
 press tab shift
 on_row Reading "⇧Tab from the page's first control"
 at=$(wc -l < "$nvda_log")
 press tab
-says "$at" "'Link', 'link'" "NVDA didn't say the page's first control after Tab from the ring"
+says "$at" "'Reading', 'document'" "NVDA didn't say the page after Tab from the ring"
+says_maybe "$at" "'Link', 'link'"
+at=$(wc -l < "$nvda_log")
 press tab
+says "$at" "'Button', 'button'" "Tab from the ring didn't leave the keyboard on the page's first control: Tab on didn't have NVDA say the button"
 press tab
 on_row Reading "Tab past the page's last control"
 at=$(wc -l < "$nvda_log")
 press tab shift
-says "$at" "'Button', 'button'" "NVDA didn't say the page's last control after ⇧Tab from the ring"
+says "$at" "'Reading', 'document'" "NVDA didn't say the page after ⇧Tab from the ring"
+says_maybe "$at" "'Button', 'button'"
+press tab
+on_row Reading "Tab from where ⇧Tab from the ring left the keyboard, the page's last control"
 judging=
+echo "note: NVDA said the control the keyboard came back onto from the ring $back_said of 2 times (#3396)"
 # Out of the page into the sidebar with F6, Focus Sidebar, and along its rows: each is read by its
 # name, with UI Automation's focus on GPUI's node for it, not Chromium's window (#3151). A second
 # tab first, at the top of Today, so ↓ has the first page's row to go to.
