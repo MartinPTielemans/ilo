@@ -280,11 +280,14 @@ bridge_on() {
 }
 rm -f "$out/mcp-bridge.log"
 bridge_on
-# Prints the bridge's next line within 30 s. sh has no read -t on Linux, where it's dash, and the
-# Mac has no timeout, so perl's alarm, which outlives its exec, bounds a shell that reads the line:
-# a shell reads a fifo a byte at a time, so it takes that line alone.
+# Prints the bridge's next line within $1 seconds, 30 if not given, and fails after. sh has no read
+# -t on Linux, where it's dash, and the Mac has no timeout, so perl reads the line under its own
+# alarm, a byte at a time to take that line alone. An alarm doesn't outlive an exec under Git Bash,
+# whose exec starts a new process, so perl reads it itself rather than a shell it execs (#3286).
 next_answer() {
-  perl -e 'alarm 30; exec @ARGV' sh -c 'read -r line && printf "%s\n" "$line"' <&5
+  perl -e 'alarm shift; my $line = "";
+    while (sysread STDIN, my $byte, 1) { $line .= $byte; last if $byte eq "\n" }
+    print $line; exit($line =~ /\n\z/ ? 0 : 1)' "${1:-30}" <&5
 }
 # Sends the JSON-RPC message $1 and, for a request, prints its answer, within 30 s.
 id=0
@@ -1524,7 +1527,7 @@ addEventListener("keydown", event => event.key == "Escape" && (document.title = 
   # the page to settle after, 5 s (kBusy), so the answer comes after the 30 s next_answer waits.
   request press_key "{\"tab\":$keys_tab,\"key\":\"Escape\"}" >&4
   await_log "^browser: title $keys_tab escape heard\$" "press_key Escape didn't reach the page"
-  pressed=$(perl -e 'alarm 60; exec @ARGV' sh -c 'read -r line && printf "%s\n" "$line"' <&5) ||
+  pressed=$(next_answer 60) ||
     fail "the browser didn't answer press_key Escape"
   pressed=$(printf '%s\n' "$pressed" | answered "press_key Escape")
   case "$pressed" in "Pressed Escape."*) ;; *) fail "press_key Escape answered: $pressed" ;; esac

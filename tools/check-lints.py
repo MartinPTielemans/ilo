@@ -17,6 +17,10 @@
 - No pattern in a run has a "$" just before "\\|". BSD grep, the Mac's, reads that "$" as a
   dollar sign, not the line's end, so that half of the choice never matches there while GNU's
   matches it on Linux (#2676). A choice keeps its anchors outside it, as "^\\(A\\|B\\)$".
+- No Swift, Objective-C or Metal in the product's code outside the Mac's platform layer, app/src,
+  app/platform/ but mac/, and core/ but core/platform/mac/ (CONTRIBUTING.md#portability, #3392):
+  no file of theirs, no Objective-C reached from Rust, and none of its syntax in a C++ file. The
+  checks' own Mac helpers in app/check/ and CI's scripts aren't the product's.
 
 Run from anywhere in the checkout. Prints each finding and exits 1 if there are any.
 """
@@ -314,9 +318,43 @@ def dollar_before_choice():
     return found
 
 
+# --- The Mac's languages outside its platform layer -------------------------------------------
+
+PRODUCT = ["app/src", "app/platform", "core"]
+MAC_LAYER = ("app/platform/mac/", "core/platform/mac/")
+MAC_FILE = re.compile(r"\.(swift|m|mm|metal)$")
+# Objective-C reached from Rust, and Objective-C's own syntax in a C++ file or header.
+OBJC_FROM_RUST = re.compile(r"msg_send!|\bobjc2?(?:_\w+)?::|\bcocoa::|\bclass!\(")
+OBJC_IN_CPP = re.compile(r"^\s*(?:@interface|@implementation|@protocol|#import\s*<)")
+MAC_CODE = {".rs": OBJC_FROM_RUST, ".cc": OBJC_IN_CPP, ".cpp": OBJC_IN_CPP, ".h": OBJC_IN_CPP}
+MOVE_IT = ("CONTRIBUTING.md#portability keeps Swift, Objective-C and Metal in platform/mac/. "
+           "Move this into "
+           "app/platform/mac/ or core/platform/mac/, behind the host's interface that every OS "
+           "implements")
+
+
+def mac_outside_platform():
+    found = []
+    for path in tracked(*PRODUCT):
+        if path.startswith(MAC_LAYER):
+            continue
+        if MAC_FILE.search(path):
+            found.append((path, 1, f"a Swift, Objective-C or Metal file outside platform/mac/. "
+                          f"{MOVE_IT}"))
+            continue
+        pattern = MAC_CODE.get(pathlib.PurePath(path).suffix)
+        if not pattern:
+            continue
+        for n, line in enumerate(read(path).splitlines()):
+            if not line.lstrip().startswith("//") and pattern.search(line):
+                found.append((path, n + 1, f"Objective-C outside platform/mac/. {MOVE_IT}"))
+    return found
+
+
 def main():
     found = (unread_markers() + bare_sleeps() + quiet_after_send() + run_places() +
-             openbox_takes() + dollar_before_choice())
+             openbox_takes() + dollar_before_choice() +
+             mac_outside_platform())
     for path, line, message in found:
         print(f"::error file={path},line={line}::{message}")
     print(f"{len(found)} found")

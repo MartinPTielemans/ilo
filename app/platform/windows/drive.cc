@@ -163,6 +163,9 @@ int g_flags = 0;
 // takes ⌃ to be until the flags change, so a ⌃Tab walk goes on to the next ⌃Tab, as Linux's driver
 // holds it (KEY_FLAGS).
 bool g_key_ctrl = false;
+// Whether that Ctrl is a ⌃Tab walk's, which a click keeps held: a hand holds ⌃ through a click
+// on the switcher's row, and letting it go first would end the walk before the press (#3340).
+bool g_walk_ctrl = false;
 // With real input, the keys the button the driver holds went down or last moved with. They stay
 // down past the command, as a hand holds a drag's ⌘ from its press to its release, and as
 // platform/linux/drive.rs holds them (#3109).
@@ -1071,12 +1074,15 @@ void AddKey(UINT vk, int modifiers) {
     const int kept = modifiers & kCtrl & ~g_flags;
     PostModifiers(g_flags | modifiers, g_flags | kept);
     g_key_ctrl = kept != 0;
+    // The walk's keys after its ⌃Tab, such as an arrow with Ctrl, keep it.
+    g_walk_ctrl = g_key_ctrl && (vk == VK_TAB || g_walk_ctrl);
     HoldKeys(0);
   }});
 }
 
 // Lets go of the Ctrl the last key left down, as input that isn't a key comes.
 void LetGoKeyCtrl() {
+  g_walk_ctrl = false;
   if (std::exchange(g_key_ctrl, false)) {
     PostModifiers(g_flags | kCtrl, g_flags);
     HoldKeys(0);
@@ -1726,6 +1732,8 @@ bool Run(const std::string& line) {
   // The pointer's and text's input comes with no Ctrl the last key left down (LetGoKeyCtrl), so a
   // click after ⌘T is no Ctrl-click. A key takes it from there, and flags lets it go itself. So does
   // a real key, which names its own: Win+D after ⌘T was Ctrl+Win+D, a new virtual desktop (#2616).
+  // A click keeps a ⌃Tab walk's Ctrl, as a hand's does (g_walk_ctrl).
+  const bool click = action == "click" || action == "clickkey";
   static const char* const kInput[] = {
       "click",      "rightclick",    "middleclick",    "doubleclick", "clickkey",
       "sideclick",  "rightclickkey", "doubleclickkey", "drag",        "dragover",
@@ -1736,7 +1744,11 @@ bool Run(const std::string& line) {
       "realkey"};
   for (const char* input : kInput) {
     if (action == input) {
-      g_steps.push_back({[] { LetGoKeyCtrl(); }});
+      g_steps.push_back({[click] {
+        if (!(click && g_walk_ctrl)) {
+          LetGoKeyCtrl();
+        }
+      }});
       break;
     }
   }
@@ -2682,6 +2694,7 @@ bool Run(const std::string& line) {
     }
     g_steps.push_back({[=] {
       const int from = g_flags | (std::exchange(g_key_ctrl, false) ? kCtrl : 0);
+      g_walk_ctrl = false;
       g_flags = 0;
       PostModifiers(from, modifiers);
       g_flags = modifiers;
