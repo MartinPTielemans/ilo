@@ -33,6 +33,9 @@ final class Blocker {
   @ObservationIgnored private var lists: [WKContentRuleList] = []
   @ObservationIgnored private var views: [ObjectIdentifier: Attached] = [:]
   @ObservationIgnored private var started = false
+  /// What a private tab's user chose for a site in that tab: whether it blocks there, by site,
+  /// for the tab's web view. Never written, since the choice names a site the tab was on.
+  private var held: [ObjectIdentifier: [String: Bool]] = [:]
 
   private enum Key {
     static let isOn = "blocking"
@@ -52,14 +55,18 @@ final class Blocker {
       isOn: defaults.object(forKey: Key.isOn) as? Bool ?? true, sitesOff: Set(defaults.stringArray(forKey: Key.sitesOff) ?? []))
   }
 
-  func blocks(_ url: URL?) -> Bool {
-    choice.blocks(url)
+  /// Whether ads and trackers are kept from the page at `url`: in a `view` that holds a choice
+  /// of its own for the page's site, that one.
+  func blocks(_ url: URL?, in view: WKWebView? = nil) -> Bool {
+    guard choice.isOn else { return false }
+    if let view, let site = BlockingChoice.site(of: url), let own = held[ObjectIdentifier(view)]?[site] { return own }
+    return choice.blocks(url)
   }
 
   /// A link without its tracking parameters, or nil when it has none, its site isn't blocked for,
   /// or it only moves within the page it was followed `from`.
-  func withoutTracking(_ url: URL, from page: URL? = nil) -> URL? {
-    choice.blocks(url) ? TrackingParameters.stripped(url, followedFrom: page) : nil
+  func withoutTracking(_ url: URL, from page: URL? = nil, in view: WKWebView? = nil) -> URL? {
+    blocks(url, in: view) ? TrackingParameters.stripped(url, followedFrom: page) : nil
   }
 
   /// Turns blocking on or off for the site of the page at `url`. The page shows it once reloaded.
@@ -67,11 +74,22 @@ final class Blocker {
     choice.set(blocks, at: url)
   }
 
+  /// Turns blocking on or off for the site of the page at `url` in one web view alone, a private
+  /// tab's, for as long as the view is there.
+  func hold(_ blocks: Bool, at url: URL?, in view: WKWebView) {
+    guard let site = BlockingChoice.site(of: url) else { return }
+    let id = ObjectIdentifier(view)
+    held[id, default: [:]][site] = blocks
+    apply(to: id)
+  }
+
   /// Has `view` follow the user's choice for each page it goes to. WebKit says where a view is
   /// going as soon as the page's own request starts, before anything the page asks for.
   func attach(_ view: WKWebView) {
     start()
     views = views.filter { $0.value.view != nil }
+    // A choice goes with the view that held it.
+    if !held.isEmpty { held = held.filter { views[$0.key] != nil } }
     let id = ObjectIdentifier(view)
     let watch = view.observe(\.url) { [weak self] view, _ in
       // WebKit changes it on the main thread.
@@ -88,7 +106,7 @@ final class Blocker {
   private func apply(to id: ObjectIdentifier) {
     guard var attached = views[id], let view = attached.view else { return }
     let content = view.configuration.userContentController
-    if choice.blocks(view.url) {
+    if blocks(view.url, in: view) {
       for list in lists.dropFirst(attached.count) { content.add(list) }
       attached.count = lists.count
     } else {

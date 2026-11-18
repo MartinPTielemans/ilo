@@ -27,10 +27,12 @@ nonisolated enum SheetGround {
 extension Palette {
   /// What's written on glass. Glass turns light over a light page and dark over a dark one,
   /// whatever the phone's appearance, and only the system's own colours turn with it.
-  var glassText: Color { .primary }
-  var glassSoft: Color { .secondary }
+  ///
+  /// A private tab's glass is ink over any page, so what's on it is Paper and doesn't turn.
+  var glassText: Color { isPrivate ? Self.paper : .primary }
+  var glassSoft: Color { isPrivate ? Self.paper.opacity(0.55) : .secondary }
   /// A round button's plate on a bar.
-  var glassButton: Color { .primary.opacity(dark ? 0.14 : 0.09) }
+  var glassButton: Color { isPrivate ? Self.paper.opacity(0.16) : .primary.opacity(dark ? 0.14 : 0.09) }
   /// What lies in the dock: a tile, the field, its button. A plain fill, so the dock is the
   /// Space's one glass.
   var dockFill: Color { .primary.opacity(dark ? 0.09 : 0.06) }
@@ -38,13 +40,14 @@ extension Palette {
   /// A bar over a page: the system's glass with the Space's colour washed in, as much as the
   /// small pill needs to show it. One glass at both sizes, so shrinking the bar moves only its frame.
   var pageGlass: Glass {
-    .regular.tint(accent.opacity(0.16))
+    isPrivate ? .regular.tint(Self.ink.opacity(PrivateMark.barInk)) : .regular.tint(accent.opacity(0.16))
   }
 
   /// What floats over the Space's ground. On the dark ground plain glass is as dark as what's
   /// under it, so it takes some of the text's own light to stand off it.
   var groundGlass: Glass {
-    dark ? .regular.tint(Self.paper.opacity(0.16)) : .regular.tint(accent.opacity(0.10))
+    if isPrivate { return .regular.tint(Self.paper.opacity(PrivateMark.fieldPaper)) }
+    return dark ? .regular.tint(Self.paper.opacity(0.16)) : .regular.tint(accent.opacity(0.10))
   }
 }
 

@@ -12,21 +12,26 @@ struct BlockingRow: View {
     let site = BlockingChoice.site(of: tab.url)
     Toggle(
       isOn: Binding(
-        get: { blocker.blocks(tab.url) },
+        get: { blocker.blocks(tab.url, in: tab.webView) },
         set: { blocks in
-          blocker.set(blocks, at: tab.url)
+          if tab.isPrivate {
+            // The choice names the site, so a private tab's is the tab's alone and never written.
+            blocker.hold(blocks, at: tab.url, in: tab.webView)
+          } else {
+            blocker.set(blocks, at: tab.url)
+          }
           tab.reload()
         })
     ) {
       RowLabel(title: "Block ads & trackers", detail: blocker.isOn ? "" : "Off in Settings") {
-        BlockingIcon(blocks: blocker.blocks(tab.url))
+        BlockingIcon(blocks: blocker.blocks(tab.url, in: tab.webView))
       }
     }
     .toggleStyle(RowToggleStyle())
     .tint(palette.accent)
     // Settings' switch is the one that's off, and a page that isn't a site's has none of its own.
     .disabled(!blocker.isOn || site == nil)
-    .sensoryFeedback(.selection, trigger: blocker.blocks(tab.url))
+    .sensoryFeedback(.selection, trigger: blocker.blocks(tab.url, in: tab.webView))
   }
 }
 

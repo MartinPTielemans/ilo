@@ -20,8 +20,17 @@ nonisolated struct Palette: Equatable, Sendable {
   var dark = true
   /// The Space's colour, or ilo's green.
   var accent = Color(hex: 0x57B97A)
+  /// A private tab's chrome: Paper on Ink in light and in dark, with no Space's colour in its
+  /// ground or its bar, so it's never taken for an ordinary page.
+  var isPrivate = false
 
   init() {}
+
+  /// A private tab's, in a Space.
+  init(privateIn space: SyncedSpace?) {
+    self.init(.dark, space: space)
+    isPrivate = true
+  }
 
   init(_ scheme: ColorScheme, space: SyncedSpace?) {
     dark = scheme == .dark
@@ -29,16 +38,16 @@ nonisolated struct Palette: Equatable, Sendable {
   }
 
   var text: Color { dark ? Self.paper : Self.ink }
-  var soft: Color { text.opacity(0.6) }
+  var soft: Color { text.opacity(isPrivate ? 0.62 : 0.6) }
   var faint: Color { text.opacity(0.25) }
   /// What the Space's colour lies over.
   private var base: Color { dark ? Color(hex: 0x131313) : Self.paper }
-  var groundTop: Color { base.mix(with: accent, by: 0.20, in: .device) }
-  var groundBottom: Color { base.mix(with: accent, by: 0.07, in: .device) }
+  var groundTop: Color { isPrivate ? Self.ink : base.mix(with: accent, by: 0.20, in: .device) }
+  var groundBottom: Color { isPrivate ? Self.ink : base.mix(with: accent, by: 0.07, in: .device) }
   /// What floats over the ground: the bar, a sheet.
   var overlay: Color { Color(hex: dark ? 0x1F1D17 : 0xFBF9F4) }
   /// The page's bar, which takes the Space's colour.
-  var tinted: Color { overlay.mix(with: accent, by: dark ? 0.36 : 0.26, in: .device) }
+  var tinted: Color { isPrivate ? Self.ink : overlay.mix(with: accent, by: dark ? 0.36 : 0.26, in: .device) }
   /// A tile's or a pressed row's plate.
   var plate: Color { dark ? .white.opacity(0.10) : Self.ink.opacity(0.07) }
   /// A round button's plate on a bar.
@@ -59,6 +68,37 @@ nonisolated struct Palette: Equatable, Sendable {
 
 extension EnvironmentValues {
   @Entry var palette = Palette()
+}
+
+/// What marks a private tab: one glyph, on its bar, on its card and beside its name.
+nonisolated enum PrivateMark {
+  static let symbol = "eye.slash"
+  /// Before the site's name on the bar, and the gap between the two.
+  static let onBar: CGFloat = 13
+  static let barGap: CGFloat = 6
+  /// On a card, which has no picture: the glyph on a plate, in the middle.
+  static let onCard: CGFloat = 20
+  static let plate: CGFloat = 44
+  static let plateRadius: CGFloat = 11
+  /// What the card's plate and its rim have of Paper, and the glyph on it.
+  static let plateFill = 0.10
+  static let cardRim = 0.16
+  static let cardGlyph = 0.78
+  /// Under the card, which is darker than any picture and needs less of a shadow to stand off.
+  static let cardShadow = Color.black.opacity(0.22)
+  static let cardShadowRadius: CGFloat = 6
+  static let cardShadowDrop: CGFloat = 4
+  /// A new private tab's words, where its page will be: the heading with the glyph before it,
+  /// the sentence under it, and how far they stand in from the sides and over the field.
+  static let heading: CGFloat = 24
+  static let headingGlyph: CGFloat = 19
+  static let headingGap: CGFloat = 10
+  static let wordsGap: CGFloat = 8
+  static let side: CGFloat = 24
+  static let overField: CGFloat = 26
+  /// The bar's ink over a page, and the field's Paper over the ink.
+  static let barInk = 0.88
+  static let fieldPaper = 0.12
 }
 
 /// The bar at the foot of every screen.
@@ -228,6 +268,25 @@ extension View {
     _ size: CGFloat, _ weight: Font.Weight = .regular, design: Font.Design = .default, relativeTo style: Font.TextStyle = .body
   ) -> some View {
     modifier(ScaledType(size: size, weight: weight, design: design, style: style))
+  }
+}
+
+/// Draws what's inside as a private tab's chrome, when it is one's: the bar, the field over the
+/// page, and what stands where a page isn't.
+private struct PrivateChrome: ViewModifier {
+  let on: Bool
+
+  @Environment(Browser.self) private var browser
+  @Environment(\.palette) private var palette
+
+  func body(content: Content) -> some View {
+    content.environment(\.palette, on ? Palette(privateIn: browser.currentSpace) : palette)
+  }
+}
+
+extension View {
+  func privateChrome(_ on: Bool) -> some View {
+    modifier(PrivateChrome(on: on))
   }
 }
 

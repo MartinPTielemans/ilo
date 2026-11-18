@@ -7,13 +7,15 @@ struct IloApp: App {
   @State private var phone: PhoneAccount
   @State private var browser: Browser
   @State private var reading = Reading()
+  @State private var cover: SwitcherCover
 
   init() {
     let phone = makeAccount()
+    let browser = Browser(
+      account: phone, settings: Settings(), cache: TabCache(), favicons: Favicons(), downloads: Downloads(), history: makeHistory())
     _phone = State(initialValue: phone)
-    _browser = State(
-      initialValue: Browser(
-        account: phone, settings: Settings(), cache: TabCache(), favicons: Favicons(), downloads: Downloads(), history: makeHistory()))
+    _browser = State(initialValue: browser)
+    _cover = State(initialValue: SwitcherCover(browser: browser))
   }
 
   var body: some Scene {
@@ -100,6 +102,7 @@ private struct BrowserScreen: View {
       }
       if browser.searchingPage, let page {
         PageSearch(tab: page)
+          .privateChrome(page.isPrivate)
           .transition(.opacity)
       }
 

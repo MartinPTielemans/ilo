@@ -8,19 +8,33 @@ struct ActionSheet: View {
 
   @Environment(Browser.self) private var browser
   @Environment(\.palette) private var palette
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var copied = false
 
   var body: some View {
     let settings = browser.settings
     let isFavourite = settings.isFavourite(tab.url)
     let isPinned = tab.role != .today
+    let isPrivate = tab.isPrivate
     VStack(spacing: 0) {
-      SheetRow(symbol: "clock", title: "History") { browser.sheet = .history }
+      if isPrivate {
+        // What private means, where the rows it leaves out would be: it has no history to open,
+        // and is nothing to pin, to favour or to move.
+        Text("Private: no history, cookies go when it closes, not synced. Files you download stay.")
+          .scaled(13, relativeTo: .footnote)
+          .foregroundStyle(palette.soft)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(.horizontal, Column.inset)
+          .padding(.top, 2)
+          .padding(.bottom, 8)
+      } else {
+        SheetRow(symbol: "clock", title: "History") { browser.sheet = .history }
+      }
       ReadingRows(tab: tab)
       if tab.isPDF {
         // A document has nothing to block and no other site to ask for: its rows keep it.
         SheetRow(symbol: "folder", title: "Save to Files") {
-          if let url = tab.url { browser.downloads.save(url, from: tab.webView) }
+          if let url = tab.url { browser.downloads.save(url, from: tab.webView, listed: !isPrivate) }
           browser.sheet = nil
         }
         SheetRow(symbol: "printer", title: "Print") {
@@ -36,15 +50,17 @@ struct ActionSheet: View {
           browser.sheet = nil
         }
       }
-      SheetRow(symbol: isFavourite ? "star.fill" : "star", title: isFavourite ? "Remove from favourites" : "Add to favourites") {
-        guard let url = tab.url else { return }
-        if isFavourite {
-          settings.removeFavourite(url)
-        } else {
-          settings.addFavourite(url, title: tab.title)
+      if !isPrivate {
+        SheetRow(symbol: isFavourite ? "star.fill" : "star", title: isFavourite ? "Remove from favourites" : "Add to favourites") {
+          guard let url = tab.url else { return }
+          if isFavourite {
+            settings.removeFavourite(url)
+          } else {
+            settings.addFavourite(url, title: tab.title)
+          }
         }
+        MoveRow(tab: tab)
       }
-      MoveRow(tab: tab)
 
       Rectangle()
         .fill(palette.text.opacity(0.12))
@@ -54,10 +70,16 @@ struct ActionSheet: View {
         .padding(.bottom, 12)
 
       HStack(spacing: 8) {
-        Button {
-          browser.togglePin()
-        } label: {
-          BigLabel(symbol: isPinned ? "pin.slash" : "pin", title: isPinned ? "Unpin" : "Pin")
+        if isPrivate {
+          Button(action: close) {
+            BigLabel(symbol: "xmark", title: "Close")
+          }
+        } else {
+          Button {
+            browser.togglePin()
+          } label: {
+            BigLabel(symbol: isPinned ? "pin.slash" : "pin", title: isPinned ? "Unpin" : "Pin")
+          }
         }
         Button {
           browser.sheet = nil
@@ -93,7 +115,7 @@ struct ActionSheet: View {
       Pill(tinted: true, floats: false) {
         RoundButton(symbol: "arrow.left", label: "Back", dimmed: !tab.canGoBack) { tab.webView.goBack() }
         RoundButton(symbol: "arrow.right", label: "Forward", dimmed: !tab.canGoForward) { tab.webView.goForward() }
-        HostLabel(url: tab.url)
+        HostLabel(url: tab.url, isPrivate: isPrivate)
           .frame(maxWidth: .infinity)
         // The name stays centred between two buttons and one.
         Color.clear.frame(width: 34)
@@ -105,6 +127,19 @@ struct ActionSheet: View {
           }
         }
       }
+      .privateChrome(isPrivate)
+    }
+  }
+
+  /// Closes the private tab that's up: its page goes to its card, as the bar's Tabs takes it,
+  /// and the card goes from the Space.
+  private func close() {
+    let id = tab.id
+    withAnimation(reduceMotion ? Motion.quick : Motion.page) {
+      browser.leave()
+    } completion: {
+      browser.left(id)
+      withAnimation(Motion.settle) { browser.close(id) }
     }
   }
 }
@@ -280,6 +315,11 @@ struct SettingsSheet: View {
         } label: {
           BigLabel(symbol: "arrow.down.to.line", title: "Downloads")
         }
+        Button {
+          browser.openPrivate()
+        } label: {
+          BigLabel(symbol: PrivateMark.symbol, title: "Private tab")
+        }
       }
       .buttonStyle(PressStyle())
     }
@@ -407,6 +447,8 @@ struct PageSearch: View {
 
   var body: some View {
     let typed = site != nil || (query != address && !query.trimmingCharacters(in: .whitespaces).isEmpty)
+    // A private tab's field stands on ink, over its page too: its glass is made for that ground.
+    let inked = tab.isPrivate
     VStack(spacing: 0) {
       if typed {
         SearchResults(query: query, site: site, pick: { browser.open($0) }, go: { browser.go($0) })
@@ -416,6 +458,10 @@ struct PageSearch: View {
           .onTapGesture { browser.searchingPage = false }
           .accessibilityLabel("Close")
           .accessibilityAddTraits(.isButton)
+          .overlay(alignment: .bottom) {
+            // A new private tab's words ride over the field while the keyboard is up.
+            if inked, !tab.hasPage { PrivateWords().padding(.bottom, PrivateMark.overField) }
+          }
       }
       SearchBar(query: $query, site: $site, focused: $focused, selectsAll: true) {
         if let destination = Destination(query, on: site, engine: browser.settings.searchEngine) { browser.go(destination) }
@@ -424,7 +470,7 @@ struct PageSearch: View {
     .foregroundStyle(palette.text)
     .background {
       // Typing covers the page, so the matches read on the Space's own ground.
-      if typed {
+      if typed || inked {
         Ground()
       } else {
         Color.black.opacity(0.4).ignoresSafeArea()

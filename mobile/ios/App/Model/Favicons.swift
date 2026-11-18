@@ -54,14 +54,25 @@ final class Favicons {
     await fetch(icon, for: host)
   }
 
+  /// The icon at an address for a private tab, which holds it itself: nothing here remembers the
+  /// site, in a file or for the launch. Asked as any icon is, in a session that keeps nothing.
+  func passing(_ address: URL) async -> UIImage? {
+    guard let data = await data(at: address) else { return nil }
+    return await Self.decode(data, saveTo: nil)
+  }
+
   private func fetch(_ address: URL, for host: String) async {
+    guard let data = await data(at: address), let icon = await Self.decode(data, saveTo: file(host)) else { return }
+    icons[host] = icon
+  }
+
+  private func data(at address: URL) async -> Data? {
     var request = URLRequest(url: address, timeoutInterval: 15)
     request.httpShouldHandleCookies = false
     guard let (data, response) = try? await session.data(for: request),
-      (response as? HTTPURLResponse)?.statusCode == 200, data.count < 2_000_000,
-      let icon = await Self.decode(data, saveTo: file(host))
-    else { return }
-    icons[host] = icon
+      (response as? HTTPURLResponse)?.statusCode == 200, data.count < 2_000_000
+    else { return nil }
+    return data
   }
 
   private func file(_ host: String) -> URL {
@@ -75,7 +86,7 @@ final class Favicons {
 
   /// The image at the size the largest icon is drawn, 56 pt at 3×, so a 1024-pixel touch icon
   /// isn't held whole for a 20 pt mark.
-  @concurrent private nonisolated static func decode(_ data: Data, saveTo file: URL) async -> UIImage? {
+  @concurrent private nonisolated static func decode(_ data: Data, saveTo file: URL?) async -> UIImage? {
     let options: [CFString: Any] = [
       kCGImageSourceCreateThumbnailFromImageAlways: true,
       kCGImageSourceCreateThumbnailWithTransform: true,
@@ -85,8 +96,10 @@ final class Favicons {
       let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
     else { return nil }
     let icon = UIImage(cgImage: plated(image))
-    try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-    try? icon.pngData()?.write(to: file, options: .atomic)
+    if let file {
+      try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+      try? icon.pngData()?.write(to: file, options: .atomic)
+    }
     return icon
   }
 

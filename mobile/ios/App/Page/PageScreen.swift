@@ -41,7 +41,7 @@ struct PageScreen: View {
           .allowsHitTesting(false)
 
         // Under the page's top corners too, which are round only while it moves.
-        (tab.failure == nil ? Color(uiColor: tab.ground) : palette.groundTop)
+        band
           .frame(height: insets.top + CardZoom.radius)
           .frame(maxHeight: .infinity, alignment: .top)
           .modifier(BandFade(progress: progress))
@@ -86,6 +86,10 @@ struct PageScreen: View {
           .barShown(
             open && !lifted && browser.sheet != .actions && !browser.searchingPage && peek == nil,
             touch: open && browser.sheet != .actions && !browser.searchingPage && peek == nil)
+          .privateChrome(tab.isPrivate)
+          // The ink bar is another bar, put in the ordinary one's place: no glass changes its tint.
+          .id(tab.isPrivate)
+          .transition(.identity)
 
         LoginLayer(tab: tab, foot: foot, band: insets.bottom)
 
@@ -107,6 +111,12 @@ struct PageScreen: View {
     .ignoresSafeArea(.keyboard)
     // The Space is live again the moment the page starts back to it, but for the page itself.
     .allowsHitTesting(browser.pageOpen || catchable || caught)
+  }
+
+  /// The status bar's band: the page's own colour, or the ground of what stands where a page isn't.
+  private var band: Color {
+    if tab.isPrivate, tab.failure != nil || !tab.hasPage { return Palette.ink }
+    return tab.failure == nil ? Color(uiColor: tab.ground) : palette.groundTop
   }
 
   /// Where the page comes from: its card, or nowhere when motion is reduced, so it only fades.
@@ -305,8 +315,15 @@ struct WebPage: View {
       .overlay {
         if let failure = tab.failure {
           FailurePage(failure: failure, tab: tab, foot: foot)
+        } else if tab.isPrivate, !tab.hasPage {
+          // A new private tab says what it is, once, where its page will be.
+          PrivateWords()
+            .padding(.bottom, foot + PrivateMark.overField)
+            .frame(maxHeight: .infinity, alignment: .bottom)
+            .background(Palette.ink)
         }
       }
+      .privateChrome(tab.isPrivate)
   }
 }
 
@@ -362,18 +379,30 @@ private struct FailurePage: View {
   }
 }
 
-/// What the bar calls the page: its site, marked when the connection isn't encrypted.
+/// What the bar calls the page: its site, marked when the connection isn't encrypted. A private
+/// tab's has the one glyph before it, at both of the bar's sizes.
 struct HostLabel: View {
   let url: URL?
+  var isPrivate = false
+
+  /// What a tab is called by its site, or a private tab with no page yet by what it is.
+  static func name(of url: URL?, isPrivate: Bool) -> String {
+    isPrivate && url == nil ? "Private tab" : Site.name(of: url)
+  }
 
   var body: some View {
-    HStack(spacing: 5) {
+    HStack(spacing: isPrivate ? PrivateMark.barGap : 5) {
+      if isPrivate {
+        Image(systemName: PrivateMark.symbol)
+          .font(.system(size: PrivateMark.onBar, weight: .semibold))
+          .accessibilityLabel("Private")
+      }
       if url?.scheme == "http" {
         Image(systemName: "lock.slash")
           .font(.system(size: 12, weight: .semibold))
           .accessibilityLabel("Not secure")
       }
-      Text(Site.name(of: url))
+      Text(Self.name(of: url, isPrivate: isPrivate))
         .lineLimit(1)
         .truncationMode(.head)
     }
@@ -484,7 +513,7 @@ private struct PagePill: View {
       .frame(maxWidth: small > 0 && width > 0 ? between(width, nameWidth * Bar.smallLabel + 20) : .infinity)
       .frame(height: between(Bar.height, Bar.small))
       .overlay {
-        HostLabel(url: tab.url)
+        HostLabel(url: tab.url, isPrivate: tab.isPrivate)
           .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { if small == 0 { nameWidth = $0 } }
           // The name keeps the width it had, so it shrinks whole and isn't cut again.
           .frame(width: small > 0 ? nameWidth : nil)
@@ -495,7 +524,7 @@ private struct PagePill: View {
           .foregroundStyle(palette.glassText)
           .accessibilityElement(children: .combine)
           .accessibilityAddTraits(.isButton)
-          .accessibilityLabel(shrunk ? "Show the bar" : Site.name(of: tab.url))
+          .accessibilityLabel(shrunk ? "Show the bar" : (tab.isPrivate ? "Private, " : "") + HostLabel.name(of: tab.url, isPrivate: tab.isPrivate))
           .accessibilityHint(shrunk ? "" : "Search or enter an address")
           .accessibilityAction { tapped(shrunk: shrunk) }
           .accessibilityAction(named: "Next Tab") { step(1) }

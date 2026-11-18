@@ -48,8 +48,18 @@ struct Zoom: Equatable {
   var ontoCard: Bool
 }
 
+/// A private tab and the Space its card is in. The phone holds it here and nowhere else: it's no
+/// tab of the account's, so no other device sees it, and nothing here is written, so a relaunch
+/// brings none back.
+struct PrivateTab: Identifiable {
+  let tab: WebTab
+  var space: String
+
+  var id: String { tab.id }
+}
+
 /// The phone's browser: which Space and page are on screen, and the web views behind them. The
-/// tabs themselves are the account's.
+/// tabs themselves are the account's, but for the private ones.
 @Observable
 final class Browser {
   enum Sheet: Equatable {
@@ -92,6 +102,8 @@ final class Browser {
   private(set) var slide = 0
   /// A link out of a pinned tab's site, open over it.
   private(set) var peek: WebTab?
+  /// The private tabs, in the order they were opened.
+  private(set) var privateTabs: [PrivateTab] = []
   /// The folders opened in place, which stay open while a search or a page covers their rows.
   var openFolders: Set<String> = []
   var sheet: Sheet?
@@ -173,10 +185,16 @@ final class Browser {
   }
 
   /// Opens an address as a new Today tab of the Space on screen, behind the page that's up: its
-  /// card is in the Space, and its page loads when it's opened.
-  func openBehind(_ url: URL) {
+  /// card is in the Space, and its page loads when it's opened. Opened `from` a private tab, it's
+  /// a private tab too.
+  func openBehind(_ url: URL, from tab: WebTab? = nil) {
     guard let space = currentSpace else { return }
-    account.openToday(url: url, title: "", in: space.id)
+    if let tab, tab.isPrivate {
+      // No file holds its address to load it from later, so it loads now.
+      makePrivate(in: space.id, from: tab).load(url)
+    } else {
+      account.openToday(url: url, title: "", in: space.id)
+    }
   }
 
   /// Searches the web for text the user selected in a page, in a new tab in front, with their
@@ -184,7 +202,83 @@ final class Browser {
   func search(_ text: String, from tab: WebTab) {
     guard tab === page || tab === peek else { return }
     slide = 0
-    openNew(settings.searchEngine.search(text))
+    openNew(settings.searchEngine.search(text), from: tab)
+  }
+
+  /// A new tab in front for what a page asked for: a private one for a private page.
+  private func openNew(_ url: URL, from tab: WebTab) {
+    guard tab.isPrivate else { return openNew(url) }
+    guard let space = currentSpace else { return }
+    let new = makePrivate(in: space.id, from: tab)
+    new.load(url, entered: true)
+    show(new, from: nil)
+  }
+
+  // MARK: Private tabs
+
+  /// Opens a private tab in the Space on screen, with nothing in it and the field up to say
+  /// where it goes.
+  func openPrivate() {
+    guard let space = currentSpace else { return }
+    slide = 0
+    show(makePrivate(in: space.id), from: nil)
+    searchingPage = true
+  }
+
+  /// Opens a link from an ordinary page as a private tab, behind the page that's up.
+  func openPrivateBehind(_ url: URL) {
+    guard let space = currentSpace else { return }
+    makePrivate(in: space.id).load(url)
+  }
+
+  /// Puts a private tab's page up, at its card.
+  func open(_ tab: WebTab) {
+    guard let held = privateTabs.first(where: { $0.tab === tab }) else { return }
+    space = held.space
+    // Its card has no picture of the page, so the page fades into it.
+    show(tab, from: places.frames[tab.id].map { Zoom(rect: $0, ontoCard: false) })
+  }
+
+  /// Whether what's on screen is a private tab's: its page, or its card in the Space.
+  var showsPrivate: Bool {
+    if pageOpen, let page { return page.isPrivate }
+    return currentSpace.map { !privateTabs(in: $0.id).isEmpty } ?? false
+  }
+
+  /// The private tabs whose cards are in a Space.
+  func privateTabs(in space: String) -> [WebTab] {
+    privateTabs.filter { $0.space == space }.map(\.tab)
+  }
+
+  /// A private tab, with cookies of its own or, opened `from` another private tab or as its
+  /// `window`, with that tab's.
+  @discardableResult
+  private func makePrivate(in space: String, from parent: WebTab? = nil, window: WKWebViewConfiguration? = nil) -> WebTab {
+    let tab = WebTab(
+      id: "private:\(UUID().uuidString)", role: .private, browser: self, window: window, opener: window == nil ? nil : parent, from: parent)
+    tabs[tab.id] = tab
+    privateTabs.append(PrivateTab(tab: tab, space: space))
+    return tab
+  }
+
+  /// Lets go of a private tab, and of its cookies and site data with it unless a tab it opened,
+  /// or the one that opened it, is still open with them.
+  private func closePrivate(_ id: String) {
+    guard let index = privateTabs.firstIndex(where: { $0.id == id }) else { return }
+    let tab = privateTabs.remove(at: index).tab
+    let store = tab.webView.configuration.websiteDataStore
+    guard !privateTabs.contains(where: { $0.tab.webView.configuration.websiteDataStore === store }) else { return }
+    // The store goes with its last web view. Emptied too, so nothing waits on what else holds one.
+    Task { await store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast) }
+  }
+
+  /// A Space that's gone, as the phone's own is when the account's take its place, leaves its
+  /// private tabs to the Space on screen.
+  private func rehomePrivate() {
+    guard let here = currentSpace?.id else { return }
+    for index in privateTabs.indices where !account.spaces.contains(where: { $0.id == privateTabs[index].space }) {
+      privateTabs[index].space = here
+    }
   }
 
   /// What return does in the field: on the Space, a new tab; over a page, that page goes there.
@@ -269,9 +363,18 @@ final class Browser {
     if !pageOpen, shown == id { shown = nil }
   }
 
-  /// The Today tab `offset` after this one in its Space, for a swipe along the bar.
+  /// The Today tab `offset` after this one in its Space, for a swipe along the bar. From a
+  /// private tab it's the private tab after it: a swipe never crosses from one kind to the other,
+  /// so neither is come upon by accident.
   func step(_ offset: Int) -> Bool {
     guard let shown, let space = currentSpace else { return false }
+    if page?.isPrivate == true {
+      let beside = privateTabs(in: space.id)
+      guard let index = beside.firstIndex(where: { $0.id == shown }), beside.indices.contains(index + offset) else { return false }
+      slide = offset
+      open(beside[index + offset])
+      return true
+    }
     let today = account.today(in: space.id)
     guard let index = today.firstIndex(where: { $0.id == shown }), today.indices.contains(index + offset) else { return false }
     slide = offset
@@ -285,10 +388,13 @@ final class Browser {
       pageOpen = false
     }
     if last == id { last = nil }
+    let wasPrivate = tabs[id]?.isPrivate == true
     tabs[id] = nil
+    places.frames[id] = nil
+    // A private tab has nothing kept and is no tab of the account's.
+    if wasPrivate { return closePrivate(id) }
     live.remove(id)
     cache.forget(id)
-    places.frames[id] = nil
     account.closeToday(id)
   }
 
@@ -305,7 +411,7 @@ final class Browser {
       guard let node = account.unpin(old) else { return }
       rename(page, to: node.id)
       page.role = .today
-    case .peek:
+    case .peek, .private:
       break
     }
   }
@@ -347,6 +453,7 @@ final class Browser {
       }
     }
     if !account.spaces.contains(where: { $0.id == space }) { space = account.spaces.first?.id }
+    rehomePrivate()
   }
 
   private func rename(_ tab: WebTab, to id: String) {
@@ -383,9 +490,12 @@ final class Browser {
       page.settle(finished: true)
       takePicture(of: page)
     }
-    // A page that opened a window keeps its web view while the window has one to speak to.
-    let openers = Set(tabs.values.compactMap { $0.opener?.id })
-    for id in live.show(tab.id, keeping: openers, holding: Set(tabs.values.filter(\.holdsText).map(\.id))) { unload(id) }
+    // A private tab keeps its web view while it's open: nothing is kept to bring its page back from.
+    if !tab.isPrivate {
+      // A page that opened a window keeps its web view while the window has one to speak to.
+      let openers = Set(tabs.values.compactMap { $0.opener?.id })
+      for id in live.show(tab.id, keeping: openers, holding: Set(tabs.values.filter(\.holdsText).map(\.id))) { unload(id) }
+    }
     sheet = nil
     searchingPage = false
     peek = nil
@@ -404,6 +514,8 @@ final class Browser {
   }
 
   private func save(_ tab: WebTab) {
+    // Nothing of a private tab is kept.
+    guard !tab.isPrivate else { return }
     tab.settle(finished: true)
     // Kept under the address the account has for the tab, which is what tells whether another
     // device has sent it elsewhere since.
@@ -463,17 +575,25 @@ final class Browser {
   func finished(_ tab: WebTab) {
     guard let page = tab.url else { return }
     Task {
-      if let icon = await tab.iconLink() { await favicons.learn(icon, for: page) }
+      let icon = await tab.iconLink()
+      if tab.isPrivate {
+        // Held by the tab and gone with it: the icons kept by host are a file each, named for the site.
+        let address = icon ?? URL(string: "/favicon.ico", relativeTo: page)?.absoluteURL
+        if let address, let image = await favicons.passing(address), tab.url?.host() == page.host() { tab.icon = image }
+      } else if let icon {
+        await favicons.learn(icon, for: page)
+      }
     }
   }
 
-  /// A page asked for a new window: a Today tab, or a Peek if it leaves a pinned tab's site.
+  /// A page asked for a new window: a Today tab, or a Peek if it leaves a pinned tab's site. A
+  /// private page's is a private tab.
   func opensWindow(_ url: URL, from tab: WebTab) {
     if tab.role == .peek {
       tab.load(url)
     } else if !peeks(url, from: tab) {
       slide = 0
-      openNew(url)
+      openNew(url, from: tab)
     }
   }
 
@@ -497,6 +617,13 @@ final class Browser {
       self.peek = peek
       return peek
     }
+    if tab.isPrivate {
+      // Private as the page that opened it, whose cookies WebKit's configuration carries.
+      let window = makePrivate(in: space.id, from: tab, window: configuration)
+      slide = 0
+      show(window, from: nil)
+      return window
+    }
     let node = account.openToday(url: address, title: "", in: space.id)
     let window = WebTab(id: node.id, role: .today, browser: self, window: configuration, opener: tab)
     tabs[node.id] = window
@@ -510,7 +637,7 @@ final class Browser {
   /// to remove, and stays.
   func closedItself(_ tab: WebTab) {
     if tab === peek { return closePeek() }
-    guard tab.role == .today, tabs[tab.id] === tab else { return }
+    guard tab.role == .today || tab.isPrivate, tabs[tab.id] === tab else { return }
     let open = pageOpen
     let back = shown == tab.id ? tab.opener : nil
     close(tab.id)
@@ -577,7 +704,8 @@ final class Browser {
   func background() {
     if let page, pageOpen { takePicture(of: page) }
     for tab in tabs.values { save(tab) }
-    settings.leftPage(pageOpen ? shown : nil)
+    // A private page isn't written down as the one to come back to: none is there to come back to.
+    settings.leftPage(pageOpen && page?.isPrivate != true ? shown : nil)
     downloads.leftScreen()
     send()
   }
@@ -623,7 +751,8 @@ final class Browser {
       collect(space.id, nil)
     }
     settings.keepHidden(among: ids.union(settings.favourites.map { DockSlot.id(of: $0.url) }))
-    for id in tabs.keys where !ids.contains(id) {
+    // The private tabs are in no account, and stay.
+    for (id, tab) in tabs where !ids.contains(id) && !tab.isPrivate {
       tabs[id] = nil
       live.remove(id)
       if shown == id {
@@ -632,6 +761,7 @@ final class Browser {
       }
     }
     cache.prune(keeping: ids)
+    rehomePrivate()
   }
 
   func signOut() async {
@@ -647,6 +777,7 @@ final class Browser {
     sheet = nil
     last = nil
     openFolders = []
+    for held in privateTabs { closePrivate(held.id) }
     tabs = [:]
     live = LiveTabs(limit: live.limit)
     cache.prune(keeping: [])

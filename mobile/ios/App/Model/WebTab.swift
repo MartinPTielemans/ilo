@@ -8,7 +8,7 @@ nonisolated struct PageFailure: Equatable, Sendable {
   var reason: String
 }
 
-/// A tab with a web view: a Today tab's, a pinned tab's own, or a Peek's.
+/// A tab with a web view: a Today tab's, a pinned tab's own, a Peek's, or a private tab's.
 @Observable
 final class WebTab: NSObject, Identifiable {
   enum Role: Equatable {
@@ -16,12 +16,22 @@ final class WebTab: NSObject, Identifiable {
     /// A pinned tab, and the address it's pinned at.
     case pinned(home: URL)
     case peek
+    /// A private tab, which the phone holds in memory alone: nothing of it is the account's,
+    /// history's or a file's, and its cookies are in a store that's never written.
+    case `private`
   }
 
   /// The account's id for the tab, which changes when it's pinned or unpinned.
   var id: String
   var role: Role
   let webView: WKWebView
+
+  var isPrivate: Bool { role == .private }
+  /// Whether a page has been in the tab. A private tab without one says what it is where the
+  /// page will be.
+  private(set) var hasPage = false
+  /// A private tab's site's icon, which goes with the tab: the icons kept by host are a file each.
+  var icon: UIImage?
 
   private(set) var url: URL?
   private(set) var title = ""
@@ -51,9 +61,9 @@ final class WebTab: NSObject, Identifiable {
   /// is still at the page before it.
   @ObservationIgnored private var failed: (url: URL, users: Bool)?
   @ObservationIgnored private var writes = NavigationWrites()
-  /// The phone's history, which this tab's pages are written to. A private tab, when the phone
-  /// has them, is made with none: `reached` is a page's only way into history, so nothing a
-  /// private tab opens has a way in, whatever else of the tab comes to tell history something.
+  /// The phone's history, which this tab's pages are written to. A private tab is made with
+  /// none: `reached` is a page's only way into history, so nothing a private tab opens has a way
+  /// in, whatever else of the tab comes to tell history something.
   @ObservationIgnored private let history: History?
   @ObservationIgnored private var visits = VisitWrites()
   /// The visit written for the page the tab is on, whose title follows the page's.
@@ -79,14 +89,27 @@ final class WebTab: NSObject, Identifiable {
 
   /// A tab that loads what it's told to, or the `window` a page of the `opener` tab opened, which
   /// WebKit loads itself and joins to that page only in a web view made as it says.
-  init(id: String, role: Role, browser: Browser, window: WKWebViewConfiguration? = nil, opener: WebTab? = nil) {
+  ///
+  /// A private tab keeps its cookies and site data in a store that's never written: one of its
+  /// own, or the one of the private tab it was opened `from`, so a page and the tabs it opens
+  /// stay signed in together. A window's is its opener's already, in WebKit's `window`.
+  init(
+    id: String, role: Role, browser: Browser, window: WKWebViewConfiguration? = nil, opener: WebTab? = nil, from parent: WebTab? = nil
+  ) {
     self.id = id
     self.role = role
     self.browser = browser
     self.opener = opener
-    history = browser.history
+    history = role == .private ? nil : browser.history
+    // A window is its opener's to write into, and has a page from the start.
+    hasPage = window != nil
 
     let configuration = window ?? WKWebViewConfiguration()
+    if role == .private, window == nil {
+      let family = parent?.webView.configuration.websiteDataStore
+      // Never a store that's written, whatever opened the tab.
+      configuration.websiteDataStore = family.flatMap { $0.isPersistent ? nil : $0 } ?? .nonPersistent()
+    }
     if window != nil {
       // WebKit's copy of the opener's, with the opener's scripts and the handlers that hear
       // them: a window has its own.
@@ -317,8 +340,9 @@ final class WebTab: NSObject, Identifiable {
   }
 
   private func keep(_ change: Unsent.Change?) {
-    // A Peek isn't a tab yet, and what's typed into it stays with its web view.
-    guard let change, role != .peek else { return }
+    // A Peek isn't a tab yet, and what's typed into it stays with its web view. So does what's
+    // typed into a private tab, which keeps its web view and has no file.
+    guard let change, role != .peek, role != .private else { return }
     switch change {
     case .keep(let text): browser?.cache.keep(text, of: id)
     case .forget: browser?.cache.keep(nil, of: id)
@@ -474,7 +498,7 @@ extension WebTab: WKNavigationDelegate {
     // A link to a new window isn't this page's to load: `createWebViewWith` opens it.
     if action.targetFrame == nil { return (.allow, preferences) }
     // A link the user followed loads without its tracking parameters, as a load of its own.
-    if inMainFrame, action.navigationType == .linkActivated, let clean = Blocker.shared.withoutTracking(url, from: webView.url) {
+    if inMainFrame, action.navigationType == .linkActivated, let clean = Blocker.shared.withoutTracking(url, from: webView.url, in: webView) {
       if browser?.peeks(clean, from: self) != true { webView.load(URLRequest(url: clean)) }
       return (.cancel, preferences)
     }
@@ -514,7 +538,7 @@ extension WebTab: WKNavigationDelegate {
     // A file the page made itself hasn't been asked about yet: its name comes with the download.
     let made = !["http", "https"].contains(navigationAction.request.url?.scheme?.lowercased())
     browser?.downloads.take(
-      download,
+      download, listed: !isPrivate,
       asks: made ? { [weak self] name in
         guard let self, let browser = self.browser else { return false }
         return await browser.ask(.download(name: name), from: self)
@@ -522,7 +546,7 @@ extension WebTab: WKNavigationDelegate {
   }
 
   func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
-    browser?.downloads.take(download)
+    browser?.downloads.take(download, listed: !isPrivate)
   }
 
   func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
@@ -548,6 +572,7 @@ extension WebTab: WKNavigationDelegate {
     // A page brought back whole from memory answers nothing, and is never a PDF.
     isPDF = answered == "application/pdf"
     committed = webView.url
+    hasPage = true
     loginState.committed()
     writes.commit()
     keep(unsent.commit())
@@ -652,7 +677,7 @@ extension WebTab: WKUIDelegate {
     // A link the user followed opens without its tracking parameters, as one in the page does,
     // in a tab that knows nothing of this one.
     if let url = action.request.url, ["http", "https"].contains(url.scheme?.lowercased()) {
-      browser?.opensWindow(Blocker.shared.withoutTracking(url) ?? url, from: self)
+      browser?.opensWindow(Blocker.shared.withoutTracking(url, in: webView) ?? url, from: self)
     }
     return nil
   }
@@ -670,7 +695,7 @@ extension WebTab: WKUIDelegate {
     // Another app's address, such as mailto: or tel:, keeps the menu the system has for it.
     if let link, !["http", "https"].contains(link.scheme?.lowercased()) { return nil }
     return UIContextMenuConfiguration(actionProvider: { [weak self] suggested in
-      PressMenu.menu(link: link, suggested: suggested) { choice in
+      PressMenu.menu(link: link, suggested: suggested, privately: self?.isPrivate == true) { choice in
         if let link { self?.chose(choice, for: link) }
       }
     })
@@ -685,7 +710,6 @@ extension WebTab: WKUIDelegate {
     animator.addCompletion { [weak self] in self?.chose(.open, for: link) }
   }
 
-  /// Does what the user chose for a pressed link, which opens without its tracking parameters.
   // MARK: Selected text
 
   /// The text selected in the page, or in a field of it.
@@ -710,10 +734,12 @@ extension WebTab: WKUIDelegate {
     if !text.isEmpty { browser?.search(text, from: self) }
   }
 
+  /// Does what the user chose for a pressed link, which opens without its tracking parameters.
   func chose(_ choice: PressMenu.Choice, for link: URL) {
     switch choice {
     case .open: follow(link)
-    case .openInNewTab: browser?.openBehind(Blocker.shared.withoutTracking(link, from: webView.url) ?? link)
+    case .openInNewTab: browser?.openBehind(Blocker.shared.withoutTracking(link, from: webView.url, in: webView) ?? link, from: self)
+    case .openPrivately: browser?.openPrivateBehind(Blocker.shared.withoutTracking(link, from: webView.url, in: webView) ?? link)
     case .copy: UIPasteboard.general.url = link
     case .share: browser?.shared = link
     }
