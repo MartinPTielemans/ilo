@@ -784,6 +784,17 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
     fail "⌘W on the agent's warning before http, which had the keyboard, didn't step back to Pages: $(since "$left" | grep -e '^browser: drive' -e '^browser: command' -e '^browser: task' | tail -6 | tr '\n' ' ')"
   await_more "$thumbnail" "$shrunk" ||
     fail "the agent's split view didn't go back into its picture after ⌘W"
+  # Where the click on the warning took the tab over, as X11's does, the tab is the user's, and
+  # its warning takes the keyboard as Chrome's does. So it's handed back first, from its page
+  # watched, with the UI given the keyboard by a click on the sidebar, as the user's would.
+  if [ "$(grep -c '^browser: agent page pressed in ' "$log" || true)" != "$presses" ]; then
+    watch "$warned"
+    send click $sidebar_point
+    send key return cmd
+    await_log "^browser: agent mcp-client handed back $warned\$" \
+      "⌘↩ didn't hand back tab $warned, which the click on its warning took over"
+    to_pages "tab $warned"
+  fi
   watch_warning "again after ⌘W"
   # The page beside, to the right of the warning's, as split_tabs put them.
   other="$((warning_x + warning_width + 100)) $((warning_y + warning_height + 100))"
