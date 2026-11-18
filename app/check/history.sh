@@ -128,7 +128,15 @@ send key r cmd shift
 expect '^browser: command force-reload via ui$' "⇧⌘R didn't run force-reload"
 expect "^browser: loaded $tab https://example.org/\$" "⇧⌘R didn't load the page again"
 # The button is stop until the page says it has stopped loading, a little after its load (#1114).
-expect '^browser: nav shows reload$' "the stop button didn't turn back into reload"
+# A press hits the button drawn last, and a reload from the run's own server can start and end
+# between two frames, drawing no stop at all (#3362): so once the page has stopped loading, the
+# click waits until the last button drawn is reload, whether or not a stop came before it.
+expect_page example.org 1 0 "after ⇧⌘R"
+for _ in $(seq 100); do
+  [ "$(last 'nav shows')" = reload ] && break
+  sleep 0.1
+done
+[ "$(last 'nav shows')" = reload ] || fail "the stop button didn't turn back into reload"
 send click $reload_button
 expect '^browser: command reload via sidebar$' "a click on reload didn't reload"
 expect "^browser: loaded $tab https://example.org/\$" "a click on reload didn't load the page again"
