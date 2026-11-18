@@ -73,13 +73,14 @@ private struct SpacePage: View {
   var body: some View {
     let account = browser.account
     let today = account.today(in: space.id)
+    let privates = browser.privateTabs(in: space.id)
     GeometryReader { room in
       ScrollViewReader { scroll in
         ScrollView(.vertical) {
           VStack(alignment: .leading, spacing: 0) {
             SpaceTitle(space: space)
-            if !today.isEmpty {
-              PageGrid(today: today)
+            if !today.isEmpty || !privates.isEmpty {
+              PageGrid(today: today, privates: privates)
             } else if account.pinned(in: space.id, folder: nil).isEmpty {
               EmptySpace(ofPhone: space.id == PhoneAccount.space.id)
             }
@@ -91,7 +92,9 @@ private struct SpacePage: View {
         .scrollIndicators(.hidden)
         .onChange(of: browser.last, initial: true) {
           // The card of the page that's up waits under it, where the page shrinks back to.
-          if let last = browser.last, today.contains(where: { $0.id == last }) { scroll.scrollTo(last) }
+          if let last = browser.last, today.contains(where: { $0.id == last }) || privates.contains(where: { $0.id == last }) {
+            scroll.scrollTo(last)
+          }
         }
       }
     }
@@ -136,9 +139,11 @@ private struct EmptySpace: View {
   }
 }
 
-/// Today's tabs, two across, in Today's order.
+/// Today's tabs, two across, in Today's order, and after them the private tabs opened here, in
+/// the order they were opened.
 private struct PageGrid: View {
   let today: [SyncedNode]
+  let privates: [WebTab]
 
   @Environment(Browser.self) private var browser
 
@@ -149,6 +154,11 @@ private struct PageGrid: View {
     ) {
       ForEach(today) { node in
         PageCard(node: node, current: node.id == last)
+      }
+      ForEach(privates) { tab in
+        PrivateCard(tab: tab, current: tab.id == last)
+          // The grid keeps a card by its tab, and a private tab's id is no account's.
+          .id(tab.id)
       }
     }
     .padding(.horizontal, Card.side)
@@ -196,21 +206,7 @@ private struct PageCard: View {
       .accessibilityValue(current ? "Last open" : "")
       .accessibilityHint("Opens the page")
       .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { browser.places.frames[node.id] = $0 }
-      .overlay(alignment: .topTrailing) {
-        Button(action: close) {
-          Image(systemName: "xmark")
-            .font(.system(size: 11, weight: .bold))
-            .foregroundStyle(.white)
-            .frame(width: Card.close, height: Card.close)
-            .background(Palette.closePlate, in: .circle)
-            .frame(width: Card.touch, height: Card.touch)
-            .contentShape(.rect)
-        }
-        .buttonStyle(PressStyle())
-        // The plate sits its inset from the corner; the touch reaches past it.
-        .padding(Card.closeInset - (Card.touch - Card.close) / 2)
-        .accessibilityLabel("Close \(node.label)")
-      }
+      .overlay(alignment: .topTrailing) { CardClose(label: node.label, action: close) }
 
       HStack(spacing: 7) {
         SiteIcon(url: node.url, label: node.label, emoji: node.icon, size: 16)
@@ -255,6 +251,28 @@ private struct PageCard: View {
 
   private func close() {
     withAnimation(Motion.settle) { browser.close(node.id) }
+  }
+}
+
+/// The button on a card's corner that closes its tab.
+struct CardClose: View {
+  let label: String
+  let action: () -> Void
+
+  var body: some View {
+    Button(action: action) {
+      Image(systemName: "xmark")
+        .font(.system(size: 11, weight: .bold))
+        .foregroundStyle(.white)
+        .frame(width: Card.close, height: Card.close)
+        .background(Palette.closePlate, in: .circle)
+        .frame(width: Card.touch, height: Card.touch)
+        .contentShape(.rect)
+    }
+    .buttonStyle(PressStyle())
+    // The plate sits its inset from the corner; the touch reaches past it.
+    .padding(Card.closeInset - (Card.touch - Card.close) / 2)
+    .accessibilityLabel("Close \(label)")
   }
 }
 

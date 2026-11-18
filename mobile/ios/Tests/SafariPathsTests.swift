@@ -16,8 +16,12 @@ import os
   @Test func `a link's menu is ilo's own, and a picture's keeps only what stays in the app`() throws {
     let link = try #require(URL(string: "https://example.org/story"))
     let menu = try #require(PressMenu.menu(link: link, suggested: webKits) { _ in })
-    #expect(menu.children.map(\.title) == ["Open", "Open in New Tab", "Copy Link", "Share…", PressMenu.savesPicture])
+    #expect(
+      menu.children.map(\.title) == ["Open", "Open in New Tab", "Open in Private Tab", "Copy Link", "Share…", PressMenu.savesPicture])
     #expect(menu.title == link.absoluteString)
+    // A private page's new tab is private already.
+    let inPrivate = try #require(PressMenu.menu(link: link, suggested: webKits, privately: true) { _ in })
+    #expect(inPrivate.children.map(\.title) == ["Open", "Open in New Tab", "Copy Link", "Share…", PressMenu.savesPicture])
 
     let picture = try #require(PressMenu.menu(link: nil, suggested: webKits) { _ in })
     #expect(Set(picture.children.map(\.title)) == PressMenu.forPicture)
