@@ -529,33 +529,35 @@ if [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 1
     sed -n "$((n + 1)),\$p" "$log" | grep 'before the page: ' | grep -qv 'before the page: page$' &&
       fail "${chord%,*} in Safari's engine's page went elsewhere: $(sed -n "$((n + 1)),\$p" "$log" | grep 'before the page' | tail -2)"
   done
-  # A record for #3359, never a pass or a fail: whether F6, Chrome's key out of a page, and the
-  # command bar's Focus Sidebar take the keyboard from Safari's engine's page to the sidebar's ring.
-  # Arrow $2 after way $1 says which has the keyboard: it moves the ring, as ↑ always does to New
-  # Tab's row, or the page sees it, which its line shows only when its last key was another.
-  where_keys_went() {
-    send key "$2"
-    expect "^browser: sidebar keyed \|^browser: title $tab .* key Arrow" "$2 after $1 went nowhere"
-    if logged '^browser: sidebar keyed '; then
-      echo "record: $1 -> the ring has the keyboard, as $2 moved it; key $key, focus $focus"
-      send key escape
-      expect '^browser: sidebar keys left by escape$' "escape didn't take the ring away after $1"
-    else
-      echo "record: $1 -> Safari's engine's page has the keyboard, as it saw $2; key $key, focus $focus"
-    fi
-    sed -n "$((n + 1)),\$p" "$log" | grep -e '^browser: command ' -e '^browser: sidebar ' -e 'before the page: ' |
-      sed 's/^/record:   /'
+  # Tab past the page's last control, and ⇧Tab before its first, ring the tab's row as on
+  # Chromium's page, and the same key from the ring gives the page that control again (#3359). The
+  # field is the page's one control, so each way leaves from it and comes back to it, and what's
+  # typed after says it has the keyboard. Each key comes once the last one's line has, no wait.
+  # $1 is the key's name, $2 its driver keys, $3 the end the page is left at, $4 the control the
+  # ring gives back, and $5 a letter for the field.
+  out_and_back() {
+    send key $2
+    expect "^browser: tab $tab focus left its page at the $3, kept by the app\$" \
+      "$1 from the field didn't leave Safari's engine's page for the app"
+    expect '^browser: sidebar keyed ' "$1 out of Safari's engine's page didn't ring the tab's row"
+    left=$step
+    send key $2
+    expect "^browser: ring gave the page its $4 control\$" "$1 from the ring didn't go into Safari's engine's page"
+    # The ring stayed on the row until this key: the page didn't take the keyboard back by itself.
+    sed -n "/^browser: drive $left: /,/^browser: drive $step: /p" "$log" |
+      grep -c '^browser: \(sidebar keyed\|strip keyed\|ring gave the page\) ' | grep -qx 1 ||
+      fail "the ring moved on from the tab's row by itself after $1 out of Safari's engine's page"
+    send type $5
+    page_says " field $typed$5 " "$1 from the ring didn't give Safari's engine's page its field"
+    typed=$typed$5
   }
   send click $page_point
-  n=$(wc -l < "$log")
-  send key f6
-  where_keys_went "F6 on the page" up
-  send click $page_point
-  send key escape
-  page_says " key Escape " "Safari's engine's page didn't see escape before Focus Sidebar"
-  n=$(wc -l < "$log")
-  bar_command focus-sidebar "Focus Sidebar" "focus sidebar"
-  where_keys_went "the command bar's Focus Sidebar from the page" up
+  send key tab
+  send type a
+  page_says ' field a ' "Tab in Safari's engine's page didn't focus its field"
+  typed=a
+  out_and_back Tab tab end first b
+  out_and_back ⇧Tab "tab shift" start last c
   send click $sidebar_point
   n=$(wc -l < "$log")
   for chord in up down "z cmd" escape; do
@@ -581,4 +583,5 @@ echo "ok: in the mode the bar sat over things at the page's top, bottom and righ
 [ -z "$composing" ] || echo "ok: Japanese input in a field on the page kept ↓ and escape while it" \
   "composed with Arrange on, and the mode had escape again once it committed."
 [ -z "$safari" ] || echo "ok: over Safari's engine's page the command bar offered no Boost of the" \
-  "site, and ↑, ↓, ⌘Z and escape went to the page with it focused and to the UI with the UI."
+  "site, ↑, ↓, ⌘Z and escape went to the page with it focused and to the UI with the UI, and Tab" \
+  "and ⇧Tab left the page for the tab's row and went back into its field from there."
