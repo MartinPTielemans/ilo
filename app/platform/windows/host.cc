@@ -44,6 +44,7 @@
 #include <vector>
 
 #include "../host.h"
+#include "browser_core.h"
 
 // UrlCreateFromPathW, for the files dragged onto the UI.
 #pragma comment(lib, "shlwapi.lib")
@@ -1372,11 +1373,18 @@ void AppActivating(bool active, DWORD thread) {
   }
 }
 
+// The core's id for each browser window, by its UI's view (host_window_opened).
+std::map<void*, uint64_t>& WindowIds() {
+  static std::map<void*, uint64_t> ids;
+  return ids;
+}
+
 // A window of ours hid. A tab's dialog that hides with the keyboard, as Chrome hides one when its
-// pane loses the focus, gives it to its browser window: Chromium hides a window without activating
-// another (HWNDMessageHandler::Hide), where SW_HIDE would, so the hidden dialog stayed the active
-// window and the keys after went to it unheard, as Go to Pane 2 after Go to Pane 1 from Chrome's
-// warning before http did (#3330).
+// pane loses the focus, gives it to the page its browser window shows, where the keys that hid it
+// meant it to go, as on Linux: Chromium hides a window without activating another
+// (HWNDMessageHandler::Hide), where SW_HIDE would, so the hidden dialog stayed the active window and
+// the keys after went to it unheard, as Go to Pane 2 after Go to Pane 1 from Chrome's warning before
+// http did (#3330). The activation alone gives the UI the keyboard.
 void CALLBACK WindowHid(HWINEVENTHOOK, DWORD, HWND hwnd, LONG object, LONG child, DWORD, DWORD) {
   if (object != OBJID_WINDOW || child != CHILDID_SELF || !hwnd || GetForegroundWindow() != hwnd ||
       IsWindowVisible(hwnd)) {
@@ -1389,6 +1397,9 @@ void CALLBACK WindowHid(HWINEVENTHOOK, DWORD, HWND hwnd, LONG object, LONG child
   // check.sh reads this line.
   fprintf(stderr, "browser: a tab's dialog hid with the keyboard, which goes to its window\n");
   SetForegroundWindow(root);
+  if (auto id = WindowIds().find(UiViewOf(root)); id != WindowIds().end()) {
+    bc_window_focus_page(id->second);
+  }
 }
 
 void WatchForeground() {
@@ -3749,11 +3760,6 @@ void host_watch_key_window(void (*changed)(void* ui_view)) {
 // The window is Chromium's, which goes full screen through the core (bc_window_toggle_full_screen),
 // and the app hears of it as the window's bounds change, as on Linux.
 void host_watch_full_screen(void (*)(void*, bool)) {}
-
-static std::map<void*, uint64_t>& WindowIds() {
-  static std::map<void*, uint64_t> ids;
-  return ids;
-}
 
 void host_window_opened(void* ui_view, uint64_t window) {
   WindowIds()[ui_view] = window;
