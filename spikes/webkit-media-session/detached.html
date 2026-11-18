@@ -1,0 +1,15 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>start</title>
+<script>
+// As the app's media check's music: an Audio no document holds, named, with a previous and a next
+// track and no play or pause handler.
+const music = window.music = new Audio("tone.wav");
+music.loop = true;
+music.onplaying = () => document.title = "playing";
+music.onpause = () => document.title = "paused";
+navigator.mediaSession.metadata = new MediaMetadata({title: "Quiet", artist: "Check"});
+navigator.mediaSession.setActionHandler("previoustrack", () => document.title = "previous track");
+navigator.mediaSession.setActionHandler("nexttrack", () => document.title = "next track");
+music.play().catch(error => document.title = "refused " + error.name);
+</script>

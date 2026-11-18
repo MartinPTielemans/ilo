@@ -8,7 +8,7 @@ if [ "$(uname)" = Darwin ]; then
   mkdir -p "$spike"
   log="$spike/probe.log"
   : > "$log"
-  cp ../spikes/webkit-media-session/index.html "$spike/"
+  cp ../spikes/webkit-media-session/index.html ../spikes/webkit-media-session/detached.html "$spike/"
   # Two looped tones, 30 s each, long enough for WebKit to count them as Now Playing.
   python3 -I -c '
 import math, struct, sys, wave
@@ -33,10 +33,15 @@ for name, pitch in (("tone.wav", 440), ("tone2.wav", 660)):
   # The runs go under set -e, so a status the probe or the stopped server ends with is kept.
   probed=0
   "$spike/probe" "http://localhost:$spike_port/index.html" > "$log" 2>&1 || probed=$?
+  # Then music no document holds, on a muted page, as the app's media check plays it.
+  detached=0
+  "$spike/probe" "http://localhost:$spike_port/detached.html" detached > "$spike/probe-detached.log" 2>&1 ||
+    detached=$?
   kill "$spike_server" 2> /dev/null || true
   wait "$spike_server" 2> /dev/null || true
-  cat "$log"
+  cat "$log" "$spike/probe-detached.log"
   [ "$probed" = 0 ] || fail "the probe exited $probed"
+  [ "$detached" = 0 ] || fail "the detached probe exited $detached"
   echo "ok: the WebKit media probe ran; its answers are the webkit-media lines above"
 else
   echo "skip: webkit-media: a spike for Safari's engine, which only the Mac has"

@@ -62,6 +62,8 @@ static NSString* const kWatch =
   int _sessionChanges;
   int _metadataCalls;
   BOOL _playing;
+  // The detached run: the page's music is an Audio no document holds, and the page is muted.
+  BOOL _detached;
 }
 
 // An object's class and each of its properties' values, for WebKit's own types.
@@ -113,9 +115,10 @@ static NSString* const kWatch =
   Log(@"_WKNowPlayingMetadata %@", metadata ? [names componentsJoinedByString:@", "] : @"absent");
 }
 
-- (instancetype)initWithURL:(NSURL*)url {
+- (instancetype)initWithURL:(NSURL*)url detached:(BOOL)detached {
   if ((self = [super init])) {
     _url = url;
+    _detached = detached;
   }
   return self;
 }
@@ -133,6 +136,14 @@ static NSString* const kWatch =
                                           inContentWorld:World()]];
   _web = [[WKWebView alloc] initWithFrame:NSMakeRect(0, 0, 480, 320) configuration:config];
   _web.navigationDelegate = self;
+  // Muted from the start, as the app's checks run each page (--mute-audio).
+  if (_detached) {
+    SEL mute = NSSelectorFromString(@"_setPageMuted:");
+    if ([_web respondsToSelector:mute]) {
+      ((void (*)(id, SEL, NSUInteger))objc_msgSend)(_web, mute, 1);
+      Log(@"page muted");
+    }
+  }
   BOOL observable = [_web respondsToSelector:NSSelectorFromString(@"_isPlayingAudio")];
   Log(@"_isPlayingAudio %@", observable ? @"answers, observed" : @"absent");
   if (observable) {
@@ -247,11 +258,100 @@ static NSString* const kWatch =
 
 - (void)webView:(WKWebView*)web didFinishNavigation:(WKNavigation*)navigation {
   Log(@"loaded %@, title %@", web.URL.absoluteString, web.title);
+  // No document event comes from music no document holds, so its steps start from the load.
+  if (_detached) {
+    [self after:1.5 run:^{
+      [self detachedSteps];
+    }];
+    return;
+  }
   [self after:5 run:^{
     if (!self->_playing) {
       Log(@"no playing event 5 s after the load; title %@", self->_web.title);
     }
   }];
+}
+
+// What the app's own player would do to a page whose music no document holds, muted, in the first
+// seconds after it starts, before WebKit's Now Playing session is active.
+- (void)detachedSteps {
+  NSMutableArray<dispatch_block_t>* steps = [NSMutableArray array];
+  __block void (^next)(void);
+  next = ^{
+    if (steps.count == 0) {
+      Log(@"done: %d messages, %d _isPlayingAudio changes in all", self->_messages,
+          self->_audioChanges);
+      exit(0);
+    }
+    dispatch_block_t step = steps.firstObject;
+    [steps removeObjectAtIndex:0];
+    step();
+    [self after:1.5 run:next];
+  };
+  void (^state)(NSString*) = ^(NSString* when) {
+    Log(@"%@: title %@, _isPlayingAudio %@, _hasActiveNowPlayingSession %@", when,
+        self->_web.title, [self->_web valueForKey:@"_isPlayingAudio"],
+        [self->_web respondsToSelector:NSSelectorFromString(@"_hasActiveNowPlayingSession")]
+            ? [self->_web valueForKey:@"_hasActiveNowPlayingSession"]
+            : @"absent");
+  };
+  void (^ask)(NSString*, NSString*) = ^(NSString* step, NSString* name) {
+    SEL selector = NSSelectorFromString(name);
+    if (![self->_web respondsToSelector:selector]) {
+      Log(@"%@ %@ absent", step, name);
+      return;
+    }
+    void (^done)(BOOL) = ^(BOOL success) {
+      [self after:0.5 run:^{
+        state([NSString stringWithFormat:@"%@ %@ answered %d", step, name, success]);
+      }];
+    };
+    ((void (*)(id, SEL, id))objc_msgSend)(self->_web, selector, done);
+  };
+  NSString* read =
+      @"({named: !!navigator.mediaSession.metadata, title: navigator.mediaSession.metadata?.title"
+       " ?? '', artist: navigator.mediaSession.metadata?.artist ?? '', elements: "
+       "document.querySelectorAll('audio, video').length})";
+  [steps addObject:^{
+    state(@"d1 playing, muted");
+    [self inWorld:World() run:read then:^(id result) {
+      Log(@"d1 the browser's world reads %@", result);
+    }];
+  }];
+  [steps addObject:^{
+    ask(@"d2", @"_pauseNowPlayingMediaSession:");
+  }];
+  [steps addObject:^{
+    if (![self->_web.title isEqualToString:@"paused"]) {
+      [self->_web pauseAllMediaPlaybackWithCompletionHandler:^{
+        [self after:0.5 run:^{
+          state(@"d3 pauseAllMediaPlayback");
+        }];
+      }];
+    } else {
+      Log(@"d3 already paused");
+    }
+  }];
+  [steps addObject:^{
+    ask(@"d4", @"_playPredominantOrNowPlayingMediaSession:");
+  }];
+  [steps addObject:^{
+    [self inWorld:World()
+              run:@"navigator.mediaSession.callActionHandler({action: 'nexttrack'}), 'called'"
+             then:^(id result) {
+               [self after:0.5 run:^{
+                 state([NSString stringWithFormat:@"d5 next track from the browser's world %@",
+                                                  result]);
+               }];
+             }];
+  }];
+  [steps addObject:^{
+    ask(@"d6", @"_pauseNowPlayingMediaSession:");
+  }];
+  [steps addObject:^{
+    ask(@"d7", @"_playPredominantOrNowPlayingMediaSession:");
+  }];
+  next();
 }
 
 // One step after another, each given time to answer, with what arrived logged as it came.
@@ -449,12 +549,13 @@ int main(int argc, const char* argv[]) {
   @autoreleasepool {
     started = CFAbsoluteTimeGetCurrent();
     if (argc < 2) {
-      fprintf(stderr, "usage: probe <page url>\n");
+      fprintf(stderr, "usage: probe <page url> [detached]\n");
       return 2;
     }
     [NSApplication sharedApplication];
     [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
-    Probe* probe = [[Probe alloc] initWithURL:[NSURL URLWithString:@(argv[1])]];
+    Probe* probe = [[Probe alloc] initWithURL:[NSURL URLWithString:@(argv[1])]
+                                         detached:argc > 2 && !strcmp(argv[2], "detached")];
     dispatch_async(dispatch_get_main_queue(), ^{
       [probe start];
     });
