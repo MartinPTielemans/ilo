@@ -8,9 +8,7 @@ use gpui::{
     VisualTestContext, point, px,
 };
 
-use crate::shell::{
-    Folders, Naming, ROW_HEIGHT, Shell, Slot, fields_opened, recorder::Recorder,
-};
+use crate::shell::{Folders, Naming, ROW_HEIGHT, Shell, Slot, fields_opened, recorder::Recorder};
 
 const FOLDER: u64 = 20;
 
@@ -31,7 +29,14 @@ fn window(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext, Rc
         let space = (1, "Space".into(), None, 1, "".into(), "".into(), "".into());
         shell.set_spaces(vec![space], cx);
         shell.set_space(1, cx);
-        shell.set_tabs(1, vec![FOLDER, 12], vec![10], Vec::new(), folders(false), cx);
+        shell.set_tabs(
+            1,
+            vec![FOLDER, 12],
+            vec![10],
+            Vec::new(),
+            folders(false),
+            cx,
+        );
         shell.set_selected(10, cx);
     });
     cx.run_until_parked();
@@ -64,7 +69,9 @@ fn click(cx: &mut VisualTestContext, position: Point<Pixels>, clicks: usize) {
 }
 
 fn naming(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Option<Naming> {
-    shell.read_with(cx, |shell, _| shell.renaming.as_ref().map(|renaming| renaming.naming))
+    shell.read_with(cx, |shell, _| {
+        shell.renaming.as_ref().map(|renaming| renaming.naming)
+    })
 }
 
 /// The core reports the folder opened, as it does after the first press.
@@ -102,7 +109,9 @@ fn a_double_click_on_a_folder_after_a_press_in_the_page_names_it(cx: &mut TestAp
     let at = row(&shell, cx, FOLDER);
     click(cx, at, 1);
     click(cx, at, 2);
-    shell.update_in(cx, |shell, window, cx| shell.keyboard_left(pressed, window, cx));
+    shell.update_in(cx, |shell, window, cx| {
+        shell.keyboard_left(pressed, window, cx)
+    });
     cx.run_until_parked();
     opened(&shell, cx);
     cx.run_until_parked();
