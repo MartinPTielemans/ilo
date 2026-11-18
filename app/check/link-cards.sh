@@ -342,6 +342,10 @@ card "$page_link" "https://cards.test/page.html" "Link cards on again"
 expect '^browser: link card page with picture$' "Link cards on again: ⇧ on a link showed no card" "$shifted"
 send key escape
 expect '^browser: link card closed$' "Link cards on again: Esc didn't take the card"
+# Off the link, as the user's pointer leaves it on its way to the sidebar, which a driven click on
+# the Mac doesn't, so its plate isn't left over the agent's page.
+send move 600 560
+expect '^browser: link target none$' "Link cards on again: leaving the link kept its plate"
 
 # An agent's tab with the same page, opened by an MCP client on the bridge.
 case "$(uname -s)" in
@@ -411,9 +415,6 @@ expect '^browser: link target cards.test/plain.html$' \
 send flags shift
 expect "^browser: title $agent_tab key Shift [0-9]*\$" "an agent's page: the page didn't get the ⇧"
 send flags
-# A plate is placed as the link is reported, so none placed by the page's ⇧ is none at all.
-! sed -n "/^browser: drive $agent_step: /,\$p" "$log" | grep '^browser: link target window at ' ||
-  fail "an agent's page: its link got a plate, which only the window's own tab's links get"
 ! sed -n "/^browser: drive $agent_step: /,\$p" "$log" | grep '^browser: link card \(loading\|page\|failed\)' ||
   fail "an agent's page: ⇧ on a link showed a card"
 ../tools/window-screenshot.sh "$pid" "$out/link-cards-agent.png" > /dev/null 2>&1 || true
@@ -422,6 +423,9 @@ exec 4>&- 5<&-
 exec 3>&-
 quit
 forget_appearance
+# With the user's link left before, any plate placed since is the agent's page's, read whole now.
+! sed -n "/^browser: drive $agent_step: /,\$p" "$log" | grep '^browser: link target window at ' ||
+  fail "an agent's page: its link got a plate, which only the window's own tab's links get"
 # Long after either ⇧, neither link's page was asked.
 [ "$(asked /bare.html)" = "$bare_asked" ] ||
   fail "Link cards off: the server got a request for the link's page: $(grep '^/bare.html ' "$out/link-cards-public.log")"
