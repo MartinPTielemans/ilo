@@ -126,21 +126,26 @@ class MiniPlayerWatch : public views::WidgetObserver {
       return;
     }
     // check.sh reads these lines.
-    const std::string size = widget->GetWindowBoundsInScreen().size().ToString();
-    LogHandover("mini player shows", size);
+    LogHandover("mini player shows", widget->GetWindowBoundsInScreen().size().ToString());
     if (ui::Compositor* compositor = widget->GetCompositor()) {
       compositor->RequestSuccessfulPresentationTimeForNextFrame(base::BindOnce(
-          [](const std::string& size, const viz::FrameTimingDetails& timing) {
+          [](base::WeakPtr<views::Widget> widget, const viz::FrameTimingDetails& timing) {
+            if (!widget) {
+              return;
+            }
+            // Its size as its first frame is presented, not as it showed: Chrome can resize it
+            // after the show, in the same task, as for its automatic Picture in Picture question
+            // (#2822).
+            std::string detail = widget->GetWindowBoundsInScreen().size().ToString();
             // The time is when this ran on the UI thread. Beside it, when the frame was
             // presented, so a UI thread late to run it shows apart from a late frame (#3181).
-            std::string detail = size;
             if (const std::optional<base::TimeDelta> presented =
                     SinceHandoverClicked(timing.presentation_feedback.timestamp)) {
               detail += base::StringPrintf(", presented at %.1f ms", presented->InMillisecondsF());
             }
             LogHandover("mini player on screen", detail);
           },
-          size));
+          widget->GetWeakPtr()));
     }
   }
 
@@ -169,10 +174,6 @@ MiniPlayerWatch& Watching() {
   return *watch;
 }
 
-// How far back from a release its speed is taken, as the Space pages' swipe takes it
-// (app/src/shell.rs).
-constexpr base::TimeDelta kReleaseHistory = base::Milliseconds(100);
-
 // Where a Mini Player was each time its move loop moved it, for the speed it's let go at. Where the
 // loop moves only its outline, and the window at the release, it's where the outline was (#3062).
 class MoveWatch : public views::WidgetObserver {
@@ -180,56 +181,28 @@ class MoveWatch : public views::WidgetObserver {
   explicit MoveWatch(views::Widget* widget)
       : outline_(platform::WatchOutlineMoves(
             widget,
-            base::BindRepeating(&MoveWatch::Moved, base::Unretained(this)))) {
-    Moved(widget->GetWindowBoundsInScreen().origin());
+            base::BindRepeating(&MoveWatch::OutlineMoved, base::Unretained(this)))) {
+    moves_.Window(widget->GetWindowBoundsInScreen().origin(), base::TimeTicks::Now());
     observation_.Observe(widget);
   }
 
-  // Its speed in points a second as it's let go at |released|, over the last kReleaseHistory, so a
-  // pause before the release slows it.
   gfx::Vector2dF Velocity(base::TimeTicks released) const {
-    const Move* from = &moves_.front();
-    for (const Move& move : moves_) {
-      if (move.when <= released - kReleaseHistory) {
-        from = &move;
-      }
-    }
-    const double seconds = (released - from->when).InSecondsF();
-    if (seconds <= 0) {
-      return gfx::Vector2dF();
-    }
-    const gfx::Vector2d moved = moves_.back().at - from->at;
-    return gfx::Vector2dF(moved.x() / seconds, moved.y() / seconds);
+    return MiniPlayerReleaseVelocity(moves_.moves(), released);
   }
-
-  // Its last move, if it came within kReleaseHistory of the release.
   gfx::Vector2dF LastMove(base::TimeTicks released) const {
-    if (moves_.size() < 2 || moves_.back().when < released - kReleaseHistory) {
-      return gfx::Vector2dF();
-    }
-    const gfx::Vector2d moved = moves_.back().at - moves_[moves_.size() - 2].at;
-    return gfx::Vector2dF(moved.x(), moved.y());
+    return MiniPlayerLastMove(moves_.moves(), released);
   }
 
   // views::WidgetObserver:
   void OnWidgetBoundsChanged(views::Widget* widget, const gfx::Rect& bounds) override {
-    Moved(bounds.origin());
+    moves_.Window(bounds.origin(), base::TimeTicks::Now());
   }
   void OnWidgetDestroying(views::Widget* widget) override { observation_.Reset(); }
 
  private:
-  struct Move {
-    base::TimeTicks when;
-    gfx::Point at;
-  };
+  void OutlineMoved(const gfx::Point& at) { moves_.Outline(at, base::TimeTicks::Now()); }
 
-  void Moved(const gfx::Point& at) {
-    if (moves_.empty() || moves_.back().at != at) {
-      moves_.push_back({base::TimeTicks::Now(), at});
-    }
-  }
-
-  std::vector<Move> moves_;
+  MiniPlayerMoves moves_;
   base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{this};
   base::ScopedClosureRunner outline_;
 };

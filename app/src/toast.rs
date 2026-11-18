@@ -278,33 +278,54 @@ pub fn open(
 /// Shows `text`, then `key`'s chip and the words after it if there's a key, for `time` from now,
 /// in place of any toast showing.
 pub fn show(text: &str, key: Option<(&str, &str)>, time: Duration, cx: &mut App) {
-    present(text, key, Vec::new(), Some(time), false, None, cx);
+    present(text, None, key, Vec::new(), Some(time), false, None, cx);
 }
 
 /// Shows `text` with `buttons` after it, for `time` from now and for as long as the pointer is
 /// over it, in place of any toast showing.
 pub fn show_with_buttons(text: &str, buttons: Vec<Button>, time: Duration, cx: &mut App) {
-    present(text, None, buttons, Some(time), false, None, cx);
+    present(text, None, None, buttons, Some(time), false, None, cx);
+}
+
+/// Shows `text` with `buttons` after it for `time`, as `show_with_buttons` does, and logs it as
+/// `logged`, as its words name what's the user's, such as a Board's name.
+pub fn show_logged_as(
+    text: &str,
+    logged: &str,
+    buttons: Vec<Button>,
+    time: Duration,
+    cx: &mut App,
+) {
+    present(
+        text,
+        Some(logged),
+        None,
+        buttons,
+        Some(time),
+        false,
+        None,
+        cx,
+    );
 }
 
 /// Shows `text` about `tab` with `buttons` after it, in place of any toast showing, until a button
 /// is pressed or `hide_held` takes it away, as for a page that stopped answering.
 pub fn show_held(text: &str, buttons: Vec<Button>, tab: u64, cx: &mut App) {
-    present(text, None, buttons, None, false, Some(tab), cx);
+    present(text, None, None, buttons, None, false, Some(tab), cx);
 }
 
 /// Shows `text` with `buttons` after it, in place of any toast showing, until a button is pressed
 /// or another toast takes its place, as for a question that can wait, such as whether to send a
 /// crash's report.
 pub fn show_until_answered(text: &str, buttons: Vec<Button>, cx: &mut App) {
-    present(text, None, buttons, None, false, None, cx);
+    present(text, None, None, buttons, None, false, None, cx);
 }
 
 /// Shows `text` with `buttons` after it, in place of any toast showing, until a button is pressed
 /// or `hide_resting` takes it away. Another toast takes its place for that one's time, and it comes
 /// back once that one has gone, as it says what keeps on, such as a trace recording.
 pub fn show_resting(text: &str, buttons: Vec<Button>, cx: &mut App) {
-    present(text, None, buttons.clone(), None, false, None, cx);
+    present(text, None, None, buttons.clone(), None, false, None, cx);
     let Some(window) = cx.try_global::<ToastWindow>().map(|toast| toast.0) else {
         return;
     };
@@ -373,6 +394,24 @@ pub fn showing(text: &str, cx: &App) -> bool {
         .is_some_and(|shown| shown.leaving.is_none() && shown.text == text)
 }
 
+/// Presses the button named `name` on the toast showing, as a click does, for the tests of what
+/// shows a toast. Returns whether one showed.
+#[cfg(test)]
+pub(crate) fn press(name: &str, cx: &mut App) -> bool {
+    let Some(window) = cx.try_global::<ToastWindow>().map(|toast| toast.0) else {
+        return false;
+    };
+    (window.update(cx, |toast, _, cx| {
+        let at = (toast.shown.as_ref())
+            .and_then(|shown| shown.buttons.iter().position(|button| button.name == name))?;
+        toast.press(at, point(px(0.), px(0.)), cx);
+        Some(())
+    }))
+    .ok()
+    .flatten()
+    .is_some()
+}
+
 /// The undo it offered has been done some other way: its toast goes, if it shows, whether it
 /// offers the undo with its button or names its key, as "Space deleted! Use ⌘Z to undo." does.
 pub fn hide_undo(cx: &mut App) {
@@ -402,7 +441,16 @@ pub fn hide_undo(cx: &mut App) {
 /// Shows how to leave full screen, as the window has gone full screen or another Space shows in
 /// it, in place of any toast showing.
 pub fn show_full_screen(cx: &mut App) {
-    present(NOTE, None, Vec::new(), Some(NOTE_TIME), true, None, cx);
+    present(
+        NOTE,
+        None,
+        None,
+        Vec::new(),
+        Some(NOTE_TIME),
+        true,
+        None,
+        cx,
+    );
 }
 
 /// The window has left full screen: the note on how to goes, if it shows.
@@ -421,6 +469,7 @@ pub fn hide_full_screen(cx: &mut App) {
 
 fn present(
     text: &str,
+    logged: Option<&str>,
     key: Option<(&str, &str)>,
     buttons: Vec<Button>,
     time: Option<Duration>,
@@ -442,7 +491,8 @@ fn present(
             } else {
                 format!(" [{}]", names.join(", "))
             };
-            log!("browser: toast shown {text}{words}{names}");
+            let logged = logged.unwrap_or(text);
+            log!("browser: toast shown {logged}{words}{names}");
             let timer = match time {
                 Some(time) => cx.spawn(async move |toast, cx| {
                     cx.background_executor().timer(time).await;
@@ -653,7 +703,8 @@ impl Render for Toast {
                 }
             })
             .collect();
-        // What it says, which VoiceOver says as it comes, wherever its cursor is.
+        // What it says, which a screen reader says as it comes, wherever its cursor is: the Mac's
+        // AccessKit announces a live region's value, and Windows' and Linux's its name (#3236).
         let said = match &shown.key {
             Some((key, rest)) => format!("{} {key} {rest}", shown.text),
             None => shown.text.to_string(),
@@ -663,6 +714,7 @@ impl Render for Toast {
             .when(a11y, |toast| {
                 toast
                     .role(Role::Status)
+                    .aria_label(said.clone())
                     .aria_value(said)
                     .a11y_synthetic_children(|builder| builder.parent_node().set_live(Live::Polite))
             })

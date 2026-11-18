@@ -154,7 +154,7 @@ jobs:
         battery calls cards count everyday extensions favorites hosts
         idle media notifications policies popup preview ranking switch-frames translate webrtc windows
         pictures boosts arrange-card foot-bar peek-motion rules overlays safe-start update-checks shots sidebar-right alt-click mini-bar
-        page-menu arrange arrange-trade arrange-drop panel-shadows
+        page-menu arrange arrange-trade arrange-drop arrange-order panel-shadows
       # The runs that don't apply to Windows, a line each with why, which the summary gives. They're
       # skipped even when named.
       WINDOWS_SKIPS: |
@@ -467,9 +467,11 @@ jobs:
             ":"*" $run "*)
               start=$SECONDS
               status=0
-              # Perf measures Chrome beside the app.
+              # Perf measures Chrome beside the app, and a lone adblock-native makes uBlock Origin's
+              # pass of the 50 sites before its own (#3260).
               limit=20m
               [ "$run" != perf ] || limit=40m
+              [ "$run" != adblock-native ] || limit=40m
               timeout "$limit" ./check.sh "$run" > "$out/$run.log" 2>&1 || status=$?
               # By the app's path, never by image name, which would reach any other Chrome. Before
               # the move, as Windows won't move a folder a process still has a file open in.

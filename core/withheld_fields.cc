@@ -1,7 +1,6 @@
 #include "browser_core/withheld_fields.h"
 
 #include <algorithm>
-#include <cstddef>
 
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
@@ -20,51 +19,36 @@ namespace {
 constexpr float kStripe = 2;
 constexpr float kPeriod = 9;
 
-// The field's background as drawn: the colour most of its four corners, just inside, have, as its
-// text rarely reaches a corner.
-SkColor Background(const SkBitmap& picture, const gfx::Rect& box) {
-  const int left = std::min(box.x() + 1, box.right() - 1);
-  const int right = std::max(box.right() - 2, box.x());
-  const int top = std::min(box.y() + 1, box.bottom() - 1);
-  const int bottom = std::max(box.bottom() - 2, box.y());
-  const SkColor corners[] = {picture.getColor(left, top), picture.getColor(right, top),
-                             picture.getColor(left, bottom), picture.getColor(right, bottom)};
-  SkColor most = corners[0];
-  std::ptrdiff_t count = 0;
-  for (SkColor corner : corners) {
-    const std::ptrdiff_t same = std::ranges::count(corners, corner);
-    if (same > count) {
-      most = corner;
-      count = same;
-    }
-  }
-  return SkColorSetA(most, SK_AlphaOPAQUE);
-}
-
-// The stripes' colour: a little darker than a light background, a little lighter than a dark one.
-SkColor Stripe(SkColor background) {
-  const int r = SkColorGetR(background);
-  const int g = SkColorGetG(background);
-  const int b = SkColorGetB(background);
-  if (r * 299 + g * 587 + b * 114 > 128 * 1000) {
-    return SkColorSetRGB(r * 85 / 100, g * 85 / 100, b * 82 / 100);
-  }
-  return SkColorSetRGB(r + (255 - r) / 4, g + (255 - g) / 4, b + (255 - b) / 4);
-}
+// The hatch's two greys, the same on every page: a colour taken from the field's pixels would
+// follow what it holds, and the picture of a withheld field shows nothing of that. A mid grey reads
+// as covered on a light page and a dark one.
+constexpr SkColor kGround = SkColorSetRGB(0xC8, 0xC8, 0xC8);
+constexpr SkColor kStripeColor = SkColorSetRGB(0xA6, 0xA6, 0xA6);
 
 }  // namespace
 
-bool Withheld(const FieldFacts& field) {
+Seen SeenOf(const FieldFacts& field) {
   if (field.value.empty()) {
-    return false;
+    return Seen::kEmpty;
   }
   if (field.secret || field.autofilled) {
-    return true;
+    return Seen::kFilled;
   }
-  if (field.typed && *field.typed == field.value) {
-    return false;
+  if ((field.typed && *field.typed == field.value) || field.fixed ||
+      (field.select && field.markup == field.value)) {
+    return Seen::kValue;
   }
-  return !field.fixed && field.markup != field.value;
+  return field.typed ? Seen::kChanged : Seen::kFilled;
+}
+
+bool CouldShow(const FieldFacts& field) {
+  return !field.value.empty() && !field.secret && !field.autofilled &&
+         (field.typed || field.fixed || field.select);
+}
+
+bool Withheld(const FieldFacts& field) {
+  const Seen seen = SeenOf(field);
+  return seen == Seen::kFilled || seen == Seen::kChanged;
 }
 
 bool Hatches(const FieldFacts& field, Hatched hatched) {
@@ -76,6 +60,7 @@ bool SecretAutocomplete(std::string_view autocomplete) {
        base::SplitStringPiece(autocomplete, base::kWhitespaceASCII, base::TRIM_WHITESPACE,
                               base::SPLIT_WANT_NONEMPTY)) {
     if (base::StartsWith(token, "cc-", base::CompareCase::INSENSITIVE_ASCII) ||
+        base::EndsWith(token, "password", base::CompareCase::INSENSITIVE_ASCII) ||
         base::EqualsCaseInsensitiveASCII(token, "one-time-code")) {
       return true;
     }
@@ -112,13 +97,12 @@ void Hatch(SkBitmap& picture, const std::vector<gfx::Rect>& boxes, float scale) 
     if (box.IsEmpty()) {
       continue;
     }
-    const SkColor background = Background(picture, box);
     canvas.save();
     canvas.clipRect(
         SkRect::Make(SkIRect::MakeXYWH(box.x(), box.y(), box.width(), box.height())));
-    canvas.drawColor(background);
+    canvas.drawColor(kGround);
     SkPaint stripe;
-    stripe.setColor(Stripe(background));
+    stripe.setColor(kStripeColor);
     stripe.setAntiAlias(true);
     stripe.setStrokeWidth(std::max(kStripe * scale, 1.f));
     // Lines rising to the right, each from the bottom edge, so the stripes meet every edge alike.

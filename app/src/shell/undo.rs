@@ -8,7 +8,7 @@ use gpui::{Context, SharedString};
 
 use crate::link_preview::Closed;
 
-use super::{Shell, Space};
+use super::{Shell, Space, live_folders::LiveSource};
 
 /// How long the toast that offers an Undo stays, and for as long as the pointer is over it.
 const OFFER_TIME: Duration = Duration::from_secs(5);
@@ -56,6 +56,7 @@ impl What {
     pub const MOVE_TO_SPACE: What = What::said("Move to Space", "Tab Moved to Space");
     pub const MOVE_FOLDER_TO_SPACE: What = What::said("Move to Space", "Folder Moved to Space");
     pub const DELETE_FOLDER: What = What::said("Delete Folder", "Folder Deleted");
+    pub const CONVERT_TO_FOLDER: What = What::quiet("Convert to Folder");
     pub const REMOVE_FROM_SPLIT: What = What::quiet("Remove from Split");
     pub const SPLIT: What = What::quiet("Split View");
     pub const SEPARATE_ALL: What = What::quiet("Separate All Tabs");
@@ -78,6 +79,7 @@ impl What {
     pub const EXPORT_INTO_FOLDER: What =
         What::said("Export into Folder", "Space Exported into Folder");
     pub const DELETE_ARCHIVED: What = What::said("Delete from Archive", "Deleted from Archive");
+    pub const DELETE_BOARD: What = What::said("Delete Board", "Board Deleted");
     pub const CLEAR_ARCHIVE: What = What::said("Clear Archive", "Archive Cleared");
     /// The command bar's trash, ⇧⌦ or ⌥⌘⌫ on a page or search from history. The row going from
     /// the list under the pointer is what it did, so there's no toast.
@@ -117,6 +119,8 @@ pub(super) struct Folder {
     index: usize,
     /// What it held, in order: the first tab of each split view, and the folders.
     children: Vec<u64>,
+    /// What filled it, if it was a Live Folder, which it's made again as.
+    live: Option<LiveSource>,
 }
 
 /// What a name, an icon or a colour belongs to. A Space's colour comes with the theme it's the
@@ -196,6 +200,14 @@ pub(super) enum Edit {
     Restore(Folder),
     /// Deletes a folder.
     Delete(u64),
+    /// Makes the plain folder that Convert to Folder left a Live Folder that `source` fills again,
+    /// in its place, with what it holds: the core makes Live Folders new, so it's a new one.
+    Relive {
+        folder: u64,
+        source: LiveSource,
+    },
+    /// Converts the Live Folder to a plain one, as Convert to Folder does.
+    Unlive(u64),
     /// Puts a tab in a split view with another, at its left end or right end.
     Join {
         tab: u64,
@@ -300,6 +312,19 @@ pub(super) enum Edit {
     PutBackSuggestion(u64),
     /// Takes it out again.
     RemoveSuggestion(u64),
+    /// Brings Board `id` of `profile` back from where Delete put it, and then, as its page finds
+    /// it there, reopens the window's tabs of it that Delete closed, by the steps `tabs`, the last
+    /// closed first.
+    RestoreBoard {
+        profile: u64,
+        id: String,
+        tabs: Vec<Edit>,
+    },
+    /// Takes Board `id` of `profile` out of the list again, and closes the window's tabs of it.
+    DeleteBoard {
+        profile: u64,
+        id: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -369,7 +394,7 @@ impl Edit {
                 id(&mut folder.container);
                 ids(&mut folder.children);
             }
-            Edit::Delete(folder) => id(folder),
+            Edit::Delete(folder) | Edit::Unlive(folder) | Edit::Relive { folder, .. } => id(folder),
             Edit::Join { tab, with, .. } => {
                 id(tab);
                 id(with);
@@ -396,6 +421,8 @@ impl Edit {
             | Edit::UndeleteTask(_)
             | Edit::DeleteTask(_) => {}
             Edit::PutBackSuggestion(_) | Edit::RemoveSuggestion(_) => {}
+            Edit::RestoreBoard { tabs, .. } => tabs.iter_mut().for_each(|tab| tab.rekey(from, to)),
+            Edit::DeleteBoard { .. } => {}
             Edit::Set(prop, _) => match prop {
                 Prop::TabName(each)
                 | Prop::TabIcon(each)
@@ -460,6 +487,11 @@ impl Edit {
                     .task(agent.clone(), crate::agents::task::TaskAction::Delete, cx);
                 Some(Edit::UndeleteTask(agent))
             }
+            Edit::RestoreBoard { profile, id, tabs } => {
+                shell.restore_board(profile, id.clone(), tabs, cx);
+                Some(Edit::DeleteBoard { profile, id })
+            }
+            Edit::DeleteBoard { profile, id } => shell.take_board(profile, id, cx),
             Edit::Reopen { tabs: closed, show } => {
                 let mut tabs = Vec::new();
                 let mut shown = None;
@@ -543,7 +575,9 @@ impl Edit {
                 })
             }
             Edit::Restore(folder) => {
-                let made = shell.restore_folder(&folder, cx);
+                // A Live Folder the core can't make live any more comes back plain, its tabs in
+                // it, rather than not at all.
+                let made = shell.restore_folder(&folder, true, cx)?;
                 shell.history.rekey(folder.id, made);
                 Some(Edit::Delete(made))
             }
@@ -552,6 +586,20 @@ impl Edit {
                 shell.browser.delete_folder(folder, cx);
                 Some(snapshot)
             }
+            Edit::Relive { folder, source } => {
+                let Some(Edit::Restore(mut snapshot)) = shell.folder_snapshot(folder) else {
+                    return None;
+                };
+                snapshot.live = Some(source);
+                // Made in the plain folder's place, it takes what that holds, and the empty
+                // plain one goes. One the core can't make live, the plain folder is already: the
+                // step can't be done, so it goes as any such step does, the folder untouched.
+                let made = shell.restore_folder(&snapshot, false, cx)?;
+                shell.browser.delete_folder(folder, cx);
+                shell.history.rekey(folder, made);
+                Some(Edit::Unlive(made))
+            }
+            Edit::Unlive(folder) => shell.convert_live_folder_now(folder, cx),
             Edit::Join { tab, with, left } => {
                 if !shell.has_tab(tab) || !shell.has_tab(with) {
                     return None;
@@ -1550,18 +1598,39 @@ impl Shell {
             container,
             index,
             children,
+            live: space.folders.live.get(&folder).copied(),
         }))
     }
 
-    /// Makes `folder` again where it was, puts what it held back in it, and returns its new id.
-    fn restore_folder(&mut self, folder: &Folder, cx: &mut Context<Self>) -> u64 {
-        let made = self.browser.create_folder(
-            folder.space,
-            &folder.name,
-            folder.container,
-            folder.index,
-            cx,
-        );
+    /// Makes `folder` again where it was, puts what it held back in it, and returns its new id. A
+    /// Live Folder comes back live, filled from its source; one the core can't make live comes
+    /// back `plain`, else not at all.
+    fn restore_folder(
+        &mut self,
+        folder: &Folder,
+        plain: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<u64> {
+        let live = (folder.live)
+            .map(|source| (self.browser).create_live_folder(folder.space, source, &folder.name, cx))
+            .filter(|&made| made != 0);
+        if folder.live.is_some() && live.is_none() && !plain {
+            return None;
+        }
+        let made = match live {
+            // The core makes it at the bottom of the pinned tabs.
+            Some(made) => {
+                (self.browser).move_folder(made, folder.container, folder.index, cx);
+                made
+            }
+            None => self.browser.create_folder(
+                folder.space,
+                &folder.name,
+                folder.container,
+                folder.index,
+                cx,
+            ),
+        };
         let mut index = 0;
         for &child in &folder.children {
             let panes = self.panes_in(folder.space, child);
@@ -1574,7 +1643,7 @@ impl Shell {
         if !folder.open {
             self.browser.set_folder_open(made, false, cx);
         }
-        made
+        Some(made)
     }
 
     pub(super) fn is_folder_anywhere(&self, row: u64) -> bool {
@@ -1693,7 +1762,10 @@ impl Shell {
     fn set_prop(&mut self, prop: Prop, value: &Value, cx: &mut Context<Self>) {
         let browser = self.browser.clone();
         match (prop, value) {
-            (Prop::TabName(tab), Value::Text(name)) => browser.rename_tab(tab, name, cx),
+            (Prop::TabName(tab), Value::Text(name)) => {
+                browser.rename_tab(tab, name, cx);
+                self.keep_board_name(tab, name, cx);
+            }
             (Prop::TabIcon(tab), Value::Text(icon)) => browser.set_icon(tab, icon, cx),
             (Prop::PinnedUrl(tab), Value::Text(url)) => browser.set_pinned_url(tab, url, cx),
             (Prop::FolderName(folder), Value::Text(name)) => {

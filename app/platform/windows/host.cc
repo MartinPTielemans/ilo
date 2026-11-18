@@ -12,6 +12,7 @@
 #include <commctrl.h>
 #include <commdlg.h>
 #include <dwmapi.h>
+#include <msctf.h>
 #include <shellapi.h>
 #include <shlobj.h>
 #include <shlwapi.h>
@@ -133,6 +134,13 @@ std::string ClassName(HWND hwnd) {
     GetClassNameA(hwnd, name, sizeof(name));
   }
   return name;
+}
+
+// Whether |hwnd| is a tab's dialog of browser window |root|: a window of Chromium's own that
+// |root| owns (PageDialogsInOwnWindow in the core), not one of the app's.
+bool TabDialogOf(HWND hwnd, HWND root) {
+  return hwnd && root && GetWindow(hwnd, GW_OWNER) == root && !host_floating_name(hwnd) &&
+         ClassName(hwnd).rfind("Chrome_WidgetWin_", 0) == 0;
 }
 
 // What check.sh calls the floating window |hwnd|, for the focus area's lines.
@@ -526,6 +534,19 @@ LRESULT CALLBACK FloatingProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpa
         // on it, so this one takes the keyboard back as the window has it (#1363).
         if (floating->keyboard && to && to == GetWindow(hwnd, GW_OWNER) && !Pressed()) {
           LogIn("focus", "%s takes the keyboard back", FloatingName(hwnd));
+          break;
+        }
+        // Chromium activates a tab's dialog, a window of its own, as it first shows: nor is that the
+        // user leaving, and it takes the keyboard back from the dialog, as the Mac's overlays do.
+        // A dialog never gets the keyboard from this, an agent's tab's included (#3242).
+        if (floating->keyboard && !Pressed() && TabDialogOf(to, GetWindow(hwnd, GW_OWNER))) {
+          LogIn("focus", "%s takes the keyboard back from a tab's dialog", FloatingName(hwnd));
+          Later([hwnd, to] {
+            if (IsWindowVisible(hwnd) && GetForegroundWindow() == to) {
+              SetForegroundWindow(hwnd);
+              SetFocus(hwnd);
+            }
+          });
           break;
         }
         floating->keyboard = false;
@@ -1751,7 +1772,8 @@ LRESULT CALLBACK KeyPressed(int code, WPARAM wparam, LPARAM lparam) {
 // shortcut until the bar has the keyboard, keys are held and then given to it in the order typed.
 // For a shortcut the page gets first, the core says if the page kept it and no bar opens
 // (host_release_held_keys). A hold lasts kHoldKeysMs at most, as the core's does. They're posted to
-// our own window only; SendInput would reach whatever app is in front (platform/host.h's warning).
+// our own window only, or given to the IME on this thread through TSF; SendInput would reach
+// whatever app is in front (platform/host.h's warning).
 std::vector<MSG> g_held_keys;
 bool g_holding_keys = false;
 // The window the keys wait for, or null for whichever bar opens.
@@ -1759,6 +1781,64 @@ HWND g_keys_for = nullptr;
 HHOOK g_held_hook = nullptr;
 UINT_PTR g_hold_timer = 0;
 constexpr UINT kHoldKeysMs = 1000;
+
+// The UI thread's TSF thread manager, which Chromium's pages and the IME use, or null:
+// CoCreateInstance hands back the one the thread has.
+ITfThreadMgr* ThreadManager() {
+  static ITfThreadMgr* manager = [] {
+    // CLSID_TF_ThreadMgr.
+    const CLSID thread_manager = {
+        0x529a9e6b, 0x6587, 0x4f23, {0xab, 0x9e, 0x9c, 0x7d, 0x68, 0x3e, 0x3c, 0x50}};
+    ITfThreadMgr* made = nullptr;
+    CoCreateInstance(thread_manager, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&made));
+    return made;
+  }();
+  return manager;
+}
+
+// A TSF document with nothing in it, which has TSF's focus while a hold lasts: Microsoft's IME
+// takes a key before the hold sees it, so with the page's document focused what's typed for a bar
+// would compose in the page (#1784).
+ITfDocumentMgr* EmptyDocument() {
+  static ITfDocumentMgr* empty = [] {
+    ITfDocumentMgr* made = nullptr;
+    if (ITfThreadMgr* manager = ThreadManager()) {
+      manager->CreateDocumentMgr(&made);
+    }
+    return made;
+  }();
+  return empty;
+}
+
+// The window that had the keyboard as the hold began, and the TSF document that had TSF's focus,
+// which gets it back as the hold ends if that window still has the keyboard.
+HWND g_held_from = nullptr;
+ITfDocumentMgr* g_held_document = nullptr;
+
+// Gives |held| to the IME of the TSF document with TSF's focus, as the input queue would, so it
+// composes there; or, if the IME doesn't take it, posts it to |to| as typed.
+void GiveHeldKey(const MSG& held, HWND to) {
+  static ITfKeystrokeMgr* keystrokes = [] {
+    ITfKeystrokeMgr* manager = nullptr;
+    if (ITfThreadMgr* threads = ThreadManager()) {
+      threads->QueryInterface(IID_PPV_ARGS(&manager));
+    }
+    return manager;
+  }();
+  BOOL eaten = FALSE;
+  if (keystrokes) {
+    if (held.message == WM_KEYDOWN || held.message == WM_SYSKEYDOWN) {
+      if (SUCCEEDED(keystrokes->TestKeyDown(held.wParam, held.lParam, &eaten)) && eaten) {
+        keystrokes->KeyDown(held.wParam, held.lParam, &eaten);
+      }
+    } else if (SUCCEEDED(keystrokes->TestKeyUp(held.wParam, held.lParam, &eaten)) && eaten) {
+      keystrokes->KeyUp(held.wParam, held.lParam, &eaten);
+    }
+  }
+  if (!eaten) {
+    PostMessageW(to, held.message, held.wParam, held.lParam);
+  }
+}
 
 // Gives the keys held to the window that now has the keyboard, unless they wait for another bar.
 void ReleaseKeys(HWND from) {
@@ -1779,8 +1859,25 @@ void ReleaseKeys(HWND from) {
     fprintf(stderr, "browser: held %zu key events for %s\n", g_held_keys.size(),
             to_bar ? "GPUIPanel" : "BrowserCoreNSWindow");
   }
+  // A page that kept the shortcut still has the keyboard: its document gets TSF's focus back, and
+  // the keys held go to the IME there, so they compose in the page as typed. A bar that took the
+  // keyboard has TSF's focus on its own already, but its window is IMM32's, which the keystroke
+  // manager has no document for, so the keys go to it as posted plain keys, and only those typed
+  // after it has the keyboard compose (#1784).
+  const HWND held_from = std::exchange(g_held_from, nullptr);
+  bool composes = false;
+  if (ITfDocumentMgr* document = std::exchange(g_held_document, nullptr)) {
+    if (GetFocus() == held_from && SUCCEEDED(ThreadManager()->SetFocus(document))) {
+      composes = !to_bar && to == held_from;
+    }
+    document->Release();
+  }
   for (const MSG& held : g_held_keys) {
-    PostMessageW(to, held.message, held.wParam, held.lParam);
+    if (composes) {
+      GiveHeldKey(held, to);
+    } else {
+      PostMessageW(to, held.message, held.wParam, held.lParam);
+    }
   }
   g_held_keys.clear();
 }
@@ -1821,6 +1918,21 @@ void HoldKeys(HWND window) {
   g_holding_keys = true;
   g_keys_for = window;
   g_hold_timer = SetTimer(nullptr, 0, kHoldKeysMs, HoldTimedOut);
+  // TSF's focus goes to an empty document until the hold ends, so the IME composes nothing in the
+  // page meanwhile and the keys come to the hold as typed.
+  ITfThreadMgr* manager = ThreadManager();
+  ITfDocumentMgr* empty = EmptyDocument();
+  if (g_held_document || !manager || !empty) {
+    return;
+  }
+  ITfDocumentMgr* focused = nullptr;
+  if (SUCCEEDED(manager->GetFocus(&focused)) && focused && focused != empty &&
+      SUCCEEDED(manager->SetFocus(empty))) {
+    g_held_from = GetFocus();
+    g_held_document = focused;
+  } else if (focused) {
+    focused->Release();
+  }
 }
 
 // A held Escape's repeats reach only the window its press went to, as on the Mac (host.mm's
@@ -2854,6 +2966,13 @@ std::map<HWND, bool>& WindowButtonsShown() {
   return shown;
 }
 
+// The browser windows whose buttons are at the right with the sidebar on the left
+// (host_set_window_buttons_right).
+std::set<HWND>& ButtonsRight() {
+  static std::set<HWND> right;
+  return right;
+}
+
 // How far down the top edge resizes, as thick as Windows' resize border on the other edges.
 int TopEdge(HWND root) {
   const UINT dpi = GetDpiForWindow(root);
@@ -2902,11 +3021,11 @@ int FrameHit(HWND root, POINT at) {
   }
   // Maximize, the second of shell.rs's WINDOW_BUTTONS in Windows' order (windows_buttons), 43
   // from the left and window-button-y (24) down, its plate windows-button-plate (22) across
-  // (design/tokens.toml): kept in step with them. With the sidebar on the right the group is
-  // there, close at the corner, and maximize 43 from the right.
+  // (design/tokens.toml): kept in step with them. With the sidebar on the right, or the top bar
+  // on, the group is at the right, close at the corner, and maximize 43 from the right.
   const double scale = Scale(root);
-  const double across = SidebarRight().count(root) ? client.right / scale - at.x / scale
-                                                   : at.x / scale;
+  const bool right = SidebarRight().count(root) || ButtonsRight().count(root);
+  const double across = right ? client.right / scale - at.x / scale : at.x / scale;
   auto shown = WindowButtonsShown().find(root);
   if (shown != WindowButtonsShown().end() && shown->second && std::abs(across - 43) <= 11 &&
       std::abs(at.y / scale - 24) <= 11) {
@@ -3139,6 +3258,7 @@ LRESULT CALLBACK FrameProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam
       }
       WindowButtonsShown().erase(hwnd);
       SidebarRight().erase(hwnd);
+      ButtonsRight().erase(hwnd);
       FrameUi().erase(hwnd);
       std::erase_if(LittleViews(), [hwnd](HWND view) {
         return !IsWindow(view) || GetAncestor(view, GA_ROOT) == hwnd;
@@ -4845,6 +4965,9 @@ void host_hide_link_target(double fade) {
   FadeOut(g_link_target, fade, MaybeStopWatchingPointer);
 }
 
+// Windows blend with what's under them, so the room round an overlay's outline shows through.
+void host_outline_overlay(void*, double, double, double, double, double) {}
+
 bool host_mouse_down(void) {
   return Pressed();
 }
@@ -5137,6 +5260,18 @@ void host_set_sidebar_right(void* ui_view, bool right) {
     SidebarRight().insert(root);
   } else {
     SidebarRight().erase(root);
+  }
+}
+
+void host_set_window_buttons_right(void* ui_view, bool right) {
+  HWND root = Root(ui_view);
+  if (!root) {
+    return;
+  }
+  if (right) {
+    ButtonsRight().insert(root);
+  } else {
+    ButtonsRight().erase(root);
   }
 }
 

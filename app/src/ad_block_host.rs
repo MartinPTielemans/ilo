@@ -54,6 +54,14 @@ impl choice::Host for Choice {
 
 static BLOCKER: LazyLock<Arc<Blocker>> = LazyLock::new(|| Arc::new(Blocker::new()));
 
+/// The browser's own engine while it blocks, for a request the core makes itself, which no ad
+/// blocker sees, as a link card's picture: Some(None) while it blocks and its first engine hasn't
+/// loaded, and None with blocking off or uBlock Origin the blocker. Never waits.
+pub(crate) fn blocking_engine() -> Option<Option<Arc<ad_block::Engine>>> {
+    let blocks = launch().engine == Engine::Native && unsafe { bc::bc_ad_blocking() };
+    blocks.then(|| BLOCKER.loaded())
+}
+
 /// Where the compiled engine is kept for the next launch: the profile folder Chromium was given.
 static CACHE: OnceLock<PathBuf> = OnceLock::new();
 

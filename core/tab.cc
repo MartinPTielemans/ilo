@@ -527,6 +527,15 @@ void Tab::FocusPage(content::WebContents* contents) {
 }
 
 // static
+void Tab::FocusPageEnd(content::WebContents* contents, bool last) {
+  if (Tab* tab = FromWebContents(contents); tab && tab->system_page_) {
+    tab->system_page_->Focus();
+  } else {
+    contents->FocusThroughTabTraversal(last);
+  }
+}
+
+// static
 bool Tab::AskAppAboutKey(bool (*callback)(void*, bc_id, const bc_key*),
                          bc_id tab,
                          const input::NativeWebKeyboardEvent& event,

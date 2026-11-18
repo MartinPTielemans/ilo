@@ -116,6 +116,8 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     "settings.share-space-radius",
     "settings.share-tile-radius",
     "mini-bar.radius",
+    // A card's recent rows, inside its picture's box (#3074).
+    "hover-card.recent-row-radius",
 ];
 
 #[test]
@@ -167,6 +169,10 @@ fn a_corner_inside_another_is_concentric() {
     assert_eq!(
         hover_card::RADIUS,
         hover_card::PICTURE_RADIUS + hover_card::PADDING
+    );
+    assert_eq!(
+        hover_card::PICTURE_RADIUS,
+        hover_card::RECENT_ROW_RADIUS + hover_card::PADDING
     );
     assert_eq!(mini_bar::RADIUS, mini_bar::BUTTON_RADIUS + mini_bar::INSET);
     assert_eq!(

@@ -744,12 +744,12 @@ class Follower : public extensions::ExtensionRegistryObserver,
       // out the reload as it first starts). Chrome loads it back as one from its extensions page,
       // which its policy turns off while developer mode is, so it would block nothing until the
       // next launch. Not inside the registry's notification.
-      reloaded_ = true;
       base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
           FROM_HERE, base::BindOnce(&Follower::LoadAgain, weak_factory_.GetWeakPtr()));
-    } else if (std::exchange(reloaded_, false)) {
-      // Loaded again, it keeps the reason Chrome turned it off for, which the user's setting
-      // clears.
+    } else {
+      // Each load keeps the reasons it was off for, Chrome's own included, so one for a reload a
+      // quit cut short stays at every launch: Chrome clears that only for what loaded before this
+      // (#3063). The user's setting decides at each load, as launch's own look can come before it.
       base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
           FROM_HERE, base::BindOnce(&ApplyAdBlocking));
     }
@@ -761,8 +761,6 @@ class Follower : public extensions::ExtensionRegistryObserver,
 
   const raw_ptr<Profile> profile_;
   const raw_ptr<extensions::EventRouter> event_router_;
-  // Whether it reloaded itself and hasn't been loaded again since.
-  bool reloaded_ = false;
   base::ScopedObservation<extensions::ExtensionRegistry, extensions::ExtensionRegistryObserver>
       observation_{this};
   base::WeakPtrFactory<Follower> weak_factory_{this};

@@ -177,8 +177,11 @@ start c "$PWD/$out/sync-devices-c" 7
 open_sign_in
 sign_in
 await '^browser: account NeedsSecret None$' || fail "C, signed in, didn't need the account's secret"
+# C offers to pair with A and B next, whose Cancel row moves the words' button down.
+await '^browser: account Pairing None$' || fail "C, needing the secret, didn't offer to pair"
 settings_keyboard
-at=$(drawn "sync use-words") || fail "C's Settings › Sync didn't offer the words"
+at=$(drawn_after "sync use-words" '^browser: account Pairing None$') ||
+  fail "C's Settings › Sync didn't offer the words"
 send clickkey $at
 send type $words
 send key return

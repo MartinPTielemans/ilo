@@ -18,23 +18,44 @@ namespace browser_core {
 struct FieldFacts {
   // What it holds now, as the accessibility tree reads it.
   std::u16string value;
-  // A password field, now or ever (the page may have made one a text field), or a card's or a
-  // one-time code's, by its autocomplete.
+  // A password field, now or ever in its document (the page may have made one a text field), or
+  // a password's, a card's or a one-time code's by its autocomplete.
   bool secret = false;
   // Chromium's autofill filled it, or shows a fill in it.
   bool autofilled = false;
   // Disabled or read-only, which neither the user nor autofill can fill.
   bool fixed = false;
-  // Its value in the page's markup: an input's value attribute, a textarea's text, or a select's
-  // option marked selected.
+  // A select, by its role: the only field whose markup counts. A field is the page's own only
+  // while the page's markup is what filled it, which the core can't tell of an input or a textarea.
+  bool select = false;
+  // A select's value in the page's markup: its option marked selected, else its first.
   std::optional<std::u16string> markup;
   // What the agent's own typing or choosing left in it, as the field read after it settled.
   std::optional<std::u16string> typed;
 };
 
-// Whether what the field holds is withheld from an agent: anything the core can't name as the
-// agent's own unchanged typing or the page's own value, so the user's typing and what autofill or a
-// password manager put there, and a secret field always. An empty one has nothing to withhold.
+// What an agent sees of a field, in its outline and its pictures alike, so the two can't drift.
+enum class Seen {
+  // It holds nothing.
+  kEmpty,
+  // What it holds: the agent's own typing, unchanged, or the page's own value, a read-only or
+  // disabled field's or a select's option its markup marks selected.
+  kValue,
+  // That it holds something, which the core can't name as either: the user's typing, what
+  // autofill or a password manager put there, and a secret field's contents always, even the
+  // agent's own typing.
+  kFilled,
+  // That it holds something else than the agent typed there.
+  kChanged,
+};
+Seen SeenOf(const FieldFacts& field);
+
+// Whether reading the field's attributes and markup could let SeenOf show what it holds: what the
+// agent typed, a read-only or disabled field's, or a select's. Any other filled field reads filled
+// whatever they say, so the page isn't asked about it.
+bool CouldShow(const FieldFacts& field);
+
+// Whether what the field holds is withheld from an agent: anything SeenOf doesn't show.
 bool Withheld(const FieldFacts& field);
 
 // Which fields a picture hatches: those whose contents an agent doesn't see (Withheld), as its
@@ -42,7 +63,9 @@ bool Withheld(const FieldFacts& field);
 enum class Hatched { kWithheld, kEveryValue };
 bool Hatches(const FieldFacts& field, Hatched hatched);
 
-// Whether an autocomplete attribute's tokens name a card's or a one-time code's field.
+// Whether an autocomplete attribute's tokens name a password's, a card's or a one-time code's
+// field: a token ending in "password", as "current-password" and "new-password", one starting
+// "cc-", or "one-time-code".
 bool SecretAutocomplete(std::string_view autocomplete);
 
 // |box|, in a frame's CSS pixels, in its parent's: cut to the frame's |frame| box there, then moved
@@ -57,9 +80,9 @@ gfx::Rect InPicture(const gfx::RectF& box,
                     const gfx::Rect& source,
                     const gfx::Size& picture);
 
-// Paints each of |boxes| over with a hatch in its own background, as a filled field whose contents
-// are withheld looks in an agent's picture: filled, with nothing of the text, not even its length.
-// |scale| is the picture's pixels per CSS pixel.
+// Paints each of |boxes| over with a grey hatch, as a filled field whose contents are withheld
+// looks in an agent's picture: filled, with nothing of the text, not even its length, and the
+// same whatever the field holds. |scale| is the picture's pixels per CSS pixel.
 void Hatch(SkBitmap& picture, const std::vector<gfx::Rect>& boxes, float scale);
 
 }  // namespace browser_core
