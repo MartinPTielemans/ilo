@@ -7,6 +7,8 @@ every process of the browser.
                              each one's kind on Windows only when asked, as it's slow there
   usage.py memory FILE       prints the memory summed, in MiB, and how many processes
   usage.py kinds FILE        prints the memory by kind of process, in MiB, the most first
+  usage.py peak FILE KIND    prints the most memory any process of KIND took in its life, in MiB,
+                             or nothing where the snapshot read none, as on the Mac
   usage.py idle-kinds A B     prints the CPU from snapshot A to B by kind of process, the most first
   usage.py idle FILE...      prints each window's CPU, % of one core, and wakeups a second, from
                              each snapshot to the next, as "cpu wakeups" a line
@@ -16,7 +18,8 @@ interrupt wakeups, as Ardia's acperf.swift reads them. Linux has no wakeup count
 thread's context switches, and memory is RssAnon and VmSwap, Chromium's private footprint there.
 On Windows it's NtQuerySystemInformation's processes: PagefileUsage (private bytes, Chromium's
 footprint there), user and kernel time, and each thread's context switches. Context switches count
-only the threads still running, so a window takes no process's below zero.
+only the threads still running, so a window takes no process's below zero. A process's peak is
+Linux's VmHWM and Windows' PeakWorkingSetSize, kept apart from the rest in the snapshot.
 """
 
 import ctypes
@@ -37,7 +40,7 @@ def kind_of(args):
     return "browser"
 
 
-def mac(procs, kinds):
+def mac(procs, kinds, peaks):
     lib = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
 
     class Timebase(ctypes.Structure):
@@ -67,7 +70,7 @@ def mac(procs, kinds):
     return seen
 
 
-def linux(procs, kinds):
+def linux(procs, kinds, peaks):
     hz = os.sysconf("SC_CLK_TCK")
     seen = {}
     for pid in filter(str.isdigit, os.listdir("/proc")):
@@ -91,10 +94,12 @@ def linux(procs, kinds):
         kb = sum(int(status.get(key, "0 kB").split()[0]) for key in ("RssAnon", "VmSwap"))
         # utime and stime, the 14th and 15th of stat's fields, the 12th and 13th after its name.
         seen[pid] = [kind_of(args), (int(fields[11]) + int(fields[12])) / hz, switches, kb * 1024]
+        if "VmHWM" in status:
+            peaks[pid] = int(status["VmHWM"].split()[0]) * 1024
     return seen
 
 
-def windows(procs, kinds):
+def windows(procs, kinds, peaks):
     from ctypes import wintypes
 
     ntdll = ctypes.WinDLL("ntdll")
@@ -133,6 +138,7 @@ def windows(procs, kinds):
                     for at in range(offset + 256, offset + 256 + 80 * threads, 80))
                 seen[str(pid)] = ["process", (user + kernel) / 1e7, switches,
                                   int.from_bytes(entry[184:192], "little")]
+                peaks[str(pid)] = int.from_bytes(entry[136:144], "little")
             kernel32.CloseHandle(handle)
         if not next_offset:
             break
@@ -164,9 +170,10 @@ def main():
     if command == "snap":
         procs, path = sys.argv[2], sys.argv[3]
         taker = {"darwin": mac, "win32": windows}.get(sys.platform, linux)
-        seen = taker(procs, sys.argv[4:] == ["kinds"])
+        peaks = {}
+        seen = taker(procs, sys.argv[4:] == ["kinds"], peaks)
         with open(path, "w") as f:
-            json.dump({"time": time.time(), "procs": seen}, f)
+            json.dump({"time": time.time(), "procs": seen, "peaks": peaks}, f)
     elif command == "memory":
         seen = read(sys.argv[2])["procs"]
         print(f"{sum(p[3] for p in seen.values()) / 1048576:.0f} {len(seen)}")
@@ -175,6 +182,15 @@ def main():
         for kind, _, _, footprint in read(sys.argv[2])["procs"].values():
             totals[kind] = totals.get(kind, 0) + footprint / 1048576
         print(", ".join(f"{kind} {mib:.0f}" for kind, mib in sorted(totals.items(), key=lambda t: -t[1])))
+    elif command == "peak":
+        # Of the processes whose kind was read: on Windows, where a snapshot without kinds, or
+        # whose command lines didn't read, has every process "process", that's none (#3315).
+        snap = read(sys.argv[2])
+        kind = sys.argv[3]
+        found = [snap.get("peaks", {}).get(pid) for pid, p in snap["procs"].items() if p[0] == kind]
+        found = [n for n in found if n]
+        if found:
+            print(round(max(found) / 1048576))
     elif command == "idle-kinds":
         a, b = read(sys.argv[2]), read(sys.argv[3])
         secs = b["time"] - a["time"]
