@@ -1372,11 +1372,36 @@ void AppActivating(bool active, DWORD thread) {
   }
 }
 
+// A window of ours hid. A tab's dialog that hides with the keyboard, as Chrome hides one when its
+// pane loses the focus, gives it to its browser window: Chromium hides a window without activating
+// another (HWNDMessageHandler::Hide), where SW_HIDE would, so the hidden dialog stayed the active
+// window and the keys after went to it unheard, as Go to Pane 2 after Go to Pane 1 from Chrome's
+// warning before http did (#3330).
+void CALLBACK WindowHid(HWINEVENTHOOK, DWORD, HWND hwnd, LONG object, LONG child, DWORD, DWORD) {
+  if (object != OBJID_WINDOW || child != CHILDID_SELF || !hwnd || GetForegroundWindow() != hwnd ||
+      IsWindowVisible(hwnd)) {
+    return;
+  }
+  HWND root = GetWindow(hwnd, GW_OWNER);
+  if (!TabDialogOf(hwnd, root) || !UiViewOf(root) || !IsWindowVisible(root) || IsIconic(root)) {
+    return;
+  }
+  // check.sh reads this line.
+  fprintf(stderr, "browser: a tab's dialog hid with the keyboard, which goes to its window\n");
+  SetForegroundWindow(root);
+}
+
 void WatchForeground() {
   static HWINEVENTHOOK hook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND,
                                               nullptr, ForegroundChanged, 0, 0,
                                               WINEVENT_OUTOFCONTEXT);
   (void)hook;
+  // Our own windows' alone, which only hide as the UI thread runs, so it hears them at its next
+  // message, as it goes back to its loop.
+  static HWINEVENTHOOK hid =
+      SetWinEventHook(EVENT_OBJECT_HIDE, EVENT_OBJECT_HIDE, nullptr, WindowHid,
+                      GetCurrentProcessId(), 0, WINEVENT_OUTOFCONTEXT);
+  (void)hid;
 }
 
 Floating g_overlays[6];
