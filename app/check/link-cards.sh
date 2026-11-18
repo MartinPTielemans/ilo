@@ -180,6 +180,10 @@ if [ "$active" != 1 ]; then
   echo "skip: link cards. Browser wasn't the active app, so the page got no keys."
   exit 0
 fi
+# Light by choice, since a runner's system can be dark (the hosted Mac's is), and the
+# captures before the dark pass are the light ones.
+send menu "Appearance › Light"
+expect '^browser: appearance light$' "View › Appearance › Light didn't turn the UI light"
 
 # The window's points of the links' bands, each 80 tall, below the page's top inset.
 page_link="600 50"
