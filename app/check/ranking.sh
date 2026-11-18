@@ -230,4 +230,7 @@ expect '^browser: command bar hidden$' "escape didn't close the command bar"
 
 exec 3>&-
 quit
+# Its server stops with it, as the runs after it in the call start their own (#3345).
+kill "$tls" 2> /dev/null || true
+tls= tls_port=
 echo "ok: the command bar lists the page shown last for \"ranking\" ($shown_rows), one row for two GitHub pages from history with one title, and for \"rise\" the last of four open tabs shown first, as Switch to Tab, the search second and the two tabs shown before it after, the first not risen, and a closed tab's row ends "Closed today · Reopen" and a visited page's "Visited today". Windows: $out/ranking-shown-last.png, $out/ranking-one-title.png, $out/ranking-tabs-rise.png, $out/ranking-closed-visited.png"

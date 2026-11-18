@@ -14,6 +14,7 @@
 #include "base/scoped_observation.h"
 #include "base/task/cancelable_task_tracker.h"
 #include "base/time/time.h"
+#include "browser_core/agent_job_voter.h"
 #include "browser_core/platform/system_page.h"
 #include "browser_core/public/browser_core.h"
 #include "browser_core/session.h"
@@ -97,6 +98,9 @@ class Tab : public content::WebContentsObserver,
   static gfx::NativeView PageViewOf(content::WebContents* contents);
   // Gives |contents|'s page the keyboard.
   static void FocusPage(content::WebContents* contents);
+  // Focuses |contents|'s first control, or its |last|. The other engine's page takes the keyboard
+  // where it had it, as WebKit has no public way to focus an end.
+  static void FocusPageEnd(content::WebContents* contents, bool last);
   // Asks the app, through |callback|, about a key going down in |tab|'s page, whose focused element
   // takes text if |editing|. Returns whether the app used it.
   static bool AskAppAboutKey(bool (*callback)(void*, bc_id, const bc_key*),
@@ -312,6 +316,7 @@ class Tab : public content::WebContentsObserver,
   void DidFinishNavigation(content::NavigationHandle* navigation) override;
   void DidStartLoading() override;
   void DidStopLoading() override;
+  void DidFirstVisuallyNonEmptyPaint() override;
   void NavigationEntriesDeleted() override;
   void DidFinishLoad(content::RenderFrameHost* frame, const GURL& url) override;
   void RenderFrameHostChanged(content::RenderFrameHost* old_host,
@@ -337,6 +342,7 @@ class Tab : public content::WebContentsObserver,
   bool SystemPageKey(const input::NativeWebKeyboardEvent& event,
                      bool before_page,
                      bool editing) override;
+  bool SystemPageFocusLeft(bool reverse) override;
   void SystemPageClicked() override;
   void SystemPageOutputRestricted() override;
 
@@ -428,6 +434,8 @@ class Tab : public content::WebContentsObserver,
   // the last launch saved it with.
   scoped_refptr<content::SessionStorageNamespaceHandle> storage_;
   bool unloading_ = false;
+  // A load the user is looking at, which an agent's job steps aside for.
+  UserLoad user_load_;
   std::string name_;
   std::string icon_;
   // bc_tab_set_volume's, from 0 to 1.

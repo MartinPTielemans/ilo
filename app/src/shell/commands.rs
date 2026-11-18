@@ -1743,7 +1743,7 @@ impl Shell {
             }
             // Escape closes the Library, after a picker over it, which has the keyboard, has
             // closed (the owner, #1074; Arc's doesn't).
-            Command::Stop if self.library_open => return self.set_library(false, cx),
+            Command::Stop if self.library_open => return self.escape_library(cx),
             // Escape leaves full screen when there's no load to stop, as the note there says.
             Command::Stop if self.full_screen && !self.page_fullscreen => {
                 if !self.page(self.selected).loading {
@@ -1820,8 +1820,9 @@ impl Shell {
             Command::NewNote => return self.browser.new_note(self.space, None, cx),
             Command::NewBoard => return self.new_board(cx),
             Command::ViewBoards => {
-                return self
-                    .library_command(cx, |shell, cx| shell.view_section(Section::Boards, cx));
+                return self.library_command(from, cx, |shell, cx| {
+                    shell.view_section(Section::Boards, cx)
+                });
             }
             Command::NewNoteSplit => {
                 let with = self.selected;
@@ -1872,29 +1873,34 @@ impl Shell {
             Command::ToggleSidebar => return self.toggle_sidebar(cx),
             Command::Appearance(appearance) => return self.set_app_appearance(appearance, cx),
             Command::ViewLibrary => {
-                return self
-                    .library_command(cx, |shell, cx| shell.set_library(!shell.library_open, cx));
+                return self.library_command(from, cx, |shell, cx| {
+                    shell.set_library(!shell.library_open, cx)
+                });
             }
             Command::ViewArchive => {
-                return self
-                    .library_command(cx, |shell, cx| shell.view_section(Section::Archive, cx));
+                return self.library_command(from, cx, |shell, cx| {
+                    shell.view_section(Section::Archive, cx)
+                });
             }
             Command::ViewDownloads => {
-                return self
-                    .library_command(cx, |shell, cx| shell.view_section(Section::Downloads, cx));
+                return self.library_command(from, cx, |shell, cx| {
+                    shell.view_section(Section::Downloads, cx)
+                });
             }
             Command::ViewMedia => {
                 return self
-                    .library_command(cx, |shell, cx| shell.view_section(Section::Media, cx));
+                    .library_command(from, cx, |shell, cx| shell.view_section(Section::Media, cx));
             }
             Command::ViewAgents => {
-                return self
-                    .library_command(cx, |shell, cx| shell.view_section(Section::Agents, cx));
+                return self.library_command(from, cx, |shell, cx| {
+                    shell.view_section(Section::Agents, cx)
+                });
             }
             Command::NewBoost | Command::EditBoost => return self.open_boost(cx),
             Command::ViewBoosts => {
-                return self
-                    .library_command(cx, |shell, cx| shell.view_section(Section::Boosts, cx));
+                return self.library_command(from, cx, |shell, cx| {
+                    shell.view_section(Section::Boosts, cx)
+                });
             }
             Command::ClearArchive => return self.clear_archive(cx),
             Command::NewSpace => return self.new_space(cx),

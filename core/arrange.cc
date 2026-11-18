@@ -1290,8 +1290,12 @@ constexpr char16_t kScript[] =
         const c = carry;
         let saved = null;
         if (!mode.previewing) {
+          // A rest that found the drop doesn't fit holds it refused until the pointer moves on, so
+          // letting go there lands nothing, not the drop the move showed before it (#3003).
+          const held = c.drop && c.drop.change === CHANGE.REFUSED && c.rest &&
+            Math.hypot(a.x - c.rest.x, a.y - c.rest.y) < LIFT;
           c.x = a.x; c.y = a.y;
-          c.drop = still(() => dropAt(a.x, a.y, !!a.free));
+          if (!held) c.drop = still(() => dropAt(a.x, a.y, !!a.free));
         }
         const d = c.drop;
         const keep = mode.previewing;
@@ -1633,6 +1637,7 @@ void Arrange::End(bool tell) {
   pressed_ = false;
   scrolling_ = false;
   move_.reset();
+  pointer_.reset();
   told_.reset();
   rest_.Stop();
   settle_.Stop();
@@ -1825,6 +1830,8 @@ bool Arrange::OnMouse(content::RenderWidgetHost* widget, const blink::WebMouseEv
                               .Set("x", at.x() / zoom)
                               .Set("y", at.y() / zoom)
                               .Set("free", (event.GetModifiers() & kFreeKey) != 0);
+  const bool still = pointer_ == point;
+  pointer_ = point.Clone();
   switch (event.GetType()) {
     case Type::kMouseDown:
       if (!left) {
@@ -1838,6 +1845,9 @@ bool Arrange::OnMouse(content::RenderWidgetHost* widget, const blink::WebMouseEv
       Run("down", std::move(point), base::BindOnce(&Arrange::Answered, weak_factory_.GetWeakPtr()));
       return true;
     case Type::kMouseMove:
+      if (still) {
+        return pressed_;
+      }
       // Moves without a press still reach the page, which the outline follows.
       move_ = std::move(point);
       if (!moving_) {

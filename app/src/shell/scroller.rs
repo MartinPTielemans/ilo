@@ -102,14 +102,14 @@ impl Shell {
                     // check.sh waits for these lines.
                     crate::log!("browser: scroller shown");
                 }
-                self.scroller.moved = Some(Instant::now());
+                self.scroller.moved = Some(self.clock.now());
                 self.wake_scroller(cx);
             }
         }
         let Some(moved) = self.scroller.moved else {
             return;
         };
-        let since = moved.elapsed().as_secs_f32();
+        let since = self.since(moved);
         if since >= HOLD + FADE {
             self.scroller.moved = None;
             crate::log!("browser: scroller hidden");
@@ -130,7 +130,7 @@ impl Shell {
                     let left = shell
                         .scroller
                         .moved
-                        .map(|moved| Duration::from_secs_f32(HOLD).saturating_sub(moved.elapsed()));
+                        .map(|moved| Duration::from_secs_f32((HOLD - shell.since(moved)).max(0.)));
                     if left.is_none_or(|left| left.is_zero()) {
                         shell.scroller.wake = None;
                         cx.notify();
@@ -157,7 +157,7 @@ impl Shell {
         let Some(moved) = self.scroller.moved else {
             return 0.;
         };
-        let since = moved.elapsed().as_secs_f32();
+        let since = self.since(moved);
         (1. - (since - HOLD).max(0.) / FADE).clamp(0., 1.)
     }
 

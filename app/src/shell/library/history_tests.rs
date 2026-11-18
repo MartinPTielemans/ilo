@@ -848,9 +848,11 @@ fn window_shortcuts(before: &str, cx: &mut TestAppContext) -> Vec<String> {
     });
     cx.update(|window, cx| window.focus(&search, cx));
     cx.run_until_parked();
-    if !before.is_empty() {
+    if before == "down" {
         cx.simulate_keystrokes(before);
         assert!(ringed(&shell, cx).is_some(), "{before} rang no row");
+    } else if !before.is_empty() {
+        cx.simulate_keystrokes(before);
     }
     let mut did = Vec::new();
     for key in ["cmd-z", "cmd-f", "cmd-w"] {
@@ -872,4 +874,23 @@ fn the_rows_ring_leaves_the_windows_shortcuts_as_they_are(cx: &mut TestAppContex
     let without = window_shortcuts("", cx);
     let with = window_shortcuts("down", cx);
     assert_eq!(with, without);
+}
+
+/// Tab from the field to the Library's sections moves the keyboard and nothing else: the window's
+/// shortcuts make the same calls and leave the Library as they do from the field.
+#[gpui::test]
+fn a_section_stop_leaves_the_windows_shortcuts_as_they_are(cx: &mut TestAppContext) {
+    let calls = |did: Vec<String>| -> Vec<String> {
+        did.into_iter()
+            .map(|each| each.split(", field focused").next().unwrap().to_owned())
+            .collect()
+    };
+    let without = window_shortcuts("", cx);
+    let with = window_shortcuts("tab", cx);
+    assert!(
+        with.iter()
+            .all(|each| each.ends_with("field focused false")),
+        "Tab left the field"
+    );
+    assert_eq!(calls(with), calls(without));
 }

@@ -9,9 +9,10 @@
 # from the window in an empty Space and with a page, F6 from the page and the arrows down the rows
 # have NVDA say something, with UI Automation's focus off GPUI's unnamed root and, in the sidebar,
 # on the ringed row; ↓ in the bar has it say the suggestion selected and where it stands, ⇧Tab from
-# a page's first control keeps the keyboard in ilo's window, and the Library's key has it on the
-# Library's search field, where ↓ has it say the row ringed and where it stands. Elsewhere it
-# records.
+# a page's first control and Tab past its last ring the tab shown's row, and Tab and ⇧Tab from the
+# ring have it say the page's first and last control, and the Library's key has it on the
+# Library's search field, where ↓ has it say the row ringed and where it stands and Tab has it on
+# the Library's sections. Elsewhere it records.
 # NVDA's portable copy (GPL) is fetched from NV Access' release on GitHub, its checksum pinned, into
 # the hosted runner's temporary folder, and never installed: with NVDA_DIR naming a portable copy,
 # the run uses that instead. Off a hosted Windows runner, and without NVDA_DIR, it skips.
@@ -225,10 +226,11 @@ heard=$(wc -l < "$nvda_log")
 send type exa
 spoken "typed exa"
 # ↓ selects the next suggestion while the field keeps the keyboard, and the bar's live region says
-# it and where it stands, "…, 2 of 3" (#3236).
+# it and where it stands, "…, 2 of 3" (#3236): the second, as the typed letters' late words name
+# the first.
 at=$(wc -l < "$nvda_log")
 press down
-says "$at" ", [0-9]* of [0-9]*'" "NVDA didn't say the suggestion ↓ selected in the command bar"
+says "$at" ", 2 of [0-9]*'" "NVDA didn't say the suggestion ↓ selected in the command bar"
 press escape
 # The Space the onboarding leaves has no tabs, and Tab rings New Tab's row, read as a button by
 # its name, where it said nothing before (#3151).
@@ -269,11 +271,23 @@ press tab
 press down
 press down
 press tab shift
-# ⇧Tab again, from the page's first control, the link: the keyboard stays in ilo's window, as
-# Chrome's goes to its own controls, never to another app's (#3220). Where in it is recorded.
+# ⇧Tab again, from the page's first control, the link, rings the tab shown's row, read by its
+# name, and Tab from the ring has NVDA say the link; Tab past the last control, the button, rings
+# the row again, and ⇧Tab from it has NVDA say the button (#3220). Each as the focused control's
+# name and role, as the document's line NVDA reads on entering the page names both as well.
+judging=1
 press tab shift
-tail -n 4 "$focus_file" | grep -q "^foreground window: .* (ilo's)$" ||
-  fail "⇧Tab from the page's first control took the keyboard out of ilo's window: $focus_file"
+on_row Reading "⇧Tab from the page's first control"
+at=$(wc -l < "$nvda_log")
+press tab
+says "$at" "'Link', 'link'" "NVDA didn't say the page's first control after Tab from the ring"
+press tab
+press tab
+on_row Reading "Tab past the page's last control"
+at=$(wc -l < "$nvda_log")
+press tab shift
+says "$at" "'Button', 'button'" "NVDA didn't say the page's last control after ⇧Tab from the ring"
+judging=
 # Out of the page into the sidebar with F6, Focus Sidebar, and along its rows: each is read by its
 # name, with UI Automation's focus on GPUI's node for it, not Chromium's window (#3151). A second
 # tab first, at the top of Today, so ↓ has the first page's row to go to.
@@ -311,10 +325,25 @@ before=$heard
 press down
 grep -q '^browser: library row keyed ' "$log" || fail "↓ from History's field rang no row: $log"
 says "$before" ', 1 of [0-9]' "NVDA didn't say History's ringed row and where it stands after ↓"
+# Tab from the field goes on to the Library's other controls, its sections first, which ↓ walks,
+# and ⇧Tab comes back, where Tab went nowhere before (#3238).
 judging=
 press up
+judging=1
+in_library() {
+  tail -n 4 "$focus_file" | grep -q "^UI Automation focus: [A-Za-z ]* \"$1\", framework AccessKit" ||
+    fail "UI Automation's focus isn't on the Library's $1 after $2: $focus_file"
+}
+before=$heard
 press tab
-press tab
+in_library Media tab
+says "$before" "'Media', 'tab'" "NVDA didn't say the Library's Media section after Tab from History's field"
+press down
+in_library Downloads down
+press tab shift
+press tab shift
+in_library "Search History" "⇧Tab twice"
+judging=
 press escape
 press , cmd
 press tab

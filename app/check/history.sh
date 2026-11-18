@@ -6,9 +6,10 @@
 # host typed in the command bar goes over https first, then http, or from Chromium 157 Chrome's
 # warning before http, whose dialog has the keyboard and still lets ⌘L, ⌘T and ⌘W reach the app,
 # also one shown again as the tab in front closes, and leaves the command bar every key as it shows,
-# and leaves a page split beside it the click into it and the typing after, and a local one over
-# http. One typed with http:// loads over http as written, with no https try and no warning, as in
-# Chrome's address bar. Only what the user typed counts: an agent's open_tab
+# and leaves a page split beside it the click into it and the typing after, and shows with the
+# keyboard on a click on its own pane's page, which never hears it, and a local one over http. One
+# typed with http:// loads over http as written, with no https try and no warning, as in Chrome's
+# address bar. Only what the user typed counts: an agent's open_tab
 # and navigate, and a link, to an http:// address, are tried over https first, and the agent's tab
 # at its warning leaves the user's window the keyboard. A right-click on reload lists Reload, Hard
 # Reload and Clear Site Data and Reload, the last deleting the site's cookies, storage and cache,
@@ -52,12 +53,17 @@ page='data:text/html,<title>loading</title>
 log="$out/history.log"
 step=0
 rm -f "$saved" "$launch_frame"
+# The example.com and example.org pages the steps go back and forward between come from a server of
+# the run's own, which a runner always reaches (#3144). Neither has a favicon, as example.com has none.
+serve_tls example '<meta charset=utf-8><link rel=icon href="data:,"><title>Example Domain</title>
+<h1>Example Domain</h1>' example.com example.org
 BROWSER_DRIVE=1 BROWSER_URL="$page" "$browser" \
   --host-resolver-rules="MAP stuck.test 127.0.0.1:$(cat "$out/port"), \
 MAP $plain 127.0.0.1:$port, MAP $nearby 127.0.0.1:$port, \
 MAP $written 127.0.0.1:$port, MAP $agent_opened 127.0.0.1:$port, \
 MAP $agent_moved 127.0.0.1:$port, MAP $linked 127.0.0.1:$port, \
-MAP $barred 127.0.0.1:$port" < "$out/drive" > "$log" 2>&1 &
+MAP $barred 127.0.0.1:$port, $tls_rules" --ignore-certificate-errors-spki-list="$tls_key" \
+  < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
@@ -123,7 +129,15 @@ send key r cmd shift
 expect '^browser: command force-reload via ui$' "⇧⌘R didn't run force-reload"
 expect "^browser: loaded $tab https://example.org/\$" "⇧⌘R didn't load the page again"
 # The button is stop until the page says it has stopped loading, a little after its load (#1114).
-expect '^browser: nav shows reload$' "the stop button didn't turn back into reload"
+# A press hits the button drawn last, and a reload from the run's own server can start and end
+# between two frames, drawing no stop at all (#3362): so once the page has stopped loading, the
+# click waits until the last button drawn is reload, whether or not a stop came before it.
+expect_page example.org 1 0 "after ⇧⌘R"
+for _ in $(seq 100); do
+  [ "$(last 'nav shows')" = reload ] && break
+  sleep 0.1
+done
+[ "$(last 'nav shows')" = reload ] || fail "the stop button didn't turn back into reload"
 send click $reload_button
 expect '^browser: command reload via sidebar$' "a click on reload didn't reload"
 expect "^browser: loaded $tab https://example.org/\$" "a click on reload didn't load the page again"
@@ -319,6 +333,15 @@ stored "$nearby" "1 1 1" "Clear Site Data and Reload on 127.0.0.1 lost $nearby's
 # bar in the user's window: an agent's tab never takes the user's keyboard, as its warning took it
 # on Windows (#3164).
 agent_steps() {
+  # The agent's warning is its tab's, which no window shows: it isn't shown in the user's window
+  # either, as Chrome keeps a tab's dialog hidden while its tab is (#3164).
+  no_agent_dialog() {
+    [ "$major" -ge 157 ] || return 0
+    send layout
+    shown=$(since | sed -n 's/^browser: layout child //p' | head -1)
+    [ -z "$shown" ] ||
+      fail "the agent's warning before http, after $1 in its own Space, showed at $shown in the user's window, which shows the user's tab: $(since | grep '^browser: layout' | tr '\n' ' ')"
+  }
   send agentspace claude-code Claude Code
   expect '^browser: made space [1-9][0-9]* for agent claude-code$' "the driver didn't make the agent's Space"
   before=$(tls)
@@ -326,11 +349,13 @@ agent_steps() {
   expect '^browser: agent claude-code opened [1-9][0-9]*$' "the agent didn't open http://$agent_opened/"
   agent_tab=$(sed -n 's/^browser: agent claude-code opened \([0-9]*\)$/\1/p' "$log" | tail -1)
   upgraded "$agent_tab" "$agent_opened" "the agent's open_tab"
+  no_agent_dialog "its open_tab"
   before=$(tls)
   send agentnavigate claude-code "$agent_tab" "http://$agent_moved/"
   expect "^browser: agent claude-code navigated $agent_tab: 1\$" \
     "the core didn't take the agent's navigate to http://$agent_moved/"
   upgraded "$agent_tab" "$agent_moved" "the agent's navigate"
+  no_agent_dialog "its navigate"
   agent_at="at Chrome's warning before http"
   [ "$major" -ge 157 ] || agent_at="loaded over http"
   send key l cmd
@@ -383,7 +408,8 @@ ran_on_warning() {
 # A page beside the warning in a split keeps a click into it and the typing after. On X11 a tab's
 # dialog takes the keyboard back after a focus change that leaves no view focused (#2926), and a
 # page is no view: the click into the page beside it was at risk of sending its keys to the warning
-# in the other pane. The warning is clicked first, so it has had the keyboard.
+# in the other pane. The warning is clicked first, so it has had the keyboard. Then a click on the
+# warned pane's page focuses that pane and shows its warning with the keyboard.
 if [ "$major" -ge 157 ]; then
   printf '%s' '<title>beside</title>
 <input id=field style="position:fixed;inset:0;font-size:40px" oninput="document.title = `beside has ${field.value}`">
@@ -434,6 +460,10 @@ requestAnimationFrame(() => requestAnimationFrame(() => document.title = "beside
       "Go to Pane 1 (⌃⇧1) on $warned_tab's warning before http, in a split, didn't focus the pane beside it: $(since "$shortcut" | grep -e '^browser: drive' -e '^browser: command ' -e '^browser: selected' | tail -4 | tr '\n' ' ')"
     since "$shortcut" | grep -q '^browser: command focus-pane via ' ||
       fail "⌃⇧1 on $warned_tab's warning before http focused the pane beside it, but not as Go to Pane 1: $(since "$shortcut" | grep '^browser: command ' | tr '\n' ' ')"
+    # The warning hides as its pane loses the focus. On Windows it had the keyboard, which the host
+    # gives the browser window, as Chromium hides a window without activating another (#3330).
+    ! windows || expect "^browser: a tab's dialog hid with the keyboard, which goes to its window\$" \
+      "the warning before http hid after Go to Pane 1 with the keyboard, which its window didn't get"
     send key 2 ctrl shift
     expect "^browser: selected $warned_tab in [0-9.]* ms\$" \
       "Go to Pane 2 (⌃⇧2), after ⌃⇧1 on its warning before http, didn't focus $warned_tab's pane again: $(since "$shortcut" | grep -e '^browser: drive' -e '^browser: command ' -e '^browser: selected' | tail -4 | tr '\n' ' ')"
@@ -464,21 +494,50 @@ requestAnimationFrame(() => requestAnimationFrame(() => document.title = "beside
     "typing after a click on the page beside $warned_tab's warning before http didn't reach that page: the keyboard is in $key, on $focus: $(since "$clicked" | grep -e '^browser: drive' -e "^browser: title $beside " | tail -6 | tr '\n' ' ')"
   since "$clicked" | grep -q "^browser: title $beside beside blurred\$" &&
     fail "the page beside $warned_tab's warning before http lost the keyboard after the click into it: $(since "$clicked" | grep -e '^browser: drive' -e "^browser: title $beside " | tail -6 | tr '\n' ' ')"
+  # A click on the warned pane's page, below its hidden warning, focuses that pane, and the warning
+  # shows with the keyboard. The page under it ignores input while the warning's up, so the press
+  # never reached it, and nothing focused the pane (#3196); the click still mustn't reach that page.
+  pane=$(echo "$panes" | sed -n 2p)
+  pane_x=${pane%%,*} pane_y=${pane#*,}
+  pane_y=${pane_y%% *} pane_h=${pane#*x}
+  send click $((pane_x + 100)) $((pane_y + pane_h - 60))
+  pressed=$step
+  expect "^browser: selected $warned_tab\$" \
+    "a click on $warned_tab's page below its warning before http, beside a page in a split, didn't focus its pane: $(since "$pressed" | grep -e '^browser: drive' -e '^browser: selected' -e "^browser: title $beside " | tail -6 | tr '\n' ' ')"
+  expect "^browser: title $beside beside blurred\$" "the page beside kept the keyboard after a click on $warned_tab's page below its warning before http"
+  for _ in $(seq 50); do
+    send layout
+    sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q '^browser: layout child ' && break
+    sleep 0.1
+  done
+  warning_box
+  send state
+  [ "$key" = NativeWidgetMacNSWindow ] ||
+    fail "a click on $warned_tab's page below its warning before http focused its pane, but the warning at $warning didn't take the keyboard: it's in $key, on $focus"
+  send key z
+  send state
+  since "$pressed" | grep -q "^browser: title $beside beside has xyz\$" &&
+    fail "a key after a click on $warned_tab's page below its warning before http reached the page beside it"
+  since "$pressed" | grep -q "^browser: page $warned_tab back [01] forward [01] loading 1 " &&
+    fail "a click on $warned_tab's page below its warning before http reached the page under the warning: $(since "$pressed" | grep "^browser: page $warned_tab " | tail -3 | tr '\n' ' ')"
+  # The page beside it again, for the ⌘W that closes it.
+  pane=$(echo "$panes" | sed -n 1p)
+  pane_x=${pane%%,*} pane_y=${pane#*,}
+  pane_y=${pane_y%% *}
+  send click $((pane_x + 100)) $((pane_y + 100))
+  expect "^browser: selected $beside\$" "a click on the page beside $warned_tab's warning before http, after the warned pane's, didn't focus its pane again"
   send key w cmd
   expect "^browser: tab $beside closed\$" "⌘W didn't close the pane beside $warned_tab's warning before http"
   expect "^browser: panes $warned_tab\$" "⌘W on the pane beside the warning didn't leave $warned_tab alone"
   tab=$warned_tab
-  # On the Mac the warning isn't shown again once the pane beside it closes: the page under it is
-  # bare and has the keyboard, and drops every key, ilo's shortcuts with them (#3233). A click on
-  # the sidebar gives the UI the keyboard, as the user's would, and the steps after load the warning
-  # again from the command bar.
+  # On the Mac the warning, a window of its own, shows again with the keyboard once the pane beside
+  # it closes. Without it the page under it is bare and has the keyboard, and drops every key, ilo's
+  # shortcuts with them (#3233). The steps after press ⌘L from here.
   if [ "$(uname)" = Darwin ]; then
     send state
     if [ "$key" != NativeWidgetMacNSWindow ]; then
       send layout
-      echo "skip: Chrome's warning before http shown again with the keyboard once the pane beside it closes, on the Mac: the keyboard is in $key, on $focus, and the window's children are$(since | sed -n 's/^browser: layout child / /p' | tr '\n' ',') (#3233)."
-      send click $sidebar_point
-      in_browser AccessKitSubclassOfGPUIView "a click on the sidebar beside $warned_tab's page, alone again after ⌘W closed the pane beside it"
+      fail "Chrome's warning before http wasn't shown again with the keyboard once ⌘W closed the pane beside it: the keyboard is in $key, on $focus, and the window's children are$(since | sed -n 's/^browser: layout child / /p' | tr '\n' ',')"
     fi
   fi
 fi
@@ -721,4 +780,15 @@ agent_steps
 exec 3>&-
 quit
 kill "$stuck"
+kill "$tls" 2> /dev/null || true
+tls=
+# Each example.com and example.org page the launch loaded came from the run's server; the hosts
+# under example.com that lead to the check's own aren't these.
+examples=$(sed -n 's|^browser: loaded [0-9]* \(https\{0,1\}://example\.[a-z]*/.*\)$|\1|p' "$log" | sort -u)
+[ -n "$examples" ] || fail "the launch loaded no example.com or example.org page"
+for url in $examples; do
+  grep -qxF "example: GET $url" "$out/example-tls.log" ||
+    fail "$url loaded, but not from the run's server: $(grep -v '^example: ' "$out/example-tls.log" | tail -3)"
+done
+echo "ok: the example.com and example.org pages the launch loaded came from the run's own server: $(echo $examples)"
 echo "ok: ⌘← ⌘→ and the header's buttons go back and forward, with the page or the UI focused, and so does a swipe over the page but not over the sidebar; reload and force reload load the page again; ⌘., escape and the stop button stop a load; the row keeps a page's favicon until the next page has loaded without one; a host typed in the command bar goes over https first and then http, or from Chromium 157 Chrome's warning before http, where ⌘L, ⌘T and ⌘W reach the UI and escape closes the command bar alone, ⌘L still opens it after ⌘W closed a warned tab over another, and the bar keeps Return as a warning first shows under it, and a local one goes over http at once; a link and an agent's open_tab and navigate to http:// go over https first, and ⌘L still opens the command bar with the agent's tab at its last load; a right-click on reload lists Reload, Hard Reload and Clear Site Data and Reload, which each reload, the last with the site's cookie, localStorage and IndexedDB gone and another site's kept. Windows: $out/history.png, $out/loading.png, $out/reload-menu-dark.png, $out/reload-menu-light.png"

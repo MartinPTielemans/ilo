@@ -23,6 +23,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
+#include "browser_core/agent_autofill.h"
 #include "browser_core/agent_session.h"
 #include "browser_core/archive.h"
 #include "browser_core/auto_archive.h"
@@ -31,6 +32,7 @@
 #include "browser_core/dialog_keys.h"
 #include "browser_core/extensions.h"
 #include "browser_core/favorites.h"
+#include "browser_core/focus_leaving_rule.h"
 #include "browser_core/host.h"
 #include "browser_core/idle_unload.h"
 #include "browser_core/install_question.h"
@@ -72,6 +74,8 @@
 #include "chrome/browser/ui/navigator/browser_navigator.h"
 #include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/navigator/browser_navigator_params_utils.h"
+#include "chrome/browser/ui/tabs/public/tab_dialog_manager.h"
+#include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -1856,6 +1860,7 @@ void Window::Show(content::WebContents* contents, const gfx::Rect& frame) {
     }
   }
   panes_ = std::move(panes);
+  const bool newly_shown = shown_.get() != contents;
   shown_ = contents->GetWeakPtr();
   SetLetGo(false);
   page_frame_ = frame;
@@ -1867,6 +1872,18 @@ void Window::Show(content::WebContents* contents, const gfx::Rect& frame) {
   // wait for its new size: the app lays them out once it has it (LeaveFullScreen).
   if (!platform::PagesHeldForResize(widget_.get())) {
     LayOutPage();
+  }
+  // Chrome hides a tab's dialog as the tab leaves the front, and shows it again only as its page
+  // goes from hidden to visible. A pane of a split stays visible while another has the focus, so
+  // its dialog, as Chrome's warning before http, shows again here as its pane takes the focus
+  // (#3196, #3233). Only then: showing a dialog gives it the keyboard. Never an agent's tab's,
+  // which never takes the user's keyboard (#3164): a watched one's dialog shows as Chrome shows it.
+  if (newly_shown && !IsAgentTab(contents)) {
+    tabs::TabFeatures* features = tabs::TabInterface::GetFromContents(contents)->GetTabFeatures();
+    if (tabs::TabDialogManager* dialogs = features ? features->tab_dialog_manager() : nullptr;
+        dialogs && dialogs->UpdateDialogVisibility()) {
+      dialogs->UpdateModalDialogBounds();
+    }
   }
   if (freed) {
     LogHandover("giver let go", Handing(id_, freed));
@@ -3336,6 +3353,24 @@ void Window::GiveKeyboardToPage() {
   platform::ReleaseKeyboard(widget_.get());
   FocusPage();
   FocusPageSoon();
+}
+
+void Window::GiveKeyboardToPageEnd(bool last) {
+  if (!shown_) {
+    return;
+  }
+  const bool given = focus_leaving_rule::Enter(IsAgentTab(shown_.get()), [&] {
+    GiveKeyboardToPage();
+    // GiveKeyboardToPage focused the page now if it could; the posted focus after keeps its
+    // control.
+    if (widget_->IsActive()) {
+      Tab::FocusPageEnd(shown_.get(), last);
+    }
+  });
+  if (!given) {
+    fprintf(stderr, "browser: window %llu kept the keyboard from agent's tab %llu\n",
+            static_cast<unsigned long long>(id_), static_cast<unsigned long long>(selected_));
+  }
 }
 
 void Window::OverlayTakesKeyboard(bool takes) {

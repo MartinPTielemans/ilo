@@ -137,6 +137,10 @@ class Arrange : public content::WebContentsObserver,
   bool moving_ = false;
   bool scrolling_ = false;
   std::optional<base::DictValue> move_;
+  // Where the last mouse event had the pointer, in the page, with the free key. Windows sends a move
+  // where the pointer already is when any window is placed, such as the foot bar as its words
+  // change, and a move that doesn't move mustn't judge the drop again or put off the rest (#3379).
+  std::optional<base::DictValue> pointer_;
   // The last state told, so the app hears each change once.
   std::optional<base::DictValue> told_;
   // How long a carry holds still before the page shows the drop made: the look's |rest|.

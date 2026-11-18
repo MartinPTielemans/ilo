@@ -179,6 +179,14 @@ struct Shown {
 }
 
 impl Shown {
+    /// Whether it offers the undo, with its button or by naming its key, as "Space deleted! Use ⌘Z
+    /// to undo." does.
+    fn offers_undo(&self) -> bool {
+        let undo_key = crate::shell::keystroke_label("cmd-z");
+        self.buttons.iter().any(|button| button.name == UNDO_BUTTON)
+            || (self.key.as_ref()).is_some_and(|(key, _)| **key == *undo_key)
+    }
+
     fn pose(&self) -> Pose {
         let arrived = Pose::arriving(self.shown.map_or(0., |shown| shown.elapsed().as_secs_f32()));
         match self.leaving {
@@ -412,26 +420,26 @@ pub(crate) fn press(name: &str, cx: &mut App) -> bool {
     .is_some()
 }
 
+/// Whether a toast that offers the undo shows and isn't leaving, which keeps its promise of ⌘Z
+/// from a field with text in it (#3307).
+pub fn offers_undo(cx: &App) -> bool {
+    let Some(window) = cx.try_global::<ToastWindow>().map(|toast| toast.0) else {
+        return false;
+    };
+    (window.read(cx).ok())
+        .and_then(|toast| toast.shown.as_ref())
+        .is_some_and(|shown| shown.leaving.is_none() && shown.offers_undo())
+}
+
 /// The undo it offered has been done some other way: its toast goes, if it shows, whether it
 /// offers the undo with its button or names its key, as "Space deleted! Use ⌘Z to undo." does.
 pub fn hide_undo(cx: &mut App) {
     let Some(window) = cx.try_global::<ToastWindow>().map(|toast| toast.0) else {
         return;
     };
-    let undo_key = crate::shell::keystroke_label("cmd-z");
     window
         .update(cx, |toast, _, cx| {
-            let undoing = toast.shown.as_ref().is_some_and(|shown| {
-                shown
-                    .buttons
-                    .iter()
-                    .any(|button| button.name == UNDO_BUTTON)
-                    || shown
-                        .key
-                        .as_ref()
-                        .is_some_and(|(key, _)| **key == *undo_key)
-            });
-            if undoing {
+            if toast.shown.as_ref().is_some_and(Shown::offers_undo) {
                 toast.leave(cx);
             }
         })

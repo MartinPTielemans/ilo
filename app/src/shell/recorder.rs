@@ -1496,6 +1496,13 @@ impl Browser for Recorder {
         self.record("focus page".into())
     }
 
+    fn focus_page_end(&self, last: bool, _: &mut App) {
+        self.record(format!(
+            "focus page {}",
+            if last { "last" } else { "first" }
+        ))
+    }
+
     fn lay_out_page(&self, _: Bounds<Pixels>, _: f32, _: &mut App) {
         self.page_events.borrow_mut().push("layout");
     }
@@ -1655,6 +1662,12 @@ impl Browser for Recorder {
         self.undo_toast.borrow_mut().take();
         self.undo_toasts_hidden
             .set(self.undo_toasts_hidden.get() + 1);
+    }
+
+    /// Its Undo button's toast shows until it's hidden, or a test takes `undo_toast` as its time
+    /// running out.
+    fn undo_toast_showing(&self, _: &App) -> bool {
+        self.undo_toast.borrow().is_some()
     }
 
     fn in_front(&self) -> bool {

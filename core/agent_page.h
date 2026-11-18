@@ -412,6 +412,8 @@ class AgentPage : public content::WebContentsObserver,
   std::unique_ptr<WheelWatch> wheel_;
   // Keeps the page drawing while it's hidden, for the agent's input and screenshots.
   base::ScopedClosureRunner drawing_;
+  // Lifts the page's renderer out of the background while the job running works in it (#3285).
+  base::ScopedClosureRunner working_;
   // Whether an agent acts on the page, from its first action until its session ends, and how many
   // pictures are under way, so a page only pictured lets DevTools go after.
   bool acted_ = false;

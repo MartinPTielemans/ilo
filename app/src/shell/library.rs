@@ -1044,6 +1044,8 @@ impl Shell {
                 .selection_color(self.palette.selection())
         });
         let observe = cx.observe(&search, |shell, _, cx| shell.filter(false, cx));
+        // Tab stops at the field, as at each of the Library's controls (keys.rs).
+        let _ = search.read(cx).focus_handle(cx).tab_stop(true);
         self.library = Some(Library {
             search,
             query: String::new(),
@@ -1060,7 +1062,7 @@ impl Shell {
             steps_all: Vec::new(),
             drawn: Rc::default(),
             _search: observe,
-            cards: cx.focus_handle(),
+            cards: cx.focus_handle().tab_stop(true),
             keyed_card: None,
             keyed_row: None,
             row_drawn: Rc::default(),
@@ -1081,11 +1083,13 @@ impl Shell {
     /// ⌘Z, or ⇧⌘Z unless `undoing`, in the Library's search field: while it's empty, nothing typed
     /// there could seem to be what the key undoes, so it's the window's step, the one the toast
     /// offers after Clear Archive or Delete from Archive (#3306). With text in it, the key goes on
-    /// to the field, which keeps it from undoing what's out of sight.
+    /// to the field, which keeps it from undoing what's out of sight, unless it's ⌘Z while this
+    /// window's toast offering it shows: the toast is in sight and promises the key (#3307).
     fn step_past_search(&mut self, undoing: bool, cx: &mut Context<Self>) {
         let empty = (self.library.as_ref())
             .is_some_and(|library| library.search.read(cx).text().is_empty());
-        if empty {
+        let offered = undoing && self.undo_offered && self.browser.undo_toast_showing(cx);
+        if empty || offered {
             match undoing {
                 true => self.undo(cx),
                 false => self.redo(cx),
@@ -1752,6 +1756,13 @@ impl Shell {
         let color = Hsla::from(self.palette.section_glyph);
         let (gap, lower) = self.sections_fit();
         let sections = div()
+            .id("library-sections")
+            .when(self.a11y, |sections| {
+                sections
+                    .role(Role::TabList)
+                    .aria_label("Sections")
+                    .aria_orientation(gpui::Orientation::Vertical)
+            })
             .flex()
             .flex_col()
             .gap(px(gap))
@@ -1793,8 +1804,9 @@ impl Shell {
             true => x - COLUMN_WIDTH,
             false => x,
         };
-        let back = div()
-            .id("library-back")
+        let back = div().id("library-back");
+        let back = self
+            .stop(back, "Back".into())
             .absolute()
             .map(|back| match right {
                 true => back.right(px(LIBRARY_BACK_INSET)),
@@ -1902,8 +1914,7 @@ impl Shell {
                 only => only.label(),
             };
             // At least Arc's width, growing from its end to fit what it filters to.
-            div()
-                .id("library-filter")
+            self.stop(div().id("library-filter"), label.into())
                 .flex_none()
                 .min_w(px(FILTER_WIDTH))
                 .px(px(FILTER_PAD))
@@ -1992,6 +2003,7 @@ impl Shell {
             .opacity(Shell::library_opacity(sidebar_opacity))
             .child(column)
             .child(edge);
+        let panel = self.with_stops(panel, cx);
         let panel = match spaces {
             true => panel.child(self.space_cards(cx)),
             false => panel
@@ -2965,9 +2977,14 @@ impl Shell {
     }
 
     /// A small button of the Library's lists, as Agents' Clear.
-    fn list_button(&self, id: impl Into<gpui::ElementId>, label: &'static str) -> Stateful<Div> {
-        div()
-            .id(id)
+    /// A button at a row's end, a Tab stop read by `name`.
+    fn list_button(
+        &self,
+        id: impl Into<gpui::ElementId>,
+        label: &'static str,
+        name: SharedString,
+    ) -> Stateful<Div> {
+        self.stop(div().id(id), name)
             .px(px(8.))
             .py(px(3.))
             .rounded(px(ARCHIVED_RADIUS))
@@ -3058,10 +3075,14 @@ impl Shell {
             let drawn = (self.library.as_ref()).map(|library| {
                 crate::settings_rows::drawn(format!("library revoke {site}"), library.drawn.clone())
             });
-            self.list_button(("past-revoke", index), "Revoke")
-                .relative()
-                .children(drawn)
-                .on_click(cx.listener(move |shell, _, _, cx| shell.revoke_past_site(index, cx)))
+            self.list_button(
+                ("past-revoke", index),
+                "Revoke",
+                format!("Revoke {site}").into(),
+            )
+            .relative()
+            .children(drawn)
+            .on_click(cx.listener(move |shell, _, _, cx| shell.revoke_past_site(index, cx)))
         });
         div()
             .h(px(ARCHIVED_PITCH))
@@ -3434,7 +3455,7 @@ impl Shell {
             .items_center()
             .justify_end()
             .child(
-                self.list_button("agents-clear", "Clear")
+                self.list_button("agents-clear", "Clear", "Clear".into())
                     .on_click(cx.listener(|shell, _, _, cx| shell.clear_agent_history(cx))),
             )
             .into_any_element()
@@ -3729,8 +3750,44 @@ impl Shell {
         )
         .absolute()
         .size_full();
+        // ↓ and ↑ go along the buttons, stopping at the ends, as Settings' sections do.
+        let shown: Vec<Section> = [
+            Section::Media,
+            Section::Downloads,
+            Section::Spaces,
+            Section::Boards,
+            Section::Archive,
+            Section::Agents,
+            Section::Boosts,
+        ]
+        .into_iter()
+        .filter(|&each| self.has_section(each))
+        .collect();
+        let at = shown.iter().position(|&each| each == section).unwrap_or(0);
+        let last = shown.len().saturating_sub(1);
         div()
             .id(label)
+            .when(self.a11y, |button| {
+                button
+                    .role(Role::Tab)
+                    .aria_label(label)
+                    .aria_selected(selected)
+            })
+            .tab_index(0)
+            .focus_from_keys_only()
+            .focus_visible(self.stop_ring())
+            .on_key_down(move |event, window, cx| {
+                if event.keystroke.modifiers.modified() {
+                    return;
+                }
+                match event.keystroke.key.as_str() {
+                    "down" if at < last => window.focus_next(cx),
+                    "up" if at > 0 => window.focus_prev(cx),
+                    "down" | "up" => {}
+                    _ => return,
+                }
+                cx.stop_propagation();
+            })
             .relative()
             .w(px(SECTION_WIDTH))
             .h(px(SECTION_HEIGHT))

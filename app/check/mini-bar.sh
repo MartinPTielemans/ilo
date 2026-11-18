@@ -529,6 +529,41 @@ if [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 1
     sed -n "$((n + 1)),\$p" "$log" | grep 'before the page: ' | grep -qv 'before the page: page$' &&
       fail "${chord%,*} in Safari's engine's page went elsewhere: $(sed -n "$((n + 1)),\$p" "$log" | grep 'before the page' | tail -2)"
   done
+  # Tab past the page's last control, and ⇧Tab before its first, ring the tab's row as on
+  # Chromium's page, and the same key from the ring gives the page that control again (#3359). The
+  # field is the page's one control, so each way leaves from it and comes back to it, and what's
+  # typed after says it has the keyboard. Tab into a field selects its text, in WebKit as in every
+  # browser (FocusController focuses with SelectionRestorationMode::SelectAll), so the letter
+  # typed after takes the place of the one before: a field that kept its old focus would have both.
+  # Each key comes once the last one's line has, no wait.
+  # $1 is the key's name, $2 its driver keys, $3 the end the page is left at, $4 the control the
+  # ring gives back, and $5 a letter for the field.
+  out_and_back() {
+    send key $2
+    expect "^browser: tab $tab focus left its page at the $3, kept by the app\$" \
+      "$1 from the field didn't leave Safari's engine's page for the app"
+    expect "^browser: sidebar keyed $tab\$" "$1 out of Safari's engine's page didn't ring the tab's row"
+    expect "^browser: sidebar ring $tab at " "$1 out of Safari's engine's page didn't draw the row's ring"
+    left=$step
+    # The app has the keyboard, not the stop the page's Tab landed on.
+    send state
+    in_browser AccessKitSubclassOfGPUIView "after $1 out of Safari's engine's page"
+    ../tools/window-screenshot.sh "$pid" "$out/mini-bar-safari-$3-row.png" || fail "no window to capture"
+    send key $2
+    expect "^browser: ring gave the page its $4 control\$" "$1 from the ring didn't go into Safari's engine's page"
+    # The ring stayed on the row until this key: the page didn't take the keyboard back by itself.
+    sed -n "/^browser: drive $left: /,/^browser: drive $step: /p" "$log" |
+      grep -c '^browser: \(sidebar keyed\|strip keyed\|ring gave the page\) ' | grep -qx 1 ||
+      fail "the ring moved on from the tab's row by itself after $1 out of Safari's engine's page"
+    send type $5
+    page_says " field $5 " "$1 from the ring didn't give Safari's engine's page its field, its text selected"
+  }
+  send click $page_point
+  send key tab
+  send type a
+  page_says ' field a ' "Tab in Safari's engine's page didn't focus its field"
+  out_and_back Tab tab end first b
+  out_and_back ⇧Tab "tab shift" start last c
   send click $sidebar_point
   n=$(wc -l < "$log")
   for chord in up down "z cmd" escape; do
@@ -554,4 +589,5 @@ echo "ok: in the mode the bar sat over things at the page's top, bottom and righ
 [ -z "$composing" ] || echo "ok: Japanese input in a field on the page kept ↓ and escape while it" \
   "composed with Arrange on, and the mode had escape again once it committed."
 [ -z "$safari" ] || echo "ok: over Safari's engine's page the command bar offered no Boost of the" \
-  "site, and ↑, ↓, ⌘Z and escape went to the page with it focused and to the UI with the UI."
+  "site, ↑, ↓, ⌘Z and escape went to the page with it focused and to the UI with the UI, and Tab" \
+  "and ⇧Tab left the page for the tab's row and went back into its field from there."

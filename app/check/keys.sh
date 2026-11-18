@@ -28,7 +28,8 @@
 # the UI from both sides, while ⌘T no longer runs it, and its ↺ gives ⌘T back. About ilo shows
 # Settings' About tab, with Settings key and with About already showing. The Shortcuts tab lists
 # the sidebar's commands, and Focus Sidebar given ⌃⌘K there takes the keyboard from the page, as
-# its own F6 does once Restore Defaults gives it back. Go to Space 1 given ⌃⌘1 there shows the
+# its own F6 does once Restore Defaults gives it back. Tab past the page's last control rings its
+# tab's row, and Tab or ⇧Tab from the ring gives the page its first or last control. Go to Space 1 given ⌃⌘1 there shows the
 # first Space, and ⌃1 no longer does. Include Favorites in ⌘1–⌘8 turned off there has ⌘1 show the
 # first tab that isn't a favorite, and Last Tab Goes to the Ninth Tab has ⌘9 count as ⌘1 does,
 # until Restore Defaults, after which ⌘9 shows the last tab. A shortcut the page keeps, ⌘F here,
@@ -45,6 +46,7 @@ alone='if (["Shift", "Control", "Alt", "Meta"].includes(e.key)) document.title =
 [ "$(uname)" = Darwin ] || alone=
 page='data:text/html,<title>loading</title>
 <textarea id=text autofocus style="font:24px system-ui;width:95%25;height:90vh"></textarea>
+<button onfocus="document.title = %27page focus end%27">End</button>
 <script>
 requestAnimationFrame(() => setTimeout(() => document.title = "ready"));
 text.oninput = () => document.title = "value " + text.value;
@@ -63,11 +65,17 @@ addEventListener("keydown", e => {
 });
 </script>'
 serve
+# The searches' DuckDuckGo pages and docs.new come from a server of the run's own, which a runner
+# always reaches (#3144).
+serve_tls keys '<meta charset=utf-8><link rel=icon href="data:,"><title>served by the run</title>' \
+  duckduckgo.com docs.new
 log="$out/keys.log"
 step=0
 # The user's keys, which a failed run may have left changed.
 rm -f "$saved" "$launch_frame" "$(dirname "$saved")/Shortcuts"
-BROWSER_DRIVE=1 BROWSER_URL="$page" "$browser" < "$out/drive" > "$log" 2>&1 &
+BROWSER_DRIVE=1 BROWSER_URL="$page" "$browser" \
+  --host-resolver-rules="$tls_rules" --ignore-certificate-errors-spki-list="$tls_key" \
+  < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 # At once, as the overlays' windows are made a frame or two after the window comes on screen.
@@ -906,6 +914,42 @@ send key escape
 expect '^browser: sidebar keys left by escape$' "escape didn't take F6's sidebar keyboard away"
 in_browser RenderWidgetHostViewCocoa "after escape left the sidebar F6 gave the keyboard"
 
+# Tab past the page's last control rings the shown tab's row, and Tab from the ring gives the
+# page its first control, ⇧Tab before the first and back its last, so the keyboard always has a
+# place (#3220). Each Tab comes as soon as the last one's line, with no wait: no copy of the page's
+# Tab reaches the ring, under Wayland either, as the ring staying on the row until the next Tab
+# shows, so the ring drops none.
+# The ring is on the row the leave rang, from the leave's step $1 until the Tab from it.
+ring_stayed() {
+  sed -n "/^browser: drive $1: /,/^browser: drive $step: /p" "$log" |
+    grep -c '^browser: \(sidebar keyed\|strip keyed\|ring gave the page\) ' | grep -qx 1 ||
+    fail "the ring moved on from the tab's row by itself after $2"
+}
+send click $page_point
+send key tab
+expect '^browser: title [0-9]* page focus end$' "Tab from the field didn't reach the page's button"
+send key tab
+expect '^browser: sidebar keyed ' "Tab past the page's last control didn't ring the tab's row"
+row=$(since | sed -n 's/^browser: sidebar keyed \([0-9]*\)$/\1/p' | head -1)
+expect "^browser: sidebar ring $row at " "Tab past the page's last control didn't draw the row's ring"
+left=$step
+../tools/window-screenshot.sh "$pid" "$out/page-end-row.png" || fail "no window to capture"
+send key tab
+expect '^browser: ring gave the page its first control$' "Tab from the ring didn't go into the page"
+ring_stayed $left "Tab past the page's last control"
+send type y
+expect '^browser: title [0-9]* value .*y$' "Tab from the ring didn't give the page's field the keyboard"
+send key tab shift
+expect '^browser: sidebar keyed ' "⇧Tab before the page's first control didn't ring the tab's row"
+row=$(since | sed -n 's/^browser: sidebar keyed \([0-9]*\)$/\1/p' | head -1)
+expect "^browser: sidebar ring $row at " "⇧Tab before the page's first control didn't draw the row's ring"
+left=$step
+../tools/window-screenshot.sh "$pid" "$out/page-start-row.png" || fail "no window to capture"
+send key tab shift
+expect '^browser: ring gave the page its last control$' "⇧Tab from the ring didn't go into the page"
+ring_stayed $left "⇧Tab before the page's first control"
+expect '^browser: title [0-9]* page focus end$' "⇧Tab from the ring didn't give the page's button the keyboard"
+
 # A shortcut the page keeps, as this one keeps ⌘F, runs ilo's command on a second press at once,
 # as Arc's does. Prefer ilo, from a right-click on Find's keys in Settings › Shortcuts, has ⌘F
 # run Find before the page sees it, and Prefer Websites gives the page it first again (#682).
@@ -1033,7 +1077,7 @@ searching 'arc+browser' "the search didn't start: $(grep '^browser: page ' "$log
 send key w cmd
 expect "^browser: today $searched_from\$" "⌘W didn't close the search's tab"
 # A .new address typed names what it makes, first, and ↩ opens it in a new tab though ⌘L's bar
-# edits the tab shown (#698). docs.new sends a browser that isn't signed in to Google's sign-in.
+# edits the tab shown (#698).
 before=$(today)
 send key l cmd
 expect '^browser: command bar shown$' "⌘L didn't open the command bar"
@@ -1045,7 +1089,7 @@ send key return
 expect '^browser: command bar new tab https://docs.new/$' "the docs.new row didn't open a new tab"
 expect "^browser: today [0-9][0-9]*${before:+ $before}\$" "the docs.new row's tab isn't in Today"
 tab=$(today | cut -d' ' -f1)
-expect "^browser: loaded $tab https://[a-z]*\.google\.com/" "docs.new didn't go to Google Docs"
+expect "^browser: loaded $tab https://docs\.new/\$" "docs.new didn't load in its tab"
 send key w cmd
 expect "^browser: today $before\$" "⌘W didn't close the docs.new tab"
 # A page the bar opens in a new tab has the keyboard, so its field autofocused gets what's typed
@@ -1258,5 +1302,18 @@ exec 3>&-
 await '^browser: warn before quitting off$' ||
   fail "Quit, and don't ask again didn't turn the warning off"
 exited
+kill "$tls" 2> /dev/null || true
+tls=
+# Each DuckDuckGo and docs.new page the launch loaded came from the run's server.
+ours=$(grep -E '^browser: loaded [0-9]+ https://(duckduckgo\.com|docs\.new)/' "$log" | cut -d' ' -f4- | sort -u)
+while read -r url; do
+  [ -n "$url" ] || continue
+  grep -qxF "keys: GET $url" "$out/keys-tls.log" ||
+    fail "$url loaded, but not from the run's server: $(grep -v '^keys: ' "$out/keys-tls.log" | tail -3)"
+done << EOF
+$ours
+EOF
+grep -qxF 'keys: GET https://docs.new/' "$out/keys-tls.log" || fail "docs.new didn't come from the run's server"
+echo "ok: the DuckDuckGo and docs.new pages the launch loaded came from the run's own server: $(echo "$ours" | tr '\n' ' ')"
 echo "ok: focus follows clicks, typing reaches the focused side, reserved shortcuts skip the page and the others reach it first, ⌘Q asks first in the dialog, and escape keeps the browser and Quit, and don't ask again quits, the command bar takes the keyboard and gives it back, a held escape that closes it doesn't repeat into the page, keys typed right after ⌘T, ⌘L and ⌘F land in the bar they open from both sides, a composition too, and reach a page that keeps ⌘F after it, and a composition once a page that keeps ⌘L late, with New Tab's plate while ⌘T's is open, goes to a host over https and searches for words, names docs.new typed and opens it in a new tab, and a page it opens in a new tab has the keyboard, its autofocused field and the browser's shortcuts too, Japanese input composes in both, on the Mac Korean composes a syllable at a time in both, and on Windows in the page, on Windows Japanese and Korean typed right after Ctrl+L in a page that keeps it compose there and Japanese typed for the bar stays out of the page, and the Edit menu undoes, redoes and selects in the page, ⌘Y opens the history page from both sides, Settings › Shortcuts' search finds New Tab by name and ⌘T's rows by their keys, and the rows of the commands it lacked, and New Tab rebound to ⌃⌘T there stays reserved from both sides while ⌘T runs nothing, until ↺ gives it back, About ilo shows Settings' About tab with Settings key and again with About showing, Shortcuts lists the sidebar's commands and Focus Sidebar given ⌃⌘K there gives the sidebar the keyboard from the page until escape, Go to Space 1 given ⌃⌘1 there shows the first Space while ⌃1 runs nothing, Include Favorites in ⌘1–⌘8 off has ⌘1 show the first tab that isn't a favorite, Last Tab Goes to the Ninth Tab has ⌘9 count the ninth tab and Restore Defaults has it show the last again, a second ⌘F at once runs Find after the page kept the first, Prefer ilo on Find from a right-click on its keys has ⌘F run it before the page sees it and Prefer Websites gives the page it first again, and a killed page's renderer leaves the browser running and ⌘R loads the page again. Windows: $out/quit.png, $out/command-bar.png, $out/search.png, $out/new-document.png, $out/ime.png, $out/shortcuts-search.png, $out/shortcuts-rows.png, $out/shortcuts.png, $out/about.png, $out/shortcuts-sidebar.png, $out/shortcuts-favorites.png, $out/shortcuts-prefer.png"
 echo "$launch_bar"

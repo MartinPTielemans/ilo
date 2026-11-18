@@ -136,14 +136,14 @@ impl Shell {
             .map(|space| (space.id, space.folders.pinned_shut));
         match (self.pinned_seen, seen) {
             (Some((was_in, was)), Some((space, shut))) if was_in == space && was != shut => {
-                self.pinned_turn = Some(Instant::now());
+                self.pinned_turn = Some(self.clock.now());
             }
             (Some((was_in, _)), Some((space, _))) if was_in != space => self.pinned_turn = None,
             _ => {}
         }
         self.pinned_seen = seen;
         if let Some(start) = self.pinned_turn {
-            if start.elapsed().as_secs_f32() < PINNED_TURN {
+            if self.since(start) < PINNED_TURN {
                 window.request_animation_frame();
             } else {
                 self.pinned_turn = None;
@@ -188,9 +188,7 @@ impl Shell {
         )
         .absolute()
         .size_full();
-        let t = (self.pinned_turn).map_or(1., |start| {
-            (start.elapsed().as_secs_f32() / PINNED_TURN).min(1.)
-        });
+        let t = (self.pinned_turn).map_or(1., |start| (self.since(start) / PINNED_TURN).min(1.));
         let turned = cubic_bezier(0.42, 0., 0.58, 1., t);
         let turned = if shut { turned } else { 1. - turned };
         let glyph = svg()
@@ -448,7 +446,7 @@ impl Shell {
             .find(|&&(old, _)| old == row)
             .filter(|_| selected);
         left.map(|(_, start)| {
-            let t = (start.elapsed().as_secs_f32() / SELECTED_UNHOVER).min(1.);
+            let t = (self.since(*start) / SELECTED_UNHOVER).min(1.);
             1. - cubic_bezier(0., 0., 0.58, 1., t)
         })
     }

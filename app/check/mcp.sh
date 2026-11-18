@@ -30,7 +30,9 @@
 # and so are keys while its frame has the keyboard, each with an activity-log entry, and its
 # listeners don't hear the agent's keys or typing. Neither the agent's click nor its ArrowDown and
 # Enter in a login field opens or accepts Chrome's suggestion of a saved login. Its keys, typed or
-# pressed, go to the page alone, and Escape the page doesn't keep runs no Stop of ilo's. Where it
+# pressed, go to the page alone, and Escape the page doesn't keep runs no Stop of ilo's. Its Tab
+# past its page's last control stays in its page, whose next Tab starts it over, and never reaches
+# the user's ring. Where it
 # acts in the page watched, its pointer and a
 # ring with the element's ref show it. It opens a page, clicks its link, goes back, where the tab
 # takes the page's title again, scrolls, takes a screenshot and closes a tab, pins a tab of its own, unpins it and removes it. A close asks a page with a beforeunload
@@ -278,11 +280,14 @@ bridge_on() {
 }
 rm -f "$out/mcp-bridge.log"
 bridge_on
-# Prints the bridge's next line within 30 s. sh has no read -t on Linux, where it's dash, and the
-# Mac has no timeout, so perl's alarm, which outlives its exec, bounds a shell that reads the line:
-# a shell reads a fifo a byte at a time, so it takes that line alone.
+# Prints the bridge's next line within $1 seconds, 30 if not given, and fails after. sh has no read
+# -t on Linux, where it's dash, and the Mac has no timeout, so perl reads the line under its own
+# alarm, a byte at a time to take that line alone. An alarm doesn't outlive an exec under Git Bash,
+# whose exec starts a new process, so perl reads it itself rather than a shell it execs (#3286).
 next_answer() {
-  perl -e 'alarm 30; exec @ARGV' sh -c 'read -r line && printf "%s\n" "$line"' <&5
+  perl -e 'alarm shift; my $line = "";
+    while (sysread STDIN, my $byte, 1) { $line .= $byte; last if $byte eq "\n" }
+    print $line; exit($line =~ /\n\z/ ? 0 : 1)' "${1:-30}" <&5
 }
 # Sends the JSON-RPC message $1 and, for a request, prints its answer, within 30 s.
 id=0
@@ -1470,7 +1475,7 @@ addEventListener("keydown", event => event.key == "Escape" && (document.title = 
   # the page to settle after, 5 s (kBusy), so the answer comes after the 30 s next_answer waits.
   request press_key "{\"tab\":$keys_tab,\"key\":\"Escape\"}" >&4
   await_log "^browser: title $keys_tab escape heard\$" "press_key Escape didn't reach the page"
-  pressed=$(perl -e 'alarm 60; exec @ARGV' sh -c 'read -r line && printf "%s\n" "$line"' <&5) ||
+  pressed=$(next_answer 60) ||
     fail "the browser didn't answer press_key Escape"
   pressed=$(printf '%s\n' "$pressed" | answered "press_key Escape")
   case "$pressed" in "Pressed Escape."*) ;; *) fail "press_key Escape answered: $pressed" ;; esac
@@ -1480,6 +1485,36 @@ addEventListener("keydown", event => event.key == "Escape" && (document.title = 
   [ "$(tabs)" = "$before" ] || fail "the agent's Escape changed the tabs in its Space"
   closed=$(call close_tab "{\"tab\":$keys_tab}")
   case "$closed" in "Closed tab $keys_tab."*) ;; *) fail "closing the keys page answered: $closed" ;; esac
+
+  # Its Tab past its page's last control stays in the page: the core asks the app only of a
+  # user's tab, so the user's ring and keyboard don't move (#3220).
+  printf '%s' '<script src="painted.js"></script><input id=start aria-label="First field">
+<input id=last aria-label="Last field">
+<script>
+let focused = 0;
+start.onfocus = () => document.title = "start focused " + ++focused;
+last.onfocus = () => document.title = "last focused";
+painted(() => document.title = "end");
+</script>' > "$out/site/end.html"
+  outline=$(call open_tab "{\"url\":\"localhost:$port/end.html\"}")
+  end_tab=$(printf '%s\n' "$outline" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  [ -n "$end_tab" ] || fail "open_tab of the end page answered: $outline"
+  await_log "^browser: title $end_tab end\$" "the end page didn't paint"
+  rings=$(grep -c '^browser: sidebar keyed \|^browser: strip keyed \|^browser: tab [0-9]* focus left its page.*kept by the app$' "$log" || true)
+  call press_key "{\"tab\":$end_tab,\"key\":\"Tab\"}" > /dev/null
+  await_log "^browser: title $end_tab start focused 1\$" "the agent's Tab didn't reach its page's field"
+  call press_key "{\"tab\":$end_tab,\"key\":\"Tab\"}" > /dev/null
+  await_log "^browser: title $end_tab last focused\$" "the agent's second Tab didn't reach the last field"
+  call press_key "{\"tab\":$end_tab,\"key\":\"Tab\"}" > /dev/null
+  await_log "^browser: tab $end_tab focus left its page at the end, kept by the agent's page\$" \
+    "the agent's Tab past its page's last control wasn't kept in its page"
+  # Kept, the page has the keyboard with nothing in it focused, so its next Tab starts it over.
+  call press_key "{\"tab\":$end_tab,\"key\":\"Tab\"}" > /dev/null
+  await_log "^browser: title $end_tab start focused 2\$" \
+    "the agent's Tab after its page's end didn't give it its first control again"
+  [ "$(grep -c '^browser: sidebar keyed \|^browser: strip keyed \|^browser: tab [0-9]* focus left its page.*kept by the app$' "$log" || true)" = "$rings" ] ||
+    fail "the agent's Tab past its page's end reached the user's ring"
+  call close_tab "{\"tab\":$end_tab}" > /dev/null
 
   # Its typing is keys, as a keyboard's, so a field's own key handlers filter and format it as they
   # do a user's, and a line break never sends or submits: a chat composer whose Enter sends gets
@@ -1746,9 +1781,9 @@ input, textarea { position: absolute; box-sizing: border-box; width: 40%; height
 <script src="painted.js"></script>
 <script>document.querySelector("[aria-label=\"Frame filled\"]").value = "██████";
 painted(() => parent.postMessage("painted", "*"));</script>' > "$out/site/withheld-inner.html"
-  # The fields keep some of their background inside their border, as most pages' do: a withheld
-  # field's hatch takes the colour its corners show, and text filling a field to its corners, as
-  # Linux's full blocks do, made the hatch red, which reads as the text shown.
+  # The fields keep some of their background inside their border, as most pages' do, and the
+  # one-time code's has none, so its text reaches its edges: a withheld field's hatch is the same
+  # greys whatever the field holds, and a hatch taken from the field's pixels went red there (#3277).
   printf '%s' "<!doctype html><meta charset=utf-8><title>loading</title><style>
 body { margin: 0; background: #fff }
 input, textarea { position: absolute; box-sizing: border-box; width: 20vw; height: 12vh; margin: 0;
@@ -1765,7 +1800,7 @@ button { position: absolute; left: 70vw; top: 50vh }
 <input aria-label='Shown password' type=password value='██████' style='left: 26vw; top: 20vh'>
 <input aria-label=Card autocomplete=cc-number value='██████' style='left: 50vw; top: 20vh'>
 <textarea aria-label=Note style='left: 74vw; top: 20vh'>██████</textarea>
-<input aria-label='One-time code' autocomplete=one-time-code style='left: 2vw; top: 33vh; height: 5vh; font-size: 4vh'>
+<input aria-label='One-time code' autocomplete=one-time-code style='left: 2vw; top: 33vh; height: 5vh; padding: 0; font-size: 4vh'>
 <input aria-label='Card typed' autocomplete='cc-number' style='left: 26vw; top: 33vh; height: 5vh; font-size: 4vh'>
 <input aria-label='Extension changed' style='left: 50vw; top: 33vh; height: 5vh; font-size: 4vh'>
 <select aria-label='Moved select' style='position: absolute; left: 74vw; top: 33vh'><option selected>First<option>Second</select>
@@ -1861,7 +1896,8 @@ red = total = 0
 for y in range(int(y0 * abs(height)), int(y1 * abs(height))):
     row = y if height < 0 else abs(height) - 1 - y
     for x in range(int(x0 * width), int(x1 * width)):
-        b, g, r = data[offset + row * stride + x * bits // 8:][:3]
+        start = offset + row * stride + x * bits // 8
+        b, g, r = data[start:start + 3]
         red += r > 160 and g < 100 and b < 100
         total += 1
 print(red * 100 // max(total, 1), red)
