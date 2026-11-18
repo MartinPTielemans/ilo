@@ -3,7 +3,7 @@
 
 use std::cell::RefCell;
 
-use gpui::{TestAppContext, VisualTestContext};
+use gpui::{Modifiers, TestAppContext, VisualTestContext};
 
 use super::*;
 
@@ -73,6 +73,17 @@ impl Switcher {
     fn keys(&self, keys: &str, cx: &mut TestAppContext) {
         let mut visual = VisualTestContext::from_window(self.window.into(), cx);
         visual.simulate_keystrokes(keys);
+        visual.run_until_parked();
+    }
+
+    /// Presses `button` on row `at` of three, with `modifiers` held, as the platform hands it to
+    /// GPUI's window.
+    fn press(&self, at: usize, button: MouseButton, modifiers: Modifiers, cx: &mut TestAppContext) {
+        let mut visual = VisualTestContext::from_window(self.window.into(), cx);
+        // As tall as its rows, as the host makes it.
+        visual.simulate_resize(size(px(WIDTH), px(height(3))));
+        let y = LIST_X + (at as f32 + 0.5) * ROW_HEIGHT;
+        visual.simulate_mouse_down(point(px(WIDTH / 2.), px(y)), button, modifiers);
         visual.run_until_parked();
     }
 
@@ -156,6 +167,23 @@ fn a_click_outside_stays_and_leaving_the_app_lets_go(cx: &mut TestAppContext) {
     assert_eq!(switcher.showing(cx), None);
     // Dismissed again, it was already gone, and tells nothing.
     cx.update(|cx| dismissed(cx));
+    assert!(switcher.heard().is_empty());
+}
+
+#[gpui::test]
+fn a_press_on_a_row_with_ctrl_held_picks_it(cx: &mut TestAppContext) {
+    let switcher = open_switcher(cx);
+    // ⌃ is held while it shows. On Windows and Linux a press comes as it is.
+    switcher.show(3, 0, cx);
+    switcher.press(2, MouseButton::Left, Modifiers::control(), cx);
+    assert_eq!(switcher.heard(), [Heard::Chose(2)]);
+    // On the Mac, GPUI hands a ⌃-left press on as a right press with ⌃ cleared (#3360).
+    switcher.show(3, 0, cx);
+    switcher.press(1, MouseButton::Right, Modifiers::none(), cx);
+    assert_eq!(switcher.heard(), [Heard::Chose(1)]);
+    // A right press the user made, ⌃ still held, picks nothing.
+    switcher.show(3, 0, cx);
+    switcher.press(1, MouseButton::Right, Modifiers::control(), cx);
     assert!(switcher.heard().is_empty());
 }
 
