@@ -54,7 +54,9 @@ takes a command a line on its standard input:
                   page opened last at an address starting with PREFIX has played, whether it's
                   paused, whether its player shows an ad, and refused where Chrome kept it from
                   starting, cued where it waits for play, or else the player's state, as
-                  YouTube's player says, - with no player
+                  YouTube's player says, - with no player, then why it isn't refused: "asked"
+                  or "unasked", "unstarted" or "started", as the player's classes say, "data"
+                  and the video's readyState, "visible" or "hidden", "focused" or "unfocused"
   content         logs "cdp: content TEXT IMAGES COVER", or "cdp: content none" for no page: the
                   attached page's shown text, in characters, its shown pictures at least 50 px a
                   side, and the percent of the viewport the largest element fixed in place over
@@ -95,6 +97,11 @@ For perf's Chrome on the same runner (check/perf.sh), which has no driver of its
                   screens, from the main display's top left, once there's a page
   histogram NAME  logs "cdp: histogram NAME SUM COUNT", or "cdp: histogram NAME none" while the
                   browser has none by that name, such as Chrome's startup times
+For board-perf's traced switches (check/board-perf.sh):
+  frame PREFIX    logs "cdp: frame visible|hidden|none" once the page opened last at an address
+                  starting with PREFIX has run two animation frames, so one shown has drawn since,
+                  as a switch's span ends at its first frame and the next switch would cut it off,
+                  or none for no such page
 For perf's traced switches, in ilo and Chrome:
   trace start CATEGORIES
                   starts tracing the comma-separated CATEGORIES, keeping the trace's last part
@@ -540,7 +547,9 @@ def ask(prefix, script, selector):
 # it. Refused, the player has asked to play, as playing-mode says, and has the data to, but the
 # video is still paused and has never started, as Chrome lets a page start a video with sound only
 # once the user has acted on it. Cued, the player has the video and waits for play to be pressed,
-# as its state 5 says (#3272). Otherwise the player's state, as a number, or - with no player.
+# as its state 5 says (#3272). Otherwise the player's state, as a number, or - with no player,
+# then what of refused's test the reading met, and whether the page was shown and had the keyboard,
+# as YouTube starts no video in a hidden page: why it wasn't pressed (#3272).
 VIDEO = """(() => {
   const video = document.querySelector("video");
   if (!video) return "";
@@ -553,8 +562,12 @@ VIDEO = """(() => {
   const state = player && typeof player.getPlayerState === "function" ?
     String(player.getPlayerState()) : "-";
   const cued = state === "5" && video.paused;
+  const has = (name) => Boolean(player && player.classList.contains(name));
+  const why = " " + (has("playing-mode") ? "asked" : "unasked") +
+    " " + (has("unstarted-mode") ? "unstarted" : "started") + " data " + video.readyState +
+    " " + document.visibilityState + " " + (document.hasFocus() ? "focused" : "unfocused");
   return video.currentTime.toFixed(1) + (video.paused ? " paused" : " playing") +
-         (ad ? " ad" : " no-ad") + (refused ? " refused" : cued ? " cued" : " " + state);
+         (ad ? " ad" : " no-ad") + (refused ? " refused" : cued ? " cued" : " " + state + why);
 })()"""
 
 
@@ -631,6 +644,18 @@ COUNT = """((selectors) => {
   }
   return JSON.stringify(counted);
 })"""
+
+
+# Two animation frames, which a hidden page runs none of until it's shown.
+FRAME = """new Promise((done) => requestAnimationFrame(() =>
+  requestAnimationFrame(() => done(document.visibilityState))))"""
+
+
+def frame(prefix):
+    on = page_session(prefix)
+    value = on and call("Runtime.evaluate", {"expression": FRAME, "awaitPromise": True,
+                                             "returnByValue": True}, on).get("result", {}).get("value")
+    return value or "none"
 
 
 def evaluate(expression):
@@ -843,6 +868,8 @@ for line in sys.stdin:
         log("has %s %s" % (words[2], ask(words[1], HAS, words[2])))
     elif words == ["content"]:
         log("content " + content())
+    elif words[:1] == ["frame"] and len(words) == 2:
+        log("frame " + frame(words[1]))
     elif words[:1] == ["video"] and len(words) == 2:
         log("video " + video(words[1]))
     elif words[:1] == ["hidden"] and len(words) in (2, 3) and session:

@@ -16,11 +16,12 @@
 # Player, 10 in from the top right of the screen, with Dia's corners and rim, and its flat scrim
 # under the pointer, on the Mac in mini-player-rest.png and mini-player-hover.png. A scroll or a
 # drag moves it, ⌘ or Ctrl with a scroll sizes it, and a double-click puts it back in its tab,
-# shown. On the Mac a throw settles it 10 in at a corner, and a slow release near a side 10 in along
-# it. The next shows where it was left, after a relaunch too, and coming back to its tab's window
-# from another window, or from another app with a menu open, puts it back in the tab. A video
-# playing with sound floats as a tab switch hides it, its Mini Player on screen within 250 ms of the
-# switch, its first frame at the size it was placed at.
+# shown. On Windows a drag let go after a rest leaves it there, with window contents shown while
+# dragging or not. On the Mac a throw settles it 10 in at a corner, and a slow release near a side
+# 10 in along it. The next shows where it was left, after a relaunch too, and coming back to its
+# tab's window from another window, or from another app with a menu open, puts it back in the tab. A
+# video playing with sound floats as a tab switch hides it, its Mini Player on screen within 250 ms
+# of the switch, its first frame at the size it was placed at.
 # A page asks to share the screen only from a click or a key: asked with neither, its promise is
 # refused, and nothing is shared (decision 12).
 # Chromium's fake camera and microphone stand in for real ones, and the share takes the tab titled
@@ -895,15 +896,29 @@ EOF
   [ "$rest" -ge 170 ] ||
     fail "the Mini Player at rest was dark over its video, at $rest where the video is about 204"
   # Captured until the scrim, which fades in over 200 ms from the pointer's move, has come.
+  # Each capture's time from the move is logged, so a red tells captures after the controls'
+  # own hide, 2.5 s after the move, from a scrim never shown (#3354).
+  scrim_ms() { perl -MTime::HiRes=time -e 'printf "%d\n", time * 1000'; }
+  moved_at=$(scrim_ms)
   send pip move $((pw / 8)) $((ph / 2))
+  capture=0
   for _ in $(seq 20); do
+    capture=$((capture + 1))
+    began=$(($(scrim_ms) - moved_at))
+    [ "$capture" -gt 1 ] || first_capture=$began
     FRAME="$at" ../tools/window-screenshot.sh "$pid" "$out/mini-player-hover.png" floating ||
       fail "no Mini Player to capture"
     hovered=$(lightness "$out/mini-player-hover.png")
+    echo "media: scrim capture $capture began at +$began ms from the move, lightness $hovered"
     [ "$hovered" -lt 170 ] && break
   done
+  if [ "$first_capture" -gt 2500 ]; then
+    first_when="after the controls' own hide 2.5 s after the move"
+  else
+    first_when="before the controls' own hide 2.5 s after the move"
+  fi
   [ "$hovered" -lt 170 ] ||
-    fail "the pointer on the Mini Player didn't bring its scrim: it stayed at $hovered, where the video is about 204 and under the scrim about 133"
+    fail "the pointer on the Mini Player didn't bring its scrim: it stayed at $hovered, where the video is about 204 and under the scrim about 133; the first of $capture captures began at +$first_capture ms, $first_when"
   # One flat scrim, as Dia's: over the video, one colour in a frame, it's as dark at a third of
   # the height as at three fifths, off the buttons above and the progress bar below (#2881). An
   # engine older than its core has Chrome's gradients.
@@ -997,7 +1012,8 @@ else
   if windows; then
     # Windows 11 shows a window's contents while it's dragged, as the core's throw expects: with
     # that off, as on GitHub's runners, Windows moves the window once, at the release, which the
-    # core reads as a throw (#3062). So the drag has it on, and puts back what was set after.
+    # core read as a throw (#3062). So this drag has it on, the next has it off, and each puts back
+    # what was set after.
     drag_full=$(reg query 'HKCU\Control Panel\Desktop' //v DragFullWindows 2> /dev/null |
       awk '/DragFullWindows/ { print $3 }')
     drag_full_windows 1
@@ -1038,6 +1054,37 @@ else
   ! windows || moved="x >= px - 200 && x <= px - 190"
   ! wayland || moved="x >= px - 200 && x <= px - 190" grown="x == px && y == py"
   mini_player_at "$moved && y == py && w == pw && h == ph" "a drag didn't move the Mini Player"
+  if windows; then
+    # With the setting off, as "Adjust for best performance" leaves it, Windows draws an outline
+    # and moves the window once, at the release, which still isn't a throw when the pointer rested
+    # first (#3062). The window stays put until then, so there's nothing to wait for but the rest.
+    drag_full_windows 0
+    send pip press $((pw / 8)) $((ph / 2))
+    expect 'browser: mini player pressed at ' \
+      "a press off its controls didn't reach the Mini Player with the outline drag"
+    send pip dragto $((pw / 8 - 10)) $((ph / 2))
+    expect 'browser: mini player moving from ' \
+      "a drag didn't start moving the Mini Player with the outline drag"
+    # The move loop starts a moment after the drag passes its threshold, and moves the outline only
+    # for moves of the pointer it hears: a jump made before it started reaches it with the release,
+    # as a throw. A hand goes on moving, so the pointer goes on in steps once it has started.
+    sleep 0.3
+    for x in 50 100 150 200; do
+      send pip dragto $((pw / 8 - x)) $((ph / 2))
+      sleep 0.05
+    done
+    sleep 0.2 # the rest, past the 100 ms of moves a release is read from
+    send pip release $((pw / 8 - 200)) $((ph / 2))
+    drag_full_windows "${drag_full:-1}"
+    expect 'browser: mini player let go at ' "the Mini Player wasn't let go from the outline drag"
+    let_go=$(grep 'browser: mini player let go at ' "$log" | tail -1 | sed 's/.*browser: //')
+    case $let_go in
+    *", staying") ;;
+    *) fail "with contents off while dragging, a rest before the release still threw it: $let_go" ;;
+    esac
+    mini_player_at "$moved && y == py && w == pw && h == ph" \
+      "a drag with window contents off while dragging didn't move the Mini Player"
+  fi
 fi
 send pip wheel $((pw / 2)) $((ph / 3)) -2 cmd
 mini_player_at "w > pw * 1.15 && h > ph * 1.15 && $grown" \

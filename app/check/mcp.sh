@@ -280,11 +280,14 @@ bridge_on() {
 }
 rm -f "$out/mcp-bridge.log"
 bridge_on
-# Prints the bridge's next line within 30 s. sh has no read -t on Linux, where it's dash, and the
-# Mac has no timeout, so perl's alarm, which outlives its exec, bounds a shell that reads the line:
-# a shell reads a fifo a byte at a time, so it takes that line alone.
+# Prints the bridge's next line within $1 seconds, 30 if not given, and fails after. sh has no read
+# -t on Linux, where it's dash, and the Mac has no timeout, so perl reads the line under its own
+# alarm, a byte at a time to take that line alone. An alarm doesn't outlive an exec under Git Bash,
+# whose exec starts a new process, so perl reads it itself rather than a shell it execs (#3286).
 next_answer() {
-  perl -e 'alarm 30; exec @ARGV' sh -c 'read -r line && printf "%s\n" "$line"' <&5
+  perl -e 'alarm shift; my $line = "";
+    while (sysread STDIN, my $byte, 1) { $line .= $byte; last if $byte eq "\n" }
+    print $line; exit($line =~ /\n\z/ ? 0 : 1)' "${1:-30}" <&5
 }
 # Sends the JSON-RPC message $1 and, for a request, prints its answer, within 30 s.
 id=0
@@ -702,9 +705,10 @@ for split_tab in $split_a $split_b $split_c; do
 done
 # An agent's tab at Chrome's warning before http, in the agent's split view, watched from the
 # conversation, where its split's pages share the watched page's place. The warning shown doesn't
-# take the user's keyboard. Once the user's click gives it the keyboard, a press in the page beside
-# it takes the keyboard to that page, and never to an agent's dialog: on the Mac that press gives
-# the keyboard back to the browser window (#3212).
+# take the user's keyboard, on the Mac too, where it's a window of its own (#3240). Once the user's
+# click gives it the keyboard, ⌘W steps back to Pages from there, a press in the page beside it
+# takes the keyboard to that page, and never to an agent's dialog: on the Mac that press gives the
+# keyboard back to the browser window (#3212). Escape there is the warning's, as Chrome's is.
 if [ "$driven" = 1 ]; then
   await '^browser: settings about Version .*, on Chromium [0-9]' || fail "the engine's version wasn't said"
   major=$(sed -n 's/^browser: settings about .*on Chromium \([0-9]*\)\..*/\1/p' "$log" | head -1)
@@ -733,16 +737,59 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
     await_more "$back" "$before" || fail "Escape didn't step back to Pages from $1"
     await_more "$thumbnail" "$shrunk" || fail "$1 didn't go back into its picture"
   }
+  # Tab round the strip's ring never gives the watched agent's page the keyboard: its stop is the
+  # strip's words, so the handback into a page, which on Windows gives the shown page's pane the
+  # keyboard straight (#3396), never runs for it. Tab from the window's keyboard rings the strip,
+  # where F6 would leave the agent's Space for the user's (sidebar_keys.rs). Windows alone, the
+  # change's.
+  ring_strip() {
+    windows || return 0
+    ringed=$((step + 1))
+    send key tab
+    expect '^browser: strip keyed ' "Tab with the agent's split watched didn't ring the strip under it"
+    for _ in 1 2 3 4 5 6 7 8; do
+      send key tab
+    done
+    send state
+    logged '^browser: strip keyed page$' "$ringed" ||
+      fail "Tab round the strip with the agent's split watched never rang its page's stop"
+    ! logged '^browser: ring gave the page ' "$ringed" ||
+      fail "Tab round the ring with the agent's split watched gave its page the keyboard"
+    case "$key $focus" in
+      *NativeWidgetMacNSWindow* | *RenderWidgetHostViewCocoa*)
+        fail "Tab round the ring with the agent's split watched left the keyboard in $key, on $focus" ;;
+    esac
+  }
+  # Watches $warned, whose warning shows over its pane, at $warning, without the user's keyboard,
+  # and has a click on it give it the keyboard. $1 says how the user came to watch it, and $2 is a
+  # step to take while it's watched, before the click.
+  watch_warning() {
+    watch "$warned"
+    for _ in $(seq 50); do
+      send layout
+      since | grep -q '^browser: layout child ' && break
+      sleep 0.1
+    done
+    laid=$(since | grep -m1 '^browser: layout')
+    warning=$(since | sed -n 's/^browser: layout child //p' | head -1)
+    [ -n "$warning" ] || fail "the agent's tab $warned, watched in its split view $1, showed no warning before http: $laid"
+    send state
+    [ "$key" != NativeWidgetMacNSWindow ] ||
+      fail "the agent's warning before http, watched in its split view $1, took the user's keyboard as it showed: $key, $focus"
+    [ -z "${2:-}" ] || "$2"
+    warning_x=${warning%%,*} warning_y=${warning#*,}
+    warning_y=${warning_y%% *} warning_size=${warning#* }
+    warning_width=${warning_size%%x*} warning_height=${warning_size#*x}
+    send click $((warning_x + warning_width / 2)) $((warning_y + 8))
+    warning_clicked=$step
+    send state
+    [ "$key" = NativeWidgetMacNSWindow ] ||
+      fail "a click on the agent's warning before http at $warning, watched in its split view $1, didn't give it the keyboard: $key, $focus"
+  }
   to_pages "tab $agent_tab"
-  watch "$warned"
-  for _ in $(seq 50); do
-    send layout
-    since | grep -q '^browser: layout child ' && break
-    sleep 0.1
-  done
-  laid=$(since | grep -m1 '^browser: layout')
-  warning=$(since | sed -n 's/^browser: layout child //p' | head -1)
-  [ -n "$warning" ] || fail "the agent's tab $warned, watched in its split view, showed no warning before http: $laid"
+  presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
+  watch_warning "from Pages" ring_strip
+  first_click=$warning_clicked
   # Linux's driver lists the pages the shell lays out, and the task area lays out a watched split
   # as one, which the core divides: the capture shows its panes there.
   if [ "$(uname)" = Linux ]; then
@@ -753,21 +800,30 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
       fail "watching tab $warned didn't show its split view's two pages: $laid"
   fi
   ../tools/window-screenshot.sh "$pid" "$out/agent-split-warning.png" || fail "no window to capture"
-  send state
-  if [ "$key" = NativeWidgetMacNSWindow ]; then
-    [ "$(uname)" = Darwin ] ||
-      fail "the agent's warning before http, watched in its split view, took the user's keyboard as it showed: $key, $focus"
-    echo "skip: mcp: the user's keyboard staying where it was as an agent's warning before http shows in a watched split view, on the Mac: the warning took it as the watch showed it (#3240)."
+  # From the agent's warning with the keyboard, ⌘W steps back to Pages, as it does from its page,
+  # and the split watched again shows the warning without the keyboard (#3240).
+  back='^browser: task page [0-9]* back$'
+  thumbnail='^browser: task page in its thumbnail$'
+  before=$(grep -c "$back" "$log" || true)
+  shrunk=$(grep -c "$thumbnail" "$log" || true)
+  send key w cmd
+  left=$step
+  await_more "$back" "$before" ||
+    fail "⌘W on the agent's warning before http, which had the keyboard, didn't step back to Pages: $(since "$left" | grep -e '^browser: drive' -e '^browser: command' -e '^browser: task' | tail -6 | tr '\n' ' ')"
+  await_more "$thumbnail" "$shrunk" ||
+    fail "the agent's split view didn't go back into its picture after ⌘W"
+  # Where the click on the warning took the tab over, as X11's does, the tab is the user's, and
+  # its warning takes the keyboard as Chrome's does. So it's handed back first, from its page
+  # watched, with the UI given the keyboard by a click on the sidebar, as the user's would.
+  if [ "$(grep -c '^browser: agent page pressed in ' "$log" || true)" != "$presses" ]; then
+    watch "$warned"
+    send click $sidebar_point
+    send key return cmd
+    await_log "^browser: agent mcp-client handed back $warned\$" \
+      "⌘↩ didn't hand back tab $warned, which the click on its warning took over"
+    to_pages "tab $warned"
   fi
-  warning_x=${warning%%,*} warning_y=${warning#*,}
-  warning_y=${warning_y%% *} warning_size=${warning#* }
-  warning_width=${warning_size%%x*} warning_height=${warning_size#*x}
-  presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
-  send click $((warning_x + warning_width / 2)) $((warning_y + 8))
-  warning_clicked=$step
-  send state
-  [ "$key" = NativeWidgetMacNSWindow ] ||
-    fail "a click on the agent's warning before http at $warning, watched in its split view, didn't give it the keyboard: $key, $focus"
+  watch_warning "again after ⌘W"
   # The page beside, to the right of the warning's, as split_tabs put them.
   other="$((warning_x + warning_width + 100)) $((warning_y + warning_height + 100))"
   send click $other
@@ -778,15 +834,15 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
   ../tools/window-screenshot.sh "$pid" "$out/agent-split-pressed.png" || fail "no window to capture"
   # The press takes over the tab pressed, and ⌘↩ hands it back. It takes over the tab watched
   # instead, or on X11 the click on the warning already took that one and the press beside takes
-  # none (#3243), while the area goes on to show the tab pressed. So each tab the two clicks took
-  # over is watched again and handed back there, with the UI given the keyboard by a click on the
-  # sidebar: on the Mac the warning takes it as its page shows (#3240).
+  # none (#3243), while the area goes on to show the tab pressed. So each tab the clicks took over
+  # is watched again and handed back there, with the UI given the keyboard by a click on the
+  # sidebar, as the user's would.
   send state
-  taken=$(since "$warning_clicked" | sed -n 's/^browser: agent page pressed in \([0-9]*\)$/\1/p' |
+  taken=$(since "$first_click" | sed -n 's/^browser: agent page pressed in \([0-9]*\)$/\1/p' |
     sort -u | tr '\n' ' ')
   taken=${taken% }
   [ -n "$taken" ] ||
-    fail "neither the click on the agent's warning before http nor the press beside it took over a tab: $(since "$warning_clicked" | grep -e '^browser: drive' -e '^browser: agent' | tail -8 | tr '\n' ' ')"
+    fail "neither the click on the agent's warning before http nor the press beside it took over a tab: $(since "$first_click" | grep -e '^browser: drive' -e '^browser: agent' | tail -8 | tr '\n' ' ')"
   if [ "$taken" = "$beside" ]; then
     hand_back_pressed "$presses"
     shown="the split view"
@@ -803,7 +859,31 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
       shown="tab $tab"
     done
   fi
+  # Escape on the warning with the keyboard is the warning's, its Go back, on every OS: a dialog
+  # keeps the keys that answer it (dialog_keys.cc). The warning goes, and the tab leaves the http
+  # page, here for the new tab page, as it had no page before it.
+  # Where the click on the warning takes the tab over, as X11's can, ⌘↩ hands it back after.
   to_pages "$shown"
+  presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
+  watch_warning "before Escape"
+  send key escape
+  escaped=$step
+  for _ in $(seq 50); do
+    since "$escaped" | grep "^browser: page $warned " | grep -qv "$plain" && break
+    sleep 0.1
+  done
+  since "$escaped" | grep "^browser: page $warned " | grep -qv "$plain" ||
+    fail "Escape on the agent's warning before http, which had the keyboard, didn't answer it: tab $warned stayed at http://$plain: $(since "$escaped" | grep -e '^browser: drive' -e "^browser: page $warned " -e '^browser: task' | tail -6 | tr '\n' ' ')"
+  for _ in $(seq 50); do
+    send layout
+    none_since '^browser: layout child ' && break
+    sleep 0.1
+  done
+  none_since '^browser: layout child ' ||
+    fail "the agent's warning before http stayed after its Escape: $(since | grep '^browser: layout child ')"
+  send click $sidebar_point
+  hand_back_pressed "$presses"
+  to_pages "tab $warned"
   for split_tab in $warned $beside; do
     closed=$(call close_tab "{\"tab\":$split_tab}")
     case "$closed" in "Closed tab $split_tab."*) ;; *) fail "closing the split view's page answered: $closed" ;; esac
@@ -1472,7 +1552,7 @@ addEventListener("keydown", event => event.key == "Escape" && (document.title = 
   # the page to settle after, 5 s (kBusy), so the answer comes after the 30 s next_answer waits.
   request press_key "{\"tab\":$keys_tab,\"key\":\"Escape\"}" >&4
   await_log "^browser: title $keys_tab escape heard\$" "press_key Escape didn't reach the page"
-  pressed=$(perl -e 'alarm 60; exec @ARGV' sh -c 'read -r line && printf "%s\n" "$line"' <&5) ||
+  pressed=$(next_answer 60) ||
     fail "the browser didn't answer press_key Escape"
   pressed=$(printf '%s\n' "$pressed" | answered "press_key Escape")
   case "$pressed" in "Pressed Escape."*) ;; *) fail "press_key Escape answered: $pressed" ;; esac

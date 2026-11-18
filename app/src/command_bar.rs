@@ -70,6 +70,7 @@ use crate::tokens::command_bar::ICON_BOX_X;
 use crate::tokens::command_bar::ICON_SIZE;
 use crate::tokens::command_bar::INPUT_ICON;
 use crate::tokens::command_bar::INPUT_ICON_X;
+use crate::tokens::command_bar::INPUT_LINE;
 use crate::tokens::command_bar::INPUT_TEXT;
 use crate::tokens::command_bar::INPUT_TEXT_X;
 use crate::tokens::command_bar::PLATE_INSET;
@@ -525,6 +526,12 @@ pub trait Host {
     fn set_height(&self, height: f32);
     /// Hides the bar's window once the user has chosen something in it.
     fn hide(&self);
+    /// Gives the page the browser window shows the keyboard, once the bar has hidden over the page
+    /// it went to.
+    fn focus_page(&self);
+    /// Whether the page the bar goes to would be an agent's: a task's page the window shows in
+    /// place, or a tab in an agent's Space, neither of which takes the user's keyboard (#3164).
+    fn agents_page(&self, cx: &App) -> bool;
     /// Hides the bar's window as the user leaves it without choosing anything.
     fn dismiss(&self);
     /// Gives the bar's window the keyboard back, which it found it hasn't while it shows, unless
@@ -2487,6 +2494,11 @@ impl CommandBar {
     }
 
     fn go(&mut self, _: &Go, _: &mut Window, cx: &mut Context<Self>) {
+        // ↩ while an input method composes is its own, to commit with, as AppKit's and Windows'
+        // take it before the bar: one that passes it on doesn't make the bar go with half a word.
+        if self.input.read(cx).composing() {
+            return;
+        }
         // A task isn't logged: it's the user's words.
         if self.ask.is_some() {
             return self.run_ask(self.selected, cx);
@@ -2504,8 +2516,13 @@ impl CommandBar {
         {
             // check.sh reads this line.
             log!("browser: command bar reloads tab {tab}");
+            let users = !self.host.agents_page(cx);
             self.close();
-            return self.host.reload(tab);
+            self.host.reload(tab);
+            if users {
+                self.host.focus_page();
+            }
+            return;
         }
         // Before anything is typed, that's one of the Space's tabs.
         if self.chosen().is_some() {
@@ -2551,8 +2568,16 @@ impl CommandBar {
     fn go_to_typed(&self, url: &str, typed: &str, cx: &mut App) {
         // check.sh reads this line.
         log!("browser: command bar go {url}");
+        // Asked before the page shows, which can take the window out of a task's area.
+        let users = !self.host.agents_page(cx);
         self.show_page(url, typed, cx);
         self.close();
+        // The page takes the keyboard, as Chrome's address bar gives it, wherever it was before the
+        // bar opened, such as in the UI over a Board. Chrome gives it only while its window is
+        // active, which on the Mac and Windows the bar's own window was until it hid (#3453).
+        if users {
+            self.host.focus_page();
+        }
     }
 
     /// ⌘↩: opens where ↩ would go in a tab behind the one shown, at the top of Today, and the bar
@@ -2857,7 +2882,14 @@ impl CommandBar {
             (0, Target::Tab(_)) if row.new_document => {
                 // check.sh reads this line.
                 log!("browser: command bar new tab {}", row.url);
+                let users = !self.host.agents_page(cx);
                 self.host.open_tab(&row.url, "", false);
+                self.close();
+                // A new document is a page the user went to, as go_to_typed's are.
+                if users {
+                    self.host.focus_page();
+                }
+                return;
             }
             (0, _) => return self.go_to(&row.url, cx),
             (tab, Target::Beside(with)) => {
@@ -3479,7 +3511,7 @@ impl Render for CommandBar {
                                 .pr(px(HINT_END))
                                 .gap(px(text_x - icon_x - icon))
                                 .text_size(px(text_size))
-                                .line_height(px(23.))
+                                .line_height(px(INPUT_LINE))
                                 .child(self.input_icon(cx))
                                 .when_some(self.mode_name(), |line, name| {
                                     let page = self.ask.as_ref().and_then(|ask| ask.page.as_ref());

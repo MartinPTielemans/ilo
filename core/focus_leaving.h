@@ -18,6 +18,11 @@ std::unique_ptr<content::WebContentsViewDelegate> AnswerFocusLeaving(
     content::WebContents* contents,
     std::unique_ptr<content::WebContentsViewDelegate> chrome);
 
+// Tab left the page of |contents|'s tab at its end, or ⇧Tab (|reverse|) at its start, answered by
+// focus_leaving_rule's rule and logged. Chromium's page asks it through the delegate above, and
+// Safari's engine's page through its tab. Returns whether the app took the keyboard.
+bool FocusLeftPage(content::WebContents* contents, bool reverse);
+
 }  // namespace browser_core
 
 #endif  // BROWSER_CORE_FOCUS_LEAVING_H_

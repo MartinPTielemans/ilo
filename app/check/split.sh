@@ -302,6 +302,23 @@ read_pages
 [ "$pages" = "$two BrowserCoreFocusRing $left" ] ||
   fail "the ring didn't go to the left pane: $pages"
 ../tools/window-screenshot.sh "$pid" "$out/split-left.png" || fail "no window to capture"
+# The command bar closing over the focused pane gives that pane's page the keyboard back, not the
+# other one's, and so does Tab from the ring F6 put on the split's row: on Windows the core gives
+# it straight to the pane the selected page shows in (#3396).
+send key l cmd
+expect '^browser: command bar shown$' "⌘L in the left pane didn't open the command bar"
+send key escape
+expect '^browser: command bar hidden$' "escape didn't close the command bar over the left pane"
+read_keyboard
+[ "$keyboard" = "$left" ] ||
+  fail "the command bar closing gave ${keyboard:-nothing} the keyboard, not the focused left pane"
+send key f6
+expect '^browser: sidebar keyed ' "F6 from the left pane didn't ring the split's row"
+send key tab
+expect '^browser: ring gave the page its first control$' "Tab from the split's ring didn't go into the page"
+read_keyboard
+[ "$keyboard" = "$left" ] ||
+  fail "Tab from the ring gave ${keyboard:-nothing} the keyboard, not the focused left pane"
 # ⌘L edits the focused pane's URL, as Arc's address bar is the panel's, and the other pane keeps its
 # page. Back puts the left pane's page back for the steps after.
 send key l cmd

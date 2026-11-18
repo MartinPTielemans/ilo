@@ -212,9 +212,11 @@ icon-size = 16.0
 title-x = 45.0
 # A row's content ends this far inside its plate: Arc's 10, and the 2 the plate is wider than Arc's.
 row-end = 12.0
-# The input's icon is 18 pt and 23 in; its text, 18 pt too, starts 53 in.
+# The input's icon is 18 pt and 23 in; its text, 18 pt too, starts 53 in, on a line 23 high, which
+# holds the field's 13 pt text too.
 input-icon = 18.0
 input-text = 18.0
+input-line = 23.0
 input-icon-x = 23.0
 input-text-x = 53.0
 # The hint after the input ends this far from the panel's side, 11 after the field.
@@ -419,6 +421,8 @@ glyph-disabled = 0xffffff42
 divider = 0xffffff26
 divider-height = 16.0
 text = 0xffffff
+# The field's line, for body text.
+text-line = 18.0
 count = 0xffffff99
 # Arc's red for no match.
 not-found = 0xdb1929
@@ -802,6 +806,8 @@ favicon = 16.0
 width = 320.0
 inset = 16.0
 radius = 16.0
+# The card's body text's line, and its title's and site's.
+body-line = 18.0
 title-line = 16.0
 site-line = 14.0
 header-gap = 8.0
@@ -944,12 +950,15 @@ foot-bottom = 8.0
 foot-glyph = 15.0
 # A section's name and glyph, the selected one's plate (the sidebar's, white with its shadow in
 # light), and the foot's quieter name and glyph: the name at the headings' alpha, the least that
-# reads at 4.5:1 on the light stand-in too (#1636).
+# reads at 4.5:1 on the light stand-in too (#1636). The plate's shadow falls 1 and blurs 2, as the
+# sidebar's light-selected one does.
 section-text = 0.78
 section-glyph-alpha = 0.66
 section-selected = 0.2
 section-selected-light = 0xffffffd9
 section-shadow = 0x00000033
+section-shadow-y = 1.0
+section-shadow-blur = 2.0
 section-hovered = 0.12
 foot-text = 0.66
 foot-glyph-alpha = 0.45
@@ -972,7 +981,11 @@ found-flash-time = 0.6
 # 28 where rows go on under it.
 card-rim = 0xffffff12
 card-ring = 0x00000012
+# Its shadow is its own, fainter than [elevation]'s resting one and with no outline: 1 down,
+# blurred 3.
 card-shadow = 0x0000000f
+card-shadow-y = 1.0
+card-shadow-blur = 3.0
 fade = 28.0
 # A section's page: 26 down, 36 in, at most 632 wide, its text 14 in, so headings, names and lines
 # share a column and the groups' plates hang outside it.
@@ -1031,7 +1044,10 @@ switch-height = 18.0
 knob = 14.0
 knob-inset = 2.0
 knob-alpha = 0.94
+# The knob's shadow, 1 down and blurred 2.
 knob-shadow = 0x00000047
+knob-shadow-y = 1.0
+knob-shadow-blur = 2.0
 switch-off = 0.17
 switch-off-light = 0.14
 # Pop-up buttons and buttons are 24 tall at the control radius, a button's title 10 in, a pop-up's
@@ -1929,8 +1945,10 @@ dot = 13.0
 glow = 0.18
 glow-width = 80.0
 glow-strip = 4.0
-# The circle's shadow, black at this much.
+# The circle's shadow, black at this much, 1 down and blurred 4.
 shadow = 0.3
+shadow-y = 1.0
+shadow-blur = 4.0
 
 [shell.onboarding]
 # A new profile's first launch (docs/ux-spec.md › Onboarding): the brand's ground over the whole

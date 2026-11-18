@@ -63,6 +63,8 @@ rm -rf "$perf_dir"
 mkdir -p "$perf_dir"
 profile_dir="$PWD/$perf_dir/profile"
 mkdir -p "$profile_dir"
+# The CPU beside each tab-switch figure, which compares only with one from the same model (#3418).
+on_cpu=$(runner_cpu)
 cat > "$out/site/perf.html" << 'HTML'
 <!doctype html><meta charset=utf-8><title>loading</title>
 <style>
@@ -466,10 +468,10 @@ perf_session() {
   perf_row settled-wakeups-20 "Idle wakeups, 20 tabs, settled" "$wakeups /s" "Ardia 11.82 /s"
 
   perf_switches switch
-  perf_row switch "Tab switch, key to page shown" "$(perf_stats '%.0f' < "$perf_dir/switch") ms" \
+  perf_row switch "Tab switch, key to page shown" "$(perf_stats '%.0f' < "$perf_dir/switch") ms on $on_cpu" \
     "Ardia 14 ms, Chrome 8 ms (gate: 16 ms)"
   perf_row switch-core "Tab switch, key to the core's report" \
-    "$(perf_stats '%.1f' < "$perf_dir/switch-core") ms" "none of its own"
+    "$(perf_stats '%.1f' < "$perf_dir/switch-core") ms on $on_cpu" "none of its own"
 
   : > "$perf_dir/newwindow"
   for _ in 1 2 3; do
@@ -937,7 +939,7 @@ print(int((time.clock_gettime(time.CLOCK_REALTIME) - time.clock_gettime(time.CLO
     echo titles >&5
     chrome_switches c chrome-switch
     perf_row chrome-switch "Chrome here, tab switch, cdp.py's stamp to page shown" \
-      "$(perf_stats '%.0f' < "$perf_dir/chrome-switch") ms" "ilo's, the gate"
+      "$(perf_stats '%.0f' < "$perf_dir/chrome-switch") ms on $on_cpu" "ilo's, the gate"
     chrome_quit
     # The traced switches, in a launch of Chrome's own, as ilo's, its trace perf/trace-chrome.json.
     if [ -n "${CHECK_TRACE_CATEGORIES:-}" ]; then
@@ -1022,7 +1024,7 @@ PY
 fi
 missed=$(grep ', missed$' "$perf_dir/gate.txt" 2> /dev/null | sed 's/^perf: gate, //; s/: ilo .*(\(.*\)), missed$/ \1/' |
   tr '\n' ';' | sed 's/;$//; s/;/; /g')
-[ -z "$missed" ] || fail "ilo took more than 10 % over Chrome on this runner: $missed (#456)"
+[ -z "$missed" ] || fail "ilo took more than 10 % over Chrome on this runner: $missed (#456), on $on_cpu"
 apart=$(grep -E '^perf: gate, memory, (10|20) tabs: .*, not settled: ' "$perf_dir/gate.txt" 2> /dev/null |
   sed 's/^perf: gate, memory, \([0-9]*\) tabs: .*, not settled: /\1 tabs, /' | tr '\n' ';' |
   sed 's/;$//; s/;/; /g')

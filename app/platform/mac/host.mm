@@ -2226,6 +2226,12 @@ size_t host_screens(double* frames, size_t count) {
 NSPoint g_driven_pointer;
 bool g_driven_pointer_known = false;
 
+// The pointer on screen: the driven one in a driven run, which NSEvent.mouseLocation doesn't see,
+// so an overlay shown under it takes its clicks as under a hand's (#3387).
+static NSPoint Pointer() {
+  return g_driven_pointer_known ? g_driven_pointer : NSEvent.mouseLocation;
+}
+
 bool host_app_icon(const char* bundle_id, size_t size, uint8_t* rgba) {
   @autoreleasepool {
     NSWorkspace* workspace = NSWorkspace.sharedWorkspace;
@@ -2261,7 +2267,7 @@ bool host_app_icon(const char* bundle_id, size_t size, uint8_t* rgba) {
 }
 
 bool host_pointer(double* x, double* y) {
-  const NSPoint point = g_driven_pointer_known ? g_driven_pointer : NSEvent.mouseLocation;
+  const NSPoint point = Pointer();
   *x = point.x;
   // AppKit's y runs up from the bottom of the main display, the core's down from its top.
   *y = NSHeight(NSScreen.screens.firstObject.frame) - point.y;
@@ -4385,13 +4391,13 @@ void host_toast_takes_clicks(bool takes) {
                                                               return event;
                                                             }];
   }
-  PlaceToastClicks(NSEvent.mouseLocation);
+  PlaceToastClicks(Pointer());
 }
 
 void host_set_toast_plate(double x, double y, double width, double height) {
   g_toast_plate = NSMakeRect(x, y, width, height);
   if (g_toast_takes) {
-    PlaceToastClicks(NSEvent.mouseLocation);
+    PlaceToastClicks(Pointer());
   }
 }
 
@@ -4559,7 +4565,7 @@ void host_show_mini_bar(void* ui_view, double x, double y, double width, double 
                                                   return event;
                                                 }];
     }
-    PlaceMiniBarClicks(NSEvent.mouseLocation);
+    PlaceMiniBarClicks(Pointer());
     if (g_mini_bar.parentWindow != browser->window) {
       AddOver(browser->window, g_mini_bar);
       RaiseOverlays(browser, g_mini_bar);
@@ -4866,7 +4872,7 @@ void host_show_hover_card(void* ui_view, double left, double top, double width, 
       RaiseOverlays(browser, g_card);
     }
     WatchCard();
-    PlaceCardClicks(NSEvent.mouseLocation);
+    PlaceCardClicks(Pointer());
     // check.sh waits for this line, and for the UI's "hover card settled" before a capture.
     fprintf(stderr, "browser: hover card window shown\n");
   });
