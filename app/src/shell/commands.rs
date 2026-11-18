@@ -2943,6 +2943,62 @@ mod tests {
         assert!(!shell.read_with(cx, |shell, _| shell.new_tab));
     }
 
+    /// A browser shortcut pressed while ⌘L's bar has the keyboard, which shows another tab of the
+    /// Space, tells the bar, whose pick opens a new tab now, and New Tab takes the plate: ↩ never
+    /// loads in the tab the user left (#3428). ⌘L opened from the page or from the UI alike. The
+    /// same tab shown again, or the bar closed, tells it nothing.
+    #[gpui::test]
+    fn the_open_url_bar_follows_another_tab_a_shortcut_shows(cx: &mut gpui::TestAppContext) {
+        use std::rc::Rc;
+
+        use crate::shell::{Folders, Page, recorder::Recorder};
+
+        for from in ["page", "ui"] {
+            let host = Rc::new(Recorder::default());
+            let browser = host.clone();
+            let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+            shell.update(cx, |shell, cx| {
+                let space = (1, "One".into(), None, 1, "".into(), "".into(), "".into());
+                shell.set_spaces(vec![space], cx);
+                shell.set_tabs(
+                    1,
+                    Vec::new(),
+                    vec![11, 12],
+                    Vec::new(),
+                    Folders::default(),
+                    cx,
+                );
+                for tab in [11, 12] {
+                    let page = Page {
+                        url: format!("https://{tab}.test/").into(),
+                        ..Page::default()
+                    };
+                    shell.set_page(tab, page, cx);
+                }
+                shell.set_space(1, cx);
+                shell.set_selected(11, cx);
+                shell.run(Command::EditUrl, from, cx);
+            });
+            assert_eq!(host.bar_edits.take(), [Some(11)], "⌘L from the {from}");
+            host.take();
+            // The bar has the keyboard, so the shortcut comes from it, as the UI's.
+            shell.update(cx, |shell, cx| shell.run(Command::NextTab, "ui", cx));
+            assert_eq!(host.take(), ["select 12"], "⌘L from the {from}");
+            shell.update(cx, |shell, cx| shell.set_selected(12, cx));
+            assert_eq!(host.tabs_shown_to_bar.take(), [12], "⌘L from the {from}");
+            assert!(
+                shell.read_with(cx, |shell, _| shell.new_tab),
+                "New Tab takes the plate, ⌘L from the {from}"
+            );
+
+            shell.update(cx, |shell, cx| shell.set_selected(12, cx));
+            assert!(host.tabs_shown_to_bar.take().is_empty());
+            host.bar_open.set(false);
+            shell.update(cx, |shell, cx| shell.set_selected(11, cx));
+            assert!(host.tabs_shown_to_bar.take().is_empty());
+        }
+    }
+
     /// ⌘L in the moment after the tab shown closes, before the window shows the next, opens the
     /// bar on the tab shown next, which ↩ then loads, in the order the core reports them (#2953).
     #[gpui::test]
