@@ -12,7 +12,7 @@
 # which the host doesn't read, says so and is never written over, captured, as is one holding []
 # rather than a Board. A private window has no New Board, and a Board's address there shows "This
 # Board isn't here.", captured. New Board from the File menu, the sidebar's +, the command bar, and
-# its key with a Board's page and with the command bar's field focused, each makes one. Japanese
+# its key with a Board's page and with the sidebar holding the keyboard, each makes one. Japanese
 # input as a Board's first keys is its note; ⌘C, ⌘V and ⌘Z in the page copy, paste and undo cards,
 # and ⌘− zooms the canvas, not the page, each saved. Relaunched, the Board comes back with its note.
 # An agent gets nothing of a Board, wherever the user opens one: one New Board made, one opened from
@@ -325,7 +325,7 @@ send key "$n" cmd
 expect "^browser: selected $board\( in .*\)\{0,1\}\$" "⌘$n didn't show the first Board's tab $board of \"$(today)\""
 
 # 1b: New Board from each of its places, the File menu, the sidebar's + and the command bar, and
-# its key with the page focused and with the command bar's field focused. Each makes a Board, a
+# its key with the page focused and with the sidebar holding the keyboard. Each makes a Board, a
 # pinned tab whose name is there to type over, kept with ↩, which gives the page the keyboard.
 # made <how>: the Board New Board just made, named $1, its tab in $tab and its folder in $made_folder.
 made() {
