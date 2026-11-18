@@ -95,6 +95,11 @@ For perf's Chrome on the same runner (check/perf.sh), which has no driver of its
                   screens, from the main display's top left, once there's a page
   histogram NAME  logs "cdp: histogram NAME SUM COUNT", or "cdp: histogram NAME none" while the
                   browser has none by that name, such as Chrome's startup times
+For board-perf's traced switches (check/board-perf.sh):
+  frame PREFIX    logs "cdp: frame visible|hidden|none" once the page opened last at an address
+                  starting with PREFIX has run two animation frames, so one shown has drawn since,
+                  as a switch's span ends at its first frame and the next switch would cut it off,
+                  or none for no such page
 For perf's traced switches, in ilo and Chrome:
   trace start CATEGORIES
                   starts tracing the comma-separated CATEGORIES, keeping the trace's last part
@@ -633,6 +638,18 @@ COUNT = """((selectors) => {
 })"""
 
 
+# Two animation frames, which a hidden page runs none of until it's shown.
+FRAME = """new Promise((done) => requestAnimationFrame(() =>
+  requestAnimationFrame(() => done(document.visibilityState))))"""
+
+
+def frame(prefix):
+    on = page_session(prefix)
+    value = on and call("Runtime.evaluate", {"expression": FRAME, "awaitPromise": True,
+                                             "returnByValue": True}, on).get("result", {}).get("value")
+    return value or "none"
+
+
 def evaluate(expression):
     return call("Runtime.evaluate", {"expression": expression, "returnByValue": True},
                 session).get("result", {}).get("value")
@@ -843,6 +860,8 @@ for line in sys.stdin:
         log("has %s %s" % (words[2], ask(words[1], HAS, words[2])))
     elif words == ["content"]:
         log("content " + content())
+    elif words[:1] == ["frame"] and len(words) == 2:
+        log("frame " + frame(words[1]))
     elif words[:1] == ["video"] and len(words) == 2:
         log("video " + video(words[1]))
     elif words[:1] == ["hidden"] and len(words) in (2, 3) and session:
