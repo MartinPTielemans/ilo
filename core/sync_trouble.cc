@@ -1,5 +1,7 @@
 #include "browser_core/sync_trouble.h"
 
+#include "components/sync/engine/polling_constants.h"
+
 namespace browser_core::sync_trouble {
 
 namespace {
@@ -7,6 +9,11 @@ namespace {
 // Long enough that a network change or a wake from sleep, which fails a cycle or two, is over.
 constexpr base::TimeDelta kLasting = base::Minutes(2);
 constexpr int kLastingCycles = 3;
+// The longest sync waits between two tries once they fail: syncer::kMaxBackoffTime, 10 minutes,
+// which BackoffDelayProvider clamps every wait to (backoff_delay_provider.cc). A cycle that starts
+// longer than that after the failed one before it didn't follow it, as when the Mac slept between
+// them, so the failures of a cycle before and one after a sleep aren't two minutes of them.
+constexpr base::TimeDelta kLongestRetryWait = syncer::kMaxBackoffTime;
 
 int Trouble(const syncer::SyncerError& error, const Refused& refused) {
   using Type = syncer::SyncerError::Type;
@@ -76,7 +83,7 @@ int Classify(const syncer::SyncerError& download,
   return downloaded != BC_SYNC_TROUBLE_NONE ? downloaded : Trouble(commit, refused);
 }
 
-bool Run::Ended(int trouble, const Refused& refused, base::Time ended) {
+bool Run::Ended(int trouble, const Refused& refused, base::Time started, base::Time ended) {
   const int was = shown_;
   const base::Time was_since = since_;
   const Refused was_refused = refused_;
@@ -87,9 +94,14 @@ bool Run::Ended(int trouble, const Refused& refused, base::Time ended) {
     since_ = base::Time();
     refused_ = Refused();
   } else {
+    // A run of failures is one only while sync kept trying: otherwise it starts again here.
+    if (failed_ > 0 && started - last_ > kLongestRetryWait) {
+      failed_ = 0;
+    }
     if (failed_++ == 0) {
       first_ = ended;
     }
+    last_ = ended;
     if (failed_ >= kLastingCycles || ended - first_ >= kLasting) {
       shown_ = trouble;
       since_ = first_;

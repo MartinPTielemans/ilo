@@ -1,7 +1,7 @@
 // What a sync cycle came to, and whether a trouble has lasted long enough for Settings to say so
 // (#3435): three failed cycles in a row, or two minutes of failed cycles with none going through,
-// decided as each cycle ends, with no timer. Apart from the account (sync.cc), so
-// browser_core_unittests tests the rule alone.
+// while sync kept trying, decided as each cycle ends, with no timer. Apart from the account
+// (sync.cc), so browser_core_unittests tests the rule alone.
 
 #ifndef BROWSER_CORE_SYNC_TROUBLE_H_
 #define BROWSER_CORE_SYNC_TROUBLE_H_
@@ -42,18 +42,19 @@ int Classify(const syncer::SyncerError& download,
 // The troubles of the cycles as they end, and the one Settings shows.
 class Run {
  public:
-  // A cycle with |trouble| ended at |ended|, with |refused| of its changes refused. Returns
-  // whether what Read gives changed.
-  bool Ended(int trouble, const Refused& refused, base::Time ended);
+  // A cycle with |trouble| that started at |started| ended at |ended|, with |refused| of its
+  // changes refused. Returns whether what Read gives changed.
+  bool Ended(int trouble, const Refused& refused, base::Time started, base::Time ended);
   // Signed out, or signed in again: a run of the account before starts nothing.
   void Reset();
   // The trouble shown, and with it since when and what was refused, into |activity|'s fields.
   void Read(bc_sync_activity* activity) const;
 
  private:
-  // The cycles that failed in a row, and when the first of them ended.
+  // The cycles that failed in a row, and when the first and the last of them ended.
   int failed_ = 0;
   base::Time first_;
+  base::Time last_;
   int shown_ = BC_SYNC_TROUBLE_NONE;
   base::Time since_;
   Refused refused_;

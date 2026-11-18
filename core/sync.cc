@@ -1563,11 +1563,11 @@ class Account : public syncer::SyncServiceObserver,
   }
   // Every cycle's end, the ones that fail too, which decides whether a trouble has lasted.
   void OnSyncCycleCompleted(syncer::SyncService* sync) override {
-    const syncer::ModelNeutralState cycle =
-        sync->GetLastCycleSnapshotForDebugging().model_neutral_state();
+    const syncer::SyncCycleSnapshot snapshot = sync->GetLastCycleSnapshotForDebugging();
+    const syncer::ModelNeutralState& cycle = snapshot.model_neutral_state();
     const int trouble = sync_trouble::Classify(cycle.last_download_updates_result,
                                                cycle.commit_result, cycle_refused_);
-    trouble_run_.Ended(trouble, cycle_refused_, base::Time::Now());
+    trouble_run_.Ended(trouble, cycle_refused_, snapshot.sync_start_time(), base::Time::Now());
     cycle_refused_ = sync_trouble::Refused();
     // Which tells the app, through Notify, if the activity it reads changed.
     OnStateChanged(sync);
