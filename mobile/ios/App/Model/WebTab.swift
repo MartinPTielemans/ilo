@@ -669,6 +669,12 @@ extension WebTab: WKUIDelegate {
   }
 
   func webView(
+    _ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String, defaultText: String?, initiatedByFrame frame: WKFrameInfo
+  ) async -> String? {
+    await browser?.ask(prompt, suggesting: defaultText ?? "", from: self)
+  }
+
+  func webView(
     _ webView: WKWebView, decideMediaCapturePermissionsFor origin: WKSecurityOrigin, initiatedBy frame: WKFrameInfo,
     type: WKMediaCaptureType
   ) async -> WKPermissionDecision {

@@ -381,3 +381,41 @@ import os
     #expect(server.requests.last?.headers["user-agent"] == phone)
   }
 }
+
+/// A page's prompt(), its question with an answer to type.
+@Suite(.serialized, .timeLimit(.minutes(2))) @MainActor struct TypedAnswerTests {
+  private func page(in browser: Browser) async throws -> WebTab {
+    let server = try await Loopback { _ in .html("<title>Page</title>") }
+    browser.openNew(server.url("/page"))
+    let page = try #require(browser.page)
+    #expect(await eventually { await page.shows("/page") })
+    return page
+  }
+
+  @Test func `a page's question gets what the user types, starting from what the page suggests`() async throws {
+    let browser = testBrowser()
+    let page = try await page(in: browser)
+
+    let answer = Task { await page.run("return prompt('Your name?', 'Ann')") as? String }
+    #expect(await eventually { browser.prompt != nil })
+    guard case .wants(let question) = browser.prompt?.kind else {
+      Issue.record("The page's question wasn't asked.")
+      return
+    }
+    #expect(question == "Your name?")
+    #expect(browser.typed == "Ann")
+    browser.typed = "Bea"
+    browser.answer(true)
+    #expect(await answer.value == "Bea")
+  }
+
+  @Test func `Cancel answers a page's question with nothing`() async throws {
+    let browser = testBrowser()
+    let page = try await page(in: browser)
+
+    let answer = Task { await page.run("return prompt('Your name?', 'Ann') === null") as? Bool }
+    #expect(await eventually { browser.prompt != nil })
+    browser.answer(false)
+    #expect(await answer.value == true)
+  }
+}

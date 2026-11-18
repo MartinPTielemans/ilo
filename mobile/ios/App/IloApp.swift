@@ -145,6 +145,10 @@ private struct BrowserScreen: View {
       case .asks:
         Button("OK") { browser.answer(true) }
         Button("Cancel", role: .cancel) { browser.answer(false) }
+      case .wants:
+        TextField("", text: $browser.typed)
+        Button("OK") { browser.answer(true) }
+        Button("Cancel", role: .cancel) { browser.answer(false) }
       case .says, .notice:
         Button("OK") { browser.answer(true) }
       case .resend:
@@ -154,7 +158,7 @@ private struct BrowserScreen: View {
       switch prompt.kind {
       case .leave(let url): Text("\(prompt.host) wants to leave ilo for an app that opens “\(url.scheme ?? "")” links.")
       case .download: Text("From \(prompt.host).")
-      case .says(let text), .asks(let text): Text(text)
+      case .says(let text), .asks(let text), .wants(let text): Text(text)
       case .notice, .resend: Text("")
       }
     }
@@ -176,7 +180,7 @@ private struct BrowserScreen: View {
     switch prompt?.kind {
     case .leave: "Open in another app?"
     case .download(let name): "Download “\(name)”?"
-    case .says, .asks: prompt?.host ?? ""
+    case .says, .asks, .wants: prompt?.host ?? ""
     case .notice(let text): text
     case .resend, nil: ""
     }

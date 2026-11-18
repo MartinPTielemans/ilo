@@ -12,6 +12,8 @@ struct Prompt: Identifiable {
     /// A page's alert, and its question.
     case says(String)
     case asks(String)
+    /// A page's question with an answer to type.
+    case wants(String)
     /// Something ilo has to say, with nothing to choose.
     case notice(String)
     /// A reload that would send a form's answers a second time.
@@ -91,6 +93,8 @@ final class Browser {
   private(set) var prompt: Prompt?
   /// A finished download, for the system's sheet to save or open.
   var downloaded: URL?
+  /// What the user has typed in answer to a page's question.
+  var typed = ""
   /// A link the user chose to share, for the system's sheet to send on.
   var shared: URL?
   /// Launch puts the keyboard up, once.
@@ -467,6 +471,15 @@ final class Browser {
     return await withCheckedContinuation { continuation in
       prompt = Prompt(kind: kind, host: Site.name(of: tab.url)) { continuation.resume(returning: $0) }
     }
+  }
+
+  /// Asks a page's question that takes a typed answer, starting from the answer the page
+  /// suggests. Nothing is the user saying no.
+  func ask(_ question: String, suggesting answer: String, from tab: WebTab) async -> String? {
+    guard prompt == nil else { return nil }
+    typed = answer
+    guard await ask(.wants(question), from: tab) else { return nil }
+    return typed
   }
 
   func answer(_ yes: Bool) {
