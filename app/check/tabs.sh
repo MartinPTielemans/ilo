@@ -1859,6 +1859,15 @@ tab_to() {
 settings_general() {
   send menu Settings…
   expect '^browser: settings shown ' "Settings… didn't show Settings"
+  # Settings takes the pointer's scrolls once the window behind it has drawn as not the user's: on
+  # Wayland a scroll sent before that frame moved nothing (#3372). It's the last such line, as
+  # Settings may already have been in front.
+  for _ in $(seq 100); do
+    [ "$(grep '^browser: window [0-9]* drew main ' "$log" | tail -1 | sed 's/.* //')" = false ] && break
+    sleep 0.1
+  done
+  [ "$(grep '^browser: window [0-9]* drew main ' "$log" | tail -1 | sed 's/.* //')" = false ] ||
+    fail "the window behind Settings didn't draw as not the user's"
   if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' General$'; then
     settings_drew
     send clickkey $(drawn "toolbar General")
