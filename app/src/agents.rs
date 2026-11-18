@@ -1596,12 +1596,21 @@ impl Agents {
                     return;
                 };
                 let host = site(&self.browser.tab(tab, cx).url);
-                // Before the request is read, so its answer says nothing of a page off limits.
+                // Before the request is read, so its answer says nothing of a page off limits. Nor
+                // of a tab not the agent's, which the core answers as any other.
                 if let Some(why) = self.off_limits(&agent, tab, cx) {
                     self.note(&agent, "request", &host, why);
                     cx.notify();
                     _ = reply.send(ToolResult::error(why));
                     return;
+                }
+                if !self.owns(&agent, tab, cx) {
+                    if let Err(why) = self.may_act(&agent, tab, "request", cx) {
+                        self.note(&agent, "request", &host, &why);
+                        cx.notify();
+                        _ = reply.send(ToolResult::error(why));
+                        return;
+                    }
                 }
                 let requests = match request::parse(&arguments, &self.browser.tab(tab, cx).url) {
                     Ok(requests) => requests,
@@ -3245,14 +3254,18 @@ impl Agents {
         self.browser.may_act(agent, tab, action, cx)
     }
 
-    /// Why `agent` may not see or act on `tab` for its page (`off_limits`), or None. A tab of
-    /// another Space gets the core's answer for any tab not the agent's, so it says nothing of the
-    /// user's page.
+    /// Why `agent` may not see or act on `tab` for its page (`off_limits`), or None. Another
+    /// Space's tab off the web is the core's to answer, and log, as any tab not the agent's, so the
+    /// answer says nothing of the user's page. A Board's answer is that already.
     fn off_limits(&self, agent: &str, tab: u64, cx: &App) -> Option<&'static str> {
         let why = self.browser.off_limits(tab, cx)?;
+        (why == NOT_ITS_SPACE || self.owns(agent, tab, cx)).then_some(why)
+    }
+
+    /// Whether `tab` is in `agent`'s own Space.
+    fn owns(&self, agent: &str, tab: u64, cx: &App) -> bool {
         let space = self.browser.space_of(tab, cx);
-        let own = space != 0 && space == self.browser.agent_space(agent);
-        Some(if own { why } else { NOT_ITS_SPACE })
+        space != 0 && space == self.browser.agent_space(agent)
     }
 
     /// The tabs of `space` an agent sees: none off limits, as `may_act` refuses those.
