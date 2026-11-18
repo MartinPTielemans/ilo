@@ -1426,11 +1426,15 @@ void ReleaseKeyboard(views::Widget* widget) {
     // page's own: NVDA takes 40–55 ms over the window's, and takes the page's two that come in
     // that time as one, the control's, which its browse mode then ignores (#3396). To the window
     // itself, which KeyboardForPage counts as the page's, while the page has no view shown yet or
-    // the window isn't the active one, or is minimized, where Windows keeps it on the window.
+    // the window isn't the active one, or is minimized, where Windows keeps it on the window. And
+    // while the pane has it already, as its DevTools may: the pane gives it up and the page takes
+    // it back, as before.
     const HWND window = views->window();
     const HWND pane =
         GetActiveWindow() == window && !IsIconic(window) ? views->ShownPane() : nullptr;
-    SetFocus(pane ? pane : window);
+    const HWND focus = GetFocus();
+    const bool pane_has = focus && (focus == pane || IsChild(pane, focus));
+    SetFocus(pane && !pane_has ? pane : window);
   }
 }
 
