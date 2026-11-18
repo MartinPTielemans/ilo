@@ -1024,7 +1024,7 @@ PY
 fi
 missed=$(grep ', missed$' "$perf_dir/gate.txt" 2> /dev/null | sed 's/^perf: gate, //; s/: ilo .*(\(.*\)), missed$/ \1/' |
   tr '\n' ';' | sed 's/;$//; s/;/; /g')
-[ -z "$missed" ] || fail "ilo took more than 10 % over Chrome on this runner, $on_cpu: $missed (#456)"
+[ -z "$missed" ] || fail "ilo took more than 10 % over Chrome on this runner: $missed (#456), on $on_cpu"
 apart=$(grep -E '^perf: gate, memory, (10|20) tabs: .*, not settled: ' "$perf_dir/gate.txt" 2> /dev/null |
   sed 's/^perf: gate, memory, \([0-9]*\) tabs: .*, not settled: /\1 tabs, /' | tr '\n' ';' |
   sed 's/;$//; s/;/; /g')
