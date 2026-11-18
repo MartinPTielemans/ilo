@@ -568,6 +568,31 @@ if [ "$major" -ge 157 ]; then
     [ "$key" = NativeWidgetMacNSWindow ] ||
       fail "the command bar closing over Chrome's warning before http gave the keyboard to $key, on $focus, not back to the warning"
   fi
+  # F6 over Chrome's warning before http rings the tab's row, and Tab from there goes into the page
+  # under the warning, whose taking the keyboard hands it to the warning. The warning took it back
+  # from the ring, as F6 activating the window focused the page first (#3443). Windows alone, whose
+  # pane the warning took it back from.
+  if windows; then
+    send key f6
+    f6=$step
+    expect '^browser: sidebar keyed ' "F6 from Chrome's warning before http didn't ring the tab's row"
+    send state
+    in_browser AccessKitSubclassOfGPUIView "after F6 over Chrome's warning before http"
+    send key tab
+    expect '^browser: ring gave the page its first control$' \
+      "Tab from the ring didn't go into the page under Chrome's warning before http"
+    # The warning takes the keyboard back in tasks posted as the pane gets it. Those F6 left were
+    # posted before Tab's, so once Tab's has run, any of F6's has too, and none came before the
+    # ring gave the page the keyboard.
+    expect '^browser: tab dialog took the keyboard back$' \
+      "the page under Chrome's warning before http, given the keyboard by the ring, didn't give it to the warning"
+    [ "$(since "$f6" | sed '/^browser: ring gave the page its first control$/q' |
+      grep -c '^browser: tab dialog took the keyboard back$')" = 0 ] ||
+      fail "Chrome's warning before http took the keyboard back from the ring F6 gave it"
+    send state
+    [ "$key" = NativeWidgetMacNSWindow ] ||
+      fail "Tab from the ring into the page under Chrome's warning before http gave the keyboard to $key, on $focus, not to the warning"
+  fi
   # A click on the page beside the warning: the page drops it, but on the Mac AppKit gives the
   # page's view the keyboard all the same, where every key is dropped. The core gives it back to
   # the warning (dialog_keys.cc), so the second ⌘T, next, still opens the bar (#2625).
