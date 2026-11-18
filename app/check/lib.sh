@@ -941,6 +941,29 @@ cpu() {
 summary() {
   sort -n | awk '{ v[NR] = $1 } END { if (NR) printf "median %.1f ms, max %.1f ms, %d switches", v[int((NR + 1) / 2)], v[NR], NR }'
 }
+# The machine's CPU model and how many CPUs it runs, as "AMD EPYC 7763 64-Core Processor, 4 CPUs",
+# said beside each tab-switch figure. Under Xvfb the UI draws on the CPU, through lavapipe, and an
+# AMD EPYC 7763 runner's switches take about twice an EPYC 9V74's, so a figure compares only with
+# one from the same model (#3418).
+runner_cpu() {
+  local model count
+  if windows; then
+    local processor='HKLM:\HARDWARE\DESCRIPTION\System\CentralProcessor\0'
+    model=$(powershell.exe -NoProfile -NonInteractive -Command \
+      "(Get-ItemProperty '$processor').ProcessorNameString")
+    count=${NUMBER_OF_PROCESSORS:-}
+  elif [ "$(uname)" = Darwin ]; then
+    model=$(sysctl -n machdep.cpu.brand_string 2> /dev/null)
+    count=$(sysctl -n hw.ncpu 2> /dev/null)
+  else
+    model=$(grep -m1 '^model name' /proc/cpuinfo | cut -d: -f2-)
+    # Arm's /proc/cpuinfo names no model.
+    [ -n "$model" ] || model=$(lscpu 2> /dev/null | sed -n 's/^Model name: *//p' | head -1)
+    count=$(nproc 2> /dev/null)
+  fi
+  model=$(printf '%s' "$model" | tr -d '\r' | sed 's/^ *//; s/ *$//')
+  echo "${model:-a CPU that names no model}, ${count:-an unknown number of} CPUs"
+}
 
 # The page view keeps the sidebar's 228 points on its left and 10 on its other sides, over GPUI's
 # view, which fills the window. A full-screen page ("fills") covers the whole window, and with the

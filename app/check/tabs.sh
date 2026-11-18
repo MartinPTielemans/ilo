@@ -2400,6 +2400,6 @@ echo "ok: new tabs open at the top and show, the command bar lists the Space's o
   "and $out/tabs-menu-sorted-dark.png, and the line over Today's menu, Sort offered then dimmed, in" \
   "$out/divider-menu-light.png, $out/divider-menu-dark.png, $out/divider-menu-sorted-light.png" \
   "and $out/divider-menu-sorted-dark.png."
-echo "  Switch to a loaded tab, tab strip to frame shown (Chrome's measure; gate 16 ms): $chrome_ms."
+echo "  Switch to a loaded tab, tab strip to frame shown (Chrome's measure; gate 16 ms) on $(runner_cpu): $chrome_ms."
 echo "  A site search for example: the core listed $listed_rows rows, the bar one."
 echo "  Switch, key to the core's report: $app_ms. Windows: $out/muted.png, $out/tabs.png, $out/bar-close.png, $out/suggestions.png, $out/completion.png, $out/search-tabs.png, $out/url-field-bar.png, $out/commands-only.png, $out/numbered.png, $out/listed.png, $out/popular.png, $out/site-hint.png, $out/site-search.png, $out/field-menu.png, $out/empty.png, $out/remove-suggestion.png, $out/remove-tooltip.png, $out/site-search-settings.png, $out/bar-picked.png, $out/idle-unloaded.png, $out/back-held.png, $out/back-menu.png, $out/back-behind.png, $out/chosen.png, $out/chosen-menu.png"
