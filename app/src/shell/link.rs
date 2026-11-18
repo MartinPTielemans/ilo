@@ -146,8 +146,6 @@ impl Shell {
         }
         let card = self.browser.link_card(tab);
         if card == 0 {
-            // The core asked nothing, as for a page in an agent's Space. check.sh reads this line.
-            log!("browser: link card not asked: refused");
             return false;
         }
         link_target::card_asked(card, link.target.clone(), cx);

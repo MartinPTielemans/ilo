@@ -12,7 +12,8 @@
 # loading, and refused; and the plate growing into it as link-card.mp4 where the OS records.
 # Off in Settings › Links, and in an agent's Space, ⇧ asks nothing: no card shows, and the server
 # gets no request for the link. The agent is an MCP client on the bridge, as mcp.sh's, whose page
-# the user watches from its card and takes over with a click, so the page gets the ⇧.
+# the user watches from its card and clicks in, so the page gets the ⇧. A watched page isn't the
+# window's own tab, so its links get no plate, and ⇧ has nothing to ask the core for.
 # Needs the core's link card (#3085), which a checkout without core/link_card.cc doesn't have.
 
 if [ ! -f ../core/link_card.cc ]; then
@@ -22,6 +23,7 @@ fi
 log="$out/link-cards.log"
 step=0
 rm -f "$saved"
+forget_appearance
 # Settings › Links' switch is kept off as this file, which an earlier run's end may have left.
 cards_off="$profile_dir/link-cards-off"
 rm -f "$cards_off"
@@ -272,6 +274,24 @@ send click "$room_x" "$room_y"
 expect "^browser: title $tab pressed [0-9]*\$" \
   "a click at $room_x $room_y, in the link target's room above its plate (its window at $at), didn't reach the page under it"
 
+# The cards in the dark, a page with its picture and one with none, captured as
+# link-card-<case>-dark.png beside the light ones, then the profile's appearance back.
+send menu "Appearance › Dark"
+expect '^browser: appearance dark$' "View › Appearance › Dark didn't turn the UI dark"
+for each in "page:$page_link:https://cards.test/page.html:page with picture" \
+  "plain:$plain_link:https://cards.test/plain.html:page"; do
+  name=${each%%:*} rest=${each#*:}
+  point=${rest%%:*} rest=${rest#*:}
+  url=${rest%:*} state=${rest##*:}
+  card "$point" "$url" "dark, $name"
+  expect "^browser: link card $state\$" "dark, $name: ⇧ on its link showed no card" "$shifted"
+  ../tools/window-screenshot.sh "$pid" "$out/link-card-$name-dark.png" > /dev/null 2>&1 || true
+  send key escape
+  expect '^browser: link card closed$' "dark, $name: Esc didn't take the card"
+done
+send menu "Appearance › Light"
+expect '^browser: appearance light$' "View › Appearance › Light didn't turn the UI light"
+
 # How many requests the public server logged for the path $1.
 asked() { grep -c "^$1 " "$out/link-cards-public.log" || true; }
 
@@ -387,14 +407,13 @@ plain_asked=$(asked /plain.html)
 agent_step=$step
 send move $plain_link
 expect '^browser: link target cards.test/plain.html$' \
-  "an agent's page: resting on its link showed no link target"
-expect '^browser: link target window shown$' "an agent's page: the link target's window didn't show"
+  "an agent's page: resting on its link didn't report the link"
 send flags shift
-agent_shifted=$step
 expect "^browser: title $agent_tab key Shift [0-9]*\$" "an agent's page: the page didn't get the ⇧"
-expect '^browser: link card not asked: refused$' \
-  "an agent's page: ⇧ on a link with its plate showing asked the core for a card" "$agent_shifted"
 send flags
+# A plate is placed as the link is reported, so none placed by the page's ⇧ is none at all.
+! sed -n "/^browser: drive $agent_step: /,\$p" "$log" | grep '^browser: link target window at ' ||
+  fail "an agent's page: its link got a plate, which only the window's own tab's links get"
 ! sed -n "/^browser: drive $agent_step: /,\$p" "$log" | grep '^browser: link card \(loading\|page\|failed\)' ||
   fail "an agent's page: ⇧ on a link showed a card"
 ../tools/window-screenshot.sh "$pid" "$out/link-cards-agent.png" > /dev/null 2>&1 || true
@@ -402,9 +421,10 @@ send flags
 exec 4>&- 5<&-
 exec 3>&-
 quit
+forget_appearance
 # Long after either ⇧, neither link's page was asked.
 [ "$(asked /bare.html)" = "$bare_asked" ] ||
   fail "Link cards off: the server got a request for the link's page: $(grep '^/bare.html ' "$out/link-cards-public.log")"
 [ "$(asked /plain.html)" = "$plain_asked" ] ||
   fail "an agent's page: the server got a request for the link's page: $(grep '^/plain.html ' "$out/link-cards-public.log")"
-echo "link cards: a page's card with its picture, asked without cookie, referrer or certificate; a private address and a redirect to one refused unasked; a page with no picture, one that says nothing, and one loading; a click in the plate's room reaching the page; and none asked off in Settings › Links, back on turned on, or in an agent's Space, its page watched and taken over"
+echo "link cards: a page's card with its picture, asked without cookie, referrer or certificate; a private address and a redirect to one refused unasked; a page with no picture, one that says nothing, and one loading, light and dark; a click in the plate's room reaching the page; and none asked off in Settings › Links, back on turned on, or in an agent's Space, its page watched and clicked in"
