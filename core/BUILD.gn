@@ -181,6 +181,17 @@ source_set("space_default") {
   ]
 }
 
+# What a sync cycle came to, and whether a trouble has lasted for Settings to say, apart so
+# browser_core_unittests tests the rule alone.
+source_set("sync_trouble") {
+  sources = [
+    "sync_trouble.cc",
+    "sync_trouble.h",
+  ]
+  deps = [ "//base" ]
+  public_deps = [ "//components/sync" ]
+}
+
 # Whether a newer ilo wrote one of the account's Spaces, apart so browser_core_unittests tests the
 # rule alone.
 source_set("sync_spaces_newer") {
@@ -742,6 +753,7 @@ source_set("browser_core") {
     ":sync_guard",
     ":sync_keys",
     ":sync_spaces_newer",
+    ":sync_trouble",
     ":link_card_rule",
     ":typed_http",
     ":typing_keys",
@@ -1069,6 +1081,7 @@ test("browser_core_unittests") {
     "sync_guard_unittest.cc",
     "sync_pairing_unittest.cc",
     "sync_spaces_newer_unittest.cc",
+    "sync_trouble_unittest.cc",
     "sync_updates_unittest.cc",
     "system_stores_unittest.cc",
     "tab_recent_rule_unittest.cc",
@@ -1110,6 +1123,7 @@ test("browser_core_unittests") {
     ":sync_guard",
     ":sync_keys",
     ":sync_spaces_newer",
+    ":sync_trouble",
     ":link_card_rule",
     ":typed_http",
     ":typing_keys",
