@@ -426,6 +426,10 @@ thread_local! {
     static FLAGS: Cell<u16> = const { Cell::new(0) };
     /// The modifiers the last key went with.
     static KEY_FLAGS: Cell<u16> = const { Cell::new(0) };
+    /// Whether the Control the last key left down is a ⌃Tab walk's, which a click keeps held: a
+    /// hand holds ⌃ through a click on the switcher's row, and letting it go first would end the
+    /// walk before the press (#3340).
+    static WALK: Cell<bool> = const { Cell::new(false) };
     /// The modifier keys the driver holds down through XTEST.
     static XTEST_MODIFIERS: Cell<u16> = const { Cell::new(0) };
     /// The other keys the driver holds down through XTEST, whose next press is a repeat.
@@ -974,6 +978,7 @@ fn button(at: Target, button: u8, press: bool, state: u16) -> Option<()> {
         // Control a key left down would make the press a Ctrl-click.
         if XTEST_MODIFIERS.get() != 0 {
             KEY_FLAGS.set(0);
+            WALK.set(false);
         }
         xtest_modifiers(state & MODIFIERS | FLAGS.get())?;
     }
@@ -1424,6 +1429,9 @@ fn key_events(key: &str, mut state: u16, kinds: &[u8]) -> Option<()> {
     state |= FLAGS.get();
     let modifiers = KeyButMask::CONTROL | KeyButMask::MOD1 | KeyButMask::SHIFT;
     KEY_FLAGS.set(state & u16::from(modifiers));
+    // The walk's keys after its ⌃Tab, such as an arrow with Control, keep it.
+    let control = state & u16::from(KeyButMask::CONTROL) != 0;
+    WALK.set(control && (key == "tab" || WALK.get()));
     hold_modifiers();
     if shift {
         state |= u16::from(KeyButMask::SHIFT);
@@ -1442,6 +1450,16 @@ fn hold_modifiers() -> Option<()> {
 /// The modifiers the driver holds between its keys: `flags`', and the Control of the last key.
 fn held_modifiers() -> u16 {
     FLAGS.get() | KEY_FLAGS.get() & u16::from(KeyButMask::CONTROL)
+}
+
+/// The Control a click `action` keeps: a ⌃Tab walk's (WALK), for a left click, as a hand's.
+fn walk_control(action: &str) -> u16 {
+    let kept = matches!(action, "click" | "clickkey") && WALK.get();
+    if kept {
+        u16::from(KeyButMask::CONTROL)
+    } else {
+        0
+    }
 }
 
 /// Lets go of the keys and buttons an earlier launch's driver left down through XTEST. The server
@@ -2679,7 +2697,12 @@ fn run_command(line: &str) -> Option<()> {
                 "middleclick" => 2,
                 _ => 1,
             };
-            click(at, which, click_modifiers(words), false)?;
+            click(
+                at,
+                which,
+                click_modifiers(words) | walk_control(action),
+                false,
+            )?;
             if action == "doubleclick" {
                 click(at, 1, none, true)?;
             }
@@ -2719,7 +2742,7 @@ fn run_command(line: &str) -> Option<()> {
             click(
                 at,
                 if action == "rightclickkey" { 3 } else { 1 },
-                none,
+                walk_control(action),
                 false,
             )?;
             if action == "doubleclickkey" {
@@ -2905,6 +2928,7 @@ fn run_command(line: &str) -> Option<()> {
         // ⌃ through a ⌃Tab walk.
         "flags" => {
             KEY_FLAGS.set(0);
+            WALK.set(false);
             FLAGS.set(modifiers(words));
             hold_modifiers()
         }

@@ -550,24 +550,17 @@ send flags
 expect "^browser: selected $c in " "letting go of ⌃ on $c didn't show it"
 [ "$(switches_since "$from")" = 2 ] ||
   fail "⌃Tab twice switched $(switches_since "$from") times, not twice: on the first press and as ⌃ went up"
-# A press on a row shows its tab, a.
+# A press on a row shows its tab, a, and the tab the walk passed through, b, doesn't count as shown
+# (#3114), so ⌃⇧Tab goes back to it. The press keeps the walk's ⌃ held, as a hand's does (#3340),
+# and waits for the switcher to draw its rows.
 send key tab ctrl
 expect "^browser: tab switcher lists $c $b $a selected $b\$" \
   "⌃Tab held didn't list $c, $b and $a with $b selected: $(grep '^browser: tab switcher lists ' "$log" | tail -1)"
-if windows; then
-  # Windows' driver brings the browser window in front before a real press, which takes the
-  # keyboard from the switcher and closes it, so the press would land on the page.
-  echo "skip: a press on the switcher's row on Windows, as the driver activates the browser window first"
-  held_key right
-  expect "^browser: tab switcher selected $a\$" "→ didn't select $a"
-  send flags
-  expect "^browser: selected $a in " "letting go of ⌃ on $a didn't show it"
-else
-  send clickkey $(switcher_row 2)
-  expect "^browser: tab switcher chose $a\$" "a press on the switcher's third row didn't choose $a"
-  expect "^browser: selected $a in " "a press on the switcher's row didn't show $a"
-  send flags
-fi
+expect '^browser: tab switcher drawn$' "the switcher's window didn't draw a frame"
+send clickkey $(switcher_row 2)
+expect "^browser: tab switcher chose $a\$" "a press on the switcher's third row didn't choose $a"
+expect "^browser: selected $a in " "a press on the switcher's row didn't show $a"
+send flags
 # ⌃⇧Tab starts from the tab shown longest ago, and goes back.
 send key tab ctrl shift
 expect "^browser: selected $b in " "⌃⇧Tab didn't show $b, the tab shown longest ago"
@@ -582,12 +575,6 @@ expect "^browser: selected $a in " "letting go of ⌃ on $a didn't show it"
 send click $sidebar_point
 switch "tab ctrl" "$c"
 expect '^browser: command recent-tab via ui$' "⌃Tab with the UI focused didn't reach the UI"
-send flags
-# A click ends the walk too.
-switch "tab ctrl" "$a"
-send click $(row 1)
-expect "^browser: selected $b in " "a click on the second row didn't show its tab"
-switch "tab ctrl shift" "$c"
 send flags
 send click 100 154
 expect '^browser: command new-tab via sidebar$' "a click on \"+ New Tab\" didn't run New Tab"

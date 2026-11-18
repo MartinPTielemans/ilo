@@ -114,9 +114,13 @@ else
 fi
 bridge_pid=$!
 exec 4> "$out/rules-in" 5< "$out/rules-out"
-# The bridge's next line within 30 s, as mcp's next_answer.
+# The bridge's next line within 30 s, as mcp's next_answer: perl reads it under its own alarm, which
+# doesn't outlive an exec under Git Bash (#3286).
+line_within='alarm shift; my $line = "";
+  while (sysread STDIN, my $byte, 1) { $line .= $byte; last if $byte eq "\n" }
+  print $line; exit($line =~ /\n\z/ ? 0 : 1)'
 next_answer() {
-  perl -e 'alarm 30; exec @ARGV' sh -c 'read -r line && printf "%s\n" "$line"' <&5
+  perl -e "$line_within" 30 <&5
 }
 # The answer on stdin to the call $1: its text, after "error: " if it's an error, or a picture's
 # type and size. An answer to another call, as a page that forged one would make, says so.
@@ -351,7 +355,7 @@ if [ "$driven" = 1 ]; then
   second_pid=$!
   exec 6> "$out/rules-in2" 7< "$out/rules-out2"
   second_answer() {
-    perl -e 'alarm 30; exec @ARGV' sh -c 'read -r line && printf "%s\n" "$line"' <&7
+    perl -e "$line_within" 30 <&7
   }
   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"rules-second","version":"1"}}}' >&6
   second_answer > /dev/null || fail "the browser didn't answer the second connection's initialize"
