@@ -542,8 +542,13 @@ if [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 1
     send key $2
     expect "^browser: tab $tab focus left its page at the $3, kept by the app\$" \
       "$1 from the field didn't leave Safari's engine's page for the app"
-    expect '^browser: sidebar keyed ' "$1 out of Safari's engine's page didn't ring the tab's row"
+    expect "^browser: sidebar keyed $tab\$" "$1 out of Safari's engine's page didn't ring the tab's row"
+    expect "^browser: sidebar ring $tab at " "$1 out of Safari's engine's page didn't draw the row's ring"
     left=$step
+    # The app has the keyboard, not the stop the page's Tab landed on.
+    send state
+    in_browser AccessKitSubclassOfGPUIView "after $1 out of Safari's engine's page"
+    ../tools/window-screenshot.sh "$pid" "$out/mini-bar-safari-$3-row.png" || fail "no window to capture"
     send key $2
     expect "^browser: ring gave the page its $4 control\$" "$1 from the ring didn't go into Safari's engine's page"
     # The ring stayed on the row until this key: the page didn't take the keyboard back by itself.
