@@ -6,7 +6,13 @@
 #include "base/auto_reset.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/task/single_thread_task_runner.h"
+#include "browser_core/agent_autofill.h"
 #include "browser_core/host.h"
+#include "browser_core/window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
@@ -113,6 +119,7 @@ bool PagePresses::OnMouse(content::RenderWidgetHost* widget, const blink::WebMou
   }
   const uint32_t modifiers = Modifiers(event.GetModifiers());
   if (!modifiers || !Host().tab_press_before_page) {
+    FocusPane();
     return false;
   }
   const gfx::PointF at = InPage(widget, event);
@@ -120,12 +127,29 @@ bool PagePresses::OnMouse(content::RenderWidgetHost* widget, const blink::WebMou
   LOG(ERROR) << "browser: tab " << tab_ << " press with modifiers " << modifiers << " "
              << (taken ? "taken" : "left to the page");
   if (!taken) {
+    FocusPane();
     return false;
   }
   pressed_ = widget;
   press_ = event;
   last_ = at;
   return true;
+}
+
+void PagePresses::FocusPane() {
+  // A page behind its tab's dialog ignores input, so it never hears the press that would focus its
+  // pane (Tab::DidGetUserInteraction), and the dialog, hidden while its pane isn't focused, would
+  // never show (#3196). Posted as the page's is. An agent's tab is left as it is.
+  content::WebContents* contents = web_contents();
+  tabs::TabInterface* tab = tabs::TabInterface::MaybeGetFromContents(contents);
+  BrowserWindowInterface* browser = tab ? tab->GetBrowserWindowInterface() : nullptr;
+  TabStripModel* tabs = browser ? browser->GetTabStripModel() : nullptr;
+  const int index = tabs ? tabs->GetIndexOfWebContents(contents) : TabStripModel::kNoTab;
+  if (index == TabStripModel::kNoTab || !tabs->IsTabBlocked(index) || IsAgentTab(contents)) {
+    return;
+  }
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(&Window::OnPageClicked, tab_));
 }
 
 bool PagePresses::End(const gfx::PointF& at) {
