@@ -55,7 +55,7 @@ content::WebContents* ShownPage(views::Widget* window) {
 
 // Hears the keys of |dialog| in its root view, as views gives them to it on every OS: before the
 // dialog for ilo's reserved and Prefer ilo shortcuts (tab_key_before_page), and after it for those
-// it didn't use (tab_key_unhandled), as the core's page gives them.
+// it didn't use (tab_key_unhandled), as the core's page gives them. And its presses.
 class DialogKeys : public ui::EventHandler, public views::WidgetObserver {
  public:
   DialogKeys(views::Widget* dialog, views::Widget* window) : dialog_(dialog), window_(window) {
@@ -99,6 +99,21 @@ class DialogKeys : public ui::EventHandler, public views::WidgetObserver {
     // The tab, the window and the dialog can go in it: nothing here is touched after.
     if (page->GetDelegate()->HandleKeyboardEvent(page, key)) {
       event->StopPropagation();
+    }
+  }
+
+  // A press on the dialog: one on an agent's tab's, such as answering its warning before http,
+  // acts on the agent's tab, so the app takes the tab over as a press in its page does (#3243).
+  // The dialog still gets it.
+  void OnMouseEvent(ui::MouseEvent* event) override {
+    if (event->type() == ui::EventType::kMousePressed && event->phase() == ui::EP_PRETARGET) {
+      Window::DialogPressed(window_, dialog_);
+    }
+  }
+  // A finger on a touch screen, which views gives the dialog as a touch, not a mouse press.
+  void OnTouchEvent(ui::TouchEvent* event) override {
+    if (event->type() == ui::EventType::kTouchPressed && event->phase() == ui::EP_PRETARGET) {
+      Window::DialogPressed(window_, dialog_);
     }
   }
 

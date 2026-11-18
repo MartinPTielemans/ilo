@@ -1176,6 +1176,7 @@ bool Tab::SystemPageFocusLeft(bool reverse) {
 }
 
 void Tab::SystemPageClicked() {
+  Window::PagePressed(web_contents());
   Window::OnPageClicked(id_);
 }
 
@@ -1567,6 +1568,15 @@ void Tab::DidGetUserInteraction(const blink::WebInputEvent& event) {
     last_press_held_command_ = event.GetModifiers() & command;
     last_press_at_ = base::TimeTicks::Now();
     last_press_held_alt_ = event.GetModifiers() & blink::WebInputEvent::kAltKey;
+  }
+  // The user's press, a button or a finger going down, told as it comes, with the tab pressed: in a
+  // split view the window's focused pane changes only once OnPageClicked runs, and the app takes
+  // over the tab pressed, not that one (#3243). An agent's own input comes through DevTools and
+  // reaches here as the user's does, marked kFromDebugger: it takes nothing over.
+  const bool users = !(event.GetModifiers() & blink::WebInputEvent::kFromDebugger);
+  if (users && (event.GetType() == blink::WebInputEvent::Type::kMouseDown ||
+                event.GetType() == blink::WebInputEvent::Type::kTouchStart)) {
+    Window::PagePressed(web_contents());
   }
   // A click, not the keyboard coming to the page: the core moves the keyboard between the pages of
   // a split view itself, and focus reports posted from those moves arrive after the next one.

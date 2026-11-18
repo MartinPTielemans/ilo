@@ -106,8 +106,6 @@ mod needs_you;
 #[path = "../platform/linux/overlays.rs"]
 mod overlays;
 #[cfg(target_os = "linux")]
-#[path = "../platform/linux/page_presses.rs"]
-mod page_presses;
 #[cfg(target_os = "linux")]
 #[path = "../platform/linux/panels.rs"]
 mod panels;
@@ -456,11 +454,10 @@ unsafe extern "C" fn started(_: *mut c_void) {
                 }
             },
             // The page is in the window's own surface, so GPUI's focus doesn't see it take the
-            // keyboard, nor the Shell hear the press (page_pressed).
+            // keyboard.
             page_pressed: |surface| {
                 if let Some(window) = window_in(surface) {
                     ui_keyboard_left_in(window);
-                    page_pressed_in(window);
                 }
             },
             is_ui: |surface| {
@@ -1122,6 +1119,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         tab_press_before_page: Some(tab_press_before_page),
         tab_press_moved: Some(tab_press_moved),
         tab_press_released: Some(tab_press_released),
+        tab_page_pressed: Some(tab_page_pressed),
         tab_boost_zapped: Some(tab_boost_zapped),
         tab_boost_zap_ended: Some(tab_boost_zap_ended),
         tab_arrange_state: Some(boosts_host::tab_arrange_state),
