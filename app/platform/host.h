@@ -427,10 +427,13 @@ void host_hide_drop_targets(void);
 // the keyboard until it's hidden. It starts hidden.
 void host_add_dialog(void* dialog_view);
 
-// Shows the dialog's window over |ui_view|'s window, as the UI draws it now, with the keyboard:
-// over all of it, or with a |width|, over that rect of its content, from its top left, such as a
-// tab's card. Shown already, it moves to the rect.
-void host_show_dialog(void* ui_view, double x, double y, double width, double height);
+// Shows the dialog's window over |ui_view|'s window, as the UI draws it now: over all of it, or
+// with a |width|, over that rect of its content, from its top left, such as a tab's card or a
+// split view's pane. With |keyboard| it has the keyboard, and takes it back as its window takes
+// it; without, it's at rest over a pane the user isn't in, and the window keeps the keyboard for
+// the page beside. Shown already, it moves to the rect and takes the keyboard or gives it up.
+void host_show_dialog(void* ui_view, double x, double y, double width, double height,
+                      bool keyboard);
 
 // Hides the dialog's window. The browser window gets the keyboard back, with the focus where it
 // was.

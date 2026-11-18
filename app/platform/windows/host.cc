@@ -1477,8 +1477,10 @@ Floating g_drop_targets;
 Floating g_dialog;
 // Whether the dialog covers part of its window, as a page's does its tab's card or pane.
 bool g_dialog_part = false;
-// The browser window whose page beside a page's dialog in a split view the user pressed: it keeps
-// the keyboard it took for that page, until the dialog is pressed or shown anew (#3231).
+// The browser window that has the keyboard for the page beside a page's dialog in a split view:
+// the user pressed that page, which the UI then answers by bringing the dialog to rest, or the
+// dialog shows at rest. It lasts until the dialog is pressed, the UI shows it live, or it hides
+// (#3231, #3461).
 HWND g_dialog_lent = nullptr;
 Floating g_site_controls;
 
@@ -4270,19 +4272,39 @@ void host_add_dialog(void* dialog_view) {
 
 // The browser window whose taskbar button flashes for the dialog shown over it in the background.
 static HWND g_dialog_asking = nullptr;
+// The dialog rests over a split view's pane the user isn't in, without the keyboard (#3461).
+static bool g_dialog_rests = false;
 
-void host_show_dialog(void* ui_view, double x, double y, double width, double height) {
-  if (!g_dialog.hwnd || !IsWindowVisible(g_dialog.hwnd)) {
+void host_show_dialog(void* ui_view, double x, double y, double width, double height,
+                      bool keyboard) {
+  HWND root = Root(ui_view);
+  const bool shown = g_dialog.hwnd && IsWindowVisible(g_dialog.hwnd);
+  // At rest the browser window keeps the keyboard for the page beside, through a resize too, and
+  // live again, its pane focused by a click on the dialog or a key, the dialog takes it back.
+  const bool back = keyboard && shown && g_dialog_rests;
+  g_dialog_rests = !keyboard;
+  if (!keyboard) {
+    g_dialog_lent = root;
+  } else if (!shown || back) {
     g_dialog_lent = nullptr;
   }
   g_dialog_part = width > 0;
   // Without a rect, it covers all of the window.
   if (width <= 0) {
     x = y = 0;
-    ContentSize(Root(ui_view), &width, &height);
+    ContentSize(root, &width, &height);
   }
-  Show(g_dialog, ui_view, x, y, width, height, true);
-  HWND root = Root(ui_view);
+  Show(g_dialog, ui_view, x, y, width, height, keyboard);
+  if (!keyboard) {
+    if (g_dialog.hwnd && GetForegroundWindow() == g_dialog.hwnd) {
+      GiveKeyboard(root);
+    }
+    // A dialog at rest blocks nothing the user is in, so it asks for no one's attention.
+    return;
+  }
+  if (back && root && GetForegroundWindow() == root) {
+    SetForegroundWindow(g_dialog.hwnd);
+  }
   // Shown with another app in front, it's its thread's active window meanwhile, as a modal dialog
   // of Windows' own is, without coming in front. The taskbar button and Alt+Tab bring an app back
   // with that window, so it comes back with the keyboard: its browser window, active before it,
@@ -4305,6 +4327,7 @@ void host_show_dialog(void* ui_view, double x, double y, double width, double he
 void host_hide_dialog(void) {
   Hide(g_dialog);
   g_dialog_lent = nullptr;
+  g_dialog_rests = false;
   // Answered or gone before the user came to it, it asks no more.
   if (g_dialog_asking && IsWindow(g_dialog_asking) && GetForegroundWindow() != g_dialog_asking) {
     FLASHWINFO stop{sizeof stop, g_dialog_asking, FLASHW_STOP, 0, 0};

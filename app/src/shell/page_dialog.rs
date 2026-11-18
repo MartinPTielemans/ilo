@@ -1,6 +1,7 @@
 //! A page's own dialogs, such as its alert(), which the core reports for each tab in place of
 //! Chrome's: the tab shown asks with the browser's dialog over its card, or its pane in a split
-//! view, and the others' wait until their tab shows again (docs/ux-spec.md › Page dialogs).
+//! view, where the pane the user isn't in keeps its page's at rest, and the others' wait until
+//! their tab shows again (docs/ux-spec.md › Page dialogs).
 
 use std::fmt;
 
@@ -62,8 +63,9 @@ impl fmt::Debug for PageReply {
     }
 }
 
-/// The dialog shown over the card, by its tab and id, and where.
-pub type ShownPageDialog = (u64, PageDialog, (Bounds<Pixels>, f32));
+/// The dialog shown over the card or a pane, by its tab and id, where, and whether it rests, over
+/// a split view's pane the user isn't in, without the keyboard (#3461).
+pub type ShownPageDialog = (u64, PageDialog, (Bounds<Pixels>, f32), bool);
 
 impl Shell {
     /// The core reports the dialog `tab`'s page asks, or that it asks none.
@@ -111,33 +113,54 @@ impl Shell {
     }
 
     /// Shows the dialog of the tab shown over its card, from the window's draw, or takes back the
-    /// one shown once its tab no longer shows or its page no longer asks. A tab showing its page in
-    /// Safari's engine keeps Chromium's dialog back, as its page isn't the one that asks, until the
-    /// tab is back in Chromium.
+    /// one shown once its tab no longer shows or its page no longer asks. In a split view the
+    /// focused pane's page asks first, and while it asks nothing another pane's rests over its
+    /// pane, so the user sees what that page waits on (#3461). A tab showing its page in Safari's
+    /// engine keeps Chromium's dialog back, as its page isn't the one that asks, until the tab is
+    /// back in Chromium.
     pub(super) fn show_page_dialog(&mut self, cx: &mut Context<Self>) {
-        let asked = self.page_dialogs.get(&self.selected);
-        let asked = asked.filter(|_| !self.page(self.selected).system_engine);
+        let panes = self.panes(self.selected);
+        let asked = std::iter::once(self.selected)
+            .chain(panes.iter().copied().filter(|&tab| tab != self.selected))
+            .find_map(|tab| {
+                let dialog = self.page_dialogs.get(&tab)?;
+                (!self.page(tab).system_engine).then_some((tab, dialog))
+            });
         // The user's page is out of the window while a task has the page area, and its dialog
         // waits for it.
         let asked = asked.filter(|_| self.task_area.is_none());
         // A Little ilo window's own page first, then what a tab it sent behind asks to open.
-        let asked = asked
-            .map(|dialog| (self.selected, dialog))
-            .or_else(|| self.little_sent_asks());
+        let asked = asked.or_else(|| self.little_sent_asks());
         let wanted = match (asked, self.page_laid) {
-            (Some((tab, dialog)), Some(laid)) => {
-                Some((tab, dialog.clone(), self.pane_laid(tab, laid)))
-            }
+            (Some((tab, dialog)), Some(laid)) => Some((
+                tab,
+                dialog.clone(),
+                self.pane_laid(tab, laid),
+                self.dialog_rests(tab),
+            )),
             _ => None,
         };
         let key = wanted
             .as_ref()
-            .map(|(tab, dialog, over)| (*tab, dialog.id, *over));
+            .map(|(tab, dialog, over, rests)| (*tab, dialog.id, *over, *rests));
         if self.page_dialog_shown == Some(key) {
             return;
         }
         self.page_dialog_shown = Some(key);
         self.browser.show_page_dialog(wanted, cx);
+    }
+
+    /// Whether `tab`'s dialog rests: it's in a split view's pane the user isn't in, so the page
+    /// beside keeps the keyboard and the window's shortcuts.
+    fn dialog_rests(&self, tab: u64) -> bool {
+        tab != self.selected && self.panes(self.selected).contains(&tab)
+    }
+
+    /// Focuses `tab`'s pane, for a click on its dialog at rest, which then goes live with it.
+    pub fn focus_dialog_pane(&mut self, tab: u64, cx: &mut Context<Self>) {
+        if self.dialog_rests(tab) {
+            self.select(tab, cx);
+        }
     }
 
     /// Where `tab`'s page is in the page area `laid`: its pane in a split view, as Chrome shows a

@@ -4235,7 +4235,7 @@ impl link_preview::Host for PreviewPeek {
 struct PreviewDialog;
 
 impl dialog::Host for PreviewDialog {
-    fn show(&self, _: Option<u64>, _: Option<Bounds<Pixels>>) {}
+    fn show(&self, _: Option<u64>, _: Option<Bounds<Pixels>>, _: bool) {}
 
     fn hide(&self) {}
 }

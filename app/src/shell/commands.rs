@@ -1456,8 +1456,13 @@ pub fn bind_keys(cx: &mut App) {
     super::bind_conversation_keys(cx);
     cx.on_action(|run: &Run, cx| {
         // The menu's keys reach it from the dialog's window too, and the dialog has to be
-        // answered first, as an alert's does.
-        if crate::dialog::asking(cx) {
+        // answered first, as an alert's does. A page's blocks its own pane alone, so the keys
+        // to another pane leave it, at rest (#3461).
+        let moves_pane = matches!(
+            run.0,
+            Command::NextPane | Command::PreviousPane | Command::FocusPane(_)
+        );
+        if crate::dialog::asking(cx) && !(moves_pane && crate::dialog::asks_page(cx)) {
             return;
         }
         // A shortcut in the UI opens its field before GPUI has read the keys typed after it, which

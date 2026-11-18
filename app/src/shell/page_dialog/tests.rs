@@ -210,9 +210,59 @@ fn in_a_split_the_dialog_covers_its_own_pane(cx: &mut TestAppContext) {
         (laid.0.top(), laid.0.bottom())
     );
     assert!(over.0.right() < laid.0.center().x, "{over:?} in {laid:?}");
-    // A click on the page beside focuses its pane, and the dialog goes with its pane's focus.
+    // A click on the page beside focuses its pane, and the dialog stays over its own, at rest,
+    // where the page beside keeps the keyboard (#3461).
     select(&shell, cx, 20);
-    assert_eq!(dialogs(&host), ["page dialog none"]);
+    assert_eq!(dialogs(&host), ["page dialog 10 1 at rest"]);
+    let rests_over = shell.read_with(cx, |shell, _| shell.page_dialog_shown.flatten().unwrap().2);
+    assert_eq!(rests_over, over);
+    // A click on it at rest focuses its pane, and once the core shows that, it's live again.
+    shell.update(cx, |shell, cx| shell.focus_dialog_pane(10, cx));
+    cx.run_until_parked();
+    assert!(host.take().contains(&"select 10".to_string()));
     select(&shell, cx, 10);
     assert_eq!(dialogs(&host), ["page dialog 10 1"]);
+    // Live, its pane is focused already.
+    shell.update(cx, |shell, cx| shell.focus_dialog_pane(10, cx));
+    cx.run_until_parked();
+    assert!(host.take().is_empty());
+}
+
+#[gpui::test]
+fn in_a_split_the_focused_panes_dialog_asks_first(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx);
+    shell.update(cx, |shell, cx| {
+        let split = Split {
+            tabs: vec![10, 20],
+            ..Default::default()
+        };
+        shell.set_tabs(
+            1,
+            Vec::new(),
+            vec![10, 20, 30],
+            vec![split],
+            Folders::default(),
+            cx,
+        );
+        shell.set_selected(10, cx);
+    });
+    cx.run_until_parked();
+    host.take();
+    // A tab outside the split waits for its tab to show, as anywhere.
+    ask(&shell, cx, 30, Some(prompt(3)));
+    assert_eq!(dialogs(&host), Vec::<String>::new());
+    // The pane beside asks at rest while the one the user is in asks nothing.
+    ask(&shell, cx, 20, Some(prompt(2)));
+    assert_eq!(dialogs(&host), ["page dialog 20 2 at rest"]);
+    // The user's pane asking comes first, live; the other's waits.
+    ask(&shell, cx, 10, Some(prompt(1)));
+    assert_eq!(dialogs(&host), ["page dialog 10 1"]);
+    ask(&shell, cx, 10, None);
+    assert_eq!(dialogs(&host), ["page dialog 20 2 at rest"]);
+    // Its pane focused by keys, it's live.
+    shell.update(cx, |shell, cx| shell.focus_pane(true, cx));
+    cx.run_until_parked();
+    assert!(host.take().contains(&"select 20".to_string()));
+    select(&shell, cx, 20);
+    assert_eq!(dialogs(&host), ["page dialog 20 2"]);
 }

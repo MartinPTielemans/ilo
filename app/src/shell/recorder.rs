@@ -1006,7 +1006,10 @@ impl Browser for Recorder {
 
     fn show_page_dialog(&self, shown: Option<ShownPageDialog>, _: &mut App) {
         match shown {
-            Some((tab, dialog, _)) => self.record(format!("page dialog {tab} {}", dialog.id)),
+            Some((tab, dialog, _, rests)) => {
+                let rests = if rests { " at rest" } else { "" };
+                self.record(format!("page dialog {tab} {}{rests}", dialog.id))
+            }
             None => self.record("page dialog none".into()),
         }
     }

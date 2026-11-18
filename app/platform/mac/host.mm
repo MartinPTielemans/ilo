@@ -498,8 +498,9 @@ NSTimeInterval g_active_since = 0;
 // What the dialog covers, as insets from the browser window's content edges: none for all of it,
 // or a tab's card for a page's dialog, which keeps them as the window resizes.
 NSEdgeInsets g_dialog_insets;
-// The user pressed the page in the pane beside a page's dialog in a split view: the browser window
-// keeps the keyboard it took for that page, until the dialog takes it again (#3231).
+// The browser window has the keyboard for the page beside a page's dialog in a split view: the
+// user pressed that page, which the UI then answers by bringing the dialog to rest, or the dialog
+// shows at rest. It lasts until the UI shows the dialog live again, or it hides (#3231, #3461).
 bool g_dialog_lent = false;
 
 // The Site Controls' window and view, the browser they show over, and where their top left goes
@@ -3782,7 +3783,8 @@ void host_add_dialog(void* dialog_view) {
               }];
 }
 
-void host_show_dialog(void* ui_view, double x, double y, double width, double height) {
+void host_show_dialog(void* ui_view, double x, double y, double width, double height,
+                      bool keyboard) {
   Browser* browser = BrowserWithView(ui_view);
   if (!g_dialog || !browser || !browser->window) {
     return;
@@ -3792,14 +3794,28 @@ void host_show_dialog(void* ui_view, double x, double y, double width, double he
                                                  NSWidth(content) - x - width)
                               : NSEdgeInsetsZero;
   if (g_dialog_shown) {
-    // The card it's over moved, such as when the sidebar hid.
-    if (g_dialog_over == browser) {
-      [g_dialog setFrame:DialogFrame(browser) display:YES];
+    if (g_dialog_over != browser) {
+      return;
+    }
+    // The card or pane it's over moved, such as when the sidebar hid.
+    [g_dialog setFrame:DialogFrame(browser) display:YES];
+    if (!keyboard) {
+      // At rest: the browser window keeps the keyboard for the page beside, through a resize too.
+      g_dialog_lent = true;
+      if (g_dialog.isKeyWindow) {
+        [browser->window makeKeyWindow];
+      }
+    } else if (g_dialog_lent) {
+      // Live again, its pane focused: it takes the keyboard back, unless another window has it.
+      g_dialog_lent = false;
+      if (browser->window.isKeyWindow) {
+        [g_dialog makeKeyWindow];
+      }
     }
     return;
   }
   g_dialog_shown = true;
-  g_dialog_lent = false;
+  g_dialog_lent = !keyboard;
   g_dialog_over = browser;
   // After the UI's update that asked, since the window draws here: at its frame, before it shows,
   // since it keeps the last frame it drew.
@@ -3811,8 +3827,12 @@ void host_show_dialog(void* ui_view, double x, double y, double width, double he
     [g_dialog_view.layer setNeedsDisplay];
     [g_dialog_view.layer displayIfNeeded];
     AddOver(browser->window, g_dialog);
-    [g_dialog makeKeyAndOrderFront:nil];
-    fprintf(stderr, "browser: dialog window shown\n");
+    if (g_dialog_lent) {
+      [g_dialog orderFront:nil];
+    } else {
+      [g_dialog makeKeyAndOrderFront:nil];
+    }
+    fprintf(stderr, "browser: dialog window shown%s\n", g_dialog_lent ? " at rest" : "");
   });
 }
 
