@@ -217,9 +217,11 @@ switch "$(board_index "$plain_a") cmd" "$plain_a"
 expect 'browser: board saved$' "the Board of 2,000 notes didn't save as its tab hid again"
 board_memory "two plain pages, the Board in the background"
 
-board_traced latency switches-plain.json board_switches 10 "$plain_a" data:text/html,plain-a "$plain_b" data:text/html,plain-b
+# The workflow's trace input adds categories, such as toplevel for where a switch spends its time.
+switch_categories=$trace_categories
+board_traced "$switch_categories" switches-plain.json board_switches 10 "$plain_a" data:text/html,plain-a "$plain_b" data:text/html,plain-b
 board_spans switches-plain.json "between two plain pages"
-board_traced latency switches-board.json board_switches 10 "$plain_a" data:text/html,plain-a "$board" "chrome://board/$id"
+board_traced "$switch_categories" switches-board.json board_switches 10 "$plain_a" data:text/html,plain-a "$board" "chrome://board/$id"
 board_spans switches-board.json "" "plain page to the Board" "the Board to a plain page"
 
 # Each add from the Board shown, as a drop is on the page in view.
