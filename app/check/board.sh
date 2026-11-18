@@ -11,7 +11,8 @@
 # showing lands when it's shown, a step from the first, both captured. A Board's file over 4 MiB,
 # which the host doesn't read, says so and is never written over, captured, as is one holding []
 # rather than a Board. A private window has no New Board, and a Board's address there shows "This
-# Board isn't here.", captured. Japanese input as the first keys is the hosted Mac's.
+# Board isn't here.", captured. The Board holding [] shows its file in the system's file manager
+# from its note's button, last. Japanese input as the first keys is the hosted Mac's.
 
 log="$out/board.log"
 step=0
@@ -212,7 +213,8 @@ PYEOF
 [ ! -s "$out/board-landed.why" ] || fail "$(cat "$out/board-landed.why")"
 ../tools/window-screenshot.sh "$pid" "$out/board-landed-shown.png" || fail "no window to capture"
 
-# A Board's file over 4 MiB, which the host doesn't read, says so, and a pan doesn't write over it.
+# A Board's file over 4 MiB, which the host doesn't read, says so with a button to show the file,
+# captured, and a pan doesn't write over it.
 # Other Boards save as a hover card's picture shows them, so the file is what's compared.
 large=$(printf 'c%.0s' $(seq 32))
 mkdir -p "$boards/$large"
@@ -271,12 +273,27 @@ send insert "chrome://board/$id"
 send key return
 expect "^browser: loaded [0-9]* chrome://board/$id\$" "the Board's address didn't load in the private window"
 ../tools/window-screenshot.sh "$pid" "$out/board-private.png" || fail "no window to capture"
+private=$(grep '^browser: private window opened ' "$log" | tail -1 | cut -d' ' -f5)
+
+# #3224: the Board holding [] offers its file in the system's file manager, its button with the
+# keyboard, and that leaves the file as it was. Last, as the Finder and Explorer take the keyboard
+# from the app.
+send window 2
+send key w cmd shift
+expect "^browser: window closed $private\$" "⇧⌘W didn't close the private window"
+send window 1
+send key return
+expect '^browser: board shows its file$' \
+  "↩ on the unreadable Board, whose Show button has the keyboard, didn't show its file"
+[ "$(cat "$boards/$other/board.json")" = '[]' ] ||
+  fail "showing the unreadable Board's file changed it: $(head -c 200 "$boards/$other/board.json")"
 quit
 echo "ok: New Board made $id, its name kept and its note saved in its folder alone, unlogged;" \
   "Library › Boards listed it; renamed, found by the bar, archived and reopened, the log said" \
   "only \"(a Board)\", and its next save kept the note; markup and a javascript: link ran" \
   "nothing; a waiting picture landed as a card and left the arrivals, and one that came while" \
   "its tab wasn't showing landed a step from it when shown; a Board over 4 MiB and one" \
-  "holding [] weren't written over; a private window had no New Board." \
+  "holding [] weren't written over, and the one holding [] showed its file; a private window had" \
+  "no New Board." \
   "Windows: $out/board.png $out/board-markup.png $out/board-landed.png" \
   "$out/board-landed-shown.png $out/board-unread.png $out/board-private.png"
