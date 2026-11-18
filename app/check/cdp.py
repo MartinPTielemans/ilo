@@ -49,11 +49,12 @@ takes a command a line on its standard input:
                   last at an address starting with PREFIX matches SELECTOR, in its shadow trees
                   too, or none for no such page: a WebUI page shows what Chrome did by its
                   controls' attributes, as a disabled menu
-  video PREFIX    logs "cdp: video SECONDS playing|paused ad|no-ad refused|-", or "cdp: video
-                  none" for no such page or no video in it: how far the first video in the page
-                  opened last at an address starting with PREFIX has played, whether it's paused,
-                  whether its player shows an ad, and refused where Chrome kept it from starting,
-                  as YouTube's player says
+  video PREFIX    logs "cdp: video SECONDS playing|paused ad|no-ad refused|cued|STATE", or "cdp:
+                  video none" for no such page or no video in it: how far the first video in the
+                  page opened last at an address starting with PREFIX has played, whether it's
+                  paused, whether its player shows an ad, and refused where Chrome kept it from
+                  starting, cued where it waits for play, or else the player's state, as
+                  YouTube's player says, - with no player
   content         logs "cdp: content TEXT IMAGES COVER", or "cdp: content none" for no page: the
                   attached page's shown text, in characters, its shown pictures at least 50 px a
                   side, and the percent of the viewport the largest element fixed in place over
@@ -67,15 +68,17 @@ takes a command a line on its standard input:
                   sheet hides and which the page hid itself (#3268); and with BASE, an
                   earlier run's FILE for the same site, its selectors none of whose elements were
                   shown then, the page's own aside, and some are now. Logs "cdp: hidden SELECTORS
-                  ELEMENTS SHOWN blocker SELECTORS page SELECTORS missed SELECTORS ELEMENTS in MS
-                  ms"
+                  ELEMENTS SHOWN blocker SELECTORS page SELECTORS missed SELECTORS ELEMENTS
+                  untold ELEMENTS SELECTORS in MS ms", untold those not told apart in 15 s
   requests FILE   records each request the attached page and its frames make from now on, a JSON
                   line each in FILE: "sent" with its id, address and wall time in ms, and
-                  "redirect": true where it's a redirect of the request before it, "failed"
+                  "redirect": true where it's a redirect of the request before it, and
+                  "document": true where it's the page's own, its top frame's, "failed"
                   with its id and Chromium's error, as net::ERR_BLOCKED_BY_CLIENT for an ad
-                  blocker's, and "answered" with its id for a response from no server, network
-                  cache or service worker, as the browser's own ad blocker's stand-in is, then
-                  logs "cdp: recording requests"
+                  blocker's, "answered" with its id for a response from no server, network
+                  cache or service worker, as the browser's own ad blocker's stand-in is, and
+                  "document" with its id, HTTP status and address for the page's own response,
+                  then logs "cdp: recording requests"
 For perf's Chrome on the same runner (check/perf.sh), which has no driver of its own:
   titles          logs "cdp: title TARGET TITLE" for each page's title now, then each time a page's
                   changes, where perf's page stamps its paint and each time it's shown. DevTools
@@ -229,6 +232,28 @@ def call(method, params=None, session=None, quiet=False):
     return reply["result"]
 
 
+def calls(method, many, session):
+    """METHOD's result for each of MANY's params, None where one fails. They're sent together and
+    the browser answers them in turn, matched by id, so asking N costs no N round trips (#3335)."""
+    global sent
+    numbers = []
+    for params in many:
+        with lock:
+            sent += 1
+            numbers.append(sent)
+        message = {"id": numbers[-1], "method": method, "params": params}
+        if session:
+            message["sessionId"] = session
+        with sending:
+            send(json.dumps(message).encode())
+    results = []
+    with answered:
+        for number in numbers:
+            answered.wait_for(lambda: number in replies)
+            results.append(replies.pop(number).get("result"))
+    return results
+
+
 def post(method, params, session):
     """Sends a command whose reply nothing waits for, from the thread that reads the replies."""
     global sent
@@ -238,6 +263,12 @@ def post(method, params, session):
     with sending:
         send(json.dumps({"id": number, "method": method, "params": params,
                          "sessionId": session}).encode())
+
+
+def top_document(params):
+    """Whether a request's event is the attached page's own document, its top frame's, whose id is
+    the page's target id."""
+    return params.get("type") == "Document" and params.get("frameId") == attached
 
 
 def record(message):
@@ -257,10 +288,17 @@ def record(message):
         # are a renderer's process id and a count, and the OS gives a later process the same id.
         if "redirectResponse" in params:
             line["redirect"] = True
+        if top_document(params):
+            line["document"] = True
     elif method == "Network.loadingFailed":
         line = {"event": "failed", "id": params["requestId"], "error": params["errorText"]}
     elif method == "Network.responseReceived":
         response = params["response"]
+        if top_document(params):
+            # The page's own answer, so a page that didn't load says whether its server refused it.
+            recording.write(json.dumps({"event": "document", "id": params["requestId"],
+                                        "status": response["status"], "url": response["url"]})
+                            + "\n")
         kept = ("fromDiskCache", "fromServiceWorker", "fromPrefetchCache", "fromEarlyHints")
         if response.get("remoteIPAddress") or any(response.get(key) for key in kept):
             return True
@@ -500,7 +538,8 @@ def ask(prefix, script, selector):
 # ad, and whether Chrome refused to start it, as YouTube's says with classes on the player round
 # it. Refused, the player has asked to play, as playing-mode says, and has the data to, but the
 # video is still paused and has never started, as Chrome lets a page start a video with sound only
-# once the user has acted on it.
+# once the user has acted on it. Cued, the player has the video and waits for play to be pressed,
+# as its state 5 says (#3272). Otherwise the player's state, as a number, or - with no player.
 VIDEO = """(() => {
   const video = document.querySelector("video");
   if (!video) return "";
@@ -510,8 +549,11 @@ VIDEO = """(() => {
   const refused = player && player.classList.contains("playing-mode") &&
     player.classList.contains("unstarted-mode") && video.paused &&
     video.readyState === HTMLMediaElement.HAVE_ENOUGH_DATA;
+  const state = player && typeof player.getPlayerState === "function" ?
+    String(player.getPlayerState()) : "-";
+  const cued = state === "5" && video.paused;
   return video.currentTime.toFixed(1) + (video.paused ? " paused" : " playing") +
-         (ad ? " ad" : " no-ad") + (refused ? " refused" : " -");
+         (ad ? " ad" : " no-ad") + (refused ? " refused" : cued ? " cued" : " " + state);
 })()"""
 
 
@@ -653,14 +695,21 @@ def blockers(rules):
             and r["selectorList"]["text"] not in BLINKS and "-internal-" not in r["selectorList"]["text"]]
 
 
+# How many of whose() asks go to the browser together: enough that it's never waiting on the
+# check, few enough that a blocker's rule found in one says the next wave's answers already.
+WAVE = 32
+
+
 def whose(selectors, budget=15):
-    """Of SELECTORS, those a blocker hid and those the page hid itself, as two lists. A blocker's
+    """Of SELECTORS, those a blocker hid and those the page hid itself, as two lists, then how many
+    marked elements and selectors weren't told apart when BUDGET ended. A blocker's
     hiding is a rule from a style sheet the page didn't load, as blockers() tells it: the
     browser's own engine's (core/ad_block_page_agent.cc) and uBlock Origin's, their procedural
     filters' too, which hide by an attribute and a rule. The page's own is an element at display: none that no such
     rule hides, as a player's controls before it plays (#3268). A selector is the page's only
     where every element looked at is, and one not told apart in BUDGET seconds is neither, so it
-    counts as the blocker's would."""
+    counts as the blocker's would. Each selector's first element is asked about before any
+    selector's second, so a page's many hidden parts get the most selectors an answer."""
     began = time.monotonic()
     owners = evaluate("%s(%s)" % (MARK, json.dumps(selectors))) or []
     call("DOM.enable", {}, session)
@@ -673,21 +722,30 @@ def whose(selectors, budget=15):
     # at once where it's the blocker's: most of a page's hiding is a few of its rules.
     lists = []
     if len(nodes) == len(owners):
-        for k, node in enumerate(nodes):
-            if said[k] or time.monotonic() - began > budget:
-                continue
-            styles = call("CSS.getMatchedStylesForNode", {"nodeId": node}, session, quiet=True)
-            if styles is None:
-                continue
-            rules = [m["rule"] for m in styles.get("matchedCSSRules", []) if hides_none(m["rule"])]
-            theirs = blockers(rules)
-            if not theirs:
-                said[k] = "page"
-                continue
-            said[k] = "blocker"
-            new = [text for text in theirs if text not in lists]
-            if new:
+        # Each marked element's place among its selector's, the order they're asked about in.
+        nth, seen = [], {}
+        for owner in owners:
+            nth.append(seen.get(owner, 0))
+            seen[owner] = nth[-1] + 1
+        order = sorted(range(len(nodes)), key=lambda k: (nth[k], k))
+        while time.monotonic() - began <= budget:
+            wave = [k for k in order if said[k] is None][:WAVE]
+            if not wave:
+                break
+            asked = set(wave)
+            order = [k for k in order if k not in asked]
+            found = False
+            for k, styles in zip(wave, calls("CSS.getMatchedStylesForNode",
+                                             [{"nodeId": nodes[k]} for k in wave], session)):
+                if styles is None:
+                    continue
+                rules = [m["rule"] for m in styles.get("matchedCSSRules", []) if hides_none(m["rule"])]
+                theirs = blockers(rules)
+                said[k] = "blocker" if theirs else "page"
+                new = [text for text in theirs if text not in lists]
                 lists += new
+                found = found or bool(new)
+            if found:
                 for i, hit in enumerate(evaluate("%s(%s)" % (MATCHES, json.dumps(lists))) or []):
                     if hit and i < len(said):
                         said[i] = "blocker"
@@ -700,7 +758,8 @@ def whose(selectors, budget=15):
         told.setdefault(selectors[owner], []).append(verdict)
     blocker = sorted(s for s, v in told.items() if "blocker" in v)
     page = sorted(s for s, v in told.items() if all(x == "page" for x in v))
-    return blocker, page
+    untold = [s for s, v in told.items() if None in v and "blocker" not in v]
+    return blocker, page, [said.count(None), len(untold)]
 
 
 def hidden(path, base):
@@ -711,7 +770,7 @@ def hidden(path, base):
     if not major.isdigit() or int(major) not in BLINKS_READ:
         found["blinks_unread"] = product
     # Only a selector none of whose elements show can be one a later run misses.
-    found["blocker"], found["page"] = whose([s for s, (_, shown) in found["hidden"].items()
+    found["blocker"], found["page"], found["untold"] = whose([s for s, (_, shown) in found["hidden"].items()
                                              if not shown])
     before = json.load(open(base, encoding="utf-8")) if base else {"hidden": {}}
     # What the earlier run hid all of and this one shows some of. A selector whose elements were
@@ -723,10 +782,11 @@ def hidden(path, base):
     found["ms"] = int((time.monotonic() - began) * 1000)
     with open(path, "w", encoding="utf-8") as out:
         json.dump(found, out)
-    return "%d %d %d blocker %d page %d missed %d %d in %d ms" % (
+    return "%d %d %d blocker %d page %d missed %d %d untold %d %d in %d ms" % (
         len(found["hidden"]), sum(n for n, _ in found["hidden"].values()),
         sum(shown for _, shown in found["hidden"].values()), len(found["blocker"]),
-        len(found["page"]), len(found["missed"]), sum(found["missed"].values()), found["ms"])
+        len(found["page"]), len(found["missed"]), sum(found["missed"].values()),
+        found["untold"][0], found["untold"][1], found["ms"])
 
 
 for line in sys.stdin:

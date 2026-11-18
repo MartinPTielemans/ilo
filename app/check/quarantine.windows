@@ -4,4 +4,8 @@
 # Only the memory rows at 10 and 20 tabs fail perf's gate (check/perf.sh), so this names them alone.
 perf #2138 2026-11-10 ilo took more than 10 % over Chrome on this runner: memory,
 trouble #2676 2026-11-13 the run didn't end at the first column
-history #3164 2026-11-16 ⌘L in the user's window, with the agent's tab at Chrome's warning before http, didn't open the command bar
+# On Windows a rest where the carried thing doesn't fit flips between Refused and a settle with no
+# pointer move, and letting go lands the settle (#3379): Wide at the side's edge in arrange, the
+# narrow column's refused card in arrange-drop. The Mac and Linux refuse there and land nothing.
+arrange #3379 2026-11-18 letting go where the rest refused Wide landed a drop all the same
+arrange-drop #3379 2026-11-18 a card that can't be 120 wide is refused in the narrow column: letting go where the rest refused landed a drop all the same

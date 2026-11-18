@@ -9,9 +9,10 @@ use std::rc::Rc;
 
 use gpui::{
     AnyElement, App, Bounds, Context, FocusHandle, Focusable, FontWeight, Global,
-    HoverListenerMode, Hsla, KeyBinding, MouseButton, ScrollHandle, SharedString, TitlebarOptions,
-    Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions,
-    actions, div, img, linear_color_stop, linear_gradient, point, prelude::*, px, size, svg,
+    HoverListenerMode, Hsla, KeyBinding, MouseButton, MouseDownEvent, ScrollHandle, SharedString,
+    TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind,
+    WindowOptions, actions, div, img, linear_color_stop, linear_gradient, point, prelude::*, px,
+    size, svg,
 };
 
 use crate::elevation::Level;
@@ -368,6 +369,18 @@ impl TabSwitcher {
                 cx.listener(move |switcher, _, _, cx| {
                     cx.stop_propagation();
                     switcher.heard(Heard::Chose(tab), cx);
+                }),
+            )
+            // ⌃ is held while the switcher shows, and GPUI hands the Mac's ⌃-left press on as a
+            // right press with ⌃ cleared, so that's the user's click too (#3360). A right press
+            // has ⌃ set everywhere else.
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |switcher, event: &MouseDownEvent, _, cx| {
+                    if !event.modifiers.control {
+                        cx.stop_propagation();
+                        switcher.heard(Heard::Chose(tab), cx);
+                    }
                 }),
             )
             .child(icon)

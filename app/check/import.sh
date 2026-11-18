@@ -201,10 +201,15 @@ web_data="$profile_dir/Default/Web Data"
 # The app on Windows takes Windows' paths, and starts in a folder of its own.
 # Arc's Work profile is held back from its Space until the run releases it, with Shift+F12, so the
 # captures show its card waiting and then stalled however fast the profile loads (import_host.rs).
+# The Web Store page an imported extension's Add… opens comes from a server of the run's own,
+# which a runner always reaches (#3144).
+serve_tls store '<meta charset=utf-8><link rel=icon href="data:,"><title>Check Pinned</title>
+<h1>Check Pinned</h1>' chromewebstore.google.com
 BROWSER_IMPORT_HOLD=Work BROWSER_IMPORT_HOME="$(native_path "$PWD/$home")" \
   BROWSER_IMPORT_PASSWORDS="$(native_path "$PWD/$passwords")" \
   BROWSER_IMPORT_BOOKMARKS="$(native_path "$PWD/$bookmarks")" BROWSER_DRIVE=1 BROWSER_URL="${site}import.html" \
-  "$browser" --extension-mime-request-handling=always-prompt-for-install < "$out/drive" \
+  "$browser" --extension-mime-request-handling=always-prompt-for-install \
+  --host-resolver-rules="$tls_rules" --ignore-certificate-errors-spki-list="$tls_key" < "$out/drive" \
   > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
@@ -648,6 +653,10 @@ send state
 ../tools/window-screenshot.sh "$pid" "$out/import-extensions.png" || fail "no window to capture"
 click_in_sight "import-add-extension $pinned_id"
 expect "^browser: import add extension $pinned_id\$" "Add… didn't take the extension off the list"
+store="https://chromewebstore.google.com/detail/$pinned_id"
+expect "^browser: loaded [0-9]* $store\$" "Add… didn't load the extension's Web Store page"
+grep -qxF "store: GET $store" "$out/store-tls.log" ||
+  fail "the Web Store page didn't come from the run's server: $(grep -v '^store: ' "$out/store-tls.log" | tail -3)"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 go_from_bar "${site}pinned.crx"
@@ -746,6 +755,9 @@ else
   echo "skip: importing from Safari, with Full Disk Access: Safari is the Mac's."
 fi
 quit
+# Its server stops with it, as the runs after it in the call start their own (#3345).
+kill "$tls" 2> /dev/null || true
+tls= tls_port=
 [ -n "$arc" ] || echo "skip: import's Arc steps. Arc has no Linux build, so it's never found there."
 echo "ok: Settings › Import finds the fixture's Arc, Chrome and Firefox. From Arc come its Spaces,"
 echo "  one in a new profile, their pinned tabs and folders, Personal's Today tab, and its favorites; from"
@@ -755,6 +767,7 @@ echo "  A bookmarks file comes in as a Space named Bookmarks, and a second time 
 echo "  A passwords file comes in, says how many, and is deleted when asked; a second one says its"
 echo "  changed login conflicted and kept the saved one; Settings' Passwords tab lists the three,"
 echo "  and the app menu's Import from Other Browsers… shows Import again."
+echo "  Add… on an imported extension loads its Web Store page, from the run's own server."
 [ "$(uname)" != Darwin ] || echo "  Safari waits for Full Disk Access, then its bookmarks, Reading List and history come in, once."
 echo "  With the sidebar hidden, Arc's two Spaces say so in a toast."
 echo "  Settings' list and $first_found's choices, under Import › $first_found, at 820 by 660 and"

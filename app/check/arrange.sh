@@ -365,58 +365,25 @@ picks 2 Alpha
 picks 1 Beta
 picks 0 Gamma
 
-# A fit refusal: the wide section at the side's edge, where it doesn't fit, and nothing changes.
-# Known under #3003, in two shapes. On main's core the edge, the gap between Side and Note, is the
-# side's middle, and the core trades Wide with the side itself, kept as it's let go. On the
-# batch's core the rest refuses, but the release lands the settle the move showed before it,
-# between Side and Note, and saves it. The run asserts each as the core gives it, reports it, and
-# takes it back with ⌘Z, as it takes the float back below, so the steps after it start from the
-# page before it. Once the core refuses there and saves nothing, the run says so. A refusal shows
-# no preview: the rest finds the drop doesn't fit, and the step stays Carrying, Refused.
+# A fit refusal: the wide section at the side's edge, where it doesn't fit. The rest finds the drop
+# doesn't fit and shows no preview, the step staying Carrying, Refused, and letting go there lands
+# nothing: the thing stays selected where it was and nothing is saved (#3003).
 carry $(slot 3) $(side_edge)
 expect "^browser: arrange $tab \(Preview\|Carrying Refused\) " \
   "a rest at the side's edge showed no drop and no refusal"
 ../tools/window-screenshot.sh "$pid" "$out/arrange-refused.png" || fail "no window to capture"
 preview=$(grep "^browser: arrange $tab \(Preview\|Carrying Refused\) " "$log" | tail -1 |
   cut -d' ' -f5)
+[ "$preview" = Refused ] || fail "a rest where the thing doesn't fit didn't refuse it: $preview"
 send release $(side_edge)
 expect "^browser: arrange $tab Selected " "letting go where the thing doesn't fit left no selection"
-case "$preview" in
-  Refused)
-    # The core logs a release's save before its selection, so once Selected is in, a settle the
-    # release landed is in the log too.
-    if sed -n "/^browser: drive $step: /,\$p" "$log" |
-      grep "^browser: arrange $tab Selected Settles " > /dev/null; then
-      expect "browser: tab $tab arrange saved 2 changes\$" \
-        "the release after the refusal settled Wide but the core didn't save it"
-      shows 'c,b,a,w side s,n hidden - float -' \
-        "the settle the release landed after the refusal didn't read as #3003 has it on the batch"
-      kept 2 "the settle the release landed after the refusal wasn't saved"
-      send key z cmd
-      expect "browser: tab $tab arrange saved 1 changes\$" "⌘Z didn't reach the mode"
-      shows 'c,b,a,w side s,n hidden - float -' "⌘Z didn't take back the settle after the refusal"
-      kept 1 "⌘Z's step back wasn't saved"
-      refusal="the rest where Wide doesn't fit refused it, but letting go there settled it between"
-      refusal="$refusal Side and Note all the same, which ⌘Z took back"
-    else
-      shows 'c,b,a,w side s,n hidden - float -' "the refused drop changed the page"
-      [ "$(changes)" = 1 ] || fail "the refused drop was saved: $(changes) changes"
-      refusal="the rest where Wide doesn't fit refused it, so #3003's known row is a line to remove"
-    fi
-    ;;
-  Trades)
-    expect "browser: tab $tab arrange saved 2 changes\$" "the core didn't save the trade with the side"
-    shows 'b,c,s,a,n side b,c,s,a,n hidden - float w:absolute' \
-      "the trade of Wide with the side didn't put the side in the column, as #3003 has it today"
-    kept 2 "the trade with the side wasn't saved"
-    send key z cmd
-    expect "browser: tab $tab arrange saved 1 changes\$" "⌘Z didn't reach the mode"
-    shows 'c,b,a,w side s,n hidden - float -' "⌘Z didn't take back the trade with the side"
-    kept 1 "⌘Z's step back wasn't saved"
-    refusal="a rest where Wide doesn't fit traded it with the side, which ⌘Z took back"
-    ;;
-  *) fail "a rest where the thing doesn't fit didn't refuse it: $preview" ;;
-esac
+# The core logs a release's save before its selection, so once Selected is in, a drop the release
+# landed is in the log too.
+landed=$(sed -n "/^browser: drive $step: /,\$p" "$log" |
+  grep "^browser: arrange $tab Selected \(Settles\|Trades\) " | tail -1)
+[ -z "$landed" ] || fail "letting go where the rest refused Wide landed a drop all the same: $landed"
+shows 'c,b,a,w side s,n hidden - float -' "the refused drop changed the page"
+[ "$(changes)" = 1 ] || fail "the refused drop was saved: $(changes) changes"
 
 # The page's bare background, where it has no block, is no place: carried there with no key held,
 # the note goes back where it was, and the foot bar says so rather than naming ⌘ (#3017).
@@ -681,8 +648,8 @@ echo "ok: from the Boost card's Arrange, a click picked a thing with the page ta
   "⌘ floated one, whose pin turned it to scroll with the page and back. ⌘Z took the float back," \
   "Hide was Zap's rule, which ⌘Z took back, and Put back on a traded thing took the trade back." \
   "$went Each change was saved in $host.arrange.json. A settle then a trade of the thing it" \
-  "went beside swapped the two in the settle's order, and a press after picked Wide. Known under #3003:" \
-  "$refusal. Reloaded, the page" \
+  "went beside swapped the two in the settle's order, and a press after picked Wide. Letting go" \
+  "where Wide didn't fit landed nothing and saved nothing. Reloaded, the page" \
   "placed the arrangement, and" \
   "$first_frame." \
   "Edited outside ilo it stayed off, and Site Controls' Turn On kept it. A private window's page" \
