@@ -196,6 +196,14 @@ nonisolated enum Ring {
   static let swipeThrough: CGFloat = 220
 }
 
+/// The offer to keep a password, on the chip over the bar.
+nonisolated enum SaveOffer {
+  /// How long the chip stands before it leaves for the page's sheet.
+  static let stands: TimeInterval = 8
+  /// How long it says the password is saved.
+  static let saved: TimeInterval = 1
+}
+
 /// The text column every list keeps: icons start 24 in and titles 56.
 nonisolated enum Column {
   static let side: CGFloat = 12

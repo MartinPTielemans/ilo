@@ -120,7 +120,7 @@ extension Account {
   /// Tries again by itself only while something waits on it: a change to send, or the first
   /// download. Otherwise the relay says when there's something to get.
   private func retryLater() {
-    guard !state.changes.isEmpty || phase == .starting else { return }
+    guard !state.changes.isEmpty || hasPasswordWrites || phase == .starting else { return }
     retry(after: retryDelay)
     retryDelay = min(retryDelay * 2, Self.longestDelay)
   }
@@ -140,7 +140,7 @@ extension Account {
   }
 
   /// Sends one message. An access token the server refuses is refreshed once.
-  private func send(_ message: Bytes, _ generation: Int) async throws -> SyncResponse {
+  func send(_ message: Bytes, _ generation: Int) async throws -> SyncResponse {
     guard let api, let cacheGUID = session?.cacheGUID else { throw SyncFailure.stale }
     let access = try await accessToken()
     var response: SyncResponse
@@ -314,7 +314,7 @@ extension Account {
     // what's unsent then waits out.
     guard let keys, let session, settleTask == nil else { return result }
     guard Date() >= heldUntil else {
-      result.later = !state.changes.isEmpty
+      result.later = !state.changes.isEmpty || hasPasswordWrites
       return result
     }
     let pending = plan(keys)
@@ -384,6 +384,10 @@ extension Account {
       for sent in batch { rebase(sent.tag) }
       changed()
     }
+    let passwords = try await commitPasswords(keys, session, generation, last: last)
+    result.conflicted = result.conflicted || passwords.conflicted
+    result.undone = result.undone || passwords.undone
+    result.later = result.later || passwords.later
     return result
   }
 }

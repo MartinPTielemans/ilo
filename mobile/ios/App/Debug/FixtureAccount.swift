@@ -9,6 +9,8 @@
   /// something wrong to say until the app next comes to the front. `-fixture-pages 8` and
   /// `-fixture-pins 7` give its first Space that many open pages and pinned tabs, and
   /// `-fixture-unseen 3` leaves that many of its open pages unseen for two days.
+  /// `-fixture-login http://127.0.0.1:8000` has it keep a made-up login for that site already;
+  /// the logins saved to it are kept until the app quits, and go to no server.
   @Observable
   final class FixtureAccount: IloAccount {
     private(set) var phase: AccountPhase
@@ -20,6 +22,8 @@
     private(set) var spaces: [SyncedSpace] = []
     private var nodes: [SyncedNode] = []
     private var refreshed = false
+    /// The made-up saved logins, with their made-up passwords.
+    private var kept: [(login: SavedLogin, password: String)] = []
 
     static let defaultServer = URL(string: "https://sync.fixture.invalid")!
     private static let redirect = URL(string: "https://sync.fixture.invalid/signed-in")!
@@ -106,6 +110,7 @@
       pairing = .none
       spaces = []
       nodes = []
+      kept = []
     }
 
     func refresh() async {
@@ -190,6 +195,12 @@
 
     private func fill() {
       email = email.isEmpty ? "you@example.com" : email
+      let arguments = ProcessInfo.processInfo.arguments
+      if let index = arguments.firstIndex(of: "-fixture-login"), arguments.indices.contains(index + 1),
+        let site = URL(string: arguments[index + 1])
+      {
+        try? save(username: "mira@example.org", password: "made-up-old-password", on: site)
+      }
       spaces = [
         SyncedSpace(id: "work", name: "Work"),
         SyncedSpace(id: "home", name: "Home", color: 0xD98A4E, icon: "🏡"),
@@ -247,6 +258,38 @@
       let arguments = ProcessInfo.processInfo.arguments
       guard let index = arguments.firstIndex(of: flag), arguments.indices.contains(index + 1) else { return nil }
       return Int(arguments[index + 1])
+    }
+  }
+
+  /// Saved passwords as an account has them, all made up and kept in memory.
+  extension FixtureAccount: IloPasswords {
+    private func realm(of site: URL) -> String? {
+      phase == .ready ? LoginOffer.origin(of: site).map { $0 + "/" } : nil
+    }
+
+    func logins(for page: URL) -> [SavedLogin] {
+      guard let realm = realm(of: page) else { return [] }
+      return kept.map(\.login).filter { $0.realm == realm }
+    }
+
+    func password(for login: SavedLogin) throws -> String {
+      guard let found = kept.first(where: { $0.login == login }) else { throw SavedLoginError.gone }
+      return found.password
+    }
+
+    func saving(username: String, password: String, on site: URL) -> LoginSaving {
+      guard let realm = realm(of: site), !password.isEmpty else { return .none }
+      guard let found = kept.first(where: { $0.login.realm == realm && $0.login.username == username }) else { return .save }
+      return found.password == password ? .none : .update
+    }
+
+    func save(username: String, password: String, on site: URL) throws {
+      guard let realm = realm(of: site), !password.isEmpty else { throw SavedLoginError.notSaved }
+      if let index = kept.firstIndex(where: { $0.login.realm == realm && $0.login.username == username }) {
+        kept[index].password = password
+      } else {
+        kept.insert((SavedLogin(id: UUID().uuidString.lowercased(), username: username, realm: realm), password), at: 0)
+      }
     }
   }
 #endif

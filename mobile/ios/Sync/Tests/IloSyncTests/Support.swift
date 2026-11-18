@@ -435,9 +435,9 @@ final class Computer {
   /// and no specifics. `key` stands in for a key the phone hasn't got, and `bare` leaves the
   /// ciphertext out.
   @discardableResult
-  func put(password data: Bytes?, tag: String, key other: NigoriKey? = nil, bare: Bool = false) async throws
-    -> SyncResponse.Entry
-  {
+  func put(
+    password data: Bytes?, tag: String, key other: NigoriKey? = nil, bare: Bool = false, hash: String? = nil
+  ) async throws -> SyncResponse.Entry {
     let name = "password:" + tag
     let key = other ?? self.key!
     let now = protoTime()
@@ -459,12 +459,13 @@ final class Computer {
               if !bare {
                 password.message(1, EncryptedData(keyName: key.name, blob: key.encrypt(data)).write)
               }
-              // An entry with no notes has an empty Notes message there.
-              password.message(5, EncryptedData(keyName: key.name, blob: key.encrypt([])).write)
+              // The login's notes again: an entry with none has an empty Notes message there.
+              password.message(
+                5, EncryptedData(keyName: key.name, blob: key.encrypt(PasswordData.notes(of: data))).write)
             }
           }
         }
-        entry.string(23, clientTagHash(type: DataType.passwords, tag: tag))
+        entry.string(23, hash ?? clientTagHash(type: DataType.passwords, tag: tag))
       }
       commit.string(2, self.cacheGUID)
     }
@@ -475,6 +476,71 @@ final class Computer {
       known[name] = data == nil ? nil : (answer.id, answer.version)
     }
     return answer
+  }
+
+  /// The name a computer of this account gives a password with this data: Chromium's
+  /// GetClientTag, keyed as core/sync_guard.cc keys it.
+  func name(of data: Bytes) throws -> String {
+    let fields = try XCTUnwrap(protoFields(data))
+    func text(_ number: Int) -> String { fields.last(number)?.string ?? "" }
+    return PasswordTag.hash(
+      secret: secret, origin: text(3), usernameElement: text(5), username: text(6), passwordElement: text(7),
+      realm: text(2))
+  }
+
+  /// Saves a login as a computer does, under the name it gives it, or deletes that one.
+  @discardableResult
+  func save(login data: Bytes, deleted: Bool = false) async throws -> SyncResponse.Entry {
+    let hash = try name(of: data)
+    // On what the account has now, as a computer that has downloaded it: what the phone wrote
+    // is known here by the same name.
+    known["password:" + hash] = try await passwords()[hash].map { ($0.id, $0.version) }
+    return try await put(password: deleted ? nil : data, tag: hash, hash: hash)
+  }
+
+  struct Login {
+    var id: String
+    var version: Int64
+    var data: Bytes
+    var form: PasswordForm
+  }
+
+  /// The account's passwords as the server has them now, by name, each checked as a computer
+  /// does before it takes one. A fresh download each time, so nothing is the phone's word.
+  func passwords(file: StaticString = #filePath, line: UInt = #line) async throws -> [String: Login] {
+    var found: [String: Login] = [:]
+    for (update, wire) in try await updates([DataType.passwords]) where update.serverTag == nil {
+      let raw = try XCTUnwrap(protoFields(wire))
+      let hash = try XCTUnwrap(update.hash)
+      if update.deleted {
+        found[hash] = nil
+        continue
+      }
+      // core/sync_guard.cc's KeepSyncUpdate: the entity's name says nothing, and its specifics
+      // are a password's two ciphertexts and nothing else.
+      XCTAssertEqual(raw.last(7)?.string, "encrypted", file: file, line: line)
+      let specifics = try XCTUnwrap(raw.last(21)?.bytes.flatMap(protoFields))
+      XCTAssertEqual(specifics.map(\.number), [DataType.passwords], file: file, line: line)
+      let own = try XCTUnwrap(specifics[0].bytes.flatMap(protoFields))
+      XCTAssertEqual(own.map(\.number), [1, 5], file: file, line: line)
+      // DataTypeWorker's DecryptPasswordSpecifics: both under the account's key, and the notes
+      // must decrypt for the password to be taken at all.
+      let encrypted = try XCTUnwrap(update.password)
+      XCTAssertEqual(encrypted.keyName, key.name, file: file, line: line)
+      let data = try XCTUnwrap(key.decrypt(encrypted.blob), "not the account's key", file: file, line: line)
+      let notes = try XCTUnwrap(own[1].bytes.flatMap(EncryptedData.init))
+      XCTAssertEqual(notes.keyName, key.name, file: file, line: line)
+      XCTAssertEqual(key.decrypt(notes.blob), PasswordData.notes(of: data), file: file, line: line)
+      // ClientTagBasedRemoteUpdateHandler: an update under another name than the one the
+      // computer works out from what's inside is dropped.
+      XCTAssertEqual(hash, try name(of: data), "a computer would drop it", file: file, line: line)
+      // LoginDatabase's DoesMatchConstraints: a page and a realm.
+      let fields = try XCTUnwrap(protoFields(data))
+      XCTAssertNotNil(fields.last(3)?.string.flatMap(URL.init), file: file, line: line)
+      XCTAssertNotEqual(fields.last(2)?.string ?? "", "", file: file, line: line)
+      found[hash] = Login(id: update.id, version: update.version, data: data, form: try XCTUnwrap(PasswordForm(data)))
+    }
+    return found
   }
 
   private func commit(_ id: String, encrypted: EncryptedData?) async throws -> SyncResponse.Entry {

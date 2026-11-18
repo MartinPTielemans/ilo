@@ -86,6 +86,8 @@ final class WebTab: NSObject, Identifiable {
   var committedURL: URL? { committed }
   /// What the page said of its sign-in form.
   let loginState = LoginState()
+  /// The offer to save the login the page was signed in with. In memory only.
+  let loginSave = LoginSave()
   /// Whether the page is a PDF: a file to save and to print, and no site's page to block on.
   private(set) var isPDF = false
   /// What kind of file the load on its way answered with.
@@ -192,6 +194,7 @@ final class WebTab: NSObject, Identifiable {
   /// wrote out in the search field, as against a search, a link or a tile.
   func load(_ url: URL, entered: Bool = false, typed: Bool = false) {
     failure = nil
+    loginSave.loads()
     if entered { writes.enter() } else { writes.own() }
     unsent.load(entered: entered)
     visits.load(typed: typed)
@@ -518,6 +521,7 @@ extension WebTab: WKNavigationDelegate {
     preferences.preferredContentMode = wantsDesktopSite ? .desktop : .recommended
     guard let url = action.request.url else { return (.cancel, preferences) }
     let inMainFrame = action.targetFrame?.isMainFrame ?? true
+    if inMainFrame { loginSave.asked(action.navigationType, posts: action.request.httpMethod == "POST") }
 
     switch url.scheme?.lowercased() {
     case "http", "https":
@@ -624,6 +628,7 @@ extension WebTab: WKNavigationDelegate {
     committed = webView.url
     hasPage = true
     loginState.committed()
+    loginSave.committed(at: committed, entry: webView.backForwardList.currentItem)
     writes.commit()
     keep(unsent.commit())
     swipe.arrived()
@@ -710,6 +715,7 @@ private final class PageMessages: NSObject, WKScriptMessageHandler {
     case PageScripts.touchMessage: tab?.touchVerdict(message.body)
     case PageScripts.typedMessage where message.frameInfo.isMainFrame: tab?.typed(message.body)
     case LoginScript.message: tab?.heardLogin(message)
+    case LoginScript.usedMessage: tab?.heardLoginUsed(message)
     default: break
     }
   }

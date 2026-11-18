@@ -36,8 +36,10 @@ extension WebTab {
     guard let shows = message.body as? Bool else { return }
     let from = message.frameInfo.securityOrigin
     let port = from.port == 0 || from.port == (from.protocol == "https" ? 443 : 80) ? "" : ":\(from.port)"
-    loginState.heard(
-      shows: shows, mainFrame: message.frameInfo.isMainFrame, origin: "\(from.protocol)://\(from.host)\(port)", page: committedURL)
+    let origin = "\(from.protocol)://\(from.host)\(port)"
+    loginState.heard(shows: shows, mainFrame: message.frameInfo.isMainFrame, origin: origin, page: committedURL)
+    // The same word, of the same page, says whether a sign-in before it took.
+    if message.frameInfo.isMainFrame, committedURL.flatMap(LoginOffer.origin) == origin { loginSave.heard(shows: shows, judge: saveJudge) }
   }
 
   /// Fills a saved login into the page, after the user who tapped it confirmed: its top frame's

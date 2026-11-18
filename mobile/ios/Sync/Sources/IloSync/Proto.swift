@@ -153,6 +153,28 @@ struct ProtoWriter {
     build(&inner)
     bytes(field, inner.bytes)
   }
+
+  /// A field as it was read, whatever it is: what a message is written back with when only
+  /// some of its fields are this ilo's to change.
+  mutating func field(_ field: ProtoField) {
+    let number = UInt64(field.number) << 3
+    switch field.value {
+    case .varint(let value):
+      varint(field.number, value)
+    case .fixed64(let value):
+      raw(number | 1)
+      for shift in stride(from: 0, to: 64, by: 8) { bytes.append(UInt8(truncatingIfNeeded: value >> UInt64(shift))) }
+    case .bytes(let value):
+      bytes(field.number, value)
+    case .group(let value):
+      raw(number | 3)
+      bytes += value
+      raw(number | 4)
+    case .fixed32(let value):
+      raw(number | 5)
+      for shift in stride(from: 0, to: 32, by: 8) { bytes.append(UInt8(truncatingIfNeeded: value >> UInt32(shift))) }
+    }
+  }
 }
 
 extension Array where Element == ProtoField {
