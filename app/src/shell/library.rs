@@ -1081,11 +1081,13 @@ impl Shell {
     /// ⌘Z, or ⇧⌘Z unless `undoing`, in the Library's search field: while it's empty, nothing typed
     /// there could seem to be what the key undoes, so it's the window's step, the one the toast
     /// offers after Clear Archive or Delete from Archive (#3306). With text in it, the key goes on
-    /// to the field, which keeps it from undoing what's out of sight.
+    /// to the field, which keeps it from undoing what's out of sight, unless it's ⌘Z while this
+    /// window's toast offering it shows: the toast is in sight and promises the key (#3307).
     fn step_past_search(&mut self, undoing: bool, cx: &mut Context<Self>) {
         let empty = (self.library.as_ref())
             .is_some_and(|library| library.search.read(cx).text().is_empty());
-        if empty {
+        let offered = undoing && self.undo_offered && self.browser.undo_toast_showing(cx);
+        if empty || offered {
             match undoing {
                 true => self.undo(cx),
                 false => self.redo(cx),
