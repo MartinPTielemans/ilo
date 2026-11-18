@@ -67,8 +67,8 @@ takes a command a line on its standard input:
                   sheet hides and which the page hid itself (#3268); and with BASE, an
                   earlier run's FILE for the same site, its selectors none of whose elements were
                   shown then, the page's own aside, and some are now. Logs "cdp: hidden SELECTORS
-                  ELEMENTS SHOWN blocker SELECTORS page SELECTORS missed SELECTORS ELEMENTS in MS
-                  ms"
+                  ELEMENTS SHOWN blocker SELECTORS page SELECTORS missed SELECTORS ELEMENTS
+                  untold ELEMENTS SELECTORS in MS ms", untold those not told apart in 15 s
   requests FILE   records each request the attached page and its frames make from now on, a JSON
                   line each in FILE: "sent" with its id, address and wall time in ms, and
                   "redirect": true where it's a redirect of the request before it, "failed"
@@ -681,7 +681,8 @@ WAVE = 32
 
 
 def whose(selectors, budget=15):
-    """Of SELECTORS, those a blocker hid and those the page hid itself, as two lists. A blocker's
+    """Of SELECTORS, those a blocker hid and those the page hid itself, as two lists, then how many
+    marked elements and selectors weren't told apart when BUDGET ended. A blocker's
     hiding is a rule from a style sheet the page didn't load, as blockers() tells it: the
     browser's own engine's (core/ad_block_page_agent.cc) and uBlock Origin's, their procedural
     filters' too, which hide by an attribute and a rule. The page's own is an element at display: none that no such
@@ -737,7 +738,8 @@ def whose(selectors, budget=15):
         told.setdefault(selectors[owner], []).append(verdict)
     blocker = sorted(s for s, v in told.items() if "blocker" in v)
     page = sorted(s for s, v in told.items() if all(x == "page" for x in v))
-    return blocker, page
+    untold = [s for s, v in told.items() if None in v and "blocker" not in v]
+    return blocker, page, [said.count(None), len(untold)]
 
 
 def hidden(path, base):
@@ -748,7 +750,7 @@ def hidden(path, base):
     if not major.isdigit() or int(major) not in BLINKS_READ:
         found["blinks_unread"] = product
     # Only a selector none of whose elements show can be one a later run misses.
-    found["blocker"], found["page"] = whose([s for s, (_, shown) in found["hidden"].items()
+    found["blocker"], found["page"], found["untold"] = whose([s for s, (_, shown) in found["hidden"].items()
                                              if not shown])
     before = json.load(open(base, encoding="utf-8")) if base else {"hidden": {}}
     # What the earlier run hid all of and this one shows some of. A selector whose elements were
@@ -760,10 +762,11 @@ def hidden(path, base):
     found["ms"] = int((time.monotonic() - began) * 1000)
     with open(path, "w", encoding="utf-8") as out:
         json.dump(found, out)
-    return "%d %d %d blocker %d page %d missed %d %d in %d ms" % (
+    return "%d %d %d blocker %d page %d missed %d %d untold %d %d in %d ms" % (
         len(found["hidden"]), sum(n for n, _ in found["hidden"].values()),
         sum(shown for _, shown in found["hidden"].values()), len(found["blocker"]),
-        len(found["page"]), len(found["missed"]), sum(found["missed"].values()), found["ms"])
+        len(found["page"]), len(found["missed"]), sum(found["missed"].values()),
+        found["untold"][0], found["untold"][1], found["ms"])
 
 
 for line in sys.stdin:
