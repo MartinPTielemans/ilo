@@ -2461,19 +2461,19 @@ fn task_space(id: u64) -> SpaceEntry {
 }
 
 /// PREVIEW_TASK_RING=<stop> (with PREVIEW_TASKS=open) watches the working task's page, and
-/// rings the stop named, as Tab from the window does: none, row, back, page, take-over or stop
+/// rings the stop named, as Tab from the window does: none, card, back, page, take-over or stop
 /// (#3220).
 fn preview_task_ring(shell: WeakEntity<Shell>, cx: &mut App) {
     let Ok(stop) = std::env::var("PREVIEW_TASK_RING") else {
         return;
     };
-    // Tabs after the strip's first stop, Back; the row is the one before it.
+    // Tabs after the strip's first stop, the task's card.
     let tabs = match stop.as_str() {
-        "back" => Some(0),
-        "page" => Some(1),
-        "take-over" => Some(2),
-        "stop" => Some(3),
-        "row" => Some(4),
+        "card" => Some(0),
+        "back" => Some(1),
+        "page" => Some(2),
+        "take-over" => Some(3),
+        "stop" => Some(4),
         _ => None,
     };
     let tab = FIRST_TASK + 300;
@@ -2555,6 +2555,12 @@ fn task_cards(home: u64) -> Vec<TaskCard> {
         command: None,
     };
     let mut cards: Vec<TaskCard> = (FIRST_TASK..).zip(TASKS).map(card).collect();
+    // PREVIEW_TASK_STEP=long gives the working task a step line too long for a narrow window's
+    // strip.
+    if std::env::var("PREVIEW_TASK_STEP").as_deref() == Ok("long") {
+        cards[0].status =
+            "Step 3 · Comparing the seats in rows 12 to 18 for two on the aisle".into();
+    }
     // Newest first, as the Agents send them.
     cards.reverse();
     cards

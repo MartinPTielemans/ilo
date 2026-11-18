@@ -30,7 +30,8 @@
 # and so are keys while its frame has the keyboard, each with an activity-log entry, and its
 # listeners don't hear the agent's keys or typing. Neither the agent's click nor its ArrowDown and
 # Enter in a login field opens or accepts Chrome's suggestion of a saved login. Its keys, typed or
-# pressed, go to the page alone, and Escape the page doesn't keep runs no Stop of ilo's. Where it
+# pressed, go to the page alone, and Escape the page doesn't keep runs no Stop of ilo's. Its Tab
+# past its page's last control wraps there and never reaches the user's ring. Where it
 # acts in the page watched, its pointer and a
 # ring with the element's ref show it. It opens a page, clicks its link, goes back, where the tab
 # takes the page's title again, scrolls, takes a screenshot and closes a tab, pins a tab of its own, unpins it and removes it. A close asks a page with a beforeunload
@@ -1480,6 +1481,32 @@ addEventListener("keydown", event => event.key == "Escape" && (document.title = 
   [ "$(tabs)" = "$before" ] || fail "the agent's Escape changed the tabs in its Space"
   closed=$(call close_tab "{\"tab\":$keys_tab}")
   case "$closed" in "Closed tab $keys_tab."*) ;; *) fail "closing the keys page answered: $closed" ;; esac
+
+  # Its Tab past its page's last control wraps in the page: the core asks the app only of a
+  # user's tab, so the user's ring and keyboard don't move (#3220).
+  printf '%s' '<script src="painted.js"></script><input id=start aria-label="First field">
+<input id=last aria-label="Last field">
+<script>
+let focused = 0;
+start.onfocus = () => document.title = "start focused " + ++focused;
+last.onfocus = () => document.title = "last focused";
+painted(() => document.title = "end");
+</script>' > "$out/site/end.html"
+  outline=$(call open_tab "{\"url\":\"localhost:$port/end.html\"}")
+  end_tab=$(printf '%s\n' "$outline" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  [ -n "$end_tab" ] || fail "open_tab of the end page answered: $outline"
+  await_log "^browser: title $end_tab end\$" "the end page didn't paint"
+  rings=$(grep -c '^browser: sidebar keyed \|^browser: tab [0-9]* focus left its page' "$log" || true)
+  call press_key "{\"tab\":$end_tab,\"key\":\"Tab\"}" > /dev/null
+  await_log "^browser: title $end_tab start focused 1\$" "the agent's Tab didn't reach its page's field"
+  call press_key "{\"tab\":$end_tab,\"key\":\"Tab\"}" > /dev/null
+  await_log "^browser: title $end_tab last focused\$" "the agent's second Tab didn't reach the last field"
+  call press_key "{\"tab\":$end_tab,\"key\":\"Tab\"}" > /dev/null
+  await_log "^browser: title $end_tab start focused 2\$" \
+    "the agent's Tab past its page's last control didn't wrap to its first"
+  [ "$(grep -c '^browser: sidebar keyed \|^browser: tab [0-9]* focus left its page' "$log" || true)" = "$rings" ] ||
+    fail "the agent's Tab past its page's end reached the user's ring"
+  call close_tab "{\"tab\":$end_tab}" > /dev/null
 
   # Its typing is keys, as a keyboard's, so a field's own key handlers filter and format it as they
   # do a user's, and a line break never sends or submits: a chat composer whose Enter sends gets
