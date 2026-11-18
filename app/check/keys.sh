@@ -332,6 +332,15 @@ elif windows && [ -z "$japanese" ]; then
   echo "skip: composing in a page: the runner has no Japanese IME, and the Windows driver's own input method composes in the UI's fields alone."
   composed=
 else
+  # On Windows the field has the keyboard back from the ring first, so Japanese composes right after
+  # the handback, which gives the page's pane the keyboard straight, and the pane tells the input
+  # method before the page's view takes focus (#3396).
+  if windows; then
+    send key tab shift
+    expect '^browser: sidebar keyed ' "⇧Tab from the page's field didn't ring the tab's row"
+    send key tab
+    expect '^browser: ring gave the page its first control$' "Tab from the ring didn't give the page's field back the keyboard"
+  fi
   send $ime
   send type nihongo
   expect "^browser: title [0-9]* value abcd$preedit\$" "the page didn't show the composition"
@@ -939,20 +948,6 @@ expect '^browser: ring gave the page its first control$' "Tab from the ring didn
 ring_stayed $left "Tab past the page's last control"
 send type y
 expect '^browser: title [0-9]* value .*y$' "Tab from the ring didn't give the page's field the keyboard"
-# On Windows, Japanese composes there too, once Tab from the ring has given the page's pane the
-# keyboard straight, and the pane has told the input method before the page's view took focus
-# (#3396). Space converts it and Return commits it, as above: with hiragana committed unconverted,
-# another window took the click on the page below, the IME's by every sign.
-if windows && [ -n "$japanese" ]; then
-  send $ime
-  send type nihongo
-  expect "^browser: title [0-9]* value .*y$preedit\$" \
-    "Japanese typed after Tab from the ring didn't compose $preedit in the page: $(grep '^browser: title' "$log" | tail -1)"
-  send key space
-  expect '^browser: title [0-9]* value .*y日本語$' "the page didn't show the conversion after Tab from the ring"
-  send key return
-  send ime off
-fi
 send key tab shift
 expect '^browser: sidebar keyed ' "⇧Tab before the page's first control didn't ring the tab's row"
 row=$(since | sed -n 's/^browser: sidebar keyed \([0-9]*\)$/\1/p' | head -1)
