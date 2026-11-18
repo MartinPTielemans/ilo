@@ -630,6 +630,7 @@ expect '^browser: command bar shown$' "⌘T didn't open the command bar"
 send insert "chrome://board/$other"
 send key return
 expect "^browser: loaded [0-9]* chrome://board/$other\$" "the Board whose file holds [] didn't load"
+unread=$(grep "^browser: loaded [0-9]* chrome://board/$other\$" "$log" | tail -1 | cut -d' ' -f3)
 send scroll 640 400 40 5
 for _ in $(seq 30); do
   # The window a save would come in, as above.
@@ -637,6 +638,10 @@ for _ in $(seq 30); do
 done
 [ "$(cat "$boards/$other/board.json")" = '[]' ] ||
   fail "the Board whose file holds [] was written over: $(head -c 200 "$boards/$other/board.json")"
+# Its tab closes, or the relaunch brings it back, and the bar after it opens the Board in a second
+# tab, which says it's open in another and offers no file.
+send key w cmd
+expect "^browser: tab $unread closed\$" "⌘W didn't close the Board whose file holds []"
 
 # 4: a private window has no New Board, and a Board's address there finds no Board.
 send key n cmd shift
@@ -703,9 +708,9 @@ expect '^browser: command bar shown$' "⌘T didn't open the command bar after th
 send insert "chrome://board/$other"
 send key return
 expect "^browser: loaded [0-9]* chrome://board/$other\$" "the Board whose file holds [] didn't load after the relaunch"
-# The page offers the button, with the keyboard, once it has read the file, a moment after its
-# load that the app's log can't tell: a ↩ before then lands on the page itself and does nothing,
-# so it goes again, three times at most, as profiles.sh's Tab and Space do. The core's line has
+# The page offers the button, with the keyboard, once it has read the file, after the load the
+# app logs and with no line of its own: a ↩ before then lands on the page and does nothing, so it
+# goes again, three times at most, as profiles.sh's Tab and Space do. The core's line has
 # Chromium's prefix.
 shown=
 for _ in 1 2 3; do
