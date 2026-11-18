@@ -169,7 +169,7 @@ impl Shell {
     /// The foot of a card's list while it looks for devices: a turning ring before "Looking for
     /// devices…", which takes no click.
     pub(super) fn looking_row(&self) -> Stateful<Div> {
-        let turned = self.breath.turned(TURN);
+        let turned = self.breath.turned(TURN, self.clock.now());
         let ring = svg()
             .path("icons/loading.svg")
             .flex_none()

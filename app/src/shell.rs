@@ -3279,7 +3279,8 @@ impl Shell {
         }
         if space == self.space {
             let eliding = (eliding, dotted(entry));
-            (self.swaps).folders_changed(&before_folders, &entry.folders, eliding, Instant::now());
+            let now = self.clock.now();
+            (self.swaps).folders_changed(&before_folders, &entry.folders, eliding, now);
         }
         let has_tabs = !entry.pinned.is_empty() || !entry.today.is_empty();
         // After a Clear, the rows left are in their places at once (Arc).
@@ -3831,8 +3832,8 @@ impl Shell {
                 flag(page.developer_mode)
             );
         }
-        self.swaps
-            .page_changed(tab, self.selected, &entry.page, &page, Instant::now());
+        let now = self.clock.now();
+        (self.swaps).page_changed(tab, self.selected, &entry.page, &page, now);
         let trouble = (page.trouble != entry.page.trouble).then_some(page.trouble);
         // What its hover card shows of the page, besides its title: its host, emoji and buttons.
         let carded = |page: &Page| (page.url.clone(), page.icon.clone(), page.share_instead);
@@ -4483,7 +4484,7 @@ impl Shell {
         let Some(drag) = self.drag.as_mut().filter(|drag| drag.shape.start.is_some()) else {
             return;
         };
-        if drag.shape.turning(Instant::now()) {
+        if drag.shape.turning(self.clock.now()) {
             window.request_animation_frame();
             return;
         }
@@ -4580,7 +4581,8 @@ impl Render for Shell {
             log!("browser: hover {row} close {close} favicon {favicon}");
         }
         self.step_clear_arrow();
-        self.swaps.step(window);
+        let now = self.clock.now();
+        self.swaps.step(window, now);
         // As the outline's, so a capture of the URL field's button shows the glyph it logged.
         let copied = match (
             self.url_copied.is_some(),
