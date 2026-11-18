@@ -12,7 +12,8 @@
 # a step from the first, both captured. A Board's file over 4 MiB, which the host doesn't read, says
 # so and is never written over, captured, as is one holding [] rather than a Board. A private window
 # has no New Board, and a Board's address there shows "This Board isn't here.", captured. The Board
-# holding [] shows its file in the system's file manager from its note's button, last. Japanese
+# holding [] shows its file in the system's file manager from its note's button, last of the steps;
+# after it, that the page the bar's ↩ loaded over a Board had the keyboard is judged. Japanese
 # input as the first keys is the hosted Mac's.
 
 log="$out/board.log"
@@ -129,7 +130,10 @@ grep -q 'shelves over the sink' "$folder/board.json" ||
   fail "the reopened Board's save lost its note: $(head -c 300 "$folder/board.json")"
 
 # A reload of the Board, and a load away from it to a web page, drop what its page had on its way
-# and leave the browser running (#3427); back brings the Board again for the steps after.
+# and leave the browser running (#3427); back brings the Board again for the steps after. ⌘← goes
+# back from the page or the UI, wherever the bar's ↩ left the keyboard, so this claims nothing about
+# who has it: which side heard it is judged after the last step (#3453), so a miss there ends no
+# step before it.
 send key r cmd
 expect "^browser: loaded $board chrome://board/$id\$" "⌘R didn't load the Board again"
 serve
@@ -138,7 +142,13 @@ expect '^browser: command bar shown$' "⌘L on the Board didn't open the command
 send type "${site}page.html"
 send key return
 expect "^browser: loaded $board ${site}page.html\$" "the Board's tab didn't load the page typed in the bar"
-history_key left back page
+# Where the ↩ left the keyboard, as the driver says it: the key window and the view with focus.
+went=$(grep "^browser: drive $step done, " "$log" | tail -1 |
+  sed 's/^[^,]*, \(key [^,]*, focus [^,]*\),.*/\1/')
+send key left cmd
+expect '^browser: command back via ' "⌘left on the page the bar loaded over the Board didn't run back"
+back_via=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep '^browser: command back via ' |
+  head -1 | cut -d' ' -f5)
 expect "^browser: loaded $board chrome://board/$id\$" "back didn't bring the Board again"
 
 # 1c: a Board whose note's text is markup, and a link to javascript:, runs neither: each would
@@ -306,6 +316,11 @@ expect 'browser: board shows its file$' \
   "↩ on the unreadable Board, whose Show button has the keyboard, didn't show its file"
 [ "$(cat "$boards/$other/board.json")" = '[]' ] ||
   fail "showing the unreadable Board's file changed it: $(head -c 200 "$boards/$other/board.json")"
+# #3453: the page the bar's ↩ loaded over the Board had the keyboard, so ⌘← there went to the page
+# first, as on any page. Judged here, after the file manager, from what was heard then.
+[ "$back_via" = page ] ||
+  fail "the page the bar's ↩ loaded over a Board didn't have the keyboard: ⌘left ran back via\
+ $back_via, the ↩ having left $went"
 quit
 echo "ok: New Board made $id, its name kept and its note saved in its folder alone, unlogged;" \
   "Library › Boards listed it; renamed, found by the bar, archived and reopened, the log said" \
@@ -313,6 +328,6 @@ echo "ok: New Board made $id, its name kept and its note saved in its folder alo
   "nothing; a waiting picture landed as a card and left the arrivals, and one that came while" \
   "its tab wasn't showing landed a step from it when shown; a Board over 4 MiB and one" \
   "holding [] weren't written over, and the one holding [] showed its file; a private window had" \
-  "no New Board." \
+  "no New Board; the page loaded over a Board from the bar had the keyboard." \
   "Windows: $out/board.png $out/board-markup.png $out/board-landed.png" \
   "$out/board-landed-shown.png $out/board-unread.png $out/board-private.png"

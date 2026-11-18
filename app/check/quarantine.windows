@@ -9,3 +9,6 @@ trouble #2676 2026-11-13 the run didn't end at the first column
 # focus event on the page's last control as the keyboard comes in from outside. These two steps alone.
 screen-reader #3396 2026-11-18 NVDA didn't say the page's first control after Tab from the ring
 screen-reader #3396 2026-11-18 NVDA didn't say the page's last control after ⇧Tab from the ring
+# The page the command bar's ↩ loads over a Board doesn't get the keyboard (#3453): board's last
+# step alone.
+board #3453 2026-11-18 the page the bar's ↩ loaded over a Board didn't have the keyboard

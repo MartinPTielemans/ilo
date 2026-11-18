@@ -2,3 +2,6 @@
 # open (check/quarantine.sh says how). A line lasts 14 days:
 # <run> #<issue> <YYYY-MM-DD> [<its FAIL line's start, as the summary shows it>]
 switch-frames #2248 2026-11-10 the page area showed no page through a switch
+# The page the command bar's ↩ loads over a Board doesn't get the keyboard (#3453): board's last
+# step alone.
+board #3453 2026-11-18 the page the bar's ↩ loaded over a Board didn't have the keyboard
