@@ -253,3 +253,51 @@ import WebKit
     #expect(await page.shows("/files"))
   }
 }
+
+/// A reload of the page a form's answers brought.
+@Suite(.serialized, .timeLimit(.minutes(2))) @MainActor struct ResendTests {
+  @Test func `a reload sends a form again only once the user says so`() async throws {
+    let server = try await Loopback { request in
+      request.method == "POST"
+        ? .html("<title>Sent</title>")
+        : .html("<title>Form</title><form method=post action=/sent><input name=order value=one></form>")
+    }
+    let browser = testBrowser()
+    browser.openNew(server.url("/form"))
+    let page = try #require(browser.page)
+    #expect(await eventually { await page.shows("/form") })
+    _ = await page.run("document.forms[0].submit()")
+    #expect(await eventually { await page.shows("/sent") })
+    #expect(server.requests(to: "/sent", method: "POST") == 1)
+
+    page.reload()
+    #expect(await eventually { browser.prompt != nil })
+    guard case .resend = browser.prompt?.kind else {
+      Issue.record("The reload didn't ask.")
+      return
+    }
+    #expect(browser.prompt?.atFoot == true)
+    browser.answer(false)
+    try await Task.sleep(for: .milliseconds(300))
+    #expect(server.requests(to: "/sent", method: "POST") == 1)
+    #expect(await page.shows("/sent"))
+    #expect(page.failure == nil)
+
+    page.reload()
+    #expect(await eventually { browser.prompt != nil })
+    browser.answer(true)
+    #expect(await eventually { server.requests(to: "/sent", method: "POST") == 2 })
+  }
+
+  @Test func `a reload of a page no form brought asks nothing`() async throws {
+    let server = try await Loopback { _ in .html("<title>Page</title>") }
+    let browser = testBrowser()
+    browser.openNew(server.url("/page"))
+    let page = try #require(browser.page)
+    #expect(await eventually { await page.shows("/page") })
+
+    page.reload()
+    #expect(await eventually { server.requests(to: "/page") == 2 })
+    #expect(browser.prompt == nil)
+  }
+}

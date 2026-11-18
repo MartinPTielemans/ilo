@@ -410,6 +410,11 @@ extension WebTab: WKNavigationDelegate {
       let wanted = await browser?.ask(.download(name: name), from: self) == true
       return (wanted ? .download : .cancel, preferences)
     }
+    // A reload of what a form's answers brought sends them again: a second order, a second
+    // payment. The user says whether it does.
+    if inMainFrame, action.navigationType == .formResubmitted, await browser?.ask(.resend, from: self) != true {
+      return (.cancel, preferences)
+    }
     // A link to a new window isn't this page's to load: `createWebViewWith` opens it.
     if action.targetFrame == nil { return (.allow, preferences) }
     // A link the user followed loads without its tracking parameters, as a load of its own.

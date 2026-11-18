@@ -106,6 +106,22 @@ private struct BrowserScreen: View {
       }
       .modifier(OverKeyboard())
       ReadingLayer()
+      // Where a question asked at the foot of the screen comes from.
+      Color.clear
+        .frame(width: 1, height: 1)
+        .confirmationDialog(
+          "Send the form again?", isPresented: Binding(get: { browser.prompt?.atFoot == true }, set: { if !$0 { browser.answer(false) } }),
+          titleVisibility: .visible, presenting: browser.prompt
+        ) { _ in
+          Button("Send Again") { browser.answer(true) }
+          // Said outright: iOS 26 leaves a cancelling button out of a dialog that points at
+          // where it came from, and a tap beside it is all that's left to say no.
+          Button("Cancel") { browser.answer(false) }
+        } message: { prompt in
+          Text("Reloading this page sends \(prompt.host) what you entered a second time.")
+        }
+        .frame(maxHeight: .infinity, alignment: .bottom)
+        .allowsHitTesting(false)
     }
     .animation(Motion.quick, value: browser.searchingPage)
     .onChange(of: browser.shown, initial: true) {
@@ -115,7 +131,8 @@ private struct BrowserScreen: View {
       }
     }
     .alert(
-      title(of: browser.prompt), isPresented: Binding(get: { browser.prompt != nil }, set: { if !$0 { browser.answer(false) } }),
+      title(of: browser.prompt),
+      isPresented: Binding(get: { browser.prompt.map { !$0.atFoot } ?? false }, set: { if !$0 { browser.answer(false) } }),
       presenting: browser.prompt
     ) { prompt in
       switch prompt.kind {
@@ -130,13 +147,15 @@ private struct BrowserScreen: View {
         Button("Cancel", role: .cancel) { browser.answer(false) }
       case .says, .notice:
         Button("OK") { browser.answer(true) }
+      case .resend:
+        EmptyView()
       }
     } message: { prompt in
       switch prompt.kind {
       case .leave(let url): Text("\(prompt.host) wants to leave ilo for an app that opens “\(url.scheme ?? "")” links.")
       case .download: Text("From \(prompt.host).")
       case .says(let text), .asks(let text): Text(text)
-      case .notice: Text("")
+      case .notice, .resend: Text("")
       }
     }
     .sheet(isPresented: Binding(get: { browser.downloaded != nil }, set: { if !$0 { browser.downloaded = nil } })) {
@@ -159,7 +178,7 @@ private struct BrowserScreen: View {
     case .download(let name): "Download “\(name)”?"
     case .says, .asks: prompt?.host ?? ""
     case .notice(let text): text
-    case nil: ""
+    case .resend, nil: ""
     }
   }
 }

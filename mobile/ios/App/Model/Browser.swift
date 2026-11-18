@@ -14,6 +14,13 @@ struct Prompt: Identifiable {
     case asks(String)
     /// Something ilo has to say, with nothing to choose.
     case notice(String)
+    /// A reload that would send a form's answers a second time.
+    case resend
+  }
+
+  /// Whether it's asked at the foot of the screen, where the thumb is, and not in an alert.
+  var atFoot: Bool {
+    if case .resend = kind { true } else { false }
   }
 
   let id = UUID()
