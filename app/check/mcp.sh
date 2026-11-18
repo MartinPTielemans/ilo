@@ -703,9 +703,9 @@ done
 # An agent's tab at Chrome's warning before http, in the agent's split view, watched from the
 # conversation, where its split's pages share the watched page's place. The warning shown doesn't
 # take the user's keyboard, on the Mac too, where it's a window of its own (#3240). Once the user's
-# click gives it the keyboard, ⌘W and Escape step back to Pages from there, and a press in the page
-# beside it takes the keyboard to that page, and never to an agent's dialog: on the Mac that press
-# gives the keyboard back to the browser window (#3212).
+# click gives it the keyboard, ⌘W steps back to Pages from there, a press in the page beside it
+# takes the keyboard to that page, and never to an agent's dialog: on the Mac that press gives the
+# keyboard back to the browser window (#3212). Escape there is the warning's, as Chrome's is.
 if [ "$driven" = 1 ]; then
   await '^browser: settings about Version .*, on Chromium [0-9]' || fail "the engine's version wasn't said"
   major=$(sed -n 's/^browser: settings about .*on Chromium \([0-9]*\)\..*/\1/p' "$log" | head -1)
@@ -772,21 +772,19 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
       fail "watching tab $warned didn't show its split view's two pages: $laid"
   fi
   ../tools/window-screenshot.sh "$pid" "$out/agent-split-warning.png" || fail "no window to capture"
-  # From the agent's warning with the keyboard, ⌘W and Escape step back to Pages, as they do from
-  # its page. Each time, the split watched again shows the warning without the keyboard (#3240).
-  for leave in "key w cmd|⌘W" "key escape|Escape"; do
-    back='^browser: task page [0-9]* back$'
-    thumbnail='^browser: task page in its thumbnail$'
-    before=$(grep -c "$back" "$log" || true)
-    shrunk=$(grep -c "$thumbnail" "$log" || true)
-    send ${leave%%|*}
-    left=$step
-    await_more "$back" "$before" ||
-      fail "${leave#*|} on the agent's warning before http, which had the keyboard, didn't step back to Pages: $(since "$left" | grep -e '^browser: drive' -e '^browser: command' -e '^browser: task' | tail -6 | tr '\n' ' ')"
-    await_more "$thumbnail" "$shrunk" ||
-      fail "the agent's split view didn't go back into its picture after ${leave#*|}"
-    watch_warning "again after ${leave#*|}"
-  done
+  # From the agent's warning with the keyboard, ⌘W steps back to Pages, as it does from its page,
+  # and the split watched again shows the warning without the keyboard (#3240).
+  back='^browser: task page [0-9]* back$'
+  thumbnail='^browser: task page in its thumbnail$'
+  before=$(grep -c "$back" "$log" || true)
+  shrunk=$(grep -c "$thumbnail" "$log" || true)
+  send key w cmd
+  left=$step
+  await_more "$back" "$before" ||
+    fail "⌘W on the agent's warning before http, which had the keyboard, didn't step back to Pages: $(since "$left" | grep -e '^browser: drive' -e '^browser: command' -e '^browser: task' | tail -6 | tr '\n' ' ')"
+  await_more "$thumbnail" "$shrunk" ||
+    fail "the agent's split view didn't go back into its picture after ⌘W"
+  watch_warning "again after ⌘W"
   # The page beside, to the right of the warning's, as split_tabs put them.
   other="$((warning_x + warning_width + 100)) $((warning_y + warning_height + 100))"
   send click $other
@@ -822,7 +820,31 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
       shown="tab $tab"
     done
   fi
+  # Escape on the warning with the keyboard is the warning's, its Go back, on every OS: a dialog
+  # keeps the keys that answer it (dialog_keys.cc). The warning goes, and the tab leaves the http
+  # page, here for the new tab page, as it had no page before it.
+  # Where the click on the warning takes the tab over, as X11's can, ⌘↩ hands it back after.
   to_pages "$shown"
+  presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
+  watch_warning "before Escape"
+  send key escape
+  escaped=$step
+  for _ in $(seq 50); do
+    since "$escaped" | grep "^browser: page $warned " | grep -qv "$plain" && break
+    sleep 0.1
+  done
+  since "$escaped" | grep "^browser: page $warned " | grep -qv "$plain" ||
+    fail "Escape on the agent's warning before http, which had the keyboard, didn't answer it: tab $warned stayed at http://$plain: $(since "$escaped" | grep -e '^browser: drive' -e "^browser: page $warned " -e '^browser: task' | tail -6 | tr '\n' ' ')"
+  for _ in $(seq 50); do
+    send layout
+    none_since '^browser: layout child ' && break
+    sleep 0.1
+  done
+  none_since '^browser: layout child ' ||
+    fail "the agent's warning before http stayed after its Escape: $(since | grep '^browser: layout child ')"
+  send click $sidebar_point
+  hand_back_pressed "$presses"
+  to_pages "tab $warned"
   for split_tab in $warned $beside; do
     closed=$(call close_tab "{\"tab\":$split_tab}")
     case "$closed" in "Closed tab $split_tab."*) ;; *) fail "closing the split view's page answered: $closed" ;; esac
