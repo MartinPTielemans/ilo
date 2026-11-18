@@ -1179,6 +1179,7 @@ elif [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   served "^GET safari localhost:$port/bounce" "the redirects didn't pass through the other site in Safari's engine"
   go_from_bar "127.0.0.1:$port/hop.html?away"
   expect "^browser: title $tab hop safari\$" "the site's hop page left Safari's engine"
+  painted=$(grep -c "^GET chromium localhost:$port/painted " "$out/site.log" || true)
   send click $page_point
   expect "^browser: tab $tab back to Chromium for http://localhost:$port/engine.html\$" \
     "a link whose redirects ended at another site didn't take the tab back to Chromium"
@@ -1186,6 +1187,15 @@ elif [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   # Chromium's view shows the page it kept, with its title, until the handback's load replaces it,
   # which would count a click from zero again.
   expect "^browser: loaded $tab http://localhost:$port/engine.html\$" "Chromium didn't load the handed-back page"
+  # Chromium drops a click that comes before a page it loaded first shows, as it does a key, while it
+  # holds the last page's picture (painted.js in site.sh), so the click waits for the page to have
+  # painted (#3323).
+  for _ in $(seq 100); do
+    [ "$(grep -c "^GET chromium localhost:$port/painted " "$out/site.log")" -gt "$painted" ] && break
+    sleep 0.1
+  done
+  [ "$(grep -c "^GET chromium localhost:$port/painted " "$out/site.log")" -gt "$painted" ] ||
+    fail "Chromium's handed-back page didn't say it had painted: $(grep "^GET chromium localhost:$port/" "$out/site.log" | tail -2 | tr '\n' ' ')"
   # The command bar closes at a click outside it before the click is dispatched, so the click lands
   # on the page as it would with the bar closed (AGENTS.md › Over the page). Chromium's page counts
   # the click that closed the bar and the next, as Safari's engine's does below.

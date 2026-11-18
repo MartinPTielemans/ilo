@@ -318,11 +318,15 @@ navigator.requestMediaKeySystemAccess("org.w3.clearkey", [{
 # A page that names the engine showing it: Safari's sends Safari's user agent, without Chrome's name.
 # A text field covers it, so a click anywhere in it lands there, and the field's title says what it
 # did: a press, counted, its value, what ⌘A selected and ⌘C copied, and a committed composition.
-# It keeps escape, counting each.
+# It keeps escape, counting each. In Chromium it asks the site for /painted once painted() says it
+# has painted, which a click the moment it has loaded waits for (#3323): its title can't wait, as it
+# names the engine for the page Chromium kept from before Safari's engine had the tab, too.
 printf '%s' '<title>loading</title>
 <input id=f style="position:fixed;left:0;top:0;width:100%;height:100%;box-sizing:border-box">
+<script src="painted.js"></script>
 <script>
 document.title = "engine " + (/Chrome\//.test(navigator.userAgent) ? "chromium" : "safari");
+/Chrome\//.test(navigator.userAgent) && painted(() => fetch("/painted", {cache: "no-store"}));
 let presses = 0;
 onmousedown = () => document.title = "pressed " + ++presses;
 const selected = () => f.value.slice(f.selectionStart, f.selectionEnd);
