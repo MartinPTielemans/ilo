@@ -530,17 +530,14 @@ requestAnimationFrame(() => requestAnimationFrame(() => document.title = "beside
   expect "^browser: tab $beside closed\$" "⌘W didn't close the pane beside $warned_tab's warning before http"
   expect "^browser: panes $warned_tab\$" "⌘W on the pane beside the warning didn't leave $warned_tab alone"
   tab=$warned_tab
-  # On the Mac the warning isn't shown again once the pane beside it closes: the page under it is
-  # bare and has the keyboard, and drops every key, ilo's shortcuts with them (#3233). A click on
-  # the sidebar gives the UI the keyboard, as the user's would, and the steps after load the warning
-  # again from the command bar.
+  # On the Mac the warning, a window of its own, shows again with the keyboard once the pane beside
+  # it closes. Without it the page under it is bare and has the keyboard, and drops every key, ilo's
+  # shortcuts with them (#3233). The steps after press ⌘L from here.
   if [ "$(uname)" = Darwin ]; then
     send state
     if [ "$key" != NativeWidgetMacNSWindow ]; then
       send layout
-      echo "skip: Chrome's warning before http shown again with the keyboard once the pane beside it closes, on the Mac: the keyboard is in $key, on $focus, and the window's children are$(since | sed -n 's/^browser: layout child / /p' | tr '\n' ',') (#3233)."
-      send click $sidebar_point
-      in_browser AccessKitSubclassOfGPUIView "a click on the sidebar beside $warned_tab's page, alone again after ⌘W closed the pane beside it"
+      fail "Chrome's warning before http wasn't shown again with the keyboard once ⌘W closed the pane beside it: the keyboard is in $key, on $focus, and the window's children are$(since | sed -n 's/^browser: layout child / /p' | tr '\n' ',')"
     fi
   fi
 fi
