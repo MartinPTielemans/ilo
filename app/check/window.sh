@@ -1569,16 +1569,22 @@ for dot in dots:
         print(cx, cy)
 PY
   }
-  # Where the taskbar shows $4 dots (1 without it) in $1 and none in $2, from its copy saved at
-  # $out/taskbar-$3.png, in $dot, "x y" a line. Explorer redraws an overlay a moment after it's
-  # given, and makes Settings' button a moment after the window shows.
+  # Where the taskbar shows $4 dots (1 without it), or with $5 exactly $4, in $1 and none in $2,
+  # from its copy saved at $out/taskbar-$3.png, in $dot, "x y" a line. Explorer redraws an overlay
+  # a moment after it's given, makes Settings' button a moment after the window shows, and takes
+  # it away a moment after it hides.
   taskbar_dot() {
     for _ in $(seq 20); do
       screen_png $taskbar "$out/taskbar-$3.png" ||
         fail "PowerShell didn't copy the taskbar off the screen"
       to_bmp "$out/taskbar-$3.png" "$out/taskbar.bmp" || fail "PowerShell couldn't read $3's copy"
       dot=$(dot_at "$out/taskbar.bmp" "$1" "$2")
-      [ -n "$dot" ] && [ "$(echo "$dot" | wc -l)" -ge "${4:-1}" ] && return 0
+      dots=$(echo "$dot" | awk NF | wc -l)
+      if [ -n "${5:-}" ]; then
+        [ "$dots" -eq "$4" ] && return 0
+      else
+        [ "$dots" -ge "${4:-1}" ] && return 0
+      fi
       sleep 0.25
     done
     return 1
@@ -1655,6 +1661,22 @@ public static extern bool SetProcessDPIAware();
   fi
   send key w cmd
   expect '^browser: settings hidden$' "Ctrl+W didn't hide Settings"
+  if [ -n "$read_dot" ]; then
+    # Settings' button goes as it hides, and its next one, when it shows again, carries the dot
+    # with no click on the switch to set it.
+    taskbar_dot 7eb6d5 0b8045 hidden 1 exactly ||
+      fail "Settings hid and the taskbar doesn't show the browser window's dot alone: $(echo $dot)"
+    same_place "$green_at" || fail "with Settings hidden the dot is at $(echo $dot), not at $green_at"
+    send menu Settings…
+    expect '^browser: settings shown ' "Settings… didn't show Settings again for its taskbar button"
+    taskbar_dot 7eb6d5 0b8045 again 2 ||
+      fail "Settings shown again and the taskbar buttons' dots, the browser window's and Settings', aren't both the blue Space's 7eb6d5: $(echo $dot)"
+    same_place "$green_at" || fail "the dots with Settings shown again are at $(echo $dot), none at $green_at"
+    same_place "$green_at" away ||
+      fail "Settings' taskbar button shown again has no dot of its own beside the browser window's at $green_at: $(echo $dot)"
+    send key w cmd
+    expect '^browser: settings hidden$' "Ctrl+W didn't hide Settings shown again"
+  fi
   dock="the taskbar button's switch off and on again in Settings"
   dock_shots=", $out/taskbar-dot-switch.png"
   if [ -n "$read_dot" ]; then
@@ -1663,8 +1685,8 @@ public static extern bool SetProcessDPIAware();
     expect "^browser: menu shown $(cased 'Change Space Icon…')" "a right-click on the Space's name showed no menu"
     send choose "$(cased 'Remove Theme Color')"
     expect '^browser: colored space [0-9]* none$' "Remove Theme Color didn't take the blue away"
-    dock="the taskbar button's dot read off the screen at $green_at: 0b8045 in a Space without a colour, 7eb6d5 in a blue Space, 0b8045 with its switch off in Settings and 7eb6d5 on again, Settings' own button carrying the same dot at $settings_dot"
-    dock_shots="$dock_shots, $out/taskbar-green.png, $out/taskbar-blue.png, $out/taskbar-off.png, $out/taskbar-on.png"
+    dock="the taskbar button's dot read off the screen at $green_at: 0b8045 in a Space without a colour, 7eb6d5 in a blue Space, 0b8045 with its switch off in Settings and 7eb6d5 on again, Settings' own button carrying the same dot at $settings_dot, gone with Settings hidden and back with no click when it showed again"
+    dock_shots="$dock_shots, $out/taskbar-green.png, $out/taskbar-blue.png, $out/taskbar-off.png, $out/taskbar-on.png, $out/taskbar-hidden.png, $out/taskbar-again.png"
   else
     echo "skip: the taskbar button's dot in the Space's color: only a check VM's run copies the taskbar off its screen, so only its switch is checked."
   fi
