@@ -464,6 +464,9 @@ done
 
 exec 3>&-
 quit
+# Its server stops with it, as the runs after it in the call start their own (#3345).
+kill "$tls" 2> /dev/null || true
+tls= tls_port=
 echo "handback: $results"
 [ -z "$failed" ] || fail "these didn't hand back as Chrome does: $failed"
 echo "ok: a desktop app's sign-in hands back: the open-app dialog shows over the window showing the page, in Little ilo and in a tab, for a redirect with no gesture, a click and a pop-up, and Open gives the app the URL, while a pop-up that closes itself at once opens nothing, as in Chrome, and a tab a link opened only for the app closes once the app has it; a public page's request to the app's own server on 127.0.0.1 asks for Local Network Access over the window, and Allow lets it through. $results"
