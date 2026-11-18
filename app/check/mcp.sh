@@ -776,8 +776,32 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
     await_more "$back" "$before" || fail "Escape didn't step back to Pages from $1"
     await_more "$thumbnail" "$shrunk" || fail "$1 didn't go back into its picture"
   }
+  # Tab round the strip's ring never gives the watched agent's page the keyboard: its stop is the
+  # strip's words, so the handback into a page, which on Windows gives the shown page's pane the
+  # keyboard straight (#3396), never runs for it. Tab from the window's keyboard rings the strip,
+  # where F6 would leave the agent's Space for the user's (sidebar_keys.rs). Windows alone, the
+  # change's.
+  ring_strip() {
+    windows || return 0
+    ringed=$((step + 1))
+    send key tab
+    expect '^browser: strip keyed ' "Tab with the agent's split watched didn't ring the strip under it"
+    for _ in 1 2 3 4 5 6 7 8; do
+      send key tab
+    done
+    send state
+    logged '^browser: strip keyed page$' "$ringed" ||
+      fail "Tab round the strip with the agent's split watched never rang its page's stop"
+    ! logged '^browser: ring gave the page ' "$ringed" ||
+      fail "Tab round the ring with the agent's split watched gave its page the keyboard"
+    case "$key $focus" in
+      *NativeWidgetMacNSWindow* | *RenderWidgetHostViewCocoa*)
+        fail "Tab round the ring with the agent's split watched left the keyboard in $key, on $focus" ;;
+    esac
+  }
   # Watches $warned, whose warning shows over its pane, at $warning, without the user's keyboard,
-  # and has a click on it give it the keyboard. $1 says how the user came to watch it.
+  # and has a click on it give it the keyboard. $1 says how the user came to watch it, and $2 is a
+  # step to take while it's watched, before the click.
   watch_warning() {
     watch "$warned"
     for _ in $(seq 50); do
@@ -791,6 +815,7 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
     send state
     [ "$key" != NativeWidgetMacNSWindow ] ||
       fail "the agent's warning before http, watched in its split view $1, took the user's keyboard as it showed: $key, $focus"
+    [ -z "${2:-}" ] || "$2"
     warning_x=${warning%%,*} warning_y=${warning#*,}
     warning_y=${warning_y%% *} warning_size=${warning#* }
     warning_width=${warning_size%%x*} warning_height=${warning_size#*x}
@@ -817,7 +842,7 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
   to_pages "tab $agent_tab"
   presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
   took=$(grep -c "^browser: agent mcp-client taken over in $warned\$" "$log" || true)
-  watch_warning "from Pages"
+  watch_warning "from Pages" ring_strip
   first_click=$warning_clicked
   # Linux's driver lists the pages the shell lays out, and the task area lays out a watched split
   # as one, which the core divides: the capture shows its panes there.

@@ -1055,7 +1055,6 @@ void Tab::DropSystemPage() {
   system_page_.reset();
   ForgetOutputRestricted();
   favicon_ = gfx::Image();
-  system_page_favicon_.clear();
   system_page_title_.reset();
   EngineChanged();
 }
@@ -1089,7 +1088,8 @@ void Tab::FetchSystemPageFavicon() {
     return;
   }
   // WebKit keeps its pages' favicons to itself, so the tab shows the one Chromium knows for the
-  // page, else for its site, else none.
+  // page, else for its site, else none. Each document's is told, none too: the app still shows the
+  // last page's, which may be Chromium's from before the tab came to the system's engine (#3431).
   service->GetRawFaviconForPageURL(
       system_page_->url(), {favicon_base::IconType::kFavicon}, kFaviconPixels,
       /*fallback_to_host=*/true,
@@ -1098,17 +1098,10 @@ void Tab::FetchSystemPageFavicon() {
             if (!tab || !tab->system_page_ || !Host().tab_favicon_changed) {
               return;
             }
-            std::vector<uint8_t> png;
-            if (result.is_valid()) {
-              png.assign(result.bitmap_data->data(),
-                         result.bitmap_data->data() + result.bitmap_data->size());
-            }
-            if (png == tab->system_page_favicon_) {
-              return;
-            }
-            tab->system_page_favicon_ = png;
-            Host().tab_favicon_changed(Host().context, tab->id_, png.empty() ? nullptr : png.data(),
-                                       png.size());
+            const bool known = result.is_valid();
+            Host().tab_favicon_changed(Host().context, tab->id_,
+                                       known ? result.bitmap_data->data() : nullptr,
+                                       known ? result.bitmap_data->size() : 0);
           },
           weak_factory_.GetWeakPtr()),
       &favicon_tracker_);

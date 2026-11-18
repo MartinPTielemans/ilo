@@ -928,6 +928,17 @@ function read(path, type = "text") {
   });
 }
 
+// Under the note of a Board that can't be read, its file in the system's file manager, to copy out
+// or mend, as the page never writes over it (#3224). Chrome's word for that off the Mac. It takes
+// the keyboard, as nothing else on the page does anything.
+function offerFile() {
+  const show = document.createElement("button");
+  show.textContent = navigator.userAgent.includes("Mac OS X") ? "Show in Finder" : "Show in Folder";
+  show.addEventListener("click", () => send("show"));
+  $("#note").append(show);
+  show.focus();
+}
+
 async function open_() {
   useTool("select");
   const answer = id ? await send("hello") : "missing";
@@ -946,7 +957,9 @@ async function open_() {
     board = JSON.parse(text);
   } catch {}
   if (!board || typeof board !== "object" || Array.isArray(board)) {
-    return say("This Board's file can't be read.");
+    say("This Board's file can't be read.");
+    offerFile();
+    return;
   }
   cards = Array.isArray(board.cards) ? board.cards : [];
   camera = { x: 0, y: 0, zoom: 1, ...board.camera };

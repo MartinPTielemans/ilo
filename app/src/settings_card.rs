@@ -14,7 +14,8 @@ use gpui::{
 use crate::palette::OVERLAY_DARK;
 use crate::tokens::palette::DIALOG_LIGHT;
 use crate::tokens::settings::{
-    CARD_RIM, CARD_RING, CARD_SHADOW, FADE, HELD_TITLE, PAGE_BOTTOM, PAGE_TOP, PAGE_X, TEXT_X,
+    CARD_RIM, CARD_RING, CARD_SHADOW, CARD_SHADOW_BLUR, CARD_SHADOW_Y, FADE, HELD_TITLE,
+    PAGE_BOTTOM, PAGE_TOP, PAGE_X, TEXT_X,
 };
 use crate::tokens::shell::CARD_INSET;
 
@@ -390,8 +391,8 @@ impl Card {
                     .border_color(rgba(CARD_RING))
                     .shadow(vec![BoxShadow {
                         color: rgba(CARD_SHADOW).into(),
-                        offset: point(px(0.), px(1.)),
-                        blur_radius: px(3.),
+                        offset: point(px(0.), px(CARD_SHADOW_Y)),
+                        blur_radius: px(CARD_SHADOW_BLUR),
                         spread_radius: px(0.),
                         inset: false,
                     }])

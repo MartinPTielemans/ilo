@@ -481,9 +481,8 @@ class Tab : public content::WebContentsObserver,
   std::unique_ptr<platform::SystemPage> system_page_;
   // How many system pages the tab has made, the last of them system_page_.
   int system_pages_ = 0;
-  // The system page's favicon, PNG, and its title, which the app was last told of. None since a
-  // document committed, so each document's title is told even when it's the one before's.
-  std::vector<uint8_t> system_page_favicon_;
+  // The system page's title, which the app was last told of. None since a document committed, so
+  // each document's title is told even when it's the one before's.
   std::optional<std::string> system_page_title_;
   // The title the app was last told of.
   std::string reported_title_;

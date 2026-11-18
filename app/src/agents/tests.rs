@@ -833,6 +833,366 @@ fn reading_a_tab_of_the_users_is_refused_and_logged(cx: &mut TestAppContext) {
     );
 }
 
+/// Every tool that takes a tab, with what it needs besides, so only the tab can refuse it.
+const TAB_TOOLS: &[(&str, &str)] = &[
+    ("read_page", "{}"),
+    ("snapshot", "{}"),
+    ("screenshot", "{}"),
+    ("click", r#"{ "ref": "e1" }"#),
+    ("type", r#"{ "ref": "e1", "text": "x" }"#),
+    ("select", r#"{ "ref": "e1", "option": "a" }"#),
+    ("press_key", r#"{ "key": "Enter" }"#),
+    ("scroll", r#"{ "direction": "down" }"#),
+    ("navigate", r#"{ "url": "https://www.example.org/" }"#),
+    ("navigate", r#"{ "url": "back" }"#),
+    (
+        "run_steps",
+        r#"{ "steps": [{ "action": "scroll", "direction": "down" }] }"#,
+    ),
+    ("request", r#"{ "method": "GET", "path": "/" }"#),
+    ("close_tab", "{}"),
+    ("remove_tab", "{}"),
+    ("pin_tab", "{}"),
+    ("unpin_tab", "{}"),
+    ("split_tabs", r#"{ "tabs": [20, 21] }"#),
+    ("add_to_split", r#"{ "split": 20 }"#),
+    ("separate_tab", "{}"),
+    ("list_split", "{}"),
+    ("hand_off", r#"{ "reason": "To sign in." }"#),
+];
+
+/// Puts a tab of the user's, 21 on `url` with the title `title`, first in Claude Code's Space,
+/// where a call without a tab would otherwise go, and checks the agent gets nothing of it: list_tabs
+/// leaves it out, or for a page off the web names it by its number alone, no call without a tab
+/// lands on it, and every tool given it is refused with `refused` before the core reads or does
+/// anything in it. The activity log names the page by its kind, `kind`, alone. A page off the web
+/// the agent may still close, its way out of a tab that went there.
+fn gets_nothing_of(
+    url: &'static str,
+    title: &'static str,
+    kind: &str,
+    refused: &str,
+    cx: &mut TestAppContext,
+) {
+    let (agents, browser, _) = connected(cx);
+    browser.tabs.borrow_mut().insert(1, (21, 2, title, url));
+
+    let listed = call(&agents, "claude-code", "list_tabs", json!({}), cx)
+        .recv()
+        .unwrap()
+        .text;
+    let off_the_web = refused == NOT_WEB_PAGE;
+    assert!(listed.contains("20  Example Domain"), "{listed}");
+    assert!(
+        !listed.contains(title) && !listed.contains(url),
+        "list_tabs named {url}: {listed}"
+    );
+    assert_eq!(
+        listed.contains("21  A page that isn't http or https"),
+        off_the_web,
+        "list_tabs for {url}: {listed}"
+    );
+    assert_eq!(listed.contains("21 "), off_the_web, "{listed}");
+
+    for &(tool, arguments) in TAB_TOOLS {
+        if off_the_web && tool == "close_tab" {
+            continue;
+        }
+        let mut arguments: Value = serde_json::from_str(arguments).unwrap();
+        arguments["tab"] = json!(21);
+        let answer = call(&agents, "claude-code", tool, arguments.clone(), cx);
+        cx.run_until_parked();
+        let answer = answer.recv().unwrap();
+        assert!(
+            answer.error && answer.text.contains(refused),
+            "{tool} {arguments} on {url}: {answer:?}"
+        );
+        assert!(!answer.text.contains(title), "{tool} named the tab's title");
+    }
+    // ask_for_tab: a tab the user doesn't hold is never the agent's to ask for, and one they took
+    // over and then opened the page in is refused as the rest.
+    let ask = json!({ "tab": 21, "reason": "To see it." });
+    let answer = call(&agents, "claude-code", "ask_for_tab", ask.clone(), cx);
+    let answer = answer.recv().unwrap();
+    assert!(
+        answer.error && !answer.text.contains(title),
+        "ask_for_tab on {url}: {answer:?}"
+    );
+    agents.update(cx, |agents, cx| agents.take_over("claude-code", 21, cx));
+    let answer = call(&agents, "claude-code", "ask_for_tab", ask, cx);
+    let answer = answer.recv().unwrap();
+    assert!(
+        answer.error && answer.text.contains(refused),
+        "ask_for_tab on {url}, held: {answer:?}"
+    );
+    assert!(browser.reads.borrow().is_empty(), "the core read {url}");
+    assert!(browser.pages.borrow().is_empty(), "the core acted in {url}");
+    assert!(
+        browser.navigated.borrow().is_empty(),
+        "the core navigated {url}"
+    );
+    assert!(browser.closes.borrow().is_empty(), "the core closed {url}");
+    assert!(
+        browser.requests.borrow().is_empty(),
+        "the core sent a request from {url}"
+    );
+    assert!(browser.splits.borrow().is_empty(), "the core split {url}");
+    let (_, site, why) = log(&agents, "claude-code", cx)[0].clone();
+    assert_eq!(why, refused, "the activity log doesn't say why");
+    assert!(
+        !site.contains(title),
+        "the activity log named the tab's title: {site}"
+    );
+    assert_eq!(site, kind, "the activity log's site for {url}");
+
+    let _ = call(&agents, "claude-code", "read_page", json!({}), cx);
+    assert_eq!(
+        browser.reads.borrow()[0].0,
+        20,
+        "read_page without a tab read {url}"
+    );
+
+    if off_the_web {
+        agents.update(cx, |agents, cx| agents.hand_back(21, cx));
+        let answer = call(
+            &agents,
+            "claude-code",
+            "close_tab",
+            json!({ "tab": 21 }),
+            cx,
+        );
+        cx.run_until_parked();
+        let answer = answer.recv().unwrap();
+        assert!(!answer.error, "close_tab on {url}: {answer:?}");
+        assert!(
+            !answer.text.contains(title),
+            "close_tab named the tab's title"
+        );
+        assert_eq!(browser.closes.borrow().as_slice(), &[(21, false)]);
+    }
+}
+
+/// A Board the user opens in an agent's Space stays the user's alone, as a Board and what's on it
+/// are: the agent hears of it only as of a tab not its own (#3073).
+#[gpui::test]
+fn an_agent_never_reaches_a_board_in_its_space(cx: &mut TestAppContext) {
+    gets_nothing_of(
+        "chrome://board/0123456789abcdef0123456789abcdef",
+        "Kitchen plans",
+        "board",
+        "The tab isn't in the agent's own Space.",
+        cx,
+    );
+}
+
+/// A page that isn't http(s), opened by the user in an agent's Space, is one agents never use: no
+/// title, address, text or picture of it reaches one.
+#[gpui::test]
+fn an_agent_gets_nothing_of_a_page_off_the_web_in_its_space(cx: &mut TestAppContext) {
+    let refused = "The tab's page isn't an http or https page, the only pages agents may use.";
+    gets_nothing_of(
+        "chrome://settings/passwords",
+        "Settings",
+        "settings",
+        refused,
+        cx,
+    );
+}
+
+#[gpui::test]
+fn an_agent_gets_nothing_of_a_file_in_its_space(cx: &mut TestAppContext) {
+    let refused = "The tab's page isn't an http or https page, the only pages agents may use.";
+    let file = "file:///Users/someone/notes.txt";
+    gets_nothing_of(file, "notes.txt", "file", refused, cx);
+}
+
+#[gpui::test]
+fn an_agent_gets_nothing_of_an_extensions_page_in_its_space(cx: &mut TestAppContext) {
+    let refused = "The tab's page isn't an http or https page, the only pages agents may use.";
+    gets_nothing_of(
+        "chrome-extension://abcdefghijklmnopabcdefghijklmnop/options.html",
+        "Options",
+        "extension",
+        refused,
+        cx,
+    );
+}
+
+/// A pinned Board not yet loaded has only the URL it's pinned to, which is enough.
+#[test]
+fn a_tab_pinned_to_a_board_is_off_limits_before_it_loads() {
+    let board = "chrome://board/0123456789abcdef0123456789abcdef";
+    assert_eq!(off_limits("", board), Some(NOT_ITS_SPACE));
+    assert_eq!(
+        off_limits("https://www.example.com/", board),
+        Some(NOT_ITS_SPACE)
+    );
+    assert_eq!(off_limits("", "https://www.example.com/"), None);
+    assert_eq!(off_limits("https://www.example.com/", ""), None);
+}
+
+/// A tab whose first page hasn't committed has no address, or the empty start page's, and holds
+/// nothing of anyone's: it's the core's to wait for and check once its page commits, as main's
+/// page tools always did. Past that start page, anything but http(s) is off limits.
+#[test]
+fn a_tab_yet_to_commit_its_first_page_is_the_cores_to_check() {
+    assert_eq!(off_limits("", ""), None);
+    assert_eq!(off_limits("about:blank", ""), None);
+    assert_eq!(off_limits("about:blank#top", ""), None);
+    assert_eq!(off_limits("about:blank", "https://www.example.com/"), None);
+    assert_eq!(off_limits("about:blankish", ""), Some(NOT_WEB_PAGE));
+    assert_eq!(off_limits("about:srcdoc", ""), Some(NOT_WEB_PAGE));
+    assert_eq!(off_limits("", "chrome://settings/"), Some(NOT_WEB_PAGE));
+    assert_eq!(off_limits("data:text/html,hi", ""), Some(NOT_WEB_PAGE));
+}
+
+/// The log names a web page by its site, and any other page by its kind alone, as a file's path,
+/// an extension's id or anything else in its address may be the user's.
+#[test]
+fn the_log_names_a_page_off_the_web_by_its_kind() {
+    assert_eq!(site("https://www.example.com/a?b"), "example.com");
+    assert_eq!(
+        site("chrome://board/0123456789abcdef0123456789abcdef"),
+        "board"
+    );
+    assert_eq!(site("chrome://settings/passwords"), "settings");
+    assert_eq!(site("chrome://history/?q=kitchen"), "browser");
+    assert_eq!(site("file:///Users/someone/notes.txt"), "file");
+    assert_eq!(site("file://server/share/notes.txt"), "file");
+    assert_eq!(
+        site("chrome-extension://abcdefghijklmnopabcdefghijklmnop/options.html"),
+        "extension"
+    );
+    assert_eq!(site("view-source:https://www.example.com/"), "page");
+    assert_eq!(site("about:blank"), "");
+}
+
+/// The agent's own tab before its first page commits, as one open_tab just made, one a page opened
+/// with a link or window.open, or a blank popup its opener is about to navigate, shows no address
+/// or the empty start page's. A call on it goes to the core, which waits for the page as it always
+/// has, and list_tabs, run beside it, still lists it.
+#[gpui::test]
+fn an_agents_tab_yet_to_commit_its_first_page_is_the_cores_to_wait_for(cx: &mut TestAppContext) {
+    for url in ["", "about:blank"] {
+        let (agents, browser, _) = connected(cx);
+        browser.tabs.borrow_mut().push((21, 2, "", url));
+        let snapshot = call(&agents, "claude-code", "snapshot", json!({ "tab": 21 }), cx);
+        let listed = call(&agents, "claude-code", "list_tabs", json!({}), cx);
+        cx.run_until_parked();
+        let listed = listed.recv().unwrap().text;
+        assert!(
+            listed.contains("21  "),
+            "list_tabs left out {url:?}: {listed}"
+        );
+        assert!(
+            browser.pages.borrow().iter().any(|page| page.0 == 21),
+            "the snapshot of a tab on {url:?} didn't reach the core: {:?}",
+            snapshot.try_recv()
+        );
+        let _ = call(
+            &agents,
+            "claude-code",
+            "read_page",
+            json!({ "tab": 21 }),
+            cx,
+        );
+        assert!(
+            browser.reads.borrow().iter().any(|read| read.0 == 21),
+            "read_page didn't ask the core to read a tab on {url:?}"
+        );
+    }
+}
+
+/// A tab of the user's, in their own Space, gets the core's answer for any tab not the agent's,
+/// whatever its page: refusing it for being off the web would tell the agent what the user has
+/// open.
+#[gpui::test]
+fn a_users_tab_off_the_web_is_answered_as_any_tab_not_the_agents(cx: &mut TestAppContext) {
+    for url in [
+        "chrome://settings/passwords",
+        "file:///home/user/plan.txt",
+        "data:text/html,words",
+    ] {
+        let (agents, browser, _) = connected(cx);
+        browser.tabs.borrow_mut().push((31, 1, "Passwords", url));
+        for (tool, arguments) in [
+            ("read_page", json!({ "tab": 31 })),
+            ("snapshot", json!({ "tab": 31 })),
+            (
+                "request",
+                json!({ "tab": 31, "url": "https://example.org/" }),
+            ),
+            ("close_tab", json!({ "tab": 31 })),
+        ] {
+            let answer = call(&agents, "claude-code", tool, arguments, cx);
+            cx.run_until_parked();
+            assert_eq!(
+                answer.recv().unwrap(),
+                ToolResult::error(NOT_ITS_SPACE),
+                "{tool} on a user's tab at {url}"
+            );
+            // The core's answer, which its activity log has.
+            assert!(
+                browser.checked.borrow_mut().drain(..).next().is_some(),
+                "{tool} on a user's tab at {url} didn't ask the core"
+            );
+        }
+    }
+}
+
+/// Once read, a page still on the empty start page is no web page, as the core's page tools find,
+/// and a tab that became a Board meanwhile is answered as a Board is everywhere else.
+#[gpui::test]
+fn read_page_answers_for_the_page_it_read(cx: &mut TestAppContext) {
+    for (url, refused) in [
+        ("about:blank", NOT_WEB_PAGE),
+        (
+            "chrome://board/0123456789abcdef0123456789abcdef",
+            NOT_ITS_SPACE,
+        ),
+    ] {
+        let (agents, browser, _) = connected(cx);
+        let answer = call(
+            &agents,
+            "claude-code",
+            "read_page",
+            json!({ "tab": 20 }),
+            cx,
+        );
+        let (_, request) = browser.reads.borrow()[0];
+        browser.tabs.borrow_mut()[1] = (20, 2, "Kitchen plans", url);
+        agents.update(cx, |agents, cx| {
+            agents.text_read(request, Some("Kitchen plans\nshelves".into()), cx)
+        });
+        assert_eq!(answer.recv().unwrap(), ToolResult::error(refused), "{url}");
+    }
+}
+
+/// read_page answers only for an http(s) page, as the page tools do: the core reads any page, so
+/// one the tab went to while it was read, such as the browser's own, gives the agent nothing.
+#[gpui::test]
+fn read_page_gives_nothing_of_a_page_off_the_web(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let answer = call(
+        &agents,
+        "claude-code",
+        "read_page",
+        json!({ "tab": 20 }),
+        cx,
+    );
+    let (_, request) = browser.reads.borrow()[0];
+    browser.tabs.borrow_mut()[1] = (20, 2, "Settings", "chrome://settings/");
+    agents.update(cx, |agents, cx| {
+        agents.text_read(request, Some("Settings\nYou and Google".into()), cx)
+    });
+    assert_eq!(
+        answer.recv().unwrap(),
+        ToolResult::error(
+            "The tab's page isn't an http or https page, the only pages agents may use."
+        )
+    );
+}
+
 /// read_page on the agent's own tab asks the core for its text, and answers with it once it
 /// comes, saying which page it is. Without a tab, it reads the one the agent used last.
 #[gpui::test]
@@ -3102,6 +3462,28 @@ fn an_agent_splits_only_its_own_tabs(cx: &mut TestAppContext) {
     }
     let checked = browser.checked.borrow();
     assert!(checked.iter().any(|each| each == "separate_tab"));
+}
+
+/// Every tool an agent or a task can call says what it did in the activity log in words of its
+/// own, not describe's fallback, so a new tool can't land with no entry beside it (#3392).
+#[test]
+fn every_tool_has_an_activity_log_entry() {
+    let mut names = tools::names("claude-code");
+    names.extend(tools::names("task-1"));
+    // The log names an action as the core's entry does, which is the tool's name but for select's
+    // (agents.rs).
+    let logged = |name: &str| match name {
+        "select" => "select_option".to_string(),
+        name => name.to_string(),
+    };
+    let missing: Vec<_> = (names.iter())
+        .filter(|name| tools::describe(&logged(name)) == "Acted")
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "these tools have no words in the activity log; give each its line in tools::describe: \
+         {missing:?}"
+    );
 }
 
 /// Take Back All Tabs, in the agent's Space's menu, takes over each tab there the user doesn't
