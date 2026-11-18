@@ -63,7 +63,7 @@ index a5390e77f8..9cd66b3f5c 100644
 +    held_key, marked_range_in, open_next_window_in_surface, resize_embedded,
 +};
 diff --git a/crates/gpui_linux/src/linux.rs b/crates/gpui_linux/src/linux.rs
-index e4da54b52b..98581e2739 100644
+index e4da54b52b..6539091423 100644
 --- a/crates/gpui_linux/src/linux.rs
 +++ b/crates/gpui_linux/src/linux.rs
 @@ -1,7 +1,9 @@
@@ -76,7 +76,7 @@ index e4da54b52b..98581e2739 100644
  mod platform;
  mod system_notifications;
  #[cfg(any(feature = "wayland", feature = "x11"))]
-@@ -15,14 +17,53 @@ mod x11;
+@@ -15,14 +17,62 @@ mod x11;
  mod xdg_desktop_portal;
  
  pub use dispatcher::*;
@@ -92,6 +92,15 @@ index e4da54b52b..98581e2739 100644
 +pub(crate) fn is_secret(item: &gpui::ClipboardItem) -> bool {
 +    item.metadata().is_some_and(|metadata| metadata == PASSWORD_MANAGER_HINT)
 +}
++/// What a window holds while it hands on the input before it (`handle_input` in x11 and wayland),
++/// as the Mac does (#2658): a press, a release or a key, what comes behind one, and an input
++/// method's text behind them, for the field that had the keys when it came.
++#[cfg(any(feature = "wayland", feature = "x11"))]
++pub(crate) enum Held {
++    Input(gpui::PlatformInput),
++    Text(Option<gpui::FocusId>, Box<dyn FnOnce(&mut gpui::PlatformInputHandler)>),
++}
++
  pub(crate) use display_connection::{Backend, DisplayConnection, select_backend};
 +pub(crate) use file_drag::drag_ended;
 +pub use file_drag::{DragEnd, set_drag_icon, start_drag, start_file_drag};
@@ -2738,7 +2747,7 @@ index cbc962bcff..53aed61dfc 100644
  use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
  
 diff --git a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
-index 2d40cf7fa9..6bf6e950c6 100644
+index 2d40cf7fa9..986b7d14f3 100644
 --- a/crates/gpui_linux/src/linux/wayland/client.rs
 +++ b/crates/gpui_linux/src/linux/wayland/client.rs
 @@ -12,11 +12,7 @@ use std::{
@@ -3137,12 +3146,12 @@ index 2d40cf7fa9..6bf6e950c6 100644
 +                    .collect();
 +                shm_buffer(self, picture.width, picture.height, &bgra).ok_or(())
 +            }
++        };
++        let Ok(buffer) = made else {
++            return false;
          };
 -        let scale = focused_window.primary_output_scale();
 -        self.cursor.set_icon(
-+        let Ok(buffer) = made else {
-+            return false;
-+        };
 +        let hot = |at: u32| (at / scale) as i32;
 +        self.cursor.set_buffer(
              &wl_pointer,
@@ -4164,7 +4173,7 @@ index 2d40cf7fa9..6bf6e950c6 100644
              }
              _ => {}
          }
-@@ -3478,4 +4158,859 @@ mod tests {
+@@ -3478,4 +4158,860 @@ mod tests {
              &[(10, 20, 1, 18)]
          );
      }
@@ -4354,28 +4363,29 @@ index 2d40cf7fa9..6bf6e950c6 100644
 +    text: &str,
 +    selected: Option<std::ops::Range<usize>>,
 +) -> bool {
-+    let Some(window) = drive_text_window(surface) else {
++    let Some(window) = drive_text_window(surface).filter(|window| window.with_input_handler(|_| ()).is_some()) else {
 +        return false;
 +    };
-+    window
-+        .with_input_handler(|handler| match text.is_empty() {
-+            true => {
-+                if let Some(marked) = handler.marked_text_range() {
-+                    handler.replace_text_in_range(Some(marked), "");
-+                }
++    let text = text.to_string();
++    window.ime(move |handler| match text.is_empty() {
++        true => {
++            if let Some(marked) = handler.marked_text_range() {
++                handler.replace_text_in_range(Some(marked), "");
 +            }
-+            false => handler.replace_and_mark_text_in_range(None, text, selected),
-+        })
-+        .is_some()
++        }
++        false => handler.replace_and_mark_text_in_range(None, &text, selected),
++    });
++    true
 +}
 +
 +/// As `drive_compose_in`: commits `text` in place of what was composed.
 +pub fn drive_commit_in(surface: *mut std::ffi::c_void, text: &str) -> bool {
-+    drive_text_window(surface)
-+        .and_then(|window| {
-+            window.with_input_handler(|handler| handler.replace_text_in_range(None, text))
-+        })
-+        .is_some()
++    let Some(window) = drive_text_window(surface).filter(|window| window.with_input_handler(|_| ()).is_some()) else {
++        return false;
++    };
++    let text = text.to_string();
++    window.ime(move |handler| handler.replace_text_in_range(None, &text));
++    true
 +}
 +
 +/// What the text field with the keys in `surface` (drive_text_window) has marked, in UTF-16.
@@ -5177,7 +5187,7 @@ index 2d66fed95c..89242e3f08 100644
          &mut self,
          wl_pointer: &WlPointer,
 diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/src/linux/wayland/window.rs
-index 8d92234ef1..15323061f0 100644
+index 8d92234ef1..f80a134927 100644
 --- a/crates/gpui_linux/src/linux/wayland/window.rs
 +++ b/crates/gpui_linux/src/linux/wayland/window.rs
 @@ -11,12 +11,13 @@ use calloop::ping::Ping;
@@ -5204,7 +5214,7 @@ index 8d92234ef1..15323061f0 100644
 +    /// nested loop lets the next press in while the input callback is out, and it waits its turn as
 +    /// on the Mac (`gpui::HeldInput`), where it was dropped.
 +    input_busy: bool,
-+    held_input: std::collections::VecDeque<gpui::PlatformInput>,
++    held_input: std::collections::VecDeque<crate::linux::Held>,
  }
  
  #[derive(Debug, Clone, Copy)]
@@ -5783,10 +5793,29 @@ index 8d92234ef1..15323061f0 100644
          let mut state = self.state.borrow_mut();
          if !state.active {
              return;
-@@ -1493,6 +1938,17 @@ impl WaylandWindowStatePtr {
-         }
+@@ -1467,12 +1912,7 @@ impl WaylandWindowStatePtr {
      }
  
+     pub fn handle_ime(&self, ime: ImeInput) {
+-        if self.is_blocked() {
+-            return;
+-        }
+-        let mut state = self.state.borrow_mut();
+-        if let Some(mut input_handler) = state.input_handler.take() {
+-            drop(state);
++        self.ime(move |input_handler| {
+             match ime {
+                 ImeInput::InsertText(text) => {
+                     input_handler.replace_text_in_range(None, &text);
+@@ -1489,8 +1929,18 @@ impl WaylandWindowStatePtr {
+                     }
+                 }
+             }
+-            self.state.borrow_mut().input_handler = Some(input_handler);
+-        }
++        });
++    }
++
 +    /// Where the caret of the text field that has the keys is, if one has: `Some(None)` while
 +    /// that isn't known, as when the field's text changed since it was last laid out.
 +    pub fn text_caret(&self) -> Option<Option<Bounds<Pixels>>> {
@@ -5796,12 +5825,10 @@ index 8d92234ef1..15323061f0 100644
 +            .then(|| input_handler.ime_candidate_bounds());
 +        self.state.borrow_mut().input_handler = Some(input_handler);
 +        caret
-+    }
-+
+     }
+ 
      pub fn get_ime_area(&self) -> Option<Bounds<Pixels>> {
-         let mut state = self.state.borrow_mut();
-         let mut bounds: Option<Bounds<Pixels>> = None;
-@@ -1577,6 +2033,27 @@ impl WaylandWindowStatePtr {
+@@ -1577,6 +2027,62 @@ impl WaylandWindowStatePtr {
          if self.is_blocked() {
              return;
          }
@@ -5810,26 +5837,61 @@ index 8d92234ef1..15323061f0 100644
 +            if callbacks.input_busy {
 +                let behind = !callbacks.held_input.is_empty();
 +                if gpui::HeldInput::waits(&input, behind) {
-+                    callbacks.held_input.push_back(input);
++                    callbacks.held_input.push_back(crate::linux::Held::Input(input));
 +                }
 +                return;
 +            }
 +            callbacks.input_busy = true;
 +        }
-+        let mut next = Some(input);
-+        while let Some(input) = next {
-+            self.hand_on_input(input);
-+            let mut callbacks = self.callbacks.borrow_mut();
-+            next = callbacks.held_input.pop_front();
-+            callbacks.input_busy = next.is_some();
++        self.hand_on_input(input);
++        self.hand_on_held();
++    }
++
++    /// Hands on what came while the window handed input on, in order. It stays busy until the
++    /// last, so nothing that comes meanwhile overtakes what's held.
++    fn hand_on_held(&self) {
++        loop {
++            let held = {
++                let mut callbacks = self.callbacks.borrow_mut();
++                let held = callbacks.held_input.pop_front();
++                callbacks.input_busy = held.is_some();
++                held
++            };
++            match held {
++                None => return,
++                Some(crate::linux::Held::Input(input)) => self.hand_on_input(input),
++                Some(crate::linux::Held::Text(focus, change)) => {
++                    self.with_input_handler(|handler| {
++                        if handler.focus_id() == focus {
++                            change(handler);
++                        }
++                    });
++                }
++            }
 +        }
++    }
++
++    /// An input method's `change` to the text field with the keys, now, or behind the input held
++    /// (`handle_input`), so text typed after a key never comes ahead of it.
++    pub(crate) fn ime(&self, change: impl FnOnce(&mut PlatformInputHandler) + 'static) {
++        if self.is_blocked() {
++            return;
++        }
++        let mut callbacks = self.callbacks.borrow_mut();
++        if !callbacks.held_input.is_empty() {
++            let focus = self.state.borrow().input_handler.as_ref().and_then(|handler| handler.focus_id());
++            callbacks.held_input.push_back(crate::linux::Held::Text(focus, Box::new(change)));
++            return;
++        }
++        drop(callbacks);
++        self.with_input_handler(change);
 +    }
 +
 +    fn hand_on_input(&self, input: PlatformInput) {
          let callback = self.callbacks.borrow_mut().input.take();
          if let Some(mut fun) = callback {
              let result = fun(input.clone());
-@@ -1598,6 +2075,29 @@ impl WaylandWindowStatePtr {
+@@ -1598,6 +2104,29 @@ impl WaylandWindowStatePtr {
          }
      }
  
@@ -5859,7 +5921,7 @@ index 8d92234ef1..15323061f0 100644
      pub fn set_focused(&self, focus: bool) {
          self.state.borrow_mut().active = focus;
          let callback = self.callbacks.borrow_mut().active_status_change.take();
-@@ -1888,9 +2388,11 @@ impl PlatformWindow for WaylandWindow {
+@@ -1888,9 +2417,11 @@ impl PlatformWindow for WaylandWindow {
      }
  
      fn set_title(&mut self, title: &str) {
@@ -5872,7 +5934,7 @@ index 8d92234ef1..15323061f0 100644
      }
  
      fn set_app_id(&mut self, app_id: &str) {
-@@ -2011,6 +2513,13 @@ impl PlatformWindow for WaylandWindow {
+@@ -2011,6 +2542,13 @@ impl PlatformWindow for WaylandWindow {
      fn draw(&self, scene: &Scene) {
          let mut state = self.borrow_mut();
          let state = &mut *state;
@@ -5886,7 +5948,7 @@ index 8d92234ef1..15323061f0 100644
          let Some(renderer) = &mut state.renderer else {
              return;
          };
-@@ -2027,7 +2536,7 @@ impl PlatformWindow for WaylandWindow {
+@@ -2027,7 +2565,7 @@ impl PlatformWindow for WaylandWindow {
                      .cast::<std::ffi::c_void>(),
              };
              match renderer.recover(&raw_window) {
@@ -5895,7 +5957,7 @@ index 8d92234ef1..15323061f0 100644
                  Err(err) => {
                      log::warn!("GPU recovery failed, will retry on next frame: {err}");
                  }
-@@ -2043,9 +2552,25 @@ impl PlatformWindow for WaylandWindow {
+@@ -2043,9 +2581,25 @@ impl PlatformWindow for WaylandWindow {
              let callback = state.surface.frame(&state.globals.qh, state.surface.id());
              state.pending_frame_callback = Some(callback);
          }
@@ -5921,7 +5983,7 @@ index 8d92234ef1..15323061f0 100644
          } else {
              state.presentation = state.presentation.failed();
              self.0.frame_loop.set(FrameLoop::PresentationFailed);
-@@ -2208,6 +2733,11 @@ impl PlatformWindow for WaylandWindow {
+@@ -2208,6 +2762,11 @@ impl PlatformWindow for WaylandWindow {
      }
  
      fn update_ime_position(&self, bounds: Bounds<Pixels>) {
@@ -5933,7 +5995,7 @@ index 8d92234ef1..15323061f0 100644
          let state = self.borrow();
          if !state.active {
              return;
-@@ -2215,6 +2745,13 @@ impl PlatformWindow for WaylandWindow {
+@@ -2215,6 +2774,13 @@ impl PlatformWindow for WaylandWindow {
          state.client.update_ime_position(bounds);
      }
  
@@ -10094,7 +10156,7 @@ index 0000000000..704677746c
 +        .log_err();
 +}
 diff --git a/crates/gpui_linux/src/linux/x11/window.rs b/crates/gpui_linux/src/linux/x11/window.rs
-index f6ee76ae8c..1624ddd6fd 100644
+index f6ee76ae8c..92ba91f49d 100644
 --- a/crates/gpui_linux/src/linux/x11/window.rs
 +++ b/crates/gpui_linux/src/linux/x11/window.rs
 @@ -73,8 +73,11 @@ x11rb::atom_manager! {
@@ -10132,7 +10194,7 @@ index f6ee76ae8c..1624ddd6fd 100644
 +    /// nested loop lets the next press in while the input callback is out, and it waits its turn as
 +    /// on the Mac (`gpui::HeldInput`), where it was dropped.
 +    input_busy: bool,
-+    held_input: std::collections::VecDeque<PlatformInput>,
++    held_input: std::collections::VecDeque<crate::linux::Held>,
  }
  
  pub struct X11WindowState {
@@ -10156,7 +10218,7 @@ index f6ee76ae8c..1624ddd6fd 100644
      force_render_after_recovery: bool,
      fullscreen: bool,
      client_side_decorations_supported: bool,
-@@ -307,12 +332,237 @@ impl X11WindowState {
+@@ -307,12 +332,241 @@ impl X11WindowState {
      }
  }
  
@@ -10185,25 +10247,29 @@ index f6ee76ae8c..1624ddd6fd 100644
 +/// `x_window` composes `text` with `selected` selected in it, or stops composing with `text`
 +/// empty. Returns false unless `x_window` is GPUI's and takes text.
 +pub fn drive_compose(x_window: u32, text: &str, selected: Option<std::ops::Range<usize>>) -> bool {
-+    embedded_window(x_window)
-+        .map(|window| {
-+            window.with_input_handler(|handler| match text.is_empty() {
-+                true => {
-+                    if let Some(marked) = handler.marked_text_range() {
-+                        handler.replace_text_in_range(Some(marked), "");
-+                    }
-+                }
-+                false => handler.replace_and_mark_text_in_range(None, text, selected),
-+            })
-+        })
-+        .is_some()
++    let Some(window) = embedded_window(x_window).filter(|window| window.with_input_handler(|_| ()).is_some()) else {
++        return false;
++    };
++    let text = text.to_string();
++    window.ime(move |handler| match text.is_empty() {
++        true => {
++            if let Some(marked) = handler.marked_text_range() {
++                handler.replace_text_in_range(Some(marked), "");
++            }
++        }
++        false => handler.replace_and_mark_text_in_range(None, &text, selected),
++    });
++    true
 +}
 +
 +/// As `drive_compose`: commits `text` in place of what was composed.
 +pub fn drive_commit(x_window: u32, text: &str) -> bool {
-+    embedded_window(x_window)
-+        .map(|window| window.with_input_handler(|handler| handler.replace_text_in_range(None, text)))
-+        .is_some()
++    let Some(window) = embedded_window(x_window).filter(|window| window.with_input_handler(|_| ()).is_some()) else {
++        return false;
++    };
++    let text = text.to_string();
++    window.ime(move |handler| handler.replace_text_in_range(None, &text));
++    true
 +}
 +
 +/// For a test driver, as a trackpad: GPUI's window `x_window` scrolls at `position` in it, the
@@ -10394,7 +10460,7 @@ index f6ee76ae8c..1624ddd6fd 100644
  }
  
  impl rwh::HasWindowHandle for RawWindow {
-@@ -522,7 +772,22 @@ impl X11WindowState {
+@@ -522,7 +776,22 @@ impl X11WindowState {
                      | xproto::EventMask::VISIBILITY_CHANGE,
              );
  
@@ -10417,7 +10483,7 @@ index f6ee76ae8c..1624ddd6fd 100644
          if bounds.size.width.0 == 0 || bounds.size.height.0 == 0 {
              log::warn!(
                  "Window bounds contain a zero value. height={}, width={}. Falling back to defaults.",
-@@ -540,7 +805,7 @@ impl X11WindowState {
+@@ -540,7 +809,7 @@ impl X11WindowState {
                      visual.depth,
                      x_window,
                      visual_set.root,
@@ -10426,7 +10492,7 @@ index f6ee76ae8c..1624ddd6fd 100644
                      bounds.origin.y.0,
                      bounds.size.width.0,
                      bounds.size.height.0
-@@ -549,8 +814,8 @@ impl X11WindowState {
+@@ -549,8 +818,8 @@ impl X11WindowState {
              xcb.create_window(
                  visual.depth,
                  x_window,
@@ -10437,7 +10503,7 @@ index f6ee76ae8c..1624ddd6fd 100644
                  bounds.origin.y.0 as i16,
                  bounds.size.width.0 as u16,
                  bounds.size.height.0 as u16,
-@@ -576,7 +841,7 @@ impl X11WindowState {
+@@ -576,7 +845,7 @@ impl X11WindowState {
              )?;
  
              let reply = get_reply(|| "X11 GetGeometry failed.", xcb.get_geometry(x_window))?;
@@ -10446,7 +10512,7 @@ index f6ee76ae8c..1624ddd6fd 100644
                  bounds.origin.x.0 += 2;
                  // Work around a bug where our rendered content appears
                  // outside the window bounds when opened at the default position
-@@ -769,11 +1034,10 @@ impl X11WindowState {
+@@ -769,11 +1038,10 @@ impl X11WindowState {
                      // Note: this has to be done after the GPU init, or otherwise
                      // the sizes are immediately invalidated.
                      size: query_render_extent(xcb, x_window)?,
@@ -10462,7 +10528,7 @@ index f6ee76ae8c..1624ddd6fd 100644
                      preferred_present_mode: None,
                  };
                  WgpuRenderer::new(gpu_context, &raw_window, config, compositor_gpu)?
-@@ -790,6 +1054,12 @@ impl X11WindowState {
+@@ -790,6 +1058,12 @@ impl X11WindowState {
                      Some((f32::from(size.width) as i32, f32::from(size.height) as i32));
              }
              size_hints.max_size = Some((max_texture_size as i32, max_texture_size as i32));
@@ -10475,7 +10541,7 @@ index f6ee76ae8c..1624ddd6fd 100644
              check_reply(
                  || {
                      format!(
-@@ -827,6 +1097,8 @@ impl X11WindowState {
+@@ -827,6 +1101,8 @@ impl X11WindowState {
  
              Ok(Self {
                  parent,
@@ -10484,7 +10550,7 @@ index f6ee76ae8c..1624ddd6fd 100644
                  children: FxHashSet::default(),
                  client,
                  executor,
-@@ -843,6 +1115,7 @@ impl X11WindowState {
+@@ -843,6 +1119,7 @@ impl X11WindowState {
                  // The window is not mapped until the client sees `MapNotify`.
                  visibility: WindowVisibility::Hidden,
                  hovered: false,
@@ -10492,7 +10558,7 @@ index f6ee76ae8c..1624ddd6fd 100644
                  force_render_after_recovery: false,
                  fullscreen: false,
                  maximized_vertical: false,
-@@ -850,7 +1123,10 @@ impl X11WindowState {
+@@ -850,7 +1127,10 @@ impl X11WindowState {
                  hidden: false,
                  appearance,
                  handle,
@@ -10504,7 +10570,7 @@ index f6ee76ae8c..1624ddd6fd 100644
                  client_side_decorations_supported,
                  decorations: WindowDecorations::Server,
                  last_insets: [0, 0, 0, 0],
-@@ -958,6 +1234,7 @@ impl X11Window {
+@@ -958,6 +1238,7 @@ impl X11Window {
              callbacks: Rc::new(RefCell::new(Callbacks::default())),
              xcb: xcb.clone(),
              x_window,
@@ -10512,7 +10578,7 @@ index f6ee76ae8c..1624ddd6fd 100644
          };
  
          let state = ptr.state.borrow_mut();
-@@ -1049,6 +1326,23 @@ impl X11Window {
+@@ -1049,6 +1330,23 @@ impl X11Window {
  }
  
  impl X11WindowStatePtr {
@@ -10536,7 +10602,7 @@ index f6ee76ae8c..1624ddd6fd 100644
      pub fn should_close(&self) -> bool {
          let mut cb = self.callbacks.borrow_mut();
          if let Some(mut should_close) = cb.should_close.take() {
-@@ -1194,9 +1488,39 @@ impl X11WindowStatePtr {
+@@ -1194,9 +1492,74 @@ impl X11WindowStatePtr {
      }
  
      pub fn handle_input(&self, input: PlatformInput) {
@@ -10549,34 +10615,69 @@ index f6ee76ae8c..1624ddd6fd 100644
 +        if pointer.is_some() {
 +            self.state.borrow_mut().pointer = pointer;
 +        }
-         if self.is_blocked() {
-             return;
-         }
++        if self.is_blocked() {
++            return;
++        }
 +        {
 +            let mut callbacks = self.callbacks.borrow_mut();
 +            if callbacks.input_busy {
 +                let behind = !callbacks.held_input.is_empty();
 +                if gpui::HeldInput::waits(&input, behind) {
-+                    callbacks.held_input.push_back(input);
++                    callbacks.held_input.push_back(crate::linux::Held::Input(input));
 +                }
 +                return;
 +            }
 +            callbacks.input_busy = true;
 +        }
-+        let mut next = Some(input);
-+        while let Some(input) = next {
-+            self.hand_on_input(input);
-+            let mut callbacks = self.callbacks.borrow_mut();
-+            next = callbacks.held_input.pop_front();
-+            callbacks.input_busy = next.is_some();
++        self.hand_on_input(input);
++        self.hand_on_held();
++    }
++
++    /// Hands on what came while the window handed input on, in order. It stays busy until the
++    /// last, so nothing that comes meanwhile overtakes what's held.
++    fn hand_on_held(&self) {
++        loop {
++            let held = {
++                let mut callbacks = self.callbacks.borrow_mut();
++                let held = callbacks.held_input.pop_front();
++                callbacks.input_busy = held.is_some();
++                held
++            };
++            match held {
++                None => return,
++                Some(crate::linux::Held::Input(input)) => self.hand_on_input(input),
++                Some(crate::linux::Held::Text(focus, change)) => {
++                    self.with_input_handler(|handler| {
++                        if handler.focus_id() == focus {
++                            change(handler);
++                        }
++                    });
++                }
++            }
 +        }
++    }
++
++    /// An input method's `change` to the text field with the keys, now, or behind the input held
++    /// (`handle_input`), so text typed after a key never comes ahead of it.
++    fn ime(&self, change: impl FnOnce(&mut PlatformInputHandler) + 'static) {
+         if self.is_blocked() {
+             return;
+         }
++        let mut callbacks = self.callbacks.borrow_mut();
++        if !callbacks.held_input.is_empty() {
++            let focus = self.state.borrow().input_handler.as_ref().and_then(|handler| handler.focus_id());
++            callbacks.held_input.push_back(crate::linux::Held::Text(focus, Box::new(change)));
++            return;
++        }
++        drop(callbacks);
++        self.with_input_handler(change);
 +    }
 +
 +    fn hand_on_input(&self, input: PlatformInput) {
          let callback = self.callbacks.borrow_mut().input.take();
          if let Some(mut fun) = callback {
              let result = fun(input.clone());
-@@ -1221,6 +1545,14 @@ impl X11WindowStatePtr {
+@@ -1221,58 +1584,32 @@ impl X11WindowStatePtr {
          }
      }
  
@@ -10589,9 +10690,66 @@ index f6ee76ae8c..1624ddd6fd 100644
 +    }
 +
      pub fn handle_ime_commit(&self, text: String) {
-         if self.is_blocked() {
-             return;
-@@ -1384,7 +1716,41 @@ impl X11WindowStatePtr {
+-        if self.is_blocked() {
+-            return;
+-        }
+-        let mut state = self.state.borrow_mut();
+-        if let Some(mut input_handler) = state.input_handler.take() {
+-            drop(state);
+-            input_handler.replace_text_in_range(None, &text);
+-            let mut state = self.state.borrow_mut();
+-            state.input_handler = Some(input_handler);
+-        }
++        self.ime(move |input_handler| input_handler.replace_text_in_range(None, &text));
+     }
+ 
+     pub fn handle_ime_preedit(&self, text: String) {
+-        if self.is_blocked() {
+-            return;
+-        }
+-        let mut state = self.state.borrow_mut();
+-        if let Some(mut input_handler) = state.input_handler.take() {
+-            drop(state);
+-            input_handler.replace_and_mark_text_in_range(None, &text, None);
+-            let mut state = self.state.borrow_mut();
+-            state.input_handler = Some(input_handler);
+-        }
++        self.ime(move |input_handler| input_handler.replace_and_mark_text_in_range(None, &text, None));
+     }
+ 
+     pub fn handle_ime_unmark(&self) {
+-        if self.is_blocked() {
+-            return;
+-        }
+-        let mut state = self.state.borrow_mut();
+-        if let Some(mut input_handler) = state.input_handler.take() {
+-            drop(state);
+-            input_handler.unmark_text();
+-            let mut state = self.state.borrow_mut();
+-            state.input_handler = Some(input_handler);
+-        }
++        self.ime(|input_handler| input_handler.unmark_text());
+     }
+ 
+     pub fn handle_ime_delete(&self) {
+-        if self.is_blocked() {
+-            return;
+-        }
+-        let mut state = self.state.borrow_mut();
+-        if let Some(mut input_handler) = state.input_handler.take() {
+-            drop(state);
++        self.ime(|input_handler| {
+             if let Some(marked) = input_handler.marked_text_range() {
+                 input_handler.replace_text_in_range(Some(marked), "");
+             }
+-            let mut state = self.state.borrow_mut();
+-            state.input_handler = Some(input_handler);
+-        }
++        });
+     }
+ 
+     pub fn get_ime_area(&self) -> Option<Bounds<ScaledPixels>> {
+@@ -1384,7 +1721,41 @@ impl X11WindowStatePtr {
      }
  }
  
@@ -10633,7 +10791,7 @@ index f6ee76ae8c..1624ddd6fd 100644
      fn bounds(&self) -> Bounds<Pixels> {
          self.0.state.borrow().bounds
      }
-@@ -1473,6 +1839,9 @@ impl PlatformWindow for X11Window {
+@@ -1473,6 +1844,9 @@ impl PlatformWindow for X11Window {
      }
  
      fn mouse_position(&self) -> Point<Pixels> {
@@ -10643,7 +10801,7 @@ index f6ee76ae8c..1624ddd6fd 100644
          get_reply(
              || "X11 QueryPointer failed.",
              self.0.xcb.query_pointer(self.0.x_window),
-@@ -1528,6 +1897,10 @@ impl PlatformWindow for X11Window {
+@@ -1528,6 +1902,10 @@ impl PlatformWindow for X11Window {
      }
  
      fn activate(&self) {
@@ -10654,7 +10812,7 @@ index f6ee76ae8c..1624ddd6fd 100644
          let data = [1, xproto::Time::CURRENT_TIME.into(), 0, 0, 0];
          let message = xproto::ClientMessageEvent::new(
              32,
-@@ -1615,6 +1988,9 @@ impl PlatformWindow for X11Window {
+@@ -1615,6 +1993,9 @@ impl PlatformWindow for X11Window {
      }
  
      fn map_window(&mut self) -> anyhow::Result<()> {
@@ -10664,7 +10822,7 @@ index f6ee76ae8c..1624ddd6fd 100644
          check_reply(
              || "X11 MapWindow failed.",
              self.0.xcb.map_window(self.0.x_window),
-@@ -1765,20 +2141,25 @@ impl PlatformWindow for X11Window {
+@@ -1765,20 +2146,25 @@ impl PlatformWindow for X11Window {
                  visual_id: inner.visual_id,
              };
              match renderer.recover(&raw_window) {
@@ -10691,7 +10849,7 @@ index f6ee76ae8c..1624ddd6fd 100644
          }
      }
  
-@@ -1842,11 +2223,6 @@ impl PlatformWindow for X11Window {
+@@ -1842,11 +2228,6 @@ impl PlatformWindow for X11Window {
      fn window_decorations(&self) -> gpui::Decorations {
          let state = self.0.state.borrow();
  
@@ -10703,7 +10861,7 @@ index f6ee76ae8c..1624ddd6fd 100644
          match state.decorations {
              WindowDecorations::Server => Decorations::Server,
              WindowDecorations::Client => {
-@@ -1915,16 +2291,16 @@ impl PlatformWindow for X11Window {
+@@ -1915,16 +2296,16 @@ impl PlatformWindow for X11Window {
          }
      }
  
@@ -10725,7 +10883,7 @@ index f6ee76ae8c..1624ddd6fd 100644
          }
  
          // https://github.com/rust-windowing/winit/blob/master/src/platform_impl/linux/x11/util/hint.rs#L53-L87
-@@ -1976,6 +2352,13 @@ impl PlatformWindow for X11Window {
+@@ -1976,6 +2357,13 @@ impl PlatformWindow for X11Window {
          client.update_ime_position(bounds);
      }
  
@@ -10739,7 +10897,7 @@ index f6ee76ae8c..1624ddd6fd 100644
      fn gpu_specs(&self) -> Option<GpuSpecs> {
          self.0.state.borrow().renderer.as_ref()?.gpu_specs()
      }
-@@ -2065,3 +2448,164 @@ impl accesskit::DeactivationHandler for TrivialDeactivationHandler {
+@@ -2065,3 +2453,164 @@ impl accesskit::DeactivationHandler for TrivialDeactivationHandler {
          (self.callback)();
      }
  }
