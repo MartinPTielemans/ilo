@@ -108,6 +108,9 @@ expect '^browser: command bar shown$' "⌘T didn't open the command bar"
 send insert 'data:text/html,<title>away</title>'
 send key return
 expect '^browser: loaded [0-9]* data:text/html,<title>away</title>$' "the page to leave the Board for didn't load"
+# The page ↩ went to has the keyboard, which the UI had over the Board (#3453).
+send state
+in_browser RenderWidgetHostViewCocoa "after ↩ in ⌘T's bar over a Board"
 send key t cmd
 expect '^browser: command bar shown$' "⌘T didn't open the command bar"
 send type pant

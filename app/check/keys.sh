@@ -193,6 +193,23 @@ send key w cmd
 expect '^browser: command close-tab via ui$' "⌘W with the UI focused didn't reach the UI"
 expect '^browser: window closed [0-9]' "⌘W in a window with no page didn't close it"
 send window 1
+# A page opened from the command bar in a window with no page has the keyboard, which the UI held
+# for it, as one opened over a page has (#3239).
+send key n cmd
+expect '^browser: command new-window via ' "⌘N didn't open a window for the page from its bar"
+new_window_bar
+send key t cmd
+expect '^browser: command bar shown$' "⌘T in a window with no page didn't open the command bar"
+send insert 'data:text/html,<title>first</title>'
+send key return
+expect '^browser: loaded [0-9]* data:text/html,<title>first</title>$' \
+  "the page from the command bar in a window with no page didn't load"
+send state
+in_browser RenderWidgetHostViewCocoa "after ↩ in ⌘T's bar in a window with no page"
+send key w cmd shift
+expect '^browser: command close-window via page$' "⇧⌘W with the page from the bar focused didn't reach the UI"
+expect '^browser: window closed [0-9]' "⇧⌘W didn't close the window the page from the bar opened in"
+send window 1
 
 send click $sidebar_point
 # GPUI's view in a window it doesn't own, which AccessKit subclasses.

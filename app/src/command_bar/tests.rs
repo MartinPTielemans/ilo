@@ -18,6 +18,8 @@ use crate::text_input::{self, Chosen, FieldMenu, korean};
 #[derive(Default)]
 struct Recorder {
     calls: RefCell<Vec<String>>,
+    /// What the bar had asked of the host each time it gave the page the keyboard.
+    page_keyboard: RefCell<Vec<String>>,
     /// What the user typed for each load, which the core reads for an http address written out.
     typed: RefCell<Vec<String>>,
     /// What the core was asked to suggest for, the text and whether it may complete it.
@@ -156,6 +158,11 @@ impl Host for Recorder {
 
     fn hide(&self) {
         self.record("hide".into());
+    }
+
+    fn focus_page(&self) {
+        let before = self.calls.borrow().join(", ");
+        self.page_keyboard.borrow_mut().push(before);
     }
 
     fn dismiss(&self) {
@@ -460,6 +467,12 @@ impl Bar {
     /// What the bar asked of the host since the last time.
     fn calls(&self) -> Vec<String> {
         self.host.calls.take()
+    }
+
+    /// What the bar had asked of the host each time it gave the page the keyboard since the last
+    /// time.
+    fn page_keyboard(&self) -> Vec<String> {
+        self.host.page_keyboard.take()
     }
 
     /// What the user typed for each load since the last time.
@@ -2492,6 +2505,45 @@ fn each_load_says_what_was_typed(cx: &mut TestAppContext) {
     );
     bar.keys("enter");
     assert_eq!(bar.typed(), ["http://exa"], "↩ on a completion");
+}
+
+/// ↩ that goes to a page gives it the keyboard once the bar has hidden, as Chrome's address bar
+/// does, wherever the keyboard was before the bar opened: in the page, or in the UI, as over a
+/// Board (#3453) or a window with no page (#3239). A pick that shows a tab already open, or copies,
+/// leaves it.
+#[gpui::test]
+fn return_gives_the_page_it_goes_to_the_keyboard(cx: &mut TestAppContext) {
+    let mut bar = Bar::new(cx);
+    bar.edit("chrome://board/1", None);
+    bar.type_text("example.org");
+    bar.keys("enter");
+    assert_eq!(
+        bar.page_keyboard(),
+        ["navigate 1 https://example.org/, hide"],
+        "a page loaded in the tab shown"
+    );
+    bar.calls();
+    bar.edit("https://example.org/", None);
+    bar.keys("enter");
+    assert_eq!(
+        bar.page_keyboard(),
+        ["hide, reload 1"],
+        "the page loaded again"
+    );
+    bar.calls();
+    let mut bar = Bar::new(cx);
+    bar.type_text("example.com");
+    bar.keys("enter");
+    assert_eq!(
+        bar.page_keyboard(),
+        ["open https://example.com/, hide"],
+        "a page in a new tab"
+    );
+    bar.calls();
+    let mut bar = Bar::with_tabs(cx, vec![tab(4, "https://a.test/")]);
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["select 4", "hide"]);
+    assert!(bar.page_keyboard().is_empty(), "a tab already open");
 }
 
 /// ↩ on the URL ⌘L opened the bar on loads the page again, as Arc's does; typed over, it goes
