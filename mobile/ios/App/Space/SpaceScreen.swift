@@ -58,10 +58,12 @@ struct SpaceScreen: View {
         }
         .padding(Dock.inset)
         .contentShape(.rect)
-        // The Spaces turn under the thumb: a sideways drag on the tiles or the resting field
-        // moves the pager with the finger, and lets go on the Space next door.
+        // The Spaces turn under the thumb: a sideways drag on the tiles or the empty field moves
+        // the pager with the finger, and lets go on the Space next door. The keyboard being up
+        // doesn't stop it, as the app opens that way; text in the field does, since a drag
+        // there moves the caret.
         .gesture(
-          Sideways(isOn: !focused && !typing) { distance in
+          Sideways(isOn: !typing) { distance in
             turn.moved(distance, on: browser.currentSpace?.id, among: account.spaces.map(\.id))
           } ended: { distance, speed in
             let landing = turn.landing(distance, speed: speed, on: browser.currentSpace?.id, among: account.spaces.map(\.id))

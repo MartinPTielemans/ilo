@@ -26,25 +26,30 @@ struct SpacePager: View {
 
   var body: some View {
     @Bindable var browser = browser
-    ScrollView(.horizontal) {
-      // Every Space is there, so the one next door is drawn when the dock's swipe brings it in.
-      HStack(spacing: 0) {
-        ForEach(browser.account.spaces) { space in
-          SpacePage(space: space)
-            .containerRelativeFrame(.horizontal)
+    ScrollViewReader { pages in
+      ScrollView(.horizontal) {
+        // Every Space is there, so the one next door is drawn when the dock's swipe brings it in.
+        HStack(spacing: 0) {
+          ForEach(browser.account.spaces) { space in
+            SpacePage(space: space)
+              .containerRelativeFrame(.horizontal)
+          }
         }
+        .scrollTargetLayout()
+        .modifier(Drawn(turn: turn))
       }
-      .scrollTargetLayout()
-      .modifier(Drawn(turn: turn))
-    }
-    .scrollTargetBehavior(.paging)
-    .scrollPosition(id: $browser.space)
-    .scrollIndicators(.hidden)
-    .contentShape(.rect)
-    .onTapGesture(perform: rest)
-    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { turn.width = $0 }
-    .onAppear {
-      if browser.space == nil { browser.space = browser.account.spaces.first?.id }
+      .scrollTargetBehavior(.paging)
+      .scrollPosition(id: $browser.space)
+      .scrollIndicators(.hidden)
+      .contentShape(.rect)
+      .onTapGesture(perform: rest)
+      .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { turn.width = $0 }
+      .onAppear {
+        if browser.space == nil { browser.space = browser.account.spaces.first?.id }
+        // A pager made anew, at launch or when the field is cleared, starts on its first Space
+        // whichever one the position names, so it's put on the Space the dock is showing.
+        if let space = browser.space { pages.scrollTo(space, anchor: .leading) }
+      }
     }
   }
 
