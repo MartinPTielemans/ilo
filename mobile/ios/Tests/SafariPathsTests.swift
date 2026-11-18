@@ -204,3 +204,52 @@ import WebKit
     #expect(browser.page === page)
   }
 }
+
+/// A file a page makes itself and hands over through a link that says to download it.
+@Suite(.serialized, .timeLimit(.minutes(2))) @MainActor struct MadeFileTests {
+  nonisolated private static let blob = "const link = document.createElement('a'); link.href = URL.createObjectURL(new Blob(['made-up,csv\\n1,2\\n'], { type: 'text/csv' })); link.download = 'export.csv'; document.body.appendChild(link); link.click()"
+  nonisolated private static let data = "const link = document.createElement('a'); link.href = 'data:text/plain;base64,aGVsbG8='; link.download = 'hello.txt'; document.body.appendChild(link); link.click()"
+
+  private func page(in browser: Browser) async throws -> (WebTab, Loopback) {
+    let server = try await Loopback { _ in .html("<title>Files</title>") }
+    browser.openNew(server.url("/files"))
+    let page = try #require(browser.page)
+    #expect(await eventually { await page.shows("/files") })
+    return (page, server)
+  }
+
+  @Test(arguments: [(blob, "export.csv", "made-up,csv\n1,2\n"), (data, "hello.txt", "hello")])
+  func `a file the page made downloads once the user says so, and the page stays`(script: String, name: String, holds: String) async throws {
+    let browser = testBrowser()
+    let (page, _) = try await page(in: browser)
+
+    _ = await page.run(script)
+    #expect(await eventually { browser.prompt != nil })
+    guard case .download(let asked) = browser.prompt?.kind else {
+      Issue.record("The download wasn't asked about.")
+      return
+    }
+    #expect(asked == name)
+    browser.answer(true)
+    #expect(await eventually { browser.downloaded != nil })
+    let file = try #require(browser.downloaded)
+    #expect(file.lastPathComponent == name)
+    #expect(try String(contentsOf: file, encoding: .utf8) == holds)
+    #expect(await page.shows("/files"))
+    #expect(page.failure == nil)
+  }
+
+  @Test func `a file the user turns down isn't kept, and nothing is said of it`() async throws {
+    let browser = testBrowser()
+    let (page, _) = try await page(in: browser)
+
+    _ = await page.run(Self.blob)
+    #expect(await eventually { browser.prompt != nil })
+    browser.answer(false)
+    #expect(await eventually { page.downloadsRunning == 0 })
+    try await Task.sleep(for: .milliseconds(300))
+    #expect(browser.downloaded == nil)
+    #expect(browser.prompt == nil)
+    #expect(await page.shows("/files"))
+  }
+}

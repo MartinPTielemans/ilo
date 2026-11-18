@@ -62,6 +62,8 @@ final class WebTab: NSObject, Identifiable {
   let loginState = LoginState()
   /// Where each download in flight is being written. Observed, for the bar to show one running.
   private var downloads: [ObjectIdentifier: URL] = [:]
+  /// Downloads of a file a page made itself, which the user hasn't been asked about yet.
+  @ObservationIgnored private var unasked: Set<ObjectIdentifier> = []
   var downloadsRunning: Int { downloads.count }
 
   /// A tab that loads what it's told to, or the `window` a page of the `opener` tab opened, which
@@ -391,7 +393,9 @@ extension WebTab: WKNavigationDelegate {
     case "http", "https":
       break
     case "about", "blob", "data":
-      return (.allow, preferences)
+      // A file the page made itself, behind a link that says to download it: its name comes
+      // with the download, which asks then.
+      return (action.shouldPerformDownload ? .download : .allow, preferences)
     default:
       // Another app's address, such as mailto: or tel:. Only the page itself may ask, and the
       // user says whether to leave.
@@ -441,6 +445,7 @@ extension WebTab: WKNavigationDelegate {
 
   func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
     download.delegate = self
+    if !["http", "https"].contains(navigationAction.request.url?.scheme?.lowercased()) { unasked.insert(ObjectIdentifier(download)) }
   }
 
   func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
@@ -647,6 +652,10 @@ extension WebTab: WKUIDelegate {
 
 extension WebTab: WKDownloadDelegate {
   func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String) async -> URL? {
+    if unasked.remove(ObjectIdentifier(download)) != nil, await browser?.ask(.download(name: suggestedFilename), from: self) != true {
+      // No destination is the download called off.
+      return nil
+    }
     let folder = URL.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
     try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
     let file = folder.appending(path: suggestedFilename)
@@ -659,7 +668,9 @@ extension WebTab: WKDownloadDelegate {
   }
 
   func download(_ download: WKDownload, didFailWithError error: any Error, resumeData: Data?) {
-    downloads[ObjectIdentifier(download)] = nil
+    unasked.remove(ObjectIdentifier(download))
+    // One the user called off never had a file.
+    guard downloads.removeValue(forKey: ObjectIdentifier(download)) != nil else { return }
     browser?.tell("The download didn't finish. \(error.localizedDescription)")
   }
 }
