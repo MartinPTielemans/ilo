@@ -939,6 +939,17 @@ expect '^browser: ring gave the page its first control$' "Tab from the ring didn
 ring_stayed $left "Tab past the page's last control"
 send type y
 expect '^browser: title [0-9]* value .*y$' "Tab from the ring didn't give the page's field the keyboard"
+# On Windows, Japanese composes there too, once Tab from the ring has given the page's pane the
+# keyboard straight, and the pane has told the input method before the page's view took focus
+# (#3396). Return commits it.
+if windows && [ -n "$japanese" ]; then
+  send $ime
+  send type nihongo
+  expect "^browser: title [0-9]* value .*y$preedit\$" \
+    "Japanese typed after Tab from the ring didn't compose $preedit in the page: $(grep '^browser: title' "$log" | tail -1)"
+  send key return
+  send ime off
+fi
 send key tab shift
 expect '^browser: sidebar keyed ' "⇧Tab before the page's first control didn't ring the tab's row"
 row=$(since | sed -n 's/^browser: sidebar keyed \([0-9]*\)$/\1/p' | head -1)

@@ -762,6 +762,25 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
       fail "the agent's warning before http, watched in its split view, took the user's keyboard as it showed: $key, $focus"
     echo "skip: mcp: the user's keyboard staying where it was as an agent's warning before http shows in a watched split view, on the Mac: the warning took it as the watch showed it (#3240)."
   fi
+  # F6 and Tab round the ring never give the watched agent's page the keyboard: its stop is the
+  # strip's words, so the handback into a page, which on Windows gives the shown page's pane the
+  # keyboard straight (#3396), never runs for it. Windows alone, the change's.
+  if windows; then
+    ringed=$((step + 1))
+    send key f6
+    for _ in 1 2 3 4 5 6 7 8; do
+      send key tab
+    done
+    send state
+    logged '^browser: \(sidebar\|strip\) keyed ' "$ringed" ||
+      fail "F6 and Tab with the agent's split watched didn't move the ring"
+    ! logged '^browser: ring gave the page ' "$ringed" ||
+      fail "Tab round the ring with the agent's split watched gave its page the keyboard"
+    case "$key $focus" in
+      *NativeWidgetMacNSWindow* | *RenderWidgetHostViewCocoa*)
+        fail "Tab round the ring with the agent's split watched left the keyboard in $key, on $focus" ;;
+    esac
+  fi
   warning_x=${warning%%,*} warning_y=${warning#*,}
   warning_y=${warning_y%% *} warning_size=${warning#* }
   warning_width=${warning_size%%x*} warning_height=${warning_size#*x}
