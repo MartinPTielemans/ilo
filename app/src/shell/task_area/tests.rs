@@ -1362,3 +1362,52 @@ fn take_over_arriving_moves_nothing_else(cx: &mut TestAppContext) {
         "the words didn't give up the room"
     );
 }
+
+/// Take Over shows while the ring is on any of the task's stops, the card, back, the page, Take
+/// Over and Stop, so it is there before the ring reaches its neighbour; never with the ring on a
+/// stop that isn't the task's, a tab's row or New Tab's, nor with no ring (#3220).
+#[gpui::test]
+fn take_over_shows_with_the_ring_on_the_tasks_stops_alone(cx: &mut TestAppContext) {
+    use crate::shell::page_ends::{STOPS_DRAWN, StripStop};
+    use crate::shell::sidebar_keys::NEW_TAB;
+    let (shell, _, cx) = shell_with_task(cx);
+    watching_working(&shell, cx);
+    let shows = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        STOPS_DRAWN.with(|drawn| drawn.borrow_mut().clear());
+        draw(shell, cx);
+        STOPS_DRAWN.with(|drawn| drawn.borrow().contains_key(&StripStop::TakeOver))
+    };
+    assert!(!shows(&shell, cx), "Take Over shows with no ring");
+    shell.update(cx, |shell, cx| shell.tab_into_strip(false, cx));
+    let stops = [
+        StripStop::Card,
+        StripStop::Back,
+        StripStop::Page,
+        StripStop::TakeOver,
+        StripStop::Stop,
+    ];
+    for stop in stops {
+        assert_eq!(
+            shell.read_with(cx, |shell, _| shell.keyed_strip),
+            Some(stop)
+        );
+        assert!(
+            shows(&shell, cx),
+            "Take Over hides with the ring on {stop:?}"
+        );
+        shell.update(cx, |shell, cx| shell.key_tab(false, cx));
+    }
+    let row = shell.read_with(cx, |shell, _| {
+        shell.key_rows().into_iter().find(|row| *row != NEW_TAB)
+    });
+    let row = row.expect("the Space has no tab's row");
+    for (row, name) in [(row, "a tab's row"), (NEW_TAB, "New Tab's row")] {
+        shell.update(cx, |shell, cx| shell.key_row(row, cx));
+        assert!(
+            !shows(&shell, cx),
+            "Take Over shows with the ring on {name}"
+        );
+    }
+    shell.update(cx, |shell, cx| shell.leave_keys("test", cx));
+    assert!(!shows(&shell, cx), "Take Over shows once the ring leaves");
+}
