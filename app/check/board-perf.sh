@@ -4,10 +4,12 @@
 # plain pages, and:
 # - Tab switches, by Chrome's measure: DevTools traces 10 round trips between the two plain pages,
 #   then 10 between a plain page and the Board, and board_trace.py reads TabSwitching::Latency's
-#   spans, from the tab strip's change to the first frame presented, against the 16 ms gate.
+#   spans, from the tab strip's change to the first frame presented, against the 16 ms gate. Each
+#   switch waits for its page's next frames (cdp.py's frame) before the next one, which would cut
+#   its span off before its frame.
 # - Memory, summed over the browser's processes as perf's is: with the two plain pages, with the
 #   Board shown, and with it in the background.
-# - Adding a picture, dropped on the Board as a file: a 1 MB PNG and one just under the 50 MB a
+# - Adding a picture, dragged over the Board as a file from another app and dropped: a 1 MB PNG and one just under the 50 MB a
 #   picture may be, three of each, each traced alone. The UI thread's longest task from the drop to
 #   the Board saved, as the page writes the file in 256 KiB slices to the Board's own sequence, and
 #   the add's time from the drop to the core's "board added" line: for the big one, its file and
@@ -71,11 +73,21 @@ board_cdp_await() {
   done
   fail "$3: $(tail -3 "$cdp_log" | tr '\n' ' ')"
 }
-# $1 round trips between tabs $2 and $3, starting on $2, each switch by its ⌘ digit.
+# Shows tab $1, whose address starts with $2, by its ⌘ digit, and waits for its page's frames.
+board_switch() {
+  switch "$(board_index "$1") cmd" "$1"
+  since=$(wc -l < "$cdp_log")
+  echo "frame $2" >&5
+  board_cdp_await "$since" '^cdp: frame ' "tab $1's page didn't say it drew"
+  tail -n +$((since + 1)) "$cdp_log" | grep -q '^cdp: frame visible$' ||
+    fail "tab $1's page drew hidden: $(tail -n +$((since + 1)) "$cdp_log" | grep '^cdp: frame ')"
+}
+# $1 round trips between tab $2, at an address starting with $3, and tab $4, at one with $5,
+# starting on $2.
 board_switches() {
   for _ in $(seq "$1"); do
-    switch "$(board_index "$3") cmd" "$3"
-    switch "$(board_index "$2") cmd" "$2"
+    board_switch "$4" "$5"
+    board_switch "$2" "$3"
   done
 }
 # The memory now, labelled $1, as "MiB processes" with the kinds of process after.
@@ -130,11 +142,16 @@ PYEOF
 # Drops the picture $1 on the Board, its $2nd of kind $3, which stores $4 files, and waits for the
 # Board saved after: the add's times go in $dir/add-$3-$2.
 board_add() {
-  : > "$dir/add-$3-$2.stamp"
+  # Over the page, then on, as a drag from another app moves: the page's answer, which takes it,
+  # comes with an update after the one that enters (split.sh).
+  send dragover 580 380 file "$(app_path "$1")"
+  send dragover $page_point
+  expect '^browser: drag over [A-Za-z]* taken$' "the Board's page didn't take the $3 picture dragged over it"
   board_stamp
   dropped=$stamp
-  send dragdrop $page_point file "$(app_path "$1")"
+  send dragdrop $page_point
   dropped_step=$step
+  expect '^browser: drag dropped$' "the Board's page didn't take the $3 picture let go over it"
   for _ in $(seq 1200); do
     [ "$(since "$dropped_step" | grep -c 'browser: board added ')" -ge "$4" ] && break
     since "$dropped_step" | grep -q 'browser: board refused a write$' &&
@@ -169,12 +186,18 @@ size=$(wc -c < "$profile_dir/Default/Boards/$id/board.json" | tr -d ' ')
 [ "$size" -lt 4194304 ] || fail "the Board of 2,000 notes is $size bytes, over the 4 MiB a Board's file may hold"
 
 scratch=$(mktemp -d)
-start_with_cdp 'data:text/html,<title>plain a</title><p>A plain page.' "$profile_dir" ""
+# The plain pages' addresses start with their names, as cdp.py's frame finds a page by the start of
+# its address, a word, where a browser may escape the markup after.
+plain_a_url='data:text/html,plain-a<title>plain-a</title>'
+plain_b_url='data:text/html,plain-b<title>plain-b</title>'
+# Made before the launch, as await reads it before the app has its fifos open.
+: > "$log"
+start_with_cdp "$plain_a_url" "$profile_dir" ""
 await_load
 send click $page_point
 plain_a=$(today | cut -d' ' -f1)
 [ -n "$plain_a" ] || fail "the first page's tab isn't in Today"
-board_open 'data:text/html,<title>plain b</title><p>Another plain page.' "the second plain page"
+board_open "$plain_b_url" "the second plain page"
 plain_b=$tab
 board_memory "two plain pages"
 
@@ -192,9 +215,9 @@ switch "$(board_index "$plain_a") cmd" "$plain_a"
 expect 'browser: board saved$' "the Board of 2,000 notes didn't save as its tab hid again"
 board_memory "two plain pages, the Board in the background"
 
-board_traced latency switches-plain.json board_switches 10 "$plain_a" "$plain_b"
+board_traced latency switches-plain.json board_switches 10 "$plain_a" data:text/html,plain-a "$plain_b" data:text/html,plain-b
 board_spans switches-plain.json "between two plain pages"
-board_traced latency switches-board.json board_switches 10 "$plain_a" "$board"
+board_traced latency switches-board.json board_switches 10 "$plain_a" data:text/html,plain-a "$board" "chrome://board/$id"
 board_spans switches-board.json "" "plain page to the Board" "the Board to a plain page"
 
 # Each add from the Board shown, as a drop is on the page in view.
