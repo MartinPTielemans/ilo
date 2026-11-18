@@ -32,8 +32,9 @@
 #     whether it works.
 # A host or address neither run requested counts for neither, as the ads a site serves change from
 # load to load. A site that's still Cloudflare's bot check 8 s after it loads gets one more go. If
-# the check still stands in either run, or DataDome's captcha loaded over the page, the site isn't
-# compared, and the result names it, as a bot check has no ads to block. On a YouTube watch page
+# the check still stands in either run, DataDome's captcha loaded over the page, or the site sent
+# the run on to Google's unusual-traffic page, the site isn't compared, and the result names it
+# and what stood in, as a bot check has no ads to block. On a YouTube watch page
 # the run reads the player from the load on, to say whether an ad showed before the video played
 # 5 s, and it fails where the baseline's played with no ad and this run's showed one or didn't
 # play. It needs the network and the sites, so it runs only when named: ./check.sh adblock-parity.
@@ -441,8 +442,13 @@ for line in open(starts, encoding="utf-8"):
     started, url, load_ms, *rest = line.rstrip("\n").split(" ")
     landed = rest[0] if rest and load_ms != "none" else ""
     ok = load_ms != "none" and not landed.startswith("chrome-error:")
+    # What stood in for the site's page, where a bot check did.
+    at = urlsplit(landed)
+    bot = ("Cloudflare's bot check" if "bot-check" in rest else
+           "Google's unusual-traffic page" if (at.hostname or "").endswith("google.com")
+           and at.path.startswith("/sorry/") else "")
     sites.append({"at": int(started), "url": url, "loaded": ok, "load_ms": load_ms if ok else "",
-                  "bot": "bot-check" in rest})
+                  "bot": bot})
 # A watch page's video: "ad" or "no-ad", the seconds it played or none, then what got it playing.
 videos = {}
 for line in open(watched, encoding="utf-8"):
@@ -534,7 +540,8 @@ for i, s in enumerate(sites):
     s["blinks_unread"] = look.get("blinks_unread")
     # DataDome's captcha, which a site shows a runner it takes for a bot, over the page in place:
     # a bot check as Cloudflare's is, with no title to tell it by (#2111).
-    s["bot"] = s["bot"] or any(h.endswith("captcha-delivery.com") for h in s["allowed"])
+    if not s["bot"] and any(h.endswith("captcha-delivery.com") for h in s["allowed"]):
+        s["bot"] = "DataDome's captcha"
 
 def video_cell(video):
     if not video:
@@ -570,8 +577,8 @@ worse = []
 refused = []
 site_missed = False
 # A site that was a bot check in this run or the baseline's, which an older table
-# doesn't say.
-unchecked = [s["url"] for s in sites if s["bot"]]
+# doesn't say, with what stood in for its page.
+unchecked = {s["url"]: s["bot"] for s in sites if s["bot"]}
 if baseline:
     lines = [line.rstrip("\n").split("\t") for line in open(baseline, encoding="utf-8")]
     rows = lines[1:]
@@ -583,7 +590,7 @@ if baseline:
         if not b:
             continue
         if len(b) > 8 and b[8] == "1" and not s["bot"]:
-            unchecked.append(s["url"])
+            unchecked[s["url"]] = "a bot check in the baseline's run"
         if s["url"] in unchecked:
             continue
         if b[1] == "1" and not s["loaded"]:
@@ -660,8 +667,10 @@ print(f"{len(loaded)} of {len(sites)} sites loaded, in {median} ms at the median
       + f"; {blocker_hid} selectors hidden by the blocker's style sheet and "
         f"{sum(s['page_hid'] for s in sites)} by the page's own"
       + (f"; {len(missed)} selectors the baseline hid all of showed" if baseline else "")
-      + "".join(f"; {s['url']}'s video {video_said(s['video'])}" for s in sites if s["video"])
-      + (f"; not compared, as a bot check stood in: {', '.join(unchecked)}" if unchecked else "")
+      + "".join(f"; {s['url']}'s video {video_said(s['video'])}" for s in sites
+                if s["video"] and s["url"] not in unchecked)
+      + (f"; not compared, as a bot check stood in: "
+         + ", ".join(f"{url} ({what})" for url, what in unchecked.items()) if unchecked else "")
       + "".join(f"; {r}" for r in refused))
 if worse:
     sys.exit(1)
