@@ -49,11 +49,12 @@ takes a command a line on its standard input:
                   last at an address starting with PREFIX matches SELECTOR, in its shadow trees
                   too, or none for no such page: a WebUI page shows what Chrome did by its
                   controls' attributes, as a disabled menu
-  video PREFIX    logs "cdp: video SECONDS playing|paused ad|no-ad refused|-", or "cdp: video
-                  none" for no such page or no video in it: how far the first video in the page
-                  opened last at an address starting with PREFIX has played, whether it's paused,
-                  whether its player shows an ad, and refused where Chrome kept it from starting,
-                  as YouTube's player says
+  video PREFIX    logs "cdp: video SECONDS playing|paused ad|no-ad refused|cued|STATE", or "cdp:
+                  video none" for no such page or no video in it: how far the first video in the
+                  page opened last at an address starting with PREFIX has played, whether it's
+                  paused, whether its player shows an ad, and refused where Chrome kept it from
+                  starting, cued where it waits for play, or else the player's state, as
+                  YouTube's player says, - with no player
   content         logs "cdp: content TEXT IMAGES COVER", or "cdp: content none" for no page: the
                   attached page's shown text, in characters, its shown pictures at least 50 px a
                   side, and the percent of the viewport the largest element fixed in place over
@@ -500,7 +501,8 @@ def ask(prefix, script, selector):
 # ad, and whether Chrome refused to start it, as YouTube's says with classes on the player round
 # it. Refused, the player has asked to play, as playing-mode says, and has the data to, but the
 # video is still paused and has never started, as Chrome lets a page start a video with sound only
-# once the user has acted on it.
+# once the user has acted on it. Cued, the player has the video and waits for play to be pressed,
+# as its state 5 says (#3272). Otherwise the player's state, as a number, or - with no player.
 VIDEO = """(() => {
   const video = document.querySelector("video");
   if (!video) return "";
@@ -510,8 +512,11 @@ VIDEO = """(() => {
   const refused = player && player.classList.contains("playing-mode") &&
     player.classList.contains("unstarted-mode") && video.paused &&
     video.readyState === HTMLMediaElement.HAVE_ENOUGH_DATA;
+  const state = player && typeof player.getPlayerState === "function" ?
+    String(player.getPlayerState()) : "-";
+  const cued = state === "5" && video.paused;
   return video.currentTime.toFixed(1) + (video.paused ? " paused" : " playing") +
-         (ad ? " ad" : " no-ad") + (refused ? " refused" : " -");
+         (ad ? " ad" : " no-ad") + (refused ? " refused" : cued ? " cued" : " " + state);
 })()"""
 
 
