@@ -696,8 +696,10 @@ def blockers(rules):
 
 
 # How many of whose() asks go to the browser together: enough that it's never waiting on the
-# check, few enough that a blocker's rule found in one says the next wave's answers already.
-WAVE = 32
+# check, few enough that a blocker's rule found in one says the next wave's answers already. The
+# browser answers them one at a time, up to 0.4 s each on a page of many rules, so a wave's also
+# what the budget can run over by (#3335).
+WAVE = 8
 
 
 def whose(selectors, budget=15):
@@ -709,7 +711,8 @@ def whose(selectors, budget=15):
     rule hides, as a player's controls before it plays (#3268). A selector is the page's only
     where every element looked at is, and one not told apart in BUDGET seconds is neither, so it
     counts as the blocker's would. Each selector's first element is asked about before any
-    selector's second, so a page's many hidden parts get the most selectors an answer."""
+    selector's second, so a page's many hidden parts get the most selectors an answer, and a
+    selector one of whose elements is the blocker's is the blocker's, so its others aren't asked."""
     began = time.monotonic()
     owners = evaluate("%s(%s)" % (MARK, json.dumps(selectors))) or []
     call("DOM.enable", {}, session)
@@ -728,8 +731,10 @@ def whose(selectors, budget=15):
             nth.append(seen.get(owner, 0))
             seen[owner] = nth[-1] + 1
         order = sorted(range(len(nodes)), key=lambda k: (nth[k], k))
+        # The selectors an element of which is the blocker's, which nothing more can change.
+        settled = set()
         while time.monotonic() - began <= budget:
-            wave = [k for k in order if said[k] is None][:WAVE]
+            wave = [k for k in order if said[k] is None and owners[k] not in settled][:WAVE]
             if not wave:
                 break
             asked = set(wave)
@@ -749,6 +754,7 @@ def whose(selectors, budget=15):
                 for i, hit in enumerate(evaluate("%s(%s)" % (MATCHES, json.dumps(lists))) or []):
                     if hit and i < len(said):
                         said[i] = "blocker"
+            settled.update(owner for owner, verdict in zip(owners, said) if verdict == "blocker")
     evaluate(UNMARK)
     # Each would send an event a change of the page's from here on.
     call("CSS.disable", {}, session)
@@ -759,7 +765,8 @@ def whose(selectors, budget=15):
     blocker = sorted(s for s, v in told.items() if "blocker" in v)
     page = sorted(s for s, v in told.items() if all(x == "page" for x in v))
     untold = [s for s, v in told.items() if None in v and "blocker" not in v]
-    return blocker, page, [said.count(None), len(untold)]
+    # A blocker's selector's elements left unasked aren't untold: their selector is told.
+    return blocker, page, [sum(told[s].count(None) for s in untold), len(untold)]
 
 
 def hidden(path, base):
