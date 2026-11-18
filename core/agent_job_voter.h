@@ -87,6 +87,10 @@ class UserLoad {
                base::WeakPtr<const performance_manager::PageNode> page,
                bool shown,
                bool agents);
+  // The tab came to its page with a load already under way, as a tab the core makes once
+  // Chrome's Navigate has started its first navigation does (#3285). It counts as Started's would,
+  // with that navigation's id unknown: the first navigation to finish is taken to be it.
+  void Joined(base::WeakPtr<const performance_manager::PageNode> page, bool shown, bool agents);
   // |navigation| finished, having |committed| a document or not. One that commits nothing, as a
   // download or a stopped navigation, ends the load; one the tab has since replaced doesn't.
   void Finished(int64_t navigation, bool committed);
@@ -94,14 +98,18 @@ class UserLoad {
   void Painted();
   void Stopped();
   void Closed();
-  // The tab is shown or hidden: its load counts only while the user is looking at it.
-  void Shown(bool shown);
+  // The tab is shown or hidden: its load counts only while the user is looking at it, and only
+  // while |agents| says the agent doesn't have the tab, which a tab may learn only once it's made.
+  void Shown(bool shown, bool agents);
 
   bool counts() const { return counted_; }
 
  private:
   void End();
   void Update();
+
+  // Joined's navigation, whose id the tab never heard.
+  static constexpr int64_t kInFlight = -1;
 
   int64_t navigation_ = 0;
   base::WeakPtr<const performance_manager::PageNode> page_;

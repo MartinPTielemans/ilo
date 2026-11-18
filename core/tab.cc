@@ -426,7 +426,14 @@ void Tab::Attach(content::WebContents* contents) {
   PageTranslate::CreateForWebContents(contents, id_);
   ObserveHelpers();
   // A tab is often made with its first page already on its way, before anything observes it, so
-  // the app hears it's loading now rather than once the page commits.
+  // the app hears it's loading now rather than once the page commits, and a load the user looks at
+  // counts from now: a tab typed in the command bar starts loading in Navigate, before the core
+  // makes its Tab, and never told of that navigation's start (#3285).
+  if (contents->IsLoading() || contents->GetController().GetPendingEntry()) {
+    user_load_.Joined(
+        performance_manager::PerformanceManager::GetPrimaryPageNodeForWebContents(contents),
+        contents->GetVisibility() == content::Visibility::VISIBLE, IsAgentTab(contents));
+  }
   ReportStateSoon();
 }
 
@@ -1626,7 +1633,7 @@ void Tab::DidUpdateAudioMutingState(bool muted) {
 }
 
 void Tab::OnVisibilityChanged(content::Visibility visibility) {
-  user_load_.Shown(visibility == content::Visibility::VISIBLE);
+  user_load_.Shown(visibility == content::Visibility::VISIBLE, IsAgentTab(web_contents()));
   // As Chrome loads a restored tab once it's shown. Posted: the page view is being shown now.
   if (visibility == content::Visibility::VISIBLE && waiting_) {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(

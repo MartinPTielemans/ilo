@@ -119,7 +119,14 @@ void UserLoad::Started(int64_t navigation,
   Update();
 }
 
+void UserLoad::Joined(base::WeakPtr<const PageNode> page, bool shown, bool agents) {
+  Started(kInFlight, std::move(page), shown, agents);
+}
+
 void UserLoad::Finished(int64_t navigation, bool committed) {
+  if (navigation_ == kInFlight) {
+    navigation_ = navigation;
+  }
   if (navigation == navigation_ && !committed) {
     End();
   }
@@ -137,8 +144,9 @@ void UserLoad::Closed() {
   End();
 }
 
-void UserLoad::Shown(bool shown) {
+void UserLoad::Shown(bool shown, bool agents) {
   shown_ = shown;
+  agents_ = agents;
   Update();
 }
 

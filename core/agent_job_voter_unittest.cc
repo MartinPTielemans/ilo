@@ -297,19 +297,72 @@ TEST_F(UserLoadTest, ALoadCountsWhileItsTabIsShown) {
   load.Started(1, PageOf(users_->page.get()), /*shown=*/false, /*agents=*/false);
   EXPECT_TRUE(JobLifted());
 
-  load.Shown(true);
+  load.Shown(true, /*agents=*/false);
   EXPECT_FALSE(JobLifted());
 
-  load.Shown(false);
+  load.Shown(false, /*agents=*/false);
   EXPECT_TRUE(JobLifted());
 
-  load.Shown(true);
+  load.Shown(true, /*agents=*/false);
   load.Painted();
   EXPECT_TRUE(JobLifted());
 
   // Shown again once its load is over, it doesn't count.
-  load.Shown(false);
-  load.Shown(true);
+  load.Shown(false, /*agents=*/false);
+  load.Shown(true, /*agents=*/false);
+  EXPECT_TRUE(JobLifted());
+}
+
+// A tab the core makes once its first navigation has started, as a tab typed in the command bar
+// is, joins that load: it counts once the tab is shown, until it paints (#3285).
+TEST_F(UserLoadTest, ATabMadeMidLoadCountsThatLoadOnceShown) {
+  UserLoad load;
+  load.Joined(PageOf(users_->page.get()), /*shown=*/false, /*agents=*/false);
+  EXPECT_FALSE(load.counts());
+  EXPECT_TRUE(JobLifted());
+
+  load.Shown(true, /*agents=*/false);
+  EXPECT_TRUE(load.counts());
+  EXPECT_FALSE(JobLifted());
+
+  // The joined navigation commits: the load goes on until the page paints.
+  load.Finished(7, /*committed=*/true);
+  EXPECT_FALSE(JobLifted());
+  load.Painted();
+  EXPECT_TRUE(JobLifted());
+}
+
+// The joined navigation, whose id the tab never heard, ends the load if it commits nothing. A
+// navigation the user starts after it is told by its id as before.
+TEST_F(UserLoadTest, AJoinedLoadEndsOnItsFirstFinishWithoutACommit) {
+  UserLoad load;
+  load.Joined(PageOf(users_->page.get()), /*shown=*/true, /*agents=*/false);
+  EXPECT_FALSE(JobLifted());
+  load.Finished(9, /*committed=*/false);
+  EXPECT_FALSE(load.counts());
+  EXPECT_TRUE(JobLifted());
+
+  load.Joined(PageOf(users_->page.get()), /*shown=*/true, /*agents=*/false);
+  StartShown(load, 12);
+  load.Finished(11, /*committed=*/false);
+  EXPECT_FALSE(JobLifted());
+  load.Finished(12, /*committed=*/false);
+  EXPECT_TRUE(JobLifted());
+
+  load.Joined(PageOf(users_->page.get()), /*shown=*/true, /*agents=*/false);
+  load.Stopped();
+  EXPECT_TRUE(JobLifted());
+}
+
+// An agent's tab is made before its Space holds it, so it can't tell it's the agent's as it joins
+// its first load; shown, it can, and its load never counts.
+TEST_F(UserLoadTest, AnAgentsTabMadeMidLoadNeverCounts) {
+  UserLoad load;
+  load.Joined(PageOf(users_->page.get()), /*shown=*/false, /*agents=*/false);
+  load.Shown(true, /*agents=*/true);
+  EXPECT_FALSE(load.counts());
+  EXPECT_TRUE(JobLifted());
+  load.Painted();
   EXPECT_TRUE(JobLifted());
 }
 
