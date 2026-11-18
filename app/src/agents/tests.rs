@@ -863,9 +863,10 @@ const TAB_TOOLS: &[(&str, &str)] = &[
 
 /// Puts a tab of the user's, 21 on `url` with the title `title`, first in Claude Code's Space,
 /// where a call without a tab would otherwise go, and checks the agent gets nothing of it: list_tabs
-/// leaves it out, no call without a tab lands on it, and every tool given it is refused with
-/// `refused` before the core reads or does anything in it. The activity log names the page by its
-/// kind, `kind`, alone.
+/// leaves it out, or for a page off the web names it by its number alone, no call without a tab
+/// lands on it, and every tool given it is refused with `refused` before the core reads or does
+/// anything in it. The activity log names the page by its kind, `kind`, alone. A page off the web
+/// the agent may still close, its way out of a tab that went there.
 fn gets_nothing_of(
     url: &'static str,
     title: &'static str,
@@ -880,13 +881,23 @@ fn gets_nothing_of(
         .recv()
         .unwrap()
         .text;
+    let off_the_web = refused == NOT_WEB_PAGE;
     assert!(listed.contains("20  Example Domain"), "{listed}");
     assert!(
-        !listed.contains(title) && !listed.contains(url) && !listed.contains("21 "),
-        "list_tabs listed {url}: {listed}"
+        !listed.contains(title) && !listed.contains(url),
+        "list_tabs named {url}: {listed}"
     );
+    assert_eq!(
+        listed.contains("21  A page that isn't http or https"),
+        off_the_web,
+        "list_tabs for {url}: {listed}"
+    );
+    assert_eq!(listed.contains("21 "), off_the_web, "{listed}");
 
     for &(tool, arguments) in TAB_TOOLS {
+        if off_the_web && tool == "close_tab" {
+            continue;
+        }
         let mut arguments: Value = serde_json::from_str(arguments).unwrap();
         arguments["tab"] = json!(21);
         let answer = call(&agents, "claude-code", tool, arguments.clone(), cx);
@@ -940,6 +951,25 @@ fn gets_nothing_of(
         20,
         "read_page without a tab read {url}"
     );
+
+    if off_the_web {
+        agents.update(cx, |agents, cx| agents.hand_back(21, cx));
+        let answer = call(
+            &agents,
+            "claude-code",
+            "close_tab",
+            json!({ "tab": 21 }),
+            cx,
+        );
+        cx.run_until_parked();
+        let answer = answer.recv().unwrap();
+        assert!(!answer.error, "close_tab on {url}: {answer:?}");
+        assert!(
+            !answer.text.contains(title),
+            "close_tab named the tab's title"
+        );
+        assert_eq!(browser.closes.borrow().as_slice(), &[(21, false)]);
+    }
 }
 
 /// A Board the user opens in an agent's Space stays the user's alone, as a Board and what's on it

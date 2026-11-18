@@ -1259,8 +1259,17 @@ impl Agents {
             "list_tabs" => {
                 // Its first call makes its Space, which the core then lists.
                 self.space(&agent, cx);
+                // A tab of its own off the web is listed by its number alone, so it can close it.
                 let tabs: Vec<TabInfo> = (self.browser.agent_tabs(&agent, cx).into_iter())
-                    .filter(|tab| self.browser.off_limits(tab.id, cx).is_none())
+                    .filter_map(|tab| match self.browser.off_limits(tab.id, cx) {
+                        None => Some(tab),
+                        Some(NOT_WEB_PAGE) => Some(TabInfo {
+                            title: OFF_THE_WEB.into(),
+                            url: "".into(),
+                            ..tab
+                        }),
+                        Some(_) => None,
+                    })
                     .collect();
                 self.note(&agent, "list_tabs", "", "");
                 cx.notify();
@@ -3244,12 +3253,15 @@ impl Agents {
         self.act_as(agent, tab, action, action, reply, cx)
     }
 
-    /// As `act`, for what the core checks as `action` and the log names `logged`.
     /// The core's answer to whether `agent` may do `action` to `tab` (Browser::may_act), but never
     /// for a tab that's off limits, whatever its Space (`off_limits`).
+    /// Closing one of its own off the web reads nothing of it, and is the agent's way out of a tab
+    /// that went there.
     fn may_act(&self, agent: &str, tab: u64, action: &str, cx: &mut App) -> Result<(), String> {
-        if let Some(why) = self.off_limits(agent, tab, cx) {
-            return Err(why.into());
+        match self.off_limits(agent, tab, cx) {
+            Some(NOT_WEB_PAGE) if action == "close_tab" => {}
+            Some(why) => return Err(why.into()),
+            None => {}
         }
         self.browser.may_act(agent, tab, action, cx)
     }
@@ -3275,6 +3287,7 @@ impl Agents {
             .collect()
     }
 
+    /// As `act`, for what the core checks as `action` and the log names `logged`.
     fn act_as(
         &mut self,
         agent: &str,
@@ -3817,6 +3830,8 @@ const WEB_ONLY: &str = "Agents may open only http and https pages.";
 /// Why an agent can't read a page that isn't on the web, in the core's words (AgentPage::NotWebPage).
 const NOT_WEB_PAGE: &str =
     "The tab's page isn't an http or https page, the only pages agents may use.";
+/// list_tabs' title for a tab of the agent's own off the web, in place of its title and address.
+const OFF_THE_WEB: &str = "A page that isn't http or https";
 /// The core's refusal of a tab not in the agent's Space (bc_agent_may_act).
 const NOT_ITS_SPACE: &str = "The tab isn't in the agent's own Space.";
 /// Why an agent can't type into a password field.
