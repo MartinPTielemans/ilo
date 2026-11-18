@@ -69,7 +69,8 @@ takes a command a line on its standard input:
                   earlier run's FILE for the same site, its selectors none of whose elements were
                   shown then, the page's own aside, and some are now. Logs "cdp: hidden SELECTORS
                   ELEMENTS SHOWN blocker SELECTORS page SELECTORS missed SELECTORS ELEMENTS
-                  untold ELEMENTS SELECTORS in MS ms", untold those not told apart in 40 s
+                  untold ELEMENTS SELECTORS gone ELEMENTS in MS ms", untold those not told apart
+                  in 40 s, and gone those of them the page removed before their ask was answered
   requests FILE   records each request the attached page and its frames make from now on, a JSON
                   line each in FILE: "sent" with its id, address and wall time in ms, and
                   "redirect": true where it's a redirect of the request before it, and
@@ -704,7 +705,8 @@ WAVE = 8
 
 def whose(selectors, budget=40):
     """Of SELECTORS, those a blocker hid and those the page hid itself, as two lists, then how many
-    marked elements and selectors weren't told apart when BUDGET ended. It asks until every marked
+    marked elements and selectors weren't told apart when BUDGET ended, and how many of those
+    elements the page removed before their ask was answered. It asks until every marked
     element is told, so only a page of many hidden parts and style rules takes long: Chromium
     answers each ask in turn, cold, up to 0.4 s on Windows, about 35 s for a YouTube watch page
     there (#3335). A blocker's
@@ -746,6 +748,8 @@ def whose(selectors, budget=40):
             for k, styles in zip(wave, calls("CSS.getMatchedStylesForNode",
                                              [{"nodeId": nodes[k]} for k in wave], session)):
                 if styles is None:
+                    # An ask for a node the page has removed since it was marked fails.
+                    said[k] = "gone"
                     continue
                 rules = [m["rule"] for m in styles.get("matchedCSSRules", []) if hides_none(m["rule"])]
                 theirs = blockers(rules)
@@ -767,9 +771,10 @@ def whose(selectors, budget=40):
         told.setdefault(selectors[owner], []).append(verdict)
     blocker = sorted(s for s, v in told.items() if "blocker" in v)
     page = sorted(s for s, v in told.items() if all(x == "page" for x in v))
-    untold = [s for s, v in told.items() if None in v and "blocker" not in v]
+    untold = [s for s, v in told.items() if (None in v or "gone" in v) and "blocker" not in v]
     # A blocker's selector's elements left unasked aren't untold: their selector is told.
-    return blocker, page, [sum(told[s].count(None) for s in untold), len(untold)]
+    gone = sum(told[s].count("gone") for s in untold)
+    return blocker, page, [sum(told[s].count(None) for s in untold) + gone, len(untold), gone]
 
 
 def hidden(path, base):
@@ -792,11 +797,11 @@ def hidden(path, base):
     found["ms"] = int((time.monotonic() - began) * 1000)
     with open(path, "w", encoding="utf-8") as out:
         json.dump(found, out)
-    return "%d %d %d blocker %d page %d missed %d %d untold %d %d in %d ms" % (
+    return "%d %d %d blocker %d page %d missed %d %d untold %d %d gone %d in %d ms" % (
         len(found["hidden"]), sum(n for n, _ in found["hidden"].values()),
         sum(shown for _, shown in found["hidden"].values()), len(found["blocker"]),
         len(found["page"]), len(found["missed"]), sum(found["missed"].values()),
-        found["untold"][0], found["untold"][1], found["ms"])
+        found["untold"][0], found["untold"][1], found["untold"][2], found["ms"])
 
 
 for line in sys.stdin:

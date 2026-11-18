@@ -30,9 +30,13 @@ Profile* StartProfile();
 Profile* ProfileFor(const std::string& dir);
 // Has the core wait for each profile in |dirs| that isn't loaded yet: the launch shows the window
 // before the profiles of the Spaces it doesn't show have loaded, and their tabs wait for them.
-// As each loads, whoever loads it, |arrived| runs with its directory and it, or null if it didn't.
+// As each loads, whoever loads it, |arrived| runs with its directory and it, or null if it didn't,
+// once each, for one that was already loaded too: Chrome's own list loads some first.
 void ExpectProfiles(const std::set<std::string>& dirs,
                     base::RepeatingCallback<void(const std::string&, Profile*)> arrived);
+// Clears Chrome's list of the profiles active at quit, so the next launch loads none of them
+// before the core says (#3349). Called as the quit starts, after Chrome has written it.
+void ForgetActiveProfiles();
 // Whether the core is waiting for |dir|'s profile.
 bool ProfileExpected(const std::string& dir);
 // |dir| while the core waits for its profile, else the directory of the profile ProfileFor gives:
