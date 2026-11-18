@@ -83,7 +83,7 @@ int Classify(const syncer::SyncerError& download,
   return downloaded != BC_SYNC_TROUBLE_NONE ? downloaded : Trouble(commit, refused);
 }
 
-bool Run::Ended(int trouble, const Refused& refused, base::Time started, base::Time ended) {
+bool Cycles::Ended(int trouble, const Refused& refused, base::Time started, base::Time ended) {
   const int was = shown_;
   const base::Time was_since = since_;
   const Refused was_refused = refused_;
@@ -112,11 +112,11 @@ bool Run::Ended(int trouble, const Refused& refused, base::Time started, base::T
          refused_.kind() != was_refused.kind();
 }
 
-void Run::Reset() {
-  *this = Run();
+void Cycles::Reset() {
+  *this = Cycles();
 }
 
-void Run::Read(bc_sync_activity* activity) const {
+void Cycles::Read(bc_sync_activity* activity) const {
   activity->trouble = shown_;
   activity->since = since_.is_null() ? 0 : since_.InMillisecondsFSinceUnixEpoch();
   activity->refused = shown_ == BC_SYNC_TROUBLE_REFUSED ? refused_.count() : 0;

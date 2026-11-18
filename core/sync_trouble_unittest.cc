@@ -10,15 +10,15 @@ using syncer::SyncerError;
 
 const base::Time kStart = base::Time::FromMillisecondsSinceUnixEpoch(1'700'000'000'000);
 
-bc_sync_activity Shown(const Run& run) {
+bc_sync_activity Shown(const Cycles& cycles) {
   bc_sync_activity activity = {};
-  run.Read(&activity);
+  cycles.Read(&activity);
   return activity;
 }
 
 // A cycle that took no time, ending at |at|.
-bool End(Run& run, int trouble, base::Time at, const Refused& refused = Refused()) {
-  return run.Ended(trouble, refused, at, at);
+bool End(Cycles& cycles, int trouble, base::Time at, const Refused& refused = Refused()) {
+  return cycles.Ended(trouble, refused, at, at);
 }
 
 Refused Of(int kind, int count) {
@@ -80,41 +80,41 @@ TEST(SyncTroubleTest, KindsAreSettingsNames) {
 
 // One failed cycle, or two, then one that goes through, shows nothing (#3435's report).
 TEST(SyncTroubleTest, AMissedCycleShowsNothing) {
-  Run run;
-  EXPECT_FALSE(End(run, BC_SYNC_TROUBLE_OFFLINE, kStart));
-  EXPECT_FALSE(End(run, BC_SYNC_TROUBLE_OFFLINE, kStart + base::Seconds(30)));
-  EXPECT_EQ(Shown(run).trouble, BC_SYNC_TROUBLE_NONE);
-  EXPECT_FALSE(End(run, BC_SYNC_TROUBLE_NONE, kStart + base::Seconds(60)));
+  Cycles cycles;
+  EXPECT_FALSE(End(cycles, BC_SYNC_TROUBLE_OFFLINE, kStart));
+  EXPECT_FALSE(End(cycles, BC_SYNC_TROUBLE_OFFLINE, kStart + base::Seconds(30)));
+  EXPECT_EQ(Shown(cycles).trouble, BC_SYNC_TROUBLE_NONE);
+  EXPECT_FALSE(End(cycles, BC_SYNC_TROUBLE_NONE, kStart + base::Seconds(60)));
   // The count starts again.
-  EXPECT_FALSE(End(run, BC_SYNC_TROUBLE_SERVER, kStart + base::Seconds(90)));
-  EXPECT_FALSE(End(run, BC_SYNC_TROUBLE_SERVER, kStart + base::Seconds(100)));
-  EXPECT_EQ(Shown(run).trouble, BC_SYNC_TROUBLE_NONE);
+  EXPECT_FALSE(End(cycles, BC_SYNC_TROUBLE_SERVER, kStart + base::Seconds(90)));
+  EXPECT_FALSE(End(cycles, BC_SYNC_TROUBLE_SERVER, kStart + base::Seconds(100)));
+  EXPECT_EQ(Shown(cycles).trouble, BC_SYNC_TROUBLE_NONE);
 }
 
 // The third failure in a row shows, since the first, and the next good cycle clears it.
 TEST(SyncTroubleTest, ThreeInARowShowSinceTheFirst) {
-  Run run;
-  End(run, BC_SYNC_TROUBLE_OFFLINE, kStart);
-  End(run, BC_SYNC_TROUBLE_OFFLINE, kStart + base::Seconds(10));
-  EXPECT_TRUE(End(run, BC_SYNC_TROUBLE_SERVER, kStart + base::Seconds(20)));
-  bc_sync_activity shown = Shown(run);
+  Cycles cycles;
+  End(cycles, BC_SYNC_TROUBLE_OFFLINE, kStart);
+  End(cycles, BC_SYNC_TROUBLE_OFFLINE, kStart + base::Seconds(10));
+  EXPECT_TRUE(End(cycles, BC_SYNC_TROUBLE_SERVER, kStart + base::Seconds(20)));
+  bc_sync_activity shown = Shown(cycles);
   EXPECT_EQ(shown.trouble, BC_SYNC_TROUBLE_SERVER);
   EXPECT_EQ(shown.since, kStart.InMillisecondsFSinceUnixEpoch());
   EXPECT_EQ(shown.refused, 0);
   // Another of the same changes nothing.
-  EXPECT_FALSE(End(run, BC_SYNC_TROUBLE_SERVER, kStart + base::Seconds(40)));
-  EXPECT_TRUE(End(run, BC_SYNC_TROUBLE_NONE, kStart + base::Seconds(80)));
-  shown = Shown(run);
+  EXPECT_FALSE(End(cycles, BC_SYNC_TROUBLE_SERVER, kStart + base::Seconds(40)));
+  EXPECT_TRUE(End(cycles, BC_SYNC_TROUBLE_NONE, kStart + base::Seconds(80)));
+  shown = Shown(cycles);
   EXPECT_EQ(shown.trouble, BC_SYNC_TROUBLE_NONE);
   EXPECT_EQ(shown.since, 0);
 }
 
 // Cycles back off as they fail, so two minutes of failures can be two cycles.
 TEST(SyncTroubleTest, TwoMinutesOfFailuresShow) {
-  Run run;
-  End(run, BC_SYNC_TROUBLE_OFFLINE, kStart);
-  EXPECT_FALSE(End(run, BC_SYNC_TROUBLE_OFFLINE, kStart + base::Seconds(119)));
-  Run later;
+  Cycles cycles;
+  End(cycles, BC_SYNC_TROUBLE_OFFLINE, kStart);
+  EXPECT_FALSE(End(cycles, BC_SYNC_TROUBLE_OFFLINE, kStart + base::Seconds(119)));
+  Cycles later;
   End(later, BC_SYNC_TROUBLE_OFFLINE, kStart);
   EXPECT_TRUE(End(later, BC_SYNC_TROUBLE_OFFLINE, kStart + base::Minutes(2)));
   EXPECT_EQ(Shown(later).trouble, BC_SYNC_TROUBLE_OFFLINE);
@@ -123,41 +123,41 @@ TEST(SyncTroubleTest, TwoMinutesOfFailuresShow) {
 // A cycle that fails as the Mac sleeps and one that fails as it wakes, hours apart, aren't a run:
 // sync waits at most syncer::kMaxBackoffTime between tries, so nothing ran in between.
 TEST(SyncTroubleTest, ASleepBetweenFailuresStartsTheRunAgain) {
-  Run run;
-  End(run, BC_SYNC_TROUBLE_OFFLINE, kStart);
+  Cycles cycles;
+  End(cycles, BC_SYNC_TROUBLE_OFFLINE, kStart);
   const base::Time woke = kStart + base::Hours(8);
-  EXPECT_FALSE(End(run, BC_SYNC_TROUBLE_OFFLINE, woke));
-  EXPECT_EQ(Shown(run).trouble, BC_SYNC_TROUBLE_NONE);
+  EXPECT_FALSE(End(cycles, BC_SYNC_TROUBLE_OFFLINE, woke));
+  EXPECT_EQ(Shown(cycles).trouble, BC_SYNC_TROUBLE_NONE);
   // Two more in a row make three since the wake, shown since the first of them.
-  EXPECT_FALSE(End(run, BC_SYNC_TROUBLE_OFFLINE, woke + base::Seconds(1)));
-  EXPECT_TRUE(End(run, BC_SYNC_TROUBLE_OFFLINE, woke + base::Seconds(3)));
-  const bc_sync_activity shown = Shown(run);
+  EXPECT_FALSE(End(cycles, BC_SYNC_TROUBLE_OFFLINE, woke + base::Seconds(1)));
+  EXPECT_TRUE(End(cycles, BC_SYNC_TROUBLE_OFFLINE, woke + base::Seconds(3)));
+  const bc_sync_activity shown = Shown(cycles);
   EXPECT_EQ(shown.trouble, BC_SYNC_TROUBLE_OFFLINE);
   EXPECT_EQ(shown.since, woke.InMillisecondsFSinceUnixEpoch());
 }
 
 // A wait of sync's longest between two failed cycles still keeps them one run.
 TEST(SyncTroubleTest, TheLongestRetryWaitKeepsTheRun) {
-  Run run;
-  End(run, BC_SYNC_TROUBLE_SERVER, kStart);
+  Cycles cycles;
+  End(cycles, BC_SYNC_TROUBLE_SERVER, kStart);
   const base::Time next = kStart + syncer::kMaxBackoffTime;
-  EXPECT_TRUE(run.Ended(BC_SYNC_TROUBLE_SERVER, Refused(), next, next + base::Seconds(2)));
-  EXPECT_EQ(Shown(run).since, kStart.InMillisecondsFSinceUnixEpoch());
+  EXPECT_TRUE(cycles.Ended(BC_SYNC_TROUBLE_SERVER, Refused(), next, next + base::Seconds(2)));
+  EXPECT_EQ(Shown(cycles).since, kStart.InMillisecondsFSinceUnixEpoch());
 }
 
 TEST(SyncTroubleTest, ARefusalSaysHowManyOfWhat) {
-  Run run;
+  Cycles cycles;
   const Refused two = Of(BC_SYNC_KIND_SPACES, 2);
-  End(run, BC_SYNC_TROUBLE_REFUSED, kStart, two);
-  End(run, BC_SYNC_TROUBLE_REFUSED, kStart + base::Seconds(30), two);
+  End(cycles, BC_SYNC_TROUBLE_REFUSED, kStart, two);
+  End(cycles, BC_SYNC_TROUBLE_REFUSED, kStart + base::Seconds(30), two);
   EXPECT_TRUE(
-      End(run, BC_SYNC_TROUBLE_REFUSED, kStart + base::Seconds(60), Of(BC_SYNC_KIND_SPACES, 3)));
-  bc_sync_activity shown = Shown(run);
+      End(cycles, BC_SYNC_TROUBLE_REFUSED, kStart + base::Seconds(60), Of(BC_SYNC_KIND_SPACES, 3)));
+  bc_sync_activity shown = Shown(cycles);
   EXPECT_EQ(shown.trouble, BC_SYNC_TROUBLE_REFUSED);
   EXPECT_EQ(shown.refused, 3);
   EXPECT_EQ(shown.refused_kind, BC_SYNC_KIND_SPACES);
-  EXPECT_TRUE(End(run, BC_SYNC_TROUBLE_OFFLINE, kStart + base::Seconds(90)));
-  shown = Shown(run);
+  EXPECT_TRUE(End(cycles, BC_SYNC_TROUBLE_OFFLINE, kStart + base::Seconds(90)));
+  shown = Shown(cycles);
   EXPECT_EQ(shown.trouble, BC_SYNC_TROUBLE_OFFLINE);
   EXPECT_EQ(shown.refused, 0);
   EXPECT_EQ(shown.since, kStart.InMillisecondsFSinceUnixEpoch());
@@ -165,27 +165,27 @@ TEST(SyncTroubleTest, ARefusalSaysHowManyOfWhat) {
 
 // Being told to wait is the server's answer: it shows from its cycle and ends a run of failures.
 TEST(SyncTroubleTest, ThrottledShowsAtOnce) {
-  Run run;
-  End(run, BC_SYNC_TROUBLE_OFFLINE, kStart);
-  End(run, BC_SYNC_TROUBLE_OFFLINE, kStart + base::Seconds(10));
-  EXPECT_TRUE(End(run, BC_SYNC_TROUBLE_THROTTLED, kStart + base::Seconds(20)));
-  EXPECT_EQ(Shown(run).trouble, BC_SYNC_TROUBLE_THROTTLED);
-  EXPECT_EQ(Shown(run).since, 0);
-  EXPECT_FALSE(End(run, BC_SYNC_TROUBLE_OFFLINE, kStart + base::Seconds(30)));
-  EXPECT_EQ(Shown(run).trouble, BC_SYNC_TROUBLE_THROTTLED);
-  EXPECT_TRUE(End(run, BC_SYNC_TROUBLE_NONE, kStart + base::Seconds(40)));
-  EXPECT_EQ(Shown(run).trouble, BC_SYNC_TROUBLE_NONE);
+  Cycles cycles;
+  End(cycles, BC_SYNC_TROUBLE_OFFLINE, kStart);
+  End(cycles, BC_SYNC_TROUBLE_OFFLINE, kStart + base::Seconds(10));
+  EXPECT_TRUE(End(cycles, BC_SYNC_TROUBLE_THROTTLED, kStart + base::Seconds(20)));
+  EXPECT_EQ(Shown(cycles).trouble, BC_SYNC_TROUBLE_THROTTLED);
+  EXPECT_EQ(Shown(cycles).since, 0);
+  EXPECT_FALSE(End(cycles, BC_SYNC_TROUBLE_OFFLINE, kStart + base::Seconds(30)));
+  EXPECT_EQ(Shown(cycles).trouble, BC_SYNC_TROUBLE_THROTTLED);
+  EXPECT_TRUE(End(cycles, BC_SYNC_TROUBLE_NONE, kStart + base::Seconds(40)));
+  EXPECT_EQ(Shown(cycles).trouble, BC_SYNC_TROUBLE_NONE);
 }
 
 TEST(SyncTroubleTest, ResetForgetsTheRun) {
-  Run run;
+  Cycles cycles;
   for (int i = 0; i < 3; ++i) {
-    End(run, BC_SYNC_TROUBLE_SIGN_IN, kStart + base::Seconds(i));
+    End(cycles, BC_SYNC_TROUBLE_SIGN_IN, kStart + base::Seconds(i));
   }
-  EXPECT_EQ(Shown(run).trouble, BC_SYNC_TROUBLE_SIGN_IN);
-  run.Reset();
-  EXPECT_EQ(Shown(run).trouble, BC_SYNC_TROUBLE_NONE);
-  EXPECT_FALSE(End(run, BC_SYNC_TROUBLE_SIGN_IN, kStart + base::Seconds(9)));
+  EXPECT_EQ(Shown(cycles).trouble, BC_SYNC_TROUBLE_SIGN_IN);
+  cycles.Reset();
+  EXPECT_EQ(Shown(cycles).trouble, BC_SYNC_TROUBLE_NONE);
+  EXPECT_FALSE(End(cycles, BC_SYNC_TROUBLE_SIGN_IN, kStart + base::Seconds(9)));
 }
 
 }  // namespace

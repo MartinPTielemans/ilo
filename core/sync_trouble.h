@@ -39,8 +39,9 @@ int Classify(const syncer::SyncerError& download,
              const syncer::SyncerError& commit,
              const Refused& refused);
 
-// The troubles of the cycles as they end, and the one Settings shows.
-class Run {
+// The troubles of the cycles as they end, and the one Settings shows. Not "Run", which in a
+// gtest TEST names testing::Test::Run.
+class Cycles {
  public:
   // A cycle with |trouble| that started at |started| ended at |ended|, with |refused| of its
   // changes refused. Returns whether what Read gives changed.

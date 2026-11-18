@@ -819,7 +819,7 @@ class Account : public syncer::SyncServiceObserver,
       return;
     }
     // Decided as the cycles ended, so one that failed alone shows nothing (#3435).
-    trouble_run_.Read(activity);
+    trouble_cycles_.Read(activity);
   }
 
   // The server deletes the account and signs out its devices, this one with them, so nothing is
@@ -1340,7 +1340,7 @@ class Account : public syncer::SyncServiceObserver,
     setup_.reset();
     encrypting_ = false;
     starting_over_ = false;
-    trouble_run_.Reset();
+    trouble_cycles_.Reset();
     cycle_refused_ = sync_trouble::Refused();
     commit_request_.reset();
     refresh_.clear();
@@ -1567,7 +1567,7 @@ class Account : public syncer::SyncServiceObserver,
     const syncer::ModelNeutralState& cycle = snapshot.model_neutral_state();
     const int trouble = sync_trouble::Classify(cycle.last_download_updates_result,
                                                cycle.commit_result, cycle_refused_);
-    trouble_run_.Ended(trouble, cycle_refused_, snapshot.sync_start_time(), base::Time::Now());
+    trouble_cycles_.Ended(trouble, cycle_refused_, snapshot.sync_start_time(), base::Time::Now());
     cycle_refused_ = sync_trouble::Refused();
     // Which tells the app, through Notify, if the activity it reads changed.
     OnStateChanged(sync);
@@ -1936,7 +1936,7 @@ class Account : public syncer::SyncServiceObserver,
   bc_sync_activity notified_activity_ = {};
   // The cycles' troubles, the changes the server refused in the cycle under way, and the commit
   // request whose response is yet to come.
-  sync_trouble::Run trouble_run_;
+  sync_trouble::Cycles trouble_cycles_;
   sync_trouble::Refused cycle_refused_;
   std::unique_ptr<syncer::ProtocolEvent> commit_request_;
   std::string logged_state_;
