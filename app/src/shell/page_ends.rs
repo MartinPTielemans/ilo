@@ -1,12 +1,13 @@
 //! The keyboard at a page's ends (#3220). Tab past a page's last control, or Shift+Tab before its
 //! first, rings the shown tab's row, as Focus Sidebar does, and Tab or Shift+Tab from the ring
 //! gives the page its first or last control, so the keyboard always has a place a screen reader
-//! can say. With a task's page watched, the strip under it is in the ring too, in its own order:
-//! back to the conversation, the page, then its chips. An agent's page the user doesn't hold never
-//! gets the keyboard from the ring: its stop is the strip's words, which name the page as the
-//! agent's, and Take Over is its own stop. Where there's no row to ring (Little ilo, the top bar,
-//! a hidden sidebar, full screen, the Library, a page another window or Peek shows) the app
-//! doesn't take the keyboard, and the page wraps.
+//! can say. With a task's page watched, the ring is the task's card, whose page shows, and the
+//! strip under it, in its own order: back to the conversation, the page, then its chips. The
+//! Space's rows aren't stops then, as Return on one would swap in another page. An agent's page
+//! the user doesn't hold never gets the keyboard from the ring: its stop is the strip's words,
+//! which name the page as the agent's, and Take Over is its own stop. Where there's no row to ring
+//! (Little ilo, the top bar, a hidden sidebar, full screen, the Library, a page another window or
+//! Peek shows) the app doesn't take the keyboard, and the page wraps.
 
 use std::time::Duration;
 use web_time::Instant;
@@ -22,8 +23,10 @@ use super::{
 use crate::tokens::shell::{KEYED, KEYED_RING};
 
 /// A stop of the strip under a task's page watched.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum StripStop {
+    /// The task's card at the sidebar's foot, whose page the area shows.
+    Card,
     Back,
     /// The page: the strip's words for an agent's page, the page itself for one the user holds.
     Page,
@@ -37,6 +40,32 @@ pub(super) enum StripStop {
 /// ring's keys get too, as GPUI has every key under Wayland, or a page with nothing to focus
 /// handing back the Tab that went into it.
 const SAME_PRESS: Duration = Duration::from_millis(200);
+
+#[cfg(test)]
+thread_local! {
+    /// Where each stop was last drawn, for the tests: Take Over's arrival moves none of the others.
+    pub(super) static STOPS_DRAWN: std::cell::RefCell<std::collections::HashMap<StripStop, gpui::Bounds<gpui::Pixels>>> =
+        Default::default();
+}
+
+/// Records where `stop` is drawn, in the tests alone.
+fn stop_drawn(stop: StripStop) -> Option<gpui::AnyElement> {
+    #[cfg(test)]
+    return Some(
+        gpui::canvas(
+            move |bounds, _, _| STOPS_DRAWN.with(|drawn| drawn.borrow_mut().insert(stop, bounds)),
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .size_full()
+        .into_any_element(),
+    );
+    #[cfg(not(test))]
+    {
+        let _ = stop;
+        None
+    }
+}
 
 /// Where the ring's Tab came from, kept until the page it went into answers.
 #[derive(Default)]
@@ -126,7 +155,7 @@ impl Shell {
         }
         let stops = self.ring_stops();
         let stop = match reverse {
-            false => stops.get(1),
+            false => stops.first(),
             true => stops.last(),
         };
         let Some(&Some(stop)) = stop else {
@@ -142,6 +171,13 @@ impl Shell {
     /// as a press there would take the page over.
     pub(super) fn key_strip_show(&mut self, stop: StripStop, cx: &mut Context<Self>) {
         match stop {
+            StripStop::Card => {
+                if let Some(agent) = self.task_strip_agent() {
+                    self.leave_strip("card", cx);
+                    log!("browser: command show-task via strip keys");
+                    self.show_task(agent, cx);
+                }
+            }
             StripStop::Back => {
                 self.leave_strip("back", cx);
                 self.task_page_back(cx);
@@ -172,7 +208,7 @@ impl Shell {
         }
     }
 
-    /// The ring's stops in order, a row's as None: with a task's page watched, the row, the
+    /// The ring's stops in order, a row's as None: with a task's page watched, the task's card, the
     /// strip's back, the page and the strip's chips; otherwise the row and the page.
     pub(super) fn ring_stops(&self) -> Vec<Option<StripStop>> {
         let Some((_, tab)) = self.watched_task_page() else {
@@ -189,9 +225,15 @@ impl Shell {
                 StripChip::Stop => StripStop::Stop,
                 StripChip::Open => StripStop::Open,
             });
-        [None, Some(StripStop::Back), Some(StripStop::Page)]
-            .into_iter()
-            .chain(chips.map(Some))
+        // The card while the foot draws it, so the ring never sits where it can't be seen.
+        let card = self
+            .task_strip_agent()
+            .filter(|agent| self.foot_holds(agent))
+            .map(|_| StripStop::Card);
+        card.into_iter()
+            .chain([StripStop::Back, StripStop::Page])
+            .chain(chips)
+            .map(Some)
             .collect()
     }
 
@@ -225,6 +267,7 @@ impl Shell {
         });
         element
             .relative()
+            .children(stop_drawn(stop))
             .children(ring)
             .when(self.a11y, |element| {
                 let role = match stop {
@@ -329,6 +372,7 @@ impl Shell {
 /// How the log names a strip's stop.
 fn strip_stop_name(stop: StripStop) -> &'static str {
     match stop {
+        StripStop::Card => "card",
         StripStop::Back => "back",
         StripStop::Page => "page",
         StripStop::TakeOver => "take-over",

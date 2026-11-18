@@ -30,6 +30,7 @@ use gpui::{
 };
 
 use super::library::LIBRARY_BACK_INSET;
+use super::page_ends::StripStop;
 use super::{
     Edit, FAVICON_SIZE, FAVICON_X, FOOTER_HEIGHT, HOVERED, NAV, NAV_RADIUS, NAV_SIZE, PLATE_HEIGHT,
     PLATE_INSET, PLATE_RADIUS, Palette, ROW_HEIGHT, SECONDARY, STATUS_AGENT, Shell, Slot, TILE,
@@ -905,6 +906,13 @@ impl Shell {
             && self.form().is_none()
     }
 
+    /// Whether the foot draws `agent`'s plate, where the ring can sit.
+    pub(super) fn foot_holds(&self, agent: &SharedString) -> bool {
+        let task = Holds::Task(agent.clone());
+        self.foot_drawn()
+            && (self.foot.plates.iter()).any(|plate| plate.holds == task && !plate.leaving)
+    }
+
     /// Whether a task's plate shows `agent`'s conversation.
     fn foot_shows(&self, agent: &SharedString) -> bool {
         self.talk_agent().as_ref() == Some(agent)
@@ -1571,9 +1579,15 @@ impl Shell {
             key,
             !plate.moving(now, still),
         );
+        let name: SharedString = format!("{}, {}", face.card.title, face.card.status).into();
         // Its chips and ✕ take their own clicks before the plate does.
-        plate_box
-            .id(("task-plate", key))
+        let plate = plate_box.id(("task-plate", key));
+        // The plate whose page shows is the ring's stop while it's watched.
+        let plate = match shown {
+            true => self.strip_stop(plate, StripStop::Card, name, TILE_RADIUS),
+            false => plate,
+        };
+        plate
             .child(drawn)
             .child(content)
             .children(close)
