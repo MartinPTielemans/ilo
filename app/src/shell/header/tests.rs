@@ -1,10 +1,7 @@
 //! Where the shell asks for the Site Controls, and the tooltips its buttons ask for, on a host
 //! that records them.
 
-use std::{
-    rc::Rc,
-    time::{Duration, Instant},
-};
+use std::{rc::Rc, time::Duration};
 
 use gpui::{
     AppContext, Bounds, Entity, Modifiers, MouseButton, NavigationDirection, TestAppContext,
@@ -579,12 +576,17 @@ fn back_forward_and_reload_shrink_a_little_while_held(cx: &mut TestAppContext) {
     cx.run_until_parked();
     host.take();
     let at = |x: f32| point(px(x + NAV_SIZE / 2.), px(NAV_TOP + NAV_SIZE / 2.));
-    let scale = |cx: &mut VisualTestContext, x| shell.read_with(cx, |shell, _| shell.nav_scale(x));
-    // As if the press were `ago` seconds back, and the release `let_go` seconds back.
+    let scale = |cx: &mut VisualTestContext, x| {
+        shell.read_with(cx, |shell, cx| {
+            shell.nav_scale(x, cx.background_executor().now())
+        })
+    };
+    // As if the press were `ago` seconds back, and the release `let_go` seconds back, on the
+    // executor's clock, which the button's times are on: the runner's speed doesn't move it.
     let back = |cx: &mut VisualTestContext, ago: f32, let_go: f32| {
-        shell.update(cx, |shell, _| {
+        shell.update(cx, |shell, cx| {
             let held = shell.held_nav.as_mut().unwrap();
-            let now = Instant::now();
+            let now = cx.background_executor().now();
             held.pressed = now - Duration::from_secs_f32(ago);
             held.let_go = held.let_go.map(|_| now - Duration::from_secs_f32(let_go));
         })
