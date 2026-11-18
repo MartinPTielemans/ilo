@@ -3418,8 +3418,8 @@ fn hold_window(window: xproto::Window, what: &str, step: &str, x: f64, y: f64) -
         let was = connection.query_pointer(*root).ok()?.reply().ok()?;
         let back = (was.root_x, was.root_y);
         fake(xproto::MOTION_NOTIFY_EVENT, 0, (at.root_x, at.root_y))?;
-        // The pointer is the display's, so a press anywhere but on the Mini Player would be
-        // another window's.
+        // The pointer is the display's, so a press anywhere but on the window would be another
+        // window's.
         let under = connection.query_pointer(*root).ok()?.reply().ok()?.child;
         if !within(connection, window, under) {
             log!("browser: {what} press: another window is over it there");
