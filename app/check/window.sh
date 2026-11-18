@@ -1874,6 +1874,107 @@ else
   toggle ui shown "⌘S after the window behind's edge"
 fi
 
+# A tiled window, as a tiling desktop places every window (#3219): the check's sway floats them,
+# so sway tiles this one, which then fills the output from its left edge. The hidden sidebar comes
+# out at x 0 and, on the right, at the last column. A press and drag in the band at the left edge
+# has no window beside it to size against alone, and with a second window tiled to its left it
+# moves the split between them, as a drag on sway's own border does.
+tiled=
+if [ "$(uname)" = Linux ] && [ -n "${SWAYSOCK:-}" ]; then
+  # frame_of <n>: $frame, the frame sway gives window <n>, x y w h. Not in $(): send counts steps.
+  frame_of() {
+    send order
+    frame=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 "^browser: frame window $1 " |
+      cut -d' ' -f5-)
+  }
+  frame_of 1
+  floated=$frame
+  swaymsg "[pid=$pid] floating disable" > /dev/null || fail "sway didn't tile the window"
+  for _ in $(seq 40); do
+    frame_of 1
+    framed=$frame
+    [ "$framed" != "$floated" ] && break
+  done
+  [ "$framed" != "$floated" ] || fail "sway didn't tile the window: its frame stayed $floated"
+  ../tools/window-screenshot.sh "$pid" "$out/tiled.png" || fail "no window to capture"
+  send key s cmd
+  expect '^browser: sidebar hidden$' "⌘S on the tiled window didn't hide the sidebar"
+  send move 400 300
+  reveal_at_edge "the pointer at the tiled window's edge didn't bring the sidebar out"
+  ../tools/window-screenshot.sh "$pid" "$out/tiled-reveal.png" || fail "no window to capture"
+  send move 600 300
+  expect '^browser: reveal hidden$' "the pointer leaving the tiled window's sidebar out didn't send it away"
+  # held <x> <dx>: $at, the driven window's frame after a press at <x> and a drag by <dx>.
+  held() {
+    send hold press "$1" 300
+    send hold dragto $(($1 + $2 / 4)) 300
+    send hold dragto $(($1 + $2)) 300
+    send hold release $(($1 + $2)) 300
+    at=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: held at ' | cut -d' ' -f4-)
+  }
+  from=$((step + 1))
+  held 1 40
+  alone=$at
+  ! sed -n "/^browser: drive $from: /,\$p" "$log" | grep -q '^browser: reveal \(waits\|shown\)$' ||
+    fail "a press and drag in the tiled window's band brought the sidebar out"
+  tiled="tiled at $framed, a drag in from its left band left it at ${alone:-no frame}"
+  # The sidebar on the right, through the command bar's move as a user can: out at the last column.
+  right=${framed#* * }
+  right=${right%% *}
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T didn't open the command bar on the tiled window"
+  send type move sidebar
+  expect '^browser: command bar commands "move sidebar": Move Sidebar to the Right$' \
+    "the command bar didn't list only Move Sidebar to the Right"
+  send key return
+  expect '^browser: sidebar on the right$' "Move Sidebar to the Right didn't move it"
+  send move $((right - 400)) 300
+  send move $((right - 1)) 300
+  send move $((right - 1)) 306
+  expect '^browser: reveal shown$' "the pointer at the tiled window's right edge didn't bring the sidebar out"
+  ../tools/window-screenshot.sh "$pid" "$out/tiled-reveal-right.png" || fail "no window to capture"
+  send move $((right - 600)) 300
+  expect '^browser: reveal hidden$' "the pointer leaving the sidebar out on the right didn't send it away"
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T didn't open the command bar on the tiled window again"
+  send type move sidebar
+  expect '^browser: command bar commands "move sidebar": Move Sidebar to the Left$' \
+    "the command bar didn't list only Move Sidebar to the Left"
+  send key return
+  expect '^browser: sidebar on the left$' "Move Sidebar to the Left didn't move it back"
+  # A second window, tiled to its left, sway's split between them where the band is.
+  send key n cmd
+  expect '^browser: window opened [0-9]' "⌘N didn't open a second window on the tiled one"
+  tiled_second=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
+  driven_tiled=$(grep -c '^browser: window opened ' "$log")
+  expect_late '^browser: command bar shown$' "⌘N's window didn't open the command bar"
+  send key escape
+  expect '^browser: command bar hidden$' "escape didn't close ⌘N's command bar"
+  swaymsg "[pid=$pid] floating disable" > /dev/null || fail "sway didn't tile the second window"
+  swaymsg move left > /dev/null ||
+    fail "sway didn't move the second window to the first one's left"
+  for _ in $(seq 40); do
+    frame_of 1
+    split=$frame
+    [ "$split" != "$framed" ] && [ "${split%% *}" != 0 ] && break
+  done
+  [ "${split%% *}" != 0 ] || fail "sway didn't tile the second window left of the first: $split"
+  send window 1
+  held 1 -100
+  beside=$at
+  ../tools/window-screenshot.sh "$pid" "$out/tiled-split.png" all || fail "no window to capture"
+  tiled="$tiled; beside a window tiled to its left, at $split, the same drag out by 100 left it at ${beside:-no frame}"
+  send window "$driven_tiled"
+  send key w cmd shift
+  expect "^browser: window closed $tiled_second\$" "⇧⌘W didn't close the second tiled window"
+  send window 1
+  send key s cmd
+  expect '^browser: sidebar shown$' "⌘S on the tiled window didn't bring the sidebar back"
+  swaymsg "[pid=$pid] floating enable" > /dev/null || fail "sway didn't float the window again"
+  send place 0 0 1000 700
+  echo "tiled: $tiled"
+fi
+
 # ⌘N with the page's keyboard, in full screen, opens a window that goes full screen too, then opens
 # ⌘T's command bar in it, whose URL loads there (Arc). The window it came from shows what it did.
 # Last, as what it leaves would reach the steps after: its page stays in the Space's Today, where
