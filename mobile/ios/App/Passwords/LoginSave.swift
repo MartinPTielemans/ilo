@@ -73,15 +73,6 @@ final class LoginSave {
   @ObservationIgnored private var sites: Set<String> = []
   /// The origin of the page that committed last, if it's a web page.
   @ObservationIgnored private var here: String?
-  /// A form with a password was sent from the tab's own frame, and the page it brings hasn't
-  /// committed yet.
-  @ObservationIgnored private var sending = false
-  /// The request the tab's own frame was last let go to was a form's answers themselves.
-  @ObservationIgnored private var posts = false
-  /// The pages of the tab's history that a form with a password brought. WebKit keeps a form's
-  /// answers with the page they brought, to send them again at a reload, and they are in the
-  /// state a tab is saved with.
-  @ObservationIgnored private let brought = NSHashTable<WKBackForwardListItem>.weakObjects()
 
   /// Whether anything of a login is in memory.
   var holdsLogin: Bool { used != nil || offer.map { !$0.login.password.value.isEmpty } == true }
@@ -92,34 +83,17 @@ final class LoginSave {
     movedOn = false
   }
 
-  /// A form with a password in it was sent, whether or not it's one to offer for. One in a
-  /// frame may bring a page into that frame alone, which is kept with the page it's in: `entry`.
-  func sent(mainFrame: Bool, on entry: WKBackForwardListItem?) {
-    if mainFrame { sending = true } else if let entry { brought.add(entry) }
-  }
-
-  /// The tab's own frame is going somewhere, by a request that `posts` a form's answers or
-  /// doesn't. Where the user sends it is no answer to a form.
-  func asked(_ type: WKNavigationType, posts: Bool = false) {
-    self.posts = posts
+  /// The tab's own frame is going somewhere. Where the user sends it is no answer to a form.
+  func asked(_ type: WKNavigationType) {
     if type == .linkActivated || type == .backForward || type == .reload { used = nil }
   }
 
   /// The app loads an address in the tab.
   func loads() {
     used = nil
-    sending = false
   }
 
-  /// Whether the state WebKit saves for a history with `entry` in it holds a password.
-  func holdsPassword(_ entry: WKBackForwardListItem) -> Bool {
-    brought.contains(entry)
-  }
-
-  func committed(at page: URL?, entry: WKBackForwardListItem? = nil) {
-    // A page sent on from the form's answer was asked for anew, without them.
-    if sending, posts, let entry { brought.add(entry) }
-    sending = false
+  func committed(at page: URL?) {
     here = page.flatMap(LoginOffer.origin)
     // The offer is for the site the tab was on: elsewhere it's forgotten.
     if offer != nil, !(here.map(sites.contains) ?? false) { offer = nil }
@@ -264,7 +238,6 @@ extension WebTab {
   func heardLoginUsed(_ message: WKScriptMessage) {
     guard !isPrivate, let body = message.body as? [String: Any], let origin = Self.origin(of: message.frameInfo) else { return }
     if let password = body["password"] as? String {
-      loginSave.sent(mainFrame: message.frameInfo.isMainFrame, on: webView.backForwardList.currentItem)
       let login = UsedLogin(
         origin: origin, username: body["username"] as? String ?? "", password: Hidden(password), mainFrame: message.frameInfo.isMainFrame)
       loginSave.used(login, judge: saveJudge)
@@ -273,13 +246,6 @@ extension WebTab {
     } else if body["edited"] != nil {
       loginSave.edited(origin)
     }
-  }
-
-  /// Whether the web view's state holds a password a form was sent with: the tab's saved state
-  /// stays the one from before, as for a page a saved login was filled into.
-  var stateHoldsPassword: Bool {
-    let list = webView.backForwardList
-    return (list.backList + [list.currentItem].compactMap { $0 } + list.forwardList).contains(where: loginSave.holdsPassword)
   }
 
   /// Saves the login on offer to the account, which sends it now or when it next reaches its

@@ -88,6 +88,8 @@ final class WebTab: NSObject, Identifiable {
   let loginState = LoginState()
   /// The offer to save the login the page was signed in with. In memory only.
   let loginSave = LoginSave()
+  /// The pages of the tab's history that a POST brought.
+  @ObservationIgnored private let posted = PostedPages()
   /// Whether the page is a PDF: a file to save and to print, and no site's page to block on.
   private(set) var isPDF = false
   /// What kind of file the load on its way answered with.
@@ -222,6 +224,12 @@ final class WebTab: NSObject, Identifiable {
   /// starts: that state would load the page once more, as a new one after it.
   var state: Data? {
     webView.isLoading ? nil : webView.interactionState as? Data
+  }
+
+  /// Whether that state holds what a POST sent, a sign-in form's password among it: the tab's
+  /// saved state stays the one from before, as for a page a saved login was filled into.
+  var stateHoldsPost: Bool {
+    posted.holds(in: webView.backForwardList)
   }
 
   func reload() {
@@ -521,7 +529,11 @@ extension WebTab: WKNavigationDelegate {
     preferences.preferredContentMode = wantsDesktopSite ? .desktop : .recommended
     guard let url = action.request.url else { return (.cancel, preferences) }
     let inMainFrame = action.targetFrame?.isMainFrame ?? true
-    if inMainFrame { loginSave.asked(action.navigationType, posts: action.request.httpMethod == "POST") }
+    if inMainFrame { loginSave.asked(action.navigationType) }
+    // A new window's request is that window's tab's to hear of.
+    if let frame = action.targetFrame {
+      posted.asked(posts: action.request.httpMethod == "POST", mainFrame: frame.isMainFrame, on: webView.backForwardList.currentItem)
+    }
 
     switch url.scheme?.lowercased() {
     case "http", "https":
@@ -628,7 +640,8 @@ extension WebTab: WKNavigationDelegate {
     committed = webView.url
     hasPage = true
     loginState.committed()
-    loginSave.committed(at: committed, entry: webView.backForwardList.currentItem)
+    loginSave.committed(at: committed)
+    posted.committed(webView.backForwardList.currentItem)
     writes.commit()
     keep(unsent.commit())
     swipe.arrived()

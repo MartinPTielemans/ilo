@@ -792,7 +792,7 @@ private func freshSettings() -> Settings {
     #expect(await eventually { tab.loginSave.offer != nil })
     // Written down while the offer stands, as the app does when it leaves the screen.
     #expect(await eventually { await tab.shows("/home") && !tab.webView.isLoading })
-    #expect(!tab.stateHoldsPassword)
+    #expect(!tab.stateHoldsPost)
     browser.background()
     #expect(await eventually { await browser.cache.saved(of: tab.id) != nil })
     let first = try #require(await browser.cache.saved(of: tab.id)).state
@@ -834,12 +834,12 @@ private func freshSettings() -> Settings {
     #expect(await eventually { tab.loginSave.offer != nil })
     #expect(await eventually { await tab.shows("/direct") && !tab.webView.isLoading })
     // WebKit keeps the form's answers with the page they brought, in the state it hands out.
-    #expect(tab.stateHoldsPassword)
+    #expect(tab.stateHoldsPost)
     browser.background()
     // Still so with that page behind the one showing.
     tab.load(server.url("/books"), entered: true)
     #expect(await eventually { await tab.shows("/books") && !tab.webView.isLoading })
-    #expect(tab.stateHoldsPassword)
+    #expect(tab.stateHoldsPost)
 
     // Another tab's state is written at the same time: once it's there, this one's would be.
     let other = try await open("/books", in: browser, on: server)
