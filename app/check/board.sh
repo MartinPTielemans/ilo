@@ -663,10 +663,8 @@ expect "^browser: loaded [0-9]* chrome://board/$twice\$" "the Board to open in t
 first=$(grep "^browser: loaded [0-9]* chrome://board/$twice\$" "$log" | tail -1 | cut -d' ' -f3)
 send key t cmd
 expect '^browser: command bar shown$' "⌘T didn't open the command bar over the Board's tab"
+# Over the Board's own tab the bar doesn't offer that tab, and ↩ on the address opens another.
 send insert "chrome://board/$twice"
-# The bar's first row is the address, which opens a tab of its own, and its tab comes second.
-expect "^browser: command bar puts tab $first second\$" \
-  "the command bar didn't offer the Board's open tab under its address: $(grep '^browser: command bar puts tab ' "$log" | tail -1)"
 send key return
 expect "^browser: loaded [0-9]* chrome://board/$twice\$" "the Board's address didn't load in a second tab"
 second=$(grep "^browser: loaded [0-9]* chrome://board/$twice\$" "$log" | tail -1 | cut -d' ' -f3)
