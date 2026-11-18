@@ -165,12 +165,13 @@ impl Shell {
                 )
             })
             .child(glyph);
-        scaled_from_middle(button, self.nav_scale(x))
+        scaled_from_middle(button, self.nav_scale(x, cx.background_executor().now()))
     }
 
-    /// The pointer pressed the header button at `x`, which runs `command`.
+    /// The pointer pressed the header button at `x`, which runs `command`. Its times are the
+    /// executor's, as the timer for its menu is, so a test's clock moves the two together (#3373).
     fn hold_nav(&mut self, x: f32, command: Command, cx: &mut Context<Self>) {
-        let pressed = Instant::now();
+        let pressed = cx.background_executor().now();
         self.held_nav = Some(HeldNav {
             x,
             command,
@@ -184,30 +185,30 @@ impl Shell {
     /// The pointer let go of the header button it pressed, or its menu took the press over.
     pub(super) fn let_go_nav(&mut self, cx: &mut Context<Self>) {
         if let Some(held) = self.held_nav.as_mut().filter(|held| held.let_go.is_none()) {
-            held.let_go = Some(Instant::now());
+            held.let_go = Some(cx.background_executor().now());
             cx.notify();
         }
     }
 
     /// How small the header button at `x` is drawn, plate and glyph: smaller while it's held,
     /// growing back from where it is once it's let go, as a row's plate does.
-    pub(super) fn nav_scale(&self, x: f32) -> f32 {
+    pub(super) fn nav_scale(&self, x: f32, now: Instant) -> f32 {
         let Some(held) = self.held_nav.as_ref().filter(|held| held.x == x) else {
             return 1.;
         };
-        1. - (1. - NAV_PRESS_SCALE) * held_depth(held.pressed, held.let_go, Instant::now())
+        1. - (1. - NAV_PRESS_SCALE) * held_depth(held.pressed, held.let_go, now)
     }
 
     /// Lets the held header button go once it has grown back, and asks for the next frame only
     /// while it's shrinking or growing, so a button at rest costs no frames.
-    pub(super) fn step_held_nav(&mut self, window: &mut Window) {
+    pub(super) fn step_held_nav(&mut self, window: &mut Window, cx: &App) {
         let Some(held) = &mut self.held_nav else {
             return;
         };
         let name = held.command.name();
         match (
             held.let_go,
-            held_depth(held.pressed, held.let_go, Instant::now()),
+            held_depth(held.pressed, held.let_go, cx.background_executor().now()),
         ) {
             (Some(_), 0.) => {
                 // check.sh waits for these lines.
