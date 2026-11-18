@@ -697,17 +697,27 @@ written=$(grep -v '^browser: drive [0-9]*: ' "$log" | grep 'shelves\|kitchen\|pa
 ../tools/window-screenshot.sh "$pid" "$out/board-relaunched.png" || fail "no window to capture"
 # #3224: the Board holding [] offers its file in the system's file manager, its button with the
 # keyboard, and that leaves the file as it was. Last, after the relaunch, as the Finder and
-# Explorer take the keyboard from the app. The bar goes to the Board's tab, which loads it, and its
-# page gives the button the keyboard.
+# Explorer take the keyboard from the app. The bar opens the Board in a tab of its own.
 send key t cmd
 expect '^browser: command bar shown$' "⌘T didn't open the command bar after the relaunch"
 send insert "chrome://board/$other"
 send key return
 expect "^browser: loaded [0-9]* chrome://board/$other\$" "the Board whose file holds [] didn't load after the relaunch"
-send key return
-# The core's line has Chromium's prefix.
-expect 'browser: board shows its file$' \
-  "↩ on the unreadable Board, whose Show button has the keyboard, didn't show its file"
+# The page offers the button, with the keyboard, once it has read the file, a moment after its
+# load that the app's log can't tell: a ↩ before then lands on the page itself and does nothing,
+# so it goes again, three times at most, as profiles.sh's Tab and Space do. The core's line has
+# Chromium's prefix.
+shown=
+for _ in 1 2 3; do
+  send key return
+  for _ in $(seq 30); do
+    logged 'browser: board shows its file$' && shown=1 && break
+    sleep 0.1
+  done
+  [ -z "$shown" ] || break
+done
+[ -n "$shown" ] ||
+  fail "↩ on the unreadable Board, whose Show button has the keyboard, didn't show its file"
 [ "$(cat "$boards/$other/board.json")" = '[]' ] ||
   fail "showing the unreadable Board's file changed it: $(head -c 200 "$boards/$other/board.json")"
 # #3453: the page the bar's ↩ loaded over the Board had the keyboard, so ⌘← there went to the page
