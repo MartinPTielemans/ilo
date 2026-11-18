@@ -11,7 +11,10 @@
 # showing lands when it's shown, a step from the first, both captured. A Board's file over 4 MiB,
 # which the host doesn't read, says so and is never written over, captured, as is one holding []
 # rather than a Board. A private window has no New Board, and a Board's address there shows "This
-# Board isn't here.", captured. Japanese input as the first keys is the hosted Mac's.
+# Board isn't here.", captured. New Board from the File menu, the sidebar's +, the command bar, and
+# its key with a Board's page and with the command bar's field focused, each makes one. Japanese
+# input as a Board's first keys is its note; ⌘C, ⌘V and ⌘Z in the page copy, paste and undo cards,
+# and ⌘− zooms the canvas, not the page, each saved. Relaunched, the Board comes back with its note.
 # An agent gets nothing of a Board, wherever the user opens one: one New Board made, one opened from
 # Library › Boards, and one whose address the user typed into the agent's own tab, taken over. Its
 # list_tabs leaves each out, read_page, snapshot, screenshot and click on it are refused as on a tab
@@ -321,6 +324,135 @@ n=$(echo $(pinned) $(today) | tr ' ' '\n' | grep -nx "$board" | cut -d: -f1)
 send key "$n" cmd
 expect "^browser: selected $board\( in .*\)\{0,1\}\$" "⌘$n didn't show the first Board's tab $board of \"$(today)\""
 
+# 1b: New Board from each of its places, the File menu, the sidebar's + and the command bar, and
+# its key with the page focused and with the command bar's field focused. Each makes a Board, a
+# pinned tab whose name is there to type over, kept with ↩, which gives the page the keyboard.
+# made <how>: the Board New Board just made, named $1, its tab in $tab and its folder in $made_folder.
+made() {
+  expect '^browser: new board [0-9a-f]\{32\} tab [0-9]*$' "New Board from $2 made no Board"
+  line=$(grep '^browser: new board [0-9a-f]\{32\} tab ' "$log" | tail -1)
+  made_id=$(echo "$line" | cut -d' ' -f4)
+  tab=$(echo "$line" | cut -d' ' -f6)
+  expect "^browser: name board $tab\$" "the Board New Board made from $2 didn't offer its name to type over"
+  send type "$1"
+  send key return
+  expect "^browser: board $tab has the keyboard\$" "↩ on the name of the Board made from $2 didn't give its page the keyboard"
+  made_folder="$boards/$made_id"
+  for _ in $(seq 50); do
+    [ "$(cat "$made_folder/name" 2> /dev/null)" = "$1" ] && break
+    sleep 0.1
+  done
+  [ "$(cat "$made_folder/name" 2> /dev/null)" = "$1" ] ||
+    fail "the name of the Board made from $2 wasn't kept in its folder: $(cat "$made_folder/name" 2> /dev/null)"
+}
+# The Board's tab $tab archived, so the sidebar's places stay few for the steps after.
+archive() {
+  send key w cmd
+  expect "^browser: tab $tab closed\$" "⌘W didn't archive the Board's tab $tab, made from $1"
+}
+# The cards in the Board $1's file, as "kind" begins each.
+cards() {
+  grep -o '"kind"' "$1/board.json" 2> /dev/null | wc -l | tr -d ' '
+}
+# Waits for a save of a Board after the count $1 of them, failing with $2.
+saved_after() {
+  for _ in $(seq 50); do
+    [ "$(grep -c 'browser: board saved$' "$log")" -gt "$1" ] && return 0
+    sleep 0.1
+  done
+  fail "$2: $(grep 'browser: board ' "$log" | tail -1)"
+}
+
+send menu "New Board"
+expect '^browser: command new-board via ' "the File menu's New Board didn't run New Board"
+made loft "the File menu"
+loft=$made_folder
+# Japanese input as the Board's first keys: it composes in the first note's field and the note
+# keeps what was committed.
+saves=$(grep -c 'browser: board saved$' "$log")
+send ime on
+send type nihongo
+send key space
+send key return
+send ime off
+saved_after "$saves" "the note typed in Japanese wasn't saved"
+for _ in $(seq 20); do
+  grep -q '日本語' "$loft/board.json" && break
+  sleep 0.1
+done
+grep -q '日本語' "$loft/board.json" ||
+  fail "the Board's note didn't keep the Japanese committed in it: $(head -c 300 "$loft/board.json")"
+# The page's own keys while it has the keyboard: escape leaves the note, ⌘A takes every card, ⌘C
+# and ⌘V copy it to a second one, and ⌘Z takes the paste back, each saved. ⌘− and ⌘0 zoom the
+# canvas, which the Board keeps, not the browser's page.
+send key escape
+send key a cmd
+send key c cmd
+saves=$(grep -c 'browser: board saved$' "$log")
+send key v cmd
+saved_after "$saves" "⌘V in the Board saved nothing"
+for _ in $(seq 20); do
+  [ "$(cards "$loft")" = 2 ] && break
+  sleep 0.1
+done
+[ "$(cards "$loft")" = 2 ] || fail "⌘C and ⌘V in the Board didn't make a second card: $(cards "$loft") in its file"
+saves=$(grep -c 'browser: board saved$' "$log")
+send key z cmd
+saved_after "$saves" "⌘Z in the Board saved nothing"
+for _ in $(seq 20); do
+  [ "$(cards "$loft")" = 1 ] && break
+  sleep 0.1
+done
+[ "$(cards "$loft")" = 1 ] || fail "⌘Z in the Board didn't take the paste back: $(cards "$loft") cards in its file"
+saves=$(grep -c 'browser: board saved$' "$log")
+send key - cmd
+saved_after "$saves" "⌘− in the Board saved nothing"
+for _ in $(seq 20); do
+  grep -q '"zoom": *0\.8[,}]' "$loft/board.json" && break
+  sleep 0.1
+done
+grep -q '"zoom": *0\.8[,}]' "$loft/board.json" ||
+  fail "⌘− in the Board didn't zoom its canvas out: $(head -c 200 "$loft/board.json")"
+send key 0 cmd
+grep -q "^browser: zoom $tab " "$log" && fail "⌘− or ⌘0 in the Board zoomed the browser's page: $(grep "^browser: zoom $tab " "$log" | tail -1)"
+archive "the File menu"
+
+# The sidebar's + offers New Board, and New Board's key from the Board's page makes another.
+send layout
+height=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
+  sed 's/^browser: layout content [0-9]*x\([0-9]*\),.*/\1/')
+post click 204 $((height - 25))
+expect "^browser: menu shown .*$(cased 'New Board')" "the sidebar's + didn't offer New Board"
+send choose "$(cased 'New Board')"
+expect '^browser: command new-board via ' "the + menu's New Board didn't run New Board"
+made porch "the sidebar's +"
+porch=$tab
+send key e ctrl shift
+expect '^browser: command new-board via ' "⌃⇧E with a Board's page focused didn't run New Board"
+made shed "⌃⇧E with a Board's page focused"
+archive "⌃⇧E with a Board's page focused"
+tab=$porch
+n=$(echo $(pinned) $(today) | tr ' ' '\n' | grep -nx "$porch" | cut -d: -f1)
+[ -n "$n" ] || fail "the Board's tab $porch isn't in the sidebar: pinned \"$(pinned)\", Today \"$(today)\""
+switch "$n cmd" "$porch"
+archive "the sidebar's +"
+
+# The command bar finds New Board, and New Board's key with the bar's field focused runs it too.
+bar_command new-board "New Board" "new board"
+made barn "the command bar"
+archive "the command bar"
+send key l cmd
+expect '^browser: command bar shown$' "⌘L didn't open the command bar"
+send key e ctrl shift
+expect '^browser: command new-board via ' "⌃⇧E with the command bar's field focused didn't run New Board"
+made deck "⌃⇧E with the command bar's field focused"
+archive "⌃⇧E with the command bar's field focused"
+written=$(grep -v '^browser: drive [0-9]*: ' "$log" | grep '日本語\|loft\|porch\|shed\|barn\|deck' | head -1)
+[ -z "$written" ] || fail "the log says what a Board holds or its name: $written"
+n=$(echo $(pinned) $(today) | tr ' ' '\n' | grep -nx "$board" | cut -d: -f1)
+[ -n "$n" ] || fail "the first Board's tab $board isn't in the sidebar: pinned \"$(pinned)\", Today \"$(today)\""
+switch "$n cmd" "$board"
+
 # 1c: a Board whose note's text is markup, and a link to javascript:, runs neither: each would
 # take the page to #ran, which its page line would say, as a Board's title is never logged. Its id
 # isn't in $marked, where send keeps the driver's marked text.
@@ -470,15 +602,47 @@ send insert "chrome://board/$id"
 send key return
 expect "^browser: loaded [0-9]* chrome://board/$id\$" "the Board's address didn't load in the private window"
 ../tools/window-screenshot.sh "$pid" "$out/board-private.png" || fail "no window to capture"
+
+# 1b: a Board kept across a relaunch. Its tab comes back named, the bar finds it by the start of its
+# name, and its page reads its file: a pan saves it with its note. The Japanese note's is kept too.
+exec 3>&-
+quit
+log="$out/board-restored.log"
+step=0
+BROWSER_DRIVE=1 "$browser" < "$out/drive" > "$log" 2>&1 &
+pid=$!
+exec 3> "$out/drive"
+await '^browser: restored in ' || fail "the relaunch didn't restore the Spaces"
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar after the relaunch"
+send type pant
+expect '^browser: command bar puts tab [0-9]* first$' \
+  "the command bar didn't put the Board's tab first after the relaunch: $(grep '^browser: command bar suggestions ' "$log" | tail -1)"
+board=$(grep '^browser: command bar puts tab [0-9]* first$' "$log" | tail -1 | cut -d' ' -f6)
+send key return
+expect "^browser: command bar switch to tab $board\$" "↩ on the Board's row didn't switch to its tab after the relaunch"
+expect "^browser: loaded $board chrome://board/$id\$" "the Board's tab didn't load its Board after the relaunch"
+saves=$(grep -c 'browser: board saved$' "$log")
+send scroll 640 400 40 5
+saved_after "$saves" "a pan on the Board after the relaunch wasn't saved"
+grep -q 'shelves over the sink' "$folder/board.json" ||
+  fail "the Board's save after the relaunch lost its note: $(head -c 300 "$folder/board.json")"
+grep -q '日本語' "$loft/board.json" ||
+  fail "the Japanese note's Board lost it across the relaunch: $(head -c 300 "$loft/board.json")"
+written=$(grep -v '^browser: drive [0-9]*: ' "$log" | grep 'shelves\|kitchen\|pantry\|日本語\|loft' | head -1)
+[ -z "$written" ] || fail "the relaunch's log says what a Board holds or its name: $written"
 quit
 echo "ok: New Board made $id, its name kept and its note saved in its folder alone, unlogged;" \
   "Library › Boards listed it; renamed, found by the bar, archived and reopened, the log said" \
-  "only \"(a Board)\", and its next save kept the note; an agent got nothing of a Board made," \
+  "only \"(a Board)\", and its next save kept the note; New Board from the File menu, the" \
+  "sidebar's +, the command bar and its key with the page and the bar focused; Japanese kept as" \
+  "the first note; ⌘C ⌘V and ⌘Z in the page saved; ⌘− the canvas's, not the page's; an agent got nothing of a Board made," \
   "opened from the Library or typed into its own tab, each refusal logged without a name;" \
   "markup and a javascript: link ran" \
   "nothing; a waiting picture landed as a card and left the arrivals, and one that came while" \
   "its tab wasn't showing landed a step from it when shown; a Board over 4 MiB and one" \
-  "holding [] weren't written over; a private window had no New Board." \
+  "holding [] weren't written over; a private window had no New Board; after a relaunch the" \
+  "Board came back, found by its name, and its next save kept its note." \
   "Windows: $out/board.png $out/board-markup.png $out/board-landed.png" \
   "$out/board-landed-shown.png $out/board-unread.png $out/board-private.png" \
   "$([ -f "$out/board-agent-tab.png" ] && echo "$out/board-agent-tab.png")"
