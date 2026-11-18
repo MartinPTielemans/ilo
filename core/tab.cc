@@ -1359,10 +1359,20 @@ void Tab::ReportState() {
   const media_session::mojom::MediaSessionInfoPtr media =
       session ? session->GetMediaSessionInfoSync() : nullptr;
   const bool controllable = media && media->is_controllable;
-  const std::string media_title =
-      controllable ? base::UTF16ToUTF8(session->GetMediaSessionMetadata().title) : "";
-  const std::string media_artist =
-      controllable ? base::UTF16ToUTF8(session->GetMediaSessionMetadata().artist) : "";
+  // A system page's from WebKit and the page's metadata. It plays, pauses and skips through the
+  // page's own handlers, but floats nothing: its video isn't Chromium's to show in a card.
+  const platform::SystemMedia system_media = page ? page->media() : platform::SystemMedia();
+  std::string media_title;
+  std::string media_artist;
+  if (controllable) {
+    media_title = base::UTF16ToUTF8(session->GetMediaSessionMetadata().title);
+    media_artist = base::UTF16ToUTF8(session->GetMediaSessionMetadata().artist);
+  } else if (system_media.has) {
+    // Without the page's own, its title, as Chromium's media session names a page's.
+    media_title =
+        base::UTF16ToUTF8(system_media.title.empty() ? page->title() : system_media.title);
+    media_artist = base::UTF16ToUTF8(system_media.artist);
+  }
   const bc_tab_state state = {
       .url = url.c_str(),
       .can_go_back = CanGoBack(),
@@ -1382,18 +1392,22 @@ void Tab::ReportState() {
       .sharing = !page && sharing,
       .shared = !page && capture->IsBeingMirrored(contents),
       .share_instead = !page && ShareInsteadInfoBar(contents),
-      .media = controllable,
-      .media_playing = controllable && media->playback_state ==
-                                           media_session::mojom::MediaPlaybackState::kPlaying,
+      .media = controllable || system_media.has,
+      .media_playing = controllable ? media->playback_state ==
+                                          media_session::mojom::MediaPlaybackState::kPlaying
+                                    : system_media.has && system_media.playing,
       .media_title = media_title.c_str(),
       .media_artist = media_artist.c_str(),
       .media_previous =
-          controllable &&
-          std::ranges::contains(session->GetMediaSessionActionsSync(),
-                                media_session::mojom::MediaSessionAction::kPreviousTrack),
-      .media_next = controllable &&
-                    std::ranges::contains(session->GetMediaSessionActionsSync(),
-                                          media_session::mojom::MediaSessionAction::kNextTrack),
+          controllable
+              ? std::ranges::contains(session->GetMediaSessionActionsSync(),
+                                      media_session::mojom::MediaSessionAction::kPreviousTrack)
+              : system_media.has && system_media.named,
+      .media_next =
+          controllable
+              ? std::ranges::contains(session->GetMediaSessionActionsSync(),
+                                      media_session::mojom::MediaSessionAction::kNextTrack)
+              : system_media.has && system_media.named,
       // Chrome offers the action while the page floats too, where the player has nothing to do,
       // but a video in its card floats from there (FloatCardVideo).
       .media_picture_in_picture =
@@ -1828,6 +1842,23 @@ void Tab::ShareInstead() {
 }
 
 void Tab::Media(int action) {
+  if (system_page_) {
+    switch (action) {
+      case BC_MEDIA_PLAY:
+        system_page_->Media(platform::MediaAction::kPlay);
+        break;
+      case BC_MEDIA_PAUSE:
+        system_page_->Media(platform::MediaAction::kPause);
+        break;
+      case BC_MEDIA_NEXT:
+        system_page_->Media(platform::MediaAction::kNext);
+        break;
+      case BC_MEDIA_PREVIOUS:
+        system_page_->Media(platform::MediaAction::kPrevious);
+        break;
+    }
+    return;
+  }
   content::MediaSession* session =
       web_contents() ? content::MediaSession::GetIfExists(web_contents()) : nullptr;
   if (!session) {

@@ -273,18 +273,67 @@ NSString* const kWatchOutput =
      "  });\n"
      "})();";
 
+// What the browser's world posts to as the page's media plays, pauses or changes.
+NSString* const kMedia = @"media";
+
+// Reads, in the browser's world, what the player shows of the page's media and nothing else:
+// [named, title, artist, an element of the document playing]. Its metadata, as the page names its
+// track, reads the same in each world. An element nothing in the document holds plays unseen here,
+// and WebKit's _isPlayingAudio tells of it.
+NSString* const kReadMedia =
+    @"(() => {\n"
+     "  const metadata = navigator.mediaSession?.metadata;\n"
+     "  const playing = [...document.querySelectorAll('audio, video')].some((e) => !e.paused);\n"
+     "  return [!!metadata, metadata?.title ?? '', metadata?.artist ?? '', playing];\n"
+     "})()";
+
+// Calls the page's own handler for |action| from the browser's world. Where the page has none,
+// WebKit's own play and pause still reach what it plays, an Audio no document holds included, and
+// the rest do nothing.
+void CallAction(WKWebView* web, NSString* action) {
+  NSString* script = [NSString
+      stringWithFormat:@"navigator.mediaSession?.callActionHandler?.({action: '%@'}), true",
+                       action];
+  [web evaluateJavaScript:script inFrame:nil inContentWorld:BrowserWorld() completionHandler:nil];
+}
+
+// Has the browser's world tell what kReadMedia reads each time the document's media starts, stops
+// or changes source, as those events reach the document in its capture phase. Nothing runs between
+// them, and the page's world sees none of it.
+NSString* WatchMediaScript() {
+  return [NSString stringWithFormat:@"(() => {\n"
+                                     "  const handler = window.webkit?.messageHandlers?.%@;\n"
+                                     "  if (!handler) return;\n"
+                                     "  const post = () => handler.postMessage(%@);\n"
+                                     "  for (const type of ['play', 'playing', 'pause', 'emptied', "
+                                     "'ended']) {\n"
+                                     "    document.addEventListener(type, post, true);\n"
+                                     "  }\n"
+                                     "})();",
+                                    kMedia, kReadMedia];
+}
+
 // How long a page has to answer for its localStorage, before its tab goes back to Chromium
 // without it.
 constexpr int64_t kStorageWaitSeconds = 2;
+
+// WebKit's keys that tell of the page's media.
+NSArray<NSString*>* MediaKeys() {
+  return @[ @"_isPlayingAudio", @"_hasActiveNowPlayingSession" ];
+}
 
 // The WebKit page's own keys, which KVO reports.
 NSArray<NSString*>* ObservedKeys(WKWebView* web) {
   NSMutableArray<NSString*>* keys = [@[
     @"URL", @"title", @"loading", @"canGoBack", @"canGoForward", @"hasOnlySecureContent"
   ] mutableCopy];
-  // WebKit's own, not public: whether the page plays sound, as Safari's speaker shows.
-  if ([web respondsToSelector:NSSelectorFromString(@"_isPlayingAudio")]) {
-    [keys addObject:@"_isPlayingAudio"];
+  // WebKit's own, not public: whether the page plays sound, as Safari's speaker shows, and whether
+  // it has a session the system's Now Playing would show, some seconds after it starts. Each change
+  // has the page's media read again.
+  for (NSString* key in MediaKeys()) {
+    if ([web respondsToSelector:NSSelectorFromString(key)]) {
+      [keys addObject:key];
+    }
   }
   return keys;
 }
@@ -410,7 +459,10 @@ class SystemPageMac : public SystemPage {
     [web_.configuration.userContentController addScriptMessageHandler:delegates_
                                                           contentWorld:PageWorld()
                                                                   name:kOutputRestricted];
-    WatchOutput();
+    [web_.configuration.userContentController addScriptMessageHandler:delegates_
+                                                          contentWorld:BrowserWorld()
+                                                                  name:kMedia];
+    Watch();
     view_ = [[BrowserCoreSystemPageView alloc] initWithFrame:NSZeroRect];
     view_->_owner = this;
     web_.frame = view_.bounds;
@@ -436,6 +488,8 @@ class SystemPageMac : public SystemPage {
     [web_.configuration.userContentController
         removeScriptMessageHandlerForName:kOutputRestricted
                              contentWorld:PageWorld()];
+    [web_.configuration.userContentController removeScriptMessageHandlerForName:kMedia
+                                                                    contentWorld:BrowserWorld()];
     delegates_->_owner = nullptr;
     view_->_owner = nullptr;
     before_->_owner = after_->_owner = nullptr;
@@ -562,6 +616,12 @@ class SystemPageMac : public SystemPage {
            reinterpret_cast<BOOL (*)(id, SEL)>(objc_msgSend)(web_, playing);
   }
   bool muted() override { return muted_; }
+  SystemMedia media() override {
+    SystemMedia now = media_;
+    now.playing = audible() || element_playing_;
+    now.has = now.has || now.playing;
+    return now;
+  }
 
   void Load(const GURL& url) override {
     if (!started_) {
@@ -595,9 +655,65 @@ class SystemPageMac : public SystemPage {
     delegate_->SystemPageChanged();
   }
 
+  void Media(MediaAction action) override {
+    switch (action) {
+      case MediaAction::kPlay:
+        Play();
+        break;
+      case MediaAction::kPause:
+        Pause();
+        break;
+      case MediaAction::kNext:
+        CallAction(web_, @"nexttrack");
+        break;
+      case MediaAction::kPrevious:
+        CallAction(web_, @"previoustrack");
+        break;
+    }
+  }
+
   // From the views and delegates above.
   void Changed() { delegate_->SystemPageChanged(); }
-  void Committed() { Soon(base::BindOnce(&Delegate::SystemPageCommitted)); }
+  void Committed() {
+    // A new document has played nothing and named nothing.
+    media_ = SystemMedia();
+    element_playing_ = false;
+    Soon(base::BindOnce(&Delegate::SystemPageCommitted));
+  }
+
+  // WebKit's sound or Now Playing changed: the page's media is read again.
+  void MediaChanged() {
+    base::WeakPtr<SystemPageMac> page = weak_factory_.GetWeakPtr();
+    [web_ evaluateJavaScript:kReadMedia
+                     inFrame:nil
+              inContentWorld:BrowserWorld()
+           completionHandler:^(id result, NSError* error) {
+             if (page) {
+               page->TookMedia(result);
+             }
+           }];
+  }
+
+  // What kReadMedia read, from the browser's world. Tells the tab only of a change.
+  void TookMedia(id result) {
+    NSArray* read = [result isKindOfClass:[NSArray class]] ? result : nil;
+    if (read.count != 4 || ![read[0] isKindOfClass:[NSNumber class]] ||
+        ![read[1] isKindOfClass:[NSString class]] || ![read[2] isKindOfClass:[NSString class]] ||
+        ![read[3] isKindOfClass:[NSNumber class]]) {
+      return;
+    }
+    const SystemMedia before = media();
+    media_.named = [read[0] boolValue];
+    media_.title = base::SysNSStringToUTF16(read[1]);
+    media_.artist = base::SysNSStringToUTF16(read[2]);
+    element_playing_ = [read[3] boolValue];
+    media_.has = media().has;
+    const SystemMedia now = media();
+    if (now.has != before.has || now.playing != before.playing || now.named != before.named ||
+        now.title != before.title || now.artist != before.artist) {
+      delegate_->SystemPageChanged();
+    }
+  }
   void Loaded() {
     Seeded();
     Soon(base::BindOnce(&Delegate::SystemPageLoaded));
@@ -607,7 +723,7 @@ class SystemPageMac : public SystemPage {
     if (seeding_) {
       seeding_ = false;
       [web_.configuration.userContentController removeAllUserScripts];
-      WatchOutput();
+      Watch();
     }
   }
   void OutputRestricted() { Soon(base::BindOnce(&Delegate::SystemPageOutputRestricted)); }
@@ -694,14 +810,55 @@ class SystemPageMac : public SystemPage {
         a, b, net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
   }
 
-  // Has every document watch its protected video, from its start.
-  void WatchOutput() {
-    WKUserScript* script = [[WebKitClass(@"WKUserScript") alloc]
+  // Has every document watch its protected video, from its start, and the main frame's its media.
+  void Watch() {
+    WKUserScript* output = [[WebKitClass(@"WKUserScript") alloc]
           initWithSource:kWatchOutput
            injectionTime:WKUserScriptInjectionTimeAtDocumentStart
         forMainFrameOnly:NO
           inContentWorld:PageWorld()];
-    [web_.configuration.userContentController addUserScript:script];
+    [web_.configuration.userContentController addUserScript:output];
+    WKUserScript* media = [[WebKitClass(@"WKUserScript") alloc]
+          initWithSource:WatchMediaScript()
+           injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+        forMainFrameOnly:YES
+          inContentWorld:BrowserWorld()];
+    [web_.configuration.userContentController addUserScript:media];
+  }
+
+  // Calls WebKit's own |name|, not public, which takes a block told whether it did, and runs
+  // |otherwise| if it didn't or there's none.
+  void TryWebKit(NSString* name, dispatch_block_t otherwise) {
+    SEL selector = NSSelectorFromString(name);
+    if (![web_ respondsToSelector:selector]) {
+      otherwise();
+      return;
+    }
+    void (^done)(BOOL) = ^(BOOL did) {
+      if (!did) {
+        otherwise();
+      }
+    };
+    reinterpret_cast<void (*)(id, SEL, id)>(objc_msgSend)(web_, selector, done);
+  }
+
+  // The page's Now Playing session, through its pause handler, as the media keys pause it. Without
+  // one, everything the page plays.
+  void Pause() {
+    WKWebView* web = web_;
+    TryWebKit(@"_pauseNowPlayingMediaSession:", ^{
+      [web pauseAllMediaPlaybackWithCompletionHandler:nil];
+    });
+  }
+
+  // The page's Now Playing session, or what WebKit takes for its main media, through its play
+  // handler, as the media keys play it. WebKit says it did nothing for a session only seconds old,
+  // so then the page's play action, which plays even a page without a handler.
+  void Play() {
+    WKWebView* web = web_;
+    TryWebKit(@"_playPredominantOrNowPlayingMediaSession:", ^{
+      CallAction(web, @"play");
+    });
   }
 
   void PassOn(bool before, NSSelectionDirection direction) {
@@ -761,6 +918,10 @@ class SystemPageMac : public SystemPage {
   // The page a link the user followed in the main frame left, until its answer comes.
   GURL link_from_;
   bool muted_ = false;
+  // What the browser's world last read of the page's media, and whether an element of its
+  // document was playing then.
+  SystemMedia media_;
+  bool element_playing_ = false;
   base::WeakPtrFactory<SystemPageMac> weak_factory_{this};
 };
 
@@ -864,8 +1025,12 @@ class SystemPageMac : public SystemPage {
                       ofObject:(id)object
                         change:(NSDictionary*)change
                        context:(void*)context {
-  if (_owner) {
-    _owner->Changed();
+  if (!_owner) {
+    return;
+  }
+  _owner->Changed();
+  if ([MediaKeys() containsObject:keyPath]) {
+    _owner->MediaChanged();
   }
 }
 
@@ -961,8 +1126,13 @@ class SystemPageMac : public SystemPage {
 
 - (void)userContentController:(WKUserContentController*)controller
       didReceiveScriptMessage:(WKScriptMessage*)message {
-  if (_owner && [message.name isEqualToString:kOutputRestricted]) {
+  if (!_owner) {
+    return;
+  }
+  if ([message.name isEqualToString:kOutputRestricted]) {
     _owner->OutputRestricted();
+  } else if ([message.name isEqualToString:kMedia]) {
+    _owner->TookMedia(message.body);
   }
 }
 
