@@ -23,6 +23,7 @@
 #include "browser_core/agent_autofill.h"
 #include "browser_core/agent_close.h"
 #include "browser_core/agent_page.h"
+#include "browser_core/agent_page_rule.h"
 #include "browser_core/agent_request.h"
 #include "browser_core/agent_session.h"
 #include "browser_core/archive.h"
@@ -208,6 +209,17 @@ Profile* LoadedProfile(bc_id profile_id) {
   // ProfileFor gives the first profile for one that isn't loaded.
   Profile* profile = dir.empty() ? nullptr : browser_core::ProfileFor(dir);
   return profile && browser_core::DirOf(profile) == dir ? profile : nullptr;
+}
+
+// Why an agent may not act on |tab| for the page it's at, or null: the rule in agent_page_rule.h,
+// kept here for every agent call whatever the app checked first.
+const char* PageRefusal(bc_id tab) {
+  const browser_core::Tab* shown = browser_core::Tab::Get(tab);
+  content::WebContents* contents = browser_core::Tab::FromId(tab);
+  const browser_core::Space* space = browser_core::Space::Holding(tab);
+  return browser_core::AgentPageRefusal(shown ? shown->Url() : GURL(),
+                                        contents ? contents->GetVisibleURL() : GURL(),
+                                        space ? space->PinnedUrl(tab) : GURL());
 }
 
 }  // namespace
@@ -590,7 +602,10 @@ bool bc_agent_may_act(const char* agent,
     refused = "ilo restarted, so the tabs you knew are gone. Call list_tabs for the tabs open now.";
   }
   if (refused.empty() && (!agent || !*agent || !browser_core::Space::AgentMayAct(agent, tab))) {
-    refused = "The tab isn't in the agent's own Space.";
+    refused = browser_core::kNotAgentsTab;
+  }
+  if (const char* page = refused.empty() ? PageRefusal(tab) : nullptr) {
+    refused = page;
   }
   if (refused.empty() && browser_core::IsHeld(tab)) {
     refused = "The user has this tab until they hand it back. Ask for it with ask_for_tab.";
@@ -636,7 +651,7 @@ size_t bc_agent_disconnected(const char* agent) {
 int bc_agent_close_tab(const char* agent, bc_id tab, bool discard) {
   const browser_core::Tab* closing = browser_core::Tab::Get(tab);
   if (!agent || !closing || !browser_core::Space::AgentMayAct(agent, tab) ||
-      browser_core::IsHeld(tab)) {
+      browser_core::IsHeld(tab) || PageRefusal(tab)) {
     return BC_AGENT_CLOSE_REFUSED;
   }
   if (browser_core::Space::Holding(tab)->IsPinned(tab)) {
@@ -685,7 +700,8 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
 }
 
 bool bc_agent_hand_off(const char* agent, bc_id tab) {
-  if (!agent || !browser_core::Space::AgentMayAct(agent, tab) || browser_core::IsHeld(tab)) {
+  if (!agent || !browser_core::Space::AgentMayAct(agent, tab) || browser_core::IsHeld(tab) ||
+      PageRefusal(tab)) {
     return false;
   }
   browser_core::Hold(tab);
@@ -740,7 +756,7 @@ bc_id bc_agent_open_tab(const char* agent, const char* url) {
 bool bc_agent_navigate(const char* agent, bc_id tab, const char* url) {
   const GURL target(url ? url : "");
   if (!agent || !browser_core::Space::AgentMayAct(agent, tab) || browser_core::IsHeld(tab) ||
-      !target.SchemeIsHTTPOrHTTPS() || !browser_core::Window::PageOf(tab)) {
+      PageRefusal(tab) || !target.SchemeIsHTTPOrHTTPS() || !browser_core::Window::PageOf(tab)) {
     return false;
   }
   LoadInTab(tab, target, ui::PAGE_TRANSITION_TYPED, /*typed_http=*/false);
@@ -763,6 +779,9 @@ size_t bc_agent_list_tabs(const char* agent, bc_id* tabs, size_t capacity) {
   }
   std::vector<bc_id> listed = space->pinned();
   std::ranges::copy(space->today(), std::back_inserter(listed));
+  // A tab it may not act on for its page isn't listed: a Board's, or the user's Settings opened
+  // there.
+  std::erase_if(listed, [](bc_id tab) { return PageRefusal(tab) != nullptr; });
   std::copy_n(listed.begin(), std::min(capacity, listed.size()), tabs);
   return listed.size();
 }
@@ -775,19 +794,20 @@ void bc_agent_page(const char* agent,
                    const char* text) {
   const bool may =
       agent && browser_core::Space::AgentMayAct(agent, tab) && !browser_core::IsHeld(tab);
+  // Back and forward too, which a page off the web doesn't otherwise stop.
+  const char* refused = may ? PageRefusal(tab) : browser_core::kNotAgentsTab;
   // A tab the browser unloaded to save memory gets its page back, not shown.
-  content::WebContents* contents = may ? browser_core::Window::PageOf(tab) : nullptr;
+  content::WebContents* contents = refused ? nullptr : browser_core::Window::PageOf(tab);
   if (!contents) {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(
-                       [](bc_id tab, uint64_t request) {
+                       [](bc_id tab, uint64_t request, const std::string& refused) {
                          if (browser_core::Host().agent_page_done) {
                            browser_core::Host().agent_page_done(
-                               browser_core::Host().context, tab, request,
-                               "The tab isn't in the agent's own Space.", true);
+                               browser_core::Host().context, tab, request, refused.c_str(), true);
                          }
                        },
-                       tab, request));
+                       tab, request, std::string(refused ? refused : browser_core::kNotAgentsTab)));
     return;
   }
   browser_core::AgentPage::CreateForWebContents(contents);
@@ -805,9 +825,10 @@ void bc_agent_request(const char* agent,
                       size_t size) {
   const bool may =
       agent && browser_core::Space::AgentMayAct(agent, tab) && !browser_core::IsHeld(tab);
-  content::WebContents* contents = may ? browser_core::Window::PageOf(tab) : nullptr;
+  const char* refused = may ? PageRefusal(tab) : browser_core::kNotAgentsTab;
+  content::WebContents* contents = refused ? nullptr : browser_core::Window::PageOf(tab);
   if (!contents) {
-    browser_core::RefuseAgentRequest(request, "The tab isn't in the agent's own Space.");
+    browser_core::RefuseAgentRequest(request, refused ? refused : browser_core::kNotAgentsTab);
     return;
   }
   browser_core::SendAgentRequest(*contents, request, method ? method : "", url ? url : "",
