@@ -193,6 +193,16 @@ pub(crate) unsafe extern "C" fn tab_key_unhandled(
     })
 }
 
+/// Tab leaves `tab`'s page at its end, or its start if `reverse` (#3220): the window rings the
+/// stop after or before the page, or the page keeps the keyboard and wraps.
+pub(crate) unsafe extern "C" fn tab_focus_leaving(
+    _: *mut c_void,
+    tab: bc::bc_id,
+    reverse: bool,
+) -> bool {
+    update_tab_window(tab, |shell, cx| shell.tab_focus_leaving(tab, reverse, cx)).unwrap_or(false)
+}
+
 /// Under Wayland the window's input method composes `text` in the UI's text field that has the keys.
 #[cfg(target_os = "linux")]
 pub(crate) unsafe extern "C" fn ui_composed(

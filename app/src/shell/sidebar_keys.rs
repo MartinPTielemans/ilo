@@ -35,7 +35,8 @@ pub(super) const NEW_TAB: u64 = 0;
 actions!(
     sidebar_keys,
     [
-        KeyUp, KeyDown, KeyShow, KeyLeave, KeyOpen, KeyOut, KeyMenu, TabIn
+        KeyUp, KeyDown, KeyShow, KeyLeave, KeyOpen, KeyOut, KeyMenu, TabIn, BackTabIn, KeyTab,
+        KeyBackTab
     ]
 );
 
@@ -50,8 +51,11 @@ pub(super) fn bind(cx: &mut App) {
         // The context menu's keys on Windows and Linux, which a Mac keyboard has only the first of.
         KeyBinding::new("shift-f10", KeyMenu, Some(CONTEXT)),
         KeyBinding::new("menu", KeyMenu, Some(CONTEXT)),
+        // From the ring, into the page or on to the strip's next stop (page_ends.rs).
+        KeyBinding::new("tab", KeyTab, Some(CONTEXT)),
+        KeyBinding::new("shift-tab", KeyBackTab, Some(CONTEXT)),
         KeyBinding::new("tab", TabIn, Some(super::KEY_CONTEXT)),
-        KeyBinding::new("shift-tab", TabIn, Some(super::KEY_CONTEXT)),
+        KeyBinding::new("shift-tab", BackTabIn, Some(super::KEY_CONTEXT)),
     ]);
 }
 
@@ -76,15 +80,21 @@ impl Shell {
     /// Tab and Shift+Tab with the window itself holding the keyboard, no field, row or page
     /// having it, ring a row as Focus Sidebar does. Otherwise they'd go nowhere, and the first
     /// keys a screen-reader user tries would say nothing (#3237).
-    pub(super) fn tab_in(&mut self, _: &TabIn, window: &mut Window, cx: &mut Context<Self>) {
+    /// With a task's page watched they ring the strip under it instead, as Focus Sidebar would
+    /// leave the page for the user's Space (page_ends.rs).
+    pub(super) fn tab_in(&mut self, reverse: bool, window: &mut Window, cx: &mut Context<Self>) {
         if self.onboarding.is_some() || !self.focus_handle.is_focused(window) {
             return cx.propagate();
+        }
+        if self.tab_into_strip(reverse, cx) {
+            return;
         }
         self.run(Command::FocusSidebar, "tab", cx);
     }
 
-    fn key_row(&mut self, row: u64, cx: &mut Context<Self>) {
+    pub(super) fn key_row(&mut self, row: u64, cx: &mut Context<Self>) {
         self.keyed = Some(row);
+        self.keyed_strip = None;
         match row {
             NEW_TAB => self.scroll_to_slot(Slot::NewTab, "new tab"),
             row => self.scroll_to_row(row),
@@ -114,7 +124,7 @@ impl Shell {
     /// The rows the ring goes over, in the sidebar's order: the favorites' tiles, then the Space's
     /// pinned rows and folders, then New Tab and Today's, past what collapsed pinned tabs and closed
     /// folders hide. Unlike `sidebar_rows`, folders are in it, as a row the keys can open.
-    fn key_rows(&self) -> Vec<u64> {
+    pub(super) fn key_rows(&self) -> Vec<u64> {
         let (pinned, today) = self.rows();
         let space = self.shown_space();
         let pinned = pinned
@@ -209,6 +219,9 @@ impl Shell {
     }
 
     fn key_show(&mut self, cx: &mut Context<Self>) {
+        if let Some(stop) = self.keyed_strip {
+            return self.key_strip_show(stop, cx);
+        }
         if let Some(folder) = self.keyed.filter(|&row| self.is_folder(row)) {
             return self.key_fold(folder, !self.folder_open(folder), cx);
         }
@@ -226,6 +239,10 @@ impl Shell {
     }
 
     fn key_leave(&mut self, cx: &mut Context<Self>) {
+        // The window keeps the keyboard: the strip's page may be an agent's.
+        if self.keyed_strip.is_some() {
+            return self.leave_strip("escape", cx);
+        }
         if self.keyed.is_none() {
             return cx.propagate();
         }
@@ -247,15 +264,25 @@ impl Shell {
     /// keyboard back, so escape stops a load again.
     pub(super) fn step_keys(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let gone = self.sidebar_hidden || self.library.is_some() || self.page_fullscreen;
-        if self.keyed.is_some() && gone {
+        if gone {
             self.leave_keys("sidebar", cx);
+            self.leave_strip("sidebar", cx);
         }
-        if std::mem::take(&mut self.focus_keys) && self.keyed.is_some() {
+        // The strip's stop went with its page, or as its chips changed.
+        if let Some(stop) = self.keyed_strip
+            && !self.ring_stops().contains(&Some(stop))
+        {
+            self.leave_strip("strip", cx);
+        }
+        let ringed = self.keyed.is_some() || self.keyed_strip.is_some();
+        if std::mem::take(&mut self.focus_keys) && ringed {
             window.focus(&self.sidebar_keys, cx);
-        } else if self.keyed.is_some() && !self.sidebar_keys.is_focused(window) {
+        } else if ringed && !self.sidebar_keys.is_focused(window) {
             self.leave_keys("focus", cx);
+            self.leave_strip("focus", cx);
         }
-        if self.keyed.is_none() && self.sidebar_keys.is_focused(window) {
+        let ringed = self.keyed.is_some() || self.keyed_strip.is_some();
+        if !ringed && self.sidebar_keys.is_focused(window) {
             window.focus(&self.focus_handle, cx);
         }
     }
@@ -281,6 +308,8 @@ impl Shell {
             .on_action(cx.listener(|shell, _: &KeyOpen, _, cx| shell.key_open(cx)))
             .on_action(cx.listener(|shell, _: &KeyOut, _, cx| shell.key_out(cx)))
             .on_action(cx.listener(|shell, _: &KeyMenu, _, cx| shell.key_menu(cx)))
+            .on_action(cx.listener(|shell, _: &KeyTab, _, cx| shell.key_tab(false, cx)))
+            .on_action(cx.listener(|shell, _: &KeyBackTab, _, cx| shell.key_tab(true, cx)))
             .on_action(cx.listener(|shell, run: &Run, _, cx| shell.key_run(run, cx)))
     }
 
@@ -399,10 +428,11 @@ mod tests {
 
     /// With the window itself holding the keyboard, Tab and Shift+Tab ring the tab shown's row as
     /// Focus Sidebar does, so a screen reader has a named row to say (#3237). Once the ring has the
-    /// keyboard Tab leaves it where it is.
+    /// keyboard, Tab from any of its rows goes into the page, at its first control, and Shift+Tab
+    /// at its last (#3220).
     #[gpui::test]
     fn tab_from_the_window_rings_the_tab_shown(cx: &mut TestAppContext) {
-        for key in ["tab", "shift-tab"] {
+        for (key, end) in [("tab", "first"), ("shift-tab", "last")] {
             let (shell, cx, host) = window(cx);
             cx.simulate_keystrokes(key);
             cx.run_until_parked();
@@ -411,7 +441,84 @@ mod tests {
             cx.simulate_keystrokes("down");
             cx.simulate_keystrokes(key);
             cx.run_until_parked();
-            assert_eq!(ringed(&shell, cx), (Some(21), Some(21)), "{key} again");
+            assert_eq!(
+                host.take(),
+                [format!("focus page {end}")],
+                "{key} from the ring"
+            );
+            assert_eq!(ringed(&shell, cx).0, None, "{key} took the ring off");
+        }
+    }
+
+    /// Tab out of the page shown at either end rings its row, the UI taking the keyboard, and the
+    /// core hears the app took it. Tab from the ring goes back in at the other end.
+    #[gpui::test]
+    fn tab_out_of_the_page_rings_its_row_and_back_in(cx: &mut TestAppContext) {
+        for (reverse, back, end) in [(false, "shift-tab", "last"), (true, "tab", "first")] {
+            let (shell, cx, host) = window(cx);
+            let took = shell.update(cx, |shell, cx| shell.tab_focus_leaving(20, reverse, cx));
+            cx.run_until_parked();
+            assert!(took, "the app didn't take the keyboard");
+            assert_eq!(
+                ringed(&shell, cx),
+                (Some(20), Some(20)),
+                "reverse {reverse}"
+            );
+            assert_eq!(host.take(), ["focus ui"]);
+            let focused = cx.update(|window, cx| shell.read(cx).sidebar_keys.is_focused(window));
+            assert!(focused, "the ring hasn't the keyboard");
+            // The same press reaching the ring too, as under Wayland, doesn't go back in.
+            cx.simulate_keystrokes(back);
+            cx.run_until_parked();
+            assert!(host.take().is_empty(), "one key bounced page, row, page");
+            shell.update(cx, |shell, _| shell.page_ends.left = None);
+            cx.simulate_keystrokes(back);
+            cx.run_until_parked();
+            assert_eq!(host.take(), [format!("focus page {end}")]);
+        }
+    }
+
+    /// A page with nothing to focus hands the ring's Tab straight back: the ring stays on the row
+    /// it was on, and nothing goes back into the page.
+    #[gpui::test]
+    fn a_page_with_nothing_to_focus_never_bounces(cx: &mut TestAppContext) {
+        let (shell, cx, host) = window(cx);
+        cx.simulate_keystrokes("tab");
+        cx.simulate_keystrokes("down");
+        cx.run_until_parked();
+        host.take();
+        cx.simulate_keystrokes("tab");
+        cx.run_until_parked();
+        assert_eq!(host.take(), ["focus page first"]);
+        let took = shell.update(cx, |shell, cx| shell.tab_focus_leaving(20, false, cx));
+        cx.run_until_parked();
+        assert!(took);
+        assert_eq!(ringed(&shell, cx), (Some(21), Some(21)), "the ring moved");
+        assert_eq!(host.take(), ["focus ui"], "it went back into the page");
+    }
+
+    /// With no row to ring the app leaves the keyboard in the page, which wraps: a hidden
+    /// sidebar, full screen, the top bar, and a tab the window doesn't show, as Peek's or another
+    /// window's.
+    #[gpui::test]
+    fn with_no_row_to_ring_the_page_wraps(cx: &mut TestAppContext) {
+        type Set = fn(&mut Shell);
+        let cases: [(&str, u64, Set); 5] = [
+            ("sidebar hidden", 20, |shell| shell.sidebar_hidden = true),
+            ("full screen", 20, |shell| shell.page_fullscreen = true),
+            ("top bar", 20, |shell| shell.top_bar = true),
+            ("another window's tab", 99, |_| {}),
+            ("a tab not shown", 21, |_| {}),
+        ];
+        for (what, tab, set) in cases {
+            let (shell, cx, host) = window(cx);
+            let took = shell.update(cx, |shell, cx| {
+                set(shell);
+                shell.tab_focus_leaving(tab, false, cx)
+            });
+            assert!(!took, "{what}");
+            assert!(host.take().is_empty(), "{what}");
+            assert_eq!(ringed(&shell, cx).0, None, "{what}");
         }
     }
 
