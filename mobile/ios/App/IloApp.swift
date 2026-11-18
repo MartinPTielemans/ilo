@@ -12,7 +12,8 @@ struct IloApp: App {
   init() {
     let phone = makeAccount()
     let browser = Browser(
-      account: phone, settings: Settings(), cache: TabCache(), favicons: Favicons(), downloads: Downloads(), history: makeHistory())
+      account: phone, settings: Settings(), cache: TabCache(), favicons: Favicons(), downloads: Downloads(), history: makeHistory(),
+      archive: makeArchive())
     _phone = State(initialValue: phone)
     _browser = State(initialValue: browser)
     _cover = State(initialValue: SwitcherCover(browser: browser))
@@ -64,6 +65,17 @@ func makeHistory() -> History {
   return History(store: HistoryStore(file: URL.applicationSupportDirectory.appending(path: "History/history.sqlite")))
 }
 
+/// The one place the phone's archive is made, in a file of its own among the app's.
+func makeArchive() -> Archive {
+  #if DEBUG
+    if ProcessInfo.processInfo.arguments.contains("-fixture") {
+      // What a made-up account lets go of stays out of the real archive's file, as its tabs do.
+      return Archive(file: URL.temporaryDirectory.appending(path: "FixturePhone/archive.json"))
+    }
+  #endif
+  return Archive()
+}
+
 /// The browser, at once: signed in or not, there's a Space to open pages in.
 private struct RootView: View {
   @Environment(Browser.self) private var browser
@@ -94,7 +106,7 @@ private struct BrowserScreen: View {
     let page = browser.page
     ZStack {
       SpaceScreen()
-        .modifier(UnderFieldSheet(up: browser.sheet == .signIn || browser.sheet == .history))
+        .modifier(UnderFieldSheet(up: browser.sheet == .signIn || browser.sheet == .history || browser.sheet == .archive))
         .accessibilityHidden(browser.pageOpen)
 
       if let page {
@@ -123,6 +135,9 @@ private struct BrowserScreen: View {
       }
       BottomSheet(isPresented: browser.sheet == .downloads, dismiss: { browser.sheet = nil }) {
         DownloadsSheet()
+      }
+      BottomSheet(isPresented: browser.sheet == .archive, ground: .solid, headroom: Listed.headroom, dismiss: { browser.sheet = nil }) {
+        ArchiveSheet(archive: browser.archive)
       }
       BottomSheet(isPresented: browser.sheet == .signIn, ground: .solid, dismiss: { browser.sheet = nil }) {
         SignInSheet()

@@ -277,6 +277,8 @@ struct SettingsSheet: View {
       }
       .buttonStyle(RowStyle())
 
+      ArchiveSetting()
+
       Toggle(isOn: $settings.keyboardOnLaunch) {
         RowLabel(title: "Open keyboard on launch") {
           Image(systemName: "keyboard")
@@ -309,6 +311,11 @@ struct SettingsSheet: View {
           browser.sheet = .history
         } label: {
           BigLabel(symbol: "clock", title: "History")
+        }
+        Button {
+          browser.sheet = .archive
+        } label: {
+          BigLabel(symbol: "archivebox", title: "Archive")
         }
         Button {
           browser.sheet = .downloads

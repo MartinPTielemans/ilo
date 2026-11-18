@@ -7,7 +7,8 @@
   /// debug builds only. It behaves as the real one does: changes change it, and signing in goes
   /// through each phase. `-fixture-signed-out` starts it at the sign-in, and `-fixture-problem` with
   /// something wrong to say until the app next comes to the front. `-fixture-pages 8` and
-  /// `-fixture-pins 7` give its first Space that many open pages and pinned tabs.
+  /// `-fixture-pins 7` give its first Space that many open pages and pinned tabs, and
+  /// `-fixture-unseen 3` leaves that many of its open pages unseen for two days.
   @Observable
   final class FixtureAccount: IloAccount {
     private(set) var phase: AccountPhase
@@ -222,6 +223,9 @@
             SyncedNode(id: "today:\($0.offset + 1)", kind: .today, space: "work", url: page($0.element.0), title: $0.element.1)
           }, at: 0)
       }
+      // The first ones stay as they are, so the Space isn't emptied.
+      let today = nodes.indices.filter { nodes[$0].space == "work" && nodes[$0].kind == .today }
+      for index in today.suffix(Self.count("-fixture-unseen") ?? 0) { nodes[index].seen = Date.now.addingTimeInterval(-2 * 24 * 3600) }
       if let count = pins {
         let pins = [
           ("Wikipedia", "https://en.wikipedia.org/"), ("Maps", "https://www.openstreetmap.org/"), ("Gutenberg", "https://www.gutenberg.org/"),

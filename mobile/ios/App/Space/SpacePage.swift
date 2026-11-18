@@ -72,7 +72,7 @@ private struct SpacePage: View {
 
   var body: some View {
     let account = browser.account
-    let today = account.today(in: space.id)
+    let today = browser.today(in: space.id)
     let privates = browser.privateTabs(in: space.id)
     GeometryReader { room in
       ScrollViewReader { scroll in
@@ -480,7 +480,7 @@ private struct FavouriteTile: View {
     let name = favourite.title.isEmpty ? Site.name(of: favourite.url) : favourite.title
     Button {
       // A favourite that's open already is shown, not opened twice.
-      if let open = browser.account.today(in: space).first(where: { $0.url == favourite.url }) {
+      if let open = browser.today(in: space).first(where: { $0.url == favourite.url }) {
         browser.open(open)
       } else {
         browser.openNew(favourite.url, title: favourite.title)
@@ -600,7 +600,7 @@ private struct FavouriteRow: View {
     Button {
       browser.sheet = nil
       // A favourite that's open already is shown, not opened twice.
-      if let open = browser.account.today(in: space).first(where: { $0.url == favourite.url }) {
+      if let open = browser.today(in: space).first(where: { $0.url == favourite.url }) {
         browser.open(open)
       } else {
         browser.openNew(favourite.url, title: favourite.title)

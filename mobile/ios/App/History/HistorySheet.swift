@@ -1,17 +1,32 @@
 import SwiftUI
 
-/// A page of history as a row reads: its icon, its title and its site, and when at the row's end.
+/// A page of history as a row reads: its icon, its title and its site, and when at the row's
+/// end. An archived tab reads the same, with how it left at its end.
 struct HistoryLabel: View {
-  let visit: Visit
+  let url: URL
+  /// The page's own title, and what the row calls it.
+  let title: String
+  let label: String
   /// The time in the list, where the day is the heading; the day in the search field.
   let when: String
+
+  init(visit: Visit, when: String) {
+    self.init(url: visit.url, title: visit.title, label: visit.label, when: when)
+  }
+
+  init(url: URL, title: String, label: String, when: String) {
+    self.url = url
+    self.title = title
+    self.label = label
+    self.when = when
+  }
 
   @Environment(\.palette) private var palette
 
   var body: some View {
     HStack(spacing: 0) {
-      RowLabel(title: visit.label, detail: Site.name(of: visit.url)) {
-        SiteIcon(url: visit.url, label: visit.title, asks: false)
+      RowLabel(title: label, detail: Site.name(of: url)) {
+        SiteIcon(url: url, label: title, asks: false)
       }
       Text(when)
         .scaled(13, relativeTo: .footnote)
@@ -34,7 +49,6 @@ struct HistorySheet: View {
   /// The row swiped aside, which shows its Forget button. One at a time.
   @State private var swiped: Visit.ID?
   @State private var asksEverything = false
-  @FocusState private var focused: Bool
 
   /// A browser that keeps no history has none to show.
   init(history: History?) {
@@ -50,7 +64,13 @@ struct HistorySheet: View {
         .accessibilityAddTraits(.isHeader)
 
       if let list, list.loaded, !list.nothingKept {
-        HistoryRows(list: list, swiped: $swiped, pick: pick)
+        DayRows(
+          days: list.days.map { ListedDay(start: $0.start, rows: $0.pages) }, kept: (list.kept.pages, list.kept.days), changes: list.changes,
+          nothing: "Nothing in history matches", swiped: $swiped, order: { Double($0.time) }, older: list.older, pick: pick,
+          forget: { list.forget($0) }
+        ) { page in
+          HistoryLabel(visit: page, when: HistoryWords.time(page.date, calendar: .current))
+        }
         // In a row's room over the field: forgetting a page leaves the sheet as tall as it was.
         if list.forgotten != nil {
           UndoChip { undo(list) }
@@ -60,7 +80,7 @@ struct HistorySheet: View {
         }
         foot(list)
       } else if list?.loaded != false {
-        NothingYet()
+        NothingYet(kept: "Pages you open on this phone are kept here.")
         if let list, list.forgotten != nil {
           UndoChip { undo(list) }
             .frame(maxWidth: .infinity)
@@ -81,42 +101,7 @@ struct HistorySheet: View {
   /// The field that filters the list by words, and beside it the trash.
   private func foot(_ list: HistoryList) -> some View {
     @Bindable var list = list
-    return HStack(spacing: Dock.gap) {
-      HStack(spacing: Column.gap) {
-        Image(systemName: "magnifyingglass")
-          .font(.system(size: 17, weight: .medium))
-          .foregroundStyle(palette.soft)
-          .frame(width: Column.icon)
-          .accessibilityHidden(true)
-        TextField("", text: $list.query, prompt: Text("Search history").foregroundStyle(palette.soft))
-          .focused($focused)
-          .scaled(17)
-          .tint(palette.accent)
-          .textInputAutocapitalization(.never)
-          .autocorrectionDisabled()
-          .submitLabel(.search)
-          .onSubmit { focused = false }
-          .accessibilityLabel("Search history")
-        if !list.query.isEmpty {
-          Button {
-            list.query = ""
-          } label: {
-            Image(systemName: "xmark.circle.fill")
-              .font(.system(size: 18))
-              .foregroundStyle(palette.soft)
-              .frame(width: 44, height: 44)
-              .contentShape(.rect)
-          }
-          .padding(.trailing, -12)
-          .accessibilityLabel("Clear")
-        }
-      }
-      .padding(.horizontal, Column.inset)
-      .frame(height: Dock.field)
-      .background(palette.plate, in: .capsule)
-      .contentShape(.rect)
-      .onTapGesture { focused = true }
-
+    return ListFoot(query: $list.query, prompt: "Search history") {
       Menu {
         ForEach(HistorySpan.allCases, id: \.self) { span in
           Button(span.title) { list.forget(span) }
@@ -124,13 +109,7 @@ struct HistorySheet: View {
         Divider()
         Button("Everything…", role: .destructive) { asksEverything = true }
       } label: {
-        Image(systemName: "trash")
-          .font(.system(size: 17, weight: .medium))
-          .foregroundStyle(palette.text)
-          .frame(width: Dock.field, height: Dock.field)
-          .background(palette.plate, in: .circle)
-          .contentShape(.circle)
-          .accessibilityLabel("Forget history")
+        TrashPlate(label: "Forget history")
       }
       // As written from the top, so the one that asks first is nearest the thumb.
       .menuOrder(.fixed)
@@ -142,8 +121,6 @@ struct HistorySheet: View {
         Text("This phone forgets every page it has been to. Your open tabs stay.")
       }
     }
-    .padding(.top, 8)
-    .dynamicTypeSize(...DynamicTypeSize.accessibility1)
   }
 
   private func pick(_ page: Visit) {
@@ -161,16 +138,109 @@ struct HistorySheet: View {
   }
 }
 
-/// The days and their pages, stacked up from the sheet's foot, read a lot at a time as the list
-/// is scrolled up.
+/// The field that filters a sheet's list by words, and beside it the list's trash.
+struct ListFoot<Trash: View>: View {
+  @Binding var query: String
+  let prompt: String
+  @ViewBuilder var trash: Trash
+
+  @Environment(\.palette) private var palette
+  @FocusState private var focused: Bool
+
+  var body: some View {
+    HStack(spacing: Dock.gap) {
+      HStack(spacing: Column.gap) {
+        Image(systemName: "magnifyingglass")
+          .font(.system(size: 17, weight: .medium))
+          .foregroundStyle(palette.soft)
+          .frame(width: Column.icon)
+          .accessibilityHidden(true)
+        TextField("", text: $query, prompt: Text(prompt).foregroundStyle(palette.soft))
+          .focused($focused)
+          .scaled(17)
+          .tint(palette.accent)
+          .textInputAutocapitalization(.never)
+          .autocorrectionDisabled()
+          .submitLabel(.search)
+          .onSubmit { focused = false }
+          .accessibilityLabel(prompt)
+        if !query.isEmpty {
+          Button {
+            query = ""
+          } label: {
+            Image(systemName: "xmark.circle.fill")
+              .font(.system(size: 18))
+              .foregroundStyle(palette.soft)
+              .frame(width: 44, height: 44)
+              .contentShape(.rect)
+          }
+          .padding(.trailing, -12)
+          .accessibilityLabel("Clear")
+        }
+      }
+      .padding(.horizontal, Column.inset)
+      .frame(height: Dock.field)
+      .background(palette.plate, in: .capsule)
+      .contentShape(.rect)
+      .onTapGesture { focused = true }
+
+      trash
+    }
+    .padding(.top, 8)
+    .dynamicTypeSize(...DynamicTypeSize.accessibility1)
+  }
+}
+
+/// The trash beside a list's field, as its button or its menu shows it.
+struct TrashPlate: View {
+  let label: String
+
+  @Environment(\.palette) private var palette
+
+  var body: some View {
+    Image(systemName: "trash")
+      .font(.system(size: 17, weight: .medium))
+      .foregroundStyle(palette.text)
+      .frame(width: Dock.field, height: Dock.field)
+      .background(palette.plate, in: .circle)
+      .contentShape(.circle)
+      .accessibilityLabel(label)
+  }
+}
+
+/// A day of a list that's read up from the foot: when it began, and its rows, the latest last.
+struct ListedDay<Item> {
+  let start: Date
+  let rows: [Item]
+}
+
+/// Days and their rows, stacked up from the sheet's foot: history's pages, read a lot at a time
+/// as the list is scrolled up, and the archive's tabs.
 ///
 /// The list is laid out foot first and turned over: where it starts is its foot, so it opens on
 /// today, and the older pages read in join its far end, where they move nothing on screen. A
 /// list laid out from its top jumps as they come in above the finger.
-private struct HistoryRows: View {
-  let list: HistoryList
-  @Binding var swiped: Visit.ID?
-  let pick: (Visit) -> Void
+struct DayRows<Item: Identifiable, Label: View>: View {
+  /// The latest day last.
+  let days: [ListedDay<Item>]
+  /// How many rows and days are kept, whatever words leave of them: the list stays as tall.
+  let kept: (rows: Int, days: Int)
+  /// Goes up when forgetting or an Undo changes the rows, which the list animates.
+  let changes: Int
+  /// What's said when words find nothing.
+  let nothing: String
+  /// The row swiped aside, which shows its Forget button. One at a time.
+  @Binding var swiped: Item.ID?
+  /// Where a row comes for VoiceOver: the latest is the highest.
+  let order: (Item) -> Double
+  /// Asked for the rows before the oldest, as the list is scrolled up to it.
+  var older: () -> Void = {}
+  let pick: (Item) -> Void
+  let forget: (Item) -> Void
+  /// What a row's swipe does, in a word and a symbol: it forgets a page unless the list says
+  /// otherwise.
+  var action: (Item) -> (word: String, symbol: String) = { _ in ("Forget", "trash") }
+  @ViewBuilder var label: (Item) -> Label
 
   @Environment(\.palette) private var palette
   @State private var place = ScrollPosition()
@@ -187,32 +257,34 @@ private struct HistoryRows: View {
     let calendar = Calendar.current
     ScrollView(.vertical) {
       LazyVStack(alignment: .leading, spacing: 0) {
-        if list.days.isEmpty {
-          Text("Nothing in history matches")
+        if days.isEmpty {
+          Text(nothing)
             .scaled(16, relativeTo: .callout)
             .foregroundStyle(palette.soft)
             .padding(.horizontal, Column.inset)
             .frame(minHeight: Listed.row)
             .upright()
         }
-        ForEach(list.days.reversed()) { day in
-          ForEach(day.pages.reversed()) { page in
+        ForEach(days.reversed(), id: \.start) { day in
+          ForEach(day.rows.reversed()) { item in
+            let action = action(item)
             SwipedAside(
-              isAside: swiped == page.id,
-              stand: { aside in swiped = aside ? page.id : swiped == page.id ? nil : swiped },
-              forget: { forget(page) }
+              isAside: swiped == item.id,
+              stand: { aside in swiped = aside ? item.id : swiped == item.id ? nil : swiped },
+              word: action.word, symbol: action.symbol,
+              forget: { drop(item) }
             ) {
               Button {
-                pick(page)
+                pick(item)
               } label: {
-                HistoryLabel(visit: page, when: HistoryWords.time(page.date, calendar: calendar))
+                label(item)
               }
               .buttonStyle(RowStyle())
-              .accessibilityAction(named: "Forget") { forget(page) }
+              .accessibilityAction(named: Text(action.word)) { drop(item) }
             }
             .upright()
-            // VoiceOver reads from the foot as the eye does, the latest page first.
-            .accessibilitySortPriority(Double(page.time))
+            // VoiceOver reads from the foot as the eye does, the latest row first.
+            .accessibilitySortPriority(order(item))
           }
           Text(HistoryWords.heading(day.start, now: now, calendar: calendar))
             .scaled(13, .semibold, relativeTo: .footnote)
@@ -224,16 +296,16 @@ private struct HistoryRows: View {
             .frame(height: Listed.heading, alignment: .bottomLeading)
             .accessibilityAddTraits(.isHeader)
             .upright()
-            // A day is named before its pages, though it stands over them.
-            .accessibilitySortPriority(day.pages.last.map { Double($0.time) + 0.5 } ?? 0)
+            // A day is named before its rows, though it stands over them.
+            .accessibilitySortPriority(day.rows.last.map { order($0) + 0.5 } ?? 0)
         }
-        // Reached by scrolling up to the oldest page read, which reads the lot before it.
+        // Reached by scrolling up to the oldest row read, which reads the lot before it.
         Color.clear
           .frame(height: 1)
-          .onAppear { list.older() }
+          .onAppear(perform: older)
       }
       .frame(maxWidth: .infinity, alignment: .leading)
-      .animation(Motion.quick, value: list.changes)
+      .animation(Motion.quick, value: changes)
     }
     .scrollPosition($place)
     .scrollBounceBehavior(.basedOnSize)
@@ -266,12 +338,12 @@ private struct HistoryRows: View {
     }
     // As tall as everything kept, up to the room there is: words that find little leave the
     // sheet as tall as it was, with what they found at its foot.
-    .frame(maxHeight: CGFloat(list.kept.pages) * Listed.row + CGFloat(list.kept.days) * Listed.heading + 1, alignment: .bottom)
+    .frame(maxHeight: CGFloat(kept.rows) * Listed.row + CGFloat(kept.days) * Listed.heading + 1, alignment: .bottom)
   }
 
-  private func forget(_ page: Visit) {
+  private func drop(_ item: Item) {
     swiped = nil
-    list.forget(page)
+    forget(item)
   }
 }
 
@@ -282,11 +354,13 @@ extension View {
   }
 }
 
-/// A row a swipe draws aside, to the button that forgets its page. Let go most of the way across,
-/// it forgets the page by itself.
+/// A row a swipe draws aside, to the button that forgets its page, or does what the list says
+/// in its `word`. Let go most of the way across, it does that by itself.
 private struct SwipedAside<Row: View>: View {
   let isAside: Bool
   let stand: (Bool) -> Void
+  let word: String
+  let symbol: String
   let forget: () -> Void
   @ViewBuilder var row: Row
 
@@ -303,9 +377,9 @@ private struct SwipedAside<Row: View>: View {
         if aside > 0 {
           Button(action: forget) {
             HStack(spacing: 6) {
-              Image(systemName: "trash")
+              Image(systemName: symbol)
                 .font(.system(size: 14, weight: .semibold))
-              Text("Forget")
+              Text(word)
                 .scaled(14, .semibold, relativeTo: .footnote)
                 .lineLimit(1)
             }
@@ -342,7 +416,7 @@ private struct SwipedAside<Row: View>: View {
 }
 
 /// What stands over the field for as long as a forgetting can be undone.
-private struct UndoChip: View {
+struct UndoChip: View {
   let undo: () -> Void
 
   @Environment(\.palette) private var palette
@@ -371,15 +445,18 @@ private struct UndoChip: View {
   }
 }
 
-/// History with nothing in it: no field and no trash, which would have nothing to act on.
-private struct NothingYet: View {
+/// A list with nothing in it: no field and no trash, which would have nothing to act on.
+struct NothingYet: View {
+  /// What the list keeps, once there is some.
+  let kept: String
+
   @Environment(\.palette) private var palette
 
   var body: some View {
     VStack(alignment: .leading, spacing: 4) {
       Text("Nothing here yet")
         .scaled(20, .semibold, relativeTo: .title3)
-      Text("Pages you open on this phone are kept here.")
+      Text(kept)
         .scaled(16, relativeTo: .callout)
         .foregroundStyle(palette.soft)
     }

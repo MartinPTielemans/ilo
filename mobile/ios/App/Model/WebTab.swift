@@ -257,6 +257,11 @@ final class WebTab: NSObject, Identifiable {
     webView.findInteraction?.presentFindNavigator(showingReplace: false)
   }
 
+  /// Whether the page is playing something now, heard or not: WebKit says no more than that.
+  func isPlaying() async -> Bool {
+    await webView.requestMediaPlaybackState() == .playing
+  }
+
   /// A picture of the top of the page, in a card's shape.
   func picture() async -> UIImage? {
     let width = webView.bounds.width

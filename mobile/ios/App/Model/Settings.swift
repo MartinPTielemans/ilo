@@ -24,6 +24,22 @@ final class Settings {
   var offersSignIn: Bool {
     didSet { defaults.set(offersSignIn, forKey: "offersSignIn") }
   }
+  /// How long a Today tab waits unseen before it goes to the archive. This phone's own: each
+  /// computer keeps its own too.
+  var archiveAfter: ArchiveAfter {
+    didSet { defaults.set(archiveAfter.rawValue, forKey: "archiveAfter") }
+  }
+  /// The account's Today tabs this phone's Spaces don't show, by their ids: those nobody has
+  /// looked at for as long as the setting says, which wait in the archive. The account still
+  /// has them, and so does every computer.
+  var awayTabs: Set<String> {
+    didSet { defaults.set(awayTabs.sorted(), forKey: "awayTabs") }
+  }
+  /// How many tabs went to the archive by themselves that the user hasn't been told of, for the
+  /// note over the dock. It shows from the first time some go until it's answered, and never again.
+  private(set) var archiveNote: Int {
+    didSet { defaults.set(archiveNote, forKey: "archiveNote") }
+  }
   private(set) var favourites: [Favourite] {
     didSet { defaults.set(try? JSONEncoder().encode(favourites), forKey: "favourites") }
   }
@@ -45,6 +61,9 @@ final class Settings {
     offersPasswords = defaults.object(forKey: "offersPasswords") as? Bool ?? true
     swipeAnywhere = defaults.object(forKey: "swipeAnywhere") as? Bool ?? true
     offersSignIn = defaults.object(forKey: "offersSignIn") as? Bool ?? true
+    archiveAfter = (defaults.object(forKey: "archiveAfter") as? Double).flatMap(ArchiveAfter.init) ?? .hours12
+    awayTabs = Set(defaults.stringArray(forKey: "awayTabs") ?? [])
+    archiveNote = defaults.integer(forKey: "archiveNote")
     favourites = defaults.data(forKey: "favourites")
       .flatMap { try? JSONDecoder().decode([Favourite].self, from: $0) } ?? []
     hiddenTiles = Set(defaults.stringArray(forKey: "hiddenTiles") ?? [])
@@ -85,6 +104,17 @@ final class Settings {
   func keepHidden(among ids: Set<String>) {
     let kept = DockTiles.kept(hiddenTiles, among: ids)
     if kept != hiddenTiles { hiddenTiles = kept }
+  }
+
+  /// Tabs went to the archive by themselves. Once the note is answered there's no more to say.
+  func archivedUnseen(_ count: Int) {
+    if count > 0, !defaults.bool(forKey: "archiveNoted") { archiveNote += count }
+  }
+
+  /// The note was put away, or followed to the archive.
+  func answerArchiveNote() {
+    defaults.set(true, forKey: "archiveNoted")
+    archiveNote = 0
   }
 
   // The page that was open when the app left, which a relaunch soon after comes back to. Later
