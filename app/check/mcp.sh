@@ -588,8 +588,10 @@ hand_back_pressed() {
   send state
   [ "$(grep -c '^browser: agent page pressed in ' "$log" || true)" = "$1" ] && return
   pressed=$(sed -n 's/^browser: agent page pressed in \([0-9]*\)$/\1/p' "$log" | tail -1)
+  handed=$(grep -c "^browser: agent mcp-client handed back $pressed\$" "$log" || true)
   send key return cmd
-  await_log "^browser: agent mcp-client handed back $pressed\$" "⌘↩ didn't hand back the page a click took"
+  await_more "^browser: agent mcp-client handed back $pressed\$" "$handed" ||
+    fail "⌘↩ didn't hand back the page a click took, $pressed"
 }
 # Agent actions never move the user's focus (decision 8): through all the agent did in its own Space
 # since the user clicked into their field, their Space, tab and keyboard stayed, and their next keys
@@ -705,9 +707,10 @@ done
 # An agent's tab at Chrome's warning before http, in the agent's split view, watched from the
 # conversation, where its split's pages share the watched page's place. The warning shown doesn't
 # take the user's keyboard, on the Mac too, where it's a window of its own (#3240). Once the user's
-# click gives it the keyboard, ⌘W steps back to Pages from there, a press in the page beside it
-# takes the keyboard to that page, and never to an agent's dialog: on the Mac that press gives the
-# keyboard back to the browser window (#3212). Escape there is the warning's, as Chrome's is.
+# click gives it the keyboard, and takes the tab over as a press in its page does (#3243), ⌘W
+# steps back to Pages from there, a press in the page beside it takes that tab over and the
+# keyboard to that page, and never to an agent's dialog: on the Mac that press gives the keyboard
+# back to the browser window (#3212). Escape there is the warning's, as Chrome's is.
 if [ "$driven" = 1 ]; then
   await '^browser: settings about Version .*, on Chromium [0-9]' || fail "the engine's version wasn't said"
   major=$(sed -n 's/^browser: settings about .*on Chromium \([0-9]*\)\..*/\1/p' "$log" | head -1)
@@ -760,8 +763,23 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
     [ "$key" = NativeWidgetMacNSWindow ] ||
       fail "a click on the agent's warning before http at $warning, watched in its split view $1, didn't give it the keyboard: $key, $focus"
   }
+  # Hands $warned back from its page watched, the UI given the keyboard by a click on the sidebar.
+  hand_back_warned() {
+    watch "$warned"
+    send click $sidebar_point
+    handed=$(grep -c "^browser: agent mcp-client handed back $warned\$" "$log" || true)
+    send key return cmd
+    await_more "^browser: agent mcp-client handed back $warned\$" "$handed" ||
+      fail "⌘↩ didn't hand back tab $warned, which the click on its warning took over"
+  }
+  # Waits for the click on the warning to take $warned over, again; $1 says when.
+  took_warned() {
+    await_more "^browser: agent mcp-client taken over in $warned\$" "$took" ||
+      fail "the click on the agent's warning before http, watched $1, didn't take tab $warned over: $(since "$warning_clicked" | grep -e '^browser: drive' -e '^browser: agent' | tail -6 | tr '\n' ' ')"
+  }
   to_pages "tab $agent_tab"
   presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
+  took=$(grep -c "^browser: agent mcp-client taken over in $warned\$" "$log" || true)
   watch_warning "from Pages"
   first_click=$warning_clicked
   # Linux's driver lists the pages the shell lays out, and the task area lays out a watched split
@@ -774,8 +792,12 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
       fail "watching tab $warned didn't show its split view's two pages: $laid"
   fi
   ../tools/window-screenshot.sh "$pid" "$out/agent-split-warning.png" || fail "no window to capture"
-  # From the agent's warning with the keyboard, ⌘W steps back to Pages, as it does from its page,
-  # and the split watched again shows the warning without the keyboard (#3240).
+  # The click on the agent's warning, a press on its tab's dialog, took the tab over, as a press
+  # in its page does: answering it acts on the tab, which is the user's from then (#3243).
+  await_log "^browser: agent page pressed in $warned\$" \
+    "the click on the agent's warning before http, watched from Pages, didn't reach the app as a press on tab $warned: $(since "$first_click" | grep -e '^browser: drive' -e '^browser: agent' | tail -6 | tr '\n' ' ')"
+  took_warned "from Pages"
+  # From the warning with the keyboard, ⌘W steps back to Pages, as it does from its page.
   back='^browser: task page [0-9]* back$'
   thumbnail='^browser: task page in its thumbnail$'
   before=$(grep -c "$back" "$log" || true)
@@ -786,18 +808,16 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
     fail "⌘W on the agent's warning before http, which had the keyboard, didn't step back to Pages: $(since "$left" | grep -e '^browser: drive' -e '^browser: command' -e '^browser: task' | tail -6 | tr '\n' ' ')"
   await_more "$thumbnail" "$shrunk" ||
     fail "the agent's split view didn't go back into its picture after ⌘W"
-  # Where the click on the warning took the tab over, as X11's does, the tab is the user's, and
-  # its warning takes the keyboard as Chrome's does. So it's handed back first, from its page
-  # watched, with the UI given the keyboard by a click on the sidebar, as the user's would.
-  if [ "$(grep -c '^browser: agent page pressed in ' "$log" || true)" != "$presses" ]; then
-    watch "$warned"
-    send click $sidebar_point
-    send key return cmd
-    await_log "^browser: agent mcp-client handed back $warned\$" \
-      "⌘↩ didn't hand back tab $warned, which the click on its warning took over"
-    to_pages "tab $warned"
-  fi
+  # The tab is the user's, and its warning takes the keyboard as Chrome's does, so it's handed back
+  # from its page watched, the UI given the keyboard by a click on the sidebar, as the user's would:
+  # the warning keeps Return, so ⌘↩ reaches ilo only from there.
+  hand_back_warned
+  to_pages "tab $warned"
+  # Watched again, the agent's warning shows without the keyboard (#3240).
+  presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
+  took=$(grep -c "^browser: agent mcp-client taken over in $warned\$" "$log" || true)
   watch_warning "again after ⌘W"
+  took_warned "again after ⌘W"
   # The page beside, to the right of the warning's, as split_tabs put them.
   other="$((warning_x + warning_width + 100)) $((warning_y + warning_height + 100))"
   send click $other
@@ -806,40 +826,33 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
   [ "$key" = BrowserCoreNSWindow ] ||
     fail "a press in the page beside the agent's warning before http left the keyboard in $key, on $focus: $(since "$pressed" | grep -e '^browser: drive' -e '^browser: agent' | tail -6 | tr '\n' ' ')"
   ../tools/window-screenshot.sh "$pid" "$out/agent-split-pressed.png" || fail "no window to capture"
-  # The press takes over the tab pressed, and ⌘↩ hands it back. It takes over the tab watched
-  # instead, or on X11 the click on the warning already took that one and the press beside takes
-  # none (#3243), while the area goes on to show the tab pressed. So each tab the clicks took over
-  # is watched again and handed back there, with the UI given the keyboard by a click on the
-  # sidebar, as the user's would.
-  send state
-  taken=$(since "$first_click" | sed -n 's/^browser: agent page pressed in \([0-9]*\)$/\1/p' |
+  # The press beside takes over the tab pressed, not the one watched (#3243), and ⌘↩ from that page,
+  # which has the keyboard, hands it back.
+  await_log "^browser: agent page pressed in $beside\$" \
+    "a press in the page beside the agent's warning didn't reach the app as a press on tab $beside: $(since "$pressed" | grep -e '^browser: drive' -e '^browser: agent' | tail -6 | tr '\n' ' ')"
+  await_log "^browser: agent mcp-client taken over in $beside\$" \
+    "a press in the other pane of a watched agent split didn't take over the tab pressed, $beside"
+  taken=$(since "$warning_clicked" | sed -n 's/^browser: agent page pressed in \([0-9]*\)$/\1/p' |
     sort -u | tr '\n' ' ')
-  taken=${taken% }
-  [ -n "$taken" ] ||
-    fail "neither the click on the agent's warning before http nor the press beside it took over a tab: $(since "$first_click" | grep -e '^browser: drive' -e '^browser: agent' | tail -8 | tr '\n' ' ')"
-  if [ "$taken" = "$beside" ]; then
-    hand_back_pressed "$presses"
-    shown="the split view"
-  else
-    echo "skip: mcp: a press in the other pane of a watched agent split taking over the tab pressed: the clicks on the warning and beside it took over tab $taken, not $beside (#3243)."
-    shown="tab $beside"
-    for tab in $taken; do
-      to_pages "$shown"
-      watch "$tab"
-      send click $sidebar_point
-      send key return cmd
-      await_log "^browser: agent mcp-client handed back $tab\$" \
-        "⌘↩ didn't hand back tab $tab, which a click on the split view took over"
-      shown="tab $tab"
-    done
-  fi
+  [ "$taken" = "$(printf '%s\n' "$warned" "$beside" | sort -u | tr '\n' ' ')" ] ||
+    fail "the click on the agent's warning and the press beside it took over tabs $taken, not $warned and $beside"
+  hand_back_pressed "$presses"
+  # The warning's tab, which its click took, is handed back from its page watched.
+  to_pages "the split view"
+  hand_back_warned
   # Escape on the warning with the keyboard is the warning's, its Go back, on every OS: a dialog
-  # keeps the keys that answer it (dialog_keys.cc). The warning goes, and the tab leaves the http
-  # page, here for the new tab page, as it had no page before it.
-  # Where the click on the warning takes the tab over, as X11's can, ⌘↩ hands it back after.
-  to_pages "$shown"
+  # keeps the keys that answer it (dialog_keys.cc). The click that gave it the keyboard took the
+  # tab over, so the Escape is the user's act on their own tab, and the strip says they have it
+  # before the page leaves. The warning goes, and the tab leaves the http page, here for the new
+  # tab page, as it had no page before it. ⌘↩ hands it back after.
+  to_pages "tab $warned"
   presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
+  took=$(grep -c "^browser: agent mcp-client taken over in $warned\$" "$log" || true)
+  driving=$(grep -c "^browser: task strip $warned says You're driving" "$log" || true)
   watch_warning "before Escape"
+  took_warned "before Escape"
+  await_more "^browser: task strip $warned says You're driving" "$driving" ||
+    fail "the strip under tab $warned didn't say the user has it once the click on its warning took it: $(grep "^browser: task strip $warned says" "$log" | tail -1)"
   send key escape
   escaped=$step
   for _ in $(seq 50); do
