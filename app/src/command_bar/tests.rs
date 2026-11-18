@@ -2575,6 +2575,16 @@ fn return_gives_the_page_it_goes_to_the_keyboard(cx: &mut TestAppContext) {
         "a page in a new tab"
     );
     bar.calls();
+    bar.edit("https://example.com/", None);
+    bar.type_text("docs.new");
+    bar.suggest("docs.new", vec![page("https://docs.new/")]);
+    bar.keys("enter");
+    assert_eq!(
+        bar.page_keyboard(),
+        ["open https://docs.new/, hide"],
+        "a new document from a tab's URL, in a new tab"
+    );
+    bar.calls();
     let mut bar = Bar::with_tabs(cx, vec![tab(4, "https://a.test/")]);
     bar.keys("enter");
     assert_eq!(bar.calls(), ["select 4", "hide"]);

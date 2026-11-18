@@ -2882,7 +2882,14 @@ impl CommandBar {
             (0, Target::Tab(_)) if row.new_document => {
                 // check.sh reads this line.
                 log!("browser: command bar new tab {}", row.url);
+                let users = !self.host.agents_page(cx);
                 self.host.open_tab(&row.url, "", false);
+                self.close();
+                // A new document is a page the user went to, as go_to_typed's are.
+                if users {
+                    self.host.focus_page();
+                }
+                return;
             }
             (0, _) => return self.go_to(&row.url, cx),
             (tab, Target::Beside(with)) => {
