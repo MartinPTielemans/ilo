@@ -354,3 +354,30 @@ import os
     #expect(page.failure == nil)
   }
 }
+
+/// Request desktop site.
+@Suite(.serialized, .timeLimit(.minutes(2))) @MainActor struct DesktopSiteTests {
+  @Test func `a desktop site is asked for as a Mac's Safari asks, and a mobile one as a phone's`() async throws {
+    let server = try await Loopback { _ in .html("<title>Site</title>") }
+    let browser = testBrowser()
+    browser.openNew(server.url("/site"))
+    let page = try #require(browser.page)
+    #expect(await eventually { await page.shows("/site") })
+    let phone = try #require(server.requests.last?.headers["user-agent"])
+    #expect(phone.contains("iPhone") && phone.contains("Mobile/"))
+
+    page.requestDesktopSite(true)
+    #expect(await eventually { server.requests(to: "/site") == 2 })
+    let desktop = try #require(server.requests.last?.headers["user-agent"])
+    #expect(desktop.contains("Macintosh"))
+    #expect(!desktop.contains("Mobile") && !desktop.contains("iPhone"))
+    #expect(await eventually { await page.shows("/site") })
+    // The page's own script reads the same.
+    #expect(await page.run("return navigator.userAgent") as? String == desktop)
+    #expect(await page.run("return navigator.platform") as? String == "MacIntel")
+
+    page.requestDesktopSite(false)
+    #expect(await eventually { server.requests(to: "/site") == 3 })
+    #expect(server.requests.last?.headers["user-agent"] == phone)
+  }
+}

@@ -85,8 +85,7 @@ final class WebTab: NSObject, Identifiable {
     } else {
       configuration.allowsInlineMediaPlayback = true
       // Sites send their in-app pages to a web view that doesn't say it's a browser.
-      let version = UIDevice.current.systemVersion.split(separator: ".").prefix(2).joined(separator: ".")
-      configuration.applicationNameForUserAgent = "Version/\(version) Mobile/15E148 Safari/604.1"
+      configuration.applicationNameForUserAgent = "Version/\(Self.safariVersion) Mobile/15E148 Safari/604.1"
     }
     let page = PageWebView(frame: .zero, configuration: configuration)
     webView = page
@@ -189,8 +188,20 @@ final class WebTab: NSObject, Identifiable {
     }
   }
 
+  /// The Safari this system's WebKit came with, as a site reads it.
+  private static var safariVersion: String {
+    UIDevice.current.systemVersion.split(separator: ".").prefix(2).joined(separator: ".")
+  }
+
+  /// What a Mac's Safari says it is. The desktop content mode gives a site a Mac's platform and
+  /// width and keeps the name above, whose "Mobile" is what sites sort phones by.
+  static var desktopAgent: String {
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/\(safariVersion) Safari/605.1.15"
+  }
+
   func requestDesktopSite(_ wanted: Bool) {
     wantsDesktopSite = wanted
+    webView.customUserAgent = wanted ? Self.desktopAgent : nil
     webView.reload()
   }
 
