@@ -226,10 +226,11 @@ heard=$(wc -l < "$nvda_log")
 send type exa
 spoken "typed exa"
 # ↓ selects the next suggestion while the field keeps the keyboard, and the bar's live region says
-# it and where it stands, "…, 2 of 3" (#3236).
+# it and where it stands, "…, 2 of 3" (#3236): the second, as the typed letters' late words name
+# the first.
 at=$(wc -l < "$nvda_log")
 press down
-says "$at" ", [0-9]* of [0-9]*'" "NVDA didn't say the suggestion ↓ selected in the command bar"
+says "$at" ", 2 of [0-9]*'" "NVDA didn't say the suggestion ↓ selected in the command bar"
 press escape
 # The Space the onboarding leaves has no tabs, and Tab rings New Tab's row, read as a button by
 # its name, where it said nothing before (#3151).
@@ -272,19 +273,20 @@ press down
 press tab shift
 # ⇧Tab again, from the page's first control, the link, rings the tab shown's row, read by its
 # name, and Tab from the ring has NVDA say the link; Tab past the last control, the button, rings
-# the row again, and ⇧Tab from it has NVDA say the button (#3220).
+# the row again, and ⇧Tab from it has NVDA say the button (#3220). Each as the focused control's
+# name and role, as the document's line NVDA reads on entering the page names both as well.
 judging=1
 press tab shift
 on_row Reading "⇧Tab from the page's first control"
 at=$(wc -l < "$nvda_log")
 press tab
-says "$at" "Link" "NVDA didn't say the page's first control after Tab from the ring"
+says "$at" "'Link', 'link'" "NVDA didn't say the page's first control after Tab from the ring"
 press tab
 press tab
 on_row Reading "Tab past the page's last control"
 at=$(wc -l < "$nvda_log")
 press tab shift
-says "$at" "Button" "NVDA didn't say the page's last control after ⇧Tab from the ring"
+says "$at" "'Button', 'button'" "NVDA didn't say the page's last control after ⇧Tab from the ring"
 judging=
 # Out of the page into the sidebar with F6, Focus Sidebar, and along its rows: each is read by its
 # name, with UI Automation's focus on GPUI's node for it, not Chromium's window (#3151). A second
