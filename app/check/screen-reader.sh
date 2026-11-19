@@ -13,7 +13,8 @@
 # past its last ring the tab shown's row, Tab and ⇧Tab from the ring go straight into the page,
 # with its focus back on its first and last control, and have NVDA say the page, and the Library's
 # key has it on the Library's search field, where ↓ has it say the row ringed and where it stands
-# and Tab has it on the Library's sections. Elsewhere it records.
+# and Tab has it on the Library's sections. Elsewhere it records, a Board's cards among them: read
+# as the keyboard reaches them, moved and deleted.
 # NVDA's portable copy (GPL) is fetched from NV Access' release on GitHub, its checksum pinned, into
 # the hosted runner's temporary folder, and never installed: with NVDA_DIR naming a portable copy,
 # the run uses that instead. Off a hosted Windows runner, and without NVDA_DIR, it skips.
@@ -488,6 +489,68 @@ press tab shift
 in_library "Search History" "⇧Tab twice"
 judging=
 press escape
+# A Board's cards (#3407), not judged yet, last of the steps as the Board stays open. New Board's
+# first note, offered with the page's keyboard, is read as an empty note. A Board whose file holds
+# two notes, opened by its address, is read card by card as Tab reaches each, and moving the second
+# with → and deleting it are said. NVDA's browse mode keeps → for its own reading, as it keeps ⌃C,
+# so a move is said only where a reader passes the arrows to the page.
+at=$(wc -l < "$nvda_log")
+press e ctrl shift
+expect '^browser: new board [0-9a-f]\{32\} tab [0-9]*$' "⌃⇧E made no Board"
+made=$(grep '^browser: new board ' "$log" | tail -1)
+made_id=$(echo "$made" | cut -d' ' -f4)
+board=$(echo "$made" | cut -d' ' -f6)
+send type "kitchen"
+press return
+expect "^browser: board $board has the keyboard\$" "↩ on the new Board's name didn't give its page the keyboard"
+board_said() {
+  said=no
+  tail -n "+$(($1 + 1))" "$nvda_log" | grep -q "^Speaking .*$2" && said=yes
+  echo "note: NVDA said $3: $said"
+}
+for _ in $(seq 100); do
+  grep "^browser: page $board " "$log" | tail -1 | grep -q ' loading 0 chrome://board/' && break
+  sleep 0.1
+done
+spoken "the new Board's page"
+board_said "$at" "'Empty note', 'note'" "New Board's first note, offered, as an empty note"
+folder=$(find "$profile_dir" -type d -path "*/Boards/$made_id" | head -1)
+[ -n "$folder" ] || fail "New Board made no folder for $made_id in the profile ($profile_dir)"
+boards=$(dirname "$folder")
+notes=$(printf '6%.0s' $(seq 32))
+mkdir -p "$boards/$notes"
+printf '%s' '{"version": 1, "camera": {"x": 0, "y": 0, "zoom": 1}, "cards": [
+  {"id": "b", "kind": "note", "x": 500, "y": 100, "w": 240, "h": 0, "z": 2, "text": "next note", "fill": "plain", "size": "m"},
+  {"id": "a", "kind": "note", "x": 100, "y": 100, "w": 240, "h": 0, "z": 1, "text": "top note", "fill": "plain", "size": "m"}]}' \
+  > "$boards/$notes/board.json"
+press t cmd
+send insert "chrome://board/$notes"
+press return
+expect "^browser: loaded [0-9]* chrome://board/$notes\$" "the Board holding two notes didn't load"
+read_tab=$(grep "^browser: loaded [0-9]* chrome://board/$notes\$" "$log" | tail -1 | cut -d' ' -f3)
+for _ in $(seq 100); do
+  grep "^browser: page $read_tab " "$log" | tail -1 | grep -q " loading 0 chrome://board/$notes\$" && break
+  sleep 0.1
+done
+# Tab until the page's focus is on the first note, the cards being first in the page, so the note
+# below says whether Tab reached it at all.
+reached=no
+for _ in $(seq 20); do
+  at=$(wc -l < "$nvda_log")
+  press tab
+  tail -n 1 "$focus_file" | grep -q '^MSAA page focus: "top note"' && reached=yes && break
+done
+echo "note: Tab reached the Board's first note: $reached"
+board_said "$at" "'top note'.*'note'" "the first note Tab reached, by its first line, as a note"
+at=$(wc -l < "$nvda_log")
+press tab
+board_said "$at" "'next note'" "the next note Tab went on to"
+at=$(wc -l < "$nvda_log")
+press right
+board_said "$at" "'Moved right" "→ moving it"
+at=$(wc -l < "$nvda_log")
+press backspace
+board_said "$at" "'Deleted next note" "Delete taking it away"
 press , cmd
 press tab
 press tab

@@ -1106,6 +1106,14 @@ impl Shell {
         );
         let page_name = self.strip_page_name(tab, &title, &detail);
         let detail = (!detail.is_empty()).then(|| format!(" · {detail}"));
+        let words = format!("{title}{}", detail.as_deref().unwrap_or_default());
+        let mut said = self.task_strip_said.borrow_mut();
+        if said.as_ref() != Some(&(tab, words.clone())) {
+            // check.sh reads this line: the strip says who has the page, as the bar did.
+            log!("browser: task strip {tab} says {words}");
+            *said = Some((tab, words));
+        }
+        drop(said);
         div()
             .id("task-strip")
             .absolute()
