@@ -18,6 +18,9 @@ on stdout.
 import base64, http.server, json, os, re, socketserver, sys, zlib
 
 DIR, LOG = sys.argv[1:3]
+# Probe only (#3597's fail-once proof, never to land): a fault each share-fault-*.sh names, which
+# breaks what one of share.sh's steps checks.
+FAULT = os.environ.get("SHARE_FAULT", "")
 
 # AES, FIPS 197.
 SBOX = [0] * 256
@@ -129,7 +132,7 @@ def make(title, items):
 
 secrets = []
 links = []
-good_id, good_key = make("Lisbon, March", [
+good_id, good_key = make("Porto, May" if FAULT == "title" else "Lisbon, March", [
     {"title": "Visit Lisboa", "url": "https://www.visitlisboa.example/en"},
     {"title": "Food", "items": [{"title": "Time Out Market", "url": "https://timeout.example/lx"}]},
     {"title": "Not a page", "url": "javascript:alert(1)"},
@@ -137,16 +140,23 @@ good_id, good_key = make("Lisbon, March", [
 links.append("good /s/%s#%s" % (good_id, good_key))
 secrets += [good_id, good_key, "Lisbon, March", "visitlisboa.example", "timeout.example"]
 gone_id, gone_key = os.urandom(16), os.urandom(32)
+if FAULT == "gone-live":
+    _i, _k = make("Gone", [{"title": "A", "url": "https://a.example/"}])
+    gone_id, gone_key = base64.urlsafe_b64decode(_i + "=="), base64.urlsafe_b64decode(_k + "=")
 links.append("gone /s/%s#%s" % (b64url(gone_id), b64url(gone_key)))
 secrets += [b64url(gone_id), b64url(gone_key)]
-GONE = {b64url(gone_id)}
-wrong_key = b64url(os.urandom(32))
+GONE = set() if FAULT == "gone-live" else {b64url(gone_id)}
+wrong_key = good_key if FAULT == "wrong-key-right" else b64url(os.urandom(32))
 links.append("wrong-key /s/%s#%s" % (good_id, wrong_key))
 unknown_id, unknown_key = b64url(os.urandom(16)), b64url(os.urandom(32))
+if FAULT == "unknown-known":
+    unknown_id, unknown_key = make("Unknown", [{"title": "B", "url": "https://b.example/"}])
 links.append("unknown /s/%s#%s" % (unknown_id, unknown_key))
 secrets += [wrong_key, unknown_id, unknown_key]
 with open(os.path.join(DIR, "links"), "w") as f:
     f.write("\n".join(links) + "\n")
+if FAULT == "secret-logged":
+    secrets.append("share page shown")
 with open(os.path.join(DIR, "secrets"), "w") as f:
     f.write("\n".join(secrets) + "\n")
 
@@ -164,7 +174,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def send(self, code, body, kind, cookie=False):
         self.send_response(code)
-        if cookie:
+        if cookie and FAULT != "no-cookie":
             self.send_header("Set-Cookie", "seen=1; SameSite=Lax; Path=/")
         self.send_header("Content-Type", kind)
         self.send_header("Content-Length", str(len(body)))
@@ -172,15 +182,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Cache-Control", "no-store")
-        self.send_header("Ilo-Share", "v1")
+        if not (FAULT == "header-off" and re.fullmatch("/s/" + ID, self.path.split("?")[0])):
+            self.send_header("Ilo-Share", "v1")
         self.end_headers()
         self.wfile.write(body)
 
     def do_GET(self):
         path = self.path.split("?")[0]
         with open(LOG, "a") as log:
+            data_cookie = FAULT == "data-cookie" and path.endswith("/data")
             log.write("%s cookie=%d referer=%d\n" % (
-                path, "Cookie" in self.headers, "Referer" in self.headers))
+                path, "Cookie" in self.headers or data_cookie, "Referer" in self.headers))
         if path == "/plain" or re.fullmatch("/s/" + ID, path):
             return self.send(200, PAGE, "text/html; charset=utf-8", path == "/plain")
         m = re.fullmatch("/s/(" + ID + ")/data", path)
