@@ -97,10 +97,72 @@ pub extern "C" fn browser_log_on(area: *const std::ffi::c_char) -> bool {
     AREAS.contains(&area.as_ref()) && on(&area)
 }
 
+/// `line` with each share link's key taken out: a link `…/s/<id>#<key>` (#680) opens the share for
+/// whoever reads it, and logs get pasted into issues. The id stays, so a line still says which.
+pub fn without_share_keys(line: String) -> String {
+    const ID: usize = 22;
+    const KEY: usize = 43;
+    let base64url = |byte: &u8| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_');
+    if !line.contains("/s/") {
+        return line;
+    }
+    let bytes = line.as_bytes();
+    let mut kept = String::with_capacity(line.len());
+    let mut from = 0;
+    let mut at = 0;
+    while let Some(found) = line[at..].find("/s/") {
+        let id = at + found + 3;
+        let key = id + ID + 1;
+        let end = key + KEY;
+        let is_link = bytes.len() >= end
+            && bytes[id..id + ID].iter().all(base64url)
+            && bytes[id + ID] == b'#'
+            && bytes[key..end].iter().all(base64url)
+            && !bytes.get(end).is_some_and(base64url);
+        if is_link {
+            kept.push_str(&line[from..key]);
+            kept.push_str("<key>");
+            from = end;
+            at = end;
+        } else {
+            at = id;
+        }
+    }
+    kept.push_str(&line[from..]);
+    kept
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::bc;
+
+    #[test]
+    fn a_share_links_key_never_reaches_the_log() {
+        let id = "AbCdEfGhIjKlMnOpQrSt-_";
+        let key = "k".repeat(42) + "Z";
+        let line = format!("browser: loaded 3 https://share.ilo.app/s/{id}#{key}\n");
+        assert_eq!(
+            without_share_keys(line),
+            format!("browser: loaded 3 https://share.ilo.app/s/{id}#<key>\n")
+        );
+        // Two in a line, one on a server of the user's.
+        let line = format!("a http://10.0.0.2:8080/s/{id}#{key} b /s/{id}#{key}");
+        assert_eq!(
+            without_share_keys(line),
+            format!("a http://10.0.0.2:8080/s/{id}#<key> b /s/{id}#<key>")
+        );
+        // What isn't a link's shape stays: a short id, a longer fragment, no fragment.
+        for line in [
+            format!("https://example.com/s/abc#{key}"),
+            format!("https://example.com/s/{id}#{key}x"),
+            format!("https://example.com/s/{id}/data"),
+            "/s/".to_string(),
+            "a line with no address".to_string(),
+        ] {
+            assert_eq!(without_share_keys(line.clone()), line);
+        }
+    }
 
     #[test]
     fn names_the_areas_it_knows_and_the_rest_apart() {

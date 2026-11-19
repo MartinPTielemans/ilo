@@ -7,12 +7,14 @@
 /// Writes a line to stderr, as `eprintln!` does, but in one write where `eprintln!` makes one for
 /// each piece, so a line Chromium logs at the same time can't land inside it, where the checks
 /// wouldn't find it.
+/// A share link's key never reaches it (`logging::without_share_keys`).
 #[macro_export]
 #[cfg(not(target_family = "wasm"))]
 macro_rules! log {
     ($($arg:tt)*) => {{
         use std::io::Write as _;
-        _ = std::io::stderr().write_all(format!("{}\n", format_args!($($arg)*)).as_bytes());
+        let line = $crate::logging::without_share_keys(format!("{}\n", format_args!($($arg)*)));
+        _ = std::io::stderr().write_all(line.as_bytes());
     }};
 }
 
