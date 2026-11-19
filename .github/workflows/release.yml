@@ -565,6 +565,12 @@ jobs:
           SIGN_IDENTITY: '-'
         run: ../tools/release.sh
 
+      # The app as the DMG ships it, started as far as macOS's check of its profile and keys, which
+      # refuses a mismatch only there: a release whose app wouldn't open stops before it's uploaded.
+      - name: Start the signed app
+        if: ${{ steps.secrets.outputs.signed == 'true' }}
+        run: ../tools/start-signed.sh build/release/ilo.dmg
+
       - name: DMG
         if: ${{ steps.secrets.outputs.signed == 'true' }}
         run: |

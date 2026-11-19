@@ -127,7 +127,10 @@ The Mac's Developer ID provisioning profile isn't a secret: every release carrie
 - doesn't list the certificate in `MAC_CERTIFICATE_P12`;
 - isn't for the App ID `938WK3V9K9.app.ilo.browser`;
 - doesn't grant every key in `app/entitlements/release.plist`;
-- or expires within 30 days, by its own date or its certificate's.
+- expires within 30 days, by its own date;
+- or lists a certificate that has expired.
+
+A certificate within 60 days of its end only warns: a release signed in its last days is as good as any other, and a security release mustn't wait on a visit to the portal. After `tools/release.sh` signs the app, and again on the DMG in the Mac job, `tools/start-signed.sh` starts the signed app as far as macOS's check of its profile and keys, where a mismatch stops it, and the release stops with it.
 
 The profile's own date is 18 years out, but the certificate it lists expires on 2027-02-01, and a new certificate needs a new profile. So does a new key in `release.plist`, such as the passkey entitlement once Apple grants it. The release's API key can't make profiles. The owner makes one in the developer portal (Profiles › Distribution › Developer ID, App ID `app.ilo.browser`, the current certificate), downloads it, and commits it in place of the file.
 

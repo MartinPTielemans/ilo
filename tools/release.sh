@@ -81,6 +81,8 @@ requirement=$("$(dirname "$0")/requirement.sh" "$(cat "$root/branding/id")" "$id
 [ "$identity" = - ] || cp "$provision" "$app/Contents/embedded.provisionprofile"
 sign --entitlements "$entitlements" ${requirement:+"-r=$requirement"} "$app"
 codesign --verify --deep --strict --verbose=2 "$app"
+# A profile or key macOS refuses passes every check above, and stops the app as it starts.
+"$(dirname "$0")/start-signed.sh" "$app"
 [ "$identity" = - ] && exit 0
 # What the app carries, read back from it.
 codesign -d --entitlements - --xml "$app" 2> /dev/null | plutil -convert xml1 -o "$out/signed.plist" -

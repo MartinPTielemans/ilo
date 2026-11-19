@@ -6,7 +6,9 @@
 # build, and tools/release.sh before signing.
 # The profile is PROVISIONING_PROFILE, else app/entitlements/developer-id.provisionprofile. It
 # must be for app/entitlements/release.plist's App ID, else PROFILE_APP_ID, and last
-# PROFILE_DAYS more days, else 30.
+# PROFILE_DAYS more days, else 30. Its certificate only warns from CERTIFICATE_DAYS out, else 60,
+# and fails once it can't sign: a release signed in its last days is as good as any, and a security
+# release mustn't wait on a visit to the portal.
 # Usage: tools/check-profile.sh <identity>
 set -euo pipefail
 root="$(cd "$(dirname "$0")/../app" && pwd)"
@@ -14,6 +16,7 @@ identity=$1
 profile=${PROVISIONING_PROFILE:-$root/entitlements/developer-id.provisionprofile}
 entitlements=$root/entitlements/release.plist
 days=${PROFILE_DAYS:-30}
+warn_days=${CERTIFICATE_DAYS:-60}
 renew="Make a new one in the developer portal and commit it (docs/releasing.md)."
 fail() {
   echo "$profile $*" >&2
@@ -43,8 +46,13 @@ expires=$(plutil -extract ExpirationDate raw "$granted")
 [ "$(date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$expires" +%s)" -gt $(($(date +%s) + days * 86400)) ] ||
   fail "expires on $expires, within $days days. $renew"
 ends=$(echo "$certificate" | openssl x509 -noout -enddate | sed 's/^notAfter=//')
-echo "$certificate" | openssl x509 -noout -checkend $((days * 86400)) > /dev/null ||
-  fail "lists a certificate that expires on $ends, within $days days. Renew the certificate in MAC_CERTIFICATE_P12, then the profile with it. $renew"
+renew_certificate="Renew the certificate in MAC_CERTIFICATE_P12, then the profile with it. $renew"
+echo "$certificate" | openssl x509 -noout -checkend 0 > /dev/null ||
+  fail "lists a certificate that expired on $ends, which can't sign. $renew_certificate"
+if ! echo "$certificate" | openssl x509 -noout -checkend $((warn_days * 86400)) > /dev/null; then
+  warning="$profile lists a certificate that expires on $ends, within $warn_days days. $renew_certificate"
+  if [ -n "${GITHUB_ACTIONS:-}" ]; then echo "::warning::$warning"; else echo "warning: $warning" >&2; fi
+fi
 
 # Each key the app claims, but the hardened runtime's, which need no profile, has each of its
 # values among the profile's, some of which are patterns such as <team>.*.
