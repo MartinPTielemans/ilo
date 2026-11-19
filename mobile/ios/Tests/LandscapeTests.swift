@@ -255,34 +255,44 @@ private struct Turned<Content: View>: View {
 
 /// The Space on a phone on its side.
 @Suite(.serialized, .timeLimit(.minutes(2))) @MainActor struct LandscapeSpaceTests {
-  @Test func `the search field is inside the clear edges on its side, and is the same field after the turn`() async throws {
+  @Test func `the search field is inside the clear edges on its side, and keeps the keyboard through the turn and back`() async throws {
     let stage = try Stage(stageBrowser()) { SpaceScreen() }
     defer { stage.close() }
-    #expect(await eventually { stage.first(UITextField.self)?.window != nil })
+    // The Space opens with the keyboard up, and the dock stands where it does with it.
+    #expect(await eventually { stage.first(UITextField.self)?.isFirstResponder == true })
     let upright = try #require(stage.first(UITextField.self))
-    let before = upright.convert(upright.bounds, to: stage.window)
+    func place() -> CGRect { upright.convert(upright.bounds, to: stage.window) }
+    // Where the field comes to rest: the dock moves as the field takes the keyboard.
+    var last = place()
+    var since = ContinuousClock.now
+    let rested = await eventually {
+      if place() != last {
+        last = place()
+        since = .now
+      }
+      return ContinuousClock.now - since > .milliseconds(300)
+    }
+    #expect(rested)
+    let before = last
     #expect(before.maxY <= Room.upright.height - Bar.gap)
 
     stage.turn(side: true)
     // The dock lies in one row at the foot: the field has moved up to less than a dock's height
     // from it, between the island's end and the other.
     let inside = await eventually {
-      guard let field = stage.first(UITextField.self) else { return false }
-      let frame = field.convert(field.bounds, to: stage.window)
+      let frame = place()
       return frame.minX >= Room.sideEdges.leading && frame.maxX <= Room.side.width - Room.sideEdges.trailing
         && frame.maxY <= Room.side.height - Bar.gap && frame.minY >= Room.side.height - 2 * Dock.pitch
     }
     #expect(inside)
-    // The same field, so what's typed in it and its focus come through the turn.
+    // The same field, with the keyboard still its own: what's typed in it comes through the turn.
     #expect(stage.first(UITextField.self) === upright)
+    #expect(upright.isFirstResponder)
 
     stage.turn(side: false)
-    let back = await eventually {
-      guard let field = stage.first(UITextField.self) else { return false }
-      return field.convert(field.bounds, to: stage.window) == before
-    }
-    #expect(back)
+    #expect(await eventually { place() == before })
     #expect(stage.first(UITextField.self) === upright)
+    #expect(upright.isFirstResponder)
   }
 
   @Test func `a grid that stands on the dock stands on it after a turn, and after the turn back`() async throws {
