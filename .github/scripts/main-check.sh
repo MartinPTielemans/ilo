@@ -106,14 +106,16 @@ report)
     --jq "map(select(.title == \"$title\"))[0].number // empty")
   case $result in
   failure)
-    # What each failed job said went wrong, or else its failed steps.
+    # What each failed job said went wrong, or else its failed steps, and each one cancelled, as
+    # one is whose time ran out (#3444).
     failed=
-    for job in $(gh api "repos/$repo/actions/runs/$GITHUB_RUN_ID/jobs" --jq '.jobs[] | select(.conclusion == "failure") | .id'); do
+    for job in $(gh api "repos/$repo/actions/runs/$GITHUB_RUN_ID/jobs" --jq '.jobs[] | select(.conclusion == "failure" or .conclusion == "cancelled") | .id'); do
       said=$(gh api "repos/$repo/check-runs/$job/annotations" --jq '.[] | select(.annotation_level == "failure"
         and (.message | startswith("Process completed with exit code") | not)) | "- " + .message')
       # shellcheck disable=SC2016 # $job is jq's.
       [ -n "$said" ] || said=$(gh api "repos/$repo/actions/jobs/$job" --jq '.name as $job | .steps[]
-        | select(.conclusion == "failure") | "- \($job): the \(.name) step failed"')
+        | select(.conclusion == "failure" or .conclusion == "cancelled")
+        | "- \($job): the \(.name) step \(if .conclusion == "failure" then "failed" else "was cancelled" end)"')
       failed+=$said$'\n'
     done
     body="[A run]($run) ($GITHUB_EVENT_NAME) failed on main at $GITHUB_SHA.

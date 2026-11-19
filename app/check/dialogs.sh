@@ -16,6 +16,8 @@
 # does, and the next question asks again (#1362). On Windows and the Mac, with a second
 # window beside the first and the first in front, the pointer resting on a row of the second
 # shows its card over the second, and on a row of the first over the first (#1432).
+# A page out of sight whose alert waits for its tab is let go by the idle check once it looks 2 hours
+# unseen, and ilo goes on (#3549).
 
 serve
 log="$out/dialogs.log"
@@ -540,13 +542,38 @@ if sway_xwayland; then
   send type ada
   answer return accept "prompt ada"
 fi
+# A page out of sight that asks with an alert, which Chromium holds until its tab shows, is let go by
+# the idle check once it looks 2 hours unseen, its alert with it, and ilo goes on (#3549). It asks
+# the run's server first and alerts on the answer: a title changed out of sight is Chrome's sign of
+# a page at work in the background, which keeps it. Neither the app nor the core logs an alert held
+# for its tab, so the alert is asked a moment after the request, seconds before the idle check runs.
+printf '%s' '<!doctype html><title>Asks out of sight</title><script>
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) setTimeout(() => fetch("/asking").finally(() => alert("out of sight")), 100)
+})</script>' > "$out/site/asks-hidden.html"
+open_from_bar "${site}asks-hidden.html"
+asking=$tab
+open_from_bar "${site}"
+served "127.0.0.1:$port/asking" "the page out of sight didn't ask with its alert"
+send age 7200
+aged=$step
+open_from_bar "${site}"
+expect 'browser: idle tabs checked$' "showing a tab didn't check for tabs unseen 2 hours"
+# The core logs it, after Chromium's prefix.
+since $aged | grep -q "browser: tab $asking without its page\$" ||
+  fail "the idle check kept the page out of sight that asked with its alert"
+expect "^browser: page $asking unloaded 1\$" "the row of the tab let go didn't show it without its page"
+# Still running, which a page deleted with its alert held ended (#3549).
+send move $page_point
 exec 3>&-
 quit
 echo "ok: a page's alert, confirm and prompt ask over its card, answer with ↩ and Esc, and an alert"
 echo "  comes back with its tab. The confirm's Cancel and OK show the pointer on them. Leave site?"
 echo "  stays with Esc and leaves with ↩. A site's sign-in cancels with Esc and signs in with ↩, and"
 echo "  the password reaches no log. A link to Maps asks, and ↩ opens nothing. The link target shows"
-echo "  and hides 20 times, between the command bar and a tab's menu, with no panic."
+echo "  and hides 20 times, between the command bar and a tab's menu, with no panic. A page out of"
+echo "  sight whose alert waits for its tab is let go by the idle check after 2 hours unseen, and ilo"
+echo "  goes on (#3549)."
 [ -z "$covered" ] || echo "  Under another app's window in front of ilo's ($covered), the" \
   "link target and the hover card show under it, and the link target over ilo's window once it's" \
   "gone. Windows: $out/link-target-covered-ilo.png, $out/link-target-covered-away.png," \
