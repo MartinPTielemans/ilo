@@ -277,6 +277,13 @@ final class Downloads: NSObject {
     }
   }
 
+  /// Removes a copy before the next launch would, in the folder made for it alone.
+  func discard(_ copy: URL) {
+    let folder = copy.deletingLastPathComponent()
+    guard folder.deletingLastPathComponent().path == parts.appending(path: "copies").path else { return }
+    try? FileManager.default.removeItem(at: folder)
+  }
+
   // MARK: The app coming and going
 
   /// The app left the screen with a file on its way. iOS is asked for the time it gives, about
@@ -514,6 +521,8 @@ private final class Copy: NSObject, WKDownloadDelegate {
   }
 
   func download(_ download: WKDownload, didFailWithError error: any Error, resumeData: Data?) {
+    // What came of it is no file to hand on.
+    try? FileManager.default.removeItem(at: folder)
     finish(nil)
   }
 
