@@ -532,8 +532,8 @@ for _ in $(seq 100); do
   grep "^browser: page $read_tab " "$log" | tail -1 | grep -q " loading 0 chrome://board/$notes\$" && break
   sleep 0.1
 done
-# NVDA's browse mode takes Tab itself, on from where its reading is, the page's top: past the
-# Board's tools, then to its cards.
+# Tab until the page's focus is on the first note, the cards being first in the page, so the note
+# below says whether Tab reached it at all.
 reached=no
 for _ in $(seq 20); do
   at=$(wc -l < "$nvda_log")
