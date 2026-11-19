@@ -73,6 +73,7 @@ Publish each draft before building the next: a Linux build doesn't follow a draf
 - **The night's commit** is the newest on main whose core and engine are those of the Mac engine that `engine/fetch.sh` takes there (`tools/nightly-commit.sh`).
   - Windows joins when its engine fits that commit too. Otherwise the feed keeps Windows's previous build.
   - The appcast is signed beside the Mac's build, so while the Mac engine is behind main's core (the MacBook slept), the night builds nothing new.
+  - A commit that changed only `mobile/`, the iPhone app's, isn't a night's: the night is the commit before it, so a merge of phone work alone builds nothing.
   - A night whose commit the feed has already builds nothing.
 - **What it builds** is the release's own jobs, so each night rehearses a release:
   - the Mac DMG, signed and notarized;
