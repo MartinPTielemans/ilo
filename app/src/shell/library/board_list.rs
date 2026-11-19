@@ -201,7 +201,12 @@ impl Shell {
     }
 
     /// A Board's menu in Library › Boards: Open, Duplicate, and Delete, which ⌘Z takes back.
-    fn board_menu(&mut self, id: String, position: Point<Pixels>, cx: &mut Context<Self>) {
+    pub(super) fn board_menu(
+        &mut self,
+        id: String,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
         let entries = vec![
             MenuEntry::new("Open", true),
             MenuEntry::new("Duplicate", true),
