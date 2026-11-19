@@ -61,10 +61,15 @@ DBUS_SESSION_BUS_ADDRESS=$session busctl --user set-property org.a11y.Bus /org/a
 # block-buffered, and what was still in the buffer when it was stopped never reached the file
 # (44431039438's ended before the onboarding's first step), so its open gives the log line
 # buffering.
+# No speech server either: on the hosted runner, with no sound, the speech-dispatcher Orca started
+# never answered, and Orca waited on it from the first thing it said (44433125069). Without one,
+# Orca still writes each thing it would say, so its own config refuses to start one.
 orca_log="$out/orca-debug.log"
-rm -rf "$out/orca-prefs" "$orca_log"
-mkdir -p "$out/orca-prefs"
-DBUS_SESSION_BUS_ADDRESS=$session AT_SPI_BUS_ADDRESS=$a11y python3 -I -c '
+rm -rf "$out/orca-prefs" "$out/orca-config" "$orca_log"
+mkdir -p "$out/orca-prefs" "$out/orca-config/speech-dispatcher"
+echo DisableAutoSpawn > "$out/orca-config/speech-dispatcher/speechd.conf"
+DBUS_SESSION_BUS_ADDRESS=$session AT_SPI_BUS_ADDRESS=$a11y XDG_CONFIG_HOME="$out/orca-config" \
+  SPEECHD_ADDRESS="unix_socket:$out/orca-config/speechd.sock" python3 -I -c '
 import builtins, runpy, sys
 opened = builtins.open
 def line_buffered(file, mode="r", *args, **kwargs):
@@ -174,7 +179,7 @@ awk -v marks="$marks" '
   /^[0-9][0-9]:[0-9][0-9]:[0-9][0-9]\.[0-9]* - / {
     time = substr($0, 1, 15)
     while (i < n && time >= at[i + 1]) { i++; print "== " what[i] }
-    if ($0 ~ / - (SPEECH OUTPUT:|FOCUS MANAGER: Request to set locus of focus)/) print substr($0, 19)
+    if ($0 ~ / - (SPEECH OUTPUT:|SPEECH: Not available|SPEECH: Using speech server|FOCUS MANAGER: Request to set locus of focus)/) print substr($0, 19)
   }
   END { while (i < n) { i++; print "== " what[i] } }' "$orca_log" > "$speech"
 said=$(grep -c '^SPEECH OUTPUT:' "$speech" || true)
