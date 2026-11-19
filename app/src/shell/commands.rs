@@ -1465,7 +1465,7 @@ pub fn bind_keys(cx: &mut App) {
     cx.on_action(|run: &Run, cx| {
         // The menu's keys reach it from the dialog's window too, and the dialog has to be
         // answered first, as an alert's does.
-        if crate::dialog::asking(cx) {
+        if crate::dialog::awaits_answer(cx) {
             return;
         }
         // A shortcut in the UI opens its field before GPUI has read the keys typed after it, which
