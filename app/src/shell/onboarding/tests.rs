@@ -762,7 +762,7 @@ fn at_three_switches(
 fn tab_and_space_turn_each_opt_in_switch(cx: &mut TestAppContext) {
     use crate::settings_rows::spoken::{press, stops};
     let (shell, cx, host) = at_three_switches(cx);
-    // Round from the window, as the step's first switch has the keyboard as it comes.
+    // Round from the window, as the step's Continue has the keyboard as it comes.
     cx.update(|window, cx| window.blur(cx));
     let names: Vec<String> = stops(cx).into_iter().map(|(_, name, _)| name).collect();
     assert_eq!(
@@ -804,9 +804,30 @@ fn tab_and_space_turn_each_opt_in_switch(cx: &mut TestAppContext) {
     );
 }
 
-/// With the switch the keyboard is on as the step comes, the first, ↩ is still Continue and Esc
-/// still Skip: neither turns it, and the count is set as the step is left, as it stands (#2978,
-/// #3498).
+/// The opt-ins rest on Continue, and the switches are a ⇥ or ⇧⇥ from it: ⇥ goes past Skip to the
+/// count's, the first, and ⇧⇥ back to the agents', the last (#3498).
+#[gpui::test]
+fn the_switches_are_a_tab_from_continue(cx: &mut TestAppContext) {
+    for (keys, at) in [
+        ("tab", "Skip"),
+        ("tab tab", "Send a daily usage count"),
+        ("shift-tab", "Let agents use the browser"),
+    ] {
+        let (_, cx, _) = at_three_switches(cx);
+        cx.simulate_a11y_activation();
+        assert_eq!(keyed(cx), Some((Role::Button, "Continue".into())));
+        cx.simulate_keystrokes(keys);
+        let role = if at == "Skip" {
+            Role::Button
+        } else {
+            Role::Switch
+        };
+        assert_eq!(keyed(cx), Some((role, at.into())), "{keys} from Continue");
+    }
+}
+
+/// With a switch the keyboard is on, ↩ is still Continue and Esc still Skip: neither turns it,
+/// and the count is set as the step is left, as it stands (#2978).
 #[gpui::test]
 fn return_and_escape_leave_from_a_focused_switch(cx: &mut TestAppContext) {
     use crate::settings_rows::spoken::press;
@@ -817,6 +838,8 @@ fn return_and_escape_leave_from_a_focused_switch(cx: &mut TestAppContext) {
         ("escape", false),
     ] {
         let (shell, cx, host) = at_three_switches(cx);
+        // From Continue, where the step rests, past Skip to the count's switch.
+        cx.simulate_keystrokes("tab tab");
         if turned {
             press("space", cx);
         }
@@ -841,9 +864,8 @@ fn return_and_escape_leave_from_a_focused_switch(cx: &mut TestAppContext) {
     }
 }
 
-/// The keyboard left on a switch, the first as the step came or another ⇥ went to, goes back to the
-/// window as the flow ends, so the shell's own keys, ⌘T among them, still reach their commands once
-/// the switches are gone.
+/// The keyboard left on a switch goes back to the window as the flow ends, so the shell's own keys,
+/// ⌘T among them, still reach their commands once the switches are gone.
 #[gpui::test]
 fn the_window_keeps_its_keys_after_a_switch_had_the_keyboard(cx: &mut TestAppContext) {
     use crate::shell::commands::Run;
@@ -853,22 +875,18 @@ fn the_window_keeps_its_keys_after_a_switch_had_the_keyboard(cx: &mut TestAppCon
         cx.bind_keys(crate::shell::keys::key_bindings(cx));
         cx.on_action(move |run: &Run, _| runs.borrow_mut().push(run.0));
     });
-    for tabbed in [false, true] {
-        let (shell, cx, _) = at_three_switches(cx);
-        if tabbed {
-            cx.simulate_keystrokes("tab");
-        }
-        cx.simulate_keystrokes("escape");
-        later(&shell, cx, END_FADE);
-        assert_eq!(step(&shell, cx), None);
-        ran.borrow_mut().clear();
-        cx.simulate_keystrokes("cmd-t");
-        assert_eq!(
-            *ran.borrow(),
-            [Command::NewTab],
-            "⌘T after the flow, with a switch the last to have the keyboard, tabbed {tabbed}"
-        );
-    }
+    let (shell, cx, _) = at_three_switches(cx);
+    cx.simulate_keystrokes("shift-tab");
+    cx.simulate_keystrokes("escape");
+    later(&shell, cx, END_FADE);
+    assert_eq!(step(&shell, cx), None);
+    ran.borrow_mut().clear();
+    cx.simulate_keystrokes("cmd-t");
+    assert_eq!(
+        *ran.borrow(),
+        [Command::NewTab],
+        "⌘T after the flow, with a switch the last to have the keyboard"
+    );
 }
 
 /// A build that names no server for the count doesn't offer it.
@@ -1660,12 +1678,13 @@ fn a_screen_reader_follows_the_keyboard_through_each_step(cx: &mut TestAppContex
     assert!(!colored, "as Skip, keeping the Space's colour");
 }
 
-/// Each step's keyboard rests on its first control as it comes, never on the step's dialog, whose
-/// title and line a screen reader says on the way in. Orca drops the arrival of a step left by a
-/// key while its place is a dialog (#3498). ↩ and Esc there do what they do anywhere in the step:
-/// ↩ is the step's button, pressed once on its way down and not again on its way up, and Esc skips.
+/// Each step's keyboard rests on a control as it comes, never on the step's dialog, whose title
+/// and line a screen reader says on the way in. Orca drops the arrival of a step left by a key
+/// while its place is a dialog (#3498). The colours and engines have it, else the step's button,
+/// the opt-ins' too, never a switch. ↩ and Esc there do what they do anywhere in the step: ↩ is
+/// the step's button, pressed once on its way down and not again on its way up, and Esc skips.
 #[gpui::test]
-fn each_step_rests_on_its_first_control(cx: &mut TestAppContext) {
+fn each_step_rests_on_a_control(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
     with_engines(&host);
     host.sync_server.set(true);
@@ -1708,9 +1727,17 @@ fn each_step_rests_on_its_first_control(cx: &mut TestAppContext) {
     press("escape", cx);
     assert_eq!(step(&shell, cx), Some(Step::OptIns));
     assert_eq!(signing(&host), 0, "Esc on Sign In skipped it");
+    // Not on a switch, each a yes to sending something, which a stray Space would give.
+    assert_eq!(keyed(cx), button("Continue"));
+    host.take();
+    press("space", cx);
+    let ending = shell.read_with(cx, |shell, _| shell.onboarding.as_ref().unwrap().ending);
+    assert!(ending.is_some(), "Space on Continue pressed it");
+    assert_eq!(host.daily_count.get(), Some(false), "and turned no switch");
     assert_eq!(
-        keyed(cx),
-        Some((Role::Switch, "Send a daily usage count".into()))
+        host.crash_reports.get(),
+        Some(false),
+        "and turned no switch"
     );
 
     started(&shell, cx);

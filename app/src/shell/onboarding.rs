@@ -369,8 +369,8 @@ pub(super) struct Onboarding {
     /// ⇥'s stops at the step's button and at its corner's Skip or Back, which ↩ and Space press.
     continue_stop: gpui::FocusHandle,
     skip_stop: gpui::FocusHandle,
-    /// The stop of the step's choice, where its keyboard rests as it comes: its swatches, its
-    /// engines or its first opt-in's switch (onboarding_rest).
+    /// The stop of the step's choice, where its keyboard rests as it comes: its swatches or its
+    /// engines (onboarding_rest).
     first_stop: gpui::FocusHandle,
     /// The step that last took the keyboard as it came.
     focused_step: Option<Step>,
@@ -930,15 +930,17 @@ impl Shell {
         }
     }
 
-    /// Where the keyboard rests as the step shown comes: on its first control, never on the
-    /// step's dialog, as the dialog pattern has it. Orca keeps a dialog it's on as its place when
-    /// a key leaves it, and then drops the next step's arrival as already its place, saying
-    /// nothing of it (#3498). The step's choice comes first, else its button; only the intro and a
-    /// step left with no control rest on their dialog.
+    /// Where the keyboard rests as the step shown comes: on a control, never on the step's
+    /// dialog, as the dialog pattern has it. Orca keeps a dialog it's on as its place when a key
+    /// leaves it, and then drops the next step's arrival as already its place, saying nothing of it
+    /// (#3498). The colour's and the engine's choice are the step, so it rests on them; any other
+    /// rests on its button, the opt-ins' too, as a switch there is a yes to sending something that
+    /// a stray Space mustn't give. Only the intro and a step left with no control rest on their
+    /// dialog.
     fn onboarding_rest(&self, cx: &gpui::App) -> Option<gpui::FocusHandle> {
         let onboarding = self.onboarding.as_ref()?;
         Some(match onboarding.step {
-            Step::Color | Step::SearchEngine | Step::OptIns => onboarding.first_stop.clone(),
+            Step::Color | Step::SearchEngine => onboarding.first_stop.clone(),
             step if self.onboarding_has_button(step, cx) => onboarding.continue_stop.clone(),
             _ => onboarding.focus.clone(),
         })
@@ -1395,8 +1397,6 @@ impl Shell {
         // The import step's boxes, the ink a little over the ground.
         let surface = colors.ground.blend(colors.ink(IMPORT_SURFACE));
         let look = Look::on(surface, colors.ink(1.), rgb(SIGNAL));
-        // The first switch is the step's stop, where its keyboard rests as it comes.
-        let mut first = self.first_stop(Step::OptIns);
         let rows = self.opt_ins(cx).into_iter().map(|(opt_in, on)| {
             let slid = match switched {
                 Some((turned, since)) if turned == opt_in => (since / SLIDE).min(1.),
@@ -1417,7 +1417,6 @@ impl Shell {
                 .ml(px(PADDING))
                 .child(
                     stop_switch(&look, "switch", name, on, slid, look.accent, self.a11y)
-                        .when_some(first.take(), |control, stop| control.track_focus(&stop))
                         // A press is its row's click; here only Space, as ↩ is the step's Continue.
                         .on_click(cx.listener(move |shell, event: &ClickEvent, _, cx| {
                             if matches!(
