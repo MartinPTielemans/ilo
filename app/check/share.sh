@@ -34,7 +34,7 @@ served_log="$share_dir/requests"
 : > "$served_log"
 rm -f "$share_dir/port"
 mkfifo "$share_dir/port"
-python3 -I -u share-server.py "$share_dir" "$served_log" > "$share_dir/port" \
+python3 -I -u check/share-server.py "$share_dir" "$served_log" > "$share_dir/port" \
   2> "$share_dir/server.err" 3>&- 4>&- 5>&- &
 collector=$!
 read -r port < "$share_dir/port" || true
