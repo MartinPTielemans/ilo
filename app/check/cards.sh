@@ -374,10 +374,13 @@ opened_from_row 0 "the pinned tab never shown since launch"
 switch "2 cmd" "$b"
 recent_row "$p" 2 cmd
 expect '^browser: command recent-behind via hover card$' "⌘-click on a row of the card didn't open it behind"
-expect "^browser: loaded [0-9]* $pull/9\$" "⌘-click on a row of the card didn't load it in a tab"
-grep "^browser: loaded [0-9]* $pull/9\$" "$log" | grep -q "loaded $p " &&
-  fail "⌘-click on a row of the card loaded it in the pinned tab, not a tab behind"
+# A tab opened behind loads once it's shown (open_behind), so it's read at the row's address.
+expect "^browser: page [0-9]* back 0 forward 0 loading 0 $pull/9\$" \
+  "⌘-click on a row of the card didn't open it in a tab"
+behind=$(grep "^browser: page [0-9]* back 0 forward 0 loading 0 $pull/9\$" "$log" | tail -1 | cut -d' ' -f3)
+[ "$behind" != "$p" ] || fail "⌘-click on a row of the card opened it in the pinned tab, not a tab behind"
 none_since "^browser: selected $p" || fail "⌘-click on a row of the card showed the pinned tab"
+none_since "^browser: selected $behind\$" || fail "⌘-click on a row of the card showed the tab it opened"
 # ⌥-click: beside the page, with the tab shown kept.
 recent_row "$p" 0 alt
 expect '^browser: command recent-beside via hover card$' "⌥-click on a row of the card didn't open it beside the page"
