@@ -50,8 +50,8 @@ pub struct Request {
     pub what: String,
 }
 
-/// What a change does, as the browser knows it from the method alone, word for word: it never
-/// reads a meaning into the path or the body.
+/// What a change does, as the browser knows it from the method and its overrides, word for word:
+/// it never reads a meaning into the path or the body.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Does {
     Sends,
@@ -89,12 +89,21 @@ impl Does {
 }
 
 impl Request {
-    /// What it does, from its method, or the one an override header names.
+    /// What it does, the stronger of the method sent and every override header's, as a server may
+    /// take either: it deletes if any says DELETE, sends only when the method is POST and every
+    /// override says POST too, and changes something for anything else, a method the browser
+    /// doesn't know included.
     pub fn kind(&self) -> Does {
-        match self.does.as_str() {
-            "DELETE" => Does::Deletes,
-            "PUT" | "PATCH" => Does::Changes,
-            _ => Does::Sends,
+        let says = std::iter::once(self.method.clone()).chain(
+            (self.headers.iter())
+                .filter(|(name, _)| OVERRIDES.iter().any(|each| name.eq_ignore_ascii_case(each)))
+                .map(|(_, value)| value.trim().to_ascii_uppercase()),
+        );
+        let says: Vec<String> = says.collect();
+        match () {
+            _ if says.iter().any(|each| each == "DELETE") => Does::Deletes,
+            _ if says.iter().all(|each| each == "POST") => Does::Sends,
+            _ => Does::Changes,
         }
     }
 
@@ -1171,6 +1180,66 @@ mod tests {
         assert_eq!(plain.target(), "POST /a");
         let same = one("DELETE", json!({ "X-HTTP-Method": "delete" }));
         assert_eq!(same.target(), "DELETE /a");
+    }
+
+    /// What the card says a change does is the stronger of the method sent and every override, as
+    /// a server may take either: a delete if any says DELETE, data to send only when all say POST,
+    /// and a change for anything else, a method the browser doesn't know included.
+    #[test]
+    fn a_change_is_the_strongest_its_method_and_overrides_say() {
+        let one = |method: &str, headers: Value| {
+            let asked = json!([{ "method": method, "path": "/a", "headers": headers,
+                                 "what": "Do it." }]);
+            parsed(asked).unwrap().remove(0).kind()
+        };
+        let none = json!({});
+        assert_eq!(one("POST", none.clone()), Does::Sends);
+        assert_eq!(one("DELETE", none.clone()), Does::Deletes);
+        for method in [
+            "PUT", "PATCH", "MERGE", "PURGE", "MKCOL", "COPY", "MOVE", "FROB",
+        ] {
+            assert_eq!(one(method, none.clone()), Does::Changes, "{method}");
+        }
+        for name in [
+            "X-HTTP-Method-Override",
+            "X-HTTP-Method",
+            "X-Method-Override",
+        ] {
+            assert_eq!(one("POST", json!({ name: "post" })), Does::Sends, "{name}");
+            for method in ["GET", "POST", "PUT", "DELETE", "MERGE"] {
+                assert_eq!(
+                    one(method, json!({ name: "DELETE" })),
+                    Does::Deletes,
+                    "{method} {name}"
+                );
+            }
+            assert_eq!(
+                one("DELETE", json!({ name: "GET" })),
+                Does::Deletes,
+                "{name}"
+            );
+            for (method, says) in [
+                ("POST", "GET"),
+                ("POST", "PUT"),
+                ("POST", "MERGE"),
+                ("POST", "FROB"),
+                ("POST", ""),
+                ("POST", "POST, DELETE"),
+                ("PUT", "POST"),
+                ("GET", "POST"),
+                ("GET", "PATCH"),
+            ] {
+                assert_eq!(
+                    one(method, json!({ name: says })),
+                    Does::Changes,
+                    "{method} {name}: {says}"
+                );
+            }
+        }
+        let both = json!({ "X-HTTP-Method": "POST", "X-Method-Override": "DELETE" });
+        assert_eq!(one("POST", both), Does::Deletes);
+        let both = json!({ "X-HTTP-Method": "POST", "X-Method-Override": "PUT" });
+        assert_eq!(one("POST", both), Does::Changes);
     }
 
     /// A write whose override says it's a read asks, so it needs the agent's sentence as any change

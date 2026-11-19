@@ -6,8 +6,8 @@
 //! handoff asks the same way: the agent needs the user in a tab, which Show Tab shows and Hand Back
 //! gives back. So does an agent asking for a tab the user took over: Keep, or Hand Back. An agent's
 //! HTTP requests that may change something ask each time (#3548): each change in the agent's own
-//! words, marked as its, over what the browser knows from its method alone, so a delete reads as
-//! one whatever the words say; the whole request one press away; Deny, or Allow.
+//! words, marked as its, over what the browser knows from its method and overrides, so a delete
+//! reads as one whatever the words say; the whole request one press away; Deny, or Allow.
 
 use std::rc::Rc;
 

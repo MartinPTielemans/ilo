@@ -4110,7 +4110,7 @@ mod requests {
             [(
                 "POST as GET /api/items".into(),
                 "POST",
-                request::Does::Sends
+                request::Does::Changes
             )]
         );
         agents.update(cx, |agents, cx| {

@@ -2063,10 +2063,11 @@ SEE
   expect '^browser: settings tab General$' "a click on General didn't show its section"
   send key w cmd
   expect '^browser: settings hidden$' "⌘W didn't hide Settings"
-  # A POST whose override header says GET asks too, as a server may take either, Deny sends it
-  # nowhere, and Settings › Agents names it by the method sent.
+  # A POST whose override header says GET asks too, as a server may take either, its card saying it
+  # changes something, the stronger of the two, Deny sends it nowhere, and Settings › Agents names
+  # it by the method sent.
   oats='{"method":"POST","path":"/api/items","headers":{"X-HTTP-Method-Override":"GET"},"body":{"title":"Oats"},"what":"Add Oats to the list."}'
-  change Dismiss 1 "$oats" '“Add Oats to the list.” Sends data to localhost'
+  change Dismiss 1 "$oats" '“Add Oats to the list.” Changes something on localhost'
   [ "$changed" = "error: The user said no: you can't make a change on localhost. Don't try again." ] ||
     fail "the denied overridden POST answered: $changed"
   grep -q 'Oats' "$out/site.log" && fail "the denied overridden POST reached the site"
