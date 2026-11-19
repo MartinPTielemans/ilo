@@ -57,12 +57,25 @@ done
 DBUS_SESSION_BUS_ADDRESS=$session busctl --user set-property org.a11y.Bus /org/a11y/bus \
   org.a11y.Status IsEnabled b true || fail "AT-SPI's bus didn't turn on"
 
-# Orca with settings of its own, its whole debug log in the run's folder.
+# Orca with settings of its own, its whole debug log in the run's folder. Orca opens that log
+# block-buffered, and what was still in the buffer when it was stopped never reached the file
+# (44431039438's ended before the onboarding's first step), so its open gives the log line
+# buffering.
 orca_log="$out/orca-debug.log"
 rm -rf "$out/orca-prefs" "$orca_log"
 mkdir -p "$out/orca-prefs"
-DBUS_SESSION_BUS_ADDRESS=$session AT_SPI_BUS_ADDRESS=$a11y \
-  "$orca" -u "$out/orca-prefs" --debug-file "$orca_log" > "$out/orca.log" 2>&1 &
+DBUS_SESSION_BUS_ADDRESS=$session AT_SPI_BUS_ADDRESS=$a11y python3 -I -c '
+import builtins, runpy, sys
+opened = builtins.open
+def line_buffered(file, mode="r", *args, **kwargs):
+    if file == sys.argv[-1] and "w" in mode:
+        return opened(file, mode, 1)
+    return opened(file, mode, *args, **kwargs)
+builtins.open = line_buffered
+path = sys.argv[1]
+sys.argv = [path] + sys.argv[2:]
+runpy.run_path(path, run_name="__main__")
+' "$orca" -u "$out/orca-prefs" --debug-file "$orca_log" > "$out/orca.log" 2>&1 &
 orca_pid=$!
 orca_quit() {
   [ -n "${orca_pid:-}" ] || return 0
