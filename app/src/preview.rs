@@ -1386,9 +1386,10 @@ impl Browser for Fake {
         self.later(cx, move |shell, cx| shell.set_cast(tab, None, cx));
     }
 
-    // Safari's engine is the Mac's alone, so elsewhere the note offers what each system's does.
+    // Safari's engine is the Mac's alone, so elsewhere the note offers what each system's does. A
+    // note only the Mac's engine gives (preview_moves) draws as on the Mac anywhere.
     fn can_use_system_engine(&self) -> bool {
-        cfg!(target_os = "macos")
+        cfg!(target_os = "macos") || preview_moves().is_some()
     }
 
     // PREVIEW_DRM=default draws the note as where ilo is the system's default browser.
@@ -1415,6 +1416,17 @@ impl Browser for Fake {
                 ..shell.page(tab)
             };
             shell.set_page(tab, page, cx);
+        });
+    }
+
+    fn leave_system_engine(&self, tab: u64, cx: &mut App) {
+        self.later(cx, move |shell, cx| {
+            let page = Page {
+                system_engine: false,
+                ..shell.page(tab)
+            };
+            shell.set_page(tab, page, cx);
+            shell.set_media_unsupported(tab, "", cx);
         });
     }
 
@@ -3129,8 +3141,19 @@ fn main() {
                         shell.set_page(tab, page, cx);
                     }
                     // PREVIEW_DRM=1 has the first tab's page ask for video ilo can't play, so its
-                    // note shows, offering what this system's does (#2468).
-                    if std::env::var_os("PREVIEW_DRM").is_some() {
+                    // note shows, offering what this system's does (#2468). =moved,
+                    // moved-ad-blocking, typed or capturing shows the note the core gives on a press
+                    // of play instead, the moved ones in Safari's engine.
+                    if let Some(note) = preview_moves() {
+                        if note.starts_with("moved") {
+                            let page = Page {
+                                system_engine: true,
+                                ..shell.page(1)
+                            };
+                            shell.set_page(1, page, cx);
+                        }
+                        shell.set_media_unsupported(1, note, cx);
+                    } else if std::env::var_os("PREVIEW_DRM").is_some() {
                         shell.set_media_unsupported(1, "com.widevine.alpha", cx);
                     }
                     // PREVIEW_CHOOSER=serial, hid, usb, bluetooth, stopped, none, off or denied has the
@@ -3969,6 +3992,14 @@ thread_local! {
 /// then a failed ask; loading never answers.
 fn preview_recent() -> Option<String> {
     std::env::var("PREVIEW_RECENT").ok()
+}
+
+/// PREVIEW_DRM's note of a press of play on the Mac (drm_note), if it names one.
+fn preview_moves() -> Option<&'static str> {
+    let drm = std::env::var("PREVIEW_DRM").ok()?;
+    ["moved", "moved-ad-blocking", "typed", "capturing"]
+        .into_iter()
+        .find(|note| *note == drm)
 }
 
 fn recent_answers(state: &str) -> Vec<browser::recent::Answer> {
