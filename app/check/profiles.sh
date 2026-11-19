@@ -299,8 +299,9 @@ if [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 1
   second=$(grep '^browser: spaces' "$log" | tail -1 | cut -d' ' -f4)
   default=$(sed -n 's/^browser: added profile \([0-9]*\) Default$/\1/p' "$log")
   work=$(sed -n 's/^browser: added profile \([0-9]*\) Profile 2$/\1/p' "$log")
-  grep -q "^browser: profiled space $first $default\$" "$log" &&
-    grep -q "^browser: profiled space $second $work\$" "$log" ||
+  # Each Space's profile is logged after the Spaces are listed.
+  await "^browser: profiled space $first $default\$" &&
+    await "^browser: profiled space $second $work\$" ||
     fail "the Spaces didn't come back in the first profile and the second"
   # Opens $1 from ⌘T's bar in the Space shown, and sets $tab to its tab, whose title is $2.
   icon_page() {
