@@ -1961,10 +1961,11 @@ else
     fail "Make default didn't make the run's site search Chrome's default: its menu stayed enabled"
   # Settings › General's Search engine shows it chosen, among the engines it offers.
   settings_general
-  # The row is named by the profile's number, which in_sight takes as it is, not as a pattern.
+  # The row is named by the profile's number, which in_sight takes as it is, not as a pattern. Not
+  # $profile: the runs share one shell, and lib.sh's menus read that for the runs after this one.
   drawn 'search engine [0-9]*' > /dev/null || fail "Settings didn't draw the profile's Search engine"
-  profile=$(sed -n 's/^browser: settings search engine \([0-9]*\) at .*/\1/p' "$log" | tail -1)
-  in_sight "search engine $profile" ||
+  engine_profile=$(sed -n 's/^browser: settings search engine \([0-9]*\) at .*/\1/p' "$log" | tail -1)
+  in_sight "search engine $engine_profile" ||
     fail "Settings drew the profile's Search engine, but not in the card's sight once scrolled to it"
   post clickkey $at
   expect "^browser: menu shown .*$engine (checked)" \
@@ -2012,11 +2013,11 @@ else
   # And back: Search engine picks DuckDuckGo again, which the next search goes to. Its item is
   # named as the default, as Page zoom's 100% is.
   settings_general
-  in_sight "search engine $profile" || fail "Settings didn't draw the profile's Search engine again"
+  in_sight "search engine $engine_profile" || fail "Settings didn't draw the profile's Search engine again"
   post clickkey $at
   expect "^browser: menu shown .*$engine (checked)" "the profile's Search engine didn't keep the run's site search"
   send choose "DuckDuckGo (default)"
-  expect "^browser: profile $profile searches with DuckDuckGo\$" "choosing DuckDuckGo didn't set the profile's engine"
+  expect "^browser: profile $engine_profile searches with DuckDuckGo\$" "choosing DuckDuckGo didn't set the profile's engine"
   send key w cmd
   expect '^browser: settings hidden$' "⌘W didn't hide Settings"
   send key t cmd
@@ -2071,12 +2072,12 @@ requestAnimationFrame(() => setTimeout(() => document.title = "google " +
   engines_listed() {
     grep '^browser: menu shown ' "$log" | tail -1 | sed 's/^browser: menu shown //'
   }
-  # Opens Settings' General and the profile's Search engine there, setting $profile.
+  # Opens Settings' General and the profile's Search engine there, setting $engine_profile.
   engines_menu() {
     settings_general
     drawn 'search engine [0-9]*' > /dev/null || fail "Google: Settings didn't draw the profile's Search engine"
-    profile=$(sed -n 's/^browser: settings search engine \([0-9]*\) at .*/\1/p' "$log" | tail -1)
-    in_sight "search engine $profile" ||
+    engine_profile=$(sed -n 's/^browser: settings search engine \([0-9]*\) at .*/\1/p' "$log" | tail -1)
+    in_sight "search engine $engine_profile" ||
       fail "Google: Settings drew the profile's Search engine, but not in the card's sight once scrolled to it"
     post clickkey $at
     expect '^browser: menu shown ' "Google: the profile's Search engine didn't open its engines"
@@ -2140,7 +2141,7 @@ requestAnimationFrame(() => setTimeout(() => document.title = "google " +
   esac
   ../tools/window-screenshot.sh "$pid" "$out/search-engine-google.png" || fail "no window to capture"
   send choose Google
-  expect "^browser: profile $profile searches with Google\$" "Google: choosing Google didn't set the profile's engine"
+  expect "^browser: profile $engine_profile searches with Google\$" "Google: choosing Google didn't set the profile's engine"
   send key w cmd
   expect '^browser: settings hidden$' "Google: ⌘W didn't hide Settings"
   send key t cmd
@@ -2180,7 +2181,7 @@ requestAnimationFrame(() => setTimeout(() => document.title = "google " +
     engines_menu
     expect "^browser: menu shown .*, Google (checked)\$" "Google: the relaunch didn't keep Google picked: $(engines_listed)"
     send choose "DuckDuckGo (default)"
-    expect "^browser: profile $profile searches with DuckDuckGo\$" "Google: choosing DuckDuckGo didn't set the profile's engine"
+    expect "^browser: profile $engine_profile searches with DuckDuckGo\$" "Google: choosing DuckDuckGo didn't set the profile's engine"
     send key w cmd
     expect '^browser: settings hidden$' "Google: ⌘W didn't hide Settings"
     bar_command site-search-settings "Site Search Settings" "site search"
