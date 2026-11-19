@@ -104,9 +104,10 @@ function restore(from, to) {
 
 // --- Saving ---
 
-let saveTimer = 0, saving = null, again = false;
+let saveTimer = 0, saving = null, again = false, pending = false;
 function changed() {
   if (!writable) return;
+  pending = true;
   clearTimeout(saveTimer);
   saveTimer = setTimeout(save, SAVE_AFTER);
 }
@@ -118,6 +119,7 @@ async function save() {
     again = true;
     return saving.then((done) => done !== false);
   }
+  pending = false;
   const bytes = new TextEncoder().encode(JSON.stringify({ version: 1, camera, cards }));
   if (bytes.byteLength > MAX_BOARD) {
     unsaved("This Board is too large to save. What's here stays on screen: remove some notes or ink, and it saves again.");
@@ -973,6 +975,9 @@ async function open_() {
   offerFirstNote();
 }
 
+// Opening the bar or the Library takes the keyboard from the page, so what's done there with the
+// Board, a Duplicate among it, finds its last change saved rather than a second old.
+addEventListener("blur", () => { if (pending) save(); });
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden" && writable) save().then(saveThumb);
   // What came while its tab wasn't showing lands now, at the centre of the view shown.
