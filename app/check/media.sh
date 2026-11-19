@@ -1349,7 +1349,8 @@ v.onplaying = () => document.title = "playing";
 v.onenterpictureinpicture = () => document.title = "floating";
 onclick = () => { audio.resume(); v.play(); };
 navigator.mediaSession.setActionHandler("enterpictureinpicture", () => v.requestPictureInPicture());
-document.title = "ready";
+// Ready once it has drawn: a click on a page before its first frame can be lost (#3512).
+requestAnimationFrame(() => setTimeout(() => document.title = "ready"));
 </script>' > "$out/site/switch.html"
   # Windows' path, D:\a\…, is file:///D:/a/….
   switch_file=$(native_path "$PWD/$out/site/switch.html" | sed 's|\\|/|g')
