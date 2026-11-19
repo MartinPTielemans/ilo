@@ -549,9 +549,11 @@ fi
 printf '%s' '<!doctype html><title>Alerts</title><script>
 addEventListener("keydown", event => { if (event.key == "a") alert("closing") })</script>' \
   > "$out/site/alerts.html"
-# The key a in the page of tab $1, shown, asks with its alert. $2 names the tab.
+# The key a in the page of tab $1, shown, asks with its alert. $2 names the tab. The click is on
+# the page at 400 across, as the two-window step can leave this window 610 wide, where 600 is the
+# card's edge.
 alert_up() {
-  send click $page_point
+  send click 400 300
   send key a
   expect "^browser: page $1 dialog Alert .* says\$" "the key a in $2's page didn't ask with its alert"
   expect '^browser: dialog settled$' "$2's alert didn't settle"
