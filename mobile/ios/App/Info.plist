@@ -33,6 +33,17 @@
 				<string>https</string>
 			</array>
 		</dict>
+		<!-- What "Open in ilo" asks iOS to open, to bring ilo forward. It carries no address. -->
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleURLName</key>
+			<string>Open in ilo</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>ilo</string>
+			</array>
+		</dict>
 	</array>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>

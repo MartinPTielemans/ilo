@@ -90,7 +90,11 @@ struct FileSheet: UIViewControllerRepresentable {
   let file: URL
 
   func makeUIViewController(context: Context) -> UIActivityViewController {
-    UIActivityViewController(activityItems: [file], applicationActivities: nil)
+    let sheet = UIActivityViewController(activityItems: [file], applicationActivities: nil)
+    // iOS lists "Open in ilo" here too. The page is in ilo already, and a private tab's link
+    // would come back as an ordinary tab, so what the action left from this sheet is let go.
+    sheet.completionWithItemsHandler = { _, _, _, _ in _ = PendingLinks.shared?.take() }
+    return sheet
   }
 
   func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}

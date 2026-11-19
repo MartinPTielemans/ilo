@@ -25,7 +25,7 @@ It's native Swift in `mobile/ios`, and paths below start there. This file adds t
 2. **Showing a secret.** Never read, print or log a password, cookie, token, recovery word, username or decrypted account data, outside a test's own made-up data: a log outlives the run that wrote it. A saved password is filled only on the user's tap, after Face ID, into a page whose origin matches exactly.
 3. **Opening a simulator on the owner's screen.** Drive one only through T3 Code's device tools: `device_open`, then the `agent-device` command it returns, which the owner watches in the Device panel. Never Simulator.app or Xcode's window; `simctl` is for installs and logs.
 4. **Calling it smooth.** A simulator proves nothing about frame rate. Say "looks right in frames", and leave "smooth" to the owner's phone.
-5. **Apple's side.** Agreements, the export declaration, the default-browser entitlement and App Store Connect are the owner's. Stop at each and ask. `DEFAULT_BROWSER_ENTITLEMENT` in `project.yml` stays `NO` until Apple grants it, or signing fails.
+5. **Apple's side.** Agreements, the export declaration, the default-browser entitlement and App Store Connect are the owner's. Stop at each and ask. `DEFAULT_BROWSER_ENTITLEMENT` in `project.yml` stays `NO` until Apple grants it, or signing fails. The share sheet's "Open in ilo" is an App ID of its own, `app.ilo.browser.ios.open`, in the App Group `group.app.ilo.browser.ios` with the app: a signed build needs both in the owner's Apple account, and another target or group is theirs to say yes to.
 
 ## Designing for the phone
 

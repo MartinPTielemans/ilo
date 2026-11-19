@@ -30,6 +30,7 @@ targets:
         buildPhase: resources
     dependencies:
       - package: IloSync
+      - target: OpenAction
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.ilo.browser.ios
@@ -43,7 +44,25 @@ targets:
         DEFAULT_BROWSER_ENTITLEMENT: NO
         CODE_SIGN_ENTITLEMENTS: $(DEFAULT_BROWSER_ENTITLEMENTS_$(DEFAULT_BROWSER_ENTITLEMENT))
         DEFAULT_BROWSER_ENTITLEMENTS_YES: App/System/DefaultBrowser.entitlements
-        DEFAULT_BROWSER_ENTITLEMENTS_NO: ""
+        DEFAULT_BROWSER_ENTITLEMENTS_NO: App/System/AppGroup.entitlements
+  # "Open in ilo" in the system's share sheet: an action, which leaves the address for the app in
+  # the App Group's folder and asks iOS to bring the app forward (App/System/PendingLinks.swift).
+  OpenAction:
+    type: app-extension
+    platform: iOS
+    sources:
+      - OpenAction
+      - App/System/PendingLinks.swift
+      # The app's ground and green, for the action's answer.
+      - App/Assets.xcassets
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.ilo.browser.ios.open
+        INFOPLIST_FILE: OpenAction/Info.plist
+        TARGETED_DEVICE_FAMILY: "1"
+        # The action's glyph: ilo's mark, which iOS draws from its shape alone, in its own colour.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_ENTITLEMENTS: App/System/AppGroup.entitlements
   iloTests:
     type: bundle.unit-test
     platform: iOS
