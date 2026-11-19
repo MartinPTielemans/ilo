@@ -81,6 +81,7 @@
 #include "browser_core/sync.h"
 #include "browser_core/system_engine.h"
 #include "browser_core/tab.h"
+#include "browser_core/tab_follow_rule.h"
 #include "browser_core/tab_recent.h"
 #include "browser_core/typed_http.h"
 #include "browser_core/webrtc.h"
@@ -179,9 +180,9 @@ Profile* ProfileOf(const browser_core::Window& window) {
                                                      : profile;
 }
 
-// Loads |url| in the tab, as Chrome loads what's typed in its location bar or a bookmark, giving a
-// tab without its page one first. With |typed_http| it's an http address the user wrote out, which
-// loads as written (TypedHttp).
+// Loads |url| in the tab, as Chrome loads what's typed in its location bar or a bookmark, or with
+// |transition| a link a site gave (tab_follow), giving a tab without its page one first. With
+// |typed_http| it's an http address the user wrote out, which loads as written (TypedHttp).
 void LoadInTab(bc_id id, const GURL& url, ui::PageTransition transition, bool typed_http) {
   content::WebContents* contents = browser_core::Window::PageOf(id);
   tabs::TabInterface* tab = contents ? tabs::TabInterface::MaybeGetFromContents(contents) : nullptr;
@@ -190,7 +191,8 @@ void LoadInTab(bc_id id, const GURL& url, ui::PageTransition transition, bool ty
   }
   // Not a link: the user starts something else in the tab, so closing a tab no longer leads back
   // to where it came from, as Chrome's tab strip forgets on a typed or bookmark navigation.
-  if (browser_core::Space* space = browser_core::Space::Holding(id)) {
+  browser_core::Space* space = browser_core::Space::Holding(id);
+  if (space && !ui::PageTransitionCoreTypeIs(transition, ui::PAGE_TRANSITION_LINK)) {
     space->ForgetOpeners();
   }
   browser_core::Tab::FromWebContents(contents)->Load(url, [&] {
@@ -200,6 +202,17 @@ void LoadInTab(bc_id id, const GURL& url, ui::PageTransition transition, bool ty
     params.url_typed_with_http_scheme = typed_http;
     Navigate(&params);
   });
+}
+
+// Loads |url| in the tab itself as a link, a pinned tab going away from its pinned URL, if it may
+// load that way (tab_follow::MayLoad), and returns whether it does. The UI's bc_tab_follow and
+// an agent's bc_agent_navigate both load through it; only their permission differs.
+bool FollowInTab(bc_id id, const GURL& url) {
+  if (!browser_core::tab_follow::MayLoad(url) || !browser_core::Window::PageOf(id)) {
+    return false;
+  }
+  LoadInTab(id, url, browser_core::tab_follow::kTransition, /*typed_http=*/false);
+  return true;
 }
 
 // The loaded profile |profile_id| names, or null.
@@ -743,8 +756,7 @@ bool bc_agent_navigate(const char* agent, bc_id tab, const char* url) {
       !target.SchemeIsHTTPOrHTTPS() || !browser_core::Window::PageOf(tab)) {
     return false;
   }
-  LoadInTab(tab, target, ui::PAGE_TRANSITION_TYPED, /*typed_http=*/false);
-  return true;
+  return FollowInTab(tab, target);
 }
 
 size_t bc_agent_list_tabs(const char* agent, bc_id* tabs, size_t capacity) {
@@ -2087,6 +2099,10 @@ void bc_tab_navigate(bc_id id, const char* url) {
 
 void bc_tab_navigate_typed(bc_id id, const char* url, const char* typed) {
   NavigateTyped(id, url, typed);
+}
+
+void bc_tab_follow(bc_id id, const char* url) {
+  FollowInTab(id, GURL(url ? url : ""));
 }
 
 void bc_tab_back_to_pinned_url(bc_id id) {
