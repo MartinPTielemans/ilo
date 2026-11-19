@@ -1441,6 +1441,10 @@ fi
 webkit_player=
 if [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   forget_engine_sites
+  # Which WebKit the page runs in, so a red here says which one it was.
+  webkit=$(plutil -extract CFBundleVersion raw \
+    /System/Library/Frameworks/WebKit.framework/Resources/Info.plist 2> /dev/null) || webkit=unknown
+  echo "note: Safari's engine is WebKit $webkit on macOS $(sw_vers -productVersion)"
   log="$out/media-safari.log"
   step=0
   rm -f "$saved" "$launch_frame"
