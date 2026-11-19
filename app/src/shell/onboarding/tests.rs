@@ -762,6 +762,8 @@ fn at_three_switches(
 fn tab_and_space_turn_each_opt_in_switch(cx: &mut TestAppContext) {
     use crate::settings_rows::spoken::{press, stops};
     let (shell, cx, host) = at_three_switches(cx);
+    // Round from the window, as the step's first switch has the keyboard as it comes.
+    cx.update(|window, cx| window.blur(cx));
     let names: Vec<String> = stops(cx).into_iter().map(|(_, name, _)| name).collect();
     assert_eq!(
         names,
@@ -802,8 +804,9 @@ fn tab_and_space_turn_each_opt_in_switch(cx: &mut TestAppContext) {
     );
 }
 
-/// With a switch the keyboard is on, ↩ is still Continue and Esc still Skip: neither turns it,
-/// and the count is set as the step is left, as it stands (#2978).
+/// With the switch the keyboard is on as the step comes, the first, ↩ is still Continue and Esc
+/// still Skip: neither turns it, and the count is set as the step is left, as it stands (#2978,
+/// #3498).
 #[gpui::test]
 fn return_and_escape_leave_from_a_focused_switch(cx: &mut TestAppContext) {
     use crate::settings_rows::spoken::press;
@@ -814,7 +817,6 @@ fn return_and_escape_leave_from_a_focused_switch(cx: &mut TestAppContext) {
         ("escape", false),
     ] {
         let (shell, cx, host) = at_three_switches(cx);
-        cx.simulate_keystrokes("tab");
         if turned {
             press("space", cx);
         }
@@ -839,8 +841,9 @@ fn return_and_escape_leave_from_a_focused_switch(cx: &mut TestAppContext) {
     }
 }
 
-/// The keyboard left on a switch goes back to the window as the flow ends, so the shell's own keys,
-/// ⌘T among them, still reach their commands once the switches are gone.
+/// The keyboard left on a switch, the first as the step came or another ⇥ went to, goes back to the
+/// window as the flow ends, so the shell's own keys, ⌘T among them, still reach their commands once
+/// the switches are gone.
 #[gpui::test]
 fn the_window_keeps_its_keys_after_a_switch_had_the_keyboard(cx: &mut TestAppContext) {
     use crate::shell::commands::Run;
@@ -850,18 +853,22 @@ fn the_window_keeps_its_keys_after_a_switch_had_the_keyboard(cx: &mut TestAppCon
         cx.bind_keys(crate::shell::keys::key_bindings(cx));
         cx.on_action(move |run: &Run, _| runs.borrow_mut().push(run.0));
     });
-    let (shell, cx, _) = at_three_switches(cx);
-    cx.simulate_keystrokes("tab");
-    cx.simulate_keystrokes("escape");
-    later(&shell, cx, END_FADE);
-    assert_eq!(step(&shell, cx), None);
-    ran.borrow_mut().clear();
-    cx.simulate_keystrokes("cmd-t");
-    assert_eq!(
-        *ran.borrow(),
-        [Command::NewTab],
-        "⌘T after the flow, with a switch the last to have the keyboard"
-    );
+    for tabbed in [false, true] {
+        let (shell, cx, _) = at_three_switches(cx);
+        if tabbed {
+            cx.simulate_keystrokes("tab");
+        }
+        cx.simulate_keystrokes("escape");
+        later(&shell, cx, END_FADE);
+        assert_eq!(step(&shell, cx), None);
+        ran.borrow_mut().clear();
+        cx.simulate_keystrokes("cmd-t");
+        assert_eq!(
+            *ran.borrow(),
+            [Command::NewTab],
+            "⌘T after the flow, with a switch the last to have the keyboard, tabbed {tabbed}"
+        );
+    }
 }
 
 /// A build that names no server for the count doesn't offer it.
@@ -1603,19 +1610,22 @@ fn press(key: &'static str, cx: &mut VisualTestContext) {
     cx.run_until_parked();
 }
 
-/// The keyboard rests on each step as it comes, so a screen reader, which follows it, reads the
-/// step by its title. ⇥ goes along the step's stops, each read by its name, the colours' saying
+/// The keyboard comes with each step, so a screen reader, which follows it, reads the step by its
+/// title on the way in. ⇥ goes along the step's stops, each read by its name, the colours' saying
 /// the one picked as the arrows move, and ↩ on Skip is Skip's press alone (#3151).
 #[gpui::test]
 fn a_screen_reader_follows_the_keyboard_through_each_step(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
     cx.simulate_a11y_activation();
     started(&shell, cx);
-    let dialog = |name: &str| Some((Role::Dialog, name.to_string()));
-    assert_eq!(keyed(cx), dialog(env!("APP_NAME")), "the intro");
+    assert_eq!(
+        keyed(cx),
+        Some((Role::Dialog, env!("APP_NAME").into())),
+        "the intro"
+    );
 
     skip_to(&shell, cx, Step::DefaultBrowser);
-    cx.simulate_keystrokes("tab tab");
+    cx.simulate_keystrokes("tab");
     assert_eq!(keyed(cx), Some((Role::Button, "Skip".into())));
     press("enter", cx);
     assert_eq!(
@@ -1625,11 +1635,9 @@ fn a_screen_reader_follows_the_keyboard_through_each_step(cx: &mut TestAppContex
     );
     assert_eq!(
         keyed(cx),
-        dialog("Pick a colour for your first Space."),
+        Some((Role::RadioGroup, "Colour".into())),
         "the step it went on to has the keyboard"
     );
-    cx.simulate_keystrokes("tab");
-    assert_eq!(keyed(cx), Some((Role::RadioGroup, "Colour".into())));
     cx.simulate_keystrokes("right");
     let first = swatch_name(SWATCHES[0]).to_string();
     assert_eq!(
@@ -1650,6 +1658,89 @@ fn a_screen_reader_follows_the_keyboard_through_each_step(cx: &mut TestAppContex
         .iter()
         .any(|call| call.starts_with("space color 1 "));
     assert!(!colored, "as Skip, keeping the Space's colour");
+}
+
+/// Each step's keyboard rests on its first control as it comes, never on the step's dialog, whose
+/// title and line a screen reader says on the way in. Orca drops the arrival of a step left by a
+/// key while its place is a dialog (#3498). ↩ and Esc there do what they do anywhere in the step:
+/// ↩ is the step's button, pressed once on its way down and not again on its way up, and Esc skips.
+#[gpui::test]
+fn each_step_rests_on_its_first_control(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    with_engines(&host);
+    host.sync_server.set(true);
+    host.daily_count.set(Some(false));
+    host.crash_reports.set(Some(false));
+    synced(cx, Status::SignedOut, "https://sync.example.org");
+    cx.simulate_a11y_activation();
+    let button = |name: &str| Some((Role::Button, name.to_string()));
+    let signing = |host: &Recorder| {
+        let calls = account_calls(host);
+        calls.iter().filter(|call| *call == "sign in").count()
+    };
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::DefaultBrowser);
+    assert_eq!(keyed(cx), button("Make Default"));
+    host.take();
+    press("enter", cx);
+    assert_eq!(step(&shell, cx), Some(Step::SearchEngine), "↩ went on");
+    let asked = host.take();
+    let asked = asked.iter().filter(|call| *call == "make default browser");
+    assert_eq!(asked.count(), 1, "↩ on Make Default asked the system once");
+
+    assert_eq!(
+        keyed(cx),
+        Some((Role::RadioButton, "DuckDuckGo".into())),
+        "the engines, read by the one picked"
+    );
+    press("escape", cx);
+    assert_eq!(step(&shell, cx), Some(Step::Color));
+    assert_eq!(keyed(cx), Some((Role::RadioGroup, "Colour".into())));
+    press("enter", cx);
+    assert_eq!(
+        step(&shell, cx),
+        Some(Step::Account),
+        "↩ on the colours went on"
+    );
+
+    assert_eq!(keyed(cx), button("Sign In"));
+    signing(&host);
+    press("escape", cx);
+    assert_eq!(step(&shell, cx), Some(Step::OptIns));
+    assert_eq!(signing(&host), 0, "Esc on Sign In skipped it");
+    assert_eq!(
+        keyed(cx),
+        Some((Role::Switch, "Send a daily usage count".into()))
+    );
+
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::Account);
+    signing(&host);
+    press("enter", cx);
+    assert_eq!(signing(&host), 1, "↩ on Sign In signed in once");
+}
+
+/// At the import the keyboard rests on its view's button, and ↩ presses it once: the list's
+/// press brings the browser's choices, and only the next imports it.
+#[gpui::test]
+fn return_at_the_import_presses_its_button_once(cx: &mut TestAppContext) {
+    use crate::import::tests::Browser;
+    let browser = Rc::new(Browser::new(None));
+    let (shell, cx, view) = importing_from(browser, cx);
+    cx.simulate_a11y_activation();
+    let guide = |cx: &mut VisualTestContext| view.read_with(cx, |view, _| view.guide());
+    let words = guide(cx).button.expect("the list's button");
+    assert_eq!(keyed(cx), Some((Role::Button, words)));
+    press("enter", cx);
+    let choices = guide(cx).title;
+    assert_ne!(choices, "Here it comes.", "↩ pressed it twice");
+    press("enter", cx);
+    assert_eq!(
+        guide(cx).title,
+        "Here it comes.",
+        "and its choices' imports"
+    );
+    assert_eq!(step(&shell, cx), Some(Step::Import));
 }
 
 /// A host offering three engines, DuckDuckGo the default and Google last, as the core lists them.
