@@ -481,7 +481,7 @@ struct PageSearch: View {
           .accessibilityAddTraits(.isButton)
           .overlay(alignment: .bottom) {
             // A new private tab's words ride over the field while the keyboard is up.
-            if inked, !tab.hasPage { PrivateWords().padding(.bottom, PrivateMark.overField) }
+            if inked, !tab.hasPage { PrivateWords(overField: true).padding(.bottom, PrivateMark.overField) }
           }
       }
       SearchBar(query: $query, site: $site, focused: $focused, selectsAll: true) {

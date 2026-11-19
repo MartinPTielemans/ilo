@@ -129,6 +129,21 @@ extension View {
     return find(in: window)
   }
 
+  /// Where what's read out under a name stands on the screen.
+  func read(_ name: String) -> CGRect? {
+    func find(in element: NSObject) -> CGRect? {
+      if element.accessibilityLabel?.hasPrefix(name) == true { return element.accessibilityFrame }
+      for child in element.accessibilityElements ?? [] {
+        if let child = child as? NSObject, let found = find(in: child) { return found }
+      }
+      for child in (element as? UIView)?.subviews ?? [] {
+        if let found = find(in: child) { return found }
+      }
+      return nil
+    }
+    return find(in: window)
+  }
+
   func close() {
     window.isHidden = true
     window.rootViewController = nil
@@ -456,5 +471,34 @@ private struct Turned<Content: View>: View {
     #expect(await eventually { tab.webView.bounds.width == Room.side.width })
     #expect(!tab.barHidden)
     #expect(browser.sheet == .actions)
+  }
+}
+
+/// A new private tab on a phone on its side.
+@Suite(.serialized, .timeLimit(.minutes(5))) @MainActor struct LandscapePrivateTests {
+  @Test func `a new private tab's words start where its open field does, on its side as upright`() async throws {
+    let browser = stageBrowser()
+    browser.openPrivate()
+    let tab = try #require(browser.page)
+    #expect(tab.isPrivate)
+    let stage = try Stage(browser) { PageSearch(tab: tab).privateChrome(true) }
+    defer { stage.close() }
+    #expect(await eventually { stage.first(UITextField.self)?.isFirstResponder == true })
+    let field = try #require(stage.first(UITextField.self))
+    /// Whether the words start their own distance in from the clear edge, no further in than
+    /// what's typed in the field under them, and are no wider than a phone upright holds.
+    func aligned(from edge: CGFloat) -> Bool {
+      guard let words = stage.read("Private tab"), words.width > 0 else { return false }
+      let typed = field.convert(field.bounds, to: stage.window)
+      return abs(words.minX - edge - PrivateMark.side) < 1 && words.minX <= typed.minX
+        && words.width <= Column.widest && words.maxY <= typed.minY
+    }
+    #expect(await eventually { aligned(from: Room.uprightEdges.leading) })
+
+    stage.turn(side: true)
+    #expect(await eventually { aligned(from: Room.sideEdges.leading) })
+
+    stage.turn(side: false)
+    #expect(await eventually { aligned(from: Room.uprightEdges.leading) })
   }
 }
