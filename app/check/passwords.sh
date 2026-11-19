@@ -406,8 +406,12 @@ expect "^browser: selected $tab\( in .*\)\{0,1\}\$" "⌘2 didn't show the login'
 if [ "$(uname)" = Darwin ]; then
   send menu Settings…
   expect '^browser: settings shown ' "Settings… didn't show Settings"
-  send clickkey $(drawn "toolbar Passwords")
-  expect '^browser: settings tab Passwords$' "a click on Passwords didn't show its section"
+  # Settings opens where it was left, which this run's steps before left at Passwords.
+  if [ "$(grep '^browser: settings shown ' "$log" | tail -1)" != "browser: settings shown Passwords" ]; then
+    settings_drew
+    send clickkey $(drawn "toolbar Passwords")
+    expect '^browser: settings tab Passwords$' "a click on Passwords didn't show its section"
+  fi
   settings_drew Passwords
   post clickkey $(drawn "manage passkeys")
   expect '^browser: manage passkeys [0-9]*$' "a click on Manage Passkeys… didn't run it"

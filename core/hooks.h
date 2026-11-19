@@ -325,8 +325,8 @@ extern bool (*g_browser_core_refuse_passkey)(content::WebContents* contents, boo
 extern bool (*g_browser_core_passkey_normal_wording)(content::WebContents* contents);
 
 // chrome/browser/webauthn/chrome_web_authentication_delegate.cc, on the Mac: the keychain access
-// group the Touch ID authenticator keeps passkeys in, or empty for Chromium's own, which no
-// signed app holds (engine/patches/mac/chromium-core-touch-id-keychain-group.patch).
+// group the Touch ID authenticator keeps passkeys in, or empty for the engine's own, which names
+// no team, so no signed app holds it (engine/patches/mac/chromium-core-touch-id-keychain-group.patch).
 extern std::string (*g_browser_core_touch_id_keychain_group)();
 
 // chrome/browser/ui/views/overlay/video_overlay_window_views.cc: a mouse, scroll or gesture event

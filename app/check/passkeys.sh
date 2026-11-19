@@ -215,8 +215,8 @@ if (location.search == "?platform") {
       "escape didn't close Chrome's passkey dialog and fail the page's request"
     # On the Mac, the Touch ID authenticator keeps passkeys on this Mac in the keychain access group
     # the app's signature holds for them, its keychain-access-groups entry ending in ".webauthn", and
-    # with none, as in a dev build, in Chromium's, which no signed app holds: it's unavailable, and
-    # says so with the group it expected (#2354). A tab with no virtual key asks, as the virtual key
+    # with none, as in a dev build, in the engine's own, which names no team, so no signed app holds
+    # it: it's unavailable, and says so with the group it expected (#2354). A tab with no virtual key asks, as the virtual key
     # answers for its own tab.
     said=
     if [ "$(uname)" = Darwin ]; then
@@ -234,10 +234,12 @@ if (location.search == "?platform") {
       unavailable='Touch ID authenticator unavailable because keychain-access-group entitlement is missing or incorrect. Expected value: '
       expected=$(grep -o "$unavailable.*" "$log" | tail -1 | sed "s/^$unavailable//" | tr -d '\r')
       if [ -z "$group" ]; then
-        [ "$expected" = .org.chromium.Chromium.webauthn ] ||
-          fail "with no keychain group for passkeys in its signature, the Touch ID authenticator" \
-            "didn't say it wanted Chromium's own, .org.chromium.Chromium.webauthn, but" \
-            "\"${expected:-nothing}\""
+        # The engine's branding's bundle id, after an empty team.
+        case $expected in
+          .?*.webauthn) ;;
+          *) fail "with no keychain group for passkeys in its signature, the Touch ID authenticator" \
+            "didn't say it wanted the engine's own, with no team, but \"${expected:-nothing}\"" ;;
+        esac
         [ "$platform" = false ] ||
           fail "with no keychain group for passkeys, the page heard the Mac has an authenticator"
       else
@@ -245,7 +247,7 @@ if (location.search == "?platform") {
           fail "signed with $group, the Touch ID authenticator still wanted $expected"
       fi
       send key w cmd
-      used="Chromium's own, .org.chromium.Chromium.webauthn"
+      used="the engine's own, $expected"
       [ -z "$group" ] || used=$group
       said="; asked on its own, the Mac's authenticator answered $platform, its keychain group $used"
     fi
