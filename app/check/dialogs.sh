@@ -16,8 +16,9 @@
 # does, and the next question asks again (#1362). On Windows and the Mac, with a second
 # window beside the first and the first in front, the pointer resting on a row of the second
 # shows its card over the second, and on a row of the first over the first (#1432).
-# A page out of sight whose alert waits for its tab is let go by the idle check once it looks 2 hours
-# unseen, and ilo goes on (#3549).
+# Closing a pinned tab from its row, by its − or a middle-click, or a Favorite by its tile's Close Tab,
+# while its page's alert is up unloads it, and ilo goes on. A page out of sight whose alert waits
+# for its tab is let go by the idle check once it looks 2 hours unseen, and ilo goes on (#3549).
 
 serve
 log="$out/dialogs.log"
@@ -542,6 +543,62 @@ if sway_xwayland; then
   send type ada
   answer return accept "prompt ada"
 fi
+# Closing a pinned tab or a Favorite from its row while its page's alert is up unloads it, its alert
+# with it, and ilo goes on (#3549): a pinned tab shown, by its −; a pinned tab whose alert another
+# tab took down, by a middle-click on its row; and a Favorite shown, by Close Tab in its tile's menu.
+printf '%s' '<!doctype html><title>Alerts</title><script>
+addEventListener("keydown", event => { if (event.key == "a") alert("closing") })</script>' \
+  > "$out/site/alerts.html"
+# The key a in the page of tab $1, shown, asks with its alert. $2 names the tab.
+alert_up() {
+  send click $page_point
+  send key a
+  expect "^browser: page $1 dialog Alert .* says\$" "the key a in $2's page didn't ask with its alert"
+  expect '^browser: dialog settled$' "$2's alert didn't settle"
+}
+open_from_bar "${site}alerts.html"
+held=$tab
+send key d cmd
+expect '^browser: command toggle-pin via page$' "⌘D with the page focused didn't reach the UI"
+expect "^browser: pinned $held\$" "⌘D didn't pin the alerts page"
+alert_up $held "the pinned tab"
+send move $(pinned_close 0)
+expect "^browser: hover tab $held close − " "the pinned tab's row didn't draw its − while its alert was up"
+send click $(pinned_close 0)
+expect '^browser: command close-tab via sidebar$' \
+  "a click on the − of the pinned tab whose alert was up didn't run Close Tab"
+# ilo quit here before #3541, with nothing saved.
+expect "^browser: page $held unloaded 1\$" "the − didn't unload the pinned tab whose alert was up"
+send click $(pinned_row 0)
+expect "^browser: selected $held\( in .*\)\{0,1\}\$" "a click on the unloaded pinned tab didn't show it"
+expect "^browser: page $held unloaded 0\$" "the unloaded pinned tab didn't load once shown"
+alert_up $held "the pinned tab loaded again"
+# The Today tab at the top, under the pinned row, takes the alert down.
+send click 100 $(($(row 0 | cut -d' ' -f2) + 41))
+expect '^browser: dialog withdrawn$' "the pinned tab's alert stayed up over another tab"
+send middleclick $(pinned_row 0)
+expect '^browser: command close-tab via sidebar$' \
+  "a middle-click on the pinned tab whose alert another tab took down didn't run Close Tab"
+expect "^browser: page $held unloaded 1\$" \
+  "a middle-click didn't unload the pinned tab whose alert another tab took down"
+open_from_bar "${site}alerts.html"
+favorite=$tab
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+send type favorite tab
+expect '^browser: command bar commands "favorite tab": Favorite Tab' \
+  "the command bar didn't find Favorite Tab"
+send key return
+expect '^browser: command add-to-favorites via command bar$' "Favorite Tab didn't run from the bar"
+expect "^browser: favorites $favorite\$" "Favorite Tab didn't make the alerts page a favorite"
+alert_up $favorite "the Favorite"
+# One favorite is one tile across the sidebar, 90 below the window's top (favorites.sh).
+post rightclick 114 114
+expect "^browser: menu shown .*$(cased 'Close Tab')\$" "a right-click on the tile didn't offer Close Tab"
+send choose "$(cased 'Close Tab')"
+expect '^browser: command close-tab via tab menu$' "Close Tab in the tile's menu didn't run"
+expect "^browser: page $favorite unloaded 1\$" "Close Tab didn't unload the Favorite whose alert was up"
+send move $page_point
 # A page out of sight that asks with an alert, which Chromium holds until its tab shows, is let go by
 # the idle check once it looks 2 hours unseen, its alert with it, and ilo goes on (#3549). It asks
 # the run's server first and alerts on the answer: a title changed out of sight is Chrome's sign of
@@ -571,9 +628,10 @@ echo "ok: a page's alert, confirm and prompt ask over its card, answer with ↩ 
 echo "  comes back with its tab. The confirm's Cancel and OK show the pointer on them. Leave site?"
 echo "  stays with Esc and leaves with ↩. A site's sign-in cancels with Esc and signs in with ↩, and"
 echo "  the password reaches no log. A link to Maps asks, and ↩ opens nothing. The link target shows"
-echo "  and hides 20 times, between the command bar and a tab's menu, with no panic. A page out of"
-echo "  sight whose alert waits for its tab is let go by the idle check after 2 hours unseen, and ilo"
-echo "  goes on (#3549)."
+echo "  and hides 20 times, between the command bar and a tab's menu, with no panic. A pinned tab"
+echo "  closed from its row by its − or a middle-click, and a Favorite by its tile's Close Tab, while"
+echo "  its page's alert is up, unloads, and ilo goes on. A page out of sight whose alert waits for its"
+echo "  tab is let go by the idle check after 2 hours unseen, and ilo goes on (#3549)."
 [ -z "$covered" ] || echo "  Under another app's window in front of ilo's ($covered), the" \
   "link target and the hover card show under it, and the link target over ilo's window once it's" \
   "gone. Windows: $out/link-target-covered-ilo.png, $out/link-target-covered-away.png," \
