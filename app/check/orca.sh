@@ -15,46 +15,46 @@ if [ "$(uname)" != Linux ]; then
   echo "skip all: Orca reads Linux only; screen-reader runs NVDA on Windows"
   return 0
 fi
-orca=$(command -v orca || true)
-if [ -z "$orca" ] && [ "${RUNNER_ENVIRONMENT:-}" = github-hosted ] && sudo -n true 2> /dev/null; then
+orca_bin=$(command -v orca || true)
+if [ -z "$orca_bin" ] && [ "${RUNNER_ENVIRONMENT:-}" = github-hosted ] && sudo -n true 2> /dev/null; then
   # Again after an update, where the runner's package lists are older than the mirror's.
   { sudo -n env DEBIAN_FRONTEND=noninteractive timeout 900 apt-get install -y -q orca ||
     { sudo -n timeout 600 apt-get update -q &&
       sudo -n env DEBIAN_FRONTEND=noninteractive timeout 900 apt-get install -y -q orca; }; } \
     > "$out/orca-apt.log" 2>&1 || fail "Orca didn't install: $(tail -5 "$out/orca-apt.log")"
-  orca=$(command -v orca || true)
+  orca_bin=$(command -v orca || true)
 fi
-if [ -z "$orca" ]; then
+if [ -z "$orca_bin" ]; then
   echo "skip all: no Orca: install the orca package; a hosted runner installs it"
   return 0
 fi
 
 # The app's session bus, whose at-spi-bus-launcher starts AT-SPI's, and AT-SPI's registry, as in
 # access: GPUI publishes its tree only while that session bus says AT-SPI is on.
-started=$(dbus-daemon --session --fork --print-address=1 --print-pid=1 2> /dev/null | tr '\n' ' ')
-session=$(echo "$started" | cut -d' ' -f1)
-buses=$(echo "$started" | cut -d' ' -f2)
-a11y=
-[ -z "$session" ] || a11y=$(DBUS_SESSION_BUS_ADDRESS=$session busctl --user call \
+orca_started=$(dbus-daemon --session --fork --print-address=1 --print-pid=1 2> /dev/null | tr '\n' ' ')
+orca_session=$(echo "$orca_started" | cut -d' ' -f1)
+buses=$(echo "$orca_started" | cut -d' ' -f2)
+orca_a11y=
+[ -z "$orca_session" ] || orca_a11y=$(DBUS_SESSION_BUS_ADDRESS=$orca_session busctl --user call \
   org.a11y.Bus /org/a11y/bus org.a11y.Bus GetAddress 2> /dev/null | sed -n 's/^s "\(.*\)"$/\1/p')
-registry=
-for each in /usr/libexec/at-spi2-registryd /usr/lib/at-spi2-registryd \
+orca_registry=
+for orca_each in /usr/libexec/at-spi2-registryd /usr/lib/at-spi2-registryd \
   /usr/lib/at-spi2-core/at-spi2-registryd; do
-  [ -x "$each" ] && registry=$each && break
+  [ -x "$orca_each" ] && orca_registry=$orca_each && break
 done
-if [ -z "$a11y" ] || [ -z "$registry" ]; then
+if [ -z "$orca_a11y" ] || [ -z "$orca_registry" ]; then
   kill $buses 2> /dev/null || true
   buses=
   echo "skip all: no AT-SPI bus answers, as dbus-daemon or at-spi2-core isn't installed"
   return 0
 fi
-AT_SPI_BUS_ADDRESS=$a11y "$registry" > "$out/orca-registry.log" 2>&1 &
+AT_SPI_BUS_ADDRESS=$orca_a11y "$orca_registry" > "$out/orca-registry.log" 2>&1 &
 buses="$buses $!"
 for _ in $(seq 50); do
-  busctl --address="$a11y" status org.a11y.atspi.Registry > /dev/null 2>&1 && break
+  busctl --address="$orca_a11y" status org.a11y.atspi.Registry > /dev/null 2>&1 && break
   sleep 0.1
 done
-DBUS_SESSION_BUS_ADDRESS=$session busctl --user set-property org.a11y.Bus /org/a11y/bus \
+DBUS_SESSION_BUS_ADDRESS=$orca_session busctl --user set-property org.a11y.Bus /org/a11y/bus \
   org.a11y.Status IsEnabled b true || fail "AT-SPI's bus didn't turn on"
 
 # Orca with settings of its own, its whole debug log in the run's folder. Orca opens that log
@@ -68,7 +68,7 @@ orca_log="$out/orca-debug.log"
 rm -rf "$out/orca-prefs" "$out/orca-config" "$orca_log"
 mkdir -p "$out/orca-prefs" "$out/orca-config/speech-dispatcher"
 echo DisableAutoSpawn > "$out/orca-config/speech-dispatcher/speechd.conf"
-DBUS_SESSION_BUS_ADDRESS=$session AT_SPI_BUS_ADDRESS=$a11y XDG_CONFIG_HOME="$out/orca-config" \
+DBUS_SESSION_BUS_ADDRESS=$orca_session AT_SPI_BUS_ADDRESS=$orca_a11y XDG_CONFIG_HOME="$out/orca-config" \
   SPEECHD_ADDRESS="unix_socket:$out/orca-config/speechd.sock" python3 -I -c '
 import builtins, runpy, sys
 opened = builtins.open
@@ -80,7 +80,7 @@ builtins.open = line_buffered
 path = sys.argv[1]
 sys.argv = [path] + sys.argv[2:]
 runpy.run_path(path, run_name="__main__")
-' "$orca" -u "$out/orca-prefs" --debug-file "$orca_log" > "$out/orca.log" 2>&1 &
+' "$orca_bin" -u "$out/orca-prefs" --debug-file "$orca_log" > "$out/orca.log" 2>&1 &
 orca_pid=$!
 orca_quit() {
   [ -n "${orca_pid:-}" ] || return 0
@@ -99,12 +99,12 @@ for _ in $(seq 300); do
   sleep 0.1
 done
 
-marks="$out/orca-marks.txt"
-: > "$marks"
+orca_marks="$out/orca-marks.txt"
+: > "$orca_marks"
 # Until Orca's log has stopped growing for 0.6 s, up to 5 s, so the next key comes after what the
 # last one made Orca say. A record's pace, not a judge: the log is buffered, and the split after
 # Orca quits is by time.
-settled() {
+orca_settled() {
   local size last=-1 still=0
   for _ in $(seq 50); do
     size=$(wc -c < "$orca_log" 2> /dev/null || echo 0)
@@ -119,13 +119,13 @@ settled() {
   done
 }
 # Step $1 starts now, in Orca's clock.
-mark() {
-  echo "$(date '+%H:%M:%S.%6N') $1" >> "$marks"
+orca_mark() {
+  echo "$(date '+%H:%M:%S.%6N') $1" >> "$orca_marks"
 }
-press() {
-  mark "key $*"
+orca_press() {
+  orca_mark "key $*"
   send key "$@"
-  settled
+  orca_settled
 }
 
 log="$out/orca-ilo.log"
@@ -133,38 +133,38 @@ step=0
 rm -f "$saved" "$profile_dir/Account"
 # An empty home for the import step, as a new user's may be, and never the runner's own browsers.
 mkdir -p "$out/orca-home"
-mark launch
-DBUS_SESSION_BUS_ADDRESS=$session BROWSER_IMPORT_HOME="$out/orca-home" BROWSER_DRIVE=1 \
+orca_mark launch
+DBUS_SESSION_BUS_ADDRESS=$orca_session BROWSER_IMPORT_HOME="$out/orca-home" BROWSER_DRIVE=1 \
   BROWSER_ONBOARDING=light "$browser" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await '^browser: onboarding step intro settled$' || fail "the onboarding's intro didn't draw"
-settled
+orca_settled
 await '^browser: onboarding left intro ' || fail "the intro didn't go on by itself"
 await '^browser: onboarding step [a-z-]* settled$' || fail "no step came after the intro"
-mark "$(grep '^browser: onboarding step [a-z-]* settled$' "$log" | tail -1 | cut -d' ' -f4) step"
-settled
-press tab
-press tab
-press tab shift
-press down
+orca_mark "$(grep '^browser: onboarding step [a-z-]* settled$' "$log" | tail -1 | cut -d' ' -f4) step"
+orca_settled
+orca_press tab
+orca_press tab
+orca_press tab shift
+orca_press down
 # On through the steps as Esc goes, each one's speech recorded as it comes.
 for _ in $(seq 10); do
   grep -q '^browser: onboarding done$' "$log" && break
-  press escape
+  orca_press escape
 done
 expect '^browser: command bar shown$' "the command bar didn't come up after the onboarding"
-mark "command bar after the onboarding"
-settled
-press escape
+orca_mark "command bar after the onboarding"
+orca_settled
+orca_press escape
 # The Space the onboarding leaves, its sidebar from Tab.
-press tab
-press tab
-press tab shift
-press down
-press down
-press up
-mark end
+orca_press tab
+orca_press tab
+orca_press tab shift
+orca_press down
+orca_press down
+orca_press up
+orca_mark end
 exec 3>&-
 quit
 orca_quit
@@ -173,14 +173,14 @@ kill $buses 2> /dev/null || true
 buses=
 
 # Each step and, until the next, what Orca said and where it took the focus to be.
-speech="$out/orca-speech.txt"
-awk -v marks="$marks" '
+orca_speech="$out/orca-speech.txt"
+awk -v marks="$orca_marks" '
   BEGIN { while ((getline line < marks) > 0) { n++; at[n] = substr(line, 1, 15); what[n] = substr(line, 17) } }
   /^[0-9][0-9]:[0-9][0-9]:[0-9][0-9]\.[0-9]* - / {
     time = substr($0, 1, 15)
     while (i < n && time >= at[i + 1]) { i++; print "== " what[i] }
     if ($0 ~ / - (SPEECH OUTPUT:|SPEECH: Not available|SPEECH: Using speech server|FOCUS MANAGER: Request to set locus of focus)/) print substr($0, 19)
   }
-  END { while (i < n) { i++; print "== " what[i] } }' "$orca_log" > "$speech"
-said=$(grep -c '^SPEECH OUTPUT:' "$speech" || true)
-echo "ok: recorded what Orca said through the onboarding and the sidebar, $said utterances: $speech"
+  END { while (i < n) { i++; print "== " what[i] } }' "$orca_log" > "$orca_speech"
+orca_said=$(grep -c '^SPEECH OUTPUT:' "$orca_speech" || true)
+echo "ok: recorded what Orca said through the onboarding and the sidebar, $orca_said utterances: $orca_speech"
