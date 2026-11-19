@@ -13,13 +13,99 @@ index 658b9f24ac..7bd5c521e1 100644
      pub fn take_signal(&self) -> Option<(Instant, FrameRequestSource)> {
          self.signal.take()
      }
+diff --git a/crates/gpui_macos/src/events.rs b/crates/gpui_macos/src/events.rs
+index 6ca05849a9..1e6c36da8a 100644
+--- a/crates/gpui_macos/src/events.rs
++++ b/crates/gpui_macos/src/events.rs
+@@ -466,18 +466,15 @@ fn parse_keystroke(native_event: &NSEvent) -> Keystroke {
+                 key_char = Some(chars_for_modified_key(native_event.keyCode(), mods));
+             }
+ 
+-            if shift
+-                && chars_ignoring_modifiers
+-                    .chars()
+-                    .all(|c| c.is_ascii_lowercase())
+-            {
+-                chars_ignoring_modifiers
+-            } else if shift {
+-                shift = false;
+-                chars_with_shift
+-            } else {
+-                chars_ignoring_modifiers
+-            }
++            let (key, shifted) = layout_key(
++                native_event.keyCode(),
++                control && !command,
++                shift,
++                chars_ignoring_modifiers,
++                chars_with_shift,
++            );
++            shift = shifted;
++            key
+         }
+     };
+ 
+@@ -494,6 +491,51 @@ fn parse_keystroke(native_event: &NSEvent) -> Keystroke {
+     }
+ }
+ 
++/// The key of `key_code`, and whether shift stays with it, from the characters the layout types
++/// with it, `unshifted` and `shifted`. Shift stays only on a letter, as the shifted character
++/// names a symbol: ⇧2 is "@" on the US layout. With ⌃ and ⇧ held and no ⌘, which type no text, a
++/// digit key is named by its place with shift kept, as Chromium names a shortcut's key, so ⌃⇧2 is
++/// ctrl-shift-2 on every layout, where it was ctrl-@ on the US one and ctrl-" on the Danish and
++/// German ones.
++pub fn layout_key(
++    key_code: u16,
++    control: bool,
++    shift: bool,
++    unshifted: String,
++    shifted: String,
++) -> (String, bool) {
++    if control
++        && shift
++        && let Some(digit) = digit_of(key_code)
++    {
++        return (digit.to_string(), true);
++    }
++    if shift && unshifted.chars().all(|c| c.is_ascii_lowercase()) {
++        (unshifted, true)
++    } else if shift {
++        (shifted, false)
++    } else {
++        (unshifted, false)
++    }
++}
++
++/// The digit the key `key_code` has on the US layout, by its place (Carbon's kVK_ANSI_0 to 9).
++fn digit_of(key_code: u16) -> Option<char> {
++    match key_code {
++        0x1D => Some('0'),
++        0x12 => Some('1'),
++        0x13 => Some('2'),
++        0x14 => Some('3'),
++        0x15 => Some('4'),
++        0x17 => Some('5'),
++        0x16 => Some('6'),
++        0x1A => Some('7'),
++        0x1C => Some('8'),
++        0x19 => Some('9'),
++        _ => None,
++    }
++}
++
+ fn always_use_command_layout() -> bool {
+     if chars_for_modified_key(0, NO_MOD).is_ascii() {
+         return false;
 diff --git a/crates/gpui_macos/src/gpui_macos.rs b/crates/gpui_macos/src/gpui_macos.rs
-index 8732badd32..ef553825c0 100644
+index 8732badd32..8292e8a442 100644
 --- a/crates/gpui_macos/src/gpui_macos.rs
 +++ b/crates/gpui_macos/src/gpui_macos.rs
-@@ -43,6 +43,7 @@ pub(crate) use platform::*;
+@@ -42,7 +42,9 @@ pub(crate) use keyboard::*;
+ pub(crate) use platform::*;
  pub(crate) use window::*;
  
++pub use events::layout_key;
  pub use platform::MacPlatform;
 +pub use window::open_next_window_in;
  
