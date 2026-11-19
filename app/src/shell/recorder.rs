@@ -1967,10 +1967,6 @@ impl Browser for Recorder {
         self.record(format!("hand back {tab}"));
     }
 
-    fn hear_page_presses(&self, on: bool, _: &mut App) {
-        self.record(format!("hear page presses {on}"));
-    }
-
     fn stop_agent(&self, agent: SharedString, _: &mut App) {
         self.record(format!("stop agent {agent}"));
     }
@@ -2160,6 +2156,10 @@ impl crate::account::Host for Account {
 
     fn activity(&self) -> crate::account::Activity {
         crate::account::Activity::default()
+    }
+
+    fn open_sync_details(&self, _: &mut App) {
+        self.calls.borrow_mut().push("open sync details".into());
     }
 
     fn delete_account(&self) {

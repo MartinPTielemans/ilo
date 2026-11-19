@@ -4417,15 +4417,17 @@ fn preview_account(state: &str, cx: &mut App) {
         _ => Status::SignedOut,
     };
     let no_server = state == "no-server";
+    // PREVIEW_SERVER=<address> signs in to a server of the user's, which the line names by its host.
+    let own = std::env::var("PREVIEW_SERVER").ok();
     let state = State {
         status,
         problem: None,
-        server: if no_server {
-            "".into()
-        } else {
-            "https://sync.ilo.app".into()
+        server: match (&own, no_server) {
+            (_, true) => "".into(),
+            (Some(own), false) => own.clone().into(),
+            (None, false) => "https://sync.ilo.app".into(),
         },
-        default_server: !no_server,
+        default_server: !no_server && own.is_none(),
         email: "sam@example.com".into(),
         code: if status == Status::Pairing {
             "312568".into()
@@ -4896,23 +4898,35 @@ impl account::Host for PreviewAccount {
     fn read_devices(&self) {}
     fn remove_device(&self, _: &str) {}
     fn choose(&self, _: account::Choice, _: bool) {}
-    // PREVIEW_SYNC=never, unreachable, throttled, stopped or update shows that line, else synced at
-    // 15:04.
+    // PREVIEW_SYNC=never, offline, server-error, refused, sign-in, throttled, stopped or update
+    // shows that line, else synced at 15:04.
     fn activity(&self) -> account::Activity {
         let shown = std::env::var("PREVIEW_SYNC").unwrap_or_default();
         let trouble = match shown.as_str() {
-            "unreachable" => Some(account::Trouble::Unreachable),
+            "offline" => Some(account::Trouble::Offline),
+            "server-error" => Some(account::Trouble::ServerError),
+            "refused" => Some(account::Trouble::Refused {
+                kind: account::Kind::Spaces,
+                count: 3,
+            }),
+            "sign-in" => Some(account::Trouble::SignIn),
             "throttled" => Some(account::Trouble::Throttled),
             "stopped" => Some(account::Trouble::Stopped),
             "update" => Some(account::Trouble::Update),
             _ => None,
         };
         let synced = if shown == "never" { "" } else { "at 15:04" };
+        let lasting = matches!(
+            shown.as_str(),
+            "offline" | "server-error" | "refused" | "sign-in"
+        );
         account::Activity {
             synced: synced.into(),
             trouble,
+            since: if lasting { "since 14:52" } else { "" }.into(),
         }
     }
+    fn open_sync_details(&self, _: &mut App) {}
     fn delete_account(&self) {}
     fn copy_secret(&self, _: &str, _: Duration, _: &mut App) {}
     fn confirm(

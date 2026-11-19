@@ -483,8 +483,9 @@ fn the_strip_takes_over_hands_back_and_stops(cx: &mut TestAppContext) {
 
 /// A press in the agent's page watched takes it over, as Take Over did, and the press is the page's
 /// (#1080): the Agents hear the same take over, so nothing else moves. Pressed again while the user
-/// holds it, nothing more happens; ⌘↩ then hands it back. The host hears the pages' presses only
-/// while an agent works.
+/// holds it, nothing more happens; ⌘↩ then hands it back. A press in the page beside it in its
+/// split view takes that tab over, not the one watched (#3243), and one in another agent's tab, or
+/// with no agent at work, takes nothing.
 #[gpui::test]
 fn a_press_in_the_agents_page_takes_it_over_and_hand_back_gives_it_back(cx: &mut TestAppContext) {
     let (shell, host, cx) = shell_with_task(cx);
@@ -502,14 +503,21 @@ fn a_press_in_the_agents_page_takes_it_over_and_hand_back_gives_it_back(cx: &mut
         shell.set_agent_status(status(Vec::new()), cx);
         shell.agent_acted("task-1".into(), 30, cx);
     });
-    assert_eq!(host.take(), ["hear page presses true"]);
-    shell.update(cx, |shell, cx| shell.page_pressed(cx));
+    host.take();
+    shell.update(cx, |shell, cx| shell.page_pressed(20, cx));
+    assert!(
+        host.take().is_empty(),
+        "a press in another agent's tab took it from the window watching a task"
+    );
+    shell.update(cx, |shell, cx| shell.page_pressed(31, cx));
+    assert_eq!(host.take(), ["take over task-1 31"]);
+    shell.update(cx, |shell, cx| shell.page_pressed(30, cx));
     assert_eq!(host.take(), ["take over task-1 30"]);
 
     shell.update(cx, |shell, cx| {
-        shell.set_agent_status(status(vec![(30, "".into())]), cx)
+        shell.set_agent_status(status(vec![(30, "".into()), (31, "".into())]), cx)
     });
-    shell.update(cx, |shell, cx| shell.page_pressed(cx));
+    shell.update(cx, |shell, cx| shell.page_pressed(30, cx));
     assert!(
         host.take().is_empty(),
         "a press in a page the user holds took it again"
@@ -520,8 +528,7 @@ fn a_press_in_the_agents_page_takes_it_over_and_hand_back_gives_it_back(cx: &mut
     assert_eq!(host.take(), ["hand back 30", "focus ui"]);
 
     shell.update(cx, |shell, cx| shell.set_agent_status(Vec::new(), cx));
-    assert_eq!(host.take(), ["hear page presses false"]);
-    shell.update(cx, |shell, cx| shell.page_pressed(cx));
+    shell.update(cx, |shell, cx| shell.page_pressed(30, cx));
     assert!(
         host.take().is_empty(),
         "a press with no agent at work took a page"

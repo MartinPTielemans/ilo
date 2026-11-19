@@ -138,29 +138,38 @@ impl Shell {
     /// What the agents do and what the user holds from them, as the Agents tell every window.
     pub fn set_agent_status(&mut self, status: Vec<Status>, cx: &mut Context<Self>) {
         if self.agent_status != status {
-            // While an agent works, a press in its page takes it over, which X11's host hears only
-            // while it's asked to.
-            if self.agent_status.is_empty() != status.is_empty() {
-                self.browser.hear_page_presses(!status.is_empty(), cx);
-            }
             self.agent_status = status;
             cx.notify();
         }
     }
 
-    /// A press in the window's page (host_watch_page_presses). In an agent's page while it works
-    /// there, the user takes the page over, as Take Over did, and the press goes on to the page
-    /// (#1080). In a page the user holds, or one of the user's own, it's a press like any other.
-    pub fn page_pressed(&mut self, cx: &mut Context<Self>) {
-        let Some((_, shown)) = self.agent_page() else {
+    /// A press on the page of the agent's tab `tab`, which a window shows, or on its dialog
+    /// (tab_page_pressed). In a page of the task the window watches while its agent works there,
+    /// the one watched or one beside it in its split view, the user takes that tab over, as Take
+    /// Over does, and the press goes on to the page (#1080, #3243). In a tab the user holds it's a
+    /// press like any other.
+    pub fn page_pressed(&mut self, tab: u64, cx: &mut Context<Self>) {
+        // The core keeps a task's split views: what the window shows of the task watched is the
+        // page watched and those beside it.
+        let Some((space, _)) = self.agent_page() else {
             return;
         };
-        let Some(Bar::Working { agent, .. }) = self.agent_bar() else {
+        if !space.pinned.contains(&tab) && !space.today.contains(&tab) {
+            return;
+        }
+        let space = space.id;
+        let Some(status) = self.agent_status.iter().find(|each| each.space == space) else {
             return;
         };
+        if status.held.iter().any(|(held, _)| *held == tab)
+            || !self.agents_at.contains_key(&status.agent)
+        {
+            return;
+        }
+        let agent = status.agent.clone();
         // check.sh reads this line.
-        log!("browser: agent page pressed in {shown}");
-        self.browser.take_over(agent, shown, cx);
+        log!("browser: agent page pressed in {tab}");
+        self.browser.take_over(agent, tab, cx);
     }
 
     /// The bar of the agent's page the window shows (`agent_page`), if the agent is at work in its

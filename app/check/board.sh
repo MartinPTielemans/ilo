@@ -28,6 +28,12 @@
 # not its own, each refusal in the activity log, and nothing logged names the Board.
 
 log="$out/board.log"
+# The first line of the log, past the driver's own echo of the keys it typed, that names a Board's
+# name or note: one of the words in $1, as a word, with no letter on either side, so the app's own
+# "finished" doesn't say "shed". Japanese has no letter beside it and matches wherever it is.
+names_said() {
+  grep -v '^browser: drive [0-9]*: ' "$log" | grep -E "(^|[^A-Za-z])($1)([^A-Za-z]|\$)" | head -1
+}
 step=0
 rm -f "$saved" "$launch_frame"
 # An MCP client's token, saved with Settings › Agents on, which the app reads as it starts. The file
@@ -93,7 +99,7 @@ grep -q 'shelves over the sink' "$folder/board.json" ||
 # 1a: the page wrote its own Board and no other.
 [ "$(ls "$boards")" = "$id" ] || fail "the profile's Boards aren't only $id: $(ls "$boards" | tr '\n' ' ')"
 # Nothing of what the user wrote is logged, past the driver's own echo of the keys it typed.
-written=$(grep -v '^browser: drive [0-9]*: ' "$log" | grep 'shelves\|kitchen' | head -1)
+written=$(names_said 'shelves|kitchen')
 [ -z "$written" ] || fail "the log says what the Board holds: $written"
 ../tools/window-screenshot.sh "$pid" "$out/board.png" || fail "no window to capture"
 
@@ -150,7 +156,7 @@ for _ in $(seq 50); do
 done
 grep -q "^browser: title $board (a Board)\$" "$log" ||
   fail "the reopened Board's title line doesn't say \"(a Board)\": $(grep "^browser: title $board " "$log" | tail -1)"
-written=$(grep -v '^browser: drive [0-9]*: ' "$log" | grep 'shelves\|kitchen\|pantry' | head -1)
+written=$(names_said 'shelves|kitchen|pantry')
 [ -z "$written" ] || fail "the log says what the Board holds: $written"
 # The reopened page read its file: a pan, which it saves, keeps the note. A page that couldn't
 # read it would have nothing to write over it but nothing.
@@ -345,7 +351,7 @@ PICTURE
 else
   echo "skip: board: a Board typed into the agent's own tab. Watching it takes clicks, and Browser wasn't the active app."
 fi
-written=$(grep -v '^browser: drive [0-9]*: ' "$log" | grep 'shelves\|kitchen\|pantry\|attic\|cellar' | head -1)
+written=$(names_said 'shelves|kitchen|pantry|attic|cellar')
 [ -z "$written" ] || fail "the log says what a Board holds or its name: $written"
 exec 4>&- 5<&-
 for _ in $(seq 100); do kill -0 "$bridge_pid" 2> /dev/null || break; sleep 0.1; done
@@ -602,7 +608,7 @@ for tab in "$copy_tab" "$garden_tab"; do
     expect "^browser: tab $tab closed\$" "⌘W didn't close the Board's copy's tab"
   fi
 done
-written=$(grep -v '^browser: drive [0-9]*: ' "$log" | grep '日本語\|loft\|porch\|shed\|barn\|deck\|garden\|cherry' | head -1)
+written=$(names_said '日本語|loft|porch|shed|barn|deck|garden|cherry')
 [ -z "$written" ] || fail "the log says what a Board holds or its name: $written"
 n=$(echo $(pinned) $(today) | tr ' ' '\n' | grep -nx "$board" | cut -d: -f1)
 [ -n "$n" ] || fail "the first Board's tab $board isn't in the sidebar: pinned \"$(pinned)\", Today \"$(today)\""
@@ -852,7 +858,7 @@ grep -q 'shelves over the sink' "$folder/board.json" ||
   fail "the Board's save after the relaunch lost its note: $(head -c 300 "$folder/board.json")"
 grep -q "$note" "$loft/board.json" ||
   fail "the first note's Board lost it across the relaunch, \"$note\": $(head -c 300 "$loft/board.json")"
-written=$(grep -v '^browser: drive [0-9]*: ' "$log" | grep 'shelves\|kitchen\|pantry\|日本語\|loft' | head -1)
+written=$(names_said 'shelves|kitchen|pantry|日本語|loft')
 [ -z "$written" ] || fail "the relaunch's log says what a Board holds or its name: $written"
 ../tools/window-screenshot.sh "$pid" "$out/board-relaunched.png" || fail "no window to capture"
 # #3224: the Board holding [] offers its file in the system's file manager, its button with the

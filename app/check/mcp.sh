@@ -225,6 +225,60 @@ await_more() {
   done
   return 1
 }
+# Fails by name when what's on screen stopped following the log (#3507): the capture $2, taken
+# once the app's line said it drew $4 at "x y width height" ($3, in the window's points), shows
+# there what the capture $1, taken before it was asked for, did. In #3270's second sighting GPUI's
+# output stopped reaching the screen while its log ran on a hundred steps, and the run went red only
+# at the next Settings show, far from where it froze. Sets follows to the part of that place that
+# changed, in percent.
+follows_log() {
+  send layout
+  width=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
+    sed -n 's/^browser: layout content \([0-9]*\)x.*/\1/p')
+  [ -n "$width" ] || fail "the driver's layout named no content size: $(grep '^browser: layout' "$log" | tail -1)"
+  for capture in "$1" "$2"; do
+    if windows; then
+      to_bmp "$capture" "$capture.bmp" || fail "PowerShell couldn't read $capture"
+    elif [ "$(uname)" = Linux ]; then
+      magick "$capture" -type TrueColor BMP3:"$capture.bmp" || fail "ImageMagick couldn't read $capture"
+    else
+      sips -s format bmp "$capture" --out "$capture.bmp" > /dev/null || fail "sips couldn't read $capture"
+    fi
+  done
+  # Of every other pixel 8 points inside the place, the share that differs by more than 32 in a
+  # channel. The pictures are in pixels and the place in points, so the window's width scales it.
+  follows=$(python3 -I - "$1.bmp" "$2.bmp" "$width" $3 << 'PY'
+import struct, sys
+def read(path):
+    data = open(path, "rb").read()
+    offset, = struct.unpack_from("<I", data, 10)
+    width, height, _, bits = struct.unpack_from("<iiHH", data, 18)
+    return data, offset, width, height, bits // 8, (bits * width + 31) // 32 * 4
+before, after = read(sys.argv[1]), read(sys.argv[2])
+if before[2:4] != after[2:4]:
+    print(100)
+    sys.exit()
+_, _, width, height, size, stride = after
+scale = width / float(sys.argv[3])
+x, y, w, h = (float(n) for n in sys.argv[4:8])
+left, top = int((x + 8) * scale), int((y + 8) * scale)
+right, bottom = min(width, int((x + w - 8) * scale)), min(abs(height), int((y + h - 8) * scale))
+changed = total = 0
+for row in range(top, bottom, 2):
+    line = row if height < 0 else abs(height) - 1 - row
+    for column in range(left, right, 2):
+        at = line * stride + column * size
+        a = before[0][before[1] + at:][:3]
+        b = after[0][after[1] + at:][:3]
+        total += 1
+        changed += max(abs(a[i] - b[i]) for i in range(3)) > 32
+print(changed * 100 // max(total, 1))
+PY
+  ) || fail "the captures $1 and $2 couldn't be compared"
+  rm -f "$1.bmp" "$2.bmp"
+  [ "$follows" -ge 5 ] ||
+    fail "what's on screen stopped following the log: the app drew $4 at $3, but the capture after it shows that place as it was before it was asked for, $follows% changed ($1, $2), so the window's frames stopped reaching the screen (#3270). The log's last lines: $(grep '^browser: ' "$log" | tail -3 | tr '\n' ';')"
+}
 
 case "$socket" in
   '\\.\pipe\'*) ;;
@@ -581,16 +635,17 @@ PICTURE
   await_more "^browser: task page $1 in place\$" "$placed" ||
     fail "tab $1's page didn't come to rest in place"
 }
-# A click in an agent's page takes it over (#1080), where the driver's click reaches the host as a
-# hand's does: the Mac, Windows and Wayland, and not X11's sent click. After clicks that are there
-# for the page's focus, not to take it, ⌘↩ hands back what one took. $1 is how many presses the log
-# had before them. The press reaches the window a turn after the click, which the state waits for.
+# A click in an agent's page takes it over (#1080). After clicks that are there for the page's
+# focus, not to take it, ⌘↩ hands back what one took. $1 is how many presses the log had before
+# them. The press reaches the window a turn after the click, which the state waits for.
 hand_back_pressed() {
   send state
   [ "$(grep -c '^browser: agent page pressed in ' "$log" || true)" = "$1" ] && return
   pressed=$(sed -n 's/^browser: agent page pressed in \([0-9]*\)$/\1/p' "$log" | tail -1)
+  handed=$(grep -c "^browser: agent mcp-client handed back $pressed\$" "$log" || true)
   send key return cmd
-  await_log "^browser: agent mcp-client handed back $pressed\$" "⌘↩ didn't hand back the page a click took"
+  await_more "^browser: agent mcp-client handed back $pressed\$" "$handed" ||
+    fail "⌘↩ didn't hand back the page a click took, $pressed"
 }
 # Agent actions never move the user's focus (decision 8): through all the agent did in its own Space
 # since the user clicked into their field, their Space, tab and keyboard stayed, and their next keys
@@ -645,9 +700,12 @@ fi
 
 # Split views (#1597): the agent puts two tabs of its own side by side, adds a third, lists them
 # and separates one, each through the core's split calls and checked by its rules, with its entry
-# in the activity log. A tab of the user's is refused, and the split stays as it was.
+# in the activity log. A tab of the user's is refused, and the split stays as it was. Each page is
+# taller than its pane, so the agent's scroll there scrolls rather than answering that nothing did.
 for page in a b c; do
-  printf '%s' "<title>Split $page</title><p>Split page $page</p>" > "$out/site/split-$page.html"
+  printf '%s' "<title>Split $page</title><p>Split page $page</p>
+<button onclick=\"document.title = 'pressed'\">Press $page</button>
+<div style=\"height: 300vh\"></div>" > "$out/site/split-$page.html"
 done
 split_tab() {
   call open_tab "{\"url\":\"localhost:$port/split-$1.html\"}" |
@@ -698,31 +756,10 @@ refused=$(call separate_tab "{\"tab\":$user_tab}")
   fail "separating the user's tab answered: $refused"
 await_log "^browser: agent activity mcp-client $user_tab separate_tab refused: The tab isn't in the agent's own Space\.\$" \
   "the refused separate didn't reach the activity log"
-# The split views' pages close, so the conversation's grid has the pages the steps after it count on.
-for split_tab in $split_a $split_b $split_c; do
-  closed=$(call close_tab "{\"tab\":$split_tab}")
-  case "$closed" in "Closed tab $split_tab."*) ;; *) fail "closing the split view's page answered: $closed" ;; esac
-done
-# An agent's tab at Chrome's warning before http, in the agent's split view, watched from the
-# conversation, where its split's pages share the watched page's place. The warning shown doesn't
-# take the user's keyboard, on the Mac too, where it's a window of its own (#3240). Once the user's
-# click gives it the keyboard, ⌘W steps back to Pages from there, a press in the page beside it
-# takes the keyboard to that page, and never to an agent's dialog: on the Mac that press gives the
-# keyboard back to the browser window (#3212). Escape there is the warning's, as Chrome's is.
+# The agent's own click in its page, as the window watches it, isn't the user's press: it comes
+# through DevTools, as the user's would reach the page, and takes nothing over (#3243). The same
+# for the page beside it in its watched split view. Its next action then isn't refused.
 if [ "$driven" = 1 ]; then
-  await '^browser: settings about Version .*, on Chromium [0-9]' || fail "the engine's version wasn't said"
-  major=$(sed -n 's/^browser: settings about .*on Chromium \([0-9]*\)\..*/\1/p' "$log" | head -1)
-fi
-if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
-  warned=$(call open_tab "{\"url\":\"http://$plain/split-a.html\"}" |
-    sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
-  [ -n "$warned" ] || fail "open_tab didn't open http://$plain/split-a.html"
-  await_log "browser: tab $warned error -20\$" \
-    "the agent's tab at http://$plain/split-a.html had no warning before http: $(grep "^browser: loaded $warned " "$log" | tail -1)"
-  beside=$(split_tab b)
-  split=$(call split_tabs "{\"tabs\":[$warned,$beside]}")
-  [ "$split" = "Tab $warned's split view, left to right: $warned, $beside." ] ||
-    fail "split_tabs with the tab at the warning answered: $split"
   # Escape steps back to Pages from the page watched, $1, which goes back into its picture before a
   # click on another picture can watch it.
   to_pages() {
@@ -737,6 +774,56 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
     await_more "$back" "$before" || fail "Escape didn't step back to Pages from $1"
     await_more "$thumbnail" "$shrunk" || fail "$1 didn't go back into its picture"
   }
+  to_pages "tab $agent_tab"
+  watch "$split_a"
+  presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
+  agent_clicks=$step
+  for tab in $split_a $split_c; do
+    ref=$(call snapshot "{\"tab\":$tab}" | sed -n 's/.*- button "Press [ac]" \[\(e[0-9]*\)\].*/\1/p' | head -1)
+    [ -n "$ref" ] || fail "the snapshot of the split view's tab $tab had no Press button"
+    clicked=$(call click "{\"tab\":$tab,\"ref\":\"$ref\"}")
+    case "$clicked" in "error: "*) fail "the agent's click in its watched split view's tab $tab answered: $clicked" ;; esac
+    await_log "^browser: title $tab pressed\$" "the agent's click in tab $tab didn't reach its page"
+    scrolled=$(call scroll "{\"tab\":$tab}")
+    case "$scrolled" in
+      "error: "*) fail "after its own click in tab $tab, watched in its split view, the agent's scroll answered: $scrolled" ;;
+    esac
+  done
+  send state
+  [ "$(grep -c '^browser: agent page pressed in ' "$log" || true)" = "$presses" ] ||
+    fail "the agent's own clicks in its watched split view reached the app as the user's press: $(since "$agent_clicks" | grep '^browser: agent' | tail -6 | tr '\n' ' ')"
+  since "$agent_clicks" | grep -q -e "^browser: agent mcp-client taken over in $split_a\$" \
+    -e "^browser: agent mcp-client taken over in $split_c\$" &&
+    fail "the agent's own click in its watched split view took its tab over"
+  to_pages "the split view"
+  watch "$agent_tab"
+fi
+# The split views' pages close, so the conversation's grid has the pages the steps after it count on.
+for split_tab in $split_a $split_b $split_c; do
+  closed=$(call close_tab "{\"tab\":$split_tab}")
+  case "$closed" in "Closed tab $split_tab."*) ;; *) fail "closing the split view's page answered: $closed" ;; esac
+done
+# An agent's tab at Chrome's warning before http, in the agent's split view, watched from the
+# conversation, where its split's pages share the watched page's place. The warning shown doesn't
+# take the user's keyboard, on the Mac too, where it's a window of its own (#3240). Once the user's
+# click gives it the keyboard, and takes the tab over as a press in its page does (#3243), ⌘W
+# steps back to Pages from there, a press in the page beside it takes that tab over and the
+# keyboard to that page, and never to an agent's dialog: on the Mac that press gives the keyboard
+# back to the browser window (#3212). Escape there is the warning's, as Chrome's is.
+if [ "$driven" = 1 ]; then
+  await '^browser: settings about Version .*, on Chromium [0-9]' || fail "the engine's version wasn't said"
+  major=$(sed -n 's/^browser: settings about .*on Chromium \([0-9]*\)\..*/\1/p' "$log" | head -1)
+fi
+if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
+  warned=$(call open_tab "{\"url\":\"http://$plain/split-a.html\"}" |
+    sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  [ -n "$warned" ] || fail "open_tab didn't open http://$plain/split-a.html"
+  await_log "browser: tab $warned error -20\$" \
+    "the agent's tab at http://$plain/split-a.html had no warning before http: $(grep "^browser: loaded $warned " "$log" | tail -1)"
+  beside=$(split_tab b)
+  split=$(call split_tabs "{\"tabs\":[$warned,$beside]}")
+  [ "$split" = "Tab $warned's split view, left to right: $warned, $beside." ] ||
+    fail "split_tabs with the tab at the warning answered: $split"
   # Tab round the strip's ring never gives the watched agent's page the keyboard: its stop is the
   # strip's words, so the handback into a page, which on Windows gives the shown page's pane the
   # keyboard straight (#3396), never runs for it. Tab from the window's keyboard rings the strip,
@@ -786,8 +873,23 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
     [ "$key" = NativeWidgetMacNSWindow ] ||
       fail "a click on the agent's warning before http at $warning, watched in its split view $1, didn't give it the keyboard: $key, $focus"
   }
+  # Hands $warned back from its page watched, the UI given the keyboard by a click on the sidebar.
+  hand_back_warned() {
+    watch "$warned"
+    send click $sidebar_point
+    handed=$(grep -c "^browser: agent mcp-client handed back $warned\$" "$log" || true)
+    send key return cmd
+    await_more "^browser: agent mcp-client handed back $warned\$" "$handed" ||
+      fail "⌘↩ didn't hand back tab $warned, which the click on its warning took over"
+  }
+  # Waits for the click on the warning to take $warned over, again; $1 says when.
+  took_warned() {
+    await_more "^browser: agent mcp-client taken over in $warned\$" "$took" ||
+      fail "the click on the agent's warning before http, watched $1, didn't take tab $warned over: $(since "$warning_clicked" | grep -e '^browser: drive' -e '^browser: agent' | tail -6 | tr '\n' ' ')"
+  }
   to_pages "tab $agent_tab"
   presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
+  took=$(grep -c "^browser: agent mcp-client taken over in $warned\$" "$log" || true)
   watch_warning "from Pages" ring_strip
   first_click=$warning_clicked
   # Linux's driver lists the pages the shell lays out, and the task area lays out a watched split
@@ -800,8 +902,12 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
       fail "watching tab $warned didn't show its split view's two pages: $laid"
   fi
   ../tools/window-screenshot.sh "$pid" "$out/agent-split-warning.png" || fail "no window to capture"
-  # From the agent's warning with the keyboard, ⌘W steps back to Pages, as it does from its page,
-  # and the split watched again shows the warning without the keyboard (#3240).
+  # The click on the agent's warning, a press on its tab's dialog, took the tab over, as a press
+  # in its page does: answering it acts on the tab, which is the user's from then (#3243).
+  await_log "^browser: agent page pressed in $warned\$" \
+    "the click on the agent's warning before http, watched from Pages, didn't reach the app as a press on tab $warned: $(since "$first_click" | grep -e '^browser: drive' -e '^browser: agent' | tail -6 | tr '\n' ' ')"
+  took_warned "from Pages"
+  # From the warning with the keyboard, ⌘W steps back to Pages, as it does from its page.
   back='^browser: task page [0-9]* back$'
   thumbnail='^browser: task page in its thumbnail$'
   before=$(grep -c "$back" "$log" || true)
@@ -812,18 +918,16 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
     fail "⌘W on the agent's warning before http, which had the keyboard, didn't step back to Pages: $(since "$left" | grep -e '^browser: drive' -e '^browser: command' -e '^browser: task' | tail -6 | tr '\n' ' ')"
   await_more "$thumbnail" "$shrunk" ||
     fail "the agent's split view didn't go back into its picture after ⌘W"
-  # Where the click on the warning took the tab over, as X11's does, the tab is the user's, and
-  # its warning takes the keyboard as Chrome's does. So it's handed back first, from its page
-  # watched, with the UI given the keyboard by a click on the sidebar, as the user's would.
-  if [ "$(grep -c '^browser: agent page pressed in ' "$log" || true)" != "$presses" ]; then
-    watch "$warned"
-    send click $sidebar_point
-    send key return cmd
-    await_log "^browser: agent mcp-client handed back $warned\$" \
-      "⌘↩ didn't hand back tab $warned, which the click on its warning took over"
-    to_pages "tab $warned"
-  fi
+  # The tab is the user's, and its warning takes the keyboard as Chrome's does, so it's handed back
+  # from its page watched, the UI given the keyboard by a click on the sidebar, as the user's would:
+  # the warning keeps Return, so ⌘↩ reaches ilo only from there.
+  hand_back_warned
+  to_pages "tab $warned"
+  # Watched again, the agent's warning shows without the keyboard (#3240).
+  presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
+  took=$(grep -c "^browser: agent mcp-client taken over in $warned\$" "$log" || true)
   watch_warning "again after ⌘W"
+  took_warned "again after ⌘W"
   # The page beside, to the right of the warning's, as split_tabs put them.
   other="$((warning_x + warning_width + 100)) $((warning_y + warning_height + 100))"
   send click $other
@@ -832,40 +936,41 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
   [ "$key" = BrowserCoreNSWindow ] ||
     fail "a press in the page beside the agent's warning before http left the keyboard in $key, on $focus: $(since "$pressed" | grep -e '^browser: drive' -e '^browser: agent' | tail -6 | tr '\n' ' ')"
   ../tools/window-screenshot.sh "$pid" "$out/agent-split-pressed.png" || fail "no window to capture"
-  # The press takes over the tab pressed, and ⌘↩ hands it back. It takes over the tab watched
-  # instead, or on X11 the click on the warning already took that one and the press beside takes
-  # none (#3243), while the area goes on to show the tab pressed. So each tab the clicks took over
-  # is watched again and handed back there, with the UI given the keyboard by a click on the
-  # sidebar, as the user's would.
-  send state
-  taken=$(since "$first_click" | sed -n 's/^browser: agent page pressed in \([0-9]*\)$/\1/p' |
+  # The press beside takes over the tab pressed, not the one watched (#3243), and ⌘↩ from that page,
+  # which has the keyboard, hands it back.
+  await_log "^browser: agent page pressed in $beside\$" \
+    "a press in the page beside the agent's warning didn't reach the app as a press on tab $beside: $(since "$pressed" | grep -e '^browser: drive' -e '^browser: agent' | tail -6 | tr '\n' ' ')"
+  await_log "^browser: agent mcp-client taken over in $beside\$" \
+    "a press in the other pane of a watched agent split didn't take over the tab pressed, $beside"
+  taken=$(since "$warning_clicked" | sed -n 's/^browser: agent page pressed in \([0-9]*\)$/\1/p' |
     sort -u | tr '\n' ' ')
-  taken=${taken% }
-  [ -n "$taken" ] ||
-    fail "neither the click on the agent's warning before http nor the press beside it took over a tab: $(since "$first_click" | grep -e '^browser: drive' -e '^browser: agent' | tail -8 | tr '\n' ' ')"
-  if [ "$taken" = "$beside" ]; then
-    hand_back_pressed "$presses"
-    shown="the split view"
-  else
-    echo "skip: mcp: a press in the other pane of a watched agent split taking over the tab pressed: the clicks on the warning and beside it took over tab $taken, not $beside (#3243)."
-    shown="tab $beside"
-    for tab in $taken; do
-      to_pages "$shown"
-      watch "$tab"
-      send click $sidebar_point
-      send key return cmd
-      await_log "^browser: agent mcp-client handed back $tab\$" \
-        "⌘↩ didn't hand back tab $tab, which a click on the split view took over"
-      shown="tab $tab"
-    done
-  fi
+  [ "$taken" = "$(printf '%s\n' "$warned" "$beside" | sort -u | tr '\n' ' ')" ] ||
+    fail "the click on the agent's warning and the press beside it took over tabs $taken, not $warned and $beside"
+  hand_back_pressed "$presses"
+  # The warning's tab, which its click took, is handed back from its page watched.
+  to_pages "the split view"
+  hand_back_warned
   # Escape on the warning with the keyboard is the warning's, its Go back, on every OS: a dialog
-  # keeps the keys that answer it (dialog_keys.cc). The warning goes, and the tab leaves the http
-  # page, here for the new tab page, as it had no page before it.
-  # Where the click on the warning takes the tab over, as X11's can, ⌘↩ hands it back after.
-  to_pages "$shown"
+  # keeps the keys that answer it (dialog_keys.cc). The click that gave it the keyboard took the
+  # tab over, so the Escape is the user's act on their own tab, and the strip says they have it
+  # before the page leaves. The warning goes, and the tab leaves the http page, here for the new
+  # tab page, as it had no page before it. ⌘↩ hands it back after.
+  to_pages "tab $warned"
+  # A press takes over a tab only while its agent is at work, and the press beside ended the
+  # agent's session in $beside, where it last acted: it reads $warned, as a working agent would, so
+  # it's at work there again before the click (#3503).
+  at_work=$(grep -c "^browser: agent mcp-client at work in $warned\$" "$log" || true)
+  read=$(call read_page "{\"tab\":$warned}")
+  case "$read" in "Tab $warned:"*) ;; *) fail "read_page of the agent's tab at the warning before http answered: $read" ;; esac
+  await_more "^browser: agent mcp-client at work in $warned\$" "$at_work" ||
+    fail "the agent's read of tab $warned, at the warning before http, didn't put it at work there: $(grep '^browser: agent mcp-client \(at work\|done\) in ' "$log" | tail -2 | tr '\n' ' ')"
   presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
+  took=$(grep -c "^browser: agent mcp-client taken over in $warned\$" "$log" || true)
+  driving=$(grep -c "^browser: task strip $warned says You're driving" "$log" || true)
   watch_warning "before Escape"
+  took_warned "before Escape"
+  await_more "^browser: task strip $warned says You're driving" "$driving" ||
+    fail "the strip under tab $warned didn't say the user has it once the click on its warning took it: $(grep "^browser: task strip $warned says" "$log" | tail -1)"
   send key escape
   escaped=$step
   for _ in $(seq 50); do
@@ -1765,6 +1870,10 @@ addEventListener("message", (event) => {
   # Allow at its right.
   change() {
     before=$(grep -c "$changes" "$log" || true)
+    # The run's first question, whose place showed no card before it.
+    if [ "$1" = Once ]; then
+      ../tools/window-screenshot.sh "$pid" "$out/agent-request-before.png" || fail "no window to capture"
+    fi
     request request "{\"tab\":$frames_tab,\"requests\":[{\"method\":\"POST\",\"path\":\"/api/items\",\"body\":{\"title\":\"Milk\"}}]}" >&4
     await_more "$changes" "$before" || fail "a change didn't ask first"
     q=$(grep '^browser: agent mcp-client asks' "$log" | tail -1 | cut -d' ' -f5 | tr -d :)
@@ -1773,6 +1882,10 @@ addEventListener("message", (event) => {
 $(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
 CARD
     ../tools/window-screenshot.sh "$pid" "$out/agent-request.png" || fail "no window to capture"
+    if [ "$1" = Once ]; then
+      follows_log "$out/agent-request-before.png" "$out/agent-request.png" "$qx $qy $qw $qh" \
+        "the change's question $q"
+    fi
     [ "$(grep -c "$posted" "$out/site.log")" = "$2" ] || fail "the change went before the user answered"
     case "$1" in Once) x=$((qw * 3 / 4)) ;; Dismiss) x=$((qw / 4)) ;; esac
     send click $((qx + x)) $((qy + qh - 26))
@@ -2267,13 +2380,8 @@ CARD
   read -r sx sy sw _ <<STRIP
 $(grep "^browser: task strip $opened_tab at " "$log" | tail -1 | cut -d' ' -f6-)
 STRIP
-  # In the page, above the strip, where nothing on the page takes the click. On X11 the host
-  # hears the display's own presses, which the driver's press makes; elsewhere its click is one.
-  if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
-    send handclick $((sx + sw / 2)) $((sy - 120))
-  else
-    send click $((sx + sw / 2)) $((sy - 120))
-  fi
+  # In the page, above the strip, where nothing on the page takes the click.
+  send click $((sx + sw / 2)) $((sy - 120))
   await_log "^browser: agent page pressed in $opened_tab\$" "a press in the agent's page didn't reach the strip"
   await_log "^browser: agent mcp-client taken over in $opened_tab\$" "a press in the agent's page didn't take it over"
   ../tools/window-screenshot.sh "$pid" "$out/agent-driving.png" || fail "no window to capture"
@@ -2919,7 +3027,7 @@ quit
 trap cleanup EXIT
 rm -f "$agents_file" "$out/mcp-in" "$out/mcp-out"
 if [ "$driven" = 1 ]; then
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), the tabs its page opens kept in its Space, behind$opened_said, without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, pins, unpins and removes its own tab but not the user's, sends requests to its tab's site with the tab's session it never sees, a change asking each time, each opening in Settings › Agents to where it went and what it sent or didn't, asks a page's beforeunload handler first, with no dialog, closing one that doesn't ask at the first call and keeping one the agent clicked or typed in that asks until it discards it, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, opens its tabs muted, is refused a tab the user took over with a press in its page until they hand it back and Keep answers its ask, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, its download asks first and answers with the file, a refused one leaving none, a bank's site asks first until Always Allow, which Settings › Agents lists$needs_said, and off takes the socket away; an action waits for its element and its page to settle ($settle), a tab's id from before a relaunch is refused as such, and a launch after the window quit in its Space shows the page it opens; a screenshot of a tab just opened out of sight answers ($fresh_picture), and with the UI holding the keyboard with its picture"
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), the tabs its page opens kept in its Space, behind$opened_said, without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, pins, unpins and removes its own tab but not the user's, sends requests to its tab's site with the tab's session it never sees, a change asking each time, its question on screen as the log draws it ($follows% of its place changed), each opening in Settings › Agents to where it went and what it sent or didn't, asks a page's beforeunload handler first, with no dialog, closing one that doesn't ask at the first call and keeping one the agent clicked or typed in that asks until it discards it, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, opens its tabs muted, is refused a tab the user took over with a press in its page until they hand it back and Keep answers its ask, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, its download asks first and answers with the file, a refused one leaving none, a bank's site asks first until Always Allow, which Settings › Agents lists$needs_said, and off takes the socket away; an action waits for its element and its page to settle ($settle), a tab's id from before a relaunch is refused as such, and a launch after the window quit in its Space shows the page it opens; a screenshot of a tab just opened out of sight answers ($fresh_picture), and with the UI holding the keyboard with its picture"
 else
   echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own and is refused the user's tab, is answered that a link to an app opens nothing, its tab staying on its page, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), and its actions wait for their element and their page to settle ($settle), and the tabs its page opens are kept in its Space, behind$opened_said. A tab's id from before a relaunch is refused as such. skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
 fi
