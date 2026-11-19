@@ -926,9 +926,12 @@ final class Browser {
     // While an account is half open the list read is the phone's own, and its tabs aren't in it.
     guard listsEveryTab else { return }
     var ids: Set<String> = []
+    // What the dock can show, each with what it's known by besides its id; a favourite has only that.
+    var tiles = Dictionary(settings.favourites.map { (DockSlot.id(of: $0.url), DockSlot.id(of: $0.url)) }, uniquingKeysWith: { first, _ in first })
     func collect(_ space: String, _ folder: String?) {
       for node in account.pinned(in: space, folder: folder) {
         ids.insert(node.id)
+        tiles[node.id] = DockTiles.mark(of: node)
         if node.kind == .folder { collect(space, node.id) }
       }
     }
@@ -936,7 +939,7 @@ final class Browser {
       ids.formUnion(account.today(in: space.id).map(\.id))
       collect(space.id, nil)
     }
-    settings.keepHidden(among: ids.union(settings.favourites.map { DockSlot.id(of: $0.url) }))
+    settings.keepHidden(among: tiles)
     // The private tabs are in no account, and stay.
     for (id, tab) in tabs where !ids.contains(id) && !tab.isPrivate {
       tabs[id] = nil

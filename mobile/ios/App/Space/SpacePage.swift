@@ -363,7 +363,7 @@ extension Browser {
 
   /// Takes a tile out of this phone's dock. The account keeps it.
   func hideTile(_ id: String) {
-    withAnimation(Motion.quick) { settings.hideTile(id) }
+    withAnimation(Motion.quick) { settings.hideTile(id, knownBy: account.node(id).map(DockTiles.mark)) }
   }
 }
 
