@@ -160,7 +160,9 @@ jobs:
 
       # The Release compile runs whatever the tests did, so one run reports both failures; Verdict
       # fails the job for them. A summary line says how many tests were skipped, as a skipped test
-      # isn't a passed one.
+      # isn't a passed one. A failed test is run once more, as the runner's simulator holds a page
+      # load for a minute or more in some runs, and the summary names each test that needed it,
+      # so one that fails often stays in sight.
       - id: tests
         name: The app's tests
         continue-on-error: true
@@ -170,9 +172,17 @@ jobs:
           status=0
           xcodebuild -project ilo.xcodeproj -scheme ilo -configuration Debug \
             -destination "platform=iOS Simulator,id=$SIMULATOR" \
+            -retry-tests-on-failure -test-iterations 2 \
             -resultBundlePath "$RUNNER_TEMP/ilo-tests.xcresult" test || status=$?
           xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/ilo-tests.xcresult" --compact 2> /dev/null |
             jq -r '"- The app: \(.totalTestCount) tests, \(.passedTests) passed, \(.failedTests) failed, \(.skippedTests) skipped."' \
+              >> "$GITHUB_STEP_SUMMARY" || true
+          xcrun xcresulttool get test-results tests --path "$RUNNER_TEMP/ilo-tests.xcresult" --compact 2> /dev/null |
+            jq -r '[.. | objects
+                | select(.nodeType? == "Test Case" and .result == "Passed"
+                    and any(.children[]?; .nodeType == "Repetition" and .result == "Failed"))
+                | .name] | unique
+              | if length > 0 then "- Passed only on a second run: " + (map("“\(.)”") | join(", ")) + "." else empty end' \
               >> "$GITHUB_STEP_SUMMARY" || true
           exit "$status"
 
