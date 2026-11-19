@@ -404,11 +404,9 @@ if [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   expect "^browser: favicon $d [1-9][0-9]* bytes\$" "the icon kept for the site didn't show at the commit"
   expect "^browser: tab $d icon already kept\$" "the page's icon wasn't found kept"
   none_since "^browser: tab $d icon kept\$" || fail "the icon kept for the page was written again"
-  # A page of the site with none of its own shows the site's, as the profile keeps it.
-  go_from_bar "127.0.0.1:$port/engine.html?after"
-  expect "^browser: title $d engine safari\$" "the site kept for Safari's engine opened in Chromium"
-  expect "^browser: favicon $d [1-9][0-9]* bytes\$" "the site's icon, kept, didn't show on its page without one"
-  webkit_moved=", a page in Safari's engine, turned on in the Site Controls, moves to another window and back, and the window it left draws WebKit's picture of it, and its tab's favicon is its page's in either engine, none where the page and the profile know none, its own from WebKit, which the profile keeps once for the site"
+  # Another page of the site isn't checked for the site's icon: Chromium looks for one only at
+  # the host with no port, and the check's server always has one.
+  webkit_moved=", a page in Safari's engine, turned on in the Site Controls, moves to another window and back, and the window it left draws WebKit's picture of it, and its tab's favicon is its page's in either engine, none where the page and the profile know none, its own from WebKit, which the profile keeps once for the page"
 fi
 
 # A heavy page shaped like a video grid and a light one move between two windows, twice with the

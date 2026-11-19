@@ -284,7 +284,7 @@ quit
 
 # From macOS 14, the second profile's page in Safari's engine shows its own icon, which that profile
 # keeps and the first doesn't: the first profile's page of the site with no icon of its own shows
-# none before it and after it (#3431).
+# none, and the same page in the first profile keeps its icon as new (#3431).
 profile_icon=
 if [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   forget_engine_sites
@@ -316,11 +316,15 @@ if [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 1
     send key w cmd
     expect "^browser: tab $tab closed\$" "⌘W didn't close $tab"
   }
+  # The window says its Space after the Spaces are listed, and the one shown here is put back.
+  await '^browser: space [0-9][0-9]*$' || fail "the launch's window showed no Space"
   shown=$(space)
   [ "$shown" = "$first" ] || {
     send key 1 ctrl
     expect "^browser: space $first in " "⌃1 didn't show the first profile's Space"
   }
+  await '^browser: favorites [0-9][0-9]*$' || fail "the first profile's Space showed no favorite"
+  favorite=$(grep '^browser: favorites [0-9]' "$log" | tail -1 | cut -d' ' -f3)
   icon_page "${site}engine.html?before" "engine safari"
   expect "^browser: favicon $tab 0 bytes\$" "the first profile's page with no icon showed one"
   close_icon_page
@@ -333,10 +337,15 @@ if [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 1
   close_icon_page
   send key 1 ctrl
   expect "^browser: space $first in " "⌃1 didn't show the first profile's Space"
-  icon_page "${site}engine.html?after" "engine safari"
-  expect "^browser: favicon $tab 0 bytes\$" \
-    "the first profile's page with no icon showed the second profile's: $(grep "^browser: favicon $tab " "$log" | tail -1)"
+  icon_page "${site}icon.html" "icon safari"
+  expect "^browser: tab $tab icon \(already \)\{0,1\}kept\$" "the first profile's icon page kept no icon"
+  grep -q "^browser: tab $tab icon already kept\$" "$log" &&
+    fail "the first profile's icon page found the second profile's icon kept"
   close_icon_page
+  # Its Space showed its favorite at the quit before, which the launch after loads; a closed tab
+  # leaves it showing none.
+  send key 1 cmd
+  expect "^browser: window [0-9]* shows $favorite\$" "⌘1 didn't show the first profile's favorite again"
   # The Space shown at the quit is the one the launch after shows.
   [ "$shown" = "$first" ] || {
     send key 2 ctrl

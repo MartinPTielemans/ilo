@@ -363,8 +363,8 @@ exec 3>&-
 quit
 
 # From macOS 14, a private window's page in Safari's engine shows its own icon, which the profile
-# doesn't keep: the regular window's page of that site with none of its own, which showed none
-# before, shows none after it too (#3431).
+# doesn't keep: the regular window's page of that site with none of its own shows none, and the
+# same page there keeps its icon as new (#3431).
 private_icon=
 if [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   forget_engine_sites
@@ -398,10 +398,12 @@ if [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 1
   send key w cmd shift
   expect "^browser: window closed $window\$" "⇧⌘W didn't close the private window"
   send window 1
-  go_from_bar "127.0.0.1:$port/engine.html?after"
-  expect "^browser: title $regular engine safari\$" "the site kept for Safari's engine opened in Chromium"
-  expect "^browser: favicon $regular 0 bytes\$" \
-    "the regular window's page with no icon showed the private window's: $(grep "^browser: favicon $regular " "$log" | tail -1)"
+  go_from_bar "127.0.0.1:$port/icon.html"
+  expect "^browser: title $regular icon safari\$" "the regular window's icon page left Safari's engine"
+  expect "^browser: tab $regular icon \(already \)\{0,1\}kept\$" \
+    "the regular window's icon page kept no icon"
+  grep -q "^browser: tab $regular icon already kept\$" "$log" &&
+    fail "the regular window's icon page found the private window's icon kept"
   exec 3>&-
   quit
   forget_engine_sites
