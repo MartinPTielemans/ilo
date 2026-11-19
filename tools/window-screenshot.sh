@@ -23,6 +23,9 @@
 # own: the overlays over the browser window are above the normal level too. On the Mac too, a
 # capture that hasn't finished in 60 s gives up, saying what it was doing then: one taken while
 # another capture of the window was going sat in ScreenCaptureKit for 45 minutes (#3191).
+# On the Mac, with READY and GO set to two paths, it gets everything ready, makes READY, and takes
+# the picture once GO is there, so a step can have it right after what it watches: the Swift takes
+# 1 to 4 s to start on a hosted runner, longer than the Mini Player's controls stay (#3354).
 # Usage: tools/window-screenshot.sh <pid> <output.png> [all | screen | floating]
 set -e
 { [ $# -eq 2 ] || { [ $# -eq 3 ] && { [ "$3" = all ] || [ "$3" = screen ]; }; }; } ||
@@ -440,6 +443,15 @@ final class Stage: @unchecked Sendable {
   }
 }
 let stage = Stage()
+// With READY and GO, ready to capture: wait for the step to ask.
+func whenAsked() {
+  let env = ProcessInfo.processInfo.environment
+  guard let ready = env["READY"], let go = env["GO"] else { return }
+  stage.text = "waiting for \(go)"
+  guard FileManager.default.createFile(atPath: ready, contents: nil)
+  else { fail("can't make \(ready)") }
+  while !FileManager.default.fileExists(atPath: go) { usleep(2000) }
+}
 DispatchQueue.global().asyncAfter(deadline: .now() + 60) {
   FileHandle.standardError.write(
     Data("The capture didn't finish in 60 s, while it was \(stage.text).\n".utf8))
@@ -474,6 +486,7 @@ if floating {
   config.width = Int(window.frame.width * CGFloat(filter.pointPixelScale))
   config.height = Int(window.frame.height * CGFloat(filter.pointPixelScale))
   config.showsCursor = false
+  whenAsked()
   stage.text = "capturing the floating window"
   write(try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config))
 }
@@ -494,6 +507,7 @@ config.sourceRect = frame.offsetBy(dx: -display.frame.minX, dy: -display.frame.m
 config.width = Int(frame.width * CGFloat(filter.pointPixelScale))
 config.height = Int(frame.height * CGFloat(filter.pointPixelScale))
 config.showsCursor = false
+whenAsked()
 stage.text = "capturing the window"
 write(try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config))
 SWIFT
