@@ -528,8 +528,15 @@ for _ in $(seq 100); do
   grep "^browser: page $read_tab " "$log" | tail -1 | grep -q " loading 0 chrome://board/$notes\$" && break
   sleep 0.1
 done
-at=$(wc -l < "$nvda_log")
-press tab
+# NVDA's browse mode takes Tab itself, on from where its reading is, the page's top: past the
+# Board's tools, then to its cards.
+reached=no
+for _ in $(seq 20); do
+  at=$(wc -l < "$nvda_log")
+  press tab
+  tail -n 1 "$focus_file" | grep -q '^MSAA page focus: "top note"' && reached=yes && break
+done
+echo "note: Tab reached the Board's first note: $reached"
 board_said "$at" "'top note'.*'note'" "the first note Tab reached, by its first line, as a note"
 at=$(wc -l < "$nvda_log")
 press tab
