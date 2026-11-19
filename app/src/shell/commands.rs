@@ -1563,6 +1563,35 @@ impl Shell {
             .command_bar(editing, shown, self.bar_tabs(cx), field, cx);
     }
 
+    /// ⌘W: closes the tab shown. From a window of Chrome's, such as its Task Manager, it closes
+    /// that window, as in Chrome, and leaves the tab alone. With no tab selected there is no page
+    /// to close, so it closes the window, as ⇧⌘W does.
+    pub(super) fn close_shown(&mut self, cx: &mut Context<Self>) {
+        if self.browser.close_other_window(cx) {
+            return;
+        }
+        if !self.chosen.is_empty() {
+            self.close_chosen(cx);
+        } else if self.selected != 0 && !self.tab_open(self.selected) {
+            // The tab shown has closed and the core hasn't said which shows next: that's the one
+            // this press closes, as a user closing tabs fast means (#3570).
+            let presses = match self.close_waits {
+                Some((space, presses)) if space == self.space => presses,
+                _ => 0,
+            };
+            self.close_waits = Some((self.space, presses + 1));
+        } else if self.selected != 0 {
+            // A pinned split's pages all go, and it stays a pinned split, as its − does (Arc
+            // 1.171), and so do a favorite split's, its tile kept.
+            let tab = self.selected;
+            let kept = self.pinned().contains(&tab) || self.favorite_split(tab).is_some();
+            let split = kept && self.panes(tab).len() > 1;
+            self.close_tab(tab, split, cx);
+        } else {
+            self.browser.close_window(cx);
+        }
+    }
+
     /// Runs a browser command and logs it. `from` says which side had the key: GPUI's bindings
     /// ("ui"), the browser handing it back ("page"), or the sidebar.
     pub fn run(&mut self, command: Command, from: &str, cx: &mut Context<Self>) {
@@ -1649,27 +1678,7 @@ impl Shell {
                 }
                 return;
             }
-            Command::CloseTab => {
-                // From a window of Chrome's, such as its Task Manager, ⌘W closes that window, as in
-                // Chrome, and leaves the tab alone. With no tab selected there is no page to
-                // close, so it closes the window, as ⇧⌘W does.
-                if !self.browser.close_other_window(cx) {
-                    if !self.chosen.is_empty() {
-                        self.close_chosen(cx);
-                    } else if self.selected != 0 {
-                        // A pinned split's pages all go, and it stays a pinned split, as its −
-                        // does (Arc 1.171), and so do a favorite split's, its tile kept.
-                        let tab = self.selected;
-                        let kept =
-                            self.pinned().contains(&tab) || self.favorite_split(tab).is_some();
-                        let split = kept && self.panes(tab).len() > 1;
-                        self.close_tab(tab, split, cx);
-                    } else {
-                        self.browser.close_window(cx);
-                    }
-                }
-                return;
-            }
+            Command::CloseTab => return self.close_shown(cx),
             Command::NewWindow => return self.browser.new_window(cx),
             Command::NewPrivateWindow => return self.browser.new_private_window(cx),
             // Off in Settings › Features, ⌥⌘N does nothing.
