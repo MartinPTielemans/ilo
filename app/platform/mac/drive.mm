@@ -1515,7 +1515,7 @@ bool Run(const std::string& line, void (^done)(void)) {
       return true;
     }
     g_pip = pip;
-    ProbeWatchPip();
+    // ProbeWatchPip();  // off: does the monitor change the early-picture red?
     std::string step;
     if (!(words >> step)) {
       LogPip(pip);
