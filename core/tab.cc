@@ -61,6 +61,7 @@
 #include "components/favicon/content/content_favicon_driver.h"
 #include "components/favicon/core/favicon_service.h"
 #include "components/favicon_base/favicon_types.h"
+#include "components/favicon_base/select_favicon_frames.h"
 #include "components/history/core/browser/history_service.h"
 #include "components/history/core/browser/history_types.h"
 #include "components/infobars/content/content_infobar_manager.h"
@@ -88,15 +89,19 @@
 #include "content/public/common/drop_data.h"
 #include "content/public/common/result_codes.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
+#include "services/data_decoder/public/cpp/decode_image.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/input/web_mouse_event.h"
 #include "third_party/blink/public/mojom/frame/sudden_termination_disabler_type.mojom-shared.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/events/keycodes/dom/dom_key.h"
 #include "ui/events/keycodes/dom/keycode_converter.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/codec/png_codec.h"
+#include "ui/gfx/favicon_size.h"
+#include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/image/image_skia_rep.h"
 #include "url/gurl.h"
@@ -1084,27 +1089,161 @@ void Tab::FetchSystemPageFavicon() {
   favicon::FaviconService* service = FaviconServiceFactory::GetForProfile(
       Profile::FromBrowserContext(web_contents()->GetBrowserContext()),
       ServiceAccessType::EXPLICIT_ACCESS);
-  if (!service || !system_page_) {
+  if (!system_page_) {
     return;
   }
-  // WebKit keeps its pages' favicons to itself, so the tab shows the one Chromium knows for the
-  // page, else for its site, else none. Each document's is told, none too: the app still shows the
-  // last page's, which may be Chromium's from before the tab came to the system's engine (#3431).
+  if (!service) {
+    system_page_icon_ = SystemPageIconState::kNoneKnown;
+    return;
+  }
+  // At once, the one Chromium knows for the page, else for its site. The page's own replaces it
+  // once WebKit has loaded it and Chromium's decoder has read it. Each document's is told, none
+  // too: the app still shows the last page's, which may be Chromium's from before the tab came to
+  // the system's engine (#3431).
   service->GetRawFaviconForPageURL(
       system_page_->url(), {favicon_base::IconType::kFavicon}, kFaviconPixels,
       /*fallback_to_host=*/true,
       base::BindOnce(
-          [](base::WeakPtr<Tab> tab, const favicon_base::FaviconRawBitmapResult& result) {
-            if (!tab || !tab->system_page_ || !Host().tab_favicon_changed) {
+          [](base::WeakPtr<Tab> tab, int document,
+             const favicon_base::FaviconRawBitmapResult& result) {
+            if (!tab || !tab->system_page_ || tab->system_page_document_ != document ||
+                tab->system_page_icon_ != SystemPageIconState::kAsking) {
               return;
             }
-            const bool known = result.is_valid();
-            Host().tab_favicon_changed(Host().context, tab->id_,
-                                       known ? result.bitmap_data->data() : nullptr,
-                                       known ? result.bitmap_data->size() : 0);
+            if (result.is_valid()) {
+              tab->ShowSystemPageIcon(result.bitmap_data->data(), result.bitmap_data->size());
+            } else if (tab->system_page_icon_none_) {
+              tab->ShowSystemPageIcon(nullptr, 0);
+            } else {
+              tab->system_page_icon_ = SystemPageIconState::kNoneKnown;
+            }
           },
-          weak_factory_.GetWeakPtr()),
+          weak_factory_.GetWeakPtr(), system_page_document_),
       &favicon_tracker_);
+}
+
+void Tab::SystemPageIcon(const GURL& icon_url, std::vector<uint8_t> bytes) {
+  if (!system_page_) {
+    return;
+  }
+  const int document = system_page_document_;
+  if (bytes.empty()) {
+    SystemPageHasNoIcon(document);
+    return;
+  }
+  Profile* profile = Profile::FromBrowserContext(web_contents()->GetBrowserContext());
+  // A private window's is shown and never kept. Its profile's favicons are the regular profile's,
+  // which keep no private page's, as Chrome's keep no incognito page's.
+  favicon::FaviconService* service =
+      profile->IsOffTheRecord()
+          ? nullptr
+          : FaviconServiceFactory::GetForProfile(profile, ServiceAccessType::EXPLICIT_ACCESS);
+  if (!service) {
+    DecodeSystemPageIcon(document, icon_url, std::move(bytes), /*keep=*/false);
+    return;
+  }
+  service->GetRawFaviconForPageURL(
+      system_page_->url(), {favicon_base::IconType::kFavicon}, kFaviconPixels,
+      /*fallback_to_host=*/false,
+      base::BindOnce(
+          [](base::WeakPtr<Tab> tab, int document, const GURL& icon_url,
+             std::vector<uint8_t> bytes, const favicon_base::FaviconRawBitmapResult& kept) {
+            if (!tab || !tab->system_page_ || tab->system_page_document_ != document) {
+              return;
+            }
+            // The profile has that icon for the page already, which the commit showed: nothing
+            // is decoded or written.
+            if (kept.is_valid() && !kept.expired && kept.icon_url == icon_url) {
+              fprintf(stderr, "browser: tab %llu icon already kept\n",
+                      static_cast<unsigned long long>(tab->id_));
+              if (tab->system_page_icon_ != SystemPageIconState::kShown) {
+                tab->ShowSystemPageIcon(kept.bitmap_data->data(), kept.bitmap_data->size());
+              }
+              return;
+            }
+            tab->DecodeSystemPageIcon(document, icon_url, std::move(bytes), /*keep=*/true);
+          },
+          weak_factory_.GetWeakPtr(), document, icon_url, std::move(bytes)),
+      &favicon_tracker_);
+}
+
+void Tab::DecodeSystemPageIcon(int document,
+                               const GURL& icon_url,
+                               std::vector<uint8_t> bytes,
+                               bool keep) {
+  // The bytes come from the web, so Chromium's sandboxed decoder reads them, never the browser
+  // process, as it reads a Chromium page's favicon. Of an .ico's frames, the one nearest the row's
+  // size. An icon bigger than 1024 pixels square is shrunk to fit.
+  constexpr uint64_t kMaxDecodedBytes = 1024 * 1024 * 4;
+  data_decoder::DecodeImageIsolated(
+      bytes, data_decoder::mojom::ImageCodec::kDefault, /*shrink_to_fit=*/true, kMaxDecodedBytes,
+      gfx::Size(kFaviconPixels, kFaviconPixels),
+      base::BindOnce(&Tab::SystemPageIconDecoded, weak_factory_.GetWeakPtr(), document, icon_url,
+                     keep));
+}
+
+void Tab::SystemPageIconDecoded(int document,
+                                const GURL& icon_url,
+                                bool keep,
+                                const SkBitmap& bitmap) {
+  if (!system_page_ || system_page_document_ != document) {
+    return;
+  }
+  if (bitmap.drawsNothing()) {
+    SystemPageHasNoIcon(document);
+    return;
+  }
+  // Sized for each of the screen's scales, as Chrome's favicon handler sizes a page's.
+  float score = 0;
+  const gfx::ImageSkia image = CreateFaviconImageSkia(
+      {bitmap}, {gfx::Size(bitmap.width(), bitmap.height())}, gfx::kFaviconSize, &score);
+  std::optional<std::vector<uint8_t>> png;
+  if (!image.isNull()) {
+    png = gfx::PNGCodec::EncodeBGRASkBitmap(image.GetRepresentation(2).GetBitmap(),
+                                            /*discard_transparency=*/false);
+  }
+  if (!png) {
+    SystemPageHasNoIcon(document);
+    return;
+  }
+  ShowSystemPageIcon(png->data(), png->size());
+  if (!keep) {
+    return;
+  }
+  // In the tab's own profile, as Chrome keeps a page's favicon, so the command bar, the Library
+  // and the tab unloaded after a relaunch find it.
+  if (favicon::FaviconService* service = FaviconServiceFactory::GetForProfile(
+          Profile::FromBrowserContext(web_contents()->GetBrowserContext()),
+          ServiceAccessType::EXPLICIT_ACCESS)) {
+    service->SetFavicons({system_page_->url()}, icon_url, favicon_base::IconType::kFavicon,
+                         gfx::Image(image));
+    // For the checks, which can't read the profile's favicons.
+    fprintf(stderr, "browser: tab %llu icon kept\n", static_cast<unsigned long long>(id_));
+  }
+}
+
+void Tab::SystemPageHasNoIcon(int document) {
+  if (system_page_document_ != document) {
+    return;
+  }
+  switch (system_page_icon_) {
+    case SystemPageIconState::kAsking:
+      system_page_icon_none_ = true;
+      break;
+    case SystemPageIconState::kNoneKnown:
+      ShowSystemPageIcon(nullptr, 0);
+      break;
+    case SystemPageIconState::kShown:
+      // The profile's for the page or its site stays, as it was the page's last time.
+      break;
+  }
+}
+
+void Tab::ShowSystemPageIcon(const uint8_t* png, size_t size) {
+  system_page_icon_ = SystemPageIconState::kShown;
+  if (Host().tab_favicon_changed) {
+    Host().tab_favicon_changed(Host().context, id_, png, size);
+  }
 }
 
 void Tab::SystemPageChanged() {
@@ -1124,6 +1263,9 @@ void Tab::SystemPageCommitted() {
       history->AddPage(url, base::Time::Now(), history::SOURCE_BROWSED);
     }
   }
+  ++system_page_document_;
+  system_page_icon_ = SystemPageIconState::kAsking;
+  system_page_icon_none_ = false;
   FetchSystemPageFavicon();
   SiteControls::PageChanged(id_);
   // Chromium tells each new document's title. WebKit's can replace the empty one the commit set
@@ -1176,6 +1318,7 @@ bool Tab::SystemPageFocusLeft(bool reverse) {
 }
 
 void Tab::SystemPageClicked() {
+  Window::PagePressed(web_contents());
   Window::OnPageClicked(id_);
 }
 
@@ -1358,10 +1501,20 @@ void Tab::ReportState() {
   const media_session::mojom::MediaSessionInfoPtr media =
       session ? session->GetMediaSessionInfoSync() : nullptr;
   const bool controllable = media && media->is_controllable;
-  const std::string media_title =
-      controllable ? base::UTF16ToUTF8(session->GetMediaSessionMetadata().title) : "";
-  const std::string media_artist =
-      controllable ? base::UTF16ToUTF8(session->GetMediaSessionMetadata().artist) : "";
+  // A system page's from WebKit and the page's metadata. It plays, pauses and skips through the
+  // page's own handlers, but floats nothing: its video isn't Chromium's to show in a card.
+  const platform::SystemMedia system_media = page ? page->media() : platform::SystemMedia();
+  std::string media_title;
+  std::string media_artist;
+  if (controllable) {
+    media_title = base::UTF16ToUTF8(session->GetMediaSessionMetadata().title);
+    media_artist = base::UTF16ToUTF8(session->GetMediaSessionMetadata().artist);
+  } else if (system_media.has) {
+    // Without the page's own, its title, as Chromium's media session names a page's.
+    media_title =
+        base::UTF16ToUTF8(system_media.title.empty() ? page->title() : system_media.title);
+    media_artist = base::UTF16ToUTF8(system_media.artist);
+  }
   const bc_tab_state state = {
       .url = url.c_str(),
       .can_go_back = CanGoBack(),
@@ -1381,18 +1534,22 @@ void Tab::ReportState() {
       .sharing = !page && sharing,
       .shared = !page && capture->IsBeingMirrored(contents),
       .share_instead = !page && ShareInsteadInfoBar(contents),
-      .media = controllable,
-      .media_playing = controllable && media->playback_state ==
-                                           media_session::mojom::MediaPlaybackState::kPlaying,
+      .media = controllable || system_media.has,
+      .media_playing = controllable ? media->playback_state ==
+                                          media_session::mojom::MediaPlaybackState::kPlaying
+                                    : system_media.has && system_media.playing,
       .media_title = media_title.c_str(),
       .media_artist = media_artist.c_str(),
       .media_previous =
-          controllable &&
-          std::ranges::contains(session->GetMediaSessionActionsSync(),
-                                media_session::mojom::MediaSessionAction::kPreviousTrack),
-      .media_next = controllable &&
-                    std::ranges::contains(session->GetMediaSessionActionsSync(),
-                                          media_session::mojom::MediaSessionAction::kNextTrack),
+          controllable
+              ? std::ranges::contains(session->GetMediaSessionActionsSync(),
+                                      media_session::mojom::MediaSessionAction::kPreviousTrack)
+              : system_media.has && system_media.named,
+      .media_next =
+          controllable
+              ? std::ranges::contains(session->GetMediaSessionActionsSync(),
+                                      media_session::mojom::MediaSessionAction::kNextTrack)
+              : system_media.has && system_media.named,
       // Chrome offers the action while the page floats too, where the player has nothing to do,
       // but a video in its card floats from there (FloatCardVideo).
       .media_picture_in_picture =
@@ -1567,6 +1724,15 @@ void Tab::DidGetUserInteraction(const blink::WebInputEvent& event) {
     last_press_held_command_ = event.GetModifiers() & command;
     last_press_at_ = base::TimeTicks::Now();
     last_press_held_alt_ = event.GetModifiers() & blink::WebInputEvent::kAltKey;
+  }
+  // The user's press, a button or a finger going down, told as it comes, with the tab pressed: in a
+  // split view the window's focused pane changes only once OnPageClicked runs, and the app takes
+  // over the tab pressed, not that one (#3243). An agent's own input comes through DevTools and
+  // reaches here as the user's does, marked kFromDebugger: it takes nothing over.
+  const bool users = !(event.GetModifiers() & blink::WebInputEvent::kFromDebugger);
+  if (users && (event.GetType() == blink::WebInputEvent::Type::kMouseDown ||
+                event.GetType() == blink::WebInputEvent::Type::kTouchStart)) {
+    Window::PagePressed(web_contents());
   }
   // A click, not the keyboard coming to the page: the core moves the keyboard between the pages of
   // a split view itself, and focus reports posted from those moves arrive after the next one.
@@ -1818,6 +1984,23 @@ void Tab::ShareInstead() {
 }
 
 void Tab::Media(int action) {
+  if (system_page_) {
+    switch (action) {
+      case BC_MEDIA_PLAY:
+        system_page_->Media(platform::MediaAction::kPlay);
+        break;
+      case BC_MEDIA_PAUSE:
+        system_page_->Media(platform::MediaAction::kPause);
+        break;
+      case BC_MEDIA_NEXT:
+        system_page_->Media(platform::MediaAction::kNext);
+        break;
+      case BC_MEDIA_PREVIOUS:
+        system_page_->Media(platform::MediaAction::kPrevious);
+        break;
+    }
+    return;
+  }
   content::MediaSession* session =
       web_contents() ? content::MediaSession::GetIfExists(web_contents()) : nullptr;
   if (!session) {
