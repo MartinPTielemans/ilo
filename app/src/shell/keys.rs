@@ -1503,4 +1503,136 @@ mod tests {
             Err(Refused::Plain)
         );
     }
+
+    /// The commands SHORTCUTS runs for `heard`, as GPUI hears a key, where `off_the_mac` presses
+    /// SHORTCUTS' keys as Linux does.
+    fn run_by(heard: &Keystroke, off_the_mac: bool) -> Vec<Command> {
+        let os = match off_the_mac {
+            true => OperatingSystem::Linux,
+            false => OperatingSystem::Mac,
+        };
+        let same = |key: &str| {
+            Keystroke::parse_with_os(key, os)
+                .is_ok_and(|key| (&key.key, key.modifiers) == (&heard.key, heard.modifiers))
+        };
+        (SHORTCUTS.iter())
+            .filter(|&&(key, _, _)| applies(key, off_the_mac))
+            .filter(|&&(key, _, _)| match off_the_mac {
+                true => pressed_off_the_mac(key).iter().any(|key| same(key)),
+                false => same(key),
+            })
+            .map(|&(_, command, _)| command)
+            .collect()
+    }
+
+    /// The Mac's GPUI names a digit key by its place while ⌃ and ⇧ are held without ⌘, so ⌃⇧2,
+    /// Go to Pane 2, runs on layouts whose ⇧2 types another character than US's @: Danish's and
+    /// German's ", which GPUI heard as ⌃" (#3502). ⇧2 and ⌥⇧2, which type, and any key without ⌃,
+    /// as a Japanese composition's are, still give the character the layout types.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_digit_keys_with_control_and_shift_are_heard_by_their_place() {
+        const TWO: u16 = 0x13;
+        const A: u16 = 0x00;
+        let heard = |code, control, shift, unshifted: &str, shifted: &str| {
+            let (key, shift) =
+                gpui_macos::layout_key(code, control, shift, unshifted.into(), shifted.into());
+            let modifiers = Modifiers {
+                control,
+                shift,
+                ..Default::default()
+            };
+            Keystroke {
+                modifiers,
+                key,
+                key_char: None,
+            }
+        };
+        for (layout, shifted) in [("US", "@"), ("Danish", "\""), ("German", "\"")] {
+            let pane_2 = heard(TWO, true, true, "2", shifted);
+            assert_eq!(
+                pane_2.unparse(OperatingSystem::Mac),
+                "ctrl-shift-2",
+                "{layout}"
+            );
+            assert_eq!(run_by(&pane_2, false), [Command::FocusPane(1)], "{layout}");
+            // ⇧2 and ⌥⇧2, whose ⌥ GPUI leaves to the text it types, as before.
+            let typed = heard(TWO, false, true, "2", shifted);
+            assert_eq!(
+                (typed.key.as_str(), typed.modifiers.shift),
+                (shifted, false)
+            );
+            assert_eq!(heard(TWO, true, false, "2", shifted).key, "2");
+        }
+        // Letters keep their shift, with ⌃ too.
+        assert_eq!(
+            heard(A, true, true, "a", "A").unparse(OperatingSystem::Mac),
+            "ctrl-shift-a"
+        );
+        assert_eq!(
+            heard(A, false, true, "a", "A").unparse(OperatingSystem::Mac),
+            "shift-a"
+        );
+        // Japanese's keys, as the input method takes them.
+        assert_eq!(heard(A, false, false, "a", "A").key, "a");
+        assert_eq!(heard(TWO, false, true, "2", "\"").key, "\"");
+    }
+
+    /// Off the Mac, GPUI names a digit key by its place while shift and Alt or Ctrl are held, so
+    /// ⌃⇧2, Go to Pane 2, pressed as Alt+Shift+2, runs on layouts whose Shift+2 types another
+    /// character than US's @: Danish's and German's ", which xkb gave GPUI as Alt+" (#3502).
+    /// Shift+2 and any key without Alt or Ctrl, as a Japanese composition's are, still give the
+    /// character the layout types.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_digit_keys_with_alt_or_ctrl_and_shift_are_heard_by_their_place() {
+        use xkbcommon::xkb;
+        // evdev's codes, plus xkb's 8.
+        const SHIFT: u32 = 50;
+        const CTRL: u32 = 37;
+        const ALT: u32 = 64;
+        const TWO: u32 = 11;
+        const A: u32 = 38;
+        let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+        let heard = |layout: &str, held: &[u32], key: u32| {
+            let keymap = xkb::Keymap::new_from_names(
+                &context,
+                "evdev",
+                "pc105",
+                layout,
+                "",
+                None,
+                xkb::COMPILE_NO_FLAGS,
+            )
+            .unwrap_or_else(|| panic!("xkb has no {layout} layout"));
+            let mut state = xkb::State::new(&keymap);
+            for &code in held {
+                state.update_key(xkb::Keycode::new(code), xkb::KeyDirection::Down);
+            }
+            let modifiers = Modifiers {
+                shift: held.contains(&SHIFT),
+                control: held.contains(&CTRL),
+                alt: held.contains(&ALT),
+                ..Default::default()
+            };
+            gpui_linux::keystroke_from_xkb(&state, modifiers, xkb::Keycode::new(key))
+        };
+        let unparse = |key: Keystroke| key.unparse(OperatingSystem::Linux);
+        for (layout, shifted) in [("us", "@"), ("dk", "\""), ("de", "\""), ("jp", "\"")] {
+            let pane_2 = heard(layout, &[ALT, SHIFT], TWO);
+            assert_eq!(run_by(&pane_2, true), [Command::FocusPane(1)], "{layout}");
+            assert_eq!(unparse(pane_2), "alt-shift-2", "{layout}");
+            let with_ctrl = heard(layout, &[CTRL, SHIFT], TWO);
+            assert_eq!(unparse(with_ctrl), "ctrl-shift-2", "{layout}");
+            let typed = heard(layout, &[SHIFT], TWO);
+            assert_eq!(
+                (typed.key.as_str(), typed.modifiers.shift),
+                (shifted, false)
+            );
+            assert_eq!(unparse(heard(layout, &[ALT], TWO)), "alt-2", "{layout}");
+            assert_eq!(unparse(heard(layout, &[ALT, SHIFT], A)), "alt-shift-a");
+            assert_eq!(unparse(heard(layout, &[SHIFT], A)), "shift-a", "{layout}");
+            assert_eq!(unparse(heard(layout, &[], A)), "a", "{layout}");
+        }
+    }
 }
