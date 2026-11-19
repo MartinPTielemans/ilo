@@ -427,6 +427,7 @@ requestAnimationFrame(() => requestAnimationFrame(() => document.title = "beside
   expect '^browser: command bar shown$' "Add Split View didn't open the command bar"
   send type "$plain"
   send key return
+  opened=$step
   expect "^browser: splits .*$beside+[0-9][0-9]*" \
     "$plain didn't open beside $nearby:$port/beside.html: $(grep '^browser: splits' "$log" | tail -1)"
   warned_tab=$(grep '^browser: splits' "$log" | tail -1 | grep -o "$beside+[0-9]*" | cut -d+ -f2)
@@ -449,10 +450,15 @@ requestAnimationFrame(() => requestAnimationFrame(() => document.title = "beside
   # move the focus between the panes, the warning hiding and showing again with it (#3214). No
   # menu item has them, so on the Mac too the core asks the app about them from the warning, even
   # when AppKit hands the key to the warning as the text it types (#3230).
+  # The core asks about the warning's keys once it watches it, which on the Mac is once the warning
+  # is on screen, as it may be only as its pane takes the focus (#3230).
+  expect "browser: tab dialog's keys heard\$" \
+    "the core never heard the keys of $warned_tab's warning before http, so it can't ask the app about its shortcuts: $(since "$opened" | grep -e '^browser: drive' -e '^browser: selected' -e 'browser: tab dialog' | tail -4 | tr '\n' ' ')" \
+    "$opened"
   send key 1 ctrl shift
   shortcut=$step
   expect "^browser: selected $beside in [0-9.]* ms\$" \
-    "Go to Pane 1 (⌃⇧1) on $warned_tab's warning before http, in a split, didn't focus the pane beside it: $(since "$shortcut" | grep -e '^browser: drive' -e '^browser: command ' -e '^browser: selected' | tail -4 | tr '\n' ' ')"
+    "Go to Pane 1 (⌃⇧1) on $warned_tab's warning before http, in a split, didn't focus the pane beside it: $(since "$shortcut" | grep -e '^browser: drive' -e '^browser: command ' -e '^browser: selected' -e 'browser: tab dialog let' | tail -4 | tr '\n' ' ')"
   since "$shortcut" | grep -q '^browser: command focus-pane via ' ||
     fail "⌃⇧1 on $warned_tab's warning before http focused the pane beside it, but not as Go to Pane 1: $(since "$shortcut" | grep '^browser: command ' | tr '\n' ' ')"
   # The warning hides as its pane loses the focus. On Windows it had the keyboard, which the host
@@ -514,12 +520,12 @@ requestAnimationFrame(() => requestAnimationFrame(() => document.title = "beside
     fail "a key after a click on $warned_tab's page below its warning before http reached the page beside it"
   since "$pressed" | grep -q "^browser: page $warned_tab back [01] forward [01] loading 1 " &&
     fail "a click on $warned_tab's page below its warning before http reached the page under the warning: $(since "$pressed" | grep "^browser: page $warned_tab " | tail -3 | tr '\n' ' ')"
-  # The page beside it again, for the ⌘W that closes it.
-  pane=$(echo "$panes" | sed -n 1p)
-  pane_x=${pane%%,*} pane_y=${pane#*,}
-  pane_y=${pane_y%% *}
-  send click $((pane_x + 100)) $((pane_y + 100))
-  expect "^browser: selected $beside\$" "a click on the page beside $warned_tab's warning before http, after the warned pane's, didn't focus its pane again"
+  # The page beside it again, for the ⌘W that closes it, by Go to Pane 1 from the warning: shown
+  # again with its pane, it still has its shortcuts asked about (#3230).
+  send key 1 ctrl shift
+  again=$step
+  expect "^browser: selected $beside in [0-9.]* ms\$" \
+    "Go to Pane 1 (⌃⇧1) on $warned_tab's warning before http, shown again as its pane took the focus, didn't focus the pane beside it: $(since "$again" | grep -e '^browser: drive' -e '^browser: command ' -e '^browser: selected' -e 'browser: tab dialog let' | tail -4 | tr '\n' ' ')"
   send key w cmd
   expect "^browser: tab $beside closed\$" "⌘W didn't close the pane beside $warned_tab's warning before http"
   expect "^browser: panes $warned_tab\$" "⌘W on the pane beside the warning didn't leave $warned_tab alone"

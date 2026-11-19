@@ -3118,6 +3118,11 @@ gfx::NativeView Window::GetHostView() const {
 }
 
 gfx::Point Window::GetDialogPosition(const gfx::Size& size) {
+  // Chrome places a tab's dialog through this each time it shows it again, after making it
+  // visible, as its tab comes to the front or its pane takes the focus. The Mac lists a child
+  // window only while it's on screen, so a dialog that came on screen after the moments
+  // AddObserver watches at, as a split pane's warning can, is watched here, from then (#3230).
+  dialog_keys::Watch(widget_.get());
   // As in Chrome's window: a tab's dialog, such as print preview, is centred over the page, at its
   // top. In a split view, over the focused page.
   return gfx::Point(focused_frame_.CenterPoint().x() - size.width() / 2, focused_frame_.y());
