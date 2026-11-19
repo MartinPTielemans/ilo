@@ -79,15 +79,19 @@ std::vector<NativeAdBlockList> Due(std::vector<NativeAdBlockList> lists) {
   return due;
 }
 
-enum class Kept { kYes, kRefused, kNotWritten };
+enum class Kept { kYes, kRefused, kNothingNew, kNotWritten };
 
 // Keeps |text| as |list|'s copy, whole or not at all, if it takes the place of the last good one.
 // Off the UI thread.
 Kept Keep(const NativeAdBlockList& list, const std::string& text) {
   std::string last_good;
   const bool read = !list.last_good.empty() && base::ReadFileToString(list.last_good, &last_good);
-  if (!ad_block_list_check::Takes(
-          text, read ? std::optional<std::string_view>(last_good) : std::nullopt)) {
+  const ad_block_list_check::Download download = ad_block_list_check::Judge(
+      text, read ? std::optional<std::string_view>(last_good) : std::nullopt);
+  if (download == ad_block_list_check::Download::kNothingNew) {
+    return Kept::kNothingNew;
+  }
+  if (download == ad_block_list_check::Download::kRefused) {
     // Each copy's date, or a null time, logged as 1601, for none.
     const base::Time updated = ad_block_list_check::Updated(text).value_or(base::Time());
     const base::Time held = ad_block_list_check::Updated(last_good).value_or(base::Time());
@@ -104,6 +108,16 @@ Kept Keep(const NativeAdBlockList& list, const std::string& text) {
              : Kept::kNotWritten;
 }
 
+// Restarts the clock on |key|'s downloaded copy when it's |held|, the copy the ad blocker reads,
+// and the list's addresses had nothing newer: else the list stays due, and every look downloads
+// it from each address again. Off the UI thread.
+void Unchanged(const std::string& key, const base::FilePath& held) {
+  if (held == DownloadedAdBlockList(key)) {
+    const base::Time now = base::Time::Now();
+    base::TouchFile(held, now, now);
+  }
+}
+
 // One pass over the lists due, which owns itself until it's done.
 class Update {
  public:
@@ -116,8 +130,7 @@ class Update {
   // Downloads the next list from its next address, or ends.
   void Next() {
     while (list_ < due_.size() && address_ >= due_[list_].addresses.size()) {
-      ++list_;
-      address_ = 0;
+      NextList();
     }
     if (list_ >= due_.size()) {
       std::move(done_).Run(std::move(updated_));
@@ -150,8 +163,10 @@ class Update {
   }
 
   void OnKept(Kept kept) {
-    // A refused download may be a mirror's broken copy, so the next address gets its turn.
-    if (kept == Kept::kRefused) {
+    // A refused download may be a mirror's broken copy, and one with nothing new a mirror that
+    // stopped, so the next address gets its turn.
+    if (kept == Kept::kRefused || kept == Kept::kNothingNew) {
+      nothing_new_ = nothing_new_ || kept == Kept::kNothingNew;
       ++address_;
       Next();
       return;
@@ -159,15 +174,30 @@ class Update {
     if (kept == Kept::kYes) {
       updated_.push_back(due_[list_].key);
     }
+    nothing_new_ = false;
+    NextList();
+    Next();
+  }
+
+  // Ends the list's turn. If one of its addresses had a copy as new as the one held and none a
+  // newer, the held copy stays, with its clock restarted.
+  void NextList() {
+    if (nothing_new_) {
+      base::ThreadPool::PostTask(
+          FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
+          base::BindOnce(&Unchanged, due_[list_].key, due_[list_].last_good));
+    }
+    nothing_new_ = false;
     ++list_;
     address_ = 0;
-    Next();
   }
 
   std::vector<NativeAdBlockList> due_;
   base::OnceCallback<void(std::vector<std::string>)> done_;
   size_t list_ = 0;
   size_t address_ = 0;
+  // Whether an address of the list had a copy as new as the one held.
+  bool nothing_new_ = false;
   std::unique_ptr<network::SimpleURLLoader> loader_;
   std::vector<std::string> updated_;
 };
