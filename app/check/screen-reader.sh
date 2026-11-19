@@ -281,6 +281,46 @@ press tab shift
 press down
 press down
 press up
+# A Board's cards (#3407), not judged yet: the note left with Escape has the keyboard and is read
+# by its first line as a note, Tab goes on to the next card, its copy, and moving it with → and
+# deleting it are said. Here, before the steps #3396 stops at, so they're recorded on every run;
+# the Board's tab is archived after, leaving the Space empty again.
+press e ctrl shift
+expect '^browser: new board [0-9a-f]\{32\} tab [0-9]*$' "⌃⇧E made no Board"
+board=$(grep '^browser: new board ' "$log" | tail -1 | cut -d' ' -f6)
+send type "kitchen"
+press return
+expect "^browser: board $board has the keyboard\$" "↩ on the new Board's name didn't give its page the keyboard"
+for _ in $(seq 100); do
+  grep "^browser: page $board " "$log" | tail -1 | grep -q ' loading 0 chrome://board/' && break
+  sleep 0.1
+done
+heard=$(wc -l < "$nvda_log")
+send type "top note"
+spoken "typed the Board's first note"
+board_said() {
+  said=no
+  tail -n "+$(($1 + 1))" "$nvda_log" | grep -q "^Speaking .*$2" && said=yes
+  echo "note: NVDA said $3: $said"
+}
+at=$(wc -l < "$nvda_log")
+press escape
+board_said "$at" "'top note'.*'note'" "the note Escape left, by its first line, as a note"
+press c cmd
+press v cmd
+at=$(wc -l < "$nvda_log")
+press tab
+board_said "$at" "'top note'" "the note's copy Tab went on to"
+at=$(wc -l < "$nvda_log")
+press right
+board_said "$at" "'Moved right" "→ moving it"
+at=$(wc -l < "$nvda_log")
+press backspace
+board_said "$at" "'Deleted top note" "Delete taking it away"
+press d cmd
+expect "^browser: today\( [0-9]*\)* $board\( [0-9]*\)*\$" "⌘D didn't move the Board's tab into Today"
+press w cmd
+expect "^browser: tab $board closed\$" "⌘W didn't archive the Board's tab"
 # ⌃T as the driver names it, the Mac's ⌘.
 press t cmd
 heard=$(wc -l < "$nvda_log")
@@ -395,43 +435,6 @@ press , cmd
 press tab
 press tab
 press escape
-# A Board's cards (#3407), not judged yet: the note left with Escape has the keyboard and is read
-# by its first line as a note, Tab goes on to the next card, its copy, and moving it with → and
-# deleting it are said. Settings, shown above, keeps the keys until it's hidden.
-press w cmd
-expect '^browser: settings hidden$' "⌘W didn't hide Settings before the Board's notes"
-press e ctrl shift
-expect '^browser: new board [0-9a-f]\{32\} tab [0-9]*$' "⌃⇧E made no Board"
-board=$(grep '^browser: new board ' "$log" | tail -1 | cut -d' ' -f6)
-send type "kitchen"
-press return
-expect "^browser: board $board has the keyboard\$" "↩ on the new Board's name didn't give its page the keyboard"
-for _ in $(seq 100); do
-  grep "^browser: page $board " "$log" | tail -1 | grep -q ' loading 0 chrome://board/' && break
-  sleep 0.1
-done
-heard=$(wc -l < "$nvda_log")
-send type "top note"
-spoken "typed the Board's first note"
-board_said() {
-  said=no
-  tail -n "+$(($1 + 1))" "$nvda_log" | grep -q "^Speaking .*$2" && said=yes
-  echo "note: NVDA said $3: $said"
-}
-at=$(wc -l < "$nvda_log")
-press escape
-board_said "$at" "'top note'.*'note'" "the note Escape left, by its first line, as a note"
-press c cmd
-press v cmd
-at=$(wc -l < "$nvda_log")
-press tab
-board_said "$at" "'top note'" "the note's copy Tab went on to"
-at=$(wc -l < "$nvda_log")
-press right
-board_said "$at" "'Moved right" "→ moving it"
-at=$(wc -l < "$nvda_log")
-press backspace
-board_said "$at" "'Deleted top note" "Delete taking it away"
 exec 3>&-
 quit
 nvda_quit

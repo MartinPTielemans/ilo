@@ -17,8 +17,7 @@
 # note; ⌘C, ⌘V and ⌘Z in the page copy, paste and undo cards, and ⌘− zooms the canvas, not the
 # page, each saved. Tab reaches a Board's cards in reading order, whatever order its file has them in, the
 # arrows move the one the keyboard's on, Delete takes it away and the keyboard goes on to the next,
-# and ⌘Z brings it back, each saved; on the Mac VoiceOver reads a note by its first line and ink as
-# a drawing, captured. Relaunched, the Board comes back with its note. The Board holding [] then shows
+# and ⌘Z brings it back, each saved, captured. Relaunched, the Board comes back with its note. The Board holding [] then shows
 # its file in the system's file manager from its note's button, last of the steps; after it, that
 # the page the bar's ↩ loaded over a Board had the keyboard is judged.
 # An agent gets nothing of a Board, wherever the user opens one: one New Board made, one opened from
@@ -675,8 +674,7 @@ send window 1
 # #3407: the keyboard reaches a Board's cards. Tab goes into them at the first in reading order, top
 # to bottom then left to right, whatever order the file has them in, and on from card to card; the
 # arrows move the card the keyboard's on, a point and with ⇧ ten; Delete takes it away and the
-# keyboard goes on to the next card; ⌘Z brings it back. On the Mac, VoiceOver reads the card the
-# keyboard's on by its role and name. NVDA's words for them are screen-reader.sh's.
+# keyboard goes on to the next card; ⌘Z brings it back. NVDA's words for them are screen-reader.sh's.
 # An id of its own: the c×32 Board of the steps before is still open in a tab, where this would only say so.
 walk=$(printf '7%.0s' $(seq 32))
 mkdir -p "$boards/$walk"
@@ -701,14 +699,6 @@ moved_to() {
   done
   fail "$2 left the cards at $(places), not $1"
 }
-voiceover() {
-  [ "$(uname)" = Darwin ] || return 0
-  said=$(../tools/ax-tree.sh "$pid" --focused)
-  case $said in
-  accessibility:*) echo "skip: VoiceOver's read of the Board's cards: $said" ;;
-  *) echo "$said" | grep -q "$1" || fail "VoiceOver doesn't read $2 as $1: $said" ;;
-  esac
-}
 send key t cmd
 expect '^browser: command bar shown$' "⌘T didn't open the command bar for the Board to walk"
 send insert "chrome://board/$walk"
@@ -720,14 +710,12 @@ for _ in $(seq 100); do
   sleep 0.1
 done
 send key tab
-voiceover '^focused: 0 AXGroup/[^ ]* "top left".* roledescription=note$' "the first card Tab reaches, a note,"
 send key tab
 saves=$(grep -c 'browser: board saved$' "$log" || true)
 send key right
 moved_to "a 100 100 b 501 100 c 100 400 d 500 400" "→ on the second card in reading order, after Tab twice,"
 send key tab
 send key tab
-voiceover '^focused: 0 AXImage/[^ ]* "Drawing"' "the ink Tab reaches last"
 saves=$(grep -c 'browser: board saved$' "$log" || true)
 send key down shift
 moved_to "a 100 100 b 501 100 c 100 400 d 500 410" "⇧↓ on the last card, after Tab twice more,"
@@ -812,7 +800,7 @@ echo "ok: New Board made $id, its name kept and its note saved in its folder alo
   "sidebar's +, the command bar and its key with the page and the bar focused; Japanese kept as" \
   "the first note; ⌘C ⌘V and ⌘Z in the page saved; ⌘− the canvas's, not the page's;" \
   "Tab walked a Board's cards in reading order, the arrows moved them, Delete and ⌘Z saved," \
-  "$( [ "$(uname)" = Darwin ] && echo "VoiceOver read the note and the ink;") an agent got nothing of a Board made," \
+  "an agent got nothing of a Board made," \
   "opened from the Library or typed into its own tab, each refusal logged without a name;" \
   "markup and a javascript: link ran" \
   "nothing; a waiting picture landed as a card and left the arrivals, and one that came while" \

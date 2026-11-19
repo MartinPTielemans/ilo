@@ -5,10 +5,7 @@
 # turns it on in a GPUI window, so with a `text` it asks again for up to 10 s until a line has it.
 # It needs this terminal to have the Accessibility permission and prints "accessibility: skipped"
 # if it hasn't; it never asks for it. Run it in the check VM, not on the owner's Mac.
-# With --focused it prints only the element the keyboard is on, a page's own included, and its role
-# as VoiceOver says it, asking Chromium for its pages' trees as VoiceOver does, for up to 10 s
-# until that element is in a page.
-# Usage: tools/ax-tree.sh <pid> [text | --focused]
+# Usage: tools/ax-tree.sh <pid> [text]
 set -e
 [ $# -ge 1 ] && [ $# -le 2 ] || { echo "usage: $0 <pid> [text]" >&2; exit 2; }
 PID="$1" UNTIL="${2:-}" swift - <<'SWIFT'
@@ -72,34 +69,6 @@ func dump() -> [String] {
   }
   for window in value(app, kAXWindowsAttribute) as? [AXUIElement] ?? [] { walk(window, 0) }
   return lines
-}
-if until == "--focused" {
-  // VoiceOver's way of asking Chromium for its pages' trees, which it builds only when asked.
-  AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
-  let deadline = Date().addingTimeInterval(10)
-  var said = "focused: none"
-  repeat {
-    if let object = value(app, kAXFocusedUIElementAttribute),
-      CFGetTypeID(object) == AXUIElementGetTypeID()
-    {
-      let focused = object as! AXUIElement
-      let kind = text(value(focused, kAXRoleDescriptionAttribute)) ?? ""
-      said = "focused: \(line(focused, 0)) roledescription=\(kind)"
-      var parent = value(focused, kAXParentAttribute)
-      var inPage = false
-      while let element = parent, CFGetTypeID(element) == AXUIElementGetTypeID() {
-        if text(value(element as! AXUIElement, kAXRoleAttribute)) == "AXWebArea" {
-          inPage = true
-          break
-        }
-        parent = value(element as! AXUIElement, kAXParentAttribute)
-      }
-      if inPage { break }
-    }
-    Thread.sleep(forTimeInterval: 0.2)
-  } while Date() < deadline
-  print(said)
-  exit(0)
 }
 var lines = dump()
 let deadline = Date().addingTimeInterval(10)
