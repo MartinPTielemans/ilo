@@ -478,7 +478,8 @@ if floating {
   // Probe for #3354, never to land: when the picture was asked for and when it came, in ms since
   // 1970.
   let asked = Date().timeIntervalSince1970 * 1000
-  let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+  let image: CGImage = try await SCScreenshotManager.captureImage(
+    contentFilter: filter, configuration: config)
   let came = Date().timeIntervalSince1970 * 1000
   FileHandle.standardError.write(Data(String(format: "probe grab %.0f %.0f\n", asked, came).utf8))
   write(image)
