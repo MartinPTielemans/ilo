@@ -159,6 +159,7 @@ final class Browser {
     space = settings.space
     wantsKeyboard = settings.keyboardOnLaunch
     (account as? PhoneAccount)?.joined = { [weak self] in self?.joined($0) }
+    watch()
   }
 
   var currentSpace: SyncedSpace? {
@@ -998,12 +999,9 @@ final class Browser {
     // While an account is half open the list read is the phone's own, and its tabs aren't in it.
     guard listsEveryTab else { return }
     var ids: Set<String> = []
-    // What the dock can show, each with what it's known by besides its id; a favourite has only that.
-    var tiles = Dictionary(settings.favourites.map { (DockSlot.id(of: $0.url), DockSlot.id(of: $0.url)) }, uniquingKeysWith: { first, _ in first })
     func collect(_ space: String, _ folder: String?) {
       for node in account.pinned(in: space, folder: folder) {
         ids.insert(node.id)
-        tiles[node.id] = DockTiles.mark(of: node)
         if node.kind == .folder { collect(space, node.id) }
       }
     }
@@ -1011,7 +1009,7 @@ final class Browser {
       ids.formUnion(account.today(in: space.id).map(\.id))
       collect(space.id, nil)
     }
-    settings.keepHidden(among: tiles)
+    lookAtTiles(forgetting: true)
     // The private tabs are in no account, and stay.
     for (id, tab) in tabs where !ids.contains(id) && !tab.isPrivate {
       tabs[id] = nil
@@ -1023,6 +1021,44 @@ final class Browser {
     }
     cache.prune(keeping: ids)
     rehomePrivate()
+  }
+
+  /// Looks at the tiles the dock can show now, so that a hidden one another device moved to
+  /// another Space, a new node there, is hidden still. A hidden one that's gone is forgotten
+  /// only when `forgetting`, at the look the app takes as it comes to the front: a move can
+  /// reach the phone as its two halves, the old node gone and then the new one there, and
+  /// between them the hiding waits for the tile it belongs to.
+  private func lookAtTiles(forgetting: Bool) {
+    guard listsEveryTab else { return }
+    // Each with what it's known by besides its id; a favourite has only that.
+    var tiles = Dictionary(settings.favourites.map { (DockSlot.id(of: $0.url), DockSlot.id(of: $0.url)) }, uniquingKeysWith: { first, _ in first })
+    func collect(_ space: String, _ folder: String?) {
+      for node in account.pinned(in: space, folder: folder) {
+        tiles[node.id] = DockTiles.mark(of: node)
+        if node.kind == .folder { collect(space, node.id) }
+      }
+    }
+    for space in account.spaces { collect(space.id, nil) }
+    settings.keepHidden(among: tiles, forgetting: forgetting)
+  }
+
+  /// Hears of the account's tabs changing, as they do by another device's hand while the app is
+  /// in front, and has the tiles this phone hides follow. Once a change, however many tabs it's
+  /// of, and never on a timer.
+  private func watch() {
+    withObservationTracking {
+      for space in account.spaces {
+        _ = account.today(in: space.id)
+        _ = account.allPinned(in: space.id)
+      }
+    } onChange: { [weak self] in
+      // Told before the change is made, so the look waits its turn.
+      Task { @MainActor in
+        guard let self else { return }
+        self.lookAtTiles(forgetting: false)
+        self.watch()
+      }
+    }
   }
 
   func signOut() async {

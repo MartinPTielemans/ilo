@@ -237,6 +237,44 @@ import Testing
     #expect(account.allPinned(in: "reading").last?.url == before[0].first { $0.id == "pin-1" }?.url)
   }
 
+  @Test func `a hidden pinned tab that another device moves while the app is in front is hidden there at once`() async throws {
+    let account = FixtureAccount(signedIn: true)
+    let browser = try browser(on: account)
+    await look(browser)
+    browser.hideTile("pin-1")
+    #expect(browser.dockTiles(in: "work").shown.map(\.label) == ["Reviews", "Roadmap"])
+    let home = browser.dockTiles(in: "home").shown.map(\.label)
+
+    // The account hears of the move by itself: nothing comes to the front.
+    let moved = try #require(account.move("pin-1", to: "home"))
+    #expect(await eventually(seconds: 10) { browser.settings.hiddenTiles == [moved.id] })
+    #expect(browser.dockTiles(in: "home").shown.map(\.label) == home)
+    // Hiding is this phone's alone: the account has the tab where the other device put it.
+    #expect(account.allPinned(in: "home").map(\.id).contains(moved.id))
+  }
+
+  @Test func `a move that reaches the phone in two halves keeps the tile hidden, and what's gone is forgotten at the front`() async throws {
+    let account = FixtureAccount(signedIn: true)
+    let browser = try browser(on: account)
+    await look(browser)
+    browser.hideTile("pin-1")
+
+    // The old node goes first. Until the app next comes to the front, its hiding waits.
+    let loose = try #require(account.unpin("pin-1"))
+    for _ in 0..<20 { await Task.yield() }
+    #expect(browser.settings.hiddenTiles == ["pin-1"])
+    // Then the new one comes, at the page the hidden one was pinned at.
+    let again = try #require(account.pin(today: loose.id))
+    #expect(await eventually(seconds: 10) { browser.settings.hiddenTiles == [again.id] })
+
+    // One that's gone for good is forgotten as the app comes to the front.
+    account.unpin(again.id)
+    for _ in 0..<20 { await Task.yield() }
+    #expect(browser.settings.hiddenTiles == [again.id])
+    await look(browser)
+    #expect(browser.settings.hiddenTiles.isEmpty)
+  }
+
   @Test func `a pinned tab that's new elsewhere is shown, whatever was hidden and is gone`() async throws {
     let account = FixtureAccount(signedIn: true)
     let browser = try browser(on: account)

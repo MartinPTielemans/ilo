@@ -135,14 +135,16 @@ final class Settings {
     if let mark = hiddenMarks.removeValue(forKey: id) { hiddenMarks[new] = mark }
   }
 
-  /// Looks at the tiles the account has now, each by its id with its mark. A hidden one the
-  /// account no longer has is forgotten, and one another device moved, a new node now, is
-  /// hidden still.
-  func keepHidden(among tiles: [String: String]) {
-    let kept = DockTiles.kept(hiddenTiles, knownBy: hiddenMarks, since: tilesSeen, among: tiles)
+  /// Looks at the tiles the account has now, each by its id with its mark. One another device
+  /// moved, a new node now, is hidden still, and a hidden one the account no longer has is
+  /// forgotten when `forgetting`, and waits for its tile otherwise.
+  func keepHidden(among tiles: [String: String], forgetting: Bool = true) {
+    let known = hiddenMarks
+    let kept = DockTiles.kept(hiddenTiles, knownBy: known, since: tilesSeen, among: tiles, forgetting: forgetting)
     if kept != hiddenTiles { hiddenTiles = kept }
     // As the account has them now: a hidden tab pinned at another address is known by that.
-    let marks = tiles.filter { kept.contains($0.key) }
+    // One that waits for its tile is known by what it was.
+    let marks = known.filter { kept.contains($0.key) }.merging(tiles.filter { kept.contains($0.key) }) { _, now in now }
     if marks != hiddenMarks { hiddenMarks = marks }
     let seen = Set(tiles.keys)
     if seen != tilesSeen { tilesSeen = seen }
