@@ -1,0 +1,49 @@
+Gives the browser the keys pressed in a page whose renderer process a JavaScript dialog blocks, as
+keys the page passed on (#3528). Chrome blocks the asking page's process while its dialog is up, and
+RenderWidgetHostImpl::ForwardKeyboardEventWithCommands dropped every key of a page in a blocked
+process before PreHandleKeyboardEvent, so the browser heard none of them. Two pages of one site
+share a process, so in a split view whose dialog rests over its pane, no browser shortcut worked from
+the page beside: not the key back to the dialog, nor a new tab's or closing the tab's, until the
+dialog was answered. Every key on every OS comes through this one function (the Mac's
+RenderWidgetHostViewCocoa, ⌘ keys included, and aura's RenderWidgetHostViewEventHandler), so the rule
+is here once. Now such a key goes to PreHandleKeyboardEvent, then to HandleKeyboardEvent as
+OnKeyboardEventAck gives an unhandled one, and the page still never gets it, as in Chrome: what the
+browser doesn't take is dropped. A key the delegate ignores for any other reason stays ignored.
+
+--- a/content/browser/renderer_host/render_widget_host_impl.cc
++++ b/content/browser/renderer_host/render_widget_host_impl.cc
+@@ -1830,7 +1830,16 @@
+     return;
+   }
+ 
+-  if (IsIgnoringWebInputEvents(key_event)) {
++  // browser_core: a page whose process a JavaScript dialog blocks still gives
++  // its keys to the browser, as keys it passed on, and never gets them itself.
++  // Two pages of a site share a process, so a page beside a dialog's was
++  // blocked with it, and no browser shortcut worked from it until the dialog
++  // was answered (#3528). Only for that reason: input the delegate ignores
++  // stays ignored.
++  const bool blocked_page_key =
++      GetProcess()->IsBlocked() && delegate_ &&
++      !delegate_->ShouldIgnoreWebInputEvents(key_event);
++  if (IsIgnoringWebInputEvents(key_event) && !blocked_page_key) {
+     return;
+   }
+ 
+@@ -1916,6 +1925,16 @@
+     }
+   }
+ 
++  // browser_core: the blocked page can't answer, so the browser has the key
++  // now as OnKeyboardEventAck would give it an unhandled one, and the page
++  // never does. A shortcut that closes the tab deletes this here.
++  if (blocked_page_key) {
++    if (delegate_ && !key_event.skip_if_unhandled && !IsHidden()) {
++      delegate_->HandleKeyboardEvent(key_event);
++    }
++    return;
++  }
++
+   auto* touch_emulator = GetTouchEmulator(/*create_if_necessary=*/false);
+   if (touch_emulator && touch_emulator->HandleKeyboardEvent(key_event)) {
+     return;
