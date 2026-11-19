@@ -2,6 +2,7 @@
 //! its profile and its theme (docs/ux-spec.md › Spaces).
 
 use crate::tokens::text;
+use std::time::Duration;
 use web_time::Instant;
 
 use gpui::{
@@ -52,6 +53,8 @@ impl Shell {
                 form.space
             }
             None => {
+                // The last form's leave ends here, so its timer can't end this one's.
+                self.leaving_form = None;
                 // Arc's name for a Space the user doesn't name.
                 let name = format!("Space {}", self.spaces.len() + 1);
                 // In the profile of the Space it's made from, and right after it (Arc), but
@@ -111,7 +114,22 @@ impl Shell {
         if let Some(tab) = tab {
             self.move_to_space(tab, space, false, cx);
         }
-        self.leaving_form = self.form.take().map(|form| (form, Instant::now()));
+        // The leave ends on the clock, as a toast's does, since a frame the window asks for can be
+        // lost: the form then stayed over the Space's rows until the pointer moved (#3554).
+        let ends = cx.spawn(async move |shell, cx| {
+            cx.background_executor()
+                .timer(Duration::from_secs_f32(FORM_LEAVE_TITLE + FORM_LEAVE))
+                .await;
+            shell
+                .update(cx, |shell, cx| {
+                    shell.leaving_form = None;
+                    // check.sh waits for this line.
+                    log!("browser: space form gone");
+                    cx.notify();
+                })
+                .ok();
+        });
+        self.leaving_form = self.form.take().map(|form| (form, Instant::now(), ends));
         window.focus(&self.focus_handle, cx);
         cx.notify();
     }

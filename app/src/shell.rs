@@ -1369,8 +1369,9 @@ pub struct Shell {
     /// The Space the window shows.
     space: u64,
     form: Option<SpaceForm>,
-    /// The form Create sent away, and when, until it's gone and its Space shows its rows.
-    leaving_form: Option<(SpaceForm, Instant)>,
+    /// The form Create sent away, and when, until it's gone and its Space shows its rows, with
+    /// the timer that ends it.
+    leaving_form: Option<(SpaceForm, Instant, Task<()>)>,
     /// The form a swipe back cancelled, while its page goes out.
     form_going: Option<SpaceForm>,
     /// The form's field takes GPUI's focus at the next draw, which is when the shell has a window.
@@ -4698,14 +4699,10 @@ impl Render for Shell {
         self.step_recent_downloads(window, cx);
         self.step_media_stack(window, cx);
         self.step_update_banner(window);
-        if let Some((_, left)) = &self.leaving_form {
-            if left.elapsed().as_secs_f32() < FORM_LEAVE_TITLE + FORM_LEAVE {
-                window.request_animation_frame();
-            } else {
-                self.leaving_form = None;
-                // check.sh waits for this line.
-                log!("browser: space form gone");
-            }
+        if let Some((_, left, _)) = &self.leaving_form
+            && left.elapsed().as_secs_f32() < FORM_LEAVE_TITLE + FORM_LEAVE
+        {
+            window.request_animation_frame();
         }
         if self.list_moving() {
             window.request_animation_frame();
@@ -5110,7 +5107,7 @@ impl Shell {
         let leaving = self
             .leaving_form
             .as_ref()
-            .filter(|(form, _)| form.space == self.space);
+            .filter(|(form, ..)| form.space == self.space);
         let sidebar = match (self.paged_form(), self.form(), leaving) {
             // Paged, the form goes as a page does, and the URL field and the favorites go with the
             // Space beside's page, as its rows do.
@@ -5130,7 +5127,7 @@ impl Shell {
                     .child(form)
             }
             (None, Some(form), _) => sidebar.child(self.space_form(form, None, cx)),
-            (None, None, Some((form, left))) => {
+            (None, None, Some((form, left, _))) => {
                 let left = left.elapsed().as_secs_f32();
                 sidebar.child(self.space_form(form, Some(left), cx))
             }
