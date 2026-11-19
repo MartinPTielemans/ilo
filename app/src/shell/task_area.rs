@@ -859,7 +859,10 @@ impl Shell {
             );
         }
         if in_place {
-            layer = layer.child(card(place, self.card_radius(), self.palette.page));
+            // A page that died leaves its place to its card, as in the user's own Space.
+            layer = layer
+                .child(card(place, self.card_radius(), self.palette.page))
+                .children(self.crash_cards(place, cx));
         } else {
             layer = layer.child(self.task_page_picture(page, between(page.thumb, place, zoom), cx));
         }

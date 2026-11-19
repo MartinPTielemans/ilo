@@ -4931,7 +4931,7 @@ impl Render for Shell {
                     )
                     .children(self.picture_element(cx))
                     .children(self.empty_card(cx))
-                    .children(self.crash_cards(cx))
+                    .children(self.crash_cards(self.page_frame(self.viewport).0, cx))
                     .children(self.pane_gaps(cx))
                     .children(self.pane_handles(cx))
             })
