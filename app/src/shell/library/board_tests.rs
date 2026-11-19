@@ -109,6 +109,51 @@ fn a_private_window_has_no_boards(cx: &mut TestAppContext) {
     });
 }
 
+/// A Board's row's menu with the keyboard: ↓ from Boards' field rings the row, ⇧F10 opens its
+/// menu, and Duplicate in it makes a copy, as from a right-click (#3526).
+#[gpui::test]
+fn a_boards_row_menu_opens_from_the_keyboard(cx: &mut TestAppContext) {
+    let profile = std::env::temp_dir().join(format!("ilo-board-keys-{}", boards::new_id()));
+    let id = "d".repeat(32);
+    boards::make(&profile, &id).unwrap();
+    std::fs::write(boards::dir(&profile).join(&id).join("board.json"), "{}").unwrap();
+    let host = Rc::new(Recorder::default());
+    (host.profile_folders.borrow_mut()).insert(1, profile.clone());
+    let browser = host.clone();
+    cx.update(|cx| {
+        crate::shell::commands::bind_keys(cx);
+        crate::text_input::bind_keys(cx);
+    });
+    let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+    cx.update(|window, _| window.activate_window());
+    shell.update(cx, |shell, cx| {
+        let space = (1, "Space".into(), None, 1, "".into(), "".into(), "".into());
+        shell.set_spaces(vec![space], cx);
+        shell.set_tabs(1, Vec::new(), vec![10], Vec::new(), Default::default(), cx);
+        shell.set_space(1, cx);
+        shell.run(Command::ViewBoards, "test", cx);
+        shell.library_motion = None;
+        shell.sidebar_fade = None;
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("down");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("shift-f10");
+    cx.run_until_parked();
+    let menu = host.menus.borrow().last().cloned().unwrap_or_default();
+    let titles: Vec<String> = menu.iter().map(|(title, _)| title.to_string()).collect();
+    assert_eq!(titles, ["Open", "Duplicate", "", "Delete"]);
+    cx.update(|_, cx| host.choose("Duplicate", cx));
+    cx.run_until_parked();
+    let rows = listed(&shell, cx);
+    assert!(
+        rows.iter()
+            .any(|(each, name)| *each != id && name == "Board copy"),
+        "no Board copy listed: {rows:?}"
+    );
+    std::fs::remove_dir_all(&profile).unwrap();
+}
+
 /// A right-click on a Board's row offers Open, Duplicate and Delete. Duplicate opens a copy named
 /// as one in a new tab and closes the Library, and Delete takes the Board out of the list. The
 /// point is the first row's, under its day's heading, where tools/parity.sh right-clicks.

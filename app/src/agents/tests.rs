@@ -2913,6 +2913,34 @@ fn the_user_takes_over_and_stops_an_agent(cx: &mut TestAppContext) {
     assert_eq!(log(&agents, "claude-code", cx)[0].0, "stopped by the user");
 }
 
+/// An agent has a status while its session lasts, for the bar in its Space and for a press in any
+/// of its tabs, which takes that tab over. Once its last session ends it has none: its tabs are the
+/// user's, with nothing to hand back to (#3503).
+#[gpui::test]
+fn an_agent_whose_session_ended_has_no_status(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+    assert!(!page_done(&agents, &browser, answer, shop_tree(), cx).error);
+    let status = agents.read_with(cx, |agents, _| agents.status());
+    assert_eq!(
+        status
+            .iter()
+            .map(|status| &status.agent)
+            .collect::<Vec<_>>(),
+        ["claude-code"]
+    );
+
+    let bye = Event::Bye {
+        agent: "claude-code".into(),
+    };
+    agents.update(cx, |agents, cx| agents.handle(bye, cx));
+    let status = agents.read_with(cx, |agents, _| agents.status());
+    assert!(
+        status.is_empty(),
+        "an agent whose session ended kept a status: {status:?}"
+    );
+}
+
 /// A tab the user took over stays theirs: the agent's calls on it are refused until it asks with
 /// ask_for_tab and the user hands it back. Keep refuses, and the tab stays the user's.
 #[gpui::test]
@@ -4044,6 +4072,36 @@ mod requests {
             agents
                 .read_with(cx, |agents, _| agents.grants("claude-code"))
                 .is_empty()
+        );
+    }
+
+    /// A write whose override header names a read still asks, and sends nothing until the user
+    /// answers; Deny sends nothing at all, and the log names the method sent (#1439).
+    #[gpui::test]
+    fn a_write_that_says_its_a_read_still_asks(cx: &mut TestAppContext) {
+        let (agents, browser, _) = connected(cx);
+        let masked = json!({ "tab": 20, "requests": [
+            { "method": "POST", "path": "/api/items",
+              "headers": { "X-HTTP-Method-Override": "GET" }, "body": { "title": "Milk" } },
+        ] });
+        let answer = call(&agents, "claude-code", "request", masked, cx);
+        let question =
+            (browser.asked.borrow().clone()).expect("a POST that said it was a GET didn't ask");
+        assert_eq!(sent(&browser).len(), 0, "it sent before the user answered");
+        assert_eq!(
+            question.changes,
+            [("POST as GET /api/items".into(), "title: Milk".into())]
+        );
+        agents.update(cx, |agents, cx| {
+            agents.answer(question.id, Answer::Never, cx)
+        });
+        assert!(answer.recv().unwrap().error);
+        assert_eq!(sent(&browser).len(), 0, "a refused call sent something");
+        assert_eq!(
+            targets(&agents, cx)
+                .last()
+                .map(|(target, _)| target.as_str()),
+            Some("POST as GET /api/items")
         );
     }
 

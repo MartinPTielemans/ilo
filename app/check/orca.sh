@@ -1,7 +1,8 @@
 # check.sh runs this at 306, only when named.
 # What Orca says as a screen-reader user moves through ilo on Linux, from a new profile's first
 # launch (#3226): the onboarding's steps, Tab and ⇧Tab in them, then Tab and the arrows in the
-# sidebar of the Space it leaves. It records and judges nothing yet. Orca follows the focus AT-SPI
+# sidebar of the Space it leaves, and F6 and the arrows along two pages' rows. It records and
+# judges nothing yet. Orca follows the focus AT-SPI
 # reports, so what it says after each key is what ilo told it had the keyboard.
 # Orca writes what it would say to its debug log, "SPEECH OUTPUT: …", with or without a speech
 # server, and where it takes the focus to be, "FOCUS MANAGER: …". The run marks the time of each
@@ -136,8 +137,11 @@ rm -f "$saved" "$profile_dir/Account"
 # An empty home for the import step, as a new user's may be, and never the runner's own browsers.
 mkdir -p "$out/orca-home"
 orca_mark launch
+# A count endpoint nothing listens on, so the opt-ins offer the count's switch, as the prod build's
+# do, while it stays off and nothing is sent.
 DBUS_SESSION_BUS_ADDRESS=$orca_session BROWSER_IMPORT_HOME="$out/orca-home" BROWSER_DRIVE=1 \
-  BROWSER_ONBOARDING=light "$browser" < "$out/drive" > "$log" 2>&1 &
+  BROWSER_ONBOARDING=light "$browser" --daily-count-url=http://127.0.0.1:9/v1/daily \
+  < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await '^browser: onboarding step intro settled$' || fail "the onboarding's intro didn't draw"
@@ -155,9 +159,22 @@ orca_press tab
 orca_press tab
 orca_press tab shift
 orca_press down
-# On through the steps as Esc goes, each one's speech recorded as it comes.
+# On through the steps as Esc goes, each one's speech recorded as it comes. At the opt-ins, whose
+# keyboard rests on Continue (#3498), ⇥ goes past Skip to each switch and on to Continue, and ⇧⇥
+# back to the last switch, before the Esc.
+orca_switches=
 for _ in $(seq 10); do
   grep -q '^browser: onboarding done$' "$log" && break
+  if [ -z "$orca_switches" ] && grep -q '^browser: onboarding step opt-ins' "$log"; then
+    orca_switches=1
+    await '^browser: onboarding step opt-ins settled$' || fail "the opt-ins step didn't draw"
+    orca_settled
+    orca_press tab
+    orca_press tab
+    orca_press tab
+    orca_press tab
+    orca_press tab shift
+  fi
   orca_press escape
 done
 expect '^browser: command bar shown$' "the command bar didn't come up after the onboarding"
@@ -171,6 +188,23 @@ orca_press tab shift
 orca_press down
 orca_press down
 orca_press up
+# Two pages in the Space, so F6 and the arrows have rows to move along: the empty Space's arrows
+# said nothing, having none (#3226).
+orca_mark "two pages opened"
+for orca_title in First Second; do
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T didn't open the command bar for the $orca_title page"
+  send type "data:text/html,<title>$orca_title</title><p>$orca_title</p>"
+  send key return
+  expect '^browser: loaded [0-9]* data:text/html' "the $orca_title page didn't load"
+done
+orca_settled
+# From the page to the sidebar's rows and along them, and out again.
+orca_press f6
+orca_press down
+orca_press down
+orca_press up
+orca_press escape
 orca_mark end
 exec 3>&-
 quit
