@@ -569,29 +569,29 @@ if [ "$major" -ge 157 ]; then
       fail "the command bar closing over Chrome's warning before http gave the keyboard to $key, on $focus, not back to the warning"
   fi
   # F6 over Chrome's warning before http rings the tab's row, and Tab from there goes into the page
-  # under the warning, whose taking the keyboard hands it to the warning. The warning took it back
-  # from the ring, as F6 activating the window focused the page first (#3443). Windows alone, whose
-  # pane the warning took it back from.
+  # under the warning, whose taking the keyboard hands it to the warning. Before #3443 the warning
+  # took it back from the ring, as F6 activating the window focused the page first. Windows alone,
+  # whose pane the warning took it back from.
   if windows; then
     send key f6
-    f6=$step
     expect '^browser: sidebar keyed ' "F6 from Chrome's warning before http didn't ring the tab's row"
     send state
     in_browser AccessKitSubclassOfGPUIView "after F6 over Chrome's warning before http"
+    # The ring hearing Tab says the sidebar kept the keyboard past the tasks F6 left, which come
+    # before Tab's.
     send key tab
+    expect '^browser: sidebar keys left by tab$' \
+      "Tab after F6 over Chrome's warning before http didn't reach the ring: the warning took the keyboard back from it"
     expect '^browser: ring gave the page its first control$' \
       "Tab from the ring didn't go into the page under Chrome's warning before http"
-    # The warning takes the keyboard back in tasks posted as the pane gets it. Those F6 left were
-    # posted before Tab's, so once Tab's has run, any of F6's has too, and none came before the
-    # ring gave the page the keyboard.
-    expect '^browser: tab dialog took the keyboard back$' \
-      "the page under Chrome's warning before http, given the keyboard by the ring, didn't give it to the warning"
-    [ "$(since "$f6" | sed '/^browser: ring gave the page its first control$/q' |
-      grep -c '^browser: tab dialog took the keyboard back$')" = 0 ] ||
-      fail "Chrome's warning before http took the keyboard back from the ring F6 gave it"
-    send state
-    [ "$key" = NativeWidgetMacNSWindow ] ||
-      fail "Tab from the ring into the page under Chrome's warning before http gave the keyboard to $key, on $focus, not to the warning"
+    # The warning then has it, which the state can't tell from the page under it: Return on its
+    # focused Go back leaves the warning, where the page would drop the key (#2625). Windows hands
+    # the warning's window the keyboard before the core's take-back asks, which then logs nothing
+    # (44451704979). The warning comes again for the steps after.
+    send key return
+    expect "^browser: page $tab trouble fine\$" \
+      "Return after Tab from the ring didn't leave Chrome's warning before http: the page under it had the keyboard, not the warning"
+    warned
   fi
   # A click on the page beside the warning: the page drops it, but on the Mac AppKit gives the
   # page's view the keyboard all the same, where every key is dropped. The core gives it back to

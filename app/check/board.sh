@@ -10,17 +10,30 @@
 # neither. A picture waiting in a Board's arrivals lands as a card when the Board opens, and leaves
 # the list once the card is saved; one that comes while its tab isn't showing lands when it's shown,
 # a step from the first, both captured. A Board's file over 4 MiB, which the host doesn't read, says
-# so and is never written over, captured, as is one holding [] rather than a Board. A private window
-# has no New Board, and a Board's address there shows "This Board isn't here.", captured. The Board
-# holding [] shows its file in the system's file manager from its note's button, last of the steps;
-# after it, that the page the bar's ↩ loaded over a Board had the keyboard is judged. Japanese
-# input as the first keys is the hosted Mac's.
+# so and is never written over, captured, as is one holding [] rather than a Board. A Board loaded
+# in a second tab says it's open in the other, captured, and saves nothing; once the first closes,
+# the second takes it over and saves. A private window
+# has no New Board, and a Board's address there shows "This Board isn't here.", captured. New Board
+# from the File menu, the sidebar's +, the command bar, and its key with a Board's page and with
+# the sidebar holding the keyboard, each makes one. Duplicate Board, from the bar at once after
+# typing, copies the Board with its last word, and a Board's row's menu duplicates it too, each
+# copy opening in a tab of its own, named as a copy. Japanese input as a Board's first keys is its
+# note; ⌘C, ⌘V and ⌘Z in the page copy, paste and undo cards, and ⌘− zooms the canvas, not the
+# page, each saved. Relaunched, the Board comes back with its note. The Board holding [] then shows
+# its file in the system's file manager from its note's button, last of the steps; after it, that
+# the page the bar's ↩ loaded over a Board had the keyboard is judged.
 # An agent gets nothing of a Board, wherever the user opens one: one New Board made, one opened from
 # Library › Boards, and one whose address the user typed into the agent's own tab, taken over. Its
 # list_tabs leaves each out, read_page, snapshot, screenshot and click on it are refused as on a tab
 # not its own, each refusal in the activity log, and nothing logged names the Board.
 
 log="$out/board.log"
+# The first line of the log, past the driver's own echo of the keys it typed, that names a Board's
+# name or note: one of the words in $1, as a word, with no letter on either side, so the app's own
+# "finished" doesn't say "shed". Japanese has no letter beside it and matches wherever it is.
+names_said() {
+  grep -v '^browser: drive [0-9]*: ' "$log" | grep -E "(^|[^A-Za-z])($1)([^A-Za-z]|\$)" | head -1
+}
 step=0
 rm -f "$saved" "$launch_frame"
 # An MCP client's token, saved with Settings › Agents on, which the app reads as it starts. The file
@@ -86,7 +99,7 @@ grep -q 'shelves over the sink' "$folder/board.json" ||
 # 1a: the page wrote its own Board and no other.
 [ "$(ls "$boards")" = "$id" ] || fail "the profile's Boards aren't only $id: $(ls "$boards" | tr '\n' ' ')"
 # Nothing of what the user wrote is logged, past the driver's own echo of the keys it typed.
-written=$(grep -v '^browser: drive [0-9]*: ' "$log" | grep 'shelves\|kitchen' | head -1)
+written=$(names_said 'shelves|kitchen')
 [ -z "$written" ] || fail "the log says what the Board holds: $written"
 ../tools/window-screenshot.sh "$pid" "$out/board.png" || fail "no window to capture"
 
@@ -115,6 +128,9 @@ expect '^browser: command bar shown$' "⌘T didn't open the command bar"
 send insert 'data:text/html,<title>away</title>'
 send key return
 expect '^browser: loaded [0-9]* data:text/html,<title>away</title>$' "the page to leave the Board for didn't load"
+# The page ↩ went to has the keyboard, which the UI had over the Board (#3453).
+send state
+in_browser RenderWidgetHostViewCocoa "after ↩ in ⌘T's bar over a Board"
 send key t cmd
 expect '^browser: command bar shown$' "⌘T didn't open the command bar"
 send type pant
@@ -140,7 +156,7 @@ for _ in $(seq 50); do
 done
 grep -q "^browser: title $board (a Board)\$" "$log" ||
   fail "the reopened Board's title line doesn't say \"(a Board)\": $(grep "^browser: title $board " "$log" | tail -1)"
-written=$(grep -v '^browser: drive [0-9]*: ' "$log" | grep 'shelves\|kitchen\|pantry' | head -1)
+written=$(names_said 'shelves|kitchen|pantry')
 [ -z "$written" ] || fail "the log says what the Board holds: $written"
 # The reopened page read its file: a pan, which it saves, keeps the note. A page that couldn't
 # read it would have nothing to write over it but nothing.
@@ -156,10 +172,9 @@ grep -q 'shelves over the sink' "$folder/board.json" ||
   fail "the reopened Board's save lost its note: $(head -c 300 "$folder/board.json")"
 
 # A reload of the Board, and a load away from it to a web page, drop what its page had on its way
-# and leave the browser running (#3427); back brings the Board again for the steps after. ⌘← goes
-# back from the page or the UI, wherever the bar's ↩ left the keyboard, so this claims nothing about
-# who has it: which side heard it is judged after the last step (#3453), so a miss there ends no
-# step before it.
+# and leave the browser running (#3427); back brings the Board again for the steps after. The page
+# the bar's ↩ loaded over the Board has the keyboard, so ⌘← there goes to the page first, as on any
+# page (#3453).
 send key r cmd
 expect "^browser: loaded $board chrome://board/$id\$" "⌘R didn't load the Board again"
 serve
@@ -168,13 +183,11 @@ expect '^browser: command bar shown$' "⌘L on the Board didn't open the command
 send type "${site}page.html"
 send key return
 expect "^browser: loaded $board ${site}page.html\$" "the Board's tab didn't load the page typed in the bar"
-# Where the ↩ left the keyboard, as the driver says it: the key window and the view with focus.
-went=$(grep "^browser: drive $step done, " "$log" | tail -1 |
-  sed 's/^[^,]*, \(key [^,]*, focus [^,]*\),.*/\1/')
+send state
+in_browser RenderWidgetHostViewCocoa "after ↩ in ⌘L's bar over a Board"
 send key left cmd
-expect '^browser: command back via ' "⌘left on the page the bar loaded over the Board didn't run back"
-back_via=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep '^browser: command back via ' |
-  head -1 | cut -d' ' -f5)
+expect '^browser: command back via page$' \
+  "the page the bar's ↩ loaded over a Board didn't have the keyboard: ⌘left didn't run back via page"
 expect "^browser: loaded $board chrome://board/$id\$" "back didn't bring the Board again"
 
 # 1d: an agent gets nothing of a Board. The client is the bridge on two pipes, as mcp's and rules'.
@@ -338,7 +351,7 @@ PICTURE
 else
   echo "skip: board: a Board typed into the agent's own tab. Watching it takes clicks, and Browser wasn't the active app."
 fi
-written=$(grep -v '^browser: drive [0-9]*: ' "$log" | grep 'shelves\|kitchen\|pantry\|attic\|cellar' | head -1)
+written=$(names_said 'shelves|kitchen|pantry|attic|cellar')
 [ -z "$written" ] || fail "the log says what a Board holds or its name: $written"
 exec 4>&- 5<&-
 for _ in $(seq 100); do kill -0 "$bridge_pid" 2> /dev/null || break; sleep 0.1; done
@@ -349,6 +362,257 @@ n=$(echo $(pinned) $(today) | tr ' ' '\n' | grep -nx "$board" | cut -d: -f1)
 # From the task area, which ⌘N leaves first, the line has no Space after it.
 send key "$n" cmd
 expect "^browser: selected $board\( in .*\)\{0,1\}\$" "⌘$n didn't show the first Board's tab $board of \"$(today)\""
+
+# 1b: New Board from each of its places, the File menu, the sidebar's + and the command bar, and
+# its key with the page focused and with the sidebar holding the keyboard. Each makes a Board, a
+# pinned tab whose name is there to type over, kept with ↩, which gives the page the keyboard.
+# made <how>: the Board New Board just made, named $1, its tab in $tab and its folder in $made_folder.
+made() {
+  expect '^browser: new board [0-9a-f]\{32\} tab [0-9]*$' "New Board from $2 made no Board"
+  line=$(grep '^browser: new board [0-9a-f]\{32\} tab ' "$log" | tail -1)
+  made_id=$(echo "$line" | cut -d' ' -f4)
+  tab=$(echo "$line" | cut -d' ' -f6)
+  expect "^browser: name board $tab\$" "the Board New Board made from $2 didn't offer its name to type over"
+  send type "$1"
+  send key return
+  expect "^browser: board $tab has the keyboard\$" "↩ on the name of the Board made from $2 didn't give its page the keyboard"
+  made_folder="$boards/$made_id"
+  for _ in $(seq 50); do
+    [ "$(cat "$made_folder/name" 2> /dev/null)" = "$1" ] && break
+    sleep 0.1
+  done
+  [ "$(cat "$made_folder/name" 2> /dev/null)" = "$1" ] ||
+    fail "the name of the Board made from $2 wasn't kept in its folder: $(cat "$made_folder/name" 2> /dev/null)"
+}
+# The Board's tab $tab archived, from Today, as ⌘W keeps a pinned tab, so the sidebar's places stay
+# few for the steps after.
+archive() {
+  send key d cmd
+  expect "^browser: today\( [0-9]*\)* $tab\( [0-9]*\)*\$" "⌘D didn't move the Board's tab $tab, made from $1, into Today: Today is \"$(today)\""
+  send key w cmd
+  expect "^browser: tab $tab closed\$" "⌘W didn't archive the Board's tab $tab, made from $1"
+}
+# The cards in the Board $1's file, as "kind" begins each.
+cards() {
+  grep -o '"kind"' "$1/board.json" 2> /dev/null | wc -l | tr -d ' '
+}
+# Waits for a save of a Board after the count $1 of them, failing with $2.
+saved_after() {
+  for _ in $(seq 50); do
+    [ "$(grep -c 'browser: board saved$' "$log")" -gt "$1" ] && return 0
+    sleep 0.1
+  done
+  fail "$2: $(grep 'browser: board ' "$log" | tail -1)"
+}
+
+send menu "New Board"
+expect '^browser: command new-board via ' "the File menu's New Board didn't run New Board"
+made loft "the File menu"
+loft=$made_folder
+# Japanese input as the Board's first keys: it composes in the first note's field and the note
+# keeps what was committed. The driver's input method is the Mac's and sway's; on Windows it's
+# Microsoft's Japanese IME where the runner has it, as keys.sh finds, and on X11 the Linux driver
+# types plain keys into a page. Where there's none, the first note is plain text.
+ime="ime on"
+if windows; then
+  ime=
+  powershell.exe -NoProfile -NonInteractive -Command "(Get-WinUserLanguageList).InputMethodTips" \
+    2> /dev/null | grep -qi 03B5835F-F03C-411B-9CE2-AA23E1171E36 && ime="ime ja"
+fi
+[ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && ime=
+saves=$(grep -c 'browser: board saved$' "$log")
+if [ -n "$ime" ]; then
+  send $ime
+  send type nihongo
+  send key space
+  send key return
+  send ime off
+  note=日本語
+else
+  echo "skip: Japanese typed into a Board's note: the runner has no input method that reaches a page here; check/ime.sh covers one."
+  send type "a loft note"
+  note="a loft note"
+fi
+saved_after "$saves" "the Board's first note, $note, wasn't saved"
+for _ in $(seq 20); do
+  grep -q "$note" "$loft/board.json" && break
+  sleep 0.1
+done
+grep -q "$note" "$loft/board.json" ||
+  fail "the Board's note didn't keep $note: $(head -c 300 "$loft/board.json")"
+# The page's own keys while it has the keyboard: escape leaves the note, ⌘A takes every card, ⌘C
+# and ⌘V copy it to a second one, and ⌘Z takes the paste back, each saved. ⌘− and ⌘0 zoom the
+# canvas, which the Board keeps, not the browser's page.
+send key escape
+send key a cmd
+send key c cmd
+saves=$(grep -c 'browser: board saved$' "$log")
+send key v cmd
+saved_after "$saves" "⌘V in the Board saved nothing"
+for _ in $(seq 20); do
+  [ "$(cards "$loft")" = 2 ] && break
+  sleep 0.1
+done
+[ "$(cards "$loft")" = 2 ] || fail "⌘C and ⌘V in the Board didn't make a second card: $(cards "$loft") in its file"
+saves=$(grep -c 'browser: board saved$' "$log")
+send key z cmd
+saved_after "$saves" "⌘Z in the Board saved nothing"
+for _ in $(seq 20); do
+  [ "$(cards "$loft")" = 1 ] && break
+  sleep 0.1
+done
+[ "$(cards "$loft")" = 1 ] || fail "⌘Z in the Board didn't take the paste back: $(cards "$loft") cards in its file"
+saves=$(grep -c 'browser: board saved$' "$log")
+send key - cmd
+saved_after "$saves" "⌘− in the Board saved nothing"
+for _ in $(seq 20); do
+  grep -q '"zoom": *0\.8[,}]' "$loft/board.json" && break
+  sleep 0.1
+done
+grep -q '"zoom": *0\.8[,}]' "$loft/board.json" ||
+  fail "⌘− in the Board didn't zoom its canvas out: $(head -c 200 "$loft/board.json")"
+send key 0 cmd
+grep -q "^browser: zoom $tab " "$log" && fail "⌘− or ⌘0 in the Board zoomed the browser's page: $(grep "^browser: zoom $tab " "$log" | tail -1)"
+../tools/window-screenshot.sh "$pid" "$out/board-first-note.png" || fail "no window to capture"
+archive "the File menu"
+
+# The sidebar's + offers New Board, and New Board's key from the Board's page makes another.
+send layout
+height=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
+  sed 's/^browser: layout content [0-9]*x\([0-9]*\),.*/\1/')
+post click 204 $((height - 25))
+expect "^browser: menu shown .*$(cased 'New Board')" "the sidebar's + didn't offer New Board"
+send choose "$(cased 'New Board')"
+expect '^browser: command new-board via ' "the + menu's New Board didn't run New Board"
+made porch "the sidebar's +"
+porch=$tab
+# Escape leaves the note's field for the page itself: in a text field on the Mac, ⌃⇧E is the text
+# system's select to the end of the line, which the field keeps.
+send key escape
+send key e ctrl shift
+expect '^browser: command new-board via ' "⌃⇧E with a Board's page focused didn't run New Board"
+made shed "⌃⇧E with a Board's page focused"
+archive "⌃⇧E with a Board's page focused"
+tab=$porch
+n=$(echo $(pinned) $(today) | tr ' ' '\n' | grep -nx "$porch" | cut -d: -f1)
+[ -n "$n" ] || fail "the Board's tab $porch isn't in the sidebar: pinned \"$(pinned)\", Today \"$(today)\""
+switch "$n cmd" "$porch"
+archive "the sidebar's +"
+
+# The command bar finds New Board, and New Board's key with the sidebar holding the keyboard runs
+# it too.
+bar_command new-board "New Board" "new board"
+made barn "the command bar"
+archive "the command bar"
+send key f6
+expect '^browser: sidebar keyed ' "F6 with the page focused didn't give the sidebar the keyboard"
+send key e ctrl shift
+expect '^browser: command new-board via ' "⌃⇧E with the sidebar holding the keyboard didn't run New Board"
+made deck "⌃⇧E with the sidebar holding the keyboard"
+archive "⌃⇧E with the sidebar holding the keyboard"
+
+# Duplicate a Board (#3406). The page saves as it loses the keyboard, so the bar opened at once
+# after typing finds the last word saved, and the copy has it. Over a Board, "dup" puts Duplicate
+# Board first, as Duplicate Current Tab isn't offered there. The copy opens in a tab of its own,
+# with its own id, and a Board's row's menu in the Library duplicates it too, closing the Library.
+send menu "New Board"
+expect '^browser: command new-board via ' "the File menu's New Board for the Board to duplicate didn't run it"
+made garden "the File menu, for the Board to duplicate"
+garden=$made_id
+garden_tab=$tab
+send type "plum cherry"
+send key l cmd
+expect '^browser: command bar shown$' "⌘L right after typing in the Board didn't open the command bar"
+send type dup
+expect '^browser: command bar commands "dup": Duplicate Board' "the command bar over a Board didn't put Duplicate Board first for dup"
+send key return
+expect '^browser: command duplicate-board via command bar$' "Duplicate Board didn't run from the command bar"
+expect "^browser: board $garden duplicated as [0-9a-f]\{32\}\$" "Duplicate Board made no copy of the Board shown"
+copy=$(grep "^browser: board $garden duplicated as " "$log" | tail -1 | cut -d' ' -f6)
+grep -q cherry "$boards/$copy/board.json" ||
+  fail "the copy hasn't the word typed just before the bar opened: $(head -c 300 "$boards/$copy/board.json")"
+[ "$(cat "$boards/$copy/name")" = "garden copy" ] ||
+  fail "the copy is named \"$(cat "$boards/$copy/name")\", not \"garden copy\""
+expect "^browser: loaded [0-9]* chrome://board/$copy\$" "the Board's copy didn't open in a tab"
+copy_tab=$(grep "^browser: loaded [0-9]* chrome://board/$copy\$" "$log" | tail -1 | cut -d' ' -f3)
+bar_command view-boards "View Boards…" "view boards"
+expect '^browser: library shown$' "View Boards… didn't open the Library to duplicate a Board from"
+send key down
+expect '^browser: library row keyed ' "↓ in Library › Boards rang no row to duplicate"
+expect '^browser: library row ring at [0-9-]* [0-9-]* [0-9]* [0-9]*$' "the Library's ring on a Board's row wasn't drawn"
+set -- $(grep '^browser: library row ring at ' "$log" | tail -1 | cut -d' ' -f6-9)
+post rightclick $(($1 + $3 / 2)) $(($2 + $4 / 2))
+expect "^browser: menu shown $(cased 'Open, Duplicate, Delete')\$" "a right-click on a Board's row didn't offer Open, Duplicate, then Delete"
+send choose Duplicate
+expect '^browser: board [0-9a-f]\{32\} duplicated as [0-9a-f]\{32\}$' "Duplicate in a Board's row's menu made no copy"
+set -- $(grep '^browser: board [0-9a-f]\{32\} duplicated as ' "$log" | tail -1 | cut -d' ' -f3,6)
+[ "$(cat "$boards/$1/board.json")" = "$(cat "$boards/$2/board.json")" ] ||
+  fail "the row's copy $2 hasn't the file of the Board $1 it copied"
+# Whichever row was first, the Board or its copy, the next copy is garden's second.
+[ "$(cat "$boards/$2/name")" = "garden copy 2" ] ||
+  fail "the row's copy is named \"$(cat "$boards/$2/name")\", not \"garden copy 2\""
+expect '^browser: library hidden$' "Duplicate in a Board's row's menu didn't close the Library"
+expect "^browser: loaded [0-9]* chrome://board/$2\$" "the row's copy didn't open in a tab"
+tab=$(grep "^browser: loaded [0-9]* chrome://board/$2\$" "$log" | tail -1 | cut -d' ' -f3)
+# The bar's "dup" over a Board and a Board's row's menu, in each tone, for the change's pictures.
+tone() {
+  case "$(grep '^browser: window light ' "$log" | tail -1)" in
+    *true) echo light ;;
+    *) echo dark ;;
+  esac
+}
+was=$(tone)
+for each in light dark; do
+  if [ "$(tone)" != "$each" ]; then
+    send menu "$(cased "Appearance › $([ $each = light ] && echo Light || echo Dark)")"
+    expect "^browser: window light $([ $each = light ] && echo true || echo false)\$" \
+      "View › Appearance didn't make the window $each for the Duplicate pictures"
+  fi
+  send key l cmd
+  expect '^browser: command bar shown$' "⌘L didn't open the command bar for its $each picture"
+  send type dup
+  expect '^browser: command bar commands "dup": Duplicate Board' "the command bar didn't put Duplicate Board first for dup, $each"
+  ../tools/window-screenshot.sh "$pid" "$out/board-duplicate-bar-$each.png" all || fail "no window to capture"
+  send key escape
+  expect '^browser: command bar hidden$' "escape didn't close the command bar of the $each picture"
+  bar_command view-boards "View Boards…" "view boards"
+  expect '^browser: library shown$' "View Boards… didn't open the Library for its $each picture"
+  send key down
+  expect '^browser: library row ring at [0-9-]* [0-9-]* [0-9]* [0-9]*$' "the Library's ring on a Board's row wasn't drawn, $each"
+  set -- $(grep '^browser: library row ring at ' "$log" | tail -1 | cut -d' ' -f6-9)
+  post rightclick $(($1 + $3 / 2)) $(($2 + $4 / 2))
+  expect "^browser: menu shown $(cased 'Open, Duplicate, Delete')\$" "a right-click on a Board's row didn't show its menu, $each"
+  ../tools/window-screenshot.sh "$pid" "$out/board-duplicate-menu-$each.png" all || fail "no window to capture"
+  send key escape
+  expect '^browser: menu closed' "escape didn't close a Board's row's menu, $each"
+  send key escape
+  expect '^browser: library hidden$' "escape didn't close the Library of the $each picture"
+done
+# The pictures end dark, so Automatic changes the look only where the system's is light.
+send menu "$(cased 'Appearance › Automatic')"
+expect '^browser: appearance automatic$' "View › Appearance › Automatic didn't run after the Duplicate pictures"
+[ "$was" = dark ] ||
+  expect '^browser: window light true$' \
+    "View › Appearance › Automatic didn't give the window its light look back after the Duplicate pictures"
+send key w cmd
+expect "^browser: tab $tab closed\$" "⌘W didn't close the row's copy's tab"
+for tab in "$copy_tab" "$garden_tab"; do
+  n=$(echo $(pinned) $(today) | tr ' ' '\n' | grep -nx "$tab" | cut -d: -f1)
+  [ -n "$n" ] || fail "the Board's tab $tab isn't in the sidebar: pinned \"$(pinned)\", Today \"$(today)\""
+  # Closing a tab shows the one under it, which may be this one already.
+  [ "$(grep '^browser: selected ' "$log" | tail -1 | cut -d' ' -f3)" = "$tab" ] || switch "$n cmd" "$tab"
+  if [ "$tab" = "$garden_tab" ]; then
+    archive "the File menu, for the Board to duplicate"
+  else
+    send key w cmd
+    expect "^browser: tab $tab closed\$" "⌘W didn't close the Board's copy's tab"
+  fi
+done
+written=$(names_said '日本語|loft|porch|shed|barn|deck|garden|cherry')
+[ -z "$written" ] || fail "the log says what a Board holds or its name: $written"
+n=$(echo $(pinned) $(today) | tr ' ' '\n' | grep -nx "$board" | cut -d: -f1)
+[ -n "$n" ] || fail "the first Board's tab $board isn't in the sidebar: pinned \"$(pinned)\", Today \"$(today)\""
+switch "$n cmd" "$board"
 
 # 1c: a Board whose note's text is markup, and a link to javascript:, runs neither: each would
 # take the page to #ran, which its page line would say, as a Board's title is never logged. Its id
@@ -474,6 +738,7 @@ expect '^browser: command bar shown$' "⌘T didn't open the command bar"
 send insert "chrome://board/$other"
 send key return
 expect "^browser: loaded [0-9]* chrome://board/$other\$" "the Board whose file holds [] didn't load"
+unread=$(grep "^browser: loaded [0-9]* chrome://board/$other\$" "$log" | tail -1 | cut -d' ' -f3)
 send scroll 640 400 40 5
 for _ in $(seq 30); do
   # The window a save would come in, as above.
@@ -481,6 +746,63 @@ for _ in $(seq 30); do
 done
 [ "$(cat "$boards/$other/board.json")" = '[]' ] ||
   fail "the Board whose file holds [] was written over: $(head -c 200 "$boards/$other/board.json")"
+# Its tab closes, or the relaunch brings it back, and the bar after it opens the Board in a second
+# tab, which says it's open in another and offers no file.
+send key w cmd
+expect "^browser: tab $unread closed\$" "⌘W didn't close the Board whose file holds []"
+
+# A Board open in one tab and loaded in a second: the second says it's open in the other and
+# writes nothing of it, and once the first closes it takes the Board over, as its page waits to.
+twice=$(printf 'e%.0s' $(seq 32))
+mkdir -p "$boards/$twice"
+printf '%s' '{"version": 1, "camera": {"x": 0, "y": 0, "zoom": 1}, "cards": []}' > "$boards/$twice/board.json"
+# Where the Board's file has its view, which a pan moves and a save keeps.
+camera() {
+  python3 -I -c 'import json, sys; c = json.load(open(sys.argv[1]))["camera"]; print(c["x"], c["y"])' \
+    "$boards/$twice/board.json"
+}
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+send insert "chrome://board/$twice"
+send key return
+expect "^browser: loaded [0-9]* chrome://board/$twice\$" "the Board to open in two tabs didn't load"
+first=$(grep "^browser: loaded [0-9]* chrome://board/$twice\$" "$log" | tail -1 | cut -d' ' -f3)
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar over the Board's tab"
+# Over the Board's own tab the bar doesn't offer that tab, and ↩ on the address opens another.
+send insert "chrome://board/$twice"
+send key return
+expect "^browser: loaded [0-9]* chrome://board/$twice\$" "the Board's address didn't load in a second tab"
+second=$(grep "^browser: loaded [0-9]* chrome://board/$twice\$" "$log" | tail -1 | cut -d' ' -f3)
+[ "$second" != "$first" ] || fail "the bar's address row went to the Board's tab $first instead of opening a second"
+../tools/window-screenshot.sh "$pid" "$out/board-elsewhere.png" || fail "no window to capture"
+send scroll 640 400 40 5
+for _ in $(seq 30); do
+  # The window a save would come in, as above.
+  sleep 0.1
+done
+[ "$(camera)" = '0 0' ] || fail "a pan in the Board's second tab was saved to its file: its view is at $(camera)"
+# A quick ⌃Tab goes back to the first tab, which ⌘W closes: the second's page loads the Board again,
+# now its own, even unseen, and once shown a pan there is saved.
+send key tab ctrl
+tapped=$step
+send flags
+# The tab is selected as ⌃ goes down, before the step letting go of it.
+expect "^browser: selected $first in " "a quick ⌃Tab didn't go back to the Board's first tab, $first" "$tapped"
+send key w cmd
+expect "^browser: tab $first closed\$" "⌘W didn't close the Board's first tab"
+expect "^browser: loaded $second chrome://board/$twice\$" \
+  "the Board's second tab didn't load it again once the first closed"
+# Closing a tab shows the one under it, as Arc does, so the second is shown by its key.
+n=$(echo $(pinned) $(today) | tr ' ' '\n' | grep -nx "$second" | cut -d: -f1)
+[ -n "$n" ] || fail "the Board's second tab $second isn't in the sidebar: pinned \"$(pinned)\", Today \"$(today)\""
+switch "$n cmd" "$second"
+saves=$(grep -c 'browser: board saved$' "$log" || true)
+send scroll 640 400 40 5
+saved_after "$saves" "a pan in the Board's second tab, once the first had closed, wasn't saved"
+[ "$(camera)" != '0 0' ] || fail "the save from the Board's second tab, once the first had closed, kept the view where it was"
+send key w cmd
+expect "^browser: tab $second closed\$" "⌘W didn't close the Board's second tab"
 
 # 4: a private window has no New Board, and a Board's address there finds no Board.
 send key n cmd shift
@@ -502,34 +824,85 @@ expect "^browser: loaded [0-9]* chrome://board/$id\$" "the Board's address didn'
 ../tools/window-screenshot.sh "$pid" "$out/board-private.png" || fail "no window to capture"
 private=$(grep '^browser: private window opened ' "$log" | tail -1 | cut -d' ' -f5)
 
-# #3224: the Board holding [] offers its file in the system's file manager, its button with the
-# keyboard, and that leaves the file as it was. Last, as the Finder and Explorer take the keyboard
-# from the app.
+# The private window closes before the relaunch, which brings back only the regular one.
 send window 2
 send key w cmd shift
 expect "^browser: window closed $private\$" "⇧⌘W didn't close the private window"
 send window 1
+
+# 1b: a Board kept across a relaunch. Its tab comes back named, the bar finds it by the start of its
+# name, and its page reads its file: a pan saves it with its note. The first note's is kept too.
+exec 3>&-
+quit
+log="$out/board-restored.log"
+step=0
+# As at the first launch, $BROWSER ends xdg-open for the file shown last.
+BROWSER=$opener BROWSER_DRIVE=1 "$browser" < "$out/drive" > "$log" 2>&1 &
+pid=$!
+exec 3> "$out/drive"
+await '^browser: restored in ' || fail "the relaunch didn't restore the Spaces"
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar after the relaunch"
+send type pant
+expect '^browser: command bar puts tab [0-9]* first$' \
+  "the command bar didn't put the Board's tab first after the relaunch: $(grep '^browser: command bar suggestions ' "$log" | tail -1)"
+board=$(grep '^browser: command bar puts tab [0-9]* first$' "$log" | tail -1 | cut -d' ' -f6)
 send key return
-# The core's line has Chromium's prefix.
-expect 'browser: board shows its file$' \
-  "↩ on the unreadable Board, whose Show button has the keyboard, didn't show its file"
+expect "^browser: command bar switch to tab $board\$" "↩ on the Board's row didn't switch to its tab after the relaunch"
+expect "^browser: loaded $board chrome://board/$id\$" "the Board's tab didn't load its Board after the relaunch"
+# None yet in the relaunch's log, where grep -c's status 1 would end the check under set -e.
+saves=$(grep -c 'browser: board saved$' "$log" || true)
+send scroll 640 400 40 5
+saved_after "$saves" "a pan on the Board after the relaunch wasn't saved"
+grep -q 'shelves over the sink' "$folder/board.json" ||
+  fail "the Board's save after the relaunch lost its note: $(head -c 300 "$folder/board.json")"
+grep -q "$note" "$loft/board.json" ||
+  fail "the first note's Board lost it across the relaunch, \"$note\": $(head -c 300 "$loft/board.json")"
+written=$(names_said 'shelves|kitchen|pantry|日本語|loft')
+[ -z "$written" ] || fail "the relaunch's log says what a Board holds or its name: $written"
+../tools/window-screenshot.sh "$pid" "$out/board-relaunched.png" || fail "no window to capture"
+# #3224: the Board holding [] offers its file in the system's file manager, its button with the
+# keyboard, and that leaves the file as it was. Last, after the relaunch, as the Finder and
+# Explorer take the keyboard from the app. The bar opens the Board in a tab of its own.
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar after the relaunch"
+send insert "chrome://board/$other"
+send key return
+expect "^browser: loaded [0-9]* chrome://board/$other\$" "the Board whose file holds [] didn't load after the relaunch"
+# The page offers the button, with the keyboard, once it has read the file, after the load the
+# app logs and with no line of its own: a ↩ before then lands on the page and does nothing, so it
+# goes again, three times at most, as profiles.sh's Tab and Space do. The core's line has
+# Chromium's prefix.
+shown=
+for _ in 1 2 3; do
+  send key return
+  for _ in $(seq 30); do
+    logged 'browser: board shows its file$' && shown=1 && break
+    sleep 0.1
+  done
+  [ -z "$shown" ] || break
+done
+[ -n "$shown" ] ||
+  fail "↩ on the unreadable Board, whose Show button has the keyboard, didn't show its file"
 [ "$(cat "$boards/$other/board.json")" = '[]' ] ||
   fail "showing the unreadable Board's file changed it: $(head -c 200 "$boards/$other/board.json")"
-# #3453: the page the bar's ↩ loaded over the Board had the keyboard, so ⌘← there went to the page
-# first, as on any page. Judged here, after the file manager, from what was heard then.
-[ "$back_via" = page ] ||
-  fail "the page the bar's ↩ loaded over a Board didn't have the keyboard: ⌘left ran back via\
- $back_via, the ↩ having left $went"
 quit
 echo "ok: New Board made $id, its name kept and its note saved in its folder alone, unlogged;" \
   "Library › Boards listed it; renamed, found by the bar, archived and reopened, the log said" \
-  "only \"(a Board)\", and its next save kept the note; an agent got nothing of a Board made," \
+  "only \"(a Board)\", and its next save kept the note; New Board from the File menu, the" \
+  "sidebar's +, the command bar and its key with the page and the bar focused; duplicated from" \
+  "the bar with its last word and from its row's menu, each copy its own Board; Japanese kept as" \
+  "the first note; ⌘C ⌘V and ⌘Z in the page saved; ⌘− the canvas's, not the page's; an agent got nothing of a Board made," \
   "opened from the Library or typed into its own tab, each refusal logged without a name;" \
   "markup and a javascript: link ran" \
   "nothing; a waiting picture landed as a card and left the arrivals, and one that came while" \
   "its tab wasn't showing landed a step from it when shown; a Board over 4 MiB and one" \
-  "holding [] weren't written over, and the one holding [] showed its file; a private window had" \
-  "no New Board; the page loaded over a Board from the bar had the keyboard." \
+  "holding [] weren't written over; a Board's second tab saved nothing until its first closed," \
+  "then took it over; a private window had no New Board; after a relaunch the" \
+  "Board came back, found by its name, and its next save kept its note; the one holding [] showed" \
+  "its file; the page loaded over a Board from the bar had the keyboard." \
   "Windows: $out/board.png $out/board-markup.png $out/board-landed.png" \
-  "$out/board-landed-shown.png $out/board-unread.png $out/board-private.png" \
-  "$([ -f "$out/board-agent-tab.png" ] && echo "$out/board-agent-tab.png")"
+  "$out/board-landed-shown.png $out/board-unread.png $out/board-elsewhere.png $out/board-private.png" \
+  "$([ -f "$out/board-agent-tab.png" ] && echo "$out/board-agent-tab.png")" \
+  "$out/board-duplicate-bar-light.png $out/board-duplicate-bar-dark.png" \
+  "$out/board-duplicate-menu-light.png $out/board-duplicate-menu-dark.png"

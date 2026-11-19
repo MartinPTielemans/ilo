@@ -4,11 +4,12 @@ use std::{
     time::Duration,
 };
 
-use gpui::{Bounds, TestAppContext, point, px, size};
+use gpui::{Bounds, Hsla, Rgba, TestAppContext, point, px, size};
 
 use super::{
     DELAY, GRACE, HEIGHT, Host, MARGIN, NEAR, PAD_X, Plate, RADIUS, RELEASE_POLL, Side, Target,
-    WINDOW_HEIGHT, WINDOW_MARGIN, WINDOW_WIDTH, near, place, plate, window_left, window_top,
+    WINDOW_HEIGHT, WINDOW_MARGIN, WINDOW_WIDTH, address_colors, near, place, plate, window_left,
+    window_top,
 };
 use crate::palette::Palette;
 
@@ -545,4 +546,42 @@ fn a_card_is_asked_once_for_its_link(cx: &mut TestAppContext) {
 #[test]
 fn the_tallest_card_fits_the_windows_room() {
     assert!(super::card::tallest() <= super::CARD_ROOM);
+}
+
+#[test]
+fn the_path_is_dimmer_than_the_site_on_a_dark_window_as_on_a_light_one() {
+    use crate::palette::{TEXT, Tone, contrast, over};
+    for tone in [Tone::Dark, Tone::Light] {
+        let palette = Palette::of(None, tone);
+        // The window's colour with no theme, opaque, which the plate and the card are filled with.
+        let fill = Hsla::from(palette.underlay);
+        let (path, site) = address_colors(fill, &palette);
+        assert!(
+            path.a <= site.a - 0.3,
+            "on a {tone:?} window the path at {} is clearly dimmer than the site at {}",
+            path.a,
+            site.a
+        );
+    }
+    // However light or dark the fill, the path still reads on it.
+    for step in 0..=20 {
+        let level = step as f32 / 20.;
+        let fill = Rgba {
+            r: level,
+            g: level,
+            b: level,
+            a: 1.,
+        };
+        for tone in [Tone::Dark, Tone::Light] {
+            let palette = Palette::of(None, tone);
+            let (path, _) = address_colors(fill.into(), &palette);
+            let drawn = over(fill, palette.ink, path.a);
+            assert!(
+                path.a == 1. || contrast(drawn, fill) >= TEXT,
+                "the path at {} on grey {level} in a {tone:?} window reads at {}:1",
+                path.a,
+                contrast(drawn, fill)
+            );
+        }
+    }
 }

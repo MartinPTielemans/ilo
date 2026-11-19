@@ -225,6 +225,60 @@ await_more() {
   done
   return 1
 }
+# Fails by name when what's on screen stopped following the log (#3507): the capture $2, taken
+# once the app's line said it drew $4 at "x y width height" ($3, in the window's points), shows
+# there what the capture $1, taken before it was asked for, did. In #3270's second sighting GPUI's
+# output stopped reaching the screen while its log ran on a hundred steps, and the run went red only
+# at the next Settings show, far from where it froze. Sets follows to the part of that place that
+# changed, in percent.
+follows_log() {
+  send layout
+  width=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
+    sed -n 's/^browser: layout content \([0-9]*\)x.*/\1/p')
+  [ -n "$width" ] || fail "the driver's layout named no content size: $(grep '^browser: layout' "$log" | tail -1)"
+  for capture in "$1" "$2"; do
+    if windows; then
+      to_bmp "$capture" "$capture.bmp" || fail "PowerShell couldn't read $capture"
+    elif [ "$(uname)" = Linux ]; then
+      magick "$capture" -type TrueColor BMP3:"$capture.bmp" || fail "ImageMagick couldn't read $capture"
+    else
+      sips -s format bmp "$capture" --out "$capture.bmp" > /dev/null || fail "sips couldn't read $capture"
+    fi
+  done
+  # Of every other pixel 8 points inside the place, the share that differs by more than 32 in a
+  # channel. The pictures are in pixels and the place in points, so the window's width scales it.
+  follows=$(python3 -I - "$1.bmp" "$2.bmp" "$width" $3 << 'PY'
+import struct, sys
+def read(path):
+    data = open(path, "rb").read()
+    offset, = struct.unpack_from("<I", data, 10)
+    width, height, _, bits = struct.unpack_from("<iiHH", data, 18)
+    return data, offset, width, height, bits // 8, (bits * width + 31) // 32 * 4
+before, after = read(sys.argv[1]), read(sys.argv[2])
+if before[2:4] != after[2:4]:
+    print(100)
+    sys.exit()
+_, _, width, height, size, stride = after
+scale = width / float(sys.argv[3])
+x, y, w, h = (float(n) for n in sys.argv[4:8])
+left, top = int((x + 8) * scale), int((y + 8) * scale)
+right, bottom = min(width, int((x + w - 8) * scale)), min(abs(height), int((y + h - 8) * scale))
+changed = total = 0
+for row in range(top, bottom, 2):
+    line = row if height < 0 else abs(height) - 1 - row
+    for column in range(left, right, 2):
+        at = line * stride + column * size
+        a = before[0][before[1] + at:][:3]
+        b = after[0][after[1] + at:][:3]
+        total += 1
+        changed += max(abs(a[i] - b[i]) for i in range(3)) > 32
+print(changed * 100 // max(total, 1))
+PY
+  ) || fail "the captures $1 and $2 couldn't be compared"
+  rm -f "$1.bmp" "$2.bmp"
+  [ "$follows" -ge 5 ] ||
+    fail "what's on screen stopped following the log: the app drew $4 at $3, but the capture after it shows that place as it was before it was asked for, $follows% changed ($1, $2), so the window's frames stopped reaching the screen (#3270). The log's last lines: $(grep '^browser: ' "$log" | tail -3 | tr '\n' ';')"
+}
 
 case "$socket" in
   '\\.\pipe\'*) ;;
@@ -1816,6 +1870,10 @@ addEventListener("message", (event) => {
   # Allow at its right.
   change() {
     before=$(grep -c "$changes" "$log" || true)
+    # The run's first question, whose place showed no card before it.
+    if [ "$1" = Once ]; then
+      ../tools/window-screenshot.sh "$pid" "$out/agent-request-before.png" || fail "no window to capture"
+    fi
     request request "{\"tab\":$frames_tab,\"requests\":[{\"method\":\"POST\",\"path\":\"/api/items\",\"body\":{\"title\":\"Milk\"}}]}" >&4
     await_more "$changes" "$before" || fail "a change didn't ask first"
     q=$(grep '^browser: agent mcp-client asks' "$log" | tail -1 | cut -d' ' -f5 | tr -d :)
@@ -1824,6 +1882,10 @@ addEventListener("message", (event) => {
 $(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
 CARD
     ../tools/window-screenshot.sh "$pid" "$out/agent-request.png" || fail "no window to capture"
+    if [ "$1" = Once ]; then
+      follows_log "$out/agent-request-before.png" "$out/agent-request.png" "$qx $qy $qw $qh" \
+        "the change's question $q"
+    fi
     [ "$(grep -c "$posted" "$out/site.log")" = "$2" ] || fail "the change went before the user answered"
     case "$1" in Once) x=$((qw * 3 / 4)) ;; Dismiss) x=$((qw / 4)) ;; esac
     send click $((qx + x)) $((qy + qh - 26))
@@ -2034,13 +2096,13 @@ PY
   # A field's inside, $1 between ($2, $3) and ($4, $5), clear of its border: $6, shown with red,
   # or withheld with none.
   see_field() {
-    share=$(reds "$2" "$3" "$4" "$5" | cut -d' ' -f1)
-    echo "$1: $share% red" >> "$out/mcp-pictured.txt"
+    reddened=$(reds "$2" "$3" "$4" "$5" | cut -d' ' -f1)
+    echo "$1: $reddened% red" >> "$out/mcp-pictured.txt"
     if [ "$6" = shown ]; then
-      [ "$share" -ge 10 ] ||
-        fail "the agent's picture didn't show $1, which it may see: $share% red"
+      [ "$reddened" -ge 10 ] ||
+        fail "the agent's picture didn't show $1, which it may see: $reddened% red"
     else
-      [ "$share" -eq 0 ] || fail "the agent's picture showed $1, which it may not: $share% red"
+      [ "$reddened" -eq 0 ] || fail "the agent's picture showed $1, which it may not: $reddened% red"
     fi
   }
   : > "$out/mcp-pictured.txt"
@@ -2965,7 +3027,7 @@ quit
 trap cleanup EXIT
 rm -f "$agents_file" "$out/mcp-in" "$out/mcp-out"
 if [ "$driven" = 1 ]; then
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), the tabs its page opens kept in its Space, behind$opened_said, without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, pins, unpins and removes its own tab but not the user's, sends requests to its tab's site with the tab's session it never sees, a change asking each time, each opening in Settings › Agents to where it went and what it sent or didn't, asks a page's beforeunload handler first, with no dialog, closing one that doesn't ask at the first call and keeping one the agent clicked or typed in that asks until it discards it, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, opens its tabs muted, is refused a tab the user took over with a press in its page until they hand it back and Keep answers its ask, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, its download asks first and answers with the file, a refused one leaving none, a bank's site asks first until Always Allow, which Settings › Agents lists$needs_said, and off takes the socket away; an action waits for its element and its page to settle ($settle), a tab's id from before a relaunch is refused as such, and a launch after the window quit in its Space shows the page it opens; a screenshot of a tab just opened out of sight answers ($fresh_picture), and with the UI holding the keyboard with its picture"
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), the tabs its page opens kept in its Space, behind$opened_said, without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, pins, unpins and removes its own tab but not the user's, sends requests to its tab's site with the tab's session it never sees, a change asking each time, its question on screen as the log draws it ($follows% of its place changed), each opening in Settings › Agents to where it went and what it sent or didn't, asks a page's beforeunload handler first, with no dialog, closing one that doesn't ask at the first call and keeping one the agent clicked or typed in that asks until it discards it, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, opens its tabs muted, is refused a tab the user took over with a press in its page until they hand it back and Keep answers its ask, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, its download asks first and answers with the file, a refused one leaving none, a bank's site asks first until Always Allow, which Settings › Agents lists$needs_said, and off takes the socket away; an action waits for its element and its page to settle ($settle), a tab's id from before a relaunch is refused as such, and a launch after the window quit in its Space shows the page it opens; a screenshot of a tab just opened out of sight answers ($fresh_picture), and with the UI holding the keyboard with its picture"
 else
   echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own and is refused the user's tab, is answered that a link to an app opens nothing, its tab staying on its page, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), and its actions wait for their element and their page to settle ($settle), and the tabs its page opens are kept in its Space, behind$opened_said. A tab's id from before a relaunch is refused as such. skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
 fi
