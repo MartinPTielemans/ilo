@@ -312,7 +312,11 @@ BROWSER_DRIVE=1 github < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await '^browser: restored in ' || fail "the relaunch didn't restore the Space"
-await "^browser: pinned $p\$" || fail "GitHub's tab didn't come back pinned"
+# A relaunch gives the restored tabs new numbers.
+await '^browser: pinned [0-9][0-9]*$' || fail "GitHub's tab didn't come back pinned"
+await '^browser: today [0-9][0-9]*$' || fail "one.html's tab didn't come back"
+p=$(pinned)
+b=$(today)
 await "^browser: selected $b\$" || fail "the relaunch didn't show one.html's tab"
 await "^browser: loaded $b http://localhost:$port/one.html\$" || fail "one.html didn't load"
 await "^browser: page $p unloaded 1\$" || fail "the pinned tab didn't come back unloaded"
