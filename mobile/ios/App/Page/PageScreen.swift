@@ -385,14 +385,12 @@ struct HostLabel: View {
   }
 }
 
-/// The foot of the page: the bar, beside it what the page offers, and under them the small pill
-/// the bar gives way to while the page is read.
+/// The foot of the page: the bar, and beside it what the page offers. While the page is read the
+/// bar is a small pill with the site's name, just over the home indicator.
 ///
-/// The bar and the pill trade places by moving, and nothing else: the bar goes down off the
-/// screen's foot as the pill comes up from under it. A bar whose glass changed size on the way was
-/// laid out, drawn and handed over anew on every frame of it, with the page scrolling under it,
-/// and the switch lagged. Glass that only moves is the same glass from one frame to the next,
-/// and each of the two is `Slid`, so the system moves it and the app has no frame of it to make.
+/// The bar and the pill are one glass, which melts from one shape into the other (`Morphed`), and
+/// the system takes it there: the app has no frame of the way to make, with the page scrolling
+/// under it. The name stays on it all the way, and the bar's buttons go.
 private struct PageBar: View {
   let tab: WebTab
   let foot: CGFloat
@@ -402,42 +400,38 @@ private struct PageBar: View {
 
   @Environment(Browser.self) private var browser
   @Environment(\.low) private var low
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   /// Whether the turn onto its side is what tucked the bar, for the turn back to undo.
   @State private var turned = false
   /// How far down a finger swiping down has taken the bar.
   @State private var tuck: CGFloat = 0
+  /// How far along the bar a finger has pulled the site's name.
+  @State private var drag: CGFloat = 0
   /// The site's name as the bar lays it out, which the small pill is cut to.
   @State private var nameWidth: CGFloat = 80
+  /// How wide the bar and the buttons beside it are together.
+  @State private var across: CGFloat = 0
 
   var body: some View {
     let shrunk = tab.barHidden
-    ZStack(alignment: .bottom) {
-      // Nothing travels where motion is reduced: one is put away where it stands, as the other comes.
-      Slid(y: shrunk && !reduceMotion ? Bar.sunk(foot: foot) : 0, unheard: shrunk) {
-        GlassGroup {
-          HStack(alignment: .bottom, spacing: Bar.gap) {
-            PagePill(tab: tab, lift: lift, tuck: $tuck, nameWidth: $nameWidth)
-            ContextButtons(tab: tab)
-          }
-        }
-        .barShown(!(shrunk && reduceMotion), touch: !shrunk)
-        // Under a finger it's SwiftUI's to move, which knows where the finger is.
-        .offset(y: tuck)
+    // The pill is in the middle of the screen, not of the room the buttons leave the bar.
+    let pill = MorphPill(
+      size: CGSize(width: nameWidth * Bar.smallLabel + 20, height: Bar.small),
+      drop: foot - Bar.gap - Bar.smallFoot(band: band), across: across, reach: Bar.smallReach)
+    // Under a finger the glass's top is the finger's: all the way once it has come as far as that goes.
+    let pulled = min(1, tuck / (Bar.height + pill.drop - pill.size.height))
+    HStack(alignment: .bottom, spacing: Bar.gap) {
+      Morphed(small: shrunk ? 1 : pulled, pill: pill, loaded: tab.isLoading ? tab.progress : nil, grow: { tab.growBar() }) {
+        BarName(tab: tab, shrunk: shrunk, drag: drag, width: $nameWidth)
+      } controls: {
+        PagePill(tab: tab, lift: lift, tuck: $tuck, drag: $drag)
       }
       .frame(height: Bar.height)
-
-      Slid(y: shrunk || reduceMotion ? 0 : Bar.smallSunk(band: band), unheard: !shrunk) {
-        SmallPill(tab: tab, nameWidth: nameWidth)
-          .barShown(shrunk || !reduceMotion, touch: shrunk)
-      }
-      .frame(width: SmallPill.width(name: nameWidth) + 2 * Bar.smallReach.width, height: Bar.small + 2 * Bar.smallReach.height)
-      // What's touched around the pill takes no room.
-      .padding(.vertical, -Bar.smallReach.height)
-      // Its place is just over the home indicator, under the bar's.
-      .offset(y: foot - Bar.gap - Bar.smallFoot(band: band))
+      // The buttons keep their room while the bar is small, so the bar that comes back is the same.
+      GlassGroup { ContextButtons(tab: tab) }
+        .barShown(!shrunk)
     }
-    .animation(reduceMotion ? Motion.quick : nil, value: shrunk)
+    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { across = $0 }
+    .animation(Motion.quick, value: shrunk)
     // A bar that comes back has let go of the finger that took it down.
     .onChange(of: shrunk) { if !shrunk { tuck = 0 } }
     .padding(.horizontal, Bar.side)
@@ -464,93 +458,55 @@ private struct PageBar: View {
   }
 }
 
-/// The small pill the bar gives way to while the page is read: the site's name, which a tap
-/// makes the bar again.
-private struct SmallPill: View {
+/// The site's name on the bar, and on the small pill, where it's all there is: there a tap makes
+/// the bar again.
+private struct BarName: View {
   let tab: WebTab
-  let nameWidth: CGFloat
+  let shrunk: Bool
+  /// How far along the bar a finger has pulled it.
+  let drag: CGFloat
+  @Binding var width: CGFloat
 
   @Environment(Browser.self) private var browser
   @Environment(\.palette) private var palette
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
-    Color.clear
-      .frame(width: Self.width(name: nameWidth), height: Bar.small)
-      .overlay {
-        HostLabel(url: tab.url, isPrivate: tab.isPrivate, distrusted: tab.distrusted)
-          // The name keeps the width it has in the bar, so it's the same name, not cut again.
-          .frame(width: nameWidth)
-          .scaleEffect(Bar.smallLabel)
-          .scaled(17, Bar.labelWeight)
-          .foregroundStyle(palette.glassText)
-          .accessibilityElement(children: .combine)
-          .accessibilityAddTraits(.isButton)
-          .accessibilityLabel("Show the bar")
-          .accessibilityAction { tab.growBar() }
-          .accessibilityAction(named: "Next Tab") { turn(1) }
-          .accessibilityAction(named: "Previous Tab") { turn(-1) }
-      }
-      .overlay(alignment: .bottomLeading) { LoadedLine(tab: tab, round: Bar.small / 2) }
-      .clipShape(.rect(cornerRadius: Bar.small / 2, style: .continuous))
-      // After the clip: glass draws its own edge and shadow outside its shape.
-      .barGlass(tinted: true)
+    HostLabel(url: tab.url, isPrivate: tab.isPrivate, distrusted: tab.distrusted)
+      .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+      .offset(x: drag)
+      .scaled(17, Bar.labelWeight)
+      .foregroundStyle(palette.glassText)
       .dynamicTypeSize(...DynamicTypeSize.accessibility1)
-      // The small pill is touched over more than it shows: a thumb's width and height.
-      .padding(.horizontal, Bar.smallReach.width)
-      .padding(.vertical, Bar.smallReach.height)
-      .contentShape(.rect)
-      .onTapGesture { tab.growBar() }
+      .accessibilityElement(children: .combine)
+      .accessibilityAddTraits(.isButton)
+      .accessibilityLabel(shrunk ? "Show the bar" : (tab.isPrivate ? "Private, " : "") + HostLabel.name(of: tab.url, isPrivate: tab.isPrivate))
+      .accessibilityHint(shrunk ? "" : "Search or enter an address")
+      .accessibilityAction { if shrunk { tab.growBar() } else { browser.searchingPage = true } }
+      .accessibilityAction(named: "Next Tab") { step(1) }
+      .accessibilityAction(named: "Previous Tab") { step(-1) }
+      .accessibilityAction(named: shrunk ? "Show the Bar" : "Hide the Bar") { if shrunk { tab.growBar() } else { tab.tuckBar() } }
   }
 
-  /// The pill's width around a name `name` wide in the bar.
-  static func width(name: CGFloat) -> CGFloat {
-    name * Bar.smallLabel + 20
-  }
-
-  private func turn(_ offset: Int) {
+  private func step(_ offset: Int) {
     withAnimation(reduceMotion ? Motion.quick : Motion.page) { _ = browser.step(offset) }
   }
 }
 
-/// How far the page has loaded, along the foot of the bar or of the pill.
-private struct LoadedLine: View {
-  let tab: WebTab
-  let round: CGFloat
-
-  @Environment(\.palette) private var palette
-
-  var body: some View {
-    GeometryReader { pill in
-      Rectangle()
-        .fill(palette.glassText.opacity(0.8))
-        .frame(width: pill.size.width * tab.progress, height: 2)
-        .frame(maxHeight: .infinity, alignment: .bottom)
-    }
-    .clipShape(.rect(cornerRadius: round, style: .continuous))
-    .opacity(tab.isLoading ? 1 : 0)
-    .animation(Motion.quick, value: tab.progress)
-    .animation(Motion.quick, value: tab.isLoading)
-    .allowsHitTesting(false)
-    .accessibilityHidden(true)
-  }
-}
-
-/// The page's three controls: the tabs, the site's name, and the page's actions. A swipe along
-/// it goes to the tab beside this one, a swipe up takes the page to the Space, and a swipe down
-/// takes the bar down under the finger, to leave the small pill: for a page that doesn't scroll
-/// and so never does that itself.
+/// What's on the page's bar around the site's name, the tabs and the page's actions, and what a
+/// touch on the bar does. A swipe along it goes to the tab beside this one, a swipe up takes the
+/// page to the Space, and a swipe down takes the bar to its small pill under the finger: for a
+/// page that doesn't scroll and so never does that itself.
 private struct PagePill: View {
   let tab: WebTab
   let lift: PageLift
   /// How far down a finger swiping down has taken the bar.
   @Binding var tuck: CGFloat
-  @Binding var nameWidth: CGFloat
+  /// How far along the bar a finger has pulled the site's name.
+  @Binding var drag: CGFloat
 
   @Environment(Browser.self) private var browser
-  @Environment(\.palette) private var palette
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @State private var drag: CGFloat = 0
   /// Which swipe the finger on the bar is making, once its first movement has said.
   @State private var axis: SpacePull.Axis?
   /// Where the finger was when its swipe up or down began.
@@ -564,22 +520,6 @@ private struct PagePill: View {
     Color.clear
       .frame(maxWidth: .infinity)
       .frame(height: Bar.height)
-      .overlay {
-        HostLabel(url: tab.url, isPrivate: tab.isPrivate, distrusted: tab.distrusted)
-          .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { nameWidth = $0 }
-          .padding(.horizontal, 49)
-          .offset(x: drag)
-          .scaled(17, Bar.labelWeight)
-          .foregroundStyle(palette.glassText)
-          .accessibilityElement(children: .combine)
-          .accessibilityAddTraits(.isButton)
-          .accessibilityLabel((tab.isPrivate ? "Private, " : "") + HostLabel.name(of: tab.url, isPrivate: tab.isPrivate))
-          .accessibilityHint("Search or enter an address")
-          .accessibilityAction { browser.searchingPage = true }
-          .accessibilityAction(named: "Next Tab") { step(1) }
-          .accessibilityAction(named: "Previous Tab") { step(-1) }
-          .accessibilityAction(named: "Hide the Bar") { tab.tuckBar() }
-      }
       .overlay {
         HStack(spacing: 10) {
           Button(action: leave) {
@@ -596,10 +536,6 @@ private struct PagePill: View {
         .padding(.horizontal, 10)
         .fixedSize(horizontal: false, vertical: true)
       }
-      .overlay(alignment: .bottomLeading) { LoadedLine(tab: tab, round: Bar.round) }
-      .clipShape(.rect(cornerRadius: Bar.round, style: .continuous))
-      // After the clip: glass draws its own edge and shadow outside its shape.
-      .barGlass(tinted: true)
       .dynamicTypeSize(...DynamicTypeSize.accessibility1)
       .contentShape(.rect)
       .onTapGesture { browser.searchingPage = true }
@@ -635,7 +571,7 @@ private struct PagePill: View {
         case .up: lift.moved(value.translation.height - origin)
         case .sideways: drag = Motion.resist(value.translation.width, over: 160)
         case .down:
-          // The bar goes down under the finger, and no way up: that swipe is the page's.
+          // The bar goes to its pill under the finger, and no way up: that swipe is the page's.
           pulled = max(0, value.translation.height - origin)
           if !reduceMotion { withAnimation(Motion.finger) { tuck = pulled } }
         case nil: break

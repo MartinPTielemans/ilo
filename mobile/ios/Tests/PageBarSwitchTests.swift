@@ -8,13 +8,15 @@ import UIKit
   var on = false
 }
 
-/// A square that goes 60 pt to the right inside a `Slid`, at the pace given outside it.
+/// A square that goes 60 pt to the right on a `Morphed`, at the pace given outside it.
 private struct Shifts: View {
   let shift: Shift
   let animation: Animation?
 
   var body: some View {
-    Slid(y: 0) {
+    Morphed(small: 0, pill: MorphPill(), grow: {}) {
+      EmptyView()
+    } controls: {
       Color.red.frame(width: 10, height: 10).offset(x: shift.on ? 60 : 0)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -37,7 +39,7 @@ private struct Surrounds: View {
   let shift: Shift
 
   var body: some View {
-    Slid(y: 0) { Marks() }
+    Morphed(small: 0, pill: MorphPill(), grow: {}) { EmptyView() } controls: { Marks() }
       .frame(width: 100, height: 100)
       .environment(\.glassAway, shift.on)
   }
@@ -59,7 +61,7 @@ private struct Opens: View {
   }
 }
 
-/// The page's bar and its small pill trading places, and what moves them.
+/// The page's bar melting into its small pill and back, and what takes it there.
 @Suite(.serialized, .timeLimit(.minutes(5))) @MainActor struct PageBarSwitchTests {
   private func window(_ root: some View) throws -> UIWindow {
     let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
@@ -69,8 +71,8 @@ private struct Opens: View {
     return window
   }
 
-  /// A page open on screen with its bar, and the bar's two places: the bar's, then the pill's.
-  private func page() async throws -> (WebTab, Browser, UIWindow, bar: SlidView, pill: SlidView) {
+  /// A page open on screen, and its bar's glass.
+  private func page() async throws -> (WebTab, Browser, UIWindow, MorphView) {
     let browser = testBrowser()
     let tab = WebTab(id: "tab", role: .today, browser: browser)
     browser.opened()
@@ -82,22 +84,26 @@ private struct Opens: View {
         .environment(browser.favicons)
         .environment(Reading())
         .environment(browser.account as! PhoneAccount))
-    #expect(await eventually { slids(in: window).count == 2 && slids(in: window).allSatisfy { $0.bounds.height > 0 } })
-    let places = slids(in: window).sorted { $0.bounds.height > $1.bounds.height }
-    return (tab, browser, window, try #require(places.first), try #require(places.last))
+    var place: MorphView?
+    #expect(
+      await eventually {
+        place = self.morphs(in: window).first { $0.bar.height > 0 && $0.shown }
+        return place != nil
+      })
+    return (tab, browser, window, try #require(place))
   }
 
-  private func slids(in view: UIView) -> [SlidView] {
-    (view as? SlidView).map { [$0] } ?? view.subviews.flatMap(slids)
+  private func morphs(in view: UIView) -> [MorphView] {
+    (view as? MorphView).map { [$0] } ?? view.subviews.flatMap(morphs)
   }
 
   private func layers(under layer: CALayer) -> [CALayer] {
     [layer] + (layer.sublayers ?? []).flatMap(layers)
   }
 
-  /// Where the left edge of the 10 pt square `place` holds is drawn in it. As it's drawn: iOS 27
+  /// Where the left edge of the 10 pt square on `place` is drawn in it. As it's drawn: iOS 27
   /// leaves a layer it's animating where it began until the animation is over.
-  private func squareLeft(in place: SlidView) -> CGFloat? {
+  private func squareLeft(in place: MorphView) -> CGFloat? {
     guard let square = layers(under: place.layer).first(where: { $0.bounds.size == CGSize(width: 10, height: 10) }) else { return nil }
     var left: CGFloat = 0
     var layer: CALayer? = square
@@ -108,58 +114,69 @@ private struct Opens: View {
     return left
   }
 
-  /// Whether a touch at the middle of `place`, where it's laid out, is for what `place` holds.
-  private func touched(_ place: SlidView, in window: UIWindow) -> Bool {
-    let middle = place.convert(CGPoint(x: place.bounds.midX, y: place.bounds.midY), to: window)
-    var hit = window.hitTest(middle, with: nil)
+  /// Whose a touch at the middle of `shape` in `place` is: something on the glass, the glass's
+  /// own place, or nothing of the bar's.
+  private enum Touched { case onIt, place, other }
+  private func touch(_ shape: CGRect, of place: MorphView, in window: UIWindow) -> Touched {
+    var hit = window.hitTest(place.convert(CGPoint(x: shape.midX, y: shape.midY), to: window), with: nil)
+    if hit === place { return .place }
     while let view = hit, view !== place { hit = view.superview }
-    return hit != nil
+    return hit == nil ? .other : .onIt
   }
 
-  @Test func `the bar goes down off the screen as its small pill comes up, and the system moves both`() async throws {
-    let (tab, _, window, bar, pill) = try await page()
+  private func near(_ one: CGRect, _ other: CGRect) -> Bool {
+    abs(one.minX - other.minX) < 0.5 && abs(one.minY - other.minY) < 0.5 && abs(one.width - other.width) < 0.5 && abs(one.height - other.height) < 0.5
+  }
+
+  @Test func `the bar's glass melts into its small pill and back, and the system takes it there`() async throws {
+    let (tab, _, window, place) = try await page()
     defer { window.isHidden = true }
     let foot = window.bounds.height
     let band = window.safeAreaInsets.bottom
-    #expect(bar.y == 0)
-    #expect(bar.convert(bar.bounds, to: window).maxY == foot - band)
-    #expect(pill.y > 0)
-    // The pill's place is just over the home indicator, and the pill waits under the screen.
-    #expect(pill.convert(pill.bounds, to: window).maxY == foot - Bar.smallFoot(band: band) + Bar.smallReach.height)
-    #expect(pill.convert(pill.bounds, to: window).minY + pill.y >= foot)
+    #expect(place.small == 0)
+    #expect(near(place.drawn, place.bar))
+    #expect(place.convert(place.bar, to: window).maxY == foot - band)
+    // The pill is just over the home indicator, in the middle of the screen, a capsule the name fits.
+    let pill = place.convert(place.shape(1), to: window)
+    #expect(pill.maxY == foot - Bar.smallFoot(band: band))
+    #expect(pill.height == Bar.small)
+    #expect(abs(pill.midX - window.bounds.midX) < 0.5)
+    #expect(pill.width >= 20 && pill.width < place.bar.width / 2)
 
     tab.tuckBar()
-    #expect(await eventually { bar.y > 0 && pill.y == 0 })
-    // Off the screen with its shadow.
-    #expect(bar.convert(bar.bounds, to: window).minY + bar.y >= foot)
-    // Both are where they're going at once, and drawn on their way there: only what the system
-    // moves is drawn somewhere the app hasn't put it. On their way first, then there: a move the
-    // system hasn't been handed yet is drawn at its end too.
+    #expect(await eventually { place.small == 1 })
+    // It's the pill at once, and drawn on its way there, between the two shapes: only what the
+    // system takes somewhere is drawn where the app hasn't put it. On its way first, then there:
+    // a change the system hasn't been handed yet is drawn at its end too.
     var between = false
     #expect(
       await eventually(seconds: 5) {
-        if bar.drawnY > 1, bar.drawnY < bar.y - 1, pill.drawnY > 1 { between = true }
-        return between && abs(bar.drawnY - bar.y) < 0.5 && abs(pill.drawnY) < 0.5
+        let drawn = place.drawn
+        if drawn.height < Bar.height - 1, drawn.height > Bar.small + 1, drawn.width < place.bar.width - 1, drawn.width > place.shape(1).width + 1 {
+          between = true
+        }
+        return between && near(drawn, place.shape(1))
       })
 
     tab.growBar()
-    #expect(await eventually { bar.y == 0 && pill.y > 0 })
-    #expect(await eventually(seconds: 5) { abs(bar.drawnY) < 0.5 && abs(pill.drawnY - pill.y) < 0.5 })
+    #expect(await eventually { place.small == 0 })
+    #expect(await eventually(seconds: 5) { near(place.drawn, place.bar) })
   }
 
-  @Test func `VoiceOver reads the one that's there, and neither while the page is searched`() async throws {
-    let (tab, browser, window, bar, pill) = try await page()
+  @Test func `VoiceOver reads the name at both sizes, the bar's buttons while it's whole, and nothing while the page is searched`() async throws {
+    let (tab, browser, window, place) = try await page()
     defer { window.isHidden = true }
-    #expect(!bar.accessibilityElementsHidden && pill.accessibilityElementsHidden)
+    #expect(!place.accessibilityElementsHidden && !place.controlsUnheard)
 
     tab.tuckBar()
-    #expect(await eventually { bar.accessibilityElementsHidden && !pill.accessibilityElementsHidden })
+    #expect(await eventually { place.controlsUnheard })
+    #expect(!place.accessibilityElementsHidden)
 
     tab.growBar()
-    #expect(await eventually { !bar.accessibilityElementsHidden && pill.accessibilityElementsHidden })
+    #expect(await eventually { !place.controlsUnheard })
 
     browser.searchingPage = true
-    #expect(await eventually { bar.accessibilityElementsHidden && pill.accessibilityElementsHidden })
+    #expect(await eventually { place.accessibilityElementsHidden })
   }
 
   @Test func `a page that grows out of its card has its bar, drawn whole`() async throws {
@@ -176,50 +193,54 @@ private struct Opens: View {
     defer { window.isHidden = true }
     try await Task.sleep(for: .milliseconds(300))
     browser.openNew(server.url("/"))
-    #expect(await eventually { browser.pageOpen && slids(in: window).count == 2 })
-    let bar = try #require(slids(in: window).max { $0.bounds.height < $1.bounds.height })
-    // Put away, what's on a bar is faded out with its glass.
-    #expect(await eventually(seconds: 5) { layers(under: bar.layer).allSatisfy { $0.opacity == 1 } })
+    #expect(await eventually { browser.pageOpen && morphs(in: window).count == 1 })
+    let place = try #require(morphs(in: window).first)
+    // Put away, a bar has neither its glass nor its name.
+    #expect(await eventually(seconds: 5) { place.shown && self.near(place.drawn, place.bar) })
   }
 
   @Test func `a touch is the bar's while it's whole, the pill's while it's small, and the page's where neither is`() async throws {
-    let (tab, browser, window, bar, pill) = try await page()
+    let (tab, browser, window, place) = try await page()
     defer { window.isHidden = true }
-    #expect(touched(bar, in: window))
-    #expect(!touched(pill, in: window))
+    // Once what's on the bar has been laid out on it.
+    #expect(await eventually { self.touch(place.bar, of: place, in: window) == .onIt })
+    #expect(touch(place.shape(1), of: place, in: window) == .other)
 
     tab.tuckBar()
-    #expect(await eventually { touched(pill, in: window) })
-    #expect(!touched(bar, in: window))
+    #expect(await eventually { self.touch(place.shape(1), of: place, in: window) == .place })
+    // Over more than it shows: a thumb's reach around it.
+    let reach = place.shape(1).insetBy(dx: -Bar.smallReach.width + 1, dy: -Bar.smallReach.height + 1)
+    #expect(touch(CGRect(x: reach.minX, y: reach.minY, width: 0, height: 0), of: place, in: window) == .place)
+    #expect(touch(place.bar, of: place, in: window) == .other)
 
     tab.growBar()
-    #expect(await eventually { touched(bar, in: window) })
-    #expect(!touched(pill, in: window))
+    #expect(await eventually { self.touch(place.bar, of: place, in: window) == .onIt })
+    #expect(touch(place.shape(1), of: place, in: window) == .other)
     // Away behind the page's field, the bar leaves the touch to it.
     browser.searchingPage = true
-    #expect(await eventually { !touched(bar, in: window) })
+    #expect(await eventually { self.touch(place.bar, of: place, in: window) == .other })
   }
 
-  @Test func `what a Slid holds is in the environment of the view the Slid is in, as that changes`() async throws {
+  @Test func `what's on a Morphed is in the environment of the view the Morphed is in, as that changes`() async throws {
     let shift = Shift()
     shift.on = true
     let window = try window(Surrounds(shift: shift))
     defer { window.isHidden = true }
-    #expect(await eventually { slids(in: window).first.map { $0.bounds.height > 0 } == true })
-    let place = try #require(slids(in: window).first)
+    #expect(await eventually { morphs(in: window).first.map { $0.bounds.height > 0 } == true })
+    let place = try #require(morphs(in: window).first)
     func left() -> CGFloat? { squareLeft(in: place) }
     #expect(await eventually(seconds: 5) { left() == 60 })
     shift.on = false
     #expect(await eventually(seconds: 5) { left() == 0 })
   }
 
-  @Test func `what a Slid holds changes at the pace of what changed it outside`() async throws {
+  @Test func `what's on a Morphed changes at the pace of what changed it outside`() async throws {
     for animation in [Animation.linear(duration: 3), nil] {
       let shift = Shift()
       let window = try window(Shifts(shift: shift, animation: animation))
       defer { window.isHidden = true }
-      #expect(await eventually { slids(in: window).first.map { $0.bounds.height > 0 } == true })
-      let place = try #require(slids(in: window).first)
+      #expect(await eventually { morphs(in: window).first.map { $0.bounds.height > 0 } == true })
+      let place = try #require(morphs(in: window).first)
       func left() -> CGFloat? { squareLeft(in: place) }
       #expect(await eventually { left() == 0 })
       shift.on = true

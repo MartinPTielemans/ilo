@@ -39,8 +39,18 @@ extension Palette {
 
   /// A bar over a page: the system's glass with the Space's colour washed in, as much as the
   /// small pill needs to show it. The bar and its small pill are the same glass.
-  var pageGlass: Glass {
-    isPrivate ? .regular.tint(Self.ink.opacity(PrivateMark.barInk)) : .regular.tint(accent.opacity(0.16))
+  var pageGlass: Glass { .regular.tint(pageTint) }
+
+  /// What's washed into it: the Space's colour, or a private tab's ink.
+  var pageTint: Color {
+    isPrivate ? Self.ink.opacity(PrivateMark.barInk) : accent.opacity(0.16)
+  }
+
+  /// The same glass as UIKit has it, for the bar that melts into its pill (`Morphed`).
+  @MainActor var pageGlassEffect: UIGlassEffect {
+    let glass = UIGlassEffect(style: .regular)
+    glass.tintColor = UIColor(pageTint)
+    return glass
   }
 
   /// What floats over the Space's ground. On the dark ground plain glass is as dark as what's
