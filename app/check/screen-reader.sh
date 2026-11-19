@@ -476,7 +476,7 @@ judging=
 press f10 shift
 at=$step
 expect '^browser: library row menu [0-9]* 0$' "⇧F10 from History's field didn't open the ringed row's menu"
-expect '^browser: menu shown Open in New Tab' "⇧F10 from History's field didn't show its ringed row's menu"
+expect '^browser: menu shown Open in new tab' "⇧F10 from History's field didn't show its ringed row's menu"
 expect '^browser: menu highlights .* at ' "the row's menu from ⇧F10 didn't highlight its first item"
 press escape
 expect '^browser: menu closed$' "escape didn't close History's row's menu"
