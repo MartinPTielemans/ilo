@@ -143,6 +143,11 @@ async function save() {
 // one note of the usual width fills half its square, a block that reads at the row's 18 points.
 const PICTURE_MARGIN = 24, PICTURE_LEAST = 480;
 
+// A card's height in the Board's own units: a note's card keeps 0, as its words size it as it shows.
+function cardHeight(card) {
+  return card.h || byId.get(card.id)?.offsetHeight || 0;
+}
+
 // The cards' bounds in the Board's own units, or null for an empty Board.
 function cardsBounds() {
   let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
@@ -157,7 +162,7 @@ function cardsBounds() {
       const r = card.width / 2;
       for (const [px, py] of card.points) take(card.x + px - r, card.y + py - r, card.x + px + r, card.y + py + r);
     } else {
-      take(card.x, card.y, card.x + card.w, card.y + (card.h || byId.get(card.id)?.offsetHeight || 0));
+      take(card.x, card.y, card.x + card.w, card.y + cardHeight(card));
     }
   }
   return left === Infinity ? null : { left, top, right, bottom };
@@ -196,7 +201,7 @@ async function saveThumb() {
     } else if (card.fill !== "none") {
       g.fillStyle = swatch(card.fill);
       g.beginPath();
-      g.roundRect(card.x, card.y, card.w, card.h, 10);
+      g.roundRect(card.x, card.y, card.w, cardHeight(card), 10);
       g.fill();
     } else {
       g.fillStyle = swatch();
