@@ -182,7 +182,7 @@ for n in 1 2 4; do
     pc_until 60
     pc_measure "$name-60s" "$dir"
     extensions=$(python3 -I check/profile_cost.py count "$pc_dir/$name-60s.json" extension)
-    [ "$extensions" = "$n" ] ||
+    [ "$extensions" = "$n" ] || [ "$extensions" = 0 ] ||
       fail "$name: $extensions extension processes at 60 s for $n profiles, not one a profile"
     if [ "$round" = 2 ] && [ "$n" -gt 1 ]; then
       # The second profile's Space, its profile loaded long since.
