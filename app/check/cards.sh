@@ -274,11 +274,6 @@ server.serve_forever()
 tls=$!
 read -r tls_port < "$out/cards-tls.port" || true
 [ -n "$tls_port" ] || fail "GitHub's https server didn't start: $(cat "$out/cards-tls.log")"
-# It takes the shell's place, so $! is the app's own process.
-github() {
-  exec "$browser" --host-resolver-rules="MAP github.com 127.0.0.1:$tls_port" \
-    --ignore-certificate-errors-spki-list="$spki" "$@"
-}
 pull=https://github.com/ilo-check/cards/pull
 
 # recent_row <tab> <n> [modifiers…]: rests on pinned tab <tab>'s row till its card has its rows,
@@ -313,7 +308,10 @@ shown_from_row() {
 log="$out/cards-recent.log"
 step=0
 rm -f "$saved"
-BROWSER_DRIVE=1 BROWSER_URL=https://github.com/ github < "$out/drive" > "$log" 2>&1 &
+BROWSER_DRIVE=1 BROWSER_URL=https://github.com/ "$browser" \
+  --host-resolver-rules="MAP github.com 127.0.0.1:$tls_port" \
+  --ignore-certificate-errors-spki-list="$spki" \
+  < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
@@ -340,7 +338,10 @@ await '^browser: command quit via ' || fail "⌘Q didn't reach the UI"
 exited
 log="$out/cards-recent-restored.log"
 step=0
-BROWSER_DRIVE=1 github < "$out/drive" > "$log" 2>&1 &
+BROWSER_DRIVE=1 "$browser" \
+  --host-resolver-rules="MAP github.com 127.0.0.1:$tls_port" \
+  --ignore-certificate-errors-spki-list="$spki" \
+  < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await '^browser: restored in ' || fail "the relaunch didn't restore the Space"
