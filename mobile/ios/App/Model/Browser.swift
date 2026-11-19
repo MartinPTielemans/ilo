@@ -867,6 +867,18 @@ final class Browser {
     prompt = Prompt(kind: .notice(text), host: "") { _ in }
   }
 
+  // MARK: Handing a link on
+
+  /// A link as Copy Link and Share give it, wherever they're offered: as it would open, without
+  /// its tracking parameters. `tab` is the page it's of, whose own choice for the site holds.
+  func link(_ url: URL, from tab: WebTab? = nil) -> URL {
+    Blocker.shared.handedOn(url, in: tab?.webView)
+  }
+
+  func copyLink(_ url: URL, from tab: WebTab? = nil) {
+    UIPasteboard.general.url = link(url, from: tab)
+  }
+
   // MARK: Files
 
   /// Opens a downloaded file: a pass in Wallet's own sheet for adding one; a calendar file's

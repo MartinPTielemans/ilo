@@ -99,7 +99,7 @@ struct PrivateCard: View {
     .contextMenu {
       Button("Close Tab", systemImage: "xmark", role: .destructive, action: close)
       if let url = tab.url {
-        Button("Copy Link", systemImage: "link") { UIPasteboard.general.url = url }
+        Button("Copy Link", systemImage: "link") { browser.copyLink(url, from: tab) }
       }
     }
     .accessibilityElement(children: .contain)

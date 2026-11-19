@@ -260,7 +260,7 @@ private struct PageCard: View {
     .contextMenu {
       Button("Close Tab", systemImage: "xmark", role: .destructive, action: close)
       if let url = node.url {
-        Button("Copy Link", systemImage: "link") { UIPasteboard.general.url = url }
+        Button("Copy Link", systemImage: "link") { browser.copyLink(url) }
       }
       MoveMenu(id: node.id)
     }
@@ -586,7 +586,7 @@ private struct PinTile: View {
       .contextMenu {
         Button("Unpin", systemImage: "pin.slash") { browser.account.unpin(node.id) }
         if let url = node.url {
-          Button("Copy Link", systemImage: "link") { UIPasteboard.general.url = url }
+          Button("Copy Link", systemImage: "link") { browser.copyLink(url) }
         }
         MoveMenu(id: node.id)
         HideButton(id: node.id)
@@ -746,7 +746,7 @@ private struct PinnedRow: View {
     .contextMenu {
       Button("Unpin", systemImage: "pin.slash") { browser.account.unpin(node.id) }
       if let url = node.url {
-        Button("Copy Link", systemImage: "link") { UIPasteboard.general.url = url }
+        Button("Copy Link", systemImage: "link") { browser.copyLink(url) }
       }
       MoveMenu(id: node.id)
       if hides { HideButton(id: node.id) }
