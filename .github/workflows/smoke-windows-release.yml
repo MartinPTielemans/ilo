@@ -1,0 +1,379 @@
+# Smoke test of a published release's Windows installer, as a new user meets it (#2613): downloads
+# the release's ilo-windows-x64-setup.exe and MSIX, checks them against the release's SHA256SUMS and
+# the MSIX's identity against the Store's (branding/windows-store.ini at the tag), installs the setup
+# silently for the user, launches the installed ilo with its driver (BROWSER_DRIVE=1) and a new
+# profile, goes through the first run's onboarding with Esc at each step, turning on the agents'
+# switch at the opt-ins step and seeing their server start, and loads a page typed in the command
+# bar the onboarding ends with. It captures the window at each step and uploads the captures, the
+# app's log and the installer's.
+# Its winget job writes winget's manifests for the release's installer with tools/winget.sh at the
+# tag, as release.yml does, checks that they name the release's URL and its SHA256SUMS hash, and has
+# winget validate them and install from them, on the runner alone: nothing goes to
+# microsoft/winget-pkgs, whose pull request is the owner's (#454).
+# By hand only, against the tag given or the latest release. It reads releases and never changes one.
+name: Smoke test of the Windows release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The release's tag, such as v0.1.16; the latest release if empty
+        required: false
+      job:
+        description: What to check
+        type: choice
+        options: [smoke, winget]
+        default: smoke
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    if: ${{ inputs.job == 'smoke' }}
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      # The tag asked for, or the latest release's, as TAG for the steps after.
+      - id: tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ASKED: ${{ inputs.tag }}
+        run: |
+          tag=${ASKED:-$(gh release view -R "$GITHUB_REPOSITORY" --json tagName -q .tagName)}
+          [ -n "$tag" ] || { echo "::error::No tag given and no latest release"; exit 1; }
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "## $tag" >> "$GITHUB_STEP_SUMMARY"
+
+      # The capture code alone; the app is the release's.
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tools
+
+      - shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          out=$RUNNER_TEMP/smoke
+          mkdir -p "$out"
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D "$out" \
+            -p ilo-windows-x64-setup.exe -p ilo-windows-x64.msix -p SHA256SUMS
+          (cd "$out" && grep -E ' \*?ilo-windows-x64(-setup\.exe|\.msix)$' SHA256SUMS | tee sums | sha256sum -c -)
+          [ "$(wc -l < "$out/sums")" = 2 ] || { echo "::error::$TAG's SHA256SUMS lacks the setup or the MSIX"; exit 1; }
+          echo "- The setup and the MSIX match $TAG's SHA256SUMS" >> "$GITHUB_STEP_SUMMARY"
+          gh api -H 'Accept: application/vnd.github.raw' \
+            "repos/$GITHUB_REPOSITORY/contents/app/branding/windows-store.ini?ref=$TAG" > "$out/windows-store.ini"
+
+      # The Store's identity, as Partner Center gives it, in the MSIX's manifest.
+      - shell: pwsh
+        run: |
+          $out = "$env:RUNNER_TEMP\smoke"
+          $want = @{}
+          foreach ($line in Get-Content "$out\windows-store.ini") {
+            if ($line -match '^\s*([a-z-]+)\s*=\s*(.*?)\s*$') { $want[$Matches[1]] = $Matches[2] }
+          }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [IO.Compression.ZipFile]::OpenRead("$out\ilo-windows-x64.msix")
+          $reader = New-Object IO.StreamReader($zip.GetEntry('AppxManifest.xml').Open())
+          [xml]$manifest = $reader.ReadToEnd()
+          $reader.Close(); $zip.Dispose()
+          $got = @{
+            'identity-name' = $manifest.Package.Identity.Name
+            'publisher' = $manifest.Package.Identity.Publisher
+            'publisher-display-name' = $manifest.Package.Properties.PublisherDisplayName
+          }
+          $bad = $false
+          foreach ($key in 'identity-name', 'publisher', 'publisher-display-name') {
+            "$key`: $($got[$key]) (the Store's: $($want[$key]))"
+            if ($got[$key] -cne $want[$key]) { $bad = $true }
+          }
+          "Version: $($manifest.Package.Identity.Version)"
+          if ($bad -or $got['identity-name'] -cne 'ilobrowser.ilo' -or $got['publisher-display-name'] -cne 'ilo browser') {
+            "- FAIL: the MSIX's identity isn't the Store's" >> $env:GITHUB_STEP_SUMMARY
+            Write-Error "The MSIX's identity isn't the Store's"
+            exit 1
+          }
+          "- The MSIX's identity is the Store's: $($got['identity-name']), $($got['publisher']), `"$($got['publisher-display-name'])`", version $($manifest.Package.Identity.Version)" >> $env:GITHUB_STEP_SUMMARY
+
+      # The size the check runs use; the runner's own is 1024x768.
+      - shell: pwsh
+        run: Set-DisplayResolution -Width 1920 -Height 1080 -Force
+
+      # Inno Setup's silent install, for the user alone (PrivilegesRequired=lowest), which starts
+      # nothing after (skipifsilent).
+      - shell: pwsh
+        run: |
+          $out = "$env:RUNNER_TEMP\smoke"
+          $setup = Start-Process -Wait -PassThru -FilePath "$out\ilo-windows-x64-setup.exe" `
+            -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/LOG=$out\install.log"
+          "Installer exit code: $($setup.ExitCode)"
+          $app = "$env:LOCALAPPDATA\Programs\ilo\chrome.exe"
+          if ($setup.ExitCode -ne 0 -or -not (Test-Path $app)) {
+            Write-Error "The installer didn't install $app"
+            exit 1
+          }
+          (Get-Item $app).VersionInfo | Format-List FileVersion, ProductVersion
+
+      - shell: bash
+        run: |
+          out=$RUNNER_TEMP/smoke
+          what=$TAG
+          app="$(cygpath -u "$LOCALAPPDATA")/Programs/ilo"
+          log=$out/ilo.log
+          summary() { echo "$1" | tee -a "$GITHUB_STEP_SUMMARY"; }
+          capture() {
+            tools/window-screenshot.sh "$pid" "$out/$1.png" all || summary "- no window to capture for $1"
+          }
+          fail() {
+            summary "FAIL ($what): $1"
+            capture failed
+            exit 1
+          }
+          # Waits up to $2 tenths of a second, 30 s by default, for a line matching $1 in the log.
+          await() {
+            for _ in $(seq "${2:-300}"); do
+              grep -q -- "$1" "$log" && return 0
+              kill -0 "$pid" 2>/dev/null || fail "ilo quit; its log's end: $(tail -3 "$log" | tr '\n' ' ')"
+              sleep 0.1
+            done
+            return 1
+          }
+          step=0
+          send() {
+            step=$((step + 1))
+            echo "$*" >&3
+            await "^browser: drive $step done" || fail "the driver didn't finish \"$*\""
+          }
+          # As check/git-bash.sh runs the app: a native program can't read Git Bash's fifo, so cat
+          # passes the driver's commands on, and exec keeps $! the app's. With no arguments, as its
+          # Start menu shortcut starts it, so the profile is the release's own new one.
+          # The opt-ins step's agents' switch, a click along its row, as check/onboarding.sh clicks
+          # it: alone, its row's middle is 18 under the window's. With the crash reports' row over
+          # it, it's half a row and a gap lower, 28 more, and the first click falls between them.
+          agents_on() {
+            send layout
+            content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content ' |
+              sed 's/^browser: layout content \([0-9]*x[0-9]*\).*/\1/')
+            width=${content%x*}
+            height=${content#*x}
+            [ -n "$height" ] || fail "the window didn't log its size"
+            send click $((width / 2)) $((height / 2 + 18))
+            if ! await '^browser: onboarding agents on$' 20; then
+              grep -q '^browser: onboarding crash-reports' "$log" && fail "a click meant for the agents' row turned the crash reports' switch"
+              send click $((width / 2)) $((height / 2 + 18 + 28))
+              await '^browser: onboarding agents on$' 20 || fail "a click on the agents' row didn't turn them on"
+            fi
+            await '^browser: agents server on ' || fail "the agents' switch didn't start their server"
+            summary "- The opt-ins step's \"Let agents use the browser\" turned on, and their server started: $(grep -m1 '^browser: agents server on ' "$log" | cut -d' ' -f5-)"
+            capture onboarding-agents-on
+          }
+          mkfifo "$out/drive"
+          run_ilo() { exec "$app/chrome.exe" < <(cat); }
+          BROWSER_DRIVE=1 run_ilo < "$out/drive" > "$log" 2>&1 &
+          pid=$!
+          exec 3> "$out/drive"
+          trap 'taskkill //PID "$(cat /proc/$pid/winpid 2>/dev/null)" //T //F > /dev/null 2>&1 || true' EXIT
+
+          await '^browser: onboarding started$' 900 || fail "a new profile's first launch didn't start the onboarding"
+          steps=$(grep -m1 '^browser: onboarding steps ' "$log" | cut -d' ' -f4-)
+          summary "- The first launch started the onboarding: $steps"
+          await '^browser: onboarding step intro settled$' || fail "the onboarding's intro didn't draw"
+          capture onboarding-intro
+          for each in $steps; do
+            [ "$each" = intro ] && continue
+            await "^browser: onboarding step $each settled\$" || fail "the onboarding's $each step didn't come"
+            capture "onboarding-$each"
+            [ "$each" = opt-ins ] && agents_on
+            send key escape
+            await "^browser: onboarding left $each via escape\$" || fail "Esc didn't leave the onboarding's $each step"
+          done
+          await '^browser: onboarding done$' || fail "the onboarding didn't end after its last step"
+          await '^browser: command new-tab via onboarding$' || fail "the onboarding didn't end with the command bar"
+          summary "- Esc went through each step, and the onboarding ended with the command bar"
+          capture command-bar
+
+          send type example.com
+          send key return
+          await '^browser: loaded [0-9]* https\?://' 600 || fail "example.com typed in the command bar loaded no page"
+          loaded=$(grep -m1 '^browser: loaded [0-9]* https\?://' "$log" | cut -d' ' -f4)
+          case "$loaded" in
+            *example.com*) summary "- example.com, typed in the command bar, loaded: $loaded" ;;
+            *) fail "example.com typed in the command bar loaded $loaded" ;;
+          esac
+          capture page
+
+          # Quits as the user does: Ctrl+Q, which asks first while Settings' warn before quitting
+          # is on, and Return confirms, as check/lib.sh's quit_by_key does. Without waiting for the
+          # driver after the last key, as it goes with the app.
+          echo "key q cmd" >&3
+          asked=
+          for _ in $(seq 50); do
+            kill -0 "$pid" 2>/dev/null || break
+            grep -q '^browser: dialog shown Quit ilo?$' "$log" && asked=1 && break
+            sleep 0.1
+          done
+          if [ -n "$asked" ]; then
+            await '^browser: dialog settled$' || fail "the quit dialog didn't settle"
+            capture quit-dialog
+            echo "key return" >&3
+            quit="Ctrl+Q asked \"Quit ilo?\", and Return quit it"
+          else
+            quit="Ctrl+Q quit it without asking"
+          fi
+          for _ in $(seq 200); do
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 0.1
+          done
+          kill -0 "$pid" 2>/dev/null && fail "ilo didn't quit in 20 s after Ctrl+Q${asked:+ and Return on \"Quit ilo?\"}; its log's end: $(tail -5 "$log" | tr '\n' ' ')"
+          summary "- $quit. Captures and logs: the smoke-windows artifact."
+
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-windows
+          path: |
+            ${{ runner.temp }}/smoke/*.png
+            ${{ runner.temp }}/smoke/*.log
+
+  winget:
+    if: ${{ inputs.job == 'winget' }}
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      # The tag asked for, or the latest release's, as TAG for the steps after.
+      - id: tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ASKED: ${{ inputs.tag }}
+        run: |
+          tag=${ASKED:-$(gh release view -R "$GITHUB_REPOSITORY" --json tagName -q .tagName)}
+          [ -n "$tag" ] || { echo "::error::No tag given and no latest release"; exit 1; }
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "## $tag" >> "$GITHUB_STEP_SUMMARY"
+
+      # tools/winget.sh and what it fills its manifests from, as the tag has them.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+          sparse-checkout: |
+            tools
+            app/branding
+            app/platform/windows/package/winget
+
+      - shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          out=$RUNNER_TEMP/winget
+          mkdir -p "$out"
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D "$out" -p ilo-windows-x64-setup.exe -p SHA256SUMS
+          # The name package.sh gives it, which winget.sh asks for; the release renames it.
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' app/Cargo.toml | head -1)
+          setup=$out/$(cat app/branding/name)-$version-x64-setup.exe
+          cp "$out/ilo-windows-x64-setup.exe" "$setup"
+          dir=$(tools/winget.sh "$setup" \
+            "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/ilo-windows-x64-setup.exe" \
+            "$out" | tail -1)
+          echo "WINGET_MANIFESTS=$(cygpath -w "$dir")" >> "$GITHUB_ENV"
+          installer=$dir/$(basename "$dir/"*.installer.yaml)
+          cat "$dir"/*.yaml
+          url=$(sed -n 's/^ *InstallerUrl: *//p' "$installer")
+          sha=$(sed -n 's/^ *InstallerSha256: *//p' "$installer" | tr A-F a-f)
+          want=https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/ilo-windows-x64-setup.exe
+          sum=$(grep ' \*\?ilo-windows-x64-setup.exe$' "$out/SHA256SUMS" | cut -d' ' -f1)
+          [ "$url" = "$want" ] || { echo "- FAIL: InstallerUrl $url, not $want" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+          [ -n "$sum" ] && [ "$sha" = "$sum" ] || { echo "- FAIL: InstallerSha256 $sha, $TAG's SHA256SUMS $sum" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+          echo "- InstallerUrl is $TAG's: $url" >> "$GITHUB_STEP_SUMMARY"
+          echo "- InstallerSha256 $sha is $TAG's SHA256SUMS'" >> "$GITHUB_STEP_SUMMARY"
+
+      # Windows Server 2022 has no winget; Microsoft's WinGet.Client module puts it on. Its alias may
+      # not reach this session's user, so the package's own winget.exe goes on the PATH.
+      - shell: pwsh
+        run: |
+          if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+            Set-PSRepository PSGallery -InstallationPolicy Trusted
+            Install-Module Microsoft.WinGet.Client -Force -Scope AllUsers
+            Repair-WinGetPackageManager -AllUsers -Latest -Force -Verbose
+            $package = Get-AppxPackage -AllUsers Microsoft.DesktopAppInstaller | Sort-Object Version | Select-Object -Last 1
+            $package | Format-List Name, Version, InstallLocation
+            foreach ($dir in "$env:LOCALAPPDATA\Microsoft\WindowsApps", $package.InstallLocation) {
+              if ($dir -and (Test-Path "$dir\winget.exe")) {
+                $dir >> $env:GITHUB_PATH
+                $env:PATH = "$dir;$env:PATH"
+                break
+              }
+            }
+          }
+          winget --version
+
+      - shell: pwsh
+        run: |
+          $dir = $env:WINGET_MANIFESTS
+          $said = winget validate --manifest $dir --disable-interactivity | Out-String
+          $code = $LASTEXITCODE
+          $said
+          "winget validate exit code: $code"
+          # Warnings exit non-zero too, and say so.
+          if ($said -notmatch 'Manifest validation succeeded') {
+            "- FAIL: winget validate, exit code ${code}: $said" >> $env:GITHUB_STEP_SUMMARY
+            exit 1
+          }
+          $verdict = [regex]::Match($said, 'Manifest validation succeeded[^\r\n]*').Value
+          "- winget validate: $verdict (exit code $code)" >> $env:GITHUB_STEP_SUMMARY
+          winget settings --enable LocalManifestFiles
+          # From winget-pkgs, a trusted source, winget marks the setup it downloads as from a trusted
+          # site. From a local manifest it marks it from the internet, so SmartScreen holds it at its
+          # "unrecognized app" dialog and the silent install never starts. Trusting the host the release
+          # downloads from gives the setup winget-pkgs' mark.
+          foreach ($map in 'Domains', 'EscDomains') {
+            $key = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings\ZoneMap\$map\github.com"
+            $null = New-Item -Force $key
+            Set-ItemProperty $key https 2
+          }
+          # Bounded, so an install that never ends fails saying what was still running and what the
+          # screen showed, not at the job's timeout.
+          $winget = Start-Process -PassThru -NoNewWindow -FilePath (Get-Command winget).Source -ArgumentList `
+            'install', '--manifest', $dir, '--silent', '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity'
+          $null = $winget.Handle
+          if (-not $winget.WaitForExit(600000)) {
+            $running = Get-CimInstance Win32_Process | Where-Object { $_.CreationDate -gt $winget.StartTime } |
+              ForEach-Object { "$($_.ProcessId) (from $($_.ParentProcessId)) $($_.Name): $($_.CommandLine)" }
+            $running
+            Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+            $screen = [Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $shot = New-Object Drawing.Bitmap $screen.Width, $screen.Height
+            [Drawing.Graphics]::FromImage($shot).CopyFromScreen($screen.Location, [Drawing.Point]::Empty, $screen.Size)
+            $shot.Save("$env:RUNNER_TEMP\winget\hung.png")
+            "- FAIL: winget install --manifest didn't finish in 10 min. Started since, still running: $($running -join '; '). The screen then: hung.png in the winget-checked artifact." >> $env:GITHUB_STEP_SUMMARY
+            exit 1
+          }
+          $code = $winget.ExitCode
+          "winget install exit code: $code"
+          $app = "$env:LOCALAPPDATA\Programs\ilo\chrome.exe"
+          if ($code -ne 0 -or -not (Test-Path $app)) {
+            "- FAIL: winget install --manifest, exit code $code, $app there: $(Test-Path $app)" >> $env:GITHUB_STEP_SUMMARY
+            exit 1
+          }
+          $version = (Get-Item $app).VersionInfo.ProductVersion
+          "- winget install --manifest downloaded the setup, checked its hash and installed $app, version $version" >> $env:GITHUB_STEP_SUMMARY
+          winget list --name ilo --disable-interactivity
+          # The step's exit code is the last command's otherwise, and a list's is informational.
+          exit 0
+
+      - if: ${{ always() }}
+        shell: pwsh
+        run: |
+          $logs = "$env:LOCALAPPDATA\Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState\DiagOutputDir"
+          if (Test-Path $logs) { Copy-Item -Recurse $logs "$env:RUNNER_TEMP\winget\logs" }
+
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: winget-checked
+          path: |
+            ${{ runner.temp }}/winget
+            !${{ runner.temp }}/winget/*.exe

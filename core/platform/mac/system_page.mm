@@ -4,8 +4,10 @@
 #import <WebKit/WebKit.h>
 #include <dlfcn.h>
 #include <objc/message.h>
+#include <objc/runtime.h>
 #include <stdio.h>
 
+#include <cstdlib>
 #include <memory>
 #include <optional>
 #include <string>
@@ -19,6 +21,7 @@
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/strings/string_util.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
@@ -46,7 +49,7 @@ namespace {
 constexpr char kWebKitPath[] = "/System/Library/Frameworks/WebKit.framework/WebKit";
 void* g_webkit = nullptr;
 
-// Loads WebKit, once. Only the calls below that need it do, each saying why.
+// Loads WebKit, once, and sets it up. Only the calls below that need it do, each saying why.
 bool LoadWebKit(const char* why) {
   if (!g_webkit) {
     // Whether something else mapped it first, such as a system framework of Chromium's.
@@ -55,6 +58,12 @@ bool LoadWebKit(const char* why) {
     // check.sh reads this line.
     fprintf(stderr, "browser: system engine loaded for %s%s\n", why,
             mapped ? ", already mapped" : "");
+    // WebKit sets itself up, its main run loop with it, as it makes its first object. Listing and
+    // deleting stores make none, and their replies through that run loop crashed on its null
+    // before any page had made one (WebsiteDataStoreCocoa.mm), so its smallest object comes first.
+    if (g_webkit) {
+      (void)[[NSClassFromString(@"WKWebpagePreferences") alloc] init];
+    }
   }
   return g_webkit != nullptr;
 }
@@ -265,18 +274,67 @@ NSString* const kWatchOutput =
      "  });\n"
      "})();";
 
+// What the browser's world posts to as the page's media plays, pauses or changes.
+NSString* const kMedia = @"media";
+
+// Reads, in the browser's world, what the player shows of the page's media and nothing else:
+// [named, title, artist, an element of the document playing]. Its metadata, as the page names its
+// track, reads the same in each world. An element nothing in the document holds plays unseen here,
+// and WebKit's _isPlayingAudio tells of it.
+NSString* const kReadMedia =
+    @"(() => {\n"
+     "  const metadata = navigator.mediaSession?.metadata;\n"
+     "  const playing = [...document.querySelectorAll('audio, video')].some((e) => !e.paused);\n"
+     "  return [!!metadata, metadata?.title ?? '', metadata?.artist ?? '', playing];\n"
+     "})()";
+
+// Calls the page's own handler for |action| from the browser's world. Where the page has none,
+// WebKit's own play and pause still reach what it plays, an Audio no document holds included, and
+// the rest do nothing.
+void CallAction(WKWebView* web, NSString* action) {
+  NSString* script = [NSString
+      stringWithFormat:@"navigator.mediaSession?.callActionHandler?.({action: '%@'}), true",
+                       action];
+  [web evaluateJavaScript:script inFrame:nil inContentWorld:BrowserWorld() completionHandler:nil];
+}
+
+// Has the browser's world tell what kReadMedia reads each time the document's media starts, stops
+// or changes source, as those events reach the document in its capture phase. Nothing runs between
+// them, and the page's world sees none of it.
+NSString* WatchMediaScript() {
+  return [NSString stringWithFormat:@"(() => {\n"
+                                     "  const handler = window.webkit?.messageHandlers?.%@;\n"
+                                     "  if (!handler) return;\n"
+                                     "  const post = () => handler.postMessage(%@);\n"
+                                     "  for (const type of ['play', 'playing', 'pause', 'emptied', "
+                                     "'ended']) {\n"
+                                     "    document.addEventListener(type, post, true);\n"
+                                     "  }\n"
+                                     "})();",
+                                    kMedia, kReadMedia];
+}
+
 // How long a page has to answer for its localStorage, before its tab goes back to Chromium
 // without it.
 constexpr int64_t kStorageWaitSeconds = 2;
+
+// WebKit's keys that tell of the page's media.
+NSArray<NSString*>* MediaKeys() {
+  return @[ @"_isPlayingAudio", @"_hasActiveNowPlayingSession" ];
+}
 
 // The WebKit page's own keys, which KVO reports.
 NSArray<NSString*>* ObservedKeys(WKWebView* web) {
   NSMutableArray<NSString*>* keys = [@[
     @"URL", @"title", @"loading", @"canGoBack", @"canGoForward", @"hasOnlySecureContent"
   ] mutableCopy];
-  // WebKit's own, not public: whether the page plays sound, as Safari's speaker shows.
-  if ([web respondsToSelector:NSSelectorFromString(@"_isPlayingAudio")]) {
-    [keys addObject:@"_isPlayingAudio"];
+  // WebKit's own, not public: whether the page plays sound, as Safari's speaker shows, and whether
+  // it has a session the system's Now Playing would show, some seconds after it starts. Each change
+  // has the page's media read again.
+  for (NSString* key in MediaKeys()) {
+    if ([web respondsToSelector:NSSelectorFromString(key)]) {
+      [keys addObject:key];
+    }
   }
   return keys;
 }
@@ -304,8 +362,22 @@ std::optional<std::vector<uint8_t>> SrgbPng(NSImage* image) {
 // The view the window shows in the tab's pane, holding the WebKit page. A page full screen leaves
 // it for WebKit's own window and comes back, while this stays in the core's window. AppKit offers
 // it every key equivalent in the window before the page has it, as Chromium's page hands the
-// browser's shortcuts over (AGENTS.md › Keyboard with the page focused).
+// browser's shortcuts over (AGENTS.md › Keyboard with the page focused). Escape isn't one, so the
+// page's own view asks it about escape as it gets it (PageWebViewClass).
 @interface BrowserCoreSystemPageView : NSView {
+ @public
+  browser_core::platform::SystemPageMac* _owner;
+}
+// Whether the app keeps the page's escape `event` from it.
+- (BOOL)keepsEscapeFromPage:(NSEvent*)event;
+@end
+
+// One of the two key views either side of the page's own, where Tab past its last control and ⇧Tab
+// before its first land. Without WebKit's private delegate method, WebKit hands focus leaving the
+// page to the window's key view loop (WebViewImpl::takeFocus), whose next view after the page's,
+// with none of these, is the page's own again. Nobody stays on one: each passes the keyboard on as
+// it gets it, has no size to click, and is out of the accessibility tree.
+@interface BrowserCorePageEndView : NSView {
  @public
   browser_core::platform::SystemPageMac* _owner;
 }
@@ -318,6 +390,44 @@ std::optional<std::vector<uint8_t>> SrgbPng(NSImage* image) {
   browser_core::platform::SystemPageMac* _owner;
 }
 @end
+
+namespace {
+
+using KeyDown = void (*)(id, SEL, NSEvent*);
+// WKWebView's own keyDown:.
+KeyDown g_web_key_down = nullptr;
+
+// Escape goes from AppKit straight to the page's keyDown:, never offered as a key equivalent, so
+// the app is asked about it there, before WebKit has it, as Chromium's page asks about every key.
+// WebKit takes the page's view out of the holder for a page's own full screen, whose window has
+// escape for itself.
+void PageKeyDown(NSView* web, SEL selector, NSEvent* event) {
+  NSView* holder = web.superview;
+  if ([holder isKindOfClass:[BrowserCoreSystemPageView class]] &&
+      [static_cast<BrowserCoreSystemPageView*>(holder) keepsEscapeFromPage:event]) {
+    return;
+  }
+  g_web_key_down(web, selector, event);
+}
+
+// WKWebView with that keyDown:, made as the first page is, as the core never links WebKit.
+Class PageWebViewClass() {
+  static Class const page_class = []() -> Class {
+    Class web = WebKitClass(@"WKWebView");
+    Class page = web ? objc_allocateClassPair(web, "BrowserCoreWebView", 0) : Nil;
+    if (!page) {
+      return web;
+    }
+    g_web_key_down =
+        reinterpret_cast<KeyDown>(class_getMethodImplementation(web, @selector(keyDown:)));
+    class_addMethod(page, @selector(keyDown:), reinterpret_cast<IMP>(PageKeyDown), "v@:@");
+    objc_registerClassPair(page);
+    return page;
+  }();
+  return page_class;
+}
+
+}  // namespace
 
 namespace browser_core::platform {
 
@@ -332,7 +442,7 @@ class SystemPageMac : public SystemPage {
     config.preferences.elementFullscreenEnabled = YES;
     // No site-safety lookups with Apple's service, as Chromium's pages make none (#2322).
     config.preferences.fraudulentWebsiteWarningEnabled = NO;
-    web_ = [[WebKitClass(@"WKWebView") alloc] initWithFrame:NSZeroRect configuration:config];
+    web_ = [[PageWebViewClass() alloc] initWithFrame:NSZeroRect configuration:config];
     web_.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     web_.allowsMagnification = YES;
     if (@available(macOS 13.3, *)) {
@@ -347,14 +457,25 @@ class SystemPageMac : public SystemPage {
     delegates_->_owner = this;
     web_.navigationDelegate = delegates_;
     web_.UIDelegate = delegates_;
+    SetIconDelegate(delegates_);
     [web_.configuration.userContentController addScriptMessageHandler:delegates_
                                                           contentWorld:PageWorld()
                                                                   name:kOutputRestricted];
-    WatchOutput();
+    [web_.configuration.userContentController addScriptMessageHandler:delegates_
+                                                          contentWorld:BrowserWorld()
+                                                                  name:kMedia];
+    Watch();
     view_ = [[BrowserCoreSystemPageView alloc] initWithFrame:NSZeroRect];
     view_->_owner = this;
     web_.frame = view_.bounds;
     [view_ addSubview:web_];
+    before_ = [[BrowserCorePageEndView alloc] initWithFrame:NSZeroRect];
+    after_ = [[BrowserCorePageEndView alloc] initWithFrame:NSZeroRect];
+    before_->_owner = after_->_owner = this;
+    [view_ addSubview:before_];
+    [view_ addSubview:after_];
+    before_.nextKeyView = web_;
+    web_.nextKeyView = after_;
     for (NSString* key in ObservedKeys(web_)) {
       [web_ addObserver:delegates_ forKeyPath:key options:0 context:nullptr];
     }
@@ -366,11 +487,16 @@ class SystemPageMac : public SystemPage {
     }
     web_.navigationDelegate = nil;
     web_.UIDelegate = nil;
+    SetIconDelegate(nil);
+    ForgetIcons();
     [web_.configuration.userContentController
         removeScriptMessageHandlerForName:kOutputRestricted
                              contentWorld:PageWorld()];
+    [web_.configuration.userContentController removeScriptMessageHandlerForName:kMedia
+                                                                    contentWorld:BrowserWorld()];
     delegates_->_owner = nullptr;
     view_->_owner = nullptr;
+    before_->_owner = after_->_owner = nullptr;
     // Out of full screen and Picture in Picture, whose windows would keep the page.
     [web_ closeAllMediaPresentationsWithCompletionHandler:^{
     }];
@@ -382,10 +508,12 @@ class SystemPageMac : public SystemPage {
     WKWebView* web = web_;
     BrowserCoreSystemPageView* view = view_;
     BrowserCoreWebKitDelegate* delegates = delegates_;
+    NSArray<NSView*>* ends = @[ before_, after_ ];
     dispatch_async(dispatch_get_main_queue(), ^{
       [web self];
       [view self];
       [delegates self];
+      [ends self];
     });
   }
 
@@ -396,6 +524,24 @@ class SystemPageMac : public SystemPage {
     NSWindow* window = view_.window;
     if (window && web_.window == window) {
       [window makeFirstResponder:web_];
+    }
+  }
+
+  void FocusEnd(bool last) override {
+    NSWindow* window = view_.window;
+    if (!window || web_.window != window) {
+      return;
+    }
+    // The page focuses its first or last control as it becomes first responder from the key view
+    // loop going that way (WebViewImpl::becomeFirstResponder), and does nothing while it stays
+    // first responder, so it gives that up first.
+    if (Focused()) {
+      [window makeFirstResponder:nil];
+    }
+    if (last) {
+      [window selectKeyViewPrecedingView:after_];
+    } else {
+      [window selectKeyViewFollowingView:before_];
     }
   }
 
@@ -474,6 +620,12 @@ class SystemPageMac : public SystemPage {
            reinterpret_cast<BOOL (*)(id, SEL)>(objc_msgSend)(web_, playing);
   }
   bool muted() override { return muted_; }
+  SystemMedia media() override {
+    SystemMedia now = media_;
+    now.playing = audible() || element_playing_;
+    now.has = now.has || now.playing;
+    return now;
+  }
 
   void Load(const GURL& url) override {
     if (!started_) {
@@ -507,9 +659,65 @@ class SystemPageMac : public SystemPage {
     delegate_->SystemPageChanged();
   }
 
+  void Media(MediaAction action) override {
+    switch (action) {
+      case MediaAction::kPlay:
+        Play();
+        break;
+      case MediaAction::kPause:
+        Pause();
+        break;
+      case MediaAction::kNext:
+        CallAction(web_, @"nexttrack");
+        break;
+      case MediaAction::kPrevious:
+        CallAction(web_, @"previoustrack");
+        break;
+    }
+  }
+
   // From the views and delegates above.
   void Changed() { delegate_->SystemPageChanged(); }
-  void Committed() { Soon(base::BindOnce(&Delegate::SystemPageCommitted)); }
+  void Committed() {
+    // A new document has played nothing and named nothing.
+    media_ = SystemMedia();
+    element_playing_ = false;
+    Soon(base::BindOnce(&Delegate::SystemPageCommitted));
+  }
+
+  // WebKit's sound or Now Playing changed: the page's media is read again.
+  void MediaChanged() {
+    base::WeakPtr<SystemPageMac> page = weak_factory_.GetWeakPtr();
+    [web_ evaluateJavaScript:kReadMedia
+                     inFrame:nil
+              inContentWorld:BrowserWorld()
+           completionHandler:^(id result, NSError* error) {
+             if (page) {
+               page->TookMedia(result);
+             }
+           }];
+  }
+
+  // What kReadMedia read, from the browser's world. Tells the tab only of a change.
+  void TookMedia(id result) {
+    NSArray* read = [result isKindOfClass:[NSArray class]] ? result : nil;
+    if (read.count != 4 || ![read[0] isKindOfClass:[NSNumber class]] ||
+        ![read[1] isKindOfClass:[NSString class]] || ![read[2] isKindOfClass:[NSString class]] ||
+        ![read[3] isKindOfClass:[NSNumber class]]) {
+      return;
+    }
+    const SystemMedia before = media();
+    media_.named = [read[0] boolValue];
+    media_.title = base::SysNSStringToUTF16(read[1]);
+    media_.artist = base::SysNSStringToUTF16(read[2]);
+    element_playing_ = [read[3] boolValue];
+    media_.has = media().has;
+    const SystemMedia now = media();
+    if (now.has != before.has || now.playing != before.playing || now.named != before.named ||
+        now.title != before.title || now.artist != before.artist) {
+      delegate_->SystemPageChanged();
+    }
+  }
   void Loaded() {
     Seeded();
     Soon(base::BindOnce(&Delegate::SystemPageLoaded));
@@ -519,7 +727,7 @@ class SystemPageMac : public SystemPage {
     if (seeding_) {
       seeding_ = false;
       [web_.configuration.userContentController removeAllUserScripts];
-      WatchOutput();
+      Watch();
     }
   }
   void OutputRestricted() { Soon(base::BindOnce(&Delegate::SystemPageOutputRestricted)); }
@@ -562,15 +770,40 @@ class SystemPageMac : public SystemPage {
     return delegate_->SystemPageKey(key, before_page, web_.inputContext != nil);
   }
 
+  bool Composing() {
+    return [web_ respondsToSelector:@selector(hasMarkedText)] &&
+           [static_cast<id>(web_) hasMarkedText];
+  }
+
   bool Focused() {
     NSResponder* responder = view_.window.firstResponder;
     return [responder isKindOfClass:[NSView class]] &&
            [static_cast<NSView*>(responder) isDescendantOf:web_];
   }
 
+  // Whether the page is in the view its window shows, and not in WebKit's own full screen window,
+  // where Tab past its ends goes round the page as before.
+  bool Holds() { return web_.superview == view_; }
+
+  // The key view before the page, or after it, became first responder going |direction|. It
+  // passes the keyboard on once AppKit's call that gave it returns, as nothing should change the
+  // first responder inside becomeFirstResponder: the main run loop runs a block queued for its
+  // modes right after the call out that queued it, before the turn ends and the frame is drawn, so
+  // no frame shows neither the page nor the app with the keyboard.
+  void EndReached(BrowserCorePageEndView* end, NSSelectionDirection direction) {
+    const bool before = end == before_;
+    base::WeakPtr<SystemPageMac> page = weak_factory_.GetWeakPtr();
+    CFRunLoopPerformBlock(CFRunLoopGetMain(), kCFRunLoopCommonModes, ^{
+      if (page) {
+        page->PassOn(before, direction);
+      }
+    });
+    CFRunLoopWakeUp(CFRunLoopGetMain());
+  }
+
   // The content process went: crashed, or killed for memory. WebKit shows nothing until a load.
   void Gone() {
-    // check.sh waits for this line, an error as Chromium's tab's is.
+    // An error, as Chromium's tab's is.
     LOG(ERROR) << "browser: system page gone at " << url().spec();
     [web_ reload];
   }
@@ -581,14 +814,78 @@ class SystemPageMac : public SystemPage {
         a, b, net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
   }
 
-  // Has every document watch its protected video, from its start.
-  void WatchOutput() {
-    WKUserScript* script = [[WebKitClass(@"WKUserScript") alloc]
+  // Has every document watch its protected video, from its start, and the main frame's its media.
+  void Watch() {
+    WKUserScript* output = [[WebKitClass(@"WKUserScript") alloc]
           initWithSource:kWatchOutput
            injectionTime:WKUserScriptInjectionTimeAtDocumentStart
         forMainFrameOnly:NO
           inContentWorld:PageWorld()];
-    [web_.configuration.userContentController addUserScript:script];
+    [web_.configuration.userContentController addUserScript:output];
+    WKUserScript* media = [[WebKitClass(@"WKUserScript") alloc]
+          initWithSource:WatchMediaScript()
+           injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+        forMainFrameOnly:YES
+          inContentWorld:BrowserWorld()];
+    [web_.configuration.userContentController addUserScript:media];
+  }
+
+  // Calls WebKit's own |name|, not public, which takes a block told whether it did, and runs
+  // |otherwise| if it didn't or there's none.
+  void TryWebKit(NSString* name, dispatch_block_t otherwise) {
+    SEL selector = NSSelectorFromString(name);
+    if (![web_ respondsToSelector:selector]) {
+      otherwise();
+      return;
+    }
+    void (^done)(BOOL) = ^(BOOL did) {
+      if (!did) {
+        otherwise();
+      }
+    };
+    reinterpret_cast<void (*)(id, SEL, id)>(objc_msgSend)(web_, selector, done);
+  }
+
+  // The page's Now Playing session, through its pause handler, as the media keys pause it. Without
+  // one, everything the page plays.
+  void Pause() {
+    WKWebView* web = web_;
+    TryWebKit(@"_pauseNowPlayingMediaSession:", ^{
+      [web pauseAllMediaPlaybackWithCompletionHandler:nil];
+    });
+  }
+
+  // The page's Now Playing session, or what WebKit takes for its main media, through its play
+  // handler, as the media keys play it. WebKit says it did nothing for a session only seconds old,
+  // so then the page's play action, which plays even a page without a handler.
+  void Play() {
+    WKWebView* web = web_;
+    TryWebKit(@"_playPredominantOrNowPlayingMediaSession:", ^{
+      CallAction(web, @"play");
+    });
+  }
+
+  void PassOn(bool before, NSSelectionDirection direction) {
+    NSWindow* window = view_.window;
+    if (!window || window.firstResponder != (before ? before_ : after_)) {
+      return;
+    }
+    if (direction == NSDirectSelection) {
+      [window makeFirstResponder:web_];
+      return;
+    }
+    // From the page: past its last control onto the view after it, or before its first onto the
+    // view before. The app takes the keyboard there, or the page has it again from its other end,
+    // as WebKit's own loop had it.
+    if (before == (direction == NSSelectingPrevious)) {
+      if (!delegate_->SystemPageFocusLeft(/*reverse=*/before) ||
+          window.firstResponder == (before ? before_ : after_)) {
+        FocusEnd(/*last=*/before);
+      }
+      return;
+    }
+    // From outside the page, through the window's key view loop: into it at that end.
+    FocusEnd(/*last=*/!before);
   }
 
   void Leave(const GURL& url) {
@@ -610,18 +907,148 @@ class SystemPageMac : public SystemPage {
                        weak_factory_.GetWeakPtr(), std::move(call)));
   }
 
+  // WebKit's icon loading, not public. WebKit loads no icon for a page without its delegate.
+  void SetIconDelegate(id delegate) {
+    SEL set = NSSelectorFromString(@"_setIconLoadingDelegate:");
+    if ([web_ respondsToSelector:set]) {
+      reinterpret_cast<void (*)(id, SEL, id)>(objc_msgSend)(web_, set, delegate);
+    }
+  }
+
+  // Answers WebKit for the icons it offered and nothing loaded, as each answer is owed once.
+  void ForgetIcons() {
+    for (IconOffer& offer : icon_offers_) {
+      offer.answer(nil);
+    }
+    icon_offers_.clear();
+  }
+
+ public:
+  // A new document committed: what WebKit offered for the last one is no longer the page's.
+  void IconsGone() {
+    ForgetIcons();
+    ++icon_document_;
+    icon_offered_ = false;
+  }
+
+  // An icon WebKit offers the document, as its load event starts: its <link rel=icon>s and touch
+  // icons, else its site's /favicon.ico. Of the favicons, SVG aside, the one whose declared size is
+  // nearest the row's 32 pixels loads, once the document's offers are in. Undeclared counts as 16,
+  // a favicon's own.
+  void IconOffered(id parameters, void (^answer)(void (^)(NSData*))) {
+    id url = IconParameter(parameters, @"url");
+    id type = IconParameter(parameters, @"iconType");
+    id mime = IconParameter(parameters, @"mimeType");
+    id size = IconParameter(parameters, @"size");
+    const bool svg = ([mime isKindOfClass:[NSString class]] &&
+                      [static_cast<NSString*>(mime) containsString:@"svg"]) ||
+                     ([url isKindOfClass:[NSURL class]] &&
+                      [[static_cast<NSURL*>(url).pathExtension lowercaseString] isEqual:@"svg"]);
+    // WKLinkIconTypeFavicon is 0; touch icons are the others.
+    if (![url isKindOfClass:[NSURL class]] || ![type isKindOfClass:[NSNumber class]] ||
+        [static_cast<NSNumber*>(type) integerValue] != 0 || svg) {
+      answer(nil);
+      return;
+    }
+    const int declared =
+        [size isKindOfClass:[NSNumber class]] ? [static_cast<NSNumber*>(size) intValue] : 16;
+    icon_offered_ = true;
+    icon_offers_.push_back({net::GURLWithNSURL(url), std::abs(declared - 32), answer});
+    if (icon_offers_.size() == 1) {
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, base::BindOnce(&SystemPageMac::LoadIcon, weak_factory_.GetWeakPtr()));
+    }
+  }
+
+  // The document finished loading, or failed to after its commit. With nothing offered, it has no
+  // icon.
+  void IconsDone() {
+    if (!icon_offered_) {
+      icon_offered_ = true;
+      TellIcon(GURL(), {});
+    }
+  }
+
+ private:
+  struct IconOffer {
+    GURL url;
+    int distance;
+    void (^__strong answer)(void (^)(NSData*));
+  };
+
+  static id IconParameter(id parameters, NSString* name) {
+    return [parameters respondsToSelector:NSSelectorFromString(name)]
+               ? [parameters valueForKey:name]
+               : nil;
+  }
+
+  void LoadIcon() {
+    if (icon_offers_.empty()) {
+      return;
+    }
+    std::vector<IconOffer> offers = std::move(icon_offers_);
+    icon_offers_.clear();
+    size_t best = 0;
+    for (size_t i = 1; i < offers.size(); ++i) {
+      if (offers[i].distance < offers[best].distance) {
+        best = i;
+      }
+    }
+    for (size_t i = 0; i < offers.size(); ++i) {
+      if (i != best) {
+        offers[i].answer(nil);
+      }
+    }
+    base::WeakPtr<SystemPageMac> page = weak_factory_.GetWeakPtr();
+    const int document = icon_document_;
+    const GURL url = offers[best].url;
+    offers[best].answer(^(NSData* data) {
+      if (!page || page->icon_document_ != document) {
+        return;
+      }
+      // An icon is small. One over a megabyte isn't decoded, and the page has none.
+      constexpr NSUInteger kMaxIconBytes = 1024 * 1024;
+      if (!data.length || data.length > kMaxIconBytes) {
+        page->TellIcon(url, {});
+        return;
+      }
+      const uint8_t* bytes = static_cast<const uint8_t*>(data.bytes);
+      page->TellIcon(url, std::vector<uint8_t>(bytes, bytes + data.length));
+    });
+  }
+
+  void TellIcon(const GURL& url, std::vector<uint8_t> bytes) {
+    Soon(base::BindOnce(
+        [](const GURL& url, std::vector<uint8_t> bytes, Delegate* delegate) {
+          delegate->SystemPageIcon(url, std::move(bytes));
+        },
+        url, std::move(bytes)));
+  }
+
   const raw_ptr<Delegate> delegate_;
   WKWebView* __strong web_;
   BrowserCoreSystemPageView* __strong view_;
+  // The key views before and after the page's.
+  BrowserCorePageEndView* __strong before_;
+  BrowserCorePageEndView* __strong after_;
   BrowserCoreWebKitDelegate* __strong delegates_;
   // What the first load loads, once Start has the page's storage in place.
   GURL first_url_;
   bool started_ = false;
+  // The icons WebKit offered the document that committed last, counted by icon_document_, until
+  // one loads, and whether it offered any.
+  std::vector<IconOffer> icon_offers_;
+  int icon_document_ = 0;
+  bool icon_offered_ = false;
   // The first load's storage script is in place.
   bool seeding_ = false;
   // The page a link the user followed in the main frame left, until its answer comes.
   GURL link_from_;
   bool muted_ = false;
+  // What the browser's world last read of the page's media, and whether an element of its
+  // document was playing then.
+  SystemMedia media_;
+  bool element_playing_ = false;
   base::WeakPtrFactory<SystemPageMac> weak_factory_{this};
 };
 
@@ -665,6 +1092,16 @@ class SystemPageMac : public SystemPage {
   return [super performKeyEquivalent:event];
 }
 
+- (BOOL)keepsEscapeFromPage:(NSEvent*)event {
+  // Escape alone, the one the app uses: ⌘ and ⌃ chords come as key equivalents. An input
+  // method's composition has it first, to cancel.
+  constexpr unsigned short kEscape = 0x35;
+  const NSEventModifierFlags chord =
+      NSEventModifierFlagCommand | NSEventModifierFlagControl | NSEventModifierFlagOption;
+  return _owner && event.keyCode == kEscape && !(event.modifierFlags & chord) &&
+         _owner->Focused() && !_owner->Composing() && _owner->Key(event, /*before_page=*/true);
+}
+
 // A click in the page, for the split view's focus. The page's view takes the event itself, so it's
 // seen as the window finds the view it goes to.
 - (NSView*)hitTest:(NSPoint)point {
@@ -680,14 +1117,47 @@ class SystemPageMac : public SystemPage {
 
 @end
 
+@implementation BrowserCorePageEndView
+
+- (BOOL)acceptsFirstResponder {
+  return _owner && _owner->Holds();
+}
+
+// AppKit's key view loop selects only a view that says it can be one, with the system's Keyboard
+// navigation on or off.
+- (BOOL)canBecomeKeyView {
+  return _owner && _owner->Holds();
+}
+
+- (BOOL)becomeFirstResponder {
+  if (_owner) {
+    _owner->EndReached(self, self.window.keyViewSelectionDirection);
+  }
+  return YES;
+}
+
+- (BOOL)isAccessibilityElement {
+  return NO;
+}
+
+- (NSView*)hitTest:(NSPoint)point {
+  return nil;
+}
+
+@end
+
 @implementation BrowserCoreWebKitDelegate
 
 - (void)observeValueForKeyPath:(NSString*)keyPath
                       ofObject:(id)object
                         change:(NSDictionary*)change
                        context:(void*)context {
-  if (_owner) {
-    _owner->Changed();
+  if (!_owner) {
+    return;
+  }
+  _owner->Changed();
+  if ([MediaKeys() containsObject:keyPath]) {
+    _owner->MediaChanged();
   }
 }
 
@@ -741,8 +1211,20 @@ class SystemPageMac : public SystemPage {
 
 - (void)webView:(WKWebView*)web didCommitNavigation:(WKNavigation*)navigation {
   if (_owner) {
+    _owner->IconsGone();
     _owner->Committed();
   }
+}
+
+// WebKit's _WKIconLoadingDelegate, not public. Each offer is answered once, nil to load nothing.
+- (void)webView:(WKWebView*)web
+    shouldLoadIconWithParameters:(id)parameters
+               completionHandler:(void (^)(void (^)(NSData*)))completionHandler {
+  if (!_owner) {
+    completionHandler(nil);
+    return;
+  }
+  _owner->IconOffered(parameters, completionHandler);
 }
 
 // The main frame's document and what it loads have finished loading, as Chromium's DidFinishLoad
@@ -750,6 +1232,7 @@ class SystemPageMac : public SystemPage {
 - (void)webView:(WKWebView*)web didFinishNavigation:(WKNavigation*)navigation {
   if (_owner) {
     _owner->Loaded();
+    _owner->IconsDone();
   }
 }
 
@@ -759,6 +1242,7 @@ class SystemPageMac : public SystemPage {
             withError:(NSError*)error {
   if (_owner) {
     _owner->Seeded();
+    _owner->IconsDone();
   }
 }
 
@@ -783,8 +1267,13 @@ class SystemPageMac : public SystemPage {
 
 - (void)userContentController:(WKUserContentController*)controller
       didReceiveScriptMessage:(WKScriptMessage*)message {
-  if (_owner && [message.name isEqualToString:kOutputRestricted]) {
+  if (!_owner) {
+    return;
+  }
+  if ([message.name isEqualToString:kOutputRestricted]) {
     _owner->OutputRestricted();
+  } else if ([message.name isEqualToString:kMedia]) {
+    _owner->TookMedia(message.body);
   }
 }
 
@@ -829,24 +1318,48 @@ std::unique_ptr<SystemPage> SystemPage::Create(const SystemStore& store,
 }
 
 // static
-void SystemPage::DeleteStore(const std::string& id) {
+void SystemPage::DeleteStore(const std::string& id, base::OnceCallback<void(bool)> done) {
   NSString* key = base::SysUTF8ToNSString(id);
   NSUUID* uuid = [[NSUUID alloc] initWithUUIDString:key];
   if (!uuid || !Available() || !LoadWebKit("deleting a profile's store")) {
+    std::move(done).Run(false);
     return;
   }
   // Ours lets go first: WebKit won't delete a store in use.
   [Stores() removeObjectForKey:key];
   if (@available(macOS 14, *)) {
+    __block base::OnceCallback<void(bool)> then = std::move(done);
     [WebKitClass(@"WKWebsiteDataStore")
         removeDataStoreForIdentifier:uuid
                    completionHandler:^(NSError* error) {
+                     // check.sh reads these lines. Never the store's id.
                      if (error) {
-                       VLOG(1) << "browser: system store " << base::SysNSStringToUTF8(key)
-                               << " not deleted: "
-                               << base::SysNSStringToUTF8(error.localizedDescription);
+                       fprintf(stderr, "browser: system store not deleted: %s\n",
+                               base::SysNSStringToUTF8(error.localizedDescription).c_str());
+                     } else {
+                       fprintf(stderr, "browser: system store deleted\n");
                      }
+                     std::move(then).Run(!error);
                    }];
+  }
+}
+
+// static
+void SystemPage::ListStores(base::OnceCallback<void(std::vector<std::string>)> done) {
+  if (!Available() || !LoadWebKit("listing the profiles' stores")) {
+    std::move(done).Run({});
+    return;
+  }
+  if (@available(macOS 14, *)) {
+    __block base::OnceCallback<void(std::vector<std::string>)> then = std::move(done);
+    [WebKitClass(@"WKWebsiteDataStore") fetchAllDataStoreIdentifiers:^(NSArray<NSUUID*>* ids) {
+      std::vector<std::string> listed;
+      for (NSUUID* each in ids) {
+        // Lower case, as the core makes its ids.
+        listed.push_back(base::ToLowerASCII(base::SysNSStringToUTF8(each.UUIDString)));
+      }
+      std::move(then).Run(std::move(listed));
+    }];
   }
 }
 

@@ -17,19 +17,28 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
+#include "browser_core/agent_autofill.h"
+#include "browser_core/arrange.h"
 #include "browser_core/autofill_menu.h"
 #include "browser_core/boosts.h"
+#include "browser_core/card_video.h"
+#include "browser_core/dialog_keys.h"
 #include "browser_core/favorites.h"
+#include "browser_core/focus_leaving.h"
 #include "browser_core/held_keys.h"
 #include "browser_core/host.h"
 #include "browser_core/link_target.h"
 #include "browser_core/page_press.h"
 #include "browser_core/page_translate.h"
 #include "browser_core/password_offer.h"
+#include "browser_core/pinned_url.h"
 #include "browser_core/platform/keyboard.h"
 #include "browser_core/platform/window_views.h"
+#include "browser_core/point.h"
+#include "browser_core/profiles.h"
 #include "browser_core/script_dialog.h"
 #include "browser_core/session.h"
+#include "browser_core/shortcut_key.h"
 #include "browser_core/developer_mode.h"
 #include "browser_core/drm_request.h"
 #include "browser_core/site_controls.h"
@@ -53,12 +62,14 @@
 #include "components/favicon/content/content_favicon_driver.h"
 #include "components/favicon/core/favicon_service.h"
 #include "components/favicon_base/favicon_types.h"
+#include "components/favicon_base/select_favicon_frames.h"
 #include "components/history/core/browser/history_service.h"
 #include "components/history/core/browser/history_types.h"
 #include "components/infobars/content/content_infobar_manager.h"
 #include "components/infobars/core/infobar.h"
 #include "components/input/native_web_keyboard_event.h"
 #include "components/keyed_service/core/service_access_type.h"
+#include "components/performance_manager/public/performance_manager.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/dom_storage_context.h"
 #include "content/public/browser/favicon_status.h"
@@ -72,21 +83,25 @@
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/storage_partition.h"
+#include "content/public/browser/visibility.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "content/public/browser/web_contents_view_delegate.h"
 #include "content/public/common/drop_data.h"
 #include "content/public/common/result_codes.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
+#include "services/data_decoder/public/cpp/decode_image.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/input/web_mouse_event.h"
 #include "third_party/blink/public/mojom/frame/sudden_termination_disabler_type.mojom-shared.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/events/keycodes/dom/dom_key.h"
 #include "ui/events/keycodes/dom/keycode_converter.h"
-#include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/codec/png_codec.h"
+#include "ui/gfx/favicon_size.h"
+#include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/image/image_skia_rep.h"
 #include "url/gurl.h"
@@ -305,28 +320,50 @@ std::vector<Tab*> Tab::All() {
 
 // static
 bc_id Tab::Restore(Profile* profile, const SavedTab& saved) {
-  if (!profile || saved.history.empty()) {
+  return profile ? Make(profile, std::string(), saved) : 0;
+}
+
+// static
+bc_id Tab::Restore(const std::string& dir, const SavedTab& saved) {
+  if (Profile* profile = ProfileFor(dir)) {
+    return Make(profile, std::string(), saved);
+  }
+  return ProfileExpected(dir) ? Make(nullptr, dir, saved) : 0;
+}
+
+// static
+std::vector<bc_id> Tab::ProfileArrived(const std::string& dir, Profile* profile) {
+  std::vector<bc_id> arrived;
+  for (auto& [id, tab] : Tabs()) {
+    if (dir.empty() || tab->waiting_for_ != dir) {
+      continue;
+    }
+    tab->waiting_for_.clear();
+    if (profile) {
+      tab->profile_ = profile->GetWeakPtr();
+    }
+    tab->TakeStorage(std::exchange(tab->waiting_storage_, std::string()));
+    tab->StateChanged();
+    tab->FindFavicon(tab->Url());
+    arrived.push_back(id);
+  }
+  return arrived;
+}
+
+// static
+bc_id Tab::Make(Profile* profile, const std::string& waiting_for, const SavedTab& saved) {
+  if (saved.history.empty()) {
     return 0;
   }
   const bc_id id = NewId();
   Tab* tab = (Tabs()[id] = base::WrapUnique(new Tab(id, profile))).get();
+  tab->waiting_for_ = waiting_for;
   // Only what the page would keep: the rest of |saved| is its place, which the caller sees to.
   SavedTab& unloaded = tab->unloaded_.emplace();
   unloaded.history = saved.history;
   unloaded.current = std::clamp(saved.current, 0, static_cast<int>(saved.history.size()) - 1);
   unloaded.muted = saved.muted;
-  // Its page's sessionStorage from the last launch, unless a tab has it already, as one a sidebar
-  // backup brings back may.
-  const std::string& storage = saved.session_storage;
-  if (!storage.empty() && std::ranges::none_of(All(), [&](const Tab* other) {
-        return other != tab && other->SessionStorageId() == storage;
-      })) {
-    tab->storage_ =
-        profile->GetDefaultStoragePartition()->GetDOMStorageContext()->RecreateSessionStorage(
-            storage);
-    // Kept on disk should it go unshown to the next launch too, as an unloaded tab's is (Unload).
-    tab->storage_->SetShouldPersist(true);
-  }
+  tab->TakeStorage(saved.session_storage);
   tab->name_ = saved.name;
   tab->icon_ = saved.icon;
   if (!saved.last_seen.is_null()) {
@@ -338,27 +375,42 @@ bc_id Tab::Restore(Profile* profile, const SavedTab& saved) {
   // Posted, as the state is, so the app hears of it once its call has returned.
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(&Tab::ReportTitle, tab->weak_factory_.GetWeakPtr()));
+  // Without a profile, once it's here (ProfileArrived).
   tab->FindFavicon(tab->Url());
   return id;
 }
 
-Tab::Tab(bc_id id, Profile* profile) : id_(id), profile_(profile->GetWeakPtr()) {}
+void Tab::TakeStorage(const std::string& storage) {
+  // Its page's sessionStorage from the last launch, unless a tab has it already, as one a sidebar
+  // backup brings back may.
+  if (storage.empty() || std::ranges::any_of(All(), [&](const Tab* other) {
+        return other != this && other->SessionStorageId() == storage;
+      })) {
+    return;
+  }
+  if (!profile()) {
+    waiting_storage_ = storage;
+    return;
+  }
+  storage_ =
+      profile()->GetDefaultStoragePartition()->GetDOMStorageContext()->RecreateSessionStorage(
+          storage);
+  // Kept on disk should it go unshown to the next launch too, as an unloaded tab's is (Unload).
+  storage_->SetShouldPersist(true);
+}
+
+Tab::Tab(bc_id id, Profile* profile)
+    : id_(id), profile_(profile ? profile->GetWeakPtr() : nullptr) {}
+
+std::string Tab::profile_dir() const {
+  return waiting_for_.empty() ? DirOf(profile()) : waiting_for_;
+}
 
 Tab::~Tab() = default;
 
 void Tab::Attach(content::WebContents* contents) {
   Observe(contents);
   TabLink::CreateForWebContents(contents, id_);
-  // Chrome's tab helpers make the driver as the tab is made, before anything asks for its id.
-  if (auto* driver = favicon::ContentFaviconDriver::FromWebContents(contents)) {
-    favicon_observation_.Observe(driver);
-  }
-  // It keeps a tab audible 2 s after its sound stops, so the speaker doesn't flicker between
-  // sounds.
-  if (auto* audible = RecentlyAudibleHelper::FromWebContents(contents)) {
-    audible_subscription_ = audible->RegisterRecentlyAudibleChangedCallback(
-        base::IgnoreArgs<bool>(base::BindRepeating(&Tab::ReportStateSoon, base::Unretained(this))));
-  }
   // Its page's camera, microphone and sharing, as Chrome's tab strip marks them. Not once quitting,
   // as a page's popup can still come after StopHearingCaptures.
   if (!capture_observation_.IsObserving() && !CapturesStopped() &&
@@ -368,23 +420,67 @@ void Tab::Attach(content::WebContents* contents) {
   }
   // Another page's session is heard from once it plays.
   media_observer_.reset();
-  // Chrome's tab sharing infobar comes and goes on it as a page starts and stops sharing a tab.
   infobar_observation_.Reset();
-  if (auto* infobars = infobars::ContentInfoBarManager::FromWebContents(contents)) {
-    infobar_observation_.Observe(infobars);
-  }
   // Its page's alert(), confirm() and prompt() ask with the app's dialog.
   ScriptDialogs::Attach(contents);
   // A press with a modifier held may be the app's, such as ⇧⌘-drag's capture.
   PagePresses::CreateForWebContents(contents, id_);
   Boosts::CreateForWebContents(contents, id_);
-  // Edit › AutoFill opens Chrome's dropdown at the field its page's focus is in.
-  AutofillMenu::Watch(contents);
+  Arrange::CreateForWebContents(contents, id_);
+  PagePoint::CreateForWebContents(contents, id_);
   // Its page's language, and the app's translation of it (#671).
   PageTranslate::CreateForWebContents(contents, id_);
+  ObserveHelpers();
   // A tab is often made with its first page already on its way, before anything observes it, so
-  // the app hears it's loading now rather than once the page commits.
+  // the app hears it's loading now rather than once the page commits, and a load the user looks at
+  // counts from now: a tab typed in the command bar starts loading in Navigate, before the core
+  // makes its Tab, and never told of that navigation's start (#3285).
+  if (contents->IsLoading() || contents->GetController().GetPendingEntry()) {
+    user_load_.Joined(
+        performance_manager::PerformanceManager::GetPrimaryPageNodeForWebContents(contents),
+        contents->GetVisibility() == content::Visibility::VISIBLE, IsAgentTab(contents));
+  }
   ReportStateSoon();
+}
+
+void Tab::ObserveHelpers() {
+  content::WebContents* contents = web_contents();
+  if (!favicon_observation_.IsObserving()) {
+    if (auto* driver = favicon::ContentFaviconDriver::FromWebContents(contents)) {
+      favicon_observation_.Observe(driver);
+    }
+  }
+  // It keeps a tab audible 2 s after its sound stops, so the speaker doesn't flicker between
+  // sounds.
+  if (!audible_subscription_) {
+    if (auto* audible = RecentlyAudibleHelper::FromWebContents(contents)) {
+      audible_subscription_ = audible->RegisterRecentlyAudibleChangedCallback(
+          base::IgnoreArgs<bool>(
+              base::BindRepeating(&Tab::ReportStateSoon, base::Unretained(this))));
+    }
+  }
+  // Chrome's tab sharing infobar comes and goes on it as a page starts and stops sharing a tab.
+  if (!infobar_observation_.IsObserving()) {
+    if (auto* infobars = infobars::ContentInfoBarManager::FromWebContents(contents)) {
+      infobar_observation_.Observe(infobars);
+    }
+  }
+  // Edit › AutoFill opens Chrome's dropdown at the field its page's focus is in.
+  AutofillMenu::Watch(contents);
+  // The URL field's key, from the first page on: a tab typed in the command bar or opened from a
+  // link starts its first navigation before the core makes its Tab, so DidStartNavigation's watch
+  // would come only with its second page (#3348).
+  PasswordOffer::WatchKey(contents);
+  if (auto* translate = PageTranslate::FromWebContents(contents)) {
+    translate->ObserveDriver();
+  }
+}
+
+// static
+void Tab::HelpersArrived(content::WebContents* contents) {
+  if (Tab* tab = FromWebContents(contents)) {
+    tab->ObserveHelpers();
+  }
 }
 
 // static
@@ -396,6 +492,12 @@ std::vector<content::WebContents*> Tab::Pages() {
     }
   }
   return pages;
+}
+
+// static
+GURL Tab::PointerLink(bc_id id) {
+  const Tab* tab = Get(id);
+  return tab ? tab->link_target_ : GURL();
 }
 
 // static
@@ -445,6 +547,15 @@ void Tab::FocusPage(content::WebContents* contents) {
 }
 
 // static
+void Tab::FocusPageEnd(content::WebContents* contents, bool last) {
+  if (Tab* tab = FromWebContents(contents); tab && tab->system_page_) {
+    tab->system_page_->FocusEnd(last);
+  } else {
+    contents->FocusThroughTabTraversal(last);
+  }
+}
+
+// static
 bool Tab::AskAppAboutKey(bool (*callback)(void*, bc_id, const bc_key*),
                          bc_id tab,
                          const input::NativeWebKeyboardEvent& event,
@@ -474,15 +585,14 @@ bool Tab::AskAppAboutKey(bool (*callback)(void*, bc_id, const bc_key*),
 
 // static
 std::string Tab::KeyName(const input::NativeWebKeyboardEvent& event, uint32_t* modifiers) {
-  std::string name = ui::KeycodeConverter::DomKeyToKeyString(ui::DomKey(event.dom_key));
   const int held = event.GetModifiers();
-  // With ⌥ held, a Mac's key is the character ⌥ types with it, such as ⌥I's "ˆ", which no shortcut
-  // names. A letter's or digit's shortcut is its key's, as Chrome's are.
-  const int code = event.windows_key_code;
-  if ((held & blink::WebInputEvent::kAltKey) &&
-      ((code >= ui::VKEY_A && code <= ui::VKEY_Z) || (code >= ui::VKEY_0 && code <= ui::VKEY_9))) {
-    name = std::string(1, static_cast<char>(code));
-  }
+  const std::string name = ShortcutKeyName(
+      ui::KeycodeConverter::DomKeyToKeyString(ui::DomKey(event.dom_key)), event.windows_key_code,
+      {.shift = (held & blink::WebInputEvent::kShiftKey) != 0,
+       .control = (held & blink::WebInputEvent::kControlKey) != 0,
+       .alt = (held & blink::WebInputEvent::kAltKey) != 0,
+       .meta = (held & blink::WebInputEvent::kMetaKey) != 0},
+      BUILDFLAG(IS_MAC));
   *modifiers = 0;
   for (auto [web, flag] : {std::pair{blink::WebInputEvent::kShiftKey, BC_MODIFIER_SHIFT},
                            std::pair{blink::WebInputEvent::kControlKey, BC_MODIFIER_CONTROL},
@@ -502,11 +612,44 @@ GURL Tab::Url() const {
   return unloaded_ ? unloaded_->history[unloaded_->current].virtual_url() : GURL();
 }
 
+bool Tab::At(const GURL& url) const {
+  if (content::WebContents* contents = web_contents()) {
+    // A page in the system's engine, or one waiting to load, is only at its own URL.
+    content::NavigationEntry* entry =
+        system_page_ || waiting_ ? nullptr : contents->GetController().GetLastCommittedEntry();
+    const GURL requested =
+        entry && !entry->IsInitialEntry() ? entry->GetOriginalRequestURL() : GURL();
+    return AtPinnedUrl(url, PageUrl(contents), requested);
+  }
+  if (!unloaded_ || unloaded_->history.empty()) {
+    return false;
+  }
+  const sessions::SerializedNavigationEntry& entry = unloaded_->history[unloaded_->current];
+  return AtPinnedUrl(url, entry.virtual_url(), entry.original_request_url());
+}
+
+void Tab::ForgetPage() {
+  const GURL url = Url();
+  if (!url.is_valid()) {
+    return;
+  }
+  Window::ForgetPage(id_, url);
+  // Each visit to it, as the command bar's ⇧⌦ takes a page out; a private window's has none.
+  Profile* profile = this->profile();
+  if (!profile || profile->IsOffTheRecord()) {
+    return;
+  }
+  if (history::HistoryService* history =
+          HistoryServiceFactory::GetForProfile(profile, ServiceAccessType::EXPLICIT_ACCESS)) {
+    history->DeleteURLs({url});
+  }
+}
+
 std::string Tab::SessionStorageId() const {
   if (content::WebContents* contents = web_contents()) {
     return contents->GetController().GetDefaultSessionStorageNamespace()->id();
   }
-  return storage_ ? storage_->id() : std::string();
+  return storage_ ? storage_->id() : waiting_storage_;
 }
 
 SavedTab Tab::Save() const {
@@ -576,6 +719,7 @@ void Tab::Unload() {
   shown_on_.reset();
   {
     base::AutoReset<bool> unloading(&unloading_, true);
+    ScriptDialogs::Cancel(contents);
     tabs->DetachAndDeleteWebContentsAt(tabs->GetIndexOfWebContents(contents));
   }
   // Chrome's session forgets the storage of a tab its tab strip deletes, which would delete it
@@ -696,6 +840,17 @@ void Tab::LoadWaiting() {
   StateChanged();
 }
 
+void Tab::SetPageMayClose(bool may) {
+  if (page_may_close_ == may) {
+    return;
+  }
+  page_may_close_ = may;
+  // The renderer reads it from the page's preferences (OverrideWebPreferences in main_delegate.cc).
+  if (web_contents()) {
+    web_contents()->NotifyPreferencesChanged();
+  }
+}
+
 void Tab::SetMuted(bool muted) {
   if (!web_contents()) {
     if (unloaded_) {
@@ -727,7 +882,6 @@ bool Tab::UseSystemEngine(const GURL& url) {
     return false;
   }
   waiting_.reset();
-  system_engine::StoreMade(profile);
   // The tab has its page before Chromium's goes, so the renderer ending reads as the switch.
   system_page_ = std::move(page);
   if (web_contents()->IsAudioMuted()) {
@@ -906,7 +1060,6 @@ void Tab::DropSystemPage() {
   system_page_.reset();
   ForgetOutputRestricted();
   favicon_ = gfx::Image();
-  system_page_favicon_.clear();
   system_page_title_.reset();
   EngineChanged();
 }
@@ -936,33 +1089,161 @@ void Tab::FetchSystemPageFavicon() {
   favicon::FaviconService* service = FaviconServiceFactory::GetForProfile(
       Profile::FromBrowserContext(web_contents()->GetBrowserContext()),
       ServiceAccessType::EXPLICIT_ACCESS);
-  if (!service || !system_page_) {
+  if (!system_page_) {
     return;
   }
-  // WebKit keeps its pages' favicons to itself, so the tab shows the one Chromium knows for the
-  // page, else for its site, else none.
+  if (!service) {
+    system_page_icon_ = SystemPageIconState::kNoneKnown;
+    return;
+  }
+  // At once, the one Chromium knows for the page, else for its site. The page's own replaces it
+  // once WebKit has loaded it and Chromium's decoder has read it. Each document's is told, none
+  // too: the app still shows the last page's, which may be Chromium's from before the tab came to
+  // the system's engine (#3431).
   service->GetRawFaviconForPageURL(
       system_page_->url(), {favicon_base::IconType::kFavicon}, kFaviconPixels,
       /*fallback_to_host=*/true,
       base::BindOnce(
-          [](base::WeakPtr<Tab> tab, const favicon_base::FaviconRawBitmapResult& result) {
-            if (!tab || !tab->system_page_ || !Host().tab_favicon_changed) {
+          [](base::WeakPtr<Tab> tab, int document,
+             const favicon_base::FaviconRawBitmapResult& result) {
+            if (!tab || !tab->system_page_ || tab->system_page_document_ != document ||
+                tab->system_page_icon_ != SystemPageIconState::kAsking) {
               return;
             }
-            std::vector<uint8_t> png;
             if (result.is_valid()) {
-              png.assign(result.bitmap_data->data(),
-                         result.bitmap_data->data() + result.bitmap_data->size());
+              tab->ShowSystemPageIcon(result.bitmap_data->data(), result.bitmap_data->size());
+            } else if (tab->system_page_icon_none_) {
+              tab->ShowSystemPageIcon(nullptr, 0);
+            } else {
+              tab->system_page_icon_ = SystemPageIconState::kNoneKnown;
             }
-            if (png == tab->system_page_favicon_) {
+          },
+          weak_factory_.GetWeakPtr(), system_page_document_),
+      &favicon_tracker_);
+}
+
+void Tab::SystemPageIcon(const GURL& icon_url, std::vector<uint8_t> bytes) {
+  if (!system_page_) {
+    return;
+  }
+  const int document = system_page_document_;
+  if (bytes.empty()) {
+    SystemPageHasNoIcon(document);
+    return;
+  }
+  Profile* profile = Profile::FromBrowserContext(web_contents()->GetBrowserContext());
+  // A private window's is shown and never kept. Its profile's favicons are the regular profile's,
+  // which keep no private page's, as Chrome's keep no incognito page's.
+  favicon::FaviconService* service =
+      profile->IsOffTheRecord()
+          ? nullptr
+          : FaviconServiceFactory::GetForProfile(profile, ServiceAccessType::EXPLICIT_ACCESS);
+  if (!service) {
+    DecodeSystemPageIcon(document, icon_url, std::move(bytes), /*keep=*/false);
+    return;
+  }
+  service->GetRawFaviconForPageURL(
+      system_page_->url(), {favicon_base::IconType::kFavicon}, kFaviconPixels,
+      /*fallback_to_host=*/false,
+      base::BindOnce(
+          [](base::WeakPtr<Tab> tab, int document, const GURL& icon_url,
+             std::vector<uint8_t> bytes, const favicon_base::FaviconRawBitmapResult& kept) {
+            if (!tab || !tab->system_page_ || tab->system_page_document_ != document) {
               return;
             }
-            tab->system_page_favicon_ = png;
-            Host().tab_favicon_changed(Host().context, tab->id_, png.empty() ? nullptr : png.data(),
-                                       png.size());
+            // The profile has that icon for the page already, which the commit showed: nothing
+            // is decoded or written.
+            if (kept.is_valid() && !kept.expired && kept.icon_url == icon_url) {
+              fprintf(stderr, "browser: tab %llu icon already kept\n",
+                      static_cast<unsigned long long>(tab->id_));
+              if (tab->system_page_icon_ != SystemPageIconState::kShown) {
+                tab->ShowSystemPageIcon(kept.bitmap_data->data(), kept.bitmap_data->size());
+              }
+              return;
+            }
+            tab->DecodeSystemPageIcon(document, icon_url, std::move(bytes), /*keep=*/true);
           },
-          weak_factory_.GetWeakPtr()),
+          weak_factory_.GetWeakPtr(), document, icon_url, std::move(bytes)),
       &favicon_tracker_);
+}
+
+void Tab::DecodeSystemPageIcon(int document,
+                               const GURL& icon_url,
+                               std::vector<uint8_t> bytes,
+                               bool keep) {
+  // The bytes come from the web, so Chromium's sandboxed decoder reads them, never the browser
+  // process, as it reads a Chromium page's favicon. Of an .ico's frames, the one nearest the row's
+  // size. An icon bigger than 1024 pixels square is shrunk to fit.
+  constexpr uint64_t kMaxDecodedBytes = 1024 * 1024 * 4;
+  data_decoder::DecodeImageIsolated(
+      bytes, data_decoder::mojom::ImageCodec::kDefault, /*shrink_to_fit=*/true, kMaxDecodedBytes,
+      gfx::Size(kFaviconPixels, kFaviconPixels),
+      base::BindOnce(&Tab::SystemPageIconDecoded, weak_factory_.GetWeakPtr(), document, icon_url,
+                     keep));
+}
+
+void Tab::SystemPageIconDecoded(int document,
+                                const GURL& icon_url,
+                                bool keep,
+                                const SkBitmap& bitmap) {
+  if (!system_page_ || system_page_document_ != document) {
+    return;
+  }
+  if (bitmap.drawsNothing()) {
+    SystemPageHasNoIcon(document);
+    return;
+  }
+  // Sized for each of the screen's scales, as Chrome's favicon handler sizes a page's.
+  float score = 0;
+  const gfx::ImageSkia image = CreateFaviconImageSkia(
+      {bitmap}, {gfx::Size(bitmap.width(), bitmap.height())}, gfx::kFaviconSize, &score);
+  std::optional<std::vector<uint8_t>> png;
+  if (!image.isNull()) {
+    png = gfx::PNGCodec::EncodeBGRASkBitmap(image.GetRepresentation(2).GetBitmap(),
+                                            /*discard_transparency=*/false);
+  }
+  if (!png) {
+    SystemPageHasNoIcon(document);
+    return;
+  }
+  ShowSystemPageIcon(png->data(), png->size());
+  if (!keep) {
+    return;
+  }
+  // In the tab's own profile, as Chrome keeps a page's favicon, so the command bar, the Library
+  // and the tab unloaded after a relaunch find it.
+  if (favicon::FaviconService* service = FaviconServiceFactory::GetForProfile(
+          Profile::FromBrowserContext(web_contents()->GetBrowserContext()),
+          ServiceAccessType::EXPLICIT_ACCESS)) {
+    service->SetFavicons({system_page_->url()}, icon_url, favicon_base::IconType::kFavicon,
+                         gfx::Image(image));
+    // For the checks, which can't read the profile's favicons.
+    fprintf(stderr, "browser: tab %llu icon kept\n", static_cast<unsigned long long>(id_));
+  }
+}
+
+void Tab::SystemPageHasNoIcon(int document) {
+  if (system_page_document_ != document) {
+    return;
+  }
+  switch (system_page_icon_) {
+    case SystemPageIconState::kAsking:
+      system_page_icon_none_ = true;
+      break;
+    case SystemPageIconState::kNoneKnown:
+      ShowSystemPageIcon(nullptr, 0);
+      break;
+    case SystemPageIconState::kShown:
+      // The profile's for the page or its site stays, as it was the page's last time.
+      break;
+  }
+}
+
+void Tab::ShowSystemPageIcon(const uint8_t* png, size_t size) {
+  system_page_icon_ = SystemPageIconState::kShown;
+  if (Host().tab_favicon_changed) {
+    Host().tab_favicon_changed(Host().context, id_, png, size);
+  }
 }
 
 void Tab::SystemPageChanged() {
@@ -982,6 +1263,9 @@ void Tab::SystemPageCommitted() {
       history->AddPage(url, base::Time::Now(), history::SOURCE_BROWSED);
     }
   }
+  ++system_page_document_;
+  system_page_icon_ = SystemPageIconState::kAsking;
+  system_page_icon_none_ = false;
   FetchSystemPageFavicon();
   SiteControls::PageChanged(id_);
   // Chromium tells each new document's title. WebKit's can replace the empty one the commit set
@@ -1029,7 +1313,12 @@ bool Tab::SystemPageKey(const input::NativeWebKeyboardEvent& event,
                         event, editing);
 }
 
+bool Tab::SystemPageFocusLeft(bool reverse) {
+  return FocusLeftPage(web_contents(), reverse);
+}
+
 void Tab::SystemPageClicked() {
+  Window::PagePressed(web_contents());
   Window::OnPageClicked(id_);
 }
 
@@ -1061,6 +1350,29 @@ bool Tab::muted() const {
   return web_contents() ? web_contents()->IsAudioMuted() : unloaded_ && unloaded_->muted;
 }
 
+void Tab::DidOpenRequestedURL(content::WebContents* new_contents,
+                              content::RenderFrameHost* source_render_frame_host,
+                              const GURL& url,
+                              const content::Referrer& referrer,
+                              WindowOpenDisposition disposition,
+                              ui::PageTransition transition,
+                              bool started_from_context_menu,
+                              bool renderer_initiated) {
+  // A pop-up an agent's page makes goes in the agent's Space, and is the agent's from now, as
+  // content makes it: content starts its page as the window is shown, before the window that
+  // places it hears of it (#2660). Its tab is made before Chrome's tab helpers, so it observes
+  // theirs once its tab strip has it (HelpersArrived). A tab Chrome's Navigate made, the window
+  // held as it made it.
+  Space* space = Space::Holding(id_);
+  if (!space || !space->agent()) {
+    return;
+  }
+  const bc_id opened = Tab::IdOf(new_contents);
+  if (!Space::Holding(opened)) {
+    space->Expect(opened);
+  }
+}
+
 void Tab::DidStartNavigation(content::NavigationHandle* navigation) {
   if (navigation->IsInPrimaryMainFrame()) {
     PasswordOffer::WatchKey(web_contents());
@@ -1069,6 +1381,11 @@ void Tab::DidStartNavigation(content::NavigationHandle* navigation) {
     // that scrolls the same page keeps it.
     if (!navigation->IsSameDocument()) {
       ReportLinkTarget(GURL());
+      user_load_.Started(
+          navigation->GetNavigationId(),
+          performance_manager::PerformanceManager::GetPrimaryPageNodeForWebContents(web_contents()),
+          web_contents()->GetVisibility() == content::Visibility::VISIBLE,
+          IsAgentTab(web_contents()));
     }
   }
 }
@@ -1077,6 +1394,7 @@ void Tab::DidFinishNavigation(content::NavigationHandle* navigation) {
   if (!navigation->IsInPrimaryMainFrame()) {
     return;
   }
+  user_load_.Finished(navigation->GetNavigationId(), navigation->HasCommitted());
   if (navigation->HasCommitted() && !navigation->IsSameDocument()) {
     net_error_ = navigation->IsErrorPage() ? navigation->GetNetErrorCode() : 0;
     if (net_error_) {
@@ -1105,7 +1423,12 @@ void Tab::DidStartLoading() {
 }
 
 void Tab::DidStopLoading() {
+  user_load_.Stopped();
   StateChanged();
+}
+
+void Tab::DidFirstVisuallyNonEmptyPaint() {
+  user_load_.Painted();
 }
 
 void Tab::NavigationEntriesDeleted() {
@@ -1145,7 +1468,7 @@ void Tab::ReportState() {
         .can_go_forward = current + 1 < count,
         .loading = false,
         .unloaded = true,
-        .away_from_pinned_url = pinned_url.is_valid() && Url() != pinned_url,
+        .away_from_pinned_url = pinned_url.is_valid() && !At(pinned_url),
         .audible = false,
         .muted = muted(),
         .icon = icon_.c_str(),
@@ -1178,17 +1501,27 @@ void Tab::ReportState() {
   const media_session::mojom::MediaSessionInfoPtr media =
       session ? session->GetMediaSessionInfoSync() : nullptr;
   const bool controllable = media && media->is_controllable;
-  const std::string media_title =
-      controllable ? base::UTF16ToUTF8(session->GetMediaSessionMetadata().title) : "";
-  const std::string media_artist =
-      controllable ? base::UTF16ToUTF8(session->GetMediaSessionMetadata().artist) : "";
+  // A system page's from WebKit and the page's metadata. It plays, pauses and skips through the
+  // page's own handlers, but floats nothing: its video isn't Chromium's to show in a card.
+  const platform::SystemMedia system_media = page ? page->media() : platform::SystemMedia();
+  std::string media_title;
+  std::string media_artist;
+  if (controllable) {
+    media_title = base::UTF16ToUTF8(session->GetMediaSessionMetadata().title);
+    media_artist = base::UTF16ToUTF8(session->GetMediaSessionMetadata().artist);
+  } else if (system_media.has) {
+    // Without the page's own, its title, as Chromium's media session names a page's.
+    media_title =
+        base::UTF16ToUTF8(system_media.title.empty() ? page->title() : system_media.title);
+    media_artist = base::UTF16ToUTF8(system_media.artist);
+  }
   const bc_tab_state state = {
       .url = url.c_str(),
       .can_go_back = CanGoBack(),
       .can_go_forward = CanGoForward(),
       .loading = page ? page->loading() : contents->ShouldShowLoadingUI(),
       .unloaded = !page && (history.NeedsReload() || waiting_),
-      .away_from_pinned_url = pinned_url.is_valid() && PageUrl(contents) != pinned_url,
+      .away_from_pinned_url = pinned_url.is_valid() && !At(pinned_url),
       .audible = page ? page->audible() : audible && audible->WasRecentlyAudible(),
       .muted = page ? page->muted() : contents->IsAudioMuted(),
       .volume = volume_,
@@ -1201,25 +1534,32 @@ void Tab::ReportState() {
       .sharing = !page && sharing,
       .shared = !page && capture->IsBeingMirrored(contents),
       .share_instead = !page && ShareInsteadInfoBar(contents),
-      .media = controllable,
-      .media_playing = controllable && media->playback_state ==
-                                           media_session::mojom::MediaPlaybackState::kPlaying,
+      .media = controllable || system_media.has,
+      .media_playing = controllable ? media->playback_state ==
+                                          media_session::mojom::MediaPlaybackState::kPlaying
+                                    : system_media.has && system_media.playing,
       .media_title = media_title.c_str(),
       .media_artist = media_artist.c_str(),
       .media_previous =
-          controllable &&
-          std::ranges::contains(session->GetMediaSessionActionsSync(),
-                                media_session::mojom::MediaSessionAction::kPreviousTrack),
-      .media_next = controllable &&
-                    std::ranges::contains(session->GetMediaSessionActionsSync(),
-                                          media_session::mojom::MediaSessionAction::kNextTrack),
-      // Chrome offers the action while the page floats too, where the player has nothing to do.
+          controllable
+              ? std::ranges::contains(session->GetMediaSessionActionsSync(),
+                                      media_session::mojom::MediaSessionAction::kPreviousTrack)
+              : system_media.has && system_media.named,
+      .media_next =
+          controllable
+              ? std::ranges::contains(session->GetMediaSessionActionsSync(),
+                                      media_session::mojom::MediaSessionAction::kNextTrack)
+              : system_media.has && system_media.named,
+      // Chrome offers the action while the page floats too, where the player has nothing to do,
+      // but a video in its card floats from there (FloatCardVideo).
       .media_picture_in_picture =
           controllable &&
-          media->picture_in_picture_state !=
-              media_session::mojom::MediaPictureInPictureState::kInPictureInPicture &&
+          (media->picture_in_picture_state !=
+               media_session::mojom::MediaPictureInPictureState::kInPictureInPicture ||
+           CardShowsVideo(contents)) &&
           std::ranges::contains(session->GetMediaSessionActionsSync(),
                                 media_session::mojom::MediaSessionAction::kEnterPictureInPicture),
+      .media_video = controllable && CardCanShowVideo(contents),
       .developer_mode = developer_mode::On(profile(), GURL(url)),
   };
   Host().tab_state_changed(Host().context, id_, &state);
@@ -1382,6 +1722,17 @@ void Tab::DidGetUserInteraction(const blink::WebInputEvent& event) {
     const int command =
         BUILDFLAG(IS_MAC) ? blink::WebInputEvent::kMetaKey : blink::WebInputEvent::kControlKey;
     last_press_held_command_ = event.GetModifiers() & command;
+    last_press_at_ = base::TimeTicks::Now();
+    last_press_held_alt_ = event.GetModifiers() & blink::WebInputEvent::kAltKey;
+  }
+  // The user's press, a button or a finger going down, told as it comes, with the tab pressed: in a
+  // split view the window's focused pane changes only once OnPageClicked runs, and the app takes
+  // over the tab pressed, not that one (#3243). An agent's own input comes through DevTools and
+  // reaches here as the user's does, marked kFromDebugger: it takes nothing over.
+  const bool users = !(event.GetModifiers() & blink::WebInputEvent::kFromDebugger);
+  if (users && (event.GetType() == blink::WebInputEvent::Type::kMouseDown ||
+                event.GetType() == blink::WebInputEvent::Type::kTouchStart)) {
+    Window::PagePressed(web_contents());
   }
   // A click, not the keyboard coming to the page: the core moves the keyboard between the pages of
   // a split view itself, and focus reports posted from those moves arrive after the next one.
@@ -1394,10 +1745,10 @@ void Tab::DidGetUserInteraction(const blink::WebInputEvent& event) {
 
 void Tab::ReportLinkTarget(const GURL& url) {
   // Only as it changes: nothing is told while the pointer is on no link and none was shown.
-  if (url.is_empty() && !link_target_) {
+  if (url.is_empty() && link_target_.is_empty()) {
     return;
   }
-  link_target_ = !url.is_empty();
+  link_target_ = url;
   if (!Host().tab_link_target) {
     return;
   }
@@ -1450,11 +1801,16 @@ void Tab::DidUpdateAudioMutingState(bool muted) {
 }
 
 void Tab::OnVisibilityChanged(content::Visibility visibility) {
+  user_load_.Shown(visibility == content::Visibility::VISIBLE, IsAgentTab(web_contents()));
   // As Chrome loads a restored tab once it's shown. Posted: the page view is being shown now.
   if (visibility == content::Visibility::VISIBLE && waiting_) {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(&Tab::LoadWaiting, weak_factory_.GetWeakPtr()));
   }
+}
+
+void Tab::OnWebContentsFocused(content::RenderWidgetHost* render_widget_host) {
+  dialog_keys::PageFocused(web_contents());
 }
 
 // The page's renderer went away, crashed, killed or ended on purpose. check.sh waits for this line,
@@ -1628,6 +1984,23 @@ void Tab::ShareInstead() {
 }
 
 void Tab::Media(int action) {
+  if (system_page_) {
+    switch (action) {
+      case BC_MEDIA_PLAY:
+        system_page_->Media(platform::MediaAction::kPlay);
+        break;
+      case BC_MEDIA_PAUSE:
+        system_page_->Media(platform::MediaAction::kPause);
+        break;
+      case BC_MEDIA_NEXT:
+        system_page_->Media(platform::MediaAction::kNext);
+        break;
+      case BC_MEDIA_PREVIOUS:
+        system_page_->Media(platform::MediaAction::kPrevious);
+        break;
+    }
+    return;
+  }
   content::MediaSession* session =
       web_contents() ? content::MediaSession::GetIfExists(web_contents()) : nullptr;
   if (!session) {
@@ -1649,8 +2022,11 @@ void Tab::Media(int action) {
       session->PreviousTrack();
       break;
     case BC_MEDIA_PICTURE_IN_PICTURE:
-      // The page's own handler if it has one, else its one video, as Chrome's media controls do.
-      session->EnterPictureInPicture();
+      // From its card to Chrome's window, if its card shows it, else the page's own handler if it
+      // has one, or its one video, as Chrome's media controls do.
+      if (!FloatCardVideo(web_contents())) {
+        session->EnterPictureInPicture();
+      }
       break;
   }
 }
@@ -1739,20 +2115,23 @@ void Tab::CaptureChanged(content::WebContents* contents) {
 }
 
 void Tab::WebContentsDestroyed() {
+  user_load_.Closed();
   // The driver is the page's too, and may go before the tab does, as may its infobars.
   favicon_observation_.Reset();
   infobar_observation_.Reset();
   media_observer_.reset();
   audible_subscription_ = {};
-  system_page_.reset();
   // Unloaded, it stays without its page.
   if (unloading_) {
+    system_page_.reset();
     Observe(nullptr);
     return;
   }
   // Closed, as at a quit or with its window. Its page is still there, so the session kept as the
-  // first tab closes saves this one from it too.
+  // first tab closes saves this one from it too, and so is its Safari's-engine page, whose address
+  // is the one saved: Chromium's history ends at the page that handed the tab to it (#2886).
   ReportClosed();
+  system_page_.reset();
   // Its sessionStorage stays on disk for the next launch with the session, which ReportClosed has
   // kept for the quit or the last window as the first tab closed, as Chrome's session keeps its
   // tabs'. Closed by the user, it goes.

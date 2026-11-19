@@ -4,11 +4,8 @@
 //! over the browser window's top right corner, as its child, and the mouse goes through it to the
 //! page, unless it has buttons, as Capture's does. What it asks of its window goes through `Host`.
 
-use std::{
-    cell::Cell,
-    rc::Rc,
-    time::{Duration, Instant},
-};
+use std::{cell::Cell, rc::Rc, time::Duration};
+use web_time::Instant;
 
 use gpui::{
     App, Bounds, ClickEvent, Context, FontWeight, Global, Hsla, Pixels, Point, Role, SharedString,
@@ -182,6 +179,14 @@ struct Shown {
 }
 
 impl Shown {
+    /// Whether it offers the undo, with its button or by naming its key, as "Space deleted! Use ⌘Z
+    /// to undo." does.
+    fn offers_undo(&self) -> bool {
+        let undo_key = crate::shell::keystroke_label("cmd-z");
+        self.buttons.iter().any(|button| button.name == UNDO_BUTTON)
+            || (self.key.as_ref()).is_some_and(|(key, _)| **key == *undo_key)
+    }
+
     fn pose(&self) -> Pose {
         let arrived = Pose::arriving(self.shown.map_or(0., |shown| shown.elapsed().as_secs_f32()));
         match self.leaving {
@@ -281,33 +286,54 @@ pub fn open(
 /// Shows `text`, then `key`'s chip and the words after it if there's a key, for `time` from now,
 /// in place of any toast showing.
 pub fn show(text: &str, key: Option<(&str, &str)>, time: Duration, cx: &mut App) {
-    present(text, key, Vec::new(), Some(time), false, None, cx);
+    present(text, None, key, Vec::new(), Some(time), false, None, cx);
 }
 
 /// Shows `text` with `buttons` after it, for `time` from now and for as long as the pointer is
 /// over it, in place of any toast showing.
 pub fn show_with_buttons(text: &str, buttons: Vec<Button>, time: Duration, cx: &mut App) {
-    present(text, None, buttons, Some(time), false, None, cx);
+    present(text, None, None, buttons, Some(time), false, None, cx);
+}
+
+/// Shows `text` with `buttons` after it for `time`, as `show_with_buttons` does, and logs it as
+/// `logged`, as its words name what's the user's, such as a Board's name.
+pub fn show_logged_as(
+    text: &str,
+    logged: &str,
+    buttons: Vec<Button>,
+    time: Duration,
+    cx: &mut App,
+) {
+    present(
+        text,
+        Some(logged),
+        None,
+        buttons,
+        Some(time),
+        false,
+        None,
+        cx,
+    );
 }
 
 /// Shows `text` about `tab` with `buttons` after it, in place of any toast showing, until a button
 /// is pressed or `hide_held` takes it away, as for a page that stopped answering.
 pub fn show_held(text: &str, buttons: Vec<Button>, tab: u64, cx: &mut App) {
-    present(text, None, buttons, None, false, Some(tab), cx);
+    present(text, None, None, buttons, None, false, Some(tab), cx);
 }
 
 /// Shows `text` with `buttons` after it, in place of any toast showing, until a button is pressed
 /// or another toast takes its place, as for a question that can wait, such as whether to send a
 /// crash's report.
 pub fn show_until_answered(text: &str, buttons: Vec<Button>, cx: &mut App) {
-    present(text, None, buttons, None, false, None, cx);
+    present(text, None, None, buttons, None, false, None, cx);
 }
 
 /// Shows `text` with `buttons` after it, in place of any toast showing, until a button is pressed
 /// or `hide_resting` takes it away. Another toast takes its place for that one's time, and it comes
 /// back once that one has gone, as it says what keeps on, such as a trace recording.
 pub fn show_resting(text: &str, buttons: Vec<Button>, cx: &mut App) {
-    present(text, None, buttons.clone(), None, false, None, cx);
+    present(text, None, None, buttons.clone(), None, false, None, cx);
     let Some(window) = cx.try_global::<ToastWindow>().map(|toast| toast.0) else {
         return;
     };
@@ -376,26 +402,44 @@ pub fn showing(text: &str, cx: &App) -> bool {
         .is_some_and(|shown| shown.leaving.is_none() && shown.text == text)
 }
 
+/// Presses the button named `name` on the toast showing, as a click does, for the tests of what
+/// shows a toast. Returns whether one showed.
+#[cfg(test)]
+pub(crate) fn press(name: &str, cx: &mut App) -> bool {
+    let Some(window) = cx.try_global::<ToastWindow>().map(|toast| toast.0) else {
+        return false;
+    };
+    (window.update(cx, |toast, _, cx| {
+        let at = (toast.shown.as_ref())
+            .and_then(|shown| shown.buttons.iter().position(|button| button.name == name))?;
+        toast.press(at, point(px(0.), px(0.)), cx);
+        Some(())
+    }))
+    .ok()
+    .flatten()
+    .is_some()
+}
+
+/// Whether a toast that offers the undo shows and isn't leaving, which keeps its promise of ⌘Z
+/// from a field with text in it (#3307).
+pub fn offers_undo(cx: &App) -> bool {
+    let Some(window) = cx.try_global::<ToastWindow>().map(|toast| toast.0) else {
+        return false;
+    };
+    (window.read(cx).ok())
+        .and_then(|toast| toast.shown.as_ref())
+        .is_some_and(|shown| shown.leaving.is_none() && shown.offers_undo())
+}
+
 /// The undo it offered has been done some other way: its toast goes, if it shows, whether it
 /// offers the undo with its button or names its key, as "Space deleted! Use ⌘Z to undo." does.
 pub fn hide_undo(cx: &mut App) {
     let Some(window) = cx.try_global::<ToastWindow>().map(|toast| toast.0) else {
         return;
     };
-    let undo_key = crate::shell::keystroke_label("cmd-z");
     window
         .update(cx, |toast, _, cx| {
-            let undoing = toast.shown.as_ref().is_some_and(|shown| {
-                shown
-                    .buttons
-                    .iter()
-                    .any(|button| button.name == UNDO_BUTTON)
-                    || shown
-                        .key
-                        .as_ref()
-                        .is_some_and(|(key, _)| **key == *undo_key)
-            });
-            if undoing {
+            if toast.shown.as_ref().is_some_and(Shown::offers_undo) {
                 toast.leave(cx);
             }
         })
@@ -405,7 +449,16 @@ pub fn hide_undo(cx: &mut App) {
 /// Shows how to leave full screen, as the window has gone full screen or another Space shows in
 /// it, in place of any toast showing.
 pub fn show_full_screen(cx: &mut App) {
-    present(NOTE, None, Vec::new(), Some(NOTE_TIME), true, None, cx);
+    present(
+        NOTE,
+        None,
+        None,
+        Vec::new(),
+        Some(NOTE_TIME),
+        true,
+        None,
+        cx,
+    );
 }
 
 /// The window has left full screen: the note on how to goes, if it shows.
@@ -424,6 +477,7 @@ pub fn hide_full_screen(cx: &mut App) {
 
 fn present(
     text: &str,
+    logged: Option<&str>,
     key: Option<(&str, &str)>,
     buttons: Vec<Button>,
     time: Option<Duration>,
@@ -431,6 +485,7 @@ fn present(
     held: Option<u64>,
     cx: &mut App,
 ) {
+    crate::lazy_window::ready::<Toast>(cx);
     let Some(window) = cx.try_global::<ToastWindow>().map(|toast| toast.0) else {
         return;
     };
@@ -444,7 +499,8 @@ fn present(
             } else {
                 format!(" [{}]", names.join(", "))
             };
-            log!("browser: toast shown {text}{words}{names}");
+            let logged = logged.unwrap_or(text);
+            log!("browser: toast shown {logged}{words}{names}");
             let timer = match time {
                 Some(time) => cx.spawn(async move |toast, cx| {
                     cx.background_executor().timer(time).await;
@@ -655,7 +711,8 @@ impl Render for Toast {
                 }
             })
             .collect();
-        // What it says, which VoiceOver says as it comes, wherever its cursor is.
+        // What it says, which a screen reader says as it comes, wherever its cursor is: the Mac's
+        // AccessKit announces a live region's value, and Windows' and Linux's its name (#3236).
         let said = match &shown.key {
             Some((key, rest)) => format!("{} {key} {rest}", shown.text),
             None => shown.text.to_string(),
@@ -665,6 +722,7 @@ impl Render for Toast {
             .when(a11y, |toast| {
                 toast
                     .role(Role::Status)
+                    .aria_label(said.clone())
                     .aria_value(said)
                     .a11y_synthetic_children(|builder| builder.parent_node().set_live(Live::Polite))
             })

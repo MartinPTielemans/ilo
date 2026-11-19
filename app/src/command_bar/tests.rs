@@ -9,7 +9,7 @@ use gpui::{
 };
 
 use super::*;
-use crate::text_input::{self, Chosen, FieldMenu};
+use crate::text_input::{self, Chosen, FieldMenu, korean};
 
 /// A host that records what the bar asks of it, but its suggestions and its window's height, and
 /// apart from the rest, where it shows the window. A text with a dot names a page there; any other
@@ -18,6 +18,12 @@ use crate::text_input::{self, Chosen, FieldMenu};
 #[derive(Default)]
 struct Recorder {
     calls: RefCell<Vec<String>>,
+    /// What the bar had asked of the host each time it gave the page the keyboard.
+    page_keyboard: RefCell<Vec<String>>,
+    /// The page the bar goes to is an agent's.
+    agents_page: std::cell::Cell<bool>,
+    /// What the user typed for each load, which the core reads for an http address written out.
+    typed: RefCell<Vec<String>>,
     /// What the core was asked to suggest for, the text and whether it may complete it.
     asked: RefCell<Vec<(String, bool)>>,
     shown: RefCell<Vec<String>>,
@@ -42,6 +48,10 @@ struct Recorder {
     settings_read: std::cell::Cell<usize>,
     /// The tabs open on the account's other computers.
     others: Vec<OtherTab>,
+    /// The archive, newest first: each tab's id, page and when it closed, in milliseconds.
+    archive: RefCell<Vec<(u64, String, f64)>>,
+    /// Now, in milliseconds since 1970.
+    now: f64,
 }
 
 impl Recorder {
@@ -87,15 +97,18 @@ impl Host for Recorder {
 
     fn page_favicon(&self, _: &str) {}
 
-    fn open_tab(&self, url: &str, behind: bool) {
+    fn open_tab(&self, url: &str, typed: &str, behind: bool) {
+        self.typed.borrow_mut().push(typed.to_string());
         self.record(format!("open {url}{}", if behind { " behind" } else { "" }));
     }
 
-    fn open_window(&self, url: &str, _: &mut App) {
+    fn open_window(&self, url: &str, typed: &str, _: &mut App) {
+        self.typed.borrow_mut().push(typed.to_string());
         self.record(format!("window {url}"));
     }
 
-    fn navigate(&self, tab: u64, url: &str) {
+    fn navigate(&self, tab: u64, url: &str, typed: &str) {
+        self.typed.borrow_mut().push(typed.to_string());
         self.record(format!("navigate {tab} {url}"));
     }
 
@@ -119,7 +132,8 @@ impl Host for Recorder {
         self.record(format!("split {tab} with {with}"));
     }
 
-    fn open_split(&self, url: &str, with: u64, _: &mut App) {
+    fn open_split(&self, url: &str, typed: &str, with: u64, _: &mut App) {
+        self.typed.borrow_mut().push(typed.to_string());
         self.record(format!("open {url} beside {with}"));
     }
 
@@ -146,6 +160,15 @@ impl Host for Recorder {
 
     fn hide(&self) {
         self.record("hide".into());
+    }
+
+    fn focus_page(&self) {
+        let before = self.calls.borrow().join(", ");
+        self.page_keyboard.borrow_mut().push(before);
+    }
+
+    fn agents_page(&self, _: &App) -> bool {
+        self.agents_page.get()
     }
 
     fn dismiss(&self) {
@@ -177,6 +200,24 @@ impl Host for Recorder {
 
     fn other_tabs(&self, _: &App) -> Rc<Vec<OtherTab>> {
         Rc::new(self.others.clone())
+    }
+
+    fn archived(&self, url: &str, _: &App) -> Option<(u64, f64)> {
+        (self.archive.borrow().iter())
+            .find(|(_, page, _)| page == url)
+            .map(|&(id, _, closed)| (id, closed))
+    }
+
+    fn restore_archived(&self, archived: u64, _: &mut App) -> bool {
+        let kept = (self.archive.borrow().iter()).any(|&(id, _, _)| id == archived);
+        if kept {
+            self.record(format!("restore archived {archived}"));
+        }
+        kept
+    }
+
+    fn now(&self) -> f64 {
+        self.now
     }
 
     fn settings_index(&self, _: &App) -> Option<Rc<Vec<settings_search::Entry>>> {
@@ -379,6 +420,27 @@ impl Bar {
             .unwrap()
     }
 
+    /// What each row says at its end about where its result is, and the glyph on its tile.
+    fn ends(&mut self) -> Vec<(String, Option<&'static str>)> {
+        self.window
+            .read_with(&self.cx.cx, |bar, _| {
+                (bar.rows.iter())
+                    .filter_map(|row| bar.end(row))
+                    .map(|(said, glyph)| (said.to_string(), glyph))
+                    .collect()
+            })
+            .unwrap()
+    }
+
+    /// Each row's icon.
+    fn icons(&mut self) -> Vec<Icon> {
+        self.window
+            .read_with(&self.cx.cx, |bar, _| {
+                bar.rows.iter().map(Suggestion::icon).collect()
+            })
+            .unwrap()
+    }
+
     /// The rows listed: each one's page, and its tab if it has one.
     fn rows(&mut self) -> Vec<(String, u64)> {
         self.window
@@ -413,6 +475,17 @@ impl Bar {
         self.host.calls.take()
     }
 
+    /// What the bar had asked of the host each time it gave the page the keyboard since the last
+    /// time.
+    fn page_keyboard(&self) -> Vec<String> {
+        self.host.page_keyboard.take()
+    }
+
+    /// What the user typed for each load since the last time.
+    fn typed(&self) -> Vec<String> {
+        self.host.typed.take()
+    }
+
     /// The tooltips asked for and ended since the last time.
     fn tips(&self) -> Vec<String> {
         self.host.tips.take()
@@ -436,6 +509,14 @@ impl Bar {
     /// the bar's pick opens a new tab now.
     fn follow(&mut self, tabs: Vec<shell::BarTab>) -> bool {
         let opens = self.cx.cx.update(|cx| space_shown(tabs.clone(), tabs, cx));
+        self.cx.run_until_parked();
+        opens
+    }
+
+    /// The window shows `tab`, another of its Space's, as a shortcut pressed in the bar can.
+    /// Returns whether the bar's pick opens a new tab now.
+    fn show_tab(&mut self, tab: u64) -> bool {
+        let opens = self.cx.cx.update(|cx| tab_shown(tab, cx));
         self.cx.run_until_parked();
         opens
     }
@@ -471,12 +552,12 @@ impl Bar {
     /// the host makes it: the input row, and with rows, to the list's foot and the space under it.
     fn drawn_over_field(&mut self) -> f32 {
         let asked = self.asked_height();
-        self.cx.simulate_resize(size(px(FIELD_WIDTH), px(asked)));
+        self.cx.simulate_resize(window(FIELD_WIDTH, asked));
         self.cx.run_until_parked();
         (self.window)
             .read_with(&self.cx.cx, |bar, _| match bar.rows.is_empty() {
                 true => FIELD_INPUT,
-                false => f32::from(bar.scroll.bounds().bottom()) + LIST_END,
+                false => f32::from(bar.scroll.bounds().bottom()) - room().above + LIST_END,
             })
             .unwrap()
     }
@@ -507,7 +588,7 @@ impl Bar {
                 *menu.borrow_mut() = Some((items, chosen));
             })))
         });
-        let at = point(px(200.), px(HEIGHT / 2.));
+        let at = at(200., HEIGHT / 2.);
         self.cx
             .simulate_mouse_down(at, MouseButton::Right, Modifiers::none());
         self.cx
@@ -538,11 +619,10 @@ impl Bar {
     /// Moves the pointer onto row `index`, with the window at its height for five rows, as the
     /// host makes it.
     fn point_at(&mut self, index: usize) {
-        self.cx
-            .simulate_resize(size(px(WIDTH), px(height(ROWS_SHOWN))));
+        self.cx.simulate_resize(window(WIDTH, height(ROWS_SHOWN)));
         let y = height(0) + LINE + LIST_TOP + (index as f32 + 0.5) * ROW_HEIGHT;
         self.cx
-            .simulate_mouse_move(point(px(200.), px(y)), None, Modifiers::none());
+            .simulate_mouse_move(at(200., y), None, Modifiers::none());
         self.cx.run_until_parked();
     }
 
@@ -577,7 +657,23 @@ impl Bar {
 fn remove_button(index: usize) -> gpui::Point<gpui::Pixels> {
     let x = WIDTH - LIST_X - PLATE_INSET - ROW_END - 3. - ICON_BOX / 2.;
     let y = height(0) + LINE + LIST_TOP + (index as f32 + 0.5) * ROW_HEIGHT;
-    point(px(x), px(y))
+    at(x, y)
+}
+
+/// The room the bar's window keeps round it, where it draws its own shadow (#2988), and none where
+/// it doesn't.
+fn room() -> crate::elevation::Reach {
+    ROOM.panel_margin()
+}
+
+/// The point `x`, `y` in the bar, in its window.
+fn at(x: f32, y: f32) -> gpui::Point<gpui::Pixels> {
+    point(px(x + room().sides), px(y + room().above))
+}
+
+/// The bar's window, as the host makes it, round a bar `width` by `height`.
+fn window(width: f32, height: f32) -> gpui::Size<gpui::Pixels> {
+    room().around(size(px(width), px(height)))
 }
 
 /// A row for a page from the profile's history, which ⇧⌦ can take out.
@@ -1013,10 +1109,11 @@ fn the_remove_button_names_itself_and_its_key(cx: &mut TestAppContext) {
     );
     let (top, bottom) = (row - ICON_BOX / 2., row + ICON_BOX / 2.);
     assert!((anchor.top - top).abs() < 1. && (anchor.bottom - bottom).abs() < 1.);
+    let shown = window(WIDTH, height(ROWS_SHOWN));
     assert_eq!(
         anchor.window,
-        (WIDTH, height(ROWS_SHOWN)),
-        "it isn't kept inside the bar"
+        (f32::from(shown.width), f32::from(shown.height)),
+        "it isn't kept inside the bar's window"
     );
 
     // Off the button onto its row, the tooltip goes.
@@ -1318,6 +1415,149 @@ fn the_input_method_composes_and_commits_in_the_bar(cx: &mut TestAppContext) {
     bar.input_method(|input, window, cx| input.unmark_text(window, cx));
     assert!(!bar.composing());
     assert_eq!(bar.input(), ("ねこ".into(), 6..6));
+}
+
+/// ↩ that commits Japanese the input method composes is the input method's: the bar stays open with
+/// the text committed, and nothing loads or gives a page the keyboard, or the text, until the next
+/// ↩. A platform that passes the ↩ on while it still composes does the same.
+#[gpui::test]
+fn return_committing_japanese_stays_in_the_bar(cx: &mut TestAppContext) {
+    let mut bar = Bar::new(cx);
+    bar.edit("https://example.org/", None);
+    bar.type_text("にほん");
+    bar.calls();
+    bar.compose("にほんご");
+    bar.keys("enter");
+    assert!(bar.is_open(), "↩ while composing closed the bar");
+    assert_eq!(bar.calls(), Vec::<String>::new(), "↩ while composing went");
+    assert!(
+        bar.page_keyboard().is_empty(),
+        "↩ while composing gave the page the keyboard"
+    );
+    bar.input_method(|input, window, cx| input.replace_text_in_range(None, "日本語", window, cx));
+    assert!(bar.is_open());
+    assert_eq!(bar.calls(), Vec::<String>::new());
+    assert!(bar.page_keyboard().is_empty());
+    bar.keys("enter");
+    assert_eq!(
+        bar.page_keyboard(),
+        [format!("navigate 1 {}, hide", search("にほん日本語"))],
+        "↩ after the commit"
+    );
+}
+
+/// `key` pressed and released as Wayland's platform hands it to the window: down, then its
+/// character typed into the field if the window didn't take the key, then up. A macro, since
+/// GPUI's test window can't be named here.
+macro_rules! press {
+    ($platform:expr, $key:expr) => {{
+        use gpui::PlatformWindow as _;
+        let keystroke = gpui::Keystroke::parse($key).unwrap().with_simulated_ime();
+        let down = gpui::PlatformInput::KeyDown(gpui::KeyDownEvent {
+            keystroke: keystroke.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        if !$platform.simulate_input(down) {
+            let mut field = $platform.take_input_handler().expect("no input handler");
+            field.replace_text_in_range(None, keystroke.key_char.as_deref().unwrap());
+            $platform.set_input_handler(field);
+        }
+        $platform.simulate_input(gpui::PlatformInput::KeyUp(gpui::KeyUpEvent { keystroke }));
+    }};
+}
+
+/// A character typed while the App is in an update, as a nested event pump delivers it, lands in
+/// the bar once the update is over, and ahead of the one typed after it (#2672).
+#[gpui::test]
+fn a_character_typed_mid_update_lands_in_the_bar(cx: &mut TestAppContext) {
+    let mut bar = Bar::new(cx);
+    let mut platform = bar.cx.cx.test_window(bar.window.into());
+    (bar.window)
+        .update(&mut bar.cx.cx, |_, _, _| press!(platform, "a"))
+        .unwrap();
+    press!(platform, "b");
+    bar.cx.run_until_parked();
+    assert_eq!(bar.input(), ("ab".into(), 2..2));
+}
+
+/// Japanese the input method composes and commits while the App is in an update, with no key of
+/// its own, as a candidate picked with the pointer is: once the update is over the bar has the
+/// committed text and nothing marked (#2672).
+#[gpui::test]
+fn a_japanese_commit_mid_update_lands_in_the_bar(cx: &mut TestAppContext) {
+    use gpui::PlatformWindow as _;
+    let mut bar = Bar::new(cx);
+    bar.compose("にほん");
+    let mut platform = bar.cx.cx.test_window(bar.window.into());
+    (bar.window)
+        .update(&mut bar.cx.cx, |_, _, _| {
+            let mut ime = platform.take_input_handler().expect("no input handler");
+            ime.replace_and_mark_text_in_range(None, "にほんご", None);
+            ime.replace_text_in_range(None, "日本語");
+            platform.set_input_handler(ime);
+        })
+        .unwrap();
+    bar.cx.run_until_parked();
+    assert!(!bar.composing());
+    assert_eq!(bar.input(), ("日本語".into(), 9..9));
+    assert_eq!(bar.calls(), Vec::<String>::new());
+}
+
+/// Korean from a 2-set keyboard, where one key can commit a syllable and start the next (#2457):
+/// in a new tab's bar and over the URL the bar opened on. The core is asked only for committed
+/// text, and ↩, which AppKit's, IBus's and Windows' Korean input methods pass on once they've
+/// committed the last syllable, goes with the whole word.
+#[gpui::test]
+fn korean_composes_syllable_by_syllable_in_the_bar(cx: &mut TestAppContext) {
+    let search = |word| format!("https://search.test/?q={word}");
+    for (word, calls, url, went) in [
+        (
+            "한글",
+            korean::HANGEUL,
+            None,
+            format!("open {}", search("한글")),
+        ),
+        (
+            "안녕하세요",
+            korean::ANNYEONG,
+            None,
+            format!("open {}", search("안녕하세요")),
+        ),
+        (
+            "한글",
+            korean::HANGEUL,
+            Some("https://example.com/"),
+            format!("navigate 1 {}", search("한글")),
+        ),
+    ] {
+        let mut bar = Bar::new(cx);
+        if let Some(url) = url {
+            bar.edit(url, None);
+        }
+        bar.host.asked.take();
+        for call in calls {
+            bar.input_method(|input, window, cx| call.apply(input, window, cx));
+        }
+        assert!(bar.composing());
+        let last = word.chars().last().unwrap().to_string();
+        bar.input_method(|input, window, cx| input.replace_text_in_range(None, &last, window, cx));
+        assert_eq!(bar.input(), (word.to_string(), word.len()..word.len()));
+        let asked: Vec<String> = (bar.host.asked.take().into_iter())
+            .map(|(text, _)| text)
+            .collect();
+        let mut syllables = String::new();
+        let committed: Vec<String> = (word.chars())
+            .map(|syllable| {
+                syllables.push(syllable);
+                syllables.clone()
+            })
+            .collect();
+        assert_eq!(asked, committed, "{word} over {url:?}");
+        bar.calls();
+        bar.keys("enter");
+        assert_eq!(bar.calls(), [went, "hide".into()], "{word} over {url:?}");
+    }
 }
 
 /// Esc goes to the input method while it composes, which cancels, putting back the text from
@@ -2282,6 +2522,100 @@ fn the_bar_is_closed_as_it_asks_to_go(cx: &mut TestAppContext) {
     );
 }
 
+/// Each load from the bar says what the user typed for it, from which the core keeps an http
+/// address written out over http, as Chrome's bar does (#2417).
+#[gpui::test]
+fn each_load_says_what_was_typed(cx: &mut TestAppContext) {
+    let mut bar = Bar::new(cx);
+    bar.edit("https://example.com/", None);
+    bar.type_text("http://example.org");
+    bar.keys("enter");
+    assert_eq!(bar.typed(), ["http://example.org"], "↩ in the tab");
+    let mut bar = Bar::new(cx);
+    bar.type_text("http://example.net");
+    bar.keys("enter");
+    assert_eq!(bar.typed(), ["http://example.net"], "↩ in a new tab");
+    let mut bar = Bar::new(cx);
+    bar.type_text("http://example.net");
+    bar.keys("cmd-enter");
+    assert_eq!(bar.typed(), ["http://example.net"], "⌘↩'s tab behind");
+    // What the bar completed isn't typed, so the core reads the completed page as a suggestion.
+    let mut bar = Bar::new(cx);
+    bar.type_text("http://exa");
+    bar.suggest(
+        "http://exa",
+        vec![completing("http://example.com/", "mple.com")],
+    );
+    bar.keys("enter");
+    assert_eq!(bar.typed(), ["http://exa"], "↩ on a completion");
+}
+
+/// ↩ that goes to a page gives it the keyboard once the bar has hidden, as Chrome's address bar
+/// does, wherever the keyboard was before the bar opened: in the page, or in the UI, as over a
+/// Board (#3453) or a window with no page (#3239). A pick that shows a tab already open, or copies,
+/// leaves it.
+#[gpui::test]
+fn return_gives_the_page_it_goes_to_the_keyboard(cx: &mut TestAppContext) {
+    let mut bar = Bar::new(cx);
+    bar.edit("chrome://board/1", None);
+    bar.type_text("example.org");
+    bar.keys("enter");
+    assert_eq!(
+        bar.page_keyboard(),
+        ["navigate 1 https://example.org/, hide"],
+        "a page loaded in the tab shown"
+    );
+    bar.calls();
+    bar.edit("https://example.org/", None);
+    bar.keys("enter");
+    assert_eq!(
+        bar.page_keyboard(),
+        ["hide, reload 1"],
+        "the page loaded again"
+    );
+    bar.calls();
+    let mut bar = Bar::new(cx);
+    bar.type_text("example.com");
+    bar.keys("enter");
+    assert_eq!(
+        bar.page_keyboard(),
+        ["open https://example.com/, hide"],
+        "a page in a new tab"
+    );
+    bar.calls();
+    bar.edit("https://example.com/", None);
+    bar.type_text("docs.new");
+    bar.suggest("docs.new", vec![page("https://docs.new/")]);
+    bar.keys("enter");
+    assert_eq!(
+        bar.page_keyboard(),
+        ["open https://docs.new/, hide"],
+        "a new document from a tab's URL, in a new tab"
+    );
+    bar.calls();
+    let mut bar = Bar::with_tabs(cx, vec![tab(4, "https://a.test/")]);
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["select 4", "hide"]);
+    assert!(bar.page_keyboard().is_empty(), "a tab already open");
+
+    // An agent's page loads, and the keyboard stays where it was.
+    let mut bar = Bar::new(cx);
+    bar.host.agents_page.set(true);
+    bar.edit("https://agent.test/", None);
+    bar.type_text("example.org");
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["navigate 1 https://example.org/", "hide"]);
+    bar.edit("https://agent.test/", None);
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["hide", "reload 1"]);
+    let mut bar = Bar::new(cx);
+    bar.host.agents_page.set(true);
+    bar.type_text("example.com");
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["open https://example.com/", "hide"]);
+    assert!(bar.page_keyboard().is_empty(), "an agent's page");
+}
+
 /// ↩ on the URL ⌘L opened the bar on loads the page again, as Arc's does; typed over, it goes
 /// where the text names.
 #[gpui::test]
@@ -2351,6 +2685,7 @@ fn copy_puts_copy_url_above_the_search_row(cx: &mut TestAppContext) {
         "Copy Build Info".into(),
         "New Window ⌘N".into(),
         "Duplicate Current Tab".into(),
+        "Duplicate Board".into(),
         "https://copy.com/".into(),
     ];
     assert_eq!(bar.listed(), expected);
@@ -2531,6 +2866,49 @@ fn the_url_bar_of_the_space_before_opens_a_new_tab(cx: &mut TestAppContext) {
     assert_eq!(bar.calls(), ["open https://example.org/", "hide"]);
 }
 
+/// ⌘L's bar edited tab 1, and a browser shortcut pressed in it showed another tab: ↩ opens a new
+/// tab, never loading in the tab the user left (#3428), as after another Space. What's typed stays,
+/// and the URL it opened on goes. On the tab it edits still shown, ↩ loads there; ⌘T's bar opens a
+/// new tab anyway; a new pane's bar goes, as its split view isn't shown.
+#[gpui::test]
+fn the_url_bar_of_a_tab_no_longer_shown_opens_a_new_tab(cx: &mut TestAppContext) {
+    let mut bar = Bar::new(cx);
+    bar.edit("https://example.com/", None);
+    assert!(bar.show_tab(2));
+    assert_eq!(bar.input(), (String::new(), 0..0));
+    bar.type_text("example.org");
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["open https://example.org/", "hide"]);
+
+    let mut bar = Bar::new(cx);
+    bar.edit("https://example.com/", None);
+    bar.type_text("example.org");
+    assert!(bar.show_tab(2));
+    assert_eq!(bar.input().0, "example.org");
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["open https://example.org/", "hide"]);
+
+    let mut bar = Bar::new(cx);
+    bar.edit("https://example.com/", None);
+    assert!(!bar.show_tab(1));
+    bar.type_text("example.org");
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["navigate 1 https://example.org/", "hide"]);
+
+    let mut bar = Bar::new(cx);
+    assert!(!bar.show_tab(2));
+    bar.type_text("example.org");
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["open https://example.org/", "hide"]);
+
+    let mut bar = Bar::new(cx);
+    let pane = Bounds::new(point(px(400.), px(10.)), size(px(400.), px(600.)));
+    let card = Bounds::new(point(px(10.), px(10.)), size(px(800.), px(600.)));
+    bar.cx.cx.update(|cx| show_split(3, pane, card, cx));
+    assert!(!bar.show_tab(2));
+    assert_eq!(bar.calls(), ["dismiss"]);
+}
+
 /// A site search leaves for the new profile, whose engines may differ; Search Tabs lists the open
 /// tabs from the Space shown; the bar over a new pane goes, as the split view stays behind.
 #[gpui::test]
@@ -2592,7 +2970,8 @@ fn space_puts_new_space_first(cx: &mut TestAppContext) {
 }
 
 /// The hidden words: "duplicate" finds New Window after Duplicate Current Tab, as Arc's does with
-/// a page, and "hide" Collapse Pinned Tabs and Toggle Sidebar after Hide Sidebar.
+/// a page, and "hide" Collapse Pinned Tabs and Toggle Sidebar after Hide Sidebar and Hide Top Bar,
+/// which this host lists whether the bar is on or not.
 #[gpui::test]
 fn a_hidden_word_finds_its_command(cx: &mut TestAppContext) {
     let mut bar = Bar::with_commands(cx);
@@ -2600,6 +2979,7 @@ fn a_hidden_word_finds_its_command(cx: &mut TestAppContext) {
     let expected = [
         "Duplicate Current Tab".to_string(),
         search("duplicate"),
+        "Duplicate Board".into(),
         "New Window ⌘N".into(),
     ];
     assert_eq!(bar.listed(), expected);
@@ -2608,6 +2988,7 @@ fn a_hidden_word_finds_its_command(cx: &mut TestAppContext) {
     let expected = [
         "Hide Sidebar ⌘S".to_string(),
         search("hide"),
+        "Hide Top Bar ⇧⌘D".into(),
         "Collapse Pinned Tabs".into(),
         "Toggle Sidebar ⌘S".into(),
     ];
@@ -2686,8 +3067,7 @@ fn a_site_completing_puts_every_command_after_the_suggestions(cx: &mut TestAppCo
 #[gpui::test]
 fn the_list_scrolls_to_keep_the_selection_in_view(cx: &mut TestAppContext) {
     let mut bar = Bar::with_commands(cx);
-    bar.cx
-        .simulate_resize(size(px(WIDTH), px(height(ROWS_SHOWN))));
+    bar.cx.simulate_resize(window(WIDTH, height(ROWS_SHOWN)));
     type_and_suggest(
         &mut bar,
         "c",
@@ -2711,17 +3091,36 @@ fn the_list_scrolls_to_keep_the_selection_in_view(cx: &mut TestAppContext) {
     assert_eq!(bar.plates().0, 8);
     // A frame, for the list to scroll.
     bar.cx
-        .simulate_resize(size(px(WIDTH), px(height(ROWS_SHOWN) + 1.)));
+        .simulate_resize(window(WIDTH, height(ROWS_SHOWN) + 1.));
     bar.cx.run_until_parked();
     assert!(in_view(&mut bar, 8));
     assert!(!in_view(&mut bar, 0));
 }
 
-/// VoiceOver finds the keyboard in a text field called what its placeholder says, and the rows in
-/// a list of suggestions with the selected one marked. As the keys move the selection while the
-/// field keeps the keyboard, a polite live region says the row and where it stands.
+/// A screen reader coming into the bar's window hears it called the Command Bar, as the menu
+/// names it, rather than a frame with no name (#3497).
 #[gpui::test]
-fn voiceover_hears_the_selected_row_as_the_keys_move_it(cx: &mut TestAppContext) {
+fn the_bars_window_is_called_the_command_bar(cx: &mut TestAppContext) {
+    let mut bar = Bar::new(cx);
+    bar.cx.simulate_a11y_activation();
+    let tree = bar.cx.a11y_tree().expect("GPUI built a tree");
+    let root = tree
+        .tree
+        .as_ref()
+        .expect("the first tree has its root")
+        .root;
+    let window = (tree.nodes.iter())
+        .find(|(id, _)| *id == root)
+        .map(|(_, node)| (node.role(), node.label()));
+    assert_eq!(window, Some((Role::Window, Some("Command Bar"))));
+}
+
+/// A screen reader finds the keyboard in a text field called what its placeholder says, and the
+/// rows in a list of suggestions with the selected one marked. As the keys move the selection while
+/// the field keeps the keyboard, a polite live region says the row and where it stands, as its
+/// value for VoiceOver and as its name for NVDA and Orca (#3236).
+#[gpui::test]
+fn a_screen_reader_hears_the_selected_row_as_the_keys_move_it(cx: &mut TestAppContext) {
     use gpui::accesskit::{Live, Role};
     let mut bar = Bar::new(cx);
     bar.cx.simulate_a11y_activation();
@@ -2770,8 +3169,8 @@ fn voiceover_hears_the_selected_row_as_the_keys_move_it(cx: &mut TestAppContext)
     );
     let status = &nodes(Role::Status)[0].1;
     assert_eq!(
-        (status.live(), status.value()),
-        (Some(Live::Polite), Some("do, 1 of 2"))
+        (status.live(), status.value(), status.label()),
+        (Some(Live::Polite), Some("do, 1 of 2"), Some("do, 1 of 2"))
     );
 
     bar.keys("down");
@@ -2781,10 +3180,8 @@ fn voiceover_hears_the_selected_row_as_the_keys_move_it(cx: &mut TestAppContext)
         .iter()
         .find(|(_, node)| node.role() == Role::Status)
         .unwrap();
-    assert_eq!(
-        status.1.value(),
-        Some("Docs, docs.test, Switch to Tab, 2 of 2")
-    );
+    let said = Some("Docs, docs.test, Switch to Tab, 2 of 2");
+    assert_eq!((status.1.value(), status.1.label()), (said, said));
 }
 
 /// ilo's menu's window, which shows nothing in a test.
@@ -2811,7 +3208,7 @@ fn the_inputs_menu_is_ilos_and_pastes_and_goes(cx: &mut TestAppContext) {
     let mut bar = Bar::new(cx);
     bar.type_text("something else");
     let right_click = |bar: &mut Bar| {
-        let at = point(px(200.), px(HEIGHT / 2.));
+        let at = at(200., HEIGHT / 2.);
         bar.cx
             .simulate_mouse_down(at, MouseButton::Right, Modifiers::none());
         bar.cx
@@ -3139,8 +3536,20 @@ fn agents_at_their_limit_or_none_ready(cx: &mut TestAppContext) {
     assert_eq!(bar.chip_and_hint(), (None, false, false));
     bar.keys("tab");
     assert_eq!(bar.agent_rows(), [SET_UP]);
+    // ↩ on it ends the ask as the bar hides, so Today's slot closes with it, and the next ⌘T,
+    // which the Shell opens from inside its own update, has no ask to end (#2459).
     bar.keys("enter");
-    assert_eq!(bar.calls(), ["asking true", "hide", "set up agents"]);
+    assert_eq!(
+        bar.calls(),
+        ["asking true", "asking false", "hide", "set up agents"]
+    );
+    bar.cx
+        .update(|_, cx| show(None, Vec::new(), Vec::new(), None, cx));
+    bar.cx.run_until_parked();
+    assert!(
+        !bar.calls().iter().any(|call| call.starts_with("asking")),
+        "the bar opened again ended an ask"
+    );
 
     let mut bar = Bar::new(cx);
     bar.type_text("summarise this");
@@ -3517,4 +3926,213 @@ fn another_computers_tabs_wait_for_two_letters_of_a_name(cx: &mut TestAppContext
         bar.suggest(typed, vec![searching(typed)]);
         assert_eq!(bar.rows(), [(search(typed), 0)], "{typed}");
     }
+}
+
+/// Midnight at the start of `day` November 2026 in the user's time zone, in milliseconds since
+/// 1970: the 10th is a Tuesday.
+fn november(day: u32) -> f64 {
+    use chrono::{Local, TimeZone};
+    let midnight = Local.with_ymd_and_hms(2026, 11, day, 0, 0, 0).earliest();
+    midnight
+        .expect("a time zone with that midnight")
+        .timestamp_millis() as f64
+}
+
+const HOUR: f64 = 3_600_000.;
+
+/// A page from the profile's history, last visited at `at`, in milliseconds since 1970.
+fn visited(url: &str, at: f64) -> Suggestion {
+    Suggestion {
+        last_visit: (at * 1000.) as i64,
+        ..page(url)
+    }
+}
+
+/// The bar, opened for a new tab at noon on Tuesday 10 November, over a Space with `tabs`, with
+/// `archive` in the archive: each tab's id, page and when it closed.
+fn with_archive(
+    cx: &mut TestAppContext,
+    tabs: Vec<shell::BarTab>,
+    archive: &[(u64, &str, f64)],
+) -> Bar {
+    let archive = (archive.iter())
+        .map(|&(id, url, closed)| (id, url.to_string(), closed))
+        .collect();
+    let host = Recorder {
+        archive: RefCell::new(archive),
+        now: november(10) + 12. * HOUR,
+        ..Recorder::default()
+    };
+    Bar::open(cx, tabs, host)
+}
+
+/// A page's row says where its result is (#2337): an open tab's Switch to Tab on the arrow's
+/// tile, a closed tab's day and Reopen on ↺'s, with its favicon for the clock, and a visited
+/// page's day in words alone, keeping the clock. A page with no visit known says nothing.
+#[gpui::test]
+fn each_row_says_where_its_result_is(cx: &mut TestAppContext) {
+    let now = november(10) + 12. * HOUR;
+    let mut bar = with_archive(cx, Vec::new(), &[(5, "https://closed.test/", now - HOUR)]);
+    bar.type_text("pa");
+    let rows = vec![
+        searching("pa"),
+        Suggestion {
+            tab: 7,
+            ..page("https://open.test/")
+        },
+        visited("https://closed.test/", now - 2. * HOUR),
+        visited("https://visited.test/", november(9) + 8. * HOUR),
+        page("https://unknown.test/"),
+    ];
+    bar.suggest("pa", rows);
+    assert_eq!(
+        bar.ends(),
+        [
+            ("Switch to Tab".into(), Some("icons/arrow-right.svg")),
+            ("Closed today · Reopen".into(), Some("icons/rotate-ccw.svg")),
+            ("Visited yesterday".into(), None),
+        ]
+    );
+    assert_eq!(
+        bar.icons()[1..],
+        [
+            Icon::Favicon,
+            Icon::Favicon,
+            Icon::Glyph("icons/clock.svg"),
+            Icon::Glyph("icons/clock.svg"),
+        ]
+    );
+}
+
+/// ↩ on a closed tab's row brings the tab back as it was, with its history, rather than loading
+/// its page afresh.
+#[gpui::test]
+fn return_on_a_closed_row_reopens_its_tab(cx: &mut TestAppContext) {
+    let now = november(10) + 12. * HOUR;
+    let mut bar = with_archive(cx, Vec::new(), &[(5, "https://closed.test/", now - HOUR)]);
+    bar.type_text("pa");
+    bar.suggest("pa", vec![searching("pa"), page("https://closed.test/")]);
+    bar.keys("down enter");
+    assert_eq!(bar.calls(), ["restore archived 5", "hide"]);
+}
+
+/// A closed tab's row whose tab has left the archive since it was listed loads its page, as any
+/// page's row does.
+#[gpui::test]
+fn a_closed_row_gone_from_the_archive_loads_its_page(cx: &mut TestAppContext) {
+    let now = november(10) + 12. * HOUR;
+    let mut bar = with_archive(cx, Vec::new(), &[(5, "https://closed.test/", now - HOUR)]);
+    bar.type_text("pa");
+    bar.suggest("pa", vec![searching("pa"), page("https://closed.test/")]);
+    bar.host.archive.borrow_mut().clear();
+    bar.keys("down enter");
+    assert_eq!(bar.calls(), ["open https://closed.test/", "hide"]);
+}
+
+/// A row says the day in words: today from midnight, yesterday from the midnight before, then
+/// the weekday for the five days before that, so it's never last week's, then the date. A visit
+/// after now, from a clock set back, is today's.
+#[gpui::test]
+fn a_row_says_its_day_in_words_at_each_boundary(cx: &mut TestAppContext) {
+    let mut bar = with_archive(cx, Vec::new(), &[(5, "https://closed.test/", november(8))]);
+    let days = [
+        (november(10) + 13. * HOUR, "today"),
+        (november(10), "today"),
+        (november(10) - 1., "yesterday"),
+        (november(9), "yesterday"),
+        (november(9) - 1., "Sunday"),
+        (november(4), "Wednesday"),
+        (november(4) - 1., "3 Nov"),
+        (november(1), "1 Nov"),
+    ];
+    bar.type_text("pa");
+    for (at, day) in days {
+        bar.suggest(
+            "pa",
+            vec![searching("pa"), visited("https://visited.test/", at)],
+        );
+        assert_eq!(bar.ends(), [(format!("Visited {day}"), None)], "{day}");
+    }
+    bar.suggest("pa", vec![searching("pa"), page("https://closed.test/")]);
+    assert_eq!(
+        bar.ends(),
+        [(
+            "Closed Sunday · Reopen".into(),
+            Some("icons/rotate-ccw.svg")
+        )]
+    );
+}
+
+/// A page that's both open and in the archive shows as open: a tab elsewhere's row switches to
+/// it, and one open in the Space or shown is never offered back from the archive.
+#[gpui::test]
+fn a_page_both_open_and_closed_shows_as_open(cx: &mut TestAppContext) {
+    let now = november(10) + 12. * HOUR;
+    let archive = [
+        (5, "https://elsewhere.test/", now - HOUR),
+        (6, "https://here.test/", now - HOUR),
+    ];
+    let mut bar = with_archive(cx, vec![tab(3, "https://here.test/")], &archive);
+    bar.type_text("pa");
+    let rows = vec![
+        searching("pa"),
+        Suggestion {
+            tab: 7,
+            ..page("https://elsewhere.test/")
+        },
+        visited("https://here.test/", now - HOUR),
+    ];
+    bar.suggest("pa", rows);
+    assert_eq!(
+        bar.ends(),
+        [
+            ("Switch to Tab".into(), Some("icons/arrow-right.svg")),
+            ("Visited today".into(), None),
+        ]
+    );
+    bar.keys("down enter");
+    assert_eq!(bar.calls(), ["select 7", "hide"]);
+}
+
+/// An address typed loads where ↩ goes, as it does when it's an open tab's page, though a tab at
+/// it closed.
+#[gpui::test]
+fn an_address_typed_loads_though_its_tab_closed(cx: &mut TestAppContext) {
+    let now = november(10) + 12. * HOUR;
+    let mut bar = with_archive(cx, Vec::new(), &[(5, "https://closed.test/", now - HOUR)]);
+    bar.type_text("closed.test");
+    bar.suggest("closed.test", vec![page("https://closed.test/")]);
+    assert_eq!(bar.ends(), []);
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["open https://closed.test/", "hide"]);
+}
+
+/// A page completed from what's typed reopens its closed tab, as a completion to an open tab's
+/// page switches to it.
+#[gpui::test]
+fn a_completion_to_a_closed_tab_reopens_it(cx: &mut TestAppContext) {
+    let now = november(10) + 12. * HOUR;
+    let mut bar = with_archive(cx, Vec::new(), &[(5, "https://closed.test/", now - HOUR)]);
+    bar.type_text("closed.t");
+    bar.suggest("closed.t", vec![completing("https://closed.test/", "est")]);
+    assert_eq!(
+        bar.ends(),
+        [("Closed today · Reopen".into(), Some("icons/rotate-ccw.svg"))]
+    );
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["restore archived 5", "hide"]);
+}
+
+/// A visited page's day, with no tile after it, ends at the right edge of the glyph a closed tab's
+/// ↺ tile draws, inside the tile's plate, whatever the tile's size (the orchestrator, 11-14).
+#[test]
+fn a_day_alone_ends_where_the_tiles_glyph_does() {
+    let end = super::bare_end();
+    let plate = (super::END_TILE_RIGHT, super::END_TILE_RIGHT + ICON_BOX);
+    assert!(
+        plate.0 < end && end < plate.1,
+        "the day ends {end} from the row's end, outside the tile's plate, {plate:?}"
+    );
+    // The glyph's box is centred on the plate, so its right edge is as far inside it as its left.
+    assert_eq!(end - plate.0, plate.1 - (end + super::END_GLYPH));
 }

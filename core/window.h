@@ -58,6 +58,8 @@ void HandoverClicked();
 // The lines check.sh times a page's move between windows by, as the app's are: "browser: handover
 // |stage| +<ms> ms (|detail|)", in ms since HandoverClicked, within 3 s of it. No page content.
 void LogHandover(const char* stage, const std::string& detail);
+// How long after HandoverClicked |at| was, while the handover lines are logged: within 3 s of it.
+std::optional<base::TimeDelta> SinceHandoverClicked(base::TimeTicks at);
 
 // One native window: the app's UI, the page it shows over that, and a Browser per profile holding
 // the window's tabs (decision 3). Closing it closes its Browsers, and it goes once they have.
@@ -88,7 +90,8 @@ class Window : public web_modal::WebContentsModalDialogHost,
   static Window* Showing(bc_id tab);
   // A video's Mini Player took the keyboard, so the window that let it go wasn't left for another
   // app or window. On Linux it can take it after that window asked (OnWidgetActivationChanged).
-  static void MiniPlayerTookKeyboard();
+  // Returns the window the user was in last, unless they had left it for another app or window.
+  static Window* MiniPlayerTookKeyboard();
   // The window |tab|'s page goes back to once no window shows it: of those that show a picture of
   // it in its place, as another window took it, the one the user was in last. Else null.
   static Window* Picturing(bc_id tab);
@@ -115,6 +118,12 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // From |tab|'s page, which the user clicked: a window showing it beside the tab it shows, in a
   // split view, shows it focused instead.
   static void OnPageClicked(bc_id tab);
+  // The user pressed a mouse button on |contents|'s page: the app hears of it if it's an agent's tab
+  // a window shows (tab_page_pressed), as the user acting there takes it from the agent.
+  static void PagePressed(content::WebContents* contents);
+  // The same for a press on |dialog|, a tab's dialog in browser window |window|, for the tab it
+  // shows over.
+  static void DialogPressed(views::Widget* window, views::Widget* dialog);
   // The hook for Chrome's tabs (hooks.h): |contents|, which asked to be shown, as Picture in
   // Picture's way back to its tab does, shows in the window holding it, in its Space.
   static void ActivateContents(content::WebContents* contents);
@@ -162,9 +171,16 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // Every window stops showing, and stops remembering, a favorite its Space no longer shows, as
   // when the favorites' scope or a Space's profile changed. It shows that Space's own tab instead.
   static void HiddenFavoritesGone();
+  // |tabs| have their profile now (Tab::ProfileArrived): a window that was asked to show one while
+  // it waited, and still shows its Space, shows it.
+  static void TabsArrived(const std::vector<bc_id>& tabs);
   // Closes |tab| as the user does: its page gets its unload handlers, which may keep it open. With
-  // |discard|, they don't run, so nothing asks, and it's gone before this returns.
+  // |discard|, they don't run, so nothing asks, and it's gone before this returns, unless it's being
+  // dragged between windows, when it stays.
   static void CloseTab(bc_id tab, bool discard = false);
+  // Keeps nothing of |tab|'s page, |url|, as it closes while still there: it isn't archived or
+  // among the tabs ReopenClosedTab reopens (bc_tab_forget_page).
+  static void ForgetPage(bc_id tab, const GURL& url);
   // Closes the Today tabs below |tab| as the user does, bottom up, so ⇧⌘T reopens each at its
   // place. A window showing one shows |tab| first, so none shows or loads on the way out.
   static void CloseBelow(bc_id tab);
@@ -258,6 +274,10 @@ class Window : public web_modal::WebContentsModalDialogHost,
   void Select(bc_id tab);
   // Gives the page shown the keyboard, from the UI if it has it (bc_window_focus_page).
   void GiveKeyboardToPage();
+  // The same at the page's first control, or its |last|, as Tab or ⇧Tab into it from Chrome's
+  // toolbar gives it (bc_window_focus_page_end). Not to an agent's tab the user doesn't hold
+  // (focus_leaving_rule::Enter).
+  void GiveKeyboardToPageEnd(bool last);
   // An overlay of the app's took the window's keyboard, or gave it back
   // (bc_window_overlay_takes_keyboard).
   void OverlayTakesKeyboard(bool takes);
@@ -328,21 +348,33 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // bc_window_undo_remove_suggestion and bc_window_redo_remove_suggestion.
   bool UndoRemoveSuggestion(bc_id removal);
   bool RedoRemoveSuggestion(bc_id removal);
+  // Deletes |profile|'s visits to |url| in the span, among the window's removals, which are then
+  // for |profile|. See bc_window_remove_history.
+  bc_id RemoveHistory(Profile* profile, const GURL& url, base::Time begin, base::Time end);
   // Lets go of what each window built on |profile|, which is about to go.
   static void LetProfileGo(Profile* profile);
 
   // Opens a tab for |profile| loading |url|, not shown, or with |when_shown| an http(s) |url| only
-  // once it's first shown. Null while the window is closing or Chromium is quitting.
-  content::WebContents* OpenTab(Profile* profile, const GURL& url, bool when_shown);
+  // once it's first shown, and with |typed_http| as the http address the user wrote out
+  // (TypedHttp). Null while the window is closing or Chromium is quitting.
+  content::WebContents* OpenTab(Profile* profile,
+                                const GURL& url,
+                                bool when_shown,
+                                bool typed_http);
+  // Opens |url| for |profile| in a tab behind, loading at once, that |space| holds before its page
+  // starts (Space::Expect), for the caller to place there.
+  content::WebContents* OpenHeld(Space& space, Profile* profile, const GURL& url);
   // Opens |url| in a tab |pinned| opened, as a link opened in front, so it's at the top of the
   // Today tabs, shown if the window shows its Space, and closing it shows |pinned| again. Null as
   // OpenTab.
-  content::WebContents* OpenFromPinned(bc_id pinned, const GURL& url);
+  content::WebContents* OpenFromPinned(bc_id pinned, const GURL& url, bool typed_http);
 
   // Opens a tab in no Space for |opener|'s profile, loading |url| at once as a link in |opener|'s
-  // page would, not shown: a link preview, which the app shows in a view of its own. Null while
-  // the window is closing or Chromium is quitting.
-  content::WebContents* OpenPreview(content::WebContents& opener, const GURL& url);
+  // page would, not shown: a link preview, which the app shows in a view of its own at |size|, its
+  // page's size from before it loads. Null while the window is closing or Chromium is quitting.
+  content::WebContents* OpenPreview(content::WebContents& opener,
+                                    const GURL& url,
+                                    const gfx::Size& size);
   // Opens a tab for |profile| with |history|, at its |current| page, not shown, with |storage| for
   // its sessionStorage if it isn't null, else a new one. It loads once it's shown. Null while the
   // window is closing or Chromium is quitting.
@@ -503,6 +535,9 @@ class Window : public web_modal::WebContentsModalDialogHost,
   std::optional<uint32_t> page_color_;
   bc_id space_ = 0;
   bc_id selected_ = 0;
+  // The tab it was asked to show while that waited for its profile, which it shows nothing for
+  // until TabsArrived, else 0.
+  bc_id waiting_ = 0;
   // Once the tab shown closes, the one to show next, as its Space picked it.
   bc_id next_after_closing_ = 0;
   // The tab each Space the window showed had shown when it left that Space.

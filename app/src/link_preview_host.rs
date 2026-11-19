@@ -35,10 +35,45 @@ impl link_preview::Host for LinkPreviewHost {
         unsafe { platform::host_link_preview_drew(left, top, width, height, radius, opacity) };
     }
 
+    fn page_color(&self, window: u64, cx: &App) -> Option<gpui::Rgba> {
+        let shell = WINDOWS.with_borrow(|windows| {
+            windows
+                .iter()
+                .find(|each| each.id == window)
+                .map(|each| each.shell.clone())
+        })?;
+        let color = shell.read_with(cx, |shell, _| shell.page_color()).ok()??;
+        Some(gpui::rgb(color))
+    }
+
     fn page_under(&self) -> bool {
         // No window of the app's holds a page on Linux (link_preview_window.rs) or Windows
         // (platform/windows/host.cc).
         cfg!(any(target_os = "linux", target_os = "windows"))
+    }
+
+    fn open_waits(&self) -> bool {
+        // Only Wayland's runs on main showed the window's page in the card as it came to rest;
+        // X11's and Windows' never did, so their hole opens the frame after, as it did.
+        WAYLAND.get()
+    }
+
+    fn shown_at_once(&self) -> bool {
+        // Windows' core lays the page's child window out as it's asked, and has no word for when
+        // it's on screen (ShowPageIn).
+        cfg!(target_os = "windows")
+    }
+
+    fn when_drawn(&self, tab: u64) -> bool {
+        #[cfg(target_os = "linux")]
+        return link_preview_window::when_presented(move || {
+            update_app_later(move |cx| link_preview::cover_shown(tab, cx));
+        });
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = tab;
+            false
+        }
     }
 
     fn release(&self) {
@@ -69,9 +104,11 @@ impl link_preview::Host for LinkPreviewHost {
         }
     }
 
-    fn kept_archived(&self, window: u64, archived: u64, cx: &mut App) {
-        // check.sh waits for this line.
-        log!("browser: restore archived {archived} from preview");
+    fn kept(&self, window: u64, archived: Option<u64>, cx: &mut App) {
+        if let Some(archived) = archived {
+            // check.sh waits for this line.
+            log!("browser: restore archived {archived} from preview");
+        }
         let shell = WINDOWS.with_borrow(|windows| {
             windows
                 .iter()
@@ -80,7 +117,7 @@ impl link_preview::Host for LinkPreviewHost {
         });
         if let Some(shell) = shell {
             shell
-                .update(cx, |shell, cx| shell.restored_from_preview(cx))
+                .update(cx, |shell, cx| shell.kept_from_preview(cx))
                 .ok();
         }
     }
@@ -106,6 +143,17 @@ impl link_preview::Host for LinkPreviewHost {
             None => tooltip::dismiss(cx),
         }
     }
+}
+
+/// The core says the preview's page is on screen where the preview laid it out, under its window,
+/// on Windows and Linux. Never on the Mac.
+pub(crate) extern "C" fn tab_shown_in(_: *mut c_void, tab: bc::bc_id, frame: bc::bc_rect) {
+    // The frame the preview passed, as it was, so it matches.
+    let page = Bounds::new(
+        point(px(frame.x as f32), px(frame.y as f32)),
+        size(px(frame.width as f32), px(frame.height as f32)),
+    );
+    update_app_later(move |cx| link_preview::page_shown(tab, page, cx));
 }
 
 pub(crate) extern "C" fn link_preview_dismissed() {
@@ -211,7 +259,8 @@ pub(crate) unsafe extern "C" fn tab_link_to_site(
     }
     // Outside the navigation that asked, which the core cancels once this returns.
     update_app_later(move |cx| {
-        let preview = unsafe { bc::bc_tab_open_preview(tab, url.as_ptr()) };
+        let at = rect(link_preview::resting(page.0));
+        let preview = unsafe { bc::bc_tab_open_preview(tab, url.as_ptr(), at) };
         if preview == 0 {
             log!("browser: link preview from {tab} not opened");
             return;

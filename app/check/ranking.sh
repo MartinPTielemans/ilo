@@ -1,3 +1,4 @@
+# check.sh runs this at 400.
 # The command bar's order, on the signals Arc's ranks on (#1396), driven against pages of the run's
 # own. The row for the page shown goes last, after a page from history it outranked. Two GitHub
 # pages with one title, from history, list as one row, as Arc's bar keeps one row per title on the
@@ -6,7 +7,8 @@
 # being at most three. Each is read from the rows the bar logs as it lists them and captured.
 # GitHub's host goes to an https server of the run's own, with a certificate made for this run,
 # which the browser takes by its key alone, so no other site's errors are let by and nothing
-# reaches GitHub.
+# reaches GitHub. A row that's a closed tab ends "Closed today · Reopen", and a page only visited
+# "Visited today" (#2337).
 
 serve
 mkdir -p "$out/github/a" "$out/github/b"
@@ -19,6 +21,10 @@ for name in one two; do
   printf '<meta charset=utf-8><title>loading Ranking %s</title><p style="font:24px system-ui">Ranking %s</p>
 <script>%s</script>' "$name" "$name" "$ready" > "$out/site/ranking-$name.html"
 done
+for name in closed visited; do
+  printf '<meta charset=utf-8><title>loading Place %s</title><p style="font:24px system-ui">Place %s</p>
+<script>%s</script>' "$name" "$name" "$ready" > "$out/site/place-$name.html"
+done
 for name in alpha beta gamma delta; do
   printf '<meta charset=utf-8><title>loading Rise %s</title><p style="font:24px system-ui">Rise %s</p>
 <script>%s</script>' "$name" "$name" "$ready" > "$out/site/rise-$name.html"
@@ -27,15 +33,30 @@ done
 MSYS2_ARG_CONV_EXCL=/CN= openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=github.com \
   -addext subjectAltName=DNS:github.com -keyout "$out/ranking-tls.key" \
   -out "$out/ranking-tls.pem" 2> /dev/null || fail "openssl didn't make GitHub's certificate"
-spki=$(openssl x509 -in "$out/ranking-tls.pem" -pubkey -noout | openssl pkey -pubin -outform der |
-  openssl dgst -sha256 -binary | base64)
+# The base64 of the SHA-256 of the certificate's key, which is what the browser takes it by.
+key_of() {
+  openssl x509 -in "$out/ranking-tls.pem" -pubkey -noout | openssl pkey -pubin -outform der |
+    openssl dgst -sha256 -binary | base64
+}
+spki=$(key_of)
+expr "$spki" : '[A-Za-z0-9+/]\{43\}=$' > /dev/null ||
+  fail "openssl gave \"$spki\" as the certificate's key, not a SHA-256 in base64"
 rm -f "$out/ranking-tls.port"
 mkfifo "$out/ranking-tls.port"
 python3 -I -u -c '
 import functools, http.server, socketserver, ssl, sys
 handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=sys.argv[1])
 # TCPServer, as site.sh binds: HTTPServer looks 127.0.0.1 up by name, 35 s on the hosted Mac.
-server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), handler)
+class Server(socketserver.ThreadingTCPServer):
+    # A handshake the browser ends, as it does for a certificate it refuses, raises here, and
+    # socketserver drops it unlogged (#2673).
+    def get_request(self):
+        try:
+            return super().get_request()
+        except OSError as error:
+            print("handshake failed: %s" % error, file=sys.stderr)
+            raise
+server = Server(("127.0.0.1", 0), handler)
 tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 tls.load_cert_chain(sys.argv[2], sys.argv[3])
 server.socket = tls.wrap_socket(server.socket, server_side=True)
@@ -52,6 +73,11 @@ read -r tls_port < "$out/ranking-tls.port" || true
 log="$out/ranking.log"
 step=0
 rm -f "$saved"
+# The bar ranks history, where an earlier ranking's pages, from the check's server on another port,
+# match "ranking" as these do and fill the rows this run reads (#2391). So it starts with none: the
+# visits, and the index of them the bar's quick matches read until it's rebuilt.
+rm -f "$profile_dir/Default/History" "$profile_dir/Default/History-journal" \
+  "$profile_dir/Default/History Provider Cache"
 BROWSER_DRIVE=1 BROWSER_URL="${site}ranking-one.html" "$browser" \
   --host-resolver-rules="MAP github.com 127.0.0.1:$tls_port" \
   --ignore-certificate-errors-spki-list="$spki" \
@@ -73,10 +99,28 @@ listed() {
   grep "^browser: command bar lists \"$1\": " "$log" | tail -1 | sed 's/^browser: command bar lists "[^"]*": //' |
     tr -s ', ' '\n ' | sed 's/^ //'
 }
+# Waits for tab $2 (or a pattern for it) to load $1, failing with $3 if it doesn't. A load the
+# network refused says its error, and for GitHub's, the key the browser was to take the
+# certificate by and what GitHub's server logged, as a refused certificate otherwise leaves no
+# trace (#2673).
+loads() {
+  expect "^browser: \(loaded $2 $1\|page $2 trouble network -[0-9]*\)\$" "$3"
+  error=$(sed -n "/^browser: drive $step: /,\$p" "$log" | sed -n "s/^browser: page $2 trouble network //p" |
+    tail -1)
+  [ -n "$error" ] || return 0
+  case $1 in
+  https://github.com/*)
+    key=$(key_of)
+    [ "$key" = "$spki" ] || key="$key, not $spki as the browser was given"
+    fail "$3: error $error. The certificate's key is $key. GitHub's server logged: $(cat "$out/ranking-tls.log")"
+    ;;
+  esac
+  fail "$3: error $error"
+}
 # Goes to $1 in the tab shown, from the command bar, and waits for its page to draw.
 go_to() {
   go_from_bar "$1"
-  expect "^browser: loaded [0-9]* $1\$" "$1 didn't load"
+  loads "$1" "[0-9]*" "$1 didn't load"
   expect "^browser: title [0-9]* $2\$" "$1 didn't draw"
 }
 # Opens $1 in a new tab from the command bar, sets $tab to it, and waits for its page to draw.
@@ -88,7 +132,7 @@ open_page() {
   send key return
   expect "^browser: today [0-9][0-9]*${before:+ $before}\$" "the tab for $1 didn't open at the top of Today"
   tab=$(today | cut -d' ' -f1)
-  expect "^browser: loaded $tab $1\$" "$1 didn't load in its tab"
+  loads "$1" "$tab" "$1 didn't load in its tab"
   expect "^browser: title $tab $2\$" "$1 didn't draw"
 }
 # Opens the bar with ⌘T, types $1, waits for the rows listed for it to have a line matching $2,
@@ -159,6 +203,34 @@ want="${site}rise-delta.html tab $rise_delta https://duckduckgo.com/?q=rise ${si
 send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar"
 
+# Where a page is: one whose tab ⌘W closed ends "Closed today · Reopen", and one only visited ends
+# "Visited today", read from what the bar logs its rows say. Pages of their own, which "place"
+# alone matches, as the core gives the bar three pages from history at most.
+closed="${site}place-closed.html"
+visited="${site}place-visited.html"
+go_to "$visited" "Place visited"
+go_to "$two" "Ranking two"
+open_page "$closed" "Place closed"
+send key w cmd
+expect "^browser: tab $tab closed\$" "⌘W didn't close the tab for $closed"
+expect '^browser: archive [1-9][0-9]* tabs$' "⌘W didn't archive the tab for $closed"
+# The core gives both pages in one answer, as its history matches come together.
+type_for place "^$visited\$" ranking-closed-visited.png
+said=$(grep '^browser: command bar says "place": ' "$log" | tail -1 | sed 's/^browser: command bar says "place": //')
+case "; $said;" in
+*"; $closed Closed today · Reopen;"*) ;;
+*) fail "the row for $closed, whose tab ⌘W closed, doesn't end \"Closed today · Reopen\": the rows say \"$said\", listed $(listed place | tr '\n' ' ')" ;;
+esac
+case "; $said;" in
+*"; $visited Visited today;"*) ;;
+*) fail "the row for $visited, visited in a tab that then went elsewhere, doesn't end \"Visited today\": the rows say \"$said\", listed $(listed place | tr '\n' ' ')" ;;
+esac
+send key escape
+expect '^browser: command bar hidden$' "escape didn't close the command bar"
+
 exec 3>&-
 quit
-echo "ok: the command bar lists the page shown last for \"ranking\" ($shown_rows), one row for two GitHub pages from history with one title, and for \"rise\" the last of four open tabs shown first, as Switch to Tab, the search second and the two tabs shown before it after, the first not risen. Windows: $out/ranking-shown-last.png, $out/ranking-one-title.png, $out/ranking-tabs-rise.png"
+# Its server stops with it, as the runs after it in the call start their own (#3345).
+kill "$tls" 2> /dev/null || true
+tls= tls_port=
+echo "ok: the command bar lists the page shown last for \"ranking\" ($shown_rows), one row for two GitHub pages from history with one title, and for \"rise\" the last of four open tabs shown first, as Switch to Tab, the search second and the two tabs shown before it after, the first not risen, and a closed tab's row ends "Closed today · Reopen" and a visited page's "Visited today". Windows: $out/ranking-shown-last.png, $out/ranking-one-title.png, $out/ranking-tabs-rise.png, $out/ranking-closed-visited.png"

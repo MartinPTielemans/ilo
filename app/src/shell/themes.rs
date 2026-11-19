@@ -97,7 +97,14 @@ impl Shell {
             Appearance::Automatic => None,
         };
         self.system_tone = self.forced_tone.or(chosen).unwrap_or(system);
-        self.window_active = window.is_window_active();
+        let active = window.is_window_active();
+        // Its Live Folders ask once this frame is drawn, not inside render. Deferred, not a
+        // next-frame callback: that asks for a frame of its own, and on Linux one asked for as
+        // the ⌘T bar closes held the new tab's page about 300 ms (#3004).
+        if active && !self.window_active {
+            cx.defer_in(window, |shell, _, cx| shell.live_window_active(cx));
+        }
+        self.window_active = active;
         if self.window_watches.is_empty() {
             self.window_watches = vec![
                 cx.observe_window_appearance(window, |_, _, cx| cx.notify()),
@@ -138,6 +145,20 @@ impl Shell {
     /// either without changing the system's.
     pub fn force_tone(&mut self, tone: Option<Tone>) {
         self.forced_tone = tone;
+    }
+
+    /// Draws the window's tint over `ground`, opaque, as the preview does where its window would
+    /// otherwise show the desktop through the tint.
+    pub fn set_ground(&mut self, ground: Rgba) {
+        self.ground = Some(ground);
+    }
+
+    /// The window's tint, over the ground if it has one.
+    pub(super) fn window_tint(&self) -> Rgba {
+        match self.ground {
+            Some(ground) => ground.blend(self.palette.tint),
+            None => self.palette.tint,
+        }
     }
 
     /// `space`'s palette, worked out once for each theme and tone it shows rather than while
@@ -184,12 +205,13 @@ impl Shell {
         }
     }
 
-    /// Shows the theme picker for `space` `at` its place in the window, with the Space's theme, or
-    /// its colour alone if it has no theme.
+    /// Shows the theme picker for `space` `at` its place in the window, to its left if `left`, with
+    /// the Space's theme, or its colour alone if it has no theme.
     pub(super) fn show_theme_picker(
         &mut self,
         space: u64,
         at: theme_picker::At,
+        left: bool,
         cx: &mut Context<Self>,
     ) {
         let Some(entry) = self.spaces.iter().find(|each| each.id == space) else {
@@ -210,7 +232,16 @@ impl Shell {
         let height = f32::from(self.viewport.height);
         // A card showing would stay under the picker, as rows' cards wait while it shows.
         self.browser.hover_card(crate::hover_card::Hover::Close, cx);
-        theme_picker::show(self.browser.window(), space, theme, at, height, changed, cx);
+        theme_picker::show(
+            self.browser.window(),
+            space,
+            theme,
+            at,
+            left,
+            height,
+            changed,
+            cx,
+        );
     }
 
     /// The picker made `theme` for `space`: the window shows it at once, and once the user is
@@ -288,7 +319,11 @@ impl Shell {
     /// Where the sidebar's middle is across the window, 0 to 1, where the window's colour is taken
     /// for what covers it.
     pub(super) fn sidebar_x(&self) -> f32 {
-        self.width() / 2. / f32::from(self.viewport.width).max(1.)
+        let x = self.width() / 2. / f32::from(self.viewport.width).max(1.);
+        match self.right() {
+            true => 1. - x,
+            false => x,
+        }
     }
 
     /// The window's colour behind everything: the gradient down it, or with a Space of more than

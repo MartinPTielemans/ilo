@@ -20,7 +20,8 @@ use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::ops::Range;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 use gpui::{
     AnyElement, Bounds, Context, FontWeight, HighlightStyle, Hsla, MouseButton, Pixels,
@@ -29,6 +30,7 @@ use gpui::{
 };
 
 use super::library::LIBRARY_BACK_INSET;
+use super::page_ends::StripStop;
 use super::{
     Edit, FAVICON_SIZE, FAVICON_X, FOOTER_HEIGHT, HOVERED, NAV, NAV_RADIUS, NAV_SIZE, PLATE_HEIGHT,
     PLATE_INSET, PLATE_RADIUS, Palette, ROW_HEIGHT, SECONDARY, STATUS_AGENT, Shell, Slot, TILE,
@@ -54,6 +56,29 @@ use crate::tokens::text;
 use crate::tooltip::text_width;
 use glyph::{Glyph, State};
 use motion::{Curve, Ease};
+
+/// Now, for the foot's motion. Tests hold this clock still and move it on themselves, so how far a
+/// fold has got is where the test put it, not wherever a slow runner's clock had got to (#3462).
+#[cfg(not(test))]
+fn clock() -> Instant {
+    Instant::now()
+}
+
+#[cfg(test)]
+thread_local! {
+    static CLOCK: Cell<Option<Instant>> = const { Cell::new(None) };
+}
+
+#[cfg(test)]
+fn clock() -> Instant {
+    CLOCK.with(Cell::get).unwrap_or_else(Instant::now)
+}
+
+/// Sets the foot's clock to `at`, where it stays until set again.
+#[cfg(test)]
+fn set_clock(at: Instant) {
+    CLOCK.with(|clock| clock.set(Some(at)));
+}
 
 /// A task's number, from its agent's id: `task-<n>`, or `session-<n>` for an outside agent's
 /// session, which are numbered with the tasks.
@@ -639,7 +664,7 @@ impl Default for Foot {
             rested: Rc::default(),
             strip_open: Rc::default(),
             scroll: ScrollHandle::new(),
-            epoch: Instant::now(),
+            epoch: clock(),
             logged: String::new(),
         }
     }
@@ -736,7 +761,7 @@ impl Shell {
     /// A finished task's mark at rest, as its card shows it: Done's tick, or the grey ring of one
     /// stopped or failed, in the glyph's box.
     pub(super) fn status_mark(&self, dot: Dot) -> impl IntoElement + use<> {
-        let now = Instant::now();
+        let now = clock();
         let drawn = Glyph::new(State::from(dot), now, true).drawn(now);
         let signal: Hsla = rgb(STATUS_AGENT).into();
         let stopped = self.stopped_ring();
@@ -752,7 +777,7 @@ impl Shell {
     /// The glyph of `agent`'s card as the foot draws it now, for the strip under its page watched to
     /// lead with, so the two read as one: its card's at rest if the foot doesn't show it.
     pub(super) fn task_glyph(&self, agent: &SharedString, dot: Dot) -> gpui::AnyElement {
-        let now = Instant::now();
+        let now = clock();
         let face = (self.foot.plates.iter())
             .find(|plate| plate.holds == Holds::Task(agent.clone()) && !plate.leaving)
             .and_then(|plate| plate.face.as_ref());
@@ -777,7 +802,7 @@ impl Shell {
     /// grow in, and each task's plate takes its card's changes. `took` is the new card that fills
     /// the slot's plate.
     fn sync_foot(&mut self, took: Option<SharedString>, cx: &mut Context<Self>) {
-        let now = Instant::now();
+        let now = clock();
         let still = cx.reduce_motion();
         let animate = self.foot.primed;
         let moves = animate && !still;
@@ -874,7 +899,7 @@ impl Shell {
 
     /// Where the media players end, over Restart to Update, the foot's plates over them.
     pub(super) fn media_top(&self) -> f32 {
-        FOOTER_HEIGHT + self.update_banner_room() + self.media_room()
+        self.over_safe_start() + self.update_banner_room() + self.media_room()
     }
 
     /// The most room the opened foot takes before it scrolls: the closed foot never does.
@@ -892,7 +917,7 @@ impl Shell {
 
     /// The room the foot takes now, which the list ends over.
     pub(super) fn foot_height(&self) -> f32 {
-        self.foot_room(Instant::now())
+        self.foot_room(clock())
     }
 
     /// Whether the sidebar shows the foot where it rests.
@@ -902,6 +927,13 @@ impl Shell {
             && self.sidebar_motion.is_none()
             && self.library.is_none()
             && self.form().is_none()
+    }
+
+    /// Whether the foot draws `agent`'s plate, where the ring can sit.
+    pub(super) fn foot_holds(&self, agent: &SharedString) -> bool {
+        let task = Holds::Task(agent.clone());
+        self.foot_drawn()
+            && (self.foot.plates.iter()).any(|plate| plate.holds == task && !plate.leaving)
     }
 
     /// Whether a task's plate shows `agent`'s conversation.
@@ -934,7 +966,7 @@ impl Shell {
     /// The bar has gone for the task: folded into the slot, whose fill takes over as it lands and
     /// whose card fades in then, or, where it couldn't fold, hidden, and the card fades in at once.
     pub fn fold_started(&mut self, folded: bool, cx: &mut Context<Self>) {
-        let now = Instant::now();
+        let now = clock();
         let still = cx.reduce_motion();
         let Some(plate) = (self.foot.plates.iter_mut())
             .find(|plate| plate.holds == Holds::Slot && !plate.leaving)
@@ -962,7 +994,7 @@ impl Shell {
     /// their rows, and asks for the next frame while anything moves. A working task's dot and
     /// shimmer draw on the loading dots' clock instead, as they move all the while it works.
     pub(super) fn step_foot(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let now = Instant::now();
+        let now = clock();
         let still = cx.reduce_motion();
         self.foot.still = still;
         self.foot.primed = true;
@@ -1044,7 +1076,7 @@ impl Shell {
 
     /// Whether `tab`'s row waits for its page's flight to land, which draws it meanwhile.
     pub(super) fn landing(&self, tab: u64) -> bool {
-        let now = Instant::now();
+        let now = clock();
         let flight = seconds(GHOST + GHOST_LAND);
         self.foot
             .opening
@@ -1085,7 +1117,7 @@ impl Shell {
                 agent: agent.clone(),
                 tabs,
                 from,
-                at: Instant::now(),
+                at: clock(),
             });
         }
         let action = tab.map_or(TaskAction::Open, TaskAction::OpenTab);
@@ -1116,7 +1148,7 @@ impl Shell {
         );
         self.closed_preview = None;
         self.closed_pinned = None;
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+        let now = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH);
         self.closed_task = Some((agent, now.unwrap_or_default().as_secs_f64() * 1000.));
     }
 
@@ -1136,9 +1168,7 @@ impl Shell {
     /// Folds `agent`'s card into the Archive `delay` seconds from now, or once its pages land.
     fn fold_later(&mut self, agent: SharedString, delay: f32) {
         self.foot.folds.retain(|(each, _)| each != &agent);
-        self.foot
-            .folds
-            .push((agent, Instant::now() + seconds(delay)));
+        self.foot.folds.push((agent, clock() + seconds(delay)));
     }
 
     /// The folds due at `now`, taken off the list: each waits for its task's pages to land first.
@@ -1185,7 +1215,7 @@ impl Shell {
         if !finished || self.talk_agent().as_ref() == Some(&agent) {
             return;
         }
-        let now = Instant::now();
+        let now = clock();
         let flies =
             self.foot.primed && !cx.reduce_motion() && !self.one_space() && self.foot_drawn();
         let from = self
@@ -1251,7 +1281,7 @@ impl Shell {
     /// plate's place to the button's box, its corners to the box's, its content fading at once and
     /// its plate over the end of the flight.
     pub(super) fn archive_flights(&self) -> Vec<AnyElement> {
-        let now = Instant::now();
+        let now = clock();
         let to = Bounds::new(
             point(
                 px(LIBRARY_BACK_INSET),
@@ -1373,7 +1403,7 @@ impl Shell {
         if self.foot.plates.is_empty() {
             return None;
         }
-        let now = Instant::now();
+        let now = clock();
         let room = self.foot_room(now);
         let total: f32 = self.foot.plates.iter().map(|plate| plate.room(now)).sum();
         let plates: Vec<AnyElement> = (self.foot.plates.iter())
@@ -1570,9 +1600,15 @@ impl Shell {
             key,
             !plate.moving(now, still),
         );
+        let name: SharedString = format!("{}, {}", face.card.title, face.card.status).into();
         // Its chips and ✕ take their own clicks before the plate does.
-        plate_box
-            .id(("task-plate", key))
+        let plate = plate_box.id(("task-plate", key));
+        // The plate whose page shows is the ring's stop while it's watched.
+        let plate = match shown {
+            true => self.strip_stop(plate, StripStop::Card, name, TILE_RADIUS),
+            false => plate,
+        };
+        plate
             .child(drawn)
             .child(content)
             .children(close)
@@ -1838,7 +1874,7 @@ impl Shell {
     /// plate growing into a row's hover plate, its favicon and title fading in, the row showing
     /// as it lands.
     pub(super) fn task_ghosts(&self) -> Vec<AnyElement> {
-        let now = Instant::now();
+        let now = clock();
         let layout = self.layout();
         let scrolled = f32::from(self.list_scroll.offset().y);
         let width = self.width() - 2. * PLATE_INSET;
@@ -2002,7 +2038,7 @@ fn logged(bounds: Bounds<Pixels>) -> String {
 
 /// A chip on a card, the sidebar's scale: the URL field's plate at a control's corners, as wide
 /// as its words, cut to the room it has.
-fn card_chip(
+pub(super) fn card_chip(
     palette: &Palette,
     id: impl Into<gpui::ElementId>,
     label: SharedString,

@@ -50,6 +50,7 @@
 #include "browser_core/sync_pairing.h"
 #include "browser_core/sync_settings.h"
 #include "browser_core/sync_spaces.h"
+#include "browser_core/sync_trouble.h"
 #include "browser_core/sync_relay.h"
 #include "browser_core/sync_words.h"
 #include "browser_core/window.h"
@@ -90,6 +91,7 @@
 #include "components/web_modal/web_contents_modal_dialog_host.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "components/web_modal/web_contents_modal_dialog_manager_delegate.h"
+#include "content/public/browser/focused_node_details.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
@@ -299,6 +301,14 @@ class SignInWindow : public views::WidgetObserver,
   void DidFinishLoad(content::RenderFrameHost* frame, const GURL& url) override {
     if (frame->IsInPrimaryMainFrame()) {
       LOG(ERROR) << "browser: sync sign-in loaded " << url.path();
+    }
+  }
+  // For the checks, which type only once the page has put its focus in a field: keys typed
+  // before land nowhere, and Return then sends an empty form (#2554).
+  void OnFocusChangedInPage(const content::FocusedNodeDetails& details) override {
+    if (details.editable_level != content::EditableLevel::kNotEditable) {
+      LOG(ERROR) << "browser: sync sign-in focused a field on "
+                 << web_contents()->GetLastCommittedURL().path();
     }
   }
 
@@ -808,19 +818,8 @@ class Account : public syncer::SyncServiceObserver,
       activity->trouble = BC_SYNC_TROUBLE_UPDATE;
       return;
     }
-    // The last cycle's results, which the next cycle replaces, so a trouble goes once it's over.
-    const syncer::ModelNeutralState cycle =
-        service->GetLastCycleSnapshotForDebugging().model_neutral_state();
-    for (const syncer::SyncerError& error : {cycle.last_download_updates_result,
-                                             cycle.commit_result}) {
-      if (error.type() == syncer::SyncerError::Type::kSuccess) {
-        continue;
-      }
-      const bool throttled = error.type() == syncer::SyncerError::Type::kProtocolError &&
-                             error.GetProtocolErrorOrDie() == syncer::THROTTLED;
-      activity->trouble = throttled ? BC_SYNC_TROUBLE_THROTTLED : BC_SYNC_TROUBLE_UNREACHABLE;
-      return;
-    }
+    // Decided as the cycles ended, so one that failed alone shows nothing (#3435).
+    trouble_cycles_.Read(activity);
   }
 
   // The server deletes the account and signs out its devices, this one with them, so nothing is
@@ -952,11 +951,15 @@ class Account : public syncer::SyncServiceObserver,
     const bool on = status == BC_SYNC_ON;
     const std::array<bool, 2> chosen = {on && Chosen(syncer::UserSelectableType::kPreferences),
                                         on && Chosen(syncer::UserSelectableType::kExtensions)};
+    bc_sync_activity activity;
+    ReadActivity(&activity);
     if (notified_ && status == notified_status_ && problem_ == notified_problem_ &&
-        now == notified_strings_ && chosen == notified_chosen_) {
+        now == notified_strings_ && chosen == notified_chosen_ &&
+        SameActivity(activity, notified_activity_)) {
       return;
     }
     notified_ = true;
+    notified_activity_ = activity;
     notified_status_ = status;
     notified_problem_ = problem_;
     notified_strings_ = now;
@@ -973,6 +976,11 @@ class Account : public syncer::SyncServiceObserver,
                            .settings = chosen[0],
                            .extensions = chosen[1]};
     Host().sync_changed(Host().context, &state);
+  }
+
+  static bool SameActivity(const bc_sync_activity& a, const bc_sync_activity& b) {
+    return a.last_synced == b.last_synced && a.trouble == b.trouble && a.since == b.since &&
+           a.refused == b.refused && a.refused_kind == b.refused_kind;
   }
 
   // Whether this device syncs |type|, one sync can: an engine without extensions has none.
@@ -1332,6 +1340,9 @@ class Account : public syncer::SyncServiceObserver,
     setup_.reset();
     encrypting_ = false;
     starting_over_ = false;
+    trouble_cycles_.Reset();
+    cycle_refused_ = sync_trouble::Refused();
+    commit_request_.reset();
     refresh_.clear();
     access_.clear();
     SetSecret(std::nullopt);
@@ -1486,6 +1497,54 @@ class Account : public syncer::SyncServiceObserver,
     const base::DictValue value = event.ToValue(/*include_specifics=*/false);
     const std::string* type = value.FindString("type");
     LOG(ERROR) << "browser: sync engine " << (type ? *type : "event");
+    if (!type) {
+      return;
+    }
+    // A commit's response says which of its changes the server refused, in the request's order,
+    // and only the request says of what type each is. Kept until its response, a copy alone: the
+    // request's ciphertext is read only for a response that refused something.
+    if (*type == "Commit Request") {
+      commit_request_ = event.Clone();
+    } else if (*type == "Commit Response") {
+      CountRefused(value);
+      commit_request_.reset();
+    }
+  }
+
+  // Adds the changes |response| refused, by their kind, to the cycle's.
+  void CountRefused(const base::DictValue& response) {
+    const base::ListValue* answers = response.FindListByDottedPath("proto.commit.entryresponse");
+    if (!answers || !commit_request_) {
+      return;
+    }
+    std::optional<base::DictValue> request;
+    const base::ListValue* entries = nullptr;
+    for (size_t i = 0; i < answers->size(); ++i) {
+      const base::DictValue* answer = (*answers)[i].GetIfDict();
+      const std::string* answered = answer ? answer->FindString("response_type") : nullptr;
+      // A conflict isn't refused: the next cycle downloads the server's and commits again.
+      if (!answered || *answered == "SUCCESS" || *answered == "CONFLICT") {
+        continue;
+      }
+      if (!request) {
+        request = commit_request_->ToValue(/*include_specifics=*/true);
+        entries = request->FindListByDottedPath("proto.commit.entries");
+      }
+      int kind = BC_SYNC_KIND_OTHER;
+      const base::DictValue* entry =
+          entries && i < entries->size() ? (*entries)[i].GetIfDict() : nullptr;
+      const base::DictValue* specifics = entry ? entry->FindDict("specifics") : nullptr;
+      // An encrypted change's specifics are the ciphertext, and an empty field of its type.
+      if (specifics) {
+        for (const auto [field, unused] : *specifics) {
+          if (field != "encrypted") {
+            kind = sync_trouble::KindOfField(field);
+            break;
+          }
+        }
+      }
+      cycle_refused_.Add(kind);
+    }
   }
 
   // syncer::SyncServiceObserver:
@@ -1501,6 +1560,17 @@ class Account : public syncer::SyncServiceObserver,
     }
     UseSecret();
     Notify();
+  }
+  // Every cycle's end, the ones that fail too, which decides whether a trouble has lasted.
+  void OnSyncCycleCompleted(syncer::SyncService* sync) override {
+    const syncer::SyncCycleSnapshot snapshot = sync->GetLastCycleSnapshotForDebugging();
+    const syncer::ModelNeutralState& cycle = snapshot.model_neutral_state();
+    const int trouble = sync_trouble::Classify(cycle.last_download_updates_result,
+                                               cycle.commit_result, cycle_refused_);
+    trouble_cycles_.Ended(trouble, cycle_refused_, snapshot.sync_start_time(), base::Time::Now());
+    cycle_refused_ = sync_trouble::Refused();
+    // Which tells the app, through Notify, if the activity it reads changed.
+    OnStateChanged(sync);
   }
   void OnSyncShutdown(syncer::SyncService* sync) override {
     setup_.reset();
@@ -1863,6 +1933,12 @@ class Account : public syncer::SyncServiceObserver,
   int notified_problem_ = 0;
   std::array<std::string, 3> notified_strings_;
   std::array<bool, 2> notified_chosen_ = {};
+  bc_sync_activity notified_activity_ = {};
+  // The cycles' troubles, the changes the server refused in the cycle under way, and the commit
+  // request whose response is yet to come.
+  sync_trouble::Cycles trouble_cycles_;
+  sync_trouble::Refused cycle_refused_;
+  std::unique_ptr<syncer::ProtocolEvent> commit_request_;
   std::string logged_state_;
 
   base::WeakPtrFactory<Account> weak_factory_{this};

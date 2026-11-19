@@ -1,3 +1,4 @@
+# check.sh runs this at 220.
 # After ⌘N opens a window and ⇧⌘W closes it, ⇧⌘N opens a private window, and ⇧⌘W closes it before
 # it has a page, ending its session while the browser keeps running. ⇧⌘N opens another, titled as
 # one in the Window menu, whose pages load in the profile's off-the-record session: a cookie set
@@ -8,7 +9,8 @@
 # relaunch brings back no private window. A private window's Library has its session's downloads
 # (#669): a file it goes to downloads, which its Library's Downloads lists, and the regular
 # window's doesn't, nor does the profile's history after the quit. Customize Chrome's page, typed in a
-# private window, is refused there, where it crashed the browser (#2070).
+# private window, is refused there, where it crashed the browser (#2070). From macOS 14, a private
+# window's page in Safari's engine shows its own icon, which the profile doesn't keep.
 
 # The served cookie page: its title says whether the site has the private cookie, and "p" in it
 # sets it. The private windows load it at a URL of their own, which nothing may write.
@@ -234,8 +236,8 @@ quit
 echo "ok: ⇧⌘N opens a private window titled Incognito, whose cookie the regular window doesn't see and the profile's other private window does, whose download its Library lists and the regular window's doesn't, closing the last one ends the session, the next starts without its cookie and refuses Customize Chrome's page, and neither the Spaces file, the history, the cookies nor a relaunch has any of it. Windows: $out/private.png, $out/private-library.png"
 
 # In a private window, the extensions allowed in Incognito run as in Chrome, and the others don't:
-# the Extensions menu lists only the allowed one and uBlock Origin, the browser's own, allowed
-# there too, and the allowed one pins at the URL field and has its Site Controls tile. Two
+# the Extensions menu lists only the allowed one, never uBlock Origin, the browser's own, which
+# blocks there as Settings' Ad Blocking (#2107), and the allowed one pins at the URL field and has its Site Controls tile. Two
 # extensions in a profile of the block's own: a first launch has Chrome list them, and Chrome's
 # preferences then allow one in Incognito and not the other, as chrome://extensions' Allow in
 # Incognito sets them, before the launch the block checks.
@@ -246,7 +248,6 @@ echo '{"manifest_version": 3, "name": "Check Allowed", "version": "1", "action":
   > "$incognito/allowed/manifest.json"
 echo '{"manifest_version": 3, "name": "Check Not Allowed", "version": "1", "action": {}}' \
   > "$incognito/not/manifest.json"
-ublock=oghkpboejbohceocapipmnjifoklonij
 # Launches the app on the block's profile with both, logging to $1.
 incognito_launch() {
   log="$out/$1.log"
@@ -257,18 +258,18 @@ incognito_launch() {
   pid=$!
   exec 3> "$out/drive"
   await_load
-  await "^browser: extensions menu [a-p]* [a-p]* $ublock\$" ||
+  await "^browser: extensions menu [a-p]* [a-p]*\$" ||
     fail "the Extensions menu didn't list both extensions: $(grep '^browser: extensions menu' "$log")"
 }
 incognito_launch private-extensions-first
 # By name: Check Allowed, then Check Not Allowed.
-ids=$(grep -m1 "^browser: extensions menu [a-p]* [a-p]* $ublock\$" "$log" | cut -d' ' -f4-5)
+ids=$(grep -m1 "^browser: extensions menu [a-p]* [a-p]*\$" "$log" | cut -d' ' -f4-5)
 allowed=${ids% *}
 not_allowed=${ids#* }
 exec 3>&-
 quit
-# Off Linux, Chrome keeps the extensions' settings in Secure Preferences, under a MAC a check can't
-# sign, so there only chrome://extensions' switch allows one in Incognito.
+# On the Mac, Chrome keeps the extensions' settings in Secure Preferences, under a MAC a check can't
+# sign, so there chrome://extensions' switch allows one in Incognito, as the user does.
 status=0
 python3 -I -c '
 import json, sys
@@ -281,8 +282,53 @@ settings[sys.argv[2]]["incognito"] = True
 settings[sys.argv[3]]["incognito"] = False
 json.dump(prefs, open(path, "w"))' "$incognito/profile" "$allowed" "$not_allowed" || status=$?
 if [ "$status" = 3 ]; then
-  echo "skip: private's extensions allowed in Incognito: Chrome keeps the extensions' settings in Secure Preferences, under a MAC, so only chrome://extensions' switch allows one."
-  exit 0
+  # Check Allowed's details page, and Tab to its Allow in Incognito switch, which cdp.py says has the
+  # keyboard, then Space. Check Not Allowed stays off, as Chrome has it at first.
+  log="$out/private-extensions-switch.log"
+  cdp_log="$out/private-extensions-cdp.log"
+  step=0
+  scratch=$(mktemp -d)
+  start_with_cdp "$regular_url" "$incognito/profile" "" \
+    --load-extension="$(app_path "$incognito/allowed"),$(app_path "$incognito/not")"
+  await_load
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+  send type "chrome://extensions/?id=$allowed"
+  send key return
+  expect "^browser: loaded [0-9]* chrome://extensions/?id=$allowed\$" \
+    "Chrome's extensions page didn't open on Check Allowed"
+  on_switch() {
+    asked=$(grep -c '^cdp: focus-within ' "$cdp_log" || true)
+    echo "focus-within chrome://extensions/ #allow-incognito" >&5
+    for _ in $(seq 50); do
+      [ "$(grep -c '^cdp: focus-within ' "$cdp_log" || true)" -gt "$asked" ] && break
+      sleep 0.1
+    done
+    grep '^cdp: focus-within ' "$cdp_log" | tail -1 | grep -q ' yes$'
+  }
+  # The page focuses its back arrow as it shows, so the first Tabs may land before or after it.
+  for _ in $(seq 30); do
+    on_switch && break
+    send key tab
+  done
+  on_switch || fail "Tab didn't reach Check Allowed's Allow in Incognito switch in 30 presses: $(grep '^cdp: focus-within ' "$cdp_log" | tail -1)"
+  send key space
+  # Chrome turns the extension off to reload it with the switch's setting, and lists the extensions
+  # again once the reload has installed it. A quit before then saves it off for a reload, which the
+  # next launch keeps (#3052). Installed, it's an unpacked one, which Chrome keeps off with
+  # developer mode off; the next launch's --load-extension turns it on.
+  reloaded() { [ "$(since | grep -c '^browser: extensions [0-9]* ')" -ge 2 ]; }
+  for _ in $(seq 100); do
+    reloaded && break
+    sleep 0.1
+  done
+  reloaded || fail "Chrome didn't reload Check Allowed after its Allow in Incognito switch"
+  exec 3>&-
+  quit
+  exec 5>&-
+  wait "$helper" 2>/dev/null || true
+  helper=
+  status=0
 fi
 [ "$status" = 0 ] || fail "couldn't allow Check Allowed in Incognito"
 incognito_launch private-extensions
@@ -296,16 +342,18 @@ send menubar Extensions
 expect '^browser: menu bar Extensions: ' "the private window's Extensions menu didn't list"
 menu=$(grep '^browser: menu bar Extensions: ' "$log" | tail -1)
 case "$menu" in
-  *"Check Allowed, uBlock Origin,"*) ;;
-  *) fail "the private window's Extensions menu didn't list Check Allowed and uBlock Origin alone: $menu" ;;
+  *"uBlock Origin"* | *"Check Not Allowed"*)
+    fail "the private window's Extensions menu didn't list Check Allowed alone: $menu" ;;
+  *": Check Allowed, "*) ;;
+  *) fail "the private window's Extensions menu didn't list Check Allowed alone: $menu" ;;
 esac
 send menu "Pin to URL Field › Check Allowed"
 expect "^browser: pin extension $allowed\$" "Pin to URL Field › Check Allowed didn't reach the UI"
 expect "^browser: extension actions $allowed\$" "the pinned Check Allowed didn't show in the URL field"
 ../tools/window-screenshot.sh "$pid" "$out/private-extensions.png" || fail "no window to capture"
 bar_command site-controls "Site Controls" "site controls"
-expect "^browser: site controls extensions $allowed $ublock\$" \
-  "the private window's Site Controls didn't list Check Allowed and uBlock Origin alone: $(grep \
+expect "^browser: site controls extensions $allowed\$" \
+  "the private window's Site Controls didn't list Check Allowed alone: $(grep \
     '^browser: site controls extensions' "$log" | tail -1)"
 expect '^browser: site controls settled$' "the Site Controls didn't open in the private window"
 ../tools/window-screenshot.sh "$pid" "$out/private-site-controls.png" || fail "no window to capture"
@@ -313,4 +361,54 @@ send key escape
 expect '^browser: site controls hidden$' "escape didn't close the Site Controls"
 exec 3>&-
 quit
-echo "ok: a private window runs the extension allowed in Incognito, listed in its Extensions menu with uBlock Origin, pinned at its URL field and in its Site Controls, and not the other. Windows: $out/private-extensions.png, $out/private-site-controls.png"
+
+# From macOS 14, a private window's page in Safari's engine shows its own icon, which the profile
+# doesn't keep: the regular window's page of that site with none of its own shows none, and the
+# same page there keeps its icon as new (#3431).
+private_icon=
+if [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
+  forget_engine_sites
+  log="$out/private-icon.log"
+  step=0
+  BROWSER_DRIVE=1 BROWSER_STREAMING_TEST_HOST=127.0.0.1 BROWSER_URL="${site}engine.html" \
+    "$browser" < "$out/drive" > "$log" 2>&1 &
+  pid=$!
+  exec 3> "$out/drive"
+  await_load
+  await '^browser: title [0-9]* engine safari$' || fail "the site kept for Safari's engine opened in Chromium"
+  regular=$(sed -n 's/^browser: title \([0-9]*\) engine safari$/\1/p' "$log" | head -1)
+  await "^browser: favicon $regular 0 bytes\$" ||
+    fail "the regular window's page with no icon showed one before the private window's"
+  send key n cmd shift
+  expect '^browser: private window opened [0-9]* profile [0-9]*$' "⇧⌘N didn't open a private window"
+  window=$(grep '^browser: private window opened ' "$log" | tail -1 | cut -d' ' -f5)
+  expect "^browser: window opened $window\$" "the private window didn't open"
+  new_window_bar
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T didn't open the command bar in the private window"
+  send insert "${site}icon.html"
+  send key return
+  expect '^browser: title [0-9]* icon safari$' "the private window's icon page didn't open in Safari's engine"
+  tab=$(sed -n 's/^browser: title \([0-9]*\) icon safari$/\1/p' "$log" | tail -1)
+  expect "^browser: window $window shows $tab\$" "the private window didn't show its icon page"
+  expect "^browser: favicon $tab [1-9][0-9]* bytes\$" \
+    "the private window's page in Safari's engine didn't show its own icon"
+  grep -q '^browser: tab [0-9]* icon \(already \)\{0,1\}kept$' "$log" &&
+    fail "the profile kept the private window's icon"
+  send key w cmd shift
+  expect "^browser: window closed $window\$" "⇧⌘W didn't close the private window"
+  send window 1
+  go_from_bar "127.0.0.1:$port/icon.html"
+  expect "^browser: title $regular icon safari\$" "the regular window's icon page left Safari's engine"
+  expect "^browser: tab $regular icon \(already \)\{0,1\}kept\$" \
+    "the regular window's icon page kept no icon"
+  grep -q "^browser: tab $regular icon already kept\$" "$log" &&
+    fail "the regular window's icon page found the private window's icon kept"
+  exec 3>&-
+  quit
+  forget_engine_sites
+  private_icon=" From macOS 14, a private window's page in Safari's engine shows its own icon, which the profile doesn't keep."
+else
+  echo "skip: a private window's icon in Safari's engine, which is the Mac's from macOS 14."
+fi
+echo "ok: a private window runs the extension allowed in Incognito, listed alone in its Extensions menu, pinned at its URL field and in its Site Controls, and not the other. Windows: $out/private-extensions.png, $out/private-site-controls.png.$private_icon"

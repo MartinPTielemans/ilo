@@ -1,3 +1,4 @@
+# check.sh runs this at 300.
 # VoiceOver reads ilo's own tree: the sidebar's Space name is a heading, and the tab shown a
 # selected tab named by its page's title in the Today tab group, after New Tab. ⌘T's bar has the
 # keyboard in a text field called "Search or Enter URL", lists its suggestions with the first
@@ -18,18 +19,21 @@ if [ "$(uname)" = Linux ]; then
   heading=heading button=button tab_group='page tab list' tab='page tab' shown=selected
   field=entry suggestion='list item' menu_role=menu menu_at=' menu "Menu"'
   submenu_role=menu menu_item='menu item' separator=separator
+  dialog=dialog radio_group=panel radio='radio button' picked=checked
 elif windows; then
   # Control type/ARIA role: UI Automation has no heading type, and AccessKit says it in the role.
   screen_reader=Narrator reader=../tools/uia-tree.sh
   heading=Text/heading button=Button/button tab_group=Tab/tablist tab=TabItem/tab shown=selected
   field=Edit/textbox suggestion=ListItem/ menu_role=Menu/menu menu_at=' Menu/menu "Menu"'
   submenu_role=Menu/menu menu_item=MenuItem/menuitem separator=Separator/separator
+  dialog=Window/dialog radio_group=Group/radiogroup radio=RadioButton/radio picked=selected
 else
   screen_reader=VoiceOver reader=../tools/ax-tree.sh
   heading=AXHeading/- button=AXButton/- tab_group=AXTabGroup/- tab=AXRadioButton/AXTabButton
   shown=value=1 field=AXTextField/- suggestion=AXStaticText/
   menu_role='AXMenu/[^ ]*' menu_at=' AXMenu/' submenu_role=AXMenu/- menu_item='AXMenuItem/[^ ]*'
   separator=AXSplitter/
+  dialog=AXWindow/AXDialog radio_group=AXRadioGroup/- radio=AXRadioButton/- picked=value=1
 fi
 session=
 a11y=
@@ -191,7 +195,8 @@ else
     send key escape
     expect '^browser: menu closed$' "escape didn't close the tab's menu"
 
-    # The find bar's buttons say what they do, and its count is the status Matches.
+    # The find bar's buttons say what they do, and its count is the status Matches, its name
+    # saying the count too, which Orca and NVDA announce (#3236).
     found="$out/access-find.txt"
     if windows; then
       # check/find.sh, which drives the find bar, isn't one of Windows' runs yet.
@@ -202,7 +207,7 @@ else
       send type VoiceOver
       expect '^browser: find bar drew "VoiceOver" 1/1$' "⌘F and typing didn't find VoiceOver on the page"
       read_tree '"Find Next"' > "$found"
-      grep -q ' "Matches"' "$found" || fail "the find bar's count isn't called Matches: $found"
+      grep -q ' "Matches, 1 of 1"' "$found" || fail "the find bar's count isn't called Matches, 1 of 1: $found"
       for name in Previous Next Close; do
         grep -q " $button \"$name\"" "$found" || fail "the find bar's $name isn't a button: $found"
       done
@@ -315,6 +320,64 @@ else
     quit
     echo "ok: $screen_reader reads the Space's name as a heading, the tab shown as the selected tab Docs in Today after New Tab, ⌘T's bar as a text field with its suggestions in a list whose selection ↓ moves, ⇧F10's field menu on its first item, the tab's menu, in front, as a menu with its items, separators and a submenu → opens, the find bar's named buttons and its Matches, Settings' sections as tabs with Chromium settings a button, and its sub-views' controls by name: Links' Add Rule and pop-ups, Sync's account buttons, the import's files and browsers, and About's update button and nightly switch where drawn. Trees: $tree, $bar, $moved, $menu, $submenu, $windows, $found, $settings, $links, $sync, $import, $about"
   fi
+fi
+# A new profile's onboarding, read as the reader reads it (#3151): each step a dialog called by its
+# title, the intro by the app's name, with Continue and Skip buttons, and the colour step's
+# swatches a radio group called Colour, a radio button a colour, none picked until → picks the
+# first. Its import home is empty, so the import step is left out.
+if ! grep -q '^accessibility: skipped' "$tree"; then
+  log="$out/access-onboarding.log"
+  step=0
+  rm -f "$saved" "$profile_dir/Account"
+  rm -rf "$out/access-home"
+  mkdir -p "$out/access-home"
+  home=$out/access-home
+  ! windows || home=$(cygpath -w "$home")
+  if [ -n "$session" ]; then
+    DBUS_SESSION_BUS_ADDRESS=$session BROWSER_IMPORT_HOME="$home" BROWSER_DRIVE=1 \
+      BROWSER_ONBOARDING=light "$browser" < "$out/drive" > "$log" 2>&1 &
+  else
+    BROWSER_IMPORT_HOME="$home" BROWSER_DRIVE=1 BROWSER_ONBOARDING=light "$browser" \
+      < "$out/drive" > "$log" 2>&1 &
+  fi
+  pid=$!
+  exec 3> "$out/drive"
+  await '^browser: onboarding started$' || fail "the onboarding didn't start"
+  # The intro goes on by itself 1.4 s after it settles, sooner than the Mac's reader compiles, so
+  # the read starts with the flow and asks again until the intro is there.
+  intro="$out/access-intro.txt"
+  read_tree "$dialog \"$app_name\"" > "$intro" &
+  reading=$!
+  await '^browser: onboarding step intro settled$' || fail "the onboarding's intro didn't draw"
+  wait "$reading"
+  grep -q " $dialog \"$app_name\"" "$intro" || fail "the intro isn't a dialog called $app_name: $intro"
+  # Esc goes on from each step to the colour's, each one settled before the next Esc.
+  for _ in 1 2 3 4; do
+    grep -q '^browser: onboarding step color settled$' "$log" && break
+    send key escape
+    expect '^browser: onboarding step [a-z-]* settled$' "Esc didn't go on to a step"
+  done
+  grep -q '^browser: onboarding step color settled$' "$log" || fail "Esc didn't come to the colour step"
+  colour="$out/access-colour.txt"
+  read_tree "$radio_group \"Colour\"" > "$colour"
+  grep -q " $dialog \"Pick a colour for your first Space.\"" "$colour" ||
+    fail "the colour step isn't a dialog called by its title: $colour"
+  [ "$(grep -c " $dialog \"" "$colour")" = 1 ] ||
+    fail "the step it left is still a dialog: $colour"
+  grep -q " $button \"Continue\"" "$colour" || fail "Continue isn't a button: $colour"
+  grep -q " $button \"Skip\"" "$colour" || fail "Skip isn't a button: $colour"
+  swatches=$(under "$radio_group \"Colour\"" "$colour" | grep " $radio \"[^\"]")
+  [ "$(echo "$swatches" | wc -l)" -ge 2 ] || fail "the swatches aren't radio buttons in Colour: $colour"
+  ! echo "$swatches" | grep -q " $picked" || fail "a colour reads as picked before any is: $colour"
+  first=$(echo "$swatches" | head -1 | sed 's/^[^"]*"\([^"]*\)".*/\1/')
+  send key right
+  picked_tree="$out/access-colour-picked.txt"
+  read_tree "$radio \"$first\" $picked" > "$picked_tree"
+  grep -q " $radio \"$first\" $picked" "$picked_tree" ||
+    fail "→ didn't read as picking the first colour, $first: $picked_tree"
+  exec 3>&-
+  quit
+  echo "ok: $screen_reader reads the onboarding's intro as a dialog called $app_name, the colour step as a dialog called by its title with Continue and Skip buttons, and its $(echo "$swatches" | wc -l | tr -d ' ') swatches as radio buttons in Colour, $first picked by →. Trees: $intro, $colour, $picked_tree"
 fi
 # The run's buses go with it.
 [ -z "${buses:-}" ] || kill $buses 2> /dev/null || true

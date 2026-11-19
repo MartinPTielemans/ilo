@@ -52,10 +52,12 @@ void SetInputRegionNow(views::Widget* widget, const std::vector<gfx::Rect>& regi
 // don't.
 void SetUpWindow(views::Widget::InitParams& params, views::WidgetDelegate& delegate);
 
-// The width in DIPs of the band inside |widget|'s edges that resizes it, which Chromium's hit test
-// takes (SetUpWindow) and the app's UI lets through to the window (window_views.cc). None while
-// the window is maximized or full screen.
-int ResizeEdgeOf(views::Widget* widget);
+// The parts of the band inside |widget|'s edges that resizes it which are Chromium's, in pixels at
+// |scale| in a window |pixels| big: along the top and bottom, and the corners. Chromium's hit test
+// takes them (SetUpWindow), and the app's UI lets them through to the window (window_views.cc).
+// The left and right bands between the corners are the UI's, which hears the pointer there and
+// resizes from them (StartResize). None while the window is maximized or full screen.
+std::vector<gfx::Rect> ResizeBandsOf(views::Widget* widget, const gfx::Size& pixels, float scale);
 
 // Has the window manager or compositor move |widget|'s window with the pointer, its button held
 // down after a press in the app's UI, as Chromium does for a press in its own title bar
@@ -63,6 +65,11 @@ int ResizeEdgeOf(views::Widget* widget);
 // manager starts from there rather than from where the pointer is now, so the window keeps the
 // press under the pointer (mini_player.cc). In window_views.cc.
 void StartMove(views::Widget* widget, std::optional<gfx::Point> press = std::nullopt);
+
+// Has the window manager or compositor resize |widget|'s window from its left edge, or with
+// |right| its right one, its button held down after a press in the UI's band there, as Chromium
+// does for a press in its own (bc_window_start_resize). In window_views.cc.
+void StartResize(views::Widget* widget, bool right);
 
 // Whether the keys in |widget|'s window are the app's UI's (bc_window_keyboard_is_ui). In
 // window_views.cc, as on X11 the core follows the X server's focus.
@@ -92,6 +99,26 @@ void OverlayTakesKeyboard(views::Widget* widget, bool takes);
 // caret at |caret|, in DIPs from the window's top left, or none is (bc_window_ui_text_input).
 void SetUITextInput(views::Widget* widget, std::optional<gfx::Rect> caret);
 
+// Under Wayland, the input method composes for the field of the app's that the keys typed in
+// |widget|'s page are held for (held_keys), from |hold| until the hold ends, |claimed| by the field
+// or not (UITextInput::HoldForPage). On X11 the hold has the keys the input method gets.
+void HoldPageComposition(views::Widget* widget, bool hold, bool claimed);
+
+// A window of the app's own on |surface|, a toplevel on Chromium's connection such as Settings,
+// composes through the core's input method for its windows, its focused field's caret at |caret|,
+// in DIPs from the surface's top left, or none is focused (bc_app_window_text_input). What it
+// composes goes to window 0 only from the input method's own events, never during the app's call,
+// so the app gives each to the field it has focused as it comes; the app keeps what a field showed
+// composed as it loses the focus, and the core drops its composition then. In window_views.cc.
+// Nothing off Wayland.
+void SetAppWindowTextInput(void* surface, std::optional<gfx::Rect> caret);
+// It no longer does (bc_app_window_text_input_end).
+void EndAppWindowTextInput(void* surface);
+
+// Chromium's text input, entering |surface|, gives |widget|'s window its focus, without the window
+// becoming active, or with a null |widget| no longer. Nothing off Wayland.
+void ComposeThroughWindow(void* surface, views::Widget* widget);
+
 // Answers on X11 the clipboard requests in Chromium's queue, and nothing else in it
 // (bc_answer_clipboard_requests). In window_views.cc.
 void AnswerClipboardRequests();
@@ -101,10 +128,6 @@ void AnswerClipboardRequests();
 // clipped to the Picture in Picture window, which Chrome would then grow to hold it (#1161). In
 // window_views.cc.
 void FloatPictureInPictureBubbles();
-
-// Where DevTools docked in a page of |widget|'s window show, the first pane's with them, and the
-// page beside them, from its content's top-left (bc_window_devtools). In window_views.cc.
-std::optional<std::pair<gfx::Rect, gfx::Rect>> DevToolsFrames(views::Widget* widget);
 
 }  // namespace browser_core::platform
 

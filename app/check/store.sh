@@ -1,3 +1,4 @@
+# check.sh runs this at 690, only when named.
 # The Chrome Web Store installs, updates and removes an extension through its own page. Its "Add to
 # Chrome" asks with the browser's dialog, listing Chrome's warnings, and return adds the extension
 # to the Extensions menu. At the next launch, the extension's update check asks Google's store and
@@ -13,17 +14,27 @@ printf '{"download": {"default_directory": "%s", "prompt_for_download": false}}'
   "$(native_path "$PWD/$out/downloads" | sed 's/\\/\\\\/g')" > "$profile_dir/Default/Preferences"
 # Chromium's log of the update checks, which an official build writes only when asked.
 updates="--enable-logging=stderr --vmodule=extension_downloader=2,extension_updater=2"
+# On Linux, removing the extension runs xdg-icon-resource for its icons, here in the run's own data
+# folder, never the runner's home. Without a hicolor folder its error lands in the log, and once
+# came in the middle of the app's line that ⌘Q's wait reads (Check on Linux 43492843229, X11).
+data_dir="$PWD/$out/store/data"
+mkdir -p "$data_dir/icons/hicolor"
 # Launches the app on the store's page for the extension, with the log $1.
 open_store() {
   log="$out/$1.log"
   step=0
-  BROWSER_DRIVE=1 BROWSER_URL="$store" BROWSER_PROFILE_DIR="$profile_dir" \
+  BROWSER_DRIVE=1 BROWSER_URL="$store" BROWSER_PROFILE_DIR="$profile_dir" XDG_DATA_HOME="$data_dir" \
     "$browser" $updates < "$out/drive" > "$log" 2>&1 &
   pid=$!
   exec 3> "$out/drive"
   await '^browser: loaded [0-9]* https://[a-z]*\.google\.com/' ||
     fail "neither the store nor Google's consent page loaded: $(grep '^browser: loaded' "$log")"
-  send state
+  # A touchpad's pixel down the sidebar's foot, which has nothing to scroll. On Windows a relaunch
+  # finds the runner's console in front, and the driver brings the app in front only for input, as
+  # a hand's first touch does, so asking where it is alone skipped the update launch. A press would
+  # take the keyboard from the page, whose button the find then can't give it.
+  # shellcheck disable=SC2086 # x and y
+  send scroll $sidebar_point 1 1
   if [ "$active" != 1 ]; then
     exec 3>&-
     quit

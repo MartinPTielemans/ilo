@@ -82,7 +82,10 @@ fn a_shadow_fades_out_inside_the_margin_of_the_window_that_draws_it() {
 
     let popover = Level::Popover.reach();
     // The tooltip's and the link target's windows are the plate and this much on every side.
-    let margins = [("tooltip and link target", [WINDOW_MARGIN; 4])];
+    let margins = [
+        ("tooltip and link target", [WINDOW_MARGIN; 4]),
+        ("mini bar", [crate::mini_bar::MARGIN; 4]),
+    ];
     // The zoom HUD's window holds its pill at the top right, and the window's width is the widest
     // pill with the margin on both sides.
     assert!(WINDOW_WIDTH >= 2. * MARGIN + 80., "room for \"500%\"");
@@ -100,5 +103,71 @@ fn a_shadow_fades_out_inside_the_margin_of_the_window_that_draws_it() {
             "{name}: {bottom} below, {popover:?}"
         );
         assert!(left >= popover.sides, "{name}: {left} left, {popover:?}");
+    }
+}
+
+#[test]
+fn a_panels_margin_holds_its_whole_shadow_in_whole_points_where_it_draws_it() {
+    for level in LEVELS {
+        let (reach, margin) = (level.reach(), level.margin_if(true));
+        for (name, room, needed) in [
+            ("above", margin.above, reach.above),
+            ("below", margin.below, reach.below),
+            ("sides", margin.sides, reach.sides),
+        ] {
+            assert!(
+                room >= needed && room == room.round(),
+                "{level:?} {name}: {room} for {needed}"
+            );
+        }
+        // Where the host draws the shadow, under the panel, the window is the panel's size.
+        assert_eq!(
+            level.margin_if(false).around(gpui::size(px(10.), px(20.))),
+            gpui::size(px(10.), px(20.))
+        );
+    }
+}
+
+/// On Windows a panel draws its shadow in its own window, round it, and the host shows that window
+/// the margin past where the panel goes (host_set_shadow_margin), so the panel has to fill the
+/// window inside the margin exactly, or it lands off where it was asked and its shadow is cut
+/// (#2988). Elsewhere it fills the window. A popover in a modal's room, as the command bar over the
+/// URL field is, keeps the modal's margin.
+#[gpui::test]
+fn a_panel_that_draws_its_own_shadow_fills_its_window_inside_the_margin(
+    cx: &mut gpui::TestAppContext,
+) {
+    use gpui::{Bounds, Context, Render, Window, canvas};
+    use std::{cell::Cell, rc::Rc};
+
+    struct Panel(Rc<Cell<Option<Bounds<Pixels>>>>, bool, Level);
+    impl Render for Panel {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let seen = self.0.clone();
+            let inside = canvas(move |bounds, _, _| seen.set(Some(bounds)), |_, _, _, _| {});
+            div().size_full().child(self.2.in_window_if(
+                self.1,
+                Level::Modal,
+                div().size_full().rounded(px(20.)).child(inside.size_full()),
+            ))
+        }
+    }
+    for (in_window, level) in [
+        (true, Level::Modal),
+        (false, Level::Modal),
+        (true, Level::Popover),
+    ] {
+        let seen = Rc::new(Cell::new(None));
+        let (_, cx) = cx.add_window_view(|_, _| Panel(seen.clone(), in_window, level));
+        cx.run_until_parked();
+        let window = cx.update(|window, _| window.viewport_size());
+        let margin = Level::Modal.margin_if(in_window);
+        let panel = seen.get().expect("the panel wasn't laid out");
+        assert_eq!(
+            panel.origin,
+            point(px(margin.sides), px(margin.above)),
+            "{in_window} {level:?}"
+        );
+        assert_eq!(margin.around(panel.size), window, "{in_window} {level:?}");
     }
 }

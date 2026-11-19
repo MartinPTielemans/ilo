@@ -3,7 +3,8 @@
 //! the trackpad clicks, as it does again if the fingers go back; letting go readied makes the
 //! Space, as New Space… does (Arc 1.170 on video; docs/ux-spec.md › Spaces).
 
-use std::{f32::consts::PI, time::Instant};
+use std::f32::consts::PI;
+use web_time::Instant;
 
 use gpui::{
     Bounds, BoxShadow, Context, Hsla, PathBuilder, Window,
@@ -47,6 +48,8 @@ use crate::tokens::shell::new_space::GLOW;
 use crate::tokens::shell::new_space::GLOW_STRIP;
 use crate::tokens::shell::new_space::GLOW_WIDTH;
 use crate::tokens::shell::new_space::SHADOW;
+use crate::tokens::shell::new_space::SHADOW_BLUR;
+use crate::tokens::shell::new_space::SHADOW_Y;
 
 /// The circle going back under the page's edge after a pull made `space`, and where the fingers
 /// left the page they pulled.
@@ -210,8 +213,8 @@ impl Shell {
             .rounded_full()
             .shadow(vec![BoxShadow {
                 color: hsla(0., 0., 0., SHADOW),
-                offset: point(px(0.), px(1.)),
-                blur_radius: px(4.),
+                offset: point(px(0.), px(SHADOW_Y)),
+                blur_radius: px(SHADOW_BLUR),
                 spread_radius: px(0.),
                 inset: false,
             }]);

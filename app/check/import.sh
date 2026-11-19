@@ -1,3 +1,4 @@
+# check.sh runs this at 340.
 # Settings › Import finds the made-up Arc in src/import/fixture and a made-up Chrome and Firefox
 # beside it, never the machine's own browsers. From Arc it brings its two Spaces, one in a new profile
 # named Work as Arc's Local State names it, their pinned tabs and folders, Personal's Today tab, its
@@ -200,10 +201,15 @@ web_data="$profile_dir/Default/Web Data"
 # The app on Windows takes Windows' paths, and starts in a folder of its own.
 # Arc's Work profile is held back from its Space until the run releases it, with Shift+F12, so the
 # captures show its card waiting and then stalled however fast the profile loads (import_host.rs).
+# The Web Store page an imported extension's Add… opens comes from a server of the run's own,
+# which a runner always reaches (#3144).
+serve_tls store '<meta charset=utf-8><link rel=icon href="data:,"><title>Check Pinned</title>
+<h1>Check Pinned</h1>' chromewebstore.google.com
 BROWSER_IMPORT_HOLD=Work BROWSER_IMPORT_HOME="$(native_path "$PWD/$home")" \
   BROWSER_IMPORT_PASSWORDS="$(native_path "$PWD/$passwords")" \
   BROWSER_IMPORT_BOOKMARKS="$(native_path "$PWD/$bookmarks")" BROWSER_DRIVE=1 BROWSER_URL="${site}import.html" \
-  "$browser" --extension-mime-request-handling=always-prompt-for-install < "$out/drive" \
+  "$browser" --extension-mime-request-handling=always-prompt-for-install \
+  --host-resolver-rules="$tls_rules" --ignore-certificate-errors-spki-list="$tls_key" < "$out/drive" \
   > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
@@ -300,7 +306,7 @@ else
   first_found=Chrome
   counts='spaces: 0, pinned: 0, folders: 0, link_rules: 0, favorites: 0, bookmarks: 3, bookmark_folders: 1, open_tabs: 2, reading_list: 0, pages: 2, addresses: 1, extensions: 0'
 fi
-send clickkey $(drawn "import-from $first_found")
+click_in_sight "import-from $first_found"
 expect "^browser: import pick $first_found\$" "Import… on $first_found's row didn't show its choices"
 expect '^browser: import drawn pick$' "$first_found's choices didn't draw"
 expect "^browser: import read $first_found: Tally { $counts }\$" \
@@ -310,7 +316,7 @@ send key escape
 expect '^browser: import escape$' "Esc in $first_found's choices didn't reach the import"
 expect '^browser: import drawn list$' "Esc didn't go back from $first_found's choices to the list"
 if [ -n "$arc" ]; then
-  send clickkey $(drawn "import-from Arc")
+  click_in_sight "import-from Arc"
   expect '^browser: import pick Arc$' "Import… on Arc's row didn't show what comes from it"
   expect '^browser: import drawn pick$' "Arc's choices didn't draw"
   ../tools/window-screenshot.sh "$pid" "$out/import-pick.png" || fail "no window to capture"
@@ -378,7 +384,7 @@ seeded${t}meet"
   expect '^browser: import drawn done$' "the import's end didn't draw"
   click_drawn import-done
   expect '^browser: import drawn list$' "Done didn't go back to the list"
-  send clickkey $(drawn "import-from Arc")
+  click_in_sight "import-from Arc"
   expect '^browser: import pick Arc$' "Import… didn't show Arc's choices again"
   expect '^browser: import drawn pick$' "Arc's choices didn't draw"
   click_drawn import-go
@@ -394,7 +400,7 @@ seeded${t}meet"
 fi
 # Chrome, the row after Arc's, brings its bookmarks, open tab, history and address, which the
 # core adds.
-send clickkey $(drawn "import-from Chrome")
+click_in_sight "import-from Chrome"
 expect '^browser: import pick Chrome$' "Import… on Chrome's row didn't show what comes from it"
 expect '^browser: import drawn pick$' "Chrome's choices didn't draw"
 click_drawn import-go
@@ -416,7 +422,7 @@ click_drawn import-done
 expect '^browser: import drawn list$' "Done didn't go back to the list"
 # Chrome's row says when it came in, that again brings only what's new, and Import Again….
 ../tools/window-screenshot.sh "$pid" "$out/import-again-list.png" || fail "no window to capture"
-send clickkey $(drawn "import-from Chrome")
+click_in_sight "import-from Chrome"
 expect '^browser: import pick Chrome$' "Import… didn't show Chrome's choices again"
 expect '^browser: import drawn pick$' "Chrome's choices didn't draw"
 click_drawn import-go
@@ -428,7 +434,7 @@ expect '^browser: import done: Everything from Chrome is here already\.$' \
 expect '^browser: import drawn done$' "the import's end didn't draw"
 click_drawn import-done
 expect '^browser: import drawn list$' "Done didn't go back to the list"
-send clickkey $(drawn "import-from Firefox")
+click_in_sight "import-from Firefox"
 expect '^browser: import pick Firefox$' "Import… on Firefox's row didn't show what comes from it"
 expect '^browser: import drawn pick$' "Firefox's choices didn't draw"
 click_drawn import-go
@@ -441,7 +447,7 @@ expect '^browser: import done: 1 Space, 2 pinned tabs and 2 pages of history cam
 expect '^browser: import drawn done$' "the import's end didn't draw"
 click_drawn import-done
 expect '^browser: import drawn list$' "Done didn't go back to the list"
-send clickkey $(drawn "import-from Firefox")
+click_in_sight "import-from Firefox"
 expect '^browser: import pick Firefox$' "Import… didn't show Firefox's choices again"
 expect '^browser: import drawn pick$' "Firefox's choices didn't draw"
 click_drawn import-go
@@ -454,7 +460,7 @@ expect '^browser: import done: Everything from Firefox is here already\.$' \
 expect '^browser: import drawn done$' "the import's end didn't draw"
 click_drawn import-done
 expect '^browser: import drawn list$' "Done didn't go back to the list"
-send clickkey $(drawn import-bookmarks)
+click_in_sight "import-bookmarks"
 expect '^browser: import bookmarks file bookmarks\.html$' "Choose File… didn't import the bookmarks file"
 await '^browser: import done: 1 Space and 2 pinned tabs came in from bookmarks\.html\.$' ||
   fail "the bookmarks file didn't come in: $(grep '^browser: import done' "$log" | tail -1)"
@@ -462,7 +468,7 @@ expect '^browser: import drawn done$' "the bookmarks file's end didn't draw"
 ../tools/window-screenshot.sh "$pid" "$out/import-bookmarks.png" || fail "no window to capture"
 click_drawn import-done
 expect '^browser: import drawn list$' "Done didn't go back to the list"
-send clickkey $(drawn import-bookmarks)
+click_in_sight "import-bookmarks"
 await '^browser: import done: Everything from bookmarks\.html is here already\.$' ||
   fail "the bookmarks file came in twice: $(grep '^browser: import done' "$log" | tail -1)"
 expect '^browser: import drawn done$' "the second bookmarks file's end didn't draw"
@@ -470,7 +476,7 @@ rm -f "$bookmarks"
 # Then the passwords file. Done's line offers to delete it, with Delete File before Done.
 click_drawn import-done
 expect '^browser: import drawn list$' "Done didn't go back to the list"
-send clickkey $(drawn import-passwords)
+click_in_sight "import-passwords"
 expect '^browser: import passwords$' "Choose File… didn't import the passwords file"
 # It names the profile only where there are two, as Arc's import makes Work.
 await "^browser: import done: 2 passwords came in${arc:+ to Default} from passwords\\.csv\\.\$" ||
@@ -478,7 +484,7 @@ await "^browser: import done: 2 passwords came in${arc:+ to Default} from passwo
 ../tools/window-screenshot.sh "$pid" "$out/import-passwords.png" || fail "no window to capture"
 [ -e "$passwords" ] || fail "the import deleted the passwords file before the user asked"
 expect '^browser: import drawn done with file$' "the import's end didn't draw with Delete File"
-send clickkey $(drawn import-delete)
+click_in_sight "import-delete"
 expect '^browser: import deleted the passwords file$' "Delete File didn't delete the passwords file"
 expect '^browser: import drawn done$' "the import's end didn't draw again without Delete File"
 [ ! -e "$passwords" ] || fail "the passwords file is still there after Delete File"
@@ -488,7 +494,7 @@ printf '%s\n' 'url,username,password' \
   'https://new.example.test/,new@example.test,made-up-three' > "$passwords"
 click_drawn import-done
 expect '^browser: import drawn list$' "Done didn't go back to the list"
-send clickkey $(drawn import-passwords)
+click_in_sight "import-passwords"
 expect '^browser: import passwords$' "Choose File… didn't import the second passwords file"
 await "^browser: import done: 1 password came in${arc:+ to Default} from passwords\.csv\. 1 conflicted with a saved password, which was kept\.\$" ||
   fail "the import didn't say 1 came in and 1 conflicted: $(grep '^browser: import done' "$log" | tail -1)"
@@ -520,6 +526,20 @@ if [ -n "$arc" ]; then
   expect '^browser: today [0-9][0-9]*$' \
     "Personal's Today tab didn't come in from Arc: $(grep '^browser: today' "$log" | tail -1)"
   ../tools/window-screenshot.sh "$pid" "$out/import-personal.png" || fail "no window to capture"
+  # Personal's dust, at Arc's 0.3 grain, is a quarter as strong while its window isn't the key
+  # one: a second window in front, smaller, leaves the first's texture in sight, both in one
+  # picture beside import-personal.png's.
+  send key n cmd
+  expect '^browser: window opened [0-9]' "⌘N didn't open a second window"
+  opened=$(sed -n 's/^browser: window opened \([0-9]*\)$/\1/p' "$log" | tail -1)
+  new_window_bar
+  send window "$(grep -c '^browser: window opened ' "$log")"
+  send resize 640 400
+  ../tools/window-screenshot.sh "$pid" "$out/import-personal-inactive.png" all ||
+    fail "no window to capture"
+  send key w cmd shift
+  expect "^browser: window closed $opened\$" "⇧⌘W didn't close the second window"
+  send window 1
 fi
 # The rows the parity checklist ticks on this run (docs/ux-parity/import.md). A made-up Brave comes
 # in after the others, which Settings finds as it shows again: its bookmarks in a bar, a folder of
@@ -608,19 +628,19 @@ send clickkey $(drawn "toolbar Import & Export")
 expect '^browser: settings tab Import & Export$' "a click on Import & Export didn't show its section"
 settings_drew 'Import & Export'
 expect '^browser: import found .*Brave' "Settings didn't find the made-up Brave once it showed again"
-send clickkey $(drawn "import-from Brave")
+click_in_sight "import-from Brave"
 expect '^browser: import pick Brave$' "Import… on Brave's row didn't show its choices"
 expect '^browser: import read Brave: ' "picking Brave didn't read it"
 # Choose folders, a box of a checkbox a folder, each ticked.
-send clickkey $(drawn import-choose-folders)
+click_in_sight "import-choose-folders"
 expect '^browser: import folders .*Other bookmarks' "Choose folders didn't list Brave's folders"
 send state
 ../tools/window-screenshot.sh "$pid" "$out/import-folders.png" || fail "no window to capture"
 # The bar's folder Reading unticked: its bookmark stays out, so 2 of the 3 come.
-send clickkey $(drawn "import-folder Reading")
+click_in_sight "import-folder Reading"
 expect '^browser: import leaves out Reading$' "a click didn't untick Reading"
 # Closed again, which keeps what's unticked, Import is back in the card's sight.
-send clickkey $(drawn import-choose-folders)
+click_in_sight "import-choose-folders"
 click_drawn import-go
 expect '^browser: import from Brave: 1 Spaces, 2 pinned tabs, 0 open tabs, 0 favorites, 0 pages, 0 addresses$' \
   "the import didn't leave the unticked folder out: $(grep '^browser: import from Brave' "$log" | tail -1)"
@@ -631,22 +651,22 @@ expect '^browser: import drawn done$' "Brave's import's end didn't draw"
 # a line of its own, with Add Anyway.
 send state
 ../tools/window-screenshot.sh "$pid" "$out/import-extensions.png" || fail "no window to capture"
-if windows; then
-  echo "skip: adding the listed extension from a .crx: Windows' driver doesn't answer its install dialog yet."
-else
-  send clickkey $(drawn "import-add-extension $pinned_id")
-  expect "^browser: import add extension $pinned_id\$" "Add… didn't take the extension off the list"
-  send key w cmd
-  expect '^browser: settings hidden$' "⌘W didn't hide Settings"
-  go_from_bar "${site}pinned.crx"
-  expect '^browser: dialog shown Add "Check Pinned"?$' "the .crx didn't ask to add Check Pinned"
-  expect '^browser: dialog takes input$' "the install dialog never took input"
-  send key return
-  expect '^browser: dialog confirmed$' "return didn't add Check Pinned"
-  await "^browser: extension $pinned_id pinned as it was in the browser imported from\$" ||
-    fail "the extension Brave pinned wasn't pinned once it came in"
-  ../tools/window-screenshot.sh "$pid" "$out/import-pinned-extension.png" || fail "no window to capture"
-fi
+click_in_sight "import-add-extension $pinned_id"
+expect "^browser: import add extension $pinned_id\$" "Add… didn't take the extension off the list"
+store="https://chromewebstore.google.com/detail/$pinned_id"
+expect "^browser: loaded [0-9]* $store\$" "Add… didn't load the extension's Web Store page"
+grep -qxF "store: GET $store" "$out/store-tls.log" ||
+  fail "the Web Store page didn't come from the run's server: $(grep -v '^store: ' "$out/store-tls.log" | tail -3)"
+send key w cmd
+expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+go_from_bar "${site}pinned.crx"
+expect '^browser: dialog shown Add "Check Pinned"?$' "the .crx didn't ask to add Check Pinned"
+expect '^browser: dialog takes input$' "the install dialog never took input"
+send key return
+expect '^browser: dialog confirmed$' "return didn't add Check Pinned"
+await "^browser: extension $pinned_id pinned as it was in the browser imported from\$" ||
+  fail "the extension Brave pinned wasn't pinned once it came in"
+../tools/window-screenshot.sh "$pid" "$out/import-pinned-extension.png" || fail "no window to capture"
 # On the Mac a made-up Safari comes in last, its Bookmarks.plist kept from the app as macOS keeps
 # ~/Library/Safari until the app has Full Disk Access. Picking it waits for that access, with Open
 # System Settings; back in the app without it, it says it's still waiting; with it, coming back
@@ -696,12 +716,12 @@ if [ "$(uname)" = Darwin ]; then
   expect '^browser: settings tab Import & Export$' "a click on Import & Export didn't show its section"
   settings_drew 'Import & Export'
   expect '^browser: import found .*Safari' "Settings didn't find the made-up Safari once it showed again"
-  send clickkey $(drawn "import-from Safari")
+  click_in_sight "import-from Safari"
   expect '^browser: import pick Safari$' "Import… on Safari's row didn't show its choices"
   expect '^browser: import from Safari needs full disk access$' \
     "Safari's files kept from the app didn't ask for Full Disk Access"
   ../tools/window-screenshot.sh "$pid" "$out/import-safari-access.png" || fail "no window to capture"
-  send clickkey $(drawn import-full-disk-access)
+  click_in_sight "import-full-disk-access"
   expect '^browser: open full disk access$' "Open System Settings didn't ask for System Settings' list"
   # Back in the app from System Settings, which the driver stands in for: a run can't take the app
   # from the front and bring it back, as macOS lets no background process make an app active.
@@ -714,7 +734,7 @@ if [ "$(uname)" = Darwin ]; then
   send active
   expect '^browser: import read Safari: ' "back in the app with access, the import didn't read Safari"
   expect '^browser: import drawn pick$' "Safari's choices didn't draw once it was read"
-  send clickkey $(drawn import-go)
+  click_in_sight "import-go"
   expect '^browser: import from Safari: 1 Spaces, 3 pinned tabs, 0 open tabs, 0 favorites, 2 pages, 0 addresses$' \
     "Import didn't plan Safari's bookmarks, Reading List and history"
   await '^browser: history added 2 to profile [0-9]*$' || fail "the core didn't add Safari's 2 pages"
@@ -724,15 +744,20 @@ if [ "$(uname)" = Darwin ]; then
   expect '^browser: import drawn done$' "Safari's import's end didn't draw"
   click_drawn import-done
   expect '^browser: import drawn list$' "Done didn't go back to the list"
-  send clickkey $(drawn "import-from Safari")
+  click_in_sight "import-from Safari"
   expect '^browser: import pick Safari$' "Import… didn't show Safari's choices again"
   expect '^browser: import drawn pick$' "Safari's choices didn't draw"
   click_drawn import-go
   await '^browser: history added 0 to profile [0-9]*$' || fail "the core added Safari's pages again"
   expect '^browser: import done: Everything from Safari is here already\.$' \
     "the second import from Safari said it added something"
+else
+  echo "skip: importing from Safari, with Full Disk Access: Safari is the Mac's."
 fi
 quit
+# Its server stops with it, as the runs after it in the call start their own (#3345).
+kill "$tls" 2> /dev/null || true
+tls= tls_port=
 [ -n "$arc" ] || echo "skip: import's Arc steps. Arc has no Linux build, so it's never found there."
 echo "ok: Settings › Import finds the fixture's Arc, Chrome and Firefox. From Arc come its Spaces,"
 echo "  one in a new profile, their pinned tabs and folders, Personal's Today tab, and its favorites; from"
@@ -742,6 +767,7 @@ echo "  A bookmarks file comes in as a Space named Bookmarks, and a second time 
 echo "  A passwords file comes in, says how many, and is deleted when asked; a second one says its"
 echo "  changed login conflicted and kept the saved one; Settings' Passwords tab lists the three,"
 echo "  and the app menu's Import from Other Browsers… shows Import again."
+echo "  Add… on an imported extension loads its Web Store page, from the run's own server."
 [ "$(uname)" != Darwin ] || echo "  Safari waits for Full Disk Access, then its bookmarks, Reading List and history come in, once."
 echo "  With the sidebar hidden, Arc's two Spaces say so in a toast."
 echo "  Settings' list and $first_found's choices, under Import › $first_found, at 820 by 660 and"

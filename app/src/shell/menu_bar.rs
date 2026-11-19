@@ -14,12 +14,16 @@ pub struct MenuBar {
     /// The shown Space's profile's extensions that run in the window, for the Extensions menu.
     pub extensions: Vec<Extension>,
     pub sidebar_hidden: bool,
+    /// Whether Top bar is on, for View's Show Top Bar or Hide Top Bar.
+    pub top_bar: bool,
     /// Whether the tab shown is pinned, or None with none shown.
     pub pinned: Option<bool>,
     /// Whether the Space shown has its pinned rows collapsed.
     pub pinned_shut: bool,
     /// Whether View's pinned tabs item would show or hide a row now, else it's dimmed.
     pub pinned_offered: bool,
+    /// Whether Tabs › Sort Today Tabs by Site would move a row now, else it's dimmed (#2344).
+    pub sort_offered: bool,
     /// Whether the page shown is in Developer Mode, or None where it can't change: no web page, or
     /// a private window.
     pub developer_mode: Option<bool>,
@@ -62,6 +66,10 @@ pub struct ProfileChoice {
 
 impl MenuBar {
     /// View's item for ⌘S, by what it does now, as Arc's.
+    pub fn top_bar_title(&self) -> &'static str {
+        super::commands::top_bar_title(self.top_bar)
+    }
+
     pub fn sidebar_title(&self) -> &'static str {
         if self.sidebar_hidden {
             "Show Sidebar"
@@ -134,12 +142,14 @@ impl Shell {
             spaces,
             extensions,
             sidebar_hidden: self.sidebar_hidden,
+            top_bar: self.top_bar,
             pinned,
             pinned_shut: self
                 .shown_space()
                 .is_some_and(|space| space.folders.pinned_shut),
             pinned_offered: self.offers(Command::CollapsePinned)
                 || self.offers(Command::ExpandPinned),
+            sort_offered: self.offers(Command::SortBySite),
             developer_mode: self.developer_mode(self.selected),
             tracing: trace::recording(cx),
             little_off: !self.little_windows,
@@ -193,10 +203,19 @@ impl Shell {
             tab => self.title(tab),
         };
         if title != self.window_title {
-            // check.sh reads this line.
-            log!("browser: window title {title}");
+            crate::title_log::window(self.selected, &title);
             self.browser.set_window_title(&title, cx);
             self.window_title = title;
+        }
+        // The window's root node takes its Space's name, as Chromium's window has with no tab
+        // shown, so a screen reader names the window it comes back to (#3537). The window's own
+        // title stays the browser window's, which the platform draws and lists.
+        let space =
+            (self.shown_space()).map_or_else(SharedString::default, |space| space.name.clone());
+        if space != self.root_name {
+            self.root_name = space;
+            self.root_name_due = true;
+            cx.notify();
         }
     }
 }
@@ -207,6 +226,45 @@ mod tests {
 
     use super::ProfileChoice;
     use crate::shell::{Command, Folders, Page, drag::detents::shell_with};
+
+    /// The window's root node, which a screen reader names the window by, takes its Space's name
+    /// as it shows and as it's renamed; a tab shown titles the window, not its root (#3537).
+    #[gpui::test]
+    fn the_windows_root_is_named_by_its_space(cx: &mut TestAppContext) {
+        use std::rc::Rc;
+
+        use gpui::{Role, VisualTestContext};
+
+        use crate::shell::{Shell, recorder::Recorder};
+        let host = Rc::new(Recorder::default());
+        let browser = host.clone();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+        cx.simulate_a11y_activation();
+        let root = |cx: &mut VisualTestContext| {
+            cx.run_until_parked();
+            let tree = cx.a11y_tree().expect("GPUI built a tree");
+            let (_, node) = (tree.nodes.iter())
+                .find(|(_, node)| node.role() == Role::Window)
+                .expect("the window's root");
+            node.label().map(str::to_string)
+        };
+        let space =
+            |id: u64, name: &str| (id, name.into(), None, 1, "".into(), "".into(), "".into());
+        shell.update(cx, |shell, cx| {
+            shell.set_spaces(vec![space(1, "Docs"), space(2, "Home")], cx);
+            shell.set_space(1, cx);
+            shell.set_tabs(1, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
+        });
+        assert_eq!(root(cx).as_deref(), Some("Docs"));
+        shell.update(cx, |shell, cx| shell.set_selected(10, cx));
+        assert_eq!(root(cx).as_deref(), Some("Docs"), "a tab shown");
+        shell.update(cx, |shell, cx| shell.set_space(2, cx));
+        assert_eq!(root(cx).as_deref(), Some("Home"), "another Space shown");
+        shell.update(cx, |shell, cx| {
+            shell.set_spaces(vec![space(1, "Docs"), space(2, "Away")], cx)
+        });
+        assert_eq!(root(cx).as_deref(), Some("Away"), "the Space renamed");
+    }
 
     /// Tabs › Pin Tab is named by the tab shown, and with none both ways; View's sidebar and pinned
     /// tabs items by what they do now.

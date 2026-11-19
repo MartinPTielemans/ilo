@@ -5,16 +5,13 @@
 //! shows over the browser window, as its child, and the mouse goes through it. What it asks of its
 //! window goes through `Host`.
 
-use std::{
-    rc::Rc,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{rc::Rc, sync::Arc, time::Duration};
+use web_time::Instant;
 
 use gpui::{
-    App, Bounds, Context, Div, FontWeight, Global, Pixels, Rgba, SharedString, Size, Task, TextRun,
-    TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind,
-    WindowOptions, WindowTextSystem, div, font, point, prelude::*, px, rgb, size,
+    App, Bounds, Context, Div, FontWeight, Global, Pixels, Point, Rgba, SharedString, Size, Task,
+    TextRun, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle,
+    WindowKind, WindowOptions, WindowTextSystem, div, font, point, prelude::*, px, rgb, size,
 };
 
 /// How long the pointer rests on a tile, row or button, from its last move, before its tooltip
@@ -33,6 +30,7 @@ use crate::tokens::tooltip::HEIGHT;
 /// Its window, wide enough for a long name, which truncates past it.
 pub use crate::tokens::tooltip::WINDOW_WIDTH;
 pub use crate::tokens::tooltip::{BUTTON_X, BUTTON_Y};
+use crate::tokens::tooltip::{DETAIL, DETAIL_GAP};
 pub const WINDOW_HEIGHT: f32 = HEIGHT;
 /// Round at half its height, but the corner at what it names, which is nearly square.
 const RADIUS: f32 = HEIGHT / 2.;
@@ -78,6 +76,8 @@ pub trait Host {
 pub struct Tip {
     pub text: SharedString,
     pub keys: Vec<SharedString>,
+    /// Said of it after the name, quieter, as a Live Folder's rows' age (#2979), or empty.
+    pub detail: SharedString,
 }
 
 impl Tip {
@@ -86,6 +86,15 @@ impl Tip {
         Tip {
             text,
             keys: Vec::new(),
+            detail: SharedString::default(),
+        }
+    }
+
+    /// A name with something said of it after.
+    pub fn detailed(text: SharedString, detail: SharedString) -> Self {
+        Tip {
+            detail,
+            ..Tip::named(text)
         }
     }
 }
@@ -103,6 +112,9 @@ pub enum Align {
     /// Right of it, starting BESIDE past the anchor's x, its right edge, and centred on it
     /// top to bottom, as Arc's is beside the footer's Library button.
     Beside,
+    /// `Beside` to its left, ending BESIDE short of the anchor's x, its left edge: toward the page
+    /// from a sidebar on the right.
+    BesideLeft,
 }
 
 /// What a tooltip hangs from: the tile, row or button it names, in the browser window.
@@ -140,12 +152,15 @@ impl Anchor {
         }
     }
 
-    /// Right of a button whose plate's frame is `frame`.
-    pub fn beside(frame: Bounds<Pixels>, window: Size<Pixels>) -> Self {
-        let x = f32::from(frame.right());
+    /// Beside a button whose plate's frame is `frame`, on its right, or on its `left`.
+    pub fn beside(frame: Bounds<Pixels>, window: Size<Pixels>, left: bool) -> Self {
+        let (x, align) = match left {
+            true => (f32::from(frame.left()), Align::BesideLeft),
+            false => (f32::from(frame.right()), Align::Beside),
+        };
         Anchor {
             x,
-            align: Align::Beside,
+            align,
             ..Self::under(frame, window)
         }
     }
@@ -154,9 +169,14 @@ impl Anchor {
 /// Whether a tooltip `width` wide under what it hangs from has its square corner on the right, for
 /// want of room to its right: it goes left from the anchor then, if there's room that side.
 fn mirrored(anchor: Anchor, width: f32) -> bool {
-    anchor.align == Align::Under
-        && anchor.x + BUTTON_X + width > anchor.window.0 - EDGE_INSET
-        && anchor.x - BUTTON_X - width >= EDGE_INSET
+    match anchor.align {
+        Align::Under => {
+            anchor.x + BUTTON_X + width > anchor.window.0 - EDGE_INSET
+                && anchor.x - BUTTON_X - width >= EDGE_INSET
+        }
+        Align::BesideLeft => true,
+        Align::Text | Align::Beside => false,
+    }
 }
 
 /// Where a tooltip of `size` has its top left: off the bottom right of a button's glyph, under a
@@ -168,6 +188,7 @@ pub fn place(anchor: Anchor, (width, height): (f32, f32)) -> (f32, f32) {
         Align::Under => anchor.x + BUTTON_X,
         Align::Text => anchor.x - TEXT_X,
         Align::Beside => anchor.x + BESIDE,
+        Align::BesideLeft => anchor.x - BESIDE - width,
     };
     // Past the edges it keeps EDGE_INSET from them, the left one first if it can't be both.
     let left = left
@@ -175,7 +196,7 @@ pub fn place(anchor: Anchor, (width, height): (f32, f32)) -> (f32, f32) {
         .max(EDGE_INSET);
     let middle = (anchor.top + anchor.bottom) / 2.;
     let top = match anchor.align {
-        Align::Beside => middle - height / 2.,
+        Align::Beside | Align::BesideLeft => middle - height / 2.,
         Align::Under if above(anchor, height) => middle - BUTTON_Y - height,
         Align::Under => middle + BUTTON_Y,
         _ if above(anchor, height) => anchor.top - GAP - height,
@@ -187,7 +208,7 @@ pub fn place(anchor: Anchor, (width, height): (f32, f32)) -> (f32, f32) {
 /// Whether a tooltip `height` tall goes above what it hangs from, for want of room below.
 fn above(anchor: Anchor, height: f32) -> bool {
     match anchor.align {
-        Align::Beside => false,
+        Align::Beside | Align::BesideLeft => false,
         Align::Under => (anchor.top + anchor.bottom) / 2. + BUTTON_Y + height > anchor.window.1,
         Align::Text => anchor.bottom + GAP + height > anchor.window.1,
     }
@@ -278,7 +299,10 @@ pub(crate) fn text_width(
 /// How `tip` lays out: its text, then a chip for each key, as wide as its glyph and its padding
 /// but no less than square.
 fn measure(tip: &Tip, system: &WindowTextSystem) -> Layout {
-    let text = text_width(&tip.text, TEXT_SIZE, FontWeight::SEMIBOLD, system);
+    let mut text = text_width(&tip.text, TEXT_SIZE, FontWeight::SEMIBOLD, system);
+    if !tip.detail.is_empty() {
+        text += DETAIL_GAP + text_width(&tip.detail, TEXT_SIZE, FontWeight::NORMAL, system);
+    }
     let chips: Vec<f32> = (tip.keys.iter())
         .map(|key| {
             let glyph = text_width(key, CHIP_TEXT_SIZE, FontWeight::SEMIBOLD, system);
@@ -319,9 +343,20 @@ impl Global for TooltipWindow {}
 /// Opens the tooltip's window, hidden, for `host` to show over the browser window, ahead of time
 /// as the toast's is.
 pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<Tooltip>> {
+    open_at(host, point(px(0.), px(0.)), false, cx)
+}
+
+/// Opens it at `origin` on screen, and on screen if `show`, as the preview does to show it alone
+/// where its host can't move it.
+pub fn open_at(
+    host: Rc<dyn Host>,
+    origin: Point<Pixels>,
+    show: bool,
+    cx: &mut App,
+) -> Option<WindowHandle<Tooltip>> {
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::new(
-            point(px(0.), px(0.)),
+            origin,
             size(
                 px(WINDOW_WIDTH + 2. * WINDOW_MARGIN),
                 px(WINDOW_HEIGHT + 2. * WINDOW_MARGIN),
@@ -333,7 +368,7 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<Tooltip>> {
             traffic_light_position: None,
         }),
         kind: WindowKind::Floating,
-        show: false,
+        show,
         focus: false,
         is_movable: false,
         is_resizable: false,
@@ -375,6 +410,7 @@ pub fn hover(window: u64, tip: Tip, anchor: Anchor, cx: &mut App) {
 
 /// As `hover`, with what the tooltip names in the window it's `over`, which may be an overlay's.
 pub fn hover_over(over: Over, tip: Tip, anchor: Anchor, cx: &mut App) {
+    crate::lazy_window::ready::<Tooltip>(cx);
     let Some(tooltip) = cx.try_global::<TooltipWindow>().map(|tooltip| tooltip.0) else {
         return;
     };
@@ -469,9 +505,13 @@ impl Tooltip {
 /// How the log names `tip`: its text, then its keys as a menu shows them, Ctrl+Shift+L off the Mac.
 fn label(tip: &Tip) -> String {
     let joint = if crate::shell::OFF_THE_MAC { "+" } else { "" };
-    match tip.keys.is_empty() {
+    let named = match tip.keys.is_empty() {
         true => tip.text.to_string(),
         false => format!("{} {}", tip.text, tip.keys.join(joint)),
+    };
+    match tip.detail.is_empty() {
+        true => named,
+        false => format!("{named} · {}", tip.detail),
     }
 }
 
@@ -497,7 +537,16 @@ impl Render for Tooltip {
             .text_color(rgb(PAPER))
             // Untruncated, it's as wide as it shaped, and a box that wide could round under it.
             .when(layout.truncated, |text| text.w(px(layout.text)).truncate())
-            .child(tip.text);
+            .child(tip.text)
+            .when(!tip.detail.is_empty(), |text| {
+                text.child(
+                    div()
+                        .ml(px(DETAIL_GAP))
+                        .font_weight(FontWeight::NORMAL)
+                        .text_color(rgb(PAPER).opacity(DETAIL))
+                        .child(tip.detail),
+                )
+            });
         let chip_top = (HEIGHT - CHIP_BODY) / 2.;
         let chips = tip
             .keys

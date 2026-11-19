@@ -12,19 +12,39 @@ stored() {
 import sqlite3, sys
 print(sqlite3.connect(sys.argv[1]).execute(sys.argv[2]).fetchone()[0])' "$db" "$1"
 }
-server_port=$(python3 -I -c '
+free_port() {
+  python3 -I -c '
 import socket
 s = socket.socket()
 s.bind(("127.0.0.1", 0))
-print(s.getsockname()[1])')
+print(s.getsockname()[1])'
+}
+server_port=$(free_port)
 # localhost, as passkeys, which the server offers, take no address for their origin.
 server_url="http://localhost:$server_port"
+# A run that sets sync_faults, a file's path, reaches the server through check/sync-proxy.py on
+# server_port, which drops sync's own requests while the file says to; the server then listens on
+# a port of its own, under the address the browser has. As count's endpoint, cleanup stops it.
+listen_port=$server_port
+if [ -n "${sync_faults:-}" ]; then
+  : > "$sync_faults"
+  listen_port=$(free_port)
+  proxy_log="$out/$run-proxy.log"
+  python3 -I check/sync-proxy.py "$server_port" "$listen_port" "$sync_faults" > "$proxy_log" 2>&1 3>&- &
+  collector=$!
+  for _ in $(seq 50); do
+    grep -q 'sync-proxy is up' "$proxy_log" && break
+    kill -0 "$collector" 2>/dev/null || fail "sync-proxy.py exited: $(tail -1 "$proxy_log")"
+    sleep 0.1
+  done
+  grep -q 'sync-proxy is up' "$proxy_log" || fail "sync-proxy.py didn't start"
+fi
 # The server is a native program on Windows, which reads the database's path as Windows names it:
 # Git Bash converts a path it's given alone, never one inside a URL.
 db_path=$db
 ! windows || db_path=$(cygpath -m "$db")
 # Each query logged, so a run can count the commits it sent (sync-devices).
-DEV_MODE=1 HOST=127.0.0.1 PORT=$server_port PUBLIC_URL=$server_url NO_COLOR=1 LOG=info,sqlx::query=debug \
+DEV_MODE=1 HOST=127.0.0.1 PORT=$listen_port PUBLIC_URL=$server_url NO_COLOR=1 LOG=info,sqlx::query=debug \
   DATABASE_URL="sqlite:$db_path?mode=rwc" "$ILO_SERVER" > "$server_log" 2>&1 3>&- &
 ilo_server=$!
 for _ in $(seq 100); do
@@ -50,6 +70,7 @@ sign_in_keys() {
     send "$@"
     return
   fi
+  installed xdotool "giving the sign-in window keys"
   if [ -z "$sign_in_window" ]; then
     sign_in_window=$(timeout 10 xdotool search --sync --all --onlyvisible --pid "$(window_pid)" \
       --name '^localhost$' | head -1)
@@ -71,8 +92,13 @@ codes=0
 # capture the window with the address typed.
 sign_in() {
   sign_in_window=
-  # The page focuses its field once it's there.
-  sign_in_keys type "$email"
+  focus_logged=
+  if engine_has ../core/sync.cc; then
+    focus_logged=1
+  else
+    echo "note: the engine predates the sign-in page's focus line, so its fields are typed into once they load"
+  fi
+  sign_in_type /authorize "$email"
   [ -z "${2:-}" ] || [ -z "$sign_in_window" ] || import -window "$sign_in_window" "$2" || true
   sign_in_keys key return
   await 'browser: sync sign-in loaded /authorize/email$' || fail "the server didn't take the address"
@@ -85,7 +111,7 @@ sign_in() {
   [ "$sent" -gt "$codes" ] || fail "ilo-server logged no sign-in code"
   codes=$sent
   code=$(grep -o '[0-9]\{6\} is your ilo sign-in code' "$server_log" | tail -1 | cut -c1-6)
-  sign_in_keys type "$code"
+  sign_in_type /authorize/email "$code"
   sign_in_keys key return
   [ "${1:-}" = first ] || [ "${1:-}" = passkey ] || return 0
   await 'browser: sync sign-in loaded /authorize/code$' || fail "the server didn't take the code"
@@ -93,11 +119,36 @@ sign_in() {
   sign_in_keys key tab
   sign_in_keys key return
 }
+# Types $2 into the sign-in page at $1 once the page has put its focus in its field, as the core
+# logs (core/sync.cc): keys typed before land nowhere, and Return then sends an empty form, which
+# the server refuses (#2554). The wait reads what was logged since the command before, as the
+# focus can come before the page's load is logged. On the driver's keys, the focus is then looked
+# for between that command and the typing, so typing on the load alone, the old order, fails here
+# whenever the focus came later.
+sign_in_type() {
+  local before=$step typed
+  [ -z "$focus_logged" ] ||
+    expect "browser: sync sign-in focused a field on $1\$" "the sign-in page at $1 didn't put its focus in its field"
+  sign_in_keys type "$2"
+  [ -n "$focus_logged" ] && [ "$step" != "$before" ] || return 0
+  typed=$step
+  sed -n "/^browser: drive $before: /,/^browser: drive $typed: /p" "$log" |
+    grep -q "browser: sync sign-in focused a field on $1\$" ||
+    fail "the keys for the sign-in page at $1 went in before the page put its focus in its field"
+}
 # Once the sign-in window has closed, Settings has the keyboard again: on Linux as the window
 # manager would give it, from xdotool or sway, as Settings' window is titled by its tab; the Mac's
 # AppKit gives it. On Windows and under Wayland the device's Settings takes the keyboard from
-# another copy's window, as a click on it would (#2114).
+# another copy's window, as a click on it would (#2114). On the Mac, with other copies running, the
+# device's copy is made the active app, and Settings… brings its Settings, GPUI's window, in front
+# of its browser window.
 settings_keyboard() {
+  if [ "$(uname)" = Darwin ]; then
+    [ -n "${others:-}" ] || return 0
+    take_activation
+    case $done in *" key GPUIWindow,"*) ;; *) send menu Settings… ;; esac
+    return 0
+  fi
   if windows; then
     python3 -I check/app-windows.py foreground "$(cat "/proc/$pid/winpid")" Sync > /dev/null ||
       fail "Settings couldn't have the keyboard again"
@@ -109,42 +160,75 @@ settings_keyboard() {
     return 0
   fi
   [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] || return 0
+  installed xdotool "giving Settings the keyboard back"
   settings=$(timeout 10 xdotool search --all --onlyvisible --pid "$(window_pid)" --name '^Sync$' | head -1)
   [ -n "$settings" ] || fail "the X server has no Settings window"
   xdotool windowactivate --sync "$settings" 2>/dev/null || xdotool windowfocus --sync "$settings" ||
     fail "Settings couldn't have the keyboard again"
 }
 
+# installed <tool> <what for>: fails the step, naming the tool, when the runner hasn't got it. Its
+# empty answer would otherwise read as the app's fault: the Flatpak job had no xclip, and Copy's
+# words read as missing (#3059).
+installed() {
+  command -v "$1" > /dev/null || fail "$2 needs $1, which isn't installed here"
+}
 # Sets clipped to what the clipboard holds, the X server's, the Wayland session's or Windows': its
 # text, or with formats the formats it holds. On the Mac the driver gives each copy a pasteboard of
-# its own in its place, which nothing else reads, so it's the device's text, as its driver logs it
-# (not the formats). A variable, not output, since the Mac's asks the driver, whose steps a
-# subshell would lose count of.
+# its own in its place, which nothing else reads, so it's the device's, as its driver logs it. A
+# variable, not output, since the Mac's asks the driver, whose steps a subshell would lose count of.
+# An empty clipboard reads as empty, as the words' leaving waits for, but a missing reader fails.
 clipboard() {
   if windows; then
     clipped=$(python3 -I check/clipboard-windows.py "${1:-text}" 2>/dev/null || true)
   elif [ "$(uname)" = Darwin ]; then
-    clipped=
-    [ -n "${1:-}" ] && return 0
     send pasteboard
-    clipped=$(sed -n "/^browser: drive $step: /,\$p" "$log" | sed -n 's/^browser: pasteboard text //p' | tail -1)
+    held=text
+    [ -z "${1:-}" ] || held=types
+    clipped=$(sed -n "/^browser: drive $step: /,\$p" "$log" |
+      sed -n "s/^browser: pasteboard $held //p" | tail -1)
+    [ "$held" = text ] || clipped=$(echo "$clipped" | tr ' ' '\n')
   elif [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    installed wl-paste "reading Wayland's clipboard"
     clipped=$(timeout 5 wl-paste -n ${1:+-l} 2>/dev/null || true)
   else
+    installed xclip "reading the X server's clipboard"
     clipped=$(timeout 5 xclip -selection clipboard -o ${1:+-t TARGETS} 2>/dev/null || true)
   fi
 }
 # The device's first browser window in front with the keyboard, as a click on it gives it. On
 # Windows the driver's window activates a window within its own copy alone, so the copy's window
 # takes the foreground from the others' too. Under Wayland a window comes forward only for the
-# copy sway has focused, so the copy is focused first, as a click in it would.
+# copy sway has focused, so the copy is focused first, as a click in it would. On the Mac each copy
+# activates itself only as it starts, and no background process can make one active, so the
+# active copy hands its activation over, as a click in the other's window would take it.
 forward() {
   if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
     swaymsg "[pid=$pid] focus" > /dev/null || fail "sway couldn't focus $on's window"
   fi
+  [ "$(uname)" != Darwin ] || take_activation
   send window 1
   ! windows || python3 -I check/app-windows.py foreground "$(cat "/proc/$pid/winpid")" > /dev/null ||
     fail "$on's window couldn't take the foreground"
+}
+# On the Mac, the device's copy made the active app: each other running copy yields to it, as only
+# the active one can, and the device waits up to 5 s to be active.
+take_activation() {
+  to=$on
+  to_pid=$pid
+  for d in a b c; do
+    eval "d_pid=\${${d}_pid:-}"
+    [ "$d" != "$to" ] && [ -n "$d_pid" ] && kill -0 "$d_pid" 2>/dev/null || continue
+    device "$d"
+    send yield "$to_pid"
+  done
+  device "$to"
+  for _ in $(seq 50); do
+    send state
+    [ "$active" = 1 ] && return 0
+    sleep 0.1
+  done
+  fail "$to didn't become the active app as the others yielded to it"
 }
 
 # The runs with several devices, each a copy of the app with a profile of its own: a, b and c, on

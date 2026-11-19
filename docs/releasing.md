@@ -37,11 +37,12 @@ A release's core batch lands first, as one squash PR from `batch/<version>`, or 
 
 From that squash until the release's branch is cut at its version commit, main takes only PRs that change checks, CI or docs, plus the fixes the orchestrator names for the release. A PR that changes `app/src`, `app/platform`, `core` or `engine` waits until the branch is cut, so the release is the tree its gate proved, plus fixes each proven on their own.
 
-1. **Move the version** on the release's branch, or on main until the nightly track is on. That's `app/Cargo.toml`, `app/Cargo.lock` and the metainfo's release line, merged as any change is.
+1. **Move the version** on the release's branch, or on main until the nightly track is on. That's `app/Cargo.toml`, `app/Cargo.lock` and the metainfo's release line, merged as any change is. It's in before the gate starts, since the gate runs on the commit that gets the tag. Main moves to the next version as soon as a release is cut, so a batch that lands for it already carries it; 0.2.1's batch landed on 0.2.0, and its tag went on a version-only child of the gated commit.
 2. **Make sure each OS has an engine for that commit.** Each OS's job stops without one, or packs an older core.
    - **On main:** Linux and Windows build nightly, so dispatch both on it: `gh workflow run engine-linux.yml --ref main` and `gh workflow run engine-windows-cross.yml --ref main`, with main at that commit. Then wait for their releases `engine-linux-<commit>` and `engine-windows-<commit>`. The Mac engine must exist for the commit too.
    - **On a release branch:** dispatch the same two with `--ref release/0.<minor>`. The Mac's is built on the owner's MacBook from the branch's commit, with `engine/build.sh`, then `tools/mac-engine-publish.sh`. `tools/mac-nightly.sh` builds main only.
-3. **Check the commit: the gate is green outside the quarantine list.** Check on macOS, Windows and Linux must pass on the release's commit.
+3. **Check the commit: the gate is green outside the quarantine list.** Check on Windows and Linux, and Check on macOS's default runs, must pass on the release's commit.
+   - **The Mac's other runs:** the ones Check on macOS leaves out of its default runs are `VM_RUNS` in `.github/workflows/check-mac.yml`, and they must pass on the owner's MacBook's check VM at that commit. The workflow's header gives each one's reason (#2205).
    - **The only reds allowed** are the runs, or steps of runs, in `app/check/quarantine.<os>`. They still run, but they don't fail a check, and each check's summary lists them under its runs.
    - **Any other red stops the release.** Fix it, or quarantine it under an open issue (`app/check/quarantine.sh` says how), before tagging. Never accept it at the gate.
    - **A quarantine line lasts 14 days.** Check scripts fails on a line older than that, or on one whose issue has closed.
@@ -54,6 +55,8 @@ From that squash until the release's branch is cut at its version commit, main t
    ```
 
    `--cleanup=verbatim` keeps the notes' `##` headings, which git's default cleanup strips as comment lines.
+
+   The notes needn't say who contributed: the draft's body ends with GitHub's list of the people whose first pull request is in the release, which the updater's text and the site's changelog don't have. The run's summary shows the list, a try's too.
 
    A quarantined line that is a bug a user can meet goes in the notes' Known gaps, and a check's own flake doesn't. The release run's summary lists both.
 
@@ -128,7 +131,7 @@ The Mac's Developer ID provisioning profile isn't a secret: every release carrie
 
 The profile's own date is 18 years out, but the certificate it lists expires on 2027-02-01, and a new certificate needs a new profile. So does a new key in `release.plist`, such as the passkey entitlement once Apple grants it. The release's API key can't make profiles. The owner makes one in the developer portal (Profiles › Distribution › Developer ID, App ID `app.ilo.browser`, the current certificate), downloads it, and commits it in place of the file.
 
-**Crash reports' symbols** go to the collector `app/branding/crash-reports` names only with the secret `SENTRY_AUTH_TOKEN`, an organization auth token that may upload debug files, and the variables `SENTRY_URL`, `SENTRY_ORG` and `SENTRY_PROJECT`: for ilo's, `https://de.sentry.io` (Sentry's EU region), `ilo-rg` and `ilo`. Each OS's job uploads its own (`tools/symbols.sh`), and `app/build.sh prod` uploads the Mac's with the same four in its environment. Without the token the packages are still built, and say no symbols were uploaded.
+**Crash reports' symbols** go to the collector `app/branding/crash-reports` names only with the secret `SENTRY_AUTH_TOKEN`, an organization auth token that may upload debug files, and the variables `SENTRY_URL`, `SENTRY_ORG` and `SENTRY_PROJECT`: for ilo's, `https://de.sentry.io` (Sentry's EU region), `ilo-rg` and `ilo`. Each OS's job uploads its own (`tools/symbols.sh`), and `app/build.sh prod` uploads the Mac's with the same four in its environment, with the engine's dSYMs the Mac job fetches first (`engine/fetch.sh symbols`). An engine released without them makes a release with a warning, and Mac symbols (`mac-symbols.yml`) uploads them for that version once its release has them. Without the token the packages are still built, and say no symbols were uploaded.
 
 **Linux.** Installs from GitHub update from ilo's Flatpak repository, a static OSTree repository in a Cloudflare R2 bucket (`tools/flatpak-repo.sh`). The bundle and `ilo.flatpakref` name it and carry its public key. The Linux files are built only with these, and without them nothing goes to the Flatpak repository and the draft isn't made:
 

@@ -16,6 +16,8 @@ if [ "$(uname)" = Linux ]; then
   ffmpeg -nostdin -loglevel error -y -f x11grab -draw_mouse 0 -framerate 60 -i "$DISPLAY" \
     -t "$2" -c:v libx264 -preset ultrafast -pix_fmt yuv420p -progress "$progress" "$3" &
   recorder=$!
+  # Ended, it ends its recording: a check that fails ends it before its own picture (#3191).
+  trap 'kill "$recorder" 2>/dev/null; rm -f "$progress"; exit 143' TERM INT
   # ffmpeg reports its frames each half second, the first report once it has written some.
   until grep -q '^frame=[1-9]' "$progress"; do
     kill -0 "$recorder" 2>/dev/null || break
@@ -27,7 +29,8 @@ if [ "$(uname)" = Linux ]; then
   rm -f "$progress"
   exit "$status"
 fi
-PID="$1" SECONDS_LONG="$2" OUT="$3" swift - <<'SWIFT'
+# The recording is this process, so ending it ends the recording (#3191).
+PID="$1" SECONDS_LONG="$2" OUT="$3" exec swift - <<'SWIFT'
 import Foundation
 import ScreenCaptureKit
 
@@ -52,7 +55,9 @@ final class Finished: NSObject, SCRecordingOutputDelegate {
 }
 
 // A stream can end by itself before it's stopped, and then stopping it says only that it had
-// (-3808, #2280), so this says why it ended and when, a line check.sh's FAIL carries.
+// (-3808, #2280), so this says why it ended and when, a line check.sh's FAIL or skip carries. The
+// recording ends with it: one the system stops as it's being stopped gets no finish, and stopping
+// it no error, so nothing else would end the wait for it (#3417).
 final class Ended: NSObject, SCStreamDelegate {
   var began: Date?
   var planned = 0.0
@@ -60,8 +65,7 @@ final class Ended: NSObject, SCStreamDelegate {
     let when = began.map {
       String(format: "%.1f s into %.1f s", Date().timeIntervalSince($0), planned)
     } ?? "before its first frame"
-    let line = "the stream ended by itself \(when): \(error)\n"
-    FileHandle.standardError.write(Data(line.utf8))
+    fail("the stream ended by itself \(when): \(error)")
   }
 }
 
@@ -105,7 +109,14 @@ ended.began = Date()
 print("recording")
 fflush(stdout)
 try await Task.sleep(for: .seconds(seconds))
-// The file is complete only once the recording output says so, after the stream stops.
+// The file is complete only once the recording output says so, after the stream stops. That takes
+// well under a second, so one that hasn't come in 5 s isn't coming, and the caller hears why rather
+// than waiting with the helper (#3417).
+do {
+  let late = String(format: "no recordingOutputDidFinishRecording came in 5 s after stopCapture, "
+    + "at the end of its %.1f s recording", seconds)
+  DispatchQueue.global().asyncAfter(deadline: .now() + 5) { fail(late) }
+}
 await withCheckedContinuation { continuation in
   finished.done = continuation
   stream.stopCapture { error in

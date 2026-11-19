@@ -1,7 +1,7 @@
 //! What the launch's picture of the sidebar needs to show in a window a little shorter or taller
 //! than the one it was taken in (crate::launch_picture).
 
-use super::{LIST_TOP, Shell};
+use super::Shell;
 use crate::launch_picture::Taken;
 use crate::tokens::shell::LIST_TRAIL;
 use crate::tokens::shell::TALL_FAVORITES;
@@ -21,6 +21,7 @@ impl Shell {
                 foot_top: viewport.into(),
                 shorter: height,
                 taller: height,
+                right: self.right,
             };
         }
         let foot_top = viewport - self.list_bottom();
@@ -42,7 +43,7 @@ impl Shell {
         };
         let (mut shorter, mut taller) = (room, room);
         // Past TALL_FAVORITES of the window's height, the favorites scroll with the list.
-        let scrolls_from = (self.list_top() - LIST_TOP) / TALL_FAVORITES;
+        let scrolls_from = (self.list_top() - self.list_start()) / TALL_FAVORITES;
         if self.tiles_scroll() {
             taller = taller.min(scrolls_from - viewport);
         } else {
@@ -58,6 +59,7 @@ impl Shell {
             foot_top: foot_top.into(),
             shorter: shorter.max(0.).into(),
             taller: taller.max(0.).into(),
+            right: self.right,
         }
     }
 }
@@ -110,6 +112,24 @@ mod tests {
         );
         assert_eq!(three.foot_top, four.foot_top);
         assert!(three.foot_top < 700. && three.foot_top > 600., "{three:?}");
+    }
+
+    /// With the sidebar on the right the picture says so, so the launch shows it there and only
+    /// there (#2375).
+    #[gpui::test]
+    fn the_picture_knows_its_side(cx: &mut TestAppContext) {
+        let host = Rc::new(Recorder::default());
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(host, cx));
+        draw(&shell, cx);
+        let left = shell.read_with(cx, |shell, _| shell.launch_picture(1000., 700.));
+        // Settings' Sidebar position, which the window reads as it draws.
+        cx.update(|_, cx| {
+            cx.set_global(crate::shell::SidebarRight(true));
+            cx.refresh_windows();
+        });
+        draw(&shell, cx);
+        let right = shell.read_with(cx, |shell, _| shell.launch_picture(1000., 700.));
+        assert!(!left.right && right.right, "{left:?} {right:?}");
     }
 
     /// Rows reaching under the foot leave the window no other height.

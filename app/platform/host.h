@@ -22,14 +22,14 @@ void host_centered(double width, double height, double* x, double* y);
 // Puts a window on screen at |x|, |y|, |width| by |height| in host_centered's terms, where the
 // first browser window will open, with the window's material and, unless |picture_width| is 0,
 // the sidebar's picture from |profile_dir| that a |picture_width| by |picture_height| window took
-// (host_save_launch_picture). Its part above |foot_top| points from the window's top shows at the
+// (host_save_launch_picture), at the window's left, or with |right| at its right. Its part above |foot_top| points from the window's top shows at the
 // window's top and the rest at its bottom, the room just above |foot_top| cropped or repeated to
 // fit (launch_picture.rs says when that draws the sidebar as the UI will). For the moment between
 // NSApp being made and the browser starting. With |maximized|, Windows' alone, it's maximized on
 // that frame's screen, as the first browser window will be (host_maximize_window), with no picture.
 void host_show_launch_window(const char* profile_dir, double x, double y, double width,
                              double height, bool maximized, double picture_width,
-                             double picture_height, double foot_top);
+                             double picture_height, double foot_top, bool right);
 
 // The visible frames of the screens a window may open on, in host_centered's terms, as x, y,
 // width and height, four to a screen: the main display's first, or with BROWSER_DISPLAY=builtin
@@ -53,10 +53,10 @@ void host_close_launch_window(void);
 // the run loop starts.
 void host_watch_finished_launching(void (*finished)(void));
 
-// Keeps the first |width| points of |ui_view|'s window, its sidebar, in |profile_dir| for the next
-// launch's window, unless the window is hidden or full screen, and says whether it took it. The
-// file is written in the background.
-bool host_save_launch_picture(void* ui_view, const char* profile_dir, double width);
+// Keeps the |width| points at the left of |ui_view|'s window, or with |right| at its right, its
+// sidebar, in |profile_dir| for the next launch's window, unless the window is hidden or full
+// screen, and says whether it took it. The file is written in the background.
+bool host_save_launch_picture(void* ui_view, const char* profile_dir, double width, bool right);
 // Windows: the same, from the sidebar's pixels in the frame the UI last drew, |columns| by |rows|
 // top-down BGRA. A picture of the window would have Windows repaint its frame, where its theme
 // paints the caption under the UI, on screen too (#1262).
@@ -202,12 +202,6 @@ void host_watch_option_taps(void (*tapped)(void* ui_view));
 // else. Linux's UI hears it itself, through GPUI's patch and the overlays it shows.
 void host_watch_ui_keyboard(void (*left)(void* ui_view));
 
-// Calls |pressed| with the UI's view of a browser window whose page the user presses a mouse
-// button in, as the press goes on to the page: a click in an agent's page takes it over (#1080).
-// Never for a press in the UI or the window's frame, nor for the wheel. On Linux the app hears
-// them itself, from GPUI under Wayland and from the X server while an agent works (page_presses.rs).
-void host_watch_page_presses(void (*pressed)(void* ui_view));
-
 // Whether a menu is open, the menu bar's or a context menu, and if so calls |apply| once none is,
 // instead of any function an earlier call left waiting. AppKit can crash when the main menu is
 // replaced while it tracks one, and the core's callbacks still come in while it does.
@@ -228,6 +222,11 @@ bool host_reduce_motion(void);
 // Calls |changed| on the UI thread each time that setting changes.
 void host_watch_reduce_motion(void (*changed)(void));
 
+// Whether the system shows times on a 12-hour clock: the Mac's "24-hour time" in Date & Time,
+// through its locale's preferred hour, and Windows' time format. Linux's desktop says so through
+// its settings portal or its locale, which platform/linux/clock.rs reads instead.
+bool host_twelve_hour_clock(void);
+
 // Whether the system opens http and https links with this app: whether it's the default browser.
 bool host_is_default_browser(void);
 
@@ -243,15 +242,16 @@ double host_since_launch(void);
 // The browser window of |ui_view| has closed: what showed over it hides, and its windows go.
 void host_forget_window(void* ui_view);
 
-// The overlays: the command bar, the Space's icon and theme pickers, a closed folder's preview and
-// the Boost editor. One shows at a time.
+// The overlays: the command bar, the Space's icon and theme pickers, a closed folder's preview, the
+// Boost editor and the switcher a held ⌃Tab shows. One shows at a time.
 #define HOST_COMMAND_BAR 0
 #define HOST_ICON_PICKER 1
 #define HOST_THEME_PICKER 2
 #define HOST_FOLDER_PREVIEW 3
 #define HOST_BOOST_EDITOR 4
+#define HOST_TAB_SWITCHER 5
 // The Site Controls take the same elevation call, though they aren't one of the overlays.
-#define HOST_SITE_CONTROLS 5
+#define HOST_SITE_CONTROLS 6
 
 // Gives the |overlay| (or the Site Controls) the shadow its elevation level draws, in Core
 // Animation's terms: a black line round its shape and a black drop shadow, each with an opacity
@@ -264,6 +264,14 @@ void host_set_overlay_elevation(int overlay,
                                 float shadow_opacity,
                                 double shadow_radius,
                                 double shadow_drop);
+
+// Windows' alone: the UI draws the shadow of the panel in |view|'s window, an overlay's, the find
+// bar's or the offer's, itself, |above|, |sides| and |below| points past the panel, as the menus
+// draw theirs, since Windows' own shadow comes only with its own corner (#2988). The host shows the
+// panel where it's asked, the window that much bigger round it, and lets clicks in that margin
+// through to what's under it, as clicks outside the panel. The Mac's and Linux's hosts draw it in a
+// window under the panel. Call it after the window is added.
+void host_set_shadow_margin(void* view, double above, double sides, double below);
 
 // Makes the window of |overlay_view| the |overlay| (one of the HOST_ overlays above), which
 // floats over a browser window when shown, for UI that has to draw over the page, translucent over
@@ -499,9 +507,9 @@ void host_hide_capture(void);
 // in a driven run.
 void host_copy_png(const uint8_t* png, size_t size);
 
-// Calls |png| with the main display's desktop picture as a PNG, at most the display's size in
-// pixels, before it returns, for Portrait Mode (#673), and says whether it did: false where the
-// system gives none, as off the Mac for now.
+// Calls |png| with the desktop picture of the display the browser is on as a PNG, at most the
+// display's size in pixels, before it returns, for Portrait Mode (#673), and says whether it did:
+// false where the system gives none, as on Linux, whose sandbox can't read it (#2682).
 bool host_desktop_picture(void* context,
                           void (*png)(void* context, const uint8_t* data, size_t size));
 
@@ -541,6 +549,40 @@ void host_show_toast(void* ui_view);
 
 // Hides the toast's window.
 void host_hide_toast(void);
+
+// Makes the window of |foot_bar_view| the foot bar: the bar a mode of the page, such as Arrange's
+// and pointing's, shows over the page's bottom centre, as a child of the browser window. A click on
+// it reaches its buttons, but it never takes the keyboard, which stays with the browser window and
+// so with the page. It starts hidden.
+void host_add_foot_bar(void* foot_bar_view);
+
+// Shows the foot bar's window over |ui_view|'s window, or moves it there: |width| by |height|
+// points, centred between |left| and |right| points in from the edges of the window's content,
+// with its bottom |bottom| points over the content's. It keeps those as the window resizes.
+void host_show_foot_bar(void* ui_view,
+                        double left,
+                        double right,
+                        double bottom,
+                        double width,
+                        double height);
+
+// Hides the foot bar's window.
+void host_hide_foot_bar(void);
+
+// Makes the window of |mini_bar_view| Arrange's mini bar: the small bar over the thing selected on
+// a page, as a child of the browser window. A click on the bar reaches its buttons, but it never
+// takes the keyboard, which stays with the browser window and so with the page. The window reaches
+// |margin| points past the bar on every side, for its shadow, and the margin lets the mouse
+// through. It starts hidden.
+void host_add_mini_bar(void* mini_bar_view, double margin);
+
+// Shows the mini bar's window over |ui_view|'s window, or moves it there: the bar |width| by
+// |height| points, its top left |x| and |y| points from the top left of the window's content. It
+// keeps that place as the window resizes, until the UI moves it.
+void host_show_mini_bar(void* ui_view, double x, double y, double width, double height);
+
+// Hides the mini bar's window.
+void host_hide_mini_bar(void);
 
 // Makes the window of |tooltip_view| the tooltip's, which floats over a browser window as its
 // child when shown, and lets the mouse through and never takes the keyboard. It starts hidden.
@@ -597,6 +639,17 @@ void host_show_link_target(void* ui_view, double left, double top, double fade);
 // Fades the link target's window out over |fade| seconds, then hides it.
 void host_hide_link_target(double fade);
 
+// The overlay window of |overlay_view| drew only inside the frame at (|left|, |top|), |width| by
+// |height| points in its content, with corners of |radius|. Where windows can't blend with what's
+// under them, as under X11 with no compositor, the host cuts the window to it, so the room it
+// keeps round it shows what's under it rather than black. Elsewhere it does nothing.
+void host_outline_overlay(void* overlay_view, double left, double top, double width, double height,
+                          double radius);
+
+// Whether a mouse button is down now, over any window, the page's included, which the UI doesn't
+// hear the presses of. The link target's window waits for the release to show, move or hide.
+bool host_mouse_down(void);
+
 // Gives |view| the keyboard in its window, from the page if the page has it.
 void host_focus(void* view);
 
@@ -609,6 +662,11 @@ int host_ask(const char* message, const char* detail, const char* const* buttons
 // Shows the close, minimize and zoom buttons of |ui_view|'s window, or hides them, as Arc does
 // while its sidebar is hidden.
 void host_show_window_buttons(void* ui_view, bool shown);
+
+// Puts |ui_view|'s window's close, minimize and zoom buttons at its right, mirrored, so close is at
+// the corner, and the reveal's window and the edge that brings it out at the right too, or back on
+// the left: Sidebar position (#2375). The UI lays out the rest.
+void host_set_sidebar_right(void* ui_view, bool right);
 
 // The Mac's close, minimize and zoom buttons as AppKit draws them in |ui_view|'s window, for the
 // copies the UI draws in their place: each one's centre across from the window's left edge, their
@@ -623,6 +681,10 @@ void host_press_window_button(void* ui_view, int button);
 // it's full screen already or on its way, as AppKit takes a window opened from a full-screen one
 // there itself. Returns whether it was.
 bool host_enter_full_screen(void* ui_view);
+
+// The Mac's: whether the browser window of |ui_view| is full screen or on its way, from the start
+// of its transition, before the window hears it's over.
+bool host_window_full_screen(void* ui_view);
 
 // Whether the browser window of |ui_view| is on the macOS desktop shown, as a window AppKit takes
 // full screen isn't until macOS has moved to its desktop. Off the Mac, always.
@@ -647,6 +709,10 @@ bool host_window_restored_frame(void* ui_view, double* x, double* y, double* wid
 // Maximizes |ui_view|'s window on the screen of the frame it has, which it then un-maximizes to, as
 // a window comes back when it quit maximized (bc_saved_window_maximized).
 void host_maximize_window(void* ui_view);
+// Puts |ui_view|'s window's minimize, maximize and close at its right corner with the sidebar on
+// the left, as the top bar has them (#3160), or back with the sidebar. The UI draws them; the frame
+// offers Snap layouts over maximize where they are.
+void host_set_window_buttons_right(void* ui_view, bool right);
 #endif
 
 // Makes the window of |reveal_view| the sidebar reveal of |ui_view|'s window, which shows over its
@@ -677,7 +743,8 @@ void host_show_settings(void);
 void host_hide_settings(void);
 
 // Closes the window with the keyboard if it's one of Chrome's with a close button, such as its
-// Task Manager or DevTools undocked, as ⌘W does in Chrome, and says whether it did.
+// Task Manager or DevTools undocked, as ⌘W does in Chrome, and says whether it did. A tab's dialog
+// isn't one: ⌘W on it closes its tab.
 bool host_close_other_window(void);
 
 // A detent on the trackpad, as a swipe's nearest Space changes.
@@ -800,9 +867,11 @@ bool host_key_repeated(void);
 // NUL, and returns its whole length in bytes without the NUL, 0 if it holds none.
 size_t host_paste(char* text, size_t capacity);
 
-// Opens |url| in Safari, which plays the protected video the engine can't. A driven run only logs it,
-// so checks never launch Safari.
-void host_open_in_safari(const char* url);
+// Opens |url| in the browser the protected-playback card offers for video the engine can't play:
+// Safari on the Mac, and the system's default browser on Windows, which the card offers only while
+// that isn't this app (#2468). Linux offers none. A driven run only logs it, so checks never launch
+// another browser.
+void host_open_elsewhere(const char* url);
 
 // Shows System Settings' list of apps with Full Disk Access, which an import from Safari needs. A
 // driven run only logs it, so checks never open System Settings.

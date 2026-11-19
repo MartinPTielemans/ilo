@@ -3,7 +3,8 @@
 //! bindings, the menus, the command bar and the keys the page hands back all ask this store, so a
 //! change reaches them at once.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 use gpui::{
     Action, App, Global, KeyBinding, KeyBindingContextPredicate, Keystroke, Modifiers, NoAction,
@@ -109,7 +110,8 @@ impl SecondPress {
         second
     }
 
-    /// The page didn't keep `keystroke`, so ilo ran its command, and the next press is a first.
+    /// ilo ran its command for `keystroke`, as the page didn't keep it or ilo took it first, so the
+    /// next press is a first.
     pub fn declined(&mut self, keystroke: &str) {
         if (self.0.as_ref()).is_some_and(|(_, first, _)| first == keystroke) {
             self.0 = None;
@@ -198,7 +200,31 @@ fn bindings_of(key: &str, action: Box<dyn Action>, cx: &App) -> Vec<KeyBinding> 
         let action = action.boxed_clone();
         KeyBinding::load(&key, action, Some(context.clone()), false, None, cx).ok()
     };
-    pressed_as(key).into_iter().filter_map(load).collect()
+    let pressed = pressed_as(key);
+    // GPUI hears a key whose shift makes a symbol with the shift taken into it, as ⌃⇧2 is ⌃@ on
+    // the Mac and Alt+@ under X11, where a page hands the browser the key with shift. The binding
+    // with shift comes first, so the menus show it.
+    let unshifted: Vec<String> = pressed
+        .iter()
+        .filter_map(|key| without_shift(key))
+        .collect();
+    pressed
+        .into_iter()
+        .chain(unshifted)
+        .filter_map(load)
+        .collect()
+}
+
+/// `key` without its shift, when what it presses with shift is a symbol shift makes, as
+/// ctrl-shift-@ is typed ctrl-@.
+fn without_shift(key: &str) -> Option<String> {
+    let (held, character) = key.rsplit_once('-')?;
+    let shifted = character.chars().count() == 1 && "~!@#$%^&*()_+{}|:\"<>?".contains(character);
+    let held: Vec<&str> = held.split('-').collect();
+    (shifted && held.contains(&"shift")).then(|| {
+        let held = held.into_iter().filter(|&each| each != "shift");
+        held.chain([character]).collect::<Vec<_>>().join("-")
+    })
 }
 
 /// Off the Mac, as on Linux and Windows, the keys SHORTCUTS writes the Mac's way are pressed with
@@ -258,6 +284,14 @@ pub fn view_binding(key: &str, action: Box<dyn Action>, context: &str, cx: &App)
         .ok()
         .map(std::rc::Rc::new);
     KeyBinding::load(&pressed, action, context, false, None, cx).expect("a valid key")
+}
+
+/// The core's answer for a key the page has: `ask`'s, unless the App is in an update, as when an
+/// agent's key or an event loop nested in one delivers it. An update of ours would panic there,
+/// inside the core's callback, and abort ilo, so the key goes to the page and only ilo's shortcut
+/// for it is missed (#2705).
+pub fn page_key_answer(cx: Option<&gpui::AsyncApp>, ask: impl FnOnce() -> bool) -> bool {
+    !cx.is_some_and(gpui::AsyncApp::is_updating) && ask()
 }
 
 /// A key the core names (bc_key) as a keystroke in GPUI's terms, with the modifiers in the order
@@ -809,6 +843,17 @@ mod tests {
 
     use super::{super::commands::ShellHandle, *};
 
+    /// A key the page has, asked about while the App is in an update, goes to the page without an
+    /// update of ours, which would panic in the core's callback and abort ilo (#2705). Once the
+    /// update is over, the ask is answered as before.
+    #[gpui::test]
+    fn a_page_key_asked_mid_update_goes_to_the_page(cx: &mut TestAppContext) {
+        let app = cx.to_async();
+        let asked = || page_key_answer(Some(&app), || app.update(|_| true));
+        assert!(!cx.update(|_| asked()), "ilo kept a key asked mid-update");
+        assert!(asked(), "ilo didn't keep a key it takes");
+    }
+
     /// Whether the Shortcuts tab's search for `typed` finds each of `rows`, a name and the
     /// command's keystroke as a binding writes it, or none.
     fn found(typed: &str, rows: &[(&str, &str)]) -> Vec<bool> {
@@ -1038,6 +1083,118 @@ mod tests {
         cx.run_until_parked();
         cx.simulate_keystrokes("cmd-s");
         assert!(!shell.read_with(&cx, |shell, _| shell.sidebar_hidden));
+    }
+
+    /// With the UI's keyboard in the browser window, as after a click on the sidebar, a key whose
+    /// shift makes a symbol is heard as the platform gives it: ⌃⇧2 as ⌃@ on the Mac, the shift
+    /// taken into the character, and as Alt+@ under X11, which is the Mac's ⌃@ here.
+    #[gpui::test]
+    fn shifted_symbol_keys_from_the_ui_run_as_the_platform_hears_them(cx: &mut TestAppContext) {
+        use crate::shell::drag::detents::shell_with;
+
+        let ran: Rc<RefCell<Vec<Command>>> = Rc::default();
+        let runs = ran.clone();
+        cx.update(|cx| {
+            cx.bind_keys(key_bindings(cx));
+            cx.on_action(move |run: &Run, _| runs.borrow_mut().push(run.0));
+        });
+        let (shell, _) = shell_with(cx, &[], &[1, 2], Default::default());
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |window, cx| {
+                let focus = shell.read(cx).focus_handle.clone();
+                window.focus(&focus, cx);
+                shell.clone()
+            })
+        });
+        let mut cx = VisualTestContext::from_window(window.unwrap().into(), cx);
+        cx.simulate_resize(gpui::size(gpui::px(1000.), gpui::px(700.)));
+        cx.run_until_parked();
+        cx.simulate_keystrokes(
+            "ctrl-shift-2 ctrl-@ ctrl-! ctrl-} ctrl-{ ctrl-+ ctrl-_ cmd-} cmd-{",
+        );
+        assert_eq!(
+            ran.take(),
+            [
+                Command::FocusPane(1),
+                Command::FocusPane(1),
+                Command::FocusPane(0),
+                Command::NextPane,
+                Command::PreviousPane,
+                Command::AddSplit,
+                Command::CloseSplitPane,
+                Command::NextTab,
+                Command::PreviousTab,
+            ]
+        );
+        // The menus still show the key with shift.
+        let shown = cx.update(|_, cx| {
+            let keymap = cx.key_bindings();
+            let keymap = keymap.borrow();
+            let binding = keymap
+                .bindings_for_action(&Run(Command::FocusPane(1)))
+                .next();
+            binding.map(|binding| {
+                binding.keystrokes()[0]
+                    .inner()
+                    .unparse(OperatingSystem::Mac)
+            })
+        });
+        assert_eq!(shown.as_deref(), Some("ctrl-shift-2"));
+
+        // No key, as GPUI hears it, runs two commands in one context, so a binding without its
+        // shift can't shadow another command's, as ⌘} would Next Tab's or ⌘+ Zoom In's.
+        let heard = |key: &gpui::Keystroke| (key.key.clone(), key.modifiers);
+        let clashes = cx.update(|_, cx| {
+            let keymap = cx.key_bindings();
+            let keymap = keymap.borrow();
+            let bindings: Vec<_> = keymap.bindings().collect();
+            let mut clashes = Vec::new();
+            for (at, first) in bindings.iter().enumerate() {
+                for second in &bindings[at + 1..] {
+                    let same_keys = first.keystrokes().len() == second.keystrokes().len()
+                        && (first.keystrokes().iter().zip(second.keystrokes()))
+                            .all(|(a, b)| heard(a.inner()) == heard(b.inner()));
+                    if same_keys
+                        && first.predicate() == second.predicate()
+                        && !first.action().partial_eq(second.action())
+                    {
+                        let key = first.keystrokes()[0].inner().unparse(OperatingSystem::Mac);
+                        let named =
+                            |action: &dyn gpui::Action| match action.as_any().downcast_ref::<Run>()
+                            {
+                                Some(run) => format!("{:?}", run.0),
+                                None => action.name().to_string(),
+                            };
+                        let (first, second) = (named(first.action()), named(second.action()));
+                        clashes.push(format!("{key}: {first} and {second}"));
+                    }
+                }
+            }
+            clashes
+        });
+        assert_eq!(clashes, Vec::<String>::new());
+        // Off the Mac too, where ⌘ is pressed as Ctrl and ⌃ as Alt.
+        let mut pressed: Vec<(gpui::Keystroke, Command)> = Vec::new();
+        for &(key, command, _) in SHORTCUTS {
+            if !applies(key, true) {
+                continue;
+            }
+            let keys = pressed_off_the_mac(key);
+            let unshifted: Vec<String> = keys.iter().filter_map(|key| without_shift(key)).collect();
+            for key in keys.into_iter().chain(unshifted) {
+                let key = gpui::Keystroke::parse_with_os(&key, OperatingSystem::Linux).unwrap();
+                pressed.push((key, command));
+            }
+        }
+        for (at, (key, command)) in pressed.iter().enumerate() {
+            for (other, other_command) in &pressed[at + 1..] {
+                assert!(
+                    heard(key) != heard(other) || command == other_command,
+                    "off the Mac, {} runs both {command:?} and {other_command:?}",
+                    key.unparse(OperatingSystem::Linux)
+                );
+            }
+        }
     }
 
     /// ⌃D in a text field of the UI deletes forward, as in any Mac field, and toggles nothing;
@@ -1481,5 +1638,137 @@ mod tests {
             recorded(&keystroke(false, true, false, "k")),
             Err(Refused::Plain)
         );
+    }
+
+    /// The commands SHORTCUTS runs for `heard`, as GPUI hears a key, where `off_the_mac` presses
+    /// SHORTCUTS' keys as Linux does.
+    fn run_by(heard: &Keystroke, off_the_mac: bool) -> Vec<Command> {
+        let os = match off_the_mac {
+            true => OperatingSystem::Linux,
+            false => OperatingSystem::Mac,
+        };
+        let same = |key: &str| {
+            Keystroke::parse_with_os(key, os)
+                .is_ok_and(|key| (&key.key, key.modifiers) == (&heard.key, heard.modifiers))
+        };
+        (SHORTCUTS.iter())
+            .filter(|&&(key, _, _)| applies(key, off_the_mac))
+            .filter(|&&(key, _, _)| match off_the_mac {
+                true => pressed_off_the_mac(key).iter().any(|key| same(key)),
+                false => same(key),
+            })
+            .map(|&(_, command, _)| command)
+            .collect()
+    }
+
+    /// The Mac's GPUI names a digit key by its place while ⌃ and ⇧ are held without ⌘, so ⌃⇧2,
+    /// Go to Pane 2, runs on layouts whose ⇧2 types another character than US's @: Danish's and
+    /// German's ", which GPUI heard as ⌃" (#3502). ⇧2 and ⌥⇧2, which type, and any key without ⌃,
+    /// as a Japanese composition's are, still give the character the layout types.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_digit_keys_with_control_and_shift_are_heard_by_their_place() {
+        const TWO: u16 = 0x13;
+        const A: u16 = 0x00;
+        let heard = |code, control, shift, unshifted: &str, shifted: &str| {
+            let (key, shift) =
+                gpui_macos::layout_key(code, control, shift, unshifted.into(), shifted.into());
+            let modifiers = Modifiers {
+                control,
+                shift,
+                ..Default::default()
+            };
+            Keystroke {
+                modifiers,
+                key,
+                key_char: None,
+            }
+        };
+        for (layout, shifted) in [("US", "@"), ("Danish", "\""), ("German", "\"")] {
+            let pane_2 = heard(TWO, true, true, "2", shifted);
+            assert_eq!(
+                pane_2.unparse(OperatingSystem::Mac),
+                "ctrl-shift-2",
+                "{layout}"
+            );
+            assert_eq!(run_by(&pane_2, false), [Command::FocusPane(1)], "{layout}");
+            // ⇧2 and ⌥⇧2, whose ⌥ GPUI leaves to the text it types, as before.
+            let typed = heard(TWO, false, true, "2", shifted);
+            assert_eq!(
+                (typed.key.as_str(), typed.modifiers.shift),
+                (shifted, false)
+            );
+            assert_eq!(heard(TWO, true, false, "2", shifted).key, "2");
+        }
+        // Letters keep their shift, with ⌃ too.
+        assert_eq!(
+            heard(A, true, true, "a", "A").unparse(OperatingSystem::Mac),
+            "ctrl-shift-a"
+        );
+        assert_eq!(
+            heard(A, false, true, "a", "A").unparse(OperatingSystem::Mac),
+            "shift-a"
+        );
+        // Japanese's keys, as the input method takes them.
+        assert_eq!(heard(A, false, false, "a", "A").key, "a");
+        assert_eq!(heard(TWO, false, true, "2", "\"").key, "\"");
+    }
+
+    /// Off the Mac, GPUI names a digit key by its place while shift and Alt or Ctrl are held, so
+    /// ⌃⇧2, Go to Pane 2, pressed as Alt+Shift+2, runs on layouts whose Shift+2 types another
+    /// character than US's @: Danish's and German's ", which xkb gave GPUI as Alt+" (#3502).
+    /// Shift+2 and any key without Alt or Ctrl, as a Japanese composition's are, still give the
+    /// character the layout types.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_digit_keys_with_alt_or_ctrl_and_shift_are_heard_by_their_place() {
+        use xkbcommon::xkb;
+        // evdev's codes, plus xkb's 8.
+        const SHIFT: u32 = 50;
+        const CTRL: u32 = 37;
+        const ALT: u32 = 64;
+        const TWO: u32 = 11;
+        const A: u32 = 38;
+        let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+        let heard = |layout: &str, held: &[u32], key: u32| {
+            let keymap = xkb::Keymap::new_from_names(
+                &context,
+                "evdev",
+                "pc105",
+                layout,
+                "",
+                None,
+                xkb::COMPILE_NO_FLAGS,
+            )
+            .unwrap_or_else(|| panic!("xkb has no {layout} layout"));
+            let mut state = xkb::State::new(&keymap);
+            for &code in held {
+                state.update_key(xkb::Keycode::new(code), xkb::KeyDirection::Down);
+            }
+            let modifiers = Modifiers {
+                shift: held.contains(&SHIFT),
+                control: held.contains(&CTRL),
+                alt: held.contains(&ALT),
+                ..Default::default()
+            };
+            gpui_linux::keystroke_from_xkb(&state, modifiers, xkb::Keycode::new(key))
+        };
+        let unparse = |key: Keystroke| key.unparse(OperatingSystem::Linux);
+        for (layout, shifted) in [("us", "@"), ("dk", "\""), ("de", "\""), ("jp", "\"")] {
+            let pane_2 = heard(layout, &[ALT, SHIFT], TWO);
+            assert_eq!(run_by(&pane_2, true), [Command::FocusPane(1)], "{layout}");
+            assert_eq!(unparse(pane_2), "alt-shift-2", "{layout}");
+            let with_ctrl = heard(layout, &[CTRL, SHIFT], TWO);
+            assert_eq!(unparse(with_ctrl), "ctrl-shift-2", "{layout}");
+            let typed = heard(layout, &[SHIFT], TWO);
+            assert_eq!(
+                (typed.key.as_str(), typed.modifiers.shift),
+                (shifted, false)
+            );
+            assert_eq!(unparse(heard(layout, &[ALT], TWO)), "alt-2", "{layout}");
+            assert_eq!(unparse(heard(layout, &[ALT, SHIFT], A)), "alt-shift-a");
+            assert_eq!(unparse(heard(layout, &[SHIFT], A)), "shift-a", "{layout}");
+            assert_eq!(unparse(heard(layout, &[], A)), "a", "{layout}");
+        }
     }
 }

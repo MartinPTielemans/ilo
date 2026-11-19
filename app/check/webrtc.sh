@@ -1,3 +1,4 @@
+# check.sh runs this at 610.
 # A page's WebRTC tells it no address its HTTP doesn't (decision 10, #1774), read from getStats.
 # With no setting and no proxy, it gathers only server-reflexive UDP candidates, on the default
 # route's interface, none of the computer's own, and two peers of the page connect through STUN
@@ -98,7 +99,7 @@ relay_switch() {
     expect '^browser: settings tab Privacy$' "a click on Privacy didn't show its section"
   fi
   settings_drew Privacy
-  send clickkey $(drawn "switch relay calls")
+  click_in_sight "switch relay calls"
   expect "^browser: relay calls $1\$" "a click on Relay calls' switch didn't turn it $1"
   [ "$1" = off ] ||
     ../tools/window-screenshot.sh "$pid" "$out/webrtc-settings.png" all || fail "no window to capture"

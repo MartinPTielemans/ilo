@@ -11,7 +11,8 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, mpsc};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::Duration;
+use web_time::{Instant, SystemTime};
 
 use futures::StreamExt;
 use gpui::{App, AppContext, Context, SharedString};
@@ -20,6 +21,7 @@ use serde_json::Value;
 use super::ready::{Found, Ready};
 use super::runner::{self, Cli, Failure, Launch, Out, Process};
 use super::{Agents, Client, Question, ToolResult, page, site, tools};
+use crate::shell::MenuEntry;
 
 /// The answers an ask shows as buttons on the card, at most, and how long each may be.
 pub const ANSWERS: usize = 3;
@@ -228,6 +230,8 @@ pub struct Traced {
     /// Why it failed, as its call's answer said.
     pub error: Option<SharedString>,
     pub picture: Option<Arc<gpui::Image>>,
+    /// How a close ended when its page had a say.
+    pub close: Option<tools::Close>,
 }
 
 /// The page the user was on when they asked, which goes as its address and title only.
@@ -879,7 +883,13 @@ impl Agents {
             let found = looked.await;
             _ = agents.update(cx, |agents, cx| {
                 agents.tasks.looking = false;
-                agents.tasks.found.extend(found);
+                for (cli, mut found) in found {
+                    // A CLI that didn't answer this time keeps the list it gave last.
+                    if found.models.is_none() && found.ready == Ready::SignedIn {
+                        found.models = agents.cli_models(cli).cloned();
+                    }
+                    agents.tasks.found.insert(cli, found);
+                }
                 agents.save();
                 // The first ready is the default until the user picks one.
                 if agents
@@ -903,21 +913,36 @@ impl Agents {
         self.tasks.default
     }
 
-    /// The models `cli`'s Model pop-up offers after its own default, as id and name: Claude's
-    /// aliases, and the models Codex listed when it was last looked for.
+    /// The models `cli`'s Model pop-up offers after its own default, which is the empty id, as id
+    /// and name in the CLI's order: those it listed when last looked for. ilo runs the CLI without
+    /// the user's settings files, so the default is the CLI's, not theirs.
     pub fn task_models(&self, cli: Cli) -> Vec<(String, String)> {
-        match cli.models() {
-            [] => self
-                .tasks
-                .found
-                .get(&cli)
-                .map(|found| found.models.clone())
-                .unwrap_or_default(),
-            models => models
-                .iter()
+        match self.cli_models(cli) {
+            Some(models) => models.listed.clone(),
+            None => (cli.unlisted_models().iter())
                 .map(|(id, name)| (id.to_string(), name.to_string()))
                 .collect(),
         }
+    }
+
+    /// `cli`'s Model menu, as its ids and items: its own default first, saying which model it is
+    /// where the CLI says, then its models, as the CLI last listed them, so the menu never waits
+    /// on the CLI.
+    pub fn task_model_menu(&self, cli: Cli) -> (Vec<(String, String)>, Vec<MenuEntry>) {
+        model_menu(
+            self.task_model(cli),
+            self.task_default_model(cli),
+            self.task_models(cli),
+        )
+    }
+
+    /// Which model `cli`'s own default is, by name, where it said when last looked for.
+    pub fn task_default_model(&self, cli: Cli) -> Option<&str> {
+        self.cli_models(cli)?.default.as_deref()
+    }
+
+    fn cli_models(&self, cli: Cli) -> Option<&super::ready::Models> {
+        self.tasks.found.get(&cli)?.models.as_ref()
     }
 
     /// Run tasks on, in Settings › Agents.
@@ -927,22 +952,20 @@ impl Agents {
         cx.notify();
     }
 
-    /// The model `cli` runs tasks with, empty for its own default.
+    /// The model `cli` runs tasks with, empty for its own default, which a saved model the CLI no
+    /// longer lists falls back to. It stays saved, so it's back if the CLI lists it again.
     pub fn task_model(&self, cli: Cli) -> &str {
-        self.tasks.models.get(&cli).map_or("", String::as_str)
+        let chosen = self.tasks.models.get(&cli).map_or("", String::as_str);
+        match self.task_models(cli).iter().any(|(id, _)| id == chosen) {
+            true => chosen,
+            false => "",
+        }
     }
 
     /// The model `cli` runs tasks with, by name, such as Haiku, or None for its own default.
     pub fn task_model_name(&self, cli: Cli) -> Option<SharedString> {
         let chosen = self.task_model(cli);
-        if chosen.is_empty() {
-            return None;
-        }
-        let models = self.task_models(cli);
-        let name = models
-            .into_iter()
-            .find(|(id, _)| id == chosen)
-            .map_or(chosen.to_string(), |(_, name)| name);
+        let (_, name) = (self.task_models(cli).into_iter()).find(|(id, _)| id == chosen)?;
         Some(name.into())
     }
 
@@ -1193,6 +1216,7 @@ impl Agents {
                     ended: Some(now),
                     error: None,
                     picture: None,
+                    close: None,
                 });
             }
             Out::Ended(None) => {
@@ -1664,6 +1688,7 @@ impl Agents {
             ended,
             error: None,
             picture: None,
+            close: None,
         });
         // Its first step: it's under way, and what it wrote before it was said along the way.
         task.waiting = None;
@@ -1725,6 +1750,21 @@ impl Agents {
         });
         step.picture = image.and_then(|image| picture(&image));
         cx.notify();
+    }
+
+    /// `agent`'s close `call` ended as its page had a say, which its line says once answered.
+    pub(super) fn close_ended(&mut self, agent: &str, call: u64, close: tools::Close) {
+        let Some(key) = self.tracer(agent, call) else {
+            return;
+        };
+        let Some(task) = self.task_mut(&key) else {
+            return;
+        };
+        let step =
+            (task.trace.iter_mut().rev()).find(|step| step.call == call && step.ended.is_none());
+        if let Some(step) = step {
+            step.close = Some(close);
+        }
     }
 
     /// A client said hello: the name its sessions' cards show. One the user connected in
@@ -1882,6 +1922,9 @@ impl Agents {
                     action: entry.action.to_string(),
                     site: entry.site.to_string(),
                     refused: entry.refused.to_string(),
+                    target: entry.target.to_string(),
+                    url: entry.url.to_string(),
+                    sent: entry.sent.clone(),
                 })
                 .collect();
             let over = steps.len().saturating_sub(crate::agent_history::STEPS);
@@ -2082,7 +2125,7 @@ impl Agents {
             }
             "select" => {
                 did.target = element.as_ref().map(named).unwrap_or_default();
-                did.text = page::clip(&string("option"), tools::TYPED_SHOWN);
+                did.text = page::clip(&page::one_line(&string("option")), tools::TYPED_SHOWN);
             }
             "press_key" => did.target = string("key"),
             "request" => did.target = super::request::described(arguments),
@@ -2140,7 +2183,7 @@ impl Agents {
         let own = self.browser.space_tab_ids(space, cx);
         match tabs.iter().find(|tab| !own.contains(tab)) {
             Some(tab) => Err(format!(
-                "Tab {tab} isn't one of yours: give the ids of tabs in your Space, from list_tabs."
+                "Tab {tab} isn't one of yours: give the ids of your own tabs, from list_tabs."
             )),
             None => Ok(tabs),
         }
@@ -2320,7 +2363,7 @@ const RETRY: &str = "Go on from where you stopped.";
 pub fn first_message(asked: &str, page: Option<&AskedOn>) -> String {
     match page {
         Some(page) => format!(
-            "{asked}\n\n(I'm on “{}”, {}. Open it in your Space if you need it.)",
+            "{asked}\n\n(I'm on “{}”, {}. Open it in a tab of your own if you need it.)",
             page.title, page.url
         ),
         None => asked.to_string(),
@@ -2663,9 +2706,11 @@ fn together(gathered: Vec<Gathered<'_>>) -> Vec<Together<'_>> {
         let did = &step.did;
         let groups = (did.tab.is_some() || did.tool == "open_tab")
             && !matches!(did.tool.as_str(), "thought" | "ask" | "list_tabs");
+        // Closes join only those their pages answered alike.
         let like = |line: &Together| {
             matches!(line, Together::Steps(steps)
-                if steps[0].1.did.tool == did.tool && steps[0].1.did.target == did.target)
+                if steps[0].1.did.tool == did.tool && steps[0].1.did.target == did.target
+                    && steps[0].1.close == step.close)
         };
         let on_tab = |line: &Together| matches!(line, Together::Steps(steps) if steps.iter().any(|(_, each)| each.did.tab == did.tab));
         let joins = (lines.len() > from && groups)
@@ -2696,6 +2741,19 @@ fn trace_step(steps: &[(usize, &Traced)]) -> TraceStep {
     let took = step
         .ended
         .map(|ended| ended.saturating_duration_since(step.started));
+    // A page that asked to stay answered the agent: its tab is open, and nothing failed.
+    let close = step.close.filter(|_| step.ended.is_some());
+    if let Some(close) = close {
+        return TraceStep {
+            key,
+            glyph: tools::step_glyph(&step.did.tool),
+            title: tools::close_title(&step.did, close).into(),
+            description: "".into(),
+            running: false,
+            failed: false,
+            opens: Opens::Nothing,
+        };
+    }
     let description = match (&step.error, took) {
         (Some(error), _) => tools::reason(error),
         // A wait's title says its time.
@@ -2747,6 +2805,22 @@ fn trace_group(steps: &[(usize, &Traced)]) -> TraceStep {
         .collect();
     let count = tabs.len();
     let running = tabs.iter().filter(|tab| tab.running).count();
+    // Closes their pages answered alike, as `together` joins them.
+    if let (0, Some(close)) = (running, first.close) {
+        let did = tools::Did {
+            site: format!("{count} tabs"),
+            ..first.did.clone()
+        };
+        return TraceStep {
+            key,
+            glyph: tools::step_glyph(&did.tool),
+            title: tools::close_title(&did, close).into(),
+            description: "".into(),
+            running: false,
+            failed: false,
+            opens: Opens::Steps(tabs),
+        };
+    }
     let failed = tabs.iter().filter(|tab| tab.failed).count();
     let tense = match (running, failed) {
         (1.., _) => tools::Tense::Now,
@@ -2830,4 +2904,28 @@ fn receipt(session: &Session, ended: &str) -> String {
         true => format!("Done {ended}").trim_end().to_string(),
         false => format!("Done · {}", did.join(" · ")),
     }
+}
+
+/// A CLI's Model menu, as its ids and items, with `chosen` checked: Default first, followed by the
+/// name of the model it is where the CLI says, then `models`.
+pub fn model_menu(
+    chosen: &str,
+    default: Option<&str>,
+    models: Vec<(String, String)>,
+) -> (Vec<(String, String)>, Vec<MenuEntry>) {
+    let default = default.map(|name| SharedString::from(name.to_string()));
+    let mut all = vec![(String::new(), MenuEntry::label("Default").to_string())];
+    all.extend(models);
+    let items = (all.iter().enumerate())
+        .map(|(at, (id, name))| {
+            let on = id == chosen;
+            MenuEntry {
+                checked: on,
+                over: on,
+                detail: default.clone().filter(|_| at == 0),
+                ..MenuEntry::named(name.clone(), true)
+            }
+        })
+        .collect();
+    (all, items)
 }

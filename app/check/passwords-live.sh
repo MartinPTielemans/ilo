@@ -1,3 +1,4 @@
+# check.sh runs this at 730, only when named.
 # A sign-in typed on the-internet.herokuapp.com/login, a public test site whose username and
 # password its own page gives, brings our offer to save the password, as passwords' local login
 # page does (#1290). It needs the network and that site, so it runs only when named:

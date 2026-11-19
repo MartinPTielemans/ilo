@@ -1,3 +1,4 @@
+# check.sh runs this at 320.
 # A page's own dialogs ask with the browser's dialog over the tab's card, in Chrome's words, each
 # captured while it's up: alert(), confirm() and prompt() from the served page's keys. ↩ answers
 # OK, with what was typed in a prompt, and Esc Cancel, and the page puts the answer in its title.
@@ -15,6 +16,8 @@
 # does, and the next question asks again (#1362). On Windows and the Mac, with a second
 # window beside the first and the first in front, the pointer resting on a row of the second
 # shows its card over the second, and on a row of the first over the first (#1432).
+# A page out of sight whose alert waits for its tab is let go by the idle check once it looks 2 hours
+# unseen, and ilo goes on (#3549).
 
 serve
 log="$out/dialogs.log"
@@ -85,9 +88,59 @@ answer return accept "confirm true"
 ask p Prompt prompt
 send type grace
 answer return accept "prompt grace"
+# Asked again once answered, the prompt is drawn again: on X11 a managed one shown again has to
+# come out of its wait for its place (#2800).
+ask p Prompt prompt-again
+send type ada
+answer return accept "prompt ada"
+
+# On X11, another app's window raised over ilo's while the page's alert shows: the window manager
+# stacks the alert under that window with ilo's, where KWin drew an override-redirect one over every
+# window it manages (#2790). Back in ilo's window, the alert has the keys again for ↩. While the
+# alert holds the input focus ilo hears each button press on the display, and only counts them
+# (#2943); with another app active it hears none.
+raised_over=
+if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && ! sway_xwayland; then
+  heard() { grep '^browser: x11 hears ' "$log" | tail -1 | cut -d' ' -f4-; }
+  ask a Alert alert-raised-over
+  for _ in $(seq 50); do [ "$(heard)" = "button presses" ] && break; sleep 0.1; done
+  [ "$(heard)" = "button presses" ] ||
+    fail "the alert holding the input focus, ilo didn't hear the presses on the display: $(heard)"
+  rm -f "$out/other-in"
+  mkfifo "$out/other-in"
+  python3 -I check/other-window.py < "$out/other-in" > "$out/other-window.log" 2>&1 &
+  other_app=$!
+  exec 7> "$out/other-in"
+  for _ in $(seq 50); do grep -q '^[0-9]' "$out/other-window.log" && break; sleep 0.1; done
+  cover=$(head -1 "$out/other-window.log")
+  xdotool windowactivate --sync "$cover" 2> /dev/null ||
+    fail "another app's window didn't open and take the keyboard: $(cat "$out/other-window.log")"
+  # The manager restacks as it activates, so its list is read until it settles, a second at most.
+  under=
+  for _ in $(seq 10); do
+    stacking=$(python3 -I check/x11-stacking.py "$cover" "$pid" 2>&1) && under=1 && break
+    sleep 0.1
+  done
+  [ -n "$under" ] || fail "the alert isn't under another app's window raised over ilo's: $stacking"
+  for _ in $(seq 50); do [ "$(heard)" = "no button presses" ] && break; sleep 0.1; done
+  [ "$(heard)" = "no button presses" ] ||
+    fail "with another app active, ilo still hears every button press on the display: $(heard)"
+  # The manager's stacking, bottom first, for whoever reads the run.
+  printf '%s\n' "$stacking" > "$out/alert-raised-over-stacking.json"
+  exec 7>&-
+  wait "$other_app" 2> /dev/null || true
+  send window 1
+  answer return accept alerted
+  # A tiling manager, as i3, tiles the other app's window beside ilo's, so the alert is beside it.
+  # Elsewhere the other app's window overlaps ilo's.
+  case $stacking in
+    *'"beside"'*) raised_over="beside the other app's window a tiling manager put beside" ;;
+    *) raised_over="under another app's window raised over" ;;
+  esac
+fi
 
 # Another tab takes the alert down, and its own brings it back.
-open_from_bar example.com
+open_from_bar "http://localhost:$port/one.html"
 other=$tab
 send click $(row 1)
 expect "^browser: selected $page\( in .*\)\{0,1\}\$" "a click on the dialogs page's row didn't show it"
@@ -118,7 +171,7 @@ send key u
 expect "^browser: title $page armed\$" "the page didn't ask to be asked before it's left"
 # Going from the page asks first, with Chrome's title.
 leave() {
-  go_from_bar example.org
+  go_from_bar "http://localhost:$port/two.html"
   expect "^browser: page $page dialog Leave Leave site?\$" "going from the page didn't ask first"
   expect '^browser: dialog settled$' "Leave site? didn't settle"
 }
@@ -143,7 +196,7 @@ fi
 leave
 send key return
 expect "^browser: page $page dialog answered accept\$" "↩ didn't leave the page"
-expect "^browser: loaded $page https://example.org/\$" "the tab didn't go to example.org once left"
+expect "^browser: loaded $page http://localhost:$port/two.html\$" "the tab didn't go to two.html once left"
 
 # Each visit asks again, as a sign-in that was cancelled isn't asked for the page it shows.
 sign_in() {
@@ -357,10 +410,12 @@ fi
 # Two windows side by side, the first in front with the keyboard: the pointer resting on a row of
 # the second, behind it, which still hears the pointer, shows that row's card over the second, not
 # over the first, the browser window last in front, where every overlay showed (#1432). Read from
-# the OS's windows: on Windows the card is on the stack over the second, and on the Mac a child
-# window of it. A row of the first shows its card over the first again.
+# the OS's windows: on Windows the card is on the stack over the second, on the Mac a child window
+# of it, and on X11 an overlay inside its content. A row of the first shows its card over the first
+# again. Under Wayland and on sway's Xwayland the compositor places the windows.
 two_windows=
-if windows || [ "$(uname)" = Darwin ]; then
+if windows || [ "$(uname)" = Darwin ] ||
+  { [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && ! sway_xwayland; }; then
   first=$(grep -m1 '^browser: window opened ' "$log" | cut -d' ' -f4)
   send key n cmd
   expect '^browser: window opened [0-9]' "⌘N didn't open a second window"
@@ -368,8 +423,10 @@ if windows || [ "$(uname)" = Darwin ]; then
   new_window_bar
   # The driver numbers windows in the order they opened.
   driven_second=$(grep -c '^browser: window opened ' "$log")
-  # The Windows runner's screen is 1920 by 1080 (check-windows.yml).
+  # The Windows runner's screen is 1920 by 1080 (check-windows.yml), and Xvfb's 1280 by 800
+  # (check.sh).
   screen="0 0 1920 1080"
+  [ "$(uname)" != Linux ] || screen="0 0 1280 800"
   if [ "$(uname)" = Darwin ]; then
     send screen
     screen=$(grep '^browser: screen at ' "$log" | tail -1 | cut -d' ' -f4-)
@@ -387,10 +444,18 @@ SCREEN
   expect "^browser: key window $first\$" "the first window didn't come in front of the second"
   send place $((screen_x + 20)) $((screen_y + 60)) $wide $tall
   # The driven window's children on the Mac, which the card's window becomes one of, in $children.
+  # On X11 the driver lists every overlay shown, from the driven window's content, so there it
+  # counts those inside it.
   children() {
     send layout
-    children=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -c '^browser: layout child' ||
-      true)
+    children=$(sed -n "/^browser: drive $step: /,\$p" "$log" | awk '
+      /^browser: layout content / { split($4, size, "[x,]"); width = size[1]; height = size[2] }
+      /^browser: layout child / {
+        split($4, at, ","); split($5, size, "x")
+        if (linux == "" || (at[1] >= 0 && at[2] >= 0 && at[1] + size[1] <= width &&
+          at[2] + size[2] <= height)) count++
+      }
+      END { print count + 0 }' linux="$([ "$(uname)" != Linux ] || echo 1)")
   }
   send window "$driven_second" behind
   windows || children
@@ -431,18 +496,90 @@ SCREEN
   send move $page_point
   expect '^browser: hover card hidden$' "leaving the first window's rows didn't hide its card"
   two_windows=1
+else
+  echo "skip: the hover card over the window behind another, under Wayland or on sway's Xwayland: the compositor places the windows."
 fi
+# On sway's Xwayland the prompt takes the keys back once its window has sway's focus again after
+# another app's window had it: back from that window's workspace, and as that window, beside the
+# browser's, quits. wlroots gives the X focus to the browser's window, not to the prompt (#2894).
+# Last, as sway's focus back to the browser's window as a prompt answered from the keys goes can
+# take it from a command bar opened at once (#2943). The dialogs page is loaded again for it.
+if sway_xwayland; then
+  go_from_bar "${site}dialogs.html"
+  expect '^browser: title [0-9]* ready$' "the dialogs page didn't load again for the prompt's step"
+  page=$(grep '^browser: title [0-9]* ready$' "$log" | tail -1 | cut -d' ' -f3)
+  send click $page_point
+  ask p Prompt prompt-back
+  # Whether the driver's "onscreen" says the X focus is on $1 (overlay, window or none) within 5 s.
+  keys_on() {
+    for _ in $(seq 50); do
+      send onscreen
+      grep '^browser: onscreen ' "$log" | tail -1 | grep -q "keyboard $1\$" && return 0
+      sleep 0.1
+    done
+    return 1
+  }
+  swaymsg 'workspace 2' > /dev/null || fail "sway didn't go to another workspace"
+  rm -f "$out/other-in"
+  mkfifo "$out/other-in"
+  python3 -I check/other-window.py < "$out/other-in" > "$out/other-window.log" 2>&1 &
+  other=$!
+  exec 5> "$out/other-in"
+  keys_on none ||
+    fail "another app's window on workspace 2 didn't take the keys from the prompt in 5 s: $(grep '^browser: onscreen ' "$log" | tail -1), $(cat "$out/other-window.log")"
+  swaymsg 'workspace 1' > /dev/null || fail "sway didn't go back to the browser's workspace"
+  keys_on overlay ||
+    fail "back on the browser's workspace from another app's window, the prompt didn't take the keys back in 5 s, so typing would go to the page: $(grep '^browser: onscreen ' "$log" | tail -3 | tr '\n' ' ')"
+  swaymsg '[title="^Other app$"] move container to workspace 1, focus' > /dev/null ||
+    fail "sway didn't bring the other app's window to the browser's workspace"
+  keys_on none ||
+    fail "the other app's window on the browser's workspace didn't take the keys in 5 s: $(grep '^browser: onscreen ' "$log" | tail -1)"
+  # It quits, and sway gives its focus back to the browser's window.
+  exec 5>&-
+  wait "$other" || fail "another app's window didn't go once its stdin closed: $(cat "$out/other-window.log")"
+  keys_on overlay ||
+    fail "once another app's window beside the browser's went, the prompt didn't take the keys back in 5 s: $(grep '^browser: onscreen ' "$log" | tail -3 | tr '\n' ' ')"
+  send type ada
+  answer return accept "prompt ada"
+fi
+# A page out of sight that asks with an alert, which Chromium holds until its tab shows, is let go by
+# the idle check once it looks 2 hours unseen, its alert with it, and ilo goes on (#3549). It asks
+# the run's server first and alerts on the answer: a title changed out of sight is Chrome's sign of
+# a page at work in the background, which keeps it. Neither the app nor the core logs an alert held
+# for its tab, so the alert is asked a moment after the request, seconds before the idle check runs.
+printf '%s' '<!doctype html><title>Asks out of sight</title><script>
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) setTimeout(() => fetch("/asking").finally(() => alert("out of sight")), 100)
+})</script>' > "$out/site/asks-hidden.html"
+open_from_bar "${site}asks-hidden.html"
+asking=$tab
+open_from_bar "${site}"
+served "127.0.0.1:$port/asking" "the page out of sight didn't ask with its alert"
+send age 7200
+aged=$step
+open_from_bar "${site}"
+expect 'browser: idle tabs checked$' "showing a tab didn't check for tabs unseen 2 hours"
+# The core logs it, after Chromium's prefix.
+since $aged | grep -q "browser: tab $asking without its page\$" ||
+  fail "the idle check kept the page out of sight that asked with its alert"
+expect "^browser: page $asking unloaded 1\$" "the row of the tab let go didn't show it without its page"
+# Still running, which a page deleted with its alert held ended (#3549).
+send move $page_point
 exec 3>&-
 quit
 echo "ok: a page's alert, confirm and prompt ask over its card, answer with ↩ and Esc, and an alert"
 echo "  comes back with its tab. The confirm's Cancel and OK show the pointer on them. Leave site?"
 echo "  stays with Esc and leaves with ↩. A site's sign-in cancels with Esc and signs in with ↩, and"
 echo "  the password reaches no log. A link to Maps asks, and ↩ opens nothing. The link target shows"
-echo "  and hides 20 times, between the command bar and a tab's menu, with no panic."
+echo "  and hides 20 times, between the command bar and a tab's menu, with no panic. A page out of"
+echo "  sight whose alert waits for its tab is let go by the idle check after 2 hours unseen, and ilo"
+echo "  goes on (#3549)."
 [ -z "$covered" ] || echo "  Under another app's window in front of ilo's ($covered), the" \
   "link target and the hover card show under it, and the link target over ilo's window once it's" \
   "gone. Windows: $out/link-target-covered-ilo.png, $out/link-target-covered-away.png," \
   "$out/link-target-uncovered.png"
+[ -z "$raised_over" ] || echo "  On X11 an alert stays $raised_over ilo's, in the window" \
+  "manager's stacking, and has the keys again back in ilo's window."
 [ -z "$background_dialog" ] || echo "  An alert that came with another app in front of ilo's" \
   "window ($background_dialog) went under that app's window and over ilo's, and took the keyboard" \
   "as ilo's window came to the front, with no caption of Windows' behind the window buttons there" \

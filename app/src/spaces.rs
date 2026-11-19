@@ -1,6 +1,7 @@
 //! What the core says of the Spaces, their favorites, the archive and the sidebar's backups.
 
 use super::*;
+use browser::shell::{LiveAnswer, LiveItem, LiveList, LiveSource, PullState};
 
 /// Saves the Spaces' favorites and pinned tabs as a Markdown file of links where the user picks,
 /// for Settings' Export…. The user's alone, as Settings is.
@@ -184,15 +185,81 @@ pub(crate) unsafe extern "C" fn space_changed(_: *mut c_void, space: bc::bc_id) 
                 folders.icons.insert(row, icon);
             }
         }
+        match unsafe { bc::bc_folder_live(row) } as u32 {
+            bc::BC_LIVE_PULL_REQUESTS => _ = folders.live.insert(row, LiveSource::PullRequests),
+            _ => {}
+        }
         match unsafe { bc::bc_folder_of(row) } {
             0 => {}
             folder => _ = folders.parents.insert(row, folder),
         }
     }
-    update_shells(|shell, cx| {
-        let (pinned, today) = (pinned.clone(), today.clone());
-        shell.set_tabs(space, pinned, today, splits.clone(), folders.clone(), cx)
+    let Some(cx) = CX.with_borrow(Clone::clone) else {
+        return;
+    };
+    cx.update(|cx| {
+        update_shells_in(cx, |shell, cx| {
+            let (pinned, today) = (pinned.clone(), today.clone());
+            shell.set_tabs(space, pinned, today, splits.clone(), folders.clone(), cx)
+        });
+        // A tab the user held from an agent that left its Space ends its hold.
+        browser::agents::space_changed(space, cx);
     });
+}
+
+/// The core's BC_LIVE_ source for `source`.
+pub(crate) fn live_source(source: LiveSource) -> c_int {
+    match source {
+        LiveSource::PullRequests => bc::BC_LIVE_PULL_REQUESTS as c_int,
+    }
+}
+
+/// The core's answer to a Live Folder's fetch, for each window's shell, whose Spaces are all of them.
+pub(crate) unsafe extern "C" fn folder_live_answered(
+    _: *mut c_void,
+    folder: bc::bc_id,
+    answer: c_int,
+    answered: i64,
+    items: *const bc::bc_live_item,
+    count: usize,
+) {
+    let text = |text: *const c_char| -> SharedString {
+        match text.is_null() {
+            true => SharedString::default(),
+            false => unsafe { CStr::from_ptr(text) }
+                .to_string_lossy()
+                .into_owned()
+                .into(),
+        }
+    };
+    let answer = match answer as u32 {
+        bc::BC_LIVE_ANSWERED => {
+            let items = match items.is_null() {
+                true => &[][..],
+                false => unsafe { std::slice::from_raw_parts(items, count) },
+            };
+            LiveAnswer::Items(
+                (items.iter())
+                    .map(|item| LiveItem {
+                        list: match item.list as u32 {
+                            bc::BC_LIVE_CREATED => LiveList::Created,
+                            _ => LiveList::ReviewRequests,
+                        },
+                        repo: text(item.repo),
+                        number: item.number,
+                        title: text(item.title),
+                        state: match item.state as u32 {
+                            bc::BC_LIVE_DRAFT => PullState::Draft,
+                            _ => PullState::Open,
+                        },
+                    })
+                    .collect(),
+            )
+        }
+        bc::BC_LIVE_SIGNED_OUT => LiveAnswer::SignedOut,
+        _ => LiveAnswer::Failed,
+    };
+    update_shells(|shell, cx| shell.set_live_answer(folder, answer.clone(), answered, cx));
 }
 
 /// A private window's name, in its sidebar and the Window menu: Chrome's, and its profile's while

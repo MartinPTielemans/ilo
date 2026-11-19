@@ -6,7 +6,7 @@
 //! GPUI can't draw over the page's native view, so the app draws them in a window of its own over
 //! the browser window, which the mouse goes through (`Browser::show_drop_targets`).
 
-use std::time::Instant;
+use web_time::Instant;
 
 use gpui::{
     AnyElement, Bounds, Context, FontWeight, Hsla, PathBuilder, Pixels, Point, Window, canvas, div,
@@ -276,7 +276,11 @@ impl Shell {
         let card = self.page_frame(self.viewport).0;
         // A file's row, past the trigger, hands its file to the system's drag to upload it to the
         // page, as a download's row does, in place of the targets, and the row goes back.
-        let into_page = position.x > card.left() + px(TARGET_TRIGGER);
+        // Past the trigger from the card's edge by the sidebar.
+        let into_page = match self.right() {
+            true => position.x < card.right() - px(TARGET_TRIGGER),
+            false => position.x > card.left() + px(TARGET_TRIGGER),
+        };
         let listed = matches!(drag.from, Place::List(..)) && !self.sidebar_hidden;
         let tab = drag.tab;
         if let Some(path) = (into_page && listed)
@@ -301,7 +305,7 @@ impl Shell {
             Place::List(..) if !self.sidebar_hidden => self.split_partner(drag.tab),
             Place::List(..) | Place::Favorite(_) => None,
         };
-        let Some(with) = with.filter(|_| position.x > card.left() + px(TARGET_TRIGGER)) else {
+        let Some(with) = with.filter(|_| into_page) else {
             if let Some(over) = self.drag.as_mut().and_then(|drag| drag.over_page.take()) {
                 // check.sh reads this line.
                 log!("browser: drop targets gone");

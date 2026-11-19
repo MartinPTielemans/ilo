@@ -1,3 +1,4 @@
+# check.sh runs this at 360.
 # A new profile's first launch plays the onboarding over the window, captured at each step in a
 # light and a dark appearance: the intro draws ilo's wordmark and its line and goes on by itself, or
 # at any key; the import step lists the made-up Arc in src/import/fixture (a made-up Chrome on
@@ -6,9 +7,13 @@
 # gives the first Space the swatch picked, and the last step leaves the flow for the first Space's
 # welcome with the command bar up and a line under it. The default browser's step shows only while
 # ilo isn't the default, and is skipped everywhere but a Linux CI VM, where its button makes ilo
-# the default for a moment, so the run never changes a desk's. The opt-ins' shows always, with
-# the agents' switch, as every build has their server, and the dark pass turns it on in its new
-# profile and sees the server start. The account's comes between the colour and the opt-ins while
+# the default for a moment, so the run never changes a desk's. The search engine's comes after it
+# with the profile's list: Esc sets none, and the dark pass's ↓ and Return set the engine after the
+# default, as Settings' pop-up does. The opt-ins' shows always, with
+# the agents' switch, as every build has their server, and the daily count's, off, as the run
+# names an endpoint; the dark pass turns the agents' on in its new profile and sees their server
+# start, and turns the count's on and off again from the keyboard. The account's comes between
+# the colour and the opt-ins while
 # the build names a sync server (branding/sync-server), and Esc leaves it signed out: the run never
 # signs in to the hosted server, as sync-account signs in on a server of its own. Help › Welcome to
 # ilo plays it again, in the window while it shows no page and in a new window while it shows one. A
@@ -67,8 +72,10 @@ launch_new() {
   log="$out/onboarding-$1.log"
   step=0
   rm -f "$saved" "$profile_dir/Account"
+  # A count endpoint nothing listens on, so the opt-ins offer the count's switch, as the prod
+  # build's do, while the switch stays off and nothing is sent (count.sh turns it on).
   BROWSER_IMPORT_HOME="$import_home" BROWSER_DRIVE=1 BROWSER_ONBOARDING=$1 \
-    "$browser" < "$out/drive" > "$log" 2>&1 &
+    "$browser" --daily-count-url=http://127.0.0.1:9/v1/daily < "$out/drive" > "$log" 2>&1 &
   pid=$!
   exec 3> "$out/drive"
   await '^browser: onboarding step intro settled$' || fail "$1: the intro didn't draw"
@@ -99,6 +106,7 @@ for each in $steps; do
 done
 expect '^browser: onboarding done$' "light: the flow didn't end after its last step"
 grep -q '^browser: onboarding picked color ' "$log" && fail "light: Esc at the colour step gave the Space one"
+grep -q '^browser: profile [0-9]* searches with ' "$log" && fail "light: Esc at the search engine step set one"
 expect '^browser: command new-tab via onboarding$' "light: the flow didn't end with the command bar"
 expect '^browser: command bar shown$' "light: the command bar didn't come up after the flow"
 capture_step light-in
@@ -220,6 +228,15 @@ case " $steps " in
       done
       [ "$made" = "${entry##*/}" ] ||
         fail "dark: the default browser's button left the default '$made', not ${entry##*/}"
+      # xdg-settings sets each type with its own xdg-mime, each reading the lists and writing them
+      # back: one still going once http reads as ilo's writes ilo back over the lists put back
+      # below, and the replay found ilo the default (#2773). On the VM only the app's runs it.
+      for _ in $(seq 100); do
+        pgrep -x xdg-settings > /dev/null || break
+        sleep 0.1
+      done
+      ! pgrep -x xdg-settings > /dev/null ||
+        fail "dark: the app's xdg-settings was still setting the default 10 s after it read as ilo"
       at=0
       for list in $lists; do
         at=$((at + 1))
@@ -239,6 +256,16 @@ case " $steps " in
     fi
     ;;
 esac
+case " $steps " in
+  *" search-engine "*)
+    expect '^browser: onboarding step search-engine settled$' "dark: the search engine step didn't come"
+    capture_step dark-search-engine
+    send key down
+    send key return
+    expect '^browser: profile [0-9]* searches with ' "dark: ↓ and Return didn't set the engine after the default"
+    expect '^browser: onboarding left search-engine via return$' "dark: Return didn't leave the search engine step"
+    ;;
+esac
 expect '^browser: onboarding step color settled$' "dark: the colour step didn't come"
 send key right
 capture_step dark-color
@@ -254,14 +281,34 @@ if [ -n "$account" ]; then
 fi
 expect '^browser: onboarding step opt-ins settled$' "dark: the opt-ins step didn't come"
 capture_step dark-opt-ins
+expect '^browser: onboarding daily-count at ' \
+  "dark: the opt-ins step didn't draw the count's switch, though the run names an endpoint"
 # The agents' row takes a click on its switch, where the app says it's drawn once the step has
-# come, the second row of two with a crash collector and the only one without (#1286).
+# come, the last row of three with a crash collector, else of two (#1286).
 expect '^browser: onboarding agents at ' "dark: the opt-ins step didn't draw the agents' switch"
 send click $(grep '^browser: onboarding agents at ' "$log" | tail -1 | cut -d' ' -f5-6)
 expect '^browser: onboarding agents on$' "dark: a click on the agents' row didn't turn them on"
 expect '^browser: agents server on ' "dark: the agents' switch didn't start their server"
+# The keyboard reaches the switches too: from Continue, where the step rests (#3498), ⇥ past Skip
+# to the count's, the first, where Space turns it on, ⇥ on and ⇧⇥ back to it, and Space turns it
+# off again, so Esc still leaves it as it was (#2985). The click on the agents' row moved no focus.
+send key tab
+send key tab
+send key space
+expect '^browser: onboarding daily-count on$' \
+  "dark: ⇥ twice from Continue, past Skip, then Space didn't turn the count's switch on"
+# Captured once the knob has slid all the way on.
+expect '^browser: onboarding daily-count slid$' "dark: the count's switch didn't finish its slide on"
+capture_step dark-opt-ins-keys
+send key tab
+send key tab shift
+send key space
+expect '^browser: onboarding daily-count off$' \
+  "dark: ⇥ then ⇧⇥ didn't come back to the count's switch for Space to turn it off"
+grep -q '^browser: onboarding agents off$' "$log" && fail "dark: a key meant for the count's switch turned the agents' off"
 send key escape
 expect '^browser: onboarding left opt-ins via escape$' "dark: Esc didn't leave the opt-ins step"
+grep -q '^browser: onboarding daily-count set ' "$log" && fail "dark: Esc set the count, left off"
 expect '^browser: onboarding done$' "dark: the flow didn't end after its last step"
 expect '^browser: command bar shown$' "dark: the command bar didn't come up after the flow"
 capture_step dark-in
@@ -311,9 +358,9 @@ expect '^browser: command bar shown$' "the replay in its own window didn't end w
 exec 3>&-
 quit
 
-# Suggested favorites: a first launch on a made-up Chrome whose history visits two sites three
-# times and more brings them in, with ↩ at the browser and ↩ at its choices, and the step after
-# the import is Your favorites, offering those two, ticked.
+# Suggested favorites: a first launch on a made-up Chrome with tabs open, whose history visits two
+# sites three times and more, brings them in with ↩ at the browser and ↩ at its choices, and the
+# step after the import is Your favorites, offering those two, ticked.
 fav_home="$PWD/$out/onboarding-favorites-home"
 rm -rf "$fav_home"
 if [ "$(uname)" = Darwin ]; then
@@ -326,7 +373,29 @@ fi
 mkdir -p "$fav_chrome/Default"
 printf '%s' '{"profile":{"info_cache":{"Default":{"name":"Me"}}}}' > "$fav_chrome/Local State"
 printf '%s' '{}' > "$fav_chrome/Default/Preferences"
-printf '%s' '{"roots":{}}' > "$fav_chrome/Default/Bookmarks"
+# Three bookmarks on its bar, which come in as pinned tabs, and 55 tabs open in its last session,
+# which come in as Today tabs: placing those reads the first window's Shell, and the import step
+# is pressed inside that Shell's update, which aborted the launch (#2428).
+printf '%s' '{"roots":{"bookmark_bar":{"type":"folder","name":"Bookmarks bar","children":[
+  {"type":"url","name":"Docs","url":"https://docs.example.org/"},
+  {"type":"url","name":"Wiki","url":"https://wiki.example.org/"},
+  {"type":"url","name":"Calendar","url":"https://calendar.example.org/"}]}},"version":1}' \
+  > "$fav_chrome/Default/Bookmarks"
+mkdir -p "$fav_chrome/Default/Sessions"
+perl -e '
+sub cmd { my ($id, $body) = @_; pack("S<C", length($body) + 1, $id) . $body }
+sub nav { my ($tab, $index, $url) = @_;
+  my $pickle = pack("l<3", $tab, $index, length $url) . $url;
+  $pickle .= "\0" x (-length($pickle) % 4);
+  $pickle .= pack("l<", 0);
+  pack("l<", length $pickle) . $pickle }
+print "SNSS", pack("l<", 3), cmd(9, pack("l<2", 1, 0));
+for my $tab (2 .. 56) {
+  print cmd(0, pack("l<2", 1, $tab)), cmd(2, pack("l<2", $tab, $tab - 2)),
+    cmd(6, nav($tab, 0, "https://open.example.org/" . ($tab - 1)));
+}
+print cmd(255, "")' > "$fav_chrome/Default/Sessions/Session_13400000000000000" ||
+  fail "couldn't write the made-up Chrome's session"
 # Chromium counts microseconds from 1601: an hour ago.
 python3 -I -c '
 import sqlite3, sys, time
@@ -360,6 +429,9 @@ expect '^browser: import read Chrome: ' "favorites: picking Chrome didn't read i
 send key return
 expect '^browser: import suggests https://news\.example\.org/ https://mail\.example\.org/$' \
   "favorites: the import didn't work out the sites its history visited most: $(grep 'import suggests' "$log")"
+expect '^browser: import from Chrome: [0-9]* Spaces, 3 pinned tabs, 55 open tabs, ' \
+  "favorites: the import didn't plan Chrome's bookmarks and open tabs: $(grep 'import from Chrome' "$log")"
+expect '^browser: import done: ' "favorites: the import with open tabs didn't finish"
 await '^browser: onboarding step favorites settled$' ||
   fail "favorites: the step after the import wasn't Your favorites"
 capture_step favorites

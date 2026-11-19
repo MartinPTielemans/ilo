@@ -10,9 +10,10 @@
 #   ilo-demo.tar.gz              the site's live demo, when the commit has one (demo.yml)
 # and, in the run rather than the release, winget's manifests for the Windows installer.
 # On a pushed v* tag, or by hand with the tag's name. The tag must be app/Cargo.toml's version, and
-# its message is the release's notes. By hand before the tag exists, it's a try: it skips, and says so
-# in the run, what needs the owner (the Store's identity, the Developer ID, notarization, the appcast)
-# and makes no release, leaving its packages as the run's artifact release-try. Each job builds on
+# its message is the release's notes, which the release's body follows with its new contributors.
+# By hand before the tag exists, it's a try: it skips, and says so in the run, what needs the owner
+# (the Store's identity, the Developer ID, notarization, the appcast) and makes no release, leaving
+# its packages as the run's artifact release-try. Each job builds on
 # its OS's prebuilt engine for the commit, which engine/fetch.sh finds or fails on; a release never
 # builds an engine. The Linux and Windows engines are built nightly, not for each core change, so
 # before pushing the tag, dispatch Engine on Linux and Engine on Windows (cross-compiled) on its
@@ -471,6 +472,19 @@ jobs:
           rustup update stable --no-self-update
           ./setup.sh
 
+      # The engine's dSYMs, beside its Chromium.app, where build.sh finds them for tools/symbols.sh,
+      # so the framework's frames in crash reports have names (#2951). An engine released without
+      # them still makes a release, with those frames unnamed until Mac symbols adds them.
+      - name: Engine's symbols
+        run: |
+          status=0
+          ../engine/fetch.sh symbols >/dev/null || status=$?
+          case $status in
+          0) ;;
+          2) echo "::warning::The engine's release has no dSYMs, so this version's crash reports won't name the framework's frames. Run Mac symbols (mac-symbols.yml) once it has them." ;;
+          *) exit "$status" ;;
+          esac
+
       # A keychain of the run's own, which the runner deletes, with the Developer ID and the
       # notarization key as notarytool's profile "notary".
       - name: Keychain
@@ -669,6 +683,8 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+      # Who wrote each new contributor's pull request.
+      pull-requests: read
     env:
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ needs.version.outputs.tag }}
@@ -730,6 +746,36 @@ jobs:
             done
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # The body ends with the people whose first pull request is in this release (#3257): that
+      # section of GitHub's generated notes alone. Each line's pull request decides who counts, a
+      # person and not the owner, since the notes name a bot without its [bot]. The appcast job
+      # took the notes before this, so the updater's text never has it. Only a list, so it can't
+      # cost the release: the step continues on an error.
+      - name: New contributors
+        continue-on-error: true
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          args=(-f "tag_name=$TAG" -f "target_commitish=$GITHUB_SHA")
+          previous=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name) &&
+            args+=(-f "previous_tag_name=$previous")
+          gh api -X POST "repos/$GITHUB_REPOSITORY/releases/generate-notes" "${args[@]}" --jq .body |
+            sed -n '/^## New Contributors/,/^$/p' > "$RUNNER_TEMP/generated.md"
+          : > "$RUNNER_TEMP/people.md"
+          while read -r line; do
+            author=$(gh api "repos/$GITHUB_REPOSITORY/pulls/${line##*/pull/}" --jq '"\(.user.type) \(.user.login)"')
+            if [ "${author%% *}" = User ] && [ "${author#* }" != "$OWNER" ]; then
+              echo "$line" >> "$RUNNER_TEMP/people.md"
+            fi
+          done < <(command grep -E '^\* @[^ ]+ made their first contribution in .*/pull/[0-9]+$' "$RUNNER_TEMP/generated.md")
+          if [ -s "$RUNNER_TEMP/people.md" ]; then
+            { printf '\n## New Contributors\n\n'; cat "$RUNNER_TEMP/people.md"; } > notes/contributors.md
+            { printf '## New contributors\n\nSince %s, the release'"'"'s body ends with:\n\n' "${previous:-the first commit}"
+              cat "$RUNNER_TEMP/people.md"; } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No new contributors since ${previous:-the first commit}: the release's body has no such heading." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - run: |
           (cd assets && sha256sum -- ilo-* > SHA256SUMS)
           # The Mac's minimum, LSMinimumSystemVersion in app/build.sh.
@@ -740,6 +786,7 @@ jobs:
           fi
           [ -f assets/ilo-demo.tar.gz ] ||
             echo "No site demo in the draft: publishing it leaves the site's demo as it was." >> "$GITHUB_STEP_SUMMARY"
+          [ ! -f notes/contributors.md ] || cat notes/contributors.md >> notes/notes.md
           # A try makes no release, not even a draft, which would hold the tag's name: its packages
           # are the run's artifact release-try instead.
           if [ "$TRIAL" = true ]; then

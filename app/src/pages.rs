@@ -112,6 +112,7 @@ pub(crate) unsafe extern "C" fn tab_site_controls(
             bc::BC_AD_BLOCKING_OFF => Some(false),
             _ => None,
         },
+        ad_blocked: string(controls.ad_blocked),
         developer_mode: match controls.developer_mode as u32 {
             bc::BC_DEVELOPER_MODE_ON => Some(true),
             bc::BC_DEVELOPER_MODE_OFF => Some(false),
@@ -137,15 +138,25 @@ pub(crate) unsafe extern "C" fn tab_site_controls(
         .collect(),
         boostable: false,
         boost: None,
+        arrangement_misfits: None,
+        arrangement_off: None,
+        recent: None,
     };
     update_app(|cx| {
         // The app keeps the Boosts, so its window says what the core can't.
         let shell = tab_window(tab, cx).and_then(|window| window.shell.upgrade());
-        let (boostable, boost) =
-            shell.map_or((false, None), |shell| shell.read(cx).boost_state(tab));
+        let ((boostable, boost), (misfits, off), recent) =
+            shell.map_or(((false, None), (None, None), None), |shell| {
+                let shell = shell.read(cx);
+                let recent = shell.recent_switch(tab, cx);
+                (shell.boost_state(tab), shell.arrangement_note(tab), recent)
+            });
         let site = site_controls::Site {
             boostable,
             boost,
+            arrangement_misfits: misfits.map(Into::into),
+            arrangement_off: off.map(Into::into),
+            recent,
             ..site
         };
         site_controls::changed(tab, site, cx)
@@ -574,6 +585,7 @@ pub(crate) unsafe extern "C" fn window_suggestions(
             removable: suggestion.removable,
             keyword: string(suggestion.keyword),
             site: string(suggestion.site).into(),
+            last_visit: suggestion.last_visit,
             ..command_bar::Suggestion::default()
         })
         .collect();

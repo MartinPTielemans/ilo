@@ -4,17 +4,18 @@
 use std::{collections::HashMap, rc::Rc};
 
 use gpui::{
-    Context, Hsla, MouseButton, MouseDownEvent, Role, canvas, div, hsla, img, prelude::*, px, rgba,
-    svg,
+    App, Context, Hsla, MouseButton, MouseDownEvent, Role, canvas, div, hsla, img, prelude::*, px,
+    rgba, svg,
 };
 
+use super::return_mark::{Bitmap, Source};
 use crate::elevation::Level;
 use crate::icon_picker::Subject;
 use crate::tooltip::{self, Anchor, Tip};
 
 use super::{
     Curve, DEVELOPER_TILE, DIVIDER, FAVICON_DRAWN, FAVICON_SIZE, FAVICON_X, FOLDER_TITLE_X,
-    FOOTER_HEIGHT, HAIRLINE, HOVERED, LIST_TOP, PLATE_INSET, Place, Row, SECONDARY, SEGMENT_LINE,
+    FOOTER_HEIGHT, HAIRLINE, HOVERED, PLATE_INSET, Place, Row, SECONDARY, SEGMENT_LINE,
     SLEEPING_FAVICON, Shell, Slot, Space, TALL_FAVORITES, TILE, TILE_COLUMNS, TILE_GAP,
     TILE_HEIGHT, TILE_HOVERED, TILE_MARK, TILE_MARK_INSET, TILE_MIN, TILE_RADIUS, TILE_RING,
     TILE_UNTHEMED, TILE_UNTHEMED_LIGHT, TITLE_END_INSET, TITLE_GAP, TURN_TITLE_FADE, TileTheme,
@@ -49,6 +50,16 @@ impl FavoritesScope {
             Self::Every => "In Every Space",
             Self::Profile => "In Each Profile's Spaces",
             Self::Space => "In Each Space",
+        }
+    }
+
+    /// Its name under its drawing in Settings, a caption, so in sentence case on every OS as the
+    /// pane's other lines are. Space keeps its capital: it's ours.
+    pub fn caption(self) -> &'static str {
+        match self {
+            Self::Every => "In every Space",
+            Self::Profile => "In each profile's Spaces",
+            Self::Space => "In each Space",
         }
     }
 
@@ -94,7 +105,7 @@ impl Shell {
                     tiles.role(Role::TabList).aria_label("Favorites")
                 })
                 .absolute()
-                .top(px(LIST_TOP))
+                .top(px(self.list_start()))
                 .left_0()
                 .w(px(self.width()))
                 .when(self.tiles_scroll(), |tiles| {
@@ -252,9 +263,7 @@ impl Shell {
             .zip(places)
             .map(|(tab, place)| {
                 let way = self.tile_slides.get(&tab).map_or(0., |&(_, start, curve)| {
-                    curve
-                        .at(start.elapsed().as_secs_f32())
-                        .map_or(0., |done| 1. - done)
+                    curve.at(self.since(start)).map_or(0., |done| 1. - done)
                 });
                 let from = self
                     .tile_slides
@@ -292,7 +301,7 @@ impl Shell {
         curve: Curve,
         cx: &gpui::App,
     ) {
-        let now = crate::motion::start(cx);
+        let now = crate::motion::start_at(self.clock.now(), cx);
         let tabs = self.tile_tabs();
         let places = self.tile_places(tabs.len());
         let slides: Vec<_> = tabs
@@ -305,8 +314,9 @@ impl Shell {
             })
             .collect();
         // As the rows' (move_rows): slides over stay for the next frame to say the tiles settled.
-        let over = |(_, start, curve): &([f32; 3], std::time::Instant, Curve)| {
-            curve.at(start.elapsed().as_secs_f32()).is_none()
+        let clock = self.clock.clone();
+        let over = |(_, start, curve): &([f32; 3], web_time::Instant, Curve)| {
+            curve.at(Self::since_on(&clock, *start)).is_none()
         };
         self.tile_slides.retain(|_, slide| over(slide));
         self.tile_slides.extend(slides);
@@ -320,7 +330,7 @@ impl Shell {
             .tile_places(count)
             .last()
             .map_or(0., |&[_, top, _]| top + TILE_HEIGHT);
-        LIST_TOP + if count > 0 { rows + TILE_GAP } else { 0. }
+        self.list_start() + if count > 0 { rows + TILE_GAP } else { 0. }
     }
 
     /// Where the Space's pages start: under the tiles.
@@ -333,7 +343,7 @@ impl Shell {
         self.list_top()
             + self.list_slide.map_or(0., |(from, start, curve)| {
                 curve
-                    .at(start.elapsed().as_secs_f32())
+                    .at(self.since(start))
                     .map_or(0., |done| from * (1. - done))
             })
     }
@@ -341,7 +351,7 @@ impl Shell {
     /// Whether the tiles scroll with the list, as they do while they're taller than
     /// TALL_FAVORITES of the window.
     pub(super) fn tiles_scroll(&self) -> bool {
-        self.list_top() - LIST_TOP > TALL_FAVORITES * f32::from(self.viewport.height)
+        self.list_top() - self.list_start() > TALL_FAVORITES * f32::from(self.viewport.height)
     }
 
     /// How far the tiles have gone up with the list.
@@ -354,14 +364,14 @@ impl Shell {
 
     /// Where the tiles' top is drawn.
     pub(super) fn tiles_top(&self) -> f32 {
-        LIST_TOP - self.tiles_scrolled()
+        self.list_start() - self.tiles_scrolled()
     }
 
     /// Where the Space's pages are drawn from: under the tiles, or under the URL field while the
     /// tiles scroll with them.
     pub(super) fn pages_top(&self) -> f32 {
         if self.tiles_scroll() {
-            LIST_TOP
+            self.list_start()
         } else {
             self.drawn_list_top()
         }
@@ -369,7 +379,7 @@ impl Shell {
 
     /// Where the sidebar under the tiles starts, as they're drawn.
     pub(super) fn under_tiles(&self) -> f32 {
-        (self.list_top() - self.tiles_scrolled()).max(LIST_TOP)
+        (self.list_top() - self.tiles_scrolled()).max(self.list_start())
     }
 
     /// The room a page leaves above its rows for the tiles that scroll with it.
@@ -405,15 +415,23 @@ impl Shell {
         let Row::Tab(tab) = row else {
             return;
         };
-        // A closed folder with tabs has its preview, which names it, in place of the tooltip.
-        if !self.is_folder(tab) || !self.previewed(tab).is_empty() {
+        // A closed folder with tabs has its preview, which names it, in place of the tooltip, but
+        // a Live Folder's says how old its rows are.
+        let live = self.live_source(tab).is_some();
+        if !self.is_folder(tab) || (!live && !self.previewed(tab).is_empty()) {
             return;
         }
         let (name, title) = (self.folder_name(tab), FOLDER_TITLE_X);
+        let age = self.live_age(tab);
         let busy = self.dragging().is_some() || self.menu_row.is_some();
         let frame = self.tip_frames.borrow().get(&tab).copied();
         let tip = (hovered && !busy)
-            .then(|| tooltip::text_for(&name).map(Tip::named))
+            .then(|| {
+                tooltip::text_for(&name).map(|name| match age {
+                    Some(age) => Tip::detailed(name, age.into()),
+                    None => Tip::named(name),
+                })
+            })
             .flatten()
             .zip(frame)
             .map(|(text, frame)| (text, Anchor::titled(frame, title, self.viewport)));
@@ -488,7 +506,7 @@ impl Shell {
             false if selected => shown,
             false => fill,
         };
-        let icon = self.tile_middle(tab, theme.as_deref());
+        let icon = self.tile_middle(tab, theme.as_deref(), cx);
         div()
             .id(("tile", tab))
             .when(self.a11y, |tile| {
@@ -496,6 +514,9 @@ impl Shell {
                     .accessibility_id(format!("tile-{tab}"))
                     .aria_label(self.tab_label(tab))
                     .aria_selected(selected)
+                    .when(self.keyed == Some(tab), |tile| {
+                        tile.aria_active_descendant()
+                    })
                     .pressed_by_mouse_down(false, true)
             })
             .h(px(TILE_HEIGHT))
@@ -619,7 +640,7 @@ impl Shell {
     }
 
     /// A tile's favicon, or a one-colour icon's white template on the tile it themes.
-    fn tile_icon(&self, tab: u64, theme: Option<&TileTheme>) -> gpui::Div {
+    fn tile_icon(&self, tab: u64, theme: Option<&TileTheme>, cx: &App) -> gpui::Div {
         div()
             .size(px(FAVICON_SIZE))
             .flex()
@@ -628,12 +649,27 @@ impl Shell {
             .when(self.page(tab).unloaded, |icon| {
                 icon.opacity(SLEEPING_FAVICON)
             })
-            .child(match theme {
-                Some(TileTheme::Flat { template, .. }) => img(template.clone())
-                    .size(px(FAVICON_DRAWN))
-                    .into_any_element(),
-                _ => self.tab_icon(tab),
-            })
+            .child(self.with_return_mark(
+                &self.palette,
+                tab,
+                FAVICON_SIZE,
+                match theme {
+                    Some(TileTheme::Flat { template, .. }) => Some(Bitmap {
+                        source: Source::Decoded(template.clone()),
+                        drawn: FAVICON_DRAWN,
+                    }),
+                    _ => self.tab_bitmap_in(&self.palette, tab),
+                },
+                || {
+                    match theme {
+                        Some(TileTheme::Flat { template, .. }) => img(template.clone())
+                            .size(px(FAVICON_DRAWN))
+                            .into_any_element(),
+                        _ => self.tab_icon(tab),
+                    }
+                },
+                cx,
+            ))
     }
 
     /// Whether `tab` can become a favorite of the Space shown, or is one already, below the most
@@ -673,7 +709,7 @@ impl Shell {
     /// each after the first behind the split row's line, so it reads as the row it was (ours: Arc's
     /// tile isn't recorded). Three in a narrow tile take a smaller favicon. An icon the user gave
     /// it takes their place.
-    fn split_icons(&self, tabs: &[u64], width: f32) -> gpui::Div {
+    fn split_icons(&self, tabs: &[u64], width: f32, cx: &App) -> gpui::Div {
         let segment = width / tabs.len() as f32;
         let size = match segment < FAVICON_SIZE + 6. {
             true => SPLIT_TILE_FAVICON,
@@ -692,7 +728,14 @@ impl Shell {
                     .when(self.page(tab).unloaded, |icon| {
                         icon.opacity(SLEEPING_FAVICON)
                     })
-                    .child(self.tab_icon_sized(tab, size));
+                    .child(self.with_return_mark(
+                        &self.palette,
+                        tab,
+                        size,
+                        self.tab_bitmap_sized(tab, size),
+                        || self.tab_icon_sized(tab, size),
+                        cx,
+                    ));
                 div()
                     .relative()
                     .flex_1()
@@ -732,23 +775,39 @@ impl Shell {
         }
     }
 
+    /// The bitmap `tab_icon_sized` draws, if it draws one.
+    fn tab_bitmap_sized(&self, tab: u64, size: f32) -> Option<Bitmap> {
+        if size >= FAVICON_SIZE || !self.page(tab).icon.is_empty() {
+            return self.tab_bitmap_in(&self.palette, tab);
+        }
+        Some(Bitmap {
+            source: Source::Encoded(self.tabs.get(&tab)?.favicon.clone()?),
+            drawn: FAVICON_DRAWN * size / FAVICON_SIZE,
+        })
+    }
+
     /// What a tile draws in its middle: a favorite split's segments, unless it has an icon of its
     /// own, else the favicon or the one-colour icon's template.
-    fn tile_middle(&self, tab: u64, theme: Option<&TileTheme>) -> gpui::AnyElement {
+    fn tile_middle(&self, tab: u64, theme: Option<&TileTheme>, cx: &App) -> gpui::AnyElement {
         // A split's row dragged over the favorites is its tile too.
         let panes = self.panes(tab);
         match panes.len() > 1 && self.page(tab).icon.is_empty() {
             true => {
                 let width = self.tile_places(self.tile_tabs().len().max(1))[0][2];
-                self.split_icons(&panes, width).into_any_element()
+                self.split_icons(&panes, width, cx).into_any_element()
             }
-            false => self.tile_icon(tab, theme).into_any_element(),
+            false => self.tile_icon(tab, theme, cx).into_any_element(),
         }
     }
 
     /// The tiles of `favorites` on the page of a Space beside the shown one's, at their places
     /// as they show once it's shown, `selected`'s filled and ringed. They take no input.
-    pub(super) fn still_tiles(&self, favorites: &[u64], selected: u64) -> Option<gpui::Div> {
+    pub(super) fn still_tiles(
+        &self,
+        favorites: &[u64],
+        selected: u64,
+        cx: &App,
+    ) -> Option<gpui::Div> {
         let places = self.tile_places(favorites.len());
         let tiles = places
             .into_iter()
@@ -785,7 +844,7 @@ impl Shell {
                         tile_fill(&self.palette, developer, 0.)
                     })
                     .children(theme.as_deref().and_then(TileTheme::layers))
-                    .child(self.tile_middle(tab, theme.as_deref()))
+                    .child(self.tile_middle(tab, theme.as_deref(), cx))
                     .when(selected && developer, |tile| {
                         tile.child(developer_outline(&self.palette, TILE_RADIUS))
                     });
@@ -797,7 +856,7 @@ impl Shell {
         (!favorites.is_empty()).then(|| {
             div()
                 .absolute()
-                .top(px(LIST_TOP))
+                .top(px(self.list_start()))
                 .left_0()
                 .w(px(self.width()))
                 .children(tiles)

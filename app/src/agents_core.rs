@@ -96,6 +96,16 @@ impl Browser for Core {
         }
     }
 
+    fn off_limits(&self, tab: u64, cx: &App) -> Option<&'static str> {
+        // A pinned tab not yet loaded has no page, only the URL it's pinned to.
+        agents::off_limits(&self.tab(tab, cx).url, &name(bc::bc_tab_pinned_url, tab))
+    }
+
+    fn space_of(&self, tab: u64, cx: &App) -> u64 {
+        let mut spaces = ids(bc::bc_spaces).into_iter();
+        (spaces.find(|&space| self.space_tab_ids(space, cx).contains(&tab))).unwrap_or(0)
+    }
+
     fn may_act(&self, agent: &str, tab: u64, action: &str, _: &mut App) -> Result<(), String> {
         let (Ok(agent), Ok(action)) = (CString::new(agent), CString::new(action)) else {
             return Err("The agent's name can't be used.".into());
@@ -217,7 +227,7 @@ impl Browser for Core {
         match unsafe { bc::bc_agent_close_tab(agent.as_ptr(), tab, discard) } as u32 {
             bc::BC_AGENT_CLOSED => agents::Closed::Closed,
             bc::BC_AGENT_CLOSE_PINNED => agents::Closed::Pinned,
-            bc::BC_AGENT_CLOSE_ASKS => agents::Closed::Asks,
+            bc::BC_AGENT_CLOSE_PENDING => agents::Closed::Pending,
             _ => agents::Closed::Refused,
         }
     }
@@ -232,6 +242,14 @@ impl Browser for Core {
 
     fn set_pinned(&self, tab: u64, pinned: bool, _: &mut App) {
         unsafe { bc::bc_tab_set_pinned(tab, pinned) };
+    }
+
+    fn move_today(&self, tab: u64, index: usize, _: &mut App) {
+        unsafe { bc::bc_tab_move(tab, false, 0, index) };
+    }
+
+    fn url_site(&self, url: &str) -> Option<String> {
+        crate::url_site(url)
     }
 
     // The core has no call that removes a pinned tab, so it's the two the row's remove button

@@ -1,7 +1,7 @@
 //! The link preview's geometry, keys and clicks, on a host that records what it asks of its window
 //! and the core.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use gpui::{Modifiers, TestAppContext, VisualTestContext};
 
@@ -10,6 +10,15 @@ use super::*;
 #[derive(Default)]
 struct Recorder {
     calls: RefCell<Vec<String>>,
+    /// Whether the page shows under the window, as on Windows and Linux.
+    under: Cell<bool>,
+    /// Whether its hole opens the frame after it's laid out at rest, as on X11 and Windows.
+    opens_at_once: Cell<bool>,
+    /// Whether the page is on screen where it's laid out at once, with no word from the core, as
+    /// on Windows.
+    shown_at_once: Cell<bool>,
+    /// Whether it says when the frame the window draws is on screen, as Wayland's does.
+    says_drawn: Cell<bool>,
 }
 
 impl Recorder {
@@ -34,10 +43,27 @@ impl Host for Recorder {
     fn show(&self, window: u64) {
         self.push(format!("show {window}"));
     }
-    // A frame of the motion, which tells nothing of what the user did.
-    fn drew(&self, _: Bounds<Pixels>, _: f32, _: f32) {}
+    // A frame of the motion, which tells nothing of what the user did, but for the hole a page
+    // under the window shows through.
+    fn drew(&self, page: Bounds<Pixels>, _: f32, _: f32) {
+        if self.under.get() {
+            self.push(format!("hole {}", describe(page)));
+        }
+    }
     fn page_under(&self) -> bool {
-        false
+        self.under.get()
+    }
+    fn open_waits(&self) -> bool {
+        !self.opens_at_once.get()
+    }
+    fn shown_at_once(&self) -> bool {
+        self.shown_at_once.get()
+    }
+    fn when_drawn(&self, tab: u64) -> bool {
+        if self.says_drawn.get() {
+            self.push(format!("when drawn {tab}"));
+        }
+        self.says_drawn.get()
     }
     fn release(&self) {
         self.push("release".into());
@@ -53,8 +79,10 @@ impl Host for Recorder {
             archived.map_or(String::new(), |archived| format!(" of archived {archived}"));
         self.push(format!("keep {window} {tab}{archived}"));
     }
-    fn kept_archived(&self, window: u64, archived: u64, _: &mut App) {
-        self.push(format!("kept archived {archived} in {window}"));
+    fn kept(&self, window: u64, archived: Option<u64>, _: &mut App) {
+        if let Some(archived) = archived {
+            self.push(format!("kept archived {archived} in {window}"));
+        }
     }
     fn closed(&self, window: u64, closed: Closed, undone: bool, _: &mut App) {
         let (x, y) = (f32::from(closed.link.x), f32::from(closed.link.y));
@@ -112,14 +140,19 @@ struct Shown {
 
 impl Shown {
     fn new(cx: &mut TestAppContext) -> Self {
-        let host = Rc::new(Recorder::default());
+        let mut shown = Self::on(Recorder::default(), cx);
+        assert_eq!(shown.calls(), [PLACED, "show 1"]);
+        shown
+    }
+
+    fn on(host: Recorder, cx: &mut TestAppContext) -> Self {
+        let host = Rc::new(host);
         let window = cx.update(|cx| open(host.clone(), cx));
         let window = window.expect("no window for the link preview");
         let cx = VisualTestContext::from_window(window.into(), cx);
         cx.simulate_resize(size(px(800.), px(600.)));
         let mut shown = Shown { cx, host };
         shown.show(TAB);
-        assert_eq!(shown.calls(), [PLACED, "show 1"]);
         shown
     }
 
@@ -152,6 +185,12 @@ impl Shown {
         self.cx
             .simulate_click(point(px(x), px(y)), Modifiers::none());
         self.cx.run_until_parked();
+    }
+
+    /// What the preview asked since the last time, as it is now.
+    fn drawn(&mut self) -> Vec<String> {
+        self.cx.run_until_parked();
+        self.host.calls.take()
     }
 
     /// What the preview asked since the last time, once it has had time to leave.
@@ -239,6 +278,411 @@ fn it_shows_the_site() {
     assert_eq!(site_of("https://example.org"), "example.org");
     assert_eq!(site_of("http://localhost:50821/b.html"), "localhost");
     assert_eq!(site_of("http://[::1]:8080/"), "[::1]");
+}
+
+/// Where its page shows under the window, it's laid out at its size from the first and never
+/// resized by the motion: out of sight while the card grows with a plate in its place, under the
+/// plate the frame after the card first draws at rest, and through the hole once the core says it's
+/// on screen there. As it closes, the plate fills the hole the frame before the hole closes, the
+/// page leaves the frame after, before the window's page has the keyboard back, and the card shrinks
+/// back once the core says the page has left (#2519, #2640).
+#[gpui::test]
+fn a_page_under_the_window_waits_for_the_card(cx: &mut TestAppContext) {
+    let host = Recorder::default();
+    host.under.set(true);
+    let mut shown = Shown::on(host, cx);
+    let calls = shown.calls();
+    assert_eq!(calls[..2], [OUT_OF_SIGHT, "show 1"]);
+    assert!(calls[2..].iter().all(|call| call == NO_HOLE), "{calls:?}");
+    rest(&mut shown);
+    // The card's first frame at rest, which the page comes in under only once it's on screen.
+    frame(&mut shown);
+    assert_eq!(shown.drawn(), [NO_HOLE]);
+    frame(&mut shown);
+    assert_eq!(shown.drawn(), [PLACED, NO_HOLE]);
+    // The card keeps its plate until the core says the page is on screen there, and then draws
+    // the hole by itself.
+    frame(&mut shown);
+    assert_eq!(shown.drawn(), [NO_HOLE]);
+    there(&mut shown, AT_REST);
+    assert_eq!(shown.drawn(), [HOLE]);
+    shown.keys("escape");
+    frame(&mut shown);
+    frame(&mut shown);
+    // The key's own frame, then the plate's in the open hole, then the hole closes over the page,
+    // which leaves the frame after, and only then does the window's page have the keyboard back.
+    assert_eq!(
+        shown.drawn(),
+        [HOLE, HOLE, NO_HOLE, NO_HOLE, OUT_OF_SIGHT, "release"]
+    );
+    // The card holds at rest until the core says the page has left, and shrinks back from then.
+    advance(&mut shown, CLOSE / 2.);
+    assert_eq!(pose_of(&mut shown).scale, 1.);
+    there(&mut shown, LEFT);
+    let calls = shown.calls();
+    assert_eq!(calls[calls.len() - 3..], ["hide", "close 7", CLOSED]);
+}
+
+/// The core may never say the page is on screen, such as for a window with nothing on screen: the
+/// hole opens, and the card shrinks back as it closes, 150 ms on all the same.
+#[gpui::test]
+fn the_wait_for_a_page_under_the_window_runs_out(cx: &mut TestAppContext) {
+    let host = Recorder::default();
+    host.under.set(true);
+    let mut shown = Shown::on(host, cx);
+    shown.calls();
+    rest(&mut shown);
+    frame(&mut shown);
+    frame(&mut shown);
+    assert_eq!(shown.drawn(), [NO_HOLE, PLACED, NO_HOLE]);
+    advance(&mut shown, 0.149);
+    assert_eq!(shown.drawn(), Vec::<String>::new());
+    advance(&mut shown, 0.001);
+    assert_eq!(shown.drawn(), [HOLE]);
+    shown.keys("escape");
+    frame(&mut shown);
+    frame(&mut shown);
+    shown.drawn();
+    advance(&mut shown, 0.149);
+    assert_eq!(pose_of(&mut shown).scale, 1.);
+    let calls = shown.calls();
+    assert_eq!(calls[calls.len() - 3..], ["hide", "close 7", CLOSED]);
+}
+
+/// The wait's limit goes as the core says the page is there, and as the page moves again, so no
+/// timer outlives what it waits for.
+#[gpui::test]
+fn the_wait_ends_as_the_core_says(cx: &mut TestAppContext) {
+    let host = Recorder::default();
+    host.under.set(true);
+    let mut shown = Shown::on(host, cx);
+    shown.calls();
+    rest(&mut shown);
+    frame(&mut shown);
+    frame(&mut shown);
+    assert!(waiting(&mut shown));
+    // A word for where it was before isn't one for where it is.
+    there(&mut shown, OUT_OF_SIGHT_AT);
+    assert!(waiting(&mut shown));
+    there(&mut shown, AT_REST);
+    assert!(!waiting(&mut shown));
+    shown.keys("escape");
+    frame(&mut shown);
+    frame(&mut shown);
+    assert!(waiting(&mut shown));
+    shown.cx.cx.update(|cx| tab_closed(TAB, cx));
+    assert!(shown.cx.cx.update(|cx| tab(cx)).is_none());
+}
+
+/// Where the window's page never showed through as the card came to rest (X11 and Windows), the
+/// hole opens the frame after the page is laid out at rest, with no word from the core, and the
+/// close still holds the card at rest until the core says the page has left (#2640).
+#[gpui::test]
+fn where_the_open_never_showed_through_it_doesnt_wait(cx: &mut TestAppContext) {
+    let host = Recorder::default();
+    host.under.set(true);
+    host.opens_at_once.set(true);
+    let mut shown = Shown::on(host, cx);
+    shown.calls();
+    rest(&mut shown);
+    frame(&mut shown);
+    frame(&mut shown);
+    frame(&mut shown);
+    assert_eq!(shown.drawn(), [NO_HOLE, PLACED, NO_HOLE, HOLE]);
+    assert!(!waiting(&mut shown));
+    shown.keys("escape");
+    frame(&mut shown);
+    frame(&mut shown);
+    assert_eq!(
+        shown.drawn(),
+        [HOLE, HOLE, NO_HOLE, NO_HOLE, OUT_OF_SIGHT, "release"]
+    );
+    advance(&mut shown, CLOSE / 2.);
+    assert_eq!(pose_of(&mut shown).scale, 1.);
+    there(&mut shown, LEFT);
+    let calls = shown.calls();
+    assert_eq!(calls[calls.len() - 3..], ["hide", "close 7", CLOSED]);
+}
+
+/// Where the core never says the page is on screen (Windows), it's there once laid out, as its view
+/// moves at once. The close still holds the card at rest until the page has left, as there a first
+/// frame late after the key drew the card shrunk round the page at rest, and the page leaving with
+/// the hole showed the window's page in the card (#2640): the plate fills the hole, the hole closes
+/// over the page, the page leaves the frame after, and the card shrinks back from there.
+#[gpui::test]
+fn where_the_core_never_says_the_close_holds_without_waiting(cx: &mut TestAppContext) {
+    let host = Recorder::default();
+    host.under.set(true);
+    host.opens_at_once.set(true);
+    host.shown_at_once.set(true);
+    let mut shown = Shown::on(host, cx);
+    shown.calls();
+    rest(&mut shown);
+    frame(&mut shown);
+    frame(&mut shown);
+    frame(&mut shown);
+    assert_eq!(shown.drawn(), [NO_HOLE, PLACED, NO_HOLE, HOLE]);
+    assert!(!waiting(&mut shown));
+    shown.keys("escape");
+    // No frame for most of the close's time after the key: the preview is still there, at rest.
+    advance(&mut shown, CLOSE * 0.7);
+    assert_eq!(pose_of(&mut shown).scale, 1.);
+    frame(&mut shown);
+    frame(&mut shown);
+    assert_eq!(
+        shown.drawn(),
+        [HOLE, HOLE, NO_HOLE, NO_HOLE, OUT_OF_SIGHT, "release"]
+    );
+    assert!(!waiting(&mut shown));
+    let calls = shown.calls();
+    assert_eq!(calls[calls.len() - 3..], ["hide", "close 7", CLOSED]);
+}
+
+/// Where the host says when the window's frame is on screen (Wayland's), the page leaves once the
+/// frame that closed the hole over it is, rather than the frame after: a compositor that waits for
+/// the GPU to finish that frame can show the window's without the page first (#2640).
+#[gpui::test]
+fn the_page_leaves_once_the_frame_covering_it_is_on_screen(cx: &mut TestAppContext) {
+    let mut shown = covered_at_rest(cx);
+    shown.keys("escape");
+    frame(&mut shown);
+    frame(&mut shown);
+    frame(&mut shown);
+    let drawn = shown.drawn();
+    assert!(drawn.iter().all(|call| call != OUT_OF_SIGHT), "{drawn:?}");
+    let asked = drawn.iter().filter(|call| *call == "when drawn 7").count();
+    assert_eq!(
+        asked, 1,
+        "asked for a frame other than the one closing the hole: {drawn:?}"
+    );
+    // The page leaves as the host says, in the frame that draws.
+    shown.cx.cx.update(|cx| cover_shown(TAB, cx));
+    let drawn = shown.drawn();
+    assert_eq!(
+        drawn[drawn.len() - 2..],
+        [OUT_OF_SIGHT, "release"],
+        "{drawn:?}"
+    );
+    there(&mut shown, LEFT);
+    let calls = shown.calls();
+    assert_eq!(calls[calls.len() - 3..], ["hide", "close 7", CLOSED]);
+}
+
+/// And if the host never says, as for a window with nothing on screen, the page leaves 150 ms on,
+/// so the close never hangs on it.
+#[gpui::test]
+fn the_wait_for_the_frame_covering_the_page_runs_out(cx: &mut TestAppContext) {
+    let mut shown = covered_at_rest(cx);
+    shown.keys("escape");
+    frame(&mut shown);
+    frame(&mut shown);
+    shown.drawn();
+    advance(&mut shown, 0.149);
+    let drawn = shown.drawn();
+    assert!(drawn.iter().all(|call| call != OUT_OF_SIGHT), "{drawn:?}");
+    advance(&mut shown, 0.001);
+    let drawn = shown.drawn();
+    assert_eq!(
+        drawn[drawn.len() - 2..],
+        [OUT_OF_SIGHT, "release"],
+        "{drawn:?}"
+    );
+}
+
+/// A preview at rest with its page showing through the hole, on a host that says when the
+/// window's frame is on screen.
+fn covered_at_rest(cx: &mut TestAppContext) -> Shown {
+    let host = Recorder::default();
+    host.under.set(true);
+    host.says_drawn.set(true);
+    let mut shown = Shown::on(host, cx);
+    shown.calls();
+    rest(&mut shown);
+    frame(&mut shown);
+    frame(&mut shown);
+    there(&mut shown, AT_REST);
+    assert_eq!(shown.drawn(), [NO_HOLE, PLACED, NO_HOLE, HOLE]);
+    shown
+}
+
+/// Esc as the card lands, its page laid out at rest under the plate before the hole has opened
+/// over it, holds the card at rest all the same until the page has left, as shrinking would show
+/// the page round it (#3319).
+#[gpui::test]
+fn a_close_before_the_hole_opens_holds_until_the_page_has_left(cx: &mut TestAppContext) {
+    let host = Recorder::default();
+    host.under.set(true);
+    let mut shown = Shown::on(host, cx);
+    shown.calls();
+    rest(&mut shown);
+    frame(&mut shown);
+    frame(&mut shown);
+    assert_eq!(shown.drawn(), [NO_HOLE, PLACED, NO_HOLE]);
+    shown.keys("escape");
+    frame(&mut shown);
+    frame(&mut shown);
+    // The key's own frame, then the plate's, and the page leaves the frame after, still unseen,
+    // before the window's page has the keyboard back.
+    assert_eq!(
+        shown.drawn(),
+        [NO_HOLE, NO_HOLE, NO_HOLE, OUT_OF_SIGHT, "release", NO_HOLE]
+    );
+    advance(&mut shown, CLOSE / 2.);
+    assert_eq!(pose_of(&mut shown).scale, 1.);
+    there(&mut shown, LEFT);
+    let calls = shown.calls();
+    assert_eq!(calls[calls.len() - 3..], ["hide", "close 7", CLOSED]);
+}
+
+/// Where the host says when the window's frame is on screen (Wayland's), where #3319 was seen, the
+/// page under the plate leaves once the plate's frame is.
+#[gpui::test]
+fn where_the_host_says_a_close_before_the_hole_opens_waits_for_the_plate(cx: &mut TestAppContext) {
+    let host = Recorder::default();
+    host.under.set(true);
+    host.says_drawn.set(true);
+    let mut shown = Shown::on(host, cx);
+    shown.calls();
+    rest(&mut shown);
+    frame(&mut shown);
+    frame(&mut shown);
+    assert_eq!(shown.drawn(), [NO_HOLE, PLACED, NO_HOLE]);
+    shown.keys("escape");
+    frame(&mut shown);
+    frame(&mut shown);
+    frame(&mut shown);
+    let drawn = shown.drawn();
+    assert!(drawn.iter().all(|call| call != OUT_OF_SIGHT), "{drawn:?}");
+    assert_eq!(
+        drawn.iter().filter(|call| *call == "when drawn 7").count(),
+        1,
+        "{drawn:?}"
+    );
+    assert_eq!(pose_of(&mut shown).scale, 1.);
+    shown.cx.cx.update(|cx| cover_shown(TAB, cx));
+    let drawn = shown.drawn();
+    assert_eq!(
+        drawn[drawn.len() - 2..],
+        [OUT_OF_SIGHT, "release"],
+        "{drawn:?}"
+    );
+    there(&mut shown, LEFT);
+    let calls = shown.calls();
+    assert_eq!(calls[calls.len() - 3..], ["hide", "close 7", CLOSED]);
+}
+
+/// The same on Windows, where the hole opens the frame after the page is laid out at rest: an Esc
+/// before that frame holds the card until the page has left (#3319).
+#[gpui::test]
+fn where_the_core_never_says_a_close_before_the_hole_opens_holds(cx: &mut TestAppContext) {
+    let host = Recorder::default();
+    host.under.set(true);
+    host.opens_at_once.set(true);
+    host.shown_at_once.set(true);
+    let mut shown = Shown::on(host, cx);
+    shown.calls();
+    rest(&mut shown);
+    frame(&mut shown);
+    frame(&mut shown);
+    assert_eq!(shown.drawn(), [NO_HOLE, PLACED, NO_HOLE]);
+    // Esc before the next frame, which would open the hole.
+    shown
+        .cx
+        .cx
+        .update(|cx| update(cx, |preview, _, cx| preview.close("escape", cx)).expect("no window"));
+    advance(&mut shown, CLOSE * 0.7);
+    assert_eq!(pose_of(&mut shown).scale, 1.);
+    frame(&mut shown);
+    frame(&mut shown);
+    assert_eq!(
+        shown.drawn(),
+        [NO_HOLE, NO_HOLE, OUT_OF_SIGHT, "release", NO_HOLE]
+    );
+    let calls = shown.calls();
+    assert_eq!(calls[calls.len() - 3..], ["hide", "close 7", CLOSED]);
+}
+
+/// Under Reduce Motion the card fades in where it rests, and the page waits out of sight for it
+/// all the same.
+#[gpui::test]
+fn under_reduce_motion_a_page_under_the_window_waits_for_the_card(cx: &mut TestAppContext) {
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let host = Recorder::default();
+    host.under.set(true);
+    let mut shown = Shown::on(host, cx);
+    assert_eq!(shown.calls()[..2], [OUT_OF_SIGHT, "show 1"]);
+    rest(&mut shown);
+    frame(&mut shown);
+    frame(&mut shown);
+    there(&mut shown, AT_REST);
+    assert_eq!(shown.drawn(), [NO_HOLE, PLACED, NO_HOLE, HOLE]);
+}
+
+/// Where its page rests, waits out of sight, and leaves to as it closes.
+const AT_REST: (f32, f32) = (296., 106.);
+const OUT_OF_SIGHT_AT: (f32, f32) = (-1438., 106.);
+const LEFT: (f32, f32) = OUT_OF_SIGHT_AT;
+
+/// The core says the page is on screen at `(x, y)`, at its size.
+fn there(shown: &mut Shown, (x, y): (f32, f32)) {
+    shown
+        .cx
+        .cx
+        .update(|cx| page_shown(TAB, bounds(x, y, 438., 428.), cx));
+    shown.cx.run_until_parked();
+}
+
+/// Moves the clock on by `seconds`, and the preview's tasks with it.
+fn advance(shown: &mut Shown, seconds: f32) {
+    shown
+        .cx
+        .executor()
+        .advance_clock(Duration::from_secs_f32(seconds));
+    shown.cx.run_until_parked();
+}
+
+/// How the preview draws itself now.
+fn pose_of(shown: &mut Shown) -> Pose {
+    shown.cx.cx.update(|cx| {
+        update(cx, |preview, _, cx| {
+            preview.preview.as_ref().expect("no preview").drawn(cx)
+        })
+        .expect("no window")
+    })
+}
+
+/// Whether it waits for the core to say the page is on screen.
+fn waiting(shown: &mut Shown) -> bool {
+    shown.cx.cx.update(|cx| {
+        update(cx, |preview, _, _| {
+            preview
+                .preview
+                .as_ref()
+                .is_some_and(|shown| shown._wait.is_some())
+        })
+        .unwrap_or(false)
+    })
+}
+
+/// Where a page under the window waits: at its size, left of the window.
+const OUT_OF_SIGHT: &str = "place 7 -1438 106 438 428 r16";
+const NO_HOLE: &str = "hole 400 200 0 0";
+const HOLE: &str = "hole 296 106 438 428";
+
+/// Its motion's clock is the wall's, so its window came on screen as long ago as it opens.
+fn rest(shown: &mut Shown) {
+    shown.cx.cx.update(|cx| {
+        update(cx, |preview, _, _| {
+            let shown = preview.preview.as_mut().expect("no preview");
+            shown.shown = Some(Instant::now() - Duration::from_secs_f32(OPEN));
+        })
+    });
+}
+
+/// A frame of the preview's window.
+fn frame(shown: &mut Shown) {
+    shown.cx.update(|window, _| window.refresh());
+    shown.cx.run_until_parked();
 }
 
 /// Esc closes it back into the link, and its page once it has left.

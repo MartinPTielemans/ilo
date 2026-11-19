@@ -1,3 +1,4 @@
+# check.sh runs this at 180.
 # The menu bar's Extensions menu lists the turned-on extensions of the shown Space's profile, by
 # name, over Pin to URL Field and Manage Extensions…. Choosing one runs its action on the tab shown,
 # as a click on its toolbar button does in Chrome: one without a popup hears the click, and a
@@ -102,7 +103,9 @@ const frame = time => {
   time - first > 600 ? call() : done || requestAnimationFrame(frame);
 };
 requestAnimationFrame(frame);
+addEventListener("keydown", event => event.key === "t" && chrome.tabs.create({url: "opened.html"}));
 EOF2
+echo '<title>opened</title>the tab the popup opened' > "$extensions/popup/opened.html"
 cat > "$extensions/third/manifest.json" << 'EOF'
 {"manifest_version": 3, "name": "Check Third", "version": "1",
  "action": {"default_popup": "popup.html"}, "options_ui": {"page": "options.html"},
@@ -137,19 +140,25 @@ page='data:text/html,<title>loading</title>
 profile_dir="$extensions/profile"
 rm -rf "$profile_dir"
 mkdir -p "$profile_dir"
+# On Linux, removing an extension runs xdg-icon-resource for its icons, here in the run's own data
+# folder, never the runner's home. Without a hicolor folder its error lands in the log, and once
+# came in the middle of the driver's line a step waits for (#2792), as in store (#2726).
+data_dir="$PWD/$out/extensions-data"
+mkdir -p "$data_dir/icons/hicolor"
 log="$out/extensions.log"
 step=0
-BROWSER_DRIVE=1 BROWSER_URL="$page" BROWSER_PROFILE_DIR="$profile_dir" "$browser" \
+BROWSER_DRIVE=1 BROWSER_URL="$page" BROWSER_PROFILE_DIR="$profile_dir" XDG_DATA_HOME="$data_dir" \
+  "$browser" \
   --load-extension="$(app_path "$clicked_dir"),$(app_path "$extensions/popup"),$(app_path "$extensions/third"),$(app_path "$extensions/panel")" \
   < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
-# The browser's own ad blocker, uBlock Origin, is in every profile, last by name.
-ublock=oghkpboejbohceocapipmnjifoklonij
-listing="^browser: extensions menu [a-p]* [a-p]* [a-p]* [a-p]* $ublock\$"
+# The browser's own ad blocker, uBlock Origin, is in every profile, and never listed: it's Settings'
+# Ad Blocking (#2107).
+listing="^browser: extensions menu [a-p]* [a-p]* [a-p]* [a-p]*\$"
 await "$listing" ||
-  fail "the Extensions menu didn't list the four extensions and the ad blocker: $(grep '^browser: extensions' "$log")"
+  fail "the Extensions menu didn't list the four extensions alone: $(grep '^browser: extensions' "$log")"
 # By name.
 ids=$(grep -m1 "$listing" "$log" | cut -d' ' -f4-)
 clicked=$(echo "$ids" | cut -d' ' -f1)
@@ -205,14 +214,18 @@ expect "^browser: extension popup $popup\$" "Check Popup's popup didn't show"
 expect "^browser: extension actions $popup:1 $clicked:7\$" \
   "the badge Check Popup's popup gave it didn't show at once"
 ../tools/window-screenshot.sh "$pid" "$out/extension-popup.png" || fail "no window to capture"
-# Closes the popup: escape, where it has the keyboard. On Linux the core gives the keyboard to a
-# page alone, not to a popup (#708), so a click on its action again closes it, as in Chrome, or
-# on the page, $1, where it has none.
+# Under Wayland the popup gets the keyboard on an engine with the core that lends it the UI's
+# (#2836). On an older one a click on its action again closes it, as in Chrome, or on the page, $1.
+popup_keys=yes
+if [ -n "${WAYLAND_DISPLAY:-}" ] && ! engine_has ../core/platform/linux/window_views.cc; then
+  popup_keys=no
+fi
+# Closes the popup: escape, where it has the keyboard.
 close_popup() {
-  if [ "$(uname)" = Linux ] && [ -n "${1:-}" ]; then
+  if [ "$popup_keys" = no ] && [ -n "${1:-}" ]; then
     send click $1
     how="a click on the page"
-  elif [ "$(uname)" = Linux ]; then
+  elif [ "$popup_keys" = no ]; then
     send click $first_place
     how="a click on its action"
   else
@@ -239,8 +252,8 @@ painted_by_escape() {
       exit
     }' "$log"
 }
-if [ "$(uname)" = Linux ]; then
-  echo "skip: the extension's popup taking the keyboard and escape closing it: on Linux the core gives the keyboard to a page alone (#708)."
+if [ "$popup_keys" = no ]; then
+  echo "skip: the extension's popup taking the keyboard and escape closing it: under Wayland an engine older than its core gives the popup no keyboard (#2836)."
   close_popup
 else
   send state
@@ -249,11 +262,38 @@ else
   send state
   [ "$key" = BrowserCoreNSWindow ] ||
     fail "the browser window didn't get the keyboard back from the popup: it's in $key"
+  # Opened by a click on its action, the popup had the keyboard from the UI, which has it back.
+  [ -z "${WAYLAND_DISPLAY:-}" ] || [ "$focus" = AccessKitSubclassOfGPUIView ] ||
+    fail "the UI didn't get the keyboard back from the popup it opened: focus is on $focus"
+fi
+# A tab the popup opens in front, as its button or a link in it does, has the keyboard once the
+# popup closes, not the UI that lent the popup it. On Linux, the core's, on an engine with it.
+if [ "$popup_keys" = no ] || [ "$(uname)" != Linux ] ||
+  ! engine_has ../core/window.cc ../core/platform/linux/window_views.cc; then
+  echo "skip: the keyboard in the tab an extension's popup opened: Linux's, on an engine with its core (#2935)."
+else
+  send click $first_place
+  expect "^browser: extension popup $popup\$" "Check Popup's popup didn't show to open a tab"
+  send key t
+  expect "^browser: loaded [0-9]* chrome-extension://$popup/opened.html\$" \
+    "the popup's key didn't open its tab"
+  opened=$(grep "^browser: loaded [0-9]* chrome-extension://$popup/opened.html\$" "$log" |
+    tail -1 | cut -d' ' -f3)
+  expect '^browser: extension popup none$' "the popup didn't close as its tab opened"
+  expect "^browser: selected $opened\( in .*\)\{0,1\}\$" "the popup's tab didn't show"
+  send state
+  [ "$key" = BrowserCoreNSWindow ] && [ "$focus" = RenderWidgetHostViewCocoa ] ||
+    fail "the tab the popup opened didn't get the keyboard: it's in $key, focus on $focus"
+  send key w cmd
+  expect "^browser: today " "⌘W didn't close the tab the popup opened"
+  index=$(today | tr ' ' '\n' | grep -n "^$first\$" | cut -d: -f1)
+  send click $(row $((index - 1)))
+  expect "^browser: selected $first\( in .*\)\{0,1\}\$" "the first tab didn't show again"
 fi
 # The Extensions menu runs a pinned one too, its popup hanging from its action.
 send menu "Check Popup"
 expect "^browser: extension popup $popup\$" "Check Popup's popup didn't show from the menu"
-# On Linux a click on its action would run it again, so the page's click closes it, for the bar.
+# Without the keyboard a click on its action would run it again, so the page's click closes it.
 close_popup "$page_point"
 # The command bar finds it by its name and runs it, as Arc's does (#1396). Captured before the
 # expect, so a build without the row shows what's there instead.
@@ -283,6 +323,8 @@ expect '^browser: command bar shown$' "⌘L didn't open the command bar in the L
 send insert "data:text/html,<title>little</title>A page in Little ilo"
 send key return
 expect "^browser: extension actions $popup[^ ]* $clicked" "the Little ilo window didn't list the pinned actions"
+# The list comes a frame before the bar draws it, and a click before then lands on the title (#3163).
+expect "^browser: little bar drew actions $popup $clicked\$" "the Little ilo bar didn't draw the pinned actions"
 # Logged as the window first drew its bar, before its page.
 await '^browser: little bar title ends at ' || fail "the Little ilo window's bar didn't say where its title ends"
 read -r end_x end_y << EOF
@@ -293,7 +335,7 @@ send click $((end_x - 45)) "$end_y"
 expect "^browser: run extension $popup ran\$" "a click on Check Popup's action in Little ilo didn't run it"
 expect "^browser: extension popup $popup\$" "Check Popup's popup didn't show from Little ilo"
 ../tools/window-screenshot.sh "$pid" "$out/little-extension-popup.png" all || fail "no window to capture"
-if [ "$(uname)" = Linux ]; then
+if [ "$popup_keys" = no ]; then
   send click $((end_x - 45)) "$end_y"
 else
   send key escape
@@ -324,7 +366,7 @@ expect "^browser: run extension $third ran\$" "Check Third didn't run from the o
 expect "^browser: extension popup $third\$" "Check Third's popup didn't show"
 ../tools/window-screenshot.sh "$pid" "$out/extension-overflow-popup.png" ||
   fail "no window to capture"
-# Its action is behind the overflow button, so on Linux a click on the page closes it.
+# Its action is behind the overflow button, so without the keyboard a click on the page closes it.
 close_popup "$page_point"
 # Check Clicked unpinned, Check Third has a place of its own, where a right-click unpins it.
 send menu "Pin to URL Field › Check Clicked"
@@ -428,11 +470,11 @@ expect '^browser: dialog shown Remove “Check Third”?$' "Remove didn't ask fi
 ../tools/window-screenshot.sh "$pid" "$out/extension-remove.png" || fail "no window to capture"
 send key return
 expect "^browser: remove extension $third removed\$" "Remove didn't remove Check Third"
-expect "^browser: extensions menu $clicked $panel $popup $ublock\$" \
+expect "^browser: extensions menu $clicked $panel $popup\$" \
   "the removed Check Third stayed in the Extensions menu"
 expect '^browser: extension actions $' "the removed Check Third's action stayed"
-# The Site Controls list every turned-on extension, here the three unpinned ones and the ad
-# blocker, by name, and a click on one's tile runs it, its popup hanging from the tile. On the
+# The Site Controls list every turned-on extension but the ad blocker, here the three unpinned
+# ones, by name, and a click on one's tile runs it, its popup hanging from the tile. On the
 # first tab. The grid's third tile has its middle at 234 187: the tiles are 56 apart from 122, and
 # their first row is 23 under the heading's cap, which is 46 under the action tiles' top at 102.
 index=$(today | tr ' ' '\n' | grep -n "^$first\$" | cut -d: -f1)
@@ -446,7 +488,7 @@ expect '^browser: command bar commands "site controls": Site Controls$' \
   "the command bar didn't find Site Controls"
 send key return
 expect '^browser: command site-controls via command bar$' "Site Controls didn't run from the bar"
-expect "^browser: site controls extensions $clicked $panel $popup $ublock\$" \
+expect "^browser: site controls extensions $clicked $panel $popup\$" \
   "the Site Controls didn't list the unpinned extensions by name: $(grep \
     '^browser: site controls extensions' "$log" | tail -1)"
 expect '^browser: site controls settled$' "the Site Controls didn't finish opening"
@@ -485,7 +527,7 @@ send choose "$(cased 'Move to Top')"
 expect "^browser: site controls extension move-to-top $popup\$" "Move to Top didn't reach the panel"
 # With the badge its popup set for every tab, which the extension keeps.
 expect "^browser: extension actions $popup:1\$" "Move to Top didn't pin Check Popup"
-expect "^browser: site controls drew extensions $popup $clicked $panel $ublock\$" \
+expect "^browser: site controls drew extensions $popup $clicked $panel\$" \
   "the grid didn't draw Check Popup first: $(grep '^browser: site controls drew' "$log" | tail -1)"
 none_since '^browser: site controls closing' || fail "Move to Top closed the Site Controls"
 ../tools/window-screenshot.sh "$pid" "$out/site-controls-move-to-top.png" ||
@@ -496,7 +538,7 @@ expect "^browser: menu shown $(cased 'Move to Top') (disabled), $(cased 'Unpin, 
 send choose Unpin
 expect "^browser: unpin extension $popup\$" "Unpin on Check Popup's tile didn't unpin it"
 expect '^browser: extension actions $' "the unpinned Check Popup's action stayed"
-expect "^browser: site controls drew extensions $clicked $panel $popup $ublock\$" \
+expect "^browser: site controls drew extensions $clicked $panel $popup\$" \
   "the grid didn't draw Check Popup back by name"
 post rightclick 234 187
 expect "^browser: menu shown $(cased 'Move to Top, Pin, Remove, Manage Extension')\$" \
@@ -626,17 +668,17 @@ echo '<title>answered</title>' > "$home/extension/answered.html"
 echo '<title>unanswered</title>' > "$home/extension/unanswered.html"
 log="$out/native-host.log"
 step=0
-BROWSER_DRIVE=1 BROWSER_URL="$page" BROWSER_PROFILE_DIR="$home/profile" \
+BROWSER_DRIVE=1 BROWSER_URL="$page" BROWSER_PROFILE_DIR="$home/profile" XDG_DATA_HOME="$data_dir" \
   "$browser" --load-extension="$home/extension" \
   --other-browsers-dir="$home/browsers" \
   < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
-# Check Native, then uBlock Origin, last by name, which no longer reloads itself away (#954).
-await "^browser: extensions menu [a-p]* $ublock\$" ||
+# Check Native alone.
+await "^browser: extensions menu [a-p]*\$" ||
   fail "the Extensions menu didn't list Check Native"
-native=$(grep -m1 "^browser: extensions menu [a-p]* $ublock\$" "$log" | cut -d' ' -f4)
+native=$(grep -m1 "^browser: extensions menu [a-p]*\$" "$log" | cut -d' ' -f4)
 # The host allows only the extension, whose id comes from its folder. Windows runs a host that isn't
 # an .exe through cmd, so there it's a .bat that runs the script with Git Bash.
 host="$home/host.sh"
@@ -745,7 +787,7 @@ printf '{"download": {"default_directory": "%s", "prompt_for_download": false}}'
   "$(native_path "$PWD/$out/downloads" | sed 's/\\/\\\\/g')" > "$crx/profile/Default/Preferences"
 log="$out/install.log"
 step=0
-BROWSER_DRIVE=1 BROWSER_URL="$site" BROWSER_PROFILE_DIR="$crx/profile" \
+BROWSER_DRIVE=1 BROWSER_URL="$site" BROWSER_PROFILE_DIR="$crx/profile" XDG_DATA_HOME="$data_dir" \
   "$browser" --extension-mime-request-handling=always-prompt-for-install \
   < "$out/drive" > "$log" 2>&1 &
 pid=$!
@@ -798,9 +840,13 @@ printf "<?xml version='1.0' encoding='UTF-8'?>
 # Its next version, asking for more, from the page over the one added: Chrome asks again with the
 # browser's dialog, listing the new warnings (extension-update.png), and return updates it. Installed,
 # it asks the browser to check for its updates, as Chrome checks on its own only every 5 hours and
-# ignores --extensions-update-frequency.
+# ignores --extensions-update-frequency. Chrome holds an update that comes while the extension has a
+# process until that process ends, which this worker's can outlast the check by; a reload puts the
+# held update in at once.
 cat > "$crx/source/worker.js" << 'EOF'
-chrome.runtime.onInstalled.addListener(() => chrome.runtime.requestUpdateCheck(() => {}));
+chrome.runtime.onInstalled.addListener(() => chrome.runtime.requestUpdateCheck((result) => {
+  if ((result && result.status) === "update_available") chrome.runtime.reload();
+}));
 EOF
 cat > "$crx/source/manifest.json" << EOF
 {"manifest_version": 3, "name": "Check Install", "version": "2", "permissions": ["tabs", "history"],
@@ -880,15 +926,17 @@ echo '<title>crash page</title>' > "$crashing/extension/page.html"
 crash_launch() {
   log="$out/$1.log"
   step=0
-  BROWSER_DRIVE=1 BROWSER_URL="$page" BROWSER_PROFILE_DIR="$crashing/profile" \
+  BROWSER_DRIVE=1 BROWSER_URL="$page" BROWSER_PROFILE_DIR="$crashing/profile" XDG_DATA_HOME="$data_dir" \
     "$browser" --load-extension="$(app_path "$crashing/extension")" \
     < "$out/drive" > "$log" 2>&1 &
   pid=$!
   exec 3> "$out/drive"
   await_load
-  await "^browser: extensions menu [a-p]* $ublock\$" ||
+  # Its own page, not just any: while site.sh took $page, this launch opened about:blank and passed.
+  await '^browser: title [0-9]* ready$' || fail "the crash launch's page didn't draw"
+  await "^browser: extensions menu [a-p]*\$" ||
     fail "the Extensions menu didn't list Check Crash: $(grep '^browser: extensions menu' "$log")"
-  crashing_id=$(grep -m1 "^browser: extensions menu [a-p]* $ublock\$" "$log" | cut -d' ' -f4)
+  crashing_id=$(grep -m1 "^browser: extensions menu [a-p]*\$" "$log" | cut -d' ' -f4)
 }
 # The extension's page in the tab shown, and chrome://crash in it, the extension's crash $1. Fails
 # if its process ends and the core counts no crash, and returns 1 if it doesn't end in 30 s.
@@ -919,11 +967,11 @@ crash_block() {
   expect "^browser: told extension $crashing_id crashed\$" "the browser didn't hear it told the user"
   expect '^browser: dialog settled$' "the dialog saying Check Crash was turned off didn't settle"
   ../tools/window-screenshot.sh "$pid" "$out/extension-crashed-off.png" || fail "no window to capture"
-  grep "^browser: extensions menu" "$log" | tail -1 | grep -q " $crashing_id " &&
+  grep "^browser: extensions menu" "$log" | tail -1 | grep -q " $crashing_id\$" &&
     fail "Check Crash stayed in the Extensions menu, turned off"
   send key return
   expect "^browser: turn on extension $crashing_id on\$" "Turn On Again didn't turn Check Crash on"
-  expect "^browser: extensions menu $crashing_id $ublock\$" \
+  expect "^browser: extensions menu $crashing_id\$" \
     "Check Crash didn't come back in the Extensions menu"
   exec 3>&-
   quit
@@ -931,7 +979,7 @@ crash_block() {
 if ! crash_block; then
   exec 3>&-
   quit
-  echo "skip: an extension turned off after two crashes: the page chrome://crash crashed didn't end in 30 s on this machine, so the core heard no crash."
+  echo "skip: an extension turned off after two crashes: the page chrome://crash crashed didn't end in 30 s on this machine, as its core handler (/proc/sys/kernel/core_pattern) still took its core, so the core heard no crash."
 else
   echo "ok: an extension whose own process crashes twice, across a relaunch, is turned off, and the browser's dialog says so, with Turn On Again, which turns it on. Window: $out/extension-crashed-off.png"
 fi

@@ -57,6 +57,12 @@ sidebar_point="100 400"
 
 # After a failure, nothing the check started keeps running.
 cleanup() {
+  status=${1:-$?}
+  # A command that failed under set -e ends the check without fail's line, so a result would read
+  # as an exit with no failure, as sync-extensions' mkfifo on the pipe a run before left did (#2486).
+  if [ "$status" != 0 ] && [ -z "${failed:-}" ]; then
+    echo "FAIL: ${run:-the check} stopped at a command that failed, with status $status, before saying why; the lines above are its last" >&2
+  fi
   # The servers may be gone already, and under set -e a failed kill would end the trap here.
   [ -z "${server:-}" ] || kill "$server" 2>/dev/null || true
   [ -z "${collector:-}" ] || kill "$collector" 2>/dev/null || true
@@ -108,13 +114,49 @@ cleanup() {
   pkill -9 -f "$procs" || true
 }
 fail() {
+  failed=1
   echo "FAIL: $1" >&2
-  grep -v '^$' "$log" | tail -5 >&2
+  # After a wait that ran out, what it waited for and what came instead (#2566).
+  if [ -n "${waited_for:-}" ]; then
+    wait_report >&2
+  else
+    grep -v '^$' "$log" | tail -5 >&2
+  fi
   # What the window showed, for a failure the log doesn't explain, as on CI.
   if [ -n "${pid:-}" ] && [ -n "${out:-}" ] && kill -0 "$pid" 2>/dev/null; then
+    end_captures
     ../tools/window-screenshot.sh "$pid" "$out/failed.png" > /dev/null 2>&1 || true
   fi
   exit 1
+}
+# The window's captures the run has going, "<pid> <stop file>" a line (capturing).
+captures=
+# Notes that the process $1 captures the window, tools/window-frames.sh until the file $2 appears or
+# tools/window-record.sh. On the Mac a still taken while another capture goes ends that one
+# (ReplayKit's -5814), or hangs in ScreenCaptureKit (#3191), so a failure ends them before its
+# picture.
+capturing() {
+  captures="$captures$1 ${2:-}
+"
+}
+# Ends the captures still going: each with its stop file if it has one, else at once, and at once if
+# it hasn't ended 5 s after its file.
+end_captures() {
+  # A here-document, not a pipe, so the loop runs in this shell and can wait for its own jobs.
+  while read -r capturer stop_file; do
+    [ -n "$capturer" ] && kill -0 "$capturer" 2> /dev/null || continue
+    if [ -n "$stop_file" ]; then
+      touch "$stop_file"
+      for _ in $(seq 50); do
+        kill -0 "$capturer" 2> /dev/null || break
+        sleep 0.1
+      done
+    fi
+    kill "$capturer" 2> /dev/null || true
+    wait "$capturer" 2> /dev/null || true
+  done <<CAPTURES
+$captures
+CAPTURES
 }
 # The app ended by itself.
 gone() {
@@ -135,6 +177,8 @@ own_count_logs=
 # Fails the check if a launch's log says a count was sent and it named no server of the run's own:
 # that count reached the hosted server. check.sh asks after each run.
 counted_nowhere() {
+  # The run is over, and so is what its last wait was about.
+  waited_for=
   for counted in $(grep -rlx --include='*.log' 'browser: daily count sent' "$out" || true); do
     case " $own_count_logs " in
       *" $counted "*) ;;
@@ -145,20 +189,108 @@ counted_nowhere() {
     esac
   done
 }
-# Whether the prebuilt engine was built with the core's files $@ as this checkout has them, for a
-# step that needs a core change: an engine built before it skips the step, saying so.
+# Whether the engine linked was built with the core's files $@ as this checkout has them, for a
+# step that needs a core change: an engine built before it skips the step, saying so. Only the
+# files of core/ and engine/patches/ are compared (tools/engine-changes.sh).
 engine_has() {
-  local commit
-  commit=$(../engine/fetch.sh commit 2> /dev/null) && git diff --quiet "$commit" -- "$@"
+  local changes file
+  if git rev-parse --is-inside-work-tree > /dev/null 2>&1; then
+    # The linked engine, prebuilt or a local build, against this checkout as it is now.
+    changes=$(../tools/engine-changes.sh 2> /dev/null) || return 1
+  else
+    # A copy of the tree with no repository, as a check VM's (#2554): build.sh compared it.
+    [ -f build/engine-changes ] ||
+      fail "this tree has no repository and build/engine-changes isn't there, so whether the engine has ${*} is unknown: build with ./build.sh where git is, and copy build/ with the app"
+    changes=$(cat build/engine-changes)
+  fi
+  for file in "$@"; do
+    case $file in
+      ../*) file=${file#../} ;;
+      *) file=app/$file ;;
+    esac
+    ! printf '%s\n' "$changes" | grep -qxF "$file" || return 1
+  done
 }
 # Waits up to 30 s for a line matching $1 in the log of the current run.
 await() {
+  wait_begins
   for _ in $(seq 300); do
     grep -q "$1" "$log" && return 0
-    kill -0 "$pid" 2>/dev/null || gone
+    kill -0 "$pid" 2>/dev/null || {
+      ran_out "$1" "" exited
+      gone
+    }
     sleep 0.1
   done
+  ran_out "$1" ""
   return 1
+}
+# A wait for a line starts: the one before it, met or not, is no longer what a failure is about.
+# Seconds by the shell's clock where it has one, as Git Bash forks slowly, or else by date's.
+wait_begins() {
+  waited_for=
+  wait_began=${SECONDS:-$(date +%s)}
+}
+# Notes, for fail, a wait for a line matching $1 that ran out, or that the app's exit ended with
+# $3 "exited", which read the app's lines from command $2 on, or all of them.
+ran_out() {
+  waited_for=$1
+  waited_from=$2
+  waited_end=${3:-}
+  waited_secs=$((${SECONDS:-$(date +%s)} - ${wait_began:-0}))
+}
+# What fail says after a wait ran out, for someone who has never seen the run (#2566): what it
+# waited for and how long, the app's lines from the wait's command on, and the log's lines nearest
+# to what it waited for, those starting as the pattern's plain start does. Most often the line came,
+# but in another form, from another layer, or before the command.
+wait_report() {
+  local plain= near= at=
+  if [ "$waited_end" = exited ]; then
+    echo "The app exited during a wait for a line matching: $waited_for"
+  else
+    echo "The wait ran out after ${waited_secs} s, for a line matching: $waited_for"
+  fi
+  if [ -n "$waited_from" ]; then
+    echo "What the app logged from command $waited_from ($(sed -n "s/^browser: drive $waited_from: //p" "$log" | head -1)) on, the last 40 lines:"
+    since "$waited_from" | grep -v '^$' | fold_alike | tail -40 | sed 's/^/  /'
+    at=$(grep -n "^browser: drive $waited_from: " "$log" | head -1 | cut -d: -f1)
+  else
+    echo "What the app logged last, 40 lines:"
+    grep -v '^$' "$log" | fold_alike | tail -40 | sed 's/^/  /'
+  fi
+  # The pattern's start up to its first special character, then a word shorter each time while two
+  # are left, until some line starts with it: "browser:" alone would match every line. No "[." in
+  # the bracket, which starts a collating symbol there.
+  plain=$(printf '%s\n' "$waited_for" | sed 's/^\^//; s/[]$*.\\[].*//; s/ *$//')
+  while [ "${plain% *}" != "$plain" ]; do
+    near=$(awk -v plain="$plain" 'index($0, plain) == 1 { print NR ": " $0 }' "$log" | tail -5)
+    if [ -n "$near" ]; then
+      echo "The log's last lines starting \"$plain\", by line number${at:+ (command $waited_from is line $at)}:"
+      printf '%s\n' "$near" | sed 's/^/  /'
+      break
+    fi
+    plain=${plain% *}
+  done
+  [ -n "$near" ] || echo "No line in the log starts as the pattern does."
+  waited_for=
+}
+# Folds each run of lines that are alike but for their numbers into its first and last line,
+# saying how many there were.
+fold_alike() {
+  awk '
+    function flush() {
+      if (n == 1) print first
+      else if (same) print first "  (" n " times)"
+      else {
+        print first
+        if (n > 2) print "... " n - 2 " more like it ..."
+        print last
+      }
+    }
+    { key = $0; gsub(/[0-9]+/, "#", key) }
+    n && key == run { n++; last = $0; if ($0 != first) same = 0; next }
+    { if (n) flush(); run = key; first = last = $0; n = 1; same = 1 }
+    END { if (n) flush() }'
 }
 # Puts View › Appearance back to Automatic, the profile's first, by taking away the choice the core
 # keeps with the Spaces, and the file an older app kept it in, which a run that picks Light or Dark
@@ -255,6 +387,15 @@ exited() {
   [ "$(uname)" != Darwin ] || echo "engine sites after the quit: $(engine_sites)"
   return 0
 }
+# What the runs that trace record: tabs, and perf's traced switches. Unset, it's latency, Chrome's
+# tab switch spans, which tabs reads, and perf traces nothing. CHECK_TRACE_CATEGORIES names others for
+# a breakdown, as #2377's, latency among them, and a run on CI takes them from its check workflow's
+# trace input. More than latency fills tabs' trace before its run ends, so then it keeps the run's
+# last part, and says how many of its switches have a span; perf traces only its switches, through
+# DevTools, so its buffer holds them all.
+trace_categories=${CHECK_TRACE_CATEGORIES:-latency}
+trace_mode=
+[ "$trace_categories" = latency ] || trace_mode=--trace-startup-record-mode=record-continuously
 # A quit Apple Event goes through -[NSApplication terminate:], the way macOS quits apps when the
 # user logs out. On Windows each browser window is asked to close, as its close button does, and
 # Chromium quits with its last one: taskkill without /F closed one of two (#1017). On Linux SIGINT
@@ -329,6 +470,61 @@ quit() {
   quit_app
   exited "$@"
 }
+# uBlock Origin's selfie of its filters (#2381, #2502), which goes with uBlock Origin (#2111). A
+# launch takes its filters in from it, or with none compiles them, and 53 s after its lists last
+# changed writes it, about a minute into a new profile's first launch, in the browser's pool, main
+# and IO threads and the extension's process: 0.85 s of CPU in 4 s on the Mac. A user's launches
+# after are on it, so a run's that measure them are too.
+# ublock_stores <command>: <command> on each of its two stores, failing as it fails on one.
+ublock_stores() {
+  local ublock=oghkpboejbohceocapipmnjifoklonij
+  "$@" "$profile_dir/Default/IndexedDB/chrome-extension_${ublock}_0.indexeddb.leveldb" &&
+    "$@" "$profile_dir/Default/Local Extension Settings/$ublock"
+}
+ublock_store_selfie() {
+  local keys key
+  keys=$(python3 -I check/leveldb_keys.py "$1") || return 1
+  for key in staticMain staticExtFilteringEngine staticNetFilteringEngine; do
+    printf '%s\n' "$keys" | LC_ALL=C grep -aq "selfie/$key\$" || return 1
+  done
+}
+# ublock_selfie: whether uBlock Origin wrote its selfie's three parts, which it takes in only
+# together, to its IndexedDB and to its extension storage, by the keys their files hold. A key it
+# takes out stays in them until they compact, so this says only that one was written.
+ublock_selfie() {
+  ublock_stores ublock_store_selfie
+}
+# What <store> holds of the selfie, and its files, for a run that ends with none.
+ublock_store_note() {
+  echo "$1"
+  ls -lR "$1" "${1%.leveldb}.blob" 2> /dev/null || true
+  python3 -I check/leveldb_keys.py "$1" | LC_ALL=C grep -ao 'selfie/.*' | sort | uniq -c
+}
+# selfie_launch <url> <log>: a launch on page <url>, logged to <log>, that stays until uBlock Origin
+# has written its selfie, checking each second, and quits, so its work has ended before the next
+# launch. $selfie_at is the seconds it took.
+selfie_launch() {
+  local run_log=$log stayed
+  log=$2
+  rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
+  stayed=$(date +%s)
+  BROWSER_URL="$1" BROWSER_PROFILE_DIR="$profile_dir" "$browser" < /dev/null > "$log" 2>&1 &
+  pid=$!
+  selfie_at=
+  for _ in $(seq 180); do
+    ublock_selfie && selfie_at=$(($(date +%s) - stayed)) && break
+    kill -0 "$pid" 2> /dev/null || gone
+    sleep 1
+  done
+  quit
+  if [ -z "$selfie_at" ]; then
+    # Whether it wrote none or some, for a run that ends here.
+    ublock_stores ublock_store_note > "$out/selfie-stores.txt" 2>&1 || true
+    fail "uBlock Origin wrote no selfie in a launch that stayed 180 s; its stores: $out/selfie-stores.txt"
+  fi
+  rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
+  log=$run_log
+}
 # Whether the run is on X11 through sway's Xwayland, where a child window such as the password
 # offer or the find bar can't keep the X focus, which wlroots' window manager sends back to the
 # browser window (#1646). Wayland and Xvfb keep it.
@@ -378,6 +574,14 @@ post() {
   step=$((step + 1))
   echo "$*" >&3
 }
+# click_placed <send|post> <part>: a click on the Site Controls' <part>, such as "shield",
+# "switch Developer Mode" or "line Location", where they last logged it. They log each part's place
+# whenever it changes while open, so a check needn't know the panel's geometry.
+click_placed() {
+  at=$(grep "^browser: site controls $2 at " "$log" | tail -1 | sed "s/^browser: site controls $2 at //")
+  [ -n "$at" ] || fail "the Site Controls didn't draw $2"
+  "$1" click $at
+}
 # A Today tab's Share as its menu logs it, with the comma before it: this Mac's share services, or
 # with none its one Share… for the share sheet, dimmed for a page with no link, or nothing on Linux,
 # which has neither. A check reads past them and never chooses one.
@@ -385,28 +589,34 @@ share='\(, Share…\( (disabled)\)\?\|, Share › [^,]*\(, Share › [^,]*\)*\)\
 # Waits for a line matching $1 logged after the last command was sent, or after command $3, and
 # fails with $2.
 expect() {
+  wait_begins
   for _ in $(seq 100); do
     logged "$1" "${3:-}" && return 0
     exited_without "$1" "$2" "${3:-}"
     sleep 0.1
   done
+  ran_out "$1" "${3:-$step}"
   fail "$2"
 }
 # expect, for up to 30 s, for what waits on a process that may still be starting.
 expect_late() {
+  wait_begins
   for _ in $(seq 300); do
     sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q "$1" && return 0
     sleep 0.1
   done
+  ran_out "$1" "$step"
   fail "$2"
 }
 # expect, looking every 10 ms, for a press that has to land within the first frames of a motion.
 expect_soon() {
+  wait_begins
   for _ in $(seq 1000); do
     logged "$1" && return 0
     exited_without "$1" "$2"
     sleep 0.01
   done
+  ran_out "$1" "$step"
   fail "$2"
 }
 # A line matching $1 was logged after the last command was sent, or after command $2.
@@ -416,12 +626,29 @@ logged() {
 # The app that was to log $1 is gone without it, which says why the step $2 failed. It's looked
 # for again, as the app may have logged it as it went.
 exited_without() {
-  [ -z "${pid:-}" ] || kill -0 "$pid" 2>/dev/null || logged "$1" "${3:-}" || fail "the app exited: $2"
+  [ -z "${pid:-}" ] || kill -0 "$pid" 2>/dev/null || logged "$1" "${3:-}" || {
+    ran_out "$1" "${3:-$step}" exited
+    fail "the app exited: $2"
+  }
 }
 # Settings has drawn its tab $1, or whichever it shows, since the last command, on showing or on a
 # change of tab: until it has, a click in it finds nothing to land on (#1101, #1133).
+# Its failure names the platform's last report of the window on screen since the command, which is
+# what a show's line waits on (#3270).
 settings_drew() {
-  expect "^browser: settings drew ${1:-.*}\$" "Settings didn't draw ${1:-its tab}"
+  local drew="^browser: settings drew ${1:-.*}\$" seen=
+  wait_begins
+  for _ in $(seq 100); do
+    logged "$drew" && return 0
+    exited_without "$drew" "Settings didn't draw ${1:-its tab}"
+    sleep 0.1
+  done
+  ran_out "$drew" "$step"
+  seen=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep '^browser: settings visibility ' | tail -1)
+  if [ -n "$seen" ]; then
+    fail "Settings didn't draw ${1:-its tab}; the last report of its window since the command: ${seen#browser: settings }"
+  fi
+  fail "Settings didn't draw ${1:-its tab}; no report of its window's visibility came since the command"
 }
 # Where Settings last drew its control $1, "x y" for clickkey, once it has: it logs each place it
 # draws one ("browser: settings $1 at x y"). That can be a frame from before the state a run just
@@ -463,6 +690,24 @@ in_sight() {
   if [ "$y" -gt "$bottom" ]; then by=$((y - bottom + 32)); else by=$((y - top - 32)); fi
   send scrollkey "${at% *}" $(((top + bottom) / 2)) "$by" 1
   at=$(drawn_after "$1" "^browser: drive $step: ") || return 1
+  # GPUI on Windows takes the driver's wheel messages for lines, about two thirds of the points
+  # asked, which can leave the row under the edge: scroll the rest. Where the card can't scroll
+  # further, nothing draws again and at stays where it was.
+  y=${at#* }
+  [ "$y" -ge "$top" ] && [ "$y" -le "$bottom" ] && return 0
+  if [ "$y" -gt "$bottom" ]; then by=$((y - bottom + 32)); else by=$((y - top - 32)); fi
+  send scrollkey "${at% *}" $(((top + bottom) / 2)) "$by" 1
+  rest=$(drawn_after "$1" "^browser: drive $step: ") && at=$rest
+  return 0
+}
+# Clicks Settings' control $1 in the card, where the card shows it whole, as in_sight scrolls it:
+# one at $(drawn …) under a short window's edge takes the click on nothing (#2503). $2 is the
+# driver's command, clickkey unless named. in_sight's variables are its own here, so a caller's at,
+# a mark it awaits from, keeps.
+click_in_sight() {
+  local at sight top bottom y by rest
+  in_sight "$1" || fail "Settings didn't draw $1"
+  send "${2:-clickkey}" $at
 }
 # ⌘N's and ⇧⌘N's window opens with ⌘T's command bar once it's on screen, as Arc's (window.sh
 # checks it). Escape closes it, leaving the window with no page that the steps after expect. With
@@ -540,6 +785,14 @@ page_shortcut() {
   send key "$1" cmd
   expect "^browser: command $2 via page$" "⌘$(echo "$1" | tr a-z A-Z) with the page focused didn't reach the UI"
 }
+# Command $1 ran once since the last command was sent, which $2 names: under Wayland GPUI reads a
+# page's key after Chromium, and once the app's answer has given the UI the keyboard, as closing
+# the page that had it does, GPUI would run the key again (#2442). Read once the command's effect
+# is logged, which comes after a second run would.
+ran_once() {
+  ran=$(since | grep -c "^browser: command $1 via ")
+  [ "$ran" = 1 ] || fail "$2 ran $1 $ran times"
+}
 
 # What the sidebar last logged of $1, "sidebar hovered" or "sidebar tools": 1 or shown, 0 or hidden,
 # or nothing before its first change.
@@ -550,16 +803,22 @@ last() { grep "^browser: $1 " "$log" | tail -1 | sed 's/.* //'; }
 # takes its stills after recorded. A recording that doesn't start is tried once more, then the
 # run goes on without it, saying why: the video is the motion's proof, never a step's.
 record() {
-  # tools/window-record.sh records with the Mac's ScreenCaptureKit alone.
-  if [ "$(uname)" != Darwin ]; then
+  # tools/window-record.sh records the Mac's windows with ScreenCaptureKit, and on Linux check.sh's
+  # Xvfb, which holds nothing but the app. Wayland's sessions and Windows have no recorder yet.
+  case "$(uname):${BROWSER_HEADLESS:-}" in
+  Darwin:* | Linux:xvfb) ;;
+  *)
     recording=""
-    echo "skip: recording $1, as tools/window-record.sh records only the Mac's windows so far."
+    echo "skip: recording $1, as tools/window-record.sh records only the Mac's windows and" \
+      "Linux's Xvfb so far."
     return 0
-  fi
+    ;;
+  esac
   recording="$out/$1.mp4"
   for try in 1 2; do
     ../tools/window-record.sh "$pid" "$2" "$recording" > "$out/$1-record.log" 2>&1 &
     recorder=$!
+    capturing "$recorder"
     for _ in $(seq 300); do
       grep -q '^recording$' "$out/$1-record.log" && return 0
       kill -0 "$recorder" 2> /dev/null || break
@@ -589,15 +848,19 @@ recorded() {
   fail "the window's recording didn't finish: $said"
 }
 # GitHub's hosted Mac starts a recording and never gets its first frame, ReplayKit's -5822 (#1108),
-# so there the run goes on without it, saying so. Anywhere else a recording that started and then
-# failed fails the run.
+# and a check VM's guest stops a stream partway through, ScreenCaptureKit's -3821 (#2396). The
+# motion can't be taken again once it's driven, so the run goes on without the video, saying so.
+# Any other recording that started and then failed fails the run.
 unrecorded() {
   said=$(tail -1 "${recording%.mp4}-record.log")
+  stopped=$(grep '^the stream ended by itself.*Code=-3821 ' "${recording%.mp4}-record.log" | tail -1)
   case "${GITHUB_ACTIONS:-}: $said" in
-  true:*Code=-5822*) ;;
-  *) return 1 ;;
+  true:*Code=-5822*)
+    echo "skip: recording $(basename "$recording" .mp4), as the hosted Mac's recording got no first frame: $said" ;;
+  *)
+    [ -n "$stopped" ] || return 1
+    echo "skip: recording $(basename "$recording" .mp4), as the system stopped it: $stopped" ;;
   esac
-  echo "skip: recording $(basename "$recording" .mp4), as the hosted Mac's recording got no first frame: $said"
   recording=""
 }
 # The driver's clicks come with no move, and one in the sidebar tells it the pointer is there, so
@@ -621,21 +884,24 @@ expect_tabs() {
   expect "^browser: today $1\$" "$3: Today is \"$(today)\", not \"$1\""
   expect "^browser: selected $2\( in .*\)\{0,1\}\$" "$3: tab $2 isn't shown"
 }
-# Opens a tab from the command bar, to https://$1. The scheme is typed: a bare host goes to http
+# Opens a tab from the command bar, to https://$1, or to $1 as it is when it's an http:// address,
+# a page of the check's own site (#3144). The scheme is typed: a bare host goes to http
 # and Chrome's HTTPS-Upgrades takes it to https, falling back to http when the runner's https is
 # slow or fails (#1261), and the runs that follow expect https. history checks the upgrade itself.
 open_from_bar() {
+  local typed=https://$1 url=https://$1/
+  case $1 in http://*) typed=$1 url=$1 ;; esac
   before=$(today)
   send key t cmd
   expect '^browser: command bar shown$' "⌘T didn't open the command bar"
   expect '^browser: new tab plate 1$' "⌘T didn't give New Tab the selected plate"
-  send type "https://$1"
+  send type "$typed"
   send key return
   expect "^browser: today [0-9][0-9]*${before:+ $before}\$" "the tab for $1 didn't open at the top of Today"
   tab=$(today | cut -d' ' -f1)
   expect "^browser: selected $tab\$" "the tab for $1 wasn't shown"
   expect '^browser: new tab plate 0$' "the tab for $1 didn't take the selected plate"
-  expect "^browser: loaded $tab https://$1/\$" "$1 didn't load in its tab"
+  expect "^browser: loaded $tab $url\$" "$1 didn't load in its tab"
 }
 # The driver's key $1 shows tab $2, as a switch the app times.
 switch() {
@@ -675,6 +941,29 @@ cpu() {
 summary() {
   sort -n | awk '{ v[NR] = $1 } END { if (NR) printf "median %.1f ms, max %.1f ms, %d switches", v[int((NR + 1) / 2)], v[NR], NR }'
 }
+# The machine's CPU model and how many CPUs it runs, as "AMD EPYC 7763 64-Core Processor, 4 CPUs",
+# said beside each tab-switch figure. Under Xvfb the UI draws on the CPU, through lavapipe, and an
+# AMD EPYC 7763 runner's switches take about twice an EPYC 9V74's, so a figure compares only with
+# one from the same model (#3418).
+runner_cpu() {
+  local model count
+  if windows; then
+    local processor='HKLM:\HARDWARE\DESCRIPTION\System\CentralProcessor\0'
+    model=$(powershell.exe -NoProfile -NonInteractive -Command \
+      "(Get-ItemProperty '$processor').ProcessorNameString")
+    count=${NUMBER_OF_PROCESSORS:-}
+  elif [ "$(uname)" = Darwin ]; then
+    model=$(sysctl -n machdep.cpu.brand_string 2> /dev/null)
+    count=$(sysctl -n hw.ncpu 2> /dev/null)
+  else
+    model=$(grep -m1 '^model name' /proc/cpuinfo | cut -d: -f2-)
+    # Arm's /proc/cpuinfo names no model.
+    [ -n "$model" ] || model=$(lscpu 2> /dev/null | sed -n 's/^Model name: *//p' | head -1)
+    count=$(nproc 2> /dev/null)
+  fi
+  model=$(printf '%s' "$model" | tr -d '\r' | sed 's/^ *//; s/ *$//')
+  echo "${model:-a CPU that names no model}, ${count:-an unknown number of} CPUs"
+}
 
 # The page view keeps the sidebar's 228 points on its left and 10 on its other sides, over GPUI's
 # view, which fills the window. A full-screen page ("fills") covers the whole window, and with the
@@ -702,10 +991,12 @@ check_layout() {
   [ "$ui" = "0,0 $content" ] || fail "$1: GPUI's view is at $ui in a $content window"
 }
 
-# Waits for the tab's page to be at https://$1/, done loading, with back and forward as $2 and $3
-# (1 or 0). $4 says when.
+# Waits for the tab's page to be at https://$1/, or at $1 when it's an http:// address, done
+# loading, with back and forward as $2 and $3 (1 or 0). $4 says when.
 expect_page() {
-  expect "^browser: page $tab back $2 forward $3 loading 0 https://$1/\$" "$4: the tab isn't at $1 with back $2 and forward $3: $(grep "^browser: page $tab" "$log" | tail -1)"
+  local url=https://$1/
+  case $1 in http://*) url=$1 ;; esac
+  expect "^browser: page $tab back $2 forward $3 loading 0 $url\$" "$4: the tab isn't at $1 with back $2 and forward $3: $(grep "^browser: page $tab" "$log" | tail -1)"
 }
 # Loads https://$1 in the tab from the command bar.
 go_from_bar() {
@@ -821,6 +1112,9 @@ with open(sys.argv[1], "w", encoding="utf-8") as f:
 start_with_cdp() {
   cdp_url=$1 cdp_profile=$2 cdp_page=$3
   shift 3
+  # The app's redirect to the log opens only once the fifos before it have, so the log is made here,
+  # or the first await's grep says it's missing (#3276).
+  : > "$log"
   mkfifo "$scratch/cdp"
   if windows; then
     # Chrome on Windows takes its DevTools pipe as handles, which Git Bash can't give it, so
@@ -833,8 +1127,10 @@ start_with_cdp() {
     exec 3> "$out/drive"
     await '^DevTools listening on ws://' || fail "DevTools didn't say where it listens"
     socket=$(grep -m1 '^DevTools listening on ws://' "$log" | cut -d' ' -f4 | tr -d '\r')
-    cat "$scratch/cdp" | python3 -I -u check/cdp.py --socket "$socket" "${cdp_page#/}" \
-      > "$cdp_log" 2>&1 &
+    # Neither holds the driver's pipe: wait "$helper" doesn't wait for cat, and a writer left open
+    # gives the next launch a pipe no command reaches, as exited() says (#3125).
+    cat "$scratch/cdp" 3>&- | python3 -I -u check/cdp.py --socket "$socket" "${cdp_page#/}" \
+      3>&- > "$cdp_log" 2>&1 &
   else
     mkfifo "$scratch/to-browser" "$scratch/from-browser"
     # Each end of a pipe waits for the other to open, in this order: the driver's, the browser's
@@ -849,6 +1145,25 @@ start_with_cdp() {
   fi
   helper=$!
   exec 5> "$scratch/cdp"
+}
+# The display the app opens on, "X Y WIDTH HEIGHT" in points from the main display's top left, as
+# Chrome's --window-position takes a place: with BROWSER_DISPLAY=builtin the Mac's own screen, as the
+# app's host finds it (platform/mac/host.mm), so a Chrome a run starts doesn't cover what's playing
+# on another, else the main display.
+display_bounds() {
+  [ "$(uname)" = Darwin ] || fail "display_bounds is the Mac's"
+  osascript -l JavaScript -e '
+    ObjC.import("AppKit");
+    ObjC.import("CoreGraphics");
+    const screens = $.NSScreen.screens.js;
+    const main = screens[0].frame;
+    const builtin = ObjC.unwrap(
+      $.NSProcessInfo.processInfo.environment.objectForKey("BROWSER_DISPLAY")) == "builtin";
+    const own = screens.find((screen) => builtin &&
+      $.CGDisplayIsBuiltin(screen.deviceDescription.objectForKey("NSScreenNumber").unsignedIntValue));
+    const frame = (own || screens[0]).frame;
+    [frame.origin.x, main.size.height - frame.origin.y - frame.size.height, frame.size.width,
+     frame.size.height].map(Math.round).join(" ");' || fail "the displays didn't say where the Mac's own is"
 }
 # Starts the check's web server, in site.sh, unless a run before has. Its pages are at $site. It
 # serves every run after, so only cleanup stops it: a run that did would leave the next its address
@@ -898,7 +1213,86 @@ served() {
     grep -q "$1" "$out/site.log" && return 0
     sleep 0.1
   done
-  fail "$2"
+  # With $3, the failure quotes the first requests the site logged that match it.
+  sent=
+  [ -z "${3:-}" ] || sent=": $(grep -- "$3" "$out/site.log" | head -2 | tr '\n' ' ')"
+  fail "$2$sent"
+}
+# Starts a server of the run's own for the hosts $3…, which its launches mustn't reach on the
+# internet (#3144), answering any path with the page $2, over https and plain http on one port, as
+# the bar may go to a page over either. A launch reaches it with the flags
+# --host-resolver-rules="$tls_rules" --ignore-certificate-errors-spki-list="$tls_key", $tls_key
+# being its certificate's key, and the app learns of none of it. Each request is a "$1: METHOD URL"
+# line in $1-tls.log, and any other line there is the server's trouble. The run stops it with
+# kill "$tls", and cleanup does after a failure.
+serve_tls() {
+  local name=$1 page=$2 sans= host
+  shift 2
+  [ -z "${tls:-}" ] || fail "$name's https server started while another of the run's still served"
+  for host in "$@"; do
+    sans="${sans:+$sans,}DNS:$host"
+  done
+  # Git Bash would pass the subject to Windows' openssl as a path under its own folder (#872).
+  MSYS2_ARG_CONV_EXCL=/CN= openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=$1" \
+    -addext "subjectAltName=$sans" -keyout "$out/$name-tls.key" -out "$out/$name-tls.pem" 2> /dev/null ||
+    fail "openssl didn't make $name's certificate"
+  tls_key=$(openssl x509 -in "$out/$name-tls.pem" -pubkey -noout | openssl pkey -pubin -outform der |
+    openssl dgst -sha256 -binary | base64)
+  expr "$tls_key" : '[A-Za-z0-9+/]\{43\}=$' > /dev/null ||
+    fail "openssl gave \"$tls_key\" as $name's certificate's key, not a SHA-256 in base64"
+  printf '%s' "$page" > "$out/$name-tls.html"
+  rm -f "$out/$name-tls.port"
+  mkfifo "$out/$name-tls.port"
+  python3 -I -u -c '
+import http.server, socket, socketserver, ssl, sys
+name, page = sys.argv[3], open(sys.argv[4], "rb").read()
+tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+tls.load_cert_chain(sys.argv[1], sys.argv[2])
+class Handler(http.server.BaseHTTPRequestHandler):
+    # A connection that opens with a TLS handshake record is https, and any other plain http.
+    def setup(self):
+        self.scheme = "http"
+        try:
+            if self.request.recv(1, socket.MSG_PEEK) == b"\x16":
+                self.request = tls.wrap_socket(self.request, server_side=True)
+                self.scheme = "https"
+        except OSError as error:
+            print("handshake failed: %s" % error, file=sys.stderr, flush=True)
+            raise
+        super().setup()
+    def parse_request(self):
+        parsed = super().parse_request()
+        if parsed:
+            host = self.headers.get("Host", "")
+            print("%s: %s %s://%s%s" % (name, self.command, self.scheme, host, self.path),
+                  file=sys.stderr, flush=True)
+        return parsed
+    def answer(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(page)))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(page)
+    do_GET = do_POST = do_HEAD = answer
+    def log_message(self, *args):
+        pass
+# TCPServer, as site.sh binds: HTTPServer looks 127.0.0.1 up by name, 35 s on the hosted Mac.
+server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Handler)
+# As bytes: text stdout on Windows ends a line with \r, which the driver typed as return (#1196).
+sys.stdout.buffer.write(b"%d\n" % server.server_address[1])
+sys.stdout.close()
+server.serve_forever()
+' "$out/$name-tls.pem" "$out/$name-tls.key" "$name" "$out/$name-tls.html" > "$out/$name-tls.port" \
+    2> "$out/$name-tls.log" 3>&- 4>&- 5>&- &
+  tls=$!
+  tls_port=
+  read -r tls_port < "$out/$name-tls.port" || true
+  [ -n "$tls_port" ] || fail "$name's https server didn't start: $(cat "$out/$name-tls.log")"
+  tls_rules=
+  for host in "$@"; do
+    tls_rules="${tls_rules:+$tls_rules, }MAP $host 127.0.0.1:$tls_port"
+  done
 }
 # The colour at ($2, $3), as fractions of the width and height, in the capture $1: "r g b".
 pixel() {

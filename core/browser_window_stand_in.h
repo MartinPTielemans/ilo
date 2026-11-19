@@ -308,8 +308,13 @@ class BrowserWindowStandIn : public BrowserWindow,
   web_modal::WebContentsModalDialogHost* GetWebContentsModalDialogHostFor(
       content::WebContents* web_contents) override;
   void ShowAvatarBubbleFromAvatarButton(bool is_source_accelerator) override {}
-  void MaybeShowProfileSwitchIPH() override {}
-  void MaybeShowSupervisedUserProfileSignInIPH() override {}
+  // Chromium 156's BrowserWindow has these and 157's doesn't, so they aren't marked override,
+  // which builds on both while the Mac and Linux are on 156. Drop them once every pin is on 157.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Winconsistent-missing-override"
+  void MaybeShowProfileSwitchIPH() {}
+  void MaybeShowSupervisedUserProfileSignInIPH() {}
+#pragma clang diagnostic pop
   void ShowHatsDialog(const std::string& site_id,
                       const std::optional<std::string>& hats_histogram_name,
                       const std::optional<uint64_t> hats_survey_ukm_id,

@@ -26,7 +26,7 @@ use crate::{
     theme_picker::At,
 };
 
-actions!(boost, [Escape]);
+actions!(boost, [Escape, ArrangeOuter, ArrangeInner]);
 
 /// Escape while the UI has the keyboard ends Zap, or else closes the card, and otherwise falls
 /// through, as the DRM note's does.
@@ -35,7 +35,13 @@ pub(super) fn escape_binding() -> KeyBinding {
 }
 
 pub(super) fn bind(cx: &mut gpui::App) {
-    cx.bind_keys([escape_binding()]);
+    // ↑ and ↓ with the UI holding the keyboard pick the box around or inside while Arrange is on,
+    // as they do with the page focused (run_arrange_key); a field's or the sidebar's own win.
+    cx.bind_keys([
+        escape_binding(),
+        KeyBinding::new("up", ArrangeOuter, Some(KEY_CONTEXT)),
+        KeyBinding::new("down", ArrangeInner, Some(KEY_CONTEXT)),
+    ]);
     cx.on_action(|_: &Escape, cx| {
         let shell = super::commands::key_shell(cx);
         let done =
@@ -44,14 +50,31 @@ pub(super) fn bind(cx: &mut gpui::App) {
             cx.propagate();
         }
     });
+    cx.on_action(|_: &ArrangeOuter, cx| arrange_key("up", cx));
+    cx.on_action(|_: &ArrangeInner, cx| arrange_key("down", cx));
+}
+
+fn arrange_key(keystroke: &str, cx: &mut gpui::App) {
+    let shell = super::commands::key_shell(cx);
+    let done = shell.and_then(|shell| {
+        shell
+            .update(cx, |shell, cx| {
+                shell.run_arrange_key(shell.field_tab(), keystroke, cx)
+            })
+            .ok()
+    });
+    if !done.unwrap_or(false) {
+        cx.propagate();
+    }
 }
 
 impl Shell {
     /// The profile and site of `tab`'s page where it can have a Boost: an http(s) page in a
-    /// regular window, outside an agent's Space.
+    /// regular window, outside an agent's Space, and not in Safari's engine, as what the core
+    /// boosts is Chromium's page, hidden while Safari's engine shows the tab's (#2955).
     pub(super) fn boost_site(&self, tab: u64) -> Option<(u64, String)> {
         let agents = !self.browser.space_agent(self.space).is_empty();
-        if tab == 0 || self.private || agents {
+        if tab == 0 || self.private || agents || self.page(tab).system_engine {
             return None;
         }
         let profile = self.shown_space()?.profile;
@@ -107,7 +130,7 @@ impl Shell {
     }
 
     /// Reads `profile`'s Boosts the first time, so what's offered knows the ones it has.
-    fn read_profile_boosts(&self, profile: u64, cx: &mut gpui::App) {
+    pub(super) fn read_profile_boosts(&self, profile: u64, cx: &mut gpui::App) {
         if !boosts::with(|boosts| boosts.loaded(profile)) {
             self.browser.load_boosts(profile, cx);
         }
@@ -148,7 +171,7 @@ impl Shell {
         if self.shown_boost(cx).is_none() {
             return;
         }
-        // check.sh reads this line.
+        // check.sh reads these lines.
         log!("browser: boost card {tab} opened");
         self.boost_card = Some(tab);
         cx.notify();
@@ -173,7 +196,7 @@ impl Shell {
                 })
                 .ok();
         });
-        let anchor = point(self.width(), URL_FIELD_TOP + URL_FIELD_HEIGHT / 2.);
+        let anchor = point(self.page_edge_x(), URL_FIELD_TOP + URL_FIELD_HEIGHT / 2.);
         let height = f32::from(self.viewport.height);
         // The editor is a dark sheet over a dark or a light window, as the theme picker is.
         let theme = self.spaces.iter().find(|each| each.id == self.space);
@@ -197,6 +220,7 @@ impl Shell {
             style,
             on,
             At::Row(anchor),
+            self.right,
             height,
             palette,
             requested,
@@ -222,6 +246,7 @@ impl Shell {
             }
             Request::On(on) => self.set_boost_on(profile, site, on, cx),
             Request::EditCss => self.edit_boost_file(profile, site, cx),
+            Request::EditScript => self.edit_boost_script_file(profile, site, cx),
             Request::Zap => {
                 // Zap's own card says what to do and ends it.
                 self.boost_card = Some(self.field_tab());
@@ -245,9 +270,14 @@ impl Shell {
         true
     }
 
-    /// Escape: Zap ends on the page shown, or else its card closes. Says whether either did.
+    /// Escape: Zap or Arrange ends on the page shown, or else its card closes. Says whether any
+    /// did.
     pub fn escape_boost(&mut self, cx: &mut Context<Self>) -> bool {
         let tab = self.field_tab();
+        if self.arranging(tab) {
+            self.stop_arrange(cx);
+            return true;
+        }
         match self.zapping == Some(tab) && tab != 0 {
             true => {
                 self.stop_zap(cx);
@@ -268,8 +298,9 @@ impl Shell {
         if self.shown_boost(cx).is_none() || self.zapping == Some(tab) {
             return;
         }
-        // One page at a time, as Zap is the pointer's.
+        // One page at a time, as Zap is the pointer's, and not with Arrange.
         self.stop_zap(cx);
+        self.stop_arrange(cx);
         self.zapping = Some(tab);
         self.browser.zap(tab, true, cx);
         cx.notify();
@@ -282,10 +313,12 @@ impl Shell {
         }
     }
 
-    /// The core says what the user clicked on `tab`'s page with Zap on, as a selector, or none for
-    /// the page itself: its Boost hides it from now on, and at once.
+    /// The core says what the user clicked on `tab`'s page with Zap on, or hid with Arrange's
+    /// Hide, as a selector, or none for the page itself: its Boost hides it from now on, and at
+    /// once.
     pub fn boost_zapped(&mut self, tab: u64, selector: Option<&str>, cx: &mut Context<Self>) {
-        let Some(selector) = selector.filter(|_| self.zapping == Some(tab)) else {
+        let hiding = self.zapping == Some(tab) || self.arranging == Some(tab);
+        let Some(selector) = selector.filter(|_| hiding) else {
             return;
         };
         let Some((profile, site)) = self.boost_site(tab) else {
@@ -293,6 +326,9 @@ impl Shell {
         };
         let changes = boosts::with(|boosts| boosts.zap(profile, &site, selector));
         self.browser.show_boosts(changes, cx);
+        if self.arranging == Some(tab) {
+            self.arrange_mode.kept(super::arrange::Undoable::Hide);
+        }
         cx.notify();
     }
 
@@ -304,7 +340,7 @@ impl Shell {
         }
     }
 
-    fn undo_zap(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn undo_zap(&mut self, cx: &mut Context<Self>) {
         let Some((profile, site, _)) = self.shown_boost(cx) else {
             return;
         };
@@ -319,6 +355,26 @@ impl Shell {
             return;
         };
         self.edit_boost_file(profile, &site, cx);
+    }
+
+    /// Edit Script…, from the editor's footer or the Library row: the site's script in the user's
+    /// editor, started if it has none. It runs only once the user turns it on in the browser
+    /// (#2297). The card has no button for it: a script is the rarest and riskiest of the tools,
+    /// so it's one step in, under Customize….
+    pub(super) fn edit_boost_script_file(
+        &mut self,
+        profile: u64,
+        site: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(path) = boosts::with(|boosts| boosts.script_file(profile, site)) else {
+            return;
+        };
+        log!("browser: boost edit script {site}");
+        let changes = boosts::with(|boosts| boosts.reload(profile));
+        self.browser.show_boosts(changes, cx);
+        self.browser.edit_file(&path, cx);
+        cx.notify();
     }
 
     pub(super) fn edit_boost_file(&mut self, profile: u64, site: &str, cx: &mut Context<Self>) {
@@ -354,19 +410,32 @@ impl Shell {
             return None;
         };
         let palette = &self.palette;
-        let quiet =
-            |id: &'static str, label: &'static str| card_button_as(palette, id, label, Look::Quiet);
+        let quiet = |id: &'static str, label: &'static str| {
+            card_button_as(palette, id, label, Look::Quiet).debug_selector(move || id.into())
+        };
         let edit = quiet("boost-edit", "Edit CSS…")
             .on_click(cx.listener(|shell, _, _, cx| shell.edit_boost_css(cx)));
         let zap = card_button_as(palette, "boost-zap", "Zap", Look::Primary)
+            .debug_selector(|| "boost-zap".into())
             .on_click(cx.listener(|shell, _, _, cx| shell.start_zap(cx)));
         let customize = quiet("boost-customize", "Customize…")
             .on_click(cx.listener(|shell, _, _, cx| shell.customize_boost(cx)));
+        let arrange = quiet("boost-arrange", "Arrange")
+            .on_click(cx.listener(|shell, _, _, cx| shell.start_arrange(cx)));
         let zaps = boost.as_ref().map_or(0, |boost| boost.summary.zaps);
-        // Customize… has a line of its own under the other two, as three don't fit the card, so
-        // Zap's row stays where it is as Zap starts and Done comes up under the pointer.
-        let customize =
-            (self.zapping != Some(tab)).then(|| div().mt(px(BUTTON_GAP)).flex().child(customize));
+        // Customize… and Arrange have a line of their own under the other two, as four don't fit
+        // the card, so Zap's row stays where it is as Zap starts and Done comes up under the
+        // pointer. Both lines are one grid of two equal columns, so the four buttons' edges line up
+        // whatever their labels' widths.
+        let zapping = self.zapping == Some(tab);
+        let second = (!zapping)
+            .then(|| [customize.into_any_element(), arrange.into_any_element()])
+            .into_iter()
+            .flatten();
+        let arranged = (boost.as_ref())
+            .and_then(|boost| boost.arrangement.as_ref())
+            .filter(|_| !zapping)
+            .map(|arrangement| self.arranged_list(arrangement, cx));
         let (title, detail, buttons): (String, String, Vec<gpui::AnyElement>) =
             match (self.zapping == Some(tab), boost) {
                 (true, _) => (
@@ -381,6 +450,8 @@ impl Shell {
                         .into_iter()
                         .chain(
                             [card_button_as(palette, "boost-done", "Done", Look::Primary)
+                                // Done alone, before anything's hidden, is the line.
+                                .when(zaps == 0, |done| done.col_span_full())
                                 .on_click(cx.listener(|shell, _, _, cx| shell.stop_zap(cx)))
                                 .into_any_element()],
                         )
@@ -416,14 +487,16 @@ impl Shell {
                         .child(title),
                 )
                 .child(div().text_color(palette.on_overlay(DETAIL)).child(detail))
+                .children(arranged)
                 .child(
                     div()
                         .mt(px(BUTTONS_TOP))
-                        .flex()
+                        .grid()
+                        .grid_cols(2)
                         .gap(px(BUTTON_GAP))
-                        .children(buttons),
+                        .children(buttons)
+                        .children(second),
                 )
-                .children(customize)
                 .child(close),
         )
     }

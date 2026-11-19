@@ -2,7 +2,8 @@
 //! starts loading: the old one fades and shrinks as the new one fades and grows in, as Arc's do.
 //! Lucide's check draws itself along its stroke.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 use gpui::{
     AnyElement, App, Bounds, Hsla, PathBuilder, Transformation, Window, canvas, div, fill, point,
@@ -25,11 +26,14 @@ pub(super) enum Swapped {
     CopyUrl,
     /// The arrow before a Space's Clear, while Clear would close its last Today tabs.
     Clear(u64),
+    /// A pinned tab's or favorite's return mark, while it's away from its pinned URL.
+    Away(u64),
 }
 
 pub(super) const CHECK: &str = "icons/check.svg";
 pub(super) const LINK: &str = "icons/link.svg";
 pub(super) const ARROW_DOWN: &str = "icons/arrow-down.svg";
+pub(super) const UNDO: &str = "icons/undo-2.svg";
 /// No glyph, for one that comes and goes.
 pub(super) const NONE: &str = "";
 // Both glyphs move from the same moment, linearly, about the glyph's middle: the old one fades
@@ -100,7 +104,7 @@ impl Swaps {
     }
 
     /// Starts what a report on `tab`'s page changes: the header's reload or stop, only for the tab
-    /// shown, and the tab's speaker, only while it stays shown.
+    /// shown, the tab's speaker, only while it stays shown, and its return mark.
     pub(super) fn page_changed(
         &mut self,
         tab: u64,
@@ -117,6 +121,17 @@ impl Swaps {
         if speaker(before) && speaker(after) {
             let (from, to) = (speaker_glyph(before.muted), speaker_glyph(after.muted));
             self.start(Swapped::Speaker(tab), from, to, now);
+        }
+        // A tab's first report draws its row, whose mark shows at once.
+        if !before.url.is_empty() {
+            let mark = |page: &Page| {
+                if page.away_from_pinned_url {
+                    UNDO
+                } else {
+                    NONE
+                }
+            };
+            self.start(Swapped::Away(tab), mark(before), mark(after), now);
         }
     }
 
@@ -152,19 +167,20 @@ impl Swaps {
     }
 
     /// How far `what`'s glyph has come toward `path`, ease-in-out over the whole change, for the
-    /// room a glyph that comes and goes makes as it does. None while it isn't changing.
-    pub(super) fn toward(&self, what: Swapped, path: &'static str) -> Option<f32> {
+    /// room a glyph that comes and goes makes as it does, at `now` on the list's clock. None while
+    /// it isn't changing.
+    pub(super) fn toward(&self, what: Swapped, path: &'static str, now: Instant) -> Option<f32> {
         let swap = self.0.iter().find(|swap| swap.what == what)?;
-        let way = ease(swap.elapsed(Instant::now()) / lasts(swap.to));
+        let way = ease(swap.elapsed(now) / lasts(swap.to));
         Some(if swap.to == path { way } else { 1. - way })
     }
 
-    /// Lets the changes that are done go, and asks for the next frame while one isn't.
-    pub(super) fn step(&mut self, window: &mut Window) {
+    /// Lets the changes done by `now`, on the list's clock, go, and asks for the next frame while
+    /// one isn't.
+    pub(super) fn step(&mut self, window: &mut Window, now: Instant) {
         if self.0.is_empty() {
             return;
         }
-        let now = Instant::now();
         self.0.retain(|swap| swap.elapsed(now) < lasts(swap.to));
         if !self.0.is_empty() {
             window.request_animation_frame();
@@ -195,7 +211,8 @@ impl Swaps {
                     .into_any_element(),
             };
         };
-        let elapsed = swap.elapsed(Instant::now());
+        // On the executor's clock, the real one in the app and the test's in a test (#3468).
+        let elapsed = swap.elapsed(cx.background_executor().now());
         // Under Reduce Motion the glyphs cross-fade at their size.
         let glyph = |path: &'static str, opacity: f32, scale: f32| {
             if path == NONE {
@@ -339,7 +356,9 @@ pub(crate) fn drawing_check(way: f32, color: Hsla) -> impl IntoElement {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use super::{COME, LEAVE, Page, SWAP, Swapped, Swaps, check_line, coming, grown, leaving};
+    use super::{
+        COME, LEAVE, Page, SWAP, Swapped, Swaps, UNDO, check_line, coming, grown, leaving,
+    };
 
     fn near(a: (f32, f32), b: (f32, f32)) -> bool {
         (a.0 - b.0).abs() < 1e-3 && (a.1 - b.1).abs() < 1e-3
@@ -416,6 +435,42 @@ mod tests {
         );
         swaps.page_changed(3, 1, &audible, &muted, now);
         assert!(swaps.changing(Swapped::Speaker(3)));
+    }
+
+    /// A pinned tab leaving its pinned URL, or going back, moves its return mark, on any tab, as
+    /// its row shows whichever is shown; a tab's first report shows it at once.
+    #[test]
+    fn a_return_mark_comes_and_goes_but_shows_at_once_on_a_new_row() {
+        let now = Instant::now();
+        let home = Page {
+            url: "https://example.com/".into(),
+            ..Page::default()
+        };
+        let away = Page {
+            url: "https://example.com/notes".into(),
+            away_from_pinned_url: true,
+            ..Page::default()
+        };
+        let mut swaps = Swaps::default();
+        swaps.page_changed(4, 1, &Page::default(), &away, now);
+        assert!(
+            !swaps.changing(Swapped::Away(4)),
+            "a new row's mark shows at once"
+        );
+        swaps.page_changed(4, 1, &home, &away, now);
+        // It's read on the list's clock as the change starts.
+        assert!(
+            swaps
+                .toward(Swapped::Away(4), UNDO, now)
+                .is_some_and(|way| way < 0.5)
+        );
+        swaps.page_changed(5, 1, &away, &home, now);
+        assert!(
+            swaps
+                .toward(Swapped::Away(5), UNDO, now)
+                .is_some_and(|way| way > 0.5),
+            "going, it starts whole"
+        );
     }
 
     /// Changed back mid-way, a glyph goes back from where it was: the one coming in leaves from

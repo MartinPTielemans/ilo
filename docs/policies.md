@@ -10,7 +10,7 @@ ilo takes Chromium's [enterprise policies](https://chromeenterprise.google/polic
 | Windows | `HKLM` or `HKCU\SOFTWARE\Policies\ilo` | `…\ilo\Recommended` |
 
 - **The Flatpak** has no view of the host's `/etc`, so its policies come through Flatpak's extension point, as Flathub's Chromium's do. An unmanaged extension's version folder may be a symlink to a folder holding `policies/`, never to a policy file itself, which Flatpak can't bind.
-- **uBlock Origin**, built in, takes its settings as Chromium's 3rd-party policy for its extension id, `oghkpboejbohceocapipmnjifoklonij`, as `3rdparty.extensions.<id>` beside the others. ilo's own defaults for it rank below an administrator's.
+- **uBlock Origin**, built in, takes its settings as Chromium's 3rd-party policy for its extension id, `oghkpboejbohceocapipmnjifoklonij`, as `3rdparty.extensions.<id>` beside the others. ilo's own settings for it, Settings › Ad Blocking's lists and My filters under the key `ilo`, rank below an administrator's: a `toOverwrite` that sets `filterLists` or `filters` locks those in Settings, which shows them as the policy sets them.
 - **Not here:** Chrome Browser Cloud Management, enrolment tokens and Google-account policies, none of which ungoogled-chromium has.
 
 `app/check/policies.sh` checks each: `URLBlocklist` set the system's way blocks a page, and Chromium's own names, set beside it, don't apply.

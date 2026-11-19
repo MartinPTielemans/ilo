@@ -9,6 +9,7 @@ use gpui::{App, Bounds, Pixels, Point, RenderImage, SharedString, Size, point, p
 use crate::theme::Appearance;
 use crate::tokens::shell::{WINDOW_BUTTON_SIZE, WINDOW_BUTTON_Y};
 
+use super::live_folders::LiveSource;
 use super::{
     Answer, BarSpace, BarTab, DownloadAction, MenuBar, MenuEntry, PageReply, ShownPageDialog,
 };
@@ -81,6 +82,15 @@ pub trait Browser {
     fn move_folder(&self, folder: u64, to: u64, index: usize, cx: &mut App);
     /// Deletes `folder`, leaving what was in it where it was.
     fn delete_folder(&self, folder: u64, cx: &mut App);
+    /// Makes a Live Folder named `name`, filled from `source` on `space`'s profile's session, at
+    /// the bottom of its pinned tabs, and returns it, or 0 if it can't (#2979).
+    fn create_live_folder(&self, space: u64, source: LiveSource, name: &str, cx: &mut App) -> u64;
+    /// Makes the Live Folder a plain one. The tabs opened from it stay in it.
+    fn end_live_folder(&self, folder: u64, cx: &mut App);
+    /// Asks for `folder`'s lists from `source`, on its Space's profile's session, at most once in
+    /// two minutes for the profile but for a `refresh`. The browser answers with
+    /// `Shell::set_live_answer`.
+    fn fetch_live_folder(&self, folder: u64, source: LiveSource, refresh: bool, cx: &mut App);
     /// Takes `tab` out of its split view.
     fn separate(&self, tab: u64, cx: &mut App);
     /// Moves `tab` to `index` in its split view, counted from the left or the top.
@@ -113,12 +123,24 @@ pub trait Browser {
     fn over_page_blends(&self) -> bool;
     /// Loads a pinned tab's pinned URL, unless it's there already.
     fn back_to_pinned_url(&self, tab: u64, cx: &mut App);
+    /// Loads `url` in `tab`, as a row of what's recent on its card does (#3074).
+    fn navigate(&self, _tab: u64, _url: &str, _cx: &mut App) {}
+    /// Whether the core can ask a site what's recent for a tab's card (#3074).
+    fn recent_reached(&self) -> bool {
+        crate::recent::REACHED
+    }
+    /// Asks the core what's recent on `tab`'s site, which it answers to `Shell::recent_answered`
+    /// once, at most once each two minutes per profile from the site, else from what it kept.
+    fn fetch_recent(&self, _tab: u64, _cx: &mut App) {}
     /// Mutes `tab`, or unmutes it.
     fn set_muted(&self, tab: u64, muted: bool, cx: &mut App);
     /// Has the page sharing a tab share `tab` in its place.
     fn share_instead(&self, tab: u64, cx: &mut App);
     /// Plays, pauses or skips `tab`'s media.
     fn media(&self, tab: u64, action: MediaAction, cx: &mut App);
+    /// Shows `tab`'s video live at `frame` in the window, with corners of `corner_radius`, for
+    /// its media card, or stops showing it with none.
+    fn show_video(&self, tab: u64, frame: Option<Bounds<Pixels>>, corner_radius: f32, cx: &mut App);
     /// Sets `tab`'s volume, 0 to 1, which scales its page's media (bc_tab_set_volume).
     fn set_volume(&self, tab: u64, volume: f32, cx: &mut App);
     /// Opens `tab`'s Cast dialog, which the core reports with `Shell::set_cast`.
@@ -207,6 +229,33 @@ pub trait Browser {
     fn remove_archived(&self, archived: u64, cx: &mut App) -> u64;
     /// Empties the archive, and returns the removal's id, or 0 if it was empty.
     fn clear_archive(&self, cx: &mut App) -> u64;
+    /// Asks for up to `max` of `profile`'s visited pages from before `before`, in microseconds
+    /// since 1970, or from now for 0: newest first, each once a day, and those whose title or URL
+    /// has `text`'s words. The answer comes to `Shell::history_listed` with `request`. False when
+    /// none will: a private profile, or one whose history hasn't loaded yet.
+    fn list_history(
+        &self,
+        _profile: u64,
+        _request: u64,
+        _before: i64,
+        _text: &str,
+        _max: usize,
+        _cx: &mut App,
+    ) -> bool {
+        false
+    }
+    /// Deletes `profile`'s visits to `url` from `begin` to `end`, in microseconds since 1970, and
+    /// says whether it could, as `list_history` can.
+    fn remove_history(
+        &self,
+        _profile: u64,
+        _url: &str,
+        _begin: i64,
+        _end: i64,
+        _cx: &mut App,
+    ) -> bool {
+        false
+    }
     /// Does `action` to the download.
     fn act_on_download(&self, download: u64, action: DownloadAction, cx: &mut App);
     /// Takes the downloads that aren't running or paused off the list, keeping their files: those
@@ -240,6 +289,9 @@ pub trait Browser {
     fn drag_file(&self, path: &str, cx: &mut App) -> bool;
     /// Looks up the favicon the browser has for `url`, and calls `Shell::set_page_favicon`.
     fn page_favicon(&self, url: &str, cx: &mut App);
+    /// The site of the page at `url`, the registrable domain the link target's plate emphasizes,
+    /// or None off the web (bc_url_site). Sort Today Tabs by Site gathers tabs by it.
+    fn url_site(&self, url: &str) -> Option<String>;
     /// The starts of today, yesterday, this week and last week in the user's calendar, in
     /// milliseconds since the Unix epoch.
     fn day_starts(&self) -> [f64; 4];
@@ -370,6 +422,18 @@ pub trait Browser {
     /// Opens a new document in the notes service `space`'s profile picks, in a tab at the top of
     /// its Today tabs, as a new tab opens, or in a split view with `beside`, on its right.
     fn new_note(&self, space: u64, beside: Option<u64>, cx: &mut App);
+    /// Makes Board `id` in `space`'s profile (`crate::boards`): its folder, off the main thread,
+    /// then with `capture`, capture mode's PNG, puts that on it (whose word comes in
+    /// `capture::board_answered`), then a pinned tab of `space` at its page, which `opened` gets to
+    /// name. Nothing where the profile keeps no folder.
+    fn new_board(
+        &self,
+        space: u64,
+        id: String,
+        capture: Option<Vec<u8>>,
+        opened: Box<dyn FnOnce(u64, &mut App)>,
+        cx: &mut App,
+    );
     /// Opens Chromium's search engines page in a tab of the Space shown, for its profile's site
     /// searches. The user's: agents open no pages outside http(s) (AGENTS.md).
     fn site_search_settings(&self, cx: &mut App);
@@ -404,6 +468,50 @@ pub trait Browser {
     /// Turns Zap on or off on `tab`'s page: while it's on, a click there hides what's under it,
     /// which comes back in `Shell::boost_zapped`. The user's alone.
     fn zap(&self, _tab: u64, _on: bool, _cx: &mut App) {}
+    /// Turns Arrange on `tab`'s page on, drawing its marks with `look`, or off with None (#2347):
+    /// while it's on, the user moves what's on the page, and each change comes back in
+    /// `Shell::arrange_saved`. Whether it's on: the core refuses it where a Boost isn't offered,
+    /// in an agent's Space, a private window or a page that isn't http(s). The user's alone.
+    fn arrange(
+        &self,
+        _tab: u64,
+        _look: Option<&crate::boosts::arrange::Look>,
+        _cx: &mut App,
+    ) -> bool {
+        false
+    }
+    /// Asks Arrange on `tab`'s page for `ask`: the box around or inside, Hide, Put back, the pin,
+    /// Undo or Reset. What it does comes back in `Shell::arrange_state` and `arrange_saved`.
+    fn arrange_do(&self, _tab: u64, _ask: crate::boosts::arrange::Ask, _cx: &mut App) {}
+    /// Shows Arrange's mini bar over this window's page for the thing selected, or moves it, or
+    /// hides it for none (`crate::mini_bar`).
+    fn show_mini_bar(
+        &self,
+        _shown: Option<(crate::mini_bar::Shown, crate::mini_bar::OnPress)>,
+        _cx: &mut App,
+    ) {
+    }
+    /// Shows Arrange's foot bar, `bar`, over this window's page at `page` in its content `content`
+    /// big, or hides it for none while it shows over this window (`crate::foot_bar`).
+    fn show_foot_bar(
+        &self,
+        _bar: Option<(Bounds<Pixels>, Size<Pixels>, crate::foot_bar::Bar)>,
+        _cx: &mut App,
+    ) {
+    }
+    /// Gives `site`'s pages in `profile` the arrangement read from its file, `bytes`, or takes it
+    /// away with none, from their next load and at once on those open. The core places it only
+    /// while it's what the user kept in the browser, and says what it made of it. The user's
+    /// alone, as a Boost is.
+    fn set_arrangement(&self, _profile: u64, _site: &str, _bytes: &str) -> crate::boosts::Arranged {
+        crate::boosts::Arranged::New
+    }
+    /// The user's own edit of `site`'s arrangement in the browser, Turn On or putting a change
+    /// back: the core records `bytes` as the ones the user kept, and places them. False where it
+    /// refuses them.
+    fn keep_arrangement(&self, _profile: u64, _site: &str, _bytes: &str) -> bool {
+        false
+    }
     /// Opens the file at `path` in the user's text editor.
     fn edit_file(&self, _path: &std::path::Path, _cx: &mut App) {}
     /// Shows the file at `path` in the system's file manager.
@@ -516,6 +624,10 @@ pub trait Browser {
     /// Gives the page shown the keyboard, from the UI if it has it, now or once a page still
     /// loading has a view, unless the UI takes it back first.
     fn focus_page(&self, cx: &mut App);
+    /// Gives the page shown the keyboard at its first control, or its last if `last`, as Tab or
+    /// Shift+Tab into it does (#3220). The core does nothing for an agent's tab the user doesn't
+    /// hold.
+    fn focus_page_end(&self, last: bool, cx: &mut App);
     /// Lays the page out at `frame` in the window, with corners of `radius`
     /// (`Shell::page_frame`). A split view's pages share it.
     fn lay_out_page(&self, frame: Bounds<Pixels>, radius: f32, cx: &mut App);
@@ -543,6 +655,24 @@ pub trait Browser {
     fn set_pane_corner(&self, left: f32, right: f32, top: f32, cx: &mut App);
     /// Shows the window's close, minimize and zoom buttons, or hides them.
     fn show_window_buttons(&self, shown: bool, cx: &mut App);
+    /// Puts the window's own buttons, and the reveal's window and edge, on the window's right, or
+    /// back on its left (Sidebar position, #2375).
+    fn set_sidebar_right(&self, _right: bool, _cx: &mut App) {}
+    /// Windows': puts the window's buttons at its right though the sidebar is on the left, as the
+    /// top bar has them, or back with the sidebar (#3160).
+    fn set_window_buttons_right(&self, _right: bool, _cx: &mut App) {}
+    /// The user moved the sidebar from the command bar: Sidebar position keeps it on this device,
+    /// and every window follows.
+    fn keep_sidebar_right(&self, right: bool, cx: &mut App) {
+        cx.set_global(super::SidebarRight(right));
+        cx.refresh_windows();
+    }
+    /// The user turned Top bar on or off from a menu, the command bar or its key: kept on this
+    /// device, and every window follows.
+    fn keep_top_bar(&self, on: bool, cx: &mut App) {
+        cx.set_global(super::TopBar(on));
+        cx.refresh_windows();
+    }
     /// A Little ilo window's UI has drawn its first frame on screen, where its opening grows from
     /// (host_grow_little_window).
     fn little_drawn(&self, cx: &mut App);
@@ -566,6 +696,9 @@ pub trait Browser {
     /// On Linux, has the browser window follow the pointer, on a drag's first move over the
     /// window's background, as GPUI's own move can't: its window is inside the browser window.
     fn start_window_move(&self, cx: &mut App);
+    /// On Linux, has the browser window resize from its left edge, or with `right` its right one,
+    /// after a press in the band there that the core leaves to the UI.
+    fn start_window_resize(&self, right: bool, cx: &mut App);
     /// On Linux, whether the browser window is maximized, which the third window button the UI
     /// draws shows. False on the Mac, where AppKit draws that button.
     fn window_maximized(&self) -> bool;
@@ -589,15 +722,15 @@ pub trait Browser {
     fn watch_control(&self, cx: &mut App);
     /// Puts `text` on the clipboard.
     fn copy(&self, text: &str, cx: &mut App);
-    /// The clipboard's text, from where `copy` puts it, or None if it holds none.
-    fn pasted(&self, cx: &App) -> Option<String>;
-    /// Whether the platform can open a page in Safari, which plays the protected video ilo can't.
-    /// Where it can't, the UI offers no button for it.
-    fn can_open_in_safari(&self) -> bool {
-        false
+    /// Hands `done` the clipboard's text, from where `copy` puts it, or None if it holds none,
+    /// never during the call (crate::clipboard says why).
+    fn pasted(&self, cx: &mut App, done: crate::clipboard::Done);
+    /// The other browser the protected-playback note offers for video ilo can't play, if any.
+    fn elsewhere(&self) -> Option<super::drm_note::Elsewhere> {
+        super::drm_note::Elsewhere::on(self.os(), || self.is_default_browser())
     }
-    /// Opens `url` in Safari, leaving the tab as it is.
-    fn open_in_safari(&self, _url: &str, _cx: &mut App) {}
+    /// Opens `url` there, leaving the tab as it is.
+    fn open_elsewhere(&self, _url: &str, _cx: &mut App) {}
     /// Whether the platform has Safari's engine for a tab's page, which plays the protected video
     /// Chromium can't: macOS 14 or later. Where it hasn't, the note offers Safari instead.
     fn can_use_system_engine(&self) -> bool {
@@ -614,6 +747,15 @@ pub trait Browser {
     fn download_widevine(&self, _cx: &mut App) {}
     /// Quits and starts again, bringing back the windows and their Spaces.
     fn restart(&self, _cx: &mut App) {}
+    /// Whether this launch is a safe start, with extensions and Boosts held after two crashes at
+    /// launch (crate::safe_start). Agents can't start or end one.
+    fn safe_start(&self) -> bool {
+        false
+    }
+    /// Whether Settings has ad blocking on.
+    fn ad_blocking(&self) -> bool {
+        false
+    }
     /// What PlayReady, which Windows plays protected video with, needs that the PC may lack.
     fn playready_needs(&self) -> super::PlayReady {
         super::PlayReady::None
@@ -678,6 +820,8 @@ pub trait Browser {
     );
     /// Takes the toast away if it has an Undo button, as the undo it offered has been done.
     fn hide_undo_toast(&self, cx: &mut App);
+    /// Whether a toast that offers the undo, by its button or its key, shows and isn't leaving.
+    fn undo_toast_showing(&self, cx: &App) -> bool;
     /// Gives the Edit menu's Undo and Redo the titles of what they'd undo and redo, plain Undo and
     /// Redo for `None`, which a page's own undo and redo are.
     fn set_edit_titles(&self, undo: Option<&str>, redo: Option<&str>, cx: &mut App);
@@ -687,6 +831,11 @@ pub trait Browser {
     /// does, unless it is already, which it returns: AppKit takes a window opened from a
     /// full-screen one there itself.
     fn enter_full_screen(&self, cx: &mut App) -> bool;
+    /// Whether the window is full screen or on its way, as the window has it at once: the shell
+    /// hears it a frame or more later, AppKit's once the transition is over (#2553).
+    fn full_screen_now(&self) -> bool {
+        self.window_full_screen()
+    }
     /// Whether the window is on the macOS desktop shown: one AppKit takes full screen isn't until
     /// macOS has moved there, and an overlay opened before is left on the desktop it came from.
     fn on_active_space(&self) -> bool {
@@ -704,10 +853,22 @@ pub trait Browser {
     /// Tells a closed folder's preview the pointer rests on its row, or left it, or ends it
     /// (crate::folder_preview).
     fn folder_preview(&self, ask: crate::folder_preview::Ask, cx: &mut App);
+    /// Shows a held ⌃Tab's switcher of the Space's recent tabs, moves its selection or closes it
+    /// (crate::tab_switcher).
+    fn tab_switcher(&self, ask: crate::tab_switcher::Ask, cx: &mut App);
     /// Asks for a small picture of `tab`'s page, as it was last drawn, for its hover card, which
     /// the browser keeps for it, at the window's `scale`. The user's: agents get none, as with the
     /// page's picture.
     fn card_picture(&self, tab: u64, scale: f32, cx: &mut App);
+    /// Settings › Links' Link cards: whether ⇧ on a link shows what its page says about itself.
+    fn link_cards(&self) -> bool {
+        false
+    }
+    /// Asks for the card of the link the pointer is on in `tab`'s page (bc_tab_link_card): its
+    /// id, or 0 where there's none to ask, as in an agent's tab.
+    fn link_card(&self, _tab: u64) -> u64 {
+        0
+    }
     /// Shows `plate`, the address of the link the pointer is on, at `frame` in the window, in
     /// `side` of the card, after its delay or at once if one shows or just went; or moves it there
     /// if it shows. `None` ends it.
@@ -754,19 +915,25 @@ pub trait Browser {
     /// `tabs` from it, or `open_tabs` for Search Tabs, and its profile's suggestions (decision 5).
     /// Returns whether its pick opens a new tab, for New Tab to keep its plate.
     fn command_bar_follows(&self, tabs: Vec<BarTab>, open_tabs: Vec<BarTab>, cx: &mut App) -> bool;
+    /// The window shows `tab`, another of its Space's: the command bar, if it shows over this
+    /// window and edited the tab before, opens a new tab with its pick (#3428). Returns whether it
+    /// does, for New Tab to take the plate.
+    fn command_bar_tab_shown(&self, tab: u64, cx: &mut App) -> bool;
     /// Opens the command bar over `pane`, a new pane in the card at `card`, for a page to show
     /// there in a split view with `with`.
     fn split_bar(&self, with: u64, pane: Bounds<Pixels>, card: Bounds<Pixels>, cx: &mut App);
     /// Opens the tab's find bar with the keyboard.
     fn find(&self, tab: u64, cx: &mut App);
     /// Opens the Site Controls for the site of the tab's page, or closes them if they show:
-    /// hanging from `place` in a window of `window`'s size, listing `extensions`.
+    /// hanging from `place` in a window of `window`'s size, listing `extensions`, with the tab's
+    /// profile and the others while there's more than one.
     fn site_controls(
         &self,
         tab: u64,
         place: crate::site_controls::Place,
         window: Size<Pixels>,
         extensions: Vec<crate::site_controls::Extension>,
+        profiles: Option<crate::site_controls::Profiles>,
         cx: &mut App,
     );
     /// The extensions the Site Controls list, if they show for the tab, as the core reported them.
@@ -802,8 +969,8 @@ pub trait Browser {
         background: crate::capture::portrait::Background,
         cx: &mut App,
     );
-    /// Whether Portrait Mode can put a page on the desktop's picture, which only the Mac's host
-    /// reads.
+    /// Whether Portrait Mode can put a page on the desktop's picture, which the Mac's and Windows'
+    /// hosts read.
     fn desktop_picture_offered(&self) -> bool {
         false
     }
@@ -841,9 +1008,6 @@ pub trait Browser {
     fn take_over(&self, agent: SharedString, tab: u64, cx: &mut App);
     /// The user hands `tab` back to its agent.
     fn hand_back(&self, tab: u64, cx: &mut App);
-    /// Whether the host hears presses in the pages for Shell::page_pressed, `on` while an agent
-    /// works: on X11 it listens to the screen's presses for that, and the other hosts always hear.
-    fn hear_page_presses(&self, _on: bool, _cx: &mut App) {}
     /// The user does `action` to the task whose agent is `agent` (Agent task).
     fn task(&self, agent: SharedString, action: crate::agents::task::TaskAction, cx: &mut App);
     /// The page area shows the conversation of `agent`'s task: the Agents send it now, and as it
@@ -875,6 +1039,14 @@ pub trait Browser {
     fn os(&self) -> crate::default_browser::Os {
         crate::default_browser::Os::current()
     }
+    /// The search engines `space`'s profile's default is picked from, each its keyword and name, in
+    /// the core's order, and the default's keyword: none until they've loaded, or while a policy or
+    /// an extension picks the default.
+    fn search_engines(&self, _space: u64) -> (Vec<(SharedString, SharedString)>, SharedString) {
+        Default::default()
+    }
+    /// Makes the engine of `keyword`, one of `search_engines`, `space`'s profile's default.
+    fn set_search_engine(&self, _space: u64, _keyword: &str, _name: &str, _cx: &mut App) {}
 
     /// Whether crash reports are sent, as Settings' switch has it, or None while there's no
     /// collector to send them to, when neither Settings nor the first launch offers it.
@@ -888,6 +1060,12 @@ pub trait Browser {
         None
     }
     fn set_agents(&self, _on: bool, _cx: &mut App) {}
+    /// Whether the daily usage count is on, as Settings' switch has it, or None in a build that
+    /// names no server for it.
+    fn daily_count(&self, _cx: &App) -> Option<bool> {
+        None
+    }
+    fn set_daily_count(&self, _on: bool, _cx: &mut App) {}
     /// Opens a private window in the shown Space's profile's off-the-record session, after this
     /// one's draw.
     fn new_private_window(&self, cx: &mut App);
@@ -1018,8 +1196,9 @@ pub struct Page {
     pub share_instead: bool,
     /// The page has media the browser can play, pause and skip, as Chrome's media controls do:
     /// whether it's playing, its title and artist, each empty without one, whether it has a
-    /// previous and a next track, and whether it can float in Picture in Picture while nothing of
-    /// the page floats.
+    /// previous and a next track, whether it can float in Picture in Picture while nothing of the
+    /// page floats or its card shows its video, and whether it has a video its card can show,
+    /// which a call hasn't.
     pub media: bool,
     pub media_playing: bool,
     pub media_title: SharedString,
@@ -1027,6 +1206,7 @@ pub struct Page {
     pub media_previous: bool,
     pub media_next: bool,
     pub media_picture_in_picture: bool,
+    pub media_video: bool,
     /// The tab shows its page in Developer Mode, for its site or as localhost.
     pub developer_mode: bool,
 }
@@ -1096,4 +1276,6 @@ pub struct Folders {
     /// Each folder's icon, an emoji, which the sidebar draws in place of the folder; those without
     /// one aren't here.
     pub icons: HashMap<u64, SharedString>,
+    /// What fills each Live Folder; plain folders aren't here.
+    pub live: HashMap<u64, LiveSource>,
 }

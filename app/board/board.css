@@ -1,0 +1,122 @@
+/* A Board's look. Its colours and sizes are tokens.css, which copy-board.sh writes from
+   app/design/tokens.toml's [board] table, and its accent, --accent, is ilo's own. */
+:root {
+  --lift: 0 1px 2px var(--shadow), 0 4px 12px var(--shadow);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--ink);
+}
+
+html, body { margin: 0; height: 100%; overflow: hidden; background: var(--canvas) }
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: default }
+
+#view { position: fixed; inset: 0; overflow: hidden; outline: none; touch-action: none }
+#view.hand, #view.panning { cursor: grab }
+#view.panning:active { cursor: grabbing }
+#view.pen, #view.note { cursor: crosshair }
+#world { position: absolute; left: 0; top: 0; transform-origin: 0 0 }
+#ink { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none }
+#ink path { pointer-events: stroke; fill: none; stroke-linecap: round; stroke-linejoin: round }
+
+.card {
+  position: absolute; box-sizing: border-box; border-radius: var(--card-radius);
+  /* Only what's in view is rastered. */
+  content-visibility: auto; contain-intrinsic-size: auto 160px;
+}
+/* The keyboard's card has the selection's ring, as the keyboard on a card selects it. */
+.card.selected, .card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px }
+#ink path:focus { outline: none }
+.unseen { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap }
+.card .grip {
+  position: absolute; right: -6px; bottom: -6px; width: 12px; height: 12px; border-radius: 3px;
+  background: var(--plate); box-shadow: 0 0 0 1.5px var(--accent); cursor: nwse-resize; display: none
+}
+.card.selected .grip { display: block }
+
+.note { padding: 10px 12px; background: var(--plate); box-shadow: 0 0 0 1px var(--rim), var(--lift) }
+.note .text {
+  outline: none; white-space: pre-wrap; overflow-wrap: anywhere; min-height: 1.45em;
+  font-size: var(--note-m)
+}
+.note.s .text { font-size: var(--note-s) }
+.note.l .text { font-size: var(--note-l); font-weight: 600; line-height: 1.2 }
+.note.none { background: none; box-shadow: none }
+.note.editing { cursor: text }
+
+.picture { overflow: hidden; background: var(--plate); box-shadow: 0 0 0 1px var(--rim) }
+.picture img { display: block; width: 100%; height: 100%; object-fit: cover; pointer-events: none }
+
+.link {
+  display: flex; gap: 10px; align-items: center; padding: 0 12px; background: var(--plate);
+  box-shadow: 0 0 0 1px var(--rim), var(--lift); color: inherit; text-decoration: none
+}
+.link img { width: 20px; height: 20px; flex: none }
+.link span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.link small { display: block; color: var(--ink-soft); font-size: 12px }
+
+.note.first { opacity: 0; pointer-events: none }
+
+#tools, #style, #zoom {
+  position: fixed; display: flex; gap: 2px; padding: 4px; border-radius: var(--bar-radius);
+  background: var(--bar); box-shadow: 0 0 0 1px var(--rim), var(--lift);
+  backdrop-filter: blur(20px)
+}
+#tools { left: 50%; bottom: 16px; transform: translateX(-50%) }
+#style { left: 50%; bottom: 64px; transform: translateX(-50%); align-items: center; gap: 8px }
+#style[hidden] { display: none }
+#zoom { right: 16px; bottom: 16px; align-items: center }
+#tools button, #zoom button, #sizes button {
+  width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center
+}
+#tools button:hover, #zoom button:hover, #sizes button:hover { background: var(--hover) }
+#tools button[aria-pressed="true"], #sizes button[aria-checked="true"], #widths button[aria-checked="true"] {
+  background: var(--chosen); color: var(--accent)
+}
+#zoom output { min-width: 44px; text-align: center; font-variant-numeric: tabular-nums; font-size: 12px }
+#fills, #sizes, #colors, #widths { display: flex; gap: 4px }
+#fills button, #colors button { width: 20px; height: 20px; border-radius: 50%; box-shadow: 0 0 0 1px var(--rim) }
+#fills button[aria-checked="true"], #colors button[aria-checked="true"] { box-shadow: 0 0 0 2px var(--accent) }
+#widths button { width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center }
+#widths .dot { display: block; border-radius: 50%; background: currentColor }
+#widths [data-width="2"] .dot { width: 4px; height: 4px }
+#widths [data-width="4"] .dot { width: 7px; height: 7px }
+#widths [data-width="8"] .dot { width: 12px; height: 12px }
+#style [hidden] { display: none }
+#fills button.none { background: repeating-linear-gradient(45deg, transparent 0 4px, var(--rim) 4px 5px) }
+
+.icon {
+  width: 18px; height: 18px; display: block; background: currentColor;
+  mask: var(--icon) center / contain no-repeat
+}
+.icon-mouse-pointer-2 { --icon: url(/icon-mouse-pointer-2.svg) }
+.icon-hand { --icon: url(/icon-hand.svg) }
+.icon-sticky-note { --icon: url(/icon-sticky-note.svg) }
+.icon-pencil { --icon: url(/icon-pencil.svg) }
+.icon-eraser { --icon: url(/icon-eraser.svg) }
+.icon-image { --icon: url(/icon-image.svg) }
+.icon-minus { --icon: url(/icon-minus.svg) }
+.icon-plus { --icon: url(/icon-plus.svg) }
+
+#note {
+  position: fixed; inset: 0; display: grid; place-items: center; align-content: center; gap: 14px;
+  color: var(--ink-soft); font-size: 15px; background: var(--canvas)
+}
+#note button {
+  padding: 7px 14px; border-radius: var(--bar-radius); color: var(--ink); background: var(--bar);
+  box-shadow: 0 0 0 1px var(--rim), var(--lift); font-size: 13px
+}
+#note button:hover { background: var(--hover) }
+#note button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px }
+#note[hidden], #toast[hidden], #unsaved[hidden] { display: none }
+#toast {
+  position: fixed; left: 50%; top: 16px; transform: translateX(-50%); padding: 8px 14px;
+  border-radius: var(--bar-radius); background: var(--bar); box-shadow: 0 0 0 1px var(--rim), var(--lift)
+}
+/* A refused save: a page question's card, in the page's corner, which clicks pass through. */
+#unsaved {
+  position: fixed; left: var(--notice-inset); top: var(--notice-inset); box-sizing: border-box;
+  width: min(var(--notice-width), calc(100vw - 2 * var(--notice-inset)));
+  padding: var(--notice-padding); border-radius: var(--bar-radius); background: var(--plate);
+  box-shadow: 0 0 0 1px var(--rim), var(--lift); font-size: var(--notice-text);
+  line-height: var(--notice-line); pointer-events: none
+}
+#unsaved.aside { left: auto; right: var(--notice-inset) }

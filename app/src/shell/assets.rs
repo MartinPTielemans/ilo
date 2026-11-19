@@ -243,6 +243,10 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../../assets/icons/external-link.svg"),
     ),
     (
+        "icons/eye-off.svg",
+        include_bytes!("../../assets/icons/eye-off.svg"),
+    ),
+    (
         "icons/eye.svg",
         include_bytes!("../../assets/icons/eye.svg"),
     ),
@@ -289,6 +293,22 @@ const ICONS: &[(&str, &[u8])] = &[
     (
         "icons/gift.svg",
         include_bytes!("../../assets/icons/gift.svg"),
+    ),
+    (
+        "icons/git-merge.svg",
+        include_bytes!("../../assets/icons/git-merge.svg"),
+    ),
+    (
+        "icons/git-pull-request.svg",
+        include_bytes!("../../assets/icons/git-pull-request.svg"),
+    ),
+    (
+        "icons/git-pull-request-closed.svg",
+        include_bytes!("../../assets/icons/git-pull-request-closed.svg"),
+    ),
+    (
+        "icons/git-pull-request-draft.svg",
+        include_bytes!("../../assets/icons/git-pull-request-draft.svg"),
     ),
     (
         "icons/glasses.svg",
@@ -367,6 +387,10 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../../assets/icons/loading.svg"),
     ),
     (
+        "icons/log-in.svg",
+        include_bytes!("../../assets/icons/log-in.svg"),
+    ),
+    (
         "icons/lock-open.svg",
         include_bytes!("../../assets/icons/lock-open.svg"),
     ),
@@ -431,6 +455,10 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../../assets/icons/nav-forward.svg"),
     ),
     (
+        "icons/nav-menu.svg",
+        include_bytes!("../../assets/icons/nav-menu.svg"),
+    ),
+    (
         "icons/nav-plus.svg",
         include_bytes!("../../assets/icons/nav-plus.svg"),
     ),
@@ -441,6 +469,10 @@ const ICONS: &[(&str, &[u8])] = &[
     (
         "icons/nav-sidebar.svg",
         include_bytes!("../../assets/icons/nav-sidebar.svg"),
+    ),
+    (
+        "icons/nav-sidebar-right.svg",
+        include_bytes!("../../assets/icons/nav-sidebar-right.svg"),
     ),
     (
         "icons/nav-stop.svg",
@@ -465,6 +497,14 @@ const ICONS: &[(&str, &[u8])] = &[
     (
         "icons/panel-left.svg",
         include_bytes!("../../assets/icons/panel-left.svg"),
+    ),
+    (
+        "icons/panel-right.svg",
+        include_bytes!("../../assets/icons/panel-right.svg"),
+    ),
+    (
+        "icons/panel-top.svg",
+        include_bytes!("../../assets/icons/panel-top.svg"),
     ),
     (
         "icons/paw-print.svg",
@@ -509,6 +549,10 @@ const ICONS: &[(&str, &[u8])] = &[
     (
         "icons/plus.svg",
         include_bytes!("../../assets/icons/plus.svg"),
+    ),
+    (
+        "icons/presentation.svg",
+        include_bytes!("../../assets/icons/presentation.svg"),
     ),
     (
         "icons/printer.svg",
@@ -569,6 +613,14 @@ const ICONS: &[(&str, &[u8])] = &[
     (
         "icons/shield.svg",
         include_bytes!("../../assets/icons/shield.svg"),
+    ),
+    (
+        "icons/shield-ban.svg",
+        include_bytes!("../../assets/icons/shield-ban.svg"),
+    ),
+    (
+        "icons/shield-off.svg",
+        include_bytes!("../../assets/icons/shield-off.svg"),
     ),
     (
         "icons/shopping-basket.svg",
@@ -857,9 +909,11 @@ mod tests {
             ] {
                 assert!(svg.contains(want), "{name}: needs {want}");
             }
+            // The Library's books have one solid, as its Spaces' cards do, at the one stroke.
+            let fills = if name == "library.svg" { 2 } else { 1 };
             assert_eq!(
                 svg.matches("fill=").count(),
-                1,
+                fills,
                 "{name}: an outline has no fill"
             );
             checked += 1;

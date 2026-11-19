@@ -14,8 +14,10 @@ pub(crate) const FOLDER_PREVIEW: c_int = 3;
 
 pub(crate) const BOOST_EDITOR: c_int = 4;
 
+pub(crate) const TAB_SWITCHER: c_int = 5;
+
 /// The Site Controls aren't one of the host's overlays, but its elevation call takes them too.
-pub(crate) const SITE_CONTROLS: c_int = 5;
+pub(crate) const SITE_CONTROLS: c_int = 6;
 
 /// Shows ilo's menu of `items` at `at` in the content of `ui_view`'s window, any of the app's, or
 /// of its reveal's panel if `in_reveal`, in `look`, and calls `chosen` once it closes.
@@ -183,6 +185,21 @@ impl site_controls::Host for SiteControlsHost {
         });
     }
 
+    fn set_recent(&self, tab: u64, on: bool, cx: &mut App) {
+        let shell = tab_window(tab, cx).and_then(|window| window.shell.upgrade());
+        if let Some(site) = shell.and_then(|shell| shell.read(cx).recent_site(tab)) {
+            crate::settings::set_recent_site(site, on, cx);
+        }
+    }
+
+    fn turn_on_arrangement(&self, tab: u64) {
+        update_app_later(move |cx| {
+            if let Some(shell) = tab_window(tab, cx).and_then(|window| window.shell.upgrade()) {
+                shell.update(cx, |shell, cx| shell.turn_on_arrangement(tab, cx));
+            }
+        });
+    }
+
     fn set_ad_blocking(&self, tab: u64, on: bool) {
         unsafe { bc::bc_tab_set_ad_blocking(tab, on) };
         // Settings lists the sites it's off on.
@@ -225,6 +242,18 @@ impl site_controls::Host for SiteControlsHost {
                 window
                     .shell
                     .update(cx, |shell, cx| shell.run_extension_from(&id, tile, cx))
+                    .ok();
+            }
+            site_controls::Run::OpenInProfile(profile) => {
+                window
+                    .shell
+                    .update(cx, |shell, cx| shell.open_in_profile(tab, profile, cx))
+                    .ok();
+            }
+            site_controls::Run::NewSpaceInProfile(profile) => {
+                window
+                    .shell
+                    .update(cx, |shell, cx| shell.new_space_in_profile(profile, cx))
                     .ok();
             }
             site_controls::Run::Certificate => unsafe { bc::bc_tab_show_certificate(tab) },
@@ -353,6 +382,24 @@ thread_local! {
     pub(crate) static TOAST_VIEW: Cell<*mut c_void> = const { Cell::new(std::ptr::null_mut()) };
 }
 
+/// Arrange's mini bar's requests, to the host's mini bar window, over the browser window it names.
+pub(crate) struct MiniBarHost;
+
+impl browser::mini_bar::Host for MiniBarHost {
+    fn show(&self, window: u64, place: Bounds<Pixels>) {
+        let Some(view) = ui_view_of(window) else {
+            return;
+        };
+        let (x, y) = (place.origin.x.into(), place.origin.y.into());
+        let (width, height) = (place.size.width.into(), place.size.height.into());
+        unsafe { platform::host_show_mini_bar(view, x, y, width, height) };
+    }
+
+    fn hide(&self) {
+        unsafe { platform::host_hide_mini_bar() };
+    }
+}
+
 /// The toast's requests, to the host's toast window.
 pub(crate) struct ToastHost {
     /// The toast's view, for the share menu its Share button shows, once its window is open.
@@ -376,6 +423,24 @@ impl toast::Host for ToastHost {
         let (x, y) = (bounds.origin.x.into(), bounds.origin.y.into());
         let (width, height) = (bounds.size.width.into(), bounds.size.height.into());
         unsafe { platform::host_set_toast_plate(x, y, width, height) };
+    }
+}
+
+/// The foot bar's requests, to the host's foot bar window, over the browser window it names.
+pub(crate) struct FootBarHost;
+
+impl browser::foot_bar::Host for FootBarHost {
+    fn show(&self, window: u64, place: browser::foot_bar::Place) {
+        let Some(view) = ui_view_of(window) else {
+            return;
+        };
+        let (width, height) = (place.size.width.into(), place.size.height.into());
+        let (left, right, bottom) = (place.left.into(), place.right.into(), place.bottom.into());
+        unsafe { platform::host_show_foot_bar(view, left, right, bottom, width, height) };
+    }
+
+    fn hide(&self) {
+        unsafe { platform::host_hide_foot_bar() };
     }
 }
 
@@ -500,6 +565,38 @@ pub(crate) extern "C" fn folder_preview_dismissed() {
     update_app(folder_preview::dismissed);
 }
 
+/// The ⌃Tab switcher's requests, to the host's overlay window, where ⌘T's panel shows.
+pub(crate) struct TabSwitcherHost;
+
+impl tab_switcher::Host for TabSwitcherHost {
+    fn show(&self, window: u64, height: f32) {
+        let Some(view) = ui_view_of(window) else {
+            return;
+        };
+        let (top, width) = (
+            tab_switcher::ABOVE_MIDDLE.into(),
+            tab_switcher::WIDTH.into(),
+        );
+        // Under Wayland it has the keys only once it has drawn, and a ⌃Tab typed before then is
+        // its, not lost (a walk shows it once).
+        #[cfg(target_os = "linux")]
+        crate::keys::hold_keys_for_overlay();
+        unsafe {
+            platform::host_set_overlay_height(TAB_SWITCHER, height.into());
+            platform::host_show_overlay(TAB_SWITCHER, view, true, 0., top, width);
+        }
+    }
+
+    fn hide(&self) {
+        unsafe { platform::host_hide_overlay(TAB_SWITCHER) };
+    }
+}
+
+/// The user left the switcher: a click outside it, or another app.
+pub(crate) extern "C" fn tab_switcher_dismissed() {
+    update_app(tab_switcher::dismissed);
+}
+
 /// The theme picker's requests, to the host's overlay window, over the window that asked.
 pub(crate) struct ThemeHost;
 
@@ -558,6 +655,17 @@ impl boost_editor::Host for BoostEditorHost {
             platform::host_set_overlay_shape(BOOST_EDITOR, shape.as_ptr(), shape.len() / 3);
             platform::host_set_overlay_growth(BOOST_EDITOR, x.into(), y.into());
             platform::host_show_overlay(BOOST_EDITOR, view, false, left, top, width);
+        }
+    }
+
+    fn resize(&self, height: f32, corners: &[(f32, f32, f32)]) {
+        let shape: Vec<f64> = corners
+            .iter()
+            .flat_map(|&(x, y, radius)| [x, y, radius].map(f64::from))
+            .collect();
+        unsafe {
+            platform::host_set_overlay_shape(BOOST_EDITOR, shape.as_ptr(), shape.len() / 3);
+            platform::host_set_overlay_height(BOOST_EDITOR, height.into());
         }
     }
 
@@ -638,12 +746,39 @@ impl link_target::Host for LinkTargetHost {
         let Some(view) = ui_view_of(window) else {
             return;
         };
+        // check.sh reads this line: where the window is, the card's room above the plate included.
+        log!("browser: link target window at {left} {top}");
         let fade = link_target::FADE_IN.as_secs_f64();
         unsafe { platform::host_show_link_target(view, left.into(), top.into(), fade) };
     }
 
     fn hide(&self) {
         unsafe { platform::host_hide_link_target(link_target::FADE_OUT.as_secs_f64()) };
+    }
+
+    fn outline(&self, window: &mut Window, frame: Bounds<Pixels>, radius: f32) {
+        let view = crate::browser_windows::ns_view(window);
+        let (left, top) = (
+            f32::from(frame.left()).into(),
+            f32::from(frame.top()).into(),
+        );
+        let (width, height) = (
+            f32::from(frame.size.width).into(),
+            f32::from(frame.size.height).into(),
+        );
+        unsafe { platform::host_outline_overlay(view, left, top, width, height, radius.into()) };
+    }
+
+    fn pressed(&self) -> bool {
+        unsafe { platform::host_mouse_down() }
+    }
+
+    fn card_picture(&self, card: u64, url: &str, page: &str) -> bool {
+        crate::link_cards::picture(card, url, page)
+    }
+
+    fn card_cancel(&self, card: u64) {
+        crate::link_cards::cancel(card)
     }
 }
 

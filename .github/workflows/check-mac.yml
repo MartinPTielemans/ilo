@@ -15,13 +15,15 @@
 # owner's Mac.
 # Its default runs, the night's and a train's, are every run check.sh does unnamed but VM_RUNS, the
 # runs a release still needs from the owner's MacBook's check VM, each here with its reason (#2205):
-# - clear: in 2 of 5 runs here the tab Clear Browsing Data opened drew nothing in the page area,
-#   so its dialog never had the keyboard; the VM passes it (#2248).
+# none now. clear was one until #2888: a switch from a Safari's-engine page to Chromium's left the
+# window's stale occluded mark, so the tab Clear Browsing Data opened drew nothing here.
 # switch-frames runs here: its empty page area through a switch, here in 3 of 4 runs, is on the VM
 # too, about half the time, and quarantined on the Mac under #2248 (check/quarantine.mac).
 # And one part of a run that passes here, which skips it, saying so:
 # - window's sidebar against Dia's composite: the runner's AppKit material is darker than the one
 #   Dia was measured over (#1554).
+# sync-devices runs here, in about 200 s, against the run's own ilo-server, its copies handing each
+# other the active app as each needs the keyboard (#589).
 # Of the runs check.sh does only when named, the runner passes store, sync-extensions, adblock-live,
 # adblock-parity, adblock-native, passwords-live, updates, nightly, update-checks, shots, and
 # keychain asked for alone, which builds the prod build it needs. perf and adblock-cost measure, so
@@ -42,6 +44,17 @@ on:
         description: Build the app, even if a check of this commit kept one
         type: boolean
         default: false
+      trace:
+        description: >-
+          The trace categories for tabs and perf's traced switches (app/check/lib.sh), such as
+          #2377's, latency among them; empty for latency alone in tabs and no traced switches
+        default: ''
+      lists_from:
+        description: >-
+          A Check run's id, on any OS, whose adblock-parity lists this run's adblock-parity and
+          adblock-native block with, so runs on the three OSes share one snapshot (#2111); empty
+          to download them
+        default: ''
 
 # Main's running check finishes, with only the newest dispatch or night waiting behind it; a branch's
 # dispatch replaces the one before it.
@@ -77,15 +90,17 @@ jobs:
     needs: gate
     if: needs.gate.outputs.check == 'true'
     # Named apart when it does other runs than the default ones, so it's no verdict on the commit.
-    name: ${{ inputs.runs != '' && 'check (runs asked for)' || 'check' }}${{ matrix.shard != 0 && format(' {0}/3', matrix.shard) || '' }}
+    name: ${{ inputs.runs != '' && 'check (runs asked for)' || 'check' }}${{ matrix.shard != 0 && format(' {0}/{1}', matrix.shard, inputs.runs == 'all' && 3 || 2) || '' }}
     # runs=all takes longer than the job's 120 minutes, so it's dealt across three jobs, each with
-    # its share of the runs (.github/scripts/runs.sh, #2271). Any other list is one job's.
+    # its share of the runs (.github/scripts/runs.sh, #2271). Since 11-18 the default runs take longer
+    # too, so they're dealt across two, as Windows' are (#3444). Any other list is one job's.
     strategy:
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON(inputs.runs == 'all' && '[1, 2, 3]' || '[0]') }}
+        shard: ${{ fromJSON(inputs.runs == 'all' && '[1, 2, 3]' || inputs.runs == '' && '[1, 2]' || '[0]') }}
     runs-on: macos-26
-    # The default runs take about 70 min here, after about 6 of setting up.
+    # The default runs took about 105 min here on 11-18, after about 16 of setting up, and ran out
+    # the job's time unsplit (44322076346).
     timeout-minutes: 120
     permissions:
       contents: read
@@ -99,7 +114,9 @@ jobs:
     env:
       # The runs a release still needs from the check VM, as the header says why: one leaves the
       # list once it passes on the runner (#2248).
-      VM_RUNS: clear
+      VM_RUNS: ''
+      # How many jobs the runs are dealt across, for runs.sh shard.
+      SHARDS: ${{ inputs.runs == 'all' && 3 || 2 }}
     steps:
       # With the history, where fetch.sh looks for the engine's commit.
       - uses: actions/checkout@v4
@@ -142,7 +159,9 @@ jobs:
           case $RUNS in
           '')
             runs=
-            for run in $(sed -n 's/^runs="\(\$runs \)\{0,1\}\(.*\)"$/\2/p' check.sh); do
+            default=$(sh check.sh --runs default)
+            for run in $(../.github/scripts/runs.sh shard "$SHARD" "$SHARDS"); do
+              case " $(echo $default) " in *" $run "*) ;; *) continue ;; esac
               case " $VM_RUNS " in *" $run "*) ;; *) runs="$runs $run" ;; esac
             done
             ;;
@@ -289,12 +308,23 @@ jobs:
       - if: ${{ steps.engine.outputs.found == 'true' }}
         run: |
           now=$(date +%s)
+          # Runs the SQL $2 on the database $1, leaving its output in $said. tccd may hold the
+          # database as the job starts, and sqlite3 gives up at the first lock unless told to wait
+          # for it, which failed the job before any run (#2966).
+          tcc() {
+            said=$(sudo sqlite3 -cmd '.timeout 30000' "$1" "$2" 2>&1) && return 0
+            case $said in
+            *locked*) echo "::error::$1 stayed locked for 30 s, so the grants couldn't be written: $said" ;;
+            *) echo "::error::sqlite3 failed on $1: $said" ;;
+            esac
+            exit 1
+          }
           grant() { # <database> <service> <client path>
-            sudo sqlite3 "$1" "INSERT OR REPLACE INTO access (service, client, client_type,
+            tcc "$1" "INSERT OR REPLACE INTO access (service, client, client_type,
               auth_value, auth_reason, auth_version, indirect_object_identifier, flags, last_modified)
               VALUES ('$2', '$3', 1, 2, 4, 1, 'UNUSED', 0, $now)"
-            [ "$(sudo sqlite3 "$1" "SELECT auth_value FROM access WHERE service = '$2' AND client = '$3'")" = 2 ] ||
-              { echo "::error::$2 wasn't granted to $3"; exit 1; }
+            tcc "$1" "SELECT auth_value FROM access WHERE service = '$2' AND client = '$3'"
+            [ "$said" = 2 ] || { echo "::error::$2 wasn't granted to $3"; exit 1; }
           }
           system="/Library/Application Support/com.apple.TCC/TCC.db"
           user="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
@@ -321,7 +351,7 @@ jobs:
           done
           # The app by its bundle and its path too, for a request that names it.
           for service in kTCCServiceCamera kTCCServiceMicrophone; do
-            sudo sqlite3 "$user" "INSERT OR REPLACE INTO access (service, client, client_type,
+            tcc "$user" "INSERT OR REPLACE INTO access (service, client, client_type,
               auth_value, auth_reason, auth_version, indirect_object_identifier, flags, last_modified)
               VALUES ('$service', 'dev.browser.app', 0, 2, 4, 1, 'UNUSED', 0, $now)"
             grant "$user" "$service" "$PWD/build/Browser.app/Contents/MacOS/Browser"
@@ -336,6 +366,37 @@ jobs:
           sudo killall tccd || true
           launchctl kickstart -k "gui/$(id -u)/com.apple.tccd"
           killall replayd || true
+          # A runner has refused a job's every capture though granted, ScreenCaptureKit's -3801,
+          # which failed its first check as "no window to capture" (#2963). One listing, as
+          # tools/window-screenshot.sh starts with, says so here, as the runner's fault.
+          cat > "$RUNNER_TEMP/list-windows.swift" <<'SWIFT'
+          import ScreenCaptureKit
+          do {
+            _ = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
+            print("ScreenCaptureKit lists the windows on screen")
+          } catch {
+            print(error)
+            exit((error as NSError).code == -3801 ? 3 : 1)
+          }
+          SWIFT
+          refused=0
+          said=$(swift "$RUNNER_TEMP/list-windows.swift" 2>&1) || refused=$?
+          echo "$said"
+          if [ "$refused" = 3 ]; then
+            echo "::error::the runner refused screen capture after its grants (ScreenCaptureKit's -3801), a runner fault, not a check's (#2963)"
+            exit 1
+          fi
+          [ "$refused" = 0 ] || echo "::warning::ScreenCaptureKit's listing failed, but not with -3801: $said"
+
+      # The lists an earlier run's adblock-parity downloaded, on any OS, for this run's to block
+      # with, so the OSes' runs compare the engines on one snapshot (#2111).
+      - if: ${{ steps.engine.outputs.found == 'true' && inputs.lists_from != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: adblock-parity-lists
+          path: app/build/given-lists
+          run-id: ${{ inputs.lists_from }}
+          github-token: ${{ github.token }}
 
       # Each run alone, so one failing doesn't hide the rest, and each keeps its own build/check.
       # Each of the job's share of check.sh's runs gets a line in its results, done or skipped, which
@@ -346,10 +407,12 @@ jobs:
           RUNS: ${{ steps.runs.outputs.list }}
           SHARD: ${{ matrix.shard }}
           RESULTS: ${{ runner.temp }}/results/mac-${{ matrix.shard }}.tsv
+          CHECK_TRACE_CATEGORIES: ${{ inputs.trace }}
+          ADBLOCK_PARITY_LISTS: ${{ inputs.lists_from != '' && 'build/given-lists' || '' }}
         run: |
           out=$RUNNER_TEMP/check
           mkdir -p "$out" "$(dirname "$RESULTS")"
-          all=$(../.github/scripts/runs.sh shard "$SHARD")
+          all=$(../.github/scripts/runs.sh shard "$SHARD" "$SHARDS")
           runs=$RUNS
           {
             echo "| Run | Result |"
@@ -393,13 +456,21 @@ jobs:
             *" $run "*)
               start=$SECONDS
               status=0
-              ${limit:+$limit 20m} ./check.sh "$run" > "$out/$run.log" 2>&1 || status=$?
+              # Perf measures Chrome beside the app.
+              minutes=20m
+              [ "$run" != perf ] || minutes=40m
+              ${limit:+$limit $minutes} ./check.sh "$run" > "$out/$run.log" 2>&1 || status=$?
               [ ! -d build/check ] || mv build/check "$out/$run"
               pkill -9 -f "$PWD/build/Browser.app/" || true
               # A run that passes may have skipped steps, or all of itself, such as when the app
               # wasn't the active one.
               skipped=$(grep '^skip: ' "$out/$run.log" | cut -c7- | tr '|\n' '/;' | sed 's/;$//')
-              if [ "$status" = 0 ]; then
+              # A run that skips all of itself, as one whose build lacks what it checks, says why on a
+              # "skip all: " line, and its row says skip, so nobody reads it as a pass (#2284).
+              whole=$(grep -m1 '^skip all: ' "$out/$run.log" | cut -c11- | tr '|' '/') || true
+              if [ "$status" = 0 ] && [ -n "$whole" ]; then
+                result="skip: $whole"
+              elif [ "$status" = 0 ]; then
                 result="passed in $((SECONDS - start)) s${skipped:+, skipping: $skipped}"
               else
                 said=$(grep -m1 '^FAIL' "$out/$run.log" | cut -c7- | tr '|' '/') || true
@@ -429,6 +500,15 @@ jobs:
           { echo; sh check/quarantine.sh list mac; } | tee -a "$GITHUB_STEP_SUMMARY"
           exit "$failed"
 
+      # The lists this run's adblock-parity blocked with, for a run on another OS to take with
+      # lists_from (#2111). A few MB, apart from the check's artifact, which can be a GB.
+      - if: ${{ !cancelled() && steps.engine.outputs.found == 'true' && hashFiles('app/build/adblock-parity-lists/snapshot.txt') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: adblock-parity-lists
+          path: app/build/adblock-parity-lists
+          overwrite: true
+
       - if: ${{ always() && steps.engine.outputs.found == 'true' }}
         uses: actions/upload-artifact@v4
         with:
@@ -455,9 +535,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # With app/check, whose runs check.sh lists: without them it listed none, so this job said
+          # every run had a result after a night whose time ran out (44322076346).
           sparse-checkout: |
             .github/scripts
             app/check.sh
+            app/check
           sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@v4
         continue-on-error: true
@@ -480,8 +563,10 @@ jobs:
 
   # The default runs' verdict on main, the night's or a train's, keeps the workflow's issue: a
   # dispatched run reports too, as its pass is the only one the night won't repeat on that commit.
+  # One verdict for all its jobs: it fails when one failed, or ran out of its time, which cancels
+  # it, as complete then runs and the run itself wasn't cancelled, or when a run has no result.
   report:
-    needs: [gate, check]
+    needs: [gate, check, complete]
     if: ${{ always() && needs.gate.outputs.check == 'true' && github.ref == 'refs/heads/main' && github.repository == 'MartinPTielemans/ilo' && inputs.runs == '' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -499,6 +584,6 @@ jobs:
             app/check
       - env:
           GH_TOKEN: ${{ github.token }}
-          RESULT: ${{ needs.check.result }}
+          RESULT: ${{ (needs.check.result == 'failure' || needs.complete.result == 'failure' || (needs.check.result == 'cancelled' && needs.complete.result == 'success')) && 'failure' || needs.check.result }}
           FOUND: ${{ needs.check.outputs.found }}
         run: .github/scripts/main-check.sh report "$RESULT" "$FOUND"

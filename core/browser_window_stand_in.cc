@@ -391,9 +391,17 @@ gfx::Rect BrowserWindowStandIn::GetBounds() const {
 }
 
 void BrowserWindowStandIn::Show() {
-  if (widget()) {
-    widget()->Show();
+  if (!widget()) {
+    return;
   }
+  // A window that shows is only activated, as BrowserView does: Chrome shows it again for each
+  // tab it adds, a pop-up's included, and on Windows a show of a window already shown also moves
+  // the keyboard to the window itself, from the page that had it (#2806).
+  if (widget()->IsVisible()) {
+    widget()->Activate();
+    return;
+  }
+  widget()->Show();
 }
 
 bool BrowserWindowStandIn::IsVisible() const {
@@ -813,7 +821,6 @@ void BrowserWindowStandIn::OnWidgetShowStateChanged(views::Widget* widget) {
   if (page && controller->IsTabFullscreen() && IsFullscreen() &&
       controller->GetFullscreenState(page).target_display_id !=
           FullscreenController::GetDisplayId(*page)) {
-    // check.sh reads this line.
     fprintf(stderr, "browser: page full screen ended, its display gone\n");
     page->ExitFullscreen(/*will_cause_resize=*/true);
   }

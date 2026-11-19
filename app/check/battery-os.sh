@@ -1,3 +1,4 @@
+# check.sh runs this at 540.
 # Chrome's Battery Saver reads the computer's own battery as the OS tells of its changes, and never
 # wakes an idle browser to look (core/platform/battery.h). On Linux, where Chromium reads none, the
 # core reads UPower's display device on its PropertiesChanged signal (#1771): the run's stand-in

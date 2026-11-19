@@ -1,3 +1,4 @@
+# check.sh runs this at 10.
 # A page loads in the browser window, over the GPUI sidebar drawn in it, and quitting through
 # AppKit closes the page and ends every Chromium process. The first run shows the welcome and no
 # page, so the page is given. On Windows the window's icons, which the taskbar's thumbnails and
@@ -7,7 +8,11 @@
 
 log="$out/load.log"
 rm -f "$saved" "$launch_frame"
+# The page comes from a server of the run's own, which a runner always reaches (#3144).
+serve_tls wikipedia '<meta charset=utf-8><link rel=icon href="data:,"><title>Arc (web browser)</title>
+<h1>Arc (web browser)</h1>' en.wikipedia.org
 BROWSER_URL='https://en.wikipedia.org/wiki/Arc_(web_browser)' "$browser" \
+  --host-resolver-rules="$tls_rules" --ignore-certificate-errors-spki-list="$tls_key" \
   < /dev/null > "$log" 2>&1 &
 pid=$!
 await_load
@@ -17,6 +22,8 @@ if [ "$(uname)" != Linux ]; then
   [ "$(echo "$first" | cut -d" " -f7-8)" = "1280 800" ] ||
     fail "the first window didn't open 1280 by 800: ${first:-no frame logged}"
   sized=" The first window opened at $(echo "$first" | cut -d" " -f5-)."
+else
+  echo "skip: the first window at 1280 by 800: Linux leaves the window manager to place and size it."
 fi
 ../tools/window-screenshot.sh "$pid" "$out/load.png" || fail "no window to capture"
 icons=
@@ -34,5 +41,10 @@ if windows; then
   fi
 fi
 quit
-echo "ok: $(grep '^browser: loaded' "$log" | cut -d' ' -f4-) loaded, quit cleanly.$icons$sized" \
+kill "$tls" 2> /dev/null || true
+tls=
+loaded=$(grep '^browser: loaded' "$log" | cut -d' ' -f4-)
+grep -qxF "wikipedia: GET $loaded" "$out/wikipedia-tls.log" ||
+  fail "$loaded loaded, but not from the run's server: $(grep -v '^wikipedia: ' "$out/wikipedia-tls.log" | tail -3)"
+echo "ok: $loaded loaded from the run's own server, quit cleanly.$icons$sized" \
   "Window: $out/load.png"

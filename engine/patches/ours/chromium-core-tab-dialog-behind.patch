@@ -1,0 +1,24 @@
+Shows a tab's dialog inactive when its tab isn't showing. Chrome shows a new
+tab dialog active whenever its window is, then hides it at once if its tab is
+in the background. The core gives a tab's dialog a window of its own on Windows
+(PageDialogsInOwnWindow), and Windows hides a window without activating
+another, so the hidden dialog stayed the active window and took the keyboard
+from the tab the user was on: Chrome's warning before http in a tab behind did
+it as the tab's page committed (#3164).
+
+--- a/chrome/browser/ui/tabs/tab_dialog_manager.cc
++++ b/chrome/browser/ui/tabs/tab_dialog_manager.cc
+@@ -357,9 +357,12 @@
+   // Only show as active if the primary window widget (usually the browser
+   // window) is painted as active. This prevents a background browser window
+   // from becoming foreground on showing the dialog.
++  // browser_core: nor a dialog of a tab that isn't showing, which
++  // UpdateDialogVisibility() below hides at once. Windows hides a window
++  // without activating another, so the hidden dialog kept the keyboard.
+   views::Widget* const host_widget = GetHostWidget();
+   if (host_widget && host_widget->ShouldPaintAsActive() &&
+-      !params_->should_show_inactive) {
++      !params_->should_show_inactive && GetDialogWidgetVisibility()) {
+     widget_->Show();
+   } else {
+     widget->ShowInactive();

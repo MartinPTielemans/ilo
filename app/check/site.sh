@@ -9,7 +9,8 @@
 # extensions run puts there, which Chrome installs from. "a" asks to manage windows on all the
 # displays, a permission with no question from macOS, and puts the answer in the title. Keys with
 # ⌘, ⌃ or ⌥ are the browser's. /wait is a page that never comes, /slow text that comes after a
-# second, and /held one that comes once the run has made held.go in the site's folder. login.html is a login form, its username field
+# second, and /held one that comes once the run has made held.go in the site's folder, whose title
+# then names each key it gets. login.html is a login form, its username field
 # across the page's top half and its password field across the bottom, that posts to /login,
 # which sends the browser on to welcome.html, as a site that took the login would.
 # signup.html is the same form asking for a new password, which posts to /signup, as /login.
@@ -18,7 +19,7 @@
 # page's top 40%, which put their name in the title once painted, post as the login does, and put
 # "filled" in the title while Chrome fills that field, and "unfocused" once the page's focus leaves
 # its fields for nothing, which comes after autofill hears of it, as both go the frame's way to the
-# browser in turn.
+# browser in turn. /headed is a script with the headers its query names.
 mkdir "$out/site"
 # A page that a run types into once its title says so sets that title with painted(): Chromium
 # drops a key that comes before a page it loaded first shows, for up to half a second while it
@@ -236,10 +237,12 @@ onkeydown = e => {
 # requests use up: a HID, a USB device, a serial port and a Bluetooth device, in turn. It puts
 # each answer in its title: HID's empty list as "cancelled", the others' rejection by its error's
 # name and message, and an API the engine doesn't expose, as Linux's Bluetooth, as "unsupported".
-# The click after them says "still here".
+# The click after them says "still here". Each press puts "pressed N" in its title first, the Nth.
 printf '%s' '<title>loading</title>
 <script>
 requestAnimationFrame(() => setTimeout(() => document.title = "ready"));
+let presses = 0;
+onmousedown = () => document.title = "pressed " + ++presses;
 const asks = [
   ["hid", () => navigator.hid.requestDevice({filters: []})
     .then(devices => devices.length ? "chosen" : "cancelled")],
@@ -277,6 +280,20 @@ onkeydown = e => {
   }
 };
 </script>' > "$out/site/clear.html"
+# Three plain pages the clear run opens, copies, closes and reopens, which it once loaded from live
+# sites that a runner can't always reach (#3144). A run sources this file, so the loop's name is
+# one no run keeps: as $page it took the page window and windows had set before serve.
+for clear_page in one two three; do
+  printf '<title>Clear %s</title><p style="font:24px system-ui">%s</p>' \
+    "$clear_page" "$clear_page" > "$out/site/clear-$clear_page.html"
+done
+# Three plain pages for the runs that need only a page to be there, which they once loaded from live
+# sites that a runner can't always reach (#3144). Their text is well inside the page, where a run
+# that tells a page from an empty page area looks (switch-frames).
+for plain_page in One Two Three; do
+  printf '<title>%s</title><h1 style="font:bold 64px system-ui;margin:80px">%s</h1>' \
+    "$plain_page" "$plain_page" > "$out/site/$(echo "$plain_page" | tr A-Z a-z).html"
+done
 # Pages that ask for a key system as soon as they load, Widevine, which ilo can't play, and ClearKey,
 # which it can. Each puts "asked" in its title once the request is answered, either way. Widevine's
 # is asked from a promise, so the title comes in an engine with no request, as Safari's may have none
@@ -301,10 +318,15 @@ navigator.requestMediaKeySystemAccess("org.w3.clearkey", [{
 # A page that names the engine showing it: Safari's sends Safari's user agent, without Chrome's name.
 # A text field covers it, so a click anywhere in it lands there, and the field's title says what it
 # did: a press, counted, its value, what ⌘A selected and ⌘C copied, and a committed composition.
+# It keeps escape, counting each. In Chromium it asks the site for /painted once painted() says it
+# has painted, which a click the moment it has loaded waits for (#3323): its title can't wait, as it
+# names the engine for the page Chromium kept from before Safari's engine had the tab, too.
 printf '%s' '<title>loading</title>
 <input id=f style="position:fixed;left:0;top:0;width:100%;height:100%;box-sizing:border-box">
+<script src="painted.js"></script>
 <script>
 document.title = "engine " + (/Chrome\//.test(navigator.userAgent) ? "chromium" : "safari");
+/Chrome\//.test(navigator.userAgent) && painted(() => fetch("/painted", {cache: "no-store"}));
 let presses = 0;
 onmousedown = () => document.title = "pressed " + ++presses;
 const selected = () => f.value.slice(f.selectionStart, f.selectionEnd);
@@ -312,7 +334,13 @@ f.oninput = e => e.isComposing || (document.title = "value " + f.value);
 f.onselect = document.onselectionchange = () => selected() && (document.title = "select " + selected());
 oncopy = () => document.title = "copy " + selected();
 f.addEventListener("compositionend", e => document.title = "committed " + e.data);
+let escapes = 0;
+onkeydown = e => { if (e.key == "Escape") { e.preventDefault(); document.title = "escape " + ++escapes; } };
 </script>' > "$out/site/engine.html"
+# A page with an icon of its own, the orange square, whose title names the engine showing it.
+printf '%s' '<title>loading</title><link rel="icon" href="icon.png">
+<script>document.title = "icon " + (/Chrome\//.test(navigator.userAgent) ? "chromium" : "safari");</script>' \
+  > "$out/site/icon.html"
 # The session page, whose title says the engine showing it and which of the check's values its
 # script finds, in this order, or none: the cookies h, hw, n, p and w, and the localStorage items
 # item, back and mine. It names what it found and never a value, since the app logs every title.
@@ -427,6 +455,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         ".crx": "application/x-chrome-extension",
     }
 
+    # Each request logged in printable ASCII alone. Older Pythons wrote a request line as it came,
+    # so a TLS hello the browser sent to this port put NUL bytes in site.log, and grep then
+    # took the file for binary and printed none of its lines (#3314).
+    def log_message(self, format, *args):
+        message = "".join(c if " " <= c <= "~" else "\\x%02x" % ord(c) for c in format % args)
+        sys.stderr.write("%s - - [%s] %s\n"
+                         % (self.address_string(), self.log_date_time_string(), message))
+
     def do_GET(self):
         agent = self.headers.get("User-Agent", "")
         cookies = sorted(c.strip() for c in self.headers.get("Cookie", "").split(";") if c.strip())
@@ -440,6 +476,22 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Location", urllib.parse.parse_qs(query)["to"][0])
             self.send_header("Content-Length", "0")
             self.end_headers()
+            return
+        # A script that adds its n to the list ran of the page, with the other parts of its query as
+        # headers; with to, a 302 to that address instead.
+        if path == "/headed":
+            fields = urllib.parse.parse_qs(query)
+            body = b"" if "to" in fields else ("ran.push(%r);" % fields.get("n", ["?"])[0]).encode()
+            self.send_response(302 if "to" in fields else 200)
+            for name, values in fields.items():
+                if name not in ("n", "to"):
+                    self.send_header(name, values[0])
+            if "to" in fields:
+                self.send_header("Location", fields["to"][0])
+            self.send_header("Content-Type", "text/javascript")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
         if path == "/session":
             body = open(sys.argv[1] + "/session.html", "rb").read()
@@ -479,7 +531,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             # Every request waiting is let go at once, so one Chrome asked for ahead is no matter.
             while not os.path.exists(sys.argv[1] + "/held.go"):
                 time.sleep(0.05)
-            body = b"<title>held</title>"
+            body = (b"<title>held</title><script>"
+                    b"onkeydown = event => document.title = \"held has \" + event.key</script>")
             self.send_response(200)
             self.send_header("Content-Type", "text/html")
             self.send_header("Content-Length", str(len(body)))
@@ -526,10 +579,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def do_POST(self):
         body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
         if self.path.startswith("/api/"):
-            # Logged as "POST <host><path> cookie <cookies sorted, or none> body <body>".
+            # Logged as "POST <host><path> cookie <cookies sorted, or none> body <body>", in one
+            # write as GET lines are, so no line another request logs at once lands inside it.
             cookies = sorted(c.strip() for c in self.headers.get("Cookie", "").split(";") if c.strip())
-            print("POST", self.headers.get("Host", "") + self.path, "cookie",
-                  "; ".join(cookies) or "none", "body", body.decode())
+            sys.stdout.write(" ".join(["POST", self.headers.get("Host", "") + self.path, "cookie",
+                "; ".join(cookies) or "none", "body", body.decode()]) + "\n")
             body = b"{\"id\":8," + body[1:]
             self.send_response(201)
             self.send_header("Content-Type", "application/json")

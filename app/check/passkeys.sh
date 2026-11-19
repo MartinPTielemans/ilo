@@ -1,3 +1,4 @@
+# check.sh runs this at 370.
 # Passkeys (#611): a local page registers a passkey and signs in with it, on a virtual security key
 # that DevTools' WebAuthn domain gives the page's tab (check/cdp.py), in a profile of the run's
 # own. Chrome's own dialog asks for the key while it waits for a touch: a child window of the
@@ -161,6 +162,36 @@ requestAnimationFrame(() => setTimeout(() => document.title = "ready"));
         echo "skip: passkeys' dialog placement. On Linux Chrome draws the dialog in its own window," \
           "where the X server can't find it."
       fi
+    fi
+    # On the Mac, ⌘T over the dialog opens the command bar, and escape closes it and gives the
+    # keyboard back to the dialog, not to the page under it, which drops every key while the dialog's
+    # up, ilo's shortcuts with them (#2625). A second ⌘T then opens the bar again. A click on the
+    # dialog's top edge first gives it the keyboard, as the user's would, if it hasn't it.
+    if [ "$(uname)" = Darwin ] && [ -n "$dialog" ]; then
+      send state
+      if [ "$key" != NativeWidgetMacNSWindow ]; then
+        dialog_y=${dialog#*,}
+        send click $((x + width / 2)) $((${dialog_y%% *} + 8))
+        [ "$key" = NativeWidgetMacNSWindow ] ||
+          fail "a click on Chrome's passkey dialog at $dialog didn't give it the keyboard: $key, $focus"
+      fi
+      from=$step
+      for press in first second; do
+        send key t cmd
+        expect '^browser: command bar shown$' \
+          "the $press ⌘T over Chrome's passkey dialog didn't open the command bar"
+        send key escape
+        expect '^browser: command bar hidden$' \
+          "escape didn't close the command bar the $press ⌘T over Chrome's passkey dialog opened"
+        send state
+        [ "$key" = NativeWidgetMacNSWindow ] ||
+          fail "the command bar closing over Chrome's passkey dialog gave the keyboard to $key, on" \
+            "$focus, not back to the dialog"
+      done
+      none_since "^browser: title $tab failed " "$from" ||
+        fail "the keys over Chrome's passkey dialog reached the page, failing its request"
+    elif [ "$(uname)" != Darwin ]; then
+      echo "skip: ⌘T and escape over Chrome's passkey dialog: a click on the dialog's edge gives it the keyboard first, and only the Mac's run finds where the dialog is."
     fi
     # Where the dialog can't be seen, escape goes again until it's up and closes it: the page does
     # nothing with one.

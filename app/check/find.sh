@@ -1,3 +1,4 @@
+# check.sh runs this at 120.
 # ⌘F opens the find bar over the page with the keyboard, and what's typed right after it lands
 # there. Typing finds in the page, with "n/m", once Japanese input has committed, and return,
 # shift-return, ⌘G and ⇧⌘G and the bar's arrows go through the matches, from the bar and from the
@@ -32,6 +33,7 @@ onclick = () => { unzoomed = devicePixelRatio; };
 onresize = () => document.title = "zoom " + Math.round(100 * devicePixelRatio / unzoomed);
 onscroll = () => document.title = "scrolled " + Math.round(scrollY);
 </script>'
+serve
 log="$out/find.log"
 step=0
 rm -f "$saved" "$launch_frame"
@@ -76,23 +78,23 @@ check_find_bar() {
 # On X11 through sway's Xwayland the find bar can't keep the X focus, which wlroots' window
 # manager sends back to the browser window (#1646), so its steps, and the zoom HUD's under it, are
 # skipped there, and the tabs they leave are made from the command bar: the second tab at
-# example.com, and the first gone to example.org.
+# one.html, and the first gone to two.html.
 if sway_xwayland; then
   echo "skip: the find bar's keys, its matches and the zoom HUD under it: sway's Xwayland" \
     "sends child windows' X focus back (#1646)"
   send key t cmd
   expect '^browser: command bar shown$' "⌘T didn't open the command bar"
-  send type example.com
+  send type "http://localhost:$port/one.html"
   send key return
-  expect '^browser: loaded [0-9]* https://example.com/$' "the new tab didn't load"
+  expect "^browser: loaded [0-9]* http://localhost:$port/one.html\$" "the new tab didn't load"
   second=$(today | cut -d' ' -f1)
   send key 2 cmd
   expect "^browser: selected $first" "⌘2 didn't show the first tab"
   send key l cmd
   expect '^browser: command bar shown$' "⌘L didn't open the command bar"
-  send type example.org
+  send type "http://localhost:$port/two.html"
   send key return
-  expect '^browser: loaded [0-9]* https://example.org/$' "the first tab didn't load example.org"
+  expect "^browser: loaded [0-9]* http://localhost:$port/two.html\$" "the first tab didn't load two.html"
 else
   # What's typed right after ⌘F, with no wait, lands in the bar, though the page has ⌘F first: the
   # app holds the keys that come before the bar has the keyboard, and the bar can have it before the
@@ -148,12 +150,19 @@ else
   send key backspace
   expect_find "$first" "open [1-3] of 3 apple" "the find didn't find the text again"
 
-  # A click on the page takes the keyboard and leaves the bar open, and ⌘G from the page goes on.
+  # A click on the page after those on the bar's arrows takes the keyboard and leaves the bar open.
+  # What's typed then goes to the page, as does the ⌘G after it, which goes on from the page with
+  # the bar's text as it was: under Openbox the arrows' clicks once left the keys in the bar (#2684).
   send click $page_point
   in_browser RenderWidgetHostViewCocoa "after a click on the page under the find bar"
+  send type x
   send key g cmd
-  expect '^browser: command find-next via page$' "⌘G with the page focused didn't reach the UI"
-  expect_find "$first" "open [1-3] of 3 apple" "⌘G with the page focused didn't find"
+  expect '^browser: command find-next via page$' \
+    "⌘G typed after x with the page focused didn't reach the UI from the page"
+  expect_find "$first" "open [1-3] of 3 apple" \
+    "⌘G with the page focused didn't find the bar's text as it was"
+  grep -q '^browser: find bar drew "applex"' "$log" &&
+    fail "x typed with the page focused went to the find bar"
   grep -q '^browser: find bar hidden$' "$log" && fail "a click on the page closed the find bar"
 
   # ⌘F gives the open bar the keyboard. Japanese input composes in it, and it finds once committed.
@@ -188,15 +197,15 @@ else
   # each one's in the bar, or none.
   send key t cmd
   expect '^browser: command bar shown$' "⌘T in the find bar didn't open the command bar"
-  send type example.com
+  send type "http://localhost:$port/one.html"
   send key return
   expect '^browser: find bar hidden$' "the find bar stayed over a new tab"
-  expect '^browser: loaded [0-9]* https://example.com/$' "the new tab didn't load"
+  expect "^browser: loaded [0-9]* http://localhost:$port/one.html\$" "the new tab didn't load"
   second=$(today | cut -d' ' -f1)
   send key f cmd
   expect_find "$second" "open 0 of 0 日本語" "a new tab's find didn't start from the text found last"
-  send type example
-  expect_find "$second" "open 1 of [1-9][0-9]* example" "the new tab's find didn't find"
+  send type One
+  expect_find "$second" "open 1 of [1-9][0-9]* One" "the new tab's find didn't find"
   send key 2 cmd
   expect "^browser: selected $first" "⌘2 in the find bar didn't show the first tab"
   expect '^browser: find bar drew "日本語" 1/1$' "the first tab didn't show its own find"
@@ -208,7 +217,7 @@ else
   in_browser RenderWidgetHostViewCocoa "after escape closed the find bar"
   send key 1 cmd
   expect '^browser: find bar shown$' "the second tab didn't show its find"
-  expect '^browser: find bar drew "example" 1/' "the second tab didn't show its own find"
+  expect '^browser: find bar drew "One" 1/' "the second tab didn't show its own find"
   send state
   [ "$key" = BrowserCoreNSWindow ] || fail "switching to a tab with its find open moved the keyboard to $key"
   send key 2 cmd
@@ -294,11 +303,11 @@ else
   # Another page closes it.
   send key l cmd
   expect '^browser: command bar shown$' "⌘L in the find bar didn't open the command bar"
-  send type example.org
+  send type "http://localhost:$port/two.html"
   send key return
   expect_find "$first" "closed" "going to another page didn't close the find"
   expect '^browser: find bar hidden$' "going to another page didn't hide the find bar"
-  expect '^browser: loaded [0-9]* https://example.org/$' "the first tab didn't load example.org"
+  expect "^browser: loaded [0-9]* http://localhost:$port/two.html\$" "the first tab didn't load two.html"
 fi
 
 # DevTools dock in the card on the right. They fill the page's frame, and the page keeps the rest
@@ -421,7 +430,7 @@ check_docked "back on the tab with DevTools"
 # View Source opens the page's source in a tab under it.
 send menu "View Source"
 expect '^browser: command view-source via ui$' "the View menu's View Source didn't reach the UI"
-expect '^browser: page [0-9]* .* view-source:https://example.org/$' \
+expect "^browser: page [0-9]* .* view-source:http://localhost:$port/two.html\$" \
   "View Source didn't open the page's source"
 source=$(grep '^browser: page [0-9]* .* view-source:' "$log" | tail -1 | cut -d' ' -f3)
 expect "^browser: today $second $first $source\$" "the source's tab isn't under the page's"

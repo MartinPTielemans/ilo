@@ -23,6 +23,8 @@ fn a_block_reads_back_as_its_edits() {
         face: Some(Face::Serif),
         size: 120,
         case: Some(Case::Upper),
+        adjust: [110, 100, 80],
+        advanced: true,
         dragged: true,
         name: Some("Reading; mode".into()),
     };
@@ -34,7 +36,7 @@ fn a_block_reads_back_as_its_edits() {
         "font-family: ui-serif, serif !important;",
         "text-transform: uppercase !important;",
         "html { font-size: 120% !important; }",
-        "html { filter: invert(1) hue-rotate(180deg) !important; }",
+        "html { filter: invert(1) hue-rotate(180deg) contrast(110%) saturate(80%) !important; }",
         "a, a * { color: #",
     ] {
         assert!(block.contains(line), "{line} isn't in {block}");
@@ -110,4 +112,35 @@ fn a_name_stays_in_its_comment() {
         ..Style::default()
     };
     assert_eq!(Style::of(&style.into_file(SITE)), style);
+}
+
+/// Advanced's sliders filter the page by themselves, without Invert lightness, and a file edited
+/// by hand still reads as values they can show: in their range, on their step.
+#[test]
+fn advanced_filters_the_page_and_reads_back_on_its_steps() {
+    let mut style = Style::default();
+    Adjust::Brightness.set(&mut style, 90);
+    let block = style.block().unwrap();
+    assert!(
+        block.contains("html { filter: brightness(90%) !important; }"),
+        "{block}"
+    );
+    assert!(!block.contains("img, video"), "{block}");
+    let file =
+        format!("{START}\n/* contrast 400; brightness 73; saturate -20; advanced */\n{END}\n");
+    let read = Style::of(&file);
+    assert_eq!(read.adjust, [150, 75, 0]);
+    assert!(read.advanced);
+}
+
+/// Advanced left open is kept with the Boost, though it changes nothing on the page.
+#[test]
+fn advanced_open_is_kept_alone() {
+    let open = Style {
+        advanced: true,
+        ..Style::default()
+    };
+    let block = open.block().unwrap();
+    assert!(!block.contains("filter"), "{block}");
+    assert_eq!(Style::of(&open.into_file(SITE)), open);
 }

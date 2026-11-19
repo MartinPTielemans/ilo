@@ -16,6 +16,7 @@
 #include "content/public/browser/frame_shown.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/stretch_content_on_resize_mac.h"
+#include "ui/events/base_event_utils.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/views/widget/widget.h"
 
@@ -265,11 +266,12 @@ CACornerMask CornersReached(NSView* view, NSRect rect, NSSize frame) {
          (right && max_y ? kCALayerMaxXMaxYCorner : 0);
 }
 
-// Chromium's occlusion checker passes over a window with no page in it, so a window that comes
-// back from full screen or from behind another while the page is out can stay marked occluded,
-// and a page put in it then never draws or hands back the keys it doesn't use. Chrome's windows
-// always hold a page. Asked again only for a window marked occluded: the checker asks the window
-// server about every window, which takes milliseconds.
+// Chromium's occlusion checker passes over a window with no Chromium page in it, so a window that
+// comes back from full screen or from behind another while the page is out, or holds only a
+// Safari's-engine page, can stay marked occluded, and a page put in it then never draws or hands
+// back the keys it doesn't use. Chrome's windows always hold a page. Asked again only for a window
+// marked occluded: the checker asks the window server about every window, which takes
+// milliseconds.
 void UpdateOcclusion(NSWindow* window) {
   if (![window respondsToSelector:@selector(isOccluded)] ||
       ![static_cast<id<BrowserCoreOccludedWindow>>(window) isOccluded]) {
@@ -510,7 +512,10 @@ void ShowPages(views::Widget* widget,
     [view.ring removeFromSuperview];
   }
   [view layOutPage];
-  if (!had_page && !panes.empty()) {
+  // Also whenever a Chromium page arrives: the checker passed over the window while it held only
+  // a Safari's-engine page, which has none of Chromium's page views, so its mark can be stale
+  // though it had a pane all along (#2888).
+  if ((!had_page && !panes.empty()) || arriving) {
     UpdateOcclusion(view.window);
   }
   if (holding) {
@@ -546,11 +551,13 @@ void HidePages(views::Widget* widget) {
   [view letLeavingGo];
 }
 
+// The page is in the app's view, over what it draws, so nothing waits for it to be on screen.
 void ShowPageIn(views::Widget*,
                 gfx::NativeView page,
                 void* view,
                 const gfx::Rect& frame,
-                double corner_radius) {
+                double corner_radius,
+                base::OnceClosure) {
   NSView* holder = (__bridge NSView*)view;
   NSView* page_view = page.GetNativeNSView();
   if (!holder || !page_view) {
@@ -569,11 +576,36 @@ void ShowPageIn(views::Widget*,
   UpdateOcclusion(holder.window);
 }
 
+// The page is in the app's view, which scales and fades it with the card.
+void DrawPageIn(views::Widget*, gfx::NativeView, float, const gfx::PointF&, float) {}
+
 bool FocusSettledOnActivation() {
   // AppKit can be part way through moving the keyboard, as when a committing page hides the view
   // that had it and Chromium makes the window key: a page view focused inside that move believes
   // it has the keyboard after AppKit has given it elsewhere.
   return false;
+}
+
+void PassPointerThrough(views::Widget*) {
+  // Views' accept_events makes the window ignore mouse events.
+}
+
+base::ScopedClosureRunner WatchOutlineMoves(views::Widget*,
+                                            base::RepeatingCallback<void(const gfx::Point&)>) {
+  // The Mac moves the window itself as it's dragged.
+  return base::ScopedClosureRunner();
+}
+
+std::optional<base::TimeTicks> PointerEventTime() {
+  // A move loop moves the window from its event monitor, which AppKit runs from sendEvent:, so the
+  // event being sent is the drag that moved it, or the release that ended the loop.
+  NSEvent* event = NSApp.currentEvent;
+  constexpr NSEventMask kPointer = NSEventMaskLeftMouseDown | NSEventMaskLeftMouseDragged |
+                                   NSEventMaskLeftMouseUp | NSEventMaskMouseMoved;
+  if (!event || !(NSEventMaskFromType(event.type) & kPointer)) {
+    return std::nullopt;
+  }
+  return ui::EventTimeStampFromSeconds(event.timestamp);
 }
 
 bool PageDialogsInOwnWindow() {
@@ -603,6 +635,10 @@ bool KeyboardForPage(views::Widget* widget) {
 
 void ReleaseKeyboard(views::Widget* widget) {
   [widget->GetNativeWindow().GetNativeNSWindow() makeFirstResponder:nil];
+}
+
+bool EndKeyboardLoans(views::Widget*) {
+  return false;
 }
 
 bool OverlayHasKeyboard(views::Widget* widget) {

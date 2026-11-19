@@ -249,7 +249,7 @@ fn unix_folders(
 }
 
 /// The first `claude` in `folders` that's a program, as a shell runs one.
-#[cfg(not(windows))]
+#[cfg(unix)]
 fn unix_claude(folders: &[PathBuf]) -> Option<PathBuf> {
     use std::os::unix::fs::PermissionsExt;
     let runs = |program: &PathBuf| {
@@ -289,7 +289,7 @@ fn npm_bin(
 }
 
 /// What starts the line the user's shell prints its PATH on, after anything their rc files print.
-#[cfg(not(windows))]
+#[cfg(unix)]
 const SHELL_PATH: &str = "ilo-shell-path=";
 
 /// The shell command that prints the PATH, on a line of its own.
@@ -315,7 +315,7 @@ fn shell_path() -> Option<String> {
 /// without the terminal the browser may have been started from, and with nothing to read, so an
 /// rc file that asks something goes on without an answer; one still going after `wait` is
 /// given up on, with all it started.
-#[cfg(not(windows))]
+#[cfg(unix)]
 fn printed_path(mut command: Command, wait: std::time::Duration) -> Option<String> {
     use std::io::{BufRead, BufReader};
     use std::os::unix::process::CommandExt;
@@ -347,6 +347,17 @@ fn printed_path(mut command: Command, wait: std::time::Duration) -> Option<Strin
     // Reaped once it exits, which may be after it printed the PATH.
     std::thread::spawn(move || shell.wait());
     path.ok().flatten()
+}
+
+/// The site's demo, on the web, has no programs to run, so it finds no Claude Code.
+#[cfg(not(any(unix, windows)))]
+fn unix_claude(_: &[PathBuf]) -> Option<PathBuf> {
+    None
+}
+
+#[cfg(not(any(unix, windows)))]
+fn printed_path(_: Command, _: std::time::Duration) -> Option<String> {
+    None
 }
 
 /// The folders on PATH as a terminal opened now has them: the browser's own PATH, from when

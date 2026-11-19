@@ -1,7 +1,8 @@
-# Stay On Top keeps a window over the others, and Don't Stay On Top lets it go back. ⌘N opens
-# another window on the same Spaces, showing the key window's Space with no page, with ⌘T's
-# command bar, which escape closes to its card and its one line, and a click on the card with ⌘T's
-# bar open only closes the bar. Settings
+# check.sh runs this at 210.
+# Stay On Top keeps a window over the others, with its sidebar out over it on Windows, and Don't
+# Stay On Top lets it go back. ⌘N opens another window on the same Spaces, showing the key window's
+# Space with no page, with ⌘T's command bar, which escape closes to its card and its one line, and a
+# click on the card with ⌘T's bar open only closes the bar. Settings
 # opened from it and closed by its button gives it the keyboard back. The new window never shows
 # another window's page: a Space it switches to and back shows the first tab no window shows.
 # The Spaces menu acts on the window in front. A click on a row whose page another window shows
@@ -16,9 +17,11 @@
 # which the Site Controls turn on for a page that asks for Widevine, moves to another window the
 # same way, and the window it left draws WebKit's picture of it, which the core gives from a task of
 # its own (#364: an answer inside the call that asked aborted the browser). Its page asks Apple's
-# site-safety service about no site, as Chromium's ask none. A heavy page and a light
-# one move between two windows every way a page moves, and the run says how long each stage of a
-# move takes.
+# site-safety service about no site, as Chromium's ask none, and its tab's row shows the favicon of
+# the page it's at in either engine: in Safari's, none for a page whose site has none, and the
+# page's own, which the profile keeps once and doesn't write again when the page loads again. A
+# heavy page and a light one move between two windows every way a page moves, and the run says how
+# long each stage of a move takes.
 
 # The page counts in its title from its first frame, so a page that reloaded would count from 1
 # again. "o" in it opens a tab under it, as a link to a new tab does. Its beforeunload handler,
@@ -173,6 +176,8 @@ expect '^browser: front driven, main driven, key driven, ax focused driven, ax m
 send window 1
 if [ "$(uname)" = Darwin ]; then
   expect '^browser: desktop space changed$' "the first window's full-screen Space didn't come forward"
+else
+  echo "skip: the full-screen window's Space coming forward, and the desktop's coming back: elsewhere full screen is no Space of its own."
 fi
 # Sway takes a full-screen window out of it as another on its workspace takes the focus, so there
 # the first left as the second came forward.
@@ -267,36 +272,34 @@ send window 1
 check_layout "back in the first window"
 ../tools/window-screenshot.sh "$pid" "$out/windows-closed.png" || fail "no window to capture"
 
-# ⇧↩ in the command bar opens example.com in a new window, and the first keeps its page.
+# ⇧↩ in the command bar opens one.html in a new window, and the first keeps its page.
 send key t cmd
 expect '^browser: command bar shown$' "⌘T didn't open the command bar"
-send type example.com
+send type "http://localhost:$port/one.html"
 send key return shift
-# The bar sends what it suggested first, http:// while the https:// probe is out; the page upgrades.
-expect '^browser: command bar window https*://example.com/' "⇧↩ didn't open example.com in a window"
+expect "^browser: command bar window http://localhost:$port/one.html" "⇧↩ didn't open one.html in a window"
 expect '^browser: window opened [0-9]' "⇧↩ didn't open a window"
 third=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
 expect "^browser: window $third shows [1-9][0-9]*\$" "⇧↩'s window didn't show a tab"
 c=$(grep "^browser: window $third shows [1-9]" "$log" | tail -1 | cut -d' ' -f5)
-expect "^browser: loaded $c https://example.com/\$" "example.com didn't load in ⇧↩'s window"
+expect "^browser: loaded $c http://localhost:$port/one.html\$" "one.html didn't load in ⇧↩'s window"
 none_since "^browser: window $first shows" || fail "⇧↩ changed what the first window shows"
 ../tools/window-screenshot.sh "$pid" "$out/windows-shift-return.png" all ||
   fail "no window to capture"
 
 # From the first window, the Switch to Tab row for that page brings its window forward, and the
-# first window keeps its own page. "example" is the start of the page's title and its URL.
+# first window keeps its own page. "localh" is the start of the page's URL. Chromium's first row
+# for it is a search, so the bar doesn't complete it as it did "example", and the run waits for
+# the tab's row instead.
 send window 1
 send key t cmd
 expect '^browser: command bar shown$' "⌘T in the first window didn't open the command bar"
-send type example
-expect '^browser: command bar completes "example" with "\.' \
-  "the command bar didn't complete \"example\""
-send key backspace
-suggested="^browser: command bar suggestions \"example\" in .* ms: .*https://example.com/ tab $c"
+send type localh
+suggested="^browser: command bar suggestions \"localh\" in .* ms: .*http://localhost:$port/one.html tab $c"
 expect "$suggested" "the command bar didn't suggest the tab ⇧↩'s window shows"
 for _ in 1 2 3 4 5 6 7 8; do
   send key down
-  grep '^browser: command bar selected' "$log" | tail -1 | grep -q ' https://example.com/$' && break
+  grep '^browser: command bar selected' "$log" | tail -1 | grep -q " http://localhost:$port/one.html\$" && break
 done
 send key return
 expect "^browser: command bar switch to tab $c in window $third\$" \
@@ -315,7 +318,7 @@ send window 1
 
 # A page in Safari's engine moves to a new window as Chromium's does, and the window it left draws
 # WebKit's picture of it. The drm page asks for Widevine, so its Site Controls offer Safari's
-# engine, whose row is their first, at y 262 (clear.sh), and On shows the page there.
+# engine with a switch, and On shows the page there.
 webkit_moved=
 if [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   before=$(today)
@@ -330,8 +333,8 @@ if [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   expect "^browser: site controls http://127.0.0.1:$port: .*; Safari's engine off\$" \
     "the Site Controls didn't offer Safari's engine for the drm page: $(grep '^browser: site controls http' "$log" | tail -1)"
   expect '^browser: site controls settled$' "the Site Controls didn't open at the drm page"
-  post click 207 262
-  expect "^browser: menu shown On, Off (checked)\$" "Safari's engine's row didn't offer On"
+  click_placed post "switch Safari's engine"
+  expect "^browser: menu shown On, Off (checked)\$" "Safari's engine's switch didn't offer On"
   engine_from=$(date '+%Y-%m-%d %H:%M:%S')
   send choose On
   expect "^browser: site controls set Safari's engine On\$" "On in the menu didn't run"
@@ -378,7 +381,32 @@ if [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   expect "^browser: window $first page elsewhere 0\$" \
     "the first window wasn't told it shows Safari's engine's page again"
   send window 1
-  webkit_moved=", a page in Safari's engine, turned on in the Site Controls, moves to another window and back, and the window it left draws WebKit's picture of it"
+  # The tab's row shows its page's favicon in either engine. Back in Chromium at a page with one,
+  # it shows it. Then at the site kept for Safari's engine, which Chromium knows no favicon for, it
+  # shows none, not the page's before (#3431).
+  go_from_bar "localhost:$port/index.html"
+  expect "^browser: tab $d back to Chromium for http://localhost:$port/index.html\$" \
+    "another site didn't take the drm page's tab back to Chromium"
+  expect "^browser: favicon $d [1-9][0-9]* bytes\$" "the page back in Chromium didn't show its favicon"
+  go_from_bar "127.0.0.1:$port/engine.html"
+  expect "^browser: title $d engine safari\$" "the site kept for Safari's engine opened in Chromium"
+  expect "^browser: favicon $d 0 bytes\$" \
+    "the page in Safari's engine kept the favicon of the page before: $(grep "^browser: favicon $d " "$log" | tail -1)"
+  # A page there with an icon of its own shows it: WebKit loads it, Chromium's decoder reads it,
+  # and the profile keeps it, once. The profile knew none for the site, so the icon is the page's.
+  go_from_bar "127.0.0.1:$port/icon.html"
+  expect "^browser: title $d icon safari\$" "the icon page left Safari's engine"
+  expect "^browser: favicon $d [1-9][0-9]* bytes\$" "the page in Safari's engine didn't show its own icon"
+  expect "^browser: tab $d icon kept\$" "the profile didn't keep the icon of the page in Safari's engine"
+  # Loaded again, it finds its icon kept, which it shows at once, and writes nothing.
+  go_from_bar "127.0.0.1:$port/icon.html"
+  expect "^browser: title $d icon safari\$" "the icon page left Safari's engine"
+  expect "^browser: favicon $d [1-9][0-9]* bytes\$" "the icon kept for the site didn't show at the commit"
+  expect "^browser: tab $d icon already kept\$" "the page's icon wasn't found kept"
+  none_since "^browser: tab $d icon kept\$" || fail "the icon kept for the page was written again"
+  # Another page of the site isn't checked for the site's icon: Chromium looks for one only at
+  # the host with no port, and the check's server always has one.
+  webkit_moved=", a page in Safari's engine, turned on in the Site Controls, moves to another window and back, and the window it left draws WebKit's picture of it, and its tab's favicon is its page's in either engine, none where the page and the profile know none, its own from WebKit, which the profile keeps once for the page"
 fi
 
 # A heavy page shaped like a video grid and a light one move between two windows, twice with the
@@ -541,6 +569,29 @@ else
   ../tools/window-screenshot.sh "$pid" "$out/stay-on-top.png" all || fail "no window to capture"
   send key escape
   expect '^browser: command bar hidden$' "escape didn't close the command bar over the window on top"
+  # On Windows, the sidebar out over the window on top is in front of it, under no other app's
+  # window: it's topmost with it, where it had been made not topmost so that a menu from it opened
+  # in front of it, and didn't show over the window on top (#2989).
+  if windows; then
+    send key s cmd
+    expect '^browser: sidebar hidden$' "⌘S didn't hide the sidebar of the window on top"
+    send move 600 400
+    send move 3 300
+    send move 3 306
+    expect '^browser: reveal shown$' "the pointer at the edge of the window on top didn't bring its sidebar out"
+    expect '^browser: reveal window shown$' "the sidebar out of the window on top didn't come on screen"
+    send stack
+    stack=$(grep '^browser: stack ' "$log" | tail -1 | cut -c16-)
+    case $stack in
+      reveal*driven*) ;;
+      *) fail "the sidebar out isn't in front of the window on top, with no other window between, front first: $stack" ;;
+    esac
+    ../tools/window-screenshot.sh "$pid" "$out/stay-on-top-reveal.png" all || fail "no window to capture"
+    send move 600 400
+    expect '^browser: reveal hidden$' "the pointer leaving the sidebar out of the window on top left it out"
+    send key s cmd
+    expect '^browser: sidebar shown$' "⌘S didn't bring back the sidebar of the window on top"
+  fi
   bar_command stay-on-top "Don't Stay On Top" "stay on top"
   expect '^browser: stays on top 0$' "Don't Stay On Top didn't let the window go back"
   send window $driven_fourth
@@ -716,6 +767,12 @@ if [ "$(uname)" = Darwin ] || windows || x11; then
   driven_seventh=$(grep -c '^browser: window opened ' "$log")
   # Under the pointer, at its point on the screen, as near as the screen lets it.
   send order
+  # In front of the window it left, as well as key, so a click where it shows lands in it (#2607).
+  order=$(grep '^browser: order ' "$log" | tail -1)
+  case "$order" in
+    "browser: order window $driven_seventh "*) ;;
+    *) fail "the window opened for the tab isn't in front of the one it left: ${order#browser: }" ;;
+  esac
   frame=$(grep "^browser: frame window $driven_seventh " "$log" | tail -1 | cut -d' ' -f5-)
   echo "$frame" | awk -v x=$((right + over)) '{ exit !($1 <= x && x <= $1 + $3 && $2 <= 440 && 440 <= $2 + $4) }' ||
     fail "the window opened for the tab isn't under the pointer: $frame"
@@ -739,10 +796,32 @@ else
   echo "skip: a tab's row dragged out of its window: this system has no drag of a tab (#1798)."
 fi
 
+# ⌘N right after ⇧⌘W closed a window, escape and ⇧⌘W close the window ⌘N opened, not the one the
+# close left key: no key change comes for a window opened in front, and the window left key may
+# hear it was made key only after ⌘N's opened (#2648). A race, so in rounds, as a user goes, with
+# no window picked by the driver, which would make it key.
+send key n cmd
+expect '^browser: window opened [0-9]' "⌘N didn't open a window for the closes in a row"
+closing=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
+new_window_bar
+for round in 1 2 3 4; do
+  send key w cmd shift
+  expect '^browser: window closed [0-9]' "⇧⌘W closed no window in round $round"
+  closed=$(since | sed -n 's/^browser: window closed //p' | head -1)
+  [ "$closed" = "$closing" ] ||
+    fail "⇧⌘W after ⌘N and escape closed window $closed, not ⌘N's $closing, in round $round (#2648)"
+  [ "$round" = 4 ] && break
+  send key n cmd
+  expect '^browser: window opened [0-9]' "⌘N right after ⇧⌘W didn't open a window in round $round"
+  closing=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
+  new_window_bar
+done
+closes_in_a_row=", ⌘N right after ⇧⌘W, escape and ⇧⌘W close ⌘N's window"
+
 # ⇧⌘W in the last window quits. It's the driver's last command: the app doesn't report it done.
 post key w cmd shift
 exec 3>&-
 await "^browser: window closed $first\$" || fail "⇧⌘W didn't close the last window"
 exited
 forget_engine_sites
-echo "ok: ⌘N opens a window on the same Spaces with no page, whose card shows its one line, and a click on it with the command bar open only closes the bar, which never takes another window's page on a Space switch, is the one other apps take for the window in front with the first in full screen, the Spaces menu acts on it, a click on a row moves its page there live and the window it left draws a picture of the page, a click on which takes the page back, a window switching away from the page gives it back to the one with its picture and keeps the keyboard, ⇧⌘W gives the closed window's tabs back to the other, live, and quits from the last, ⇧↩ in the command bar opens a new window, and Switch to Tab brings forward the window showing the tab${webkit_moved:-}${dragged_out:-}. Each stage of a page's move between windows: $out/handover-summary.txt. Windows: $out/windows-new.png, $out/empty-window.png, $out/windows-moved.png, $out/windows-pictured.png, $out/windows-pictured-back.png, $out/windows-handed-back.png, $out/windows-closed.png, $out/windows-shift-return.png, $out/windows-switch.png${webkit_moved:+, $out/windows-webkit-pictured.png}"
+echo "ok: ⌘N opens a window on the same Spaces with no page, whose card shows its one line, and a click on it with the command bar open only closes the bar, which never takes another window's page on a Space switch, is the one other apps take for the window in front with the first in full screen, the Spaces menu acts on it, a click on a row moves its page there live and the window it left draws a picture of the page, a click on which takes the page back, a window switching away from the page gives it back to the one with its picture and keeps the keyboard, ⇧⌘W gives the closed window's tabs back to the other, live, and quits from the last, ⇧↩ in the command bar opens a new window, and Switch to Tab brings forward the window showing the tab${webkit_moved:-}${dragged_out:-}${closes_in_a_row}. Each stage of a page's move between windows: $out/handover-summary.txt. Windows: $out/windows-new.png, $out/empty-window.png, $out/windows-moved.png, $out/windows-pictured.png, $out/windows-pictured-back.png, $out/windows-handed-back.png, $out/windows-closed.png, $out/windows-shift-return.png, $out/windows-switch.png${webkit_moved:+, $out/windows-webkit-pictured.png}"

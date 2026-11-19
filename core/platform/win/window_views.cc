@@ -14,6 +14,7 @@
 #include "base/auto_reset.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
@@ -23,13 +24,16 @@
 #include "base/scoped_multi_source_observation.h"
 #include "base/scoped_observation.h"
 #include "base/task/single_thread_task_runner.h"
+#include "browser_core/dialog_keys.h"
 #include "browser_core/host.h"
 #include "browser_core/platform/focus_ring_aura.h"
 #include "browser_core/session.h"
+#include "browser_core/tab.h"
 #include "browser_core/window.h"
 #include "chrome/browser/lifetime/application_lifetime_desktop.h"
 #include "chrome/installer/util/install_util.h"
 #include "chrome/installer/util/shell_util.h"
+#include "content/public/browser/web_contents.h"
 #include "ui/aura/client/focus_change_observer.h"
 #include "ui/aura/client/focus_client.h"
 #include "ui/aura/client/window_types.h"
@@ -43,8 +47,12 @@
 #include "ui/base/win/shell.h"
 #include "ui/display/win/screen_win.h"
 #include "ui/gfx/geometry/insets.h"
+#include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/geometry/rect_conversions.h"
+#include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/geometry/size_conversions.h"
+#include "ui/gfx/geometry/transform.h"
 #include "ui/views/focus/native_view_focus_manager.h"
 #include "ui/views/widget/desktop_aura/desktop_native_widget_aura.h"
 #include "ui/views/widget/native_widget_aura.h"
@@ -128,6 +136,11 @@ class PopupLog : public views::NativeViewFocusChangeListener,
 // shown inactive (HWNDMessageHandler::SetInitialFocus), and focusing it activates its window: that
 // closed the command bar over it and brought a window restored behind to the front (#872).
 void ShowInactive(views::Widget* holder) {
+  // A tab switch shows the pane it's already in: showing it again sends its window the style and
+  // show messages for nothing, about 0.2 ms of the switch (#2377).
+  if (holder->IsVisible()) {
+    return;
+  }
   HWND hwnd = views::HWNDForWidget(holder);
   const LONG_PTR style = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
   SetWindowLongPtr(hwnd, GWL_EXSTYLE, style | WS_EX_NOACTIVATE);
@@ -162,6 +175,16 @@ class PaneKeyboard : public aura::client::FocusChangeObserver,
   // HWND focused, which it needs to take the input method's text. Not while another of the app's
   // windows is in front, such as the command bar.
   void OnWindowFocused(aura::Window* gained_focus, aura::Window*) override {
+    // A click on a page whose tab shows a dialog focuses the pane here, as the page, ignoring input
+    // under the dialog, won't take it, and every key the pane then has is lost: the dialog takes
+    // the keyboard back, as on the Mac (#2625). Only if the pane still has the keyboard on the next
+    // turn: activating the window focuses its page first, and F6 then gives the sidebar the
+    // keyboard, which the dialog took back from it (#3443).
+    if (gained_focus) {
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE,
+          base::BindOnce(&PaneKeyboard::PageFocusedWithKeyboard, weak_factory_.GetWeakPtr()));
+    }
     const bool take =
         gained_focus && GetFocus() != hwnd_ && GetActiveWindow() == GetAncestor(hwnd_, GA_ROOT);
     VLOG(1) << "pane " << hwnd_ << " focuses " << Describe(gained_focus)
@@ -249,6 +272,12 @@ class PaneKeyboard : public aura::client::FocusChangeObserver,
   bool HasKeyboard() const {
     HWND focus = GetFocus();
     return focus && (focus == hwnd_ || IsChild(hwnd_, focus));
+  }
+
+  void PageFocusedWithKeyboard() {
+    if (client_ && HasKeyboard()) {
+      dialog_keys::PageViewFocused(client_->GetFocusedWindow());
+    }
   }
 
   void LetGoWithoutKeyboard() {
@@ -382,6 +411,65 @@ bool Tapped(HWND root) {
 
 }  // namespace alt_taps
 
+// Which window a press activating a browser window went to. Windows tells each of the pressed
+// window's parents with WM_PARENTNOTIFY first, then sends it WM_MOUSEACTIVATE, and a thread's
+// WH_CALLWNDPROC hook sees both whichever window answers them: the window under a page's content
+// is content's own, which answers WM_MOUSEACTIVATE without passing it on to the pane
+// (LegacyRenderWidgetHostHWND::OnMouseActivate), and the UI's holder focuses the UI on hearing of
+// its press (host.cc), which activates the window before WM_MOUSEACTIVATE comes. The window's own
+// WM_PARENTNOTIFY, which names no child, is the last. The hook is set only while a browser window
+// is in the back, as only a press bringing one forward is asked about.
+namespace presses {
+
+HHOOK g_hook = nullptr;
+int g_waiting = 0;
+HWND g_pressed = nullptr;
+
+LRESULT CALLBACK Sent(int code, WPARAM own, LPARAM sent) {
+  const auto* message = reinterpret_cast<const CWPSTRUCT*>(sent);
+  if (code != HC_ACTION) {
+    return CallNextHookEx(nullptr, code, own, sent);
+  }
+  const UINT told = LOWORD(message->wParam);
+  if (message->message == WM_MOUSEACTIVATE ||
+      (message->message == WM_PARENTNOTIFY &&
+       (told == WM_LBUTTONDOWN || told == WM_RBUTTONDOWN || told == WM_MBUTTONDOWN ||
+        told == WM_XBUTTONDOWN) &&
+       GetAncestor(message->hwnd, GA_ROOT) != message->hwnd)) {
+    g_pressed = message->hwnd;
+  }
+  return CallNextHookEx(nullptr, code, own, sent);
+}
+
+// |root|, a browser window, went to the back. A press in it the hook heard while another window
+// was in the back is forgotten: it came while |root| was in front, so it brought nothing forward,
+// and |root| coming back by the keyboard or the taskbar would read it as its own.
+void Wait(HWND root) {
+  if (g_pressed && GetAncestor(g_pressed, GA_ROOT) == root) {
+    g_pressed = nullptr;
+  }
+  if (g_waiting++ == 0) {
+    g_pressed = nullptr;
+    g_hook = SetWindowsHookExW(WH_CALLWNDPROC, Sent, nullptr, GetCurrentThreadId());
+  }
+}
+
+// A browser window that went to the back came forward, or went.
+void StopWaiting() {
+  if (--g_waiting == 0) {
+    UnhookWindowsHookEx(std::exchange(g_hook, nullptr));
+    g_pressed = nullptr;
+  }
+}
+
+// The window in |root| the press activating it went to, once.
+HWND Pressed(HWND root) {
+  return g_pressed && GetAncestor(g_pressed, GA_ROOT) == root ? std::exchange(g_pressed, nullptr)
+                                                              : nullptr;
+}
+
+}  // namespace presses
+
 // What runs once the window in front changes, while an overlay that has a window's keyboard is
 // (WhenOverlayLetsGo), and the hook that hears it, set only then.
 std::vector<base::OnceClosure>& OverlayLetGo() {
@@ -414,6 +502,13 @@ struct Slot {
   std::optional<double> corner_radius;
 };
 
+// How a link preview's page is drawn, for the motion of the app's card round it (DrawPageIn).
+struct Drawn {
+  float scale = 1;
+  gfx::PointF about;
+  float opacity = 1;
+};
+
 // The pages and DevTools a window shows once it changes, which move between its slots unhidden.
 using Staying = std::vector<aura::Window*>;
 
@@ -432,7 +527,12 @@ class WindowViews : public views::WidgetObserver,
     alt_taps::Watch();
   }
 
-  ~WindowViews() override { ui::HWNDSubclass::RemoveFilterFromAllTargets(this); }
+  ~WindowViews() override {
+    ui::HWNDSubclass::RemoveFilterFromAllTargets(this);
+    if (std::exchange(in_back_, false)) {
+      presses::StopWaiting();
+    }
+  }
 
   HWND window() const { return views::HWNDForWidget(widget_); }
   HWND ui() const { return ui_; }
@@ -467,12 +567,76 @@ class WindowViews : public views::WidgetObserver,
       // root names the browser window's widget, as a page in Chrome's own window reaches it.
       views::NativeWidgetAura::RegisterNativeWidgetForWindow(
           widget_->native_widget_private(), slot.widget->GetNativeView()->GetRootWindow());
-      // A page taking the keyboard ends the UI's hold on it, as on Linux.
       slot.keyboard = std::make_unique<PaneKeyboard>(
-          slot.widget.get(), base::BindRepeating(&WindowViews::set_ui_holds_for_page,
-                                                 base::Unretained(this), false));
+          slot.widget.get(),
+          base::BindRepeating(&WindowViews::PaneTookKeyboard, base::Unretained(this),
+                              slot.widget.get()));
     }
     return slot.widget.get();
+  }
+
+  // The page in |holder| took the keyboard, which ends the UI's hold on it, as on Linux. If its
+  // tab has a dialog up, the dialog takes it back (dialog_keys.cc), as the page drops every key
+  // then, ilo's shortcuts with them. The core hears it here: a page whose tab has a dialog ignores
+  // input, and Aura's page view then says nothing of taking the focus
+  // (RenderWidgetHostViewAura::OnWindowFocused), where the Mac's does. Chrome's page never takes
+  // it, as aura keeps a click from a page under its tab's dialog (WindowModalityController), but a
+  // pane is a host of its own, whose window the dialog doesn't belong to (#2855).
+  void PaneTookKeyboard(views::Widget* holder) {
+    set_ui_holds_for_page(false);
+    // On the next turn, if the pane still has the keyboard, as PaneKeyboard's focus (#3443).
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&WindowViews::PaneKeptKeyboard, weak_factory_.GetWeakPtr(),
+                                  holder->GetWeakPtr()));
+  }
+
+  void PaneKeptKeyboard(base::WeakPtr<views::Widget> holder) {
+    const HWND pane = holder ? views::HWNDForWidget(holder.get()) : nullptr;
+    const HWND focus = GetFocus();
+    if (!pane || !focus || (focus != pane && !IsChild(pane, focus))) {
+      return;
+    }
+    for (Window* window : Window::All()) {
+      if (window->widget() != widget_) {
+        continue;
+      }
+      content::WebContents* shown = Tab::FromId(window->selected());
+      if (shown && holder->GetNativeView()->Contains(shown->GetNativeView())) {
+        dialog_keys::PageFocused(shown);
+      }
+    }
+  }
+
+  // The HWND of the pane showing the window's selected page, or null while that page has no view
+  // in a shown pane, as while it loads.
+  HWND ShownPane() {
+    for (Window* window : Window::All()) {
+      if (window->widget() != widget_) {
+        continue;
+      }
+      content::WebContents* shown = Tab::FromId(window->selected());
+      if (!shown) {
+        return nullptr;
+      }
+      for (Slot& slot : panes_) {
+        if (slot.widget && slot.widget->GetNativeView()->Contains(shown->GetNativeView())) {
+          HWND pane = views::HWNDForWidget(slot.widget.get());
+          return IsWindowVisible(pane) ? pane : nullptr;
+        }
+      }
+    }
+    return nullptr;
+  }
+
+  // The window's child |hwnd| is or is in, the UI's or a pane's, or null if it's none of them.
+  HWND ChildHolding(HWND hwnd) const {
+    if (!hwnd || !IsChild(window(), hwnd)) {
+      return nullptr;
+    }
+    while (GetParent(hwnd) != window()) {
+      hwnd = GetParent(hwnd);
+    }
+    return hwnd;
   }
 
   // Takes |view| out of |holder| if it's there, so closing a slot never deletes a page, and hides
@@ -602,19 +766,35 @@ class WindowViews : public views::WidgetObserver,
     } else {
       slot.page->SetBounds(bounds);
     }
+    double radius = slot.corner_radius.value_or(corner_radius_);
+    gfx::Rect shown(pixels.size());
+    if (&slot == &preview_) {
+      shown = DrawnIn(frame, scale, shown);
+      radius *= preview_drawn_.scale;
+    }
     // shortcut: a window region's corners are aliased, unlike Core Animation's on the Mac; upgrade
     // to a DirectComposition clip if the edge shows.
-    const int diameter =
-        base::ClampRound(2 * slot.corner_radius.value_or(corner_radius_) * scale);
-    HRGN region = CreateRoundRectRgn(0, 0, pixels.width() + 1, pixels.height() + 1, diameter,
-                                     diameter);
+    const int diameter = base::ClampRound(2 * radius * scale);
+    HRGN region = shown.IsEmpty() ? CreateRectRgn(0, 0, 0, 0)
+                                  : CreateRoundRectRgn(shown.x(), shown.y(), shown.right() + 1,
+                                                       shown.bottom() + 1, diameter, diameter);
     if (slot.bottom_corners_only) {
       HRGN top = CreateRectRgn(0, 0, pixels.width(), pixels.height() / 2);
       CombineRgn(region, region, top, RGN_OR);
       DeleteObject(top);
     }
-    // The window owns the region from here.
-    SetWindowRgn(hwnd, region, TRUE);
+    // Only a region that changed: each tab switch lays the pane out again at the same size, and
+    // setting an equal region still makes Windows send the pane its frame's messages and redraw it,
+    // about 0.4 ms of each switch before its frame (#2377).
+    HRGN current = CreateRectRgn(0, 0, 0, 0);
+    const bool same = GetWindowRgn(hwnd, current) != ERROR && EqualRgn(current, region);
+    DeleteObject(current);
+    if (same) {
+      DeleteObject(region);
+    } else {
+      // The window owns the region from here.
+      SetWindowRgn(hwnd, region, TRUE);
+    }
   }
 
   // Shows |page|, a link preview's, at |frame| over the pages shown, in place of the preview it
@@ -624,6 +804,7 @@ class WindowViews : public views::WidgetObserver,
     aura::Window* parent = holder->GetNativeView();
     if (preview_.page != page) {
       Empty(preview_);
+      preview_drawn_ = Drawn();
       if (page->parent()) {
         page->parent()->RemoveChild(page);
       }
@@ -635,6 +816,46 @@ class WindowViews : public views::WidgetObserver,
     preview_.insets = InsetsOf(frame, ContentSize());
     ShowInactive(holder);
     LayOut();
+  }
+
+  // Draws the link preview's page at |scale| of its frame about |about|, in the window's content,
+  // and at |opacity|, so it's never laid out again for it: its child window stays at its frame and
+  // shows only where the page is drawn, and the page blends with the window's background there,
+  // not with the page under it.
+  void DrawPreview(aura::Window* page, float scale, const gfx::PointF& about, float opacity) {
+    if (preview_.page != page) {
+      return;
+    }
+    preview_drawn_ = {scale, about, opacity};
+    LayOut(preview_, ContentSize(), Scale());
+  }
+
+  // As the preview's slot is laid out at |frame|, |pixels| in its child window: its content's
+  // transform and opacity, and where in the window it shows, in pixels.
+  gfx::Rect DrawnIn(const gfx::Rect& frame, float scale, const gfx::Rect& pixels) {
+    const Drawn& drawn = preview_drawn_;
+    aura::Window* content = preview_.widget->GetNativeView();
+    const float in_x = drawn.about.x() - frame.x();
+    const float in_y = drawn.about.y() - frame.y();
+    gfx::Transform transform;
+    if (drawn.scale != 1) {
+      transform.Translate(in_x, in_y);
+      transform.Scale(drawn.scale, drawn.scale);
+      transform.Translate(-in_x, -in_y);
+    }
+    if (content->transform() != transform) {
+      content->SetTransform(transform);
+    }
+    content->layer()->SetOpacity(drawn.opacity);
+    if (drawn.opacity <= 0) {
+      return gfx::Rect();
+    }
+    if (drawn.scale == 1) {
+      return pixels;
+    }
+    const gfx::RectF shown(in_x * (1 - drawn.scale), in_y * (1 - drawn.scale),
+                           frame.width() * drawn.scale, frame.height() * drawn.scale);
+    return gfx::ToEnclosingRect(gfx::ScaleRect(shown, scale));
   }
 
   // aura::WindowObserver: a page or DevTools a slot holds is going.
@@ -712,14 +933,38 @@ class WindowViews : public views::WidgetObserver,
       alt_taps::Deactivated(hwnd);
       HWND focus = GetFocus();
       had_keyboard_ = focus && IsChild(hwnd, focus) ? focus : nullptr;
+      pressed_ = nullptr;
+      if (!std::exchange(in_back_, true)) {
+        presses::Wait(hwnd);
+      }
+    } else if (message == WM_ACTIVATE) {
+      // By a press, on the UI or a pane, or by the keyboard or the taskbar. Not always
+      // WA_CLICKACTIVE: a press on the UI activates the window from inside its holder's SetFocus
+      // (WM_PARENTNOTIFY), before Windows sends WM_MOUSEACTIVATE (#2910).
+      pressed_ = ChildHolding(presses::Pressed(hwnd));
+      if (std::exchange(in_back_, false)) {
+        presses::StopWaiting();
+      }
     } else if (message == WM_SETFOCUS) {
       HWND from = reinterpret_cast<HWND>(w_param);
       HWND had = std::exchange(had_keyboard_, nullptr);
+      HWND pressed = std::exchange(pressed_, nullptr);
+      // Not for a press elsewhere, on the UI or another pane, which takes the keyboard itself: a
+      // tab's dialog in the pane took it from the pane then, from the UI the user pressed (#2910).
+      // Coming back by the keyboard or the taskbar, or by a press on that pane, the pane takes it
+      // back, and a dialog there takes it from the pane, wherever the pointer is.
       if (had && from != hwnd && !(from && IsChild(hwnd, from)) && IsChild(hwnd, had) &&
-          IsWindowVisible(had)) {
+          IsWindowVisible(had) && !(pressed && pressed != ChildHolding(had))) {
         SetFocus(had);
       }
     } else if (message == WM_SIZE) {
+      // Windows activates a minimized window before it restores it, as the second Win+D does, and
+      // gives the keyboard to nothing then or as it restores it, so no WM_SETFOCUS comes and keys
+      // reached no view (#2635). The window takes it back as it's restored.
+      if (w_param != SIZE_MINIMIZED && !GetFocus() && GetActiveWindow() == hwnd) {
+        HWND had = std::exchange(had_keyboard_, nullptr);
+        SetFocus(had && IsChild(hwnd, had) && IsWindowVisible(had) ? had : hwnd);
+      }
       SizeChanged(w_param);
     } else if (message == WM_DPICHANGED) {
       // The pages go again at the new scale once Chromium has taken it and the window's new rect,
@@ -761,6 +1006,8 @@ class WindowViews : public views::WidgetObserver,
   Slot side_panel_;
   // A link preview's page, over the panes.
   Slot preview_;
+  // How its page is drawn for the card's motion (DrawPreview).
+  Drawn preview_drawn_;
   // After the slots, so it leaves its holder before that goes.
   FocusRing ring_;
   double corner_radius_ = 0;
@@ -769,6 +1016,11 @@ class WindowViews : public views::WidgetObserver,
   // The UI has the keyboard while no page shows, for the next page shown (KeyboardForPage).
   bool ui_holds_for_page_ = false;
   HWND had_keyboard_ = nullptr;
+  // The UI or the pane a press activating the window was on, from WM_ACTIVATE until the window
+  // takes the keyboard; null when the keyboard or the taskbar activated it.
+  HWND pressed_ = nullptr;
+  // Between going to the back and coming forward, while presses::Wait() counts it.
+  bool in_back_ = false;
   // The DPI the last WM_DPICHANGED carried, 0 before one comes (Scale).
   UINT dpi_ = 0;
   bool minimized_ = false;
@@ -984,15 +1236,47 @@ void HidePages(views::Widget* widget) {
 // The app's view for a link preview is an overlay of its own over the window, which can't hold a
 // page, as on Linux, so the page shows in the window over its pages, where the overlay leaves a
 // hole, and the card the app draws round that.
+// The app shows the page through its hole the frame after placing it, as no run showed it late
+// here (#2640), so nothing waits for it to be on screen.
 void ShowPageIn(views::Widget* widget,
                 gfx::NativeView page,
                 void*,
                 const gfx::Rect& frame,
-                double corner_radius) {
+                double corner_radius,
+                base::OnceClosure) {
   WindowViews* views = widget ? ViewsOf(widget) : nullptr;
   if (views && page) {
     views->ShowPreview(page, frame, corner_radius);
   }
+}
+
+void DrawPageIn(views::Widget* widget,
+                gfx::NativeView page,
+                float scale,
+                const gfx::PointF& about,
+                float opacity) {
+  WindowViews* views = widget ? ViewsOf(widget) : nullptr;
+  if (views && page) {
+    views->DrawPreview(page, scale, about, opacity);
+  }
+}
+
+std::optional<std::pair<gfx::Rect, gfx::Rect>> DevToolsFrames(views::Widget* widget) {
+  // Aura windows in the pane's one HWND, which Windows doesn't see: DevTools fill the pane, and the
+  // page is at its place in them (LayOut), each from the pane's top-left.
+  WindowViews* views = ViewsOf(widget);
+  if (!views) {
+    return std::nullopt;
+  }
+  for (Slot& slot : views->panes()) {
+    if (slot.widget && slot.page && slot.devtools && slot.devtools->IsVisible()) {
+      gfx::Rect frame(views->ContentSize());
+      frame.Inset(slot.insets);
+      const gfx::Vector2d at = frame.OffsetFromOrigin();
+      return std::pair(slot.devtools->bounds() + at, slot.page->bounds() + at);
+    }
+  }
+  return std::nullopt;
 }
 
 std::optional<gfx::Rect> FocusRingFrame(views::Widget* widget) {
@@ -1042,6 +1326,99 @@ bool FocusSettledOnActivation() {
   return false;
 }
 
+namespace {
+
+// Answers |widget|'s hit test with HTTRANSPARENT, so the pointer goes to the window of the same
+// thread under it, the browser window, as views' accept_events doesn't for a popup. Goes with the
+// widget.
+class PassThrough : public ui::HWNDMessageFilter, public views::WidgetObserver {
+ public:
+  explicit PassThrough(views::Widget* widget) {
+    ui::HWNDSubclass::AddFilterToTarget(views::HWNDForWidget(widget), this);
+    observation_.Observe(widget);
+  }
+
+  // ui::HWNDMessageFilter:
+  bool FilterMessage(HWND, UINT message, WPARAM, LPARAM, LRESULT* result) override {
+    if (message != WM_NCHITTEST) {
+      return false;
+    }
+    *result = HTTRANSPARENT;
+    return true;
+  }
+
+  // views::WidgetObserver:
+  void OnWidgetDestroying(views::Widget*) override {
+    ui::HWNDSubclass::RemoveFilterFromAllTargets(this);
+    observation_.Reset();
+    delete this;
+  }
+
+ private:
+  base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{this};
+};
+
+// Hears the origins a move loop proposes for a window it moves as an outline, which WM_MOVING gives
+// it whether or not it shows the window's contents.
+class OutlineMoves : public ui::HWNDMessageFilter {
+ public:
+  OutlineMoves(HWND window, base::RepeatingCallback<void(const gfx::Point&)> moved)
+      : moved_(std::move(moved)) {
+    ui::HWNDSubclass::AddFilterToTarget(window, this);
+  }
+  ~OutlineMoves() override { ui::HWNDSubclass::RemoveFilterFromAllTargets(this); }
+
+  // ui::HWNDMessageFilter:
+  bool FilterMessage(HWND window, UINT message, WPARAM, LPARAM l_param, LRESULT*) override {
+    if (message == WM_MOVING) {
+      // The window's rectangle in pixels, converted as views converts the window's bounds
+      // (DesktopWindowTreeHostWin::GetWindowBoundsInScreen) once it's there: by the display
+      // nearest it, where the window isn't yet.
+      proposed_ = gfx::Rect(*reinterpret_cast<const RECT*>(l_param));
+      moved_.Run(display::win::GetScreenWin()->ScreenToDIPRect(nullptr, *proposed_).origin());
+    } else if (message == WM_EXITSIZEMOVE && proposed_) {
+      // Where the window landed beside the outline's last place, in pixels and in the DIPs each
+      // gives the move watch, which counts a move only where they differ. check.sh reads this line.
+      RECT landed;
+      ::GetWindowRect(window, &landed);
+      display::win::ScreenWin* screen = display::win::GetScreenWin();
+      LOG(ERROR) << "browser: outline move ended at " << proposed_->origin().ToString() << " ("
+                 << screen->ScreenToDIPRect(nullptr, *proposed_).origin().ToString()
+                 << " DIPs), the window at " << gfx::Rect(landed).origin().ToString() << " ("
+                 << screen->ScreenToDIPRect(window, gfx::Rect(landed)).origin().ToString()
+                 << " DIPs)";
+    }
+    return false;
+  }
+
+ private:
+  base::RepeatingCallback<void(const gfx::Point&)> moved_;
+  // The outline's last place, in pixels.
+  std::optional<gfx::Rect> proposed_;
+};
+
+}  // namespace
+
+base::ScopedClosureRunner WatchOutlineMoves(
+    views::Widget* widget,
+    base::RepeatingCallback<void(const gfx::Point&)> moved) {
+  BOOL contents = TRUE;
+  if (!SystemParametersInfo(SPI_GETDRAGFULLWINDOWS, 0, &contents, 0) || contents) {
+    return base::ScopedClosureRunner();
+  }
+  return base::ScopedClosureRunner(base::DoNothingWithBoundArgs(
+      std::make_unique<OutlineMoves>(views::HWNDForWidget(widget), std::move(moved))));
+}
+
+void PassPointerThrough(views::Widget* widget) {
+  new PassThrough(widget);
+}
+
+std::optional<base::TimeTicks> PointerEventTime() {
+  // A message's time is the tick count's, 10 to 16 ms a step, as coarse as a throw's moves.
+  return std::nullopt;
+}
+
 bool PageDialogsInOwnWindow() {
   // Aura would draw it in the window's HWND, under the UI's and the pages' child HWNDs.
   return true;
@@ -1074,8 +1451,24 @@ bool KeyboardForPage(views::Widget* widget) {
 void ReleaseKeyboard(views::Widget* widget) {
   if (WindowViews* views = ViewsOf(widget)) {
     views->set_ui_holds_for_page(false);
-    SetFocus(views->window());
+    // Straight to the shown page's pane, so Windows tells of no focus on the window before the
+    // page's own: NVDA takes 40–55 ms over the window's, and takes the page's two that come in
+    // that time as one, the control's, which its browse mode then ignores (#3396). To the window
+    // itself, which KeyboardForPage counts as the page's, while the page has no view shown yet or
+    // the window isn't the active one, or is minimized, where Windows keeps it on the window. And
+    // while the pane has it already, as its DevTools may: the pane gives it up and the page takes
+    // it back, as before.
+    const HWND window = views->window();
+    const HWND pane =
+        GetActiveWindow() == window && !IsIconic(window) ? views->ShownPane() : nullptr;
+    const HWND focus = GetFocus();
+    const bool pane_has = focus && (focus == pane || IsChild(pane, focus));
+    SetFocus(pane && !pane_has ? pane : window);
   }
+}
+
+bool EndKeyboardLoans(views::Widget*) {
+  return false;
 }
 
 bool OverlayHasKeyboard(views::Widget* widget) {

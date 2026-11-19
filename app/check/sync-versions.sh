@@ -1,3 +1,6 @@
+# check.sh runs this at 710, only when named.
+# It installs the release ILO_OLD names as ilo's Flatpak, on Linux under Xvfb, so it runs only
+# when named.
 # An older ilo beside this one on one account (#2108): this build is A, and B is the release
 # ILO_OLD names, installed as ilo's Flatpak, app.ilo.browser, which the run drives in its sandbox,
 # on an ilo-server of the run's own (ilo-server.sh) and a throwaway address. A signs in first and

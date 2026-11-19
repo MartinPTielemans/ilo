@@ -3,29 +3,46 @@
 #include <algorithm>
 #include <cmath>
 #include <optional>
+#include <string>
+#include <utility>
+#include <vector>
 
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/location.h"
 #include "base/logging.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
 #include "base/scoped_observation.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/stringprintf.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "browser_core/hooks.h"
 #include "browser_core/mini_player_place.h"
+#include "browser_core/platform/window_views.h"
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
+#include "chrome/browser/ui/views/overlay/minimize_button.h"
 #include "chrome/browser/ui/views/overlay/video_overlay_window_views.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
+#include "components/viz/common/frame_timing_details.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "ui/compositor/compositor.h"
+#include "ui/compositor/compositor_animation_observer.h"
 #include "ui/compositor/layer.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/events/event.h"
 #include "ui/events/event_constants.h"
+#include "ui/gfx/animation/animation.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
@@ -38,7 +55,10 @@
 #include "ui/views/background.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/highlight_path_generator.h"
+#include "ui/views/controls/image_view.h"
+#include "ui/views/controls/label.h"
 #include "ui/views/view.h"
+#include "ui/views/view_utils.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_observer.h"
 
@@ -69,19 +89,78 @@ base::WeakPtr<views::Widget> g_made;
 
 int g_shows = 0;
 
+#if BUILDFLAG(IS_MAC)
+// The window the Mini Player took the keyboard from, for the rest of the task it took it in: AppKit
+// makes the Mini Player key as a press on it comes, in the same task as the press reaches it.
+bc_id g_took_from = 0;
+// The window a press that made the Mini Player key gives the keyboard back to as it ends.
+bc_id g_give_back_to = 0;
+
+// As the Mac's own floating video, a press on the Mini Player, a drag or a click on its buttons,
+// leaves the keyboard where it was (#2896): the window that had it has it back as the press ends,
+// while the app is still active, which the Mini Player's still having it says. One made key
+// another way, by window cycling or VoiceOver, keeps it through a press, for its controls' keys.
+void GiveKeyboardBack(views::Widget* window) {
+  Window* to = Window::FromId(std::exchange(g_give_back_to, 0));
+  if (!to || !to->widget() || !window->IsActive()) {
+    return;
+  }
+  // check.sh reads this line.
+  LOG(ERROR) << "browser: mini player pressed gave the keyboard back";
+  to->widget()->Activate();
+}
+#endif
+
 // Tells the windows as the Mini Player takes the keyboard, which on Linux can come after the window
-// that let it go asked whether it had (MiniPlayerHasKeyboard).
-class KeyboardWatch : public views::WidgetObserver {
+// that let it go asked whether it had (MiniPlayerHasKeyboard). And logs it showing, and its first
+// frame on screen, on the clock of the tab switch that floated it (LogHandover).
+class MiniPlayerWatch : public views::WidgetObserver {
  public:
   void Watch(views::Widget* widget) {
     observation_.Reset();
     observation_.Observe(widget);
   }
 
-  void OnWidgetActivationChanged(views::Widget* widget, bool active) override {
-    if (active) {
-      Window::MiniPlayerTookKeyboard();
+  void OnWidgetVisibilityChanged(views::Widget* widget, bool visible) override {
+    if (!visible) {
+      return;
     }
+    // check.sh reads these lines.
+    LogHandover("mini player shows", widget->GetWindowBoundsInScreen().size().ToString());
+    if (ui::Compositor* compositor = widget->GetCompositor()) {
+      compositor->RequestSuccessfulPresentationTimeForNextFrame(base::BindOnce(
+          [](base::WeakPtr<views::Widget> widget, const viz::FrameTimingDetails& timing) {
+            if (!widget) {
+              return;
+            }
+            // Its size as its first frame is presented, not as it showed: Chrome can resize it
+            // after the show, in the same task, as for its automatic Picture in Picture question
+            // (#2822).
+            std::string detail = widget->GetWindowBoundsInScreen().size().ToString();
+            // The time is when this ran on the UI thread. Beside it, when the frame was
+            // presented, so a UI thread late to run it shows apart from a late frame (#3181).
+            if (const std::optional<base::TimeDelta> presented =
+                    SinceHandoverClicked(timing.presentation_feedback.timestamp)) {
+              detail += base::StringPrintf(", presented at %.1f ms", presented->InMillisecondsF());
+            }
+            LogHandover("mini player on screen", detail);
+          },
+          widget->GetWeakPtr()));
+    }
+  }
+
+  void OnWidgetActivationChanged(views::Widget* widget, bool active) override {
+    if (!active) {
+      return;
+    }
+#if BUILDFLAG(IS_MAC)
+    Window* from = Window::MiniPlayerTookKeyboard();
+    g_took_from = from ? from->id() : 0;
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce([] { g_took_from = 0; }));
+#else
+    Window::MiniPlayerTookKeyboard();
+#endif
   }
 
   void OnWidgetDestroying(views::Widget* widget) override { observation_.Reset(); }
@@ -90,18 +169,148 @@ class KeyboardWatch : public views::WidgetObserver {
   base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{this};
 };
 
-KeyboardWatch& Watching() {
-  static base::NoDestructor<KeyboardWatch> watch;
+MiniPlayerWatch& Watching() {
+  static base::NoDestructor<MiniPlayerWatch> watch;
   return *watch;
+}
+
+// When the pointer event being handled happened, as the system says, or else now: a busy UI thread
+// gets to a throw's last move and its release late, and times taken then read it as a rest (#3415).
+[[maybe_unused]] base::TimeTicks PointerTime() {
+  return platform::PointerEventTime().value_or(base::TimeTicks::Now());
+}
+
+// Where a Mini Player was each time its move loop moved it, for the speed it's let go at. Where the
+// loop moves only its outline, and the window at the release, it's where the outline was (#3062).
+class MoveWatch : public views::WidgetObserver {
+ public:
+  explicit MoveWatch(views::Widget* widget)
+      : outline_(platform::WatchOutlineMoves(
+            widget,
+            base::BindRepeating(&MoveWatch::OutlineMoved, base::Unretained(this)))) {
+    moves_.Window(widget->GetWindowBoundsInScreen().origin(), PointerTime());
+    observation_.Observe(widget);
+  }
+
+  gfx::Vector2dF Velocity(base::TimeTicks released) const {
+    return MiniPlayerReleaseVelocity(moves_.moves(), released);
+  }
+  gfx::Vector2dF LastMove(base::TimeTicks released) const {
+    return MiniPlayerLastMove(moves_.moves(), released);
+  }
+
+  // views::WidgetObserver:
+  void OnWidgetBoundsChanged(views::Widget* widget, const gfx::Rect& bounds) override {
+    moves_.Window(bounds.origin(), PointerTime());
+  }
+  void OnWidgetDestroying(views::Widget* widget) override { observation_.Reset(); }
+
+ private:
+  void OutlineMoved(const gfx::Point& at) { moves_.Outline(at, PointerTime()); }
+
+  MiniPlayerMoves moves_;
+  base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{this};
+  base::ScopedClosureRunner outline_;
+};
+
+// Settles a Mini Player let go onto its rest, on the spring its release starts, moving it a frame
+// at a time as the window's compositor draws, and no longer.
+class Settle : public ui::CompositorAnimationObserver, public views::WidgetObserver {
+ public:
+  void Start(views::Widget* widget, const gfx::Rect& rest, const gfx::Vector2dF& velocity) {
+    Stop();
+    const gfx::Rect from = widget->GetWindowBoundsInScreen();
+    ui::Compositor* compositor = widget->GetCompositor();
+    // Under Reduce Motion it goes there at once, as Dia skips its throw.
+    if (!compositor || gfx::Animation::PrefersReducedMotion()) {
+      widget->SetBounds(rest);
+      return;
+    }
+    widget_ = widget;
+    compositor_ = compositor;
+    rest_ = rest;
+    offset_ = gfx::Vector2dF(from.x() - rest.x(), from.y() - rest.y());
+    velocity_ = velocity;
+    seconds_ = MiniPlayerSettleSeconds(offset_, velocity_);
+    start_.reset();
+    observation_.Observe(widget);
+    compositor->AddAnimationObserver(this);
+  }
+
+  void Stop() {
+    if (compositor_) {
+      compositor_->RemoveAnimationObserver(this);
+    }
+    compositor_ = nullptr;
+    widget_ = nullptr;
+    observation_.Reset();
+  }
+
+  // Where |widget| is going, while it settles.
+  std::optional<gfx::Rect> Rest(const views::Widget* widget) const {
+    return widget_ && widget_ == widget ? std::optional<gfx::Rect>(rest_) : std::nullopt;
+  }
+
+  // ui::CompositorAnimationObserver:
+  void OnAnimationStep(base::TimeTicks now) override {
+    if (!start_) {
+      start_ = now;
+    }
+    const double seconds = (now - *start_).InSecondsF();
+    gfx::Rect at = rest_;
+    views::Widget* widget = widget_;
+    if (seconds >= seconds_) {
+      Stop();
+    } else {
+      at.Offset(gfx::ToRoundedVector2d(MiniPlayerSpring(offset_, velocity_, seconds)));
+    }
+    widget->SetBounds(at);
+  }
+  void OnCompositingShuttingDown(ui::Compositor* compositor) override { Stop(); }
+
+  // views::WidgetObserver:
+  void OnWidgetDestroying(views::Widget* widget) override { Stop(); }
+
+ private:
+  raw_ptr<views::Widget> widget_ = nullptr;
+  raw_ptr<ui::Compositor> compositor_ = nullptr;
+  gfx::Rect rest_;
+  gfx::Vector2dF offset_;
+  gfx::Vector2dF velocity_;
+  double seconds_ = 0;
+  std::optional<base::TimeTicks> start_;
+  base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{this};
+};
+
+Settle& Settling() {
+  static base::NoDestructor<Settle> settle;
+  return *settle;
+}
+
+// |window| let go at |released| after its move loop, which |watch| watched: thrown or caught by a
+// side, it settles at its rest, on the screen it's mostly on. The Mac's and Windows' alone: Linux's
+// window manager or compositor moves it, and lets it go without the core hearing.
+[[maybe_unused]] void LetGo(views::Widget* window, const MoveWatch& watch,
+                            base::TimeTicks released) {
+  const gfx::Rect bounds = window->GetWindowBoundsInScreen();
+  const gfx::Vector2dF velocity = watch.Velocity(released);
+  const std::optional<gfx::Rect> rest =
+      MiniPlayerRest(bounds, velocity, watch.LastMove(released),
+                     display::Screen::Get()->GetDisplayMatching(bounds).work_area());
+  // check.sh reads this line.
+  LOG(ERROR) << "browser: mini player let go at " << bounds.x() << " " << bounds.y()
+             << " moving at " << std::lround(velocity.x()) << " " << std::lround(velocity.y())
+             << (rest ? ", settling at " + base::NumberToString(rest->x()) + " " +
+                            base::NumberToString(rest->y())
+                      : std::string(", staying"));
+  if (rest && *rest != bounds) {
+    Settling().Start(window, *rest, velocity);
+  }
 }
 
 // Where the last Mini Player was left, for the next, across launches as Arc's LastPiPPosition:
 // app-wide, in local state, so every profile's and a private window's share it.
 constexpr char kLeftPref[] = "browser_core.mini_player_left";
-
-void RegisterPrefs(PrefRegistrySimple* registry) {
-  registry->RegisterDictionaryPref(kLeftPref);
-}
 
 std::optional<gfx::Rect> LastLeft() {
   const base::DictValue& left = g_browser_process->local_state()->GetDict(kLeftPref);
@@ -132,6 +341,8 @@ gfx::Rect Placed(VideoOverlayWindowViews* window,
     placed.AdjustToFit(work_area);
     return placed;
   }
+  // A new one isn't the last one's settle.
+  Settling().Stop();
   ++g_shows;
   const std::optional<gfx::Rect> left = LastLeft();
   // A kept place's screen, or the nearest, if the screens changed since.
@@ -150,7 +361,9 @@ void Left(VideoOverlayWindowViews* window) {
   if (!window->IsVisible()) {
     return;
   }
-  const gfx::Rect left = window->GetWindowBoundsInScreen();
+  // Where it was going, if it was settling, which stops with it.
+  const gfx::Rect left = Settling().Rest(window).value_or(window->GetWindowBoundsInScreen());
+  Settling().Stop();
   g_browser_process->local_state()->SetDict(kLeftPref, base::DictValue()
                                                            .Set("x", left.x())
                                                            .Set("y", left.y())
@@ -201,6 +414,17 @@ void Scrolled(VideoOverlayWindowViews* window, const gfx::Vector2dF& offset, int
 }
 
 bool OnEvent(VideoOverlayWindowViews* window, ui::Event* event) {
+  // The user's own moves and sizes take it from a settle.
+  switch (event->type()) {
+    case ui::EventType::kMousewheel:
+    case ui::EventType::kScroll:
+    case ui::EventType::kGesturePinchUpdate:
+    case ui::EventType::kMousePressed:
+      Settling().Stop();
+      break;
+    default:
+      break;
+  }
   switch (event->type()) {
     case ui::EventType::kMousewheel:
       Scrolled(window, gfx::Vector2dF(event->AsMouseWheelEvent()->offset()), event->flags());
@@ -216,6 +440,9 @@ bool OnEvent(VideoOverlayWindowViews* window, ui::Event* event) {
       break;
     case ui::EventType::kMousePressed: {
       g_pressed.reset();
+#if BUILDFLAG(IS_MAC)
+      g_give_back_to = std::exchange(g_took_from, 0);
+#endif
       const ui::MouseEvent* mouse = event->AsMouseEvent();
       if (!mouse->IsOnlyLeftMouseButton()) {
         return false;
@@ -253,14 +480,26 @@ bool OnEvent(VideoOverlayWindowViews* window, ui::Event* event) {
 #else
       // As Chrome's caption would, but the window sees the press first. It may be gone after.
       if (window->IsMoveLoopSupported()) {
+        const base::WeakPtr<views::Widget> moved = window->GetWeakPtr();
+        MoveWatch watch(window);
         window->RunMoveLoop(press.OffsetFromOrigin(), views::Widget::MoveLoopSource::kMouse,
                             views::Widget::MoveLoopEscapeBehavior::kDontHide);
+        // The loop returns as the button comes up, with that event the one being handled.
+        if (moved) {
+          LetGo(moved.get(), watch, PointerTime());
+#if BUILDFLAG(IS_MAC)
+          GiveKeyboardBack(moved.get());
+#endif
+        }
       }
 #endif
       return true;
     }
     case ui::EventType::kMouseReleased:
       g_pressed.reset();
+#if BUILDFLAG(IS_MAC)
+      GiveKeyboardBack(window);
+#endif
       return false;
     default:
       return false;
@@ -282,6 +521,11 @@ constexpr SkColor kButton = SkColorSetA(SK_ColorWHITE, 0x17);
 // The white ink drop's highlight over the button's 0.09, together about 0.13.
 constexpr float kButtonHover = 0.045f;
 
+// Between the × and Chrome's favicon, and the origin's end and the button after it.
+constexpr int kTitleGap = 8;
+// Between Chrome's favicon and its origin, as Chrome has it.
+constexpr int kFaviconGap = 4;
+
 // The rim's view, among the window's own, found again at each layout.
 constexpr int kRimId = 0x1b0;
 
@@ -299,6 +543,57 @@ void Restyle(views::View* button, const gfx::Size& size) {
   if (views::InkDrop::Get(button)) {
     views::InkDrop::Get(button)->SetHighlightOpacity(kButtonHover);
   }
+}
+
+// The first child of |parent| that's a |T|, as Chrome's views have no getters for these.
+template <typename T>
+T* ChildOf(views::View* parent) {
+  if (!parent) {
+    return nullptr;
+  }
+  for (views::View* child : parent->children()) {
+    if (T* found = views::AsViewClass<T>(child)) {
+      return found;
+    }
+  }
+  return nullptr;
+}
+
+// Chrome's origin, the label in its title by the favicon.
+views::Label* Origin(VideoOverlayWindowViews* window) {
+  return ChildOf<views::Label>(window->GetTitleView());
+}
+
+// Chrome's origin, its word on whose video this is, and its favicon, beside the × rather than under
+// it, now that the × is at the top left: on the buttons' row, the origin ending short of the "–",
+// or of back to the tab without one, and eliding its start as Chrome's does. The "–" goes on the
+// row too. Returns the "–".
+views::View* PlaceTitle(VideoOverlayWindowViews* window,
+                        const gfx::Size& size,
+                        views::View* close) {
+  views::View* minimize = ChildOf<OverlayWindowMinimizeButton>(window->GetControlsContainerView());
+  const int middle = kButtonInset + kCloseSize.height() / 2;
+  int end = size.width() - kButtonInset - kBackSize.width();
+  if (minimize) {
+    minimize->SetY(middle - minimize->height() / 2);
+    if (minimize->GetVisible()) {
+      end = std::min(end, minimize->x());
+    }
+  }
+  views::View* title = window->GetTitleView();
+  views::ImageView* favicon = ChildOf<views::ImageView>(title);
+  views::Label* origin = Origin(window);
+  if (!close || !favicon || !origin) {
+    return minimize;
+  }
+  favicon->SetPosition(
+      gfx::Point(close->bounds().right() + kTitleGap, middle - favicon->height() / 2));
+  const int left = favicon->bounds().right() + kFaviconGap;
+  origin->SetBounds(left, middle - origin->height() / 2, std::max(0, end - kTitleGap - left),
+                    origin->height());
+  // The title clips what's in it, and Chrome sizes it to its own row.
+  title->SetBounds(0, 0, size.width(), 2 * kButtonInset + kCloseSize.height());
+  return minimize;
 }
 
 // Once Chrome has laid out |window|'s controls, as it shows and each time it's sized: Dia's look.
@@ -326,10 +621,12 @@ void LaidOut(VideoOverlayWindowViews* window) {
     rim->layer()->SetFillsBoundsOpaquely(false);
     rim->SetCanProcessEventsWithinSubtree(false);
     rim->SetBorder(views::CreateRoundedRectBorder(1, kCornerRadius, kRim));
-    // One flat scrim, rather than Chrome's and its gradients at the top and bottom.
+    // One flat scrim, rather than Chrome's and its gradients at the top and bottom. The gradients'
+    // views lose their backgrounds rather than being hidden, since the controls' fade shows each
+    // view it fades in (#2881).
     window->GetControlsScrimView()->SetBackground(views::CreateSolidBackground(kScrim));
-    window->GetControlsTopScrimView()->SetVisible(false);
-    window->GetControlsBottomScrimView()->SetVisible(false);
+    window->GetControlsTopScrimView()->SetBackground(nullptr);
+    window->GetControlsBottomScrimView()->SetBackground(nullptr);
   }
   const gfx::Size size = window->GetBounds().size();
   rim->SetBoundsRect(gfx::Rect(size));
@@ -343,10 +640,14 @@ void LaidOut(VideoOverlayWindowViews* window) {
   if (back) {
     back->SetPosition(gfx::Point(size.width() - kButtonInset - kBackSize.width(), kButtonInset));
   }
+  views::View* minimize = PlaceTitle(window, size, close);
   // check.sh reads this line.
+  views::View* origin = Origin(window);
   LOG(ERROR) << "browser: mini player look " << size.ToString() << " close "
              << (close ? close->bounds().ToString() : "none") << " back "
-             << (back ? back->bounds().ToString() : "none");
+             << (back ? back->bounds().ToString() : "none") << " origin "
+             << (origin ? origin->bounds().ToString() : "none") << " minimize "
+             << (minimize && minimize->GetVisible() ? minimize->bounds().ToString() : "none");
 }
 
 }  // namespace
@@ -356,7 +657,10 @@ void SetUpMiniPlayer() {
   g_browser_core_mini_player_place = &Placed;
   g_browser_core_mini_player_left = &Left;
   g_browser_core_mini_player_laid_out = &LaidOut;
-  g_browser_core_register_local_state = &RegisterPrefs;
+}
+
+void RegisterMiniPlayerPrefs(PrefRegistrySimple* registry) {
+  registry->RegisterDictionaryPref(kLeftPref);
 }
 
 bool MiniPlayerHasKeyboard() {

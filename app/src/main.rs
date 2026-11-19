@@ -34,8 +34,8 @@ use browser::window_frames::{self, Frame};
 use browser::{
     account, boost_editor, capture, command_bar, dialog, dock_dot, elevation::Level,
     folder_preview, hover_card, icon_picker, launch, launch_picture, link_preview, link_target,
-    log, log_in, menu, offer, passwords, site_controls, theme_picker, toast, tooltip, updates,
-    zoom_hud,
+    log, log_in, menu, offer, passwords, site_controls, tab_switcher, theme_picker, toast, tooltip,
+    updates, zoom_hud,
 };
 use gpui::{
     AnyWindowHandle, App, ApplicationHandle, AsyncApp, Bounds, Context, Focusable, Image,
@@ -51,6 +51,9 @@ mod active_window;
 mod agents_core;
 mod bar_picks_host;
 mod browser_windows;
+#[cfg(target_os = "linux")]
+#[path = "../platform/linux/clock.rs"]
+mod clock;
 mod daily_count_host;
 #[cfg(target_os = "linux")]
 #[path = "../platform/linux/drive.rs"]
@@ -103,8 +106,6 @@ mod needs_you;
 #[path = "../platform/linux/overlays.rs"]
 mod overlays;
 #[cfg(target_os = "linux")]
-#[path = "../platform/linux/page_presses.rs"]
-mod page_presses;
 #[cfg(target_os = "linux")]
 #[path = "../platform/linux/panels.rs"]
 mod panels;
@@ -114,6 +115,7 @@ mod popovers;
 #[cfg(target_os = "linux")]
 #[path = "../platform/linux/previews.rs"]
 mod previews;
+mod recent_host;
 #[cfg(target_os = "linux")]
 #[path = "../platform/linux/reduce_motion.rs"]
 mod reduce_motion;
@@ -121,6 +123,7 @@ mod reveal;
 #[cfg(target_os = "linux")]
 #[path = "../platform/linux/reveal_window.rs"]
 mod reveal_window;
+mod safe_start_host;
 mod settings;
 #[cfg(target_os = "linux")]
 #[path = "../platform/linux/settings_window.rs"]
@@ -155,7 +158,9 @@ mod agent_events;
 use agent_events::*;
 mod links;
 use links::*;
+mod link_cards;
 mod little_ilo;
+mod sign_in_close;
 use little_ilo::*;
 mod keys;
 use keys::*;
@@ -175,6 +180,7 @@ use updates_host::*;
 mod quitting;
 mod scripting_host;
 use quitting::*;
+mod ad_block_host;
 mod battery_saver_host;
 use battery_saver_host::*;
 mod other_tabs_host;
@@ -208,6 +214,8 @@ thread_local! {
     static MENUS: RefCell<Menus> = RefCell::default();
     // Whether a menu bar built from MENUS waits for the menu open to close.
     static MENUS_HELD: Cell<bool> = const { Cell::new(false) };
+    // Whether the UI runs on Wayland, which it learns as it starts; never off Linux.
+    static WAYLAND: Cell<bool> = const { Cell::new(false) };
 }
 
 /// The keys area's line for `key`, which a page had, `when` the page sees it or after, gone to
@@ -228,8 +236,25 @@ fn log_key(key: *const bc::bc_key, when: &str, route: &str) {
     );
 }
 
+/// ⇧ alone on a link, outside a field, grows its plate into the link's card (#3080), and the page
+/// still gets the ⇧, which a shift-click on the link needs; Esc takes a card that shows, and the
+/// page doesn't get it. Some(true) for the Esc kept, None for any other key.
+fn link_card_key(tab: bc::bc_id, key: &bc::bc_key) -> Option<bool> {
+    let name = unsafe { CStr::from_ptr(key.key) };
+    if name == c"Shift" && key.modifiers & !bc::BC_MODIFIER_SHIFT == 0 && !key.editing {
+        update_tab_window(tab, |shell, cx| shell.ask_link_card(tab, cx));
+    }
+    let cx = CX.with_borrow(Clone::clone)?;
+    (name == c"Escape" && cx.update(link_target::close_card)).then_some(true)
+}
+
 /// Whether ilo keeps `key` from the page that has it, and where it went.
 fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static str) {
+    // Read at each of the page's keys, whichever way it goes, so the next knows the one before.
+    #[cfg(target_os = "linux")]
+    let repeated_here = held_escape::page_key_repeated(&keystroke(unsafe { &*key }));
+    #[cfg(not(target_os = "linux"))]
+    let repeated_here = false;
     #[cfg(target_os = "linux")]
     if held_escape::keeps_from_page(unsafe { &*key }) {
         return (true, "held escape");
@@ -238,6 +263,9 @@ fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static st
     update_app(hover_card::close);
     // The page has the keyboard, so the sidebar's ring of Focus Sidebar has gone stale.
     update_tab_window(tab, |shell, cx| shell.leave_keys("page", cx));
+    if let Some(kept) = link_card_key(tab, unsafe { &*key }) {
+        return (kept, "link card");
+    }
     if let Some(lost) = link_preview_key(tab, key, true) {
         return (lost, "link preview");
     }
@@ -252,14 +280,20 @@ fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static st
     {
         return (true, "agent bar");
     }
-    // Escape ends Zap on the page, which the page doesn't see (shell/boost.rs).
+    // Escape ends Zap or Arrange on the page, which the page doesn't see (shell/boost.rs).
     if keystroke == "escape"
         && update_tab_window(tab, |shell, cx| {
-            shell.zapping(tab) && shell.escape_boost(cx)
+            (shell.zapping(tab) || shell.arranging(tab)) && shell.escape_boost(cx)
         })
         .unwrap_or(false)
     {
-        return (true, "zap");
+        return (true, "zap or arrange");
+    }
+    // Arrange's keys, ↑ ↓ ⌘Z and escape, are the mode's while it's on, not the page's.
+    if update_tab_window(tab, |shell, cx| shell.run_arrange_key(tab, &keystroke, cx))
+        .unwrap_or(false)
+    {
+        return (true, "arrange");
     }
     if update_tab_window(tab, |shell, cx| {
         shell.run_extension_key(&keystroke, "page", cx)
@@ -273,7 +307,7 @@ fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static st
     let shortcut = cx.as_ref().and_then(|cx| {
         cx.try_read_global(|keys: &shell::UserKeys, _| keys.command_for(&keystroke, false))
     });
-    let repeat = unsafe { platform::host_key_repeated() };
+    let repeat = repeated_here || unsafe { platform::host_key_repeated() };
     let now = Instant::now();
     // Esc in full screen, pressed twice or held, leaves even when the page keeps it (Arc's).
     if keystroke == "escape"
@@ -282,6 +316,8 @@ fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static st
         })
         .unwrap_or(false)
     {
+        // ilo took this Esc, so the next is a first press again, not a second to the page's.
+        SECOND_PRESS.with_borrow_mut(|second| second.declined(&keystroke));
         return (true, "escape in full screen");
     }
     let shortcut = shortcut.flatten().is_some();
@@ -390,6 +426,8 @@ fn restore_spaces(window: bc::bc_id, shell: WindowHandle<Shell>, cx: &mut App) -
 }
 
 unsafe extern "C" fn started(_: *mut c_void) {
+    // Before the first page, which Arrange may lift an element of.
+    boosts_host::set_arrange_lift();
     // Chromium's message loop dispatches GPUI's messages, as its run loop does on the Mac.
     #[cfg(target_os = "windows")]
     gpui_windows::embed();
@@ -416,11 +454,10 @@ unsafe extern "C" fn started(_: *mut c_void) {
                 }
             },
             // The page is in the window's own surface, so GPUI's focus doesn't see it take the
-            // keyboard, nor the Shell hear the press (page_pressed).
+            // keyboard.
             page_pressed: |surface| {
                 if let Some(window) = window_in(surface) {
                     ui_keyboard_left_in(window);
-                    page_pressed_in(window);
                 }
             },
             is_ui: |surface| {
@@ -456,9 +493,16 @@ unsafe extern "C" fn started(_: *mut c_void) {
             true => {
                 // A click in the UI takes the keyboard there, to keep, as Wayland's does: moving
                 // X's input focus into GPUI's window tells the core nothing while it's there,
-                // as after ⌘W, where the UI holds the keys for the page shown next (#1209).
-                fn pressed(ui_view: *mut c_void) {
-                    if let Some(window) = window_in(ui_view) {
+                // as after ⌘W, where the UI holds the keys for the page shown next (#1209), nor
+                // while an overlay has the keyboard, where a window manager activating the window
+                // can put it back up to the window's own after GPUI moved it (#2789). GPUI names
+                // its own window, inside the one the core holds.
+                fn pressed(view: *mut c_void) {
+                    let window = WINDOWS.with(|windows| {
+                        let windows = windows.try_borrow().ok()?;
+                        windows.iter().find(|w| w.view == view).map(|w| w.id)
+                    });
+                    if let Some(window) = window {
                         unsafe { bc::bc_window_ui_takes_keyboard(window) };
                     }
                 }
@@ -472,8 +516,11 @@ unsafe extern "C" fn started(_: *mut c_void) {
             false => {
                 gpui_linux::embed_wayland(display, keyboard);
                 gpui_linux::watch_embedder_swipes(system::swiped);
+                browser::clipboard::read_through(system::read_through_core);
+                browser::clipboard::held_through(gpui_linux::held_clipboard_text);
             }
         }
+        WAYLAND.set(!display.is_null());
         !display.is_null()
     };
     let application = gpui_platform::application().with_assets(shell::Assets);
@@ -554,6 +601,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
         }
         needs_you_host::start(cx);
         daily_count_host::start(cx);
+        safe_start_host::start(cx);
         open_window(None, None, cx);
         // Launched by New Incognito Window while ilo wasn't running, the private window opens
         // over the first.
@@ -639,6 +687,17 @@ unsafe extern "C" fn agent_download(_: *mut c_void, d: *const bc::bc_agent_downl
     agents_core::update(move |agents, cx| agents.download_ended(id, end, cx));
 }
 
+/// What an agent's close that asked the tab's page came to (#3256).
+unsafe extern "C" fn agent_close_answered(_: *mut c_void, tab: u64, answer: c_int) {
+    use browser::agents::Closed;
+    let closed = match answer as u32 {
+        bc::BC_AGENT_CLOSED => Closed::Closed,
+        bc::BC_AGENT_CLOSE_ASKS => Closed::Asks,
+        _ => Closed::Stays,
+    };
+    agents_core::update(move |agents, cx| agents.close_answered(tab, closed, cx));
+}
+
 /// The core's answer to an agent's HTTP request (bc_agent_request).
 unsafe extern "C" fn agent_request_done(
     _: *mut c_void,
@@ -673,6 +732,18 @@ unsafe extern "C" fn agent_request_done(
 }
 
 unsafe extern "C" fn launching(_: *mut c_void) {
+    safe_start_host::launching();
+    ad_block_host::launching();
+    // While Chromium starts, about 280 ms before the first window opens (#2384). Not in a launch
+    // that hands its links to the running ilo: it exits while the drivers load, which crashes it.
+    #[cfg(target_os = "linux")]
+    if !browser::launch::exits_at_lock(std::path::Path::new(&profile_dir())) {
+        gpui_wgpu::WgpuContext::make_instance_early();
+    }
+    #[cfg(target_os = "windows")]
+    if !browser::launch::exits_at_lock(std::path::Path::new(&profile_dir())) {
+        gpui_windows::make_early();
+    }
     unsafe { platform::host_watch_finished_launching(finished_launching) };
     let Ok(profile) = CString::new(profile_dir()) else {
         return;
@@ -736,7 +807,11 @@ unsafe extern "C" fn launching(_: *mut c_void) {
             taken.height
         );
     }
-    let picture = taken.filter(|taken| !maximized && launch_picture::shows(taken, width, height));
+    // A picture of the column on one side, from before the sidebar moved, is none of this
+    // window's (settings::set_sidebar_right).
+    let right = settings::sidebar_right_kept();
+    let picture =
+        taken.filter(|taken| !maximized && launch_picture::shows(taken, width, height, right));
     let (taken_width, taken_height, foot_top) = picture.map_or((0., 0., 0.), |taken| {
         (taken.width, taken.height, taken.foot_top)
     });
@@ -751,6 +826,7 @@ unsafe extern "C" fn launching(_: *mut c_void) {
             taken_width,
             taken_height,
             foot_top,
+            right,
         )
     };
     // check.sh reads this line.
@@ -775,7 +851,18 @@ extern "C" fn became_active() {
         // GTK's settings file, Linux's last word, says nothing as it changes.
         #[cfg(target_os = "linux")]
         follow_reduce_motion(cx);
+        follow_clock(cx);
     });
+}
+
+/// Reads the system's 12- or 24-hour clock, which History's times follow, as the app comes back
+/// from another app, where the user may have changed it, and once after launch (window_opening).
+fn follow_clock(cx: &mut App) {
+    #[cfg(not(target_os = "linux"))]
+    browser::clock::set_twelve_hour(unsafe { platform::host_twelve_hour_clock() });
+    #[cfg(target_os = "linux")]
+    clock::read(cx);
+    let _ = cx;
 }
 
 /// Reads the system's Reduce Motion as the first window opens, before its first frame, and again
@@ -847,11 +934,30 @@ fn profile_dir() -> String {
 /// was `given`, and the callbacks.
 fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
     let profile = profile_dir();
+    // The Flatpak's sandbox has no cameras: Chromium reaches one through PipeWire and the Camera
+    // portal, which asks the user, rather than through a grant of every device (#3166). Without a
+    // portal it falls back to the devices it can see, so it's off outside the sandbox only to keep
+    // a native install as Chrome is.
+    #[cfg(target_os = "linux")]
+    let portal_camera = flatpak::in_flatpak();
+    #[cfg(not(target_os = "linux"))]
+    let portal_camera = false;
     let mut args: Vec<String> = vec![
         format!("--user-data-dir={profile}"),
         // Chrome would copy the app bundle to check its signature against, which an
-        // ad-hoc-signed build doesn't need.
-        "--disable-features=MacAppCodeSignClone".into(),
+        // ad-hoc-signed build doesn't need. And off the Mac, every switch would copy and encode
+        // the tab it leaves for the hover cards of Chrome's tab strip, which ilo never shows: its
+        // own hover card takes its own picture (core/capture.cc, #2377). And Settings' user
+        // journeys, metrics nobody receives, tell Chrome's BrowserView of a change such as Make
+        // default in the search engines page, CHECKing it's there: ilo's windows have none (#2907).
+        // Chrome's toasts too, such as Link copied after a page menu's Copy Link Address: one
+        // anchors to the BrowserView, and with none Chrome CHECKs and ends the browser (#2950).
+        concat!(
+            "--disable-features=MacAppCodeSignClone,TabHoverCardImages,SettingsGlowupJourneys,",
+            "LinkCopiedToast,ImageCopiedToast,VideoFrameCopiedToast,LinkToHighlightCopiedToast,",
+            "ReadingListToast,TranslateToast"
+        )
+        .into(),
         // An idle browser shouldn't wake: Chrome's stack sampling feeds metrics nobody receives,
         // and the allocator's memory reclaim backs off from every 4 s while there's little to give
         // back.
@@ -859,10 +965,18 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         // On the Mac, child processes start from Apéritif helpers, as Chrome's field trial has
         // them: those link the framework at launch, so the kernel binds its constant data clean
         // and shared, where the other helpers load it late and dyld dirties 11.7 MiB of it in each.
+        // On Windows a tab's dialog from Chromium's TabDialogManager, such as 157's warning before
+        // http, takes a window of its own, as the core has the older ones take
+        // (PageDialogsInOwnWindow): drawn in the browser window's, it would be under the pages'
+        // windows, out of sight, and a click on it would reach the page (#2651).
         format!(
             "--enable-features=PartitionAllocAdaptiveMemoryReclaimInterval{}",
             if cfg!(target_os = "macos") {
                 ",AperitifHelpers"
+            } else if cfg!(target_os = "windows") {
+                ",TabModalUsesDesktopWidget"
+            } else if portal_camera {
+                ",WebRtcPipeWireCamera"
             } else {
                 ""
             }
@@ -887,6 +1001,13 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
     {
         args.push(format!("{TEST_HOST}={host}"));
     }
+    // A process that crashes prints its stack to the stderr the browser shares with its child
+    // processes, a piece at a time, so a line of the browser's written meanwhile lands in the
+    // middle of one, where the checks reading the log don't find it (#2496). check.sh keeps
+    // those stacks out with BROWSER_STACK_TRACES=off; a crash still ends the process as before.
+    if std::env::var("BROWSER_STACK_TRACES").is_ok_and(|traces| traces.trim() == "off") {
+        args.push("--disable-in-process-stack-traces".into());
+    }
     // The checks' crash, which has Crashpad write a minidump (core/crash_reports.h).
     const CRASH_TEST: &str = "--crash-after-start";
     // Where the user's crash reports go if they send them, a default service URL that a fork or a
@@ -899,7 +1020,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
     }
     // Where the daily usage count goes, which only the prod build names, unless the process was
     // given it, as a check is. The user's sync server doesn't change it.
-    if let Some(switch) = daily_count_host::prepare(&given, &profile) {
+    if let Some(switch) = daily_count_host::prepare(&given) {
         args.push(switch);
     }
     // The sync server the account signs in to until the user names another, a default service URL
@@ -910,8 +1031,18 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
     if !sync_server.is_empty() && !given.iter().any(|arg| arg.starts_with("--sync-url=")) {
         args.push(format!("--sync-url={sync_server}"));
     }
+    // Whether this launch holds the extensions, which the app decides from its own mark and says
+    // at every launch, so a restart that gives the browser its switches again decides afresh.
+    args.push(safe_start_host::prepare());
+    // Which ad blocker this launch runs, from the user's choice in Settings, decided afresh at
+    // every launch as safe start's is.
+    let ad_blocker = ad_block_host::prepare(&given, &profile);
+    args.extend(ad_blocker.switches());
     let given = given.into_iter().filter(|arg| {
-        !cfg!(feature = "prod") || !(arg.starts_with(TEST_HOST) || arg.starts_with(CRASH_TEST))
+        !arg.starts_with(browser::safe_start::SWITCH)
+            && ad_blocker.passes(arg)
+            && (!cfg!(feature = "prod")
+                || !(arg.starts_with(TEST_HOST) || arg.starts_with(CRASH_TEST)))
     });
     // On Windows and Linux Chromium has started already, with what it was given.
     let chromium_started = cfg!(any(target_os = "windows", target_os = "linux"));
@@ -920,6 +1051,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         .into_iter()
         .filter_map(|arg| CString::new(arg).ok())
         .collect();
+    ad_block_host::keep_cache_in(&args);
     if std::env::var_os("BROWSER_DRIVE").is_some() {
         #[cfg(target_os = "linux")]
         drive::start();
@@ -976,16 +1108,24 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         tab_element_box: Some(tab_element_box),
         tab_link_target: Some(tab_link_target),
         tab_captured: Some(tab_captured),
+        board_capture_added: Some(board_capture_added),
         trace_recorded: Some(trace_recorded),
         tab_pictured: Some(tab_pictured),
         window_suggestions: Some(window_suggestions),
         tab_key_before_page: Some(tab_key_before_page),
+        link_card_fetched: Some(link_cards::link_card_fetched),
         tab_key_unhandled: Some(tab_key_unhandled),
+        tab_focus_leaving: Some(tab_focus_leaving),
         tab_press_before_page: Some(tab_press_before_page),
         tab_press_moved: Some(tab_press_moved),
         tab_press_released: Some(tab_press_released),
+        tab_page_pressed: Some(tab_page_pressed),
         tab_boost_zapped: Some(tab_boost_zapped),
         tab_boost_zap_ended: Some(tab_boost_zap_ended),
+        tab_arrange_state: Some(boosts_host::tab_arrange_state),
+        tab_arrange_ended: Some(boosts_host::tab_arrange_ended),
+        tab_arrange_saved: Some(boosts_host::tab_arrange_saved),
+        tab_arrangement_fits: Some(boosts_host::tab_arrangement_fits),
         held_keys_unclaimed: Some(held_keys_unclaimed),
         tab_media_unsupported: Some(tab_media_unsupported),
         widevine_changed: Some(widevine_changed),
@@ -1013,6 +1153,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         ui_committed: Some(ui_committed),
         history_added: Some(history_added),
         history_deleted: Some(history_deleted),
+        history_listed: Some(history_listed),
         sync_changed: Some(sync_changed),
         sync_pairing_asked: Some(sync_pairing_asked),
         sync_devices_changed: Some(sync_devices_changed),
@@ -1024,6 +1165,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         agent_page_element: Some(agent_page_element),
         agent_download: Some(agent_download),
         agent_request_done: Some(agent_request_done),
+        agent_close_answered: Some(agent_close_answered),
         window_downloads_question: Some(window_downloads_question),
         archive_note_changed: Some(archive_note_changed),
         #[cfg(target_os = "linux")]
@@ -1035,6 +1177,14 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         tab_frozen: Some(tab_frozen),
         other_tabs_changed: Some(other_tabs_changed),
         app_new_window: Some(app_new_window),
+        ad_block_use: Some(ad_block_host::ad_block_use),
+        ad_block_request: Some(ad_block_host::ad_block_request),
+        ad_block_response: Some(ad_block_host::ad_block_response),
+        ad_block_page: Some(ad_block_host::ad_block_page),
+        ad_block_hide: Some(ad_block_host::ad_block_hide),
+        tab_shown_in: Some(tab_shown_in),
+        tab_recent_answered: Some(recent_host::tab_recent_answered),
+        folder_live_answered: Some(spaces::folder_live_answered),
         ..Default::default()
     };
     (args, host)

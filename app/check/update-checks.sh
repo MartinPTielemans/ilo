@@ -1,3 +1,6 @@
+# check.sh runs this at 800, only when named.
+# It builds a check copy of its own (build.sh updates), on the Mac and Windows, so it runs only
+# when named.
 # Settings › About's Check for updates automatically (#1793), on a check build (build.sh updates)
 # whose updater reads a feed the run serves, for updates signed with a key the run makes and
 # deletes after. Neither is ever the product's: the run never reads branding's feeds or the owner's
@@ -32,7 +35,34 @@ update_checks_launch() {
   pid=$!
   exec 3> "$out/drive"
   await_load
-  await '^browser: updater started$' || fail "the check build didn't start its updater"
+  await '^browser: \(updater started\|no updates: .*\)$' ||
+    fail "the check build didn't start its updater, nor say why; $(update_checks_built)"
+  local off
+  if off=$(grep -m1 '^browser: no updates: ' "$log"); then
+    fail "the check build didn't start its updater: ${off#browser: }"
+  fi
+}
+
+# Whether the check build carries the run's feed, which build.rs builds in only when it builds the
+# updater: one without it was built without the run's feed, so it has no updater. Only Windows and
+# the Mac make a check build; Linux's run stops at About's rows, before any launch.
+update_checks_built() {
+  local feed="${site}updates/appcast.xml" file built
+  if windows; then
+    file=Browser.dll
+    grep -aqF "$feed" "$app/$file" && built=1
+  elif [ "$(uname)" = Darwin ]; then
+    file=Info.plist
+    [ "$(plutil -extract SUFeedURL raw "$app/Contents/$file" 2> /dev/null)" = "$feed" ] && built=1
+  else
+    echo "its feed isn't checked on $(uname)"
+    return 0
+  fi
+  if [ -n "${built:-}" ]; then
+    echo "its $file has the run's feed"
+  else
+    echo "its $file hasn't the run's feed, $feed"
+  fi
 }
 
 # Settings' About tab, drawn, with its update row's Check.

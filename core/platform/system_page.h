@@ -29,6 +29,22 @@ namespace browser_core::platform {
 // What a site's data clearing deletes (ClearSiteAndReload, SystemPage::ClearSite).
 enum class SiteData { kCookies, kCache, kAll };
 
+// A page's media, as the sidebar's player shows it (bc_tab_state's media fields).
+struct SystemMedia {
+  // It played since its document committed, so the player has something to play again.
+  bool has = false;
+  bool playing = false;
+  // Its navigator.mediaSession.metadata's, or empty without one.
+  std::u16string title;
+  std::u16string artist;
+  // It named its track, so it's offered the previous and the next: a page that names its tracks
+  // nearly always skips them, and nothing outside the page can tell which actions it handles.
+  bool named = false;
+};
+
+// What the player does to a page's media.
+enum class MediaAction { kPlay, kPause, kNext, kPrevious };
+
 // Where a system page keeps its cookies and site data: one store a profile, apart from Chromium's
 // and from Safari's. |id| is a UUID for a profile's, or for a private session's, whose store keeps
 // nothing on disk and goes once ReleaseStore lets it go.
@@ -54,7 +70,7 @@ class SystemPage {
   // own calls, as WebKit's observers do; the rest come from tasks of their own.
   class Delegate {
    public:
-    // Its URL, title, loading, history or sound changed.
+    // Its URL, title, loading, history, sound or media changed.
     virtual void SystemPageChanged() = 0;
     // A new document committed in its main frame.
     virtual void SystemPageCommitted() = 0;
@@ -72,11 +88,18 @@ class SystemPage {
     virtual bool SystemPageKey(const input::NativeWebKeyboardEvent& event,
                                bool before_page,
                                bool editing) = 0;
+    // Tab went past the page's last control, or ⇧Tab (|reverse|) before its first. Returns
+    // whether the app took the keyboard; if not, the page has it again at its other end.
+    virtual bool SystemPageFocusLeft(bool reverse) = 0;
     // A click in the page.
     virtual void SystemPageClicked() = 0;
     // The page's protected video is kept off the screen: the display connection's protection
     // (HDCP) isn't enough for a key it has. The page says so, so the page can say it falsely.
     virtual void SystemPageOutputRestricted() = 0;
+    // The icon of the document that committed last, as its server sent it, from its own
+    // <link rel=icon>, else its site's /favicon.ico. Empty once it's known to have none. Nothing
+    // has decoded it.
+    virtual void SystemPageIcon(const GURL& icon_url, std::vector<uint8_t> bytes) = 0;
 
    protected:
     virtual ~Delegate() = default;
@@ -100,9 +123,12 @@ class SystemPage {
   static void GetCookies(const SystemStore& store,
                          const std::string& site,
                          base::OnceCallback<void(std::vector<net::CanonicalCookie>)> done);
-  // Deletes |id|'s persistent store from the disk, as its profile goes. Loads the system's engine:
-  // call it only for a store a page made.
-  static void DeleteStore(const std::string& id);
+  // Deletes |id|'s persistent store from the disk, as its profile goes, then runs |done| with
+  // whether it went. Loads the system's engine: call it only for a store a page made.
+  static void DeleteStore(const std::string& id, base::OnceCallback<void(bool deleted)> done);
+  // Runs |done| with the ids of the app's persistent stores on disk, or none if it can't list
+  // them. Loads the system's engine.
+  static void ListStores(base::OnceCallback<void(std::vector<std::string>)> done);
   // Lets a private session's store go. Never loads the system's engine.
   static void ReleaseStore(const std::string& id);
   // Deletes |domain|'s |what| from |store|, then runs |done|. Loads the system's engine, as
@@ -120,6 +146,8 @@ class SystemPage {
   virtual gfx::NativeView view() = 0;
   // Gives the page the keyboard.
   virtual void Focus() = 0;
+  // Gives the page the keyboard at its first control, or its |last|, as Tab or ⇧Tab into it does.
+  virtual void FocusEnd(bool last) = 0;
 
   // Starts the page's first load, which |storage| goes into: each origin's items are set before
   // the scripts of its first document in that load run. A Load before it changes what it loads.
@@ -141,6 +169,7 @@ class SystemPage {
   virtual bool secure() = 0;
   virtual bool audible() = 0;
   virtual bool muted() = 0;
+  virtual SystemMedia media() = 0;
 
   virtual void Load(const GURL& url) = 0;
   virtual void GoBack() = 0;
@@ -148,6 +177,8 @@ class SystemPage {
   virtual void Reload(bool bypass_cache) = 0;
   virtual void Stop() = 0;
   virtual void SetMuted(bool muted) = 0;
+  // Through the page's own handlers where it has them, as the media keys go.
+  virtual void Media(MediaAction action) = 0;
 
  protected:
   SystemPage() = default;

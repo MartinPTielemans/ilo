@@ -1,3 +1,4 @@
+# check.sh runs this at 50.
 # A page's popup opens as a tab in the window, under the page. The page's context menu is Chrome's
 # without the items the window can't do, shown in ilo's menu at the click: a dismiss leaves the page
 # free to show another, and a text field's has its spelling and writing direction items and Select
@@ -14,19 +15,20 @@
 
 # A page's popup opens as a tab in the window, as links to new tabs do, instead of a window of
 # Chrome's own.
+serve
 page='data:text/html,<title>loading</title>
-<a href="https://example.org/" style="font:24px system-ui">a link</a>
+<a href="'"http://localhost:$port/two.html"'" style="font:24px system-ui">a link</a>
 <div id="opens" style="position:absolute;left:0;top:100px;width:200px;height:60px">a window</div>
 <textarea id="field" style="position:absolute;left:0;top:200px;width:300px;height:60px">teh note</textarea>
 <script>
 requestAnimationFrame(() => setTimeout(() => document.title = "ready"));
 // A window the page can reach, behind with ⌘ held.
-document.getElementById("opens").onclick = () => open("https://example.com/");
+document.getElementById("opens").onclick = () => open("'"http://localhost:$port/one.html"'");
 // The text of the field as the title, for the check to read what typing did to it.
 document.getElementById("field").oninput = e => document.title = e.target.value;
 // A popup needs a user gesture, which a key press is.
 addEventListener("keydown", e =>
-  e.key == "p" && !e.'"$cmd_key"' && open("https://example.com/", "", "popup,width=400,height=300"));
+  e.key == "p" && !e.'"$cmd_key"' && open("'"http://localhost:$port/one.html"'", "", "popup,width=400,height=300"));
 addEventListener("keydown", e =>
   e.key == "f" && !e.'"$cmd_key"' && document.documentElement.requestFullscreen());
 </script>'
@@ -42,7 +44,7 @@ opener=$(grep -m1 '^browser: today [0-9]' "$log" | cut -d' ' -f3)
 # A tab the page didn't open, dragged under the page, for the links it opens behind to go above.
 # Opened first: a tab opened from the bar in front has the Space forget which tabs opened which, as
 # Chrome's tab strip does, so after the popup it would cut the popup off from its page.
-open_from_bar example.net
+open_from_bar "http://localhost:$port/three.html"
 other=$tab
 send drag $(row 0) 100 330
 expect "^browser: dragged $other to today 1\$" "a drag of the top row to the bottom didn't move it"
@@ -54,7 +56,7 @@ send key p
 expect '^browser: tab [0-9]* opened by [0-9]* in the foreground$' "the page's popup didn't open as a tab"
 popup=$(grep '^browser: tab [0-9]* opened by' "$log" | cut -d' ' -f3)
 expect "^browser: today $opener $popup $other\$" "the popup's tab didn't go under the page: $(grep '^browser: today' "$log" | tail -1)"
-expect '^browser: loaded [0-9]* https://example.com/$' "the popup's page didn't load in its tab"
+expect "^browser: loaded [0-9]* http://localhost:$port/one.html\$" "the popup's page didn't load in its tab"
 check_layout "with the popup's tab"
 ../tools/window-screenshot.sh "$pid" "$out/popup.png" || fail "no window to capture"
 # The page's context menu is Chrome's, with Arc's link items and ilo's Open Link in Peek (#1370),
@@ -98,7 +100,7 @@ expect "^browser: today $opener $popup $first $other\$" \
   "the link's tab didn't go after the popup's: $(grep '^browser: today' "$log" | tail -1)"
 # It waits to load until it's first shown (Dia), with the link's address.
 expect "^browser: page $first unloaded 1\$" "the link's tab behind didn't wait to load"
-expect "^browser: page $first back 0 forward 0 loading 0 https://example.org/\$" \
+expect "^browser: page $first back 0 forward 0 loading 0 http://localhost:$port/two.html\$" \
   "the link's tab behind doesn't have the link's address"
 post rightclick 250 30
 expect "^browser: menu shown $in_tab, " \
@@ -116,14 +118,14 @@ grep -q "^browser: loaded \($first\|$second\) " "$log" && fail "a link's tab loa
 # though a tab it didn't open is below it (Chrome).
 send key 4 cmd
 expect "^browser: selected $second\( in .*\)\{0,1\}\$" "⌘4 didn't show the second link's tab"
-expect "^browser: loaded $second https://example.org/\$" \
+expect "^browser: loaded $second http://localhost:$port/two.html\$" \
   "the second link's tab didn't load once shown"
 expect "^browser: page $second unloaded 0\$" "the second link's tab still says it's waiting"
 grep -q "^browser: loaded $first " "$log" && fail "the first link's tab loaded with the second"
 send key w cmd
 expect "^browser: selected $first\( in .*\)\{0,1\}\$" \
   "closing a link's tab didn't show the page's other link's tab"
-expect "^browser: loaded $first https://example.org/\$" \
+expect "^browser: loaded $first http://localhost:$port/two.html\$" \
   "the first link's tab didn't load once shown"
 switch "1 cmd" "$opener"
 # A third, still waiting at the quit, for the relaunch at the end.
@@ -140,7 +142,7 @@ send click 300 140 cmd
 expect "^browser: tab [0-9]* opened by $opener in the background\$" \
   "⌘-click on what opens a window didn't open a tab behind"
 made=$(behind)
-expect "^browser: loaded $made https://example.com/\$" \
+expect "^browser: loaded $made http://localhost:$port/one.html\$" \
   "the window the page made behind didn't load at once"
 # Print preview is the tab's dialog, a child window centred over the page, at its top. Once $1
 # has asked for it: waits for it, captures it in $out/$2 once it has drawn over before-print.png,
@@ -208,26 +210,17 @@ fi
 [ "$menu" = "$page_items" ] ||
   fail "the page's menu is $menu"
 ../tools/window-screenshot.sh "$pid" "$out/page-menu.png" || fail "no window to capture"
-if [ "$(uname)" = Linux ]; then
-  # Print preview there never gets the keyboard, so escape can't close it, and the driver can't
-  # see it (#708).
-  echo "skip: Print and ⌘P showing print preview, which escape closes: on Linux it never gets the keyboard and the driver can't see it (#708)."
-  send dismiss
-  expect '^browser: menu closed$' "dismiss didn't close the page's menu"
-  rm "${out:?}/before-print.png"
-else
-  send choose Print…
-  print_preview "the page menu's Print…" print.png
-  # ⌘P, as File › Print, with the page's text field focused, as what's typed there shows. Its last
-  # word stays spelt right, where the field's menu below is opened: a misspelt word's has no Select
-  # All, Language Settings or Writing Direction (Chrome), and Windows checks the spelling.
-  send click 300 250
-  send type s
-  expect "^browser: title $opener .*notes\$" "typing in the page's text field didn't reach it"
-  ../tools/window-screenshot.sh "$pid" "$out/before-print.png" || fail "no window to capture"
-  page_shortcut p print
-  print_preview ⌘P print-key.png xy
-fi
+send choose Print…
+print_preview "the page menu's Print…" print.png
+# ⌘P, as File › Print, with the page's text field focused, as what's typed there shows. Its last
+# word stays spelt right, where the field's menu below is opened: a misspelt word's has no Select
+# All, Language Settings or Writing Direction (Chrome), and Windows checks the spelling.
+send click 300 250
+send type s
+expect "^browser: title $opener .*notes\$" "typing in the page's text field didn't reach it"
+../tools/window-screenshot.sh "$pid" "$out/before-print.png" || fail "no window to capture"
+page_shortcut p print
+print_preview ⌘P print-key.png xy
 # A text field's menu has what Chrome gives it, its Language Settings for spelling and its Writing
 # Direction submenu, and Select All selects the field's text, which typing then replaces. The check
 # chooses nothing that uses the pasteboard.
@@ -283,16 +276,16 @@ await '^browser: restored in ' || fail "the relaunch didn't restore the Spaces"
 await '^browser: today [0-9]* [0-9]* [0-9]* [0-9]* [0-9]*$' ||
   fail "the relaunch didn't bring back the popup's, the links', the page's window and the other tab"
 waited=$(today | cut -d' ' -f3)
-await "^browser: page $waited back 0 forward 0 loading 0 https://example.org/\$" ||
+await "^browser: page $waited back 0 forward 0 loading 0 http://localhost:$port/two.html\$" ||
   fail "the link's tab waiting at the quit didn't come back with its address"
 grep -q "^browser: loaded $waited " "$log" &&
   fail "the link's tab loaded after the relaunch before it was shown"
 # Chromium drops a key for the page before its renderer is up, as the shown tab's is at a launch.
-await '^browser: loaded [0-9]* https://example.com/$' ||
+await "^browser: loaded [0-9]* http://localhost:$port/one.html\$" ||
   fail "the shown tab didn't load after the relaunch"
 send key 3 cmd
 expect "^browser: selected $waited\( in .*\)\{0,1\}\$" "⌘3 didn't show the link's tab"
-expect "^browser: loaded $waited https://example.org/\$" \
+expect "^browser: loaded $waited http://localhost:$port/two.html\$" \
   "the link's tab didn't load once shown after the relaunch"
 exec 3>&-
 quit
@@ -300,7 +293,6 @@ quit
 # A sign-in popup (#388): the page opens the identity site, another, whose Continue redirects back to
 # the page's site, which posts what it got to the opener and closes the popup itself, as Sign in
 # with Google does. Its title says whether it found its opener.
-serve
 printf '%s' '<title>loading</title><script>
 requestAnimationFrame(() => setTimeout(() => document.title = "ready"));
 let got = "", gone = false;

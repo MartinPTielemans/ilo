@@ -1,45 +1,74 @@
 //! Test driver for check.sh on Linux, as platform/mac/drive.mm is on the Mac. With BROWSER_DRIVE=1
-//! the app reads one command per line on stdin, in drive.mm's language, and sends the matching X
-//! events to its own windows only: Chromium's browser windows, and GPUI's UI and overlays in and
-//! over them. Each window's own client handles them as it would the device's: Chromium takes core
-//! events, and GPUI takes a sent core pointer event for the XInput 2 one it selects. So they go
-//! through the same hit testing, focus changes and shortcuts as real input, without touching the
-//! display's pointer or keyboard. Keys go to the window with the X server's input focus, as real
-//! keys do, and the pointer's events to the window of the app's on top at that point.
+//! the app reads one command per line on stdin, in drive.mm's language. Its pointer and keys are
+//! the X server's own, through XTEST, as a hand's are: the server routes them, with its grabs,
+//! crossings, input focus and the window manager in the way (#2721). XTEST goes to whatever window
+//! the server picks, so the driver uses it only on a display a check's session started (`xtest`):
+//! BROWSER_HEADLESS set, which only check.sh and tools/headless.sh set, and an X server with no
+//! screen of a desktop's, Xvfb's one "screen" or tools/headless.sh's Xwayland on a headless sway.
+//! Anywhere else it refuses, and its pointer and keys can't do anything.
+//!
+//! The pointer goes through XTEST alone, a click's modifiers as keys held around it, and so do keys,
+//! a chord's modifiers as keys pressed before it, Alt's too, which the window manager may take as
+//! it would a hand's, and `flags`' modifiers as keys held until it lets them go. Only a held key's
+//! repeat, which the server makes only of a key held past its delay, still goes as an X event sent
+//! to the window the server would pick, which its client handles as the device's.
 //!
 //! Under Wayland no client can hand another's surfaces input, so there the pointer and keys are
-//! sway's virtual devices, in tools/headless.sh's session alone (drive_wayland.rs).
+//! sway's virtual devices, and ime on's typing and insert are sway's input method, in
+//! tools/headless.sh's session alone (drive_wayland.rs).
+//!
+//! Four things still don't come as a hand's, each for its reason (#2721):
+//! - On X11, ime on's typing and insert post into GPUI's field (`gpui_linux::drive_compose`,
+//!   `drive_commit`, a keystroke with the text). XTEST types only what the keymap has, never
+//!   日本語, and X11's real input method is an fcitx5, which check/ime.sh runs: one in every run
+//!   would cost each run its start.
+//! - On X11, scroll by points in GPUI's windows (`gpui_linux::drive_scroll`): XTEST has the wheel's
+//!   notches and no smooth amounts. A page's scroll is the notches, through XTEST.
+//! - window, on both: it asks the window manager or sway to activate the window, as a taskbar or
+//!   Alt+Tab does. Steps about a click making a window active use click, which is a hand's.
+//! - On X11, a held key's repeat, as above: the server makes one only of a key held past its
+//!   delay, which would be a wait on time.
 //!
 //! The commands are drive.mm's, with what Linux has: click, doubleclick, rightclick, middleclick,
-//! sideclick, clickkey, doubleclickkey, rightclickkey, handclick (X11's own), drag, dragkey, press, dragto,
+//! sideclick, clickkey, doubleclickkey, rightclickkey, drag, dragkey, press, dragto,
 //! release, rightpress, rightdragto, rightrelease, dragover, dragdrop, dragleave, move, warp (Linux's), scroll, wheel, pageswipe, key,
 //! keydown, keyup, flags, type, resize, resizekey, place, order, layout, state, title, pasteboard,
 //! front, menu, menubar, choose, dismiss, window, window <n> behind, agentspace, agentmayact,
-//! agentopen, agentrelease, agentdisconnect, takeback, age, battery, pair and insert, and Windows' stack.
+//! agentopen, agentnavigate, agentrelease, agentdisconnect, takeback, age, battery, pair and insert, and Windows' stack.
+//! desktop on and off, Linux's own, shows the desktop and the windows again as a pager asks,
+//! desktop shell maps a desktop window as a desktop shell does and desktop shell off takes it away, and
+//! onscreen logs what the X server shows of the driven window and the app's overlays over it.
+//! refocus, X11's own, gives the driven browser window the input focus and asks it raised, as a
+//! window manager activating it again does.
 //! The Mac's modifiers are pressed as the app reads them off the Mac (keys.rs): cmd with Ctrl, ctrl
 //! and alt with Alt, and ⌃Tab as Ctrl+Tab; a click's as Chrome reads them, cmd with Ctrl and alt
 //! with Alt. flags presses and lets go of those keys, the last key's among them, and the keys after
 //! it go with what it holds. key's again, Linux's alone, presses the key again as the app answers
-//! the first press in a page, and logs "browser: drive pressed again". insert commits its text to a
-//! field of the UI's, not a page's. Linux's own keyonreturn sends a key as key does, the moment
+//! the first press in a page, and logs "browser: drive pressed again". insert commits its text to
+//! the field with the keys: on X11 the UI's, a page's getting plain keys; under Wayland through
+//! the input method, a page's too. Linux's own keyonreturn sends a key as key does, the moment
 //! the X input focus is back in a browser window from one of the app's own, such as a dialog that
 //! closes, as a key typed as it goes reaches the window, before Chromium has run what it posts on
 //! reading the focus come back (#1711). scroll turns the wheel a notch for each event,
 //! where the Mac's moves the content by points. choose works on ilo's menu and on ilo's dialog,
 //! whose buttons it presses by their labels as drive.mm does an alert's, and dismiss on the menu;
 //! Linux shows no alerts yet. fullscreen toggles the window's full screen through the core. ime on types as
-//! drive.mm's scripted input method does, in the UI's fields alone, as a page's input method is
-//! Chromium's, and it can't compose in a page. dragover and dragdrop are XDND's source, as
+//! drive.mm's scripted input method does, and ime ko as its 2-set Korean one: on X11 in the UI's fields alone, as a page's input method
+//! is Chromium's, out of the driver's reach; under Wayland in the field sway gives the input
+//! method, a page's too, and ime on fails, saying why, if the seat has another. dragover and
+//! dragdrop are XDND's source, as
 //! another app's drag is, to the browser window's top-level window or its proxy, and wait for its
-//! answer; under Wayland, the data device's, from a client of the driver's own (drive_drags.rs). swipe is Wayland's alone, as X11 sends no touchpad's phases. The others, such as
-//! displays, the driver can't do yet, and says so as drive.mm does. pip, which drive.mm doesn't
+//! answer; under Wayland, the data device's, from a client of the driver's own (drive_drags.rs). swipe is Wayland's alone, as X11 sends no touchpad's phases. display add and remove
+//! are Wayland's alone too: an output of sway's headless backend, beside the others, as the
+//! session's (drive_wayland.rs). The others the driver can't do yet, and says so as drive.mm does. pip, which drive.mm doesn't
 //! have yet, finds a video's Picture in Picture window, the Mini Player, or a page's, as a call
 //! floats in, and logs "browser: pip at <x> <y> <width> <height>" as it is and each time it moves
 //! or resizes, then "browser: pip gone", or "browser: pip none" without one. pip doubleclick, pip
 //! wheel, and pip press, dragto and release work in it, at points from its top-left corner as the
 //! command finds it, or as it was at the press. pip press, dragto and release alone move the
 //! display's pointer, through XTest, onto the window only, and the release puts it back once the
-//! window manager has let go, logging where the drag left the window.
+//! window manager has let go, logging where the drag left the window. Under Wayland pip is
+//! drive_wayland.rs's, from sway's tree, with its virtual pointer and in sway's layout.
 //!
 //! It logs as drive.mm does: "browser: drive <n>: <command>" as command n arrives, "browser: drive
 //! <n>: can't do that" for one it can't, and "browser: drive <n> done, key <window>, focus <view>,
@@ -53,7 +82,7 @@
 
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
+    collections::{BTreeSet, HashMap},
     ffi::{CString, c_int, c_uint, c_void},
     io::BufRead,
     rc::Rc,
@@ -71,13 +100,13 @@ use x11rb::{
     protocol::{
         Event,
         xproto::{
-            self, ButtonPressEvent, ChangeWindowAttributesAux, ConfigureWindowAux,
-            ConnectionExt as _, EnterNotifyEvent, EventMask, KeyButMask, KeyPressEvent,
-            MotionNotifyEvent, StackMode,
+            self, ChangeWindowAttributesAux, ConfigureWindowAux, ConnectionExt as _, EventMask,
+            KeyButMask, KeyPressEvent, StackMode,
         },
         xtest::ConnectionExt as _,
     },
     rust_connection::RustConnection,
+    wrapper::ConnectionExt as _,
 };
 
 use crate::{
@@ -110,9 +139,6 @@ const IDLE_WAIT: c_uint = 250;
 /// Starts reading commands from stdin.
 pub fn start() {
     crate::drive_wayland::start();
-    // Its events are the pointer the app has, as the X server's own, which it never moves, would
-    // otherwise come and go under GPUI's pointer as windows change around it.
-    gpui_linux::drive_pointer();
     std::thread::spawn(|| {
         let mut number = 0;
         for line in std::io::stdin().lock().lines() {
@@ -123,6 +149,9 @@ pub fn start() {
             number += 1;
             let n = number;
             idle(Box::new(move || {
+                if n == 1 {
+                    release_held_modifiers();
+                }
                 log!("browser: drive {n}: {line}");
                 // It's done once the title has come, which it reports itself.
                 if let Some(text) = line.strip_prefix("title ").filter(|text| !text.is_empty()) {
@@ -138,11 +167,17 @@ pub fn start() {
 /// Runs command `n`, `line`, and again 10 ms on while it asks to be (`again`), until `until`.
 fn attempt(n: u64, line: String, until: Option<Instant>) {
     RETRY_UNTIL.set(until);
+    RUNNING.set(n);
+    UNDONE.with_borrow_mut(|undone| undone.insert(n));
     let done = run(&line);
     RETRY_UNTIL.set(None);
     if !done {
         if let Some(until) = AGAIN.take() {
             after(10, Box::new(move || attempt(n, line, Some(until))));
+            return;
+        }
+        if AFTER_DONE.take() {
+            WAITING.with_borrow_mut(|waiting| waiting.push((n, line)));
             return;
         }
         log!("browser: drive {n}: can't do that");
@@ -271,14 +306,37 @@ fn settle(n: u64) {
             // Past here no press of the command's is still to be answered.
             PRESS_AGAIN.take();
             let (key, focus, active) = keyboard();
-            let marked = Field::with_keys().and_then(Field::marked);
+            let marked = marked();
             let marked = marked.map_or("none".into(), |at| format!("{},{}", at.start, at.len()));
             log!(
                 "browser: drive {n} done, key {key}, focus {focus}, active {}, marked {marked}",
                 active as u8
             );
+            UNDONE.with_borrow_mut(|undone| undone.remove(&n));
+            let ready = WAITING.with_borrow_mut(|waiting| {
+                let first = UNDONE.with_borrow(|undone| undone.first().copied());
+                let (ready, still) = std::mem::take(waiting)
+                    .into_iter()
+                    .partition(|(m, _)| first.is_none_or(|first| first >= *m));
+                *waiting = still;
+                ready
+            });
+            for (m, line) in ready {
+                attempt(m, line, None);
+            }
         }));
     }));
+}
+
+/// Has the command running, which can't yet, run again once every command before it is done,
+/// when it returns: true, unless they are already.
+pub(super) fn after_earlier_done() -> bool {
+    let running = RUNNING.get();
+    let waits = UNDONE.with_borrow(|undone| undone.first().is_some_and(|first| *first < running));
+    if waits {
+        AFTER_DONE.set(true);
+    }
+    waits
 }
 
 /// Runs `then` once each browser window has drawn its next frame, as AppKit has by the time the
@@ -341,22 +399,43 @@ thread_local! {
     static RETRY_UNTIL: Cell<Option<Instant>> = const { Cell::new(None) };
     /// That the command running asked to run again, and until when.
     static AGAIN: Cell<Option<Instant>> = const { Cell::new(None) };
+    /// The command running, the commands started and not yet reported done, and those waiting
+    /// for the ones before them to be (`after_earlier_done`).
+    static RUNNING: Cell<u64> = const { Cell::new(0) };
+    static UNDONE: RefCell<BTreeSet<u64>> = const { RefCell::new(BTreeSet::new()) };
+    static AFTER_DONE: Cell<bool> = const { Cell::new(false) };
+    static WAITING: RefCell<Vec<(u64, String)>> = const { RefCell::new(Vec::new()) };
     /// A key's second press, which the app's answer to the first page key presses (`press_again`).
     static PRESS_AGAIN: Cell<Option<Box<dyn FnOnce() -> Option<()>>>> = const { Cell::new(None) };
     /// The window a press went to, which gets the drag's events until the release, as the X
     /// server's grab of the pointer does.
     static PRESSED: Cell<Option<Target>> = const { Cell::new(None) };
+    /// That the app asked the window manager to move a browser window, as a drag on the window's
+    /// background does as the app handles its move (`window_move_asked`).
+    static MOVE_ASKED: Cell<bool> = const { Cell::new(false) };
+    /// The window manager's grab of the pointer for that move, as the browser window hears it.
+    static WM_GRAB: Cell<WmGrab> = const { Cell::new(WmGrab::None) };
+    /// What runs once the main loop has read the events the driver sent (`handled`).
+    static HANDLED: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
     /// The Mini Player's press through XTest, till its release (hold_mini_player).
     static PIP_HELD: Cell<Option<HeldPip>> = const { Cell::new(None) };
     /// The window the pointer is in, which hears it leave.
     static HOVERED: Cell<Option<Target>> = const { Cell::new(None) };
-    /// The modifiers the flags command holds, in an X state, which the keys go with until it lets
-    /// them go.
+    /// The modifiers the flags command holds down through XTEST, in an X state, which the keys and
+    /// the pointer go with until it lets them go.
     static FLAGS: Cell<u16> = const { Cell::new(0) };
     /// The modifiers the last key went with.
     static KEY_FLAGS: Cell<u16> = const { Cell::new(0) };
-    /// The modifiers the X server's keyboard has locked, for `hold_modifiers`.
-    static LOCKED: Cell<u16> = const { Cell::new(0) };
+    /// Whether the Control the last key left down is a ⌃Tab walk's, which a click keeps held: a
+    /// hand holds ⌃ through a click on the switcher's row, and letting it go first would end the
+    /// walk before the press (#3340).
+    static WALK: Cell<bool> = const { Cell::new(false) };
+    /// The modifier keys the driver holds down through XTEST.
+    static XTEST_MODIFIERS: Cell<u16> = const { Cell::new(0) };
+    /// The other keys the driver holds down through XTEST, whose next press is a repeat.
+    static XTEST_KEYS: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+    /// Whether the display is one XTEST may drive (`xtest`), once known.
+    static XTEST: Cell<Option<bool>> = const { Cell::new(None) };
     /// The last press, a click's or a drag's, in any of the app's windows: its time, place and
     /// button.
     static LAST_CLICK: Cell<Option<(std::time::Instant, Target, u8)>> = const { Cell::new(None) };
@@ -365,6 +444,9 @@ thread_local! {
     /// Whether the scripted input method types (`ime_key`), and what it composes, if anything.
     static IME_ON: Cell<bool> = const { Cell::new(false) };
     static COMPOSITION: RefCell<Option<String>> = const { RefCell::new(None) };
+    /// Whether it types `ime ko`'s Korean, and the syllable it composes.
+    static KOREAN: Cell<bool> = const { Cell::new(false) };
+    static SYLLABLE: Cell<Syllable> = const { Cell::new([None; 3]) };
 }
 
 fn server() -> Option<Rc<(RustConnection, xproto::Window)>> {
@@ -377,10 +459,8 @@ fn server() -> Option<Rc<(RustConnection, xproto::Window)>> {
         if x.is_none() {
             let (connection, screen) = x11rb::connect(None).ok()?;
             let root = &connection.setup().roots[screen];
-            // The display's own pointer, which the driver never moves otherwise, waits in the
-            // screen's corner, out of the pages: in a page, the X server tells GPUI's window the
-            // pointer left it each time its shape changes around the pages, as a panel's drag
-            // changes it, and GPUI takes that for the pointer leaving.
+            // The display's pointer waits in the screen's corner, out of the windows, until the
+            // first command moves it.
             let corner = (
                 root.width_in_pixels as i16 - 1,
                 root.height_in_pixels as i16 - 1,
@@ -418,9 +498,126 @@ fn sync() {
             Event::SelectionRequest(request) => serve_drag(&request),
             Event::SelectionNotify(notify) => pasted(&notify),
             Event::ClientMessage(message) if message.format == 32 => drag_answered(&message),
+            Event::EnterNotify(crossing) => WM_GRAB.set(wm_grab_after(
+                WM_GRAB.get(),
+                false,
+                crossing.mode,
+                crossing.detail,
+            )),
+            Event::LeaveNotify(crossing) => WM_GRAB.set(wm_grab_after(
+                WM_GRAB.get(),
+                true,
+                crossing.mode,
+                crossing.detail,
+            )),
             _ => {}
         }
     }
+}
+
+/// The window manager's grab of the pointer for a window move, as the browser window the pointer
+/// is in hears it: the pointer leaves it as the window manager takes it, and comes back as it ends.
+#[derive(Clone, Copy, PartialEq)]
+enum WmGrab {
+    None,
+    Taken,
+    GivenBack,
+}
+
+/// The grab after the browser window hears the pointer `leave` it, or enter, in `mode`, as
+/// `detail` says. Openbox grabs the pointer, which leaves the window in Grab mode, and comes back
+/// in Ungrab mode. KWin first maps a window of its own over the screen and grabs the pointer
+/// there, so it leaves as a plain move would, and comes back as KWin takes that window away. A
+/// crossing into or out of the window's own children changes nothing, nor does an earlier grab's
+/// end.
+fn wm_grab_after(
+    now: WmGrab,
+    leave: bool,
+    mode: xproto::NotifyMode,
+    detail: xproto::NotifyDetail,
+) -> WmGrab {
+    if detail == xproto::NotifyDetail::INFERIOR {
+        return now;
+    }
+    match now {
+        WmGrab::None if leave && mode != xproto::NotifyMode::UNGRAB => WmGrab::Taken,
+        WmGrab::None if mode == xproto::NotifyMode::GRAB => WmGrab::Taken,
+        WmGrab::Taken if !leave || mode == xproto::NotifyMode::UNGRAB => WmGrab::GivenBack,
+        _ => now,
+    }
+}
+
+/// The app has asked the window manager to move a browser window, which takes the pointer for it.
+pub(crate) fn window_move_asked() {
+    MOVE_ASKED.set(true);
+}
+
+/// Has the driver hear the pointer cross into and out of browser window `window`, as the window
+/// manager's grab makes it (`WmGrab`). Each client selects events for itself, so Chromium's are
+/// as they were.
+fn watch_crossings(window: xproto::Window) -> Option<()> {
+    let x = server()?;
+    let (connection, _) = &*x;
+    let events = EventMask::ENTER_WINDOW | EventMask::LEAVE_WINDOW;
+    let aux = ChangeWindowAttributesAux::new().event_mask(events);
+    connection.change_window_attributes(window, &aux).ok()?;
+    connection.flush().ok()
+}
+
+/// Runs `then` once the main loop has read the events the driver sent and the windows have drawn
+/// what they changed, as `settle` waits before it reports a command done.
+fn handled(then: Box<dyn FnOnce()>) {
+    sync();
+    gpui_linux::sync_display();
+    HANDLED.set(Some(then));
+    idle(Box::new(|| {
+        sync();
+        gpui_linux::sync_display();
+        if let Some(then) = HANDLED.take() {
+            drawn(then);
+        }
+    }));
+}
+
+/// Lets go of a drag's press at `to` once the app has handled its move, as no hand can sooner.
+/// When the app asked the window manager to move the window, the release also waits for the
+/// window manager to take the pointer, as a hand's comes during the move: before then, the move
+/// would outlive the drag and take the next press. The drag is then done once the window manager
+/// has given the pointer back.
+fn release_after_move(to: Target, done: Box<dyn FnOnce()>) {
+    handled(Box::new(move || {
+        let asked = MOVE_ASKED.take();
+        let until = Instant::now() + Duration::from_secs(5);
+        let release = move || {
+            if button(to, 1, false, button_mask(1)).is_none() {
+                log!("browser: drive couldn't let go of the drag");
+            }
+            let until = Instant::now() + Duration::from_secs(5);
+            await_wm_grab(asked, WmGrab::GivenBack, until, done);
+        };
+        await_wm_grab(asked, WmGrab::Taken, until, Box::new(release));
+    }));
+}
+
+/// Runs `then` once the window manager's grab for the window move the app `asked` for is `want`,
+/// at once if it asked for none. After `until` it says what it waited for, and runs it anyway.
+fn await_wm_grab(asked: bool, want: WmGrab, until: Instant, then: Box<dyn FnOnce()>) {
+    sync();
+    if !asked || WM_GRAB.get() == want {
+        return then();
+    }
+    if Instant::now() >= until {
+        let what = match want {
+            WmGrab::GivenBack => "give the pointer back after the drag let go",
+            _ => "take the pointer for the window move the app asked for",
+        };
+        log!("browser: drive waited 5 s for the window manager to {what}");
+        return then();
+    }
+    after(
+        10,
+        Box::new(move || await_wm_grab(asked, want, until, then)),
+    );
 }
 
 /// A browser window, as the X server has it.
@@ -481,6 +678,33 @@ fn viewable(connection: &RustConnection, window: xproto::Window) -> bool {
         .ok()
         .and_then(|c| c.reply().ok())
         .is_some_and(|attributes| attributes.map_state == xproto::MapState::VIEWABLE)
+}
+
+/// The client window in top-level window `top`: the one with ICCCM's WM_STATE, which a window
+/// manager puts on each window it manages. openbox holds it in its frame, and KWin a level deeper,
+/// in a wrapper inside its frame (#2756, #2757). `top` itself when no window down to there has it,
+/// as with no window manager.
+fn client_in(connection: &RustConnection, top: xproto::Window) -> xproto::Window {
+    let Some(state) = atom("WM_STATE") else {
+        return top;
+    };
+    let managed = |window| {
+        (connection.get_property(false, window, state, xproto::AtomEnum::ANY, 0, 0))
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+            .is_some_and(|property| property.type_ != x11rb::NONE)
+    };
+    let mut level = vec![top];
+    for _ in 0..3 {
+        if let Some(&client) = level.iter().find(|&&window| managed(window)) {
+            return client;
+        }
+        level = (level.into_iter())
+            .filter_map(|window| connection.query_tree(window).ok()?.reply().ok())
+            .flat_map(|tree| tree.children)
+            .collect();
+    }
+    top
 }
 
 /// Whether `window` is `ancestor` or inside it.
@@ -734,101 +958,233 @@ fn button_mask(button: u8) -> u16 {
     }
 }
 
-/// Moves the pointer into `to`, telling the window it was in that it left, and `to` that it came.
-fn hover(to: Target, state: u16) -> Option<()> {
+/// Moves the pointer to `to` through XTEST, with the server's crossings. Not when it's there
+/// already, as a hand sends no move then: Blink takes a move while a button is down, even to the
+/// same point, for a drag, and the release then clicks nothing (#2717, #2736).
+fn hover(to: Target) -> Option<()> {
+    HOVERED.set(Some(to));
     let x = server()?;
     let (connection, root) = &*x;
-    let from = HOVERED.replace(Some(to));
-    if from.map(|from| from.window) == Some(to.window) {
+    let at = connection.query_pointer(*root).ok()?.reply().ok()?;
+    if (at.root_x, at.root_y) == (to.root_x, to.root_y) {
         return Some(());
     }
-    let crossing = |kind: u8, at: Target| EnterNotifyEvent {
-        response_type: kind,
-        detail: xproto::NotifyDetail::NONLINEAR,
-        sequence: 0,
-        time: x11rb::CURRENT_TIME,
-        root: *root,
-        event: at.window,
-        child: x11rb::NONE,
-        root_x: at.root_x,
-        root_y: at.root_y,
-        event_x: at.x,
-        event_y: at.y,
-        state: KeyButMask::from(state),
-        mode: xproto::NotifyMode::NORMAL,
-        same_screen_focus: 1,
-    };
-    if let Some(from) = from {
-        let from = Target {
-            root_x: to.root_x,
-            root_y: to.root_y,
-            ..from
-        };
-        let event = crossing(xproto::LEAVE_NOTIFY_EVENT, from);
-        connection
-            .send_event(false, from.window, EventMask::NO_EVENT, event)
-            .ok()?;
+    xtest_event(xproto::MOTION_NOTIFY_EVENT, 0, to.root_x, to.root_y)
+}
+
+/// A press of `button`, 1 the left, 3 the right and 4 to 7 the wheel's, or its release, at `at`,
+/// through XTEST, with `state` the modifiers and the buttons held before it. The modifiers' keys
+/// go down before the press and up after the release.
+fn button(at: Target, button: u8, press: bool, state: u16) -> Option<()> {
+    if press {
+        // A hand lifts the ⌘ of its last chord before it clicks, and holds the click's own: the
+        // Control a key left down would make the press a Ctrl-click.
+        if XTEST_MODIFIERS.get() != 0 {
+            KEY_FLAGS.set(0);
+            WALK.set(false);
+        }
+        xtest_modifiers(state & MODIFIERS | FLAGS.get())?;
     }
-    let event = crossing(xproto::ENTER_NOTIFY_EVENT, to);
-    connection
-        .send_event(false, to.window, EventMask::NO_EVENT, event)
-        .ok()?;
+    hover(at)?;
+    if press {
+        uncover(at);
+    }
+    let kind = match press {
+        true => xproto::BUTTON_PRESS_EVENT,
+        false => xproto::BUTTON_RELEASE_EVENT,
+    };
+    xtest_event(kind, button, at.root_x, at.root_y)?;
+    match press {
+        true => Some(()),
+        false => xtest_modifiers(FLAGS.get()),
+    }
+}
+
+/// Before a press at `at`, with the pointer there: waits until no window of the screen's that's
+/// input-only, which a hand can't see and so never means to click, is over the point. KWin keeps
+/// one over each screen corner that has an action, and takes it away as the pointer comes into it
+/// (its X11 WindowBasedEdge's approach window), so a hand's press reaches the window under it; the
+/// driver's, sent with the move, reached KWin's first (#2765). For 2 s at most, then it goes.
+fn uncover(at: Target) {
+    let Some(x) = server() else { return };
+    let (connection, root) = &*x;
+    let covering = || {
+        let child = connection.query_pointer(*root).ok()?.reply().ok()?.child;
+        if child == x11rb::NONE || within(connection, at.window, child) {
+            return None;
+        }
+        let attributes = connection.get_window_attributes(child).ok()?.reply().ok()?;
+        (attributes.class == xproto::WindowClass::INPUT_ONLY).then_some(child)
+    };
+    let until = Instant::now() + Duration::from_secs(2);
+    let started = Instant::now();
+    let pause = || std::thread::sleep(Duration::from_millis(2));
+    match await_uncovered(until, covering, pause) {
+        Ok(0) => {}
+        Ok(_) => log!(
+            "browser: drive waited {} ms for an input-only window over the point to go",
+            started.elapsed().as_millis()
+        ),
+        Err(window) => log!(
+            "browser: drive pressed under {window:#x}, an input-only window still over the point after 2 s"
+        ),
+    }
+}
+
+/// Asks `covering` which window covers the point until it's none, with `pause` between, as the
+/// window's client takes it away once it hears the pointer come; until `until`, when it answers the
+/// window still there. How many times it was covered, otherwise.
+fn await_uncovered(
+    until: Instant,
+    mut covering: impl FnMut() -> Option<xproto::Window>,
+    mut pause: impl FnMut(),
+) -> Result<usize, xproto::Window> {
+    let mut times = 0;
+    while let Some(window) = covering() {
+        if Instant::now() >= until {
+            return Err(window);
+        }
+        times += 1;
+        pause();
+    }
+    Ok(times)
+}
+
+/// Moves the pointer to `at` through XTEST, which holds the buttons itself. While one is held, the
+/// modifiers' keys `state` names are held with it, as a drag's ⌥ that drops a copy comes during it.
+fn motion(at: Target, state: u16) -> Option<()> {
+    if state & BUTTONS != 0 {
+        xtest_modifiers(state & MODIFIERS | FLAGS.get())?;
+    }
+    hover(at)
+}
+
+/// The five buttons X has a state's bit for.
+const BUTTONS: u16 = 0x1f00;
+
+/// Control, Shift and Alt, in an X state.
+const MODIFIERS: u16 = 1 << 2 | 1 | 1 << 3;
+
+/// Whether XTEST may drive this display: only one a check's session started, as its input goes to
+/// whatever window the X server picks, and on someone's own desktop that would be their other
+/// windows. Asked once, and said once in the log. Under Xvfb, as check.sh and CI start it, with
+/// openbox or KWin, BROWSER_HEADLESS is "xvfb" and the server's one RandR output is Xvfb's
+/// "screen", where a desktop's are named for its connectors. On tools/headless.sh's Xwayland it's
+/// the session's socket, whose sway's outputs are all headless (drive_wayland::headless_sway), and
+/// the server's outputs are Xwayland's.
+fn xtest() -> Option<()> {
+    if XTEST.get().is_none() {
+        let x = server()?;
+        let (connection, root) = &*x;
+        let answer = xtest_session(connection, *root);
+        match &answer {
+            Ok(session) => log!("browser: drive input through XTEST, on {session}"),
+            Err(why) => log!("browser: drive refuses XTEST input here: {why}"),
+        }
+        XTEST.set(Some(answer.is_ok()));
+    }
+    XTEST.get()?.then_some(())
+}
+
+fn xtest_session(
+    connection: &RustConnection,
+    root: xproto::Window,
+) -> Result<&'static str, String> {
+    let headless = std::env::var("BROWSER_HEADLESS").unwrap_or_default();
+    let outputs = output_names(connection, root).unwrap_or_default();
+    xtest_verdict(&headless, &outputs, || {
+        crate::drive_wayland::headless_sway().map(drop)
+    })
+}
+
+/// `xtest`'s answer for the session `headless` names (BROWSER_HEADLESS), on an X server whose
+/// RandR outputs are `outputs`, with `sway` asked whether the sway at SWAYSOCK is headless.
+fn xtest_verdict(
+    headless: &str,
+    outputs: &[String],
+    sway: impl FnOnce() -> Result<(), String>,
+) -> Result<&'static str, String> {
+    if headless.is_empty() {
+        return Err("BROWSER_HEADLESS isn't set, which a check's session sets".into());
+    }
+    let all = |test: &dyn Fn(&str) -> bool| !outputs.is_empty() && outputs.iter().all(|o| test(o));
+    if headless == "xvfb" {
+        return match all(&|output| output == "screen") {
+            true => Ok("Xvfb"),
+            false => Err(format!(
+                "the X server's outputs are {outputs:?}, not Xvfb's \"screen\""
+            )),
+        };
+    }
+    sway()?;
+    // Xwayland names its outputs for the compositor's, or XWAYLAND<n> where it can't.
+    match all(&|output| output.starts_with("HEADLESS-") || output.starts_with("XWAYLAND")) {
+        true => Ok("tools/headless.sh's Xwayland"),
+        false => Err(format!(
+            "the X server's outputs are {outputs:?}, not a headless sway's"
+        )),
+    }
+}
+
+/// The names of the X server's RandR outputs.
+fn output_names(connection: &RustConnection, root: xproto::Window) -> Option<Vec<String>> {
+    use x11rb::protocol::randr::ConnectionExt as _;
+    let resources = (connection
+        .randr_get_screen_resources_current(root)
+        .ok()?
+        .reply())
+    .ok()?;
+    (resources.outputs.iter())
+        .map(|&output| {
+            let info = connection.randr_get_output_info(output, resources.config_timestamp);
+            Some(String::from_utf8_lossy(&info.ok()?.reply().ok()?.name).into_owned())
+        })
+        .collect()
+}
+
+/// One XTEST event at the root's `x`, `y`, waited on until the server has handled it, on a
+/// display `xtest` allows. A button's press says so in the log, as Windows' driver does for its
+/// real input: a check waits on what only a held real button gives, such as `little`'s plate.
+fn xtest_event(kind: u8, detail: u8, x: i16, y: i16) -> Option<()> {
+    xtest()?;
+    let server = server()?;
+    let (connection, root) = &*server;
+    let delay = xtest_delay(kind);
+    (connection.xtest_fake_input(kind, detail, delay, *root, x, y, 0)).ok()?;
+    connection.get_input_focus().ok()?.reply().ok()?;
+    if kind == xproto::BUTTON_PRESS_EVENT && (1..=3).contains(&detail) {
+        log!("browser: drive: real press at {x},{y}");
+    }
     Some(())
 }
 
-/// Sends a press of `button`, 1 the left, 3 the right and 4 to 7 the wheel's, or its release, at
-/// `at`, with `state` the modifiers and the buttons held before it.
-fn button(at: Target, button: u8, press: bool, state: u16) -> Option<()> {
-    hover(at, state)?;
-    let x = server()?;
-    let (connection, root) = &*x;
-    let event = ButtonPressEvent {
-        response_type: match press {
-            true => xproto::BUTTON_PRESS_EVENT,
-            false => xproto::BUTTON_RELEASE_EVENT,
-        },
-        detail: button,
-        sequence: 0,
-        time: x11rb::CURRENT_TIME,
-        root: *root,
-        event: at.window,
-        child: x11rb::NONE,
-        root_x: at.root_x,
-        root_y: at.root_y,
-        event_x: at.x,
-        event_y: at.y,
-        state: KeyButMask::from(state),
-        same_screen: true,
-    };
-    connection
-        .send_event(false, at.window, EventMask::NO_EVENT, event)
-        .ok()?;
-    connection.flush().ok()
+/// The milliseconds the server waits before an XTEST event of `kind`, XTEST's time being a delay.
+/// A press waits one, as a hand's two presses never share a millisecond: Chromium takes a press
+/// stamped as its last for that one handled again, and counts no double click
+/// (MouseEvent::GetRepeatCount).
+fn xtest_delay(kind: u8) -> u32 {
+    match kind {
+        xproto::BUTTON_PRESS_EVENT => 1,
+        _ => x11rb::CURRENT_TIME,
+    }
 }
 
-fn motion(at: Target, state: u16) -> Option<()> {
-    hover(at, state)?;
-    let x = server()?;
-    let (connection, root) = &*x;
-    let event = MotionNotifyEvent {
-        response_type: xproto::MOTION_NOTIFY_EVENT,
-        detail: xproto::Motion::NORMAL,
-        sequence: 0,
-        time: x11rb::CURRENT_TIME,
-        root: *root,
-        event: at.window,
-        child: x11rb::NONE,
-        root_x: at.root_x,
-        root_y: at.root_y,
-        event_x: at.x,
-        event_y: at.y,
-        state: KeyButMask::from(state),
-        same_screen: true,
-    };
-    connection
-        .send_event(false, at.window, EventMask::NO_EVENT, event)
-        .ok()?;
-    connection.flush().ok()
+/// The left Control, Shift and Alt keys, by their masks.
+const MODIFIER_KEYS: [(u16, u32); 3] = [(1 << 2, 0xffe3), (1, 0xffe1), (1 << 3, 0xffe9)];
+
+/// Presses and lets go of the left modifier keys through XTEST until the server holds down `want`'s
+/// Control, Shift and Alt, and no others of them.
+fn xtest_modifiers(want: u16) -> Option<()> {
+    for (mask, keysym) in MODIFIER_KEYS {
+        let kind = match (XTEST_MODIFIERS.get() & mask != 0, want & mask != 0) {
+            (false, true) => xproto::KEY_PRESS_EVENT,
+            (true, false) => xproto::KEY_RELEASE_EVENT,
+            _ => continue,
+        };
+        xtest_event(kind, keycode(keysym)?.0, 0, 0)?;
+        XTEST_MODIFIERS.set(XTEST_MODIFIERS.get() ^ mask);
+    }
+    Some(())
 }
 
 /// A click of `which` (1 the left, 3 the right, 4 to 7 the wheel's) at `at`, the second of a
@@ -964,19 +1320,19 @@ fn input_focus() -> Option<xproto::Window> {
     Some(x.0.get_input_focus().ok()?.reply().ok()?.focus)
 }
 
-/// The UI's field the scripted input method composes in: GPUI's in the X window with the input
-/// focus, or under Wayland in the browser window's surface while its UI or an overlay over it has
-/// the keys, which the compositor gives the surface.
+/// Where the scripted input method composes: GPUI's field in the X window with the input focus,
+/// posted into, or under Wayland the field sway gives the driver's input method to
+/// (drive_wayland.rs), a page's or the UI's.
 #[derive(Clone, Copy)]
 enum Field {
     X(xproto::Window),
-    Wayland(*mut c_void),
+    Wayland,
 }
 
 impl Field {
     fn with_keys() -> Option<Field> {
         match crate::drive_wayland::on() {
-            true => crate::drive_wayland::ime_surface().map(Field::Wayland),
+            true => Some(Field::Wayland),
             false => input_focus().map(Field::X),
         }
     }
@@ -984,30 +1340,162 @@ impl Field {
     fn compose(self, text: &str, selected: Option<std::ops::Range<usize>>) -> bool {
         match self {
             Field::X(window) => gpui_linux::drive_compose(window, text, selected),
-            Field::Wayland(surface) => gpui_linux::drive_compose_in(surface, text, selected),
+            Field::Wayland => crate::drive_wayland::compose(text, selected),
         }
     }
 
     fn commit(self, text: &str) -> bool {
         match self {
             Field::X(window) => gpui_linux::drive_commit(window, text),
-            Field::Wayland(surface) => gpui_linux::drive_commit_in(surface, text),
-        }
-    }
-
-    fn marked(self) -> Option<std::ops::Range<usize>> {
-        match self {
-            Field::X(window) => gpui_linux::marked_range(window),
-            Field::Wayland(surface) => gpui_linux::marked_range_in(surface),
+            Field::Wayland => crate::drive_wayland::commit(text),
         }
     }
 }
 
+/// What the UI's field with the keys has marked, for the done line: GPUI's in the X window with
+/// the input focus, or in the surface drive_wayland.rs's `ime_surface` names.
+fn marked() -> Option<std::ops::Range<usize>> {
+    match crate::drive_wayland::on() {
+        true => gpui_linux::marked_range_in(crate::drive_wayland::ime_surface()?),
+        false => gpui_linux::marked_range(input_focus()?),
+    }
+}
+
+/// Forgets what the scripted input method composed, as a real one does when sway activates or
+/// deactivates it: the text input it composed for has been reset, and the composition with it.
+pub(super) fn input_method_reset() {
+    COMPOSITION.set(None);
+    SYLLABLE.set([None; 3]);
+}
+
+/// A letter of `ime ko`'s 2-set (dubeolsik) Korean keyboard: its key, its compatibility letter for
+/// it composing alone, and its index as a syllable's first consonant (or None for a vowel), its
+/// last (or 0) and its vowel (or None for a consonant).
+struct Jamo {
+    key: u8,
+    alone: char,
+    first: Option<u32>,
+    last: u32,
+    vowel: Option<u32>,
+}
+
+const fn consonant(key: u8, alone: char, first: u32, last: u32) -> Jamo {
+    let (first, vowel) = (Some(first), None);
+    Jamo {
+        key,
+        alone,
+        first,
+        last,
+        vowel,
+    }
+}
+
+const fn vowel(key: u8, alone: char, vowel: u32) -> Jamo {
+    let (first, last, vowel) = (None, 0, Some(vowel));
+    Jamo {
+        key,
+        alone,
+        first,
+        last,
+        vowel,
+    }
+}
+
+/// drive.mm's table: the plain consonants and vowels, without the compound ones, which "한글" and
+/// "안녕하세요" don't need.
+const JAMO: [Jamo; 26] = [
+    consonant(b'r', 'ㄱ', 0, 1),
+    consonant(b's', 'ㄴ', 2, 4),
+    consonant(b'e', 'ㄷ', 3, 7),
+    consonant(b'f', 'ㄹ', 5, 8),
+    consonant(b'a', 'ㅁ', 6, 16),
+    consonant(b'q', 'ㅂ', 7, 17),
+    consonant(b't', 'ㅅ', 9, 19),
+    consonant(b'd', 'ㅇ', 11, 21),
+    consonant(b'w', 'ㅈ', 12, 22),
+    consonant(b'c', 'ㅊ', 14, 23),
+    consonant(b'z', 'ㅋ', 15, 24),
+    consonant(b'x', 'ㅌ', 16, 25),
+    consonant(b'v', 'ㅍ', 17, 26),
+    consonant(b'g', 'ㅎ', 18, 27),
+    vowel(b'k', 'ㅏ', 0),
+    vowel(b'o', 'ㅐ', 1),
+    vowel(b'i', 'ㅑ', 2),
+    vowel(b'j', 'ㅓ', 4),
+    vowel(b'p', 'ㅔ', 5),
+    vowel(b'u', 'ㅕ', 6),
+    vowel(b'h', 'ㅗ', 8),
+    vowel(b'y', 'ㅛ', 12),
+    vowel(b'n', 'ㅜ', 13),
+    vowel(b'b', 'ㅠ', 17),
+    vowel(b'm', 'ㅡ', 18),
+    vowel(b'l', 'ㅣ', 20),
+];
+
+/// The syllable `ime ko` composes, as its letters' places in JAMO: its first consonant, vowel and
+/// last consonant, each None if it has none.
+type Syllable = [Option<u8>; 3];
+
+/// What `syllable` shows: a whole syllable once it has a first consonant and a vowel, or its one
+/// letter alone, or nothing.
+fn syllable_text([first, vowel, last]: Syllable) -> String {
+    let jamo = |at: Option<u8>| at.map(|at| &JAMO[usize::from(at)]);
+    let (first, vowel, last) = (jamo(first), jamo(vowel), jamo(last));
+    if let (Some(first), Some(vowel)) = (first, vowel) {
+        let (first, vowel) = (first.first.unwrap_or(0), vowel.vowel.unwrap_or(0));
+        let at = 0xAC00 + (first * 21 + vowel) * 28 + last.map_or(0, |last| last.last);
+        return char::from_u32(at).map(String::from).unwrap_or_default();
+    }
+    first
+        .or(vowel)
+        .map(|jamo| jamo.alone.to_string())
+        .unwrap_or_default()
+}
+
+/// What `ime ko` does with `key` while it composes `syllable`, as macOS's 2-Set Korean makes the
+/// calls (#2457), drive.mm's KoreanKey: the syllable it commits, if any, the syllable it composes
+/// after, and whether it takes the key. A letter that can't join the syllable commits it and
+/// starts the next, and a vowel after a last consonant takes that consonant into the next syllable
+/// (핫 then ㅔ gives 하 and 세). Backspace takes the last letter off, and any other key commits
+/// what's composing and goes on to the window, return too, unlike Japanese input.
+fn korean_key(syllable: Syllable, key: &str) -> (Option<String>, Syllable, bool) {
+    let [first, vowel, last] = syllable;
+    let composing = syllable != [None; 3];
+    let Some(at) = JAMO.iter().position(|jamo| key.as_bytes() == [jamo.key]) else {
+        if !composing {
+            return (None, syllable, false);
+        }
+        if key == "backspace" {
+            let shorter = match syllable {
+                [_, _, Some(_)] => [first, vowel, None],
+                [Some(_), Some(_), None] => [first, None, None],
+                _ => [None; 3],
+            };
+            return (None, shorter, true);
+        }
+        return (Some(syllable_text(syllable)), [None; 3], false);
+    };
+    let jamo = &JAMO[at];
+    let at = Some(at as u8);
+    let committed = |kept: Syllable| composing.then(|| syllable_text(kept));
+    let (committed, next) = match jamo.vowel {
+        None if first.is_some() && vowel.is_some() && last.is_none() && jamo.last != 0 => {
+            (None, [first, vowel, at])
+        }
+        None => (committed(syllable), [at, None, None]),
+        Some(_) if first.is_some() && vowel.is_none() => (None, [first, at, None]),
+        // The last consonant moves on to start the syllable this vowel is in.
+        Some(_) => (committed([first, vowel, None]), [last, at, None]),
+    };
+    (committed, next, true)
+}
+
 /// Handles `key` as drive.mm's scripted input method does, with the calls a Japanese one makes in
-/// the UI's field with the keys: letters compose, space converts them all, return commits and
-/// escape cancels. Returns false for a key it leaves to the window, as one with a shortcut's
-/// modifiers, and None for one it would compose in a page, whose input method is Chromium's,
-/// which the driver can't type through: as plain keys it would pass for a composition.
+/// the field with the keys: letters compose, space converts them all, return commits and escape
+/// cancels. Returns false for a key it leaves to the window, as one with a shortcut's modifiers,
+/// and None for one no field took: on X11 one it would compose in a page, whose input method is
+/// Chromium's, which the driver can't type through, as plain keys would pass for a composition;
+/// under Wayland one where sway gave the input method no text input.
 pub(super) fn ime_key(key: &str, state: u16) -> Option<bool> {
     let shortcut = u16::from(KeyButMask::CONTROL | KeyButMask::MOD1);
     let letter = key.len() == 1 && key.bytes().all(|b| b.is_ascii_lowercase());
@@ -1015,7 +1503,26 @@ pub(super) fn ime_key(key: &str, state: u16) -> Option<bool> {
     if !IME_ON.get() || (state | FLAGS.get()) & shortcut != 0 || !(composing || letter) {
         return Some(false);
     }
+    // Under Wayland, the activates and deactivates sway sent since the last key come first: the
+    // composition may have gone with them, and then Return and Escape are plain keys.
+    if crate::drive_wayland::on() {
+        // A letter that starts a composition waits for the commands before it to be done, as a ⌘L
+        // sent with no wait: Chromium reads that key on this thread only once this command
+        // returns, and sway resets the input method as the hold moves it from the page after
+        // that. Composed in that gap, which a person's typing doesn't fit in, the letters would
+        // be reset under the field that showed them.
+        if letter && !composing && after_earlier_done() {
+            return None;
+        }
+        crate::drive_wayland::sync();
+        if COMPOSITION.with_borrow(Option::is_none) && !letter {
+            return Some(false);
+        }
+    }
     let field = Field::with_keys()?;
+    if KOREAN.get() {
+        return korean_ime_key(field, key);
+    }
     let composition = COMPOSITION.take();
     let mark = |text: &str, selected: std::ops::Range<usize>| {
         let handled = field.compose(text, Some(selected));
@@ -1044,6 +1551,25 @@ pub(super) fn ime_key(key: &str, state: u16) -> Option<bool> {
     Some(true)
 }
 
+/// `ime_key` for `ime ko`: commits and composes in `field` as `korean_key` says.
+fn korean_ime_key(field: Field, key: &str) -> Option<bool> {
+    let (committed, next, taken) = korean_key(SYLLABLE.get(), key);
+    let text = syllable_text(next);
+    let committed_ok = committed
+        .as_deref()
+        .is_none_or(|committed| field.commit(committed));
+    // A commit ends the composition, so only a syllable after it is composed again.
+    let end = text.encode_utf16().count();
+    let cursor = (!text.is_empty()).then_some(end..end);
+    let composed = committed.is_some() && text.is_empty() || field.compose(&text, cursor);
+    if !(committed_ok && composed) {
+        return None;
+    }
+    SYLLABLE.set(next);
+    COMPOSITION.set((!text.is_empty()).then_some(text));
+    Some(taken)
+}
+
 /// Sends `key`'s events of `kinds` as `key` does. A held key's repeats are presses without
 /// releases between them, as the X server sends them while it auto-repeats.
 fn key_events(key: &str, mut state: u16, kinds: &[u8]) -> Option<()> {
@@ -1051,6 +1577,9 @@ fn key_events(key: &str, mut state: u16, kinds: &[u8]) -> Option<()> {
     state |= FLAGS.get();
     let modifiers = KeyButMask::CONTROL | KeyButMask::MOD1 | KeyButMask::SHIFT;
     KEY_FLAGS.set(state & u16::from(modifiers));
+    // The walk's keys after its ⌃Tab, such as an arrow with Control, keep it.
+    let control = state & u16::from(KeyButMask::CONTROL) != 0;
+    WALK.set(control && (key == "tab" || WALK.get()));
     hold_modifiers();
     if shift {
         state |= u16::from(KeyButMask::SHIFT);
@@ -1058,37 +1587,58 @@ fn key_events(key: &str, mut state: u16, kinds: &[u8]) -> Option<()> {
     code_events(code, state, kinds)
 }
 
-/// Has the X server's keyboard hold Control while the driver does, after `flags` or a key with it,
-/// and Alt while `flags` does, as real keys would: the events the driver sends change none of its
-/// state, and the app's ⌃Tab walk lasts while the server says Control is held
-/// (gpui_linux::watch_control), as a menu shows ⌥'s alternates while it says Alt is.
+/// Has the X server's keyboard hold down, through XTEST, the modifier keys `flags` holds and the
+/// Control the last key went with, as a hand's would stay down: the app's ⌃Tab walk lasts while
+/// the server says Control is held (gpui_linux::watch_control), as a menu shows ⌥'s alternates
+/// while it says Alt is.
 fn hold_modifiers() -> Option<()> {
-    use x11rb::protocol::xkb::{self, ConnectionExt as _};
-    let control = (FLAGS.get() | KEY_FLAGS.get()) & u16::from(KeyButMask::CONTROL);
-    let held = control | (FLAGS.get() & u16::from(KeyButMask::MOD1));
-    if held == LOCKED.get() {
-        return Some(());
+    xtest_modifiers(held_modifiers())
+}
+
+/// The modifiers the driver holds between its keys: `flags`', and the Control of the last key.
+fn held_modifiers() -> u16 {
+    FLAGS.get() | KEY_FLAGS.get() & u16::from(KeyButMask::CONTROL)
+}
+
+/// The Control a click `action` keeps: a ⌃Tab walk's (WALK), for a left click, as a hand's.
+fn walk_control(action: &str) -> u16 {
+    let kept = matches!(action, "click" | "clickkey") && WALK.get();
+    if kept {
+        u16::from(KeyButMask::CONTROL)
+    } else {
+        0
     }
-    let x = server()?;
-    let (connection, _) = &*x;
-    // The server takes no other XKB request from a client before this one.
-    connection.xkb_use_extension(1, 0).ok()?.reply().ok()?;
-    let affected = xproto::ModMask::CONTROL | xproto::ModMask::M1;
-    let none = xproto::ModMask::from(0u16);
-    (connection.xkb_latch_lock_state(
-        xkb::ID::USE_CORE_KBD.into(),
-        affected,
-        xproto::ModMask::from(held),
-        false,
-        xkb::Group::M1,
-        none,
-        false,
-        0,
-    ))
-    .ok()?;
-    connection.flush().ok()?;
-    LOCKED.set(held);
-    Some(())
+}
+
+/// Lets go of the keys and buttons an earlier launch's driver left down through XTEST. The server
+/// keeps a key or button XTEST pressed, so a launch that quit or crashed after a key with ⌘ or ⌃
+/// left the next launch on the same server reading every key typed as a shortcut, in its UI and
+/// in pages that get keys through XTest, as xdotool's (#2511).
+fn release_held_modifiers() {
+    if crate::drive_wayland::on() {
+        return;
+    }
+    let release = || -> Option<()> {
+        let x = server()?;
+        let (connection, root) = &*x;
+        let keys = connection.query_keymap().ok()?.reply().ok()?.keys;
+        let down = (0..=255u8).filter(|&code| keys[usize::from(code / 8)] & 1 << (code % 8) != 0);
+        for code in down {
+            xtest_event(xproto::KEY_RELEASE_EVENT, code, 0, 0)?;
+        }
+        let pointer = connection.query_pointer(*root).ok()?.reply().ok()?;
+        let buttons = u16::from(pointer.mask);
+        for button in (1..=5).filter(|&button| buttons & button_mask(button) != 0) {
+            xtest_event(
+                xproto::BUTTON_RELEASE_EVENT,
+                button,
+                pointer.root_x,
+                pointer.root_y,
+            )?;
+        }
+        Some(())
+    };
+    release();
 }
 
 /// Runs `key`, a key command, once the X input focus is in a browser window, looking each
@@ -1109,8 +1659,41 @@ fn key_on_return(key: String, until: std::time::Instant, done: Box<dyn FnOnce()>
     done();
 }
 
-/// Sends the key `code`'s events of `kinds`, with the modifiers `state`, as `key_events` does.
+/// The key `code`'s events of `kinds`, with the modifiers `state`, as `key_events` does: through
+/// XTEST, with the modifier keys `state` has going down before the press and those the driver
+/// holds staying down after the release, unless it's a repeat. A chord with Alt, the Mac's ⌃ or ⌥,
+/// goes as a hand's does, so a window manager's bind would take it first: check/openbox.xml leaves
+/// the chords the checks press, which tools/check-lints.py holds it to (#2721).
 fn code_events(code: u8, state: u16, kinds: &[u8]) -> Option<()> {
+    // A held key's repeat, a press of a key down already, is what XTEST can't send: the server
+    // makes repeats only of a key held past its delay, which is a wait on time.
+    let repeat =
+        kinds == [xproto::KEY_PRESS_EVENT] && XTEST_KEYS.with_borrow(|down| down.contains(&code));
+    if repeat {
+        return sent_code_events(code, state, kinds);
+    }
+    let held = held_modifiers();
+    if kinds.first() == Some(&xproto::KEY_PRESS_EVENT) {
+        xtest_modifiers(state & MODIFIERS | held)?;
+    }
+    for &kind in kinds {
+        xtest_event(kind, code, 0, 0)?;
+        XTEST_KEYS.with_borrow_mut(|down| {
+            down.retain(|&key| key != code);
+            if kind == xproto::KEY_PRESS_EVENT {
+                down.push(code);
+            }
+        });
+    }
+    if kinds.last() == Some(&xproto::KEY_RELEASE_EVENT) {
+        xtest_modifiers(held)?;
+    }
+    Some(())
+}
+
+/// Sends the key `code`'s events of `kinds`, with the modifiers `state`, to the window the X
+/// server would pick.
+fn sent_code_events(code: u8, state: u16, kinds: &[u8]) -> Option<()> {
     let x = server()?;
     let (connection, root) = &*x;
     // As the X server picks it: the window under the pointer when that's shown and in the focus
@@ -1201,7 +1784,13 @@ fn stack() -> Option<()> {
             break;
         }
         let Some(at) = bounds(top) else { continue };
-        if !viewable(connection, top)
+        // A window for input alone draws nothing, so it's in front of nothing, such as KWin's at
+        // the screen's corner for its edge actions (#2756).
+        let input_only = (connection.get_window_attributes(top).ok())
+            .and_then(|cookie| cookie.reply().ok())
+            .is_some_and(|a| a.class == xproto::WindowClass::INPUT_ONLY);
+        if input_only
+            || !viewable(connection, top)
             || at[0] >= over[2]
             || over[0] >= at[2]
             || at[1] >= over[3]
@@ -1214,8 +1803,7 @@ fn stack() -> Option<()> {
             continue;
         }
         // The window manager's frame holds the client, which has the title and process.
-        let mut clients = vec![top];
-        clients.extend(connection.query_tree(top).ok()?.reply().ok()?.children);
+        let clients = [client_in(connection, top), top];
         let property = |window, name: &str| {
             let reply = connection
                 .get_property(false, window, atom(name)?, xproto::AtomEnum::ANY, 0, 256)
@@ -1800,6 +2388,51 @@ fn atom(name: &str) -> Option<xproto::Atom> {
     )
 }
 
+/// Maps a desktop window over the whole screen, as a desktop shell (Plasma's, xfdesktop) does, or
+/// takes it away: KWin shows the desktop by raising that window over the others and giving it the
+/// keyboard, and without one it shows nothing.
+fn desktop_shell(on: bool) -> Option<()> {
+    thread_local! {
+        static SHELL: Cell<Option<xproto::Window>> = const { Cell::new(None) };
+    }
+    let x = server()?;
+    let (connection, root) = &*x;
+    if let Some(window) = SHELL.take() {
+        connection.destroy_window(window).ok()?;
+    }
+    if on {
+        let screen = (connection.setup().roots.iter()).find(|screen| screen.root == *root)?;
+        let window = connection.generate_id().ok()?;
+        (connection.create_window(
+            x11rb::COPY_DEPTH_FROM_PARENT,
+            window,
+            *root,
+            0,
+            0,
+            screen.width_in_pixels,
+            screen.height_in_pixels,
+            0,
+            xproto::WindowClass::INPUT_OUTPUT,
+            x11rb::COPY_FROM_PARENT,
+            &xproto::CreateWindowAux::new().background_pixel(screen.black_pixel),
+        ))
+        .ok()?;
+        let kind = atom("_NET_WM_WINDOW_TYPE")?;
+        let desktop = atom("_NET_WM_WINDOW_TYPE_DESKTOP")?;
+        (connection.change_property32(
+            xproto::PropMode::REPLACE,
+            window,
+            kind,
+            xproto::AtomEnum::ATOM,
+            &[desktop],
+        ))
+        .ok()?;
+        connection.map_window(window).ok()?;
+        SHELL.set(Some(window));
+    }
+    connection.flush().ok()
+}
+
 /// The driver's own window, on its connection, which nobody sees.
 fn driver_window() -> Option<xproto::Window> {
     if let Some(window) = DRIVER_WINDOW.get() {
@@ -2212,7 +2845,12 @@ fn run_command(line: &str) -> Option<()> {
                 "middleclick" => 2,
                 _ => 1,
             };
-            click(at, which, click_modifiers(words), false)?;
+            click(
+                at,
+                which,
+                click_modifiers(words) | walk_control(action),
+                false,
+            )?;
             if action == "doubleclick" {
                 click(at, 1, none, true)?;
             }
@@ -2229,23 +2867,6 @@ fn run_command(line: &str) -> Option<()> {
             };
             click(at, which, none, false)
         }
-        // handclick <x> <y>: a click there with the display's own pointer, through XTest, as a hand
-        // clicks: the host hears the screen's presses (page_presses.rs), which a click sent to a
-        // window isn't. The pointer stays there, as a hand's does.
-        "handclick" => {
-            let (x, y) = point(&mut words)?;
-            let at = target_at(x, y)?;
-            let server = server()?;
-            let (connection, root) = &*server;
-            let fake = |kind: u8, button: u8, (x, y): (i16, i16)| {
-                (connection.xtest_fake_input(kind, button, x11rb::CURRENT_TIME, *root, x, y, 0))
-                    .ok()?;
-                connection.get_input_focus().ok()?.reply().ok().map(drop)
-            };
-            fake(xproto::MOTION_NOTIFY_EVENT, 0, (at.root_x, at.root_y))?;
-            fake(xproto::BUTTON_PRESS_EVENT, 1, (at.root_x, at.root_y))?;
-            fake(xproto::BUTTON_RELEASE_EVENT, 1, (at.root_x, at.root_y))
-        }
         "clickkey" | "rightclickkey" | "doubleclickkey" => {
             let (x, y) = point(&mut words)?;
             // Settings' close button is the window manager's off the Mac, in its title bar.
@@ -2259,7 +2880,7 @@ fn run_command(line: &str) -> Option<()> {
             click(
                 at,
                 if action == "rightclickkey" { 3 } else { 1 },
-                none,
+                walk_control(action),
                 false,
             )?;
             if action == "doubleclickkey" {
@@ -2301,10 +2922,14 @@ fn run_command(line: &str) -> Option<()> {
                 ..target_in(driven()?.window, x2, y2)?
             };
             let to = relative_to(to, at.window)?;
+            watch_crossings(driven()?.window)?;
+            MOVE_ASKED.set(false);
+            WM_GRAB.set(WmGrab::None);
             first_press(at, 1, false);
             button(at, 1, true, none)?;
             motion(to, button_mask(1))?;
-            button(to, 1, false, button_mask(1))
+            go_on(Box::new(move |done| release_after_move(to, done)));
+            Some(())
         }
         "press" | "dragto" | "release" | "rightpress" | "rightdragto" | "rightrelease" => {
             let (x, y) = point(&mut words)?;
@@ -2434,30 +3059,16 @@ fn run_command(line: &str) -> Option<()> {
             go_on(Box::new(move |done| key_on_return(key, until, done)));
             Some(())
         }
-        // Each modifier going down or up as its key does, the left one, in the state held before
-        // it, as the X server reports a key.
-        // The modifiers the last key went with are held too, as the Mac's app takes them to be
-        // until the flags change, such as ⌃ through a ⌃Tab walk.
+        // Each modifier's left key going down or up through XTEST, as a hand's, so the X server
+        // reports it in the state held before it and holds it for the keys and clicks after.
+        // The modifiers the last key went with are let go of, as a hand lets go of a chord, unless
+        // `flags` names them: the Mac's app takes them to be held until the flags change, such as
+        // ⌃ through a ⌃Tab walk.
         "flags" => {
-            let to = modifiers(words);
-            FLAGS.set(FLAGS.get() | KEY_FLAGS.take());
-            let keys = [
-                (KeyButMask::CONTROL, 0xffe3),
-                (KeyButMask::MOD1, 0xffe9),
-                (KeyButMask::SHIFT, 0xffe1),
-            ];
-            for (mask, keysym) in keys {
-                let (mask, held) = (u16::from(mask), FLAGS.get());
-                let kind = match (held & mask != 0, to & mask != 0) {
-                    (false, true) => xproto::KEY_PRESS_EVENT,
-                    (true, false) => xproto::KEY_RELEASE_EVENT,
-                    _ => continue,
-                };
-                code_events(keycode(keysym)?.0, held, &[kind])?;
-                FLAGS.set(held ^ mask);
-            }
-            hold_modifiers();
-            Some(())
+            KEY_FLAGS.set(0);
+            WALK.set(false);
+            FLAGS.set(modifiers(words));
+            hold_modifiers()
         }
         // Repeats are presses like the first, so repeat changes nothing here.
         "keydown" => key_events(words.next()?, none, &[xproto::KEY_PRESS_EVENT]),
@@ -2465,12 +3076,19 @@ fn run_command(line: &str) -> Option<()> {
         "type" => rest.chars().try_for_each(|c| key(&c.to_string(), none)),
         "insert" => insert(rest),
         "ime" => {
-            IME_ON.set(match words.next()? {
-                "on" => true,
-                "off" => false,
+            let (on, korean) = match words.next()? {
+                "on" => (true, false),
+                "ko" => (true, true),
+                "off" => (false, false),
                 _ => return None,
-            });
-            COMPOSITION.set(None);
+            };
+            // Under Wayland the driver is sway's input method from here, or refuses to be.
+            if on && crate::drive_wayland::on() {
+                crate::drive_wayland::input_method()?;
+            }
+            IME_ON.set(on);
+            KOREAN.set(korean);
+            input_method_reset();
             Some(())
         }
         // As the window manager's full-screen key, through the core, as the Mac's goes through the
@@ -2499,6 +3117,54 @@ fn run_command(line: &str) -> Option<()> {
             let mask = EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY;
             connection.send_event(false, *root, mask, message).ok()?;
             connection.flush().ok()
+        }
+        // As a pager's show-desktop button or openbox's Super+D, Linux's own: the window manager
+        // hides every window to show the desktop, or shows them again, asked through the root
+        // window (EWMH's _NET_SHOWING_DESKTOP), as wmctrl -k asks.
+        "desktop" => {
+            let on = match words.next()? {
+                "on" => 1,
+                "off" => 0,
+                "shell" => return desktop_shell(words.next() != Some("off")),
+                _ => return None,
+            };
+            let showing = atom("_NET_SHOWING_DESKTOP")?;
+            let x = server()?;
+            let (connection, root) = &*x;
+            let message = xproto::ClientMessageEvent::new(32, *root, showing, [on, 0, 0, 0, 0]);
+            let mask = EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY;
+            connection.send_event(false, *root, mask, message).ok()?;
+            connection.flush().ok()
+        }
+        // What the X server shows of the driven window and the app's windows over it, Linux's own:
+        // "browser: onscreen window <0|1>, overlays <on screen> of <shown>, keyboard
+        // <overlay|window|none>", the window that has the X input focus.
+        "onscreen" => {
+            let browser = driven()?;
+            let x = server()?;
+            let (connection, _) = &*x;
+            let viewable = |window: xproto::Window| {
+                connection
+                    .get_window_attributes(window)
+                    .ok()
+                    .and_then(|cookie| cookie.reply().ok())
+                    .is_some_and(|a| a.map_state == xproto::MapState::VIEWABLE)
+            };
+            let views = overlay_views();
+            let on = (views.iter())
+                .filter(|&&view| viewable(view as usize as u32))
+                .count();
+            let keyboard = match keyboard_window() {
+                Some(Keyboard::Overlay(_)) => "overlay",
+                Some(Keyboard::Browser(..) | Keyboard::Settings(..)) => "window",
+                None => "none",
+            };
+            log!(
+                "browser: onscreen window {}, overlays {on} of {}, keyboard {keyboard}",
+                u8::from(viewable(browser.window)),
+                views.len()
+            );
+            Some(())
         }
         // The driven window's state as the window manager has it and its frame now, as Windows'
         // driver logs its placement: "browser: placement <maximized|normal> <x> <y> <width>
@@ -2569,6 +3235,23 @@ fn run_command(line: &str) -> Option<()> {
             Some(())
         }
         "stack" => stack(),
+        // The window manager focusing the driven browser window again with no input, as sway does
+        // as it activates it while an overlay over it maps (#3044): the X focus to its window, and
+        // a raise asked of the manager, which sway's leaves to its own activations.
+        "refocus" => {
+            let browser = driven()?;
+            let x = server()?;
+            let (connection, _) = &*x;
+            let focus = xproto::InputFocus::POINTER_ROOT;
+            connection
+                .set_input_focus(focus, browser.window, x11rb::CURRENT_TIME)
+                .ok()?;
+            let above = ConfigureWindowAux::new().stack_mode(StackMode::ABOVE);
+            connection.configure_window(browser.window, &above).ok()?;
+            sync();
+            log!("browser: drive refocused the browser window");
+            Some(())
+        }
         "front" => {
             let driven = driven().map(|b| b.id);
             let describe = |browser: Option<Browser>| match browser {
@@ -2744,6 +3427,15 @@ fn run_command(line: &str) -> Option<()> {
             log!("browser: agent {agent} opened {tab}");
             Some(())
         }
+        "agentnavigate" => {
+            let agent = words.next()?;
+            let tab: bc::bc_id = words.next()?.parse().ok()?;
+            let url = words.next()?;
+            let (agent_c, url_c) = (CString::new(agent).ok()?, CString::new(url).ok()?);
+            let went = unsafe { bc::bc_agent_navigate(agent_c.as_ptr(), tab, url_c.as_ptr()) };
+            log!("browser: agent {agent} navigated {tab}: {}", went as u8);
+            Some(())
+        }
         "agentrelease" => {
             let agent = words.next()?;
             let tab: bc::bc_id = words.next()?.parse().ok()?;
@@ -2794,6 +3486,16 @@ fn run_command(line: &str) -> Option<()> {
             Some(())
         }
         "pip" => mini_player_command(words),
+        // hold press, hold dragto and hold release <x> <y>: as pip's, on the driven browser window,
+        // for its edges, which the window manager resizes it from with the display's pointer.
+        "hold" => {
+            let step = words.next()?;
+            let (x, y) = point(&mut words)?;
+            match step {
+                "press" | "dragto" | "release" => hold_window(driven()?.window, "held", step, x, y),
+                _ => None,
+            }
+        }
         _ => None,
     }
 }
@@ -2825,14 +3527,9 @@ fn mini_player() -> Option<xproto::Window> {
                 .is_some_and(|a| a.map_state == xproto::MapState::VIEWABLE)
     };
     let tops = connection.query_tree(*root).ok()?.reply().ok()?.children;
-    // A window manager that reparents, as openbox does, holds it in a frame of its own.
-    tops.into_iter().find_map(|top| {
-        if ours(top) {
-            return Some(top);
-        }
-        let children = connection.query_tree(top).ok()?.reply().ok()?.children;
-        children.into_iter().find(|&child| ours(child))
-    })
+    (tops.into_iter())
+        .map(|top| client_in(connection, top))
+        .find(|&window| ours(window))
 }
 
 /// pip, and pip doubleclick, wheel, press, dragto and release (run_command's header).
@@ -2850,7 +3547,7 @@ fn mini_player_command<'a>(mut words: impl Iterator<Item = &'a str>) -> Option<(
     };
     let (x, y) = point(&mut words)?;
     if let "press" | "dragto" | "release" = action {
-        return hold_mini_player(window, action, x, y);
+        return hold_window(window, "pip", action, x, y);
     }
     let at = target_in(window, x, y)?;
     match action {
@@ -2874,24 +3571,22 @@ fn mini_player_command<'a>(mut words: impl Iterator<Item = &'a str>) -> Option<(
 
 /// pip press, pip dragto and pip release <x> <y>, at points where the window was at the press: the
 /// display's own pointer, through XTest. Sent events can't move it, as the window manager moves it
-/// with the pointer the X server has, as a hand moves it.
-fn hold_mini_player(window: xproto::Window, step: &str, x: f64, y: f64) -> Option<()> {
+/// with the pointer the X server has, as a hand moves it. hold's are the same on a browser window.
+/// The release logs where the drag left the window, as "browser: <what> at".
+fn hold_window(window: xproto::Window, what: &str, step: &str, x: f64, y: f64) -> Option<()> {
     let server = server()?;
     let (connection, root) = &*server;
-    let fake = |kind: u8, button: u8, (x, y): (i16, i16)| {
-        (connection.xtest_fake_input(kind, button, x11rb::CURRENT_TIME, *root, x, y, 0)).ok()?;
-        connection.get_input_focus().ok()?.reply().ok().map(drop)
-    };
+    let fake = |kind: u8, button: u8, (x, y): (i16, i16)| xtest_event(kind, button, x, y);
     if step == "press" {
         let at = target_in(window, x, y)?;
         let was = connection.query_pointer(*root).ok()?.reply().ok()?;
         let back = (was.root_x, was.root_y);
         fake(xproto::MOTION_NOTIFY_EVENT, 0, (at.root_x, at.root_y))?;
-        // The pointer is the display's, so a press anywhere but on the Mini Player would be
-        // another window's.
+        // The pointer is the display's, so a press anywhere but on the window would be another
+        // window's.
         let under = connection.query_pointer(*root).ok()?.reply().ok()?.child;
         if !within(connection, window, under) {
-            log!("browser: pip press: another window is over the Mini Player there");
+            log!("browser: {what} press: another window is over it there");
             return fake(xproto::MOTION_NOTIFY_EVENT, 0, back);
         }
         first_press(at, 1, false);
@@ -2943,7 +3638,7 @@ fn hold_mini_player(window: xproto::Window, step: &str, x: f64, y: f64) -> Optio
     }
     // Where the drag left it, as the last frame the window manager gave it may have come before.
     let [left, top, width, height] = frame(window)?;
-    log!("browser: pip at {left:.0} {top:.0} {width:.0} {height:.0}");
+    log!("browser: {what} at {left:.0} {top:.0} {width:.0} {height:.0}");
     fake(xproto::MOTION_NOTIFY_EVENT, 0, held.back)
 }
 
@@ -3040,4 +3735,139 @@ fn relative_to(to: Target, window: xproto::Window) -> Option<Target> {
         y: at.dst_y,
         ..to
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{WmGrab, await_uncovered, wm_grab_after, xproto, xtest_delay, xtest_verdict};
+    use std::time::{Duration, Instant};
+
+    // ime ko types Korean a syllable at a time, as drive.mm's does, for keys' Korean typed right
+    // after Ctrl+L under Wayland (#3403).
+    #[test]
+    fn ime_ko_composes_a_syllable_at_a_time_from_a_2_set_keyboard() {
+        use super::{Syllable, korean_key, syllable_text};
+        let typed = |keys: &str| {
+            let mut committed = String::new();
+            let mut syllable: Syllable = [None; 3];
+            for key in keys.chars() {
+                let (commit, next, taken) = korean_key(syllable, &key.to_string());
+                assert!(taken, "{key} wasn't taken");
+                committed += &commit.unwrap_or_default();
+                syllable = next;
+            }
+            (committed, syllable)
+        };
+        // A vowel after a last consonant takes it into the next syllable: 안 then ㅕ gives 안 and 녀.
+        let (committed, syllable) = typed("dkssudgktpdy");
+        assert_eq!(
+            (committed.as_str(), syllable_text(syllable).as_str()),
+            ("안녕하세", "요")
+        );
+        // A consonant after a last one commits the syllable and starts the next.
+        let (committed, syllable) = typed("gksrmf");
+        assert_eq!(
+            (committed.as_str(), syllable_text(syllable).as_str()),
+            ("한", "글")
+        );
+        // Backspace takes the last letter off, and escape commits what's left and goes on.
+        let (commit, syllable, taken) = korean_key(syllable, "backspace");
+        assert_eq!(
+            (commit, syllable_text(syllable).as_str(), taken),
+            (None, "그", true)
+        );
+        let (commit, syllable, taken) = korean_key(syllable, "escape");
+        assert_eq!(
+            (commit.as_deref(), syllable, taken),
+            (Some("그"), [None; 3], false)
+        );
+        // With nothing composing, a key that isn't a letter is the window's.
+        assert_eq!(korean_key([None; 3], "escape"), (None, [None; 3], false));
+        // A letter alone shows as its own letter.
+        assert_eq!(syllable_text(typed("k").1), "ㅏ");
+    }
+
+    // KWin's input-only window over the screen's corner took the press the driver sent with the
+    // move there, before KWin heard the pointer come and took the window away (#2765).
+    #[test]
+    fn a_press_waits_for_an_input_only_window_over_the_point_to_go() {
+        let later = Instant::now() + Duration::from_secs(60);
+        let mut pauses = 0;
+        let mut answers = [Some(0x20001b), Some(0x20001b), None].into_iter();
+        let waited = await_uncovered(later, || answers.next().flatten(), || pauses += 1);
+        assert_eq!(waited, Ok(2));
+        assert_eq!(pauses, 2);
+        // Nothing over the point: the press goes at once.
+        let mut pauses = 0;
+        assert_eq!(await_uncovered(later, || None, || pauses += 1), Ok(0));
+        assert_eq!(pauses, 0);
+        // One that stays past the deadline is named, and the press goes anyway.
+        let past = Instant::now();
+        assert_eq!(
+            await_uncovered(past, || Some(0x20001b), || {}),
+            Err(0x20001b)
+        );
+    }
+
+    // The driver let go of a drag before the window manager took the pointer for the window move
+    // the drag started, and the move outlived it and took the next press (#2721).
+    #[test]
+    fn a_window_move_waits_for_the_window_managers_grab_and_its_end() {
+        use xproto::{NotifyDetail as Detail, NotifyMode as Mode};
+        let (leave, enter) = (true, false);
+        let after = |now, leave, mode, detail| wm_grab_after(now, leave, mode, detail);
+        // Openbox: the grab takes the pointer out of the window, and its end brings it back.
+        let taken = after(WmGrab::None, leave, Mode::GRAB, Detail::VIRTUAL);
+        assert!(taken == WmGrab::Taken);
+        assert!(after(taken, enter, Mode::UNGRAB, Detail::VIRTUAL) == WmGrab::GivenBack);
+        // KWin: the window it maps over the screen takes the pointer, and goes at the move's end.
+        let taken = after(WmGrab::None, leave, Mode::NORMAL, Detail::NONLINEAR);
+        assert!(taken == WmGrab::Taken);
+        assert!(after(taken, leave, Mode::GRAB, Detail::NONLINEAR) == WmGrab::Taken);
+        assert!(after(taken, enter, Mode::NORMAL, Detail::NONLINEAR) == WmGrab::GivenBack);
+        // The pointer going into or out of the window's own children is no grab.
+        assert!(after(WmGrab::None, leave, Mode::NORMAL, Detail::INFERIOR) == WmGrab::None);
+        assert!(after(WmGrab::Taken, enter, Mode::NORMAL, Detail::INFERIOR) == WmGrab::Taken);
+        // An earlier grab's end, before the move's, gives nothing back and takes nothing.
+        assert!(after(WmGrab::None, enter, Mode::UNGRAB, Detail::VIRTUAL) == WmGrab::None);
+        assert!(after(WmGrab::None, leave, Mode::UNGRAB, Detail::VIRTUAL) == WmGrab::None);
+    }
+
+    fn outputs(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| name.to_string()).collect()
+    }
+
+    // A double click's two presses went out within a millisecond, so Chromium took the second
+    // for the first handled again and the Mini Player saw no double click (#2721).
+    #[test]
+    fn xtest_presses_never_share_a_millisecond() {
+        assert!(xtest_delay(xproto::BUTTON_PRESS_EVENT) >= 1);
+        // Nothing else waits: a release, a move or a key goes as soon as it's sent.
+        for kind in [
+            xproto::BUTTON_RELEASE_EVENT,
+            xproto::MOTION_NOTIFY_EVENT,
+            xproto::KEY_PRESS_EVENT,
+            xproto::KEY_RELEASE_EVENT,
+        ] {
+            assert_eq!(xtest_delay(kind), 0);
+        }
+    }
+
+    #[test]
+    fn xtest_drives_only_a_checks_own_display() {
+        let headless = || Ok(());
+        let desktop = || Err("sway's outputs aren't all headless".to_string());
+        // Xvfb, as check.sh and CI start it, and headless.sh's Xwayland.
+        assert!(xtest_verdict("xvfb", &outputs(&["screen"]), headless).is_ok());
+        assert!(xtest_verdict("wayland-1", &outputs(&["HEADLESS-1"]), headless).is_ok());
+        assert!(xtest_verdict("wayland-1", &outputs(&["XWAYLAND0"]), headless).is_ok());
+        // Someone's own desktop: no BROWSER_HEADLESS, or one set by hand over a real screen.
+        assert!(xtest_verdict("", &outputs(&["screen"]), headless).is_err());
+        assert!(xtest_verdict("xvfb", &outputs(&["eDP-1", "HDMI-1"]), headless).is_err());
+        assert!(xtest_verdict("xvfb", &outputs(&["XWAYLAND0"]), headless).is_err());
+        assert!(xtest_verdict("xvfb", &[], headless).is_err());
+        // A desktop sway's Xwayland, and an Xwayland that isn't the headless sway's.
+        assert!(xtest_verdict("wayland-1", &outputs(&["XWAYLAND0"]), desktop).is_err());
+        assert!(xtest_verdict("wayland-1", &outputs(&["DP-1"]), headless).is_err());
+    }
 }

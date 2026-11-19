@@ -162,3 +162,13 @@ fn a_tab_in_safaris_engine_keeps_chromiums_dialog_back(cx: &mut TestAppContext) 
     engine(&shell, cx, false);
     assert_eq!(dialogs(&host), ["page dialog 10 1"]);
 }
+
+#[gpui::test]
+fn a_window_coming_to_the_front_takes_back_anothers_dialog(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx);
+    // Another window's page asked, and that window closed with its tab before it drew again, so
+    // the dialog over it stayed and took every shortcut after from this one (#3108).
+    shell.update(cx, |shell, cx| shell.became_key(cx));
+    cx.run_until_parked();
+    assert_eq!(dialogs(&host), ["page dialog none"]);
+}

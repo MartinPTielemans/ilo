@@ -6,6 +6,7 @@
 #include <xdg-activation-v1-client-protocol.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -42,11 +43,17 @@ namespace browser_core::platform {
 namespace {
 
 // The resize edge's width, Arc's and Dia's outer 3 pt (docs/ux-spec.md › Dragging the window), here
-// inside the window, so thinner than the card's margin, where the pointer stopped at the window's
-// left edge brings the hidden sidebar out. The corners' length along each edge is Chrome's own
-// frame's on Linux (OpaqueBrowserFrameView). In DIPs.
+// inside the window. Its left and right parts between the corners are the UI's, as the pointer at
+// the window's edge there brings the hidden sidebar out (#3219). The corners' length along each
+// edge is Chrome's own frame's on Linux (OpaqueBrowserFrameView). In DIPs.
 constexpr int kResizeEdge = 3;
 constexpr int kResizeCorner = 16;
+
+// The width in DIPs of the band inside |widget|'s edges that resizes it, none while it's maximized
+// or full screen.
+int ResizeEdgeOf(views::Widget* widget) {
+  return widget->IsMaximized() || widget->IsFullscreen() ? 0 : kResizeEdge;
+}
 
 void (*g_app_dispatched)() = nullptr;
 
@@ -228,6 +235,17 @@ void* WaylandSurfaceOf(views::Widget* widget, gfx::Size* size) {
       widget->GetNativeWindow()->GetHost()->GetAcceleratedWidget());
 }
 
+void ComposeThroughWindow(void* surface, views::Widget* widget) {
+  wl::WaylandProxy* proxy = wl::WaylandProxy::GetInstance();
+  if (!proxy) {
+    return;
+  }
+  proxy->SetEmbedderTextInputSurface(
+      static_cast<wl_surface*>(surface),
+      widget ? widget->GetNativeWindow()->GetHost()->GetAcceleratedWidget()
+             : gfx::kNullAcceleratedWidget);
+}
+
 bool TakeKeyboardBack(views::Widget* widget) {
   gfx::Size size;
   auto* surface = static_cast<wl_surface*>(WaylandSurfaceOf(widget, &size));
@@ -360,7 +378,8 @@ void SetUpWindow(views::Widget::InitParams& params, views::WidgetDelegate& deleg
   // A frame view that draws nothing, in place of GTK's title bar, with Chromium's own frameless
   // resizing: a press in the band at its edges asks the compositor or window manager to resize
   // the window (xdg_toplevel.resize, _NET_WM_MOVERESIZE), and the pointer there takes the edge's
-  // cursor. The app's header moves the window (bc_window_start_move).
+  // cursor. The app's header moves the window (bc_window_start_move). The left and right bands
+  // between the corners are the UI's (ResizeBandsOf), which resizes from them itself.
   delegate.SetFrameViewFactory(
       base::BindRepeating([](views::Widget* widget) -> std::unique_ptr<views::FrameView> {
         auto frame = std::make_unique<views::NativeFrameView>(widget);
@@ -380,8 +399,23 @@ void SetUpWindow(views::Widget::InitParams& params, views::WidgetDelegate& deleg
       }));
 }
 
-int ResizeEdgeOf(views::Widget* widget) {
-  return widget->IsMaximized() || widget->IsFullscreen() ? 0 : kResizeEdge;
+std::vector<gfx::Rect> ResizeBandsOf(views::Widget* widget, const gfx::Size& pixels, float scale) {
+  const int edge = static_cast<int>(std::lround(ResizeEdgeOf(widget) * scale));
+  if (!edge) {
+    return {};
+  }
+  const int w = pixels.width();
+  const int h = pixels.height();
+  const int corner =
+      std::clamp(static_cast<int>(std::lround(kResizeCorner * scale)), edge, std::max(edge, h / 2));
+  return {
+      gfx::Rect(0, 0, w, edge),
+      gfx::Rect(0, h - edge, w, edge),
+      gfx::Rect(0, edge, edge, corner - edge),
+      gfx::Rect(0, h - corner, edge, corner - edge),
+      gfx::Rect(w - edge, edge, edge, corner - edge),
+      gfx::Rect(w - edge, h - corner, edge, corner - edge),
+  };
 }
 
 }  // namespace browser_core::platform

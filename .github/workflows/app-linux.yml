@@ -60,6 +60,22 @@ jobs:
       - uses: actions/checkout@v4
       - run: rustup component add rustfmt
       - run: git ls-files -z 'app/*.rs' | xargs -0 rustfmt --check
+      # std's Instant and SystemTime build for the web and panic there when read, so the library the
+      # site's demo runs reads web_time's, which are std's off the web. Tests, and the browser's own
+      # main.rs and the modules it declares, are left out: the demo builds none of them.
+      - name: The demo's code reads web_time's clock
+        working-directory: app
+        run: |
+          set -f
+          skip=":!src/main.rs :!*tests.rs :!*/tests/*"
+          for module in $(sed -nE 's/^mod ([a-z0-9_]+);/\1/p' src/main.rs); do
+            skip="$skip :!src/$module.rs :!src/$module/*"
+          done
+          if git grep -nE '^use std::time::(\{[^}]*\b(Instant|SystemTime|UNIX_EPOCH)\b|(Instant|SystemTime|UNIX_EPOCH);)|^    time::(\{[^}]*\b(Instant|SystemTime|UNIX_EPOCH)\b|(Instant|SystemTime|UNIX_EPOCH)\b)' \
+            -- 'src/*.rs' $skip; then
+            echo "::error::Use web_time::{Instant, SystemTime, UNIX_EPOCH} for these, not std::time's."
+            exit 1
+          fi
       - uses: ./.github/actions/tree-proof
         with:
           job: app-linux-fmt
@@ -105,12 +121,52 @@ jobs:
 
       - run: ./setup.sh
       - run: cargo test --release --lib
+      # GPUI's Linux code has tests of its own, which the patch adds to and the app's don't reach: those
+      # drive the app's views on a host that records what they ask (#2995). The crate is in zed's
+      # workspace, not the app's, so they run there, on the toolchain the app builds with rather than
+      # the one zed pins. Their build isn't cached and takes about 5 minutes, so it runs only when the
+      # branch changes that code, or the app's Linux host beside it. Not --locked: the patch gives
+      # gpui_linux a dependency, image, that zed's Cargo.lock doesn't list for it, and Cargo adds
+      # that one line, leaving every version as zed locked it.
+      - id: gpui-linux
+        name: Does this change GPUI's Linux code?
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE: ${{ github.event.pull_request.base.sha || 'main' }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        # Compare names at most 300 files, all on its first page, and says nothing when it stops
+        # there; its later pages hold only commits (#3202). So the tests are skipped only on a list
+        # known whole: under 300 files, from a first page that has every commit.
+        run: |
+          if ! compare=$(gh api "repos/$GITHUB_REPOSITORY/compare/$BASE...$HEAD" \
+            --jq '"\(.files | length) \(.commits | length) \(.total_commits)", .files[].filename'); then
+            echo "Compare didn't answer, so the tests run."
+            echo "changed=1" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          read -r files commits total <<< "$compare"
+          if [ "$files" -ge 300 ] || [ "$commits" -lt "$total" ]; then
+            echo "Compare named $files files and $commits of $total commits, a list that may be cut short, so the tests run."
+            echo "changed=1" >> "$GITHUB_OUTPUT"
+          elif tail -n +2 <<< "$compare" | grep -qE '^app/(patches/gpui-linux-embedded\.patch$|platform/linux/)'; then
+            echo "changed=1" >> "$GITHUB_OUTPUT"
+          fi
+      - name: GPUI's Linux tests
+        if: steps.gpui-linux.outputs.changed
+        working-directory: app/.deps/zed
+        env:
+          RUSTUP_TOOLCHAIN: stable
+        run: cargo test --release -p gpui_linux --lib --target-dir "$RUNNER_TEMP/gpui-linux"
       # libBrowser.so, the browser on Linux (linux/Cargo.toml): main.rs and platform/linux, which
       # neither the tests nor the preview compile. It names none of the engine's symbols until chrome
       # loads it, so a check needs no engine, and finds what wouldn't compile, such as a call to a
       # function main.rs builds on the Mac and Windows alone.
       - run: cargo check --release --manifest-path linux/Cargo.toml --target-dir target
       - run: cargo build --release --bin preview
+      # The site's demo is the preview built for the web (demo.yml), which only a release builds, so
+      # a change that breaks it is caught here. A check, not demo.yml's build: no LTO or wasm-bindgen.
+      - run: rustup target add wasm32-unknown-unknown
+      - run: cargo check --release --target wasm32-unknown-unknown --bin preview
       # What follows decides nothing, so this tree has passed.
       - uses: ./.github/actions/tree-proof
         with:

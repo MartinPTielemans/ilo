@@ -1,13 +1,28 @@
+# check.sh runs this at 750, only when named.
+# It needs the network, so it runs only when named.
 # adblock-parity's 50 sites with the browser's own ad blocker in place of uBlock Origin
 # (--ad-block-engine=native, #2111): the gate it has to pass. It fails where it does worse than
-# uBlock Origin did in the last adblock-parity run, whose table outlives the check in build/, as
-# each check starts by clearing build/check and CI checks each run on its own, unless
-# ADBLOCK_PARITY_BASELINE names another run's sites.tsv. So ./check.sh adblock-parity adblock-native
-# compares the two engines on the same sites the same hour.
-# It leaves adblock-native/ as adblock-parity leaves its own.
-engine=native
-if [ -z "${ADBLOCK_PARITY_BASELINE:-}" ] && [ -s build/adblock-parity-sites.tsv ]; then
+# uBlock Origin did on the same sites in the same hour, unless ADBLOCK_PARITY_BASELINE names
+# another run's sites.tsv. An older table in build/ holds the sites as they were then: one from
+# before fandom.com stopped asking for OtAutoBlock.js failed the native engine on a request neither
+# engine was asked for (#3260). So with no adblock-parity table from the last hour, as
+# ./check.sh adblock-parity adblock-native leaves, or CI's run before it in the same job, it runs
+# uBlock Origin's pass first.
+# It leaves adblock-native/ as adblock-parity leaves its own. A build without the engine (#2116)
+# skips, as its run would be uBlock Origin's again (#2284).
+if [ -z "${ADBLOCK_PARITY_BASELINE:-}" ]; then
+  if [ -z "$(find build/adblock-parity-sites.tsv -mmin -60 2>/dev/null)" ]; then
+    run=adblock-parity engine=ublock
+    . check/adblock-parity.sh
+    run=adblock-native
+    # Its app may still be writing its profile as it ends, as check.sh waits between runs.
+    for _ in $(seq 200); do
+      pgrep -f "$procs" > /dev/null || break
+      sleep 0.1
+    done
+  fi
   ADBLOCK_PARITY_BASELINE=build/adblock-parity-sites.tsv
 fi
+engine=native
 . check/adblock-parity.sh
 engine=

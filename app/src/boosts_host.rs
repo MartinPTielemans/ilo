@@ -20,11 +20,20 @@ pub(crate) fn all_off() -> bool {
     std::path::Path::new(&format!("{}/{NO_BOOSTS}", crate::profile_dir())).exists()
 }
 
-/// Has the core show each site's CSS as it changed.
+/// Has the core show each site's CSS and arrangement as they changed.
 pub(crate) fn show(changes: Vec<boosts::Change>) {
     for change in changes {
-        let (Ok(site), Ok(css)) = (CString::new(change.site.as_str()), CString::new(change.css))
-        else {
+        let css = match change.shows {
+            boosts::Shows::Css(css) => css,
+            boosts::Shows::Arrangement(bytes) => {
+                let state = set_arrangement(change.profile, &change.site, &bytes);
+                if !bytes.is_empty() {
+                    boosts::with(|boosts| boosts.set_arranged(change.profile, &change.site, state));
+                }
+                continue;
+            }
+        };
+        let (Ok(site), Ok(css)) = (CString::new(change.site.as_str()), CString::new(css)) else {
             continue;
         };
         // check.sh reads this line.
@@ -35,6 +44,195 @@ pub(crate) fn show(changes: Vec<boosts::Change>) {
         );
         unsafe { bc::bc_profile_set_boost(change.profile, site.as_ptr(), css.as_ptr()) };
     }
+}
+
+/// Gives the core `site`'s arrangement, as Browser::set_arrangement, or takes it away when empty.
+pub(crate) fn set_arrangement(profile: u64, site: &str, bytes: &str) -> boosts::Arranged {
+    let Ok(site_c) = CString::new(site) else {
+        return boosts::Arranged::Refused;
+    };
+    let state = match bytes.is_empty() {
+        true => unsafe {
+            bc::bc_profile_set_arrangement(profile, site_c.as_ptr(), std::ptr::null(), 0)
+        },
+        false => unsafe {
+            let bytes_ptr = bytes.as_ptr().cast::<c_char>();
+            bc::bc_profile_set_arrangement(profile, site_c.as_ptr(), bytes_ptr, bytes.len())
+        },
+    };
+    let state = match state as u32 {
+        bc::BC_ARRANGEMENT_ON => boosts::Arranged::On,
+        bc::BC_ARRANGEMENT_NEW => boosts::Arranged::New,
+        bc::BC_ARRANGEMENT_CHANGED => boosts::Arranged::Changed,
+        _ => boosts::Arranged::Refused,
+    };
+    log!(
+        "browser: arrangement for {site} ({} bytes) {state:?}",
+        bytes.len()
+    );
+    state
+}
+
+/// Turn On, or a change put back: the core records `bytes` as the user's for `site` and places
+/// them, as Browser::keep_arrangement.
+pub(crate) fn keep_arrangement(profile: u64, site: &str, bytes: &str) -> bool {
+    let Ok(site_c) = CString::new(site) else {
+        return false;
+    };
+    let bytes_ptr = bytes.as_ptr().cast::<c_char>();
+    let kept = unsafe {
+        bc::bc_profile_turn_on_arrangement(profile, site_c.as_ptr(), bytes_ptr, bytes.len())
+    };
+    log!(
+        "browser: arrangement for {site} ({} bytes) kept {kept}",
+        bytes.len()
+    );
+    kept
+}
+
+/// The look the core gives what Arrange lifts off the page: the app's popover elevation, once,
+/// before the first page loads.
+pub(crate) fn set_arrange_lift() {
+    let lift = browser::elevation::Level::Popover.lift();
+    let lift = bc::bc_arrange_lift {
+        rim: lift.rim,
+        outline: lift.outline,
+        shadow: lift.shadow,
+        outline_blur: lift.outline_blur.into(),
+        shadow_y: lift.shadow_y.into(),
+        shadow_blur: lift.shadow_blur.into(),
+    };
+    unsafe { bc::bc_arrange_set_lift(&lift) };
+}
+
+/// Arrange ended on the tab without the app asking, as a new page ends it.
+pub(crate) unsafe extern "C" fn tab_arrange_ended(_: *mut c_void, tab: bc::bc_id) {
+    update_app_later(move |cx| {
+        if let Some(shell) = tab_window(tab, cx).and_then(|window| window.shell.upgrade()) {
+            shell.update(cx, |shell, cx| shell.arrange_ended(tab, cx));
+        }
+    });
+}
+
+/// Where the user is in the tab's Arrange, once a step changes and as a scroll starts and rests:
+/// for the mode's keys, ⌘Z's history and the mini bar over the thing selected.
+pub(crate) unsafe extern "C" fn tab_arrange_state(
+    _: *mut c_void,
+    tab: bc::bc_id,
+    state: *const bc::bc_arrange_state,
+) {
+    use boosts::arrange::{Element, Outcome, Refused, State, Step};
+    let state = unsafe { &*state };
+    let text = |text: *const c_char| {
+        if text.is_null() {
+            String::new()
+        } else {
+            unsafe { CStr::from_ptr(text) }
+                .to_string_lossy()
+                .into_owned()
+        }
+    };
+    let element = |element: &bc::bc_arrange_element| Element {
+        kind: text(element.kind),
+        name: text(element.name),
+    };
+    let r = &state.box_;
+    let state = State {
+        step: match state.step as u32 {
+            bc::BC_ARRANGE_CARRYING => Step::Carrying,
+            bc::BC_ARRANGE_PREVIEW => Step::Preview,
+            bc::BC_ARRANGE_SELECTED => Step::Selected,
+            _ => Step::Pointing,
+        },
+        element: element(&state.element),
+        change: match state.change as u32 {
+            bc::BC_ARRANGE_SETTLES => Outcome::Settles,
+            bc::BC_ARRANGE_TRADES => Outcome::Trades,
+            bc::BC_ARRANGE_FLOATS => Outcome::Floats,
+            bc::BC_ARRANGE_REFUSED => Outcome::Refused,
+            _ => Outcome::None,
+        },
+        before: element(&state.before),
+        after: element(&state.after),
+        refused: match state.refused as u32 {
+            bc::BC_ARRANGE_DOESNT_FIT => Refused::DoesntFit,
+            bc::BC_ARRANGE_NOT_SHOWN => Refused::NotShown,
+            bc::BC_ARRANGE_COVERED => Refused::Covered,
+            _ => Refused::Fits,
+        },
+        on_screen: state.on_screen,
+        can_undo: state.can_undo,
+        can_reset: state.can_reset,
+        // A box 0 wide is none: nothing selected, or the page scrolling.
+        selection: (r.width > 0.).then(|| [r.x, r.y, r.width, r.height].map(|v| v as f32)),
+    };
+    update_app_later(move |cx| {
+        if let Some(shell) = tab_window(tab, cx).and_then(|window| window.shell.upgrade()) {
+            shell.update(cx, |shell, cx| shell.arrange_state(tab, state, cx));
+        }
+    });
+}
+
+/// The user changed the site's arrangement in the tab's Arrange: all of it, or empty after Reset.
+pub(crate) unsafe extern "C" fn tab_arrange_saved(
+    _: *mut c_void,
+    tab: bc::bc_id,
+    site: *const c_char,
+    arrangement: *const c_char,
+    size: usize,
+) {
+    if site.is_null() {
+        return;
+    }
+    let site = unsafe { CStr::from_ptr(site) }
+        .to_string_lossy()
+        .into_owned();
+    let bytes = match arrangement.is_null() || size == 0 {
+        true => String::new(),
+        false => {
+            let bytes = unsafe { std::slice::from_raw_parts(arrangement.cast::<u8>(), size) };
+            // Not text, it's no arrangement the app writes.
+            let Ok(bytes) = std::str::from_utf8(bytes) else {
+                return;
+            };
+            bytes.to_owned()
+        }
+    };
+    update_app_later(move |cx| {
+        if let Some(shell) = tab_window(tab, cx).and_then(|window| window.shell.upgrade()) {
+            shell.update(cx, |shell, cx| shell.arrange_saved(tab, &site, &bytes, cx));
+        }
+    });
+}
+
+/// Which of the site's saved changes found nothing on the tab's page, by index.
+pub(crate) unsafe extern "C" fn tab_arrangement_fits(
+    _: *mut c_void,
+    tab: bc::bc_id,
+    site: *const c_char,
+    misfits: *const u32,
+    count: usize,
+) {
+    if site.is_null() {
+        return;
+    }
+    let site = unsafe { CStr::from_ptr(site) }
+        .to_string_lossy()
+        .into_owned();
+    let misfits: Vec<usize> = match misfits.is_null() || count == 0 {
+        true => Vec::new(),
+        false => unsafe { std::slice::from_raw_parts(misfits, count) }
+            .iter()
+            .map(|&each| each as usize)
+            .collect(),
+    };
+    update_app_later(move |cx| {
+        if let Some(shell) = tab_window(tab, cx).and_then(|window| window.shell.upgrade()) {
+            shell.update(cx, |shell, cx| {
+                shell.arrangement_fits(tab, &site, misfits, cx)
+            });
+        }
+    });
 }
 
 /// Reads `profile`'s Boosts, has the core show them and watches their folder, once a launch.

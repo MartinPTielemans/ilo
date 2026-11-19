@@ -7,7 +7,7 @@
 //! at the same inset and radius. The bar's row is the main window's header row, its buttons the
 //! header's, and the favicon stands where the header's first button does.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 use gpui::{
     App, Bounds, Context, Entity, FontWeight, MouseButton, Pixels, Point, SharedString, Window,
@@ -54,6 +54,11 @@ pub(super) struct Little {
     pub(super) sent: Vec<u64>,
     /// Where its bar's title went in its last draw, at whose end its extensions' buttons are.
     pub(super) title: Cell<Option<Bounds<Pixels>>>,
+    /// The extensions' buttons its bar last drew, which check.sh waits for before it clicks one:
+    /// the core's list of them comes a frame before the bar draws it (#3163).
+    drew_actions: RefCell<Option<String>>,
+    /// Whether it's about to close by itself, as a sign-in's page another app opened ends (#2327).
+    closing: bool,
 }
 
 /// One of the user's Spaces, as a Little ilo window knows it: enough to name and mark it in its
@@ -115,6 +120,8 @@ impl Shell {
             picker_at: Cell::new(None),
             sent: Vec::new(),
             title: Cell::new(None),
+            drew_actions: RefCell::new(None),
+            closing: false,
         });
         shell.spaces = vec![Space {
             id: space,
@@ -130,6 +137,7 @@ impl Shell {
             folders: Default::default(),
             shown: 0,
             peeked: Vec::new(),
+            live_rooms: Default::default(),
         }];
         if let Some(look) = look {
             shell.take_look(look.name, look.color, look.theme, look.icon);
@@ -430,6 +438,36 @@ impl Shell {
         );
     }
 
+    /// Whether the window is about to close by itself, its sign-in done: its bar says so in place
+    /// of the page's title, so the window going reads as meant.
+    pub fn set_little_closing(&mut self, closing: bool, cx: &mut Context<Self>) {
+        if let Some(little) = &mut self.little
+            && little.closing != closing
+        {
+            little.closing = closing;
+            // check.sh reads this line.
+            log!("browser: little bar closing {closing}");
+            cx.notify();
+        }
+    }
+
+    /// The bar's title after the page's host: the page's own, unless the window is about to close
+    /// by itself, when it says so. It names no key to bring it back, as nothing does: the page's
+    /// address carries a single-use code, which the browser keeps nowhere (#2527).
+    pub(super) fn little_bar_title(&self, tab: u64, site: &str, url: &str) -> SharedString {
+        if self.little.as_ref().is_some_and(|little| little.closing) {
+            return "Signed in, closing".into();
+        }
+        // A page with no title of its own is named by its host, which the bar shows already, as
+        // part of the whole URL in Developer Mode.
+        match tab {
+            0 => SharedString::default(),
+            _ => Some(self.title(tab))
+                .filter(|title| title.as_ref() != site && title.as_ref() != host(url))
+                .unwrap_or_default(),
+        }
+    }
+
     /// `tab`, which its page opened, went behind: while no window shows it, its question to open
     /// another app is asked here.
     pub fn little_sent(&mut self, tab: u64, cx: &mut Context<Self>) {
@@ -526,6 +564,17 @@ impl Shell {
         // The pinned extensions' buttons end the title, as they end the URL field in the sidebar,
         // the title giving up their room.
         let (shown, overflow) = self.shown_actions();
+        if let Some(little) = &self.little {
+            let ids = (self.extension_actions.iter().take(shown))
+                .map(|action| action.id.as_ref())
+                .chain(overflow.then_some("more"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            if little.drew_actions.borrow().as_deref() != Some(ids.as_str()) {
+                log!("browser: little bar drew actions {ids}");
+                little.drew_actions.replace(Some(ids));
+            }
+        }
         let actions = px((shown + overflow as usize) as f32 * URL_BUTTON_SIZE);
         let bounds = Bounds::new(row.origin, size(row.size.width - actions, row.size.height));
         let end = self.little_end(cx);
@@ -533,14 +582,8 @@ impl Shell {
         // the bar does, in the URL field's colours.
         let (site, site_color) = self.url_words(tab, &url, 1.);
         let icon = (tab != 0).then(|| self.tabs.get(&tab).and_then(|tab| tab.favicon.clone()));
-        // A page with no title of its own is named by its host, which the bar shows already, as
-        // part of the whole URL in Developer Mode.
-        let title = match tab {
-            0 => SharedString::default(),
-            _ => Some(self.title(tab))
-                .filter(|title| *title != site && title.as_ref() != host(&url))
-                .unwrap_or_default(),
-        };
+        let title = self.little_bar_title(tab, &site, &url);
+        let closing = self.little.as_ref().is_some_and(|little| little.closing);
         let title = div()
             .id("little-title")
             .when(self.a11y, |title| title.button_named(site.clone()))
@@ -568,10 +611,12 @@ impl Shell {
             }))
             .children(icon.map(|icon| div().flex_none().child(favicon(&self.palette, icon))))
             // Each ends in an ellipsis rather than a cut. The host keeps at most half the row, so
-            // a long one leaves the title room, and the title gives up its room first.
+            // a long one leaves the title room, and the title gives up its room first, but for the
+            // line that the window's closing, whose key to reopen it is what it's there to say.
             .child(
                 div()
-                    .flex_shrink_0()
+                    .when(!closing, |site| site.flex_shrink_0())
+                    .when(closing, |site| site.min_w(px(0.)))
                     .max_w(relative(0.5))
                     .truncate()
                     .text_color(site_color)
@@ -579,8 +624,8 @@ impl Shell {
             )
             .child(
                 div()
-                    .flex_1()
-                    .min_w(px(0.))
+                    .when(!closing, |title| title.flex_1().min_w(px(0.)))
+                    .when(closing, |title| title.flex_none().max_w(relative(1.)))
                     .truncate()
                     .text_color(self.palette.text(TITLE))
                     .child(title),
@@ -763,7 +808,10 @@ pub(super) fn little_runs(command: Command) -> bool {
                     | Command::RenameTab
                     | Command::RevealTab
                     | Command::Clear
+                    | Command::SortBySite
                     | Command::ToggleSidebar
+                    | Command::MoveSidebar
+                    | Command::ToggleTopBar
                     | Command::AddSplit
                     // A private window's Library has its session's downloads; a Little ilo
                     // window has no Library at all.

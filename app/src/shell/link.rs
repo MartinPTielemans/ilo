@@ -51,6 +51,8 @@ impl Shell {
             self.show_link(cx);
             return;
         }
+        // A card is the link's: the next link's plate comes without it.
+        crate::link_target::close_card(cx);
         // It stays on the side it moved to while the pointer is on links, and starts on the left.
         let side = last.as_ref().map_or(Side::Left, |link| link.side);
         let whole = last.is_some_and(|link| link.whole);
@@ -125,6 +127,29 @@ impl Shell {
             link.side = link.side.other();
             self.show_link(cx);
         }
+    }
+
+    /// ⇧ alone in `tab`'s page, outside a field (#3080): with the plate showing that page's link
+    /// and Settings › Links' link cards on, asks the core for its card. The page gets the ⇧ all the
+    /// same, and ⇧ again on the same link, or its auto-repeat, asks nothing more. Whether it asked.
+    pub fn ask_link_card(&mut self, tab: u64, cx: &mut Context<Self>) -> bool {
+        let Some(link) = self.link.as_ref().filter(|link| link.tab == tab) else {
+            return false;
+        };
+        if !self.browser.link_cards() {
+            // check.sh reads this line.
+            log!("browser: link card not asked: off");
+            return false;
+        }
+        if link_target::card_for(&link.target, cx) {
+            return false;
+        }
+        let card = self.browser.link_card(tab);
+        if card == 0 {
+            return false;
+        }
+        link_target::card_asked(card, link.target.clone(), cx);
+        true
     }
 
     /// Takes the plate away, if it shows.

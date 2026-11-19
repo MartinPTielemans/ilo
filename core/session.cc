@@ -18,6 +18,7 @@
 #include "base/files/important_file_writer.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/i18n/time_formatting.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
@@ -27,6 +28,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "base/values.h"
@@ -300,6 +302,7 @@ SavedSpace SaveSpace(const Space& space, bc_id shown, std::vector<bc_id>* today)
         to.folders.push_back({.name = space.FolderName(id),
                               .icon = space.FolderIcon(id),
                               .open = space.IsOpen(id),
+                              .live = space.FolderLive(id),
                               .folder = folder_of(id),
                               .at = to.pinned.size(),
                               .node = node_of(id)});
@@ -499,6 +502,9 @@ std::optional<std::string> ToJson(const Saved& saved) {
       if (!folder->icon.empty()) {
         row.Set("icon", folder->icon);
       }
+      if (folder->live == BC_LIVE_PULL_REQUESTS) {
+        row.Set("live", "pull-requests");
+      }
       write_folder(space.folders, folder->folder, row);
       WriteNode(folder->node, row);
       pinned.Insert(pinned.begin() + folder->at, base::Value(std::move(row)));
@@ -608,6 +614,15 @@ std::optional<std::string> ToJson(const Saved& saved) {
                            .Set("notification_prompts", saved.settings.notification_prompts)
                            .Set("appearance", saved.settings.appearance)
                            .Set("space_header", saved.settings.space_header));
+  base::DictValue lists;
+  for (const auto& [key, on] : saved.settings.ad_block_lists) {
+    lists.Set(key, on);
+  }
+  base::DictValue& settings = *root.FindDict("settings");
+  settings.Set("ad_block_lists", std::move(lists));
+  if (saved.settings.ad_block_filters) {
+    settings.Set("ad_block_filters", *saved.settings.ad_block_filters);
+  }
   return base::WriteJson(root);
 }
 
@@ -772,6 +787,9 @@ std::optional<Saved> Read(const base::FilePath& path) {
               .name = *folder,
               .icon = dict->FindString("icon") ? *dict->FindString("icon") : std::string(),
               .open = dict->FindBool("open").value_or(true),
+              .live = dict->FindString("live") && *dict->FindString("live") == "pull-requests"
+                          ? BC_LIVE_PULL_REQUESTS
+                          : 0,
               .folder = folder_of(*dict),
               .at = to.pinned.size(),
               .node = ReadNode(*dict),
@@ -871,6 +889,16 @@ std::optional<Saved> Read(const base::FilePath& path) {
     }
     saved.settings.unload_idle_tabs = settings->FindBool("unload_idle_tabs").value_or(true);
     saved.settings.ad_blocking = settings->FindBool("ad_blocking").value_or(true);
+    if (const base::DictValue* lists = settings->FindDict("ad_block_lists")) {
+      for (const auto [key, on] : *lists) {
+        if (on.is_bool()) {
+          saved.settings.ad_block_lists[key] = on.GetBool();
+        }
+      }
+    }
+    if (const std::string* filters = settings->FindString("ad_block_filters")) {
+      saved.settings.ad_block_filters = *filters;
+    }
     saved.settings.send_crash_reports =
         settings->FindBool("send_crash_reports").value_or(false);
     saved.settings.relay_calls = settings->FindBool("relay_calls").value_or(false);
@@ -1049,7 +1077,7 @@ void PutBackSidebar(Window& window, const std::string& dir, const Saved& saved) 
     if (saved_space.agent) {
       continue;
     }
-    Space* space = RestoreSpace(window, profile, saved_space);
+    Space* space = RestoreSpace(window, DirOf(profile), saved_space);
     const int favorite = saved_space.shown_favorite;
     if (favorite >= 0 && static_cast<size_t>(favorite) < favorites.size() &&
         favorites[favorite]) {
@@ -1071,6 +1099,11 @@ void PutBackSidebar(Window& window, const std::string& dir, const Saved& saved) 
   fprintf(stderr, "browser: sidebar of %s restored, %zu Spaces\n", dir.c_str(),
           saved.spaces.size());
 }
+
+// The profiles the launch didn't wait for (Saver::OnRead): loads them, after the window.
+void LoadLaterProfiles(std::set<std::string> dirs);
+// Gives the tabs that waited for |dir|'s profile it, and its Spaces what they'd have had at launch.
+void LaterProfileArrived(const std::string& dir, Profile* profile);
 
 class Saver : public base::ImportantFileWriter::BackgroundDataSerializer {
  public:
@@ -1214,6 +1247,10 @@ class Saver : public base::ImportantFileWriter::BackgroundDataSerializer {
   // At logout, restart or SIGTERM, Chrome writes what it must and exits without waiting for the
   // writer's sequence, so the Spaces are written here, as it allows.
   void OnClosingAll(bool closing) {
+    // After Chrome's ProfileManager, whose callback came first, saved its list.
+    if (closing) {
+      ForgetActiveProfiles();
+    }
     if (!closing || kept_ ||
         browser_shutdown::GetShutdownType() != browser_shutdown::ShutdownType::kEndSession) {
       return;
@@ -1248,19 +1285,47 @@ class Saver : public base::ImportantFileWriter::BackgroundDataSerializer {
     ApplyAppearance();
     ArchiveDefaultRead();
     sync_settings::Read();
-    // The profiles the Spaces and favorites are in load before they come back.
-    std::set<std::string> profiles;
+    // The profiles of the Spaces the windows show, and of agents' Spaces, which an agent may open a
+    // tab in as soon as it's back, load before the window comes on screen. The other Spaces' and
+    // the favorites' load after it, each 100–150 ms of the UI thread (#2500), their tabs waiting.
+    std::set<std::string> now;
+    std::set<std::string> later;
     if (saved) {
+      std::vector<size_t> shown;
+      for (const SavedWindow& window : LoadedWindows()) {
+        shown.push_back(static_cast<size_t>(window.space));
+      }
+      if (shown.empty()) {
+        shown.push_back(0);
+      }
+      for (size_t at = 0; at < saved->spaces.size(); ++at) {
+        const SavedSpace& space = saved->spaces[at];
+        const bool needed = space.agent || std::ranges::contains(shown, at);
+        (needed ? now : later).insert(space.profile);
+        const int favorite = space.shown_favorite;
+        if (needed && favorite >= 0 && static_cast<size_t>(favorite) < saved->favorites.size()) {
+          now.insert(saved->favorites[favorite].profile);
+        }
+      }
       for (const SavedTab& favorite : saved->favorites) {
-        profiles.insert(favorite.profile);
+        later.insert(favorite.profile);
       }
-      for (const SavedSpace& space : saved->spaces) {
-        profiles.insert(space.profile);
+      for (const std::string& dir : now) {
+        later.erase(dir);
       }
-      profiles.erase(std::string());
+      now.erase(std::string());
+      later.erase(std::string());
     }
     loaded_ = std::move(saved);
-    LoadProfiles(profiles, std::move(loaded));
+    ExpectProfiles(later, base::BindRepeating(&LaterProfileArrived));
+    LoadProfiles(now, base::BindOnce(
+                          [](base::OnceClosure loaded, std::set<std::string> later) {
+                            std::move(loaded).Run();
+                            // A task of its own, so the window and its Spaces come first.
+                            base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+                                FROM_HERE, base::BindOnce(&LoadLaterProfiles, std::move(later)));
+                          },
+                          std::move(loaded), std::move(later)));
   }
 
   scoped_refptr<base::SequencedTaskRunner> task_runner_;
@@ -1371,7 +1436,7 @@ bool RestoreSavedWindow(Window& window, size_t index) {
 }
 
 Space* RestoreSpace(Window& window,
-                    Profile* profile,
+                    const std::string& profile,
                     const SavedSpace& saved_space,
                     bc_id id,
                     size_t at) {
@@ -1381,12 +1446,13 @@ Space* RestoreSpace(Window& window,
   space->SetTheme(saved_space.theme);
   space->SetPinnedOpen(saved_space.pinned_open);
   space->SetTouched(saved_space.touched);
-  space->SetProfile(DirOf(profile));
+  space->SetProfile(profile);
   // Else the Space comes back as a new window shows it: its pinned tabs, none shown, and no Today
   // tabs, which go in the archive.
   const bool whole = UserSettings().restore_windows;
   const auto restore = [&](const SavedTab& saved_tab, int index) -> bc_id {
-    // Without its page until it's first shown, which saves launch making a page for each tab.
+    // Without its page until it's first shown, which saves launch making a page for each tab, and
+    // waiting for its profile if that's still loading.
     const bc_id tab = Tab::Restore(profile, saved_tab);
     if (tab && whole && index == saved_space.shown) {
       window.SetSelectedIn(space->id(), tab);
@@ -1412,6 +1478,7 @@ Space* RestoreSpace(Window& window,
                                             space->pinned_rows().size());
       space->SetOpen(folder, saved_folder.open);
       space->SetFolderIcon(folder, saved_folder.icon);
+      space->SetFolderLive(folder, saved_folder.live);
       nodes[folder] = saved_folder.node;
       folder_ids.push_back(folder);
     }
@@ -1518,9 +1585,12 @@ namespace {
 // the session-only cookies of sites the user has cleared on exit, in each profile, as Chrome does
 // once its session restore has given its tabs theirs (SessionRestoreImpl), or at a launch that
 // restores none.
-void DeleteStaleSessionData() {
+bool& StaleSessionDataDeleted() {
   static bool deleted = false;
-  if (std::exchange(deleted, true) || !g_browser_process->profile_manager()) {
+  return deleted;
+}
+void DeleteStaleSessionData() {
+  if (std::exchange(StaleSessionDataDeleted(), true) || !g_browser_process->profile_manager()) {
     return;
   }
   for (Profile* profile : g_browser_process->profile_manager()->GetLoadedProfiles()) {
@@ -1528,6 +1598,35 @@ void DeleteStaleSessionData() {
       profile->GetDefaultStoragePartition()->DeleteStaleSessionData();
     }
   }
+}
+
+void LoadLaterProfiles(std::set<std::string> dirs) {
+  if (browser_shutdown::IsTryingToQuit() || browser_shutdown::HasShutdownStarted()) {
+    return;
+  }
+  LoadProfiles(dirs, base::DoNothing());
+}
+
+void LaterProfileArrived(const std::string& dir, Profile* profile) {
+  // check.sh reads this line, the time since the Unix epoch.
+  LOG(ERROR) << "browser: profile " << dir << (profile ? "" : " couldn't load,") << " arrived at "
+             << base::Time::Now().InMillisecondsSinceUnixEpoch();
+  // One that couldn't load has its tabs in the start profile, as the launch would have given it,
+  // and its Spaces keep its directory, so its favorites still show in them.
+  Profile* in = profile ? profile : StartProfile();
+  const std::vector<bc_id> tabs = Tab::ProfileArrived(dir, in);
+  // Its tabs have their sessionStorage now, which a launch that's back already deleted the rest
+  // of in the profiles it had (DeleteStaleSessionData).
+  if (profile && StaleSessionDataDeleted()) {
+    profile->GetDefaultStoragePartition()->DeleteStaleSessionData();
+  }
+  // Under Every Space, its Spaces get the favorites' sites it lacks, as SetSpaceProfile gives them.
+  Favorites::Complete();
+  Window::HiddenFavoritesGone();
+  // A window asked to show one of them shows it now.
+  Window::TabsArrived(tabs);
+  // Its Today tabs' time to archive is its own now (ArchiveAfter).
+  ScheduleAutoArchive();
 }
 
 bool RestoreSavedSession(Window& window);
@@ -1547,12 +1646,11 @@ bool RestoreSavedSession(Window& window) {
   if (!saved || !StartProfile() || !Space::All().empty()) {
     return false;
   }
-  // First, as a Space may show one. Each in its profile, which loaded with the session, else in the
-  // one the core started with.
+  // First, as a Space may show one. Each in its profile, which loaded with the session or is still
+  // loading, else in the one the core started with.
   std::vector<bc_id> favorites;
   for (const SavedTab& saved_tab : saved->favorites) {
-    const bc_id tab = favorites.emplace_back(
-        Tab::Restore(ProfileFor(saved_tab.profile), saved_tab));
+    const bc_id tab = favorites.emplace_back(Tab::Restore(saved_tab.profile, saved_tab));
     if (tab) {
       Favorites::Restore(tab,
                          saved_tab.pinned_url.is_valid()
@@ -1564,7 +1662,7 @@ bool RestoreSavedSession(Window& window) {
   RestoreFavoriteSplits(saved->favorites, favorites);
   RestoredSpaces().clear();
   for (const SavedSpace& saved_space : saved->spaces) {
-    Space* space = RestoreSpace(window, ProfileFor(saved_space.profile), saved_space);
+    Space* space = RestoreSpace(window, HomeFor(saved_space.profile), saved_space);
     RestoredSpaces().push_back(space->id());
     if (UserSettings().restore_windows && saved_space.shown_favorite >= 0 &&
         favorites[saved_space.shown_favorite]) {

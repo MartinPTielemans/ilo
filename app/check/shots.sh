@@ -1,3 +1,4 @@
+# check.sh runs this at 820, only when named.
 # The pictures of ilo for its Microsoft Store listing and the README (#454), from the README shot's
 # Space and tabs: a Space "ilo" in the default colour, ilobrowser.com, Wikipedia's Web browser and
 # ilo's GitHub repository pinned, and Wikipedia's Chromium and ilobrowser.com/ilo in Today, on

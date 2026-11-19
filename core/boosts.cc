@@ -1,6 +1,11 @@
 #include "browser_core/boosts.h"
 
+#include <memory>
+#include <optional>
+#include <set>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include "base/functional/bind.h"
 #include "base/json/string_escape.h"
@@ -8,11 +13,20 @@
 #include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "browser_core/arrange.h"
+#include "browser_core/boost_colors.h"
 #include "browser_core/host.h"
+#include "browser_core/point.h"
 #include "browser_core/profiles.h"
+#include "browser_core/space.h"
 #include "browser_core/tab.h"
+#include "browser_core/window.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_keyed_service_factory.h"
 #include "chrome/common/chrome_isolated_world_ids.h"
+#include "components/keyed_service/core/keyed_service.h"
+#include "components/pref_registry/pref_registry_syncable.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/browser/host_zoom_map.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
@@ -122,10 +136,72 @@ std::map<bc_id, std::map<std::string, std::string, std::less<>>>& Store() {
   return *store;
 }
 
+// Each Space's colours for its tabs' Boosts, by Space.
+std::map<bc_id, bc_boost_colors>& SpaceColorStore() {
+  static base::NoDestructor<std::map<bc_id, bc_boost_colors>> store;
+  return *store;
+}
+
+// The tabs with a frame showing a Boost, so a change of Spaces walks those alone and a user with
+// none pays nothing per tab.
+std::set<Boosts*>& Boosted() {
+  static base::NoDestructor<std::set<Boosts*>> boosted;
+  return *boosted;
+}
+
+bool Same(const std::optional<bc_boost_colors>& a, const std::optional<bc_boost_colors>& b) {
+  if (!a || !b) {
+    return !a == !b;
+  }
+  return a->background == b->background && a->text == b->text && a->accent == b->accent &&
+         a->accent_text == b->accent_text;
+}
+
 // The profile whose Boosts |contents| takes: a private window's takes its original's.
 bc_id ProfileIdOf(content::WebContents* contents) {
   Profile* profile = Profile::FromBrowserContext(contents->GetBrowserContext());
   return profile ? ProfileId(DirOf(profile->GetOriginalProfile())) : 0;
+}
+
+// The script the app read from each profile's Boost files, by profile and site. It runs only while
+// the record says these bytes are the ones turned on.
+std::map<bc_id, std::map<std::string, std::string, std::less<>>>& Scripts() {
+  static base::NoDestructor<std::map<bc_id, std::map<std::string, std::string, std::less<>>>>
+      scripts;
+  return *scripts;
+}
+
+// Builds no service: Chrome registers a profile's prefs through its factories.
+class PrefsFactory : public ProfileKeyedServiceFactory {
+ public:
+  static PrefsFactory* GetInstance() {
+    static base::NoDestructor<PrefsFactory> instance;
+    return instance.get();
+  }
+
+  PrefsFactory() : ProfileKeyedServiceFactory("BrowserCoreBoostScripts") {}
+
+ private:
+  std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
+      content::BrowserContext* context) const override {
+    return nullptr;
+  }
+
+  void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) override {
+    boost_script::RegisterPrefs(registry);
+  }
+};
+
+// Whether |frame| and every frame it's in show |site|: a script never runs in a frame another
+// site's page holds, nor in one whose origin is opaque, as a sandboxed or srcdoc frame's is.
+bool AllOf(content::RenderFrameHost* frame, std::string_view site) {
+  for (; frame; frame = frame->GetParentOrOuterDocument()) {
+    if (frame->GetLastCommittedOrigin().opaque() ||
+        Boosts::SiteOf(frame->GetLastCommittedURL()) != site) {
+      return false;
+    }
+  }
+  return true;
 }
 
 std::string_view CssFor(bc_id profile, std::string_view site) {
@@ -174,6 +250,7 @@ Boosts::Boosts(content::WebContents* contents, bc_id tab)
       tab_(tab) {}
 
 Boosts::~Boosts() {
+  Boosted().erase(this);
   Unhook();
 }
 
@@ -214,10 +291,177 @@ void Boosts::Set(bc_id profile, std::string_view site, std::string_view css) {
   }
 }
 
+// static
+void Boosts::SetSpaceColors(bc_id space, const bc_boost_colors* colors) {
+  auto& store = SpaceColorStore();
+  auto it = store.find(space);
+  const std::optional<bc_boost_colors> had =
+      it == store.end() ? std::nullopt : std::optional<bc_boost_colors>(it->second);
+  const std::optional<bc_boost_colors> now =
+      colors ? std::optional<bc_boost_colors>(*colors) : std::nullopt;
+  if (Same(had, now)) {
+    return;
+  }
+  if (now) {
+    store.insert_or_assign(space, *now);
+  } else {
+    store.erase(it);
+  }
+  SpacesChanged();
+}
+
+// static
+void Boosts::SpacesChanged() {
+  if (Boosted().empty()) {
+    return;
+  }
+  // Reapply can take a tab out, as one of its frames no longer takes a Boost.
+  const std::vector<Boosts*> boosted(Boosted().begin(), Boosted().end());
+  for (Boosts* each : boosted) {
+    if (Boosted().contains(each) && !Same(each->SpaceColors(), each->colors_)) {
+      each->Reapply();
+    }
+  }
+}
+
+void BoostSpacesChanged() {
+  Boosts::SpacesChanged();
+}
+
+void BoostSpaceGone(bc_id space) {
+  SpaceColorStore().erase(space);
+}
+
+// static
+boost_script::State Boosts::SetScript(bc_id profile,
+                                      std::string_view site,
+                                      std::optional<std::string_view> script) {
+  auto& scripts = Scripts()[profile];
+  // One too large never runs, so it isn't kept.
+  if (!script || site.empty() || script->size() > boost_script::kMaxBytes) {
+    scripts.erase(std::string(site));
+  } else {
+    scripts.insert_or_assign(std::string(site), std::string(*script));
+  }
+  return ScriptState(profile, site, script.value_or(std::string_view()));
+}
+
+// static
+boost_script::State Boosts::ScriptState(bc_id profile,
+                                        std::string_view site,
+                                        std::string_view script) {
+  if (script.size() > boost_script::kMaxBytes) {
+    return boost_script::State::kTooLarge;
+  }
+  Profile* loaded = ProfileOrLoad(profile);
+  return loaded ? boost_script::Check(*loaded->GetPrefs(), site, script)
+                : boost_script::State::kNew;
+}
+
+// static
+bool Boosts::TurnOnScript(bc_id profile, std::string_view site, std::string_view script) {
+  Profile* loaded = ProfileOrLoad(profile);
+  if (!loaded || !boost_script::TurnOn(*loaded->GetPrefs(), site, script)) {
+    return false;
+  }
+  // What runs is what the user was shown, even if the file changed while the dialog was open.
+  Scripts()[profile].insert_or_assign(std::string(site), std::string(script));
+  LOG(ERROR) << "browser: boost script turned on " << site;
+  return true;
+}
+
+// static
+void Boosts::ForgetScript(bc_id profile, std::string_view site) {
+  if (Profile* loaded = ProfileOrLoad(profile)) {
+    boost_script::Forget(*loaded->GetPrefs(), site);
+    LOG(ERROR) << "browser: boost script turned off " << site;
+  }
+}
+
+// static
+void Boosts::RegisterPrefs() {
+  PrefsFactory::GetInstance();
+}
+
+void Boosts::RunScript(content::RenderFrameHost* frame) {
+  content::WebContents* contents = web_contents();
+  Profile* profile = Profile::FromBrowserContext(contents->GetBrowserContext());
+  if (!profile || profile->IsOffTheRecord()) {
+    return;
+  }
+  // An agent's tab acts in the user's sessions, never with the user's own code (#2297's 1.5).
+  if (Space* space = Space::Holding(tab_); space && space->agent()) {
+    return;
+  }
+  const std::string site = SiteOf(frame->GetLastCommittedURL());
+  auto scripts = Scripts().find(ProfileIdOf(contents));
+  if (site.empty() || scripts == Scripts().end()) {
+    return;
+  }
+  auto script = scripts->second.find(site);
+  if (script == scripts->second.end() || !AllOf(frame, site) ||
+      boost_script::Check(*profile->GetPrefs(), site, script->second) != boost_script::State::kOn) {
+    return;
+  }
+  // The bytes that were hashed, as UTF-8: an invalid sequence becomes U+FFFD, as a file would.
+  frame->ExecuteJavaScriptInIsolatedWorld(base::UTF8ToUTF16(script->second),
+                                          content::RenderFrameHost::JavaScriptResultCallback(),
+                                          ISOLATED_WORLD_ID_BOOST_SCRIPT);
+  LOG(ERROR) << "browser: tab " << tab_ << " boost script ran " << site;
+}
+
 void Boosts::Apply(content::RenderFrameHost* frame) {
-  const std::string_view css =
-      CssFor(ProfileIdOf(web_contents()), SiteOf(frame->GetLastCommittedURL()));
-  Run(frame, "css", css, 0, 0, content::RenderFrameHost::JavaScriptResultCallback());
+  const std::string site = SiteOf(frame->GetLastCommittedURL());
+  const std::string_view css = CssFor(ProfileIdOf(web_contents()), site);
+  if (css.empty()) {
+    Run(frame, "css", css, 0, 0, content::RenderFrameHost::JavaScriptResultCallback());
+    Took(frame, false);
+    return;
+  }
+  colors_ = SpaceColors();
+  Took(frame, true);
+  // A frame another site's page holds takes its own Boost, but not the colours of the Space the
+  // page is in.
+  const bc_boost_colors* colors = colors_ && AllOf(frame, site) ? &*colors_ : nullptr;
+  Run(frame, "css", BoostSheet(colors, css), 0, 0,
+      content::RenderFrameHost::JavaScriptResultCallback());
+}
+
+std::optional<bc_boost_colors> Boosts::SpaceColors() const {
+  // An agent's tab acts in the user's sessions, and its pages get nothing of the user's theme.
+  const Space* space = Window::SpaceOf(web_contents());
+  if (!space || space->agent()) {
+    return std::nullopt;
+  }
+  auto it = SpaceColorStore().find(space->id());
+  return it == SpaceColorStore().end() ? std::nullopt : std::optional<bc_boost_colors>(it->second);
+}
+
+void Boosts::Reapply() {
+  // Blink would hold the script in a page in the back-forward cache and run it at the restore,
+  // which applies the sheet again anyway, so the tab's colours are its live frames' alone.
+  colors_ = SpaceColors();
+  const bc_id profile = ProfileIdOf(web_contents());
+  web_contents()->ForEachRenderFrameHost([&](content::RenderFrameHost* frame) {
+    if (!frame->IsInLifecycleState(content::RenderFrameHost::LifecycleState::kInBackForwardCache) &&
+        !CssFor(profile, SiteOf(frame->GetLastCommittedURL())).empty()) {
+      Apply(frame);
+    }
+  });
+}
+
+void Boosts::Took(content::RenderFrameHost* frame, bool boosted) {
+  if (boosted) {
+    boosted_frames_.insert(frame->GetGlobalId());
+  } else {
+    boosted_frames_.erase(frame->GetGlobalId());
+  }
+  if (boosted_frames_.empty()) {
+    Boosted().erase(this);
+    colors_.reset();
+  } else {
+    Boosted().insert(this);
+  }
 }
 
 void Boosts::Zap(bool on) {
@@ -233,6 +477,13 @@ void Boosts::Zap(bool on) {
     // Nothing to zap on a page that isn't http(s): the app hears it ended.
     EndZap(true);
     return;
+  }
+  // Arrange and Point take the page's presses too.
+  if (Arrange* arrange = Arrange::FromWebContents(web_contents())) {
+    arrange->End(/*tell=*/true);
+  }
+  if (PagePoint* point = PagePoint::FromWebContents(web_contents())) {
+    point->End(/*tell=*/true);
   }
   zapping_ = true;
   web_contents()->ForEachRenderFrameHost(
@@ -302,23 +553,48 @@ void Boosts::Zapped(base::Value selector) {
 }
 
 void Boosts::DidFinishNavigation(content::NavigationHandle* navigation) {
-  if (!navigation->HasCommitted() || navigation->IsSameDocument() || navigation->IsErrorPage()) {
+  if (!navigation->HasCommitted() || navigation->IsSameDocument()) {
     return;
   }
   content::RenderFrameHost* frame = navigation->GetRenderFrameHost();
-  // A site with no Boost has nothing to run, but a page from the back-forward cache keeps the sheet
-  // it had, which may have changed since.
-  if (frame &&
-      (navigation->IsServedFromBackForwardCache() ||
-       !CssFor(ProfileIdOf(web_contents()), SiteOf(frame->GetLastCommittedURL())).empty())) {
-    Apply(frame);
+  if (!frame) {
+    return;
   }
+  const bc_id profile = ProfileIdOf(web_contents());
+  if (navigation->IsServedFromBackForwardCache()) {
+    // A restored page keeps the sheets its frames had, which may have changed since, and Reapply
+    // passed it by while it was cached. Only its main frame navigates, so each frame that had a
+    // Boost or has one now takes it again here.
+    frame->ForEachRenderFrameHost([&](content::RenderFrameHost* each) {
+      if (boosted_frames_.contains(each->GetGlobalId()) ||
+          !CssFor(profile, SiteOf(each->GetLastCommittedURL())).empty()) {
+        Apply(each);
+      }
+    });
+    return;
+  }
+  // A site with no Boost has nothing to run. A new document with none, or an error page, leaves the
+  // frame unboosted.
+  if (!navigation->IsErrorPage() &&
+      !CssFor(profile, SiteOf(frame->GetLastCommittedURL())).empty()) {
+    Apply(frame);
+  } else {
+    Took(frame, false);
+  }
+}
+
+void Boosts::DOMContentLoaded(content::RenderFrameHost* frame) {
+  RunScript(frame);
 }
 
 void Boosts::RenderFrameCreated(content::RenderFrameHost* frame) {
   if (zapping_) {
     Hook(frame->GetRenderWidgetHost());
   }
+}
+
+void Boosts::RenderFrameDeleted(content::RenderFrameHost* frame) {
+  Took(frame, false);
 }
 
 void Boosts::PrimaryPageChanged(content::Page& page) {
@@ -329,6 +605,8 @@ void Boosts::PrimaryPageChanged(content::Page& page) {
 }
 
 void Boosts::WebContentsDestroyed() {
+  boosted_frames_.clear();
+  Boosted().erase(this);
   zapping_ = false;
   Unhook();
 }

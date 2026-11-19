@@ -1,7 +1,8 @@
 //! The sidebar's header: the buttons to hide the sidebar and go back, forward and
 //! reload, and the URL field under them.
 
-use std::{cell::RefCell, collections::HashMap, rc::Rc, time::Instant};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use web_time::Instant;
 
 use crate::command_bar::PLACEHOLDER_TEXT;
 use crate::site_controls::Place;
@@ -164,12 +165,13 @@ impl Shell {
                 )
             })
             .child(glyph);
-        scaled_from_middle(button, self.nav_scale(x))
+        scaled_from_middle(button, self.nav_scale(x, cx.background_executor().now()))
     }
 
-    /// The pointer pressed the header button at `x`, which runs `command`.
+    /// The pointer pressed the header button at `x`, which runs `command`. Its times are the
+    /// executor's, as the timer for its menu is, so a test's clock moves the two together (#3373).
     fn hold_nav(&mut self, x: f32, command: Command, cx: &mut Context<Self>) {
-        let pressed = Instant::now();
+        let pressed = cx.background_executor().now();
         self.held_nav = Some(HeldNav {
             x,
             command,
@@ -183,30 +185,30 @@ impl Shell {
     /// The pointer let go of the header button it pressed, or its menu took the press over.
     pub(super) fn let_go_nav(&mut self, cx: &mut Context<Self>) {
         if let Some(held) = self.held_nav.as_mut().filter(|held| held.let_go.is_none()) {
-            held.let_go = Some(Instant::now());
+            held.let_go = Some(cx.background_executor().now());
             cx.notify();
         }
     }
 
     /// How small the header button at `x` is drawn, plate and glyph: smaller while it's held,
     /// growing back from where it is once it's let go, as a row's plate does.
-    pub(super) fn nav_scale(&self, x: f32) -> f32 {
+    pub(super) fn nav_scale(&self, x: f32, now: Instant) -> f32 {
         let Some(held) = self.held_nav.as_ref().filter(|held| held.x == x) else {
             return 1.;
         };
-        1. - (1. - NAV_PRESS_SCALE) * held_depth(held.pressed, held.let_go, Instant::now())
+        1. - (1. - NAV_PRESS_SCALE) * held_depth(held.pressed, held.let_go, now)
     }
 
     /// Lets the held header button go once it has grown back, and asks for the next frame only
     /// while it's shrinking or growing, so a button at rest costs no frames.
-    pub(super) fn step_held_nav(&mut self, window: &mut Window) {
+    pub(super) fn step_held_nav(&mut self, window: &mut Window, cx: &App) {
         let Some(held) = &mut self.held_nav else {
             return;
         };
         let name = held.command.name();
         match (
             held.let_go,
-            held_depth(held.pressed, held.let_go, Instant::now()),
+            held_depth(held.pressed, held.let_go, cx.background_executor().now()),
         ) {
             (Some(_), 0.) => {
                 // check.sh waits for these lines.
@@ -279,12 +281,13 @@ impl Shell {
                     .collect();
                 let anchor = match side {
                     TipSide::Under => Anchor::under(frame, self.viewport),
-                    TipSide::Beside => Anchor::beside(frame, self.viewport),
+                    TipSide::Beside => Anchor::beside(frame, self.viewport, self.right),
                 };
                 (
                     Tip {
                         text: name.into(),
                         keys,
+                        detail: SharedString::default(),
                     },
                     anchor,
                 )
@@ -341,7 +344,8 @@ impl Shell {
             log!("browser: nav glyphs dimmed {dimmed}");
         }
         let page = self.page(self.field_tab());
-        let [sidebar, back, forward, reload_x] = nav_places(self.width(), self.full_screen);
+        let [sidebar, back, forward, reload_x] =
+            nav_places(self.width(), self.full_screen, self.right);
         let reload = match page.loading {
             true => (reload_x, reload_glyph(true), Command::Stop, true),
             false => (
@@ -366,7 +370,10 @@ impl Shell {
         let buttons = [
             (
                 sidebar,
-                "icons/nav-sidebar.svg",
+                match self.right {
+                    true => "icons/nav-sidebar-right.svg",
+                    false => "icons/nav-sidebar.svg",
+                },
                 Command::ToggleSidebar,
                 true,
             ),
@@ -418,10 +425,14 @@ impl Shell {
 
     /// The URL field's box in the window, while the docked sidebar shows it.
     pub(super) fn url_field_bounds(&self) -> Option<Bounds<Pixels>> {
+        // The bar's is there whenever the bar is, the sidebar hidden too.
+        if self.bar_on() {
+            return Some(self.bar_field_bounds());
+        }
         let docked = !self.page_fullscreen && !self.sidebar_hidden && self.sidebar_motion.is_none();
         (docked && self.form().is_none() && self.library.is_none()).then(|| {
             Bounds::new(
-                point(px(PLATE_INSET), px(URL_FIELD_TOP)),
+                point(px(self.column_x() + PLATE_INSET), px(URL_FIELD_TOP)),
                 size(px(self.width() - 2. * PLATE_INSET), px(URL_FIELD_HEIGHT)),
             )
         })
@@ -453,11 +464,62 @@ impl Shell {
                 );
                 Place::Button { field, button }
             }
-            None => Place::Corner(point(px(self.card_left() + PLATE_INSET), px(PLATE_INSET))),
+            None => Place::Corner(point(px(self.card_corner() + PLATE_INSET), px(PLATE_INSET))),
         };
         let extensions = self.site_controls_extensions();
-        self.browser
-            .site_controls(self.field_tab(), place, self.viewport, extensions, cx);
+        let profiles = self.site_controls_profiles();
+        self.browser.site_controls(
+            self.field_tab(),
+            place,
+            self.viewport,
+            extensions,
+            profiles,
+            cx,
+        );
+    }
+
+    /// The tab's profile and the user's others, for the Site Controls' chip, while there's more
+    /// than one (#2339). A window with a Space of its own has none: a private one's session shares
+    /// none of the profile's logins, and Little ilo's bar has its own picker.
+    pub(super) fn site_controls_profiles(&self) -> Option<crate::site_controls::Profiles> {
+        if self.private || self.blank || self.little.is_some() || self.profiles.len() < 2 {
+            return None;
+        }
+        let current = self.shown_space()?.profile;
+        let name = (self.profiles.iter())
+            .find(|(id, _)| *id == current)?
+            .1
+            .clone();
+        let others = (self.profiles.iter())
+            .filter(|(id, _)| *id != current)
+            .map(|(id, name)| (*id, name.clone(), self.users_space_in(*id).is_some()))
+            .collect();
+        Some(crate::site_controls::Profiles { name, others })
+    }
+
+    /// The first of the user's Spaces in `profile`, in the sidebar's order: agents' aren't theirs.
+    fn users_space_in(&self, profile: u64) -> Option<u64> {
+        (self.spaces.iter())
+            .find(|space| space.profile == profile && space.agent.is_empty())
+            .map(|space| space.id)
+    }
+
+    /// Site Controls' Open in <profile> (#2339): the tab's page in a new tab of the first of the
+    /// user's Spaces in `profile`, shown, as Little ilo's picker goes to that profile's first
+    /// Space. It loads fresh there, as the profile's cookies are its own (decision 5).
+    pub fn open_in_profile(&mut self, tab: u64, profile: u64, cx: &mut Context<Self>) {
+        let url = self.page(tab).url;
+        let Some(space) = self.users_space_in(profile) else {
+            return;
+        };
+        self.show_space(space, cx);
+        self.browser.open_page(&url, cx);
+    }
+
+    /// Site Controls' New Space in <profile>…, for a profile none of the user's Spaces is in: New
+    /// Space's form, its Space in `profile`.
+    pub fn new_space_in_profile(&mut self, profile: u64, cx: &mut Context<Self>) {
+        self.new_space_from(None, Some(profile), cx);
     }
 
     /// A button at the URL field's end, `end` in from it, shown while the pointer is over the
@@ -487,8 +549,8 @@ impl Shell {
         self.url_words(self.field_tab(), url, shown)
     }
 
-    /// What a URL field showing `tab`, at `url`, says, in its colour: the page's host, its whole
-    /// URL in Developer Mode, as Chrome's Always Show Full URLs has it, or with no tab, the command
+    /// What a URL field showing `tab`, at `url`, says, in its colour: the page's host, "Board" for
+    /// a Board's, its whole URL in Developer Mode, as Chrome's Always Show Full URLs has it, or with no tab, the command
     /// bar's placeholder, `shown` of the way in.
     pub(super) fn url_words(&self, tab: u64, url: &str, shown: f32) -> (SharedString, Hsla) {
         if tab == 0 {
@@ -498,6 +560,8 @@ impl Shell {
         }
         let words = match self.extension_name(url) {
             Some(name) => name,
+            // A Board's address is an id, which says nothing; the row has its name.
+            None if crate::boards::id_in(url).is_some() => "Board".into(),
             None if self.page(tab).developer_mode => url.to_string().into(),
             None => host(url).to_string().into(),
         };
@@ -698,7 +762,7 @@ impl Shell {
             .absolute()
             .top(px(URL_FIELD_TOP))
             .left(px(PLATE_INSET))
-            .w(px(self.width() - 2. * PLATE_INSET))
+            .w(px(self.field_width()))
             .h(px(URL_FIELD_HEIGHT))
             .flex()
             .items_center()
@@ -713,6 +777,15 @@ impl Shell {
             .on_click(cx.listener(|shell, _, _, cx| {
                 shell.clicked_bar_target(Command::EditUrl, "sidebar", cx)
             }))
+            // In the bar, its right-click is the bar's, which its press keeps from the bar under it.
+            .when(self.bar_on(), |field| {
+                field.on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(|shell, event: &MouseDownEvent, _, cx| {
+                        shell.top_bar_menu(event.position, cx)
+                    }),
+                )
+            })
             .bg(self.palette.plate(URL_FIELD))
             // It brightens under the pointer as a tile does, from the same white 0.10 (ours).
             .hover(|style| style.bg(self.palette.plate(TILE_HOVERED)))
@@ -738,7 +811,7 @@ impl Shell {
     /// Site Controls or DevTools button while they take clicks, a pinned extension's action, or
     /// the field.
     pub(super) fn field_part_at(&self, x: f32) -> AtRest {
-        let width = self.width() - 2. * PLATE_INSET;
+        let width = self.field_width();
         let (shown, overflow) = self.shown_actions();
         let actions = (shown + overflow as usize) as f32 * URL_BUTTON_SIZE;
         if actions > 0. && x >= width - URL_BUTTON_INSET - actions {
@@ -896,7 +969,7 @@ impl Shell {
         }
         let to = if self.tools_on { 1. } else { 0. };
         self.tools_fade.map_or(to, |(start, from)| {
-            fade_at(from, to, start.elapsed().as_secs_f32(), TOOLS_FADE)
+            fade_at(from, to, self.since(start), TOOLS_FADE)
         })
     }
 
@@ -907,11 +980,11 @@ impl Shell {
             self.tools_fade = None;
             self.tools_on = self.sidebar_hovered;
         } else if self.sidebar_hovered != self.tools_on {
-            self.tools_fade = Some((Instant::now(), self.tools_opacity()));
+            self.tools_fade = Some((self.clock.now(), self.tools_opacity()));
             self.tools_on = self.sidebar_hovered;
         }
         if let Some((start, _)) = self.tools_fade {
-            if start.elapsed().as_secs_f32() < TOOLS_FADE {
+            if self.since(start) < TOOLS_FADE {
                 window.request_animation_frame();
                 return;
             }
@@ -966,8 +1039,10 @@ pub(super) fn reload_glyph(loading: bool) -> &'static str {
 /// lights, or starts near the sidebar's edge in full screen, where they're gone (Arc 1.171). The
 /// others keep to the sidebar's right edge, NAV_TRAIL in and NAV_PITCH apart (Arc 1.170), and a
 /// narrow sidebar loses reload, then forward, while back would come nearer the sidebar button than
-/// NAV_AFTER_SIDEBAR.
-pub(super) fn nav_places(width: f32, full_screen: bool) -> [Option<f32>; 4] {
+/// NAV_AFTER_SIDEBAR. With the sidebar on the `right` the row is mirrored, the sidebar button by the
+/// window's buttons at the right edge, but back, forward and reload keep their order, back NAV_TRAIL
+/// from the page (#2375).
+pub(super) fn nav_places(width: f32, full_screen: bool, right: bool) -> [Option<f32>; 4] {
     let sidebar = if full_screen {
         FULL_SCREEN_SIDEBAR_BUTTON_X
     } else {
@@ -981,8 +1056,14 @@ pub(super) fn nav_places(width: f32, full_screen: bool) -> [Option<f32>; 4] {
     let mut places = [Some(sidebar), None, None, None];
     if let Some(count) = count.filter(|&count| count > 0) {
         for index in 0..count {
-            places[1 + index] = Some(last - (count - 1 - index) as f32 * NAV_PITCH);
+            places[1 + index] = Some(match right {
+                true => NAV_TRAIL + index as f32 * NAV_PITCH,
+                false => last - (count - 1 - index) as f32 * NAV_PITCH,
+            });
         }
+    }
+    if right {
+        places[0] = Some(width - sidebar - NAV_SIZE);
     }
     places
 }

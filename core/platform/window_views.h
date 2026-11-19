@@ -6,10 +6,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <utility>
 
 #include "base/containers/span.h"
 #include "base/functional/callback_forward.h"
 #include "base/functional/callback_helpers.h"
+#include "base/time/time.h"
 #include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/native_ui_types.h"
@@ -102,12 +104,42 @@ void HidePages(views::Widget* widget);
 // over what the view draws, with corners of |corner_radius|. For a page no window shows, such as a
 // link preview's. Where the app can't hold a page in a view of its own, as on Linux, it shows over
 // the pages of |widget|'s window, the one whose Browser holds it, at |frame| in its content, and
-// the app's view over the window leaves it a hole.
+// the app's view over the window leaves it a hole. On Linux, |shown| runs once the first frame
+// with the page at |frame| is on screen, unless ShowPageIn comes again first; Windows and the Mac
+// drop it.
 void ShowPageIn(views::Widget* widget,
                 gfx::NativeView page,
                 void* view,
                 const gfx::Rect& frame,
-                double corner_radius);
+                double corner_radius,
+                base::OnceClosure shown);
+
+// Draws |page|, which ShowPageIn shows, at |scale| of its frame's size about |about|, in the
+// frame's coordinates, and at |opacity|, without laying it out again, until the next call or
+// another page shown. Where it shows in the window, under the app's view; the Mac's page is in that
+// view, which scales and fades it, and this does nothing.
+void DrawPageIn(views::Widget* widget,
+                gfx::NativeView page,
+                float scale,
+                const gfx::PointF& about,
+                float opacity);
+
+// Lets the pointer through |widget|, a window of the core's over the browser window's UI that
+// shows something but takes nothing, such as a media card's video, to the UI under it. Views'
+// accept_events does it on the Mac and Wayland, but not on X11 or Windows.
+void PassPointerThrough(views::Widget* widget);
+
+// Runs |moved| with each origin, in DIPs, that a move loop on |widget| proposes while the system
+// moves only an outline of the window and the window itself only at the release: Windows does so
+// with "Show window contents while dragging" off. Until the runner it returns goes. Where the
+// window moves as it's dragged, as with that setting on and on the Mac, it never runs.
+base::ScopedClosureRunner WatchOutlineMoves(views::Widget* widget,
+                                            base::RepeatingCallback<void(const gfx::Point&)> moved);
+
+// When the system says the pointer event the UI thread is handling now happened, or none where it
+// can't say. A move loop's moves and its release are timed by it, so a throw is measured as the
+// pointer moved, not as a busy UI thread got to it, which reads a throw as a rest (#3415).
+std::optional<base::TimeTicks> PointerEventTime();
 
 // Whether a page's dialog, such as Chrome's passkey dialog, needs a native window of its own to
 // show over the pages, rather than being drawn in the window's own.
@@ -126,6 +158,12 @@ bool KeyboardForPage(views::Widget* widget);
 // Gives the keyboard in |widget|'s window to the window itself, which KeyboardForPage counts as
 // the page's.
 void ReleaseKeyboard(views::Widget* widget);
+
+// Ends the loans of |widget|'s keyboard to a window or bubble of Chromium's over it, such as an
+// extension's popup, so the UI or page that lent it doesn't have it back as the window is active
+// again. Whether there was one. Linux only: the Mac's and Windows' windows give the keyboard back
+// themselves.
+bool EndKeyboardLoans(views::Widget* widget);
 
 // Whether an overlay of the app's over |widget|'s window, such as the command bar or a menu, has
 // the keyboard, which takes it from the window on every platform: on the Mac a child window, key;
@@ -161,6 +199,11 @@ void StretchOnResize(content::RenderWidgetHostView* view, bool stretch);
 // On Linux and Windows: the frame of a tab's dialog, such as print preview, shown in |widget|'s
 // window, from its content's top-left, if one shows (bc_window_dialog).
 std::optional<gfx::Rect> DialogFrame(views::Widget* widget);
+
+// On Linux and Windows: where DevTools docked in a page of |widget|'s window show, the first
+// pane's with them, and the page beside them, from its content's top-left (bc_window_devtools).
+// They're aura windows inside the pane's one X window or HWND, which the driver can't see.
+std::optional<std::pair<gfx::Rect, gfx::Rect>> DevToolsFrames(views::Widget* widget);
 
 // On Windows: the widget of a tab's dialog, such as print preview, shown over |widget|'s window in
 // a window of its own (PageDialogsInOwnWindow), or null.

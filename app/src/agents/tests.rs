@@ -41,9 +41,11 @@ struct Made {
     /// The tasks' Spaces made, and the Spaces deleted.
     task_spaces: RefCell<Vec<u64>>,
     deleted: RefCell<Vec<u64>>,
-    /// The tabs the user pinned, and those whose page asks before it's left.
+    /// The tabs the user pinned, and those whose page has a beforeunload handler, which a close
+    /// asks, and how many times the core was asked to close each.
     pinned: RefCell<HashSet<u64>>,
     asks: RefCell<HashSet<u64>>,
+    closes: RefCell<Vec<(u64, bool)>>,
     /// The downloads the agents answered for the user, and whether each goes on.
     downloads: RefCell<Vec<(u64, bool)>>,
     /// The HTTP requests the agents sent: the tab, the request and what it sent.
@@ -118,6 +120,13 @@ impl Browser for Made {
                 pinned: self.pinned.borrow().contains(&id),
             },
         )
+    }
+
+    fn space_of(&self, tab: u64, _: &App) -> u64 {
+        let tabs = self.tabs.borrow();
+        tabs.iter()
+            .find(|each| each.0 == tab)
+            .map_or(0, |each| each.1)
     }
 
     fn may_act(&self, agent: &str, tab: u64, action: &str, _: &mut App) -> Result<(), String> {
@@ -216,6 +225,31 @@ impl Browser for Made {
         }
     }
 
+    fn url_site(&self, url: &str) -> Option<String> {
+        crate::sort_by_site::made_up_site(url)
+    }
+
+    fn move_today(&self, tab: u64, index: usize, cx: &mut App) {
+        let panes = self.split(tab, cx);
+        let mut tabs = self.tabs.borrow_mut();
+        let Some(space) = tabs.iter().find(|each| each.0 == tab).map(|each| each.1) else {
+            return;
+        };
+        let moved: Vec<_> = (panes.iter())
+            .filter_map(|&pane| tabs.iter().find(|each| each.0 == pane).copied())
+            .collect();
+        tabs.retain(|each| !panes.contains(&each.0));
+        let pinned = self.pinned.borrow();
+        let today: Vec<usize> = (0..tabs.len())
+            .filter(|&at| tabs[at].1 == space && !pinned.contains(&tabs[at].0))
+            .collect();
+        let at = match today.get(index) {
+            Some(&at) => at,
+            None => today.last().map_or(tabs.len(), |&last| last + 1),
+        };
+        tabs.splice(at..at, moved);
+    }
+
     // As the core does: three tabs at most, of one Space, the tab leaving any split it was in.
     fn split_with(&self, tab: u64, with: u64, cx: &mut App) -> bool {
         let space = |tab| {
@@ -267,8 +301,9 @@ impl Browser for Made {
         if self.pinned.borrow().contains(&tab) {
             return Closed::Pinned;
         }
+        self.closes.borrow_mut().push((tab, discard));
         if !discard && self.asks.borrow().contains(&tab) {
-            return Closed::Asks;
+            return Closed::Pending;
         }
         self.tabs.borrow_mut().retain(|each| each.0 != tab);
         Closed::Closed
@@ -336,6 +371,8 @@ struct Configs {
     failing: Mutex<Option<String>>,
     /// The clients on the computer, besides any other MCP client.
     found: Mutex<Vec<Client>>,
+    /// What each task CLI answers when looked for; one not here isn't found.
+    looked: Mutex<Vec<(crate::agents::runner::Cli, crate::agents::ready::Found)>>,
 }
 
 impl Clients for Configs {
@@ -359,12 +396,17 @@ impl Clients for Configs {
         client == Client::Other || self.found.lock().unwrap().contains(&client)
     }
 
-    /// The tests never run a CLI of this computer's: none is found.
-    fn look_for_task_cli(&self, _: crate::agents::runner::Cli) -> crate::agents::ready::Found {
-        crate::agents::ready::Found {
-            ready: crate::agents::ready::Ready::NotFound,
-            ..Default::default()
-        }
+    /// The tests never run a CLI of this computer's: each answers as `looked` says.
+    fn look_for_task_cli(&self, cli: crate::agents::runner::Cli) -> crate::agents::ready::Found {
+        let looked = self.looked.lock().unwrap();
+        let found = looked.iter().find(|(each, _)| *each == cli);
+        found.map_or(
+            crate::agents::ready::Found {
+                ready: crate::agents::ready::Ready::NotFound,
+                ..Default::default()
+            },
+            |(_, found)| found.clone(),
+        )
     }
 }
 
@@ -661,7 +703,7 @@ fn list_tabs_lists_only_the_agents_own_tabs(cx: &mut TestAppContext) {
         [("claude-code".to_string(), "Claude Code".to_string())]
     );
     assert!(!answer.error);
-    assert!(answer.text.starts_with("Your Space has no tabs yet."));
+    assert!(answer.text.starts_with("You have no tabs yet."));
 
     browser
         .tabs
@@ -787,6 +829,401 @@ fn reading_a_tab_of_the_users_is_refused_and_logged(cx: &mut TestAppContext) {
             "read_page".into(),
             "en.wikipedia.org".into(),
             "The tab isn't in the agent's own Space.".into()
+        )
+    );
+}
+
+/// Every tool that takes a tab, with what it needs besides, so only the tab can refuse it.
+const TAB_TOOLS: &[(&str, &str)] = &[
+    ("read_page", "{}"),
+    ("snapshot", "{}"),
+    ("screenshot", "{}"),
+    ("click", r#"{ "ref": "e1" }"#),
+    ("type", r#"{ "ref": "e1", "text": "x" }"#),
+    ("select", r#"{ "ref": "e1", "option": "a" }"#),
+    ("press_key", r#"{ "key": "Enter" }"#),
+    ("scroll", r#"{ "direction": "down" }"#),
+    ("navigate", r#"{ "url": "https://www.example.org/" }"#),
+    ("navigate", r#"{ "url": "back" }"#),
+    (
+        "run_steps",
+        r#"{ "steps": [{ "action": "scroll", "direction": "down" }] }"#,
+    ),
+    ("request", r#"{ "method": "GET", "path": "/" }"#),
+    ("close_tab", "{}"),
+    ("remove_tab", "{}"),
+    ("pin_tab", "{}"),
+    ("unpin_tab", "{}"),
+    ("split_tabs", r#"{ "tabs": [20, 21] }"#),
+    ("add_to_split", r#"{ "split": 20 }"#),
+    ("separate_tab", "{}"),
+    ("list_split", "{}"),
+    ("hand_off", r#"{ "reason": "To sign in." }"#),
+];
+
+/// Puts a tab of the user's, 21 on `url` with the title `title`, first in Claude Code's Space,
+/// where a call without a tab would otherwise go, and checks the agent gets nothing of it: list_tabs
+/// leaves it out, or for a page off the web names it by its number alone, no call without a tab
+/// lands on it, and every tool given it is refused with `refused` before the core reads or does
+/// anything in it. The activity log names the page by its kind, `kind`, alone. A page off the web
+/// the agent may still close, its way out of a tab that went there.
+fn gets_nothing_of(
+    url: &'static str,
+    title: &'static str,
+    kind: &str,
+    refused: &str,
+    cx: &mut TestAppContext,
+) {
+    let (agents, browser, _) = connected(cx);
+    browser.tabs.borrow_mut().insert(1, (21, 2, title, url));
+
+    let listed = call(&agents, "claude-code", "list_tabs", json!({}), cx)
+        .recv()
+        .unwrap()
+        .text;
+    let off_the_web = refused == NOT_WEB_PAGE;
+    assert!(listed.contains("20  Example Domain"), "{listed}");
+    assert!(
+        !listed.contains(title) && !listed.contains(url),
+        "list_tabs named {url}: {listed}"
+    );
+    assert_eq!(
+        listed.contains("21  A page that isn't http or https"),
+        off_the_web,
+        "list_tabs for {url}: {listed}"
+    );
+    assert_eq!(listed.contains("21 "), off_the_web, "{listed}");
+
+    for &(tool, arguments) in TAB_TOOLS {
+        if off_the_web && tool == "close_tab" {
+            continue;
+        }
+        let mut arguments: Value = serde_json::from_str(arguments).unwrap();
+        arguments["tab"] = json!(21);
+        let answer = call(&agents, "claude-code", tool, arguments.clone(), cx);
+        cx.run_until_parked();
+        let answer = answer.recv().unwrap();
+        assert!(
+            answer.error && answer.text.contains(refused),
+            "{tool} {arguments} on {url}: {answer:?}"
+        );
+        assert!(!answer.text.contains(title), "{tool} named the tab's title");
+    }
+    // ask_for_tab: a tab the user doesn't hold is never the agent's to ask for, and one they took
+    // over and then opened the page in is refused as the rest.
+    let ask = json!({ "tab": 21, "reason": "To see it." });
+    let answer = call(&agents, "claude-code", "ask_for_tab", ask.clone(), cx);
+    let answer = answer.recv().unwrap();
+    assert!(
+        answer.error && !answer.text.contains(title),
+        "ask_for_tab on {url}: {answer:?}"
+    );
+    agents.update(cx, |agents, cx| agents.take_over("claude-code", 21, cx));
+    let answer = call(&agents, "claude-code", "ask_for_tab", ask, cx);
+    let answer = answer.recv().unwrap();
+    assert!(
+        answer.error && answer.text.contains(refused),
+        "ask_for_tab on {url}, held: {answer:?}"
+    );
+    assert!(browser.reads.borrow().is_empty(), "the core read {url}");
+    assert!(browser.pages.borrow().is_empty(), "the core acted in {url}");
+    assert!(
+        browser.navigated.borrow().is_empty(),
+        "the core navigated {url}"
+    );
+    assert!(browser.closes.borrow().is_empty(), "the core closed {url}");
+    assert!(
+        browser.requests.borrow().is_empty(),
+        "the core sent a request from {url}"
+    );
+    assert!(browser.splits.borrow().is_empty(), "the core split {url}");
+    let (_, site, why) = log(&agents, "claude-code", cx)[0].clone();
+    assert_eq!(why, refused, "the activity log doesn't say why");
+    assert!(
+        !site.contains(title),
+        "the activity log named the tab's title: {site}"
+    );
+    assert_eq!(site, kind, "the activity log's site for {url}");
+
+    let _ = call(&agents, "claude-code", "read_page", json!({}), cx);
+    assert_eq!(
+        browser.reads.borrow()[0].0,
+        20,
+        "read_page without a tab read {url}"
+    );
+
+    if off_the_web {
+        agents.update(cx, |agents, cx| agents.hand_back(21, cx));
+        let answer = call(
+            &agents,
+            "claude-code",
+            "close_tab",
+            json!({ "tab": 21 }),
+            cx,
+        );
+        cx.run_until_parked();
+        let answer = answer.recv().unwrap();
+        assert!(!answer.error, "close_tab on {url}: {answer:?}");
+        assert!(
+            !answer.text.contains(title),
+            "close_tab named the tab's title"
+        );
+        assert_eq!(browser.closes.borrow().as_slice(), &[(21, false)]);
+    }
+}
+
+/// A Board the user opens in an agent's Space stays the user's alone, as a Board and what's on it
+/// are: the agent hears of it only as of a tab not its own (#3073).
+#[gpui::test]
+fn an_agent_never_reaches_a_board_in_its_space(cx: &mut TestAppContext) {
+    gets_nothing_of(
+        "chrome://board/0123456789abcdef0123456789abcdef",
+        "Kitchen plans",
+        "board",
+        "The tab isn't in the agent's own Space.",
+        cx,
+    );
+}
+
+/// A page that isn't http(s), opened by the user in an agent's Space, is one agents never use: no
+/// title, address, text or picture of it reaches one.
+#[gpui::test]
+fn an_agent_gets_nothing_of_a_page_off_the_web_in_its_space(cx: &mut TestAppContext) {
+    let refused = "The tab's page isn't an http or https page, the only pages agents may use.";
+    gets_nothing_of(
+        "chrome://settings/passwords",
+        "Settings",
+        "settings",
+        refused,
+        cx,
+    );
+}
+
+#[gpui::test]
+fn an_agent_gets_nothing_of_a_file_in_its_space(cx: &mut TestAppContext) {
+    let refused = "The tab's page isn't an http or https page, the only pages agents may use.";
+    let file = "file:///Users/someone/notes.txt";
+    gets_nothing_of(file, "notes.txt", "file", refused, cx);
+}
+
+#[gpui::test]
+fn an_agent_gets_nothing_of_an_extensions_page_in_its_space(cx: &mut TestAppContext) {
+    let refused = "The tab's page isn't an http or https page, the only pages agents may use.";
+    gets_nothing_of(
+        "chrome-extension://abcdefghijklmnopabcdefghijklmnop/options.html",
+        "Options",
+        "extension",
+        refused,
+        cx,
+    );
+}
+
+/// A pinned Board not yet loaded has only the URL it's pinned to, which is enough.
+#[test]
+fn a_tab_pinned_to_a_board_is_off_limits_before_it_loads() {
+    let board = "chrome://board/0123456789abcdef0123456789abcdef";
+    assert_eq!(off_limits("", board), Some(NOT_ITS_SPACE));
+    assert_eq!(
+        off_limits("https://www.example.com/", board),
+        Some(NOT_ITS_SPACE)
+    );
+    assert_eq!(off_limits("", "https://www.example.com/"), None);
+    assert_eq!(off_limits("https://www.example.com/", ""), None);
+}
+
+/// A tab whose first page hasn't committed has no address, or the empty start page's, and holds
+/// nothing of anyone's: it's the core's to wait for and check once its page commits, as main's
+/// page tools always did. Past that start page, anything but http(s) is off limits.
+#[test]
+fn a_tab_yet_to_commit_its_first_page_is_the_cores_to_check() {
+    assert_eq!(off_limits("", ""), None);
+    assert_eq!(off_limits("about:blank", ""), None);
+    assert_eq!(off_limits("about:blank#top", ""), None);
+    assert_eq!(off_limits("about:blank", "https://www.example.com/"), None);
+    assert_eq!(off_limits("about:blankish", ""), Some(NOT_WEB_PAGE));
+    assert_eq!(off_limits("about:srcdoc", ""), Some(NOT_WEB_PAGE));
+    assert_eq!(off_limits("", "chrome://settings/"), Some(NOT_WEB_PAGE));
+    assert_eq!(off_limits("data:text/html,hi", ""), Some(NOT_WEB_PAGE));
+}
+
+/// The log names a web page by its site, and any other page by its kind alone, as a file's path,
+/// an extension's id or anything else in its address may be the user's.
+#[test]
+fn the_log_names_a_page_off_the_web_by_its_kind() {
+    assert_eq!(site("https://www.example.com/a?b"), "example.com");
+    assert_eq!(
+        site("chrome://board/0123456789abcdef0123456789abcdef"),
+        "board"
+    );
+    assert_eq!(site("chrome://settings/passwords"), "settings");
+    assert_eq!(site("chrome://history/?q=kitchen"), "browser");
+    assert_eq!(site("file:///Users/someone/notes.txt"), "file");
+    assert_eq!(site("file://server/share/notes.txt"), "file");
+    assert_eq!(
+        site("chrome-extension://abcdefghijklmnopabcdefghijklmnop/options.html"),
+        "extension"
+    );
+    assert_eq!(site("view-source:https://www.example.com/"), "page");
+    assert_eq!(site("about:blank"), "");
+}
+
+/// The agent's own tab before its first page commits, as one open_tab just made, one a page opened
+/// with a link or window.open, or a blank popup its opener is about to navigate, shows no address
+/// or the empty start page's. A call on it goes to the core, which waits for the page as it always
+/// has, and list_tabs, run beside it, still lists it.
+#[gpui::test]
+fn an_agents_tab_yet_to_commit_its_first_page_is_the_cores_to_wait_for(cx: &mut TestAppContext) {
+    for url in ["", "about:blank"] {
+        let (agents, browser, _) = connected(cx);
+        browser.tabs.borrow_mut().push((21, 2, "", url));
+        let snapshot = call(&agents, "claude-code", "snapshot", json!({ "tab": 21 }), cx);
+        let listed = call(&agents, "claude-code", "list_tabs", json!({}), cx);
+        cx.run_until_parked();
+        let listed = listed.recv().unwrap().text;
+        assert!(
+            listed.contains("21  "),
+            "list_tabs left out {url:?}: {listed}"
+        );
+        assert!(
+            browser.pages.borrow().iter().any(|page| page.0 == 21),
+            "the snapshot of a tab on {url:?} didn't reach the core: {:?}",
+            snapshot.try_recv()
+        );
+        let _ = call(
+            &agents,
+            "claude-code",
+            "read_page",
+            json!({ "tab": 21 }),
+            cx,
+        );
+        assert!(
+            browser.reads.borrow().iter().any(|read| read.0 == 21),
+            "read_page didn't ask the core to read a tab on {url:?}"
+        );
+    }
+}
+
+/// A tab of the user's, in their own Space, gets the core's answer for any tab not the agent's,
+/// whatever its page: refusing it for being off the web would tell the agent what the user has
+/// open.
+#[gpui::test]
+fn a_users_tab_off_the_web_is_answered_as_any_tab_not_the_agents(cx: &mut TestAppContext) {
+    for url in [
+        "chrome://settings/passwords",
+        "file:///home/user/plan.txt",
+        "data:text/html,words",
+    ] {
+        let (agents, browser, _) = connected(cx);
+        browser.tabs.borrow_mut().push((31, 1, "Passwords", url));
+        for (tool, arguments) in [
+            ("read_page", json!({ "tab": 31 })),
+            ("snapshot", json!({ "tab": 31 })),
+            (
+                "request",
+                json!({ "tab": 31, "url": "https://example.org/" }),
+            ),
+            ("close_tab", json!({ "tab": 31 })),
+        ] {
+            let answer = call(&agents, "claude-code", tool, arguments, cx);
+            cx.run_until_parked();
+            assert_eq!(
+                answer.recv().unwrap(),
+                ToolResult::error(NOT_ITS_SPACE),
+                "{tool} on a user's tab at {url}"
+            );
+            // The core's answer, which its activity log has.
+            assert!(
+                browser.checked.borrow_mut().drain(..).next().is_some(),
+                "{tool} on a user's tab at {url} didn't ask the core"
+            );
+        }
+    }
+}
+
+/// A request from a tab not the agent's, the user's or another agent's, gets the core's answer for
+/// the tab alone, before any of its requests is read, as every other tool does: an answer for each
+/// request would tell the agent they got as far as the tab's site.
+#[gpui::test]
+fn a_request_from_a_tab_not_the_agents_is_refused_for_the_tab(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    browser.agent_spaces.borrow_mut().insert("codex".into(), 3);
+    (browser.tabs.borrow_mut()).push((30, 3, "Rust", "https://www.rust-lang.org/"));
+    browser.checked.borrow_mut().clear();
+    for (tab, site) in [(10, "en.wikipedia.org"), (30, "rust-lang.org")] {
+        let requests = json!({ "tab": tab, "requests": [{ "method": "GET", "path": "/api/me" }] });
+        let answer = call(&agents, "claude-code", "request", requests, cx);
+        cx.run_until_parked();
+        assert_eq!(
+            answer.recv().unwrap(),
+            ToolResult::error(NOT_ITS_SPACE),
+            "request from tab {tab}"
+        );
+        assert_eq!(
+            browser
+                .checked
+                .borrow_mut()
+                .drain(..)
+                .collect::<Vec<String>>(),
+            ["request"],
+            "the core didn't check tab {tab} once"
+        );
+        assert_eq!(
+            log(&agents, "claude-code", cx)[0],
+            ("request".into(), site.into(), NOT_ITS_SPACE.into())
+        );
+    }
+    assert!(browser.requests.borrow().is_empty(), "a request was sent");
+}
+
+/// Once read, a page still on the empty start page is no web page, as the core's page tools find,
+/// and a tab that became a Board meanwhile is answered as a Board is everywhere else.
+#[gpui::test]
+fn read_page_answers_for_the_page_it_read(cx: &mut TestAppContext) {
+    for (url, refused) in [
+        ("about:blank", NOT_WEB_PAGE),
+        (
+            "chrome://board/0123456789abcdef0123456789abcdef",
+            NOT_ITS_SPACE,
+        ),
+    ] {
+        let (agents, browser, _) = connected(cx);
+        let answer = call(
+            &agents,
+            "claude-code",
+            "read_page",
+            json!({ "tab": 20 }),
+            cx,
+        );
+        let (_, request) = browser.reads.borrow()[0];
+        browser.tabs.borrow_mut()[1] = (20, 2, "Kitchen plans", url);
+        agents.update(cx, |agents, cx| {
+            agents.text_read(request, Some("Kitchen plans\nshelves".into()), cx)
+        });
+        assert_eq!(answer.recv().unwrap(), ToolResult::error(refused), "{url}");
+    }
+}
+
+/// read_page answers only for an http(s) page, as the page tools do: the core reads any page, so
+/// one the tab went to while it was read, such as the browser's own, gives the agent nothing.
+#[gpui::test]
+fn read_page_gives_nothing_of_a_page_off_the_web(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let answer = call(
+        &agents,
+        "claude-code",
+        "read_page",
+        json!({ "tab": 20 }),
+        cx,
+    );
+    let (_, request) = browser.reads.borrow()[0];
+    browser.tabs.borrow_mut()[1] = (20, 2, "Settings", "chrome://settings/");
+    agents.update(cx, |agents, cx| {
+        agents.text_read(request, Some("Settings\nYou and Google".into()), cx)
+    });
+    assert_eq!(
+        answer.recv().unwrap(),
+        ToolResult::error(
+            "The tab's page isn't an http or https page, the only pages agents may use."
         )
     );
 }
@@ -1224,7 +1661,7 @@ fn an_action_answers_with_what_changed_in_the_page(cx: &mut TestAppContext) {
         format!(
             "Clicked combobox “Size”.\n\n{head}{since}New:\n\
              - listbox \"Size\" [e6]\n  - option \"S\" [e7]\n  - option \"M\" [e8]\n\n\
-             Changed:\n- combobox \"Size\" [e4] (expanded)"
+             Changed:\n- combobox \"Size\" [e4] (expanded): now expanded"
         )
     );
 
@@ -1241,7 +1678,7 @@ fn an_action_answers_with_what_changed_in_the_page(cx: &mut TestAppContext) {
         cx,
     );
     assert!(
-        scrolled.contains("Changed:\n- combobox \"Size\" [e4]\n\nGone:\n- listbox"),
+        scrolled.contains("Changed:\n- combobox \"Size\" [e4]: now collapsed\n\nGone:\n- listbox"),
         "{scrolled}"
     );
     let again = act(
@@ -1382,6 +1819,21 @@ fn an_agent_chooses_an_option_by_its_text(cx: &mut TestAppContext) {
         missed.text
     );
 
+    // A line break in the option goes to the core as it was asked, and the answer says it on one
+    // line.
+    let choose = json!({ "tab": 20, "ref": "e1", "option": "5\n1" });
+    let answer = call(&agents, "claude-code", "select", choose, cx);
+    let (.., text) = browser.pages.borrow().last().cloned().unwrap();
+    assert_eq!(text, "5\n1");
+    let missed = page_done(&agents, &browser, answer, answered(None), cx);
+    assert!(
+        missed
+            .text
+            .starts_with("Chose “5 1” in the combobox “Status”. It doesn't"),
+        "{}",
+        missed.text
+    );
+
     let pages = browser.pages.borrow().len();
     for wrong in [
         json!({ "tab": 20, "ref": "e1" }),
@@ -1419,7 +1871,8 @@ fn an_agent_chooses_an_option_by_its_text(cx: &mut TestAppContext) {
     );
 
     let pages = browser.pages.borrow().len();
-    let paying = json!({ "tab": 20, "ref": "e2", "option": "Pay now" });
+    // The user's question says the option on one line, its line break a space.
+    let paying = json!({ "tab": 20, "ref": "e2", "option": "Pay\u{2028}now" });
     let _answer = call(&agents, "claude-code", "select", paying, cx);
     let question = browser
         .asked
@@ -1579,6 +2032,55 @@ fn an_agent_never_reaches_chromes_password_manager(cx: &mut TestAppContext) {
     assert!(browser.pages.borrow().is_empty());
 }
 
+/// Library › History lists the profile's pages, so an agent can't reach the history page Chrome
+/// keeps them in either, by a tab of its own or its tab's way, each try in the activity log with
+/// why, and it has no tool that lists or removes them (#2337).
+#[gpui::test]
+fn an_agent_never_reaches_the_history(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let tabs = browser.tabs.borrow().len();
+    let refused = ToolResult::error("Agents may open only http and https pages.");
+    for url in [
+        "chrome://history",
+        "chrome://history/?q=bank",
+        "CHROME://HISTORY",
+    ] {
+        let answer = call(
+            &agents,
+            "claude-code",
+            "open_tab",
+            json!({ "url": url }),
+            cx,
+        );
+        assert_eq!(answer.recv().unwrap(), refused, "{url}");
+        let going = json!({ "tab": 20, "url": url });
+        let answer = call(&agents, "claude-code", "navigate", going, cx);
+        assert_eq!(answer.recv().unwrap(), refused, "{url}");
+        let (action, _, why) = log(&agents, "claude-code", cx)[0].clone();
+        assert_eq!(
+            (action.as_str(), why.as_str()),
+            ("navigate", "Agents may open only http and https pages."),
+            "{url}'s refusal isn't in the activity log"
+        );
+    }
+    assert_eq!(
+        browser.tabs.borrow().len(),
+        tabs,
+        "an agent opened the history"
+    );
+    assert!(
+        browser.navigated.borrow().is_empty(),
+        "an agent went to the history"
+    );
+    for tool in ["history", "list_history", "remove_history"] {
+        let answer = call(&agents, "claude-code", tool, json!({}), cx);
+        assert_eq!(
+            answer.recv().unwrap(),
+            ToolResult::error(format!("There's no tool {tool}."))
+        );
+    }
+}
+
 /// A tab the page opens as the agent clicks, which the core puts in the agent's Space, behind, is
 /// named in the click's answer, so the agent can work in it (#1470). One another tab's page opens
 /// isn't.
@@ -1603,7 +2105,7 @@ fn a_tab_the_agents_click_opens_is_named(cx: &mut TestAppContext) {
     let said = clicked.text.split("\n\n").next().unwrap();
     assert_eq!(
         said,
-        "Clicked textbox “Coupon”. It opened tab 26 in your Space."
+        "Clicked textbox “Coupon”. It opened tab 26 among your tabs."
     );
 
     let answer = call(
@@ -1717,6 +2219,35 @@ fn a_question_left_unanswered_is_refused_after_5_minutes(cx: &mut TestAppContext
     assert_eq!(log(&agents, "claude-code", cx)[0].2, NO_ANSWER);
     let grants = agents.read_with(cx, |agents, _| agents.grants("claude-code"));
     assert!(grants.is_empty());
+}
+
+/// A check's `--agent-waits` shortens both waits so a run sees each end; a prod build, or a value
+/// that isn't two whole seconds, keeps the spec's.
+#[test]
+fn a_checks_waits_stand_in_for_the_specs_outside_prod() {
+    let given = |args: &[&str]| args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
+    let spec = Waits {
+        ask: ASK_WAIT,
+        handoff: HANDOFF_WAIT,
+    };
+    assert_eq!(Waits::new(&given(&[]), false), spec);
+    assert_eq!(
+        Waits::new(&given(&["--agent-waits=2,3"]), false),
+        Waits {
+            ask: Duration::from_secs(2),
+            handoff: Duration::from_secs(3),
+        }
+    );
+    assert_eq!(
+        Waits::new(&given(&["--agent-waits=2,3"]), true),
+        spec,
+        "a prod build reads no check's waits"
+    );
+    assert_eq!(Waits::new(&given(&["--agent-waits=2"]), false), spec);
+    assert_eq!(
+        Waits::new(&given(&["--agent-waits=x,3"]), false).ask,
+        ASK_WAIT
+    );
 }
 
 /// A handoff not handed back in 15 minutes answers the agent's call, so it isn't left waiting.
@@ -2114,6 +2645,62 @@ fn the_log_says_how_long_ago() {
     assert_eq!(ago(now + Duration::from_secs(5), now), "Just now");
 }
 
+/// A page whose requests were still open when the core stopped waiting, though what it showed
+/// held still, as one that polls, says that rather than that it may change yet (#2355).
+#[gpui::test]
+fn an_action_says_when_only_requests_were_still_open(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let answer = call(&agents, "claude-code", "scroll", json!({ "tab": 20 }), cx);
+    let polling = json!({ "nodes": [
+        { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Shop" } },
+    ], "requests": true })
+    .to_string();
+    let scrolled = page_done(&agents, &browser, answer, polling, cx);
+    assert!(!scrolled.error);
+    assert!(
+        scrolled.text.starts_with(
+            "Scrolled down. The page held still, with requests it made still open after 5 s.\n\n\
+             Tab 20"
+        ),
+        "{}",
+        scrolled.text
+    );
+    assert!(
+        !scrolled.text.contains("may change yet"),
+        "{}",
+        scrolled.text
+    );
+}
+
+/// A wait step until "quiet" ends as soon as the page holds still with only its requests open, as
+/// a page that polls keeps one open for good (#2355).
+#[gpui::test]
+fn a_wait_step_ends_on_a_page_that_holds_still_while_it_polls(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let steps =
+        json!({ "tab": 20, "steps": [{ "action": "wait", "until": "quiet", "seconds": 10 }] });
+    let run = call(&agents, "claude-code", "run_steps", steps, cx);
+    let polling = json!({ "nodes": [
+        { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Shop" } },
+    ], "requests": true })
+    .to_string();
+    let request = browser.pages.borrow().last().unwrap().1;
+    agents.update(cx, |agents, cx| {
+        agents.page_done(request, polling, false, cx)
+    });
+    cx.run_until_parked();
+    let ran = run.recv().unwrap();
+    assert!(
+        ran.text.starts_with(
+            "Ran 1 steps.\n1. The page held still, with requests it made still open after 5 s.\n\n\
+             Tab 20"
+        ),
+        "{}",
+        ran.text
+    );
+    assert_eq!(browser.pages.borrow().len(), 1, "it looked again");
+}
+
 /// The core answers the agents' last request of it with the shop's tree.
 fn shop_done(agents: &Entity<Agents>, browser: &Made, cx: &mut TestAppContext) {
     let request = browser.pages.borrow().last().unwrap().1;
@@ -2144,7 +2731,8 @@ fn an_action_says_when_its_page_was_still_busy(cx: &mut TestAppContext) {
 }
 
 /// A wait step until "quiet" asks the core for the page once it has settled, again while it was
-/// still busy, and once its time is up goes on with the run, as a page that polls never settles.
+/// still busy, and once its time is up goes on with the run, as a page that keeps changing never
+/// settles.
 #[gpui::test]
 fn a_wait_step_waits_for_the_page_to_settle(cx: &mut TestAppContext) {
     let (agents, browser, _) = connected(cx);
@@ -2325,6 +2913,34 @@ fn the_user_takes_over_and_stops_an_agent(cx: &mut TestAppContext) {
     assert_eq!(log(&agents, "claude-code", cx)[0].0, "stopped by the user");
 }
 
+/// An agent has a status while its session lasts, for the bar in its Space and for a press in any
+/// of its tabs, which takes that tab over. Once its last session ends it has none: its tabs are the
+/// user's, with nothing to hand back to (#3503).
+#[gpui::test]
+fn an_agent_whose_session_ended_has_no_status(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+    assert!(!page_done(&agents, &browser, answer, shop_tree(), cx).error);
+    let status = agents.read_with(cx, |agents, _| agents.status());
+    assert_eq!(
+        status
+            .iter()
+            .map(|status| &status.agent)
+            .collect::<Vec<_>>(),
+        ["claude-code"]
+    );
+
+    let bye = Event::Bye {
+        agent: "claude-code".into(),
+    };
+    agents.update(cx, |agents, cx| agents.handle(bye, cx));
+    let status = agents.read_with(cx, |agents, _| agents.status());
+    assert!(
+        status.is_empty(),
+        "an agent whose session ended kept a status: {status:?}"
+    );
+}
+
 /// A tab the user took over stays theirs: the agent's calls on it are refused until it asks with
 /// ask_for_tab and the user hands it back. Keep refuses, and the tab stays the user's.
 #[gpui::test]
@@ -2473,20 +3089,41 @@ fn an_agent_closes_only_its_own_tabs(cx: &mut TestAppContext) {
     assert_eq!(tools::describe(&entry.0), "Closed a tab");
 }
 
-/// A page that asks before it's left stays open, and the answer says why: the agent's own tab
-/// closes with discard, and the log says it was without saving (#1447).
-#[gpui::test]
-fn an_agent_discards_only_a_page_it_opened(cx: &mut TestAppContext) {
-    let (agents, browser, _) = connected(cx);
+/// The core answers a close that asked `tab`'s page with `closed`, from a task of its own, as the
+/// core's agent_close_answered does: the tab goes if it closed.
+fn page_answers(
+    agents: &Entity<Agents>,
+    browser: &Made,
+    tab: u64,
+    closed: Closed,
+    cx: &mut TestAppContext,
+) {
+    if closed == Closed::Closed {
+        browser.tabs.borrow_mut().retain(|each| each.0 != tab);
+    }
+    agents.update(cx, |agents, cx| agents.close_answered(tab, closed, cx));
+}
+
+/// The agent's own tab at docs.example, whose page has a beforeunload handler: 30.
+fn opened_with_handler(agents: &Entity<Agents>, browser: &Made, cx: &mut TestAppContext) {
     let opened = call(
-        &agents,
+        agents,
         "claude-code",
         "open_tab",
         json!({ "url": "docs.example" }),
         cx,
     );
-    _ = page_done(&agents, &browser, opened, shop_tree(), cx);
+    _ = page_done(agents, browser, opened, shop_tree(), cx);
     browser.asks.borrow_mut().insert(30);
+}
+
+/// A page whose handler asks to stay stays open, and the answer, which waits for the page, says
+/// why; the log has the close once the page answered. With discard, the agent's own tab is asked
+/// again and closes without saving, the log saying so, and the user isn't asked (#1447, #3256).
+#[gpui::test]
+fn an_agent_discards_only_a_page_it_opened(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    opened_with_handler(&agents, &browser, cx);
 
     let kept = call(
         &agents,
@@ -2495,6 +3132,14 @@ fn an_agent_discards_only_a_page_it_opened(cx: &mut TestAppContext) {
         json!({ "tab": 30 }),
         cx,
     );
+    assert!(kept.try_recv().is_err(), "answered before the page did");
+    assert!(
+        log(&agents, "claude-code", cx)
+            .iter()
+            .all(|entry| entry.0 != "close_tab"),
+        "logged the close before the page answered"
+    );
+    page_answers(&agents, &browser, 30, Closed::Asks, cx);
     let kept = kept.recv().unwrap();
     assert!(kept.error);
     assert_eq!(
@@ -2506,11 +3151,16 @@ fn an_agent_discards_only_a_page_it_opened(cx: &mut TestAppContext) {
         browser.tabs.borrow().iter().any(|tab| tab.0 == 30),
         "a refused close closed it"
     );
+    assert_eq!(log(&agents, "claude-code", cx)[0].0, "close_tab");
 
     let discard = json!({ "tab": 30, "discard": true });
-    let closed = call(&agents, "claude-code", "close_tab", discard, cx)
-        .recv()
-        .unwrap();
+    let closed = call(&agents, "claude-code", "close_tab", discard, cx);
+    assert!(
+        closed.try_recv().is_err(),
+        "the discard didn't ask the page"
+    );
+    page_answers(&agents, &browser, 30, Closed::Asks, cx);
+    let closed = closed.recv().unwrap();
     assert!(!closed.error);
     assert_eq!(closed.text, "Closed tab 30 without saving.");
     assert!(browser.tabs.borrow().iter().all(|tab| tab.0 != 30));
@@ -2527,8 +3177,101 @@ fn an_agent_discards_only_a_page_it_opened(cx: &mut TestAppContext) {
     );
 }
 
-/// In a tab the agent didn't open, what's unsaved may be the user's: discard asks them first, and
-/// only their yes closes it.
+/// A page whose handler doesn't ask closes at the first call, discard or not, with nothing lost
+/// and no question to the user, even in a tab the agent didn't open.
+#[gpui::test]
+fn a_page_that_doesnt_ask_closes_at_the_first_call(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    for each in (browser.tabs.borrow_mut().iter_mut()).filter(|each| each.0 == 10) {
+        each.1 = 2;
+    }
+    browser.asks.borrow_mut().insert(10);
+    let discard = json!({ "tab": 10, "discard": true });
+    let closed = call(&agents, "claude-code", "close_tab", discard, cx);
+    page_answers(&agents, &browser, 10, Closed::Closed, cx);
+    let closed = closed.recv().unwrap();
+    assert!(!closed.error);
+    assert_eq!(closed.text, "Closed tab 10.");
+    assert_eq!(*browser.closes.borrow(), [(10, false)]);
+    assert_eq!(*browser.asked.borrow(), None, "asked the user");
+    let entry = log(&agents, "claude-code", cx).remove(0);
+    assert_eq!(
+        entry,
+        ("close_tab".into(), "en.wikipedia.org".into(), "".into())
+    );
+}
+
+/// A second close while the page is asked waits for the same answer, with no second ask of the
+/// page's own: each close has its entry in the log. A discard of the agent's own tab meanwhile
+/// closes it at once, and the close waiting hears it closed.
+#[gpui::test]
+fn closes_while_the_page_is_asked_share_its_answer(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    opened_with_handler(&agents, &browser, cx);
+    let first = call(
+        &agents,
+        "claude-code",
+        "close_tab",
+        json!({ "tab": 30 }),
+        cx,
+    );
+    let second = call(
+        &agents,
+        "claude-code",
+        "close_tab",
+        json!({ "tab": 30 }),
+        cx,
+    );
+    page_answers(&agents, &browser, 30, Closed::Asks, cx);
+    for answer in [first, second] {
+        let answer = answer.recv().unwrap();
+        assert!(answer.error);
+        assert!(answer.text.starts_with("Tab 30 stays open: its page asks"));
+    }
+    let closes = log(&agents, "claude-code", cx);
+    assert_eq!(closes.iter().filter(|e| e.0 == "close_tab").count(), 2);
+
+    let waiting = call(
+        &agents,
+        "claude-code",
+        "close_tab",
+        json!({ "tab": 30 }),
+        cx,
+    );
+    let discard = json!({ "tab": 30, "discard": true });
+    let discarded = call(&agents, "claude-code", "close_tab", discard, cx)
+        .recv()
+        .unwrap();
+    assert_eq!(discarded.text, "Closed tab 30 without saving.");
+    assert!(waiting.try_recv().is_err(), "answered before the core did");
+    page_answers(&agents, &browser, 30, Closed::Closed, cx);
+    assert_eq!(waiting.recv().unwrap().text, "Closed tab 30.");
+}
+
+/// A tab that went to another page before its page answered stays, and the answer says so.
+#[gpui::test]
+fn a_tab_that_changed_meanwhile_stays(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    opened_with_handler(&agents, &browser, cx);
+    let kept = call(
+        &agents,
+        "claude-code",
+        "close_tab",
+        json!({ "tab": 30 }),
+        cx,
+    );
+    page_answers(&agents, &browser, 30, Closed::Stays, cx);
+    let kept = kept.recv().unwrap();
+    assert!(kept.error);
+    assert_eq!(
+        kept.text,
+        "Tab 30 stays open: before its page answered, it went to another page, was unloaded, \
+         or the user took it over or pinned it."
+    );
+}
+
+/// In a tab the agent didn't open, what's unsaved may be the user's: once the page asked to stay,
+/// discard asks them first, and only their yes closes it.
 #[gpui::test]
 fn discarding_a_page_the_user_gave_asks_them(cx: &mut TestAppContext) {
     let (agents, browser, _) = connected(cx);
@@ -2545,6 +3288,8 @@ fn discarding_a_page_the_user_gave_asks_them(cx: &mut TestAppContext) {
     let discard = json!({ "tab": 10, "discard": true });
 
     let refused = call(&agents, "claude-code", "close_tab", discard.clone(), cx);
+    assert_eq!(*browser.asked.borrow(), None, "asked before the page did");
+    page_answers(&agents, &browser, 10, Closed::Asks, cx);
     let question = browser
         .asked
         .borrow()
@@ -2571,6 +3316,7 @@ fn discarding_a_page_the_user_gave_asks_them(cx: &mut TestAppContext) {
     );
 
     let closed = call(&agents, "claude-code", "close_tab", discard, cx);
+    page_answers(&agents, &browser, 10, Closed::Asks, cx);
     let question = browser
         .asked
         .borrow()
@@ -2779,6 +3525,28 @@ fn an_agent_splits_only_its_own_tabs(cx: &mut TestAppContext) {
     }
     let checked = browser.checked.borrow();
     assert!(checked.iter().any(|each| each == "separate_tab"));
+}
+
+/// Every tool an agent or a task can call says what it did in the activity log in words of its
+/// own, not describe's fallback, so a new tool can't land with no entry beside it (#3392).
+#[test]
+fn every_tool_has_an_activity_log_entry() {
+    let mut names = tools::names("claude-code");
+    names.extend(tools::names("task-1"));
+    // The log names an action as the core's entry does, which is the tool's name but for select's
+    // (agents.rs).
+    let logged = |name: &str| match name {
+        "select" => "select_option".to_string(),
+        name => name.to_string(),
+    };
+    let missing: Vec<_> = (names.iter())
+        .filter(|name| tools::describe(&logged(name)) == "Acted")
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "these tools have no words in the activity log; give each its line in tools::describe: \
+         {missing:?}"
+    );
 }
 
 /// Take Back All Tabs, in the agent's Space's menu, takes over each tab there the user doesn't
@@ -3038,6 +3806,7 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
             "pin_tab",
             "unpin_tab",
             "remove_tab",
+            "sort_tabs_by_site",
         ]
     );
 
@@ -3078,6 +3847,7 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
         ("unpin_tab", tab(json!({}))),
         ("pin_tab", tab(json!({}))),
         ("remove_tab", tab(json!({}))),
+        ("sort_tabs_by_site", json!({})),
         ("split_tabs", json!({ "tabs": [20, 30] })),
         ("add_to_split", json!({ "tab": 30, "split": 20 })),
         ("list_split", tab(json!({}))),
@@ -3129,6 +3899,37 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
             checked.contains(action),
             "{action} didn't ask the core: {checked:?}"
         );
+    }
+}
+
+/// A Boost and Arrange are the user's own view of their pages (#695, #2347): no tool, for an agent
+/// from outside or a task, and no run_steps step names them, and the agents' code reaches neither
+/// the Boosts nor an arrangement's file.
+#[test]
+fn no_agent_path_reaches_arrange_or_a_boost() {
+    let named = |text: &str| {
+        let text = text.to_lowercase();
+        ["arrange", "boost", "zap"]
+            .iter()
+            .any(|word| text.contains(word))
+    };
+    for agent in ["claude-code", "task-1"] {
+        let tools = tools::list(agent).to_string();
+        assert!(!named(&tools), "{agent}'s tools name one");
+    }
+    assert!(!tools::STEPS.iter().any(|step| named(step)));
+    let sources = [
+        include_str!("../agents.rs"),
+        include_str!("tools.rs"),
+        include_str!("task.rs"),
+        include_str!("server.rs"),
+        include_str!("page.rs"),
+        include_str!("request.rs"),
+        include_str!("runner.rs"),
+    ];
+    for source in sources {
+        assert!(!source.contains("boosts::"), "the agents reach the Boosts");
+        assert!(!source.contains("arrange"), "the agents reach Arrange");
     }
 }
 
@@ -3271,6 +4072,36 @@ mod requests {
             agents
                 .read_with(cx, |agents, _| agents.grants("claude-code"))
                 .is_empty()
+        );
+    }
+
+    /// A write whose override header names a read still asks, and sends nothing until the user
+    /// answers; Deny sends nothing at all, and the log names the method sent (#1439).
+    #[gpui::test]
+    fn a_write_that_says_its_a_read_still_asks(cx: &mut TestAppContext) {
+        let (agents, browser, _) = connected(cx);
+        let masked = json!({ "tab": 20, "requests": [
+            { "method": "POST", "path": "/api/items",
+              "headers": { "X-HTTP-Method-Override": "GET" }, "body": { "title": "Milk" } },
+        ] });
+        let answer = call(&agents, "claude-code", "request", masked, cx);
+        let question =
+            (browser.asked.borrow().clone()).expect("a POST that said it was a GET didn't ask");
+        assert_eq!(sent(&browser).len(), 0, "it sent before the user answered");
+        assert_eq!(
+            question.changes,
+            [("POST as GET /api/items".into(), "title: Milk".into())]
+        );
+        agents.update(cx, |agents, cx| {
+            agents.answer(question.id, Answer::Never, cx)
+        });
+        assert!(answer.recv().unwrap().error);
+        assert_eq!(sent(&browser).len(), 0, "a refused call sent something");
+        assert_eq!(
+            targets(&agents, cx)
+                .last()
+                .map(|(target, _)| target.as_str()),
+            Some("POST as GET /api/items")
         );
     }
 
@@ -4021,8 +4852,7 @@ mod tasks {
             json!({ "result": "Two museums.", "tabs": [30, 50] }),
             cx,
         );
-        let theirs =
-            "Tab 50 isn't one of yours: give the ids of tabs in your Space, from list_tabs.";
+        let theirs = "Tab 50 isn't one of yours: give the ids of your own tabs, from list_tabs.";
         assert_eq!(refused.recv().unwrap(), ToolResult::error(theirs));
         // A result with its other arguments written into it, as Haiku wrote one, calls again.
         let garbled = "MAAT opens at 10:00.</result>\n<parameter name=\"summary\">MAAT 10–19h";
@@ -4553,9 +5383,31 @@ mod tasks {
         page: Option<String>,
         cx: &mut TestAppContext,
     ) -> ToolResult {
+        traced_by(
+            agents,
+            agent,
+            tool,
+            arguments,
+            cx,
+            |answer, cx| match page {
+                Some(text) => page_done(agents, browser, answer, text, cx),
+                None => answer.recv().unwrap(),
+            },
+        )
+    }
+
+    /// `traced`, with `answer` taking the call's reply: for a call the core answers later.
+    fn traced_by(
+        agents: &Entity<Agents>,
+        agent: &str,
+        tool: &str,
+        arguments: Value,
+        cx: &mut TestAppContext,
+        answer: impl FnOnce(mpsc::Receiver<ToolResult>, &mut TestAppContext) -> ToolResult,
+    ) -> ToolResult {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let id = NEXT.fetch_add(1, Ordering::Relaxed);
-        let (reply, answer) = mpsc::channel();
+        let (reply, receiver) = mpsc::channel();
         let at = std::time::Instant::now();
         let call = Call {
             id,
@@ -4566,10 +5418,7 @@ mod tasks {
             at,
         };
         agents.update(cx, |agents, cx| agents.handle(Event::Call(call), cx));
-        let result = match page {
-            Some(text) => page_done(agents, browser, answer, text, cx),
-            None => answer.recv().unwrap(),
-        };
+        let result = answer(receiver, cx);
         let error = result.error.then(|| result.text.clone());
         let at = std::time::Instant::now();
         let answered = Event::Answered {
@@ -4653,6 +5502,43 @@ mod tasks {
             0,
             "a stopped card asks for nothing"
         );
+    }
+
+    /// A step that chose an option with a line break in it says it on one line, as the card's
+    /// status and the trace's title are a line each.
+    #[gpui::test]
+    fn a_chosen_options_line_break_makes_no_second_line_of_the_step(cx: &mut TestAppContext) {
+        let (agents, browser) = ready(None, cx);
+        let agent = start(&agents, "Use the coupon", cx);
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Working
+        });
+        browser
+            .tabs
+            .borrow_mut()
+            .push((30, 100, "Shop", "https://shop.example/basket"));
+        let snapshot = json!({ "tab": 30 });
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "snapshot",
+            snapshot,
+            Some(shop_tree()),
+            cx,
+        );
+        let choose = json!({ "tab": 30, "ref": "e1", "option": "SPRING\n10" });
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "select",
+            choose,
+            Some(shop_tree()),
+            cx,
+        );
+        let status = card_of(&agents, cx).status.to_string();
+        assert_eq!(status, "Step 2 · Chose “SPRING 10” in “Coupon”");
     }
 
     /// A task's calls are its conversation's trace, each titled by what it did and opening to what
@@ -4752,6 +5638,87 @@ mod tasks {
         );
     }
 
+    /// A close the page asked to stay through reads as the tab left open, not as a failure, with
+    /// why joined to it, and the discard after it as closed without saving, among a plain close's
+    /// line (#3256).
+    #[gpui::test]
+    fn a_close_the_page_kept_reads_as_kept_not_failed(cx: &mut TestAppContext) {
+        use crate::agents::task::{Line, Opens, TraceItem};
+        let (agents, browser) = ready(None, cx);
+        let agent = start(&agents, "Tidy my tabs", cx);
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Working
+        });
+        // The agent opens the draft, and the basket is another tab in its Space.
+        let url = json!({ "url": "https://docs.example/draft" });
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "open_tab",
+            url,
+            Some(shop_tree()),
+            cx,
+        );
+        let (draft, space, ..) = *browser.tabs.borrow().last().unwrap();
+        let basket = draft + 1;
+        let shop = (basket, space, "Shop", "https://shop.example/basket");
+        browser.tabs.borrow_mut().push(shop);
+        browser.asks.borrow_mut().insert(draft);
+        let basket = json!({ "tab": basket });
+        assert!(!traced(&agents, &browser, &agent, "close_tab", basket, None, cx).error);
+        // The core asks the draft's page, a discard too, and the page answers from a task of its
+        // own that it asks to stay.
+        let mut asked = |arguments: Value, cx: &mut TestAppContext| {
+            traced_by(&agents, &agent, "close_tab", arguments, cx, |answer, cx| {
+                page_answers(&agents, &browser, draft, Closed::Asks, cx);
+                answer.recv().unwrap()
+            })
+        };
+        assert!(
+            asked(json!({ "tab": draft }), cx).error,
+            "the page asked to stay"
+        );
+        let discard = asked(json!({ "tab": draft, "discard": true }), cx);
+        assert_eq!(discard.text, format!("Closed tab {draft} without saving."));
+
+        let conversation =
+            agents.read_with(cx, |agents, cx| agents.conversation(&agent, cx).unwrap());
+        let [Line::Trace(trace)] = conversation.lines.as_slice() else {
+            panic!("{:?}", conversation.lines)
+        };
+        let closes: Vec<_> = (trace.items.iter())
+            .filter_map(|item| match item {
+                TraceItem::Step(step)
+                    if step.title.starts_with("Closed") || step.title.starts_with("Left") =>
+                {
+                    Some(step)
+                }
+                _ => None,
+            })
+            .collect();
+        let lines: Vec<_> = (closes.iter())
+            .map(|step| (step.title.as_ref(), step.description.as_ref(), step.failed))
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                ("Closed shop.example", "", false),
+                // The reason after a dot, in the title's ink, as History joins a row's parts.
+                (
+                    "Left docs.example open · asked to stay: unsaved changes",
+                    "",
+                    false
+                ),
+                ("Closed docs.example without saving", "", false),
+            ]
+        );
+        assert!(
+            matches!(closes[1].opens, Opens::Nothing),
+            "it opened to what the agent was told"
+        );
+    }
+
     /// An open's line titles its site alone and opens to its whole address.
     #[gpui::test]
     fn an_open_line_titles_its_site_and_opens_to_its_address(cx: &mut TestAppContext) {
@@ -4821,6 +5788,7 @@ mod tasks {
             ended: Some(now),
             error: Some("Timed out waiting for the page.".into()),
             picture: None,
+            close: None,
         };
         let lines = fold(&[], &[failed], true, false, None);
         let [Line::Trace(trace)] = lines.as_slice() else {
@@ -4988,6 +5956,7 @@ mod tasks {
             ended: ended.map(at),
             error: None,
             picture: None,
+            close: None,
         };
         let mut messages = vec![message(Who::User, "Museum hours", 0)];
         let mut trace = vec![step("open_tab", 1, 1, Some(3))];
@@ -5056,6 +6025,7 @@ mod tasks {
             ended: Some(at(3)),
             error: None,
             picture: None,
+            close: None,
         }];
         let mut messages = vec![
             message(Who::User, "Museum hours", 0),
@@ -5092,6 +6062,7 @@ mod tasks {
             ended: Some(at(seconds + 1)),
             error: None,
             picture: None,
+            close: None,
         };
         let messages = [Message {
             who: Who::User,
@@ -5396,6 +6367,82 @@ mod tasks {
                 .is_empty(),
             "off lists none"
         );
+    }
+
+    /// The Model menu as the user sees it.
+    fn model_menu(agents: &Entity<Agents>, cli: Cli, cx: &mut TestAppContext) -> String {
+        agents.read_with(cx, |agents, _| {
+            crate::menu::described(&agents.task_model_menu(cli).1)
+        })
+    }
+
+    #[gpui::test]
+    fn claudes_models_come_from_claude_and_one_it_drops_runs_on_its_default(
+        cx: &mut TestAppContext,
+    ) {
+        use crate::agents::ready::Models;
+        let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+        let listing = |models: Option<Models>| Found {
+            ready: Ready::SignedIn,
+            program: Some("/usr/local/bin/claude".into()),
+            models,
+            ..Default::default()
+        };
+        let listed = Models {
+            listed: [("opus", "Opus"), ("fable", "Fable"), ("sonnet", "Sonnet")]
+                .map(|(id, name)| (id.to_string(), name.to_string()))
+                .into(),
+            default: Some("Opus".into()),
+        };
+        let agents = agents(&browser, &configs, None, cx);
+        agents.update(cx, |agents, cx| {
+            agents.set_on(true, cx);
+            agents.set_task_model(Cli::Claude, "haiku", cx);
+        });
+        // Till Claude lists its own, ilo's names for them, Default naming none.
+        assert_eq!(
+            model_menu(&agents, Cli::Claude, cx),
+            "Default, Opus, Sonnet, Haiku (checked)"
+        );
+
+        *configs.looked.lock().unwrap() = vec![(Cli::Claude, listing(Some(listed)))];
+        agents.update(cx, |agents, cx| agents.look_for_task_agents(cx));
+        cx.run_until_parked();
+        // Its names in its order, Default saying which it is; Haiku is gone, so Default is chosen,
+        // for the run too, and comes back if Claude lists it again.
+        assert_eq!(
+            model_menu(&agents, Cli::Claude, cx),
+            "Default [Opus] (checked), Opus, Fable, Sonnet"
+        );
+        agents.read_with(cx, |agents, _| {
+            assert_eq!(agents.task_model(Cli::Claude), "");
+            assert_eq!(agents.task_model_name(Cli::Claude), None);
+        });
+
+        // Claude not answering the next time keeps the list it gave.
+        *configs.looked.lock().unwrap() = vec![(Cli::Claude, listing(None))];
+        agents.update(cx, |agents, cx| {
+            agents.look_for_task_agents(cx);
+            agents.set_task_model(Cli::Claude, "fable", cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            model_menu(&agents, Cli::Claude, cx),
+            "Default [Opus], Opus, Fable (checked), Sonnet"
+        );
+        agents.read_with(cx, |agents, _| {
+            assert_eq!(agents.task_model(Cli::Claude), "fable");
+            assert_eq!(
+                agents.task_model_name(Cli::Claude).as_deref(),
+                Some("Fable")
+            );
+        });
+
+        // An empty list: Default alone.
+        *configs.looked.lock().unwrap() = vec![(Cli::Claude, listing(Some(Models::default())))];
+        agents.update(cx, |agents, cx| agents.look_for_task_agents(cx));
+        cx.run_until_parked();
+        assert_eq!(model_menu(&agents, Cli::Claude, cx), "Default (checked)");
     }
 
     #[gpui::test]
@@ -5877,4 +6924,95 @@ mod sessions {
         assert_eq!(space(30), None);
         assert_eq!(space(31), Some(2));
     }
+}
+
+/// An agent sorts its own Space's Today tabs by site, by the user's command's rule (#2344): its
+/// pinned tab stays where it is, its split joins no site, the user's Space isn't touched, and it's one entry
+/// in the log. Sorted already, it says so and nothing moves. A task has no such tool.
+#[gpui::test]
+fn an_agent_sorts_its_own_today_tabs_by_site(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    browser.tabs.borrow_mut().extend([
+        (21, 2, "Wiki", "https://en.wikipedia.org/wiki/Rust"),
+        (22, 2, "Docs", "https://docs.example.com/"),
+        (23, 2, "Left", "https://news.ycombinator.com/"),
+        (24, 2, "Right", "https://example.org/"),
+        (25, 2, "More", "https://de.wikipedia.org/wiki/Arc"),
+        (26, 1, "Theirs", "https://www.example.com/b"),
+        (27, 2, "Pinned", "https://en.wikipedia.org/"),
+    ]);
+    browser.pinned.borrow_mut().insert(27);
+    browser.splits.borrow_mut().push(vec![23, 24]);
+    let sort = |cx: &mut TestAppContext| {
+        call(&agents, "claude-code", "sort_tabs_by_site", json!({}), cx)
+            .recv()
+            .unwrap()
+    };
+    let in_space = |space: u64| -> Vec<u64> {
+        (browser.tabs.borrow().iter())
+            .filter(|tab| tab.1 == space)
+            .map(|tab| tab.0)
+            .collect()
+    };
+    let users = in_space(1);
+    let answer = sort(cx);
+    assert_eq!(
+        answer,
+        ToolResult::text(
+            "Sorted your Today tabs by site, each site's tabs together at its first tab's place: \
+             20, 22, 21, 25, 23."
+        )
+    );
+    assert_eq!(in_space(2), [20, 22, 21, 25, 23, 24, 27]);
+    assert_eq!(in_space(1), users, "the user's Space stays as it was");
+    assert_eq!(
+        sort(cx),
+        ToolResult::text("Your Today tabs are together by site already.")
+    );
+    assert_eq!(in_space(2), [20, 22, 21, 25, 23, 24, 27]);
+    let logged: Vec<_> = (log(&agents, "claude-code", cx).into_iter())
+        .map(|(action, _, refused)| (action, refused))
+        .collect();
+    let sorted = ("sort_tabs_by_site".to_string(), String::new());
+    assert_eq!(logged[..2], [sorted.clone(), sorted]);
+    assert_eq!(
+        tools::describe("sort_tabs_by_site"),
+        "Sorted its tabs by site"
+    );
+    assert!(tools::names("claude-code").contains(&"sort_tabs_by_site".to_string()));
+    assert!(!tools::names("task-1").contains(&"sort_tabs_by_site".to_string()));
+}
+
+mod holds;
+
+/// An agent's http:// is never one the user typed (#2417): open_tab and navigate hand the core the
+/// address as the agent wrote it through `open_tab` and `navigate`, bc_agent_open_tab's and
+/// bc_agent_navigate's, which take no typed text, so the core never sets
+/// url_typed_with_http_scheme for it and HTTPS-First still tries it over https first.
+#[gpui::test]
+fn an_agents_http_address_is_never_a_typed_one(cx: &mut TestAppContext) {
+    let (agents, browser, _configs) = connected(cx);
+    let answer = call(
+        &agents,
+        "claude-code",
+        "open_tab",
+        json!({ "url": "http://plain.example.com/" }),
+        cx,
+    );
+    assert!(!page_done(&agents, &browser, answer, shop_tree(), cx).error);
+    let (tab, _, _, opened) = *browser.tabs.borrow().last().unwrap();
+    assert_eq!((tab, opened), (30, "http://plain.example.com/"));
+
+    let answer = call(
+        &agents,
+        "claude-code",
+        "navigate",
+        json!({ "url": "http://other.example.com/" }),
+        cx,
+    );
+    assert!(!page_done(&agents, &browser, answer, shop_tree(), cx).error);
+    assert_eq!(
+        *browser.navigated.borrow(),
+        [(30, "http://other.example.com/".to_string())]
+    );
 }

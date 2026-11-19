@@ -9,11 +9,11 @@
 use std::{rc::Rc, sync::Arc, time::Duration};
 
 use gpui::{
-    App, Bounds, ContentMask, Context, Corners, CursorStyle, Div, FocusHandle, FontWeight, Global,
-    KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
-    RenderImage, SharedString, Stateful, TitlebarOptions, Window, WindowBackgroundAppearance,
-    WindowBounds, WindowHandle, WindowKind, WindowOptions, actions, canvas, div, point, prelude::*,
-    px, rgba, size, svg,
+    AnyElement, App, Bounds, ContentMask, Context, Corners, CursorStyle, Div, FocusHandle,
+    FontWeight, Global, KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    Pixels, Point, Radians, RenderImage, SharedString, Stateful, TitlebarOptions, Transformation,
+    Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions,
+    actions, canvas, div, point, prelude::*, px, rgba, size, svg,
 };
 use image::{Frame, RgbaImage};
 
@@ -21,7 +21,10 @@ use crate::elevation::Level;
 use crate::menu::Look;
 use crate::toast;
 
-actions!(capture, [Leave, Undo, Done]);
+actions!(capture, [Leave, Undo, Done, Up, Down, Left, Right]);
+
+mod boards;
+pub use boards::{Board, BoardAnswer, board_answered, boards_listed};
 
 pub mod markup;
 
@@ -43,7 +46,7 @@ use crate::tokens::capture::RING_RADIUS;
 use crate::tokens::capture::markup::{BUTTON, COLOURS as MARK_COLOURS, DOT, GAP as BAR_GAP};
 // The menu is ilo's (menu.rs), in its tokens, the narrowest it comes.
 use crate::tokens::menu::MIN_WIDTH as MENU_WIDTH;
-use crate::tokens::menu::{GAP, LINE, PADDING, RADIUS, ROW, ROW_RADIUS, ROW_X, TEXT};
+use crate::tokens::menu::{CHEVRON, GAP, LINE, PADDING, RADIUS, ROW, ROW_RADIUS, ROW_X, TEXT};
 /// How far the pointer moves with the button down before a click is a drag (ours).
 pub const DRAG: f32 = 4.;
 /// How long the toast after a capture stays, and longer while the pointer is over it (ours).
@@ -53,8 +56,8 @@ const PROGRESS_TIME: Duration = Duration::from_secs(60);
 const COPIED: &str = "Screenshot Copied to Clipboard";
 const SAVED: &str = "Saved to Library";
 
-/// What the menu does with what's chosen, in Arc's order without New Easel, which isn't built: one
-/// is a variant here, a row in ROWS and an arm in `Capture::done`.
+/// What the menu does with what's chosen, in Arc's order, a Board for Arc's Easel: one is a variant
+/// here, a row in ROWS and an arm in `Capture::done`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Action {
     /// The field at the menu's top: the system's share menu (interim: Arc's field lists people and
@@ -69,6 +72,12 @@ pub enum Action {
     Edit,
     /// Back to choosing.
     Retake,
+    /// The submenu of the profile's Boards, shown only when it has one (`Session::boards`).
+    AddToBoard,
+    /// Onto the Board at this place in Add to Board's submenu.
+    Board(usize),
+    /// A new Board with what's chosen on it, as Arc's New Easel (#3073).
+    NewBoard,
 }
 
 /// The menu's rows under its field, a line between groups. Messages is the Mac's alone.
@@ -81,6 +90,8 @@ const ROWS: &[Option<Action>] = if cfg!(target_os = "macos") {
         Some(Action::Edit),
         None,
         Some(Action::Retake),
+        Some(Action::AddToBoard),
+        Some(Action::NewBoard),
     ]
 } else {
     &[
@@ -90,6 +101,8 @@ const ROWS: &[Option<Action>] = if cfg!(target_os = "macos") {
         Some(Action::Edit),
         None,
         Some(Action::Retake),
+        Some(Action::AddToBoard),
+        Some(Action::NewBoard),
     ]
 };
 
@@ -106,6 +119,10 @@ impl Action {
             Action::Messages => "Send via iMessage…",
             Action::Edit => "Edit",
             Action::Retake => "Retake",
+            Action::AddToBoard => "Add to Board",
+            // Its row shows the Board's name, which only the menu has.
+            Action::Board(_) => "",
+            Action::NewBoard => "New Board",
         }
     }
 
@@ -118,6 +135,8 @@ impl Action {
             Action::Messages => "icons/message-circle.svg",
             Action::Edit => "icons/pencil.svg",
             Action::Retake => "icons/rotate-ccw.svg",
+            Action::AddToBoard => "icons/plus.svg",
+            Action::Board(_) | Action::NewBoard => "icons/presentation.svg",
         }
     }
 
@@ -131,6 +150,10 @@ impl Action {
             Action::Messages => "messages",
             Action::Edit => "edit",
             Action::Retake => "retake",
+            Action::AddToBoard => "add-to-board",
+            // No Board's name or place in the list: the log is no record of the user's Boards.
+            Action::Board(_) => "board",
+            Action::NewBoard => "new-board",
         }
     }
 }
@@ -169,6 +192,17 @@ pub trait Host {
     fn share(&self, png: &[u8], share: Share);
     /// The desktop's picture as a PNG, for Portrait Mode, where the system gives one.
     fn desktop_picture(&self) -> Option<Vec<u8>>;
+    /// Reads the Boards of the profile of `tab`'s page off the main thread, the last changed first,
+    /// which come in `boards_listed`.
+    fn read_boards(&self, tab: u64);
+    /// Makes Board `id` in the profile of `tab`'s page with `png` on it, and opens it as New Board
+    /// does, its row's name in a field. Whether the picture arrived comes in `board_answered`.
+    fn new_board(&self, tab: u64, id: &str, png: &[u8]);
+    /// Puts `png` on `board`, of the profile of `tab`'s page. Returns whether the core will try,
+    /// and then whether it arrived comes in `board_answered`.
+    fn add_to_board(&self, tab: u64, board: &Board, png: &[u8]) -> bool;
+    /// Shows Board `id` of the front window's profile: its tab, else a new one.
+    fn open_board(&self, id: &str);
 }
 
 /// The picture of the page that capture mode draws: as it is, and grey around what's chosen.
@@ -194,10 +228,23 @@ struct Session {
     drag: Option<Bounds<Pixels>>,
     /// What the user chose, which the menu shows at.
     chosen: Option<Bounds<Pixels>>,
+    /// The menu's row under the pointer, lit with the Space's accent.
+    lit: Option<Action>,
     /// The picture asked for of what's chosen, and what to do with it once it comes.
     pending: Option<(u64, Action)>,
-    /// Whether the menu offers Save to Library: not in a private window.
+    /// Whether the menu offers Save to Library and the Boards' rows: not in a private window.
     library: bool,
+    /// The profile's Boards, the last changed first as Library › Boards lists them, at most
+    /// `boards::LISTED`, which Add to Board's submenu lists.
+    boards: Vec<Board>,
+    /// How wide Add to Board's submenu is for the Boards' names.
+    boards_width: f32,
+    /// Whether Add to Board's submenu shows.
+    submenu: bool,
+    /// Where the pointer last moved over capture mode, and how many moves it has made, for the
+    /// safe triangle on its way to the submenu.
+    pointer: Option<Point<Pixels>>,
+    moves: u64,
     /// The browser window's menus' look, which the menu, the pill and the ring take.
     look: Look,
     /// What the log last said was drawn: the pill, the menu or Edit's bar, and whether in the
@@ -299,12 +346,15 @@ impl Session {
         point(px(x.min(right).max(MARGIN)), px(y.min(bottom).max(MARGIN)))
     }
 
-    /// The menu's rows, without Save to Library where there's no Library to save to.
+    /// The menu's rows: Save to Library and the Boards' only where the window keeps a Library
+    /// and Boards, not a private one's, and Add to Board only when the profile has a Board.
     fn rows(&self) -> impl Iterator<Item = Option<Action>> + use<> {
-        let library = self.library;
-        ROWS.iter()
-            .copied()
-            .filter(move |row| library || *row != Some(Action::SaveToLibrary))
+        let (library, boards) = (self.library, !self.boards.is_empty());
+        ROWS.iter().copied().filter(move |row| match row {
+            Some(Action::SaveToLibrary | Action::NewBoard) => library,
+            Some(Action::AddToBoard) => library && boards,
+            _ => true,
+        })
     }
 
     /// The field, a line under it, the rows and their lines, inside the panel's padding.
@@ -326,6 +376,8 @@ pub struct Capture {
     /// A Portrait Mode capture on its way.
     portrait: Option<Portrait>,
     requests: u64,
+    /// Captures put on Boards, waiting for the core's word on each, in the order they were put.
+    boarding: std::collections::VecDeque<boards::Boarding>,
 }
 
 /// A Portrait Mode capture on its way: its tab and request, what the page goes on, and the page's
@@ -349,6 +401,10 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<Capture>> {
     cx.bind_keys([
         KeyBinding::new("escape", Leave, Some("Capture")),
         KeyBinding::new("enter", Done, Some("Capture")),
+        KeyBinding::new("up", Up, Some("Capture")),
+        KeyBinding::new("down", Down, Some("Capture")),
+        KeyBinding::new("left", Left, Some("Capture")),
+        KeyBinding::new("right", Right, Some("Capture")),
         crate::shell::view_binding("cmd-z", Box::new(Undo), "Capture", cx),
     ]);
     let options = WindowOptions {
@@ -379,6 +435,7 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<Capture>> {
             full_page: None,
             portrait: None,
             requests: 0,
+            boarding: Default::default(),
         })
     });
     match window {
@@ -426,6 +483,7 @@ fn start_now(
     press: Option<Point<Pixels>>,
     cx: &mut App,
 ) {
+    crate::lazy_window::ready::<Capture>(cx);
     update(cx, |capture, window, cx| {
         if capture.session.is_some() {
             if press.is_none() {
@@ -444,8 +502,14 @@ fn start_now(
             press,
             drag: None,
             chosen: None,
+            lit: None,
             pending: None,
             library,
+            boards: Vec::new(),
+            boards_width: 0.,
+            submenu: false,
+            pointer: None,
+            moves: 0,
             look,
             drawn: None,
             marks: Vec::new(),
@@ -454,6 +518,9 @@ fn start_now(
         // check.sh reads this line.
         log!("browser: capture started");
         capture.host.capture(tab, request, false, None);
+        if library {
+            capture.host.read_boards(tab);
+        }
     });
 }
 
@@ -736,6 +803,11 @@ impl Capture {
                 )
             });
             let (chosen, marks) = (session.chosen, std::mem::take(&mut session.marks));
+            // The Board it goes onto, which leaves with the session.
+            let board = match action {
+                Action::Board(at) => session.boards.get(at).cloned(),
+                _ => None,
+            };
             self.leave(action.name(), window, cx);
             match (png, chosen) {
                 (Some(png), Some(chosen)) if !marks.is_empty() => {
@@ -749,33 +821,40 @@ impl Capture {
                     cx.spawn(async move |capture, cx| {
                         let png = marked.await;
                         capture
-                            .update(cx, |capture, cx| capture.deliver(action, field, png, cx))
+                            .update(cx, |capture, cx| {
+                                capture.deliver(action, field, (tab, board), png, cx)
+                            })
                             .ok();
                     })
                     .detach();
                 }
-                (png, _) => self.deliver(action, field, png, cx),
+                (png, _) => self.deliver(action, field, (tab, board), png, cx),
             }
         }
     }
 
-    /// Does `action` with the picture of what was chosen, once capture mode has left: Send To's
-    /// share menu at its `field`, else `done`.
+    /// Does `action` with the picture of what was chosen in `tab`'s page, once capture mode has
+    /// left: Send To's share menu at its `field`, onto a new Board or the `board` chosen, else
+    /// `done`.
     fn deliver(
         &mut self,
         action: Action,
         field: Option<Bounds<Pixels>>,
+        (tab, board): (u64, Option<Board>),
         png: Option<Vec<u8>>,
         cx: &mut Context<Self>,
     ) {
-        match (action, field) {
-            (Action::SendTo, _) if !SHARES => self.done(Action::Copy, png, cx),
-            (Action::SendTo, Some(field)) => {
-                if let Some(png) = png {
-                    self.host.share(&png, Share::Menu(field));
-                }
-            }
-            _ => self.done(action, png, cx),
+        match (action, field, png) {
+            (Action::SendTo, _, png) if !SHARES => self.done(Action::Copy, png, cx),
+            (Action::SendTo, Some(field), Some(png)) => self.host.share(&png, Share::Menu(field)),
+            (Action::NewBoard, _, Some(png)) => self.new_board(tab, png),
+            (Action::Board(_), _, Some(png)) => match board {
+                Some(board) => self.add_to_board(tab, board, png, cx),
+                None => log!("browser: capture board gone"),
+            },
+            (Action::NewBoard | Action::Board(_), _, None) => log!("browser: capture failed"),
+            (Action::SendTo, ..) => {}
+            (action, _, png) => self.done(action, png, cx),
         }
     }
 
@@ -846,7 +925,13 @@ impl Capture {
             }
             Action::Save => self.host.save(&png),
             Action::Messages => self.host.share(&png, Share::Messages),
-            Action::SendTo | Action::Edit | Action::Retake => {}
+            // Delivered before here, or not a picture's.
+            Action::SendTo
+            | Action::Edit
+            | Action::Retake
+            | Action::AddToBoard
+            | Action::Board(_)
+            | Action::NewBoard => {}
         }
     }
 
@@ -870,6 +955,12 @@ impl Capture {
     }
 
     fn moved(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
+        // Off the menu while it shows: what's lit goes out.
+        if (self.session.as_ref())
+            .is_some_and(|session| session.chosen.is_some() && session.editing.is_none())
+        {
+            return self.point(at, cx);
+        }
         if let Some(session) = self.session.as_mut()
             && let (Some(chosen), Some(editing)) = (session.chosen, session.editing.as_mut())
         {
@@ -964,6 +1055,7 @@ impl Capture {
             return cx.notify();
         };
         session.chosen = Some(chosen);
+        session.lit = None;
         self.host.camera(false);
         // check.sh reads this line.
         log!("browser: capture chose {}", describe(chosen));
@@ -980,16 +1072,29 @@ impl Capture {
         else {
             return;
         };
+        // Add to Board opens its submenu, as a submenu's row does in menu.rs.
+        if action == Action::AddToBoard {
+            return self.light(
+                |session| {
+                    session.lit = Some(Action::AddToBoard);
+                    session.submenu = true;
+                },
+                cx,
+            );
+        }
         // check.sh reads this line.
         log!("browser: capture run {}", action.name());
         if action == Action::Retake {
             session.chosen = None;
+            session.lit = None;
+            session.submenu = false;
             session.hover = None;
             session.marks.clear();
             self.host.camera(true);
             return cx.notify();
         }
         if action == Action::Edit {
+            session.lit = None;
             session.editing = Some(Editing {
                 tool: Tool::Pen,
                 colour: MARK_COLOURS[0],
@@ -1142,20 +1247,25 @@ impl Capture {
             .children(parts)
     }
 
+    /// The menu at `origin`, with Add to Board's `submenu` beside it while it shows.
     fn menu(
         &self,
         origin: Point<Pixels>,
         rows: Vec<Option<Action>>,
+        lit: [Option<Action>; 2],
+        submenu: Option<AnyElement>,
         look: Look,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let palette = look.palette();
         let highlight = look.highlight;
-        // A row of ilo's menu: the Space's accent under the pointer, with the label solved on it.
-        let row = |id: &'static str| {
+        let lit = move |action: Action| lit.contains(&Some(action));
+        // A row of ilo's menu: the Space's accent under the pointer, with its title and glyph in
+        // the label solved on it, as menu.rs lights a row. Lit from state, where the pointer is
+        // over the menu, as a hover's text colour never reaches the title (#3137).
+        let row = |action: Action| {
             div()
-                .id(id)
-                .group(id)
+                .id(action.name())
                 .h(px(ROW))
                 .mx(px(PADDING))
                 .px(px(ROW_X))
@@ -1163,7 +1273,9 @@ impl Capture {
                 .items_center()
                 .gap(px(GAP))
                 .rounded(px(ROW_RADIUS))
-                .hover(|style| style.bg(highlight.fill).text_color(highlight.label))
+                .when(lit(action), |row| {
+                    row.bg(highlight.fill).text_color(highlight.label)
+                })
                 .active(|style| style.bg(highlight.pressed))
         };
         let line = || {
@@ -1183,25 +1295,43 @@ impl Capture {
         };
         let rows: Vec<_> = (rows.into_iter())
             .map(|row_| match row_ {
-                Some(action) => row(action.name())
+                Some(action) => row(action)
                     .on_click(cx.listener(move |capture, _, _, cx| capture.run(action, cx)))
                     .child(
                         svg()
                             .path(action.glyph())
                             .size(px(GLYPH))
                             .flex_none()
-                            .text_color(rgba(palette.secondary))
-                            .group_hover(action.name(), |style| style.text_color(highlight.label)),
+                            .text_color(match lit(action) {
+                                true => highlight.label,
+                                false => rgba(palette.secondary),
+                            }),
                     )
                     .child(action.label())
+                    .when(action == Action::AddToBoard, |row| {
+                        // menu.rs's chevron, after the title at the row's end.
+                        row.child(div().flex_1()).child(
+                            svg()
+                                .path("icons/chevron-down.svg")
+                                .size(px(CHEVRON))
+                                .flex_none()
+                                .text_color(match lit(action) {
+                                    true => highlight.label,
+                                    false => rgba(palette.secondary),
+                                })
+                                .with_transformation(Transformation::rotate(Radians(
+                                    -std::f32::consts::FRAC_PI_2,
+                                ))),
+                        )
+                    })
                     .into_any_element(),
                 None => line(),
             })
             .collect();
         // Arc's field, as a row tinted the menu's line colour. Its words are the label's, as the
         // secondary colour falls under 4.5:1 on the tint in the dark look.
-        let field = row(Action::SendTo.name())
-            .bg(rgba(palette.line))
+        let field = row(Action::SendTo)
+            .when(!lit(Action::SendTo), |field| field.bg(rgba(palette.line)))
             .on_click(cx.listener(|capture, _, _, cx| capture.run(Action::SendTo, cx)))
             .child(Action::SendTo.label());
         div()
@@ -1219,6 +1349,11 @@ impl Capture {
             .text_size(px(TEXT))
             .text_color(rgba(palette.label))
             .occlude()
+            // The menu hides the page under it from the pointer, so it hands on the pointer's
+            // moves over it, which light its rows.
+            .on_mouse_move(cx.listener(|capture, event: &MouseMoveEvent, _, cx| {
+                capture.point(event.position, cx)
+            }))
             // The rim is its own layer, so its border doesn't move the rows.
             .child(
                 div()
@@ -1233,6 +1368,7 @@ impl Capture {
             .child(field)
             .child(line())
             .children(rows)
+            .children(submenu)
     }
 }
 
@@ -1257,10 +1393,26 @@ impl Capture {
                 let editing = (capture.session.as_ref()).is_some_and(|s| s.editing.is_some());
                 match editing {
                     true => capture.cancel_edit(cx),
+                    // esc closes only Add to Board's submenu while it shows, as menu.rs's does.
+                    false if capture.close_submenu(cx) => {}
                     false => capture.leave("escape", window, cx),
                 }
             }))
-            .on_action(cx.listener(|capture, _: &Done, _, cx| capture.finish_edit(cx)))
+            .on_action(cx.listener(|capture, _: &Done, _, cx| {
+                let editing = (capture.session.as_ref()).is_some_and(|s| s.editing.is_some());
+                match editing {
+                    true => capture.finish_edit(cx),
+                    false => capture.choose(cx),
+                }
+            }))
+            .on_action(cx.listener(|capture, _: &Up, _, cx| capture.step(false, cx)))
+            .on_action(cx.listener(|capture, _: &Down, _, cx| capture.step(true, cx)))
+            .on_action(cx.listener(|capture, _: &Right, _, cx| {
+                capture.open_submenu(cx);
+            }))
+            .on_action(cx.listener(|capture, _: &Left, _, cx| {
+                capture.close_submenu(cx);
+            }))
             .on_action(cx.listener(|capture, _: &Undo, _, cx| capture.undo(cx)))
             .size_full()
             .font_family(crate::face::UI);
@@ -1365,7 +1517,9 @@ impl Capture {
             .filter(|_| session.editing.is_none())
             .map(|chosen| {
                 let origin = session.menu_origin(chosen);
-                self.menu(origin, session.rows().collect(), look, cx)
+                let submenu = self.submenu(session, chosen, look, cx);
+                let rows = session.rows().collect();
+                self.menu(origin, rows, session.lit_rows(), submenu, look, cx)
             });
         let bar = session
             .chosen

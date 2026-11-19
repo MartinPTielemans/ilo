@@ -106,6 +106,14 @@ fn place(view: *mut c_void, shown: &Shown) {
     );
 }
 
+/// Runs `presented` once the frame the preview's window draws now is on screen, where the
+/// compositor says when one is (Wayland's): false, and nothing to run, where it can't or while the
+/// preview doesn't show.
+pub(crate) fn when_presented(presented: impl FnOnce() + 'static) -> bool {
+    let view = PREVIEW.with_borrow(|preview| preview.shown.map(|_| preview.view));
+    view.is_some_and(|view| gpui_linux::when_overlay_presented(view, presented))
+}
+
 /// The user left the preview: a click in its page, as GPUI hears the browser window's too, or
 /// another window or app. It stays, as its page has the keyboard.
 fn left(_: *mut c_void) {}
@@ -119,6 +127,8 @@ pub extern "C" fn host_add_link_preview(
         preview.view = view;
         preview.dismissed = Some(dismissed);
     });
+    // Peek stays while the user is in another app, beside it or under its window.
+    gpui_linux::set_overlay_managed(view);
     // The core shows the page in the browser window, under this one, and only needs to know there's
     // a view it goes with.
     view
@@ -153,7 +163,7 @@ pub extern "C" fn host_show_link_preview(ui_view: *mut c_void) {
     let bounds = Bounds::new(point(px(0.), px(0.)), content);
     crate::overlays::show_over(view, ui_view, bounds, px(0.), false, left);
     // check.sh reads this line.
-    eprintln!("browser: link preview shown");
+    browser::log!("browser: link preview shown");
 }
 
 #[unsafe(no_mangle)]
@@ -193,7 +203,7 @@ fn release(except: *mut c_void) -> Option<Shown> {
     })?;
     place(view, &shown);
     // check.sh reads this line.
-    eprintln!("browser: link preview released");
+    browser::log!("browser: link preview released");
     Some(shown)
 }
 
@@ -226,7 +236,7 @@ pub extern "C" fn host_hide_link_preview() {
     if let Some(view) = view {
         gpui_linux::hide_overlay(view, || {});
         // check.sh reads this line.
-        eprintln!("browser: link preview hidden");
+        browser::log!("browser: link preview hidden");
     }
 }
 

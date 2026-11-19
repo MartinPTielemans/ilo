@@ -1,3 +1,4 @@
+# check.sh runs this at 390.
 # What an agent a page has talked round still can't do (#2325): a scripted MCP client tries
 # everything the rules forbid, and pages of the run's own try to steer it. No model is in the loop:
 # the client does the worst a fully steered agent could, and the browser must refuse each try or
@@ -113,9 +114,13 @@ else
 fi
 bridge_pid=$!
 exec 4> "$out/rules-in" 5< "$out/rules-out"
-# The bridge's next line within 30 s, as mcp's next_answer.
+# The bridge's next line within 30 s, as mcp's next_answer: perl reads it under its own alarm, which
+# doesn't outlive an exec under Git Bash (#3286).
+line_within='alarm shift; my $line = "";
+  while (sysread STDIN, my $byte, 1) { $line .= $byte; last if $byte eq "\n" }
+  print $line; exit($line =~ /\n\z/ ? 0 : 1)'
 next_answer() {
-  perl -e 'alarm 30; exec @ARGV' sh -c 'read -r line && printf "%s\n" "$line"' <&5
+  perl -e "$line_within" 30 <&5
 }
 # The answer on stdin to the call $1: its text, after "error: " if it's an error, or a picture's
 # type and size. An answer to another call, as a page that forged one would make, says so.
@@ -226,8 +231,9 @@ outside() {
   refused scroll "{\"tab\":$1,\"direction\":\"down\"}" "scroll in $2" "$space"
   refused navigate "{\"tab\":$1,\"url\":\"$local_site/rules-own.html\"}" "navigate of $2" "$space"
   refused pin_tab "{\"tab\":$1}" "pin_tab of $2" "$space"
+  # Refused for the tab, before any request is read, so with no request's prefix.
   refused request "{\"tab\":$1,\"requests\":[{\"method\":\"GET\",\"path\":\"/api/me?rules-outside\"}]}" \
-    "request from $2" "*: $space"
+    "request from $2" "$space"
   refused run_steps "{\"tab\":$1,\"steps\":[{\"action\":\"snapshot\"}]}" "run_steps in $2" "Step 1 failed: $space"
   refused split_tabs "{\"tabs\":[$own_tab,$1]}" "split_tabs with $2" "$space"
   refused hand_off "{\"tab\":$1,\"reason\":\"Sign in\"}" "hand_off of $2" "$space"
@@ -350,7 +356,7 @@ if [ "$driven" = 1 ]; then
   second_pid=$!
   exec 6> "$out/rules-in2" 7< "$out/rules-out2"
   second_answer() {
-    perl -e 'alarm 30; exec @ARGV' sh -c 'read -r line && printf "%s\n" "$line"' <&7
+    perl -e "$line_within" 30 <&7
   }
   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"rules-second","version":"1"}}}' >&6
   second_answer > /dev/null || fail "the browser didn't answer the second connection's initialize"
@@ -465,6 +471,25 @@ done
 for secret in $secrets; do
   if grep -qF "$secret" "$answers"; then missed "an answer held $(echo "$secret" | cut -c1-12)…"; fi
 done
+
+# #2685's repro, on real input: the pointer rests on Today's first row until its tab's hover card is
+# drawn, and then the agent asks. On Windows the window drew nothing after the hover card, the
+# question's card included. The last Deny left the pointer where it clicked, which is that row once
+# the question's card has gone, so it leaves the row first, and its card hides if it showed.
+if [ "$driven" = 1 ] && [ "${BROWSER_DRIVE_REAL:-}" = 1 ] && [ -z "$missing" ]; then
+  send move $page_point
+  if grep '^browser: hover card \(shown \|hidden$\)' "$log" | tail -1 | grep -q shown; then
+    expect '^browser: hover card hidden$' "the hover card the last Deny left up didn't hide off its row"
+  fi
+  send move $(row 0)
+  expect '^browser: hover card shown ' "resting on Today's first row showed no hover card"
+  # Its frame at rest, which each showing logs ("hover card drawn" is logged once a tab and picture,
+  # and tab 4's card was drawn earlier in the run). In #2685's stall the card never settled.
+  expect '^browser: hover card settled$' \
+    "the agent's own tab, asked with a tab's hover card shown: the card came on screen and never settled"
+  denied "$own_tab" "the agent's own tab, asked with a tab's hover card shown: a PUT" \
+    "[{\"method\":\"PUT\",\"path\":\"/api/rules-change-PUT\",\"body\":{}}]"
+fi
 
 exec 4>&-
 for _ in $(seq 100); do kill -0 "$bridge_pid" 2> /dev/null || break; sleep 0.1; done

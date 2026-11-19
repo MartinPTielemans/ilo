@@ -7,8 +7,9 @@ use std::{
 };
 
 use gpui::{
-    AnyView, AppContext, Bounds, Context, Entity, IntoElement, Pixels, Render, SharedString,
-    TestAppContext, VisualTestContext, Window, div, point, px, size,
+    AnyView, AppContext, Bounds, Context, Entity, InteractiveElement, IntoElement, Pixels, Render,
+    SharedString, StatefulInteractiveElement, Styled, TestAppContext, VisualTestContext, Window,
+    div, point, px, size,
 };
 
 use super::{Zoom, pushed, watched};
@@ -146,6 +147,33 @@ fn core_shows_users(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
         let tab = shell.selected();
         shell.set_space(1, cx);
         shell.set_selected(tab, cx);
+    });
+}
+
+/// The watched page's zoom.
+fn zoom(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Zoom {
+    shell.read_with(cx, |shell, _| {
+        shell
+            .task_area
+            .as_ref()
+            .unwrap()
+            .page
+            .as_ref()
+            .unwrap()
+            .zoom
+    })
+}
+
+fn set_zoom(shell: &Entity<Shell>, cx: &mut VisualTestContext, zoom: Zoom) {
+    shell.update(cx, |shell, _| {
+        shell
+            .task_area
+            .as_mut()
+            .unwrap()
+            .page
+            .as_mut()
+            .unwrap()
+            .zoom = zoom;
     });
 }
 
@@ -321,8 +349,14 @@ fn a_tasks_page_zooms_out_of_its_thumbnail_and_back(cx: &mut TestAppContext) {
     cx.update(|_, cx| cx.set_reduce_motion(false));
     let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
     host.take();
+    // The zooms run on the real clock, so the test sets each one's start: a minute ahead holds it
+    // where it starts however slow the runner, and a second back has it over.
+    let begun = Instant::now() + Duration::from_secs(60);
+    let over = Instant::now() - Duration::from_secs(1);
     shell.update(cx, |shell, cx| shell.watch_task_page(30, thumb, None, cx));
     assert_eq!(host.take(), ["select 30", "focus ui"]);
+    assert!(matches!(zoom(&shell, cx), Zoom::Out(_)), "it zooms out");
+    set_zoom(&shell, cx, Zoom::Out(begun));
     core_shows_task(&shell, cx, 30);
     draw(&shell, cx);
     let (card, laid) = frames(&shell, cx);
@@ -331,47 +365,80 @@ fn a_tasks_page_zooms_out_of_its_thumbnail_and_back(cx: &mut TestAppContext) {
         pushed(watched(card), away(&shell, cx)),
         "out of the window as it zooms"
     );
-    shell.update(cx, |shell, _| {
-        let page = shell.task_area.as_mut().unwrap().page.as_mut().unwrap();
-        page.zoom = Zoom::Out(Instant::now() - Duration::from_secs(1));
-    });
+    set_zoom(&shell, cx, Zoom::Out(over));
     draw(&shell, cx);
     assert_eq!(frames(&shell, cx).1, watched(card), "in place");
 
     shell.update(cx, |shell, cx| shell.task_page_back(cx));
     let calls = host.take();
     assert_eq!(calls, ["picture 30", "focus ui"]);
-    let request = shell.read_with(cx, |shell, _| {
-        match shell
-            .task_area
-            .as_ref()
-            .unwrap()
-            .page
-            .as_ref()
-            .unwrap()
-            .zoom
-        {
-            Zoom::Asked(request) => request,
-            zoom => panic!("{zoom:?}"),
-        }
-    });
+    let Zoom::Asked(request) = zoom(&shell, cx) else {
+        panic!("{:?}", zoom(&shell, cx));
+    };
     assert!(
         host.shown.borrow().is_empty(),
         "the page stays till its picture comes"
     );
     shell.update(cx, |shell, cx| shell.page_pictured(request, None, cx));
     assert_eq!(*host.shown.borrow(), [1]);
+    assert!(matches!(zoom(&shell, cx), Zoom::In(_)), "it zooms back in");
+    set_zoom(&shell, cx, Zoom::In(begun));
     core_shows_users(&shell, cx);
     draw(&shell, cx);
     assert_eq!(frames(&shell, cx).1, pushed(card, away(&shell, cx)));
-    shell.update(cx, |shell, _| {
-        let page = shell.task_area.as_mut().unwrap().page.as_mut().unwrap();
-        page.zoom = Zoom::In(Instant::now() - Duration::from_secs(1));
-    });
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_page_drawn()),
+        Some((3, 30)),
+        "drawn as it zooms in"
+    );
+    set_zoom(&shell, cx, Zoom::In(over));
     draw(&shell, cx);
     assert!(shell.read_with(cx, |shell, _| {
         shell.task_area.as_ref().unwrap().page.is_none()
     }));
+}
+
+/// A conversation whose pictures fill it, which counts the clicks on them, as a picture's watches
+/// its page.
+struct Pictures(Rc<std::cell::Cell<u32>>);
+
+impl Render for Pictures {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let clicks = self.0.clone();
+        div()
+            .id("pictures")
+            .size_full()
+            .on_click(move |_, _, _| clicks.set(clicks.get() + 1))
+    }
+}
+
+/// A click on another picture while the page watched goes back into its thumbnail reaches the
+/// picture, which watches its own page, as one does once the page is back (#3496). The page going
+/// back is drawn over the conversation, and its press there is for a page coming out alone.
+#[gpui::test]
+fn a_click_on_the_conversation_while_the_page_goes_back_reaches_it(cx: &mut TestAppContext) {
+    let (shell, _host, cx) = shell_with_task(cx);
+    let clicks = Rc::new(std::cell::Cell::new(0));
+    let pictures = clicks.clone();
+    let view: AnyView = cx.update(|_, cx| cx.new(|_| Pictures(pictures)).into());
+    shell.update(cx, |shell, cx| shell.open_task(3, view, cx));
+    let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
+    shell.update(cx, |shell, cx| shell.watch_task_page(30, thumb, None, cx));
+    core_shows_task(&shell, cx, 30);
+    let over = Instant::now() - Duration::from_secs(1);
+    set_zoom(&shell, cx, Zoom::Out(over));
+    draw(&shell, cx);
+    let (card, _) = frames(&shell, cx);
+    // Held where the zoom back starts, the page still fills the area.
+    set_zoom(
+        &shell,
+        cx,
+        Zoom::In(Instant::now() + Duration::from_secs(60)),
+    );
+    core_shows_users(&shell, cx);
+    draw(&shell, cx);
+    cx.simulate_click(card.center(), gpui::Modifiers::none());
+    assert_eq!(clicks.get(), 1, "the click on the conversation was lost");
 }
 
 /// Selecting any of the user's tabs, the one selected too, or another Space leaves the area and
@@ -460,8 +527,9 @@ fn the_strip_takes_over_hands_back_and_stops(cx: &mut TestAppContext) {
 
 /// A press in the agent's page watched takes it over, as Take Over did, and the press is the page's
 /// (#1080): the Agents hear the same take over, so nothing else moves. Pressed again while the user
-/// holds it, nothing more happens; ⌘↩ then hands it back. The host hears the pages' presses only
-/// while an agent works.
+/// holds it, nothing more happens; ⌘↩ then hands it back. A press in the page beside it in its
+/// split view takes that tab over, not the one watched (#3243), and one in another agent's tab, or
+/// with no agent at work, takes nothing.
 #[gpui::test]
 fn a_press_in_the_agents_page_takes_it_over_and_hand_back_gives_it_back(cx: &mut TestAppContext) {
     let (shell, host, cx) = shell_with_task(cx);
@@ -479,14 +547,21 @@ fn a_press_in_the_agents_page_takes_it_over_and_hand_back_gives_it_back(cx: &mut
         shell.set_agent_status(status(Vec::new()), cx);
         shell.agent_acted("task-1".into(), 30, cx);
     });
-    assert_eq!(host.take(), ["hear page presses true"]);
-    shell.update(cx, |shell, cx| shell.page_pressed(cx));
+    host.take();
+    shell.update(cx, |shell, cx| shell.page_pressed(20, cx));
+    assert!(
+        host.take().is_empty(),
+        "a press in another agent's tab took it from the window watching a task"
+    );
+    shell.update(cx, |shell, cx| shell.page_pressed(31, cx));
+    assert_eq!(host.take(), ["take over task-1 31"]);
+    shell.update(cx, |shell, cx| shell.page_pressed(30, cx));
     assert_eq!(host.take(), ["take over task-1 30"]);
 
     shell.update(cx, |shell, cx| {
-        shell.set_agent_status(status(vec![(30, "".into())]), cx)
+        shell.set_agent_status(status(vec![(30, "".into()), (31, "".into())]), cx)
     });
-    shell.update(cx, |shell, cx| shell.page_pressed(cx));
+    shell.update(cx, |shell, cx| shell.page_pressed(30, cx));
     assert!(
         host.take().is_empty(),
         "a press in a page the user holds took it again"
@@ -497,11 +572,47 @@ fn a_press_in_the_agents_page_takes_it_over_and_hand_back_gives_it_back(cx: &mut
     assert_eq!(host.take(), ["hand back 30", "focus ui"]);
 
     shell.update(cx, |shell, cx| shell.set_agent_status(Vec::new(), cx));
-    assert_eq!(host.take(), ["hear page presses false"]);
-    shell.update(cx, |shell, cx| shell.page_pressed(cx));
+    shell.update(cx, |shell, cx| shell.page_pressed(30, cx));
     assert!(
         host.take().is_empty(),
         "a press with no agent at work took a page"
+    );
+}
+
+/// Whose tab it is decides, not where the agent acted last (#3503): a press in the tab it acted in
+/// last takes it over, which ends its session there, and a press in the other tab of its split view
+/// then takes that one over too. A press on a tab's dialog comes as a press in its tab.
+#[gpui::test]
+fn a_press_takes_over_each_of_the_agents_tabs_after_the_one_it_acted_in(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    watching(&shell, &host, cx);
+    let status = |held: Vec<(u64, SharedString)>| {
+        vec![Status {
+            agent: "task-1".into(),
+            name: "Claude".into(),
+            space: 3,
+            doing: "Typed · flights.example".into(),
+            held,
+        }]
+    };
+    shell.update(cx, |shell, cx| {
+        shell.set_agent_status(status(Vec::new()), cx);
+        shell.agent_acted("task-1".into(), 31, cx);
+    });
+    host.take();
+    shell.update(cx, |shell, cx| shell.page_pressed(31, cx));
+    assert_eq!(host.take(), ["take over task-1 31"]);
+    // The core ends the agent's session in the tab taken over, where it acted last.
+    shell.update(cx, |shell, cx| {
+        shell.agent_session_ended("task-1", 31, cx);
+        shell.set_agent_status(status(vec![(31, "".into())]), cx);
+    });
+    host.take();
+    shell.update(cx, |shell, cx| shell.page_pressed(30, cx));
+    assert_eq!(
+        host.take(),
+        ["take over task-1 30"],
+        "a press in the agent's other tab took nothing once the tab it acted in last was taken over"
     );
 }
 
@@ -640,6 +751,57 @@ fn a_scroll_in_the_agents_page_never_takes_it_over(cx: &mut TestAppContext) {
         !calls.iter().any(|call| call.starts_with("take over")),
         "{calls:?}"
     );
+}
+
+/// An agent at work in a tab it then closes is at work nowhere: the page watched, its Space's other
+/// tab, shows no bar for it, and Take Over offers nothing, until it acts in a tab again.
+#[gpui::test]
+fn an_agent_is_at_work_in_no_tab_once_it_closes_the_one_it_was_in(cx: &mut TestAppContext) {
+    use crate::shell::agent_bar::Bar;
+    let (shell, host, cx) = shell_with_task(cx);
+    still(cx);
+    let view = conversation(cx);
+    shell.update(cx, |shell, cx| shell.open_task(3, view, cx));
+    let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
+    assert!(shell.update(cx, |shell, cx| shell.watch_task_page(31, thumb, None, cx)));
+    core_shows_task(&shell, cx, 31);
+    draw(&shell, cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_agent_status(
+            vec![Status {
+                agent: "task-1".into(),
+                name: "Claude".into(),
+                space: 3,
+                doing: "Clicked “Report”".into(),
+                held: Vec::new(),
+            }],
+            cx,
+        );
+        shell.agent_acted("task-1".into(), 30, cx);
+    });
+    let at_work = |cx: &mut VisualTestContext| {
+        shell.read_with(cx, |shell, _| match shell.agent_bar() {
+            Some(Bar::Working { tab, .. }) => Some(tab),
+            _ => None,
+        })
+    };
+    assert_eq!(at_work(cx), Some(30));
+
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(3, Vec::new(), vec![31], Vec::new(), Folders::default(), cx)
+    });
+    draw(&shell, cx);
+    assert_eq!(
+        at_work(cx),
+        None,
+        "the bar still shows the agent at work in its closed tab"
+    );
+    host.take();
+    shell.update(cx, |shell, cx| shell.agent_bar_primary(cx));
+    assert!(host.take().is_empty(), "Take Over asked for the closed tab");
+
+    shell.update(cx, |shell, cx| shell.agent_acted("task-1".into(), 31, cx));
+    assert_eq!(at_work(cx), Some(31));
 }
 
 /// Escape on a task's page watched steps back to the conversation from the page's keyboard, which
@@ -1013,7 +1175,7 @@ fn only_what_needs_the_user_has_a_primary() {
     }
 
     let primaries = |held, dot, open| -> Vec<StripChip> {
-        (strip_chips(held, dot, open).into_iter())
+        (strip_chips(held, dot, open, false).into_iter())
             .filter(|(_, look)| *look == Look::Primary)
             .map(|(chip, _)| chip)
             .collect()
@@ -1033,8 +1195,355 @@ fn only_what_needs_the_user_has_a_primary() {
         assert!(primaries(held, dot, open).is_empty(), "{what}");
     }
     assert_eq!(
-        strip_chips(false, Some(Dot::Working), false),
+        strip_chips(false, Some(Dot::Working), false, false),
         [(StripChip::Stop, Look::Quiet)],
         "at work, Stop alone and quiet: a press in the page takes it over"
     );
+    assert_eq!(
+        strip_chips(false, Some(Dot::Working), false, true),
+        [
+            (StripChip::TakeOver, Look::Quiet),
+            (StripChip::Stop, Look::Quiet)
+        ],
+        "with the ring in the strip, Take Over is a stop of its own, before Stop"
+    );
+    assert_eq!(
+        strip_chips(true, Some(Dot::Working), false, true),
+        [(StripChip::HandBack, Look::Quiet)],
+        "a page the user holds has no Take Over"
+    );
+}
+
+/// An agent's page watched, which the user doesn't hold: the ring goes over the strip in its own
+/// order, the task's card, back, the page, Take Over and Stop, and never into the page or onto
+/// the Space's rows, where Return would swap in another page. The page's stop
+/// names it as the agent's, Return on it does nothing, and Return on Take Over takes it over, as
+/// ⌘↩ does (#3220).
+#[gpui::test]
+fn the_ring_never_enters_an_agents_page(cx: &mut TestAppContext) {
+    use crate::shell::page_ends::StripStop;
+    let (shell, host, cx) = shell_with_task(cx);
+    watching_working(&shell, cx);
+    // Tab with the window's keyboard rings the strip, staying with the page watched.
+    assert!(shell.update(cx, |shell, cx| shell.tab_into_strip(false, cx)));
+    draw(&shell, cx);
+    host.take();
+    let at = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell.read_with(cx, |shell, _| (shell.keyed.is_some(), shell.keyed_strip))
+    };
+    let tab = |reverse: bool, shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| shell.key_tab(reverse, cx));
+        draw(shell, cx);
+        at(shell, cx)
+    };
+    assert_eq!(at(&shell, cx), (false, Some(StripStop::Card)));
+    let went: Vec<_> = (0..5).map(|_| tab(false, &shell, cx)).collect();
+    assert_eq!(
+        went,
+        [
+            (false, Some(StripStop::Back)),
+            (false, Some(StripStop::Page)),
+            (false, Some(StripStop::TakeOver)),
+            (false, Some(StripStop::Stop)),
+            (false, Some(StripStop::Card)),
+        ]
+    );
+    let back: Vec<_> = (0..5).map(|_| tab(true, &shell, cx)).collect();
+    assert_eq!(
+        back,
+        [
+            (false, Some(StripStop::Stop)),
+            (false, Some(StripStop::TakeOver)),
+            (false, Some(StripStop::Page)),
+            (false, Some(StripStop::Back)),
+            (false, Some(StripStop::Card)),
+        ]
+    );
+    // Shift+Tab from the window rings the last stop, Stop.
+    shell.update(cx, |shell, cx| {
+        shell.keyed_strip = None;
+        shell.tab_into_strip(true, cx)
+    });
+    assert_eq!(at(&shell, cx), (false, Some(StripStop::Stop)));
+    tab(true, &shell, cx);
+    assert_eq!(tab(true, &shell, cx), (false, Some(StripStop::Page)));
+    let calls = host.take();
+    assert!(
+        !calls.iter().any(|call| call.starts_with("focus page")),
+        "the ring gave the agent's page the keyboard: {calls:?}"
+    );
+    let name = shell.read_with(cx, |shell, _| {
+        let (title, detail) = shell.task_strip_words(30);
+        shell.strip_page_name(30, &title, &detail)
+    });
+    assert!(name.starts_with("Claude's page"), "{name}");
+    assert!(name.ends_with("Take Over to use it yourself."), "{name}");
+    shell.update(cx, |shell, cx| shell.key_strip_show(StripStop::Page, cx));
+    assert!(
+        host.take().is_empty(),
+        "Return on the page's stop did something"
+    );
+    shell.update(cx, |shell, cx| {
+        shell.key_strip_show(StripStop::TakeOver, cx)
+    });
+    assert_eq!(
+        host.take().first().map(String::as_str),
+        Some("take over task-1 30")
+    );
+}
+
+/// A working task's card shown, its page watched as the agent acts there.
+fn watching_working(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
+    use crate::agents::task::{Card, Dot};
+    still(cx);
+    let card = Card {
+        agent: "task-1".into(),
+        home: 1,
+        space: 3,
+        name: "Claude".into(),
+        replies: true,
+        title: "Find a flight".into(),
+        status: "Clicking “Tickets”".into(),
+        asks: false,
+        dot: Dot::Working,
+        answers: Vec::new(),
+        question: None,
+        open: Vec::new(),
+        retry: false,
+        command: None,
+    };
+    shell.update(cx, |shell, cx| {
+        shell.set_task_cards(vec![card], cx);
+        shell.show_task("task-1".into(), cx);
+    });
+    let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
+    assert!(shell.update(cx, |shell, cx| shell.watch_task_page(30, thumb, None, cx)));
+    core_shows_task(shell, cx, 30);
+    shell.update(cx, |shell, cx| {
+        let status = Status {
+            agent: "task-1".into(),
+            name: "Claude".into(),
+            space: 3,
+            doing: "Clicking “Tickets”".into(),
+            held: Vec::new(),
+        };
+        shell.set_agent_status(vec![status], cx);
+        shell.agent_acted("task-1".into(), 30, cx);
+    });
+    draw(shell, cx);
+}
+
+/// Return on the task's card does what a click on it does: the shown task's card closes its
+/// conversation, its page with it, and the ring leaves the strip.
+#[gpui::test]
+fn return_on_the_task_card_does_what_its_click_does(cx: &mut TestAppContext) {
+    use crate::shell::page_ends::StripStop;
+    let (shell, _, cx) = shell_with_task(cx);
+    watching_working(&shell, cx);
+    assert!(shell.update(cx, |shell, cx| shell.tab_into_strip(false, cx)));
+    draw(&shell, cx);
+    let stop = shell.read_with(cx, |shell, _| shell.keyed_strip);
+    assert_eq!(stop, Some(StripStop::Card));
+    shell.update(cx, |shell, cx| shell.key_strip_show(StripStop::Card, cx));
+    draw(&shell, cx);
+    let (open, stop) = shell.read_with(cx, |shell, _| (shell.task_open(), shell.keyed_strip));
+    assert_eq!(open, None, "Return on the card left its conversation open");
+    assert_eq!(stop, None, "the ring stayed in the strip");
+}
+
+/// A page the user holds is theirs: Tab from the ring's back goes into it, and Tab out of it
+/// rings the strip's next stop, Hand Back, the UI taking the keyboard.
+#[gpui::test]
+fn a_held_task_page_takes_tab_as_the_users_does(cx: &mut TestAppContext) {
+    use crate::shell::page_ends::StripStop;
+    let (shell, host, cx) = shell_with_task(cx);
+    watching(&shell, &host, cx);
+    shell.update(cx, |shell, cx| {
+        let status = Status {
+            agent: "task-1".into(),
+            name: "Claude".into(),
+            space: 3,
+            doing: "".into(),
+            held: vec![(30, "".into())],
+        };
+        shell.set_agent_status(vec![status], cx);
+    });
+    assert!(shell.update(cx, |shell, cx| shell.tab_into_strip(false, cx)));
+    draw(&shell, cx);
+    host.take();
+    shell.update(cx, |shell, cx| shell.key_tab(false, cx));
+    draw(&shell, cx);
+    assert_eq!(host.take(), ["focus page first"]);
+    // Later than the press that went in, which a page with nothing to focus hands back.
+    let took = shell.update(cx, |shell, cx| {
+        shell.page_ends.entered = None;
+        shell.tab_focus_leaving(30, false, cx)
+    });
+    assert!(took, "the app didn't take the keyboard from the held page");
+    let stop = shell.read_with(cx, |shell, _| shell.keyed_strip);
+    assert_eq!(stop, Some(StripStop::HandBack));
+}
+
+/// The Library opened by its key from the page, then a task's page watched: the Library's key
+/// closing it gives the window the keyboard, never the agent's page (#3313).
+#[gpui::test]
+fn a_key_closing_the_library_never_gives_an_agents_page_the_keyboard(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    let library = |shell: &Entity<Shell>, from: &str, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| {
+            shell.run(Command::ViewLibrary, from, cx);
+            shell.library_motion = None;
+            shell.sidebar_fade = None;
+        });
+        draw(shell, cx);
+    };
+    library(&shell, "page", cx);
+    watching(&shell, &host, cx);
+    assert!(shell.read_with(cx, |shell, _| shell.library_open));
+    library(&shell, "ui", cx);
+    assert!(
+        !host.take().contains(&"focus page".to_owned()),
+        "the agent's page got it"
+    );
+    let root = cx.update(|window, cx| shell.read(cx).focus_handle.is_focused(window));
+    assert!(root, "the field kept the UI's keyboard");
+}
+
+/// Take Over comes with the ring and moves nothing else in the strip: back and Stop stay where
+/// they are, and the words, the agent's dot with them, keep their place and give up the room
+/// (#3220).
+#[gpui::test]
+fn take_over_arriving_moves_nothing_else(cx: &mut TestAppContext) {
+    use crate::shell::page_ends::{STOPS_DRAWN, StripStop};
+    let (shell, _, cx) = shell_with_task(cx);
+    watching_working(&shell, cx);
+    let drawn = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        STOPS_DRAWN.with(|drawn| drawn.borrow_mut().clear());
+        draw(shell, cx);
+        STOPS_DRAWN.with(|drawn| drawn.borrow().clone())
+    };
+    let before = drawn(&shell, cx);
+    assert!(
+        !before.contains_key(&StripStop::TakeOver),
+        "Take Over shows without the ring"
+    );
+    shell.update(cx, |shell, cx| shell.tab_into_strip(false, cx));
+    let after = drawn(&shell, cx);
+    let take_over = after[&StripStop::TakeOver];
+    for stop in [StripStop::Back, StripStop::Stop] {
+        assert_eq!(
+            before[&stop], after[&stop],
+            "{stop:?} moved as Take Over came"
+        );
+    }
+    let (words, room) = (before[&StripStop::Page], after[&StripStop::Page]);
+    assert_eq!(
+        words.origin, room.origin,
+        "the words moved as Take Over came"
+    );
+    assert!(
+        room.right() <= take_over.left(),
+        "the words run under Take Over"
+    );
+    assert!(
+        room.size.width < words.size.width,
+        "the words didn't give up the room"
+    );
+}
+
+/// Take Over shows while the ring is on any of the task's stops, the card, back, the page, Take
+/// Over and Stop, so it is there before the ring reaches its neighbour; never with the ring on a
+/// stop that isn't the task's, a tab's row or New Tab's, nor with no ring (#3220).
+#[gpui::test]
+fn take_over_shows_with_the_ring_on_the_tasks_stops_alone(cx: &mut TestAppContext) {
+    use crate::shell::page_ends::{STOPS_DRAWN, StripStop};
+    use crate::shell::sidebar_keys::NEW_TAB;
+    let (shell, _, cx) = shell_with_task(cx);
+    watching_working(&shell, cx);
+    let shows = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        STOPS_DRAWN.with(|drawn| drawn.borrow_mut().clear());
+        draw(shell, cx);
+        STOPS_DRAWN.with(|drawn| drawn.borrow().contains_key(&StripStop::TakeOver))
+    };
+    assert!(!shows(&shell, cx), "Take Over shows with no ring");
+    shell.update(cx, |shell, cx| shell.tab_into_strip(false, cx));
+    let stops = [
+        StripStop::Card,
+        StripStop::Back,
+        StripStop::Page,
+        StripStop::TakeOver,
+        StripStop::Stop,
+    ];
+    for stop in stops {
+        assert_eq!(
+            shell.read_with(cx, |shell, _| shell.keyed_strip),
+            Some(stop)
+        );
+        assert!(
+            shows(&shell, cx),
+            "Take Over hides with the ring on {stop:?}"
+        );
+        shell.update(cx, |shell, cx| shell.key_tab(false, cx));
+    }
+    let row = shell.read_with(cx, |shell, _| {
+        shell.key_rows().into_iter().find(|row| *row != NEW_TAB)
+    });
+    let row = row.expect("the Space has no tab's row");
+    for (row, name) in [(row, "a tab's row"), (NEW_TAB, "New Tab's row")] {
+        shell.update(cx, |shell, cx| shell.key_row(row, cx));
+        assert!(
+            !shows(&shell, cx),
+            "Take Over shows with the ring on {name}"
+        );
+    }
+    shell.update(cx, |shell, cx| shell.leave_keys("test", cx));
+    assert!(!shows(&shell, cx), "Take Over shows once the ring leaves");
+}
+
+/// A press on the card of the agent's page watched whose renderer died, its Reload for one, is the
+/// user acting on the agent's tab: it takes the tab over, as a press in its page does, and the
+/// Reload still loads the page again (#3433).
+#[gpui::test]
+fn a_press_on_the_crash_card_of_the_agents_page_takes_it_over(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    watching(&shell, &host, cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_agent_status(
+            vec![Status {
+                agent: "task-1".into(),
+                name: "Claude".into(),
+                space: 3,
+                doing: "Typed · flights.example".into(),
+                held: Vec::new(),
+            }],
+            cx,
+        );
+        shell.agent_acted("task-1".into(), 30, cx);
+        shell.set_page(
+            30,
+            Page {
+                url: "https://flights.example/".into(),
+                trouble: crate::shell::Trouble::Crashed,
+                ..Page::default()
+            },
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    shell.update(cx, |shell, cx| {
+        shell.crash_reload_drawn.set(None);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    host.take();
+    let reload = shell
+        .read_with(cx, |shell, _| shell.crash_reload_drawn.get())
+        .expect("the watched page that died shows the card's Reload");
+    let place = shell.read_with(cx, |shell, _| watched(shell.page_frame(shell.viewport).0));
+    assert!(
+        place.contains(&reload.center()),
+        "{reload:?} is in the page's place {place:?}"
+    );
+    cx.simulate_click(reload.center(), gpui::Modifiers::none());
+    assert_eq!(host.take(), ["take over task-1 30", "reload 30"]);
 }

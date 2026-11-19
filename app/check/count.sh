@@ -1,26 +1,31 @@
+# check.sh runs this at 620.
 # The daily usage count (#1977) goes once a UTC day to the endpoint the build names, and nowhere
 # else, against an endpoint of the run's own, check/count-server.py, as only the prod build names
-# ilo's. On a profile of its own, which a launch finds new or not:
-# - a new profile's first launch sends one count, a second after it starts as the run waits less,
-#   flagged first, weekly and monthly, which holds exactly what Settings › Privacy says, without a
-#   cookie; the date the copy keeps is then today's;
-# - Send a Daily Usage Count, turned off in Settings › Privacy, sends nothing at the next launch,
-#   though a count is due, and turned back on, its file is gone;
+# ilo's. It's off until the user turns it on (#2978), in onboarding's last step, as they leave it,
+# or in Settings › Privacy. Each case has a profile of its own, which a launch finds new or not:
+# 1. a new profile's launch sends nothing;
+# 2. onboarding left with its switch untouched, or turned on and off again, sends nothing;
+# 3. onboarding's switch turned on sends nothing while the step shows, and one count as Continue
+#    leaves it, flagged first, weekly and monthly, which holds exactly what the step and Settings ›
+#    Privacy say, without a cookie; the date the copy keeps is then today's;
+# 4. a profile from before the ask, which kept a count's date and no yes, sends nothing.
+# Then, on the yes profile:
+# - Send a Daily Usage Count turned off in Settings › Privacy drops the yes, and the next launch
+#   sends nothing though a count is due; turned back on, it sends the day's at once, not first;
 # - one the endpoint refuses keeps the date, and the next launch sends it, flagged for the day it
 #   is, with first off;
 # - the launch after on the same day sends none;
 # - a dev build, given no endpoint, sends none and offers no switch, as main's Privacy did, and
 #   still offers the privacy policy, with the line on what ilo never sees, as every build does.
 # A launch on a new UTC day while the app stays open isn't checked: the run can't move the clock,
-# and the tests check the flags of the day (daily_count.rs).
+# and the tests check the flags of the day and the yes (daily_count.rs).
 
 count_dir="$PWD/$out/count"
 rm -rf "$count_dir"
-mkdir -p "$count_dir/profile"
-count_profile="$count_dir/profile"
-! windows || count_profile=$(cygpath -w "$count_profile")
-last_file="$count_dir/profile/daily-count"
-off_file="$count_dir/profile/no-daily-count"
+mkdir -p "$count_dir/no-browsers"
+# The onboarding's import finds no browser in this home, so its step doesn't come.
+import_home="$count_dir/no-browsers"
+! windows || import_home=$(cygpath -w "$import_home")
 # As crash's collector, which cleanup stops if the run fails.
 python3 -I check/count-server.py "$count_dir/port" > "$count_dir/server.log" 2>&1 &
 collector=$!
@@ -50,22 +55,85 @@ print(str(weekly).lower(), str(monthly).lower())' "$1"
 counts() {
   grep -c '"method"' "$count_dir/server.log" || true
 }
+# Makes profile $1 the run's: its folder, and the yes and the date the app keeps there.
+use_profile() {
+  mkdir -p "$count_dir/$1"
+  count_profile="$count_dir/$1"
+  ! windows || count_profile=$(cygpath -w "$count_profile")
+  last_file="$count_dir/$1/daily-count"
+  yes_file="$count_dir/$1/daily-count-yes"
+}
 # Launches the app on the run's profile, logging to $out/count-$1.log, with $2 as its endpoint, or
-# none, and waits for its page.
+# none, and waits for its page; or, with $3 "onboarding", gives it no page, so a new profile plays
+# the onboarding, and waits for its intro.
 launch_count() {
   log="$out/count-$1.log"
   step=0
+  local onboarding=${3:-}
   if [ -n "$2" ]; then
     set -- "--daily-count-url=$2"
     own_count_logs="$own_count_logs $log"
   else
     set --
   fi
-  BROWSER_DRIVE=1 BROWSER_URL="$page" BROWSER_PROFILE_DIR="$count_profile" \
-    BROWSER_DAILY_COUNT_AFTER=1 "$browser" "$@" < "$out/drive" > "$log" 2>&1 &
+  if [ -z "$onboarding" ]; then
+    BROWSER_DRIVE=1 BROWSER_URL="$page" BROWSER_PROFILE_DIR="$count_profile" \
+      BROWSER_DAILY_COUNT_AFTER=1 "$browser" "$@" < "$out/drive" > "$log" 2>&1 &
+  else
+    BROWSER_DRIVE=1 BROWSER_ONBOARDING=light BROWSER_IMPORT_HOME="$import_home" \
+      BROWSER_PROFILE_DIR="$count_profile" BROWSER_DAILY_COUNT_AFTER=1 \
+      "$browser" "$@" < "$out/drive" > "$log" 2>&1 &
+  fi
   pid=$!
   exec 3> "$out/drive"
-  await_load
+  if [ -z "$onboarding" ]; then
+    await_load
+  else
+    await '^browser: onboarding step intro settled$' ||
+      fail "$1: a new profile's first launch with no page didn't play the onboarding"
+  fi
+}
+# Esc through the onboarding's steps to its last, the opt-ins, where the count's switch is.
+to_opt_ins() {
+  local steps each
+  steps=$(grep -m1 '^browser: onboarding steps ' "$log" | cut -d' ' -f4-)
+  case " $steps" in
+    *" opt-ins") ;;
+    *) fail "the onboarding's steps were '$steps', with the opt-ins not last" ;;
+  esac
+  # The intro settled at launch and goes on by itself, before any key is sent, so the step after
+  # it is waited for in the whole log, and each later one after the Esc that left the one before.
+  await '^browser: onboarding left intro via time$' ||
+    fail "the onboarding's intro didn't go on by itself"
+  for each in $steps; do
+    [ "$each" = intro ] && continue
+    if [ "$step" = 0 ]; then
+      await "^browser: onboarding step $each settled\$" ||
+        fail "the onboarding's $each step didn't come after the intro"
+    else
+      expect "^browser: onboarding step $each settled\$" "the onboarding's $each step didn't come"
+    fi
+    [ "$each" = opt-ins ] && break
+    send key escape
+    expect "^browser: onboarding left $each via escape\$" "Esc didn't leave the $each step"
+  done
+  expect '^browser: onboarding daily-count at ' \
+    "the opt-ins step didn't draw the count's switch, though the build names an endpoint"
+}
+# Clicks the count's switch, where the app says it's drawn, which turns it $1, on or off.
+turn_count() {
+  send click $(grep '^browser: onboarding daily-count at ' "$log" | tail -1 | cut -d' ' -f5-6)
+  expect "^browser: onboarding daily-count $1\$" "a click on the count's switch didn't turn it $1"
+}
+# Leaves the onboarding's last step with key $1, escape or return, which ends it.
+leave_onboarding() {
+  send key "$1"
+  expect '^browser: onboarding done$' "$1 at the opt-ins step didn't end the onboarding"
+  # The flow ends in the command bar, whose window holds the keyboard, so on the Mac Settings would
+  # open behind the browser's window with a click meant for it landing in the sidebar.
+  expect '^browser: command bar shown$' "the onboarding didn't end with the command bar"
+  send key escape
+  expect '^browser: command bar hidden$' "Esc didn't close the command bar the onboarding ended with"
 }
 # Shows Settings › Privacy, captured to $out/$1.
 privacy() {
@@ -118,58 +186,129 @@ sys.exit(1 if wrong else 0)
 ' "$count_dir/server.log" "$1" "$2" "$3" "$4") ||
     fail "the count the endpoint got wasn't right: $why"
 }
+# The launch, said by $1, held its count as off, sent none and kept no yes.
+held_off() {
+  await '^browser: daily count not sent: off$' || fail "$1: the launch didn't hold the count as off"
+  grep -q '^browser: daily count sending' "$log" && fail "$1: the launch sent a count"
+  [ ! -e "$yes_file" ] || fail "$1: the launch kept a yes, $yes_file"
+}
 
-# A new profile's first launch sends one count, flagged first, weekly and monthly.
-launch_count first "$endpoint/v1/daily"
+# 1. A new profile's launch sends nothing, and offers the switch in Privacy.
+use_profile new
+launch_count new "$endpoint/v1/daily"
+held_off "a new profile"
+privacy count-privacy-new.png
+expect '^browser: settings switch send a daily usage count at ' \
+  "Privacy didn't offer the count's switch in a build that names an endpoint"
+exec 3>&-
+quit
+[ "$(counts)" = 0 ] || fail "a new profile's launch sent $(counts) counts, not none"
+[ ! -e "$last_file" ] || fail "a new profile's launch kept a count's date, though it sent none"
+
+# 2. Onboarding skipped with the switch untouched, or left with it turned on and off again, sends
+# nothing.
+use_profile skipped
+launch_count skipped "$endpoint/v1/daily" onboarding
+to_opt_ins
+../tools/window-screenshot.sh "$pid" "$out/count-onboarding-off.png" || fail "no window to capture"
+leave_onboarding escape
+held_off "onboarding skipped"
+grep -q '^browser: onboarding daily-count set ' "$log" && fail "skipping the step set the count"
+exec 3>&-
+quit
+use_profile again-off
+launch_count again-off "$endpoint/v1/daily" onboarding
+to_opt_ins
+turn_count on
+turn_count off
+leave_onboarding return
+held_off "onboarding's switch turned on and off again"
+grep -q '^browser: onboarding daily-count set ' "$log" &&
+  fail "the switch turned on and off again set the count"
+exec 3>&-
+quit
+[ "$(counts)" = 0 ] || fail "onboarding left with the count off sent $(counts) counts"
+
+# 3. Onboarding's switch turned on sends nothing while the step shows, and one count as Continue
+# leaves it, flagged first, weekly and monthly.
+use_profile yes
+launch_count yes "$endpoint/v1/daily" onboarding
+to_opt_ins
+turn_count on
+../tools/window-screenshot.sh "$pid" "$out/count-onboarding-on.png" || fail "no window to capture"
+[ ! -e "$yes_file" ] || fail "the switch turned on kept a yes while the step showed"
+grep -q '^browser: daily count switch ' "$log" && fail "the switch turned on set the count at once"
+leave_onboarding return
+# Both come as Return leaves the step, before the onboarding's end, so before the Esc that closed
+# the command bar after it.
+grep -q '^browser: onboarding daily-count set on$' "$log" ||
+  fail "Continue with the switch on didn't set the count"
+grep -q '^browser: daily count switch on$' "$log" ||
+  fail "Continue with the switch on didn't reach the count"
 await '^browser: daily count sending first true weekly true monthly true$' ||
-  fail "a new profile's first launch didn't send a count flagged first, weekly and monthly"
-await '^browser: daily count sent$' || fail "the endpoint didn't take the first launch's count"
-[ "$(counts)" = 1 ] || fail "the first launch sent $(counts) counts, not one"
+  fail "Continue with the switch on didn't send a count flagged first, weekly and monthly"
+await '^browser: daily count sent$' || fail "the endpoint didn't take the count after Continue"
+[ -e "$yes_file" ] || fail "Continue with the switch on kept no yes, $yes_file"
+[ "$(counts)" = 1 ] || fail "Continue with the switch on sent $(counts) counts, not one"
 check_count 1 true true true
 first_count=$why
 [ "$(cat "$last_file" 2>/dev/null)" = "$(utc_day 0)" ] ||
   fail "the date kept after the count was '$(cat "$last_file" 2>/dev/null)', not today's"
-# Its switch is in Privacy, on, and turned off there it keeps its file.
+# Its switch is in Privacy, on, and turned off there the yes goes.
 privacy count-privacy.png
-send clickkey $(drawn "switch send a daily usage count")
+click_in_sight "switch send a daily usage count"
 expect '^browser: send a daily usage count off$' "a click on the switch didn't turn the count off"
 expect '^browser: daily count switch off$' "turning the switch off didn't reach the count"
-[ -e "$off_file" ] || fail "the switch turned off left no $off_file"
+[ ! -e "$yes_file" ] || fail "the switch turned off kept the yes, $yes_file"
 ../tools/window-screenshot.sh "$pid" "$out/count-privacy-off.png" || fail "no window to capture"
 exec 3>&-
 quit
 
-# Off, the next launch sends nothing, though yesterday's count makes today's due, and turned back on
-# its file goes.
+# 4. A profile from before the ask, which sent counts under the old default and kept yesterday's
+# date, sends none though one is due.
+use_profile updated
 utc_day 1 > "$last_file"
-launch_count off "$endpoint/v1/daily"
-await '^browser: daily count not sent: off$' || fail "the launch with the count off didn't hold it"
-grep -q '^browser: daily count sending' "$log" && fail "the launch with the count off sent one"
-privacy count-privacy-off-launch.png
-send clickkey $(drawn "switch send a daily usage count")
-expect '^browser: send a daily usage count on$' "a click on the switch didn't turn the count on"
-expect '^browser: daily count switch on$' "turning the switch on didn't reach the count"
-[ ! -e "$off_file" ] || fail "the switch turned on left $off_file"
+launch_count updated "$endpoint/v1/daily"
+held_off "a profile from before the ask"
 exec 3>&-
 quit
-[ "$(counts)" = 1 ] || fail "the endpoint got a count while the switch was off"
+[ "$(counts)" = 1 ] || fail "a profile from before the ask sent a count"
 
-# One the endpoint refuses keeps yesterday's date, and the next launch sends today's, not first.
+# The yes profile, turned off, sends nothing at its next launch though yesterday's count makes
+# today's due, and turned back on sends the day's at once, not first.
+use_profile yes
+utc_day 1 > "$last_file"
 set -- $(flags_after 1)
 weekly=$1 monthly=$2
+launch_count off "$endpoint/v1/daily"
+held_off "the count turned off"
+privacy count-privacy-off-launch.png
+click_in_sight "switch send a daily usage count"
+expect '^browser: send a daily usage count on$' "a click on the switch didn't turn the count on"
+expect '^browser: daily count switch on$' "turning the switch on didn't reach the count"
+[ -e "$yes_file" ] || fail "the switch turned on kept no yes, $yes_file"
+await "^browser: daily count sending first false weekly $weekly monthly $monthly\$" ||
+  fail "the switch turned on didn't send the day's count, weekly $weekly and monthly $monthly"
+await '^browser: daily count sent$' || fail "the endpoint didn't take the count after the switch"
+check_count 2 false "$weekly" "$monthly"
+exec 3>&-
+quit
+
+# One the endpoint refuses keeps yesterday's date, and the next launch sends today's, not first.
+utc_day 1 > "$last_file"
 launch_count refused "$endpoint/refuse/v1/daily"
 await "^browser: daily count sending first false weekly $weekly monthly $monthly\$" ||
   fail "the launch after a day didn't send a count flagged weekly $weekly and monthly $monthly"
 await '^browser: daily count not sent$' || fail "the refused count wasn't said not sent"
 exec 3>&-
 quit
-[ "$(counts)" = 2 ] || fail "the endpoint got $(counts) requests, not the refused one as the second"
+[ "$(counts)" = 3 ] || fail "the endpoint got $(counts) requests, not the refused one as the third"
 [ "$(cat "$last_file")" = "$(utc_day 1)" ] || fail "the refused count changed the date kept"
 launch_count retried "$endpoint/v1/daily"
 await "^browser: daily count sending first false weekly $weekly monthly $monthly\$" ||
   fail "the launch after the refused count didn't send it again"
 await '^browser: daily count sent$' || fail "the endpoint didn't take the count sent again"
-check_count 3 false "$weekly" "$monthly"
+check_count 4 false "$weekly" "$monthly"
 [ "$(cat "$last_file")" = "$(utc_day 0)" ] || fail "the date kept after the count wasn't today's"
 exec 3>&-
 quit
@@ -180,9 +319,10 @@ await '^browser: daily count sent today already$' ||
   fail "the launch on the same day didn't hold it"
 exec 3>&-
 quit
-[ "$(counts)" = 3 ] || fail "the launch on the same day sent a count"
+[ "$(counts)" = 4 ] || fail "the launch on the same day sent a count"
 
-# A dev build, given no endpoint, sends none, though one is due, and offers no switch.
+# A dev build, given no endpoint, sends none, though one is due and the yes is kept, and offers no
+# switch.
 utc_day 1 > "$last_file"
 launch_count none ""
 await '^browser: daily count none: no server$' || fail "the dev build didn't say it has no server"
@@ -194,14 +334,17 @@ grep -q '^browser: settings switch send a daily usage count at ' "$log" &&
   fail "Privacy offered the count's switch in a build that names no server"
 exec 3>&-
 quit
-[ "$(counts)" = 3 ] || fail "the dev build sent a count"
+[ "$(counts)" = 4 ] || fail "the dev build sent a count"
 grep -q '^browser: daily count sending' "$log" && fail "the dev build sent a count"
 kill "$collector" 2>/dev/null || true
 collector=
-echo "ok: a new profile's first launch sent one count, flagged first, weekly and monthly, without" \
-  "a cookie: $first_count. Turned off in Settings › Privacy, the next launch sent none though one" \
-  "was due, and turned back on, its file went. One the endpoint refused kept yesterday's date," \
-  "and the next launch sent it, weekly $weekly and monthly $monthly; the launch after on the same" \
-  "day sent none, and a dev build given no endpoint sent none and offered no switch, but did" \
-  "offer the privacy policy, with what ilo never sees. Windows:" \
-  "$out/count-privacy.png, $out/count-privacy-off.png, $out/count-privacy-none.png"
+echo "ok: a new profile sent no count, nor did onboarding skipped or left with its switch turned" \
+  "on and off again, nor a profile from before the ask that had sent counts. Onboarding's switch" \
+  "turned on sent nothing while the step showed, and one count as Continue left it, flagged" \
+  "first, weekly and monthly, without a cookie: $first_count. Turned off in Settings › Privacy," \
+  "the next launch sent none though one was due, and turned back on it sent the day's, weekly" \
+  "$weekly and monthly $monthly. One the endpoint refused kept yesterday's date, and the next" \
+  "launch sent it; the launch after on the same day sent none, and a dev build given no endpoint" \
+  "sent none and offered no switch, but did offer the privacy policy. Windows:" \
+  "$out/count-onboarding-off.png, $out/count-onboarding-on.png," \
+  "$out/count-privacy-new.png, $out/count-privacy.png, $out/count-privacy-none.png"

@@ -1,10 +1,8 @@
 //! The browser's commands: their names, their keys and where the command bar offers
 //! them, and what each does, run from a key, a menu, the command bar or the page.
 
-use std::{
-    sync::{Arc, LazyLock},
-    time::Instant,
-};
+use std::sync::{Arc, LazyLock};
+use web_time::Instant;
 
 use gpui::{
     Action, App, Bounds, Context, Global, Image, KeyBinding, MenuItem, Pixels, Point, SharedString,
@@ -104,6 +102,9 @@ pub enum Command {
     Exit,
     /// Closes the Today tabs of the Space shown, but the one shown.
     Clear,
+    /// Brings each site's Today tabs in the Space shown together, at its first tab's place
+    /// (`crate::sort_by_site`).
+    SortBySite,
     /// Undoes the last thing the user did that lost or moved something (`Shell::undo`).
     Undo,
     /// Does again what Undo undid.
@@ -167,6 +168,11 @@ pub enum Command {
     /// Keeps the window over other apps' windows, or lets it go back among them (Arc's Window ›
     /// Stay On Top).
     StayOnTop,
+    /// Moves the sidebar to the window's other side, Settings' Sidebar position, in every window.
+    /// The command bar's alone, with no key (#2375).
+    MoveSidebar,
+    /// Turns Top bar on or off, Settings' Top bar, in every window (#3160).
+    ToggleTopBar,
     /// Turns Developer Mode on or off for the page's site.
     ToggleDeveloperMode,
     /// Opens Chrome's extensions page in a new tab.
@@ -223,6 +229,8 @@ pub enum Command {
     EditBoost,
     /// Opens the Library on the profile's Boosts, or closes it there.
     ViewBoosts,
+    /// Opens the Library on the profile's Boards, or closes it there.
+    ViewBoards,
     /// Opens the command bar over a new pane beside the pages shown, for a split view.
     AddSplit,
     /// Opens a new document in the notes service the Space's profile picks (`crate::notes`), in a
@@ -230,6 +238,11 @@ pub enum Command {
     NewNote,
     /// The same, in a split view with the tab shown.
     NewNoteSplit,
+    /// Makes a Board in the Space's profile and opens it in a pinned tab, with its row's name in
+    /// a field to type over, as New Folder names a folder (#3073).
+    NewBoard,
+    /// Copies the Board shown into a Board of its own, named as a copy, in a new tab (#3406).
+    DuplicateBoard,
     /// Closes the split view's focused page.
     CloseSplitPane,
     /// Takes the split view's focused page out of it, to show alone.
@@ -248,6 +261,8 @@ pub enum Command {
     /// Focuses the split view's page right of the focused one, or left of it.
     NextPane,
     PreviousPane,
+    /// Focuses the split view's page at this place from the left, as Arc's ⌃⇧1–⌃⇧4 do.
+    FocusPane(usize),
     /// Opens Chrome's history page in a new tab.
     ViewHistory,
     /// Opens Chromium's search engines page in a new tab, where the profile's site searches are
@@ -377,6 +392,8 @@ pub(super) const SHORTCUTS: &[(&str, Command, bool)] = &[
     // keeps it. Off the Mac it would be Alt+D, Chrome's, so it has none there.
     ("ctrl-d", Command::ToggleDeveloperMode, false),
     ("cmd-s", Command::ToggleSidebar, false),
+    // Unreserved as ⌘S is, so a page that keeps it, as vscode.dev's Run and Debug, still gets it.
+    ("shift-cmd-d", Command::ToggleTopBar, false),
     // Chrome's key for moving the keyboard out of the page, unreserved as Chrome's is, as Arc's ⌘.
     // is Stop Loading here.
     ("f6", Command::FocusSidebar, false),
@@ -389,12 +406,22 @@ pub(super) const SHORTCUTS: &[(&str, Command, bool)] = &[
     ("ctrl-shift-=", Command::AddSplit, false),
     ("ctrl-shift-+", Command::AddSplit, false),
     ("ctrl-shift-n", Command::NewNote, false),
+    ("ctrl-shift-e", Command::NewBoard, false),
     ("ctrl-shift--", Command::CloseSplitPane, false),
     ("ctrl-shift-_", Command::CloseSplitPane, false),
     ("ctrl-shift-]", Command::NextPane, false),
     ("ctrl-shift-}", Command::NextPane, false),
     ("ctrl-shift-[", Command::PreviousPane, false),
     ("ctrl-shift-{", Command::PreviousPane, false),
+    // A split view has at most four pages. GPUI may name the digit or what ⇧ makes of it.
+    ("ctrl-shift-1", Command::FocusPane(0), false),
+    ("ctrl-shift-!", Command::FocusPane(0), false),
+    ("ctrl-shift-2", Command::FocusPane(1), false),
+    ("ctrl-shift-@", Command::FocusPane(1), false),
+    ("ctrl-shift-3", Command::FocusPane(2), false),
+    ("ctrl-shift-#", Command::FocusPane(2), false),
+    ("ctrl-shift-4", Command::FocusPane(3), false),
+    ("ctrl-shift-$", Command::FocusPane(3), false),
     ("escape", Command::Stop, false),
     ("ctrl-1", Command::SelectSpace(0), false),
     ("ctrl-2", Command::SelectSpace(1), false),
@@ -414,6 +441,20 @@ const HIDE_SIDEBAR: &str = "Hide Sidebar";
 /// Window › Stay On Top, and the command bar's row that ends it while it's on.
 pub const STAY_ON_TOP: &str = "Stay On Top";
 const DONT_STAY_ON_TOP: &str = "Don't Stay On Top";
+
+/// The command bar's rows for Sidebar position, of which it lists the one that would move it.
+const SIDEBAR_TO_RIGHT: &str = "Move Sidebar to the Right";
+const SIDEBAR_TO_LEFT: &str = "Move Sidebar to the Left";
+pub(super) const SHOW_TOP_BAR: &str = "Show Top Bar";
+pub(super) const HIDE_TOP_BAR: &str = "Hide Top Bar";
+
+/// Top bar's item in a menu and its row in the command bar, by whether it's on.
+pub(super) fn top_bar_title(on: bool) -> &'static str {
+    match on {
+        true => HIDE_TOP_BAR,
+        false => SHOW_TOP_BAR,
+    }
+}
 
 /// The page's Developer Mode's rows in the command bar, of which it lists the one that would change
 /// it (Arc's, in sentence case).
@@ -456,6 +497,11 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
     ),
     ("Archive Tab", Command::CloseTab, &["close tab"]),
     ("Clear Today", Command::Clear, &["unpinned tabs"]),
+    (
+        "Sort Today Tabs by Site",
+        Command::SortBySite,
+        &["group tabs by site", "tidy tabs"],
+    ),
     (
         "Clear Cache and Refresh",
         Command::ClearCacheAndRefresh,
@@ -611,6 +657,21 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         Command::NewNoteSplit,
         &["document", "side by side"],
     ),
+    (
+        "New Board",
+        Command::NewBoard,
+        &["canvas", "whiteboard", "moodboard", "easel", "sketch"],
+    ),
+    (
+        "Duplicate Board",
+        Command::DuplicateBoard,
+        &["copy", "canvas", "whiteboard", "moodboard", "easel"],
+    ),
+    (
+        "View Boards…",
+        Command::ViewBoards,
+        &["canvas", "whiteboard", "moodboard", "easel", "sketch"],
+    ),
     ("Toggle Sidebar", Command::ToggleSidebar, &["hide", "show"]),
     (
         "Automatic Appearance",
@@ -665,6 +726,26 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         DONT_STAY_ON_TOP,
         Command::StayOnTop,
         &["float", "always on top", "pin window"],
+    ),
+    (
+        SIDEBAR_TO_RIGHT,
+        Command::MoveSidebar,
+        &["side", "position", "left", "right"],
+    ),
+    (
+        SIDEBAR_TO_LEFT,
+        Command::MoveSidebar,
+        &["side", "position", "left", "right"],
+    ),
+    (
+        SHOW_TOP_BAR,
+        Command::ToggleTopBar,
+        &["toolbar", "address bar", "url bar"],
+    ),
+    (
+        HIDE_TOP_BAR,
+        Command::ToggleTopBar,
+        &["toolbar", "address bar", "url bar"],
     ),
     (
         trace::RECORD,
@@ -1151,6 +1232,7 @@ impl Command {
     pub fn key_name(self) -> String {
         match self {
             Command::SelectSpace(index) => format!("select-space-{}", index + 1),
+            Command::FocusPane(index) => format!("focus-pane-{}", index + 1),
             _ => self.name().to_string(),
         }
     }
@@ -1197,6 +1279,7 @@ impl Command {
             Command::ToggleFullScreen => "toggle-full-screen",
             Command::Exit => "exit",
             Command::Clear => "clear",
+            Command::SortBySite => "sort-by-site",
             Command::Undo => "undo",
             Command::Redo => "redo",
             Command::CopyUrl => "copy-url",
@@ -1232,6 +1315,8 @@ impl Command {
             Command::TaskManager => "task-manager",
             Command::RecordTrace => "record-trace",
             Command::StayOnTop => "stay-on-top",
+            Command::MoveSidebar => "move-sidebar",
+            Command::ToggleTopBar => "toggle-top-bar",
             Command::ToggleDeveloperMode => "toggle-developer-mode",
             Command::ManageExtensions => "manage-extensions",
             Command::AddExtension => "add-extension",
@@ -1263,6 +1348,9 @@ impl Command {
             Command::AddSplit => "add-split",
             Command::NewNote => "new-note",
             Command::NewNoteSplit => "new-note-split",
+            Command::NewBoard => "new-board",
+            Command::DuplicateBoard => "duplicate-board",
+            Command::ViewBoards => "view-boards",
             Command::CloseSplitPane => "close-split-pane",
             Command::SeparatePane => "separate-pane",
             Command::SeparateSplit => "separate-split",
@@ -1273,6 +1361,7 @@ impl Command {
             Command::MovePaneRight => "move-pane-right",
             Command::NextPane => "next-pane",
             Command::PreviousPane => "previous-pane",
+            Command::FocusPane(_) => "focus-pane",
             Command::ViewHistory => "view-history",
             Command::SiteSearchSettings => "site-search-settings",
             Command::ClearBrowsingData => "clear-browsing-data",
@@ -1339,6 +1428,16 @@ pub fn window_became_key(shell: WeakEntity<Shell>) -> impl FnOnce(&mut App) + 's
     }
 }
 
+/// Whether a window made key since `shell` was has yet to be heard, so `shell` hearing late mustn't
+/// take the shortcuts back from it (#2648).
+pub(super) fn key_moved_on(shell: &WeakEntity<Shell>) -> bool {
+    MADE_KEY.with_borrow(|made_key| {
+        made_key
+            .as_ref()
+            .is_some_and(|made_key| made_key != shell && made_key.upgrade().is_some())
+    })
+}
+
 /// The shell made key has heard, so the ShellHandle names it.
 pub(super) fn heard_key(shell: &WeakEntity<Shell>) {
     MADE_KEY.with_borrow_mut(|made_key| {
@@ -1387,6 +1486,7 @@ pub fn bind_keys(cx: &mut App) {
     translate::bind(cx);
     boost::bind(cx);
     sidebar_keys::bind(cx);
+    super::library::keys::bind(cx);
 }
 
 /// The command bar is about to put `tab` in a split view with `with`: the pages shown take back the
@@ -1422,17 +1522,87 @@ pub fn task_page_shown(tab: u64, cx: &App) -> bool {
     shell.is_some_and(|shell| shell.read(cx).task_page_live() == Some(tab))
 }
 
+/// Whether the window's page, or one the command bar opens there, is an agent's: while a task's area
+/// is up, whose page is the task's or opens under it, or in an agent's Space.
+pub fn agents_page_shown(cx: &App) -> bool {
+    let shell = key_shell(cx).and_then(|shell| shell.upgrade());
+    shell.is_some_and(|shell| {
+        let shell = shell.read(cx);
+        shell.task_area.is_some() || !shell.browser.space_agent(shell.space).is_empty()
+    })
+}
+
 /// A menu item that runs `command`, showing its shortcut.
 pub fn menu_item(name: impl Into<SharedString>, command: Command) -> MenuItem {
     MenuItem::action(name, Run(command))
 }
 
 impl Shell {
+    /// Opens the command bar on the tab the URL field shows, or as for a new one with none.
+    pub(super) fn edit_url(&mut self, from: &str, cx: &mut Context<Self>) {
+        self.set_new_tab(false, cx);
+        let tab = self.field_tab();
+        let editing = (tab != 0).then(|| (tab, self.url(tab)));
+        self.set_bar_over_card(editing.is_none(), cx);
+        // A click on the URL field opens the bar over the field, and ⌘L centred (Arc). In a Little
+        // ilo window a click on its bar's title opens it compact over the title, and the keys
+        // inside the window.
+        let field = match self.little_field_bounds(cx) {
+            Some(title) if from == "little bar" => Some(title),
+            Some(_) => {
+                let (bar, shown) = (self.little_bar_bounds(), self.shown_urls());
+                return self
+                    .browser
+                    .command_bar_in(editing, shown, self.bar_tabs(cx), bar, cx);
+            }
+            None if from == "sidebar" => self.url_field_bounds(),
+            None => None,
+        };
+        let shown = self.shown_urls();
+        self.browser
+            .command_bar(editing, shown, self.bar_tabs(cx), field, cx);
+    }
+
+    /// ⌘W: closes the tab shown. From a window of Chrome's, such as its Task Manager, it closes
+    /// that window, as in Chrome, and leaves the tab alone. With no tab selected there is no page
+    /// to close, so it closes the window, as ⇧⌘W does.
+    pub(super) fn close_shown(&mut self, cx: &mut Context<Self>) {
+        if self.browser.close_other_window(cx) {
+            return;
+        }
+        if !self.chosen.is_empty() {
+            self.close_chosen(cx);
+        } else if self.selected != 0 && !self.tab_open(self.selected) {
+            // The tab shown has closed and the core hasn't said which shows next: that's the one
+            // this press closes, as a user closing tabs fast means (#3570).
+            let presses = match self.close_waits {
+                Some((space, presses)) if space == self.space => presses,
+                _ => 0,
+            };
+            self.close_waits = Some((self.space, presses + 1));
+        } else if self.selected != 0 {
+            // A pinned split's pages all go, and it stays a pinned split, as its − does (Arc
+            // 1.171), and so do a favorite split's, its tile kept.
+            let tab = self.selected;
+            let kept = self.pinned().contains(&tab) || self.favorite_split(tab).is_some();
+            let split = kept && self.panes(tab).len() > 1;
+            self.close_tab(tab, split, cx);
+        } else {
+            self.browser.close_window(cx);
+        }
+    }
+
     /// Runs a browser command and logs it. `from` says which side had the key: GPUI's bindings
     /// ("ui"), the browser handing it back ("page"), or the sidebar.
     pub fn run(&mut self, command: Command, from: &str, cx: &mut Context<Self>) {
         // check.sh waits for these lines.
         log!("browser: command {} via {from}", command.name());
+        // A command after a ⌘L still waiting for the tab shown next is the one the user wants.
+        self.edit_url_waits = None;
+        // And so is any but another ⌘W after one waiting to close the tab shown next (#3570).
+        if !matches!(command, Command::CloseTab) {
+            self.close_waits = None;
+        }
         if self.one_space() && !private_runs(command) {
             return;
         }
@@ -1483,6 +1653,9 @@ impl Shell {
         }
         let target = match command {
             Command::NewTab => {
+                // The page it opens is where the user's going, so the ring ends, as return on a
+                // tab's row ends it, and Tab from the window rings that page's row (#3151).
+                self.leave_keys("new tab", cx);
                 self.set_new_tab(true, cx);
                 self.set_bar_over_card(true, cx);
                 let shown = self.shown_urls();
@@ -1495,34 +1668,13 @@ impl Shell {
                 self.set_bar_over_card(true, cx);
                 return self.browser.search_tabs(self.open_tabs(cx), cx);
             }
-            Command::EditUrl => {
-                self.set_new_tab(false, cx);
-                let tab = self.field_tab();
-                let editing = (tab != 0).then(|| (tab, self.url(tab)));
-                self.set_bar_over_card(editing.is_none(), cx);
-                // A click on the URL field opens the bar over the field, and ⌘L centred (Arc). In a
-                // Little ilo window a click on its bar's title opens it compact over the title, and
-                // the keys inside the window.
-                let field = match self.little_field_bounds(cx) {
-                    Some(title) if from == "little bar" => Some(title),
-                    Some(_) => {
-                        let (bar, shown) = (self.little_bar_bounds(), self.shown_urls());
-                        return self.browser.command_bar_in(
-                            editing,
-                            shown,
-                            self.bar_tabs(cx),
-                            bar,
-                            cx,
-                        );
-                    }
-                    None if from == "sidebar" => self.url_field_bounds(),
-                    None => None,
-                };
-                let shown = self.shown_urls();
-                return self
-                    .browser
-                    .command_bar(editing, shown, self.bar_tabs(cx), field, cx);
+            // The tab shown closed and the core hasn't said which shows next, which the bar edits
+            // then, as the closed one's ↩ would load nothing (#2953).
+            Command::EditUrl if self.field_tab() != 0 && !self.tab_open(self.field_tab()) => {
+                self.edit_url_waits = Some(from.to_string());
+                return;
             }
+            Command::EditUrl => return self.edit_url(from, cx),
             // A Little ilo window's page closes with it (Arc).
             Command::CloseTab if self.little.is_some() => {
                 if !self.browser.close_other_window(cx) {
@@ -1530,27 +1682,7 @@ impl Shell {
                 }
                 return;
             }
-            Command::CloseTab => {
-                // From a window of Chrome's, such as its Task Manager, ⌘W closes that window, as in
-                // Chrome, and leaves the tab alone. With no tab selected there is no page to
-                // close, so it closes the window, as ⇧⌘W does.
-                if !self.browser.close_other_window(cx) {
-                    if !self.chosen.is_empty() {
-                        self.close_chosen(cx);
-                    } else if self.selected != 0 {
-                        // A pinned split's pages all go, and it stays a pinned split, as its −
-                        // does (Arc 1.171), and so do a favorite split's, its tile kept.
-                        let tab = self.selected;
-                        let kept =
-                            self.pinned().contains(&tab) || self.favorite_split(tab).is_some();
-                        let split = kept && self.panes(tab).len() > 1;
-                        self.close_tab(tab, split, cx);
-                    } else {
-                        self.browser.close_window(cx);
-                    }
-                }
-                return;
-            }
+            Command::CloseTab => return self.close_shown(cx),
             Command::NewWindow => return self.browser.new_window(cx),
             Command::NewPrivateWindow => return self.browser.new_private_window(cx),
             // Off in Settings › Features, ⌥⌘N does nothing.
@@ -1610,6 +1742,9 @@ impl Shell {
             Command::ToggleFullScreen => return self.browser.toggle_full_screen(cx),
             Command::Exit => return self.browser.toggle_full_screen(cx),
             Command::Clear => return self.clear(cx),
+            Command::SortBySite => return self.sort_by_site(cx),
+            // While Arrange is on, ⌘Z and the Edit menu's Undo take back its steps (shell/arrange.rs).
+            Command::Undo if self.undo_arrange(self.field_tab(), cx) => return,
             Command::Undo => {
                 self.undo(cx);
                 return;
@@ -1639,7 +1774,7 @@ impl Shell {
             }
             // Escape closes the Library, after a picker over it, which has the keyboard, has
             // closed (the owner, #1074; Arc's doesn't).
-            Command::Stop if self.library_open => return self.set_library(false, cx),
+            Command::Stop if self.library_open => return self.escape_library(cx),
             // Escape leaves full screen when there's no load to stop, as the note there says.
             Command::Stop if self.full_screen && !self.page_fullscreen => {
                 if !self.page(self.selected).loading {
@@ -1663,6 +1798,12 @@ impl Shell {
                 return self.update_menus(cx);
             }
             Command::StayOnTop => return self.toggle_on_top(cx),
+            Command::MoveSidebar => {
+                return self
+                    .browser
+                    .keep_sidebar_right(!super::sidebar_right(cx), cx);
+            }
+            Command::ToggleTopBar => return self.browser.keep_top_bar(!self.top_bar, cx),
             Command::ToggleDeveloperMode => {
                 let on = !self.page(self.selected).developer_mode;
                 return self.browser.set_developer_mode(self.selected, on, cx);
@@ -1687,11 +1828,11 @@ impl Shell {
             }
             Command::Welcome => return self.welcome_again(cx),
             Command::ReportProblem => {
-                let url = BuildInfo::here().issue_url(build_info::NEW_ISSUE);
+                let url = BuildInfo::here(cx).issue_url(build_info::NEW_ISSUE);
                 return self.browser.open_page(&url, cx);
             }
             Command::CopyBuildInfo => {
-                return self.copy(&BuildInfo::here().text(), "Copied Build Info", cx);
+                return self.copy(&BuildInfo::here(cx).text(), "Copied Build Info", cx);
             }
             Command::HelpCenter => return self.browser.open_page(build_info::HELP_CENTER, cx),
             Command::WhatsNew => return self.browser.open_page(build_info::WHATS_NEW, cx),
@@ -1708,6 +1849,18 @@ impl Shell {
             Command::Quit => return self.browser.quit(cx),
             Command::AddSplit => return self.add_pane(cx),
             Command::NewNote => return self.browser.new_note(self.space, None, cx),
+            Command::NewBoard => return self.new_board(cx),
+            Command::DuplicateBoard => {
+                if let Some(id) = crate::boards::id_in(&self.page(self.selected).url) {
+                    self.duplicate_board(id.to_owned(), cx);
+                }
+                return;
+            }
+            Command::ViewBoards => {
+                return self.library_command(from, cx, |shell, cx| {
+                    shell.view_section(Section::Boards, cx)
+                });
+            }
             Command::NewNoteSplit => {
                 let with = self.selected;
                 if with != 0 && !self.split_full(with, cx) {
@@ -1753,15 +1906,39 @@ impl Shell {
             }
             Command::NextPane => return self.focus_pane(true, cx),
             Command::PreviousPane => return self.focus_pane(false, cx),
+            Command::FocusPane(index) => return self.focus_pane_at(index, cx),
             Command::ToggleSidebar => return self.toggle_sidebar(cx),
             Command::Appearance(appearance) => return self.set_app_appearance(appearance, cx),
-            Command::ViewLibrary => return self.set_library(!self.library_open, cx),
-            Command::ViewArchive => return self.view_section(Section::Archive, cx),
-            Command::ViewDownloads => return self.view_section(Section::Downloads, cx),
-            Command::ViewMedia => return self.view_section(Section::Media, cx),
-            Command::ViewAgents => return self.view_section(Section::Agents, cx),
+            Command::ViewLibrary => {
+                return self.library_command(from, cx, |shell, cx| {
+                    shell.set_library(!shell.library_open, cx)
+                });
+            }
+            Command::ViewArchive => {
+                return self.library_command(from, cx, |shell, cx| {
+                    shell.view_section(Section::Archive, cx)
+                });
+            }
+            Command::ViewDownloads => {
+                return self.library_command(from, cx, |shell, cx| {
+                    shell.view_section(Section::Downloads, cx)
+                });
+            }
+            Command::ViewMedia => {
+                return self
+                    .library_command(from, cx, |shell, cx| shell.view_section(Section::Media, cx));
+            }
+            Command::ViewAgents => {
+                return self.library_command(from, cx, |shell, cx| {
+                    shell.view_section(Section::Agents, cx)
+                });
+            }
             Command::NewBoost | Command::EditBoost => return self.open_boost(cx),
-            Command::ViewBoosts => return self.view_section(Section::Boosts, cx),
+            Command::ViewBoosts => {
+                return self.library_command(from, cx, |shell, cx| {
+                    shell.view_section(Section::Boosts, cx)
+                });
+            }
             Command::ClearArchive => return self.clear_archive(cx),
             Command::NewSpace => return self.new_space(cx),
             Command::RenameSpace => return self.rename_space(self.space, cx),
@@ -1837,47 +2014,6 @@ impl Shell {
             false => index + self.favorites.len(),
         };
         (index < count).then_some(index)
-    }
-
-    /// ⌃Tab, as in Arc: shows the Space's tab shown before this one at once, with no switcher.
-    /// While ⌃ is held, each ⌃Tab goes on to the one shown before that, and ⌃⇧Tab back. A split's
-    /// row counts once.
-    fn walk(&mut self, rows: Vec<u64>, forward: bool, cx: &mut Context<Self>) {
-        // Then the rows not shown yet, in the sidebar's order.
-        let mut order: Vec<u64> = Vec::new();
-        for row in self
-            .recent
-            .iter()
-            .map(|&tab| self.row_of(tab))
-            .chain(rows.iter().copied())
-        {
-            if rows.contains(&row) && !order.contains(&row) {
-                order.push(row);
-            }
-        }
-        let count = order.len();
-        let next = match order
-            .iter()
-            .position(|&row| row == self.row_of(self.selected))
-        {
-            Some(at) if forward => (at + 1) % count,
-            Some(at) => (at + count - 1) % count,
-            // With no tab shown, the tab shown last (Arc).
-            None if forward && count > 0 => 0,
-            None => match count.checked_sub(1) {
-                Some(last) => last,
-                None => return,
-            },
-        };
-        let tab = self.row_tab(order[next]);
-        if tab == self.selected {
-            return;
-        }
-        if self.walked.is_none() {
-            self.browser.watch_control(cx);
-        }
-        self.walked = Some(tab);
-        self.select(tab, cx);
     }
 
     /// Clears the Space shown, but the tab shown, unless that's all there is to clear. Its rows go
@@ -1958,22 +2094,34 @@ impl Shell {
     /// does. The clipboard is read only now, and text that isn't one http(s) link opens nothing,
     /// as a drop of it doesn't. No agent path: the clipboard is the user's.
     fn paste_url_as_tab(&mut self, cx: &mut Context<Self>) {
-        if let Some(urls) = self.pasted_urls(cx) {
-            self.browser.open_at(&urls, false, 0, 0, cx);
-        }
+        self.pasted_urls(cx, |shell, urls, cx| {
+            shell.browser.open_at(&urls, false, 0, 0, cx);
+        });
     }
 
-    /// The clipboard's web link, read now, as one URL to open, or None for anything else.
-    pub(super) fn pasted_urls(&self, cx: &App) -> Option<Vec<String>> {
+    /// Hands `then` the clipboard's web link, read now, as one URL to open, and nothing for
+    /// anything else.
+    pub(super) fn pasted_urls(
+        &self,
+        cx: &mut Context<Self>,
+        then: impl FnOnce(&mut Self, Vec<String>, &mut Context<Self>) + 'static,
+    ) {
+        let shell = cx.entity().downgrade();
         // From the host, where Copy Link put it: a driven Mac run's pasteboard is its own.
-        let text = self.browser.pasted(cx).unwrap_or_default();
-        // Text that isn't a web link opens nothing here, not a search, as Arc's ⌥⌘V does.
-        let urls = dropped_urls([(text.trim(), false)], |_| None);
-        if urls.is_empty() {
-            // check.sh reads this line.
-            log!("browser: pasted no URL");
-        }
-        Some(urls).filter(|urls| !urls.is_empty())
+        self.browser.pasted(
+            cx,
+            Box::new(move |text, cx| {
+                let text = text.unwrap_or_default();
+                // Text that isn't a web link opens nothing here, not a search, as Arc's ⌥⌘V does.
+                let urls = dropped_urls([(text.trim(), false)], |_| None);
+                if urls.is_empty() {
+                    // check.sh reads this line.
+                    log!("browser: pasted no URL");
+                    return;
+                }
+                shell.update(cx, |shell, cx| then(shell, urls, cx)).ok();
+            }),
+        );
     }
 
     /// File › Share… and the command bar's Share…: the system's share sheet for the page shown,
@@ -1984,15 +2132,16 @@ impl Shell {
             return;
         }
         let at = match self.url_field_bounds() {
-            Some(field) => point(field.center().x, field.bottom()) + self.sidebar_origin.get(),
+            Some(field) => point(field.center().x, field.bottom()),
             None => {
                 let page = self.page_frame(self.viewport).0;
                 point(page.center().x, page.top())
             }
         };
-        let title = self.title(self.selected);
-        self.browser
-            .show_share_sheet(self.selected, &link, &title, at, cx);
+        let (tab, title) = (self.selected, self.title(self.selected));
+        // After this update, as finding the tab's window reads every Shell (#2459).
+        let browser = self.browser.clone();
+        cx.defer(move |cx| browser.show_share_sheet(tab, &link, &title, at, cx));
     }
 
     /// `tab`'s link to copy, as a Markdown link if `markdown`, and the toast to say so with.
@@ -2239,6 +2388,8 @@ impl Shell {
                     .any(|&folder| !space.is_open(folder))
             }),
             Command::Clear => !self.today().is_empty(),
+            // With every site's tabs together already, it would change nothing.
+            Command::SortBySite => self.sorted_by_site(self.space).is_some(),
             Command::FavoriteTab => {
                 let tab = self.selected;
                 tab != 0 && !self.favorites.contains(&tab) && self.has_room_for(tab)
@@ -2261,6 +2412,10 @@ impl Shell {
                 self.profile_choices(self.space).is_some_and(|(_, new)| new)
             }
             Command::ToggleFullScreen => true,
+            // A Board's second tab would only say it's open in another tab, so over a Board it's
+            // Duplicate Board.
+            Command::DuplicateTab => crate::boards::id_in(&page.url).is_none(),
+            Command::DuplicateBoard => crate::boards::id_in(&page.url).is_some(),
             // Only full screen, the page's too, has something to leave.
             Command::Exit => self.full_screen,
             Command::CheckForUpdates => self.browser.updates(),
@@ -2284,6 +2439,8 @@ impl Shell {
             | Command::RenameSpace
             | Command::EditTheme
             | Command::ExportSpace
+            | Command::NewBoard
+            | Command::ViewBoards
             | Command::ViewLibrary
             | Command::ViewArchive
             | Command::ClearArchive
@@ -2305,6 +2462,8 @@ impl Shell {
             | Command::Appearance(_)
             | Command::RecordTrace
             | Command::StayOnTop
+            | Command::MoveSidebar
+            | Command::ToggleTopBar
             | Command::ReportProblem
             | Command::CopyBuildInfo
             | Command::HelpCenter
@@ -2378,6 +2537,14 @@ impl Shell {
                     })
             .then_some(name),
             Command::CheckForUpdates => (name == crate::updates::command_title(cx)).then_some(name),
+            Command::MoveSidebar => {
+                let to = match super::sidebar_right(cx) {
+                    true => SIDEBAR_TO_LEFT,
+                    false => SIDEBAR_TO_RIGHT,
+                };
+                (name == to).then_some(name)
+            }
+            Command::ToggleTopBar => (name == top_bar_title(self.top_bar)).then_some(name),
             _ => Some(name),
         }
     }
@@ -2518,6 +2685,10 @@ pub(super) fn private_runs(command: Command) -> bool {
             // The service's document needs the profile's sign-in, which a private window hasn't.
             | Command::NewNote
             | Command::NewNoteSplit
+            // A Board is a folder of the profile's, and a private window keeps none.
+            | Command::NewBoard
+            | Command::DuplicateBoard
+            | Command::ViewBoards
     )
 }
 
@@ -2802,6 +2973,314 @@ mod tests {
         });
         assert!(host.followed_tabs.take().is_empty());
         assert!(!shell.read_with(cx, |shell, _| shell.new_tab));
+    }
+
+    /// A browser shortcut pressed while ⌘L's bar has the keyboard, which shows another tab of the
+    /// Space, tells the bar, whose pick opens a new tab now, and New Tab takes the plate: ↩ never
+    /// loads in the tab the user left (#3428). ⌘L opened from the page or from the UI alike. The
+    /// same tab shown again, or the bar closed, tells it nothing.
+    #[gpui::test]
+    fn the_open_url_bar_follows_another_tab_a_shortcut_shows(cx: &mut gpui::TestAppContext) {
+        use std::rc::Rc;
+
+        use crate::shell::{Folders, Page, recorder::Recorder};
+
+        for from in ["page", "ui"] {
+            let host = Rc::new(Recorder::default());
+            let browser = host.clone();
+            let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+            shell.update(cx, |shell, cx| {
+                let space = (1, "One".into(), None, 1, "".into(), "".into(), "".into());
+                shell.set_spaces(vec![space], cx);
+                shell.set_tabs(
+                    1,
+                    Vec::new(),
+                    vec![11, 12],
+                    Vec::new(),
+                    Folders::default(),
+                    cx,
+                );
+                for tab in [11, 12] {
+                    let page = Page {
+                        url: format!("https://{tab}.test/").into(),
+                        ..Page::default()
+                    };
+                    shell.set_page(tab, page, cx);
+                }
+                shell.set_space(1, cx);
+                shell.set_selected(11, cx);
+                shell.run(Command::EditUrl, from, cx);
+            });
+            assert_eq!(host.bar_edits.take(), [Some(11)], "⌘L from the {from}");
+            host.take();
+            // The bar has the keyboard, so the shortcut comes from it, as the UI's.
+            shell.update(cx, |shell, cx| shell.run(Command::NextTab, "ui", cx));
+            assert_eq!(host.take(), ["select 12"], "⌘L from the {from}");
+            shell.update(cx, |shell, cx| shell.set_selected(12, cx));
+            assert_eq!(host.tabs_shown_to_bar.take(), [12], "⌘L from the {from}");
+            assert!(
+                shell.read_with(cx, |shell, _| shell.new_tab),
+                "New Tab takes the plate, ⌘L from the {from}"
+            );
+
+            shell.update(cx, |shell, cx| shell.set_selected(12, cx));
+            assert!(host.tabs_shown_to_bar.take().is_empty());
+            host.bar_open.set(false);
+            shell.update(cx, |shell, cx| shell.set_selected(11, cx));
+            assert!(host.tabs_shown_to_bar.take().is_empty());
+        }
+    }
+
+    /// ⌘L in the moment after the tab shown closes, before the window shows the next, opens the
+    /// bar on the tab shown next, which ↩ then loads, in the order the core reports them (#2953).
+    #[gpui::test]
+    fn edit_url_as_the_tab_shown_closes_edits_the_one_shown_next(cx: &mut gpui::TestAppContext) {
+        use std::rc::Rc;
+
+        use crate::shell::{Folders, Page, recorder::Recorder};
+
+        let host = Rc::new(Recorder::default());
+        let browser = host.clone();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+        let today = |shell: &mut Shell, tabs: Vec<u64>, cx: &mut Context<Shell>| {
+            shell.set_tabs(1, Vec::new(), tabs, Vec::new(), Folders::default(), cx);
+        };
+        shell.update(cx, |shell, cx| {
+            let space = (1, "One".into(), None, 1, "".into(), "".into(), "".into());
+            shell.set_spaces(vec![space], cx);
+            today(shell, vec![4, 6, 7, 8], cx);
+            for tab in [4, 6, 7, 8] {
+                let page = Page {
+                    url: format!("https://{tab}.test/").into(),
+                    ..Page::default()
+                };
+                shell.set_page(tab, page, cx);
+            }
+            shell.set_space(1, cx);
+            shell.set_selected(8, cx);
+            // The pop-up's tab closes, and ⌘L comes before the window shows the tab before it.
+            today(shell, vec![4, 6, 7], cx);
+            shell.run(Command::EditUrl, "ui", cx);
+        });
+        assert!(
+            host.bar_edits.take().is_empty(),
+            "the bar waits for the tab shown next"
+        );
+        shell.update(cx, |shell, cx| shell.set_selected(7, cx));
+        assert_eq!(host.bar_edits.take(), [Some(7)]);
+
+        // With the tab shown open, ⌘L opens the bar on it at once.
+        shell.update(cx, |shell, cx| shell.run(Command::EditUrl, "ui", cx));
+        assert_eq!(host.bar_edits.take(), [Some(7)]);
+
+        // A command after the ⌘L is the one the user wants: ⌘T's bar stays, and the tab shown next
+        // opens no other over it.
+        shell.update(cx, |shell, cx| {
+            today(shell, vec![4, 6], cx);
+            shell.run(Command::EditUrl, "ui", cx);
+            shell.run(Command::NewTab, "ui", cx);
+            shell.set_selected(6, cx);
+        });
+        assert_eq!(host.bar_edits.take(), [None], "only ⌘T's bar opened");
+
+        // The Space left empty shows no tab, and the bar opens as for none.
+        shell.update(cx, |shell, cx| {
+            today(shell, Vec::new(), cx);
+            shell.run(Command::EditUrl, "ui", cx);
+            shell.set_selected(0, cx);
+        });
+        assert_eq!(host.bar_edits.take(), [None]);
+    }
+
+    /// ⌘W in the moment after the tab shown closes, before the window shows the next, closes the
+    /// tab shown next, and each of two such presses closes one, as when the user closes tabs fast
+    /// (#3570). With the Space left empty, the press closes nothing more, not the window.
+    #[gpui::test]
+    fn close_tab_as_the_tab_shown_closes_closes_the_one_shown_next(cx: &mut gpui::TestAppContext) {
+        use std::rc::Rc;
+
+        use crate::shell::{Folders, Page, recorder::Recorder};
+
+        let host = Rc::new(Recorder::default());
+        let browser = host.clone();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+        let today = |shell: &mut Shell, tabs: Vec<u64>, cx: &mut Context<Shell>| {
+            shell.set_tabs(1, Vec::new(), tabs, Vec::new(), Folders::default(), cx);
+        };
+        let closes = |host: &Recorder| {
+            host.take()
+                .into_iter()
+                .filter(|call| call.starts_with("close"))
+                .collect::<Vec<_>>()
+        };
+        shell.update(cx, |shell, cx| {
+            let space = (1, "One".into(), None, 1, "".into(), "".into(), "".into());
+            shell.set_spaces(vec![space], cx);
+            today(shell, vec![4, 6, 7, 8], cx);
+            for tab in [4, 6, 7, 8] {
+                let page = Page {
+                    url: format!("https://{tab}.test/").into(),
+                    ..Page::default()
+                };
+                shell.set_page(tab, page, cx);
+            }
+            shell.set_space(1, cx);
+            shell.set_selected(8, cx);
+            shell.run(Command::CloseTab, "page", cx);
+        });
+        assert_eq!(closes(&host), ["close 8"]);
+
+        // The core says 8 has gone, and ⌘W comes before it says which tab shows next.
+        shell.update(cx, |shell, cx| {
+            today(shell, vec![4, 6, 7], cx);
+            shell.run(Command::CloseTab, "ui", cx);
+        });
+        assert_eq!(
+            closes(&host),
+            Vec::<String>::new(),
+            "⌘W waits for the tab shown next"
+        );
+        shell.update(cx, |shell, cx| shell.set_selected(7, cx));
+        assert_eq!(closes(&host), ["close 7"], "⌘W closes the tab shown next");
+
+        // Two presses in the gap close one tab each, as the core shows each next.
+        shell.update(cx, |shell, cx| {
+            today(shell, vec![4, 6], cx);
+            shell.run(Command::CloseTab, "ui", cx);
+            shell.run(Command::CloseTab, "ui", cx);
+            shell.set_selected(6, cx);
+        });
+        assert_eq!(closes(&host), ["close 6"]);
+        shell.update(cx, |shell, cx| {
+            today(shell, vec![4], cx);
+            shell.set_selected(4, cx);
+        });
+        assert_eq!(
+            closes(&host),
+            ["close 4"],
+            "the second press closes the next"
+        );
+
+        // The Space left empty shows no tab: the press waiting closes neither a tab nor the window,
+        // and the next ⌘W, with no tab shown, closes the window as before.
+        shell.update(cx, |shell, cx| {
+            today(shell, Vec::new(), cx);
+            shell.run(Command::CloseTab, "ui", cx);
+            shell.set_selected(0, cx);
+        });
+        assert!(
+            closes(&host).is_empty(),
+            "nothing closes for the press in the gap"
+        );
+        shell.update(cx, |shell, cx| shell.run(Command::CloseTab, "ui", cx));
+        assert_eq!(closes(&host), ["close window"]);
+
+        // Nor does a press in the gap close a tab of another Space the window shows next.
+        shell.update(cx, |shell, cx| {
+            let space =
+                |id, name: &str| (id, name.into(), None, 1, "".into(), "".into(), "".into());
+            shell.set_spaces(vec![space(1, "One"), space(2, "Two")], cx);
+            today(shell, vec![5], cx);
+            shell.set_tabs(2, Vec::new(), vec![9], Vec::new(), Folders::default(), cx);
+            shell.set_selected(5, cx);
+            today(shell, Vec::new(), cx);
+            shell.run(Command::CloseTab, "ui", cx);
+            shell.set_selected(9, cx);
+            shell.set_space(2, cx);
+        });
+        assert!(closes(&host).is_empty(), "another Space's tab stays");
+    }
+
+    /// ⌘W's wait for the tab shown next never outlives its moment: the user's next action, the
+    /// core's next selection whichever way it goes, or another Space shown ends it, and a tab the
+    /// user picks later never closes (#3570).
+    #[gpui::test]
+    fn close_tab_waiting_ends_with_the_next_selection_or_action(cx: &mut gpui::TestAppContext) {
+        use std::rc::Rc;
+
+        use crate::shell::{Folders, Page, recorder::Recorder};
+
+        let host = Rc::new(Recorder::default());
+        let browser = host.clone();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+        let closes = |host: &Recorder| {
+            host.take()
+                .into_iter()
+                .filter(|call| call.starts_with("close"))
+                .collect::<Vec<_>>()
+        };
+        shell.update(cx, |shell, cx| {
+            let space =
+                |id, name: &str| (id, name.into(), None, 1, "".into(), "".into(), "".into());
+            shell.set_spaces(vec![space(1, "One"), space(2, "Two")], cx);
+            shell.set_tabs(2, Vec::new(), vec![9], Vec::new(), Folders::default(), cx);
+            for tab in [3, 4, 6, 7, 8, 9] {
+                let page = Page {
+                    url: format!("https://{tab}.test/").into(),
+                    ..Page::default()
+                };
+                shell.set_page(tab, page, cx);
+            }
+            shell.set_space(1, cx);
+        });
+        // `shown` shows in One with `rest` under it; ⌘W closes it, the core says it's gone, and a
+        // second ⌘W comes before the core says which tab shows next.
+        let press_in_the_gap = |shell: &gpui::Entity<Shell>,
+                                shown: u64,
+                                rest: Vec<u64>,
+                                cx: &mut gpui::VisualTestContext| {
+            shell.update(cx, |shell: &mut Shell, cx| {
+                let mut tabs = rest.clone();
+                tabs.insert(0, shown);
+                shell.set_tabs(1, Vec::new(), tabs, Vec::new(), Folders::default(), cx);
+                shell.set_selected(shown, cx);
+                shell.run(Command::CloseTab, "page", cx);
+                shell.set_tabs(1, Vec::new(), rest, Vec::new(), Folders::default(), cx);
+                shell.run(Command::CloseTab, "ui", cx);
+            });
+        };
+
+        // The user picks a tab before the core's selection comes: only the first tab closes.
+        press_in_the_gap(&shell, 8, vec![7, 6, 4, 3], cx);
+        shell.update(cx, |shell, cx| {
+            shell.select(4, cx);
+            shell.set_selected(7, cx);
+            shell.set_selected(4, cx);
+        });
+        assert_eq!(closes(&host), ["close 8"], "the tab the user picked stays");
+
+        // Any other command ends the wait, as ⌘T here.
+        press_in_the_gap(&shell, 4, vec![7, 6, 3], cx);
+        shell.update(cx, |shell, cx| {
+            shell.run(Command::NewTab, "ui", cx);
+            shell.set_selected(7, cx);
+        });
+        assert_eq!(closes(&host), ["close 4"], "⌘T after the press keeps 7");
+
+        // The core's selection that a task's page takes ends it too, and a tab selected later
+        // stays.
+        press_in_the_gap(&shell, 7, vec![6, 3], cx);
+        shell.update(cx, |shell, cx| {
+            shell.task_core = 2;
+            shell.set_selected(6, cx);
+            shell.task_core = 0;
+            shell.set_selected(6, cx);
+        });
+        assert_eq!(
+            closes(&host),
+            ["close 7"],
+            "6 stays after a task's page took the selection"
+        );
+
+        // Another Space reported first (#1332), then its tab, then back: nothing more closes.
+        press_in_the_gap(&shell, 6, vec![3], cx);
+        shell.update(cx, |shell, cx| {
+            shell.set_space(2, cx);
+            shell.set_selected(9, cx);
+            shell.set_space(1, cx);
+            shell.set_selected(3, cx);
+        });
+        assert_eq!(closes(&host), ["close 6"], "9 and 3 stay");
     }
 
     /// The bar finds Site Search Settings by its name or by Chrome's, and it opens the search
@@ -3105,6 +3584,67 @@ mod tests {
         );
     }
 
+    /// New Board, from ⌃⇧E, the command bar or the + menu, makes a Board in the Space shown and
+    /// puts its row's name in a field, "Board" all selected, to type over. A private window keeps
+    /// no Boards, so it neither offers nor runs it (#3073's condition 4).
+    #[gpui::test]
+    fn new_board_names_its_row_and_a_private_window_makes_none(cx: &mut gpui::TestAppContext) {
+        use std::rc::Rc;
+
+        use gpui::{AppContext as _, point, px};
+
+        use crate::shell::{Browser, Naming};
+
+        assert_eq!(
+            UserKeys::default().command_for("ctrl-shift-e", false),
+            Some(Command::NewBoard)
+        );
+        let (shell, host) = shell_with_today(cx, vec![10]);
+        shell.update(cx, |shell, cx| {
+            assert!(shell.offers(Command::NewBoard));
+            shell.run(Command::NewBoard, "keys", cx);
+        });
+        cx.run_until_parked();
+        shell.update(cx, |shell, cx| {
+            let renaming = shell
+                .renaming
+                .as_ref()
+                .expect("no field for the Board's name");
+            assert!(matches!(renaming.naming, Naming::Tab(900)));
+            let field = renaming.name.read(cx);
+            assert_eq!((field.text(), field.selection()), ("Board", 0..5));
+            shell.plus_menu(point(px(100.), px(700.)), cx);
+        });
+        let titles: Vec<String> = host
+            .menus
+            .borrow()
+            .last()
+            .unwrap()
+            .iter()
+            .map(|(title, _)| title.to_string())
+            .collect();
+        let split = titles.iter().position(|title| title == "New Split View");
+        assert_eq!(
+            titles.iter().position(|title| title == "New Board"),
+            split.map(|at| at + 1),
+            "New Board isn't after New Split View: {titles:?}"
+        );
+        assert_eq!(host.boards.borrow().len(), 1);
+
+        let browser: Rc<dyn Browser> = host.clone();
+        let private = cx.new(|cx| Shell::private_window(browser, 1, "Incognito".into(), 1, cx));
+        private.update(cx, |shell, cx| {
+            assert!(!shell.offers(Command::NewBoard));
+            assert_eq!(shell.bar_name("New Board", Command::NewBoard, cx), None);
+            shell.run(Command::NewBoard, "keys", cx);
+        });
+        assert_eq!(
+            host.boards.borrow().len(),
+            1,
+            "a private window made a Board"
+        );
+    }
+
     /// Off in Settings › Features, nothing offers or runs New Note or New Note Split: not the +
     /// menu, the command bar or ⌃⇧N. On again, ⌃⇧N opens one.
     #[gpui::test]
@@ -3211,5 +3751,41 @@ mod tests {
             ["select 11"],
             "and still does once the shell has heard"
         );
+    }
+
+    /// A window opened in front keeps the shortcuts when the window made key before it, as one
+    /// closed, hears only after it opened, as macOS reports no key change for the window opened
+    /// in front: ⌘N right after ⇧⌘W, then ⇧⌘W, closes the new window, not the one behind (#2648).
+    #[gpui::test]
+    fn a_window_opened_in_front_keeps_the_shortcuts_from_one_made_key_before(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(bind_keys);
+        let (behind, behind_host) = shell_with_today(cx, vec![11]);
+        cx.run_until_parked();
+
+        // A window closed and left this one key, and its shell hears once the executor turns.
+        let behind_heard = window_became_key(behind.downgrade());
+        // ⌘N's window opens before that turn, and is key from when it opens, as the app makes it.
+        let (opened, opened_host) = shell_with_today(cx, vec![21]);
+        let opened_heard = window_became_key(opened.downgrade());
+        cx.update(behind_heard);
+        behind_host.take();
+        opened_host.take();
+        let closed = |host: &super::super::recorder::Recorder| {
+            host.take().iter().any(|call| call == "close window")
+        };
+
+        cx.update(|cx| cx.dispatch_action(&Run(Command::CloseWindow)));
+        assert!(closed(&opened_host), "⇧⌘W closed the window opened");
+        assert!(!closed(&behind_host), "and not the one behind");
+
+        cx.update(opened_heard);
+        cx.update(|cx| cx.dispatch_action(&Run(Command::CloseWindow)));
+        assert!(
+            closed(&opened_host),
+            "and still does once the window opened has heard"
+        );
+        assert!(!closed(&behind_host), "the one behind still isn't closed");
     }
 }

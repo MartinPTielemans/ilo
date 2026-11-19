@@ -20,21 +20,30 @@
 #include "base/scoped_multi_source_observation.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/bind_post_task.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
+#include "browser_core/agent_job_voter.h"
+#include "browser_core/ax_text.h"
 #include "browser_core/host.h"
 #include "browser_core/platform/window_views.h"
+#include "browser_core/select_choices.h"
+#include "browser_core/space.h"
 #include "browser_core/tab.h"
+#include "browser_core/typing_keys.h"
 #include "browser_core/window.h"
 #include "build/build_config.h"
 #include "chrome/browser/shell_integration.h"
 #include "components/autofill/content/browser/content_autofill_client.h"
 #include "components/autofill/core/browser/filling/filling_product.h"
 #include "components/autofill/core/browser/suggestions/suggestion_hiding_reason.h"
+#include "components/performance_manager/public/performance_manager.h"
 #include "content/public/browser/browser_accessibility_state.h"
 #include "components/viz/common/frame_sinks/copy_output_result.h"
+#include "mojo/public/cpp/bindings/callback_helpers.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/host_zoom_map.h"
 #include "content/public/browser/navigation_controller.h"
@@ -53,6 +62,7 @@
 #include "ui/accessibility/ax_mode.h"
 #include "third_party/blink/public/mojom/input/input_event_result.mojom-shared.h"
 #include "ui/gfx/geometry/point_f.h"
+#include "ui/gfx/geometry/rect.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/gfx/codec/jpeg_codec.h"
 #include "ui/gfx/geometry/size.h"
@@ -74,6 +84,14 @@ constexpr base::TimeDelta kQuiet = base::Milliseconds(500);
 constexpr base::TimeDelta kFrame = base::Hertz(60);
 // What the wheel starts, a scroll or nothing to scroll, has started by then (#1627).
 constexpr base::TimeDelta kSettle = base::Milliseconds(400);
+// What an agent hears when the input would reach an extension's control, which the activity log
+// has too.
+constexpr char kExtensionCovers[] =
+    "An extension's control covers that spot on the page, and agents can't act on an "
+    "extension's controls. Ask the user if it's in the way.";
+constexpr char kExtensionKeyboard[] =
+    "An extension's control has the keyboard in this tab, and agents can't act on an "
+    "extension's controls. Click the page outside it first, or ask the user.";
 // How long a hidden page keeps drawing after an agent's last action, for its next one.
 constexpr base::TimeDelta kRest = base::Seconds(30);
 // Ours: how long a navigation that became a download keeps its action's answer for the download.
@@ -100,35 +118,6 @@ constexpr Key kKeys[] = {
     {"Home", 36, ""},      {"End", 35, ""},
 };
 
-// Whether the node is a field, whose value is the user's: a text field of any kind, a select, a
-// date, time or number input, or an editable region such as a mail's body.
-bool IsField(const base::DictValue& node) {
-  if (const base::ListValue* properties = node.FindList("properties")) {
-    for (const base::Value& property : *properties) {
-      const base::DictValue* dict = property.GetIfDict();
-      const std::string* name = dict ? dict->FindString("name") : nullptr;
-      if (name && *name == "editable") {
-        return true;
-      }
-    }
-  }
-  const std::string* role = node.FindStringByDottedPath("role.value");
-  if (!role) {
-    return false;
-  }
-  static constexpr std::string_view kFields[] = {
-      "textbox", "searchbox", "combobox",  "spinbutton",
-      "date",    "datetime",  "inputtime", "colorwell",
-  };
-  const std::string lower = base::ToLowerASCII(*role);
-  for (std::string_view field : kFields) {
-    if (lower == field) {
-      return true;
-    }
-  }
-  return false;
-}
-
 // Whether an accessibility node is disabled, as a control, or one in a disabled fieldset, is.
 bool IsDisabled(const base::Value& node) {
   const base::DictValue* dict = node.GetIfDict();
@@ -149,8 +138,7 @@ bool IsDisabled(const base::Value& node) {
 // A node's name, as the page shows it, its runs of spaces one.
 std::string NameOf(const base::DictValue& node) {
   const std::string* name = node.FindStringByDottedPath("name.value");
-  return name ? base::CollapseWhitespaceASCII(*name, /*trim_sequences_with_line_breaks=*/true)
-              : std::string();
+  return name ? OneSpaced(*name) : std::string();
 }
 
 // A name as it compares in any case, as "Open" and "OPEN" do.
@@ -158,18 +146,123 @@ std::u16string Folded(std::string_view name) {
   return base::i18n::FoldCase(base::UTF8ToUTF16(name));
 }
 
-// Whether the node has the boolean |property|, such as "selected", and it's true.
-bool Has(const base::DictValue& node, std::string_view property) {
-  if (const base::ListValue* properties = node.FindList("properties")) {
-    for (const base::Value& each : *properties) {
-      const base::DictValue* dict = each.GetIfDict();
-      const std::string* name = dict ? dict->FindString("name") : nullptr;
-      if (name && *name == property) {
-        return dict->FindBoolByDottedPath("value.value").value_or(false);
+// The attribute |name| of a node as DOM.describeNode gives it, if it has one.
+std::optional<std::string> AttributeOf(const base::DictValue& node, std::string_view name) {
+  const base::ListValue* attributes = node.FindList("attributes");
+  // Name, value, name, value.
+  for (size_t i = 0; attributes && i + 1 < attributes->size(); i += 2) {
+    const std::string* each = (*attributes)[i].GetIfString();
+    const std::string* value = (*attributes)[i + 1].GetIfString();
+    if (each && value && base::EqualsCaseInsensitiveASCII(*each, name)) {
+      return *value;
+    }
+  }
+  return std::nullopt;
+}
+
+// The text of a described node's text children, as a textarea's or an option's is.
+std::string ChildText(const base::DictValue& node) {
+  std::string text;
+  if (const base::ListValue* children = node.FindList("children")) {
+    for (const base::Value& child : *children) {
+      const base::DictValue* dict = child.GetIfDict();
+      const std::string* value = dict ? dict->FindString("nodeValue") : nullptr;
+      if (value && dict->FindInt("nodeType") == 3) {
+        text += *value;
       }
     }
   }
-  return false;
+  return text;
+}
+
+// An option's label as a select shows it: its label attribute or else its text, its runs of
+// spaces one.
+std::u16string LabelOf(const base::DictValue& option) {
+  const std::optional<std::string> label = AttributeOf(option, "label");
+  return OneSpaced(base::UTF8ToUTF16(label && !label->empty() ? *label : ChildText(option)));
+}
+
+// A described select's value in the page's markup: its option marked selected, else its first.
+// None for any other field, whose markup doesn't count (FieldFacts::select).
+std::optional<std::u16string> MarkupOf(const base::DictValue& node) {
+  const std::string* name = node.FindString("nodeName");
+  if (!name || *name != "SELECT") {
+    return std::nullopt;
+  }
+  std::vector<const base::DictValue*> options;
+  const auto add = [&options](const base::DictValue& parent, const auto& add) -> void {
+    const base::ListValue* children = parent.FindList("children");
+    for (size_t i = 0; children && i < children->size(); ++i) {
+      const base::DictValue* child = (*children)[i].GetIfDict();
+      const std::string* tag = child ? child->FindString("nodeName") : nullptr;
+      if (tag && *tag == "OPTION") {
+        options.push_back(child);
+      } else if (tag && *tag == "OPTGROUP") {
+        add(*child, add);
+      }
+    }
+  };
+  add(node, add);
+  if (options.empty()) {
+    return std::nullopt;
+  }
+  for (const base::DictValue* option : options) {
+    if (AttributeOf(*option, "selected")) {
+      return LabelOf(*option);
+    }
+  }
+  return LabelOf(*options.front());
+}
+
+// What |described|, a field as DescribeField gives it, adds to |facts|: whether its type or
+// autocomplete makes it secret, and a select's value in the markup. One that couldn't be read, or
+// wasn't, is secret.
+void AddDescribed(FieldFacts& facts, const base::DictValue* described) {
+  const base::DictValue* node = described ? described->FindDict("node") : nullptr;
+  if (!node) {
+    facts.secret = true;
+    return;
+  }
+  const std::optional<std::string> type = AttributeOf(*node, "type");
+  const std::optional<std::string> autocomplete = AttributeOf(*node, "autocomplete");
+  facts.secret |= (type && base::EqualsCaseInsensitiveASCII(*type, "password")) ||
+                  (autocomplete && SecretAutocomplete(*autocomplete));
+  facts.markup = MarkupOf(*node);
+  // A select's value is its option's label, as the tree reads it, its runs of spaces one.
+  const std::string* name = node->FindString("nodeName");
+  if (name && *name == "SELECT") {
+    facts.value = OneSpaced(facts.value);
+  }
+}
+
+// The most fields one read asks the page about, each a round trip to its renderer. Past it a field
+// reads filled, so a page with very many can't make an outline or a picture slow.
+constexpr size_t kMostDescribed = 64;
+
+void Bound(std::vector<std::pair<int64_t, FieldFacts>>& fields) {
+  size_t described = 0;
+  for (auto& [element, facts] : fields) {
+    if (CouldShow(facts) && ++described > kMostDescribed) {
+      AddDescribed(facts, nullptr);
+    }
+  }
+}
+
+// The box around a quad's corners, as DOM.getBoxModel and DOM.getContentQuads give them.
+std::optional<gfx::RectF> BoundsOf(const base::ListValue& quad) {
+  if (quad.size() < 8) {
+    return std::nullopt;
+  }
+  double xs[4];
+  double ys[4];
+  for (size_t corner = 0; corner < 4; ++corner) {
+    xs[corner] = quad[2 * corner].GetIfDouble().value_or(0);
+    ys[corner] = quad[2 * corner + 1].GetIfDouble().value_or(0);
+  }
+  const auto [left, right] = std::ranges::minmax(xs);
+  const auto [top, bottom] = std::ranges::minmax(ys);
+  return gfx::RectF(static_cast<float>(left), static_cast<float>(top),
+                    static_cast<float>(right - left), static_cast<float>(bottom - top));
 }
 
 // Network.enable's parameters: no request's or response's body is kept.
@@ -230,10 +323,70 @@ base::ListValue Tagged(base::ListValue nodes, const std::string& prefix, int slo
   return nodes;
 }
 
+// Why there's no picture, for the agent.
+constexpr char kNoPicture[] = "The page couldn't be pictured.";
+constexpr char kPictureChanged[] = "The page changed while it was pictured. Try again.";
+
+// DevTools attaches to each frame in another process below a session's, in a session of its own.
+base::DictValue AutoAttaching() {
+  return base::DictValue()
+      .Set("autoAttach", true)
+      .Set("waitForDebuggerOnStart", false)
+      .Set("flatten", true)
+      .Set("filter", base::ListValue().Append(base::DictValue().Set("type", "iframe")));
+}
+
+// At most this many labels are asked for a hidden control, each a few DevTools round trips.
+constexpr size_t kLabelsAsked = 20;
+// The controls a label may hide, in the order they're looked for.
+constexpr std::string_view kChoiceKinds[] = {"radio", "checkbox"};
+
+// A selector for an input of the |kind|, with the |id| if one's given, quoted as CSS quotes it.
+std::string ChoiceSelector(std::string_view kind, const std::optional<std::string>& id) {
+  std::string selector = base::StrCat({"input[type=", kind, "]"});
+  if (!id) {
+    return selector;
+  }
+  selector += "[id=\"";
+  for (const char each : *id) {
+    if (each == '"' || each == '\\') {
+      selector += '\\';
+      selector += each;
+    } else if (static_cast<unsigned char>(each) < 0x20 || each == 0x7f) {
+      // A line break or other control character, which a CSS string can't hold as it is.
+      selector += base::StringPrintf("\\%x ", static_cast<unsigned char>(each));
+    } else {
+      selector += each;
+    }
+  }
+  selector += "\"]";
+  return selector;
+}
+
 void Report(bc_id tab, uint64_t request, std::string text, bool error) {
   if (Host().agent_page_done) {
     Host().agent_page_done(Host().context, tab, request, text.c_str(), error);
   }
+}
+
+// A hidden tab's renderer runs as a background process, which the OS starves while the agent's
+// typing waits on it (#3285). The vote follows the page to whichever process holds it, and goes
+// with the page if the tab closes first.
+base::ScopedClosureRunner LiftWhileWorking(content::WebContents& contents) {
+  base::WeakPtr<performance_manager::PageNode> page =
+      performance_manager::PerformanceManager::GetPrimaryPageNodeForWebContents(&contents);
+  AgentJobVoter* voter = AgentJobVoter::Get();
+  if (!page || !voter) {
+    return {};
+  }
+  voter->JobStarted(page.get());
+  return base::ScopedClosureRunner(base::BindOnce(
+      [](base::WeakPtr<performance_manager::PageNode> page) {
+        if (AgentJobVoter* voter = AgentJobVoter::Get(); voter && page) {
+          voter->JobEnded(page.get());
+        }
+      },
+      page));
 }
 
 }  // namespace
@@ -244,7 +397,10 @@ bool IsWebFrame(content::RenderFrameHost* frame) {
   return scheme == url::kHttpScheme || scheme == url::kHttpsScheme;
 }
 
-base::ListValue AgentTree(base::ListValue nodes, const std::set<int64_t>& passwords) {
+base::ListValue AgentTree(base::ListValue nodes,
+                          const std::set<int64_t>& passwords,
+                          const std::map<int64_t, FieldShown>& contents) {
+  std::map<std::string, std::vector<std::string>> choices = SelectChoices(nodes);
   std::map<std::string, const base::DictValue*> by_id;
   for (const base::Value& node : nodes) {
     const base::DictValue* dict = node.GetIfDict();
@@ -265,9 +421,26 @@ base::ListValue AgentTree(base::ListValue nodes, const std::set<int64_t>& passwo
       }
     }
   };
+  // A combobox's list that the page made its child (aria-owns), as a picker's often is, is the
+  // page's own, as a list the field only controls already shows: it stays, with its options, and
+  // the field keeps it (#2355). Whatever else is under the field goes.
+  std::map<std::string, base::ListValue> lists;
   for (const auto& [id, node] : by_id) {
-    if (IsField(*node)) {
-      children_of(*node);
+    const base::ListValue* children = IsField(*node) ? node->FindList("childIds") : nullptr;
+    if (!children) {
+      continue;
+    }
+    for (const base::Value& child : *children) {
+      const std::string* each = child.GetIfString();
+      if (!each) {
+        continue;
+      }
+      const auto found = by_id.find(*each);
+      if (IsRole(*node, "combobox") && found != by_id.end() && IsRole(*found->second, "listbox")) {
+        lists[id].Append(*each);
+      } else {
+        steps.push_back(*each);
+      }
     }
   }
   while (!steps.empty()) {
@@ -285,12 +458,44 @@ base::ListValue AgentTree(base::ListValue nodes, const std::set<int64_t>& passwo
   for (base::Value& node : nodes) {
     base::DictValue* dict = node.GetIfDict();
     const std::string* id = dict ? dict->FindString("nodeId") : nullptr;
-    if (!id || under_fields.contains(*id)) {
+    // What an extension's content script made is the extension's, not the page's: no ref, and no
+    // text read as the page's (engine/patches/ours/chromium-agent-extension-nodes.patch marks it,
+    // and each node inside it).
+    if (!id || under_fields.contains(*id) || Has(*dict, "fromExtension")) {
       continue;
     }
     dict->Remove("value");
+    const std::optional<int64_t> backend = ElementOf(*dict);
+    if (const auto field = backend ? contents.find(*backend) : contents.end();
+        field != contents.end()) {
+      switch (field->second.seen) {
+        case Seen::kValue:
+          dict->Set("holds", field->second.value);
+          break;
+        case Seen::kEmpty:
+          dict->Set("contents", "empty");
+          break;
+        case Seen::kFilled:
+          dict->Set("contents", "filled");
+          break;
+        case Seen::kChanged:
+          dict->Set("contents", "changed");
+          break;
+      }
+    }
     if (IsField(*dict)) {
-      dict->Remove("childIds");
+      if (auto list = lists.find(*id); list != lists.end()) {
+        dict->Set("childIds", std::move(list->second));
+      } else {
+        dict->Remove("childIds");
+      }
+    }
+    if (auto select = choices.find(*id); select != choices.end() && !select->second.empty()) {
+      base::ListValue names;
+      for (std::string& name : select->second) {
+        names.Append(std::move(name));
+      }
+      dict->Set("choices", std::move(names));
     }
     if (base::ListValue* properties = dict->FindList("properties")) {
       properties->EraseIf([](const base::Value& property) {
@@ -299,13 +504,51 @@ base::ListValue AgentTree(base::ListValue nodes, const std::set<int64_t>& passwo
         return !name || *name == "valuetext";
       });
     }
-    const std::optional<int64_t> backend = ElementOf(*dict);
     if (backend && passwords.contains(*backend)) {
       dict->Set("password", true);
     }
     kept.Append(std::move(node));
   }
   return kept;
+}
+
+std::vector<int64_t> UnnamedLabels(const base::ListValue& nodes, size_t most) {
+  // The labels each node's name could come from, whether or not another source won.
+  std::set<int64_t> named;
+  for (const base::Value& node : nodes) {
+    const base::DictValue* dict = node.GetIfDict();
+    const std::optional<int64_t> element = dict ? ElementOf(*dict) : std::nullopt;
+    const base::ListValue* sources = element ? dict->FindListByDottedPath("name.sources") : nullptr;
+    if (!sources) {
+      continue;
+    }
+    for (const base::Value& source : *sources) {
+      const base::DictValue* each = source.GetIfDict();
+      const base::ListValue* related =
+          each ? each->FindListByDottedPath("nativeSourceValue.relatedNodes") : nullptr;
+      if (!related) {
+        continue;
+      }
+      for (const base::Value& label : *related) {
+        const base::DictValue* label_dict = label.GetIfDict();
+        // A frame's tree numbers its own DOM nodes, so the label is in the node's frame.
+        if (const std::optional<int> id =
+                label_dict ? label_dict->FindInt("backendDOMNodeId") : std::nullopt) {
+          named.insert(ElementId(SlotOfElement(*element), *id));
+        }
+      }
+    }
+  }
+  std::vector<int64_t> labels;
+  for (const base::Value& node : nodes) {
+    const base::DictValue* dict = node.GetIfDict();
+    const std::optional<int64_t> element = dict ? ElementOf(*dict) : std::nullopt;
+    if (element && IsRole(*dict, "LabelText") && !named.contains(*element) &&
+        labels.size() < most) {
+      labels.push_back(*element);
+    }
+  }
+  return labels;
 }
 
 // Whether a wheel moved anything, as the widgets of the page's frames answer it: a scroll it
@@ -365,6 +608,7 @@ AgentPage::~AgentPage() {
 }
 
 void AgentPage::Act(uint64_t request, int action, int64_t element, std::string text) {
+  acted_ = true;
   jobs_.push_back({request, action, element, std::move(text)});
   Next();
 }
@@ -400,7 +644,9 @@ void AgentPage::Next() {
   }
   job_ = std::move(jobs_.front());
   jobs_.pop_front();
+  limit_.Started();
   rest_.Stop();
+  working_ = LiftWhileWorking(GetWebContents());
   // A hidden tab otherwise stops drawing, and its page then takes no input and gives no picture.
   if (!drawing_) {
     drawing_ = GetWebContents().IncrementCapturerCount(gfx::Size(), /*stay_hidden=*/true,
@@ -639,7 +885,13 @@ void AgentPage::Quiet() {
   base::TimeTicks next = job_->deadline;
   if (now >= next) {
     settling_ = false;
-    job_->busy = true;
+    // A document still loading is busy. Requests alone are said apart, as what the page shows
+    // may well have held still, which Still finds out, and then it's busy too.
+    if (GetWebContents().IsLoading()) {
+      job_->busy = true;
+    } else {
+      job_->requests = true;
+    }
     Still(base::ListValue());
     return;
   }
@@ -785,7 +1037,24 @@ void AgentPage::PressInView() {
                     return;
                   }
                   page->Point(*shown);
-                  page->Listen(base::BindOnce(&AgentPage::ClickAt, page, slot, at, size_t{0}));
+                  // From the top frame down, as the click goes, so what an extension put over
+                  // the element in any frame above it is found.
+                  page->Covered(
+                      shown->CenterPoint(),
+                      base::BindOnce(
+                          [](base::WeakPtr<AgentPage> page, int slot, gfx::PointF at,
+                             bool covered) {
+                            if (!page || !page->job_) {
+                              return;
+                            }
+                            if (covered) {
+                              page->RefuseExtension(kExtensionCovers);
+                              return;
+                            }
+                            page->Listen(
+                                base::BindOnce(&AgentPage::ClickAt, page, slot, at, size_t{0}));
+                          },
+                          page, slot, at));
                 },
                 page, slot, box->CenterPoint()));
       },
@@ -793,8 +1062,8 @@ void AgentPage::PressInView() {
 }
 
 void AgentPage::Choose(const base::ListValue& nodes, const std::vector<std::string>& frames) {
-  const std::string want =
-      base::CollapseWhitespaceASCII(job_->text, /*trim_sequences_with_line_breaks=*/true);
+  // What was asked is matched as the outline shows names, and echoed as it was asked.
+  const std::string want = OneSpaced(job_->text);
   if (want.empty()) {
     Fail("Choosing needs an element and an option.");
     return;
@@ -915,8 +1184,8 @@ void AgentPage::Choose(const base::ListValue& nodes, const std::vector<std::stri
   const std::vector<const Option*>& matches = exact.empty() ? folded : exact;
   if (matches.size() != 1) {
     constexpr size_t kListed = 50;
-    std::string why = matches.empty() ? "There's no option “" + want + "” there."
-                                      : "Several options are named “" + want + "”.";
+    std::string why = matches.empty() ? "There's no option “" + job_->text + "” there."
+                                      : "Several options are named “" + job_->text + "”.";
     why += " Its options are ";
     for (size_t each = 0; each < options.size() && each < kListed; ++each) {
       std::string name;
@@ -935,7 +1204,7 @@ void AgentPage::Choose(const base::ListValue& nodes, const std::vector<std::stri
   }
   const Option& option = *matches.front();
   if (Has(*option.node, "disabled")) {
-    Fail("The option “" + want + "” is disabled.");
+    Fail("The option “" + job_->text + "” is disabled.");
     return;
   }
   chosen_ = ElementOf(*option.node).value_or(0);
@@ -953,7 +1222,7 @@ void AgentPage::Choose(const base::ListValue& nodes, const std::vector<std::stri
     return;
   }
   if (!chosen_) {
-    Fail("The option “" + want + "” can't be clicked. Take a new snapshot.");
+    Fail("The option “" + job_->text + "” can't be clicked. Take a new snapshot.");
     return;
   }
   job_->element = chosen_;
@@ -1026,9 +1295,7 @@ bool AgentPage::Shows(const base::ListValue& nodes) {
     // What a field holds is never told: only whether it's the option the agent chose. A
     // dropdown's button may show it as its name instead.
     const std::string* value = dict->FindStringByDottedPath("value.value");
-    const std::string held =
-        value ? base::CollapseWhitespaceASCII(*value, /*trim_sequences_with_line_breaks=*/true)
-              : std::string();
+    const std::string held = value ? OneSpaced(*value) : std::string();
     if (Folded(held) == chosen || Folded(NameOf(*dict)) == chosen) {
       return true;
     }
@@ -1124,12 +1391,18 @@ void AgentPage::Focus(int64_t element, bool submit) {
   // Focus moves to the element's frame, where the main frame's keys then go.
   Send("DOM.focus", base::DictValue().Set("backendNodeId", NodeOfElement(element)),
        base::BindOnce(
-           [](base::WeakPtr<AgentPage> page, bool submit, const base::DictValue* focused) {
+           [](base::WeakPtr<AgentPage> page, int64_t element, bool submit,
+              const base::DictValue* focused) {
              if (!page) {
                return;
              }
              if (!focused) {
                page->Fail("The element can't take typing. Take a new snapshot.");
+               return;
+             }
+             // Focusing it can bring an extension's menu, which may take the keyboard.
+             if (page->KeysInExtension()) {
+               page->RefuseExtension(kExtensionKeyboard);
                return;
              }
              // What the field holds is selected, so the text replaces it.
@@ -1145,27 +1418,83 @@ void AgentPage::Focus(int64_t element, bool submit) {
                         base::DoNothing());
              page->Send("Input.dispatchKeyEvent", select.Clone().Set("type", "keyUp"),
                         base::DoNothing());
-             page->Send(
-                 "Input.insertText", base::DictValue().Set("text", page->job_->text),
-                 base::BindOnce(
-                     [](base::WeakPtr<AgentPage> page, bool submit, const base::DictValue* typed) {
-                       if (!page) {
-                         return;
-                       }
-                       if (!typed) {
-                         page->Fail("The page didn't take the text.");
-                         return;
-                       }
-                       if (submit) {
-                         page->PressKey("Enter", base::BindOnce(&AgentPage::Settle, page));
-                       } else {
-                         page->Settle();
-                       }
-                     },
-                     page, submit));
+             page->TypeInto(element, submit);
            },
-           weak_factory_.GetWeakPtr(), submit),
+           weak_factory_.GetWeakPtr(), element, submit),
        SlotOfElement(element));
+}
+
+void AgentPage::TypeInto(int64_t element, bool submit) {
+  std::u16string text = base::UTF8ToUTF16(job_->text);
+  base::ReplaceSubstringsAfterOffset(&text, 0, u"\r\n", u"\n");
+  std::ranges::replace(text, u'\r', u'\n');
+  if (text.find(u'\n') == std::u16string::npos) {
+    TypeKeys(std::move(text), submit);
+    return;
+  }
+  // An input holds one line, where Enter would submit its form: its line breaks go, as they
+  // would had the text been pasted.
+  Send("DOM.describeNode", base::DictValue().Set("backendNodeId", NodeOfElement(element)),
+       base::BindOnce(
+           [](base::WeakPtr<AgentPage> page, std::u16string text, bool submit,
+              const base::DictValue* described) {
+             if (!page) {
+               return;
+             }
+             const std::string* name =
+                 described ? described->FindStringByDottedPath("node.nodeName") : nullptr;
+             if (name && base::EqualsCaseInsensitiveASCII(*name, "input")) {
+               std::erase(text, u'\n');
+             }
+             page->TypeKeys(std::move(text), submit);
+           },
+           weak_factory_.GetWeakPtr(), std::move(text), submit),
+       SlotOfElement(element));
+}
+
+void AgentPage::TypeKeys(std::u16string text, bool submit) {
+  auto typed = base::BindOnce(
+      [](base::WeakPtr<AgentPage> page, bool submit, const base::DictValue* typed) {
+        if (!page) {
+          return;
+        }
+        if (!typed) {
+          page->Fail("The page didn't take the text.");
+          return;
+        }
+        if (submit) {
+          page->PressKey("Enter", base::BindOnce(&AgentPage::Settle, page));
+        } else {
+          page->Settle();
+        }
+      },
+      weak_factory_.GetWeakPtr(), submit);
+  // Nothing to type clears what's selected, as Delete would.
+  if (text.empty()) {
+    const base::DictValue key = base::DictValue()
+                                    .Set("key", "Delete")
+                                    .Set("code", "Delete")
+                                    .Set("windowsVirtualKeyCode", 46);
+    Send("Input.dispatchKeyEvent", key.Clone().Set("type", "rawKeyDown"), base::DoNothing());
+    Send("Input.dispatchKeyEvent", key.Clone().Set("type", "keyUp"), std::move(typed));
+    return;
+  }
+  // DevTools' key events rather than its insertText, as a key carries DevTools' mark of input
+  // that isn't the user's, which keeps it from an extension's listeners
+  // (engine/patches/ours/chromium-agent-extension-listeners.patch), and an IME's commit doesn't.
+  std::vector<base::DictValue> keys = TypingKeys(text);
+  if (keys.empty()) {
+    const base::DictValue none;
+    std::move(typed).Run(&none);
+    return;
+  }
+  for (size_t each = 0; each < keys.size(); ++each) {
+    if (each + 1 < keys.size()) {
+      Send("Input.dispatchKeyEvent", std::move(keys[each]), base::DoNothing());
+    } else {
+      Send("Input.dispatchKeyEvent", std::move(keys[each]), std::move(typed));
+    }
+  }
 }
 
 void AgentPage::PressKey(const std::string& name, base::OnceClosure then) {
@@ -1179,6 +1508,10 @@ void AgentPage::PressKey(const std::string& name, base::OnceClosure then) {
     Fail(
         "There's no such key. Press Enter, Tab, Escape, Backspace, Delete, Space, an arrow, "
         "PageUp, PageDown, Home or End.");
+    return;
+  }
+  if (KeysInExtension()) {
+    RefuseExtension(kExtensionKeyboard);
     return;
   }
   HideSuggestions();
@@ -1245,15 +1578,33 @@ void AgentPage::TurnWheel(bool down) {
 }
 
 void AgentPage::Wheel(const gfx::RectF& area, bool down) {
-  wheel_ = std::make_unique<WheelWatch>(GetWebContents());
   const gfx::PointF at = area.CenterPoint();
+  // From the main frame, where the wheel goes, down through the frames it goes into.
+  Covered(at,
+          base::BindOnce(
+              [](base::WeakPtr<AgentPage> page, gfx::PointF at, bool down, float height,
+                 bool covered) {
+                if (!page || !page->job_) {
+                  return;
+                }
+                if (covered) {
+                  page->RefuseExtension(kExtensionCovers);
+                  return;
+                }
+                page->TurnWheelAt(at, down, height);
+              },
+              weak_factory_.GetWeakPtr(), at, down, area.height()));
+}
+
+void AgentPage::TurnWheelAt(gfx::PointF at, bool down, float height) {
+  wheel_ = std::make_unique<WheelWatch>(GetWebContents());
   Send("Input.dispatchMouseEvent",
        base::DictValue()
            .Set("type", "mouseWheel")
            .Set("x", at.x())
            .Set("y", at.y())
            .Set("deltaX", 0)
-           .Set("deltaY", (down ? 0.8 : -0.8) * area.height()),
+           .Set("deltaY", (down ? 0.8 : -0.8) * height),
        base::BindOnce(
            [](base::WeakPtr<AgentPage> page, bool down, const base::DictValue*) {
              if (page) {
@@ -1311,23 +1662,12 @@ void AgentPage::History(bool forward) {
 }
 
 void AgentPage::Screenshot() {
-  content::RenderWidgetHostView* view = GetWebContents().GetRenderWidgetHostView();
-  if (!view) {
+  if (!GetWebContents().GetRenderWidgetHostView()) {
     Fail("The page couldn't be pictured.");
     return;
   }
-  // A copy of the page's own surface, as the app's pictures of a page are (capture.cc). DevTools'
-  // capture waits for a redraw to be presented, which a page out of sight gets only as its window
-  // draws something new, so with the UI holding the keyboard and the window still it never came. A
-  // page no window shows is held in its tab's window, unseen, which gives it a compositor.
-  base::ScopedClosureRunner held;
-  if (!view->IsShowing()) {
-    Window* window = Window::Holding(tab_);
-    held = platform::DrawUnseen(window ? window->widget() : nullptr,
-                                GetWebContents().GetNativeView());
-  }
   // Should no frame come, the agent hears so after as long as a page that won't load is waited for
-  // (#1461), rather than never. The timer runs only while the copy is out.
+  // (#1461), rather than never.
   const uint64_t request = job_->request;
   wait_.Start(FROM_HERE, kLoadTimeout,
               base::BindOnce(
@@ -1340,44 +1680,505 @@ void AgentPage::Screenshot() {
                     }
                   },
                   base::Unretained(this), request));
+  Draw(std::nullopt, Hatched::kWithheld,
+       base::BindOnce(
+           [](base::WeakPtr<AgentPage> page, uint64_t request,
+              base::expected<SkBitmap, std::string> picture) {
+             if (!page || !page->job_ || page->job_->request != request) {
+               return;
+             }
+             if (!picture.has_value()) {
+               page->wait_.Stop();
+               page->Fail(std::move(picture.error()));
+               return;
+             }
+             // A page in a big window is millions of pixels, too many to encode on the UI thread.
+             base::ThreadPool::PostTaskAndReplyWithResult(
+                 FROM_HERE, {base::TaskPriority::USER_VISIBLE},
+                 base::BindOnce(
+                     [](const SkBitmap& picture) {
+                       std::optional<std::vector<uint8_t>> jpeg =
+                           gfx::JPEGCodec::Encode(picture, /*quality=*/75);
+                       return jpeg ? base::Base64Encode(*jpeg) : std::string();
+                     },
+                     std::move(*picture)),
+                 base::BindOnce(
+                     [](base::WeakPtr<AgentPage> page, uint64_t request, std::string data) {
+                       if (!page || !page->job_ || page->job_->request != request) {
+                         return;
+                       }
+                       page->wait_.Stop();
+                       if (data.empty()) {
+                         page->Fail("The page couldn't be pictured.");
+                         return;
+                       }
+                       page->Answer(std::move(data), /*error=*/false);
+                     },
+                     page, request));
+           },
+           weak_factory_.GetWeakPtr(), request));
+}
+
+// static
+void AgentPage::Picture(content::WebContents& contents,
+                        std::optional<gfx::Rect> area,
+                        Hatched hatched,
+                        Pictured done) {
+  CreateForWebContents(&contents);
+  AgentPage* page = FromWebContents(&contents);
+  // Posted, so the caller never hears inside its own call, and heard even if the page goes or its
+  // agent's session ends first.
+  done = mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+      base::BindPostTaskToCurrentDefault(std::move(done)),
+      base::expected<SkBitmap, std::string>(base::unexpected(kNoPicture)));
+  ++page->pictures_;
+  page->Draw(area, hatched,
+             base::BindOnce(
+                 [](base::WeakPtr<AgentPage> page, Pictured done,
+                    base::expected<SkBitmap, std::string> picture) {
+                   if (page && --page->pictures_ == 0 && !page->acted_) {
+                     // Posted, as this may be inside DevTools' own reply.
+                     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+                         FROM_HERE, base::BindOnce(&AgentPage::Rest, page));
+                   }
+                   std::move(done).Run(std::move(picture));
+                 },
+                 page->weak_factory_.GetWeakPtr(), std::move(done)));
+}
+
+void AgentPage::Draw(std::optional<gfx::Rect> area, Hatched hatched, Pictured done) {
+  if (agent_host_) {
+    WithheldBoxes(hatched, base::BindOnce(&AgentPage::Copy, weak_factory_.GetWeakPtr(), area,
+                                          hatched, std::move(done)));
+    return;
+  }
+  // DevTools tells of the page's frames in other processes as it attaches to each level of them,
+  // and a frame not heard of yet would be hatched whole.
+  Send("Target.setAutoAttach", AutoAttaching(),
+       base::BindOnce(
+           [](base::WeakPtr<AgentPage> page, std::optional<gfx::Rect> area, Hatched hatched,
+              Pictured done, const base::DictValue* result) {
+             if (!page) {
+               return;
+             }
+             if (!result) {
+               std::move(done).Run(base::unexpected(kNoPicture));
+               return;
+             }
+             page->Attach(1,
+                          base::BindOnce(&AgentPage::Draw, page, area, hatched, std::move(done)));
+           },
+           weak_factory_.GetWeakPtr(), area, hatched, std::move(done)),
+       0);
+}
+
+void AgentPage::Attach(size_t slot, base::OnceClosure then) {
+  for (; slot < targets_.size(); ++slot) {
+    if (!targets_[slot].session.empty()) {
+      // Its reply comes after DevTools has told of the frames it attached to.
+      Send("Target.setAutoAttach", AutoAttaching(),
+           base::BindOnce(
+               [](base::WeakPtr<AgentPage> page, size_t slot, base::OnceClosure then,
+                  const base::DictValue*) {
+                 if (page) {
+                   page->Attach(slot + 1, std::move(then));
+                 }
+               },
+               weak_factory_.GetWeakPtr(), slot, std::move(then)),
+           static_cast<int>(slot));
+      return;
+    }
+  }
+  std::move(then).Run();
+}
+
+void AgentPage::Copy(std::optional<gfx::Rect> area,
+                     Hatched hatched,
+                     Pictured done,
+                     std::optional<Boxes> before) {
+  content::RenderWidgetHostView* view = GetWebContents().GetRenderWidgetHostView();
+  const gfx::Rect source =
+      !view ? gfx::Rect()
+            : gfx::IntersectRects(area.value_or(gfx::Rect(view->GetViewBounds().size())),
+                                  gfx::Rect(view->GetViewBounds().size()));
+  if (!before || source.IsEmpty()) {
+    std::move(done).Run(base::unexpected(before ? kNoPicture : kPictureChanged));
+    return;
+  }
+  // A copy of the page's own surface, as the app's pictures of a page are (capture.cc). DevTools'
+  // capture waits for a redraw to be presented, which a page out of sight gets only as its window
+  // draws something new, so with the UI holding the keyboard and the window still it never came. A
+  // page no window shows is held in its tab's window, unseen, which gives it a compositor.
+  base::ScopedClosureRunner held;
+  if (!view->IsShowing()) {
+    Window* window = Window::Holding(tab_);
+    held = platform::DrawUnseen(window ? window->widget() : nullptr,
+                                GetWebContents().GetNativeView());
+  }
   view->CopyFromSurface(
-      gfx::Rect(), gfx::Size(), base::TimeDelta(),
+      source, gfx::Size(), base::TimeDelta(),
       base::BindOnce(
-          [](base::WeakPtr<AgentPage> page, uint64_t request, base::ScopedClosureRunner held,
+          [](base::WeakPtr<AgentPage> page, gfx::Rect source, Hatched hatched, Pictured done,
+             Boxes before, base::ScopedClosureRunner held,
              const content::CopyFromSurfaceResult& result) {
-            if (!page || !page->job_ || page->job_->request != request) {
+            if (!page) {
               return;
             }
             if (!result.has_value() || result->bitmap.drawsNothing()) {
-              page->wait_.Stop();
-              page->Fail("The page couldn't be pictured.");
+              std::move(done).Run(base::unexpected(kNoPicture));
               return;
             }
-            // A page in a big window is millions of pixels, too many to encode on the UI thread.
-            base::ThreadPool::PostTaskAndReplyWithResult(
-                FROM_HERE, {base::TaskPriority::USER_VISIBLE},
-                base::BindOnce(
-                    [](const SkBitmap& bitmap) {
-                      std::optional<std::vector<uint8_t>> jpeg =
-                          gfx::JPEGCodec::Encode(bitmap, /*quality=*/75);
-                      return jpeg ? base::Base64Encode(*jpeg) : std::string();
-                    },
-                    result->bitmap),
-                base::BindOnce(
-                    [](base::WeakPtr<AgentPage> page, uint64_t request, std::string data) {
-                      if (!page || !page->job_ || page->job_->request != request) {
-                        return;
-                      }
-                      page->wait_.Stop();
-                      if (data.empty()) {
-                        page->Fail("The page couldn't be pictured.");
-                        return;
-                      }
-                      page->Answer(std::move(data), /*error=*/false);
-                    },
-                    page, request));
+            // Where the boxes are after the copy too, as the page may have moved one meanwhile,
+            // as a smooth scroll does: each is painted over all the way from one box to the other.
+            page->WithheldBoxes(hatched,
+                                base::BindOnce(&AgentPage::Paint, page, source, std::move(done),
+                                               std::move(before), result->bitmap));
           },
-          weak_factory_.GetWeakPtr(), request, std::move(held)));
+          weak_factory_.GetWeakPtr(), source, hatched, std::move(done), std::move(*before),
+          std::move(held)));
+}
+
+void AgentPage::Paint(gfx::Rect source,
+                      Pictured done,
+                      Boxes before,
+                      SkBitmap bitmap,
+                      std::optional<Boxes> after) {
+  if (!after) {
+    std::move(done).Run(base::unexpected(kPictureChanged));
+    return;
+  }
+  for (const auto& [element, box] : *after) {
+    const auto [field, added] = before.emplace(element, box);
+    if (!added) {
+      field->second.Union(box);
+    }
+  }
+  // The page's CSS pixels, at its zoom, are the view's points (Point), and the picture has the
+  // screen's pixels.
+  const float zoom = static_cast<float>(
+      blink::ZoomLevelToZoomFactor(content::HostZoomMap::GetZoomLevel(&GetWebContents())));
+  const gfx::Size size(bitmap.width(), bitmap.height());
+  std::vector<gfx::Rect> boxes;
+  for (const auto& [element, box] : before) {
+    const gfx::Rect pixels = InPicture(box, zoom, source, size);
+    if (!pixels.IsEmpty()) {
+      boxes.push_back(pixels);
+    }
+  }
+  const float scale =
+      zoom * static_cast<float>(size.width()) / static_cast<float>(source.width());
+  // A page in a big window is millions of pixels, too many to paint on the UI thread.
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::TaskPriority::USER_VISIBLE},
+      base::BindOnce(
+          [](const SkBitmap& bitmap, std::vector<gfx::Rect> boxes,
+             float scale) -> std::optional<SkBitmap> {
+            SkBitmap picture;
+            // Painted on a copy of its own, as the copy's pixels may be shared.
+            if (!picture.tryAllocPixels(bitmap.info()) || !bitmap.readPixels(picture.pixmap())) {
+              return std::nullopt;
+            }
+            Hatch(picture, boxes, scale);
+            return picture;
+          },
+          std::move(bitmap), std::move(boxes), scale),
+      base::BindOnce(
+          [](Pictured done, std::optional<SkBitmap> picture) {
+            if (!picture) {
+              std::move(done).Run(base::unexpected(kNoPicture));
+              return;
+            }
+            std::move(done).Run(std::move(*picture));
+          },
+          std::move(done)));
+}
+
+void AgentPage::Rest() {
+  if (!acted_ && !pictures_ && !job_ && jobs_.empty()) {
+    Detach();
+  }
+}
+
+AgentPage::Withholding::Withholding() = default;
+AgentPage::Withholding::~Withholding() = default;
+
+void AgentPage::WithheldBoxes(Hatched hatched,
+                              base::OnceCallback<void(std::optional<Boxes>)> then) {
+  auto withholding = std::make_unique<Withholding>();
+  withholding->frames = Frames();
+  withholding->hatched = hatched;
+  withholding->then = std::move(then);
+  // A frame below one whose fields are read that can't be read itself, as an extension's own, one
+  // not live or one whose session hasn't started, is hatched whole, as the outline leaves it out.
+  // What's in it is in its box.
+  content::RenderFrameHost* main = GetWebContents().GetPrimaryMainFrame();
+  std::map<std::string, int> read;
+  for (const Frame& frame : withholding->frames) {
+    read[frame.id] = frame.slot;
+  }
+  main->ForEachRenderFrameHost([&](content::RenderFrameHost* host) {
+    content::RenderFrameHost* parent = host->GetParent();
+    if (!parent) {
+      return;
+    }
+    const std::string id = host->GetDevToolsFrameToken().ToString();
+    const auto above =
+        read.find(parent == main ? std::string() : parent->GetDevToolsFrameToken().ToString());
+    if (above != read.end() && !read.contains(id)) {
+      withholding->unread.emplace_back(above->second, id);
+    }
+  });
+  ReadFields(std::move(withholding), 0);
+}
+
+void AgentPage::ReadFields(std::unique_ptr<Withholding> withholding, size_t next) {
+  if (next >= withholding->frames.size()) {
+    Cover(std::move(withholding), 0);
+    return;
+  }
+  const Frame& frame = withholding->frames[next];
+  const int slot = frame.slot;
+  base::DictValue params;
+  if (next > 0) {
+    params.Set("frameId", frame.id);
+  }
+  Send("Accessibility.getFullAXTree", std::move(params),
+       base::BindOnce(
+           [](base::WeakPtr<AgentPage> page, std::unique_ptr<Withholding> withholding, size_t next,
+              int slot, const base::DictValue* result) {
+             if (!page) {
+               return;
+             }
+             const base::ListValue* nodes = result ? result->FindList("nodes") : nullptr;
+             // A frame whose fields can't be read may show anything: no picture, rather.
+             if (!nodes) {
+               std::move(withholding->then).Run(std::nullopt);
+               return;
+             }
+             for (const base::Value& node : *nodes) {
+               const base::DictValue* dict = node.GetIfDict();
+               const std::optional<std::string> value = dict ? ValueOf(*dict) : std::nullopt;
+               const std::optional<int> backend =
+                   dict ? dict->FindInt("backendDOMNodeId") : std::nullopt;
+               if (!value || value->empty() || !backend || !IsField(*dict)) {
+                 continue;
+               }
+               const int64_t element = ElementId(slot, *backend);
+               FieldFacts facts;
+               facts.value = base::UTF8ToUTF16(*value);
+               facts.secret = Has(*dict, "wasPassword");
+               facts.autofilled = Has(*dict, "autofilled");
+               facts.fixed = IsDisabled(node) || Has(*dict, "readonly");
+               facts.select = IsRole(*dict, "combobox");
+               if (const auto typed = page->typed_.find(element); typed != page->typed_.end()) {
+                 facts.typed = typed->second;
+               }
+               withholding->fields.emplace_back(element, std::move(facts));
+             }
+             page->ReadFields(std::move(withholding), next + 1);
+           },
+           weak_factory_.GetWeakPtr(), std::move(withholding), next, slot),
+       slot);
+}
+
+void AgentPage::Cover(std::unique_ptr<Withholding> withholding, size_t next) {
+  if (next >= withholding->unread.size()) {
+    Bound(withholding->fields);
+    NextField(std::move(withholding), 0);
+    return;
+  }
+  const auto& [slot, frame] = withholding->unread[next];
+  const int in = slot;
+  Send("DOM.getFrameOwner", base::DictValue().Set("frameId", frame),
+       base::BindOnce(
+           [](base::WeakPtr<AgentPage> page, std::unique_ptr<Withholding> withholding, size_t next,
+              int slot, const base::DictValue* result) {
+             if (!page) {
+               return;
+             }
+             const std::optional<int> owner =
+                 result ? result->FindInt("backendNodeId") : std::nullopt;
+             // A frame whose element can't be found may show anything: no picture, rather.
+             if (!owner) {
+               std::move(withholding->then).Run(std::nullopt);
+               return;
+             }
+             page->Send(
+                 "DOM.getBoxModel", base::DictValue().Set("backendNodeId", *owner),
+                 base::BindOnce(
+                     [](base::WeakPtr<AgentPage> page, std::unique_ptr<Withholding> withholding,
+                        size_t next, int slot, int64_t element, const base::DictValue* result) {
+                       if (!page) {
+                         return;
+                       }
+                       // Its content box, where the frame's page shows.
+                       const base::ListValue* content =
+                           result ? result->FindListByDottedPath("model.content") : nullptr;
+                       page->Keep(std::move(withholding), slot, element,
+                                  content ? BoundsOf(*content) : std::nullopt, &AgentPage::Cover,
+                                  next + 1);
+                     },
+                     page, std::move(withholding), next, slot, ElementId(slot, *owner)),
+                 slot);
+           },
+           weak_factory_.GetWeakPtr(), std::move(withholding), next, in),
+       in);
+}
+
+void AgentPage::NextField(std::unique_ptr<Withholding> withholding, size_t next) {
+  if (next >= withholding->fields.size()) {
+    base::OnceCallback<void(std::optional<Boxes>)> then = std::move(withholding->then);
+    std::move(then).Run(std::move(withholding->boxes));
+    return;
+  }
+  // Any other field hatches whatever the page says of it.
+  if (!CouldShow(withholding->fields[next].second)) {
+    Withhold(std::move(withholding), next, nullptr);
+    return;
+  }
+  const int64_t element = withholding->fields[next].first;
+  DescribeField(element, base::BindOnce(&AgentPage::Withhold, weak_factory_.GetWeakPtr(),
+                                        std::move(withholding), next));
+}
+
+void AgentPage::DescribeField(int64_t element, Reply then) {
+  // Its attributes, then a select's options, for its value in the markup.
+  Send("DOM.describeNode", base::DictValue().Set("backendNodeId", NodeOfElement(element)),
+       base::BindOnce(
+           [](base::WeakPtr<AgentPage> page, int64_t element, Reply then,
+              const base::DictValue* result) {
+             if (!page) {
+               return;
+             }
+             const base::DictValue* node = result ? result->FindDict("node") : nullptr;
+             const std::string* name = node ? node->FindString("nodeName") : nullptr;
+             if (!name || *name != "SELECT") {
+               std::move(then).Run(result);
+               return;
+             }
+             page->Send(
+                 "DOM.describeNode",
+                 base::DictValue().Set("backendNodeId", NodeOfElement(element)).Set("depth", 3),
+                 std::move(then), SlotOfElement(element));
+           },
+           weak_factory_.GetWeakPtr(), element, std::move(then)),
+       SlotOfElement(element));
+}
+
+void AgentPage::Withhold(std::unique_ptr<Withholding> withholding,
+                         size_t next,
+                         const base::DictValue* described) {
+  const int64_t element = withholding->fields[next].first;
+  FieldFacts& facts = withholding->fields[next].second;
+  AddDescribed(facts, described);
+  if (!Hatches(facts, withholding->hatched)) {
+    NextField(std::move(withholding), next + 1);
+    return;
+  }
+  const int slot = SlotOfElement(element);
+  Send("DOM.getBoxModel", base::DictValue().Set("backendNodeId", NodeOfElement(element)),
+       base::BindOnce(
+           [](base::WeakPtr<AgentPage> page, std::unique_ptr<Withholding> withholding, size_t next,
+              int slot, const base::DictValue* result) {
+             if (!page) {
+               return;
+             }
+             // Its padding box, inside its border, where it shows what it holds.
+             const base::ListValue* padding =
+                 result ? result->FindListByDottedPath("model.padding") : nullptr;
+             const int64_t element = withholding->fields[next].first;
+             page->Keep(std::move(withholding), slot, element,
+                        padding ? BoundsOf(*padding) : std::nullopt, &AgentPage::NextField,
+                        next + 1);
+           },
+           weak_factory_.GetWeakPtr(), std::move(withholding), next, slot),
+       slot);
+}
+
+void AgentPage::Lift(int slot, gfx::RectF box, Then then) {
+  if (slot == 0) {
+    std::move(then).Run(box);
+    return;
+  }
+  content::RenderFrameHost* frame = FrameOf(slot);
+  content::RenderFrameHost* parent = frame ? frame->GetParent() : nullptr;
+  const int up = parent ? SlotOf(parent) : -1;
+  if (up < 0) {
+    std::move(then).Run(std::nullopt);
+    return;
+  }
+  Send("DOM.getFrameOwner", base::DictValue().Set("frameId", targets_[slot].frame),
+       base::BindOnce(
+           [](base::WeakPtr<AgentPage> page, int up, gfx::RectF box, Then then,
+              const base::DictValue* result) {
+             if (!page) {
+               return;
+             }
+             const std::optional<int> owner =
+                 result ? result->FindInt("backendNodeId") : std::nullopt;
+             if (!owner) {
+               std::move(then).Run(std::nullopt);
+               return;
+             }
+             page->Send(
+                 "DOM.getBoxModel", base::DictValue().Set("backendNodeId", *owner),
+                 base::BindOnce(
+                     [](base::WeakPtr<AgentPage> page, int up, gfx::RectF box, Then then,
+                        const base::DictValue* result) {
+                       if (!page) {
+                         return;
+                       }
+                       // The frame's page shows in its element's content box; a frame with none
+                       // isn't drawn.
+                       const base::ListValue* content =
+                           result ? result->FindListByDottedPath("model.content") : nullptr;
+                       const std::optional<gfx::RectF> frame =
+                           content ? BoundsOf(*content) : std::nullopt;
+                       if (!frame) {
+                         std::move(then).Run(gfx::RectF());
+                         return;
+                       }
+                       page->Lift(up, IntoParent(box, *frame), std::move(then));
+                     },
+                     page, up, box, std::move(then)),
+                 up);
+           },
+           weak_factory_.GetWeakPtr(), up, box, std::move(then)),
+       up);
+}
+
+void AgentPage::Keep(std::unique_ptr<Withholding> withholding,
+                     int slot,
+                     int64_t element,
+                     std::optional<gfx::RectF> box,
+                     void (AgentPage::*go_on)(std::unique_ptr<Withholding>, size_t),
+                     size_t next) {
+  if (!box) {
+    (this->*go_on)(std::move(withholding), next);
+    return;
+  }
+  Lift(slot, *box,
+       base::BindOnce(
+           [](base::WeakPtr<AgentPage> page, std::unique_ptr<Withholding> withholding,
+              int64_t element, void (AgentPage::*go_on)(std::unique_ptr<Withholding>, size_t),
+              size_t next, std::optional<gfx::RectF> lifted) {
+             if (!page) {
+               return;
+             }
+             if (!lifted) {
+               std::move(withholding->then).Run(std::nullopt);
+               return;
+             }
+             if (!lifted->IsEmpty()) {
+               withholding->boxes[element] = *lifted;
+             }
+             ((*page).*go_on)(std::move(withholding), next);
+           },
+           weak_factory_.GetWeakPtr(), std::move(withholding), element, go_on, next));
+}
+
+void AgentPage::KeepTyped(int64_t element, std::u16string sent) {
+  typed_[element] = std::move(sent);
 }
 
 void AgentPage::Snapshot() {
@@ -1496,7 +2297,8 @@ void AgentPage::StitchTree(size_t next) {
         fields.push_back(*backend);
       }
     }
-    CheckPasswords(std::move(nodes), std::move(fields), {});
+    std::vector<int64_t> labels = UnnamedLabels(nodes, kLabelsAsked);
+    CheckLabels(std::move(nodes), std::move(fields), std::move(labels), {});
     return;
   }
   const Frame& frame = frames_[next];
@@ -1538,25 +2340,194 @@ void AgentPage::StitchTree(size_t next) {
        parent.slot);
 }
 
+void AgentPage::CheckLabels(base::ListValue nodes,
+                            std::vector<int64_t> fields,
+                            std::vector<int64_t> labels,
+                            std::map<int64_t, Choice> choices) {
+  if (labels.empty()) {
+    // Each label shows as its control, which an agent picks by clicking the label, as a person
+    // does; the app names it from the text inside.
+    for (base::Value& node : nodes) {
+      base::DictValue* dict = node.GetIfDict();
+      const std::optional<int64_t> element = dict ? ElementOf(*dict) : std::nullopt;
+      const auto choice = element ? choices.find(*element) : choices.end();
+      if (choice == choices.end()) {
+        continue;
+      }
+      dict->SetByDottedPath("role.value", choice->second.role);
+      dict->Set("label", true);
+      dict->EnsureList("properties")
+          ->Append(base::DictValue()
+                       .Set("name", "checked")
+                       .Set("value", base::DictValue()
+                                         .Set("type", "tristate")
+                                         .Set("value", choice->second.checked ? "true" : "false")));
+    }
+    CheckPasswords(std::move(nodes), std::move(fields), {});
+    return;
+  }
+  const int64_t label = labels.back();
+  labels.pop_back();
+  ChoiceOf(label, base::BindOnce(
+                      [](base::WeakPtr<AgentPage> page, base::ListValue nodes,
+                         std::vector<int64_t> fields, std::vector<int64_t> labels,
+                         std::map<int64_t, Choice> choices, int64_t label,
+                         std::optional<Choice> choice) {
+                        if (!page) {
+                          return;
+                        }
+                        if (choice) {
+                          choices[label] = std::move(*choice);
+                        }
+                        page->CheckLabels(std::move(nodes), std::move(fields), std::move(labels),
+                                          std::move(choices));
+                      },
+                      weak_factory_.GetWeakPtr(), std::move(nodes), std::move(fields),
+                      std::move(labels), std::move(choices), label));
+}
+
+void AgentPage::ChoiceOf(int64_t label, ChoiceThen then) {
+  const int slot = SlotOfElement(label);
+  // Node ids hold only after the session has asked for the document.
+  Send(
+      "DOM.getDocument", base::DictValue().Set("depth", 0),
+      base::BindOnce(
+          [](base::WeakPtr<AgentPage> page, int slot, int64_t label, ChoiceThen then,
+             const base::DictValue* result) {
+            const base::DictValue* root = result ? result->FindDict("root") : nullptr;
+            const std::optional<int> document = root ? root->FindInt("nodeId") : std::nullopt;
+            if (!page || !document) {
+              std::move(then).Run(std::nullopt);
+              return;
+            }
+            page->Send(
+                "DOM.pushNodesByBackendIdsToFrontend",
+                base::DictValue().Set("backendNodeIds",
+                                      base::ListValue().Append(NodeOfElement(label))),
+                base::BindOnce(
+                    [](base::WeakPtr<AgentPage> page, int slot, int document, ChoiceThen then,
+                       const base::DictValue* result) {
+                      const base::ListValue* ids = result ? result->FindList("nodeIds") : nullptr;
+                      const std::optional<int> node =
+                          ids && !ids->empty() ? (*ids)[0].GetIfInt() : std::nullopt;
+                      if (!page || !node || *node == 0) {
+                        std::move(then).Run(std::nullopt);
+                        return;
+                      }
+                      page->Send(
+                          "DOM.getAttributes", base::DictValue().Set("nodeId", *node),
+                          base::BindOnce(
+                              [](base::WeakPtr<AgentPage> page, int slot, int document, int node,
+                                 ChoiceThen then, const base::DictValue* result) {
+                                if (!page) {
+                                  std::move(then).Run(std::nullopt);
+                                  return;
+                                }
+                                const base::ListValue* attributes =
+                                    result ? result->FindList("attributes") : nullptr;
+                                std::optional<std::string> id;
+                                // Name, value, name, value.
+                                for (size_t i = 0; attributes && i + 1 < attributes->size();
+                                     i += 2) {
+                                  const std::string* name = (*attributes)[i].GetIfString();
+                                  const std::string* value = (*attributes)[i + 1].GetIfString();
+                                  if (name && value && *name == "for") {
+                                    id = *value;
+                                  }
+                                }
+                                // A label with a "for" is for that element, wherever it is.
+                                const int scope = id ? document : node;
+                                page->FindChoice(slot, scope, std::move(id), 0, std::move(then));
+                              },
+                              page, slot, document, *node, std::move(then)),
+                          slot);
+                    },
+                    page, slot, *document, std::move(then)),
+                slot);
+          },
+          weak_factory_.GetWeakPtr(), slot, label, std::move(then)),
+      slot);
+}
+
+void AgentPage::FindChoice(int slot,
+                           int scope,
+                           std::optional<std::string> id,
+                           size_t kind,
+                           ChoiceThen then) {
+  if (kind >= std::size(kChoiceKinds)) {
+    std::move(then).Run(std::nullopt);
+    return;
+  }
+  std::string selector = ChoiceSelector(kChoiceKinds[kind], id);
+  // Made before the call, whose reply takes the selector: Windows' compilers evaluate a call's
+  // arguments right to left, so the reply's would take it first and leave the query empty.
+  base::DictValue query = base::DictValue().Set("nodeId", scope).Set("selector", selector);
+  Send(
+      "DOM.querySelectorAll", std::move(query),
+      base::BindOnce(
+          [](base::WeakPtr<AgentPage> page, int slot, int scope, std::optional<std::string> id,
+             size_t kind, std::string selector, ChoiceThen then, const base::DictValue* result) {
+            if (!page) {
+              std::move(then).Run(std::nullopt);
+              return;
+            }
+            const base::ListValue* found = result ? result->FindList("nodeIds") : nullptr;
+            if (!found || found->empty()) {
+              page->FindChoice(slot, scope, std::move(id), kind + 1, std::move(then));
+              return;
+            }
+            // Whether it's checked now, not as the page's HTML first had it.
+            page->Send(
+                "DOM.querySelectorAll",
+                base::DictValue().Set("nodeId", scope).Set("selector", selector + ":checked"),
+                base::BindOnce(
+                    [](size_t kind, ChoiceThen then, const base::DictValue* result) {
+                      const base::ListValue* checked =
+                          result ? result->FindList("nodeIds") : nullptr;
+                      std::move(then).Run(
+                          Choice{std::string(kChoiceKinds[kind]), checked && !checked->empty()});
+                    },
+                    kind, std::move(then)),
+                slot);
+          },
+          weak_factory_.GetWeakPtr(), slot, scope, std::move(id), kind, std::move(selector),
+          std::move(then)),
+      slot);
+}
+
 void AgentPage::CheckPasswords(base::ListValue nodes,
                                std::vector<int64_t> fields,
                                std::set<int64_t> passwords) {
   if (fields.empty()) {
-    base::DictValue answer = base::DictValue().Set("nodes", AgentTree(std::move(nodes), passwords));
-    if (job_ && job_->busy) {
-      answer.Set("busy", true);
+    // What the agent typed or chose, which a field then shows only while it holds exactly that:
+    // typing replaces what the field held, so anything else in it, even what the page or an
+    // extension changed as the agent typed, isn't the agent's.
+    if (job_ && (job_->action == BC_AGENT_PAGE_TYPE || job_->action == BC_AGENT_PAGE_TYPE_SUBMIT)) {
+      KeepTyped(job_->element, base::UTF8ToUTF16(job_->text));
+    } else if (choosing_ == Choosing::kChosen && field_) {
+      KeepTyped(field_, base::UTF8ToUTF16(chosen_name_));
     }
-    if (choosing_ == Choosing::kChosen && shows_) {
-      answer.Set("chosen", chosen_name_);
+    // Each field, with what the tree says of where what it holds came from.
+    std::vector<std::pair<int64_t, FieldFacts>> filled;
+    for (const base::Value& node : nodes) {
+      const base::DictValue* dict = node.GetIfDict();
+      const std::optional<int64_t> element = dict ? ElementOf(*dict) : std::nullopt;
+      if (!element || !IsField(*dict)) {
+        continue;
+      }
+      FieldFacts facts;
+      facts.value = base::UTF8ToUTF16(ValueOf(*dict).value_or(std::string()));
+      facts.secret = passwords.contains(*element) || Has(*dict, "wasPassword");
+      facts.autofilled = Has(*dict, "autofilled");
+      facts.fixed = IsDisabled(node) || Has(*dict, "readonly");
+      facts.select = IsRole(*dict, "combobox");
+      if (const auto typed = typed_.find(*element); typed != typed_.end()) {
+        facts.typed = typed->second;
+      }
+      filled.emplace_back(*element, std::move(facts));
     }
-    // The ids of elements in frames of their own are doubles, written as the integers they are.
-    std::optional<std::string> json = base::WriteJsonWithOptions(
-        base::Value(std::move(answer)), base::JSONWriter::OPTIONS_OMIT_DOUBLE_TYPE_PRESERVATION);
-    if (json) {
-      Answer(std::move(*json), /*error=*/false);
-    } else {
-      Fail("The page's tree couldn't be read.");
-    }
+    Bound(filled);
+    ReadContents(std::move(nodes), std::move(passwords), std::move(filled), 0);
     return;
   }
   const int64_t field = fields.back();
@@ -1577,6 +2548,58 @@ void AgentPage::CheckPasswords(base::ListValue nodes,
                  },
                  weak_factory_.GetWeakPtr(), std::move(nodes), std::move(fields),
                  std::move(passwords), field));
+}
+
+void AgentPage::ReadContents(base::ListValue nodes,
+                             std::set<int64_t> passwords,
+                             std::vector<std::pair<int64_t, FieldFacts>> filled,
+                             size_t next) {
+  // Only a field that could show what it holds needs anything more of the page.
+  while (next < filled.size() && !CouldShow(filled[next].second)) {
+    ++next;
+  }
+  if (next < filled.size()) {
+    const int64_t element = filled[next].first;
+    DescribeField(element, base::BindOnce(
+                               [](base::WeakPtr<AgentPage> page, base::ListValue nodes,
+                                  std::set<int64_t> passwords,
+                                  std::vector<std::pair<int64_t, FieldFacts>> filled, size_t next,
+                                  const base::DictValue* described) {
+                                 if (!page) {
+                                   return;
+                                 }
+                                 AddDescribed(filled[next].second, described);
+                                 page->ReadContents(std::move(nodes), std::move(passwords),
+                                                    std::move(filled), next + 1);
+                               },
+                               weak_factory_.GetWeakPtr(), std::move(nodes), std::move(passwords),
+                               std::move(filled), next));
+    return;
+  }
+  // A field shows what it holds only where an agent's picture of it would (withheld_fields.h).
+  std::map<int64_t, FieldShown> contents;
+  for (const auto& [element, facts] : filled) {
+    const Seen seen = SeenOf(facts);
+    contents[element] = {seen, seen == Seen::kValue ? base::UTF16ToUTF8(facts.value) : ""};
+  }
+  base::DictValue answer =
+      base::DictValue().Set("nodes", AgentTree(std::move(nodes), passwords, contents));
+  if (job_ && job_->busy) {
+    answer.Set("busy", true);
+  } else if (job_ && job_->requests) {
+    answer.Set("requests", true);
+  }
+  if (choosing_ == Choosing::kChosen && shows_) {
+    answer.Set("chosen", chosen_name_);
+  }
+  // The ids of elements in frames of their own are doubles, written as the integers they are.
+  std::optional<std::string> json = base::WriteJsonWithOptions(
+      base::Value(std::move(answer)), base::JSONWriter::OPTIONS_OMIT_DOUBLE_TYPE_PRESERVATION);
+  if (json) {
+    Answer(std::move(*json), /*error=*/false);
+  } else {
+    Fail("The page's tree couldn't be read.");
+  }
 }
 
 void AgentPage::Center(Then then) {
@@ -1604,52 +2627,110 @@ void AgentPage::Locate(Then then) {
              if (!page) {
                return;
              }
-             page->Send(
-                 "DOM.scrollIntoViewIfNeeded", base::DictValue().Set("backendNodeId", element),
+             page->ScrollParams(
+                 slot, element,
                  base::BindOnce(
                      [](base::WeakPtr<AgentPage> page, int slot, int element, Then then,
-                        const base::DictValue*) {
+                        base::DictValue params) {
                        if (!page) {
                          return;
                        }
                        page->Send(
-                           "DOM.getContentQuads", base::DictValue().Set("backendNodeId", element),
+                           "DOM.scrollIntoViewIfNeeded", std::move(params),
                            base::BindOnce(
-                               [](base::WeakPtr<AgentPage> page, Then then,
-                                  const base::DictValue* result) {
+                               [](base::WeakPtr<AgentPage> page, int slot, int element, Then then,
+                                  const base::DictValue*) {
                                  if (!page) {
                                    return;
                                  }
-                                 const base::ListValue* quads =
-                                     result ? result->FindList("quads") : nullptr;
-                                 const base::ListValue* quad =
-                                     quads && !quads->empty() ? (*quads)[0].GetIfList() : nullptr;
-                                 if (!quad || quad->size() < 8) {
-                                   std::move(then).Run(std::nullopt);
-                                   return;
-                                 }
-                                 // The box around its corners.
-                                 double xs[4];
-                                 double ys[4];
-                                 for (size_t corner = 0; corner < 4; ++corner) {
-                                   xs[corner] = (*quad)[2 * corner].GetIfDouble().value_or(0);
-                                   ys[corner] = (*quad)[2 * corner + 1].GetIfDouble().value_or(0);
-                                 }
-                                 const auto [left, right] = std::ranges::minmax(xs);
-                                 const auto [top, bottom] = std::ranges::minmax(ys);
-                                 const gfx::RectF box(
-                                     static_cast<float>(left), static_cast<float>(top),
-                                     static_cast<float>(right - left),
-                                     static_cast<float>(bottom - top));
-                                 std::move(then).Run(box);
+                                 page->Measure(slot, element, std::move(then));
                                },
-                               page, std::move(then)),
+                               page, slot, element, std::move(then)),
                            slot);
                      },
-                     page, slot, element, std::move(then)),
-                 slot);
+                     page, slot, element, std::move(then)));
            },
            weak_factory_.GetWeakPtr(), slot, element, std::move(then)),
+       slot);
+}
+
+void AgentPage::ScrollParams(int slot,
+                             int element,
+                             base::OnceCallback<void(base::DictValue)> then) {
+  Send(
+      "DOM.getBoxModel", base::DictValue().Set("backendNodeId", element),
+      base::BindOnce(
+          [](base::WeakPtr<AgentPage> page, int slot, int element,
+             base::OnceCallback<void(base::DictValue)> then, const base::DictValue* result) {
+            if (!page) {
+              return;
+            }
+            const base::DictValue* model = result ? result->FindDict("model") : nullptr;
+            const std::optional<int> width = model ? model->FindInt("width") : std::nullopt;
+            const std::optional<int> height = model ? model->FindInt("height") : std::nullopt;
+            if (!width || !height) {
+              std::move(then).Run(base::DictValue().Set("backendNodeId", element));
+              return;
+            }
+            page->Send(
+                "Page.getLayoutMetrics", base::DictValue(),
+                base::BindOnce(
+                    [](int element, int width, int height,
+                       base::OnceCallback<void(base::DictValue)> then,
+                       const base::DictValue* metrics) {
+                      base::DictValue params = base::DictValue().Set("backendNodeId", element);
+                      const base::DictValue* viewport =
+                          metrics ? metrics->FindDict("cssLayoutViewport") : nullptr;
+                      const double view =
+                          viewport ? viewport->FindDouble("clientHeight").value_or(0) : 0;
+                      // A quarter of the view above and below it, or as much as an element too
+                      // tall for that leaves, so its middle, where a click lands, stays in view.
+                      const int room = static_cast<int>(std::min(view / 4, (view - height) / 2));
+                      if (room > 0) {
+                        params.Set("rect", base::DictValue()
+                                               .Set("x", 0)
+                                               .Set("y", -room)
+                                               .Set("width", std::max(width, 1))
+                                               .Set("height", height + 2 * room));
+                      }
+                      std::move(then).Run(std::move(params));
+                    },
+                    element, *width, *height, std::move(then)),
+                slot);
+          },
+          weak_factory_.GetWeakPtr(), slot, element, std::move(then)),
+      slot);
+}
+
+void AgentPage::Measure(int slot, int element, Then then) {
+  Send("DOM.getContentQuads", base::DictValue().Set("backendNodeId", element),
+       base::BindOnce(
+           [](base::WeakPtr<AgentPage> page, Then then, const base::DictValue* result) {
+             if (!page) {
+               return;
+             }
+             const base::ListValue* quads = result ? result->FindList("quads") : nullptr;
+             const base::ListValue* quad =
+                 quads && !quads->empty() ? (*quads)[0].GetIfList() : nullptr;
+             if (!quad || quad->size() < 8) {
+               std::move(then).Run(std::nullopt);
+               return;
+             }
+             // The box around its corners.
+             double xs[4];
+             double ys[4];
+             for (size_t corner = 0; corner < 4; ++corner) {
+               xs[corner] = (*quad)[2 * corner].GetIfDouble().value_or(0);
+               ys[corner] = (*quad)[2 * corner + 1].GetIfDouble().value_or(0);
+             }
+             const auto [left, right] = std::ranges::minmax(xs);
+             const auto [top, bottom] = std::ranges::minmax(ys);
+             const gfx::RectF box(static_cast<float>(left), static_cast<float>(top),
+                                  static_cast<float>(right - left),
+                                  static_cast<float>(bottom - top));
+             std::move(then).Run(box);
+           },
+           weak_factory_.GetWeakPtr(), std::move(then)),
        slot);
 }
 
@@ -1752,6 +2833,137 @@ void AgentPage::HideSuggestions() {
   }
 }
 
+void AgentPage::Covered(gfx::PointF at, base::OnceCallback<void(bool)> then) {
+  CoveredIn(0, at, 0, std::move(then));
+}
+
+void AgentPage::CoveredIn(int slot,
+                          gfx::PointF at,
+                          int depth,
+                          base::OnceCallback<void(bool)> then) {
+  Send("DOM.getNodeForLocation",
+       base::DictValue().Set("x", static_cast<int>(at.x())).Set("y", static_cast<int>(at.y())),
+       base::BindOnce(
+           [](base::WeakPtr<AgentPage> page, int slot, gfx::PointF at, int depth,
+              base::OnceCallback<void(bool)> then, const base::DictValue* found) {
+             if (!page) {
+               return;
+             }
+             const std::optional<int> node = found ? found->FindInt("backendNodeId") : std::nullopt;
+             // Nothing there the page can say, as over its margin: what's found next is the page's.
+             if (!node) {
+               std::move(then).Run(false);
+               return;
+             }
+             page->Send(
+                 "DOM.describeNode", base::DictValue().Set("backendNodeId", *node),
+                 base::BindOnce(&AgentPage::CoveredBy, page, slot, at, depth, *node,
+                                std::move(then)),
+                 slot);
+           },
+           weak_factory_.GetWeakPtr(), slot, at, depth, std::move(then)),
+       slot);
+}
+
+void AgentPage::CoveredBy(int slot,
+                          gfx::PointF at,
+                          int depth,
+                          int node,
+                          base::OnceCallback<void(bool)> then,
+                          const base::DictValue* described) {
+  // A frame's element: the frame it holds takes the input, and one that isn't a web page's is an
+  // extension's, or the browser's.
+  const std::string* frame =
+      described ? described->FindStringByDottedPath("node.frameId") : nullptr;
+  content::RenderFrameHost* inner = nullptr;
+  if (frame) {
+    GetWebContents().GetPrimaryMainFrame()->ForEachRenderFrameHost(
+        [&inner, frame](content::RenderFrameHost* each) {
+          if (each->GetDevToolsFrameToken().ToString() == *frame) {
+            inner = each;
+          }
+        });
+  }
+  if (inner && !IsWebFrame(inner)) {
+    std::move(then).Run(true);
+    return;
+  }
+  // A page's frame in a process of its own, whose own session finds what's under the point there,
+  // which is its frame's element's content box's top left on. One in the same process the first
+  // look went into.
+  const int below = inner ? SlotOf(inner) : -1;
+  constexpr int kDeepest = 8;
+  if (below >= 0 && below != slot && depth < kDeepest) {
+    Send("DOM.getBoxModel", base::DictValue().Set("backendNodeId", node),
+         base::BindOnce(
+             [](base::WeakPtr<AgentPage> page, int below, gfx::PointF at, int depth,
+                base::OnceCallback<void(bool)> then, const base::DictValue* result) {
+               if (!page) {
+                 return;
+               }
+               const base::ListValue* content =
+                   result ? result->FindListByDottedPath("model.content") : nullptr;
+               if (!content || content->size() < 2) {
+                 std::move(then).Run(false);
+                 return;
+               }
+               at.Offset(-static_cast<float>((*content)[0].GetIfDouble().value_or(0)),
+                         -static_cast<float>((*content)[1].GetIfDouble().value_or(0)));
+               page->CoveredIn(below, at, depth + 1, std::move(then));
+             },
+             weak_factory_.GetWeakPtr(), below, at, depth, std::move(then)),
+         slot);
+    return;
+  }
+  Send("Accessibility.getPartialAXTree",
+       base::DictValue().Set("backendNodeId", node).Set("fetchRelatives", false),
+       base::BindOnce(
+           [](base::OnceCallback<void(bool)> then, const base::DictValue* tree) {
+             const base::ListValue* nodes = tree ? tree->FindList("nodes") : nullptr;
+             bool made = false;
+             for (size_t i = 0; nodes && i < nodes->size(); ++i) {
+               if (const base::DictValue* dict = (*nodes)[i].GetIfDict()) {
+                 made = made || Has(*dict, "fromExtension");
+               }
+             }
+             std::move(then).Run(made);
+           },
+           std::move(then)),
+       slot);
+}
+
+bool AgentPage::KeysInExtension() {
+  content::RenderFrameHost* focused = GetWebContents().GetFocusedFrame();
+  return focused && !IsWebFrame(focused);
+}
+
+void AgentPage::RefuseExtension(std::string why) {
+  static constexpr std::pair<int, const char*> kActions[] = {
+      {BC_AGENT_PAGE_CLICK, "click"},           {BC_AGENT_PAGE_TYPE, "type"},
+      {BC_AGENT_PAGE_TYPE_SUBMIT, "type"},      {BC_AGENT_PAGE_KEY, "press_key"},
+      {BC_AGENT_PAGE_SCROLL_DOWN, "scroll"},    {BC_AGENT_PAGE_SCROLL_UP, "scroll"},
+      {BC_AGENT_PAGE_SELECT, "select_option"},
+  };
+  const char* action = "click";
+  for (const auto& [each, name] : kActions) {
+    if (job_ && job_->action == each) {
+      action = name;
+    }
+  }
+  const Space* space = Space::Holding(tab_);
+  if (space && space->agent() && Host().agent_activity) {
+    // check.sh reads it in the log, as Settings › Agents lists it.
+    const bc_agent_activity entry = {
+        .agent = space->agent()->id.c_str(),
+        .tab = tab_,
+        .action = action,
+        .refused = why.c_str(),
+    };
+    Host().agent_activity(Host().context, &entry);
+  }
+  Fail(std::move(why));
+}
+
 // static
 void AgentPage::AppRefused(content::WebContents* contents, const GURL& url) {
   AgentPage* page = contents ? FromWebContents(contents) : nullptr;
@@ -1790,6 +3002,8 @@ void AgentPage::Answer(std::string text, bool error) {
   app_name_.clear();
   const uint64_t request = job_->request;
   job_.reset();
+  limit_.Ended();
+  working_.RunAndReset();
   frames_.clear();
   EndChoosing();
   wheel_.reset();
@@ -1821,6 +3035,55 @@ void AgentPage::Fail(std::string why) {
   Answer(std::move(why), /*error=*/true);
 }
 
+void AgentPage::EndWaiting(std::string why, std::optional<std::string> unstarted) {
+  // What the page owes the job is never waited on again: a reply that comes once the dialog is
+  // answered would otherwise run into the job after this one. Dropped, a picture under way
+  // answers that there's none.
+  base::flat_map<int, std::pair<int, Reply>> owed = std::exchange(replies_, {});
+  // The jobs queued behind it would each send to a page that can't answer while its dialog is up,
+  // and wait out the limit in turn, so they end now with their own answer, after this one's.
+  std::deque<Job> queued = unstarted ? std::exchange(jobs_, {}) : std::deque<Job>();
+  Fail(std::move(why));
+  for (const Job& job : queued) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&Report, tab_, job.request, *unstarted, true));
+  }
+}
+
+// static
+void AgentPage::DialogShown(bc_id tab, int kind) {
+  content::WebContents* contents = Tab::FromId(tab);
+  AgentPage* page = contents ? FromWebContents(contents) : nullptr;
+  if (!page) {
+    return;
+  }
+  // As the app names it in its answer to a call that comes while it's up.
+  std::string_view what;
+  switch (kind) {
+    case BC_DIALOG_ALERT:
+      what = "an alert";
+      break;
+    case BC_DIALOG_CONFIRM:
+      what = "a confirm dialog";
+      break;
+    case BC_DIALOG_PROMPT:
+      what = "a prompt dialog";
+      break;
+    case BC_DIALOG_LEAVE:
+      what = "a dialog asking whether to leave it";
+      break;
+    case BC_DIALOG_SIGN_IN:
+      what = "a dialog asking for a user name and password";
+      break;
+    case BC_DIALOG_OPEN_APP:
+      what = "a dialog asking to open another app";
+      break;
+    default:
+      what = "a dialog";
+  }
+  page->limit_.DialogShown(what);
+}
+
 void AgentPage::AnswerHeld() {
   if (std::optional<Held> held = std::exchange(held_, std::nullopt)) {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
@@ -1835,6 +3098,8 @@ void AgentPage::LetGo() {
     owed.push_front(*std::move(job_));
   }
   job_.reset();
+  limit_.Ended();
+  working_.RunAndReset();
   download_starting_.Stop();
   AnswerHeld();
   for (const Job& job : owed) {
@@ -1843,6 +3108,10 @@ void AgentPage::LetGo() {
                                   std::string("The agent's session with the tab ended."), true));
   }
   weak_factory_.InvalidateWeakPtrs();
+  // What the agent typed is kept only to compare with while its session lasts.
+  typed_.clear();
+  acted_ = false;
+  pictures_ = 0;
   wheel_.reset();
   wait_.Stop();
   rest_.Stop();
@@ -1914,6 +3183,7 @@ void AgentPage::Send(const char* method, base::DictValue params, Reply reply, in
     return;
   }
   replies_[id] = {slot, std::move(reply)};
+  limit_.Sent();
   agent_host_->DispatchProtocolMessage(this, base::as_byte_span(*json));
 }
 
@@ -1922,13 +3192,7 @@ void AgentPage::AutoAttach(int slot) {
   if (!agent_host_) {
     return;
   }
-  Send("Target.setAutoAttach",
-       base::DictValue()
-           .Set("autoAttach", true)
-           .Set("waitForDebuggerOnStart", false)
-           .Set("flatten", true)
-           .Set("filter", base::ListValue().Append(base::DictValue().Set("type", "iframe"))),
-       base::DoNothing(), slot);
+  Send("Target.setAutoAttach", AutoAttaching(), base::DoNothing(), slot);
 }
 
 void AgentPage::Detach() {
@@ -1968,6 +3232,7 @@ void AgentPage::DispatchProtocolMessage(content::DevToolsAgentHost* agent_host,
   }
   Reply run = std::move(reply->second.second);
   replies_.erase(reply);
+  limit_.Replied(replies_.size());
   // An error has no result, which each reply takes for a failure.
   std::move(run).Run(dict->FindDict("result"));
 }
@@ -1978,6 +3243,7 @@ void AgentPage::AgentHostClosed(content::DevToolsAgentHost* agent_host) {
   auto replies = std::move(replies_);
   replies_.clear();
   targets_.clear();
+  limit_.Replied(0);
   for (auto& [id, reply] : replies) {
     std::move(reply.second).Run(nullptr);
   }
@@ -2033,6 +3299,7 @@ void AgentPage::Detached(const std::string& session) {
     }
     Reply run = std::move(reply->second.second);
     replies_.erase(reply);
+    limit_.Replied(replies_.size());
     std::move(run).Run(nullptr);
   }
 }
@@ -2047,6 +3314,11 @@ void AgentPage::DidStopLoading() {
 }
 
 void AgentPage::DidFinishNavigation(content::NavigationHandle* navigation) {
+  // A new document's fields hold nothing the agent typed.
+  if (navigation->IsInPrimaryMainFrame() && navigation->HasCommitted() &&
+      !navigation->IsSameDocument()) {
+    typed_.clear();
+  }
   if (navigation->IsDownload() && job_) {
     download_starting_.Start(FROM_HERE, kDownloadStart,
                              base::BindOnce(&AgentPage::AnswerHeld, base::Unretained(this)));

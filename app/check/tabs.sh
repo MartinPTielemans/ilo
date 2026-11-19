@@ -1,3 +1,4 @@
+# check.sh runs this at 30.
 # A tab opened from the command bar goes at the top of the Space's Today tabs and shows. The command
 # bar lists the Space's other tabs before anything is typed, those shown last first, and suggests
 # pages from history as it's typed in, growing to fit them, with the tabs already at them, never the
@@ -8,10 +9,11 @@
 # filters, and ↩ switches to the one left. ⌘T or ⌘L closes the open bar again, ⌘L's field holds the
 # whole address, and ↩ on it as it opened reloads the page. Tab in the empty field, or "/ ", lists
 # only the commands, which typing filters, until Esc or ⌫ at the start leaves, and "2. tab" goes to
-# the second sidebar item. ⌘1–⌘9, ⌥⌘↓, ⌥⌘↑ and clicks on rows show tabs. ⌃Tab, with the page or
-# the UI focused, shows the tab shown before, and with ⌃ held goes on back through the tabs in the
-# order they were shown, and ⌃⇧Tab the other way,
-# until ⌃ goes up or a click. A tab a page opens goes under it and closing it goes back there, and
+# the second sidebar item. ⌘1–⌘9, ⌥⌘↓, ⌥⌘↑ and clicks on rows show tabs. A quick ⌃Tab, with the
+# page or the UI focused, shows the tab shown before and nothing else; held, it shows the switcher
+# of the tabs in the order they were shown, where ⌃Tab, ⇧ and the arrows move the selection, letting
+# go of ⌃ or a press on a row shows it, and Escape goes back to the tab the walk started from
+# (switcher-light.png, switcher-dark.png); ⌃⇧Tab starts the other way. A tab a page opens goes under it and closing it goes back there, and
 # ⌘W otherwise shows the tab below, or above at the bottom. Tabs opened behind close to their
 # sibling, then their opener; after a switch to an unrelated tab, a tab opened in front closes to
 # the tab below; and a pinned tab's newest tab opened in front closes back to it, past an older one.
@@ -25,11 +27,15 @@
 # that loads once it's first shown, Tab on the row that hints a search engine, or a space after its
 # keyword, searches with that engine alone until ⌫ leaves, ↩ on a sum's row copies its result, and a
 # right-click in its field shows the field's menu, with Paste and Go. Site Search Settings opens
-# Chromium's search engines page. The command bar's tests, in src/command_bar/tests.rs, have the
-# rest of its keys and what the menu's items do. A tab's menu walks by its keys past lines and
-# dimmed items, selects by typing, opens a submenu by → and by the pointer, which crosses a row on
-# its way there without taking it, picks what a press-drag-release ends on and closes on a click
-# outside. A tab unseen for 2 hours lets go of its page as another is shown, unless it plays sound,
+# Chromium's search engines page, where a site search added for the run's own server and made the
+# default is the one Settings' Search engine shows chosen, until it picks DuckDuckGo back. A new
+# profile's onboarding opens on DuckDuckGo and its Search engine lists Google last, whose pick asks
+# Google's hosts, the run's own server here, for the search alone, and which stays gone once
+# Chromium's page deletes it. The command bar's tests, in src/command_bar/tests.rs, have the rest of its keys and what the menu's
+# items do. A tab's menu walks by its keys past lines and dimmed items, selects by typing, opens a
+# submenu by → and by the pointer, which crosses a row on its way there without taking it, picks
+# what a press-drag-release ends on and closes on a click outside. A tab unseen for 2 hours lets go
+# of its page as another is shown, unless it plays sound,
 # its page asks before it's left or a split shows it, and loads it back with its history once shown,
 # and Settings' Unload switch turns that off and on. The header's glyphs stay lit with the
 # command bar open and with the page having the keyboard, and dim behind Settings till it goes. Back right-clicked or held lists the pages
@@ -37,7 +43,9 @@
 # back in a tab behind. Tabs › Reset all tabs in this Space takes the loaded pinned tabs away from
 # their pinned URLs back there, and leaves an unloaded one. ⌘-click and ⇧-click choose rows,
 # whose menu and ⇧⌘C copy their links, one a line, and ⌘D, New Folder and ⌘W pin, folder and
-# close them all, each one step for ⌘Z. Reports how long switches take.
+# close them all, each one step for ⌘Z. Sort Today Tabs by Site puts each site's tabs together at
+# its first tab's place, recorded light and dark, dimmed in the Tabs menu then, one step for ⌘Z,
+# and the order comes back after a quit. Reports how long switches take.
 
 # A Space's Today tabs. The page opens a tab of its own from its button, the way a link to a new tab
 # does, p in it plays a quiet tone until x, and u has it ask before it's left, or stop asking. The
@@ -70,8 +78,15 @@ log="$out/tabs.log"
 trace="$PWD/$out/trace.json"
 step=0
 rm -f "$saved" "$launch_frame"
-BROWSER_DRIVE=1 BROWSER_URL="$page" "$browser" --enable-tracing=latency \
-  --enable-tracing-format=json --trace-startup-file="$trace" < "$out/drive" > "$log" 2>&1 &
+# The example.com and example.org pages the steps open, and DuckDuckGo's for the searches, come from
+# a server of the run's own, which a runner always reaches (#3144).
+serve_tls example '<meta charset=utf-8><link rel=icon href="data:,"><title>Example Domain</title>
+<h1>Example Domain</h1>' example.com '*.example.com' example.org duckduckgo.com
+# shellcheck disable=SC2086 # the record mode, or nothing
+BROWSER_DRIVE=1 BROWSER_URL="$page" "$browser" --enable-tracing="$trace_categories" $trace_mode \
+  --enable-tracing-format=json --trace-startup-file="$trace" \
+  --host-resolver-rules="$tls_rules" --ignore-certificate-errors-spki-list="$tls_key" \
+  < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
@@ -365,7 +380,11 @@ none_while '^browser: menu submenu Move to hidden$' ||
 expect '^browser: menu submenu Move to hidden$' "resting under Move to didn't close its submenu"
 send key escape
 expect '^browser: menu closed$' "escape didn't close the menu"
-# Press, drag and release: a right press opens the menu, and letting go on an item picks it.
+# Press, drag and release: a right press opens the menu, and letting go on an item picks it. The
+# page has had the keyboard since the bar's ↩ loaded it, and each menu closing gives it back, so a
+# click on the sidebar gives the UI the keyboard first: the click into the page after the pick then
+# shows where it went.
+send click $sidebar_point
 set -- $(row 0)
 send rightpress $1 $2
 expect "^browser: menu shown $(cased 'Copy Link, ')" "a right press on the top Today row didn't show its menu"
@@ -374,6 +393,18 @@ send rightdragto $(($1 + 60)) $(($2 + 16))
 expect "^browser: menu highlights $(cased 'Copy Link') at " "dragging onto Copy Link didn't highlight it"
 send rightrelease $(($1 + 60)) $(($2 + 16))
 expect "^browser: menu chose $(cased 'Copy Link')\$" "letting go on Copy Link didn't pick it"
+# The first click after an item chosen with the pointer lands in the page, and the window stays
+# where it was: on Windows the press that opened the menu, whose release the menu took, left the
+# browser window holding the mouse captured, so the click went to the UI over the page (#2516).
+send order
+[ "$focus" != RenderWidgetHostViewCocoa ] ||
+  fail "the page had the keyboard before the click into it, which then can't say where the click went"
+chosen_frame=$(grep '^browser: frame window 1 ' "$log" | tail -1 | cut -d' ' -f5-)
+send click $page_point
+in_browser RenderWidgetHostViewCocoa "a click into the page right after a menu item chosen with the pointer"
+send order
+[ "$(grep '^browser: frame window 1 ' "$log" | tail -1 | cut -d' ' -f5-)" = "$chosen_frame" ] ||
+  fail "a click into the page right after a menu item chosen with the pointer moved the window from $chosen_frame"
 # A click outside closes the menu, and goes no further.
 post rightclick $(row 0)
 expect "^browser: menu shown $(cased 'Copy Link, ')" "a right-click on the top Today row didn't show its menu"
@@ -422,26 +453,132 @@ switch "up alt cmd" "$b"
 switch "down alt cmd" "$a"
 # Next wraps around, as in Chrome.
 switch "down alt cmd" "$c"
-# ⌃Tab goes back through the tabs in the order they were shown, c, a and b by now, as far as ⌃
-# stays down. Then the tab it showed counts as shown last.
+# ⌃Tab goes back through the tabs in the order they were shown, c, a and b by now (#2954). A quick
+# one switches once, on its press, and shows nothing; the tab it showed counts as shown last.
 send click $page_point
-switch "tab ctrl" "$a"
-expect '^browser: command recent-tab via page$' "⌃Tab with the page focused didn't reach the UI"
-switch "tab ctrl" "$b"
+tapped_from=$(wc -l < "$log")
+send key tab ctrl
+tapped=$step
 send flags
-switch "tab ctrl" "$c"
+# Arithmetic, as the Mac's wc pads its count with spaces, which tail -n refuses.
+let_go=$(($(wc -l < "$log")))
+expect "^browser: selected $a in " "a quick ⌃Tab didn't show $a, the tab shown before $c" "$tapped"
+expect '^browser: command recent-tab via page$' "⌃Tab with the page focused didn't reach the UI" "$tapped"
+# Windows' driver sends its next command later than [tab-switcher.motion] delay, so there the tap
+# is held long enough to show the switcher before ⌃ goes up, and letting go on the tab shown
+# switches no more. One shown after ⌃ went up is a failure, read at the next step's.
+sed -n "/^browser: drive $tapped: /,/^browser: drive $((tapped + 1)): /p" "$log" |
+  grep -q '^browser: tab switcher lists ' &&
+  echo "skip: a quick ⌃Tab showing nothing, as the driver let go of ⌃ after the switcher's delay"
+# The switcher's rows: ⌘T's place and width, its rows 50 tall inside a 6 inset, row $1's middle.
+switcher_row() {
+  echo "$((765 / 2)) $((6 + 50 * $1 + 25))"
+}
+# Presses the switcher's key $1 with ⌃ still held: Ctrl off the Mac, where the driver's ctrl is Alt
+# but for Tab, and a key without Ctrl would let it go.
+held_key() {
+  if [ "$(uname)" = Darwin ]; then send key "$1" ctrl; else send key "$1" cmd; fi
+}
+# The number of tabs shown since the log's line $1.
+switches_since() {
+  tail -n +"$(($1 + 1))" "$log" | grep -c '^browser: selected ' || true
+}
+# Held, it shows the Space's tabs, most recently shown first, with the one ⌃Tab showed selected,
+# and the page stays: ⌃Tab and the arrows move the selection, wrapping, and letting go of ⌃ shows
+# its row, one more switch.
+send menu "$(cased 'Appearance › Light')"
+expect '^browser: appearance light$' "View › Appearance › Light didn't change the appearance"
+from=$(wc -l < "$log")
+send key tab ctrl
+expect "^browser: selected $c in " "⌃Tab didn't show $c, the tab shown before $a"
+expect "^browser: tab switcher lists $a $c $b selected $c\$" \
+  "⌃Tab held didn't list $a, $c and $b with $c selected: $(grep '^browser: tab switcher lists ' "$log" | tail -1)"
+expect '^browser: tab switcher shown$' "the switcher's window didn't show"
+expect '^browser: tab switcher drawn$' "the switcher's window showed but never drew a frame"
+[ "$(tail -n +"$let_go" "$log" | grep -c '^browser: tab switcher lists ')" = 1 ] ||
+  fail "a quick ⌃Tab showed the switcher after ⌃ went up"
+[ "$(switches_since "$tapped_from")" = 2 ] ||
+  fail "a quick ⌃Tab and a held one switched $(switches_since "$tapped_from") times, not once each"
+../tools/window-screenshot.sh "$pid" "$out/switcher-light.png" all || fail "no window to capture"
+send key tab ctrl
+expect "^browser: tab switcher selected $b\$" "⌃Tab with the switcher shown didn't select $b"
+held_key right
+expect "^browser: tab switcher selected $a\$" "→ on the switcher's last row didn't wrap to $a"
+held_key left
+expect "^browser: tab switcher selected $b\$" "← didn't go back to $b"
 send flags
-switch "tab ctrl shift" "$a"
+expect "^browser: selected $b in " "letting go of ⌃ on $b didn't show it"
+expect '^browser: tab switcher hidden$' "letting go of ⌃ didn't close the switcher"
+[ "$(switches_since "$from")" = 2 ] ||
+  fail "a held ⌃Tab walk switched $(switches_since "$from") times, not twice: on the press and as ⌃ went up"
+# Escape goes back to the tab the walk started from, b.
+send menu "$(cased 'Appearance › Dark')"
+expect '^browser: appearance dark$' "View › Appearance › Dark didn't change the appearance"
+send key tab ctrl
+expect "^browser: selected $a in " "⌃Tab didn't show $a, the tab shown before $b"
+expect "^browser: tab switcher lists $b $a $c selected $a\$" \
+  "⌃Tab held didn't list $b, $a and $c with $a selected: $(grep '^browser: tab switcher lists ' "$log" | tail -1)"
+expect '^browser: tab switcher drawn$' "the switcher's window didn't draw a frame"
+../tools/window-screenshot.sh "$pid" "$out/switcher-dark.png" all || fail "no window to capture"
+send key tab ctrl
+expect "^browser: tab switcher selected $c\$" "⌃Tab with the switcher shown didn't select $c"
+if windows; then
+  # Ctrl+Esc is the Start menu's on Windows, so it walks back to b and lets go, the same end.
+  echo "skip: Escape in the tab switcher on Windows, where Ctrl+Esc opens the Start menu"
+  held_key left
+  expect "^browser: tab switcher selected $a\$" "← didn't go back to $a"
+  held_key left
+  expect "^browser: tab switcher selected $b\$" "← didn't go back to $b"
+  send flags
+  expect "^browser: selected $b in " "letting go of ⌃ on $b didn't show it"
+  expect '^browser: tab switcher hidden$' "letting go of ⌃ didn't close the switcher"
+else
+  held_key escape
+  expect "^browser: tab switcher stays on $b\$" "Escape in the switcher didn't stay on $b"
+  expect "^browser: selected $b in " "Escape in the switcher didn't go back to $b"
+  expect '^browser: tab switcher hidden$' "Escape didn't close the switcher"
+  send flags
+fi
+send menu "$(cased 'Appearance › Automatic')"
+# A second ⌃Tab before the delay shows it at once, and the page stays.
+# Where the driver's commands come further apart than the delay, the first shows it, and the
+# second moves its selection.
+from=$(wc -l < "$log")
+send key tab ctrl
+pressed=$step
+send key tab ctrl
+expect "^browser: tab switcher .*selected $c\$" \
+  "a second ⌃Tab didn't show the switcher with $c selected: $(grep '^browser: tab switcher lists ' "$log" | tail -1)" "$pressed"
+expect "^browser: tab switcher lists $b $a $c selected " "a second ⌃Tab didn't list $b, $a and $c" "$pressed"
 send flags
+expect "^browser: selected $c in " "letting go of ⌃ on $c didn't show it"
+[ "$(switches_since "$from")" = 2 ] ||
+  fail "⌃Tab twice switched $(switches_since "$from") times, not twice: on the first press and as ⌃ went up"
+# A press on a row shows its tab, a, and the tab the walk passed through, b, doesn't count as shown
+# (#3114), so ⌃⇧Tab goes back to it. The press keeps the walk's ⌃ held, as a hand's does (#3340),
+# and waits for the switcher to draw its rows.
+send key tab ctrl
+expect "^browser: tab switcher lists $c $b $a selected $b\$" \
+  "⌃Tab held didn't list $c, $b and $a with $b selected: $(grep '^browser: tab switcher lists ' "$log" | tail -1)"
+expect '^browser: tab switcher drawn$' "the switcher's window didn't draw a frame"
+send clickkey $(switcher_row 2)
+expect "^browser: tab switcher chose $a\$" "a press on the switcher's third row didn't choose $a"
+expect "^browser: selected $a in " "a press on the switcher's row didn't show $a"
+send flags
+# ⌃⇧Tab starts from the tab shown longest ago, and goes back.
+send key tab ctrl shift
+expect "^browser: selected $b in " "⌃⇧Tab didn't show $b, the tab shown longest ago"
+expect "^browser: tab switcher lists $a $c $b selected $b\$" \
+  "⌃⇧Tab held didn't list $a, $c and $b with $b selected: $(grep '^browser: tab switcher lists ' "$log" | tail -1)"
+send key tab ctrl shift
+expect "^browser: tab switcher selected $c\$" "⌃⇧Tab with the switcher shown didn't select $c"
+held_key left
+expect "^browser: tab switcher selected $a\$" "← didn't go back to $a"
+send flags
+expect "^browser: selected $a in " "letting go of ⌃ on $a didn't show it"
 send click $sidebar_point
 switch "tab ctrl" "$c"
 expect '^browser: command recent-tab via ui$' "⌃Tab with the UI focused didn't reach the UI"
-send flags
-# A click ends the walk too.
-switch "tab ctrl" "$a"
-send click $(row 1)
-expect "^browser: selected $b in " "a click on the second row didn't show its tab"
-switch "tab ctrl shift" "$c"
 send flags
 send click 100 154
 expect '^browser: command new-tab via sidebar$' "a click on \"+ New Tab\" didn't run New Tab"
@@ -612,6 +749,7 @@ fi
 send key w cmd
 expect "^browser: tab $n closed\$" "⌘W didn't close the right pane"
 expect "^browser: panes $b\$" "⌘W on the right pane didn't leave b's page alone"
+ran_once close-tab "one ⌘W on the right pane"
 switch "4 cmd" "$asks"
 send click $page_point
 send key u
@@ -633,30 +771,40 @@ expect_tabs "$b" "$b" "after closing the bottom tab"
 # app answers the first, its tab started and its renderer starting: a quick second press on a busy
 # machine comes then, before the tasks the first posted, among them the one that focuses the tab's
 # page, and went to the pane the page before left, where nothing heard it (#1519).
+# Whether the second press comes in that race is the runner's: Chromium may run the task focusing
+# the page before it reads the press, which then reaches the page and comes back as the first did.
+# Both tabs come back either way, but only a press in the race proves #1519's fix, so the step
+# goes again from the same tabs until one is, up to 5 times (#3382).
 if [ "$(uname)" = Linux ]; then
-  send key t cmd shift again
-  logged '^browser: drive pressed again$' || fail "the driver didn't press ⇧⌘T again as the app answered the first"
-  for _ in $(seq 100); do
-    [ "$(since $step | grep -c '^browser: command reopen-closed-tab via page$')" -ge 2 ] && break
-    sleep 0.1
+  for try in 1 2 3 4 5; do
+    send key t cmd shift again
+    pressed=$step
+    logged '^browser: drive pressed again$' || fail "the driver didn't press ⇧⌘T again as the app answered the first"
+    for _ in $(seq 100); do
+      [ "$(since $step | grep -c '^browser: command reopen-closed-tab via page$')" -ge 2 ] && break
+      sleep 0.1
+    done
+    [ "$(since $step | grep -c '^browser: command reopen-closed-tab via page$')" -ge 2 ] ||
+      fail "the second of two quick ⇧⌘T didn't reach the UI: Today is \"$(today)\""
+    expect "^browser: today [0-9][0-9]* $b [0-9][0-9]*\$" \
+      "two quick ⇧⌘T didn't reopen both tabs where they were: Today is \"$(today)\""
+    raced=0
+    logged '^browser: key for tab [0-9]*, with no page view to hear it, to the browser$' "$pressed" && raced=1
+    top=$(today | cut -d' ' -f1)
+    bottom=$(today | cut -d' ' -f3)
+    # Closed again, so the run goes on as it was, or the step goes again as it began.
+    shown=$(grep '^browser: selected ' "$log" | tail -1 | cut -d' ' -f3)
+    [ "$shown" = "$bottom" ] || switch "9 cmd" "$bottom"
+    send key w cmd
+    expect "^browser: today $top $b\$" "⌘W didn't close the bottom tab ⇧⌘T reopened"
+    shown=$(grep '^browser: selected ' "$log" | tail -1 | cut -d' ' -f3)
+    [ "$shown" = "$top" ] || switch "1 cmd" "$top"
+    send key w cmd
+    expect_tabs "$b" "$b" "after closing the tabs two quick ⇧⌘T reopened"
+    [ "$raced" = 1 ] && break
+    [ "$try" -lt 5 ] ||
+      fail "in each of 5 tries the second ⇧⌘T came once the reopened tab's page had the keyboard, so the check missed #1519's race"
   done
-  [ "$(since $step | grep -c '^browser: command reopen-closed-tab via page$')" -ge 2 ] ||
-    fail "the second of two quick ⇧⌘T didn't reach the UI: Today is \"$(today)\""
-  logged '^browser: key for tab [0-9]*, with no page view to hear it, to the browser$' ||
-    fail "the second ⇧⌘T came once the reopened tab's page had the keyboard, so the check missed #1519's race"
-  expect "^browser: today [0-9][0-9]* $b [0-9][0-9]*\$" \
-    "two quick ⇧⌘T didn't reopen both tabs where they were: Today is \"$(today)\""
-  top=$(today | cut -d' ' -f1)
-  bottom=$(today | cut -d' ' -f3)
-  # Closed again, so the run goes on as it was.
-  shown=$(grep '^browser: selected ' "$log" | tail -1 | cut -d' ' -f3)
-  [ "$shown" = "$bottom" ] || switch "9 cmd" "$bottom"
-  send key w cmd
-  expect "^browser: today $top $b\$" "⌘W didn't close the bottom tab ⇧⌘T reopened"
-  shown=$(grep '^browser: selected ' "$log" | tail -1 | cut -d' ' -f3)
-  [ "$shown" = "$top" ] || switch "1 cmd" "$top"
-  send key w cmd
-  expect_tabs "$b" "$b" "after closing the tabs two quick ⇧⌘T reopened"
 fi
 send key w cmd
 expect_tabs " *" 0 "after closing the last tab"
@@ -871,44 +1019,6 @@ expect '^browser: command bar drew ""$' \
   "Esc didn't put back the bar as ⌘T opened it: $(grep '^browser: command bar drew' "$log" | tail -1)"
 send key escape
 expect '^browser: command bar hidden$' "Esc didn't close the command bar"
-# ⌥⌘⌫ takes the selected row out too, beside ⇧⌦, as Arc's does: here the search for dogs, typed
-# before. Off the Mac it would be Ctrl+Alt+Backspace, which X11 can take to end the session, so
-# there ⇧⌦ alone does (command_bar.rs).
-if [ "$(uname)" = Darwin ]; then
-  remove="backspace alt cmd" removed=⌥⌘⌫
-else
-  remove="delete shift" removed=⇧⌦
-fi
-# History has the search only once its page commits, which can come after the next ⌘T. The page's
-# title says it has: its first page line comes as it starts. Where DuckDuckGo doesn't answer the
-# runner, history never has it (#1875), and the step says it skipped.
-answered=
-for _ in $(seq 100); do
-  logged "^browser: title $searched .*dogs" && answered=1 && break
-  sleep 0.1
-done
-dogs='https://duckduckgo.com/?q=dogs'
-if [ -z "$answered" ]; then
-  echo "skip: $removed on the search for dogs typed before: DuckDuckGo didn't answer, and history has a search only once its page commits."
-else
-  send key t cmd
-  expect '^browser: command bar shown$' "⌘T didn't open the command bar"
-  send type dog
-  expect "^browser: command bar suggestions \"dog\" in .*$dogs[^,]* removable" \
-    "the command bar didn't suggest the search for dogs typed before: $(suggestions | tr '\n' ' ')"
-  for _ in 1 2 3 4 5 6 7 8; do
-    send key down
-    grep '^browser: command bar selected' "$log" | tail -1 | grep -q " $dogs" && break
-  done
-  send key $remove
-  expect "^browser: command bar removes $dogs" "$removed didn't take the search for dogs out"
-  # Chrome says the page left the history, which the bar forgets what it learned of.
-  expect '^browser: history deleted [1-9][0-9]* urls from profile [0-9]*$' \
-    "Chrome didn't say $removed deleted the search for dogs from the history"
-  expect '^browser: command bar suggestions "dog" in ' "the command bar didn't list its rows again after $removed"
-  send key escape
-  expect '^browser: command bar hidden$' "escape didn't close the command bar"
-fi
 # A sum's result is the row after the first, and ↩ on it copies the result, to a pasteboard of the
 # run's own.
 send key t cmd
@@ -1284,7 +1394,6 @@ expect "^browser: chosen $c $b $a\$" "⌘-clicks didn't choose the rows once mor
 send key w cmd
 expect "^browser: today $rest\$" "⌘W with rows chosen didn't close them all: $(today)"
 send key z cmd
-reopened=$step
 expect "^browser: today [0-9][0-9]* [0-9][0-9]* [0-9][0-9]* $rest\$" \
   "⌘Z after ⌘W didn't bring the three chosen tabs back: $(today)"
 
@@ -1311,13 +1420,29 @@ if windows; then
     expect '^browser: new tab plate 0$' "$1 left New Tab's plate selected"
     overlays_none "$1"
   }
-  # The toast from ⌘Z and the hover card under the pointer go by themselves.
-  away
-  for _ in $(seq 100); do
-    toast=$(grep '^browser: toast \(shown\|hidden\)' "$log" | tail -1)
-    card=$(grep '^browser: hover card \(shown\|hidden\)' "$log" | tail -1)
-    case "$toast $card" in *shown*) sleep 0.1 ;; *) break ;; esac
-  done
+  # Where each window over the page is, "x,y" in points, in the driver's order, once there's one.
+  overlays_at() {
+    for _ in $(seq 20); do
+      send overlays
+      at=$(grep '^browser: overlays shown ' "$log" | tail -1 | grep -o ' at [0-9-]*,[0-9-]*' |
+        cut -c5- | tr '\n' ' ')
+      [ -n "$at" ] && return 0
+      sleep 0.1
+    done
+    fail "$1"
+  }
+  # The toast from ⌘Z and the hover card under the pointer go by themselves, once the pointer is
+  # over the page. The driver's pointer is real (#2544), so it rests where a menu was opened, on its
+  # row, which shows the row's hover card once the menu closes, as it does to a hand.
+  settle() {
+    away
+    for _ in $(seq 100); do
+      toast=$(grep '^browser: toast \(shown\|hidden\)' "$log" | tail -1)
+      card=$(grep '^browser: hover card \(shown\|hidden\)' "$log" | tail -1)
+      case "$toast $card" in *shown*) sleep 0.1 ;; *) break ;; esac
+    done
+  }
+  settle
   overlays_none "the steps before"
   send key t cmd
   expect '^browser: command bar shown$' "⌘T didn't open the command bar"
@@ -1342,6 +1467,7 @@ if windows; then
   send key escape
   expect '^browser: menu closed$' "escape didn't close the menu"
   expect '^browser: menu window hidden$' "escape left the menu's window up"
+  settle
   overlays_none "the menu, once closed,"
   send reshow
   expect '^browser: reshown [1-9][0-9]*$' "the driver found none of the UI's windows hidden to show again"
@@ -1362,23 +1488,36 @@ if windows; then
     expect '^browser: menu closed$' "minimizing the window left its menu open"
     expect '^browser: menu window hidden$' "minimizing the window left its menu's window up"
     send minimize
+    settle
     overlays_none "the window coming back from minimized after its menu closed"
   else
     echo "skip: a menu in a minimized window, as the app wasn't active once its window came back."
   fi
+  # Windows' own Win+D and back with the bar open: the bar closes with the window, and once the
+  # window is back the keyboard is the window's, not the hidden bar's, where what the user typed
+  # went unseen and Ctrl+T closed the bar again (#2545). Real keys, which need the desktop to be
+  # the check's own.
+  if [ -n "${CI:-}" ] && [ "$active" = 1 ]; then
+    send key t cmd
+    expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+    send realkey d win
+    bar_gone "Win+D"
+    send realkey d win
+    expect '^browser: command bar hidden, its browser window takes the keyboard$' \
+      "the window back from Win+D left its hidden command bar with the keyboard"
+    send realkey t ctrl
+    expect '^browser: command bar shown$' "Ctrl+T after Win+D and back didn't open the command bar"
+    overlays_at "the command bar after Win+D isn't on screen"
+    send realkey g
+    expect '^browser: command bar drew "g"$' "what's typed after Win+D didn't go into the command bar"
+    ../tools/window-screenshot.sh "$pid" "$out/command-bar-after-win-d.png" || fail "no window to capture"
+    send key escape
+    bar_gone "Esc in the command bar after Win+D"
+  else
+    echo "skip: Win+D with the command bar open, as real keys need CI's desktop and the app active."
+  fi
   # Moved with the bar open, the window takes the bar along, over the same place, where it stayed
   # behind on the screen, and the window's menu closes, as the Mac's do (#1364).
-  # Where each window over the page is, "x,y" in points, in the driver's order, once there's one.
-  overlays_at() {
-    for _ in $(seq 20); do
-      send overlays
-      at=$(grep '^browser: overlays shown ' "$log" | tail -1 | grep -o ' at [0-9-]*,[0-9-]*' |
-        cut -c5- | tr '\n' ' ')
-      [ -n "$at" ] && return 0
-      sleep 0.1
-    done
-    fail "$1"
-  }
   send order
   frame=$(grep '^browser: frame window 1 ' "$log" | tail -1 | cut -d' ' -f5-)
   read -r frame_x frame_y frame_width frame_height <<FRAME
@@ -1408,6 +1547,7 @@ FRAME
   expect '^browser: menu closed$' "moving the window left its menu open"
   expect '^browser: menu window hidden$' "moving the window left its menu's window up"
   send place "$frame_x" "$frame_y" "$frame_width" "$frame_height"
+  settle
   overlays_none "the menu, closed as its window moved,"
   # The bar opened while a page loads in another site's renderer, so its view replaces the one
   # that had the keyboard as it commits: the bar stays open with the keyboard, as it closes only
@@ -1463,20 +1603,127 @@ FRAME
   expect '^browser: command bar shown$' "Ctrl+T didn't open the command bar after Alt+F4 closed a window"
   send key escape
   bar_gone "Esc in the command bar after Alt+F4 closed the window it was over"
+  # The display adapter restarting, as a driver update or a reset does, takes GPUI's device away.
+  # With the bar open and the app idle, the bar's window stayed on screen with nothing drawn in it,
+  # the page reading through its frame and shadow, and the sidebar black, until the next input asked
+  # for a frame (#2536). The device's removal now wakes GPUI to draw its windows again on a new one.
+  # The bar's view isn't rendered again for it, so its "drew" line doesn't say. pnputil needs an
+  # administrator, as CI's runner is.
+  send key t cmd
+  expect '^browser: command bar shown$' "Ctrl+T didn't open the command bar"
+  restarted=$(powershell.exe -NoProfile -Command \
+    'Get-PnpDevice -Class Display -Status OK | ForEach-Object { pnputil /restart-device $_.InstanceId }' \
+    2>&1 || true)
+  case "$restarted" in
+    *"restarted successfully"*)
+      # A driver command that draws nothing, for what's logged after the restart.
+      send overlays
+      expect '^browser: gpui redrew its windows on a new device$' \
+        "the windows drew nothing after the display adapter restarted under the bar, with no input"
+      overlays_at "the command bar's window left the screen as the display adapter restarted"
+      ../tools/window-screenshot.sh "$pid" "$out/bar-adapter-restarted.png" all ||
+        fail "no window to capture"
+      adapter=", and the open bar draws again after the display adapter restarts under it"
+      ;;
+    *) echo "skip: the display adapter restarting under the bar, as pnputil couldn't: $restarted" ;;
+  esac
+  send key escape
+  bar_gone "Esc in the command bar after the display adapter restarted"
+fi
+
+# Showing the desktop with the command bar open (#2711). On X11 the bar is a window of its own that
+# no window manager takes, so it has to leave the screen as its window does: openbox hides every
+# window, and the bar goes with the browser window and comes back with it, with the keys. KWin
+# raises the desktop shell's window over the others and gives it the keys, and the bar closes as
+# it does for any window that takes them; without a shell KWin shows nothing, so the driver maps
+# one. EWMH's _NET_SHOWING_DESKTOP asks either, as openbox's Super+D, KWin's Ctrl+F12 and a
+# pager's button do. sway has no desktop to show and hides a window on another workspace: under
+# Wayland the bar is part of the window's surface and goes with it, and closes as the app goes
+# inactive, as on leaving it for another app's window. sway's Xwayland, where the app is only when
+# X11 is forced in a Wayland session, draws the bar on every workspace and tells no X client its
+# window left the screen (#2720), so the step doesn't run there.
+if [ "$(uname)" = Linux ] && { [ -n "${WAYLAND_DISPLAY:-}" ] || [ "${BROWSER_HEADLESS:-xvfb}" = xvfb ]; }; then
+  # The share, in thousandths, of the capture's most common colour: the empty screen's, with the
+  # pointer the only other thing on it.
+  plain() {
+    ../tools/window-screenshot.sh "$pid" "$1" all || fail "no screen to capture"
+    convert "$1" -format %c histogram:info:- |
+      awk -v all="$(identify -format '%[fx:w*h]' "$1")" \
+        '{ n = $1 + 0; if (n > top) top = n } END { printf "%d\n", top * 1000 / all }'
+  }
+  if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    send key t cmd
+    expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+    opened=$step
+    swaymsg workspace 9 > /dev/null || fail "sway didn't go to another workspace"
+    for _ in $(seq 50); do
+      [ "$(plain "$out/workspace-away.png")" -ge 995 ] && break
+      sleep 0.1
+    done
+    [ "$(plain "$out/workspace-away.png")" -ge 995 ] ||
+      fail "another workspace still showed the bar or its window: $out/workspace-away.png"
+    expect '^browser: command bar hidden$' "the bar stayed open with its window off screen" "$opened"
+    expect '^browser: app active 0$' "the app stayed active with its window off screen" "$opened"
+    active=$(grep -c '^browser: app active 1$' "$log")
+    swaymsg workspace 1 > /dev/null || fail "sway didn't go back to the window's workspace"
+    for _ in $(seq 100); do
+      [ "$(grep -c '^browser: app active 1$' "$log")" -gt "$active" ] && break
+      sleep 0.1
+    done
+    [ "$(grep -c '^browser: app active 1$' "$log")" -gt "$active" ] ||
+      fail "the app didn't log \"browser: app active 1\" in 10 s back on its window's workspace"
+    ../tools/window-screenshot.sh "$pid" "$out/workspace-back.png" all || fail "no screen to capture"
+    desktop="on another workspace the window and its bar are off screen, and the bar closes as the app does on leaving it"
+  else
+    # What the X server shows, as "window <0|1>, overlays <on screen> of <shown>, keyboard <whose>".
+    onscreen() {
+      for _ in $(seq 50); do
+        send onscreen
+        seen=$(grep '^browser: onscreen ' "$log" | tail -1)
+        printf '%s\n' "$seen" | grep -q "^browser: onscreen $1\$" && return 0
+        sleep 0.1
+      done
+      fail "$2: $seen"
+    }
+    send desktop shell
+    send key t cmd
+    expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+    onscreen 'window 1, overlays \([1-9][0-9]*\) of \1, keyboard overlay' \
+      "the bar didn't show over its window with the keys"
+    send desktop on
+    shown=$step
+    onscreen 'window [01], overlays 0 of [0-9][0-9]*, keyboard none' \
+      "showing the desktop left the bar on screen, or the keys with the app"
+    [ "$(plain "$out/desktop-shown.png")" -ge 995 ] ||
+      fail "the desktop showed more than itself: $out/desktop-shown.png"
+    send desktop off
+    onscreen 'window 1, overlays \(\([1-9][0-9]*\) of \2, keyboard overlay\|0 of 0, keyboard window\)' \
+      "the window didn't come back with the keys once the windows showed again"
+    if [ "${seen##*keyboard }" = overlay ]; then
+      send type g
+      expect '^browser: command bar drew "g"$' \
+        "a key typed once the windows showed again didn't reach the bar"
+      ../tools/window-screenshot.sh "$pid" "$out/desktop-back.png" all || fail "no screen to capture"
+      send key escape
+      expect '^browser: command bar hidden$' "Esc didn't close the bar once its window was back"
+      desktop="showing the desktop takes the window and its bar off screen, and back with the keys"
+    else
+      expect '^browser: command bar hidden$' "the bar was off screen but not closed" "$shown"
+      ../tools/window-screenshot.sh "$pid" "$out/desktop-back.png" all || fail "no screen to capture"
+      desktop="showing the desktop closes the bar as the desktop takes the keys, and the window comes back with them"
+    fi
+    send desktop shell off
+  fi
+elif [ "$(uname)" = Linux ]; then
+  echo "skip: another workspace with the command bar open, on sway's Xwayland: sway draws the bar on every workspace and tells no X client its window left the screen; the app is there only when X11 is forced (#2720)."
 fi
 
 # Arc's bar commands that call what the menus do: Mute All Tabs mutes every tab, and Unmute All
 # Tabs, listed while one is muted, unmutes them; Enter Full Screen puts the window full screen and
 # reads Exit Full Screen there, which takes it out; and there Exit, View › Exit's, with ⎋'s key,
 # takes it out too.
-# The ⌘Z above gave the tab shown a fresh page, and a key typed into a page whose renderer is still
-# starting is lost (#1519), which the Wayland pass hits. There ⌘L waits for the page to load. #1974
-# fixes the race in the core and removes this.
-if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
-  echo "skip: ⌘L in the page ⌘Z brought back before it has loaded: the key is lost while its renderer starts (#1519)."
-  reopened_tab=$(sed -n "/^browser: drive $reopened: /,\$p" "$log" | grep '^browser: tab [0-9]* has its page$' | tail -1 | cut -d' ' -f3)
-  expect "^browser: loaded ${reopened_tab:-[0-9]*} " "the tab ⌘Z brought back didn't load" "$reopened"
-fi
+# The ⌘Z above gave the tab shown a fresh page, and ⌘L reaches the browser while its renderer is
+# still starting (#1519).
 send click $page_point
 send key l cmd
 expect '^browser: command bar shown$' "⌘L didn't open the command bar for Mute All Tabs"
@@ -1510,6 +1757,19 @@ exec 3>&-
 # Chrome writes the trace before it quits, once every process has started tracing or 10 s have
 # passed, so a renderer that closed early can hold the quit that long.
 quit 30
+kill "$tls" 2> /dev/null || true
+tls=
+# Each example.com, example.org and DuckDuckGo page the launch loaded came from the run's server.
+examples=$(grep -E '^browser: loaded [0-9]+ https?://([a-z.]*example\.[a-z]+|duckduckgo\.com)/' "$log" |
+  cut -d' ' -f4- | sort -u)
+[ -n "$examples" ] || fail "the launch loaded no example.com or example.org page"
+while read -r url; do
+  grep -qxF "example: GET $url" "$out/example-tls.log" ||
+    fail "$url loaded, but not from the run's server: $(grep -v '^example: ' "$out/example-tls.log" | tail -3)"
+done << EOF
+$examples
+EOF
+echo "ok: the example.com, example.org and DuckDuckGo pages the launch loaded came from the run's own server: $(echo "$examples" | tr '\n' ' ')"
 
 app_ms=$(sed -n 's/^browser: selected [0-9]* in \([0-9.]*\) ms$/\1/p' "$log" | summary)
 [ -s "$trace" ] || fail "the app didn't write its trace"
@@ -1517,34 +1777,20 @@ app_ms=$(sed -n 's/^browser: selected [0-9]* in \([0-9.]*\) ms$/\1/p' "$log" | s
 # Chrome writes Perfetto's proto, its default.
 head -c 1 "$trace" | grep -q '[[{]' ||
   fail "the trace isn't JSON, so Chrome didn't get --enable-tracing-format=json"
-spans=$(python3 -I - "$trace" << 'PY'
-import json, sys
-# Chrome's tab switch spans, begin and end events paired by id, in microseconds. A switch to a tab
-# whose page hasn't loaded yet, as when a new tab shows, times the page load; Chrome reports those
-# apart from switches, and so does this. Chrome times none between the tabs of a split view, as to
-# the one Add Split View opens beside the tab shown, whose page is on screen already, and the core
-# has it do the same for ours. A switch cut off before its frame showed, as by the next switch
-# while ⌃ is held, never finished, so Chrome's histograms leave it out; it's only counted.
-events = json.load(open(sys.argv[1], encoding="utf-8"))
-events = events["traceEvents"] if isinstance(events, dict) else events
-begins = {}
-for event in events:
-    if event.get("name") != "TabSwitching::Latency":
-        continue
-    if event.get("ph") == "b":
-        measurement = event.get("args", {}).get("tab_switch_measurement", {})
-        begins[event.get("id")] = (event["ts"], "NOT_LOADED" in measurement.get("tab_state", ""),
-                                   measurement.get("result") == "RESULT_INCOMPLETE")
-    elif event.get("ph") == "e" and event.get("id") in begins:
-        begin, not_loaded, incomplete = begins.pop(event.get("id"))
-        if not not_loaded:
-            print("incomplete" if incomplete else (event["ts"] - begin) / 1000)
-PY
-)
+spans=$(python3 -I check/tab_switches.py "$trace")
 chrome_ms=$(echo "$spans" | grep -v incomplete | summary)
-[ -n "$chrome_ms" ] || fail "the trace has no finished tab switches"
+# With more than latency, a trace whose buffer ran out may keep none, and the product's not at fault.
+if [ "$trace_categories" = latency ]; then
+  [ -n "$chrome_ms" ] || fail "the trace has no finished tab switches"
+elif [ -z "$(echo "$spans" | grep -v incomplete | grep .)" ]; then
+  chrome_ms=none
+fi
 # grep -c finds none in a run where no switch was cut off, and exits 1 then.
 chrome_ms="$chrome_ms, $(echo "$spans" | grep -c incomplete || true) incomplete, not counted"
+# With more than latency, the trace keeps the run's last part, where its buffer runs out, so the
+# switches before are left out of it.
+[ "$trace_categories" = latency ] || chrome_ms="$chrome_ms; with $trace_categories, $(echo "$spans" |
+  grep -c . || true) of the $(grep -c '^browser: selected [0-9]* in ' "$log" || true) switches have a span"
 # A tab that let go of its page, unseen 2 hours, gets its page back once shown with its
 # sessionStorage, where a site keeps its sign-in, as Chrome's discarded tabs keep theirs (#1934).
 # Its cookies are its profile's, so only the storage could go.
@@ -1593,11 +1839,572 @@ else
   exec 3>&-
   quit
 fi
-echo "ok: new tabs open at the top and show, the command bar lists the Space's other tabs before anything is typed, suggests pages, their tabs and well-known sites and completes what's typed, ⌘L opens it centred and a click on the URL field over the field, ⇧⌘A lists the open tabs alone, typing filters them and ↩ switches, ⌘T and ⌘L close the open bar again, ⌘L's field holds the whole address and ↩ on it reloads, Tab in the empty field or \"/ \" lists only the commands until Esc or ⌫ leaves, keys and clicks switch, ⇧⌦ and a click on a row's trash take a page out of history and ⌥⌘⌫ a search typed before, which Chrome then says left the history, and the button's tooltip names it and its key over the bar, ⌘Z puts the page back and ⇧⌘Z takes it out again, ⇧⌘↩ searches and ⌘↩ opens a tab behind that loads once shown, Tab on a hinted row searches with its engine alone until ⌫ leaves, a space after the keyword is only a space, \"yout\" hints YouTube and Tab searches it, ↩ on a sum's row copies its result, and a right-click in its field shows Paste and Go, ⌃Tab goes back through the tabs shown while ⌃ is held, a page's tab goes under it and closing it, by close and ↩ in the command bar, goes back, tabs opened behind close to their sibling then their opener, a switch to an unrelated tab and a link opened in front forget older openers, so a pinned tab's newest tab closes back to it, ⌘W shows the tab below or above, on Linux two quick ⇧⌘T reopen both tabs closed last, an empty Space shows no pane, its window resizes, and on Windows maximizes and restores, and it still opens tabs, a tab mutes and its speaker unmutes it, a tab unseen 2 hours lets go of its page as another shows unless it plays sound, asks before it's left or shows in a split, and gets it back with its history and its sessionStorage once shown, and Settings' Unload switch turns that off and on, Site Search Settings opens Chromium's search engines page, a pick of View Media… lists it above View Archive…, its equal for \"view\", back right-clicked or held lists the pages back, nearest first, with their favicons, and a row picked goes there, back held and reload pressed shrink a little and grow back, and reload let go off it doesn't reload, and ⌘-clicked opens the page back in a tab behind. Reset all tabs in this Space takes the loaded pinned tabs back to their pinned URLs and leaves the unloaded one. ⌘-click and ⇧-click choose three rows, whose menu and ⇧⌘C copy their links in order, and ⌘D pins them, New Folder folders them and ⌘W closes them, each undone by ⌘Z. On Windows the bar, a tooltip and a menu are on screen only while the UI shows them: after Esc, ⌘T again or a click on the page, as the pointer leaves, after Windows shows them again and after their window was minimized."
+# Whether what has the keyboard in Chromium's search engines page matches the selector $1, or is
+# in what does.
+settings_focus() {
+  asked=$(grep -c '^cdp: focus-within ' "$cdp_log" || true)
+  echo "focus-within chrome://settings/ $1" >&5
+  for _ in $(seq 50); do
+    [ "$(grep -c '^cdp: focus-within ' "$cdp_log" || true)" -gt "$asked" ] && break
+    sleep 0.1
+  done
+  grep '^cdp: focus-within ' "$cdp_log" | tail -1 | grep -q ' yes$'
+}
+# Whether an element in the page matches the selector $1, shadow trees included.
+settings_has() {
+  asked=$(grep -c '^cdp: has ' "$cdp_log" || true)
+  echo "has chrome://settings/ $1" >&5
+  for _ in $(seq 50); do
+    [ "$(grep -c '^cdp: has ' "$cdp_log" || true)" -gt "$asked" ] && break
+    sleep 0.1
+  done
+  grep '^cdp: has ' "$cdp_log" | tail -1 | grep -q ' yes$'
+}
+# Tab until $1 has the keyboard, failing with $2 after 80 presses: the page's every row has its
+# own buttons.
+tab_to() {
+  for _ in $(seq 80); do
+    settings_focus "$1" && return 0
+    send key tab
+  done
+  settings_focus "$1" || fail "$2 in 80 presses of Tab: $(grep '^cdp: focus-within ' "$cdp_log" | tail -1)"
+}
+# Shows Settings' General, where Settings opens on the section it showed last.
+settings_general() {
+  send menu Settings…
+  expect '^browser: settings shown ' "Settings… didn't show Settings"
+  # Settings takes the pointer's scrolls once the window behind it has drawn as not the user's: on
+  # Wayland a scroll sent before that frame moved nothing (#3372). It's the last such line, as
+  # Settings may already have been in front.
+  for _ in $(seq 100); do
+    [ "$(grep '^browser: window [0-9]* drew main ' "$log" | tail -1 | sed 's/.* //')" = false ] && break
+    sleep 0.1
+  done
+  [ "$(grep '^browser: window [0-9]* drew main ' "$log" | tail -1 | sed 's/.* //')" = false ] ||
+    fail "the window behind Settings didn't draw as not the user's"
+  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' General$'; then
+    settings_drew
+    send clickkey $(drawn "toolbar General")
+    expect '^browser: settings tab General$' "a click on General didn't show its section"
+  fi
+  settings_drew General
+}
+# A search's page has to commit for history to have it, and DuckDuckGo may never answer a runner
+# (#1875), so the steps that need one search the run's own server, in a launch of its own with a new
+# profile. The search for dogs above goes to DuckDuckGo, as the navigation's own line says
+# (searching in lib.sh), which needs no answer. This launch's DuckDuckGo is the run's own server too,
+# with the same page as the run's search. Settings' Search engine lists the engines Chrome
+# offers and the one it uses, so a site search the user adds is set as Chrome's users set it: Add on
+# Chromium's search engines page, from the bar's Site Search Settings, and Make default in its
+# menu. The page's controls are Chromium's WebUI, which takes keys through its shadow trees, so
+# check/cdp.py says which has the keyboard. The server's page puts the search in its title once it
+# has drawn.
+log="$out/tabs-search.log"
+cdp_log="$out/tabs-search-cdp.log"
+step=0
+scratch=$(mktemp -d)
+rm -f "$saved" "$launch_frame"
+printf '%s' '<title>loading</title>
+<script>
+const query = new URLSearchParams(location.search).get("q");
+requestAnimationFrame(() => setTimeout(() => document.title = "searched " + query));
+</script>' > "$out/site/search.html"
+serve_tls duckduckgo "$(cat "$out/site/search.html")" duckduckgo.com
+start_with_cdp "${site}search.html?q=nothing" "$(app_path "$PWD/$out/search-profile")" "" \
+  --host-resolver-rules="$tls_rules" --ignore-certificate-errors-spki-list="$tls_key"
+await_load
+await '^browser: title [0-9]* searched nothing$' || fail "the run's search page didn't draw"
+send click $page_point
+if [ "$active" != 1 ]; then
+  exec 3>&-
+  quit
+  echo "skip: a search with the run's own engine. Browser wasn't the active app, so the page ignored the click."
+else
+  bar_command site-search-settings "Site Search Settings" "site search"
+  expect '^browser: loaded [0-9]* chrome://settings/searchEngines$' \
+    "Site Search Settings didn't open Chromium's search engines page: $(grep '^browser: loaded' "$log" | tail -1)"
+  tab_to '#addSearchEngine' "Tab didn't reach the site searches' Add"
+  send key space
+  # The dialog's name field takes the keyboard as it opens. Its Add is disabled until Chrome has
+  # found all three fields valid, and Tab passes over it until then.
+  for _ in $(seq 50); do
+    settings_focus '#searchEngine' && break
+    sleep 0.1
+  done
+  settings_focus '#searchEngine' || fail "Add didn't open its dialog with the keyboard in the name field"
+  engine=127.0.0.1
+  send type $engine
+  send key tab
+  settings_focus '#keyword' || fail "Tab didn't go from the name to the shortcut"
+  send type local
+  send key tab
+  settings_focus '#queryUrl' || fail "Tab didn't go from the shortcut to the URL"
+  send type "${site}search.html?q=%s"
+  ../tools/window-screenshot.sh "$pid" "$out/site-search-add.png" || fail "no window to capture"
+  tab_to '#actionButton' "Tab didn't reach the dialog's Add, so Chrome didn't take the fields"
+  send key space
+  # Chrome lists site searches by name, and a digit is before Arc's, so the run's is first, and its
+  # menu's first item is Make default.
+  menu=".icon-more-vert[aria-label*=\"$engine\"]"
+  tab_to "$menu" "Tab didn't reach the run's site search's menu"
+  send key space
+  for _ in $(seq 10); do
+    settings_focus '#makeDefault' && break
+    send key down
+  done
+  settings_focus '#makeDefault' || fail "the run's site search's menu didn't reach Make default"
+  ../tools/window-screenshot.sh "$pid" "$out/site-search-menu.png" || fail "no window to capture"
+  send key space
+  # Chrome's default engine's menu has nothing to do, so the page disables it once Chrome says the
+  # run's site search is the default.
+  for _ in $(seq 50); do
+    settings_has "$menu[disabled]" && break
+    sleep 0.1
+  done
+  settings_has "$menu[disabled]" ||
+    fail "Make default didn't make the run's site search Chrome's default: its menu stayed enabled"
+  # Settings › General's Search engine shows it chosen, among the engines it offers.
+  settings_general
+  # The row is named by the profile's number, which in_sight takes as it is, not as a pattern. Not
+  # $profile: the runs share one shell, and lib.sh's menus read that for the runs after this one.
+  drawn 'search engine [0-9]*' > /dev/null || fail "Settings didn't draw the profile's Search engine"
+  engine_profile=$(sed -n 's/^browser: settings search engine \([0-9]*\) at .*/\1/p' "$log" | tail -1)
+  in_sight "search engine $engine_profile" ||
+    fail "Settings drew the profile's Search engine, but not in the card's sight once scrolled to it"
+  post clickkey $at
+  expect "^browser: menu shown .*$engine (checked)" \
+    "the profile's Search engine didn't show the run's site search chosen: $(grep '^browser: menu shown' "$log" | tail -1)"
+  grep '^browser: menu shown' "$log" | tail -1 | grep -q 'DuckDuckGo' ||
+    fail "the profile's Search engine didn't offer DuckDuckGo beside the run's site search"
+  ../tools/window-screenshot.sh "$pid" "$out/search-engine-chosen.png" || fail "no window to capture"
+  send key escape
+  expect '^browser: menu closed$' "escape didn't close the Search engine menu"
+  send key w cmd
+  expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+  send type dogs
+  send key return
+  dogs="${site}search.html?q=dogs"
+  expect "^browser: command bar go $dogs\$" \
+    "↩ didn't search the run's engine: $(grep '^browser: command bar go' "$log" | tail -1)"
+  await "^browser: title [0-9]* searched dogs\$" || fail "the run's search for dogs didn't draw"
+  # ⌥⌘⌫ takes the selected row out too, beside ⇧⌦, as Arc's does: here the search for dogs, typed
+  # before. Off the Mac it would be Ctrl+Alt+Backspace, which X11 can take to end the session, so
+  # there ⇧⌦ alone does (command_bar.rs).
+  if [ "$(uname)" = Darwin ]; then
+    remove="backspace alt cmd" removed=⌥⌘⌫
+  else
+    remove="delete shift" removed=⇧⌦
+  fi
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+  send type dog
+  expect "^browser: command bar suggestions \"dog\" in .*$dogs[^,]* removable" \
+    "the command bar didn't suggest the search for dogs typed before: $(suggestions | tr '\n' ' ')"
+  for _ in 1 2 3 4 5 6 7 8; do
+    send key down
+    grep '^browser: command bar selected' "$log" | tail -1 | grep -q " $dogs" && break
+  done
+  send key $remove
+  expect "^browser: command bar removes $dogs" "$removed didn't take the search for dogs out"
+  # Chrome says the page left the history, which the bar forgets what it learned of.
+  expect '^browser: history deleted [1-9][0-9]* urls from profile [0-9]*$' \
+    "Chrome didn't say $removed deleted the search for dogs from the history"
+  expect '^browser: command bar suggestions "dog" in ' "the command bar didn't list its rows again after $removed"
+  send key escape
+  expect '^browser: command bar hidden$' "escape didn't close the command bar"
+  # And back: Search engine picks DuckDuckGo again, which the next search goes to. Its item is
+  # named as the default, as Page zoom's 100% is.
+  settings_general
+  in_sight "search engine $engine_profile" || fail "Settings didn't draw the profile's Search engine again"
+  post clickkey $at
+  expect "^browser: menu shown .*$engine (checked)" "the profile's Search engine didn't keep the run's site search"
+  send choose "DuckDuckGo (default)"
+  expect "^browser: profile $engine_profile searches with DuckDuckGo\$" "choosing DuckDuckGo didn't set the profile's engine"
+  send key w cmd
+  expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+  send type cats
+  send key return
+  expect '^browser: command bar go https://duckduckgo.com/?q=cats$' \
+    "↩ didn't search DuckDuckGo once Settings picked it again: $(grep '^browser: command bar go' "$log" | tail -1)"
+  exec 3>&-
+  quit
+fi
+exec 5>&-
+wait "$helper" 2>/dev/null || true
+helper=
+kill "$tls" 2> /dev/null || true
+tls=
+# What DuckDuckGo was asked in this launch, the run's server answered.
+searches=$(grep -E '^browser: loaded [0-9]+ https?://duckduckgo\.com/' "$log" | cut -d' ' -f4- | sort -u || true)
+while read -r url; do
+  [ -n "$url" ] || continue
+  grep -qxF "duckduckgo: GET $url" "$out/duckduckgo-tls.log" ||
+    fail "$url loaded, but not from the run's server: $(grep -v '^duckduckgo: ' "$out/duckduckgo-tls.log" | tail -3)"
+done << EOF
+$searches
+EOF
+# Google's search, which the core adds once to each profile as a choice only (decision 2,
+# core/search_default.h), on a new profile of its own in three launches. Its first launch's search
+# engine step opens on DuckDuckGo, the default, so Return there sets nothing. Settings lists Google
+# last, with DuckDuckGo chosen; picking it there makes ↩ in ⌘T's bar search
+# https://www.google.com/search?q=… and nothing else of Google's, typing included, since the
+# engine has no suggest URL. A second launch picks DuckDuckGo again and deletes Google on
+# Chromium's search engines page, and a third finds it gone from Settings' list. Google's hosts go
+# to an https server of the run's own, as ranking.sh's GitHub does, which logs each request, so
+# nothing reaches Google and whatever the browser asks of it shows. The security components'
+# downloads from www.google.com, which come on their own, are off in these launches. An engine
+# built before the core added Google skips the step.
+if ! engine_has ../core/search_default.cc ../core/search.cc; then
+  echo "skip: Google's search engine. The engine linked was built before the core offered it (core/search_default.cc)."
+else
+  google_profile="$PWD/$out/google-profile"
+  rm -rf "$google_profile" "$out/google-home"
+  # An empty home, so the first launch's import step finds no browser of the runner's.
+  mkdir -p "$out/google-home"
+  # Its page, for any path, puts the search in its title once drawn, and names its own icon, so no
+  # /favicon.ico is asked.
+  serve_tls google '<meta charset=utf-8><link rel=icon href="data:,"><title>loading</title><script>
+requestAnimationFrame(() => setTimeout(() => document.title = "google " +
+  new URLSearchParams(location.search).get("q")));</script>' www.google.com google.com '*.google.com'
+  google_key=$tls_key
+  google_rules=$tls_rules
+  # The engines Settings' Search engine lists, as it last showed them.
+  engines_listed() {
+    grep '^browser: menu shown ' "$log" | tail -1 | sed 's/^browser: menu shown //'
+  }
+  # Opens Settings' General and the profile's Search engine there, setting $engine_profile.
+  engines_menu() {
+    settings_general
+    drawn 'search engine [0-9]*' > /dev/null || fail "Google: Settings didn't draw the profile's Search engine"
+    engine_profile=$(sed -n 's/^browser: settings search engine \([0-9]*\) at .*/\1/p' "$log" | tail -1)
+    in_sight "search engine $engine_profile" ||
+      fail "Google: Settings drew the profile's Search engine, but not in the card's sight once scrolled to it"
+    post clickkey $at
+    expect '^browser: menu shown ' "Google: the profile's Search engine didn't open its engines"
+  }
+  # The engines listed have no Google, or fail with $1.
+  no_google() {
+    case ", $(engines_listed)," in
+      *", Google,"* | *", Google (checked),"*) fail "$1: $(engines_listed)" ;;
+    esac
+  }
+
+  # The first launch: the onboarding, Settings' list and a search.
+  log="$out/tabs-google.log"
+  step=0
+  BROWSER_ONBOARDING=light BROWSER_IMPORT_HOME="$(app_path "$PWD/$out/google-home")" \
+    BROWSER_PROFILE_DIR="$(app_path "$google_profile")" BROWSER_DRIVE=1 "$browser" \
+    --host-resolver-rules="$google_rules" --ignore-certificate-errors-spki-list="$google_key" \
+    --disable-component-update < "$out/drive" > "$log" 2>&1 &
+  pid=$!
+  exec 3> "$out/drive"
+  await '^browser: onboarding step intro settled$' || fail "Google: the new profile's first launch didn't play the onboarding"
+  steps=$(grep -m1 '^browser: onboarding steps ' "$log" | cut -d' ' -f4-)
+  case " $steps " in
+    *" search-engine "*) ;;
+    *) fail "Google: the new profile's first launch had no search engine step: '$steps'" ;;
+  esac
+  # The intro goes on by itself, before any key is sent, so the step after it is waited for in the
+  # whole log, and each later one after the key that left the one before, as count.sh does.
+  await '^browser: onboarding left intro via time$' || fail "Google: the intro didn't go on by itself"
+  for each in $steps; do
+    [ "$each" = intro ] && continue
+    if [ "$step" = 0 ]; then
+      await "^browser: onboarding step $each settled\$" || fail "Google: the $each step didn't come"
+    else
+      expect "^browser: onboarding step $each settled\$" "Google: the $each step didn't come"
+    fi
+    if [ "$each" = search-engine ]; then
+      ../tools/window-screenshot.sh "$pid" "$out/search-engine-step-google.png" || fail "no window to capture"
+      send key return
+      expect '^browser: onboarding left search-engine via return$' "Google: Return didn't leave the search engine step"
+      # Return sets the engine picked unless it's the default, so a line here is a step that
+      # opened on another, such as Google.
+      none_since '^browser: profile [0-9]* searches with ' ||
+        fail "Google: Return as the search engine step opened set an engine, so it hadn't DuckDuckGo picked: $(grep '^browser: profile [0-9]* searches with ' "$log" | tail -1)"
+    else
+      send key escape
+      expect "^browser: onboarding left $each via escape\$" "Google: Esc didn't leave the $each step"
+    fi
+  done
+  expect '^browser: onboarding done$' "Google: the flow didn't end after its last step"
+  expect '^browser: command bar shown$' "Google: the command bar didn't come up after the flow"
+  send key escape
+  expect '^browser: command bar hidden$' "Google: escape didn't close the command bar"
+  engines_menu
+  case ", $(engines_listed)" in
+    *", DuckDuckGo (default) (checked),"*", Google") ;;
+    *) fail "Google: a new profile's Search engine didn't list Google last, with DuckDuckGo chosen as the default: $(engines_listed)" ;;
+  esac
+  case ", $(engines_listed)" in
+    *", Google"*", Google"*) fail "Google: a new profile's Search engine listed Google twice: $(engines_listed)" ;;
+  esac
+  ../tools/window-screenshot.sh "$pid" "$out/search-engine-google.png" || fail "no window to capture"
+  send choose Google
+  expect "^browser: profile $engine_profile searches with Google\$" "Google: choosing Google didn't set the profile's engine"
+  send key w cmd
+  expect '^browser: settings hidden$' "Google: ⌘W didn't hide Settings"
+  send key t cmd
+  expect '^browser: command bar shown$' "Google: ⌘T didn't open the command bar"
+  send type pelicans
+  google_search='https://www\.google\.com/search?q=pelicans'
+  expect "^browser: command bar suggestions \"pelicans\" in [0-9.]* ms: $google_search\\([ ,]\\|\$\\)" \
+    "Google: the bar's first row for \"pelicans\" wasn't Google's search: $(grep '^browser: command bar suggestions' "$log" | tail -1)"
+  send key return
+  expect "^browser: command bar go $google_search\$" \
+    "Google: ↩ didn't search Google: $(grep '^browser: command bar go' "$log" | tail -1)"
+  await '^browser: title [0-9]* google pelicans$' ||
+    fail "Google: the search didn't draw the run's page for www.google.com: $(grep '^browser: page [0-9]* trouble' "$log" | tail -1) $(grep -v '^google: ' "$out/google-tls.log" | tail -3)"
+  google_tab=$(sed -n 's/^browser: title \([0-9]*\) google pelicans$/\1/p' "$log" | tail -1)
+  # Closed, so the next launches bring back no tab of Google's that would ask it again.
+  send key w cmd
+  expect "^browser: tab $google_tab closed\$" "Google: ⌘W didn't close the search's tab"
+  exec 3>&-
+  quit
+
+  # The second launch: DuckDuckGo again, and Google deleted on Chromium's search engines page.
+  log="$out/tabs-google-delete.log"
+  cdp_log="$out/tabs-google-cdp.log"
+  step=0
+  scratch=$(mktemp -d)
+  start_with_cdp "${site}search.html?q=nothing" "$(app_path "$google_profile")" "" \
+    --host-resolver-rules="$google_rules" --ignore-certificate-errors-spki-list="$google_key" \
+    --disable-component-update
+  await_load
+  await '^browser: title [0-9]* searched nothing$' || fail "Google: the run's page didn't draw"
+  send click $page_point
+  if [ "$active" != 1 ]; then
+    exec 3>&-
+    quit
+    echo "skip: deleting Google's search engine. Browser wasn't the active app, so the page ignored the click."
+  else
+    engines_menu
+    expect "^browser: menu shown .*, Google (checked)\$" "Google: the relaunch didn't keep Google picked: $(engines_listed)"
+    send choose "DuckDuckGo (default)"
+    expect "^browser: profile $engine_profile searches with DuckDuckGo\$" "Google: choosing DuckDuckGo didn't set the profile's engine"
+    send key w cmd
+    expect '^browser: settings hidden$' "Google: ⌘W didn't hide Settings"
+    bar_command site-search-settings "Site Search Settings" "site search"
+    expect '^browser: loaded [0-9]* chrome://settings/searchEngines$' \
+      "Google: Site Search Settings didn't open Chromium's search engines page: $(grep '^browser: loaded' "$log" | tail -1)"
+    # Its menu's label is "… Google", where the site searches the core adds name Google Drive and
+    # the like. Site searches past the first few are in a collapsed list, which Tab reaches as its
+    # expand button first.
+    menu='.icon-more-vert[aria-label$=Google]'
+    found=
+    for _ in $(seq 200); do
+      settings_focus "$menu" && found=1 && break
+      ! settings_focus 'cr-expand-button:not([expanded])' || send key space
+      send key tab
+    done
+    [ -n "$found" ] ||
+      fail "Google: Tab didn't reach Google's menu on Chromium's search engines page in 200 presses: $(grep '^cdp: focus-within ' "$cdp_log" | tail -1)"
+    send key space
+    # Chrome's menu has Delete, or Delete among Edit and Turn off where its newer page is on.
+    for _ in $(seq 10); do
+      settings_focus '#delete,#deleteOption' && break
+      send key down
+    done
+    settings_focus '#delete,#deleteOption' || fail "Google: its menu on Chromium's search engines page didn't reach Delete"
+    ../tools/window-screenshot.sh "$pid" "$out/search-engine-google-delete.png" || fail "no window to capture"
+    send key space
+    for _ in $(seq 50); do
+      settings_has "$menu" || break
+      ! settings_has 'cr-dialog[open]' ||
+        fail "Google: Delete asked to confirm, which an engine the user could add doesn't, on Chromium's search engines page"
+      sleep 0.1
+    done
+    ! settings_has "$menu" || fail "Google: Delete on Chromium's search engines page left Google listed"
+    send key w cmd
+    engines_menu
+    no_google "Google: Settings still listed Google once Chromium's page deleted it"
+    send key escape
+    expect '^browser: menu closed$' "Google: escape didn't close the Search engine menu"
+    exec 3>&-
+    quit
+
+    # The third launch: Google stays gone, never added again.
+    log="$out/tabs-google-gone.log"
+    step=0
+    BROWSER_PROFILE_DIR="$(app_path "$google_profile")" BROWSER_DRIVE=1 "$browser" \
+      --host-resolver-rules="$google_rules" --ignore-certificate-errors-spki-list="$google_key" \
+      --disable-component-update < "$out/drive" > "$log" 2>&1 &
+    pid=$!
+    exec 3> "$out/drive"
+    await '^browser: restored in ' || fail "Google: the third launch didn't bring the Spaces back"
+    await '^browser: UI shown at ' || fail "Google: the third launch didn't show its UI"
+    # The page first, as in the second launch: Settings shown while another app is in front, as a
+    # relaunch on Windows finds the runner's console, stays behind the browser window that the
+    # first press brings in front, and its click lands in the page.
+    await '^browser: title [0-9]* searched nothing$' || fail "Google: the third launch didn't bring the run's page back"
+    send click $page_point
+    if [ "$active" != 1 ]; then
+      exec 3>&-
+      quit
+      echo "skip: Google staying gone on a relaunch. Browser wasn't the active app, so the page ignored the click."
+    else
+      engines_menu
+      no_google "Google: a relaunch brought Google back after it was deleted"
+      expect_listed=$(engines_listed)
+      case "$expect_listed" in
+        *"DuckDuckGo (default) (checked)"*) ;;
+        *) fail "Google: the relaunch didn't keep DuckDuckGo: $expect_listed" ;;
+      esac
+      send key escape
+      expect '^browser: menu closed$' "Google: escape didn't close the Search engine menu"
+      exec 3>&-
+      quit
+    fi
+  fi
+  exec 5>&-
+  wait "$helper" 2>/dev/null || true
+  helper=
+  kill "$tls" 2> /dev/null || true
+  tls=
+  # The whole step asked Google's hosts for the search alone: no suggestion as "pelicans" was
+  # typed, nothing on a launch, nothing from Chromium's page.
+  requests=$(grep '^google: ' "$out/google-tls.log" || true)
+  [ "$requests" = "google: GET https://www.google.com/search?q=pelicans" ] ||
+    fail "Google: its hosts were asked for more than the search, or not for it: $(printf '%s' "$requests" | tr '\n' ';')"
+  echo "ok: Google's search engine, on a new profile: the first launch's step opens on DuckDuckGo, Settings lists Google last with DuckDuckGo chosen, its pick searches https://www.google.com/search?q=… and asks Google for nothing else, and once Chromium's search engines page deletes it a relaunch doesn't bring it back. Windows: $out/search-engine-step-google.png, $out/search-engine-google.png, $out/search-engine-google-delete.png"
+fi
+# Sort Today Tabs by Site, from the command bar, puts the served page's tabs together at each
+# site's first tab's place, 127.0.0.1 and localhost being two sites of one server, records the rows
+# sliding there, light and dark, and the Tabs menu shows it dimmed once they're together, as does
+# the line over Today's menu, which leads with it and Clear Today. ⌘Z and ⇧⌘Z take it back and do
+# it again, and the core keeps the sorted order across a quit (#2344).
+# The URL of tab $1, as the app last heard it.
+url_of() {
+  grep "^browser: page $1 back " "$log" | tail -1 | sed 's/.* //'
+}
+# The Tabs menu lists Sort Today Tabs by Site, dimmed if $1 is "(disabled)".
+sort_item() {
+  send menubar Tabs
+  expect "^browser: menu bar Tabs: .*, Sort Today Tabs by Site$1, " \
+    "the Tabs menu's Sort Today Tabs by Site wasn't ${2:-there}"
+}
+# A right-click on the line over Today, under the Space's name with no pinned tab, shows Sort Today
+# Tabs by Site, dimmed if $1 is "(disabled)", and Clear Today over the empty space's menu, captured
+# in $2.png, which escape closes.
+divider_menu() {
+  post rightclick 60 $((90 + 44 + 7))
+  expect "^browser: menu shown $(cased "Sort Today Tabs by Site$1, Clear Today, New Tab, New Folder…"), " \
+    "a right-click on the line over Today didn't lead with Sort Today Tabs by Site${1:+ dimmed} and Clear Today"
+  ../tools/window-screenshot.sh "$pid" "$out/$2.png" || fail "no window to capture"
+  send key escape
+  expect '^browser: menu closed$' "escape didn't close the line over Today's menu"
+}
+# Waits for Today as $1, with $s3 still shown, $2 saying what went wrong. A sort and its undo and
+# redo move rows but never the tab shown, which logs no new selected line, so that one is read.
+expect_order() {
+  expect "^browser: today $1\$" "$2: Today is \"$(today)\", not \"$1\""
+  [ "$(grep '^browser: selected ' "$log" | tail -1 | cut -d' ' -f3)" = "$s3" ] ||
+    fail "$2: tab $s3 isn't shown: $(grep '^browser: selected ' "$log" | tail -1)"
+}
+# Sorts with the command bar in appearance $1, recording the rows sliding, and captures the window
+# and, on the Mac, the Tabs menu open with the command dimmed.
+sort_in() {
+  send menu "Appearance › $1"
+  scheme=$(echo "$1" | tr A-Z a-z)
+  expect "^browser: appearance $scheme\$" "View › Appearance › $1 didn't change the appearance"
+  # Read, not waited for: the appearance changes nothing in Today, which logs no new line.
+  [ "$(today)" = "$before" ] ||
+    fail "before Sort Today Tabs by Site, $scheme: Today is \"$(today)\", not \"$before\""
+  sort_item "" "offered with the sites apart"
+  divider_menu "" "divider-menu-$scheme"
+  record "sort-by-site-$scheme" 3
+  bar_command sort-by-site "Sort Today Tabs by Site" "sort today"
+  expect '^browser: sorted by site ' "Sort Today Tabs by Site didn't sort"
+  expect_order "$after" "after Sort Today Tabs by Site, $scheme"
+  recorded
+  ../tools/window-screenshot.sh "$pid" "$out/sorted-by-site-$scheme.png" || fail "no window to capture"
+  sort_item " (disabled)" "dimmed with every site together"
+  divider_menu " (disabled)" "divider-menu-sorted-$scheme"
+  if [ "$(uname)" = Darwin ]; then
+    post openmenu Tabs
+    expect '^browser: menu tracked New Tab' "the Tabs menu didn't open"
+    ../tools/window-screenshot.sh "$pid" "$out/tabs-menu-sorted-$scheme.png" ||
+      fail "no window to capture"
+    post dismiss
+  fi
+}
+log="$out/tabs-sort.log"
+step=0
+rm -f "$saved" "$launch_frame"
+forget_appearance
+BROWSER_DRIVE=1 BROWSER_URL="${site}notes.txt" "$browser" < "$out/drive" > "$log" 2>&1 &
+pid=$!
+exec 3> "$out/drive"
+await_load
+first=$(today)
+send click $page_point
+if [ "$active" != 1 ]; then
+  exec 3>&-
+  quit
+  echo "skip: Sort Today Tabs by Site. Browser wasn't the active app, so the page ignored the click."
+  sorted=skipped
+else
+  # New tabs open at the top, so Today reads 127.0.0.1, localhost, 127.0.0.1, localhost, 127.0.0.1.
+  for page in "http://localhost:$port/notes.txt" "${site}notes.txt?again" \
+    "http://localhost:$port/notes.txt?2" "${site}notes.txt?3"; do
+    send key t cmd
+    expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+    send type "$page"
+    send key return
+    expect "^browser: loaded [0-9]* $page\$" "$page didn't load in a tab"
+  done
+  s3=$(today | cut -d' ' -f1)
+  l2=$(today | cut -d' ' -f2)
+  s2=$(today | cut -d' ' -f3)
+  l1=$(today | cut -d' ' -f4)
+  before="$s3 $l2 $s2 $l1 $first"
+  after="$s3 $s2 $first $l2 $l1"
+  sort_in Light
+  send key z cmd
+  expect_order "$before" "after ⌘Z undid Sort Today Tabs by Site"
+  send key z cmd shift
+  expect_order "$after" "after ⇧⌘Z sorted again"
+  send key z cmd
+  expect_order "$before" "after ⌘Z undid it again"
+  sort_in Dark
+  send menu "Appearance › Automatic"
+  exec 3>&-
+  quit
+  forget_appearance
+  log="$out/tabs-sort-restored.log"
+  step=0
+  BROWSER_DRIVE=1 "$browser" < "$out/drive" > "$log" 2>&1 &
+  pid=$!
+  exec 3> "$out/drive"
+  await '^browser: restored in ' || fail "the relaunch after Sort Today Tabs by Site didn't restore"
+  await '^browser: today [0-9]* [0-9]* [0-9]* [0-9]* [0-9]*$' ||
+    fail "Today didn't come back with its five tabs"
+  urls=""
+  for tab in $(today); do
+    await "^browser: page $tab back " || fail "the restored tab $tab reported no page"
+    urls="$urls $(url_of "$tab")"
+  done
+  [ "$urls" = " ${site}notes.txt?3 ${site}notes.txt?again ${site}notes.txt http://localhost:$port/notes.txt?2 http://localhost:$port/notes.txt" ] ||
+    fail "the sorted order didn't come back after a quit: Today's pages are$urls"
+  exec 3>&-
+  quit
+  sorted="Sort Today Tabs by Site from the command bar puts each site's tabs together at its first tab's place, light and dark, and the Tabs menu dims it then; ⌘Z and ⇧⌘Z undo and redo it, and the order comes back after a quit"
+fi
+echo "ok: new tabs open at the top and show, the command bar lists the Space's other tabs before anything is typed, suggests pages, their tabs and well-known sites and completes what's typed, ⌘L opens it centred and a click on the URL field over the field, ⇧⌘A lists the open tabs alone, typing filters them and ↩ switches, ⌘T and ⌘L close the open bar again, ⌘L's field holds the whole address and ↩ on it reloads, Tab in the empty field or \"/ \" lists only the commands until Esc or ⌫ leaves, keys and clicks switch, ⇧⌦ and a click on a row's trash take a page out of history and ⌥⌘⌫ a search typed before, which Chrome then says left the history, and the button's tooltip names it and its key over the bar, ⌘Z puts the page back and ⇧⌘Z takes it out again, ⇧⌘↩ searches and ⌘↩ opens a tab behind that loads once shown, Tab on a hinted row searches with its engine alone until ⌫ leaves, a space after the keyword is only a space, \"yout\" hints YouTube and Tab searches it, ↩ on a sum's row copies its result, and a right-click in its field shows Paste and Go, ⌃Tab goes back through the tabs shown while ⌃ is held, a page's tab goes under it and closing it, by close and ↩ in the command bar, goes back, tabs opened behind close to their sibling then their opener, a switch to an unrelated tab and a link opened in front forget older openers, so a pinned tab's newest tab closes back to it, ⌘W shows the tab below or above, on Linux two quick ⇧⌘T reopen both tabs closed last, an empty Space shows no pane, its window resizes, and on Windows maximizes and restores, and it still opens tabs, a tab mutes and its speaker unmutes it, a tab unseen 2 hours lets go of its page as another shows unless it plays sound, asks before it's left or shows in a split, and gets it back with its history and its sessionStorage once shown, and Settings' Unload switch turns that off and on, Site Search Settings opens Chromium's search engines page, where a site search added and made the default there shows chosen in Settings' Search engine, ↩ searches with it, and Settings picks DuckDuckGo back, a pick of View Media… lists it above View Archive…, its equal for \"view\", back right-clicked or held lists the pages back, nearest first, with their favicons, and a row picked goes there, back held and reload pressed shrink a little and grow back, and reload let go off it doesn't reload, and ⌘-clicked opens the page back in a tab behind. Reset all tabs in this Space takes the loaded pinned tabs back to their pinned URLs and leaves the unloaded one. ⌘-click and ⇧-click choose three rows, whose menu and ⇧⌘C copy their links in order, and ⌘D pins them, New Folder folders them and ⌘W closes them, each undone by ⌘Z. On Windows the bar, a tooltip and a menu are on screen only while the UI shows them: after Esc, ⌘T again or a click on the page, as the pointer leaves, after Windows shows them again and after their window was minimized${adapter:-}.${desktop:+ On Linux $desktop.}"
 [ -z "${committed:-}" ] || echo "  On Windows Alt+F4 in the bar closes its window and the bar opens" \
   "over the next one, the bar" \
   "moves with its window and the window's menu closes, and the bar stays open over a page that" \
   "commits in another site's renderer and $committed: $out/command-bar-moved.png"
-echo "  Switch to a loaded tab, tab strip to frame shown (Chrome's measure; gate 16 ms): $chrome_ms."
+[ "$sorted" = skipped ] || echo "  $sorted: $out/sorted-by-site-light.png," \
+  "$out/sorted-by-site-dark.png, the rows sliding in $out/sort-by-site-light.mp4 and" \
+  "$out/sort-by-site-dark.mp4, and on the Mac the Tabs menu in $out/tabs-menu-sorted-light.png" \
+  "and $out/tabs-menu-sorted-dark.png, and the line over Today's menu, Sort offered then dimmed, in" \
+  "$out/divider-menu-light.png, $out/divider-menu-dark.png, $out/divider-menu-sorted-light.png" \
+  "and $out/divider-menu-sorted-dark.png."
+echo "  Switch to a loaded tab, tab strip to frame shown (Chrome's measure; gate 16 ms) on $(runner_cpu): $chrome_ms."
 echo "  A site search for example: the core listed $listed_rows rows, the bar one."
 echo "  Switch, key to the core's report: $app_ms. Windows: $out/muted.png, $out/tabs.png, $out/bar-close.png, $out/suggestions.png, $out/completion.png, $out/search-tabs.png, $out/url-field-bar.png, $out/commands-only.png, $out/numbered.png, $out/listed.png, $out/popular.png, $out/site-hint.png, $out/site-search.png, $out/field-menu.png, $out/empty.png, $out/remove-suggestion.png, $out/remove-tooltip.png, $out/site-search-settings.png, $out/bar-picked.png, $out/idle-unloaded.png, $out/back-held.png, $out/back-menu.png, $out/back-behind.png, $out/chosen.png, $out/chosen-menu.png"

@@ -1,14 +1,17 @@
 #!/bin/bash
-# Downloads the prebuilt engine, checked against its hash, into .deps/prebuilt, and prints the
-# path of its Chromium.app, or on Linux and Windows its Chromium directory. It's the newest
-# engine-mac, engine-linux or engine-windows release built from a commit in this checkout's
-# history, in the repository prebuilt.ini names: the owner's Mac publishes the Mac's
-# (tools/mac-engine-publish.sh), and .github/workflows/engine-linux.yml and engine-windows-cross.yml
-# the others. It exits with 2 when no engine fits this checkout, which CI takes for a reason to
-# skip, and 1 on any other failure.
-# `fetch.sh symbols` does the same for the Windows engine's PDBs, which its release has beside it,
-# for crash reports (tools/symbols.sh). `fetch.sh commit` only prints the commit that engine was
-# built from, without the header's check or a download (tools/mac-nightly.sh).
+# Downloads the prebuilt engine, checked against its hash, into .deps/prebuilt, and prints the path
+# of its Chromium.app, or on Linux and Windows its Chromium directory. It's the nearest engine-mac,
+# engine-linux or engine-windows release built from a commit in this checkout's history with this
+# commit's core, or else the nearest, in the repository prebuilt.ini names: the owner's Mac
+# publishes the Mac's (tools/mac-engine-publish.sh), and .github/workflows/engine-linux.yml and
+# engine-windows-cross.yml the others. It exits with 2 when no engine fits this checkout, which CI
+# takes for a reason to skip, and 1 on any other failure.
+# `fetch.sh symbols` does the same for the engine's symbols, for crash reports (tools/symbols.sh):
+# the Windows engine's PDBs, which its release has beside it, and on the Mac the engine with its
+# dSYMs unpacked beside Chromium.app, where app/build.sh looks, printing their directory. A release
+# without them exits with 2, as one without an engine does. `fetch.sh commit` only prints the
+# commit that engine was built from, without the header's check or a download
+# (tools/mac-nightly.sh).
 # Usage: fetch.sh [symbols|commit]
 set -euo pipefail
 symbols=
@@ -28,7 +31,6 @@ none() {
 
 case $(uname -sm) in
 "Darwin arm64")
-  [ -z "$symbols" ] || fail "the Mac engine's symbols are its dSYMs, beside Chromium.app."
   platform=mac asset=Chromium-mac-arm64.tar.xz app=Chromium.app
   publisher="tools/mac-engine-publish.sh on the Mac, after engine/build.sh"
   sha256sum() { shasum -a 256 "$@"; }
@@ -48,28 +50,44 @@ esac
 
 repo=$(git config -f prebuilt.ini prebuilt.repository)
 # A release is named for the commit it was built from, which is ilo's, not the engine repository's,
-# where its tag is. The nearest one in this history wins.
-commit=
-best=
+# where its tag is. The nearest one in this history whose core is this commit's wins, or with none,
+# the nearest: by commit count alone, an engine built on main after a batch branched is nearer than
+# the batch's own once the batch lands, and lacks its core (#2913). tools/engine-changed.sh picks
+# the same way. An engine the nearest was built over has this commit's core, when the nearest
+# hasn't, only if a later commit reverted the core, where the nearest serves anyway, so only
+# engines off the nearest's history are compared: on a core branch, which no engine has yet, they
+# are the few a landing brought in, not every engine since the first.
+built=
 while read -r _ ref; do
   case $ref in *"^{}") continue ;; esac
   tagged=$(git rev-parse -q --verify "${ref#refs/tags/engine-"$platform"-}^{commit}" 2>/dev/null) ||
     continue
   git merge-base --is-ancestor "$tagged" HEAD 2>/dev/null || continue
-  distance=$(git rev-list --count "$tagged..HEAD")
-  if [ -z "$best" ] || [ "$distance" -lt "$best" ]; then
-    commit=$tagged
-    best=$distance
-  fi
+  built+="$(git rev-list --count "$tagged..HEAD") $tagged"$'\n'
 done < <(git ls-remote --tags "$repo.git" "refs/tags/engine-$platform-*")
-[ -n "$commit" ] ||
+[ -n "$built" ] ||
   none "no prebuilt $platform engine in $repo was built from this checkout's history. Fetch the history with git fetch --unshallow, or publish one with $publisher."
+nearest=
+commit=
+while read -r _ tagged; do
+  if [ -z "$nearest" ]; then
+    nearest=$tagged commit=$tagged
+  elif git merge-base --is-ancestor "$tagged" "$nearest"; then
+    continue
+  fi
+  if ../tools/core-same.sh "$tagged" HEAD core engine/series engine/patches ':(exclude)*.md' 2>/dev/null; then
+    commit=$tagged
+    break
+  fi
+done < <(printf '%s' "$built" | sort -n)
 if [ -n "$only_commit" ]; then
   echo "$commit"
   exit 0
 fi
 url=$repo/releases/download/engine-$platform-${commit:0:12}/$asset
-sha256=$(curl -fsSL "$url.sha256") || none "the release engine-$platform-${commit:0:12} has no $asset yet."
+# --retry tries a host's 5xx again, as GitHub's 503 that stopped a whole Check on Linux (#2074),
+# but not a 404, a release without its engine yet.
+sha256=$(curl -fsSL --retry 5 "$url.sha256") || none "the release engine-$platform-${commit:0:12} has no $asset yet."
 
 # The engine holds the core of the commit it was built from. A different header would bind the app
 # to functions or layouts the engine doesn't have. One that differs only in its comments is the same
@@ -90,7 +108,7 @@ if [ ! -d "$dir" ]; then
   name=${url##*/}
   archive=$dir.${name#*.}
   echo "fetch: downloading the prebuilt engine (${commit:0:12})" >&2
-  curl -fL --progress-bar -o "$archive" "$url"
+  curl -fL --retry 5 --progress-bar -o "$archive" "$url"
   echo "$sha256  $archive" | sha256sum -c --status ||
     { rm -f "$archive"; fail "the download doesn't match its sha256."; }
   rm -rf "$dir.part"
@@ -104,5 +122,25 @@ if [ ! -d "$dir" ]; then
   # Earlier prebuilt engines go, but not for the symbols, which go with the next engine. A built
   # app keeps its own copy.
   [ -n "$symbols" ] || find .deps/prebuilt -mindepth 1 -maxdepth 1 ! -name "$sha256" -exec rm -rf {} +
+fi
+if [ -n "$symbols" ] && [ "$platform" = mac ]; then
+  if ! [ -d "$dir/Chromium Framework.dSYM" ]; then
+    url=${url%/*}/Chromium-mac-arm64-dSYMs.tar.xz
+    sha256=$(curl -fsSL --retry 5 "$url.sha256") ||
+      none "the release engine-mac-${commit:0:12} has no dSYMs, so its framework's frames can't be named."
+    echo "fetch: downloading the prebuilt engine's dSYMs (${commit:0:12})" >&2
+    archive=$dir.dSYMs.tar.xz
+    curl -fL --retry 5 --progress-bar -o "$archive" "$url"
+    echo "$sha256  $archive" | sha256sum -c --status ||
+      { rm -f "$archive"; fail "the dSYMs' download doesn't match its sha256."; }
+    rm -rf "$dir.dSYMs"
+    mkdir "$dir.dSYMs"
+    tar -xf "$archive" -C "$dir.dSYMs"
+    rm "$archive"
+    mv "$dir.dSYMs"/*.dSYM "$dir"
+    rmdir "$dir.dSYMs"
+  fi
+  echo "$dir"
+  exit 0
 fi
 echo "$dir/$app"

@@ -1,10 +1,7 @@
 //! Where the shell asks for the Site Controls, and the tooltips its buttons ask for, on a host
 //! that records them.
 
-use std::{
-    rc::Rc,
-    time::{Duration, Instant},
-};
+use std::{rc::Rc, time::Duration};
 
 use gpui::{
     AppContext, Bounds, Entity, Modifiers, MouseButton, NavigationDirection, TestAppContext,
@@ -30,7 +27,7 @@ const RELOAD_X: f32 = 190.;
 /// ours always were, at 347 where Arc 1.170 has them, and the sidebar button where it was.
 #[test]
 fn back_forward_and_reload_keep_to_the_sidebars_right_edge() {
-    let at = |width| nav_places(width, false);
+    let at = |width| nav_places(width, false, false);
     assert_eq!(
         at(228.),
         [Some(77.), Some(BACK_X), Some(FORWARD_X), Some(RELOAD_X)]
@@ -47,7 +44,7 @@ fn back_forward_and_reload_keep_to_the_sidebars_right_edge() {
 /// back never comes nearer the sidebar button than its 13 at 228.
 #[test]
 fn a_narrow_sidebar_loses_reload_then_forward() {
-    let at = |width| nav_places(width, false);
+    let at = |width| nav_places(width, false, false);
     assert_eq!(at(227.), [Some(77.), Some(155.), Some(189.), None]);
     assert_eq!(at(194.), [Some(77.), Some(122.), Some(156.), None]);
     assert_eq!(at(193.), [Some(77.), Some(155.), None, None]);
@@ -58,12 +55,12 @@ fn a_narrow_sidebar_loses_reload_then_forward() {
 /// 1.171), and the others keep their places, with room for all three down to the narrowest.
 #[test]
 fn in_full_screen_the_sidebar_button_moves_left() {
-    let [sidebar, back, ..] = nav_places(228., true);
+    let [sidebar, back, ..] = nav_places(228., true, false);
     assert_eq!(
         (sidebar.unwrap() + NAV_SIZE / 2., back),
         (29.25, Some(BACK_X))
     );
-    assert_eq!(nav_places(165., true).iter().flatten().count(), 4);
+    assert_eq!(nav_places(165., true, false).iter().flatten().count(), 4);
 }
 
 /// A shell showing one Space with `pinned` and `today` tabs and `folders`.
@@ -579,12 +576,17 @@ fn back_forward_and_reload_shrink_a_little_while_held(cx: &mut TestAppContext) {
     cx.run_until_parked();
     host.take();
     let at = |x: f32| point(px(x + NAV_SIZE / 2.), px(NAV_TOP + NAV_SIZE / 2.));
-    let scale = |cx: &mut VisualTestContext, x| shell.read_with(cx, |shell, _| shell.nav_scale(x));
-    // As if the press were `ago` seconds back, and the release `let_go` seconds back.
+    let scale = |cx: &mut VisualTestContext, x| {
+        shell.read_with(cx, |shell, cx| {
+            shell.nav_scale(x, cx.background_executor().now())
+        })
+    };
+    // As if the press were `ago` seconds back, and the release `let_go` seconds back, on the
+    // executor's clock, which the button's times are on: the runner's speed doesn't move it.
     let back = |cx: &mut VisualTestContext, ago: f32, let_go: f32| {
-        shell.update(cx, |shell, _| {
+        shell.update(cx, |shell, cx| {
             let held = shell.held_nav.as_mut().unwrap();
-            let now = Instant::now();
+            let now = cx.background_executor().now();
             held.pressed = now - Duration::from_secs_f32(ago);
             held.let_go = held.let_go.map(|_| now - Duration::from_secs_f32(let_go));
         })

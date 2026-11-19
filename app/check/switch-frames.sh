@@ -1,12 +1,14 @@
+# check.sh runs this at 460.
 # Every Space switch, by ⌃1 and ⌃2 and by the switcher's dots, and every switch between a Space's
 # tabs by a click on its row, shows a page in the page area at every frame: the one it leaves until
 # the one it shows has drawn, and never the empty page area between them, for 60 to 230 ms on
 # GitHub's hosted Mac (#1438). A burst of the window's pictures (tools/window-frames.sh) looks at
 # the page area in each: one flat colour is no page. Its pages are never flat, the first striped and
-# the others example.com's and example.org's text on their backgrounds.
-# The pictures need the Mac's ScreenCaptureKit, check.sh's Xvfb on Linux, or a CI runner's screen on
-# Windows; elsewhere the run says it can't take them.
+# the others one.html's and two.html's text on their backgrounds.
+# The pictures need the Mac's ScreenCaptureKit, check.sh's Xvfb or tools/headless.sh's sway session
+# on Linux, or a CI runner's screen on Windows; elsewhere the run says it can't take them.
 page="data:text/html,<title>ready</title><body style=\"margin:0;height:100vh;background:repeating-linear-gradient(45deg,%23cc3333 0 24px,%23ffffff 24px 48px)\">"
+serve
 log="$out/switch-frames.log"
 frames="$out/switch-frames.txt"
 marks="$out/switch-marks.txt"
@@ -33,20 +35,18 @@ content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: la
   sed 's/^browser: layout content \([0-9]*x[0-9]*\),.*/\1/')
 width=${content%x*}
 height=${content#*x}
-# The switcher's dots are centred under the sidebar, 25 above the window's bottom.
-dots_y=$((height - 25))
 send menu New Space…
 expect "^browser: spaces $first [0-9]*\$" "New Space didn't make a second Space"
 second=$(grep '^browser: spaces' "$log" | tail -1 | cut -d' ' -f4)
 send type frames
 send key return
-open_from_bar example.org
+open_from_bar "http://localhost:$port/two.html"
 send key 1 ctrl
 expect "^browser: space $first in " "⌃1 didn't show the first Space"
-open_from_bar example.com
+open_from_bar "http://localhost:$port/one.html"
 c=$tab
-# Today's rows, newest first: example.com's over the striped page's.
-[ "$(today)" = "$c $a" ] || fail "Today is \"$(today)\", not example.com's tab over the striped page's"
+# Today's rows, newest first: one.html's over the striped page's.
+[ "$(today)" = "$c $a" ] || fail "Today is \"$(today)\", not one.html's tab over the striped page's"
 
 # The page area, 16 in from the card's edges: past the sidebar's 228, and 10 from the window's
 # other sides.
@@ -56,6 +56,7 @@ mark() { echo "$(now) $*" >> "$marks"; }
 ../tools/window-frames.sh "$pid" 120 "$stop" 244 26 $((width - 270)) $((height - 52)) \
   "$out/switch-flat" > "$frames" 2> "$out/switch-frames-capture.log" &
 capture=$!
+capturing "$capture" "$stop"
 for _ in $(seq 600); do
   grep -q '^capturing' "$frames" && break
   kill -0 "$capture" 2> /dev/null || break
@@ -88,11 +89,11 @@ for i in 1 2 3 4; do
 done
 for i in 1 2; do
   mark "dot2 $i"
-  send click 131 $dots_y
+  send click "$(sed -n "s/^browser: switcher dot $second in window [0-9]* at //p" "$log" | tail -1)"
   expect "^browser: space $second in " "the second dot didn't show the second Space"
   sleep 0.7
   mark "dot1 $i"
-  send click 97 $dots_y
+  send click "$(sed -n "s/^browser: switcher dot $first in window [0-9]* at //p" "$log" | tail -1)"
   expect "^browser: space $first in " "the first dot didn't show the first Space"
   sleep 0.7
 done
@@ -103,7 +104,7 @@ for i in 1 2; do
   sleep 0.7
   mark "row0 $i"
   send click $(row 0)
-  expect "^browser: selected $c in " "a click on example.com's row didn't show it"
+  expect "^browser: selected $c in " "a click on one.html's row didn't show it"
   sleep 0.7
 done
 mark stop

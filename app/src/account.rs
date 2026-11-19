@@ -10,7 +10,8 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 use gpui::{
     App, Bounds, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight,
@@ -19,7 +20,9 @@ use gpui::{
 };
 
 use crate::dialog::{Question, Return, Tone};
-use crate::settings_rows::{Look, SLIDE, button, detailed_row, group, named_button, stop_switch};
+use crate::settings_rows::{
+    Look, SLIDE, button, detailed_row, group, named_button, ring, stop_switch,
+};
 use crate::text_input::TextInput;
 use crate::tokens::menu::{DARK_DESTRUCTIVE, LIGHT_DESTRUCTIVE};
 use crate::tokens::settings::{
@@ -111,11 +114,18 @@ pub fn synced(cx: &App) -> State {
         .unwrap_or_default()
 }
 
-/// What stops sync from keeping up with the server (BC_SYNC_TROUBLE_).
+/// What stops sync from keeping up with the server (BC_SYNC_TROUBLE_). The core says the first
+/// four only once they've lasted, so one missed cycle shows nothing.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Trouble {
-    /// The last try couldn't reach the server, or it answered with an error.
-    Unreachable,
+    /// There's no connection to the server.
+    Offline,
+    /// The server has answered with errors.
+    ServerError,
+    /// The server refused `count` of this device's changes, to `kind`; the rest syncs.
+    Refused { kind: Kind, count: u32 },
+    /// The server no longer takes this device's sign-in.
+    SignIn,
     /// The server asked the device to wait.
     Throttled,
     /// Sync stopped after an error, until the browser starts again.
@@ -125,12 +135,43 @@ pub enum Trouble {
     Update,
 }
 
+/// A kind of data that syncs, as a line names it (BC_SYNC_KIND_). The line names the kind, never
+/// an item.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Kind {
+    Spaces,
+    Bookmarks,
+    Passwords,
+    OpenTabs,
+    Settings,
+    Extensions,
+    /// More than one kind, or one Settings doesn't name: the line names none.
+    Other,
+}
+
+impl Kind {
+    /// What the line calls changes to it, after "changes to", or None for Other.
+    fn words(self) -> Option<&'static str> {
+        match self {
+            Kind::Spaces => Some("Spaces"),
+            Kind::Bookmarks => Some("bookmarks"),
+            Kind::Passwords => Some("passwords"),
+            Kind::OpenTabs => Some("open tabs"),
+            Kind::Settings => Some("settings"),
+            Kind::Extensions => Some("extensions"),
+            Kind::Other => None,
+        }
+    }
+}
+
 /// How sync is keeping up with the server, as the core said when the view last asked.
 #[derive(Clone, PartialEq, Debug, Default)]
 pub struct Activity {
     /// When it last synced, as `synced_when` says it, or "" if it hasn't.
     pub synced: SharedString,
     pub trouble: Option<Trouble>,
+    /// Since when a lasting trouble has stopped sync, as `since_when` says it, or "".
+    pub since: SharedString,
 }
 
 /// What the view tells the window it's in.
@@ -185,8 +226,12 @@ pub trait Host {
     fn remove_device(&self, id: &str);
     /// Syncs `what` on this device from now on, or stops.
     fn choose(&self, what: Choice, on: bool);
-    /// How sync is keeping up, asked as the view shows, never on a timer.
+    /// How sync is keeping up, asked as the view shows and again as the core says it changed,
+    /// never on a timer.
     fn activity(&self) -> Activity;
+    /// Opens sync's own page of what it's doing, chrome://sync-internals, in a tab of the profile
+    /// that syncs, in a window of the user's, never a private one, and goes to it.
+    fn open_sync_details(&self, cx: &mut App);
     /// Deletes the account, its synced data and its devices on the server, and signs out.
     fn delete_account(&self);
     /// Puts the account's secret on this device's clipboard, marked for clipboard histories and
@@ -269,7 +314,7 @@ pub fn copy_for(text: &str, kept: Duration, cx: &mut App) {
     cx.spawn(async move |cx| {
         cx.background_executor().timer(kept).await;
         cx.update(|cx| {
-            if cx.read_from_clipboard().and_then(|item| item.text()) == Some(text) {
+            if crate::clipboard::holds_own(cx, &text) {
                 cx.write_to_clipboard(ClipboardItem::new_string(String::new()));
             }
         });
@@ -370,6 +415,17 @@ pub fn synced_when(at: f64, day_starts: [f64; 4]) -> String {
     }
 }
 
+/// Since when a trouble has lasted, `at` as `synced_when` takes it, as its line puts it: "since
+/// 15:04" today, "since yesterday at 15:04", or "for 3 days". "" for 0.
+pub fn since_when(at: f64, day_starts: [f64; 4]) -> String {
+    let when = synced_when(at, day_starts);
+    match when.strip_suffix(" ago") {
+        Some(days) => format!("for {days}"),
+        None if when.is_empty() => when,
+        None => format!("since {}", when.strip_prefix("at ").unwrap_or(&when)),
+    }
+}
+
 /// The time of day `at` is, in milliseconds since the Unix epoch, as "15:04", with `today` the
 /// start of today in the user's calendar. Off by an hour after a clock change, the day it changes.
 pub fn clock(at: f64, today: f64) -> String {
@@ -431,8 +487,8 @@ impl Account {
         &self.state
     }
 
-    /// Asks the core again how sync is keeping up, as Settings shows the account: the line it
-    /// says is read then, not kept up to date while it shows, which would wake the browser.
+    /// Asks the core again how sync is keeping up, as Settings shows the account and as the core
+    /// says a sync cycle changed it.
     pub fn read_activity(&mut self, cx: &mut Context<Self>) {
         let activity = match self.state.status {
             Status::On => self.host.activity(),
@@ -446,7 +502,9 @@ impl Account {
 
     /// The account as the core says it is now.
     pub fn set_state(&mut self, state: State, cx: &mut Context<Self>) {
+        // The core tells of a sync cycle that changed how sync keeps up with the same state.
         if state == self.state {
+            self.read_activity(cx);
             return;
         }
         // check.sh waits for this line. The email stays out of the log.
@@ -1135,7 +1193,7 @@ impl Account {
                         .flex_1()
                         .min_w_0()
                         .child(self.state.email.clone())
-                        .child(self.status_line()),
+                        .child(self.status_line(cx)),
                 )
                 .child(div().flex_none().child(sign_out)),
         );
@@ -1293,15 +1351,36 @@ impl Account {
     fn status_words(&self) -> (Option<String>, String) {
         let app = env!("APP_NAME");
         let synced = &self.activity.synced;
+        let since = &self.activity.since;
         let last = match synced.is_empty() {
             true => String::new(),
             false => format!("Last synced {synced}; "),
         };
         match (self.state.problem, self.activity.trouble) {
             (Some(problem), _) => (Some(problem_text(problem).into()), String::new()),
-            (None, Some(Trouble::Unreachable)) => (
-                Some(format!("Can't reach {}.", self.server_phrase())),
-                format!("{last}{app} keeps trying."),
+            // A lasting trouble says since when, which is also about when it last synced.
+            (None, Some(Trouble::Offline)) => (
+                Some(format!("No connection {since}.")),
+                format!("{app} syncs once it's back."),
+            ),
+            (None, Some(Trouble::ServerError)) => (
+                Some(format!("{} has had errors {since}.", self.server_phrase())),
+                format!("{app} keeps trying."),
+            ),
+            (None, Some(Trouble::Refused { kind, count })) => {
+                let changes = if count == 1 { "change" } else { "changes" };
+                let what = match kind.words() {
+                    Some(kind) => format!("{count} {changes} to {kind}"),
+                    None => format!("{count} {changes}"),
+                };
+                (
+                    Some(format!("{what} refused {since}.")),
+                    "The rest syncs.".into(),
+                )
+            }
+            (None, Some(Trouble::SignIn)) => (
+                Some("Sign in again to keep syncing.".into()),
+                format!("Not synced {since}."),
             ),
             (None, Some(Trouble::Throttled)) => (
                 Some("The server asked to wait.".into()),
@@ -1327,8 +1406,20 @@ impl Account {
 
     /// The line under the account's email, after a dot: green while it syncs, red, as what stops
     /// it is, while something does.
-    fn status_line(&self) -> gpui::Div {
+    /// A trouble the user can look into ends in Details…, sync's own page of what it's doing.
+    fn status_line(&self, cx: &mut Context<Self>) -> gpui::Div {
         let (trouble, rest) = self.status_words();
+        let details = self.state.problem.is_none()
+            && matches!(
+                self.activity.trouble,
+                Some(
+                    Trouble::Offline
+                        | Trouble::ServerError
+                        | Trouble::Refused { .. }
+                        | Trouble::SignIn
+                        | Trouble::Stopped
+                )
+            );
         let red = match self.look.light() {
             true => gpui::rgba(LIGHT_DESTRUCTIVE),
             false => gpui::rgba(DARK_DESTRUCTIVE),
@@ -1344,6 +1435,29 @@ impl Account {
         }
         if !rest.is_empty() {
             text.push(div().child(rest));
+        }
+        if details {
+            let details = self.link(
+                "details",
+                "Details…",
+                "Sync details, in a new tab",
+                cx,
+                |account, _, cx| {
+                    // check.sh waits for this line.
+                    log!("browser: settings sync details");
+                    account.host.open_sync_details(cx);
+                },
+            );
+            // The keyboard reaches it with ⇥ in the row's order, before Sign Out, and Space or
+            // Return opens it.
+            text.push(
+                div().child(
+                    details
+                        .tab_index(0)
+                        .focus_from_keys_only()
+                        .focus_visible(ring(self.look.ink)),
+                ),
+            );
         }
         div()
             .flex()

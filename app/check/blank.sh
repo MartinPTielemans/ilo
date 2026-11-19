@@ -1,3 +1,4 @@
+# check.sh runs this at 230.
 # A Blank Window, Arc's (⌃⌘N on the Mac; New Blank Window in the command bar everywhere): one Space
 # of its own in the profile of the Space shown, unsaved and listed nowhere, whose pages load in that
 # profile and whose tabs stay in it. A tab's Move to › a Space of that profile moves it out, live, to
@@ -65,7 +66,8 @@ scale = width / float(sys.argv[2])
 stride = (bits * width + 31) // 32 * 4
 def at(x, y):
     row = y if height < 0 else abs(height) - 1 - y
-    b, g, r = data[offset + row * stride + x * bits // 8:][:3]
+    start = offset + row * stride + x * bits // 8
+    b, g, r = data[start:start + 3]
     return r + g + b
 def first_ink(top, bottom):
     ys = range(int(top * scale), int(bottom * scale))

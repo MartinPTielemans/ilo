@@ -7,20 +7,17 @@ use std::{cell::RefCell, collections::HashMap, ffi::CString, ffi::c_void, rc::Rc
 
 use browser::{
     elevation::Level,
-    log,
+    find_status, log,
     palette::{Palette, STATE_HOVERED, STATE_PRESSED},
     shell::{self, keystroke_keys},
     text_input::TextInput,
     tooltip::{self, Anchor, Tip},
 };
 use gpui::{
-    AnyWindowHandle, App, Bounds, Context, Entity, Focusable, FontWeight, Global, KeyBinding,
-    Pixels, Point, SharedString, Size, TitlebarOptions, Window, WindowBackgroundAppearance,
-    WindowBounds, WindowHandle, WindowKind, WindowOptions,
-    accesskit::{Live, Role},
-    actions, canvas, div, point,
-    prelude::*,
-    px, rgb, rgba, size, svg,
+    AnyWindowHandle, App, Bounds, Context, Entity, Focusable, Global, KeyBinding, Pixels, Point,
+    SharedString, Size, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds,
+    WindowHandle, WindowKind, WindowOptions, accesskit::Role, actions, canvas, div, point,
+    prelude::*, px, rgb, rgba, size, svg,
 };
 
 use crate::{bc, platform};
@@ -38,8 +35,6 @@ use browser::tokens::find_bar::FILL;
 const TOP: f32 = shell::CARD_INSET * 2.;
 use browser::tokens::find_bar::ARROW_OVERLAP;
 use browser::tokens::find_bar::BUTTON;
-use browser::tokens::find_bar::COUNT;
-use browser::tokens::find_bar::COUNT_GAP;
 use browser::tokens::find_bar::DIVIDER;
 use browser::tokens::find_bar::DIVIDER_GAP;
 use browser::tokens::find_bar::DIVIDER_HEIGHT;
@@ -48,21 +43,12 @@ use browser::tokens::find_bar::GLYPH;
 use browser::tokens::find_bar::GLYPH_COLOR;
 use browser::tokens::find_bar::GLYPH_DISABLED;
 use browser::tokens::find_bar::INSET;
-use browser::tokens::find_bar::NOT_FOUND;
 use browser::tokens::find_bar::PLACEHOLDER;
 use browser::tokens::find_bar::TEXT;
+use browser::tokens::find_bar::TEXT_LINE;
 use browser::tokens::text;
 
-/// A tab's find in page, as the core reports it.
-#[derive(Clone, Default)]
-pub struct Find {
-    pub open: bool,
-    pub text: String,
-    /// -1 until the page has looked.
-    pub matches: i32,
-    /// From 1, or 0 for none.
-    pub selected: i32,
-}
+pub use browser::find_status::Find;
 
 thread_local! {
     // Every tab's. Kept out of GPUI's entities, so a tab closing inside a GPUI update drops its own.
@@ -147,7 +133,9 @@ pub fn open(
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::new(
             point(px(0.), px(0.)),
-            size(px(WIDTH), px(HEIGHT)),
+            Level::Popover
+                .panel_margin()
+                .around(size(px(WIDTH), px(HEIGHT))),
         ))),
         titlebar: Some(TitlebarOptions {
             title: None,
@@ -188,6 +176,7 @@ pub fn open(
             if let Ok(view) = window.update(cx, |_, window, _| crate::ns_view(window)) {
                 let (right, top) = (f64::from(RIGHT), f64::from(TOP));
                 unsafe { platform::host_add_find_bar(ui_view, view, right, top) };
+                crate::window_opening::make_room(view, Level::Popover);
                 cx.global_mut::<FindBars>().0.insert(browser, window);
             }
             Some(window.into())
@@ -373,11 +362,10 @@ impl FindBar {
     /// Finds the text as the user types it, as Chrome's find bar does, once an input method has
     /// committed it.
     fn edited(&mut self, cx: &mut Context<Self>) {
-        let input = self.input.read(cx);
-        if input.composing() || input.text() == self.searched {
+        let Some(text) = self.input.read(cx).committed_change(&self.searched) else {
             return;
-        }
-        self.searched = input.text().to_string();
+        };
+        self.searched = text.to_string();
         find(self.tab, &self.searched, true);
     }
 
@@ -405,14 +393,10 @@ impl FindBar {
         unsafe { platform::host_hide_find_bar(self.ui_view) };
     }
 
-    /// What the page found for the text, once it has looked: which match of how many, or none.
+    /// What the page found for the text, once it has looked: which match of how many, or none,
+    /// while the tab's find is open.
     fn found(&self) -> Option<(i32, i32)> {
-        FINDS.with_borrow(|finds| match finds.get(&self.tab) {
-            Some(find) if !find.text.is_empty() && find.matches >= 0 => {
-                Some((find.selected, find.matches))
-            }
-            _ => None,
-        })
+        FINDS.with_borrow(|finds| finds.get(&self.tab).and_then(Find::found))
     }
 
     /// The pointer has come onto or left `button`, whose tooltip names it and its key, hanging
@@ -431,13 +415,18 @@ impl FindBar {
                     .into_iter()
                     .map(Into::into)
                     .collect();
-                let anchor = Anchor::under(Bounds::new(origin + frame.origin, frame.size), window);
+                // The frame is in the bar's window, which has the margin round the bar that its
+                // shadow draws in on Windows; the bar's place is the bar's own.
+                let margin = Level::Popover.panel_margin();
+                let in_bar = frame.origin - point(px(margin.sides), px(margin.above));
+                let anchor = Anchor::under(Bounds::new(origin + in_bar, frame.size), window);
                 self.tipped = Some(button);
                 tooltip::hover(
                     self.browser,
                     Tip {
                         text: name.into(),
                         keys,
+                        detail: SharedString::default(),
                     },
                     anchor,
                     cx,
@@ -530,18 +519,14 @@ impl Render for FindBar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let a11y = window.is_a11y_active();
         let found = self.found();
-        // Arc's count, "1/12", and its previous and next, or "NOT FOUND" in their place.
-        let (status, matches) = match found {
-            Some((_, 0)) => ("NOT FOUND".to_string(), None),
-            Some((selected, matches)) => (format!("{selected}/{matches}"), Some(matches)),
-            None => (String::new(), None),
-        };
+        let status = find_status::count(found);
         // check.sh reads these lines.
         log!(
             "browser: find bar drew \"{}\" {status}",
             self.input.read(cx).text()
         );
-        let enabled = matches.is_some();
+        // Arc's previous and next, or "NOT FOUND" in their place.
+        let enabled = found.is_some_and(|(_, matches)| matches != 0);
         let not_found = found.is_some() && !enabled;
         let previous = Named::Previous.named().0;
         let previous = Self::button("previous", "icons/chevron-up.svg", previous, enabled, a11y);
@@ -558,34 +543,7 @@ impl Render for FindBar {
             .when(enabled, |button| {
                 button.on_click(cx.listener(|bar, _, _, cx| bar.find_next(true, cx)))
             });
-        // What it says, said as it changes after what's typed, wherever VoiceOver's cursor is:
-        // "1 of 12" rather than its slash, and "not found" rather than its capitals.
-        let said = match found {
-            Some((_, 0)) => "Not found".to_string(),
-            Some((selected, matches)) => format!("{selected} of {matches}"),
-            None => String::new(),
-        };
-        let status = div()
-            .id("matches")
-            .when(a11y, |status| {
-                status
-                    .role(Role::Status)
-                    .aria_label("Matches")
-                    .aria_value(said)
-                    .a11y_synthetic_children(|builder| builder.parent_node().set_live(Live::Polite))
-            })
-            .flex_none()
-            .mr(px(COUNT_GAP))
-            .when(not_found, |status| {
-                status
-                    .text_size(px(text::SMALL))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(NOT_FOUND))
-            })
-            .when(!not_found, |status| {
-                status.text_size(px(text::SMALL)).text_color(rgba(COUNT))
-            })
-            .child(status);
+        let status = find_status::status(found, a11y);
         let divider = div()
             .flex_none()
             .w(px(DIVIDER_GAP))
@@ -615,48 +573,52 @@ impl Render for FindBar {
             .size_full()
             .font_family(browser::face::UI)
             .child(
-                div()
-                    .key_context("FindBar")
-                    // A key ends a button's tooltip, as a click does.
-                    .capture_key_down(cx.listener(|bar, _, _, cx| bar.end_tip(cx)))
-                    .on_action(cx.listener(|bar, _: &FindNext, _, cx| bar.find_next(true, cx)))
-                    .on_action(cx.listener(|bar, _: &FindPrevious, _, cx| bar.find_next(false, cx)))
-                    .on_action(cx.listener(Self::select_all))
-                    .on_action(cx.listener(Self::close))
-                    .size_full()
-                    .relative()
-                    .flex()
-                    .items_center()
-                    .px(px(INSET))
-                    .rounded(px(RADIUS))
-                    .bg(rgb(FILL))
-                    .text_color(rgb(TEXT))
-                    .text_size(px(text::BODY))
-                    .line_height(px(18.))
-                    .child(search)
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .ml(px(FIELD_GAP))
-                            .overflow_hidden()
-                            .child(self.input.clone()),
-                    )
-                    .child(status)
-                    .when(!not_found, |bar| bar.child(previous).child(next))
-                    .child(divider)
-                    .child(close)
-                    // The popover level's rim, its own layer so the border doesn't move the bar's
-                    // parts. Its shadow is the window's, which the host's find bar still takes from
-                    // the system.
-                    .child(
-                        div()
-                            .absolute()
-                            .size_full()
-                            .rounded(px(RADIUS))
-                            .border(px(0.5))
-                            .border_color(Level::Popover.rim()),
-                    ),
+                Level::Popover.in_window(
+                    div()
+                        .key_context("FindBar")
+                        // A key ends a button's tooltip, as a click does.
+                        .capture_key_down(cx.listener(|bar, _, _, cx| bar.end_tip(cx)))
+                        .on_action(cx.listener(|bar, _: &FindNext, _, cx| bar.find_next(true, cx)))
+                        .on_action(
+                            cx.listener(|bar, _: &FindPrevious, _, cx| bar.find_next(false, cx)),
+                        )
+                        .on_action(cx.listener(Self::select_all))
+                        .on_action(cx.listener(Self::close))
+                        .size_full()
+                        .relative()
+                        .flex()
+                        .items_center()
+                        .px(px(INSET))
+                        .rounded(px(RADIUS))
+                        .bg(rgb(FILL))
+                        .text_color(rgb(TEXT))
+                        .text_size(px(text::BODY))
+                        .line_height(px(TEXT_LINE))
+                        .child(search)
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .ml(px(FIELD_GAP))
+                                .overflow_hidden()
+                                .child(self.input.clone()),
+                        )
+                        .child(status)
+                        .when(!not_found, |bar| bar.child(previous).child(next))
+                        .child(divider)
+                        .child(close)
+                        // The popover level's rim, its own layer so the border doesn't move the bar's
+                        // parts. Its shadow is the window's, which the Mac's host takes from the
+                        // system, or on Windows the bar's own, round it in the window.
+                        .child(
+                            div()
+                                .absolute()
+                                .size_full()
+                                .rounded(px(RADIUS))
+                                .border(px(0.5))
+                                .border_color(Level::Popover.rim()),
+                        ),
+                ),
             )
     }
 }

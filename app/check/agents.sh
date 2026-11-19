@@ -1,3 +1,4 @@
+# check.sh runs this at 80.
 # A Space the driver makes for an agent, through the core as agent code will, is never the user's
 # to see (#1080): the window keeps it apart, as a task's, out of the switcher, the Spaces menu and
 # ⌃1 to ⌃9, and the agent's work shows on its card instead. With the Spaces menu open on the Mac,
@@ -45,9 +46,13 @@ with open(sys.argv[1], "w", encoding="utf-8") as file:
 PY
 agents_file="$(dirname "$saved")/Agents"
 printf '{"on":false,"agents":[],"grants":{"claude-code":{"check-allowed.example":"always"}}}' > "$agents_file"
-# The user's tab, as the first run opens none.
+# The user's tab, as the first run opens none, from a server of the run's own, which a runner
+# always reaches (#3144).
+serve_tls wikipedia '<meta charset=utf-8><link rel=icon href="data:,"><title>Arc (web browser)</title>
+<h1>Arc (web browser)</h1>' en.wikipedia.org
 BROWSER_DRIVE=1 BROWSER_URL='https://en.wikipedia.org/wiki/Arc_(web_browser)' \
-  "$browser" < "$out/drive" > "$log" 2>&1 &
+  "$browser" --host-resolver-rules="$tls_rules" --ignore-certificate-errors-spki-list="$tls_key" \
+  < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
@@ -62,6 +67,8 @@ if [ "$(uname)" = Darwin ]; then
   made="a Space made for an agent with the Spaces menu open stays out of the menu bar"
   post openmenu Spaces
   expect '^browser: menu tracked New Space…' "the Spaces menu didn't open"
+else
+  echo "skip: an agent's Space made with the Spaces menu open, and the menu bar not put up under it: AppKit's main menu, replaced under an open menu, is the Mac's."
 fi
 post agentspace claude-code Claude Code
 expect '^browser: made space [1-9][0-9]* for agent claude-code$' "the driver didn't make the agent's Space"
@@ -151,6 +158,11 @@ send menu 'View Agents…'
 expect '^browser: library hidden$' "View Agents… didn't close the Library"
 rm -f "$history_file" "$agents_file"
 quit
+kill "$tls" 2> /dev/null || true
+tls=
+loaded=$(grep '^browser: loaded' "$log" | cut -d' ' -f4- | head -1)
+grep -qxF "wikipedia: GET $loaded" "$out/wikipedia-tls.log" ||
+  fail "the user's tab, $loaded, didn't come from the run's server: $(grep -v '^wikipedia: ' "$out/wikipedia-tls.log" | tail -3)"
 
 # Launched again, the user's Space comes back alone: quit deletes the agent's Space, as it does a
 # task's, or the launch does, as for one a crash left.
@@ -278,7 +290,7 @@ if windows || [ -n "$mac" ]; then
   connect_with() {
     calls="$(dirname "$1")/claude-calls"
     rm -f "$calls"
-    send clickkey $(drawn "connect claude-code")
+    click_in_sight "connect claude-code"
     expect '^browser: connect agent claude-code$' "a click on Connect didn't connect Claude Code"
     expect_late '^browser: agent claude-code \(connected\|couldn.t connect: .*\)$' \
       "Connect with $(basename "$1") didn't finish"
@@ -317,7 +329,7 @@ PY
     settings_tab General
     settings_tab Agents
     ../tools/window-screenshot.sh "$pid" "$out/connected-$2.png" || fail "no window to capture"
-    send clickkey $(drawn "disconnect claude-code")
+    click_in_sight "disconnect claude-code"
     expect '^browser: agent claude-code disconnected$' "a click on Disconnect didn't disconnect Claude Code"
     calls_reach "$calls" 3 || fail "Disconnect didn't run claude"
     [ "$(tail -1 "$calls")" = "[\"mcp\",\"remove\",\"--scope\",\"user\",\"$name\"]" ] ||
@@ -342,18 +354,18 @@ PY
   # claude to take the server out, and Connect says it isn't installed.
   mkdir -p "$native"
   cp "$standin" "$native/"
-  send clickkey $(drawn "connect claude-code")
+  click_in_sight "connect claude-code"
   expect_late '^browser: agent claude-code connected$' "Connect with $(basename "$standin") didn't connect"
   rm -rf "$native"
   settings_tab General
   settings_tab Agents
-  send clickkey $(drawn "disconnect claude-code")
+  click_in_sight "disconnect claude-code"
   expect '^browser: agent claude-code disconnected$' "a click on Disconnect didn't disconnect Claude Code"
   expect_late "^browser: agent claude-code config kept: Claude Code's claude command isn't installed\.\$" \
     "Disconnect with claude gone didn't say it isn't installed"
   settings_tab General
   settings_tab Agents
-  send clickkey $(drawn "connect claude-code")
+  click_in_sight "connect claude-code"
   expect_late "^browser: agent claude-code couldn't connect: Claude Code's claude command isn't installed\.\$" \
     "Connect with no claude didn't say it isn't installed"
   settings_tab General
@@ -451,7 +463,8 @@ EOF
       sed 's/$/\r/'
   }
   # Every console window Windows shows, from a WinEvent hook, written to $2 once $1 is there. It
-  # first opens one of its own and writes "ready" to $3 once it has seen it.
+  # first opens one of its own and writes "ready" to $3 once it has seen it. Conhost's, or Windows
+  # Terminal's where that's the default terminal, as on Windows 11 and Server 2025 (#3023).
   cat > "$out/consoles.py" << 'EOF'
 import ctypes, ctypes.wintypes as w, os, subprocess, sys, time
 stop, report, ready = sys.argv[1:]
@@ -474,7 +487,7 @@ def shows(hook, event, hwnd, object, child, thread, when):
         return
     kind = ctypes.create_unicode_buffer(64)
     user32.GetClassNameW(hwnd, kind, 64)
-    if kind.value == "ConsoleWindowClass":
+    if kind.value in ("ConsoleWindowClass", "CASCADIA_HOSTING_WINDOW_CLASS"):
         pid = w.DWORD()
         user32.GetWindowThreadProcessId(w.HWND(hwnd), ctypes.byref(pid))
         shown.append(f"{hwnd} {pid.value} {name_of(pid.value)}")
@@ -618,7 +631,7 @@ PY
   tasks_found="; on Windows the task agents find claude.exe and codex.cmd, then claude.cmd and codex.exe, off the PATH, each signed in, Codex's models listed, a task from ⌘T starts on each and its CLI gets its instructions whole and the first message, and no console window shows"
 fi
 if [ "$driven" = 1 ]; then
-  echo "ok: $made, the switcher and ⌃1 to ⌃9, as a task's does, refuses an agent the user's tab, ad blocking, passwords, DevTools, a profile's settings and any action agents lack, with why in the activity log, and comes back as no Space of the user's$session_page$connected$tasks_found"
+  echo "ok: $made, the switcher and ⌃1 to ⌃9, as a task's does, refuses an agent the user's tab, ad blocking, passwords, DevTools, a profile's settings and any action agents lack, with why in the activity log, and comes back as no Space of the user's$session_page$connected$tasks_found. The user's tab came from the run's own server."
 else
-  echo "ok: $made and the switcher, as a task's does, refuses an agent the user's tab and what agents lack, with why in the activity log, and comes back as no Space of the user's$connected$tasks_found. skip: ⌃2 and ⌃3, and a past task's page. Browser wasn't the active app, so the page ignored the click."
+  echo "ok: $made and the switcher, as a task's does, refuses an agent the user's tab and what agents lack, with why in the activity log, and comes back as no Space of the user's$connected$tasks_found. The user's tab came from the run's own server. skip: ⌃2 and ⌃3, and a past task's page. Browser wasn't the active app, so the page ignored the click."
 fi

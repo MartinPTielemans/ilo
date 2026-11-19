@@ -1,3 +1,6 @@
+# check.sh runs this at 830, only when named.
+# Only Wayland's sessions drag with the data device, so it runs only when named, and skips
+# elsewhere, where the windows run checks the drag.
 # On Wayland, a tab's row dragged out of its window is the data device's drag, the app's own, as
 # the windows run checks on the Mac and X11 with the driver standing in for the drag between windows
 # (#1859): there AppKit's drag and XDND's follow the real pointer, which the driver doesn't move, but

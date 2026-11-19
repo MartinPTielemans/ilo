@@ -1,0 +1,194 @@
+The Mac's browser doesn't wait for Crashpad's handler to start. On the Mac, StartHandler spawns
+the handler and waits for it to check in before it returns, which held up ilo's launch by about
+670 ms on the check VMs. Crashpad's StartHandler already takes asynchronous_start, which only
+Windows honoured: the Mac now starts the handler on the thread that restarts it, and sets the
+exception port at once, so a child's crash meanwhile waits in the port's queue for the handler.
+The browser passes it; another initial client still waits, as it needs to know the handler
+started. A crash of the browser itself before the handler is up isn't caught.
+
+The handler, spawned once the port is set, would inherit a send right to its own port, and it
+exits only when its port has no senders left, so it would outlive the browser. It resets its
+crash port to the system's before it runs, as a restarted one does. The child forked to spawn it
+reads the macOS version into a function-local static, so the browser reads it before the thread
+starts: setting the browser's own port reads it too, and a fork while that filled the static in
+left the child waiting on its guard forever, a copy of the browser running after quit (#761).
+
+The browser's embedder port, which hands the handler the browser's shared-memory user streams,
+goes to the thread with the receive right, so the first start passes it on as a synchronous one
+does.
+
+--- a/components/crash/core/app/crashpad_mac.mm
++++ b/components/crash/core/app/crashpad_mac.mm
+@@ -200,10 +200,13 @@ bool PlatformCrashpadInitialization(
+             crash_reporter_client->GetUserStreamSharedMemoryRegions());
+       }
+ 
++      // The browser doesn't wait for the handler to start: launching it holds
++      // up the browser's own launch. Another initial client needs to know
++      // whether it started.
+       bool result = GetCrashpadClient().StartHandler(
+           handler_path, *database_path, metrics_path, url,
+-          GetProcessSimpleAnnotations(), arguments, true, false, {}, {},
+-          std::move(embedder_port));
++          GetProcessSimpleAnnotations(), arguments, true, browser_process, {},
++          {}, std::move(embedder_port));
+ 
+       // If this is an initial client that's not the browser process, it's
+       // important to sever the connection to any existing handler. If
+--- a/third_party/crashpad/crashpad/client/crashpad_client_mac.cc
++++ b/third_party/crashpad/crashpad/client/crashpad_client_mac.cc
+@@ -140,6 +140,7 @@ class HandlerStarter final : public NotifyServer::DefaultInterface {
+       const std::map<std::string, std::string>& annotations,
+       const std::vector<std::string>& arguments,
+       bool restartable,
++      bool asynchronous_start,
+       const std::vector<base::FilePath>& attachments,
+       const std::set<FileHandle>& preserve_file_handles,
+       base::apple::ScopedMachReceiveRight embedder_port) {
+@@ -175,6 +176,39 @@ class HandlerStarter final : public NotifyServer::DefaultInterface {
+       }
+     }
+ 
++    // Started asynchronously, the handler starts on the thread that restarts
++    // it, and the send right is good at once: another process's crash before
++    // the handler has the receive right waits in the port's queue until it
++    // does.
++    if (asynchronous_start) {
++      const bool restarts = handler_restarter != nullptr;
++      std::unique_ptr<HandlerStarter> starter(
++          restarts ? handler_restarter.release() : new HandlerStarter());
++      starter->first_start_ = std::move(receive_right);
++      starter->first_embedder_port_ = std::move(embedder_port);
++      starter->restarts_ = restarts;
++      // The thread forks, and the child reads the macOS version into a static.
++      // It's read here first: StartHandler reads it next, setting the port,
++      // and a fork while that fills the static in would leave the child
++      // waiting on its guard for good.
++      MacOSVersionNumber();
++      if (starter->StartRestartThread(handler,
++                                      database,
++                                      metrics_dir,
++                                      url,
++                                      annotations,
++                                      arguments,
++                                      attachments,
++                                      preserve_file_handles)) {
++        // The thread owns the object now.
++        std::ignore = starter.release();
++        return send_right;
++      }
++      // Without its thread, the handler starts here, and isn't restarted.
++      receive_right = std::move(starter->first_start_);
++      embedder_port = std::move(starter->first_embedder_port_);
++    }
++
+     if (!CommonStart(handler,
+                      database,
+                      metrics_dir,
+@@ -184,6 +218,7 @@ class HandlerStarter final : public NotifyServer::DefaultInterface {
+                      std::move(receive_right),
+                      handler_restarter.get(),
+                      false,
++                     false,
+                      attachments,
+                      preserve_file_handles,
+                      std::move(embedder_port))) {
+@@ -236,6 +271,7 @@ class HandlerStarter final : public NotifyServer::DefaultInterface {
+                 base::apple::ScopedMachReceiveRight(rights),
+                 this,
+                 true,
++                false,
+                 attachments_,
+                 preserve_file_handles_,
+                 // The embedder port can't be restored during restart because
+@@ -272,6 +308,8 @@ class HandlerStarter final : public NotifyServer::DefaultInterface {
+   //!     restartable set to `true` and CommonStart() is being called to restart
+   //!     a previously-started handler, this is `true`. Otherwise, this is
+   //!     `false`.
++  //! \param[in] asynchronous_start If this process's crash exception port
++  //!     already has the send right, as after an asynchronous start, `true`.
+   //!
+   //! \return `true` on success, `false` on failure, with a message logged.
+   //!     Failures include failure to start the handler process and failure to
+@@ -285,6 +323,7 @@ class HandlerStarter final : public NotifyServer::DefaultInterface {
+                           base::apple::ScopedMachReceiveRight receive_right,
+                           HandlerStarter* handler_restarter,
+                           bool restart,
++                          bool asynchronous_start,
+                           const std::vector<base::FilePath>& attachments,
+                           const std::set<FileHandle>& preserve_file_handles,
+                           base::apple::ScopedMachReceiveRight embedder_port) {
+@@ -377,13 +416,16 @@ class HandlerStarter final : public NotifyServer::DefaultInterface {
+     // the crash exception port in the handler will have been inherited from
+     // this parent process, which was probably using the exception server now
+     // being restarted. The handler can’t monitor itself for its own crashes via
+-    // this interface.
+-    if (!SpawnSubprocess(
+-            argv,
+-            nullptr,
+-            spawn_preserve_fds,
+-            true,
+-            restart ? CrashpadClient::UseSystemDefaultHandler : nullptr)) {
++    // this interface. Started asynchronously, it would inherit a send right to
++    // its own port, so the port would never lose its last sender, and the
++    // handler would outlive every client.
++    if (!SpawnSubprocess(argv,
++                         nullptr,
++                         spawn_preserve_fds,
++                         true,
++                         restart || asynchronous_start
++                             ? CrashpadClient::UseSystemDefaultHandler
++                             : nullptr)) {
+       return false;
+     }
+ 
+@@ -447,6 +489,28 @@ class HandlerStarter final : public NotifyServer::DefaultInterface {
+   static void* RestartThreadMain(void* argument) {
+     HandlerStarter* self = reinterpret_cast<HandlerStarter*>(argument);
+ 
++    // The first start, asked for asynchronously. One that fails isn't tried
++    // again, as when it's synchronous.
++    if (self->first_start_.is_valid()) {
++      const bool started = CommonStart(self->handler_,
++                                       self->database_,
++                                       self->metrics_dir_,
++                                       self->url_,
++                                       self->annotations_,
++                                       self->arguments_,
++                                       std::move(self->first_start_),
++                                       self->restarts_ ? self : nullptr,
++                                       false,
++                                       true,
++                                       self->attachments_,
++                                       self->preserve_file_handles_,
++                                       std::move(self->first_embedder_port_));
++      if (!started || !self->restarts_) {
++        delete self;
++        return nullptr;
++      }
++    }
++
+     NotifyServer notify_server(self);
+     mach_msg_return_t mr;
+     do {
+@@ -475,6 +539,12 @@ class HandlerStarter final : public NotifyServer::DefaultInterface {
+   std::set<FileHandle> preserve_file_handles_;
+   base::apple::ScopedMachReceiveRight notify_port_;
+   uint64_t last_start_time_;
++  // The receive right and embedder port of a start asked for asynchronously,
++  // until the thread starts the handler with them, and whether the thread then
++  // restarts it.
++  base::apple::ScopedMachReceiveRight first_start_;
++  base::apple::ScopedMachReceiveRight first_embedder_port_;
++  bool restarts_ = false;
+ };
+ 
+ }  // namespace
+@@ -507,6 +577,7 @@ bool CrashpadClient::StartHandler(
+       arguments,
+       restartable && (__MAC_OS_X_VERSION_MIN_REQUIRED >= __MAC_10_10 ||
+                       MacOSVersionNumber() >= 10'10'00),
++      asynchronous_start,
+       attachments,
+       preserve_file_handles,
+       std::move(embedder_port)));

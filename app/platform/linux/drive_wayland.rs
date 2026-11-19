@@ -12,6 +12,12 @@
 //! whose the core says they are. Every window floats (tools/headless.sh), so sway stacks them as a
 //! desktop does, and moves and sizes them as it's told. Drags from another app come from a client
 //! of the driver's own, as another app's do (drive_drags.rs).
+//!
+//! drive.rs's scripted input method, and insert, are sway's input method for the seat
+//! (`zwp_input_method_v2`), made so by the first of them: sway gives what it composes and commits
+//! to the text input of the surface with the keys, as it would an fcitx5's, so which field takes it
+//! is the compositor's and the app's to say. sway has one input method per seat, so with another
+//! already bound the driver refuses and says so, rather than post into a field.
 
 use std::{
     cell::{Cell, RefCell},
@@ -23,12 +29,15 @@ use std::{
 };
 
 use browser::log;
-use gpui::{Keystroke, Modifiers};
 use serde_json::Value;
 use wayland_client::{
     Connection, Dispatch, EventQueue, QueueHandle, delegate_noop,
     globals::{GlobalListContents, registry_queue_init},
     protocol::{wl_pointer, wl_registry, wl_seat::WlSeat},
+};
+use wayland_protocols_misc::zwp_input_method_v2::client::{
+    zwp_input_method_manager_v2::ZwpInputMethodManagerV2,
+    zwp_input_method_v2::{self, ZwpInputMethodV2},
 };
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
     zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1,
@@ -58,6 +67,7 @@ const BTN_EXTRA: u32 = 0x114;
 const SUBPOINTS: f64 = 100.;
 /// sway's IPC messages.
 const RUN_COMMAND: u32 = 0;
+const GET_WORKSPACES: u32 = 1;
 const GET_OUTPUTS: u32 = 3;
 const GET_TREE: u32 = 4;
 const GET_INPUTS: u32 = 100;
@@ -67,6 +77,10 @@ struct Session {
     pointer: ZwlrVirtualPointerV1,
     keyboard: ZwpVirtualKeyboardV1,
     keymap: xkb::Keymap,
+    seat: WlSeat,
+    /// sway's input methods, if it has them, and the driver's, once made (`input_method`).
+    input_methods: Option<ZwpInputMethodManagerV2>,
+    input_method: Option<ZwpInputMethodV2>,
     /// The size of sway's layout, which the pointer's absolute positions are in.
     extent: (f64, f64),
     started: Instant,
@@ -91,6 +105,33 @@ delegate_noop!(State: ZwlrVirtualPointerManagerV1);
 delegate_noop!(State: ZwlrVirtualPointerV1);
 delegate_noop!(State: ZwpVirtualKeyboardManagerV1);
 delegate_noop!(State: ZwpVirtualKeyboardV1);
+delegate_noop!(State: ZwpInputMethodManagerV2);
+
+impl Dispatch<ZwpInputMethodV2, ()> for State {
+    fn event(
+        _: &mut Self,
+        _: &ZwpInputMethodV2,
+        event: zwp_input_method_v2::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwp_input_method_v2::Event::Activate => IM_PENDING.set(Some(true)),
+            zwp_input_method_v2::Event::Deactivate => IM_PENDING.set(Some(false)),
+            zwp_input_method_v2::Event::Done => {
+                IM_FRESH.set(false);
+                if let Some(active) = IM_PENDING.take() {
+                    IM_ACTIVE.set(active);
+                    drive::input_method_reset();
+                }
+                IM_DONES.set(IM_DONES.get().wrapping_add(1));
+            }
+            zwp_input_method_v2::Event::Unavailable => IM_UNAVAILABLE.set(true),
+            _ => {}
+        }
+    }
+}
 
 thread_local! {
     static SESSION: RefCell<Option<Session>> = const { RefCell::new(None) };
@@ -103,12 +144,28 @@ thread_local! {
     /// The modifiers flags holds, and those the last key went with, as drive.rs keeps them.
     static FLAGS: Cell<u16> = const { Cell::new(0) };
     static KEY_FLAGS: Cell<u16> = const { Cell::new(0) };
+    /// Whether the Control the last key left is a ⌃Tab walk's, which a click keeps, as drive.rs's
+    /// WALK (#3340).
+    static WALK: Cell<bool> = const { Cell::new(false) };
     /// Whether the key held since the last key's events has been held to a repeat (`repeat`).
     static REPEATED: Cell<bool> = const { Cell::new(false) };
     /// The last press: when, where in sway's layout, and its button.
     static LAST_CLICK: Cell<Option<(Instant, f64, f64, u32)>> = const { Cell::new(None) };
     /// Where in sway's layout the pointer was last put.
     static POINTER: Cell<Option<(f64, f64)>> = const { Cell::new(None) };
+    /// A press on the Mini Player, or a browser window's edge: where in it, and its frame then.
+    static PIP_HELD: Cell<Option<(f64, f64, [f64; 4])>> = const { Cell::new(None) };
+    /// The output `display add` plugged in, which `display remove` takes out.
+    static ADDED: RefCell<Option<String>> = const { RefCell::new(None) };
+    /// The driver's input method: whether a text input has it active, as of its last `done` and as
+    /// that `done` will make it, how many `done`s it has had, which each commit names, and whether
+    /// sway said the seat has another.
+    static IM_ACTIVE: Cell<bool> = const { Cell::new(false) };
+    static IM_PENDING: Cell<Option<bool>> = const { Cell::new(None) };
+    static IM_DONES: Cell<u32> = const { Cell::new(0) };
+    static IM_UNAVAILABLE: Cell<bool> = const { Cell::new(false) };
+    /// Whether the input method is new and sway hasn't told it its state yet.
+    static IM_FRESH: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Makes the driver's pointer and keyboard under Wayland, before the app's windows, so Chromium
@@ -149,12 +206,9 @@ pub(crate) fn on() -> bool {
     SESSION.with_borrow(Option::is_some)
 }
 
-fn open() -> Result<Session, String> {
-    let display = std::env::var("WAYLAND_DISPLAY").unwrap_or_default();
-    let headless = std::env::var("BROWSER_HEADLESS").unwrap_or_default();
-    if display.is_empty() || display != headless {
-        return Err("WAYLAND_DISPLAY isn't tools/headless.sh's session".into());
-    }
+/// The outputs of the sway at SWAYSOCK, if they're all headless, as tools/headless.sh's are and a
+/// desktop's never are: the driver's input there reaches nothing but the session's own windows.
+pub(crate) fn headless_sway() -> Result<Vec<Value>, String> {
     let outputs = sway(GET_OUTPUTS, "").ok_or("no sway at SWAYSOCK")?;
     let outputs = outputs.as_array().ok_or("sway listed no outputs")?;
     let headless = |output: &Value| {
@@ -165,14 +219,17 @@ fn open() -> Result<Session, String> {
     if outputs.is_empty() || !outputs.iter().all(headless) {
         return Err("sway's outputs aren't all headless".into());
     }
-    let extent = outputs
-        .iter()
-        .fold((0f64, 0f64), |(width, height), output| {
-            let rect = &output["rect"];
-            let right = number(&rect["x"]) + number(&rect["width"]);
-            let bottom = number(&rect["y"]) + number(&rect["height"]);
-            (width.max(right), height.max(bottom))
-        });
+    Ok(outputs.clone())
+}
+
+fn open() -> Result<Session, String> {
+    let display = std::env::var("WAYLAND_DISPLAY").unwrap_or_default();
+    let headless = std::env::var("BROWSER_HEADLESS").unwrap_or_default();
+    if display.is_empty() || display != headless {
+        return Err("WAYLAND_DISPLAY isn't tools/headless.sh's session".into());
+    }
+    let outputs = headless_sway()?;
+    let extent = extent(&outputs);
     let connection = Connection::connect_to_env().map_err(|e| e.to_string())?;
     let (globals, mut queue) =
         registry_queue_init::<State>(&connection).map_err(|e| e.to_string())?;
@@ -186,6 +243,8 @@ fn open() -> Result<Session, String> {
     let keyboards: ZwpVirtualKeyboardManagerV1 = globals
         .bind(&handle, 1..=1, ())
         .map_err(|e| e.to_string())?;
+    // Bound only; the input method itself is made when a run first types through it.
+    let input_methods: Option<ZwpInputMethodManagerV2> = globals.bind(&handle, 1..=1, ()).ok();
     let pointer = pointers.create_virtual_pointer(Some(&seat), &handle, ());
     let keyboard = keyboards.create_virtual_keyboard(&seat, &handle, ());
     let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
@@ -213,9 +272,96 @@ fn open() -> Result<Session, String> {
         pointer,
         keyboard,
         keymap,
+        seat,
+        input_methods,
+        input_method: None,
         extent,
         started: Instant::now(),
     })
+}
+
+/// The size of sway's layout of `outputs`.
+fn extent(outputs: &[Value]) -> (f64, f64) {
+    outputs
+        .iter()
+        .fold((0f64, 0f64), |(width, height), output| {
+            let rect = &output["rect"];
+            let right = number(&rect["x"]) + number(&rect["width"]);
+            let bottom = number(&rect["y"]) + number(&rect["height"]);
+            (width.max(right), height.max(bottom))
+        })
+}
+
+/// sway's outputs' names, once `done` holds of them, for up to 2 s, as sway adds or takes out an
+/// output a moment after the command.
+fn outputs_once(done: impl Fn(&[String]) -> bool) -> Option<Vec<String>> {
+    let until = Instant::now() + Duration::from_secs(2);
+    loop {
+        let outputs = sway(GET_OUTPUTS, "")?;
+        let names: Vec<String> = (outputs.as_array()?.iter())
+            .filter_map(|output| Some(output["name"].as_str()?.to_owned()))
+            .collect();
+        if done(&names) {
+            let extent = extent(outputs.as_array()?);
+            SESSION.with_borrow_mut(|session| session.as_mut().map(|s| s.extent = extent));
+            return Some(names);
+        }
+        if Instant::now() > until {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// A display plugged in, `width` by `height`, as an output of sway's headless backend beside the
+/// others, as the Mac's driver plugs in a virtual one, logged where in place's terms, sway's layout.
+/// Under Wayland no output is the main one, so the Mac's "main" means nothing here.
+fn display_add(width: f64, height: f64) -> Option<()> {
+    let before = outputs_once(|_| true)?;
+    let (right, _) = SESSION.with_borrow(|session| session.as_ref().map(|s| s.extent))?;
+    // sway lays an output with no position of its own out after those with one, which put the
+    // session's to the new one's right; each keeps its place as a display does.
+    for output in sway(GET_OUTPUTS, "")?.as_array()? {
+        let (name, rect) = (output["name"].as_str()?, &output["rect"]);
+        let (x, y) = (number(&rect["x"]), number(&rect["y"]));
+        sway_command(&format!("output {name} position {x} {y}"))?;
+    }
+    sway_command("create_output")?;
+    let names = outputs_once(|names| names.iter().any(|name| !before.contains(name)))?;
+    let name = names.into_iter().find(|name| !before.contains(name))?;
+    sway_command(&format!(
+        "output {name} resolution {width}x{height} position {right} 0 scale 1"
+    ))?;
+    outputs_once(|_| true)?;
+    log!("browser: display added at {right:.0} 0 {width:.0} {height:.0}");
+    ADDED.set(Some(name));
+    Some(())
+}
+
+/// The display `display_add` plugged in, unplugged, which sway moves its windows off. sway moves
+/// its workspace to another output and leaves it hidden there behind that output's own, though it
+/// has the focus, so this switches to it, as a user does.
+fn display_remove() -> Option<()> {
+    let name = ADDED.take()?;
+    sway_command(&format!("output {name} unplug"))?;
+    outputs_once(|names| !names.contains(&name))?;
+    let workspaces = sway(GET_WORKSPACES, "")?;
+    let workspaces = workspaces.as_array()?;
+    let is = |ws: &Value, key: &str| ws[key].as_bool() == Some(true);
+    if let Some(hidden) = workspaces
+        .iter()
+        .find(|ws| is(ws, "focused") && !is(ws, "visible"))
+    {
+        // Focus only moves, and shows a workspace, from elsewhere.
+        let shown = workspaces
+            .iter()
+            .find(|ws| is(ws, "visible") && ws["output"] == hidden["output"])?;
+        let (shown, hidden) = (shown["name"].as_str()?, hidden["name"].as_str()?);
+        sway_command(&format!("workspace \"{shown}\""))?;
+        sway_command(&format!("workspace \"{hidden}\""))?;
+    }
+    log!("browser: display removed");
+    Some(())
 }
 
 fn number(value: &Value) -> f64 {
@@ -494,7 +640,8 @@ pub(crate) fn key_title() -> Option<String> {
 
 /// Moves the driven browser window's content to (`x`, `y`) in sway's layout, or keeps it where it
 /// is, as sway sizes a floating window about its centre, and sizes it `width` by `height`, which
-/// the command waits for the UI to have.
+/// the command waits for the UI to have. The layout's, not its workspace's, as the tree reports
+/// it, so it lands on a display `display add` plugged in too.
 fn frame(at: Option<(f64, f64)>, width: f64, height: f64) -> Option<()> {
     let (id, node) = driven()?;
     let handle =
@@ -506,7 +653,7 @@ fn frame(at: Option<(f64, f64)>, width: f64, height: f64) -> Option<()> {
     let (x, y) = at.unwrap_or((node.x, node.y));
     let con = node.id;
     sway_command(&format!(
-        "[con_id={con}] resize set width {width} px height {height} px, move position {x} {y}"
+        "[con_id={con}] resize set width {width} px height {height} px, move absolute position {x} {y}"
     ))?;
     drive::resizing(view as usize, width, height);
     Some(())
@@ -697,6 +844,12 @@ fn held() -> u16 {
     FLAGS.get() | KEY_FLAGS.get() & CONTROL
 }
 
+/// The Control a click `action` keeps: a ⌃Tab walk's (WALK), for a left click, as a hand's.
+fn walk_control(action: &str) -> u16 {
+    let kept = matches!(action, "click" | "clickkey") && WALK.get();
+    if kept { CONTROL } else { 0 }
+}
+
 /// The pointer to (`x`, `y`) in sway's layout, unless that's in another app's window or off the
 /// screen. Just outside one of the app's, it's sway's to take, as a press at the border it resizes
 /// windows by (#1572).
@@ -772,6 +925,7 @@ fn first_press(x: f64, y: f64, which: u32, again: bool) {
 fn with_modifiers(state: u16, events: impl FnOnce() -> Option<()>) -> Option<()> {
     hold(state | FLAGS.get())?;
     KEY_FLAGS.set(KEY_FLAGS.get() & !CONTROL);
+    WALK.set(false);
     let done = events();
     hold(held())?;
     done
@@ -846,6 +1000,8 @@ fn key_events(key: &str, state: u16, kinds: &[bool]) -> Option<()> {
     REPEATED.set(false);
     let state = state | FLAGS.get();
     KEY_FLAGS.set(state & (CONTROL | ALT | SHIFT));
+    // The walk's keys after its ⌃Tab, such as an arrow with Control, keep it.
+    WALK.set(state & CONTROL != 0 && (key == "tab" || WALK.get()));
     hold(state | if shift { SHIFT } else { 0 })?;
     with_session(|session, time| {
         for &press in kinds {
@@ -883,9 +1039,9 @@ fn repeat_info() -> (u32, u32) {
         .unwrap_or((600, 25))
 }
 
-/// The surface where drive.rs's scripted input method composes, as the compositor's would:
-/// Settings' with sway's focus, or the browser window's while its UI or an overlay over it has the
-/// keys. Not while a page has them, whose input method is Chromium's.
+/// The surface whose GPUI field the done line reads the composition of: Settings' with sway's
+/// focus, or the browser window's while its UI or an overlay over it has the keys. Not while a page
+/// has them, whose composition is Chromium's, as on the Mac.
 pub(crate) fn ime_surface() -> Option<*mut c_void> {
     if focused_settings(&ours()).is_some() {
         return settings_window::shown();
@@ -897,8 +1053,8 @@ pub(crate) fn ime_surface() -> Option<*mut c_void> {
     WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.id == id).map(|w| w.ui_view))
 }
 
-/// Presses and releases `key` with the modifiers `state`, or composes it in the UI's field while
-/// drive.rs's scripted input method types, as drive.rs's key does.
+/// Presses and releases `key` with the modifiers `state`, or composes it while drive.rs's
+/// scripted input method types, as drive.rs's key does.
 fn key(key: &str, state: u16) -> Option<()> {
     if drive::ime_key(key, state | FLAGS.get())? {
         return Some(());
@@ -906,54 +1062,102 @@ fn key(key: &str, state: u16) -> Option<()> {
     key_events(key, state, &[true, false])
 }
 
-/// Commits `text` to the field of the UI, Settings or the overlay with the keys, as drive.rs's
-/// insert does.
-fn insert(text: &str) -> Option<()> {
-    // A page with the keys gets the text typed, as drive.rs's insert types it there: its field is
-    // Chromium's, which no GPUI keystroke reaches.
-    if keyboard().1 == "RenderWidgetHostViewCocoa" {
-        return text
-            .chars()
-            .try_for_each(|c| key_events(&c.to_string(), 0, &[true, false]));
-    }
-    let nodes = ours();
-    let view = match gpui_linux::shown_keyboard_overlay() {
-        Some(view) => view,
-        None if focused_settings(&nodes).is_some() => settings_window::shown()?,
-        None => {
-            let id = driven_id()?;
-            WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.id == id).map(|w| w.ui_view))?
+/// Makes the driver sway's input method for the seat, the first time, and has sway's latest state
+/// of it. None, saying why, when sway has none to give or the seat has another already, as an
+/// fcitx5 would be: the driver doesn't take its place, or post into a field instead.
+pub(crate) fn input_method() -> Option<()> {
+    let made = SESSION.with_borrow_mut(|session| {
+        let session = session.as_mut()?;
+        if session.input_method.is_none() {
+            let Some(manager) = &session.input_methods else {
+                return Some(Err("sway offers no zwp_input_method_manager_v2"));
+            };
+            IM_UNAVAILABLE.set(false);
+            IM_FRESH.set(true);
+            let handle = session.queue.handle();
+            session.input_method = Some(manager.get_input_method(&session.seat, &handle, ()));
         }
-    };
-    let cx = CX.with_borrow(Clone::clone)?;
-    let typed = Keystroke {
-        modifiers: Modifiers::default(),
-        key: String::new(),
-        key_char: Some(text.to_string()),
-    };
-    cx.update(|cx| {
-        let handle = cx.windows().into_iter().find(|handle| {
-            handle
-                .update(cx, |_, window, _| crate::ns_view(window))
-                .is_ok_and(|each| each == view)
-        })?;
-        handle
-            .update(cx, |_, window, cx| window.dispatch_keystroke(typed, cx))
-            .ok()
+        session.queue.roundtrip(&mut State).ok()?;
+        if IM_UNAVAILABLE.get() {
+            session.input_method.take()?.destroy();
+            return Some(Err("the seat has another input method"));
+        }
+        Some(Ok(()))
+    });
+    match made? {
+        Ok(()) => Some(()),
+        Err(why) => {
+            log!("browser: drive refuses to be sway's input method: {why}");
+            None
+        }
+    }
+}
+
+/// Sends what `pending` sets of the input method's state, and the commit that has sway give it to
+/// the text input it's active for. False, saying so, when none has it active: no field there takes
+/// text from an input method. An input method the command has just made waits for sway's first
+/// state of it, which comes once the text input with the keys has heard of it and enabled itself
+/// again; until then the command runs again (drive::again).
+fn input_method_commit(pending: impl FnOnce(&ZwpInputMethodV2)) -> bool {
+    if input_method().is_none() {
+        return false;
+    }
+    if !IM_ACTIVE.get() {
+        if !(IM_FRESH.get() && drive::again()) {
+            log!("browser: drive's input method isn't active: no text input has the keys");
+        }
+        return false;
+    }
+    with_session(|session, _| {
+        let input_method = session.input_method.as_ref()?;
+        pending(input_method);
+        input_method.commit(IM_DONES.get());
+        Some(())
     })
-    .filter(|&typed| typed)
-    .map(drop)
+    .flatten()
+    .is_some()
+}
+
+/// Composes `text` through the input method, with `selected`, in UTF-16 as GPUI has it, as its
+/// cursor, or ends the composition with `text` empty, as an input method cancelling does.
+pub(crate) fn compose(text: &str, selected: Option<std::ops::Range<usize>>) -> bool {
+    let at = |utf16: usize| {
+        let mut units = 0;
+        let byte = text.char_indices().find_map(|(byte, c)| {
+            let here = units >= utf16;
+            units += c.len_utf16();
+            here.then_some(byte)
+        });
+        byte.unwrap_or(text.len()) as i32
+    };
+    input_method_commit(|input_method| {
+        if !text.is_empty() {
+            let selected = selected.unwrap_or(text.len()..text.len());
+            input_method.set_preedit_string(text.into(), at(selected.start), at(selected.end));
+        }
+    })
+}
+
+/// Commits `text` through the input method, in place of what it composed.
+pub(crate) fn commit(text: &str) -> bool {
+    input_method_commit(|input_method| input_method.commit_string(text.into()))
+}
+
+/// Commits `text` to the field with the keys through the input method, a page's or the UI's, as
+/// drive.rs's insert does.
+fn insert(text: &str) -> Option<()> {
+    commit(text).then_some(())
 }
 
 /// A turn of the wheel by `notches` along `axis` at (`x`, `y`) in sway's layout, down or right
 /// for a positive one.
-fn wheel(x: f64, y: f64, axis: wl_pointer::Axis, notches: i32) -> Option<()> {
+fn wheel(x: f64, y: f64, axis: wl_pointer::Axis, notches: i32, state: u16) -> Option<()> {
     // The notches alone where the pointer already is, as drive.rs turns them: a move before them
     // stops a page's scroll short of the notches' points, as the window run's did (#1573).
     if POINTER.get() != Some((x, y)) {
         motion(x, y)?;
     }
-    with_modifiers(0, || {
+    with_modifiers(state, || {
         with_session(|session, time| {
             for _ in 0..notches.unsigned_abs() {
                 session.pointer.axis_source(wl_pointer::AxisSource::Wheel);
@@ -1039,6 +1243,26 @@ fn popups(id: bc::bc_id) -> Vec<bc::bc_rect> {
     let count = unsafe { bc::bc_window_popups(id, frames.as_mut_ptr(), frames.len()) };
     frames.truncate(count);
     frames
+}
+
+/// The driven browser window's scale, and the one each overlay that shows drew its first frame at
+/// since it showed, in the order the driver lists them (`drive::overlay_views`): "browser: scales
+/// window 2, overlays 2 2" (#2592). An overlay over another window may have that one's.
+fn scales() -> Option<()> {
+    let (id, _) = driven()?;
+    let ui_view =
+        WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.id == id).map(|w| w.ui_view))?;
+    let window = gpui_linux::embedder_scale(ui_view)?;
+    let drawn: Vec<String> = (drive::overlay_views().into_iter())
+        .filter_map(gpui_linux::overlay_first_frame_scale)
+        .map(|scale| scale.to_string())
+        .collect();
+    let drawn = match drawn.is_empty() {
+        true => "none".to_string(),
+        false => drawn.join(" "),
+    };
+    log!("browser: scales window {window}, overlays {drawn}");
+    Some(())
 }
 
 fn layout() -> Option<()> {
@@ -1137,7 +1361,13 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
                 "middleclick" => BTN_MIDDLE,
                 _ => BTN_LEFT,
             };
-            click(x, y, which, drive::click_modifiers(words), false)?;
+            click(
+                x,
+                y,
+                which,
+                drive::click_modifiers(words) | walk_control(action),
+                false,
+            )?;
             if action == "doubleclick" {
                 click(x, y, BTN_LEFT, 0, true)?;
             }
@@ -1175,7 +1405,7 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
                 return settings_click((x, y), (left + x, top + y), which, double);
             }
             let (x, y) = (left + x, top + y);
-            click(x, y, which, 0, false)?;
+            click(x, y, which, walk_control(action), false)?;
             if action == "doubleclickkey" {
                 click(x, y, BTN_LEFT, 0, true)?;
             }
@@ -1238,7 +1468,7 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
                 return swipe(x, y, (0., -dy), count.max(1).unsigned_abs(), 0);
             }
             let notches = count.max(1) * if dy > 0. { 1 } else { -1 };
-            wheel(x, y, wl_pointer::Axis::VerticalScroll, notches)
+            wheel(x, y, wl_pointer::Axis::VerticalScroll, notches, 0)
         })(),
         // In the window with the keyboard, as clickkey's point is: Settings, which is GPUI's.
         "scrollkey" => (|| {
@@ -1263,7 +1493,7 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
             let dx: f64 = words.next()?.parse().ok()?;
             let notches = (dx.abs().round() as i32).max(1);
             let notches = if dx > 0. { -notches } else { notches };
-            wheel(x, y, wl_pointer::Axis::HorizontalScroll, notches)
+            wheel(x, y, wl_pointer::Axis::HorizontalScroll, notches, 0)
         })(),
         "key" => (|| {
             let name = words.next()?;
@@ -1285,6 +1515,7 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
         "flags" => (|| {
             let to = drive::modifiers(words);
             FLAGS.set(FLAGS.get() | KEY_FLAGS.take());
+            WALK.set(false);
             for (mask, code) in MODIFIER_KEYS {
                 let held = FLAGS.get();
                 let press = match (held & mask != 0, to & mask != 0) {
@@ -1399,6 +1630,23 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
             })
         })(),
         "layout" => layout(),
+        "scales" => scales(),
+        "pip" => mini_player_command(words),
+        // hold press, hold dragto and hold release <x> <y>: as pip's, on the driven browser window,
+        // for its edges, which sway resizes it from with the display's pointer.
+        "hold" => (|| {
+            let step = words.next()?;
+            let (x, y) = drive::point(&mut words)?;
+            let (_, node) = driven()?;
+            hold_window(&node, "held", step, x, y)
+        })(),
+        "display" => match words.next() {
+            Some("add") => {
+                (|| display_add(words.next()?.parse().ok()?, words.next()?.parse().ok()?))()
+            }
+            Some("remove") => display_remove(),
+            _ => None,
+        },
         _ => return None,
     })
 }
@@ -1407,4 +1655,174 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
 fn in_driven_point<'a>(words: &mut impl Iterator<Item = &'a str>) -> Option<(f64, f64)> {
     let (x, y) = drive::point(words)?;
     in_driven(x, y)
+}
+
+/// Chromium's Picture in Picture window, if one shows: a window of the app's that's neither a
+/// browser window nor Settings, as a video's, the Mini Player, and a page's, as a call floats in.
+/// The core's Mini Player has no app id, as Settings has none, so Settings is told by its title.
+fn mini_player() -> Option<Node> {
+    let nodes = ours();
+    let open = browsers(&nodes);
+    let settings = |node: &Node| node.is_settings() && node.name == crate::settings::title();
+    let found = (nodes.iter())
+        .find(|node| !settings(node) && !open.iter().any(|(_, each)| each.id == node.id))
+        .cloned();
+    if found.is_none() {
+        describe(&nodes);
+    }
+    found
+}
+
+/// pip, and pip doubleclick, wheel, press, dragto and release, as drive.rs's, at points from the
+/// Mini Player's top-left corner as the command finds it, or as it was at the press.
+fn mini_player_command<'a>(mut words: impl Iterator<Item = &'a str>) -> Option<()> {
+    let Some(pip) = mini_player() else {
+        log!("browser: pip none");
+        return Some(());
+    };
+    let Some(action) = words.next() else {
+        log!(
+            "browser: pip at {:.0} {:.0} {:.0} {:.0}",
+            pip.x,
+            pip.y,
+            pip.width,
+            pip.height
+        );
+        watch_mini_player(pip.id);
+        return Some(());
+    };
+    let (x, y) = drive::point(&mut words)?;
+    if action != "dragto" && action != "release" && !in_front(&pip, pip.x + x, pip.y + y)? {
+        log!("browser: pip {action}: another window is over the Mini Player there");
+        return Some(());
+    }
+    match action {
+        "doubleclick" => {
+            click(pip.x + x, pip.y + y, BTN_LEFT, 0, false)?;
+            click(pip.x + x, pip.y + y, BTN_LEFT, 0, true)
+        }
+        // pip wheel <x> <y> <notches> [cmd]: a notch for each, down for content moving up.
+        "wheel" => {
+            let notches: i32 = words.next()?.parse().ok()?;
+            let state = drive::click_modifiers(words);
+            let axis = wl_pointer::Axis::VerticalScroll;
+            wheel(pip.x + x, pip.y + y, axis, notches, state)
+        }
+        "press" | "dragto" | "release" => hold_window(&pip, "pip", action, x, y),
+        _ => None,
+    }
+}
+
+/// <what> press, dragto and release <x> <y> on sway's window `node`, at points from its top-left
+/// corner as it was at the press: the display's pointer, which sway moves or sizes the window with,
+/// as a hand's. The release logs where the drag left the window, as "browser: <what> at".
+fn hold_window(node: &Node, what: &str, action: &str, x: f64, y: f64) -> Option<()> {
+    match action {
+        "press" => {
+            let (at_x, at_y) = (node.x + x, node.y + y);
+            first_press(at_x, at_y, BTN_LEFT, false);
+            motion(at_x, at_y)?;
+            PIP_HELD.set(Some((x, y, [node.x, node.y, node.width, node.height])));
+            with_modifiers(0, || button(BTN_LEFT, true))
+        }
+        "dragto" | "release" => {
+            let (held_x, held_y, start) = PIP_HELD.get()?;
+            let [left, top, ..] = start;
+            let to = (left + x, top + y);
+            motion(to.0, to.1)?;
+            // sway moves or sizes it with the pointer's moves from when Chromium asks it to, past
+            // the drag's threshold, so a move sent before then is lost to it: a hand that drags
+            // keeps moving, a point back and forth till sway has started, or 1 s.
+            let frame_of = |node: Node| [node.x, node.y, node.width, node.height];
+            let now = || ours().into_iter().find(|each| each.id == node.id);
+            // Asked after each move, as the point back puts it where it was if sway started there.
+            let taken = || now().is_none_or(|now| frame_of(now) != start);
+            if to != (left + held_x, top + held_y) && !taken() {
+                for _ in 0..20 {
+                    std::thread::sleep(Duration::from_millis(50));
+                    motion(to.0 + 1., to.1)?;
+                    let moved = taken();
+                    motion(to.0, to.1)?;
+                    if moved || taken() {
+                        break;
+                    }
+                }
+            }
+            if action == "dragto" {
+                return Some(());
+            }
+            PIP_HELD.set(None);
+            with_modifiers(0, || button(BTN_LEFT, false))?;
+            let [x, y, width, height] = frame_of(now()?);
+            log!("browser: {what} at {x:.0} {y:.0} {width:.0} {height:.0}");
+            Some(())
+        }
+        _ => None,
+    }
+}
+
+/// Whether the Mini Player is in front at (`x`, `y`), raised if another window was. tools/headless.sh
+/// floats every window, so sway raises the browser window over it as that takes the keyboard,
+/// where on a desktop the browser window tiles and a floating one stays over it. sway raises the
+/// one it focuses, and a press on it gives it the keyboard anyway, as it does on X11.
+fn in_front(pip: &Node, x: f64, y: f64) -> Option<bool> {
+    if front_at(x, y) != Some(pip.id) {
+        sway_command(&format!("[con_id={}] focus", pip.id))?;
+    }
+    Some(front_at(x, y) == Some(pip.id))
+}
+
+/// sway's window in front at (`x`, `y`) in its layout, as `others_at` finds it.
+fn front_at(x: f64, y: f64) -> Option<i64> {
+    let mut front: Vec<(Node, Option<u64>)> = every_window().into_iter().rev().collect();
+    front.sort_by_key(|(node, _)| !node.full_screen);
+    front
+        .into_iter()
+        .find(|(node, _)| {
+            (node.x..node.x + node.width).contains(&x)
+                && (node.y..node.y + node.height).contains(&y)
+        })
+        .map(|(node, _)| node.id)
+}
+
+/// Logs the Mini Player's frame each time window `con` moves or resizes, then "browser: pip gone"
+/// once it's gone, from a thread of its own, as drive.rs's X11 watcher does with the X server's
+/// events. sway sends none for a floating window's move, so it asks sway's tree every 50 ms while
+/// the Mini Player shows, the driver's alone.
+fn watch_mini_player(con: i64) {
+    static WATCHED: std::sync::Mutex<Option<i64>> = std::sync::Mutex::new(None);
+    {
+        let mut watched = WATCHED.lock().unwrap_or_else(|e| e.into_inner());
+        if *watched == Some(con) {
+            return;
+        }
+        *watched = Some(con);
+    }
+    std::thread::spawn(move || {
+        let frame_of = || {
+            (ours().into_iter())
+                .find(|node| node.id == con)
+                .map(|node| [node.x, node.y, node.width, node.height])
+        };
+        let mut last = frame_of();
+        loop {
+            std::thread::sleep(Duration::from_millis(50));
+            if *WATCHED.lock().unwrap_or_else(|e| e.into_inner()) != Some(con) {
+                return;
+            }
+            let now = frame_of();
+            match now {
+                None => {
+                    log!("browser: pip gone");
+                    *WATCHED.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                    return;
+                }
+                Some([x, y, width, height]) if now != last => {
+                    log!("browser: pip at {x:.0} {y:.0} {width:.0} {height:.0}");
+                }
+                Some(_) => {}
+            }
+            last = now;
+        }
+    });
 }

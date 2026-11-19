@@ -68,7 +68,8 @@ TemplateURLService* LoadedEngines(Profile* profile) {
 // Whether the user can make |engine| the default, or has: none while a policy or an extension
 // picks it. Chrome's CanMakeDefault is false for the default itself, which the user's list keeps.
 bool IsChoice(TemplateURLService* engines, const TemplateURL* engine) {
-  if (engine->keyword() == kNoSearch || !engines->ShowInDefaultList(engine)) {
+  if (engine->keyword() == kNoSearch ||
+      !(engines->ShowInDefaultList(engine) || IsGoogleChoice(*engine))) {
     return false;
   }
   return engine == engines->GetDefaultSearchProvider()
@@ -80,6 +81,7 @@ bool IsChoice(TemplateURLService* engines, const TemplateURL* engine) {
 void SeedOnceLoaded(Profile* profile) {
   if (TemplateURLService* engines = LoadedEngines(profile)) {
     SeedSiteSearches(profile->GetPrefs(), engines);
+    AddGoogleChoice(profile->GetPrefs(), engines);
   }
 }
 
@@ -147,13 +149,15 @@ std::string DefaultEngineChoices(Profile* profile) {
   if (!engines) {
     return choices;
   }
+  // Google's comes last, never where a region's own list would put it (decision 2).
+  std::string google;
   for (const TemplateURL* engine : engines->GetTemplateURLs()) {
     if (IsChoice(engines, engine)) {
-      choices += base::UTF16ToUTF8(engine->keyword()) + '\t' +
-                 base::UTF16ToUTF8(engine->short_name()) + '\n';
+      (IsGoogleChoice(*engine) ? google : choices) += base::UTF16ToUTF8(engine->keyword()) + '\t' +
+                                                    base::UTF16ToUTF8(engine->short_name()) + '\n';
     }
   }
-  return choices;
+  return choices + google;
 }
 
 std::u16string DefaultEngine(Profile* profile) {

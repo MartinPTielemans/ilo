@@ -15,6 +15,7 @@
 #include "base/no_destructor.h"
 #include "base/task/single_thread_task_runner.h"
 #include "browser_core/auto_archive.h"
+#include "browser_core/boost_colors.h"
 #include "browser_core/host.h"
 #include "browser_core/session.h"
 
@@ -131,6 +132,7 @@ void Space::Delete(bc_id id) {
   // The Spaces listed don't change with a window's own.
   const bool listed = !it->second->own();
   Spaces().erase(it);
+  BoostSpaceGone(id);
   if (listed) {
     std::erase(SpaceOrder(), id);
     ReportSpacesChanged();
@@ -197,6 +199,11 @@ std::vector<Space*> Space::All() {
 Space* Space::Holding(bc_id tab) {
   for (auto& [id, space] : Spaces()) {
     if (space->Has(tab)) {
+      return space.get();
+    }
+  }
+  for (auto& [id, space] : Spaces()) {
+    if (space->expected_.contains(tab)) {
       return space.get();
     }
   }
@@ -288,6 +295,28 @@ bool Space::IsOpen(bc_id folder) const {
   return it != folders_.end() && it->second.open;
 }
 
+int Space::FolderLive(bc_id folder) const {
+  auto it = folders_.find(folder);
+  return it == folders_.end() ? 0 : it->second.live;
+}
+
+bool Space::TakesLiveFolder(int source) const {
+  // The user's account's lists, which are neither an agent's nor a private window's to have.
+  return !agent() && !own() && source == BC_LIVE_PULL_REQUESTS && !LiveFolderOf(source);
+}
+
+bc_id Space::LiveFolderOf(int source) const {
+  if (!source) {
+    return 0;
+  }
+  for (const auto& [id, folder] : folders_) {
+    if (folder.live == source) {
+      return id;
+    }
+  }
+  return 0;
+}
+
 GURL Space::PinnedUrl(bc_id tab) const {
   auto it = pinned_urls_.find(tab);
   return it == pinned_urls_.end() ? GURL() : it->second;
@@ -328,6 +357,7 @@ void Space::SetProfile(std::string profile) {
 }
 
 void Space::Add(bc_id tab, bc_id opener, bool foreground) {
+  expected_.erase(tab);
   const bool pinned_opener = opener && IsPinned(opener);
   // A pinned opener sits above the Today tabs.
   auto at = pinned_opener ? today_.begin() : std::ranges::find(today_, opener);
@@ -357,11 +387,13 @@ void Space::Add(bc_id tab, bc_id opener, bool foreground) {
 }
 
 void Space::AddAt(bc_id tab, size_t index) {
+  expected_.erase(tab);
   today_.insert(today_.begin() + OutsideSplits(today_, index), tab);
   ReportChanged();
 }
 
 void Space::AddPinned(bc_id tab, bc_id folder, size_t index, GURL url) {
+  expected_.erase(tab);
   if (!IsFolder(folder)) {
     folder = 0;
   }
@@ -454,7 +486,12 @@ void Space::Move(bc_id tab,
   ReportChanged();
 }
 
+void Space::Expect(bc_id tab) {
+  expected_.insert(tab);
+}
+
 void Space::Remove(bc_id tab) {
+  expected_.erase(tab);
   if (IsFolder(tab) || (std::erase(today_, tab) == 0 && std::erase(pinned_, tab) == 0)) {
     return;
   }
@@ -494,6 +531,18 @@ void Space::SetFolderIcon(bc_id folder, std::string icon) {
     it->second.icon = std::move(icon);
     ReportChanged();
   }
+}
+
+void Space::SetFolderLive(bc_id folder, int source) {
+  auto it = folders_.find(folder);
+  if (it == folders_.end() || it->second.live == source) {
+    return;
+  }
+  if (source && !TakesLiveFolder(source)) {
+    return;
+  }
+  it->second.live = source;
+  ReportChanged();
 }
 
 void Space::SetOpen(bc_id folder, bool open) {
@@ -545,7 +594,12 @@ void Space::TakeFolder(Space& from, bc_id folder, const std::map<bc_id, bc_id>& 
     }
     from.folder_of_.erase(row);
     if (auto entry = from.folders_.extract(row)) {
-      folders_[row] = std::move(entry.mapped());
+      Folder& moved = entry.mapped();
+      // One this Space can't have, as an agent's Space can't, comes as a plain folder.
+      if (moved.live && !TakesLiveFolder(moved.live)) {
+        moved.live = 0;
+      }
+      folders_[row] = std::move(moved);
     } else {
       if (auto url = from.pinned_urls_.extract(row)) {
         pinned_urls_[here(row)] = std::move(url.mapped());
@@ -939,6 +993,8 @@ void Space::ReportChanged() {
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(
                      [](bc_id id) {
+                       // A tab that moved takes its new Space's colours in its Boost.
+                       BoostSpacesChanged();
                        if (FromId(id) && Host().space_changed) {
                          Host().space_changed(Host().context, id);
                        }

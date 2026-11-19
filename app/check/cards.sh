@@ -1,3 +1,4 @@
+# check.sh runs this at 170.
 # Resting on a sidebar tab's row shows its hover card beside the rows (#430): a picture of a tab
 # not shown, taken once the switches that hid it are quiet and never on a switch, its title and
 # host, and its buttons. The tab shown has no picture, as its page is beside the card. The next row
@@ -12,6 +13,7 @@ page='data:text/html,<title>loading</title>
 <body style="margin:0;height:100vh;background:linear-gradient(135deg,%23e1676f,%237eb6d5)">
 <h1 style="font:bold 64px system-ui;color:white;margin:40px">Colours</h1>
 <script>requestAnimationFrame(() => setTimeout(() => document.title = "colours"));</script>'
+serve
 log="$out/cards.log"
 step=0
 rm -f "$saved" "$launch_frame"
@@ -29,9 +31,9 @@ if [ "$active" != 1 ]; then
   echo "skip: cards. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi
-open_from_bar example.com
+open_from_bar "http://localhost:$port/one.html"
 b=$tab
-expect_tabs "$b $a" "$b" "after opening example.com"
+expect_tabs "$b $a" "$b" "after opening one.html"
 # The page hidden is pictured once the switch is quiet, drawn unseen for it, never the one shown.
 expect "^browser: hover card \(not \)\{0,1\}pictured $a\$" \
   "the core never answered for the tab hidden once the switch was quiet"

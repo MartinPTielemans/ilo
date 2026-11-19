@@ -7,12 +7,24 @@
 # APP_TRACK=nightly builds a nightly, which About names so and whose switch starts on.
 set -e
 cd "$(dirname "$0")"
+# Which core changes the linked engine wasn't built with, for check/lib.sh's engine_has in a copy
+# of the tree with no repository, as a check VM's (#2554): compared here, where git, the engine's
+# tags and its tree are. A build that can't compare leaves none, so no stale answer outlives it.
+engine_changes() {
+  mkdir -p build
+  if changes=$(../tools/engine-changes.sh 2> /dev/null); then
+    printf '%s\n' "$changes" > build/engine-changes
+  else
+    rm -f build/engine-changes
+  fi
+}
 # On Linux, build/Browser: a copy of the engine, chrome and what it runs with, and libBrowser.so
 # beside it, which chrome loads (linux/Cargo.toml). Hard links, as chrome finds its files and the
 # app's beside its own path, which a symbolic link would leave in the engine's folder.
 if [ "$(uname -s)" = Linux ]; then
   [ -e .deps/engine/chrome ] || ./setup.sh
   [ -e .deps/engine/chrome ] || { echo "No Linux engine in .deps/engine." >&2; exit 1; }
+  engine_changes
   features=
   [ "${1:-}" != prod ] || features="--features prod"
   # In the browser crate's target, which has built the same dependencies for the tests.
@@ -24,8 +36,10 @@ if [ "$(uname -s)" = Linux ]; then
   mkdir -p build
   cp -al "$(cd .deps/engine && pwd -P)" build/Browser
   cp target/release/libBrowser.so target/release/mcp-bridge build/Browser/
-  # uBlock Origin goes beside chrome, Chromium's assets folder off the Mac, where the core loads it.
+  # uBlock Origin and a Board's page go beside chrome, Chromium's assets folder off the Mac, where
+  # the core loads them.
   cp -R "$(./fetch-ublock.sh)" build/Browser/ublock
+  ./copy-board.sh build/Browser/board
   # shellcheck disable=SC2086
   ../tools/licences.sh build/Browser linux/Cargo.toml "$(rustc -vV | sed -n 's/^host: //p')" $features
   exit 0
@@ -36,6 +50,7 @@ case "$(uname -s)" in
   MINGW* | MSYS*)
     [ -e .deps/engine/chrome.exe ] || ./setup.sh
     [ -e .deps/engine/chrome.exe ] || { echo "No Windows engine in .deps/engine." >&2; exit 1; }
+    engine_changes
     features=
     [ "${1:-}" != prod ] || features="--features prod"
     # The nightly run's copy of build/Browser, build/Updates beside it, whose updater checks
@@ -74,12 +89,14 @@ case "$(uname -s)" in
     cp -al .deps/engine build/Browser
     cp target/release/Browser.dll target/release/mcp-bridge.exe build/Browser/
     cp -R "$(./fetch-ublock.sh)" build/Browser/ublock
+    ./copy-board.sh build/Browser/board
     # shellcheck disable=SC2086
     ../tools/licences.sh build/Browser windows/Cargo.toml "$(rustc -vV | sed -n 's/^host: //p')" $features
     exit 0
     ;;
 esac
 [ -e .deps/Chromium.app ] || ./setup.sh
+engine_changes
 # setup.sh vendors it since the app patched it; a checkout set up before that hasn't got it.
 [ -d .deps/accesskit_macos ] || {
   echo "No .deps/accesskit_macos. Run ./setup.sh again, with dev for the dev engine." >&2
@@ -177,9 +194,10 @@ cp -cR "$(cd .deps/Chromium.app && pwd -P)" "$app"
 rm "$app/Contents/MacOS/Chromium"
 # The bridge goes beside it, where Settings › Agents points an agent's MCP client.
 cp target/release/Browser target/release/mcp-bridge "$app/Contents/MacOS/"
-# uBlock Origin goes in the framework's resources, where the core loads it into every profile.
+# uBlock Origin and a Board's page go in the framework's resources, where the core loads them.
 framework=$(echo "$app"/Contents/Frameworks/*Framework.framework)
 cp -R "$(./fetch-ublock.sh)" "$framework/Resources/ublock"
+./copy-board.sh "$framework/Resources/board"
 # The dev engine's framework and helpers load its component libraries from beside the app. These
 # are links, so a rebuilt dev engine's core reaches the built app at once.
 rm -f build/*.dylib

@@ -2,11 +2,8 @@
 //! favorites, to another Space, and over the page for a split view. And links and files
 //! dragged onto the list from the page or another app, which open there.
 
-use std::{
-    collections::HashMap,
-    path::PathBuf,
-    time::{Duration, Instant},
-};
+use std::{collections::HashMap, path::PathBuf, time::Duration};
+use web_time::Instant;
 
 use gpui::{
     Bounds, Context, DispatchPhase, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
@@ -38,7 +35,8 @@ impl Shell {
     /// Under Reduce Motion the rows are in their places at once, a closed one gone with its room,
     /// and new ones still fade in.
     pub(super) fn move_rows(&mut self, before: HashMap<Slot, f32>, curve: Curve, cx: &gpui::App) {
-        let (now, moved) = (Instant::now(), crate::motion::start(cx));
+        let now = self.clock.now();
+        let moved = crate::motion::start_at(now, cx);
         let after = self.layout();
         let mut slides: Vec<_> = after
             .iter()
@@ -50,6 +48,8 @@ impl Shell {
         let mut opened = after
             .iter()
             .filter_map(|(&slot, &top)| match slot {
+                // A tab opened from a Live Folder's row takes the row's place as it is.
+                Slot::Tab(tab) if self.shown_space().is_some_and(|space| space.listed(tab)) => None,
                 Slot::Tab(tab) if !before.contains_key(&slot) => Some((top, tab)),
                 _ => None,
             })
@@ -105,8 +105,9 @@ impl Shell {
         // Slides already over stay for the next frame to drop, which says the rows settled: under
         // Reduce Motion every slide is over at once, and the core's next answer, as a ⌘Z's second
         // and third tabs come, would otherwise take them before any frame saw them.
+        let clock = self.clock.clone();
         self.slides
-            .retain(|_, (_, start, curve)| curve.at(start.elapsed().as_secs_f32()).is_none());
+            .retain(|_, (_, start, curve)| curve.at(Self::since_on(&clock, *start)).is_none());
         self.slides.extend(slides);
     }
 
@@ -119,7 +120,7 @@ impl Shell {
         }
         self.slides.get(&slot).map_or(0., |&(from, start, curve)| {
             curve
-                .at(start.elapsed().as_secs_f32())
+                .at(self.since(start))
                 .map_or(0., |done| from * (1. - done))
         })
     }
@@ -167,7 +168,7 @@ impl Shell {
             TILE_HEIGHT,
             TILE_RADIUS,
         ];
-        let turned = drag.shape.at(Instant::now());
+        let turned = drag.shape.at(self.clock.now());
         let blend = |row: f32, tile: f32| row + (tile - row) * turned;
         let (width, height) = (blend(row[2], tile[2]), blend(row[3], tile[3]));
         let pointer = drag.pointer;
@@ -218,7 +219,7 @@ impl Shell {
             // check.sh reads this line.
             log!("browser: list scrolled to {to} for {what}");
             let glide = ListGlide {
-                start: Instant::now(),
+                start: self.clock.now(),
                 from: offset,
                 to,
                 set: offset,
@@ -238,7 +239,7 @@ impl Shell {
             self.list_glide.set(None);
             return false;
         }
-        let t = (glide.start.elapsed().as_secs_f32() / LIST_GLIDE).min(1.);
+        let t = (self.since(glide.start) / LIST_GLIDE).min(1.);
         let at = glide.from + (glide.to - glide.from) * (1. - (1. - t).powi(LIST_GLIDE_POWER));
         self.list_scroll.set_offset(point(offset.x, px(-at)));
         if t < 1. {
@@ -255,7 +256,7 @@ impl Shell {
     #[cfg(test)]
     pub(super) fn land_list_glide(&self) {
         if let Some(glide) = self.list_glide.get() {
-            let start = Instant::now() - Duration::from_secs_f32(LIST_GLIDE);
+            let start = self.clock.now() - Duration::from_secs_f32(LIST_GLIDE);
             self.list_glide.set(Some(ListGlide { start, ..glide }));
         }
     }
@@ -305,7 +306,7 @@ impl Shell {
         self.press(tab, position, Place::List(pinned, index), top, grab);
         self.held_row = Some(HeldRow {
             tab,
-            pressed: Instant::now(),
+            pressed: self.clock.now(),
             let_go: None,
         });
     }
@@ -320,7 +321,7 @@ impl Shell {
         if self.dragging().is_some() || self.sidebar_scale() != 1. {
             return 1.;
         }
-        1. - (1. - PRESS_SCALE) * held.depth(Instant::now())
+        1. - (1. - PRESS_SCALE) * held.depth(self.clock.now())
     }
 
     /// Lets the held row go once it has grown back, or has come away, and asks for the next frame
@@ -329,7 +330,7 @@ impl Shell {
         let Some(held) = &self.held_row else {
             return;
         };
-        let depth = held.depth(Instant::now());
+        let depth = held.depth(self.clock.now());
         match held.let_go {
             _ if self.dragging().is_some() => self.held_row = None,
             Some(_) if depth == 0. => self.held_row = None,
@@ -508,7 +509,11 @@ impl Shell {
                     let (mut pinned, mut today) = (pinned.clone(), today.clone());
                     let tabs = if in_pinned { &mut pinned } else { &mut today };
                     tabs.insert(index, tab);
-                    let layout = slots(self.list_head(), &pinned, &today);
+                    // An open Live Folder's rows take their room among them too (#2979).
+                    let blocks = (self.shown_space())
+                        .map(|space| space.live_blocks(&pinned))
+                        .unwrap_or_default();
+                    let layout = slots(self.list_head(), &pinned, &blocks, &today);
                     ((in_pinned, index), layout[&Slot::Tab(tab)], layout)
                 })
                 .collect();
@@ -576,7 +581,10 @@ impl Shell {
             drag.depth = depth;
             drag.line = line;
             drag.onto = onto;
-            drag.shape.turn(over_favorites, crate::motion::start(cx));
+            drag.shape.turn(
+                over_favorites,
+                crate::motion::start_at(self.clock.now(), cx),
+            );
         }
         match onto {
             // check.sh waits for these lines.
@@ -774,7 +782,7 @@ impl Shell {
     /// with ⌥ held leaves a copy of its tab where it's let go and goes back, as Arc's does.
     pub(super) fn drop_row_with(&mut self, alt: bool, cx: &mut Context<Self>) {
         if let Some(held) = self.held_row.as_mut().filter(|held| held.let_go.is_none()) {
-            held.let_go = Some(Instant::now());
+            held.let_go = Some(self.clock.now());
             cx.notify();
         }
         if self.drop_over_page(cx) {
@@ -829,11 +837,23 @@ impl Shell {
             cx.notify();
             return;
         }
+        // A tab in its Live Folder's item's place keeps it, let go anywhere in the folder: the
+        // lists order it.
+        let kept = match to {
+            Place::List(true, gap) => {
+                let (rows, _) = self.rows();
+                let rows: Vec<u64> = rows.into_iter().filter(|&row| row != tab).collect();
+                let (folder, _) = self.pinned_place(&rows, gap, drag_depth, tab, false);
+                let space = self.shown_space();
+                space.is_some_and(|space| space.listed(tab) && space.folder_of(tab) == folder)
+            }
+            _ => false,
+        };
         let Some(drag) = self.drag.as_mut() else {
             return;
         };
         let favorite = matches!(to, Place::Favorite(_));
-        if drag.to == drag.from && (favorite || drag.depth == drag.from_depth) {
+        if kept || drag.to == drag.from && (favorite || drag.depth == drag.from_depth) {
             self.settle_drag(cx);
             self.putting_back = true;
         } else {
@@ -1259,10 +1279,12 @@ impl Shell {
                 .unwrap_or(0),
             None => 0,
         };
+        // A tab drawn in a Live Folder's item's place is after the folder's others wherever the
+        // core keeps it, so before it is the folder's end.
         let before = rows
             .get(gap)
             .copied()
-            .filter(|&row| space.folder_of(row) == folder);
+            .filter(|&row| space.folder_of(row) == folder && !space.listed(row));
         let panes = if copy {
             Vec::new()
         } else {

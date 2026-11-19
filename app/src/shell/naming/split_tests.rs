@@ -65,11 +65,12 @@ fn report(shell: &Entity<Shell>, cx: &mut VisualTestContext, name: &str, icon: &
     cx.run_until_parked();
 }
 
-/// A place in the split's row, `along` of the way across the sidebar.
-fn split_row(shell: &Entity<Shell>, cx: &mut VisualTestContext, along: f32) -> Point<Pixels> {
+/// The middle of the second page's segment in the split's row, folded at its end while the first
+/// shows.
+fn second_segment(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Point<Pixels> {
     shell.read_with(cx, |shell, _| {
         let top = shell.drawn_list_top() + shell.layout()[&Slot::Tab(3)];
-        point(px(shell.width() * along), px(top + ROW_HEIGHT / 2.))
+        point(px(shell.segment_middle(4)), px(top + ROW_HEIGHT / 2.))
     })
 }
 
@@ -112,13 +113,17 @@ fn naming(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> bool {
 #[gpui::test]
 fn a_double_click_on_a_split_names_the_split(cx: &mut TestAppContext) {
     let (shell, cx, host) = window(cx, "");
-    let second = split_row(&shell, cx, 0.75);
+    // The second page's segment unfolds at once, so it's where the next press finds it.
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    let second = second_segment(&shell, cx);
     press(cx, second, 1);
     assert!(
         host.take().contains(&"select 4".to_string()),
-        "the right half is the second page"
+        "the folded segment is the second page"
     );
     shell.update(cx, |shell, cx| shell.set_selected(4, cx));
+    cx.run_until_parked();
+    let second = second_segment(&shell, cx);
     press(cx, second, 2);
     assert_eq!(field(&shell, cx, 3).as_deref(), Some(""));
     cx.simulate_input("Planning");

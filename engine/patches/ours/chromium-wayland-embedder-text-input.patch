@@ -1,0 +1,218 @@
+Lets a toplevel of the embedder's on Chromium's Wayland connection, such as the app's Settings
+window, compose through a browser window's input method. The compositor gives a client's input
+method to its text inputs, and Chromium's one zwp_text_input_v3 drops an enter for a surface that
+isn't Chromium's. The embedder names the surface and the window it composes through
+(WaylandProxy::SetEmbedderTextInputSurface); an enter for that surface gives that window
+text-input focus, so its input method enables for the client the core gives it, without making the
+window active, as the embedder's surface has the keys. Keys are untouched: Chromium still drops
+those for a surface that isn't its own. Removing the window ends the entry, and the embedder ends it
+before destroying the surface. Hooks only: the logic is in browser_core/platform/linux/.
+--- a/ui/ozone/platform/wayland/host/proxy/wayland_proxy.h
++++ b/ui/ozone/platform/wayland/host/proxy/wayland_proxy.h
+@@ -94,6 +94,14 @@
+     return true;
+   }
+ 
++  // browser_core: text-input focus on |surface|, a toplevel of the embedder's
++  // on Chromium's connection, goes to the window backed by |widget|, whose
++  // input method composes for the embedder's field there; or with
++  // gfx::kNullAcceleratedWidget no longer. Set before |surface| can take the
++  // keyboard, and ended before destroying it. Removing the window ends it too.
++  virtual void SetEmbedderTextInputSurface(wl_surface* surface,
++                                           gfx::AcceleratedWidget widget) {}
++
+  protected:
+   static void SetInstance(WaylandProxy* instance);
+ };
+--- a/ui/ozone/platform/wayland/host/proxy/wayland_proxy_impl.cc
++++ b/ui/ozone/platform/wayland/host/proxy/wayland_proxy_impl.cc
+@@ -47,6 +47,12 @@
+   return !window || window->IsStateAnswered();
+ }
+ 
++void WaylandProxyImpl::SetEmbedderTextInputSurface(
++    wl_surface* surface,
++    gfx::AcceleratedWidget widget) {
++  connection_->window_manager()->SetEmbedderTextInputSurface(surface, widget);
++}
++
+ ui::WaylandWindow* WaylandProxyImpl::GetWaylandWindowForAcceleratedWidget(
+     gfx::AcceleratedWidget widget) {
+   auto* window = connection_->window_manager()->GetWindow(widget);
+--- a/ui/ozone/platform/wayland/host/proxy/wayland_proxy_impl.h
++++ b/ui/ozone/platform/wayland/host/proxy/wayland_proxy_impl.h
+@@ -39,6 +39,8 @@
+   bool WindowHasPointerFocus(gfx::AcceleratedWidget widget) override;
+   bool WindowHasKeyboardFocus(gfx::AcceleratedWidget widget) override;
+   bool IsWindowStateConfigured(gfx::AcceleratedWidget widget) override;
++  void SetEmbedderTextInputSurface(wl_surface* surface,
++                                   gfx::AcceleratedWidget widget) override;
+ 
+  private:
+   // ui::WaylandWindowObserver overrides:
+--- a/ui/ozone/platform/wayland/host/wayland_toplevel_window.cc
++++ b/ui/ozone/platform/wayland/host/wayland_toplevel_window.cc
+@@ -483,6 +483,9 @@
+     is_active_ = keyboard_focused_window &&
+                  keyboard_focused_window->GetRootParentWindow() == this;
+   } else if (connection()->SupportsTextInputFocus()) {
++    // browser_core: text-input focus on an embedder's surface composes through
++    // this window but doesn't make it active: the embedder's has the keys.
++    // (WaylandWindowManager::SetEmbedderTextInputSurface)
+     // Note: Some compositors (sway, niri, cosmic etc.) may not send
+     // text-input-v3 enter/leave events if an IM framework is not
+     // installed/running. So text input focus cannot be used always instead of
+@@ -492,8 +495,10 @@
+     // received from text-input in that case if text-input-v3 is available.
+     auto* text_input_focused_window =
+         connection()->window_manager()->GetCurrentTextInputFocusedWindow();
+-    is_active_ = text_input_focused_window &&
+-                 text_input_focused_window->GetRootParentWindow() == this;
++    is_active_ =
++        text_input_focused_window &&
++        !connection()->window_manager()->text_input_focus_for_embedder() &&
++        text_input_focused_window->GetRootParentWindow() == this;
+   } else {
+     is_active_ = is_xdg_active_;
+   }
+--- a/ui/ozone/platform/wayland/host/wayland_window_manager.cc
++++ b/ui/ozone/platform/wayland/host/wayland_window_manager.cc
+@@ -5,6 +5,7 @@
+ #include "ui/ozone/platform/wayland/host/wayland_window_manager.h"
+ 
+ #include <algorithm>
++#include <utility>
+ 
+ #include "base/check.h"
+ #include "base/observer_list.h"
+@@ -237,9 +238,15 @@
+   UpdateToplevelActivation(old_focused_window, window);
+ }
+ 
+-void WaylandWindowManager::SetTextInputFocusedWindow(WaylandWindow* window) {
++void WaylandWindowManager::SetTextInputFocusedWindow(WaylandWindow* window,
++                                                     bool for_embedder) {
+   auto* old_focused_window = GetCurrentTextInputFocusedWindow();
++  const bool was_for_embedder = std::exchange(text_input_focus_for_embedder_,
++                                              window && for_embedder);
+   if (window == old_focused_window) {
++    if (was_for_embedder != text_input_focus_for_embedder_) {
++      UpdateToplevelActivation(nullptr, window);
++    }
+     return;
+   }
+   text_input_focused_window_ = window;
+@@ -252,6 +259,31 @@
+   UpdateToplevelActivation(old_focused_window, window);
+ }
+ 
++void WaylandWindowManager::SetEmbedderTextInputSurface(
++    wl_surface* surface,
++    gfx::AcceleratedWidget widget) {
++  auto it = embedder_text_input_surfaces_.find(surface);
++  if (it != embedder_text_input_surfaces_.end() && it->second != widget &&
++      text_input_focus_for_embedder_ &&
++      text_input_focused_window_ == GetWindow(it->second)) {
++    // The surface has the focus now, so the window it composed through loses
++    // it: the compositor's next enter for the surface names the new one.
++    SetTextInputFocusedWindow(nullptr);
++  }
++  if (widget == gfx::kNullAcceleratedWidget) {
++    embedder_text_input_surfaces_.erase(surface);
++  } else {
++    embedder_text_input_surfaces_[surface] = widget;
++  }
++}
++
++WaylandWindow* WaylandWindowManager::GetEmbedderTextInputWindow(
++    wl_surface* surface) const {
++  auto it = embedder_text_input_surfaces_.find(surface);
++  return it == embedder_text_input_surfaces_.end() ? nullptr
++                                                   : GetWindow(it->second);
++}
++
+ void WaylandWindowManager::AddWindow(gfx::AcceleratedWidget widget,
+                                      WaylandWindow* window) {
+   window_map_[widget] = window;
+@@ -281,8 +313,12 @@
+   }
+   if (window == text_input_focused_window_) {
+     text_input_focused_window_ = nullptr;
++    text_input_focus_for_embedder_ = false;
+     UpdateParentToplevelAcivationOnRemoval(window);
+   }
++  // browser_core: no embedder's surface composes through a window that's gone.
++  base::EraseIf(embedder_text_input_surfaces_,
++                [widget](const auto& entry) { return entry.second == widget; });
+ 
+   observers_.Notify(&WaylandWindowObserver::OnWindowRemoved, window);
+ }
+--- a/ui/ozone/platform/wayland/host/wayland_window_manager.h
++++ b/ui/ozone/platform/wayland/host/wayland_window_manager.h
+@@ -17,6 +17,8 @@
+ #include "ui/ozone/platform/wayland/host/wayland_subsurface.h"
+ #include "ui/ozone/platform/wayland/host/wayland_window_observer.h"
+ 
++struct wl_surface;
++
+ namespace ui {
+ 
+ class WaylandWindow;
+@@ -111,7 +113,27 @@
+   // any window.
+   // The given |window| must be managed by this manager.
+   // Text input focus usually follows keyboard focus.
+-  void SetTextInputFocusedWindow(WaylandWindow* window);
++  // browser_core: |for_embedder| when the compositor gave text-input focus to
++  // an embedder's surface that composes through |window|
++  // (SetEmbedderTextInputSurface): |window|'s input method may compose, but
++  // the focus doesn't make |window| active.
++  void SetTextInputFocusedWindow(WaylandWindow* window,
++                                 bool for_embedder = false);
++
++  // browser_core: text-input focus on |surface|, a toplevel of the embedder's
++  // on this connection, not Chromium's, goes to the window backed by |widget|,
++  // whose input method then composes for the embedder's field there
++  // (browser_core/platform/linux/wayland.cc). kNullAcceleratedWidget ends it.
++  // The embedder sets it before |surface| can take the keyboard and ends it
++  // before destroying |surface|; removing the window ends it too.
++  void SetEmbedderTextInputSurface(wl_surface* surface,
++                                   gfx::AcceleratedWidget widget);
++  // browser_core: the window text-input focus on |surface| goes to, or null.
++  WaylandWindow* GetEmbedderTextInputWindow(wl_surface* surface) const;
++  // browser_core: whether text-input focus is an embedder's surface's.
++  bool text_input_focus_for_embedder() const {
++    return text_input_focus_for_embedder_;
++  }
+ 
+   // Returns all stored windows.
+   std::vector<WaylandWindow*> GetAllWindows() const;
+@@ -152,6 +174,11 @@
+   raw_ptr<WaylandWindow> pointer_focused_window_ = nullptr;
+   raw_ptr<WaylandWindow> keyboard_focused_window_ = nullptr;
+   raw_ptr<WaylandWindow> text_input_focused_window_ = nullptr;
++  // browser_core: SetEmbedderTextInputSurface's. A surface is only compared
++  // with the one text-input focus enters, never used.
++  base::flat_map<raw_ptr<wl_surface, CtnExperimental>, gfx::AcceleratedWidget>
++      embedder_text_input_surfaces_;
++  bool text_input_focus_for_embedder_ = false;
+ 
+   const raw_ptr<WaylandConnection> connection_;
+ 
+--- a/ui/ozone/platform/wayland/host/zwp_text_input_v3.cc
++++ b/ui/ozone/platform/wayland/host/zwp_text_input_v3.cc
+@@ -391,8 +391,13 @@
+                                  struct zwp_text_input_v3* text_input,
+                                  struct wl_surface* surface) {
+   auto* self = static_cast<ZwpTextInputV3Impl*>(data);
++  auto* window_manager = self->connection_->window_manager();
+   if (auto* window = wl::RootWindowFromWlSurface(surface)) {
+-    self->connection_->window_manager()->SetTextInputFocusedWindow(window);
++    window_manager->SetTextInputFocusedWindow(window);
++  } else if (auto* host = window_manager->GetEmbedderTextInputWindow(surface)) {
++    // browser_core: an embedder's window composes through this one's input
++    // method (WaylandWindowManager::SetEmbedderTextInputSurface).
++    window_manager->SetTextInputFocusedWindow(host, /*for_embedder=*/true);
+   }
+ }
+ 

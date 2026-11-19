@@ -1,3 +1,4 @@
+# check.sh runs this at 150.
 # Add Split View, from the menu, ⌃+ from the page, ⌥-click on "+ New Tab" and the tab menu, narrows
 # the page at once for a pane on its right, with the command bar over it, which takes typing and
 # escape takes back. ⌥-click on a link, and the link menu's Open Link in Split View, open it in a
@@ -28,7 +29,7 @@
 # name and all. A row let go with ⌥ held leaves a copy of its tab there, which ⌘Z closes, and
 # ⌥-click on the shown tab's own row splits it with a copy.
 
-# Split view, from the served page with example.org beside it.
+# Split view, from the served page with two.html beside it.
 serve
 log="$out/split.log"
 step=0
@@ -136,8 +137,7 @@ bar=$(grep '^browser: command bar at ' "$log" | tail -1 | cut -d' ' -f5-)
 [ "$bar" = "$over_pane" ] ||
   fail "the tab menu's command bar opened at $bar, not over the pane at $over_pane as the bar's own does"
 send type exa
-# With example.org in the history, from a run before this one in the same check, it completes in
-# place as typed.
+# The bar draws what was typed, and any completion the history gives it after.
 expect '^browser: command bar drew "exa[^"]*"$' "the tab menu's command bar didn't take typing"
 ../tools/window-screenshot.sh "$pid" "$out/split-tab-menu.png" || fail "no window to capture"
 send key escape
@@ -161,6 +161,26 @@ send key w cmd
 expect "^browser: tab $n closed\$" "⌘W didn't close the link's pane"
 expect "^browser: panes $a\$" "⌘W on the link's pane didn't leave the page alone"
 send click $page_point
+# On Linux, Shift+Alt-click does what ⌥-click does, since Openbox and Xfce take every Alt-click but
+# leave one with Shift (#2755), and ⇧-click on the same link still opens Peek.
+if [ "$(uname)" = Linux ]; then
+  send click $((x + 20)) $((y + 20)) shift alt
+  expect "^browser: splits $a+[0-9][0-9]*\$" \
+    "a click on a link with Shift+Alt didn't open it beside the page: \"$(splits)\""
+  n=$(splits | cut -d+ -f2)
+  expect "^browser: panes $a $n\$" "the window doesn't show the Shift+Alt-clicked link beside the page"
+  expect "^browser: loaded $n ${site}notes.txt\$" "the Shift+Alt-clicked link didn't load in its pane"
+  send key w cmd
+  expect "^browser: tab $n closed\$" "⌘W didn't close the Shift+Alt-clicked link's pane"
+  expect "^browser: panes $a\$" "⌘W on the Shift+Alt-clicked link's pane didn't leave the page alone"
+  send click $page_point
+  send click $((x + 20)) $((y + 20)) shift
+  expect "^browser: link preview [1-9][0-9]* ${site}notes.txt\$" "⇧-click on the link didn't open Peek"
+  expect '^browser: link preview shown$' "Peek's window didn't show"
+  send key escape
+  expect '^browser: link preview hidden$' "Esc didn't close Peek"
+  send click $page_point
+fi
 # A link dragged over the page brings the targets, which the page doesn't see, and let go on the
 # right one it opens in a pane there, as a tab let go there does. The link comes from another app,
 # as the driver hands it to the page's view: a drag the page starts is AppKit's, which follows the
@@ -255,13 +275,13 @@ send click $page_point
 send key + ctrl
 expect '^browser: command add-split via page$' "⌃+ with the page focused didn't reach the UI"
 expect '^browser: command bar shown$' "⌃+ didn't open the command bar"
-send type example.org
+send type "http://localhost:$port/two.html"
 send key return
-expect "^browser: splits $a+[0-9][0-9]*\$" "example.org didn't open beside the page: \"$(splits)\""
+expect "^browser: splits $a+[0-9][0-9]*\$" "two.html didn't open beside the page: \"$(splits)\""
 b=$(splits | cut -d+ -f2)
 expect "^browser: selected $b\$" "the new pane isn't focused"
 expect "^browser: panes $a $b\$" "the window doesn't show both panes"
-expect "^browser: loaded $b https://example.org/\$" "example.org didn't load in the new pane"
+expect "^browser: loaded $b http://localhost:$port/two.html\$" "two.html didn't load in the new pane"
 read_keyboard
 [ "$keyboard" = "$right" ] ||
   fail "the new pane's page doesn't have the keyboard: ${keyboard:-none} has it"
@@ -282,6 +302,23 @@ read_pages
 [ "$pages" = "$two BrowserCoreFocusRing $left" ] ||
   fail "the ring didn't go to the left pane: $pages"
 ../tools/window-screenshot.sh "$pid" "$out/split-left.png" || fail "no window to capture"
+# The command bar closing over the focused pane gives that pane's page the keyboard back, not the
+# other one's, and so does Tab from the ring F6 put on the split's row: on Windows the core gives
+# it straight to the pane the selected page shows in (#3396).
+send key l cmd
+expect '^browser: command bar shown$' "⌘L in the left pane didn't open the command bar"
+send key escape
+expect '^browser: command bar hidden$' "escape didn't close the command bar over the left pane"
+read_keyboard
+[ "$keyboard" = "$left" ] ||
+  fail "the command bar closing gave ${keyboard:-nothing} the keyboard, not the focused left pane"
+send key f6
+expect '^browser: sidebar keyed ' "F6 from the left pane didn't ring the split's row"
+send key tab
+expect '^browser: ring gave the page its first control$' "Tab from the split's ring didn't go into the page"
+read_keyboard
+[ "$keyboard" = "$left" ] ||
+  fail "Tab from the ring gave ${keyboard:-nothing} the keyboard, not the focused left pane"
 # ⌘L edits the focused pane's URL, as Arc's address bar is the panel's, and the other pane keeps its
 # page. Back puts the left pane's page back for the steps after.
 send key l cmd
@@ -320,15 +357,27 @@ over_left=$toast
   fail "the toast went from ${over_right:-nowhere} to ${over_left:-nowhere}, not to the left pane's corner"
 ../tools/window-screenshot.sh "$pid" "$out/split-toast.png" all || fail "no window to capture"
 # In the sidebar the split is one row, which ⌘2 shows under a tab opened above it, with the pane
-# focused last, and a click on its right segment shows that pane focused.
-open_from_bar example.net
+# focused last, and a click on its right segment shows that pane focused. The left pane has the
+# row, so the right one is its favicon at the row's end, 190 to 220 of the 228 pt sidebar (#2340):
+# the click's press comes before a frame draws the row's ✕ under the pointer.
+open_from_bar "http://localhost:$port/three.html"
 c=$tab
 expect "^browser: today $c $a $b\$" "the new tab isn't above the split: Today is \"$(today)\""
 send key 2 cmd
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" \
   "⌘2 didn't show the split with its pane focused last"
 expect "^browser: panes $a $b\$" "⌘2 didn't show both panes"
-send click 170 $(row 1 | cut -d' ' -f2)
+if windows || { [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; }; then
+  # The driver's pointer is real on Windows (#2544) and X11's XTEST (#2721), heard before the press
+  # as a hand's is, so a frame draws the row's ✕ under it first and the right favicon sits left of
+  # the ✕'s room, as a hand finds it.
+  send move 205 $(row 1 | cut -d' ' -f2)
+  expect '^browser: hover tab [0-9]* close 1 ' \
+    "resting on the split's row at 205 didn't show its ✕ (wanted a \"hover tab … close 1\" line): $(grep '^browser: hover ' "$log" | tail -3 | tr '\n' ';')"
+  send click 170 $(row 1 | cut -d' ' -f2)
+else
+  send click 205 $(row 1 | cut -d' ' -f2)
+fi
 expect "^browser: selected $b\( in .*\)\{0,1\}\$" \
   "a click on the split's right segment didn't focus it"
 read_keyboard
@@ -453,7 +502,7 @@ c=$(today | cut -d' ' -f1)
 await "^browser: selected $b\$" || fail "the relaunch didn't focus the pane focused last"
 await "^browser: panes $a $b\$" || fail "the relaunch didn't show both panes"
 await "^browser: loaded $a $site\$" || fail "the split's top page didn't load"
-await "^browser: loaded $b https://example.org/\$" || fail "the split's bottom page didn't load"
+await "^browser: loaded $b http://localhost:$port/two.html\$" || fail "the split's bottom page didn't load"
 read_pages
 [ "$pages" = "$resized" ] ||
   fail "the relaunch didn't show the panes stacked at the heights they were dragged to: $pages"
@@ -508,13 +557,13 @@ beside=alt
 ! windows || beside=winalt
 send key t cmd
 expect '^browser: command bar shown$' "⌘T didn't open the command bar"
-send type example.net
+send type "http://localhost:$port/three.html"
 send key return $beside
 expect "^browser: splits $b+[0-9][0-9]*\$" \
-  "⌥↩ didn't open example.net beside the page: \"$(splits)\""
+  "⌥↩ didn't open three.html beside the page: \"$(splits)\""
 d=$(splits | cut -d+ -f2)
 expect "^browser: panes $b $d\$" "⌥↩ didn't show the page and its new pane"
-expect "^browser: loaded $d https://example.net/\$" "example.net didn't load in the new pane"
+expect "^browser: loaded $d http://localhost:$port/three.html\$" "three.html didn't load in the new pane"
 send key w cmd
 expect "^browser: tab $d closed\$" "⌘W didn't close the focused pane"
 expect "^browser: panes $b\$" "⌘W on a pane didn't leave the page beside it alone"
@@ -528,7 +577,7 @@ expect "^browser: splits $b+[0-9][0-9]*\$" \
 e=$(splits | cut -d+ -f2)
 expect "^browser: selected $e\( in .*\)\{0,1\}\$" "the pane ⇧⌘T brought back isn't focused"
 expect "^browser: panes $b $e\$" "the window doesn't show the pane ⇧⌘T brought back"
-expect "^browser: loaded $e https://example.net/\$" "the pane ⇧⌘T brought back didn't load"
+expect "^browser: loaded $e http://localhost:$port/three.html\$" "the pane ⇧⌘T brought back didn't load"
 # Flip Split View swaps the panes, and Move Pane Right moves the focused one back to the right.
 bar_command flip-split "Flip Split View" "flip split"
 expect "^browser: splits $e+$b\$" "Flip Split View didn't swap the split's pages: \"$(splits)\""
@@ -597,9 +646,6 @@ seen_at() {
     "$(awk "BEGIN { print $2 / ${content#*x} }")"
 }
 low=$((y + h * 9 / 10))
-fill=$(seen_at $((x + 12)) $((y - 5)))
-edge=$(seen_at $((x + 12)) $low)
-page=$(seen_at $((x + w * 3 / 4)) $low)
 # Whether the colours "r g b" and "r2 g2 b2" are within 8 of each other in each channel.
 alike() {
   set -- $1 $2
@@ -607,12 +653,28 @@ alike() {
     [ "$d" -ge -8 ] && [ "$d" -le 8 ] || return 1
   done
 }
+# Whether the capture shows the page smaller: the window's colour at the card's edge, as above it.
+drawn_smaller() {
+  fill=$(seen_at $((x + 12)) $((y - 5)))
+  edge=$(seen_at $((x + 12)) $low)
+  page=$(seen_at $((x + w * 3 / 4)) $low)
+  alike "$edge" "$fill" && ! alike "$page" "$fill"
+}
 # Not on Windows yet, where each page is a window of its own and keeps its size. Nor under Xvfb,
 # which has no compositor: the capture is the targets' window alone, black where it's clear.
 if [ "$(uname)" = Linux ] && [ "${BROWSER_HEADLESS:-xvfb}" = xvfb ]; then
   echo "skip: the pages drawn smaller, in pixels: under Xvfb the capture is the targets' window alone"
-elif ! windows && [ "$still" != on ]; then
-  { alike "$edge" "$fill" && ! alike "$page" "$fill"; } ||
+elif windows; then
+  echo "skip: the pages drawn smaller, in pixels: on Windows each page is a window of its own and keeps its size."
+elif [ "$still" != on ]; then
+  # The app logs the scale as it tells the core, and the page draws at it a frame or more later,
+  # so a capture taken at once can still show it at its size, as on Wayland in #2493's runs.
+  for _ in $(seq 20); do
+    drawn_smaller && break
+    sleep 0.1
+    ../tools/window-screenshot.sh "$pid" "$out/split-targets.png" || fail "no window to capture"
+  done
+  drawn_smaller ||
     fail "the page didn't draw smaller under the tab: $edge at its edge, $fill above it, $page in it"
 fi
 send dragto 100 300
@@ -692,7 +754,7 @@ row_of() {
 # (ours: Arc's preview wasn't recorded).
 bar_command separate-split "Separate All Tabs" "separate all"
 expect '^browser: splits $' "Separate All Tabs didn't end the stacked split: \"$(splits)\""
-open_from_bar example.net
+open_from_bar "http://localhost:$port/three.html"
 f=$tab
 onto=$(today | cut -d' ' -f2)
 dragged=$(today | cut -d' ' -f3)
@@ -720,8 +782,20 @@ expect '^browser: command redo via \(ui\|page\)$' "⇧⌘Z didn't redo the split
 expect "^browser: splits $onto+$dragged\$" "⇧⌘Z didn't join the tab again: \"$(splits)\""
 # ⌥-click on the split row's ✕ takes its tabs out of the split and closes neither, as Arc's does,
 # and ⌘Z joins them again.
-close="202 $(row "$(row_of "$onto")" | cut -d' ' -f2)"
+# The ✕ shows only under the pointer, and a ⇧⌘Z the page handed back hides the row under it until
+# the pointer moves, so the click waits for the row's hover line. The pointer rests on another row
+# first, so the move onto the ✕ draws a new one whether the ✕ showed before it or not (#2846).
+onto_row=$(row_of "$onto")
+other_row=$((onto_row == 0 ? 1 : 0))
+other=
+for id in $(today); do
+  [ "$(row_of "$id")" = "$other_row" ] && other=$id && break
+done
+send move $(row "$other_row")
+expect "^browser: hover tab $other " "the pointer on row $other_row didn't hover tab $other"
+close="202 $(row "$onto_row" | cut -d' ' -f2)"
 send move $close
+expect "^browser: hover tab $onto close 1 " "the split's row under the pointer didn't draw its ✕"
 send click $close alt
 expect '^browser: command separate-split via sidebar$' "⌥-click on the split's ✕ didn't reach it"
 expect '^browser: splits $' "⌥-click on the split row's ✕ didn't separate it: \"$(splits)\""
@@ -765,7 +839,7 @@ expect '^browser: splits [0-9][0-9]*+[0-9][0-9]* [0-9][0-9]*+[0-9][0-9]*$' \
 expect "^browser: renamed split [0-9][0-9]* planning\$" "Duplicate didn't copy the split's name"
 # A row dragged with ⌥ held as it's let go stays, and a copy of its tab goes where it's let go,
 # shown, which ⌘Z closes (#690; ours: Arc's wasn't recorded).
-open_from_bar example.com
+open_from_bar "http://localhost:$port/one.html"
 c=$tab
 rows=$(today)
 y=$(row 2 | cut -d' ' -f2)

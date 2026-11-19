@@ -186,7 +186,7 @@ fn initialize_begins_a_session() {
         result["instructions"]
             .as_str()
             .unwrap()
-            .contains("Space of your own")
+            .contains("tabs of your own")
     );
     match next(&mut handed) {
         Some(Event::Hello { agent, client }) => {
@@ -264,7 +264,8 @@ fn the_server_answers_what_needs_no_browser() {
             "ask_for_tab",
             "pin_tab",
             "unpin_tab",
-            "remove_tab"
+            "remove_tab",
+            "sort_tabs_by_site",
         ]
     );
     assert_eq!(list["id"], "a");

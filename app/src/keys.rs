@@ -62,6 +62,17 @@ pub(crate) fn run_page_shortcut(tab: bc::bc_id, key: *const bc::bc_key, reserved
 thread_local! {
     /// The shortcut a page got first last, which a second press runs ilo's of if the page kept it.
     pub(crate) static SECOND_PRESS: RefCell<shell::SecondPress> = RefCell::default();
+    /// The page's key the app is answering, which GPUI reads after the answer under Wayland.
+    #[cfg(target_os = "linux")]
+    static ANSWERING: RefCell<Option<gpui::Keystroke>> = const { RefCell::new(None) };
+}
+
+/// Holds the keys typed from now for the overlay about to take the keyboard, which under Wayland
+/// has it only once it has drawn: the tab switcher, shown by a timer or by a key, not a field's
+/// shortcut. Those after the page's key being answered, if one is, as GPUI reads that key next.
+#[cfg(target_os = "linux")]
+pub(crate) fn hold_keys_for_overlay() {
+    ANSWERING.with_borrow(|key| gpui_linux::hold_keys(key.as_ref()));
 }
 
 pub(crate) unsafe extern "C" fn tab_key_before_page(
@@ -73,11 +84,24 @@ pub(crate) unsafe extern "C" fn tab_key_before_page(
     if browser::agents::pressing_key() {
         return false;
     }
-    let (kept, route) = key_before_page(tab, key);
-    log_key(key, "before the page", route);
-    #[cfg(target_os = "linux")]
-    drive::page_key_answered();
-    kept
+    let cx = CX.with_borrow(Clone::clone);
+    shell::page_key_answer(cx.as_ref(), || {
+        #[cfg(target_os = "linux")]
+        ANSWERING.set(Some(held_keystroke(unsafe { &*key })));
+        let (kept, route) = key_before_page(tab, key);
+        #[cfg(target_os = "linux")]
+        ANSWERING.set(None);
+        log_key(key, "before the page", route);
+        // Under Wayland GPUI reads this press next, and with the UI given the keyboard by the
+        // answer, as when ⌘W closed the tab that had it, it would run the shortcut again (#2442).
+        #[cfg(target_os = "linux")]
+        if kept {
+            gpui_linux::answered_key(&held_keystroke(unsafe { &*key }));
+        }
+        #[cfg(target_os = "linux")]
+        drive::page_key_answered();
+        kept
+    })
 }
 
 /// The keystroke GPUI has for `key`, one typed in a page.
@@ -156,14 +180,27 @@ pub(crate) unsafe extern "C" fn tab_key_unhandled(
     if browser::agents::pressing_key() {
         return false;
     }
-    SECOND_PRESS.with_borrow_mut(|second| second.declined(&keystroke(unsafe { &*key })));
-    let (taken, route) = match link_preview_key(tab, key, false) {
-        Some(lost) => (lost, "link preview"),
-        None if run_page_shortcut(tab, key, false) => (true, "shortcut"),
-        None => (false, "nothing"),
-    };
-    log_key(key, "the page didn't keep", route);
-    taken
+    let cx = CX.with_borrow(Clone::clone);
+    shell::page_key_answer(cx.as_ref(), || {
+        SECOND_PRESS.with_borrow_mut(|second| second.declined(&keystroke(unsafe { &*key })));
+        let (taken, route) = match link_preview_key(tab, key, false) {
+            Some(lost) => (lost, "link preview"),
+            None if run_page_shortcut(tab, key, false) => (true, "shortcut"),
+            None => (false, "nothing"),
+        };
+        log_key(key, "the page didn't keep", route);
+        taken
+    })
+}
+
+/// Tab leaves `tab`'s page at its end, or its start if `reverse` (#3220): the window rings the
+/// stop after or before the page, or the page keeps the keyboard and wraps.
+pub(crate) unsafe extern "C" fn tab_focus_leaving(
+    _: *mut c_void,
+    tab: bc::bc_id,
+    reverse: bool,
+) -> bool {
+    update_tab_window(tab, |shell, cx| shell.tab_focus_leaving(tab, reverse, cx)).unwrap_or(false)
 }
 
 /// Under Wayland the window's input method composes `text` in the UI's text field that has the keys.

@@ -2,27 +2,48 @@
 # Screenshots one process's main window with its child windows (menus, the command bar) drawn
 # over it, as on screen, but nothing from other apps. A screen capture would include whatever
 # else is open on the owner's Mac. With "all", it takes every window of the process on that display,
-# such as two browser windows, in one picture.
+# such as two browser windows, in one picture. With "screen", the Mac takes the main window's whole
+# display with the process's windows alone drawn on it, such as a Mini Player at the display's
+# corner, and the others take it as "all".
 # On Windows, under Git Bash, it copies the screen where the windows show, as Windows composes it,
 # cut to their shapes, while no other app's window is in front of them there. Otherwise it takes
 # each of the process's windows with Windows.Graphics.Capture, as Windows composes them, in their
 # order on screen, so nothing of another app's can get into the picture. Where that can't capture,
 # it draws them with PrintWindow, and says so: PrintWindow draws what DirectComposition leaves
 # see-through, as an overlay's margin, black (#1257), and has the browser window repaint its
-# frame, where Windows' theme paints the caption under the UI, on screen too (#1262).
+# frame, where Windows' theme paints the caption under the UI, on screen too (#1262). PrintWindow
+# waits for the app, so it draws only a window that answers in 2 s, and a capture that hasn't
+# finished in 60 s gives up, saying what it was doing then (#2927).
 # On Linux it captures the private session tools/headless.sh --run starts, or check.sh's Xvfb,
 # which hold nothing but the app, and refuses outside one rather than capture the owner's screen.
 # There POINTER=1 draws the display's pointer in, where the driver's warp put it, with the cursor
 # the window under it shows.
-# Usage: tools/window-screenshot.sh <pid> <output.png> [all]
+# On the Mac, with "floating", it takes only the process's window above the normal level at FRAME,
+# "<x> <y> <width> <height>" from the main display's top-left, such as Picture in Picture's, on its
+# own: the overlays over the browser window are above the normal level too. On the Mac too, a
+# capture that hasn't finished in 60 s gives up, saying what it was doing then: one taken while
+# another capture of the window was going sat in ScreenCaptureKit for 45 minutes (#3191).
+# On the Mac, with READY and GO set to two paths, it gets everything ready, makes READY, and takes
+# the picture once GO is there, so a step can have it right after what it watches: the Swift takes
+# 1 to 4 s to start on a hosted runner, longer than the Mini Player's controls stay (#3354).
+# With PICTURES at a count past 1, it takes that many pictures back to back, the second of
+# out.png as out-2.png, and prints "picture <n> asked <ms> back <ms>" for each, in ms since 1970:
+# a step can then tell a fade that came late from one that never came (#3354).
+# Usage: tools/window-screenshot.sh <pid> <output.png> [all | screen | floating]
 set -e
-[ $# -eq 2 ] || [ $# -eq 3 ] && [ "${3:-all}" = all ] ||
-  { echo "usage: $0 <pid> <output.png> [all]" >&2; exit 2; }
+{ [ $# -eq 2 ] || { [ $# -eq 3 ] && { [ "$3" = all ] || [ "$3" = screen ]; }; }; } ||
+  { [ $# -eq 3 ] && [ "$3" = floating ] && [ "$(uname)" = Darwin ]; } ||
+  { echo "usage: $0 <pid> <output.png> [all | screen | floating, on the Mac]" >&2; exit 2; }
 case "$(uname)" in
   MINGW* | MSYS*)
     [ -e "/proc/$1/winpid" ] || { echo "process $1 isn't running" >&2; exit 1; }
-    exec env PID="$(cat "/proc/$1/winpid")" OUT="$(cygpath -w "$2")" ALL="${3:-}" \
-      powershell.exe -NoProfile -NonInteractive -Command '
+    # Bounded, and it says where it was: one hung in a run until the run's timeout, while the app
+    # ran on (#2927).
+    stage=$(mktemp)
+    status=0
+    env PID="$(cat "/proc/$1/winpid")" OUT="$(cygpath -w "$2")" ALL="${3:+all}" \
+      STAGE="$(cygpath -w "$stage")" timeout 60 powershell.exe -NoProfile -NonInteractive -Command '
+[IO.File]::WriteAllText($env:STAGE, "compiling the capture")
 Add-Type -ReferencedAssemblies System.Drawing, System.Windows.Forms -TypeDefinition @"
 using System;
 using System.Collections.Generic;
@@ -42,10 +63,16 @@ public static class Capture {
   [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr hwnd, uint cmd);
   [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
   [DllImport("user32.dll")] static extern bool PrintWindow(IntPtr hwnd, IntPtr dc, uint flags);
+  [DllImport("user32.dll")] static extern IntPtr SendMessageTimeout(IntPtr hwnd, uint message, IntPtr w, IntPtr l, uint flags, uint ms, out IntPtr result);
   [DllImport("d3d11.dll")] static extern int D3D11CreateDevice(IntPtr adapter, int driver, IntPtr software, uint flags, IntPtr levels, uint count, uint sdk, out IntPtr device, out int level, out IntPtr context);
   [DllImport("d3d11.dll")] static extern int CreateDirect3D11DeviceFromDXGIDevice(IntPtr dxgi, out IntPtr device);
   [DllImport("combase.dll", CharSet = CharSet.Unicode)] static extern int WindowsCreateString(string text, int length, out IntPtr name);
   [DllImport("combase.dll")] static extern int RoGetActivationFactory(IntPtr name, ref Guid iid, out IntPtr factory);
+
+  // What it is doing, for the script to say if it runs out of time.
+  public static void Say(string stage) {
+    System.IO.File.WriteAllText(Environment.GetEnvironmentVariable("STAGE"), stage);
+  }
 
   [ComImport, Guid("3628E81B-3CAC-4C60-B7F4-23CE0E0C3356"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
   interface IGraphicsCaptureItemInterop {
@@ -177,6 +204,13 @@ public static class Capture {
         return true;
       }
     }
+    // PrintWindow waits for the window thread, without end, so only once it answers
+    // (WM_NULL; SMTO_ABORTIFHUNG).
+    IntPtr answer;
+    if (SendMessageTimeout(hwnd, 0, IntPtr.Zero, IntPtr.Zero, 2, 2000, out answer) == IntPtr.Zero)
+      throw new Exception("The window " + ClassOf(hwnd) + " did not answer in 2 s, so the app is " +
+          "busy, and PrintWindow would wait for it.");
+    Say("drawing " + ClassOf(hwnd) + " by PrintWindow");
     using (var window = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format32bppArgb)) {
       using (var g = Graphics.FromImage(window)) {
         var dc = g.GetHdc();
@@ -192,6 +226,7 @@ public static class Capture {
   public static string Run(uint pid, string path, bool all, Func<IntPtr, Bitmap> grab) {
     // Rects in pixels, as PrintWindow draws.
     SetProcessDPIAware();
+    Say("listing the windows");
     // Top-level windows come front to back. Each window owned by another, a menu or the command
     // bar, is drawn in the picture of the window that owns it.
     var windows = new List<IntPtr>();
@@ -213,6 +248,7 @@ public static class Capture {
     if (all) mains.ForEach(w => area = Rectangle.Union(area, Shown(w)));
     var shown = all ? mains : mains.GetRange(0, 1);
     if (!Covered(pid, shown)) {
+      Say("copying the screen");
       using (var screen = new Bitmap(area.Width, area.Height, PixelFormat.Format32bppArgb))
       using (var image = new Bitmap(area.Width, area.Height, PixelFormat.Format32bppArgb)) {
         using (var graphics = Graphics.FromImage(screen))
@@ -240,6 +276,7 @@ public static class Capture {
         if (!(all ? mains.Contains(top) : top == mains[0])) continue;
         if (!Draw(windows[i], graphics, area.Location, grab)) printed.Add(ClassOf(windows[i]));
       }
+      Say("saving the picture");
       image.Save(path, ImageFormat.Png);
     }
     if (printed.Count > 0)
@@ -265,6 +302,7 @@ $grab = [Func[IntPtr, System.Drawing.Bitmap]] {
       [Console]::Error.WriteLine("Windows.Graphics.Capture is not supported here.")
       return $null
     }
+    [Capture]::Say("taking " + [Capture]::ClassOf($hwnd) + " by Windows.Graphics.Capture")
     $item = [Capture]::Item($hwnd)
     # By reflection, which has the runtime ask the device for IDirect3DDevice, as PowerShell does not.
     $pool = [Windows.Graphics.Capture.Direct3D11CaptureFramePool].GetMethod("CreateFreeThreaded").Invoke(
@@ -291,6 +329,12 @@ $grab = [Func[IntPtr, System.Drawing.Bitmap]] {
     $copy = [Windows.Graphics.Imaging.SoftwareBitmap].GetMethod("CreateCopyFromSurfaceAsync",
       [Type[]] @($surface, $alpha)).Invoke($null, @($frame.Surface, $alpha::Premultiplied))
     $task = $asTask.MakeGenericMethod([Windows.Graphics.Imaging.SoftwareBitmap]).Invoke($null, @($copy))
+    if (-not $task.Wait(5000)) {
+      [Console]::Error.WriteLine("Windows.Graphics.Capture did not copy the frame of " +
+        [Capture]::ClassOf($hwnd) + " in 5 s.")
+      $frame.Dispose(); $session.Dispose(); $pool.Dispose()
+      return $null
+    }
     $bitmap = $task.Result
     $buffer = New-Object Windows.Storage.Streams.Buffer ([uint32]($bitmap.PixelWidth * $bitmap.PixelHeight * 4))
     $bitmap.CopyToBuffer($buffer)
@@ -306,8 +350,17 @@ $grab = [Func[IntPtr, System.Drawing.Bitmap]] {
     return $null
   }
 }
-$failed = [Capture]::Run([uint32]$env:PID, $env:OUT, $env:ALL -eq "all", $grab)
-if ($failed) { [Console]::Error.WriteLine($failed); exit 1 }'
+try {
+  $failed = [Capture]::Run([uint32]$env:PID, $env:OUT, $env:ALL -eq "all", $grab)
+} catch {
+  $failed = $_.Exception.InnerException.Message
+  if (-not $failed) { $failed = $_.Exception.Message }
+}
+if ($failed) { [Console]::Error.WriteLine($failed); exit 1 }' || status=$?
+    [ "$status" != 124 ] ||
+      echo "The capture didn't finish in 60 s, while it was $(cat "$stage")." >&2
+    rm -f "$stage"
+    exit "$status"
     ;;
 esac
 if [ "$(uname)" = Linux ]; then
@@ -358,7 +411,7 @@ if ours:
   [ -z "$area" ] || exec env WAYLAND_DISPLAY="$BROWSER_HEADLESS" grim ${POINTER:+-c} -g "$area" "$2"
   exec env WAYLAND_DISPLAY="$BROWSER_HEADLESS" grim ${POINTER:+-c} "$2"
 fi
-PID="$1" OUT="$2" ALL="${3:-}" swift - <<'SWIFT'
+PID="$1" OUT="$2" ALL="${3:-}" FRAME="${FRAME:-}" swift - <<'SWIFT'
 import Foundation
 import ImageIO
 import ScreenCaptureKit
@@ -367,14 +420,95 @@ import UniformTypeIdentifiers
 let pid = Int32(ProcessInfo.processInfo.environment["PID"]!)!
 let out = URL(fileURLWithPath: ProcessInfo.processInfo.environment["OUT"]!)
 let all = ProcessInfo.processInfo.environment["ALL"] == "all"
+let screen = ProcessInfo.processInfo.environment["ALL"] == "screen"
+let floating = ProcessInfo.processInfo.environment["ALL"] == "floating"
 
 func fail(_ message: String) -> Never {
   FileHandle.standardError.write(Data((message + "\n").utf8))
   exit(1)
 }
 
+// What it's doing, for the limit to say.
+final class Stage: @unchecked Sendable {
+  private let lock = NSLock()
+  private var now = "listing the windows on screen"
+  var text: String {
+    get {
+      lock.lock()
+      defer { lock.unlock() }
+      return now
+    }
+    set {
+      lock.lock()
+      defer { lock.unlock() }
+      now = newValue
+    }
+  }
+}
+let stage = Stage()
+// With READY and GO, ready to capture: wait for the step to ask.
+func whenAsked() {
+  let env = ProcessInfo.processInfo.environment
+  guard let ready = env["READY"], let go = env["GO"] else { return }
+  stage.text = "waiting for \(go)"
+  guard FileManager.default.createFile(atPath: ready, contents: nil)
+  else { fail("can't make \(ready)") }
+  while !FileManager.default.fileExists(atPath: go) { usleep(2000) }
+}
+DispatchQueue.global().asyncAfter(deadline: .now() + 60) {
+  FileHandle.standardError.write(
+    Data("The capture didn't finish in 60 s, while it was \(stage.text).\n".utf8))
+  _exit(124)
+}
+
 let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
 let windows = content.windows.filter { $0.owningApplication?.processID == pid }
+func write(_ image: CGImage, to file: URL) {
+  stage.text = "writing \(file.path)"
+  guard let png = CGImageDestinationCreateWithURL(file as CFURL, UTType.png.identifier as CFString, 1, nil)
+  else { fail("can't write \(file.path)") }
+  CGImageDestinationAddImage(png, image, nil)
+  guard CGImageDestinationFinalize(png) else { fail("can't write \(file.path)") }
+}
+let pictures = Int(ProcessInfo.processInfo.environment["PICTURES"] ?? "1") ?? 0
+guard pictures >= 1 else { fail("PICTURES isn't a count") }
+func capture(_ what: String, _ filter: SCContentFilter, _ config: SCStreamConfiguration) async throws -> Never {
+  whenAsked()
+  for n in 1...pictures {
+    stage.text = "capturing \(what)" + (pictures > 1 ? ", picture \(n)" : "")
+    let asked = Int(Date().timeIntervalSince1970 * 1000)
+    let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+    let back = Int(Date().timeIntervalSince1970 * 1000)
+    if n == 1 {
+      write(image, to: out)
+    } else {
+      let name = out.deletingPathExtension().lastPathComponent + "-\(n)." + out.pathExtension
+      write(image, to: out.deletingLastPathComponent().appendingPathComponent(name))
+    }
+    if pictures > 1 { print("picture \(n) asked \(asked) back \(back)") }
+  }
+  exit(0)
+}
+if floating {
+  let at = (ProcessInfo.processInfo.environment["FRAME"] ?? "").split(separator: " ")
+    .compactMap { Double($0) }
+  guard at.count == 4 else { fail("FRAME isn't <x> <y> <width> <height>") }
+  let wanted = CGRect(x: at[0], y: at[1], width: at[2], height: at[3])
+  let floats = windows.filter { $0.windowLayer > 0 }
+  guard let window = floats.first(where: { $0.frame.integral == wanted.integral })
+  else { fail("process \(pid) has no floating window at \(wanted), only at \(floats.map { $0.frame })") }
+  guard let display = content.displays.first(where: { $0.frame.intersects(window.frame) })
+  else { fail("no display shows the floating window") }
+  // A display's filter, as below: one for the window alone asserts in a script, which has no
+  // window server session of its own.
+  let filter = SCContentFilter(display: display, including: [window])
+  let config = SCStreamConfiguration()
+  config.sourceRect = window.frame.offsetBy(dx: -display.frame.minX, dy: -display.frame.minY)
+  config.width = Int(window.frame.width * CGFloat(filter.pointPixelScale))
+  config.height = Int(window.frame.height * CGFloat(filter.pointPixelScale))
+  config.showsCursor = false
+  try await capture("the floating window", filter, config)
+}
 // The largest normal window; a process can also own invisible helper windows.
 guard let main = windows.filter({ $0.windowLayer == 0 })
   .max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height })
@@ -382,7 +516,7 @@ else { fail("process \(pid) has no window on screen") }
 guard let display = content.displays.first(where: { $0.frame.intersects(main.frame) })
 else { fail("no display shows the window") }
 
-let frame = all
+let frame = screen ? display.frame : all
   ? windows.filter { $0.windowLayer == 0 && $0.frame.intersects(display.frame) }
     .reduce(main.frame) { $0.union($1.frame) }.intersection(display.frame)
   : main.frame
@@ -392,10 +526,5 @@ config.sourceRect = frame.offsetBy(dx: -display.frame.minX, dy: -display.frame.m
 config.width = Int(frame.width * CGFloat(filter.pointPixelScale))
 config.height = Int(frame.height * CGFloat(filter.pointPixelScale))
 config.showsCursor = false
-let image: CGImage = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
-
-guard let file = CGImageDestinationCreateWithURL(out as CFURL, UTType.png.identifier as CFString, 1, nil)
-else { fail("can't write \(out.path)") }
-CGImageDestinationAddImage(file, image, nil)
-guard CGImageDestinationFinalize(file) else { fail("can't write \(out.path)") }
+try await capture("the window", filter, config)
 SWIFT

@@ -1,0 +1,15 @@
+<!-- The header's sidebar glyph with the sidebar on the right (ours): nav-sidebar.svg mirrored, its stripe on the right. -->
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="1.75"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <rect width="16.75" height="12.75" x="3.375" y="5.875" rx="2.75" />
+  <path d="M14 5.875v12.75" />
+</svg>

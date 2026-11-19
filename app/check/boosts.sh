@@ -1,7 +1,9 @@
+# check.sh runs this at 650.
 # A site's Boost (#695): the CSS in its file in the profile's Boosts folder shows on its pages as
 # they load, and each save of the file at once; Edit Boost in the command bar opens its card, whose
 # Zap hides what the user clicks, now and in the file, until escape in the page ends it; its
 # Customize… opens the editor, whose changes show at once in each window on the site and ⌘Z takes
+# back, and whose Advanced grows the card for its sliders, which the arrow keys move and Reset puts
 # back; and with the file gone the page is its own again, as with a Boost turned off.
 
 serve
@@ -65,7 +67,7 @@ read -r bx by bw bh << EOF
 $(grep "^browser: boost card $tab at " "$log" | tail -1 | cut -d' ' -f6-)
 EOF
 ../tools/window-screenshot.sh "$pid" "$out/boost-card.png" || fail "no window to capture"
-# Zap, the right of the card's two buttons, over Customize….
+# Zap, the right of the card's first two buttons, over Arrange.
 send click $((bx + bw * 3 / 4)) $((by + bh - 62))
 expect "^browser: zap $tab on\$" "the card's Zap didn't turn Zap on"
 expect "browser: tab $tab zap on\$" "the core didn't start Zap on the page"
@@ -99,7 +101,7 @@ send layout
 height=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
   sed 's/^browser: layout content [0-9]*x\([0-9]*\),.*/\1/')
 post click 204 $((height - 25))
-plus=$(cased "New Space…, New Folder…, New Split View, New Note, Edit Boost…")
+plus=$(cased "New Space…, New Folder…, New Split View, New Board, New Note, Edit Boost…")
 expect "^browser: menu shown $plus\(, .*\)\{0,1\}\$" "the +'s menu didn't offer Edit Boost…"
 expect '^browser: menu drawn ' "the +'s menu didn't draw"
 ../tools/window-screenshot.sh "$pid" "$out/boost-plus-menu.png" || fail "no window to capture"
@@ -130,14 +132,14 @@ both_are() {
   fail "$2: $(grep "^browser: title \($tab\|$other\) " "$log" | tail -2 | tr '\n' ' ')"
 }
 
-# Customize…, the last line of the card the +'s Edit Boost… left open, opens the editor in its
-# place. Its clicks are in its points: its arrow 13 wide, then the card, whose field is 340 wide
-# and 176 tall, 8.5 in and 48 down.
+# Customize…, the left of the two on the last line of the card the +'s Edit Boost… left open,
+# beside Arrange, opens the editor in its place. Its clicks are in its points: its arrow 13 wide,
+# then the card, whose field is 340 wide and 176 tall, 8.5 in and 48 down.
 send layout
 read -r bx by bw bh << EOF
 $(grep "^browser: boost card $tab at " "$log" | tail -1 | cut -d' ' -f6-)
 EOF
-send click $((bx + bw / 2)) $((by + bh - 26))
+send click $((bx + bw / 4)) $((by + bh - 26))
 expect "^browser: boost editor for $host\$" "Customize… didn't open the Boost editor"
 expect '^browser: boost editor drawn$' "the Boost editor didn't draw itself on screen"
 ../tools/window-screenshot.sh "$pid" "$out/boost-editor.png" || fail "no window to capture"
@@ -164,13 +166,39 @@ both_are "$ground" "the second window's page didn't take the editor's ground"
 send key z cmd
 expect '^browser: boost editor undo$' "⌘Z didn't take the editor's change back"
 both_are "rgb(0, 128, 0)" "⌘Z left the editor's ground on a page"
+# Advanced, at Invert lightness's line's end, grows the card 104 points for three sliders. A click
+# at three quarters of Contrast's track, from 76 to 293, sets 125 %, and → a step more, which the
+# page takes as a filter on its root.
+send clickkey 306 244
+expect '^browser: boost editor advanced true$' "Advanced didn't open"
+expect '^browser: boost editor height 600$' "the card didn't grow for Advanced's sliders"
+send clickkey 251.75 280
+expect "^browser: boost editor set $host contrast 125; advanced; dragged\$" \
+  "a click on Contrast's track didn't set it where it was"
+send key right
+expect "^browser: boost editor set $host contrast 130; advanced; dragged\$" \
+  "→ didn't move the focused slider a step"
+# A click at a quarter of Brightness's track sets 75 %, so the capture shows a fill each way.
+send clickkey 143.25 312
+expect "^browser: boost editor set $host contrast 130; brightness 75; advanced; dragged\$" \
+  "a click on Brightness's track didn't set it where it was"
+grep -q '^html { filter: contrast(130%) brightness(75%) !important; }$' "$file" ||
+  fail "Contrast and Brightness didn't filter the page in the Boost's file: $(cat "$file")"
+../tools/window-screenshot.sh "$pid" "$out/boost-advanced.png" || fail "no window to capture"
+# Reset, left of Advanced, puts the three back; Advanced again closes them, and the card shrinks.
+send clickkey 222 244
+expect "^browser: boost editor set $host advanced; dragged\$" "Reset didn't put the sliders back"
+send clickkey 306 244
+expect '^browser: boost editor advanced false$' "Advanced didn't close"
+expect '^browser: boost editor height 496$' "the card didn't shrink as Advanced closed"
 send key escape
 expect '^browser: boost editor dismissed$' "escape didn't close the Boost editor"
 
-# Window › View Boosts…, after View Media… as Arc's, opens Library › Boosts, and closes it there.
+# Window › View Boosts…, after View Media… as Arc's, with ilo's View Boards… between them, opens
+# Library › Boosts, and closes it there.
 send menubar Window
-expect '^browser: menu bar Window: .*, View Media…, View Boosts…, ' \
-  "Window has no View Boosts… after View Media…"
+expect '^browser: menu bar Window: .*, View Media…, View Boards…, View Boosts…, ' \
+  "Window has no View Boosts… after View Media… and View Boards…"
 send menu 'View Boosts…'
 expect '^browser: command view-boosts via ui$' "Window › View Boosts… didn't run"
 expect '^browser: library section boosts$' "View Boosts… didn't open the Library on Boosts"
@@ -187,7 +215,9 @@ echo "ok: a site's Boost showed on its page as it loaded and at once as its file
   "Boost's card turned Zap on, whose click hid #ad and kept it in the file, and escape ended it;" \
   "the tab's menu and the +'s offered Edit Boost…, which opened the card; Customize… opened the" \
   "editor, whose field coloured the page in both windows, ⌘Z took it back and escape closed it;" \
+  "Advanced grew the card, Contrast's and Brightness's filtered the page and Reset put them back;" \
   "Window › View Boosts… opened the Library on Boosts and closed it;" \
   "with the file gone the page was its own again." \
   "Windows: $out/boosted.png, $out/boost-card.png, $out/zapped.png," \
-  "$out/boost-tab-menu.png, $out/boost-plus-menu.png, $out/boost-editor.png, $out/boost-edited.png"
+  "$out/boost-tab-menu.png, $out/boost-plus-menu.png, $out/boost-editor.png," \
+  "$out/boost-edited.png, $out/boost-advanced.png"

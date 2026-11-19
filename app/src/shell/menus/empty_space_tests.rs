@@ -90,6 +90,8 @@ fn space_one_menu(menu: &[String]) -> bool {
         "New Tab",
         "New Folder…",
         "—",
+        "Show Top Bar",
+        "—",
         "Change Space Icon…",
         "Rename Space…",
         "Edit Theme Color…",
@@ -132,9 +134,12 @@ fn a_right_click_on_empty_space_shows_new_tab_and_the_spaces_menu(cx: &mut TestA
     let export = entries
         .iter()
         .position(|entry| entry.title.starts_with("Export “"));
+    let live = entries
+        .iter()
+        .position(|entry| entry.title == "Live Folders");
     let mut parents = entries.iter().filter_map(|entry| entry.parent);
     assert!(
-        parents.all(|parent| parent == profile || Some(parent) == export),
+        parents.all(|parent| parent == profile || Some(parent) == export || Some(parent) == live),
         "the Set Profile submenu moved"
     );
     assert!(
@@ -142,12 +147,23 @@ fn a_right_click_on_empty_space_shows_new_tab_and_the_spaces_menu(cx: &mut TestA
         "New Tab showed another Space"
     );
 
+    // The line over Today leads with Today's own commands, then the same menu (#2344).
     let (x, top) = at_slot(&shell, cx, Slot::Divider, 30.);
     let menus = right_click(cx, &host, (x, top + DIVIDER_HEIGHT / 2.));
     assert_eq!(menus.len(), 1, "{menus:?}");
-    assert!(
-        space_one_menu(&menus[0]),
+    assert_eq!(
+        menus[0][..3],
+        ["Sort Today Tabs by Site", "Clear Today", "—"],
         "the gap between pinned and Today: {menus:?}"
+    );
+    assert!(space_one_menu(&menus[0][3..]), "{menus:?}");
+    let entries = host.entries.borrow().clone();
+    let profile = (entries.iter())
+        .position(|entry| entry.title == "Set Profile")
+        .unwrap();
+    assert!(
+        (entries.iter()).all(|entry| entry.parent.is_none_or(|parent| parent >= profile)),
+        "the Set Profile submenu moved"
     );
 }
 
@@ -168,8 +184,15 @@ fn an_empty_spaces_empty_space_shows_its_menu(cx: &mut TestAppContext) {
     let menus = right_click(cx, &host, (100., new_tab_row + ROW_PITCH + 20.));
     assert_eq!(menus.len(), 1, "{menus:?}");
     assert_eq!(
-        menus[0][..4],
-        ["New Tab", "New Folder…", "—", "Change Space Icon…"]
+        menus[0][..6],
+        [
+            "New Tab",
+            "New Folder…",
+            "—",
+            "Show Top Bar",
+            "—",
+            "Change Space Icon…"
+        ]
     );
     // Delete Space is on: Space 1 is left.
     assert!(
@@ -211,8 +234,15 @@ fn a_right_click_mid_swipe_is_for_the_space_under_the_pointer(cx: &mut TestAppCo
     let menus = right_click(cx, &host, beside);
     assert_eq!(menus.len(), 1, "{menus:?}");
     assert_eq!(
-        menus[0][..4],
-        ["New Tab", "New Folder…", "—", "Change Space Icon…"]
+        menus[0][..6],
+        [
+            "New Tab",
+            "New Folder…",
+            "—",
+            "Show Top Bar",
+            "—",
+            "Change Space Icon…"
+        ]
     );
     assert_eq!(new_tab(cx, &host), [2], "New Tab went to the Space beside");
 
@@ -249,8 +279,15 @@ fn a_right_click_mid_swipe_is_for_the_space_under_the_pointer(cx: &mut TestAppCo
     let menus = right_click(cx, &host, first);
     assert_eq!(menus.len(), 1, "a right-click mid-slide: {menus:?}");
     assert_eq!(
-        menus[0][..4],
-        ["New Tab", "New Folder…", "—", "Change Space Icon…"]
+        menus[0][..6],
+        [
+            "New Tab",
+            "New Folder…",
+            "—",
+            "Show Top Bar",
+            "—",
+            "Change Space Icon…"
+        ]
     );
     assert!(
         new_tab(cx, &host).is_empty(),

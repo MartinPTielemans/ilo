@@ -94,10 +94,33 @@ void ReportChanged() {
       }));
 }
 
-// Keeps |profile| once it has loaded, if it did, then runs |loaded|.
-void OnLoaded(base::OnceClosure loaded, Profile* profile) {
-  if (profile) {
+// The profiles the core waits for, by directory, and what runs as each arrives (ExpectProfiles).
+std::set<std::string>& Expected() {
+  static base::NoDestructor<std::set<std::string>> expected;
+  return *expected;
+}
+// The later profiles whose arrival is still to run: the expected ones, and any Chrome loaded before
+// the core expected it, as one a crash left in its list of last active profiles (#3349).
+std::set<std::string>& Late() {
+  static base::NoDestructor<std::set<std::string>> late;
+  return *late;
+}
+base::RepeatingCallback<void(const std::string&, Profile*)>& Arrived() {
+  static base::NoDestructor<base::RepeatingCallback<void(const std::string&, Profile*)>> arrived;
+  return *arrived;
+}
+
+// Keeps |dir|'s |profile| once it has loaded, if it did, then runs |loaded|. Not once quitting: a
+// profile that's let go of has nothing for the core to see to.
+void OnLoaded(const std::string& dir, base::OnceClosure loaded, Profile* profile) {
+  const bool quitting =
+      browser_shutdown::IsTryingToQuit() || browser_shutdown::HasShutdownStarted();
+  if (profile && !quitting) {
     UseProfile(profile);
+  }
+  Expected().erase(dir);
+  if (Late().erase(dir) && !quitting && Arrived()) {
+    Arrived().Run(dir, profile);
   }
   std::move(loaded).Run();
 }
@@ -246,9 +269,43 @@ Profile* StartProfile() {
 }
 
 Profile* ProfileFor(const std::string& dir) {
+  if (ProfileExpected(dir)) {
+    return nullptr;
+  }
   ProfileManager* manager = g_browser_process->profile_manager();
   Profile* profile = manager && !dir.empty() ? manager->GetProfileByPath(PathOf(dir)) : nullptr;
   return profile ? profile : StartProfile();
+}
+
+void ExpectProfiles(const std::set<std::string>& dirs,
+                    base::RepeatingCallback<void(const std::string&, Profile*)> arrived) {
+  ProfileManager* manager = g_browser_process->profile_manager();
+  Arrived() = std::move(arrived);
+  for (const std::string& dir : dirs) {
+    if (!manager || dir.empty()) {
+      continue;
+    }
+    Late().insert(dir);
+    if (!manager->GetProfileByPath(PathOf(dir))) {
+      Expected().insert(dir);
+    }
+  }
+}
+
+void ForgetActiveProfiles() {
+  // Chrome loads each profile it lists here before its first window, which would undo the late
+  // loading of a profile whose Space was shown once (#3349). The core loads the ones it needs.
+  if (PrefService* local_state = g_browser_process->local_state()) {
+    local_state->ClearPref(prefs::kProfilesLastActive);
+  }
+}
+
+bool ProfileExpected(const std::string& dir) {
+  return !dir.empty() && Expected().contains(dir);
+}
+
+std::string HomeFor(const std::string& dir) {
+  return ProfileExpected(dir) ? dir : DirOf(ProfileFor(dir));
 }
 
 std::string DirOf(Profile* profile) {
@@ -269,7 +326,7 @@ void LoadProfiles(const std::set<std::string>& dirs, base::OnceClosure done) {
   base::RepeatingClosure loaded = base::BarrierClosure(dirs.size(), std::move(done));
   for (const std::string& dir : dirs) {
     // Waits for one still being made. One deleted by hand comes back empty.
-    manager->CreateProfileAsync(PathOf(dir), base::BindOnce(&OnLoaded, loaded));
+    manager->CreateProfileAsync(PathOf(dir), base::BindOnce(&OnLoaded, dir, loaded));
   }
 }
 
