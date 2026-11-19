@@ -106,10 +106,10 @@ bool KeepsFavicon(std::string_view png) {
   return !png.empty() && png.size() <= kShareFaviconCap && png.starts_with(kPng);
 }
 
-base::Value::List ItemsValue(const std::vector<ShareItem>& items, bool favicons) {
-  base::Value::List list;
+base::ListValue ItemsValue(const std::vector<ShareItem>& items, bool favicons) {
+  base::ListValue list;
   for (const ShareItem& item : items) {
-    base::Value::Dict dict;
+    base::DictValue dict;
     dict.Set("title", Title(item.title));
     if (item.folder) {
       dict.Set("items", ItemsValue(item.items, favicons));
@@ -125,7 +125,7 @@ base::Value::List ItemsValue(const std::vector<ShareItem>& items, bool favicons)
 }
 
 std::string Json(const ShareSnapshot& snapshot, bool favicons) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set("v", static_cast<int>(kVersion));
   dict.Set("kind", KindName(snapshot.kind));
   dict.Set("title", Title(snapshot.title));
@@ -202,7 +202,7 @@ struct Reading {
   bool too_big = false;
 };
 
-std::vector<ShareItem> ReadItems(const base::Value::List* list, int depth, Reading& reading) {
+std::vector<ShareItem> ReadItems(const base::ListValue* list, int depth, Reading& reading) {
   std::vector<ShareItem> items;
   if (!list) {
     return items;
@@ -211,7 +211,7 @@ std::vector<ShareItem> ReadItems(const base::Value::List* list, int depth, Readi
     if (reading.too_big) {
       break;
     }
-    const base::Value::Dict* dict = value.GetIfDict();
+    const base::DictValue* dict = value.GetIfDict();
     if (!dict) {
       continue;
     }
@@ -219,7 +219,7 @@ std::vector<ShareItem> ReadItems(const base::Value::List* list, int depth, Readi
     if (const std::string* title = dict->FindString("title")) {
       item.title = Title(*title);
     }
-    if (const base::Value::List* inner = dict->FindList("items")) {
+    if (const base::ListValue* inner = dict->FindList("items")) {
       if (depth >= kShareDepthCap) {
         reading.too_big = true;
         break;
@@ -320,7 +320,7 @@ void AppendRows(const std::vector<ShareItem>& items, std::string& out) {
     if (!ShareTakes(item.url)) {
       continue;
     }
-    const std::string host = item.url.host();
+    const std::string host(item.url.host());
     std::string icon;
     if (KeepsFavicon(item.favicon)) {
       icon = base::StrCat({"<img class=\"icon\" alt=\"\" src=\"", kPngData,
@@ -352,8 +352,8 @@ std::optional<ShareLink> ShareLinkOf(const GURL& url) {
   if (!url.is_valid() || !url.SchemeIsHTTPOrHTTPS() || !url.has_ref()) {
     return std::nullopt;
   }
-  const std::string_view path = url.path_piece();
-  const std::string_view ref = url.ref_piece();
+  const std::string_view path = url.path();
+  const std::string_view ref = url.ref();
   if (!path.starts_with("/s/") || !IsBase64Url(path.substr(3), kIdLength) ||
       !IsBase64Url(ref, kKeyLength)) {
     return std::nullopt;
@@ -435,9 +435,9 @@ ShareOpened OpenShare(base::span<const uint8_t> blob, const ShareLink& link) {
   if (blob[0] != kVersion) {
     return Refused(ShareRefusal::kNewer);
   }
-  const std::optional<std::vector<uint8_t>> packed =
-      crypto::aead::Open(crypto::aead::AES_256_GCM, link.key, blob.subspan(1 + kIvSize),
-                         blob.subspan(1, kIvSize), base::as_byte_span(AdditionalData(link)));
+  const std::optional<std::vector<uint8_t>> packed = crypto::aead::Open(
+      crypto::aead::AES_256_GCM, link.key, blob.subspan(1 + kIvSize),
+      blob.subspan(size_t{1}, kIvSize), base::as_byte_span(AdditionalData(link)));
   if (!packed) {
     return Refused(ShareRefusal::kKey);
   }
@@ -448,13 +448,13 @@ ShareOpened OpenShare(base::span<const uint8_t> blob, const ShareLink& link) {
   }
   // Each folder is two levels of JSON, its object and its list, and the reader takes one level
   // fewer than it's given. One folder past the cap still reads, so ReadItems says it's too deep.
-  const std::optional<base::Value::Dict> read =
+  const std::optional<base::DictValue> read =
       base::JSONReader::ReadDict(*json, base::JSON_PARSE_RFC, 2 * (kShareDepthCap + 1) + 4);
   if (!read) {
     // The key opened it, so it's a shape this version doesn't read.
     return Refused(ShareRefusal::kNewer);
   }
-  const base::Value::Dict* dict = &*read;
+  const base::DictValue* dict = &*read;
   if (dict->FindInt("v") != static_cast<int>(kVersion)) {
     return Refused(ShareRefusal::kNewer);
   }

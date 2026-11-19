@@ -92,7 +92,7 @@ TEST(ShareSnapshot, ALinkHasAnIdAndAKeyInItsFragment) {
   EXPECT_EQ(read->key, link.key);
 
   const std::string id = link.id;
-  const std::string key = url.ref();
+  const std::string key(url.ref());
   for (const std::string& other :
        {base::StrCat({"https://sync.example.org/s/", id}),
         base::StrCat({"https://sync.example.org/s/", id, "#", key.substr(1)}),

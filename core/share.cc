@@ -64,6 +64,7 @@
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_skia.h"
+#include "ui/gfx/image/image_skia_rep.h"
 #include "url/gurl.h"
 
 namespace browser_core {
@@ -175,7 +176,7 @@ std::optional<Listed> OpenEntry(const std::string& id,
   const base::span<const uint8_t> all = base::as_byte_span(bytes);
   const std::optional<std::vector<uint8_t>> json =
       crypto::aead::Open(crypto::aead::AES_256_GCM, key, all.subspan(1 + kIvSize),
-                         all.subspan(1, kIvSize), base::as_byte_span(EntryData(id)));
+                         all.subspan(size_t{1}, kIvSize), base::as_byte_span(EntryData(id)));
   if (!json) {
     return std::nullopt;
   }
