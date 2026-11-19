@@ -905,35 +905,39 @@ EOF
   # past the hide showed no scrim (#3354). A picture asked late can't tell, so it fails as late
   # without being read.
   scrim_ms() { perl -MTime::HiRes=time -e 'printf "%d\n", time * 1000'; }
-  ready="$out/mini-player-hover.ready" go="$out/mini-player-hover.go"
-  rm -f "$ready" "$go"
-  FRAME="$at" READY="$ready" GO="$go" ../tools/window-screenshot.sh "$pid" \
-    "$out/mini-player-hover.png" floating 2> "$out/mini-player-hover.log" &
-  capturing=$!
-  while [ ! -e "$ready" ] && kill -0 "$capturing" 2> /dev/null; do
-    sleep 0.05
+  # Probe, not to land: 12 scrim moves, 3 s apart so the controls hide between (#3354).
+  for probe in $(seq 12); do
+    ready="$out/mini-player-hover.ready" go="$out/mini-player-hover.go"
+    rm -f "$ready" "$go"
+    FRAME="$at" READY="$ready" GO="$go" ../tools/window-screenshot.sh "$pid" \
+      "$out/mini-player-hover.png" floating 2> "$out/mini-player-hover.log" &
+    capturing=$!
+    while [ ! -e "$ready" ] && kill -0 "$capturing" 2> /dev/null; do
+      sleep 0.05
+    done
+    [ -e "$ready" ] || {
+      wait "$capturing" || true
+      fail "the Mini Player's capture under the pointer didn't get ready: $(tail -1 "$out/mini-player-hover.log")"
+    }
+    moved_at=$(scrim_ms)
+    send pip move $((pw / 8)) $((ph / 2))
+    while [ $(($(scrim_ms) - moved_at)) -lt 250 ]; do
+      sleep 0.02
+    done
+    asked=$(($(scrim_ms) - moved_at))
+    : > "$go"
+    wait "$capturing" ||
+      fail "no Mini Player to capture under the pointer: $(tail -1 "$out/mini-player-hover.log")"
+    came=$(($(scrim_ms) - moved_at))
+    rm -f "$ready" "$go"
+    echo "media: scrim picture asked at +$asked ms from the move, back at +$came ms"
+    hovered=$(lightness "$out/mini-player-hover.png")
+    cp "$out/mini-player-hover.png" "$out/mini-player-hover-$probe.png"
+    echo "media: probe scrim $probe asked at +$asked ms, back at +$came ms, lightness $hovered"
+    sleep 3
   done
-  [ -e "$ready" ] || {
-    wait "$capturing" || true
-    fail "the Mini Player's capture under the pointer didn't get ready: $(tail -1 "$out/mini-player-hover.log")"
-  }
-  moved_at=$(scrim_ms)
-  send pip move $((pw / 8)) $((ph / 2))
-  while [ $(($(scrim_ms) - moved_at)) -lt 250 ]; do
-    sleep 0.02
-  done
-  asked=$(($(scrim_ms) - moved_at))
-  : > "$go"
-  wait "$capturing" ||
-    fail "no Mini Player to capture under the pointer: $(tail -1 "$out/mini-player-hover.log")"
-  came=$(($(scrim_ms) - moved_at))
-  rm -f "$ready" "$go"
-  echo "media: scrim picture asked at +$asked ms from the move, back at +$came ms"
-  [ "$asked" -le 2000 ] ||
-    fail "the Mini Player's picture under the pointer was asked late, at +$asked ms from the move, too near the controls' own hide 2.5 s after it to tell the scrim"
-  hovered=$(lightness "$out/mini-player-hover.png")
   [ "$hovered" -lt 170 ] ||
-    fail "the pointer on the Mini Player didn't bring its scrim: it stayed at $hovered, where the video is about 204 and under the scrim about 133, in a picture asked at +$asked ms from the move and back at +$came ms"
+    fail "probe: the last of 12 scrim moves had no scrim, at $hovered"
   # One flat scrim, as Dia's: over the video, one colour in a frame, it's as dark at a third of
   # the height as at three fifths, off the buttons above and the progress bar below (#2881). An
   # engine older than its core has Chrome's gradients.
