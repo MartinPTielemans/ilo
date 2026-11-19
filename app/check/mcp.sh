@@ -1957,8 +1957,10 @@ addEventListener("message", (event) => {
   # Longer than the card shows, so the card cuts it at a word.
   milk='{"method":"POST","path":"/api/items","body":{"title":"Milk"},"what":"Add Milk to the shared shopping list under Dairy, so whoever shops next picks it up; it changes nothing else on the list and sends nothing else."}'
   milk_card='“Add Milk to the shared shopping list under Dairy, so whoever shops next picks it up; it changes nothing else on the…” Sends data to localhost'
-  # Asks for the change $3 and answers $1 with a click on the card's last row, Deny at its left and
-  # Allow at its right, once the card shows the change as $4, the site having had $2 of them.
+  # Asks for the changes $3 and answers $1 with a click on the card's last row, Deny at its left
+  # and Allow at its right, once the card shows the first change as $4, the site having had $2 of
+  # them. The card's capture is $out/$5.png, agent-request.png if not given, and with $6 the whole
+  # request opens first, its capture $out/$6.png.
   change() {
     before=$(grep -c "$changes" "$log" || true)
     # The run's first question, whose place showed no card before it.
@@ -1974,26 +1976,31 @@ addEventListener("message", (event) => {
     read -r qx qy qw qh <<CARD
 $(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
 CARD
-    ../tools/window-screenshot.sh "$pid" "$out/agent-request.png" || fail "no window to capture"
+    ../tools/window-screenshot.sh "$pid" "$out/${5:-agent-request}.png" || fail "no window to capture"
     if [ "$1" = Once ]; then
-      follows_log "$out/agent-request-before.png" "$out/agent-request.png" "$qx $qy $qw $qh" \
+      follows_log "$out/agent-request-before.png" "$out/${5:-agent-request}.png" "$qx $qy $qw $qh" \
         "the change's question $q"
-      # The whole request opens beside the card with the keyboard, and Escape closes it and puts
-      # the keyboard back on the card, the question unanswered and nothing sent.
+    fi
+    if [ -n "$6" ]; then
+      # The whole request opens beside the card with the keyboard, every change the card asks for
+      # in it, and Escape closes it and puts the keyboard back on the card, the question unanswered
+      # and nothing sent.
       await_log "^browser: agent request see $q at " "the card drew no See the whole request"
       read -r sx sy sw sh <<SEE
 $(grep "^browser: agent request see $q at " "$log" | tail -1 | cut -d' ' -f7-)
 SEE
+      asked=$(grep -c "^browser: agent question $q change " "$log")
       hosted=$(grep -c '^browser: agent request shown$' "$log" || true)
       send click $((sx + 20)) $((sy + sh / 2))
-      await_log "^browser: agent request $q shown, 1 changes\$" "See the whole request didn't show it"
+      await_log "^browser: agent request $q shown, $asked changes\$" "See the whole request didn't show it"
       # The host's line, once its window is on screen, so the capture has it.
       await_more '^browser: agent request shown$' "$hosted" || fail "the whole request's window never showed"
-      ../tools/window-screenshot.sh "$pid" "$out/agent-request-whole.png" || fail "no window to capture"
+      ../tools/window-screenshot.sh "$pid" "$out/$6.png" || fail "no window to capture"
+      returned=$(grep -c '^browser: agent request keyboard back on see$' "$log" || true)
       send key escape
       await_log "^browser: agent request $q closed (Escape)\$" "Escape didn't close the whole request"
-      await_log '^browser: agent request keyboard back on see$' \
-        "Escape didn't put the keyboard back on See the whole request"
+      await_more '^browser: agent request keyboard back on see$' "$returned" ||
+        fail "Escape didn't put the keyboard back on See the whole request"
       grep -q "^browser: agent mcp-client answered $q " "$log" && fail "Escape answered the change's question"
     fi
     [ "$(grep -c "$posted" "$out/site.log")" = "$2" ] || fail "the change went before the user answered"
@@ -2003,7 +2010,7 @@ SEE
     changed=$(next_answer) || fail "the browser didn't answer the change"
     changed=$(printf '%s\n' "$changed" | answered "the change")
   }
-  change Once 0 "$milk" "$milk_card"
+  change Once 0 "$milk" "$milk_card" agent-request agent-request-whole
   case "$changed" in
     'POST /api/items → 201 application/json'*'{"id":8,"title":"Milk"}') ;;
     *) fail "the allowed change answered: $changed" ;;
@@ -2086,6 +2093,26 @@ SEE
   expect '^browser: settings tab General$' "a click on General didn't show its section"
   send key w cmd
   expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+  # A long body shows whole in the whole request, a character that wouldn't show written out, and
+  # Deny sends it nowhere.
+  picnic='{"method":"POST","path":"/api/items","body":{"title":"Picnic","file":"menu\u202etxt.exe","notes":"Meet at the north gate of the park at noon on Saturday. Bring two blankets, the folding table and the blue cooler. Sandwiches: cheese and tomato, egg and cress, and a few plain ones for the children. Fruit: apples, grapes and a melon to cut there. Drinks: lemonade, water and a flask of tea. If it rains we move to the bandstand, and if the bandstand is taken we go to the café by the pond instead. Whoever arrives first saves the spot under the big oak by the lake, with a blanket and a sign.","items":["blankets","table","cooler","plates","cups","knife","bin bags"]},"what":"Save the picnic plan to your list."}'
+  change Dismiss 1 "$picnic" '“Save the picnic plan to your list.” Sends data to localhost' \
+    agent-request-long agent-request-whole-long
+  [ "$changed" = "error: The user said no: you can't make a change on localhost. Don't try again." ] ||
+    fail "the denied long change answered: $changed"
+  grep -q 'Picnic' "$out/site.log" && fail "the denied long change reached the site"
+  # Several changes in one call ask once, each its own row marked as the agent's words, the whole
+  # request shows them all, and Deny sends none of them.
+  bread='{"method":"POST","path":"/api/items","body":{"title":"Bread"},"what":"Add Bread to the list."}'
+  crumbs='{"method":"DELETE","path":"/api/items/9","what":"Remove the old crumbs entry."}'
+  change Dismiss 1 "$bread,$crumbs" '“Add Bread to the list.” Sends data to localhost' \
+    agent-request-several agent-request-whole-several
+  grep -q "^browser: agent question $q change 2: “Remove the old crumbs entry\.” Deletes something on localhost\$" "$log" ||
+    fail "the card didn't show the second change: $(grep "^browser: agent question $q change " "$log")"
+  [ "$changed" = "error: The user said no: you can't make a change on localhost. Don't try again." ] ||
+    fail "the denied changes answered: $changed"
+  grep -q 'Bread' "$out/site.log" && fail "a denied change of several reached the site"
+  grep -q '^DELETE ' "$out/site.log" && fail "a denied delete of several reached the site"
 
   # The agent's picture of a page withholds what its outline does of a field, by one rule: a field
   # holding what the agent typed and is unchanged shows it, as does the page's own value, a
