@@ -509,7 +509,12 @@ bool OnEvent(VideoOverlayWindowViews* window, ui::Event* event) {
     case ui::EventType::kMouseMoved:
       // check.sh reads this line, once each time the pointer comes in: Chrome has had the event and
       // shown the controls for it, so a pointer that never reaches the window has no line, and one
-      // that reaches it and brings nothing says the controls are hidden (#3354).
+      // that reaches it and brings nothing says the controls are hidden (#3354). This is the
+      // window's own handler, so its views' crossings never come here, and each OS's exit is the
+      // window's: Windows drops a leave while the pointer is still over it, and Wayland's
+      // subsurfaces take no input. A Mini Player shown under a still pointer has no line until the
+      // OS sends it an enter or a move; the Mac's doesn't, as its view's tracking area doesn't
+      // assume the pointer inside.
       if (!g_pointer_in) {
         g_pointer_in = true;
         LOG(ERROR) << "browser: mini player pointer in, controls "

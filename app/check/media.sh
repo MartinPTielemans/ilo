@@ -923,6 +923,16 @@ EOF
   # brought the controls for it, so a move that never reached it is the driver's and one that
   # brought nothing is the app's (#3354). Its line has Chromium's prefix.
   pointer_in='browser: mini player pointer in, controls '
+  # Its line comes once each time the pointer comes in since the Mini Player showed, so it has to
+  # be out at the move: nothing of the driver's reaches the Mini Player before it, and the desktop's
+  # pointer only moves in check/pointer.mm's drag above, in an earlier one. Were it in, the move
+  # would log nothing and the red below would name the driver wrongly.
+  early=$(sed -n "/^browser: drive $floated: /,\$p" "$log" | grep "$pointer_in" | head -1)
+  if [ -n "$early" ]; then
+    : > "$go"
+    wait "$capturing" || true
+    fail "the Mini Player heard a pointer come in before the step's move, so the move can't be told from it: $early"
+  fi
   heard=$(grep -c "$pointer_in" "$log" || true)
   moved_at=$(scrim_ms)
   send pip move $((pw / 8)) $((ph / 2))
