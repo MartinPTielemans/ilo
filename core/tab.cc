@@ -715,6 +715,7 @@ void Tab::Unload() {
   shown_on_.reset();
   {
     base::AutoReset<bool> unloading(&unloading_, true);
+    ScriptDialogs::Cancel(contents);
     tabs->DetachAndDeleteWebContentsAt(tabs->GetIndexOfWebContents(contents));
   }
   // Chrome's session forgets the storage of a tab its tab strip deletes, which would delete it
