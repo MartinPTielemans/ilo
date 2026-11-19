@@ -1112,6 +1112,9 @@ with open(sys.argv[1], "w", encoding="utf-8") as f:
 start_with_cdp() {
   cdp_url=$1 cdp_profile=$2 cdp_page=$3
   shift 3
+  # The app's redirect to the log opens only once the fifos before it have, so the log is made here,
+  # or the first await's grep says it's missing (#3276).
+  : > "$log"
   mkfifo "$scratch/cdp"
   if windows; then
     # Chrome on Windows takes its DevTools pipe as handles, which Git Bash can't give it, so
