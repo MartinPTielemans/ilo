@@ -34,6 +34,7 @@ It's native Swift in `mobile/ios`, and paths below start there. This file adds t
 - **Mock it first**, at real scale among its neighbours, before building.
 - **One look, in Liquid Glass.** Every glass in the app is made in `App/Look/Glass.swift`, and a view asks it for its ground.
 - **Smooth motion outranks glass**, since glass that changes is drawn again, off screen, each frame. Glass keeps its value, tint and shape while anything animates, is never interactive, never fades or scales, and takes only the built-in shapes.
+- **Glass that travels is `Slid`** (`App/Look/Slid.swift`), which has Core Animation move it, so the app makes no frame of the way. What's inside is a SwiftUI world of its own: it gets the environment values `Slid` names, so a value the app adds to its environment is added there, and VoiceOver is kept from it by `unheard`, not by a modifier.
 
 ## Verifying
 

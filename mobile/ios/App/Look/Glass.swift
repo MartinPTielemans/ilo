@@ -38,7 +38,7 @@ extension Palette {
   var dockFill: Color { .primary.opacity(dark ? 0.09 : 0.06) }
 
   /// A bar over a page: the system's glass with the Space's colour washed in, as much as the
-  /// small pill needs to show it. One glass at both sizes, so shrinking the bar moves only its frame.
+  /// small pill needs to show it. The bar and its small pill are the same glass.
   var pageGlass: Glass {
     isPrivate ? .regular.tint(Self.ink.opacity(PrivateMark.barInk)) : .regular.tint(accent.opacity(0.16))
   }

@@ -22,8 +22,7 @@ nonisolated enum ContextButton: Hashable, Sendable {
 }
 
 /// The buttons beside the page's bar, which arrive and leave with the bar's own motion. The bar
-/// made small for reading takes them with it: they stay where they are and are put away as the
-/// bar is, so they fade, where a glass button taken out of its group goes in one frame.
+/// that goes down off the screen for reading takes them with it, as one with it.
 struct ContextButtons: View {
   let tab: WebTab
 
@@ -47,8 +46,6 @@ struct ContextButtons: View {
           .transition(.opacity)
       }
     }
-    .barShown(!tab.barHidden)
-    .animation(reduceMotion ? Motion.quick : Motion.sheet, value: tab.barHidden)
     .animation(reduceMotion ? Motion.quick : Motion.sheet, value: buttons)
   }
 

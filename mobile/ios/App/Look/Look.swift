@@ -154,6 +154,18 @@ nonisolated enum Bar {
   static func smallFoot(band: CGFloat) -> CGFloat {
     band > 0 ? 16 : 6
   }
+  /// How far around the small pill a touch is still the pill's: a thumb's width and height.
+  static let smallReach = CGSize(width: 24, height: 10)
+  /// Past the screen's foot by this, a bar's glass has taken its shadow with it.
+  static let clear: CGFloat = 24
+  /// How far down the page's bar goes to be off the screen, from its place `foot` over the screen's.
+  static func sunk(foot: CGFloat) -> CGFloat {
+    foot - gap + height + clear
+  }
+  /// How far under its place the small pill waits, off the screen.
+  static func smallSunk(band: CGFloat) -> CGFloat {
+    smallFoot(band: band) + small + clear
+  }
 }
 
 /// An open page's card in the Space's grid: its picture, and a line with its icon and title.
