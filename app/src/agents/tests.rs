@@ -3214,6 +3214,82 @@ fn a_page_showing_its_dialog_closes_at_once(cx: &mut TestAppContext) {
     assert_eq!(*browser.asked.borrow(), None, "asked the user");
 }
 
+/// A tab in the agent's Space that it didn't open, as one its page opened, may hold what the user
+/// hasn't saved, and its page can't be asked while its dialog is up: a close answers at once that
+/// it stays, without asking the page, and a discard asks the user, whose yes closes it (#3536).
+#[gpui::test]
+fn a_page_the_user_gave_showing_its_dialog_asks_them(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    for each in browser
+        .tabs
+        .borrow_mut()
+        .iter_mut()
+        .filter(|each| each.0 == 10)
+    {
+        each.1 = 2;
+    }
+    browser.asks.borrow_mut().insert(10);
+    page_dialog(&agents, 10, Some(DialogKind::Alert), cx);
+
+    let pressed = call(
+        &agents,
+        "claude-code",
+        "press_key",
+        json!({ "tab": 10, "key": "Escape" }),
+        cx,
+    );
+    cx.run_until_parked();
+    let pressed = pressed.try_recv().expect("an answer at once");
+    assert_eq!(
+        (pressed.error, pressed.text.as_str()),
+        (
+            true,
+            "Tab 10's page shows an alert. Nothing more can be done on the tab while it's up, and \
+             no tool answers it. close_tab with discard: true closes the tab, and the dialog with \
+             it, once the user says yes, as you didn't open it."
+        )
+    );
+
+    let kept = call(
+        &agents,
+        "claude-code",
+        "close_tab",
+        json!({ "tab": 10 }),
+        cx,
+    );
+    cx.run_until_parked();
+    let kept = kept.try_recv().expect("an answer at once");
+    assert_eq!(
+        (kept.error, kept.text.as_str()),
+        (
+            true,
+            "Tab 10 stays open: its page shows its own dialog, so it can't be asked whether it \
+             has unsaved changes. close_tab with discard: true closes it without saving, once the \
+             user says yes."
+        )
+    );
+    assert_eq!(*browser.closes.borrow(), [], "asked the page");
+    assert_eq!(*browser.asked.borrow(), None, "asked the user");
+
+    let closed = call(
+        &agents,
+        "claude-code",
+        "close_tab",
+        json!({ "tab": 10, "discard": true }),
+        cx,
+    );
+    cx.run_until_parked();
+    assert_eq!(*browser.closes.borrow(), [], "asked the page");
+    let question = (browser.asked.borrow().clone()).expect("the discard didn't ask the user");
+    assert_eq!(question.why, UNSAVED);
+    agents.update(cx, |agents, cx| {
+        agents.answer(question.id, Answer::Once, cx)
+    });
+    let closed = closed.recv().unwrap();
+    assert_eq!(closed.text, "Closed tab 10 without saving.");
+    assert_eq!(*browser.closes.borrow(), [(10, true)]);
+}
+
 /// A dialog on a page that isn't the agent's says nothing to it: the core's refusal answers, and
 /// the agent's log has no pause.
 #[gpui::test]

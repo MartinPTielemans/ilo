@@ -3297,7 +3297,9 @@ impl Agents {
         self.browser.may_act(agent, tab, action, cx)?;
         // Only once the tab is known to be the agent's, so another's page says nothing.
         match self.dialogs.get(&tab) {
-            Some(&kind) if action != "close_tab" => Err(showing_dialog(tab, kind)),
+            Some(&kind) if action != "close_tab" => {
+                Err(showing_dialog(tab, kind, self.opened.contains(&tab)))
+            }
             _ => Ok(()),
         }
     }
@@ -3381,6 +3383,12 @@ impl Agents {
             site,
             reply,
         };
+        // In a tab it didn't open, what's unsaved may be the user's, and the page can't say: it
+        // goes as one that asks before it's left, so a discard asks the user.
+        if stuck {
+            self.close_came_to(tab, closing, Closed::Asks, cx);
+            return;
+        }
         match self.browser.close_tab(agent, tab, false, cx) {
             // A second close while its page is asked waits for the same answer.
             Closed::Pending => self.closing.entry(tab).or_default().push(closing),
@@ -3454,8 +3462,14 @@ impl Agents {
             Closed::Closed => Ok(format!("Closed tab {tab}.")),
             Closed::Pinned => Err(format!("Tab {tab} stays open: the user pinned it.")),
             Closed::Asks => Err(format!(
-                "Tab {tab} stays open: its page asks before it's left, as it may have unsaved \
-                 changes. close_tab with discard: true closes it without saving{}.",
+                "Tab {tab} stays open: {}. close_tab with discard: true closes it without \
+                 saving{}.",
+                match self.dialogs.contains_key(&tab) {
+                    true =>
+                        "its page shows its own dialog, so it can't be asked whether it has \
+                             unsaved changes",
+                    false => "its page asks before it's left, as it may have unsaved changes",
+                },
                 if self.opened.contains(&tab) {
                     ""
                 } else {
@@ -3751,8 +3765,9 @@ pub fn space_changed(space: u64, cx: &mut App) {
 }
 
 /// The answer to a call on `tab` while its page shows its own dialog of `kind`. No agent tool
-/// answers a page's dialog (#3536), so it says what the agent can do: close the tab.
-fn showing_dialog(tab: u64, kind: DialogKind) -> String {
+/// answers a page's dialog (#3536), so it says what the agent can do: close the tab, which in one
+/// it didn't `opened` takes the user's yes.
+fn showing_dialog(tab: u64, kind: DialogKind, opened: bool) -> String {
     let what = match kind {
         DialogKind::Alert => "an alert",
         DialogKind::Confirm => "a confirm dialog",
@@ -3761,9 +3776,16 @@ fn showing_dialog(tab: u64, kind: DialogKind) -> String {
         DialogKind::SignIn => "a dialog asking for a user name and password",
         DialogKind::OpenApp => "a dialog asking to open another app",
     };
+    let close = match opened {
+        true => "close_tab closes the tab, and the dialog with it",
+        false => {
+            "close_tab with discard: true closes the tab, and the dialog with it, once the user \
+             says yes, as you didn't open it"
+        }
+    };
     format!(
         "Tab {tab}'s page shows {what}. Nothing more can be done on the tab while it's up, and no \
-         tool answers it. close_tab closes the tab, and the dialog with it."
+         tool answers it. {close}."
     )
 }
 
