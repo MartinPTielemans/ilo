@@ -399,6 +399,30 @@ send key w cmd
 expect "^browser: tab $manager closed\$" "⌘W didn't close Chrome's password manager page"
 send key 2 cmd
 expect "^browser: selected $tab\( in .*\)\{0,1\}\$" "⌘2 didn't show the login's tab again"
+# On the Mac, Manage Passkeys… beside it opens Chrome's list of the passkeys the Mac keeps for the
+# profile, in a new tab, where each can be deleted: the one place they're listed, which Chrome's
+# password manager links to only once there's one (#2354). The run's build holds no keychain group
+# for them, so the list has none.
+if [ "$(uname)" = Darwin ]; then
+  send menu Settings…
+  expect '^browser: settings shown ' "Settings… didn't show Settings"
+  send clickkey $(drawn "toolbar Passwords")
+  expect '^browser: settings tab Passwords$' "a click on Passwords didn't show its section"
+  settings_drew Passwords
+  post clickkey $(drawn "manage passkeys")
+  expect '^browser: manage passkeys [0-9]*$' "a click on Manage Passkeys… didn't run it"
+  expect '^browser: settings hidden$' "Manage Passkeys… didn't hide Settings"
+  await '^browser: loaded [0-9]* chrome://settings/passkeys$' ||
+    fail "Manage Passkeys… didn't open Chrome's list of the passkeys on this Mac"
+  passkeys=$(grep '^browser: loaded [0-9]* chrome://settings/passkeys$' "$log" | tail -1 |
+    cut -d' ' -f3)
+  [ "$passkeys" != "$tab" ] || fail "Manage Passkeys… opened Chrome's list in the login's tab"
+  ../tools/window-screenshot.sh "$pid" "$out/passkeys-list.png" || fail "no window to capture"
+  send key w cmd
+  expect "^browser: tab $passkeys closed\$" "⌘W didn't close Chrome's list of passkeys"
+  send key 2 cmd
+  expect "^browser: selected $tab\( in .*\)\{0,1\}\$" "⌘2 didn't show the login's tab again"
+fi
 
 # The row's Remove closes the panel and asks in the browser window's dialog, where return removes
 # the login, and Settings, which asked for the logins, hears that it's gone. A click on the page
