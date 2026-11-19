@@ -16,9 +16,10 @@ use gpui::{
 };
 
 use crate::agents::request::{Request, Sent};
+use crate::elevation::Level;
 use crate::tokens::shell::permission::{
-    DETAIL, FACTS_LINE, LINE, WHOLE_INDENT, WHOLE_INSIDE, WHOLE_NAME, WHOLE_PADDING, WHOLE_SECTION,
-    WHOLE_WIDTH,
+    DETAIL, FACTS_LINE, LINE, WHOLE_INDENT, WHOLE_INSIDE, WHOLE_NAME, WHOLE_PADDING, WHOLE_RIM,
+    WHOLE_SECTION, WHOLE_WIDTH,
 };
 use crate::tokens::text;
 
@@ -257,6 +258,9 @@ impl Render for AgentRequest {
             .key_context(KEYS)
             .track_focus(&self.focus)
             .size_full()
+            .relative()
+            .overflow_hidden()
+            .rounded(px(RADIUS))
             .font_family(crate::face::UI)
             .text_size(px(text::BODY))
             .line_height(px(LINE));
@@ -265,6 +269,16 @@ impl Render for AgentRequest {
         };
         let palette = crate::palette::current(cx);
         let (ink, detail) = (palette.on_overlay(1.), palette.on_overlay(DETAIL));
+        // Its own plate, as the other overlays draw theirs, under the host's shadow.
+        let rim = div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .rounded(px(RADIUS))
+            .border(px(WHOLE_RIM))
+            .border_color(Level::Popover.rim_in(&palette));
+        let root = root.bg(palette.overlay);
         let label = |text: SharedString| {
             div()
                 .mt(px(WHOLE_SECTION))
@@ -405,5 +419,6 @@ impl Render for AgentRequest {
                     .track_scroll(&self.scroll)
                     .child(content),
             )
+            .child(rim)
     }
 }

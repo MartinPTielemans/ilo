@@ -2107,6 +2107,8 @@ whole-section = 14.0
 whole-name = 150.0
 whole-indent = 14.0
 whole-inside = 16.0
+# The line round its plate, as the other overlays' rims.
+whole-rim = 0.5
 
 [shell.boost]
 # Ours (#2347): the Boost card's list of what Arrange moved, between its words and its buttons.
