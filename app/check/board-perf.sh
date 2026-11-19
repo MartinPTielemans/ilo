@@ -54,7 +54,8 @@ board_open() {
 }
 # Traces categories $1 into $dir/$2 around the command after.
 board_traced() {
-  trace_categories=$1 trace_file=$dir/$2
+  # Its own: tabs reads lib.sh's trace_categories for its launch, after this run in one go.
+  local trace_categories=$1 trace_file=$dir/$2
   shift 2
   since=$(wc -l < "$cdp_log")
   echo "trace start $trace_categories" >&5
