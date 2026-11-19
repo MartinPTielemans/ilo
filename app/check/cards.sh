@@ -279,13 +279,15 @@ pull=https://github.com/ilo-check/cards/pull
 
 # recent_row <tab> <n> [modifiers…]: rests on pinned tab <tab>'s row till its card has its rows,
 # then clicks row <n>, counting from 0, as a hand would, onto the card first. Under the box's
-# padding, one heading, the review requests', is over the rows.
+# padding, one heading, the review requests', is over the rows. A card shown again with the rows
+# kept says so as it shows, and draws no new line, as what it holds hasn't changed.
 recent_row() {
   local tab=$1 n=$2
   shift 2
   send move $page_point
   send move $(pinned_row 0)
-  expect "^browser: hover card drawn $tab recent-rows\$" "the pinned tab's card didn't show its pull requests"
+  expect "^browser: hover card \(drawn\|shown\) $tab\( .*\)\{0,1\} recent-rows\$" \
+    "the pinned tab's card didn't show its pull requests"
   expect '^browser: hover card settled$' "the pinned tab's card didn't come to rest"
   at=$(grep '^browser: hover card at ' "$log" | tail -1 | cut -d' ' -f5- |
     awk -v n="$n" '{ printf "%d %d\n", $1 + $3 / 2, $2 + 4 + 22 + 44 * n + 22 }')
