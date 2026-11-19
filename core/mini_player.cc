@@ -89,6 +89,9 @@ base::WeakPtr<views::Widget> g_made;
 
 int g_shows = 0;
 
+// Whether the pointer is in the Mini Player, as its window last heard, since it last showed.
+bool g_pointer_in = false;
+
 #if BUILDFLAG(IS_MAC)
 // The window the Mini Player took the keyboard from, for the rest of the task it took it in: AppKit
 // makes the Mini Player key as a press on it comes, in the same task as the press reaches it.
@@ -344,6 +347,7 @@ gfx::Rect Placed(VideoOverlayWindowViews* window,
   // A new one isn't the last one's settle.
   Settling().Stop();
   ++g_shows;
+  g_pointer_in = false;
   const std::optional<gfx::Rect> left = LastLeft();
   // A kept place's screen, or the nearest, if the screens changed since.
   const gfx::Rect on =
@@ -500,6 +504,20 @@ bool OnEvent(VideoOverlayWindowViews* window, ui::Event* event) {
 #if BUILDFLAG(IS_MAC)
       GiveKeyboardBack(window);
 #endif
+      return false;
+    case ui::EventType::kMouseEntered:
+    case ui::EventType::kMouseMoved:
+      // check.sh reads this line, once each time the pointer comes in: Chrome has had the event and
+      // shown the controls for it, so a pointer that never reaches the window has no line, and one
+      // that reaches it and brings nothing says the controls are hidden (#3354).
+      if (!g_pointer_in) {
+        g_pointer_in = true;
+        LOG(ERROR) << "browser: mini player pointer in, controls "
+                   << (window->AreControlsVisible() ? "shown" : "hidden");
+      }
+      return false;
+    case ui::EventType::kMouseExited:
+      g_pointer_in = false;
       return false;
     default:
       return false;
