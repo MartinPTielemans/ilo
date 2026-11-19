@@ -1903,6 +1903,8 @@ pub struct Shell {
     task_core: u64,
     task_live_logged: Option<u64>,
     task_strip_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The words the strip last said, and for which tab, which check.sh reads as they change.
+    task_strip_said: RefCell<Option<(u64, String)>>,
     /// The tabs whose player × put away until their page plays again.
     media_dismissed: HashSet<u64>,
     /// The players last drawn, as the log has them, and where the bottom one is.
@@ -2342,6 +2344,7 @@ impl Shell {
             task_core: 0,
             task_live_logged: None,
             task_strip_drawn: Rc::default(),
+            task_strip_said: RefCell::default(),
             media_dismissed: HashSet::new(),
             media_logged: RefCell::default(),
             media_stack: Default::default(),

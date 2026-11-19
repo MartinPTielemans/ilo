@@ -15,7 +15,9 @@
 # the second takes it over and saves. A private window
 # has no New Board, and a Board's address there shows "This Board isn't here.", captured. New Board
 # from the File menu, the sidebar's +, the command bar, and its key with a Board's page and with
-# the sidebar holding the keyboard, each makes one. Japanese input as a Board's first keys is its
+# the sidebar holding the keyboard, each makes one. Duplicate Board, from the bar at once after
+# typing, copies the Board with its last word, and a Board's row's menu duplicates it too, each
+# copy opening in a tab of its own, named as a copy. Japanese input as a Board's first keys is its
 # note; ⌘C, ⌘V and ⌘Z in the page copy, paste and undo cards, and ⌘− zooms the canvas, not the
 # page, each saved. Relaunched, the Board comes back with its note. The Board holding [] then shows
 # its file in the system's file manager from its note's button, last of the steps; after it, that
@@ -26,6 +28,12 @@
 # not its own, each refusal in the activity log, and nothing logged names the Board.
 
 log="$out/board.log"
+# The first line of the log, past the driver's own echo of the keys it typed, that names a Board's
+# name or note: one of the words in $1, as a word, with no letter on either side, so the app's own
+# "finished" doesn't say "shed". Japanese has no letter beside it and matches wherever it is.
+names_said() {
+  grep -v '^browser: drive [0-9]*: ' "$log" | grep -E "(^|[^A-Za-z])($1)([^A-Za-z]|\$)" | head -1
+}
 step=0
 rm -f "$saved" "$launch_frame"
 # An MCP client's token, saved with Settings › Agents on, which the app reads as it starts. The file
@@ -91,7 +99,7 @@ grep -q 'shelves over the sink' "$folder/board.json" ||
 # 1a: the page wrote its own Board and no other.
 [ "$(ls "$boards")" = "$id" ] || fail "the profile's Boards aren't only $id: $(ls "$boards" | tr '\n' ' ')"
 # Nothing of what the user wrote is logged, past the driver's own echo of the keys it typed.
-written=$(grep -v '^browser: drive [0-9]*: ' "$log" | grep 'shelves\|kitchen' | head -1)
+written=$(names_said 'shelves|kitchen')
 [ -z "$written" ] || fail "the log says what the Board holds: $written"
 ../tools/window-screenshot.sh "$pid" "$out/board.png" || fail "no window to capture"
 
@@ -148,7 +156,7 @@ for _ in $(seq 50); do
 done
 grep -q "^browser: title $board (a Board)\$" "$log" ||
   fail "the reopened Board's title line doesn't say \"(a Board)\": $(grep "^browser: title $board " "$log" | tail -1)"
-written=$(grep -v '^browser: drive [0-9]*: ' "$log" | grep 'shelves\|kitchen\|pantry' | head -1)
+written=$(names_said 'shelves|kitchen|pantry')
 [ -z "$written" ] || fail "the log says what the Board holds: $written"
 # The reopened page read its file: a pan, which it saves, keeps the note. A page that couldn't
 # read it would have nothing to write over it but nothing.
@@ -343,7 +351,7 @@ PICTURE
 else
   echo "skip: board: a Board typed into the agent's own tab. Watching it takes clicks, and Browser wasn't the active app."
 fi
-written=$(grep -v '^browser: drive [0-9]*: ' "$log" | grep 'shelves\|kitchen\|pantry\|attic\|cellar' | head -1)
+written=$(names_said 'shelves|kitchen|pantry|attic|cellar')
 [ -z "$written" ] || fail "the log says what a Board holds or its name: $written"
 exec 4>&- 5<&-
 for _ in $(seq 100); do kill -0 "$bridge_pid" 2> /dev/null || break; sleep 0.1; done
@@ -502,7 +510,105 @@ send key e ctrl shift
 expect '^browser: command new-board via ' "⌃⇧E with the sidebar holding the keyboard didn't run New Board"
 made deck "⌃⇧E with the sidebar holding the keyboard"
 archive "⌃⇧E with the sidebar holding the keyboard"
-written=$(grep -v '^browser: drive [0-9]*: ' "$log" | grep '日本語\|loft\|porch\|shed\|barn\|deck' | head -1)
+
+# Duplicate a Board (#3406). The page saves as it loses the keyboard, so the bar opened at once
+# after typing finds the last word saved, and the copy has it. Over a Board, "dup" puts Duplicate
+# Board first, as Duplicate Current Tab isn't offered there. The copy opens in a tab of its own,
+# with its own id, and a Board's row's menu in the Library duplicates it too, closing the Library.
+send menu "New Board"
+expect '^browser: command new-board via ' "the File menu's New Board for the Board to duplicate didn't run it"
+made garden "the File menu, for the Board to duplicate"
+garden=$made_id
+garden_tab=$tab
+send type "plum cherry"
+send key l cmd
+expect '^browser: command bar shown$' "⌘L right after typing in the Board didn't open the command bar"
+send type dup
+expect '^browser: command bar commands "dup": Duplicate Board' "the command bar over a Board didn't put Duplicate Board first for dup"
+send key return
+expect '^browser: command duplicate-board via command bar$' "Duplicate Board didn't run from the command bar"
+expect "^browser: board $garden duplicated as [0-9a-f]\{32\}\$" "Duplicate Board made no copy of the Board shown"
+copy=$(grep "^browser: board $garden duplicated as " "$log" | tail -1 | cut -d' ' -f6)
+grep -q cherry "$boards/$copy/board.json" ||
+  fail "the copy hasn't the word typed just before the bar opened: $(head -c 300 "$boards/$copy/board.json")"
+[ "$(cat "$boards/$copy/name")" = "garden copy" ] ||
+  fail "the copy is named \"$(cat "$boards/$copy/name")\", not \"garden copy\""
+expect "^browser: loaded [0-9]* chrome://board/$copy\$" "the Board's copy didn't open in a tab"
+copy_tab=$(grep "^browser: loaded [0-9]* chrome://board/$copy\$" "$log" | tail -1 | cut -d' ' -f3)
+bar_command view-boards "View Boards…" "view boards"
+expect '^browser: library shown$' "View Boards… didn't open the Library to duplicate a Board from"
+send key down
+expect '^browser: library row keyed ' "↓ in Library › Boards rang no row to duplicate"
+expect '^browser: library row ring at [0-9-]* [0-9-]* [0-9]* [0-9]*$' "the Library's ring on a Board's row wasn't drawn"
+set -- $(grep '^browser: library row ring at ' "$log" | tail -1 | cut -d' ' -f6-9)
+post rightclick $(($1 + $3 / 2)) $(($2 + $4 / 2))
+expect "^browser: menu shown $(cased 'Open, Duplicate, Delete')\$" "a right-click on a Board's row didn't offer Open, Duplicate, then Delete"
+send choose Duplicate
+expect '^browser: board [0-9a-f]\{32\} duplicated as [0-9a-f]\{32\}$' "Duplicate in a Board's row's menu made no copy"
+set -- $(grep '^browser: board [0-9a-f]\{32\} duplicated as ' "$log" | tail -1 | cut -d' ' -f3,6)
+[ "$(cat "$boards/$1/board.json")" = "$(cat "$boards/$2/board.json")" ] ||
+  fail "the row's copy $2 hasn't the file of the Board $1 it copied"
+# Whichever row was first, the Board or its copy, the next copy is garden's second.
+[ "$(cat "$boards/$2/name")" = "garden copy 2" ] ||
+  fail "the row's copy is named \"$(cat "$boards/$2/name")\", not \"garden copy 2\""
+expect '^browser: library hidden$' "Duplicate in a Board's row's menu didn't close the Library"
+expect "^browser: loaded [0-9]* chrome://board/$2\$" "the row's copy didn't open in a tab"
+tab=$(grep "^browser: loaded [0-9]* chrome://board/$2\$" "$log" | tail -1 | cut -d' ' -f3)
+# The bar's "dup" over a Board and a Board's row's menu, in each tone, for the change's pictures.
+tone() {
+  case "$(grep '^browser: window light ' "$log" | tail -1)" in
+    *true) echo light ;;
+    *) echo dark ;;
+  esac
+}
+was=$(tone)
+for each in light dark; do
+  if [ "$(tone)" != "$each" ]; then
+    send menu "$(cased "Appearance › $([ $each = light ] && echo Light || echo Dark)")"
+    expect "^browser: window light $([ $each = light ] && echo true || echo false)\$" \
+      "View › Appearance didn't make the window $each for the Duplicate pictures"
+  fi
+  send key l cmd
+  expect '^browser: command bar shown$' "⌘L didn't open the command bar for its $each picture"
+  send type dup
+  expect '^browser: command bar commands "dup": Duplicate Board' "the command bar didn't put Duplicate Board first for dup, $each"
+  ../tools/window-screenshot.sh "$pid" "$out/board-duplicate-bar-$each.png" all || fail "no window to capture"
+  send key escape
+  expect '^browser: command bar hidden$' "escape didn't close the command bar of the $each picture"
+  bar_command view-boards "View Boards…" "view boards"
+  expect '^browser: library shown$' "View Boards… didn't open the Library for its $each picture"
+  send key down
+  expect '^browser: library row ring at [0-9-]* [0-9-]* [0-9]* [0-9]*$' "the Library's ring on a Board's row wasn't drawn, $each"
+  set -- $(grep '^browser: library row ring at ' "$log" | tail -1 | cut -d' ' -f6-9)
+  post rightclick $(($1 + $3 / 2)) $(($2 + $4 / 2))
+  expect "^browser: menu shown $(cased 'Open, Duplicate, Delete')\$" "a right-click on a Board's row didn't show its menu, $each"
+  ../tools/window-screenshot.sh "$pid" "$out/board-duplicate-menu-$each.png" all || fail "no window to capture"
+  send key escape
+  expect '^browser: menu closed' "escape didn't close a Board's row's menu, $each"
+  send key escape
+  expect '^browser: library hidden$' "escape didn't close the Library of the $each picture"
+done
+# The pictures end dark, so Automatic changes the look only where the system's is light.
+send menu "$(cased 'Appearance › Automatic')"
+expect '^browser: appearance automatic$' "View › Appearance › Automatic didn't run after the Duplicate pictures"
+[ "$was" = dark ] ||
+  expect '^browser: window light true$' \
+    "View › Appearance › Automatic didn't give the window its light look back after the Duplicate pictures"
+send key w cmd
+expect "^browser: tab $tab closed\$" "⌘W didn't close the row's copy's tab"
+for tab in "$copy_tab" "$garden_tab"; do
+  n=$(echo $(pinned) $(today) | tr ' ' '\n' | grep -nx "$tab" | cut -d: -f1)
+  [ -n "$n" ] || fail "the Board's tab $tab isn't in the sidebar: pinned \"$(pinned)\", Today \"$(today)\""
+  # Closing a tab shows the one under it, which may be this one already.
+  [ "$(grep '^browser: selected ' "$log" | tail -1 | cut -d' ' -f3)" = "$tab" ] || switch "$n cmd" "$tab"
+  if [ "$tab" = "$garden_tab" ]; then
+    archive "the File menu, for the Board to duplicate"
+  else
+    send key w cmd
+    expect "^browser: tab $tab closed\$" "⌘W didn't close the Board's copy's tab"
+  fi
+done
+written=$(names_said '日本語|loft|porch|shed|barn|deck|garden|cherry')
 [ -z "$written" ] || fail "the log says what a Board holds or its name: $written"
 n=$(echo $(pinned) $(today) | tr ' ' '\n' | grep -nx "$board" | cut -d: -f1)
 [ -n "$n" ] || fail "the first Board's tab $board isn't in the sidebar: pinned \"$(pinned)\", Today \"$(today)\""
@@ -752,7 +858,7 @@ grep -q 'shelves over the sink' "$folder/board.json" ||
   fail "the Board's save after the relaunch lost its note: $(head -c 300 "$folder/board.json")"
 grep -q "$note" "$loft/board.json" ||
   fail "the first note's Board lost it across the relaunch, \"$note\": $(head -c 300 "$loft/board.json")"
-written=$(grep -v '^browser: drive [0-9]*: ' "$log" | grep 'shelves\|kitchen\|pantry\|日本語\|loft' | head -1)
+written=$(names_said 'shelves|kitchen|pantry|日本語|loft')
 [ -z "$written" ] || fail "the relaunch's log says what a Board holds or its name: $written"
 ../tools/window-screenshot.sh "$pid" "$out/board-relaunched.png" || fail "no window to capture"
 # #3224: the Board holding [] offers its file in the system's file manager, its button with the
@@ -784,7 +890,8 @@ quit
 echo "ok: New Board made $id, its name kept and its note saved in its folder alone, unlogged;" \
   "Library › Boards listed it; renamed, found by the bar, archived and reopened, the log said" \
   "only \"(a Board)\", and its next save kept the note; New Board from the File menu, the" \
-  "sidebar's +, the command bar and its key with the page and the bar focused; Japanese kept as" \
+  "sidebar's +, the command bar and its key with the page and the bar focused; duplicated from" \
+  "the bar with its last word and from its row's menu, each copy its own Board; Japanese kept as" \
   "the first note; ⌘C ⌘V and ⌘Z in the page saved; ⌘− the canvas's, not the page's; an agent got nothing of a Board made," \
   "opened from the Library or typed into its own tab, each refusal logged without a name;" \
   "markup and a javascript: link ran" \
@@ -796,4 +903,6 @@ echo "ok: New Board made $id, its name kept and its note saved in its folder alo
   "its file; the page loaded over a Board from the bar had the keyboard." \
   "Windows: $out/board.png $out/board-markup.png $out/board-landed.png" \
   "$out/board-landed-shown.png $out/board-unread.png $out/board-elsewhere.png $out/board-private.png" \
-  "$([ -f "$out/board-agent-tab.png" ] && echo "$out/board-agent-tab.png")"
+  "$([ -f "$out/board-agent-tab.png" ] && echo "$out/board-agent-tab.png")" \
+  "$out/board-duplicate-bar-light.png $out/board-duplicate-bar-dark.png" \
+  "$out/board-duplicate-menu-light.png $out/board-duplicate-menu-dark.png"
