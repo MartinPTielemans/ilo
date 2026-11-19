@@ -19,9 +19,9 @@ use web_time::Instant;
 
 use gpui::{
     AnyElement, App, Bounds, BoxShadow, Context, Div, Entity, FocusHandle, Focusable, FontWeight,
-    Global, Hsla, Image, KeyBinding, MouseButton, Pixels, Point, SharedString, Stateful, Task,
-    TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind,
-    WindowOptions,
+    Global, Hsla, Image, KeyBinding, MouseButton, Pixels, Point, SharedString, Stateful,
+    Subscription, Task, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds,
+    WindowHandle, WindowKind, WindowOptions,
     accesskit::{Role, Toggled},
     actions, canvas, div, img, point,
     prelude::*,
@@ -299,6 +299,8 @@ struct Asked {
     /// The button held down, and the one the last frame drew so.
     pressed: Option<&'static str>,
     drawn_press: Option<&'static str>,
+    /// The window's tone the last frame drew in.
+    drawn_tone: Option<palette::Tone>,
     /// Where each button was said to be drawn, in the browser window.
     buttons_drawn: Rc<RefCell<HashMap<&'static str, Point<Pixels>>>>,
     /// Where the card, the checkbox and its label were drawn last, in the dialog's window.
@@ -366,6 +368,7 @@ pub struct Dialog {
     next_account: Option<Request>,
     /// A page's, waiting the same way, after Chrome's.
     next_page: Option<Request>,
+    _palette: Subscription,
 }
 
 struct DialogWindow(WindowHandle<Dialog>);
@@ -767,6 +770,13 @@ impl Dialog {
             next: None,
             next_account: None,
             next_page: None,
+            // View › Appearance redraws the windows before the shell gives the new palette, and a
+            // card at rest stays on screen through it, so it draws again in the palette's tone.
+            _palette: cx.observe_global::<palette::Palette>(|dialog, cx| {
+                if dialog.asked.is_some() {
+                    cx.notify();
+                }
+            }),
         }
     }
 
@@ -917,6 +927,7 @@ impl Dialog {
             drawn_hover: None,
             pressed: None,
             drawn_press: None,
+            drawn_tone: None,
             buttons_drawn: Rc::default(),
             check_drawn: Rc::default(),
         });
@@ -1265,8 +1276,17 @@ impl Render for Dialog {
                 asked.pressed.unwrap_or("none")
             );
         }
-        let question = &asked.question;
         let palette = palette::current(cx);
+        // As the hover line, for a capture after the window's tone changed under the card, which
+        // draws in a window of its own.
+        if asked.drawn_tone != Some(palette.tone) {
+            asked.drawn_tone = Some(palette.tone);
+            log!(
+                "browser: dialog drawn light {}",
+                palette.tone == palette::Tone::Light
+            );
+        }
+        let question = &asked.question;
         let page = asked.source == Source::Page;
         // At rest the keys aren't its, so no button carries one's chip or the action's fill.
         let rests = asked.rests;

@@ -694,6 +694,31 @@ fn a_click_on_a_resting_ok_answers_it(cx: &mut TestAppContext) {
     assert!(calls.contains(&"focus pane".to_string()), "{calls:?}");
 }
 
+/// A card at rest stays on screen while the user picks View › Appearance, which redraws every
+/// window before the shell gives the new palette, so the card draws again once the palette changes,
+/// where it kept the old tone on the dialogs run under Wayland.
+#[gpui::test]
+fn a_resting_card_draws_in_the_windows_new_tone(cx: &mut TestAppContext) {
+    let mut dialog = Asking::resting(cx);
+    let drawn = |dialog: &mut Asking| {
+        dialog.cx.cx.update(|cx| {
+            let window = cx.global::<DialogWindow>().0;
+            window.read(cx).unwrap().asked.as_ref().unwrap().drawn_tone
+        })
+    };
+    let other = match drawn(&mut dialog) {
+        Some(palette::Tone::Light) => palette::Tone::Dark,
+        _ => palette::Tone::Light,
+    };
+    dialog.cx.cx.update(|cx| {
+        let mut changed = palette::current(cx);
+        changed.tone = other;
+        palette::set_current(changed, cx);
+    });
+    dialog.cx.run_until_parked();
+    assert_eq!(drawn(&mut dialog), Some(other));
+}
+
 #[gpui::test]
 fn a_card_over_a_narrow_pane_takes_its_width(cx: &mut TestAppContext) {
     let (cx, host) = opened(cx);

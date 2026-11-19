@@ -202,13 +202,16 @@ stayed() {
   true
 }
 # The window in the tone $1, light or dark, from View › Appearance, which waits while a dialog
-# has the keyboard, so it's chosen with the alert at rest or gone.
+# has the keyboard, so it's chosen with the alert at rest, and the alert's card drawn in it.
 tone() {
   local light=false
   [ "$1" = light ] && light=true
   if ! grep '^browser: window light ' "$log" | tail -1 | grep -q " $light\$"; then
     send menu "Appearance › $([ "$1" = light ] && echo Light || echo Dark)"
+    toned=$step
     expect "^browser: window light $light\$" "View › Appearance didn't make the window $1"
+    # The card is a window of its own, which draws the tone a frame or more later.
+    expect "^browser: dialog drawn light $light\$" "the alert didn't draw in the window's $1 tone" "$toned"
   fi
 }
 # The window captured as $out/dialog-$1.png.
