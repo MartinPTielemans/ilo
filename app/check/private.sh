@@ -9,7 +9,8 @@
 # relaunch brings back no private window. A private window's Library has its session's downloads
 # (#669): a file it goes to downloads, which its Library's Downloads lists, and the regular
 # window's doesn't, nor does the profile's history after the quit. Customize Chrome's page, typed in a
-# private window, is refused there, where it crashed the browser (#2070).
+# private window, is refused there, where it crashed the browser (#2070). From macOS 14, a private
+# window's page in Safari's engine shows its own icon, which the profile doesn't keep.
 
 # The served cookie page: its title says whether the site has the private cookie, and "p" in it
 # sets it. The private windows load it at a URL of their own, which nothing may write.
@@ -360,4 +361,54 @@ send key escape
 expect '^browser: site controls hidden$' "escape didn't close the Site Controls"
 exec 3>&-
 quit
-echo "ok: a private window runs the extension allowed in Incognito, listed alone in its Extensions menu, pinned at its URL field and in its Site Controls, and not the other. Windows: $out/private-extensions.png, $out/private-site-controls.png"
+
+# From macOS 14, a private window's page in Safari's engine shows its own icon, which the profile
+# doesn't keep: the regular window's page of that site with none of its own shows none, and the
+# same page there keeps its icon as new (#3431).
+private_icon=
+if [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
+  forget_engine_sites
+  log="$out/private-icon.log"
+  step=0
+  BROWSER_DRIVE=1 BROWSER_STREAMING_TEST_HOST=127.0.0.1 BROWSER_URL="${site}engine.html" \
+    "$browser" < "$out/drive" > "$log" 2>&1 &
+  pid=$!
+  exec 3> "$out/drive"
+  await_load
+  await '^browser: title [0-9]* engine safari$' || fail "the site kept for Safari's engine opened in Chromium"
+  regular=$(sed -n 's/^browser: title \([0-9]*\) engine safari$/\1/p' "$log" | head -1)
+  await "^browser: favicon $regular 0 bytes\$" ||
+    fail "the regular window's page with no icon showed one before the private window's"
+  send key n cmd shift
+  expect '^browser: private window opened [0-9]* profile [0-9]*$' "⇧⌘N didn't open a private window"
+  window=$(grep '^browser: private window opened ' "$log" | tail -1 | cut -d' ' -f5)
+  expect "^browser: window opened $window\$" "the private window didn't open"
+  new_window_bar
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T didn't open the command bar in the private window"
+  send insert "${site}icon.html"
+  send key return
+  expect '^browser: title [0-9]* icon safari$' "the private window's icon page didn't open in Safari's engine"
+  tab=$(sed -n 's/^browser: title \([0-9]*\) icon safari$/\1/p' "$log" | tail -1)
+  expect "^browser: window $window shows $tab\$" "the private window didn't show its icon page"
+  expect "^browser: favicon $tab [1-9][0-9]* bytes\$" \
+    "the private window's page in Safari's engine didn't show its own icon"
+  grep -q '^browser: tab [0-9]* icon \(already \)\{0,1\}kept$' "$log" &&
+    fail "the profile kept the private window's icon"
+  send key w cmd shift
+  expect "^browser: window closed $window\$" "⇧⌘W didn't close the private window"
+  send window 1
+  go_from_bar "127.0.0.1:$port/icon.html"
+  expect "^browser: title $regular icon safari\$" "the regular window's icon page left Safari's engine"
+  expect "^browser: tab $regular icon \(already \)\{0,1\}kept\$" \
+    "the regular window's icon page kept no icon"
+  grep -q "^browser: tab $regular icon already kept\$" "$log" &&
+    fail "the regular window's icon page found the private window's icon kept"
+  exec 3>&-
+  quit
+  forget_engine_sites
+  private_icon=" From macOS 14, a private window's page in Safari's engine shows its own icon, which the profile doesn't keep."
+else
+  echo "skip: a private window's icon in Safari's engine, which is the Mac's from macOS 14."
+fi
+echo "ok: a private window runs the extension allowed in Incognito, listed alone in its Extensions menu, pinned at its URL field and in its Site Controls, and not the other. Windows: $out/private-extensions.png, $out/private-site-controls.png.$private_icon"

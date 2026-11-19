@@ -12,19 +12,39 @@ stored() {
 import sqlite3, sys
 print(sqlite3.connect(sys.argv[1]).execute(sys.argv[2]).fetchone()[0])' "$db" "$1"
 }
-server_port=$(python3 -I -c '
+free_port() {
+  python3 -I -c '
 import socket
 s = socket.socket()
 s.bind(("127.0.0.1", 0))
-print(s.getsockname()[1])')
+print(s.getsockname()[1])'
+}
+server_port=$(free_port)
 # localhost, as passkeys, which the server offers, take no address for their origin.
 server_url="http://localhost:$server_port"
+# A run that sets sync_faults, a file's path, reaches the server through check/sync-proxy.py on
+# server_port, which drops sync's own requests while the file says to; the server then listens on
+# a port of its own, under the address the browser has. As count's endpoint, cleanup stops it.
+listen_port=$server_port
+if [ -n "${sync_faults:-}" ]; then
+  : > "$sync_faults"
+  listen_port=$(free_port)
+  proxy_log="$out/$run-proxy.log"
+  python3 -I check/sync-proxy.py "$server_port" "$listen_port" "$sync_faults" > "$proxy_log" 2>&1 3>&- &
+  collector=$!
+  for _ in $(seq 50); do
+    grep -q 'sync-proxy is up' "$proxy_log" && break
+    kill -0 "$collector" 2>/dev/null || fail "sync-proxy.py exited: $(tail -1 "$proxy_log")"
+    sleep 0.1
+  done
+  grep -q 'sync-proxy is up' "$proxy_log" || fail "sync-proxy.py didn't start"
+fi
 # The server is a native program on Windows, which reads the database's path as Windows names it:
 # Git Bash converts a path it's given alone, never one inside a URL.
 db_path=$db
 ! windows || db_path=$(cygpath -m "$db")
 # Each query logged, so a run can count the commits it sent (sync-devices).
-DEV_MODE=1 HOST=127.0.0.1 PORT=$server_port PUBLIC_URL=$server_url NO_COLOR=1 LOG=info,sqlx::query=debug \
+DEV_MODE=1 HOST=127.0.0.1 PORT=$listen_port PUBLIC_URL=$server_url NO_COLOR=1 LOG=info,sqlx::query=debug \
   DATABASE_URL="sqlite:$db_path?mode=rwc" "$ILO_SERVER" > "$server_log" 2>&1 3>&- &
 ilo_server=$!
 for _ in $(seq 100); do
