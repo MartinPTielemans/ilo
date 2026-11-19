@@ -621,28 +621,15 @@ picture() {
   await_log "^browser: task picture $1 at " "the conversation didn't picture tab $1"
   grep "^browser: task picture $1 at " "$log" | tail -1 | cut -d' ' -f6-
 }
-# Watches the agent's tab $1 from its picture, from the conversation. With $2, a tab whose page goes
-# back into its own picture, the click goes to the point of $1's nearest $2's, which that page's
-# shrinking covers longest (#3496).
+# Watches the agent's tab $1 from its picture, from the conversation.
 watch() {
   read -r wx wy ww wh <<PICTURE
 $(picture "$1")
 PICTURE
-  cx=$((wx + ww / 2)) cy=$((wy + wh / 2))
-  if [ -n "${2:-}" ]; then
-    read -r nx ny nw nh <<PICTURE
-$(picture "$2")
-PICTURE
-    cx=$((nx + nw / 2)) cy=$((ny + nh / 2))
-    [ "$cx" -ge $((wx + 4)) ] || cx=$((wx + 4))
-    [ "$cx" -le $((wx + ww - 5)) ] || cx=$((wx + ww - 5))
-    [ "$cy" -ge $((wy + 4)) ] || cy=$((wy + 4))
-    [ "$cy" -le $((wy + wh - 5)) ] || cy=$((wy + wh - 5))
-  fi
   # Counted, as a page watched before has its lines already.
   watched=$(grep -c "^browser: task $session page $1\$" "$log" || true)
   placed=$(grep -c "^browser: task page $1 in place\$" "$log" || true)
-  send click "$cx" "$cy"
+  send click $((wx + ww / 2)) $((wy + wh / 2))
   await_more "^browser: task $session page $1\$" "$watched" ||
     fail "a click on tab $1's picture didn't watch it"
   await_more "^browser: task page $1 in place\$" "$placed" ||
@@ -790,8 +777,7 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
   split=$(call split_tabs "{\"tabs\":[$warned,$beside]}")
   [ "$split" = "Tab $warned's split view, left to right: $warned, $beside." ] ||
     fail "split_tabs with the tab at the warning answered: $split"
-  # Escape steps back to Pages from the page watched, $1, which goes back into its picture, unless
-  # $2 is "at once", for a click on another picture while it goes (#3496).
+  # Escape steps back to Pages from the page watched, $1, which goes back into its picture.
   to_pages() {
     back='^browser: task page [0-9]* back$'
     thumbnail='^browser: task page in its thumbnail$'
@@ -800,17 +786,6 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
     # A page there can have the keyboard, as the one a press in the split view focused on X11,
     # and keeps Escape: a click on the sidebar gives the UI the keyboard, as the user's would.
     send click $sidebar_point
-    if [ "${2:-}" = "at once" ]; then
-      # Posted, and the pictures it draws looked for without a pause, so the click can come within
-      # the 0.2 s the page takes to go back: send's and await's tenths took most of that.
-      pictures=$(grep -c '^browser: task picture ' "$log" || true)
-      post key escape
-      for _ in $(seq 1000); do
-        [ "$(grep -c '^browser: task picture ' "$log")" -gt "$pictures" ] && break
-      done
-      await_more "$back" "$before" || fail "Escape didn't step back to Pages from $1"
-      return
-    fi
     send key escape
     await_more "$back" "$before" || fail "Escape didn't step back to Pages from $1"
     await_more "$thumbnail" "$shrunk" || fail "$1 didn't go back into its picture"
@@ -840,9 +815,9 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
   }
   # Watches $warned, whose warning shows over its pane, at $warning, without the user's keyboard,
   # and has a click on it give it the keyboard. $1 says how the user came to watch it, $2 is a
-  # step to take while it's watched, before the click, and $3 is watch's $2.
+  # step to take while it's watched, before the click, and $3, "watched", says it's watched already.
   watch_warning() {
-    watch "$warned" "${3:-}"
+    [ "${3:-}" = watched ] || watch "$warned"
     for _ in $(seq 50); do
       send layout
       since | grep -q '^browser: layout child ' && break
@@ -865,14 +840,44 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
       fail "a click on the agent's warning before http at $warning, watched in its split view $1, didn't give it the keyboard: $key, $focus"
   }
   # A click on the split's picture straight after Escape, while the page watched still goes back
-  # into its own, watches the split: the page going back lets the click through (#3496).
-  to_pages "tab $agent_tab" "at once"
+  # into its own, watches the split: the page going back lets the click through (#3496). Pages is
+  # seen once first, so the click's point is known before Escape: the point of the split's picture
+  # nearest the agent's, which the page going back covers longest. The click is posted as soon as
+  # the conversation draws, as send's and await's tenths would take most of the zoom's 0.2 s.
+  to_pages "tab $agent_tab"
+  watch "$agent_tab"
+  read -r wx wy ww wh <<PICTURE
+$(picture "$warned")
+PICTURE
+  read -r cx cy nw nh <<PICTURE
+$(picture "$agent_tab")
+PICTURE
+  cx=$((cx + nw / 2)) cy=$((cy + nh / 2))
+  [ "$cx" -ge $((wx + 4)) ] || cx=$((wx + 4))
+  [ "$cx" -le $((wx + ww - 5)) ] || cx=$((wx + ww - 5))
+  [ "$cy" -ge $((wy + 4)) ] || cy=$((wy + 4))
+  [ "$cy" -le $((wy + wh - 5)) ] || cy=$((wy + wh - 5))
+  watched=$(grep -c "^browser: task $session page $warned\$" "$log" || true)
+  placed=$(grep -c "^browser: task page $warned in place\$" "$log" || true)
+  before=$(grep -c '^browser: task page [0-9]* back$' "$log" || true)
+  send click $sidebar_point
+  pictures=$(grep -c '^browser: task picture ' "$log" || true)
+  post key escape
   escaped=$step
-  presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
-  watch_warning "from Pages" ring_strip "$agent_tab"
-  since "$escaped" | grep -m1 -e '^browser: drive [0-9]*: click ' -e "^browser: task page in its thumbnail\$" |
+  for _ in $(seq 1000); do
+    [ "$(grep -c '^browser: task picture ' "$log")" -gt "$pictures" ] && break
+  done
+  post click "$cx" "$cy"
+  await "^browser: drive $step done" || fail "the driver didn't finish the click on tab $warned's picture"
+  await_more '^browser: task page [0-9]* back$' "$before" || fail "Escape didn't step back to Pages from tab $agent_tab"
+  await_more "^browser: task $session page $warned\$" "$watched" ||
+    fail "a click on tab $warned's picture at $cx $cy while tab $agent_tab went back into its own after Escape didn't watch it: $(since "$escaped" | grep -e '^browser: drive' -e '^browser: task' | head -12 | tr '\n' ' ')"
+  await_more "^browser: task page $warned in place\$" "$placed" || fail "tab $warned's page didn't come to rest in place"
+  since "$escaped" | grep -m1 -e '^browser: drive [0-9]*: click ' -e '^browser: task page in its thumbnail$' |
     grep -q '^browser: task page' &&
     echo "skip: mcp: a click on a picture while the page watched goes back: tab $agent_tab was back in its picture before the click (#3496)."
+  presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
+  watch_warning "from Pages" ring_strip watched
   first_click=$warning_clicked
   # Linux's driver lists the pages the shell lays out, and the task area lays out a watched split
   # as one, which the core divides: the capture shows its panes there.
