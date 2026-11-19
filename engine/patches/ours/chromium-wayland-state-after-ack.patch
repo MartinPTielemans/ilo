@@ -15,6 +15,9 @@ instead let sway's answer to the last commit, with the state before, reach a hel
 configure that comes while a state is held, or before that answer, was sent before the
 compositor heard the request, so the window keeps the state it has asked for over it: applied,
 sway's answer took a page out of full screen as the window's state went back.
+Its size applies only if it has one: one with none, as mutter's answer to the first commit of
+a window maximized as it shows can be, keeps the window's bounds, as a minimized window's does,
+as empty ones would ask for an empty window geometry, which xdg-shell forbids (#3456).
 --- a/ui/ozone/platform/wayland/host/wayland_toplevel_window.h
 +++ b/ui/ozone/platform/wayland/host/wayland_toplevel_window.h
 @@ -219,6 +219,13 @@
@@ -69,7 +72,7 @@ sway's answer took a page out of full screen as the window's state went back.
  #include "base/unguessable_token.h"
  #include "third_party/skia/include/core/SkPath.h"
  #include "ui/base/hit_test.h"
-@@ -585,6 +587,19 @@
+@@ -585,6 +587,20 @@
    }
  
    pending_configure_state_.tiled_edges = window_states.tiled_edges;
@@ -77,19 +80,34 @@ sway's answer took a page out of full screen as the window's state went back.
 +  // before the answer to the sync after the last one asked, was sent before
 +  // the compositor heard it, as wlroots sends a request's configures after that
 +  // answer, so the window keeps the state it has asked for rather than going
-+  // back to the one before. Its bounds still apply.
++  // back to the one before. Its bounds still apply, if it has a size.
 +  const PlatformWindowState asked = applied_state().window_state;
-+  if ((held_state_ || state_sync_) &&
-+      window_state != PlatformWindowState::kMinimized &&
-+      (asked == PlatformWindowState::kNormal ||
-+       asked == PlatformWindowState::kMaximized ||
-+       asked == PlatformWindowState::kFullScreen)) {
++  const bool keeps_asked = (held_state_ || state_sync_) &&
++                           window_state != PlatformWindowState::kMinimized &&
++                           (asked == PlatformWindowState::kNormal ||
++                            asked == PlatformWindowState::kMaximized ||
++                            asked == PlatformWindowState::kFullScreen);
++  if (keeps_asked) {
 +    window_state = asked;
 +  }
    pending_configure_state_.window_state = window_state;
  
    // Width or height set to 0 means that we should decide on width and height by
-@@ -662,6 +677,65 @@
+@@ -618,6 +634,13 @@
+   } else if (ShouldSetBounds(window_state)) {
+     bounds_dip = !restored_bounds_dip().IsEmpty() ? restored_bounds_dip()
+                                                   : GetBoundsInDIP();
++  } else if (keeps_asked) {
++    // browser_core: one with no size sent before the compositor heard the
++    // state kept above, as mutter's answer to a window's first commit can be,
++    // says nothing of that state's size. The window keeps its bounds until the
++    // answer brings some, as a minimized window does: empty ones would ask for
++    // an empty window geometry, which xdg-shell forbids (#3456).
++    bounds_dip = GetBoundsInDIP();
+   }
+ 
+   bounds_dip = AdjustBoundsToConstraintsDIP(bounds_dip);
+@@ -662,6 +685,65 @@
  
    ProcessSequencePoint(seq);
    MaybeApplyLatestStateRequest(/*force=*/false);
@@ -155,7 +173,7 @@ sway's answer took a page out of full screen as the window's state went back.
  }
  
  bool WaylandToplevelWindow::OnInitialize(
-@@ -907,6 +981,8 @@
+@@ -907,6 +989,8 @@
        return applied_state().window_state == state ||
               GetLatestRequestedState().window_state == state;
      };
@@ -164,7 +182,7 @@ sway's answer took a page out of full screen as the window's state went back.
      // Call UnSetMaximized only if current state is normal. Otherwise, if the
      // current state is fullscreen and the previous is maximized, calling
      // UnSetMaximized may result in wrong restored window position that clients
-@@ -914,6 +990,10 @@
+@@ -914,6 +998,10 @@
      if (window_state == PlatformWindowState::kMinimized) {
        xdg_toplevel_->SetMinimized();
        pending_minimize_ = true;
@@ -175,7 +193,7 @@ sway's answer took a page out of full screen as the window's state went back.
      } else if (window_state == PlatformWindowState::kFullScreen) {
        xdg_toplevel_->SetFullscreen(
            GetWaylandOutputForDisplayId(fullscreen_display_id));
-@@ -929,6 +1009,11 @@
+@@ -929,6 +1017,11 @@
          xdg_toplevel_->UnSetMaximized();
        }
      }

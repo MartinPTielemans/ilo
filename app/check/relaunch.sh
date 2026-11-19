@@ -7,8 +7,9 @@
 # the window in front maximized as the app quits, or as the last window closes, comes back
 # maximized, its launch window too, and un-maximizes to the frame it had, as Windows' own
 # placement says (#1422). On Windows and X11, a window maximized behind the one in front comes back
-# maximized behind it, and un-maximizes to its frame (#1454). Reports the launch's times with one
-# window brought back and with two.
+# maximized behind it, and un-maximizes to its frame (#1454). On Wayland, a window saved maximized
+# comes back and lives (#3456).
+# Reports the launch's times with one window brought back and with two.
 
 page='data:text/html,<title>relaunch</title>'
 # Milliseconds from the process's start to the line "browser: $1 at <ms> ms".
@@ -302,6 +303,34 @@ if windows; then
   expect_placement "normal $(at 140 100 1040 680)" 1 "un-maximized after it came back"
   maximized=" On Windows, the window in front maximized as the app quits or as the last window closes comes back maximized, its launch window too, and un-maximizes to the frame it had."
 fi
+
+# On Wayland, a window saved maximized comes back and lives past the frames that take its state:
+# under sway, it ended the browser at a frame after its first, on an empty window geometry (#3456).
+# sway grants no client a maximize, so the step saves the window maximized, as a quit under GNOME or
+# KDE does. An ended browser opens no window and answers no driver command, so those come after the
+# first frame.
+states=
+if [ -n "$wayland" ]; then
+  quit_by_key
+  exited
+  python3 -I -c '
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as f:
+    session = json.load(f)
+for window in session["windows"]:
+    window.pop("fullscreen", None)
+    window["maximized"] = True
+with open(sys.argv[1], "w", encoding="utf-8") as f:
+    json.dump(session, f)
+' "$saved" || fail "the saved window couldn't be made maximized"
+  launch_logged "$out/relaunch-maximized.log"
+  await '^browser: restored in ' || fail "the relaunch with a window saved maximized didn't restore the Spaces"
+  await '^browser: first frame at ' || fail "the window saved maximized didn't draw"
+  await '^browser: window opened [0-9]' || fail "the window saved maximized didn't open (#3456)"
+  send window 1
+  ../tools/window-screenshot.sh "$pid" "$out/relaunch-maximized.png" || fail "no window to capture"
+  states=" On Wayland, a window saved maximized comes back and lives past its first frames."
+fi
 exec 3>&-
 quit
 # The first launch, quit soon after its page loaded, marked its new data folder as having no old
@@ -312,5 +341,5 @@ for later in "$out"/relaunch-*.log; do
     fail "$(basename "$later") swept old stores, which a data folder's first launch marks it as having none of"
 done
 
-echo "ok: after ⌘Q, every regular window comes back at its frame, in its Space, stacked as it was with the one in front key; a window closed before the quit and a private window don't.$behind_maximized ⌘N with windows open cascades from the one in front at its size, and after the last regular window closes the next launch opens at its frame, not a private window's.$maximized A data folder's first launch, however short, marks it as having no old Safari's-engine stores, so no later launch sweeps them. Window: $out/relaunch-two.png"
+echo "ok: after ⌘Q, every regular window comes back at its frame, in its Space, stacked as it was with the one in front key; a window closed before the quit and a private window don't.$behind_maximized ⌘N with windows open cascades from the one in front at its size, and after the last regular window closes the next launch opens at its frame, not a private window's.$maximized$states A data folder's first launch, however short, marks it as having no old Safari's-engine stores, so no later launch sweeps them. Window: $out/relaunch-two.png"
 echo "  Launch with one window: $one; with two: $two"

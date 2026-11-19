@@ -30,7 +30,7 @@
 //!   delay, which would be a wait on time.
 //!
 //! The commands are drive.mm's, with what Linux has: click, doubleclick, rightclick, middleclick,
-//! sideclick, clickkey, doubleclickkey, rightclickkey, handclick (X11's own), drag, dragkey, press, dragto,
+//! sideclick, clickkey, doubleclickkey, rightclickkey, drag, dragkey, press, dragto,
 //! release, rightpress, rightdragto, rightrelease, dragover, dragdrop, dragleave, move, warp (Linux's), scroll, wheel, pageswipe, key,
 //! keydown, keyup, flags, type, resize, resizekey, place, order, layout, state, title, pasteboard,
 //! front, menu, menubar, choose, dismiss, window, window <n> behind, agentspace, agentmayact,
@@ -2866,16 +2866,6 @@ fn run_command(line: &str) -> Option<()> {
                 _ => return None,
             };
             click(at, which, none, false)
-        }
-        // handclick <x> <y>: a click there with the display's own pointer, as click's is now; the
-        // host hears the screen's presses (page_presses.rs). The pointer stays there.
-        "handclick" => {
-            let (x, y) = point(&mut words)?;
-            let at = target_at(x, y)?;
-            hover(at)?;
-            uncover(at);
-            xtest_event(xproto::BUTTON_PRESS_EVENT, 1, at.root_x, at.root_y)?;
-            xtest_event(xproto::BUTTON_RELEASE_EVENT, 1, at.root_x, at.root_y)
         }
         "clickkey" | "rightclickkey" | "doubleclickkey" => {
             let (x, y) = point(&mut words)?;

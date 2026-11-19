@@ -1108,31 +1108,6 @@ tab=$(today | cut -d' ' -f1)
 expect "^browser: loaded $tab https://docs\.new/\$" "docs.new didn't load in its tab"
 send key w cmd
 expect "^browser: today $before\$" "⌘W didn't close the docs.new tab"
-# A browser shortcut pressed in ⌘L's bar that shows another tab leaves the bar's ↩ opening a new
-# tab, never loading in the tab the user left, and New Tab takes the plate, captured (#3428).
-send key t cmd
-expect '^browser: command bar shown$' "⌘T didn't open the command bar"
-send insert 'data:text/html,<title>left</title>'
-send key return
-expect '^browser: loaded [0-9]* data:text/html,<title>left</title>$' "the tab to leave didn't load"
-left=$(grep '^browser: loaded [0-9]* data:text/html,<title>left</title>$' "$log" | tail -1 | cut -d' ' -f3)
-send key l cmd
-expect '^browser: command bar shown$' "⌘L didn't open the command bar"
-send key down alt cmd
-expect '^browser: command next-tab via ' "⌥⌘↓ in ⌘L's bar didn't reach the UI"
-expect '^browser: command bar follows the tab shown$' \
-  "the command bar didn't follow the tab ⌥⌘↓ showed: $(grep '^browser: selected ' "$log" | tail -1)"
-../tools/window-screenshot.sh "$pid" "$out/bar-follows.png" || fail "no window to capture"
-send insert 'data:text/html,<title>typed</title>'
-send key return
-expect '^browser: loaded [0-9]* data:text/html,<title>typed</title>$' "the page typed after ⌥⌘↓ didn't load"
-typed=$(grep '^browser: loaded [0-9]* data:text/html,<title>typed</title>$' "$log" | tail -1 | cut -d' ' -f3)
-[ "$typed" != "$left" ] || fail "↩ in ⌘L's bar loaded in tab $left, which ⌥⌘↓ had left"
-send key w cmd
-expect "^browser: tab $typed closed\$" "⌘W didn't close the typed page's tab"
-send key w cmd
-expect "^browser: tab $left closed\$" "⌘W didn't close the tab ⌥⌘↓ left"
-expect "^browser: today $before\$" "Today isn't as it was after the steps for #3428"
 # A page the bar opens in a new tab has the keyboard, so its field autofocused gets what's typed
 # and the browser's shortcuts reach the UI, with no click in it first (#428, where X11 lost them).
 send key t cmd
@@ -1319,8 +1294,8 @@ expect "^browser: selected $last\( in .*\)\{0,1\}\$" \
 send click $page_point
 
 # A page opened from the command bar in a window with no page has the keyboard, which the UI held
-# for it, as one opened over a page has (#3239). Last before ⌘Q: the page's tab goes back to the
-# Today tabs with its window, which the steps before read.
+# for it, as one opened over a page has (#3239). After the steps that read the Today tabs: the
+# page's tab goes back to them with its window.
 page_shortcut n new-window
 expect '^browser: window opened [0-9]' "⌘N didn't open a window for the page from its bar"
 new_window_bar
@@ -1337,6 +1312,36 @@ send key w cmd shift
 expect '^browser: command close-window via page$' "⇧⌘W with the page from the bar focused didn't reach the UI"
 expect '^browser: window closed [0-9]' "⇧⌘W didn't close the window the page from the bar opened in"
 send window 1
+send click $page_point
+
+# A browser shortcut pressed in ⌘L's bar that shows another tab leaves the bar's ↩ opening a new
+# tab, never loading in the tab the user left, and New Tab takes the plate, captured (#3428). Last
+# before ⌘Q, so a failure that's quarantined (#3527) leaves no other step unrun but ⌘Q's. Today as
+# it was is read once the tab is in it, as #3239's tab comes back to it with its window.
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+send insert 'data:text/html,<title>left</title>'
+send key return
+expect '^browser: loaded [0-9]* data:text/html,<title>left</title>$' "the tab to leave didn't load"
+left=$(grep '^browser: loaded [0-9]* data:text/html,<title>left</title>$' "$log" | tail -1 | cut -d' ' -f3)
+before=$(today | tr ' ' '\n' | grep -vx "$left" | tr '\n' ' ' | sed 's/ $//')
+send key l cmd
+expect '^browser: command bar shown$' "⌘L didn't open the command bar"
+send key down alt cmd
+expect '^browser: command next-tab via ' "⌥⌘↓ in ⌘L's bar didn't reach the UI"
+expect '^browser: command bar follows the tab shown$' \
+  "the command bar didn't follow the tab ⌥⌘↓ showed: $(grep '^browser: selected ' "$log" | tail -1)"
+../tools/window-screenshot.sh "$pid" "$out/bar-follows.png" || fail "no window to capture"
+send insert 'data:text/html,<title>typed</title>'
+send key return
+expect '^browser: loaded [0-9]* data:text/html,<title>typed</title>$' "the page typed after ⌥⌘↓ didn't load"
+typed=$(grep '^browser: loaded [0-9]* data:text/html,<title>typed</title>$' "$log" | tail -1 | cut -d' ' -f3)
+[ "$typed" != "$left" ] || fail "↩ in ⌘L's bar loaded in tab $left, which ⌥⌘↓ had left"
+send key w cmd
+expect "^browser: tab $typed closed\$" "⌘W didn't close the typed page's tab"
+send key w cmd
+expect "^browser: tab $left closed\$" "⌘W didn't close the tab ⌥⌘↓ left"
+expect "^browser: today $before\$" "Today isn't as it was after the steps for #3428"
 send click $page_point
 
 # ⌘Q asks first, in the dialog over the window. Escape keeps the browser running, and Quit, and

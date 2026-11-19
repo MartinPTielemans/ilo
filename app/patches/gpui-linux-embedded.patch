@@ -31,10 +31,10 @@ index a91818acd0..2d1de9aa21 100644
  # WARNING: If you change this, you must also publish a new version of zed-xim to crates.io
  xim = { git = "https://github.com/zed-industries/xim-rs.git", rev = "16f35a2c881b815a2b6cdfd6687988e84f8447d8", features = [
 diff --git a/crates/gpui_linux/src/gpui_linux.rs b/crates/gpui_linux/src/gpui_linux.rs
-index a5390e77f8..9cd66b3f5c 100644
+index a5390e77f8..0ac4f30933 100644
 --- a/crates/gpui_linux/src/gpui_linux.rs
 +++ b/crates/gpui_linux/src/gpui_linux.rs
-@@ -1,4 +1,26 @@
+@@ -1,4 +1,28 @@
  #![cfg(any(target_os = "linux", target_os = "freebsd"))]
  mod linux;
  
@@ -57,13 +57,15 @@ index a5390e77f8..9cd66b3f5c 100644
 +    take_overlay_keyboard, watch_control,
 +    take_embedder_drops, watch_alt_taps, watch_embedder_swipes, watch_pointer_over,
 +};
++#[cfg(any(feature = "wayland", feature = "x11"))]
++pub use linux::keystroke_from_xkb;
 +#[cfg(feature = "wayland")]
 +pub use linux::{
 +    commit_embedded, compose_embedded, drive_commit_in, drive_compose_in, held_clipboard_text,
 +    held_key, marked_range_in, open_next_window_in_surface, resize_embedded,
 +};
 diff --git a/crates/gpui_linux/src/linux.rs b/crates/gpui_linux/src/linux.rs
-index e4da54b52b..279d4f5d11 100644
+index e4da54b52b..2c3cd77d68 100644
 --- a/crates/gpui_linux/src/linux.rs
 +++ b/crates/gpui_linux/src/linux.rs
 @@ -1,7 +1,9 @@
@@ -76,7 +78,7 @@ index e4da54b52b..279d4f5d11 100644
  mod platform;
  mod system_notifications;
  #[cfg(any(feature = "wayland", feature = "x11"))]
-@@ -15,14 +17,72 @@ mod x11;
+@@ -15,14 +17,74 @@ mod x11;
  mod xdg_desktop_portal;
  
  pub use dispatcher::*;
@@ -132,6 +134,8 @@ index e4da54b52b..279d4f5d11 100644
 +    EmbedderDrag, EmbedderDropped, embed_x11, embedded_fd, new_host_window, take_embedder_drops,
 +    watch_embedder_swipes,
 +};
++#[cfg(any(feature = "wayland", feature = "x11"))]
++pub use platform::keystroke_from_xkb;
  #[cfg(any(feature = "wayland", feature = "x11"))]
  pub(crate) use text_system::*;
  #[cfg(feature = "wayland")]
@@ -2329,7 +2333,7 @@ index 0000000000..afef68c905
 +    }
 +}
 diff --git a/crates/gpui_linux/src/linux/platform.rs b/crates/gpui_linux/src/linux/platform.rs
-index 0c5370db6c..d641576663 100644
+index 0c5370db6c..42d4c4b956 100644
 --- a/crates/gpui_linux/src/linux/platform.rs
 +++ b/crates/gpui_linux/src/linux/platform.rs
 @@ -11,7 +11,7 @@ use std::{
@@ -2664,10 +2668,20 @@ index 0c5370db6c..d641576663 100644
      fn open_window(
          &self,
          handle: AnyWindowHandle,
-@@ -1414,6 +1713,43 @@ fn guess_ascii(keycode: Keycode, shift: bool) -> Option<char> {
+@@ -1414,8 +1713,55 @@ fn guess_ascii(keycode: Keycode, shift: bool) -> Option<char> {
      Some(c)
  }
  
++/// The digit the key `keycode` has on the US layout, by its place (evdev's KEY_1 to KEY_0).
++#[cfg(any(feature = "wayland", feature = "x11"))]
++fn digit_of(keycode: Keycode) -> Option<char> {
++    match keycode.raw() {
++        code @ 10..=18 => char::from_digit(code - 9, 10),
++        19 => Some('0'),
++        _ => None,
++    }
++}
++
 +/// Whether `layout` types Latin letters, as US, AZERTY and Dvorak do and Hebrew, Arabic, Russian
 +/// and Armenian don't: any of the keys in the letters' places types one.
 +#[cfg(any(feature = "wayland", feature = "x11"))]
@@ -2687,7 +2701,8 @@ index 0c5370db6c..d641576663 100644
 +/// Chrome's and the Mac's do: Hebrew's key that types "א" is T, and the one that types "'" is W,
 +/// though that's ASCII. None on a Latin layout, which keeps its own, and for a key that types no
 +/// ASCII there.
-+#[cfg(any(feature = "wayland", feature = "x11"))]
+ #[cfg(any(feature = "wayland", feature = "x11"))]
+-pub(super) fn keystroke_from_xkb(
 +fn latin_key(state: &State, keycode: Keycode, shift: bool) -> Option<String> {
 +    let keymap = state.get_keymap();
 +    let layout = state.key_get_layout(keycode);
@@ -2705,21 +2720,34 @@ index 0c5370db6c..d641576663 100644
 +        .then(|| key.to_ascii_lowercase().to_string())
 +}
 +
- #[cfg(any(feature = "wayland", feature = "x11"))]
- pub(super) fn keystroke_from_xkb(
++#[cfg(any(feature = "wayland", feature = "x11"))]
++pub fn keystroke_from_xkb(
      state: &State,
-@@ -1518,6 +1854,10 @@ pub(super) fn keystroke_from_xkb(
+     mut modifiers: gpui::Modifiers,
+     keycode: Keycode,
+@@ -1518,8 +1864,19 @@ pub(super) fn keystroke_from_xkb(
              }
          }
      };
+-
+-    if modifiers.shift {
 +    let key = match modifiers.control {
 +        true => latin_key(state, keycode, modifiers.shift).unwrap_or(key),
 +        false => key,
 +    };
- 
-     if modifiers.shift {
++    // With Ctrl or Alt and shift held, which type no text, a digit key is named by its place with
++    // shift kept, as Chromium names a shortcut's key: Alt+Shift+2 is alt-shift-2 on every layout,
++    // where it was alt-@ on the US one and alt-" on the Danish and German ones.
++    let digit = (modifiers.shift && (modifiers.control || modifiers.alt))
++        .then(|| digit_of(keycode))
++        .flatten();
++    let key = digit.map_or(key, String::from);
++
++    if modifiers.shift && digit.is_none() {
          // we only include the shift for upper-case letters by convention,
-@@ -1599,6 +1939,18 @@ pub fn keystroke_underlying_dead_key(keysym: Keysym) -> Option<String> {
+         // so don't include for numbers and symbols, but do include for
+         // tab/enter, etc.
+@@ -1599,6 +1956,18 @@ pub fn keystroke_underlying_dead_key(keysym: Keysym) -> Option<String> {
      }
  }
  #[cfg(any(feature = "wayland", feature = "x11"))]
