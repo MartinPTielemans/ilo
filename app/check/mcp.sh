@@ -956,14 +956,12 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
   # before the page leaves. The warning goes, and the tab leaves the http page, here for the new
   # tab page, as it had no page before it. ⌘↩ hands it back after.
   to_pages "tab $warned"
-  # A press takes over a tab only while its agent is at work, and the press beside ended the
-  # agent's session in $beside, where it last acted: it reads $warned, as a working agent would, so
-  # it's at work there again before the click (#3503).
-  at_work=$(grep -c "^browser: agent mcp-client at work in $warned\$" "$log" || true)
-  read=$(call read_page "{\"tab\":$warned}")
-  case "$read" in "Tab $warned:"*) ;; *) fail "read_page of the agent's tab at the warning before http answered: $read" ;; esac
-  await_more "^browser: agent mcp-client at work in $warned\$" "$at_work" ||
-    fail "the agent's read of tab $warned, at the warning before http, didn't put it at work there: $(grep '^browser: agent mcp-client \(at work\|done\) in ' "$log" | tail -2 | tr '\n' ' ')"
+  # The press beside took $beside over, where the agent acted last, which ended its session there.
+  # The click on the warning in $warned, its other tab, takes that one over too: whose tab it is
+  # decides, not where the agent acted last (#3503).
+  last=$(grep '^browser: agent mcp-client \(at work\|done\) in ' "$log" | tail -1)
+  [ "$last" = "browser: agent mcp-client done in $beside" ] ||
+    fail "the press beside the agent's warning didn't end its session in $beside, where it acted last, before the click on the warning in tab $warned: $last"
   presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
   took=$(grep -c "^browser: agent mcp-client taken over in $warned\$" "$log" || true)
   driving=$(grep -c "^browser: task strip $warned says You're driving" "$log" || true)
