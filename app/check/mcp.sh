@@ -1943,7 +1943,7 @@ addEventListener("message", (event) => {
     "the agent's request didn't carry the tab's session" "^GET chromium localhost:$port/api/me "
   await_log "^browser: agent activity mcp-client $frames_tab request\$" \
     "the request didn't reach the activity log"
-  changes='^browser: agent mcp-client asks [0-9]*: make a change on localhost$'
+  changes='^browser: agent mcp-client asks [0-9]*: make \(a change\|[0-9]* changes\) on localhost$'
   posted="^POST localhost:$port/api/items cookie .*api=s3cret$port[; ]"
   # A change without the agent's sentence of what it does is refused before anything asks, and
   # nothing is sent (#3548).
