@@ -13,6 +13,7 @@
 #include "base/test/test_future.h"
 #include "base/time/time.h"
 #include "chrome/common/chrome_paths.h"
+#include "mojo/core/embedder/embedder.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/test/test_url_loader_factory.h"
@@ -47,6 +48,13 @@ std::string Dated(const std::string& updated, const std::string& extra = "") {
 // An update of one list, on the loader's answers given here, in a user data folder of its own.
 class NativeAdBlockListsTest : public testing::Test {
  protected:
+  // The test loader factory answers through Mojo, which browser_core_unittests' own main doesn't
+  // start, as no other suite in it needs it. Once a process.
+  static void SetUpTestSuite() {
+    static const bool started = (mojo::core::Init(), true);
+    (void)started;
+  }
+
   void SetUp() override {
     ASSERT_TRUE(shipped_.CreateUniqueTempDir());
     factory_.SetInterceptor(base::BindLambdaForTesting(
