@@ -13,6 +13,7 @@ use super::{
     user_keys,
 };
 use crate::{
+    account::ShareKind,
     dialog::{Field, Question},
     menu::{Highlight, Look, Swatch},
     palette::Tone,
@@ -468,6 +469,16 @@ impl Shell {
                 shell.export_space(space, cx)
             }),
         ));
+        // An Agent Space's tabs are the agent's work, not the user's to share (#680).
+        if entry.is_some_and(|each| each.agent.is_empty()) && !self.one_space() {
+            items.push((
+                MenuEntry::new("Share Space", true),
+                Box::new(move |shell, cx| {
+                    log!("browser: command share-space via space menu");
+                    shell.share_space(space, cx)
+                }),
+            ));
+        }
         items.push((MenuEntry::line(), Box::new(|_, _| {})));
         items.push((
             MenuEntry::new("Manage Spaces…", true),
@@ -953,7 +964,25 @@ impl Shell {
                 Box::new(move |shell, cx| shell.move_chosen_to_space(space, cx)),
             ));
         }
-        items.extend([line(), copy, line(), close]);
+        // Not an agent's tabs, which are its work (#680).
+        let shared = self.chosen_tabs();
+        let mut share = Vec::new();
+        if self
+            .shown_space()
+            .is_some_and(|space| space.agent.is_empty())
+        {
+            share.push((
+                MenuEntry::new("Share Tabs", !shared.is_empty()),
+                "share-tabs",
+                Box::new(move |shell: &mut Shell, cx: &mut Context<Shell>| {
+                    log!("browser: command share-tabs via chosen menu");
+                    shell.browser.share_link(ShareKind::Tabs, shared, cx)
+                }) as MenuAction,
+            ));
+        }
+        items.extend([line(), copy]);
+        items.extend(share);
+        items.extend([line(), close]);
         items
     }
 
@@ -1057,6 +1086,33 @@ impl Shell {
             ),
         ];
         items.extend(rest);
+        // After Copy All Links and its Markdown, for a folder in one of the user's Spaces: an Agent
+        // Space's is the agent's work (#680).
+        let users = |space: &&super::Space| space.agent.is_empty();
+        if self
+            .spaces
+            .iter()
+            .filter(users)
+            .any(|space| space.is_folder(folder))
+        {
+            let after = 1 + items
+                .iter()
+                .position(|(_, name, _)| *name == "copy-all-links-markdown")
+                .expect("Copy All Links as Markdown is in a folder's menu");
+            items.insert(
+                after,
+                (
+                    MenuEntry::new("Share Folder", links),
+                    "share-folder",
+                    Box::new(move |shell, cx| {
+                        log!("browser: command share-folder via folder menu");
+                        shell
+                            .browser
+                            .share_link(ShareKind::Folder, vec![folder], cx)
+                    }),
+                ),
+            );
+        }
         items
     }
 
@@ -2569,7 +2625,11 @@ mod tests {
         let menu = tab_menu(&shell, &host, cx, 20);
         let at = menu.iter().position(|title| title == "Copy All Links");
         let at = at.unwrap_or_else(|| panic!("{menu:?}"));
-        assert_eq!(menu[at..at + 2], ["Copy All Links", "Paste URL as New Tab"]);
+        // Share Folder follows, as the copies' way to send them (#680).
+        assert_eq!(
+            menu[at..at + 3],
+            ["Copy All Links", "Share Folder", "Paste URL as New Tab"]
+        );
         // As Markdown, it's Copy All Links' ⌥ alternate, as in Arc's.
         let entries = host.entries.borrow().clone();
         let markdown = entries
@@ -2590,6 +2650,10 @@ mod tests {
         let (a, b) = ("[A \\[1\\]](https://a.example/)", "https://b.example/");
         let markdown = format!("copy {a}\n[{title}]({b})");
         assert!(host.take().contains(&markdown), "{markdown}");
+        tab_menu(&shell, &host, cx, 20);
+        host.take();
+        cx.update(|cx| host.choose("Share Folder", cx));
+        assert!(host.take().contains(&"share link Folder [20]".to_string()));
 
         host.copied.borrow_mut().push("https://d.example/".into());
         tab_menu(&shell, &host, cx, 22);
@@ -2678,6 +2742,52 @@ mod tests {
         assert_eq!(host.take_edits(), ["space 10 2", "move 10 true 31 0"]);
     }
 
+    /// Share Tabs shares the chosen tabs and the command bar's Share Space the Space shown, each
+    /// through the host (#680), and an Agent Space offers neither, as its tabs are the agent's work.
+    #[gpui::test]
+    fn the_users_tabs_and_space_share_and_an_agents_dont(cx: &mut TestAppContext) {
+        let (shell, host) = shell_with(cx, &[2], &[3, 4, 5], Folders::default());
+        let spaces = |agent: &str| {
+            let space = (
+                1,
+                "Work".into(),
+                None,
+                0,
+                "".into(),
+                agent.into(),
+                "".into(),
+            );
+            vec![
+                space,
+                (2, "Home".into(), None, 0, "".into(), "".into(), "".into()),
+            ]
+        };
+        shell.update(cx, |shell, cx| {
+            shell.set_spaces(spaces(""), cx);
+            shell.choose_row(3, cx);
+            shell.choose_row(5, cx);
+        });
+        let menu = tab_menu(&shell, &host, cx, 5);
+        assert!(menu.contains(&"Share Tabs".to_string()), "{menu:?}");
+        host.take();
+        cx.update(|cx| host.choose("Share Tabs", cx));
+        assert!(host.take().contains(&"share link Tabs [3, 5]".to_string()));
+        shell.update(cx, |shell, cx| {
+            assert!(shell.offers(Command::ShareSpace));
+            shell.run(Command::ShareSpace, "command bar", cx);
+        });
+        assert!(host.take().contains(&"share link Space [1]".to_string()));
+
+        shell.update(cx, |shell, cx| {
+            shell.set_spaces(spaces("task-1"), cx);
+            shell.choose_row(3, cx);
+            shell.choose_row(5, cx);
+        });
+        let menu = tab_menu(&shell, &host, cx, 5);
+        assert!(!menu.contains(&"Share Tabs".to_string()), "{menu:?}");
+        shell.update(cx, |shell, _| assert!(!shell.offers(Command::ShareSpace)));
+    }
+
     /// The chosen rows' menu pins, folders or moves them together, each as one step that ⌘Z puts
     /// back in place and ⇧⌘Z does again, and a right-click on a row not chosen lets them go.
     #[gpui::test]
@@ -2729,6 +2839,7 @@ mod tests {
                 "Add to Folder › New Folder",
                 "Move to Space › Home",
                 "Copy URLs",
+                "Share Tabs",
                 "Close Tabs"
             ]
         );

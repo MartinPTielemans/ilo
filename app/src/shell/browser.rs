@@ -364,6 +364,10 @@ pub trait Browser {
     /// Asks where to save `markdown`, which holds `links` links, offering `name`, and saves it
     /// there: a Space's from its menu, or every Space's from Settings.
     fn save_markdown(&self, name: &str, markdown: String, links: usize, cx: &mut App);
+    /// Shares `items` as a link the account holds and copies it (#680): a Space or a folder, by
+    /// its id, or chosen tabs. The first share says who can see what before it goes, and signed
+    /// out it points to Account. The user's alone: no agent tool shares.
+    fn share_link(&self, kind: crate::account::ShareKind, items: Vec<u64>, cx: &mut App);
     /// Shows print preview for the tab's page.
     fn print(&self, tab: u64, cx: &mut App);
     /// Opens or closes the tab's DevTools (0), opens or closes them at the console (1), or opens

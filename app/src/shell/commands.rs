@@ -186,6 +186,8 @@ pub enum Command {
     EditTheme,
     /// Saves the Space shown's pinned tabs, folders and Today tabs as Markdown links.
     ExportSpace,
+    /// Shares the Space shown as a link, as its menu's Share Space does (#680).
+    ShareSpace,
     /// Puts the Space shown in this profile, or with none in a new one.
     ChangeProfile(Option<u64>),
     /// Brings back the shown Space's profile's sidebar from its backup taken at this time, in
@@ -777,6 +779,7 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         Command::ExportSpace,
         &["save", "links", "backup"],
     ),
+    ("Share Space", Command::ShareSpace, &["link"]),
     ("Rename Current Tab…", Command::RenameTab, &["title"]),
     ("Next Space", Command::NextSpace, &[]),
     ("Previous Space", Command::PreviousSpace, &[]),
@@ -1324,6 +1327,7 @@ impl Command {
             Command::RenameSpace => "rename-space",
             Command::EditTheme => "edit-theme",
             Command::ExportSpace => "export-space",
+            Command::ShareSpace => "share-space",
             Command::ChangeProfile(_) => "change-profile",
             Command::RestoreSidebar(_) => "restore-sidebar",
             Command::RestoreEarlierSidebar => "restore-earlier-sidebar",
@@ -1944,6 +1948,7 @@ impl Shell {
             Command::RenameSpace => return self.rename_space(self.space, cx),
             Command::EditTheme => return self.edit_space_theme(self.space, cx),
             Command::ExportSpace => return self.export_space(self.space, cx),
+            Command::ShareSpace => return self.share_space(self.space, cx),
             Command::ChangeProfile(profile) => return self.change_profile(profile, cx),
             Command::RestoreSidebar(time) => return self.restore_sidebar(time, cx),
             Command::RestoreEarlierSidebar => return self.list_sidebar_backups(cx),
@@ -2376,6 +2381,10 @@ impl Shell {
             Command::ExpandPinned => self
                 .shown_space()
                 .is_some_and(|space| space.folders.pinned_shut && space.collapsing_hides()),
+            // An Agent Space's tabs are the agent's work, not the user's to share (#680).
+            Command::ShareSpace => self
+                .shown_space()
+                .is_some_and(|space| space.agent.is_empty()),
             // The Library and a page's full screen keep the sidebar away.
             Command::FocusSidebar => {
                 self.library.is_none() && !self.page_fullscreen && !self.sidebar_rows().is_empty()
@@ -2659,6 +2668,7 @@ pub(super) fn private_runs(command: Command) -> bool {
             | Command::RenameSpace
             | Command::EditTheme
             | Command::ExportSpace
+            | Command::ShareSpace
             | Command::ChangeProfile(_)
             | Command::RestoreSidebar(_)
             | Command::RestoreEarlierSidebar

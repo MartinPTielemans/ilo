@@ -2962,6 +2962,7 @@ fn space_puts_new_space_first(cx: &mut TestAppContext) {
         "https://spacex.com/".into(),
         "Rename Space".into(),
         "Export Space as Markdown…".into(),
+        "Share Space".into(),
         "Next Space ⌥⌘→".into(),
         "Previous Space ⌥⌘←".into(),
         "Stop Recording Trace".into(),

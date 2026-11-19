@@ -24,6 +24,12 @@ impl Shell {
         self.browser.save_markdown(&name, markdown, links, cx);
     }
 
+    /// Shares `space`'s pinned tabs and folders as a link (#680).
+    pub(super) fn share_space(&mut self, space: u64, cx: &mut Context<Self>) {
+        self.browser
+            .share_link(crate::account::ShareKind::Space, vec![space], cx);
+    }
+
     /// Asks where to save every Space of the user's as Markdown, and saves it there, for
     /// Settings' Export…. The user's alone, as Settings is.
     pub fn export_spaces(&mut self, cx: &mut Context<Self>) {

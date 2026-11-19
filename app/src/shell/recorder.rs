@@ -1065,6 +1065,10 @@ impl Browser for Recorder {
 
     fn save_page(&self, _: u64, _: &mut App) {}
 
+    fn share_link(&self, kind: crate::account::ShareKind, items: Vec<u64>, _: &mut App) {
+        self.record(format!("share link {kind:?} {items:?}"));
+    }
+
     fn save_markdown(&self, name: &str, markdown: String, links: usize, _: &mut App) {
         self.saved_markdown
             .borrow_mut()

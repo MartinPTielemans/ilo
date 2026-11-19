@@ -306,6 +306,7 @@ const SHORTCUTS: &[(&str, &[(&str, Keys)])] = &[
             ("New Space", Keys::Of(Command::NewSpace)),
             ("Rename Space", Keys::Of(Command::RenameSpace)),
             ("Export Space as Markdown", Keys::Of(Command::ExportSpace)),
+            ("Share Space", Keys::Of(Command::ShareSpace)),
             ("Show/Hide Sidebar", Keys::Of(Command::ToggleSidebar)),
             ("Collapse Pinned Tabs", Keys::Of(Command::CollapsePinned)),
             ("Expand Pinned Tabs", Keys::Of(Command::ExpandPinned)),

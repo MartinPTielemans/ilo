@@ -1466,6 +1466,8 @@ impl Browser for Fake {
     fn save_page(&self, _: u64, _: &mut App) {}
 
     fn save_markdown(&self, _: &str, _: String, _: usize, _: &mut App) {}
+    // The preview has no account to share through.
+    fn share_link(&self, _: browser::account::ShareKind, _: Vec<u64>, _: &mut App) {}
     fn close_page_menu(&self, _: u64, _: Option<i32>, _: &mut App) {}
     fn print(&self, _: u64, _: &mut App) {}
 
