@@ -787,9 +787,19 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
     # A page there can have the keyboard, as the one a press in the split view focused on X11,
     # and keeps Escape: a click on the sidebar gives the UI the keyboard, as the user's would.
     send click $sidebar_point
+    if [ "${2:-}" = "at once" ]; then
+      # Posted, and the pictures it draws looked for without a pause, so the click can come within
+      # the 0.2 s the page takes to go back: send's and await's tenths took most of that.
+      pictures=$(grep -c '^browser: task picture ' "$log" || true)
+      post key escape
+      for _ in $(seq 1000); do
+        [ "$(grep -c '^browser: task picture ' "$log")" -gt "$pictures" ] && break
+      done
+      await_more "$back" "$before" || fail "Escape didn't step back to Pages from $1"
+      return
+    fi
     send key escape
     await_more "$back" "$before" || fail "Escape didn't step back to Pages from $1"
-    [ "${2:-}" = "at once" ] && return
     await_more "$thumbnail" "$shrunk" || fail "$1 didn't go back into its picture"
   }
   # Tab round the strip's ring never gives the watched agent's page the keyboard: its stop is the
