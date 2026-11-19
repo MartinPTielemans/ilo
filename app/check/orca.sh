@@ -136,8 +136,11 @@ rm -f "$saved" "$profile_dir/Account"
 # An empty home for the import step, as a new user's may be, and never the runner's own browsers.
 mkdir -p "$out/orca-home"
 orca_mark launch
+# A count endpoint nothing listens on, so the opt-ins offer the count's switch, as the prod build's
+# do, while it stays off and nothing is sent.
 DBUS_SESSION_BUS_ADDRESS=$orca_session BROWSER_IMPORT_HOME="$out/orca-home" BROWSER_DRIVE=1 \
-  BROWSER_ONBOARDING=light "$browser" < "$out/drive" > "$log" 2>&1 &
+  BROWSER_ONBOARDING=light "$browser" --daily-count-url=http://127.0.0.1:9/v1/daily \
+  < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await '^browser: onboarding step intro settled$' || fail "the onboarding's intro didn't draw"
@@ -156,7 +159,8 @@ orca_press tab
 orca_press tab shift
 orca_press down
 # On through the steps as Esc goes, each one's speech recorded as it comes. At the opt-ins, whose
-# keyboard rests on Continue (#3498), ⇥ goes past Skip to each switch and ⇧⇥ back, before the Esc.
+# keyboard rests on Continue (#3498), ⇥ goes past Skip to each switch and on to Continue, and ⇧⇥
+# back to the last switch, before the Esc.
 orca_switches=
 for _ in $(seq 10); do
   grep -q '^browser: onboarding done$' "$log" && break
@@ -164,6 +168,7 @@ for _ in $(seq 10); do
     orca_switches=1
     await '^browser: onboarding step opt-ins settled$' || fail "the opt-ins step didn't draw"
     orca_settled
+    orca_press tab
     orca_press tab
     orca_press tab
     orca_press tab
