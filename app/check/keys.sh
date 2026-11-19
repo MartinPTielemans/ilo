@@ -687,16 +687,19 @@ send key tab
 send key return
 expect '^browser: menu shown ' "Return on Page zoom's pop-up, reached by ⇥, didn't open its menu"
 ../tools/window-screenshot.sh "$pid" "$out/settings-focus-popup.png" || fail "no window to capture"
+expect '^browser: menu window at ' "the menu's window didn't take the keyboard"
 send key escape
 expect '^browser: menu closed$' "⎋ didn't close the pop-up's menu"
 none_since '^browser: settings \(hidden\|search cleared\)$' || fail "⎋ in the pop-up's menu went on to Settings"
 send key return
 expect '^browser: menu shown ' "Return didn't open the pop-up's menu again"
+expect '^browser: menu window at ' "the menu's window didn't take the keyboard"
 send key down
 send key return
 expect '^browser: page zoom 110%$' "↓ and Return in the pop-up's menu didn't choose 110%"
 send key return
 expect '^browser: menu shown ' "Return didn't open the pop-up's menu a third time"
+expect '^browser: menu window at ' "the menu's window didn't take the keyboard"
 send key up
 send key return
 expect '^browser: page zoom 100% (default)$' "↑ and Return didn't choose the default back"

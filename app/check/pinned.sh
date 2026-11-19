@@ -790,6 +790,7 @@ expect "^browser: menu shown $(cased 'Rename Folder, Change Icon…, Duplicate, 
   "the folder's menu isn't Rename Folder, Change Icon…, Duplicate, Move to Space, Copy All Links … Delete Folder"
 expect '^browser: menu drawn ' "the folder's menu didn't draw"
 ../tools/window-screenshot.sh "$pid" "$out/folder-menu.png" || fail "no window to capture"
+expect '^browser: menu window at ' "the menu's window didn't take the keyboard"
 # With ⌥ held, Copy All Links is Copy All Links as Markdown, as in Arc's.
 send flags alt
 expect "^browser: menu drawn with ⌥ held $(cased 'Rename Folder, Change Icon…, Duplicate, Move to Space (disabled), Copy All Links as Markdown'), " \
@@ -987,6 +988,7 @@ expect "^browser: sidebar keyed $d\$" "Focus Sidebar didn't ring the tab shown's
 send key f10 shift
 expect "^browser: menu shown $(cased 'Copy Link, ')" "⇧F10 didn't open the ringed row's menu"
 expect '^browser: menu highlights .* at ' "the row's menu from ⇧F10 didn't highlight its first item"
+expect '^browser: menu window at ' "the menu's window didn't take the keyboard"
 send key escape
 expect '^browser: menu closed$' "escape didn't close the row's menu"
 none_since '^browser: sidebar keys left' || fail "closing the row's menu ended the ring"
