@@ -88,9 +88,13 @@ Kept Keep(const NativeAdBlockList& list, const std::string& text) {
   const bool read = !list.last_good.empty() && base::ReadFileToString(list.last_good, &last_good);
   if (!ad_block_list_check::Takes(
           text, read ? std::optional<std::string_view>(last_good) : std::nullopt)) {
+    // Each copy's date, or a null time, logged as 1601, for none.
+    const base::Time updated = ad_block_list_check::Updated(text).value_or(base::Time());
+    const base::Time held = ad_block_list_check::Updated(last_good).value_or(base::Time());
     LOG(WARNING) << "ad block list " << list.key << ": refused a download of "
-                 << ad_block_list_check::Rules(text) << " rules, as it isn't a list or lost "
-                 << "more than half the last good copy's " << ad_block_list_check::Rules(last_good);
+                 << ad_block_list_check::Rules(text) << " rules, updated " << updated
+                 << ", as it isn't a list, lost more than half the last good copy's "
+                 << ad_block_list_check::Rules(last_good) << " rules or is older than its " << held;
     return Kept::kRefused;
   }
   const base::FilePath file = DownloadedAdBlockList(list.key);
