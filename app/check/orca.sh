@@ -4,9 +4,11 @@
 # sidebar of the Space it leaves. It records and judges nothing yet. Orca follows the focus AT-SPI
 # reports, so what it says after each key is what ilo told it had the keyboard.
 # Orca writes what it would say to its debug log, "SPEECH OUTPUT: …", with or without a speech
-# server, and where it takes the focus to be, "FOCUS MANAGER: …". It buffers that log, so the run
-# marks the time of each step and splits the log by them once Orca has quit: orca-speech.txt is
-# what each step made Orca say and where its focus went, and orca-debug.log all of it.
+# server, and where it takes the focus to be, "FOCUS MANAGER: …". The run marks the time of each
+# step and splits the log by them once Orca has quit: orca-speech.txt is what each step made Orca
+# say and where its focus went, and orca-debug.log all of it.
+# Runs named together share one shell, so its names start with orca_, but for buses, which lib.sh's
+# cleanup reads to stop the buses as it does access's.
 # Orca comes from the distribution's package: on a hosted runner without it the run installs it
 # with apt, and elsewhere without it it skips. It reads ilo's tree over AT-SPI on buses of the
 # run's own, as access does, so it never reads the desktop's other apps.
@@ -102,8 +104,8 @@ done
 orca_marks="$out/orca-marks.txt"
 : > "$orca_marks"
 # Until Orca's log has stopped growing for 0.6 s, up to 5 s, so the next key comes after what the
-# last one made Orca say. A record's pace, not a judge: the log is buffered, and the split after
-# Orca quits is by time.
+# last one made Orca say. That's a record's pace only: a step that judges waits for a line of
+# Orca's or ilo's own instead.
 orca_settled() {
   local size last=-1 still=0
   for _ in $(seq 50); do
