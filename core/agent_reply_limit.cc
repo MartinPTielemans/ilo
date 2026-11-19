@@ -1,5 +1,6 @@
 #include "browser_core/agent_reply_limit.h"
 
+#include <optional>
 #include <utility>
 
 #include "base/functional/bind.h"
@@ -35,7 +36,7 @@ void AgentReplyLimit::Reached() {
   End(base::StrCat({"The tab's page didn't answer for ", base::NumberToString(kLimit.InSeconds()),
                     " s, so the action stopped part way. The page may be busy or stuck; "
                     "close_tab closes the tab."}),
-      /*dialog=*/false);
+      /*unstarted=*/std::nullopt);
 }
 
 void AgentReplyLimit::Replied(size_t owed) {
@@ -53,16 +54,20 @@ void AgentReplyLimit::DialogShown(std::string_view what) {
   if (!working_) {
     return;
   }
-  End(base::StrCat({"The tab's page showed ", what,
-                    " while the action ran. Nothing more can be done on the tab while it's up, "
-                    "and no tool answers it. close_tab closes the tab, and the dialog with it."}),
-      /*dialog=*/true);
+  static constexpr std::string_view kStuck =
+      " Nothing more can be done on the tab while it's up, and no tool answers it. close_tab "
+      "closes the tab, and the dialog with it.";
+  // The action running may have taken effect, and those queued never started: the agent redoes
+  // them by what each was told.
+  End(base::StrCat({"The tab's page showed ", what, " while the action ran.", kStuck}),
+      base::StrCat({"The tab's page showed ", what,
+                    " before this action started, so it wasn't done.", kStuck}));
 }
 
-void AgentReplyLimit::End(std::string why, bool dialog) {
+void AgentReplyLimit::End(std::string why, std::optional<std::string> unstarted) {
   // Once: the job is over whether or not its page has said Ended().
   Ended();
-  ends_.Run(std::move(why), dialog);
+  ends_.Run(std::move(why), std::move(unstarted));
 }
 
 }  // namespace browser_core

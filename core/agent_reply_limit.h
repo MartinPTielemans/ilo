@@ -2,6 +2,7 @@
 #define BROWSER_CORE_AGENT_REPLY_LIMIT_H_
 
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -20,9 +21,10 @@ class AgentReplyLimit {
   // (input::kHungRendererDelay, 15 s at 157), and as long as a job waits for its page to load.
   static constexpr base::TimeDelta kLimit = base::Seconds(15);
 
-  // |why| as the agent hears it. |dialog|: the page showed a dialog, which the jobs queued behind
-  // this one would wait on too.
-  using Ends = base::RepeatingCallback<void(std::string why, bool dialog)>;
+  // |why| as the agent hears it. |unstarted|, with a dialog the jobs queued behind this one would
+  // wait on too, what each of them hears instead of running; without it they run as before.
+  using Ends =
+      base::RepeatingCallback<void(std::string why, std::optional<std::string> unstarted)>;
   explicit AgentReplyLimit(Ends ends);
   AgentReplyLimit(const AgentReplyLimit&) = delete;
   AgentReplyLimit& operator=(const AgentReplyLimit&) = delete;
@@ -37,7 +39,7 @@ class AgentReplyLimit {
   // once nothing is owed, as when the job waits on a timer of its own.
   void Replied(size_t owed);
   // The page showed a dialog, |what| as the agent hears it ("an alert"). The renderer waits on its
-  // answer, so the job running ends now.
+  // answer, so the job running ends now, and the jobs queued behind it, which never started.
   void DialogShown(std::string_view what);
 
   // Whether the limit is counting, which it is only while a job waits on a reply.
@@ -45,7 +47,7 @@ class AgentReplyLimit {
 
  private:
   void Reached();
-  void End(std::string why, bool dialog);
+  void End(std::string why, std::optional<std::string> unstarted);
 
   const Ends ends_;
   bool working_ = false;
