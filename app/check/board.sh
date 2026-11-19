@@ -679,8 +679,10 @@ done
 # A quick ⌃Tab goes back to the first tab, which ⌘W closes: the second's page loads the Board again,
 # now its own, and a pan there is saved.
 send key tab ctrl
+tapped=$step
 send flags
-expect "^browser: selected $first in " "a quick ⌃Tab didn't go back to the Board's first tab, $first"
+# The tab is selected as ⌃ goes down, before the step letting go of it.
+expect "^browser: selected $first in " "a quick ⌃Tab didn't go back to the Board's first tab, $first" "$tapped"
 send key w cmd
 expect "^browser: tab $first closed\$" "⌘W didn't close the Board's first tab"
 expect "^browser: loaded $second chrome://board/$twice\$" \
