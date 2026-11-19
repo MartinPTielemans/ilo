@@ -2204,9 +2204,13 @@ impl Agents {
         held.map(|(&tab, _)| tab).collect()
     }
 
-    /// What each agent did last, and the tabs the user holds from it, for the bar in its Space.
+    /// What each agent did last, and the tabs the user holds from it, for the bar in its Space and
+    /// for a press in its pages (Shell::page_pressed). An agent whose session has ended has none:
+    /// its tabs are the user's, with nothing to hand back to (#3503).
     pub fn status(&self) -> Vec<Status> {
-        let mut agents: Vec<&str> = self.doing.keys().map(String::as_str).collect();
+        let mut agents: Vec<&str> = (self.doing.keys().map(String::as_str))
+            .filter(|agent| self.live.contains(*agent))
+            .collect();
         agents.extend(self.held.values().map(|held| held.agent.as_str()));
         agents.sort();
         agents.dedup();

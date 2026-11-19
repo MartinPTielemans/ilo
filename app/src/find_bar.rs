@@ -7,20 +7,17 @@ use std::{cell::RefCell, collections::HashMap, ffi::CString, ffi::c_void, rc::Rc
 
 use browser::{
     elevation::Level,
-    log,
+    find_status, log,
     palette::{Palette, STATE_HOVERED, STATE_PRESSED},
     shell::{self, keystroke_keys},
     text_input::TextInput,
     tooltip::{self, Anchor, Tip},
 };
 use gpui::{
-    AnyWindowHandle, App, Bounds, Context, Entity, Focusable, FontWeight, Global, KeyBinding,
-    Pixels, Point, SharedString, Size, TitlebarOptions, Window, WindowBackgroundAppearance,
-    WindowBounds, WindowHandle, WindowKind, WindowOptions,
-    accesskit::{Live, Role},
-    actions, canvas, div, point,
-    prelude::*,
-    px, rgb, rgba, size, svg,
+    AnyWindowHandle, App, Bounds, Context, Entity, Focusable, Global, KeyBinding, Pixels, Point,
+    SharedString, Size, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds,
+    WindowHandle, WindowKind, WindowOptions, accesskit::Role, actions, canvas, div, point,
+    prelude::*, px, rgb, rgba, size, svg,
 };
 
 use crate::{bc, platform};
@@ -38,8 +35,6 @@ use browser::tokens::find_bar::FILL;
 const TOP: f32 = shell::CARD_INSET * 2.;
 use browser::tokens::find_bar::ARROW_OVERLAP;
 use browser::tokens::find_bar::BUTTON;
-use browser::tokens::find_bar::COUNT;
-use browser::tokens::find_bar::COUNT_GAP;
 use browser::tokens::find_bar::DIVIDER;
 use browser::tokens::find_bar::DIVIDER_GAP;
 use browser::tokens::find_bar::DIVIDER_HEIGHT;
@@ -48,22 +43,12 @@ use browser::tokens::find_bar::GLYPH;
 use browser::tokens::find_bar::GLYPH_COLOR;
 use browser::tokens::find_bar::GLYPH_DISABLED;
 use browser::tokens::find_bar::INSET;
-use browser::tokens::find_bar::NOT_FOUND;
 use browser::tokens::find_bar::PLACEHOLDER;
 use browser::tokens::find_bar::TEXT;
 use browser::tokens::find_bar::TEXT_LINE;
 use browser::tokens::text;
 
-/// A tab's find in page, as the core reports it.
-#[derive(Clone, Default)]
-pub struct Find {
-    pub open: bool,
-    pub text: String,
-    /// -1 until the page has looked.
-    pub matches: i32,
-    /// From 1, or 0 for none.
-    pub selected: i32,
-}
+pub use browser::find_status::Find;
 
 thread_local! {
     // Every tab's. Kept out of GPUI's entities, so a tab closing inside a GPUI update drops its own.
@@ -408,14 +393,10 @@ impl FindBar {
         unsafe { platform::host_hide_find_bar(self.ui_view) };
     }
 
-    /// What the page found for the text, once it has looked: which match of how many, or none.
+    /// What the page found for the text, once it has looked: which match of how many, or none,
+    /// while the tab's find is open.
     fn found(&self) -> Option<(i32, i32)> {
-        FINDS.with_borrow(|finds| match finds.get(&self.tab) {
-            Some(find) if !find.text.is_empty() && find.matches >= 0 => {
-                Some((find.selected, find.matches))
-            }
-            _ => None,
-        })
+        FINDS.with_borrow(|finds| finds.get(&self.tab).and_then(Find::found))
     }
 
     /// The pointer has come onto or left `button`, whose tooltip names it and its key, hanging
@@ -538,18 +519,14 @@ impl Render for FindBar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let a11y = window.is_a11y_active();
         let found = self.found();
-        // Arc's count, "1/12", and its previous and next, or "NOT FOUND" in their place.
-        let (status, matches) = match found {
-            Some((_, 0)) => ("NOT FOUND".to_string(), None),
-            Some((selected, matches)) => (format!("{selected}/{matches}"), Some(matches)),
-            None => (String::new(), None),
-        };
+        let status = find_status::count(found);
         // check.sh reads these lines.
         log!(
             "browser: find bar drew \"{}\" {status}",
             self.input.read(cx).text()
         );
-        let enabled = matches.is_some();
+        // Arc's previous and next, or "NOT FOUND" in their place.
+        let enabled = found.is_some_and(|(_, matches)| matches != 0);
         let not_found = found.is_some() && !enabled;
         let previous = Named::Previous.named().0;
         let previous = Self::button("previous", "icons/chevron-up.svg", previous, enabled, a11y);
@@ -566,40 +543,7 @@ impl Render for FindBar {
             .when(enabled, |button| {
                 button.on_click(cx.listener(|bar, _, _, cx| bar.find_next(true, cx)))
             });
-        // What it says, said as it changes after what's typed, wherever VoiceOver's cursor is:
-        // "1 of 12" rather than its slash, and "not found" rather than its capitals.
-        let said = match found {
-            Some((_, 0)) => "Not found".to_string(),
-            Some((selected, matches)) => format!("{selected} of {matches}"),
-            None => String::new(),
-        };
-        // The Mac's AccessKit announces a live region's value, and Windows' and Linux's its name,
-        // so the name has the count too (#3236).
-        let name = match said.is_empty() {
-            true => "Matches".to_string(),
-            false => format!("Matches, {said}"),
-        };
-        let status = div()
-            .id("matches")
-            .when(a11y, |status| {
-                status
-                    .role(Role::Status)
-                    .aria_label(name)
-                    .aria_value(said)
-                    .a11y_synthetic_children(|builder| builder.parent_node().set_live(Live::Polite))
-            })
-            .flex_none()
-            .mr(px(COUNT_GAP))
-            .when(not_found, |status| {
-                status
-                    .text_size(px(text::SMALL))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(NOT_FOUND))
-            })
-            .when(!not_found, |status| {
-                status.text_size(px(text::SMALL)).text_color(rgba(COUNT))
-            })
-            .child(status);
+        let status = find_status::status(found, a11y);
         let divider = div()
             .flex_none()
             .w(px(DIVIDER_GAP))

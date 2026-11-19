@@ -7,8 +7,9 @@ use std::{
 };
 
 use gpui::{
-    AnyView, AppContext, Bounds, Context, Entity, IntoElement, Pixels, Render, SharedString,
-    TestAppContext, VisualTestContext, Window, div, point, px, size,
+    AnyView, AppContext, Bounds, Context, Entity, InteractiveElement, IntoElement, Pixels, Render,
+    SharedString, StatefulInteractiveElement, Styled, TestAppContext, VisualTestContext, Window,
+    div, point, px, size,
 };
 
 use super::{Zoom, pushed, watched};
@@ -397,6 +398,49 @@ fn a_tasks_page_zooms_out_of_its_thumbnail_and_back(cx: &mut TestAppContext) {
     }));
 }
 
+/// A conversation whose pictures fill it, which counts the clicks on them, as a picture's watches
+/// its page.
+struct Pictures(Rc<std::cell::Cell<u32>>);
+
+impl Render for Pictures {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let clicks = self.0.clone();
+        div()
+            .id("pictures")
+            .size_full()
+            .on_click(move |_, _, _| clicks.set(clicks.get() + 1))
+    }
+}
+
+/// A click on another picture while the page watched goes back into its thumbnail reaches the
+/// picture, which watches its own page, as one does once the page is back (#3496). The page going
+/// back is drawn over the conversation, and its press there is for a page coming out alone.
+#[gpui::test]
+fn a_click_on_the_conversation_while_the_page_goes_back_reaches_it(cx: &mut TestAppContext) {
+    let (shell, _host, cx) = shell_with_task(cx);
+    let clicks = Rc::new(std::cell::Cell::new(0));
+    let pictures = clicks.clone();
+    let view: AnyView = cx.update(|_, cx| cx.new(|_| Pictures(pictures)).into());
+    shell.update(cx, |shell, cx| shell.open_task(3, view, cx));
+    let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
+    shell.update(cx, |shell, cx| shell.watch_task_page(30, thumb, None, cx));
+    core_shows_task(&shell, cx, 30);
+    let over = Instant::now() - Duration::from_secs(1);
+    set_zoom(&shell, cx, Zoom::Out(over));
+    draw(&shell, cx);
+    let (card, _) = frames(&shell, cx);
+    // Held where the zoom back starts, the page still fills the area.
+    set_zoom(
+        &shell,
+        cx,
+        Zoom::In(Instant::now() + Duration::from_secs(60)),
+    );
+    core_shows_users(&shell, cx);
+    draw(&shell, cx);
+    cx.simulate_click(card.center(), gpui::Modifiers::none());
+    assert_eq!(clicks.get(), 1, "the click on the conversation was lost");
+}
+
 /// Selecting any of the user's tabs, the one selected too, or another Space leaves the area and
 /// shows it, and so does a quit. The window's own commands, such as ⌘S, leave the area as it is.
 #[gpui::test]
@@ -532,6 +576,43 @@ fn a_press_in_the_agents_page_takes_it_over_and_hand_back_gives_it_back(cx: &mut
     assert!(
         host.take().is_empty(),
         "a press with no agent at work took a page"
+    );
+}
+
+/// Whose tab it is decides, not where the agent acted last (#3503): a press in the tab it acted in
+/// last takes it over, which ends its session there, and a press in the other tab of its split view
+/// then takes that one over too. A press on a tab's dialog comes as a press in its tab.
+#[gpui::test]
+fn a_press_takes_over_each_of_the_agents_tabs_after_the_one_it_acted_in(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    watching(&shell, &host, cx);
+    let status = |held: Vec<(u64, SharedString)>| {
+        vec![Status {
+            agent: "task-1".into(),
+            name: "Claude".into(),
+            space: 3,
+            doing: "Typed · flights.example".into(),
+            held,
+        }]
+    };
+    shell.update(cx, |shell, cx| {
+        shell.set_agent_status(status(Vec::new()), cx);
+        shell.agent_acted("task-1".into(), 31, cx);
+    });
+    host.take();
+    shell.update(cx, |shell, cx| shell.page_pressed(31, cx));
+    assert_eq!(host.take(), ["take over task-1 31"]);
+    // The core ends the agent's session in the tab taken over, where it acted last.
+    shell.update(cx, |shell, cx| {
+        shell.agent_session_ended("task-1", 31, cx);
+        shell.set_agent_status(status(vec![(31, "".into())]), cx);
+    });
+    host.take();
+    shell.update(cx, |shell, cx| shell.page_pressed(30, cx));
+    assert_eq!(
+        host.take(),
+        ["take over task-1 30"],
+        "a press in the agent's other tab took nothing once the tab it acted in last was taken over"
     );
 }
 
@@ -1417,4 +1498,52 @@ fn take_over_shows_with_the_ring_on_the_tasks_stops_alone(cx: &mut TestAppContex
     }
     shell.update(cx, |shell, cx| shell.leave_keys("test", cx));
     assert!(!shows(&shell, cx), "Take Over shows once the ring leaves");
+}
+
+/// A press on the card of the agent's page watched whose renderer died, its Reload for one, is the
+/// user acting on the agent's tab: it takes the tab over, as a press in its page does, and the
+/// Reload still loads the page again (#3433).
+#[gpui::test]
+fn a_press_on_the_crash_card_of_the_agents_page_takes_it_over(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    watching(&shell, &host, cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_agent_status(
+            vec![Status {
+                agent: "task-1".into(),
+                name: "Claude".into(),
+                space: 3,
+                doing: "Typed · flights.example".into(),
+                held: Vec::new(),
+            }],
+            cx,
+        );
+        shell.agent_acted("task-1".into(), 30, cx);
+        shell.set_page(
+            30,
+            Page {
+                url: "https://flights.example/".into(),
+                trouble: crate::shell::Trouble::Crashed,
+                ..Page::default()
+            },
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    shell.update(cx, |shell, cx| {
+        shell.crash_reload_drawn.set(None);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    host.take();
+    let reload = shell
+        .read_with(cx, |shell, _| shell.crash_reload_drawn.get())
+        .expect("the watched page that died shows the card's Reload");
+    let place = shell.read_with(cx, |shell, _| watched(shell.page_frame(shell.viewport).0));
+    assert!(
+        place.contains(&reload.center()),
+        "{reload:?} is in the page's place {place:?}"
+    );
+    cx.simulate_click(reload.center(), gpui::Modifiers::none());
+    assert_eq!(host.take(), ["take over task-1 30", "reload 30"]);
 }

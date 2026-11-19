@@ -40,13 +40,14 @@
 # one that asks no one clicked in, and one the agent clicked or typed in stays open until the agent
 # discards it. Its download asks first, and Allow Once downloads the
 # file, which the answer names, and Never leaves none. It sends requests to its tab's site, carrying a session it
-# never sees, and a change asks every time, in a card whose Allow sends it and Deny doesn't. A change
-# without the agent's sentence of what it does is refused before anything asks. The card shows the
-# sentence, cut at a word, over what the browser knows from the method, a delete's under a harmless
-# sentence too, and the whole request opens beside it, where Escape closes it with the question
-# still unanswered and nothing sent (#3548). Settings
-# › Agents opens each request to the agent's sentence, where it went and what it sent, or that the
-# denied one wasn't. A bank's site asks first, in a card whose Allow Once opens it. Always Allow
+# never sees, and a change asks every time, in a card whose Allow sends it and Deny doesn't, a POST
+# whose override says GET too. A change without the agent's sentence of what it does is refused
+# before anything asks. The card shows the sentence, cut at a word, over what the browser knows from
+# the method, a delete's under a harmless sentence too, and the whole request opens beside it, where
+# Escape closes it with the question still unanswered and nothing sent (#3548). Settings › Agents
+# opens each request to the agent's sentence, where it went and what it sent, or that the denied one
+# wasn't, and names each by the method sent. A bank's site asks first, in a card whose Allow Once
+# opens it. Always Allow
 # opens it from then on, as Settings › Agents lists with its Revoke. A login the
 # user saved fills in neither as the agent's tab loads it nor from a dropdown, and fills once the
 # user takes the tab over, without a reload. Closing the client's end ends its session with the tab.
@@ -765,8 +766,7 @@ await_log "^browser: agent activity mcp-client $user_tab separate_tab refused: T
 # through DevTools, as the user's would reach the page, and takes nothing over (#3243). The same
 # for the page beside it in its watched split view. Its next action then isn't refused.
 if [ "$driven" = 1 ]; then
-  # Escape steps back to Pages from the page watched, $1, which goes back into its picture before a
-  # click on another picture can watch it.
+  # Escape steps back to Pages from the page watched, $1, which goes back into its picture.
   to_pages() {
     back='^browser: task page [0-9]* back$'
     thumbnail='^browser: task page in its thumbnail$'
@@ -853,10 +853,10 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
     esac
   }
   # Watches $warned, whose warning shows over its pane, at $warning, without the user's keyboard,
-  # and has a click on it give it the keyboard. $1 says how the user came to watch it, and $2 is a
-  # step to take while it's watched, before the click.
+  # and has a click on it give it the keyboard. $1 says how the user came to watch it, $2 is a
+  # step to take while it's watched, before the click, and $3, "watched", says it's watched already.
   watch_warning() {
-    watch "$warned"
+    [ "${3:-}" = watched ] || watch "$warned"
     for _ in $(seq 50); do
       send layout
       since | grep -q '^browser: layout child ' && break
@@ -892,10 +892,47 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
     await_more "^browser: agent mcp-client taken over in $warned\$" "$took" ||
       fail "the click on the agent's warning before http, watched $1, didn't take tab $warned over: $(since "$warning_clicked" | grep -e '^browser: drive' -e '^browser: agent' | tail -6 | tr '\n' ' ')"
   }
-  to_pages "tab $agent_tab"
+  # A click on the split's picture straight after Escape, while the page watched still goes back
+  # into its own, watches the split: the page going back lets the click through (#3496). The
+  # conversation first draws the split's picture as the page goes back, and the click is posted
+  # the moment it logs it, as send's and await's tenths would take most of the zoom's 0.2 s. It goes
+  # to the point of the split's picture nearest the agent's, which the page going back covers
+  # longest.
+  read -r cx cy nw nh <<PICTURE
+$(picture "$agent_tab")
+PICTURE
+  cx=$((cx + nw / 2)) cy=$((cy + nh / 2))
+  watched=$(grep -c "^browser: task $session page $warned\$" "$log" || true)
+  placed=$(grep -c "^browser: task page $warned in place\$" "$log" || true)
+  before=$(grep -c '^browser: task page [0-9]* back$' "$log" || true)
+  drawn=$(grep -c "^browser: task picture $warned at " "$log" || true)
+  send click $sidebar_point
+  post key escape
+  escaped=$step
+  for _ in $(seq 2000); do
+    [ "$(grep -c "^browser: task picture $warned at " "$log")" -gt "$drawn" ] && break
+  done
+  at=$(grep "^browser: task picture $warned at " "$log" | tail -1)
+  [ -n "$at" ] || fail "Escape from tab $agent_tab never drew tab $warned's picture in Pages"
+  read -r wx wy ww wh <<PICTURE
+${at#browser: task picture $warned at }
+PICTURE
+  [ "$cx" -ge $((wx + 4)) ] || cx=$((wx + 4))
+  [ "$cx" -le $((wx + ww - 5)) ] || cx=$((wx + ww - 5))
+  [ "$cy" -ge $((wy + 4)) ] || cy=$((wy + 4))
+  [ "$cy" -le $((wy + wh - 5)) ] || cy=$((wy + wh - 5))
+  post click "$cx" "$cy"
+  await "^browser: drive $step done" || fail "the driver didn't finish the click on tab $warned's picture"
+  await_more '^browser: task page [0-9]* back$' "$before" || fail "Escape didn't step back to Pages from tab $agent_tab"
+  await_more "^browser: task $session page $warned\$" "$watched" ||
+    fail "a click on tab $warned's picture at $cx $cy while tab $agent_tab went back into its own after Escape didn't watch it: $(since "$escaped" | grep -e '^browser: drive' -e '^browser: task' | head -12 | tr '\n' ' ')"
+  await_more "^browser: task page $warned in place\$" "$placed" || fail "tab $warned's page didn't come to rest in place"
+  since "$escaped" | grep -m1 -e '^browser: drive [0-9]*: click ' -e '^browser: task page in its thumbnail$' |
+    grep -q '^browser: task page' &&
+    echo "skip: mcp: a click on a picture while the page watched goes back: tab $agent_tab was back in its picture before the click (#3496)."
   presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
   took=$(grep -c "^browser: agent mcp-client taken over in $warned\$" "$log" || true)
-  watch_warning "from Pages" ring_strip
+  watch_warning "from Pages" ring_strip watched
   first_click=$warning_clicked
   # Linux's driver lists the pages the shell lays out, and the task area lays out a watched split
   # as one, which the core divides: the capture shows its panes there.
@@ -961,14 +998,12 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
   # before the page leaves. The warning goes, and the tab leaves the http page, here for the new
   # tab page, as it had no page before it. ⌘↩ hands it back after.
   to_pages "tab $warned"
-  # A press takes over a tab only while its agent is at work, and the press beside ended the
-  # agent's session in $beside, where it last acted: it reads $warned, as a working agent would, so
-  # it's at work there again before the click (#3503).
-  at_work=$(grep -c "^browser: agent mcp-client at work in $warned\$" "$log" || true)
-  read=$(call read_page "{\"tab\":$warned}")
-  case "$read" in "Tab $warned:"*) ;; *) fail "read_page of the agent's tab at the warning before http answered: $read" ;; esac
-  await_more "^browser: agent mcp-client at work in $warned\$" "$at_work" ||
-    fail "the agent's read of tab $warned, at the warning before http, didn't put it at work there: $(grep '^browser: agent mcp-client \(at work\|done\) in ' "$log" | tail -2 | tr '\n' ' ')"
+  # The press beside took $beside over, where the agent acted last, which ended its session there.
+  # The click on the warning in $warned, its other tab, takes that one over too: whose tab it is
+  # decides, not where the agent acted last (#3503).
+  last=$(grep '^browser: agent mcp-client \(at work\|done\) in ' "$log" | tail -1)
+  [ "$last" = "browser: agent mcp-client done in $beside" ] ||
+    fail "the press beside the agent's warning didn't end its session in $beside, where it acted last, before the click on the warning in tab $warned: $last"
   presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
   took=$(grep -c "^browser: agent mcp-client taken over in $warned\$" "$log" || true)
   driving=$(grep -c "^browser: task strip $warned says You're driving" "$log" || true)
@@ -1001,6 +1036,45 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
   watch "$agent_tab"
 else
   echo "skip: mcp: an agent's warning before http in its split view, watched. Browser wasn't the active app, or the engine is before 157."
+fi
+
+# The agent's page watched dies, as macOS ends a renderer under memory pressure: its place shows the
+# crash card, as the user's own page's does, and a press on its Reload is the user acting on the
+# agent's tab, so it takes the tab over, as a press in its page does, and loads the page again
+# (#3433). The core hears no press there, as the page has no renderer. ⌘↩ hands it back. The agent
+# reads the page first, as a press takes over only a tab the agent is at work in, and closing the
+# split view's pages left it at work in none.
+if [ "$driven" = 1 ]; then
+  at_work=$(grep -c "^browser: agent mcp-client at work in $agent_tab\$" "$log" || true)
+  read=$(call read_page "{\"tab\":$agent_tab}")
+  case "$read" in
+    "Tab $agent_tab: Agent page"*) ;;
+    *) fail "reading the agent's tab before its renderer was killed answered: $read" ;;
+  esac
+  await_more "^browser: agent mcp-client at work in $agent_tab\$" "$at_work" ||
+    fail "the agent's tab didn't show it at work once it read the page"
+  presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
+  taken=$(grep -c "^browser: agent page pressed in $agent_tab\$" "$log" || true)
+  reloads=$(grep -c "^browser: loaded $agent_tab " "$log" || true)
+  fine=$(grep -c "^browser: page $agent_tab trouble fine\$" "$log" || true)
+  kill_pages || fail "no renderer to kill"
+  await_log "^browser: page $agent_tab trouble crashed\$" "the agent's page watched, its renderer killed, wasn't called crashed"
+  await_log "^browser: crash card shown $agent_tab\$" \
+    "the agent's page watched that died showed no crash card in its place: $(grep -e "^browser: page $agent_tab " -e '^browser: crash ' "$log" | tail -4 | tr '\n' ' ')"
+  ../tools/window-screenshot.sh "$pid" "$out/agent-crashed.png" || fail "no window to capture"
+  at=$(sed -n "s/^browser: crash reload $agent_tab at \([0-9]* [0-9]* [0-9]* [0-9]*\)$/\1/p" "$log" | tail -1)
+  [ -n "$at" ] || fail "the crash card of the agent's page watched drew no Reload"
+  read -r rx ry rw rh <<RELOAD
+$at
+RELOAD
+  send click $((rx + rw / 2)) $((ry + rh / 2))
+  expect "^browser: crash card reload $agent_tab\$" "a click on the crash card's Reload in the agent's page watched didn't press it"
+  await_more "^browser: agent page pressed in $agent_tab\$" "$taken" ||
+    fail "a press on the crash card of the agent's page watched didn't take the tab over: $(since | grep -e '^browser: drive' -e '^browser: agent' | tail -6 | tr '\n' ' ')"
+  await_more "^browser: loaded $agent_tab " "$reloads" || fail "the crash card's Reload didn't load the agent's page again"
+  await_more "^browser: page $agent_tab trouble fine\$" "$fine" || fail "the agent's page loaded again wasn't fine"
+  send click $sidebar_point
+  hand_back_pressed "$presses"
 fi
 
 if [ "$driven" = 1 ]; then
@@ -1985,6 +2059,28 @@ SEE
   open_request "$denied_id" POST "to http://localhost:$port/api/items, not sent: title: Milk"
   ../tools/window-screenshot.sh "$pid" "$out/settings-agents-requests.png" || fail "no window to capture"
   # Back to General, for the visits below to click Agents.
+  send clickkey $(drawn "toolbar General")
+  expect '^browser: settings tab General$' "a click on General didn't show its section"
+  send key w cmd
+  expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+  # A POST whose override header says GET asks too, as a server may take either, Deny sends it
+  # nowhere, and Settings › Agents names it by the method sent.
+  oats='{"method":"POST","path":"/api/items","headers":{"X-HTTP-Method-Override":"GET"},"body":{"title":"Oats"},"what":"Add Oats to the list."}'
+  change Dismiss 1 "$oats" '“Add Oats to the list.” Sends data to localhost'
+  [ "$changed" = "error: The user said no: you can't make a change on localhost. Don't try again." ] ||
+    fail "the denied overridden POST answered: $changed"
+  grep -q 'Oats' "$out/site.log" && fail "the denied overridden POST reached the site"
+  send menu Settings…
+  expect '^browser: settings shown ' "Settings… didn't show Settings"
+  settings_drew
+  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Agents$'; then
+    send clickkey $(drawn "toolbar Agents")
+    expect '^browser: settings tab Agents$' "a click on Agents didn't show its section"
+  fi
+  settings_drew Agents
+  newest=$(sed -n 's/^browser: settings request \([0-9]*\) \([A-Z]*\) at .*/\1 \2/p' "$log" | sort -n | tail -1)
+  [ "${newest#* }" = POST ] && [ "${newest% *}" -gt "$denied_id" ] ||
+    fail "Settings › Agents didn't name the overridden POST by the method sent: its newest request is $newest"
   send clickkey $(drawn "toolbar General")
   expect '^browser: settings tab General$' "a click on General didn't show its section"
   send key w cmd

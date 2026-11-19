@@ -130,6 +130,7 @@ pub mod dialog;
 pub mod dock_dot;
 pub mod elevation;
 pub mod face;
+pub mod find_status;
 #[cfg(target_os = "linux")]
 pub mod flatpak;
 pub mod folder_preview;

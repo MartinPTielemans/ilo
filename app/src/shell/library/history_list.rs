@@ -570,7 +570,7 @@ impl Shell {
 
     /// The menu a right-click on a visited page's row shows: open it in a new tab, copy its URL,
     /// or take that day's visits to it out of the profile's history.
-    fn visited_menu(
+    pub(super) fn visited_menu(
         &mut self,
         url: SharedString,
         day: Option<NaiveDate>,

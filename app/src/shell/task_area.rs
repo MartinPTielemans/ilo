@@ -467,6 +467,22 @@ impl Shell {
         Some((area.space, page.tab))
     }
 
+    /// Whether the page watched is going back into its picture, over a conversation the user
+    /// can't see yet: only its pictures take a press meanwhile (#3496).
+    pub(super) fn task_page_going_back(&self) -> bool {
+        (self.task_area.as_ref())
+            .and_then(|area| area.page.as_ref())
+            .is_some_and(|page| matches!(page.zoom, Zoom::In(_)))
+    }
+
+    /// The page watched held where its zoom back starts, for a test to press under it.
+    #[cfg(test)]
+    pub(super) fn hold_task_page_going_back(&mut self) {
+        if let Some(page) = self.task_area.as_mut().and_then(|area| area.page.as_mut()) {
+            page.zoom = Zoom::In(Instant::now() + Duration::from_secs(60));
+        }
+    }
+
     /// The task's tab whose page is in place in the area, live, as the core shows it.
     pub(super) fn task_page_live(&self) -> Option<u64> {
         let area = self.task_area.as_ref()?;
@@ -804,10 +820,12 @@ impl Shell {
         let (card_frame, _) = self.page_frame(self.viewport);
         let now = Instant::now();
         let zoom = area.page.as_ref().map_or(0., |page| page.zoom.at(now));
+        let back = self.task_page_going_back();
         let mut layer = div().absolute().size_full();
         // The Space's page goes out of the window on its card.
-        // The conversation is in the card's place, and fades under a page coming out of it.
-        if zoom < 1. {
+        // The conversation is in the card's place, and fades under a page coming out of it. Under
+        // a page going back it takes clicks from the zoom's first frame, before it shows (#3496).
+        if zoom < 1. || back {
             let view = div()
                 .absolute()
                 .left_0()
@@ -859,7 +877,10 @@ impl Shell {
             );
         }
         if in_place {
-            layer = layer.child(card(place, self.card_radius(), self.palette.page));
+            // A page that died leaves its place to its card, as in the user's own Space.
+            layer = layer
+                .child(card(place, self.card_radius(), self.palette.page))
+                .children(self.crash_cards(place, cx));
         } else {
             layer = layer.child(self.task_page_picture(page, between(page.thumb, place, zoom), cx));
         }
@@ -902,13 +923,17 @@ impl Shell {
             .h(bounds.size.height)
             .rounded(radius)
             .bg(self.palette.page)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|shell, _, _, cx| {
-                    cx.stop_propagation();
-                    shell.press_task_page(cx);
-                }),
-            )
+            // Going back, it lets a press through to the conversation under it, so a click on
+            // another picture there watches that page (#3496).
+            .when(!matches!(page.zoom, Zoom::In(_)), |zooming| {
+                zooming.on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|shell, _, _, cx| {
+                        cx.stop_propagation();
+                        shell.press_task_page(cx);
+                    }),
+                )
+            })
             .children(picture)
             .into_any_element()
     }
