@@ -192,6 +192,8 @@ yours='data:text/html,<title>-</title><textarea id=f style="position:fixed;inset
 # history.sh's $plain.
 serve
 plain="mcp-plain-$(date +%s).example.com"
+# Probe, never to land: the sidebar on the right, for the whole request's picture.
+: > "$profile_dir/sidebar-right"
 BROWSER_DRIVE=1 BROWSER_MOTION=full BROWSER_URL="$yours" \
   "$browser" --load-extension="$(app_path "$extension")" \
   --host-resolver-rules="MAP $plain 127.0.0.1:$port" < "$out/drive" > "$log" 2>&1 &
@@ -1916,6 +1918,9 @@ SEE
       # The host's line, once its window is on screen, so the capture has it.
       await_more '^browser: agent request shown$' "$hosted" || fail "the whole request's window never showed"
       ../tools/window-screenshot.sh "$pid" "$out/agent-request-whole.png" || fail "no window to capture"
+      grep "^browser: agent request at \|^browser: agent question $q at " "$log" | tail -2
+      rm -f "$profile_dir/sidebar-right"
+      fail "probe: stopped after the right sidebar's whole request capture"
       send key escape
       await_log "^browser: agent request $q closed (Escape)\$" "Escape didn't close the whole request"
       await_log '^browser: agent request keyboard back on see$' \
