@@ -992,11 +992,67 @@ mod tests {
             { "method": "HEAD", "path": "/a" },
         ]);
         let sent = parsed(asked).unwrap();
-        assert_eq!(sent[0].line(), "MERGE /_api/…/items(1)");
+        assert_eq!(sent[0].line(), "POST as MERGE /_api/…/items(1)");
         assert_eq!(sent[0].summary(), "Status: Closed");
         assert_eq!(sent[0].headers.last().unwrap().1, "application/json");
         assert!(sent[1].changes() && sent[1].does == "DELETE" && sent[1].method == "GET");
         assert!(!sent[2].changes());
+    }
+
+    /// A request is a read only when the method sent and every override header it sets both say
+    /// GET or HEAD: a server may take either, so a change by either asks (#1439). What it's called
+    /// names the method sent first, and the override beside it where it differs.
+    #[test]
+    fn a_read_is_one_only_by_its_method_and_its_overrides() {
+        let overrides = [
+            "X-HTTP-Method-Override",
+            "X-HTTP-Method",
+            "X-Method-Override",
+        ];
+        let one = |method: &str, headers: Value| {
+            let asked = json!([{ "method": method, "path": "/a", "headers": headers }]);
+            parsed(asked).unwrap().remove(0)
+        };
+        for method in ["POST", "PUT", "PATCH", "DELETE"] {
+            for name in overrides {
+                for read in ["GET", "HEAD", "get"] {
+                    let sent = one(method, json!({ name: read }));
+                    assert!(sent.changes(), "{method} with {name}: {read} went unasked");
+                    assert_eq!(sent.method, method);
+                }
+            }
+        }
+        for name in overrides {
+            for change in ["POST", "DELETE", "MERGE", "GET, DELETE", ""] {
+                let sent = one("GET", json!({ name: change }));
+                assert!(sent.changes(), "GET with {name}: {change:?} went unasked");
+            }
+        }
+        let both = one(
+            "GET",
+            json!({ "X-HTTP-Method": "GET", "X-Method-Override": "DELETE" }),
+        );
+        assert!(
+            both.changes(),
+            "a second override naming a change went unasked"
+        );
+        for method in ["GET", "HEAD"] {
+            assert!(!one(method, json!({})).changes(), "a plain {method} asked");
+            for name in overrides {
+                for read in ["GET", "HEAD"] {
+                    let sent = one(method, json!({ name: read }));
+                    assert!(!sent.changes(), "{method} with {name}: {read} asked");
+                }
+            }
+        }
+
+        let masked = one("POST", json!({ "X-HTTP-Method-Override": "GET" }));
+        assert_eq!(masked.target(), "POST as GET /a");
+        assert_eq!(masked.line(), "POST as GET /a");
+        let plain = one("POST", json!({}));
+        assert_eq!(plain.target(), "POST /a");
+        let same = one("DELETE", json!({ "X-HTTP-Method": "delete" }));
+        assert_eq!(same.target(), "DELETE /a");
     }
 
     /// A body is JSON, typed so, or text, typed as text unless it says; a GET has none.

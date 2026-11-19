@@ -4075,6 +4075,36 @@ mod requests {
         );
     }
 
+    /// A write whose override header names a read still asks, and sends nothing until the user
+    /// answers; Deny sends nothing at all, and the log names the method sent (#1439).
+    #[gpui::test]
+    fn a_write_that_says_its_a_read_still_asks(cx: &mut TestAppContext) {
+        let (agents, browser, _) = connected(cx);
+        let masked = json!({ "tab": 20, "requests": [
+            { "method": "POST", "path": "/api/items",
+              "headers": { "X-HTTP-Method-Override": "GET" }, "body": { "title": "Milk" } },
+        ] });
+        let answer = call(&agents, "claude-code", "request", masked, cx);
+        let question =
+            (browser.asked.borrow().clone()).expect("a POST that said it was a GET didn't ask");
+        assert_eq!(sent(&browser).len(), 0, "it sent before the user answered");
+        assert_eq!(
+            question.changes,
+            [("POST as GET /api/items".into(), "title: Milk".into())]
+        );
+        agents.update(cx, |agents, cx| {
+            agents.answer(question.id, Answer::Never, cx)
+        });
+        assert!(answer.recv().unwrap().error);
+        assert_eq!(sent(&browser).len(), 0, "a refused call sent something");
+        assert_eq!(
+            targets(&agents, cx)
+                .last()
+                .map(|(target, _)| target.as_str()),
+            Some("POST as GET /api/items")
+        );
+    }
+
     /// The browser's headers, other sites and the user's tabs are refused, and logged, without a
     /// question and without the user's tab's address in the answer. A request that gets no answer
     /// stops the rest.
