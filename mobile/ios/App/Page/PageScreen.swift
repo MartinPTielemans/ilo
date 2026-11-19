@@ -103,7 +103,10 @@ struct PageScreen: View {
       .animation(reduceMotion ? Motion.quick : Motion.page, value: tab.id)
       .animation(Motion.sheet, value: peek == nil)
       .animation(Motion.quick, value: browser.sheet)
-      .animation(Motion.quick, value: lifted)
+      // The bar is gone the moment a finger lifts the page, and comes back at its own pace. Glass
+      // that leaves over time keeps what's on it whole until it has left, however that fades: on
+      // a quick swipe the page was off the dock with the address still over the dock's field.
+      .animation(lifted ? nil : Motion.quick, value: lifted)
       .frame(width: screen.width, height: screen.height)
       .ignoresSafeArea()
     }
