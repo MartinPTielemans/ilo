@@ -497,7 +497,9 @@ press escape
 at=$(wc -l < "$nvda_log")
 press e ctrl shift
 expect '^browser: new board [0-9a-f]\{32\} tab [0-9]*$' "⌃⇧E made no Board"
-board=$(grep '^browser: new board ' "$log" | tail -1 | cut -d' ' -f6)
+made=$(grep '^browser: new board ' "$log" | tail -1)
+made_id=$(echo "$made" | cut -d' ' -f4)
+board=$(echo "$made" | cut -d' ' -f6)
 send type "kitchen"
 press return
 expect "^browser: board $board has the keyboard\$" "↩ on the new Board's name didn't give its page the keyboard"
@@ -512,7 +514,9 @@ for _ in $(seq 100); do
 done
 spoken "the new Board's page"
 board_said "$at" "'Empty note', 'note'" "New Board's first note, offered, as an empty note"
-boards=$(dirname "$(find "$profile_dir" -type d -path "*/Boards/$board" | head -1)")
+folder=$(find "$profile_dir" -type d -path "*/Boards/$made_id" | head -1)
+[ -n "$folder" ] || fail "New Board made no folder for $made_id in the profile ($profile_dir)"
+boards=$(dirname "$folder")
 notes=$(printf '6%.0s' $(seq 32))
 mkdir -p "$boards/$notes"
 printf '%s' '{"version": 1, "camera": {"x": 0, "y": 0, "zoom": 1}, "cards": [
