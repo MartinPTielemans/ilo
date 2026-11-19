@@ -162,11 +162,34 @@ pub fn close(keep: Option<u64>, cx: &mut App) {
 
 /// The question whose requests show whole, if any.
 pub fn showing(cx: &App) -> Option<u64> {
+    showing_over(cx).map(|(_, question)| question)
+}
+
+/// The browser window it shows over and the question whose requests it shows, if it shows.
+pub fn showing_over(cx: &App) -> Option<(u64, u64)> {
     let window = cx.try_global::<RequestWindow>()?.0;
     window
         .read(cx)
         .ok()
-        .and_then(|view| view.shown.as_ref().map(|shown| shown.question))
+        .and_then(|view| (view.shown.as_ref()).map(|shown| (shown.window, shown.question)))
+}
+
+/// Closes it if it shows over browser window `window` for any question but `keep`, the one that
+/// window's card shows: a question answered, gone, or covered by a page's takes it along.
+pub fn follow(window: u64, keep: Option<u64>, cx: &mut App) {
+    if showing_over(cx).is_some_and(|(over, _)| over == window) {
+        close(keep, cx);
+    }
+}
+
+/// Its left in the window's content, beside the card from `card_left` to `card_right`: toward the
+/// page, past the card's right with a sidebar on the left, and to its left with one on the right,
+/// as the theme picker opens.
+pub fn beside(card_left: f32, card_right: f32, right: bool, inset: f32) -> f32 {
+    match right {
+        true => card_left - 2. * inset - WIDTH,
+        false => card_right + 2. * inset,
+    }
 }
 
 /// The user left it, such as with a click outside, and the host has hidden it.

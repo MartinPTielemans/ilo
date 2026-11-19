@@ -3924,7 +3924,11 @@ pub fn local_time(at: u64) -> String {
 /// "Claude Code said: “Close item 4127.”". It's plain already, and plain again for one kept
 /// before it was made so.
 pub fn said(agent: &str, words: &str) -> String {
-    format!("{agent} said: “{}”", request::plain(words))
+    format!(
+        "{} said: “{}”",
+        request::plain(agent),
+        request::plain(words)
+    )
 }
 
 pub fn ago(at: SystemTime, now: SystemTime) -> String {

@@ -191,8 +191,11 @@ impl Past {
                 target: field("target").unwrap_or_default(),
                 url: field("url").unwrap_or_default(),
                 sent,
-                // Steps kept before an agent said what a change does have none.
-                said: field("said").unwrap_or_default(),
+                // Steps kept before an agent said what a change does have none, and an edited
+                // file's is held to what the tool takes.
+                said: (field("said").unwrap_or_default().chars())
+                    .take(crate::agents::request::WHAT_MOST)
+                    .collect(),
             })
         })
         .collect();

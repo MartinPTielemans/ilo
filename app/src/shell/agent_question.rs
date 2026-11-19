@@ -55,7 +55,7 @@ impl Shell {
                     "browser: agent question {} change {}: “{}” {}",
                     asked.id,
                     at + 1,
-                    request::shown(&change.what),
+                    request::shown(&request::hide_secrets(&change.what, false).0),
                     change.kind().facts(&asked.site)
                 );
             }
@@ -79,12 +79,22 @@ impl Shell {
     fn answer_agent(&mut self, answer: Answer, cx: &mut Context<Self>) {
         if let Some(question) = self.agent_question.take() {
             self.browser.answer_agent(question.id, answer, cx);
+            // The whole request goes with its answer: the Agents' None after it changes nothing.
+            agent_request::close(None, cx);
             cx.notify();
         }
     }
 
     /// The agent's question, as a card under the URL field.
     pub(super) fn agent_question_card(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        // The whole request shows only beside its question's card, so one a page's question covers
+        // goes, as one gone or answered does.
+        let (window, keep) = (self.browser.window(), self.agent_question().map(|q| q.id));
+        if agent_request::showing_over(cx)
+            .is_some_and(|(over, question)| over == window && Some(question) != keep)
+        {
+            cx.defer(move |cx| agent_request::follow(window, keep, cx));
+        }
         let Some(question) = self.agent_question() else {
             // Drawn again, it's logged again.
             self.agent_question_drawn.set(None);
@@ -154,6 +164,8 @@ impl Shell {
             false => gpui::rgba(DARK_DESTRUCTIVE).into(),
         };
         let a11y = self.a11y;
+        // A client's name is its own words too.
+        let agent = request::plain(&question.agent);
         let small = |line: gpui::Div| line.text_size(px(text::SMALL)).line_height(px(FACTS_LINE));
         let facts = |change: &Request, alone: bool| {
             let kind = change.kind();
@@ -178,10 +190,11 @@ impl Shell {
                 true => change.kind().facts(&question.site),
                 false => change.kind().short_facts().to_string(),
             };
+            // The facts are the browser's own, and said so, so a sentence can't pass for them.
             format!(
-                "{} says: {}. {facts}.",
-                question.agent,
-                change.what.trim_end_matches('.')
+                "{agent} says: {}. {} sees: {facts}.",
+                change.what.trim_end_matches('.'),
+                env!("APP_NAME")
             )
         };
         let head = |words: String| {
@@ -194,7 +207,7 @@ impl Shell {
         let count = question.changes.len();
         let (head, changes) = match question.changes.as_slice() {
             [one] => (
-                head(format!("{} says", question.agent)),
+                head(format!("{agent} says")),
                 vec![
                     div()
                         .id(("agent-change", 0usize))
@@ -208,8 +221,8 @@ impl Shell {
             ),
             many => (
                 head(format!(
-                    "{} asks for {count} changes on {}",
-                    question.agent, question.site
+                    "{agent} asks for {count} changes on {}",
+                    question.site
                 )),
                 (many.iter().enumerate())
                     .map(|(at, change)| {
@@ -285,7 +298,7 @@ impl Shell {
                 crate::settings_rows::named_button(close, "Close")
             })
             .on_click(cx.listener(|shell, _, _, cx| shell.answer_agent(Answer::Dismiss, cx)));
-        let named = format!("{} asks to {}", question.agent, question.what);
+        let named = format!("{agent} asks to {}", question.what);
         self.plate("agent-question")
             .child(listener)
             .when(a11y, |card| card.role(Role::AlertDialog).aria_label(named))
@@ -318,10 +331,13 @@ impl Shell {
         let Some(card) = self.agent_question_drawn.get() else {
             return;
         };
-        let (left, top) = (
-            f32::from(card.right()) + 2. * PLATE_INSET,
-            f32::from(card.top()),
+        let left = agent_request::beside(
+            f32::from(card.left()),
+            f32::from(card.right()),
+            self.right,
+            PLATE_INSET,
         );
+        let top = f32::from(card.top());
         let room = agent_request::room(top, f32::from(window.viewport_size().height));
         let shell = cx.entity().downgrade();
         let handle = window.window_handle();
@@ -345,7 +361,7 @@ impl Shell {
             agent_request::Shown {
                 window: self.browser.window(),
                 question: question.id,
-                agent: question.agent.clone(),
+                agent: request::plain(&question.agent).into(),
                 site: question.site.clone(),
                 changes: question.changes.clone(),
                 left,
@@ -665,8 +681,8 @@ mod tests {
     }
 
     /// Readers hear the card as an alert named by what the agent asks, then each change as a group:
-    /// the agent's whole sentence, not the card's clip, and the browser's facts. Then "See the whole
-    /// request", collapsed, Deny and Allow, and Close (#3548).
+    /// the agent's whole sentence, not the card's clip, and the browser's facts, said as its own.
+    /// Then "See the whole request", collapsed, Deny and Allow, and Close (#3548).
     #[gpui::test]
     fn readers_hear_each_change_whole_in_the_cards_order(cx: &mut TestAppContext) {
         use gpui::accesskit::{NodeId, Role};
@@ -708,12 +724,14 @@ mod tests {
         });
         cx.simulate_a11y_activation();
         cx.run_until_parked();
-        let whole = long.trim_end_matches('.');
+        let (whole, app) = (long.trim_end_matches('.'), env!("APP_NAME"));
         assert_eq!(
             read(cx),
             [
                 "AlertDialog Claude Code asks to make a change on team.example.com".to_string(),
-                format!("Group Claude Code says: {whole}. Changes something on team.example.com."),
+                format!(
+                    "Group Claude Code says: {whole}. {app} sees: Changes something on team.example.com."
+                ),
                 "Button See the whole request, collapsed".to_string(),
                 "Button Deny".to_string(),
                 "Button Allow".to_string(),
@@ -733,8 +751,13 @@ mod tests {
         assert_eq!(
             heard[1..3],
             [
-                "Group 1 of 2. Claude Code says: Close item 1. Changes something.",
-                "Group 2 of 2. Claude Code says: Tidy up the old draft. Deletes something.",
+                format!(
+                    "Group 1 of 2. Claude Code says: Close item 1. {app} sees: Changes something."
+                ),
+                format!(
+                    "Group 2 of 2. Claude Code says: Tidy up the old draft. {app} sees: Deletes \
+                     something."
+                ),
             ]
         );
     }
@@ -817,5 +840,103 @@ mod tests {
         shell.update(cx, |shell, cx| shell.set_agent_question(None, cx));
         cx.run_until_parked();
         assert_eq!(cx.update(|_, cx| agent_request::showing(cx)), None);
+    }
+
+    /// The whole request shows only beside its question's card: it goes when the question is
+    /// answered, refused by the 5-minute rule (the Agents ask the next, or nothing), gone with its
+    /// client, or covered by a page's question taking the card's place, though the Agents say
+    /// nothing more of it after an answer.
+    #[gpui::test]
+    fn the_whole_request_goes_with_its_card(cx: &mut TestAppContext) {
+        let (host, shell, cx) = window_with(cx);
+        let shown = Rc::new(Shown::default());
+        let opened = {
+            let shown = shown.clone();
+            cx.update(|_, cx| agent_request::open(shown, cx))
+        };
+        opened.expect("the whole request's window didn't open");
+        let open = |id: u64, cx: &mut gpui::VisualTestContext| {
+            shell.update(cx, |shell, cx| {
+                let one = change("DELETE", "/api/items/7", "Tidy up the old draft.");
+                shell.set_agent_question(Some(requests(id, vec![one])), cx);
+            });
+            cx.run_until_parked();
+            shell.update_in(cx, |shell, window, cx| shell.see_whole_request(window, cx));
+            cx.run_until_parked();
+            assert_eq!(cx.update(|_, cx| agent_request::showing(cx)), Some(id));
+        };
+        let card = |cx: &mut gpui::VisualTestContext| {
+            let card = shell.read_with(cx, |shell, _| shell.agent_question_drawn.get());
+            card.expect("the card wasn't drawn")
+        };
+
+        // Answered: Deny, with the whole request open, and the Agents' None that follows.
+        open(7, cx);
+        let card_at = card(cx);
+        let last = card_at.bottom() - px(PADDING + BUTTON_HEIGHT / 2.);
+        cx.simulate_click(
+            point(card_at.left() + card_at.size.width * 0.25, last),
+            Modifiers::none(),
+        );
+        cx.run_until_parked();
+        assert!(host.take().contains(&"answer agent 7 Dismiss".to_string()));
+        assert_eq!(
+            cx.update(|_, cx| agent_request::showing(cx)),
+            None,
+            "answered"
+        );
+        shell.update(cx, |shell, cx| shell.set_agent_question(None, cx));
+        cx.run_until_parked();
+
+        // Refused by the 5-minute rule, as the Agents ask the next question in its place.
+        open(8, cx);
+        shell.update(cx, |shell, cx| {
+            shell.set_agent_question(Some(question(9)), cx)
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            cx.update(|_, cx| agent_request::showing(cx)),
+            None,
+            "refused"
+        );
+
+        // Gone with its client, as the Agents ask nothing.
+        open(10, cx);
+        shell.update(cx, |shell, cx| shell.set_agent_question(None, cx));
+        cx.run_until_parked();
+        assert_eq!(cx.update(|_, cx| agent_request::showing(cx)), None, "gone");
+
+        // A page's question takes the card's place, and the agent's is still asked.
+        open(11, cx);
+        shell.update(cx, |shell, cx| {
+            let asked = PageQuestion {
+                site: "example.com".into(),
+                permissions: Vec::new(),
+            };
+            shell.set_question(10, Some(asked), cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            cx.update(|_, cx| agent_request::showing(cx)),
+            None,
+            "covered"
+        );
+        shell.read_with(cx, |shell, _| {
+            assert_eq!(shell.agent_question.as_ref().map(|q| q.id), Some(11))
+        });
+        let hides = shown.0.borrow().iter().filter(|did| *did == "hide").count();
+        assert_eq!(hides, 4);
+    }
+
+    /// With the sidebar on the right, the whole request opens to the card's left, toward the page,
+    /// as the theme picker does; on the left, past its right.
+    #[test]
+    fn the_whole_request_opens_toward_the_page() {
+        use crate::tokens::shell::PLATE_INSET;
+        let (left, right) = (900., 1140.);
+        let on_left = agent_request::beside(20., 260., false, PLATE_INSET);
+        assert_eq!(on_left, 260. + 2. * PLATE_INSET);
+        let on_right = agent_request::beside(left, right, true, PLATE_INSET);
+        assert_eq!(on_right + agent_request::WIDTH, left - 2. * PLATE_INSET);
     }
 }

@@ -431,9 +431,9 @@ fn one(asked: &Value, origin: &str, number: usize) -> Result<Request, Wrong> {
 }
 
 /// An agent's sentence as plain text in one paragraph, wherever it's shown, so it can't lay out
-/// lines that read as the browser's own under its quote: line breaks, tabs and other control
-/// characters become a space, direction overrides and invisible format characters go, and runs of
-/// spaces become one.
+/// lines that read as the browser's own under its quote, or close the quote: line breaks, tabs,
+/// other control characters and blank glyphs become a space, double quotation marks single ones,
+/// direction overrides and invisible format characters go, and runs of spaces become one.
 pub fn plain(text: &str) -> String {
     let invisible = |c: char| {
         matches!(c,
@@ -445,9 +445,25 @@ pub fn plain(text: &str) -> String {
     };
     let spaced = (text.chars())
         .filter(|c| !invisible(*c))
-        .map(|c| match c.is_control() || c.is_whitespace() {
-            true => ' ',
-            false => c,
+        .map(|c| match c {
+            _ if c.is_control() || c.is_whitespace() => ' ',
+            // Glyphs drawn blank that aren't spaces, such as the Braille blank.
+            '\u{2800}' | '\u{1D159}' | '\u{16FE4}' => ' ',
+            '"'
+            | '\u{201C}'
+            | '\u{201D}'
+            | '\u{201F}'
+            | '\u{2033}'
+            | '\u{2036}'
+            | '\u{3003}'
+            | '\u{301D}'..='\u{301F}'
+            | '\u{FF02}' => '\'',
+            '\u{201E}' => '\u{201A}',
+            '\u{AB}' => '\u{2039}',
+            '\u{BB}' => '\u{203A}',
+            '\u{300E}' => '\u{300C}',
+            '\u{300F}' => '\u{300D}',
+            _ => c,
         })
         .collect::<String>();
     spaced
@@ -457,14 +473,19 @@ pub fn plain(text: &str) -> String {
         .join(" ")
 }
 
-/// A sentence as the question's card shows it: whole up to WHAT_SHOWN, else ended at a word, "…".
+/// A sentence as the question's card shows it: whole up to WHAT_SHOWN, else cut with "…", at a
+/// word if one ends in the last quarter, else at the limit, so a sentence in a script without
+/// spaces, or with one near its start, keeps the card's width of it.
 pub fn shown(what: &str) -> String {
     if what.chars().count() <= WHAT_SHOWN {
         return what.to_string();
     }
-    let cut: String = what.chars().take(WHAT_SHOWN - 1).collect();
-    let end = cut.rfind(' ').filter(|end| *end > 0).unwrap_or(cut.len());
-    format!("{}…", cut[..end].trim_end_matches([',', ';', ':', ' ']))
+    let cut: Vec<char> = what.chars().take(WHAT_SHOWN - 1).collect();
+    let end = (cut.iter().rposition(|c| *c == ' '))
+        .filter(|end| *end >= WHAT_SHOWN * 3 / 4)
+        .unwrap_or(cut.len());
+    let kept: String = cut[..end].iter().collect();
+    format!("{}…", kept.trim_end_matches([',', ';', ':', '、', ' ']))
 }
 
 /// The origin of an http(s) address, as "https://host[:port]" in lower case without a default
@@ -1241,6 +1262,16 @@ mod tests {
             plain("Close **item** <a href=x>4127</a>"),
             "Close **item** <a href=x>4127</a>"
         );
+        // Its quote can't be closed from inside, and a blank glyph can't push words to a line of
+        // their own.
+        assert_eq!(
+            plain("Tidy up.\u{201D} \u{2800}\u{2800}\u{2800} \"Checked: safe\" \u{FF02}ok\u{FF02}"),
+            "Tidy up.' 'Checked: safe' 'ok'"
+        );
+        assert_eq!(
+            plain("\u{201E}a\u{201C} \u{AB}b\u{BB} \u{300E}c\u{300F}"),
+            "\u{201A}a' \u{2039}b\u{203A} \u{300C}c\u{300D}"
+        );
     }
 
     /// The card shows a sentence whole up to WHAT_SHOWN, and a longer one up to a word, with "…".
@@ -1258,5 +1289,23 @@ mod tests {
             long[clipped.len() - "…".len()..].starts_with(' '),
             "cut inside a word"
         );
+    }
+
+    /// A sentence without a space in its last quarter keeps the card's width of it, cut at the
+    /// limit: Japanese, which has none, and one whose only space is near its start.
+    #[test]
+    fn the_card_clips_a_sentence_without_late_spaces_at_its_limit() {
+        let japanese = "重複している二件の項目をまとめ、古い方の履歴とラベルを残してから、新しい方を\
+            閉じて古い方へのメモを付けます。見ている人が古い方を追えるように、両方のリンクも更新し、\
+            関係するチームの全員に変更を伝えて、来週の会議で結果を確認します。\
+            終わったら、作業の記録を共有の場所に保存して、次の担当者に引き継ぎます。";
+        assert!(japanese.chars().count() > WHAT_SHOWN);
+        let clipped = shown(japanese);
+        assert_eq!(clipped.chars().count(), WHAT_SHOWN, "{clipped}");
+        assert!(japanese.starts_with(clipped.trim_end_matches('…')));
+
+        let early = format!("Merge {}", "x".repeat(200));
+        assert_eq!(shown(&early).chars().count(), WHAT_SHOWN);
+        assert!(shown(&early).starts_with("Merge x"));
     }
 }

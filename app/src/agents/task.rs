@@ -1768,10 +1768,12 @@ impl Agents {
     }
 
     /// A client said hello: the name its sessions' cards show. One the user connected in
-    /// Settings › Agents by name has that; any other MCP client, the name it gives.
+    /// Settings › Agents by name has that; any other MCP client, the name it gives, as plain text,
+    /// unless it would pass for the browser, whose words the cards set beside an agent's.
     pub(super) fn hello(&mut self, agent: &str, client: &str) {
+        let given = super::request::plain(client);
         let name = match Client::from_id(agent) {
-            Some(Client::Other) if !client.is_empty() => client.to_string(),
+            Some(Client::Other) if !given.is_empty() && !names_the_browser(&given) => given,
             Some(known) => known.name().to_string(),
             None => return,
         };
@@ -2497,6 +2499,26 @@ fn needs_you(question: &Question) -> SharedString {
     }
 }
 
+/// The words a card's foot shows of its `status`, which `fits` its lines or not. A request's that
+/// doesn't fit is "Needs your OK" alone, as the card above says the rest, rather than the words
+/// cut with dots left hanging; any other status shows as it is.
+pub fn foot_words(status: &SharedString, fits: bool) -> SharedString {
+    let request = (status.strip_prefix(NEEDS_OK))
+        .and_then(|rest| rest.strip_prefix(" · "))
+        .is_some_and(|rest| {
+            use super::request::Does;
+            [Does::Sends, Does::Changes, Does::Deletes]
+                .iter()
+                .any(|does| does.noun() == rest)
+                || (rest.strip_suffix(" changes"))
+                    .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+        });
+    match request && !fits {
+        true => NEEDS_OK.into(),
+        false => status.clone(),
+    }
+}
+
 /// How much of a card's `status` leads it, set in the title's ink and heavier: the step count
 /// while it works ("Step 5"), and "Needs you" or "Needs your OK" while a confirmation or a handoff
 /// waits, the one state that asks for the user. Zero for the rest. By the words alone, as a status
@@ -2935,4 +2957,67 @@ pub fn model_menu(
         })
         .collect();
     (all, items)
+}
+
+/// Whether a client's name would pass for the browser's own words: one with the app's name as a
+/// word, or that calls itself the browser. "Browser Use" is an agent's.
+fn names_the_browser(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    let app = env!("APP_NAME").to_lowercase();
+    lower
+        .split(|c: char| !c.is_alphanumeric())
+        .any(|word| word == app)
+        || ["the browser", "your browser", "this browser", "web browser"]
+            .iter()
+            .any(|browser| lower.contains(browser))
+        || lower == "browser"
+}
+
+#[cfg(test)]
+mod foot_tests {
+    use super::*;
+    use crate::agents::request::Request;
+
+    fn change(method: &str) -> Request {
+        Request {
+            method: method.into(),
+            does: method.into(),
+            url: "https://team.example.com/api/items/7".into(),
+            path: "/api/items/7".into(),
+            headers: Vec::new(),
+            body: String::new(),
+            what: "Tidy up the old draft.".into(),
+        }
+    }
+
+    /// A request's foot that doesn't fit is "Needs your OK" alone; a confirmation's, which says
+    /// what the agent would do, shows as it did before requests asked, fitting or not.
+    #[test]
+    fn only_a_requests_foot_gives_up_its_words() {
+        let order = Question {
+            what: "click “Place order” on shop.example, a long way past the foot's two lines"
+                .into(),
+            ..Question::default()
+        };
+        let status = needs_you(&order);
+        assert_eq!(
+            status.as_ref(),
+            "Needs your OK · click “Place order” on shop.example, a long way past the foot's two lines"
+        );
+        assert_eq!(foot_words(&status, false), status);
+        assert_eq!(foot_words(&status, true), status);
+
+        let one = Question {
+            changes: vec![change("DELETE")],
+            ..Question::default()
+        };
+        assert_eq!(needs_you(&one).as_ref(), "Needs your OK · a delete");
+        assert_eq!(foot_words(&needs_you(&one), true), needs_you(&one));
+        assert_eq!(foot_words(&needs_you(&one), false).as_ref(), NEEDS_OK);
+        let many = Question {
+            changes: vec![change("PATCH"), change("DELETE")],
+            ..Question::default()
+        };
+        assert_eq!(foot_words(&needs_you(&many), false).as_ref(), NEEDS_OK);
+    }
 }

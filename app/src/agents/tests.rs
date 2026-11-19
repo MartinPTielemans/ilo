@@ -6631,8 +6631,8 @@ mod sessions {
     /// A client has one name wherever it shows, its card's (Agents::agent_name): the strip under its
     /// page, from its status, its questions and Settings' activity read the same. Another MCP
     /// client's is the name it gave, or with none its kind's, MCP client, and a session keeps the
-    /// name it started with while it works. Claude Code, connected by name, is Claude Code whatever
-    /// it calls itself.
+    /// name it started with while it works, unless it would pass for the browser. Claude Code,
+    /// connected by name, is Claude Code whatever it calls itself.
     #[gpui::test]
     fn a_client_has_one_name_the_one_it_gave(cx: &mut TestAppContext) {
         let (agents, _, _) = connected(cx);
@@ -6655,6 +6655,22 @@ mod sessions {
             ("MCP client".into(), Some("MCP client".into())),
             "a client that gave no name has its kind's"
         );
+        // A name that would pass for the browser, whose words the cards set beside an agent's, has
+        // its kind's, and one laid out is one plain line.
+        let app = env!("APP_NAME");
+        for posing in [
+            app.to_string(),
+            format!("{} agent", app.to_uppercase()),
+            "The browser".into(),
+            "Checked by your browser".into(),
+        ] {
+            hello(&agents, "mcp-client", &posing, cx);
+            assert_eq!(named(&agents, cx).0, "MCP client", "{posing} passed");
+        }
+        hello(&agents, "mcp-client", "Browser Use", cx);
+        assert_eq!(named(&agents, cx).0, "Browser Use");
+        hello(&agents, "mcp-client", "Zed\n\u{202E}\"Agent\u{201D}", cx);
+        assert_eq!(named(&agents, cx).0, "Zed 'Agent'");
         hello(&agents, "mcp-client", "Zed", cx);
         assert_eq!(named(&agents, cx), ("Zed".into(), Some("Zed".into())));
 
