@@ -139,21 +139,51 @@ async function save() {
   return done !== false;
 }
 
-// The Library's picture, 268 × 188 at twice that, of what's in view. The Library shows it on the
-// paper of whichever look the window has, not the one it was taken in, so it has no ground of its
-// own and draws only in colours that read on either: a note's fill as its swatch, and every other
-// plate and the ink as --picture. A plate's words are left out, as they're too small to read
-// there; a note with no plate is its words.
+// Round the cards in the Library's picture, and the least it shows of the Board, in its own units:
+// one note of the usual width fills half its square, a block that reads at the row's 18 points.
+const PICTURE_MARGIN = 24, PICTURE_LEAST = 480;
+
+// The cards' bounds in the Board's own units, or null for an empty Board.
+function cardsBounds() {
+  let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+  const take = (x0, y0, x1, y1) => {
+    left = Math.min(left, x0);
+    top = Math.min(top, y0);
+    right = Math.max(right, x1);
+    bottom = Math.max(bottom, y1);
+  };
+  for (const card of cards) {
+    if (card.kind === "stroke") {
+      const r = card.width / 2;
+      for (const [px, py] of card.points) take(card.x + px - r, card.y + py - r, card.x + px + r, card.y + py + r);
+    } else {
+      take(card.x, card.y, card.x + card.w, card.y + (card.h || byId.get(card.id)?.offsetHeight || 0));
+    }
+  }
+  return left === Infinity ? null : { left, top, right, bottom };
+}
+
+// The Library's picture, 268 × 188 at twice that, of what's on the Board rather than what's in
+// view: the cards' bounds, at least PICTURE_LEAST across, in its middle square, which is all of it
+// the Library's row shows. The Library shows it on the paper of whichever look the window has, not
+// the one it was taken in, so it has no ground of its own and draws only in colours that read on
+// either: a note's fill as its swatch, and every other plate and the ink as --picture. A plate's
+// words are left out, as they're too small to read there; a note with no plate is its words.
 async function saveThumb() {
   const scale = 2, w = 268, h = 188;
   const canvas = new OffscreenCanvas(w * scale, h * scale);
   const g = canvas.getContext("2d");
   const style = getComputedStyle(document.documentElement);
   const swatch = (name) => style.getPropertyValue(SWATCHES.includes(name) ? `--fill-${name}` : "--picture").trim();
-  const fit = Math.min(w / innerWidth, h / innerHeight) * scale;
-  g.scale(fit, fit);
-  g.translate(camera.x, camera.y);
-  g.scale(camera.zoom, camera.zoom);
+  const bounds = cardsBounds();
+  if (bounds) {
+    const across = Math.max(PICTURE_LEAST, bounds.right - bounds.left + 2 * PICTURE_MARGIN);
+    const down = Math.max(PICTURE_LEAST, bounds.bottom - bounds.top + 2 * PICTURE_MARGIN);
+    const fit = Math.min(h / across, h / down) * scale;
+    g.translate((w * scale) / 2, (h * scale) / 2);
+    g.scale(fit, fit);
+    g.translate(-(bounds.left + bounds.right) / 2, -(bounds.top + bounds.bottom) / 2);
+  }
   for (const card of cards) {
     const el = byId.get(card.id);
     if (card.kind === "stroke") {
