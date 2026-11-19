@@ -507,9 +507,9 @@ archive "⌃⇧E with the sidebar holding the keyboard"
 # after typing finds the last word saved, and the copy has it. Over a Board, "dup" puts Duplicate
 # Board first, as Duplicate Current Tab isn't offered there. The copy opens in a tab of its own,
 # with its own id, and a Board's row's menu in the Library duplicates it too, closing the Library.
-send key e ctrl shift
-expect '^browser: command new-board via ' "⌃⇧E for the Board to duplicate didn't run New Board"
-made garden "⌃⇧E for the Board to duplicate"
+send menu "New Board"
+expect '^browser: command new-board via ' "the File menu's New Board for the Board to duplicate didn't run it"
+made garden "the File menu, for the Board to duplicate"
 garden=$made_id
 garden_tab=$tab
 send type "plum cherry"
@@ -588,9 +588,10 @@ expect "^browser: tab $tab closed\$" "⌘W didn't close the row's copy's tab"
 for tab in "$copy_tab" "$garden_tab"; do
   n=$(echo $(pinned) $(today) | tr ' ' '\n' | grep -nx "$tab" | cut -d: -f1)
   [ -n "$n" ] || fail "the Board's tab $tab isn't in the sidebar: pinned \"$(pinned)\", Today \"$(today)\""
-  switch "$n cmd" "$tab"
+  # Closing a tab shows the one under it, which may be this one already.
+  [ "$(grep '^browser: selected ' "$log" | tail -1 | cut -d' ' -f3)" = "$tab" ] || switch "$n cmd" "$tab"
   if [ "$tab" = "$garden_tab" ]; then
-    archive "⌃⇧E for the Board to duplicate"
+    archive "the File menu, for the Board to duplicate"
   else
     send key w cmd
     expect "^browser: tab $tab closed\$" "⌘W didn't close the Board's copy's tab"
