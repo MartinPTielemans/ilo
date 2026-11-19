@@ -469,6 +469,20 @@ before=$heard
 press down
 grep -q '^browser: library row keyed ' "$log" || fail "↓ from History's field rang no row: $log"
 says "$before" ', 1 of [0-9]' "NVDA didn't say History's ringed row and where it stands after ↓"
+# ⇧F10 from the field opens the ringed row's menu, a visited page's, under it on its first item,
+# and escape closes it, leaving the field the keyboard and the ring on the row (#3526). What NVDA
+# says of the menu isn't judged yet.
+judging=
+press f10 shift
+at=$step
+expect '^browser: library row menu [0-9]* 0$' "⇧F10 from History's field didn't open the ringed row's menu"
+expect '^browser: menu shown Open in New Tab' "⇧F10 from History's field didn't show its ringed row's menu"
+expect '^browser: menu highlights .* at ' "the row's menu from ⇧F10 didn't highlight its first item"
+press escape
+expect '^browser: menu closed$' "escape didn't close History's row's menu"
+tail -n 4 "$focus_file" | grep -q '^UI Automation focus: [A-Za-z ]* "Search History", framework AccessKit' ||
+  fail "UI Automation's focus isn't back on the Library's search field after the row's menu: $focus_file"
+none_since '^browser: library rows ring ended$' "$at" || fail "the row's menu ended the ring on History's row"
 # Tab from the field goes on to the Library's other controls, its sections first, which ↓ walks,
 # and ⇧Tab comes back, where Tab went nowhere before (#3238).
 judging=
