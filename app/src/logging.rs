@@ -97,27 +97,34 @@ pub extern "C" fn browser_log_on(area: *const std::ffi::c_char) -> bool {
     AREAS.contains(&area.as_ref()) && on(&area)
 }
 
-/// `line` with each share link's id and key taken out: a link `…/s/<id>#<key>` (#680) opens the
-/// share for whoever reads it, and logs get pasted into issues; its id, as the header says, is the
-/// account's too. The server's address stays, so a line still says it was a share.
+/// `line` with each share link's id and key taken out, as typed or escaped in a search's address: a
+/// link `…/s/<id>#<key>` (#680) opens the share for whoever reads it, and logs get pasted into
+/// issues; its id, as the header says, is the account's too. The server's address stays, so a line
+/// still says it was a share.
 pub fn without_share_links(line: String) -> String {
     const ID: usize = 22;
     const KEY: usize = 43;
+    // A link as it's typed, and as a search's address holds it, escaped.
+    const FORMS: [(&str, &str); 2] = [("/s/", "#"), ("%2fs%2f", "%23")];
     let base64url = |byte: &u8| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_');
-    if !line.contains("/s/") {
+    let lower = line.to_ascii_lowercase();
+    if !FORMS.iter().any(|(path, _)| lower.contains(path)) {
         return line;
     }
-    let bytes = line.as_bytes();
+    let (bytes, lowered) = (line.as_bytes(), lower.as_bytes());
     let mut kept = String::with_capacity(line.len());
     let mut from = 0;
     let mut at = 0;
-    while let Some(found) = line[at..].find("/s/") {
-        let id = at + found + 3;
-        let key = id + ID + 1;
+    while let Some((found, path, hash)) = (FORMS.iter())
+        .filter_map(|&(path, hash)| lower[at..].find(path).map(|found| (at + found, path, hash)))
+        .min_by_key(|&(found, ..)| found)
+    {
+        let id = found + path.len();
+        let key = id + ID + hash.len();
         let end = key + KEY;
         let is_link = bytes.len() >= end
             && bytes[id..id + ID].iter().all(base64url)
-            && bytes[id + ID] == b'#'
+            && &lowered[id + ID..key] == hash.as_bytes()
             && bytes[key..end].iter().all(base64url)
             && !bytes.get(end).is_some_and(base64url);
         if is_link {
@@ -152,6 +159,12 @@ mod tests {
         assert_eq!(
             without_share_links(line),
             "a http://10.0.0.2:8080/s/<link> b /s/<link>"
+        );
+        // Escaped, as a search for the typed link holds it, either case.
+        let line = format!("q=http%3A%2F%2Flocalhost%3A1%2Fs%2F{id}%23{key} %2fs%2f{id}%23{key}&");
+        assert_eq!(
+            without_share_links(line),
+            "q=http%3A%2F%2Flocalhost%3A1%2Fs%2F<link> %2fs%2f<link>&"
         );
         // What isn't a link's shape stays: a short id, a longer fragment, no fragment.
         for line in [
