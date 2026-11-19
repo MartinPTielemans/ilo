@@ -1,0 +1,116 @@
+#include "browser_core/agent_reply_limit.h"
+
+#include <string>
+#include <vector>
+
+#include "base/functional/bind.h"
+#include "base/test/task_environment.h"
+#include "testing/gtest/include/gtest/gtest.h"
+
+namespace browser_core {
+namespace {
+
+constexpr base::TimeDelta kTick = base::Milliseconds(1);
+
+class AgentReplyLimitTest : public testing::Test {
+ protected:
+  base::test::TaskEnvironment clock_{base::test::TaskEnvironment::TimeSource::MOCK_TIME};
+  std::vector<std::string> ended_;
+  AgentReplyLimit limit_{base::BindRepeating(
+      [](std::vector<std::string>* ended, std::string why) { ended->push_back(std::move(why)); },
+      &ended_)};
+};
+
+// A click whose page shows an alert: the click's reply never comes, as the renderer waits on the
+// alert, and the job ends as it shows, not at the limit.
+TEST_F(AgentReplyLimitTest, AJobInFlightWhenTheDialogShowsEndsWithTheDialogsAnswer) {
+  limit_.Started();
+  limit_.Sent();
+  limit_.DialogShown("an alert");
+  ASSERT_EQ(ended_.size(), 1u);
+  EXPECT_EQ(ended_[0],
+            "The tab's page showed an alert while the action ran. Nothing more can be done on the "
+            "tab while it's up, and no tool answers it. close_tab closes the tab, and the dialog "
+            "with it.");
+  EXPECT_FALSE(limit_.counting());
+  // Answered once: the limit doesn't end it again.
+  clock_.FastForwardBy(AgentReplyLimit::kLimit * 2);
+  EXPECT_EQ(ended_.size(), 1u);
+}
+
+// A job waiting for its page to load has sent nothing yet, and a dialog then ends it too.
+TEST_F(AgentReplyLimitTest, ADialogEndsAJobThatHasSentNothing) {
+  limit_.Started();
+  EXPECT_FALSE(limit_.counting());
+  limit_.DialogShown("a dialog asking whether to leave it");
+  ASSERT_EQ(ended_.size(), 1u);
+  EXPECT_TRUE(ended_[0].starts_with(
+      "The tab's page showed a dialog asking whether to leave it while the action ran."));
+}
+
+TEST_F(AgentReplyLimitTest, AReplyThatNeverComesEndsAtTheLimit) {
+  limit_.Started();
+  limit_.Sent();
+  EXPECT_TRUE(limit_.counting());
+  clock_.FastForwardBy(AgentReplyLimit::kLimit - kTick);
+  EXPECT_TRUE(ended_.empty());
+  clock_.FastForwardBy(kTick);
+  ASSERT_EQ(ended_.size(), 1u);
+  EXPECT_EQ(ended_[0],
+            "The tab's page didn't answer for 15 s, so the action stopped part way. The page may "
+            "be busy or stuck; close_tab closes the tab.");
+  EXPECT_FALSE(limit_.counting());
+}
+
+// A long job whose page keeps answering, as a tree read after each frame, is never cut off: the
+// limit counts from the page's last reply.
+TEST_F(AgentReplyLimitTest, EachReplyCountsAgainFromNow) {
+  limit_.Started();
+  limit_.Sent();
+  limit_.Sent();
+  clock_.FastForwardBy(AgentReplyLimit::kLimit - kTick);
+  limit_.Replied(/*owed=*/1);
+  clock_.FastForwardBy(AgentReplyLimit::kLimit - kTick);
+  EXPECT_TRUE(ended_.empty());
+  clock_.FastForwardBy(kTick);
+  EXPECT_EQ(ended_.size(), 1u);
+}
+
+// The timer is there only while a job waits on a reply: not on an idle page, not for a picture
+// taken with no job, not while the job waits on its own timer with nothing owed, and not after.
+TEST_F(AgentReplyLimitTest, ItCountsOnlyWhileAJobWaitsOnAReply) {
+  limit_.Sent();
+  EXPECT_FALSE(limit_.counting());
+  limit_.Replied(/*owed=*/1);
+  EXPECT_FALSE(limit_.counting());
+
+  limit_.Started();
+  EXPECT_FALSE(limit_.counting());
+  limit_.Sent();
+  EXPECT_TRUE(limit_.counting());
+  limit_.Replied(/*owed=*/0);
+  EXPECT_FALSE(limit_.counting());
+  clock_.FastForwardBy(AgentReplyLimit::kLimit * 2);
+  EXPECT_TRUE(ended_.empty());
+
+  limit_.Sent();
+  EXPECT_TRUE(limit_.counting());
+  limit_.Ended();
+  EXPECT_FALSE(limit_.counting());
+  limit_.Sent();
+  EXPECT_FALSE(limit_.counting());
+  clock_.FastForwardBy(AgentReplyLimit::kLimit * 2);
+  EXPECT_TRUE(ended_.empty());
+}
+
+// The user's own page, or an agent's with no job running, shows its dialog and nothing ends.
+TEST_F(AgentReplyLimitTest, ADialogWithNoJobEndsNothing) {
+  limit_.DialogShown("an alert");
+  limit_.Started();
+  limit_.Ended();
+  limit_.DialogShown("an alert");
+  EXPECT_TRUE(ended_.empty());
+}
+
+}  // namespace
+}  // namespace browser_core

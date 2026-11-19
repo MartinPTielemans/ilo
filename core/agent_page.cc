@@ -644,6 +644,7 @@ void AgentPage::Next() {
   }
   job_ = std::move(jobs_.front());
   jobs_.pop_front();
+  limit_.Started();
   rest_.Stop();
   working_ = LiftWhileWorking(GetWebContents());
   // A hidden tab otherwise stops drawing, and its page then takes no input and gives no picture.
@@ -3001,6 +3002,7 @@ void AgentPage::Answer(std::string text, bool error) {
   app_name_.clear();
   const uint64_t request = job_->request;
   job_.reset();
+  limit_.Ended();
   working_.RunAndReset();
   frames_.clear();
   EndChoosing();
@@ -3033,6 +3035,48 @@ void AgentPage::Fail(std::string why) {
   Answer(std::move(why), /*error=*/true);
 }
 
+void AgentPage::EndWaiting(std::string why) {
+  // What the page owes the job is never waited on again: a reply that comes once the dialog is
+  // answered would otherwise run into the job after this one. Dropped, a picture under way
+  // answers that there's none.
+  base::flat_map<int, std::pair<int, Reply>> owed = std::exchange(replies_, {});
+  Fail(std::move(why));
+}
+
+// static
+void AgentPage::DialogShown(bc_id tab, int kind) {
+  content::WebContents* contents = Tab::FromId(tab);
+  AgentPage* page = contents ? FromWebContents(contents) : nullptr;
+  if (!page) {
+    return;
+  }
+  // As the app names it in its answer to a call that comes while it's up.
+  std::string_view what;
+  switch (kind) {
+    case BC_DIALOG_ALERT:
+      what = "an alert";
+      break;
+    case BC_DIALOG_CONFIRM:
+      what = "a confirm dialog";
+      break;
+    case BC_DIALOG_PROMPT:
+      what = "a prompt dialog";
+      break;
+    case BC_DIALOG_LEAVE:
+      what = "a dialog asking whether to leave it";
+      break;
+    case BC_DIALOG_SIGN_IN:
+      what = "a dialog asking for a user name and password";
+      break;
+    case BC_DIALOG_OPEN_APP:
+      what = "a dialog asking to open another app";
+      break;
+    default:
+      what = "a dialog";
+  }
+  page->limit_.DialogShown(what);
+}
+
 void AgentPage::AnswerHeld() {
   if (std::optional<Held> held = std::exchange(held_, std::nullopt)) {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
@@ -3047,6 +3091,7 @@ void AgentPage::LetGo() {
     owed.push_front(*std::move(job_));
   }
   job_.reset();
+  limit_.Ended();
   working_.RunAndReset();
   download_starting_.Stop();
   AnswerHeld();
@@ -3131,6 +3176,7 @@ void AgentPage::Send(const char* method, base::DictValue params, Reply reply, in
     return;
   }
   replies_[id] = {slot, std::move(reply)};
+  limit_.Sent();
   agent_host_->DispatchProtocolMessage(this, base::as_byte_span(*json));
 }
 
@@ -3179,6 +3225,7 @@ void AgentPage::DispatchProtocolMessage(content::DevToolsAgentHost* agent_host,
   }
   Reply run = std::move(reply->second.second);
   replies_.erase(reply);
+  limit_.Replied(replies_.size());
   // An error has no result, which each reply takes for a failure.
   std::move(run).Run(dict->FindDict("result"));
 }
@@ -3189,6 +3236,7 @@ void AgentPage::AgentHostClosed(content::DevToolsAgentHost* agent_host) {
   auto replies = std::move(replies_);
   replies_.clear();
   targets_.clear();
+  limit_.Replied(0);
   for (auto& [id, reply] : replies) {
     std::move(reply.second).Run(nullptr);
   }
@@ -3244,6 +3292,7 @@ void AgentPage::Detached(const std::string& session) {
     }
     Reply run = std::move(reply->second.second);
     replies_.erase(reply);
+    limit_.Replied(replies_.size());
     std::move(run).Run(nullptr);
   }
 }

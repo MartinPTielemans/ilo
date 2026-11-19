@@ -20,6 +20,7 @@
 #include "base/timer/timer.h"
 #include "base/types/expected.h"
 #include "base/values.h"
+#include "browser_core/agent_reply_limit.h"
 #include "browser_core/public/browser_core.h"
 #include "browser_core/withheld_fields.h"
 #include "content/public/browser/devtools_agent_host_client.h"
@@ -68,6 +69,9 @@ class AgentPage : public content::WebContentsObserver,
   // the page: the request of the action running, or of one that answered while the download was
   // about to start, which then never answers. Else 0.
   static uint64_t TakeJob(content::WebContents* contents);
+  // The page in |tab| showed a dialog, a BC_DIALOG_ kind, which its renderer waits on: the job
+  // running there ends now, as its page won't answer until the dialog is (#3536).
+  static void DialogShown(bc_id tab, int kind);
 
   // A picture of |contents|' page, or of its |area| in the view's coordinates, as an agent is shown
   // it: what the outline withholds, the picture withholds. Each field |hatched| names and each
@@ -293,6 +297,8 @@ class AgentPage : public content::WebContentsObserver,
                     size_t next);
   void Answer(std::string text, bool error);
   void Fail(std::string why);
+  // Ends the job, which its page's dialog or the limit stopped waiting on, with |why|.
+  void EndWaiting(std::string why);
   // Gives the answer kept while a download started, as none took its action.
   void AnswerHeld();
 
@@ -380,6 +386,8 @@ class AgentPage : public content::WebContentsObserver,
   int next_command_ = 1;
   // Each command's reply, with the slot of the session it was sent to.
   base::flat_map<int, std::pair<int, Reply>> replies_;
+  // How long the job running waits on those replies.
+  AgentReplyLimit limit_{base::BindRepeating(&AgentPage::EndWaiting, base::Unretained(this))};
   std::vector<Target> targets_;
   // The frames the snapshot running reads.
   std::vector<Frame> frames_;
