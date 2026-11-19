@@ -122,6 +122,10 @@ impl Dispatch<ZwpInputMethodV2, ()> for State {
             zwp_input_method_v2::Event::Done => {
                 IM_FRESH.set(false);
                 if let Some(active) = IM_PENDING.take() {
+                    log!(
+                        "browser: probe input method {}",
+                        if active { "activated" } else { "deactivated" }
+                    );
                     IM_ACTIVE.set(active);
                     drive::input_method_reset();
                 }
