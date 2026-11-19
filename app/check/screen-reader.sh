@@ -397,7 +397,9 @@ press tab
 press escape
 # A Board's cards (#3407), not judged yet: the note left with Escape has the keyboard and is read
 # by its first line as a note, Tab goes on to the next card, its copy, and moving it with → and
-# deleting it are said.
+# deleting it are said. Settings, shown above, keeps the keys until it's hidden.
+press w cmd
+expect '^browser: settings hidden$' "⌘W didn't hide Settings before the Board's notes"
 press e ctrl shift
 expect '^browser: new board [0-9a-f]\{32\} tab [0-9]*$' "⌃⇧E made no Board"
 board=$(grep '^browser: new board ' "$log" | tail -1 | cut -d' ' -f6)

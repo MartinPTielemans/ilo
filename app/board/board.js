@@ -842,6 +842,10 @@ function offerFirstNote() {
   const card = { id: newId(), kind: "note", x, y, w: 240, h: 0, z: 1, text: "", fill: style.fill, size: style.size };
   make(card);
   const el = byId.get(card.id);
+  // Not a card yet, so not Tab's stop: the page's first focus, as when it takes the keyboard
+  // before it has loaded, would go to it rather than its field.
+  if (tabStop === card.id) tabStop = null;
+  el.tabIndex = -1;
   el.classList.add("first", "editing");
   const field = el.querySelector(".text");
   field.contentEditable = "plaintext-only";
@@ -851,6 +855,7 @@ function offerFirstNote() {
     field.removeEventListener("compositionstart", appear);
     if (editing?.card !== card) return;
     edit(() => cards.push(card));
+    keepTabStop();
     editing = { card, before: undos.at(-1), text: "" };
     el.classList.remove("first");
   };

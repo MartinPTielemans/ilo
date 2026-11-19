@@ -677,7 +677,8 @@ send window 1
 # arrows move the card the keyboard's on, a point and with ⇧ ten; Delete takes it away and the
 # keyboard goes on to the next card; ⌘Z brings it back. On the Mac, VoiceOver reads the card the
 # keyboard's on by its role and name. NVDA's words for them are screen-reader.sh's.
-walk=$(printf 'c%.0s' $(seq 32))
+# An id of its own: the c×32 Board of the steps before is still open in a tab, where this would only say so.
+walk=$(printf '7%.0s' $(seq 32))
 mkdir -p "$boards/$walk"
 printf '%s' '{"version": 1, "camera": {"x": 0, "y": 0, "zoom": 1}, "cards": [
   {"id": "d", "kind": "stroke", "x": 500, "y": 400, "w": 60, "h": 20, "z": 4, "points": [[0, 0], [60, 20]], "color": "ink", "width": 4},
