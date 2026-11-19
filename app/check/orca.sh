@@ -156,9 +156,20 @@ orca_press tab
 orca_press tab
 orca_press tab shift
 orca_press down
-# On through the steps as Esc goes, each one's speech recorded as it comes.
+# On through the steps as Esc goes, each one's speech recorded as it comes. At the opt-ins, whose
+# keyboard rests on Continue (#3498), ⇥ goes past Skip to each switch and ⇧⇥ back, before the Esc.
+orca_switches=
 for _ in $(seq 10); do
   grep -q '^browser: onboarding done$' "$log" && break
+  if [ -z "$orca_switches" ] && grep -q '^browser: onboarding step opt-ins' "$log"; then
+    orca_switches=1
+    await '^browser: onboarding step opt-ins settled$' || fail "the opt-ins step didn't draw"
+    orca_settled
+    orca_press tab
+    orca_press tab
+    orca_press tab
+    orca_press tab shift
+  fi
   orca_press escape
 done
 expect '^browser: command bar shown$' "the command bar didn't come up after the onboarding"
