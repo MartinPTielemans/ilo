@@ -370,6 +370,8 @@ if [ -n "$sync_faults" ]; then
   send window "$private_number"
   send key w cmd shift
   expect "^browser: window closed $private\$" "⇧⌘W didn't close the private window"
+  # The driver still drives the closed window, and does nothing there.
+  send window 1
 
   # Shown again, it's still red, and once the server answers, the line turns green while it shows.
   send menu Settings…
