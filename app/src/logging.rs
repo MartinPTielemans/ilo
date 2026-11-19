@@ -86,6 +86,30 @@ pub fn chord(key: &str, modifiers: u32) -> String {
     chord + key
 }
 
+/// The lost-frame probe (#3574), for the Mac's test driver: keeps a driver command's start or end
+/// in the probe's ring, flushing what the ring holds first as a command starts.
+#[cfg(target_os = "macos")]
+#[unsafe(no_mangle)]
+pub extern "C" fn browser_probe_drive(number: std::ffi::c_long, what: *const std::ffi::c_char) {
+    let what = if what.is_null() {
+        ""
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(what) }
+            .to_str()
+            .unwrap_or("?")
+    };
+    if what != "done" {
+        gpui::lost_frame_probe::flush("drive");
+    }
+    gpui::lost_frame_probe::record(format_args!("drive {number}: {what}"));
+}
+
+/// The probe's last flush, as the process exits.
+#[cfg(target_os = "macos")]
+pub extern "C" fn probe_flush_at_exit() {
+    gpui::lost_frame_probe::flush("exit");
+}
+
 /// For the hosts' C++: whether `BROWSER_LOG` turns on `area`, a C string.
 #[cfg(target_os = "windows")]
 #[unsafe(no_mangle)]

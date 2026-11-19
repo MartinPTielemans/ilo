@@ -1197,6 +1197,8 @@ fn main() {
     if std::env::var_os("BROWSER_PREWARM").is_some() {
         return;
     }
+    // The lost-frame probe (#3574) writes what its ring holds as the process exits.
+    unsafe { libc::atexit(browser::logging::probe_flush_at_exit) };
     // The time from the process's start to here is mostly macOS's check of a version it hasn't run
     // before, which warming an update saves its first launch.
     log!("browser: main at {:.1} ms", unsafe {

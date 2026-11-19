@@ -772,6 +772,9 @@ bool Key(NSWindow* window,
 // is a private CoreGraphics call. Fine for a test driver, never for the browser.
 constexpr CGEventField kWindowNumberField = (CGEventField)51;
 extern "C" void CGEventSetWindowLocation(CGEventRef event, CGPoint location);
+// The lost-frame probe's ring (#3574, src/logging.rs): a command's start, after writing what the
+// ring holds, and its end.
+extern "C" void browser_probe_drive(long number, const char* what);
 
 }  // namespace
 
@@ -2571,6 +2574,7 @@ void drive_start(void) {
         marked = [NSString stringWithFormat:@"%lu,%lu", range.location, range.length];
       }
     }
+    browser_probe_drive((long)event.data1, "done");
     fprintf(stderr, "browser: drive %ld done, key %s, focus %s, active %d, marked %s\n",
             (long)event.data1, key ? NSStringFromClass(key.class).UTF8String : "none",
             NSStringFromClass(focus.class).UTF8String, NSApp.active, marked.UTF8String);
@@ -2802,6 +2806,7 @@ void drive_start(void) {
       // In the run loop's common modes, so a command also runs while a menu is open. GCD's main
       // queue waits until it closes.
       CFRunLoopPerformBlock(CFRunLoopGetMain(), kCFRunLoopCommonModes, ^{
+        browser_probe_drive(n, line.c_str());
         fprintf(stderr, "browser: drive %ld: %s\n", n, line.c_str());
         if (!Run(line, ^{
               PostDone(n);
