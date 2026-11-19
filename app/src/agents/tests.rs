@@ -4153,6 +4153,31 @@ mod requests {
         );
     }
 
+    /// The log keeps the agent's sentence as theirs, without a value after a secret's name; the
+    /// card shows it whole.
+    #[gpui::test]
+    fn the_log_keeps_a_sentence_without_its_secret(cx: &mut TestAppContext) {
+        let (agents, browser, _) = connected(cx);
+        let change = json!({ "tab": 20, "requests": [
+            { "method": "PUT", "path": "/api/settings", "body": { "on": true },
+              "what": "Set the API key to sk-live-123" },
+        ] });
+        let answer = call(&agents, "claude-code", "request", change, cx);
+        let question = (browser.asked.borrow().clone()).expect("the change didn't ask");
+        assert_eq!(question.changes[0].what, "Set the API key to sk-live-123");
+        agents.update(cx, |agents, cx| {
+            agents.answer(question.id, Answer::Never, cx)
+        });
+        assert!(answer.recv().unwrap().error);
+        let kept = agents.read_with(cx, |agents, _| {
+            (agents.activity("claude-code"))
+                .filter(|entry| entry.action == "request")
+                .map(|entry| entry.said.to_string())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(kept, ["Set the API key to (hidden)"]);
+    }
+
     /// A write whose override header names a read still asks, and sends nothing until the user
     /// answers; Deny sends nothing at all, and the log names the method sent (#1439).
     #[gpui::test]
