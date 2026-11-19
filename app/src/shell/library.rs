@@ -2101,7 +2101,7 @@ impl Shell {
                         .w(px(ARCHIVE_WIDTH))
                         .child(archive),
                 )
-                .children(self.download_press_listeners(cx)),
+                .child(self.download_press_listeners(cx)),
         };
         match clip {
             Some(from) => div()
@@ -4184,48 +4184,53 @@ impl Shell {
     }
 
     /// The pointer's presses, moves and release anywhere in the window while a download's row is
-    /// pressed, which only hears the pointer while it's over it.
+    /// pressed, which only hears the pointer while it's over it. They're there in every frame the
+    /// rows are, not only from the one after a press: a press and a move with no frame between
+    /// them, as a quick flick or the check's driver makes, would start no drag (#3610).
     pub(super) fn download_press_listeners(
         &self,
         cx: &mut Context<Self>,
-    ) -> Option<impl IntoElement + use<>> {
-        self.download_press.filter(|(_, _, dragged)| !dragged)?;
+    ) -> impl IntoElement + use<> {
         let shell = cx.weak_entity();
-        Some(
-            canvas(
-                |_, _, _| {},
-                move |_, _, window, _| {
-                    let pressed = shell.clone();
-                    window.on_mouse_event(move |_: &MouseDownEvent, phase, _, cx| {
-                        // Before the row pressed, if it's one, hears it.
-                        if phase == DispatchPhase::Capture {
-                            pressed
-                                .update(cx, |shell, _| shell.download_press = None)
-                                .ok();
-                        }
-                    });
-                    let moved = shell.clone();
-                    window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
-                        if phase == DispatchPhase::Capture && event.dragging() {
-                            let position = event.position;
-                            moved
-                                .update(cx, |shell, cx| shell.drag_download(position, cx))
-                                .ok();
-                        }
-                    });
-                    window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
-                        // Before the row's click, which hears no press then and opens.
-                        if phase == DispatchPhase::Capture && event.button == MouseButton::Left {
-                            shell
-                                .update(cx, |shell, _| shell.download_press = None)
-                                .ok();
-                        }
-                    });
-                },
-            )
-            .absolute()
-            .size_0(),
+        canvas(
+            |_, _, _| {},
+            move |_, _, window, _| {
+                let pressed = shell.clone();
+                window.on_mouse_event(move |_: &MouseDownEvent, phase, _, cx| {
+                    // Before the row pressed, if it's one, hears it.
+                    if phase == DispatchPhase::Capture {
+                        pressed
+                            .update(cx, |shell, _| shell.let_go_of_download())
+                            .ok();
+                    }
+                });
+                let moved = shell.clone();
+                window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+                    if phase == DispatchPhase::Capture && event.dragging() {
+                        let position = event.position;
+                        moved
+                            .update(cx, |shell, cx| shell.drag_download(position, cx))
+                            .ok();
+                    }
+                });
+                window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
+                    // Before the row's click, which hears no press then and opens.
+                    if phase == DispatchPhase::Capture && event.button == MouseButton::Left {
+                        shell.update(cx, |shell, _| shell.let_go_of_download()).ok();
+                    }
+                });
+            },
         )
+        .absolute()
+        .size_0()
+    }
+
+    /// Forgets a press on a download's row that hasn't become a drag. One that has stays until the
+    /// row's click takes it, as GPUI never hears the release that ends the system's drag.
+    fn let_go_of_download(&mut self) {
+        if matches!(self.download_press, Some((_, _, false))) {
+            self.download_press = None;
+        }
     }
 
     /// The footer's button that opens the Library, at its left (Arc). While downloads run, it keeps
@@ -4462,16 +4467,20 @@ mod task_tests;
 #[cfg(test)]
 mod tests {
     use super::{
-        ARCHIVE_TOP, ARCHIVE_WIDTH, ARCHIVED_LEFT, Archived, CARD_WIDTH, COLUMN_WIDTH, Captured,
-        Download, DownloadAction, DownloadChoice, DownloadState, FILTER_WIDTH, FILTER_X,
-        HEADING_BOTTOM, HEADING_HEIGHT, HEADING_TOP, HEADING_X, Item, LIBRARY_BAND, Line,
-        MEDIA_GAP, MEDIA_TILE, Medium, SEARCH_HEIGHT, SEARCH_TOP, SECTION_WIDTH, SECTION_X, Space,
-        bar_drawn, card_x, download_menu_items, downloads_progress, library_band, panel_at_rest,
-        past_end, plus_x, receded_opacity, spaces_width,
+        ARCHIVE_TOP, ARCHIVE_WIDTH, ARCHIVED_LEFT, ARCHIVED_PITCH, Archived, CARD_WIDTH,
+        COLUMN_WIDTH, Captured, Download, DownloadAction, DownloadChoice, DownloadState,
+        FILTER_WIDTH, FILTER_X, HEADING_BOTTOM, HEADING_HEIGHT, HEADING_TOP, HEADING_X, Item,
+        LIBRARY_BAND, Line, MEDIA_GAP, MEDIA_TILE, Medium, SEARCH_HEIGHT, SEARCH_TOP,
+        SECTION_WIDTH, SECTION_X, Space, bar_drawn, card_x, download_menu_items,
+        downloads_progress, library_band, panel_at_rest, past_end, plus_x, receded_opacity,
+        spaces_width,
     };
     use std::rc::Rc;
 
-    use gpui::{Modifiers, MouseButton, TestAppContext, point, px};
+    use gpui::{
+        InputEvent as _, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, TestAppContext,
+        point, px,
+    };
 
     use crate::shell::recorder::Recorder;
     use crate::shell::sidebar::window_buttons_at;
@@ -4860,6 +4869,56 @@ mod tests {
             opened
                 .iter()
                 .any(|call| call.starts_with("open file:///tmp/my%20photo.jpg "))
+        );
+        assert!(
+            !shell.read_with(cx, |shell, _| shell.library_open),
+            "the Library stayed open"
+        );
+    }
+
+    /// A finished download's row pressed and moved past the drag's start before a frame comes
+    /// between them, as the check's driver can, still hands its file to the system's drag, and
+    /// the Library closes (#3610).
+    #[gpui::test]
+    fn a_download_s_row_dragged_before_the_next_frame_drags_its_file(cx: &mut TestAppContext) {
+        let host = Rc::new(Recorder::default());
+        let browser = host.clone();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+        shell.update(cx, |shell, cx| {
+            shell.set_downloads(vec![download(DownloadState::Done, false)], cx);
+            shell.section = Section::Downloads;
+            shell.set_library(true, cx);
+            shell.library_motion = None;
+            shell.sidebar_fade = None;
+        });
+        cx.run_until_parked();
+        host.take();
+        // The first row, under the first heading.
+        let top = ARCHIVE_TOP + HEADING_TOP + HEADING_HEIGHT + HEADING_BOTTOM;
+        let row = point(
+            px(COLUMN_WIDTH + ARCHIVED_LEFT + 60.),
+            px(top + ARCHIVED_PITCH / 2.),
+        );
+        cx.update(|window, cx| {
+            let press = MouseDownEvent {
+                button: MouseButton::Left,
+                position: row,
+                click_count: 1,
+                ..Default::default()
+            };
+            window.dispatch_event(press.to_platform_input(), cx);
+            let moved = MouseMoveEvent {
+                position: row + point(px(0.), px(29.)),
+                pressed_button: Some(MouseButton::Left),
+                ..Default::default()
+            };
+            window.dispatch_event(moved.to_platform_input(), cx);
+        });
+        cx.run_until_parked();
+        let calls = host.take();
+        assert!(
+            calls.contains(&"drag file /Users/someone/Downloads/report.pdf".to_string()),
+            "no drag of the file: {calls:?}"
         );
         assert!(
             !shell.read_with(cx, |shell, _| shell.library_open),
