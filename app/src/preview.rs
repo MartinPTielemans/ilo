@@ -4481,7 +4481,8 @@ fn preview_account(state: &str, cx: &mut App) {
         share(
             "d",
             account::ShareKind::Folder,
-            "Apartments in Lisbon, Porto and Coimbra, with the landlords' replies and the maps",
+            "Apartments in Lisbon, Porto and Coimbra, with the landlords' replies, the maps, the train \
+             times and the notes from every viewing we went to in March",
             12,
             2.,
             None,
