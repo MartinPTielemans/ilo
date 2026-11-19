@@ -248,8 +248,9 @@ split_rests() {
     # renderer process, which two tabs typed in the bar never share. ⌥-click on its row joins it
     # to the page shown.
     # The two windows' steps left this one half the screen wide, where an X press at the page's
-    # usual point misses it, so it's the size the two-site split had, and clicked in its middle.
-    send resize 1100 720
+    # usual point misses it, so it's near the size the two-site split had, and clicked in its
+    # middle. Not that size, or the resize the rest goes through below would change nothing.
+    send resize 1180 760
     for _ in $(seq 50); do
       send layout
       alone=$(since | grep -m1 '^browser: layout' | grep -o 'WebContentsViewCocoa [0-9,]* [0-9x]*' |
