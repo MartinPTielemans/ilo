@@ -75,6 +75,8 @@ struct SyncState: Codable, Sendable {
   var local: [String: SpaceEntity]?
   /// The account's saved passwords, each still encrypted, by its client tag's hash.
   var passwords: [String: PasswordRecord]?
+  /// The logins the phone saved or changed and the account hasn't taken yet, by the same hash.
+  var passwordWrites: [String: PasswordWrite]?
   /// Whether all of the account's Spaces have been downloaded once.
   var downloaded = false
 }
@@ -85,6 +87,7 @@ enum Said {
   static let removed = "This phone was signed out of the account."
   static let unexpected = "The server answered with something ilo doesn't understand."
   static let undone = "The account didn't take a change, so it was undone."
+  static let passwordNotSaved = "The account didn't take a password, so it isn't saved."
   static let newer = "A newer ilo made this, and this one can't change it."
   static let wordsChanged = "The account's recovery words changed. Enter the new ones."
   static let notKept = "The phone couldn't save the account, so it may ask you to sign in again."
@@ -129,7 +132,7 @@ public final class Account: IloAccount {
   }
   /// The saved logins' usernames by site, made when first asked for and let go whenever the
   /// passwords or the keys change. Never saved.
-  @ObservationIgnored var loginIndex: [String: [IndexedLogin]]?
+  @ObservationIgnored var loginIndex: LoginIndex?
   /// Whether the SecretStore has the account's secret, which is read only to derive keys.
   @ObservationIgnored var hasSecret = false
   @ObservationIgnored var state = SyncState()
@@ -202,6 +205,11 @@ public final class Account: IloAccount {
     self.state = state.load().flatMap { try? JSONDecoder().decode(SyncState.self, from: $0) } ?? SyncState()
     // On from the saved changes' own, so a new change is never taken for one of them.
     revision = self.state.changes.values.map(\.revision).max() ?? 0
+    // Passwords an ilo that only read them kept came without the server's id for each, which
+    // changing one needs: they come down once more, with it.
+    if self.state.passwords?.values.contains(where: { $0.id == nil }) == true {
+      self.state.markers[DataType.passwords] = nil
+    }
     updatePhase()
     rebuild()
     start()

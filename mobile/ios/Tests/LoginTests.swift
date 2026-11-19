@@ -21,6 +21,8 @@ import WebKit
   }
 
   func password(for login: SavedLogin) throws -> String { "made-up-password" }
+  func saving(username: String, password: String, on site: URL) -> LoginSaving { .none }
+  func save(username: String, password: String, on site: URL) throws {}
 }
 
 private func login(_ username: String, at realm: String = "https://example.org/") -> SavedLogin {

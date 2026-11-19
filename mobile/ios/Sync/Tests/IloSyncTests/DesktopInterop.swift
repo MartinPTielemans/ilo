@@ -7,7 +7,7 @@
 // for the sign-in code>" and "dir <a folder>". Each line of <dir>/phone.in is a JSON object with
 // "n" and "do"; its answer is a line of <dir>/phone.out with the same "n". "do" is one of
 // snapshot, refresh, openToday, updateToday, sawToday, closeToday, pin, unpin, rename, nameAnyway,
-// age, logins and quit.
+// age, logins, saving, save and quit.
 
 import Foundation
 import XCTest
@@ -129,6 +129,37 @@ final class DesktopInterop: XCTestCase {
         said["logins"] = logins.map(\.username)
         said["passwords"] = logins.map { (try? account.password(for: $0)) ?? "" }
         said["realm"] = PasswordForm.realm(of: page) ?? ""
+        said["entities"] = account.state.passwords?.count ?? 0
+        // Each login's name at the server and the version the phone has of it, which say whether
+        // a change another device made was to that entity or to one beside it.
+        said["ids"] = logins.map(\.id)
+        said["versions"] = logins.map { account.state.passwords?[$0.id]?.version ?? -1 }
+        said["unsentLogins"] = (account.state.passwordWrites ?? [:]).keys.sorted()
+      case "saving":
+        // What the app asks before it offers to save a login a page was signed in with.
+        let site = try XCTUnwrap(URL(string: text("url")))
+        said["saving"] = "\(account.saving(username: text("username"), password: text("password"), on: site))"
+      case "save":
+        // The app's offer, taken (App/Passwords/LoginSave.swift): what saving would do, then the
+        // save, which goes to the account in the background, and the refresh that waits for it.
+        // "anyway" saves where the app would have made no offer, as when another device saved
+        // the login between the offer and the tap.
+        let site = try XCTUnwrap(URL(string: text("url")))
+        let would = account.saving(username: text("username"), password: text("password"), on: site)
+        said["saving"] = "\(would)"
+        if would != .none || ask["anyway"] as? Bool == true {
+          do {
+            try account.save(username: text("username"), password: text("password"), on: site)
+            said["saved"] = true
+          } catch {
+            said["saved"] = false
+            said["error"] = "\(error)"
+          }
+        }
+        // What the save left to send, before anything is, and after the cycle that sends it.
+        said["kept"] = (account.state.passwordWrites ?? [:]).keys.sorted()
+        await account.refresh()
+        said["unsentLogins"] = (account.state.passwordWrites ?? [:]).keys.sorted()
         said["entities"] = account.state.passwords?.count ?? 0
       case "quit":
         try answer(n, said)

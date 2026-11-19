@@ -108,6 +108,10 @@ final class WebTab: NSObject, Identifiable {
   var committedURL: URL? { committed }
   /// What the page said of its sign-in form.
   let loginState = LoginState()
+  /// The offer to save the login the page was signed in with. In memory only.
+  let loginSave = LoginSave()
+  /// The pages of the tab's history that a POST brought.
+  @ObservationIgnored private let posted = PostedPages()
   /// Whether the page is a PDF: a file to save and to print, and no site's page to block on.
   private(set) var isPDF = false
   /// What kind of file the load on its way answered with.
@@ -217,6 +221,7 @@ final class WebTab: NSObject, Identifiable {
   /// wrote out in the search field, as against a search, a link or a tile.
   func load(_ url: URL, entered: Bool = false, typed: Bool = false) {
     if again != url { failure = nil }
+    loginSave.loads()
     if entered { writes.enter() } else { writes.own() }
     unsent.load(entered: entered)
     visits.load(typed: typed)
@@ -245,6 +250,12 @@ final class WebTab: NSObject, Identifiable {
   var state: Data? {
     // Nor of the empty page in the place of one WebKit wouldn't ask for: the state before stays.
     webView.isLoading || turnedAway ? nil : webView.interactionState as? Data
+  }
+
+  /// Whether that state holds what a POST sent, a sign-in form's password among it: the tab's
+  /// saved state stays the one from before, as for a page a saved login was filled into.
+  var stateHoldsPost: Bool {
+    posted.holds(in: webView.backForwardList)
   }
 
   /// Loads the page again, or tries again the one that didn't load. What's said of a failure
@@ -619,6 +630,11 @@ extension WebTab: WKNavigationDelegate {
     preferences.preferredContentMode = wantsDesktopSite ? .desktop : .recommended
     guard let url = action.request.url else { return (.cancel, preferences) }
     let inMainFrame = action.targetFrame?.isMainFrame ?? true
+    if inMainFrame { loginSave.asked(action.navigationType) }
+    // A new window's request is that window's tab's to hear of.
+    if let frame = action.targetFrame {
+      posted.asked(posts: action.request.httpMethod == "POST", mainFrame: frame.isMainFrame, on: webView.backForwardList.currentItem)
+    }
 
     switch url.scheme?.lowercased() {
     case "http", "https":
@@ -751,6 +767,8 @@ extension WebTab: WKNavigationDelegate {
     committed = webView.url
     hasPage = true
     loginState.committed()
+    loginSave.committed(at: committed)
+    posted.committed(webView.backForwardList.currentItem)
     writes.commit()
     keep(unsent.commit())
     swipe.arrived()
@@ -916,6 +934,7 @@ private final class PageMessages: NSObject, WKScriptMessageHandler {
     case PageScripts.touchMessage: tab?.touchVerdict(message.body)
     case PageScripts.typedMessage where message.frameInfo.isMainFrame: tab?.typed(message.body)
     case LoginScript.message: tab?.heardLogin(message)
+    case LoginScript.usedMessage: tab?.heardLoginUsed(message)
     default: break
     }
   }

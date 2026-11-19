@@ -1,7 +1,7 @@
-// The account's saved passwords, read and never written: Chromium's PASSWORDS type
+// The account's saved passwords: Chromium's PASSWORDS type
 // (components/sync/protocol/password_specifics.proto), which the account's computers keep under
 // the same keys as the Spaces. Each stays on the phone as the server sent it, encrypted, and is
-// decrypted in memory when a page asks.
+// decrypted in memory when a page asks. PasswordWrite.swift is how the phone saves one.
 
 import Foundation
 
@@ -9,6 +9,10 @@ import Foundation
 struct PasswordRecord: Codable, Equatable, Sendable {
   var version: Int64
   var encrypted: EncryptedData
+  /// The server's id for the entity and when it was made, which a commit that changes it
+  /// gives back. Nil on one an earlier ilo kept, until it's downloaded again.
+  var id: String?
+  var created: Int64?
 }
 
 /// What the phone reads of sync_pb.PasswordSpecificsData, by the fields' numbers there.
@@ -85,10 +89,12 @@ extension Account: IloPasswords {
         continue
       }
       guard update.isPassword else { continue }
-      if let known = passwords[hash], update.version <= known.version { continue }
+      if let known = passwords[hash], update.version <= known.version, known.id != nil { continue }
       // One with no ciphertext isn't an account's with a passphrase: what the phone had of it is
       // no longer the account's, so that goes too.
-      passwords[hash] = update.password.map { PasswordRecord(version: update.version, encrypted: $0) }
+      passwords[hash] = update.password.map {
+        PasswordRecord(version: update.version, encrypted: $0, id: update.id, created: update.created)
+      }
     }
     if passwords != state.passwords ?? [:] {
       state.passwords = passwords
@@ -105,24 +111,33 @@ extension Account: IloPasswords {
     var used: Int64
   }
 
-  /// A record decrypted, if the phone has its key and it reads as a password's data.
-  private func form(_ record: PasswordRecord) -> PasswordForm? {
-    keys?.decrypt(record.encrypted).flatMap(PasswordForm.init)
+  struct LoginIndex {
+    /// The logins by realm, most recently used first and one for each username.
+    var logins: [String: [IndexedLogin]] = [:]
+    /// The realms the user said never to save a password for.
+    var never: Set<String> = []
   }
 
-  /// The logins by realm, most recently used first and one for each username. Usernames only:
-  /// a password is decrypted again when one is asked for.
-  private func index() -> [String: [IndexedLogin]] {
+  /// A login decrypted, if the phone has its key and it reads as a password's data: what the
+  /// phone wrote and hasn't sent, over what the account has.
+  func form(_ hash: String) -> PasswordForm? {
+    login(hash).flatMap { keys?.decrypt($0) }.flatMap(PasswordForm.init)
+  }
+
+  /// Usernames only: a password is decrypted again when one is asked for.
+  func index() -> LoginIndex {
     if let loginIndex { return loginIndex }
-    var found: [String: [IndexedLogin]] = [:]
-    for (hash, record) in state.passwords ?? [:] {
-      guard let form = form(record), form.fills else { continue }
-      found[form.realm, default: []].append(
+    var found = LoginIndex()
+    for hash in Set((state.passwords ?? [:]).keys).union((state.passwordWrites ?? [:]).keys) {
+      guard let form = form(hash) else { continue }
+      if form.scheme == 0, form.blocked { found.never.insert(form.realm) }
+      guard form.fills else { continue }
+      found.logins[form.realm, default: []].append(
         IndexedLogin(id: hash, username: form.username, used: max(form.used, form.created)))
     }
-    for (realm, logins) in found {
+    for (realm, logins) in found.logins {
       var seen: Set<String> = []
-      found[realm] = logins.sorted { ($0.used, $0.id) > ($1.used, $1.id) }.filter {
+      found.logins[realm] = logins.sorted { ($0.used, $0.id) > ($1.used, $1.id) }.filter {
         seen.insert($0.username).inserted
       }
     }
@@ -132,12 +147,12 @@ extension Account: IloPasswords {
 
   public func logins(for page: URL) -> [SavedLogin] {
     guard phase == .ready, let realm = PasswordForm.realm(of: page) else { return [] }
-    return (index()[realm] ?? []).map { SavedLogin(id: $0.id, username: $0.username, realm: realm) }
+    return (index().logins[realm] ?? []).map { SavedLogin(id: $0.id, username: $0.username, realm: realm) }
   }
 
   public func password(for login: SavedLogin) throws -> String {
-    guard phase == .ready, let record = state.passwords?[login.id], let form = form(record),
-      form.fills, form.realm == login.realm, form.username == login.username
+    guard phase == .ready, let form = form(login.id), form.fills, form.realm == login.realm,
+      form.username == login.username
     else { throw SavedLoginError.gone }
     return form.password
   }

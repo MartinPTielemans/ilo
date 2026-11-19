@@ -67,6 +67,7 @@ struct ActionSheet: View {
           }
         }
         MoveRow(tab: tab)
+        SaveLoginRow(tab: tab)
       }
 
       Rectangle()
@@ -259,6 +260,8 @@ struct SettingsSheet: View {
       BlockingSetting()
 
       PasswordsSetting()
+
+      SavePasswordsSetting()
 
       Menu {
         Picker("Search engine", selection: $settings.searchEngine) {

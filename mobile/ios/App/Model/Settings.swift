@@ -16,6 +16,15 @@ final class Settings {
   var offersPasswords: Bool {
     didSet { defaults.set(offersPasswords, forKey: "offersPasswords") }
   }
+  /// A page the user signed in to is offered to have its login saved to the account.
+  var offersToSave: Bool {
+    didSet { defaults.set(offersToSave, forKey: "offersToSave") }
+  }
+  /// The sites the user said never to offer that for, by origin. This phone's own: the account
+  /// isn't told, and no username or password is among them.
+  private(set) var neverSaves: Set<String> {
+    didSet { defaults.set(neverSaves.sorted(), forKey: "neverSaves") }
+  }
   /// A sideways swipe anywhere on a page goes back and forward, not only one from the edge.
   var swipeAnywhere: Bool {
     didSet { defaults.set(swipeAnywhere, forKey: "swipeAnywhere") }
@@ -59,6 +68,8 @@ final class Settings {
     searchEngine = SearchEngine.named(defaults.string(forKey: "searchEngine"))
     keyboardOnLaunch = defaults.object(forKey: "keyboardOnLaunch") as? Bool ?? true
     offersPasswords = defaults.object(forKey: "offersPasswords") as? Bool ?? true
+    offersToSave = defaults.object(forKey: "offersToSave") as? Bool ?? true
+    neverSaves = Set(defaults.stringArray(forKey: "neverSaves") ?? [])
     swipeAnywhere = defaults.object(forKey: "swipeAnywhere") as? Bool ?? true
     offersSignIn = defaults.object(forKey: "offersSignIn") as? Bool ?? true
     archiveAfter = (defaults.object(forKey: "archiveAfter") as? Double).flatMap(ArchiveAfter.init) ?? .hours12
@@ -83,6 +94,14 @@ final class Settings {
   func removeFavourite(_ url: URL) {
     favourites.removeAll { $0.url == url }
     showTile(DockSlot.id(of: url))
+  }
+
+  func neverSave(for origin: String) {
+    neverSaves.insert(origin)
+  }
+
+  func offerToSave(for origin: String) {
+    if neverSaves.contains(origin) { neverSaves.remove(origin) }
   }
 
   func hideTile(_ id: String) {

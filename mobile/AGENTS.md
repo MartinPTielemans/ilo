@@ -16,6 +16,7 @@ It's native Swift in `mobile/ios`, and paths below start there. This file adds t
 
 - **What a device shows of the account is that device's choice.** Hiding a tile on the phone never changes the account.
 - **What changes the account must be something the desktop understands**, since every computer on the account reads it.
+- **A saved password is Chromium's own record, under the name `core/sync_guard.cc` gives it.** `Sync/Sources/IloSync/PasswordWrite.swift` makes that name by hand, and a desktop drops a record whose name doesn't fit without saying so. A change to either side's name changes both.
 - **A desktop file the phone reads starts the phone's checks** only if `mobile_ios` in `.github/scripts/ci-changes.cjs` names it. A test or script that starts reading another adds it there in the same PR.
 
 ## The ways to hurt yourself

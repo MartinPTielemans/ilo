@@ -668,8 +668,9 @@ final class Browser {
     tab.settle(finished: true)
     // Kept under the address the account has for the tab, which is what tells whether another
     // device has sent it elsewhere since.
-    // A page a saved login went into holds it in its fields, so the state from before stays.
-    if let state = tab.state, !tab.loginState.filled {
+    // A page a saved login went into holds it in its fields, and one a POST brought holds what
+    // was sent, so the state from before stays.
+    if let state = tab.state, !tab.loginState.filled, !tab.stateHoldsPost {
       cache.keep(TabCache.Saved(url: account.node(tab.id)?.url, state: state), of: tab.id)
     }
   }

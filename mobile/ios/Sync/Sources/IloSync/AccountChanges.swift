@@ -36,6 +36,11 @@ extension Account {
   /// Remakes what the app reads and saves the state. After every change to either.
   func changed() {
     rebuild()
+    persist()
+  }
+
+  /// Saves the state alone, for a change to what no list shows: a password.
+  func persist() {
     guard session != nil else { return }
     do {
       try store.save(JSONEncoder().encode(state))

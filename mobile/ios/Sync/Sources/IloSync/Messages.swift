@@ -45,8 +45,9 @@ func protoTime(_ date: Date = Date()) -> Int64 {
   Int64((date.timeIntervalSince1970 * 1000).rounded())
 }
 
-/// One entry of a commit for ILO_SPACE, as Chromium writes one for a type that's encrypted
-/// (CommitContributionImpl::PopulateCommitProto, DataTypeWorker::EncryptSpecifics).
+/// One entry of a commit, as Chromium writes one for a type that's encrypted
+/// (CommitContributionImpl::PopulateCommitProto): for ILO_SPACE as DataTypeWorker's
+/// EncryptSpecifics leaves it, and for a password as its EncryptPasswordSpecificsData does.
 struct CommitEntry {
   /// The server's id for it, or any new one for an entity it hasn't got.
   var id: String
@@ -57,16 +58,29 @@ struct CommitEntry {
   var modified: Int64
   /// Its SpaceEntity encrypted, or nil to delete it.
   var encrypted: EncryptedData?
+  /// A saved login, in place of a Space's entity: the entry is one of PASSWORDS.
+  var password: PasswordWrite?
 
   func write(_ writer: inout ProtoWriter) {
+    let deleted = encrypted == nil && password == nil
     writer.string(1, id)
     writer.int(4, version)
     writer.int(5, modified)
-    if encrypted != nil { writer.int(6, created) }
+    if !deleted { writer.int(6, created) }
     // The real name would tell the server what's inside. A deletion's is empty.
-    writer.string(7, encrypted == nil ? "" : "encrypted")
-    writer.bool(18, encrypted == nil)
+    writer.string(7, deleted ? "" : "encrypted")
+    writer.bool(18, deleted)
     writer.message(21) { specifics in
+      if let password {
+        // A password's ciphertext is in its own specifics, with its notes' beside it and
+        // nothing else: with a passphrase Chromium writes no unencrypted_metadata, and
+        // core/sync_guard.cc drops an entity that has any.
+        specifics.message(DataType.passwords) { own in
+          own.message(1, password.encrypted.write)
+          own.message(5, password.notes.write)
+        }
+        return
+      }
       if let encrypted { specifics.message(1, encrypted.write) }
       // The type's own field, empty, says which type the entity is.
       specifics.bytes(DataType.iloSpace, [])

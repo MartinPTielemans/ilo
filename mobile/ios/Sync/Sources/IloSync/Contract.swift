@@ -195,10 +195,23 @@ public struct SavedLogin: Identifiable, Hashable, Sendable {
 public enum SavedLoginError: Error, Equatable, Sendable {
   /// The account no longer has the login as it was listed.
   case gone
+  /// The login can't be saved from this phone as things are: `saving` would say `.none`.
+  case notSaved
 }
 
-/// The passwords the account's computers saved, which the phone reads and never changes. Apart
-/// from IloAccount, so that what stands in for an account needn't have any.
+/// What saving a login a page was just signed in with would do to the account.
+public enum LoginSaving: Equatable, Sendable {
+  /// Nothing: the account has it as it is, the user said never to save for the site, or this
+  /// phone can't write it so that the account's computers would read it.
+  case none
+  /// The account has no login of that username for the site.
+  case save
+  /// It has one, with another password.
+  case update
+}
+
+/// The account's saved passwords: the ones its computers saved, and the ones the phone does.
+/// Apart from IloAccount, so that what stands in for an account needn't have any.
 @MainActor
 public protocol IloPasswords: AnyObject {
   /// The logins saved for exactly this page's scheme, host and port, most recently used first.
@@ -206,6 +219,15 @@ public protocol IloPasswords: AnyObject {
   func logins(for page: URL) -> [SavedLogin]
   /// A login's password, decrypted for this call and kept nowhere.
   func password(for login: SavedLogin) throws -> String
+  /// What `save` would do with a login used at `site`, a page of it or its origin. The
+  /// password is compared in memory and kept nowhere.
+  func saving(username: String, password: String, on site: URL) -> LoginSaving
+  /// Saves the login for the site's scheme, host and port, or changes the password of the one
+  /// saved for that username. It fills on this phone at once and goes to the account in the
+  /// background, now or when the server is next reached; until then it's kept as the account
+  /// keeps it, encrypted with the account's keys. One the server refuses is dropped, and said
+  /// in the account's `problem`.
+  func save(username: String, password: String, on site: URL) throws
 }
 
 extension IloAccount {
