@@ -4699,6 +4699,11 @@ impl Render for Shell {
         self.step_media_stack(window, cx);
         self.step_update_banner(window);
         if let Some((_, left)) = &self.leaving_form {
+            // The lost-frame probe (#3554): each frame of the leave, and when.
+            log!(
+                "browser: probe form frame at {:.0} ms",
+                left.elapsed().as_secs_f64() * 1000.
+            );
             if left.elapsed().as_secs_f32() < FORM_LEAVE_TITLE + FORM_LEAVE {
                 window.request_animation_frame();
             } else {

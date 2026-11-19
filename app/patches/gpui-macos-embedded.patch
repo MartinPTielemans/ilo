@@ -326,7 +326,7 @@ index 4b48188131..b9b785975c 100644
          }
      }
 diff --git a/crates/gpui_macos/src/window.rs b/crates/gpui_macos/src/window.rs
-index f2208d35ec..856c8149a9 100644
+index f2208d35ec..b12abff5d1 100644
 --- a/crates/gpui_macos/src/window.rs
 +++ b/crates/gpui_macos/src/window.rs
 @@ -11,7 +11,7 @@ use dispatch2::DispatchQueue;
@@ -338,7 +338,15 @@ index f2208d35ec..856c8149a9 100644
      Pixels, PlatformAtlas, PlatformDisplay, PlatformFrameSignal, PlatformInput,
      PlatformInputHandler, PlatformWindow, Point, PromptButton, PromptLevel, RequestFrameOptions,
      SharedString, Size, SystemWindowTab, WindowAppearance, WindowBackgroundAppearance,
-@@ -41,12 +41,14 @@ use objc2_app_kit::NSFilenamesPboardType;
+@@ -26,7 +26,6 @@ use core_foundation_sys::number::{CFBooleanGetValue, CFBooleanRef};
+ use core_graphics::display::CGDirectDisplayID;
+ use ctor::ctor;
+ use futures::channel::oneshot;
+-use gpui_util::ResultExt;
+ use objc2::{
+     AnyThread, MainThreadMarker, class, msg_send,
+     rc::{Retained, autoreleasepool},
+@@ -41,12 +40,14 @@ use objc2_app_kit::NSFilenamesPboardType;
  use objc2_app_kit::{
      NSAlert, NSAlertStyle, NSAppearance, NSAutoresizingMaskOptions, NSBackingStoreType, NSBeep,
      NSButton, NSColor, NSDragOperation, NSDraggingContext, NSDraggingImageComponent,
@@ -355,7 +363,7 @@ index f2208d35ec..856c8149a9 100644
  };
  use objc2_core_graphics::CGColor;
  use objc2_foundation::{
-@@ -58,6 +60,7 @@ use raw_window_handle as rwh;
+@@ -58,6 +59,7 @@ use raw_window_handle as rwh;
  use smallvec::SmallVec;
  use std::{
      cell::Cell,
@@ -363,7 +371,7 @@ index f2208d35ec..856c8149a9 100644
      ffi::{CStr, CString, c_void},
      mem,
      ops::Range,
-@@ -66,14 +69,17 @@ use std::{
+@@ -66,14 +68,17 @@ use std::{
      ptr::{self, NonNull},
      rc::Rc,
      sync::{
@@ -383,7 +391,7 @@ index f2208d35ec..856c8149a9 100644
  static RESTORES_WORKSPACE_AT_LAUNCH_DEFAULT: Once = Once::new();
  
  static mut WINDOW_CLASS: *const AnyClass = ptr::null();
-@@ -82,6 +88,19 @@ static mut VIEW_CLASS: *const AnyClass = ptr::null();
+@@ -82,6 +87,19 @@ static mut VIEW_CLASS: *const AnyClass = ptr::null();
  static mut BLURRED_VIEW_CLASS: *const AnyClass = ptr::null();
  static mut WINDOW_STATE_ARCHIVER_DELEGATE_CLASS: *const AnyClass = ptr::null();
  static mut WINDOW_STATE_UNARCHIVER_CLASS: *const AnyClass = ptr::null();
@@ -403,7 +411,7 @@ index f2208d35ec..856c8149a9 100644
  
  // WindowLevel const value ref: https://docs.rs/core-graphics2/0.4.1/src/core_graphics2/window_level.rs.html
  #[allow(non_upper_case_globals)]
-@@ -100,8 +119,42 @@ pub enum UserTabbingPreference {
+@@ -100,8 +118,42 @@ pub enum UserTabbingPreference {
  #[ctor(unsafe)]
  unsafe fn build_classes() {
      unsafe {
@@ -448,7 +456,7 @@ index f2208d35ec..856c8149a9 100644
          VIEW_CLASS = {
              let mut decl = ClassBuilder::new(c"GPUIView", class!(NSView)).unwrap();
              decl.add_ivar::<*mut c_void>(WINDOW_STATE_IVAR);
-@@ -259,6 +312,13 @@ unsafe fn build_classes() {
+@@ -259,6 +311,13 @@ unsafe fn build_classes() {
                  accepts_first_mouse as extern "C" fn(_, Sel, *mut AnyObject) -> Bool,
              );
  
@@ -462,7 +470,7 @@ index f2208d35ec..856c8149a9 100644
              decl.add_method(
                  sel!(_opaqueRectForWindowMoveWhenInTitlebar),
                  opaque_rect_for_window_move_when_in_titlebar as extern "C" fn(_, Sel) -> NSRect,
-@@ -407,16 +467,22 @@ pub(crate) unsafe fn set_active_window_cursor_style(style: CursorStyle) {
+@@ -407,16 +466,22 @@ pub(crate) unsafe fn set_active_window_cursor_style(style: CursorStyle) {
      }
  }
  
@@ -490,7 +498,7 @@ index f2208d35ec..856c8149a9 100644
          decl.add_method(
              sel!(canBecomeKeyWindow),
              yes as extern "C" fn(_, Sel) -> Bool,
-@@ -640,6 +706,8 @@ unsafe fn apply_simple_fullscreen_plan(
+@@ -640,6 +705,8 @@ unsafe fn apply_simple_fullscreen_plan(
  struct MacWindowState {
      handle: AnyWindowHandle,
      foreground_executor: ForegroundExecutor,
@@ -499,7 +507,7 @@ index f2208d35ec..856c8149a9 100644
      background_executor: BackgroundExecutor,
      native_window: *mut AnyObject,
      native_view: NonNull<AnyObject>,
-@@ -648,6 +716,8 @@ struct MacWindowState {
+@@ -648,6 +715,8 @@ struct MacWindowState {
      cursor_style: CursorStyle,
      cursor_visible: Arc<AtomicBool>,
      frame_source: Option<WindowFrameSource>,
@@ -508,7 +516,7 @@ index f2208d35ec..856c8149a9 100644
      renderer: renderer::Renderer,
      request_frame_callback: Option<Box<dyn FnMut(RequestFrameOptions)>>,
      event_callback: Option<Box<dyn FnMut(PlatformInput) -> gpui::DispatchEventResult>>,
-@@ -665,7 +735,6 @@ struct MacWindowState {
+@@ -665,7 +734,6 @@ struct MacWindowState {
      input_handler: Option<PlatformInputHandler>,
      last_key_equivalent: Option<KeyDownEvent>,
      last_left_mouse_down_event: Option<Retained<AnyObject>>,
@@ -516,7 +524,7 @@ index f2208d35ec..856c8149a9 100644
      traffic_light_position: Option<Point<Pixels>>,
      traffic_light_frames: Option<TrafficLightFrames>,
      pre_fullscreen_traffic_light_frames: Option<TrafficLightFrames>,
-@@ -673,9 +742,21 @@ struct MacWindowState {
+@@ -673,9 +741,21 @@ struct MacWindowState {
      previous_modifiers_changed_event: Option<PlatformInput>,
      keystroke_for_do_command: Option<Keystroke>,
      do_command_handled: Option<bool>,
@@ -538,7 +546,7 @@ index f2208d35ec..856c8149a9 100644
      // When true, the whole content view is reported as app-owned titlebar content via
      // `_opaqueRectForWindowMoveWhenInTitlebar`, so AppKit does not drag the window from
      // the titlebar or delay titlebar clicks (a delay first observed on macOS 27). Such
-@@ -694,9 +775,85 @@ struct MacWindowState {
+@@ -694,9 +774,85 @@ struct MacWindowState {
      accesskit_adapter: Option<accesskit_macos::SubclassingAdapter>,
      // The parent window if this window is a sheet (Dialog kind)
      sheet_parent: Option<*mut AnyObject>,
@@ -624,7 +632,34 @@ index f2208d35ec..856c8149a9 100644
      fn move_traffic_light(&mut self) {
          if let Some(traffic_light_position) = self.traffic_light_position {
              if self.is_fullscreen() && !self.is_exiting_fullscreen {
-@@ -909,10 +1066,14 @@ impl MacWindowState {
+@@ -821,18 +977,24 @@ impl MacWindowState {
+             .occlusionState()
+             .contains(NSWindowOcclusionState::Visible)
+         {
++            lost_frame_probe(self, "display link not started: not visible");
+             return;
+         }
+         let screen: *mut AnyObject = unsafe { msg_send![self.native_window, screen] };
+         let Some(display_id) = display_id_for_screen(screen) else {
+             // AppKit can temporarily report no screen while displays are being reconfigured.
++            lost_frame_probe(self, "display link not started: no screen");
+             return;
+         };
+         let data = self.native_view.as_ptr() as *mut c_void;
+-        self.frame_source
++        match self
++            .frame_source
+             .get_or_insert_with(|| WindowFrameSource::new(data, step))
+             .start(display_id)
+-            .log_err();
++        {
++            Ok(()) => lost_frame_probe(self, "display link started"),
++            Err(error) => lost_frame_probe(self, &format!("display link not started: {error}")),
++        }
+     }
+ 
+     fn stop_display_link(&mut self) {
+@@ -909,10 +1071,14 @@ impl MacWindowState {
      }
  
      fn content_size(&self) -> Size<Pixels> {
@@ -643,7 +678,7 @@ index f2208d35ec..856c8149a9 100644
          size(px(width as f32), px(height as f32))
      }
  
-@@ -960,6 +1121,19 @@ impl MacWindow {
+@@ -960,6 +1126,19 @@ impl MacWindow {
          renderer_context: renderer::Context,
          marker: MainThreadMarker,
      ) -> Self {
@@ -663,7 +698,7 @@ index f2208d35ec..856c8149a9 100644
          autoreleasepool(|_| unsafe {
              let allows_automatic_window_tabbing = tabbing_identifier.is_some();
              if allows_automatic_window_tabbing {
-@@ -1061,67 +1235,25 @@ impl MacWindow {
+@@ -1061,67 +1240,25 @@ impl MacWindow {
              let native_view: *mut AnyObject = msg_send![native_view, initWithFrame: content_bounds];
              assert!(!native_view.is_null());
  
@@ -744,7 +779,7 @@ index f2208d35ec..856c8149a9 100644
              let mut window = Self(state, marker);
  
              (*native_window)
-@@ -1289,6 +1421,96 @@ impl MacWindow {
+@@ -1289,6 +1426,96 @@ impl MacWindow {
          })
      }
  
@@ -841,7 +876,7 @@ index f2208d35ec..856c8149a9 100644
      pub fn active_window() -> Option<AnyWindowHandle> {
          unsafe {
              let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-@@ -1366,6 +1588,19 @@ impl Drop for MacWindow {
+@@ -1366,6 +1593,19 @@ impl Drop for MacWindow {
          // renderer's command queue are actually released with the window.
          drop(this.accesskit_adapter.take());
          this.renderer.destroy();
@@ -861,7 +896,7 @@ index f2208d35ec..856c8149a9 100644
          let window = this.native_window;
          let sheet_parent = this.sheet_parent.take();
          this.frame_source.take();
-@@ -1683,6 +1918,15 @@ impl PlatformWindow for MacWindow {
+@@ -1683,6 +1923,15 @@ impl PlatformWindow for MacWindow {
          self.0.as_ref().lock().input_handler.take()
      }
  
@@ -877,7 +912,7 @@ index f2208d35ec..856c8149a9 100644
      fn prompt(
          &self,
          level: PromptLevel,
-@@ -1841,6 +2085,10 @@ impl PlatformWindow for MacWindow {
+@@ -1841,6 +2090,10 @@ impl PlatformWindow for MacWindow {
  
          let opaque = background_appearance == WindowBackgroundAppearance::Opaque;
          this.renderer.update_transparency(!opaque);
@@ -888,7 +923,7 @@ index f2208d35ec..856c8149a9 100644
  
          unsafe {
              let _: () = msg_send![this.native_window, setOpaque: opaque.to_objc()];
-@@ -1993,6 +2241,25 @@ impl PlatformWindow for MacWindow {
+@@ -1993,6 +2246,26 @@ impl PlatformWindow for MacWindow {
          }
      }
  
@@ -905,6 +940,7 @@ index f2208d35ec..856c8149a9 100644
 +                    .as_ref()
 +                    .is_some_and(WindowFrameSource::is_running)
 +                {
++                    lost_frame_probe(&lock, "frame waker finds the display link stopped");
 +                    lock.start_display_link();
 +                }
 +            }
@@ -914,7 +950,7 @@ index f2208d35ec..856c8149a9 100644
      fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>) {
          self.0.as_ref().lock().request_frame_callback = Some(callback);
      }
-@@ -2315,9 +2582,6 @@ impl PlatformWindow for MacWindow {
+@@ -2315,9 +2588,6 @@ impl PlatformWindow for MacWindow {
              ];
  
              let started = !session.is_null();
@@ -924,7 +960,7 @@ index f2208d35ec..856c8149a9 100644
              log::debug!(
                  "start_external_drag completed: started={}, item_count={}",
                  started,
-@@ -2345,12 +2609,22 @@ impl PlatformWindow for MacWindow {
+@@ -2345,12 +2615,22 @@ impl PlatformWindow for MacWindow {
          };
          let action_handler = A11yActionHandler(callbacks.action);
  
@@ -952,7 +988,7 @@ index f2208d35ec..856c8149a9 100644
          };
  
          lock.accesskit_adapter = Some(adapter);
-@@ -2477,6 +2751,26 @@ extern "C" fn dealloc_view(this: &AnyObject, _: Sel) {
+@@ -2477,6 +2757,26 @@ extern "C" fn dealloc_view(this: &AnyObject, _: Sel) {
      }
  }
  
@@ -979,7 +1015,7 @@ index f2208d35ec..856c8149a9 100644
  fn add_mouse_tracking_area(native_view: &NSView) {
      let options = NSTrackingAreaOptions::MouseEnteredAndExited
          | NSTrackingAreaOptions::MouseMoved
-@@ -2555,13 +2849,58 @@ extern "C" fn handle_key_equivalent(
+@@ -2555,13 +2855,58 @@ extern "C" fn handle_key_equivalent(
      _: Sel,
      native_event: *mut AnyObject,
  ) -> Bool {
@@ -1038,7 +1074,7 @@ index f2208d35ec..856c8149a9 100644
  extern "C" fn handle_key_up(this: &AnyObject, _: Sel, native_event: *mut AnyObject) {
      handle_key_event(this, native_event, false);
  }
-@@ -2645,15 +2984,40 @@ extern "C" fn handle_key_event(
+@@ -2645,15 +2990,40 @@ extern "C" fn handle_key_event(
          return Bool::NO;
      };
  
@@ -1086,7 +1122,7 @@ index f2208d35ec..856c8149a9 100644
      };
  
      match event {
-@@ -2728,6 +3092,12 @@ extern "C" fn handle_key_event(
+@@ -2728,6 +3098,12 @@ extern "C" fn handle_key_event(
                      }
                  };
                  window_state.as_ref().lock().keystroke_for_do_command.take();
@@ -1099,7 +1135,7 @@ index f2208d35ec..856c8149a9 100644
                  if let Some(handled) = window_state.as_ref().lock().do_command_handled.take() {
                      return handled.to_objc();
                  } else if handled == Bool::YES {
-@@ -2785,7 +3155,6 @@ extern "C" fn handle_key_event(
+@@ -2785,7 +3161,6 @@ extern "C" fn handle_key_event(
  
  extern "C" fn handle_view_event(this: &AnyObject, _: Sel, native_event: *mut AnyObject) {
      let window_state = unsafe { get_window_state(this) };
@@ -1107,7 +1143,7 @@ index f2208d35ec..856c8149a9 100644
      let mut lock = window_state.as_ref().lock();
      let window_height = lock.content_size().height;
      let native_event_type: NSEventType = unsafe { msg_send![native_event, type] };
-@@ -2886,33 +3255,6 @@ extern "C" fn handle_view_event(this: &AnyObject, _: Sel, native_event: *mut Any
+@@ -2886,33 +3261,6 @@ extern "C" fn handle_view_event(this: &AnyObject, _: Sel, native_event: *mut Any
                  }
                  lock = window_state.as_ref().lock();
              }
@@ -1141,7 +1177,7 @@ index f2208d35ec..856c8149a9 100644
              PlatformInput::ModifiersChanged(ModifiersChangedEvent {
                  modifiers,
                  capslock,
-@@ -2934,14 +3276,145 @@ extern "C" fn handle_view_event(this: &AnyObject, _: Sel, native_event: *mut Any
+@@ -2934,14 +3282,161 @@ extern "C" fn handle_view_event(this: &AnyObject, _: Sel, native_event: *mut Any
              _ => {}
          }
  
@@ -1257,10 +1293,10 @@ index f2208d35ec..856c8149a9 100644
 +                }
 +                window_state.lock().input_handler = Some(input_handler);
 +            }
-         }
-     }
- }
- 
++        }
++    }
++}
++
 +/// Puts the window's event callback back once it has taken the input held while it was out, in
 +/// order (#2658), up to a held key or text, which AppKit and the field get from the main queue.
 +fn give_back_event_callback(
@@ -1277,19 +1313,59 @@ index f2208d35ec..856c8149a9 100644
 +                schedule_hand_on(window_state);
 +            }
 +            return;
-+        }
+         }
 +        let Some(MacHeld::Input(held)) = lock.held.pop_front() else {
 +            unreachable!()
 +        };
 +        drop(lock);
 +        callback(held);
-+    }
+     }
+ }
+ 
++/// The lost-frame probe (#3554): a line on stderr, in one write, naming the window by its address
++/// with its occlusion state and whether it's key, for the display link's starts and stops.
++fn lost_frame_probe(state: &MacWindowState, what: &str) {
++    use std::io::Write as _;
++    let window = state.native_window();
++    let occlusion = window.occlusionState().0;
++    let key = window.isKeyWindow();
++    _ = std::io::stderr().write_all(
++        format!(
++            "browser: probe frame {:p} occlusion {occlusion} key {key}: {what}\n",
++            state.native_window
++        )
++        .as_bytes(),
++    );
 +}
 +
  fn visibility(state: &MacWindowState) -> WindowVisibility {
      let is_visible = state
          .native_window()
-@@ -3362,7 +3835,14 @@ extern "C" fn step(view: *mut c_void) {
+@@ -2989,6 +3484,7 @@ fn report_visibility(window_state: &Arc<Mutex<MacWindowState>>) {
+ extern "C" fn window_did_change_occlusion_state(this: &AnyObject, _: Sel, _: *mut AnyObject) {
+     let window_state = unsafe { get_window_state(this) };
+     let mut lock = window_state.lock();
++    lost_frame_probe(&lock, "occlusion changed");
+     if lock
+         .native_window()
+         .occlusionState()
+@@ -3200,6 +3696,7 @@ extern "C" fn window_did_change_key_status(this: &AnyObject, selector: Sel, _: *
+ 
+         if lock.activated_least_once {
+             if let Some(mut callback) = lock.request_frame_callback.take() {
++                lost_frame_probe(&lock, "became key: synchronous frame, display link stopped");
+                 lock.renderer.set_presents_with_transaction(true);
+                 lock.stop_display_link();
+                 drop(lock);
+@@ -3326,6 +3823,7 @@ extern "C" fn display_layer(this: &AnyObject, _: Sel, _: *mut AnyObject) {
+     let window_state = unsafe { get_window_state(this) };
+     let mut lock = window_state.lock();
+     if let Some(mut callback) = lock.request_frame_callback.take() {
++        lost_frame_probe(&lock, "display_layer: synchronous frame, display link stopped");
+         lock.renderer.set_presents_with_transaction(true);
+         lock.stop_display_link();
+         drop(lock);
+@@ -3362,7 +3860,15 @@ extern "C" fn step(view: *mut c_void) {
              signal_source,
              ..Default::default()
          });
@@ -1300,12 +1376,13 @@ index f2208d35ec..856c8149a9 100644
 +        // itself. The run-on only bridges the gaps between a stream's events and the last frame
 +        // after it; a longer one is 60 to 120 empty callbacks a second after every interaction.
 +        if lock.frame_demand_at.elapsed() > FRAME_RUN_ON {
++            lost_frame_probe(&lock, "display link stopped: run-on over");
 +            lock.stop_display_link();
 +        }
      }
  }
  
-@@ -3451,11 +3931,9 @@ extern "C" fn insert_text(
+@@ -3451,11 +3957,9 @@ extern "C" fn insert_text(
              text
          };
  
@@ -1320,7 +1397,7 @@ index f2208d35ec..856c8149a9 100644
      }
  }
  
-@@ -3473,16 +3951,14 @@ extern "C" fn set_marked_text(
+@@ -3473,16 +3977,14 @@ extern "C" fn set_marked_text(
          } else {
              text
          };
@@ -1342,7 +1419,7 @@ index f2208d35ec..856c8149a9 100644
  }
  
  extern "C" fn attributed_substring_for_proposed_range(
-@@ -3521,19 +3997,22 @@ extern "C" fn do_command_by_selector(this: &AnyObject, _: Sel, _: Sel) {
+@@ -3521,19 +4023,22 @@ extern "C" fn do_command_by_selector(this: &AnyObject, _: Sel, _: Sel) {
      let state = unsafe { get_window_state(this) };
      let mut lock = state.as_ref().lock();
      let keystroke = lock.keystroke_for_do_command.take();
@@ -1372,7 +1449,7 @@ index f2208d35ec..856c8149a9 100644
  }
  
  extern "C" fn view_did_change_effective_appearance(this: &AnyObject, _: Sel) {
-@@ -3555,6 +4034,10 @@ extern "C" fn view_did_change_effective_appearance(this: &AnyObject, _: Sel) {
+@@ -3555,6 +4060,10 @@ extern "C" fn view_did_change_effective_appearance(this: &AnyObject, _: Sel) {
      }
  }
  
@@ -1383,7 +1460,7 @@ index f2208d35ec..856c8149a9 100644
  extern "C" fn accepts_first_mouse(this: &AnyObject, _: Sel, _: *mut AnyObject) -> Bool {
      let window_state = unsafe { get_window_state(this) };
      let mut lock = window_state.as_ref().lock();
-@@ -3717,54 +4200,11 @@ extern "C" fn dragging_session_ended(
+@@ -3717,54 +4226,11 @@ extern "C" fn dragging_session_ended(
      let window_state = unsafe { get_window_state(this) };
      {
          let mut lock = window_state.lock();
@@ -1438,7 +1515,7 @@ index f2208d35ec..856c8149a9 100644
  /// Sends the specified FileDropEvent using `PlatformInput::FileDrop` to the window
  /// state and updates the window state according to the event passed.
  fn send_file_drop_event(
-@@ -3781,10 +4221,9 @@ fn send_file_drop_event(
+@@ -3781,10 +4247,9 @@ fn send_file_drop_event(
      if let Some(mut callback) = lock.event_callback.take() {
          drop(lock);
          callback(PlatformInput::FileDrop(file_drop_event));
