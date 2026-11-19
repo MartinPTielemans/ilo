@@ -452,6 +452,12 @@ if pip_driven; then
   px=0 py=0 pw=0 ph=0
   send pip
   mini_player_at 1 "the floating call had no window"
+  # Chromium floats it in the screen's bottom right. At the top left, where it has now and then
+  # floated on X11, the drag below can't move it up and would fail for a fault that isn't the
+  # drag's, so that place gets a line of its own (#3623).
+  if ! wayland && [ "$px $py" = "0 0" ]; then
+    fail "the floating call floated at the screen's top left, not its bottom right"
+  fi
   # Up and left, as it floats in the screen's bottom right: the window manager moves it with the
   # pointer from where Chromium hands the drag over, at the press or past the drag's threshold.
   send pip press $((pw / 2)) 17
