@@ -343,7 +343,7 @@ if [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 1
   # Its Space showed its favorite at the quit before, which the launch after loads; a closed tab
   # leaves it showing none.
   send key 1 cmd
-  expect "^browser: selected $favorite\$" "⌘1 didn't show the first profile's favorite again"
+  expect "^browser: window [0-9]* shows $favorite\$" "⌘1 didn't show the first profile's favorite again"
   # The Space shown at the quit is the one the launch after shows.
   [ "$shown" = "$first" ] || {
     send key 2 ctrl
