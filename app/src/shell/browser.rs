@@ -741,6 +741,9 @@ pub trait Browser {
     /// Shows `tab`'s page in Safari's engine, in the tab, and has its profile keep the site for it.
     /// The user's: agents get none.
     fn use_system_engine(&self, _tab: u64, _cx: &mut App) {}
+    /// Shows `tab`'s page in Chromium again, and has its profile keep the site there. The user's:
+    /// agents get none.
+    fn leave_system_engine(&self, _tab: u64, _cx: &mut App) {}
     /// Where Google's Widevine module is, which the core offers on Linux alone.
     fn widevine(&self) -> crate::widevine::Widevine {
         crate::widevine::Widevine::None

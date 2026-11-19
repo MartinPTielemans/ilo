@@ -1622,6 +1622,10 @@ impl Browser for Engine {
         use_system_engine(tab);
     }
 
+    fn leave_system_engine(&self, tab: u64, _: &mut App) {
+        leave_system_engine(tab);
+    }
+
     fn close_media_note(&self, tab: u64, _: &mut App) {
         unsafe { bc::bc_tab_close_media_note(tab) };
     }
