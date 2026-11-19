@@ -351,6 +351,15 @@ source_set("link_card_rule") {
   ]
 }
 
+# The key a page's key is named by for the app's shortcuts, apart so browser_core_unittests tests it
+# alone.
+source_set("shortcut_key") {
+  sources = [
+    "shortcut_key.cc",
+    "shortcut_key.h",
+  ]
+}
+
 # How an agent's typing goes to a page as key events, apart so browser_core_unittests tests it alone.
 source_set("typing_keys") {
   sources = [
@@ -785,6 +794,7 @@ source_set("browser_core") {
     ":sync_spaces_newer",
     ":sync_trouble",
     ":link_card_rule",
+    ":shortcut_key",
     ":typed_http",
     ":typing_keys",
     ":window_frames",
@@ -1103,6 +1113,7 @@ test("browser_core_unittests") {
     "popup_hold_unittest.cc",
     "search_default_unittest.cc",
     "select_choices_unittest.cc",
+    "shortcut_key_unittest.cc",
     "sidebar_backups_unittest.cc",
     "site_searches_unittest.cc",
 
@@ -1160,6 +1171,7 @@ test("browser_core_unittests") {
     ":sync_spaces_newer",
     ":sync_trouble",
     ":link_card_rule",
+    ":shortcut_key",
     ":typed_http",
     ":typing_keys",
     ":window_frames",
