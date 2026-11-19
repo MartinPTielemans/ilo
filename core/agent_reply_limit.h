@@ -20,7 +20,9 @@ class AgentReplyLimit {
   // (input::kHungRendererDelay, 15 s at 157), and as long as a job waits for its page to load.
   static constexpr base::TimeDelta kLimit = base::Seconds(15);
 
-  using Ends = base::RepeatingCallback<void(std::string why)>;
+  // |why| as the agent hears it. |dialog|: the page showed a dialog, which the jobs queued behind
+  // this one would wait on too.
+  using Ends = base::RepeatingCallback<void(std::string why, bool dialog)>;
   explicit AgentReplyLimit(Ends ends);
   AgentReplyLimit(const AgentReplyLimit&) = delete;
   AgentReplyLimit& operator=(const AgentReplyLimit&) = delete;
@@ -43,7 +45,7 @@ class AgentReplyLimit {
 
  private:
   void Reached();
-  void End(std::string why);
+  void End(std::string why, bool dialog);
 
   const Ends ends_;
   bool working_ = false;

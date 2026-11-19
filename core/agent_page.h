@@ -297,8 +297,9 @@ class AgentPage : public content::WebContentsObserver,
                     size_t next);
   void Answer(std::string text, bool error);
   void Fail(std::string why);
-  // Ends the job, which its page's dialog or the limit stopped waiting on, with |why|.
-  void EndWaiting(std::string why);
+  // Ends the job, which its page's dialog or the limit stopped waiting on, with |why|, and with a
+  // |dialog| the jobs queued behind it.
+  void EndWaiting(std::string why, bool dialog);
   // Gives the answer kept while a download started, as none took its action.
   void AnswerHeld();
 

@@ -34,7 +34,8 @@ void AgentReplyLimit::Sent() {
 void AgentReplyLimit::Reached() {
   End(base::StrCat({"The tab's page didn't answer for ", base::NumberToString(kLimit.InSeconds()),
                     " s, so the action stopped part way. The page may be busy or stuck; "
-                    "close_tab closes the tab."}));
+                    "close_tab closes the tab."}),
+      /*dialog=*/false);
 }
 
 void AgentReplyLimit::Replied(size_t owed) {
@@ -54,13 +55,14 @@ void AgentReplyLimit::DialogShown(std::string_view what) {
   }
   End(base::StrCat({"The tab's page showed ", what,
                     " while the action ran. Nothing more can be done on the tab while it's up, "
-                    "and no tool answers it. close_tab closes the tab, and the dialog with it."}));
+                    "and no tool answers it. close_tab closes the tab, and the dialog with it."}),
+      /*dialog=*/true);
 }
 
-void AgentReplyLimit::End(std::string why) {
+void AgentReplyLimit::End(std::string why, bool dialog) {
   // Once: the job is over whether or not its page has said Ended().
   Ended();
-  ends_.Run(std::move(why));
+  ends_.Run(std::move(why), dialog);
 }
 
 }  // namespace browser_core

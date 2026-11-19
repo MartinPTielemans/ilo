@@ -3035,12 +3035,19 @@ void AgentPage::Fail(std::string why) {
   Answer(std::move(why), /*error=*/true);
 }
 
-void AgentPage::EndWaiting(std::string why) {
+void AgentPage::EndWaiting(std::string why, bool dialog) {
   // What the page owes the job is never waited on again: a reply that comes once the dialog is
   // answered would otherwise run into the job after this one. Dropped, a picture under way
   // answers that there's none.
   base::flat_map<int, std::pair<int, Reply>> owed = std::exchange(replies_, {});
-  Fail(std::move(why));
+  // The jobs queued behind it would each send to a page that can't answer while its dialog is up,
+  // and wait out the limit in turn, so they end now with the same answer, after this one's.
+  std::deque<Job> queued = dialog ? std::exchange(jobs_, {}) : std::deque<Job>();
+  Fail(why);
+  for (const Job& job : queued) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&Report, tab_, job.request, why, true));
+  }
 }
 
 // static

@@ -16,9 +16,14 @@ class AgentReplyLimitTest : public testing::Test {
  protected:
   base::test::TaskEnvironment clock_{base::test::TaskEnvironment::TimeSource::MOCK_TIME};
   std::vector<std::string> ended_;
+  // Whether each end was a dialog's, which ends the jobs queued behind it too.
+  std::vector<bool> dialogs_;
   AgentReplyLimit limit_{base::BindRepeating(
-      [](std::vector<std::string>* ended, std::string why) { ended->push_back(std::move(why)); },
-      &ended_)};
+      [](AgentReplyLimitTest* test, std::string why, bool dialog) {
+        test->ended_.push_back(std::move(why));
+        test->dialogs_.push_back(dialog);
+      },
+      base::Unretained(this))};
 };
 
 // A click whose page shows an alert: the click's reply never comes, as the renderer waits on the
@@ -32,6 +37,7 @@ TEST_F(AgentReplyLimitTest, AJobInFlightWhenTheDialogShowsEndsWithTheDialogsAnsw
             "The tab's page showed an alert while the action ran. Nothing more can be done on the "
             "tab while it's up, and no tool answers it. close_tab closes the tab, and the dialog "
             "with it.");
+  EXPECT_TRUE(dialogs_[0]);
   EXPECT_FALSE(limit_.counting());
   // Answered once: the limit doesn't end it again.
   clock_.FastForwardBy(AgentReplyLimit::kLimit * 2);
@@ -59,6 +65,8 @@ TEST_F(AgentReplyLimitTest, AReplyThatNeverComesEndsAtTheLimit) {
   EXPECT_EQ(ended_[0],
             "The tab's page didn't answer for 15 s, so the action stopped part way. The page may "
             "be busy or stuck; close_tab closes the tab.");
+  // A hung page may answer the next job, so only this one ends.
+  EXPECT_FALSE(dialogs_[0]);
   EXPECT_FALSE(limit_.counting());
 }
 
