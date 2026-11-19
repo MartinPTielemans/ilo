@@ -653,22 +653,57 @@ fn shared(id: &str, kind: ShareKind) -> SharedLink {
 }
 
 /// Signed in, the account's shared links are listed after its devices, none before the core has
-/// listed them, and each row's Copy Link and Unshare ask the core for that link.
+/// listed them, newest first. Copy Link copies that link and says Copied a while; Unshare asks
+/// first, and unshares only once confirmed.
 #[gpui::test]
 fn the_shared_links_copy_and_unshare(cx: &mut TestAppContext) {
     let mut tab = shown(state(Status::On), cx);
     tab.host.take();
     assert!(!tab.drawn("copy a"));
-    let shares = vec![
-        shared("a", ShareKind::Folder),
-        shared("b", ShareKind::Space),
-    ];
-    tab.account
-        .update(tab.cx, |account, cx| account.set_shares(shares, cx));
+    let mut older = shared("a", ShareKind::Folder);
+    older.shared = 1.;
+    let mut newer = shared("b", ShareKind::Space);
+    newer.shared = 2.;
+    tab.account.update(tab.cx, |account, cx| {
+        account.set_shares(vec![older, newer], cx)
+    });
     tab.cx.run_until_parked();
+    let top = |tab: &mut Shown, name: &str| {
+        let bounds = tab
+            .account
+            .read_with(tab.cx, |account, _| account.drawn(name));
+        bounds.expect("drawn").origin.y
+    };
+    assert!(
+        top(&mut tab, "copy b") < top(&mut tab, "copy a"),
+        "newest first"
+    );
+
     tab.click("copy b");
+    assert_eq!(tab.host.take(), ["copy share b"]);
+    let says = |tab: &mut Shown| {
+        tab.account.read_with(tab.cx, |account, cx| {
+            let now = cx.background_executor().now();
+            account
+                .copied_share
+                .as_ref()
+                .filter(|(_, at)| now - *at < COPIED)
+                .map(|(id, _)| id.to_string())
+        })
+    };
+    assert_eq!(says(&mut tab).as_deref(), Some("b"));
+    tab.cx.executor().advance_clock(COPIED);
+    tab.cx.run_until_parked();
+    assert_eq!(says(&mut tab), None, "Copied is Copy Link again");
+
     tab.click("unshare a");
-    assert_eq!(tab.host.take(), ["copy share b", "unshare a"]);
+    assert_eq!(
+        tab.host.take(),
+        ["ask Unshare “Share a”? Unshare"],
+        "nothing goes until confirmed"
+    );
+    tab.confirm();
+    assert_eq!(tab.host.take(), ["unshare a"]);
 }
 
 /// A link's line says the day it was last shared, not its time.

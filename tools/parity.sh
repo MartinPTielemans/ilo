@@ -25,7 +25,8 @@
 # the left and on the right (#3160), and Library › Boards, light and dark, a Board's row's menu,
 # and the protected-media note, whose card a Board's refused save follows in the page (#3073), the
 # keyboard's ring on New Tab's row in an empty Space, light and dark (#3151), on Library ›
-# Boards' second row, light and dark (#3238), and Settings › Account's Shared Links, light and dark
+# Boards' second row, light and dark (#3238), and Settings › Account's Shared Links, one's name too
+# long for its row, at rest, with Copy Link pressed and with Unshare…'s question, light and dark
 # (#680). The preview's Linux host places no window, so sway
 # puts Site Controls, the icon picker and the tooltip in the middle rather than where the Mac's host
 # would.
@@ -99,6 +100,10 @@ screens=(
   "new-tab-ring-dark|sidebar ring 0 at|PREVIEW_EMPTY=new PREVIEW_FOCUS_SIDEBAR=1 PREVIEW_APPEARANCE=dark"
   "shared-links-light|settings sync unshare c at|PREVIEW_ACCOUNT=signed-in PREVIEW_APPEARANCE=light"
   "shared-links-dark|settings sync unshare c at|PREVIEW_ACCOUNT=signed-in PREVIEW_APPEARANCE=dark"
+  "shared-links-copied-light|pressed Copy Link|PREVIEW_ACCOUNT=signed-in PREVIEW_SHARES=copied PREVIEW_APPEARANCE=light"
+  "shared-links-copied-dark|pressed Copy Link|PREVIEW_ACCOUNT=signed-in PREVIEW_SHARES=copied PREVIEW_APPEARANCE=dark"
+  "shared-links-unshare-light|dialog settled|PREVIEW_ACCOUNT=signed-in PREVIEW_SHARES=unshare PREVIEW_APPEARANCE=light"
+  "shared-links-unshare-dark|dialog settled|PREVIEW_ACCOUNT=signed-in PREVIEW_SHARES=unshare PREVIEW_APPEARANCE=dark"
 )
 case $(uname -s) in
   MINGW* | MSYS*) systems=(windows) drag= ;;

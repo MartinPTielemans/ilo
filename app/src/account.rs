@@ -321,6 +321,8 @@ pub struct Account {
     devices: Option<Vec<Device>>,
     /// The account's shared links, as the core last listed them while the account showed.
     shares: Option<Vec<SharedLink>>,
+    /// The shared link whose Copy Link was last pressed, and when, as it says Copied.
+    copied_share: Option<(SharedString, Instant)>,
     /// As the core said when the view last showed.
     activity: Activity,
     words: Option<Words>,
@@ -500,6 +502,7 @@ impl Account {
             state: State::default(),
             devices: None,
             shares: None,
+            copied_share: None,
             activity: Activity::default(),
             words: None,
             server: None,
@@ -616,9 +619,46 @@ impl Account {
     }
 
     /// The account's shared links, as the core listed them.
-    pub fn set_shares(&mut self, shares: Vec<SharedLink>, cx: &mut Context<Self>) {
+    /// Newest first, as the one just shared is the one most often copied again.
+    pub fn set_shares(&mut self, mut shares: Vec<SharedLink>, cx: &mut Context<Self>) {
+        shares.sort_by(|a, b| b.shared.total_cmp(&a.shared));
         self.shares = Some(shares);
         cx.notify();
+    }
+
+    /// Copies the shared link `id`'s link, and has its button say Copied a while.
+    pub fn copy_share(&mut self, id: SharedString, cx: &mut Context<Self>) {
+        self.host.copy_share(&id);
+        self.copied_share = Some((id, cx.background_executor().now()));
+        cx.spawn(async move |account, cx| {
+            cx.background_executor().timer(COPIED).await;
+            account.update(cx, |_, cx| cx.notify()).ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Unshares `id` once the user confirms: the server deletes it, on every device's list, and
+    /// nothing brings it back.
+    pub fn unshare(
+        &mut self,
+        id: SharedString,
+        title: SharedString,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let host = self.host.clone();
+        self.host.confirm(
+            format!("Unshare “{title}”?"),
+            "The link will open nothing, for anyone who has it. Tabs someone already added stay \
+             theirs."
+                .into(),
+            "Unshare",
+            Return::Nothing,
+            Box::new(move |_| host.unshare(&id)),
+            window,
+            cx,
+        );
     }
 
     /// Where the button named `name` was last drawn, for a test to press.
@@ -1391,25 +1431,44 @@ impl Account {
             "{kind} · {tabs} · shared {}",
             shared_when(share.shared, self.host.day_starts())
         );
-        let id = share.id.to_string();
+        // The executor's clock, which tests move on.
+        let now = cx.background_executor().now();
+        let copied = self
+            .copied_share
+            .as_ref()
+            .is_some_and(|(id, at)| *id == share.id && now - *at < COPIED);
+        let (title, spoken) = match copied {
+            true => ("Copied", format!("Link to {} Copied", share.title)),
+            false => ("Copy Link", format!("Copy Link to {}", share.title)),
+        };
         let copy = {
-            let id = id.clone();
+            let id = share.id.clone();
             self.button_said(
                 format!("copy {id}"),
-                "Copy Link",
-                format!("Copy Link to {}", share.title),
+                title,
+                spoken,
                 cx,
-                move |account, _, _| account.host.copy_share(&id),
+                move |account, _, cx| account.copy_share(id.clone(), cx),
             )
         };
+        // Copied says it happened, with a check, until it's Copy Link again.
+        let copy = copy.when(copied, |copy| {
+            copy.child(
+                svg()
+                    .path("icons/check.svg")
+                    .ml(px(HEADER_GAP))
+                    .size(px(text::BODY))
+                    .text_color(self.look.ink),
+            )
+        });
         let unshare = {
-            let id = id.clone();
+            let (id, title) = (share.id.clone(), share.title.clone());
             self.button_said(
                 format!("unshare {id}"),
                 "Unshare…",
                 format!("Unshare {}", share.title),
                 cx,
-                move |account, _, _| account.host.unshare(&id),
+                move |account, window, cx| account.unshare(id.clone(), title.clone(), window, cx),
             )
         };
         frame()

@@ -4450,7 +4450,11 @@ fn preview_account(state: &str, cx: &mut App) {
         device("2", "MacBook Air", "macOS", false),
         device("3", "ThinkPad X1", "Linux", false),
     ];
-    // The account's shared links (#680): a folder shared today, a Space and chosen tabs before.
+    // The account's shared links (#680): a folder shared today, one whose name is longer than its
+    // row, a Space and chosen tabs before. PREVIEW_SHARES=copied presses the first's Copy Link, and
+    // again each second, so it says Copied however late the picture is taken; unshare presses its
+    // Unshare… and shows the question.
+    let pressed = std::env::var("PREVIEW_SHARES").ok();
     let share = |id: &str, kind, title: &str, tabs, days: f64, color: Option<u32>, icon: &str| {
         account::SharedLink {
             id: id.to_string().into(),
@@ -4469,6 +4473,15 @@ fn preview_account(state: &str, cx: &mut App) {
             "Lisbon, March",
             7,
             0.,
+            None,
+            "",
+        ),
+        share(
+            "d",
+            account::ShareKind::Folder,
+            "Apartments in Lisbon, Porto and Coimbra, with the landlords' replies and the maps",
+            12,
+            2.,
             None,
             "",
         ),
@@ -4524,6 +4537,25 @@ fn preview_account(state: &str, cx: &mut App) {
             }
         });
         window.focus(&page.read(cx).account.focus_handle(cx), cx);
+        let account = page.read(cx).account.clone();
+        match pressed.as_deref() {
+            Some("copied") => {
+                cx.spawn(async move |cx| {
+                    loop {
+                        account.update(cx, |account, cx| account.copy_share("a".into(), cx));
+                        log!("preview: pressed Copy Link");
+                        cx.background_executor().timer(Duration::from_secs(1)).await;
+                    }
+                })
+                .detach();
+            }
+            Some("unshare") => window.on_next_frame(move |window, cx| {
+                account.update(cx, |account, cx| {
+                    account.unshare("a".into(), "Lisbon, March".into(), window, cx)
+                });
+            }),
+            _ => {}
+        }
         if scroll > 0. {
             let scrolled = page.clone();
             window.on_next_frame(move |_, cx| {
