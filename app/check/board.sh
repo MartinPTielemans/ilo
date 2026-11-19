@@ -10,7 +10,9 @@
 # neither. A picture waiting in a Board's arrivals lands as a card when the Board opens, and leaves
 # the list once the card is saved; one that comes while its tab isn't showing lands when it's shown,
 # a step from the first, both captured. A Board's file over 4 MiB, which the host doesn't read, says
-# so and is never written over, captured, as is one holding [] rather than a Board. A private window
+# so and is never written over, captured, as is one holding [] rather than a Board. A Board loaded
+# in a second tab says it's open in the other, captured, and saves nothing; once the first closes,
+# the second takes it over and saves. A private window
 # has no New Board, and a Board's address there shows "This Board isn't here.", captured. New Board
 # from the File menu, the sidebar's +, the command bar, and its key with a Board's page and with
 # the sidebar holding the keyboard, each makes one. Japanese input as a Board's first keys is its
@@ -643,6 +645,59 @@ done
 send key w cmd
 expect "^browser: tab $unread closed\$" "⌘W didn't close the Board whose file holds []"
 
+# A Board open in one tab and loaded in a second: the second says it's open in the other and
+# writes nothing of it, and once the first closes it takes the Board over, as its page waits to.
+twice=$(printf 'e%.0s' $(seq 32))
+mkdir -p "$boards/$twice"
+printf '%s' '{"version": 1, "camera": {"x": 0, "y": 0, "zoom": 1}, "cards": []}' > "$boards/$twice/board.json"
+# Where the Board's file has its view, which a pan moves and a save keeps.
+camera() {
+  python3 -I -c 'import json, sys; c = json.load(open(sys.argv[1]))["camera"]; print(c["x"], c["y"])' \
+    "$boards/$twice/board.json"
+}
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+send insert "chrome://board/$twice"
+send key return
+expect "^browser: loaded [0-9]* chrome://board/$twice\$" "the Board to open in two tabs didn't load"
+first=$(grep "^browser: loaded [0-9]* chrome://board/$twice\$" "$log" | tail -1 | cut -d' ' -f3)
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar over the Board's tab"
+# Over the Board's own tab the bar doesn't offer that tab, and ↩ on the address opens another.
+send insert "chrome://board/$twice"
+send key return
+expect "^browser: loaded [0-9]* chrome://board/$twice\$" "the Board's address didn't load in a second tab"
+second=$(grep "^browser: loaded [0-9]* chrome://board/$twice\$" "$log" | tail -1 | cut -d' ' -f3)
+[ "$second" != "$first" ] || fail "the bar's address row went to the Board's tab $first instead of opening a second"
+../tools/window-screenshot.sh "$pid" "$out/board-elsewhere.png" || fail "no window to capture"
+send scroll 640 400 40 5
+for _ in $(seq 30); do
+  # The window a save would come in, as above.
+  sleep 0.1
+done
+[ "$(camera)" = '0 0' ] || fail "a pan in the Board's second tab was saved to its file: its view is at $(camera)"
+# A quick ⌃Tab goes back to the first tab, which ⌘W closes: the second's page loads the Board again,
+# now its own, even unseen, and once shown a pan there is saved.
+send key tab ctrl
+tapped=$step
+send flags
+# The tab is selected as ⌃ goes down, before the step letting go of it.
+expect "^browser: selected $first in " "a quick ⌃Tab didn't go back to the Board's first tab, $first" "$tapped"
+send key w cmd
+expect "^browser: tab $first closed\$" "⌘W didn't close the Board's first tab"
+expect "^browser: loaded $second chrome://board/$twice\$" \
+  "the Board's second tab didn't load it again once the first closed"
+# Closing a tab shows the one under it, as Arc does, so the second is shown by its key.
+n=$(echo $(pinned) $(today) | tr ' ' '\n' | grep -nx "$second" | cut -d: -f1)
+[ -n "$n" ] || fail "the Board's second tab $second isn't in the sidebar: pinned \"$(pinned)\", Today \"$(today)\""
+switch "$n cmd" "$second"
+saves=$(grep -c 'browser: board saved$' "$log" || true)
+send scroll 640 400 40 5
+saved_after "$saves" "a pan in the Board's second tab, once the first had closed, wasn't saved"
+[ "$(camera)" != '0 0' ] || fail "the save from the Board's second tab, once the first had closed, kept the view where it was"
+send key w cmd
+expect "^browser: tab $second closed\$" "⌘W didn't close the Board's second tab"
+
 # 4: a private window has no New Board, and a Board's address there finds no Board.
 send key n cmd shift
 expect '^browser: private window opened [0-9]* profile [0-9]*$' "⇧⌘N didn't open a private window"
@@ -735,9 +790,10 @@ echo "ok: New Board made $id, its name kept and its note saved in its folder alo
   "markup and a javascript: link ran" \
   "nothing; a waiting picture landed as a card and left the arrivals, and one that came while" \
   "its tab wasn't showing landed a step from it when shown; a Board over 4 MiB and one" \
-  "holding [] weren't written over; a private window had no New Board; after a relaunch the" \
+  "holding [] weren't written over; a Board's second tab saved nothing until its first closed," \
+  "then took it over; a private window had no New Board; after a relaunch the" \
   "Board came back, found by its name, and its next save kept its note; the one holding [] showed" \
   "its file; the page loaded over a Board from the bar had the keyboard." \
   "Windows: $out/board.png $out/board-markup.png $out/board-landed.png" \
-  "$out/board-landed-shown.png $out/board-unread.png $out/board-private.png" \
+  "$out/board-landed-shown.png $out/board-unread.png $out/board-elsewhere.png $out/board-private.png" \
   "$([ -f "$out/board-agent-tab.png" ] && echo "$out/board-agent-tab.png")"
