@@ -25,3 +25,90 @@ index a635bc463a..a4629d9f52 100644
          let texture_descriptor = metal::TextureDescriptor::new();
          texture_descriptor.set_width(size.width.into());
          texture_descriptor.set_height(size.height.into());
+diff --git a/crates/gpui_apple/src/metal_renderer.rs b/crates/gpui_apple/src/metal_renderer.rs
+index 862e62a54b..887d4c4dd4 100644
+--- a/crates/gpui_apple/src/metal_renderer.rs
++++ b/crates/gpui_apple/src/metal_renderer.rs
+@@ -43,6 +43,42 @@ const MAX_INSTANCE_BUFFER_SIZE: usize = 256 * 1024 * 1024;
+ pub type Context = Arc<Mutex<InstanceBufferPool>>;
+ pub type Renderer = MetalRenderer;
+ 
++/// Says on stderr, for ilo's checks, why a frame didn't reach the screen: at most one line in five
++/// seconds for each cause, with how many it left out, so a GPU or window server that stops taking
++/// a window's frames (#3270) shows in the log the checks keep, without a line for every frame.
++pub struct LostFrames(std::sync::Mutex<(Option<std::time::Instant>, u32)>);
++
++impl LostFrames {
++    pub const fn new() -> Self {
++        Self(std::sync::Mutex::new((None, 0)))
++    }
++
++    pub fn say(&self, why: std::fmt::Arguments) {
++        use std::io::Write as _;
++        let Ok(mut last) = self.0.lock() else {
++            return;
++        };
++        let now = std::time::Instant::now();
++        if last
++            .0
++            .is_some_and(|at| now.duration_since(at) < std::time::Duration::from_secs(5))
++        {
++            last.1 += 1;
++            return;
++        }
++        let left_out = mem::take(&mut last.1);
++        last.0 = Some(now);
++        drop(last);
++        // One write, so a line Chromium logs at the same time can't land inside it.
++        _ = std::io::stderr().write_all(
++            format!("browser: gpui frame lost: {why}, {left_out} more left out\n").as_bytes(),
++        );
++    }
++}
++
++static NO_DRAWABLE: LostFrames = LostFrames::new();
++static FAILED_COMMANDS: LostFrames = LostFrames::new();
++
+ pub unsafe fn new_renderer(
+     context: self::Context,
+     _native_window: *mut c_void,
+@@ -535,10 +571,10 @@ impl MetalRenderer {
+         let drawable = if let Some(drawable) = layer.next_drawable() {
+             drawable
+         } else {
+-            log::error!(
+-                "failed to retrieve next drawable, drawable size: {:?}",
+-                viewport_size
+-            );
++            NO_DRAWABLE.say(format_args!(
++                "the layer gave no drawable at {}x{}",
++                viewport_size.width.0, viewport_size.height.0
++            ));
+             return;
+         };
+ 
+@@ -593,10 +629,23 @@ impl MetalRenderer {
+ 
+         let instance_buffer_pool = self.instance_buffer_pool.clone();
+         let instance_buffer = Cell::new(Some(writer.finish()));
+-        let block = RcBlock::new(move |_: ptr::NonNull<AnyObject>| {
++        let block = RcBlock::new(move |command_buffer: ptr::NonNull<AnyObject>| {
+             if let Some(instance_buffer) = instance_buffer.take() {
+                 instance_buffer_pool.lock().release(instance_buffer);
+             }
++            // MTLCommandBufferStatusError: the frame never reached its drawable, for its error's code.
++            const ERROR: usize = 5;
++            let command_buffer = unsafe { command_buffer.as_ref() };
++            let status: usize = unsafe { objc2::msg_send![command_buffer, status] };
++            if status == ERROR {
++                let error: *mut AnyObject = unsafe { objc2::msg_send![command_buffer, error] };
++                let code: isize = if error.is_null() {
++                    0
++                } else {
++                    unsafe { objc2::msg_send![error, code] }
++                };
++                FAILED_COMMANDS.say(format_args!("a command buffer ended in error {code}"));
++            }
+         });
+         // SAFETY: Both pointee types are opaque views of the same Objective-C block pointer ABI.
+         unsafe {
