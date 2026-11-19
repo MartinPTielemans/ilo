@@ -1895,9 +1895,14 @@ content::WebContents* Window::OpenPreview(content::WebContents& opener,
   // The app shows it in its card until it draws, so it shows the window's page colour until then,
   // as the panes do, not Chromium's white (#2742). Nothing has asked for its id yet, so its tab is
   // made here, which keeps the colour for the page's view once that's made.
-  if (Tab* tab = Tab::Get(Tab::IdOf(preview)); tab && page_color_) {
+  Tab* tab = Tab::Get(Tab::IdOf(preview));
+  if (tab && page_color_) {
     tab->SetPageColor(
         SkColorSetRGB(*page_color_ >> 16, *page_color_ >> 8 & 0xff, *page_color_ & 0xff));
+  }
+  // Its card draws Chromium's page, so its load stays there (system_engine.h).
+  if (tab) {
+    tab->set_opened_as_preview();
   }
   // Inserting a background tab sized it to the active tab's page.
   preview->Resize(gfx::Rect(size));

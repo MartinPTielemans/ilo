@@ -274,6 +274,16 @@ class Tab : public content::WebContentsObserver,
   base::TimeTicks last_press_at() const { return last_press_at_; }
   // And ⌥ (Alt), which tells ⇧⌥-click on a link from ⇧-click on Linux, as both ask for a window.
   bool last_press_held_alt() const { return last_press_held_alt_; }
+  // When the user's last press reached the page, a button, finger or key going down, and when an
+  // agent's last input did, which comes through DevTools: null if none has. A page asking for
+  // protected media moves only on the user's (protected_move_rule.h).
+  base::TimeTicks users_input_at() const { return users_input_at_; }
+  base::TimeTicks agents_input_at() const { return agents_input_at_; }
+
+  // Whether the tab was opened as a link preview (Window::OpenPreview), which it stays until a
+  // Space or the favorites take it.
+  bool opened_as_preview() const { return opened_as_preview_; }
+  void set_opened_as_preview() { opened_as_preview_ = true; }
 
   // When a window last stopped showing the tab, else when it opened, for the auto-archive and for
   // unloading tabs unseen a while.
@@ -461,6 +471,9 @@ class Tab : public content::WebContentsObserver,
   gfx::PointF last_click_;
   bool last_press_held_command_ = false;
   base::TimeTicks last_press_at_;
+  base::TimeTicks users_input_at_;
+  base::TimeTicks agents_input_at_;
+  bool opened_as_preview_ = false;
   bool last_press_held_alt_ = false;
   // Whether the app was last told the page is full screen.
   bool fullscreen_ = false;

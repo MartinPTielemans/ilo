@@ -2,6 +2,7 @@
 #define BROWSER_CORE_SYSTEM_ENGINE_H_
 
 #include <string>
+#include <vector>
 
 #include "base/files/file_path.h"
 #include "base/functional/callback_forward.h"
@@ -20,10 +21,12 @@ namespace browser_core::system_engine {
 
 // The system's engine, WebKit on the Mac, shows a tab's page in place of Chromium's for a site
 // whose protected video only it plays (decision 1). A short built-in list of streaming services
-// opens there from the first visit. For any other site the user switches a tab to it once, from
-// the protected-media note, and the profile keeps the site: its pages open in the system's engine
-// from then on. Site Controls turns either off, per profile. A tab goes back to Chromium at another
-// site. Agents never act in it, as the browser can't keep their rules in an engine whose pages it
+// opens there from the first visit. Any other site's tab moves there by itself once its page asks
+// for what Chromium can't play on the user's press (protected_move_rule.h), or the user switches
+// it from the protected-media note, and the profile keeps the site: its pages open in the system's
+// engine from then on. Site Controls and Settings turn either off, per profile, which the profile
+// keeps too, so the site never moves by itself again. A tab goes back to Chromium at another site.
+// Agents never act in it, as the browser can't keep their rules in an engine whose pages it
 // doesn't control, and an agent's Space never switches.
 
 // Registers what profiles keep for it. Before the first profile is made.
@@ -32,16 +35,26 @@ void RegisterProfilePrefs();
 // Whether the platform has one.
 bool Available();
 
-// Whether |tab| may show its page in the system's engine: one of the user's tabs, not an agent's.
+// Whether the user has it on, in Settings › Features: off, no page shows there, listed services
+// included. Turning it off sends each tab showing a page there back to Chromium.
+bool On();
+void SetOn(bool on);
+
+// Whether |tab| may show its page in the system's engine: with it available and on, one of the
+// user's tabs, not an agent's.
 bool Allowed(bc_id tab);
+
+// Whether |tab| is a link preview's, whose card draws Chromium's page alone, so it never moves.
+bool Previewing(bc_id tab);
 
 // The site of |url| as the profile keeps it: its registrable domain, else its host.
 std::string SiteOf(const GURL& url);
 
 // Whether |profile| opens |url|'s site in the system's engine: a listed service the user didn't
-// turn off, or a site the user kept. Remember turns it on, taking back a listed service's off
-// rather than keeping it, and Forget turns it off, which a listed service keeps as an override. A
-// private window's profile has what its profile does, and what it changes goes with its session.
+// turn off, or a site the user kept, with the engine on. Remember turns it on, taking back a listed
+// service's off rather than keeping it, and the site's closed note, and Forget turns it off, which
+// a listed service keeps as an override. A private window's profile has what its profile does, and
+// what it changes goes with its session.
 bool Remembered(Profile* profile, const GURL& url);
 void Remember(Profile* profile, const GURL& url);
 void Forget(Profile* profile, const GURL& url);
@@ -52,6 +65,22 @@ void Forget(Profile* profile, const GURL& url);
 // session.
 bool NoteClosed(Profile* profile, const GURL& url);
 void CloseNote(Profile* profile, const GURL& url);
+
+// Whether |profile| keeps |url|'s site in Chromium: a listed service the user turned off, or a
+// site whose note they closed or that they turned off. Such a site never moves by itself.
+bool KeptInChromium(Profile* profile, const GURL& url);
+
+// Settings' list (bc_system_engine_sites, bc_system_engine_kept_sites): the sites |profile| keeps
+// for the system's engine, never a listed service, and those it keeps in Chromium, listed services
+// by their entries, each in the order it took them. UseSite has it keep one of either for the
+// system's engine or in Chromium, as Site Controls' switch does for a tab at the site.
+std::vector<std::string> Sites(Profile* profile);
+std::vector<std::string> KeptSites(Profile* profile);
+void UseSite(Profile* profile, const std::string& site, bool on);
+
+// Forgets what |profile| chose for |url|'s site in either engine, and its closed note, as Clear
+// Site Data and Reload clears the site's settings. A listed service opens there again.
+void ForgetChoices(Profile* profile, const GURL& url);
 
 // Where |profile|'s system pages keep their cookies: a store of its own, apart from Chromium's and
 // Safari's, or for a private window's profile one that keeps nothing. A profile's store has a

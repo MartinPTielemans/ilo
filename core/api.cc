@@ -2157,6 +2157,38 @@ bool bc_system_engine_available(void) {
   return browser_core::system_engine::Available();
 }
 
+bool bc_system_engine_on(void) {
+  return browser_core::system_engine::On();
+}
+
+void bc_set_system_engine_on(bool on) {
+  browser_core::system_engine::SetOn(on);
+  browser_core::SessionChanged();
+}
+
+static size_t CopyLines(const std::vector<std::string>& all, char* out, size_t capacity) {
+  std::string lines;
+  for (const std::string& each : all) {
+    lines += (lines.empty() ? "" : "\n") + each;
+  }
+  return CopyString(lines, out, capacity);
+}
+
+size_t bc_system_engine_sites(bc_id profile_id, char* sites, size_t capacity) {
+  return CopyLines(browser_core::system_engine::Sites(LoadedProfile(profile_id)), sites, capacity);
+}
+
+size_t bc_system_engine_kept_sites(bc_id profile_id, char* sites, size_t capacity) {
+  return CopyLines(browser_core::system_engine::KeptSites(LoadedProfile(profile_id)), sites,
+                   capacity);
+}
+
+void bc_system_engine_use_site(bc_id profile_id, const char* site, bool on) {
+  if (Profile* profile = LoadedProfile(profile_id); profile && site) {
+    browser_core::system_engine::UseSite(profile, site, on);
+  }
+}
+
 bool bc_tab_set_system_engine(bc_id id, bool on) {
   content::WebContents* contents = browser_core::Tab::FromId(id);
   const GURL url = contents ? browser_core::Tab::PageUrl(contents) : GURL();
