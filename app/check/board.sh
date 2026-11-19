@@ -537,6 +537,35 @@ grep -q cherry "$boards/$copy/board.json" ||
   fail "the copy is named \"$(cat "$boards/$copy/name")\", not \"garden copy\""
 expect "^browser: loaded [0-9]* chrome://board/$copy\$" "the Board's copy didn't open in a tab"
 copy_tab=$(grep "^browser: loaded [0-9]* chrome://board/$copy\$" "$log" | tail -1 | cut -d' ' -f3)
+# garden hid as its copy opened, which is when a Board takes its picture for the Library. Its one
+# note has to be on it: a note's card keeps no height, as its words size it, and a picture drawn at
+# that height has nothing on it (#3568).
+inked() {
+  python3 -I - "$1" << 'PY'
+import struct, sys, zlib
+data = open(sys.argv[1], "rb").read()
+at, idat, width = 8, b"", 0
+while at < len(data):
+    size, kind = struct.unpack_from(">I4s", data, at)
+    if kind == b"IHDR":
+        width, _, depth, colour = struct.unpack_from(">IIBB", data, at + 8)
+        if (depth, colour) != (8, 6):
+            sys.exit("not the 8-bit RGBA a canvas writes: depth %d, colour type %d" % (depth, colour))
+    elif kind == b"IDAT":
+        idat += data[at + 8:at + 8 + size]
+    at += size + 12
+# A row filtered from nothing but clear pixels is all zeros past its filter byte, whichever filter.
+rows, stride = zlib.decompress(idat), 1 + width * 4
+sys.exit(0 if any(rows[i + 1:i + stride].strip(b"\0") for i in range(0, len(rows), stride)) else 1)
+PY
+}
+picture="$boards/$garden/thumb.png"
+for _ in $(seq 50); do
+  [ -f "$picture" ] && inked "$picture" && break
+  sleep 0.1
+done
+[ -f "$picture" ] && inked "$picture" ||
+  fail "the Library's picture of garden, taken as its copy opened over it, has nothing drawn though garden has a note: $([ -f "$picture" ] && echo "$(wc -c < "$picture") bytes, all clear" || echo "no picture")"
 bar_command view-boards "View Boards…" "view boards"
 expect '^browser: library shown$' "View Boards… didn't open the Library to duplicate a Board from"
 send key down
