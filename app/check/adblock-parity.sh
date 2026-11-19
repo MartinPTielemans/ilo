@@ -43,7 +43,9 @@
 # played 5 s, and it fails where the baseline's played with no ad and this run's showed one or
 # didn't play. It needs the network and the sites, so it runs only when named:
 # ./check.sh adblock-parity.
-# Both engines block with one copy of each list, downloaded once by the baseline's run.
+# Both engines block with one copy of each list, downloaded once by the baseline's run, or with
+# ADBLOCK_PARITY_LISTS naming the lists/ another run left, that copy: a Check dispatched with
+# lists_from takes an earlier run's, so the three OSes' runs block with one snapshot (#2111).
 # It leaves adblock-parity/sites.tsv, a capture a site, the requests recorded, in hidden/ what
 # each site hid, and in lists/ the lists it blocked with, which a run with uBlock Origin copies
 # beside its table for the next to compare.
@@ -87,7 +89,10 @@ else
   ublock="$(echo "$app"/Contents/Frameworks/*Framework.framework)/Resources/ublock"
 fi
 lists="$dir/lists"
-held_lists=
+# Lists named and not there fail the run: a download in their place would be another snapshot.
+held_lists=${ADBLOCK_PARITY_LISTS:-}
+[ -z "$held_lists" ] || [ -s "$held_lists/snapshot.txt" ] ||
+  fail "ADBLOCK_PARITY_LISTS names no lists another run left: no $held_lists/snapshot.txt"
 [ -z "${ADBLOCK_PARITY_BASELINE:-}" ] || held_lists="${ADBLOCK_PARITY_BASELINE%sites.tsv}lists"
 if [ -n "$held_lists" ] && [ -s "$held_lists/snapshot.txt" ]; then
   cp -R "$held_lists" "$lists"

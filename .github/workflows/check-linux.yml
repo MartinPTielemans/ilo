@@ -39,6 +39,12 @@ on:
           The trace categories for tabs and perf's traced switches (app/check/lib.sh), such as
           #2377's, latency among them; empty for latency alone in tabs and no traced switches
         default: ''
+      lists_from:
+        description: >-
+          A Check run's id, on any OS, whose adblock-parity lists this run's adblock-parity and
+          adblock-native block with, so runs on the three OSes share one snapshot (#2111); empty
+          to download them
+        default: ''
 
 concurrency:
   group: check-linux-${{ github.ref }}
@@ -52,10 +58,11 @@ permissions:
 env:
   # The runs that pass on X11 so far. live-folder-site asks GitHub, so it's here and not Wayland's:
   # each X11 run with this list (nights, trains, a dispatch naming none) trips if its signed-out
-  # answer changes shape (#2979).
+  # answer changes shape (#2979). adblock-native makes uBlock Origin's pass of the 50 sites and then
+  # the native engine's, on one snapshot, so a parity regression shows before the flip (#2111).
   LINUX_RUNS: >-
     tabs window find agents spaces crash profiles private blank quit mcp appearance access history
-    load preview import adblock adblock-lists adblock-cosmetic adblock-page passkeys onboarding links link-cards
+    load preview import adblock adblock-lists adblock-cosmetic adblock-page adblock-native passkeys onboarding links link-cards
     relaunch split extensions capture board popup pinned about windows dialogs trouble cards passwords updates
     restore favorites keys clear media store adblock-live live-folder-site widevine sync sync-account sync-devices
     sync-extensions little devices pair notifications calls battery battery-os idle handback
@@ -449,6 +456,16 @@ jobs:
           grep -q '^/dev/hidraw' "$RUNNER_TEMP/uhid.log"
           echo "BROWSER_CHECK_HID=ilo check HID" >> "$GITHUB_ENV"
 
+      # The lists an earlier run's adblock-parity downloaded, on any OS, for this run's to block
+      # with, so the OSes' runs compare the engines on one snapshot (#2111).
+      - if: ${{ steps.engine.outputs.found == 'true' && matrix.session != 'ime' && inputs.lists_from != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: adblock-parity-lists
+          path: app/build/given-lists
+          run-id: ${{ inputs.lists_from }}
+          github-token: ${{ github.token }}
+
       # Each run alone, so one failing doesn't hide the rest, and each keeps its own build/check. A
       # run's result goes in the leg's results for the check job, which fails on it: the leg fails
       # only when it couldn't finish.
@@ -459,6 +476,7 @@ jobs:
           RUNS: ${{ matrix.runs }}
           RESULTS: ${{ runner.temp }}/results/${{ matrix.session }}-${{ matrix.shard }}.tsv
           CHECK_TRACE_CATEGORIES: ${{ inputs.trace }}
+          ADBLOCK_PARITY_LISTS: ${{ inputs.lists_from != '' && 'build/given-lists' || '' }}
           # The runner's C.UTF-8 names no country, for which Chromium's search engines leave out
           # DuckDuckGo, the one the core picks, so the command bar would offer no search.
           LANG: en_US.UTF-8
@@ -572,6 +590,15 @@ jobs:
           objcopy --only-keep-debug build/Browser/libBrowser.so "$out/symbols/libBrowser.so.debug"
           id=$(readelf -n build/Browser/libBrowser.so | sed -n 's/^ *Build ID: //p')
           echo "::warning::$crashed crashed: libBrowser.so's symbols, build id $id, are in symbols/ in the artifact. addr2line -f -C -e libBrowser.so.debug names a frame's offset."
+
+      # The lists this run's adblock-parity blocked with, for a run on another OS to take with
+      # lists_from (#2111). A few MB, apart from the check's artifact, which can be a GB.
+      - if: ${{ !cancelled() && steps.engine.outputs.found == 'true' && hashFiles('app/build/adblock-parity-lists/snapshot.txt') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: adblock-parity-lists
+          path: app/build/adblock-parity-lists
+          overwrite: true
 
       # The check job puts the legs' files back together as one check-linux artifact.
       - if: ${{ always() && steps.engine.outputs.found == 'true' }}
