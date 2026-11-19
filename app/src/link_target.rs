@@ -139,6 +139,15 @@ fn fit(text: &str, room: f32, share: f32, measure: &impl Fn(&str) -> f32) -> Str
     cut(fits)
 }
 
+/// The address's colours on the plate's or the card's `fill`: the path and the site's, the site
+/// brighter. They're opaque on the window's colour, so the floor is the fill's own (#3476).
+pub fn address_colors(fill: Hsla, palette: &Palette) -> (Hsla, Hsla) {
+    (
+        palette.text_on(SECONDARY, fill),
+        palette.text_on(PRIMARY, fill),
+    )
+}
+
 /// The plate for `target` in at most `max` wide, `measure` giving how wide a string is. The site
 /// always stays: a long address loses the middle of its path first, then its subdomains from the
 /// left, and the site itself only when it can't fit alone.
@@ -618,6 +627,7 @@ impl Render for LinkTarget {
                     .child(self.outline(crate::tokens::hover_card::RADIUS)),
             );
         }
+        let (path, site) = address_colors(fill, &palette);
         let text = div()
             .absolute()
             .left(px(PAD_X))
@@ -626,9 +636,9 @@ impl Render for LinkTarget {
             .items_center()
             .whitespace_nowrap()
             .text_size(px(TEXT_SIZE))
-            .text_color(palette.text(SECONDARY))
+            .text_color(path)
             .child(plate.before)
-            .child(div().text_color(palette.text(PRIMARY)).child(plate.site))
+            .child(div().text_color(site).child(plate.site))
             .child(plate.after);
         // The rim is its own layer, so the border doesn't shift what the fill's box holds.
         let rim = div()
