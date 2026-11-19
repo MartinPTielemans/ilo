@@ -557,7 +557,8 @@ send age 7200
 aged=$step
 open_from_bar "${site}"
 expect 'browser: idle tabs checked$' "showing a tab didn't check for tabs unseen 2 hours"
-since $aged | grep -q "^browser: tab $asking without its page\$" ||
+# The core logs it, after Chromium's prefix.
+since $aged | grep -q "browser: tab $asking without its page\$" ||
   fail "the idle check kept the page out of sight that asked with its alert"
 expect "^browser: page $asking unloaded 1\$" "the row of the tab let go didn't show it without its page"
 # Still running, which a page deleted with its alert held ended (#3549).
