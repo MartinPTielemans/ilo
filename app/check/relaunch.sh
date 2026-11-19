@@ -8,8 +8,9 @@
 # maximized, its launch window too, and un-maximizes to the frame it had, as Windows' own
 # placement says (#1422). On Windows and X11, a window maximized behind the one in front comes back
 # maximized behind it, and un-maximizes to its frame (#1454). On Wayland, a window saved maximized
-# comes back and lives (#3456).
-# Reports the launch's times with one window brought back and with two.
+# comes back and lives (#3456). A window showing no page as the app quits comes back at its frame
+# too, and a quit a page stops leaves the session saving, so a tab opened after it comes back
+# (#3494). Reports the launch's times with one window brought back and with two.
 
 page='data:text/html,<title>relaunch</title>'
 # Milliseconds from the process's start to the line "browser: $1 at <ms> ms".
@@ -304,6 +305,60 @@ if windows; then
   maximized=" On Windows, the window in front maximized as the app quits or as the last window closes comes back maximized, its launch window too, and un-maximizes to the frame it had."
 fi
 
+# A window showing no page, at a frame of its own as the app quits, comes back there. No page's tab
+# closes to keep the session as the quit goes ahead, so the core keeps it then, while Chrome still
+# has the window: it closes every window first, and kept after that a window had no frame and no
+# state (#3494).
+empty=$(windows_opened | head -1)
+grep -q "^browser: window $empty shows [1-9]" "$log" &&
+  fail "the window opened after the last one closed showed a page, so its quit has a page's tab to keep the session: $(grep "^browser: window $empty shows " "$log" | tail -1)"
+send window 1
+send place "$(at 100 60 960 620)"
+quit_by_key
+exited
+launch_logged "$out/relaunch-no-page.log"
+await '^browser: restored in ' || fail "the relaunch after a quit with no page shown didn't restore the Spaces"
+await '^browser: window opened [0-9]' || fail "the window quit with no page shown didn't open"
+empty=$(windows_opened | head -1)
+same_frame "$(frame_of "$empty")" "$(at 100 60 960 620)" ||
+  fail "the window that showed no page as the app quit came back at $(frame_of "$empty"), not where it was at $(at 100 60 960 620) (#3494)"
+exec 3>&-
+quit
+
+# A quit a page stops leaves the session as it was: a tab opened after it is in the next launch's,
+# as the session is kept only once the quit goes ahead (#3494).
+serve
+asks='data:text/html,<title>asks</title><script>onkeydown = () => { onbeforeunload = e => e.preventDefault(); document.title = "armed" }</script>'
+launch_logged "$out/relaunch-stopped.log" "$asks"
+await '^browser: title [0-9]* asks$' || fail "the page that asks before it's left didn't load"
+asking=$(grep '^browser: title [0-9]* asks$' "$log" | tail -1 | cut -d' ' -f3)
+send click $page_point
+send key u
+expect "^browser: title $asking armed\$" "the page didn't ask to be asked before it's left"
+post key q cmd
+expect "^browser: dialog shown Quit $app_name?\$" "⌘Q didn't ask before quitting"
+expect '^browser: dialog settled$' "the dialog asking to quit didn't settle"
+post key return
+expect "^browser: page $asking dialog Leave " "the quit didn't ask the page that asks before it's left"
+expect '^browser: dialog settled$' "the page's question at the quit didn't settle"
+send key escape
+expect "^browser: page $asking dialog answered cancel\$" "Esc didn't stay on the page, stopping the quit"
+open_from_bar "${site}welcome.html"
+kept=$tab
+post key q cmd
+expect "^browser: dialog shown Quit $app_name?\$" "⌘Q didn't ask before quitting, after a quit the page stopped"
+expect '^browser: dialog settled$' "the dialog asking to quit didn't settle, after a quit the page stopped"
+post key return
+expect "^browser: page $asking dialog Leave " "the second quit didn't ask the page that asks before it's left"
+expect '^browser: dialog settled$' "the page's question at the second quit didn't settle"
+post key return
+exec 3>&-
+exited
+launch_logged "$out/relaunch-after-stopped.log"
+await '^browser: restored in ' || fail "the relaunch after a quit the page stopped didn't restore the Spaces"
+await "^browser: loaded [0-9]* ${site}welcome.html\$" ||
+  fail "the tab opened after a quit the page stopped (tab $kept) didn't come back shown, so the session wasn't kept at the quit that went ahead (#3494): $(grep '^browser: loaded ' "$log" | tr '\n' ' ')"
+
 # On Wayland, a window saved maximized comes back and lives past the frames that take its state:
 # under sway, it ended the browser at a frame after its first, on an empty window geometry (#3456).
 # sway grants no client a maximize, so the step saves the window maximized, as a quit under GNOME or
@@ -341,5 +396,5 @@ for later in "$out"/relaunch-*.log; do
     fail "$(basename "$later") swept old stores, which a data folder's first launch marks it as having none of"
 done
 
-echo "ok: after ⌘Q, every regular window comes back at its frame, in its Space, stacked as it was with the one in front key; a window closed before the quit and a private window don't.$behind_maximized ⌘N with windows open cascades from the one in front at its size, and after the last regular window closes the next launch opens at its frame, not a private window's.$maximized$states A data folder's first launch, however short, marks it as having no old Safari's-engine stores, so no later launch sweeps them. Window: $out/relaunch-two.png"
+echo "ok: after ⌘Q, every regular window comes back at its frame, in its Space, stacked as it was with the one in front key; a window closed before the quit and a private window don't.$behind_maximized ⌘N with windows open cascades from the one in front at its size, and after the last regular window closes the next launch opens at its frame, not a private window's.$maximized$states A window showing no page as the app quits comes back at its frame, and a quit a page stops leaves the session saving, so a tab opened after it comes back. A data folder's first launch, however short, marks it as having no old Safari's-engine stores, so no later launch sweeps them. Window: $out/relaunch-two.png"
 echo "  Launch with one window: $one; with two: $two"
