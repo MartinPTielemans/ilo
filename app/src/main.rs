@@ -477,6 +477,10 @@ unsafe extern "C" fn started(_: *mut c_void) {
                         )
                     });
                     let (x, y, height) = caret.unwrap_or_default();
+                    log!(
+                        "browser: probe ui text input {} {x:.0} {y:.0}",
+                        caret.is_some()
+                    );
                     unsafe {
                         bc::bc_window_ui_text_input(
                             window,
