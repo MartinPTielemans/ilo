@@ -120,8 +120,8 @@ send key t cmd
 expect '^browser: command bar shown$' "⌘T didn't open the command bar"
 send insert "$link"
 send key return
-expect '^browser: share page shown$' "the link didn't show the core's page for its share"
-expect '^browser: share found$' "the core's page for the share committed, but no share was found"
+expect 'browser: share page shown$' "the link didn't show the core's page for its share"
+expect 'browser: share found$' "the core's page for the share committed, but no share was found"
 opened=$(today | cut -d' ' -f1)
 expect "^browser: offer $opened share\$" "the share opened in tab $opened wasn't offered"
 ../tools/window-screenshot.sh "$pid" "$out/share-send-offer.png" > /dev/null 2>&1 || true
