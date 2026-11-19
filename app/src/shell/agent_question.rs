@@ -664,6 +664,81 @@ mod tests {
         assert!(host.take().contains(&"answer agent 8 Dismiss".to_string()));
     }
 
+    /// Readers hear the card as an alert named by what the agent asks, then each change as a group:
+    /// the agent's whole sentence, not the card's clip, and the browser's facts. Then "See the whole
+    /// request", collapsed, Deny and Allow, and Close (#3548).
+    #[gpui::test]
+    fn readers_hear_each_change_whole_in_the_cards_order(cx: &mut TestAppContext) {
+        use gpui::accesskit::{NodeId, Role};
+        let (_, shell, cx) = window_with(cx);
+        let long = "Close item 4127 as a duplicate of 4130, keeping its comments and its watchers, \
+            and say so on 4130 so whoever reads it next knows where the history went.";
+        assert!(long.chars().count() > 120, "the card would show it whole");
+        let read = |cx: &mut gpui::VisualTestContext| {
+            let tree = cx.a11y_tree().expect("GPUI built a tree");
+            let nodes: std::collections::HashMap<NodeId, gpui::accesskit::Node> =
+                tree.nodes.into_iter().collect();
+            let (alert, _) = (nodes.iter())
+                .find(|(_, node)| node.role() == Role::AlertDialog)
+                .expect("the card isn't an alert");
+            let mut heard = vec![format!(
+                "{:?} {}",
+                Role::AlertDialog,
+                nodes[alert].label().unwrap_or("")
+            )];
+            let mut next: Vec<NodeId> = nodes[alert].children().iter().rev().copied().collect();
+            while let Some(id) = next.pop() {
+                let node = &nodes[&id];
+                if let (Role::Group | Role::Button, Some(label)) = (node.role(), node.label()) {
+                    let expanded = match node.is_expanded() {
+                        Some(true) => ", expanded",
+                        Some(false) => ", collapsed",
+                        None => "",
+                    };
+                    heard.push(format!("{:?} {label}{expanded}", node.role()));
+                }
+                next.extend(node.children().iter().rev().copied());
+            }
+            heard
+        };
+
+        shell.update(cx, |shell, cx| {
+            let one = change("PATCH", "/api/items/4127", long);
+            shell.set_agent_question(Some(requests(7, vec![one])), cx);
+        });
+        cx.simulate_a11y_activation();
+        cx.run_until_parked();
+        let whole = long.trim_end_matches('.');
+        assert_eq!(
+            read(cx),
+            [
+                "AlertDialog Claude Code asks to make a change on team.example.com".to_string(),
+                format!("Group Claude Code says: {whole}. Changes something on team.example.com."),
+                "Button See the whole request, collapsed".to_string(),
+                "Button Deny".to_string(),
+                "Button Allow".to_string(),
+                "Button Close".to_string(),
+            ]
+        );
+
+        shell.update(cx, |shell, cx| {
+            let changes = vec![
+                change("PATCH", "/api/items/1", "Close item 1."),
+                change("DELETE", "/api/items/7", "Tidy up the old draft."),
+            ];
+            shell.set_agent_question(Some(requests(8, changes)), cx);
+        });
+        cx.run_until_parked();
+        let heard = read(cx);
+        assert_eq!(
+            heard[1..3],
+            [
+                "Group 1 of 2. Claude Code says: Close item 1. Changes something.",
+                "Group 2 of 2. Claude Code says: Tidy up the old draft. Deletes something.",
+            ]
+        );
+    }
+
     #[derive(Default)]
     struct Shown(RefCell<Vec<String>>);
 
