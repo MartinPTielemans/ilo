@@ -14,6 +14,7 @@
 #include "base/time/time.h"
 #include "chrome/common/chrome_paths.h"
 #include "services/network/public/cpp/resource_request.h"
+#include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
