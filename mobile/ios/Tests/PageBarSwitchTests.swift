@@ -244,13 +244,16 @@ private struct Opens: View {
       func left() -> CGFloat? { squareLeft(in: place) }
       #expect(await eventually { left() == 0 })
       shift.on = true
-      try await Task.sleep(for: .milliseconds(600))
-      let at = try #require(left())
-      if animation != nil {
-        #expect(at > 3 && at < 57)
-      } else {
-        #expect(at == 60)
+      // On its way there for three seconds, or there at once: looked at by the clock, since a
+      // runner that's busy looks late.
+      var between = false
+      let there = await eventually(seconds: 10) {
+        let at = left() ?? 0
+        between = between || (at > 3 && at < 57)
+        return at == 60
       }
+      #expect(there)
+      #expect(between == (animation != nil))
     }
   }
 }

@@ -131,7 +131,7 @@ extension View {
 
   /// Where what's read out under a name stands on the screen.
   func read(_ name: String) -> CGRect? {
-    _ = Stage.heard
+    hear()
     func find(in element: NSObject) -> CGRect? {
       if element.accessibilityLabel?.hasPrefix(name) == true { return element.accessibilityFrame }
       for child in element.accessibilityElements ?? [] {
@@ -148,17 +148,33 @@ extension View {
   func close() {
     window.isHidden = true
     window.rootViewController = nil
+    if let unheard { Stage.ears?.set(unheard ? 1 : 0) }
+    unheard = nil
   }
+
+  /// Whether a runner was reading before this stage said one is.
+  private var unheard: Bool?
 
   /// SwiftUI makes what VoiceOver reads only while something reads it, and on a simulator nothing
   /// has driven yet nothing does: there, nothing was read. This says a test's runner is reading,
-  /// as a UI test's does.
-  private static let heard: Void = {
+  /// as a UI test's does, until the stage closes. The simulator keeps what's said for every run
+  /// after, and while it stands each page's process takes seconds longer to start.
+  private func hear() {
+    guard unheard == nil, let ears = Stage.ears else { return }
+    unheard = ears.get() != 0
+    ears.set(1)
+  }
+
+  private static let ears: (get: @convention(c) () -> UInt8, set: @convention(c) (Int32) -> Void)? = {
     let root = ProcessInfo.processInfo.environment["IPHONE_SIMULATOR_ROOT"] ?? ""
     guard let library = dlopen(root + "/usr/lib/libAccessibility.dylib", RTLD_NOW),
+      let get = dlsym(library, "_AXSAutomationEnabled"),
       let set = dlsym(library, "_AXSSetAutomationEnabled")
-    else { return }
-    unsafeBitCast(set, to: (@convention(c) (Int32) -> Void).self)(1)
+    else { return nil }
+    return (
+      unsafeBitCast(get, to: (@convention(c) () -> UInt8).self),
+      unsafeBitCast(set, to: (@convention(c) (Int32) -> Void).self)
+    )
   }()
 }
 
