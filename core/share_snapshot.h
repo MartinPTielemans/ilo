@@ -7,7 +7,9 @@
 //   link = <server>/s/<id>#<key>, the id 16 random bytes and the key 32, in unpadded base64url
 //   blob = 0x01 || iv(12) || AES-256-GCM(key, iv, aad = "ilo share v1 " + id, deflate-raw(JSON))
 // AES-GCM as the page has it in WebCrypto, which has no ChaCha; the id in the additional data, so a
-// blob served under another id doesn't open.
+// blob served under another id doesn't open. The key reaches the server only inside the link's
+// entry in the account's list, sealed under a key derived from the account's secret (share.cc), so
+// another of the account's devices can copy the link; the server reads neither the blob nor the key.
 
 #ifndef BROWSER_CORE_SHARE_SNAPSHOT_H_
 #define BROWSER_CORE_SHARE_SNAPSHOT_H_
