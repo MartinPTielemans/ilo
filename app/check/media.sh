@@ -919,7 +919,8 @@ EOF
   }
   moved_at=$(scrim_ms)
   send pip move $((pw / 8)) $((ph / 2))
-  while [ $(($(scrim_ms) - moved_at)) -lt 250 ]; do
+  # Probe, not to land: GO held past +2000 ms, so the step must fail as late (#3354).
+  while [ $(($(scrim_ms) - moved_at)) -lt 2100 ]; do
     sleep 0.02
   done
   asked=$(($(scrim_ms) - moved_at))
