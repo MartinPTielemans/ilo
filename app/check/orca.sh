@@ -142,13 +142,13 @@ pid=$!
 exec 3> "$out/drive"
 await '^browser: onboarding step intro settled$' || fail "the onboarding's intro didn't draw"
 orca_settled
-await '^browser: onboarding left intro ' || fail "the intro didn't go on by itself"
-# The step after the intro, from the steps the app named at launch: any step's settled line would
-# match the intro's own, already there, and mark the step too soon.
+# The step after the intro, from the steps the app named at launch, marked as the intro leaves for
+# it, so what it says on the way in is the step's.
 orca_next=$(sed -n 's/^browser: onboarding steps intro \([a-z-]*\).*/\1/p' "$log")
 [ -n "$orca_next" ] || fail "the app didn't name a step after the intro"
-await "^browser: onboarding step $orca_next settled\$" || fail "the $orca_next step didn't draw"
+await '^browser: onboarding left intro ' || fail "the intro didn't go on by itself"
 orca_mark "$orca_next step"
+await "^browser: onboarding step $orca_next settled\$" || fail "the $orca_next step didn't draw"
 orca_settled
 orca_press tab
 orca_press tab
