@@ -1593,6 +1593,9 @@ pub struct Shell {
     /// ⌘L, from where it came, pressed after the tab shown closed and before the core said which
     /// shows next, which the bar then opens on (#2953).
     edit_url_waits: Option<String>,
+    /// ⌘W pressed after the tab shown closed and before the core said which shows next, with the
+    /// Space it was pressed in and how many times: each closes the tab it shows next (#3570).
+    close_waits: Option<(u64, usize)>,
     drag: Option<Drag>,
     /// A tab's row dragged out of the window, as the system drags it, until it's let go.
     window_drag: Option<drag::WindowDrag>,
@@ -2198,6 +2201,7 @@ impl Shell {
             press_closed_bar: false,
             bar_follows: false,
             edit_url_waits: None,
+            close_waits: None,
             drag: None,
             window_drag: None,
             dragged: false,
@@ -3576,6 +3580,15 @@ impl Shell {
         }
         if let Some(from) = self.edit_url_waits.take() {
             self.edit_url(&from, cx);
+        }
+        // A Space left empty shows none, and the press was for a tab, so the window stays; nor
+        // does it close a tab of another Space shown since.
+        if let Some((space, presses)) = self.close_waits.take()
+            && tab != 0
+            && self.spot_of(tab).is_some_and(|spot| spot.space == space)
+        {
+            self.close_waits = (presses > 1).then_some((space, presses - 1));
+            self.close_shown(cx);
         }
         self.update_title(cx);
         self.update_menus(cx);
