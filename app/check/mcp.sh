@@ -621,15 +621,28 @@ picture() {
   await_log "^browser: task picture $1 at " "the conversation didn't picture tab $1"
   grep "^browser: task picture $1 at " "$log" | tail -1 | cut -d' ' -f6-
 }
-# Watches the agent's tab $1 from its picture, from the conversation.
+# Watches the agent's tab $1 from its picture, from the conversation. With $2, a tab whose page goes
+# back into its own picture, the click goes to the point of $1's nearest $2's, which that page's
+# shrinking covers longest (#3496).
 watch() {
   read -r wx wy ww wh <<PICTURE
 $(picture "$1")
 PICTURE
+  cx=$((wx + ww / 2)) cy=$((wy + wh / 2))
+  if [ -n "${2:-}" ]; then
+    read -r nx ny nw nh <<PICTURE
+$(picture "$2")
+PICTURE
+    cx=$((nx + nw / 2)) cy=$((ny + nh / 2))
+    [ "$cx" -ge $((wx + 4)) ] || cx=$((wx + 4))
+    [ "$cx" -le $((wx + ww - 5)) ] || cx=$((wx + ww - 5))
+    [ "$cy" -ge $((wy + 4)) ] || cy=$((wy + 4))
+    [ "$cy" -le $((wy + wh - 5)) ] || cy=$((wy + wh - 5))
+  fi
   # Counted, as a page watched before has its lines already.
   watched=$(grep -c "^browser: task $session page $1\$" "$log" || true)
   placed=$(grep -c "^browser: task page $1 in place\$" "$log" || true)
-  send click $((wx + ww / 2)) $((wy + wh / 2))
+  send click "$cx" "$cy"
   await_more "^browser: task $session page $1\$" "$watched" ||
     fail "a click on tab $1's picture didn't watch it"
   await_more "^browser: task page $1 in place\$" "$placed" ||
@@ -826,10 +839,10 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
     esac
   }
   # Watches $warned, whose warning shows over its pane, at $warning, without the user's keyboard,
-  # and has a click on it give it the keyboard. $1 says how the user came to watch it, and $2 is a
-  # step to take while it's watched, before the click.
+  # and has a click on it give it the keyboard. $1 says how the user came to watch it, $2 is a
+  # step to take while it's watched, before the click, and $3 is watch's $2.
   watch_warning() {
-    watch "$warned"
+    watch "$warned" "${3:-}"
     for _ in $(seq 50); do
       send layout
       since | grep -q '^browser: layout child ' && break
@@ -856,7 +869,7 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
   to_pages "tab $agent_tab" "at once"
   escaped=$step
   presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
-  watch_warning "from Pages" ring_strip
+  watch_warning "from Pages" ring_strip "$agent_tab"
   since "$escaped" | grep -m1 -e '^browser: drive [0-9]*: click ' -e "^browser: task page in its thumbnail\$" |
     grep -q '^browser: task page' &&
     echo "skip: mcp: a click on a picture while the page watched goes back: tab $agent_tab was back in its picture before the click (#3496)."
