@@ -353,6 +353,38 @@ __weak NSWindow* g_pip;
 NSPoint g_pip_held_at;
 bool g_pip_held = false;
 
+// Probe for #3354, never to land: the time now, in ms since 1970, as the check's clock reads it.
+double ProbeNow() {
+  return NSDate.date.timeIntervalSince1970 * 1000;
+}
+// Logs each move, enter and exit AppKit gives the Mini Player, with the real pointer.
+void ProbeWatchPip() {
+  static id monitor = nil;
+  if (monitor) {
+    return;
+  }
+  monitor = [NSEvent
+      addLocalMonitorForEventsMatchingMask:NSEventMaskMouseMoved | NSEventMaskMouseEntered |
+                                           NSEventMaskMouseExited
+                                   handler:^NSEvent*(NSEvent* event) {
+                                     NSWindow* pip = g_pip;
+                                     if (pip && event.window == pip) {
+                                       const NSPoint real = NSEvent.mouseLocation;
+                                       const char* type =
+                                           event.type == NSEventTypeMouseMoved     ? "moved"
+                                           : event.type == NSEventTypeMouseEntered ? "entered"
+                                                                                   : "exited";
+                                       fprintf(stderr,
+                                               "browser: probe pip %s at %.0f,%.0f real %.0f,%.0f "
+                                               "key %d t %.0f\n",
+                                               type, event.locationInWindow.x,
+                                               event.locationInWindow.y, real.x, real.y,
+                                               pip.keyWindow, ProbeNow());
+                                     }
+                                     return event;
+                                   }];
+}
+
 // Whether the last key was a ⌃Tab walk's, or one of its later keys with ⌃, such as ⌃→. A left
 // click then comes with ⌃, as a hand holds ⌃ through a click on the switcher's row (#3340) and as
 // the other OSes' drivers keep it. Other input, flags and a key without ⌃ end it.
@@ -696,6 +728,15 @@ void MoveIn(NSWindow* target, double x, double y) {
   NSView* hit =
       [content hitTest:[content.superview convertPoint:move.locationInWindow fromView:nil]];
   Pointed(target, move.locationInWindow);
+  if (target == g_pip) {
+    const NSPoint real = NSEvent.mouseLocation;
+    const NSRect frame = target.frame;
+    fprintf(stderr,
+            "browser: probe move hit %s key %d frame %.0f,%.0f %.0fx%.0f real %.0f,%.0f in %d t %.0f\n",
+            hit ? NSStringFromClass(hit.class).UTF8String : "none", target.keyWindow,
+            frame.origin.x, frame.origin.y, frame.size.width, frame.size.height, real.x, real.y,
+            NSPointInRect(real, frame), ProbeNow());
+  }
   [hit mouseMoved:move];
   TrackMove(content, move, hit);
   [NSApp postEvent:move atStart:NO];
@@ -1474,6 +1515,7 @@ bool Run(const std::string& line, void (^done)(void)) {
       return true;
     }
     g_pip = pip;
+    ProbeWatchPip();
     std::string step;
     if (!(words >> step)) {
       LogPip(pip);

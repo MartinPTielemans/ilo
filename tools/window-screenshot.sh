@@ -475,7 +475,13 @@ if floating {
   config.height = Int(window.frame.height * CGFloat(filter.pointPixelScale))
   config.showsCursor = false
   stage.text = "capturing the floating window"
-  write(try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config))
+  // Probe for #3354, never to land: when the picture was asked for and when it came, in ms since
+  // 1970.
+  let asked = Date().timeIntervalSince1970 * 1000
+  let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+  let came = Date().timeIntervalSince1970 * 1000
+  FileHandle.standardError.write(Data(String(format: "probe grab %.0f %.0f\n", asked, came).utf8))
+  write(image)
 }
 // The largest normal window; a process can also own invisible helper windows.
 guard let main = windows.filter({ $0.windowLayer == 0 })

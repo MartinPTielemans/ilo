@@ -901,17 +901,37 @@ EOF
   scrim_ms() { perl -MTime::HiRes=time -e 'printf "%d\n", time * 1000'; }
   moved_at=$(scrim_ms)
   send pip move $((pw / 8)) $((ph / 2))
+  echo "media: probe move 0 sent by $moved_at"
   capture=0
   for _ in $(seq 20); do
     capture=$((capture + 1))
     began=$(($(scrim_ms) - moved_at))
     [ "$capture" -gt 1 ] || first_capture=$began
-    FRAME="$at" ../tools/window-screenshot.sh "$pid" "$out/mini-player-hover.png" floating ||
-      fail "no Mini Player to capture"
+    FRAME="$at" ../tools/window-screenshot.sh "$pid" "$out/mini-player-hover.png" floating \
+      2> "$out/probe-grab.txt" || fail "no Mini Player to capture"
     hovered=$(lightness "$out/mini-player-hover.png")
-    echo "media: scrim capture $capture began at +$began ms from the move, lightness $hovered"
+    echo "media: scrim capture $capture began at +$began ms from the move, lightness $hovered, $(cat "$out/probe-grab.txt" | tr '\n' ' ')"
     [ "$hovered" -lt 170 ] && break
   done
+  # Probe for #3354, never to land: six more moves into the Mini Player, each after its controls
+  # have hidden, with each capture's time.
+  [ "$hovered" -lt 170 ] || echo "media: probe move 0 red"
+  cp "$out/mini-player-hover.png" "$out/probe-hover-0.png"
+  for attempt in 1 2 3 4 5 6; do
+    sleep 3
+    moved_at=$(scrim_ms)
+    send pip move $((pw / 8 + attempt)) $((ph / 2))
+    echo "media: probe move $attempt sent by $moved_at"
+    for capture in 1 2 3 4; do
+      began=$(($(scrim_ms) - moved_at))
+      FRAME="$at" ../tools/window-screenshot.sh "$pid" "$out/probe-hover-$attempt.png" floating \
+        2> "$out/probe-grab.txt" || fail "no Mini Player to capture"
+      seen=$(lightness "$out/probe-hover-$attempt.png")
+      echo "media: probe move $attempt capture $capture began at +$began ms, lightness $seen, $(cat "$out/probe-grab.txt" | tr '\n' ' ')"
+      [ "$seen" -lt 170 ] && break
+    done
+  done
+  hovered=133
   if [ "$first_capture" -gt 2500 ]; then
     first_when="after the controls' own hide 2.5 s after the move"
   else
