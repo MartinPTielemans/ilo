@@ -41,7 +41,6 @@ fn past(id: &str, ended: u64) -> Past {
                         value: "Table for four".into(),
                     },
                 ],
-                said: "Book a table for four at eight on Friday.".into(),
                 ..step(ended - 20, "request", "taberna.example", "")
             },
         ],

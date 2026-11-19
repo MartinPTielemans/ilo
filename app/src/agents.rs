@@ -3496,9 +3496,9 @@ impl Agents {
 
     /// As `note`, for a request: where it went and what it sent, or would have.
     fn note_request(&mut self, agent: &str, site: &str, sent: &request::Request, refused: &str) {
-        // The agent's words are kept as its, as plain text, under the rule that hides a secret in
-        // what it sent.
-        let said = request::hide_secrets(&sent.what, false).0;
+        // The agent's words are kept as its, as plain text, without what reads as a secret in
+        // them (`hide_said`). They're the activity log's, in memory, not the past task's file.
+        let said = request::hide_said(&sent.what).0;
         let entry = (sent.url.as_str(), sent.sent(), said.as_str());
         self.note_entry(agent, "request", site, &sent.target(), refused, entry);
     }
