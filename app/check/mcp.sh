@@ -704,15 +704,21 @@ await_log "^browser: agent activity mcp-client $user_tab separate_tab refused: T
 # through DevTools, as the user's would reach the page, and takes nothing over (#3243). The same
 # for the page beside it in its watched split view. Its next action then isn't refused.
 if [ "$driven" = 1 ]; then
-  # Escape steps back to Pages from the page watched, the sidebar first given the keyboard.
-  pages_again() {
+  # Escape steps back to Pages from the page watched, $1, which goes back into its picture before a
+  # click on another picture can watch it.
+  to_pages() {
     back='^browser: task page [0-9]* back$'
+    thumbnail='^browser: task page in its thumbnail$'
     before=$(grep -c "$back" "$log" || true)
+    shrunk=$(grep -c "$thumbnail" "$log" || true)
+    # A page there can have the keyboard, as the one a press in the split view focused on X11,
+    # and keeps Escape: a click on the sidebar gives the UI the keyboard, as the user's would.
     send click $sidebar_point
     send key escape
     await_more "$back" "$before" || fail "Escape didn't step back to Pages from $1"
+    await_more "$thumbnail" "$shrunk" || fail "$1 didn't go back into its picture"
   }
-  pages_again "tab $agent_tab"
+  to_pages "tab $agent_tab"
   watch "$split_a"
   presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
   agent_clicks=$step
@@ -733,7 +739,7 @@ if [ "$driven" = 1 ]; then
   since "$agent_clicks" | grep -q -e "^browser: agent mcp-client taken over in $split_a\$" \
     -e "^browser: agent mcp-client taken over in $split_c\$" &&
     fail "the agent's own click in its watched split view took its tab over"
-  pages_again "the split view"
+  to_pages "the split view"
   watch "$agent_tab"
 fi
 # The split views' pages close, so the conversation's grid has the pages the steps after it count on.
@@ -762,20 +768,6 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
   split=$(call split_tabs "{\"tabs\":[$warned,$beside]}")
   [ "$split" = "Tab $warned's split view, left to right: $warned, $beside." ] ||
     fail "split_tabs with the tab at the warning answered: $split"
-  # Escape steps back to Pages from the page watched, $1, which goes back into its picture before a
-  # click on another picture can watch it.
-  to_pages() {
-    back='^browser: task page [0-9]* back$'
-    thumbnail='^browser: task page in its thumbnail$'
-    before=$(grep -c "$back" "$log" || true)
-    shrunk=$(grep -c "$thumbnail" "$log" || true)
-    # A page there can have the keyboard, as the one a press in the split view focused on X11,
-    # and keeps Escape: a click on the sidebar gives the UI the keyboard, as the user's would.
-    send click $sidebar_point
-    send key escape
-    await_more "$back" "$before" || fail "Escape didn't step back to Pages from $1"
-    await_more "$thumbnail" "$shrunk" || fail "$1 didn't go back into its picture"
-  }
   # Tab round the strip's ring never gives the watched agent's page the keyboard: its stop is the
   # strip's words, so the handback into a page, which on Windows gives the shown page's pane the
   # keyboard straight (#3396), never runs for it. Tab from the window's keyboard rings the strip,
