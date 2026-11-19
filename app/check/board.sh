@@ -677,7 +677,7 @@ for _ in $(seq 30); do
 done
 [ "$(camera)" = '0 0' ] || fail "a pan in the Board's second tab was saved to its file: its view is at $(camera)"
 # A quick ⌃Tab goes back to the first tab, which ⌘W closes: the second's page loads the Board again,
-# now its own, and a pan there is saved.
+# now its own, even unseen, and once shown a pan there is saved.
 send key tab ctrl
 tapped=$step
 send flags
@@ -687,7 +687,10 @@ send key w cmd
 expect "^browser: tab $first closed\$" "⌘W didn't close the Board's first tab"
 expect "^browser: loaded $second chrome://board/$twice\$" \
   "the Board's second tab didn't load it again once the first closed"
-expect "^browser: selected $second in " "closing the Board's first tab didn't show its second, $second"
+# Closing a tab shows the one under it, as Arc does, so the second is shown by its key.
+n=$(echo $(pinned) $(today) | tr ' ' '\n' | grep -nx "$second" | cut -d: -f1)
+[ -n "$n" ] || fail "the Board's second tab $second isn't in the sidebar: pinned \"$(pinned)\", Today \"$(today)\""
+switch "$n cmd" "$second"
 saves=$(grep -c 'browser: board saved$' "$log" || true)
 send scroll 640 400 40 5
 saved_after "$saves" "a pan in the Board's second tab, once the first had closed, wasn't saved"
