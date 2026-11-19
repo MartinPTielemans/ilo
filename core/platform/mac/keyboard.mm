@@ -4,8 +4,10 @@
 #include <Carbon/Carbon.h>
 
 #include "base/apple/foundation_util.h"
+#include "base/apple/owned_objc.h"
 #include "base/apple/scoped_cftyperef.h"
 #include "components/input/native_web_keyboard_event.h"
+#include "ui/events/event.h"
 #include "ui/events/keycodes/keyboard_code_conversion_mac.h"
 
 namespace browser_core::platform {
@@ -41,6 +43,17 @@ std::string LatinKey(const input::NativeWebKeyboardEvent& event) {
     return std::string();
   }
   return std::string(1, static_cast<char>(typed));
+}
+
+std::unique_ptr<ui::KeyEvent> KeyBehindCharacter(const ui::KeyEvent& character) {
+  // views makes the character in AppKit's dispatch of the key, with no NSEvent of its own.
+  NSEvent* key = NSApp.currentEvent;
+  if (!character.is_char() || character.HasNativeEvent() || !key ||
+      key.type != NSEventTypeKeyDown || key.characters.length != 1 ||
+      [key.characters characterAtIndex:0] != character.GetCharacter()) {
+    return nullptr;
+  }
+  return std::make_unique<ui::KeyEvent>(base::apple::OwnedNSEvent(key));
 }
 
 }  // namespace browser_core::platform

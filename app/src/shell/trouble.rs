@@ -7,7 +7,10 @@
 
 use web_time::Instant;
 
-use gpui::{Context, Div, FontWeight, MouseButton, Stateful, Window, div, prelude::*, px, svg};
+use gpui::{
+    Bounds, Context, Div, FontWeight, MouseButton, Pixels, Stateful, Window, div, prelude::*, px,
+    svg,
+};
 
 use super::{
     SECONDARY, SPEAKER_DRAWN, SPEAKER_GAP, SPEAKER_SIZE, Shell, TITLE, Trouble,
@@ -72,12 +75,21 @@ impl Shell {
         }
     }
 
+    /// The tab whose panes show crash cards: the one selected, or with a task in the page area,
+    /// its page watched once it's in place, as the user's Space's page is out of the window then.
+    fn crash_shown(&self) -> u64 {
+        match self.task_area {
+            Some(_) => self.task_page_live().unwrap_or(0),
+            None => self.selected,
+        }
+    }
+
     /// Starts the fade of each card shown, and has it start again once its tab is shown again.
     pub(super) fn step_crash_cards(&mut self, window: &mut Window) {
         if self.crash_cards.is_empty() {
             return;
         }
-        let panes = self.panes(self.selected);
+        let panes = self.panes(self.crash_shown());
         let now = Instant::now();
         for (&tab, card) in &mut self.crash_cards {
             if !panes.contains(&tab) {
@@ -94,15 +106,20 @@ impl Shell {
         }
     }
 
-    /// The card in each pane shown whose page died: its one line and Reload, centred, fading in as
-    /// the empty card's line does. A press on it shows its tab, as one on a page does.
-    pub(super) fn crash_cards(&self, cx: &mut Context<Self>) -> Vec<Stateful<Div>> {
-        if self.crash_cards.is_empty() || self.selected == 0 {
+    /// The card in each pane shown in `frame` whose page died: its one line and Reload, centred,
+    /// fading in as the empty card's line does. A press on it shows its tab, as one on a page does,
+    /// and one on an agent's tab watched takes it over, as a press in its page does (#3433).
+    pub(super) fn crash_cards(
+        &self,
+        frame: Bounds<Pixels>,
+        cx: &mut Context<Self>,
+    ) -> Vec<Stateful<Div>> {
+        let shown = self.crash_shown();
+        if self.crash_cards.is_empty() || shown == 0 {
             return Vec::new();
         }
-        let (frame, _) = self.page_frame(self.viewport);
-        let panes = self.panes(self.selected);
-        let (stacked, shares) = (self.stacked(self.selected), self.shares(self.selected));
+        let panes = self.panes(shown);
+        let (stacked, shares) = (self.stacked(shown), self.shares(shown));
         let now = Instant::now();
         pane_frames(frame, panes.len(), stacked, &shares)
             .into_iter()
@@ -152,7 +169,10 @@ impl Shell {
                             cx.listener(move |shell, _, _, cx| {
                                 // Not the window's background, whose drag moves the window.
                                 cx.stop_propagation();
-                                if shell.selected != tab {
+                                // The core hears no press here, as the page has no renderer.
+                                shell.page_pressed(tab, cx);
+                                // A task's page stays watched: selecting it would leave the area.
+                                if shell.task_area.is_none() && shell.selected != tab {
                                     shell.select(tab, cx);
                                 }
                             }),

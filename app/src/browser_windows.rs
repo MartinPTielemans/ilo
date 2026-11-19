@@ -185,23 +185,22 @@ pub(crate) fn ui_keyboard_left_in(id: bc::bc_id) {
     });
 }
 
-/// The user pressed a mouse button in a page of the window drawn in `ui_view`, which an agent's
-/// page shown there takes as the user taking it over (Shell::page_pressed).
-pub(crate) extern "C" fn page_pressed(ui_view: *mut c_void) {
-    page_pressed_in(window_with_view(ui_view));
-}
-
-/// As `page_pressed`, for the window `id`: after the press, which the page has.
-pub(crate) fn page_pressed_in(id: bc::bc_id) {
-    let Some(shell) = WINDOWS.with(|windows| {
-        let windows = windows.try_borrow().ok()?;
-        let window = windows.iter().find(|window| window.id == id)?;
-        Some(window.shell.clone())
-    }) else {
-        return;
-    };
+/// The user pressed a mouse button on the page of the agent's tab `tab`, or on its dialog, which
+/// the window watching it as a task's page takes as the user taking it over (Shell::page_pressed).
+/// After the press, which the page has: it comes as the core hands the press on.
+pub(crate) unsafe extern "C" fn tab_page_pressed(_: *mut c_void, tab: bc::bc_id) {
     update_app_later(move |cx| {
-        shell.update(cx, |shell, cx| shell.page_pressed(cx)).ok();
+        let shells = WINDOWS.with_borrow(|windows| {
+            windows
+                .iter()
+                .map(|window| window.shell.clone())
+                .collect::<Vec<_>>()
+        });
+        for shell in shells {
+            shell
+                .update(cx, |shell, cx| shell.page_pressed(tab, cx))
+                .ok();
+        }
     });
 }
 

@@ -29,6 +29,22 @@ namespace browser_core::platform {
 // What a site's data clearing deletes (ClearSiteAndReload, SystemPage::ClearSite).
 enum class SiteData { kCookies, kCache, kAll };
 
+// A page's media, as the sidebar's player shows it (bc_tab_state's media fields).
+struct SystemMedia {
+  // It played since its document committed, so the player has something to play again.
+  bool has = false;
+  bool playing = false;
+  // Its navigator.mediaSession.metadata's, or empty without one.
+  std::u16string title;
+  std::u16string artist;
+  // It named its track, so it's offered the previous and the next: a page that names its tracks
+  // nearly always skips them, and nothing outside the page can tell which actions it handles.
+  bool named = false;
+};
+
+// What the player does to a page's media.
+enum class MediaAction { kPlay, kPause, kNext, kPrevious };
+
 // Where a system page keeps its cookies and site data: one store a profile, apart from Chromium's
 // and from Safari's. |id| is a UUID for a profile's, or for a private session's, whose store keeps
 // nothing on disk and goes once ReleaseStore lets it go.
@@ -54,7 +70,7 @@ class SystemPage {
   // own calls, as WebKit's observers do; the rest come from tasks of their own.
   class Delegate {
    public:
-    // Its URL, title, loading, history or sound changed.
+    // Its URL, title, loading, history, sound or media changed.
     virtual void SystemPageChanged() = 0;
     // A new document committed in its main frame.
     virtual void SystemPageCommitted() = 0;
@@ -80,6 +96,10 @@ class SystemPage {
     // The page's protected video is kept off the screen: the display connection's protection
     // (HDCP) isn't enough for a key it has. The page says so, so the page can say it falsely.
     virtual void SystemPageOutputRestricted() = 0;
+    // The icon of the document that committed last, as its server sent it, from its own
+    // <link rel=icon>, else its site's /favicon.ico. Empty once it's known to have none. Nothing
+    // has decoded it.
+    virtual void SystemPageIcon(const GURL& icon_url, std::vector<uint8_t> bytes) = 0;
 
    protected:
     virtual ~Delegate() = default;
@@ -149,6 +169,7 @@ class SystemPage {
   virtual bool secure() = 0;
   virtual bool audible() = 0;
   virtual bool muted() = 0;
+  virtual SystemMedia media() = 0;
 
   virtual void Load(const GURL& url) = 0;
   virtual void GoBack() = 0;
@@ -156,6 +177,8 @@ class SystemPage {
   virtual void Reload(bool bypass_cache) = 0;
   virtual void Stop() = 0;
   virtual void SetMuted(bool muted) = 0;
+  // Through the page's own handlers where it has them, as the media keys go.
+  virtual void Media(MediaAction action) = 0;
 
  protected:
   SystemPage() = default;

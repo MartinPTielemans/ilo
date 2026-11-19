@@ -483,8 +483,9 @@ fn the_strip_takes_over_hands_back_and_stops(cx: &mut TestAppContext) {
 
 /// A press in the agent's page watched takes it over, as Take Over did, and the press is the page's
 /// (#1080): the Agents hear the same take over, so nothing else moves. Pressed again while the user
-/// holds it, nothing more happens; ⌘↩ then hands it back. The host hears the pages' presses only
-/// while an agent works.
+/// holds it, nothing more happens; ⌘↩ then hands it back. A press in the page beside it in its
+/// split view takes that tab over, not the one watched (#3243), and one in another agent's tab, or
+/// with no agent at work, takes nothing.
 #[gpui::test]
 fn a_press_in_the_agents_page_takes_it_over_and_hand_back_gives_it_back(cx: &mut TestAppContext) {
     let (shell, host, cx) = shell_with_task(cx);
@@ -502,14 +503,21 @@ fn a_press_in_the_agents_page_takes_it_over_and_hand_back_gives_it_back(cx: &mut
         shell.set_agent_status(status(Vec::new()), cx);
         shell.agent_acted("task-1".into(), 30, cx);
     });
-    assert_eq!(host.take(), ["hear page presses true"]);
-    shell.update(cx, |shell, cx| shell.page_pressed(cx));
+    host.take();
+    shell.update(cx, |shell, cx| shell.page_pressed(20, cx));
+    assert!(
+        host.take().is_empty(),
+        "a press in another agent's tab took it from the window watching a task"
+    );
+    shell.update(cx, |shell, cx| shell.page_pressed(31, cx));
+    assert_eq!(host.take(), ["take over task-1 31"]);
+    shell.update(cx, |shell, cx| shell.page_pressed(30, cx));
     assert_eq!(host.take(), ["take over task-1 30"]);
 
     shell.update(cx, |shell, cx| {
-        shell.set_agent_status(status(vec![(30, "".into())]), cx)
+        shell.set_agent_status(status(vec![(30, "".into()), (31, "".into())]), cx)
     });
-    shell.update(cx, |shell, cx| shell.page_pressed(cx));
+    shell.update(cx, |shell, cx| shell.page_pressed(30, cx));
     assert!(
         host.take().is_empty(),
         "a press in a page the user holds took it again"
@@ -520,11 +528,47 @@ fn a_press_in_the_agents_page_takes_it_over_and_hand_back_gives_it_back(cx: &mut
     assert_eq!(host.take(), ["hand back 30", "focus ui"]);
 
     shell.update(cx, |shell, cx| shell.set_agent_status(Vec::new(), cx));
-    assert_eq!(host.take(), ["hear page presses false"]);
-    shell.update(cx, |shell, cx| shell.page_pressed(cx));
+    shell.update(cx, |shell, cx| shell.page_pressed(30, cx));
     assert!(
         host.take().is_empty(),
         "a press with no agent at work took a page"
+    );
+}
+
+/// Whose tab it is decides, not where the agent acted last (#3503): a press in the tab it acted in
+/// last takes it over, which ends its session there, and a press in the other tab of its split view
+/// then takes that one over too. A press on a tab's dialog comes as a press in its tab.
+#[gpui::test]
+fn a_press_takes_over_each_of_the_agents_tabs_after_the_one_it_acted_in(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    watching(&shell, &host, cx);
+    let status = |held: Vec<(u64, SharedString)>| {
+        vec![Status {
+            agent: "task-1".into(),
+            name: "Claude".into(),
+            space: 3,
+            doing: "Typed · flights.example".into(),
+            held,
+        }]
+    };
+    shell.update(cx, |shell, cx| {
+        shell.set_agent_status(status(Vec::new()), cx);
+        shell.agent_acted("task-1".into(), 31, cx);
+    });
+    host.take();
+    shell.update(cx, |shell, cx| shell.page_pressed(31, cx));
+    assert_eq!(host.take(), ["take over task-1 31"]);
+    // The core ends the agent's session in the tab taken over, where it acted last.
+    shell.update(cx, |shell, cx| {
+        shell.agent_session_ended("task-1", 31, cx);
+        shell.set_agent_status(status(vec![(31, "".into())]), cx);
+    });
+    host.take();
+    shell.update(cx, |shell, cx| shell.page_pressed(30, cx));
+    assert_eq!(
+        host.take(),
+        ["take over task-1 30"],
+        "a press in the agent's other tab took nothing once the tab it acted in last was taken over"
     );
 }
 
@@ -1410,4 +1454,52 @@ fn take_over_shows_with_the_ring_on_the_tasks_stops_alone(cx: &mut TestAppContex
     }
     shell.update(cx, |shell, cx| shell.leave_keys("test", cx));
     assert!(!shows(&shell, cx), "Take Over shows once the ring leaves");
+}
+
+/// A press on the card of the agent's page watched whose renderer died, its Reload for one, is the
+/// user acting on the agent's tab: it takes the tab over, as a press in its page does, and the
+/// Reload still loads the page again (#3433).
+#[gpui::test]
+fn a_press_on_the_crash_card_of_the_agents_page_takes_it_over(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    watching(&shell, &host, cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_agent_status(
+            vec![Status {
+                agent: "task-1".into(),
+                name: "Claude".into(),
+                space: 3,
+                doing: "Typed · flights.example".into(),
+                held: Vec::new(),
+            }],
+            cx,
+        );
+        shell.agent_acted("task-1".into(), 30, cx);
+        shell.set_page(
+            30,
+            Page {
+                url: "https://flights.example/".into(),
+                trouble: crate::shell::Trouble::Crashed,
+                ..Page::default()
+            },
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    shell.update(cx, |shell, cx| {
+        shell.crash_reload_drawn.set(None);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    host.take();
+    let reload = shell
+        .read_with(cx, |shell, _| shell.crash_reload_drawn.get())
+        .expect("the watched page that died shows the card's Reload");
+    let place = shell.read_with(cx, |shell, _| watched(shell.page_frame(shell.viewport).0));
+    assert!(
+        place.contains(&reload.center()),
+        "{reload:?} is in the page's place {place:?}"
+    );
+    cx.simulate_click(reload.center(), gpui::Modifiers::none());
+    assert_eq!(host.take(), ["take over task-1 30", "reload 30"]);
 }

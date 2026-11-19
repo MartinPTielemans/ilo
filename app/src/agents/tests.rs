@@ -1140,6 +1140,41 @@ fn a_users_tab_off_the_web_is_answered_as_any_tab_not_the_agents(cx: &mut TestAp
     }
 }
 
+/// A request from a tab not the agent's, the user's or another agent's, gets the core's answer for
+/// the tab alone, before any of its requests is read, as every other tool does: an answer for each
+/// request would tell the agent they got as far as the tab's site.
+#[gpui::test]
+fn a_request_from_a_tab_not_the_agents_is_refused_for_the_tab(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    browser.agent_spaces.borrow_mut().insert("codex".into(), 3);
+    (browser.tabs.borrow_mut()).push((30, 3, "Rust", "https://www.rust-lang.org/"));
+    browser.checked.borrow_mut().clear();
+    for (tab, site) in [(10, "en.wikipedia.org"), (30, "rust-lang.org")] {
+        let requests = json!({ "tab": tab, "requests": [{ "method": "GET", "path": "/api/me" }] });
+        let answer = call(&agents, "claude-code", "request", requests, cx);
+        cx.run_until_parked();
+        assert_eq!(
+            answer.recv().unwrap(),
+            ToolResult::error(NOT_ITS_SPACE),
+            "request from tab {tab}"
+        );
+        assert_eq!(
+            browser
+                .checked
+                .borrow_mut()
+                .drain(..)
+                .collect::<Vec<String>>(),
+            ["request"],
+            "the core didn't check tab {tab} once"
+        );
+        assert_eq!(
+            log(&agents, "claude-code", cx)[0],
+            ("request".into(), site.into(), NOT_ITS_SPACE.into())
+        );
+    }
+    assert!(browser.requests.borrow().is_empty(), "a request was sent");
+}
+
 /// Once read, a page still on the empty start page is no web page, as the core's page tools find,
 /// and a tab that became a Board meanwhile is answered as a Board is everywhere else.
 #[gpui::test]
@@ -2876,6 +2911,34 @@ fn the_user_takes_over_and_stops_an_agent(cx: &mut TestAppContext) {
     assert_eq!(*browser.asked.borrow(), None);
     assert_eq!(*browser.disconnected.borrow(), ["claude-code"]);
     assert_eq!(log(&agents, "claude-code", cx)[0].0, "stopped by the user");
+}
+
+/// An agent has a status while its session lasts, for the bar in its Space and for a press in any
+/// of its tabs, which takes that tab over. Once its last session ends it has none: its tabs are the
+/// user's, with nothing to hand back to (#3503).
+#[gpui::test]
+fn an_agent_whose_session_ended_has_no_status(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+    assert!(!page_done(&agents, &browser, answer, shop_tree(), cx).error);
+    let status = agents.read_with(cx, |agents, _| agents.status());
+    assert_eq!(
+        status
+            .iter()
+            .map(|status| &status.agent)
+            .collect::<Vec<_>>(),
+        ["claude-code"]
+    );
+
+    let bye = Event::Bye {
+        agent: "claude-code".into(),
+    };
+    agents.update(cx, |agents, cx| agents.handle(bye, cx));
+    let status = agents.read_with(cx, |agents, _| agents.status());
+    assert!(
+        status.is_empty(),
+        "an agent whose session ended kept a status: {status:?}"
+    );
 }
 
 /// A tab the user took over stays theirs: the agent's calls on it are refused until it asks with

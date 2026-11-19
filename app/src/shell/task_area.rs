@@ -859,7 +859,10 @@ impl Shell {
             );
         }
         if in_place {
-            layer = layer.child(card(place, self.card_radius(), self.palette.page));
+            // A page that died leaves its place to its card, as in the user's own Space.
+            layer = layer
+                .child(card(place, self.card_radius(), self.palette.page))
+                .children(self.crash_cards(place, cx));
         } else {
             layer = layer.child(self.task_page_picture(page, between(page.thumb, place, zoom), cx));
         }
@@ -1097,6 +1100,14 @@ impl Shell {
         );
         let page_name = self.strip_page_name(tab, &title, &detail);
         let detail = (!detail.is_empty()).then(|| format!(" · {detail}"));
+        let words = format!("{title}{}", detail.as_deref().unwrap_or_default());
+        let mut said = self.task_strip_said.borrow_mut();
+        if said.as_ref() != Some(&(tab, words.clone())) {
+            // check.sh reads this line: the strip says who has the page, as the bar did.
+            log!("browser: task strip {tab} says {words}");
+            *said = Some((tab, words));
+        }
+        drop(said);
         div()
             .id("task-strip")
             .absolute()
