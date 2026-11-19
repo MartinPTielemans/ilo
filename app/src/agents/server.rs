@@ -434,7 +434,7 @@ impl Lane {
 }
 
 /// A message read and not yet answered, with the lanes it holds while it's answered: none for
-/// open_tab, which waits only for room.
+/// open_tab and close_tab, which wait only for room.
 struct Waiting {
     line: String,
     lanes: Vec<Lane>,
@@ -569,7 +569,9 @@ fn lanes(line: &str) -> Vec<Lane> {
         .and_then(Value::as_u64))
     .filter(|tab| *tab != 0);
     let own = match (tool, tab) {
-        ("open_tab", _) => None,
+        // A close is the agent's way out of a tab, so it never waits behind a call stuck on the
+        // tab's page, as one is while the page shows its own dialog (#3536).
+        ("open_tab" | "close_tab", _) => None,
         (_, Some(tab)) => Some(Lane::Tab(tab)),
         (_, None) => Some(Lane::InOrder),
     };

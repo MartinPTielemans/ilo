@@ -3117,6 +3117,125 @@ fn opened_with_handler(agents: &Entity<Agents>, browser: &Made, cx: &mut TestApp
     browser.asks.borrow_mut().insert(30);
 }
 
+/// The page of `tab` shows its own dialog of `kind`, or none any more, as the core reports it.
+fn page_dialog(
+    agents: &Entity<Agents>,
+    tab: u64,
+    kind: Option<DialogKind>,
+    cx: &mut TestAppContext,
+) {
+    agents.update(cx, |agents, cx| agents.page_dialog(tab, kind, cx));
+    cx.run_until_parked();
+}
+
+/// While its page shows its own dialog, a call on the agent's tab answers at once, naming the
+/// dialog, and reaches no page, as no tool answers a page's dialog; the log says the dialog paused
+/// it, without its words. Once the dialog has gone, calls reach the page again (#3536).
+#[gpui::test]
+fn a_call_on_a_page_showing_its_dialog_answers_at_once(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let opened = call(
+        &agents,
+        "claude-code",
+        "open_tab",
+        json!({ "url": "docs.example" }),
+        cx,
+    );
+    _ = page_done(&agents, &browser, opened, shop_tree(), cx);
+    let pages = browser.pages.borrow().len();
+    page_dialog(&agents, 30, Some(DialogKind::Confirm), cx);
+
+    for (tool, arguments) in [
+        ("press_key", json!({ "tab": 30, "key": "Escape" })),
+        ("click", json!({ "tab": 30, "ref": "e1" })),
+        ("navigate", json!({ "tab": 30, "url": "back" })),
+    ] {
+        let answer = call(&agents, "claude-code", tool, arguments, cx);
+        cx.run_until_parked();
+        let answer = answer.try_recv().expect("an answer at once");
+        assert!(answer.error, "{tool}");
+        assert_eq!(
+            answer.text,
+            "Tab 30's page shows a confirm dialog. Nothing more can be done on the tab while \
+             it's up, and no tool answers it. close_tab closes the tab, and the dialog with it."
+        );
+    }
+    assert_eq!(
+        browser.pages.borrow().len(),
+        pages,
+        "a call reached the page"
+    );
+    let entries = log(&agents, "claude-code", cx);
+    assert!(
+        entries.contains(&("page_dialog".into(), "docs.example".into(), "".into())),
+        "{entries:?}"
+    );
+    assert_eq!(
+        (entries.iter())
+            .filter(|entry| entry.0 == "page_dialog")
+            .count(),
+        1
+    );
+
+    page_dialog(&agents, 30, None, cx);
+    let pressed = call(
+        &agents,
+        "claude-code",
+        "press_key",
+        json!({ "tab": 30, "key": "Escape" }),
+        cx,
+    );
+    cx.run_until_parked();
+    assert!(pressed.try_recv().is_err(), "answered without the page");
+    assert_eq!(browser.pages.borrow().len(), pages + 1);
+}
+
+/// The agent's own tab whose page shows its dialog closes at once, without asking its page,
+/// which can't answer while its dialog is up, nor the user (#3536).
+#[gpui::test]
+fn a_page_showing_its_dialog_closes_at_once(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    opened_with_handler(&agents, &browser, cx);
+    page_dialog(&agents, 30, Some(DialogKind::Alert), cx);
+    let closed = call(
+        &agents,
+        "claude-code",
+        "close_tab",
+        json!({ "tab": 30 }),
+        cx,
+    );
+    cx.run_until_parked();
+    let closed = closed.try_recv().expect("an answer at once");
+    assert_eq!(
+        (closed.error, closed.text.as_str()),
+        (false, "Closed tab 30.")
+    );
+    assert_eq!(*browser.closes.borrow(), [(30, true)]);
+    assert_eq!(*browser.asked.borrow(), None, "asked the user");
+}
+
+/// A dialog on a page that isn't the agent's says nothing to it: the core's refusal answers, and
+/// the agent's log has no pause.
+#[gpui::test]
+fn another_spaces_dialog_says_nothing(cx: &mut TestAppContext) {
+    let (agents, _, _) = connected(cx);
+    _ = call(&agents, "claude-code", "list_tabs", json!({}), cx);
+    page_dialog(&agents, 10, Some(DialogKind::Alert), cx);
+    let refused = call(
+        &agents,
+        "claude-code",
+        "click",
+        json!({ "tab": 10, "ref": "e1" }),
+        cx,
+    );
+    cx.run_until_parked();
+    let refused = refused.try_recv().expect("the core's refusal");
+    assert!(refused.error);
+    assert!(!refused.text.contains("dialog"), "{}", refused.text);
+    let entries = log(&agents, "claude-code", cx);
+    assert!(!entries.iter().any(|entry| entry.0 == "page_dialog"));
+}
+
 /// A page whose handler asks to stay stays open, and the answer, which waits for the page, says
 /// why; the log has the close once the page answered. With discard, the agent's own tab is asked
 /// again and closes without saving, the log saying so, and the user isn't asked (#1447, #3256).
