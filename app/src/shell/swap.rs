@@ -167,19 +167,20 @@ impl Swaps {
     }
 
     /// How far `what`'s glyph has come toward `path`, ease-in-out over the whole change, for the
-    /// room a glyph that comes and goes makes as it does. None while it isn't changing.
-    pub(super) fn toward(&self, what: Swapped, path: &'static str) -> Option<f32> {
+    /// room a glyph that comes and goes makes as it does, at `now` on the list's clock. None while
+    /// it isn't changing.
+    pub(super) fn toward(&self, what: Swapped, path: &'static str, now: Instant) -> Option<f32> {
         let swap = self.0.iter().find(|swap| swap.what == what)?;
-        let way = ease(swap.elapsed(Instant::now()) / lasts(swap.to));
+        let way = ease(swap.elapsed(now) / lasts(swap.to));
         Some(if swap.to == path { way } else { 1. - way })
     }
 
-    /// Lets the changes that are done go, and asks for the next frame while one isn't.
-    pub(super) fn step(&mut self, window: &mut Window) {
+    /// Lets the changes done by `now`, on the list's clock, go, and asks for the next frame while
+    /// one isn't.
+    pub(super) fn step(&mut self, window: &mut Window, now: Instant) {
         if self.0.is_empty() {
             return;
         }
-        let now = Instant::now();
         self.0.retain(|swap| swap.elapsed(now) < lasts(swap.to));
         if !self.0.is_empty() {
             window.request_animation_frame();
@@ -210,7 +211,8 @@ impl Swaps {
                     .into_any_element(),
             };
         };
-        let elapsed = swap.elapsed(Instant::now());
+        // On the executor's clock, the real one in the app and the test's in a test (#3468).
+        let elapsed = swap.elapsed(cx.background_executor().now());
         // Under Reduce Motion the glyphs cross-fade at their size.
         let glyph = |path: &'static str, opacity: f32, scale: f32| {
             if path == NONE {
@@ -456,16 +458,16 @@ mod tests {
             "a new row's mark shows at once"
         );
         swaps.page_changed(4, 1, &home, &away, now);
-        // It's read against the clock, a moment after the change started.
+        // It's read on the list's clock as the change starts.
         assert!(
             swaps
-                .toward(Swapped::Away(4), UNDO)
+                .toward(Swapped::Away(4), UNDO, now)
                 .is_some_and(|way| way < 0.5)
         );
         swaps.page_changed(5, 1, &away, &home, now);
         assert!(
             swaps
-                .toward(Swapped::Away(5), UNDO)
+                .toward(Swapped::Away(5), UNDO, now)
                 .is_some_and(|way| way > 0.5),
             "going, it starts whole"
         );

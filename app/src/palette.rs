@@ -449,6 +449,14 @@ impl Palette {
         Hsla::from(self.ink).opacity(alpha.max(self.text_floor))
     }
 
+    /// Ink or Paper at `alpha` on the opaque `fill`, or as much more as text needs to read on it.
+    /// The window's floor answers for its material over any backdrop and the plates on it, so on a
+    /// dark window it lifts a dim alpha almost to the ink, where the fill under it needs far less.
+    pub fn text_on(&self, alpha: f32, fill: Hsla) -> Hsla {
+        let floor = least_alpha(self.ink, &[fill.to_rgb()], TEXT + BETWEEN);
+        Hsla::from(self.ink).opacity(alpha.max(floor))
+    }
+
     /// Text at `alpha`, `lit` of the way to the ink at `high`, as a shimmer's highlight passes. It
     /// goes from where the floor puts the text, so the highlight shows however far that raises it.
     pub fn lit(&self, alpha: f32, high: f32, lit: f32) -> Hsla {

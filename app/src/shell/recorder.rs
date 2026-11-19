@@ -211,6 +211,8 @@ pub(super) struct Recorder {
     pub(super) copied: RefCell<Vec<String>>,
     /// The tabs the command bar was given to list each time the window showed another Space.
     pub(super) followed_tabs: RefCell<Vec<Vec<u64>>>,
+    /// Each tab of the same Space the command bar heard was shown while it was open.
+    pub(super) tabs_shown_to_bar: RefCell<Vec<u64>>,
     /// What moved the pages, in order: "layout" for the page's frame, "shares" for a split's, and
     /// "moving" and "still" for what the shell told the core about the motion.
     pub(super) page_events: RefCell<Vec<&'static str>>,
@@ -1578,6 +1580,13 @@ impl Browser for Recorder {
         self.record("window move".into())
     }
 
+    fn start_window_resize(&self, right: bool, _: &mut App) {
+        self.record(format!(
+            "window resize {}",
+            if right { "right" } else { "left" }
+        ))
+    }
+
     fn window_maximized(&self) -> bool {
         false
     }
@@ -1823,6 +1832,15 @@ impl Browser for Recorder {
             self.followed_tabs
                 .borrow_mut()
                 .push(tabs.iter().map(|tab| tab.tab).collect());
+        }
+        open
+    }
+
+    /// An open bar edited the tab before, as ⌘L's does.
+    fn command_bar_tab_shown(&self, tab: u64, _: &mut App) -> bool {
+        let open = self.bar_open.get();
+        if open {
+            self.tabs_shown_to_bar.borrow_mut().push(tab);
         }
         open
     }
