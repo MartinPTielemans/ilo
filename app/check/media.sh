@@ -112,12 +112,16 @@ onkeydown = async e => {
       navigator.mediaSession.metadata = new MediaMetadata({title: "Quiet", artist: "Check"});
       navigator.mediaSession.setActionHandler("previoustrack", () => document.title = "previous track");
       navigator.mediaSession.setActionHandler("nexttrack", () => document.title = "next track");
-      navigator.mediaSession.setActionHandler("enterpictureinpicture", async () => {
-        const floating = await documentPictureInPicture.requestWindow({width: 320, height: 180});
-        floating.onpagehide = () => document.title = "landed";
-        document.onvisibilitychange = () => document.hidden || floating.close();
-        document.title = "floating";
-      });
+      // Alone in its try: a browser that knows no such action, as an older WebKit, throws, and
+      // the music still has to play.
+      try {
+        navigator.mediaSession.setActionHandler("enterpictureinpicture", async () => {
+          const floating = await documentPictureInPicture.requestWindow({width: 320, height: 180});
+          floating.onpagehide = () => document.title = "landed";
+          document.onvisibilitychange = () => document.hidden || floating.close();
+          document.title = "floating";
+        });
+      } catch {}
       await music.play();
     } else if (e.key == "o" || e.key == "p") {
       window.open(e.key == "o" ? "call.html?Shared" : "call.html?Other");
