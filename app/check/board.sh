@@ -495,6 +495,7 @@ post click 204 $((height - 25))
 expect "^browser: menu shown .*$(cased 'New Board')" "the sidebar's +$replaced didn't offer New Board"
 if [ -n "$replaced" ]; then
   expect '^browser: menu at .* closed by ' "the row's menu didn't close as the sidebar's + opened its own"
+  expect '^browser: menu window at ' "the + menu's window didn't take the keyboard"
   send key down
   expect '^browser: menu highlights .* at ' "↓ in the + menu, opened in a row's menu's place, rang no row: it hasn't the keyboard"
 fi
@@ -599,6 +600,7 @@ for each in light dark; do
   post rightclick $(($1 + $3 / 2)) $(($2 + $4 / 2))
   expect "^browser: menu shown $(cased 'Open, Duplicate, Delete')\$" "a right-click on a Board's row didn't show its menu, $each"
   ../tools/window-screenshot.sh "$pid" "$out/board-duplicate-menu-$each.png" all || fail "no window to capture"
+  expect '^browser: menu window at ' "the menu's window didn't take the keyboard"
   send key escape
   expect '^browser: menu closed' "escape didn't close a Board's row's menu, $each"
   send key escape
