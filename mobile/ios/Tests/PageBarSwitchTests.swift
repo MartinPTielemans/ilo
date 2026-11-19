@@ -95,6 +95,19 @@ private struct Opens: View {
     [layer] + (layer.sublayers ?? []).flatMap(layers)
   }
 
+  /// Where the left edge of the 10 pt square `place` holds is drawn in it. As it's drawn: iOS 27
+  /// leaves a layer it's animating where it began until the animation is over.
+  private func squareLeft(in place: SlidView) -> CGFloat? {
+    guard let square = layers(under: place.layer).first(where: { $0.bounds.size == CGSize(width: 10, height: 10) }) else { return nil }
+    var left: CGFloat = 0
+    var layer: CALayer? = square
+    while let here = layer, here !== place.layer {
+      left += (here.presentation() ?? here).frame.minX
+      layer = here.superlayer
+    }
+    return left
+  }
+
   /// Whether a touch at the middle of `place`, where it's laid out, is for what `place` holds.
   private func touched(_ place: SlidView, in window: UIWindow) -> Bool {
     let middle = place.convert(CGPoint(x: place.bounds.midX, y: place.bounds.midY), to: window)
@@ -194,10 +207,7 @@ private struct Opens: View {
     defer { window.isHidden = true }
     #expect(await eventually { slids(in: window).first.map { $0.bounds.height > 0 } == true })
     let place = try #require(slids(in: window).first)
-    func left() -> CGFloat? {
-      layers(under: place.layer).first { $0.bounds.size == CGSize(width: 10, height: 10) }
-        .map { $0.convert($0.bounds, to: place.layer).minX }
-    }
+    func left() -> CGFloat? { squareLeft(in: place) }
     #expect(await eventually(seconds: 5) { left() == 60 })
     shift.on = false
     #expect(await eventually(seconds: 5) { left() == 0 })
@@ -210,11 +220,7 @@ private struct Opens: View {
       defer { window.isHidden = true }
       #expect(await eventually { slids(in: window).first.map { $0.bounds.height > 0 } == true })
       let place = try #require(slids(in: window).first)
-      /// Where the square's left edge is in the `Slid`.
-      func left() -> CGFloat? {
-        layers(under: place.layer).first { $0.bounds.size == CGSize(width: 10, height: 10) }
-          .map { $0.convert($0.bounds, to: place.layer).minX }
-      }
+      func left() -> CGFloat? { squareLeft(in: place) }
       #expect(await eventually { left() == 0 })
       shift.on = true
       try await Task.sleep(for: .milliseconds(600))
