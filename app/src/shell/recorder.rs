@@ -900,8 +900,9 @@ impl Browser for Recorder {
         true
     }
 
-    fn drag_file(&self, _: &str, _: &mut App) -> bool {
-        Default::default()
+    fn drag_file(&self, path: &str, _: &mut App) -> bool {
+        self.record(format!("drag file {path}"));
+        true
     }
 
     fn page_favicon(&self, _: &str, _: &mut App) {}
