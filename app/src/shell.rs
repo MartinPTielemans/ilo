@@ -1811,6 +1811,10 @@ pub struct Shell {
     /// What the menu bar was last given for this window, and the window's title.
     menus: MenuBar,
     window_title: SharedString,
+    /// The name of the window's root node, its Space's, and whether the window is still to take it
+    /// (`update_title`).
+    root_name: SharedString,
+    root_name_due: bool,
     /// What the URL field said when it last drew, for its log line.
     url_field_drawn: RefCell<SharedString>,
     /// Whether the header last drew reload or stop, for its log line.
@@ -2298,6 +2302,8 @@ impl Shell {
             sidebar_backups: HashMap::new(),
             menus: MenuBar::default(),
             window_title: SharedString::default(),
+            root_name: SharedString::default(),
+            root_name_due: false,
             url_field_drawn: RefCell::default(),
             reload_drawn: Cell::default(),
             back_drawn: Cell::default(),
@@ -4514,6 +4520,14 @@ impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.a11y = window.is_a11y_active();
         self.watch_appearance(window, cx);
+        // After the frame, which takes the root's name as it starts and asks for none while it's
+        // drawn, so another comes with it.
+        if std::mem::take(&mut self.root_name_due) {
+            cx.defer_in(window, |shell, window, _| {
+                window.set_accessible_window_title(&shell.root_name);
+                window.refresh();
+            });
+        }
         // A Space shown with a Live Folder asks for their lists once its switch is drawn, so the
         // fetch never holds a frame of it. Deferred, as the window's ask is: a next-frame callback
         // asks for a frame of its own (#3004).
