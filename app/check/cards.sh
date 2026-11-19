@@ -274,53 +274,12 @@ server.serve_forever()
 tls=$!
 read -r tls_port < "$out/cards-tls.port" || true
 [ -n "$tls_port" ] || fail "GitHub's https server didn't start: $(cat "$out/cards-tls.log")"
+# It takes the shell's place, so $! is the app's own process.
 github() {
-  "$browser" --host-resolver-rules="MAP github.com 127.0.0.1:$tls_port" \
+  exec "$browser" --host-resolver-rules="MAP github.com 127.0.0.1:$tls_port" \
     --ignore-certificate-errors-spki-list="$spki" "$@"
 }
 pull=https://github.com/ilo-check/cards/pull
-
-# GitHub's page pinned, and another shown, then launched again: the pinned tab comes back unloaded.
-log="$out/cards-recent.log"
-step=0
-rm -f "$saved"
-BROWSER_DRIVE=1 BROWSER_URL=https://github.com/ github < "$out/drive" > "$log" 2>&1 &
-pid=$!
-exec 3> "$out/drive"
-await_load
-await '^browser: title [0-9]* GitHub$' ||
-  fail "GitHub's page from the run's server didn't draw: $(cat "$out/cards-tls.log")"
-p=$(today)
-send click $page_point
-if [ "$active" != 1 ]; then
-  exec 3>&-
-  quit
-  kill "$tls" 2>/dev/null || true
-  echo "skip: a pinned tab's recent rows. Browser wasn't the active app, so the page ignored the click."
-  exit 0
-fi
-send key d cmd
-expect "^browser: pinned $p\$" "⌘D didn't pin GitHub's tab"
-open_from_bar "http://localhost:$port/one.html"
-b=$tab
-quit_by_key
-await '^browser: command quit via ' || fail "⌘Q didn't reach the UI"
-exited
-log="$out/cards-recent-restored.log"
-step=0
-BROWSER_DRIVE=1 github < "$out/drive" > "$log" 2>&1 &
-pid=$!
-exec 3> "$out/drive"
-await '^browser: restored in ' || fail "the relaunch didn't restore the Space"
-# A relaunch gives the restored tabs new numbers.
-await '^browser: pinned [0-9][0-9]*$' || fail "GitHub's tab didn't come back pinned"
-await '^browser: today [0-9][0-9]*$' || fail "one.html's tab didn't come back"
-p=$(pinned)
-b=$(today)
-await "^browser: selected $b\$" || fail "the relaunch didn't show one.html's tab"
-await "^browser: loaded $b http://localhost:$port/one.html\$" || fail "one.html didn't load"
-await "^browser: page $p unloaded 1\$" || fail "the pinned tab didn't come back unloaded"
-send click $page_point
 
 # recent_row <tab> <n> [modifiers…]: rests on pinned tab <tab>'s row till its card has its rows,
 # then clicks row <n>, counting from 0, as a hand would, onto the card first. Under the box's
@@ -349,11 +308,54 @@ shown_from_row() {
   send move $page_point
   in_browser RenderWidgetHostViewCocoa "after a click on row $1 of $2's card"
 }
+# GitHub's page pinned, and another shown: a row of the pinned tab, shown since launch. Then
+# launched again, so the pinned tab comes back unloaded and never shown.
+log="$out/cards-recent.log"
+step=0
+rm -f "$saved"
+BROWSER_DRIVE=1 BROWSER_URL=https://github.com/ github < "$out/drive" > "$log" 2>&1 &
+pid=$!
+exec 3> "$out/drive"
+await_load
+await '^browser: title [0-9]* GitHub$' ||
+  fail "GitHub's page from the run's server didn't draw: $(cat "$out/cards-tls.log")"
+p=$(today)
+send click $page_point
+if [ "$active" != 1 ]; then
+  exec 3>&-
+  quit
+  kill "$tls" 2>/dev/null || true
+  echo "skip: a pinned tab's recent rows. Browser wasn't the active app, so the page ignored the click."
+  exit 0
+fi
+send key d cmd
+expect "^browser: pinned $p\$" "⌘D didn't pin GitHub's tab"
+open_from_bar "http://localhost:$port/one.html"
+b=$tab
+recent_row "$p" 1
+shown_from_row 1 "the pinned tab shown since launch"
+switch "2 cmd" "$b"
+quit_by_key
+await '^browser: command quit via ' || fail "⌘Q didn't reach the UI"
+exited
+log="$out/cards-recent-restored.log"
+step=0
+BROWSER_DRIVE=1 github < "$out/drive" > "$log" 2>&1 &
+pid=$!
+exec 3> "$out/drive"
+await '^browser: restored in ' || fail "the relaunch didn't restore the Space"
+# A relaunch gives the restored tabs new numbers.
+await '^browser: pinned [0-9][0-9]*$' || fail "GitHub's tab didn't come back pinned"
+await '^browser: today [0-9][0-9]*$' || fail "one.html's tab didn't come back"
+p=$(pinned)
+b=$(today)
+await "^browser: selected $b\$" || fail "the relaunch didn't show one.html's tab"
+await "^browser: loaded $b http://localhost:$port/one.html\$" || fail "one.html didn't load"
+await "^browser: page $p unloaded 1\$" || fail "the pinned tab didn't come back unloaded"
+send click $page_point
+
 recent_row "$p" 0
 shown_from_row 0 "the pinned tab never shown since launch"
-switch "2 cmd" "$b"
-recent_row "$p" 1
-shown_from_row 1 "the pinned tab shown before"
 # ⌘-click: a tab behind, with the tab shown kept.
 switch "2 cmd" "$b"
 recent_row "$p" 2 cmd
