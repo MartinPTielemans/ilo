@@ -1916,6 +1916,8 @@ SEE
       # The host's line, once its window is on screen, so the capture has it.
       await_more '^browser: agent request shown$' "$hosted" || fail "the whole request's window never showed"
       ../tools/window-screenshot.sh "$pid" "$out/agent-request-whole.png" || fail "no window to capture"
+      grep "^browser: agent request at \|^browser: agent question $q at " "$log" | tail -2
+      fail "probe: stopped after the right sidebar's whole request capture"
       send key escape
       await_log "^browser: agent request $q closed (Escape)\$" "Escape didn't close the whole request"
       await_log '^browser: agent request keyboard back on see$' \
@@ -1929,6 +1931,13 @@ SEE
     changed=$(next_answer) || fail "the browser didn't answer the change"
     changed=$(printf '%s\n' "$changed" | answered "the change")
   }
+  # Probe, never to land: the sidebar on the right, for the whole request's picture.
+  send key t cmd
+  await_log '^browser: command bar shown$' "probe: no command bar"
+  send type move sidebar
+  sleep 1
+  send key return
+  await_log '^browser: sidebar on the right$' "probe: the sidebar didn't move right"
   change Once 0 "$milk" "$milk_card"
   case "$changed" in
     'POST /api/items → 201 application/json'*'{"id":8,"title":"Milk"}') ;;
