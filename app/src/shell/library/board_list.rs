@@ -77,9 +77,15 @@ impl Shell {
         };
         let when = history_when(board.changed, library.starts, crate::clock::twelve_hour());
         let picture = match &board.thumb {
-            Some(thumb) => img(thumb.clone())
+            // On the Board's paper in the window's look, as the page saves its picture with no
+            // ground, so it shows in either look whichever it was taken in.
+            Some(thumb) => div()
                 .size(px(FAVICON_SIZE))
-                .object_fit(ObjectFit::Cover)
+                .bg(gpui::rgb(match self.palette.tone {
+                    crate::palette::Tone::Dark => crate::tokens::board::CANVAS_DARK,
+                    crate::palette::Tone::Light => crate::tokens::board::CANVAS,
+                }))
+                .child(img(thumb.clone()).size_full().object_fit(ObjectFit::Cover))
                 .into_any_element(),
             None => svg()
                 .path("icons/presentation.svg")
@@ -152,23 +158,64 @@ impl Shell {
         match open {
             Some(tab) => self.show_row(tab, cx),
             None => {
-                let tab = self.browser.open_at(&[boards::url(id)], false, 0, 0, cx);
                 let name = (self.board_list.iter())
                     .find(|board| board.id == id)
-                    .map(|board| board.name.clone())
-                    .filter(|name| name != "Board");
-                if let Some(name) = name.filter(|_| tab != 0) {
-                    self.browser.rename_tab(tab, &name, cx);
-                }
+                    .map(|board| board.name.clone());
+                self.open_board_tab(id, name, cx);
             }
         }
         self.set_library(false, cx);
     }
 
-    /// A Board's menu in Library › Boards: Open, and Delete, which ⌘Z takes back.
-    fn board_menu(&mut self, id: String, position: Point<Pixels>, cx: &mut Context<Self>) {
+    /// Opens Board `id` in a new tab, named `name` as its row is, unless that's the product's.
+    fn open_board_tab(&mut self, id: &str, name: Option<String>, cx: &mut Context<Self>) {
+        let tab = self.browser.open_at(&[boards::url(id)], false, 0, 0, cx);
+        if let Some(name) = name.filter(|name| tab != 0 && name != "Board") {
+            self.browser.rename_tab(tab, &name, cx);
+        }
+    }
+
+    /// Duplicate, on a Board's row or from the bar over its tab: a copy of Board `id`, with its
+    /// cards and pictures, opens in a new tab named as its row once it's whole on disk, and the
+    /// Library closes as on Open. It isn't a ⌘Z step: Delete on the copy is the way out, and says
+    /// what it does.
+    pub(in crate::shell) fn duplicate_board(&mut self, id: String, cx: &mut Context<Self>) {
+        let Some((_, folder)) = self.boards_profile() else {
+            return;
+        };
+        let copy = boards::new_id();
+        let made = cx.background_spawn({
+            let (id, copy) = (id.clone(), copy.clone());
+            async move { boards::duplicate(&folder, &id, &copy) }
+        });
+        cx.spawn(async move |shell, cx| {
+            let made = made.await;
+            shell
+                .update(cx, |shell, cx| match made {
+                    Ok(name) => {
+                        // check/board.sh reads this line.
+                        log!("browser: board {id} duplicated as {copy}");
+                        shell.open_board_tab(&copy, Some(name), cx);
+                        shell.set_library(false, cx);
+                        shell.read_boards(cx);
+                    }
+                    Err(error) => log!("browser: board {id} duplicate {copy} failed: {error}"),
+                })
+                .ok();
+        })
+        .detach();
+    }
+
+    /// A Board's menu in Library › Boards: Open, Duplicate, and Delete, which ⌘Z takes back.
+    pub(super) fn board_menu(
+        &mut self,
+        id: String,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
         let entries = vec![
             MenuEntry::new("Open", true),
+            MenuEntry::new("Duplicate", true),
             MenuEntry::line(),
             MenuEntry::new("Delete", true).destructive(),
         ];
@@ -185,7 +232,8 @@ impl Shell {
                 shell
                     .update(cx, |shell, cx| match chosen {
                         Some(0) => shell.open_listed_board(&id, cx),
-                        Some(2) => shell.delete_board(id.clone(), cx),
+                        Some(1) => shell.duplicate_board(id.clone(), cx),
+                        Some(3) => shell.delete_board(id.clone(), cx),
                         _ => {}
                     })
                     .ok();

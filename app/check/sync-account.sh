@@ -14,6 +14,12 @@
 # device is named by its label, such as "ilo on Linux", not its owner's name, and the Sync tab,
 # shown again, says when it last synced. No request in Chromium's net log of the whole run goes to
 # Google's servers.
+# A sync trouble shows once it lasts (#3435), on an engine with core/sync_trouble.cc, where the
+# browser reaches the server through check/sync-proxy.py, which drops sync's requests when asked.
+# Turning Extensions on again, with one request dropped, leaves the line green; with each dropped,
+# the third failed cycle in a row turns it red, saying there's no connection. Details… then opens
+# chrome://sync-internals in the regular window, never the private one in front, and once the
+# server answers again, the line turns green while Settings shows it.
 # Sign Out, as the account's only device, asks first, and the server forgets the device. Signed
 # out, the passkey signs in again, on a key in the next window that holds it, and on Linux Delete
 # Account, asked first, leaves the server nothing of the account and the browser signed out. The domain is the check's alone. Agents never get DevTools: it runs any
@@ -28,6 +34,14 @@ cdp_log="$out/sync-account-cdp.log"
 netlog="$out/sync-account-net.json"
 step=0
 rm -f "$saved" "$launch_frame" "$profile_dir/Account" "$netlog"
+# An engine whose core tells of a sync trouble once it lasts has the browser reach the server
+# through check/sync-proxy.py, which fails sync's requests when the run asks (ilo-server.sh).
+sync_faults=
+if engine_has ../core/sync_trouble.cc ../core/sync.cc; then
+  sync_faults="$out/sync-account-faults"
+else
+  echo "note: the engine predates core/sync_trouble.cc, so sync's requests aren't failed and the line's troubles go unchecked"
+fi
 . check/ilo-server.sh
 
 # Sends cdp.py the command $1 and waits up to 10 s for its answer, the next line it logs matching
@@ -285,6 +299,96 @@ expect '^browser: sync activity synced None$' \
   "shown again after the Spaces reached the server, Sync didn't say it had synced"
 ../tools/window-screenshot.sh "$pid" "$out/sync-status.png" || fail "no window to capture"
 
+# A sync trouble shows only once it lasts, and the line follows sync as its cycles end, while
+# Settings shows it (#3435). Turning Extensions on again downloads them, in a cycle of their own.
+if [ -n "$sync_faults" ]; then
+  # Waits up to 30 s for the core's word, since the last command, that sync is active again with
+  # the extensions ($1 with) or without them ($1 without), failing with $2.
+  synced_extensions() {
+    for _ in $(seq 300); do
+      types=$(since | grep 'browser: sync types ' | tail -1)
+      case $1,$types in
+      with,*Extensions*) return 0 ;;
+      without,*Extensions*) ;;
+      without,?*) return 0 ;;
+      esac
+      kill -0 "$pid" 2>/dev/null || gone
+      sleep 0.1
+    done
+    fail "$2: $(grep 'browser: sync types ' "$log" | tail -1)"
+  }
+  dropped() { grep -c '^dropped ' "$proxy_log" || true; }
+  extensions() {
+    click_in_sight "sync switch extensions"
+    expect "^browser: sync extensions $1\$" "a click on Extensions' switch didn't turn them $1"
+  }
+  # The proxy drops that cycle's request once, and sync, trying again a second later, goes through:
+  # the line stays green.
+  extensions off
+  synced_extensions without "sync didn't start again without the extensions"
+  echo once > "$sync_faults"
+  extensions on
+  synced_extensions with "sync, its request dropped once, didn't go through with the extensions"
+  [ "$(dropped)" = 1 ] ||
+    fail "the proxy dropped $(dropped) of sync's requests, not the one asked: $(tail -3 "$proxy_log")"
+  missed=$(since | grep '^browser: sync activity .* Some(' || true)
+  [ -z "$missed" ] || fail "one missed sync cycle turned the line red: $missed"
+
+  # With each request dropped, the third cycle in a row that fails turns it red, saying since when.
+  extensions off
+  synced_extensions without "sync didn't start again without the extensions"
+  had=$(dropped)
+  echo drop > "$sync_faults"
+  extensions on
+  expect_late '^browser: sync activity synced Some(Offline)$' \
+    "sync's cycles failed and the line didn't say there's no connection"
+  failed=$(($(dropped) - had))
+  [ "$failed" -ge 3 ] || fail "the line turned red after $failed failed cycles, not three"
+  in_sight "sync details" || fail "the red line drew no Details…"
+  ../tools/window-screenshot.sh "$pid" "$out/sync-trouble.png" || fail "no window to capture"
+
+  # Details… opens sync's own page in a regular window of the profile the account syncs, never
+  # the private window in front, whose tab would read its own profile's page.
+  send window 1
+  send key n cmd shift
+  expect '^browser: private window opened [0-9]* profile [0-9]*$' "⇧⌘N didn't open a private window"
+  private=$(grep '^browser: private window opened ' "$log" | tail -1 | cut -d' ' -f5)
+  # The driver's number for it: windows count in the order they opened.
+  private_number=$(grep -c '^browser: window opened ' "$log")
+  new_window_bar
+  send menu Settings…
+  expect '^browser: settings shown ' "Settings… didn't show Settings over the private window"
+  click_in_sight "sync details"
+  expect '^browser: settings sync details$' "a click on Details… didn't take it"
+  expect '^browser: settings hidden$' "Details… didn't hide Settings for its page"
+  expect '^browser: loaded [0-9]* chrome://sync-internals/\{0,1\}$' "Details… didn't open sync's page"
+  details=$(since | sed -n 's|^browser: loaded \([0-9]*\) chrome://sync-internals/\{0,1\}$|\1|p' | tail -1)
+  expect "^browser: window [0-9]* shows $details\$" "no window showed sync's page"
+  shown_in=$(since | sed -n "s/^browser: window \([0-9]*\) shows $details\$/\1/p" | tail -1)
+  [ "$shown_in" != "$private" ] || fail "Details… opened sync's page in the private window"
+  ../tools/window-screenshot.sh "$pid" "$out/sync-details.png" || fail "no window to capture"
+  send window "$private_number"
+  send key w cmd shift
+  expect "^browser: window closed $private\$" "⇧⌘W didn't close the private window"
+  # The driver still drives the closed window, and does nothing there.
+  send window 1
+
+  # Shown again, it's still red, and once the server answers, the line turns green while it shows.
+  send menu Settings…
+  expect '^browser: settings shown ' "Settings… didn't show Settings again"
+  expect '^browser: sync activity synced Some(Offline)$' "Settings, shown again, didn't read the trouble"
+  : > "$sync_faults"
+  # Sync tries again as it backs off, which may be most of a minute after the cycles that failed.
+  recovered=
+  for _ in $(seq 900); do
+    since | grep -q '^browser: sync activity synced None$' && recovered=1 && break
+    kill -0 "$pid" 2>/dev/null || gone
+    sleep 0.1
+  done
+  [ -n "$recovered" ] || fail "the server answered again and the line didn't turn green in 90 s"
+  ../tools/window-screenshot.sh "$pid" "$out/sync-recovered.png" || fail "no window to capture"
+fi
+
 # The words leave the clipboard 90 s after the copy.
 while [ $(($(date +%s) - copied_at)) -le 100 ]; do
   clipboard
@@ -394,8 +498,8 @@ urls=$(grep -o '"url":"[a-z]*://[^"]*"' "$netlog" | cut -d'"' -f4 | sort -u)
 google=$(printf '%s\n' "$urls" | google_asked)
 [ -z "$google" ] ||
   fail "the browser asked Google's servers: $(printf "%s\n" "$google" | tr "\n" " ")"
-kill "$helper" "$ilo_server" 2>/dev/null || true
-helper= ilo_server=
+kill "$helper" "$ilo_server" ${collector:+"$collector"} 2>/dev/null || true
+helper= ilo_server= collector=
 rm -rf "$scratch"
 scratch=
 echo "ok: signed in to a local ilo-server as $email, where Chrome's passkey dialog showed" \

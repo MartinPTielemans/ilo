@@ -86,6 +86,10 @@ impl Host for Recorder {
         self.activity.borrow().clone()
     }
 
+    fn open_sync_details(&self, _: &mut App) {
+        self.record("open sync details");
+    }
+
     fn delete_account(&self) {
         self.record("delete account");
     }
@@ -803,9 +807,15 @@ impl Shown<'_> {
 
     /// The core's answer to how sync is keeping up, as the view reads it when Settings shows.
     fn shows_with(&mut self, synced: &str, trouble: Option<Trouble>) {
+        self.shows_since(synced, trouble, "");
+    }
+
+    /// The same, with a lasting trouble's since when.
+    fn shows_since(&mut self, synced: &str, trouble: Option<Trouble>, since: &str) {
         *self.host.activity.borrow_mut() = Activity {
             synced: synced.to_string().into(),
             trouble,
+            since: since.to_string().into(),
         };
         self.account
             .update(self.cx, |account, cx| account.read_activity(cx));
@@ -826,14 +836,6 @@ fn the_status_line_says_when_it_synced_and_what_stops_it(cx: &mut TestAppContext
     assert_eq!(
         tab.status(),
         (None, format!("Synced at 15:04, through {app}"))
-    );
-    tab.shows_with("at 15:04", Some(Trouble::Unreachable));
-    assert_eq!(
-        tab.status(),
-        (
-            Some(format!("Can't reach {app}'s server.")),
-            format!("Last synced at 15:04; {app} keeps trying.")
-        )
     );
     tab.shows_with("", Some(Trouble::Throttled));
     assert_eq!(
@@ -858,18 +860,8 @@ fn the_status_line_says_when_it_synced_and_what_stops_it(cx: &mut TestAppContext
         )
     );
 
-    // A server of the user's own is named by its host.
-    tab.set(State {
-        default_server: false,
-        ..state(Status::On)
-    });
-    tab.shows_with("yesterday at 09:30", Some(Trouble::Unreachable));
-    assert_eq!(
-        tab.status().0.as_deref(),
-        Some("Can't reach sync.example.org.")
-    );
-
-    // Nothing reads it again until Settings shows again, however long it stays open.
+    // Nothing reads it again on its own, however long Settings stays open: only as it shows, or
+    // as the core says a cycle changed it.
     tab.host.take();
     tab.cx.run_until_parked();
     assert!(tab.host.take().is_empty());
@@ -1037,4 +1029,193 @@ fn every_control_in_sync_has_a_name(cx: &mut TestAppContext) {
     for name in ["Sign Out", "Remove Device b", "Show Recovery Words…"] {
         assert!(names.contains(&name.into()), "{name} in {names:?}");
     }
+}
+
+/// A lasting trouble says what kind and since when, in red, then what happens next (#3435). The
+/// kind of data is named, never an item, and a server of the user's is named by its whole host.
+#[gpui::test]
+fn a_lasting_trouble_says_what_and_since_when(cx: &mut TestAppContext) {
+    let mut tab = shown(state(Status::On), cx);
+    let app = env!("APP_NAME");
+    let since = "since 14:52";
+    tab.shows_since("at 14:50", Some(Trouble::Offline), since);
+    assert_eq!(
+        tab.status(),
+        (
+            Some("No connection since 14:52.".into()),
+            format!("{app} syncs once it's back.")
+        )
+    );
+    tab.shows_since("at 14:50", Some(Trouble::ServerError), since);
+    assert_eq!(
+        tab.status(),
+        (
+            Some(format!("{app}'s server has had errors since 14:52.")),
+            format!("{app} keeps trying.")
+        )
+    );
+    let refused = |kind, count| Some(Trouble::Refused { kind, count });
+    tab.shows_since("at 15:04", refused(Kind::Spaces, 3), since);
+    assert_eq!(
+        tab.status(),
+        (
+            Some("3 changes to Spaces refused since 14:52.".into()),
+            "The rest syncs.".into()
+        )
+    );
+    tab.shows_since("at 15:04", refused(Kind::Bookmarks, 1), since);
+    assert_eq!(
+        tab.status().0.as_deref(),
+        Some("1 change to bookmarks refused since 14:52.")
+    );
+    tab.shows_since("at 15:04", refused(Kind::OpenTabs, 2), "for 3 days");
+    assert_eq!(
+        tab.status().0.as_deref(),
+        Some("2 changes to open tabs refused for 3 days.")
+    );
+    // Of more than one kind, or one Settings doesn't name, it names none.
+    tab.shows_since("at 15:04", refused(Kind::Other, 4), since);
+    assert_eq!(
+        tab.status().0.as_deref(),
+        Some("4 changes refused since 14:52.")
+    );
+    tab.shows_since(
+        "at 14:50",
+        Some(Trouble::SignIn),
+        "since yesterday at 14:52",
+    );
+    assert_eq!(
+        tab.status(),
+        (
+            Some("Sign in again to keep syncing.".into()),
+            "Not synced since yesterday at 14:52.".into()
+        )
+    );
+
+    let host = "sync.a-long-name-for-a-server-of-the-users-own.example.org";
+    tab.set(State {
+        default_server: false,
+        server: format!("https://{host}/").into(),
+        ..state(Status::On)
+    });
+    tab.shows_since("at 14:50", Some(Trouble::ServerError), since);
+    assert_eq!(
+        tab.status().0,
+        Some(format!("{host} has had errors since 14:52."))
+    );
+}
+
+/// The core says a sync cycle changed how sync keeps up with the account as it was, and the line
+/// follows: red once the trouble has lasted, as synced again once a cycle goes through.
+#[gpui::test]
+fn the_line_follows_the_cycles_the_core_tells_of(cx: &mut TestAppContext) {
+    let mut tab = shown(state(Status::On), cx);
+    tab.shows_with("at 14:50", None);
+    tab.host.take();
+
+    *tab.host.activity.borrow_mut() = Activity {
+        synced: "at 14:50".into(),
+        trouble: Some(Trouble::Offline),
+        since: "since 14:52".into(),
+    };
+    tab.set(state(Status::On));
+    assert_eq!(tab.host.take(), ["activity"]);
+    assert_eq!(
+        tab.status().0.as_deref(),
+        Some("No connection since 14:52.")
+    );
+    assert!(tab.drawn("details"));
+
+    *tab.host.activity.borrow_mut() = Activity {
+        synced: "at 15:10".into(),
+        trouble: None,
+        since: "".into(),
+    };
+    tab.set(state(Status::On));
+    assert_eq!(tab.host.take(), ["activity"]);
+    assert_eq!(tab.status().0, None);
+    assert!(!tab.drawn("details"));
+}
+
+/// Details… ends the lines of the troubles the user can look into, and opens sync's own page of
+/// what it's doing: by a click, and from the keyboard, where ⇥ reaches it before Sign Out and an
+/// assistive app says what it opens.
+#[gpui::test]
+fn details_opens_syncs_own_page(cx: &mut TestAppContext) {
+    let mut tab = shown(state(Status::On), cx);
+    let since = "since 14:52";
+    for trouble in [
+        Trouble::Offline,
+        Trouble::ServerError,
+        Trouble::Refused {
+            kind: Kind::Spaces,
+            count: 3,
+        },
+        Trouble::SignIn,
+        Trouble::Stopped,
+    ] {
+        tab.shows_since("at 14:50", Some(trouble), since);
+        assert!(tab.drawn("details"), "no Details… for {trouble:?}");
+    }
+    // Being told to wait ends by itself, and an update is the user's to make, not to look into.
+    for trouble in [None, Some(Trouble::Throttled), Some(Trouble::Update)] {
+        tab.shows_since("at 14:50", trouble, "");
+        assert!(!tab.drawn("details"), "Details… for {trouble:?}");
+    }
+
+    tab.shows_since("at 14:50", Some(Trouble::ServerError), since);
+    tab.host.take();
+    tab.click("details");
+    assert_eq!(tab.host.take(), ["open sync details"]);
+
+    let stops = crate::settings_rows::spoken::stops(tab.cx);
+    let names: Vec<&str> = stops.iter().map(|(_, name, _)| name.as_str()).collect();
+    let details = names
+        .iter()
+        .position(|name| *name == "Sync details, in a new tab");
+    let sign_out = names.iter().position(|name| *name == "Sign Out");
+    assert!(
+        details.is_some() && details < sign_out,
+        "⇥ reaches Details… before Sign Out: {names:?}"
+    );
+    // ⇥ round to it, and Return opens it.
+    tab.cx.update(|window, cx| window.focus_next(cx));
+    for _ in 0..names.len() {
+        let focused = tab.cx.a11y_tree().and_then(|tree| {
+            (tree.nodes.iter())
+                .find(|(id, _)| *id == tree.focus)
+                .and_then(|(_, node)| node.label().map(str::to_string))
+        });
+        if focused.as_deref() == Some("Sync details, in a new tab") {
+            break;
+        }
+        tab.cx.update(|window, cx| window.focus_next(cx));
+        tab.cx.run_until_parked();
+    }
+    tab.host.take();
+    crate::settings_rows::spoken::press("enter", tab.cx);
+    assert_eq!(tab.host.take(), ["open sync details"]);
+}
+
+/// Since when a trouble has lasted, as its line puts it.
+#[test]
+fn since_reads_as_the_line_puts_it() {
+    let hour = 3_600_000.;
+    let today = 1_700_000_000_000.;
+    let days = [
+        today,
+        today - 24. * hour,
+        today - 48. * hour,
+        today - 72. * hour,
+    ];
+    assert_eq!(
+        since_when(today + 14. * hour + 52. * 60_000., days),
+        "since 14:52"
+    );
+    assert_eq!(
+        since_when(today - 14.5 * hour, days),
+        "since yesterday at 09:30"
+    );
+    assert_eq!(since_when(today - 80. * hour, days), "for 4 days");
+    assert_eq!(since_when(0., days), "");
 }

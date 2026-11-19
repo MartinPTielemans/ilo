@@ -435,7 +435,9 @@ fn command_glyph(command: shell::Command) -> &'static str {
         Command::ViewHistory => "icons/rotate-ccw-clock.svg",
         Command::ClearBrowsingData => "icons/brush-cleaning.svg",
         Command::NewNote | Command::NewNoteSplit => "icons/file.svg",
-        Command::NewBoard | Command::ViewBoards => "icons/presentation.svg",
+        Command::NewBoard | Command::DuplicateBoard | Command::ViewBoards => {
+            "icons/presentation.svg"
+        }
         Command::Settings | Command::SiteSearchSettings => "icons/settings.svg",
         Command::KeyboardShortcuts => "icons/keyboard.svg",
         Command::About => "icons/info.svg",
@@ -746,6 +748,9 @@ impl CommandBarWindow {
     }
 }
 
+/// What the bar's window is called to an assistive app.
+pub const WINDOW_NAME: &str = "Command Bar";
+
 /// Opens the command bar's window, hidden, for `host` to show over the browser window. Opening it
 /// ahead of time keeps window setup off the path from the shortcut to the bar on screen.
 pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<CommandBar>> {
@@ -766,7 +771,10 @@ pub fn open_at(
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         // The preview's has none, so it hasn't the window buttons the host's takes off.
         titlebar: (!show).then_some(TitlebarOptions {
-            title: None,
+            // A screen reader says the window as the keyboard comes into it and leaves: "Command
+            // Bar", as the menu names it, rather than a frame with no name (#3497). The Mac hides
+            // a clear title bar's title, and the other hosts draw none.
+            title: Some(WINDOW_NAME.into()),
             appears_transparent: true,
             traffic_light_position: None,
         }),

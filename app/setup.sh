@@ -33,9 +33,9 @@ find .deps/zed \( -name AGENTS.md -o -name CLAUDE.md -o -name GEMINI.md -o -name
   -o -name .agents -o -name .claude -o -name .codex -o -name .cursor -o -name .factory \
   -o -name .gemini -o -name .junie \) -prune -exec rm -rf {} +
 # One patch a crate: gpui_macos's, gpui_windows's and gpui_linux's embed GPUI in Chromium's window
-# and loop, gpui's scales what's painted, lets the tests stand in for an assistive app, adds the
-# Edit menu's Paste and Match Style, caps a window's frame rate only while the app isn't the
-# active one and leaves the site's demo only the image decoders and regex tables it uses,
+# and loop, gpui's scales what's painted, lets the tests stand in for an assistive app, names a
+# window's root node for one apart from the window's title, adds the Edit menu's Paste and Match
+# Style, caps a window's frame rate only while the app isn't the active one and leaves the site's demo only the image decoders and regex tables it uses,
 # gpui_wgpu's draws with Vulkan alone on Linux, builds each pipeline once for all windows, the
 # first time one draws with it, resizes a canvas under WebGL without waiting on the GPU, which
 # WebGL can't, and lets a browser's WebGPU canvas be see-through, and gpui_web's draws the site's

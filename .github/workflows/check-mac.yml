@@ -49,6 +49,12 @@ on:
           The trace categories for tabs and perf's traced switches (app/check/lib.sh), such as
           #2377's, latency among them; empty for latency alone in tabs and no traced switches
         default: ''
+      lists_from:
+        description: >-
+          A Check run's id, on any OS, whose adblock-parity lists this run's adblock-parity and
+          adblock-native block with, so runs on the three OSes share one snapshot (#2111); empty
+          to download them
+        default: ''
 
 # Main's running check finishes, with only the newest dispatch or night waiting behind it; a branch's
 # dispatch replaces the one before it.
@@ -84,15 +90,17 @@ jobs:
     needs: gate
     if: needs.gate.outputs.check == 'true'
     # Named apart when it does other runs than the default ones, so it's no verdict on the commit.
-    name: ${{ inputs.runs != '' && 'check (runs asked for)' || 'check' }}${{ matrix.shard != 0 && format(' {0}/3', matrix.shard) || '' }}
+    name: ${{ inputs.runs != '' && 'check (runs asked for)' || 'check' }}${{ matrix.shard != 0 && format(' {0}/{1}', matrix.shard, inputs.runs == 'all' && 3 || 2) || '' }}
     # runs=all takes longer than the job's 120 minutes, so it's dealt across three jobs, each with
-    # its share of the runs (.github/scripts/runs.sh, #2271). Any other list is one job's.
+    # its share of the runs (.github/scripts/runs.sh, #2271). Since 11-18 the default runs take longer
+    # too, so they're dealt across two, as Windows' are (#3444). Any other list is one job's.
     strategy:
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON(inputs.runs == 'all' && '[1, 2, 3]' || '[0]') }}
+        shard: ${{ fromJSON(inputs.runs == 'all' && '[1, 2, 3]' || inputs.runs == '' && '[1, 2]' || '[0]') }}
     runs-on: macos-26
-    # The default runs take about 73 min here, after about 6 of setting up.
+    # The default runs took about 105 min here on 11-18, after about 16 of setting up, and ran out
+    # the job's time unsplit (44322076346).
     timeout-minutes: 120
     permissions:
       contents: read
@@ -107,6 +115,8 @@ jobs:
       # The runs a release still needs from the check VM, as the header says why: one leaves the
       # list once it passes on the runner (#2248).
       VM_RUNS: ''
+      # How many jobs the runs are dealt across, for runs.sh shard.
+      SHARDS: ${{ inputs.runs == 'all' && 3 || 2 }}
     steps:
       # With the history, where fetch.sh looks for the engine's commit.
       - uses: actions/checkout@v4
@@ -149,7 +159,9 @@ jobs:
           case $RUNS in
           '')
             runs=
-            for run in $(sh check.sh --runs default); do
+            default=$(sh check.sh --runs default)
+            for run in $(../.github/scripts/runs.sh shard "$SHARD" "$SHARDS"); do
+              case " $(echo $default) " in *" $run "*) ;; *) continue ;; esac
               case " $VM_RUNS " in *" $run "*) ;; *) runs="$runs $run" ;; esac
             done
             ;;
@@ -376,6 +388,16 @@ jobs:
           fi
           [ "$refused" = 0 ] || echo "::warning::ScreenCaptureKit's listing failed, but not with -3801: $said"
 
+      # The lists an earlier run's adblock-parity downloaded, on any OS, for this run's to block
+      # with, so the OSes' runs compare the engines on one snapshot (#2111).
+      - if: ${{ steps.engine.outputs.found == 'true' && inputs.lists_from != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: adblock-parity-lists
+          path: app/build/given-lists
+          run-id: ${{ inputs.lists_from }}
+          github-token: ${{ github.token }}
+
       # Each run alone, so one failing doesn't hide the rest, and each keeps its own build/check.
       # Each of the job's share of check.sh's runs gets a line in its results, done or skipped, which
       # the complete job reads.
@@ -386,10 +408,11 @@ jobs:
           SHARD: ${{ matrix.shard }}
           RESULTS: ${{ runner.temp }}/results/mac-${{ matrix.shard }}.tsv
           CHECK_TRACE_CATEGORIES: ${{ inputs.trace }}
+          ADBLOCK_PARITY_LISTS: ${{ inputs.lists_from != '' && 'build/given-lists' || '' }}
         run: |
           out=$RUNNER_TEMP/check
           mkdir -p "$out" "$(dirname "$RESULTS")"
-          all=$(../.github/scripts/runs.sh shard "$SHARD")
+          all=$(../.github/scripts/runs.sh shard "$SHARD" "$SHARDS")
           runs=$RUNS
           {
             echo "| Run | Result |"
@@ -477,6 +500,15 @@ jobs:
           { echo; sh check/quarantine.sh list mac; } | tee -a "$GITHUB_STEP_SUMMARY"
           exit "$failed"
 
+      # The lists this run's adblock-parity blocked with, for a run on another OS to take with
+      # lists_from (#2111). A few MB, apart from the check's artifact, which can be a GB.
+      - if: ${{ !cancelled() && steps.engine.outputs.found == 'true' && hashFiles('app/build/adblock-parity-lists/snapshot.txt') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: adblock-parity-lists
+          path: app/build/adblock-parity-lists
+          overwrite: true
+
       - if: ${{ always() && steps.engine.outputs.found == 'true' }}
         uses: actions/upload-artifact@v4
         with:
@@ -503,9 +535,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # With app/check, whose runs check.sh lists: without them it listed none, so this job said
+          # every run had a result after a night whose time ran out (44322076346).
           sparse-checkout: |
             .github/scripts
             app/check.sh
+            app/check
           sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@v4
         continue-on-error: true
@@ -528,8 +563,10 @@ jobs:
 
   # The default runs' verdict on main, the night's or a train's, keeps the workflow's issue: a
   # dispatched run reports too, as its pass is the only one the night won't repeat on that commit.
+  # One verdict for all its jobs: it fails when one failed, or ran out of its time, which cancels
+  # it, as complete then runs and the run itself wasn't cancelled, or when a run has no result.
   report:
-    needs: [gate, check]
+    needs: [gate, check, complete]
     if: ${{ always() && needs.gate.outputs.check == 'true' && github.ref == 'refs/heads/main' && github.repository == 'MartinPTielemans/ilo' && inputs.runs == '' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -547,6 +584,6 @@ jobs:
             app/check
       - env:
           GH_TOKEN: ${{ github.token }}
-          RESULT: ${{ needs.check.result }}
+          RESULT: ${{ (needs.check.result == 'failure' || needs.complete.result == 'failure' || (needs.check.result == 'cancelled' && needs.complete.result == 'success')) && 'failure' || needs.check.result }}
           FOUND: ${{ needs.check.outputs.found }}
         run: .github/scripts/main-check.sh report "$RESULT" "$FOUND"

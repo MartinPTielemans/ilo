@@ -108,7 +108,17 @@ pub(crate) fn launch_asks_private_window() -> bool {
 /// shows, as a profile's own page, such as Chrome's password manager, shows that profile's data.
 /// With none, in the Space shown, unless it's an agent's, which none of the user's tabs go in.
 pub(crate) fn open_in_profile(profile: bc::bc_id, url: &str) {
-    let window = front().0;
+    open_in_window(front().0, profile, url);
+}
+
+/// As `open_in_profile`, in the front window of the user's that isn't private, whose tabs are a
+/// profile's own: a private window's would read its own profile's page.
+pub(crate) fn open_in_users_window(profile: bc::bc_id, url: &str) {
+    let regular = WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.regular()).map(|w| w.id));
+    open_in_window(regular.unwrap_or(0), profile, url);
+}
+
+fn open_in_window(window: bc::bc_id, profile: bc::bc_id, url: &str) {
     if window == 0 {
         return;
     }

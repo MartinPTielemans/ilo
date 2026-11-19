@@ -2685,6 +2685,7 @@ fn copy_puts_copy_url_above_the_search_row(cx: &mut TestAppContext) {
         "Copy Build Info".into(),
         "New Window ⌘N".into(),
         "Duplicate Current Tab".into(),
+        "Duplicate Board".into(),
         "https://copy.com/".into(),
     ];
     assert_eq!(bar.listed(), expected);
@@ -2978,6 +2979,7 @@ fn a_hidden_word_finds_its_command(cx: &mut TestAppContext) {
     let expected = [
         "Duplicate Current Tab".to_string(),
         search("duplicate"),
+        "Duplicate Board".into(),
         "New Window ⌘N".into(),
     ];
     assert_eq!(bar.listed(), expected);
@@ -3093,6 +3095,24 @@ fn the_list_scrolls_to_keep_the_selection_in_view(cx: &mut TestAppContext) {
     bar.cx.run_until_parked();
     assert!(in_view(&mut bar, 8));
     assert!(!in_view(&mut bar, 0));
+}
+
+/// A screen reader coming into the bar's window hears it called the Command Bar, as the menu
+/// names it, rather than a frame with no name (#3497).
+#[gpui::test]
+fn the_bars_window_is_called_the_command_bar(cx: &mut TestAppContext) {
+    let mut bar = Bar::new(cx);
+    bar.cx.simulate_a11y_activation();
+    let tree = bar.cx.a11y_tree().expect("GPUI built a tree");
+    let root = tree
+        .tree
+        .as_ref()
+        .expect("the first tree has its root")
+        .root;
+    let window = (tree.nodes.iter())
+        .find(|(id, _)| *id == root)
+        .map(|(_, node)| (node.role(), node.label()));
+    assert_eq!(window, Some((Role::Window, Some("Command Bar"))));
 }
 
 /// A screen reader finds the keyboard in a text field called what its placeholder says, and the

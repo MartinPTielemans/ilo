@@ -64,6 +64,8 @@ constexpr CGFloat kButtonInset = 13;
 @interface BrowserCoreNSWindow : NativeWidgetMacNSWindow
 // Ends a way out of full screen AppKit took the window and didn't finish, as it says it has.
 - (void)finishFullScreenExit;
+// Ends a way into full screen AppKit gave up, leaving the window windowed, as an exit's.
+- (void)finishFullScreenEnter;
 @end
 
 @implementation BrowserCoreNSWindow {
@@ -72,6 +74,8 @@ constexpr CGFloat kButtonInset = 13;
   BOOL _leaving;
   NSNumber* _leavingFrom;
   BOOL _leavingMoved;
+  // AppKit said it's taking the window into full screen and hasn't said it's done.
+  BOOL _entering;
 }
 
 - (instancetype)initWithContentRect:(NSRect)contentRect
@@ -83,6 +87,14 @@ constexpr CGFloat kButtonInset = 13;
                                  backing:bufferingType
                                    defer:deferCreation])) {
     NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
+    [center addObserver:self
+               selector:@selector(willEnterFullScreen:)
+                   name:NSWindowWillEnterFullScreenNotification
+                 object:self];
+    [center addObserver:self
+               selector:@selector(didEnterFullScreen:)
+                   name:NSWindowDidEnterFullScreenNotification
+                 object:self];
     [center addObserver:self
                selector:@selector(willExitFullScreen:)
                    name:NSWindowWillExitFullScreenNotification
@@ -99,6 +111,14 @@ constexpr CGFloat kButtonInset = 13;
   return self;
 }
 
+- (void)willEnterFullScreen:(NSNotification*)notification {
+  _entering = YES;
+}
+
+- (void)didEnterFullScreen:(NSNotification*)notification {
+  _entering = NO;
+}
+
 - (void)willExitFullScreen:(NSNotification*)notification {
   _leaving = YES;
   _leavingFrom = self.screen.deviceDescription[@"NSScreenNumber"];
@@ -107,6 +127,7 @@ constexpr CGFloat kButtonInset = 13;
 
 - (void)didExitFullScreen:(NSNotification*)notification {
   _leaving = NO;
+  _entering = NO;
 }
 
 - (void)didChangeScreen:(NSNotification*)notification {
@@ -139,6 +160,26 @@ constexpr CGFloat kButtonInset = 13;
     [center postNotificationName:NSWindowWillExitFullScreenNotification object:self];
   }
   [center postNotificationName:NSWindowDidExitFullScreenNotification object:self];
+}
+
+- (void)finishFullScreenEnter {
+  // AppKit tells only the window's delegate of a way into full screen it gave up, as when a press
+  // comes as a way out ends, and the window ends windowed with AppKit's will and no did. Chrome's
+  // occlusion checker passes over a window from AppKit's will until its did, so it never looks at
+  // this one again: a page shown in it later stays occluded, its keys going nowhere (#2248). The
+  // window gets the did AppKit sometimes sends after a failure, its exit's, which Chrome's widget
+  // takes as it is already windowed, so the checker, the widget and the app all hear one end.
+  if (!_entering || (self.styleMask & NSWindowStyleMaskFullScreen)) {
+    return;
+  }
+  remote_cocoa::NativeWidgetNSWindowBridge* bridge = self.bridge;
+  if (bridge && (bridge->target_fullscreen_state() || bridge->in_fullscreen_transition())) {
+    return;
+  }
+  _entering = NO;
+  fprintf(stderr, "browser: window full screen enter ended windowed, finished for AppKit\n");
+  [NSNotificationCenter.defaultCenter postNotificationName:NSWindowDidExitFullScreenNotification
+                                                    object:self];
 }
 
 + (Class)frameViewClassForStyleMask:(NSWindowStyleMask)windowStyle {
@@ -175,6 +216,19 @@ class NativeWidget : public views::NativeWidgetMac {
     if (!IsFullscreen()) {
       leaving_full_screen_.Run();
     }
+  }
+
+  void OnWindowFullscreenTransitionComplete() override {
+    // A way in AppKit gave up ends here, windowed, as Chrome's widget handles the failure. Its
+    // missing did comes on the next turn, out of that handling.
+    NSWindow* window = GetNativeWindow().GetNativeNSWindow();
+    if (IsFullscreen() || ![window isKindOfClass:[BrowserCoreNSWindow class]]) {
+      return;
+    }
+    __weak BrowserCoreNSWindow* weak_window = (BrowserCoreNSWindow*)window;
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [weak_window finishFullScreenEnter];
+    });
   }
 
  protected:
