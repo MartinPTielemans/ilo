@@ -3441,11 +3441,14 @@ void Window::OverlayTakesKeyboard(bool takes) {
     GiveKeyboardToPage();
     return;
   }
+#if BUILDFLAG(IS_LINUX)
   // Otherwise the page or UI that had it has it back, unless what it was went under the overlay,
-  // as a page view a commit replaced: then the window holds it for the page shown. Under Wayland
-  // the window stays active under the overlay, so this stands in for the activation that gives it
-  // to that page on X11 (OnWidgetActivationChanged).
-  FocusPage();
+  // as a page view a commit replaced: then the window holds it for the page shown. Only Wayland
+  // leaves the window active under the overlay, so this stands in for the activation that gives it
+  // to that page on X11 (OnWidgetActivationChanged). Never to an agent's tab, which never takes the
+  // user's keyboard (#3164).
+  focus_leaving_rule::Enter(IsAgentTab(shown_.get()), [&] { FocusPage(); });
+#endif
 }
 
 void Window::FocusPageSoon() {
