@@ -917,7 +917,7 @@ EOF
   # once right after each show, by the driver or, with probe_real=1, by the runner's real pointer
   # moved in from outside it (check/pointer.mm, CI only). Each capture's time is logged.
   [ "$hovered" -lt 170 ] || echo "media: probe move 0 red"
-  probe_real=0 probe_shows=5
+  probe_real=1 probe_shows=10
   if [ "$probe_real" = 1 ]; then
     clang++ -fobjc-arc -framework Cocoa -o "$out/pointer" check/pointer.mm 2> "$out/pointer.log" ||
       fail "check/pointer.mm didn't build: $(cat "$out/pointer.log")"
