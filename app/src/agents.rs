@@ -141,7 +141,8 @@ pub struct Question {
     pub back: bool,
     /// The requests of a call that may change something (request), each with the agent's own
     /// sentence for it, all of them. They ask every time, so their card has no Always or Never.
-    pub changes: Vec<request::Request>,
+    /// Shared, as each window's card and the whole request read the same bodies.
+    pub changes: std::rc::Rc<[request::Request]>,
     /// The site they go to, the tab's, which the card's facts name.
     pub site: SharedString,
 }

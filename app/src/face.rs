@@ -13,6 +13,24 @@ pub const UI: &str = ".SystemUIFont";
 #[cfg(not(target_os = "macos"))]
 pub const UI: &str = "Inter";
 
+/// The monospaced faces, in the order one is taken: the first of them the computer has.
+pub const MONO: [&str; 7] = [
+    "SF Mono",
+    "Menlo",
+    "Cascadia Mono",
+    "Consolas",
+    "Noto Sans Mono",
+    "DejaVu Sans Mono",
+    "Liberation Mono",
+];
+
+/// The first of MONO among the computer's `fonts`, or the UI's face if it has none.
+pub fn mono(fonts: &[String]) -> &'static str {
+    (MONO.iter())
+        .find(|name| fonts.iter().any(|font| font == *name))
+        .map_or(UI, |name| name)
+}
+
 #[cfg(not(any(target_os = "macos", target_family = "wasm")))]
 const INTER: [&[u8]; 4] = [
     include_bytes!("../assets/fonts/Inter-Regular.ttf"),

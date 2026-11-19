@@ -2491,7 +2491,7 @@ fn needs_you(question: &Question) -> SharedString {
         Some(_) => format!("{NEEDS_YOU} · {}", question.why.trim_end_matches('.')).into(),
         // A request's changes: what the browser knows from their methods, never the agent's
         // words, which the card above quotes as its.
-        None => match question.changes.as_slice() {
+        None => match &question.changes[..] {
             [] => format!("{NEEDS_OK} · {}", question.what).into(),
             [one] => format!("{NEEDS_OK} · {}", one.kind().noun()).into(),
             many => format!("{NEEDS_OK} · {} changes", many.len()).into(),
@@ -2981,7 +2981,6 @@ mod foot_tests {
     fn change(method: &str) -> Request {
         Request {
             method: method.into(),
-            does: method.into(),
             url: "https://team.example.com/api/items/7".into(),
             path: "/api/items/7".into(),
             headers: Vec::new(),
@@ -3008,14 +3007,14 @@ mod foot_tests {
         assert_eq!(foot_words(&status, true), status);
 
         let one = Question {
-            changes: vec![change("DELETE")],
+            changes: vec![change("DELETE")].into(),
             ..Question::default()
         };
         assert_eq!(needs_you(&one).as_ref(), "Needs your OK · a delete");
         assert_eq!(foot_words(&needs_you(&one), true), needs_you(&one));
         assert_eq!(foot_words(&needs_you(&one), false).as_ref(), NEEDS_OK);
         let many = Question {
-            changes: vec![change("PATCH"), change("DELETE")],
+            changes: vec![change("PATCH"), change("DELETE")].into(),
             ..Question::default()
         };
         assert_eq!(foot_words(&needs_you(&many), false).as_ref(), NEEDS_OK);

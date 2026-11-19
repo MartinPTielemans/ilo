@@ -4188,13 +4188,13 @@ impl Settings {
                     entry.said.clone(),
                 )
             });
-        // check.sh reads this line: where it went, and what it sent, secrets hidden.
         if let (true, Some((.., words))) = (opened, &found)
             && !words.is_empty()
         {
             // check.sh reads this line: the agent's words, first, as plain text.
             log!("browser: settings request {id} said: {words}");
         }
+        // check.sh reads this line: where it went, and what it sent, secrets hidden.
         match (opened, found.map(|(url, ok, sent, _)| (url, ok, sent))) {
             (true, Some((url, true, sent))) => {
                 log!("browser: settings request {id} opened to {url}, sent: {sent}")

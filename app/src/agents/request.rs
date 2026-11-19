@@ -33,13 +33,10 @@ const HIDDEN: &str = "(hidden)";
 const EMPTY: &str = "\"\"";
 
 /// A request, as checked against the page and ready for the core (bc_agent_request).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Request {
     /// As sent, in capitals.
     pub method: String,
-    /// What it does, as the question and the log say it: the method, or the one an override
-    /// header names, which a server takes in its place.
-    pub does: String,
     /// The whole address, on the page's origin.
     pub url: String,
     /// Its path and query.
@@ -89,17 +86,24 @@ impl Does {
 }
 
 impl Request {
-    /// What it does, the stronger of the method sent and every override header's, as a server may
-    /// take either: it deletes if any says DELETE, sends only when the method is POST and every
-    /// override says POST too, and changes something for anything else, a method the browser
-    /// doesn't know included.
+    /// The methods a server may take it as, which the card, its head and whether it asks all read:
+    /// the one sent, then each piece of each override header's value, split at its commas, as the
+    /// browser splits one it refuses (`forbidden_header`), trimmed and in capitals.
+    fn says(&self) -> Vec<String> {
+        let overrides = (self.headers.iter())
+            .filter(|(name, _)| OVERRIDES.iter().any(|each| name.eq_ignore_ascii_case(each)))
+            .flat_map(|(_, value)| value.split(','))
+            .map(|piece| piece.trim().to_ascii_uppercase());
+        std::iter::once(self.method.clone())
+            .chain(overrides)
+            .collect()
+    }
+
+    /// What it does, the strongest of what it says: it deletes if any says DELETE, sends only
+    /// when all say POST, and changes something for anything else, a method the browser doesn't
+    /// know or an empty override included.
     pub fn kind(&self) -> Does {
-        let says = std::iter::once(self.method.clone()).chain(
-            (self.headers.iter())
-                .filter(|(name, _)| OVERRIDES.iter().any(|each| name.eq_ignore_ascii_case(each)))
-                .map(|(_, value)| value.trim().to_ascii_uppercase()),
-        );
-        let says: Vec<String> = says.collect();
+        let says = self.says();
         match () {
             _ if says.iter().any(|each| each == "DELETE") => Does::Deletes,
             _ if says.iter().all(|each| each == "POST") => Does::Sends,
@@ -107,14 +111,10 @@ impl Request {
         }
     }
 
-    /// Whether it may change anything: anything but a GET or HEAD whose override headers, if it
-    /// sets any, all say GET or HEAD too, as a server may take the method or an override.
+    /// Whether it may change anything: anything but a GET or HEAD whose overrides, if it sets any,
+    /// all say GET or HEAD too.
     pub fn changes(&self) -> bool {
-        let read = |method: &str| matches!(method, "GET" | "HEAD");
-        !read(&self.method)
-            || (self.headers.iter())
-                .filter(|(name, _)| OVERRIDES.iter().any(|each| name.eq_ignore_ascii_case(each)))
-                .any(|(_, value)| !read(&value.trim().to_ascii_uppercase()))
+        !(self.says().iter()).all(|each| matches!(each.as_str(), "GET" | "HEAD"))
     }
 
     /// What it is, for the log and the answer: "POST /api/items".
@@ -122,11 +122,18 @@ impl Request {
         format!("{} {}", self.methods(), clip(&self.path, 60))
     }
 
-    /// The method sent, and the one an override names where it differs: "POST as GET".
-    fn methods(&self) -> String {
-        match self.does == self.method {
+    /// The method sent, then every other an override names, once each: "POST as GET, DELETE". A
+    /// piece that isn't a method's name isn't named, though `kind` and `changes` count it.
+    pub fn methods(&self) -> String {
+        let mut named: Vec<String> = Vec::new();
+        for each in self.says().into_iter().skip(1) {
+            if each != self.method && is_token(&each) && !named.contains(&each) {
+                named.push(each);
+            }
+        }
+        match named.is_empty() {
             true => self.method.clone(),
-            false => format!("{} as {}", self.method, self.does),
+            false => format!("{} as {}", self.method, named.join(", ")),
         }
     }
 
@@ -407,18 +414,8 @@ fn one(asked: &Value, origin: &str, number: usize) -> Result<Request, Wrong> {
     if !body.is_empty() && !has("content-type") {
         headers.push(("Content-Type".into(), kind.into()));
     }
-    let does = (OVERRIDES.iter())
-        .find_map(|name| {
-            headers
-                .iter()
-                .find(|(each, _)| each.eq_ignore_ascii_case(name))
-        })
-        .map(|(_, value)| value.to_ascii_uppercase())
-        .filter(|does| is_token(does))
-        .unwrap_or_else(|| method.clone());
     let mut request = Request {
         method,
-        does,
         url,
         path,
         headers,
@@ -456,31 +453,73 @@ fn one(asked: &Value, origin: &str, number: usize) -> Result<Request, Wrong> {
     Ok(request)
 }
 
+/// Characters drawn as nothing: direction overrides and marks, joiners, variation selectors, tags
+/// and other format characters.
+fn invisible(c: char) -> bool {
+    matches!(c,
+        '\u{AD}' | '\u{34F}' | '\u{61C}' | '\u{115F}' | '\u{1160}' | '\u{17B4}' | '\u{17B5}'
+        | '\u{180B}'..='\u{180F}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}'
+        | '\u{2060}'..='\u{206F}' | '\u{3164}' | '\u{FE00}'..='\u{FE0F}' | '\u{FEFF}'
+        | '\u{FFA0}' | '\u{FFF0}'..='\u{FFFB}' | '\u{1BCA0}'..='\u{1BCA3}'
+        | '\u{1D173}'..='\u{1D17A}' | '\u{E0000}'..='\u{E0FFF}')
+}
+
+/// Glyphs drawn blank that aren't spaces, such as the Braille blank.
+fn blank(c: char) -> bool {
+    matches!(c, '\u{2800}' | '\u{1D159}' | '\u{16FE4}')
+}
+
+/// What joins or styles the characters beside it, as in an emoji family or a Persian word: the
+/// joiners, and the variation selector that asks for an emoji's colour.
+fn joins(c: char) -> bool {
+    matches!(c, '\u{200C}' | '\u{200D}' | '\u{FE0F}')
+}
+
+/// A single quotation mark or apostrophe, of which a run reads as a double one.
+fn single_quote(c: char) -> bool {
+    matches!(
+        c,
+        '\'' | '\u{2018}' | '\u{2019}' | '\u{201B}' | '\u{2032}' | '\u{FF07}'
+    )
+}
+
 /// An agent's sentence as plain text in one paragraph, wherever it's shown, so it can't lay out
 /// lines that read as the browser's own under its quote, or close the quote: line breaks, tabs,
-/// other control characters and blank glyphs become a space, double quotation marks single ones,
-/// direction overrides and invisible format characters go, and runs of spaces become one.
+/// other control characters and blank glyphs become a space, double quotation marks and runs of
+/// single ones become one single mark, direction overrides and invisible format characters go,
+/// and runs of spaces become one. A joiner stays between two characters that show, and an emoji's
+/// colour selector after one, as they make what's drawn there and hide nothing.
 pub fn plain(text: &str) -> String {
-    let invisible = |c: char| {
-        matches!(c,
-            '\u{AD}' | '\u{34F}' | '\u{61C}' | '\u{115F}' | '\u{1160}' | '\u{17B4}' | '\u{17B5}'
-            | '\u{180B}'..='\u{180F}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}'
-            | '\u{2060}'..='\u{206F}' | '\u{3164}' | '\u{FE00}'..='\u{FE0F}' | '\u{FEFF}'
-            | '\u{FFA0}' | '\u{FFF0}'..='\u{FFFB}' | '\u{1BCA0}'..='\u{1BCA3}'
-            | '\u{1D173}'..='\u{1D17A}' | '\u{E0000}'..='\u{E0FFF}')
-    };
-    let spaced = (text.chars())
-        .filter(|c| !invisible(*c))
-        .map(|c| match c {
-            _ if c.is_control() || c.is_whitespace() => ' ',
-            // Glyphs drawn blank that aren't spaces, such as the Braille blank.
-            '\u{2800}' | '\u{1D159}' | '\u{16FE4}' => ' ',
+    let chars: Vec<char> = text.chars().collect();
+    let shows = |c: char| !(invisible(c) || blank(c) || c.is_control() || c.is_whitespace());
+    let mut spaced = String::with_capacity(text.len());
+    let mut last = None;
+    for (at, &c) in chars.iter().enumerate() {
+        if invisible(c) {
+            let before = last.is_some_and(shows);
+            let after = chars.get(at + 1).is_some_and(|next| shows(*next));
+            let kept = match c {
+                '\u{FE0F}' => before,
+                _ => joins(c) && before && after,
+            };
+            if kept {
+                spaced.push(c);
+                last = Some(c);
+            }
+            continue;
+        }
+        let c = match c {
+            _ if c.is_control() || c.is_whitespace() || blank(c) => ' ',
             '"'
+            | '\u{2BA}'
+            | '\u{5F4}'
             | '\u{201C}'
             | '\u{201D}'
             | '\u{201F}'
             | '\u{2033}'
             | '\u{2036}'
+            | '\u{275D}'
+            | '\u{275E}'
             | '\u{3003}'
             | '\u{301D}'..='\u{301F}'
             | '\u{FF02}' => '\'',
@@ -490,13 +529,41 @@ pub fn plain(text: &str) -> String {
             '\u{300E}' => '\u{300C}',
             '\u{300F}' => '\u{300D}',
             _ => c,
-        })
-        .collect::<String>();
+        };
+        if single_quote(c) && last.is_some_and(single_quote) {
+            continue;
+        }
+        spaced.push(c);
+        last = Some(c);
+    }
     spaced
         .split(' ')
         .filter(|word| !word.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Text an agent wrote as the whole request shows it, exactly, with what wouldn't show or would
+/// move what's around it written out instead, as `\u{202E}`: control characters, invisible and
+/// format characters, blank glyphs and every space but the plain one. A line break stays one
+/// where `lines` is set, as a body's are its own. Gives the text and where each escape is in it.
+pub fn escaped(text: &str, lines: bool) -> (String, Vec<std::ops::Range<usize>>) {
+    let mut shown = String::with_capacity(text.len());
+    let mut marks = Vec::new();
+    for c in text.chars() {
+        let written = (c.is_control() && !(lines && c == '\n'))
+            || invisible(c)
+            || blank(c)
+            || (c.is_whitespace() && c != ' ' && c != '\n');
+        if written {
+            let start = shown.len();
+            shown.push_str(&format!("\\u{{{:04X}}}", u32::from(c)));
+            marks.push(start..shown.len());
+        } else {
+            shown.push(c);
+        }
+    }
+    (shown, marks)
 }
 
 /// A sentence as the question's card shows it: whole up to WHAT_SHOWN, else cut with "…", at a
@@ -750,6 +817,72 @@ pub fn hide_secrets(text: &str, json: bool) -> (String, usize) {
         };
     }
     hide_text(text)
+}
+
+/// An agent's sentence as the log and the activity file keep it, without what reads as a secret:
+/// what `hide_secrets` hides in text, and a word that follows a secret's name, such as "API key"
+/// or "password:", past "to", "is", "=" or ":", or with a digit in it. The card shows the
+/// sentence whole; it's never kept.
+pub fn hide_said(what: &str) -> (String, usize) {
+    let (text, mut hidden) = hide_text(what);
+    let core = |word: &str| -> String {
+        (word.chars())
+            .filter(|c| c.is_alphanumeric())
+            .collect::<String>()
+    };
+    // What may come between a name and its value: "to", "is", "=", or a dash. Not "as", which
+    // more often starts the words after ("the token, as asked").
+    let filler = |word: &str| {
+        let lower = word.to_lowercase();
+        let bare = lower.trim_matches(|c: char| !c.is_alphanumeric() && c != '=' && c != ':');
+        matches!(bare, "to" | "is" | "was" | "=" | ":" | "")
+    };
+    let mut words: Vec<String> = text.split(' ').map(str::to_string).collect();
+    let mut at = 0;
+    while at < words.len() {
+        // A name and its value in one word: "token=abc123", "password:hunter2".
+        if let Some((name, value)) = words[at].split_once(['=', ':'])
+            && !value.is_empty()
+            && secret_name(name)
+            && value != HIDDEN
+        {
+            let sep = &words[at][name.len()..name.len() + 1];
+            words[at] = format!("{name}{sep}{HIDDEN}");
+            hidden += 1;
+            at += 1;
+            continue;
+        }
+        let one = secret_name(&core(&words[at]));
+        let two = at + 1 < words.len()
+            && !one
+            && secret_name(&format!("{}{}", core(&words[at]), core(&words[at + 1])))
+            && !secret_name(&core(&words[at + 1]));
+        if !(one || two) {
+            at += 1;
+            continue;
+        }
+        let mut next = at + if two { 2 } else { 1 };
+        let named = &words[next - 1];
+        let mut past = named.ends_with(':') || named.ends_with('=');
+        while next < words.len() && filler(&words[next]) {
+            past = true;
+            next += 1;
+        }
+        let Some(value) = words.get(next) else {
+            break;
+        };
+        let end = value.trim_end_matches(['.', ',', ';', '!', '?', ')', '\'', '\u{2019}']);
+        if !end.is_empty()
+            && !value.starts_with(HIDDEN)
+            && (past || end.chars().any(|c| c.is_ascii_digit()))
+        {
+            let rest = value[end.len()..].to_string();
+            words[next] = format!("{HIDDEN}{rest}");
+            hidden += 1;
+        }
+        at = next + 1;
+    }
+    (words.join(" "), hidden)
 }
 
 /// Whether a field by this name holds a secret. A CSRF token is the page's own, no use without
@@ -1118,10 +1251,10 @@ mod tests {
             { "method": "HEAD", "path": "/a" },
         ]);
         let sent = parsed(asked).unwrap();
-        assert_eq!(sent[0].does, "MERGE");
         assert!(sent[0].target().starts_with("POST as MERGE /_api/"));
         assert_eq!(sent[0].headers.last().unwrap().1, "application/json");
-        assert!(sent[1].changes() && sent[1].does == "DELETE" && sent[1].method == "GET");
+        assert!(sent[1].changes() && sent[1].kind() == Does::Deletes && sent[1].method == "GET");
+        assert_eq!(sent[1].methods(), "GET as DELETE");
         assert!(!sent[2].changes());
     }
 
@@ -1224,7 +1357,6 @@ mod tests {
                 ("POST", "MERGE"),
                 ("POST", "FROB"),
                 ("POST", ""),
-                ("POST", "POST, DELETE"),
                 ("PUT", "POST"),
                 ("GET", "POST"),
                 ("GET", "PATCH"),
@@ -1238,8 +1370,47 @@ mod tests {
         }
         let both = json!({ "X-HTTP-Method": "POST", "X-Method-Override": "DELETE" });
         assert_eq!(one("POST", both), Does::Deletes);
+        // A value with commas is read piece by piece, so a DELETE anywhere in it deletes.
+        for says in [
+            "POST, DELETE",
+            "DELETE, POST",
+            " get ,delete",
+            "GET,DELETE,",
+        ] {
+            assert_eq!(
+                one("POST", json!({ "X-HTTP-Method-Override": says })),
+                Does::Deletes,
+                "{says}"
+            );
+        }
+        assert_eq!(
+            one("POST", json!({ "X-HTTP-Method": "POST, POST" })),
+            Does::Sends
+        );
+        assert_eq!(
+            one("POST", json!({ "X-HTTP-Method": "POST, PUT" })),
+            Does::Changes
+        );
         let both = json!({ "X-HTTP-Method": "POST", "X-Method-Override": "PUT" });
         assert_eq!(one("POST", both), Does::Changes);
+    }
+
+    /// The head names the method sent, then every other method its overrides name, once each and
+    /// in their order, from the same pieces the facts line reads.
+    #[test]
+    fn the_head_names_every_override_that_differs() {
+        let head = |method: &str, headers: Value| {
+            let asked = json!([{ "method": method, "path": "/a", "headers": headers,
+                                 "what": "Do it." }]);
+            parsed(asked).unwrap().remove(0).methods()
+        };
+        assert_eq!(head("POST", json!({})), "POST");
+        assert_eq!(head("POST", json!({ "X-HTTP-Method": "post" })), "POST");
+        let two = json!({ "X-HTTP-Method-Override": "GET, DELETE" });
+        assert_eq!(head("POST", two), "POST as GET, DELETE");
+        let three = json!({ "X-HTTP-Method": "GET", "X-Method-Override": "DELETE, GET, POST" });
+        assert_eq!(head("POST", three), "POST as GET, DELETE");
+        assert_eq!(head("GET", json!({ "X-HTTP-Method": "GET,  " })), "GET");
     }
 
     /// A write whose override says it's a read asks, so it needs the agent's sentence as any change
@@ -1434,6 +1605,97 @@ mod tests {
             plain("\u{201E}a\u{201C} \u{AB}b\u{BB} \u{300E}c\u{300F}"),
             "\u{201A}a' \u{2039}b\u{203A} \u{300C}c\u{300D}"
         );
+    }
+
+    /// A joiner stays between two characters that show, and an emoji's colour selector after one,
+    /// as they make an emoji family or a Persian word and hide nothing; anywhere else they go.
+    /// Every script's double marks are one single mark, and so is a run of single ones.
+    #[test]
+    fn joiners_stay_where_they_join_and_quotes_stay_single() {
+        let family = "\u{1F469}\u{200D}\u{1F467}";
+        assert_eq!(
+            plain(&format!("Tag {family} here")),
+            format!("Tag {family} here")
+        );
+        let persian = "\u{0645}\u{06CC}\u{200C}\u{062E}\u{0648}\u{0627}\u{0647}\u{0645}";
+        assert_eq!(plain(persian), persian);
+        assert_eq!(
+            plain("Love it \u{2764}\u{FE0F}"),
+            "Love it \u{2764}\u{FE0F}"
+        );
+        assert_eq!(plain("a \u{200D}b c\u{200D} \u{FE0F}d \u{200C}"), "a b c d");
+        assert_eq!(
+            plain("x\u{2BA}y\u{275D}z\u{275E} \u{5F4}w\u{5F4}"),
+            "x'y'z' 'w'"
+        );
+        assert_eq!(
+            plain("Done.'' ''Checked'\u{2019} it's"),
+            "Done.' 'Checked' it's"
+        );
+    }
+
+    /// The whole request writes out what wouldn't show, so an override can't turn its text
+    /// around and a blank can't hide a word: every control, format and invisible character, blank
+    /// glyph and space but the plain one, with where each is, and a body's own line breaks kept.
+    #[test]
+    fn the_whole_request_writes_out_what_wouldnt_show() {
+        let (shown, marks) = escaped("/pay/\u{202E}gro.elpmaxe\u{202C}", false);
+        assert_eq!(shown, "/pay/\\u{202E}gro.elpmaxe\\u{202C}");
+        assert_eq!(
+            marks
+                .iter()
+                .map(|at| &shown[at.clone()])
+                .collect::<Vec<_>>(),
+            ["\\u{202E}", "\\u{202C}"]
+        );
+        let (shown, _) = escaped("a\u{200B}b\u{2800}c\u{00A0}d\te\u{2028}f g", false);
+        assert_eq!(
+            shown,
+            "a\\u{200B}b\\u{2800}c\\u{00A0}d\\u{0009}e\\u{2028}f g"
+        );
+        assert_eq!(escaped("a\nb", false).0, "a\\u{000A}b");
+        assert_eq!(escaped("a\n\nb\r\n", true).0, "a\n\nb\\u{000D}\n");
+        assert_eq!(
+            escaped("Close 4127 \u{1F469}", true).0,
+            "Close 4127 \u{1F469}"
+        );
+    }
+
+    /// The log and the activity file keep the sentence without what reads as a secret: a word
+    /// after a secret's name and a filler or a colon, or with a digit, and every JWT and bearer
+    /// credential. A word after the name with neither, and the words around, stay.
+    #[test]
+    fn a_sentence_is_kept_without_its_secrets() {
+        let hid = |what: &str| hide_said(what).0;
+        assert_eq!(
+            hid("Set the API key to sk-live-123"),
+            "Set the API key to (hidden)"
+        );
+        assert_eq!(
+            hid("Set the API key sk-live-123."),
+            "Set the API key (hidden)."
+        );
+        assert_eq!(
+            hid("Change the password: hunter two"),
+            "Change the password: (hidden) two"
+        );
+        assert_eq!(hid("Use token=abc123 for it"), "Use token=(hidden) for it");
+        assert_eq!(
+            hid("Rotate the access token, as asked"),
+            "Rotate the access token, as asked"
+        );
+        assert_eq!(hid("Reset the password field"), "Reset the password field");
+        assert_eq!(
+            hid("Save the secret is opensesame now"),
+            "Save the secret is (hidden) now"
+        );
+        let jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N";
+        assert_eq!(hid(&format!("Send {jwt} on")), "Send (hidden) on");
+        assert_eq!(
+            hid("Send Bearer abcdefgh12345 on"),
+            "Send Bearer (hidden) on"
+        );
+        assert_eq!(hid("Close item 4127."), "Close item 4127.");
     }
 
     /// The card shows a sentence whole up to WHAT_SHOWN, and a longer one up to a word, with "…".

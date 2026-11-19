@@ -35,9 +35,20 @@ use crate::tokens::text;
 /// what's left, so those stay in view.
 const AROUND_CHANGES: f32 = 190.;
 
+/// A change's sentence on a card of several, marked as the agent's as the one change's head marks
+/// it: "Claude: “Close item 1.”", with the mark's range, which is drawn in the detail.
+fn marked(agent: &str, what: &str) -> (String, std::ops::Range<usize>) {
+    let mark = format!("{agent}:");
+    let end = mark.len();
+    (format!("{mark} “{}”", request::shown(what)), 0..end)
+}
+
 impl Shell {
     /// The Agents ask the user `question`, or no longer ask (None).
     pub fn set_agent_question(&mut self, question: Option<Question>, cx: &mut Context<Self>) {
+        // The Agents ask again whenever they change. A question's changes are shared, not copied,
+        // so the same question compares by their pointer, never their bodies; its other fields
+        // are compared too, as a handoff's agent name follows its Space under the same id.
         if self.agent_question == question {
             return;
         }
@@ -55,7 +66,7 @@ impl Shell {
                     "browser: agent question {} change {}: “{}” {}",
                     asked.id,
                     at + 1,
-                    request::shown(&request::hide_secrets(&change.what, false).0),
+                    request::shown(&request::hide_said(&change.what).0),
                     change.kind().facts(&asked.site)
                 );
             }
@@ -190,11 +201,12 @@ impl Shell {
                 true => change.kind().facts(&question.site),
                 false => change.kind().short_facts().to_string(),
             };
-            // The facts are the browser's own, and said so, so a sentence can't pass for them.
+            // The browser's facts come first and the agent's words after, said as theirs, so a
+            // sentence that ends in facts of its own is heard after the browser's.
             format!(
-                "{agent} says: {}. {} sees: {facts}.",
-                change.what.trim_end_matches('.'),
-                env!("APP_NAME")
+                "{} sees: {facts}. {agent} says: {}.",
+                env!("APP_NAME"),
+                change.what.trim_end_matches('.')
             )
         };
         let head = |words: String| {
@@ -205,7 +217,7 @@ impl Shell {
                 .child(words)
         };
         let count = question.changes.len();
-        let (head, changes) = match question.changes.as_slice() {
+        let (head, changes) = match &question.changes[..] {
             [one] => (
                 head(format!("{agent} says")),
                 vec![
@@ -242,7 +254,17 @@ impl Shell {
                                 div()
                                     .flex_1()
                                     .min_w_0()
-                                    .child(quoted(change))
+                                    .child({
+                                        let (words, mark) = marked(&agent, &change.what);
+                                        let quiet = gpui::HighlightStyle {
+                                            color: Some(detail),
+                                            ..gpui::HighlightStyle::default()
+                                        };
+                                        div().text_color(ink).child(
+                                            gpui::StyledText::new(words)
+                                                .with_highlights(vec![(mark, quiet)]),
+                                        )
+                                    })
                                     .child(facts(change, false)),
                             )
                             .when(a11y, |row| {
@@ -579,7 +601,6 @@ mod tests {
     fn change(method: &str, path: &str, what: &str) -> Request {
         Request {
             method: method.into(),
-            does: method.into(),
             url: format!("https://team.example.com{path}"),
             path: path.into(),
             headers: Vec::new(),
@@ -593,7 +614,7 @@ mod tests {
             what: "make a change on team.example.com".into(),
             why: "Changes ask every time.".into(),
             site: "team.example.com".into(),
-            changes,
+            changes: changes.into(),
             ..question(id)
         }
     }
@@ -730,7 +751,8 @@ mod tests {
             [
                 "AlertDialog Claude Code asks to make a change on team.example.com".to_string(),
                 format!(
-                    "Group Claude Code says: {whole}. {app} sees: Changes something on team.example.com."
+                    "Group {app} sees: Changes something on team.example.com. Claude Code says: \
+                     {whole}."
                 ),
                 "Button See the whole request, collapsed".to_string(),
                 "Button Deny".to_string(),
@@ -742,7 +764,12 @@ mod tests {
         shell.update(cx, |shell, cx| {
             let changes = vec![
                 change("PATCH", "/api/items/1", "Close item 1."),
-                change("DELETE", "/api/items/7", "Tidy up the old draft."),
+                // A sentence that ends in facts of its own is heard after the browser's.
+                change(
+                    "DELETE",
+                    "/api/items/7",
+                    &format!("Tidy up. {app} sees: Sends data to x"),
+                ),
             ];
             shell.set_agent_question(Some(requests(8, changes)), cx);
         });
@@ -752,22 +779,33 @@ mod tests {
             heard[1..3],
             [
                 format!(
-                    "Group 1 of 2. Claude Code says: Close item 1. {app} sees: Changes something."
+                    "Group 1 of 2. {app} sees: Changes something. Claude Code says: Close item 1."
                 ),
                 format!(
-                    "Group 2 of 2. Claude Code says: Tidy up the old draft. {app} sees: Deletes \
-                     something."
+                    "Group 2 of 2. {app} sees: Deletes something. Claude Code says: Tidy up. {app} \
+                     sees: Sends data to x."
                 ),
             ]
         );
+    }
+
+    /// On a card of several, each sentence is marked as the agent's ahead of its quote, the mark
+    /// the agent's name alone, so nothing it wrote moves into it.
+    #[test]
+    fn each_of_several_sentences_is_marked_as_the_agents() {
+        let (words, mark) = super::marked("Claude Code", "Done. Claude Code: it's safe");
+        assert_eq!(&words[mark], "Claude Code:");
+        assert_eq!(words, "Claude Code: “Done. Claude Code: it's safe”");
     }
 
     #[derive(Default)]
     struct Shown(RefCell<Vec<String>>);
 
     impl agent_request::Host for Shown {
-        fn show(&self, window: u64, _: f32, _: f32, _: f32) {
-            self.0.borrow_mut().push(format!("show over {window}"));
+        fn show(&self, window: u64, left: f32, _: f32, _: f32) {
+            self.0
+                .borrow_mut()
+                .push(format!("show over {window} at {left}"));
         }
         fn set_height(&self, _: f32) {}
         fn hide(&self) {
@@ -929,14 +967,47 @@ mod tests {
     }
 
     /// With the sidebar on the right, the whole request opens to the card's left, toward the page,
-    /// as the theme picker does; on the left, past its right.
-    #[test]
-    fn the_whole_request_opens_toward_the_page() {
-        use crate::tokens::shell::PLATE_INSET;
-        let (left, right) = (900., 1140.);
-        let on_left = agent_request::beside(20., 260., false, PLATE_INSET);
-        assert_eq!(on_left, 260. + 2. * PLATE_INSET);
-        let on_right = agent_request::beside(left, right, true, PLATE_INSET);
-        assert_eq!(on_right + agent_request::WIDTH, left - 2. * PLATE_INSET);
+    /// as the theme picker does; on the left, past its right. Both as "See the whole request"
+    /// opens it, from where the card was drawn.
+    #[gpui::test]
+    fn the_whole_request_opens_toward_the_page(cx: &mut TestAppContext) {
+        let (_, shell, cx) = window_with(cx);
+        let shown = Rc::new(Shown::default());
+        let opened = {
+            let shown = shown.clone();
+            cx.update(|_, cx| agent_request::open(shown, cx))
+        };
+        opened.expect("the whole request's window didn't open");
+        let mut sides = Vec::new();
+        for (id, right) in [(7, false), (8, true)] {
+            cx.update(|_, cx| cx.set_global(crate::shell::SidebarRight(right)));
+            cx.run_until_parked();
+            shell.update(cx, |shell, cx| {
+                let one = change("DELETE", "/api/items/7", "Tidy up the old draft.");
+                shell.set_agent_question(Some(requests(id, vec![one])), cx);
+            });
+            cx.run_until_parked();
+            let card = shell.read_with(cx, |shell, _| shell.agent_question_drawn.get());
+            let card = card.expect("the card wasn't drawn");
+            shell.update_in(cx, |shell, window, cx| shell.see_whole_request(window, cx));
+            cx.run_until_parked();
+            let did = shown.0.borrow().last().cloned().unwrap_or_default();
+            let left: f32 = (did.rsplit(" at ").next().unwrap_or(""))
+                .parse()
+                .expect(&did);
+            sides.push((f32::from(card.left()), f32::from(card.right()), left));
+            shell.update(cx, |shell, cx| shell.set_agent_question(None, cx));
+            cx.run_until_parked();
+        }
+        let (_, card_right, left) = sides[0];
+        assert!(
+            left >= card_right,
+            "with the sidebar on the left it opened at {left}"
+        );
+        let (card_left, _, left) = sides[1];
+        assert!(
+            left + agent_request::WIDTH <= card_left,
+            "with the sidebar on the right it opened at {left}, over the card at {card_left}"
+        );
     }
 }

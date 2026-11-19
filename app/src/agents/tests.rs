@@ -2221,6 +2221,71 @@ fn a_question_left_unanswered_is_refused_after_5_minutes(cx: &mut TestAppContext
     assert!(grants.is_empty());
 }
 
+/// A request's question goes as any question does, and so its whole request with it: left 5
+/// minutes, it's refused and the card clears, and when its client goes, the card clears with it.
+/// Neither sends anything.
+#[gpui::test]
+fn a_requests_question_goes_unanswered_and_with_its_client(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let ask = |cx: &mut TestAppContext| {
+        let change = json!({ "tab": 20, "requests": [
+            { "method": "DELETE", "path": "/api/items/7", "what": "Tidy up the old draft." },
+        ] });
+        let answer = call(&agents, "claude-code", "request", change, cx);
+        let question = browser
+            .asked
+            .borrow()
+            .clone()
+            .expect("the delete didn't ask");
+        assert_eq!(question.changes.len(), 1);
+        answer
+    };
+
+    let answer = ask(cx);
+    cx.executor().advance_clock(ASK_WAIT);
+    let refused = answer.recv().unwrap();
+    assert!(
+        refused
+            .text
+            .starts_with("The user didn't answer in 5 minutes"),
+        "{}",
+        refused.text
+    );
+    assert_eq!(
+        *browser.asked.borrow(),
+        None,
+        "the card stayed past 5 minutes"
+    );
+
+    agents.update(cx, |agents, cx| {
+        let hello = Event::Hello {
+            agent: "claude-code".into(),
+            client: "claude-code".into(),
+        };
+        agents.handle(hello, cx);
+    });
+    let _answer = ask(cx);
+    agents.update(cx, |agents, cx| {
+        agents.handle(
+            Event::Bye {
+                agent: "claude-code".into(),
+            },
+            cx,
+        )
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        *browser.asked.borrow(),
+        None,
+        "the card stayed with its client gone"
+    );
+    assert_eq!(
+        browser.requests.borrow().len(),
+        0,
+        "a request went unanswered"
+    );
+}
+
 /// A check's `--agent-waits` shortens both waits so a run sees each end; a prod build, or a value
 /// that isn't two whole seconds, keeps the spec's.
 #[test]
