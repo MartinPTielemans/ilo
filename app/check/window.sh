@@ -156,19 +156,20 @@ check_buttons() {
 # capture <png> <shown>: captures the window into png. Under Wayland, sway keeps showing the
 # window's last frame, or its own grey where there was none, until the app's next frame reaches it,
 # so there it captures again until the function shown passes on the capture, 100 captures at most.
-# $captures counts them and $redraw says how long it took (#2336).
+# $tries counts them and $redraw says how long it took (#2336). Not $captures: lib.sh's lists the
+# captures going, which a failure ends.
 capture() {
   wayland=
   [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ] && wayland=1 && start=$(date +%s%N)
   ../tools/window-screenshot.sh "$pid" "$1" || fail "no window to capture"
-  captures=1
+  tries=1
   redraw=
   [ -n "$wayland" ] || return 0
-  while ! "$2" "$1" && [ $captures -lt 100 ]; do
+  while ! "$2" "$1" && [ $tries -lt 100 ]; do
     ../tools/window-screenshot.sh "$pid" "$1" || fail "no window to capture"
-    captures=$((captures + 1))
+    tries=$((tries + 1))
   done
-  redraw="$(( ($(date +%s%N) - start) / 1000000 )) ms, capture $captures"
+  redraw="$(( ($(date +%s%N) - start) / 1000000 )) ms, capture $tries"
 }
 # Waits for a page's full screen $1 (enter or exit) to end in the window and the UI to have placed
 # the page and drawn at the window's new size. Their lines carry the clock the core's and the host's
@@ -437,7 +438,7 @@ widened() { [ "$(pixel "$1" 0.97 0.5)" != "63 63 63" ]; }
 capture "$out/resize-gap.png" widened
 grep -q "^browser: title $tab gap drew\$" "$log" && fail "gap.html drew at the new size before the capture"
 set -- $(pixel "$out/resize-gap.png" 0.97 0.5)
-[ "$captures" = 1 ] || set -- "$@" "in capture $captures"
+[ "$tries" = 1 ] || set -- "$@" "in capture $tries"
 if [ "$1" -ge 170 ] && [ "$2" -ge 50 ] && [ "$2" -le 130 ] && [ "$3" -le 60 ]; then
   gap="the space gap.html hadn't drawn yet showed its orange, $*"
 elif [ "$3" -ge 170 ] && [ "$1" -le 60 ]; then
