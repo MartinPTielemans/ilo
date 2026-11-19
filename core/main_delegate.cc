@@ -360,6 +360,12 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
     fprintf(stderr, "browser: terminating, %s\n",
             ShutdownName(browser_shutdown::GetShutdownType()));
     keep_alive_.reset();
+    // The session keeps each regular window's frame and state while Chrome still has its native
+    // window: off the Mac it closes them all as this returns (OnAppExiting), and a quit no page's
+    // tab kept as it closed would otherwise be kept at Window::CloseAll, with none left (#3494).
+    if (std::ranges::any_of(Window::All(), [](const Window* each) { return !each->own_space(); })) {
+      KeepSession();
+    }
     // A remote-debugging switch, with the window Chrome doesn't open at startup, has Chrome hold
     // the browser up until a client closes it over the protocol, so the user's quit never ended.
     ChromeDevToolsManagerDelegate::AllowBrowserToClose();
