@@ -37,12 +37,6 @@ struct ActionSheet: View {
           if let url = tab.url { browser.downloads.save(url, from: tab.webView, listed: !isPrivate) }
           browser.sheet = nil
         }
-        SheetRow(symbol: "printer", title: "Print") {
-          browser.sheet = nil
-          Task {
-            if let file = await browser.copy(of: tab) { Printing.print(file, named: tab.title) }
-          }
-        }
       } else {
         BlockingRow(tab: tab)
         if tab.exception != nil, tab.failure == nil {
@@ -55,6 +49,12 @@ struct ActionSheet: View {
         SheetRow(symbol: "desktopcomputer", title: tab.wantsDesktopSite ? "Request mobile site" : "Request desktop site") {
           tab.requestDesktopSite(!tab.wantsDesktopSite)
           browser.sheet = nil
+        }
+      }
+      if tab.canPrint {
+        SheetRow(symbol: "printer", title: "Print") {
+          browser.sheet = nil
+          browser.print(tab)
         }
       }
       if !isPrivate {

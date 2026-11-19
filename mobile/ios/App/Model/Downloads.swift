@@ -90,6 +90,11 @@ final class Downloads: NSObject {
     var listed = true
     /// A file asked for by address takes the name its answer gives it; a retry keeps its row's.
     var renames = false
+    /// Takes the file if the system has a sheet of its own for its kind: a copy in a temporary
+    /// place, or nothing if it didn't come.
+    var hands: ((URL?) -> Void)?
+    /// Where that copy is being written.
+    var handed: URL?
     var watch: NSKeyValueObservation?
   }
 
@@ -157,13 +162,14 @@ final class Downloads: NSObject {
   // MARK: Starting
 
   /// A page's download, which is the list's from here on. `asks` puts the question to the user
-  /// for a file the page made itself, once its name is known.
+  /// for a file that hasn't been asked about yet, once its name is known. `hands` takes a
+  /// calendar file or a pass in place of the list: nothing is asked for one, and it gets no row.
   ///
   /// `listed` is the seam for a private tab, when there is one: its file is saved in the folder
   /// as any other and its row stands while the app runs, but the row is never written to the
   /// list's file, so nothing of it is left once the app has gone.
-  func take(_ download: WKDownload, listed: Bool = true, asks: ((String) async -> Bool)? = nil) {
-    flights[ObjectIdentifier(download)] = Flight(download: download, id: UUID(), asks: asks, listed: listed)
+  func take(_ download: WKDownload, listed: Bool = true, asks: ((String) async -> Bool)? = nil, hands: ((URL?) -> Void)? = nil) {
+    flights[ObjectIdentifier(download)] = Flight(download: download, id: UUID(), asks: asks, listed: listed, hands: hands)
     download.delegate = self
   }
 
@@ -261,13 +267,13 @@ final class Downloads: NSObject {
   // MARK: A copy to send on
 
   /// A copy of the file at an address in a temporary place, for the system to send on or to
-  /// print: asked for through the page's own web view. Nothing of it is listed, and it's gone
-  /// with the parts at the next launch.
+  /// print: asked for through the page's own web view. Nothing of it is listed, and whoever
+  /// asked for it discards it once the system is done with it.
   func copy(of url: URL, from webView: WKWebView) async -> URL? {
     let download = await webView.startDownload(using: URLRequest(url: url))
     let key = ObjectIdentifier(download)
     return await withCheckedContinuation { continuation in
-      let copy = Copy(download: download, folder: parts.appending(path: "copies/\(UUID().uuidString)", directoryHint: .isDirectory)) { [weak self] file in
+      let copy = Copy(download: download, folder: place()) { [weak self] file in
         self?.copies[key] = nil
         continuation.resume(returning: file)
       }
@@ -275,6 +281,48 @@ final class Downloads: NSObject {
       copies[key] = copy
       download.delegate = copy
     }
+  }
+
+  /// A place of its own for one temporary copy, so the copy keeps its file's name.
+  private func place() -> URL {
+    parts.appending(path: "copies/\(UUID().uuidString)", directoryHint: .isDirectory)
+  }
+
+  /// Removes a temporary copy the system is done with. Anything else, such as a file in the
+  /// folder or a link, is left as it is.
+  func discard(_ copy: URL?) {
+    guard let place = copy?.deletingLastPathComponent(), copy?.isFileURL == true,
+      place.deletingLastPathComponent().standardizedFileURL.path == parts.appending(path: "copies").standardizedFileURL.path
+    else { return }
+    try? FileManager.default.removeItem(at: place)
+  }
+
+  /// Makes a download of a temporary copy, as the user asked: it moves into the folder, and has
+  /// a row as a file that just finished.
+  func keep(_ copy: URL, listed: Bool = true) {
+    var row = Download(id: UUID(), name: free(copy.lastPathComponent), source: nil, started: .now, state: .done)
+    defer { discard(copy) }
+    do {
+      try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+      try FileManager.default.moveItem(at: copy, to: file(of: row))
+    } catch {
+      return
+    }
+    row.size = (try? file(of: row).resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init)
+    list.append(row)
+    if !listed { unlisted.insert(row.id) }
+    news = true
+    tick()
+    write()
+  }
+
+  /// A file on its way to a sheet came to more than one may be: it's called off.
+  private func outgrew(_ key: ObjectIdentifier) {
+    guard let flight = flights.removeValue(forKey: key) else { return }
+    let copy = flight.handed
+    // After WebKit has let go of the file.
+    flight.download.cancel { [weak self] _ in self?.discard(copy) }
+    flight.hands?(nil)
   }
 
   // MARK: The app coming and going
@@ -405,6 +453,22 @@ extension Downloads: WKDownloadDelegate {
   func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String) async -> URL? {
     let key = ObjectIdentifier(download)
     guard var flight = flights[key] else { return nil }
+    if flight.hands != nil, let kind = Handed(type: response.mimeType, name: suggestedFilename), response.expectedContentLength <= Handed.most {
+      // The last run's parts are gone before this one's copy is written among them.
+      await loading?.value
+      guard flights[key] != nil else { return nil }
+      let place = place()
+      try? FileManager.default.createDirectory(at: place, withIntermediateDirectories: true)
+      let copy = place.appending(path: kind.named(Self.clean(suggestedFilename)))
+      flight.handed = copy
+      // An answer that didn't say how long it is may be any length.
+      flight.watch = download.progress.observe(\.completedUnitCount) { [weak self] progress, _ in
+        guard progress.completedUnitCount > Handed.most else { return }
+        Self.onMain { self?.outgrew(key) }
+      }
+      flights[key] = flight
+      return copy
+    }
     if let asks = flight.asks {
       flight.asks = nil
       flights[key] = flight
@@ -447,8 +511,12 @@ extension Downloads: WKDownloadDelegate {
   }
 
   func downloadDidFinish(_ download: WKDownload) {
-    guard let flight = flights.removeValue(forKey: ObjectIdentifier(download)), let index = list.firstIndex(where: { $0.id == flight.id })
-    else { return }
+    guard let flight = flights.removeValue(forKey: ObjectIdentifier(download)) else { return }
+    if let copy = flight.handed {
+      flight.hands?(copy)
+      return
+    }
+    guard let index = list.firstIndex(where: { $0.id == flight.id }) else { return }
     var row = list[index]
     let part = parts.appending(path: row.id.uuidString, directoryHint: .isDirectory)
     let written = part.appending(path: row.name)
@@ -478,6 +546,11 @@ extension Downloads: WKDownloadDelegate {
   func download(_ download: WKDownload, didFailWithError error: any Error, resumeData: Data?) {
     // One the user called off, stopped or deleted has no flight any more.
     guard let flight = flights.removeValue(forKey: ObjectIdentifier(download)) else { return }
+    if let copy = flight.handed {
+      discard(copy)
+      flight.hands?(nil)
+      return
+    }
     try? FileManager.default.removeItem(at: parts.appending(path: flight.id.uuidString, directoryHint: .isDirectory))
     guard let index = list.firstIndex(where: { $0.id == flight.id }), list[index].state == .running else { return }
     list[index].state = .failed(Self.reason(error))
