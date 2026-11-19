@@ -98,6 +98,14 @@ impl Host for Recorder {
         self.record(format!("remove {id}"));
     }
 
+    fn copy_share(&self, id: &str) {
+        self.record(format!("copy share {id}"));
+    }
+
+    fn unshare(&self, id: &str) {
+        self.record(format!("unshare {id}"));
+    }
+
     fn choose(&self, what: Choice, on: bool) {
         self.record(format!("choose {what:?} {on}"));
     }
@@ -630,6 +638,50 @@ fn the_devices_and_remove(cx: &mut TestAppContext) {
     assert!(!tab.drawn("remove this"));
     tab.click("remove phone");
     assert_eq!(tab.host.take(), ["remove phone"]);
+}
+
+fn shared(id: &str, kind: ShareKind) -> SharedLink {
+    SharedLink {
+        id: id.into(),
+        kind,
+        title: format!("Share {id}").into(),
+        tabs: 3,
+        shared: 0.,
+        color: None,
+        icon: "".into(),
+    }
+}
+
+/// Signed in, the account's shared links are listed after its devices, none before the core has
+/// listed them, and each row's Copy Link and Unshare ask the core for that link.
+#[gpui::test]
+fn the_shared_links_copy_and_unshare(cx: &mut TestAppContext) {
+    let mut tab = shown(state(Status::On), cx);
+    tab.host.take();
+    assert!(!tab.drawn("copy a"));
+    let shares = vec![
+        shared("a", ShareKind::Folder),
+        shared("b", ShareKind::Space),
+    ];
+    tab.account
+        .update(tab.cx, |account, cx| account.set_shares(shares, cx));
+    tab.cx.run_until_parked();
+    tab.click("copy b");
+    tab.click("unshare a");
+    assert_eq!(tab.host.take(), ["copy share b", "unshare a"]);
+}
+
+/// A link's line says the day it was last shared, not its time.
+#[test]
+fn shared_when_says_the_day() {
+    let today = 10. * 86_400_000.;
+    let days = [today, today - 86_400_000., 0., 0.];
+    assert_eq!(shared_when(today + 3_600_000., days), "today");
+    assert_eq!(shared_when(today - 3_600_000., days), "yesterday");
+    assert_eq!(
+        shared_when(today - 3. * 86_400_000. + 3_600_000., days),
+        "3 days ago"
+    );
 }
 
 /// Signed in, each of what else can sync has its switch, which asks the core for the other way,

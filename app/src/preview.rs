@@ -4450,6 +4450,47 @@ fn preview_account(state: &str, cx: &mut App) {
         device("2", "MacBook Air", "macOS", false),
         device("3", "ThinkPad X1", "Linux", false),
     ];
+    // The account's shared links (#680): a folder shared today, a Space and chosen tabs before.
+    let share = |id: &str, kind, title: &str, tabs, days: f64, color: Option<u32>, icon: &str| {
+        account::SharedLink {
+            id: id.to_string().into(),
+            kind,
+            title: title.to_string().into(),
+            tabs,
+            shared: now() - days * DAY,
+            color: color.map(gpui::rgb),
+            icon: icon.to_string().into(),
+        }
+    };
+    let shares = vec![
+        share(
+            "a",
+            account::ShareKind::Folder,
+            "Lisbon, March",
+            7,
+            0.,
+            None,
+            "",
+        ),
+        share(
+            "b",
+            account::ShareKind::Space,
+            "Research",
+            5,
+            7.,
+            Some(MORE_COLORS[3]),
+            "glyph:book",
+        ),
+        share(
+            "c",
+            account::ShareKind::Tabs,
+            "3 tabs from Work",
+            3,
+            17.,
+            None,
+            "",
+        ),
+    ];
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         ..Default::default()
@@ -4465,6 +4506,7 @@ fn preview_account(state: &str, cx: &mut App) {
                 account.set_state(state, cx);
                 if status == Status::On {
                     account.set_devices(devices, cx);
+                    account.set_shares(shares, cx);
                 }
                 account
             });
@@ -4883,6 +4925,11 @@ struct PreviewAccount {
 impl account::Host for PreviewAccount {
     fn set_server(&self, _: &str) -> bool {
         true
+    }
+    fn day_starts(&self) -> [f64; 4] {
+        let today = now() - now() % DAY;
+        let week = today - ((today / DAY + 3.) % 7.) * DAY;
+        [today, today - DAY, week, week - 7. * DAY]
     }
     fn sign_in(&self) {}
     fn cancel(&self) {}
