@@ -454,6 +454,8 @@ pub(super) struct Library {
     /// where it was last drawn, for return to open it from there as a click does.
     keyed_row: Option<(usize, usize)>,
     row_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Where the empty Boards list's New Board button was last drawn, for check.sh to click.
+    new_board_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The search the list shows, to skip notes from the field that leave its text as it was.
     query: String,
     items: Vec<Item>,
@@ -1066,6 +1068,7 @@ impl Shell {
             keyed_card: None,
             keyed_row: None,
             row_drawn: Rc::default(),
+            new_board_drawn: Rc::default(),
         });
         // check.sh waits for these lines.
         log!("browser: library section {}", section.name());
@@ -1715,6 +1718,64 @@ impl Shell {
 
     /// The line a section's list holds while it has nothing to list: what fills it, or with a
     /// search, that nothing matches.
+    /// The empty Boards list's way to make its first Board (#3575): New Board, as its key and the
+    /// + menu run it, with that key beside it as a menu row shows one. Tab reaches it from the
+    /// search field, and a screen reader reads its name without the key.
+    fn new_board_button(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let drawn = self
+            .library
+            .as_ref()
+            .map(|library| library.new_board_drawn.clone());
+        let log_drawn = canvas(
+            |_, _, _| {},
+            move |bounds: Bounds<Pixels>, _, _, _| {
+                let Some(drawn) = &drawn else {
+                    return;
+                };
+                if drawn.replace(Some(bounds)) != Some(bounds) {
+                    // check/board.sh clicks it where this line says.
+                    log!(
+                        "browser: library new board at {:.0} {:.0} {:.0} {:.0}",
+                        f32::from(bounds.origin.x),
+                        f32::from(bounds.origin.y),
+                        f32::from(bounds.size.width),
+                        f32::from(bounds.size.height)
+                    );
+                }
+            },
+        )
+        .absolute()
+        .size_full();
+        let label = div()
+            .flex()
+            .items_baseline()
+            .gap(px(crate::tokens::menu::GAP))
+            .child("New Board")
+            .child(
+                div()
+                    .font_weight(FontWeight::NORMAL)
+                    .text_size(px(text::SMALL))
+                    .text_color(self.palette.text(SECONDARY))
+                    .child(keystroke_label("ctrl-shift-e")),
+            );
+        let button = super::permission::card_button_as(
+            &self.palette,
+            "library-new-board",
+            label,
+            super::permission::Look::Quiet,
+        )
+        .flex_none()
+        .relative()
+        .text_size(px(text::BODY))
+        .on_click(cx.listener(|shell, _, _, cx| shell.run(Command::NewBoard, "library", cx)))
+        .child(log_drawn);
+        div()
+            .flex()
+            .justify_center()
+            .mt(px(12.))
+            .child(self.stop(button, "New Board".into()))
+    }
+
     fn empty_line(&self, section: Section, unsearched: bool) -> &'static str {
         let tasks = self.archive_only() == Only::Tasks;
         match (section, unsearched) {
@@ -1731,9 +1792,13 @@ impl Shell {
             },
             (Section::Agents, true) => "Your agents' finished tasks stay here for 30 days.",
             (Section::Agents, false) => "No tasks match.",
-            (Section::Boosts, true) => "New Boost makes one for the page shown.",
+            (Section::Boosts, true) => {
+                "A Boost restyles a site. Open the site, then pick Boost in its Site Controls."
+            }
             (Section::Boosts, false) => "No Boosts match.",
-            (Section::Boards, true) => "New Board makes one, from the + menu.",
+            (Section::Boards, true) => {
+                "A Board holds notes, pictures, links and drawings, laid out as you like."
+            }
             (Section::Boards, false) => "No Boards match.",
             (Section::Downloads, true) => "Files you download show here.",
             (Section::Downloads, false) => "No downloads match.",
@@ -1972,6 +2037,12 @@ impl Shell {
                 .text_size(px(text::SMALL))
                 .text_color(self.palette.text(SECONDARY))
                 .child(div().relative().child(line).child(log_drawn))
+                // The list's own way to make its first Board, with the key that does it from
+                // anywhere (#3575); a search that matched nothing has nothing to make.
+                .children(
+                    (self.section == Section::Boards && library.query.is_empty())
+                        .then(|| self.new_board_button(cx)),
+                )
                 .into_any_element()
         } else {
             let item =
