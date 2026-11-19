@@ -26,6 +26,9 @@
 # On the Mac, with READY and GO set to two paths, it gets everything ready, makes READY, and takes
 # the picture once GO is there, so a step can have it right after what it watches: the Swift takes
 # 1 to 4 s to start on a hosted runner, longer than the Mini Player's controls stay (#3354).
+# With PICTURES at a count past 1, it takes that many pictures back to back, the second of
+# out.png as out-2.png, and prints "picture <n> asked <ms> back <ms>" for each, in ms since 1970:
+# a step can then tell a fade that came late from one that never came (#3354).
 # Usage: tools/window-screenshot.sh <pid> <output.png> [all | screen | floating]
 set -e
 { [ $# -eq 2 ] || { [ $# -eq 3 ] && { [ "$3" = all ] || [ "$3" = screen ]; }; }; } ||
@@ -460,12 +463,30 @@ DispatchQueue.global().asyncAfter(deadline: .now() + 60) {
 
 let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
 let windows = content.windows.filter { $0.owningApplication?.processID == pid }
-func write(_ image: CGImage) -> Never {
-  stage.text = "writing \(out.path)"
-  guard let file = CGImageDestinationCreateWithURL(out as CFURL, UTType.png.identifier as CFString, 1, nil)
-  else { fail("can't write \(out.path)") }
-  CGImageDestinationAddImage(file, image, nil)
-  guard CGImageDestinationFinalize(file) else { fail("can't write \(out.path)") }
+func write(_ image: CGImage, to file: URL) {
+  stage.text = "writing \(file.path)"
+  guard let png = CGImageDestinationCreateWithURL(file as CFURL, UTType.png.identifier as CFString, 1, nil)
+  else { fail("can't write \(file.path)") }
+  CGImageDestinationAddImage(png, image, nil)
+  guard CGImageDestinationFinalize(png) else { fail("can't write \(file.path)") }
+}
+let pictures = Int(ProcessInfo.processInfo.environment["PICTURES"] ?? "1") ?? 0
+guard pictures >= 1 else { fail("PICTURES isn't a count") }
+func capture(_ what: String, _ filter: SCContentFilter, _ config: SCStreamConfiguration) async throws -> Never {
+  whenAsked()
+  for n in 1...pictures {
+    stage.text = "capturing \(what)" + (pictures > 1 ? ", picture \(n)" : "")
+    let asked = Int(Date().timeIntervalSince1970 * 1000)
+    let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+    let back = Int(Date().timeIntervalSince1970 * 1000)
+    if n == 1 {
+      write(image, to: out)
+    } else {
+      let name = out.deletingPathExtension().lastPathComponent + "-\(n)." + out.pathExtension
+      write(image, to: out.deletingLastPathComponent().appendingPathComponent(name))
+    }
+    if pictures > 1 { print("picture \(n) asked \(asked) back \(back)") }
+  }
   exit(0)
 }
 if floating {
@@ -486,9 +507,7 @@ if floating {
   config.width = Int(window.frame.width * CGFloat(filter.pointPixelScale))
   config.height = Int(window.frame.height * CGFloat(filter.pointPixelScale))
   config.showsCursor = false
-  whenAsked()
-  stage.text = "capturing the floating window"
-  write(try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config))
+  try await capture("the floating window", filter, config)
 }
 // The largest normal window; a process can also own invisible helper windows.
 guard let main = windows.filter({ $0.windowLayer == 0 })
@@ -507,7 +526,5 @@ config.sourceRect = frame.offsetBy(dx: -display.frame.minX, dy: -display.frame.m
 config.width = Int(frame.width * CGFloat(filter.pointPixelScale))
 config.height = Int(frame.height * CGFloat(filter.pointPixelScale))
 config.showsCursor = false
-whenAsked()
-stage.text = "capturing the window"
-write(try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config))
+try await capture("the window", filter, config)
 SWIFT
