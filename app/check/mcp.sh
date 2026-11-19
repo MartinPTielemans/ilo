@@ -1910,8 +1910,11 @@ CARD
       read -r sx sy sw sh <<SEE
 $(grep "^browser: agent request see $q at " "$log" | tail -1 | cut -d' ' -f7-)
 SEE
+      hosted=$(grep -c '^browser: agent request shown$' "$log" || true)
       send click $((sx + 20)) $((sy + sh / 2))
       await_log "^browser: agent request $q shown, 1 changes\$" "See the whole request didn't show it"
+      # The host's line, once its window is on screen, so the capture has it.
+      await_more '^browser: agent request shown$' "$hosted" || fail "the whole request's window never showed"
       ../tools/window-screenshot.sh "$pid" "$out/agent-request-whole.png" || fail "no window to capture"
       send key escape
       await_log "^browser: agent request $q closed (Escape)\$" "Escape didn't close the whole request"
@@ -1942,6 +1945,8 @@ SEE
   # A delete reads as one from its method, whatever its sentence says.
   draft='{"method":"DELETE","path":"/api/items/7","what":"Tidy up the old draft so your list is cleaner."}'
   change Dismiss 1 "$draft" '“Tidy up the old draft so your list is cleaner.” Deletes something on localhost'
+  [ "$changed" = "error: The user said no: you can't make a change on localhost. Don't try again." ] ||
+    fail "the denied delete answered: $changed"
   grep -q '^DELETE ' "$out/site.log" && fail "the denied delete reached the site"
   # Settings › Agents lists each request by what it did, and a press opens it to where it went and
   # what it sent, or, for the change the user said no to, that it wasn't sent (#2326). Each row's
