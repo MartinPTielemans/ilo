@@ -646,10 +646,12 @@ fi
 
 # Split views (#1597): the agent puts two tabs of its own side by side, adds a third, lists them
 # and separates one, each through the core's split calls and checked by its rules, with its entry
-# in the activity log. A tab of the user's is refused, and the split stays as it was.
+# in the activity log. A tab of the user's is refused, and the split stays as it was. Each page is
+# taller than its pane, so the agent's scroll there scrolls rather than answering that nothing did.
 for page in a b c; do
   printf '%s' "<title>Split $page</title><p>Split page $page</p>
-<button onclick=\"document.title = 'pressed'\">Press $page</button>" > "$out/site/split-$page.html"
+<button onclick=\"document.title = 'pressed'\">Press $page</button>
+<div style=\"height: 300vh\"></div>" > "$out/site/split-$page.html"
 done
 split_tab() {
   call open_tab "{\"url\":\"localhost:$port/split-$1.html\"}" |
@@ -704,15 +706,21 @@ await_log "^browser: agent activity mcp-client $user_tab separate_tab refused: T
 # through DevTools, as the user's would reach the page, and takes nothing over (#3243). The same
 # for the page beside it in its watched split view. Its next action then isn't refused.
 if [ "$driven" = 1 ]; then
-  # Escape steps back to Pages from the page watched, the sidebar first given the keyboard.
-  pages_again() {
+  # Escape steps back to Pages from the page watched, $1, which goes back into its picture before a
+  # click on another picture can watch it.
+  to_pages() {
     back='^browser: task page [0-9]* back$'
+    thumbnail='^browser: task page in its thumbnail$'
     before=$(grep -c "$back" "$log" || true)
+    shrunk=$(grep -c "$thumbnail" "$log" || true)
+    # A page there can have the keyboard, as the one a press in the split view focused on X11,
+    # and keeps Escape: a click on the sidebar gives the UI the keyboard, as the user's would.
     send click $sidebar_point
     send key escape
     await_more "$back" "$before" || fail "Escape didn't step back to Pages from $1"
+    await_more "$thumbnail" "$shrunk" || fail "$1 didn't go back into its picture"
   }
-  pages_again "tab $agent_tab"
+  to_pages "tab $agent_tab"
   watch "$split_a"
   presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
   agent_clicks=$step
@@ -733,7 +741,7 @@ if [ "$driven" = 1 ]; then
   since "$agent_clicks" | grep -q -e "^browser: agent mcp-client taken over in $split_a\$" \
     -e "^browser: agent mcp-client taken over in $split_c\$" &&
     fail "the agent's own click in its watched split view took its tab over"
-  pages_again "the split view"
+  to_pages "the split view"
   watch "$agent_tab"
 fi
 # The split views' pages close, so the conversation's grid has the pages the steps after it count on.
@@ -762,20 +770,6 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
   split=$(call split_tabs "{\"tabs\":[$warned,$beside]}")
   [ "$split" = "Tab $warned's split view, left to right: $warned, $beside." ] ||
     fail "split_tabs with the tab at the warning answered: $split"
-  # Escape steps back to Pages from the page watched, $1, which goes back into its picture before a
-  # click on another picture can watch it.
-  to_pages() {
-    back='^browser: task page [0-9]* back$'
-    thumbnail='^browser: task page in its thumbnail$'
-    before=$(grep -c "$back" "$log" || true)
-    shrunk=$(grep -c "$thumbnail" "$log" || true)
-    # A page there can have the keyboard, as the one a press in the split view focused on X11,
-    # and keeps Escape: a click on the sidebar gives the UI the keyboard, as the user's would.
-    send click $sidebar_point
-    send key escape
-    await_more "$back" "$before" || fail "Escape didn't step back to Pages from $1"
-    await_more "$thumbnail" "$shrunk" || fail "$1 didn't go back into its picture"
-  }
   # Tab round the strip's ring never gives the watched agent's page the keyboard: its stop is the
   # strip's words, so the handback into a page, which on Windows gives the shown page's pane the
   # keyboard straight (#3396), never runs for it. Tab from the window's keyboard rings the strip,
@@ -908,6 +902,14 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
   # before the page leaves. The warning goes, and the tab leaves the http page, here for the new
   # tab page, as it had no page before it. ⌘↩ hands it back after.
   to_pages "tab $warned"
+  # A press takes over a tab only while its agent is at work, and the press beside ended the
+  # agent's session in $beside, where it last acted: it reads $warned, as a working agent would, so
+  # it's at work there again before the click (#3503).
+  at_work=$(grep -c "^browser: agent mcp-client at work in $warned\$" "$log" || true)
+  read=$(call read_page "{\"tab\":$warned}")
+  case "$read" in "Tab $warned:"*) ;; *) fail "read_page of the agent's tab at the warning before http answered: $read" ;; esac
+  await_more "^browser: agent mcp-client at work in $warned\$" "$at_work" ||
+    fail "the agent's read of tab $warned, at the warning before http, didn't put it at work there: $(grep '^browser: agent mcp-client \(at work\|done\) in ' "$log" | tail -2 | tr '\n' ' ')"
   presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
   took=$(grep -c "^browser: agent mcp-client taken over in $warned\$" "$log" || true)
   driving=$(grep -c "^browser: task strip $warned says You're driving" "$log" || true)
