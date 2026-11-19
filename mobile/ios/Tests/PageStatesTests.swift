@@ -846,6 +846,72 @@ private func question(
     #expect(server.requests(to: "/home") == 1)
   }
 
+  @Test func `nothing of an exception is in the phone's history, a tab's files or the settings`() async throws {
+    let certificate = try Self.made()
+    let server = try await site(certificate)
+    let directory = URL.temporaryDirectory.appending(path: "certificate-tests-\(UUID().uuidString)")
+    let suite = "certificate-tests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    let store = HistoryStore(file: directory.appending(path: "history.sqlite"))
+    let browser = Browser(
+      account: PhoneAccount(account: FixtureAccount(signedIn: false), directory: directory.appending(path: "phone")),
+      settings: Settings(defaults: defaults), cache: TabCache(directory: directory.appending(path: "tabs")),
+      favicons: Favicons(directory: directory.appending(path: "favicons")),
+      downloads: testDownloads(in: directory), history: History(store: store))
+    browser.openNew(server.url("/home"), typed: true)
+    let page = try #require(browser.page)
+    #expect(await eventually { page.failure?.certificate != nil })
+    let exception = try #require(page.failure?.certificate?.exception)
+    page.visitAnyway()
+    #expect(await eventually { await page.shows("/home") })
+    #expect(await eventually { page.exception == exception })
+    #expect(await eventually { !page.isLoading && page.state != nil })
+
+    // Everything the phone writes of a tab when the app leaves the screen.
+    browser.background()
+    #expect(await eventually { (try? await store.visits(limit: 10))?.contains { $0.url == server.url("/home") } == true })
+    #expect(await eventually { await browser.cache.saved(of: page.id) != nil })
+
+    // The certificate and its fingerprint, as bytes and as they'd be written out.
+    let print = exception.fingerprint
+    let hex = print.map { String(format: "%02x", $0) }.joined()
+    let der = SecCertificateCopyData(certificate.certificate) as Data
+    let written = [hex, hex.uppercased(), print.base64EncodedString(), der.base64EncodedString()]
+    let marks = [print, der] + written.map { Data($0.utf8) } + written.compactMap { $0.data(using: .utf16LittleEndian) }
+    // The host is in the page's own address, which history and the tab keep as any page's. So
+    // there it's the certificate that's looked for, which an exception written down would name.
+    let address = Data("\(exception.host):\(exception.port)".utf8)
+    var addressed = 0
+    let files = FileManager.default.enumerator(at: directory, includingPropertiesForKeys: nil)
+    while let file = files?.nextObject() as? URL {
+      guard let bytes = try? Data(contentsOf: file) else { continue }
+      for mark in marks { #expect(bytes.range(of: mark) == nil, "\(file.lastPathComponent)") }
+      if bytes.range(of: address) != nil { addressed += 1 }
+    }
+    // The search reads what's written: the visit and the tab are there, at the page's address.
+    #expect(addressed > 1)
+
+    // The settings, as the defaults have them to write: every key and value.
+    var kept: [Data] = []
+    func gather(_ value: Any) {
+      switch value {
+      case let text as String: kept.append(Data(text.utf8))
+      case let data as Data: kept.append(data)
+      case let list as [Any]: list.forEach(gather)
+      case let table as [String: Any]: table.forEach { gather($0.key); gather($0.value) }
+      default: kept.append(Data("\(value)".utf8))
+      }
+    }
+    gather(defaults.persistentDomain(forName: suite) ?? [:])
+    #expect(!kept.isEmpty)
+    // No address belongs in them, so the host there would be the exception's.
+    let host = Data(exception.host.utf8)
+    for bytes in kept {
+      for mark in marks { #expect(bytes.range(of: mark) == nil) }
+      #expect(bytes.range(of: host) == nil)
+    }
+  }
+
   @Test func `another port's certificate isn't covered, and Stop Trusting takes the way on back`() async throws {
     let server = try await site(try Self.made())
     let other = try await site(try Self.made())

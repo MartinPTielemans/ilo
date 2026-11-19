@@ -587,6 +587,8 @@ private final class Copy: NSObject, WKDownloadDelegate {
   }
 
   func download(_ download: WKDownload, didFailWithError error: any Error, resumeData: Data?) {
+    // What came of it is no file to hand on.
+    try? FileManager.default.removeItem(at: folder)
     finish(nil)
   }
 

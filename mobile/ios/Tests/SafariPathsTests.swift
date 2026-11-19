@@ -61,6 +61,13 @@ import os
     page.chose(.copy, for: link)
     #expect(UIPasteboard.general.url == link)
   }
+
+  @Test func `Copy Link copies the link as Open would open it, without its tracking parameters`() throws {
+    let browser = testBrowser()
+    let page = WebTab(id: "tab", role: .today, browser: browser)
+    page.chose(.copy, for: try #require(URL(string: "https://example.org/story?id=7&utm_source=mail&fbclid=abc")))
+    #expect(UIPasteboard.general.url == URL(string: "https://example.org/story?id=7"))
+  }
 }
 
 /// What the app's Info.plist promises iOS, read from the app the tests run in.

@@ -57,6 +57,17 @@ final class Settings {
   private(set) var hiddenTiles: Set<String> {
     didSet { defaults.set(hiddenTiles.sorted(), forKey: "hiddenTiles") }
   }
+  /// What each hidden tile is known by besides its id, and every tile the account had when the
+  /// phone last looked. Another device that moves a pinned tab to another Space makes a new node
+  /// of it, with nothing to say which it was: these tell the phone it's one it hides.
+  @ObservationIgnored private var hiddenMarks: [String: String] {
+    get { defaults.dictionary(forKey: "hiddenMarks") as? [String: String] ?? [:] }
+    set { defaults.set(newValue.isEmpty ? nil : newValue, forKey: "hiddenMarks") }
+  }
+  @ObservationIgnored private var tilesSeen: Set<String>? {
+    get { defaults.stringArray(forKey: "tilesSeen").map(Set.init) }
+    set { defaults.set(newValue?.sorted(), forKey: "tilesSeen") }
+  }
   /// The Space last on screen.
   @ObservationIgnored var space: String? {
     get { defaults.string(forKey: "space") }
@@ -104,12 +115,16 @@ final class Settings {
     if neverSaves.contains(origin) { neverSaves.remove(origin) }
   }
 
-  func hideTile(_ id: String) {
+  /// Hides a tile, with what it's `knownBy` besides its id (`DockTiles.mark`), if the account
+  /// could give it another.
+  func hideTile(_ id: String, knownBy mark: String? = nil) {
     hiddenTiles.insert(id)
+    if let mark { hiddenMarks[id] = mark }
   }
 
   func showTile(_ id: String) {
     if hiddenTiles.contains(id) { hiddenTiles.remove(id) }
+    if hiddenMarks[id] != nil { hiddenMarks[id] = nil }
   }
 
   /// A pinned tab moved to another Space is a new node there. One this phone hid stays hidden,
@@ -117,12 +132,20 @@ final class Settings {
   func movedTile(_ id: String, to new: String) {
     guard hiddenTiles.contains(id) else { return }
     hiddenTiles = hiddenTiles.subtracting([id]).union([new])
+    if let mark = hiddenMarks.removeValue(forKey: id) { hiddenMarks[new] = mark }
   }
 
-  /// Forgets the hidden tiles the account no longer has.
-  func keepHidden(among ids: Set<String>) {
-    let kept = DockTiles.kept(hiddenTiles, among: ids)
+  /// Looks at the tiles the account has now, each by its id with its mark. A hidden one the
+  /// account no longer has is forgotten, and one another device moved, a new node now, is
+  /// hidden still.
+  func keepHidden(among tiles: [String: String]) {
+    let kept = DockTiles.kept(hiddenTiles, knownBy: hiddenMarks, since: tilesSeen, among: tiles)
     if kept != hiddenTiles { hiddenTiles = kept }
+    // As the account has them now: a hidden tab pinned at another address is known by that.
+    let marks = tiles.filter { kept.contains($0.key) }
+    if marks != hiddenMarks { hiddenMarks = marks }
+    let seen = Set(tiles.keys)
+    if seen != tilesSeen { tilesSeen = seen }
   }
 
   /// Tabs went to the archive by themselves. Once the note is answered there's no more to say.

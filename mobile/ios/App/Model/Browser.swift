@@ -111,6 +111,8 @@ final class Browser {
   private(set) var peek: WebTab?
   /// The private tabs, in the order they were opened.
   private(set) var privateTabs: [PrivateTab] = []
+  /// The copies of a private tab's documents handed to Share or Print, which go when it closes.
+  @ObservationIgnored private var privateCopies: [String: [URL]] = [:]
   /// The folders opened in place, which stay open while a search or a page covers their rows.
   var openFolders: Set<String> = []
   var sheet: Sheet?
@@ -291,6 +293,7 @@ final class Browser {
   private func closePrivate(_ id: String) {
     guard let index = privateTabs.firstIndex(where: { $0.id == id }) else { return }
     let tab = privateTabs.remove(at: index).tab
+    for copy in privateCopies.removeValue(forKey: id) ?? [] { downloads.discard(copy) }
     let store = tab.webView.configuration.websiteDataStore
     guard !privateTabs.contains(where: { $0.tab.webView.configuration.websiteDataStore === store }) else { return }
     // The store goes with its last web view. Emptied too, so nothing waits on what else holds one.
@@ -926,7 +929,15 @@ final class Browser {
   /// first, as the page was.
   func copy(of tab: WebTab) async -> URL? {
     guard let url = tab.url else { return nil }
-    return await downloads.copy(of: url, from: tab.webView)
+    let copy = await downloads.copy(of: url, from: tab.webView)
+    guard let copy, tab.isPrivate else { return copy }
+    // A private tab keeps nothing once it's closed, and one closed meanwhile has nothing to send.
+    guard tabs[tab.id] === tab else {
+      downloads.discard(copy)
+      return nil
+    }
+    privateCopies[tab.id, default: []].append(copy)
+    return copy
   }
 
   // MARK: The app coming and going
@@ -975,9 +986,12 @@ final class Browser {
     // While an account is half open the list read is the phone's own, and its tabs aren't in it.
     guard listsEveryTab else { return }
     var ids: Set<String> = []
+    // What the dock can show, each with what it's known by besides its id; a favourite has only that.
+    var tiles = Dictionary(settings.favourites.map { (DockSlot.id(of: $0.url), DockSlot.id(of: $0.url)) }, uniquingKeysWith: { first, _ in first })
     func collect(_ space: String, _ folder: String?) {
       for node in account.pinned(in: space, folder: folder) {
         ids.insert(node.id)
+        tiles[node.id] = DockTiles.mark(of: node)
         if node.kind == .folder { collect(space, node.id) }
       }
     }
@@ -985,7 +999,7 @@ final class Browser {
       ids.formUnion(account.today(in: space.id).map(\.id))
       collect(space.id, nil)
     }
-    settings.keepHidden(among: ids.union(settings.favourites.map { DockSlot.id(of: $0.url) }))
+    settings.keepHidden(among: tiles)
     // The private tabs are in no account, and stay.
     for (id, tab) in tabs where !ids.contains(id) && !tab.isPrivate {
       tabs[id] = nil

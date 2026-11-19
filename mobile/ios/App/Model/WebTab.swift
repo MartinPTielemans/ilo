@@ -1067,13 +1067,15 @@ extension WebTab: WKUIDelegate {
     if !text.isEmpty { browser?.search(text, from: self) }
   }
 
-  /// Does what the user chose for a pressed link, which opens without its tracking parameters.
+  /// Does what the user chose for a pressed link, which opens without its tracking parameters,
+  /// and is copied as it would open.
   func chose(_ choice: PressMenu.Choice, for link: URL) {
+    let opened = Blocker.shared.withoutTracking(link, from: webView.url, in: webView) ?? link
     switch choice {
     case .open: follow(link)
-    case .openInNewTab: browser?.openBehind(Blocker.shared.withoutTracking(link, from: webView.url, in: webView) ?? link, from: self)
-    case .openPrivately: browser?.openPrivateBehind(Blocker.shared.withoutTracking(link, from: webView.url, in: webView) ?? link)
-    case .copy: UIPasteboard.general.url = link
+    case .openInNewTab: browser?.openBehind(opened, from: self)
+    case .openPrivately: browser?.openPrivateBehind(opened)
+    case .copy: UIPasteboard.general.url = opened
     case .share: browser?.shared = link
     }
   }

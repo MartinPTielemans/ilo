@@ -10,6 +10,16 @@ import WebKit
 /// phone's files, in the account, and after a relaunch. An ordinary tab does the same beside it
 /// wherever that's what proves the check would have caught something.
 @Suite(.serialized, .timeLimit(.minutes(2))) @MainActor struct PrivateTabTests {
+  nonisolated private static let chart = Data(
+    """
+    %PDF-1.4
+    1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj
+    2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj
+    3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]>>endobj
+    trailer<</Root 1 0 R>>
+    %%EOF
+    """.utf8)
+
   private let directory = URL.temporaryDirectory.appending(path: "private-tests-\(UUID().uuidString)")
   private let suite = "private-tests-\(UUID().uuidString)"
 
@@ -44,6 +54,8 @@ import WebKit
       case "/bread": return .html("<title>Rye</title><link rel=icon href=/icon.png><input id=note>")
       case "/icon.png": return Loopback.Response(headers: ["Content-Type": "image/png"], body: icon)
       case "/boat.pdf": return .file("boat.pdf", Data("%PDF-1.4 made-up".utf8), type: "application/pdf")
+      // A document the tab shows, where the one above is a file it's handed.
+      case "/chart.pdf": return Loopback.Response(headers: ["Content-Type": "application/pdf"], body: Self.chart)
       default: return Loopback.Response(status: 404)
       }
     }
@@ -282,6 +294,40 @@ import WebKit
     await again.settled()
     #expect(again.list.isEmpty)
     #expect(FileManager.default.fileExists(atPath: again.folder.appending(path: "boat.pdf").path))
+  }
+
+  @Test func `the copy of a private tab's document that Share and Print are handed is gone with the tab`() async throws {
+    let server = try await site()
+    let browser = try browser()
+    browser.openNew(server.url("/chart.pdf"))
+    let page = try #require(browser.page)
+    #expect(await eventually { page.isPDF })
+    browser.openPrivate()
+    let secret = try #require(browser.page)
+    secret.load(server.url("/chart.pdf"), entered: true, typed: true)
+    #expect(await eventually { secret.isPDF })
+
+    let kept = try #require(await browser.copy(of: page))
+    let first = try #require(await browser.copy(of: secret))
+    let second = try #require(await browser.copy(of: secret))
+    #expect(try Data(contentsOf: first) == Self.chart)
+    #expect(try Data(contentsOf: second) == Self.chart)
+
+    // An ordinary tab's copy waits for the next launch, as whatever it was handed to may read it yet.
+    browser.close(page.id)
+    #expect(FileManager.default.fileExists(atPath: kept.path))
+    browser.close(secret.id)
+    #expect(files(in: "parts") == [kept.lastPathComponent])
+
+    // One made for a tab that closed meanwhile is never handed on.
+    browser.openPrivate()
+    let closing = try #require(browser.page)
+    closing.load(server.url("/chart.pdf"), entered: true, typed: true)
+    #expect(await eventually { closing.isPDF })
+    async let late = browser.copy(of: closing)
+    browser.close(closing.id)
+    #expect(await late == nil)
+    #expect(files(in: "parts") == [kept.lastPathComponent])
   }
 
   @Test func `a relaunch brings no private tab back, and coming to the front loses none`() async throws {

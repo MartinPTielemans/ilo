@@ -52,9 +52,28 @@ nonisolated struct DockTiles: Equatable, Sendable {
     shown.count + (more.isEmpty ? 0 : 1)
   }
 
-  /// The hidden ids that still name something: a tile unpinned or deleted elsewhere is forgotten.
-  static func kept(_ hidden: Set<String>, among ids: Set<String>) -> Set<String> {
-    hidden.intersection(ids)
+  /// What a pinned tab or a folder is known by besides its id: the address it's pinned at, or
+  /// the folder's name.
+  static func mark(of node: SyncedNode) -> String {
+    node.kind == .folder ? "folder \(node.name)" : "pin \(node.url?.absoluteString ?? "")"
+  }
+
+  /// The hidden ids after a look at the account's `tiles`, each by its id with its mark. One that
+  /// still names a tile stays. One that's gone was unpinned or deleted elsewhere and is forgotten,
+  /// unless a tile the account didn't have at the last look, `since`, has the mark it was
+  /// `knownBy`: that's the hidden one, moved to another Space by another device, and it's hidden
+  /// under its new id. A tile that was there all along is never taken for it.
+  static func kept(_ hidden: Set<String>, knownBy marks: [String: String] = [:], since seen: Set<String>? = nil, among tiles: [String: String])
+    -> Set<String>
+  {
+    var kept = hidden.filter { tiles[$0] != nil }
+    guard let seen else { return kept }
+    for id in hidden.subtracting(kept).sorted() {
+      guard let mark = marks[id] else { continue }
+      let moved = tiles.filter { $0.value == mark && !seen.contains($0.key) && !kept.contains($0.key) }.keys.min()
+      if let moved { kept.insert(moved) }
+    }
+    return kept
   }
 }
 

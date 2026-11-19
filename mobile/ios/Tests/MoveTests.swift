@@ -192,4 +192,67 @@ import Testing
     // The account still has every tab: hiding is this phone's alone.
     #expect(browser.account.pinned(in: "home", folder: nil).map(\.label) == ["Weather", "Roadmap", "Design tokens"])
   }
+
+  /// Comes to the front, and returns once the look at the account that follows is done: it
+  /// forgets a hidden id that names nothing.
+  private func look(_ browser: Browser) async {
+    browser.settings.hideTile("pin-nowhere")
+    browser.foreground()
+    #expect(await eventually { !browser.settings.hiddenTiles.contains("pin-nowhere") })
+  }
+
+  @Test func `a hidden pinned tab that another device moves to another Space stays hidden there`() async throws {
+    // The account as its devices have it, which another of them changes under the phone.
+    let account = FixtureAccount(signedIn: true)
+    let defaults = try #require(UserDefaults(suiteName: "move-tests-\(UUID().uuidString)"))
+    func launch() -> Browser {
+      Browser(
+        account: PhoneAccount(account: account, directory: directory), settings: Settings(defaults: defaults),
+        cache: TabCache(directory: directory.appending(path: "tabs")), favicons: Favicons(directory: directory.appending(path: "favicons")),
+        downloads: testDownloads(in: directory))
+    }
+    var browser = launch()
+    await look(browser)
+    browser.hideTile("pin-1")
+    #expect(browser.dockTiles(in: "work").shown.map(\.label) == ["Reviews", "Roadmap"])
+    let before = account.spaces.map { account.allPinned(in: $0.id) }
+
+    // A move made elsewhere is a new node there, as the phone's own move is, with nothing to say
+    // which node it was.
+    let moved = try #require(account.move("pin-1", to: "home"))
+    #expect(moved.id != "pin-1")
+    await look(browser)
+    #expect(browser.settings.hiddenTiles == [moved.id])
+    #expect(browser.dockTiles(in: "home").shown.map(\.label) == ["Weather"])
+
+    // And on, while the app wasn't running: what it knew the tile by is kept with the hiding.
+    let again = try #require(account.move(moved.id, to: "reading"))
+    browser = launch()
+    await look(browser)
+    #expect(browser.settings.hiddenTiles == [again.id])
+    #expect(browser.dockTiles(in: "reading").shown.allSatisfy { $0.id != again.id })
+
+    // Hiding and following changed nothing of the account but the moves another device made.
+    #expect(account.allPinned(in: "work").map(\.id) == before[0].map(\.id).filter { $0 != "pin-1" })
+    #expect(account.allPinned(in: "reading").last?.url == before[0].first { $0.id == "pin-1" }?.url)
+  }
+
+  @Test func `a pinned tab that's new elsewhere is shown, whatever was hidden and is gone`() async throws {
+    let account = FixtureAccount(signedIn: true)
+    let browser = try browser(on: account)
+    await look(browser)
+    // The same page pinned in two Spaces, and hidden in one.
+    let page = try #require(account.node("pin-1")?.url)
+    let twin = try #require(account.pin(today: account.openToday(url: page, title: "Twin", in: "home").id))
+    await look(browser)
+    browser.hideTile("pin-1")
+
+    // Unpinned elsewhere, the hidden one is forgotten, and the other, there all along, still shows.
+    account.unpin("pin-1")
+    let other = try #require(account.pin(today: account.openToday(url: blank, title: "Other", in: "home").id))
+    await look(browser)
+    #expect(browser.settings.hiddenTiles.isEmpty)
+    #expect(browser.dockTiles(in: "home").shown.map(\.id).contains(twin.id))
+    #expect(browser.dockTiles(in: "home").shown.map(\.id).contains(other.id))
+  }
 }

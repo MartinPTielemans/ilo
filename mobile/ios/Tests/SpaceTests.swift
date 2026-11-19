@@ -132,8 +132,27 @@ import Testing
   }
 
   @Test func `a hidden id the account no longer has is forgotten`() {
-    #expect(DockTiles.kept(["pin-1", "gone"], among: ["pin-1", "pin-2"]) == ["pin-1"])
-    #expect(DockTiles.kept([], among: ["pin-1"]).isEmpty)
+    #expect(DockTiles.kept(["pin-1", "gone"], among: ["pin-1": "pin a", "pin-2": "pin b"]) == ["pin-1"])
+    #expect(DockTiles.kept([], among: ["pin-1": "pin a"]).isEmpty)
+  }
+
+  @Test func `a hidden tile that comes back as a new one, as a move elsewhere makes it, is hidden still`() {
+    let marks = ["pin-1": "pin a", "folder": "folder Reviews"]
+    let seen: Set = ["pin-1", "pin-2", "folder"]
+    // Gone, and one that wasn't there at the last look has what it was known by.
+    #expect(DockTiles.kept(["pin-1"], knownBy: marks, since: seen, among: ["pin-2": "pin b", "new": "pin a"]) == ["new"])
+    #expect(DockTiles.kept(["folder"], knownBy: marks, since: seen, among: ["pin-1": "pin a", "new": "folder Reviews"]) == ["new"])
+    // Another address, or a folder by a tab's, is something else, and so is one that was there before.
+    #expect(DockTiles.kept(["pin-1"], knownBy: marks, since: seen, among: ["pin-2": "pin b", "new": "pin c"]).isEmpty)
+    #expect(DockTiles.kept(["pin-1"], knownBy: marks, since: seen, among: ["pin-2": "pin a"]).isEmpty)
+    // Two hidden at one address that both moved are two new ones, and neither takes one that's hidden already.
+    #expect(
+      DockTiles.kept(["pin-1", "pin-2"], knownBy: ["pin-1": "pin a", "pin-2": "pin a"], since: seen, among: ["x": "pin a", "y": "pin a"])
+        == ["x", "y"])
+    #expect(DockTiles.kept(["pin-1", "x"], knownBy: ["pin-1": "pin a", "x": "pin a"], since: seen, among: ["x": "pin a"]) == ["x"])
+    // Without a last look to tell what's new, or without what it was known by, nothing is followed.
+    #expect(DockTiles.kept(["pin-1"], knownBy: marks, since: nil, among: ["new": "pin a"]).isEmpty)
+    #expect(DockTiles.kept(["pin-1"], knownBy: [:], since: seen, among: ["new": "pin a"]).isEmpty)
   }
 
   @Test func `what this phone hides outlives the app, and comes back when shown or no longer there`() {
@@ -153,7 +172,7 @@ import Testing
     settings.removeFavourite(Self.favourite.url)
     #expect(Settings(defaults: defaults).hiddenTiles == ["pin-2"])
 
-    settings.keepHidden(among: ["pin-1"])
+    settings.keepHidden(among: ["pin-1": "pin a"])
     #expect(Settings(defaults: defaults).hiddenTiles.isEmpty)
     // Hiding never touched the favourites themselves.
     #expect(settings.favourites.isEmpty)

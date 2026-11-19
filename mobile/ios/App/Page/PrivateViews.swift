@@ -10,6 +10,8 @@ struct PrivateWords: View {
       HStack(spacing: PrivateMark.headingGap) {
         Image(systemName: PrivateMark.symbol)
           .font(.system(size: PrivateMark.headingGlyph, weight: .medium))
+          // The symbol's own name is "Hide", which is what it would be called wherever it's read.
+          .accessibilityLabel("Private")
           .accessibilityHidden(true)
         Text("Private tab")
           .scaled(PrivateMark.heading, .semibold, relativeTo: .title2)
@@ -50,6 +52,7 @@ struct PrivateCard: View {
           .overlay {
             Image(systemName: PrivateMark.symbol)
               .font(.system(size: PrivateMark.onCard, weight: .medium))
+              .accessibilityLabel("Private")
               .foregroundStyle(Palette.paper.opacity(PrivateMark.cardGlyph))
               .frame(width: PrivateMark.plate, height: PrivateMark.plate)
               .background(
@@ -112,6 +115,7 @@ struct PrivateCard: View {
     } else if tab.url == nil {
       Image(systemName: PrivateMark.symbol)
         .font(.system(size: 11, weight: .semibold))
+        .accessibilityLabel("Private")
         .foregroundStyle(palette.soft)
         .frame(width: 16, height: 16)
     } else {
