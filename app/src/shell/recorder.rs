@@ -986,6 +986,10 @@ impl Browser for Recorder {
         self.record(format!("system engine {tab}"))
     }
 
+    fn leave_system_engine(&self, tab: u64, _: &mut App) {
+        self.record(format!("system engine {tab} off"))
+    }
+
     fn widevine(&self) -> crate::widevine::Widevine {
         self.widevine.get()
     }

@@ -28,6 +28,12 @@
 //! protection (HDCP) falls short, as a dock's can, which the site never says. A statement, with
 //! nothing to offer: the fix is the user's cable. Its × and escape close it for the tab, until it
 //! goes to another site, as the cause is the desk's and not the site's.
+//!
+//! Where a tab moves to Safari's engine by itself, on the user's press of play, the note there says
+//! so and what doesn't run there, with Move Back, which Site Controls' Off does too. Its × and
+//! escape close it for the tab, as the output's. Where the tab didn't move, as the page has typing
+//! or captures the camera, microphone or screen, the note says what moving loses, and plays it in
+//! the tab only at the button.
 
 use gpui::{
     App, Context, FontWeight, KeyBinding, MouseButton, SharedString, actions, div, prelude::*, px,
@@ -96,9 +102,29 @@ const OUTPUT_RESTRICTED: &str = "output-restricted";
 const OUTPUT_WORDS: &str =
     "This video needs a protected display connection. A dock or adapter may be limiting it.";
 const OUTPUT_CLOSE_TIP: &str = "Close";
+/// What the core reports, in place of a key system, for a tab it moved to Safari's engine on the
+/// user's press of play, and for one where the ad blocker ran on the site, which doesn't run there.
+const MOVED: &str = "moved";
+const MOVED_AD_BLOCKING: &str = "moved-ad-blocking";
+/// Ours, as #3593's mocks put it: what happened and what the user gives up for it.
+const MOVED_WORDS: &str =
+    "This tab moved to Safari's engine to play its video. Extensions don't run there.";
+const MOVED_AD_BLOCKING_WORDS: &str = "This tab moved to Safari's engine to play its video. Extensions and ad blocking don't run there.";
+const MOVE_BACK: &str = "Move Back";
+/// What the core reports for a tab it didn't move, as the move's reload would lose what the user
+/// typed, or a page that asks before leaving, or what the page captures.
+const TYPED: &str = "typed";
+const CAPTURING: &str = "capturing";
+const TYPED_WORDS: &str = "This site's video needs Safari's engine. Moving there reloads the page, without what you typed.";
+const CAPTURING_WORDS: &str = "This site's video needs Safari's engine. Moving there reloads the page and stops its camera, microphone or screen.";
 const CLOSE_KEY: &str = "drm-note-close";
 
 actions!(drm_note, [CloseNote]);
+
+/// Whether `note` is one of Safari's engine's notes, shown while the tab's page is there.
+fn safaris(note: &str) -> bool {
+    matches!(note, OUTPUT_RESTRICTED | MOVED | MOVED_AD_BLOCKING)
+}
 
 /// The other browser the note offers for video ilo can't play (#2468).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -140,6 +166,8 @@ enum Offer {
     RestartForWidevine,
     /// Opens the page in the other browser, leaving the tab as it is.
     Elsewhere,
+    /// Shows the moved page in Chromium again, as Site Controls' Off.
+    MoveBack,
 }
 
 impl Offer {
@@ -149,6 +177,7 @@ impl Offer {
             Offer::DownloadWidevine => "drm-note-widevine",
             Offer::RestartForWidevine => "drm-note-restart",
             Offer::Elsewhere => "drm-note-elsewhere",
+            Offer::MoveBack => "drm-note-move-back",
         }
     }
 
@@ -158,6 +187,7 @@ impl Offer {
             Offer::DownloadWidevine => shell.download_widevine(cx),
             Offer::RestartForWidevine => shell.restart_for_widevine(cx),
             Offer::Elsewhere => shell.open_elsewhere(cx),
+            Offer::MoveBack => shell.move_back(cx),
         }
     }
 }
@@ -205,7 +235,8 @@ pub(super) fn bind(cx: &mut App) {
 impl Shell {
     /// The core reports the protected-media key system `tab`'s page asked for that ilo can't play,
     /// that its page in Safari's engine has its protected video kept off the screen
-    /// (`output-restricted`), or that there's no note any more (empty).
+    /// (`output-restricted`), that it moved there (`moved`, `moved-ad-blocking`), why it didn't
+    /// (`typed`, `capturing`), or that there's no note any more (empty).
     pub fn set_media_unsupported(&mut self, tab: u64, key_system: &str, cx: &mut Context<Self>) {
         let changed = match key_system.is_empty() {
             true => self.drm_notes.remove(&tab).is_some(),
@@ -223,20 +254,27 @@ impl Shell {
 
     /// The key system behind the note of the tab shown, if its page needs one. A page's question
     /// takes the note's place until it's answered, as an agent's does, as all hang from the same
-    /// place. Each note is its engine's: Chromium's until the tab is in Safari's, which has only the
-    /// output's.
+    /// place. Each note is its engine's: Chromium's until the tab is in Safari's, which has the
+    /// output's and the move's. The move's stays reported until Chromium's page commits, so a tab
+    /// on its way back never shows it as Chromium's.
     pub(super) fn drm_note(&self) -> Option<&SharedString> {
         let playing = self.page(self.selected).system_engine;
         let asked = self.page_asks() || self.agent_question.is_some();
         self.drm_notes
             .get(&self.selected)
-            .filter(|key_system| (key_system.as_ref() == OUTPUT_RESTRICTED) == playing && !asked)
+            .filter(|key_system| safaris(key_system) == playing && !asked)
     }
 
-    /// Whether the note of the tab shown is the output's, which offers nothing.
-    fn output_note(&self) -> bool {
+    /// Whether the note of the tab shown is Safari's engine's, which closes for the tab alone.
+    fn safaris_note(&self) -> bool {
         self.drm_note()
-            .is_some_and(|key_system| key_system.as_ref() == OUTPUT_RESTRICTED)
+            .is_some_and(|key_system| safaris(key_system))
+    }
+
+    /// Whether the note of the tab shown says the tab moved to Safari's engine.
+    fn moved_note(&self) -> bool {
+        self.drm_note()
+            .is_some_and(|key_system| matches!(key_system.as_ref(), MOVED | MOVED_AD_BLOCKING))
     }
 
     /// Closes the note of the tab shown for its site, which the core keeps from asking again. It
@@ -249,7 +287,7 @@ impl Shell {
         let tab = self.selected;
         // check.sh reads this line.
         log!("browser: drm note {tab} closed");
-        if !self.output_note() {
+        if !self.safaris_note() {
             self.browser.close_media_note(tab, cx);
         }
         self.drm_notes.remove(&tab);
@@ -261,7 +299,7 @@ impl Shell {
     fn hover_drm_close(&mut self, hovered: bool, cx: &mut Context<Self>) {
         let busy = self.dragging().is_some() || self.menu_row.is_some();
         let frame = self.button_frames.borrow().get(CLOSE_KEY).copied();
-        let name = if self.output_note() {
+        let name = if self.safaris_note() {
             OUTPUT_CLOSE_TIP
         } else {
             CLOSE_TIP
@@ -291,10 +329,19 @@ impl Shell {
 
     /// Shows the page of the tab shown in Safari's engine. The core takes the note away.
     fn use_system_engine(&mut self, cx: &mut Context<Self>) {
-        if self.drm_note().is_none() || self.output_note() || !self.can_switch() {
+        if self.drm_note().is_none() || self.safaris_note() || !self.can_switch() {
             return;
         }
         self.browser.use_system_engine(self.selected, cx);
+    }
+
+    /// Shows the moved page of the tab shown in Chromium again, and has its profile keep the site
+    /// there, as Site Controls' Off. The note goes once the core says the tab is Chromium's.
+    fn move_back(&mut self, cx: &mut Context<Self>) {
+        if !self.moved_note() {
+            return;
+        }
+        self.browser.leave_system_engine(self.selected, cx);
     }
 
     /// Where Google's Widevine module is, if the note of the tab shown offers it: for a Widevine
@@ -356,7 +403,7 @@ impl Shell {
     /// Opens the page of the tab shown in the other browser, where there's one. The tab keeps its
     /// page, and its note.
     fn open_elsewhere(&mut self, cx: &mut Context<Self>) {
-        if self.drm_note().is_none() || self.output_note() || self.browser.elsewhere().is_none() {
+        if self.drm_note().is_none() || self.safaris_note() || self.browser.elsewhere().is_none() {
             return;
         }
         let url = self.page(self.selected).url;
@@ -366,12 +413,23 @@ impl Shell {
     /// What the note of the tab shown says, and its button's offer and words, if it has one. Where
     /// there's nothing to offer, it says why.
     fn note_offer(&self) -> (&'static str, Option<(Offer, &'static str)>) {
-        if self.output_note() {
+        let note = self.drm_note().map_or("", |key_system| key_system.as_ref());
+        let move_back = Some((Offer::MoveBack, MOVE_BACK));
+        if note == OUTPUT_RESTRICTED {
             (OUTPUT_WORDS, None)
+        } else if note == MOVED {
+            (MOVED_WORDS, move_back)
+        } else if note == MOVED_AD_BLOCKING {
+            (MOVED_AD_BLOCKING_WORDS, move_back)
         } else if let Some(state) = self.widevine_offer() {
             Self::widevine_note(state)
         } else if self.can_switch() {
-            (SWITCH_WORDS, Some((Offer::Switch, SWITCH)))
+            let words = match note {
+                TYPED => TYPED_WORDS,
+                CAPTURING => CAPTURING_WORDS,
+                _ => SWITCH_WORDS,
+            };
+            (words, Some((Offer::Switch, SWITCH)))
         } else {
             let open = self.browser.elsewhere();
             let open = open.map(|elsewhere| (Offer::Elsewhere, elsewhere.label(self.private)));
@@ -435,9 +493,10 @@ mod tests {
     use gpui::{App, AppContext, Modifiers, TestAppContext};
 
     use super::{
-        CLOSE_KEY, OPEN_DEFAULT, OPEN_DEFAULT_PRIVATE, OPEN_SAFARI, OUTPUT_RESTRICTED, Offer,
-        PLAYREADY_PRIVATE, PLAYREADY_WINDOWS_11, PlayReady, SWITCH, WIDEVINE_DOWNLOAD,
-        WIDEVINE_WORDS, WORDS,
+        CAPTURING, CAPTURING_WORDS, CLOSE_KEY, MOVE_BACK, MOVED, MOVED_AD_BLOCKING,
+        MOVED_AD_BLOCKING_WORDS, MOVED_WORDS, OPEN_DEFAULT, OPEN_DEFAULT_PRIVATE, OPEN_SAFARI,
+        OUTPUT_RESTRICTED, Offer, PLAYREADY_PRIVATE, PLAYREADY_WINDOWS_11, PlayReady, SWITCH,
+        TYPED, TYPED_WORDS, WIDEVINE_DOWNLOAD, WIDEVINE_WORDS, WORDS,
     };
 
     use crate::default_browser::Os;
@@ -787,7 +846,7 @@ mod tests {
                 ..shell.page(10)
             };
             shell.set_page(10, page, cx);
-            assert!(shell.output_note());
+            assert!(shell.safaris_note());
             host.take();
             shell.use_system_engine(cx);
             shell.open_elsewhere(cx);
@@ -844,6 +903,91 @@ mod tests {
                 .any(|asked| asked.starts_with("close media note"))
         );
         shell.read_with(cx, |shell, _| assert!(shell.drm_note().is_none()));
+    }
+
+    /// Shows tab 10's page in Safari's engine, or in Chromium.
+    fn in_safaris_engine(shell: &gpui::Entity<Shell>, on: bool, cx: &mut TestAppContext) {
+        shell.update(cx, |shell, cx| {
+            let page = Page {
+                system_engine: on,
+                ..shell.page(10)
+            };
+            shell.set_page(10, page, cx);
+        });
+    }
+
+    /// A tab the core moved says so in Safari's engine, with what doesn't run there, and Move
+    /// Back hands it to Chromium. On its way back, before Chromium's page commits and the core
+    /// takes the note back, it shows nothing, never Chromium's offer to play it there.
+    #[gpui::test]
+    fn the_moved_note_shows_in_safaris_engine_and_moves_back(cx: &mut TestAppContext) {
+        let (shell, host) = window_with_tabs(cx);
+        host.system_engine.set(true);
+        in_safaris_engine(&shell, true, cx);
+        shell.update(cx, |shell, cx| {
+            // Without a note, there's nothing to move back.
+            shell.move_back(cx);
+            shell.set_media_unsupported(10, MOVED, cx);
+        });
+        assert_eq!(
+            offered(&shell, cx),
+            (MOVED_WORDS, Some((Offer::MoveBack, MOVE_BACK)))
+        );
+        assert_eq!(take_offer(&shell, &host, cx), ["system engine 10 off"]);
+        shell.update(cx, |shell, cx| {
+            shell.use_system_engine(cx);
+            shell.open_elsewhere(cx);
+            shell.set_media_unsupported(10, MOVED_AD_BLOCKING, cx);
+        });
+        assert!(
+            host.take().is_empty(),
+            "the moved note offered another engine"
+        );
+        assert_eq!(
+            offered(&shell, cx),
+            (MOVED_AD_BLOCKING_WORDS, Some((Offer::MoveBack, MOVE_BACK)))
+        );
+        in_safaris_engine(&shell, false, cx);
+        shell.update(cx, |shell, cx| {
+            assert!(shell.drm_note().is_none());
+            shell.move_back(cx);
+            shell.use_system_engine(cx);
+        });
+        assert!(host.take().is_empty(), "the tab on its way back was moved");
+    }
+
+    /// Its × and escape close it for the tab alone, as the output's: the core is told nothing, so
+    /// the site keeps its move.
+    #[gpui::test]
+    fn the_moved_note_closes_for_the_tab(cx: &mut TestAppContext) {
+        let (shell, host) = window_with_tabs(cx);
+        in_safaris_engine(&shell, true, cx);
+        shell.update(cx, |shell, cx| {
+            shell.set_media_unsupported(10, MOVED, cx);
+            host.take();
+            shell.close_drm_note(cx);
+            assert!(shell.drm_note().is_none());
+        });
+        assert!(host.take().is_empty());
+    }
+
+    /// A tab the core didn't move, as moving would lose what the page has, says what, and plays
+    /// in the tab only at the button. Its × closes it for the site, as any site's.
+    #[gpui::test]
+    fn a_tab_that_didnt_move_says_what_moving_loses(cx: &mut TestAppContext) {
+        let (shell, host) = window_with_tabs(cx);
+        host.system_engine.set(true);
+        for (note, words) in [(TYPED, TYPED_WORDS), (CAPTURING, CAPTURING_WORDS)] {
+            shell.update(cx, |shell, cx| shell.set_media_unsupported(10, note, cx));
+            assert_eq!(
+                offered(&shell, cx),
+                (words, Some((Offer::Switch, SWITCH))),
+                "{note}"
+            );
+            assert_eq!(take_offer(&shell, &host, cx), ["system engine 10"]);
+            shell.update(cx, |shell, cx| shell.close_drm_note(cx));
+            assert_eq!(host.take(), ["close media note 10"]);
+        }
     }
 
     /// On Linux, the core offers Google's Widevine module: a Widevine page's note offers it and
