@@ -1001,8 +1001,18 @@ fi
 # The agent's page watched dies, as macOS ends a renderer under memory pressure: its place shows the
 # crash card, as the user's own page's does, and a press on its Reload is the user acting on the
 # agent's tab, so it takes the tab over, as a press in its page does, and loads the page again
-# (#3433). The core hears no press there, as the page has no renderer. ⌘↩ hands it back.
+# (#3433). The core hears no press there, as the page has no renderer. ⌘↩ hands it back. The agent
+# reads the page first, as a press takes over only a tab the agent is at work in, and closing the
+# split view's pages left it at work in none.
 if [ "$driven" = 1 ]; then
+  at_work=$(grep -c "^browser: agent mcp-client at work in $agent_tab\$" "$log" || true)
+  read=$(call read_page "{\"tab\":$agent_tab}")
+  case "$read" in
+    "Tab $agent_tab: Agent page"*) ;;
+    *) fail "reading the agent's tab before its renderer was killed answered: $read" ;;
+  esac
+  await_more "^browser: agent mcp-client at work in $agent_tab\$" "$at_work" ||
+    fail "the agent's tab didn't show it at work once it read the page"
   presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
   taken=$(grep -c "^browser: agent page pressed in $agent_tab\$" "$log" || true)
   reloads=$(grep -c "^browser: loaded $agent_tab " "$log" || true)
