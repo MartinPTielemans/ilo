@@ -210,20 +210,20 @@ TEST(ShareSnapshot, TitlesAreCutAtACharacterAndOtherAddressesLeftOut) {
       base::StrCat({"https://a.example/", std::string(kShareAddressCap, 'p')});
   const std::string items = base::StrCat(
       {R"([{"title":")", long_title, R"(","url":"https://a.example/"},)",
-       R"({"title":"js","url":"javascript:alert(1)"},)",
-       R"({"title":"data","url":"data:text/html,<script>alert(1)</script>"},)",
+       // "x(" delimits these, as their scripts hold the )" that would end R"(.
+       R"x({"title":"js","url":"javascript:alert(1)"},)x",
+       R"x({"title":"data","url":"data:text/html,<script>alert(1)</script>"},)x",
        R"({"title":"file","url":"file:///etc/passwd"},)",
        R"({"title":"ilo","url":"chrome://settings"},)",
        R"({"title":"long","url":")", long_url, R"("},)",
-       R"({"title":"user","url":"https://me:secret@b.example/x"}])"
-});
-const ShareOpened opened = OpenShare(RawBlob(Snapshot(items), link), link);
-ASSERT_TRUE(opened.snapshot);
-const std::vector<ShareItem>& kept = opened.snapshot->items;
-ASSERT_EQ(kept.size(), 2u);
-EXPECT_LE(kept[0].title.size(), kShareTitleCap);
-EXPECT_TRUE(base::IsStringUTF8(kept[0].title));
-EXPECT_EQ(kept[1].url, GURL("https://b.example/x"));
+       R"({"title":"user","url":"https://me:secret@b.example/x"}])"});
+  const ShareOpened opened = OpenShare(RawBlob(Snapshot(items), link), link);
+  ASSERT_TRUE(opened.snapshot);
+  const std::vector<ShareItem>& kept = opened.snapshot->items;
+  ASSERT_EQ(kept.size(), 2u);
+  EXPECT_LE(kept[0].title.size(), kShareTitleCap);
+  EXPECT_TRUE(base::IsStringUTF8(kept[0].title));
+  EXPECT_EQ(kept[1].url, GURL("https://b.example/x"));
 }
 
 TEST(ShareSnapshot, OnlyASmallPngIsAFavicon) {
