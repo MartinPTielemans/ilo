@@ -1,5 +1,8 @@
-//! What sharing as a link says (#680): before the first share, signed out, and once the link is
-//! copied. The host asks and shows them; the words are here so they're the same from every menu.
+//! What sharing as a link says (#680): before the first share, signed out, once the link is
+//! copied, and when one is opened in ilo. The host asks and shows them; the words are here so
+//! they're the same from every menu.
+
+use crate::account::ShareKind;
 
 /// What Share does next, from whether the account is on and whether the user has shared before.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -69,6 +72,48 @@ pub fn copied(title: &str, replaced: bool, count: usize, left_out: usize) -> Str
     words
 }
 
+/// The offer card over a share's page in ilo (tab_share_found): its question, its detail and its
+/// action. A folder or chosen tabs go at the foot of Pinned in `space`, as a folder; a Space comes
+/// as a new one. `again` when the user added this link before, which the add then updates.
+pub fn offer(
+    kind: ShareKind,
+    title: &str,
+    count: usize,
+    space: &str,
+    again: bool,
+) -> (String, String, &'static str) {
+    let (open, now) = match count {
+        1 => ("It opens only when you click it.", "as it is now"),
+        _ => ("They open only when you click them.", "as they are now"),
+    };
+    let tabs = tabs(count);
+    match (kind, again) {
+        (ShareKind::Space, false) => (
+            format!("Add the Space “{title}”?"),
+            format!(
+                "A new Space with its {tabs} pinned, its colour and its icon, on your current \
+                 profile. {open}"
+            ),
+            "Add to Sidebar",
+        ),
+        (ShareKind::Space, true) => (
+            format!("Update the Space “{title}”?"),
+            format!("The Space you added from this link gets its {tabs} {now}. {open}"),
+            "Update",
+        ),
+        (_, false) => (
+            format!("Add “{title}” to your sidebar?"),
+            format!("A folder of {tabs} goes at the foot of Pinned in {space}. {open}"),
+            "Add to Sidebar",
+        ),
+        (_, true) => (
+            format!("Update “{title}” in your sidebar?"),
+            format!("The folder you added from this link gets its {tabs} {now}. {open}"),
+            "Update",
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -92,6 +137,26 @@ mod tests {
         assert_eq!(action, "Copy Link");
         let (_, detail, _) = explain("Notes", 1);
         assert!(detail.starts_with("Anyone with the link can see this tab’s name and address,"));
+    }
+
+    #[test]
+    fn the_offer_says_where_a_share_goes_and_that_nothing_loads() {
+        let (question, detail, action) =
+            offer(ShareKind::Folder, "Lisbon, March", 7, "Travel", false);
+        assert_eq!(question, "Add “Lisbon, March” to your sidebar?");
+        assert_eq!(
+            detail,
+            "A folder of 7 tabs goes at the foot of Pinned in Travel. They open only when you \
+             click them."
+        );
+        assert_eq!(action, "Add to Sidebar");
+        let (question, detail, _) = offer(ShareKind::Space, "Research", 5, "Travel", false);
+        assert_eq!(question, "Add the Space “Research”?");
+        assert!(detail.starts_with("A new Space with its 5 tabs pinned, its colour and its icon"));
+        let (question, detail, action) = offer(ShareKind::Tabs, "Notes", 1, "Work", true);
+        assert_eq!(question, "Update “Notes” in your sidebar?");
+        assert!(detail.ends_with("its 1 tab as it is now. It opens only when you click it."));
+        assert_eq!(action, "Update");
     }
 
     #[test]
