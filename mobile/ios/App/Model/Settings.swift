@@ -77,12 +77,12 @@ final class Settings {
   init(defaults: UserDefaults = .standard) {
     self.defaults = defaults
     searchEngine = SearchEngine.named(defaults.string(forKey: "searchEngine"))
-    keyboardOnLaunch = defaults.object(forKey: "keyboardOnLaunch") as? Bool ?? true
-    offersPasswords = defaults.object(forKey: "offersPasswords") as? Bool ?? true
-    offersToSave = defaults.object(forKey: "offersToSave") as? Bool ?? true
+    keyboardOnLaunch = Self.flag("keyboardOnLaunch", in: defaults)
+    offersPasswords = Self.flag("offersPasswords", in: defaults)
+    offersToSave = Self.flag("offersToSave", in: defaults)
     neverSaves = Set(defaults.stringArray(forKey: "neverSaves") ?? [])
-    swipeAnywhere = defaults.object(forKey: "swipeAnywhere") as? Bool ?? true
-    offersSignIn = defaults.object(forKey: "offersSignIn") as? Bool ?? true
+    swipeAnywhere = Self.flag("swipeAnywhere", in: defaults)
+    offersSignIn = Self.flag("offersSignIn", in: defaults)
     archiveAfter = (defaults.object(forKey: "archiveAfter") as? Double).flatMap(ArchiveAfter.init) ?? .hours12
     awayTabs = Set(defaults.stringArray(forKey: "awayTabs") ?? [])
     archiveNote = defaults.integer(forKey: "archiveNote")
@@ -91,6 +91,12 @@ final class Settings {
     hiddenTiles = Set(defaults.stringArray(forKey: "hiddenTiles") ?? [])
     // An earlier build kept the searches that visited sites described, which was a list of them.
     defaults.removeObject(forKey: "siteSearches")
+  }
+
+  /// A switch that's on until it's turned off. Read as the system reads a yes or a no, since a
+  /// launch argument, such as `-keyboardOnLaunch NO`, gives its answer as a word.
+  private static func flag(_ key: String, in defaults: UserDefaults) -> Bool {
+    defaults.object(forKey: key) == nil ? true : defaults.bool(forKey: key)
   }
 
   func isFavourite(_ url: URL?) -> Bool {

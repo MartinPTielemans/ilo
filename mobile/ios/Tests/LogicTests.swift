@@ -217,6 +217,16 @@ import Testing
     #expect(settings.favourites.isEmpty)
   }
 
+  @Test func `a launch argument's no, which comes as a word, turns a switch off`() {
+    // What `-keyboardOnLaunch NO` puts in the defaults a launch reads.
+    defaults.set("NO", forKey: "keyboardOnLaunch")
+    defaults.set("YES", forKey: "swipeAnywhere")
+    let launched = Settings(defaults: defaults)
+    #expect(!launched.keyboardOnLaunch)
+    #expect(launched.swipeAnywhere)
+    #expect(launched.offersPasswords)
+  }
+
   @Test func `favourites and settings outlive the app`() {
     let url = URL(string: "https://example.com/")!
     settings.addFavourite(url, title: "Example")
