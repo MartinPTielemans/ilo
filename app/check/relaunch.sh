@@ -315,6 +315,15 @@ with open(sys.argv[1], encoding="utf-8") as f:
 ' "$saved" 2>&1 || echo "(none)"
 }
 if [ -n "$wayland" ] || sway_xwayland; then
+  # [DEBUG-3494] a windowed quit of the same window first, which shows no page either: does its
+  # frame go the same way?
+  echo "note: [DEBUG-3494] saved before the windowed quit: $(saved_windows)"
+  send window 1
+  quit_by_key
+  exited
+  echo "note: [DEBUG-3494] saved after the windowed quit: $(saved_windows)"
+  launch_logged "$out/relaunch-windowed.log"
+  await '^browser: first frame at ' || fail "[DEBUG-3494] the relaunch after the windowed quit didn't draw"
   echo "note: [DEBUG-3494] saved before the full-screen step: $(saved_windows)"
   send window 1
   send fullscreen
