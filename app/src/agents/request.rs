@@ -18,6 +18,12 @@ pub const LISTED: usize = 3;
 /// The characters of an answer's body the agent reads at most, and of all a call's together.
 const SHOWN: usize = 20_000;
 pub const ALL_SHOWN: usize = 100_000;
+/// The headers that name a method for a server to take in the sent one's place.
+const OVERRIDES: [&str; 3] = [
+    "x-http-method-override",
+    "x-http-method",
+    "x-method-override",
+];
 /// What stands for a value that's hidden.
 const HIDDEN: &str = "(hidden)";
 /// What stands for an empty value in what a request sent, as an empty one is an object's name.
@@ -40,19 +46,32 @@ pub struct Request {
 }
 
 impl Request {
-    /// Whether it may change anything: anything but a GET or HEAD that's just that.
+    /// Whether it may change anything: anything but a GET or HEAD whose override headers, if it
+    /// sets any, all say GET or HEAD too, as a server may take the method or an override.
     pub fn changes(&self) -> bool {
-        !matches!(self.does.as_str(), "GET" | "HEAD")
+        let read = |method: &str| matches!(method, "GET" | "HEAD");
+        !read(&self.method)
+            || (self.headers.iter())
+                .filter(|(name, _)| OVERRIDES.iter().any(|each| name.eq_ignore_ascii_case(each)))
+                .any(|(_, value)| !read(&value.trim().to_ascii_uppercase()))
     }
 
     /// What it is, for the log and the answer: "POST /api/items".
     pub fn target(&self) -> String {
-        format!("{} {}", self.does, clip(&self.path, 60))
+        format!("{} {}", self.methods(), clip(&self.path, 60))
     }
 
-    /// What it is, short enough for a line of the question: "MERGE /_api/…/items(1)".
+    /// What it is, short enough for a line of the question: "POST as MERGE /_api/…/items(1)".
     pub fn line(&self) -> String {
-        format!("{} {}", self.does, short(&self.path))
+        format!("{} {}", self.methods(), short(&self.path))
+    }
+
+    /// The method sent, and the one an override names where it differs: "POST as GET".
+    fn methods(&self) -> String {
+        match self.does == self.method {
+            true => self.method.clone(),
+            false => format!("{} as {}", self.method, self.does),
+        }
     }
 
     /// What its body sends, in a line for the question, or "".
@@ -335,12 +354,7 @@ fn one(asked: &Value, origin: &str) -> Result<Request, Wrong> {
     if !body.is_empty() && !has("content-type") {
         headers.push(("Content-Type".into(), kind.into()));
     }
-    let overrides = [
-        "x-http-method-override",
-        "x-http-method",
-        "x-method-override",
-    ];
-    let does = (overrides.iter())
+    let does = (OVERRIDES.iter())
         .find_map(|name| {
             headers
                 .iter()
