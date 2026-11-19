@@ -32,6 +32,8 @@ struct Morphed<Name: View, Controls: View>: View {
   var loaded: Double?
   /// A tap on the pill.
   var grow: () -> Void
+  /// What scrolls under the bar.
+  var over: UIScrollView?
   /// What it's called, at both sizes: in its middle, and smaller on the pill.
   @ViewBuilder var name: Name
   /// What's on the bar and not on the pill, and what a touch on the bar does.
@@ -53,7 +55,7 @@ struct Morphed<Name: View, Controls: View>: View {
 
   var body: some View {
     Melted(
-      small: small, pill: pill, loaded: loaded, palette: palette, away: away, moving: !reduceMotion, grow: grow,
+      small: small, pill: pill, loaded: loaded, palette: palette, away: away, moving: !reduceMotion, grow: grow, over: over,
       name: inside(name), controls: inside(controls)
     )
     // The pill is under the bar's place, and is touched there.
@@ -81,6 +83,7 @@ private struct Melted<Name: View, Controls: View>: UIViewControllerRepresentable
   var away: Bool
   var moving: Bool
   var grow: () -> Void
+  var over: UIScrollView?
   var name: Name
   var controls: Controls
 
@@ -102,6 +105,7 @@ private struct Melted<Name: View, Controls: View>: UIViewControllerRepresentable
 
   private func set(_ place: MorphView) {
     place.grow = grow
+    place.fade.scrollView = over
     place.set(pill: pill)
     place.set(palette: palette, away: away)
     place.set(loaded: loaded)
@@ -141,9 +145,13 @@ final class MorphView: UIView {
   private var tint: Color?
   private var effect: UIGlassEffect?
   fileprivate var grow: () -> Void = {}
+  /// What scrolls under the bar fades out there, as the system has it under a bar of its own.
+  fileprivate let fade = UIScrollEdgeElementContainerInteraction()
 
   init() {
     super.init(frame: .zero)
+    fade.edge = .bottom
+    addInteraction(fade)
     glass.cornerConfiguration = .capsule()
     // What's on it is cut to it: the bar's buttons, on its way to the pill.
     glass.contentView.cornerConfiguration = .capsule()

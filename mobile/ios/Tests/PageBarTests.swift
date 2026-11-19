@@ -165,6 +165,15 @@ import WebKit
     return at
   }
 
+  @Test func `the page fades out under the whole bar and is sharp around the small pill`() {
+    let tab = WebTab(id: "tab", role: .today, browser: browser())
+    #expect(!tab.webView.scrollView.bottomEdgeEffect.isHidden)
+    tab.tuckBar()
+    #expect(tab.webView.scrollView.bottomEdgeEffect.isHidden)
+    tab.growBar()
+    #expect(!tab.webView.scrollView.bottomEdgeEffect.isHidden)
+  }
+
   @Test func `a page's fixed foot and its full height end just above the bar, whole and small`() async throws {
     let tab = WebTab(id: "tab", role: .today, browser: browser())
     let window = try window(showing: tab)
@@ -180,7 +189,7 @@ import WebKit
     for id in ["foot", "tall"] {
       let at = try await settled(id, above: whole, in: tab)
       #expect(at <= whole)
-      #expect(at >= whole - Bar.gap - 1)
+      #expect(at >= whole - Bar.clear - 1)
     }
 
     tab.tuckBar()
@@ -188,7 +197,7 @@ import WebKit
     // With the bar on its way, what scrolls ends above the pill already, and the page keeps the
     // layout it had: a new one would land in the middle of the bar's motion.
     #expect(tab.webView.scrollView.contentInset.bottom < Bar.height)
-    #expect(tab.webView.obscuredContentInsets.bottom == Bar.height + Bar.gap + band)
+    #expect(tab.webView.obscuredContentInsets.bottom == Bar.height + Bar.clear + band)
     // Once the bar is there, the page has the room it gave up, and still ends above the pill.
     for id in ["foot", "tall"] {
       var at = try await foot(of: id, in: tab)
@@ -198,13 +207,13 @@ import WebKit
       }
       #expect(at > whole)
       #expect(at <= small)
-      #expect(at >= small - Bar.gap - 1)
+      #expect(at >= small - Bar.smallClear - 1)
     }
 
     tab.growBar()
     #expect(!tab.barHidden)
-    #expect(tab.webView.scrollView.contentInset.bottom == Bar.height + Bar.gap)
-    #expect(tab.webView.obscuredContentInsets.bottom < Bar.height + Bar.gap + band)
+    #expect(tab.webView.scrollView.contentInset.bottom == Bar.height + Bar.clear)
+    #expect(tab.webView.obscuredContentInsets.bottom < Bar.height + Bar.clear + band)
     for id in ["foot", "tall"] {
       #expect(try await settled(id, above: whole, in: tab) <= whole)
     }

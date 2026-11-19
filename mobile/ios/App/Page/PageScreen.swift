@@ -415,12 +415,12 @@ private struct PageBar: View {
     let shrunk = tab.barHidden
     // The pill is in the middle of the screen, not of the room the buttons leave the bar.
     let pill = MorphPill(
-      size: CGSize(width: nameWidth * Bar.smallLabel + 20, height: Bar.small),
+      size: CGSize(width: nameWidth * Bar.smallLabel + 2 * Bar.smallInset, height: Bar.small),
       drop: foot - Bar.gap - Bar.smallFoot(band: band), across: across, reach: Bar.smallReach)
     // Under a finger the glass's top is the finger's: all the way once it has come as far as that goes.
     let pulled = min(1, tuck / (Bar.height + pill.drop - pill.size.height))
     HStack(alignment: .bottom, spacing: Bar.gap) {
-      Morphed(small: shrunk ? 1 : pulled, pill: pill, loaded: tab.isLoading ? tab.progress : nil, grow: { tab.growBar() }) {
+      Morphed(small: shrunk ? 1 : pulled, pill: pill, loaded: tab.isLoading ? tab.progress : nil, grow: { tab.growBar() }, over: tab.webView.scrollView) {
         BarName(tab: tab, shrunk: shrunk, drag: drag, width: $nameWidth)
       } controls: {
         PagePill(tab: tab, lift: lift, tuck: $tuck, drag: $drag)

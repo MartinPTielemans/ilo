@@ -146,8 +146,14 @@ nonisolated enum Bar {
   static let gap: CGFloat = 8
   static let side: CGFloat = 12
   static let radius: CGFloat = 18
-  /// The page's bar while the page is read: a pill with the site's name.
-  static let small: CGFloat = 24
+  /// The page's bar while the page is read: a pill with the site's name, the size of Safari's.
+  static let small: CGFloat = 32
+  /// From each end of the small pill to the site's name.
+  static let smallInset: CGFloat = 18
+  /// How far over the page's bar the page ends, and over its small pill: Safari's, so what a page
+  /// pins to its foot stands where it does there.
+  static let clear: CGFloat = 16
+  static let smallClear: CGFloat = 12
   /// How far the small pill sits over the screen's foot: just clear of the home indicator, which
   /// lies as far from the foot whichever way the phone is held, in a `band` that isn't as deep on
   /// its side.

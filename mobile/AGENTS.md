@@ -35,6 +35,7 @@ It's native Swift in `mobile/ios`, and paths below start there. This file adds t
 - **One look, in Liquid Glass.** Every glass in the app is made in `App/Look/Glass.swift`, and a view asks it for its ground.
 - **Smooth motion outranks glass**, since glass that SwiftUI changes is drawn again by the app, each frame. SwiftUI's glass keeps its value, tint and shape while anything animates, is never interactive, never fades or scales, and takes only the built-in shapes.
 - **Glass that changes shape is `Morphed`** (`App/Look/Morphed.swift`): one UIKit glass whose frame the system animates, so the app makes no frame of the way. The page's bar melts into its small pill with it. SwiftUI's own morph (`glassEffectID`) costs what resizing the glass each frame does, and stays out. What's on a `Morphed` is a SwiftUI world of its own: it gets the environment values `Morphed` names, so a value the app adds to its environment is added there, and a change outside reaches it at its own pace only through `Held`.
+- **The page's foot is laid out as Safari's.** `WebTab` tells WebKit what the bar covers, and WebKit does the rest: where a page pins something to its foot it fills what's covered with that colour, so the bar rests on a band, and elsewhere the page shows around the bar. Which pages get the band changes with the iOS version (GitHub does on 26, not on 27), so before calling one a fault, open the page in Safari on the same simulator.
 
 ## Verifying
 

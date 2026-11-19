@@ -531,7 +531,7 @@ final class WebTab: NSObject, Identifiable {
     shrink.scrolled(
       to: scroll.contentOffset.y + insets.top,
       of: scroll.contentSize.height + insets.top + insets.bottom - scroll.bounds.height,
-      freed: Bar.height + Bar.gap - smallFoot,
+      freed: Bar.height + Bar.clear - smallFoot,
       byUser: scroll.isTracking || scroll.isDecelerating)
     if barHidden != shrink.shrunk { barHidden = shrink.shrunk }
   }
@@ -582,21 +582,23 @@ final class WebTab: NSObject, Identifiable {
 
   /// What the small pill covers of the page's foot, over the home indicator's band.
   private var smallFoot: CGFloat {
-    max(Bar.gap, Bar.smallFoot(band: band) + Bar.small + Bar.gap - band)
+    max(Bar.gap, Bar.smallFoot(band: band) + Bar.small + Bar.smallClear - band)
   }
 
   /// What scrolls ends above the bar, whichever size it is.
   private func fitBar() {
-    let foot = barHidden ? smallFoot : Bar.height + Bar.gap
+    let foot = barHidden ? smallFoot : Bar.height + Bar.clear
     webView.scrollView.contentInset.bottom = foot
     webView.scrollView.verticalScrollIndicatorInsets.bottom = foot
+    // The page fades out under the whole bar, and is sharp around the small pill, as in Safari.
+    webView.scrollView.bottomEdgeEffect.isHidden = barHidden
   }
 
   /// The page is laid out above the bar too: what it fixes to its foot, or fits to the screen's
   /// height, stands clear of the bar. The web view keeps the whole screen, so what scrolls still
   /// shows through the bar. WebKit lays the page out again at once for each new inset.
   private func fitPage() {
-    let whole = Bar.height + Bar.gap
+    let whole = Bar.height + Bar.clear
     let foot = barHidden ? smallFoot : whole
     // WebKit measures these from the web view's own foot, under the home indicator.
     let most = UIEdgeInsets(top: 0, left: 0, bottom: whole + band, right: 0)
