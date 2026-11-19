@@ -41,6 +41,7 @@
 #include "browser_core/password_offer.h"
 #include "browser_core/platform/window_views.h"
 #include "browser_core/profiles.h"
+#include "browser_core/script_dialog.h"
 #include "browser_core/session.h"
 #include "browser_core/side_panel.h"
 #include "browser_core/space.h"
@@ -809,6 +810,42 @@ void Window::OnPageClicked(bc_id tab) {
 }
 
 // static
+void Window::PagePressed(content::WebContents* contents) {
+  // A user's tab costs the one IsAgentTab, and the app isn't asked.
+  if (!Host().tab_page_pressed || !IsAgentTab(contents)) {
+    return;
+  }
+  const bc_id tab = Tab::IdOf(contents);
+  if (Showing(tab)) {
+    Host().tab_page_pressed(Host().context, tab);
+  }
+}
+
+// static
+void Window::DialogPressed(views::Widget* window, views::Widget* dialog) {
+  for (auto& [id, each] : Windows()) {
+    if (each->widget() != window) {
+      continue;
+    }
+    // In a split view the dialog may be over the page beside the one focused.
+    for (bc_id tab : each->panes_) {
+      content::WebContents* contents = Tab::FromId(tab);
+      if (!IsAgentTab(contents)) {
+        continue;
+      }
+      tabs::TabInterface* model = tabs::TabInterface::MaybeGetFromContents(contents);
+      tabs::TabFeatures* features = model ? model->GetTabFeatures() : nullptr;
+      tabs::TabDialogManager* dialogs = features ? features->tab_dialog_manager() : nullptr;
+      if (dialogs && dialogs->IsDialogManaged(dialog)) {
+        PagePressed(contents);
+        return;
+      }
+    }
+    return;
+  }
+}
+
+// static
 void Window::ActivateContents(content::WebContents* contents) {
   const bc_id tab = Tab::IdOf(contents);
   // A tab the window shows already stays as it is: a notification's click brings its tab forward,
@@ -1407,6 +1444,7 @@ void Window::CloseTab(bc_id tab, bool discard) {
   }
   TabStripModel* tabs = in->GetBrowserWindowInterface()->GetTabStripModel();
   if (discard) {
+    ScriptDialogs::Cancel(contents);
     tabs->DetachAndDeleteWebContentsAt(tabs->GetIndexOfWebContents(contents));
     return;
   }
@@ -3431,16 +3469,24 @@ void Window::OverlayTakesKeyboard(bool takes) {
     return;
   }
   // The overlay showed another tab, as the command bar does going to a page: its page takes the
-  // keyboard, as a press that shows a tab gives it. On X11 the window isn't active while the
-  // overlay has the input focus, so FocusPage passed the page over as it showed, and the window
-  // holds the keyboard for it until it's active again. Not when the tab it showed closed, as a
-  // Space the dialog deleted did: what shows then comes of that, and the UI keeps the keyboard, as
-  // the Mac's does.
+  // keyboard, as a press that shows a tab gives it. FocusPage passed the page over as it showed,
+  // the keyboard being the overlay's, and on X11 the window holds it for the page until it's active
+  // again. Not when the tab it showed closed, as a Space the dialog deleted did: what shows then
+  // comes of that, and the UI keeps the keyboard, as the Mac's does.
   const bc_id under = std::exchange(selected_under_overlay_, 0);
   if (under != selected_ && shown_ && (!under || Tab::Get(under))) {
     page_had_keyboard_ = true;
     GiveKeyboardToPage();
+    return;
   }
+#if BUILDFLAG(IS_LINUX)
+  // Otherwise the page or UI that had it has it back, unless what it was went under the overlay,
+  // as a page view a commit replaced: then the window holds it for the page shown. Only Wayland
+  // leaves the window active under the overlay, so this stands in for the activation that gives it
+  // to that page on X11 (OnWidgetActivationChanged). Never to an agent's tab, which never takes the
+  // user's keyboard (#3164).
+  focus_leaving_rule::Enter(IsAgentTab(shown_.get()), [&] { FocusPage(); });
+#endif
 }
 
 void Window::FocusPageSoon() {
@@ -3455,6 +3501,15 @@ void Window::FocusPage() {
   if (!shown_ || !widget_->IsActive()) {
     return;
   }
+#if BUILDFLAG(IS_LINUX)
+  // Under Wayland the window stays active while an overlay has its keyboard, and a page focused
+  // then, as one a shortcut in the command bar shows, takes the input method from the bar's field
+  // (#3527). The page has it as the overlay lets go (OverlayTakesKeyboard), as the window being
+  // active again gives it elsewhere.
+  if (platform::OverlayHasKeyboard(widget_.get())) {
+    return;
+  }
+#endif
   if (content::WebContents* devtools = devtools_to_focus_.get()) {
     devtools_to_focus_ = nullptr;
     page_had_keyboard_ = false;

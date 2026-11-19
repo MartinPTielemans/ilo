@@ -14,7 +14,7 @@
 # Mac the run answers macOS's question for the local network that looking for devices brings, and
 # any it asks as the call starts. A video's page menu floats it in Picture in Picture, the Mini
 # Player, 10 in from the top right of the screen, with Dia's corners and rim, and its flat scrim
-# under the pointer, on the Mac in mini-player-rest.png and mini-player-hover.png. A scroll or a
+# under the pointer, on the Mac in mini-player-rest.png and mini-player-hover*.png. A scroll or a
 # drag moves it, ⌘ or Ctrl with a scroll sizes it, and a double-click puts it back in its tab,
 # shown. On Windows a drag let go after a rest leaves it there, with window contents shown while
 # dragging or not. On the Mac a throw settles it 10 in at a corner, and a slow release near a side
@@ -112,12 +112,16 @@ onkeydown = async e => {
       navigator.mediaSession.metadata = new MediaMetadata({title: "Quiet", artist: "Check"});
       navigator.mediaSession.setActionHandler("previoustrack", () => document.title = "previous track");
       navigator.mediaSession.setActionHandler("nexttrack", () => document.title = "next track");
-      navigator.mediaSession.setActionHandler("enterpictureinpicture", async () => {
-        const floating = await documentPictureInPicture.requestWindow({width: 320, height: 180});
-        floating.onpagehide = () => document.title = "landed";
-        document.onvisibilitychange = () => document.hidden || floating.close();
-        document.title = "floating";
-      });
+      // Alone in its try: a browser that knows no such action, as an older WebKit, throws, and
+      // the music still has to play.
+      try {
+        navigator.mediaSession.setActionHandler("enterpictureinpicture", async () => {
+          const floating = await documentPictureInPicture.requestWindow({width: 320, height: 180});
+          floating.onpagehide = () => document.title = "landed";
+          document.onvisibilitychange = () => document.hidden || floating.close();
+          document.title = "floating";
+        });
+      } catch {}
       await music.play();
     } else if (e.key == "o" || e.key == "p") {
       window.open(e.key == "o" ? "call.html?Shared" : "call.html?Other");
@@ -895,36 +899,60 @@ EOF
   rest=$(lightness "$out/mini-player-rest.png")
   [ "$rest" -ge 170 ] ||
     fail "the Mini Player at rest was dark over its video, at $rest where the video is about 204"
-  # Captured until the scrim, which fades in over 200 ms from the pointer's move, has come.
-  # Each capture's time from the move is logged, so a red tells captures after the controls'
-  # own hide, 2.5 s after the move, from a scrim never shown (#3354).
+  # The scrim fades in over 200 ms from the pointer's move, and the controls hide 2.5 s after it.
+  # The capture gets ready before the move and is asked for its pictures once the fade is due:
+  # started after the move, its Swift took 1 to 4 s to start on a hosted runner, and a picture
+  # past the hide showed no scrim (#3354). It takes three back to back, so a fade that starts late
+  # on a busy runner still shows in a later one, and a hover that brings no controls shows in none.
+  # Only a picture asked within 2 s of the move counts: one nearer the hide can't tell.
   scrim_ms() { perl -MTime::HiRes=time -e 'printf "%d\n", time * 1000'; }
+  ready="$out/mini-player-hover.ready" go="$out/mini-player-hover.go"
+  rm -f "$ready" "$go"
+  PICTURES=3 FRAME="$at" READY="$ready" GO="$go" ../tools/window-screenshot.sh "$pid" \
+    "$out/mini-player-hover.png" floating > "$out/mini-player-hover.times" \
+    2> "$out/mini-player-hover.log" &
+  capturing=$!
+  while [ ! -e "$ready" ] && kill -0 "$capturing" 2> /dev/null; do
+    sleep 0.05
+  done
+  [ -e "$ready" ] || {
+    wait "$capturing" || true
+    fail "the Mini Player's capture under the pointer didn't get ready: $(tail -1 "$out/mini-player-hover.log")"
+  }
   moved_at=$(scrim_ms)
   send pip move $((pw / 8)) $((ph / 2))
-  capture=0
-  for _ in $(seq 20); do
-    capture=$((capture + 1))
-    began=$(($(scrim_ms) - moved_at))
-    [ "$capture" -gt 1 ] || first_capture=$began
-    FRAME="$at" ../tools/window-screenshot.sh "$pid" "$out/mini-player-hover.png" floating ||
-      fail "no Mini Player to capture"
-    hovered=$(lightness "$out/mini-player-hover.png")
-    echo "media: scrim capture $capture began at +$began ms from the move, lightness $hovered"
-    [ "$hovered" -lt 170 ] && break
+  while [ $(($(scrim_ms) - moved_at)) -lt 250 ]; do
+    sleep 0.02
   done
-  if [ "$first_capture" -gt 2500 ]; then
-    first_when="after the controls' own hide 2.5 s after the move"
-  else
-    first_when="before the controls' own hide 2.5 s after the move"
-  fi
-  [ "$hovered" -lt 170 ] ||
-    fail "the pointer on the Mini Player didn't bring its scrim: it stayed at $hovered, where the video is about 204 and under the scrim about 133; the first of $capture captures began at +$first_capture ms, $first_when"
+  : > "$go"
+  wait "$capturing" ||
+    fail "no Mini Player to capture under the pointer: $(tail -1 "$out/mini-player-hover.log")"
+  rm -f "$ready" "$go"
+  shown='' readings='' in_time=0
+  while read -r _ n _ asked_at _ back_at; do
+    asked=$((asked_at - moved_at)) came=$((back_at - moved_at))
+    picture="$out/mini-player-hover.png"
+    [ "$n" = 1 ] || picture="$out/mini-player-hover-$n.png"
+    hovered=$(lightness "$picture")
+    echo "media: scrim picture $n asked at +$asked ms from the move, back at +$came ms, lightness $hovered"
+    readings="$readings${readings:+, }$hovered in picture $n asked at +$asked ms and back at +$came ms"
+    [ "$asked" -le 2000 ] || continue
+    in_time=$((in_time + 1))
+    [ -z "$shown" ] && [ "$hovered" -lt 170 ] && shown=$n scrim=$picture
+  done < "$out/mini-player-hover.times"
+  [ -n "$readings" ] ||
+    fail "the Mini Player's capture under the pointer said no picture's times: $(tail -1 "$out/mini-player-hover.log")"
+  [ "$in_time" -gt 0 ] ||
+    fail "the Mini Player's pictures under the pointer were all asked late, past 2 s from the move, too near the controls' own hide 2.5 s after it to tell the scrim: $readings"
+  [ -n "$shown" ] ||
+    fail "the pointer on the Mini Player didn't bring its scrim in any picture asked within 2 s: where the video is about 204 and under the scrim about 133, it read $readings"
+  echo "media: the scrim showed in picture $shown"
   # One flat scrim, as Dia's: over the video, one colour in a frame, it's as dark at a third of
   # the height as at three fifths, off the buttons above and the progress bar below (#2881). An
   # engine older than its core has Chrome's gradients.
   if engine_has ../core/mini_player.cc; then
-    upper=$(pixel "$out/mini-player-hover.png" 0.125 0.3)
-    lower=$(pixel "$out/mini-player-hover.png" 0.125 0.6)
+    upper=$(pixel "$scrim" 0.125 0.3)
+    lower=$(pixel "$scrim" 0.125 0.6)
     echo "$upper $lower" |
       awk '{ for (i = 1; i <= 3; i++) { d = $i - $(i + 3); if (d * d > 16) exit 1 } }' ||
       fail "the Mini Player's scrim wasn't flat: $upper a third down, $lower three fifths down"
@@ -1430,4 +1458,76 @@ if [ -n "$looked" ]; then
   [ -z "$bad" ] || fail "the Mini Player's origin or its \"–\" was over its buttons: $bad"
 fi
 
-echo "ok: a tab in a call marks its row with the camera, then the screen while it shares a tab, the tab it shares shows the screen too, another tab's Share This Tab Instead moves the share there, and the marks go when the call ends; a call floats while its tab is hidden, unless its Site Controls or Settings turn that off, and its window moves by its top bar and sizes from its corner; music playing out of sight has a player that pauses it, skips back, sets its volume from a drawer, floats it in Picture in Picture, shows its tab and goes on ×, and a private window's music has one there alone; the Cast card opens from View and the page menu and closes on ×; a video's menu floats it in Picture in Picture, 10 in from the top right of the screen, where a scroll or a drag moves it, Ctrl with a scroll sizes it and a double-click shows its tab, the next shows where the last was left, after a relaunch too, and coming back to its tab's window from another window, or from another app with a menu open, puts it back in the tab."
+# Music in Safari's engine has a player too, on the Mac from macOS 14: the checks' streaming host
+# (main.rs) opens the call page there from its first load. Its title and artist come from the
+# page's metadata, its previous and next are there as the page names its track, and its buttons
+# play, pause and skip through the page's own handlers. Nothing floats from it, as its video isn't
+# Chromium's. Back in Chromium, the tab has no player (#3432).
+webkit_player=
+if [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
+  forget_engine_sites
+  # Which WebKit the page runs in, so a red here says which one it was.
+  webkit=$(plutil -extract CFBundleVersion raw \
+    /System/Library/Frameworks/WebKit.framework/Resources/Info.plist 2> /dev/null) || webkit=unknown
+  echo "note: Safari's engine is WebKit $webkit on macOS $(sw_vers -productVersion)"
+  log="$out/media-safari.log"
+  step=0
+  rm -f "$saved" "$launch_frame"
+  BROWSER_DRIVE=1 BROWSER_STREAMING_TEST_HOST=127.0.0.1 BROWSER_URL="${site}call.html" \
+    "$browser" < "$out/drive" > "$log" 2>&1 &
+  pid=$!
+  exec 3> "$out/drive"
+  await_load
+  await '^browser: title [0-9]* ready$' || fail "the call page didn't draw in Safari's engine"
+  grep -q '^browser: system engine loaded for ' "$log" ||
+    fail "the streaming host's call page opened in Chromium, not Safari's engine"
+  a=$(today | cut -d' ' -f1)
+  send click $page_point
+  if [ "$active" = 1 ]; then
+    send key m
+    expect "^browser: title $a playing\$" "m in Safari's engine's page didn't play its silence"
+    expect "^browser: page $a media 1 playing 1 previous 1 next 1 pip 0 Quiet\$" \
+      "the music in Safari's engine had no player's controls: $(grep "^browser: page $a media " "$log" | tail -1)"
+    # The page opens a tab and shows it, so the music plays out of sight.
+    send key o
+    expect "^browser: today \($a [0-9][0-9]*\|[0-9][0-9]* $a\)\$" "the page in Safari's engine didn't open a tab"
+    b=$(today | tr ' ' '\n' | grep -vx "$a")
+    expect "^browser: media players $a\$" "the tab playing in Safari's engine out of sight had no player"
+    player_at 33 "the player of Safari's engine's music wasn't drawn 33 tall at rest"
+    send click $((mx + mw / 2)) $((my + mh / 2))
+    expect '^browser: command media-pause via player$' "the player's pause didn't take the click"
+    expect "^browser: title $a paused\$" "the player's pause didn't pause the music in Safari's engine"
+    expect "^browser: page $a media 1 playing 0 previous 1 next 1 pip 0 Quiet\$" \
+      "the player didn't show the music in Safari's engine paused"
+    expect '^browser: media stack open$' "the stack didn't open under the pointer"
+    player_at '6[56]' "the open stack's front card wasn't 65.5 tall"
+    control_y=$((my + mh - 17))
+    send click "$(control_x 1)" $control_y
+    expect '^browser: command media-previous via player$' "the player's previous didn't take the click"
+    expect "^browser: title $a previous track\$" "the player's previous didn't reach the page's handler in Safari's engine"
+    send click "$(control_x 3)" $control_y
+    expect '^browser: command media-next via player$' "the player's next didn't take the click"
+    expect "^browser: title $a next track\$" "the player's next didn't reach the page's handler in Safari's engine"
+    send click "$(control_x 2)" $control_y
+    expect "^browser: title $a playing\$" "the player's play didn't play the music in Safari's engine again"
+    expect "^browser: page $a media 1 playing 1 previous 1 next 1 pip 0 Quiet\$" \
+      "the player didn't show the music in Safari's engine playing again"
+    ../tools/window-screenshot.sh "$pid" "$out/media-player-safari.png" || fail "no window to capture"
+    # Its tab shown and taken to another site goes back to Chromium, and has no player.
+    shown "$a"
+    go_from_bar "localhost:$port/call.html"
+    expect "^browser: tab $a back to Chromium for http://localhost:$port/call.html\$" \
+      "another site didn't take the music's tab back to Chromium"
+    expect "^browser: page $a media 0 " "the tab back in Chromium kept the player of Safari's engine's music"
+    shown "$b"
+    none_since "^browser: media players [0-9]" || fail "the tab back in Chromium had a player"
+    webkit_player="; music in Safari's engine has a player too, named from the page, whose pause, previous, next and play reach the page, and none once its tab is back in Chromium"
+  else
+    echo "skip: media's player for Safari's engine. Browser wasn't the active app, so the page ignored the click."
+  fi
+  exec 3>&-
+  quit
+  forget_engine_sites
+fi
+
+echo "ok: a tab in a call marks its row with the camera, then the screen while it shares a tab, the tab it shares shows the screen too, another tab's Share This Tab Instead moves the share there, and the marks go when the call ends; a call floats while its tab is hidden, unless its Site Controls or Settings turn that off, and its window moves by its top bar and sizes from its corner; music playing out of sight has a player that pauses it, skips back, sets its volume from a drawer, floats it in Picture in Picture, shows its tab and goes on ×, and a private window's music has one there alone; the Cast card opens from View and the page menu and closes on ×; a video's menu floats it in Picture in Picture, 10 in from the top right of the screen, where a scroll or a drag moves it, Ctrl with a scroll sizes it and a double-click shows its tab, the next shows where the last was left, after a relaunch too, and coming back to its tab's window from another window, or from another app with a menu open, puts it back in the tab$webkit_player."

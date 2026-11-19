@@ -23,6 +23,9 @@ class ScriptDialogs : public javascript_dialogs::TabModalDialogManagerDelegate {
   // Has |contents|, a tab, ask with the app's dialog, in place of the manager Chrome's tab helpers
   // gave it.
   static void Attach(content::WebContents* contents);
+  // Takes back |contents|' dialogs before its page is deleted out of its tab strip, as Chromium
+  // does when a page closes with its delegate, which a tab detached for deletion no longer has.
+  static void Cancel(content::WebContents* contents);
 
   explicit ScriptDialogs(content::WebContents* contents);
   ScriptDialogs(const ScriptDialogs&) = delete;

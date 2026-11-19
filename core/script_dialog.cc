@@ -104,6 +104,14 @@ void ScriptDialogs::Attach(content::WebContents* contents) {
       contents, std::make_unique<ScriptDialogs>(contents));
 }
 
+// static
+void ScriptDialogs::Cancel(content::WebContents* contents) {
+  if (auto* manager = javascript_dialogs::TabModalDialogManager::FromWebContents(contents)) {
+    // The tab's own, and the app-modal ones its page asks, as a leave-page question.
+    manager->CancelDialogs(contents, /*reset_state=*/true);
+  }
+}
+
 ScriptDialogs::ScriptDialogs(content::WebContents* contents) : contents_(contents) {}
 
 ScriptDialogs::~ScriptDialogs() = default;

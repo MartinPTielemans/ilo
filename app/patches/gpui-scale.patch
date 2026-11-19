@@ -775,7 +775,7 @@ index 6cb33874b2..0066ba74a2 100644
  
  #[cfg_attr(
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index c559412e56..af067cbfec 100644
+index c559412e56..d0d40dd300 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
 @@ -147,7 +147,7 @@ struct FrameDirtyAccumulator {
@@ -1218,7 +1218,21 @@ index c559412e56..af067cbfec 100644
      pub fn render_to_image(&self) -> anyhow::Result<image::RgbaImage> {
          self.platform_window
              .render_to_image(&self.rendered_frame.scene)
-@@ -3636,6 +3863,14 @@ impl Window {
+@@ -3061,6 +3288,13 @@ impl Window {
+         self.a11y.set_window_title(title.to_string());
+     }
+ 
++    /// Names the window's root node for assistive technologies, as its title does, and leaves the
++    /// platform window's title alone: for a window inside another app's, whose title and title bar
++    /// that app owns.
++    pub fn set_accessible_window_title(&mut self, title: &str) {
++        self.a11y.set_window_title(title.to_string());
++    }
++
+     /// Sets the position of the macOS traffic light buttons.
+     #[cfg(target_os = "macos")]
+     pub fn set_traffic_light_position(&self, position: Point<Pixels>) {
+@@ -3636,6 +3870,14 @@ impl Window {
          profiling::finish_frame!();
      }
  
@@ -1233,7 +1247,7 @@ index c559412e56..af067cbfec 100644
      /// Presents the most recently drawn frame if it hasn't been presented yet.
      #[cfg(all(test, feature = "profiler"))]
      pub fn present_if_needed(&mut self) {
-@@ -3761,7 +3996,23 @@ impl Window {
+@@ -3761,7 +4003,23 @@ impl Window {
          #[cfg(feature = "profiler")]
          let paint_start = Instant::now();
          self.invalidator.set_phase(DrawPhase::Paint);
@@ -1258,7 +1272,7 @@ index c559412e56..af067cbfec 100644
  
          #[cfg(any(feature = "inspector", debug_assertions))]
          self.paint_inspector(inspector_element, cx);
-@@ -4227,6 +4478,40 @@ impl Window {
+@@ -4227,6 +4485,40 @@ impl Window {
          result
      }
  
@@ -1299,7 +1313,7 @@ index c559412e56..af067cbfec 100644
      pub(crate) fn with_element_opacity<R>(
          &mut self,
          opacity: Option<f32>,
-@@ -4273,6 +4558,13 @@ impl Window {
+@@ -4273,6 +4565,13 @@ impl Window {
          result
      }
  
@@ -1313,7 +1327,7 @@ index c559412e56..af067cbfec 100644
      /// When you call this method during [`Element::prepaint`], containing elements will attempt to
      /// scroll to cause the specified bounds to become visible. When they decide to autoscroll, they will call
      /// [`Element::prepaint`] again with a new set of bounds. See [`crate::List`] for an example of an element
-@@ -5417,7 +5709,9 @@ impl Window {
+@@ -5417,7 +5716,9 @@ impl Window {
          if focus_handle.is_focused(self) {
              let cx = self.to_async(cx);
              self.next_frame.input_handlers.push(Some(
@@ -1324,7 +1338,7 @@ index c559412e56..af067cbfec 100644
              ));
          }
      }
-@@ -5578,14 +5872,45 @@ impl Window {
+@@ -5578,14 +5879,45 @@ impl Window {
      fn reset_cursor_style(&self, cx: &mut App) {
          // Set the cursor only if we're the active window.
          if self.is_window_hovered() {
@@ -1373,7 +1387,7 @@ index c559412e56..af067cbfec 100644
      /// Dispatch a given keystroke as though the user had typed it.
      /// You can create a keystroke with Keystroke::parse("").
      pub fn dispatch_keystroke(&mut self, keystroke: Keystroke, cx: &mut App) -> bool {
-@@ -5801,6 +6126,7 @@ impl Window {
+@@ -5801,6 +6133,7 @@ impl Window {
          DispatchEventResult {
              propagate: cx.propagate_event,
              default_prevented: self.default_prevented,
@@ -1381,7 +1395,7 @@ index c559412e56..af067cbfec 100644
          }
      }
  
-@@ -7097,18 +7423,24 @@ impl Window {
+@@ -7097,18 +7430,24 @@ impl Window {
  
          // Fall back to built-in action handling.
          match request.action {
@@ -1409,7 +1423,7 @@ index c559412e56..af067cbfec 100644
                          position: center,
                          modifiers: Modifiers::default(),
                          click_count: 1,
-@@ -7908,11 +8240,42 @@ fn with_element_arena_erased(callback: &mut dyn FnMut(&mut Arena)) -> Result<(),
+@@ -7908,11 +8247,42 @@ fn with_element_arena_erased(callback: &mut dyn FnMut(&mut Arena)) -> Result<(),
          let arena_cell = unsafe { &*arena_pointer };
          callback(&mut arena_cell.borrow_mut());
          Ok(())
@@ -1452,7 +1466,7 @@ index c559412e56..af067cbfec 100644
  #[cfg(test)]
  mod tests {
      use std::{
-@@ -8179,6 +8542,101 @@ mod tests {
+@@ -8179,6 +8549,101 @@ mod tests {
          }
      }
  
@@ -1554,7 +1568,7 @@ index c559412e56..af067cbfec 100644
      /// Visibility transitions reach observers exactly once each, with the new
      /// state already stored on the window, and never wake the platform for a
      /// frame: the platform requests one itself when it resumes presenting.
-@@ -8616,6 +9074,50 @@ mod tests {
+@@ -8616,6 +9081,50 @@ mod tests {
          );
      }
  

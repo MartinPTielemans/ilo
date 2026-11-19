@@ -603,17 +603,22 @@ jobs:
           path: app/build/adblock-parity-lists
           overwrite: true
 
-      - if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: check-windows${{ matrix.shard != 0 && format('-{0}', matrix.shard) || '' }}
-          path: ${{ runner.temp }}/check
-          if-no-files-found: ignore
+      # The results first, a few hundred bytes, so complete still names each run's result when
+      # the check folder's upload doesn't end (#3471).
       - if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: results-windows-${{ matrix.shard }}
           path: ${{ runner.temp }}/results
+          if-no-files-found: ignore
+      # About 500 MB, which takes 20 to 38 s. A stalled upload ends at the limit, so the job ends
+      # and keeps its log, where a hung one took the job's log with it (#3471).
+      - if: ${{ always() }}
+        timeout-minutes: 10
+        uses: actions/upload-artifact@v4
+        with:
+          name: check-windows${{ matrix.shard != 0 && format('-{0}', matrix.shard) || '' }}
+          path: ${{ runner.temp }}/check
           if-no-files-found: ignore
 
   # A run with no result, such as one its job's time ran out before, fails the check, so a run
@@ -626,9 +631,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # With app/check, whose runs check.sh lists: without them it listed none, so this job
+          # passed whatever runs had no result (#3444).
           sparse-checkout: |
             .github/scripts
             app/check.sh
+            app/check
           sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@v4
         continue-on-error: true
@@ -680,9 +688,11 @@ jobs:
 
   # The default runs' verdict on main, the night's or a train's, keeps the workflow's issue: a
   # dispatched run reports too, as its pass is the only one the night won't repeat on that commit.
-  # An engine that fails to fetch fails the run too.
+  # An engine that fails to fetch fails the run too, as does a check job that ran out of its time,
+  # which cancels it, as complete then runs and the run itself wasn't cancelled, or a run with no
+  # result.
   report:
-    needs: [gate, engine, check]
+    needs: [gate, engine, check, complete]
     if: ${{ always() && needs.gate.outputs.check == 'true' && github.ref == 'refs/heads/main' && github.repository == 'MartinPTielemans/ilo' && inputs.runs == '' && !(github.event.schedule == '23 7 * * *' || inputs.runner == 'windows-2025') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -700,6 +710,6 @@ jobs:
             app/check
       - env:
           GH_TOKEN: ${{ github.token }}
-          RESULT: ${{ needs.engine.result == 'failure' && 'failure' || needs.check.result }}
+          RESULT: ${{ (needs.engine.result == 'failure' || needs.check.result == 'failure' || needs.complete.result == 'failure' || (needs.check.result == 'cancelled' && needs.complete.result == 'success')) && 'failure' || needs.check.result }}
           FOUND: ${{ needs.engine.outputs.found }}
         run: .github/scripts/main-check.sh report "$RESULT" "$FOUND"

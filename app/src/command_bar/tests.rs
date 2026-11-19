@@ -3097,6 +3097,24 @@ fn the_list_scrolls_to_keep_the_selection_in_view(cx: &mut TestAppContext) {
     assert!(!in_view(&mut bar, 0));
 }
 
+/// A screen reader coming into the bar's window hears it called the Command Bar, as the menu
+/// names it, rather than a frame with no name (#3497).
+#[gpui::test]
+fn the_bars_window_is_called_the_command_bar(cx: &mut TestAppContext) {
+    let mut bar = Bar::new(cx);
+    bar.cx.simulate_a11y_activation();
+    let tree = bar.cx.a11y_tree().expect("GPUI built a tree");
+    let root = tree
+        .tree
+        .as_ref()
+        .expect("the first tree has its root")
+        .root;
+    let window = (tree.nodes.iter())
+        .find(|(id, _)| *id == root)
+        .map(|(_, node)| (node.role(), node.label()));
+    assert_eq!(window, Some((Role::Window, Some("Command Bar"))));
+}
+
 /// A screen reader finds the keyboard in a text field called what its placeholder says, and the
 /// rows in a list of suggestions with the selected one marked. As the keys move the selection while
 /// the field keeps the keyboard, a polite live region says the row and where it stands, as its
