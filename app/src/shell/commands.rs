@@ -1599,6 +1599,10 @@ impl Shell {
         log!("browser: command {} via {from}", command.name());
         // A command after a ⌘L still waiting for the tab shown next is the one the user wants.
         self.edit_url_waits = None;
+        // And so is any but another ⌘W after one waiting to close the tab shown next (#3570).
+        if !matches!(command, Command::CloseTab) {
+            self.close_waits = None;
+        }
         if self.one_space() && !private_runs(command) {
             return;
         }
@@ -3185,6 +3189,98 @@ mod tests {
             shell.set_space(2, cx);
         });
         assert!(closes(&host).is_empty(), "another Space's tab stays");
+    }
+
+    /// ⌘W's wait for the tab shown next never outlives its moment: the user's next action, the
+    /// core's next selection whichever way it goes, or another Space shown ends it, and a tab the
+    /// user picks later never closes (#3570).
+    #[gpui::test]
+    fn close_tab_waiting_ends_with_the_next_selection_or_action(cx: &mut gpui::TestAppContext) {
+        use std::rc::Rc;
+
+        use crate::shell::{Folders, Page, recorder::Recorder};
+
+        let host = Rc::new(Recorder::default());
+        let browser = host.clone();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+        let closes = |host: &Recorder| {
+            host.take()
+                .into_iter()
+                .filter(|call| call.starts_with("close"))
+                .collect::<Vec<_>>()
+        };
+        shell.update(cx, |shell, cx| {
+            let space =
+                |id, name: &str| (id, name.into(), None, 1, "".into(), "".into(), "".into());
+            shell.set_spaces(vec![space(1, "One"), space(2, "Two")], cx);
+            shell.set_tabs(2, Vec::new(), vec![9], Vec::new(), Folders::default(), cx);
+            for tab in [3, 4, 6, 7, 8, 9] {
+                let page = Page {
+                    url: format!("https://{tab}.test/").into(),
+                    ..Page::default()
+                };
+                shell.set_page(tab, page, cx);
+            }
+            shell.set_space(1, cx);
+        });
+        // `shown` shows in One with `rest` under it; ⌘W closes it, the core says it's gone, and a
+        // second ⌘W comes before the core says which tab shows next.
+        let press_in_the_gap = |shell: &gpui::Entity<Shell>,
+                                shown: u64,
+                                rest: Vec<u64>,
+                                cx: &mut gpui::VisualTestContext| {
+            shell.update(cx, |shell: &mut Shell, cx| {
+                let mut tabs = rest.clone();
+                tabs.insert(0, shown);
+                shell.set_tabs(1, Vec::new(), tabs, Vec::new(), Folders::default(), cx);
+                shell.set_selected(shown, cx);
+                shell.run(Command::CloseTab, "page", cx);
+                shell.set_tabs(1, Vec::new(), rest, Vec::new(), Folders::default(), cx);
+                shell.run(Command::CloseTab, "ui", cx);
+            });
+        };
+
+        // The user picks a tab before the core's selection comes: only the first tab closes.
+        press_in_the_gap(&shell, 8, vec![7, 6, 4, 3], cx);
+        shell.update(cx, |shell, cx| {
+            shell.select(4, cx);
+            shell.set_selected(7, cx);
+            shell.set_selected(4, cx);
+        });
+        assert_eq!(closes(&host), ["close 8"], "the tab the user picked stays");
+
+        // Any other command ends the wait, as ⌘T here.
+        press_in_the_gap(&shell, 4, vec![7, 6, 3], cx);
+        shell.update(cx, |shell, cx| {
+            shell.run(Command::NewTab, "ui", cx);
+            shell.set_selected(7, cx);
+        });
+        assert_eq!(closes(&host), ["close 4"], "⌘T after the press keeps 7");
+
+        // The core's selection that a task's page takes ends it too, and a tab selected later
+        // stays.
+        press_in_the_gap(&shell, 7, vec![6, 3], cx);
+        shell.update(cx, |shell, cx| {
+            shell.task_core = 2;
+            shell.set_selected(6, cx);
+            shell.task_core = 0;
+            shell.set_selected(6, cx);
+        });
+        assert_eq!(
+            closes(&host),
+            ["close 7"],
+            "6 stays after a task's page took the selection"
+        );
+
+        // Another Space reported first (#1332), then its tab, then back: nothing more closes.
+        press_in_the_gap(&shell, 6, vec![3], cx);
+        shell.update(cx, |shell, cx| {
+            shell.set_space(2, cx);
+            shell.set_selected(9, cx);
+            shell.set_space(1, cx);
+            shell.set_selected(3, cx);
+        });
+        assert_eq!(closes(&host), ["close 6"], "9 and 3 stay");
     }
 
     /// The bar finds Site Search Settings by its name or by Chrome's, and it opens the search
