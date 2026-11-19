@@ -1853,6 +1853,10 @@ impl Browser for Fake {
         shell::FavoritesScope::default()
     }
 
+    fn keeps_passkeys(&self) -> bool {
+        false
+    }
+
     // The preview's window is GPUI's own, which has the keyboard already.
     fn focus_ui(&self, _: &mut App) {}
 
