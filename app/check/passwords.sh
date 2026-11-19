@@ -413,6 +413,15 @@ if [ "$(uname)" = Darwin ]; then
     expect '^browser: settings tab Passwords$' "a click on Passwords didn't show its section"
   fi
   settings_drew Passwords
+  # Manage Passkeys… beside Manage Passwords…, light and dark, for #3598's pictures.
+  for each in light dark; do
+    send menu "Appearance › $([ $each = light ] && echo Light || echo Dark)"
+    expect "^browser: appearance $each\$" "View › Appearance didn't make the app $each"
+    in_sight "manage passkeys" || fail "Settings didn't draw Manage Passkeys…, $each"
+    ../tools/window-screenshot.sh "$pid" "$out/settings-passkeys-$each.png" || fail "no window to capture"
+  done
+  send menu "Appearance › Automatic"
+  expect '^browser: appearance automatic$' "View › Appearance › Automatic didn't change the appearance"
   post clickkey $(drawn "manage passkeys")
   expect '^browser: manage passkeys [0-9]*$' "a click on Manage Passkeys… didn't run it"
   expect '^browser: settings hidden$' "Manage Passkeys… didn't hide Settings"
