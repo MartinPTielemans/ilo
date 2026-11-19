@@ -139,14 +139,17 @@ async function save() {
   return done !== false;
 }
 
-// The Library's picture, 268 × 188 at twice that, of what's in view.
+// The Library's picture, 268 × 188 at twice that, of what's in view. The Library shows it on the
+// paper of whichever look the window has, not the one it was taken in, so it has no ground of its
+// own and draws only in colours that read on either: a note's fill as its swatch, and every other
+// plate and the ink as --picture. A plate's words are left out, as they're too small to read
+// there; a note with no plate is its words.
 async function saveThumb() {
   const scale = 2, w = 268, h = 188;
   const canvas = new OffscreenCanvas(w * scale, h * scale);
   const g = canvas.getContext("2d");
   const style = getComputedStyle(document.documentElement);
-  g.fillStyle = style.getPropertyValue("--canvas");
-  g.fillRect(0, 0, canvas.width, canvas.height);
+  const swatch = (name) => style.getPropertyValue(SWATCHES.includes(name) ? `--fill-${name}` : "--picture").trim();
   const fit = Math.min(w / innerWidth, h / innerHeight) * scale;
   g.scale(fit, fit);
   g.translate(camera.x, camera.y);
@@ -154,21 +157,21 @@ async function saveThumb() {
   for (const card of cards) {
     const el = byId.get(card.id);
     if (card.kind === "stroke") {
-      g.strokeStyle = inkColor(card.color, style);
+      g.strokeStyle = swatch(card.color);
       g.lineWidth = card.width;
       g.lineCap = g.lineJoin = "round";
       g.stroke(new Path2D(strokePath(card)));
     } else if (card.kind === "picture" && el?.firstChild?.complete) {
       g.drawImage(el.firstChild, card.x, card.y, card.w, card.h);
-    } else {
-      g.fillStyle = card.fill === "none" ? "transparent" : el ? getComputedStyle(el).backgroundColor : "transparent";
+    } else if (card.fill !== "none") {
+      g.fillStyle = swatch(card.fill);
       g.beginPath();
       g.roundRect(card.x, card.y, card.w, card.h, 10);
       g.fill();
-      g.fillStyle = style.getPropertyValue("--ink");
+    } else {
+      g.fillStyle = swatch();
       g.font = `${card.size === "l" ? 28 : 15}px system-ui`;
-      g.fillText((card.text ?? card.title ?? card.url ?? "").split("\n")[0].slice(0, 60),
-        card.x + 12, card.y + 28, card.w - 24);
+      g.fillText((card.text ?? "").split("\n")[0].slice(0, 60), card.x + 12, card.y + 28, card.w - 24);
     }
   }
   const png = new Uint8Array(await (await canvas.convertToBlob({ type: "image/png" })).arrayBuffer());
