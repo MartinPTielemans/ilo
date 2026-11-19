@@ -3206,9 +3206,11 @@ impl Shell {
             let more = cx.listener(move |shell, _: &gpui::ClickEvent, _, cx| {
                 shell.open_past_step(step, true, cx)
             });
+            let said =
+                (!each.said.is_empty()).then(|| crate::agents::said(&past.agent, &each.said));
             crate::settings_rows::sent_part(
                 ("past-step-all", step),
-                None,
+                said,
                 &each.url,
                 &each.sent,
                 !each.refused.is_empty(),

@@ -313,3 +313,50 @@ fn a_past_request_opens_to_what_it_sent(cx: &mut TestAppContext) {
         named(cx, Role::ListBoxOption, title).expect("the request is a row of the list");
     assert_eq!(node.is_expanded(), Some(false));
 }
+
+/// A request's row is headed by its method and path, the browser's words, however long the
+/// agent's sentence is; opened, the sentence comes first, as the agent's (#3548).
+#[gpui::test]
+fn a_past_requests_head_stays_its_method_and_path(cx: &mut TestAppContext) {
+    use gpui::accesskit::{Action, Role};
+    let (shell, _, cx) = agents(cx);
+    let said = "Close the duplicate of item 4130 and move its watchers over, then label the older \
+                one as the one to keep; nothing else on the tracker changes or is sent anywhere.";
+    shell.update(cx, |shell, cx| {
+        let past = &mut shell.agent_history[0];
+        past.steps.push(Step {
+            at: past.ended - 10,
+            action: "request".into(),
+            site: "tracker.example".into(),
+            target: "PATCH /api/items/4127".into(),
+            url: "https://tracker.example/api/items/4127".into(),
+            said: said.into(),
+            ..Default::default()
+        });
+        let entries = shell.agent_history.clone();
+        shell.browser.set_agent_history(0, &write(&entries));
+        shell.open_past_task("2", cx);
+    });
+    cx.simulate_a11y_activation();
+    cx.run_until_parked();
+    let title = "Sent PATCH /api/items/4127 to tracker.example";
+    let (request, _) = named(cx, Role::ListBoxOption, title)
+        .expect("the request's head isn't its method and path");
+    let tree = cx.a11y_tree().expect("GPUI built a tree");
+    assert!(
+        !(tree.nodes.iter())
+            .any(|(_, node)| node.label().is_some_and(|label| label.contains("4130"))),
+        "the agent's sentence named a node before it was opened"
+    );
+    cx.simulate_a11y_action(request, Action::Click);
+    cx.run_until_parked();
+    let (_, node) = named(cx, Role::ListBoxOption, title).expect("the head changed once opened");
+    assert_eq!(node.is_expanded(), Some(true));
+    // Opened, the row's part gives the sentence whole, as the agent's.
+    let whole = format!("Claude Code said: “{said}”");
+    let tree = cx.a11y_tree().expect("GPUI built a tree");
+    assert!(
+        (tree.nodes.iter()).any(|(_, node)| node.label() == Some(whole.as_str())),
+        "the opened row didn't give the agent's sentence"
+    );
+}

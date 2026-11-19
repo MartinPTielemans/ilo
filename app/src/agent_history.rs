@@ -38,6 +38,8 @@ pub struct Step {
     pub target: String,
     pub url: String,
     pub sent: Vec<Sent>,
+    /// The agent's own sentence for a request, secrets hidden, or empty (#3548).
+    pub said: String,
 }
 
 /// A past task or session, as its receipt showed it.
@@ -136,6 +138,9 @@ impl Past {
                     kept["url"] = json!(step.url);
                     kept["sent"] = json!(sent);
                 }
+                if !step.said.is_empty() {
+                    kept["said"] = json!(step.said);
+                }
                 kept
             })
             .collect();
@@ -186,6 +191,11 @@ impl Past {
                 target: field("target").unwrap_or_default(),
                 url: field("url").unwrap_or_default(),
                 sent,
+                // Steps kept before an agent said what a change does have none, and an edited
+                // file's is held to what the tool takes.
+                said: (field("said").unwrap_or_default().chars())
+                    .take(crate::agents::request::WHAT_MOST)
+                    .collect(),
             })
         })
         .collect();
