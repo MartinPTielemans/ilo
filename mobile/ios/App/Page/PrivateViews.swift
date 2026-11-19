@@ -3,6 +3,10 @@ import SwiftUI
 /// A new private tab says what it is, once, in the place a page will take: the heading with the
 /// one glyph, and what private means here.
 struct PrivateWords: View {
+  /// Over the open field, which runs the width of a phone on its side, the words start where it
+  /// does. Over the bar they stand in its column.
+  var overField = false
+
   @Environment(\.palette) private var palette
 
   var body: some View {
@@ -25,8 +29,9 @@ struct PrivateWords: View {
     .foregroundStyle(palette.text)
     .frame(maxWidth: .infinity, alignment: .leading)
     .padding(.horizontal, PrivateMark.side)
-    .footColumn()
+    .frame(maxWidth: Column.widest)
     .accessibilityElement(children: .combine)
+    .frame(maxWidth: .infinity, alignment: overField ? .leading : .center)
   }
 }
 
@@ -99,7 +104,7 @@ struct PrivateCard: View {
     .contextMenu {
       Button("Close Tab", systemImage: "xmark", role: .destructive, action: close)
       if let url = tab.url {
-        Button("Copy Link", systemImage: "link") { UIPasteboard.general.url = url }
+        Button("Copy Link", systemImage: "link") { browser.copyLink(url, from: tab) }
       }
     }
     .accessibilityElement(children: .contain)

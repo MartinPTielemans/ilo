@@ -159,6 +159,7 @@ final class Browser {
     space = settings.space
     wantsKeyboard = settings.keyboardOnLaunch
     (account as? PhoneAccount)?.joined = { [weak self] in self?.joined($0) }
+    watch()
   }
 
   var currentSpace: SyncedSpace? {
@@ -352,12 +353,20 @@ final class Browser {
     return Array(found.filter { !open.contains($0.url) }.prefix(Self.historyMatches))
   }
 
-  /// Goes back to a page of history: to its tab if the Space on screen has it open. If not, the
-  /// page under the search field goes there, as it does to an address typed, and anywhere else
-  /// it's a new tab of the Space on screen.
+  /// The Today tab of the Space on screen that waits in the archive at an address.
+  private func waiting(at url: URL) -> SyncedNode? {
+    let away = settings.awayTabs
+    guard !away.isEmpty, let space = currentSpace else { return nil }
+    return account.today(in: space.id).first { away.contains($0.id) && $0.url == url }
+  }
+
+  /// Goes back to a page of history: to its tab if the Space on screen has it open, or has it
+  /// waiting in the archive, which comes back as opening its row there would bring it. If not,
+  /// the page under the search field goes there, as it does to an address typed, and anywhere
+  /// else it's a new tab of the Space on screen.
   func revisit(_ visit: Visit) {
     slide = 0
-    if let open = tab(at: visit.url) {
+    if let open = tab(at: visit.url) ?? waiting(at: visit.url) {
       self.open(open)
     } else if searchingPage, let page {
       searchingPage = false
@@ -505,9 +514,7 @@ final class Browser {
         if archive.keep(node, at: now) { closed += 1 }
       }
     }
-    // With no account open its tabs didn't close: they're no longer this phone's to list.
-    let ofAccount = (account as? PhoneAccount)?.showsAccount ?? true
-    let left = archive.follow(due, closed: { ofAccount && self.account.node($0) == nil }, at: now)
+    let left = archive.follow(due, closed: { self.closed($0) }, at: now)
     for id in left {
       // Its web view goes; what brings its page back stays, for when the tab does.
       live.remove(id)
@@ -521,15 +528,52 @@ final class Browser {
     settings.archivedUnseen(closed + left.count)
   }
 
+  /// Whether a tab that waited in the archive and is a Today tab no longer was closed. With no
+  /// account open its tabs didn't close: they're no longer this phone's to list. Nor did one
+  /// that's pinned now, which is in its Space's dock.
+  private func closed(_ tab: ArchivedTab) -> Bool {
+    guard (account as? PhoneAccount)?.showsAccount ?? true, let id = tab.node, account.node(id) == nil else { return false }
+    return pin(of: tab) == nil
+  }
+
+  /// The pinned tab a tab that waited in the archive became, on another device: a Today tab
+  /// pinned is a new node, so it's known by its Space and its page.
+  private func pin(of tab: ArchivedTab) -> SyncedNode? {
+    account.allPinned(in: tab.space).first { $0.kind == .pin && $0.url == tab.url }
+  }
+
+  /// The tabs that wait in the archive follow the account as it changes, as another device's
+  /// close or pin does while the app is in front: one the account no longer has as a Today tab
+  /// is the record of a closed tab from now, or gone from the list if it's pinned. Nothing is
+  /// sent to wait here: that's `archiveUnseen`'s, and never while the Space is on screen.
+  private func followArchive(now: Date = .now) {
+    guard let archive, listsEveryTab else { return }
+    let gone = archive.tabs.filter { tab in tab.node.map { account.node($0)?.kind != .today } ?? false }
+    guard !gone.isEmpty else { return }
+    archive.left(gone, closed: closed, at: now)
+    let away = settings.awayTabs.subtracting(gone.compactMap(\.node))
+    if away != settings.awayTabs { settings.awayTabs = away }
+  }
+
   /// Brings a tab back from the archive and opens it. One that waited there is the same tab,
   /// in its Space again and seen now, which every device hears. One that's closed is a new
-  /// Today tab of the Space it was in, or of the one on screen if that's gone.
+  /// Today tab of the Space it was in, or of the one on screen if that's gone. One whose row
+  /// says it waits, picked in the moment after another device closed it, opens as a closed one
+  /// does, and one another device pinned opens as that pinned tab, never as a second tab.
   func restore(_ tab: ArchivedTab) {
     guard let archive else { return }
-    if let id = tab.node, let node = account.node(id), node.kind == .today {
-      guard archive.take(tab) else { return }
-      slide = 0
-      return open(node)
+    if let id = tab.node {
+      if let node = account.node(id), node.kind == .today {
+        guard archive.take(tab) else { return }
+        slide = 0
+        return open(node)
+      }
+      if settings.awayTabs.contains(id) { settings.awayTabs.remove(id) }
+      if let pin = pin(of: tab) {
+        guard archive.take(tab) else { return }
+        slide = 0
+        return open(pin)
+      }
     }
     guard let space = account.spaces.first(where: { $0.id == tab.space }) ?? currentSpace, archive.take(tab) else { return }
     let node = account.openToday(url: tab.url, title: tab.title, in: space.id)
@@ -867,6 +911,18 @@ final class Browser {
     prompt = Prompt(kind: .notice(text), host: "") { _ in }
   }
 
+  // MARK: Handing a link on
+
+  /// A link as Copy Link and Share give it, wherever they're offered: as it would open, without
+  /// its tracking parameters. `tab` is the page it's of, whose own choice for the site holds.
+  func link(_ url: URL, from tab: WebTab? = nil) -> URL {
+    Blocker.shared.handedOn(url, in: tab?.webView)
+  }
+
+  func copyLink(_ url: URL, from tab: WebTab? = nil) {
+    UIPasteboard.general.url = link(url, from: tab)
+  }
+
   // MARK: Files
 
   /// Opens a downloaded file: a pass in Wallet's own sheet for adding one; a calendar file's
@@ -986,12 +1042,9 @@ final class Browser {
     // While an account is half open the list read is the phone's own, and its tabs aren't in it.
     guard listsEveryTab else { return }
     var ids: Set<String> = []
-    // What the dock can show, each with what it's known by besides its id; a favourite has only that.
-    var tiles = Dictionary(settings.favourites.map { (DockSlot.id(of: $0.url), DockSlot.id(of: $0.url)) }, uniquingKeysWith: { first, _ in first })
     func collect(_ space: String, _ folder: String?) {
       for node in account.pinned(in: space, folder: folder) {
         ids.insert(node.id)
-        tiles[node.id] = DockTiles.mark(of: node)
         if node.kind == .folder { collect(space, node.id) }
       }
     }
@@ -999,7 +1052,7 @@ final class Browser {
       ids.formUnion(account.today(in: space.id).map(\.id))
       collect(space.id, nil)
     }
-    settings.keepHidden(among: tiles)
+    lookAtTiles(forgetting: true)
     // The private tabs are in no account, and stay.
     for (id, tab) in tabs where !ids.contains(id) && !tab.isPrivate {
       tabs[id] = nil
@@ -1011,6 +1064,45 @@ final class Browser {
     }
     cache.prune(keeping: ids)
     rehomePrivate()
+  }
+
+  /// Looks at the tiles the dock can show now, so that a hidden one another device moved to
+  /// another Space, a new node there, is hidden still. A hidden one that's gone is forgotten
+  /// only when `forgetting`, at the look the app takes as it comes to the front: a move can
+  /// reach the phone as its two halves, the old node gone and then the new one there, and
+  /// between them the hiding waits for the tile it belongs to.
+  private func lookAtTiles(forgetting: Bool) {
+    guard listsEveryTab else { return }
+    // Each with what it's known by besides its id; a favourite has only that.
+    var tiles = Dictionary(settings.favourites.map { (DockSlot.id(of: $0.url), DockSlot.id(of: $0.url)) }, uniquingKeysWith: { first, _ in first })
+    func collect(_ space: String, _ folder: String?) {
+      for node in account.pinned(in: space, folder: folder) {
+        tiles[node.id] = DockTiles.mark(of: node)
+        if node.kind == .folder { collect(space, node.id) }
+      }
+    }
+    for space in account.spaces { collect(space.id, nil) }
+    settings.keepHidden(among: tiles, forgetting: forgetting)
+  }
+
+  /// Hears of the account's tabs changing, as they do by another device's hand while the app is
+  /// in front, and has what this phone keeps of them follow: the tiles it hides and the tabs
+  /// that wait in its archive. Once a change, however many tabs it's of, and never on a timer.
+  private func watch() {
+    withObservationTracking {
+      for space in account.spaces {
+        _ = account.today(in: space.id)
+        _ = account.allPinned(in: space.id)
+      }
+    } onChange: { [weak self] in
+      // Told before the change is made, so the look waits its turn.
+      Task { @MainActor in
+        guard let self else { return }
+        self.lookAtTiles(forgetting: false)
+        self.followArchive()
+        self.watch()
+      }
+    }
   }
 
   func signOut() async {

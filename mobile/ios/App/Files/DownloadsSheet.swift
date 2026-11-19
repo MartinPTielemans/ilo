@@ -26,8 +26,7 @@ struct DownloadsSheet: View {
           .frame(minHeight: 48)
       } else {
         // A long list scrolls, from its foot; a short one is as tall as its rows.
-        SheetRows { rows(days) }
-          .frame(maxHeight: Dock.listHeight)
+        SheetRows(most: Dock.listHeight) { rows(days) }
       }
 
       Rectangle()

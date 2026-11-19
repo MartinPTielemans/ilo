@@ -140,7 +140,7 @@ final class Archive {
   /// Lists the account's Today tabs that are `due` to wait here, and returns those new to the
   /// list. One listed before that isn't due any more was looked at since, on some device, and
   /// is back in its Space. One that `closed` says left the account is the record of it from now.
-  @discardableResult func follow(_ due: [SyncedNode], closed: (String) -> Bool, at date: Date = .now) -> [String] {
+  @discardableResult func follow(_ due: [SyncedNode], closed: (ArchivedTab) -> Bool, at date: Date = .now) -> [String] {
     var new = Dictionary(due.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     var kept: [ArchivedTab] = []
     for var tab in tabs {
@@ -150,7 +150,7 @@ final class Archive {
           tab.url = node.url ?? tab.url
           tab.title = node.title
           tab.space = node.space
-        } else if closed(id) {
+        } else if closed(tab) {
           tab.node = nil
           tab.date = date
         } else {
@@ -168,6 +168,25 @@ final class Archive {
       write()
     }
     return added.compactMap(\.node)
+  }
+
+  /// Tabs that waited here have `left` the account's Today tabs. One that `closed` says was
+  /// closed is the record of it from now, and any other is listed no more.
+  func left(_ left: [ArchivedTab], closed: (ArchivedTab) -> Bool, at date: Date = .now) {
+    let gone = Set(left.map(\.id))
+    var kept: [ArchivedTab] = []
+    for var tab in tabs {
+      if gone.contains(tab.id), tab.node != nil {
+        guard closed(tab) else { continue }
+        tab.node = nil
+        tab.date = date
+      }
+      kept.append(tab)
+    }
+    kept.sort { $0.date > $1.date }
+    guard kept != tabs else { return }
+    tabs = kept
+    write()
   }
 
   /// A tab that waited here is in its Space again.

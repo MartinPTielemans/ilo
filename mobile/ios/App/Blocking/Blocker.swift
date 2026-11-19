@@ -69,6 +69,12 @@ final class Blocker {
     blocks(url, in: view) ? TrackingParameters.stripped(url, followedFrom: page) : nil
   }
 
+  /// A link as it's copied or shared: as it would open, without its tracking parameters. Followed
+  /// `from` a page, one that only moves within that page is as it's written.
+  func handedOn(_ url: URL, from page: URL? = nil, in view: WKWebView? = nil) -> URL {
+    withoutTracking(url, from: page, in: view) ?? url
+  }
+
   /// Turns blocking on or off for the site of the page at `url`. The page shows it once reloaded.
   func set(_ blocks: Bool, at url: URL?) {
     choice.set(blocks, at: url)

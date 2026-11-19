@@ -68,6 +68,31 @@ import os
     page.chose(.copy, for: try #require(URL(string: "https://example.org/story?id=7&utm_source=mail&fbclid=abc")))
     #expect(UIPasteboard.general.url == URL(string: "https://example.org/story?id=7"))
   }
+
+  @Test func `Share sends the link as Open would open it too`() throws {
+    let browser = testBrowser()
+    let page = WebTab(id: "tab", role: .today, browser: browser)
+    page.chose(.share, for: try #require(URL(string: "https://example.org/story?id=7&utm_source=mail&fbclid=abc")))
+    #expect(browser.shared == URL(string: "https://example.org/story?id=7"))
+  }
+
+  @Test func `a card's, a tile's and the page's own Copy Link and Share give the link as it would open`() throws {
+    let browser = testBrowser()
+    let written = try #require(URL(string: "https://example.org/story?id=7&utm_source=mail&fbclid=abc"))
+    let opened = try #require(URL(string: "https://example.org/story?id=7"))
+    // A card in the Space and a tile in the dock, which have no page of their own up.
+    browser.copyLink(written)
+    #expect(UIPasteboard.general.url == opened)
+    #expect(browser.link(written) == opened)
+    // The page's own sheet, for the page it's of.
+    let page = WebTab(id: "tab", role: .today, browser: browser)
+    UIPasteboard.general.url = nil
+    browser.copyLink(written, from: page)
+    #expect(UIPasteboard.general.url == opened)
+    #expect(browser.link(written, from: page) == opened)
+    // A link with nothing to leave out is as it's written.
+    #expect(browser.link(opened) == opened)
+  }
 }
 
 /// What the app's Info.plist promises iOS, read from the app the tests run in.

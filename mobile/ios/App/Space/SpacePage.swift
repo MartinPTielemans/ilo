@@ -260,7 +260,7 @@ private struct PageCard: View {
     .contextMenu {
       Button("Close Tab", systemImage: "xmark", role: .destructive, action: close)
       if let url = node.url {
-        Button("Copy Link", systemImage: "link") { UIPasteboard.general.url = url }
+        Button("Copy Link", systemImage: "link") { browser.copyLink(url) }
       }
       MoveMenu(id: node.id)
     }
@@ -586,7 +586,7 @@ private struct PinTile: View {
       .contextMenu {
         Button("Unpin", systemImage: "pin.slash") { browser.account.unpin(node.id) }
         if let url = node.url {
-          Button("Copy Link", systemImage: "link") { UIPasteboard.general.url = url }
+          Button("Copy Link", systemImage: "link") { browser.copyLink(url) }
         }
         MoveMenu(id: node.id)
         HideButton(id: node.id)
@@ -610,8 +610,7 @@ struct MoreSheet: View {
         .padding(.vertical, 8)
         .accessibilityAddTraits(.isHeader)
       // A long list scrolls; a short one is as tall as its rows.
-      SheetRows(from: .top) { rows(more, in: space) }
-        .frame(maxHeight: Dock.listHeight)
+      SheetRows(from: .top, most: Dock.listHeight) { rows(more, in: space) }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
     // With few enough left for the dock's rows, there's nothing more to show.
@@ -689,8 +688,7 @@ struct FolderSheet: View {
             .padding(.vertical, 12)
         } else {
           // A long folder scrolls; a short one is as tall as its rows.
-          SheetRows(from: .top) { rows(of: node) }
-            .frame(maxHeight: Dock.listHeight)
+          SheetRows(from: .top, most: Dock.listHeight) { rows(of: node) }
         }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
@@ -746,7 +744,7 @@ private struct PinnedRow: View {
     .contextMenu {
       Button("Unpin", systemImage: "pin.slash") { browser.account.unpin(node.id) }
       if let url = node.url {
-        Button("Copy Link", systemImage: "link") { UIPasteboard.general.url = url }
+        Button("Copy Link", systemImage: "link") { browser.copyLink(url) }
       }
       MoveMenu(id: node.id)
       if hides { HideButton(id: node.id) }

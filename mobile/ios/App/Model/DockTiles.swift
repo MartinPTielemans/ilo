@@ -62,16 +62,22 @@ nonisolated struct DockTiles: Equatable, Sendable {
   /// still names a tile stays. One that's gone was unpinned or deleted elsewhere and is forgotten,
   /// unless a tile the account didn't have at the last look, `since`, has the mark it was
   /// `knownBy`: that's the hidden one, moved to another Space by another device, and it's hidden
-  /// under its new id. A tile that was there all along is never taken for it.
-  static func kept(_ hidden: Set<String>, knownBy marks: [String: String] = [:], since seen: Set<String>? = nil, among tiles: [String: String])
-    -> Set<String>
-  {
+  /// under its new id. A tile that was there all along is never taken for it. Without
+  /// `forgetting`, one that's gone and isn't found stays, in case its tile is still on its way.
+  static func kept(
+    _ hidden: Set<String>, knownBy marks: [String: String] = [:], since seen: Set<String>? = nil, among tiles: [String: String],
+    forgetting: Bool = true
+  ) -> Set<String> {
     var kept = hidden.filter { tiles[$0] != nil }
-    guard let seen else { return kept }
     for id in hidden.subtracting(kept).sorted() {
-      guard let mark = marks[id] else { continue }
-      let moved = tiles.filter { $0.value == mark && !seen.contains($0.key) && !kept.contains($0.key) }.keys.min()
-      if let moved { kept.insert(moved) }
+      let moved = marks[id].flatMap { mark in
+        seen.flatMap { seen in tiles.filter { $0.value == mark && !seen.contains($0.key) && !kept.contains($0.key) }.keys.min() }
+      }
+      if let moved {
+        kept.insert(moved)
+      } else if !forgetting {
+        kept.insert(id)
+      }
     }
     return kept
   }

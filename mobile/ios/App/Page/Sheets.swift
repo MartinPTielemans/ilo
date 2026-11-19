@@ -98,7 +98,7 @@ struct ActionSheet: View {
           BigLabel(symbol: "magnifyingglass", title: "Find")
         }
         Button {
-          UIPasteboard.general.url = tab.url
+          if let url = tab.url { browser.copyLink(url, from: tab) }
           copied = true
         } label: {
           BigLabel(symbol: copied ? "checkmark" : "link", title: copied ? "Copied" : "Copy link")
@@ -108,12 +108,12 @@ struct ActionSheet: View {
           if tab.isPDF {
             // A document is sent as the file it is, not as a link to it.
             Button {
-              Task { browser.shared = await browser.copy(of: tab) ?? url }
+              Task { browser.shared = await browser.copy(of: tab) ?? browser.link(url, from: tab) }
             } label: {
               BigLabel(symbol: "square.and.arrow.up", title: "Share")
             }
           } else {
-            ShareLink(item: url) {
+            ShareLink(item: browser.link(url, from: tab)) {
               BigLabel(symbol: "square.and.arrow.up", title: "Share")
             }
           }
@@ -481,7 +481,7 @@ struct PageSearch: View {
           .accessibilityAddTraits(.isButton)
           .overlay(alignment: .bottom) {
             // A new private tab's words ride over the field while the keyboard is up.
-            if inked, !tab.hasPage { PrivateWords().padding(.bottom, PrivateMark.overField) }
+            if inked, !tab.hasPage { PrivateWords(overField: true).padding(.bottom, PrivateMark.overField) }
           }
       }
       SearchBar(query: $query, site: $site, focused: $focused, selectsAll: true) {

@@ -392,9 +392,11 @@ struct OverKeyboard: ViewModifier {
   @State private var keyboard = CGFloat.infinity
 
   func body(content: Content) -> some View {
-    content
-      .padding(.bottom, max(0, end - keyboard))
-      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+    // The sheet lies over a filler that is the screen's room and no more: a frame around the sheet
+    // would grow with a sheet that wants more than the room over the keyboard, and what grows past
+    // the screen moves everything laid out with it.
+    Color.clear
+      .overlay(alignment: .bottom) { content.padding(.bottom, max(0, end - keyboard)) }
       .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { end = $0 }
       .ignoresSafeArea(.keyboard)
       .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in

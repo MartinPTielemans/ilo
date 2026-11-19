@@ -826,7 +826,8 @@ private func question(
 
     page.visitAnyway()
     #expect(await eventually { await page.shows("/home") })
-    #expect(page.failure == nil)
+    // The warning stays over the page until its certificate is read, a moment after it's in.
+    #expect(await eventually { page.failure == nil })
     #expect(await eventually { page.exception == fault.exception })
     #expect(page.distrusted)
 
