@@ -18,6 +18,12 @@ pub const LISTED: usize = 3;
 /// The characters of an answer's body the agent reads at most, and of all a call's together.
 const SHOWN: usize = 20_000;
 pub const ALL_SHOWN: usize = 100_000;
+/// The headers that name a method for a server to take in the sent one's place.
+const OVERRIDES: [&str; 3] = [
+    "x-http-method-override",
+    "x-http-method",
+    "x-method-override",
+];
 /// What stands for a value that's hidden.
 const HIDDEN: &str = "(hidden)";
 /// What stands for an empty value in what a request sent, as an empty one is an object's name.
@@ -40,19 +46,32 @@ pub struct Request {
 }
 
 impl Request {
-    /// Whether it may change anything: anything but a GET or HEAD that's just that.
+    /// Whether it may change anything: anything but a GET or HEAD whose override headers, if it
+    /// sets any, all say GET or HEAD too, as a server may take the method or an override.
     pub fn changes(&self) -> bool {
-        !matches!(self.does.as_str(), "GET" | "HEAD")
+        let read = |method: &str| matches!(method, "GET" | "HEAD");
+        !read(&self.method)
+            || (self.headers.iter())
+                .filter(|(name, _)| OVERRIDES.iter().any(|each| name.eq_ignore_ascii_case(each)))
+                .any(|(_, value)| !read(&value.trim().to_ascii_uppercase()))
     }
 
     /// What it is, for the log and the answer: "POST /api/items".
     pub fn target(&self) -> String {
-        format!("{} {}", self.does, clip(&self.path, 60))
+        format!("{} {}", self.methods(), clip(&self.path, 60))
     }
 
-    /// What it is, short enough for a line of the question: "MERGE /_api/…/items(1)".
+    /// What it is, short enough for a line of the question: "POST as MERGE /_api/…/items(1)".
     pub fn line(&self) -> String {
-        format!("{} {}", self.does, short(&self.path))
+        format!("{} {}", self.methods(), short(&self.path))
+    }
+
+    /// The method sent, and the one an override names where it differs: "POST as GET".
+    fn methods(&self) -> String {
+        match self.does == self.method {
+            true => self.method.clone(),
+            false => format!("{} as {}", self.method, self.does),
+        }
     }
 
     /// What its body sends, in a line for the question, or "".
@@ -335,12 +354,7 @@ fn one(asked: &Value, origin: &str) -> Result<Request, Wrong> {
     if !body.is_empty() && !has("content-type") {
         headers.push(("Content-Type".into(), kind.into()));
     }
-    let overrides = [
-        "x-http-method-override",
-        "x-http-method",
-        "x-method-override",
-    ];
-    let does = (overrides.iter())
+    let does = (OVERRIDES.iter())
         .find_map(|name| {
             headers
                 .iter()
@@ -992,11 +1006,67 @@ mod tests {
             { "method": "HEAD", "path": "/a" },
         ]);
         let sent = parsed(asked).unwrap();
-        assert_eq!(sent[0].line(), "MERGE /_api/…/items(1)");
+        assert_eq!(sent[0].line(), "POST as MERGE /_api/…/items(1)");
         assert_eq!(sent[0].summary(), "Status: Closed");
         assert_eq!(sent[0].headers.last().unwrap().1, "application/json");
         assert!(sent[1].changes() && sent[1].does == "DELETE" && sent[1].method == "GET");
         assert!(!sent[2].changes());
+    }
+
+    /// A request is a read only when the method sent and every override header it sets both say
+    /// GET or HEAD: a server may take either, so a change by either asks (#1439). What it's called
+    /// names the method sent first, and the override beside it where it differs.
+    #[test]
+    fn a_read_is_one_only_by_its_method_and_its_overrides() {
+        let overrides = [
+            "X-HTTP-Method-Override",
+            "X-HTTP-Method",
+            "X-Method-Override",
+        ];
+        let one = |method: &str, headers: Value| {
+            let asked = json!([{ "method": method, "path": "/a", "headers": headers }]);
+            parsed(asked).unwrap().remove(0)
+        };
+        for method in ["POST", "PUT", "PATCH", "DELETE"] {
+            for name in overrides {
+                for read in ["GET", "HEAD", "get"] {
+                    let sent = one(method, json!({ name: read }));
+                    assert!(sent.changes(), "{method} with {name}: {read} went unasked");
+                    assert_eq!(sent.method, method);
+                }
+            }
+        }
+        for name in overrides {
+            for change in ["POST", "DELETE", "MERGE", "GET, DELETE", ""] {
+                let sent = one("GET", json!({ name: change }));
+                assert!(sent.changes(), "GET with {name}: {change:?} went unasked");
+            }
+        }
+        let both = one(
+            "GET",
+            json!({ "X-HTTP-Method": "GET", "X-Method-Override": "DELETE" }),
+        );
+        assert!(
+            both.changes(),
+            "a second override naming a change went unasked"
+        );
+        for method in ["GET", "HEAD"] {
+            assert!(!one(method, json!({})).changes(), "a plain {method} asked");
+            for name in overrides {
+                for read in ["GET", "HEAD"] {
+                    let sent = one(method, json!({ name: read }));
+                    assert!(!sent.changes(), "{method} with {name}: {read} asked");
+                }
+            }
+        }
+
+        let masked = one("POST", json!({ "X-HTTP-Method-Override": "GET" }));
+        assert_eq!(masked.target(), "POST as GET /a");
+        assert_eq!(masked.line(), "POST as GET /a");
+        let plain = one("POST", json!({}));
+        assert_eq!(plain.target(), "POST /a");
+        let same = one("DELETE", json!({ "X-HTTP-Method": "delete" }));
+        assert_eq!(same.target(), "DELETE /a");
     }
 
     /// A body is JSON, typed so, or text, typed as text unless it says; a GET has none.
