@@ -241,6 +241,8 @@ pub enum Command {
     /// Makes a Board in the Space's profile and opens it in a pinned tab, with its row's name in
     /// a field to type over, as New Folder names a folder (#3073).
     NewBoard,
+    /// Copies the Board shown into a Board of its own, named as a copy, in a new tab (#3406).
+    DuplicateBoard,
     /// Closes the split view's focused page.
     CloseSplitPane,
     /// Takes the split view's focused page out of it, to show alone.
@@ -659,6 +661,11 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         "New Board",
         Command::NewBoard,
         &["canvas", "whiteboard", "moodboard", "easel", "sketch"],
+    ),
+    (
+        "Duplicate Board",
+        Command::DuplicateBoard,
+        &["copy", "canvas", "whiteboard", "moodboard", "easel"],
     ),
     (
         "View Boards…",
@@ -1342,6 +1349,7 @@ impl Command {
             Command::NewNote => "new-note",
             Command::NewNoteSplit => "new-note-split",
             Command::NewBoard => "new-board",
+            Command::DuplicateBoard => "duplicate-board",
             Command::ViewBoards => "view-boards",
             Command::CloseSplitPane => "close-split-pane",
             Command::SeparatePane => "separate-pane",
@@ -1829,6 +1837,12 @@ impl Shell {
             Command::AddSplit => return self.add_pane(cx),
             Command::NewNote => return self.browser.new_note(self.space, None, cx),
             Command::NewBoard => return self.new_board(cx),
+            Command::DuplicateBoard => {
+                if let Some(id) = crate::boards::id_in(&self.page(self.selected).url) {
+                    self.duplicate_board(id.to_owned(), cx);
+                }
+                return;
+            }
             Command::ViewBoards => {
                 return self.library_command(from, cx, |shell, cx| {
                     shell.view_section(Section::Boards, cx)
@@ -2385,6 +2399,10 @@ impl Shell {
                 self.profile_choices(self.space).is_some_and(|(_, new)| new)
             }
             Command::ToggleFullScreen => true,
+            // A Board's second tab would only say it's open in another tab, so over a Board it's
+            // Duplicate Board.
+            Command::DuplicateTab => crate::boards::id_in(&page.url).is_none(),
+            Command::DuplicateBoard => crate::boards::id_in(&page.url).is_some(),
             // Only full screen, the page's too, has something to leave.
             Command::Exit => self.full_screen,
             Command::CheckForUpdates => self.browser.updates(),
@@ -2656,6 +2674,7 @@ pub(super) fn private_runs(command: Command) -> bool {
             | Command::NewNoteSplit
             // A Board is a folder of the profile's, and a private window keeps none.
             | Command::NewBoard
+            | Command::DuplicateBoard
             | Command::ViewBoards
     )
 }

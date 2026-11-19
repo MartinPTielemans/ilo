@@ -2685,6 +2685,7 @@ fn copy_puts_copy_url_above_the_search_row(cx: &mut TestAppContext) {
         "Copy Build Info".into(),
         "New Window ⌘N".into(),
         "Duplicate Current Tab".into(),
+        "Duplicate Board".into(),
         "https://copy.com/".into(),
     ];
     assert_eq!(bar.listed(), expected);
@@ -2978,6 +2979,7 @@ fn a_hidden_word_finds_its_command(cx: &mut TestAppContext) {
     let expected = [
         "Duplicate Current Tab".to_string(),
         search("duplicate"),
+        "Duplicate Board".into(),
         "New Window ⌘N".into(),
     ];
     assert_eq!(bar.listed(), expected);
