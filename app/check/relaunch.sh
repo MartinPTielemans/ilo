@@ -345,6 +345,7 @@ send key escape
 expect "^browser: page $asking dialog answered cancel\$" "Esc didn't stay on the page, stopping the quit"
 open_from_bar "${site}welcome.html"
 kept=$tab
+kept_today=$(today)
 post key q cmd
 expect "^browser: dialog shown Quit $app_name?\$" "⌘Q didn't ask before quitting, after a quit the page stopped"
 expect '^browser: dialog settled$' "the dialog asking to quit didn't settle, after a quit the page stopped"
@@ -356,8 +357,17 @@ exec 3>&-
 exited
 launch_logged "$out/relaunch-after-stopped.log"
 await '^browser: restored in ' || fail "the relaunch after a quit the page stopped didn't restore the Spaces"
-await "^browser: loaded [0-9]* ${site}welcome.html\$" ||
-  fail "the tab opened after a quit the page stopped (tab $kept) didn't come back shown, so the session wasn't kept at the quit that went ahead (#3494): $(grep '^browser: loaded ' "$log" | tr '\n' ' ')"
+# The tab is in the session, at its place in Today, whichever tab comes back shown: the quit's own
+# question shows the tab that asks before it asks, and a tab that isn't shown comes back unloaded.
+await "^browser: page [0-9]* back [01] forward [01] loading [01] ${site}welcome.html\$" ||
+  fail "the tab opened after a quit the page stopped (tab $kept) didn't come back, so the session wasn't kept at the quit that went ahead (#3494): $(grep -e '^browser: page [0-9]* back ' -e '^browser: today ' "$log" | tr '\n' ' ')"
+welcome=$(grep "^browser: page [0-9]* back [01] forward [01] loading [01] ${site}welcome.html\$" "$log" | head -1 | cut -d' ' -f3)
+placed=
+for each in $kept_today; do
+  if [ "$each" = "$kept" ]; then placed="$placed $welcome"; else placed="$placed [0-9][0-9]*"; fi
+done
+await "^browser: today$placed\$" ||
+  fail "the tab opened after a quit the page stopped came back as tab $welcome, but not at its place in Today, which was \"$kept_today\" with it as $kept (#3494): $(grep '^browser: today ' "$log" | tail -3 | tr '\n' ' ')"
 
 # On Wayland, a window saved maximized comes back and lives past the frames that take its state:
 # under sway, it ended the browser at a frame after its first, on an empty window geometry (#3456).
