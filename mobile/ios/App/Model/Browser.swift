@@ -506,9 +506,7 @@ final class Browser {
         if archive.keep(node, at: now) { closed += 1 }
       }
     }
-    // With no account open its tabs didn't close: they're no longer this phone's to list.
-    let ofAccount = (account as? PhoneAccount)?.showsAccount ?? true
-    let left = archive.follow(due, closed: { ofAccount && self.account.node($0) == nil }, at: now)
+    let left = archive.follow(due, closed: { self.closed($0) }, at: now)
     for id in left {
       // Its web view goes; what brings its page back stays, for when the tab does.
       live.remove(id)
@@ -522,15 +520,52 @@ final class Browser {
     settings.archivedUnseen(closed + left.count)
   }
 
+  /// Whether a tab that waited in the archive and is a Today tab no longer was closed. With no
+  /// account open its tabs didn't close: they're no longer this phone's to list. Nor did one
+  /// that's pinned now, which is in its Space's dock.
+  private func closed(_ tab: ArchivedTab) -> Bool {
+    guard (account as? PhoneAccount)?.showsAccount ?? true, let id = tab.node, account.node(id) == nil else { return false }
+    return pin(of: tab) == nil
+  }
+
+  /// The pinned tab a tab that waited in the archive became, on another device: a Today tab
+  /// pinned is a new node, so it's known by its Space and its page.
+  private func pin(of tab: ArchivedTab) -> SyncedNode? {
+    account.allPinned(in: tab.space).first { $0.kind == .pin && $0.url == tab.url }
+  }
+
+  /// The tabs that wait in the archive follow the account as it changes, as another device's
+  /// close or pin does while the app is in front: one the account no longer has as a Today tab
+  /// is the record of a closed tab from now, or gone from the list if it's pinned. Nothing is
+  /// sent to wait here: that's `archiveUnseen`'s, and never while the Space is on screen.
+  private func followArchive(now: Date = .now) {
+    guard let archive, listsEveryTab else { return }
+    let gone = archive.tabs.filter { tab in tab.node.map { account.node($0)?.kind != .today } ?? false }
+    guard !gone.isEmpty else { return }
+    archive.left(gone, closed: closed, at: now)
+    let away = settings.awayTabs.subtracting(gone.compactMap(\.node))
+    if away != settings.awayTabs { settings.awayTabs = away }
+  }
+
   /// Brings a tab back from the archive and opens it. One that waited there is the same tab,
   /// in its Space again and seen now, which every device hears. One that's closed is a new
-  /// Today tab of the Space it was in, or of the one on screen if that's gone.
+  /// Today tab of the Space it was in, or of the one on screen if that's gone. One whose row
+  /// says it waits, picked in the moment after another device closed it, opens as a closed one
+  /// does, and one another device pinned opens as that pinned tab, never as a second tab.
   func restore(_ tab: ArchivedTab) {
     guard let archive else { return }
-    if let id = tab.node, let node = account.node(id), node.kind == .today {
-      guard archive.take(tab) else { return }
-      slide = 0
-      return open(node)
+    if let id = tab.node {
+      if let node = account.node(id), node.kind == .today {
+        guard archive.take(tab) else { return }
+        slide = 0
+        return open(node)
+      }
+      if settings.awayTabs.contains(id) { settings.awayTabs.remove(id) }
+      if let pin = pin(of: tab) {
+        guard archive.take(tab) else { return }
+        slide = 0
+        return open(pin)
+      }
     }
     guard let space = account.spaces.first(where: { $0.id == tab.space }) ?? currentSpace, archive.take(tab) else { return }
     let node = account.openToday(url: tab.url, title: tab.title, in: space.id)
@@ -1043,8 +1078,8 @@ final class Browser {
   }
 
   /// Hears of the account's tabs changing, as they do by another device's hand while the app is
-  /// in front, and has the tiles this phone hides follow. Once a change, however many tabs it's
-  /// of, and never on a timer.
+  /// in front, and has what this phone keeps of them follow: the tiles it hides and the tabs
+  /// that wait in its archive. Once a change, however many tabs it's of, and never on a timer.
   private func watch() {
     withObservationTracking {
       for space in account.spaces {
@@ -1056,6 +1091,7 @@ final class Browser {
       Task { @MainActor in
         guard let self else { return }
         self.lookAtTiles(forgetting: false)
+        self.followArchive()
         self.watch()
       }
     }
