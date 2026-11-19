@@ -62,11 +62,11 @@ pc_launch() {
   launched=$(date +%s%3N)
   if [ -n "${4:-}" ]; then
     # shellcheck disable=SC2086 # the switches, a word each
-    BROWSER_DRIVE=1 BROWSER_URL="$4" BROWSER_PROFILE_DIR="$1" "$browser" $3 \
+    BROWSER_DRIVE=1 BROWSER_URL="$4" BROWSER_PROFILE_DIR="$1" "$browser" --ad-block-engine=native $3 \
       < "$out/drive" > "$log" 2>&1 &
   else
     # shellcheck disable=SC2086 # the switches, a word each
-    BROWSER_DRIVE=1 BROWSER_PROFILE_DIR="$1" "$browser" $3 < "$out/drive" > "$log" 2>&1 &
+    BROWSER_DRIVE=1 BROWSER_PROFILE_DIR="$1" "$browser" --ad-block-engine=native $3 < "$out/drive" > "$log" 2>&1 &
   fi
   pid=$!
   exec 3> "$out/drive"
