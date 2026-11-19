@@ -3116,7 +3116,7 @@ case "$handed" in
 esac
 # A page in the agent's tab that asks for a passkey never gets one for the agent (principle 3).
 # The agent's tab is out of the user's sight, its page unfocused, so Blink refuses the request
-# itself ("The document is not focused."). A page that has the focus reaches Chrome, where the
+# itself, as the page doesn't have focus. A page that has the focus reaches Chrome, where the
 # core hands the tab to the user before Chrome's dialog asks, with Touch ID's authenticator among
 # those found where the Mac has one, and the agent is refused the tab until they hand it back
 # (g_browser_core_refuse_passkey). Either way no passkey is made, and the run says which it saw.
@@ -3149,7 +3149,7 @@ if grep -q "^browser: agent mcp-client hands off $passkey_tab: passkey\$" "$log"
 else
   failed=$(grep "^browser: title $passkey_tab failed " "$log" | tail -1 | cut -d' ' -f5-)
   case "$failed" in
-    "NotAllowedError: The document is not focused.") ;;
+    "NotAllowedError: The operation is not allowed at this time because the page does not have focus.") ;;
     *) fail "the agent's page's passkey request failed otherwise than for its unfocused page: $failed" ;;
   esac
   passkey_said="was refused by Blink, the agent's page being unfocused"
