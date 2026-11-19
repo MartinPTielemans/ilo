@@ -558,6 +558,20 @@ source_set("system_stores") {
   ]
 }
 
+# Chrome's delegate for a profile's data removal, wrapped so Clear Browsing Data also reaches the
+# system's engine, apart so browser_core_unittests tests it with Chrome's delegate stubbed (#3600).
+source_set("clear_both_engines") {
+  sources = [
+    "clear_both_engines.cc",
+    "clear_both_engines.h",
+  ]
+  public_deps = [ "//content/public/browser" ]
+  deps = [
+    "//base",
+    "//chrome/browser/browsing_data:constants",
+  ]
+}
+
 # The native engine's list updates, apart so browser_core_unittests drives them with a test
 # loader factory in place of the browser's.
 source_set("native_ad_block_lists") {
@@ -772,6 +786,7 @@ source_set("browser_core") {
     ":ax_text",
     ":boost_colors",
     ":boost_script",
+    ":clear_both_engines",
     ":drm_request",
     ":history_removal",
     ":idle_check",
@@ -1097,6 +1112,7 @@ test("browser_core_unittests") {
     "agent_job_voter_unittest.cc",
     "boost_colors_unittest.cc",
     "boost_script_unittest.cc",
+    "clear_both_engines_unittest.cc",
     # The removals the Library's History and the command bar undo on ⌘Z, on a history service.
     "history_removal_unittest.cc",
     "idle_check_unittest.cc",
@@ -1154,6 +1170,7 @@ test("browser_core_unittests") {
     ":agent_reply_limit",
     ":boost_colors",
     ":boost_script",
+    ":clear_both_engines",
     ":history_removal",
     ":idle_check",
     ":mini_player_place",
@@ -1179,6 +1196,7 @@ test("browser_core_unittests") {
     "//base",
     "//base/test:run_all_unittests",
     "//base/test:test_support",
+    "//chrome/browser/browsing_data:constants",
     "//components/history/core/browser",
     "//components/history/core/test",
     "//components/omnibox/browser",

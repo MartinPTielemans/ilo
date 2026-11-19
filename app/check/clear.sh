@@ -42,8 +42,10 @@
 # when it leaves. From 14, a listed streaming service, a host of the run's server the dev build
 # lists, opens in Safari's engine from its first load, in a private window too, the Site Controls
 # show it on, and Off keeps it in Chromium after a reload, in a new tab, after another site and
-# back and after a relaunch, where On brings it back. A profile made where one's folder was removed
-# by hand has a Safari's engine store of its own, and the old one is deleted at the next launch.
+# back and after a relaunch, where On brings it back. Clear browsing data's Delete, for all time on
+# the Mac, takes the history away, and from 14 Safari's engine's store and the sites the profile
+# chose. A profile made where one's folder was removed by hand has a Safari's engine store of its
+# own, and the old one is deleted at the next launch.
 
 # Clear, from the served page and two more, with the served page pinned for it to leave.
 serve
@@ -51,6 +53,23 @@ serve
 # run before would leave the note closed here, and the runs after would open their pages there. It
 # forgets them before its first launch and after its last.
 forget_engine_sites
+# On the Mac, Clear browsing data's Delete below is for all time, the range a user picks there being
+# kept, so it reaches what Safari's engine keeps too (#3600).
+if [ "$(uname)" = Darwin ]; then
+  python3 -I -c '
+import json, os, sys
+path = sys.argv[1]
+prefs = {}
+if os.path.exists(path):
+    with open(path, encoding="utf-8") as f:
+        prefs = json.load(f)
+prefs.setdefault("browser", {}).setdefault("clear_data", {})["time_period"] = 4
+os.makedirs(os.path.dirname(path), exist_ok=True)
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(prefs, f)
+' "$profile_dir/Default/Preferences" ||
+    fail "the profile's range for Clear browsing data couldn't be set"
+fi
 
 log="$out/clear.log"
 step=0
@@ -1586,6 +1605,31 @@ for _ in $(seq 20); do
 done
 history_suggested && fail "Delete in Clear browsing data left $visited in the history: $suggested"
 ../tools/window-screenshot.sh "$pid" "$out/clear-browsing-data-deleted.png" || fail "no window to capture"
+# From macOS 14 that Delete, for all time with cookies, cleared Safari's engine too: the profile's
+# choices, so localhost's closed note shows again and 127.0.0.1 opens in Chromium, and the store,
+# so 127.0.0.1's session page there sees nothing, not even the HttpOnly cookie its server set.
+if [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
+  tab=$(grep '^browser: loaded [0-9]* chrome://settings/clearBrowserData$' "$log" | tail -1 | cut -d' ' -f3)
+  go_from_bar "localhost:$port/drm.html"
+  expect "^browser: page $tab needs com.widevine.alpha\$" \
+    "after Delete for all time, localhost's page asking for Widevine brought no note"
+  expect "^browser: drm note $tab at " "Delete for all time left localhost's note closed"
+  go_from_bar "127.0.0.1:$port/drm.html"
+  expect "^browser: page $tab needs com.widevine.alpha\$" \
+    "after Delete for all time, 127.0.0.1 opened in Safari's engine: $(engine_sites)"
+  expect "^browser: drm note $tab at " "127.0.0.1's note wasn't drawn after Delete"
+  send layout
+  read -r nx ny nw nh <<EOF
+$(grep "^browser: drm note $tab at " "$log" | tail -1 | cut -d' ' -f6-)
+EOF
+  send click $((nx + nw / 2)) $((ny + nh - 26))
+  expect "^browser: system engine $tab on\$" "the note's button didn't show the page in Safari's engine after Delete"
+  go_from_bar "127.0.0.1:$port/session"
+  expect "^browser: title $tab session safari sees none\$" \
+    "Delete for all time left 127.0.0.1's session in Safari's engine: $(grep "^browser: title $tab session " "$log" | tail -1)"
+  served "^GET safari 127.0.0.1:$port/session cookie none\$" \
+    "Safari's engine's request after Delete for all time carried a cookie" "^GET safari 127.0.0.1:$port/session "
+fi
 send key w cmd
 exec 3>&- 5>&-
 quit
