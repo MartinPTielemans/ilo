@@ -15,7 +15,10 @@
 # from the File menu, the sidebar's +, the command bar, and its key with a Board's page and with
 # the sidebar holding the keyboard, each makes one. Japanese input as a Board's first keys is its
 # note; ⌘C, ⌘V and ⌘Z in the page copy, paste and undo cards, and ⌘− zooms the canvas, not the
-# page, each saved. Relaunched, the Board comes back with its note. The Board holding [] then shows
+# page, each saved. Tab reaches a Board's cards in reading order, whatever order its file has them in, the
+# arrows move the one the keyboard's on, Delete takes it away and the keyboard goes on to the next,
+# and ⌘Z brings it back, each saved; on the Mac VoiceOver reads a note by its first line and ink as
+# a drawing, captured. Relaunched, the Board comes back with its note. The Board holding [] then shows
 # its file in the system's file manager from its note's button, last of the steps; after it, that
 # the page the bar's ↩ loaded over a Board had the keyboard is judged.
 # An agent gets nothing of a Board, wherever the user opens one: one New Board made, one opened from
@@ -669,6 +672,82 @@ send key w cmd shift
 expect "^browser: window closed $private\$" "⇧⌘W didn't close the private window"
 send window 1
 
+# #3407: the keyboard reaches a Board's cards. Tab goes into them at the first in reading order, top
+# to bottom then left to right, whatever order the file has them in, and on from card to card; the
+# arrows move the card the keyboard's on, a point and with ⇧ ten; Delete takes it away and the
+# keyboard goes on to the next card; ⌘Z brings it back. On the Mac, VoiceOver reads the card the
+# keyboard's on by its role and name. NVDA's words for them are screen-reader.sh's.
+walk=$(printf 'c%.0s' $(seq 32))
+mkdir -p "$boards/$walk"
+printf '%s' '{"version": 1, "camera": {"x": 0, "y": 0, "zoom": 1}, "cards": [
+  {"id": "d", "kind": "stroke", "x": 500, "y": 400, "w": 60, "h": 20, "z": 4, "points": [[0, 0], [60, 20]], "color": "ink", "width": 4},
+  {"id": "b", "kind": "note", "x": 500, "y": 100, "w": 240, "h": 0, "z": 2, "text": "top right", "fill": "plain", "size": "m"},
+  {"id": "c", "kind": "link", "x": 100, "y": 400, "w": 280, "h": 56, "z": 3, "url": "https://example.com/", "title": "lower link"},
+  {"id": "a", "kind": "note", "x": 100, "y": 100, "w": 240, "h": 0, "z": 1, "text": "top left\nand more", "fill": "plain", "size": "m"}]}' \
+  > "$boards/$walk/board.json"
+# Each card's id and place in the file, in reading order: "a 100 100 b 500 100 …".
+places() {
+  python3 -I -c 'import json, sys
+cards = json.load(open(sys.argv[1]))["cards"]
+print(" ".join("%s %g %g" % (c["id"], c["x"], c["y"]) for c in sorted(cards, key=lambda c: (c["y"], c["x"]))))' \
+    "$boards/$walk/board.json"
+}
+moved_to() {
+  saved_after "$saves" "$2 wasn't saved"
+  for _ in $(seq 50); do
+    [ "$(places)" = "$1" ] && return 0
+    sleep 0.1
+  done
+  fail "$2 left the cards at $(places), not $1"
+}
+voiceover() {
+  [ "$(uname)" = Darwin ] || return 0
+  said=$(../tools/ax-tree.sh "$pid" --focused)
+  case $said in
+  accessibility:*) echo "skip: VoiceOver's read of the Board's cards: $said" ;;
+  *) echo "$said" | grep -q "$1" || fail "VoiceOver doesn't read $2 as $1: $said" ;;
+  esac
+}
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar for the Board to walk"
+send insert "chrome://board/$walk"
+send key return
+expect "^browser: loaded [0-9]* chrome://board/$walk\$" "the Board to walk with the keyboard didn't load"
+walked=$(grep "^browser: loaded [0-9]* chrome://board/$walk\$" "$log" | tail -1 | cut -d' ' -f3)
+for _ in $(seq 100); do
+  grep "^browser: page $walked " "$log" | tail -1 | grep -q " loading 0 chrome://board/$walk\$" && break
+  sleep 0.1
+done
+send key tab
+voiceover '^focused: 0 AXGroup/[^ ]* "top left".* roledescription=note$' "the first card Tab reaches, a note,"
+send key tab
+saves=$(grep -c 'browser: board saved$' "$log" || true)
+send key right
+moved_to "a 100 100 b 501 100 c 100 400 d 500 400" "→ on the second card in reading order, after Tab twice,"
+send key tab
+send key tab
+voiceover '^focused: 0 AXImage/[^ ]* "Drawing"' "the ink Tab reaches last"
+saves=$(grep -c 'browser: board saved$' "$log" || true)
+send key down shift
+moved_to "a 100 100 b 501 100 c 100 400 d 500 410" "⇧↓ on the last card, after Tab twice more,"
+send key tab shift
+saves=$(grep -c 'browser: board saved$' "$log" || true)
+send key backspace
+moved_to "a 100 100 b 501 100 d 500 410" "Delete on the link card, after ⇧Tab,"
+saves=$(grep -c 'browser: board saved$' "$log" || true)
+# The keyboard went on to the card after the one deleted, the ink.
+send key left
+moved_to "a 100 100 b 501 100 d 499 410" "← after Delete, on the card after the one deleted,"
+saves=$(grep -c 'browser: board saved$' "$log" || true)
+send key z cmd
+moved_to "a 100 100 b 501 100 d 500 410" "⌘Z of the ←"
+saves=$(grep -c 'browser: board saved$' "$log" || true)
+send key z cmd
+moved_to "a 100 100 b 501 100 c 100 400 d 500 410" "⌘Z of the Delete"
+../tools/window-screenshot.sh "$pid" "$out/board-keyboard.png" || fail "no window to capture"
+send key w cmd
+expect "^browser: tab $walked closed\$" "⌘W didn't close the Board walked with the keyboard"
+
 # 1b: a Board kept across a relaunch. Its tab comes back named, the bar finds it by the start of its
 # name, and its page reads its file: a pan saves it with its note. The first note's is kept too.
 exec 3>&-
@@ -730,7 +809,9 @@ echo "ok: New Board made $id, its name kept and its note saved in its folder alo
   "Library › Boards listed it; renamed, found by the bar, archived and reopened, the log said" \
   "only \"(a Board)\", and its next save kept the note; New Board from the File menu, the" \
   "sidebar's +, the command bar and its key with the page and the bar focused; Japanese kept as" \
-  "the first note; ⌘C ⌘V and ⌘Z in the page saved; ⌘− the canvas's, not the page's; an agent got nothing of a Board made," \
+  "the first note; ⌘C ⌘V and ⌘Z in the page saved; ⌘− the canvas's, not the page's;" \
+  "Tab walked a Board's cards in reading order, the arrows moved them, Delete and ⌘Z saved," \
+  "$( [ "$(uname)" = Darwin ] && echo "VoiceOver read the note and the ink;") an agent got nothing of a Board made," \
   "opened from the Library or typed into its own tab, each refusal logged without a name;" \
   "markup and a javascript: link ran" \
   "nothing; a waiting picture landed as a card and left the arrivals, and one that came while" \
@@ -739,5 +820,5 @@ echo "ok: New Board made $id, its name kept and its note saved in its folder alo
   "Board came back, found by its name, and its next save kept its note; the one holding [] showed" \
   "its file; the page loaded over a Board from the bar had the keyboard." \
   "Windows: $out/board.png $out/board-markup.png $out/board-landed.png" \
-  "$out/board-landed-shown.png $out/board-unread.png $out/board-private.png" \
+  "$out/board-landed-shown.png $out/board-unread.png $out/board-private.png $out/board-keyboard.png" \
   "$([ -f "$out/board-agent-tab.png" ] && echo "$out/board-agent-tab.png")"

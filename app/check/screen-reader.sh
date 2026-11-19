@@ -13,7 +13,7 @@
 # past its last ring the tab shown's row, and Tab and ⇧Tab from the ring have it say the page's
 # first and last control, and the Library's key has it on the Library's search field, where ↓ has
 # it say the row ringed and where it stands and Tab has it on the Library's sections. Elsewhere it
-# records.
+# records, a Board's cards among them: read as the keyboard reaches them, moved and deleted.
 # NVDA's portable copy (GPL) is fetched from NV Access' release on GitHub, its checksum pinned, into
 # the hosted runner's temporary folder, and never installed: with NVDA_DIR naming a portable copy,
 # the run uses that instead. Off a hosted Windows runner, and without NVDA_DIR, it skips.
@@ -395,6 +395,41 @@ press , cmd
 press tab
 press tab
 press escape
+# A Board's cards (#3407), not judged yet: the note left with Escape has the keyboard and is read
+# by its first line as a note, Tab goes on to the next card, its copy, and moving it with → and
+# deleting it are said.
+press e ctrl shift
+expect '^browser: new board [0-9a-f]\{32\} tab [0-9]*$' "⌃⇧E made no Board"
+board=$(grep '^browser: new board ' "$log" | tail -1 | cut -d' ' -f6)
+send type "kitchen"
+press return
+expect "^browser: board $board has the keyboard\$" "↩ on the new Board's name didn't give its page the keyboard"
+for _ in $(seq 100); do
+  grep "^browser: page $board " "$log" | tail -1 | grep -q ' loading 0 chrome://board/' && break
+  sleep 0.1
+done
+heard=$(wc -l < "$nvda_log")
+send type "top note"
+spoken "typed the Board's first note"
+board_said() {
+  said=no
+  tail -n "+$(($1 + 1))" "$nvda_log" | grep -q "^Speaking .*$2" && said=yes
+  echo "note: NVDA said $3: $said"
+}
+at=$(wc -l < "$nvda_log")
+press escape
+board_said "$at" "'top note'.*'note'" "the note Escape left, by its first line, as a note"
+press c cmd
+press v cmd
+at=$(wc -l < "$nvda_log")
+press tab
+board_said "$at" "'top note'" "the note's copy Tab went on to"
+at=$(wc -l < "$nvda_log")
+press right
+board_said "$at" "'Moved right" "→ moving it"
+at=$(wc -l < "$nvda_log")
+press backspace
+board_said "$at" "'Deleted top note" "Delete taking it away"
 exec 3>&-
 quit
 nvda_quit

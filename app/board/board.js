@@ -96,10 +96,13 @@ function edit(change) {
 function restore(from, to) {
   if (!from.length) return;
   to.push(snapshot());
+  const focused = focusedCard();
   cards = JSON.parse(from.pop());
   selection.clear();
   renderAll();
   changed();
+  // The cards were drawn again: the keyboard stays on them, on the card it was on if it's back.
+  if (focused) cardOf(tabStop) ? focusCard(cardOf(tabStop)) : view.focus();
 }
 
 // --- Saving ---
@@ -201,6 +204,7 @@ function make(card) {
     el.setAttribute("stroke", inkColor(card.color));
     el.setAttribute("stroke-width", String(card.width));
     el.dataset.id = card.id;
+    name(el, card);
     ink.append(el);
     byId.set(card.id, el);
     return;
@@ -240,6 +244,7 @@ function make(card) {
   if (card.kind === "note") el.classList.add(card.size || "m", card.fill === "none" ? "none" : "filled");
   if (card.kind === "note" && fillColor(card.fill)) el.style.background = fillColor(card.fill);
   el.dataset.id = card.id;
+  name(el, card);
   const grip = document.createElement("span");
   grip.className = "grip";
   el.append(grip);
@@ -251,8 +256,85 @@ function make(card) {
 function renderAll() {
   for (const el of byId.values()) el.remove();
   byId.clear();
+  if (!cardOf(tabStop)) tabStop = ordered()[0]?.id ?? null;
   for (const card of cards) make(card);
   showStyle();
+}
+
+// --- What a screen reader reaches ---
+
+// A card's role and name, and whether Tab stops on it: a note by its first line, a picture as
+// "Picture", as its file's name is only its bytes' hash, ink as "Drawing" and a link by its text.
+function label(card) {
+  if (card.kind === "picture") return "Picture";
+  if (card.kind === "stroke") return "Drawing";
+  if (card.kind === "link") return card.title || webAddress(card.url) || card.url;
+  const line = card.text.split("\n").map((line) => line.trim()).find(Boolean);
+  return line ? line.slice(0, 80) : "Empty note";
+}
+function name(el, card) {
+  tabStop ??= card.id;
+  if (card.kind === "note") el.setAttribute("role", "group"), el.setAttribute("aria-roledescription", "note");
+  if (card.kind === "picture" || card.kind === "stroke") el.setAttribute("role", "img");
+  if (card.kind !== "link") el.setAttribute("aria-label", label(card));
+  el.tabIndex = card.id === tabStop ? 0 : -1;
+}
+
+// The cards are one stop of Tab's, the one the keyboard was last on or else the first in reading
+// order, and Tab and ⇧Tab go on from card to card in that order: top to bottom, then left to right.
+let tabStop = null;
+const ordered = () => cards.slice().sort((a, b) => a.y - b.y || a.x - b.x);
+function setTabStop(cardId) {
+  if (tabStop === cardId) return;
+  const was = byId.get(tabStop);
+  if (was) was.tabIndex = -1;
+  tabStop = cardId;
+  const now = byId.get(cardId);
+  if (now) now.tabIndex = 0;
+}
+function keepTabStop() {
+  if (!byId.has(tabStop)) setTabStop(ordered()[0]?.id ?? null);
+}
+const inTools = (el) => Boolean(el?.closest?.("#tools, #style, #zoom, #note, #unsaved, #toast"));
+const focusedCard = () => {
+  const el = document.activeElement?.closest?.("[data-id]");
+  return el && view.contains(el) ? cardOf(el.dataset.id) : null;
+};
+// Shows |card| with the keyboard on it, and pans to it if it's out of view.
+function focusCard(card) {
+  const el = byId.get(card.id);
+  if (!el) return;
+  setTabStop(card.id);
+  el.focus({ preventScroll: true });
+  const x = camera.x + card.x * camera.zoom, y = camera.y + card.y * camera.zoom;
+  const w = card.w * camera.zoom, h = (card.h || el.offsetHeight) * camera.zoom;
+  if (x < 0 || y < 0 || x + w > innerWidth || y + h > innerHeight) {
+    camera.x = innerWidth / 2 - (card.x + card.w / 2) * camera.zoom;
+    camera.y = innerHeight / 2 - (card.y + (card.h || el.offsetHeight) / 2) * camera.zoom;
+    moveCamera();
+  }
+}
+// The keyboard on a card selects it alone, as a click does. A click never moves the focus (the
+// view's pointerdown keeps it), so this is Tab's, ⇧Tab's or the page's own.
+world.addEventListener("focusin", (e) => {
+  const el = e.target.closest?.("[data-id]");
+  if (!el || editing) return;
+  setTabStop(el.dataset.id);
+  if (selection.size !== 1 || !selection.has(el.dataset.id)) {
+    selection.clear();
+    selection.add(el.dataset.id);
+    renderSelection();
+  }
+});
+// The view is the camera's, never scrolled: a focus that would scroll it pans instead.
+view.addEventListener("scroll", () => (view.scrollTop = view.scrollLeft = 0));
+
+// What a screen reader says of an edit the keyboard made: polite, unseen, and said again even when
+// it's the same words, as each press of an arrow moves the cards again.
+let said = false;
+function announce(text) {
+  said = !said;
+  $("#said").textContent = said ? text : `${text}\u00a0`;
 }
 function redraw(card) {
   byId.get(card.id)?.remove();
@@ -675,6 +757,7 @@ function erase(e) {
     byId.get(cardId)?.remove();
     byId.delete(cardId);
   });
+  keepTabStop();
 }
 
 function renderSelection() {
@@ -737,6 +820,7 @@ function stopEditing() {
   } else if (card.text !== was) {
     undos.push(before);
     redos.length = 0;
+    el?.setAttribute("aria-label", label(card));
   }
 }
 world.addEventListener("dblclick", (e) => {
@@ -785,7 +869,11 @@ document.addEventListener("keydown", (e) => {
   if (command && e.key === "-") return e.preventDefault(), zoomAt(camera.zoom / 1.25);
   if (command && e.key === "0") return e.preventDefault(), zoomAt(1);
   if (editing) {
-    if (e.key === "Escape") stopEditing(), view.focus();
+    if (e.key === "Escape") {
+      const card = editing.card;
+      stopEditing();
+      byId.has(card.id) ? focusCard(card) : view.focus();
+    }
     return;
   }
   if (command && e.key.toLowerCase() === "z") {
@@ -795,22 +883,67 @@ document.addEventListener("keydown", (e) => {
   if (command && e.key.toLowerCase() === "a") {
     e.preventDefault();
     for (const card of cards) selection.add(card.id);
-    return renderSelection();
+    renderSelection();
+    return announce(cards.length === 1 ? "1 card selected" : `All ${cards.length} cards selected`);
   }
   if (e.key === "Delete" || e.key === "Backspace") {
     if (!selection.size) return;
     e.preventDefault();
-    return edit(() => {
+    const gone = cards.filter((card) => selection.has(card.id));
+    const order = ordered();
+    const focused = focusedCard();
+    const after = focused && order.slice(order.indexOf(focused)).find((card) => !selection.has(card.id));
+    edit(() => {
       cards = cards.filter((card) => !selection.has(card.id));
       for (const cardId of selection) byId.get(cardId)?.remove(), byId.delete(cardId);
       selection.clear();
       showStyle();
     });
+    keepTabStop();
+    announce(gone.length === 1 ? `Deleted ${label(gone[0])}` : `Deleted ${gone.length} cards`);
+    // The keyboard goes on to the card after, as a list's does once its item is gone.
+    if (focused) {
+      const next = after || ordered().findLast((card) => card.y < focused.y || (card.y === focused.y && card.x < focused.x));
+      next ? focusCard(next) : view.focus();
+    }
+    return;
   }
-  if (e.key === "Escape") return selection.clear(), renderSelection();
+  if (e.key === "Escape") {
+    if (selection.size) announce("Nothing selected");
+    return selection.clear(), renderSelection();
+  }
+  // The arrows move what's selected a point on screen, and with ⇧ ten, each press a step of ⌘Z's.
+  const arrows = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+  if (arrows[e.key] && selection.size && !command && !e.altKey && !inTools(e.target)) {
+    e.preventDefault();
+    const step = (e.shiftKey ? 10 : 1) / camera.zoom;
+    const [dx, dy] = arrows[e.key].map((d) => d * step);
+    edit(() => {
+      for (const card of cards) {
+        if (!selection.has(card.id)) continue;
+        card.x += dx;
+        card.y += dy;
+        const el = byId.get(card.id);
+        if (card.kind === "stroke") el?.setAttribute("d", strokePath(card));
+        else if (el) place(el, card);
+      }
+    });
+    return announce(`Moved ${e.key.slice(5).toLowerCase()}`);
+  }
+  // Tab and ⇧Tab go from card to card in reading order, and past the last or first out of them.
+  if (e.key === "Tab" && !command && !e.altKey) {
+    const focused = focusedCard();
+    if (!focused) return;
+    const order = ordered();
+    const next = order[order.indexOf(focused) + (e.shiftKey ? -1 : 1)];
+    if (next) e.preventDefault(), focusCard(next);
+    return;
+  }
   if (e.key === "Enter" && selection.size === 1) {
     const card = cardOf([...selection][0]);
     if (card?.kind === "note") return e.preventDefault(), startEditing(card);
+    // A link card's own ↩ would be a click, which the Board keeps from opening it (below).
+    if (card?.kind === "link") return e.preventDefault(), open(byId.get(card.id), e);
   }
   if (e.key === " ") spaceHeld = true, view.classList.add("panning");
   if (command || e.altKey) return;
