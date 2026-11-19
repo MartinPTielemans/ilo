@@ -899,6 +899,10 @@ expect "^browser: selected $s\$" "the dropped text's search didn't show"
 searching 'dogs+and+cats' \
   "the dropped text didn't start a search for it: $(grep "^browser: page $s " "$log" | tail -1)" "$s"
 ../tools/window-screenshot.sh "$pid" "$out/dropped-text.png" || fail "no window to capture"
+# The search's live page can put up its own cards, as one asking for the location over the top
+# of the sidebar, which would take the pointer from the name row below (#3628): the dropped
+# link's tab, a page of the run's own site, shows for the name row's steps.
+switch "4 cmd" "$d"
 
 # Under the pointer the Space's name row lights as a tab row does, with its chevron after the name
 # (in the icon's slot with an icon) and its ••• at its end, and a press anywhere on it but the •••
