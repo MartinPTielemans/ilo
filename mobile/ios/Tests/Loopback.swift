@@ -190,10 +190,11 @@ nonisolated final class Loopback: @unchecked Sendable {
 /// Waits for something a page or the network brings about, and says whether it came.
 @MainActor func eventually(seconds: Int = 45, _ came: @MainActor () async -> Bool) async -> Bool {
   // By the clock: CI's iOS 27 simulator has taken 23 s over a run's first page, which an iOS 26
-  // one loads in a third of a second, and some runs it holds a load until WebKit gives up on it,
-  // a minute or more. CI runs a failed test once more (mobile-ios.yml), and a suite's time limit
-  // is for both runs together, so a wait that counted its turns and outlasted the limit took the
-  // second run with it. What came is answered at once either way.
+  // one loads in a third of a second, and in its first minutes it holds some loads until WebKit
+  // gives up on them, a minute or more. No wait outlasts that, so CI runs a suite that failed
+  // once more, later (mobile-ios.yml). A wait that counted its turns lasted over two minutes
+  // there, past its suite's time limit, which ends the whole test process. What came is answered
+  // at once either way.
   let end = ContinuousClock.now + .seconds(seconds)
   repeat {
     if await came() { return true }

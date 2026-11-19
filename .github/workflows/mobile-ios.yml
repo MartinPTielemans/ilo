@@ -160,31 +160,43 @@ jobs:
 
       # The Release compile runs whatever the tests did, so one run reports both failures; Verdict
       # fails the job for them. A summary line says how many tests were skipped, as a skipped test
-      # isn't a passed one. A failed test is run once more, as the runner's simulator holds a page
-      # load for a minute or more in some runs, and the summary names each test that needed it,
-      # so one that fails often stays in sight. xcodebuild counts a suite's time limit over both
-      # runs together, so the second run saves only a test whose first one failed well inside it.
+      # isn't a passed one. The runner's simulator holds a page's load for a minute or more at
+      # times in its first ten minutes or so, and a test run again at once meets the same hold. So
+      # the suites with a failed test are run once more after the rest, when it has settled, and
+      # theirs is the result. The summary names them, so a suite that fails often stays in sight.
       - id: tests
         name: The app's tests
         continue-on-error: true
         env:
           SIMULATOR: ${{ steps.simulator.outputs.udid }}
         run: |
+          tests() {
+            bundle=$1
+            shift
+            xcodebuild -project ilo.xcodeproj -scheme ilo -configuration Debug \
+              -destination "platform=iOS Simulator,id=$SIMULATOR" -resultBundlePath "$bundle" "$@"
+          }
+          counts() {
+            xcrun xcresulttool get test-results summary --path "$1" --compact 2> /dev/null |
+              jq -r --arg what "$2" '"- \($what): \(.totalTestCount) tests, \(.passedTests) passed, \(.failedTests) failed, \(.skippedTests) skipped."' \
+                >> "$GITHUB_STEP_SUMMARY" || true
+          }
           status=0
-          xcodebuild -project ilo.xcodeproj -scheme ilo -configuration Debug \
-            -destination "platform=iOS Simulator,id=$SIMULATOR" \
-            -retry-tests-on-failure -test-iterations 2 \
-            -resultBundlePath "$RUNNER_TEMP/ilo-tests.xcresult" test || status=$?
-          xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/ilo-tests.xcresult" --compact 2> /dev/null |
-            jq -r '"- The app: \(.totalTestCount) tests, \(.passedTests) passed, \(.failedTests) failed, \(.skippedTests) skipped."' \
-              >> "$GITHUB_STEP_SUMMARY" || true
-          xcrun xcresulttool get test-results tests --path "$RUNNER_TEMP/ilo-tests.xcresult" --compact 2> /dev/null |
+          tests "$RUNNER_TEMP/ilo-tests.xcresult" test || status=$?
+          counts "$RUNNER_TEMP/ilo-tests.xcresult" "The app"
+          [ "$status" -eq 0 ] && exit 0
+          # A run that failed with no failed test, as one that didn't compile, has none to run again.
+          suites=$(xcrun xcresulttool get test-results tests --path "$RUNNER_TEMP/ilo-tests.xcresult" --compact 2> /dev/null |
             jq -r '[.. | objects
-                | select(.nodeType? == "Test Case" and .result == "Passed"
-                    and any(.children[]?; .nodeType == "Repetition" and .result == "Failed"))
-                | .name] | unique
-              | if length > 0 then "- Passed only on a second run: " + (map("“\(.)”") | join(", ")) + "." else empty end' \
-              >> "$GITHUB_STEP_SUMMARY" || true
+              | select(.nodeType? == "Test Suite" and any(.children[]?; .nodeType == "Test Case" and .result == "Failed"))
+              | .name] | unique | .[]' || true)
+          [ -n "$suites" ] || exit "$status"
+          only=()
+          for suite in $suites; do only+=("-only-testing:iloTests/$suite"); done
+          echo "again=true" >> "$GITHUB_OUTPUT"
+          status=0
+          tests "$RUNNER_TEMP/ilo-tests-again.xcresult" "${only[@]}" test-without-building || status=$?
+          counts "$RUNNER_TEMP/ilo-tests-again.xcresult" "Run again after a failed test, $(printf '%s' "$suites" | tr '\n' ' ')"
           exit "$status"
 
       # What the simulator's Debug build doesn't compile: the optimizer's checks and a device's
@@ -207,12 +219,13 @@ jobs:
           } | tee -a "$GITHUB_STEP_SUMMARY"
           [ "$TESTS" = success ] && [ "$RELEASE" = success ]
 
-      # Each failed test with its attachments, to open in Xcode.
-      - if: ${{ !cancelled() && steps.tests.outcome == 'failure' }}
+      # Each failed test with its attachments, to open in Xcode: the first run's, and the second's
+      # where there was one.
+      - if: ${{ !cancelled() && (steps.tests.outcome == 'failure' || steps.tests.outputs.again == 'true') }}
         uses: actions/upload-artifact@v4
         with:
           name: ilo-ios-tests
-          path: ${{ runner.temp }}/ilo-tests.xcresult
+          path: ${{ runner.temp }}/ilo-tests*.xcresult
           retention-days: 7
 
   # The tree has passed once both jobs have, which neither can record alone.
