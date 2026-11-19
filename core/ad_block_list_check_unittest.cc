@@ -24,6 +24,11 @@ std::string Dated(std::string_view updated, std::string_view list) {
   return "! Title: A list\n! Updated: " + std::string(updated) + "\n" + std::string(list);
 }
 
+// Whether |downloaded| takes |last_good|'s place, for the rules, which ask nothing more.
+bool Takes(std::string_view downloaded, std::optional<std::string_view> last_good) {
+  return Judge(downloaded, last_good) == Download::kTaken;
+}
+
 base::Time Utc(int year, int month, int day, int hour, int minute, int second) {
   base::Time time;
   EXPECT_TRUE(base::Time::FromUTCExploded({year, month, 0, day, hour, minute, second, 0}, &time));
@@ -86,43 +91,80 @@ TEST(AdBlockListCheck, ReadsWhenAListSaysItWasUpdated) {
 }
 
 // A mirror that stopped updating serves a copy older than the one held: refused, so the next
-// mirror is tried, whatever its rules (#3505).
+// address is tried, whatever its rules (#3505).
 TEST(AdBlockListCheck, ADownloadOlderThanTheCopyHeldIsRefused) {
   const std::string held = Dated("2026-11-19T00:10:18Z", List(100));
-  EXPECT_FALSE(Takes(Dated("2026-10-14T00:10:05Z", List(100)), held))
+  EXPECT_EQ(Judge(Dated("2026-10-14T00:10:05Z", List(100)), held), Download::kRefused)
       << "a mirror a month behind, with as many rules";
-  EXPECT_FALSE(Takes(Dated("2026-11-19T00:10:17Z", List(200)), held)) << "a second older";
-  EXPECT_TRUE(Takes(Dated("2026-11-19T00:10:18Z", List(100)), held)) << "the copy held again";
-  EXPECT_TRUE(Takes(Dated("2026-11-19T12:10:18Z", List(100)), held)) << "a newer copy";
-  EXPECT_TRUE(
-      Takes(Dated("2026-10-14T00:10:05Z", List(100)), Dated("2026-09-16T00:10:16Z", List(100))))
+  EXPECT_EQ(Judge(Dated("2026-11-19T00:10:17Z", List(200)), held), Download::kRefused)
+      << "a second older";
+  EXPECT_EQ(Judge(Dated("2026-11-19T12:10:18Z", List(100)), held), Download::kTaken)
+      << "a newer copy";
+  EXPECT_EQ(
+      Judge(Dated("2026-10-14T00:10:05Z", List(100)), Dated("2026-09-16T00:10:16Z", List(100))),
+      Download::kTaken)
       << "the stale mirror's copy is newer than the one the browser came with";
-  EXPECT_FALSE(Takes(Dated("2026-11-20T00:10:18Z", List(49)), held))
+  EXPECT_EQ(Judge(Dated("2026-11-20T00:10:18Z", List(49)), held), Download::kRefused)
       << "a newer copy that lost more than half the rules is still cut short";
-  EXPECT_TRUE(Takes("! Last modified: Thu, 19 Nov 2026 12:15:39 +0000\n" + List(100),
-                    "! Last modified: Wed, 18 Nov 2026 12:15:39 +0000\n" + List(100)))
+  EXPECT_EQ(Judge("! Last modified: Thu, 19 Nov 2026 12:15:39 +0000\n" + List(100),
+                  "! Last modified: Wed, 18 Nov 2026 12:15:39 +0000\n" + List(100)),
+            Download::kTaken)
       << "EasyList's date reads as well as URLhaus's";
-  EXPECT_FALSE(Takes("! Last modified: Tue, 17 Nov 2026 12:15:39 +0000\n" + List(100),
-                     "! Last modified: Wed, 18 Nov 2026 12:15:39 +0000\n" + List(100)));
+  EXPECT_EQ(Judge("! Last modified: Tue, 17 Nov 2026 12:15:39 +0000\n" + List(100),
+                  "! Last modified: Wed, 18 Nov 2026 12:15:39 +0000\n" + List(100)),
+            Download::kRefused);
+}
+
+// The list's first address is a mirror that stopped where the copy held came from, so each
+// update's first download says the same date as the held copy. That's nothing new, not a copy to
+// take, so the next address gets its turn and gives the newer one (#3505).
+TEST(AdBlockListCheck, AFirstMirrorThatStoppedGivesTheNextItsTurn) {
+  const std::string held = Dated("2026-10-14T00:10:05Z", List(100));
+  EXPECT_EQ(Judge(Dated("2026-10-14T00:10:05Z", List(100)), held), Download::kNothingNew)
+      << "the first mirror, stopped at the held copy";
+  EXPECT_EQ(Judge(Dated("2026-11-19T00:10:18Z", List(100)), held), Download::kTaken)
+      << "the second, current";
+  EXPECT_EQ(Judge("! Last modified: Wed, 18 Nov 2026 12:15:39 +0000\n" + List(101),
+                  "! Last modified: Wed, 18 Nov 2026 12:15:39 +0000\n" + List(100)),
+            Download::kNothingNew)
+      << "EasyList's date, the same, though a mirror's copy differs";
+  EXPECT_EQ(Judge(Dated("2026-10-14T00:10:05Z", List(49)), held), Download::kRefused)
+      << "half the rules lost is a fault, whatever the date: that check comes first";
+}
+
+// A list that hasn't changed since the last update, the common day: every address says the
+// held copy's date. Each is nothing new, never refused, so the held copy stays with no line in
+// the log.
+TEST(AdBlockListCheck, AListWithNothingNewAtAnyAddressIsNoFault) {
+  const std::string held = Dated("2026-11-19T00:10:18Z", List(100));
+  for (const std::string& address :
+       {Dated("2026-11-19T00:10:18Z", List(100)), Dated("2026-11-19T00:10:18Z", List(100)),
+        Dated("2026-11-19T00:10:18Z", List(99)), Dated("2026-11-19T00:10:18Z", List(100))}) {
+    EXPECT_EQ(Judge(address, held), Download::kNothingNew);
+  }
 }
 
 // With no date to go by on either side, a download is judged by its rules, as before.
 TEST(AdBlockListCheck, ACopyThatSaysNoDateIsJudgedByItsRulesAlone) {
   const std::string held = Dated("2026-11-19T00:10:18Z", List(100));
-  EXPECT_TRUE(Takes(List(100), held)) << "a download that says no date";
-  EXPECT_FALSE(Takes(List(49), held));
-  EXPECT_TRUE(Takes(Dated("2026-10-14T00:10:05Z", List(100)), List(100)))
+  EXPECT_EQ(Judge(List(100), held), Download::kTaken) << "a download that says no date";
+  EXPECT_EQ(Judge(List(49), held), Download::kRefused);
+  EXPECT_EQ(Judge(Dated("2026-10-14T00:10:05Z", List(100)), List(100)), Download::kTaken)
       << "a held copy that says no date";
-  EXPECT_TRUE(Takes(Dated("not a date", List(100)), held)) << "a date that doesn't read";
+  EXPECT_EQ(Judge(Dated("not a date", List(100)), held), Download::kTaken)
+      << "a date that doesn't read";
+  EXPECT_EQ(Judge(List(100), List(100)), Download::kTaken)
+      << "neither says a date, so nothing tells a copy as new from a newer one";
 }
 
 // The first download of a list, with no copy held, has nothing to be older than: it's taken if
 // it reads as a list, whatever its date.
 TEST(AdBlockListCheck, AFirstDownloadIsTakenWhateverItsDate) {
-  EXPECT_TRUE(Takes(Dated("2026-10-13T00:10:05Z", List(100)), std::nullopt));
-  EXPECT_TRUE(Takes(Dated("2026-11-19T00:10:18Z", List(1)), std::nullopt));
-  EXPECT_FALSE(Takes(Dated("2026-11-19T00:10:18Z", List(0)), std::nullopt)) << "no rules";
-  EXPECT_FALSE(Takes("<!doctype html><title>404</title>", std::nullopt));
+  EXPECT_EQ(Judge(Dated("2026-10-13T00:10:05Z", List(100)), std::nullopt), Download::kTaken);
+  EXPECT_EQ(Judge(Dated("2026-11-19T00:10:18Z", List(1)), std::nullopt), Download::kTaken);
+  EXPECT_EQ(Judge(Dated("2026-11-19T00:10:18Z", List(0)), std::nullopt), Download::kRefused)
+      << "no rules";
+  EXPECT_EQ(Judge("<!doctype html><title>404</title>", std::nullopt), Download::kRefused);
 }
 
 TEST(AdBlockListCheck, APageLooksAtTheListsAnHourAfterTheLastLook) {

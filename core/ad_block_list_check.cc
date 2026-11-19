@@ -111,25 +111,28 @@ std::optional<base::Time> Updated(std::string_view list) {
   return std::nullopt;
 }
 
-bool Takes(std::string_view downloaded, std::optional<std::string_view> last_good) {
+Download Judge(std::string_view downloaded, std::optional<std::string_view> last_good) {
   const std::string_view start = base::TrimWhitespaceASCII(downloaded, base::TRIM_LEADING);
   if (start.starts_with('<') || downloaded.find('\0') != std::string_view::npos ||
       !base::IsStringUTF8(downloaded)) {
-    return false;
+    return Download::kRefused;
   }
   const size_t rules = Rules(downloaded);
   if (rules == 0) {
-    return false;
+    return Download::kRefused;
   }
   if (!last_good) {
-    return true;
+    return Download::kTaken;
   }
   if (rules * 2 < Rules(*last_good)) {
-    return false;
+    return Download::kRefused;
   }
   const std::optional<base::Time> updated = Updated(downloaded);
   const std::optional<base::Time> held = Updated(*last_good);
-  return !updated || !held || *updated >= *held;
+  if (!updated || !held || *updated > *held) {
+    return Download::kTaken;
+  }
+  return *updated == *held ? Download::kNothingNew : Download::kRefused;
 }
 
 }  // namespace browser_core::ad_block_list_check
