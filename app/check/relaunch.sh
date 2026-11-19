@@ -302,6 +302,34 @@ if windows; then
   expect_placement "normal $(at 140 100 1040 680)" 1 "un-maximized after it came back"
   maximized=" On Windows, the window in front maximized as the app quits or as the last window closes comes back maximized, its launch window too, and un-maximizes to the frame it had."
 fi
+
+# Spike for #3464, never merged: on Wayland, a window full screen as the app quits, its saved state
+# and frame, and whether it comes back full screen.
+states=
+if [ -n "$wayland" ]; then
+  send window 1
+  send fullscreen
+  expect '^browser: window entered full screen$' "the driver's full screen didn't put the window full screen"
+  quit_by_key
+  exited
+  saved_window=$(python3 -I -c '
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as f:
+    window = json.load(f)["windows"][0]
+state = "fullscreen" if window.get("fullscreen") else "maximized" if window.get("maximized") else "windowed"
+print(state, *window.get("bounds", []))
+' "$saved") || fail "the session saved after the full-screen quit couldn't be read"
+  echo "note: saved after the full-screen quit: $saved_window"
+  launch_logged "$out/relaunch-fullscreen.log"
+  await '^browser: restored in ' || fail "the relaunch after a full-screen quit didn't restore the Spaces"
+  await '^browser: first frame at ' || fail "the window quit full screen didn't draw"
+  await '^browser: window opened [0-9]' || fail "the window quit full screen didn't open"
+  await '^browser: window entered full screen$' || fail "quit full screen, the window came back otherwise"
+  send window 1
+  send fullscreen
+  expect '^browser: window left full screen$' "the window brought back full screen didn't leave it"
+  states=" On Wayland, a window full screen as the app quits comes back full screen."
+fi
 exec 3>&-
 quit
 # The first launch, quit soon after its page loaded, marked its new data folder as having no old
@@ -312,5 +340,5 @@ for later in "$out"/relaunch-*.log; do
     fail "$(basename "$later") swept old stores, which a data folder's first launch marks it as having none of"
 done
 
-echo "ok: after ⌘Q, every regular window comes back at its frame, in its Space, stacked as it was with the one in front key; a window closed before the quit and a private window don't.$behind_maximized ⌘N with windows open cascades from the one in front at its size, and after the last regular window closes the next launch opens at its frame, not a private window's.$maximized A data folder's first launch, however short, marks it as having no old Safari's-engine stores, so no later launch sweeps them. Window: $out/relaunch-two.png"
+echo "ok: after ⌘Q, every regular window comes back at its frame, in its Space, stacked as it was with the one in front key; a window closed before the quit and a private window don't.$behind_maximized ⌘N with windows open cascades from the one in front at its size, and after the last regular window closes the next launch opens at its frame, not a private window's.$maximized$states A data folder's first launch, however short, marks it as having no old Safari's-engine stores, so no later launch sweeps them. Window: $out/relaunch-two.png"
 echo "  Launch with one window: $one; with two: $two"
