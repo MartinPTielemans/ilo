@@ -103,6 +103,51 @@ pub fn offer(
     }
 }
 
+/// Why a share, an unshare or the list didn't go as asked (BC_SHARE_PROBLEM_).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Problem {
+    SignedOut,
+    Empty,
+    TooBig,
+    TooMany,
+    Server,
+}
+
+impl Problem {
+    /// The core's BC_SHARE_PROBLEM_, None for BC_SHARE_PROBLEM_NONE.
+    pub fn from_core(problem: i32) -> Option<Problem> {
+        match problem {
+            0 => None,
+            1 => Some(Problem::SignedOut),
+            2 => Some(Problem::Empty),
+            3 => Some(Problem::TooBig),
+            4 => Some(Problem::TooMany),
+            _ => Some(Problem::Server),
+        }
+    }
+}
+
+/// The toast when `title` wasn't shared, saying what the user can do about it.
+pub fn not_shared(title: &str, problem: Problem) -> String {
+    let why = match problem {
+        Problem::SignedOut => "sign in to Sync to share links",
+        Problem::Empty => "it has no web pages",
+        Problem::TooBig => "it holds more than a link can",
+        Problem::TooMany => "your server takes no more links for now",
+        Problem::Server => "couldn’t reach your sync server · try again",
+    };
+    format!("“{title}” wasn’t shared · {why}")
+}
+
+/// What a shared link's row says in place of what it holds once its unshare didn't go: the link
+/// still opens, for anyone who has it.
+pub fn not_unshared(problem: Problem) -> &'static str {
+    match problem {
+        Problem::SignedOut => "Not unshared: sign in to unshare. The link still opens.",
+        _ => "Not unshared: couldn't reach the server. The link still opens.",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,5 +212,22 @@ mod tests {
             copied("Notes", true, 1, 1),
             "Link to “Notes” updated · now 1 tab · 1 tab left out"
         );
+    }
+
+    #[test]
+    fn a_share_that_didnt_go_says_why() {
+        assert_eq!(Problem::from_core(0), None);
+        assert_eq!(Problem::from_core(1), Some(Problem::SignedOut));
+        assert_eq!(Problem::from_core(5), Some(Problem::Server));
+        assert_eq!(
+            not_shared("Lisbon, March", Problem::Empty),
+            "“Lisbon, March” wasn’t shared · it has no web pages"
+        );
+        assert_eq!(
+            not_shared("Notes", Problem::Server),
+            "“Notes” wasn’t shared · couldn’t reach your sync server · try again"
+        );
+        assert!(not_unshared(Problem::Server).ends_with("The link still opens."));
+        assert!(not_unshared(Problem::SignedOut).starts_with("Not unshared: sign in"));
     }
 }

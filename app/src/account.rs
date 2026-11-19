@@ -262,8 +262,10 @@ pub trait Host {
     fn request_pairing(&self);
     fn read_devices(&self);
     fn remove_device(&self, id: &str);
-    /// Copies the shared link `id`'s link, which the core seals with its key, and says so.
-    fn copy_share(&self, _id: &str) {}
+    /// Asks the core for the account's shared links, as the devices are asked for.
+    fn list_shares(&self) {}
+    /// Puts the shared link `id`'s link, its key in its fragment, on the clipboard.
+    fn copy_share(&self, _id: &str, _cx: &mut App) {}
     /// Asks the core to unshare `id`, after asking the user.
     fn unshare(&self, _id: &str) {}
     /// The starts of today and the days before it in the user's calendar (host_day_starts).
@@ -323,6 +325,8 @@ pub struct Account {
     shares: Option<Vec<SharedLink>>,
     /// The shared link whose Copy Link was last pressed, and when, as it says Copied.
     copied_share: Option<(SharedString, Instant)>,
+    /// The shared link whose unshare last didn't go, and why, which its row says until it goes.
+    unshare_failed: Option<(SharedString, crate::share::Problem)>,
     /// As the core said when the view last showed.
     activity: Activity,
     words: Option<Words>,
@@ -503,6 +507,7 @@ impl Account {
             devices: None,
             shares: None,
             copied_share: None,
+            unshare_failed: None,
             activity: Activity::default(),
             words: None,
             server: None,
@@ -622,13 +627,39 @@ impl Account {
     /// Newest first, as the one just shared is the one most often copied again.
     pub fn set_shares(&mut self, mut shares: Vec<SharedLink>, cx: &mut Context<Self>) {
         shares.sort_by(|a, b| b.shared.total_cmp(&a.shared));
+        let listed = |id: &SharedString| shares.iter().any(|share| share.id == *id);
+        if !self
+            .unshare_failed
+            .as_ref()
+            .is_some_and(|(id, _)| listed(id))
+        {
+            self.unshare_failed = None;
+        }
         self.shares = Some(shares);
+        cx.notify();
+    }
+
+    /// What unsharing `id` came to: gone, which the list the core sends next shows, or `problem`,
+    /// which its row says, as the link still opens.
+    pub fn unshared(
+        &mut self,
+        id: SharedString,
+        problem: Option<crate::share::Problem>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(problem) = problem {
+            let mut shares = self.shares.iter().flatten();
+            let row = shares.position(|share| share.id == id);
+            // check.sh reads this line, which names the row, as the id stays out of the log.
+            log!("browser: share {row:?} not unshared {problem:?}");
+        }
+        self.unshare_failed = problem.map(|problem| (id, problem));
         cx.notify();
     }
 
     /// Copies the shared link `id`'s link, and has its button say Copied a while.
     pub fn copy_share(&mut self, id: SharedString, cx: &mut Context<Self>) {
-        self.host.copy_share(&id);
+        self.host.copy_share(&id, cx);
         self.copied_share = Some((id, cx.background_executor().now()));
         cx.spawn(async move |account, cx| {
             cx.background_executor().timer(COPIED).await;
@@ -689,6 +720,7 @@ impl Account {
             Status::On if self.devices.is_none() => {
                 self.devices = Some(Vec::new());
                 self.host.read_devices();
+                self.host.list_shares();
             }
             _ => {}
         }
@@ -1343,7 +1375,8 @@ impl Account {
             .shares
             .iter()
             .flatten()
-            .map(|share| self.shared_link(share, cx))
+            .enumerate()
+            .map(|(row, share)| self.shared_link(row, share, cx))
             .collect();
         let chosen = [
             detailed_row(
@@ -1389,9 +1422,10 @@ impl Account {
             .child(self.delete_group(cx))
     }
 
-    /// A shared link's row: what it is on its plate, its title, what it holds and when it was
-    /// shared, and Copy Link and Unshare.
-    fn shared_link(&self, share: &SharedLink, cx: &mut Context<Self>) -> gpui::Div {
+    /// A shared link's row, the `row`th: what it is on its plate, its title, what it holds and when
+    /// it was shared, and Copy Link and Unshare. Its buttons are drawn under the row's place, as
+    /// the link's id stays out of the log.
+    fn shared_link(&self, row: usize, share: &SharedLink, cx: &mut Context<Self>) -> gpui::Div {
         let (kind, glyph) = match share.kind {
             ShareKind::Folder => ("Folder", "icons/folder.svg"),
             ShareKind::Space => ("Space", "icons/spaces.svg"),
@@ -1424,10 +1458,14 @@ impl Account {
         };
         let plate = plate.bg(fill).child(icon);
         let tabs = crate::share::tabs(share.tabs);
-        let detail = format!(
-            "{kind} · {tabs} · shared {}",
-            shared_when(share.shared, self.host.day_starts())
-        );
+        let failed = (self.unshare_failed.as_ref()).filter(|(id, _)| *id == share.id);
+        let detail = match failed {
+            Some((_, problem)) => crate::share::not_unshared(*problem).to_string(),
+            None => format!(
+                "{kind} · {tabs} · shared {}",
+                shared_when(share.shared, self.host.day_starts())
+            ),
+        };
         // The executor's clock, which tests move on.
         let now = cx.background_executor().now();
         let copied = self
@@ -1441,7 +1479,7 @@ impl Account {
         let copy = {
             let id = share.id.clone();
             self.button_said(
-                format!("copy {id}"),
+                format!("share {row} copy"),
                 title,
                 spoken,
                 cx,
@@ -1461,7 +1499,7 @@ impl Account {
         let unshare = {
             let (id, title) = (share.id.clone(), share.title.clone());
             self.button_said(
-                format!("unshare {id}"),
+                format!("share {row} unshare"),
                 "Unshare…",
                 format!("Unshare {}", share.title),
                 cx,

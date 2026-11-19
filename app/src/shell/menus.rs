@@ -967,16 +967,14 @@ impl Shell {
         // Not an agent's tabs, which are its work (#680).
         let shared = self.chosen_tabs();
         let mut share = Vec::new();
-        if self
-            .shown_space()
-            .is_some_and(|space| space.agent.is_empty())
-        {
+        if let Some(space) = (self.shown_space()).filter(|space| space.agent.is_empty()) {
+            let title = space.name.clone();
             share.push((
                 MenuEntry::new("Share Tabs", !shared.is_empty()),
                 "share-tabs",
                 Box::new(move |shell: &mut Shell, cx: &mut Context<Shell>| {
                     log!("browser: command share-tabs via chosen menu");
-                    shell.browser.share_link(ShareKind::Tabs, shared, cx)
+                    shell.browser.share_link(ShareKind::Tabs, shared, title, cx)
                 }) as MenuAction,
             ));
         }
@@ -1106,9 +1104,8 @@ impl Shell {
                     "share-folder",
                     Box::new(move |shell, cx| {
                         log!("browser: command share-folder via folder menu");
-                        shell
-                            .browser
-                            .share_link(ShareKind::Folder, vec![folder], cx)
+                        let title = shell.folder_name(folder);
+                        (shell.browser).share_link(ShareKind::Folder, vec![folder], title, cx)
                     }),
                 ),
             );
@@ -2653,7 +2650,9 @@ mod tests {
         tab_menu(&shell, &host, cx, 20);
         host.take();
         cx.update(|cx| host.choose("Share Folder", cx));
-        assert!(host.take().contains(&"share link Folder [20]".to_string()));
+        let folder = shell.read_with(cx, |shell, _| shell.folder_name(20));
+        let shared = format!("share link Folder [20] {folder}");
+        assert!(host.take().contains(&shared), "{shared}");
 
         host.copied.borrow_mut().push("https://d.example/".into());
         tab_menu(&shell, &host, cx, 22);
@@ -2771,12 +2770,18 @@ mod tests {
         assert!(menu.contains(&"Share Tabs".to_string()), "{menu:?}");
         host.take();
         cx.update(|cx| host.choose("Share Tabs", cx));
-        assert!(host.take().contains(&"share link Tabs [3, 5]".to_string()));
+        assert!(
+            host.take()
+                .contains(&"share link Tabs [3, 5] Work".to_string())
+        );
         shell.update(cx, |shell, cx| {
             assert!(shell.offers(Command::ShareSpace));
             shell.run(Command::ShareSpace, "command bar", cx);
         });
-        assert!(host.take().contains(&"share link Space [1]".to_string()));
+        assert!(
+            host.take()
+                .contains(&"share link Space [1] Work".to_string())
+        );
 
         shell.update(cx, |shell, cx| {
             shell.set_spaces(spaces("task-1"), cx);

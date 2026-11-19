@@ -26,8 +26,11 @@ impl Shell {
 
     /// Shares `space`'s pinned tabs and folders as a link (#680).
     pub(super) fn share_space(&mut self, space: u64, cx: &mut Context<Self>) {
-        self.browser
-            .share_link(crate::account::ShareKind::Space, vec![space], cx);
+        let Some(each) = self.spaces.iter().find(|each| each.id == space) else {
+            return;
+        };
+        let title = each.name.clone();
+        (self.browser).share_link(crate::account::ShareKind::Space, vec![space], title, cx);
     }
 
     /// Asks where to save every Space of the user's as Markdown, and saves it there, for
