@@ -10,13 +10,11 @@ Ardia's Dia spec and parity list, merged with captures of Arc (60 fps recordings
 
 ## Phase 1: architecture spike
 
-GPUI and a prebuilt Chromium in one Mac process, to settle the run loop, the native page view, overlays over the page, focus, keyboard and IME. A no-go meant Chromium Views.
-
 **Met, go:** `spikes/gpui-cef/` and `spikes/gpui-ardia/` at 91ddfe6 (decision 4).
 
 ## Phase 2: engine
 
-ungoogled-chromium built as Chrome's framework from `engine/series`, with embedding hooks, Manifest V2 kept and the password manager on. Prebuilt engines download, so UI work never waits on a build. CI compiles the core on Linux.
+ungoogled-chromium built as Chrome's framework from `engine/series`, with embedding hooks, Manifest V2 kept and the password manager on. CI compiles the core on Linux.
 
 **Done when** a prebuilt framework downloads and links into the app. **Met:** `engine/fetch.sh`, and Core on Linux (#2010).
 
