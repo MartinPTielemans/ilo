@@ -737,16 +737,17 @@ class ShareThrottle : public content::NavigationThrottle {
                               base::BindOnce(&ShareThrottle::Answered, weak_factory_.GetWeakPtr()),
                               kShareBlobCap);
     timeout_.Start(FROM_HERE, kTimeout,
-                   base::BindOnce(&ShareThrottle::Commit, base::Unretained(this),
-                                  ShareRefusedPage(false, std::nullopt)));
+                   base::BindOnce(&ShareThrottle::TimedOut, base::Unretained(this)));
     return true;
   }
+
+  void TimedOut() { Commit(ShareRefusedPage(false, std::nullopt), "unanswered"); }
 
   void Redirected(const GURL& from,
                   const net::RedirectInfo& redirect,
                   const network::mojom::URLResponseHead& head,
                   std::vector<std::string>* removed_headers) {
-    Commit(ShareRefusedPage(false, std::nullopt));
+    Commit(ShareRefusedPage(false, std::nullopt), "redirected");
   }
 
   void Answered(std::optional<std::string> body) {
@@ -754,34 +755,39 @@ class ShareThrottle : public content::NavigationThrottle {
     const int status = head && head->headers ? head->headers->response_code() : 0;
     const int error = loader_->NetError();
     if (status == 410) {
-      Commit(ShareRefusedPage(true, std::nullopt));
+      Commit(ShareRefusedPage(true, std::nullopt), "unshared");
       return;
     }
     if (error == net::ERR_INSUFFICIENT_RESOURCES) {
-      Commit(ShareRefusedPage(false, ShareRefusal::kTooBig));
+      Commit(ShareRefusedPage(false, ShareRefusal::kTooBig), "too big");
       return;
     }
     // A link to a share the server never had was copied wrong.
     if (status == 404) {
-      Commit(ShareRefusedPage(false, ShareRefusal::kKey));
+      Commit(ShareRefusedPage(false, ShareRefusal::kKey), "unknown");
       return;
     }
     if (status != 200 || !body) {
-      Commit(ShareRefusedPage(false, std::nullopt));
+      Commit(ShareRefusedPage(false, std::nullopt), "unanswered");
       return;
     }
     ShareOpened opened = OpenShare(base::as_byte_span(*body), *link_);
     if (!opened.snapshot) {
-      Commit(ShareRefusedPage(false, opened.refusal));
+      Commit(ShareRefusedPage(false, opened.refusal),
+             opened.refusal == ShareRefusal::kTooBig  ? "too big"
+             : opened.refusal == ShareRefusal::kNewer ? "newer"
+                                                      : "key");
       return;
     }
     std::string page = SharePage(*opened.snapshot, host_);
     ShareOffer::Expect(navigation_handle()->GetWebContents(),
                        navigation_handle()->GetNavigationId(), std::move(*opened.snapshot), host_);
-    Commit(std::move(page));
+    Commit(std::move(page), "shown");
   }
 
-  void Commit(std::string page) {
+  // |said| is what the core's log says of it, which holds nothing of the share.
+  void Commit(std::string page, const char* said) {
+    LOG(ERROR) << "browser: share page " << said;
     timeout_.Stop();
     loader_.reset();
     weak_factory_.InvalidateWeakPtrs();
