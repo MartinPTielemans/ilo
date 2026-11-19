@@ -1977,6 +1977,7 @@ else
   grep '^browser: menu shown' "$log" | tail -1 | grep -q 'DuckDuckGo' ||
     fail "the profile's Search engine didn't offer DuckDuckGo beside the run's site search"
   ../tools/window-screenshot.sh "$pid" "$out/search-engine-chosen.png" || fail "no window to capture"
+  expect '^browser: menu window at ' "the menu's window didn't take the keyboard"
   send key escape
   expect '^browser: menu closed$' "escape didn't close the Search engine menu"
   send key w cmd
@@ -2295,6 +2296,7 @@ divider_menu() {
   expect "^browser: menu shown $(cased "Sort Today Tabs by Site$1, Clear Today, New Tab, New Folder…"), " \
     "a right-click on the line over Today didn't lead with Sort Today Tabs by Site${1:+ dimmed} and Clear Today"
   ../tools/window-screenshot.sh "$pid" "$out/$2.png" || fail "no window to capture"
+  expect '^browser: menu window at ' "the menu's window didn't take the keyboard"
   send key escape
   expect '^browser: menu closed$' "escape didn't close the line over Today's menu"
 }

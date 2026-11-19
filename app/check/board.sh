@@ -599,6 +599,7 @@ for each in light dark; do
   post rightclick $(($1 + $3 / 2)) $(($2 + $4 / 2))
   expect "^browser: menu shown $(cased 'Open, Duplicate, Delete')\$" "a right-click on a Board's row didn't show its menu, $each"
   ../tools/window-screenshot.sh "$pid" "$out/board-duplicate-menu-$each.png" all || fail "no window to capture"
+  expect '^browser: menu window at ' "the menu's window didn't take the keyboard"
   send key escape
   expect '^browser: menu closed' "escape didn't close a Board's row's menu, $each"
   send key escape
