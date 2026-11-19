@@ -38,7 +38,8 @@
 # takes the page's title again, scrolls, takes a screenshot and closes a tab, pins a tab of its own, unpins it and removes it. A close asks a page with a beforeunload
 # handler first, with no dialog: one whose handler doesn't ask closes at the first call, as does
 # one that asks no one clicked in, and one the agent clicked or typed in stays open until the agent
-# discards it. Its download asks first, and Allow Once downloads the
+# discards it. While a page's own alert is up in its tab, a call there answers at once and close_tab
+# closes the tab. Its download asks first, and Allow Once downloads the
 # file, which the answer names, and Never leaves none. It sends requests to its tab's site, carrying a session it
 # never sees, and a change asks every time, in a card whose Allow sends it and Deny doesn't. Settings
 # › Agents opens each request to where it went and what it sent, or that the denied one wasn't. A bank's site asks first, in a card whose Allow Once opens it. Always Allow
@@ -2332,6 +2333,30 @@ addEventListener("beforeunload", event => { if (dirty) event.preventDefault() })
   closed=$(call close_tab "{\"tab\":$form,\"discard\":true}")
   [ "$closed" = "Closed tab $form without saving." ] || fail "discarding the form answered: $closed"
   grep -q "^browser: page $form dialog [^n]" "$log" && fail "closing the form showed a dialog"
+  # A page's own dialog in the agent's tab is the user's to answer, and no tool answers it (#3536).
+  # A call on the tab answers at once, naming the dialog, and reaches no page, and the activity log
+  # says the dialog paused the agent, without its words. close_tab closes the tab without asking
+  # its page, which can't answer while its dialog is up. The click arms the alert for later than a
+  # click's job can take, whose settling ends within 5 s, so the click has its answer first.
+  printf '%s\n' '<!doctype html><title>Asks</title><button>Ask</button>
+<script>document.querySelector("button").onclick = () => setTimeout(() => alert("Hold the seats?"), 10000)</script>' > "$out/site/asks.html"
+  set -- $(open_with asks.html button Ask)
+  asks=$1
+  call click "{\"tab\":$asks,\"ref\":\"$2\"}" > /dev/null
+  await_log "^browser: page $asks dialog Alert " "the page's alert didn't come in the agent's tab"
+  shown_at=$(wc -l < "$log")
+  pressed=$(call press_key "{\"tab\":$asks,\"key\":\"Escape\"}")
+  [ "$pressed" = "error: Tab $asks's page shows an alert. Nothing more can be done on the tab while it's up, and no tool answers it. close_tab closes the tab, and the dialog with it." ] ||
+    fail "a press while the page's alert is up answered: $pressed"
+  sed -n "$shown_at,\$p" "$log" | grep -q "^browser: agent page $asks " &&
+    fail "the press reached the page under its alert"
+  await_log "^browser: agent logged mcp-client page_dialog localhost\$" \
+    "the activity log didn't say the page's alert paused the agent"
+  grep -q '^browser: agent logged .*Hold the seats' "$log" && fail "the activity log has the alert's words"
+  closed=$(call close_tab "{\"tab\":$asks}")
+  [ "$closed" = "Closed tab $asks." ] || fail "closing the tab under its alert answered: $closed"
+  grep -q "browser: agent close $asks asks its page\$" "$log" && fail "the close asked the page under its alert"
+  await_log "^browser: tab $asks closed\$" "the core didn't tell of the tab closed under its alert"
 
   # It pins a tab of its own, which list_tabs says it pinned, unpins it, pins it again and removes
   # it, to the archive. The user's tab isn't its to pin.

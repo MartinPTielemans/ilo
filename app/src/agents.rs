@@ -41,6 +41,7 @@ use futures::StreamExt;
 use gpui::{App, AppContext, Context, Entity, Global, SharedString, Task};
 use serde_json::{Value, json};
 
+use crate::shell::DialogKind;
 use crate::sort_by_site;
 
 pub use clients::{Client, Clients, Entry, System};
@@ -650,6 +651,9 @@ pub struct Agents {
     doing: HashMap<String, SharedString>,
     /// The tabs the user holds from agents, by tab.
     held: HashMap<u64, Held>,
+    /// The tabs whose page shows its own dialog, such as its alert(), by tab, as the core reports
+    /// it (`page_dialog`): nothing more is done on one until it's gone (#3536).
+    dialogs: HashMap<u64, DialogKind>,
     /// The runs of steps under way, each waiting on its step's answer.
     runs: Vec<Run>,
     /// The agent whose run's step is starting, whose log entries go under the run's.
@@ -816,6 +820,7 @@ impl Agents {
             doing: HashMap::new(),
             pins: HashMap::new(),
             held: HashMap::new(),
+            dialogs: HashMap::new(),
             runs: Vec::new(),
             stepping: None,
             tasks: task::Tasks {
@@ -2058,7 +2063,29 @@ impl Agents {
 
     /// The core closed `tab` (tabs::tab_closed). A hold on it ends.
     pub fn tab_closed(&mut self, tab: u64, cx: &mut Context<Self>) {
+        self.dialogs.remove(&tab);
         self.let_go(tab, held::Event::Closed, cx);
+    }
+
+    /// `tab`'s page shows its own dialog of `kind`, or none any more (pages::tab_dialog). In an
+    /// agent's tab it pauses the agent there, which the log says without the dialog's words.
+    pub fn page_dialog(&mut self, tab: u64, kind: Option<DialogKind>, cx: &mut Context<Self>) {
+        let Some(kind) = kind else {
+            self.dialogs.remove(&tab);
+            return;
+        };
+        if self.dialogs.insert(tab, kind).is_some() {
+            return;
+        }
+        let space = self.browser.space_of(tab, cx);
+        let agent = (self.live.iter())
+            .find(|agent| space != 0 && self.browser.agent_space(agent) == space)
+            .cloned();
+        if let Some(agent) = agent {
+            let site = site(&self.browser.tab(tab, cx).url);
+            self.note(&agent, "page_dialog", &site, "");
+            cx.notify();
+        }
     }
 
     /// `space`'s tabs changed (spaces::space_changed). A held tab that left its agent's Space
@@ -3267,7 +3294,12 @@ impl Agents {
             Some(why) => return Err(why.into()),
             None => {}
         }
-        self.browser.may_act(agent, tab, action, cx)
+        self.browser.may_act(agent, tab, action, cx)?;
+        // Only once the tab is known to be the agent's, so another's page says nothing.
+        match self.dialogs.get(&tab) {
+            Some(&kind) if action != "close_tab" => Err(showing_dialog(tab, kind)),
+            _ => Ok(()),
+        }
     }
 
     /// Why `agent` may not see or act on `tab` for its page (`off_limits`), or None. Another
@@ -3334,10 +3366,13 @@ impl Agents {
         if let Err(why) = self.may_act(agent, tab, "close_tab", cx) {
             return self.refuse(act_of(agent, call, tab, reply), &site, &why, cx);
         }
-        // The agent's own tab, discarded while its page is asked, doesn't wait for the page.
-        if discard && self.opened.contains(&tab) && self.closing.contains_key(&tab) {
+        // The agent's own tab, discarded while its page is asked, doesn't wait for the page. Nor
+        // does one whose page shows its dialog, which can't answer before it's gone (#3536).
+        let asked = discard && self.closing.contains_key(&tab);
+        let stuck = self.dialogs.contains_key(&tab);
+        if self.opened.contains(&tab) && (asked || stuck) {
             let closed = self.browser.close_tab(agent, tab, true, cx);
-            return self.closed(agent, call, tab, true, closed, &site, reply, cx);
+            return self.closed(agent, call, tab, discard, closed, &site, reply, cx);
         }
         let closing = Closing {
             agent: agent.into(),
@@ -3694,6 +3729,13 @@ fn answer_of(tab: u64, event: held::Event) -> ToolResult {
     }
 }
 
+/// `tab`'s page shows its own dialog of `kind`, or none any more (pages::tab_dialog).
+pub fn page_dialog(tab: u64, kind: Option<DialogKind>, cx: &mut App) {
+    if let Some(agents) = global(cx) {
+        agents.update(cx, |agents, cx| agents.page_dialog(tab, kind, cx));
+    }
+}
+
 /// The core closed `tab` (tabs::tab_closed).
 pub fn tab_closed(tab: u64, cx: &mut App) {
     if let Some(agents) = global(cx) {
@@ -3706,6 +3748,23 @@ pub fn space_changed(space: u64, cx: &mut App) {
     if let Some(agents) = global(cx) {
         agents.update(cx, |agents, cx| agents.space_changed(space, cx));
     }
+}
+
+/// The answer to a call on `tab` while its page shows its own dialog of `kind`. No agent tool
+/// answers a page's dialog (#3536), so it says what the agent can do: close the tab.
+fn showing_dialog(tab: u64, kind: DialogKind) -> String {
+    let what = match kind {
+        DialogKind::Alert => "an alert",
+        DialogKind::Confirm => "a confirm dialog",
+        DialogKind::Prompt => "a prompt dialog",
+        DialogKind::Leave => "a dialog asking whether to leave it",
+        DialogKind::SignIn => "a dialog asking for a user name and password",
+        DialogKind::OpenApp => "a dialog asking to open another app",
+    };
+    format!(
+        "Tab {tab}'s page shows {what}. Nothing more can be done on the tab while it's up, and no \
+         tool answers it. close_tab closes the tab, and the dialog with it."
+    )
 }
 
 /// An action on `tab` for the call `call` with nothing more to it, as a close is.
