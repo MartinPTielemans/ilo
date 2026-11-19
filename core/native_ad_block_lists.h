@@ -6,8 +6,13 @@
 
 #include "base/files/file_path.h"
 #include "base/functional/callback_forward.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/time/time.h"
 #include "url/gurl.h"
+
+namespace network {
+class SharedURLLoaderFactory;
+}
 
 namespace browser_core {
 
@@ -33,12 +38,15 @@ base::FilePath DownloadedAdBlockList(const std::string& key);
 // uBlock Origin updates its lists at once. Off the UI thread.
 bool AnyNativeAdBlockListLongOutOfDate(const std::vector<NativeAdBlockList>& lists);
 
-// Downloads, one after another, those of |lists| whose copy is older than its update_after, or
-// that has none, trying each address until one answers with a list, and then calls |done| on the
-// UI thread with the keys of the lists it downloaded. A download that doesn't take the place of
-// the last good copy (ad_block_list_check.h), refused or with nothing new, has the next address
-// tried. A list none of its addresses gives a newer copy keeps the copy it has. On the UI thread.
+// Downloads, one after another, through |factory|, those of |lists| whose copy is older than its
+// update_after, or that has none, trying each address until one answers with a list, and then
+// calls |done| on the UI thread with the keys of the lists it downloaded. A download that doesn't
+// take the place of the last good copy (ad_block_list_check.h), refused or with nothing new, has
+// the next address tried. A list none of its addresses gives a newer copy keeps the copy it has,
+// and if one gave a copy as new, that copy is current: the held one is kept as the downloaded
+// copy, so the list isn't due again until its update_after has passed. On the UI thread.
 void UpdateNativeAdBlockLists(std::vector<NativeAdBlockList> lists,
+                              scoped_refptr<network::SharedURLLoaderFactory> factory,
                               base::OnceCallback<void(std::vector<std::string>)> done);
 
 }  // namespace browser_core

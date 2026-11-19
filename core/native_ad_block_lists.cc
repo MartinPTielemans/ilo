@@ -17,7 +17,6 @@
 #include "base/path_service.h"
 #include "base/task/thread_pool.h"
 #include "browser_core/ad_block_list_check.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/common/chrome_paths.h"
 #include "net/http/http_response_headers.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
@@ -79,7 +78,7 @@ std::vector<NativeAdBlockList> Due(std::vector<NativeAdBlockList> lists) {
   return due;
 }
 
-enum class Kept { kYes, kRefused, kNothingNew, kNotWritten };
+enum class Kept { kYes, kRefused, kNothingNew, kHeld, kNotWritten };
 
 // Keeps |text| as |list|'s copy, whole or not at all, if it takes the place of the last good one.
 // Off the UI thread.
@@ -108,29 +107,43 @@ Kept Keep(const NativeAdBlockList& list, const std::string& text) {
              : Kept::kNotWritten;
 }
 
-// Restarts the clock on |key|'s downloaded copy when it's |held|, the copy the ad blocker reads,
-// and the list's addresses had nothing newer: else the list stays due, and every look downloads
-// it from each address again. Off the UI thread.
-void Unchanged(const std::string& key, const base::FilePath& held) {
-  if (held == DownloadedAdBlockList(key)) {
-    const base::Time now = base::Time::Now();
-    base::TouchFile(held, now, now);
-  }
+// Keeps |list|'s held copy as its downloaded copy, the copy the browser came with or the one it
+// downloaded last, when an address had a copy as new and none a newer: it's current, and its
+// clock starts as a download's would, so the list isn't due again at the next look. Off the UI
+// thread.
+Kept KeepHeld(const NativeAdBlockList& list) {
+  std::string held;
+  const base::FilePath file = DownloadedAdBlockList(list.key);
+  return !list.last_good.empty() && base::ReadFileToString(list.last_good, &held) &&
+                 base::CreateDirectory(file.DirName()) &&
+                 base::ImportantFileWriter::WriteFileAtomically(file, held)
+             ? Kept::kHeld
+             : Kept::kNotWritten;
 }
 
 // One pass over the lists due, which owns itself until it's done.
 class Update {
  public:
   Update(std::vector<NativeAdBlockList> due,
+         scoped_refptr<network::SharedURLLoaderFactory> factory,
          base::OnceCallback<void(std::vector<std::string>)> done)
-      : due_(std::move(due)), done_(std::move(done)) {}
+      : due_(std::move(due)), factory_(std::move(factory)), done_(std::move(done)) {}
   Update(const Update&) = delete;
   Update& operator=(const Update&) = delete;
 
   // Downloads the next list from its next address, or ends.
   void Next() {
     while (list_ < due_.size() && address_ >= due_[list_].addresses.size()) {
-      NextList();
+      if (nothing_new_) {
+        nothing_new_ = false;
+        base::ThreadPool::PostTaskAndReplyWithResult(
+            FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
+            base::BindOnce(&KeepHeld, due_[list_]),
+            base::BindOnce(&Update::OnKept, base::Unretained(this)));
+        return;
+      }
+      ++list_;
+      address_ = 0;
     }
     if (list_ >= due_.size()) {
       std::move(done_).Run(std::move(updated_));
@@ -141,9 +154,8 @@ class Update {
     request->url = due_[list_].addresses[address_];
     request->credentials_mode = network::mojom::CredentialsMode::kOmit;
     loader_ = network::SimpleURLLoader::Create(std::move(request), kLists);
-    loader_->DownloadToString(g_browser_process->shared_url_loader_factory().get(),
-                              base::BindOnce(&Update::Downloaded, base::Unretained(this)),
-                              kLargest);
+    loader_->DownloadToString(
+        factory_.get(), base::BindOnce(&Update::Downloaded, base::Unretained(this)), kLargest);
   }
 
  private:
@@ -171,28 +183,18 @@ class Update {
       Next();
       return;
     }
+    // A held copy kept is the copy the ad blocker reads already, so only a download is given it.
     if (kept == Kept::kYes) {
       updated_.push_back(due_[list_].key);
     }
     nothing_new_ = false;
-    NextList();
+    ++list_;
+    address_ = 0;
     Next();
   }
 
-  // Ends the list's turn. If one of its addresses had a copy as new as the one held and none a
-  // newer, the held copy stays, with its clock restarted.
-  void NextList() {
-    if (nothing_new_) {
-      base::ThreadPool::PostTask(
-          FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
-          base::BindOnce(&Unchanged, due_[list_].key, due_[list_].last_good));
-    }
-    nothing_new_ = false;
-    ++list_;
-    address_ = 0;
-  }
-
   std::vector<NativeAdBlockList> due_;
+  scoped_refptr<network::SharedURLLoaderFactory> factory_;
   base::OnceCallback<void(std::vector<std::string>)> done_;
   size_t list_ = 0;
   size_t address_ = 0;
@@ -221,16 +223,18 @@ bool AnyNativeAdBlockListLongOutOfDate(const std::vector<NativeAdBlockList>& lis
 }
 
 void UpdateNativeAdBlockLists(std::vector<NativeAdBlockList> lists,
+                              scoped_refptr<network::SharedURLLoaderFactory> factory,
                               base::OnceCallback<void(std::vector<std::string>)> done) {
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
       base::BindOnce(&Due, std::move(lists)),
       base::BindOnce(
-          [](base::OnceCallback<void(std::vector<std::string>)> done,
+          [](scoped_refptr<network::SharedURLLoaderFactory> factory,
+             base::OnceCallback<void(std::vector<std::string>)> done,
              std::vector<NativeAdBlockList> due) {
-            (new Update(std::move(due), std::move(done)))->Next();
+            (new Update(std::move(due), std::move(factory), std::move(done)))->Next();
           },
-          std::move(done)));
+          std::move(factory), std::move(done)));
 }
 
 }  // namespace browser_core
