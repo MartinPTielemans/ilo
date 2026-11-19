@@ -626,9 +626,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # With app/check, whose runs check.sh lists: without them it listed none, so this job
+          # passed whatever runs had no result (#3444).
           sparse-checkout: |
             .github/scripts
             app/check.sh
+            app/check
           sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@v4
         continue-on-error: true
@@ -680,9 +683,11 @@ jobs:
 
   # The default runs' verdict on main, the night's or a train's, keeps the workflow's issue: a
   # dispatched run reports too, as its pass is the only one the night won't repeat on that commit.
-  # An engine that fails to fetch fails the run too.
+  # An engine that fails to fetch fails the run too, as does a check job that ran out of its time,
+  # which cancels it, as complete then runs and the run itself wasn't cancelled, or a run with no
+  # result.
   report:
-    needs: [gate, engine, check]
+    needs: [gate, engine, check, complete]
     if: ${{ always() && needs.gate.outputs.check == 'true' && github.ref == 'refs/heads/main' && github.repository == 'MartinPTielemans/ilo' && inputs.runs == '' && !(github.event.schedule == '23 7 * * *' || inputs.runner == 'windows-2025') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -700,6 +705,6 @@ jobs:
             app/check
       - env:
           GH_TOKEN: ${{ github.token }}
-          RESULT: ${{ needs.engine.result == 'failure' && 'failure' || needs.check.result }}
+          RESULT: ${{ (needs.engine.result == 'failure' || needs.check.result == 'failure' || needs.complete.result == 'failure' || (needs.check.result == 'cancelled' && needs.complete.result == 'success')) && 'failure' || needs.check.result }}
           FOUND: ${{ needs.engine.outputs.found }}
         run: .github/scripts/main-check.sh report "$RESULT" "$FOUND"
