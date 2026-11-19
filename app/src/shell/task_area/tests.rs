@@ -1418,3 +1418,51 @@ fn take_over_shows_with_the_ring_on_the_tasks_stops_alone(cx: &mut TestAppContex
     shell.update(cx, |shell, cx| shell.leave_keys("test", cx));
     assert!(!shows(&shell, cx), "Take Over shows once the ring leaves");
 }
+
+/// A press on the card of the agent's page watched whose renderer died, its Reload for one, is the
+/// user acting on the agent's tab: it takes the tab over, as a press in its page does, and the
+/// Reload still loads the page again (#3433).
+#[gpui::test]
+fn a_press_on_the_crash_card_of_the_agents_page_takes_it_over(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    watching(&shell, &host, cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_agent_status(
+            vec![Status {
+                agent: "task-1".into(),
+                name: "Claude".into(),
+                space: 3,
+                doing: "Typed · flights.example".into(),
+                held: Vec::new(),
+            }],
+            cx,
+        );
+        shell.agent_acted("task-1".into(), 30, cx);
+        shell.set_page(
+            30,
+            Page {
+                url: "https://flights.example/".into(),
+                trouble: crate::shell::Trouble::Crashed,
+                ..Page::default()
+            },
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    shell.update(cx, |shell, cx| {
+        shell.crash_reload_drawn.set(None);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    host.take();
+    let reload = shell
+        .read_with(cx, |shell, _| shell.crash_reload_drawn.get())
+        .expect("the watched page that died shows the card's Reload");
+    let place = shell.read_with(cx, |shell, _| watched(shell.page_frame(shell.viewport).0));
+    assert!(
+        place.contains(&reload.center()),
+        "{reload:?} is in the page's place {place:?}"
+    );
+    cx.simulate_click(reload.center(), gpui::Modifiers::none());
+    assert_eq!(host.take(), ["take over task-1 30", "reload 30"]);
+}
