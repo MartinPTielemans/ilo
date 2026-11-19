@@ -996,6 +996,35 @@ else
   echo "skip: mcp: an agent's warning before http in its split view, watched. Browser wasn't the active app, or the engine is before 157."
 fi
 
+# The agent's page watched dies, as macOS ends a renderer under memory pressure: its place shows the
+# crash card, as the user's own page's does, and a press on its Reload is the user acting on the
+# agent's tab, so it takes the tab over, as a press in its page does, and loads the page again
+# (#3433). The core hears no press there, as the page has no renderer. ⌘↩ hands it back.
+if [ "$driven" = 1 ]; then
+  presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
+  taken=$(grep -c "^browser: agent page pressed in $agent_tab\$" "$log" || true)
+  reloads=$(grep -c "^browser: loaded $agent_tab " "$log" || true)
+  fine=$(grep -c "^browser: page $agent_tab trouble fine\$" "$log" || true)
+  kill_pages || fail "no renderer to kill"
+  await_log "^browser: page $agent_tab trouble crashed\$" "the agent's page watched, its renderer killed, wasn't called crashed"
+  await_log "^browser: crash card shown $agent_tab\$" \
+    "the agent's page watched that died showed no crash card in its place: $(grep -e "^browser: page $agent_tab " -e '^browser: crash ' "$log" | tail -4 | tr '\n' ' ')"
+  ../tools/window-screenshot.sh "$pid" "$out/agent-crashed.png" || fail "no window to capture"
+  at=$(sed -n "s/^browser: crash reload $agent_tab at \([0-9]* [0-9]* [0-9]* [0-9]*\)$/\1/p" "$log" | tail -1)
+  [ -n "$at" ] || fail "the crash card of the agent's page watched drew no Reload"
+  read -r rx ry rw rh <<RELOAD
+$at
+RELOAD
+  send click $((rx + rw / 2)) $((ry + rh / 2))
+  expect "^browser: crash card reload $agent_tab\$" "a click on the crash card's Reload in the agent's page watched didn't press it"
+  await_more "^browser: agent page pressed in $agent_tab\$" "$taken" ||
+    fail "a press on the crash card of the agent's page watched didn't take the tab over: $(since | grep -e '^browser: drive' -e '^browser: agent' | tail -6 | tr '\n' ' ')"
+  await_more "^browser: loaded $agent_tab " "$reloads" || fail "the crash card's Reload didn't load the agent's page again"
+  await_more "^browser: page $agent_tab trouble fine\$" "$fine" || fail "the agent's page loaded again wasn't fine"
+  send click $sidebar_point
+  hand_back_pressed "$presses"
+fi
+
 if [ "$driven" = 1 ]; then
   # The core lists the agent's Space alone: its tab, and not the user's Wikipedia tab in theirs.
   listed=$(call list_tabs '{}')
