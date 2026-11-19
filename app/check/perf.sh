@@ -640,12 +640,9 @@ if [ -n "${CHECK_TRACE_CATEGORIES:-}" ] && [ "$active" = 1 ]; then
   for n in $(seq 5 20); do
     perf_open "t$n" traced-newtab
   done
-  perf_until $((loaded + 15))
-  perf_trace trace-ilo.json "$cdp_log" ilo traced-switch-rows "$log" perf_traced_ilo
-  perf_traced_rows traced-switch "Tab switch" ilo
-  [ ! -s "$perf_dir/traced-unloaded" ] || perf_row traced-unloaded \
-    "Tab switch to a tab without its page, traced, key to page shown" \
-    "$(perf_stats '%.0f' < "$perf_dir/traced-unloaded") ms" "none of its own"
+  # probe-2111, never merged: 20 s of the 20 tabs settled, traced, in place of the switches.
+  perf_until $((loaded + 120))
+  perf_traced trace-ilo-idle.json "$cdp_log" perf_until $(($(date +%s) + 20))
   exec 3>&- 5>&-
   quit
   kill "$helper" 2> /dev/null || true
