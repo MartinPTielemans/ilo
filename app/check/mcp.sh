@@ -646,10 +646,12 @@ fi
 
 # Split views (#1597): the agent puts two tabs of its own side by side, adds a third, lists them
 # and separates one, each through the core's split calls and checked by its rules, with its entry
-# in the activity log. A tab of the user's is refused, and the split stays as it was.
+# in the activity log. A tab of the user's is refused, and the split stays as it was. Each page is
+# taller than its pane, so the agent's scroll there scrolls rather than answering that nothing did.
 for page in a b c; do
   printf '%s' "<title>Split $page</title><p>Split page $page</p>
-<button onclick=\"document.title = 'pressed'\">Press $page</button>" > "$out/site/split-$page.html"
+<button onclick=\"document.title = 'pressed'\">Press $page</button>
+<div style=\"height: 300vh\"></div>" > "$out/site/split-$page.html"
 done
 split_tab() {
   call open_tab "{\"url\":\"localhost:$port/split-$1.html\"}" |
