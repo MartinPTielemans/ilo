@@ -767,15 +767,20 @@ fn the_cards_rows_are_the_sites_answer_until_the_switch_goes_off(cx: &mut TestAp
     assert_eq!(shown(cx), Some(Recent::Loading));
 }
 
-/// A row opens in the pinned tab, behind it (⌘), or beside the page shown (⌥); signed out, the
-/// card's click goes to GitHub's sign-in in the tab.
+/// A row opens shown, behind the tab shown (⌘), or beside its page (⌥). A pinned tab keeps its
+/// page, so the core opens the row in a Today tab and shows it, which the shell leaves shown
+/// (#3576); a favorite loads it and is shown. Signed out, the card's click goes to GitHub's
+/// sign-in the same way.
 #[gpui::test]
-fn a_row_opens_in_the_tab_behind_it_or_beside_the_page(cx: &mut TestAppContext) {
+fn a_row_opens_shown_behind_the_tab_or_beside_the_page(cx: &mut TestAppContext) {
     let (shell, cx, host) = on_github(cx);
     rest_on(&shell, cx, &host, 1);
-    let rest = host.card.borrow().clone().unwrap();
-    let opens = |cx: &mut VisualTestContext, event: Event| {
-        cx.update(|_, cx| (rest.events)(1, event, cx));
+    let pinned = host.card.borrow().clone().unwrap();
+    rest_on(&shell, cx, &host, 10);
+    let favorite = host.card.borrow().clone().unwrap();
+    let opens = |cx: &mut VisualTestContext, tab: u64, event: Event| {
+        let rest = if tab == 1 { &pinned } else { &favorite };
+        cx.update(|_, cx| (rest.events)(tab, event, cx));
         cx.run_until_parked();
         let asked = host.take();
         asked
@@ -789,26 +794,48 @@ fn a_row_opens_in_the_tab_behind_it_or_beside_the_page(cx: &mut TestAppContext) 
     };
     let url = "https://github.com/acme/web/pull/482";
     assert_eq!(
-        opens(cx, Event::Open(pull(482), Opening::Behind)),
+        opens(cx, 1, Event::Open(pull(482), Opening::Behind)),
         [format!("open behind {url} false 0 0")]
     );
     assert_eq!(
-        opens(cx, Event::Open(pull(482), Opening::Beside)),
+        opens(cx, 1, Event::Open(pull(482), Opening::Beside)),
         [format!("open split {url} 2 false false")]
     );
-    // In the tab, which shows with its page focused, as a click on its row does.
+    // The pinned tab isn't selected over the Today tab the core shows.
     assert_eq!(
-        opens(cx, Event::Open(pull(482), Opening::Here)),
+        opens(cx, 1, Event::Open(pull(482), Opening::Here)),
+        [format!("navigate 1 {url}"), "focus page".into()]
+    );
+    assert_eq!(
+        opens(cx, 1, Event::SignIn),
+        ["navigate 1 https://github.com/login", "focus page"]
+    );
+    // At the row's address already, the core loads it in the pinned tab, which is shown.
+    shell.update(cx, |shell, cx| {
+        let page = Page {
+            url: url.into(),
+            ..Default::default()
+        };
+        shell.set_page(1, page, cx);
+    });
+    cx.run_until_parked();
+    host.take();
+    assert_eq!(
+        opens(cx, 1, Event::Open(pull(482), Opening::Here)),
         [
             format!("navigate 1 {url}"),
             "select 1".into(),
             "focus page".into()
         ]
     );
+    // A favorite loads it in its own page, and is shown with it.
     assert_eq!(
-        opens(cx, Event::SignIn),
-        ["navigate 1 https://github.com/login", "focus page"],
-        "the tab is shown already"
+        opens(cx, 10, Event::Open(pull(482), Opening::Here)),
+        [
+            format!("navigate 10 {url}"),
+            "select 10".into(),
+            "focus page".into()
+        ]
     );
 }
 

@@ -277,8 +277,9 @@ impl Shell {
         self.card_changed(tab, cx);
     }
 
-    /// A row of what's recent on `tab`'s card was clicked: it opens in the tab, which leaves its
-    /// pinned address and shows its way back, behind it, or beside the page.
+    /// A row of what's recent on `tab`'s card was clicked: it opens and shows, behind the tab
+    /// shown, or beside its page. A pinned tab keeps its page, so there the row opens in a Today
+    /// tab of its own, which the core shows (#3576).
     fn open_recent(
         &mut self,
         tab: u64,
@@ -300,10 +301,15 @@ impl Shell {
         }
     }
 
-    /// Loads `url` in `tab`, and shows it with the page focused, as a click on its row would.
+    /// Loads `url` in `tab`, and shows it with the page focused, as a click on its row would. A
+    /// pinned tab's other address the core opens in a Today tab and shows, which selecting the
+    /// pinned tab would hide behind it (#3576).
     fn navigate_shown(&mut self, tab: u64, url: &str, cx: &mut Context<Self>) {
+        let opens_its_own = self.pinned().contains(&tab) && *self.page(tab).url != *url;
         self.browser.navigate(tab, url, cx);
-        self.select(tab, cx);
+        if !opens_its_own {
+            self.select(tab, cx);
+        }
         self.browser.focus_page(cx);
     }
 
