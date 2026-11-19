@@ -804,10 +804,15 @@ impl Shell {
         let (card_frame, _) = self.page_frame(self.viewport);
         let now = Instant::now();
         let zoom = area.page.as_ref().map_or(0., |page| page.zoom.at(now));
+        let back = area
+            .page
+            .as_ref()
+            .is_some_and(|page| matches!(page.zoom, Zoom::In(_)));
         let mut layer = div().absolute().size_full();
         // The Space's page goes out of the window on its card.
-        // The conversation is in the card's place, and fades under a page coming out of it.
-        if zoom < 1. {
+        // The conversation is in the card's place, and fades under a page coming out of it. Under
+        // a page going back it takes clicks from the zoom's first frame, before it shows (#3496).
+        if zoom < 1. || back {
             let view = div()
                 .absolute()
                 .left_0()
@@ -902,13 +907,17 @@ impl Shell {
             .h(bounds.size.height)
             .rounded(radius)
             .bg(self.palette.page)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|shell, _, _, cx| {
-                    cx.stop_propagation();
-                    shell.press_task_page(cx);
-                }),
-            )
+            // Going back, it lets a press through to the conversation under it, so a click on
+            // another picture there watches that page (#3496).
+            .when(!matches!(page.zoom, Zoom::In(_)), |zooming| {
+                zooming.on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|shell, _, _, cx| {
+                        cx.stop_propagation();
+                        shell.press_task_page(cx);
+                    }),
+                )
+            })
             .children(picture)
             .into_any_element()
     }
