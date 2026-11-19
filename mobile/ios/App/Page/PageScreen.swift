@@ -429,9 +429,10 @@ private struct PageBar: View {
       // The buttons keep their room while the bar is small, so the bar that comes back is the same.
       GlassGroup { ContextButtons(tab: tab) }
         .barShown(!shrunk)
+        // Theirs alone: the bar's own way is the system's, and nothing on it waits on this.
+        .animation(Motion.quick, value: shrunk)
     }
     .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { across = $0 }
-    .animation(Motion.quick, value: shrunk)
     // A bar that comes back has let go of the finger that took it down.
     .onChange(of: shrunk) { if !shrunk { tuck = 0 } }
     .padding(.horizontal, Bar.side)

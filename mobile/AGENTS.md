@@ -33,8 +33,8 @@ It's native Swift in `mobile/ios`, and paths below start there. This file adds t
 - **A phone surface is designed for the phone**, never the desktop's sidebar made small.
 - **Mock it first**, at real scale among its neighbours, before building.
 - **One look, in Liquid Glass.** Every glass in the app is made in `App/Look/Glass.swift`, and a view asks it for its ground.
-- **Smooth motion outranks glass**, since glass that changes is drawn again, off screen, each frame. Glass keeps its value, tint and shape while anything animates, is never interactive, never fades or scales, and takes only the built-in shapes.
-- **Glass that travels is `Slid`** (`App/Look/Slid.swift`), which has Core Animation move it, so the app makes no frame of the way. What's inside is a SwiftUI world of its own: it gets the environment values `Slid` names, so a value the app adds to its environment is added there, and VoiceOver is kept from it by `unheard`, not by a modifier.
+- **Smooth motion outranks glass**, since glass that SwiftUI changes is drawn again by the app, each frame. SwiftUI's glass keeps its value, tint and shape while anything animates, is never interactive, never fades or scales, and takes only the built-in shapes.
+- **Glass that changes shape is `Morphed`** (`App/Look/Morphed.swift`): one UIKit glass whose frame the system animates, so the app makes no frame of the way. The page's bar melts into its small pill with it. SwiftUI's own morph (`glassEffectID`) costs what resizing the glass each frame does, and stays out. What's on a `Morphed` is a SwiftUI world of its own: it gets the environment values `Morphed` names, so a value the app adds to its environment is added there, and a change outside reaches it at its own pace only through `Held`.
 
 ## Verifying
 
