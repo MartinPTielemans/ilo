@@ -1,0 +1,72 @@
+# ilo for iPhone. `xcodegen` here writes ilo.xcodeproj, which isn't committed.
+name: ilo
+options:
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+    SWIFT_APPROACHABLE_CONCURRENCY: YES
+    MARKETING_VERSION: 0.1.0
+    CURRENT_PROJECT_VERSION: 19
+    DEVELOPMENT_TEAM: 938WK3V9K9
+    CODE_SIGN_STYLE: Automatic
+packages:
+  IloSync:
+    path: Sync
+targets:
+  ilo:
+    type: application
+    platform: iOS
+    sources:
+      # App holds the phone's own icon, App/ilo.icon: the desktop's design redrawn for iOS's tile
+      # and its Clear and Tinted styles. The desktop's is tuned for the Dock and stays as it is.
+      - App
+      # The blocking rules, which Blocking/build.sh makes; run it once before xcodegen.
+      - path: Blocking/Rules
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - package: IloSync
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.ilo.browser.ios
+        INFOPLIST_FILE: App/Info.plist
+        # iPhone only. Set on the target: XcodeGen's iOS preset puts "1,2" there, over the project's.
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: ilo
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        # Apple's default-browser entitlement, com.apple.developer.web-browser. YES once Apple
+        # has granted it to the team: before that no profile carries it and signing fails.
+        DEFAULT_BROWSER_ENTITLEMENT: NO
+        CODE_SIGN_ENTITLEMENTS: $(DEFAULT_BROWSER_ENTITLEMENTS_$(DEFAULT_BROWSER_ENTITLEMENT))
+        DEFAULT_BROWSER_ENTITLEMENTS_YES: App/System/DefaultBrowser.entitlements
+        DEFAULT_BROWSER_ENTITLEMENTS_NO: ""
+  iloTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - Tests
+    dependencies:
+      - target: ilo
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.ilo.browser.ios.tests
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  ilo:
+    build:
+      targets:
+        ilo: all
+        iloTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      # The tests run inside the app, which needs an account to start.
+      commandLineArguments:
+        "-fixture": true
+      targets:
+        - iloTests

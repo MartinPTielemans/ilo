@@ -5,7 +5,8 @@
 const fs = require("node:fs");
 
 // Each job ci.yml can run, and the paths it covers. app_linux and engine_windows are ready for
-// app-linux.yml and engine-windows.yml; ci.yml's comment says how to hook them in.
+// app-linux.yml and engine-windows.yml; ci.yml's comment says how to hook them in. A path two jobs
+// cover, such as core/sync_spaces.proto, starts both.
 const JOBS = {
   // What only Windows compiles of the UI: its host, the browser's DLL, GPUI's Windows patch, and the
   // build script and manifest that name the host's files, its libraries and Cargo's Windows target.
@@ -28,6 +29,18 @@ const JOBS = {
     /^engine\//,
     /^\.github\/workflows\/engine-windows\.yml$/,
     /^\.github\/actions\/engine-windows-stage\//,
+  ],
+  // The iPhone app (mobile/AGENTS.md), and what it reads of the desktop's: the core's sync code,
+  // which IloSync writes for and mirrors, the site searches and the tokens a phone test reads, and
+  // the ad blocker's pin its rules are built from. Nothing else of the desktop's starts it, and
+  // mobile/ starts no desktop job.
+  mobile_ios: [
+    /^mobile\//,
+    /^core\/sync/,
+    /^core\/site_searches\.cc$/,
+    /^app\/design\/tokens\.toml$/,
+    /^app\/ublock\.ini$/,
+    /^\.github\/workflows\/mobile-ios\.yml$/,
   ],
 };
 

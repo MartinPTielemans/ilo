@@ -13,6 +13,8 @@ outputs:
     value: ${{ steps.detect.outputs.engine_windows }}
   app_windows:
     value: ${{ steps.detect.outputs.app_windows }}
+  mobile_ios:
+    value: ${{ steps.detect.outputs.mobile_ios }}
 runs:
   using: composite
   steps:
