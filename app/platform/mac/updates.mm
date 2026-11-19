@@ -581,6 +581,19 @@ bool host_keep_keychain_key(void) {
   }
 }
 
+bool host_keeps_passkeys(void) {
+  SecTaskRef task = SecTaskCreateFromSelf(kCFAllocatorDefault);
+  if (!task) return false;
+  CFTypeRef value = SecTaskCopyValueForEntitlement(task, CFSTR("keychain-access-groups"), nullptr);
+  CFRelease(task);
+  NSArray* groups = (__bridge_transfer NSArray*)value;
+  if (![groups isKindOfClass:[NSArray class]]) return false;
+  for (id group in groups) {
+    if ([group isKindOfClass:[NSString class]] && [group hasSuffix:@".webauthn"]) return true;
+  }
+  return false;
+}
+
 bool host_updates_available(void) {
   NSBundle* main = NSBundle.mainBundle;
   NSString* sparkle = [main.privateFrameworksPath stringByAppendingPathComponent:@"Sparkle.framework"];
