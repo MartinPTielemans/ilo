@@ -82,6 +82,7 @@
 #include "extensions/common/url_pattern_set.h"
 #include "net/base/isolation_info.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 #include "url/url_constants.h"
@@ -453,7 +454,8 @@ void UpdateLists() {
     return;
   }
   updating = true;
-  UpdateNativeAdBlockLists(ListsToKeepCurrent(), base::BindOnce([](std::vector<std::string> keys) {
+  UpdateNativeAdBlockLists(ListsToKeepCurrent(), g_browser_process->shared_url_loader_factory(),
+                           base::BindOnce([](std::vector<std::string> keys) {
                              updating = false;
                              for (const std::string& key : keys) {
                                const auto listed = std::ranges::find(Lists(), key, &Listed::key);
