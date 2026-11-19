@@ -2420,6 +2420,7 @@ impl Browser for Engine {
         // Once the shell that asked is done, as it reads the shell. Chromium's quit is posted, so
         // comes after.
         cx.defer(save_launch_picture);
+        crate::quitting::probe_full_screen("as the quit is asked");
         // With no window to ask over, there's nothing open to lose.
         if !unsafe { bc::bc_warn_before_quitting() } || front().1.is_null() {
             return quit_because("the user's Quit, which had nothing to ask");
@@ -2450,6 +2451,7 @@ impl Browser for Engine {
         let quit =
             Box::new(|_: Vec<String>, _: &mut App| quit_because("the user's Quit, answered"));
         with_overlays(move |cx| dialog::pose(None, question, quit, cx), cx);
+        cx.defer(|_| crate::quitting::probe_full_screen("after the dialog is posed"));
     }
 }
 

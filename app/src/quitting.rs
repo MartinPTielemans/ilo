@@ -17,6 +17,7 @@ pub(crate) fn launch_layout_path() -> String {
 /// Quits the browser, saying what asked, as each way the browser ends logs a line that names it:
 /// this, Chromium's shutdown (main_delegate.cc) and, on the Mac, a quit Apple Event (host.mm).
 pub(crate) fn quit_because(why: &str) {
+    probe_full_screen(&format!("at quit for {why}"));
     log!("browser: quit for {why}");
     unsafe { bc::bc_quit() };
 }
@@ -35,6 +36,7 @@ pub(crate) unsafe extern "C" fn quit_going_ahead(_: *mut c_void, restarting: boo
         "browser: quit going ahead{}",
         if restarting { ", restarting" } else { "" }
     );
+    probe_full_screen("as the quit goes ahead");
     shell::quit_goes_ahead();
     // Chrome closes the core's windows as this returns (OnAppExiting), and destroys their surfaces
     // a task before the core says each has closed (window_closed): the overlays over them go now.
@@ -50,6 +52,7 @@ pub(crate) unsafe extern "C" fn private_session_ended(_: *mut c_void, profile: b
 
 pub(crate) unsafe extern "C" fn stopping(_: *mut c_void) {
     log!("browser: stopping");
+    probe_full_screen("stopping");
     safe_start_host::stopping();
     // On Windows, a ready update installs once the app has gone.
     #[cfg(not(target_os = "linux"))]
@@ -226,4 +229,19 @@ pub(crate) fn save_launch_frame(ui_view: *mut c_void) {
             format!("{x} {y} {width} {height} maximized\n"),
         );
     }
+}
+
+/// [DEBUG-3494] Each window's full-screen state as the core reads it, at `when`: a probe for where
+/// a full-screen window's state is lost on its way to the saved session under sway, never to merge.
+pub(crate) fn probe_full_screen(when: &str) {
+    #[cfg(not(target_os = "macos"))]
+    for window in ids(bc::bc_windows) {
+        let full = unsafe { bc::bc_window_is_full_screen(window) };
+        log!(
+            "[DEBUG-3494] window {window} full screen {} {when}",
+            full as u8
+        );
+    }
+    #[cfg(target_os = "macos")]
+    let _ = when;
 }
