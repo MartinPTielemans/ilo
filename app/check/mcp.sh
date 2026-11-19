@@ -2109,7 +2109,7 @@ SEE
     agent-request-several agent-request-whole-several
   grep -q "^browser: agent question $q change 2: “Remove the old crumbs entry\.” Deletes something on localhost\$" "$log" ||
     fail "the card didn't show the second change: $(grep "^browser: agent question $q change " "$log")"
-  [ "$changed" = "error: The user said no: you can't make a change on localhost. Don't try again." ] ||
+  [ "$changed" = "error: The user said no: you can't make 2 changes on localhost. Don't try again." ] ||
     fail "the denied changes answered: $changed"
   grep -q 'Bread' "$out/site.log" && fail "a denied change of several reached the site"
   grep -q '^DELETE ' "$out/site.log" && fail "a denied delete of several reached the site"
