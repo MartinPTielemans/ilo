@@ -361,8 +361,8 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
             ShutdownName(browser_shutdown::GetShutdownType()));
     keep_alive_.reset();
     // The session keeps each regular window's frame and state while Chrome still has its native
-    // window: off the Mac it closes them all as this returns (OnAppExiting), and a quit no page's
-    // tab kept as it closed would otherwise be kept at Window::CloseAll, with none left (#3494).
+    // window: it closes them all as this returns (OnAppExiting's CloseAllWidgets), and a quit no
+    // page's tab kept as it closed would otherwise be kept at Window::CloseAll, with none (#3494).
     if (std::ranges::any_of(Window::All(), [](const Window* each) { return !each->own_space(); })) {
       KeepSession();
     }

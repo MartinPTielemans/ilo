@@ -307,8 +307,8 @@ fi
 
 # A window showing no page, at a frame of its own as the app quits, comes back there. No page's tab
 # closes to keep the session as the quit goes ahead, so the core keeps it then, while Chrome still
-# has the window: off the Mac it closes every window first, and kept after that a window had no
-# frame and no state (#3494).
+# has the window: it closes every window first, and kept after that a window had no frame and no
+# state (#3494).
 empty=$(windows_opened | head -1)
 grep -q "^browser: window $empty shows [1-9]" "$log" &&
   fail "the window opened after the last one closed showed a page, so its quit has a page's tab to keep the session: $(grep "^browser: window $empty shows " "$log" | tail -1)"
