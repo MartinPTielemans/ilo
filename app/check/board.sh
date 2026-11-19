@@ -495,6 +495,7 @@ post click 204 $((height - 25))
 expect "^browser: menu shown .*$(cased 'New Board')" "the sidebar's +$replaced didn't offer New Board"
 if [ -n "$replaced" ]; then
   expect '^browser: menu at .* closed by ' "the row's menu didn't close as the sidebar's + opened its own"
+  expect '^browser: menu window at ' "the + menu's window didn't take the keyboard"
   send key down
   expect '^browser: menu highlights .* at ' "↓ in the + menu, opened in a row's menu's place, rang no row: it hasn't the keyboard"
 fi
