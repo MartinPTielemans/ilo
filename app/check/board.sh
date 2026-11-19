@@ -1,7 +1,8 @@
 # check.sh runs this at 690.
-# A Board (#3073). New Board's key makes one in the Space's profile, a pinned tab whose row's name
-# is there to type over; ↩ keeps the name in the Board's folder and gives the page the keyboard,
-# where the first note's field takes the keys typed next. The page saves the note a second later, in
+# A Board (#3073). The empty Library › Boards list's New Board makes one in the Space's profile
+# and closes the Library (#3575), a pinned tab whose row's name is there to type over; ↩ keeps
+# the name in the Board's folder and gives the page the keyboard, where the first note's field
+# takes the keys typed next. The page saves the note a second later, in
 # its own Board's folder alone, and no log line says what the note or the name is. Library › Boards
 # lists it. Renamed while open, opened from the command bar by the start of its name, unpinned,
 # archived and reopened, it's still only "(a Board)" in the log, never its name, and the reopened
@@ -63,15 +64,25 @@ rm -f "$agents_file"
 socket=$(grep '^browser: agents server on' "$log" | tail -1 | sed 's/^browser: agents server on //')
 if windows; then bridge="$app/mcp-bridge.exe"; else bridge="$(dirname "$browser")/mcp-bridge"; fi
 
-# New Board, from its key.
-send key e ctrl shift
-expect '^browser: command new-board via ' "⌃⇧E didn't run New Board"
+# New Board, from the empty Library › Boards list's button, clicked where it logged itself. It runs
+# New Board as its key does, and the Library goes, so the name typed next is the row's (#3572).
+bar_command view-boards "View Boards…" "view boards"
+expect '^browser: library shown$' "View Boards… didn't open the Library on its empty Boards list"
+expect '^browser: library new board at [0-9-]* [0-9-]* [0-9]* [0-9]*$' \
+  "the empty Library › Boards list drew no New Board button"
+../tools/window-screenshot.sh "$pid" "$out/board-library-empty.png" || fail "no window to capture"
+set -- $(grep '^browser: library new board at ' "$log" | tail -1 | cut -d' ' -f6-9)
+post click $(($1 + $3 / 2)) $(($2 + $4 / 2))
+expect '^browser: command new-board via library$' \
+  "a click on the empty Boards list's New Board didn't run New Board"
 expect '^browser: new board [0-9a-f]\{32\} tab [0-9]*$' \
   "New Board made no Board: $(grep '^browser: new board ' "$log" | tail -1)"
 made=$(grep '^browser: new board [0-9a-f]\{32\} tab ' "$log" | tail -1)
 id=$(echo "$made" | cut -d' ' -f4)
 board=$(echo "$made" | cut -d' ' -f6)
 expect "^browser: name board $board\$" "the new Board's row didn't offer its name to type over"
+expect '^browser: library hidden$' \
+  "New Board from the empty Boards list left the Library over the Board's name"
 folder=$(find "$profile_dir" -type d -path "*/Boards/$id" | head -1)
 [ -n "$folder" ] || fail "New Board made no folder for $id in the profile ($profile_dir)"
 boards=$(dirname "$folder")

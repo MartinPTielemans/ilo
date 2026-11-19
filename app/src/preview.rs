@@ -547,14 +547,19 @@ impl Fake {
 }
 
 /// PREVIEW_LIBRARY=boards: four made-up Boards in a profile folder of their own, two with a
-/// picture, changed hours to a week ago, the last never named.
+/// picture, changed hours to a week ago, the last never named; =boards-empty, none.
 fn preview_boards_folder() -> Option<std::path::PathBuf> {
-    (std::env::var("PREVIEW_LIBRARY").ok()? == "boards").then_some(())?;
+    let which = std::env::var("PREVIEW_LIBRARY").ok()?;
+    (which == "boards" || which == "boards-empty").then_some(())?;
     static FOLDER: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
     FOLDER
         .get_or_init(|| {
             let folder =
                 std::env::temp_dir().join(format!("ilo-preview-boards-{}", std::process::id()));
+            if which == "boards-empty" {
+                std::fs::create_dir_all(&folder).ok()?;
+                return Some(folder);
+            }
             let now = std::time::SystemTime::now();
             let hours = |hours: u64| now - std::time::Duration::from_secs(hours * 3600);
             let boards = [
@@ -3394,8 +3399,8 @@ fn main() {
             let shell_window = window.as_ref().ok().copied();
             match window {
                 // PREVIEW_LIBRARY=1 opens the Library, and PREVIEW_LIBRARY=downloads, =spaces,
-                // =history, =agents or =boards opens it there; =rename opens its Spaces with the first card's
-                // name in its field.
+                // =history, =agents, =boosts, =boards or =boards-empty opens it there; =rename opens
+                // its Spaces with the first card's name in its field.
                 Ok(window) if std::env::var_os("PREVIEW_LIBRARY").is_some() => {
                     window
                         .update(cx, |shell, window, cx| {
@@ -3404,7 +3409,10 @@ fn main() {
                                 Ok("spaces") => shell.show_spaces(cx),
                                 Ok("agents") => shell.show_agents(cx),
                                 Ok("history") => shell.show_visited(cx),
-                                Ok("boards") => shell.run(Command::ViewBoards, "preview", cx),
+                                Ok("boosts") => shell.run(Command::ViewBoosts, "preview", cx),
+                                Ok("boards" | "boards-empty") => {
+                                    shell.run(Command::ViewBoards, "preview", cx)
+                                }
                                 Ok("rename") => {
                                     shell.show_spaces(cx);
                                     shell.preview_rename_card(window, cx);

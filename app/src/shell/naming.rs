@@ -563,6 +563,9 @@ impl Shell {
             _watches: Vec::new(),
         });
         self.board_named = Some(tab);
+        // The field is in the sidebar, which the Library covers, as New Board from its empty
+        // Boards list or with its key leaves it.
+        self.set_library(false, cx);
         self.dock(cx);
         self.browser.focus_ui(cx);
         self.focus_renaming = true;
