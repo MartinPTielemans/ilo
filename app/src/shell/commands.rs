@@ -3079,6 +3079,105 @@ mod tests {
         assert_eq!(host.bar_edits.take(), [None]);
     }
 
+    /// ⌘W in the moment after the tab shown closes, before the window shows the next, closes the
+    /// tab shown next, and each of two such presses closes one, as when the user closes tabs fast
+    /// (#3570). With the Space left empty, the press closes nothing more, not the window.
+    #[gpui::test]
+    fn close_tab_as_the_tab_shown_closes_closes_the_one_shown_next(cx: &mut gpui::TestAppContext) {
+        use std::rc::Rc;
+
+        use crate::shell::{Folders, Page, recorder::Recorder};
+
+        let host = Rc::new(Recorder::default());
+        let browser = host.clone();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+        let today = |shell: &mut Shell, tabs: Vec<u64>, cx: &mut Context<Shell>| {
+            shell.set_tabs(1, Vec::new(), tabs, Vec::new(), Folders::default(), cx);
+        };
+        let closes = |host: &Recorder| {
+            host.take()
+                .into_iter()
+                .filter(|call| call.starts_with("close"))
+                .collect::<Vec<_>>()
+        };
+        shell.update(cx, |shell, cx| {
+            let space = (1, "One".into(), None, 1, "".into(), "".into(), "".into());
+            shell.set_spaces(vec![space], cx);
+            today(shell, vec![4, 6, 7, 8], cx);
+            for tab in [4, 6, 7, 8] {
+                let page = Page {
+                    url: format!("https://{tab}.test/").into(),
+                    ..Page::default()
+                };
+                shell.set_page(tab, page, cx);
+            }
+            shell.set_space(1, cx);
+            shell.set_selected(8, cx);
+            shell.run(Command::CloseTab, "page", cx);
+        });
+        assert_eq!(closes(&host), ["close 8"]);
+
+        // The core says 8 has gone, and ⌘W comes before it says which tab shows next.
+        shell.update(cx, |shell, cx| {
+            today(shell, vec![4, 6, 7], cx);
+            shell.run(Command::CloseTab, "ui", cx);
+        });
+        assert_eq!(
+            closes(&host),
+            Vec::<String>::new(),
+            "⌘W waits for the tab shown next"
+        );
+        shell.update(cx, |shell, cx| shell.set_selected(7, cx));
+        assert_eq!(closes(&host), ["close 7"], "⌘W closes the tab shown next");
+
+        // Two presses in the gap close one tab each, as the core shows each next.
+        shell.update(cx, |shell, cx| {
+            today(shell, vec![4, 6], cx);
+            shell.run(Command::CloseTab, "ui", cx);
+            shell.run(Command::CloseTab, "ui", cx);
+            shell.set_selected(6, cx);
+        });
+        assert_eq!(closes(&host), ["close 6"]);
+        shell.update(cx, |shell, cx| {
+            today(shell, vec![4], cx);
+            shell.set_selected(4, cx);
+        });
+        assert_eq!(
+            closes(&host),
+            ["close 4"],
+            "the second press closes the next"
+        );
+
+        // The Space left empty shows no tab: the press waiting closes neither a tab nor the window,
+        // and the next ⌘W, with no tab shown, closes the window as before.
+        shell.update(cx, |shell, cx| {
+            today(shell, Vec::new(), cx);
+            shell.run(Command::CloseTab, "ui", cx);
+            shell.set_selected(0, cx);
+        });
+        assert!(
+            closes(&host).is_empty(),
+            "nothing closes for the press in the gap"
+        );
+        shell.update(cx, |shell, cx| shell.run(Command::CloseTab, "ui", cx));
+        assert_eq!(closes(&host), ["close window"]);
+
+        // Nor does a press in the gap close a tab of another Space the window shows next.
+        shell.update(cx, |shell, cx| {
+            let space =
+                |id, name: &str| (id, name.into(), None, 1, "".into(), "".into(), "".into());
+            shell.set_spaces(vec![space(1, "One"), space(2, "Two")], cx);
+            today(shell, vec![5], cx);
+            shell.set_tabs(2, Vec::new(), vec![9], Vec::new(), Folders::default(), cx);
+            shell.set_selected(5, cx);
+            today(shell, Vec::new(), cx);
+            shell.run(Command::CloseTab, "ui", cx);
+            shell.set_selected(9, cx);
+            shell.set_space(2, cx);
+        });
+        assert!(closes(&host).is_empty(), "another Space's tab stays");
+    }
+
     /// The bar finds Site Search Settings by its name or by Chrome's, and it opens the search
     /// engines page. A private window keeps no site searches of its own, so it offers none.
     #[gpui::test]
