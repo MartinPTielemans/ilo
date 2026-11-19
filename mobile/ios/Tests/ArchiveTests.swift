@@ -692,6 +692,40 @@ private let then = date(10)
     #expect(await eventually { await tab.shows("/old") })
   }
 
+  @Test func `a page of history whose tab waits in the archive brings that tab back, and opens no second one`() async throws {
+    let server = try await server()
+    let account = SeenAccount()
+    account.nodes = [
+      SyncedNode(id: "today:waits", kind: .today, space: "work", url: server.url("/waits"), title: "Waits", seen: then),
+      SyncedNode(id: "today:elsewhere", kind: .today, space: "home", url: server.url("/elsewhere"), title: "Elsewhere", seen: then),
+    ]
+    let (browser, archive) = browser(on: account)
+    await browser.archiveUnseen(now: then.addingTimeInterval(day))
+    #expect(browser.today(in: "work").isEmpty)
+    #expect(browser.currentSpace?.id == "work")
+    browser.sheet = .history
+
+    // As a row of the history sheet does, and one the Space's field finds.
+    browser.revisit(Visit(url: server.url("/waits"), title: "Waits", time: Visit.time(of: then), typed: false, device: "phone"))
+    #expect(account.nodes.map(\.id) == ["today:waits", "today:elsewhere"])
+    #expect(browser.today(in: "work").map(\.id) == ["today:waits"])
+    #expect(archive.tabs.map(\.title) == ["Elsewhere"])
+    #expect(browser.settings.awayTabs == ["today:elsewhere"])
+    // Seen now, which every device hears, as when its row in the archive brings it back.
+    #expect(account.noted == ["today:waits"])
+    #expect(browser.sheet == nil)
+    let tab = try #require(browser.page)
+    #expect(tab.id == "today:waits")
+    #expect(await eventually { await tab.shows("/waits") })
+
+    // One that waits in another Space is none of this one's, as an open one there isn't.
+    browser.leave()
+    browser.left(tab.id)
+    browser.revisit(Visit(url: server.url("/elsewhere"), title: "Elsewhere", time: Visit.time(of: then), typed: false, device: "phone"))
+    #expect(account.today(in: "work").count == 2)
+    #expect(browser.settings.awayTabs == ["today:elsewhere"])
+  }
+
   @Test func `a closed tab opens again as a new Today tab of the Space it was in`() async throws {
     let server = try await server()
     let account = SeenAccount()

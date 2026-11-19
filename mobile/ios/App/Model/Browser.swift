@@ -353,12 +353,20 @@ final class Browser {
     return Array(found.filter { !open.contains($0.url) }.prefix(Self.historyMatches))
   }
 
-  /// Goes back to a page of history: to its tab if the Space on screen has it open. If not, the
-  /// page under the search field goes there, as it does to an address typed, and anywhere else
-  /// it's a new tab of the Space on screen.
+  /// The Today tab of the Space on screen that waits in the archive at an address.
+  private func waiting(at url: URL) -> SyncedNode? {
+    let away = settings.awayTabs
+    guard !away.isEmpty, let space = currentSpace else { return nil }
+    return account.today(in: space.id).first { away.contains($0.id) && $0.url == url }
+  }
+
+  /// Goes back to a page of history: to its tab if the Space on screen has it open, or has it
+  /// waiting in the archive, which comes back as opening its row there would bring it. If not,
+  /// the page under the search field goes there, as it does to an address typed, and anywhere
+  /// else it's a new tab of the Space on screen.
   func revisit(_ visit: Visit) {
     slide = 0
-    if let open = tab(at: visit.url) {
+    if let open = tab(at: visit.url) ?? waiting(at: visit.url) {
       self.open(open)
     } else if searchingPage, let page {
       searchingPage = false
