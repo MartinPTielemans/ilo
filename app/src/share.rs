@@ -74,21 +74,20 @@ pub fn copied(title: &str, replaced: bool, count: usize, left_out: usize) -> Str
 
 /// The offer card over a share's page in ilo (tab_share_found): its question, its detail and its
 /// action. A folder or chosen tabs go at the foot of Pinned in `space`, as a folder; a Space comes
-/// as a new one. `again` when the user added this link before, which the add then updates.
+/// as a new one. Adding a link added before adds another, as the core does.
 pub fn offer(
     kind: ShareKind,
     title: &str,
     count: usize,
     space: &str,
-    again: bool,
 ) -> (String, String, &'static str) {
-    let (open, now) = match count {
-        1 => ("It opens only when you click it.", "as it is now"),
-        _ => ("They open only when you click them.", "as they are now"),
+    let open = match count {
+        1 => "It opens only when you click it.",
+        _ => "They open only when you click them.",
     };
     let tabs = tabs(count);
-    match (kind, again) {
-        (ShareKind::Space, false) => (
+    match kind {
+        ShareKind::Space => (
             format!("Add the Space “{title}”?"),
             format!(
                 "A new Space with its {tabs} pinned, its colour and its icon, on your current \
@@ -96,20 +95,10 @@ pub fn offer(
             ),
             "Add to Sidebar",
         ),
-        (ShareKind::Space, true) => (
-            format!("Update the Space “{title}”?"),
-            format!("The Space you added from this link gets its {tabs} {now}. {open}"),
-            "Update",
-        ),
-        (_, false) => (
+        _ => (
             format!("Add “{title}” to your sidebar?"),
             format!("A folder of {tabs} goes at the foot of Pinned in {space}. {open}"),
             "Add to Sidebar",
-        ),
-        (_, true) => (
-            format!("Update “{title}” in your sidebar?"),
-            format!("The folder you added from this link gets its {tabs} {now}. {open}"),
-            "Update",
         ),
     }
 }
@@ -141,8 +130,7 @@ mod tests {
 
     #[test]
     fn the_offer_says_where_a_share_goes_and_that_nothing_loads() {
-        let (question, detail, action) =
-            offer(ShareKind::Folder, "Lisbon, March", 7, "Travel", false);
+        let (question, detail, action) = offer(ShareKind::Folder, "Lisbon, March", 7, "Travel");
         assert_eq!(question, "Add “Lisbon, March” to your sidebar?");
         assert_eq!(
             detail,
@@ -150,13 +138,15 @@ mod tests {
              click them."
         );
         assert_eq!(action, "Add to Sidebar");
-        let (question, detail, _) = offer(ShareKind::Space, "Research", 5, "Travel", false);
+        let (question, detail, _) = offer(ShareKind::Space, "Research", 5, "Travel");
         assert_eq!(question, "Add the Space “Research”?");
         assert!(detail.starts_with("A new Space with its 5 tabs pinned, its colour and its icon"));
-        let (question, detail, action) = offer(ShareKind::Tabs, "Notes", 1, "Work", true);
-        assert_eq!(question, "Update “Notes” in your sidebar?");
-        assert!(detail.ends_with("its 1 tab as it is now. It opens only when you click it."));
-        assert_eq!(action, "Update");
+        let (question, detail, action) = offer(ShareKind::Tabs, "Notes", 1, "Work");
+        assert_eq!(question, "Add “Notes” to your sidebar?");
+        assert!(detail.ends_with(
+            "A folder of 1 tab goes at the foot of Pinned in Work. It opens only when you click it."
+        ));
+        assert_eq!(action, "Add to Sidebar");
     }
 
     #[test]
