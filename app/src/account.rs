@@ -1423,10 +1423,7 @@ impl Account {
             SpaceIcon::Dot => drawn(glyph),
         };
         let plate = plate.bg(fill).child(icon);
-        let tabs = match share.tabs {
-            1 => "1 tab".to_string(),
-            count => format!("{count} tabs"),
-        };
+        let tabs = crate::share::tabs(share.tabs);
         let detail = format!(
             "{kind} · {tabs} · shared {}",
             shared_when(share.shared, self.host.day_starts())

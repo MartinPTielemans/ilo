@@ -166,6 +166,7 @@ pub mod settings_pictures;
 pub mod settings_rows;
 pub mod settings_search;
 pub mod settling;
+pub mod share;
 pub mod shell;
 pub mod site_controls;
 pub mod sort_by_site;
