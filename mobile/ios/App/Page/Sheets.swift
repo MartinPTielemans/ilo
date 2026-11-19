@@ -17,57 +17,59 @@ struct ActionSheet: View {
     let isPinned = tab.role != .today
     let isPrivate = tab.isPrivate
     VStack(spacing: 0) {
-      if isPrivate {
-        // What private means, where the rows it leaves out would be: it has no history to open,
-        // and is nothing to pin, to favour or to move.
-        Text("Private: no history, cookies go when it closes, not synced. Files you download stay.")
-          .scaled(13, relativeTo: .footnote)
-          .foregroundStyle(palette.soft)
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(.horizontal, Column.inset)
-          .padding(.top, 2)
-          .padding(.bottom, 8)
-      } else {
-        SheetRow(symbol: "clock", title: "History") { browser.sheet = .history }
-      }
-      ReadingRows(tab: tab)
-      if tab.isPDF {
-        // A document has nothing to block and no other site to ask for: its rows keep it.
-        SheetRow(symbol: "folder", title: "Save to Files") {
-          if let url = tab.url { browser.downloads.save(url, from: tab.webView, listed: !isPrivate) }
-          browser.sheet = nil
+      SheetRows {
+        if isPrivate {
+          // What private means, where the rows it leaves out would be: it has no history to open,
+          // and is nothing to pin, to favour or to move.
+          Text("Private: no history, cookies go when it closes, not synced. Files you download stay.")
+            .scaled(13, relativeTo: .footnote)
+            .foregroundStyle(palette.soft)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, Column.inset)
+            .padding(.top, 2)
+            .padding(.bottom, 8)
+        } else {
+          SheetRow(symbol: "clock", title: "History") { browser.sheet = .history }
         }
-      } else {
-        BlockingRow(tab: tab)
-        if tab.exception != nil, tab.failure == nil {
-          // The way back from Visit Anyway, listed while a page that came in by it is up.
-          SheetRow(symbol: States.brokenLock, title: "Stop trusting this site") {
-            tab.stopTrusting()
+        ReadingRows(tab: tab)
+        if tab.isPDF {
+          // A document has nothing to block and no other site to ask for: its rows keep it.
+          SheetRow(symbol: "folder", title: "Save to Files") {
+            if let url = tab.url { browser.downloads.save(url, from: tab.webView, listed: !isPrivate) }
+            browser.sheet = nil
+          }
+        } else {
+          BlockingRow(tab: tab)
+          if tab.exception != nil, tab.failure == nil {
+            // The way back from Visit Anyway, listed while a page that came in by it is up.
+            SheetRow(symbol: States.brokenLock, title: "Stop trusting this site") {
+              tab.stopTrusting()
+              browser.sheet = nil
+            }
+          }
+          SheetRow(symbol: "desktopcomputer", title: tab.wantsDesktopSite ? "Request mobile site" : "Request desktop site") {
+            tab.requestDesktopSite(!tab.wantsDesktopSite)
             browser.sheet = nil
           }
         }
-        SheetRow(symbol: "desktopcomputer", title: tab.wantsDesktopSite ? "Request mobile site" : "Request desktop site") {
-          tab.requestDesktopSite(!tab.wantsDesktopSite)
-          browser.sheet = nil
-        }
-      }
-      if tab.canPrint {
-        SheetRow(symbol: "printer", title: "Print") {
-          browser.sheet = nil
-          browser.print(tab)
-        }
-      }
-      if !isPrivate {
-        SheetRow(symbol: isFavourite ? "star.fill" : "star", title: isFavourite ? "Remove from favourites" : "Add to favourites") {
-          guard let url = tab.url else { return }
-          if isFavourite {
-            settings.removeFavourite(url)
-          } else {
-            settings.addFavourite(url, title: tab.title)
+        if tab.canPrint {
+          SheetRow(symbol: "printer", title: "Print") {
+            browser.sheet = nil
+            browser.print(tab)
           }
         }
-        MoveRow(tab: tab)
-        SaveLoginRow(tab: tab)
+        if !isPrivate {
+          SheetRow(symbol: isFavourite ? "star.fill" : "star", title: isFavourite ? "Remove from favourites" : "Add to favourites") {
+            guard let url = tab.url else { return }
+            if isFavourite {
+              settings.removeFavourite(url)
+            } else {
+              settings.addFavourite(url, title: tab.title)
+            }
+          }
+          MoveRow(tab: tab)
+          SaveLoginRow(tab: tab)
+        }
       }
 
       Rectangle()
@@ -235,77 +237,79 @@ struct SettingsSheet: View {
   var body: some View {
     @Bindable var settings = browser.settings
     VStack(spacing: 0) {
-      AccountRow()
+      SheetRows {
+        AccountRow()
 
-      HStack(spacing: Column.gap) {
-        RowLabel(title: "ilo \(version)", detail: "GPL-3.0") {
-          Image(systemName: "info.circle")
-            .settingsIcon()
-        }
-        Button("Source") {
-          browser.sheet = nil
-          browser.openNew(Self.source)
-        }
-        .buttonStyle(ChipStyle())
-      }
-
-      Rectangle()
-        .fill(palette.text.opacity(0.12))
-        .frame(height: 1)
-        .padding(.horizontal, Column.inset)
-        .padding(.vertical, 8)
-
-      HiddenTiles()
-
-      BlockingSetting()
-
-      PasswordsSetting()
-
-      SavePasswordsSetting()
-
-      Menu {
-        Picker("Search engine", selection: $settings.searchEngine) {
-          ForEach(SearchEngine.all) { engine in
-            Text(engine.name).tag(engine)
-          }
-        }
-      } label: {
         HStack(spacing: Column.gap) {
-          RowLabel(title: "Search engine") {
-            Image(systemName: "magnifyingglass")
+          RowLabel(title: "ilo \(version)", detail: "GPL-3.0") {
+            Image(systemName: "info.circle")
               .settingsIcon()
           }
-          Text(settings.searchEngine.name)
-            .scaled(16, relativeTo: .callout)
-            .foregroundStyle(palette.soft)
-          Image(systemName: "chevron.up.chevron.down")
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(palette.soft)
-            .padding(.trailing, Column.inset)
+          Button("Source") {
+            browser.sheet = nil
+            browser.openNew(Self.source)
+          }
+          .buttonStyle(ChipStyle())
         }
-        .contentShape(.rect)
-      }
-      .buttonStyle(RowStyle())
 
-      ArchiveSetting()
+        Rectangle()
+          .fill(palette.text.opacity(0.12))
+          .frame(height: 1)
+          .padding(.horizontal, Column.inset)
+          .padding(.vertical, 8)
 
-      Toggle(isOn: $settings.keyboardOnLaunch) {
-        RowLabel(title: "Open keyboard on launch") {
-          Image(systemName: "keyboard")
-            .settingsIcon()
+        HiddenTiles()
+
+        BlockingSetting()
+
+        PasswordsSetting()
+
+        SavePasswordsSetting()
+
+        Menu {
+          Picker("Search engine", selection: $settings.searchEngine) {
+            ForEach(SearchEngine.all) { engine in
+              Text(engine.name).tag(engine)
+            }
+          }
+        } label: {
+          HStack(spacing: Column.gap) {
+            RowLabel(title: "Search engine") {
+              Image(systemName: "magnifyingglass")
+                .settingsIcon()
+            }
+            Text(settings.searchEngine.name)
+              .scaled(16, relativeTo: .callout)
+              .foregroundStyle(palette.soft)
+            Image(systemName: "chevron.up.chevron.down")
+              .font(.system(size: 12, weight: .semibold))
+              .foregroundStyle(palette.soft)
+              .padding(.trailing, Column.inset)
+          }
+          .contentShape(.rect)
         }
-      }
-      .tint(palette.accent)
-      .padding(.trailing, Column.inset)
+        .buttonStyle(RowStyle())
 
-      Toggle(isOn: $settings.swipeAnywhere) {
-        RowLabel(title: "Swipe anywhere to go back") {
-          Image(systemName: "hand.draw")
-            .settingsIcon()
+        ArchiveSetting()
+
+        Toggle(isOn: $settings.keyboardOnLaunch) {
+          RowLabel(title: "Open keyboard on launch") {
+            Image(systemName: "keyboard")
+              .settingsIcon()
+          }
         }
+        .tint(palette.accent)
+        .padding(.trailing, Column.inset)
+
+        Toggle(isOn: $settings.swipeAnywhere) {
+          RowLabel(title: "Swipe anywhere to go back") {
+            Image(systemName: "hand.draw")
+              .settingsIcon()
+          }
+        }
+        .tint(palette.accent)
+        .padding(.trailing, Column.inset)
       }
-      .tint(palette.accent)
-      .padding(.trailing, Column.inset)
 
       Rectangle()
         .fill(palette.text.opacity(0.12))

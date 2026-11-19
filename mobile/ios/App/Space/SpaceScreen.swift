@@ -11,13 +11,21 @@ struct SpaceScreen: View {
   @State private var site: SiteSearch?
   /// The home indicator's band, which the dock sits down into.
   @State private var band: CGFloat = 0
+  /// The shape of a whole page on this screen, which the cards' pictures follow.
+  @State private var page = CGSize.zero
   /// How far the dock's swipe has drawn the Spaces aside.
   @State private var turn = SpaceTurn()
   @FocusState private var focused: Bool
+  @Environment(\.low) private var low
 
   var body: some View {
     let account = browser.account
     let typing = !query.isEmpty || site != nil
+    // On its side a keyboard leaves room for the field and little more: the tiles, the dots and
+    // what's said over the dock step aside until it goes.
+    let bare = typing || (low && focused)
+    // Upright the tiles stand over the field; on its side beside it, in a dock one row high.
+    let lie = low ? AnyLayout(HStackLayout(spacing: 0)) : AnyLayout(VStackLayout(spacing: 0))
     VStack(spacing: 0) {
       if account.spaces.isEmpty {
         NoSpaces()
@@ -42,22 +50,22 @@ struct SpaceScreen: View {
     // the system's bar: a field in that one never tells SwiftUI it has the focus.
     .safeAreaInset(edge: .bottom, spacing: 0) {
       VStack(spacing: 0) {
-        SpaceDots()
+        if !(low && focused) { SpaceDots() }
 
-        if !typing { ArchiveNote { focused = false } }
+        if !bare { ArchiveNote { focused = false } }
 
         // One glass, and plain fills on it: the offer, the pinned tabs, the field and its button.
         VStack(spacing: 0) {
-          if !typing {
-            SyncOffer()
-            PinTiles(turn: turn)
+          if !bare { SyncOffer() }
+          lie {
+            if !bare { PinTiles(turn: turn) }
+            SearchBar(
+              query: $query, site: $site, focused: $focused, fieldOff: account.spaces.isEmpty, docked: true,
+              // While a file has begun or ended since the list was looked at, the chevron leads there.
+              menu: { browser.sheet = browser.downloads.news ? .downloads : .settings }, submit: submit
+            )
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { browser.places.bar = $0 }
           }
-          SearchBar(
-            query: $query, site: $site, focused: $focused, fieldOff: account.spaces.isEmpty, docked: true,
-            // While a file has begun or ended since the list was looked at, the chevron leads there.
-            menu: { browser.sheet = browser.downloads.news ? .downloads : .settings }, submit: submit
-          )
-          .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { browser.places.bar = $0 }
         }
         .padding(Dock.inset)
         .contentShape(.rect)
@@ -82,16 +90,24 @@ struct SpaceScreen: View {
         // Over the keyboard by its margin; without it, down in the home indicator's band and
         // just clear of the indicator, where the page's small pill sits too.
         .padding(.bottom, focused || band <= 0 ? Dock.margin : min(Dock.margin, Bar.smallFoot(band: band) - band))
-        .animation(Motion.quick, value: typing)
+        .animation(Motion.quick, value: bare)
       }
     }
     .background {
       // Read with the keyboard left out, so the band is the home indicator's alone.
       GeometryReader { area in
-        Color.clear.onChange(of: area.safeAreaInsets.bottom, initial: true) { band = area.safeAreaInsets.bottom }
+        let insets = area.safeAreaInsets
+        Color.clear
+          .onChange(of: insets.bottom, initial: true) { band = insets.bottom }
+          // A page is the whole screen under the status bar.
+          .onChange(
+            of: CGSize(width: area.size.width + insets.leading + insets.trailing, height: area.size.height + insets.bottom),
+            initial: true
+          ) { _, shape in page = shape }
       }
       .ignoresSafeArea(.keyboard)
     }
+    .environment(\.pageShape, page)
     // The grid runs out under the status bar, into the ground's own colour.
     .overlay(alignment: .top) {
       GeometryReader { top in

@@ -67,6 +67,10 @@ nonisolated struct Palette: Equatable, Sendable {
 }
 
 extension EnvironmentValues {
+  /// The phone is on its side: little height, and room past both ends of what stands at the foot.
+  var low: Bool { verticalSizeClass == .compact }
+  /// The shape of a whole page on this screen, which a card's picture is no taller than.
+  @Entry var pageShape = CGSize.zero
   @Entry var palette = Palette()
 }
 
@@ -145,9 +149,10 @@ nonisolated enum Bar {
   /// The page's bar while the page is read: a pill with the site's name.
   static let small: CGFloat = 24
   /// How far the small pill sits over the screen's foot: just clear of the home indicator, which
-  /// lies in the lower half of its `band`.
+  /// lies as far from the foot whichever way the phone is held, in a `band` that isn't as deep on
+  /// its side.
   static func smallFoot(band: CGFloat) -> CGFloat {
-    max(band - 18, 6)
+    band > 0 ? 16 : 6
   }
 }
 
@@ -155,7 +160,7 @@ nonisolated enum Bar {
 nonisolated enum Card {
   static let pictureHeight: CGFloat = 200
   static let radius: CGFloat = 18
-  /// The grid: two columns, from the screen's sides.
+  /// The grid, from the screen's sides.
   static let side: CGFloat = 16
   static let columnGap: CGFloat = 12
   static let rowGap: CGFloat = 16
@@ -166,9 +171,25 @@ nonisolated enum Card {
   static let closeInset: CGFloat = 7
   static let touch: CGFloat = 44
 
+  /// The narrowest a card is where the grid has room for more than two.
+  static let least: CGFloat = 176
+
+  /// How many cards lie across a grid `width` wide: two on a phone upright, more on its side.
+  static func across(in width: CGFloat) -> Int {
+    max(2, Int((width - 2 * side + columnGap) / (least + columnGap)))
+  }
+
+  /// How tall the picture is on a card `width` wide, where a whole page has the shape `page`: no
+  /// taller than the page is to that width, so a page on its side lands on its card whole.
+  static func picture(width: CGFloat, page: CGSize) -> CGFloat {
+    guard page.width > 0, page.height > 0 else { return pictureHeight }
+    return min(pictureHeight, width * page.height / page.width)
+  }
+
   /// A card's width in a grid `width` across.
   static func width(in width: CGFloat) -> CGFloat {
-    max(1, (width - 2 * side - columnGap) / 2)
+    let across = CGFloat(across(in: width))
+    return max(1, (width - 2 * side - (across - 1) * columnGap) / across)
   }
 }
 
@@ -186,6 +207,9 @@ nonisolated enum Dock {
   static let tileIcon: CGFloat = 30
   static let tileLabel: CGFloat = 66
   static let across = 5
+  /// A tile's share of the dock's width upright, which it keeps beside the field on a phone on
+  /// its side.
+  static let pitch: CGFloat = 72
   /// Between two rows of tiles, and under the last.
   static let rowGap: CGFloat = 10
   static let pinsFoot: CGFloat = 12
@@ -240,6 +264,9 @@ nonisolated enum SaveOffer {
 
 /// The text column every list keeps: icons start 24 in and titles 56.
 nonisolated enum Column {
+  /// The widest that stands at the foot, the bar and a sheet: the widest phone upright. On a
+  /// phone on its side they keep to that, in the middle of the foot.
+  static let widest: CGFloat = 440
   static let side: CGFloat = 12
   static let inset: CGFloat = 12
   static let icon: CGFloat = 20

@@ -237,4 +237,69 @@ enum PageScripts {
       globalThis.iloTyped = { collect, restore };
     })();
     """
+
+  /// Holds what's at the top of the page at the top across a turn. Run as the turn starts, it
+  /// marks the text there and puts it back where it was once the page is laid out for its new
+  /// width: WebKit keeps how far the page is scrolled, which after a turn is other text. What
+  /// the page fixes to its head is passed over, since that stays where it is by itself. A turn
+  /// back holds what the turn before it held, so there and back ends where it began.
+  static let keepPlace = """
+    // A turn that starts before the last one is done with takes over from it.
+    const turn = globalThis.iloTurn = (globalThis.iloTurn || 0) + 1;
+    if (scrollY <= 0) return;
+    const held = element => {
+      for (let e = element; e && e !== document.documentElement; e = e.parentElement) {
+        const position = getComputedStyle(e).position;
+        if (position === 'fixed' || position === 'sticky') return true;
+      }
+      return false;
+    };
+    // The width the page is laid out for: `innerWidth` follows it some frames later.
+    const width = () => document.documentElement.clientWidth;
+    const wide = width();
+    // A page left where the last turn put it keeps that turn's mark: what's at the top on its
+    // side may be far from it upright, where the page has one column for its two.
+    let place = globalThis.iloPlace;
+    if (!place || Math.abs(scrollY - place.y) >= 2 || !(place.mark.startContainer || place.mark).isConnected) {
+      const x = Math.min(wide, innerWidth) / 2;
+      let mark = null;
+      for (let y = 1; y < innerHeight / 2 && !mark; y += 24) {
+        const element = document.elementFromPoint(x, y);
+        if (!element || held(element)) continue;
+        mark = element;
+        const caret = document.caretRangeFromPoint(x, y);
+        const text = caret && caret.startContainer;
+        if (text && text.nodeType === Node.TEXT_NODE && element.contains(text) && caret.startOffset < text.length) {
+          caret.setEnd(text, caret.startOffset + 1);
+          if (caret.getClientRects().length) mark = caret;
+        }
+      }
+      if (!mark) return;
+      place = globalThis.iloPlace = { mark, top: mark.getBoundingClientRect().top, y: scrollY };
+    }
+    const { mark, top } = place;
+    await new Promise(done => {
+      // The page's height changes by itself, as the bar does: only a new width is the turn.
+      const turned = () => {
+        if (width() === wide) return;
+        removeEventListener('resize', turned);
+        done();
+      };
+      addEventListener('resize', turned);
+      // A width that never changes ends the wait.
+      setTimeout(() => { removeEventListener('resize', turned); done(); }, 1000);
+    });
+    if (width() === wide) return;
+    // WebKit moves the page once more some frames into its new size, so the text is held where
+    // it was while the turn is still on screen, unless a finger or another turn takes the page.
+    let free = false;
+    addEventListener('touchstart', () => { free = true; }, { once: true, passive: true, capture: true });
+    const until = performance.now() + 400;
+    while (!free && turn === globalThis.iloTurn && performance.now() < until) {
+      const off = mark.getBoundingClientRect().top - top;
+      if (Math.abs(off) >= 1) scrollBy(0, off);
+      place.y = scrollY;
+      await new Promise(done => requestAnimationFrame(done));
+    }
+    """
 }

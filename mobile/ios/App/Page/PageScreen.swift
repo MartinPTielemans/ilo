@@ -9,6 +9,7 @@ struct PageScreen: View {
   @Environment(Browser.self) private var browser
   @Environment(\.palette) private var palette
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.low) private var low
   /// While a finger holds the page: how open it is, 1 whole and 0 on its card.
   @State private var held: CGFloat?
   /// Let go of, and on its way to the Space or back to the whole screen.
@@ -23,7 +24,10 @@ struct PageScreen: View {
     // Read inside the safe area: a view that ignores it is told its insets are nothing.
     GeometryReader { safe in
       let insets = safe.safeAreaInsets
-      let screen = CGSize(width: safe.size.width, height: safe.size.height + insets.top + insets.bottom)
+      // The whole screen: on its side the page runs under the island's end too, and WebKit keeps
+      // its text clear of it.
+      let screen = CGSize(
+        width: safe.size.width + insets.leading + insets.trailing, height: safe.size.height + insets.top + insets.bottom)
       // The page starts under the status bar, whose band takes the page's own colour.
       let full = CGRect(x: 0, y: insets.top, width: screen.width, height: screen.height - insets.top)
       let foot = max(insets.bottom, Bar.gap) + Bar.gap
@@ -76,7 +80,8 @@ struct PageScreen: View {
             .onTapGesture { browser.closePeek() }
             .accessibilityHidden(true)
             .transition(.opacity)
-          PeekSheet(peek: peek, top: insets.top + 88, foot: foot)
+          // On its side the screen has no height to leave over a Peek.
+          PeekSheet(peek: peek, top: low ? Bar.side : insets.top + 88, status: insets.top, foot: foot)
             .transition(.move(edge: .bottom))
         }
 
@@ -389,8 +394,11 @@ private struct PageBar: View {
   let lift: PageLift
 
   @Environment(Browser.self) private var browser
+  @Environment(\.low) private var low
   /// How wide the buttons beside the bar are, which stay in their place while the bar is small.
   @State private var beside: CGFloat = 0
+  /// Whether the turn onto its side is what tucked the bar, for the turn back to undo.
+  @State private var turned = false
 
   var body: some View {
     GlassGroup {
@@ -403,6 +411,7 @@ private struct PageBar: View {
       }
     }
     .padding(.horizontal, Bar.side)
+    .footColumn()
     .padding(.bottom, foot - Bar.gap)
     .frame(maxHeight: .infinity, alignment: .bottom)
     .sensoryFeedback(.selection, trigger: tab.id)
@@ -411,6 +420,17 @@ private struct PageBar: View {
     .onChange(of: browser.searchingPage) { if browser.searchingPage { tab.growBar() } }
     .onChange(of: browser.peek == nil) { tab.growBar() }
     .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in tab.growBar() }
+    // Height is what a phone on its side lacks: a turn onto its side tucks a whole bar, and the
+    // turn back brings that one back. Behind a sheet, the field or a Peek it stays whole.
+    .onChange(of: low) {
+      if low {
+        turned = !tab.barHidden && browser.sheet == nil && !browser.searchingPage && browser.peek == nil
+        if turned { tab.tuckBar() }
+      } else if turned {
+        turned = false
+        tab.growBar()
+      }
+    }
   }
 }
 
@@ -634,6 +654,8 @@ private struct PagePill: View {
 private struct PeekSheet: View {
   let peek: WebTab
   let top: CGFloat
+  /// The status bar's band, which the sheet's strip becomes when it grows to the whole screen.
+  let status: CGFloat
   let foot: CGFloat
 
   @Environment(Browser.self) private var browser
@@ -651,7 +673,7 @@ private struct PeekSheet: View {
           .opacity(keeping ? 0 : 1)
           .frame(maxWidth: .infinity)
           // Grown to the whole screen, the strip is the status bar's band.
-          .frame(height: keeping ? top - 88 : 26)
+          .frame(height: keeping ? status : 26)
         WebPage(tab: peek, foot: foot + Bar.height)
       }
       .background(Color(uiColor: peek.ground))
@@ -684,6 +706,7 @@ private struct PeekSheet: View {
           .buttonStyle(PressStyle())
       }
       .padding(.horizontal, Bar.side)
+      .footColumn()
       .padding(.bottom, foot - Bar.gap)
     }
     .accessibilityElement(children: .contain)
