@@ -38,6 +38,7 @@
 #include "browser_core/profiles.h"
 #include "browser_core/script_dialog.h"
 #include "browser_core/session.h"
+#include "browser_core/shortcut_key.h"
 #include "browser_core/developer_mode.h"
 #include "browser_core/drm_request.h"
 #include "browser_core/site_controls.h"
@@ -98,7 +99,6 @@
 #include "ui/base/window_open_disposition.h"
 #include "ui/events/keycodes/dom/dom_key.h"
 #include "ui/events/keycodes/dom/keycode_converter.h"
-#include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/gfx/favicon_size.h"
 #include "ui/gfx/image/image.h"
@@ -585,15 +585,14 @@ bool Tab::AskAppAboutKey(bool (*callback)(void*, bc_id, const bc_key*),
 
 // static
 std::string Tab::KeyName(const input::NativeWebKeyboardEvent& event, uint32_t* modifiers) {
-  std::string name = ui::KeycodeConverter::DomKeyToKeyString(ui::DomKey(event.dom_key));
   const int held = event.GetModifiers();
-  // With ⌥ held, a Mac's key is the character ⌥ types with it, such as ⌥I's "ˆ", which no shortcut
-  // names. A letter's or digit's shortcut is its key's, as Chrome's are.
-  const int code = event.windows_key_code;
-  if ((held & blink::WebInputEvent::kAltKey) &&
-      ((code >= ui::VKEY_A && code <= ui::VKEY_Z) || (code >= ui::VKEY_0 && code <= ui::VKEY_9))) {
-    name = std::string(1, static_cast<char>(code));
-  }
+  const std::string name = ShortcutKeyName(
+      ui::KeycodeConverter::DomKeyToKeyString(ui::DomKey(event.dom_key)), event.windows_key_code,
+      {.shift = (held & blink::WebInputEvent::kShiftKey) != 0,
+       .control = (held & blink::WebInputEvent::kControlKey) != 0,
+       .alt = (held & blink::WebInputEvent::kAltKey) != 0,
+       .meta = (held & blink::WebInputEvent::kMetaKey) != 0},
+      BUILDFLAG(IS_MAC));
   *modifiers = 0;
   for (auto [web, flag] : {std::pair{blink::WebInputEvent::kShiftKey, BC_MODIFIER_SHIFT},
                            std::pair{blink::WebInputEvent::kControlKey, BC_MODIFIER_CONTROL},
@@ -720,6 +719,7 @@ void Tab::Unload() {
   shown_on_.reset();
   {
     base::AutoReset<bool> unloading(&unloading_, true);
+    ScriptDialogs::Cancel(contents);
     tabs->DetachAndDeleteWebContentsAt(tabs->GetIndexOfWebContents(contents));
   }
   // Chrome's session forgets the storage of a tab its tab strip deletes, which would delete it

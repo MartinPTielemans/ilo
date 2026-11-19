@@ -351,6 +351,15 @@ source_set("link_card_rule") {
   ]
 }
 
+# The key a page's key is named by for the app's shortcuts, apart so browser_core_unittests tests it
+# alone.
+source_set("shortcut_key") {
+  sources = [
+    "shortcut_key.cc",
+    "shortcut_key.h",
+  ]
+}
+
 # How an agent's typing goes to a page as key events, apart so browser_core_unittests tests it alone.
 source_set("typing_keys") {
   sources = [
@@ -472,6 +481,16 @@ source_set("agent_close_rule") {
   ]
 }
 
+# How long an agent's job waits on its page's renderer, apart so browser_core_unittests tests the
+# limit alone (#3536).
+source_set("agent_reply_limit") {
+  sources = [
+    "agent_reply_limit.cc",
+    "agent_reply_limit.h",
+  ]
+  deps = [ "//base" ]
+}
+
 # An agent's download, held until the user answers, apart so browser_core_unittests tests the hold
 # alone.
 source_set("agent_download_hold") {
@@ -536,6 +555,26 @@ source_set("system_stores") {
     "//base",
     "//chrome/common:constants",
     "//components/prefs",
+  ]
+}
+
+# The native engine's list updates, apart so browser_core_unittests drives them with a test
+# loader factory in place of the browser's.
+source_set("native_ad_block_lists") {
+  sources = [
+    "native_ad_block_lists.cc",
+    "native_ad_block_lists.h",
+  ]
+  public_deps = [
+    "//base",
+    "//url",
+  ]
+  deps = [
+    ":ad_block_list_check",
+    "//chrome/common:constants",
+    "//net",
+    "//services/network/public/cpp",
+    "//services/network/public/mojom",
   ]
 }
 
@@ -641,8 +680,6 @@ source_set("browser_core") {
     "mini_player.h",
     "native_ad_block.cc",
     "native_ad_block.h",
-    "native_ad_block_lists.cc",
-    "native_ad_block_lists.h",
     "notes.cc",
     "notes.h",
     "open_app_dialog.cc",
@@ -721,6 +758,7 @@ source_set("browser_core") {
   deps = [
     ":ad_block_carry",
     ":ad_block_list_check",
+    ":native_ad_block_lists",
     ":ad_block_off_sites",
     ":ad_block_page",
     ":archive_rule",
@@ -740,6 +778,7 @@ source_set("browser_core") {
     ":mini_player_place",
     ":other_tabs",
     ":agent_close_rule",
+    ":agent_reply_limit",
     ":popup_hold",
     ":search_default",
     ":select_choices",
@@ -755,6 +794,7 @@ source_set("browser_core") {
     ":sync_spaces_newer",
     ":sync_trouble",
     ":link_card_rule",
+    ":shortcut_key",
     ":typed_http",
     ":typing_keys",
     ":window_frames",
@@ -1046,12 +1086,14 @@ test("browser_core_unittests") {
     "arrange_rule_unittest.cc",
     "focus_leaving_rule_unittest.cc",
     "live_folder_rule_unittest.cc",
+    "native_ad_block_lists_unittest.cc",
     "pinned_url_unittest.cc",
     "arrangement_unittest.cc",
     "board_store_unittest.cc",
     "ax_text_unittest.cc",
     "agent_close_rule_unittest.cc",
     "agent_download_hold_unittest.cc",
+    "agent_reply_limit_unittest.cc",
     "agent_job_voter_unittest.cc",
     "boost_colors_unittest.cc",
     "boost_script_unittest.cc",
@@ -1071,6 +1113,7 @@ test("browser_core_unittests") {
     "popup_hold_unittest.cc",
     "search_default_unittest.cc",
     "select_choices_unittest.cc",
+    "shortcut_key_unittest.cc",
     "sidebar_backups_unittest.cc",
     "site_searches_unittest.cc",
 
@@ -1099,6 +1142,7 @@ test("browser_core_unittests") {
     ":arrange_rule",
     ":focus_leaving_rule",
     ":live_folder_rule",
+    ":native_ad_block_lists",
     ":pinned_url",
     ":tab_recent_rule",
     ":arrangement",
@@ -1107,6 +1151,7 @@ test("browser_core_unittests") {
     ":agent_close_rule",
     ":agent_download_hold",
     ":agent_job_voter",
+    ":agent_reply_limit",
     ":boost_colors",
     ":boost_script",
     ":history_removal",
@@ -1126,6 +1171,7 @@ test("browser_core_unittests") {
     ":sync_spaces_newer",
     ":sync_trouble",
     ":link_card_rule",
+    ":shortcut_key",
     ":typed_http",
     ":typing_keys",
     ":window_frames",
@@ -1150,6 +1196,9 @@ test("browser_core_unittests") {
     "//components/sync:test_support",
     "//components/sync_preferences:test_support",
     "//components/variations:test_support",
+    "//mojo/core/embedder",
+    "//services/network:test_support",
+    "//services/network/public/cpp",
     "//skia",
     "//testing/gmock",
     "//testing/gtest",
