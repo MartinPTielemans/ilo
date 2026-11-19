@@ -582,9 +582,12 @@ for each in light dark; do
   send key escape
   expect '^browser: library hidden$' "escape didn't close the Library of the $each picture"
 done
+# The pictures end dark, so Automatic changes the look only where the system's is light.
 send menu "$(cased 'Appearance › Automatic')"
-expect "^browser: window light $([ "$was" = light ] && echo true || echo false)\$" \
-  "View › Appearance › Automatic didn't give the window its look back after the Duplicate pictures"
+expect '^browser: appearance automatic$' "View › Appearance › Automatic didn't run after the Duplicate pictures"
+[ "$was" = dark ] ||
+  expect '^browser: window light true$' \
+    "View › Appearance › Automatic didn't give the window its light look back after the Duplicate pictures"
 send key w cmd
 expect "^browser: tab $tab closed\$" "⌘W didn't close the row's copy's tab"
 for tab in "$copy_tab" "$garden_tab"; do
