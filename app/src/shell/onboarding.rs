@@ -1509,7 +1509,9 @@ impl Shell {
                 );
             div().child(row)
         });
-        div()
+        // The ring is the box's own, as a button's is, drawn over its plate: on a frame round it,
+        // the box would cover it.
+        group(&look, rows)
             .id("onboarding-engines")
             .when(a11y, |list| {
                 list.role(Role::RadioGroup).aria_label("Search engine")
@@ -1519,13 +1521,11 @@ impl Shell {
                 list.track_focus(&stop)
             })
             .focus_from_keys_only()
-            .rounded(px(crate::tokens::radius::ROW))
             .focus_visible(ring(colors.ink(1.)))
             .mt(px(BUTTON_GAP))
             .w(px(OPT_IN_WIDTH))
             .text_size(px(crate::tokens::text::BODY))
             .text_color(look.ink)
-            .child(group(&look, rows))
             .into_any_element()
     }
 
