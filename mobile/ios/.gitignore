@@ -1,0 +1,8 @@
+# XcodeGen writes the project from project.yml.
+*.xcodeproj
+.build/
+DerivedData/
+xcuserdata/
+# Downloaded filter lists and the converter's build, and the rules Blocking/build.sh makes of them.
+.deps/
+Blocking/Rules/
