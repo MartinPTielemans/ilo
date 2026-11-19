@@ -578,14 +578,16 @@ fn preview_boards_folder() -> Option<std::path::PathBuf> {
                     browser::boards::write_name(&folder, &id, name).ok()?;
                 }
                 if let Some([r, g, b]) = colour {
-                    // A Board's picture as its page saves it: cards on the page's ground.
+                    // A Board's picture as its page saves it, with no ground: a note in its
+                    // fill and a plain one in the picture's grey.
+                    let [_, gr, gg, gb] = browser::tokens::board::PICTURE.to_be_bytes();
                     let thumb = image::RgbaImage::from_fn(96, 96, |x, y| {
-                        let card = (12..44).contains(&x) && (14..50).contains(&y)
-                            || (52..86).contains(&x) && (34..78).contains(&y);
-                        image::Rgba(if card {
+                        image::Rgba(if (12..44).contains(&x) && (14..50).contains(&y) {
                             [r, g, b, 255]
+                        } else if (52..86).contains(&x) && (34..78).contains(&y) {
+                            [gr, gg, gb, 255]
                         } else {
-                            [246, 244, 240, 255]
+                            [0, 0, 0, 0]
                         })
                     });
                     thumb.save(board.join("thumb.png")).ok()?;
