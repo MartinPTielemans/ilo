@@ -15,17 +15,18 @@
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "base/uuid.h"
 #include "base/values.h"
-#include "browser_core/agent_autofill.h"
 #include "browser_core/host.h"
 #include "browser_core/network_refuser.h"
 #include "browser_core/session.h"
@@ -60,6 +61,7 @@
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/gfx/image/image.h"
@@ -93,8 +95,10 @@ constexpr net::NetworkTrafficAnnotationTag kShareData =
         policy_exception_justification: "Asked only as the user opens a shared link."
       })");
 
-// The account's links' entries are sealed under a key from its secret, which the server never
-// has, so any of its devices lists them and the server reads none.
+// Each of the account's links has an entry on its server: what the list shows, and the link's key,
+// so another of its devices can copy the link. Entries are sealed under a key derived from the
+// account's secret, which the server never has, so any of its devices lists them and the server
+// reads none, nor the key in them.
 constexpr std::string_view kListInfo = "ilo share v1 list";
 constexpr uint8_t kEntryVersion = 1;
 constexpr size_t kIvSize = 12;
@@ -319,47 +323,92 @@ void PostMade(uint64_t request, size_t left_out, int problem) {
                      request, left_out, problem));
 }
 
+// What bc_unshare |id| came to, which the app shows when it isn't NONE, as the link still opens.
+void Unshared(const std::string& id, int problem) {
+  LOG(ERROR) << "browser: unshared, " << problem;
+  if (Host().unshared) {
+    Host().unshared(Host().context, id.c_str(), problem);
+  }
+}
+
 // What bc_share_make would share.
 struct Collected {
   ShareSnapshot snapshot;
   size_t left_out = 0;
   // A folder's or a Space's sync node, which makes it the same one on every device.
   std::string node;
+  // Each kept tab's favicon, in the order a walk of the snapshot meets its tabs, or an empty
+  // bitmap, which Pack encodes off the UI thread. Empty once encoded, and when only counting.
+  std::vector<SkBitmap> favicons;
 };
 
-ShareItem TabItem(bc_id id, size_t& left_out, bool& kept) {
-  ShareItem item;
-  kept = false;
-  const Tab* tab = Tab::Get(id);
+// The title of |tab|'s page at |url|: its page's now if it's there, else the latest at |url| in
+// its history, else none, as a page a pinned tab went on to may say what it holds, as a mail's
+// subject does, and its address alone goes.
+std::string PageTitle(const Tab& tab, const GURL& url) {
+  const SavedTab saved = tab.Save();
+  const size_t count = saved.history.size();
+  if (saved.current >= 0 && static_cast<size_t>(saved.current) < count &&
+      (tab.Url() == url || saved.history[saved.current].virtual_url() == url)) {
+    return base::UTF16ToUTF8(saved.history[saved.current].title());
+  }
+  for (size_t i = count; i-- > 0;) {
+    if (saved.history[i].virtual_url() == url) {
+      return base::UTF16ToUTF8(saved.history[i].title());
+    }
+  }
+  return std::string();
+}
+
+// A copy of |tab|'s favicon's pixels for Pack, as its own may change on the UI thread meanwhile,
+// or an empty bitmap.
+SkBitmap FaviconBitmap(const Tab& tab) {
+  const gfx::Image& favicon = tab.favicon();
+  if (favicon.IsEmpty()) {
+    return SkBitmap();
+  }
+  const SkBitmap& shown = favicon.AsImageSkia().GetRepresentation(2).GetBitmap();
+  SkBitmap copy;
+  if (shown.drawsNothing() || !copy.tryAllocPixels(shown.info()) ||
+      !shown.readPixels(copy.pixmap())) {
+    return SkBitmap();
+  }
+  return copy;
+}
+
+// |row| of |space| as a share's tab, or none, counted in |left_out|, as its address isn't one a
+// link takes. A pinned tab goes at the address it's pinned at, a Today tab at the one it shows.
+std::optional<ShareItem> TabItem(const Space& space,
+                                 bc_id row,
+                                 Collected& collected,
+                                 bool favicons) {
+  const Tab* tab = Tab::Get(row);
   if (!tab) {
-    return item;
+    return std::nullopt;
   }
-  item.url = ShareAddress(tab->Url());
+  const GURL pinned = space.PinnedUrl(row);
+  const GURL shown = tab->Url();
+  ShareItem item;
+  item.url = ShareAddress(pinned.is_valid() ? pinned : shown);
   if (!ShareTakes(item.url)) {
-    ++left_out;
-    return item;
+    ++collected.left_out;
+    return std::nullopt;
   }
-  kept = true;
   item.title = tab->name();
   if (item.title.empty()) {
-    const SavedTab saved = tab->Save();
-    if (saved.current >= 0 && static_cast<size_t>(saved.current) < saved.history.size()) {
-      item.title = base::UTF16ToUTF8(saved.history[saved.current].title());
-    }
+    item.title = PageTitle(*tab, pinned.is_valid() ? pinned : shown);
   }
-  const gfx::Image& favicon = tab->favicon();
-  if (!favicon.IsEmpty()) {
-    std::optional<std::vector<uint8_t>> png = gfx::PNGCodec::EncodeBGRASkBitmap(
-        favicon.AsImageSkia().GetRepresentation(2).GetBitmap(), /*discard_transparency=*/false);
-    if (png && png->size() <= kShareFaviconCap) {
-      item.favicon.assign(png->begin(), png->end());
-    }
+  if (favicons) {
+    // The favicon is the page's it shows, so only for the site the link names.
+    collected.favicons.push_back(url::IsSameOriginWith(ShareAddress(shown), item.url)
+                                     ? FaviconBitmap(*tab)
+                                     : SkBitmap());
   }
   return item;
 }
 
 // The rows directly in |folder|, else outside every folder, top to bottom, with what's in them.
-std::vector<ShareItem> Rows(const Space& space, bc_id folder, size_t& left_out) {
+std::vector<ShareItem> Rows(const Space& space, bc_id folder, Collected& collected, bool favicons) {
   std::vector<ShareItem> items;
   for (bc_id row : space.pinned_rows()) {
     if (space.FolderOf(row) != folder) {
@@ -369,14 +418,12 @@ std::vector<ShareItem> Rows(const Space& space, bc_id folder, size_t& left_out) 
       ShareItem item;
       item.folder = true;
       item.title = space.FolderName(row);
-      item.items = Rows(space, row, left_out);
+      item.items = Rows(space, row, collected, favicons);
       items.push_back(std::move(item));
       continue;
     }
-    bool kept = false;
-    ShareItem item = TabItem(row, left_out, kept);
-    if (kept) {
-      items.push_back(std::move(item));
+    if (std::optional<ShareItem> item = TabItem(space, row, collected, favicons)) {
+      items.push_back(std::move(*item));
     }
   }
   return items;
@@ -387,7 +434,8 @@ bool Shareable(const Space* space) {
   return space && !space->agent() && !space->own();
 }
 
-std::optional<Collected> Collect(int kind, const bc_id* items, size_t count) {
+// What bc_share_make would share. Only to count, |favicons| false, it takes none.
+std::optional<Collected> Collect(int kind, const bc_id* items, size_t count, bool favicons) {
   if (!items || !count) {
     return std::nullopt;
   }
@@ -403,7 +451,7 @@ std::optional<Collected> Collect(int kind, const bc_id* items, size_t count) {
     snapshot.title = space->name();
     snapshot.color = space->color();
     snapshot.icon = space->icon();
-    snapshot.items = Rows(*space, 0, collected.left_out);
+    snapshot.items = Rows(*space, 0, collected, favicons);
     collected.node = space->node().id.AsLowercaseString();
     return collected;
   }
@@ -414,7 +462,7 @@ std::optional<Collected> Collect(int kind, const bc_id* items, size_t count) {
     }
     snapshot.title = space->FolderName(items[0]);
     snapshot.icon = space->FolderIcon(items[0]);
-    snapshot.items = Rows(*space, items[0], collected.left_out);
+    snapshot.items = Rows(*space, items[0], collected, favicons);
     if (const Space::Node* node = space->NodeOf(items[0])) {
       collected.node = node->id.AsLowercaseString();
     }
@@ -446,65 +494,144 @@ std::optional<Collected> Collect(int kind, const bc_id* items, size_t count) {
     if (!std::ranges::contains(chosen, row) || space->IsFolder(row)) {
       continue;
     }
-    bool kept = false;
-    ShareItem item = TabItem(row, collected.left_out, kept);
-    if (kept) {
-      snapshot.items.push_back(std::move(item));
+    if (std::optional<ShareItem> item = TabItem(*space, row, collected, favicons)) {
+      snapshot.items.push_back(std::move(*item));
     }
   }
   return collected;
 }
 
-// Sends |collected| to the server under |listed|'s link, as a new link or, |replacing|, over the
-// one the account has for the same folder or Space.
-void Send(uint64_t request, Collected collected, Listed listed, bool replacing, int tries) {
-  const std::optional<std::vector<uint8_t>> blob =
-      SealShare(collected.snapshot, LinkOf(listed), kShareBlobCap);
-  if (!blob) {
-    PostMade(request, collected.left_out, BC_SHARE_PROBLEM_TOO_BIG);
+// Gives |items|' tabs their favicons from |bitmaps|, in the order Collect took them, as PNGs a
+// snapshot keeps.
+void EncodeFavicons(std::vector<ShareItem>& items,
+                    const std::vector<SkBitmap>& bitmaps,
+                    size_t& next) {
+  for (ShareItem& item : items) {
+    if (item.folder) {
+      EncodeFavicons(item.items, bitmaps, next);
+      continue;
+    }
+    if (next >= bitmaps.size()) {
+      return;
+    }
+    const SkBitmap& bitmap = bitmaps[next++];
+    if (bitmap.drawsNothing()) {
+      continue;
+    }
+    std::optional<std::vector<uint8_t>> png =
+        gfx::PNGCodec::EncodeBGRASkBitmap(bitmap, /*discard_transparency=*/false);
+    if (png && png->size() <= kShareFaviconCap) {
+      item.favicon.assign(png->begin(), png->end());
+    }
+  }
+}
+
+// A snapshot, its favicons encoded, and it sealed, off the UI thread.
+struct Packed {
+  ShareSnapshot snapshot;
+  std::optional<SealedShare> sealed;
+};
+
+Packed Pack(ShareSnapshot snapshot,
+            std::vector<SkBitmap> favicons,
+            ShareLink link,
+            bool with_favicons) {
+  size_t next = 0;
+  EncodeFavicons(snapshot.items, favicons, next);
+  Packed packed;
+  packed.sealed = SealShare(snapshot, link, kShareBlobCap, with_favicons);
+  packed.snapshot = std::move(snapshot);
+  return packed;
+}
+
+void Send(uint64_t request, Collected collected, Listed listed, bool replacing, int tries,
+          bool favicons);
+
+// What the server said to a snapshot sent under |listed|'s link.
+void Sent(uint64_t request,
+          Collected collected,
+          Listed listed,
+          bool replacing,
+          int tries,
+          bool favicons,
+          int status,
+          std::string answer) {
+  if (status == 200 || status == 201 || status == 204) {
+    Made(request, &listed, collected.left_out, replacing, BC_SHARE_PROBLEM_NONE);
+    ShareList();
+    return;
+  }
+  // Unshared meanwhile, on another device: a new link. A new id the server has, which a random
+  // 128 bits makes all but impossible: another one. Each once.
+  if (((replacing && (status == 404 || status == 410)) || (!replacing && status == 409)) &&
+      tries == 0) {
+    const ShareLink link = NewShareLink();
+    listed.id = link.id;
+    listed.key = link.key;
+    Send(request, std::move(collected), std::move(listed), /*replacing=*/false, tries + 1,
+         favicons);
+    return;
+  }
+  // The server keeps less than the core sends: without its favicons, once.
+  if (status == 413 && favicons) {
+    Send(request, std::move(collected), std::move(listed), replacing, tries, /*favicons=*/false);
+    return;
+  }
+  Made(request, nullptr, collected.left_out, false, ProblemOf(status));
+}
+
+// |packed| sent to the server under |listed|'s link.
+void Sealed(uint64_t request,
+            Collected collected,
+            Listed listed,
+            bool replacing,
+            int tries,
+            Packed packed) {
+  collected.snapshot = std::move(packed.snapshot);
+  collected.favicons.clear();
+  if (!packed.sealed) {
+    Made(request, nullptr, collected.left_out, false, BC_SHARE_PROBLEM_TOO_BIG);
     return;
   }
   const std::optional<std::string> entry = SealEntry(listed);
   if (!entry) {
-    PostMade(request, collected.left_out, BC_SHARE_PROBLEM_SIGNED_OUT);
+    Made(request, nullptr, collected.left_out, false, BC_SHARE_PROBLEM_SIGNED_OUT);
     return;
   }
   base::DictValue body;
   if (!replacing) {
     body.Set("id", listed.id);
   }
-  body.Set("blob", base::Base64Encode(*blob));
+  body.Set("blob", base::Base64Encode(packed.sealed->blob));
   body.Set("entry", *entry);
   const std::string path =
       replacing ? base::StrCat({"/api/shares/", listed.id}) : std::string("/api/shares");
-  sync::AskForShares(
-      replacing ? "PUT" : "POST", path, base::WriteJson(body).value_or(std::string()),
-      base::BindOnce(
-          [](uint64_t request, Collected collected, Listed listed, bool replacing, int tries,
-             int status, std::string answer) {
-            if (status == 200 || status == 201 || status == 204) {
-              Made(request, &listed, collected.left_out, replacing, BC_SHARE_PROBLEM_NONE);
-              ShareList();
-              return;
-            }
-            // Unshared meanwhile, on another device: a new link. A new id the server has, which a
-            // random 128 bits makes all but impossible: another one, once.
-            if (((replacing && (status == 404 || status == 410)) ||
-                 (!replacing && status == 409)) &&
-                tries < 2) {
-              const ShareLink link = NewShareLink();
-              listed.id = link.id;
-              listed.key = link.key;
-              Send(request, std::move(collected), std::move(listed), /*replacing=*/false,
-                   tries + 1);
-              return;
-            }
-            Made(request, nullptr, collected.left_out, false, ProblemOf(status));
-          },
-          request, std::move(collected), std::move(listed), replacing, tries));
+  const bool favicons = packed.sealed->favicons;
+  sync::AskForShares(replacing ? "PUT" : "POST", path,
+                     base::WriteJson(body).value_or(std::string()),
+                     base::BindOnce(&Sent, request, std::move(collected), std::move(listed),
+                                    replacing, tries, favicons));
 }
 
-// The link the account has for |node|, from its server's list now, then Send.
+// Seals |collected| under |listed|'s link, off the UI thread, with its favicons if |favicons| and
+// they fit, then sends it as a new link or, |replacing|, over the one the account has for the
+// same folder or Space.
+void Send(uint64_t request,
+          Collected collected,
+          Listed listed,
+          bool replacing,
+          int tries,
+          bool favicons) {
+  ShareSnapshot snapshot = std::move(collected.snapshot);
+  std::vector<SkBitmap> bitmaps = std::move(collected.favicons);
+  const ShareLink link = LinkOf(listed);
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::TaskPriority::USER_BLOCKING, base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
+      base::BindOnce(&Pack, std::move(snapshot), std::move(bitmaps), link, favicons),
+      base::BindOnce(&Sealed, request, std::move(collected), std::move(listed), replacing, tries));
+}
+
+// The link the account has for |listed|'s node, from its server's list now, then Send.
 void SendForNode(uint64_t request, Collected collected, Listed listed) {
   sync::AskForShares(
       "GET", "/api/shares", std::string(),
@@ -515,25 +642,34 @@ void SendForNode(uint64_t request, Collected collected, Listed listed) {
               return;
             }
             const std::optional<std::array<uint8_t, 32>> key = sync::ShareKey(kListInfo);
+            if (!key) {
+              Made(request, nullptr, collected.left_out, false, BC_SHARE_PROBLEM_SIGNED_OUT);
+              return;
+            }
+            // A list it can't read can't say there's no link for the node, and a second link for
+            // it would leave the first one out of date and unlisted.
             const std::optional<base::Value> json =
                 base::JSONReader::Read(body, base::JSON_PARSE_RFC);
+            if (!json || !json->is_list()) {
+              Made(request, nullptr, collected.left_out, false, BC_SHARE_PROBLEM_SERVER);
+              return;
+            }
             bool replacing = false;
-            if (key && json && json->is_list()) {
-              for (const base::Value& each : json->GetList()) {
-                const base::DictValue* dict = each.GetIfDict();
-                const std::string* id = dict ? dict->FindString("id") : nullptr;
-                const std::string* entry = dict ? dict->FindString("entry") : nullptr;
-                std::optional<Listed> opened =
-                    id && entry ? OpenEntry(*id, *entry, *key) : std::nullopt;
-                if (opened && opened->node == listed.node) {
-                  listed.id = opened->id;
-                  listed.key = opened->key;
-                  replacing = true;
-                  break;
-                }
+            for (const base::Value& each : json->GetList()) {
+              const base::DictValue* dict = each.GetIfDict();
+              const std::string* id = dict ? dict->FindString("id") : nullptr;
+              const std::string* entry = dict ? dict->FindString("entry") : nullptr;
+              std::optional<Listed> opened =
+                  id && entry ? OpenEntry(*id, *entry, *key) : std::nullopt;
+              if (opened && opened->node == listed.node) {
+                listed.id = opened->id;
+                listed.key = opened->key;
+                replacing = true;
+                break;
               }
             }
-            Send(request, std::move(collected), std::move(listed), replacing, 0);
+            Send(request, std::move(collected), std::move(listed), replacing, 0,
+                 /*favicons=*/true);
           },
           request, std::move(collected), std::move(listed)));
 }
@@ -669,9 +805,37 @@ class ShareOffer : public content::WebContentsUserData<ShareOffer>,
 
 WEB_CONTENTS_USER_DATA_KEY_IMPL(ShareOffer);
 
+// A share's answer opened, and its page, off the UI thread.
+struct Opening {
+  ShareOpened opened;
+  std::string page;
+};
+
+Opening OpenAndShow(std::string body, ShareLink link, std::string host) {
+  Opening opening;
+  opening.opened = OpenShare(base::as_byte_span(body), link);
+  if (opening.opened.snapshot) {
+    opening.page = SharePage(*opening.opened.snapshot, host);
+  }
+  return opening;
+}
+
+// Whether |navigation| is in a tab of the user's own, as bc_tab_answer_share says, where a link
+// opens as a share: not an agent's or a private window's.
+bool UsersTab(content::NavigationHandle& navigation) {
+  content::WebContents* contents = navigation.GetWebContents();
+  if (contents->GetBrowserContext()->IsOffTheRecord()) {
+    return false;
+  }
+  const Tab* tab = Tab::FromWebContents(contents);
+  const Space* space = tab ? Space::Holding(tab->id()) : nullptr;
+  return space && !space->agent() && !space->off_the_record();
+}
+
 // Looks at a navigation's answer for Ilo-Share: v1 at a link's address. Then the server's page
 // doesn't commit: the core asks for the share's data and commits a page of its own in its place,
-// as the ad block commits its warning.
+// as the ad block commits its warning. It holds nothing, and asks nothing of the tab, until it
+// sees that header.
 class ShareThrottle : public content::NavigationThrottle {
  public:
   explicit ShareThrottle(content::NavigationThrottleRegistry& registry)
@@ -684,12 +848,13 @@ class ShareThrottle : public content::NavigationThrottle {
       return PROCEED;
     }
     const GURL& url = navigation_handle()->GetURL();
-    link_ = ShareLinkOf(url);
-    if (!link_) {
+    std::optional<ShareLink> link = ShareLinkOf(url);
+    if (!link || !UsersTab(*navigation_handle())) {
       return PROCEED;
     }
-    host_ = url.host();
-    if (!Ask(url.Resolve(base::StrCat({"/s/", link_->id, "/data"})))) {
+    fetch_ = std::make_unique<Fetch>(*this, std::move(*link), url.host());
+    if (!fetch_->Ask(url.Resolve(base::StrCat({"/s/", fetch_->link().id, "/data"})))) {
+      fetch_.reset();
       return PROCEED;
     }
     return DEFER;
@@ -697,112 +862,134 @@ class ShareThrottle : public content::NavigationThrottle {
   const char* GetNameForLogging() override { return "browser_core::ShareThrottle"; }
 
  private:
-  bool Ask(const GURL& data) {
-    network::mojom::NetworkContext* network = navigation_handle()
-                                                  ->GetWebContents()
-                                                  ->GetBrowserContext()
-                                                  ->GetDefaultStoragePartition()
-                                                  ->GetNetworkContext();
-    if (!network) {
-      return false;
-    }
-    auto params = network::mojom::URLLoaderFactoryParams::New();
-    params->process_id = network::OriginatingProcessId::browser();
-    params->is_trusted = true;
-    params->is_orb_enabled = false;
-    // Its own, never the profile's, which could pick a client certificate or answer a sign-in for
-    // the user.
-    params->url_loader_network_observer = refuser_.Bind();
-    params->network_restrictions_id = network::GetNoOpNetworkRestrictionsId();
-    network->CreateURLLoaderFactory(factory_.BindNewPipeAndPassReceiver(), std::move(params));
+  // Asking for a share's data, from its link's server alone.
+  class Fetch {
+   public:
+    Fetch(ShareThrottle& throttle, ShareLink link, std::string host)
+        : throttle_(throttle), link_(std::move(link)), host_(std::move(host)) {}
 
-    auto request = std::make_unique<network::ResourceRequest>();
-    request->url = data;
-    request->method = net::HttpRequestHeaders::kGetMethod;
-    request->credentials_mode = network::mojom::CredentialsMode::kOmit;
-    request->referrer_policy = net::ReferrerPolicy::NO_REFERRER;
-    request->do_not_prompt_for_login = true;
-    // Nothing kept in the cache, and nothing shared with the user's browsing.
-    request->load_flags = net::LOAD_DISABLE_CACHE;
-    request->trusted_params = network::ResourceRequest::TrustedParams();
-    request->trusted_params->isolation_info = net::IsolationInfo::CreateTransient(std::nullopt);
-    loader_ = network::SimpleURLLoader::Create(std::move(request), kShareData);
-    // No cookie read or written. Unlike a link card's, a server on the machine or the network is
-    // asked: the link names it, and the user opened it.
-    loader_->SetURLLoaderFactoryOptions(network::mojom::kURLLoadOptionBlockAllCookies);
-    loader_->SetAllowHttpErrorResults(true);
-    // The link's own server answers, or nothing does.
-    loader_->SetOnRedirectCallback(
-        base::BindRepeating(&ShareThrottle::Redirected, weak_factory_.GetWeakPtr()));
-    loader_->DownloadToString(factory_.get(),
-                              base::BindOnce(&ShareThrottle::Answered, weak_factory_.GetWeakPtr()),
-                              kShareBlobCap);
-    timeout_.Start(FROM_HERE, kTimeout,
-                   base::BindOnce(&ShareThrottle::TimedOut, base::Unretained(this)));
-    return true;
-  }
+    const ShareLink& link() const { return link_; }
 
-  void TimedOut() { Commit(ShareRefusedPage(false, std::nullopt), "unanswered"); }
+    bool Ask(const GURL& data) {
+      network::mojom::NetworkContext* network = throttle_->navigation_handle()
+                                                    ->GetWebContents()
+                                                    ->GetBrowserContext()
+                                                    ->GetDefaultStoragePartition()
+                                                    ->GetNetworkContext();
+      if (!network) {
+        return false;
+      }
+      auto params = network::mojom::URLLoaderFactoryParams::New();
+      params->process_id = network::OriginatingProcessId::browser();
+      params->is_trusted = true;
+      params->is_orb_enabled = false;
+      // Its own, never the profile's, which could pick a client certificate or answer a sign-in
+      // for the user.
+      params->url_loader_network_observer = refuser_.Bind();
+      params->network_restrictions_id = network::GetNoOpNetworkRestrictionsId();
+      network->CreateURLLoaderFactory(factory_.BindNewPipeAndPassReceiver(), std::move(params));
 
-  void Redirected(const GURL& from,
-                  const net::RedirectInfo& redirect,
-                  const network::mojom::URLResponseHead& head,
-                  std::vector<std::string>* removed_headers) {
-    Commit(ShareRefusedPage(false, std::nullopt), "redirected");
-  }
+      auto request = std::make_unique<network::ResourceRequest>();
+      request->url = data;
+      request->method = net::HttpRequestHeaders::kGetMethod;
+      request->credentials_mode = network::mojom::CredentialsMode::kOmit;
+      request->referrer_policy = net::ReferrerPolicy::NO_REFERRER;
+      request->do_not_prompt_for_login = true;
+      // Nothing kept in the cache, and nothing shared with the user's browsing.
+      request->load_flags = net::LOAD_DISABLE_CACHE;
+      request->trusted_params = network::ResourceRequest::TrustedParams();
+      request->trusted_params->isolation_info = net::IsolationInfo::CreateTransient(std::nullopt);
+      loader_ = network::SimpleURLLoader::Create(std::move(request), kShareData);
+      // No cookie read or written. Unlike a link card's, a server on the machine or the network is
+      // asked: the link names it, and the user opened it.
+      loader_->SetURLLoaderFactoryOptions(network::mojom::kURLLoadOptionBlockAllCookies);
+      loader_->SetAllowHttpErrorResults(true);
+      // The link's own server answers, or nothing does.
+      loader_->SetOnRedirectCallback(
+          base::BindRepeating(&Fetch::Redirected, base::Unretained(this)));
+      loader_->DownloadToString(factory_.get(),
+                                base::BindOnce(&Fetch::Answered, base::Unretained(this)),
+                                kShareBlobCap);
+      timeout_.Start(FROM_HERE, kTimeout, base::BindOnce(&Fetch::TimedOut, base::Unretained(this)));
+      return true;
+    }
 
-  void Answered(std::optional<std::string> body) {
-    const network::mojom::URLResponseHead* head = loader_->ResponseInfo();
-    const int status = head && head->headers ? head->headers->response_code() : 0;
-    const int error = loader_->NetError();
-    if (status == 410) {
-      Commit(ShareRefusedPage(true, std::nullopt), "unshared");
-      return;
+   private:
+    // Each ends in the throttle's Commit, which deletes this, so nothing of this is touched after.
+    void TimedOut() { throttle_->Commit(ShareRefusedPage(false, std::nullopt), "unanswered"); }
+
+    void Redirected(const GURL& from,
+                    const net::RedirectInfo& redirect,
+                    const network::mojom::URLResponseHead& head,
+                    std::vector<std::string>* removed_headers) {
+      throttle_->Commit(ShareRefusedPage(false, std::nullopt), "redirected");
     }
-    if (error == net::ERR_INSUFFICIENT_RESOURCES) {
-      Commit(ShareRefusedPage(false, ShareRefusal::kTooBig), "too big");
-      return;
+
+    void Answered(std::optional<std::string> body) {
+      const network::mojom::URLResponseHead* head = loader_->ResponseInfo();
+      const int status = head && head->headers ? head->headers->response_code() : 0;
+      const int error = loader_->NetError();
+      loader_.reset();
+      if (status == 410) {
+        throttle_->Commit(ShareRefusedPage(true, std::nullopt), "unshared");
+        return;
+      }
+      if (error == net::ERR_INSUFFICIENT_RESOURCES) {
+        throttle_->Commit(ShareRefusedPage(false, ShareRefusal::kTooBig), "too big");
+        return;
+      }
+      // A link to a share the server never had was copied wrong.
+      if (status == 404) {
+        throttle_->Commit(ShareRefusedPage(false, ShareRefusal::kKey), "unknown");
+        return;
+      }
+      if (status != 200 || !body) {
+        throttle_->Commit(ShareRefusedPage(false, std::nullopt), "unanswered");
+        return;
+      }
+      // Opening a megabyte takes longer than a frame, so not on the UI thread. The timeout still
+      // runs meanwhile.
+      base::ThreadPool::PostTaskAndReplyWithResult(
+          FROM_HERE,
+          {base::TaskPriority::USER_BLOCKING, base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
+          base::BindOnce(&OpenAndShow, std::move(*body), link_, host_),
+          base::BindOnce(&Fetch::Opened, weak_factory_.GetWeakPtr()));
     }
-    // A link to a share the server never had was copied wrong.
-    if (status == 404) {
-      Commit(ShareRefusedPage(false, ShareRefusal::kKey), "unknown");
-      return;
+
+    void Opened(Opening opening) {
+      if (!opening.opened.snapshot) {
+        const ShareRefusal refusal = opening.opened.refusal;
+        throttle_->Commit(ShareRefusedPage(false, refusal),
+                         refusal == ShareRefusal::kTooBig  ? "too big"
+                         : refusal == ShareRefusal::kNewer ? "newer"
+                                                           : "key");
+        return;
+      }
+      content::NavigationHandle* navigation = throttle_->navigation_handle();
+      ShareOffer::Expect(navigation->GetWebContents(), navigation->GetNavigationId(),
+                         std::move(*opening.opened.snapshot), host_);
+      throttle_->Commit(std::move(opening.page), "shown");
     }
-    if (status != 200 || !body) {
-      Commit(ShareRefusedPage(false, std::nullopt), "unanswered");
-      return;
-    }
-    ShareOpened opened = OpenShare(base::as_byte_span(*body), *link_);
-    if (!opened.snapshot) {
-      Commit(ShareRefusedPage(false, opened.refusal),
-             opened.refusal == ShareRefusal::kTooBig  ? "too big"
-             : opened.refusal == ShareRefusal::kNewer ? "newer"
-                                                      : "key");
-      return;
-    }
-    std::string page = SharePage(*opened.snapshot, host_);
-    ShareOffer::Expect(navigation_handle()->GetWebContents(),
-                       navigation_handle()->GetNavigationId(), std::move(*opened.snapshot), host_);
-    Commit(std::move(page), "shown");
-  }
+
+    const raw_ref<ShareThrottle> throttle_;
+    const ShareLink link_;
+    const std::string host_;
+    NetworkRefuser refuser_;
+    mojo::Remote<network::mojom::URLLoaderFactory> factory_;
+    std::unique_ptr<network::SimpleURLLoader> loader_;
+    base::OneShotTimer timeout_;
+    base::WeakPtrFactory<Fetch> weak_factory_{this};
+  };
 
   // |said| is what the core's log says of it, which holds nothing of the share.
   void Commit(std::string page, const char* said) {
     LOG(ERROR) << "browser: share page " << said;
-    timeout_.Stop();
-    loader_.reset();
-    weak_factory_.InvalidateWeakPtrs();
+    fetch_.reset();
     // Last: the navigation, and this with it, can go here.
     CancelDeferredNavigation({CANCEL, net::ERR_BLOCKED_BY_CLIENT, std::move(page)});
   }
 
-  std::optional<ShareLink> link_;
-  std::string host_;
-  NetworkRefuser refuser_;
-  mojo::Remote<network::mojom::URLLoaderFactory> factory_;
-  std::unique_ptr<network::SimpleURLLoader> loader_;
-  base::OneShotTimer timeout_;
-  base::WeakPtrFactory<ShareThrottle> weak_factory_{this};
+  std::unique_ptr<Fetch> fetch_;
 };
 
 // Rows for |items| in |space|, in |folder| or outside every folder, from |index| on, each tab
@@ -840,7 +1027,7 @@ bool ShareCount(int kind,
                 size_t* tabs,
                 size_t* folders,
                 size_t* left_out) {
-  const std::optional<Collected> collected = Collect(kind, items, count);
+  const std::optional<Collected> collected = Collect(kind, items, count, /*favicons=*/false);
   if (!collected) {
     return false;
   }
@@ -858,7 +1045,7 @@ bool ShareCount(int kind,
 }
 
 uint64_t ShareMake(int kind, const bc_id* items, size_t count) {
-  std::optional<Collected> collected = Collect(kind, items, count);
+  std::optional<Collected> collected = Collect(kind, items, count, /*favicons=*/true);
   if (!collected) {
     return 0;
   }
@@ -885,7 +1072,8 @@ uint64_t ShareMake(int kind, const bc_id* items, size_t count) {
   listed.icon = collected->snapshot.icon;
   listed.shared_at = base::Time::Now().InMillisecondsFSinceUnixEpoch();
   if (listed.node.empty()) {
-    Send(request, std::move(*collected), std::move(listed), /*replacing=*/false, 0);
+    Send(request, std::move(*collected), std::move(listed), /*replacing=*/false, 0,
+         /*favicons=*/true);
   } else {
     SendForNode(request, std::move(*collected), std::move(listed));
   }
@@ -897,16 +1085,31 @@ void ShareList() {
 }
 
 void Unshare(const std::string& id) {
+  // No server has a link by another name.
   if (id.size() != kIdLength || !std::ranges::all_of(id, [](char c) {
         return base::IsAsciiAlphaNumeric(c) || c == '-' || c == '_';
       })) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&Unshared, id, BC_SHARE_PROBLEM_NONE));
+    return;
+  }
+  if (!sync::ShareServer().is_valid()) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&Unshared, id, BC_SHARE_PROBLEM_SIGNED_OUT));
     return;
   }
   sync::AskForShares("DELETE", base::StrCat({"/api/shares/", id}), std::string(),
-                     base::BindOnce([](int status, std::string body) {
-                       LOG(ERROR) << "browser: unshared, " << status;
-                       ShareList();
-                     }));
+                     base::BindOnce(
+                         [](std::string id, int status, std::string body) {
+                           // Gone already, as unshared on another device, is as asked.
+                           const bool gone = status == 200 || status == 204 || status == 404 ||
+                                             status == 410;
+                           Unshared(id, gone ? BC_SHARE_PROBLEM_NONE : ProblemOf(status));
+                           if (gone) {
+                             ShareList();
+                           }
+                         },
+                         id));
 }
 
 bc_id TabAnswerShare(bc_id tab, bc_id space_id, bool add) {
@@ -949,15 +1152,9 @@ bc_id TabAnswerShare(bc_id tab, bc_id space_id, bool add) {
 void AddShareThrottle(content::NavigationThrottleRegistry& registry) {
   content::NavigationHandle& navigation = registry.GetNavigationHandle();
   // The user's: typed, pasted, a link from another app, or one a page started on their gesture.
+  // Whose tab it is waits for a share's answer (UsersTab), as most navigations aren't one.
   if (!navigation.IsInPrimaryMainFrame() ||
       (navigation.IsRendererInitiated() && !navigation.HasUserGesture())) {
-    return;
-  }
-  content::WebContents* contents = navigation.GetWebContents();
-  const Tab* tab = Tab::FromWebContents(contents);
-  const Space* space = tab ? Space::Holding(tab->id()) : nullptr;
-  if (!space || space->agent() || space->off_the_record() ||
-      contents->GetBrowserContext()->IsOffTheRecord() || IsAgentTab(contents)) {
     return;
   }
   registry.AddThrottle(std::make_unique<ShareThrottle>(registry));

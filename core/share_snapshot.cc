@@ -35,6 +35,13 @@ ShareSnapshot& ShareSnapshot::operator=(const ShareSnapshot&) = default;
 ShareSnapshot& ShareSnapshot::operator=(ShareSnapshot&&) = default;
 ShareSnapshot::~ShareSnapshot() = default;
 
+SealedShare::SealedShare() = default;
+SealedShare::SealedShare(const SealedShare&) = default;
+SealedShare::SealedShare(SealedShare&&) = default;
+SealedShare& SealedShare::operator=(const SealedShare&) = default;
+SealedShare& SealedShare::operator=(SealedShare&&) = default;
+SealedShare::~SealedShare() = default;
+
 namespace {
 
 constexpr uint8_t kVersion = 1;
@@ -132,8 +139,9 @@ std::string Json(const ShareSnapshot& snapshot, bool favicons) {
   if (snapshot.color) {
     dict.Set("color", base::StringPrintf("#%06x", *snapshot.color & 0xffffff));
   }
-  if (!snapshot.icon.empty()) {
-    dict.Set("icon", Title(snapshot.icon));
+  // OpenShare drops a longer one.
+  if (!snapshot.icon.empty() && snapshot.icon.size() <= kShareIconCap) {
+    dict.Set("icon", snapshot.icon);
   }
   dict.Set("made", static_cast<double>(snapshot.made));
   dict.Set("items", ItemsValue(snapshot.items, favicons));
@@ -198,9 +206,28 @@ std::optional<std::string> Inflate(base::span<const uint8_t> in, bool* too_big) 
 
 // What reading the items found past the caps.
 struct Reading {
-  size_t tabs = 0;
+  // Tabs and folders together, so a snapshot of nothing but empty folders is capped as one of tabs.
+  size_t items = 0;
   bool too_big = false;
 };
+
+// Whether any tab in |items| has a favicon a snapshot keeps.
+bool AnyFavicon(const std::vector<ShareItem>& items) {
+  return std::ranges::any_of(items, [](const ShareItem& item) {
+    return item.folder ? AnyFavicon(item.items) : KeepsFavicon(item.favicon);
+  });
+}
+
+// How deep |items|' folders go: 0 for none, 1 for folders of tabs alone.
+int DepthOf(const std::vector<ShareItem>& items) {
+  int depth = 0;
+  for (const ShareItem& item : items) {
+    if (item.folder) {
+      depth = std::max(depth, 1 + DepthOf(item.items));
+    }
+  }
+  return depth;
+}
 
 std::vector<ShareItem> ReadItems(const base::ListValue* list, int depth, Reading& reading) {
   std::vector<ShareItem> items;
@@ -220,7 +247,7 @@ std::vector<ShareItem> ReadItems(const base::ListValue* list, int depth, Reading
       item.title = Title(*title);
     }
     if (const base::ListValue* inner = dict->FindList("items")) {
-      if (depth >= kShareDepthCap) {
+      if (depth >= kShareDepthCap || ++reading.items > kShareItemCap) {
         reading.too_big = true;
         break;
       }
@@ -238,7 +265,7 @@ std::vector<ShareItem> ReadItems(const base::ListValue* list, int depth, Reading
       continue;
     }
     item.url = ShareAddress(item.url);
-    if (++reading.tabs > kShareTabCap) {
+    if (++reading.items > kShareItemCap) {
       reading.too_big = true;
       break;
     }
@@ -399,11 +426,24 @@ GURL ShareAddress(const GURL& url) {
   return url.ReplaceComponents(replacements);
 }
 
-std::optional<std::vector<uint8_t>> SealShare(const ShareSnapshot& snapshot,
-                                              const ShareLink& link,
-                                              size_t cap) {
-  for (bool favicons : {true, false}) {
-    const std::optional<std::string> packed = Deflate(Json(snapshot, favicons));
+std::optional<SealedShare> SealShare(const ShareSnapshot& snapshot,
+                                     const ShareLink& link,
+                                     size_t cap,
+                                     bool favicons) {
+  const ShareCounts counts = CountShare(snapshot.items);
+  if (counts.tabs + counts.folders > kShareItemCap || DepthOf(snapshot.items) > kShareDepthCap) {
+    return std::nullopt;
+  }
+  for (bool with : {true, false}) {
+    if (with && (!favicons || !AnyFavicon(snapshot.items))) {
+      continue;
+    }
+    const std::string json = Json(snapshot, with);
+    // Addresses alike deflate to little, and OpenShare stops inflating at its cap.
+    if (json.size() > kShareInflatedCap) {
+      continue;
+    }
+    const std::optional<std::string> packed = Deflate(json);
     if (!packed) {
       return std::nullopt;
     }
@@ -415,12 +455,13 @@ std::optional<std::vector<uint8_t>> SealShare(const ShareSnapshot& snapshot,
     const std::vector<uint8_t> sealed =
         crypto::aead::Seal(crypto::aead::AES_256_GCM, link.key, base::as_byte_span(*packed), iv,
                            base::as_byte_span(AdditionalData(link)));
-    std::vector<uint8_t> blob;
-    blob.reserve(1 + kIvSize + sealed.size());
-    blob.push_back(kVersion);
-    blob.insert(blob.end(), iv.begin(), iv.end());
-    blob.insert(blob.end(), sealed.begin(), sealed.end());
-    return blob;
+    SealedShare made;
+    made.favicons = with;
+    made.blob.reserve(1 + kIvSize + sealed.size());
+    made.blob.push_back(kVersion);
+    made.blob.insert(made.blob.end(), iv.begin(), iv.end());
+    made.blob.insert(made.blob.end(), sealed.begin(), sealed.end());
+    return made;
   }
   return std::nullopt;
 }
@@ -475,7 +516,7 @@ ShareOpened OpenShare(base::span<const uint8_t> blob, const ShareLink& link) {
     }
   }
   // An emoji: a few characters at most.
-  if (const std::string* icon = dict->FindString("icon"); icon && icon->size() <= 32) {
+  if (const std::string* icon = dict->FindString("icon"); icon && icon->size() <= kShareIconCap) {
     snapshot.icon = *icon;
   }
   snapshot.made = static_cast<int64_t>(dict->FindDouble("made").value_or(0));

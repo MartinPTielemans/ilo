@@ -111,9 +111,10 @@ TEST(ShareSnapshot, WhatIsSealedOpensWithItsLink) {
   space.kind = BC_SHARE_SPACE;
   space.color = 0x5b6ad0;
   space.icon = "🔭";
-  const std::optional<std::vector<uint8_t>> blob = SealShare(space, link, kShareBlobCap);
-  ASSERT_TRUE(blob);
-  const ShareOpened opened = OpenShare(*blob, link);
+  const std::optional<SealedShare> sealed = SealShare(space, link, kShareBlobCap);
+  ASSERT_TRUE(sealed);
+  EXPECT_TRUE(sealed->favicons);
+  const ShareOpened opened = OpenShare(sealed->blob, link);
   ASSERT_TRUE(opened.snapshot);
   const ShareSnapshot& snapshot = *opened.snapshot;
   EXPECT_EQ(snapshot.kind, BC_SHARE_SPACE);
@@ -132,7 +133,7 @@ TEST(ShareSnapshot, WhatIsSealedOpensWithItsLink) {
 
 TEST(ShareSnapshot, AnotherKeyAnotherIdOrAChangedByteOpensNothing) {
   const ShareLink link = NewShareLink();
-  const std::vector<uint8_t> blob = *SealShare(Lisbon(), link, kShareBlobCap);
+  const std::vector<uint8_t> blob = SealShare(Lisbon(), link, kShareBlobCap)->blob;
 
   ShareLink key = link;
   key.key[0] ^= 1;
@@ -174,7 +175,7 @@ TEST(ShareSnapshot, ASmallBlobThatInflatesPastTheCapIsRefused) {
   EXPECT_EQ(OpenShare(blob, link).refusal, ShareRefusal::kTooBig);
 }
 
-TEST(ShareSnapshot, AtMostTheCapsTabsAndDepth) {
+TEST(ShareSnapshot, AtMostTheCapsTabsAndFoldersAndDepth) {
   const ShareLink link = NewShareLink();
   auto tabs = [](size_t count) {
     std::string items = "[";
@@ -184,9 +185,31 @@ TEST(ShareSnapshot, AtMostTheCapsTabsAndDepth) {
     }
     return items + "]";
   };
-  EXPECT_TRUE(OpenShare(RawBlob(Snapshot(tabs(kShareTabCap)), link), link).snapshot);
-  EXPECT_EQ(OpenShare(RawBlob(Snapshot(tabs(kShareTabCap + 1)), link), link).refusal,
+  EXPECT_TRUE(OpenShare(RawBlob(Snapshot(tabs(kShareItemCap)), link), link).snapshot);
+  EXPECT_EQ(OpenShare(RawBlob(Snapshot(tabs(kShareItemCap + 1)), link), link).refusal,
             ShareRefusal::kTooBig);
+
+  // Folders count with tabs: a few kilobytes of empty folders would otherwise open as a page of
+  // megabytes, and add as that many folders.
+  auto folders = [](size_t count) {
+    std::string items = "[";
+    for (size_t i = 0; i < count; ++i) {
+      base::StrAppend(&items, {i ? "," : "", R"({"items":[]})"});
+    }
+    return items + "]";
+  };
+  const std::vector<uint8_t> empty = RawBlob(Snapshot(folders(200000)), link);
+  EXPECT_LT(empty.size(), 64u * 1024);
+  EXPECT_EQ(OpenShare(empty, link).refusal, ShareRefusal::kTooBig);
+  EXPECT_TRUE(OpenShare(RawBlob(Snapshot(folders(kShareItemCap)), link), link).snapshot);
+  EXPECT_EQ(OpenShare(RawBlob(Snapshot(folders(kShareItemCap + 1)), link), link).refusal,
+            ShareRefusal::kTooBig);
+  // Half the cap of tabs and one past half of folders, in one list.
+  const std::string half = tabs(kShareItemCap / 2);
+  const std::string more = folders(kShareItemCap / 2 + 1);
+  const std::string mixed =
+      base::StrCat({half.substr(0, half.size() - 1), ",", more.substr(1)});
+  EXPECT_EQ(OpenShare(RawBlob(Snapshot(mixed), link), link).refusal, ShareRefusal::kTooBig);
 
   auto nested = [](int depth) {
     std::string items = R"([{"title":"t","url":"https://a.example/"}])";
@@ -235,7 +258,7 @@ TEST(ShareSnapshot, OnlyASmallPngIsAFavicon) {
   snapshot.items.back().favicon = Png(kShareFaviconCap + 1);
   snapshot.items.push_back(Tab("svg", "https://c.example/"));
   snapshot.items.back().favicon = "<svg onload=alert(1)>";
-  const ShareOpened opened = OpenShare(*SealShare(snapshot, link, kShareBlobCap), link);
+  const ShareOpened opened = OpenShare(SealShare(snapshot, link, kShareBlobCap)->blob, link);
   ASSERT_TRUE(opened.snapshot);
   EXPECT_EQ(opened.snapshot->items[0].favicon, Png());
   EXPECT_TRUE(opened.snapshot->items[1].favicon.empty());
@@ -254,13 +277,76 @@ TEST(ShareSnapshot, FaviconsGoFirstWhenALinkWouldBeTooBig) {
         Tab("t", base::StrCat({"https://a.example/", base::NumberToString(i)})));
     snapshot.items.back().favicon = Png(1000);
   }
-  const size_t with = SealShare(snapshot, link, kShareBlobCap)->size();
-  const std::optional<std::vector<uint8_t>> without = SealShare(snapshot, link, with - 1);
+  const size_t with = SealShare(snapshot, link, kShareBlobCap)->blob.size();
+  const std::optional<SealedShare> without = SealShare(snapshot, link, with - 1);
   ASSERT_TRUE(without);
-  for (const ShareItem& item : OpenShare(*without, link).snapshot->items) {
+  EXPECT_FALSE(without->favicons);
+  for (const ShareItem& item : OpenShare(without->blob, link).snapshot->items) {
     EXPECT_TRUE(item.favicon.empty());
   }
   EXPECT_FALSE(SealShare(snapshot, link, 64));
+
+  // As when the server said a link was too big for it.
+  const std::optional<SealedShare> asked = SealShare(snapshot, link, kShareBlobCap, false);
+  ASSERT_TRUE(asked);
+  EXPECT_FALSE(asked->favicons);
+  EXPECT_LT(asked->blob.size(), with);
+
+  ShareSnapshot plain;
+  plain.items.push_back(Tab("t", "https://a.example/"));
+  EXPECT_FALSE(SealShare(plain, link, kShareBlobCap)->favicons);
+}
+
+// What SealShare makes OpenShare opens: past a cap OpenShare has, SealShare makes nothing, which
+// the core tells the app as BC_SHARE_PROBLEM_TOO_BIG.
+TEST(ShareSnapshot, ALinkIloMakesOpensInIlo) {
+  const ShareLink link = NewShareLink();
+  auto opens = [&](const ShareSnapshot& snapshot) {
+    const std::optional<SealedShare> sealed = SealShare(snapshot, link, kShareBlobCap);
+    return sealed && OpenShare(sealed->blob, link).snapshot.has_value();
+  };
+  auto seals = [&](const ShareSnapshot& snapshot) {
+    return SealShare(snapshot, link, kShareBlobCap).has_value();
+  };
+
+  ShareSnapshot many;
+  for (size_t i = 0; i < kShareItemCap - 1; ++i) {
+    many.items.push_back(Tab("t", base::StrCat({"https://a.example/", base::NumberToString(i)})));
+  }
+  many.items.push_back(Folder("f", {}));
+  EXPECT_TRUE(opens(many));
+  many.items.push_back(Folder("g", {}));
+  EXPECT_FALSE(seals(many));
+
+  auto nested = [](int depth) {
+    std::vector<ShareItem> items = {Tab("t", "https://a.example/")};
+    for (int i = 0; i < depth; ++i) {
+      items = {Folder("f", std::move(items))};
+    }
+    ShareSnapshot snapshot;
+    snapshot.items = std::move(items);
+    return snapshot;
+  };
+  EXPECT_TRUE(opens(nested(kShareDepthCap)));
+  EXPECT_FALSE(seals(nested(kShareDepthCap + 1)));
+
+  // Long addresses alike deflate well under the blob's cap but inflate past the snapshot's.
+  ShareSnapshot long_addresses;
+  const std::string path(kShareAddressCap - 64, 'p');
+  for (size_t i = 0; long_addresses.items.size() * path.size() <= kShareInflatedCap; ++i) {
+    long_addresses.items.push_back(
+        Tab("t", base::StrCat({"https://a.example/", base::NumberToString(i), "/", path})));
+  }
+  EXPECT_FALSE(seals(long_addresses));
+  long_addresses.items.resize(long_addresses.items.size() / 2);
+  EXPECT_TRUE(opens(long_addresses));
+
+  // A Space's icon past an emoji's few characters goes without it, as OpenShare drops it.
+  ShareSnapshot space = Lisbon();
+  space.icon = std::string(kShareIconCap + 1, 'x');
+  const std::optional<SealedShare> sealed = SealShare(space, link, kShareBlobCap);
+  ASSERT_TRUE(sealed);
+  EXPECT_EQ(OpenShare(sealed->blob, link).snapshot->icon, "");
 }
 
 TEST(ShareSnapshot, ThePageEscapesWhatItShowsAndLinksOnlyHttp) {

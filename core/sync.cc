@@ -166,10 +166,12 @@ constexpr net::NetworkTrafficAnnotationTag kShares =
         sender: "Share links"
         description:
           "Sends the account's server a snapshot of a folder, a Space or tabs the user shares as a "
-          "link, sealed with a key that stays in the link, so the server can't read it; lists the "
-          "account's links for Settings; and unshares one."
+          "link, sealed with the link's key; lists the account's links for Settings; and unshares "
+          "one. The link's key goes to the server only inside the link's list entry, sealed under "
+          "a key derived from the account's secret, which the server doesn't have, so the server "
+          "reads neither the snapshot nor the key."
         trigger:
-          "The user shares a folder, a Space or tabs, opens Settings › Account's Shared Links, or "
+          "The user shares a folder, a Space or tabs, opens Settings › Sync's Shared Links, or "
           "unshares a link."
         data:
           "The sealed snapshot and its sealed list entry, the link's id, and the access token."
@@ -178,9 +180,13 @@ constexpr net::NetworkTrafficAnnotationTag kShares =
       }
       policy {
         cookies_allowed: NO
-        setting: "Sharing needs an account: Settings › Account: Sign Out."
+        setting: "Sharing needs an account: Settings › Sync: Sign Out."
         policy_exception_justification: "Only on the user's own request, while signed in."
       })");
+
+// How long the account's server has to answer a request, so a stalled one ends as one the server
+// couldn't take, and what waits on it, a share or an unshare, hears so.
+constexpr base::TimeDelta kAccountTimeout = base::Seconds(30);
 
 std::string Base64Url(base::span<const uint8_t> bytes) {
   std::string encoded;
@@ -1163,6 +1169,7 @@ class Account : public syncer::SyncServiceObserver,
       (*it)->AttachStringForUpload(form, content_type);
     }
     (*it)->SetAllowHttpErrorResults(true);
+    (*it)->SetTimeoutDuration(kAccountTimeout);
     (*it)->DownloadToString(
         g_browser_process->shared_url_loader_factory().get(),
         base::BindOnce(&Account::FetchDone, weak_factory_.GetWeakPtr(), it, std::move(done)),
@@ -1199,6 +1206,7 @@ class Account : public syncer::SyncServiceObserver,
       (*it)->AttachStringForUpload(json, "application/json");
     }
     (*it)->SetAllowHttpErrorResults(true);
+    (*it)->SetTimeoutDuration(kAccountTimeout);
     // A blob of 1 MiB is 1.4 MiB in base64, and the list holds an entry for each of the account's
     // links.
     (*it)->DownloadToString(

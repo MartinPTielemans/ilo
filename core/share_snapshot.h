@@ -25,16 +25,18 @@
 
 namespace browser_core {
 
-// What the core takes from a server, as the header says, and what it puts in a link: the blob it
-// asks for, the snapshot inflated, its tabs and how deep its folders go, a title's bytes, cut at a
-// character, an address's, past which its tab is left out, and a favicon's, past which it is.
+// What the core takes from a server, as the header says, and what it puts in a link, so a link ilo
+// makes opens in ilo: the blob it asks for, the snapshot inflated, its tabs and folders together
+// and how deep its folders go, a title's bytes, cut at a character, an address's, past which its
+// tab is left out, a favicon's, past which it is, and a Space's icon's, an emoji's few characters.
 inline constexpr size_t kShareBlobCap = 1 << 20;
 inline constexpr size_t kShareInflatedCap = 4 << 20;
-inline constexpr size_t kShareTabCap = 5000;
+inline constexpr size_t kShareItemCap = 5000;
 inline constexpr int kShareDepthCap = 8;
 inline constexpr size_t kShareTitleCap = 1024;
 inline constexpr size_t kShareAddressCap = 8 * 1024;
 inline constexpr size_t kShareFaviconCap = 4 * 1024;
+inline constexpr size_t kShareIconCap = 32;
 
 // A tab, or a folder with |items|, in a snapshot.
 struct ShareItem {
@@ -101,15 +103,31 @@ ShareCounts CountShare(const std::vector<ShareItem>& items);
 bool ShareTakes(const GURL& url);
 GURL ShareAddress(const GURL& url);
 
-// |snapshot| sealed for |link|, at most |cap| bytes: with every favicon if it fits, else with none,
-// else nothing.
-std::optional<std::vector<uint8_t>> SealShare(const ShareSnapshot& snapshot,
-                                              const ShareLink& link,
-                                              size_t cap);
+// A sealed snapshot, and whether its favicons are in it.
+struct SealedShare {
+  SealedShare();
+  SealedShare(const SealedShare&);
+  SealedShare(SealedShare&&);
+  SealedShare& operator=(const SealedShare&);
+  SealedShare& operator=(SealedShare&&);
+  ~SealedShare();
+
+  std::vector<uint8_t> blob;
+  bool favicons = false;
+};
+
+// |snapshot| sealed for |link|, at most |cap| bytes: with every favicon if |favicons| and it fits,
+// else with none, else nothing. Nothing too when it's past what OpenShare takes: over
+// kShareItemCap tabs and folders, folders deeper than kShareDepthCap, or over kShareInflatedCap
+// inflated. Seconds for thousands of tabs, so off the UI thread.
+std::optional<SealedShare> SealShare(const ShareSnapshot& snapshot,
+                                     const ShareLink& link,
+                                     size_t cap,
+                                     bool favicons = true);
 
 // Why a blob doesn't open, for the page that says so.
 enum class ShareRefusal {
-  // Over a cap: the blob, the snapshot inflated, its tabs or its depth.
+  // Over a cap: the blob, the snapshot inflated, its tabs and folders, or its depth.
   kTooBig,
   // A version, or a shape, the core doesn't read.
   kNewer,
@@ -118,7 +136,8 @@ enum class ShareRefusal {
 };
 
 // Opens |blob|, a server's answer for |link|, under the caps: titles are cut, and tabs at an
-// address the snapshot can't hold, and favicons that aren't a small PNG, are left out.
+// address the snapshot can't hold, and favicons that aren't a small PNG, are left out. Off the UI
+// thread, as SealShare.
 struct ShareOpened {
   std::optional<ShareSnapshot> snapshot;
   ShareRefusal refusal = ShareRefusal::kKey;
