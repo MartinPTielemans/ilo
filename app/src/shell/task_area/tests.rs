@@ -535,6 +535,43 @@ fn a_press_in_the_agents_page_takes_it_over_and_hand_back_gives_it_back(cx: &mut
     );
 }
 
+/// Whose tab it is decides, not where the agent acted last (#3503): a press in the tab it acted in
+/// last takes it over, which ends its session there, and a press in the other tab of its split view
+/// then takes that one over too. A press on a tab's dialog comes as a press in its tab.
+#[gpui::test]
+fn a_press_takes_over_each_of_the_agents_tabs_after_the_one_it_acted_in(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    watching(&shell, &host, cx);
+    let status = |held: Vec<(u64, SharedString)>| {
+        vec![Status {
+            agent: "task-1".into(),
+            name: "Claude".into(),
+            space: 3,
+            doing: "Typed · flights.example".into(),
+            held,
+        }]
+    };
+    shell.update(cx, |shell, cx| {
+        shell.set_agent_status(status(Vec::new()), cx);
+        shell.agent_acted("task-1".into(), 31, cx);
+    });
+    host.take();
+    shell.update(cx, |shell, cx| shell.page_pressed(31, cx));
+    assert_eq!(host.take(), ["take over task-1 31"]);
+    // The core ends the agent's session in the tab taken over, where it acted last.
+    shell.update(cx, |shell, cx| {
+        shell.agent_session_ended("task-1", 31, cx);
+        shell.set_agent_status(status(vec![(31, "".into())]), cx);
+    });
+    host.take();
+    shell.update(cx, |shell, cx| shell.page_pressed(30, cx));
+    assert_eq!(
+        host.take(),
+        ["take over task-1 30"],
+        "a press in the agent's other tab took nothing once the tab it acted in last was taken over"
+    );
+}
+
 /// ⌘↩ reaches the strip before the agent's page does, as ⌘. does, so a form in the page can't
 /// keep it as its own Send (#1080): Take Over while the agent drives, Hand Back once the user
 /// holds the page. Without an agent's page, and from the UI's keys, where the command bar's ⌘↩

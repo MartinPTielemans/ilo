@@ -2913,6 +2913,34 @@ fn the_user_takes_over_and_stops_an_agent(cx: &mut TestAppContext) {
     assert_eq!(log(&agents, "claude-code", cx)[0].0, "stopped by the user");
 }
 
+/// An agent has a status while its session lasts, for the bar in its Space and for a press in any
+/// of its tabs, which takes that tab over. Once its last session ends it has none: its tabs are the
+/// user's, with nothing to hand back to (#3503).
+#[gpui::test]
+fn an_agent_whose_session_ended_has_no_status(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+    assert!(!page_done(&agents, &browser, answer, shop_tree(), cx).error);
+    let status = agents.read_with(cx, |agents, _| agents.status());
+    assert_eq!(
+        status
+            .iter()
+            .map(|status| &status.agent)
+            .collect::<Vec<_>>(),
+        ["claude-code"]
+    );
+
+    let bye = Event::Bye {
+        agent: "claude-code".into(),
+    };
+    agents.update(cx, |agents, cx| agents.handle(bye, cx));
+    let status = agents.read_with(cx, |agents, _| agents.status());
+    assert!(
+        status.is_empty(),
+        "an agent whose session ended kept a status: {status:?}"
+    );
+}
+
 /// A tab the user took over stays theirs: the agent's calls on it are refused until it asks with
 /// ask_for_tab and the user hands it back. Keep refuses, and the tab stays the user's.
 #[gpui::test]
