@@ -12,11 +12,11 @@ use std::{
 use web_time::Instant;
 
 use gpui::{
-    AnyElement, Bounds, ClickEvent, Context, DispatchPhase, Div, DragMoveEvent, Entity, Focusable,
-    FontWeight, HitboxBehavior, Hsla, Image, ListAlignment, ListState, Modifiers, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, Point, RenderImage, Role,
-    SharedString, Stateful, StyledText, Subscription, WeakEntity, Window, canvas, div, img,
-    linear_color_stop, linear_gradient, list, prelude::*, px, relative, svg,
+    AnyElement, App, Bounds, ClickEvent, Context, DispatchPhase, Div, DragMoveEvent, Entity,
+    Focusable, FontWeight, HitboxBehavior, Hsla, Image, ListAlignment, ListState, Modifiers,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, Point,
+    RenderImage, Role, SharedString, Stateful, StyledText, Subscription, WeakEntity, Window,
+    canvas, div, img, linear_color_stop, linear_gradient, list, prelude::*, px, relative, svg,
 };
 
 use super::{
@@ -1716,8 +1716,6 @@ impl Shell {
         );
     }
 
-    /// The line a section's list holds while it has nothing to list: what fills it, or with a
-    /// search, that nothing matches.
     /// The empty Boards list's way to make its first Board (#3575): New Board, as its key and the
     /// + menu run it, with that key beside it as a menu row shows one. Tab reaches it from the
     /// search field, and a screen reader reads its name without the key.
@@ -1748,11 +1746,14 @@ impl Shell {
         .size_full();
         let label = div()
             .flex()
-            .items_baseline()
+            .items_start()
+            .line_height(px(crate::tokens::shell::permission::LINE))
             .gap(px(crate::tokens::menu::GAP))
             .child("New Board")
             .child(
                 div()
+                    .relative()
+                    .top(key_drop(cx))
                     .font_weight(FontWeight::NORMAL)
                     .text_size(px(text::SMALL))
                     .text_color(self.palette.text(SECONDARY))
@@ -1776,6 +1777,8 @@ impl Shell {
             .child(self.stop(button, "New Board".into()))
     }
 
+    /// The line a section's list holds while it has nothing to list: what fills it, or with a
+    /// search, that nothing matches.
     fn empty_line(&self, section: Section, unsearched: bool) -> &'static str {
         let tasks = self.archive_only() == Only::Tasks;
         match (section, unsearched) {
@@ -4421,6 +4424,22 @@ pub(super) fn of(received: i64, total: i64) -> String {
         true => format!("{} of {}", bytes(received), bytes(total)),
         false => bytes(received),
     }
+}
+
+/// How far the New Board button's key drops below the top of its label's line for the two to
+/// share a baseline, as a menu row's label and key do. GPUI's text gives the layout no baseline,
+/// so `items_baseline` lines up the two boxes' bottoms, and each line centres its own glyphs: the
+/// smaller key sat a point below the label's baseline.
+fn key_drop(cx: &App) -> Pixels {
+    let system = cx.text_system();
+    let baseline = |size: f32, weight: FontWeight| {
+        let font = system.resolve_font(&gpui::Font {
+            weight,
+            ..gpui::font(crate::face::UI)
+        });
+        system.baseline_offset(font, px(size), px(crate::tokens::shell::permission::LINE))
+    };
+    baseline(text::BODY, FontWeight::MEDIUM) - baseline(text::SMALL, FontWeight::NORMAL)
 }
 
 #[cfg(test)]
