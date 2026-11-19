@@ -1328,6 +1328,10 @@ impl Browser for Engine {
         shell::FavoritesScope::from_core(unsafe { bc::bc_favorites_scope() })
     }
 
+    fn keeps_passkeys(&self) -> bool {
+        crate::platform::keeps_passkeys()
+    }
+
     fn context_menu(
         &self,
         items: Vec<MenuEntry>,
