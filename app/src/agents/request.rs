@@ -13,8 +13,11 @@ use super::page::clip;
 pub const MAX: usize = 20;
 /// The most a request's body may be, in bytes.
 pub const MAX_BODY: usize = 1 << 20;
-/// The changes a question lists; it counts the rest.
-pub const LISTED: usize = 3;
+/// The most of a `what` the tool takes, once it's plain text: a sentence, not a page.
+pub const WHAT_MOST: usize = 500;
+/// The most of a `what` the question's card shows, ended at a word: one plain sentence naming the
+/// thing and the change fits, and at the sidebar's least width Deny and Allow stay in view.
+pub const WHAT_SHOWN: usize = 120;
 /// The characters of an answer's body the agent reads at most, and of all a call's together.
 const SHOWN: usize = 20_000;
 pub const ALL_SHOWN: usize = 100_000;
@@ -37,9 +40,58 @@ pub struct Request {
     pub path: String,
     pub headers: Vec<(String, String)>,
     pub body: String,
+    /// The agent's own sentence for what it does, as plain text (`plain`), or "" for a read.
+    pub what: String,
+}
+
+/// What a change does, as the browser knows it from the method alone, word for word: it never
+/// reads a meaning into the path or the body.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Does {
+    Sends,
+    Changes,
+    Deletes,
+}
+
+impl Does {
+    /// The card's facts line for one change: "Changes something on tracker.example".
+    pub fn facts(self, site: &str) -> String {
+        match self {
+            Does::Sends => format!("Sends data to {site}"),
+            Does::Changes => format!("Changes something on {site}"),
+            Does::Deletes => format!("Deletes something on {site}"),
+        }
+    }
+
+    /// The facts of one of several changes, whose site the card names once.
+    pub fn short_facts(self) -> &'static str {
+        match self {
+            Does::Sends => "Sends data",
+            Does::Changes => "Changes something",
+            Does::Deletes => "Deletes something",
+        }
+    }
+
+    /// What a task's card says it waits on: "a change".
+    pub fn noun(self) -> &'static str {
+        match self {
+            Does::Sends => "data to send",
+            Does::Changes => "a change",
+            Does::Deletes => "a delete",
+        }
+    }
 }
 
 impl Request {
+    /// What it does, from its method, or the one an override header names.
+    pub fn kind(&self) -> Does {
+        match self.does.as_str() {
+            "DELETE" => Does::Deletes,
+            "PUT" | "PATCH" => Does::Changes,
+            _ => Does::Sends,
+        }
+    }
+
     /// Whether it may change anything: anything but a GET or HEAD that's just that.
     pub fn changes(&self) -> bool {
         !matches!(self.does.as_str(), "GET" | "HEAD")
@@ -48,16 +100,6 @@ impl Request {
     /// What it is, for the log and the answer: "POST /api/items".
     pub fn target(&self) -> String {
         format!("{} {}", self.does, clip(&self.path, 60))
-    }
-
-    /// What it is, short enough for a line of the question: "MERGE /_api/…/items(1)".
-    pub fn line(&self) -> String {
-        format!("{} {}", self.does, short(&self.path))
-    }
-
-    /// What its body sends, in a line for the question, or "".
-    pub fn summary(&self) -> String {
-        summary(&self.body)
     }
 
     /// What its body sends, a line a field, for the activity log (#2326).
@@ -271,10 +313,12 @@ pub fn parse(arguments: &Value, page: &str) -> Result<Vec<Request>, Wrong> {
             "requests is 1 to {MAX} requests, each with a method and a path."
         ))
     })?;
-    asked.iter().map(|asked| one(asked, &origin)).collect()
+    (asked.iter().enumerate())
+        .map(|(at, asked)| one(asked, &origin, at + 1))
+        .collect()
 }
 
-fn one(asked: &Value, origin: &str) -> Result<Request, Wrong> {
+fn one(asked: &Value, origin: &str, number: usize) -> Result<Request, Wrong> {
     let malformed = |why: &str| Err(Wrong::Malformed(why.into()));
     let text = |name: &str| asked.get(name).and_then(Value::as_str).map(str::trim);
     let method = text("method").unwrap_or_default().to_ascii_uppercase();
@@ -349,6 +393,32 @@ fn one(asked: &Value, origin: &str) -> Result<Request, Wrong> {
         .map(|(_, value)| value.to_ascii_uppercase())
         .filter(|does| is_token(does))
         .unwrap_or_else(|| method.clone());
+    // The user reads the agent's own words for a change before they allow it, so a change has them;
+    // a read never asks, and keeps none.
+    let what = match asked.get("what") {
+        None | Some(Value::Null) => String::new(),
+        Some(Value::String(what)) => plain(what),
+        Some(_) => return malformed("`what` is a string: one plain sentence."),
+    };
+    let what = match matches!(does.as_str(), "GET" | "HEAD") {
+        true => String::new(),
+        false if what.is_empty() => {
+            return Err(Wrong::Malformed(format!(
+                "Request {number} ({does} {}) may change something, so it needs a `what`: one plain \
+                 sentence saying what it will do, for the user to read before they allow it. \
+                 Nothing was sent.",
+                short(&path)
+            )));
+        }
+        false if what.chars().count() > WHAT_MOST => {
+            return Err(Wrong::Malformed(format!(
+                "Request {number}'s `what` is {} characters; give one plain sentence of {WHAT_MOST} \
+                 at most. Nothing was sent.",
+                what.chars().count()
+            )));
+        }
+        false => what,
+    };
     Ok(Request {
         method,
         does,
@@ -356,7 +426,45 @@ fn one(asked: &Value, origin: &str) -> Result<Request, Wrong> {
         path,
         headers,
         body,
+        what,
     })
+}
+
+/// An agent's sentence as plain text in one paragraph, wherever it's shown, so it can't lay out
+/// lines that read as the browser's own under its quote: line breaks, tabs and other control
+/// characters become a space, direction overrides and invisible format characters go, and runs of
+/// spaces become one.
+pub fn plain(text: &str) -> String {
+    let invisible = |c: char| {
+        matches!(c,
+            '\u{AD}' | '\u{34F}' | '\u{61C}' | '\u{115F}' | '\u{1160}' | '\u{17B4}' | '\u{17B5}'
+            | '\u{180B}'..='\u{180F}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{206F}' | '\u{3164}' | '\u{FE00}'..='\u{FE0F}' | '\u{FEFF}'
+            | '\u{FFA0}' | '\u{FFF0}'..='\u{FFFB}' | '\u{1BCA0}'..='\u{1BCA3}'
+            | '\u{1D173}'..='\u{1D17A}' | '\u{E0000}'..='\u{E0FFF}')
+    };
+    let spaced = (text.chars())
+        .filter(|c| !invisible(*c))
+        .map(|c| match c.is_control() || c.is_whitespace() {
+            true => ' ',
+            false => c,
+        })
+        .collect::<String>();
+    spaced
+        .split(' ')
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// A sentence as the question's card shows it: whole up to WHAT_SHOWN, else ended at a word, "…".
+pub fn shown(what: &str) -> String {
+    if what.chars().count() <= WHAT_SHOWN {
+        return what.to_string();
+    }
+    let cut: String = what.chars().take(WHAT_SHOWN - 1).collect();
+    let end = cut.rfind(' ').filter(|end| *end > 0).unwrap_or(cut.len());
+    format!("{}…", cut[..end].trim_end_matches([',', ';', ':', ' ']))
 }
 
 /// The origin of an http(s) address, as "https://host[:port]" in lower case without a default
@@ -497,38 +605,6 @@ fn short(path: &str) -> String {
         short.push_str("?…");
     }
     clip(&short, SHORT + 8)
-}
-
-/// A body in a line: a JSON object's fields as "name: value", without the metadata a service
-/// adds, and anything else's first line.
-fn summary(body: &str) -> String {
-    const LINE: usize = 60;
-    let body = body.trim();
-    if body.is_empty() {
-        return String::new();
-    }
-    match serde_json::from_str::<Value>(body) {
-        Ok(Value::Object(fields)) => {
-            let metadata = |name: &str| {
-                name.starts_with("__") || name.starts_with('@') || name.starts_with("odata.")
-            };
-            let fields = fields.iter().filter(|(name, _)| !metadata(name));
-            let fields = fields.map(|(name, value)| match value {
-                Value::String(text) => format!("{name}: {}", clip(text, 24)),
-                Value::Array(_) | Value::Object(_) => format!("{name}: …"),
-                value => format!("{name}: {value}"),
-            });
-            clip(&fields.collect::<Vec<_>>().join(", "), LINE)
-        }
-        Ok(Value::Array(items)) => format!("a list of {}", items.len()),
-        _ => {
-            let first = body.lines().next().unwrap_or_default();
-            clip(
-                &first.split_whitespace().collect::<Vec<_>>().join(" "),
-                LINE,
-            )
-        }
-    }
 }
 
 /// The core's answer to a request (bc_agent_response).
@@ -947,7 +1023,9 @@ mod tests {
     #[test]
     fn the_browsers_headers_and_credentials_are_refused() {
         let with = |name: &str, value: &str| {
-            parsed(json!([{ "method": "POST", "path": "/a", "headers": { name: value } }]))
+            let asked = json!([{ "method": "POST", "path": "/a", "headers": { name: value },
+                                 "what": "Add an item." }]);
+            parsed(asked)
         };
         let refused = [
             "Cookie",
@@ -987,13 +1065,13 @@ mod tests {
         let item = json!({ "__metadata": { "type": "x" }, "Status": "Closed" });
         let asked = json!([
             { "method": "POST", "path": "/_api/web/lists/getbytitle('Tasks')/items(1)",
-              "headers": { "X-HTTP-Method": "merge" }, "body": item },
-            { "method": "GET", "path": "/a", "headers": { "X-HTTP-Method-Override": "DELETE" } },
+              "headers": { "X-HTTP-Method": "merge" }, "body": item, "what": "Close task 1." },
+            { "method": "GET", "path": "/a", "headers": { "X-HTTP-Method-Override": "DELETE" },
+              "what": "Delete a." },
             { "method": "HEAD", "path": "/a" },
         ]);
         let sent = parsed(asked).unwrap();
-        assert_eq!(sent[0].line(), "MERGE /_api/…/items(1)");
-        assert_eq!(sent[0].summary(), "Status: Closed");
+        assert_eq!(sent[0].does, "MERGE");
         assert_eq!(sent[0].headers.last().unwrap().1, "application/json");
         assert!(sent[1].changes() && sent[1].does == "DELETE" && sent[1].method == "GET");
         assert!(!sent[2].changes());
@@ -1003,11 +1081,13 @@ mod tests {
     #[test]
     fn bodies_are_typed_as_a_pages_fetch_types_them() {
         let form = json!({ "Content-Type": "application/x-www-form-urlencoded" });
-        let asked = json!([{ "method": "PUT", "path": "/a", "body": "a=1&b=2", "headers": form }]);
+        let asked = json!([{ "method": "PUT", "path": "/a", "body": "a=1&b=2", "headers": form,
+                             "what": "Set a and b." }]);
         let sent = parsed(asked).unwrap();
         assert_eq!(sent[0].body, "a=1&b=2");
         assert_eq!(sent[0].headers.len(), 1);
-        let text = parsed(json!([{ "method": "POST", "path": "/a", "body": "hi" }])).unwrap();
+        let text = json!([{ "method": "POST", "path": "/a", "body": "hi", "what": "Say hi." }]);
+        let text = parsed(text).unwrap();
         assert_eq!(text[0].headers[0].1, "text/plain;charset=UTF-8");
         let get = parsed(json!([{ "method": "GET", "path": "/a", "body": "hi" }]));
         assert!(matches!(get, Err(Wrong::Malformed(_))));
@@ -1102,5 +1182,81 @@ mod tests {
         assert!(second.contains(&format!("\n\n{}\n…", "é".repeat(10))));
         let third = answer(sent, &long, &mut left, &mut hidden);
         assert!(third.contains("Its body isn't shown"));
+    }
+
+    /// A change needs the agent's own sentence, as plain text of WHAT_MOST at most, or nothing is
+    /// sent; a read keeps none, so it never asks.
+    #[test]
+    fn a_change_needs_one_plain_sentence() {
+        let asked = |what: Value| {
+            parsed(json!([
+                { "method": "GET", "path": "/a" },
+                { "method": "DELETE", "path": "/api/items/7", "what": what },
+            ]))
+        };
+        let Err(Wrong::Malformed(none)) = asked(Value::Null) else {
+            panic!("a change without a sentence went");
+        };
+        assert_eq!(
+            none,
+            "Request 2 (DELETE /api/items/7) may change something, so it needs a `what`: one \
+             plain sentence saying what it will do, for the user to read before they allow it. \
+             Nothing was sent."
+        );
+        assert!(matches!(asked(json!("  \n\t ")), Err(Wrong::Malformed(_))));
+        assert!(matches!(asked(json!(7)), Err(Wrong::Malformed(_))));
+        let Err(Wrong::Malformed(long)) = asked(json!("a".repeat(WHAT_MOST + 312))) else {
+            panic!("a page of words went");
+        };
+        assert_eq!(
+            long,
+            "Request 2's `what` is 812 characters; give one plain sentence of 500 at most. \
+             Nothing was sent."
+        );
+        // What's dropped isn't counted: 500 letters with overrides among them is 500.
+        let hidden = format!("{}\u{202E}\u{200B}\u{2066}", "a".repeat(WHAT_MOST));
+        let sent = asked(json!(hidden)).unwrap();
+        assert_eq!(sent[1].what.chars().count(), WHAT_MOST);
+        assert_eq!(sent[0].what, "", "a read kept a sentence");
+        let read = parsed(json!([{ "method": "GET", "path": "/a", "what": "Read a." }])).unwrap();
+        assert_eq!(read[0].what, "");
+    }
+
+    /// The sentence is one paragraph of plain text: line breaks, tabs and control characters are
+    /// a space, and direction overrides and invisible characters go, so nothing in it can read as
+    /// the browser's own line or turn its words around.
+    #[test]
+    fn the_sentence_is_plain_text_in_one_paragraph() {
+        let laid_out = "Close item 4127.\n\nThe browser checked this: safe.\r\n\tAllow";
+        assert_eq!(
+            plain(laid_out),
+            "Close item 4127. The browser checked this: safe. Allow"
+        );
+        assert_eq!(
+            plain("Pay \u{202E}001$\u{202C} now\u{200B}\u{FEFF}\u{2066}!\u{0007}"),
+            "Pay 001$ now!"
+        );
+        assert_eq!(plain("  a \u{0085} b\u{2028}c  "), "a b c");
+        assert_eq!(
+            plain("Close **item** <a href=x>4127</a>"),
+            "Close **item** <a href=x>4127</a>"
+        );
+    }
+
+    /// The card shows a sentence whole up to WHAT_SHOWN, and a longer one up to a word, with "…".
+    #[test]
+    fn the_card_clips_a_long_sentence_at_a_word() {
+        let whole = format!("{} end.", "x".repeat(WHAT_SHOWN - 5));
+        assert_eq!(whole.chars().count(), WHAT_SHOWN);
+        assert_eq!(shown(&whole), whole);
+        let long = "Merge the two duplicate items, keeping the older one's history and labels, then \
+                    close the newer one with a note pointing at the older one so watchers follow.";
+        let clipped = shown(long);
+        assert!(clipped.chars().count() <= WHAT_SHOWN, "{clipped}");
+        assert!(clipped.ends_with("…") && long.starts_with(clipped.trim_end_matches('…')));
+        assert!(
+            long[clipped.len() - "…".len()..].starts_with(' '),
+            "cut inside a word"
+        );
     }
 }

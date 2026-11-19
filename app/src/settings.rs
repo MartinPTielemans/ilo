@@ -3985,7 +3985,9 @@ impl Settings {
                     let ago = div()
                         .text_color(look.detail)
                         .child(agents::ago(entry.at, now));
-                    self.request_row(agents, entry, what, detail, ago, cx)
+                    let said =
+                        (!entry.said.is_empty()).then(|| agents::said(client.name(), &entry.said));
+                    self.request_row(agents, entry, what, detail, said, ago, cx)
                 })
                 .collect();
             if grants.is_none() && entries.is_empty() {
@@ -4097,6 +4099,7 @@ impl Settings {
         entry: &agents::Activity,
         what: String,
         detail: Option<SharedString>,
+        said: Option<String>,
         ago: gpui::Div,
         cx: &Context<Self>,
     ) -> gpui::Div {
@@ -4140,6 +4143,7 @@ impl Settings {
         let part = opened.then(|| {
             sent_part(
                 ("request-all", id),
+                said,
                 &entry.url,
                 &entry.sent,
                 refused,
@@ -4181,10 +4185,17 @@ impl Settings {
                     entry.url.clone(),
                     entry.refused.is_empty(),
                     said(&entry.sent),
+                    entry.said.clone(),
                 )
             });
         // check.sh reads this line: where it went, and what it sent, secrets hidden.
-        match (opened, found) {
+        if let (true, Some((.., words))) = (opened, &found)
+            && !words.is_empty()
+        {
+            // check.sh reads this line: the agent's words, first, as plain text.
+            log!("browser: settings request {id} said: {words}");
+        }
+        match (opened, found.map(|(url, ok, sent, _)| (url, ok, sent))) {
             (true, Some((url, true, sent))) => {
                 log!("browser: settings request {id} opened to {url}, sent: {sent}")
             }

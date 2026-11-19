@@ -1925,6 +1925,7 @@ impl Agents {
                     target: entry.target.to_string(),
                     url: entry.url.to_string(),
                     sent: entry.sent.clone(),
+                    said: entry.said.to_string(),
                 })
                 .collect();
             let over = steps.len().saturating_sub(crate::agent_history::STEPS);
@@ -2421,7 +2422,7 @@ fn first_words(result: &str) -> SharedString {
 /// What a card's status leads with when a confirmation or a handoff waits on the user, the one
 /// status the card sets heavier (`status_lead`).
 pub const NEEDS_YOU: &str = "Needs you";
-const NEEDS_OK: &str = "Needs your OK";
+pub const NEEDS_OK: &str = "Needs your OK";
 
 /// A task's status while it works, saying how far it has got by its own steps: "Step 5 · Clicking
 /// “Tickets”", the step of the turn it's on, else the last it took, counted among the turn's steps
@@ -2486,7 +2487,13 @@ fn needs_you(question: &Question) -> SharedString {
     match question.handoff {
         Some(_) if question.why.is_empty() => NEEDS_YOU.into(),
         Some(_) => format!("{NEEDS_YOU} · {}", question.why.trim_end_matches('.')).into(),
-        None => format!("{NEEDS_OK} · {}", question.what).into(),
+        // A request's changes: what the browser knows from their methods, never the agent's
+        // words, which the card above quotes as its.
+        None => match question.changes.as_slice() {
+            [] => format!("{NEEDS_OK} · {}", question.what).into(),
+            [one] => format!("{NEEDS_OK} · {}", one.kind().noun()).into(),
+            many => format!("{NEEDS_OK} · {} changes", many.len()).into(),
+        },
     }
 }
 

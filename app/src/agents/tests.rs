@@ -3982,21 +3982,34 @@ mod requests {
 
         let changes = json!({ "tab": 20, "requests": [
             { "method": "GET", "path": "/api/items" },
-            { "method": "POST", "path": "/api/items", "body": { "title": "Milk" } },
-            { "method": "DELETE", "path": "/api/items/7" },
+            { "method": "POST", "path": "/api/items", "body": { "title": "Milk" },
+              "what": "Add Milk to the list." },
+            { "method": "DELETE", "path": "/api/items/7",
+              "what": "Tidy up the old draft so your list is cleaner." },
         ] });
         let answer = call(&agents, "claude-code", "request", changes.clone(), cx);
         let question = browser.asked.borrow().clone().expect("a change didn't ask");
         assert_eq!(question.what, "make 2 changes on example.com");
         assert_eq!(question.why, "Changes ask every time.");
-        let listed = [
-            ("POST /api/items", "title: Milk"),
-            ("DELETE /api/items/7", ""),
-        ];
-        let listed = listed.map(|(line, sends)| (line.into(), sends.into()));
+        assert_eq!(question.site, "example.com");
+        // Each change in the agent's words, and what the browser knows from its method alone.
+        let listed: Vec<_> = (question.changes.iter())
+            .map(|change| (change.target(), change.what.as_str(), change.kind()))
+            .collect();
         assert_eq!(
-            (question.changes.as_slice(), question.more),
-            (listed.as_slice(), 0)
+            listed,
+            [
+                (
+                    "POST /api/items".into(),
+                    "Add Milk to the list.",
+                    request::Does::Sends
+                ),
+                (
+                    "DELETE /api/items/7".into(),
+                    "Tidy up the old draft so your list is cleaner.",
+                    request::Does::Deletes
+                ),
+            ]
         );
         assert_eq!(sent(&browser).len(), 1, "it sent before the user answered");
         agents.update(cx, |agents, cx| {
@@ -4075,6 +4088,22 @@ mod requests {
         assert!(
             refusals.iter().all(|why| !why.is_empty()) && refusals.len() == 3,
             "{refusals:?}"
+        );
+        // A change without the agent's sentence isn't asked or sent, and the user wasn't asked,
+        // so there's no entry for it.
+        let unsaid =
+            json!([{ "method": "GET", "path": "/a" }, { "method": "PATCH", "path": "/b" }]);
+        let unsaid = refused(unsaid, 20, cx);
+        assert!(
+            unsaid.starts_with("Request 2 (PATCH /b) may change something"),
+            "{unsaid}"
+        );
+        assert!(unsaid.ends_with("Nothing was sent."), "{unsaid}");
+        assert!(sent(&browser).is_empty());
+        assert_eq!(
+            targets(&agents, cx).len(),
+            3,
+            "a call that asked nothing was logged"
         );
 
         let two = json!([{ "method": "GET", "path": "/a" }, { "method": "GET", "path": "/b" }]);

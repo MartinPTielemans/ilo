@@ -139,12 +139,11 @@ pub struct Question {
     /// Whether the agent asks for that tab back (ask_for_tab), which Keep refuses, rather than
     /// handing it to the user.
     pub back: bool,
-    /// The changes a call's requests would make (request), the first `request::LISTED`, each
-    /// what it does and where, then what it sends, or "". They ask every time, so their card has
-    /// no Always or Never.
-    pub changes: Vec<(SharedString, SharedString)>,
-    /// The changes it doesn't list.
-    pub more: usize,
+    /// The requests of a call that may change something (request), each with the agent's own
+    /// sentence for it, all of them. They ask every time, so their card has no Always or Never.
+    pub changes: Vec<request::Request>,
+    /// The site they go to, the tab's, which the card's facts name.
+    pub site: SharedString,
 }
 
 /// What an agent is doing, and what the user holds from it, for the bar in its Space.
@@ -555,6 +554,8 @@ pub struct Activity {
     pub url: SharedString,
     /// What a request sent, or would have, a line a field, without its secrets (#2326).
     pub sent: Vec<request::Sent>,
+    /// What the agent said a request does, in its own words, without their secrets (#3548).
+    pub said: SharedString,
 }
 
 /// A new entry's id: the log's entries are made in more than one place.
@@ -2483,19 +2484,18 @@ impl Agents {
         {
             return self.run(act, cx);
         }
-        let changes: Vec<&request::Request> =
-            act.requests.iter().filter(|each| each.changes()).collect();
-        let listed = changes.iter().take(request::LISTED);
+        let changes = (act.requests.iter())
+            .filter(|each| each.changes())
+            .cloned()
+            .collect();
         let question = Question {
             id: self.next_request,
             agent: self.agent_name(&act.agent),
             from: act.agent.clone().into(),
             what: act.what.clone().into(),
             why: why.into(),
-            changes: listed
-                .map(|each| (each.line().into(), each.summary().into()))
-                .collect(),
-            more: changes.len().saturating_sub(request::LISTED),
+            changes,
+            site: site.clone().into(),
             ..Question::default()
         };
         self.next_request += 1;
@@ -3491,13 +3491,16 @@ impl Agents {
 
     /// As `note`, for a request: where it went and what it sent, or would have.
     fn note_request(&mut self, agent: &str, site: &str, sent: &request::Request, refused: &str) {
-        let entry = (sent.url.as_str(), sent.sent());
+        // The agent's words are kept as its, as plain text, under the rule that hides a secret in
+        // what it sent.
+        let said = request::hide_secrets(&sent.what, false).0;
+        let entry = (sent.url.as_str(), sent.sent(), said.as_str());
         self.note_entry(agent, "request", site, &sent.target(), refused, entry);
     }
 
     /// As `note`, for what on the page, `target`.
     fn note_on(&mut self, agent: &str, action: &str, site: &str, target: &str, refused: &str) {
-        self.note_entry(agent, action, site, target, refused, ("", Vec::new()))
+        self.note_entry(agent, action, site, target, refused, ("", Vec::new(), ""))
     }
 
     fn note_entry(
@@ -3507,7 +3510,7 @@ impl Agents {
         site: &str,
         target: &str,
         refused: &str,
-        (url, sent): (&str, Vec<request::Sent>),
+        (url, sent, said): (&str, Vec<request::Sent>, &str),
     ) {
         // The rules run reads each entry as Settings › Agents lists it, the app's own refusals too,
         // which never reach the core's line.
@@ -3534,6 +3537,7 @@ impl Agents {
             id: entry_id(),
             url: SharedString::from(url.to_string()),
             sent,
+            said: SharedString::from(said.to_string()),
         };
         if self.stepping.as_deref() == Some(agent) {
             let run = self
@@ -3916,6 +3920,13 @@ pub fn local_time(at: u64) -> String {
 }
 
 /// How long ago `at` was, as the log says it.
+/// An agent's sentence for a request as an opened log entry shows it, marked as its words:
+/// "Claude Code said: “Close item 4127.”". It's plain already, and plain again for one kept
+/// before it was made so.
+pub fn said(agent: &str, words: &str) -> String {
+    format!("{agent} said: “{}”", request::plain(words))
+}
+
 pub fn ago(at: SystemTime, now: SystemTime) -> String {
     let seconds = now.duration_since(at).map_or(0, |since| since.as_secs());
     match seconds {

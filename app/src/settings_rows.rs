@@ -690,13 +690,16 @@ fn chevron(up: bool, color: gpui::Hsla) -> gpui::Svg {
         .text_color(color)
 }
 
-/// What an agent's request shows opened under its title (#2326): "To" and its whole address,
-/// then "Sent", or "Not sent" if it was refused, a line a field, cut at the edge until `all`, when
-/// a long value wraps whole. Past eight lines the eighth is "Show all", which calls `show_all`.
-/// Its caller places it under the row's title, at the title's start.
+/// What an agent's request shows opened under its title (#2326): first what the agent said it
+/// does, `said` ("Claude Code said: “…”"), whole and in one paragraph as the agent's words, never
+/// the row's head (#3548); then "To" and its whole address, then "Sent", or "Not sent" if it was
+/// refused, a line a field, cut at the edge until `all`, when a long value wraps whole. Past
+/// eight lines the eighth is "Show all", which calls `show_all`. Its caller places it under the
+/// row's title, at the title's start.
 #[allow(clippy::too_many_arguments)]
 pub fn sent_part(
     id: impl Into<gpui::ElementId>,
+    said: Option<String>,
     url: &str,
     sent: &[Sent],
     refused: bool,
@@ -781,6 +784,7 @@ pub fn sent_part(
         .flex()
         .flex_col()
         .gap(px(SENT_GAP))
+        .children(said.map(|said| small(said.into()).text_color(ink)))
         .child(labelled("To", vec![to.into_any_element()]))
         .when(!lines.is_empty(), |part| part.child(labelled(label, lines)))
 }

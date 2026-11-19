@@ -5,16 +5,35 @@
 //! in front of the user. The Agents keep what waits on the answer (agents::Agents::answer). A
 //! handoff asks the same way: the agent needs the user in a tab, which Show Tab shows and Hand Back
 //! gives back. So does an agent asking for a tab the user took over: Keep, or Hand Back. An agent's
-//! HTTP requests that may change something ask each time, listing the changes: Deny, or Allow.
+//! HTTP requests that may change something ask each time (#3548): each change in the agent's own
+//! words, marked as its, over what the browser knows from its method alone, so a delete reads as
+//! one whatever the words say; the whole request one press away; Deny, or Allow.
 
-use gpui::{Context, FontWeight, div, prelude::*, px};
+use std::rc::Rc;
+
+use gpui::{Context, FontWeight, Window, accesskit::Role, div, prelude::*, px};
 
 use super::{
     Shell, TITLE,
-    permission::{BESIDE_CLOSE, BUTTONS_TOP, Look, card_button_as, card_close, card_listener},
+    permission::{
+        BESIDE_CLOSE, BUTTONS_TOP, Look, card_button_as, card_close, card_listener, part_listener,
+    },
 };
+use crate::agent_request::{self, Closed};
+use crate::agents::request::{self, Does as Kind, Request};
 use crate::agents::{Answer, Question};
-use crate::tokens::shell::permission::{BUTTON_GAP, CHANGE_GAP, DETAIL};
+use crate::palette::Tone;
+use crate::tokens::menu::{DARK_DESTRUCTIVE, LIGHT_DESTRUCTIVE};
+use crate::tokens::shell::PLATE_INSET;
+use crate::tokens::shell::permission::{
+    BUTTON_GAP, CHANGE_TOP, DETAIL, FACTS_LINE, FACTS_TOP, NUMBER, SEE_RING, SEE_TOP,
+};
+use crate::tokens::text;
+
+/// The most a request's card has around its changes: its head, why it asks, "See the whole
+/// request" and its buttons, with its padding, at the sidebar's least width. The changes scroll in
+/// what's left, so those stay in view.
+const AROUND_CHANGES: f32 = 190.;
 
 impl Shell {
     /// The Agents ask the user `question`, or no longer ask (None).
@@ -27,7 +46,24 @@ impl Shell {
             // check.sh reads this line, as the agent's client goes with its question unanswered.
             log!("browser: agent question {} gone", gone.id);
         }
+        let was = self.agent_question.as_ref().map(|old| old.id);
+        if let Some(asked) = question.as_ref().filter(|new| Some(new.id) != was) {
+            // check.sh reads these lines: each change as the card shows it, the agent's words
+            // and then the browser's.
+            for (at, change) in asked.changes.iter().enumerate() {
+                log!(
+                    "browser: agent question {} change {}: “{}” {}",
+                    asked.id,
+                    at + 1,
+                    request::shown(&change.what),
+                    change.kind().facts(&asked.site)
+                );
+            }
+        }
         self.agent_question = question;
+        // The whole request goes with its question.
+        let keep = self.agent_question.as_ref().map(|question| question.id);
+        agent_request::close(keep, cx);
         // The question needs the sidebar, so a hidden one comes out with it.
         if self.agent_question.is_some() && self.can_reveal() {
             self.set_revealed(true, cx);
@@ -54,6 +90,9 @@ impl Shell {
             self.agent_question_drawn.set(None);
             return None;
         };
+        if !question.changes.is_empty() {
+            return Some(self.request_card(question, cx));
+        }
         let listener = card_listener("agent question", &self.agent_question_drawn, question.id);
         let buttons = buttons(question).into_iter().map(|button| {
             let row = button.look == Look::Text;
@@ -74,22 +113,6 @@ impl Shell {
             card_close(&self.palette, "agent-question-close")
                 .on_click(cx.listener(|shell, _, _, cx| shell.answer_agent(Answer::Dismiss, cx)))
         });
-        // A request's changes, which ask every time: what each does, and Allow is for them alone.
-        let changes = question.changes.iter().map(|(line, sends)| {
-            let change = div()
-                .mt(px(CHANGE_GAP))
-                .text_color(self.palette.on_overlay(DETAIL))
-                .child(line.clone());
-            change.when(!sends.is_empty(), |change| {
-                change.child(div().child(sends.clone()))
-            })
-        });
-        let more = (question.more > 0).then(|| {
-            div()
-                .mt(px(CHANGE_GAP))
-                .text_color(self.palette.on_overlay(DETAIL))
-                .child(format!("and {} more", question.more))
-        });
         Some(
             self.plate("agent-question")
                 .child(listener)
@@ -100,8 +123,6 @@ impl Shell {
                         .font_weight(FontWeight::SEMIBOLD)
                         .child(title),
                 )
-                .children(changes)
-                .children(more)
                 .child(
                     div()
                         .text_color(self.palette.on_overlay(DETAIL))
@@ -120,6 +141,221 @@ impl Shell {
                 .children(close)
                 .into_any_element(),
         )
+    }
+
+    /// The card of an agent's requests that may change something: the agent's own sentence for
+    /// each, quoted under its name, over the browser's facts from the method; why it asks; the
+    /// whole request; Deny or Allow.
+    fn request_card(&self, question: &Question, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let listener = card_listener("agent question", &self.agent_question_drawn, question.id);
+        let (detail, ink) = (self.palette.on_overlay(DETAIL), self.palette.text(TITLE));
+        let red: gpui::Hsla = match self.palette.tone == Tone::Light {
+            true => gpui::rgba(LIGHT_DESTRUCTIVE).into(),
+            false => gpui::rgba(DARK_DESTRUCTIVE).into(),
+        };
+        let a11y = self.a11y;
+        let small = |line: gpui::Div| line.text_size(px(text::SMALL)).line_height(px(FACTS_LINE));
+        let facts = |change: &Request, alone: bool| {
+            let kind = change.kind();
+            let words = match alone {
+                true => kind.facts(&question.site),
+                false => kind.short_facts().to_string(),
+            };
+            let line = small(div().mt(px(FACTS_TOP)));
+            match kind {
+                Kind::Deletes => line.text_color(red).font_weight(FontWeight::MEDIUM),
+                _ => line.text_color(detail),
+            }
+            .child(words)
+        };
+        let quoted = |change: &Request| {
+            div()
+                .text_color(ink)
+                .child(format!("“{}”", request::shown(&change.what)))
+        };
+        let said = |change: &Request, alone: bool| {
+            let facts = match alone {
+                true => change.kind().facts(&question.site),
+                false => change.kind().short_facts().to_string(),
+            };
+            format!(
+                "{} says: {}. {facts}.",
+                question.agent,
+                change.what.trim_end_matches('.')
+            )
+        };
+        let head = |words: String| {
+            small(div())
+                .pr(px(BESIDE_CLOSE))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(detail)
+                .child(words)
+        };
+        let count = question.changes.len();
+        let (head, changes) = match question.changes.as_slice() {
+            [one] => (
+                head(format!("{} says", question.agent)),
+                vec![
+                    div()
+                        .id(("agent-change", 0usize))
+                        .mt(px(2.))
+                        .child(quoted(one))
+                        .child(facts(one, true))
+                        .when(a11y, |change| {
+                            change.role(Role::Group).aria_label(said(one, true))
+                        }),
+                ],
+            ),
+            many => (
+                head(format!(
+                    "{} asks for {count} changes on {}",
+                    question.agent, question.site
+                )),
+                (many.iter().enumerate())
+                    .map(|(at, change)| {
+                        div()
+                            .id(("agent-change", at))
+                            .mt(px(CHANGE_TOP))
+                            .flex()
+                            .gap(px(6.))
+                            .child(
+                                div()
+                                    .w(px(NUMBER))
+                                    .flex_none()
+                                    .text_color(detail)
+                                    .child(format!("{}", at + 1)),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(quoted(change))
+                                    .child(facts(change, false)),
+                            )
+                            .when(a11y, |row| {
+                                let spoken =
+                                    format!("{} of {count}. {}", at + 1, said(change, false));
+                                row.role(Role::Group).aria_label(spoken)
+                            })
+                    })
+                    .collect(),
+            ),
+        };
+        let (top, _) = self.plate_at();
+        let room = f32::from(self.viewport.height) - top - PLATE_INSET - AROUND_CHANGES;
+        let changes = div()
+            .id("agent-question-changes")
+            .max_h(px(room.max(3. * FACTS_LINE)))
+            .overflow_y_scroll()
+            .children(changes);
+        let showing = agent_request::showing(cx) == Some(question.id);
+        let see = div()
+            .id("agent-request-see")
+            .mt(px(SEE_TOP))
+            .track_focus(&self.agent_request_see)
+            .focus_visible(crate::settings_rows::ring(self.palette.accent.into()))
+            .rounded(px(SEE_RING))
+            .text_color(self.palette.accent)
+            .font_weight(FontWeight::MEDIUM)
+            .cursor_pointer()
+            .relative()
+            .child(part_listener(
+                "agent request see".into(),
+                &self.agent_request_see_drawn,
+                question.id,
+            ))
+            .child("See the whole request")
+            .when(a11y, |see| {
+                crate::settings_rows::named_button(see, "See the whole request")
+                    .aria_expanded(showing)
+            })
+            .on_click(cx.listener(|shell, _, window, cx| shell.see_whole_request(window, cx)));
+        let buttons = buttons(question).into_iter().map(|button| {
+            card_button_as(&self.palette, button.id, button.label, button.look)
+                .when(a11y, |control| {
+                    crate::settings_rows::named_button(control, button.label)
+                })
+                .on_click(cx.listener(move |shell, _, _, cx| match button.does {
+                    Does::Answer(answer) => shell.answer_agent(answer, cx),
+                    _ => {}
+                }))
+        });
+        let close = card_close(&self.palette, "agent-question-close")
+            .when(a11y, |close| {
+                crate::settings_rows::named_button(close, "Close")
+            })
+            .on_click(cx.listener(|shell, _, _, cx| shell.answer_agent(Answer::Dismiss, cx)));
+        let named = format!("{} asks to {}", question.agent, question.what);
+        self.plate("agent-question")
+            .child(listener)
+            .when(a11y, |card| card.role(Role::AlertDialog).aria_label(named))
+            .child(head)
+            .child(changes)
+            .child(
+                div()
+                    .mt(px(SEE_TOP))
+                    .text_color(detail)
+                    .child(question.why.clone()),
+            )
+            .child(see)
+            .child(
+                div()
+                    .mt(px(BUTTONS_TOP))
+                    .flex()
+                    .gap(px(BUTTON_GAP))
+                    .children(buttons),
+            )
+            .child(close)
+            .into_any_element()
+    }
+
+    /// Shows the agent's request whole, beside its card, with the keyboard; Escape there gives it
+    /// back to "See the whole request".
+    fn see_whole_request(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(question) = self.agent_question() else {
+            return;
+        };
+        let Some(card) = self.agent_question_drawn.get() else {
+            return;
+        };
+        let (left, top) = (
+            f32::from(card.right()) + 2. * PLATE_INSET,
+            f32::from(card.top()),
+        );
+        let room = agent_request::room(top, f32::from(window.viewport_size().height));
+        let shell = cx.entity().downgrade();
+        let handle = window.window_handle();
+        let closed = Rc::new(move |how: Closed, cx: &mut gpui::App| {
+            if how != Closed::Escape {
+                return;
+            }
+            let shell = shell.clone();
+            _ = handle.update(cx, |_, window, cx| {
+                _ = shell.update(cx, |shell, cx| {
+                    // From the page too, if it had the keyboard before the request was opened.
+                    shell.browser.focus_ui(cx);
+                    window.focus(&shell.agent_request_see, cx);
+                    // check.sh reads this line.
+                    log!("browser: agent request keyboard back on see");
+                    cx.notify();
+                });
+            });
+        });
+        agent_request::show(
+            agent_request::Shown {
+                window: self.browser.window(),
+                question: question.id,
+                agent: question.agent.clone(),
+                site: question.site.clone(),
+                changes: question.changes.clone(),
+                left,
+                top,
+                room,
+                closed,
+            },
+            cx,
+        );
+        cx.notify();
     }
 }
 
@@ -221,13 +457,16 @@ pub(super) fn buttons(question: &Question) -> Vec<Button> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
     use std::rc::Rc;
 
     use gpui::{Modifiers, TestAppContext, point, px};
 
-    use crate::agents::Question;
+    use super::BUTTONS_TOP;
+    use crate::agent_request;
+    use crate::agents::{Question, request::Request};
     use crate::shell::{Folders, Page, Question as PageQuestion, Shell, recorder::Recorder};
-    use crate::tokens::shell::permission::{BUTTON_GAP, BUTTON_HEIGHT, PADDING};
+    use crate::tokens::shell::permission::{BUTTON_GAP, BUTTON_HEIGHT, LINE, PADDING};
 
     fn question(id: u64) -> Question {
         Question {
@@ -321,24 +560,38 @@ mod tests {
         assert!(host.take().contains(&"answer agent 9 Never".to_string()));
     }
 
-    /// A request's changes ask every time, so their card has Deny and Allow side by side in its
-    /// last row, and nothing to answer for good above it.
-    #[gpui::test]
-    fn a_requests_card_allows_once_or_denies(cx: &mut TestAppContext) {
+    fn change(method: &str, path: &str, what: &str) -> Request {
+        Request {
+            method: method.into(),
+            does: method.into(),
+            url: format!("https://team.example.com{path}"),
+            path: path.into(),
+            headers: Vec::new(),
+            body: String::new(),
+            what: what.into(),
+        }
+    }
+
+    fn requests(id: u64, changes: Vec<Request>) -> Question {
+        Question {
+            what: "make a change on team.example.com".into(),
+            why: "Changes ask every time.".into(),
+            site: "team.example.com".into(),
+            changes,
+            ..question(id)
+        }
+    }
+
+    fn window_with(
+        cx: &mut TestAppContext,
+    ) -> (
+        Rc<Recorder>,
+        gpui::Entity<Shell>,
+        &mut gpui::VisualTestContext,
+    ) {
         let host = Rc::new(Recorder::default());
         let browser = host.clone();
         let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
-        let changes = |id: u64| Question {
-            what: "make 4 changes on team.example.com".into(),
-            why: "Changes ask every time.".into(),
-            changes: vec![
-                ("PATCH /api/items/1".into(), "status: Closed".into()),
-                ("PATCH /api/items/2".into(), "status: Closed".into()),
-                ("DELETE /api/items/7".into(), "".into()),
-            ],
-            more: 1,
-            ..question(id)
-        };
         shell.update(cx, |shell, cx| {
             let space = (
                 1,
@@ -353,6 +606,26 @@ mod tests {
             shell.set_tabs(1, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
             shell.set_space(1, cx);
             shell.set_selected(10, cx);
+        });
+        (host, shell, cx)
+    }
+
+    /// A request's changes ask every time, so their card has Deny and Allow side by side in its
+    /// last row, and nothing above it answers.
+    #[gpui::test]
+    fn a_requests_card_allows_once_or_denies(cx: &mut TestAppContext) {
+        let (host, shell, cx) = window_with(cx);
+        let changes = |id: u64| {
+            requests(
+                id,
+                vec![
+                    change("PATCH", "/api/items/1", "Close item 1."),
+                    change("PATCH", "/api/items/2", "Close item 2."),
+                    change("DELETE", "/api/items/7", "Tidy up the old draft."),
+                ],
+            )
+        };
+        shell.update(cx, |shell, cx| {
             shell.set_agent_question(Some(changes(7)), cx);
         });
         cx.run_until_parked();
@@ -389,5 +662,85 @@ mod tests {
         );
         cx.run_until_parked();
         assert!(host.take().contains(&"answer agent 8 Dismiss".to_string()));
+    }
+
+    #[derive(Default)]
+    struct Shown(RefCell<Vec<String>>);
+
+    impl agent_request::Host for Shown {
+        fn show(&self, window: u64, _: f32, _: f32, _: f32) {
+            self.0.borrow_mut().push(format!("show over {window}"));
+        }
+        fn set_height(&self, _: f32) {}
+        fn hide(&self) {
+            self.0.borrow_mut().push("hide".into());
+        }
+    }
+
+    /// "See the whole request" shows it with the keyboard, and Escape there closes it and gives
+    /// the keyboard back to the button: the question is still asked, and nothing was sent.
+    #[gpui::test]
+    fn escape_in_the_whole_request_closes_it_and_answers_nothing(cx: &mut TestAppContext) {
+        let (host, shell, cx) = window_with(cx);
+        let shown = Rc::new(Shown::default());
+        let whole = {
+            let shown = shown.clone();
+            cx.update(|_, cx| agent_request::open(shown, cx))
+        };
+        let whole = whole.expect("the whole request's window didn't open");
+        shell.update(cx, |shell, cx| {
+            let one = change("DELETE", "/api/items/7", "Tidy up the old draft.");
+            shell.set_agent_question(Some(requests(7, vec![one])), cx);
+        });
+        cx.run_until_parked();
+        let see = shell.read_with(cx, |shell, _| shell.agent_question_drawn.get());
+        let card = see.expect("the card wasn't drawn");
+        // "See the whole request" is the row over the buttons' row.
+        let row = card.bottom() - px(PADDING + BUTTON_HEIGHT + BUTTONS_TOP + LINE / 2.);
+        cx.simulate_click(
+            point(card.left() + px(PADDING + 8.), row),
+            Modifiers::none(),
+        );
+        cx.run_until_parked();
+        assert_eq!(cx.update(|_, cx| agent_request::showing(cx)), Some(7));
+        assert!(
+            shown
+                .0
+                .borrow()
+                .iter()
+                .any(|did| did.starts_with("show over"))
+        );
+
+        whole
+            .update(cx, |_, window, cx| {
+                window.dispatch_action(Box::new(agent_request::Dismiss), cx)
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(cx.update(|_, cx| agent_request::showing(cx)), None);
+        assert!(shown.0.borrow().contains(&"hide".to_string()));
+        assert!(
+            !host
+                .take()
+                .iter()
+                .any(|did| did.starts_with("answer agent")),
+            "Escape answered the question"
+        );
+        shell.read_with(cx, |shell, _| {
+            assert_eq!(shell.agent_question().map(|question| question.id), Some(7))
+        });
+        let back = shell.read_with(cx, |shell, _| shell.agent_request_see.clone());
+        cx.update(|window, _| assert!(back.is_focused(window), "the keyboard isn't on See"));
+
+        // Answered, the question takes the whole request with it.
+        cx.simulate_click(
+            point(card.left() + px(PADDING + 8.), row),
+            Modifiers::none(),
+        );
+        cx.run_until_parked();
+        assert_eq!(cx.update(|_, cx| agent_request::showing(cx)), Some(7));
+        shell.update(cx, |shell, cx| shell.set_agent_question(None, cx));
+        cx.run_until_parked();
+        assert_eq!(cx.update(|_, cx| agent_request::showing(cx)), None);
     }
 }

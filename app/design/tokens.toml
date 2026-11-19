@@ -2088,6 +2088,25 @@ close-inset = 7.0
 close-glyph = 12.0
 # Above each change a request card lists, and above why it asks, so each reads as one.
 change-gap = 6.0
+# A request's change (#3548): the agent's sentence, then the browser's facts line under it at the
+# small size, `facts-top` below; several changes each `change-top` below the last, numbered in a
+# `number` column. "See the whole request" sits `see-top` below why it asks.
+facts-top = 4.0
+facts-line = 15.0
+change-top = 8.0
+number = 10.0
+see-top = 10.0
+# The corners of the keyboard's ring around "See the whole request", which is a link's words.
+see-ring = 4.0
+# The whole request beside the card (#3548), over the page: `whole-width` wide, its sections
+# `whole-section` apart, a field's name `whole-name` wide, nested fields `whole-indent` in, and
+# kept `whole-inside` inside the window.
+whole-width = 520.0
+whole-padding = 16.0
+whole-section = 14.0
+whole-name = 150.0
+whole-indent = 14.0
+whole-inside = 16.0
 
 [shell.boost]
 # Ours (#2347): the Boost card's list of what Arrange moved, between its words and its buttons.

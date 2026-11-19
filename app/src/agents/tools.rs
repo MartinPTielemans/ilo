@@ -414,7 +414,7 @@ fn shared() -> Value {
         {
             "name": "request",
             "title": "Send HTTP requests",
-            "description": "Send HTTP requests from a tab's page to its own site, as the page's own script could, signed in as the page is: for a site's API, such as the JSON its page reads, when that's quicker than its pages. GET and HEAD go at once. Any other method may change something, so it asks the user first, every time: all of a call's changes in one question, and none is sent if they say no. The browser adds the page's cookies, which you never see; you can't set Cookie, Authorization or a header the browser sets. Answers with each request's status, type and text body, never its headers, with values that look like sign-in tokens or secrets hidden. They go one after another; one that gets no answer stops the rest.",
+            "description": "Send HTTP requests from a tab's page to its own site, as the page's own script could, signed in as the page is: for a site's API, such as the JSON its page reads, when that's quicker than its pages. GET and HEAD go at once. Any other method may change something, so it asks the user first, every time: give each such request a what, one plain sentence in the user's terms saying what it will do, such as \"Close item 4127 as a duplicate of 4130.\" The user sees your sentence as yours, beside what the browser knows from the method alone (sends, changes or deletes) and the site, so say plainly what it does. All of a call's changes are in one question, and none is sent if they say no. The browser adds the page's cookies, which you never see; you can't set Cookie, Authorization or a header the browser sets. Answers with each request's status, type and text body, never its headers, with values that look like sign-in tokens or secrets hidden. They go one after another; one that gets no answer stops the rest.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -429,6 +429,7 @@ fn shared() -> Value {
                                 "path": { "type": "string", "description": "A path on the tab's site, such as /api/items?page=2, or a whole address on it." },
                                 "headers": { "type": "object", "additionalProperties": { "type": "string" } },
                                 "body": { "description": "JSON, sent as application/json, or a string, sent as text unless headers give its Content-Type. 1 MB at most." },
+                                "what": { "type": "string", "maxLength": super::request::WHAT_MOST, "description": "For any method but GET and HEAD: one plain sentence saying what this request will do, shown to the user before they allow it. 120 characters show on the card; 500 at most." },
                             },
                             "required": ["method", "path"],
                         },
