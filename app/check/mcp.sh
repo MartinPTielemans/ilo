@@ -1983,13 +1983,13 @@ PY
   # A field's inside, $1 between ($2, $3) and ($4, $5), clear of its border: $6, shown with red,
   # or withheld with none.
   see_field() {
-    share=$(reds "$2" "$3" "$4" "$5" | cut -d' ' -f1)
-    echo "$1: $share% red" >> "$out/mcp-pictured.txt"
+    reddened=$(reds "$2" "$3" "$4" "$5" | cut -d' ' -f1)
+    echo "$1: $reddened% red" >> "$out/mcp-pictured.txt"
     if [ "$6" = shown ]; then
-      [ "$share" -ge 10 ] ||
-        fail "the agent's picture didn't show $1, which it may see: $share% red"
+      [ "$reddened" -ge 10 ] ||
+        fail "the agent's picture didn't show $1, which it may see: $reddened% red"
     else
-      [ "$share" -eq 0 ] || fail "the agent's picture showed $1, which it may not: $share% red"
+      [ "$reddened" -eq 0 ] || fail "the agent's picture showed $1, which it may not: $reddened% red"
     fi
   }
   : > "$out/mcp-pictured.txt"
