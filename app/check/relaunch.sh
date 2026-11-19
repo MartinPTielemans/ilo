@@ -306,7 +306,16 @@ fi
 # Spike for #3464, never merged: on Wayland, a window full screen as the app quits, its saved state
 # and frame, and whether it comes back full screen.
 states=
-if [ -n "$wayland" ]; then
+# [DEBUG-3494] each saved window whole, as JSON, the one before the full screen and the one after.
+saved_windows() {
+  python3 -I -c '
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as f:
+    print(json.dumps(json.load(f)["windows"]))
+' "$saved" 2>&1 || echo "(none)"
+}
+if [ -n "$wayland" ] || sway_xwayland; then
+  echo "note: [DEBUG-3494] saved before the full-screen step: $(saved_windows)"
   send window 1
   send fullscreen
   expect '^browser: window entered full screen$' "the driver's full screen didn't put the window full screen"
@@ -320,6 +329,7 @@ state = "fullscreen" if window.get("fullscreen") else "maximized" if window.get(
 print(state, *window.get("bounds", []))
 ' "$saved") || fail "the session saved after the full-screen quit couldn't be read"
   echo "note: saved after the full-screen quit: $saved_window"
+  echo "note: [DEBUG-3494] saved windows after the full-screen quit: $(saved_windows)"
   launch_logged "$out/relaunch-fullscreen.log"
   await '^browser: restored in ' || fail "the relaunch after a full-screen quit didn't restore the Spaces"
   await '^browser: first frame at ' || fail "the window quit full screen didn't draw"
