@@ -15,8 +15,8 @@
 # run, and runs only in one.
 # It opens on the Mac's own screen, where there is one, so it doesn't cover what's playing on
 # another; BROWSER_DISPLAY=main opens it on the main display.
-# Leaves window captures and logs in build/check/. Build first with ./build.sh, or on the Mac give
-# CHECK_APP another app to run, such as a release's.
+# Leaves window captures and logs in build/check/. Build first with ./build.sh, or, on CI only, give
+# the Mac's CHECK_APP another app to run, such as a release's.
 # Each run starts on an empty profile, build/check-profile, never the dev build's, which the app is
 # given by BROWSER_PROFILE_DIR; a failed run's stays there for reading until the next check.
 # On Windows it runs under Git Bash, with python3 on the PATH, on the app the engine's chrome.exe
@@ -166,7 +166,13 @@ elif [ "$(uname)" = Linux ]; then
   browser="$app/chrome"
   procs="$app/chrome"
 elif [ -n "${CHECK_APP:-}" ]; then
-  # Another app than the build's, such as a release's copied from its DMG (signed-mac-probe.yml).
+  # Another app than the build's, such as a release's copied from its DMG (signed-mac-probe.yml). On
+  # CI only: a release keeps its keys in the user's Keychain and its settings in their defaults
+  # whatever profile it's given, and the checks never run the copy someone uses.
+  if [ -z "${GITHUB_ACTIONS:-}" ]; then
+    echo "FAIL: CHECK_APP runs only on CI (GITHUB_ACTIONS): a release would use this Mac's Keychain and settings" >&2
+    exit 1
+  fi
   app=$CHECK_APP
   browser="$app/Contents/MacOS/$(plutil -extract CFBundleExecutable raw -o - "$app/Contents/Info.plist")"
   procs="$app/Contents"
