@@ -68,6 +68,9 @@ struct SpacePager: View {
 private struct SpacePage: View {
   let space: SyncedSpace
 
+  /// What the scroll view knows the Space's pages by, all of them as one.
+  private static let pages = "pages"
+
   @Environment(Browser.self) private var browser
 
   var body: some View {
@@ -86,10 +89,18 @@ private struct SpacePage: View {
             }
           }
           .frame(maxWidth: .infinity, minHeight: room.size.height, alignment: .bottomLeading)
+          .id(Self.pages)
         }
         .defaultScrollAnchor(.bottom)
         .scrollBounceBehavior(.basedOnSize)
         .scrollIndicators(.hidden)
+        // The grid stands on the dock, and rides up with it when the keyboard lifts it. By itself
+        // it stays where it was: its last row under the dock, the Space's dots on the row before.
+        .onScrollGeometryChange(for: CGFloat.self) { $0.contentInsets.bottom } action: { before, now in
+          if now > before {
+            withAnimation(Motion.keyboard) { scroll.scrollTo(Self.pages, anchor: .bottom) }
+          }
+        }
         .onChange(of: browser.last, initial: true) {
           // The card of the page that's up waits under it, where the page shrinks back to.
           if let last = browser.last, today.contains(where: { $0.id == last }) || privates.contains(where: { $0.id == last }) {
