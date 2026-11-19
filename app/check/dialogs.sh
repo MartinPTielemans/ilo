@@ -574,6 +574,7 @@ expect "^browser: page $held unloaded 1\$" "the − didn't unload the pinned tab
 send click $(pinned_row 0)
 expect "^browser: selected $held\( in .*\)\{0,1\}\$" "a click on the unloaded pinned tab didn't show it"
 expect "^browser: page $held unloaded 0\$" "the unloaded pinned tab didn't load once shown"
+expect "^browser: loaded $held ${site}alerts.html\$" "the pinned tab's page didn't load again once shown"
 alert_up $held "the pinned tab loaded again"
 # The Today tab at the top, under the pinned row, takes the alert down.
 send click 100 $(($(row 0 | cut -d' ' -f2) + 41))
