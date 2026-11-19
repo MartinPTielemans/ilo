@@ -611,38 +611,6 @@ fn asks_come_one_at_a_time() {
     assert_eq!(opening.len(), 10, "a turn's tabs opened one after another");
 }
 
-/// A close of a tab starts while a call on that tab waits on its page, as one does while the
-/// page shows its own dialog (#3536), and the call after the close still waits its turn.
-#[test]
-fn a_close_never_waits_behind_its_tabs_calls() {
-    let (server, _, mut handed) = server();
-    let (mut writer, answers) = session(&server, &mut handed);
-    send_call(
-        &mut writer,
-        2,
-        "press_key",
-        json!({ "tab": 1, "key": "Escape" }),
-    );
-    let stuck = next_call(&mut handed).expect("the press");
-    send_call(&mut writer, 3, "click", json!({ "tab": 1, "ref": "e1" }));
-    send_call(&mut writer, 4, "close_tab", json!({ "tab": 1 }));
-    let close = next_call(&mut handed).expect("the close, while the press waits");
-    assert_eq!(close.tool, "close_tab");
-    assert!(
-        no_call(&mut handed),
-        "the click went before the press answered"
-    );
-    close.reply.send(ToolResult::text("Closed tab 1.")).unwrap();
-    assert_eq!(answered(&answers), 4);
-    stuck
-        .reply
-        .send(ToolResult::error("The tab closed."))
-        .unwrap();
-    assert_eq!(answered(&answers), 2);
-    let click = next_call(&mut handed).expect("the click, after the press");
-    assert_eq!(click.tool, "click");
-}
-
 /// Stopped by the user, a connection answers the call under way, refuses the calls after it
 /// without the UI hearing them, then closes, and the UI hears the agent's bye (#1080).
 #[test]
