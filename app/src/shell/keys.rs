@@ -1140,6 +1140,61 @@ mod tests {
             })
         });
         assert_eq!(shown.as_deref(), Some("ctrl-shift-2"));
+
+        // No key, as GPUI hears it, runs two commands in one context, so a binding without its
+        // shift can't shadow another command's, as ⌘} would Next Tab's or ⌘+ Zoom In's.
+        let heard = |key: &gpui::Keystroke| (key.key.clone(), key.modifiers);
+        let clashes = cx.update(|_, cx| {
+            let keymap = cx.key_bindings();
+            let keymap = keymap.borrow();
+            let bindings: Vec<_> = keymap.bindings().collect();
+            let mut clashes = Vec::new();
+            for (at, first) in bindings.iter().enumerate() {
+                for second in &bindings[at + 1..] {
+                    let same_keys = first.keystrokes().len() == second.keystrokes().len()
+                        && (first.keystrokes().iter().zip(second.keystrokes()))
+                            .all(|(a, b)| heard(a.inner()) == heard(b.inner()));
+                    if same_keys
+                        && first.predicate() == second.predicate()
+                        && !first.action().partial_eq(second.action())
+                    {
+                        let key = first.keystrokes()[0].inner().unparse(OperatingSystem::Mac);
+                        let named =
+                            |action: &dyn gpui::Action| match action.as_any().downcast_ref::<Run>()
+                            {
+                                Some(run) => format!("{:?}", run.0),
+                                None => action.name().to_string(),
+                            };
+                        let (first, second) = (named(first.action()), named(second.action()));
+                        clashes.push(format!("{key}: {first} and {second}"));
+                    }
+                }
+            }
+            clashes
+        });
+        assert_eq!(clashes, Vec::<String>::new());
+        // Off the Mac too, where ⌘ is pressed as Ctrl and ⌃ as Alt.
+        let mut pressed: Vec<(gpui::Keystroke, Command)> = Vec::new();
+        for &(key, command, _) in SHORTCUTS {
+            if !applies(key, true) {
+                continue;
+            }
+            let keys = pressed_off_the_mac(key);
+            let unshifted: Vec<String> = keys.iter().filter_map(|key| without_shift(key)).collect();
+            for key in keys.into_iter().chain(unshifted) {
+                let key = gpui::Keystroke::parse_with_os(&key, OperatingSystem::Linux).unwrap();
+                pressed.push((key, command));
+            }
+        }
+        for (at, (key, command)) in pressed.iter().enumerate() {
+            for (other, other_command) in &pressed[at + 1..] {
+                assert!(
+                    heard(key) != heard(other) || command == other_command,
+                    "off the Mac, {} runs both {command:?} and {other_command:?}",
+                    key.unparse(OperatingSystem::Linux)
+                );
+            }
+        }
     }
 
     /// ⌃D in a text field of the UI deletes forward, as in any Mac field, and toggles nothing;
