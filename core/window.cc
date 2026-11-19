@@ -41,6 +41,7 @@
 #include "browser_core/password_offer.h"
 #include "browser_core/platform/window_views.h"
 #include "browser_core/profiles.h"
+#include "browser_core/script_dialog.h"
 #include "browser_core/session.h"
 #include "browser_core/side_panel.h"
 #include "browser_core/space.h"
@@ -1443,6 +1444,7 @@ void Window::CloseTab(bc_id tab, bool discard) {
   }
   TabStripModel* tabs = in->GetBrowserWindowInterface()->GetTabStripModel();
   if (discard) {
+    ScriptDialogs::Cancel(contents);
     tabs->DetachAndDeleteWebContentsAt(tabs->GetIndexOfWebContents(contents));
     return;
   }
