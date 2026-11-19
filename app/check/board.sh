@@ -482,17 +482,15 @@ archive "the File menu"
 send layout
 height=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
   sed 's/^browser: layout content [0-9]*x\([0-9]*\),.*/\1/')
+# A menu shown in the dispatch that hides the last one keeps the keyboard it took (#3572): the +
+# pressed while a row's menu shows opens its own in that menu's place, then ↓ rings one of its rows.
+post rightclick $(row 0)
+expect '^browser: menu shown ' "a right-click on the sidebar's first row didn't show its menu"
 post click 204 $((height - 25))
-expect "^browser: menu shown .*$(cased 'New Board')" "the sidebar's + didn't offer New Board"
-# A menu shown again before the last one's hide has run keeps the keyboard it took (#3572): the +
-# menu closed with Escape and opened again at once, each posted without waiting, then ↓ rings a row.
-post key escape
-again=$step
-post click 204 $((height - 25))
-expect '^browser: menu closed' "Escape didn't close the sidebar's + menu" "$again"
-expect "^browser: menu shown .*$(cased 'New Board')" "the sidebar's + didn't open again just after Escape closed it"
+expect "^browser: menu shown .*$(cased 'New Board')" "the sidebar's +, pressed while a row's menu showed, didn't offer New Board"
+expect '^browser: menu at .* closed by ' "the row's menu didn't close as the sidebar's + opened its own"
 send key down
-expect '^browser: menu highlights .* at ' "↓ in the + menu, opened again just after it closed, rang no row: it hasn't the keyboard"
+expect '^browser: menu highlights .* at ' "↓ in the + menu, opened in a row's menu's place, rang no row: it hasn't the keyboard"
 send choose "$(cased 'New Board')"
 expect '^browser: command new-board via ' "the + menu's New Board didn't run New Board"
 made porch "the sidebar's +"
