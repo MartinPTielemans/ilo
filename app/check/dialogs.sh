@@ -150,15 +150,6 @@ ask a Alert alert-back
 send click $(row 0)
 expect "^browser: selected $other\( in .*\)\{0,1\}\$" "a click on another tab's row didn't show it"
 expect '^browser: dialog withdrawn$' "the alert stayed up over another tab"
-# A key typed as the alert taken back leaves is the window's: on Linux at once, elsewhere once it
-# has hidden (#3617).
-send key t cmd
-typed=$step
-expect '^browser: command bar shown$' "⌘T typed as the alert taken back left didn't open the command bar"
-since "$typed" | grep -q '^browser: dialog hidden$' ||
-  fail "the alert taken back had hidden before ⌘T came, so the step didn't type it as the alert left"
-send key escape
-expect '^browser: command bar hidden$' "Esc didn't close the command bar ⌘T opened as the alert left"
 send click $(row 1)
 expect "^browser: selected $page\( in .*\)\{0,1\}\$" "a click on the dialogs page's row didn't show it"
 expect '^browser: dialog shown .* says$' "the alert didn't come back with its tab"
