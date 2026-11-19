@@ -853,29 +853,34 @@ typedef struct bc_sync_activity {
 // A shared link (#680): a folder, a Space's pinned tabs and folders, or chosen tabs, as a list of
 // their pages that anyone with the link can open, in any browser, on the account's ilo server
 // (ilo-server's docs/protocol.md, Shares). The core makes the snapshot and seals it with a key of
-// its own, which goes in the link's fragment and never to the server, so the server keeps what it
-// can't read. A snapshot holds titles, http(s) addresses without their user and password, the
-// folders, a Space's name, colour and icon, and small favicons, and nothing of the profile: no
-// cookie, no history, no other address. All of it is the user's alone: agents get no share calls,
-// an agent's Space can't be shared, and a private window's tabs can't be.
+// its own, which goes in the link's fragment. The server gets that key only inside the link's entry
+// in the account's list, sealed under a key derived from the account's secret, which the server
+// doesn't have, so another of the account's devices can list the link and copy it. The server reads
+// neither the snapshot nor the key. A snapshot holds titles, http(s) addresses without their user
+// and password, the folders, a Space's name, colour and icon, and small favicons, and nothing of
+// the profile: no cookie, no history, no other address. All of it is the user's alone: agents get
+// no share calls, an agent's Space can't be shared, and a private window's tabs can't be.
 #define BC_SHARE_FOLDER 0
 #define BC_SHARE_SPACE 1
 #define BC_SHARE_TABS 2
 
-// Why a share, an unshare or the list didn't go as asked, in share_made and shares_listed.
+// Why a share, an unshare or the list didn't go as asked, in share_made, unshared and
+// shares_listed.
 #define BC_SHARE_PROBLEM_NONE 0
 // The account isn't syncing (BC_SYNC_ON), which a link needs, as the account owns it.
 #define BC_SHARE_PROBLEM_SIGNED_OUT 1
 // None of its tabs has an http(s) address.
 #define BC_SHARE_PROBLEM_EMPTY 2
-// It's over the server's size for a link even with every favicon left out.
+// It holds more than a link takes: over 5,000 tabs and folders together, folders more than 8 deep,
+// or over the server's size even with every favicon left out.
 #define BC_SHARE_PROBLEM_TOO_BIG 3
 // The account has as many links as its server keeps, or shared as many as it takes in an hour.
 #define BC_SHARE_PROBLEM_TOO_MANY 4
-// The server couldn't be reached, or refused. It can be tried again.
+// The server couldn't be reached, didn't answer within 30 seconds, or refused. It can be tried
+// again.
 #define BC_SHARE_PROBLEM_SERVER 5
 
-// One of the account's links, as Settings › Account lists it. Strings are UTF-8.
+// One of the account's links, as Settings › Sync lists it. Strings are UTF-8.
 typedef struct bc_share {
   // The link's id, for bc_unshare.
   const char* id;
@@ -1613,10 +1618,15 @@ typedef struct bc_host {
   void (*shares_listed)(void* context, const bc_share* shares, size_t count, int problem);
   // The user opened a shared link in |tab|, which the core has opened in place of the server's
   // page (bc_tab_answer_share): offer to add |found| over the tab's page while the tab shows, and
-  // answer with bc_tab_answer_share. It comes again with null once the offer goes: answered, the
-  // tab navigated or closed, or another tab shown, which doesn't bring it back. Once a load. Never
-  // in a private window or an agent's tab. The user's alone: agents hear none.
+  // answer with bc_tab_answer_share. It comes again with null once the offer goes: answered, or
+  // the tab navigated or closed. The app answers no once it shows another tab in the tab's place,
+  // as the offer doesn't come back. Once a load. Never in a private window or an agent's tab. The
+  // user's alone: agents hear none.
   void (*tab_share_found)(void* context, bc_id tab, const bc_share_found* found);
+  // What bc_unshare |id| came to, once: BC_SHARE_PROBLEM_NONE when the server deleted the link or
+  // had no such link, else why not, and the link still opens for anyone who has it. The user's
+  // alone: agents hear none. |id| lasts only for the call.
+  void (*unshared)(void* context, const char* id, int problem);
 } bc_host;
 
 // Runs Chromium in this process with these arguments (Chromium's switches) and returns its exit
@@ -4125,20 +4135,25 @@ BC_EXPORT bool bc_share_count(int kind,
 // Shares as a link, with BC_SHARE_FOLDER, the folder |items| holds alone, with what's in it; with
 // BC_SHARE_SPACE, the Space it holds alone, its pinned tabs and folders, never its Today tabs or
 // the favorites; with BC_SHARE_TABS, |count| tabs of one Space, as a list in their order. A folder
-// or a Space is the same one, by its sync node, on every device of the account and after a
-// restart, so sharing it again seals what it holds now under its link and key, and replaces what
-// the link shows; chosen tabs are a new link each time. A tab's split shares as its pages.
-// Favicons go in at most 4 KiB each as PNG, and leave first when the link would be too big. Then
-// share_made with the returned request, from a task of its own. Returns 0, doing nothing, for an
-// agent's Space or anything in it, a window's own Space, as a private window's, a folder or tab
-// that isn't, or tabs in more than one Space.
+// or a Space is the same one, by its sync node, on every device of the account and after a restart,
+// so sharing it again seals what it holds now under its link and key, and replaces what the link
+// shows; chosen tabs are a new link each time. A tab's split shares as its pages. A pinned tab
+// shares the address it's pinned at, a Today tab the one it shows. What it puts in a link stays
+// within what the core opens (bc_tab_answer_share), so a link ilo makes opens in ilo: a tab whose
+// address isn't http(s) or is over 8 KiB is left out and counted, a title is cut at 1,024 bytes,
+// and over 5,000 tabs and folders or 8 folders deep it's BC_SHARE_PROBLEM_TOO_BIG. Favicons go in
+// at most 4 KiB each as PNG, and leave first when the link would be too big, for the core or the
+// server. Then share_made with the returned request, from a task of its own, the snapshot sealed
+// off the UI thread. Returns 0, doing nothing, for an agent's Space or anything in it, a window's
+// own Space, as a private window's, a folder or tab that isn't, or tabs in more than one Space.
 BC_EXPORT uint64_t bc_share_make(int kind, const bc_id* items, size_t count);
 
 // Asks the server for the account's links. Then shares_listed.
 BC_EXPORT void bc_share_list(void);
 
 // Deletes the link |id| from the server, so it opens nothing from then on, on any device. What
-// someone already added from it stays theirs. Then shares_listed.
+// someone already added from it stays theirs. Then unshared, and shares_listed once it went
+// through.
 BC_EXPORT void bc_unshare(const char* id);
 
 // How the core opens a shared link (tab_share_found). A main-frame navigation the user made in a
@@ -4151,14 +4166,15 @@ BC_EXPORT void bc_unshare(const char* id);
 // script runs, and the core asks for /s/<id>/data, as a link card asks (bc_tab_link_card), with no
 // cookie, referrer or sign-in and sharing no cache with the user's browsing, but to whatever
 // address the link names, a server on the machine or the network included.
-// The core takes at most 1 MiB, inflates it to at most 4 MiB, and opens it with the key; it holds
-// at most 5,000 tabs, 8 folders deep, each title at most 1,024 bytes and each address at most 8 KiB
-// and http(s), with any other left out, and each favicon a PNG of at most 4 KiB, which only the
-// engine's sandboxed image decoder reads. In the server's page's place the core commits a page of
-// its own at the link's address, as it does a page its ad block blocks: the list, or why it can't
-// be opened, such as it was unshared or its key doesn't match. That page allows no script and has
-// none of the server's origin, its cookies or its storage. The key stays in the address, so it's in
-// the profile's history, and in the tabs it syncs, which only the user's account reads.
+// The core takes at most 1 MiB, inflates it to at most 4 MiB, and opens it with the key, off the UI
+// thread; it holds at most 5,000 tabs and folders together, 8 folders deep, each title at most
+// 1,024 bytes and each address at most 8 KiB and http(s), with any other left out, and each favicon
+// a PNG of at most 4 KiB, which only the engine's sandboxed image decoder reads. In the server's
+// page's place the core commits a page of its own at the link's address, as it does a page its ad
+// block blocks: the list, or why it can't be opened, such as it was unshared or its key doesn't
+// match. That page allows no script and has none of the server's origin, its cookies or its
+// storage. The link's address, its key included, is in the profile's history and in the tabs it
+// syncs, which only the user's account reads.
 // The user's answer to tab_share_found: |add| adds the link's folder or chosen tabs as a new folder
 // at the end of |space|'s pinned tabs, a Space of the user's in any profile, or its Space as a new
 // Space after the others, in the tab's profile, with its name, colour, icon, and its tabs pinned.
