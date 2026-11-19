@@ -104,6 +104,7 @@ constexpr auto kListed = base::MakeFixedFlatSet<std::string_view>({
     "hbomax.com",
     "hulu.com",
     "max.com",
+    "music.apple.com",
     "netflix.com",
     "open.spotify.com",
     "paramountplus.com",
