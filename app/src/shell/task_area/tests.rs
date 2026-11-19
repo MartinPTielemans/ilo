@@ -7,8 +7,9 @@ use std::{
 };
 
 use gpui::{
-    AnyView, AppContext, Bounds, Context, Entity, IntoElement, Pixels, Render, SharedString,
-    TestAppContext, VisualTestContext, Window, div, point, px, size,
+    AnyView, AppContext, Bounds, Context, Entity, InteractiveElement, IntoElement, Pixels, Render,
+    SharedString, StatefulInteractiveElement, Styled, TestAppContext, VisualTestContext, Window,
+    div, point, px, size,
 };
 
 use super::{Zoom, pushed, watched};
@@ -395,6 +396,49 @@ fn a_tasks_page_zooms_out_of_its_thumbnail_and_back(cx: &mut TestAppContext) {
     assert!(shell.read_with(cx, |shell, _| {
         shell.task_area.as_ref().unwrap().page.is_none()
     }));
+}
+
+/// A conversation whose pictures fill it, which counts the clicks on them, as a picture's watches
+/// its page.
+struct Pictures(Rc<std::cell::Cell<u32>>);
+
+impl Render for Pictures {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let clicks = self.0.clone();
+        div()
+            .id("pictures")
+            .size_full()
+            .on_click(move |_, _, _| clicks.set(clicks.get() + 1))
+    }
+}
+
+/// A click on another picture while the page watched goes back into its thumbnail reaches the
+/// picture, which watches its own page, as one does once the page is back (#3496). The page going
+/// back is drawn over the conversation, and its press there is for a page coming out alone.
+#[gpui::test]
+fn a_click_on_the_conversation_while_the_page_goes_back_reaches_it(cx: &mut TestAppContext) {
+    let (shell, _host, cx) = shell_with_task(cx);
+    let clicks = Rc::new(std::cell::Cell::new(0));
+    let pictures = clicks.clone();
+    let view: AnyView = cx.update(|_, cx| cx.new(|_| Pictures(pictures)).into());
+    shell.update(cx, |shell, cx| shell.open_task(3, view, cx));
+    let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
+    shell.update(cx, |shell, cx| shell.watch_task_page(30, thumb, None, cx));
+    core_shows_task(&shell, cx, 30);
+    let over = Instant::now() - Duration::from_secs(1);
+    set_zoom(&shell, cx, Zoom::Out(over));
+    draw(&shell, cx);
+    let (card, _) = frames(&shell, cx);
+    // Held where the zoom back starts, the page still fills the area.
+    set_zoom(
+        &shell,
+        cx,
+        Zoom::In(Instant::now() + Duration::from_secs(60)),
+    );
+    core_shows_users(&shell, cx);
+    draw(&shell, cx);
+    cx.simulate_click(card.center(), gpui::Modifiers::none());
+    assert_eq!(clicks.get(), 1, "the click on the conversation was lost");
 }
 
 /// Selecting any of the user's tabs, the one selected too, or another Space leaves the area and

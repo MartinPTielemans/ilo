@@ -777,8 +777,8 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
   split=$(call split_tabs "{\"tabs\":[$warned,$beside]}")
   [ "$split" = "Tab $warned's split view, left to right: $warned, $beside." ] ||
     fail "split_tabs with the tab at the warning answered: $split"
-  # Escape steps back to Pages from the page watched, $1, which goes back into its picture before a
-  # click on another picture can watch it.
+  # Escape steps back to Pages from the page watched, $1, which goes back into its picture, unless
+  # $2 is "at once", for a click on another picture while it goes (#3496).
   to_pages() {
     back='^browser: task page [0-9]* back$'
     thumbnail='^browser: task page in its thumbnail$'
@@ -789,6 +789,7 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
     send click $sidebar_point
     send key escape
     await_more "$back" "$before" || fail "Escape didn't step back to Pages from $1"
+    [ "${2:-}" = "at once" ] && return
     await_more "$thumbnail" "$shrunk" || fail "$1 didn't go back into its picture"
   }
   # Tab round the strip's ring never gives the watched agent's page the keyboard: its stop is the
@@ -840,9 +841,15 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
     [ "$key" = NativeWidgetMacNSWindow ] ||
       fail "a click on the agent's warning before http at $warning, watched in its split view $1, didn't give it the keyboard: $key, $focus"
   }
-  to_pages "tab $agent_tab"
+  # A click on the split's picture straight after Escape, while the page watched still goes back
+  # into its own, watches the split: the page going back lets the click through (#3496).
+  to_pages "tab $agent_tab" "at once"
+  escaped=$step
   presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
   watch_warning "from Pages" ring_strip
+  since "$escaped" | grep -m1 -e '^browser: drive [0-9]*: click ' -e "^browser: task page in its thumbnail\$" |
+    grep -q '^browser: task page' &&
+    echo "skip: mcp: a click on a picture while the page watched goes back: tab $agent_tab was back in its picture before the click (#3496)."
   first_click=$warning_clicked
   # Linux's driver lists the pages the shell lays out, and the task area lays out a watched split
   # as one, which the core divides: the capture shows its panes there.
