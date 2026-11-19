@@ -54,7 +54,8 @@ board_open() {
 }
 # Traces categories $1 into $dir/$2 around the command after.
 board_traced() {
-  trace_categories=$1 trace_file=$dir/$2
+  # Its own: tabs reads lib.sh's trace_categories for its launch, after this run in one go.
+  local trace_categories=$1 trace_file=$dir/$2
   shift 2
   since=$(wc -l < "$cdp_log")
   echo "trace start $trace_categories" >&5
@@ -115,15 +116,15 @@ board_spans() {
   [ -s "$dir/$1.ms" ] || fail "the trace $1 has no switch span: $(tr '\n' ' ' < "$dir/$1.spans")"
   if [ -n "${3:-}" ]; then
     echo "board-perf: tab switch, $3, Chrome's span: $(awk 'NR % 2 == 1' "$dir/$1.spans" |
-      grep -v incomplete | board_stats) ms; gate 16 ms"
+      grep -v incomplete | board_stats) ms; gate 16 ms; on $on_cpu"
     echo "board-perf: tab switch, $4, Chrome's span: $(awk 'NR % 2 == 0' "$dir/$1.spans" |
-      grep -v incomplete | board_stats) ms; gate 16 ms"
+      grep -v incomplete | board_stats) ms; gate 16 ms; on $on_cpu"
   else
-    echo "board-perf: tab switch, $2, Chrome's span: $(board_stats < "$dir/$1.ms") ms; gate 16 ms"
+    echo "board-perf: tab switch, $2, Chrome's span: $(board_stats < "$dir/$1.ms") ms; gate 16 ms; on $on_cpu"
   fi
   [ "$incomplete" = 0 ] || echo "board-perf: $1: $incomplete of the switches were cut off before their frame"
   over=$(awk '$1 > 16' "$dir/$1.ms" | wc -l | tr -d ' ')
-  [ "$over" = 0 ] || echo "board-perf: FINDING: $over of $1's switches took over 16 ms: $(tr '\n' ' ' < "$dir/$1.ms")"
+  [ "$over" = 0 ] || echo "board-perf: FINDING: $over of $1's switches took over 16 ms on $on_cpu: $(tr '\n' ' ' < "$dir/$1.ms")"
 }
 # Writes a PNG of random pixels, $2 by $2, stored without compression so its size is the pixels',
 # to $1.
@@ -217,6 +218,8 @@ switch "$(board_index "$plain_a") cmd" "$plain_a"
 expect 'browser: board saved$' "the Board of 2,000 notes didn't save as its tab hid again"
 board_memory "two plain pages, the Board in the background"
 
+# The CPU beside each switch figure, which compares only with one from the same model (#3418).
+on_cpu=$(runner_cpu)
 board_traced latency switches-plain.json board_switches 10 "$plain_a" data:text/html,plain-a "$plain_b" data:text/html,plain-b
 board_spans switches-plain.json "between two plain pages"
 board_traced latency switches-board.json board_switches 10 "$plain_a" data:text/html,plain-a "$board" "chrome://board/$id"

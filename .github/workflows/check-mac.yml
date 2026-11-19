@@ -49,6 +49,12 @@ on:
           The trace categories for tabs and perf's traced switches (app/check/lib.sh), such as
           #2377's, latency among them; empty for latency alone in tabs and no traced switches
         default: ''
+      lists_from:
+        description: >-
+          A Check run's id, on any OS, whose adblock-parity lists this run's adblock-parity and
+          adblock-native block with, so runs on the three OSes share one snapshot (#2111); empty
+          to download them
+        default: ''
 
 # Main's running check finishes, with only the newest dispatch or night waiting behind it; a branch's
 # dispatch replaces the one before it.
@@ -382,6 +388,16 @@ jobs:
           fi
           [ "$refused" = 0 ] || echo "::warning::ScreenCaptureKit's listing failed, but not with -3801: $said"
 
+      # The lists an earlier run's adblock-parity downloaded, on any OS, for this run's to block
+      # with, so the OSes' runs compare the engines on one snapshot (#2111).
+      - if: ${{ steps.engine.outputs.found == 'true' && inputs.lists_from != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: adblock-parity-lists
+          path: app/build/given-lists
+          run-id: ${{ inputs.lists_from }}
+          github-token: ${{ github.token }}
+
       # Each run alone, so one failing doesn't hide the rest, and each keeps its own build/check.
       # Each of the job's share of check.sh's runs gets a line in its results, done or skipped, which
       # the complete job reads.
@@ -392,6 +408,7 @@ jobs:
           SHARD: ${{ matrix.shard }}
           RESULTS: ${{ runner.temp }}/results/mac-${{ matrix.shard }}.tsv
           CHECK_TRACE_CATEGORIES: ${{ inputs.trace }}
+          ADBLOCK_PARITY_LISTS: ${{ inputs.lists_from != '' && 'build/given-lists' || '' }}
         run: |
           out=$RUNNER_TEMP/check
           mkdir -p "$out" "$(dirname "$RESULTS")"
@@ -482,6 +499,15 @@ jobs:
           [ ! -s "$out/local-network.log" ] || cat "$out/local-network.log"
           { echo; sh check/quarantine.sh list mac; } | tee -a "$GITHUB_STEP_SUMMARY"
           exit "$failed"
+
+      # The lists this run's adblock-parity blocked with, for a run on another OS to take with
+      # lists_from (#2111). A few MB, apart from the check's artifact, which can be a GB.
+      - if: ${{ !cancelled() && steps.engine.outputs.found == 'true' && hashFiles('app/build/adblock-parity-lists/snapshot.txt') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: adblock-parity-lists
+          path: app/build/adblock-parity-lists
+          overwrite: true
 
       - if: ${{ always() && steps.engine.outputs.found == 'true' }}
         uses: actions/upload-artifact@v4

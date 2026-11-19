@@ -969,7 +969,7 @@ impl Shell {
         }
         let to = if self.tools_on { 1. } else { 0. };
         self.tools_fade.map_or(to, |(start, from)| {
-            fade_at(from, to, start.elapsed().as_secs_f32(), TOOLS_FADE)
+            fade_at(from, to, self.since(start), TOOLS_FADE)
         })
     }
 
@@ -980,11 +980,11 @@ impl Shell {
             self.tools_fade = None;
             self.tools_on = self.sidebar_hovered;
         } else if self.sidebar_hovered != self.tools_on {
-            self.tools_fade = Some((Instant::now(), self.tools_opacity()));
+            self.tools_fade = Some((self.clock.now(), self.tools_opacity()));
             self.tools_on = self.sidebar_hovered;
         }
         if let Some((start, _)) = self.tools_fade {
-            if start.elapsed().as_secs_f32() < TOOLS_FADE {
+            if self.since(start) < TOOLS_FADE {
                 window.request_animation_frame();
                 return;
             }

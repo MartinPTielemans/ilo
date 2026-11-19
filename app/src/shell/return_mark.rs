@@ -56,7 +56,7 @@ impl Shell {
         let what = Swapped::Away(tab);
         // The notch opens and closes with its glyph's change, and is whole under Reduce Motion,
         // as the glyph is at its size.
-        let open = match self.swaps.toward(what, UNDO) {
+        let open = match self.swaps.toward(what, UNDO, self.clock.now()) {
             Some(way) => crate::motion::scale(way, cx),
             None if away => 1.,
             None => return icon(),

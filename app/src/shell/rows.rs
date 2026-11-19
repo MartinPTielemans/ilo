@@ -1932,7 +1932,7 @@ impl Shell {
         let clear = self.tools_shown().then(|| {
             let arrow = if self.clears_last() { ARROW_DOWN } else { NONE };
             let what = Swapped::Clear(self.space);
-            let room = self.swaps.toward(what, ARROW_DOWN);
+            let room = self.swaps.toward(what, ARROW_DOWN, self.clock.now());
             let room = room.unwrap_or(if arrow == NONE { 0. } else { 1. });
             // Fading out, it takes no click and doesn't light up.
             let color = if live && self.clear_hovered {
@@ -2018,8 +2018,8 @@ impl Shell {
             match self.drawn_arrow {
                 Some((was_in, was)) if was_in == space => {
                     let glyph = |arrow: bool| if arrow { ARROW_DOWN } else { NONE };
-                    self.swaps
-                        .start(Swapped::Clear(space), glyph(was), glyph(is), Instant::now());
+                    let now = self.clock.now();
+                    (self.swaps).start(Swapped::Clear(space), glyph(was), glyph(is), now);
                 }
                 _ => self.swaps.end(Swapped::Clear(space)),
             }
@@ -2082,25 +2082,24 @@ pub(super) struct Breath {
 }
 
 impl Breath {
-    /// How strong a loading dot drawn now is.
-    pub(super) fn strength(&self) -> f32 {
-        self.through(BREATH).map_or(1., breath_strength)
+    /// How strong a loading dot drawn at `now`, on the list's clock, is.
+    pub(super) fn strength(&self, now: Instant) -> f32 {
+        self.through(BREATH, now).map_or(1., breath_strength)
     }
 
-    /// How far round a loading ring drawn now is, as a fraction of a turn each `turn`: none while
-    /// motion is reduced.
-    pub(super) fn turned(&self, turn: Duration) -> f32 {
-        self.through(turn).unwrap_or(0.)
+    /// How far round a loading ring drawn at `now` is, as a fraction of a turn each `turn`: none
+    /// while motion is reduced.
+    pub(super) fn turned(&self, turn: Duration, now: Instant) -> f32 {
+        self.through(turn, now).unwrap_or(0.)
     }
 
-    /// How far through its `period` something drawn now on this clock is, or None while motion is
-    /// reduced and it holds still.
-    fn through(&self, period: Duration) -> Option<f32> {
+    /// How far through its `period` something drawn at `now` on this clock is, or None while
+    /// motion is reduced and it holds still.
+    fn through(&self, period: Duration, now: Instant) -> Option<f32> {
         self.drawn.set(true);
         if self.still.get() {
             return None;
         }
-        let now = Instant::now();
         if self
             .last
             .replace(Some(now))
@@ -2159,7 +2158,7 @@ impl Shell {
             .size(px(STATUS_DOT))
             .rounded_full()
             .bg(self.palette.text(STATUS_LOADING));
-        let strength = self.breath.strength();
+        let strength = self.breath.strength(self.clock.now());
         Some(
             div()
                 .flex_none()
@@ -2247,26 +2246,29 @@ mod tests {
     /// full strength.
     #[test]
     fn the_loading_dots_breathe_together() {
+        // The list's clock, held at one time as a test's is, so the runner's speed can't move the
+        // dots between two lines (#3468).
+        let now = Instant::now();
         let breath = Breath::default();
-        assert!((breath.strength() - BREATH_LOW).abs() < 0.01);
+        assert!((breath.strength(now) - BREATH_LOW).abs() < 0.01);
         assert!((breath_strength(0.25) - (1. + BREATH_LOW) / 2.).abs() < 0.001);
         assert!((breath_strength(1.) - BREATH_LOW).abs() < 0.001);
-        breath.since.set(Some(Instant::now() - BREATH / 2));
-        let (first, second) = (breath.strength(), breath.strength());
+        breath.since.set(Some(now - BREATH / 2));
+        let (first, second) = (breath.strength(now), breath.strength(now));
         assert!(first > 0.99, "half a breath in, {first}");
-        assert!((second - first).abs() < 0.01);
+        assert_eq!(second, first);
 
-        breath.last.set(Some(
-            Instant::now() - LOADING_GAP - Duration::from_millis(1),
-        ));
+        breath
+            .last
+            .set(Some(now - LOADING_GAP - Duration::from_millis(1)));
         assert!(
-            breath.strength() < BREATH_LOW + 0.01,
+            breath.strength(now) < BREATH_LOW + 0.01,
             "undrawn for a while, it starts over"
         );
 
-        breath.since.set(Some(Instant::now() - BREATH / 4));
+        breath.since.set(Some(now - BREATH / 4));
         breath.still.set(true);
-        assert_eq!(breath.strength(), 1.);
+        assert_eq!(breath.strength(now), 1.);
     }
 
     /// A row's hover fill comes and goes at once, and only the selected row's eases back, from
@@ -2518,8 +2520,20 @@ mod tests {
                 shell.set_tabs(1, vec![5, 6], vec![2], Vec::new(), folded(!open), cx)
             });
             cx.run_until_parked();
-            let turn = shell.read_with(cx, |shell, _| shell.pinned_turn);
-            assert!(turn.is_some_and(|start| start.elapsed().as_secs_f32() < PINNED_TURN));
+            // On the list's clock, which a test holds, so the runner's speed can't end the turn
+            // (#3468); moving that clock past it does.
+            let turning = |cx: &mut VisualTestContext| {
+                shell.read_with(cx, |shell, _| {
+                    shell.pinned_turn.map(|start| shell.since(start))
+                })
+            };
+            assert!(turning(cx).is_some_and(|t| t < PINNED_TURN), "at {at:?}");
+            cx.executor()
+                .advance_clock(Duration::from_secs_f32(PINNED_TURN));
+            // The next frame, which the turn asked for, finds it done.
+            shell.update(cx, |_, cx| cx.notify());
+            cx.run_until_parked();
+            assert_eq!(turning(cx), None, "at {at:?}");
         }
         assert!(
             shell.read_with(cx, |shell, _| shell.renaming.is_none()),
@@ -3015,11 +3029,12 @@ mod tests {
         let scale = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
             shell.read_with(cx, |shell, _| shell.press_scale(3))
         };
-        // As if the press were `ago` seconds back, and the release `let_go` seconds back.
+        // As if the press were `ago` seconds back, and the release `let_go` seconds back, on the
+        // list's clock, which the test holds (#3468).
         let back = |shell: &Entity<Shell>, cx: &mut VisualTestContext, ago: f32, let_go: f32| {
             shell.update(cx, |shell, _| {
+                let now = shell.clock.now();
                 let held = shell.held_row.as_mut().unwrap();
-                let now = Instant::now();
                 held.pressed = now - Duration::from_secs_f32(ago);
                 held.let_go = held.let_go.map(|_| now - Duration::from_secs_f32(let_go));
             })

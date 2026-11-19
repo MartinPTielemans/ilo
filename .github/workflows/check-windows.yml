@@ -42,6 +42,12 @@ on:
           The trace categories for tabs and perf's traced switches (app/check/lib.sh), such as
           #2377's, latency among them; empty for latency alone in tabs and no traced switches
         default: ''
+      lists_from:
+        description: >-
+          A Check run's id, on any OS, whose adblock-parity lists this run's adblock-parity and
+          adblock-native block with, so runs on the three OSes share one snapshot (#2111); empty
+          to download them
+        default: ''
 
 # Main's run in progress finishes, and while it runs a newer dispatch's or the night's pending run
 # replaces the older pending one; a branch's newer dispatch cancels its older run. Runs on
@@ -427,6 +433,16 @@ jobs:
           path: app/.deps/ilo-server/target
           key: ilo-server-windows-882f2736e5a3b228543ae33b821aeeb52f80426d
 
+      # The lists an earlier run's adblock-parity downloaded, on any OS, for this run's to block
+      # with, so the OSes' runs compare the engines on one snapshot (#2111).
+      - if: ${{ inputs.lists_from != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: adblock-parity-lists
+          path: app/build/given-lists
+          run-id: ${{ inputs.lists_from }}
+          github-token: ${{ github.token }}
+
       # Each run alone, so one failing doesn't hide the rest, and each keeps its own build/check.
       # Each of the job's share of check.sh's runs gets a line in its results, done or skipped, which
       # the complete job reads.
@@ -440,6 +456,7 @@ jobs:
           SHARD: ${{ matrix.shard }}
           RESULTS: ${{ runner.temp }}/results/windows-${{ matrix.shard }}.tsv
           CHECK_TRACE_CATEGORIES: ${{ inputs.trace }}
+          ADBLOCK_PARITY_LISTS: ${{ inputs.lists_from != '' && 'build/given-lists' || '' }}
         run: |
           out=$RUNNER_TEMP/check
           mkdir -p "$out" "$(dirname "$RESULTS")"
@@ -576,6 +593,15 @@ jobs:
         run: |
           mkdir -p "$(dirname "$STEPS")"
           printf 'Runs\t%s\nMicrosoft sign-in\t%s\n' "${RUNS_OUTCOME:-skipped}" "${SIGN_IN_OUTCOME:-skipped}" > "$STEPS"
+
+      # The lists this run's adblock-parity blocked with, for a run on another OS to take with
+      # lists_from (#2111). A few MB, apart from the check's artifact, which can be a GB.
+      - if: ${{ !cancelled() && hashFiles('app/build/adblock-parity-lists/snapshot.txt') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: adblock-parity-lists
+          path: app/build/adblock-parity-lists
+          overwrite: true
 
       - if: ${{ always() }}
         uses: actions/upload-artifact@v4

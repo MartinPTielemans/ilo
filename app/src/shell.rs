@@ -15,11 +15,12 @@ use std::{
 use web_time::Instant;
 
 use gpui::{
-    AnyElement, App, BackgroundExecutor, Bounds, BoxShadow, Context, DispatchPhase, Entity,
-    FocusHandle, Focusable, FontWeight, Global, HitboxBehavior, Hsla, Image, ModifiersChangedEvent,
-    MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels,
-    Point, Rgba, Role, ScrollHandle, SharedString, Size, Subscription, Task, Window,
-    WindowTextSystem, canvas, div, point, prelude::*, px, rgb, rgba, size, svg,
+    AnyElement, App, BackgroundExecutor, Bounds, BoxShadow, Context, CursorStyle, DispatchPhase,
+    Entity, FocusHandle, Focusable, FontWeight, Global, HitboxBehavior, Hsla, Image,
+    ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent,
+    MouseUpEvent, PathBuilder, Pixels, Point, ResizeEdge, Rgba, Role, ScrollHandle, SharedString,
+    Size, Subscription, Task, Window, WindowTextSystem, canvas, div, point, prelude::*, px, rgb,
+    rgba, size, svg,
 };
 
 use crate::{
@@ -181,9 +182,10 @@ use clean_link::clean_link;
 use commands::ShellHandle;
 pub use commands::{
     BAR_ROWS, BAR_TABS_SHOWN, BarCommand, BarSpace, BarTab, CancelName, Command, CreateSpace,
-    KEY_CONTEXT, KeepName, Match, Run, STAY_ON_TOP, bar_commands, bind_keys, copy_from_bar,
-    copy_url_of_preview, find_commands, key_name, keystroke_keys, keystroke_label, menu_item,
-    pane_added, run_from_bar, shown_tab, task_page_shown, window_became_key, with_named_rows,
+    KEY_CONTEXT, KeepName, Match, Run, STAY_ON_TOP, agents_page_shown, bar_commands, bind_keys,
+    copy_from_bar, copy_url_of_preview, find_commands, key_name, keystroke_keys, keystroke_label,
+    menu_item, pane_added, run_from_bar, shown_tab, task_page_shown, window_became_key,
+    with_named_rows,
 };
 pub use display_face::display_text;
 pub use drag::{WindowDragEnd, dropped_urls};
@@ -308,6 +310,10 @@ const REVEAL_OVERSHOOT: f32 = 8.;
 
 /// The site's demo, in a page's canvas, where wheel events carry no phase.
 const WEB: bool = cfg!(target_family = "wasm");
+
+/// The width of the band inside the browser window's edges that resizes it on Linux, as the core's
+/// (`bc_window_start_resize`).
+const RESIZE_EDGE: f32 = 3.;
 
 // Rows make room and close it, a closed tab's row fades and new rows fade in on one spring, Arc's
 // (docs/ux-spec.md › Motion: Row motion). A row's hover fill comes and goes in one frame, and only
@@ -3273,7 +3279,8 @@ impl Shell {
         }
         if space == self.space {
             let eliding = (eliding, dotted(entry));
-            (self.swaps).folders_changed(&before_folders, &entry.folders, eliding, Instant::now());
+            let now = self.clock.now();
+            (self.swaps).folders_changed(&before_folders, &entry.folders, eliding, now);
         }
         let has_tabs = !entry.pinned.is_empty() || !entry.today.is_empty();
         // After a Clear, the rows left are in their places at once (Arc).
@@ -3508,7 +3515,8 @@ impl Shell {
             }
             _ => log!("browser: selected {tab}"),
         }
-        let hidden = self.panes(self.selected);
+        let before = self.selected;
+        let hidden = self.panes(before);
         self.selected = tab;
         self.show_in_space(tab, cx);
         self.scroll_to_row(tab);
@@ -3535,11 +3543,17 @@ impl Shell {
         }
         // The command bar open over the Space before lists this one's tabs and suggestions now, so
         // a pick never goes to the other or its profile (Arc).
+        // Another tab of this Space shown by a shortcut while the bar has the keyboard leaves ⌘L's
+        // bar editing a tab that isn't shown, so its pick opens a new tab (#3428).
         let follows = std::mem::take(&mut self.bar_follows) && self.browser.command_bar_open(cx);
-        let new_tab = follows
-            && self
-                .browser
-                .command_bar_follows(self.bar_tabs(cx), self.open_tabs(cx), cx);
+        let new_tab = if follows {
+            self.browser
+                .command_bar_follows(self.bar_tabs(cx), self.open_tabs(cx), cx)
+        } else {
+            tab != before
+                && self.browser.command_bar_open(cx)
+                && self.browser.command_bar_tab_shown(tab, cx)
+        };
         self.set_new_tab(new_tab, cx);
         self.set_bar_over_card(new_tab, cx);
         self.adding_pane = None;
@@ -3818,8 +3832,8 @@ impl Shell {
                 flag(page.developer_mode)
             );
         }
-        self.swaps
-            .page_changed(tab, self.selected, &entry.page, &page, Instant::now());
+        let now = self.clock.now();
+        (self.swaps).page_changed(tab, self.selected, &entry.page, &page, now);
         let trouble = (page.trouble != entry.page.trouble).then_some(page.trouble);
         // What its hover card shows of the page, besides its title: its host, emoji and buttons.
         let carded = |page: &Page| (page.url.clone(), page.icon.clone(), page.share_instead);
@@ -4332,6 +4346,52 @@ impl Shell {
         .size_full()
     }
 
+    /// On Linux, the bands inside the window's left and right edges that resize it, over the
+    /// rest of the UI. The core leaves them to the UI between the corners
+    /// (`bc_window_start_resize`), so the pointer pushed to the edge reaches `pointer_over`, as the
+    /// hidden sidebar's edge needs (#3219), and a press there has the window manager resize the
+    /// window, as one in Chromium's own band does. None while the window is maximized or full
+    /// screen, when the core has no band.
+    fn resize_bands(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        if !cfg!(target_os = "linux") || WEB || self.maximized || self.full_screen {
+            return Vec::new();
+        }
+        [false, true]
+            .into_iter()
+            .map(|right| {
+                let band = div()
+                    .id(if right { "resize-right" } else { "resize-left" })
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .w(px(RESIZE_EDGE))
+                    .cursor(match right {
+                        true => CursorStyle::ResizeRight,
+                        false => CursorStyle::ResizeLeft,
+                    })
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |shell, _: &MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            // GPUI's window is inside the browser window, so the browser resizes
+                            // that. On X11 GPUI's own lets go of the pointer grab its press took,
+                            // which would keep the window manager from taking the pointer.
+                            window.start_window_resize(match right {
+                                true => ResizeEdge::Right,
+                                false => ResizeEdge::Left,
+                            });
+                            shell.browser.start_window_resize(right, cx);
+                        }),
+                    );
+                match right {
+                    true => band.right_0(),
+                    false => band.left_0(),
+                }
+                .into_any_element()
+            })
+            .collect()
+    }
+
     /// Deletes the Space of the form a swipe cancelled once its page is out, so the window's
     /// colour crosses to the other Space's from its own. After the draw, which the core's report
     /// of the Spaces left would otherwise come into.
@@ -4424,7 +4484,7 @@ impl Shell {
         let Some(drag) = self.drag.as_mut().filter(|drag| drag.shape.start.is_some()) else {
             return;
         };
-        if drag.shape.turning(Instant::now()) {
+        if drag.shape.turning(self.clock.now()) {
             window.request_animation_frame();
             return;
         }
@@ -4521,7 +4581,8 @@ impl Render for Shell {
             log!("browser: hover {row} close {close} favicon {favicon}");
         }
         self.step_clear_arrow();
-        self.swaps.step(window);
+        let now = self.clock.now();
+        self.swaps.step(window, now);
         // As the outline's, so a capture of the URL field's button shows the glyph it logged.
         let copied = match (
             self.url_copied.is_some(),
@@ -4882,6 +4943,7 @@ impl Render for Shell {
             .child(self.scroll_listener(true, cx))
             .child(self.navigate_listener(cx))
             .children(self.onboarding_layer(window, cx))
+            .children(self.resize_bands(cx))
             // The site's demo has one window, the page's canvas, so the reveal's panel is in it.
             .children(WEB.then(|| {
                 let panel = self.render_reveal(window, cx);

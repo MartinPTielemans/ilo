@@ -222,6 +222,11 @@ fn finds_colours_and_radii_but_not_tokens() {
         ".text_size(px(14.))",
         ".font_weight(FontWeight::BOLD)",
         "FontWeight(700.)",
+        ".line_height(px(18.))",
+        "offset: point(px(0.), px(1.)),",
+        "offset: point(px(-2.5), px(0.)),",
+        "blur_radius: px(3.),",
+        "spread_radius: px(0.5),",
     ] {
         assert!(look_literal(code).is_some(), "{code}");
     }
@@ -234,6 +239,12 @@ fn finds_colours_and_radii_but_not_tokens() {
         ".font_weight(FontWeight::SEMIBOLD)",
         "let flags = 0x0100;",
         "let seed = 0x9e37;",
+        ".line_height(px(TITLE_LINE))",
+        "offset: point(px(0.), px(0.)),",
+        "offset: point(px(0.), px(y)),",
+        "blur_radius: px(sigma(blur)),",
+        "spread_radius: px(0.),",
+        "spread_radius: px(KEYED_RING),",
     ] {
         assert_eq!(look_literal(code), None, "{code}");
     }
@@ -396,9 +407,10 @@ fn sources(dir: &Path, tests: bool) -> Vec<(String, String)> {
     out
 }
 
-/// The first colour, radius, type size or weight written as a number in `code`: a hex colour (six
-/// or eight digits), `rgb` or `rgba` of a number, `hsla` of four numbers, a corner radius or text
-/// size of a number, or a weight other than the scale's three.
+/// The first colour, radius, type size, line height, shadow or weight written as a number in
+/// `code`: a hex colour (six or eight digits), `rgb` or `rgba` of a number, `hsla` of four numbers,
+/// a corner radius, text size or line height of a number, a shadow's offset, blur or spread of a
+/// number but nought, or a weight other than the scale's three.
 fn look_literal(code: &str) -> Option<&str> {
     let word = |c: char| c.is_alphanumeric() || c == '_';
     let starts = |at: usize| !code[..at].ends_with(word);
@@ -450,6 +462,7 @@ fn look_literal(code: &str) -> Option<&str> {
         "corner_radii",
         "Corners::all",
         "text_size",
+        "line_height",
     ] {
         for (at, _) in code.match_indices(call).filter(|(at, _)| starts(*at)) {
             // `rounded` names a family: `rounded_tl` and the rest.
@@ -468,6 +481,25 @@ fn look_literal(code: &str) -> Option<&str> {
                 _ => args.split(',').next().is_some_and(number),
             };
             if literal {
+                return Some(&code[at..(close + 1).min(code.len())]);
+            }
+        }
+    }
+    // A shadow's offset, blur or spread of a number but nought, which is no look.
+    let some = |arg: &str| {
+        let arg = arg.trim().trim_start_matches("px(").trim_end_matches(')');
+        number(arg) && arg.contains(|c: char| ('1'..='9').contains(&c))
+    };
+    for field in ["offset: point(", "blur_radius: px(", "spread_radius: px("] {
+        for (at, _) in code.match_indices(field).filter(|(at, _)| starts(*at)) {
+            let args = &code[at + field.len()..];
+            let close = at
+                + field.len()
+                + match field {
+                    "offset: point(" => args.find("))").map_or(args.len(), |end| end + 1),
+                    _ => args.find(')').unwrap_or(args.len()),
+                };
+            if code[at + field.len()..close].split(',').any(some) {
                 return Some(&code[at..(close + 1).min(code.len())]);
             }
         }
