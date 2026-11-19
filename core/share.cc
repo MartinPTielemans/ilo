@@ -852,7 +852,7 @@ class ShareThrottle : public content::NavigationThrottle {
     if (!link || !UsersTab(*navigation_handle())) {
       return PROCEED;
     }
-    fetch_ = std::make_unique<Fetch>(*this, std::move(*link), url.host());
+    fetch_ = std::make_unique<Fetch>(*this, std::move(*link), std::string(url.host()));
     if (!fetch_->Ask(url.Resolve(base::StrCat({"/s/", fetch_->link().id, "/data"})))) {
       fetch_.reset();
       return PROCEED;
