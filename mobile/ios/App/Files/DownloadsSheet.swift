@@ -26,14 +26,8 @@ struct DownloadsSheet: View {
           .frame(minHeight: 48)
       } else {
         // A long list scrolls, from its foot; a short one is as tall as its rows.
-        ViewThatFits(in: .vertical) {
-          rows(days)
-          ScrollView(.vertical) { rows(days) }
-            .scrollIndicators(.hidden)
-            .defaultScrollAnchor(.bottom)
-        }
-        .frame(maxHeight: Dock.listHeight)
-        .fixedSize(horizontal: false, vertical: true)
+        SheetRows { rows(days) }
+          .frame(maxHeight: Dock.listHeight)
       }
 
       Rectangle()

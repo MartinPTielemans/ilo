@@ -130,6 +130,7 @@ private struct ReaderScreen: View {
           }
         }
         .padding(.horizontal, Bar.side)
+        .footColumn()
         .padding(.bottom, max(Bar.gap - safe.safeAreaInsets.bottom, 0))
       }
     }

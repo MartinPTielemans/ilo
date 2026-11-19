@@ -25,6 +25,7 @@ struct PrivateWords: View {
     .foregroundStyle(palette.text)
     .frame(maxWidth: .infinity, alignment: .leading)
     .padding(.horizontal, PrivateMark.side)
+    .footColumn()
     .accessibilityElement(children: .combine)
   }
 }
@@ -36,6 +37,8 @@ struct PrivateCard: View {
   let tab: WebTab
   /// The page the user came from, ringed in the Space's colour.
   let current: Bool
+  /// How tall its picture is.
+  let tall: CGFloat
 
   @Environment(Browser.self) private var browser
   @Environment(\.palette) private var palette
@@ -47,7 +50,7 @@ struct PrivateCard: View {
         browser.open(tab)
       } label: {
         Palette.ink
-          .frame(height: Card.pictureHeight)
+          .frame(height: tall)
           .frame(maxWidth: .infinity)
           .overlay {
             Image(systemName: PrivateMark.symbol)

@@ -30,21 +30,25 @@ struct SignInSheet: View {
 
   var body: some View {
     let phase = phone.accountPhase
-    VStack(alignment: .leading, spacing: 0) {
-      switch phase {
-      case .signedOut:
-        ServerStep(problem: problem, working: working) { server in
-          problem = nil
-          page = phone.beginSignIn(server: server)
+    // Over the keyboard with the phone on its side a step is taller than its room: it scrolls
+    // from its controls, which are its lowest.
+    SheetRows {
+      VStack(alignment: .leading, spacing: 0) {
+        switch phase {
+        case .signedOut:
+          ServerStep(problem: problem, working: working) { server in
+            problem = nil
+            page = phone.beginSignIn(server: server)
+          }
+        case .needsSecret:
+          if case .waiting(let code) = phone.pairing {
+            PairingStep(code: code)
+          } else {
+            WordsStep()
+          }
+        case .starting, .ready:
+          StartingStep()
         }
-      case .needsSecret:
-        if case .waiting(let code) = phone.pairing {
-          PairingStep(code: code)
-        } else {
-          WordsStep()
-        }
-      case .starting, .ready:
-        StartingStep()
       }
     }
     .padding(.top, 6)

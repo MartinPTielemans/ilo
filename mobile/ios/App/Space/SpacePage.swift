@@ -41,6 +41,9 @@ struct SpacePager: View {
       .scrollTargetBehavior(.paging)
       .scrollPosition(id: $browser.space)
       .scrollIndicators(.hidden)
+      // Cut at the sides alone: on a phone on its side the Space next door would show in the
+      // room past the screen's ends, and the grid still runs out under the status bar.
+      .clipShape(Rectangle().scale(x: 1, y: 3))
       .contentShape(.rect)
       .onTapGesture(perform: rest)
       .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { turn.width = $0 }
@@ -72,6 +75,8 @@ private struct SpacePage: View {
   private static let pages = "pages"
 
   @Environment(Browser.self) private var browser
+  /// Whether the grid stands on the dock, as it does until a finger leaves it somewhere else.
+  @State private var standing = true
 
   var body: some View {
     let account = browser.account
@@ -83,7 +88,7 @@ private struct SpacePage: View {
           VStack(alignment: .leading, spacing: 0) {
             SpaceTitle(space: space)
             if !today.isEmpty || !privates.isEmpty {
-              PageGrid(today: today, privates: privates)
+              PageGrid(today: today, privates: privates, width: room.size.width)
             } else if account.pinned(in: space.id, folder: nil).isEmpty {
               EmptySpace(ofPhone: space.id == PhoneAccount.space.id)
             }
@@ -106,6 +111,22 @@ private struct SpacePage: View {
           if let last = browser.last, today.contains(where: { $0.id == last }) || privates.contains(where: { $0.id == last }) {
             scroll.scrollTo(last)
           }
+        }
+        .onScrollPhaseChange { before, phase, context in
+          // Only where a finger left it: a turn moves the grid too, and comes to rest part-way.
+          if phase == .interacting {
+            standing = false
+          } else if phase == .idle, before == .interacting || before == .decelerating {
+            let grid = context.geometry
+            standing = grid.contentOffset.y >= grid.contentSize.height + grid.contentInsets.bottom - grid.containerSize.height - 1
+          }
+        }
+        // A turn of the phone puts the cards in other rows, and the scroll view keeps the row at
+        // its top: a grid that stood on the dock would be left with its last row under it, so it
+        // is stood on the dock again. One a finger has moved stays where it is.
+        .onScrollGeometryChange(for: CGSize.self) { CGSize(width: $0.containerSize.width, height: $0.contentSize.height) } action: { _, _ in
+          guard standing else { return }
+          scroll.scrollTo(Self.pages, anchor: .bottom)
         }
       }
     }
@@ -150,24 +171,28 @@ private struct EmptySpace: View {
   }
 }
 
-/// Today's tabs, two across, in Today's order, and after them the private tabs opened here, in
-/// the order they were opened.
+/// Today's tabs in Today's order, two across upright and as many as the width holds on a phone
+/// on its side, and after them the private tabs opened here, in the order they were opened.
 private struct PageGrid: View {
   let today: [SyncedNode]
   let privates: [WebTab]
+  /// The room the grid has from side to side.
+  let width: CGFloat
 
   @Environment(Browser.self) private var browser
+  @Environment(\.pageShape) private var page
 
   var body: some View {
     let last = browser.last
+    let tall = Card.picture(width: Card.width(in: width), page: page)
     LazyVGrid(
-      columns: [GridItem(.flexible(), spacing: Card.columnGap), GridItem(.flexible(), spacing: 0)], spacing: Card.rowGap
+      columns: Array(repeating: GridItem(.flexible(), spacing: Card.columnGap), count: Card.across(in: width)), spacing: Card.rowGap
     ) {
       ForEach(today) { node in
-        PageCard(node: node, current: node.id == last)
+        PageCard(node: node, current: node.id == last, tall: tall)
       }
       ForEach(privates) { tab in
-        PrivateCard(tab: tab, current: tab.id == last)
+        PrivateCard(tab: tab, current: tab.id == last, tall: tall)
           // The grid keeps a card by its tab, and a private tab's id is no account's.
           .id(tab.id)
       }
@@ -183,6 +208,8 @@ private struct PageCard: View {
   let node: SyncedNode
   /// The page the user came from, ringed in the Space's colour.
   let current: Bool
+  /// How tall its picture is.
+  let tall: CGFloat
 
   @Environment(Browser.self) private var browser
   @Environment(TabCache.self) private var cache
@@ -243,7 +270,7 @@ private struct PageCard: View {
 
   private var picture: some View {
     Color.clear
-      .frame(height: Card.pictureHeight)
+      .frame(height: tall)
       .frame(maxWidth: .infinity)
       .overlay(alignment: .top) {
         if let state = browser.state(of: node.id) {
@@ -291,17 +318,19 @@ struct CardClose: View {
 
 /// The Space's favourites and pinned tabs as tiles in the dock, five across: the favourites,
 /// which are this phone's own, then the pinned tabs, a folder as one tile. Two rows hold ten;
-/// with more, the tenth is the More tile, which has the rest in a sheet. Nothing here scrolls
+/// with more, the tenth is the More tile, which has the rest in a sheet. On a phone on its side
+/// one row holds five, beside the field, and the fifth is the More tile. Nothing here scrolls
 /// sideways: that swipe turns the Space.
 struct PinTiles: View {
   /// The dock's swipe, which another Space's tiles come in with.
   let turn: SpaceTurn
 
   @Environment(Browser.self) private var browser
+  @Environment(\.low) private var low
 
   var body: some View {
     if let space = browser.currentSpace {
-      let tiles = browser.dockTiles(in: space.id)
+      let tiles = browser.dockTiles(in: space.id, low: low)
       let rows = Dock.rows(for: tiles.count)
       // The Space on screen, which the dock is as tall as, and over it the one a swipe is
       // bringing in: its tiles come up as far as the Space has come across.
@@ -309,7 +338,7 @@ struct PinTiles: View {
       Lead {
         ForEach(live, id: \.self) { id in
           let incoming = id != space.id
-          grid(incoming ? browser.dockTiles(in: id) : tiles, in: id)
+          grid(incoming ? browser.dockTiles(in: id, low: low) : tiles, in: id)
             .modifier(Fading(turn: turn, incoming: incoming))
             .allowsHitTesting(!incoming)
             .accessibilityHidden(incoming)
@@ -317,8 +346,11 @@ struct PinTiles: View {
         }
       }
       .clipped()
-      .padding(.top, rows == .none ? 0 : Dock.top - Dock.inset)
-      .padding(.bottom, rows == .none ? 0 : Dock.pinsFoot)
+      // Beside the field each tile keeps the width it has upright, and the field takes the rest.
+      .frame(width: low ? Dock.pitch * CGFloat(min(tiles.count, Dock.across)) : nil)
+      .padding(.top, rows == .none || low ? 0 : Dock.top - Dock.inset)
+      .padding(.bottom, rows == .none || low ? 0 : Dock.pinsFoot)
+      .padding(.trailing, rows == .none || !low ? 0 : Dock.gap)
       // A caption under an icon, which keeps its row's height.
       .dynamicTypeSize(...DynamicTypeSize.xLarge)
       // The dock's height and its tiles settle as the Spaces do, in one movement. The glass under
@@ -329,7 +361,8 @@ struct PinTiles: View {
   }
 
   private func grid(_ tiles: DockTiles, in space: String) -> some View {
-    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 0), count: Dock.across), spacing: Dock.rowGap) {
+    let across = low ? max(1, min(tiles.count, Dock.across)) : Dock.across
+    return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 0), count: across), spacing: Dock.rowGap) {
       ForEach(tiles.shown) { slot in
         switch slot {
         case .favourite(let favourite): FavouriteTile(favourite: favourite, space: space).transition(.opacity)
@@ -367,9 +400,12 @@ struct PinTiles: View {
 }
 
 extension Browser {
-  /// The dock's tiles in a Space, less what this phone hides.
-  func dockTiles(in space: String) -> DockTiles {
-    DockTiles(favourites: settings.favourites, pinned: account.pinned(in: space, folder: nil), hidden: settings.hiddenTiles)
+  /// The dock's tiles in a Space, less what this phone hides: two rows of them upright, and one
+  /// on a phone that is `low`, on its side.
+  func dockTiles(in space: String, low: Bool = false) -> DockTiles {
+    DockTiles(
+      favourites: settings.favourites, pinned: account.pinned(in: space, folder: nil), hidden: settings.hiddenTiles,
+      room: Dock.across * (low ? 1 : 2))
   }
 
   /// Takes a tile out of this phone's dock. The account keeps it.
@@ -562,10 +598,11 @@ private struct PinTile: View {
 /// The dock's tiles past its two rows, as rows in a sheet from the foot.
 struct MoreSheet: View {
   @Environment(Browser.self) private var browser
+  @Environment(\.low) private var low
 
   var body: some View {
     let space = browser.currentSpace?.id ?? ""
-    let more = browser.dockTiles(in: space).more
+    let more = browser.dockTiles(in: space, low: low).more
     VStack(alignment: .leading, spacing: 0) {
       Text("More")
         .scaled(20, .semibold, relativeTo: .title3)
@@ -573,16 +610,11 @@ struct MoreSheet: View {
         .padding(.vertical, 8)
         .accessibilityAddTraits(.isHeader)
       // A long list scrolls; a short one is as tall as its rows.
-      ViewThatFits(in: .vertical) {
-        rows(more, in: space)
-        ScrollView(.vertical) { rows(more, in: space) }
-          .scrollIndicators(.hidden)
-      }
-      .frame(maxHeight: Dock.listHeight)
-      .fixedSize(horizontal: false, vertical: true)
+      SheetRows(from: .top) { rows(more, in: space) }
+        .frame(maxHeight: Dock.listHeight)
     }
     .frame(maxWidth: .infinity, alignment: .leading)
-    // With few enough left for the dock's two rows, there's nothing more to show.
+    // With few enough left for the dock's rows, there's nothing more to show.
     .onChange(of: more.isEmpty) { if more.isEmpty, browser.sheet == .more { browser.sheet = nil } }
   }
 
@@ -657,13 +689,8 @@ struct FolderSheet: View {
             .padding(.vertical, 12)
         } else {
           // A long folder scrolls; a short one is as tall as its rows.
-          ViewThatFits(in: .vertical) {
-            rows(of: node)
-            ScrollView(.vertical) { rows(of: node) }
-              .scrollIndicators(.hidden)
-          }
-          .frame(maxHeight: Dock.listHeight)
-          .fixedSize(horizontal: false, vertical: true)
+          SheetRows(from: .top) { rows(of: node) }
+            .frame(maxHeight: Dock.listHeight)
         }
       }
       .frame(maxWidth: .infinity, alignment: .leading)

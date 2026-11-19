@@ -130,7 +130,7 @@ struct ReadingSheet: View {
           }
           .padding(.horizontal, Bar.side)
           .padding(.bottom, Bar.gap)
-          .frame(maxWidth: .infinity)
+          .frame(maxWidth: Column.widest)
           .foregroundStyle(palette.text)
           // Long text over a page reads worse through clear glass than on a ground of its own.
           .sheetGround(.solid, shadow: talk.lowered ? palette.shadow : .clear)

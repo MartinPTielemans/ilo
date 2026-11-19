@@ -389,8 +389,10 @@ final class WebTab: NSObject, Identifiable {
     let width = webView.bounds.width
     guard width > 0, webView.window != nil, failure == nil else { return nil }
     let configuration = WKSnapshotConfiguration()
-    let card = Card.width(in: width)
-    configuration.rect = CGRect(x: 0, y: 0, width: width, height: width * Card.pictureHeight / card)
+    // The grid keeps clear of the screen's ends, as the page's text does.
+    let card = Card.width(in: width - webView.safeAreaInsets.left - webView.safeAreaInsets.right)
+    let tall = Card.picture(width: card, page: webView.bounds.size)
+    configuration.rect = CGRect(x: 0, y: 0, width: width, height: width * tall / card)
     configuration.snapshotWidth = NSNumber(value: Double(card))
     return try? await webView.takeSnapshot(configuration: configuration)
   }
@@ -626,6 +628,26 @@ private final class PageWebView: WKWebView {
     // Out first: a command is in one menu only.
     builder.remove(menu: .lookup)
     builder.insertSibling(ours, beforeMenu: .learn)
+  }
+
+  // The page is asked to keep its place before WebKit hears of the new width, so it marks the
+  // text at its top as it stood.
+  override var frame: CGRect {
+    willSet { if Self.turns(from: frame.size, to: newValue.size) { keepPlace() } }
+  }
+
+  override var bounds: CGRect {
+    willSet { if Self.turns(from: bounds.size, to: newValue.size) { keepPlace() } }
+  }
+
+  /// Whether a page of one size becomes the other by a turn of the phone: upright to on its
+  /// side, or back.
+  static func turns(from old: CGSize, to new: CGSize) -> Bool {
+    old.width > 0 && old.height > 0 && new.width > 0 && new.height > 0 && (old.width > old.height) != (new.width > new.height)
+  }
+
+  private func keepPlace() {
+    callAsyncJavaScript(PageScripts.keepPlace, arguments: [:], in: nil, in: .defaultClient)
   }
 
   override func didMoveToWindow() {

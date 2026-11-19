@@ -48,6 +48,7 @@ struct LoginLayer: View {
           tab.loginSave.hold()
         }
         .padding(.horizontal, Bar.side)
+        .footColumn()
         .padding(.bottom, keyboard > 0 ? keyboard + 2 : barTop + Bar.gap)
         .transition(.opacity.combined(with: .offset(y: 6)))
       } else if clear, !logins.isEmpty, !choosing {
@@ -63,6 +64,7 @@ struct LoginLayer: View {
           tab.loginState.putAwayOffer()
         }
         .padding(.horizontal, Bar.side)
+        .footColumn()
         // The keyboard's frame over a page starts a little above the bar of arrows it draws.
         .padding(.bottom, keyboard > 0 ? keyboard + 2 : barTop + Bar.gap)
         .transition(.opacity.combined(with: .offset(y: 6)))

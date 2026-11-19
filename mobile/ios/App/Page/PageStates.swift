@@ -63,6 +63,7 @@ struct StatePage: View {
     }
     .frame(maxWidth: .infinity, alignment: .leading)
     .padding(.horizontal, Column.side + Column.inset)
+    .footColumn()
     .padding(.top, States.overBar)
     .padding(.bottom, foot + States.overBar)
   }
@@ -203,42 +204,55 @@ private struct SiteSignInSheet: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      Text(request.door.isProxy ? "Sign in to the proxy \(request.host)" : "Sign in to \(request.host)")
-        .scaled(20, .semibold, relativeTo: .title3)
-        .accessibilityAddTraits(.isHeader)
-        .padding(.horizontal, Column.inset)
-        .padding(.vertical, 8)
-      ForEach(notes, id: \.self) { note in
-        Text(note)
-          .scaled(15, relativeTo: .subheadline)
-          .foregroundStyle(palette.soft)
-          .fixedSize(horizontal: false, vertical: true)
-          .padding(.horizontal, Column.inset)
-          .padding(.bottom, States.noteGap)
-      }
-      if request.wrong {
-        Label("That name or password wasn't right. Try again.", systemImage: "exclamationmark.circle")
-          .scaled(15, relativeTo: .subheadline)
-          .foregroundStyle(palette.alarm)
-          .padding(.horizontal, Column.inset)
-          .padding(.bottom, States.noteGap)
-      }
+      // Over the keyboard with the phone on its side there's room for one field and the buttons:
+      // the words and the fields scroll, to the field being typed in.
+      ScrollViewReader { rows in
+        SheetRows {
+          VStack(alignment: .leading, spacing: 0) {
+            Text(request.door.isProxy ? "Sign in to the proxy \(request.host)" : "Sign in to \(request.host)")
+              .scaled(20, .semibold, relativeTo: .title3)
+              .accessibilityAddTraits(.isHeader)
+              .padding(.horizontal, Column.inset)
+              .padding(.vertical, 8)
+            ForEach(notes, id: \.self) { note in
+              Text(note)
+                .scaled(15, relativeTo: .subheadline)
+                .foregroundStyle(palette.soft)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, Column.inset)
+                .padding(.bottom, States.noteGap)
+            }
+            if request.wrong {
+              Label("That name or password wasn't right. Try again.", systemImage: "exclamationmark.circle")
+                .scaled(15, relativeTo: .subheadline)
+                .foregroundStyle(palette.alarm)
+                .padding(.horizontal, Column.inset)
+                .padding(.bottom, States.noteGap)
+            }
 
-      TextField("Name", text: $name)
-        .textInputAutocapitalization(.never)
-        .autocorrectionDisabled()
-        .submitLabel(.next)
-        .focused($focus, equals: .name)
-        .onSubmit { focus = .password }
-        .modifier(SignInField())
-      SecureField("Password", text: $password)
-        // Not called a password to the system, which would offer to keep one in the Keychain
-        // under ilo's name once the sheet goes: this one is the session's alone.
-        .textContentType(.oneTimeCode)
-        .submitLabel(.go)
-        .focused($focus, equals: .password)
-        .onSubmit(send)
-        .modifier(SignInField())
+            TextField("Name", text: $name)
+              .textInputAutocapitalization(.never)
+              .autocorrectionDisabled()
+              .submitLabel(.next)
+              .focused($focus, equals: .name)
+              .onSubmit { focus = .password }
+              .modifier(SignInField())
+              .id(Field.name)
+            SecureField("Password", text: $password)
+              // Not called a password to the system, which would offer to keep one in the Keychain
+              // under ilo's name once the sheet goes: this one is the session's alone.
+              .textContentType(.oneTimeCode)
+              .submitLabel(.go)
+              .focused($focus, equals: .password)
+              .onSubmit(send)
+              .modifier(SignInField())
+              .id(Field.password)
+          }
+        }
+        .onChange(of: focus) {
+          if let focus { rows.scrollTo(focus, anchor: .bottom) }
+        }
+      }
 
       HStack(spacing: States.between) {
         Button("Cancel") { tab.cancelSignIn() }

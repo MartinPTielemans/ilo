@@ -78,6 +78,51 @@ struct RowStyle: ButtonStyle {
   }
 }
 
+extension View {
+  /// In the middle of the foot, no wider than the widest phone upright: where the bar stands,
+  /// and what rises around it, on a phone on its side.
+  func footColumn() -> some View {
+    frame(maxWidth: Column.widest).frame(maxWidth: .infinity)
+  }
+}
+
+/// A sheet's rows over its foot. They are as tall as they are while the sheet has the room, and
+/// scroll from the lowest when it hasn't, as on a phone on its side or over a keyboard: the
+/// buttons under them never move.
+struct SheetRows<Content: View>: View {
+  /// The end a list too long for its room starts from.
+  var from = UnitPoint.bottom
+  @ViewBuilder var content: Content
+
+  /// Whether the rows have less room than they need. Rows that fit don't take a pull on the sheet.
+  @State private var scrolls = false
+
+  var body: some View {
+    Hug {
+      ScrollView(.vertical) {
+        VStack(spacing: 0) { content }
+      }
+      .defaultScrollAnchor(from)
+      .scrollIndicators(.hidden)
+      .scrollDisabled(!scrolls)
+      .onScrollGeometryChange(for: Bool.self) { $0.contentSize.height > $0.containerSize.height + 1 } action: { scrolls = $1 }
+    }
+  }
+}
+
+/// As tall as its view wants to be, and no taller than the room it's given.
+private struct Hug: Layout {
+  func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+    guard let view = subviews.first else { return .zero }
+    let wanted = view.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil))
+    return CGSize(width: wanted.width, height: min(wanted.height, proposal.height ?? wanted.height))
+  }
+
+  func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+    subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
+  }
+}
+
 /// The bar: a pill floating over the foot of the screen.
 struct Pill<Content: View>: View {
   var tinted = false
@@ -179,6 +224,7 @@ struct BottomSheet<Content: View>: View {
   @ViewBuilder var content: Content
 
   @Environment(\.palette) private var palette
+  @Environment(\.low) private var low
   @State private var pull: CGFloat = 0
 
   var body: some View {
@@ -203,10 +249,11 @@ struct BottomSheet<Content: View>: View {
         }
         .padding(.horizontal, Bar.side)
         .padding(.bottom, Bar.gap)
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: Column.widest)
         .foregroundStyle(palette.text)
         .sheetGround(ground)
-        .padding(.top, headroom)
+        // On its side the screen has no status bar to keep a tall sheet's top clear of.
+        .padding(.top, low ? Bar.side : headroom)
         .offset(y: pull > 0 ? pull : Motion.resist(pull))
         .gesture(Pull(moved: { pull = $0 }, ended: release))
         .transition(.move(edge: .bottom))
