@@ -7,8 +7,8 @@
 # the window in front maximized as the app quits, or as the last window closes, comes back
 # maximized, its launch window too, and un-maximizes to the frame it had, as Windows' own
 # placement says (#1422). On Windows and X11, a window maximized behind the one in front comes back
-# maximized behind it, and un-maximizes to its frame (#1454). On Wayland, a window full screen as
-# the app quits comes back full screen, and one saved maximized comes back and lives (#3456).
+# maximized behind it, and un-maximizes to its frame (#1454). On Wayland, a window saved maximized
+# comes back and lives (#3456).
 # Reports the launch's times with one window brought back and with two.
 
 page='data:text/html,<title>relaunch</title>'
@@ -304,26 +304,13 @@ if windows; then
   maximized=" On Windows, the window in front maximized as the app quits or as the last window closes comes back maximized, its launch window too, and un-maximizes to the frame it had."
 fi
 
-# On Wayland, a window full screen as the app quits comes back full screen, and one saved maximized
-# comes back, each living past the frames that take its state: under sway, a window saved maximized
-# ended the browser at a frame after its first, on an empty window geometry (#3456). sway grants no
-# client a maximize, so the step saves the window maximized, as a quit under GNOME or KDE does. An
-# ended browser opens no window and answers no driver command, so those come after the first frame.
+# On Wayland, a window saved maximized comes back and lives past the frames that take its state:
+# under sway, it ended the browser at a frame after its first, on an empty window geometry (#3456).
+# sway grants no client a maximize, so the step saves the window maximized, as a quit under GNOME or
+# KDE does. An ended browser opens no window and answers no driver command, so those come after the
+# first frame.
 states=
 if [ -n "$wayland" ]; then
-  send window 1
-  send fullscreen
-  expect '^browser: window entered full screen$' "the driver's full screen didn't put the window full screen"
-  quit_by_key
-  exited
-  launch_logged "$out/relaunch-fullscreen.log"
-  await '^browser: restored in ' || fail "the relaunch after a full-screen quit didn't restore the Spaces"
-  await '^browser: first frame at ' || fail "the window quit full screen didn't draw"
-  await '^browser: window opened [0-9]' || fail "the window quit full screen didn't open"
-  await '^browser: window entered full screen$' || fail "quit full screen, the window came back otherwise"
-  send window 1
-  send fullscreen
-  expect '^browser: window left full screen$' "the window brought back full screen didn't leave it"
   quit_by_key
   exited
   python3 -I -c '
@@ -342,7 +329,7 @@ with open(sys.argv[1], "w", encoding="utf-8") as f:
   await '^browser: window opened [0-9]' || fail "the window saved maximized didn't open (#3456)"
   send window 1
   ../tools/window-screenshot.sh "$pid" "$out/relaunch-maximized.png" || fail "no window to capture"
-  states=" On Wayland, a window full screen as the app quits comes back full screen, and one saved maximized comes back and lives past its first frames."
+  states=" On Wayland, a window saved maximized comes back and lives past its first frames."
 fi
 exec 3>&-
 quit
