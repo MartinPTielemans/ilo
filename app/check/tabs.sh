@@ -380,7 +380,11 @@ none_while '^browser: menu submenu Move to hidden$' ||
 expect '^browser: menu submenu Move to hidden$' "resting under Move to didn't close its submenu"
 send key escape
 expect '^browser: menu closed$' "escape didn't close the menu"
-# Press, drag and release: a right press opens the menu, and letting go on an item picks it.
+# Press, drag and release: a right press opens the menu, and letting go on an item picks it. The
+# page has had the keyboard since the bar's ↩ loaded it, and each menu closing gives it back, so a
+# click on the sidebar gives the UI the keyboard first: the click into the page after the pick then
+# shows where it went.
+send click $sidebar_point
 set -- $(row 0)
 send rightpress $1 $2
 expect "^browser: menu shown $(cased 'Copy Link, ')" "a right press on the top Today row didn't show its menu"
