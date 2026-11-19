@@ -58,11 +58,10 @@ permissions:
 env:
   # The runs that pass on X11 so far. live-folder-site asks GitHub, so it's here and not Wayland's:
   # each X11 run with this list (nights, trains, a dispatch naming none) trips if its signed-out
-  # answer changes shape (#2979). adblock-native makes uBlock Origin's pass of the 50 sites and then
-  # the native engine's, on one snapshot, so a parity regression shows before the flip (#2111).
+  # answer changes shape (#2979).
   LINUX_RUNS: >-
     tabs window find agents spaces crash profiles private blank quit mcp appearance access history
-    load preview import adblock adblock-lists adblock-cosmetic adblock-page adblock-native passkeys onboarding links link-cards
+    load preview import adblock adblock-lists adblock-cosmetic adblock-page passkeys onboarding links link-cards
     relaunch split extensions capture board popup pinned about windows dialogs trouble cards passwords updates
     restore favorites keys clear media store adblock-live live-folder-site widevine sync sync-account sync-devices
     sync-extensions little devices pair notifications calls battery battery-os idle handback
@@ -118,6 +117,7 @@ jobs:
         env:
           RUNS: ${{ inputs.runs }}
           SESSION: ${{ inputs.session || 'xvfb' }}
+          EVENT: ${{ github.event_name }}
         run: |
           # check.sh's own list, the runs it does with no names and the ones it does only when named.
           all=$(sh app/check.sh --runs)
@@ -129,6 +129,11 @@ jobs:
           legs=
           for session in $sessions; do
             passing=$LINUX_RUNS
+            # The night's alone: adblock-native makes uBlock Origin's pass of the 50 sites and then
+            # the native engine's, on one snapshot, so a parity regression shows before the flip
+            # (#2111). A train's red has to be about the PRs in it, and two loads of 50 live sites
+            # minutes apart can go red on a site that changed between them.
+            [ "$EVENT" != schedule ] || passing="$passing adblock-native"
             [ "$session" != wayland ] || passing=$WAYLAND_RUNS
             case $RUNS in
             '') runs=$passing ;;
