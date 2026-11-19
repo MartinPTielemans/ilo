@@ -602,6 +602,65 @@ done
 closed=$(call close_tab "{\"tab\":$opener}")
 case "$closed" in "Closed tab $opener."*) ;; *) fail "closing the opener answered: $closed" ;; esac
 
+# An agent's navigate starts its tab a new browsing group, so a site it left keeps no hold on the
+# tab through a pop-up the site opened: the pop-up's message to its opener and its move of it go
+# nowhere (#3595). Before that, while they're related, the same press in the pop-up does both, which
+# is what makes the step's green mean something. 127.0.0.1 is another site than localhost.
+printf '%s' '<!doctype html><title>Steer</title>
+<button onclick="open(&quot;steers.html&quot;, &quot;&quot;, &quot;popup&quot;)">Pop up</button>
+<script>addEventListener("message", event => document.title = "messaged " + event.data)</script>' \
+  > "$out/site/steer.html"
+printf '%s' '<!doctype html><title>Steers</title><script>let tries = 0</script>
+<button onclick="tries++; try { opener.postMessage(&quot;steered&quot;, &quot;*&quot;);
+ opener.location = &quot;/steered.html&quot; } catch (error) {} document.title = &quot;tried &quot; + tries">Steer</button>' \
+  > "$out/site/steers.html"
+printf '%s' '<!doctype html><title>Steered</title><p>Steered.</p>' > "$out/site/steered.html"
+printf '%s' '<!doctype html><title>Left</title><p>The site the agent went to.</p>
+<script>addEventListener("message", event => document.title = "messaged " + event.data)</script>' \
+  > "$out/site/left.html"
+opened=$(call open_tab "{\"url\":\"localhost:$port/steer.html\"}")
+steer_tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+[ -n "$steer_tab" ] || fail "open_tab steer.html answered: $opened"
+ref=$(printf '%s\n' "$opened" | sed -n 's/.*- button "Pop up" \[\(e[0-9]*\)\].*/\1/p' | head -1)
+behind=$(grep -c "^browser: tab [0-9]* opened by $steer_tab in the background\$" "$log" || true)
+call click "{\"tab\":$steer_tab,\"ref\":\"$ref\"}" > /dev/null
+await_more "^browser: tab [0-9]* opened by $steer_tab in the background\$" "$behind" ||
+  fail "the steer page's Pop up didn't open a tab behind"
+popup_tab=$(sed -n "s/^browser: tab \([0-9]*\) opened by $steer_tab in the background\$/\1/p" "$log" | tail -1)
+await_log "^browser: title $popup_tab Steers\$" "the steer page's pop-up didn't load"
+steer=$(call snapshot "{\"tab\":$popup_tab}" | sed -n 's/.*- button "Steer" \[\(e[0-9]*\)\].*/\1/p' | head -1)
+[ -n "$steer" ] || fail "the snapshot of the steer page's pop-up had no Steer button"
+call click "{\"tab\":$popup_tab,\"ref\":\"$steer\"}" > /dev/null
+await_log "^browser: title $popup_tab tried 1\$" "the pop-up's Steer didn't run"
+await_log "^browser: title $steer_tab messaged steered\$" \
+  "the pop-up's message didn't reach its opener while they were related, so the step can't see one"
+await_log "^browser: loaded $steer_tab http://localhost:$port/steered.html\$" \
+  "the pop-up didn't move its opener while they were related, so the step can't see a move"
+went=$(call navigate "{\"tab\":$steer_tab,\"url\":\"http://127.0.0.1:$port/left.html\"}")
+case "$went" in "error: "*) fail "the agent's navigate to another site answered: $went" ;; esac
+await_log "^browser: loaded $steer_tab http://127.0.0.1:$port/left.html\$" \
+  "the agent's navigate to another site didn't load"
+messaged=$(grep -c "^browser: title $steer_tab messaged steered\$" "$log" || true)
+steered=$(grep -c 'steered\.html' "$out/site.log" || true)
+loads=$(grep -c "^browser: loaded $steer_tab " "$log" || true)
+call click "{\"tab\":$popup_tab,\"ref\":\"$steer\"}" > /dev/null
+# A frame's messages reach the browser in order, so by the title the browser has had the message
+# and the move. The move it let through would start at once, and the control's took well under a
+# second, so 5 s is room to see one.
+await_log "^browser: title $popup_tab tried 2\$" "the pop-up's second Steer didn't run"
+for _ in $(seq 50); do
+  [ "$(grep -c "^browser: title $steer_tab messaged steered\$" "$log")" = "$messaged" ] ||
+    fail "the pop-up of the site the agent left messaged the agent's tab"
+  [ "$(grep -c 'steered\.html' "$out/site.log")" = "$steered" ] &&
+    [ "$(grep -c "^browser: loaded $steer_tab " "$log")" = "$loads" ] ||
+    fail "the pop-up of the site the agent left moved the agent's tab: $(grep "^browser: loaded $steer_tab " "$log" | tail -1)"
+  sleep 0.1
+done
+for tab in $popup_tab $steer_tab; do
+  closed=$(call close_tab "{\"tab\":$tab}")
+  case "$closed" in "Closed tab $tab."*) ;; *) fail "closing the steer step's tab $tab answered: $closed" ;; esac
+done
+
 # The client's work is one card at the sidebar's foot, from its first call that acted on a tab, and
 # the cases' calls on their connection of their own were steps of the same card (#1080). Its name
 # is the one the client gave.
@@ -698,6 +757,23 @@ CHIP
   ../tools/window-screenshot.sh "$pid" "$out/agent-pages.png" || fail "no window to capture"
   watch "$agent_tab"
   ../tools/window-screenshot.sh "$pid" "$out/agent-watched.png" || fail "no window to capture"
+  # The agent's navigate in its tab the user watches leaves the keyboard where the user has it, here
+  # the sidebar's, not in the page it loads (#3595). Then to its page again, for the steps after.
+  send click $sidebar_point
+  ui_key=$key ui_focus=$focus
+  loaded="^browser: loaded $agent_tab http://localhost:$port/two.html\$"
+  loads=$(grep -c "$loaded" "$log" || true)
+  went=$(call navigate "{\"tab\":$agent_tab,\"url\":\"localhost:$port/two.html\"}")
+  case "$went" in "error: "*) fail "the agent's navigate in its watched tab answered: $went" ;; esac
+  await_more "$loaded" "$loads" ||
+    fail "the agent's navigate in its watched tab didn't load"
+  send state
+  [ "$key $focus" = "$ui_key $ui_focus" ] ||
+    fail "the agent's navigate in its watched tab took the keyboard from $ui_key, on $ui_focus, to $key, on $focus"
+  loaded="^browser: loaded $agent_tab http://localhost:$port/agent.html\$"
+  loads=$(grep -c "$loaded" "$log" || true)
+  call navigate "{\"tab\":$agent_tab,\"url\":\"localhost:$port/agent.html\"}" > /dev/null
+  await_more "$loaded" "$loads" || fail "the agent's navigate back to its page didn't load it"
 fi
 
 # Split views (#1597): the agent puts two tabs of its own side by side, adds a third, lists them
