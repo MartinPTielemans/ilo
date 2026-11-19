@@ -1,8 +1,11 @@
 import WebKit
 
 /// The scripts ilo runs in every page, in a world of their own, apart from the page's scripts:
-/// the page can't see them, call what they call, or read what they send.
+/// the page can't see them, call what they call, or read what they send. All but `print`, which
+/// is the page's own to call, and sends nothing but that it was called.
 enum PageScripts {
+  /// The page called `print()`, which WebKit gives an app no other word of.
+  static let printMessage = "iloPrint"
   /// What the page says of each touch, for `SwipeRule`.
   static let touchMessage = "iloTouch"
   /// What the page's fields hold, for `Unsent`.
@@ -14,8 +17,18 @@ enum PageScripts {
     content.addUserScript(WKUserScript(source: typed, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .defaultClient))
     content.add(handler, contentWorld: .defaultClient, name: touchMessage)
     content.add(handler, contentWorld: .defaultClient, name: typedMessage)
+    content.addUserScript(WKUserScript(source: print, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page))
+    content.add(handler, contentWorld: .page, name: printMessage)
     LoginScript.add(to: content, handler: handler)
   }
+
+  /// The page's `print()`, which does nothing in a web view left to itself.
+  private static let print = """
+    (() => {
+      const handler = window.webkit && webkit.messageHandlers && webkit.messageHandlers.iloPrint;
+      if (handler) window.print = () => { handler.postMessage(null); };
+    })();
+    """
 
   /// Says, as a finger comes down, whether it's on something that takes a sideways gesture: a
   /// part of the page that scrolls sideways, a field, a slider, a map or any canvas, a frame, or

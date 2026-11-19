@@ -396,7 +396,7 @@ import os
     #expect(browser.looking == text)
     browser.open(pass)
     #expect(browser.shared == pass)
-    #expect(browser.pass == nil)
+    #expect(browser.passes.isEmpty)
   }
 }
 

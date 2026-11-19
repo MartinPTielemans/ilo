@@ -1,5 +1,6 @@
 import IloSync
 import Observation
+import PassKit
 import UIKit
 import WebKit
 
@@ -16,6 +17,8 @@ struct Prompt: Identifiable {
     case wants(String)
     /// Something ilo has to say, with nothing to choose.
     case notice(String)
+    /// A calendar file or a pass that its sheet can't take, which can still be downloaded.
+    case unopened(Handed, name: String)
     /// A reload that would send a form's answers a second time.
     case resend
   }
@@ -116,14 +119,21 @@ final class Browser {
   private(set) var prompt: Prompt?
   /// A downloaded file open in Quick Look.
   var looking: URL?
-  /// A pass, in Wallet's own sheet for adding one.
-  var pass: URL?
+  /// Passes, in Wallet's own sheet for adding them.
+  var passes: [PKPass] = []
+  /// A calendar file's event, in the system's sheet for adding one.
+  var adding: Invite?
+  /// The tab whose page is in the system's print sheet, or on its way there.
+  private(set) var printing: WebTab?
   /// A file to copy somewhere else in Files, in the system's picker of places.
   var copying: URL?
   /// What the user has typed in answer to a page's question.
   var typed = ""
-  /// A link the user chose to share, or a file, for the system's sheet to send on.
-  var shared: URL?
+  /// A link the user chose to share, or a file, for the system's sheet to send on. A copy made
+  /// to send goes once the sheet has.
+  var shared: URL? {
+    didSet { if shared != oldValue { downloads.discard(oldValue) } }
+  }
   /// Launch puts the keyboard up, once.
   var wantsKeyboard: Bool
 
@@ -823,10 +833,15 @@ final class Browser {
   /// Puts a page's question to the user. A page that isn't on screen, or that asks while another
   /// question is up, gets no for an answer.
   func ask(_ kind: Prompt.Kind, from tab: WebTab) async -> Bool {
-    guard prompt == nil, tab === page || tab === peek else { return false }
+    guard prompt == nil, isUp(tab) else { return false }
     return await withCheckedContinuation { continuation in
       prompt = Prompt(kind: kind, host: Site.name(of: tab.url)) { continuation.resume(returning: $0) }
     }
+  }
+
+  /// Whether a tab's page is the one on screen.
+  func isUp(_ tab: WebTab) -> Bool {
+    tab === page || tab === peek
   }
 
   /// Asks a page's question that takes a typed answer, starting from the answer the page
@@ -851,15 +866,60 @@ final class Browser {
 
   // MARK: Files
 
-  /// Opens a downloaded file: a pass in Wallet's own sheet for adding one; what Quick Look shows
-  /// in Quick Look, which has the system's Add for a calendar file and a contact; and anything
-  /// else in the system's sheet, to hand to an app that opens it.
+  /// Opens a downloaded file: a pass in Wallet's own sheet for adding one; a calendar file's
+  /// event in the system's sheet for adding one; what Quick Look shows in Quick Look; and
+  /// anything else in the system's sheet, to hand to an app that opens it.
   func open(_ file: URL) {
     switch FileKind.of(file) {
-    case .pass: pass = file
+    case .passes(let found): passes = found
+    case .invite(let invite): adding = invite
     case .looked: looking = file
     case .other: shared = file
     }
+  }
+
+  /// A calendar file or a pass came for its sheet, from a link in `tab`. The sheet is given
+  /// what's in it, and the copy goes at once: nothing of it is kept or listed. One the sheet
+  /// can't take is offered as the download it would have been, and kept only on a yes.
+  func hand(_ file: URL?, from tab: WebTab) {
+    guard let file else { return tell("The file didn't download.") }
+    // As a question from a page that isn't on screen, or that comes while another is up.
+    guard isUp(tab), prompt == nil, !systemSheetUp else { return downloads.discard(file) }
+    switch FileKind.of(file) {
+    case .passes(let found):
+      passes = found
+      downloads.discard(file)
+    case .invite(let invite):
+      adding = invite
+      downloads.discard(file)
+    case .looked, .other:
+      let name = file.lastPathComponent
+      Task {
+        if await ask(.unopened(Handed(type: nil, name: name) ?? .invite, name: name), from: tab) {
+          downloads.keep(file, listed: !tab.isPrivate)
+        } else {
+          downloads.discard(file)
+        }
+      }
+    }
+  }
+
+  /// One of the system's own sheets is over the page.
+  private var systemSheetUp: Bool {
+    !passes.isEmpty || adding != nil || looking != nil || shared != nil || copying != nil || printing != nil
+  }
+
+  /// Puts a tab's page in the system's print sheet. The view that has the screen presents it,
+  /// and says when it's done.
+  func print(_ tab: WebTab) {
+    guard isUp(tab), tab.canPrint, prompt == nil, !systemSheetUp else { return }
+    printing = tab
+  }
+
+  func printed() {
+    let tab = printing
+    printing = nil
+    tab?.printed()
   }
 
   /// Share on an open PDF sends the file, not its link, and Print prints it: a copy is fetched

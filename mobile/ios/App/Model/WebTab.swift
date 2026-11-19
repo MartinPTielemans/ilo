@@ -114,6 +114,10 @@ final class WebTab: NSObject, Identifiable {
   @ObservationIgnored private let posted = PostedPages()
   /// Whether the page is a PDF: a file to save and to print, and no site's page to block on.
   private(set) var isPDF = false
+  /// Whether there's a page to print: one that loaded, not the words for one that didn't.
+  var canPrint: Bool { hasPage && failure == nil }
+  @ObservationIgnored private var mayPrint = true
+  @ObservationIgnored private var closesAfterPrint = false
   /// What kind of file the load on its way answered with.
   @ObservationIgnored private var answered: String?
 
@@ -493,6 +497,28 @@ final class WebTab: NSObject, Identifiable {
   @objc private func touched(_ press: UILongPressGestureRecognizer) {
     guard press.state == .began else { return }
     writes.touch()
+    touchedPage()
+  }
+
+  /// A finger came down on the page.
+  func touchedPage() {
+    mayPrint = true
+  }
+
+  /// The page called `print()`. The system's sheet comes up once for a page just opened and once
+  /// for each touch after it, so a page can't keep it on screen.
+  fileprivate func heardPrint() {
+    guard mayPrint, canPrint else { return }
+    mayPrint = false
+    browser?.print(self)
+  }
+
+  /// The print sheet is done with this page: a window that printed itself and closed, as a
+  /// receipt's does in one breath, closes now.
+  func printed() {
+    guard closesAfterPrint else { return }
+    closesAfterPrint = false
+    browser?.closedItself(self)
   }
 
   /// The page moved under the bar, which follows the finger and nothing else: a page that
@@ -646,8 +672,7 @@ extension WebTab: WKNavigationDelegate {
     case "http", "https":
       break
     case "about", "blob", "data":
-      // A file the page made itself, behind a link that says to download it: its name comes
-      // with the download, which asks then.
+      // A file the page made itself, behind a link that says to download it.
       return (action.shouldPerformDownload ? .download : .allow, preferences)
     default:
       // Another app's address, such as mailto: or tel:. Only the page itself may ask, and the
@@ -658,11 +683,9 @@ extension WebTab: WKNavigationDelegate {
       return (.cancel, preferences)
     }
 
-    if action.shouldPerformDownload {
-      let name = url.lastPathComponent.isEmpty ? Site.name(of: url) : url.lastPathComponent
-      let wanted = await browser?.ask(.download(name: name), from: self) == true
-      return (wanted ? .download : .cancel, preferences)
-    }
+    // A link that says to download what it leads to. What that is, and its name, come with the
+    // download, which asks then, or hands it to the system's sheet for its kind.
+    if action.shouldPerformDownload { return (.download, preferences) }
     // A reload of what a form's answers brought sends them again: a second order, a second
     // payment. The user says whether it does.
     if inMainFrame, action.navigationType == .formResubmitted, await browser?.ask(.resend, from: self) != true {
@@ -696,6 +719,12 @@ extension WebTab: WKNavigationDelegate {
 
   func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse) async -> WKNavigationResponsePolicy {
     let disposition = (response.response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Disposition") ?? ""
+    // A calendar file or a pass is the system's to show, in its sheet for adding one, however
+    // the site sent it. The sheet is the question, so none is asked here, and only the page on
+    // screen may bring one up.
+    if response.isForMainFrame, isHanded(response.response) {
+      return browser?.isUp(self) == true ? .download : .cancel
+    }
     if response.canShowMIMEType, !disposition.lowercased().hasPrefix("attachment") {
       if response.isForMainFrame { answered = response.response.mimeType?.lowercased() }
       return .allow
@@ -705,21 +734,37 @@ extension WebTab: WKNavigationDelegate {
     return await browser?.ask(.download(name: name), from: self) == true ? .download : .cancel
   }
 
+  private func isHanded(_ response: URLResponse) -> Bool {
+    Handed(type: response.mimeType, name: response.suggestedFilename ?? "") != nil
+  }
+
+  /// Puts the question of a download to the user, once its name is known.
+  private var question: (String) async -> Bool {
+    { [weak self] name in
+      guard let self, let browser = self.browser else { return false }
+      return await browser.ask(.download(name: name), from: self)
+    }
+  }
+
+  /// Takes a calendar file or a pass that came for its sheet.
+  private var hands: (URL?) -> Void {
+    { [weak self] file in
+      guard let self, let browser = self.browser else { return }
+      browser.hand(file, from: self)
+    }
+  }
+
   // A download is the list's from here, not this tab's: it goes on when the tab closes.
 
   func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
-    // A file the page made itself hasn't been asked about yet: its name comes with the download.
-    let made = !["http", "https"].contains(navigationAction.request.url?.scheme?.lowercased())
-    browser?.downloads.take(
-      download, listed: !isPrivate,
-      asks: made ? { [weak self] name in
-        guard let self, let browser = self.browser else { return false }
-        return await browser.ask(.download(name: name), from: self)
-      } : nil)
+    // Nothing has been asked yet: the file's name comes with the download.
+    browser?.downloads.take(download, listed: !isPrivate, asks: question, hands: hands)
   }
 
   func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
-    browser?.downloads.take(download, listed: !isPrivate)
+    // A file for a sheet wasn't asked about. One too big for its sheet is asked about after all.
+    let handed = isHanded(navigationResponse.response)
+    browser?.downloads.take(download, listed: !isPrivate, asks: handed ? question : nil, hands: handed ? hands : nil)
   }
 
   func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
@@ -939,6 +984,7 @@ private final class PageMessages: NSObject, WKScriptMessageHandler {
     switch message.name {
     case PageScripts.touchMessage: tab?.touchVerdict(message.body)
     case PageScripts.typedMessage where message.frameInfo.isMainFrame: tab?.typed(message.body)
+    case PageScripts.printMessage: tab?.heardPrint()
     case LoginScript.message: tab?.heardLogin(message)
     case LoginScript.usedMessage: tab?.heardLoginUsed(message)
     default: break
@@ -966,7 +1012,13 @@ extension WebTab: WKUIDelegate {
   /// The page closed its own window, which WebKit lets one do that a script opened, or that has
   /// been nowhere else.
   func webViewDidClose(_ webView: WKWebView) {
-    browser?.closedItself(self)
+    // In a browser `print()` holds the script until the sheet is done. Here it doesn't, so the
+    // close that follows it waits for the sheet instead.
+    if browser?.printing === self {
+      closesAfterPrint = true
+    } else {
+      browser?.closedItself(self)
+    }
   }
 
   // MARK: A long press

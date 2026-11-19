@@ -188,6 +188,9 @@ private struct BrowserScreen: View {
         TextField("", text: $browser.typed)
         Button("OK") { browser.answer(true) }
         Button("Cancel", role: .cancel) { browser.answer(false) }
+      case .unopened:
+        Button("Download") { browser.answer(true) }
+        Button("Cancel", role: .cancel) { browser.answer(false) }
       case .says, .notice:
         Button("OK") { browser.answer(true) }
       case .resend:
@@ -197,6 +200,7 @@ private struct BrowserScreen: View {
       switch prompt.kind {
       case .leave(let url): Text("\(prompt.host) wants to leave ilo for an app that opens “\(url.scheme ?? "")” links.")
       case .download: Text("From \(prompt.host).")
+      case .unopened(_, let name): Text("Download “\(name)” from \(prompt.host) instead?")
       case .says(let text), .asks(let text), .wants(let text): Text(text)
       case .notice, .resend: Text("")
       }
@@ -204,8 +208,21 @@ private struct BrowserScreen: View {
     // A file ending is felt, wherever its button is.
     .sensoryFeedback(.impact(weight: .light), trigger: browser.downloads.ended)
     .quickLookPreview($browser.looking)
-    .sheet(isPresented: Binding(get: { browser.pass != nil }, set: { if !$0 { browser.pass = nil } })) {
-      if let file = browser.pass { PassSheet(file: file) }
+    .sheet(isPresented: Binding(get: { !browser.passes.isEmpty }, set: { if !$0 { browser.passes = [] } })) {
+      PassSheet(passes: browser.passes) { browser.passes = [] }
+    }
+    .sheet(isPresented: Binding(get: { browser.adding != nil }, set: { if !$0 { browser.adding = nil } })) {
+      if let invite = browser.adding {
+        InviteSheet(invite: invite) { browser.adding = nil }
+          .ignoresSafeArea()
+      }
+    }
+    .onChange(of: browser.printing?.id) {
+      guard let tab = browser.printing else { return }
+      Task {
+        await Printing.print(tab, copying: browser.downloads)
+        browser.printed()
+      }
     }
     .sheet(isPresented: Binding(get: { browser.copying != nil }, set: { if !$0 { browser.copying = nil } })) {
       if let file = browser.copying { CopyPicker(file: file) }
@@ -224,6 +241,8 @@ private struct BrowserScreen: View {
     case .download(let name): "Download “\(name)”?"
     case .says, .asks, .wants: prompt?.host ?? ""
     case .notice(let text): text
+    case .unopened(.pass, _): "Wallet can't add this pass"
+    case .unopened(.invite, _): "ilo can't add this invite"
     case .resend, nil: ""
     }
   }
