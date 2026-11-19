@@ -6,13 +6,14 @@
 # heard before, so the run's record, screen-reader-speech.txt, is what each key made NVDA say, and
 # screen-reader-focus.txt is what UI Automation and the window manager had focused after it. It
 # judges the onboarding, the sidebar and the command bar: each step, each Tab through one, Tab
-# from the window in an empty Space and with a page, F6 from the page and the arrows down the rows
-# have NVDA say something, with UI Automation's focus off GPUI's unnamed root and, in the sidebar,
-# on the ringed row; ↓ in the bar has it say the suggestion selected and where it stands, ⇧Tab from
-# a page's first control and Tab past its last ring the tab shown's row, and Tab and ⇧Tab from the
-# ring have it say the page's first and last control, and the Library's key has it on the
-# Library's search field, where ↓ has it say the row ringed and where it stands and Tab has it on
-# the Library's sections. Elsewhere it records.
+# from the window in an empty Space, F6 from the page and the arrows down the rows have NVDA say
+# something, with UI Automation's focus off GPUI's unnamed root and, in the sidebar, on the ringed
+# row; Tab in the page ⌃T's ↩ loads has the page's focus on its first control; ↓ in the bar has
+# it say the suggestion selected and where it stands, ⇧Tab from a page's first control and Tab
+# past its last ring the tab shown's row, Tab and ⇧Tab from the ring go straight into the page,
+# with its focus back on its first and last control, and have NVDA say the page, and the Library's
+# key has it on the Library's search field, where ↓ has it say the row ringed and where it stands
+# and Tab has it on the Library's sections. Elsewhere it records.
 # NVDA's portable copy (GPL) is fetched from NV Access' release on GitHub, its checksum pinned, into
 # the hosted runner's temporary folder, and never installed: with NVDA_DIR naming a portable copy,
 # the run uses that instead. Off a hosted Windows runner, and without NVDA_DIR, it skips.
@@ -78,14 +79,23 @@ nvda_quit() {
   nvda_on=
   "$nvda_dir/nvda.exe" -q > /dev/null 2>&1 || true
 }
-run_undo=nvda_quit
+# The focus-event record's own process, from focus_events_start, stopped by its PID.
+events="$out/screen-reader-events.txt"
+recorder=
+screen_reader_undo() {
+  [ -z "$recorder" ] || kill "$recorder" 2> /dev/null || true
+  recorder=
+  nvda_quit
+}
+run_undo=screen_reader_undo
 
 speech="$out/screen-reader-speech.txt"
 # Not $focus, which send sets.
 focus_file="$out/screen-reader-focus.txt"
 : > "$speech"
 : > "$focus_file"
-# What has focus by UI Automation, by the window manager and by MSAA, after step $1.
+# What has focus by UI Automation, by the window manager and by MSAA, after step $1, and in the
+# page, MSAA's focus in Chromium's tree, which UI Automation doesn't reach.
 focused() {
   echo "== $1" >> "$focus_file"
   python3 -I - "$(cat "/proc/$pid/winpid")" >> "$focus_file" 2>&1 << 'PYTHON' || true
@@ -148,6 +158,35 @@ try:
           f" {pointer.accChildCount} children")
 except Exception as error:
     print("MSAA focus window's client: none,", error)
+try:
+    pages = []
+    if window(info.hwndFocus).startswith('Chrome_RenderWidgetHostHWND '):
+        pages.append(info.hwndFocus)
+    Each = ctypes.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
+
+    def each(hwnd, _):
+        if window(hwnd).startswith('Chrome_RenderWidgetHostHWND ') and user32.IsWindowVisible(hwnd):
+            pages.append(hwnd)
+        return True
+
+    # The page's window under the focus window, or with none there, the shown one in the window.
+    for parent in (info.hwndFocus, foreground):
+        if parent and not pages:
+            user32.EnumChildWindows(parent, Each(each), 0)
+    if not pages:
+        raise LookupError("no page window at the focus window")
+    pointer = ctypes.POINTER(acc.IAccessible)()
+    oleacc.AccessibleObjectFromWindow(pages[0], -4, ctypes.byref(acc.IAccessible._iid_),
+                                      ctypes.byref(pointer))
+    focus = pointer.accFocus
+    if isinstance(focus, int):
+        name, role = pointer.accName(focus), pointer.accRole(focus)
+    else:
+        focus = focus.QueryInterface(acc.IAccessible)
+        name, role = focus.accName(0), focus.accRole(0)
+    print(f'MSAA page focus: "{name}", role {role}')
+except Exception as error:
+    print("MSAA page focus: none,", error)
 PYTHON
 }
 # Waits up to 5 s for NVDA to say something after the key or launch it last heard, so the next
@@ -177,6 +216,13 @@ on_row() {
   tail -n 4 "$focus_file" | grep -q "^UI Automation focus: [A-Za-z ]* \"$1\", framework AccessKit" ||
     fail "UI Automation's focus isn't on the sidebar's $1 row after $2: $focus_file"
 }
+# The page's own focus, MSAA's in Chromium's tree, is on its control named $1 with MSAA's role $2
+# after $3: that's the control the page's keyboard is on and the one NVDA hears the focus is on.
+# UI Automation's focus can't say, as it stops at Chromium's window.
+page_focus() {
+  tail -n 4 "$focus_file" | grep -q "^MSAA page focus: \"$1\", role $2\$" ||
+    fail "The page's focus isn't on its $1 after $3: $focus_file"
+}
 # NVDA says something matching $2 within 5 s of the log's line $1, or the run fails as $3 says.
 says() {
   for _ in $(seq 50); do
@@ -184,6 +230,72 @@ says() {
     sleep 0.1
   done
   fail "$3: $nvda_log"
+}
+# Whether NVDA says $2 within 5 s of the log's line $1, counted in $back_said and never a fail. Back
+# onto the control the page last had, NVDA says it only when the control's focus event reaches it
+# in a cycle after the page's own (#3396). It keeps one focus event a cycle, the latest, and on a
+# document entered from outside it ignores one for the control focused there last, by design.
+back_said=0
+says_maybe() {
+  for _ in $(seq 50); do
+    if tail -n "+$(($1 + 1))" "$nvda_log" | grep -q "^Speaking .*$2"; then
+      back_said=$((back_said + 1))
+      return 0
+    fi
+    sleep 0.1
+  done
+}
+# Records each focus event ilo's process raises, as NVDA hears them, one line each in $events, with
+# the window it names and whether that's a top-level one. Only what the event says, without asking
+# ilo for the object: a reader's question into ilo on every event would shift NVDA's timing, which
+# #3396's steps are sensitive to.
+focus_events_start() {
+  : > "$events"
+  python3 -I -u - "$(cat "/proc/$pid/winpid")" >> "$events" 2>&1 << 'PYTHON' &
+import ctypes
+import ctypes.wintypes as w
+import sys
+import time
+
+sys.stdout.reconfigure(encoding="utf-8", newline="\n")
+user32 = ctypes.windll.user32
+user32.GetAncestor.restype = w.HWND
+Proc = ctypes.WINFUNCTYPE(None, w.HANDLE, w.DWORD, w.HWND, w.LONG, w.LONG, w.DWORD, w.DWORD)
+
+
+def on_event(hook, event, hwnd, object_id, child_id, thread, when):
+    name = ctypes.create_unicode_buffer(256)
+    user32.GetClassNameW(hwnd, name, 256)
+    # GA_ROOT, 2: the window is its own root when it's top-level.
+    level = "top" if hwnd and user32.GetAncestor(hwnd, 2) == hwnd else "child"
+    print(f"{time.time():.3f} focus {level} {name.value} {hwnd or 0:x} object {object_id}"
+          f" child {child_id}", flush=True)
+
+
+proc = Proc(on_event)
+# EVENT_OBJECT_FOCUS out of context, as NVDA hooks it, from ilo's process only.
+if not user32.SetWinEventHook(0x8005, 0x8005, 0, proc, int(sys.argv[1]), 0, 0):
+    sys.exit("no focus-event hook")
+print("recording", flush=True)
+message = w.MSG()
+while user32.GetMessageW(ctypes.byref(message), 0, 0, 0) > 0:
+    user32.DispatchMessageW(ctypes.byref(message))
+PYTHON
+  recorder=$!
+  for _ in $(seq 50); do
+    grep -q '^recording$' "$events" && return 0
+    sleep 0.1
+  done
+  fail "the focus-event record didn't start: $events"
+}
+# No focus event since line $1 of $events named ilo's browser window itself, its top-level
+# Chromium window, after $2: the way into the page went straight to the page's own window. Before
+# #3411 the window took the focus first on nearly every return from the ring, and NVDA, busy with
+# its event, merged the page's own two and dropped the control's (#3396).
+straight_in() {
+  if tail -n "+$(($1 + 1))" "$events" | grep -q ' focus top Chrome_WidgetWin_1 '; then
+    fail "ilo's browser window took the focus on the way into the page after $2: $events"
+  fi
 }
 # A key the driver sends as a hand's, as NVDA hears it.
 press() {
@@ -252,11 +364,19 @@ spoken "typed a page's address"
 press return
 expect '^browser: loaded' "the page didn't load"
 spoken "the page loaded"
-# The window holds the keyboard here, the page not having it (#3239), and Tab rings the tab
-# shown's row, read by its name (#3237).
-judging=1
+# ⌃T's ↩ gives the page it loads the keyboard (#3239), so Tab puts the page's focus on its first
+# control, the link, and ⇧Tab from the link rings the tab shown's row, read by its name (#3237).
+# Whether NVDA says the link is a note, not judged: no count of it is yet clean enough to hold
+# main to.
+at=$(wc -l < "$nvda_log")
 press tab
-on_row Reading tab
+page_focus Link 30 "Tab in the page ⌃T's ↩ loaded"
+said=no
+tail -n "+$((at + 1))" "$nvda_log" | grep -q "^Speaking .*'Link', 'link'" && said=yes
+echo "note: NVDA said the page's first control after Tab in the page ⌃T's ↩ loaded: $said"
+judging=1
+press tab shift
+on_row Reading "⇧Tab from the first control of the page ⌃T's ↩ loaded"
 judging=
 press tab
 press down
@@ -272,22 +392,45 @@ press down
 press down
 press tab shift
 # ⇧Tab again, from the page's first control, the link, rings the tab shown's row, read by its
-# name, and Tab from the ring has NVDA say the link; Tab past the last control, the button, rings
-# the row again, and ⇧Tab from it has NVDA say the button (#3220). Each as the focused control's
-# name and role, as the document's line NVDA reads on entering the page names both as well.
+# name, and Tab from the ring goes straight into the page with its focus back on the link; Tab past
+# the last control, the button, rings the row again, and ⇧Tab from it goes straight in with the
+# page's focus back on the button (#3220). Each time NVDA says the page. Whether it says the control
+# too is noted, not judged: back onto the control the page left from, NVDA drops it at times, in
+# Chrome too, as its own rules say (#3396). When it does say a control, it's that one.
+focus_events_start
 judging=1
 press tab shift
 on_row Reading "⇧Tab from the page's first control"
 at=$(wc -l < "$nvda_log")
+from=$(wc -l < "$events")
 press tab
-says "$at" "'Link', 'link'" "NVDA didn't say the page's first control after Tab from the ring"
+page_focus Link 30 "Tab from the ring"
+straight_in "$from" "Tab from the ring"
+says "$at" "'Reading', 'document'" "NVDA didn't say the page after Tab from the ring"
+says_maybe "$at" "'Link', 'link'"
+if tail -n "+$((at + 1))" "$nvda_log" | grep -q "^Speaking .*'Button', 'button'"; then
+  fail "NVDA said the button after Tab from the ring onto the link: $nvda_log"
+fi
 press tab
+page_focus Button 43 "Tab from the link"
 press tab
 on_row Reading "Tab past the page's last control"
 at=$(wc -l < "$nvda_log")
+from=$(wc -l < "$events")
 press tab shift
-says "$at" "'Button', 'button'" "NVDA didn't say the page's last control after ⇧Tab from the ring"
+page_focus Button 43 "⇧Tab from the ring"
+straight_in "$from" "⇧Tab from the ring"
+says "$at" "'Reading', 'document'" "NVDA didn't say the page after ⇧Tab from the ring"
+says_maybe "$at" "'Button', 'button'"
+if tail -n "+$((at + 1))" "$nvda_log" | grep -q "^Speaking .*'Link', 'link'"; then
+  fail "NVDA said the link after ⇧Tab from the ring onto the button: $nvda_log"
+fi
+press tab
+on_row Reading "Tab from where ⇧Tab from the ring left the keyboard, the page's last control"
 judging=
+kill "$recorder" 2> /dev/null || true
+recorder=
+echo "note: NVDA said the control the page's focus came back onto from the ring $back_said of 2 times (#3396)"
 # Out of the page into the sidebar with F6, Focus Sidebar, and along its rows: each is read by its
 # name, with UI Automation's focus on GPUI's node for it, not Chromium's window (#3151). A second
 # tab first, at the top of Today, so ↓ has the first page's row to go to.

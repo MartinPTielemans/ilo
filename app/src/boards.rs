@@ -102,11 +102,7 @@ pub fn list(profile: &Path) -> Vec<Listed> {
             let id = entry.file_name().into_string().ok()?;
             let folder = entry.path();
             (is_id(&id) && folder.is_dir()).then(|| {
-                let name = std::fs::read_to_string(folder.join("name"))
-                    .ok()
-                    .map(|name| name.trim().to_owned())
-                    .filter(|name| !name.is_empty())
-                    .unwrap_or_else(|| "Board".to_owned());
+                let name = read_name(&folder);
                 let thumb = Some(folder.join("thumb.png")).filter(|thumb| thumb.is_file());
                 let changed = (std::fs::metadata(folder.join("board.json")))
                     .or_else(|_| std::fs::metadata(&folder))
@@ -129,6 +125,94 @@ pub fn list(profile: &Path) -> Vec<Listed> {
             .then_with(|| a.id.cmp(&b.id))
     });
     boards
+}
+
+/// The name a Board's row was given, else the product's.
+fn read_name(folder: &Path) -> String {
+    std::fs::read_to_string(folder.join("name"))
+        .ok()
+        .map(|name| name.trim().to_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "Board".to_owned())
+}
+
+/// Whether `name` is one the core gives a file it stored on a Board: its bytes' SHA-256 in
+/// lowercase hex and its picture's extension (core/board_store.cc's FileName). A file half stored
+/// has a temporary name, so it isn't one.
+fn is_stored(name: &str) -> bool {
+    name.split_once('.').is_some_and(|(hash, extension)| {
+        hash.len() == 64
+            && hash
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            && ["png", "jpg", "gif", "webp"].contains(&extension)
+    })
+}
+
+/// A copy of the Board named `name`: "<name> copy", or "<name> copy 2", "<name> copy 3" and on,
+/// the first no Board of `taken` has, as Finder names a duplicate. A copy's copy counts on from
+/// the same "<name> copy" rather than being "copy copy".
+pub fn copy_name(name: &str, taken: &[String]) -> String {
+    let root = match name.rsplit_once(" copy ") {
+        Some((root, number))
+            if !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()) =>
+        {
+            root
+        }
+        _ => name.strip_suffix(" copy").unwrap_or(name),
+    };
+    let first = format!("{root} copy");
+    (1..)
+        .map(|n| match n {
+            1 => first.clone(),
+            n => format!("{first} {n}"),
+        })
+        .find(|each| !taken.contains(each))
+        .unwrap_or(first)
+}
+
+/// Copies Board `from` of `profile` as Board `to`, named by `copy_name`: its file, its picture and
+/// the files it stored, but not the captures still to land on it (they land once, on the Board
+/// they were sent to) or a file half stored. The copy is made in a hidden folder the list skips
+/// and renamed to `to` once whole, so a half copy is never listed or opened. One that fails stays
+/// in its hidden folder: removing it is the owner's call (#3406). Returns the copy's name. Off the
+/// main thread.
+pub fn duplicate(profile: &Path, from: &str, to: &str) -> io::Result<String> {
+    if !is_id(from) || !is_id(to) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not a Board's id",
+        ));
+    }
+    let source = dir(profile).join(from);
+    let taken: Vec<String> = list(profile).into_iter().map(|board| board.name).collect();
+    let name = copy_name(&read_name(&source), &taken);
+    let hidden = dir(profile).join(format!(".copy-{to}"));
+    std::fs::create_dir(&hidden)?;
+    std::fs::copy(source.join("board.json"), hidden.join("board.json"))?;
+    match std::fs::copy(source.join("thumb.png"), hidden.join("thumb.png")) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        copied => {
+            copied?;
+        }
+    }
+    match std::fs::read_dir(source.join("files")) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+        Ok(entries) => {
+            std::fs::create_dir(hidden.join("files"))?;
+            for entry in entries {
+                let entry = entry?;
+                let stored = entry.file_name().to_str().is_some_and(is_stored);
+                if stored && entry.file_type()?.is_file() {
+                    std::fs::copy(entry.path(), hidden.join("files").join(entry.file_name()))?;
+                }
+            }
+        }
+    }
+    std::fs::write(hidden.join("name"), &name)?;
+    std::fs::rename(&hidden, dir(profile).join(to))?;
+    Ok(name)
 }
 
 /// Keeps `name` as Board `id`'s, for the Library, as its row was named. Off the main thread.
@@ -268,6 +352,100 @@ mod tests {
         );
         forget_removed(&profile).unwrap();
         assert!(remove(&profile, "../x").is_err() && write_name(&profile, "x", "y").is_err());
+        std::fs::remove_dir_all(&profile).unwrap();
+    }
+
+    #[test]
+    fn a_copy_is_named_by_the_next_free_number_and_a_copys_copy_counts_on() {
+        let taken = |names: &[&str]| {
+            names
+                .iter()
+                .map(|name| name.to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(copy_name("Trip", &taken(&["Trip"])), "Trip copy");
+        assert_eq!(
+            copy_name("Trip", &taken(&["Trip", "Trip copy"])),
+            "Trip copy 2"
+        );
+        assert_eq!(
+            copy_name("Trip", &taken(&["Trip", "Trip copy", "Trip copy 2"])),
+            "Trip copy 3"
+        );
+        assert_eq!(
+            copy_name("Trip copy", &taken(&["Trip", "Trip copy"])),
+            "Trip copy 2"
+        );
+        assert_eq!(
+            copy_name("Trip copy 2", &taken(&["Trip copy", "Trip copy 2"])),
+            "Trip copy 3"
+        );
+        // A number that's the name's own isn't counted on.
+        assert_eq!(copy_name("Room 101", &[]), "Room 101 copy");
+        assert_eq!(copy_name("Board", &taken(&["Board"])), "Board copy");
+    }
+
+    #[test]
+    fn a_duplicate_has_the_boards_file_picture_name_and_stored_files_and_nothing_else() {
+        let profile = std::env::temp_dir().join(format!("ilo-boards-{}", new_id()));
+        let (from, to) = (new_id(), new_id());
+        let folder = make(&profile, &from).unwrap();
+        std::fs::write(folder.join("board.json"), r#"{"version":1,"cards":[1]}"#).unwrap();
+        std::fs::write(folder.join("thumb.png"), b"\x89PNG").unwrap();
+        write_name(&profile, &from, "Trip").unwrap();
+        std::fs::write(folder.join("arrived"), "waiting").unwrap();
+        let files = folder.join("files");
+        std::fs::create_dir(&files).unwrap();
+        let stored = format!("{}.png", "c".repeat(64));
+        std::fs::write(files.join(&stored), b"picture").unwrap();
+        std::fs::write(files.join(".org.chromium.Chromium.XyZ123"), b"half").unwrap();
+        std::fs::write(files.join(format!("{}.exe", "d".repeat(64))), b"not").unwrap();
+
+        assert_eq!(duplicate(&profile, &from, &to).unwrap(), "Trip copy");
+        let copy = dir(&profile).join(&to);
+        let read = |path: PathBuf| std::fs::read(path).unwrap();
+        assert_eq!(
+            read(copy.join("board.json")),
+            read(folder.join("board.json"))
+        );
+        assert_eq!(read(copy.join("thumb.png")), b"\x89PNG");
+        let mut copied: Vec<String> = std::fs::read_dir(copy.join("files"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        copied.sort();
+        assert_eq!(copied, [stored]);
+        assert!(
+            !copy.join("arrived").exists(),
+            "the captures waiting were copied"
+        );
+        assert!(!dir(&profile).join(format!(".copy-{to}")).exists());
+        let names: Vec<String> = list(&profile).into_iter().map(|board| board.name).collect();
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&"Trip copy".to_owned()), "{names:?}");
+        // The source is as it was.
+        assert!(
+            folder.join("arrived").is_file()
+                && files.join(".org.chromium.Chromium.XyZ123").is_file()
+        );
+
+        // A second copy takes the next number; an unnamed Board's is "Board copy".
+        let again = new_id();
+        assert_eq!(duplicate(&profile, &from, &again).unwrap(), "Trip copy 2");
+        let unnamed = new_id();
+        make(&profile, &unnamed).unwrap();
+        assert_eq!(
+            duplicate(&profile, &unnamed, &new_id()).unwrap(),
+            "Board copy"
+        );
+
+        // A Board that isn't there leaves its hidden folder, out of the list, and nothing else.
+        let (gone, lost) = (new_id(), new_id());
+        assert!(duplicate(&profile, &gone, &lost).is_err());
+        assert!(dir(&profile).join(format!(".copy-{lost}")).is_dir());
+        assert!(!dir(&profile).join(&lost).exists());
+        assert_eq!(list(&profile).len(), 5);
+        assert!(duplicate(&profile, "../x", &new_id()).is_err());
         std::fs::remove_dir_all(&profile).unwrap();
     }
 }

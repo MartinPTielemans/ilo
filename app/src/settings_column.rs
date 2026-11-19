@@ -21,7 +21,7 @@ use crate::tokens::settings::{
     COLUMN, COLUMN_TOP, FOOT_BOTTOM, FOOT_GLYPH, FOOT_GLYPH_ALPHA, FOOT_TEXT, NAME, PLATE_GAP,
     SEARCH_DIMMED, SEARCH_GAP, SECTION_GLYPH, SECTION_GLYPH_ALPHA, SECTION_GLYPH_GAP,
     SECTION_GROUP_GAP, SECTION_HOVERED, SECTION_SELECTED, SECTION_SELECTED_LIGHT, SECTION_SHADOW,
-    SECTION_TEXT, SECTION_X,
+    SECTION_SHADOW_BLUR, SECTION_SHADOW_Y, SECTION_TEXT, SECTION_X,
 };
 use crate::tokens::shell::{PLATE_HEIGHT, PLATE_INSET};
 
@@ -273,8 +273,8 @@ pub fn column(
 fn plate(base: Rgba, selected: bool, dark: bool) -> gpui::Div {
     let shadow = BoxShadow {
         color: rgba(SECTION_SHADOW).into(),
-        offset: point(px(0.), px(1.)),
-        blur_radius: px(2.),
+        offset: point(px(0.), px(SECTION_SHADOW_Y)),
+        blur_radius: px(SECTION_SHADOW_BLUR),
         spread_radius: px(0.),
         inset: false,
     };

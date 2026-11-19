@@ -16,6 +16,7 @@
 #include "content/public/browser/frame_shown.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/stretch_content_on_resize_mac.h"
+#include "ui/events/base_event_utils.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/views/widget/widget.h"
 
@@ -593,6 +594,18 @@ base::ScopedClosureRunner WatchOutlineMoves(views::Widget*,
                                             base::RepeatingCallback<void(const gfx::Point&)>) {
   // The Mac moves the window itself as it's dragged.
   return base::ScopedClosureRunner();
+}
+
+std::optional<base::TimeTicks> PointerEventTime() {
+  // A move loop moves the window from its event monitor, which AppKit runs from sendEvent:, so the
+  // event being sent is the drag that moved it, or the release that ended the loop.
+  NSEvent* event = NSApp.currentEvent;
+  constexpr NSEventMask kPointer = NSEventMaskLeftMouseDown | NSEventMaskLeftMouseDragged |
+                                   NSEventMaskLeftMouseUp | NSEventMaskMouseMoved;
+  if (!event || !(NSEventMaskFromType(event.type) & kPointer)) {
+    return std::nullopt;
+  }
+  return ui::EventTimeStampFromSeconds(event.timestamp);
 }
 
 bool PageDialogsInOwnWindow() {

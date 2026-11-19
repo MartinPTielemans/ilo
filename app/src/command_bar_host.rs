@@ -146,6 +146,14 @@ impl command_bar::Host for Bar {
         crate::settings::bar_hidden();
     }
 
+    fn focus_page(&self) {
+        unsafe { bc::bc_window_focus_page(front().0) };
+    }
+
+    fn agents_page(&self, cx: &App) -> bool {
+        shell::agents_page_shown(cx)
+    }
+
     fn dismiss(&self) {
         unsafe { platform::host_dismiss_overlay(COMMAND_BAR) };
         crate::settings::bar_hidden();

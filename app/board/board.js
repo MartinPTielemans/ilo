@@ -104,9 +104,10 @@ function restore(from, to) {
 
 // --- Saving ---
 
-let saveTimer = 0, saving = null, again = false;
+let saveTimer = 0, saving = null, again = false, pending = false;
 function changed() {
   if (!writable) return;
+  pending = true;
   clearTimeout(saveTimer);
   saveTimer = setTimeout(save, SAVE_AFTER);
 }
@@ -118,6 +119,7 @@ async function save() {
     again = true;
     return saving.then((done) => done !== false);
   }
+  pending = false;
   const bytes = new TextEncoder().encode(JSON.stringify({ version: 1, camera, cards }));
   if (bytes.byteLength > MAX_BOARD) {
     unsaved("This Board is too large to save. What's here stays on screen: remove some notes or ink, and it saves again.");
@@ -928,6 +930,17 @@ function read(path, type = "text") {
   });
 }
 
+// Under the note of a Board that can't be read, its file in the system's file manager, to copy out
+// or mend, as the page never writes over it (#3224). Chrome's word for that off the Mac. It takes
+// the keyboard, as nothing else on the page does anything.
+function offerFile() {
+  const show = document.createElement("button");
+  show.textContent = navigator.userAgent.includes("Mac OS X") ? "Show in Finder" : "Show in Folder";
+  show.addEventListener("click", () => send("show"));
+  $("#note").append(show);
+  show.focus();
+}
+
 async function open_() {
   useTool("select");
   const answer = id ? await send("hello") : "missing";
@@ -946,7 +959,9 @@ async function open_() {
     board = JSON.parse(text);
   } catch {}
   if (!board || typeof board !== "object" || Array.isArray(board)) {
-    return say("This Board's file can't be read.");
+    say("This Board's file can't be read.");
+    offerFile();
+    return;
   }
   cards = Array.isArray(board.cards) ? board.cards : [];
   camera = { x: 0, y: 0, zoom: 1, ...board.camera };
@@ -960,6 +975,9 @@ async function open_() {
   offerFirstNote();
 }
 
+// Opening the bar or the Library takes the keyboard from the page, so what's done there with the
+// Board, a Duplicate among it, finds its last change saved rather than a second old.
+addEventListener("blur", () => { if (pending) save(); });
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden" && writable) save().then(saveThumb);
   // What came while its tab wasn't showing lands now, at the centre of the view shown.

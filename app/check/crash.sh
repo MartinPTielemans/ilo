@@ -29,10 +29,10 @@ with open(sys.argv[1], "w", encoding="utf-8") as f:
 ' "$prefs" || fail "the session couldn't be marked clean in $prefs"
 # What no annotation may have: the switch that gives the profile, its folder and the home, which
 # have the user's name, as Windows writes them there.
-profile=$(dirname "$saved")
+user_data=$(dirname "$saved")
 home=$HOME
-! windows || { profile=$(cygpath -w "$profile") && home=$(cygpath -w "$HOME"); }
-python3 -I check/collector.py "$out/collector-port" --user-data-dir "$profile" "$home" \
+! windows || { user_data=$(cygpath -w "$user_data") && home=$(cygpath -w "$HOME"); }
+python3 -I check/collector.py "$out/collector-port" --user-data-dir "$user_data" "$home" \
   > "$out/collector.log" 2>&1 &
 collector=$!
 for _ in $(seq 50); do

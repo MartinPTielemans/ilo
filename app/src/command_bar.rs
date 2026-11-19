@@ -70,6 +70,7 @@ use crate::tokens::command_bar::ICON_BOX_X;
 use crate::tokens::command_bar::ICON_SIZE;
 use crate::tokens::command_bar::INPUT_ICON;
 use crate::tokens::command_bar::INPUT_ICON_X;
+use crate::tokens::command_bar::INPUT_LINE;
 use crate::tokens::command_bar::INPUT_TEXT;
 use crate::tokens::command_bar::INPUT_TEXT_X;
 use crate::tokens::command_bar::PLATE_INSET;
@@ -434,7 +435,9 @@ fn command_glyph(command: shell::Command) -> &'static str {
         Command::ViewHistory => "icons/rotate-ccw-clock.svg",
         Command::ClearBrowsingData => "icons/brush-cleaning.svg",
         Command::NewNote | Command::NewNoteSplit => "icons/file.svg",
-        Command::NewBoard | Command::ViewBoards => "icons/presentation.svg",
+        Command::NewBoard | Command::DuplicateBoard | Command::ViewBoards => {
+            "icons/presentation.svg"
+        }
         Command::Settings | Command::SiteSearchSettings => "icons/settings.svg",
         Command::KeyboardShortcuts => "icons/keyboard.svg",
         Command::About => "icons/info.svg",
@@ -525,6 +528,12 @@ pub trait Host {
     fn set_height(&self, height: f32);
     /// Hides the bar's window once the user has chosen something in it.
     fn hide(&self);
+    /// Gives the page the browser window shows the keyboard, once the bar has hidden over the page
+    /// it went to.
+    fn focus_page(&self);
+    /// Whether the page the bar goes to would be an agent's: a task's page the window shows in
+    /// place, or a tab in an agent's Space, neither of which takes the user's keyboard (#3164).
+    fn agents_page(&self, cx: &App) -> bool;
     /// Hides the bar's window as the user leaves it without choosing anything.
     fn dismiss(&self);
     /// Gives the bar's window the keyboard back, which it found it hasn't while it shows, unless
@@ -1152,39 +1161,49 @@ pub fn space_shown(tabs: Vec<shell::BarTab>, open_tabs: Vec<shell::BarTab>, cx: 
                 cx.defer(move |cx| host.asking(true, cx));
                 return matches!(bar.target, Target::NewTab);
             }
-            let mut text = bar.input.read(cx).text().to_string();
-            if let Target::Tab(_) = bar.target {
-                bar.target = Target::NewTab;
-                if text == bar.page {
-                    text.clear();
-                }
-                bar.page.clear();
-            }
-            if bar.commands.is_some() {
-                // Which commands do something now is the shell's to say, once out of its update.
-                cx.defer(move |cx| {
-                    later
-                        .update(cx, |bar, window, cx| bar.list_commands(text, window, cx))
-                        .ok();
-                });
-            } else if matches!(bar.target, Target::Tabs) {
-                bar.name_tabs(text, window, cx);
-            } else {
-                // A completion from the profile before goes with its rows.
-                let typed = bar.typed(cx);
-                let text = if bar.completion.is_empty() {
-                    text
-                } else {
-                    typed
-                };
-                let caret = text.len();
-                let shown = text.clone().into();
-                bar.input
-                    .update(cx, |input, cx| input.set_text(shown, caret, window, cx));
-                bar.ask_for(text, window, cx);
-            }
+            bar.retarget(later, window, cx);
             cx.notify();
             matches!(bar.target, Target::NewTab)
+        })
+        .unwrap_or(false)
+}
+
+/// The window the bar shows over shows `tab`, another tab of its Space, as a browser shortcut can
+/// while the bar has the keyboard. ⌘L's bar edited the tab before, which isn't shown now, so its
+/// pick opens a new tab, as after another Space, and never loads where the user can't see it
+/// (#3428). A new pane's bar goes, as its split view isn't shown. Returns whether a bar that
+/// edited a tab opens a new tab now.
+pub fn tab_shown(tab: u64, cx: &mut App) -> bool {
+    let Some(bar_window) = cx.try_global::<CommandBarWindow>().cloned() else {
+        return false;
+    };
+    let later = bar_window.clone();
+    bar_window
+        .update(cx, |bar, window, cx| {
+            if !bar.open.get() {
+                return false;
+            }
+            match bar.target {
+                Target::Tab(edited) if edited != tab => {}
+                Target::Beside(with) if with != tab => {
+                    // The shell is in an update, which its dismissal would update again.
+                    bar.open.set(false);
+                    let host = bar.host.clone();
+                    cx.defer(move |_| host.dismiss());
+                    return false;
+                }
+                _ => return false,
+            }
+            log!("browser: command bar follows the tab shown");
+            if bar.ask.is_some() {
+                // An ask goes on, and its task opens where asks do.
+                bar.target = Target::NewTab;
+                bar.page.clear();
+            } else {
+                bar.retarget(later, window, cx);
+            }
+            cx.notify();
+            true
         })
         .unwrap_or(false)
 }
@@ -1673,6 +1692,42 @@ impl CommandBar {
     /// Search Tabs' tabs or a Spaces menu's Spaces.
     fn lists_own(&self) -> bool {
         matches!(self.target, Target::Tabs | Target::Spaces)
+    }
+
+    /// The tab it edited isn't shown now, so its pick opens a new tab, with what's typed kept and
+    /// the URL it opened on gone, and it asks again for the text.
+    fn retarget(&mut self, later: CommandBarWindow, window: &mut Window, cx: &mut Context<Self>) {
+        let mut text = self.input.read(cx).text().to_string();
+        if let Target::Tab(_) = self.target {
+            self.target = Target::NewTab;
+            if text == self.page {
+                text.clear();
+            }
+            self.page.clear();
+        }
+        if self.commands.is_some() {
+            // Which commands do something now is the shell's to say, once out of its update.
+            cx.defer(move |cx| {
+                later
+                    .update(cx, |bar, window, cx| bar.list_commands(text, window, cx))
+                    .ok();
+            });
+        } else if matches!(self.target, Target::Tabs) {
+            self.name_tabs(text, window, cx);
+        } else {
+            // A completion from the profile before goes with its rows.
+            let typed = self.typed(cx);
+            let text = if self.completion.is_empty() {
+                text
+            } else {
+                typed
+            };
+            let caret = text.len();
+            let shown = text.clone().into();
+            self.input
+                .update(cx, |input, cx| input.set_text(shown, caret, window, cx));
+            self.ask_for(text, window, cx);
+        }
     }
 
     fn lists_spaces(&self) -> bool {
@@ -2487,6 +2542,11 @@ impl CommandBar {
     }
 
     fn go(&mut self, _: &Go, _: &mut Window, cx: &mut Context<Self>) {
+        // ↩ while an input method composes is its own, to commit with, as AppKit's and Windows'
+        // take it before the bar: one that passes it on doesn't make the bar go with half a word.
+        if self.input.read(cx).composing() {
+            return;
+        }
         // A task isn't logged: it's the user's words.
         if self.ask.is_some() {
             return self.run_ask(self.selected, cx);
@@ -2504,8 +2564,13 @@ impl CommandBar {
         {
             // check.sh reads this line.
             log!("browser: command bar reloads tab {tab}");
+            let users = !self.host.agents_page(cx);
             self.close();
-            return self.host.reload(tab);
+            self.host.reload(tab);
+            if users {
+                self.host.focus_page();
+            }
+            return;
         }
         // Before anything is typed, that's one of the Space's tabs.
         if self.chosen().is_some() {
@@ -2551,8 +2616,16 @@ impl CommandBar {
     fn go_to_typed(&self, url: &str, typed: &str, cx: &mut App) {
         // check.sh reads this line.
         log!("browser: command bar go {url}");
+        // Asked before the page shows, which can take the window out of a task's area.
+        let users = !self.host.agents_page(cx);
         self.show_page(url, typed, cx);
         self.close();
+        // The page takes the keyboard, as Chrome's address bar gives it, wherever it was before the
+        // bar opened, such as in the UI over a Board. Chrome gives it only while its window is
+        // active, which on the Mac and Windows the bar's own window was until it hid (#3453).
+        if users {
+            self.host.focus_page();
+        }
     }
 
     /// ⌘↩: opens where ↩ would go in a tab behind the one shown, at the top of Today, and the bar
@@ -2857,7 +2930,14 @@ impl CommandBar {
             (0, Target::Tab(_)) if row.new_document => {
                 // check.sh reads this line.
                 log!("browser: command bar new tab {}", row.url);
+                let users = !self.host.agents_page(cx);
                 self.host.open_tab(&row.url, "", false);
+                self.close();
+                // A new document is a page the user went to, as go_to_typed's are.
+                if users {
+                    self.host.focus_page();
+                }
+                return;
             }
             (0, _) => return self.go_to(&row.url, cx),
             (tab, Target::Beside(with)) => {
@@ -3479,7 +3559,7 @@ impl Render for CommandBar {
                                 .pr(px(HINT_END))
                                 .gap(px(text_x - icon_x - icon))
                                 .text_size(px(text_size))
-                                .line_height(px(23.))
+                                .line_height(px(INPUT_LINE))
                                 .child(self.input_icon(cx))
                                 .when_some(self.mode_name(), |line, name| {
                                     let page = self.ask.as_ref().and_then(|ask| ask.page.as_ref());

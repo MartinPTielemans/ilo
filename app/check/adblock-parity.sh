@@ -29,7 +29,9 @@
 #     Both are read 8 s after the load (cdp.py's content), and the table says them, with the
 #     page's pictures, which vary too much between loads to hold a run to, a site's count from 4
 #     to 38. A watch page's text is as far as its player and comments got, so the video says
-#     whether it works.
+#     whether it works;
+#   - fewer than 45 of the sites compared, as bot checks stood in or the baseline's table has no
+#     row for them: a run that compared too few says nothing of the engine (#2111).
 # A host or address neither run requested counts for neither, as the ads a site serves change from
 # load to load. A site that's still Cloudflare's bot check 8 s after it loads gets one more go. If
 # the check still stands in either run, DataDome's captcha loaded over the page, the site sent
@@ -43,7 +45,9 @@
 # played 5 s, and it fails where the baseline's played with no ad and this run's showed one or
 # didn't play. It needs the network and the sites, so it runs only when named:
 # ./check.sh adblock-parity.
-# Both engines block with one copy of each list, downloaded once by the baseline's run.
+# Both engines block with one copy of each list, downloaded once by the baseline's run, or with
+# ADBLOCK_PARITY_LISTS naming the lists/ another run left, that copy: a Check dispatched with
+# lists_from takes an earlier run's, so the three OSes' runs block with one snapshot (#2111).
 # It leaves adblock-parity/sites.tsv, a capture a site, the requests recorded, in hidden/ what
 # each site hid, and in lists/ the lists it blocked with, which a run with uBlock Origin copies
 # beside its table for the next to compare.
@@ -87,7 +91,10 @@ else
   ublock="$(echo "$app"/Contents/Frameworks/*Framework.framework)/Resources/ublock"
 fi
 lists="$dir/lists"
-held_lists=
+# Lists named and not there fail the run: a download in their place would be another snapshot.
+held_lists=${ADBLOCK_PARITY_LISTS:-}
+[ -z "$held_lists" ] || [ -s "$held_lists/snapshot.txt" ] ||
+  fail "ADBLOCK_PARITY_LISTS names no lists another run left: no $held_lists/snapshot.txt"
 [ -z "${ADBLOCK_PARITY_BASELINE:-}" ] || held_lists="${ADBLOCK_PARITY_BASELINE%sites.tsv}lists"
 if [ -n "$held_lists" ] && [ -s "$held_lists/snapshot.txt" ]; then
   cp -R "$held_lists" "$lists"
@@ -688,6 +695,15 @@ if baseline:
         if s["missed"] and len(s["missed"]) >= 3:
             site_missed = True
             worse.append(f"{s['url']} showed what the baseline hid all of: {', '.join(s['missed'])}")
+# A run held to a baseline that compared too few of the sites isn't a gate: each bot check is a
+# site neither run was shown no worse on (#2111).
+if baseline:
+    compared = [s for s in sites if s["url"] in before and s["url"] not in unchecked]
+    if len(compared) < 45:
+        worse.append(f"only {len(compared)} of {len(sites)} sites were compared, under the floor of 45; "
+                     + ", ".join([f"{url} ({what})" for url, what in unchecked.items()]
+                                 + [f"{s['url']} (no row in the baseline's table)"
+                                    for s in sites if s["url"] not in before]))
 # Misses too few a site to fail one still add up, where an engine misses a little everywhere:
 # uBlock Origin against itself shows at most 3 in a run.
 missed = [(s["url"], m) for s in sites if s["url"] not in unchecked for m in s["missed"] or []]
