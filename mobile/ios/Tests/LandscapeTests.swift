@@ -214,11 +214,47 @@ private struct Turned<Content: View>: View {
     #expect(whole.frame.width <= Column.widest)
     #expect(abs(whole.frame.midX - Room.side.width / 2) < 1)
     #expect(whole.frame.minX >= Room.sideEdges.leading)
+    // The rows that show are the lowest, next to the buttons: the rest scroll in from above.
+    let scroll = try #require(stage.first(UIScrollView.self))
+    #expect(await eventually { scroll.contentOffset.y > 0 && scroll.contentOffset.y + scroll.bounds.height >= scroll.contentSize.height - 1 })
 
     // Turned back it's the sheet it was, and it was never made again: what's in it is kept.
     stage.turn(side: false)
     #expect(await eventually { rows.frame.height == 480 })
     #expect(made == 1)
+  }
+
+  @Test func `a list in a sheet is as tall as its rows, and scrolls once they pass the most it may stand`() async throws {
+    // A folder of two tabs: the sheet is its name and two rows, not the room a long folder may take.
+    let browser = stageBrowser()
+    let folder = try #require(browser.account.node("folder-1"))
+    #expect(browser.account.pinned(in: folder.space, folder: folder.id).count == 2)
+    let sheet = Place()
+    let stage = try Stage(browser) {
+      BottomSheet(isPresented: true, dismiss: {}) { FolderSheet(folder: folder.id).placed(sheet) }
+    }
+    defer { stage.close() }
+    #expect(await eventually { !sheet.frame.isNull && sheet.frame.height > 0 })
+    let upright = sheet.frame.height
+    #expect(upright < Dock.listHeight / 2)
+    // On its side there's room for both rows still, so it's the sheet it was upright.
+    stage.turn(side: true)
+    #expect(await eventually { sheet.frame.height == upright && sheet.frame.maxY <= Room.side.height - Room.sideEdges.bottom })
+    stage.close()
+
+    // Ten rows where six may stand: the list stops there, and the rest scroll.
+    let rows = Place()
+    let long = try Stage(browser) {
+      BottomSheet(isPresented: true, dismiss: {}) {
+        SheetRows(most: 6 * 48) {
+          ForEach(0..<10, id: \.self) { _ in Color.clear.frame(height: 48) }
+        }
+        .placed(rows)
+      }
+    }
+    defer { long.close() }
+    #expect(await eventually { rows.frame.height == 6 * 48 })
+    #expect(long.first(UIScrollView.self)?.isScrollEnabled == true)
   }
 
   @Test func `each of the app's sheets fits a phone on its side, between its head and the home indicator`() async throws {

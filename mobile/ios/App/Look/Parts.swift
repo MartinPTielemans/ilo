@@ -92,13 +92,15 @@ extension View {
 struct SheetRows<Content: View>: View {
   /// The end a list too long for its room starts from.
   var from = UnitPoint.bottom
+  /// The most the rows stand before they scroll, in a sheet with more room than that.
+  var most = CGFloat.infinity
   @ViewBuilder var content: Content
 
   /// Whether the rows have less room than they need. Rows that fit don't take a pull on the sheet.
   @State private var scrolls = false
 
   var body: some View {
-    Hug {
+    Hug(most: most) {
       ScrollView(.vertical) {
         VStack(spacing: 0) { content }
       }
@@ -110,12 +112,14 @@ struct SheetRows<Content: View>: View {
   }
 }
 
-/// As tall as its view wants to be, and no taller than the room it's given.
+/// As tall as its view wants to be, and no taller than the room it's given or the most it may be.
 private struct Hug: Layout {
+  var most = CGFloat.infinity
+
   func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
     guard let view = subviews.first else { return .zero }
     let wanted = view.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil))
-    return CGSize(width: wanted.width, height: min(wanted.height, proposal.height ?? wanted.height))
+    return CGSize(width: wanted.width, height: min(wanted.height, most, proposal.height ?? .infinity))
   }
 
   func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
