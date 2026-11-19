@@ -947,6 +947,7 @@ pub fn describe(action: &str) -> &'static str {
         "stopped by the user" => "You stopped it, which closed its connection",
         "hand_off" => "Handed you a tab",
         "close_tab" => "Closed a tab",
+        "page_dialog" => "Paused: the page shows a dialog",
         "discard_tab" => "Closed a tab without saving",
         "download" => "Downloaded a file",
         "pin_tab" => "Pinned a tab",
