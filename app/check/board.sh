@@ -484,6 +484,15 @@ height=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: lay
   sed 's/^browser: layout content [0-9]*x\([0-9]*\),.*/\1/')
 post click 204 $((height - 25))
 expect "^browser: menu shown .*$(cased 'New Board')" "the sidebar's + didn't offer New Board"
+# A menu shown again before the last one's hide has run keeps the keyboard it took (#3572): the +
+# menu closed with Escape and opened again at once, each posted without waiting, then ↓ rings a row.
+post key escape
+again=$step
+post click 204 $((height - 25))
+expect '^browser: menu closed' "Escape didn't close the sidebar's + menu" "$again"
+expect "^browser: menu shown .*$(cased 'New Board')" "the sidebar's + didn't open again just after Escape closed it"
+send key down
+expect '^browser: menu highlights .* at ' "↓ in the + menu, opened again just after it closed, rang no row: it hasn't the keyboard"
 send choose "$(cased 'New Board')"
 expect '^browser: command new-board via ' "the + menu's New Board didn't run New Board"
 made porch "the sidebar's +"
