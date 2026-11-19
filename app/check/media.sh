@@ -913,23 +913,55 @@ EOF
     echo "media: scrim capture $capture began at +$began ms from the move, lightness $hovered, $(cat "$out/probe-grab.txt" | tr '\n' ' ')"
     [ "$hovered" -lt 170 ] && break
   done
-  # Probe for #3354, never to land: six more moves into the Mini Player, each after its controls
-  # have hidden, with each capture's time.
+  # Probe for #3354, never to land: the Mini Player shown again, $probe_shows times, and hovered
+  # once right after each show, by the driver or, with probe_real=1, by the runner's real pointer
+  # moved in from outside it (check/pointer.mm, CI only). Each capture's time is logged.
   [ "$hovered" -lt 170 ] || echo "media: probe move 0 red"
-  cp "$out/mini-player-hover.png" "$out/probe-hover-0.png"
-  for attempt in 1 2 3 4 5 6; do
-    sleep 3
+  probe_real=0 probe_shows=5
+  if [ "$probe_real" = 1 ]; then
+    clang++ -fobjc-arc -framework Cocoa -o "$out/pointer" check/pointer.mm 2> "$out/pointer.log" ||
+      fail "check/pointer.mm didn't build: $(cat "$out/pointer.log")"
+  fi
+  for show in $(seq "$probe_shows"); do
+    send key x
+    expect "^browser: title $v landed\$" "probe show $show: x didn't land the video"
+    post rightclick $page_point
+    expect "^browser: menu shown .*$(cased 'Picture in Picture')" "probe show $show: no Picture in Picture"
+    send choose "$(cased 'Picture in Picture')"
+    expect "^browser: title $v floating\$" "probe show $show: the video didn't float"
+    shown=
+    for _ in $(seq 30); do
+      send pip
+      shown=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: pip at ' | cut -d' ' -f4-)
+      [ -n "$shown" ] && break
+      sleep 0.1
+    done
+    [ -n "$shown" ] || fail "probe show $show: no Mini Player"
+    read -r sx sy sw sh <<EOF
+$shown
+EOF
     moved_at=$(scrim_ms)
-    send pip move $((pw / 8 + attempt)) $((ph / 2))
-    echo "media: probe move $attempt sent by $moved_at"
-    for capture in 1 2 3 4; do
+    if [ "$probe_real" = 1 ]; then
+      "$out/pointer" move $((sx - 30)) $((sy + sh / 2)) $((sx + sw / 8)) $((sy + sh / 2)) \
+        > "$out/pointer.txt" 2>&1 || fail "probe show $show: pointer move: $(cat "$out/pointer.txt")"
+      how="the real pointer, $(cat "$out/pointer.txt")"
+    else
+      send pip move $((sw / 8)) $((sh / 2))
+      how="the driver"
+    fi
+    echo "media: probe show $show at $shown hovered by $how, sent by $moved_at"
+    for capture in 1 2 3; do
       began=$(($(scrim_ms) - moved_at))
-      FRAME="$at" ../tools/window-screenshot.sh "$pid" "$out/probe-hover-$attempt.png" floating \
+      FRAME="$shown" ../tools/window-screenshot.sh "$pid" "$out/probe-show-$show.png" floating \
         2> "$out/probe-grab.txt" || fail "no Mini Player to capture"
-      seen=$(lightness "$out/probe-hover-$attempt.png")
-      echo "media: probe move $attempt capture $capture began at +$began ms, lightness $seen, $(cat "$out/probe-grab.txt" | tr '\n' ' ')"
+      seen=$(lightness "$out/probe-show-$show.png")
+      echo "media: probe show $show capture $capture began at +$began ms, lightness $seen, $(tr '\n' ' ' < "$out/probe-grab.txt")"
       [ "$seen" -lt 170 ] && break
     done
+    if [ "$probe_real" = 1 ]; then
+      was=$(sed -n 's/.*, was //p' "$out/pointer.txt")
+      [ -z "$was" ] || "$out/pointer" to $was > /dev/null 2>&1
+    fi
   done
   hovered=133
   if [ "$first_capture" -gt 2500 ]; then
