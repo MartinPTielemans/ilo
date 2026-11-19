@@ -252,6 +252,10 @@ private struct SiteSignInSheet: View {
         .onChange(of: focus) {
           if let focus { rows.scrollTo(focus, anchor: .bottom) }
         }
+        // The keyboard takes its room after the field has it, and a turn takes more.
+        .onScrollGeometryChange(for: CGFloat.self) { $0.containerSize.height } action: { _, _ in
+          if let focus { rows.scrollTo(focus, anchor: .bottom) }
+        }
       }
 
       HStack(spacing: States.between) {

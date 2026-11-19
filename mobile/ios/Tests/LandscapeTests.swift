@@ -272,6 +272,62 @@ private struct Turned<Content: View>: View {
     #expect(long.first(UIScrollView.self)?.isScrollEnabled == true)
   }
 
+  @Test func `a sheet over the keyboard that wants more than its room leaves the screen around it where it was`() async throws {
+    let (layer, sheet) = (Place(), Place())
+    let stage = try Stage(stageBrowser()) {
+      BottomSheet(isPresented: true, dismiss: {}) { Color.clear.frame(height: 300).placed(sheet) }
+        .modifier(OverKeyboard())
+        .placed(layer)
+    }
+    defer { stage.close() }
+    stage.turn(side: true)
+    let keyboard = CGRect(x: 0, y: Room.side.height - 200, width: Room.side.width, height: 200)
+    let lifted = await eventually {
+      NotificationCenter.default.post(
+        name: UIResponder.keyboardWillChangeFrameNotification, object: nil, userInfo: [UIResponder.keyboardFrameEndUserInfoKey: keyboard])
+      return sheet.frame.maxY <= keyboard.minY && sheet.frame.height == 300
+    }
+    #expect(lifted)
+    // What the sheet is laid over is the screen's own room still: a layer that grew with its sheet
+    // would stand past the top, and take everything laid out with it there.
+    #expect(layer.frame.minY >= 0)
+    #expect(layer.frame.maxY <= Room.side.height)
+  }
+
+  @Test func `a site's question keeps the field being typed in over its buttons, once the keyboard has its room on a phone on its side`() async throws {
+    let server = try await Loopback { _ in
+      var refusal = Loopback.Response.html("<title>refused</title>", headers: ["WWW-Authenticate": "Basic realm=\"Camera\""])
+      refusal.status = 401
+      return refusal
+    }
+    let browser = stageBrowser()
+    browser.openNew(server.url("/door"))
+    browser.opened()
+    let page = try #require(browser.page)
+    #expect(await eventually { page.signIn != nil })
+    let stage = try Stage(browser) { SiteSignInLayer() }
+    defer { stage.close() }
+    stage.turn(side: true)
+    #expect(await eventually { stage.first(UITextField.self)?.isFirstResponder == true })
+    let field = try #require(stage.first(UITextField.self))
+    let rows = try #require(stage.first(UIScrollView.self))
+
+    // The keyboard of a phone on its side comes after the field has it, as the system says it
+    // does, and leaves the rows room for one field.
+    let keyboard = CGRect(x: 0, y: Room.side.height - 240, width: Room.side.width, height: 240)
+    let seen = await eventually {
+      NotificationCenter.default.post(
+        name: UIResponder.keyboardWillChangeFrameNotification, object: nil, userInfo: [UIResponder.keyboardFrameEndUserInfoKey: keyboard])
+      let typed = field.convert(field.bounds, to: stage.window)
+      let room = rows.convert(rows.bounds, to: stage.window)
+      // The sheet has come to rest over the keyboard, its buttons between that and its rows, with
+      // less room than the rows need: its head is on the screen, and the field is whole in the rows.
+      return room.maxY <= keyboard.minY - Bar.height && room.height < rows.contentSize.height - 1
+        && room.minY >= Bar.side && typed.minY >= room.minY - 1 && typed.maxY <= room.maxY + 1
+    }
+    #expect(seen)
+  }
+
   @Test func `each of the app's sheets fits a phone on its side, between its head and the home indicator`() async throws {
     let browser = stageBrowser()
     let signedOut = stageBrowser(signedIn: false)
