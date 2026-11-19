@@ -118,6 +118,12 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // From |tab|'s page, which the user clicked: a window showing it beside the tab it shows, in a
   // split view, shows it focused instead.
   static void OnPageClicked(bc_id tab);
+  // The user pressed a mouse button on |contents|'s page: the app hears of it if it's an agent's tab
+  // a window shows (tab_page_pressed), as the user acting there takes it from the agent.
+  static void PagePressed(content::WebContents* contents);
+  // The same for a press on |dialog|, a tab's dialog in browser window |window|, for the tab it
+  // shows over.
+  static void DialogPressed(views::Widget* window, views::Widget* dialog);
   // The hook for Chrome's tabs (hooks.h): |contents|, which asked to be shown, as Picture in
   // Picture's way back to its tab does, shows in the window holding it, in its Space.
   static void ActivateContents(content::WebContents* contents);
