@@ -40,8 +40,9 @@
 # one that asks no one clicked in, and one the agent clicked or typed in stays open until the agent
 # discards it. Its download asks first, and Allow Once downloads the
 # file, which the answer names, and Never leaves none. It sends requests to its tab's site, carrying a session it
-# never sees, and a change asks every time, in a card whose Allow sends it and Deny doesn't. Settings
-# › Agents opens each request to where it went and what it sent, or that the denied one wasn't. A bank's site asks first, in a card whose Allow Once opens it. Always Allow
+# never sees, and a change asks every time, in a card whose Allow sends it and Deny doesn't, a POST
+# whose override says GET too. Settings › Agents opens each request to where it went and what it
+# sent, or that the denied one wasn't, and names each by the method sent. A bank's site asks first, in a card whose Allow Once opens it. Always Allow
 # opens it from then on, as Settings › Agents lists with its Revoke. A login the
 # user saved fills in neither as the agent's tab loads it nor from a dropdown, and fills once the
 # user takes the tab over, without a reload. Closing the client's end ends its session with the tab.
@@ -2012,6 +2013,39 @@ CARD
   open_request "$denied_id" POST "to http://localhost:$port/api/items, not sent: title: Milk"
   ../tools/window-screenshot.sh "$pid" "$out/settings-agents-requests.png" || fail "no window to capture"
   # Back to General, for the visits below to click Agents.
+  send clickkey $(drawn "toolbar General")
+  expect '^browser: settings tab General$' "a click on General didn't show its section"
+  send key w cmd
+  expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+  # A POST whose override header says GET asks too, as a server may take either, Deny sends it
+  # nowhere, and Settings › Agents names it by the method sent.
+  before=$(grep -c "$changes" "$log" || true)
+  request request "{\"tab\":$frames_tab,\"requests\":[{\"method\":\"POST\",\"path\":\"/api/items\",\"headers\":{\"X-HTTP-Method-Override\":\"GET\"},\"body\":{\"title\":\"Oats\"}}]}" >&4
+  await_more "$changes" "$before" || fail "a POST whose override header said GET didn't ask first"
+  q=$(grep '^browser: agent mcp-client asks' "$log" | tail -1 | cut -d' ' -f5 | tr -d :)
+  await_log "^browser: agent question $q at " "the overridden POST's question wasn't drawn"
+  read -r qx qy qw qh <<CARD
+$(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
+CARD
+  grep -q 'Oats' "$out/site.log" && fail "the overridden POST went before the user answered"
+  send click $((qx + qw / 4)) $((qy + qh - 26))
+  await_log "^browser: agent mcp-client answered $q Dismiss\$" "Deny didn't answer the overridden POST's question"
+  changed=$(next_answer) || fail "the browser didn't answer the overridden POST"
+  changed=$(printf '%s\n' "$changed" | answered "the overridden POST")
+  [ "$changed" = "error: The user said no: you can't make a change on localhost. Don't try again." ] ||
+    fail "the denied overridden POST answered: $changed"
+  grep -q 'Oats' "$out/site.log" && fail "the denied overridden POST reached the site"
+  send menu Settings…
+  expect '^browser: settings shown ' "Settings… didn't show Settings"
+  settings_drew
+  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Agents$'; then
+    send clickkey $(drawn "toolbar Agents")
+    expect '^browser: settings tab Agents$' "a click on Agents didn't show its section"
+  fi
+  settings_drew Agents
+  newest=$(sed -n 's/^browser: settings request \([0-9]*\) \([A-Z]*\) at .*/\1 \2/p' "$log" | sort -n | tail -1)
+  [ "${newest#* }" = POST ] && [ "${newest% *}" -gt "$denied_id" ] ||
+    fail "Settings › Agents didn't name the overridden POST by the method sent: its newest request is $newest"
   send clickkey $(drawn "toolbar General")
   expect '^browser: settings tab General$' "a click on General didn't show its section"
   send key w cmd
