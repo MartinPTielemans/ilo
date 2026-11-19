@@ -581,17 +581,54 @@ if [ "$major" -ge 157 ]; then
     send key tab
     expect '^browser: ring gave the page its first control$' \
       "Tab from the ring didn't go into the page under Chrome's warning before http"
-    # The warning takes the keyboard back in tasks posted as the pane gets it. Those F6 left were
-    # posted before Tab's, so once Tab's has run, any of F6's has too, and none came before the
-    # ring gave the page the keyboard.
-    expect '^browser: tab dialog took the keyboard back$' \
-      "the page under Chrome's warning before http, given the keyboard by the ring, didn't give it to the warning"
-    [ "$(since "$f6" | sed '/^browser: ring gave the page its first control$/q' |
-      grep -c '^browser: tab dialog took the keyboard back$')" = 0 ] ||
-      fail "Chrome's warning before http took the keyboard back from the ring F6 gave it"
+    # Probe, not to land (#3443, the twelfth batch's Windows leg): after Tab from the ring, which
+    # has the keyboard, the warning or the page under it? The warning's focus is on Go back, so a
+    # Return there leaves the warning if the warning has it; under the warning the page drops it.
+    probe_saw() {
+      for _ in $(seq "$2"); do
+        since "$probe_from" | grep -q "$1" && return 0
+        sleep 0.1
+      done
+      return 1
+    }
+    echo "probe: take-back lines since F6: $(since "$f6" | grep -c '^browser: tab dialog took the keyboard back$')"
     send state
-    [ "$key" = NativeWidgetMacNSWindow ] ||
-      fail "Tab from the ring into the page under Chrome's warning before http gave the keyboard to $key, on $focus, not to the warning"
+    echo "probe: after Tab from the ring, the keyboard is in $key, on $focus"
+    trouble_before=$(grep "^browser: page $tab trouble " "$log" | tail -1)
+    send key return
+    probe_from=$step
+    left="^browser: \\(page $tab back [01] forward [01] loading 1 \\|loaded $tab \\|tab $tab closed\\)"
+    if probe_saw "$left" 50; then
+      echo "probe: (a) Return after Tab from the ring left the warning: $(since "$probe_from" | grep "$left" | head -2 | tr '\n' ' ')"
+      echo "probe: lines from the Return: $(since "$probe_from" | grep -v '^browser: command bar' | head -14 | tr '\n' '|')"
+      fail "probe: (a), the warning had the keyboard after Tab from the ring; take-back lines since F6: $(since "$f6" | grep -c '^browser: tab dialog took the keyboard back$')"
+    fi
+    echo "probe: (b) Return after Tab from the ring did nothing in 5 s: $(since "$probe_from" | tr '\n' '|')"
+    send state
+    echo "probe: the keyboard is in $key, on $focus; trouble before $trouble_before, now $(grep "^browser: page $tab trouble " "$log" | tail -1)"
+    send key l cmd
+    probe_from=$step
+    if probe_saw '^browser: command bar shown$' 50; then
+      echo "probe: (b) ⌘L was heard and opened the command bar: $(since "$probe_from" | grep '^browser: command ' | head -3 | tr '\n' '|')"
+      send key escape
+      expect '^browser: command bar hidden$' "probe: escape didn't close the bar ⌘L opened"
+      send state
+      echo "probe: after the bar closed, the keyboard is in $key, on $focus"
+      recovered="escape out of the bar ⌘L opened"
+    else
+      echo "probe: (b) ⌘L did nothing in 5 s: $(since "$probe_from" | tr '\n' '|')"
+      warning_box
+      send click $((warning_x + warning_width / 2)) $((warning_y + warning_height / 2))
+      send state
+      echo "probe: after a click on the warning at $warning, the keyboard is in $key, on $focus"
+      recovered="a click on the warning"
+    fi
+    send key return
+    probe_from=$step
+    if probe_saw "$left" 50; then
+      fail "probe: (b), the Return after Tab from the ring was dropped; after $recovered, a Return left the warning: $(since "$probe_from" | grep "$left" | head -2 | tr '\n' ' ')"
+    fi
+    fail "probe: (b), and after $recovered Return still did nothing: $(since "$probe_from" | tr '\n' '|')"
   fi
   # A click on the page beside the warning: the page drops it, but on the Mac AppKit gives the
   # page's view the keyboard all the same, where every key is dropped. The core gives it back to
