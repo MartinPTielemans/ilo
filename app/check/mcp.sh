@@ -840,33 +840,34 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
       fail "a click on the agent's warning before http at $warning, watched in its split view $1, didn't give it the keyboard: $key, $focus"
   }
   # A click on the split's picture straight after Escape, while the page watched still goes back
-  # into its own, watches the split: the page going back lets the click through (#3496). Pages is
-  # seen once first, so the click's point is known before Escape: the point of the split's picture
-  # nearest the agent's, which the page going back covers longest. The click is posted as soon as
-  # the conversation draws, as send's and await's tenths would take most of the zoom's 0.2 s.
-  to_pages "tab $agent_tab"
-  watch "$agent_tab"
-  read -r wx wy ww wh <<PICTURE
-$(picture "$warned")
-PICTURE
+  # into its own, watches the split: the page going back lets the click through (#3496). The
+  # conversation first draws the split's picture as the page goes back, and the click is posted
+  # the moment it logs it, as send's and await's tenths would take most of the zoom's 0.2 s. It goes
+  # to the point of the split's picture nearest the agent's, which the page going back covers
+  # longest.
   read -r cx cy nw nh <<PICTURE
 $(picture "$agent_tab")
 PICTURE
   cx=$((cx + nw / 2)) cy=$((cy + nh / 2))
+  watched=$(grep -c "^browser: task $session page $warned\$" "$log" || true)
+  placed=$(grep -c "^browser: task page $warned in place\$" "$log" || true)
+  before=$(grep -c '^browser: task page [0-9]* back$' "$log" || true)
+  drawn=$(grep -c "^browser: task picture $warned at " "$log" || true)
+  send click $sidebar_point
+  post key escape
+  escaped=$step
+  for _ in $(seq 2000); do
+    [ "$(grep -c "^browser: task picture $warned at " "$log")" -gt "$drawn" ] && break
+  done
+  at=$(grep "^browser: task picture $warned at " "$log" | tail -1)
+  [ -n "$at" ] || fail "Escape from tab $agent_tab never drew tab $warned's picture in Pages"
+  read -r wx wy ww wh <<PICTURE
+${at#browser: task picture $warned at }
+PICTURE
   [ "$cx" -ge $((wx + 4)) ] || cx=$((wx + 4))
   [ "$cx" -le $((wx + ww - 5)) ] || cx=$((wx + ww - 5))
   [ "$cy" -ge $((wy + 4)) ] || cy=$((wy + 4))
   [ "$cy" -le $((wy + wh - 5)) ] || cy=$((wy + wh - 5))
-  watched=$(grep -c "^browser: task $session page $warned\$" "$log" || true)
-  placed=$(grep -c "^browser: task page $warned in place\$" "$log" || true)
-  before=$(grep -c '^browser: task page [0-9]* back$' "$log" || true)
-  send click $sidebar_point
-  pictures=$(grep -c '^browser: task picture ' "$log" || true)
-  post key escape
-  escaped=$step
-  for _ in $(seq 1000); do
-    [ "$(grep -c '^browser: task picture ' "$log")" -gt "$pictures" ] && break
-  done
   post click "$cx" "$cy"
   await "^browser: drive $step done" || fail "the driver didn't finish the click on tab $warned's picture"
   await_more '^browser: task page [0-9]* back$' "$before" || fail "Escape didn't step back to Pages from tab $agent_tab"
