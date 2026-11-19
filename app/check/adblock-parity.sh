@@ -29,7 +29,9 @@
 #     Both are read 8 s after the load (cdp.py's content), and the table says them, with the
 #     page's pictures, which vary too much between loads to hold a run to, a site's count from 4
 #     to 38. A watch page's text is as far as its player and comments got, so the video says
-#     whether it works.
+#     whether it works;
+#   - fewer than 45 of the sites compared, as bot checks stood in or the baseline's table has no
+#     row for them: a run that compared too few says nothing of the engine (#2111).
 # A host or address neither run requested counts for neither, as the ads a site serves change from
 # load to load. A site that's still Cloudflare's bot check 8 s after it loads gets one more go. If
 # the check still stands in either run, DataDome's captcha loaded over the page, the site sent
@@ -693,6 +695,15 @@ if baseline:
         if s["missed"] and len(s["missed"]) >= 3:
             site_missed = True
             worse.append(f"{s['url']} showed what the baseline hid all of: {', '.join(s['missed'])}")
+# A run held to a baseline that compared too few of the sites isn't a gate: each bot check is a
+# site neither run was shown no worse on (#2111).
+if baseline:
+    compared = [s for s in sites if s["url"] in before and s["url"] not in unchecked]
+    if len(compared) < 45:
+        worse.append(f"only {len(compared)} of {len(sites)} sites were compared, under the floor of 45; "
+                     + ", ".join([f"{url} ({what})" for url, what in unchecked.items()]
+                                 + [f"{s['url']} (no row in the baseline's table)"
+                                    for s in sites if s["url"] not in before]))
 # Misses too few a site to fail one still add up, where an engine misses a little everywhere:
 # uBlock Origin against itself shows at most 3 in a run.
 missed = [(s["url"], m) for s in sites if s["url"] not in unchecked for m in s["missed"] or []]
