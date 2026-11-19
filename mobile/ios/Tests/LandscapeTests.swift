@@ -131,6 +131,7 @@ extension View {
 
   /// Where what's read out under a name stands on the screen.
   func read(_ name: String) -> CGRect? {
+    _ = Stage.heard
     func find(in element: NSObject) -> CGRect? {
       if element.accessibilityLabel?.hasPrefix(name) == true { return element.accessibilityFrame }
       for child in element.accessibilityElements ?? [] {
@@ -148,6 +149,17 @@ extension View {
     window.isHidden = true
     window.rootViewController = nil
   }
+
+  /// SwiftUI makes what VoiceOver reads only while something reads it, and on a simulator nothing
+  /// has driven yet nothing does: there, nothing was read. This says a test's runner is reading,
+  /// as a UI test's does.
+  private static let heard: Void = {
+    let root = ProcessInfo.processInfo.environment["IPHONE_SIMULATOR_ROOT"] ?? ""
+    guard let library = dlopen(root + "/usr/lib/libAccessibility.dylib", RTLD_NOW),
+      let set = dlsym(library, "_AXSSetAutomationEnabled")
+    else { return }
+    unsafeBitCast(set, to: (@convention(c) (Int32) -> Void).self)(1)
+  }()
 }
 
 private struct Turned<Content: View>: View {
