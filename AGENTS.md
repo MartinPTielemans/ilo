@@ -1,6 +1,6 @@
 # ilo
 
-An open-source, Arc-style browser: ungoogled-chromium underneath, a GPUI (Rust) interface on top, faster to use than Chrome, and built to be the browser AI agents work in. Mac first; everything above a thin platform layer is portable. Pre-alpha. [docs/decisions.md](docs/decisions.md) says why the stack is what it is; [docs/roadmap.md](docs/roadmap.md) gives each phase's exit check.
+An open-source, Arc-style browser: ungoogled-chromium underneath, a GPUI (Rust) interface on top, faster to use than Chrome, and built to be the browser AI agents work in. Mac first, portable above a thin platform layer; the iPhone app, `mobile/ios`, is Swift on WebKit. Pre-alpha. [docs/decisions.md](docs/decisions.md) says why the stack is what it is; [docs/roadmap.md](docs/roadmap.md) gives each phase's exit check.
 
 ## What we never compromise on
 
@@ -77,7 +77,7 @@ The most common defect is a change that works on the path you tested and is miss
 
 - Most changes need no doc change; agents can read the code.
 - Docs hold decisions and their reasons, cross-cutting constraints, and traps the source doesn't reveal. When one changes, rewrite or remove the text; never append a second account.
-- Decisions in `docs/decisions.md` are settled. Reopen one only with the owner, and with the evidence its "revisit if" names. Electron as the product, WebKit or Gecko as ilo's engine, and closed source are off the table.
+- Decisions in `docs/decisions.md` are settled. Reopen one only with the owner, and with the evidence its "revisit if" names. Electron as the product, WebKit or Gecko as the desktop's engine, and closed source are off the table.
 - Working notes, research dumps and scratch files stay out of the repo. The roadmap is the plan; a merged PR is the implementation record.
 
 ## Where code lives

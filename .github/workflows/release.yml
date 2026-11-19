@@ -743,7 +743,9 @@ jobs:
       # section of GitHub's generated notes alone. Each line's pull request decides who counts, a
       # person and not the owner, since the notes name a bot without its [bot]. The appcast job
       # took the notes before this, so the updater's text never has it. Only a list, so it can't
-      # cost the release: the step continues on an error.
+      # cost the release: the step continues on an error. A pull request that changed only mobile/
+      # is the iPhone app's, whose versions are their own, tagged ios-v* (mobile/AGENTS.md), so its
+      # author isn't new to this release; one whose files can't be read counts as the desktop's.
       - name: New contributors
         continue-on-error: true
         env:
@@ -756,8 +758,10 @@ jobs:
             sed -n '/^## New Contributors/,/^$/p' > "$RUNNER_TEMP/generated.md"
           : > "$RUNNER_TEMP/people.md"
           while read -r line; do
-            author=$(gh api "repos/$GITHUB_REPOSITORY/pulls/${line##*/pull/}" --jq '"\(.user.type) \(.user.login)"')
-            if [ "${author%% *}" = User ] && [ "${author#* }" != "$OWNER" ]; then
+            pull=repos/$GITHUB_REPOSITORY/pulls/${line##*/pull/}
+            author=$(gh api "$pull" --jq '"\(.user.type) \(.user.login)"')
+            if [ "${author%% *}" = User ] && [ "${author#* }" != "$OWNER" ] &&
+              command grep -qv '^mobile/' <<< "$(gh api --paginate "$pull/files" --jq '.[].filename')"; then
               echo "$line" >> "$RUNNER_TEMP/people.md"
             fi
           done < <(command grep -E '^\* @[^ ]+ made their first contribution in .*/pull/[0-9]+$' "$RUNNER_TEMP/generated.md")
