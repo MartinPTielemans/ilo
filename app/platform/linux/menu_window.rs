@@ -124,7 +124,7 @@ pub extern "C" fn host_hide_menu_window() {
     if window != 0 {
         overlays::lend_keyboard(window, view, false);
     }
-    gpui_linux::hide_overlay(view, || {});
+    gpui_linux::hide_overlay(view, crate::overlays::menu_hidden);
     browser::log!("browser: menu window hidden");
 }
 
