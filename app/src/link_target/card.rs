@@ -11,7 +11,7 @@ use gpui::{
 };
 use image::{Frame, RgbaImage};
 
-use super::{LinkTarget, Plate, Target};
+use super::{LinkTarget, Plate, Target, address_colors};
 use crate::elevation::Level;
 use crate::link_card::{outcome, outcome::Outcome, picture};
 use crate::palette::Palette;
@@ -22,7 +22,7 @@ use crate::tokens::link_card::{
     ALERT_GAP, BAR_DESC, BAR_DESC_SHARE, BAR_GAP, BAR_TITLE, BAR_TITLE_SHARE, DESC, DESC_GAP,
     DESC_LINE, DESC_LINES, LANDS_GAP, PICTURE_RATIO, ROW_BOTTOM, ROW_GAP, TITLE_LINES, WIDTH,
 };
-use crate::tokens::link_target::{HEIGHT, PRIMARY, SECONDARY, TEXT_SIZE};
+use crate::tokens::link_target::{HEIGHT, TEXT_SIZE};
 use crate::tokens::text::{BODY, SMALL};
 
 /// The picture's box, inside the card's padding.
@@ -236,7 +236,13 @@ pub fn tallest() -> f32 {
 }
 
 /// The address row: the plate's address, and → the site it landed on.
-fn address(plate: &Plate, lands: Option<&SharedString>, palette: &Palette) -> AnyElement {
+fn address(
+    plate: &Plate,
+    lands: Option<&SharedString>,
+    fill: Hsla,
+    palette: &Palette,
+) -> AnyElement {
+    let (path, site) = address_colors(fill, palette);
     div()
         .h(px(HEIGHT))
         .flex()
@@ -245,17 +251,13 @@ fn address(plate: &Plate, lands: Option<&SharedString>, palette: &Palette) -> An
         .overflow_hidden()
         .text_ellipsis()
         .text_size(px(TEXT_SIZE))
-        .text_color(palette.text(SECONDARY))
+        .text_color(path)
         .child(plate.before.clone())
-        .child(
-            div()
-                .text_color(palette.text(PRIMARY))
-                .child(plate.site.clone()),
-        )
+        .child(div().text_color(site).child(plate.site.clone()))
         .child(plate.after.clone())
         .when_some(lands.cloned(), |row, lands| {
             row.child(div().px(px(LANDS_GAP)).child("\u{2192}"))
-                .child(div().text_color(palette.text(PRIMARY)).child(lands))
+                .child(div().text_color(site).child(lands))
         })
         .into_any_element()
 }
@@ -385,7 +387,7 @@ pub fn render(
         .mt(px(ROW_GAP))
         .px(px(TEXT_X))
         .pb(px(ROW_BOTTOM))
-        .child(address(plate, lands, palette));
+        .child(address(plate, lands, fill, palette));
     body = body.child(text).child(row);
     div()
         .relative()

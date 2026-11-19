@@ -168,7 +168,7 @@ impl Shell {
             TILE_HEIGHT,
             TILE_RADIUS,
         ];
-        let turned = drag.shape.at(Instant::now());
+        let turned = drag.shape.at(self.clock.now());
         let blend = |row: f32, tile: f32| row + (tile - row) * turned;
         let (width, height) = (blend(row[2], tile[2]), blend(row[3], tile[3]));
         let pointer = drag.pointer;
@@ -219,7 +219,7 @@ impl Shell {
             // check.sh reads this line.
             log!("browser: list scrolled to {to} for {what}");
             let glide = ListGlide {
-                start: Instant::now(),
+                start: self.clock.now(),
                 from: offset,
                 to,
                 set: offset,
@@ -239,7 +239,7 @@ impl Shell {
             self.list_glide.set(None);
             return false;
         }
-        let t = (glide.start.elapsed().as_secs_f32() / LIST_GLIDE).min(1.);
+        let t = (self.since(glide.start) / LIST_GLIDE).min(1.);
         let at = glide.from + (glide.to - glide.from) * (1. - (1. - t).powi(LIST_GLIDE_POWER));
         self.list_scroll.set_offset(point(offset.x, px(-at)));
         if t < 1. {
@@ -256,7 +256,7 @@ impl Shell {
     #[cfg(test)]
     pub(super) fn land_list_glide(&self) {
         if let Some(glide) = self.list_glide.get() {
-            let start = Instant::now() - Duration::from_secs_f32(LIST_GLIDE);
+            let start = self.clock.now() - Duration::from_secs_f32(LIST_GLIDE);
             self.list_glide.set(Some(ListGlide { start, ..glide }));
         }
     }
@@ -306,7 +306,7 @@ impl Shell {
         self.press(tab, position, Place::List(pinned, index), top, grab);
         self.held_row = Some(HeldRow {
             tab,
-            pressed: Instant::now(),
+            pressed: self.clock.now(),
             let_go: None,
         });
     }
@@ -321,7 +321,7 @@ impl Shell {
         if self.dragging().is_some() || self.sidebar_scale() != 1. {
             return 1.;
         }
-        1. - (1. - PRESS_SCALE) * held.depth(Instant::now())
+        1. - (1. - PRESS_SCALE) * held.depth(self.clock.now())
     }
 
     /// Lets the held row go once it has grown back, or has come away, and asks for the next frame
@@ -330,7 +330,7 @@ impl Shell {
         let Some(held) = &self.held_row else {
             return;
         };
-        let depth = held.depth(Instant::now());
+        let depth = held.depth(self.clock.now());
         match held.let_go {
             _ if self.dragging().is_some() => self.held_row = None,
             Some(_) if depth == 0. => self.held_row = None,
@@ -581,7 +581,10 @@ impl Shell {
             drag.depth = depth;
             drag.line = line;
             drag.onto = onto;
-            drag.shape.turn(over_favorites, crate::motion::start(cx));
+            drag.shape.turn(
+                over_favorites,
+                crate::motion::start_at(self.clock.now(), cx),
+            );
         }
         match onto {
             // check.sh waits for these lines.
@@ -779,7 +782,7 @@ impl Shell {
     /// with ⌥ held leaves a copy of its tab where it's let go and goes back, as Arc's does.
     pub(super) fn drop_row_with(&mut self, alt: bool, cx: &mut Context<Self>) {
         if let Some(held) = self.held_row.as_mut().filter(|held| held.let_go.is_none()) {
-            held.let_go = Some(Instant::now());
+            held.let_go = Some(self.clock.now());
             cx.notify();
         }
         if self.drop_over_page(cx) {
