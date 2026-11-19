@@ -231,8 +231,9 @@ outside() {
   refused scroll "{\"tab\":$1,\"direction\":\"down\"}" "scroll in $2" "$space"
   refused navigate "{\"tab\":$1,\"url\":\"$local_site/rules-own.html\"}" "navigate of $2" "$space"
   refused pin_tab "{\"tab\":$1}" "pin_tab of $2" "$space"
+  # Refused for the tab, before any request is read, so with no request's prefix.
   refused request "{\"tab\":$1,\"requests\":[{\"method\":\"GET\",\"path\":\"/api/me?rules-outside\"}]}" \
-    "request from $2" "*: $space"
+    "request from $2" "$space"
   refused run_steps "{\"tab\":$1,\"steps\":[{\"action\":\"snapshot\"}]}" "run_steps in $2" "Step 1 failed: $space"
   refused split_tabs "{\"tabs\":[$own_tab,$1]}" "split_tabs with $2" "$space"
   refused hand_off "{\"tab\":$1,\"reason\":\"Sign in\"}" "hand_off of $2" "$space"

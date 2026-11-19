@@ -1140,6 +1140,41 @@ fn a_users_tab_off_the_web_is_answered_as_any_tab_not_the_agents(cx: &mut TestAp
     }
 }
 
+/// A request from a tab not the agent's, the user's or another agent's, gets the core's answer for
+/// the tab alone, before any of its requests is read, as every other tool does: an answer for each
+/// request would tell the agent they got as far as the tab's site.
+#[gpui::test]
+fn a_request_from_a_tab_not_the_agents_is_refused_for_the_tab(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    browser.agent_spaces.borrow_mut().insert("codex".into(), 3);
+    (browser.tabs.borrow_mut()).push((30, 3, "Rust", "https://www.rust-lang.org/"));
+    browser.checked.borrow_mut().clear();
+    for (tab, site) in [(10, "en.wikipedia.org"), (30, "rust-lang.org")] {
+        let requests = json!({ "tab": tab, "requests": [{ "method": "GET", "path": "/api/me" }] });
+        let answer = call(&agents, "claude-code", "request", requests, cx);
+        cx.run_until_parked();
+        assert_eq!(
+            answer.recv().unwrap(),
+            ToolResult::error(NOT_ITS_SPACE),
+            "request from tab {tab}"
+        );
+        assert_eq!(
+            browser
+                .checked
+                .borrow_mut()
+                .drain(..)
+                .collect::<Vec<String>>(),
+            ["request"],
+            "the core didn't check tab {tab} once"
+        );
+        assert_eq!(
+            log(&agents, "claude-code", cx)[0],
+            ("request".into(), site.into(), NOT_ITS_SPACE.into())
+        );
+    }
+    assert!(browser.requests.borrow().is_empty(), "a request was sent");
+}
+
 /// Once read, a page still on the empty start page is no web page, as the core's page tools find,
 /// and a tab that became a Board meanwhile is answered as a Board is everywhere else.
 #[gpui::test]
