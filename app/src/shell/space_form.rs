@@ -431,7 +431,9 @@ mod tests {
         accesskit::{Action, HasPopup, Node, NodeId, Role},
     };
 
-    use crate::shell::{Command, Shell, SpaceEntry, recorder::Recorder};
+    use crate::shell::{
+        Command, FORM_LEAVE, FORM_LEAVE_TITLE, Shell, SpaceEntry, recorder::Recorder,
+    };
 
     fn space(id: u64, name: &str) -> SpaceEntry {
         (
@@ -662,5 +664,48 @@ mod tests {
         cx.run_until_parked();
         let (_, create) = named(cx, Role::Button, "Create Space");
         assert!(create.is_disabled(), "Create Space without a name");
+    }
+
+    fn leaving(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> bool {
+        shell.read_with(cx, |shell, _| shell.leaving_form.is_some())
+    }
+
+    /// The time Create's leave takes, its title's delay and its own.
+    fn leave_time() -> std::time::Duration {
+        std::time::Duration::from_secs_f32(FORM_LEAVE_TITLE + FORM_LEAVE)
+    }
+
+    /// Create's leave ends once its time has passed, with no frame drawn after it starts: a frame
+    /// the window asked for and never got left the form over the new Space's rows (#3554).
+    #[gpui::test]
+    fn the_form_is_gone_once_its_leave_has_had_its_time(cx: &mut TestAppContext) {
+        let (shell, cx, _) = form(cx);
+        shell.update_in(cx, |shell, window, cx| shell.create_space(window, cx));
+        assert!(leaving(&shell, cx), "Create didn't start the form's leave");
+        cx.executor().advance_clock(leave_time() / 2);
+        assert!(leaving(&shell, cx), "the form went before its leave's time");
+        cx.executor().advance_clock(leave_time());
+        assert!(
+            !leaving(&shell, cx),
+            "the form stayed after its leave's time"
+        );
+    }
+
+    /// A form opened again before the last one's leave has had its time ends that leave, so
+    /// nothing the leave set going is left to end it later.
+    #[gpui::test]
+    fn a_form_opened_again_ends_the_last_ones_leave(cx: &mut TestAppContext) {
+        let (shell, cx, _) = form(cx);
+        shell.update_in(cx, |shell, window, cx| shell.create_space(window, cx));
+        shell.update(cx, |shell, cx| shell.run(Command::NewSpace, "menu", cx));
+        assert!(
+            !leaving(&shell, cx),
+            "the last form's leave outlived the new form's opening"
+        );
+        cx.executor().advance_clock(leave_time() * 2);
+        assert!(
+            shell.read_with(cx, |shell, _| shell.form.is_some()),
+            "the new form went with the last one's leave"
+        );
     }
 }
