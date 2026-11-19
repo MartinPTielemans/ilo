@@ -85,14 +85,15 @@ private func question(
     #expect(page.failure == .unopened)
     #expect(page.url == address)
     #expect(await eventually { !page.isLoading })
-    // The first page of its tab, so there's none to go back to, and no state of an empty page to keep.
+    // The first page of its tab, so there's none to go back to, and no state of an empty page to
+    // keep: an iOS that puts one in the address's place has none, and one that says an error has no page.
     #expect(!page.canLeaveFailure)
-    #expect(page.state == nil)
+    #expect(page.state == nil || page.webView.backForwardList.currentItem == nil)
 
     // Try Again asks again and says the same.
     page.reload()
     #expect(page.failure == .unopened)
-    #expect(await eventually { !page.isLoading })
+    #expect(await eventually { !page.webView.isLoading && !page.isLoading })
     #expect(page.failure == .unopened)
     #expect(page.url == address)
   }
@@ -108,9 +109,9 @@ private func question(
     page.load(address, entered: true)
     #expect(await eventually { page.failure != nil && !page.isLoading })
     page.reload()
-    #expect(await eventually { !page.isLoading })
+    #expect(await eventually { !page.webView.isLoading && !page.isLoading })
     page.reload()
-    #expect(await eventually { !page.isLoading })
+    #expect(await eventually { !page.webView.isLoading && !page.isLoading })
     #expect(page.failure == .unopened)
     #expect(page.url == address)
 
@@ -139,6 +140,8 @@ private func question(
       #expect(failure.certificate == nil)
       titles.insert(failure.title)
     }
+    // WebKit's no to an address is said as the empty page an earlier iOS shows for one is.
+    #expect(PageFailure(NSError(domain: "WebKitErrorDomain", code: 103, userInfo: [NSLocalizedDescriptionKey: systems])) == .unopened)
     // Offline, no such host, timed out, not answering and lost each have their own words.
     #expect(titles.count >= 8)
     let other = PageFailure(NSError(domain: "WebKitErrorDomain", code: 101, userInfo: [NSLocalizedDescriptionKey: systems]))
@@ -196,6 +199,60 @@ private func question(
     #expect(await eventually { page.failure != nil })
     #expect(page.canLeaveFailure)
     page.leaveFailure()
+    #expect(page.failure == nil)
+    #expect(page.url == server.url("/first"))
+    #expect(await page.shows("/first"))
+    #expect(server.requests(to: "/first") == loads)
+  }
+
+  @Test func `a second Try Again while the first is on its way tries the same address, not the page before`() async throws {
+    let down = OSAllocatedUnfairLock(initialState: true)
+    let server = try await site(down)
+    let browser = testBrowser()
+    browser.openNew(server.url("/first"))
+    let page = try #require(browser.page)
+    #expect(await eventually { await page.shows("/first") })
+    let loads = server.requests(to: "/first")
+
+    page.load(server.url("/broken"), entered: true)
+    #expect(await eventually { page.failure != nil })
+    let said = page.failure
+    let tries = server.requests(to: "/broken")
+    page.reload()
+    page.reload()
+    #expect(page.failure == said)
+    #expect(await eventually { server.requests(to: "/broken") > tries && !page.webView.isLoading })
+    #expect(page.failure == said)
+    #expect(page.url == server.url("/broken"))
+    #expect(server.requests(to: "/first") == loads)
+  }
+
+  @Test func `Go Back while another try is on its way is the page before, and the try brings nothing after it`() async throws {
+    // Down at first, and then so slow that the second try stays on its way.
+    let down = OSAllocatedUnfairLock(initialState: true)
+    let gate = Loopback.Gate()
+    let server = try await Loopback { request in
+      guard request.path == "/broken" else { return .html("<title>\(request.path)</title>", headers: ["Cache-Control": "no-store"]) }
+      if down.withLock({ $0 }) { return nil }
+      return Loopback.Response(headers: ["Content-Type": "text/html"], body: Data(repeating: 0x20, count: 4096), held: .init(first: 0, gate: gate))
+    }
+    let browser = testBrowser()
+    browser.openNew(server.url("/first"))
+    let page = try #require(browser.page)
+    #expect(await eventually { await page.shows("/first") })
+    let loads = server.requests(to: "/first")
+
+    page.load(server.url("/broken"), entered: true)
+    #expect(await eventually { page.failure != nil })
+    let tries = server.requests(to: "/broken")
+    down.withLock { $0 = false }
+    page.reload()
+    #expect(await eventually { server.requests(to: "/broken") > tries })
+    #expect(page.canLeaveFailure)
+    page.leaveFailure()
+    #expect(page.failure == nil)
+    #expect(await eventually { !page.webView.isLoading && !page.isLoading })
+    gate.open()
     #expect(page.failure == nil)
     #expect(page.url == server.url("/first"))
     #expect(await page.shows("/first"))

@@ -261,7 +261,7 @@ final class WebTab: NSObject, Identifiable {
   /// Loads the page again, or tries again the one that didn't load. What's said of a failure
   /// stays up meanwhile: the answer replaces it, a page or the same words.
   func reload() {
-    if let failed, failed.url != webView.url {
+    if let failed, failed.url != shown {
       again = failed.url
       // The web view's own reload would bring back the page before the one that didn't load.
       load(failed.url, entered: failed.users)
@@ -283,9 +283,13 @@ final class WebTab: NSObject, Identifiable {
   /// one before it.
   var canLeaveFailure: Bool {
     if turnedAway { return before != nil }
-    if let failed, webView.url != nil, failed.url != webView.url { return true }
+    if let failed, let shown, failed.url != shown { return true }
     return webView.canGoBack
   }
+
+  /// The address of the page the web view is on. Its own `url` is the one on its way while
+  /// there is one, as while what failed is tried again.
+  private var shown: URL? { webView.backForwardList.currentItem?.url }
 
   /// Goes back from what didn't load. A load that never arrived left the web view on the page
   /// before it, which is shown again without a load.
@@ -293,10 +297,12 @@ final class WebTab: NSObject, Identifiable {
     if turnedAway {
       // Past the empty pages, however many tries left one each.
       if let before { webView.go(to: before) }
-    } else if let failed, webView.url != nil, failed.url != webView.url {
+    } else if let failed, let shown, failed.url != shown {
+      // Another try on its way would put its words back over the page.
+      webView.stopLoading()
       failure = nil
       self.failed = nil
-      url = webView.url
+      url = shown
     } else if webView.canGoBack {
       webView.goBack()
     }
@@ -1085,6 +1091,12 @@ extension PageFailure {
   /// A load that failed, in words of what the user can do about it. Never the system's own
   /// words for it, which name codes and servers.
   init(_ error: NSError) {
+    // WebKit's own no to an address on a port it keeps pages from, which iOS 27 says as an
+    // error and iOS 26 as an empty page.
+    if error.domain == "WebKitErrorDomain", error.code == 103 {
+      self = .unopened
+      return
+    }
     guard error.domain == NSURLErrorDomain else {
       self.init(title: "This page didn't load", reason: "Something went wrong on the way. Try again.")
       return
