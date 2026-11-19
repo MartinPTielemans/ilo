@@ -316,6 +316,8 @@ if [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 1
     send key w cmd
     expect "^browser: tab $tab closed\$" "⌘W didn't close $tab"
   }
+  # The window says its Space after the Spaces are listed, and the one shown here is put back.
+  await '^browser: space [0-9][0-9]*$' || fail "the launch's window showed no Space"
   shown=$(space)
   [ "$shown" = "$first" ] || {
     send key 1 ctrl
