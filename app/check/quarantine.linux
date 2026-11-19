@@ -7,4 +7,3 @@ perf #2138 2026-11-11 ilo took more than 10 % over Chrome on this runner: memory
 profiles@wayland #3159 2026-11-16 the driver can't do "type nihongo"
 adblock@wayland #3159 2026-11-17 the driver can't do "insert
 links@wayland #3159 2026-11-17 the driver can't do "insert
-board@wayland #3572 2026-11-19 ↩ on the name of the Board made from the sidebar's + didn't give its page the keyboard

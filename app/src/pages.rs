@@ -281,7 +281,9 @@ pub(crate) unsafe extern "C" fn tab_dialog(
         ),
         None => log!("browser: page {tab} dialog none"),
     }
+    let kind = dialog.as_ref().map(|dialog| dialog.kind);
     update_shells(|shell, cx| shell.set_page_dialog(tab, dialog.clone(), cx));
+    update_app(|cx| browser::agents::page_dialog(tab, kind, cx));
 }
 
 pub(crate) unsafe extern "C" fn tab_permission_asked(
