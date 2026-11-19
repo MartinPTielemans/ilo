@@ -579,11 +579,17 @@ alert_up $held "the pinned tab loaded again"
 # The Today tab at the top, under the pinned row, takes the alert down.
 send click 100 $(($(row 0 | cut -d' ' -f2) + 41))
 expect '^browser: dialog withdrawn$' "the pinned tab's alert stayed up over another tab"
+withdrawn=$step
 send middleclick $(pinned_row 0)
 expect '^browser: command close-tab via sidebar$' \
   "a middle-click on the pinned tab whose alert another tab took down didn't run Close Tab"
 expect "^browser: page $held unloaded 1\$" \
   "a middle-click didn't unload the pinned tab whose alert another tab took down"
+# On Linux a key typed as the withdrawn alert's window hides is lost (#3617), so the ⌘T after waits
+# for the hide there. Its fix takes this wait out, with a step typing a key as the alert hides.
+if [ "$(uname)" = Linux ]; then
+  expect '^browser: dialog window hidden$' "the withdrawn alert's window didn't hide" "$withdrawn"
+fi
 open_from_bar "${site}alerts.html"
 favorite=$tab
 send key t cmd
@@ -595,12 +601,21 @@ send key return
 expect '^browser: command add-to-favorites via command bar$' "Favorite Tab didn't run from the bar"
 expect "^browser: favorites $favorite\$" "Favorite Tab didn't make the alerts page a favorite"
 alert_up $favorite "the Favorite"
-# One favorite is one tile across the sidebar, 90 below the window's top (favorites.sh).
-post rightclick 114 114
-expect "^browser: menu shown .*$(cased 'Close Tab')\$" "a right-click on the tile didn't offer Close Tab"
-send choose "$(cased 'Close Tab')"
-expect '^browser: command close-tab via tab menu$' "Close Tab in the tile's menu didn't run"
-expect "^browser: page $favorite unloaded 1\$" "Close Tab didn't unload the Favorite whose alert was up"
+if [ "$(uname)" = Linux ]; then
+  # On Linux a tab's menu opened over the page's alert closes at once (#3616), so ↩ answers the
+  # alert instead. Its fix takes this skip out.
+  echo "skip: closing a Favorite by its tile's Close Tab while its alert is up, on Linux: the tile's menu closes at once over the alert (#3616)."
+  send key return
+  expect "^browser: page $favorite dialog answered accept\$" "↩ didn't answer the Favorite's alert"
+  expect '^browser: dialog hidden$' "the Favorite's alert didn't leave once answered"
+else
+  # One favorite is one tile across the sidebar, 90 below the window's top (favorites.sh).
+  post rightclick 114 114
+  expect "^browser: menu shown .*$(cased 'Close Tab')\$" "a right-click on the tile didn't offer Close Tab"
+  send choose "$(cased 'Close Tab')"
+  expect '^browser: command close-tab via tab menu$' "Close Tab in the tile's menu didn't run"
+  expect "^browser: page $favorite unloaded 1\$" "Close Tab didn't unload the Favorite whose alert was up"
+fi
 send move $page_point
 # A page out of sight that asks with an alert, which Chromium holds until its tab shows, is let go by
 # the idle check once it looks 2 hours unseen, its alert with it, and ilo goes on (#3549). It asks
