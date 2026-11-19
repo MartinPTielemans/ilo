@@ -3467,16 +3467,24 @@ void Window::OverlayTakesKeyboard(bool takes) {
     return;
   }
   // The overlay showed another tab, as the command bar does going to a page: its page takes the
-  // keyboard, as a press that shows a tab gives it. On X11 the window isn't active while the
-  // overlay has the input focus, so FocusPage passed the page over as it showed, and the window
-  // holds the keyboard for it until it's active again. Not when the tab it showed closed, as a
-  // Space the dialog deleted did: what shows then comes of that, and the UI keeps the keyboard, as
-  // the Mac's does.
+  // keyboard, as a press that shows a tab gives it. FocusPage passed the page over as it showed,
+  // the keyboard being the overlay's, and on X11 the window holds it for the page until it's active
+  // again. Not when the tab it showed closed, as a Space the dialog deleted did: what shows then
+  // comes of that, and the UI keeps the keyboard, as the Mac's does.
   const bc_id under = std::exchange(selected_under_overlay_, 0);
   if (under != selected_ && shown_ && (!under || Tab::Get(under))) {
     page_had_keyboard_ = true;
     GiveKeyboardToPage();
+    return;
   }
+#if BUILDFLAG(IS_LINUX)
+  // Otherwise the page or UI that had it has it back, unless what it was went under the overlay,
+  // as a page view a commit replaced: then the window holds it for the page shown. Only Wayland
+  // leaves the window active under the overlay, so this stands in for the activation that gives it
+  // to that page on X11 (OnWidgetActivationChanged). Never to an agent's tab, which never takes the
+  // user's keyboard (#3164).
+  focus_leaving_rule::Enter(IsAgentTab(shown_.get()), [&] { FocusPage(); });
+#endif
 }
 
 void Window::FocusPageSoon() {
@@ -3491,6 +3499,15 @@ void Window::FocusPage() {
   if (!shown_ || !widget_->IsActive()) {
     return;
   }
+#if BUILDFLAG(IS_LINUX)
+  // Under Wayland the window stays active while an overlay has its keyboard, and a page focused
+  // then, as one a shortcut in the command bar shows, takes the input method from the bar's field
+  // (#3527). The page has it as the overlay lets go (OverlayTakesKeyboard), as the window being
+  // active again gives it elsewhere.
+  if (platform::OverlayHasKeyboard(widget_.get())) {
+    return;
+  }
+#endif
   if (content::WebContents* devtools = devtools_to_focus_.get()) {
     devtools_to_focus_ = nullptr;
     page_had_keyboard_ = false;
