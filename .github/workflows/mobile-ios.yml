@@ -162,7 +162,8 @@ jobs:
       # fails the job for them. A summary line says how many tests were skipped, as a skipped test
       # isn't a passed one. A failed test is run once more, as the runner's simulator holds a page
       # load for a minute or more in some runs, and the summary names each test that needed it,
-      # so one that fails often stays in sight.
+      # so one that fails often stays in sight. xcodebuild counts a suite's time limit over both
+      # runs together, so the second run saves only a test whose first one failed well inside it.
       - id: tests
         name: The app's tests
         continue-on-error: true

@@ -510,7 +510,7 @@ private func freshSettings() -> Settings {
 
 /// A sign-in in a tab of the browser, on a site this test serves, with a made-up account that
 /// keeps what's saved to it in memory.
-@Suite(.serialized, .timeLimit(.minutes(3))) @MainActor struct LoginSaveFlowTests {
+@Suite(.serialized, .timeLimit(.minutes(5))) @MainActor struct LoginSaveFlowTests {
   private let directory = URL.temporaryDirectory.appending(path: "save-tests-\(UUID().uuidString)")
   private let suite = "save-tests-\(UUID().uuidString)"
 

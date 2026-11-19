@@ -6,7 +6,7 @@ import os
 @testable import ilo
 
 /// What a long press on a link or a picture offers.
-@Suite(.serialized, .timeLimit(.minutes(2))) @MainActor struct PressMenuTests {
+@Suite(.serialized, .timeLimit(.minutes(5))) @MainActor struct PressMenuTests {
   /// WebKit's own actions for a link that is a picture, by the names it gives them.
   private let webKits = [
     "WKElementActionTypeOpen", "WKElementActionTypeAddToReadingList", "WKElementActionTypeSaveImage", "WKElementActionTypeCopy",
@@ -98,7 +98,7 @@ import os
 }
 
 /// A window a page's script opens, as a sign-in or a payment does.
-@Suite(.serialized, .timeLimit(.minutes(2))) @MainActor struct WindowTests {
+@Suite(.serialized, .timeLimit(.minutes(5))) @MainActor struct WindowTests {
   /// A made-up sign-in: the page waits to hear from the window it opens, which says who signed
   /// in and closes itself.
   private func site() async throws -> Loopback {
@@ -180,7 +180,7 @@ import os
 }
 
 /// The menu over selected text.
-@Suite(.serialized, .timeLimit(.minutes(2))) @MainActor struct SelectionMenuTests {
+@Suite(.serialized, .timeLimit(.minutes(5))) @MainActor struct SelectionMenuTests {
   @Test func `Search Web is ilo's, after Look Up and Translate, which stay the system's`() throws {
     let system = ["_define:", "_translate:"].map { UICommand(title: $0, action: Selector($0)) }
     var searched = 0
@@ -232,7 +232,7 @@ import os
 }
 
 /// A file a page makes itself and hands over through a link that says to download it.
-@Suite(.serialized, .timeLimit(.minutes(2))) @MainActor struct MadeFileTests {
+@Suite(.serialized, .timeLimit(.minutes(5))) @MainActor struct MadeFileTests {
   nonisolated private static let blob = "const link = document.createElement('a'); link.href = URL.createObjectURL(new Blob(['made-up,csv\\n1,2\\n'], { type: 'text/csv' })); link.download = 'export.csv'; document.body.appendChild(link); link.click()"
   nonisolated private static let data = "const link = document.createElement('a'); link.href = 'data:text/plain;base64,aGVsbG8='; link.download = 'hello.txt'; document.body.appendChild(link); link.click()"
 
@@ -283,7 +283,7 @@ import os
 }
 
 /// A reload of the page a form's answers brought.
-@Suite(.serialized, .timeLimit(.minutes(2))) @MainActor struct ResendTests {
+@Suite(.serialized, .timeLimit(.minutes(5))) @MainActor struct ResendTests {
   @Test func `a reload sends a form again only once the user says so`() async throws {
     let server = try await Loopback { request in
       request.method == "POST"
@@ -331,7 +331,7 @@ import os
 }
 
 /// Try Again on a page that didn't load.
-@Suite(.serialized, .timeLimit(.minutes(2))) @MainActor struct TryAgainTests {
+@Suite(.serialized, .timeLimit(.minutes(5))) @MainActor struct TryAgainTests {
   /// A site whose `/broken` hangs up without an answer while it's `down`.
   private func site(_ down: OSAllocatedUnfairLock<Bool>) async throws -> Loopback {
     try await Loopback { request in
@@ -383,7 +383,7 @@ import os
 }
 
 /// Request desktop site.
-@Suite(.serialized, .timeLimit(.minutes(2))) @MainActor struct DesktopSiteTests {
+@Suite(.serialized, .timeLimit(.minutes(5))) @MainActor struct DesktopSiteTests {
   @Test func `a desktop site is asked for as a Mac's Safari asks, and a mobile one as a phone's`() async throws {
     let server = try await Loopback { _ in .html("<title>Site</title>") }
     let browser = testBrowser()
@@ -410,7 +410,7 @@ import os
 }
 
 /// A page's prompt(), its question with an answer to type.
-@Suite(.serialized, .timeLimit(.minutes(2))) @MainActor struct TypedAnswerTests {
+@Suite(.serialized, .timeLimit(.minutes(5))) @MainActor struct TypedAnswerTests {
   private func page(in browser: Browser) async throws -> WebTab {
     let server = try await Loopback { _ in .html("<title>Page</title>") }
     browser.openNew(server.url("/page"))

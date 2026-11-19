@@ -49,7 +49,7 @@ private func question(
 }
 
 /// A load that failed.
-@Suite(.serialized, .timeLimit(.minutes(2))) @MainActor struct FailedLoadTests {
+@Suite(.serialized, .timeLimit(.minutes(5))) @MainActor struct FailedLoadTests {
   /// A site whose `/broken` hangs up without an answer while it's `down`.
   private func site(_ down: OSAllocatedUnfairLock<Bool>) async throws -> Loopback {
     try await Loopback { request in
@@ -333,7 +333,7 @@ private func question(
 }
 
 /// A site that asks for a name and password.
-@Suite(.serialized, .timeLimit(.minutes(2))) @MainActor struct SiteSignInTests {
+@Suite(.serialized, .timeLimit(.minutes(5))) @MainActor struct SiteSignInTests {
   private static let name = "ada-7f3a"
   private static let password = "lovelace-91c2-secret"
   private static var header: String { "Basic " + Data("\(name):\(password)".utf8).base64EncodedString() }
@@ -633,7 +633,7 @@ private func question(
 }
 
 /// A certificate that can't be trusted.
-@Suite(.serialized, .timeLimit(.minutes(2))) @MainActor struct CertificateTests {
+@Suite(.serialized, .timeLimit(.minutes(5))) @MainActor struct CertificateTests {
   private static let day: TimeInterval = 86_400
 
   @Test func `a certificate that ran out says when, and one not yet valid says from when`() throws {
@@ -788,7 +788,7 @@ private func question(
 
 /// A certificate that can't be trusted, over a TLS server on this machine whose certificate the
 /// test made.
-@Suite(.serialized, .timeLimit(.minutes(3))) @MainActor struct CertificatePageTests {
+@Suite(.serialized, .timeLimit(.minutes(5))) @MainActor struct CertificatePageTests {
   private func site(_ certificate: TestCertificate) async throws -> Loopback {
     try await Loopback(identity: certificate.identity()) { request in
       .html("<title>\(request.path)</title>", headers: ["Cache-Control": "no-store"])

@@ -509,7 +509,7 @@ private final class LocalSite: Sendable {
 
 /// A tab's pages through a real web view, since what WebKit says of a redirect, a reload and a
 /// script's move is what the writes are decided from.
-@Suite(.serialized, .timeLimit(.minutes(2))) @MainActor struct HistoryOfPagesTests {
+@Suite(.serialized, .timeLimit(.minutes(5))) @MainActor struct HistoryOfPagesTests {
   private let directory = URL.temporaryDirectory.appending(path: "history-tests-\(UUID().uuidString)")
   private let history: History
   private let tab: WebTab

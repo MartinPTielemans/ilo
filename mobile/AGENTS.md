@@ -53,6 +53,7 @@ xcodebuild -project ilo.xcodeproj -scheme ilo -configuration Release \
 - **Done** is both test suites green, the Release compile, and a look at it running, in light and in dark, through the device tools.
 - **Read the skipped count.** IloSync's tests start an ilo-server of their own from `~/.cache/ilo-ios-spike/ilo-server-target/release/ilo-server` and skip without it. Report a skip, not a pass.
 - **CI runs the same three** (`.github/workflows/mobile-ios.yml`) for a change to `mobile/` or to what the phone reads of the desktop's. The app's run on iOS 27 simulators alone: iOS 26, the oldest it runs on, is yours to run. IloSync's run with GitHub's `macos-26` Swift, an earlier one than Xcode 27.1's, so the package keeps to what its manifest's 6.0 allows.
+- **CI runs a failed test once more**, as its simulator holds a load for a minute or more in some runs, and the job's summary names each test that passed only then. xcodebuild counts a suite's time limit over both runs together and fails a test that outlasts it whatever the second run said, so a test's waits go by the clock (`eventually` in `Tests/Loopback.swift`) and add up to well under its suite's limit.
 - **`ci_scripts/ci_post_clone.sh` makes the rules and the project** in CI, and is the script Xcode Cloud runs after it clones. A tool or a made file the build comes to need goes there.
 - **A PR that changes only `mobile/`** starts none of the desktop's jobs and needs none of its Mac runs or trains: a green Check is its gate.
 

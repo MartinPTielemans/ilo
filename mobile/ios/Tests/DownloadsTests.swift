@@ -7,7 +7,7 @@ import os
 
 /// Downloads as the app does them: a real tab asks a server on this machine for a file, and the
 /// list follows it into the folder.
-@Suite(.serialized, .timeLimit(.minutes(2))) @MainActor struct DownloadsTests {
+@Suite(.serialized, .timeLimit(.minutes(5))) @MainActor struct DownloadsTests {
   nonisolated private static let boat = Data((0..<200_000).map { UInt8(truncatingIfNeeded: $0) })
   nonisolated private static let paper = Data(
     """

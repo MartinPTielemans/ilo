@@ -424,7 +424,7 @@ private let then = date(10)
 }
 
 /// The archive and the pages that are up: these load pages, from a server on this machine.
-@Suite(.serialized, .timeLimit(.minutes(2))) @MainActor struct ArchivePageTests {
+@Suite(.serialized, .timeLimit(.minutes(5))) @MainActor struct ArchivePageTests {
   /// A page with a sound that goes on once it's started: two seconds of silence, over and over.
   private static let sound = """
     <audio loop></audio><p>Playing</p>

@@ -6,7 +6,7 @@ import WebKit
 
 /// Calendar files, passes and printing as the app does them: a real tab asks a server on this
 /// machine, and what the system's sheet would be given is what the browser holds for it.
-@Suite(.serialized, .timeLimit(.minutes(2))) @MainActor struct HandedFilesTests {
+@Suite(.serialized, .timeLimit(.minutes(5))) @MainActor struct HandedFilesTests {
   nonisolated private static let walk = Data(
     """
     BEGIN:VCALENDAR

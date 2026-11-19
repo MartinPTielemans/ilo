@@ -673,7 +673,7 @@ private struct NeverAnswering: ReadingModel {
 }
 
 /// Reading as the app does it: a real tab's page, followed as the screen follows it.
-@Suite(.timeLimit(.minutes(2))) @MainActor struct ReadingPageTests {
+@Suite(.timeLimit(.minutes(5))) @MainActor struct ReadingPageTests {
   private let directory = URL.temporaryDirectory.appending(path: "reading-tests-\(UUID().uuidString)")
   private let story = URL(string: "https://example.org/story")!
 

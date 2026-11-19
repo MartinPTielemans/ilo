@@ -188,21 +188,26 @@ nonisolated final class Loopback: @unchecked Sendable {
 }
 
 /// Waits for something a page or the network brings about, and says whether it came.
-@MainActor func eventually(seconds: Int = 30, _ came: @MainActor () async -> Bool) async -> Bool {
-  // Half a minute at most: CI's iOS 27 simulator takes ten seconds over a page that an iOS 26
-  // one loads in a third of one, and what came is answered at once either way.
-  for _ in 0..<seconds * 100 {
+@MainActor func eventually(seconds: Int = 45, _ came: @MainActor () async -> Bool) async -> Bool {
+  // By the clock: CI's iOS 27 simulator has taken 23 s over a run's first page, which an iOS 26
+  // one loads in a third of a second, and some runs it holds a load until WebKit gives up on it,
+  // a minute or more. CI runs a failed test once more (mobile-ios.yml), and a suite's time limit
+  // is for both runs together, so a wait that counted its turns and outlasted the limit took the
+  // second run with it. What came is answered at once either way.
+  let end = ContinuousClock.now + .seconds(seconds)
+  repeat {
     if await came() { return true }
     try? await Task.sleep(for: .milliseconds(10))
-  }
+  } while ContinuousClock.now < end
   return false
 }
 
 /// Waits for what a download brings to its list, and says whether it came.
 @MainActor func downloaded(_ came: @MainActor () async -> Bool) async -> Bool {
-  // Two minutes: after the yes, the list has the file in 26 ms on a Mac's simulator, and CI's has
-  // taken over half a minute to start a run's first downloads.
-  await eventually(seconds: 120, came)
+  // A minute, which is when WebKit gives up on a load that brings nothing: after the yes, the
+  // list has the file in 26 ms on a Mac's simulator, and CI's has taken over half a minute to
+  // start a run's first downloads.
+  await eventually(seconds: 60, came)
 }
 
 extension WebTab {

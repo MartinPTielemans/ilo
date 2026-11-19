@@ -101,7 +101,7 @@ import WebKit
 }
 
 /// A page under the bar, as WebKit lays it out: in a window, as the app shows it.
-@Suite(.serialized, .timeLimit(.minutes(2))) @MainActor struct PageUnderBarTests {
+@Suite(.serialized, .timeLimit(.minutes(5))) @MainActor struct PageUnderBarTests {
   private let directory = URL.temporaryDirectory.appending(path: "bar-tests-\(UUID().uuidString)")
 
   private func browser() -> Browser {

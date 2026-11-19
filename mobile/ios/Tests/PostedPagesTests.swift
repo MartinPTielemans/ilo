@@ -7,7 +7,7 @@ import WebKit
 // Every site and every word sent here is made up, and every page is this test's own.
 
 /// What a POST sent, and the state a tab is saved with.
-@Suite(.serialized, .timeLimit(.minutes(3))) @MainActor struct PostedPagesTests {
+@Suite(.serialized, .timeLimit(.minutes(5))) @MainActor struct PostedPagesTests {
   private let directory = URL.temporaryDirectory.appending(path: "posted-tests-\(UUID().uuidString)")
   /// The tab cache's own directory.
   private var tabs: URL { directory.appending(path: "tabs") }

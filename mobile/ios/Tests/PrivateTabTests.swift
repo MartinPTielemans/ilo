@@ -9,7 +9,7 @@ import WebKit
 /// What private means, each part checked where it would show: in what a site is sent, in the
 /// phone's files, in the account, and after a relaunch. An ordinary tab does the same beside it
 /// wherever that's what proves the check would have caught something.
-@Suite(.serialized, .timeLimit(.minutes(2))) @MainActor struct PrivateTabTests {
+@Suite(.serialized, .timeLimit(.minutes(5))) @MainActor struct PrivateTabTests {
   nonisolated private static let chart = Data(
     """
     %PDF-1.4
