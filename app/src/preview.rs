@@ -4457,6 +4457,8 @@ fn preview_account(state: &str, cx: &mut App) {
     // again each second, so it says Copied however late the picture is taken; unshare presses its
     // Unshare… and shows the question.
     let pressed = std::env::var("PREVIEW_SHARES").ok();
+    // A dialog over Settings takes the shown Space's palette, which a light system makes light.
+    palette::set_current(Palette::of(None, preview_tone().unwrap_or_default()), cx);
     let share = |id: &str, kind, title: &str, tabs, days: f64, color: Option<u32>, icon: &str| {
         account::SharedLink {
             id: id.to_string().into(),
