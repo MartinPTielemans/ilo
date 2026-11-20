@@ -56,6 +56,8 @@ struct Made {
     muted: RefCell<Vec<(u64, bool)>>,
     /// Tabs the core holds in a Space that its list of the Space's tabs leaves out.
     unlisted: RefCell<HashSet<u64>>,
+    /// The tabs whose page is loading.
+    loading: RefCell<HashSet<u64>>,
 }
 
 impl Made {
@@ -122,6 +124,10 @@ impl Browser for Made {
                 pinned: self.pinned.borrow().contains(&id),
             },
         )
+    }
+
+    fn loading(&self, tab: u64, _: &App) -> bool {
+        self.loading.borrow().contains(&tab)
     }
 
     fn space_of(&self, tab: u64, _: &App) -> u64 {
@@ -4102,6 +4108,7 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
             "run_steps",
             "hand_off",
             "ask_for_tab",
+            "wait_for_event",
             "pin_tab",
             "unpin_tab",
             "remove_tab",
@@ -4142,6 +4149,8 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
         ),
         ("hand_off", tab(json!({ "reason": "Sign in" }))),
         ("ask_for_tab", tab(json!({ "reason": "To go on" }))),
+        // It reads only what list_tabs gives, and asks the core nothing.
+        ("wait_for_event", tab(json!({ "events": ["loaded"] }))),
         ("pin_tab", tab(json!({}))),
         ("unpin_tab", tab(json!({}))),
         ("pin_tab", tab(json!({}))),
@@ -7392,4 +7401,254 @@ fn an_agents_http_address_is_never_a_typed_one(cx: &mut TestAppContext) {
         *browser.navigated.borrow(),
         [(30, "http://other.example.com/".to_string())]
     );
+}
+
+/// wait_for_event (#3668): an agent waits for an event in its own tabs, which no other tab's reaches.
+mod waits {
+    use super::*;
+
+    const AGENT: &str = "claude-code";
+
+    fn wait(
+        agents: &Entity<Agents>,
+        arguments: Value,
+        cx: &mut TestAppContext,
+    ) -> mpsc::Receiver<ToolResult> {
+        call(agents, AGENT, "wait_for_event", arguments, cx)
+    }
+
+    fn line(answer: &mpsc::Receiver<ToolResult>) -> String {
+        let answer = answer.try_recv().expect("an answer");
+        assert!(!answer.error, "{}", answer.text);
+        answer.text
+    }
+
+    /// Moves the made tab `tab` to `url`, as a page the core reports.
+    fn go(browser: &Made, tab: u64, url: &'static str) {
+        let mut tabs = browser.tabs.borrow_mut();
+        tabs.iter_mut().find(|each| each.0 == tab).unwrap().3 = url;
+    }
+
+    /// With its tab, a wait for what's so already answers at once: a page not loading loaded, a
+    /// tab nobody holds handed back, a URL other than the one the agent was told navigated.
+    #[gpui::test]
+    fn a_wait_on_a_tab_answers_at_once_for_what_is_so(cx: &mut TestAppContext) {
+        let (agents, browser, _) = connected(cx);
+        let loaded = wait(&agents, json!({ "events": ["loaded"], "tab": 20 }), cx);
+        assert_eq!(line(&loaded), "Tab 20 loaded https://www.example.com/.");
+        let back = wait(
+            &agents,
+            json!({ "events": ["taken", "handed_back"], "tab": 20 }),
+            cx,
+        );
+        assert_eq!(line(&back), "The user handed tab 20 back.");
+
+        // Told of the tab by list_tabs, the agent hears it moved on since.
+        _ = call(&agents, AGENT, "list_tabs", json!({}), cx);
+        let navigated = json!({ "events": ["navigated"], "tab": 20 });
+        let same = wait(&agents, navigated.clone(), cx);
+        assert!(
+            same.try_recv().is_err(),
+            "it answered for the URL it was told"
+        );
+        go(&browser, 20, "https://www.example.com/next");
+        agents.update(cx, |agents, cx| {
+            agents.wait_page(20, "https://www.example.com/next", cx)
+        });
+        assert_eq!(line(&same), "Tab 20 went to https://www.example.com/next.");
+        go(&browser, 20, "https://www.example.com/last");
+        let moved = wait(&agents, navigated, cx);
+        assert_eq!(line(&moved), "Tab 20 went to https://www.example.com/last.");
+    }
+
+    /// Without a tab, a wait hears only the next event on one of the agent's tabs: an idle tab
+    /// isn't a load, and the user's tabs say nothing.
+    #[gpui::test]
+    fn a_wait_on_all_its_tabs_hears_edges_of_its_own(cx: &mut TestAppContext) {
+        let (agents, browser, _) = connected(cx);
+        let loaded = wait(&agents, json!({ "events": ["loaded", "navigated"] }), cx);
+        assert!(loaded.try_recv().is_err(), "an idle tab answered");
+        agents.update(cx, |agents, cx| {
+            agents.wait_loaded(10, "https://en.wikipedia.org/", cx);
+            agents.wait_page(10, "https://en.wikipedia.org/wiki/Other", cx);
+        });
+        assert!(
+            loaded.try_recv().is_err(),
+            "the user's tab reached the agent"
+        );
+        // A tab the agent's page opens in its Space counts.
+        browser
+            .tabs
+            .borrow_mut()
+            .push((21, 2, "Opened", "https://www.example.com/opened"));
+        agents.update(cx, |agents, cx| {
+            agents.wait_loaded(21, "https://www.example.com/opened", cx)
+        });
+        assert_eq!(
+            line(&loaded),
+            "Tab 21 loaded https://www.example.com/opened."
+        );
+        assert_eq!(
+            log(&agents, AGENT, cx)[0],
+            ("wait_for_event".into(), "example.com".into(), "".into())
+        );
+    }
+
+    /// A wait names only a tab of the agent's own: another's is refused, and asked whether it
+    /// closed, it says the same of the user's tab as of one that's gone.
+    #[gpui::test]
+    fn a_wait_on_a_tab_not_its_own_learns_nothing_of_it(cx: &mut TestAppContext) {
+        let (agents, _, _) = connected(cx);
+        let refused = wait(&agents, json!({ "events": ["loaded"], "tab": 10 }), cx);
+        assert_eq!(
+            refused.try_recv().unwrap(),
+            ToolResult::error(NOT_ITS_SPACE)
+        );
+        let closed = |tab| json!({ "events": ["closed"], "tab": tab });
+        let users = line(&wait(&agents, closed(10), cx));
+        let gone = line(&wait(&agents, closed(99), cx));
+        assert_eq!(
+            users.replace("10", "N"),
+            gone.replace("99", "N"),
+            "the user's tab answered apart"
+        );
+        let wrong = wait(&agents, json!({ "events": ["answered"] }), cx);
+        assert!(wrong.try_recv().unwrap().error);
+    }
+
+    /// A tab closing, or the user taking it over and handing it back, answers the waits on it.
+    #[gpui::test]
+    fn the_user_and_the_page_answer_a_wait(cx: &mut TestAppContext) {
+        let (agents, browser, _) = connected(cx);
+        let taken = wait(&agents, json!({ "events": ["taken"], "tab": 20 }), cx);
+        assert!(taken.try_recv().is_err());
+        agents.update(cx, |agents, cx| agents.take_over(AGENT, 20, cx));
+        assert_eq!(line(&taken), "The user took tab 20 over.");
+        let back = wait(&agents, json!({ "events": ["handed_back"], "tab": 20 }), cx);
+        assert!(
+            back.try_recv().is_err(),
+            "it answered while the user holds it"
+        );
+        agents.update(cx, |agents, cx| agents.hand_back(20, cx));
+        assert_eq!(line(&back), "The user handed tab 20 back.");
+
+        let closed = wait(&agents, json!({ "events": ["closed"] }), cx);
+        browser.tabs.borrow_mut().retain(|tab| tab.0 != 20);
+        agents.update(cx, |agents, cx| agents.tab_closed(20, cx));
+        assert_eq!(line(&closed), "Tab 20 closed.");
+    }
+
+    /// A wait answers once its seconds pass with nothing, and Stop answers it at once. With no
+    /// wait, nothing listens to the pages.
+    #[gpui::test]
+    fn a_wait_ends_by_its_seconds_or_stop(cx: &mut TestAppContext) {
+        let (agents, _, _) = connected(cx);
+        let quiet = wait(&agents, json!({ "events": ["closed"], "seconds": 30 }), cx);
+        assert!(waiting());
+        cx.executor().advance_clock(Duration::from_secs(29));
+        assert!(quiet.try_recv().is_err(), "it ended early");
+        cx.executor().advance_clock(Duration::from_secs(1));
+        assert_eq!(line(&quiet), "Nothing happened in 30 s.");
+        assert!(!waiting(), "a wait left a listener");
+
+        let stopped = wait(&agents, json!({ "events": ["closed"] }), cx);
+        agents.update(cx, |agents, cx| agents.stop_agent(AGENT, cx));
+        assert_eq!(stopped.try_recv().unwrap(), ToolResult::error(STOPPED));
+        assert!(!waiting());
+    }
+
+    /// The core can report a load before the wait for it comes, while the shell still says the
+    /// page loads: the shell's end of the load answers it then.
+    #[gpui::test]
+    fn a_wait_on_a_loading_tab_hears_its_end_as_the_shell_sees_it(cx: &mut TestAppContext) {
+        let (agents, browser, _) = connected(cx);
+        browser.loading.borrow_mut().insert(20);
+        let loaded = wait(&agents, json!({ "events": ["loaded"], "tab": 20 }), cx);
+        let page = |cx: &mut TestAppContext| {
+            agents.update(cx, |agents, cx| {
+                agents.wait_page(20, "https://www.example.com/", cx)
+            })
+        };
+        page(cx);
+        assert!(
+            loaded.try_recv().is_err(),
+            "it answered while the page loaded"
+        );
+        browser.loading.borrow_mut().remove(&20);
+        page(cx);
+        assert_eq!(line(&loaded), "Tab 20 loaded https://www.example.com/.");
+    }
+
+    /// Settings › Agents says a wait's entry as the card said its step, never by an event's name.
+    #[gpui::test]
+    fn the_activity_log_says_a_wait_as_the_card_does(cx: &mut TestAppContext) {
+        let (agents, _, _) = connected(cx);
+        let loaded = wait(&agents, json!({ "events": ["loaded"], "tab": 20 }), cx);
+        _ = line(&loaded);
+        let quiet = wait(&agents, json!({ "events": ["closed"], "seconds": 1 }), cx);
+        cx.executor().advance_clock(Duration::from_secs(1));
+        _ = line(&quiet);
+        let titles = agents.read_with(cx, |agents, _| {
+            (agents.activity(AGENT))
+                .map(|entry| {
+                    let did = tools::Did {
+                        tool: entry.action.to_string(),
+                        site: entry.site.to_string(),
+                        target: entry.target.to_string(),
+                        ..Default::default()
+                    };
+                    tools::step_title(&did, tools::Tense::Done)
+                })
+                .collect::<Vec<_>>()
+        });
+        assert!(
+            titles
+                .iter()
+                .any(|title| title == "Waited for example.com to load"),
+            "{titles:?}"
+        );
+        assert!(
+            titles
+                .iter()
+                .any(|title| title == "Waited for a tab to close"),
+            "{titles:?}"
+        );
+    }
+
+    /// A download whose call answered before it ended is told once, to the next wait for one,
+    /// and only the last few are kept.
+    #[gpui::test]
+    fn a_download_ended_after_its_call_is_told_once(cx: &mut TestAppContext) {
+        let (agents, browser, _) = connected(cx);
+        let url = json!({ "url": "https://files.example.com/report.docx" });
+        let answer = call(&agents, AGENT, "open_tab", url, cx);
+        let request = browser.pages.borrow().last().unwrap().1;
+        download_started(&agents, 30, request, 900, cx);
+        let question = browser.asked.borrow().clone().unwrap();
+        agents.update(cx, |agents, cx| {
+            agents.answer(question.id, Answer::Once, cx)
+        });
+        cx.executor().advance_clock(DOWNLOAD_WAIT);
+        assert!(answer.recv().unwrap().text.contains("is still downloading"));
+        let done = DownloadEnd::Done {
+            name: "report.docx".into(),
+            bytes: 48_213,
+            path: "/Users/someone/Downloads/report.docx".into(),
+        };
+        agents.update(cx, |agents, cx| agents.download_ended(900, done, cx));
+        let told = wait(&agents, json!({ "events": ["download"] }), cx);
+        assert!(line(&told).starts_with("Downloaded report.docx (48 KB) to Downloads."));
+        let again = wait(&agents, json!({ "events": ["download"] }), cx);
+        assert!(again.try_recv().is_err(), "a download was told twice");
+
+        agents.update(cx, |agents, cx| {
+            for each in 0..20 {
+                agents.download_untold(AGENT, format!("download {each}"), cx);
+            }
+        });
+        assert_eq!(line(&again), "download 0");
+        let kept = agents.read_with(cx, |agents, _| agents.untold[AGENT].clone());
+        assert_eq!(kept.len(), 16);
+        assert_eq!(kept.front().unwrap(), "download 4");
+    }
 }

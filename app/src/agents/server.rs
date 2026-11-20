@@ -419,6 +419,8 @@ enum Lane {
     Tab(u64),
     /// ask, hand_off and ask_for_tab: one prompt at a time, the others waiting their turn.
     Asks,
+    /// wait_for_event, one at a time, whose minutes hold up no tab's calls nor any with no tab.
+    Waits,
 }
 
 impl Lane {
@@ -570,6 +572,7 @@ fn lanes(line: &str) -> Vec<Lane> {
     .filter(|tab| *tab != 0);
     let own = match (tool, tab) {
         ("open_tab", _) => None,
+        ("wait_for_event", _) => Some(Lane::Waits),
         (_, Some(tab)) => Some(Lane::Tab(tab)),
         (_, None) => Some(Lane::InOrder),
     };

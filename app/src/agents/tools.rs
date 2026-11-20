@@ -505,6 +505,31 @@ fn shared() -> Value {
             },
             "annotations": { "readOnlyHint": true, "openWorldHint": false },
         },
+        {
+            "name": "wait_for_event",
+            "title": "Wait for an event",
+            "description": "Wait until one of the events you name happens in your own tabs, or until seconds pass, in place of calling snapshot or list_tabs again and again. Answers with one line: what happened, on which tab, or that nothing did. With a tab, an event that's a state already true answers at once: loaded when the tab isn't loading, navigated when its URL isn't the one your last answer on it gave, taken while the user holds it, handed_back while nobody does, closed when it isn't yours. Without one, it waits on all your tabs for the next event to happen. A download that ended after its call answered is told once, either way.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "events": {
+                        "type": "array",
+                        "items": { "type": "string", "enum": super::wait::EVENTS.map(|(name, _)| name) },
+                        "minItems": 1,
+                        "description": "The events to wait for, any one of which answers: a page loaded or navigated, a tab closed, a download of yours ended, the user took a tab over or handed it back.",
+                    },
+                    "tab": { "type": "integer", "description": "One of your tabs, from list_tabs or open_tab. Without it, any of yours." },
+                    "seconds": {
+                        "type": "number",
+                        "minimum": 1,
+                        "maximum": super::wait::LONGEST,
+                        "description": format!("How long to wait at most: {} unless you say.", super::wait::SECONDS),
+                    },
+                },
+                "required": ["events"],
+            },
+            "annotations": { "readOnlyHint": true, "openWorldHint": false },
+        },
     ])
 }
 
@@ -807,6 +832,12 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
             };
         }
         "ask" => ("Asking you", "Asked you", "Couldn't ask you", String::new()),
+        "wait_for_event" => (
+            "Waiting for",
+            "Waited for",
+            "Couldn't wait for",
+            target("an event"),
+        ),
         "thought" => ("Thinking", "Thought", "Thought", String::new()),
         action => return describe(action).to_string(),
     };
@@ -852,7 +883,7 @@ pub fn step_glyph(tool: &str) -> &'static str {
         "scroll" => "icons/arrow-down.svg",
         "screenshot" => "icons/eye.svg",
         "request" => "icons/arrow-left-right.svg",
-        "wait" => "icons/clock.svg",
+        "wait" | "wait_for_event" => "icons/clock.svg",
         "list_tabs" | "close_tab" | "remove_tab" | "hand_off" | "ask_for_tab" | "split_tabs"
         | "add_to_split" | "separate_tab" | "list_split" | "sort_tabs_by_site" => {
             "icons/app-window.svg"
@@ -964,6 +995,7 @@ pub fn describe(action: &str) -> &'static str {
         "kept" => "You kept the tab",
         "run_steps" => "Ran steps",
         "wait" => "Waited for the page",
+        "wait_for_event" => "Waited for an event",
         "revoked" => "You revoked its permission",
         "revoked all" => "You revoked all its permissions",
         "title" => "Named the task",

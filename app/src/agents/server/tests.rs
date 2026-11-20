@@ -262,6 +262,7 @@ fn the_server_answers_what_needs_no_browser() {
             "run_steps",
             "hand_off",
             "ask_for_tab",
+            "wait_for_event",
             "pin_tab",
             "unpin_tab",
             "remove_tab",
@@ -609,6 +610,37 @@ fn asks_come_one_at_a_time() {
     }
     let opening: Vec<Call> = (5..15).filter_map(|_| next_call(&mut handed)).collect();
     assert_eq!(opening.len(), 10, "a turn's tabs opened one after another");
+}
+
+/// A wait, with a tab or without, holds up none of the agent's calls, on that tab or with none,
+/// and the next wait waits its turn (#3668).
+#[test]
+fn a_wait_holds_up_no_call() {
+    let (server, _, mut handed) = server();
+    let (mut writer, answers) = session(&server, &mut handed);
+    let wait = |tab: Value| json!({ "events": ["loaded"], "tab": tab });
+    send_call(&mut writer, 2, "wait_for_event", wait(json!(1)));
+    let waiting = next_call(&mut handed).expect("the wait");
+    assert_eq!(waiting.tool, "wait_for_event");
+    send_call(&mut writer, 3, "wait_for_event", wait(Value::Null));
+    send_call(&mut writer, 4, "click", json!({ "tab": 1, "ref": "e1" }));
+    send_call(&mut writer, 5, "press_key", json!({ "key": "Enter" }));
+    let click = next_call(&mut handed).expect("the call on the wait's tab");
+    assert_eq!(click.tool, "click", "a wait held up its tab's call");
+    click.reply.send(ToolResult::text("Clicked.")).unwrap();
+    assert_eq!(answered(&answers), 4);
+    let key = next_call(&mut handed).expect("the call with no tab");
+    assert_eq!(key.tool, "press_key", "a wait held up a call with no tab");
+    assert!(no_call(&mut handed), "two waits at once");
+    key.reply.send(ToolResult::text("Pressed.")).unwrap();
+    assert_eq!(answered(&answers), 5);
+    waiting
+        .reply
+        .send(ToolResult::text("Tab 1 loaded."))
+        .unwrap();
+    assert_eq!(answered(&answers), 2);
+    let next = next_call(&mut handed).expect("the second wait");
+    assert_eq!(next.arguments["tab"], Value::Null);
 }
 
 /// Stopped by the user, a connection answers the call under way, refuses the calls after it

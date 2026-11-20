@@ -435,8 +435,47 @@ case "$read" in
   "Tab $documents: Documents"*) ;;
   *) fail "reading the tab a link to an app left answered: $read" ;;
 esac
-closed=$(call close_tab "{\"tab\":$documents}")
+
+# wait_for_event (#3668): the agent waits for an event in its own tabs rather than asking again and
+# again. A page that moves itself on, after its tab's open_tab answered, is heard going, a tab not
+# loading answers loaded at once, and a wait on all its tabs hears the documents tab close, which a
+# call on that tab does while the wait waits.
+printf '%s' '<!doctype html><title>Moving</title>
+<script>setTimeout(() => location.href = "wait-moved.html", 2500)</script>' \
+  > "$out/site/wait-moving.html"
+printf '%s' '<!doctype html><title>Moved</title>' > "$out/site/wait-moved.html"
+opened=$(call open_tab "{\"url\":\"localhost:$port/wait-moving.html\"}")
+moving=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+[ -n "$moving" ] || fail "open_tab wait-moving.html answered: $opened"
+heard=$(call wait_for_event "{\"events\":[\"navigated\"],\"tab\":$moving,\"seconds\":20}")
+[ "$heard" = "Tab $moving went to http://localhost:$port/wait-moved.html." ] ||
+  fail "a wait for the moving page to navigate answered: $heard"
+heard=$(call wait_for_event "{\"events\":[\"loaded\"],\"tab\":$moving,\"seconds\":20}")
+[ "$heard" = "Tab $moving loaded http://localhost:$port/wait-moved.html." ] ||
+  fail "a wait for the moved page to load answered: $heard"
+await_log "^browser: agent mcp-client waited loaded $moving\$" "the wait for a load logged no line"
+call close_tab "{\"tab\":$moving}" > /dev/null
+waits=$(grep -c '^browser: agent mcp-client calls wait_for_event$' "$log" || true)
+wait_id=$((id + 1))
+request wait_for_event '{"events":["closed"],"seconds":20}' >&4
+await_more '^browser: agent mcp-client calls wait_for_event$' "$waits" ||
+  fail "the wait on all the agent's tabs didn't reach the browser"
+request close_tab "{\"tab\":$documents}" >&4
+# The two answer at once, in either order.
+for _ in 1 2; do
+  answer=$(next_answer) || fail "the browser didn't answer the wait and the close"
+  case "$answer" in
+    *"\"id\":$wait_id,"*) heard=$(printf '%s\n' "$answer" | answered wait_for_event) ;;
+    *) closed=$(printf '%s\n' "$answer" | answered close_tab) ;;
+  esac
+done
 case "$closed" in "Closed tab $documents."*) ;; *) fail "closing the documents tab answered: $closed" ;; esac
+[ "$heard" = "Tab $documents closed." ] ||
+  fail "a wait on all the agent's tabs heard the close as: $heard"
+# A wait nothing answers ends by its seconds.
+heard=$(call wait_for_event '{"events":["closed"],"seconds":1}')
+[ "$heard" = "Nothing happened in 1 s." ] || fail "a wait nothing answered ended as: $heard"
+await_log '^browser: agent mcp-client waited nothing$' "a wait's seconds logged no line"
 
 # A tab an agent's tab opens follows the agent's rules from when it's made, as the agent's own tab
 # does, whether a link, a page's window.open or a redirect in it leads there (#2660).
@@ -2717,7 +2756,16 @@ CARD
   await_more "^browser: title $opened_tab login\$" "$before" ||
     fail "the login page didn't load in the agent's tab again"
   before=$(logins)
+  # A wait on the tab hears the user take it over, and the next one their hand back (#3668).
+  waits=$(grep -c '^browser: agent mcp-client calls wait_for_event$' "$log" || true)
+  request wait_for_event "{\"events\":[\"taken\"],\"tab\":$opened_tab,\"seconds\":20}" >&4
+  await_more '^browser: agent mcp-client calls wait_for_event$' "$waits" ||
+    fail "the wait for a take over didn't reach the browser"
   take_over "to fill the login"
+  heard=$(next_answer) || fail "the wait for a take over didn't answer"
+  heard=$(printf '%s\n' "$heard" | answered wait_for_event)
+  [ "$heard" = "The user took tab $opened_tab over." ] ||
+    fail "the wait for a take over answered: $heard"
   await_log "^browser: title $opened_tab filled\$" "Take Over didn't fill the saved password in"
   [ "$(logins)" = "$before" ] || fail "Take Over reloaded the login page to fill it"
   send click 600 60
@@ -2726,8 +2774,16 @@ CARD
   ../tools/window-screenshot.sh "$pid" "$out/agent-login-filled.png" || fail "no window to capture"
   send key escape
   before=$(grep -c "$handed" "$log" || true)
+  waits=$(grep -c '^browser: agent mcp-client calls wait_for_event$' "$log" || true)
+  request wait_for_event "{\"events\":[\"handed_back\"],\"tab\":$opened_tab,\"seconds\":20}" >&4
+  await_more '^browser: agent mcp-client calls wait_for_event$' "$waits" ||
+    fail "the wait for a hand back didn't reach the browser"
   send key return cmd
   await_more "$handed" "$before" || fail "⌘↩ didn't hand the filled tab back"
+  heard=$(next_answer) || fail "the wait for a hand back didn't answer"
+  heard=$(printf '%s\n' "$heard" | answered wait_for_event)
+  [ "$heard" = "The user handed tab $opened_tab back." ] ||
+    fail "the wait for a hand back answered: $heard"
 
   # open_tab at a file downloads it once the user says yes on the card (#1446), and answers with
   # its name and size, its empty tab closed. Never cancels the next, which leaves no file.
@@ -2817,6 +2873,20 @@ $(grep 'browser: agent .*download' "$log" | tail -3)"
   notes_ref=$(printf '%s\n' "$saved_page" | sed -n 's/.*- link "Notes" \[\(e[0-9]*\)\].*/\1/p' | head -1)
   [ -n "$notes_tab" ] && [ -n "$notes_ref" ] ||
     fail "the agent's tab of the site it may download from didn't open with its link: $saved_page"
+  # A download a page starts on its own, with no call to answer, is told to a wait for one
+  # (wait_for_event, #3668), whether it ends before the wait or during it.
+  printf 'later\n' > "$out/site/later.docx"
+  printf '%s' '<!doctype html><title>Later</title>
+<script>setTimeout(() => location.href = "later.docx", 1500)</script>' > "$out/site/later.html"
+  later=$(call open_tab "{\"url\":\"saved.localhost:$port/later.html\"}")
+  later_tab=$(printf '%s\n' "$later" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  [ -n "$later_tab" ] || fail "open_tab later.html answered: $later"
+  heard=$(call wait_for_event '{"events":["download"],"seconds":20}')
+  told="Downloaded later.docx (6 bytes) to downloads. Agents can't open files; ask the user if you"
+  [ "$heard" = "$told need it." ] ||
+    fail "a wait for the page's own download answered: $heard"
+  await_log '^browser: agent mcp-client waited download 0$' "the wait for a download logged no line"
+  # Left open: closing it would leave the agent at work in it for the session's end below.
 
   # A bank's site asks first, in a card in the window, and Allow Once opens it.
   bank="{\"url\":\"bank.localhost:$port/fields.html\"}"
@@ -3222,9 +3292,9 @@ quit
 trap cleanup EXIT
 rm -f "$agents_file" "$out/mcp-in" "$out/mcp-out"
 if [ "$driven" = 1 ]; then
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), the tabs its page opens kept in its Space, behind$opened_said, without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, pins, unpins and removes its own tab but not the user's, sends requests to its tab's site with the tab's session it never sees, a change asking each time, refused unasked without its sentence, its question on screen as the log draws it ($follows% of its place changed) with the sentence cut at a word over the method's facts, a delete's too, and the whole request beside it until Escape, unanswered, each opening in Settings › Agents to the agent's sentence, where it went and what it sent or didn't, asks a page's beforeunload handler first, with no dialog, closing one that doesn't ask at the first call and keeping one the agent clicked or typed in that asks until it discards it, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, opens its tabs muted, is refused a tab the user took over with a press in its page until they hand it back and Keep answers its ask, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, its download asks first and answers with the file, a refused one leaving none, a bank's site asks first until Always Allow, which Settings › Agents lists$needs_said, and off takes the socket away; an action waits for its element and its page to settle ($settle), a tab's id from before a relaunch is refused as such, and a launch after the window quit in its Space shows the page it opens; a screenshot of a tab just opened out of sight answers ($fresh_picture), and with the UI holding the keyboard with its picture"
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), the tabs its page opens kept in its Space, behind$opened_said, without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, pins, unpins and removes its own tab but not the user's, sends requests to its tab's site with the tab's session it never sees, a change asking each time, refused unasked without its sentence, its question on screen as the log draws it ($follows% of its place changed) with the sentence cut at a word over the method's facts, a delete's too, and the whole request beside it until Escape, unanswered, each opening in Settings › Agents to the agent's sentence, where it went and what it sent or didn't, asks a page's beforeunload handler first, with no dialog, closing one that doesn't ask at the first call and keeping one the agent clicked or typed in that asks until it discards it, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, opens its tabs muted, is refused a tab the user took over with a press in its page until they hand it back and Keep answers its ask, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, its download asks first and answers with the file, a refused one leaving none, a bank's site asks first until Always Allow, which Settings › Agents lists$needs_said, and off takes the socket away; an action waits for its element and its page to settle ($settle), a tab's id from before a relaunch is refused as such, and a launch after the window quit in its Space shows the page it opens; a screenshot of a tab just opened out of sight answers ($fresh_picture), and with the UI holding the keyboard with its picture; a wait hears its page move on and load, its tab close, the user take it over and hand it back, and its page's own download, and ends by its seconds when nothing answers it"
 else
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own and is refused the user's tab, is answered that a link to an app opens nothing, its tab staying on its page, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), and its actions wait for their element and their page to settle ($settle), and the tabs its page opens are kept in its Space, behind$opened_said. A tab's id from before a relaunch is refused as such. skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own and is refused the user's tab, is answered that a link to an app opens nothing, its tab staying on its page, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), and its actions wait for their element and their page to settle ($settle), and the tabs its page opens are kept in its Space, behind$opened_said. A tab's id from before a relaunch is refused as such. A wait hears its page move on and load and its tab close, and ends by its seconds when nothing answers it. skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
 fi
 if [ -n "${toast_skip:-}" ]; then
   echo "skip: the needs' toast showing, as Windows shows toasts only for an installed copy, which the run's isn't: it counted on the taskbar button and asked for the toast."

@@ -242,7 +242,10 @@ pub(crate) unsafe extern "C" fn tab_loaded(_: *mut c_void, tab: bc::bc_id, url: 
     let url = unsafe { CStr::from_ptr(url) }.to_string_lossy();
     log!("browser: loaded {tab} {url}");
     let owned = url.to_string();
-    update_app_later(move |cx| crate::sign_in_close::tab_loaded(tab, &owned, cx));
+    update_app_later(move |cx| {
+        crate::sign_in_close::tab_loaded(tab, &owned, cx);
+        browser::agents::tab_loaded(tab, &owned, cx);
+    });
     sample_foot_bar(tab);
     sample_mini_bar(tab);
 }
@@ -385,6 +388,11 @@ pub(crate) unsafe extern "C" fn tab_state_changed(
         update_app(|cx| link_preview::set_url(tab, page.url.clone(), cx));
     }
     update_shells(|shell, cx| shell.set_page(tab, page.clone(), cx));
+    // Later, as the core reports a page from inside the agents' own calls.
+    if browser::agents::waiting() {
+        let url = page.url.to_string();
+        update_app_later(move |cx| browser::agents::tab_page(tab, &url, cx));
+    }
 }
 
 pub(crate) unsafe extern "C" fn tab_title_changed(
