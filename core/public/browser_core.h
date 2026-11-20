@@ -1824,8 +1824,9 @@ BC_EXPORT size_t bc_agent_disconnected(const char* agent);
 // tab_opened tells of the tab, then spaces_changed. Agent code calls it.
 BC_EXPORT bc_id bc_agent_open_tab(const char* agent, const char* url);
 
-// Loads the http(s) |url| in |tab|, if it's in the Space of the agent with the id |agent|, and
-// returns whether it does: never another URL. Agent code calls it after bc_agent_may_act.
+// Loads the http(s) |url| in |tab| as bc_tab_follow does, if it's in the Space of the agent with
+// the id |agent|, and returns whether it does: never another URL. Agent code calls it after
+// bc_agent_may_act.
 BC_EXPORT bool bc_agent_navigate(const char* agent, bc_id tab, const char* url);
 
 // What bc_agent_close_tab did, and what agent_close_answered says a pending close came to.
@@ -2934,6 +2935,14 @@ BC_EXPORT void bc_tab_navigate(bc_id tab, const char* url);
 // As bc_tab_navigate, for the address the user typed as |typed|, read as bc_tab_open_typed reads
 // it.
 BC_EXPORT void bc_tab_navigate_typed(bc_id tab, const char* url, const char* typed);
+
+// Loads the http(s) |url| in |tab| itself, for an address the user picks from what the tab's site
+// gave, such as a row of its card: a pinned tab goes away from its pinned URL, with its way back
+// (bc_tab_back_to_pinned_url), where bc_tab_navigate opens a pinned tab's other address in a tab of
+// its own. It loads as a link, but with no page as its initiator or referrer, which a link in the
+// page would have. Any other scheme loads nothing. A tab without its page is given one.
+// bc_agent_navigate loads an agent's URL this way once its rules allow it.
+BC_EXPORT void bc_tab_follow(bc_id tab, const char* url);
 
 // Goes back, or forward, in the tab's history, if it has a page that way.
 BC_EXPORT void bc_tab_go_back(bc_id tab);
