@@ -345,9 +345,10 @@ pub struct ToolResult {
 }
 
 impl ToolResult {
+    /// An answer, cut at `tools::MAX_ANSWER` characters, whatever the tool (#3657).
     pub fn text(text: impl Into<String>) -> Self {
         ToolResult {
-            text: text.into(),
+            text: tools::capped(text.into()),
             error: false,
             image: None,
         }
@@ -355,7 +356,7 @@ impl ToolResult {
 
     pub fn error(text: impl Into<String>) -> Self {
         ToolResult {
-            text: text.into(),
+            text: tools::capped(text.into()),
             error: true,
             image: None,
         }
@@ -467,6 +468,17 @@ impl Did {
     }
 }
 
+/// A read of a tab's text waiting on the core: read_page's, or a page tool's that answers with the
+/// text (`Show::Text`), after what it did, its `note`.
+struct Reading {
+    agent: String,
+    tab: u64,
+    reply: mpsc::Sender<ToolResult>,
+    note: String,
+    /// The character of the text the answer starts at.
+    from: usize,
+}
+
 /// What of the page's outline an action answers with, as its `outline` argument says.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Show {
@@ -477,6 +489,9 @@ enum Show {
     Nothing,
     /// The outline of the element with this DOM node alone: snapshot's ref.
     Element(i64),
+    /// The page's text, as read_page gives it, for a page the agent reads: open_tab's and
+    /// navigate's `answer` (#3657).
+    Text,
 }
 
 impl Show {
@@ -491,11 +506,23 @@ impl Show {
         }
     }
 
-    /// As a new page answers: the outline whole, unless none.
+    /// As a new page answers: the outline whole, unless none or the text.
     fn whole(self) -> Show {
         match self {
-            Show::Nothing => Show::Nothing,
+            Show::Nothing | Show::Text => self,
             _ => Show::Full,
+        }
+    }
+
+    /// open_tab's and navigate's `answer`: "outline", as without it, "text" or "none". Without
+    /// it, navigate's `outline`, as before.
+    fn answer(arguments: &Value) -> Result<Show, String> {
+        match arguments.get("answer") {
+            None | Some(Value::Null) => Show::argument(arguments),
+            Some(Value::String(show)) if show == "outline" => Ok(Show::Full),
+            Some(Value::String(show)) if show == "text" => Ok(Show::Text),
+            Some(Value::String(show)) if show == "none" => Ok(Show::Nothing),
+            Some(_) => Err("answer is outline, text or none.".into()),
         }
     }
 }
@@ -638,7 +665,7 @@ pub struct Agents {
     live: HashSet<String>,
     log: Vec<Activity>,
     /// The reads waiting on the core, by request.
-    reading: HashMap<u64, (String, u64, mpsc::Sender<ToolResult>)>,
+    reading: HashMap<u64, Reading>,
     next_request: u64,
     /// The tab each agent used last, which a call without a tab uses.
     current: HashMap<String, u64>,
@@ -1114,7 +1141,8 @@ impl Agents {
         self.agents.retain(|agent| agent.client != client);
         self.tokens_changed();
         self.save();
-        self.reading.retain(|_, (agent, _, _)| agent != client.id());
+        self.reading
+            .retain(|_, reading| reading.agent != client.id());
         self.forget_waiting(client.id(), cx);
         if let Some((server, _)) = &self.server {
             server.disconnect(client.id());
@@ -1214,7 +1242,14 @@ impl Agents {
 
     /// The core's answer to the read `request`: the page's text, or None if it had none.
     pub fn text_read(&mut self, request: u64, text: Option<String>, cx: &mut Context<Self>) {
-        let Some((agent, tab, reply)) = self.reading.remove(&request) else {
+        let Some(Reading {
+            agent,
+            tab,
+            reply,
+            note,
+            from,
+        }) = self.reading.remove(&request)
+        else {
             return;
         };
         // Read once it loaded, as the page tools look once they've acted: the tab may have gone
@@ -1225,11 +1260,18 @@ impl Agents {
         let refused = refused.or_else(|| (!is_web(&tab.url)).then_some(NOT_WEB_PAGE));
         _ = reply.send(match (text, refused) {
             (Some(_), Some(why)) => ToolResult::error(why),
-            (Some(text), None) => ToolResult::text(tools::page_text(&tab, &text)),
+            (Some(text), None) => {
+                let text = tools::page_text(&tab, &text, from);
+                ToolResult::text(match note.is_empty() {
+                    true => text,
+                    false => format!("{note}\n\n{text}"),
+                })
+            }
             (None, _) => ToolResult::error(
                 "The tab has no page loaded: it loads once the user shows it. Try another tab.",
             ),
         });
+        self.advance(cx);
     }
 
     /// What the server's threads hand over.
@@ -1332,17 +1374,40 @@ impl Agents {
                         return;
                     }
                 };
+                let from = match arguments.get("from") {
+                    None | Some(Value::Null) => 0,
+                    Some(from) => match from.as_u64() {
+                        Some(from) => from as usize,
+                        None => {
+                            _ = reply.send(ToolResult::error(
+                                "from is a character of the page's text to start at, from 0.",
+                            ));
+                            return;
+                        }
+                    },
+                };
                 if !self.act(&agent, tab, "read_page", &reply, cx) {
                     return;
                 }
-                let request = self.next_request;
-                self.next_request += 1;
-                self.reading.insert(request, (agent, tab, reply));
-                self.browser.read_text(tab, request);
+                let note = String::new();
+                self.read_page(Reading {
+                    agent,
+                    tab,
+                    reply,
+                    note,
+                    from,
+                });
             }
             "open_tab" => {
                 let Some(url) = self.url_argument(&arguments, &reply) else {
                     return;
+                };
+                let show = match Show::answer(&arguments) {
+                    Ok(show) => show.whole(),
+                    Err(why) => {
+                        _ = reply.send(ToolResult::error(why));
+                        return;
+                    }
                 };
                 let host = site(&url);
                 let act = Act {
@@ -1357,7 +1422,7 @@ impl Agents {
                     element: 0,
                     text: String::new(),
                     note: String::new(),
-                    show: Show::Full,
+                    show,
                     download: 0,
                     field: String::new(),
                     requests: Vec::new(),
@@ -1387,7 +1452,11 @@ impl Agents {
                         return;
                     }
                 };
-                let show = match Show::argument(&arguments) {
+                let show = match tool.as_str() {
+                    "navigate" => Show::answer(&arguments),
+                    _ => Show::argument(&arguments),
+                };
+                let show = match show {
                     Ok(show) => show,
                     Err(why) => {
                         _ = reply.send(ToolResult::error(why));
@@ -2261,8 +2330,8 @@ impl Agents {
         // check.sh reads this line.
         log!("browser: agent {agent} stopped");
         let stopped = || ToolResult::error(STOPPED);
-        for (_, (_, _, reply)) in self.reading.extract_if(|_, (each, _, _)| each == agent) {
-            _ = reply.send(stopped());
+        for (_, reading) in self.reading.extract_if(|_, reading| reading.agent == agent) {
+            _ = reading.reply.send(stopped());
         }
         for (_, acting) in self.acting.extract_if(|_, acting| acting.agent == agent) {
             _ = acting.reply.send(stopped());
@@ -3246,6 +3315,18 @@ impl Agents {
                     false => format!("{note}\n\n{part}"),
                 }
             }
+            // The refs stay the page's, for an action the agent takes after reading it.
+            Show::Text => {
+                self.outlines
+                    .insert(tab, page::outline(&info, &nodes, refs, None));
+                return self.read_page(Reading {
+                    agent,
+                    tab,
+                    reply,
+                    note,
+                    from: 0,
+                });
+            }
             show => {
                 self.outlines.insert(tab, whole);
                 self.answer_with(&agent, tab, note, show)
@@ -3253,6 +3334,15 @@ impl Agents {
         };
         _ = reply.send(ToolResult::text(text));
         self.advance(cx);
+    }
+
+    /// Asks the core for the text of `reading`'s tab, which `text_read` answers with.
+    fn read_page(&mut self, reading: Reading) {
+        let request = self.next_request;
+        self.next_request += 1;
+        let tab = reading.tab;
+        self.reading.insert(request, reading);
+        self.browser.read_text(tab, request);
     }
 
     /// `note`, what an action did, then the tab's latest outline as `show` says, which is the
@@ -3264,12 +3354,13 @@ impl Agents {
         let had = (self.had.get(&tab))
             .filter(|(whose, _)| whose == agent)
             .map(|(_, had)| had);
-        let page = match (show, had) {
-            (Show::Nothing, _) => outline.head().to_string(),
+        let (page, has) = match (show, had) {
+            (Show::Nothing | Show::Text, _) => (outline.head().to_string(), false),
             (Show::Changes, Some(had)) => outline.since(had),
-            _ => outline.text(),
+            _ => (outline.text(), true),
         };
-        if show != Show::Nothing {
+        // A line saying most of it changed leaves the agent with the outline it had.
+        if has {
             self.had.insert(tab, (agent.to_string(), outline.clone()));
         }
         match note.is_empty() {

@@ -18,9 +18,10 @@ pub const WHAT_MOST: usize = 500;
 /// The most of a `what` the question's card shows, ended at a word: one plain sentence naming the
 /// thing and the change fits, and at the sidebar's least width Deny and Allow stay in view.
 pub const WHAT_SHOWN: usize = 120;
-/// The characters of an answer's body the agent reads at most, and of all a call's together.
-const SHOWN: usize = 20_000;
-pub const ALL_SHOWN: usize = 100_000;
+/// The characters of an answer's body the agent reads at most, and of all a call's together, which
+/// leaves room under the answer's cap (`tools::MAX_ANSWER`) for each request's line.
+const SHOWN: usize = 10_000;
+pub const ALL_SHOWN: usize = 11_000;
 /// The most characters of an address or a header's name or value the whole request shows. Nothing
 /// earlier bounds them, and a server takes far fewer: an address past this is no real one.
 pub const PART_SHOWN: usize = 10_000;
