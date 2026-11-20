@@ -2087,6 +2087,8 @@ SEE
     expect '^browser: settings tab Agents$' "a click on Agents didn't show its section"
   fi
   settings_drew Agents
+  # A frame logs its rows after its drew line, the newest first, so the newest is in once one is.
+  expect '^browser: settings request [0-9]* [A-Z]* at ' "Settings › Agents drew no request after the denied overridden POST"
   newest=$(sed -n 's/^browser: settings request \([0-9]*\) \([A-Z]*\) at .*/\1 \2/p' "$log" | sort -n | tail -1)
   [ "${newest#* }" = POST ] && [ "${newest% *}" -gt "$denied_id" ] ||
     fail "Settings › Agents didn't name the overridden POST by the method sent: its newest request is $newest"
