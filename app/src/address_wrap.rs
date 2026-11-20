@@ -1,18 +1,79 @@
 //! Where a web address in a line that wraps may break: after a scheme's `//`, after each dot of
 //! its host and before its `:port`, so a long host fills each line with whole parts of itself
-//! rather than "http:/" over "/sign-in…localhos" over "t:49217" (#3748). GPUI's wrapper breaks
-//! only before a character it doesn't count as a word's, and a dot and a colon are a word's, so
-//! the drawn text carries a zero-width space at each of those places. It's the drawn text only:
-//! what is copied, sent, logged or read to a screen reader stays the real address, and the
-//! address is never shortened or reordered. A label longer than the line still breaks inside, as
-//! GPUI breaks a word that has no place to break before.
+//! rather than "http:/" over "/sign-in…localhos" over "t:49217" (#3748). The address is never
+//! shortened, elided or reordered, and what is copied, sent or logged stays the text as it is.
+//!
+//! A break hint in the string can't do it: GPUI finds a line's breaks from the shaped glyphs, and
+//! CoreText and DirectWrite give a zero-width space no glyph of its own, so only Linux's shaper
+//! would break there. So a line holding an address is drawn as a row of its parts that wraps
+//! between them, each part a text of its own, and a part wider than the line breaks inside, as
+//! GPUI breaks any word with no place to break before. A line with no address is one text, as
+//! before, so prose and a page's long alert cost nothing more. The parts have no id, so they add
+//! nothing to what a screen reader reads: the dialog and the cards name their own text.
 
-/// The character GPUI breaks before, drawn as nothing.
-pub const BREAK: char = '\u{200B}';
+use gpui::{AnyElement, IntoElement, ParentElement, SharedString, Styled, div};
 
-/// `text` as drawn in a line that wraps, with each web address in it given its places to break.
-/// The rest of `text` is as it was.
-pub fn drawn(text: &str) -> String {
+/// Where a part ends, in the marked text, drawn as nothing.
+const BREAK: char = '\u{200B}';
+
+/// `text` drawn so each web address in it wraps between its parts.
+pub fn text(text: &str) -> AnyElement {
+    let Some(lines) = lines(text) else {
+        return SharedString::from(text.to_owned()).into_any_element();
+    };
+    div()
+        .flex()
+        .flex_col()
+        .children(lines.into_iter().map(|parts| {
+            match <[String; 1]>::try_from(parts) {
+                Ok([line]) => SharedString::from(line).into_any_element(),
+                Err(parts) => div()
+                    .flex()
+                    .flex_wrap()
+                    .children(parts.into_iter().map(|part| div().min_w_0().child(part)))
+                    .into_any_element(),
+            }
+        }))
+        .into_any_element()
+}
+
+/// The lines of `text`, each as the parts it wraps between, or None if it holds no web address.
+/// A line with no address is one part, so it wraps as text does; one with an address breaks after
+/// each space and at the address's places. An empty line is a space, so it keeps its height.
+fn lines(text: &str) -> Option<Vec<Vec<String>>> {
+    let marked = marked(text);
+    if !marked.contains(BREAK) {
+        return None;
+    }
+    let lines = marked.split('\n').map(|line| {
+        if !line.contains(BREAK) {
+            return vec![if line.is_empty() {
+                " ".into()
+            } else {
+                line.into()
+            }];
+        }
+        let mut parts = Vec::new();
+        let mut part = String::new();
+        for c in line.chars() {
+            if c != BREAK {
+                part.push(c);
+            }
+            // A no-break space joins, as "wants\u{a0}to" does.
+            if (c == BREAK || c == ' ') && !part.is_empty() {
+                parts.push(std::mem::take(&mut part));
+            }
+        }
+        if !part.is_empty() {
+            parts.push(part);
+        }
+        parts
+    });
+    Some(lines.collect())
+}
+
+/// `text` with a BREAK at each of its web addresses' places to break, and the rest as it was.
+fn marked(text: &str) -> String {
     let mut out = String::with_capacity(text.len() + 16);
     for piece in text.split_inclusive(char::is_whitespace) {
         let word = piece.trim_end_matches(char::is_whitespace);
@@ -131,14 +192,14 @@ fn is_host(host: &str, scheme: bool, port: bool) -> bool {
 mod tests {
     use super::*;
 
-    /// `drawn` with each break shown as `|`, for reading.
+    /// `marked` with each break shown as `|`, for reading.
     fn shown(text: &str) -> String {
-        drawn(text).replace(BREAK, "|")
+        marked(text).replace(BREAK, "|")
     }
 
-    /// The drawn text is the text with breaks added and nothing else.
+    /// The marked text is the text with breaks added and nothing else.
     fn same_text(text: &str) {
-        assert_eq!(drawn(text).replace(BREAK, ""), text, "{text}");
+        assert_eq!(marked(text).replace(BREAK, ""), text, "{text}");
     }
 
     #[test]
@@ -216,7 +277,8 @@ mod tests {
             "a: b",
             "",
         ] {
-            assert_eq!(drawn(text), text);
+            assert_eq!(marked(text), text);
+            assert_eq!(lines(text), None, "{text}");
         }
     }
 
@@ -228,5 +290,54 @@ mod tests {
             "http://|a.|example|:81\n\nYour connection to this site isn’t private."
         );
         same_text(message);
+    }
+
+    #[test]
+    fn a_line_with_an_address_wraps_between_its_parts_and_its_words() {
+        let card = "sign-in.accounts.long-host.localhost asks you to sign in.";
+        assert_eq!(
+            lines(card).unwrap(),
+            [vec![
+                "sign-in.",
+                "accounts.",
+                "long-host.",
+                "localhost ",
+                "asks ",
+                "you ",
+                "to ",
+                "sign ",
+                "in."
+            ]]
+        );
+        let title = "shop.example.com wants\u{a0}to";
+        assert_eq!(
+            lines(title).unwrap(),
+            [vec!["shop.", "example.", "com ", "wants\u{a0}to"]]
+        );
+    }
+
+    #[test]
+    fn a_line_without_an_address_stays_one_text() {
+        let message = "http://a.example:81\n\nYour connection to this site isn’t private.";
+        assert_eq!(
+            lines(message).unwrap(),
+            [
+                vec!["http://", "a.", "example", ":81"],
+                vec![" "],
+                vec!["Your connection to this site isn’t private."]
+            ]
+        );
+    }
+
+    #[test]
+    fn the_parts_together_are_the_text() {
+        for text in [
+            "http://sign-in.accounts.a-long-example-host-for-the-dialog.localhost:49217",
+            "(see https://docs.example.org/a.b/c?d=e.f).",
+            "http://[2001:db8::1]:8443/ and bücher.beispiel.de",
+        ] {
+            let parts: String = lines(text).unwrap().concat().concat();
+            assert_eq!(parts, text);
+        }
     }
 }
