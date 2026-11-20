@@ -76,7 +76,6 @@
 #include "browser_core/public/browser_core.h"
 #include "browser_core/search.h"
 #include "browser_core/session.h"
-#include "browser_core/share.h"
 #include "browser_core/site_controls.h"
 #include "browser_core/space.h"
 #include "browser_core/sync.h"
@@ -3145,31 +3144,4 @@ void bc_sync_choose(int what, bool on) {
 
 void bc_sync_delete_account(void) {
   browser_core::sync::DeleteAccount();
-}
-
-bool bc_share_count(int kind,
-                    const bc_id* items,
-                    size_t count,
-                    size_t* tabs,
-                    size_t* folders,
-                    size_t* left_out) {
-  return browser_core::ShareCount(kind, items, count, tabs, folders, left_out);
-}
-
-uint64_t bc_share_make(int kind, const bc_id* items, size_t count) {
-  return browser_core::ShareMake(kind, items, count);
-}
-
-void bc_share_list(void) {
-  browser_core::ShareList();
-}
-
-void bc_unshare(const char* id) {
-  if (id) {
-    browser_core::Unshare(id);
-  }
-}
-
-bc_id bc_tab_answer_share(bc_id tab, bc_id space, bool add) {
-  return browser_core::TabAnswerShare(tab, space, add);
 }

@@ -6,14 +6,7 @@
 #ifndef BROWSER_CORE_SYNC_H_
 #define BROWSER_CORE_SYNC_H_
 
-#include <array>
-#include <cstdint>
-#include <optional>
 #include <string>
-#include <string_view>
-
-#include "base/functional/callback_forward.h"
-#include "url/gurl.h"
 
 struct bc_sync_activity;
 
@@ -44,16 +37,6 @@ void RemoveDevice(const std::string& id);
 void ReadActivity(bc_sync_activity* activity);
 void Choose(int what, bool on);
 void DeleteAccount();
-
-// For share links (share.cc). Nothing of these is logged, as nothing of a share is.
-// The account's server, or an empty URL while signed out.
-GURL ShareServer();
-// A key for |info| derived from the account's secret, or none while signed out or without it.
-std::optional<std::array<uint8_t, 32>> ShareKey(std::string_view info);
-// Asks the account's server, as the account, |method| |path| with the JSON |json| if it isn't
-// empty. |done| gets the answer's status, 0 if there was none or the user is signed out, and body.
-using ShareAnswered = base::OnceCallback<void(int status, std::string body)>;
-void AskForShares(std::string method, std::string path, std::string json, ShareAnswered done);
 
 }  // namespace browser_core::sync
 

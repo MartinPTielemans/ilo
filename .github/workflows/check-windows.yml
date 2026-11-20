@@ -160,7 +160,7 @@ jobs:
         battery calls cards count everyday extensions favorites hosts
         idle media notifications policies popup preview ranking switch-frames translate webrtc windows
         pictures boosts arrange-card foot-bar peek-motion rules overlays safe-start update-checks shots sidebar-right alt-click mini-bar
-        page-menu arrange arrange-trade arrange-drop arrange-order panel-shadows share
+        page-menu arrange arrange-trade arrange-drop arrange-order panel-shadows
       # The runs that don't apply to Windows, a line each with why, which the summary gives. They're
       # skipped even when named.
       WINDOWS_SKIPS: |

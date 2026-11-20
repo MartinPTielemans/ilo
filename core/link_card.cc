@@ -14,7 +14,6 @@
 #include "base/timer/timer.h"
 #include "browser_core/host.h"
 #include "browser_core/link_card_rule.h"
-#include "browser_core/network_refuser.h"
 #include "browser_core/space.h"
 #include "browser_core/tab.h"
 #include "content/public/browser/browser_context.h"
@@ -84,6 +83,86 @@ constexpr net::NetworkTrafficAnnotationTag kLinkCard =
 constexpr base::TimeDelta kWait = base::Milliseconds(150);
 // A page or its picture, every redirect included.
 constexpr base::TimeDelta kTimeout = base::Seconds(5);
+
+// Answers for the card what the profile's own observer would answer for the user: no client
+// certificate, a cancel for every sign-in, no private network, and no site's data cleared.
+class Refuser : public network::mojom::URLLoaderNetworkServiceObserver {
+ public:
+  mojo::PendingRemote<network::mojom::URLLoaderNetworkServiceObserver> Bind() {
+    mojo::PendingRemote<network::mojom::URLLoaderNetworkServiceObserver> remote;
+    receivers_.Add(this, remote.InitWithNewPipeAndPassReceiver());
+    return remote;
+  }
+
+  void OnSSLCertificateError(const GURL& url,
+                             int net_error,
+                             const net::SSLInfo& ssl_info,
+                             bool fatal,
+                             OnSSLCertificateErrorCallback response) override {
+    std::move(response).Run(net_error);
+  }
+  void OnCertificateRequested(
+      const std::optional<base::UnguessableToken>& window_id,
+      const scoped_refptr<net::SSLCertRequestInfo>& cert_info,
+      mojo::PendingRemote<network::mojom::ClientCertificateResponder> responder) override {
+    mojo::Remote<network::mojom::ClientCertificateResponder>(std::move(responder))
+        ->ContinueWithoutCertificate();
+  }
+  void OnAuthRequired(
+      const std::optional<base::UnguessableToken>& window_id,
+      int32_t request_id,
+      const GURL& url,
+      bool first_auth_attempt,
+      bool do_not_prompt_for_login,
+      const net::AuthChallengeInfo& auth_info,
+      const scoped_refptr<net::HttpResponseHeaders>& head_headers,
+      mojo::PendingRemote<network::mojom::AuthChallengeResponder> responder) override {
+    mojo::Remote<network::mojom::AuthChallengeResponder>(std::move(responder))
+        ->OnAuthCredentials(std::nullopt);
+  }
+  void OnLocalNetworkAccessPermissionRequired(
+      network::mojom::TransportType type,
+      network::mojom::IPAddressSpace ip_address_space,
+      OnLocalNetworkAccessPermissionRequiredCallback callback) override {
+    std::move(callback).Run(network::mojom::LocalNetworkAccessResult::kDenied);
+  }
+  void OnPlatformLocalNetworkPermissionRequired(
+      OnPlatformLocalNetworkPermissionRequiredCallback callback) override {
+    std::move(callback).Run(false);
+  }
+  void OnClearSiteData(const GURL& url,
+                       const std::optional<net::SchemefulSite>& top_level_site,
+                       const std::optional<base::UnguessableToken>& nonce,
+                       const std::string& header_value,
+                       int32_t load_flags,
+                       const std::optional<net::CookiePartitionKey>& cookie_partition_key,
+                       bool partitioned_state_allowed_only,
+                       OnClearSiteDataCallback callback) override {
+    std::move(callback).Run();
+  }
+  void OnLoadingStateUpdate(network::mojom::LoadInfoPtr info,
+                            OnLoadingStateUpdateCallback callback) override {
+    std::move(callback).Run();
+  }
+  void OnDataUseUpdate(int32_t network_traffic_annotation_id_hash,
+                       base::ByteSize recv_bytes,
+                       base::ByteSize sent_bytes) override {}
+  void Clone(
+      mojo::PendingReceiver<network::mojom::URLLoaderNetworkServiceObserver> observer) override {
+    receivers_.Add(this, std::move(observer));
+  }
+  void OnWebSocketConnectedToLocalNetwork(
+      const GURL& request_url,
+      network::mojom::IPAddressSpace ip_address_space) override {}
+  void OnUrlLoaderConnectedToLocalNetwork(
+      const GURL& request_url,
+      network::mojom::IPAddressSpace response_address_space,
+      network::mojom::IPAddressSpace client_address_space,
+      network::mojom::IPAddressSpace target_address_space) override {}
+
+ private:
+  mojo::ReceiverSet<network::mojom::URLLoaderNetworkServiceObserver> receivers_;
+};
 
 // Whether the card may ask from |tab|: one of the user's, never an agent's Space's.
 content::WebContents* UsersPage(bc_id tab) {
@@ -359,7 +438,7 @@ class Card : public content::WebContentsObserver,
   std::string read_;
   base::OneShotTimer wait_;
   base::OneShotTimer limit_;
-  NetworkRefuser refuser_;
+  Refuser refuser_;
   mojo::Remote<network::mojom::URLLoaderFactory> factory_;
   mojo::Receiver<network::mojom::ProxyLookupClient> lookup_{this};
   std::unique_ptr<network::SimpleURLLoader> loader_;
