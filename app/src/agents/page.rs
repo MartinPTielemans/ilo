@@ -189,6 +189,8 @@ pub fn outline(tab: &TabInfo, nodes: &[Value], refs: &mut Refs, part: Option<i64
         form: None,
         focus: Focus::Unknown,
         elements: Vec::new(),
+        messages: Vec::new(),
+        editors: Vec::new(),
     };
     let backend = |node: &&Value| node.get("backendDOMNodeId").and_then(Value::as_i64);
     let root = match part {
@@ -227,6 +229,8 @@ pub fn outline(tab: &TabInfo, nodes: &[Value], refs: &mut Refs, part: Option<i64
         notes,
         focus: walk.focus,
         elements: walk.elements,
+        messages: walk.messages,
+        editors: walk.editors,
     }
 }
 
@@ -244,6 +248,11 @@ pub struct Outline {
     /// What has the keyboard, and each element with a ref, for what a key press activates.
     focus: Focus,
     elements: Vec<Element>,
+    /// The form of each message the page holds, a multi-line field or a rich-text editor that
+    /// isn't empty, or none for one in no form: what a Send control would send.
+    messages: Vec<Option<i64>>,
+    /// The DOM node of each rich-text editor, where a line break may send what it holds.
+    editors: Vec<i64>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -294,6 +303,18 @@ impl Line {
 }
 
 impl Outline {
+    /// Whether a Send control in `form`, or in no form, would send a message the page holds: one
+    /// in that form or in no form, or, for a control in no form, anywhere on the page, as a
+    /// composer's Send often sits outside every form.
+    pub fn sends_message(&self, form: Option<i64>) -> bool {
+        (self.messages.iter()).any(|each| form.is_none() || each.is_none() || *each == form)
+    }
+
+    /// Whether the element on the DOM node `node` is a rich-text editor.
+    pub fn is_editor(&self, node: i64) -> bool {
+        self.editors.contains(&node)
+    }
+
     /// Which tab and page it is, without the outline.
     pub fn head(&self) -> &str {
         &self.head
@@ -464,6 +485,8 @@ struct Walk<'a> {
     form: Option<i64>,
     focus: Focus,
     elements: Vec<Element>,
+    messages: Vec<Option<i64>>,
+    editors: Vec<i64>,
 }
 
 impl Walk<'_> {
@@ -517,6 +540,13 @@ impl Walk<'_> {
             .unwrap_or(false);
         let role = role(node);
         let name = name(node);
+        let rich = editable(node) == Some("richtext");
+        if let (false, true, Some(backend)) = (ignored, rich, node.get("backendDOMNodeId")) {
+            self.editors.extend(backend.as_i64());
+        }
+        if !ignored && (rich || (role == "textbox" && state(node, "multiline"))) && holds(node) {
+            self.messages.push(self.form);
+        }
         if state(node, "focused") {
             self.focus = match role {
                 "RootWebArea" => Focus::Page,
@@ -685,6 +715,24 @@ impl Walk<'_> {
     }
 }
 
+/// How the node is editable, as Chromium says: "plaintext" or "richtext", the latter for a
+/// contenteditable editor.
+fn editable(node: &Value) -> Option<&str> {
+    let properties = node.get("properties").and_then(Value::as_array);
+    let property = (properties.into_iter().flatten())
+        .find(|property| property.get("name").and_then(Value::as_str) == Some("editable"))?;
+    property.pointer("/value/value").and_then(Value::as_str)
+}
+
+/// Whether a field holds anything, as the core says: the agent's own typing or the page's value,
+/// or that it's filled.
+fn holds(node: &Value) -> bool {
+    let shown = node.get("holds").and_then(Value::as_str);
+    let contents = node.get("contents").and_then(Value::as_str);
+    shown.is_some_and(|holds| !holds.trim().is_empty())
+        || matches!(contents, Some("filled" | "changed"))
+}
+
 /// Whether the node has the state `name`, such as "focused".
 fn state(node: &Value, name: &str) -> bool {
     let properties = node.get("properties").and_then(Value::as_array);
@@ -769,12 +817,103 @@ const PAYMENT: &[&str] = &[
     "subscribe",
     "donate",
     "transfer",
+    "complete order",
+    "confirm order",
+    "confirm purchase",
+    "confirm and pay",
+    "confirm booking",
+    "book now",
+    "reserve",
+    "bid",
+    "pledge",
+    // Danish.
+    "betal",
+    "køb",
+    "bestil",
+    "bekræft ordre",
+    "støt",
+    "donér",
+    // German.
+    "kaufen",
+    "bezahlen",
+    "bestellen",
+    "buchen",
+    "spenden",
+    // French.
+    "payer",
+    "acheter",
+    "commander",
+    "faire un don",
+    // Spanish.
+    "pagar",
+    "comprar",
+    "donar",
+    // Dutch, whose "bestellen" is German's too.
+    "betalen",
+    "doneren",
+    // Swedish.
+    "betala",
+    "köp",
+    "beställ",
+    "skänk",
 ];
 /// Words that send, as a button's name has them.
 const SEND: &[&str] = &[
-    "send", "submit", "post", "publish", "reply", "tweet", "comment",
+    "send",
+    "submit",
+    "post",
+    "publish",
+    "reply",
+    "tweet",
+    "comment",
+    "forward",
+    "share",
+    "sende",
+    "senden",
+    "antworten",
+    "envoyer",
+    "enviar",
+    "verzenden",
+    "skicka",
+    "create topic",
 ];
+/// Words that move money, as a button's name has them, which ask on a bank's or money site
+/// alone: a yes to opening one isn't a yes to what's done there.
+const MOVES: &[&str] = &[
+    "withdraw",
+    "transfer",
+    "confirm",
+    // Danish.
+    "hæv",
+    "overfør",
+    "bekræft",
+    // German.
+    "abheben",
+    "überweisen",
+    "bestätigen",
+    // French.
+    "retirer",
+    "virement",
+    "transférer",
+    "confirmer",
+    // Spanish.
+    "retirar",
+    "transferir",
+    "confirmar",
+    // Dutch.
+    "opnemen",
+    "overboeken",
+    "overmaken",
+    "bevestigen",
+    // Swedish.
+    "ta ut",
+    "överför",
+    "bekräfta",
+];
+/// Sites that send messages, where a Send control asks even with no message the outline shows:
+/// one composed where the outline doesn't see it, as in a frame of its own.
 const MESSAGING: &[&str] = &[
+    "mail.proton.me",
     "mail.google.com",
     "outlook.live.com",
     "outlook.office.com",
@@ -790,33 +929,85 @@ const MESSAGING: &[&str] = &[
     "web.telegram.org",
     "reddit.com",
 ];
+/// Banks' and money sites without "bank" in their host, each a site whole, as each country's
+/// site is one of its own.
 const BANKS: &[&str] = &[
-    "chase",
-    "wellsfargo",
-    "bankofamerica",
-    "citi",
-    "capitalone",
-    "schwab",
-    "fidelity",
-    "vanguard",
-    "paypal",
-    "venmo",
-    "revolut",
-    "wise",
-    "monzo",
-    "coinbase",
+    "chase.com",
+    "wellsfargo.com",
+    "bankofamerica.com",
+    "citi.com",
+    "capitalone.com",
+    "schwab.com",
+    "fidelity.com",
+    "vanguard.com",
+    "paypal.com",
+    "venmo.com",
+    "revolut.com",
+    "wise.com",
+    "monzo.com",
+    "coinbase.com",
+    "americanexpress.com",
+    "discover.com",
+    "pnc.com",
+    "td.com",
+    "ally.com",
+    "sofi.com",
+    "robinhood.com",
+    "etoro.com",
+    "interactivebrokers.com",
+    "binance.com",
+    "kraken.com",
+    "bitstamp.net",
+    "crypto.com",
+    "klarna.com",
+    "n26.com",
+    "bunq.com",
+    "hsbc.com",
+    "hsbc.co.uk",
+    "barclays.co.uk",
+    "barclaycard.co.uk",
+    "natwest.com",
+    "nationwide.co.uk",
+    "halifax.co.uk",
+    "santander.co.uk",
+    "santander.de",
+    "santander.es",
+    "ing.com",
+    "ing.de",
+    "ing.nl",
+    "sparkasse.de",
+    "dkb.de",
+    "comdirect.de",
+    "postfinance.ch",
+    "ubs.com",
+    "nordea.com",
+    "nordea.dk",
+    "nordea.se",
+    "nordea.no",
+    "nordea.fi",
+    "nykredit.dk",
+    "lsb.dk",
+    "lunar.app",
+    "mobilepay.dk",
+    "vipps.no",
 ];
 
 /// Why acting on the element named `label` on `host` asks the user first, if it does: it looks
-/// like a payment or an order, or it sends a message or post from a site that sends them. Typing
-/// with submit and pressing Enter are "send".
-pub fn risk(host: &str, label: &str) -> Option<&'static str> {
+/// like a payment or an order, or it sends a message or post, from a site that sends them or
+/// with a `message` in its form, or the page's for one in no form, for it to send, or it sends or
+/// moves money on a bank's or money site (GHSA-6qxg-jpw9-5jrr). Typing with submit and pressing
+/// Enter are "send".
+pub fn risk(host: &str, label: &str, message: bool) -> Option<&'static str> {
     let label = label.to_lowercase();
     if PAYMENT.iter().any(|words| has_words(&label, words)) {
         return Some(ORDER);
     }
     let sends = SEND.iter().any(|words| has_words(&label, words));
-    if sends && MESSAGING.iter().any(|site| on(host, site)) {
+    let moves = || MOVES.iter().any(|words| has_words(&label, words));
+    if (sends || moves()) && opening_risk(host).is_some() {
+        return Some(ORDER);
+    }
+    if sends && (message || MESSAGING.iter().any(|site| on(host, site))) {
         return Some(SENDS);
     }
     None
@@ -864,7 +1055,8 @@ pub fn pressing_risk(
     }
     let asks = |surely: bool| {
         move |element: &Element| {
-            let why = risk(host, &element.name)?;
+            let message = outline.is_some_and(|outline| outline.sends_message(element.form));
+            let why = risk(host, &element.name, message)?;
             let control = element.clone();
             Some(Pressing {
                 why,
@@ -912,7 +1104,7 @@ pub const SENDS: &str = "It sends a message or a post.";
 /// Why opening a page on `host` asks the user first, if it does: it's a bank's.
 pub fn opening_risk(host: &str) -> Option<&'static str> {
     let host = host.to_lowercase();
-    let bank = BANKS.iter().any(|bank| on(&host, &format!("{bank}.com"))) || host.contains("bank");
+    let bank = BANKS.iter().any(|bank| on(&host, bank)) || host.contains("bank");
     bank.then_some("It's a bank's site.")
 }
 
@@ -1468,16 +1660,20 @@ mod tests {
     /// a bank's site; the words have to be words, not inside others.
     #[test]
     fn what_asks_the_user_first() {
-        assert!(risk("shop.example", "Place your order").is_some());
-        assert!(risk("shop.example", "Proceed to checkout").is_some());
-        assert!(risk("shop.example", "Pay now").is_some());
-        assert_eq!(risk("shop.example", "Payment methods"), None);
-        assert_eq!(risk("shop.example", "Send"), None);
-        assert!(risk("mail.google.com", "Send").is_some());
-        assert!(risk("old.reddit.com", "send").is_some());
-        assert_eq!(risk("notreddit.com", "send"), None);
-        assert_eq!(risk("mail.google.com", "Sender"), None);
+        assert!(risk("shop.example", "Place your order", false).is_some());
+        assert!(risk("shop.example", "Proceed to checkout", false).is_some());
+        assert!(risk("shop.example", "Pay now", false).is_some());
+        assert_eq!(risk("shop.example", "Payment methods", false), None);
+        assert_eq!(risk("butik.example", "Betalingsmetoder", false), None);
+        assert_eq!(risk("shop.example", "Send", false), None);
+        assert!(risk("shop.example", "Send", true).is_some());
+        assert!(risk("mail.google.com", "Send", false).is_some());
+        assert!(risk("old.reddit.com", "send", false).is_some());
+        assert_eq!(risk("notreddit.com", "send", false), None);
+        assert_eq!(risk("mail.google.com", "Sender", false), None);
         assert!(opening_risk("www.chase.com").is_some());
+        assert!(opening_risk("netbank.nordea.dk").is_some());
+        assert_eq!(opening_risk("notnordea.dk"), None);
         assert!(opening_risk("online.mybank.example").is_some());
         assert_eq!(opening_risk("example.com"), None);
         assert_eq!(opening_risk("notchase.com"), None);
@@ -1496,16 +1692,24 @@ mod tests {
             ("butik.example", "Køb nu"),
             ("laden.example", "Jetzt kaufen"),
             ("mail.proton.me", "Send"),
-            ("teams.microsoft.com", "Send"),
-            ("github.com", "Comment"),
-            ("meta.discourse.org", "Create Topic"),
             ("www.binance.com", "Withdraw"),
             ("netbank.nordea.dk", "Overfør"),
             ("netbank.nordea.dk", "Send"),
             ("online.mybank.example", "Confirm"),
         ] {
-            if risk(host, label).is_none() {
+            if risk(host, label, false).is_none() {
                 missed.push(format!("{label} on {host} asks nothing"));
+            }
+        }
+        for (host, label) in [
+            ("teams.microsoft.com", "Send"),
+            ("github.com", "Comment"),
+            ("meta.discourse.org", "Create Topic"),
+        ] {
+            let (outline, control) = composed(label, true, Some("filled"));
+            let message = outline.sends_message(control.form);
+            if risk(host, &control.name, message).is_none() {
+                missed.push(format!("{label} on {host}, with a message, asks nothing"));
             }
         }
         for host in [
@@ -1519,10 +1723,110 @@ mod tests {
                 missed.push(format!("opening {host} asks nothing"));
             }
         }
-        if risk("shop.example", "Confirm").is_some() {
+        if risk("shop.example", "Confirm", false).is_some() {
             missed.push("Confirm off the money sites asks".into());
         }
         assert!(missed.is_empty(), "{}", missed.join("\n"));
+    }
+
+    /// A page with a message field and a Send control named `send`: the field a multi-line one
+    /// in the control's form, or with `rich`, a rich-text editor in no form, as a chat's is, its
+    /// `contents` as the core says. Returns its outline and the control.
+    fn composed(send: &str, rich: bool, contents: Option<&str>) -> (Outline, Element) {
+        let mut nodes = match rich {
+            true => vec![
+                node("1", "RootWebArea", "Chat", &["2", "3"]),
+                node("2", "textbox", "Message", &[]),
+                node("3", "button", send, &[]),
+            ],
+            false => vec![
+                node("1", "RootWebArea", "Issue", &["4"]),
+                node("4", "form", "", &["2", "3"]),
+                node("2", "textbox", "Body", &[]),
+                node("3", "button", send, &[]),
+            ],
+        };
+        let property = match rich {
+            true => {
+                json!({ "name": "editable", "value": { "type": "token", "value": "richtext" } })
+            }
+            false => json!({ "name": "multiline", "value": { "type": "boolean", "value": true } }),
+        };
+        for each in &mut nodes {
+            let id: i64 = each["nodeId"].as_str().unwrap().parse().unwrap();
+            each["backendDOMNodeId"] = json!(id * 10);
+            if id == 2 {
+                each["properties"] = json!([property]);
+                if let Some(contents) = contents {
+                    each["contents"] = json!(contents);
+                }
+            }
+        }
+        let outline = outline(&tab(), &nodes, &mut Refs::default(), None);
+        let control = outline
+            .elements
+            .iter()
+            .find(|each| each.name == send)
+            .cloned();
+        (outline, control.unwrap())
+    }
+
+    /// A Send control asks on any site when the page holds a message for it to send: a
+    /// multi-line field in its form or a rich-text editor in no form, holding anything. A
+    /// single-line field, an empty one, or one in another form doesn't make it ask, and a
+    /// line break in an editor is its Enter.
+    #[test]
+    fn a_message_the_page_holds_makes_its_send_ask() {
+        for (rich, label) in [(false, "Comment"), (true, "Send")] {
+            let (outline, control) = composed(label, rich, Some("filled"));
+            assert!(outline.sends_message(control.form), "{label}");
+            assert_eq!(risk("site.example", label, true), Some(SENDS));
+            let (empty, control) = composed(label, rich, Some("empty"));
+            assert!(
+                !empty.sends_message(control.form),
+                "{label} with nothing to send"
+            );
+            let (unknown, control) = composed(label, rich, None);
+            assert!(
+                !unknown.sends_message(control.form),
+                "{label} with nothing said"
+            );
+        }
+        // What the agent typed counts, and a Send of another form doesn't send it.
+        let mut nodes = vec![
+            node("1", "RootWebArea", "Shop", &["4", "5"]),
+            node("4", "form", "", &["2", "3"]),
+            node("2", "textbox", "Notes", &[]),
+            node("3", "button", "Comment", &[]),
+            node("5", "form", "", &["6"]),
+            node("6", "button", "Submit", &[]),
+        ];
+        for (at, backend) in [(1, 40), (2, 20), (3, 30), (4, 50), (5, 60)] {
+            nodes[at]["backendDOMNodeId"] = json!(backend);
+        }
+        nodes[2]["properties"] =
+            json!([{ "name": "multiline", "value": { "type": "boolean", "value": true } }]);
+        nodes[2]["holds"] = json!("Looks good");
+        let page = outline(&tab(), &nodes, &mut Refs::default(), None);
+        let named = |name: &str| page.elements.iter().find(|each| each.name == name).unwrap();
+        assert!(page.sends_message(named("Comment").form));
+        assert!(
+            !page.sends_message(named("Submit").form),
+            "a Submit in another form"
+        );
+        // A single-line field holding text is no message.
+        nodes[2]["properties"] = json!([]);
+        let single = outline(&tab(), &nodes, &mut Refs::default(), None);
+        assert!(!single.sends_message(Some(40)));
+        // Enter in the chat's editor, as a line break typed there is, asks as a click on Send.
+        let (chat, _) = composed("Send", true, Some("filled"));
+        assert!(chat.is_editor(20));
+        let editor = chat.elements.iter().find(|each| each.node == 20).unwrap();
+        let pressing = pressing_risk("chat.example", Some(&chat), "Enter", Some(editor));
+        assert_eq!(
+            pressing.map(|pressing| pressing.control.name),
+            Some("Send".into())
+        );
     }
 
     #[test]

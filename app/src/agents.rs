@@ -2412,7 +2412,9 @@ impl Agents {
                 act.page = PageAction::Click;
                 act.note = format!("Clicked {} {}.", element.role, label(element));
                 act.what = format!("click {} on {host}", label(element));
-                risk = page::risk(&host, &element.name);
+                let outline = self.outlines.get(&tab);
+                let message = outline.is_some_and(|outline| outline.sends_message(element.form));
+                risk = page::risk(&host, &element.name, message);
             }
             "type" => {
                 let (Some(element), Some(text)) = (&element, string("text")) else {
@@ -2441,8 +2443,13 @@ impl Agents {
                 );
                 act.what = format!("send “{}” on {host}", page::clip(&text, 60));
                 // Its Enter asks as a click on what it submits would, and else as a message sent.
+                // A line break in a rich-text editor is that Enter, as a chat's composer sends
+                // on it.
                 let outline = self.outlines.get(&tab);
-                let pressing = (submit
+                let broken = text.contains(['\n', '\r'])
+                    && outline.is_some_and(|outline| outline.is_editor(element.node));
+                let enter = submit || broken;
+                let pressing = (enter
                     .then(|| page::pressing_risk(&host, outline, "Enter", Some(element))))
                 .flatten();
                 risk = match pressing {
@@ -2463,7 +2470,7 @@ impl Agents {
                         };
                         Some(pressing.why)
                     }
-                    None => submit.then(|| page::risk(&host, "send")).flatten(),
+                    None => enter.then(|| page::risk(&host, "send", false)).flatten(),
                 };
                 act.text = text;
             }
@@ -2487,7 +2494,10 @@ impl Agents {
                 act.note = format!("Chose {chose} in the {}.", act.field);
                 act.what = format!("choose {chose} in {} on {host}", label(element));
                 // As a click on the field or the option would.
-                risk = page::risk(&host, &element.name).or_else(|| page::risk(&host, &option));
+                let outline = self.outlines.get(&tab);
+                let message = outline.is_some_and(|outline| outline.sends_message(element.form));
+                risk = page::risk(&host, &element.name, message)
+                    .or_else(|| page::risk(&host, &option, message));
                 act.text = option;
             }
             "press_key" => {
@@ -2516,7 +2526,7 @@ impl Agents {
                         Some(pressing.why)
                     }
                     None => (key == "Enter")
-                        .then(|| page::risk(&host, "send"))
+                        .then(|| page::risk(&host, "send", false))
                         .flatten(),
                 };
                 act.text = key;
