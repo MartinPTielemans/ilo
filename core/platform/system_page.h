@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "base/functional/callback_forward.h"
+#include "browser_core/quit_stores_wait.h"
 #include "net/cookies/canonical_cookie.h"
 #include "ui/gfx/native_ui_types.h"
 #include "url/gurl.h"
@@ -137,6 +138,11 @@ class SystemPage {
                         const std::string& domain,
                         SiteData what,
                         base::OnceClosure done);
+  // Asks the system's engine to write what the session's stores keep to the disk now, then runs
+  // |done| with how it answered: at once with kNone if the session made no store that keeps
+  // anything. A quit asks after its last page has closed, as an item a page set less than a moment
+  // before is otherwise lost with the engine's process (#3685). Never loads the system's engine.
+  static void WriteStores(base::OnceCallback<void(StoresWritten)> done);
 
   SystemPage(const SystemPage&) = delete;
   SystemPage& operator=(const SystemPage&) = delete;
