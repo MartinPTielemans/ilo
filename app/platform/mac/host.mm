@@ -253,6 +253,10 @@ void StripTint(CALayer* layer) {
 @property(weak) NSView* surfaceView;
 // The surface's, in its log lines.
 @property(copy) NSString* name;
+// The view the UI draws in, in the window the plate is over, and whether it has heard the pointer
+// leave for the plate since it came onto it.
+@property(weak) NSView* parentView;
+@property BOOL parentLeft;
 @end
 
 @implementation HostPlateWindow
@@ -377,13 +381,39 @@ void StripTint(CALayer* layer) {
   [self.target otherMouseUp:[self surfaceEvent:event]];
 }
 
+// The pointer is on the plate, which the window under it hears as a move outside it, as GPUI's
+// leave is on Linux and Windows when the pointer goes into the surface's window. A move the driver
+// posts brings it no exit, and its UI kept the row under the pointer's last place hovered, so a
+// row moving there after a click on the card showed its own card (#3644). Not while a button is
+// down, as that window still has the drag.
+- (void)tellParentLeft:(NSEvent*)event {
+  HostPlateWindow* plate = (HostPlateWindow*)self.window;
+  NSWindow* parent = plate.parentWindow;
+  NSView* view = plate.parentView;
+  if (plate.parentLeft || NSEvent.pressedMouseButtons || !parent || view.window != parent) {
+    return;
+  }
+  plate.parentLeft = YES;
+  [view mouseMoved:[NSEvent mouseEventWithType:NSEventTypeMouseMoved
+                                      location:NSMakePoint(-1, NSHeight(parent.frame) + 1)
+                                 modifierFlags:event.modifierFlags
+                                     timestamp:event.timestamp
+                                  windowNumber:parent.windowNumber
+                                       context:nil
+                                   eventNumber:0
+                                    clickCount:0
+                                      pressure:0]];
+}
+
 - (void)mouseMoved:(NSEvent*)event {
   [self.target mouseMoved:[self surfaceEvent:event]];
+  [self tellParentLeft:event];
 }
 
 - (void)mouseEntered:(NSEvent*)event {
   const NSPoint at = [self.window convertPointToScreen:event.locationInWindow];
   [self.target mouseMoved:[self surfaceEvent:event type:NSEventTypeMouseMoved at:at]];
+  [self tellParentLeft:event];
 }
 
 // A move outside the surface's window, as GPUI's leave is on Linux and Windows: the pointer is off
@@ -394,6 +424,7 @@ void StripTint(CALayer* layer) {
   if (NSEvent.pressedMouseButtons) {
     return;
   }
+  ((HostPlateWindow*)self.window).parentLeft = NO;
   NSWindow* surface = ((HostPlateWindow*)self.window).surface;
   const NSPoint outside = NSMakePoint(-1, NSHeight(surface.frame) + 1);
   [self.target mouseMoved:[self surfaceEvent:event
@@ -963,6 +994,7 @@ void HidePlateWindow(HostPlateWindow* plate) {
   }
   [plate.parentWindow removeChildWindow:plate];
   [plate orderOut:nil];
+  plate.parentLeft = NO;
   fprintf(stderr, "browser: plate window %s hidden\n", plate.name.UTF8String);
 }
 
@@ -988,6 +1020,9 @@ void PlacePlateWindow(HostPlateWindow* plate, NSWindow* parent, NSRect rect) {
   const bool added = plate.parentWindow != parent;
   if (added) {
     [plate.parentWindow removeChildWindow:plate];
+    Browser* browser = BrowserOf(parent);
+    plate.parentView = browser ? browser->ui_view : nil;
+    plate.parentLeft = NO;
     AddOver(parent, plate);
     [plate orderWindow:NSWindowAbove relativeTo:surface.windowNumber];
   }
