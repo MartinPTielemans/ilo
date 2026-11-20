@@ -1387,6 +1387,35 @@ NSSet<NSString*>* WebKitTypes(SiteData what) {
 }  // namespace
 
 // static
+void SystemPage::WriteStores(base::OnceCallback<void(StoresWritten)> done) {
+  // A store is made only with WebKit loaded, so with none kept this never loads it.
+  WKWebsiteDataStore* kept = nil;
+  for (WKWebsiteDataStore* each in Stores().objectEnumerator) {
+    if (each.persistent) {
+      kept = each;
+      break;
+    }
+  }
+  if (!kept) {
+    std::move(done).Run(StoresWritten::kNone);
+    return;
+  }
+  // WebKit commits localStorage half a second after a write, and as the app exits its networking
+  // process can exit before it commits (WebKit's XPCServiceMain). Preparing that process to suspend
+  // commits every store's, and flushes their cookies: it's one process for all of them, so any
+  // store asks it. There's no public call for it.
+  SEL prepare = NSSelectorFromString(@"_sendNetworkProcessPrepareToSuspend:");
+  if (![kept respondsToSelector:prepare]) {
+    std::move(done).Run(StoresWritten::kNoWay);
+    return;
+  }
+  __block base::OnceCallback<void(StoresWritten)> then = std::move(done);
+  reinterpret_cast<void (*)(id, SEL, id)>(objc_msgSend)(kept, prepare, ^{
+    std::move(then).Run(StoresWritten::kWritten);
+  });
+}
+
+// static
 void SystemPage::ClearSite(const SystemStore& store,
                            const std::string& domain,
                            SiteData what,

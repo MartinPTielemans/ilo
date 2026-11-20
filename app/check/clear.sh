@@ -1858,7 +1858,10 @@ sys.exit(0 if state.get("browser_core", {}).get("system_engine", {}).get("old_st
   await '^browser: title [0-9]* session safari sees w back$' ||
     fail "the session page didn't keep its cookie and item in the store of Default's path: $(grep '^browser: title [0-9]* session' "$log" | tail -1)"
   exec 3>&-
+  # At once, as the item was set a moment ago: the quit has the engine write it (#3685).
   quit
+  grep -q '^browser: quit: system stores written at [0-9]* ms$' "$log" ||
+    fail "the quit didn't have Safari's engine write its stores: $(grep '^browser: quit: system stores' "$log" | tail -1)"
   # As an old version leaves the folder: no store named, none listed, unmarked, Profile 1 counted.
   old_store_prefs '' unswept
   # At a page in Chromium, so the sweep's listing is the launch's first call into WebKit, which
@@ -1873,6 +1876,9 @@ sys.exit(0 if state.get("browser_core", {}).get("system_engine", {}).get("old_st
     fail "the sweep deleted $deleted stores, not the one of Profile 1's path alone: $(grep '^browser: system store' "$log" | tail -3)"
   exec 3>&-
   quit
+  # Listing and deleting stores make none, so the quit has nothing to wait for.
+  ! grep -q '^browser: quit: system stores' "$log" ||
+    fail "a quit with no store made waited for Safari's engine: $(grep '^browser: quit: system stores' "$log")"
   old_stores_marked || fail "the sweep didn't mark the folder swept"
   # The store of Default's path stayed, its folder being there, and Profile 1's went.
   old_store_prefs "$kept_store"

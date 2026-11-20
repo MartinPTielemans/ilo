@@ -362,6 +362,8 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
     // reason before this, and the system's Apple Event on the Mac too.
     fprintf(stderr, "browser: terminating, %s\n",
             ShutdownName(browser_shutdown::GetShutdownType()));
+    // Before the app's own hold goes, so the quit waits for the system's engine's stores.
+    system_engine::WriteStoresAtQuit();
     keep_alive_.reset();
     // The session keeps each regular window's frame and state while Chrome still has its native
     // window: it closes them all as this returns (OnAppExiting's CloseAllWidgets), and a quit no

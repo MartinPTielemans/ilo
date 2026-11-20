@@ -539,6 +539,16 @@ source_set("agent_reply_limit") {
   deps = [ "//base" ]
 }
 
+# How a quit waits for the system's engine to write its stores (#3685), apart so
+# browser_core_unittests tests the rule alone.
+source_set("quit_stores_wait") {
+  sources = [
+    "quit_stores_wait.cc",
+    "quit_stores_wait.h",
+  ]
+  deps = [ "//base" ]
+}
+
 # An agent's download, held until the user answers, apart so browser_core_unittests tests the hold
 # alone.
 source_set("agent_download_hold") {
@@ -850,6 +860,7 @@ source_set("browser_core") {
     ":agent_reply_limit",
     ":popup_hold",
     ":protected_move_rule",
+    ":quit_stores_wait",
     ":search_default",
     ":select_choices",
     ":agent_download_hold",
@@ -1171,6 +1182,7 @@ test("browser_core_unittests") {
     "agent_download_hold_unittest.cc",
     "agent_reply_limit_unittest.cc",
     "agent_job_voter_unittest.cc",
+    "quit_stores_wait_unittest.cc",
     "boost_colors_unittest.cc",
     "boost_script_unittest.cc",
     "clear_both_engines_unittest.cc",
@@ -1235,6 +1247,7 @@ test("browser_core_unittests") {
     ":agent_download_hold",
     ":agent_job_voter",
     ":agent_reply_limit",
+    ":quit_stores_wait",
     ":boost_colors",
     ":boost_script",
     ":clear_both_engines",
