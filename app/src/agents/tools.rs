@@ -27,8 +27,8 @@ pub const INSTRUCTIONS: &str = concat!(
      takes one out, and list_split says which are together.\n\n\
      Payments, orders, sending messages, banks' sites and every request that may change \
      something ask the user first. If they say no, \
-     don't try again. You can never type into a password field: a sign-in, a 2FA prompt or a \
-     CAPTCHA is the user's to do, so hand the tab to them with hand_off, and take a snapshot \
+     don't try again. You can never type into a password field: a sign-in, a 2FA prompt, a \
+     CAPTCHA or a file field is the user's to do, so hand the tab to them with hand_off, and take a snapshot \
      once they hand it back, as its page will have changed. The user can take a tab over too, \
      on purpose: it's theirs until they hand it back. Carry on in your other tabs, and only \
      when the task can't go on without that one, ask for it with ask_for_tab, saying why. Use \
@@ -57,7 +57,7 @@ pub const TASK_INSTRUCTIONS: &str = concat!(
      short sentence, what they need to know to answer as its context, and up to three short \
      answers when there are a few to pick from. It waits for their answer.\n\n\
      Never ask for a password, a one-time code or a card number in the conversation. A sign-in, \
-     a 2FA prompt or a CAPTCHA is the user's to do: hand them the tab with hand_off.\n\n\
+     a 2FA prompt, a CAPTCHA or a file field is the user's to do: hand them the tab with hand_off.\n\n\
      Never pay, and never place an order, book or send a message unless the user asked you to. \
      When the work ends on a page only the user may finish, such as a checkout, stop there.\n\n\
      When you're done, call finish with the result in a sentence or two, and its summary in one \
@@ -493,7 +493,7 @@ fn shared() -> Value {
         {
             "name": "hand_off",
             "title": "Hand off to the user",
-            "description": "Hand a tab to the user for a step only they may do: a sign-in, 2FA, a CAPTCHA, or a choice that's theirs. They're asked in the browser, and this waits until they hand the tab back. Meanwhile the tab is theirs, and calls on it are refused. Its page will have changed when it's back: take a snapshot before you act in it.",
+            "description": "Hand a tab to the user for a step only they may do: a sign-in, 2FA, a CAPTCHA, a file to put in a page, or a choice that's theirs. They're asked in the browser, and this waits until they hand the tab back. Meanwhile the tab is theirs, and calls on it are refused. Its page will have changed when it's back: take a snapshot before you act in it.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
