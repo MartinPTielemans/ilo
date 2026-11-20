@@ -1199,10 +1199,10 @@ impl TalkView {
         let shown = self.shown.as_ref()?;
         shown.lines.iter().rev().find_map(|line| match line {
             Line::Trace(trace) => (trace.items.iter().rev()).find_map(|item| match item {
-                TraceItem::Step(step) if step.running => Some(step.title.clone()),
+                TraceItem::Step(step) if step.running => Some(picture_step(step)),
                 _ => None,
             }),
-            Line::Step(step) if step.running => Some(step.title.clone()),
+            Line::Step(step) if step.running => Some(picture_step(step)),
             _ => None,
         })
     }
@@ -2370,6 +2370,12 @@ pub(super) fn picture_status(
         Some(why) => Some(format!("Needs you · {why}").into()),
         None => step,
     }
+}
+
+/// A step's title as a page's picture says it: a request's written out as the trace writes it
+/// (#3645), drawn plain in the picture's small line.
+pub(super) fn picture_step(step: &TraceStep) -> SharedString {
+    crate::agent_request::Written::step(step.request, &step.title).text
 }
 
 #[cfg(test)]
