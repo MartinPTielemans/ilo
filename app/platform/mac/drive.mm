@@ -35,7 +35,8 @@
 //   keyup <key>                           <key> let go
 //   flags [cmd] [shift] [alt] [ctrl]      the modifiers held from now, as each changed one's own
 //                                         key going down or up; key holds them only for its own key
-//   type <text>                           lowercase letters, dots and spaces
+//   type <text>                           the characters key has, a capital as its letter with
+//                                         shift, each as its own key down and up
 //   insert <text>                         commits <text>, any characters, to the key window's
 //                                         text input, as the character palette does for an emoji.
 //                                         The app's asking for the palette only logs "browser:
@@ -395,7 +396,7 @@ const std::map<std::string, unsigned short> kKeyCodes = {
     {"0", 29}, {"-", 27}, {"+", 27}, {"[", 33}, {"]", 30}, {"up", 126}, {"down", 125},
     {"left", 123}, {"right", 124}, {"backspace", 51}, {",", 43}, {"delete", 117},
     {"pageup", 116}, {"pagedown", 121}, {"/", 44}, {"?", 44}, {"=", 24}, {"&", 26}, {"_", 27},
-    {":", 41}, {"@", 19}, {"!", 18}, {"(", 25}, {")", 29}, {"%", 23}, {"f12", 111},
+    {":", 41}, {"@", 19}, {"!", 18}, {"(", 25}, {")", 29}, {"%", 23}, {"#", 20}, {"f12", 111},
     {"f10", 109}, {"f6", 97},
 };
 // AppKit's characters for the arrows are NSUpArrowFunctionKey to NSRightArrowFunctionKey, and for
