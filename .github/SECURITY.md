@@ -30,6 +30,12 @@ Never in a public issue, pull request or discussion. ilo's own is:
 - **The engine patches** (`engine/series`, `engine/patches/`), including a Chromium protection they
   turn off.
 
+Connect in Settings › Agents writes a client's token in plain text into that client's own config,
+`~/.claude.json` for Claude Code or `~/.codex/config.toml` for Codex, where any program running as
+you can read it; that's by design, as the client reads it there to start ilo's bridge. The token
+gives only that client's connection to ilo, under the same rules and questions, and Disconnect there
+makes it worthless.
+
 ## What a report needs
 
 - The ilo version and build, as Settings › About shows it, and the Chromium version: Copy Build
