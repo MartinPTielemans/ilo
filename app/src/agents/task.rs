@@ -2096,7 +2096,6 @@ impl Agents {
         if !session.calls.is_empty() || !open.is_empty() {
             return;
         }
-        // check.sh reads this line.
         log!(
             "browser: session {key} quiet for {} s after its last page",
             QUIET.as_secs()
