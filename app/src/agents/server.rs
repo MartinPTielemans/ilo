@@ -90,7 +90,7 @@ const MAX_CONNECTIONS: usize = 32;
 /// room for a machine that's stalled.
 const TOKEN_WAIT: Duration = Duration::from_secs(5);
 /// What a client is told when every place is taken.
-const FULL: &str = "The browser has too many agent connections open. Quit a client you aren't using, then connect again.";
+const FULL: &str = "ilo is at its limit for connected clients. Quit another client session, then reconnect or restart this one.";
 
 /// The server, running until it's dropped.
 pub struct Server {
@@ -342,8 +342,11 @@ fn accept(mut listener: pipe::Listener, shared: Arc<Shared>) {
 }
 
 /// Keeps a new connection and serves it on a thread of its own, unless there are too many, which
-/// it says before it closes. A line fits what the socket or pipe holds, so writing it never waits
-/// on the client.
+/// it says before it closes. That line, about 110 bytes and the first written to the connection,
+/// fits what a socket buffers (8 KiB on the Mac, more on Linux) and what the pipe does (64 KiB,
+/// pipe.rs's BUFFER), so writing it on the accept thread never waits on a client, which may never
+/// read. It isn't flushed, which on the pipe waits for the client to read: dropping the stream
+/// closes its handle without disconnecting it, and the client still reads what was written.
 fn welcome(mut stream: Stream, shared: &Arc<Shared>) {
     let number = shared.next_connection.fetch_add(1, Ordering::SeqCst);
     {

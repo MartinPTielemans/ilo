@@ -58,6 +58,18 @@ impl Client {
         }
     }
 
+    /// Opens one whose reads give up after 10 s, set as it connects: the Mac refuses a socket's
+    /// timeout once the server has closed the connection (EINVAL).
+    fn open_bounded(server: &Server) -> Client {
+        let client = Client::open(server);
+        client
+            .reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        client
+    }
+
     /// Connects and sends `token` first, and gives the server's answer to it.
     fn with(server: &Server, token: &str) -> (Client, Value) {
         let mut client = Client::open(server);
@@ -194,22 +206,59 @@ fn a_full_server_says_so() {
     assert_eq!(refused.unwrap_err(), FULL);
 }
 
+/// Connections that come while the server is full and neither send nor read hold up no one: the
+/// server says it's full to each and goes on, and a client once places are free is served. Each
+/// still reads the line late, after the server closed its end.
+#[test]
+fn connections_that_never_read_hold_up_no_one() {
+    let (server, _, _handed) = server_waiting(Duration::from_secs(1));
+    // Bounded where the server keeps them: its close is what each waits for.
+    let silent: Vec<Client> = (0..MAX_CONNECTIONS)
+        .map(|_| Client::open_bounded(&server))
+        .collect();
+    let deaf: Vec<Client> = (0..8).map(|_| Client::open(&server)).collect();
+    for mut client in silent {
+        let read = client.reader.read(&mut [0]);
+        assert!(
+            matches!(read, Ok(0)),
+            "a connection that sent no token was still open 10 s on: {read:?}"
+        );
+    }
+    // Were the line to the connections that don't read wait on them, the server would take no
+    // other: the connection would fail, or its answer wouldn't come.
+    let stream = connect(server.path())
+        .expect("no connection once places were free, behind connections that never read");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    let mut client = Client {
+        writer: stream.try_clone().unwrap(),
+        reader: BufReader::new(stream),
+    };
+    client.send(json!({ "token": TOKEN }));
+    let answer = read_line(&mut client.reader)
+        .expect("no answer to the token 10 s on, behind connections that never read");
+    assert_eq!(
+        serde_json::from_str::<Value>(&answer).unwrap(),
+        json!({ "ok": true })
+    );
+    for mut client in deaf {
+        assert_eq!(client.read(), Some(json!({ "error": FULL })));
+        assert_eq!(client.read(), None);
+    }
+}
+
 /// A connection that sends no token is closed once its time is up, so connections that send
 /// nothing can't keep a client out (#3700).
 #[test]
 fn connections_that_send_no_token_give_way() {
     let (server, _, _handed) = server_waiting(Duration::from_millis(200));
+    // Bounded where the server keeps them: its close is what each waits for.
     let silent: Vec<Client> = (0..MAX_CONNECTIONS)
-        .map(|_| Client::open(&server))
+        .map(|_| Client::open_bounded(&server))
         .collect();
     for mut client in silent {
-        // Bounds the test where the server keeps them: the server's close is what it waits for.
-        let reader = client.reader.get_ref();
-        reader
-            .set_read_timeout(Some(Duration::from_secs(10)))
-            .unwrap();
-        let mut byte = [0];
-        let read = client.reader.read(&mut byte);
+        let read = client.reader.read(&mut [0]);
         assert!(
             matches!(read, Ok(0)),
             "a connection that sent no token was still open 10 s on: {read:?}"
