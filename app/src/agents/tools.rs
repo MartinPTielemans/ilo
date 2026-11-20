@@ -395,7 +395,7 @@ fn shared() -> Value {
         {
             "name": "click",
             "title": "Click",
-            "description": "Click an element by its ref. Answers with what changed in the page's outline.",
+            "description": "Click an element by its ref. Answers with what changed in the page's outline. To fill in a form, give its fields, choices and the click that sends it as one run_steps call.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "ref": element, "outline": outline, "tab": tab },
@@ -406,7 +406,7 @@ fn shared() -> Value {
         {
             "name": "type",
             "title": "Type",
-            "description": "Type text into a field by its ref, in place of what it holds. submit presses Enter after. Answers with what changed in the page's outline.",
+            "description": "Type text into a field by its ref, in place of what it holds. submit presses Enter after. Answers with what changed in the page's outline. To fill in a form, give its fields, choices and the click that sends it as one run_steps call.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -504,7 +504,7 @@ fn shared() -> Value {
         {
             "name": "run_steps",
             "title": "Run steps",
-            "description": "Run several actions in a tab in one call, in order: each is checked as it would be alone. Stops at the first that fails, asks the user first, or is refused. Answers with what each did, then what changed in the page's outline, as outline says.",
+            "description": "Run several actions in a tab in one call, in order, such as a form's fields, its choices and the click that sends it: each is checked as it would be alone. Stops at the first that fails, asks the user first, or is refused. Answers with what each did, then what changed in the page's outline, as outline says, or a last screenshot's picture.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -525,11 +525,11 @@ fn shared() -> Value {
                                 "direction": { "type": "string", "enum": ["down", "up"] },
                                 "gone": { "type": "string" },
                                 "until": { "type": "string", "enum": ["quiet"] },
-                                "seconds": { "type": "number", "exclusiveMinimum": 0, "maximum": MAX_WAIT },
+                                "seconds": { "type": "number", "exclusiveMinimum": 0, "maximum": MAX_TEXT_WAIT },
                             },
                             "required": ["action"],
                         },
-                        "description": "Each step is an action and what that tool takes: click and scroll a ref, type a ref and text, select a ref and an option, press_key a key, navigate a url. wait waits for text to show in the page, for gone text to go from it, or until \"quiet\", for the page to settle, each up to seconds (5 if not given); or with none of those, waits the seconds.",
+                        "description": format!("Each step is an action and what that tool takes: click and scroll a ref, type a ref and text, select a ref and an option, press_key a key, navigate a url. wait waits for text to show in the page or for gone text to go from it, up to seconds (5 if not given, {MAX_TEXT_WAIT} at most); until \"quiet\", for the page to settle, up to seconds (5 if not given, {MAX_WAIT} at most); or with none of those, waits the seconds, {MAX_WAIT} at most. check looks once for text in the page: the run answers in that one line if it's there, and fails with the outline if not. screenshot, as the last step only, answers with a picture of the page."),
                     },
                     "outline": outline,
                     "tab": tab,
@@ -569,8 +569,9 @@ fn shared() -> Value {
     ])
 }
 
-/// The actions run_steps takes: those of the tools that act in a tab, not a screenshot, and wait.
-pub const STEPS: [&str; 8] = [
+/// The actions run_steps takes: those of the tools that act in a tab, wait and check, and a
+/// screenshot as the last.
+pub const STEPS: [&str; 10] = [
     "navigate",
     "snapshot",
     "click",
@@ -579,6 +580,8 @@ pub const STEPS: [&str; 8] = [
     "press_key",
     "scroll",
     "wait",
+    "check",
+    "screenshot",
 ];
 /// The tabs a split view holds at most, as the core keeps it (bc_tab_split_with).
 pub const SPLIT_TABS: usize = 3;
@@ -586,9 +589,11 @@ pub const SPLIT_TABS: usize = 3;
 pub const MAX_STEPS: usize = 20;
 /// What a wait step until "quiet" waits for, as its title says it.
 pub const SETTLE: &str = "the page to settle";
-/// How long a wait step waits for its text, in seconds, unless it says, and at most.
+/// How long a wait step waits, in seconds, unless it says; at most for a time or the page to
+/// settle; and at most for its text, as a page's search or upload can take minutes (#3659).
 pub const WAIT: f64 = 5.0;
 pub const MAX_WAIT: f64 = 30.0;
+pub const MAX_TEXT_WAIT: f64 = 300.0;
 
 /// list_tabs' answer.
 pub fn tab_list(tabs: &[TabInfo], current: Option<u64>, mine: &[u64]) -> String {
@@ -815,6 +820,7 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
             ),
             _ => ("Waiting", "Waited", "Couldn't wait", target("")),
         },
+        "check" => ("Looking for", "Saw", "Didn't see", target("text")),
         "list_tabs" => (
             "Looking over",
             "Looked over",
@@ -921,6 +927,7 @@ pub fn step_glyph(tool: &str) -> &'static str {
         "screenshot" => "icons/eye.svg",
         "request" => "icons/arrow-left-right.svg",
         "wait" => "icons/clock.svg",
+        "check" => "icons/text-search.svg",
         "list_tabs" | "close_tab" | "remove_tab" | "hand_off" | "ask_for_tab" | "split_tabs"
         | "add_to_split" | "separate_tab" | "list_split" | "sort_tabs_by_site" => {
             "icons/app-window.svg"
@@ -1032,6 +1039,7 @@ pub fn describe(action: &str) -> &'static str {
         "kept" => "You kept the tab",
         "run_steps" => "Ran steps",
         "wait" => "Waited for the page",
+        "check" => "Looked for text on the page",
         "revoked" => "You revoked its permission",
         "revoked all" => "You revoked all its permissions",
         "title" => "Named the task",

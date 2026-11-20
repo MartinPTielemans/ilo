@@ -372,10 +372,14 @@ impl ToolResult {
 
     pub fn to_json(&self) -> Value {
         match &self.image {
-            Some(jpeg) => json!({
-                "content": [{ "type": "image", "data": jpeg, "mimeType": "image/jpeg" }],
-                "isError": self.error,
-            }),
+            Some(jpeg) => {
+                let picture = json!({ "type": "image", "data": jpeg, "mimeType": "image/jpeg" });
+                let content = match self.text.is_empty() {
+                    true => vec![picture],
+                    false => vec![json!({ "type": "text", "text": self.text }), picture],
+                };
+                json!({ "content": content, "isError": self.error })
+            }
             None => {
                 json!({ "content": [{ "type": "text", "text": self.text }], "isError": self.error })
             }
@@ -754,7 +758,10 @@ impl Run {
 struct Wait {
     id: u64,
     what: WaitFor,
+    /// A check step's one look, which answers in one line.
+    check: bool,
     seconds: f64,
+    started: Instant,
     until: Instant,
     /// The next look's answer, for the timer to give the core.
     look: Option<mpsc::Sender<ToolResult>>,
@@ -775,8 +782,10 @@ enum WaitFor {
 }
 
 /// How often a wait looks at the page for its text, in a run under way: no more than the page's
-/// own settling after an action takes.
+/// own settling after an action takes, at first, then a tenth of the time it has waited, up to
+/// LOOK_MOST, as a wait of minutes is for something slow.
 const LOOK_EVERY: Duration = Duration::from_millis(500);
+const LOOK_MOST: Duration = Duration::from_secs(5);
 
 /// What an answer starts with when the core stopped waiting for its page to settle.
 const BUSY: &str = "The page was still busy after 5 s, so it may change yet.";
@@ -1471,9 +1480,13 @@ impl Agents {
                 };
                 let steps = arguments.get("steps").and_then(Value::as_array).cloned();
                 let steps = steps.unwrap_or_default();
+                let action = |step: &Value| {
+                    step.get("action")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                };
                 let wrong = steps.iter().position(|step| {
-                    let action = step.get("action").and_then(Value::as_str);
-                    !action.is_some_and(|action| tools::STEPS.contains(&action))
+                    !action(step).is_some_and(|action| tools::STEPS.contains(&action.as_str()))
                 });
                 if steps.is_empty() || steps.len() > tools::MAX_STEPS || wrong.is_some() {
                     _ = reply.send(ToolResult::error(format!(
@@ -1481,6 +1494,17 @@ impl Agents {
                         tools::MAX_STEPS,
                         tools::STEPS.join(", ")
                     )));
+                    return;
+                }
+                // Its picture is the run's answer, so nothing comes after it.
+                let pictures = steps.iter().rev().skip(1);
+                if pictures
+                    .filter_map(action)
+                    .any(|action| action == "screenshot")
+                {
+                    _ = reply.send(ToolResult::error(
+                        "A screenshot is only the last step, as its picture is the run's answer.",
+                    ));
                     return;
                 }
                 let show = match Show::argument(&arguments) {
@@ -1833,7 +1857,7 @@ impl Agents {
         let (reply, answer) = mpsc::channel();
         run.step = answer;
         self.trace_step(&run.agent, run.call, run.tab, &step, cx);
-        if tool == "wait" {
+        if tool == "wait" || tool == "check" {
             return self.wait(run, &step, reply, cx);
         }
         let asked = self.asking.len();
@@ -1866,7 +1890,8 @@ impl Agents {
         self.runs.push(run);
     }
 
-    /// Starts a wait step: checked as a snapshot, which each of its looks is, but logged as itself.
+    /// Starts a wait step, or a check step, which looks once: checked as a snapshot, which each of
+    /// its looks is, but logged as itself.
     fn wait(
         &mut self,
         mut run: Run,
@@ -1881,37 +1906,57 @@ impl Agents {
                 .trim()
                 .to_string()
         };
+        let check = string("action") == "check";
+        let given = step.get("seconds").and_then(Value::as_f64);
         let what = match (string("text"), string("gone"), string("until").as_str()) {
+            (text, gone, "") if check => (!text.is_empty() && gone.is_empty() && given.is_none())
+                .then_some(WaitFor::Shows(text)),
             (text, gone, "") if text.is_empty() && gone.is_empty() => Some(WaitFor::Time),
             (text, gone, "") if gone.is_empty() => Some(WaitFor::Shows(text)),
             (text, gone, "") if text.is_empty() => Some(WaitFor::Goes(gone)),
             (text, gone, "quiet") if text.is_empty() && gone.is_empty() => Some(WaitFor::Quiet),
             _ => None,
         };
-        let seconds = match step.get("seconds").and_then(Value::as_f64) {
+        // Text can take minutes to come, as a search's results; the page settles in seconds.
+        let most = match what {
+            Some(WaitFor::Shows(_) | WaitFor::Goes(_)) => tools::MAX_TEXT_WAIT,
+            _ => tools::MAX_WAIT,
+        };
+        let seconds = match given {
+            _ if check => Some(0.0),
             None if !matches!(what, Some(WaitFor::Time)) => Some(tools::WAIT),
-            seconds => seconds.filter(|seconds| *seconds > 0.0 && *seconds <= tools::MAX_WAIT),
+            seconds => seconds.filter(|seconds| *seconds > 0.0 && *seconds <= most),
         };
         let (Some(what), Some(seconds)) = (what, seconds) else {
-            _ = reply.send(ToolResult::error(format!(
-                "wait needs text to wait for, gone with text to wait to go, until \"quiet\" to \
-                 wait for the page to settle, or seconds, at most {}.",
-                tools::MAX_WAIT
-            )));
+            let why = match check {
+                true => "check needs text to look for, once; to wait for it, use wait.".into(),
+                false => format!(
+                    "wait needs text to wait for, or gone with text to wait to go, up to seconds, \
+                     at most {}; until \"quiet\" to wait for the page to settle, or seconds alone, \
+                     at most {}.",
+                    tools::MAX_TEXT_WAIT,
+                    tools::MAX_WAIT
+                ),
+            };
+            _ = reply.send(ToolResult::error(why));
             return self.runs.push(run);
         };
         self.stepping = Some(run.agent.clone());
-        let may = self.act_as(&run.agent, run.tab, "snapshot", "wait", &reply, cx);
+        let logged = if check { "check" } else { "wait" };
+        let may = self.act_as(&run.agent, run.tab, "snapshot", logged, &reply, cx);
         self.stepping = None;
         if may {
             let id = self.next_request;
             self.next_request += 1;
             let time = Duration::from_secs_f64(seconds);
-            let until = cx.background_executor().now() + time;
+            let started = cx.background_executor().now();
+            let until = started + time;
             let mut wait = Wait {
                 id,
                 what,
+                check,
                 seconds,
+                started,
                 until,
                 look: None,
                 timer: None,
@@ -1946,7 +1991,8 @@ impl Agents {
         let now = cx.background_executor().now();
         let late = now >= wait.until;
         // The core waits for the page to settle itself, so a quiet wait looks again at once.
-        let mut next = LOOK_EVERY.min(wait.until.saturating_duration_since(now));
+        let every = (now.saturating_duration_since(wait.started) / 10).clamp(LOOK_EVERY, LOOK_MOST);
+        let mut next = every.min(wait.until.saturating_duration_since(now));
         match &wait.what {
             WaitFor::Time => {
                 let note = format!("Waited {seconds} s.");
@@ -1973,6 +2019,16 @@ impl Agents {
                 let shows = outline.to_lowercase().contains(&text.to_lowercase());
                 let goes = matches!(wait.what, WaitFor::Goes(_));
                 let text = page::clip(text, 60);
+                // A check answers in its one line, or fails with the outline, as a wait does.
+                if wait.check {
+                    return Some(match shows {
+                        true => ToolResult::text(format!("“{text}” is on the page.")),
+                        false => {
+                            let why = format!("“{text}” isn't on the page.");
+                            ToolResult::error(self.answer_with(&agent, tab, why, run.show))
+                        }
+                    });
+                }
                 let said = match (goes, shows) {
                     (false, true) => Some((format!("“{text}” showed."), false)),
                     (true, false) => Some((format!("“{text}” went."), false)),
@@ -2095,8 +2151,12 @@ impl Agents {
                     } else if run.steps.is_empty() {
                         let done = run.done.iter().map(|note| format!("{note}\n"));
                         let done: String = done.collect();
-                        let text = format!("Ran {n} steps.\n{done}{n}. {}", answer.text);
-                        _ = run.reply.send(ToolResult::text(text));
+                        let last = match (&answer.image, answer.text.is_empty()) {
+                            (Some(_), true) => "Took a screenshot of the page.",
+                            _ => answer.text.as_str(),
+                        };
+                        let text = format!("Ran {n} steps.\n{done}{n}. {last}");
+                        _ = run.reply.send(ToolResult { text, ..answer });
                     } else {
                         let note = answer.text.split("\n\n").next().unwrap_or_default();
                         run.done.push(format!("{n}. {note}"));
@@ -3275,7 +3335,8 @@ impl Agents {
         }
         if !text.starts_with('{') {
             _ = reply.send(ToolResult::image(text));
-            return;
+            // A run's last step, whose picture is its answer.
+            return self.advance(cx);
         }
         let tree: Value = serde_json::from_str(&text).unwrap_or_default();
         let nodes = tree["nodes"]
