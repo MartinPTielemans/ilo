@@ -21,13 +21,17 @@ pub extern "C" fn host_add_settings(settings_view: *mut c_void) {
 #[unsafe(no_mangle)]
 pub extern "C" fn host_show_settings() {
     let view = SETTINGS.get();
+    // A show that never says "settings shown" says which way it stopped: with no window, or in
+    // show_window, which under Wayland talks to the compositor (#3624).
     if view.is_null() {
+        browser::log!("browser: settings has no window to show");
         return;
     }
     let over = match PLACED.replace(true) {
         true => std::ptr::null_mut(),
         false => crate::front().1,
     };
+    browser::log!("browser: settings window showing");
     gpui_linux::show_window(view, over);
     SHOWN.set(true);
     SHOWN_ANEW.set(true);
