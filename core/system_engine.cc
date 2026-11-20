@@ -17,19 +17,27 @@
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_util.h"
 #include "base/supports_user_data.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
+#include "base/time/time.h"
 #include "base/uuid.h"
 #include "base/values.h"
+#include "browser_core/clear_both_engines.h"
+#include "browser_core/favorites.h"
+#include "browser_core/session.h"
+#include "browser_core/site_controls.h"
 #include "browser_core/space.h"
 #include "browser_core/system_stores.h"
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/browsing_data/chrome_browsing_data_remover_delegate.h"
+#include "chrome/browser/browsing_data/chrome_browsing_data_remover_delegate_factory.h"
 #include "chrome/browser/lifetime/browser_shutdown.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_keyed_service_factory.h"
@@ -43,6 +51,7 @@
 #include "components/services/storage/public/mojom/local_storage_control.mojom.h"
 #include "components/services/storage/public/mojom/storage_usage_info.mojom.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/browsing_data_remover.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/navigation_throttle.h"
 #include "content/public/browser/navigation_throttle_registry.h"
@@ -72,21 +81,77 @@ constexpr char kClosedNotes[] = "browser_core.system_engine.closed_notes";
 // The listed services the user turned off, by their entries in kListed.
 constexpr char kListedOff[] = "browser_core.system_engine.listed_off";
 
-// Builds no service: Chrome registers a profile's prefs through its factories.
-class PrefsFactory : public ProfileKeyedServiceFactory {
+// Hands the profile's data remover a wrapper of Chrome's delegate from the profile's start to its
+// shutdown, so Chrome's Clear Browsing Data also reaches the system's engine (#3600).
+class ClearService : public KeyedService {
  public:
-  static PrefsFactory* GetInstance() {
-    static base::NoDestructor<PrefsFactory> instance;
+  ClearService(Profile* profile, content::BrowsingDataRemoverDelegate* chrome)
+      : profile_(profile),
+        clear_(chrome,
+               base::BindRepeating(&ClearService::ClearStore, base::Unretained(this)),
+               base::BindRepeating(&ClearService::ClearChoices, base::Unretained(this))) {
+    profile->GetBrowsingDataRemover()->SetEmbedderDelegate(&clear_);
+  }
+
+  // Chrome's delegate shuts down after this, as the factory depends on its, and takes itself off
+  // the remover then.
+  void Shutdown() override {
+    profile_->GetBrowsingDataRemover()->SetEmbedderDelegate(clear_.chrome());
+  }
+
+ private:
+  void ClearStore(base::Time begin, bool everything, base::OnceClosure done) {
+    if (!StoreUsed(profile_)) {
+      std::move(done).Run();
+      return;
+    }
+    platform::SystemPage::ClearSince(
+        StoreOf(profile_), begin,
+        everything ? platform::SiteData::kAll : platform::SiteData::kCookies, std::move(done));
+  }
+
+  // Every site goes back to the listed default. A private window writes no choices of its own.
+  void ClearChoices() {
+    if (profile_->IsOffTheRecord()) {
+      return;
+    }
+    for (const char* pref : {kSites, kClosedNotes, kListedOff}) {
+      profile_->GetPrefs()->ClearPref(pref);
+    }
+  }
+
+  const raw_ptr<Profile> profile_;
+  ClearBothEngines clear_;
+};
+
+// Registers a profile's prefs, as Chrome does through its factories, and makes its ClearService
+// with the profile, for each profile Chrome makes a remover's delegate for.
+class Factory : public ProfileKeyedServiceFactory {
+ public:
+  static Factory* GetInstance() {
+    static base::NoDestructor<Factory> instance;
     return instance.get();
   }
 
-  PrefsFactory() : ProfileKeyedServiceFactory("BrowserCoreSystemEngine") {}
+  Factory()
+      : ProfileKeyedServiceFactory("BrowserCoreSystemEngine",
+                                   ProfileSelections::Builder()
+                                       .WithRegular(ProfileSelection::kOwnInstance)
+                                       .WithGuest(ProfileSelection::kOwnInstance)
+                                       .Build()) {
+    DependsOn(ChromeBrowsingDataRemoverDelegateFactory::GetInstance());
+  }
 
  private:
   std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
       content::BrowserContext* context) const override {
-    return nullptr;
+    Profile* profile = Profile::FromBrowserContext(context);
+    ChromeBrowsingDataRemoverDelegate* chrome =
+        ChromeBrowsingDataRemoverDelegateFactory::GetForProfile(profile);
+    return chrome ? std::make_unique<ClearService>(profile, chrome) : nullptr;
   }
+
+  bool ServiceIsCreatedWithBrowserContext() const override { return true; }
 
   void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) override {
     registry->RegisterListPref(kSites);
@@ -104,6 +169,7 @@ constexpr auto kListed = base::MakeFixedFlatSet<std::string_view>({
     "hbomax.com",
     "hulu.com",
     "max.com",
+    "music.apple.com",
     "netflix.com",
     "open.spotify.com",
     "paramountplus.com",
@@ -529,6 +595,38 @@ class ChromiumWriter {
   base::WeakPtrFactory<ChromiumWriter> weak_factory_{this};
 };
 
+bool Holds(Profile* profile, const char* pref, std::string_view value) {
+  const base::ListValue& list = profile->GetPrefs()->GetList(pref);
+  return !list.empty() && std::ranges::contains(list, base::Value(value));
+}
+
+std::vector<std::string> Strings(Profile* profile, const char* pref) {
+  std::vector<std::string> all;
+  for (const base::Value& each : profile->GetPrefs()->GetList(pref)) {
+    if (each.is_string()) {
+      all.push_back(each.GetString());
+    }
+  }
+  return all;
+}
+
+// Whether a tab of |profile| shows a page of |site| in the system's engine.
+bool ShowsSite(Profile* profile, const std::string& site) {
+  return std::ranges::any_of(Tab::Pages(), [&](content::WebContents* each) {
+    platform::SystemPage* page = Tab::FromWebContents(each)->system_page();
+    return each->GetBrowserContext() == profile && page && SiteOf(page->url()) == site;
+  });
+}
+
+// Has Site Controls read again each of |profile|'s tabs at |site|, whose engine choice changed.
+void SiteChanged(Profile* profile, const std::string& site) {
+  for (content::WebContents* each : Tab::Pages()) {
+    if (each->GetBrowserContext() == profile && SiteOf(Tab::PageUrl(each)) == site) {
+      SiteControls::PageChanged(Tab::IdOf(each));
+    }
+  }
+}
+
 // Has |tabs| show their pages in Chromium, those still at |site| in the system's engine, once
 // their session is there.
 void HandBack(base::WeakPtr<Profile> profile,
@@ -611,7 +709,7 @@ class Throttle : public content::NavigationThrottle {
       return CANCEL_AND_IGNORE;
     }
     content::WebContents* contents = navigation_handle()->GetWebContents();
-    if (!Kept() || !Allowed(Tab::IdOf(contents))) {
+    if (!Kept() || !Allowed(Tab::IdOf(contents)) || Previewing(Tab::IdOf(contents))) {
       return PROCEED;
     }
     // Posted: the navigation is part way through.
@@ -632,18 +730,45 @@ class Throttle : public content::NavigationThrottle {
 }  // namespace
 
 void RegisterProfilePrefs() {
-  PrefsFactory::GetInstance();
+  Factory::GetInstance();
 }
 
 bool Available() {
   return platform::SystemPage::Available();
 }
 
+bool On() {
+  return UserSettings().system_engine;
+}
+
+void SetOn(bool on) {
+  if (UserSettings().system_engine == on) {
+    return;
+  }
+  UserSettings().system_engine = on;
+  // On, each tab at a site kept for it loads there at its next navigation, as after Site Controls.
+  // Off, each goes back now, once a profile and site, as ReturnToChromium takes every tab of the
+  // profile at the site.
+  std::set<std::pair<content::BrowserContext*, std::string>> returned;
+  for (content::WebContents* each : Tab::Pages()) {
+    platform::SystemPage* page = Tab::FromWebContents(each)->system_page();
+    if (!on && page && returned.emplace(each->GetBrowserContext(), SiteOf(page->url())).second) {
+      ReturnToChromium(Profile::FromBrowserContext(each->GetBrowserContext()), page->url());
+    }
+    SiteControls::PageChanged(Tab::IdOf(each));
+  }
+}
+
 bool Allowed(bc_id tab) {
   content::WebContents* contents = Tab::FromId(tab);
   // Placed or about to be: a tab Chrome just made is in no Space yet.
   const Space* space = contents ? Window::SpaceOf(contents) : Space::Holding(tab);
-  return Available() && !(space && space->agent());
+  return Available() && On() && !(space && space->agent());
+}
+
+bool Previewing(bc_id tab) {
+  const Tab* each = Tab::Get(tab);
+  return each && each->opened_as_preview() && !Space::Holding(tab) && !Favorites::Has(tab);
 }
 
 std::string SiteOf(const GURL& url) {
@@ -654,7 +779,7 @@ std::string SiteOf(const GURL& url) {
 }
 
 bool Remembered(Profile* profile, const GURL& url) {
-  if (!profile || !url.SchemeIsHTTPOrHTTPS() || !Available()) {
+  if (!profile || !url.SchemeIsHTTPOrHTTPS() || !Available() || !On()) {
     return false;
   }
   if (const std::string_view entry = ListedEntry(url); !entry.empty()) {
@@ -671,12 +796,16 @@ void Remember(Profile* profile, const GURL& url) {
   if (!profile || !url.SchemeIsHTTPOrHTTPS()) {
     return;
   }
+  // Kept for the system's engine, the site no longer counts as kept in Chromium.
+  if (NoteClosed(profile, url)) {
+    ScopedListPrefUpdate(profile->GetPrefs(), kClosedNotes)->EraseValue(base::Value(SiteOf(url)));
+  }
   // A listed service is never kept: turning it on takes back the user's off.
   if (const std::string_view entry = ListedEntry(url); !entry.empty()) {
     ScopedListPrefUpdate(profile->GetPrefs(), kListedOff)->EraseValue(base::Value(entry));
     return;
   }
-  if (!Remembered(profile, url)) {
+  if (!Holds(profile, kSites, SiteOf(url))) {
     ScopedListPrefUpdate(profile->GetPrefs(), kSites)->Append(SiteOf(url));
   }
 }
@@ -706,6 +835,73 @@ void CloseNote(Profile* profile, const GURL& url) {
     return;
   }
   ScopedListPrefUpdate(profile->GetPrefs(), kClosedNotes)->Append(SiteOf(url));
+}
+
+bool KeptInChromium(Profile* profile, const GURL& url) {
+  if (!profile || !url.SchemeIsHTTPOrHTTPS()) {
+    return false;
+  }
+  const std::string_view entry = ListedEntry(url);
+  return NoteClosed(profile, url) || (!entry.empty() && Holds(profile, kListedOff, entry));
+}
+
+std::vector<std::string> Sites(Profile* profile) {
+  return profile ? Strings(profile, kSites) : std::vector<std::string>();
+}
+
+std::vector<std::string> KeptSites(Profile* profile) {
+  if (!profile) {
+    return {};
+  }
+  std::vector<std::string> kept = Strings(profile, kListedOff);
+  // A listed service turned off also closed its site's note, which is the same choice.
+  std::set<std::string> listed_sites;
+  for (const std::string& entry : kept) {
+    listed_sites.insert(SiteOf(GURL("https://" + entry + "/")));
+  }
+  for (std::string& site : Strings(profile, kClosedNotes)) {
+    if (!listed_sites.contains(site)) {
+      kept.push_back(std::move(site));
+    }
+  }
+  return kept;
+}
+
+void UseSite(Profile* profile, const std::string& site, bool on) {
+  if (!profile) {
+    return;
+  }
+  // Only a site the list gave: the app can't make the profile keep one the user never saw.
+  const bool listed = Holds(profile, kSites, site) || Holds(profile, kListedOff, site) ||
+                      Holds(profile, kClosedNotes, site);
+  const GURL url("https://" + site + "/");
+  if (!listed || !url.is_valid()) {
+    return;
+  }
+  if (on) {
+    Remember(profile, url);
+  } else {
+    // As bc_tab_set_system_engine's off: forgotten first, then the note counts as closed, and
+    // the tabs there go back.
+    Forget(profile, url);
+    CloseNote(profile, url);
+    if (ShowsSite(profile, SiteOf(url))) {
+      ReturnToChromium(profile, url);
+    }
+  }
+  SiteChanged(profile, SiteOf(url));
+}
+
+void ForgetChoices(Profile* profile, const GURL& url) {
+  if (!profile || !url.SchemeIsHTTPOrHTTPS()) {
+    return;
+  }
+  const std::string site = SiteOf(url);
+  ScopedListPrefUpdate(profile->GetPrefs(), kSites)->EraseValue(base::Value(site));
+  ScopedListPrefUpdate(profile->GetPrefs(), kClosedNotes)->EraseValue(base::Value(site));
+  if (const std::string_view entry = ListedEntry(url); !entry.empty()) {
+    ScopedListPrefUpdate(profile->GetPrefs(), kListedOff)->EraseValue(base::Value(entry));
+  }
 }
 
 platform::SystemStore StoreOf(Profile* profile) {

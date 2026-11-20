@@ -491,6 +491,9 @@ Browser* g_dialog_over;
 NSWindow* g_dialog;
 NSView* g_dialog_view;
 bool g_dialog_shown = false;
+// The dialog shown is leaving: it goes on drawing, but takes no click and doesn't take the keyboard
+// back (host_dialog_leaving).
+bool g_dialog_leaving = false;
 // When the app last became the active one, in the system's uptime, as events' timestamps are: a
 // press from before it is the one that activated the app.
 NSTimeInterval g_active_since = 0;
@@ -3739,7 +3742,7 @@ void host_add_dialog(void* dialog_view) {
                   object:nil
                    queue:nil
               usingBlock:^(NSNotification* notification) {
-                if (g_dialog_shown && notification.object != g_dialog &&
+                if (g_dialog_shown && !g_dialog_leaving && notification.object != g_dialog &&
                     !HostIsMenuWindow(notification.object) &&
                     (NSEdgeInsetsEqual(g_dialog_insets, NSEdgeInsetsZero) ||
                      notification.object == g_dialog_over->window)) {
@@ -3765,6 +3768,8 @@ void host_show_dialog(void* ui_view, double x, double y, double width, double he
     return;
   }
   g_dialog_shown = true;
+  g_dialog_leaving = false;
+  g_dialog.ignoresMouseEvents = NO;
   g_dialog_over = browser;
   // After the UI's update that asked, since the window draws here: at its frame, before it shows,
   // since it keeps the last frame it drew.
@@ -3786,6 +3791,8 @@ void host_hide_dialog(void) {
     return;
   }
   g_dialog_shown = false;
+  g_dialog_leaving = false;
+  g_dialog.ignoresMouseEvents = NO;
   Browser* browser = g_dialog_over;
   // Unless another window took the keyboard, such as from a page's dialog.
   const bool key = g_dialog.isKeyWindow || !NSApp.keyWindow;
@@ -3794,6 +3801,18 @@ void host_hide_dialog(void) {
   if (key) {
     [KeyWindowOver(browser) makeKeyWindow];
   }
+}
+
+void host_dialog_leaving(void) {
+  if (!g_dialog_shown || g_dialog_leaving) {
+    return;
+  }
+  g_dialog_leaving = true;
+  g_dialog.ignoresMouseEvents = YES;
+  if (g_dialog.isKeyWindow) {
+    [KeyWindowOver(g_dialog_over) makeKeyWindow];
+  }
+  fprintf(stderr, "browser: dialog gives the keyboard back\n");
 }
 
 void host_add_site_controls(void* view, void (*dismissed)(void)) {
