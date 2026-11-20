@@ -80,7 +80,7 @@ pub fn run(
     use super::server;
     let stream = server::connect(socket).map_err(|_| {
         format!(
-            "{} isn't running with agents on. Turn them on in Settings › Agents.",
+            "{0} isn't running, or agents are off. Open {0} and turn agents on in Settings › Agents.",
             env!("APP_NAME")
         )
     })?;

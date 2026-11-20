@@ -461,8 +461,9 @@ pub(super) fn buttons(question: &Question) -> Vec<Button> {
                 Does::Show(tab),
             ),
         ],
-        // A request's changes: Allow sends them alone, so there's no Always.
-        None if !question.changes.is_empty() => vec![
+        // A request's changes, and a payment, ask every time: Allow lets them go alone, so there's
+        // no Always.
+        None if !question.changes.is_empty() || question.each_time => vec![
             button(
                 "agent-question-deny",
                 "Deny",
