@@ -579,17 +579,13 @@ alert_up $held "the pinned tab loaded again"
 # The Today tab at the top, under the pinned row, takes the alert down.
 send click 100 $(($(row 0 | cut -d' ' -f2) + 41))
 expect '^browser: dialog withdrawn$' "the pinned tab's alert stayed up over another tab"
-withdrawn=$step
 send middleclick $(pinned_row 0)
 expect '^browser: command close-tab via sidebar$' \
   "a middle-click on the pinned tab whose alert another tab took down didn't run Close Tab"
 expect "^browser: page $held unloaded 1\$" \
   "a middle-click didn't unload the pinned tab whose alert another tab took down"
-# On Linux a key typed as the withdrawn alert's window hides is lost (#3617), so the ⌘T after waits
-# for the hide there. Its fix takes this wait out, with a step typing a key as the alert hides.
-if [ "$(uname)" = Linux ]; then
-  expect '^browser: dialog window hidden$' "the withdrawn alert's window didn't hide" "$withdrawn"
-fi
+# The ⌘T is typed at once, while the withdrawn alert leaves: on Linux it gives the keys back as it
+# starts to, and a key typed then opens the bar as it does after the hide (#3617).
 open_from_bar "${site}alerts.html"
 favorite=$tab
 send key t cmd
