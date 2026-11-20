@@ -143,7 +143,7 @@ fn pin_tools() -> Vec<Value> {
         json!({
             "name": "sort_tabs_by_site",
             "title": "Sort tabs by site",
-            "description": "Sort your Today tabs by site, as the user's Sort Today Tabs by Site does: each site's tabs come together at its first tab's place, in the order they were in. A site is a registrable domain, so docs.example.com and example.com are one. Pinned tabs stay where they are; a split view or a page off the web joins no site and keeps its order among the rest, so sites gathered from below it come above it. Nothing loads or closes. Answers with the new order.",
+            "description": "Sort your Today tabs by site, as the user's Sort Today Tabs by Site does: each site's tabs come together at its first tab's place, in the order they were in. A site is a registrable domain, so docs.example.com and example.com are one. Pinned tabs stay where they are; a split view, a page off the web or a tab the user holds joins no site and keeps its order among the rest, so sites gathered from below it come above it. Nothing loads or closes. Answers with the new order.",
             "inputSchema": { "type": "object", "properties": {} },
             "annotations": tabs,
         }),
@@ -249,7 +249,7 @@ fn shared() -> Value {
         {
             "name": "list_tabs",
             "title": "List tabs",
-            "description": "List your tabs, pinned first: each one's id, title and URL, then who pinned it if it's pinned. * marks the tab you used last.",
+            "description": "List your tabs, pinned first: each one's id, title and URL, then who pinned it if it's pinned. * marks the tab you used last. A tab the user holds, after a handoff or a take-over, is listed by its id with \"With the user until they hand it back\" and no title or URL, until they hand it back.",
             "inputSchema": { "type": "object", "properties": {} },
             "annotations": { "readOnlyHint": true, "openWorldHint": false },
         },

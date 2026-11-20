@@ -125,6 +125,20 @@ pub struct Element {
     pub role: String,
     pub name: String,
     pub password: bool,
+    /// The DOM node of the form it's in, if it's in one.
+    pub form: Option<i64>,
+}
+
+/// What has the keyboard in a page, as its outline says.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum Focus {
+    /// The page itself, with no element of it.
+    Page,
+    /// An element with a ref.
+    On(Element),
+    /// The outline doesn't say, or it's on an element without a ref.
+    #[default]
+    Unknown,
 }
 
 /// A tab's refs, which stay the same for an element while its page is the same.
@@ -188,6 +202,9 @@ pub fn outline(tab: &TabInfo, nodes: &[Value], refs: &mut Refs, part: Option<i64
         size: 0,
         password: false,
         captcha: false,
+        form: None,
+        focus: Focus::Unknown,
+        elements: Vec::new(),
     };
     let backend = |node: &&Value| node.get("backendDOMNodeId").and_then(Value::as_i64);
     let root = match part {
@@ -216,10 +233,7 @@ pub fn outline(tab: &TabInfo, nodes: &[Value], refs: &mut Refs, part: Option<i64
         notes.push(CUT);
     }
     if walk.password {
-        notes.push(
-            "This page has a password field, which is off limits to you: signing in is the user's \
-             to do. Hand them the tab with hand_off.",
-        );
+        notes.push(PASSWORD);
     }
     if walk.captcha {
         notes.push(
@@ -235,6 +249,8 @@ pub fn outline(tab: &TabInfo, nodes: &[Value], refs: &mut Refs, part: Option<i64
         document: nodes.first().as_ref().and_then(backend),
         lines: walk.lines,
         notes,
+        focus: walk.focus,
+        elements: walk.elements,
     }
 }
 
@@ -262,6 +278,9 @@ fn response(nodes: &[Value]) -> Option<String> {
         .map(name)
         .find(|text| text.chars().count() > RESPONSE_TEXT)
 }
+/// What an outline of a page with a password field says of it.
+const PASSWORD: &str = "This page has a password field, which is off limits to you: signing in is \
+                        the user's to do. Hand them the tab with hand_off.";
 
 /// A page's outline, which an answer gives whole, or as what changed since one the agent had.
 #[derive(Clone, Debug, Default)]
@@ -274,6 +293,9 @@ pub struct Outline {
     document: Option<i64>,
     lines: Vec<Line>,
     notes: Vec<&'static str>,
+    /// What has the keyboard, and each element with a ref, for what a key press activates.
+    focus: Focus,
+    elements: Vec<Element>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -324,6 +346,12 @@ impl Line {
 }
 
 impl Outline {
+    /// Whether it's of the page at `url` and that page has a password field: a sign-in page, or one
+    /// with a sign-in form.
+    pub fn signs_in_at(&self, url: &str) -> bool {
+        self.page == url.split('#').next().unwrap_or_default() && self.notes.contains(&PASSWORD)
+    }
+
     /// Which tab and page it is, without the outline.
     pub fn head(&self) -> &str {
         &self.head
@@ -547,6 +575,10 @@ struct Walk<'a> {
     size: usize,
     password: bool,
     captcha: bool,
+    /// The form the walk is in, and what it found has the keyboard and can be acted on.
+    form: Option<i64>,
+    focus: Focus,
+    elements: Vec<Element>,
 }
 
 impl<'a> Walk<'a> {
@@ -629,7 +661,12 @@ impl<'a> Walk<'a> {
                 role: role.into(),
                 name: name.into(),
                 password,
+                form: self.form,
             };
+            if state(node, "focused") {
+                self.focus = Focus::On(element.clone());
+            }
+            self.elements.push(element.clone());
             let number = self.refs.name(element);
             reference = Some(number);
             line.push_str(&format!(" [e{number}]"));
@@ -763,6 +800,10 @@ impl<'a> Walk<'a> {
             let ignored = (child.get("ignored").and_then(Value::as_bool)).unwrap_or(false);
             let name = name(child);
             self.looks_for_captcha(&name);
+            // As node() does: an element with a ref then says it has the keyboard (`element`).
+            if state(child, "focused") {
+                self.focus = Focus::Unknown;
+            }
             if ignored || role == "ListMarker" {
                 continue;
             }
@@ -809,6 +850,12 @@ impl<'a> Walk<'a> {
             .unwrap_or(false);
         let role = role(node);
         let name = name(node);
+        if state(node, "focused") {
+            self.focus = match role {
+                "RootWebArea" => Focus::Page,
+                _ => Focus::Unknown,
+            };
+        }
         self.looks_for_captcha(&name);
         // A list's bullet or number, which its indent already says.
         if role == "ListMarker" {
@@ -827,11 +874,14 @@ impl<'a> Walk<'a> {
         }
         // A row or a list item that a line can hold is one line; else it's outlined line by line.
         if !ignored && ROWS.contains(&role) {
-            let last = self.refs.next;
+            let last = (self.refs.next, self.elements.len());
             match self.row(node, depth, role, &name, levels) {
                 Some(line) => return self.add(line),
-                // Its refs are named again as its lines show them.
-                None => self.refs.forget_after(last),
+                // Its refs and elements are named again as its lines show them.
+                None => {
+                    self.refs.forget_after(last.0);
+                    self.elements.truncate(last.1);
+                }
             }
         }
         let name = match (role, name.is_empty()) {
@@ -866,9 +916,17 @@ impl<'a> Walk<'a> {
             next = depth + 1;
             next_name = name;
         }
+        let outer = self.form;
+        if role == "form" {
+            self.form = node
+                .get("backendDOMNodeId")
+                .and_then(Value::as_i64)
+                .or(outer);
+        }
         for child in self.children(node) {
             self.node(child, next, &next_name, levels + 1);
         }
+        self.form = outer;
         // A frame with nothing under its line, as a site's helper frames have, says nothing
         // (#1444).
         if let Some((at, size)) = frame
@@ -916,6 +974,19 @@ const NESTED: &[&str] = &[
 const ROW_PARTS: usize = 30;
 /// The characters of a text a row's line shows.
 const ROW_TEXT_SHOWN: usize = 100;
+
+/// Whether the node has the state `name`, such as "focused".
+fn state(node: &Value, name: &str) -> bool {
+    let properties = node.get("properties").and_then(Value::as_array);
+    properties.into_iter().flatten().any(|property| {
+        property.get("name").and_then(Value::as_str) == Some(name)
+            && match property.pointer("/value/value") {
+                Some(Value::Bool(value)) => *value,
+                Some(Value::String(value)) => value == "true",
+                _ => false,
+            }
+    })
+}
 
 fn role(node: &Value) -> &str {
     node.pointer("/role/value")
@@ -1039,6 +1110,88 @@ pub fn risk(host: &str, label: &str) -> Option<&'static str> {
         return Some(SENDS);
     }
     None
+}
+
+/// Roles a key types in, where Space is a space and Enter submits the form.
+const FIELDS: &[&str] = &["textbox", "searchbox", "combobox", "spinbutton"];
+
+/// Roles Enter clicks, as Chromium names them: a summary is a "DisclosureTriangle". Enter on any
+/// other control, such as a checkbox, radio or slider, submits its form as Enter in a field does.
+const ENTER_CLICKS: &[&str] = &[
+    "button",
+    "link",
+    "menuitem",
+    "menuitemcheckbox",
+    "menuitemradio",
+    "tab",
+    "DisclosureTriangle",
+];
+
+/// A key press that asks first, as a click on `control` would, for `why`. `surely` when the press
+/// is a click on it, and not when it's one of the controls the press may click.
+#[derive(Debug, PartialEq)]
+pub struct Pressing {
+    pub why: &'static str,
+    pub control: Element,
+    pub surely: bool,
+}
+
+/// Whether pressing `key` asks the user first, as a click would on what it activates. Space
+/// activates the control that has the keyboard, and Enter a button, link, menu item, tab or
+/// summary, as a click on it does. Enter elsewhere, in a field (`typed_in` or the one with the
+/// keyboard) or on another control, submits its form, as a click on its submit button does. The
+/// outline doesn't say which button that is, nor whether one outside the form belongs to it, so
+/// any control of the form or outside every form that would ask asks, or of the page when the
+/// control has no form or the outline doesn't say what has the keyboard (GHSA-hqw3-jp9p-3rhj).
+pub fn pressing_risk(
+    host: &str,
+    outline: Option<&Outline>,
+    key: &str,
+    typed_in: Option<&Element>,
+) -> Option<Pressing> {
+    if key != "Enter" && key != "Space" {
+        return None;
+    }
+    let asks = |surely: bool| {
+        move |element: &Element| {
+            let why = risk(host, &element.name)?;
+            let control = element.clone();
+            Some(Pressing {
+                why,
+                control,
+                surely,
+            })
+        }
+    };
+    let focus = match (typed_in, outline) {
+        (Some(field), _) => Focus::On(field.clone()),
+        (None, Some(outline)) => outline.focus.clone(),
+        (None, None) => Focus::Unknown,
+    };
+    let form = match &focus {
+        Focus::Page => return None,
+        Focus::On(control) => {
+            let role = control.role.as_str();
+            let clicks = match key {
+                "Space" => !FIELDS.contains(&role),
+                _ => ENTER_CLICKS.contains(&role),
+            };
+            match (clicks, key) {
+                (true, _) => return asks(true)(control),
+                // Space in a field types a space.
+                (false, "Space") => return None,
+                (false, _) => control.form,
+            }
+        }
+        Focus::Unknown => None,
+    };
+    let elements = outline.map(|outline| outline.elements.as_slice());
+    let mut elements = elements.unwrap_or_default().iter();
+    match form {
+        Some(form) => (elements.filter(|each| each.form.is_none_or(|each| each == form)))
+            .find_map(asks(false)),
+        None => elements.find_map(asks(false)),
+    }
 }
 
 /// Why a payment or an order asks first, which a session's receipt counts as an order placed.
@@ -1688,6 +1841,35 @@ mod tests {
                  - listitem [e3]: checkbox \"Select\" [e4] (checked) · \"From Ana\""
             ),
             "{outline}"
+        );
+    }
+
+    /// A control in a row that's a line has the keyboard as one on a line of its own does, so
+    /// Enter on it asks first as a click on it would.
+    #[test]
+    fn a_row_says_what_in_it_has_the_keyboard() {
+        let mut nodes = vec![
+            node("1", "RootWebArea", "Basket", &["2"]),
+            node("2", "list", "", &["3"]),
+            node("3", "listitem", "", &["31", "32"]),
+            node("31", "StaticText", "Two shirts", &[]),
+            node("32", "button", "Pay now", &[]),
+        ];
+        for node in &mut nodes {
+            node["backendDOMNodeId"] =
+                json!(node["nodeId"].as_str().unwrap().parse::<i64>().unwrap());
+        }
+        nodes[4]["properties"] = json!([{ "name": "focused", "value": { "value": true } }]);
+        let outline = outline(&tab(), &nodes, &mut Refs::default(), None);
+        let text = outline.text();
+        assert!(
+            text.ends_with("\n- listitem [e1]: \"Two shirts\" · button \"Pay now\" [e2]"),
+            "{text}"
+        );
+        let pressing = pressing_risk("shop.example", Some(&outline), "Enter", None).unwrap();
+        assert_eq!(
+            (pressing.control.name.as_str(), pressing.surely),
+            ("Pay now", true)
         );
     }
 

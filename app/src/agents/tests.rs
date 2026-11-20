@@ -787,6 +787,61 @@ fn open_tab_as_the_first_call_makes_the_agents_space(cx: &mut TestAppContext) {
     );
 }
 
+/// While the user holds one of the agent's tabs, list_tabs names it by its number and says it's
+/// with the user, with nothing of its page, and sorting by site leaves it where it is, as its place
+/// would tell its site (#3694). Handed back, it's listed as before.
+#[gpui::test]
+fn a_tab_the_user_holds_is_listed_without_its_page(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    browser.tabs.borrow_mut().extend([
+        (21, 2, "Wiki", "https://en.wikipedia.org/wiki/Rust"),
+        (22, 2, "Docs", "https://docs.example.com/"),
+        (25, 2, "More", "https://de.wikipedia.org/wiki/Arc"),
+    ]);
+    let list = |cx: &mut TestAppContext| {
+        call(&agents, "claude-code", "list_tabs", json!({}), cx)
+            .recv()
+            .unwrap()
+            .text
+    };
+    assert!(list(cx).contains("21  Wiki  https://en.wikipedia.org/wiki/Rust"));
+    agents.update(cx, |agents, cx| agents.take_over("claude-code", 21, cx));
+    let held = list(cx);
+    let line = held
+        .lines()
+        .find(|line| line[2..].starts_with("21  "))
+        .unwrap();
+    assert!(
+        line.contains("With the user until they hand it back"),
+        "{held}"
+    );
+    assert!(
+        !held.contains("Wiki") && !held.contains("wikipedia.org/wiki/Rust"),
+        "list_tabs named the held tab's page: {held}"
+    );
+    assert!(
+        held.contains("22  Docs  https://docs.example.com/"),
+        "{held}"
+    );
+
+    let sorted = call(&agents, "claude-code", "sort_tabs_by_site", json!({}), cx)
+        .recv()
+        .unwrap();
+    assert_eq!(
+        sorted,
+        ToolResult::text("Your Today tabs are together by site already."),
+        "the held tab's site moved a tab"
+    );
+    let order: Vec<u64> = (browser.tabs.borrow().iter())
+        .filter(|tab| tab.1 == 2)
+        .map(|tab| tab.0)
+        .collect();
+    assert_eq!(order, [20, 21, 22, 25]);
+
+    agents.update(cx, |agents, cx| agents.hand_back(21, cx));
+    assert!(list(cx).contains("21  Wiki  https://en.wikipedia.org/wiki/Rust"));
+}
+
 /// Two agents each list their own Space's tabs, as the core lists the calling agent's, and neither
 /// the other's nor the user's.
 #[gpui::test]
@@ -1563,7 +1618,9 @@ fn an_agents_key_goes_to_the_page_without_an_update_of_the_app(cx: &mut TestAppC
             cx,
         );
         assert_eq!(browser.pages.borrow().last().unwrap().4, key);
-        assert!(!page_done(&agents, &browser, answer, shop_tree(), cx).error);
+        // The search field has the keyboard, so Enter there pays for nothing and asks nothing.
+        let page = checkout_tree(Some("7"));
+        assert!(!page_done(&agents, &browser, answer, page, cx).error);
     }
     // The user's keys, after it, are the app's again.
     assert!(!pressing_key());
@@ -2006,6 +2063,205 @@ fn an_agent_chooses_an_option_by_its_text(cx: &mut TestAppContext) {
         browser.pages.borrow().len(),
         pages,
         "it chose before the user answered"
+    );
+}
+
+/// A checkout's page, with what has the keyboard `focused` by its node's id: a card form with its
+/// Pay now button and a box to save the card, and a search form with nothing that pays.
+fn checkout_tree(focused: Option<&str>) -> String {
+    let mut nodes = vec![
+        json!({ "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Checkout" },
+          "childIds": ["2", "6"] }),
+        json!({ "nodeId": "2", "role": { "value": "form" }, "name": { "value": "" },
+          "backendDOMNodeId": 60, "childIds": ["3", "4", "5"] }),
+        json!({ "nodeId": "3", "role": { "value": "textbox" }, "name": { "value": "Card number" },
+          "backendDOMNodeId": 61 }),
+        json!({ "nodeId": "4", "role": { "value": "button" }, "name": { "value": "Pay now" },
+          "backendDOMNodeId": 62 }),
+        json!({ "nodeId": "5", "role": { "value": "checkbox" },
+          "name": { "value": "Save this card" }, "backendDOMNodeId": 63 }),
+        json!({ "nodeId": "6", "role": { "value": "form" }, "name": { "value": "" },
+          "backendDOMNodeId": 70, "childIds": ["7", "8"] }),
+        json!({ "nodeId": "7", "role": { "value": "searchbox" }, "name": { "value": "Search" },
+          "backendDOMNodeId": 71 }),
+        json!({ "nodeId": "8", "role": { "value": "button" }, "name": { "value": "Go" },
+          "backendDOMNodeId": 72 }),
+    ];
+    focusing(nodes, focused)
+}
+
+/// The tree `nodes` with the node `focused` holding the keyboard, if any.
+fn focusing(mut nodes: Vec<Value>, focused: Option<&str>) -> String {
+    for node in &mut nodes {
+        if Some(node["nodeId"].as_str().unwrap()) == focused {
+            let focused = json!({ "type": "booleanOrUndefined", "value": true });
+            node["properties"] = json!([{ "name": "focused", "value": focused }]);
+        }
+    }
+    json!({ "nodes": nodes }).to_string()
+}
+
+/// A checkout whose Pay now button sits outside the card's form, as a sticky footer's does, tied
+/// to it by the button's form attribute, which the tree doesn't show.
+fn footer_tree(focused: Option<&str>) -> String {
+    let nodes = vec![
+        json!({ "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Checkout" },
+          "childIds": ["2", "4"] }),
+        json!({ "nodeId": "2", "role": { "value": "form" }, "name": { "value": "" },
+          "backendDOMNodeId": 60, "childIds": ["3"] }),
+        json!({ "nodeId": "3", "role": { "value": "textbox" }, "name": { "value": "Card number" },
+          "backendDOMNodeId": 61 }),
+        json!({ "nodeId": "4", "role": { "value": "button" }, "name": { "value": "Pay now" },
+          "backendDOMNodeId": 62 }),
+    ];
+    focusing(nodes, focused)
+}
+
+/// A key press that activates a control asks as a click on it does, on a site that sends no
+/// messages. Enter in a field or on a checkbox submits its form, whose Pay now button a click on
+/// would ask, as typing with submit does, as does a Pay now button outside any form. Space or
+/// Enter on the focused Pay now button is a click on it, wherever the last answer left the
+/// keyboard. Enter in a form with nothing that pays, Space in a field or on a checkbox and Tab ask
+/// nothing (GHSA-hqw3-jp9p-3rhj).
+#[gpui::test]
+fn a_key_press_that_activates_a_control_asks_as_a_click_on_it(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let look = |tree: String, cx: &mut TestAppContext| {
+        let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+        let outline = page_done(&agents, &browser, answer, tree, cx).text;
+        assert!(outline.contains("- button \"Pay now\" [e2]"), "{outline}");
+    };
+    let snapshot =
+        |focused: Option<&str>, cx: &mut TestAppContext| look(checkout_tree(focused), cx);
+    // Calls `tool` and checks it asks `what` before anything reaches the page, then the × answers.
+    let asks = |tool: &str, arguments: Value, what: &str, cx: &mut TestAppContext| {
+        *browser.asked.borrow_mut() = None;
+        let pages = browser.pages.borrow().len();
+        let answer = call(&agents, "claude-code", tool, arguments, cx);
+        let question =
+            (browser.asked.borrow().clone()).unwrap_or_else(|| panic!("{what} didn't ask"));
+        assert_eq!(question.what, what);
+        assert_eq!(question.why, "It looks like a payment or an order.");
+        assert_eq!(
+            browser.pages.borrow().len(),
+            pages,
+            "{what} reached the page unasked"
+        );
+        agents.update(cx, |agents, cx| {
+            agents.answer(question.id, Answer::Dismiss, cx)
+        });
+        assert!(answer.recv().unwrap().error);
+    };
+    // Calls `tool`, which goes to the page without a question, and the page answers with `tree`.
+    let answered = |tool: &str, arguments: Value, tree: String, cx: &mut TestAppContext| {
+        *browser.asked.borrow_mut() = None;
+        let answer = call(&agents, "claude-code", tool, arguments.clone(), cx);
+        assert!(browser.asked.borrow().is_none(), "{tool} {arguments} asked");
+        assert!(!page_done(&agents, &browser, answer, tree, cx).error);
+    };
+    let goes = |tool: &str, arguments: Value, cx: &mut TestAppContext| {
+        answered(tool, arguments, checkout_tree(None), cx)
+    };
+
+    snapshot(None, cx);
+    let card = json!({ "tab": 20, "ref": "e1", "text": "4242", "submit": true });
+    let what = "press Enter, which may click “Pay now” on example.com, after typing “4242” into “Card number”";
+    asks("type", card, what, cx);
+    goes(
+        "type",
+        json!({ "tab": 20, "ref": "e4", "text": "socks", "submit": true }),
+        cx,
+    );
+    goes(
+        "type",
+        json!({ "tab": 20, "ref": "e1", "text": "4242" }),
+        cx,
+    );
+
+    snapshot(Some("3"), cx);
+    let enter = json!({ "tab": 20, "key": "Enter" });
+    asks(
+        "press_key",
+        enter.clone(),
+        "press Enter, which may click “Pay now” on example.com",
+        cx,
+    );
+    snapshot(Some("3"), cx);
+    goes("press_key", json!({ "tab": 20, "key": "Space" }), cx);
+    snapshot(Some("3"), cx);
+    goes("press_key", json!({ "tab": 20, "key": "Tab" }), cx);
+
+    snapshot(Some("4"), cx);
+    let space = json!({ "tab": 20, "key": "Space" });
+    asks(
+        "press_key",
+        space,
+        "press Space to click “Pay now” on example.com",
+        cx,
+    );
+    snapshot(Some("4"), cx);
+    asks(
+        "press_key",
+        enter.clone(),
+        "press Enter to click “Pay now” on example.com",
+        cx,
+    );
+
+    // Enter on a checkbox submits its form too, so it asks as Enter in the form's field does, and
+    // Space on it checks it.
+    snapshot(Some("5"), cx);
+    asks(
+        "press_key",
+        enter.clone(),
+        "press Enter, which may click “Pay now” on example.com",
+        cx,
+    );
+    snapshot(Some("5"), cx);
+    goes("press_key", json!({ "tab": 20, "key": "Space" }), cx);
+
+    // The answer to the action before the press says where the keyboard went, with no look at the
+    // page between: Tab's, and a look at one element's part, whose page the core outlined whole.
+    snapshot(Some("7"), cx);
+    let tab = json!({ "tab": 20, "key": "Tab" });
+    answered("press_key", tab, checkout_tree(Some("4")), cx);
+    asks(
+        "press_key",
+        enter.clone(),
+        "press Enter to click “Pay now” on example.com",
+        cx,
+    );
+    snapshot(Some("7"), cx);
+    let part = json!({ "tab": 20, "ref": "e1" });
+    answered("snapshot", part, checkout_tree(Some("4")), cx);
+    asks(
+        "press_key",
+        enter.clone(),
+        "press Enter to click “Pay now” on example.com",
+        cx,
+    );
+
+    // A Pay now button outside the card's form may be the one its Enter clicks.
+    look(footer_tree(Some("3")), cx);
+    asks(
+        "press_key",
+        enter.clone(),
+        "press Enter, which may click “Pay now” on example.com",
+        cx,
+    );
+
+    // Enter in the search form clicks Go, never the card form's Pay now.
+    snapshot(Some("7"), cx);
+    goes("press_key", enter.clone(), cx);
+    // The page itself has the keyboard: Enter activates nothing.
+    snapshot(Some("1"), cx);
+    goes("press_key", enter.clone(), cx);
+    // The outline doesn't say what has it, so anything on the page that pays asks.
+    snapshot(None, cx);
+    asks(
+        "press_key",
+        enter,
+        "press Enter, which may click “Pay now” on example.com",
+        cx,
     );
 }
 
@@ -4405,6 +4661,40 @@ mod requests {
                 .map(|entry| (entry.target.to_string(), entry.refused.to_string()))
                 .collect()
         })
+    }
+
+    /// On a page the agent's outline saw ask for a password, as a sign-in page does, a request's
+    /// answer says the site may have answered as to someone signed out, and names hand_off; on
+    /// one that doesn't, it says nothing of it (#3661).
+    #[gpui::test]
+    fn a_request_on_a_sign_in_page_says_so(cx: &mut TestAppContext) {
+        let (agents, browser, _) = connected(cx);
+        let read = json!({ "tab": 20, "requests": [{ "method": "GET", "path": "/api/me" }] });
+        let snapshot = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+        page_done(&agents, &browser, snapshot, shop_tree(), cx);
+        let answer = call(&agents, "claude-code", "request", read.clone(), cx);
+        answered(&agents, &browser, 401, r#"{"error":"sign in"}"#, cx);
+        let text = answer.recv().unwrap().text;
+        assert!(
+            text.starts_with(
+                "Tab 20's page asks for a password, as a sign-in page does, so its site may have \
+                 answered as to someone signed out. Signing in is the user's to do: hand them the \
+                 tab with hand_off, and send the requests again once they hand it back.\n\n\
+                 GET /api/me → 401"
+            ),
+            "{text}"
+        );
+
+        let signed_in = json!({ "nodes": [
+            { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Shop" } },
+        ]})
+        .to_string();
+        let snapshot = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+        page_done(&agents, &browser, snapshot, signed_in, cx);
+        let answer = call(&agents, "claude-code", "request", read, cx);
+        answered(&agents, &browser, 200, r#"{"name":"Ada"}"#, cx);
+        let text = answer.recv().unwrap().text;
+        assert!(text.starts_with("GET /api/me → 200"), "{text}");
     }
 
     /// A read goes at once, and its answer is the body without what looks like a credential. A
