@@ -21,7 +21,12 @@ class QuitStoresWaitTest : public testing::Test {
                         *kept = std::move(answer);
                       },
                       &answer_),
-                  base::BindOnce(&QuitStoresWaitTest::Ended, base::Unretained(this)));
+                  Done());
+  }
+
+  // What the wait ends with, kept for the test to read.
+  base::OnceCallback<void(std::optional<std::string>)> Done() {
+    return base::BindOnce(&QuitStoresWaitTest::Ended, base::Unretained(this));
   }
 
   void Ended(std::optional<std::string> line) {
@@ -40,7 +45,7 @@ TEST_F(QuitStoresWaitTest, AQuitWithNoStoreWaitsForNothingAndSaysNothing) {
   WaitForStores(base::BindOnce([](base::OnceCallback<void(StoresWritten)> answer) {
                   std::move(answer).Run(StoresWritten::kNone);
                 }),
-                base::BindOnce(&QuitStoresWaitTest::Ended, base::Unretained(this)));
+                Done());
   EXPECT_EQ(ends_, 1);
   EXPECT_FALSE(line_);
   // Nothing left to run: no limit was posted.
@@ -76,7 +81,7 @@ TEST_F(QuitStoresWaitTest, AnEngineWithNoWayToBeAskedSaysSoAtOnce) {
   WaitForStores(base::BindOnce([](base::OnceCallback<void(StoresWritten)> answer) {
                   std::move(answer).Run(StoresWritten::kNoWay);
                 }),
-                base::BindOnce(&QuitStoresWaitTest::Ended, base::Unretained(this)));
+                Done());
   EXPECT_EQ(ends_, 1);
   EXPECT_EQ(line_, "system stores not written, no way to write them");
   EXPECT_EQ(task_environment_.GetPendingMainThreadTaskCount(), 0u);
