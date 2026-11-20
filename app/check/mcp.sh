@@ -2698,10 +2698,14 @@ CARD
   await_more "$thumbnail" "$shrunk" || fail "the page watched didn't go back into its picture for the sign-in"
   cards=$(grep -c '^browser: agent question [0-9]* at ' "$log" || true)
   settled=$(grep -c '^browser: dialog settled$' "$log" || true)
+  # A host as long as a sign-in's can be, whose line the card wraps.
+  sign_in_host=sign-in.accounts.a-long-example-host-for-the-card.localhost
   asked="^browser: page $opened_tab dialog SignIn Sign in\$"
-  request navigate "{\"tab\":$opened_tab,\"url\":\"localhost:$port/sign-in?agent\"}" >&4
+  request navigate "{\"tab\":$opened_tab,\"url\":\"$sign_in_host:$port/sign-in?agent\"}" >&4
   await_log "$asked" "the site's sign-in didn't ask in the agent's tab"
-  sign_in_why='localhost asks you to sign in\. Sign in, then hand the tab back\.'
+  # Its apostrophe is typographic, which a locale reads as one character or three, and the UI's
+  # tests hold it to the letter.
+  sign_in_why="$(printf '%s' "$sign_in_host" | sed 's/\./\\./g') asks you to sign in\. Hand the tab back when you.*re done\."
   await_log "^browser: agent mcp-client hands off $opened_tab: $sign_in_why\$" \
     "the sign-in didn't hand the agent's tab to the user: $(grep "^browser: agent mcp-client hands off $opened_tab" "$log" | tail -1)"
   await_more '^browser: agent question [0-9]* at ' "$cards" || fail "the sign-in's handoff wasn't drawn"
@@ -2736,7 +2740,7 @@ CARD
   waited=$(next_answer) || fail "the browser didn't answer the navigate that met the sign-in"
   waited=$(printf '%s\n' "$waited" | answered navigate)
   case "$waited" in
-    "The page asked for a sign-in in the browser's own dialog, which is the user's to answer, so the browser handed them the tab and this call waited on them. The user handed tab $opened_tab back."*) ;;
+    "A browser sign-in dialog opened on the tab, so the browser handed the tab to the user and this call waited. Nothing they typed is shown. The user handed tab $opened_tab back. Take a snapshot to see where it is now.") ;;
     *) fail "the navigate that met the sign-in answered: $waited" ;;
   esac
   signed_said=$(call snapshot "{\"tab\":$opened_tab}")

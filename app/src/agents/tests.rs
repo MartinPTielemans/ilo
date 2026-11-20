@@ -3531,7 +3531,7 @@ fn a_sign_in_the_browser_asks_for_hands_the_tab_to_the_user(cx: &mut TestAppCont
     cx.run_until_parked();
     asks_for_sign_in(&agents, &browser, 30, "http://auth.example:8080", cx);
     let question = (browser.asked.borrow().clone()).expect("the sign-in didn't ask");
-    let why = "auth.example asks you to sign in. Sign in, then hand the tab back.";
+    let why = "auth.example asks you to sign in. Hand the tab back when you’re done.";
     assert_eq!((question.handoff, question.why.as_ref()), (Some(30), why));
     assert!(browser.held.borrow().contains(&30));
     let status = agents.read_with(cx, |agents, _| agents.status());
@@ -3570,9 +3570,9 @@ fn a_sign_in_the_browser_asks_for_hands_the_tab_to_the_user(cx: &mut TestAppCont
     assert!(again.error);
     assert!(
         again.text.starts_with(
-            "Tab 30's page shows a dialog asking for a user name and password, which is the \
-             user's to answer. Nothing more can be done on the tab while it's up: hand_off hands \
-             it to them to sign in, or close_tab closes the tab"
+            "Tab 30 shows a browser sign-in dialog, which only the user can answer. No other \
+             calls work on the tab while it is open: use hand_off to let the user sign in, or \
+             close_tab to close the tab and its dialog."
         ),
         "{}",
         again.text
@@ -3596,7 +3596,7 @@ fn a_sign_in_handoff_answers_after_15_minutes(cx: &mut TestAppContext) {
     let question = (browser.asked.borrow().clone()).expect("the sign-in didn't ask");
     assert_eq!(
         question.why,
-        "A proxy asks you to sign in. Sign in, then hand the tab back."
+        "A proxy asks you to sign in. Hand the tab back when you’re done."
     );
     cx.executor().advance_clock(HANDOFF_WAIT);
     let answer = snapshot.recv().unwrap();

@@ -3986,6 +3986,21 @@ fn showing_dialog(tab: u64, kind: DialogKind, opened: bool) -> String {
         DialogKind::SignIn => "a dialog asking for a user name and password",
         DialogKind::OpenApp => "a dialog asking to open another app",
     };
+    // Only the user may sign in (#3662).
+    if kind == DialogKind::SignIn {
+        let close = match opened {
+            true => "close_tab to close the tab and its dialog",
+            false => {
+                "close_tab with discard: true to close the tab and its dialog once the user says \
+                 yes, as you didn't open it"
+            }
+        };
+        return format!(
+            "Tab {tab} shows a browser sign-in dialog, which only the user can answer. No other \
+             calls work on the tab while it is open: use hand_off to let the user sign in, or \
+             {close}."
+        );
+    }
     let close = match opened {
         true => "close_tab closes the tab, and the dialog with it",
         false => {
@@ -3993,17 +4008,10 @@ fn showing_dialog(tab: u64, kind: DialogKind, opened: bool) -> String {
              says yes, as you didn't open it"
         }
     };
-    match kind {
-        // Only the user may sign in (#3662).
-        DialogKind::SignIn => format!(
-            "Tab {tab}'s page shows {what}, which is the user's to answer. Nothing more can be \
-             done on the tab while it's up: hand_off hands it to them to sign in, or {close}."
-        ),
-        _ => format!(
-            "Tab {tab}'s page shows {what}. Nothing more can be done on the tab while it's up, \
-             and no tool answers it. {close}."
-        ),
-    }
+    format!(
+        "Tab {tab}'s page shows {what}. Nothing more can be done on the tab while it's up, and no \
+         tool answers it. {close}."
+    )
 }
 
 /// An action on `tab` for the call `call` with nothing more to it, as a close is.
@@ -4214,15 +4222,15 @@ const PASSKEY: &str = "The page asks for your passkey. Sign in, then hand the ta
 fn sign_in_why(from: &str) -> String {
     match site(from) {
         host if web_site(&host) => {
-            format!("{host} asks you to sign in. Sign in, then hand the tab back.")
+            format!("{host} asks you to sign in. Hand the tab back when you’re done.")
         }
-        _ => "A proxy asks you to sign in. Sign in, then hand the tab back.".into(),
+        _ => "A proxy asks you to sign in. Hand the tab back when you’re done.".into(),
     }
 }
 
 /// What the call that met a sign-in hears first once its wait ends (`sign_in_hand_off`).
-const SIGNED_IN: &str = "The page asked for a sign-in in the browser's own dialog, which is the \
-    user's to answer, so the browser handed them the tab and this call waited on them.";
+const SIGNED_IN: &str = "A browser sign-in dialog opened on the tab, so the browser handed the \
+    tab to the user and this call waited. Nothing they typed is shown.";
 
 /// Why no agent may see or act on a tab showing `url`, or pinned to `pinned`, even in its own
 /// Space, or None. A Board's tab, by either, is the user's alone, as a Board and what's on it are,
