@@ -3234,6 +3234,7 @@ impl Shell {
             None => (false, false),
         };
         let secondary = self.palette.text(SECONDARY);
+        let ink = self.palette.text(UNSELECTED_TITLE);
         let head = div()
             .h(px(ARCHIVED_PITCH))
             .pl(px(ARCHIVED_LEFT))
@@ -3251,11 +3252,12 @@ impl Shell {
                     .justify_center()
                     .pl(px(ARCHIVED_TEXT_X))
                     .pr(px(8.))
-                    .child(text_line(
-                        title.clone().into(),
+                    .child(element_line(
+                        crate::agent_request::Written::step(each.action == "request", &title)
+                            .drawn(secondary, ink),
                         text::BODY,
                         17.,
-                        self.palette.text(UNSELECTED_TITLE),
+                        ink,
                     ))
                     .child(text_line(under.into(), text::SMALL, 15., secondary)),
             )
@@ -4404,6 +4406,11 @@ pub(super) fn library_band(way: f32) -> f32 {
 
 /// A line of a row's text, cut short with an ellipsis.
 fn text_line(text: SharedString, size: f32, height: f32, color: Hsla) -> gpui::Div {
+    element_line(text, size, height, color)
+}
+
+/// A line as `text_line` draws it, of text styled already.
+fn element_line(text: impl IntoElement, size: f32, height: f32, color: Hsla) -> gpui::Div {
     div()
         .h(px(height))
         .flex()

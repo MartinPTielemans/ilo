@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use browser::account::{self, Account};
 use browser::ad_block::choice::{self as ad_blocker, EngineRow};
+use browser::agent_request::Written;
 use browser::agents::ready::Ready;
 use browser::agents::runner::Cli;
 use browser::agents::{self, Agents, Client};
@@ -3959,7 +3960,8 @@ impl Settings {
             let grants = self.grants(agents, client, cx);
             let entries: Vec<gpui::Div> = (model.activity(client.id()).take(ACTIVITY_SHOWN))
                 .map(|entry| {
-                    // Each entry in the words a task's trace says its steps in.
+                    // Each entry in the words a task's trace says its steps in, a request's
+                    // written out as the whole request writes it (#3645).
                     let title = |entry: &agents::Activity| {
                         let did = agents::tools::Did {
                             tool: entry.action.to_string(),
@@ -3971,21 +3973,20 @@ impl Settings {
                             true => agents::tools::Tense::Done,
                             false => agents::tools::Tense::Failed,
                         };
-                        agents::tools::step_title(&did, tense)
+                        let title = agents::tools::step_title(&did, tense);
+                        Written::step(entry.action == "request", &title)
                     };
                     let what = title(entry);
                     let refused = (entry.steps.iter().map(|step| &step.refused))
                         .find(|refused| !refused.is_empty())
                         .unwrap_or(&entry.refused);
                     let steps = entry.steps.iter().map(title);
-                    let detail: SharedString = if !refused.is_empty() {
-                        format!("Refused: {refused}").into()
-                    } else if !entry.steps.is_empty() {
-                        steps.collect::<Vec<_>>().join(" · ").into()
+                    let detail = if !refused.is_empty() {
+                        Written::plain(&format!("Refused: {refused}"))
                     } else {
-                        SharedString::default()
+                        Written::joined(steps, " · ")
                     };
-                    let detail = Some(detail).filter(|detail| !detail.is_empty());
+                    let detail = Some(detail).filter(|detail| !detail.text.is_empty());
                     let ago = div()
                         .text_color(look.detail)
                         .child(agents::ago(entry.at, now));
@@ -4101,8 +4102,8 @@ impl Settings {
         &self,
         agents: &Entity<Agents>,
         entry: &agents::Activity,
-        what: String,
-        detail: Option<SharedString>,
+        what: Written,
+        detail: Option<Written>,
         said: Option<String>,
         ago: gpui::Div,
         cx: &Context<Self>,
@@ -4113,7 +4114,13 @@ impl Settings {
         let opened = self.requests_opened.contains(&id);
         let slot = chevron_slot(opens.then_some(opened), look.detail.into());
         let controls = vec![ago.into_any_element(), slot.into_any_element()];
-        let head = line_row(look, what.clone(), detail, controls);
+        let head = browser::settings_rows::frame()
+            .child(browser::settings_rows::written_text(
+                look,
+                &what,
+                detail.as_ref(),
+            ))
+            .child(browser::settings_rows::end(controls));
         if !opens {
             return head;
         }
@@ -4124,7 +4131,7 @@ impl Settings {
             .focus_from_keys_only()
             .focus_visible(browser::settings_rows::ring(look.ink))
             .when(self.a11y, |head| {
-                named_button(head, what.clone()).aria_expanded(opened)
+                named_button(head, what.text.clone()).aria_expanded(opened)
             })
             // Its method, which check.sh tells reads from changes by, and no path: its "/" would
             // end the run's pattern.

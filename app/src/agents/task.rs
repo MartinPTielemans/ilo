@@ -196,6 +196,9 @@ pub struct TraceStep {
     pub key: usize,
     pub glyph: &'static str,
     pub title: SharedString,
+    /// Whether the title names a request, whose words the agent wrote: the trace writes out
+    /// what wouldn't show in it and marks it, as the whole request does (#3645).
+    pub request: bool,
     /// After the title: how long it took, from 1 s, or why it failed.
     pub description: SharedString,
     /// Whether it's the step under way, which shimmers.
@@ -2435,7 +2438,12 @@ fn working(task: &Task) -> SharedString {
         Some(step) => format!(
             "Step {} · {}",
             taken.len(),
-            tools::step_title(&step.did, tense(step))
+            // A request's path is the agent's own text, so it's written out here as in the trace.
+            crate::agent_request::Written::step(
+                step.did.tool == "request",
+                &tools::step_title(&step.did, tense(step)),
+            )
+            .text
         )
         .into(),
         None => "Thinking · no steps yet".into(),
@@ -2776,6 +2784,7 @@ fn trace_step(steps: &[(usize, &Traced)]) -> TraceStep {
             key,
             glyph: tools::step_glyph(&step.did.tool),
             title: tools::close_title(&step.did, close).into(),
+            request: false,
             description: "".into(),
             running: false,
             failed: false,
@@ -2807,6 +2816,7 @@ fn trace_step(steps: &[(usize, &Traced)]) -> TraceStep {
         key,
         glyph: tools::step_glyph(&step.did.tool),
         title: tools::step_title(&step.did, tense(step)).into(),
+        request: step.did.tool == "request",
         description: description.into(),
         running: step.ended.is_none(),
         failed: step.error.is_some(),
@@ -2826,6 +2836,7 @@ fn trace_group(steps: &[(usize, &Traced)]) -> TraceStep {
                 true => line,
                 false => TraceStep {
                     title: step.did.page.clone().into(),
+                    request: false,
                     ..line
                 },
             }
@@ -2843,6 +2854,7 @@ fn trace_group(steps: &[(usize, &Traced)]) -> TraceStep {
             key,
             glyph: tools::step_glyph(&did.tool),
             title: tools::close_title(&did, close).into(),
+            request: false,
             description: "".into(),
             running: false,
             failed: false,
@@ -2893,6 +2905,7 @@ fn trace_group(steps: &[(usize, &Traced)]) -> TraceStep {
         key,
         glyph: tools::step_glyph(&did.tool),
         title: tools::group_title(&did, count, tense).into(),
+        request: did.tool == "request",
         description: description.into(),
         running: running > 0,
         failed: failed > 0,

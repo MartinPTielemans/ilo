@@ -11,6 +11,10 @@ use super::page::clip;
 
 /// The requests one call sends at most.
 pub const MAX: usize = 20;
+/// The headers one request carries at most. A page's own fetch sends a handful (a type, a token,
+/// an Accept) and a server such as Apache refuses past 100, so 32 is room for any real call, and
+/// the whole request draws no more than 32 rows of a request's headers, each cut at PART_SHOWN.
+pub const MAX_HEADERS: usize = 32;
 /// The most a request's body may be, in bytes.
 pub const MAX_BODY: usize = 1 << 20;
 /// The most of a `what` the tool takes, once it's plain text: a sentence, not a page.
@@ -375,6 +379,12 @@ fn one(asked: &Value, origin: &str, number: usize) -> Result<Request, Wrong> {
     let mut headers = Vec::new();
     match asked.get("headers") {
         None | Some(Value::Null) => {}
+        Some(Value::Object(asked)) if asked.len() > MAX_HEADERS => {
+            return Err(Wrong::Malformed(format!(
+                "Request {number} has {} headers; give {MAX_HEADERS} at most. Nothing was sent.",
+                asked.len()
+            )));
+        }
         Some(Value::Object(asked)) => {
             for (name, value) in asked {
                 let Some(value) = value.as_str() else {
@@ -1603,6 +1613,29 @@ mod tests {
         assert_eq!(sent[0].what, "", "a read kept a sentence");
         let read = parsed(json!([{ "method": "GET", "path": "/a", "what": "Read a." }])).unwrap();
         assert_eq!(read[0].what, "");
+    }
+
+    /// A request carries MAX_HEADERS headers at most, or nothing is sent, so the whole request
+    /// draws a bounded number of rows however many the agent names.
+    #[test]
+    fn a_request_has_a_bounded_number_of_headers() {
+        let with = |count: usize| {
+            let headers: serde_json::Map<String, Value> = (0..count)
+                .map(|at| (format!("X-Note-{at}"), json!("a")))
+                .collect();
+            parsed(json!([
+                { "method": "GET", "path": "/a" },
+                { "method": "GET", "path": "/b", "headers": headers },
+            ]))
+        };
+        assert_eq!(with(MAX_HEADERS).unwrap()[1].headers.len(), MAX_HEADERS);
+        let Err(Wrong::Malformed(many)) = with(MAX_HEADERS + 1) else {
+            panic!("a request of {} headers went", MAX_HEADERS + 1);
+        };
+        assert_eq!(
+            many,
+            "Request 2 has 33 headers; give 32 at most. Nothing was sent."
+        );
     }
 
     /// The sentence is one paragraph of plain text: line breaks, tabs and control characters are

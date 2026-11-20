@@ -445,7 +445,14 @@ impl Shell {
                 (self.agent_history.get(past)).map(|past| past.title.clone().into())
             }
             Item::PastHead(_) => Some("Back".into()),
-            Item::PastStep(past, step) => self.past_step_title(past, step).map(Into::into),
+            Item::PastStep(past, step) => {
+                let request = (self.agent_history.get(past))
+                    .and_then(|each| each.steps.get(step))
+                    .is_some_and(|each| each.action == "request");
+                // The name a reader hears is the text the row draws, a request's written out.
+                (self.past_step_title(past, step))
+                    .map(|title| crate::agent_request::Written::step(request, &title).text)
+            }
             Item::Boost(boost) => self.boost_list.get(boost).map(|boost| boost.site.clone()),
             Item::Board(board) => {
                 (self.board_list.get(board)).map(|board| board.name.clone().into())

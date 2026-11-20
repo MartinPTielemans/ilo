@@ -5902,6 +5902,37 @@ mod tasks {
         assert_eq!(status, "Step 2 · Chose “SPRING 10” in “Coupon”");
     }
 
+    /// A request's path is the agent's own text, so the card's status writes out an override in
+    /// it, as the trace does, and the line can't be turned around by it.
+    #[gpui::test]
+    fn a_request_steps_status_writes_out_an_override(cx: &mut TestAppContext) {
+        let (agents, browser) = ready(None, cx);
+        let agent = start(&agents, "Read my orders", cx);
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Working
+        });
+        browser
+            .tabs
+            .borrow_mut()
+            .push((30, 100, "Shop", "https://shop.example/basket"));
+        let read = json!({ "tab": 30, "requests": [{ "method": "GET", "path": "/api/menu\u{202E}txt.exe" }] });
+        traced_by(&agents, &agent, "request", read, cx, |answer, cx| {
+            let request = browser.requests.borrow().last().unwrap().1;
+            let response = request::Response {
+                status: 200,
+                kind: "application/json".into(),
+                body: b"{}".to_vec(),
+                ..request::Response::default()
+            };
+            agents.update(cx, |agents, cx| agents.request_done(request, response, cx));
+            answer.recv().unwrap()
+        });
+        let status = card_of(&agents, cx).status.to_string();
+        assert!(status.starts_with("Step 1 · "), "{status}");
+        assert!(!status.contains('\u{202E}'), "{status:?}");
+        assert!(status.contains("menu\\u{202E}txt.exe"), "{status}");
+    }
+
     /// A task's calls are its conversation's trace, each titled by what it did and opening to what
     /// it saw or why it failed. What it typed shows, but never what it typed into a password
     /// field, though the field refused it.

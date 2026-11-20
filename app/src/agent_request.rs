@@ -13,10 +13,10 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use gpui::{
-    App, Bounds, Context, FocusHandle, Focusable, FontWeight, Global, HighlightStyle, KeyBinding,
-    ScrollHandle, SharedString, StyledText, TitlebarOptions, Window, WindowBackgroundAppearance,
-    WindowBounds, WindowHandle, WindowKind, WindowOptions, accesskit::Role, actions, canvas, div,
-    point, prelude::*, px, size,
+    App, Bounds, Context, Div, FocusHandle, Focusable, FontWeight, Global, HighlightStyle,
+    KeyBinding, ScrollHandle, SharedString, Stateful, StyledText, TitlebarOptions, Window,
+    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions,
+    accesskit::Role, actions, canvas, div, point, prelude::*, px, size,
 };
 
 use crate::agents::request::{self, ALL_SHOWN, PART_SHOWN, Request};
@@ -42,7 +42,7 @@ pub struct Written {
 }
 
 impl Written {
-    fn of(text: &str, lines: bool) -> Written {
+    pub fn of(text: &str, lines: bool) -> Written {
         let (text, escapes) = request::escaped(text, lines);
         Written {
             text: text.into(),
@@ -80,6 +80,56 @@ impl Written {
                 points.collect::<Vec<_>>().join(", ")
             )
         })
+    }
+
+    /// A step's title as the activity and a task's trace draw it: a request's as `of` writes it,
+    /// since the agent named its path and every word of it; any other's as it is, with nothing
+    /// marked, so a literal `\u{…}` in a page's title isn't taken for the browser's.
+    pub fn step(request: bool, title: &str) -> Written {
+        match request {
+            true => Written::of(title, false),
+            false => Written::plain(title),
+        }
+    }
+
+    /// Text as it is, nothing written out.
+    pub fn plain(text: &str) -> Written {
+        Written {
+            text: text.to_string().into(),
+            escapes: Vec::new(),
+        }
+    }
+
+    /// The parts in order with `between` each two, every escape where its part put it.
+    pub fn joined(parts: impl IntoIterator<Item = Written>, between: &str) -> Written {
+        let (mut text, mut escapes) = (String::new(), Vec::new());
+        for (at, part) in parts.into_iter().enumerate() {
+            if at > 0 {
+                text.push_str(between);
+            }
+            let start = text.len();
+            escapes
+                .extend((part.escapes.iter()).map(|range| start + range.start..start + range.end));
+            text.push_str(&part.text);
+        }
+        Written {
+            text: text.into(),
+            escapes,
+        }
+    }
+
+    /// The text with its escapes marked as the whole request marks them: in `detail` on the ink
+    /// at WHOLE_ESCAPE.
+    pub fn drawn(&self, detail: gpui::Hsla, ink: gpui::Hsla) -> StyledText {
+        let mark = HighlightStyle {
+            color: Some(detail),
+            background_color: Some(ink.opacity(WHOLE_ESCAPE)),
+            ..HighlightStyle::default()
+        };
+        let marks: Vec<_> = (self.escapes.iter())
+            .map(|range| (range.clone(), mark))
+            .collect();
+        StyledText::new(self.text.clone()).with_highlights(marks)
     }
 }
 
@@ -463,20 +513,26 @@ impl Render for AgentRequest {
         // What the agent wrote, on its plate in the monospaced face, its escapes in the detail on
         // a darker plate, so they're told from typed text without colour; a reader hears the text
         // and then which characters the browser wrote out.
-        let block = |id: String, written: &Written| {
-            let escape = HighlightStyle {
-                color: Some(detail),
-                background_color: Some(palette.plate(WHOLE_ESCAPE)),
-                ..HighlightStyle::default()
-            };
+        let escape = HighlightStyle {
+            color: Some(detail),
+            background_color: Some(palette.plate(WHOLE_ESCAPE)),
+            ..HighlightStyle::default()
+        };
+        let plated = move |written: &Written| {
             let marks = (written.escapes.iter()).map(|range| (range.clone(), escape));
-            div()
-                .id(SharedString::from(id))
+            StyledText::new(written.text.clone()).with_highlights(marks.collect::<Vec<_>>())
+        };
+        // Read as the text, then which characters the browser wrote out.
+        let heard = |element: Stateful<Div>, written: &Written| {
+            element
                 .role(Role::Label)
                 .aria_label(written.text.replace('\u{200B}', ""))
-                .when_some(written.heard(), |block, heard| {
-                    block.aria_description(heard)
+                .when_some(written.heard(), |element, heard| {
+                    element.aria_description(heard)
                 })
+        };
+        let block = |id: String, written: &Written| {
+            heard(div().id(SharedString::from(id)), written)
                 .mt(px(WHOLE_GAP))
                 .min_w_0()
                 .px(px(WHOLE_BLOCK))
@@ -487,10 +543,7 @@ impl Render for AgentRequest {
                 .text_size(px(text::SMALL))
                 .line_height(px(FACTS_LINE))
                 .text_color(ink)
-                .child(
-                    StyledText::new(written.text.clone())
-                        .with_highlights(marks.collect::<Vec<_>>()),
-                )
+                .child(plated(written))
         };
         // Under a part that's cut, how much of it shows.
         let note = |cut: &Cut| {
@@ -521,7 +574,15 @@ impl Render for AgentRequest {
                                     .flex_none()
                                     .mt(px(WHOLE_BLOCK / 2.))
                                     .text_color(detail)
-                                    .child(StyledText::new(name.text.text.clone()))
+                                    .child(
+                                        heard(
+                                            div().id(SharedString::from(format!(
+                                                "whole-{at}-header-{row}-name"
+                                            ))),
+                                            &name.text,
+                                        )
+                                        .child(plated(&name.text)),
+                                    )
                                     .children(note(name)),
                             )
                             .child(
@@ -725,6 +786,52 @@ mod tests {
             ("X-Note", "pay \\u{202E}001$")
         );
         assert_eq!(&value.text[value.escapes[0].clone()], "\\u{202E}");
+    }
+
+    /// The activity and a trace mark only what the browser wrote out, in a request's step: a
+    /// page's title that holds a literal `\u{202E}` is drawn as it is, with no plate, while a
+    /// request's path has its override written out and marked, and a literal typed in it has
+    /// its backslash written out, so only the browser's own escape is marked.
+    #[test]
+    fn only_a_requests_step_is_written_out_and_marked() {
+        let title = "Opened Notes \\u{202E} and more on notes.example.com";
+        let page = Written::step(false, title);
+        assert_eq!((page.text.as_ref(), page.escapes.len()), (title, 0));
+        let request = Written::step(
+            true,
+            "Sent POST /pay/\u{202E}gro and \\u{2066} to shop.example.com",
+        );
+        assert_eq!(
+            request.text.as_ref(),
+            "Sent POST /pay/\\u{202E}gro and \\u{005C}u{2066} to shop.example.com"
+        );
+        let marked: Vec<&str> = (request.escapes.iter())
+            .map(|at| &request.text[at.clone()])
+            .collect();
+        assert_eq!(marked, ["\\u{202E}", "\\u{005C}"]);
+    }
+
+    /// Steps joined into one line keep each escape on what it marked, past every step and
+    /// separator before it.
+    #[test]
+    fn joined_steps_keep_their_marks_in_place() {
+        let joined = Written::joined(
+            [
+                Written::step(false, "Read \\u{202E} on a.example.com"),
+                Written::step(true, "Sent POST /é\u{200B}x to a.example.com"),
+                Written::step(true, "Sent PUT /\u{202E} to a.example.com"),
+            ],
+            " · ",
+        );
+        let marked: Vec<&str> = (joined.escapes.iter())
+            .map(|at| &joined.text[at.clone()])
+            .collect();
+        assert_eq!(marked, ["\\u{200B}", "\\u{202E}"]);
+        assert!(joined.text.starts_with("Read \\u{202E} on"), "{joined:?}");
+        assert!(
+            joined.text.ends_with("PUT /\\u{202E} to a.example.com"),
+            "{joined:?}"
+        );
     }
 
     /// Each escape in an address of many parts is marked where it is, past every break after a

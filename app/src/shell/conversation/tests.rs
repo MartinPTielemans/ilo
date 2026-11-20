@@ -38,6 +38,7 @@ fn step(key: usize, title: &str, running: bool) -> TraceStep {
         key,
         glyph: "icons/globe.svg",
         title: title.to_string().into(),
+        request: false,
         description: "".into(),
         running,
         failed: false,
@@ -913,4 +914,18 @@ fn a_held_pages_picture_says_why() {
         picture_status(Some(&"Sign in to github.com".into()), None),
         Some("Needs you · Sign in to github.com".into())
     );
+}
+
+/// A request's step under a page's picture is written out as the trace writes it (#3645); any
+/// other step's title is said as it is.
+#[test]
+fn a_pictures_request_step_writes_out_what_wouldnt_show() {
+    use super::picture_step;
+    let mut sending = step(0, "Sending GET /api/menu\u{202E}txt.exe", true);
+    sending.request = true;
+    let said = picture_step(&sending);
+    assert!(!said.contains('\u{202E}'), "{said}");
+    assert!(said.contains(r"menu\u{202E}txt.exe"), "{said}");
+    let opening = step(1, "Opening skyscanner.net", true);
+    assert_eq!(picture_step(&opening), opening.title);
 }
