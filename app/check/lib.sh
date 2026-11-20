@@ -41,9 +41,19 @@ profile=$(cased "Set Profile › Default (checked), Set Profile › New Profile 
 # Markdown…, through cased.
 into='\(Export “[^”]*” into Folder › [^,]*, \)*'
 empty_profile=$(cased "Set Profile › Default (checked), Set Profile › New Profile")
-# The product's name, which the app's menus and alerts use, and the dev build's id.
+# The product's name, which the app's menus and alerts use, and the checked app's id. On the Mac
+# it's the Info.plist's of the app check.sh picked, so a release's under CHECK_APP quits and keeps
+# its defaults by its own id, not the dev build's (#3614). The dev build's is dev.browser.app
+# (build.sh), which the runs off the Mac keep too.
 app_name=$(cat branding/name)
-app_id=dev.browser.app
+checked_app_id=dev.browser.app
+if [ "$(uname)" = Darwin ]; then
+  checked_app_id=$(plutil -extract CFBundleIdentifier raw -o - "$app/Contents/Info.plist") || {
+    echo "FAIL: $app has no CFBundleIdentifier for the check to quit it and keep its defaults by" >&2
+    exit 1
+  }
+fi
+app_id=$checked_app_id
 # The KeyboardEvent property a page reads ⌘ from, which off the Mac is pressed with Ctrl (keys.rs).
 cmd_key=metaKey
 { windows || [ "$(uname)" = Linux ]; } && cmd_key=ctrlKey
