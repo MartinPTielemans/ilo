@@ -4070,6 +4070,64 @@ const CORE_ALLOWS: [&str; 21] = [
     "unpin_tab",
 ];
 
+/// What the descriptions tell an agent (#3664): each tool that may take a tab says, as the others
+/// do, to give it once there's more than one; the server's instructions and a task's say so too, and
+/// name only tools there are; and ask_for_tab and hand_off say when to use them and what follows.
+#[test]
+fn the_descriptions_say_how_to_use_tabs() {
+    for agent in ["claude-code", "task-1"] {
+        let listed = tools::list(agent);
+        let listed = listed.as_array().unwrap();
+        let names: Vec<&str> = (listed.iter())
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect();
+        // Those where it may be left out: add_to_split's is the one tab it adds.
+        let optional = |tool: &&Value| {
+            let required = tool["inputSchema"]["required"].as_array();
+            !required.is_some_and(|required| required.contains(&json!("tab")))
+        };
+        let tab_said: Vec<&str> = (listed.iter().filter(optional))
+            .filter_map(|tool| tool["inputSchema"]["properties"]["tab"]["description"].as_str())
+            .collect();
+        assert!(tab_said.len() > 10, "{agent}: {tab_said:?}");
+        assert!(
+            tab_said.iter().all(|said| *said == tab_said[0]),
+            "{agent}'s tools say the tab differently: {tab_said:?}"
+        );
+        assert!(tab_said[0].contains("more than one tab"), "{}", tab_said[0]);
+        let instructions = match agent {
+            "task-1" => tools::TASK_INSTRUCTIONS,
+            _ => tools::INSTRUCTIONS,
+        };
+        assert!(
+            instructions.contains("its tab once you have more than one"),
+            "{agent}"
+        );
+        assert!(
+            instructions.contains("Calls on different tabs run at the same time"),
+            "{agent}"
+        );
+        // Every snake_case word in them is a tool the agent has.
+        let words = instructions.split(|c: char| !(c.is_ascii_lowercase() || c == '_'));
+        for word in words.filter(|word| word.contains('_')) {
+            assert!(
+                names.contains(&word),
+                "{agent}'s instructions name {word}, not a tool"
+            );
+        }
+        let said = |name: &str| {
+            let tool = listed.iter().find(|tool| tool["name"] == name);
+            tool.map(|tool| tool["description"].as_str().unwrap().to_string())
+        };
+        if let Some(ask) = said("ask_for_tab") {
+            assert!(ask.contains("can't go on without it"), "{ask}");
+            assert!(ask.contains("say why"), "{ask}");
+        }
+        let hand_off = said("hand_off").unwrap();
+        assert!(hand_off.contains("take a snapshot"), "{hand_off}");
+    }
+}
+
 /// Agents never read or fill a saved password, address, card or passkey (principle 3). The server
 /// offers exactly these tools, and every one asks the core only for an action its allowlist has,
 /// so a tool or action that could reach them fails here until it's added on purpose, with its rule.
