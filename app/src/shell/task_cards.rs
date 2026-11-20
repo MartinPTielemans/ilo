@@ -37,7 +37,7 @@ use super::{
     TILE_RADIUS, TITLE, TITLE_END_INSET, TITLE_GAP, What, cubic_bezier, dashed_plate,
     selected_plate, title,
 };
-use crate::agents::task::{Card, Dot, TaskAction, open_label, status_lead};
+use crate::agents::task::{Card, Dot, TaskAction, foot_words, open_label, status_lead};
 use crate::palette::{STATE_HOVERED, STATE_PRESSED};
 use crate::tokens::shell::task::motion::{
     ARCHIVE, ARCHIVE_CLOSE, ARCHIVE_CLOSE_DELAY, ARCHIVE_CONTENT, ARCHIVE_EASE, ARCHIVE_HOLD,
@@ -1723,19 +1723,13 @@ impl Shell {
             None => (None, 1.),
         };
         let lines = if status.asks { status.lines } else { 1 };
+        let words = foot_words(&status.text, face.width <= room * lines as f32);
         div()
             .relative()
             .mt(px(STATUS_GAP))
             .h(px(status_height(status.asks, status.lines)))
             .children(old)
-            .child(line(
-                status.text.clone(),
-                lines,
-                status.asks,
-                rise * (1. - t),
-                t,
-                working,
-            ))
+            .child(line(words, lines, status.asks, rise * (1. - t), t, working))
     }
 
     /// The card's chips, in the rows its shape gives them, the first one's words on the title's

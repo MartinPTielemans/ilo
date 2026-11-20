@@ -54,6 +54,8 @@ struct Made {
     splits: RefCell<Vec<Vec<u64>>>,
     /// Each mute or unmute asked of a tab, in order.
     muted: RefCell<Vec<(u64, bool)>>,
+    /// Tabs the core holds in a Space that its list of the Space's tabs leaves out.
+    unlisted: RefCell<HashSet<u64>>,
 }
 
 impl Made {
@@ -88,7 +90,7 @@ impl Browser for Made {
 
     fn space_tabs(&self, space: u64, _: &App) -> Vec<TabInfo> {
         (self.tabs.borrow().iter())
-            .filter(|tab| tab.1 == space)
+            .filter(|tab| tab.1 == space && !self.unlisted.borrow().contains(&tab.0))
             .map(|&(id, _, title, url)| TabInfo {
                 id,
                 title: title.into(),
@@ -1175,6 +1177,43 @@ fn a_request_from_a_tab_not_the_agents_is_refused_for_the_tab(cx: &mut TestAppCo
     assert!(browser.requests.borrow().is_empty(), "a request was sent");
 }
 
+/// A change goes only with the user's answer, whatever the UI's list of the agent's tabs and the
+/// core's check say: a tab the core allows that the UI doesn't list, as a popup the agent's tab
+/// opened might be, gets no question, and its change is refused in the core's words for a tab not
+/// the agent's and sent nowhere; a read in the same call still goes.
+#[gpui::test]
+fn a_change_from_a_tab_the_ui_doesnt_list_is_refused_unasked(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    (browser.tabs.borrow_mut()).push((21, 2, "Tracker", "https://tracker.example/"));
+    browser.unlisted.borrow_mut().insert(21);
+    let requests = json!({ "tab": 21, "requests": [
+        { "method": "GET", "path": "/api/me" },
+        { "method": "POST", "path": "/api/items", "body": { "title": "Milk" },
+          "what": "Add milk to the list." },
+    ] });
+    let answer = call(&agents, "claude-code", "request", requests, cx);
+    cx.run_until_parked();
+    assert!(browser.asked.borrow().is_none(), "the change asked");
+    let sent = browser.requests.borrow().clone();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0].2.method, "GET");
+    let (request, response) = (
+        sent[0].1,
+        request::Response {
+            status: 200,
+            ..Default::default()
+        },
+    );
+    agents.update(cx, |agents, cx| agents.request_done(request, response, cx));
+    cx.run_until_parked();
+    let answered = answer.recv().unwrap();
+    assert!(
+        format!("{answered:?}").contains(&format!("POST /api/items: {NOT_ITS_SPACE}")),
+        "{answered:?}"
+    );
+    assert_eq!(browser.requests.borrow().len(), 1, "the change was sent");
+}
+
 /// Once read, a page still on the empty start page is no web page, as the core's page tools find,
 /// and a tab that became a Board meanwhile is answered as a Board is everywhere else.
 #[gpui::test]
@@ -2219,6 +2258,71 @@ fn a_question_left_unanswered_is_refused_after_5_minutes(cx: &mut TestAppContext
     assert_eq!(log(&agents, "claude-code", cx)[0].2, NO_ANSWER);
     let grants = agents.read_with(cx, |agents, _| agents.grants("claude-code"));
     assert!(grants.is_empty());
+}
+
+/// A request's question goes as any question does, and so its whole request with it: left 5
+/// minutes, it's refused and the card clears, and when its client goes, the card clears with it.
+/// Neither sends anything.
+#[gpui::test]
+fn a_requests_question_goes_unanswered_and_with_its_client(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let ask = |cx: &mut TestAppContext| {
+        let change = json!({ "tab": 20, "requests": [
+            { "method": "DELETE", "path": "/api/items/7", "what": "Tidy up the old draft." },
+        ] });
+        let answer = call(&agents, "claude-code", "request", change, cx);
+        let question = browser
+            .asked
+            .borrow()
+            .clone()
+            .expect("the delete didn't ask");
+        assert_eq!(question.changes.len(), 1);
+        answer
+    };
+
+    let answer = ask(cx);
+    cx.executor().advance_clock(ASK_WAIT);
+    let refused = answer.recv().unwrap();
+    assert!(
+        refused
+            .text
+            .starts_with("The user didn't answer in 5 minutes"),
+        "{}",
+        refused.text
+    );
+    assert_eq!(
+        *browser.asked.borrow(),
+        None,
+        "the card stayed past 5 minutes"
+    );
+
+    agents.update(cx, |agents, cx| {
+        let hello = Event::Hello {
+            agent: "claude-code".into(),
+            client: "claude-code".into(),
+        };
+        agents.handle(hello, cx);
+    });
+    let _answer = ask(cx);
+    agents.update(cx, |agents, cx| {
+        agents.handle(
+            Event::Bye {
+                agent: "claude-code".into(),
+            },
+            cx,
+        )
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        *browser.asked.borrow(),
+        None,
+        "the card stayed with its client gone"
+    );
+    assert_eq!(
+        browser.requests.borrow().len(),
+        0,
+        "a request went unanswered"
+    );
 }
 
 /// A check's `--agent-waits` shortens both waits so a run sees each end; a prod build, or a value
@@ -4205,21 +4309,34 @@ mod requests {
 
         let changes = json!({ "tab": 20, "requests": [
             { "method": "GET", "path": "/api/items" },
-            { "method": "POST", "path": "/api/items", "body": { "title": "Milk" } },
-            { "method": "DELETE", "path": "/api/items/7" },
+            { "method": "POST", "path": "/api/items", "body": { "title": "Milk" },
+              "what": "Add Milk to the list." },
+            { "method": "DELETE", "path": "/api/items/7",
+              "what": "Tidy up the old draft so your list is cleaner." },
         ] });
         let answer = call(&agents, "claude-code", "request", changes.clone(), cx);
         let question = browser.asked.borrow().clone().expect("a change didn't ask");
         assert_eq!(question.what, "make 2 changes on example.com");
         assert_eq!(question.why, "Changes ask every time.");
-        let listed = [
-            ("POST /api/items", "title: Milk"),
-            ("DELETE /api/items/7", ""),
-        ];
-        let listed = listed.map(|(line, sends)| (line.into(), sends.into()));
+        assert_eq!(question.site, "example.com");
+        // Each change in the agent's words, and what the browser knows from its method alone.
+        let listed: Vec<_> = (question.changes.iter())
+            .map(|change| (change.target(), change.what.as_str(), change.kind()))
+            .collect();
         assert_eq!(
-            (question.changes.as_slice(), question.more),
-            (listed.as_slice(), 0)
+            listed,
+            [
+                (
+                    "POST /api/items".into(),
+                    "Add Milk to the list.",
+                    request::Does::Sends
+                ),
+                (
+                    "DELETE /api/items/7".into(),
+                    "Tidy up the old draft so your list is cleaner.",
+                    request::Does::Deletes
+                ),
+            ]
         );
         assert_eq!(sent(&browser).len(), 1, "it sent before the user answered");
         agents.update(cx, |agents, cx| {
@@ -4270,6 +4387,31 @@ mod requests {
         );
     }
 
+    /// The log keeps the agent's sentence as theirs, without a value after a secret's name; the
+    /// card shows it whole.
+    #[gpui::test]
+    fn the_log_keeps_a_sentence_without_its_secret(cx: &mut TestAppContext) {
+        let (agents, browser, _) = connected(cx);
+        let change = json!({ "tab": 20, "requests": [
+            { "method": "PUT", "path": "/api/settings", "body": { "on": true },
+              "what": "Set the API key to sk-live-123" },
+        ] });
+        let answer = call(&agents, "claude-code", "request", change, cx);
+        let question = (browser.asked.borrow().clone()).expect("the change didn't ask");
+        assert_eq!(question.changes[0].what, "Set the API key to sk-live-123");
+        agents.update(cx, |agents, cx| {
+            agents.answer(question.id, Answer::Never, cx)
+        });
+        assert!(answer.recv().unwrap().error);
+        let kept = agents.read_with(cx, |agents, _| {
+            (agents.activity("claude-code"))
+                .filter(|entry| entry.action == "request")
+                .map(|entry| entry.said.to_string())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(kept, ["Set the API key to (hidden)"]);
+    }
+
     /// A write whose override header names a read still asks, and sends nothing until the user
     /// answers; Deny sends nothing at all, and the log names the method sent (#1439).
     #[gpui::test]
@@ -4277,15 +4419,23 @@ mod requests {
         let (agents, browser, _) = connected(cx);
         let masked = json!({ "tab": 20, "requests": [
             { "method": "POST", "path": "/api/items",
-              "headers": { "X-HTTP-Method-Override": "GET" }, "body": { "title": "Milk" } },
+              "headers": { "X-HTTP-Method-Override": "GET" }, "body": { "title": "Milk" },
+              "what": "Add Milk to the list." },
         ] });
         let answer = call(&agents, "claude-code", "request", masked, cx);
         let question =
             (browser.asked.borrow().clone()).expect("a POST that said it was a GET didn't ask");
         assert_eq!(sent(&browser).len(), 0, "it sent before the user answered");
+        let listed: Vec<_> = (question.changes.iter())
+            .map(|change| (change.target(), change.method.as_str(), change.kind()))
+            .collect();
         assert_eq!(
-            question.changes,
-            [("POST as GET /api/items".into(), "title: Milk".into())]
+            listed,
+            [(
+                "POST as GET /api/items".into(),
+                "POST",
+                request::Does::Changes
+            )]
         );
         agents.update(cx, |agents, cx| {
             agents.answer(question.id, Answer::Never, cx)
@@ -4328,6 +4478,22 @@ mod requests {
         assert!(
             refusals.iter().all(|why| !why.is_empty()) && refusals.len() == 3,
             "{refusals:?}"
+        );
+        // A change without the agent's sentence isn't asked or sent, and the user wasn't asked,
+        // so there's no entry for it.
+        let unsaid =
+            json!([{ "method": "GET", "path": "/a" }, { "method": "PATCH", "path": "/b" }]);
+        let unsaid = refused(unsaid, 20, cx);
+        assert!(
+            unsaid.starts_with("Request 2 (PATCH /b) may change something"),
+            "{unsaid}"
+        );
+        assert!(unsaid.ends_with("Nothing was sent."), "{unsaid}");
+        assert!(sent(&browser).is_empty());
+        assert_eq!(
+            targets(&agents, cx).len(),
+            3,
+            "a call that asked nothing was logged"
         );
 
         let two = json!([{ "method": "GET", "path": "/a" }, { "method": "GET", "path": "/b" }]);
@@ -6855,8 +7021,8 @@ mod sessions {
     /// A client has one name wherever it shows, its card's (Agents::agent_name): the strip under its
     /// page, from its status, its questions and Settings' activity read the same. Another MCP
     /// client's is the name it gave, or with none its kind's, MCP client, and a session keeps the
-    /// name it started with while it works. Claude Code, connected by name, is Claude Code whatever
-    /// it calls itself.
+    /// name it started with while it works, unless it would pass for the browser. Claude Code,
+    /// connected by name, is Claude Code whatever it calls itself.
     #[gpui::test]
     fn a_client_has_one_name_the_one_it_gave(cx: &mut TestAppContext) {
         let (agents, _, _) = connected(cx);
@@ -6879,6 +7045,22 @@ mod sessions {
             ("MCP client".into(), Some("MCP client".into())),
             "a client that gave no name has its kind's"
         );
+        // A name that would pass for the browser, whose words the cards set beside an agent's, has
+        // its kind's, and one laid out is one plain line.
+        let app = env!("APP_NAME");
+        for posing in [
+            app.to_string(),
+            format!("{} agent", app.to_uppercase()),
+            "The browser".into(),
+            "Checked by your browser".into(),
+        ] {
+            hello(&agents, "mcp-client", &posing, cx);
+            assert_eq!(named(&agents, cx).0, "MCP client", "{posing} passed");
+        }
+        hello(&agents, "mcp-client", "Browser Use", cx);
+        assert_eq!(named(&agents, cx).0, "Browser Use");
+        hello(&agents, "mcp-client", "Zed\n\u{202E}\"Agent\u{201D}", cx);
+        assert_eq!(named(&agents, cx).0, "Zed 'Agent'");
         hello(&agents, "mcp-client", "Zed", cx);
         assert_eq!(named(&agents, cx), ("Zed".into(), Some("Zed".into())));
 
