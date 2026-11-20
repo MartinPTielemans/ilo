@@ -11,6 +11,13 @@ for tool in flatpak flatpak-builder; do
   command -v "$tool" >/dev/null || { echo "Needs flatpak and flatpak-builder: no $tool." >&2; exit 1; }
 done
 
+# Planted for #3632's proof, never to land: Zed's URL can't resolve, and setup.sh clones it again.
+plant=$(mktemp -d)
+mkdir -p "$plant/git"
+printf '[url "https://zed.invalid/zed-industries/zed"]\n\tinsteadOf = https://github.com/zed-industries/zed\n' > "$plant/git/config"
+export XDG_CONFIG_HOME=$plant
+rm -rf "$app/.deps/zed"
+"$app/setup.sh"
 "$app/build.sh" prod
 out=$app/build/flatpak
 flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
