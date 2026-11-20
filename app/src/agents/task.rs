@@ -1235,6 +1235,7 @@ impl Agents {
                         tabs: Vec::new(),
                     };
                     task.ended = Some(SystemTime::now());
+                    self.task_ended_hooks(&agent, cx);
                 }
             }
             // The turn the user stopped ends as an error; their stop is what the card says.
@@ -1296,6 +1297,7 @@ impl Agents {
             task.writing = None;
         }
         self.forget_waiting(agent, cx);
+        self.task_ended_hooks(agent, cx);
         // What's ready may have changed.
         self.look_for_task_agents(cx);
         cx.notify();
@@ -1372,6 +1374,7 @@ impl Agents {
             }
             None => agent.to_string(),
         };
+        self.task_ended_hooks(agent, cx);
         self.stop_agent(&driver, cx);
         cx.notify();
     }
@@ -1989,7 +1992,7 @@ impl Agents {
     }
 
     /// The user stopped the outside agent `agent`: its session under way is stopped.
-    pub(super) fn session_stopped(&mut self, agent: &str) {
+    pub(super) fn session_stopped(&mut self, agent: &str, cx: &mut Context<Self>) {
         let live = (self.tasks.tasks.iter_mut()).find(|task| {
             task.state == State::Working
                 && (task.session.as_ref()).is_some_and(|session| session.agent == agent)
@@ -2000,6 +2003,8 @@ impl Agents {
             if let Some(session) = &mut task.session {
                 session.idle = None;
             }
+            let key = task.agent.clone();
+            self.task_ended_hooks(&key, cx);
         }
     }
 
@@ -2055,6 +2060,7 @@ impl Agents {
         }
         // check.sh reads this line.
         log!("browser: session {key} done");
+        self.task_ended_hooks(key, cx);
         cx.notify();
     }
 
@@ -2331,6 +2337,7 @@ impl Agents {
                 };
                 task.ended = Some(SystemTime::now());
                 self.note(agent, "finish", &site, "");
+                self.task_ended_hooks(agent, cx);
                 _ = reply.send(ToolResult::text(
                     "Done. The user sees your result. Stop here.",
                 ));

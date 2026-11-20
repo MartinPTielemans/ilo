@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use browser::account::{self, Account};
 use browser::ad_block::choice::{self as ad_blocker, EngineRow};
+use browser::agents::hooks::{self, Hook};
 use browser::agents::ready::Ready;
 use browser::agents::runner::Cli;
 use browser::agents::{self, Agents, Client};
@@ -55,10 +56,11 @@ use browser::tokens::palette::{LIGHT_STAND_IN, NO_THEME_ACCENT, SELECTION, STAND
 use browser::tokens::radius;
 use browser::tokens::settings::{
     BUTTONS_TOP, CHIP_GAP, CONTROL_GAP, CONTROL_HEIGHT, CONTROL_PADDING, CONTROL_RADIUS, DETAIL,
-    DETAIL_LINE, DETAIL_TOP, END_GAP, FIELD_PADDING, FIRST_GROUP, FOUND_FLASH, FOUND_FLASH_TIME,
-    GLYPH_PLATE, GLYPH_PLATE_GAP, GROUP_GAP, HEADING_BOTTOM, HEADING_TOP, HEIGHT, LEDE_LINE,
-    LEDE_TOP, MIN_HEIGHT, MIN_WIDTH, NAME, PAGE_WIDTH, POPUP_WIDTH, ROW_X, SECTION_TEXT, SENT_TUCK,
-    SHORT_PADDING, SHORT_ROW, SIDE_ROOM, SIDE_TOP, TEXT_X, TITLE, WIDTH,
+    DETAIL_LINE, DETAIL_TOP, DISCLOSURE_GAP, DISCLOSURE_GLYPH, END_GAP, FIELD_PADDING, FIRST_GROUP,
+    FOUND_FLASH, FOUND_FLASH_TIME, GLYPH_PLATE, GLYPH_PLATE_GAP, GROUP_GAP, HEADING_BOTTOM,
+    HEADING_TOP, HEIGHT, LEDE_LINE, LEDE_TOP, MIN_HEIGHT, MIN_WIDTH, NAME, PAGE_WIDTH, POPUP_WIDTH,
+    ROW_X, SECTION_TEXT, SENT_TUCK, SHORT_PADDING, SHORT_ROW, SIDE_ROOM, SIDE_TOP, TEXT_X, TITLE,
+    WIDTH,
 };
 use browser::tokens::shell::library::{TITLE_LINE, TITLE_SIZE};
 use browser::tokens::shell::{
@@ -439,6 +441,8 @@ enum Popup {
     TaskModel(Cli),
     /// General's Page zoom.
     PageZoom,
+    /// The event a hook being added runs on, in Agents.
+    HookEvent,
 }
 
 impl Popup {
@@ -453,6 +457,7 @@ impl Popup {
             Popup::TaskAgent => "Run tasks on".into(),
             Popup::TaskModel(cli) => format!("{} model", cli.name()).into(),
             Popup::PageZoom => "Page zoom".into(),
+            Popup::HookEvent => "Event".into(),
         }
     }
 }
@@ -491,6 +496,10 @@ pub struct Settings {
     search: Entity<TextInput>,
     /// Ad Blocking's field that adds a filter to My filters.
     filter: Entity<TextInput>,
+    /// Agents' field for a hook's command, and the event of the hook it adds while its row is
+    /// open (#3668).
+    hook: Entity<TextInput>,
+    adding_hook: Option<hooks::Event>,
     /// What the search last logged it found, for check.sh.
     searched: String,
     /// The row a click on a found section's name showed, which flashes once, and when.
@@ -1348,6 +1357,12 @@ fn view(cx: &mut App) -> Entity<Settings> {
                 .caret_color(look.ink)
                 .spoken("New filter")
         });
+        let hook = cx.new(|cx| {
+            TextInput::new("Command", cx)
+                .placeholder_color(look.detail)
+                .caret_color(look.ink)
+                .spoken("Hook command")
+        });
         // ⇥ stops at the field, after the sections.
         let _ = search.read(cx).focus_handle(cx).tab_stop(true);
         Settings {
@@ -1377,6 +1392,8 @@ fn view(cx: &mut App) -> Entity<Settings> {
             refused: None,
             search,
             filter,
+            hook,
+            adding_hook: None,
             searched: String::new(),
             flash: None,
             focus_row: None,
@@ -3950,6 +3967,7 @@ impl Settings {
         if cfg!(target_os = "macos") {
             blocks.extend(self.scripts(agents, accent, cx));
         }
+        blocks.extend(self.hooks(agents, cx));
         // A list for each agent, as each has its own Space (decision 8): what the user let it do
         // or never do on a site, to revoke, then what it did.
         let model = agents.read(cx);
@@ -4036,6 +4054,181 @@ impl Settings {
             "Agents never see your passwords, cookies or autofill.",
             blocks,
         )
+    }
+
+    /// Hooks (#3668): the user's commands that run on an agent's events, each with its last run
+    /// and Remove, and Add Hook… under them, which opens a row to add one. They're the user's
+    /// alone: no agent sees, adds or runs one.
+    fn hooks(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> Vec<Block> {
+        let look = &self.look;
+        let now = std::time::SystemTime::now();
+        let mut rows: Vec<gpui::Div> = (agents.read(cx).hooks().iter())
+            .map(|hook| {
+                let remove = {
+                    let agents = agents.clone();
+                    let id = hook.id;
+                    self.button(("hook-remove", id), "Remove")
+                        .relative()
+                        .child(self.drawn(format!("remove hook {id}")))
+                        .on_click(move |_, _, cx| {
+                            agents.update(cx, |agents, cx| agents.remove_hook(id, cx))
+                        })
+                };
+                let controls = vec![hook_ran(look, hook, now), remove.into_any_element()];
+                line_row(
+                    look,
+                    hook.event.name(),
+                    Some(hook.command.clone().into()),
+                    controls,
+                )
+            })
+            .collect();
+        if rows.is_empty() && self.adding_hook.is_none() {
+            rows.push(line_row(
+                look,
+                "No hooks",
+                Some(
+                    "Run a command of yours when an agent finishes, asks you something, or hands \
+                     you a tab."
+                        .into(),
+                ),
+                Vec::new(),
+            ));
+        }
+        if let Some(event) = self.adding_hook {
+            rows.push(self.adding_hook_row(agents, event, cx));
+        }
+        let note = div()
+            .px(px(TEXT_X))
+            .mt(px(BUTTONS_TOP))
+            .text_size(px(text::SMALL))
+            .line_height(px(DETAIL_LINE))
+            .text_color(look.detail)
+            .child(
+                "Each runs on its own, given the event, the agent's name and the task's title as \
+                 the agent named it, never a page's address. Agents can't see, add or run hooks.",
+            );
+        let mut under = div().flex().flex_col();
+        if self.adding_hook.is_none() {
+            let add = self
+                .button("hook-add-open", "Add Hook…")
+                .relative()
+                .child(self.drawn("add hook".into()))
+                .on_click(cx.listener(|settings, _, window, cx| {
+                    settings.adding_hook = Some(hooks::Event::TaskEnded);
+                    let field = settings.hook.focus_handle(cx);
+                    window.focus(&field, cx);
+                    cx.notify();
+                }));
+            under = under.child(div().flex().child(add));
+        }
+        vec![
+            Block::Heading("Hooks".into()),
+            Block::Group(group(look, rows)),
+            Block::Under(under.child(note)),
+        ]
+    }
+
+    /// The row Add Hook… opens: the event, the command's field, Cancel and Add.
+    fn adding_hook_row(
+        &self,
+        agents: &Entity<Agents>,
+        event: hooks::Event,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let look = &self.look;
+        let choose = self.popup(
+            Popup::HookEvent,
+            event.name().into(),
+            HOOK_EVENT_WIDTH,
+            cx.listener(|settings, _, window, cx| settings.choose_hook_event(window, cx)),
+        );
+        let added = agents.clone();
+        let field = div()
+            .relative()
+            .flex_1()
+            .min_w_0()
+            .h(px(CONTROL_HEIGHT))
+            .px(px(FIELD_PADDING))
+            .flex()
+            .items_center()
+            .rounded(px(CONTROL_RADIUS))
+            .bg(look.control)
+            .key_context("Naming")
+            .on_action(cx.listener(move |settings, _: &KeepName, window, cx| {
+                settings.add_hook(&added, window, cx)
+            }))
+            .on_action(cx.listener(|settings, _: &CancelName, window, cx| {
+                settings.close_hook_row(window, cx)
+            }))
+            .child(self.drawn("hook field".into()))
+            .child(self.hook.clone());
+        let cancel = self
+            .button("hook-cancel", "Cancel")
+            .on_click(cx.listener(|settings, _, window, cx| settings.close_hook_row(window, cx)));
+        let agents = agents.clone();
+        let add = self
+            .button("hook-add", "Add")
+            .relative()
+            .child(self.drawn("add hook command".into()))
+            .on_click(
+                cx.listener(move |settings, _, window, cx| settings.add_hook(&agents, window, cx)),
+            );
+        frame()
+            .gap(px(CONTROL_GAP))
+            .child(choose)
+            .child(field)
+            .child(cancel)
+            .child(add)
+    }
+
+    /// Opens the event menu of the hook being added.
+    fn choose_hook_event(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let chosen = self.adding_hook;
+        let items = (hooks::Event::ALL.iter())
+            .map(|&event| {
+                let on = Some(event) == chosen;
+                MenuEntry {
+                    checked: on,
+                    over: on,
+                    ..MenuEntry::named(event.name(), true)
+                }
+            })
+            .collect();
+        let settings = cx.weak_entity();
+        let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
+            _ = settings.update(cx, |settings, cx| {
+                if let Some(&event) = picked.and_then(|index| hooks::Event::ALL.get(index))
+                    && settings.adding_hook.is_some()
+                {
+                    settings.adding_hook = Some(event);
+                }
+                settings.chose(cx)
+            });
+        });
+        self.pop_up(Popup::HookEvent, items, picked, window, cx);
+    }
+
+    /// Add on the hook row: adds the hook typed, and closes the row. With nothing typed, it does
+    /// nothing, as My filters' Add does.
+    fn add_hook(&mut self, agents: &Entity<Agents>, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(event) = self.adding_hook else {
+            return;
+        };
+        let typed = self.hook.read(cx).text().trim().to_string();
+        if typed.is_empty() {
+            return;
+        }
+        agents.update(cx, |agents, cx| agents.add_hook(event, &typed, cx));
+        self.close_hook_row(window, cx);
+    }
+
+    /// Cancel or Esc on the hook row: closes it, emptied.
+    fn close_hook_row(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.adding_hook = None;
+        (self.hook).update(cx, |field, cx| field.reset("".into(), window, cx));
+        window.focus(&self.focus, cx);
+        cx.notify();
     }
 
     /// Scripts (#704): the switch that lets AppleScript in, off at first, and what each script
@@ -5442,6 +5635,46 @@ fn method(target: &str) -> &str {
 }
 
 /// A row: its name, the line under it, if any, and its controls at its end.
+/// The ell of the hook row's event pop-up, which holds its longest name.
+const HOOK_EVENT_WIDTH: f32 = 200.;
+
+/// A hook's last run, before its Remove: not yet, running, when it ran, or when and how it failed,
+/// with the alert glyph, and how many of its events it skipped while it ran.
+fn hook_ran(look: &RowLook, hook: &Hook, now: std::time::SystemTime) -> AnyElement {
+    let Some(ran) = &hook.last else {
+        return div()
+            .text_color(look.detail)
+            .child("Not run yet")
+            .into_any_element();
+    };
+    let ago = agents::ago(ran.at, now);
+    let said = match (&ran.failed, hook.running) {
+        (_, true) => "Running".to_string(),
+        (Some(why), false) => format!("Failed {}: {why}", ago.to_lowercase()),
+        (None, false) => format!("Ran {}", ago.to_lowercase()),
+    };
+    let said = match ran.skipped {
+        0 => said,
+        skipped => format!("{said}, skipped {skipped}"),
+    };
+    let failed = ran.failed.is_some() && !hook.running;
+    div()
+        .flex()
+        .items_center()
+        .gap(px(DISCLOSURE_GAP))
+        .text_color(look.detail)
+        .when(failed, |row| {
+            row.child(
+                svg()
+                    .path("icons/circle-alert.svg")
+                    .size(px(DISCLOSURE_GLYPH))
+                    .text_color(look.detail),
+            )
+        })
+        .child(said)
+        .into_any_element()
+}
+
 fn line_row(
     look: &RowLook,
     name: impl Into<SharedString>,

@@ -17,6 +17,7 @@ pub mod bridge;
 pub mod clients;
 mod codex;
 mod held;
+pub mod hooks;
 pub mod page;
 #[cfg(windows)]
 mod pipe;
@@ -698,6 +699,9 @@ pub struct Agents {
     told: HashMap<(String, u64), SharedString>,
     /// The tab each call under way names, by call, whose answer `told` keeps.
     on_tab: HashMap<u64, u64>,
+    /// The user's hooks (#3668), in the order they were added, and the id the next one takes.
+    hooks: Vec<hooks::Hook>,
+    next_hook: u64,
 }
 
 /// A run of steps (run_steps): one at a time, each as its tool would run alone.
@@ -863,6 +867,8 @@ impl Agents {
             untold: HashMap::new(),
             told: HashMap::new(),
             on_tab: HashMap::new(),
+            hooks: Vec::new(),
+            next_hook: 0,
         }
     }
 
@@ -928,6 +934,20 @@ impl Agents {
             .get("scripts")
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        let hooks = saved
+            .get("hooks")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten();
+        let hooks: Vec<(hooks::Event, String)> = (hooks.filter_map(|hook| {
+            let event = hooks::Event::from_id(hook.get("event")?.as_str()?)?;
+            Some((event, hook.get("command")?.as_str()?.to_string()))
+        }))
+        .collect();
+        self.hooks.clear();
+        for (event, command) in hooks {
+            self.push_hook(event, command);
+        }
         if self.on {
             self.start(cx);
         }
@@ -1214,6 +1234,7 @@ impl Agents {
             };
             self.held.insert(tab, held);
             self.carry(tab, held::Event::Passkey, life, actions, cx);
+            self.fire_hooks(hooks::Event::HandedToYou, agent, None, cx);
         }
         if why != "disconnected" {
             let site = site(&self.browser.tab(tab, cx).url);
@@ -1479,7 +1500,7 @@ impl Agents {
                 self.next_request += 1;
                 let why = page::clip(why, 200);
                 let held = Held {
-                    agent,
+                    agent: agent.clone(),
                     call: id,
                     why,
                     question,
@@ -1489,6 +1510,7 @@ impl Agents {
                 };
                 self.held.insert(tab, held);
                 self.carry(tab, held::Event::HandOff, life, actions, cx);
+                self.fire_hooks(hooks::Event::HandedToYou, &agent, None, cx);
             }
             "sort_tabs_by_site" if !is_task(&agent) => self.sort_by_site(&agent, reply, cx),
             "pin_tab" | "unpin_tab" | "remove_tab" if !is_task(&agent) => {
@@ -1647,6 +1669,7 @@ impl Agents {
                 (held.question, held.back) = (question, Some(page::clip(why, 200)));
                 (held.call, held.reply) = (id, Some(reply));
                 self.carry(tab, held::Event::Ask { holder }, life, actions, cx);
+                self.fire_hooks(hooks::Event::Asked, &agent, None, cx);
             }
             "request" => {
                 let Some(tab) = self.tab_for(&agent, &arguments, &reply, cx) else {
@@ -2263,7 +2286,7 @@ impl Agents {
                     server.stop(agent);
                 }
                 self.note(agent, "stopped by the user", "", "");
-                self.session_stopped(agent);
+                self.session_stopped(agent, cx);
             }
             None => self.note(agent, "stopped", "", ""),
         }
@@ -2584,7 +2607,7 @@ impl Agents {
             question.id,
             act.what
         );
-        let id = question.id;
+        let (id, agent) = (question.id, act.agent.clone());
         self.asking.push(Asking {
             question,
             site,
@@ -2595,6 +2618,7 @@ impl Agents {
             }),
         });
         self.asked(cx);
+        self.fire_hooks(hooks::Event::Asked, &agent, None, cx);
     }
 
     /// The question `id` waited ASK_WAIT with no answer: the action is refused this once, as the
@@ -3735,6 +3759,125 @@ impl Agents {
         *self.tokens.lock().unwrap() = tokens.chain(tasks).collect();
     }
 
+    /// The user's hooks, for Settings › Agents. No agent's call reaches them.
+    pub fn hooks(&self) -> &[hooks::Hook] {
+        &self.hooks
+    }
+
+    /// Settings › Agents' Add: a hook running `command` on `event`.
+    pub fn add_hook(&mut self, event: hooks::Event, command: &str, cx: &mut Context<Self>) {
+        let command = command.trim();
+        if command.is_empty() {
+            return;
+        }
+        // check.sh reads this line.
+        log!("browser: hook added {}", event.id());
+        self.push_hook(event, command.to_string());
+        self.save();
+        cx.notify();
+    }
+
+    /// Settings › Agents' Remove on the hook `id`. One running ends on its own.
+    pub fn remove_hook(&mut self, id: u64, cx: &mut Context<Self>) {
+        let Some(at) = self.hooks.iter().position(|hook| hook.id == id) else {
+            return;
+        };
+        let removed = self.hooks.remove(at);
+        // check.sh reads this line.
+        log!("browser: hook removed {}", removed.event.id());
+        self.save();
+        cx.notify();
+    }
+
+    fn push_hook(&mut self, event: hooks::Event, command: String) {
+        self.hooks.push(hooks::Hook {
+            id: self.next_hook,
+            event,
+            command,
+            last: None,
+            running: false,
+        });
+        self.next_hook += 1;
+    }
+
+    /// Runs the user's hooks on `event`, which the agent `agent` made, each on a thread of its
+    /// own, so nothing waits for them. A hook still running skips it, and says so.
+    fn fire_hooks(
+        &mut self,
+        event: hooks::Event,
+        agent: &str,
+        ended: Option<hooks::Ended>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.hooks.iter().any(|hook| hook.event == event) {
+            return;
+        }
+        // Its card's: a task's own, else the latest of the agent's sessions.
+        let task = self.task(agent).or_else(|| {
+            (self.tasks.tasks.iter().rev())
+                .find(|task| (task.session.as_ref()).is_some_and(|session| session.agent == agent))
+        });
+        let title = task.map(|task| task.title.to_string()).unwrap_or_default();
+        let given = hooks::environment(event, &self.agent_name(agent), &title, ended);
+        let now = SystemTime::now();
+        for hook in self.hooks.iter_mut().filter(|hook| hook.event == event) {
+            if hook.running {
+                if let Some(last) = &mut hook.last {
+                    last.skipped += 1;
+                }
+                continue;
+            }
+            log!("browser: hook {} runs", event.id());
+            hook.running = true;
+            hook.last = Some(hooks::Ran {
+                at: now,
+                failed: None,
+                skipped: 0,
+            });
+            let (id, command, given) = (hook.id, hook.command.clone(), given.clone());
+            // It blocks for as long as the hook runs, LIMIT at most, off the UI thread.
+            let running =
+                (cx.background_executor()).spawn(async move { hooks::run(&command, &given) });
+            cx.spawn(async move |agents, cx| {
+                let ran = running.await;
+                _ = agents.update(cx, |agents, cx| agents.hook_ran(id, ran, cx));
+            })
+            .detach();
+        }
+        cx.notify();
+    }
+
+    /// The hook `id` ended, as `ran` says.
+    fn hook_ran(&mut self, id: u64, ran: Result<(), String>, cx: &mut Context<Self>) {
+        let Some(hook) = self.hooks.iter_mut().find(|hook| hook.id == id) else {
+            return;
+        };
+        // check.sh reads this line.
+        match &ran {
+            Ok(()) => log!("browser: hook {} ran", hook.event.id()),
+            Err(why) => log!("browser: hook {} failed: {why}", hook.event.id()),
+        }
+        hook.running = false;
+        if let Some(last) = &mut hook.last {
+            last.failed = ran.err();
+        }
+        cx.notify();
+    }
+
+    /// Runs the hooks on the end of the card `key`, a task's or an outside agent's session's, as
+    /// its state says it ended. A limit isn't an end.
+    pub(super) fn task_ended_hooks(&mut self, key: &str, cx: &mut Context<Self>) {
+        let ended = self.task(key).and_then(|task| match task.state {
+            task::State::Done { .. } => Some(hooks::Ended::Done),
+            task::State::Failed { .. } => Some(hooks::Ended::Failed),
+            task::State::Stopped => Some(hooks::Ended::Stopped),
+            _ => None,
+        });
+        if let Some(ended) = ended {
+            self.fire_hooks(hooks::Event::TaskEnded, key, Some(ended), cx);
+        }
+    }
+
     fn save(&self) {
         let Some(path) = &self.path else { return };
         let agents: Vec<Value> = (self.agents.iter())
@@ -3766,6 +3909,9 @@ impl Agents {
             "grants": grants,
             "tasks": tasks,
             "scripts": self.scripts,
+            "hooks": (self.hooks.iter())
+                .map(|hook| json!({ "event": hook.event.id(), "command": hook.command }))
+                .collect::<Vec<_>>(),
         });
         if let Err(error) = clients::write_private(path, saved.to_string().as_bytes()) {
             log!("couldn't save the agents' settings: {error}");
