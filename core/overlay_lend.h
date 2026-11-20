@@ -23,18 +23,23 @@ class OverlayLend {
   void Take(uint64_t selected);
 
   // The UI asked for the keyboard (bc_window_ui_takes_keyboard), as for a field the overlay's
-  // chosen command shows.
+  // chosen command shows, or a press in the UI. Counted only while the overlay has it.
   void UIAsked();
+  // The app gave the page shown the keyboard (bc_window_focus_page), as a press on a tab's row
+  // does after the press's ask: the later of the two asks counts.
+  void PageAsked();
 
   // The overlay let the keyboard go with |selected| selected, |page_shown| saying whether the
-  // window shows a page. The UI keeps it when it asked for it since the overlay took it, even with
-  // the let-go after the ask, as a Wayland overlay's comes a compositor roundtrip after its hide
-  // (#3572). Otherwise the page shown takes it when the overlay showed another tab, as the command
-  // bar does going to a page, unless the tab selected as it took it closed, |open| saying which
-  // are, as a Space the dialog deleted: what shows then comes of that.
+  // window shows a page. The UI keeps it when its ask is the last one since the overlay took it,
+  // even with the let-go after the ask, as a Wayland overlay's comes a compositor roundtrip after
+  // its hide (#3572). Otherwise the page shown takes it when the overlay showed another tab, as the
+  // command bar does going to a page, unless the tab selected as it took it closed, |open| saying
+  // which are, as a Space the dialog deleted: what shows then comes of that.
   Goes LetGo(uint64_t selected, bool page_shown, base::FunctionRef<bool(uint64_t)> open);
 
  private:
+  // |under_| is 0 in a lend taken with no tab selected, so the lend has a flag of its own.
+  bool lent_ = false;
   uint64_t under_ = 0;
   bool ui_asked_ = false;
 };

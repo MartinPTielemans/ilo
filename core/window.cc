@@ -3439,7 +3439,10 @@ void Window::GiveKeyboardToPage() {
   // Held by the window, the keyboard is the page's (KeyboardForPage), as when the page shown before
   // left with it, so FocusPage gives it to the page shown. Given now, as a closing command bar
   // leaves it with the page: a key that came first would reach the window, where nothing takes it.
-  // A page still loading has no view to take it yet, and takes it once its view comes.
+  // A page still loading has no view to take it yet, and takes it once its view comes. Asked while
+  // an overlay has the keyboard, the page has it as the overlay lets go, past an ask of the UI's
+  // before, as a press on a tab's row makes (OverlayLend).
+  overlay_lend_.PageAsked();
   platform::ReleaseKeyboard(widget_.get());
   FocusPage();
   FocusPageSoon();

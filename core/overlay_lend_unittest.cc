@@ -27,6 +27,14 @@ struct Window {
     lend.UIAsked();
     keyboard = Keyboard::kUI;
   }
+  // As bc_window_focus_page, which waits for the let-go while the overlay has the keyboard under
+  // Wayland (FocusPage).
+  void GivePage() {
+    lend.PageAsked();
+    if (keyboard != Keyboard::kOverlay) {
+      keyboard = Keyboard::kPage;
+    }
+  }
   void LetGo() {
     switch (lend.LetGo(selected, /*page_shown=*/true, Open)) {
       case Goes::kToPage:
@@ -104,6 +112,56 @@ TEST(OverlayLend, AnAskCountsForItsLendAlone) {
   window.selected = kBoard;
   window.LetGo();
   EXPECT_EQ(window.keyboard, Keyboard::kPage);
+}
+
+TEST(OverlayLend, APressOnATabsRowGivesItsPageTheKeyboard) {
+  // With the command bar open, a press on another tab's row asks for the keyboard for the UI, then
+  // shows the tab and gives its page the keyboard, as it does with no overlay open. Under Wayland
+  // the bar's let-go comes after all that.
+  Window window;
+  window.lent_by = Keyboard::kUI;
+  window.Take();
+  window.Ask();
+  window.selected = kBoard;
+  window.GivePage();
+  window.LetGo();
+  EXPECT_EQ(window.keyboard, Keyboard::kPage);
+}
+
+TEST(OverlayLend, APressOnTheShownTabsRowGivesItsPageTheKeyboardBack) {
+  // The same row as shown: the page the UI lent it from has it back.
+  Window window;
+  window.Take();
+  window.Ask();
+  window.GivePage();
+  window.LetGo();
+  EXPECT_EQ(window.keyboard, Keyboard::kPage);
+}
+
+TEST(OverlayLend, TheUIsAskAfterThePagesCounts) {
+  Window window;
+  window.Take();
+  window.selected = kBoard;
+  window.GivePage();
+  window.Ask();
+  window.LetGo();
+  EXPECT_EQ(window.keyboard, Keyboard::kUI);
+}
+
+TEST(OverlayLend, AnAskWithNoLendDoesntCountForALetGoWithNoTake) {
+  // A let-go with no take before it answers as it did, whatever the UI asked before.
+  OverlayLend lend;
+  lend.Take(kTab);
+  lend.LetGo(kTab, /*page_shown=*/true, Open);
+  lend.UIAsked();
+  EXPECT_EQ(lend.LetGo(kBoard, /*page_shown=*/true, Open), Goes::kToPage);
+}
+
+TEST(OverlayLend, ALendTakenWithNoTabSelectedCountsTheAsk) {
+  OverlayLend lend;
+  lend.Take(0);
+  lend.UIAsked();
+  EXPECT_EQ(lend.LetGo(kBoard, /*page_shown=*/true, Open), Goes::kToUI);
 }
 
 TEST(OverlayLend, ATabClosedUnderTheOverlayGivesItBack) {
