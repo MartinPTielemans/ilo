@@ -4236,8 +4236,8 @@ fn showing_dialog(tab: u64, kind: DialogKind, opened: bool) -> String {
         let close = match opened {
             true => "close_tab to close the tab and its dialog",
             false => {
-                "close_tab with discard: true to close the tab and its dialog once the user says \
-                 yes, as you didn't open it"
+                "close_tab with discard: true to close the tab and its dialog. You did not open \
+                 this tab, so the user may be asked first"
             }
         };
         return format!(

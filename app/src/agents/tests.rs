@@ -3776,6 +3776,18 @@ fn a_sign_in_the_browser_asks_for_hands_the_tab_to_the_user(cx: &mut TestAppCont
     );
 }
 
+/// A tab the agent didn't open, its sign-in up, is closed with discard, which may ask the user.
+#[test]
+fn a_sign_in_on_a_tab_not_opened_says_discard() {
+    assert_eq!(
+        showing_dialog(7, DialogKind::SignIn, false),
+        "Tab 7 shows a browser sign-in dialog, which only the user can answer. No other calls \
+         work on the tab while it is open: use hand_off to let the user sign in, or close_tab \
+         with discard: true to close the tab and its dialog. You did not open this tab, so the \
+         user may be asked first."
+    );
+}
+
 /// A sign-in's handoff not handed back answers in 15 minutes, as any handoff does, and a proxy's
 /// is named as one. Another dialog ending a call answers it at once (#3536).
 #[gpui::test]
