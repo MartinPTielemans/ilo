@@ -1745,7 +1745,8 @@ painted(() => document.title = "console");
   await_log "^browser: title $console_tab console\$" "the console page didn't paint"
   outline=$(call snapshot "{\"tab\":$console_tab}")
   printf '%s\n' "$outline" > "$out/mcp-console.txt"
-  row=$(printf '%s\n' "$outline" | sed -n 's/.*- row "web-3[^"]*" \[\(e[0-9]*\)\].*/\1/p' | head -1)
+  # A row is a line, its ref first and then its cells' (#3657).
+  row=$(printf '%s\n' "$outline" | sed -n 's/.*- row \[\(e[0-9]*\)\]: "web-3" .*/\1/p' | head -1)
   volumes=$(ref_of listitem Volumes)
   agree=$(ref_of checkbox "I agree")
   [ -n "$row" ] && [ -n "$volumes" ] && [ -n "$agree" ] ||
