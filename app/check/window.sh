@@ -475,29 +475,43 @@ else
   esac
 fi
 # On the Mac, a toast with buttons takes the mouse through a window of its own over its plate
-# (#3611). Among the browser window's children, the toast's window is as wide and tall as the
-# toast's last plate line says, and the plate window, as big as the plate, is where that line puts
-# the plate in it, within a point, as both are logged rounded.
+# (#3611). The host's last line for it says where the window is and where the toast drew its plate,
+# unrounded: the window holds the plate in the whole points around it and no more, as the plate
+# can sit at half a point. Among the browser window's children, the plate window is exactly there,
+# and the toast's window, as big as the toast's last plate line says, has the plate where that line
+# puts it, within the half point that line rounds to.
+plate_holds() {
+  echo "$1" | sed 's/, its plate at / /; s/[,x]/ /g' | awk '
+    function holds(lo, size, at, width) {
+      return lo <= at && at - lo < 1 && lo + size >= at + width && lo + size - at - width < 1
+    }
+    { exit !(holds($1, $3, $5, $7) && holds($2, $4, $6, $8)) }'
+}
 plate_window_over() {
   [ "$(uname)" = Darwin ] || return 0
-  local plate children
+  local plate placed children
   plate=$(grep '^browser: toast plate' "$log" | tail -1 | sed 's/^browser: toast plate //; s/ in / /')
+  placed=$(grep '^browser: plate window toast at ' "$log" | tail -1 |
+    sed 's/^browser: plate window toast at //')
+  plate_holds "$placed" ||
+    fail "$1, the toast's plate window doesn't hold its plate in the whole points round it: $placed"
   send layout
   children=$(sed -n "/^browser: drive $step: /,\$p" "$log" | sed -n 's/^browser: layout child //p')
-  echo "$children" | awk -v plate="$plate" '
-    function near(a, b) { return a - b >= -1 && a - b <= 1 }
-    BEGIN { split(plate, p, " ") }
+  { echo "$plate"; echo "$placed" | sed 's/, its plate at / /; s/[,x]/ /g'; echo "$children"; } |
+    awk '
+    function near(a, b) { return a - b >= -0.5 && a - b <= 0.5 }
+    NR == 1 { split($0, p, " "); next }
+    NR == 2 { split($0, w, " "); next }
     {
       split($1, at, ","); split($2, size, "x")
       if (size[1] == p[5] && size[2] == p[6]) { tx = at[1]; ty = at[2]; toast = 1 }
-      if (near(size[1], p[3]) && near(size[2], p[4])) { n++; px[n] = at[1]; py[n] = at[2] }
+      if (at[1] == w[1] && at[2] == w[2] && size[1] == w[3] && size[2] == w[4]) window = 1
     }
     END {
-      if (!toast) exit 1
-      for (i = 1; i <= n; i++) if (near(px[i], tx + p[1]) && near(py[i], ty + p[2])) exit 0
-      exit 1
+      exit !(toast && window && near(w[5], tx + p[1]) && near(w[6], ty + p[2]) &&
+        near(w[7], p[3]) && near(w[8], p[4]))
     }' ||
-    fail "$1, the toast's plate window isn't over its plate, $plate in the toast's window: the window's children are $(echo "$children" | tr '\n' ';')"
+    fail "$1, the toast's plate window isn't over its plate, $plate in the toast's window, as the host placed it, $placed: the window's children are $(echo "$children" | tr '\n' ';')"
 }
 send fullscreen
 expect '^browser: window entered full screen$' "the window didn't go full screen"
@@ -544,8 +558,9 @@ if [ "$(uname)" = Darwin ]; then
     fail "⇧⌘C's toast in full screen put no plate window over its plate"
   placed=$(grep '^browser: plate window toast at ' "$log" | tail -1 |
     sed 's/^browser: plate window toast at //')
-  [ "${placed%%, its plate at *}" = "${placed#*, its plate at }" ] ||
-    fail "in full screen, ⇧⌘C's toast's plate window isn't over its plate: $placed"
+  plate_holds "$placed" ||
+    fail "in full screen, ⇧⌘C's toast's plate window doesn't hold its plate in the whole points" \
+      "round it: $placed"
   expect '^browser: toast hidden$' "⇧⌘C's toast in full screen stayed past its time"
   logged '^browser: plate window toast hidden$' ||
     fail "⇧⌘C's toast's plate window stayed on screen after the toast, in full screen"

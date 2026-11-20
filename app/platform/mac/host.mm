@@ -989,8 +989,11 @@ void PlacePlateWindow(HostPlateWindow* plate, NSWindow* parent, NSRect rect) {
     return;
   }
   const NSRect frame = surface.frame;
-  const NSRect over = NSMakeRect(NSMinX(frame) + NSMinX(rect), NSMaxY(frame) - NSMaxY(rect),
-                                 NSWidth(rect), NSHeight(rect));
+  const NSRect drawn = NSMakeRect(NSMinX(frame) + NSMinX(rect), NSMaxY(frame) - NSMaxY(rect),
+                                  NSWidth(rect), NSHeight(rect));
+  // A window takes whole points, and the plate can sit at half a point, inside its 0.5 border, so
+  // the window takes the whole points holding it rather than the ones AppKit would round it to.
+  const NSRect over = NSIntegralRect(drawn);
   const bool moved = !NSEqualRects(plate.frame, over);
   if (moved) {
     [plate setFrame:over display:NO];
@@ -1002,15 +1005,14 @@ void PlacePlateWindow(HostPlateWindow* plate, NSWindow* parent, NSRect rect) {
     [plate orderWindow:NSWindowAbove relativeTo:surface.windowNumber];
   }
   if (moved || added) {
-    // Where the window is and where its surface's plate is, from the browser window's content's
-    // top left, for check.sh to compare.
+    // Where the window is and where its surface drew the plate, unrounded, from the browser
+    // window's content's top left, for check.sh to compare.
     const NSRect content = [parent contentRectForFrameRect:parent.frame];
     const NSRect at = plate.frame;
-    fprintf(stderr,
-            "browser: plate window %s at %.0f,%.0f %.0fx%.0f, its plate at %.0f,%.0f %.0fx%.0f\n",
+    fprintf(stderr, "browser: plate window %s at %g,%g %gx%g, its plate at %g,%g %gx%g\n",
             plate.name.UTF8String, NSMinX(at) - NSMinX(content), NSMaxY(content) - NSMaxY(at),
-            NSWidth(at), NSHeight(at), NSMinX(over) - NSMinX(content),
-            NSMaxY(content) - NSMaxY(over), NSWidth(over), NSHeight(over));
+            NSWidth(at), NSHeight(at), NSMinX(drawn) - NSMinX(content),
+            NSMaxY(content) - NSMaxY(drawn), NSWidth(drawn), NSHeight(drawn));
   }
 }
 
