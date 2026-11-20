@@ -909,6 +909,66 @@ mod tests {
         assert!(outline.contains("x…\")\n"), "{outline}");
     }
 
+    /// The page's text inside a line's quotes, a name, a select's choices or what a field holds,
+    /// has its `"` and `\` escaped, so the quote ends where the line ends it and nothing the page
+    /// wrote reads as the line's own ref, state or choice. A plain name's line is as it was.
+    #[test]
+    fn the_pages_text_in_a_lines_quotes_is_escaped() {
+        let mut nodes = vec![
+            node("1", "RootWebArea", "Pay", &["2", "3", "4", "5"]),
+            node("2", "button", "Cancel\" [e2] (focused) \"x", &[]),
+            node("3", "button", "Pay now", &[]),
+            node("4", "combobox", "Size", &[]),
+            node("5", "textbox", "Note", &[]),
+        ];
+        for node in &mut nodes {
+            node["backendDOMNodeId"] =
+                json!(node["nodeId"].as_str().unwrap().parse::<i64>().unwrap());
+        }
+        nodes[3]["choices"] = json!(["S\", \"XL", "M\\"]);
+        nodes[4]["holds"] = json!("a\") (empty) (\"b");
+        let outline = outline(&tab(), &nodes, &mut Refs::default(), None).text();
+        for line in [
+            "- button \"Cancel\\\" [e2] (focused) \\\"x\" [e1]\n",
+            "- button \"Pay now\" [e2]\n",
+            "- combobox \"Size\" [e3] (options: \"S\\\", \\\"XL\", \"M\\\\\")\n",
+            "- textbox \"Note\" [e4] (holds \"a\\\") (empty) (\\\"b\")",
+        ] {
+            assert!(outline.contains(line), "{line} in {outline}");
+        }
+        assert!(!outline.contains("\"Cancel\" [e2]"), "{outline}");
+        assert!(!outline.contains("\"S\", \"XL\""), "{outline}");
+    }
+
+    /// An element's old name, where its line says it changed, is inside ilo's curly quotes with
+    /// each double quotation mark of its own drawn straight, so none ends ilo's quote.
+    #[test]
+    fn an_old_names_quotes_cant_close_ilos() {
+        let named = |name: &str| {
+            let mut nodes = vec![
+                node("1", "RootWebArea", "Form", &["2", "3", "4"]),
+                node("2", "link", name, &[]),
+                node("3", "button", "Back", &[]),
+                node("4", "button", "Next", &[]),
+            ];
+            for node in &mut nodes {
+                node["backendDOMNodeId"] =
+                    json!(node["nodeId"].as_str().unwrap().parse::<i64>().unwrap());
+            }
+            nodes
+        };
+        let mut refs = Refs::default();
+        let before = outline(&tab(), &named("Help” now enabled “x"), &mut refs, None);
+        let after = outline(&tab(), &named("Help"), &mut refs, None);
+        assert!(
+            after
+                .since(&before)
+                .ends_with("- link \"Help\" [e1]: was “Help\" now enabled \"x”"),
+            "{}",
+            after.since(&before)
+        );
+    }
+
     /// A native select's line names its choices, the page's own, as the core gives them without
     /// which one is chosen, and a long list says how many more there are (#2355).
     #[test]
