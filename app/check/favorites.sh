@@ -427,7 +427,8 @@ expect '^browser: toast shown Removed from Favorites \[undo\]$' "Remove from Fav
 # window's margin where its shadow falls, reaches the page. The window ends at the content's right
 # edge, and the app logs where the plate is in it and how wide it is. This step has never run: the
 # moves and the click are posted, as the driver's are, to the window the window server would pick,
-# so it stands or falls with the toast's window letting the mouse through there.
+# so it stands or falls with the plate alone taking the mouse there, on the Mac through a window
+# over it.
 expect '^browser: toast plate [0-9]* [0-9]* [0-9]* [0-9]* in [0-9]* [0-9]*$' \
   "the undo toast didn't tell where its plate is"
 set -- $(grep '^browser: toast plate' "$log" | tail -1 | sed 's/^browser: toast plate //; s/ in / /')
@@ -443,6 +444,25 @@ expect '^browser: command undo via \(ui\|page\)$' "⌘Z didn't undo Remove from 
 expect "^browser: favorites $a\$" "⌘Z didn't put the tile back"
 expect "^browser: today $left\$" "⌘Z left the tab in Today: Today is \"$(today)\""
 none_since '^browser: selected' || fail "⌘Z after Remove from Favorites showed another tab"
+# The way out: with the toast gone, its plate's place is the page's again. Its plate window goes
+# off screen with it, so a click where the plate was reaches the page, once typing in the page's
+# text field along its bottom has put another title there. The click leaves the field, so the
+# page keeps no ⇧⌘Z after.
+expect '^browser: toast hidden$' "the undo toast stayed after ⌘Z"
+if [ "$(uname)" = Darwin ]; then
+  logged '^browser: plate window toast hidden$' ||
+    fail "the undo toast's plate window stayed on screen after the toast"
+fi
+size=$(grep '^browser: layout content' "$log" | tail -1 |
+  sed 's/^browser: layout content \([0-9]*\)x\([0-9]*\),.*/\1 \2/')
+send click $((toast_content - 100)) $((${size#* } - 40))
+send type w
+expect '^browser: title [0-9]* value .*w$' "typing in the page's text field didn't reach it"
+plate_point="$((toast_content - $5 + $1 + $3 / 2)) $(($2 + $4 / 2))"
+send move $plate_point
+send click $plate_point
+expect '^browser: title [0-9]* corner$' \
+  "a click where the undo toast's plate was, after the toast went, didn't reach the page"
 send key z cmd shift
 expect '^browser: command redo via \(ui\|page\)$' "⇧⌘Z didn't redo Remove from Favorites"
 expect '^browser: favorites $' "⇧⌘Z left the tile"

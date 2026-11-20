@@ -241,6 +241,196 @@ void StripTint(CALayer* layer) {
 }
 @end
 
+// Where the toast, the hover card or Arrange's mini bar takes the mouse: a window of its own,
+// drawing nothing, exactly over the plate the surface draws, which hands its view what it gets.
+// The surface's window lets the mouse through everywhere, its shadow's margin with it. A window
+// that took the mouse only while the pointer was on its plate dropped a click there: the window
+// server caught up with the switch more than 70 ms after the pointer arrived in a slow guest, and
+// sent a click in that time to the page (#3611). This one takes the mouse from the moment the
+// plate is placed, as Linux's input region and Windows's hit test do.
+@interface HostPlateWindow : NSWindow
+@property(weak) NSWindow* surface;
+@property(weak) NSView* surfaceView;
+// The surface's, in its log lines.
+@property(copy) NSString* name;
+@end
+
+@implementation HostPlateWindow
+- (NSRect)constrainFrameRect:(NSRect)frame toScreen:(NSScreen*)screen {
+  return frame;
+}
+
+- (BOOL)canBecomeKeyWindow {
+  return NO;
+}
+
+- (BOOL)canBecomeMainWindow {
+  return NO;
+}
+
+// It isn't one of the app's windows to accessibility, and what's at a point on it is what the
+// surface has there.
+- (BOOL)isAccessibilityElement {
+  return NO;
+}
+
+- (id)accessibilityHitTest:(NSPoint)point {
+  return [self.surface accessibilityHitTest:point];
+}
+@end
+
+@interface HostPlateView : NSView
+@end
+
+@implementation HostPlateView
+- (instancetype)initWithFrame:(NSRect)frame {
+  self = [super initWithFrame:frame];
+  [self addTrackingArea:[[NSTrackingArea alloc]
+                            initWithRect:NSZeroRect
+                                 options:NSTrackingMouseEnteredAndExited |
+                                         NSTrackingMouseMoved | NSTrackingActiveAlways |
+                                         NSTrackingInVisibleRect
+                                   owner:self
+                                userInfo:nil]];
+  return self;
+}
+
+// |event|, a mouse event of the plate window's, as the surface's window would have had it there,
+// of |type|, at |at| on screen.
+- (NSEvent*)surfaceEvent:(NSEvent*)event type:(NSEventType)type at:(NSPoint)at {
+  HostPlateWindow* plate = (HostPlateWindow*)self.window;
+  const bool moved = type == NSEventTypeMouseMoved;
+  NSEvent* handed = [NSEvent mouseEventWithType:type
+                                       location:[plate.surface convertPointFromScreen:at]
+                                  modifierFlags:event.modifierFlags
+                                      timestamp:event.timestamp
+                                   windowNumber:plate.surface.windowNumber
+                                        context:nil
+                                    eventNumber:moved ? 0 : event.eventNumber
+                                     clickCount:moved ? 0 : event.clickCount
+                                       pressure:moved ? 0 : event.pressure];
+  // AppKit gives every event it makes button 0, and GPUI takes the button from the number.
+  if (!moved && event.buttonNumber != 0) {
+    CGEventRef numbered = CGEventCreateCopy(handed.CGEvent);
+    CGEventSetIntegerValueField(numbered, kCGMouseEventButtonNumber, event.buttonNumber);
+    handed = [NSEvent eventWithCGEvent:numbered];
+    CFRelease(numbered);
+  }
+  return handed;
+}
+
+- (NSEvent*)surfaceEvent:(NSEvent*)event {
+  return [self surfaceEvent:event
+                       type:event.type
+                         at:[self.window convertPointToScreen:event.locationInWindow]];
+}
+
+- (NSView*)target {
+  return ((HostPlateWindow*)self.window).surfaceView;
+}
+
+- (BOOL)acceptsFirstMouse:(NSEvent*)event {
+  return [self.target acceptsFirstMouse:event ? [self surfaceEvent:event] : nil];
+}
+
+- (BOOL)acceptsFirstResponder {
+  return NO;
+}
+
+- (BOOL)mouseDownCanMoveWindow {
+  return NO;
+}
+
+- (void)mouseDown:(NSEvent*)event {
+  [self.target mouseDown:[self surfaceEvent:event]];
+}
+
+- (void)mouseDragged:(NSEvent*)event {
+  [self.target mouseDragged:[self surfaceEvent:event]];
+}
+
+- (void)mouseUp:(NSEvent*)event {
+  [self.target mouseUp:[self surfaceEvent:event]];
+}
+
+- (void)rightMouseDown:(NSEvent*)event {
+  [self.target rightMouseDown:[self surfaceEvent:event]];
+}
+
+- (void)rightMouseDragged:(NSEvent*)event {
+  [self.target rightMouseDragged:[self surfaceEvent:event]];
+}
+
+- (void)rightMouseUp:(NSEvent*)event {
+  [self.target rightMouseUp:[self surfaceEvent:event]];
+}
+
+- (void)otherMouseDown:(NSEvent*)event {
+  [self.target otherMouseDown:[self surfaceEvent:event]];
+}
+
+- (void)otherMouseDragged:(NSEvent*)event {
+  [self.target otherMouseDragged:[self surfaceEvent:event]];
+}
+
+- (void)otherMouseUp:(NSEvent*)event {
+  [self.target otherMouseUp:[self surfaceEvent:event]];
+}
+
+- (void)mouseMoved:(NSEvent*)event {
+  [self.target mouseMoved:[self surfaceEvent:event]];
+}
+
+- (void)mouseEntered:(NSEvent*)event {
+  const NSPoint at = [self.window convertPointToScreen:event.locationInWindow];
+  [self.target mouseMoved:[self surfaceEvent:event type:NSEventTypeMouseMoved at:at]];
+}
+
+// A move outside the surface's window, as GPUI's leave is on Linux and Windows: the pointer is off
+// the plate, and its margin lets the pointer through. Not while a button is down, as the drags and
+// the release that follow still come here, with the pointer's place.
+- (void)mouseExited:(NSEvent*)event {
+  if (NSEvent.pressedMouseButtons) {
+    return;
+  }
+  NSWindow* surface = ((HostPlateWindow*)self.window).surface;
+  const NSPoint outside = NSMakePoint(-1, NSHeight(surface.frame) + 1);
+  [self.target mouseMoved:[self surfaceEvent:event
+                                        type:NSEventTypeMouseMoved
+                                          at:[surface convertPointToScreen:outside]]];
+}
+
+// None of the three scrolls, and a scroll on its plate went to the surface's view, which had
+// nothing for it, and not to the page.
+- (void)scrollWheel:(NSEvent*)event {
+}
+@end
+
+// Makes the plate window for |view|, in |surface|, and named |name| in its log lines.
+HostPlateWindow* MakePlateWindow(NSWindow* surface, NSView* view, NSString* name) {
+  HostPlateWindow* plate = [[HostPlateWindow alloc] initWithContentRect:NSZeroRect
+                                                              styleMask:NSWindowStyleMaskBorderless
+                                                                backing:NSBackingStoreBuffered
+                                                                  defer:NO];
+  plate.surface = surface;
+  plate.surfaceView = view;
+  plate.name = name;
+  plate.releasedWhenClosed = NO;
+  plate.opaque = NO;
+  plate.backgroundColor = NSColor.clearColor;
+  plate.hasShadow = NO;
+  plate.animationBehavior = NSWindowAnimationBehaviorNone;
+  plate.excludedFromWindowsMenu = YES;
+  plate.movable = NO;
+  // Set, rather than left to its default, so the window server gives it the whole of its frame and
+  // not only what it draws, which is nothing.
+  plate.ignoresMouseEvents = NO;
+  plate.contentView = [[HostPlateView alloc] initWithFrame:NSZeroRect];
+  return plate;
+}
+
+void PlacePlateWindow(HostPlateWindow* plate, NSWindow* parent, NSRect rect);
+
 // The view the link preview's page goes in, over the UI's: flipped, so the core places the page
 // from its top left at any size, and the mouse goes through it but for the page.
 @interface HostPageHolder : NSView
@@ -561,16 +751,16 @@ void PlaceFootBar() {
 
 // Arrange's mini bar, the browser window it shows over, and where: the bar's frame in points from
 // the top left of that window's content (host_show_mini_bar), and how far its window reaches past
-// the bar, for the shadow the bar draws, where the mouse goes through. A window is all or nothing
-// for the mouse, so a monitor hears the pointer move on and off the bar while it shows.
+// the bar, for the shadow the bar draws, where the mouse goes through. The bar takes the mouse
+// through its plate window.
 Browser* g_mini_bar_over;
 NSWindow* g_mini_bar;
 NSView* g_mini_bar_view;
+HostPlateWindow* g_mini_bar_plate_window;
 bool g_mini_bar_shown = false;
 unsigned g_mini_bar_changes = 0;
 NSRect g_mini_bar_place;
 double g_mini_bar_margin = 0;
-id g_mini_bar_monitor;
 
 void PlaceMiniBar() {
   NSWindow* window = g_mini_bar_over->window;
@@ -580,22 +770,16 @@ void PlaceMiniBar() {
                                   NSMaxY(content) - NSMinY(frame) - NSHeight(frame),
                                   NSWidth(frame), NSHeight(frame))
                display:NO];
+  PlacePlateWindow(g_mini_bar_plate_window, window,
+                   NSMakeRect(g_mini_bar_margin, g_mini_bar_margin, NSWidth(g_mini_bar_place),
+                              NSHeight(g_mini_bar_place)));
 }
 
-// Lets the mouse through the mini bar's window but on the bar, with the pointer at |screen|.
-void PlaceMiniBarClicks(NSPoint screen) {
-  NSPoint at = [g_mini_bar convertPointFromScreen:screen];
-  at.y = NSHeight(g_mini_bar.frame) - at.y;
-  const NSRect bar = NSMakeRect(g_mini_bar_margin, g_mini_bar_margin, NSWidth(g_mini_bar_place),
-                                NSHeight(g_mini_bar_place));
-  g_mini_bar.ignoresMouseEvents = !NSPointInRect(at, bar);
-}
-// Whether the toast has buttons, so its plate takes clicks; its window's margin, where its shadow
-// falls, never does. The plate, from the window's top left, and the monitor that hears the pointer
-// move on and off it, since a window is all or nothing for the mouse.
+// Whether the toast has buttons, so its plate takes clicks, through its plate window; its window's
+// margin, where its shadow falls, never does. The plate, from the window's top left.
 bool g_toast_takes = false;
 NSRect g_toast_plate = NSZeroRect;
-id g_toast_monitor;
+HostPlateWindow* g_toast_plate_window;
 
 // The tooltip's window and view, the browser it shows over, where its top left goes there, and a
 // count of its shows and hides, so a fade's end doesn't hide one shown since.
@@ -613,16 +797,19 @@ unsigned g_tooltip_changes = 0;
 void (*g_tooltip_away)(void);
 
 // The hover card's window and view, as the tooltip's, and the plate in it, from the window's top
-// left, which alone takes the mouse, for its buttons; while it shows, the monitor that hears the
-// pointer move on and off the plate and a press, a scroll or a key outside it, which end it.
+// left, which alone takes the mouse, for its buttons, through its plate window; while it shows,
+// the monitor that hears the pointer move on and off the plate and a press or a scroll outside it,
+// which end it, and whether the card was last told the pointer is on its plate.
 Browser* g_card_over;
 NSWindow* g_card;
 NSView* g_card_view;
+HostPlateWindow* g_card_plate_window;
 bool g_card_shown = false;
 double g_card_left = 0;
 double g_card_top = 0;
 double g_card_margin = 0;
 NSRect g_card_plate = NSZeroRect;
+bool g_card_pointer_on = false;
 unsigned g_card_changes = 0;
 void (*g_card_away)(void);
 id g_card_monitor;
@@ -727,7 +914,8 @@ constexpr NSWindowLevel kOverLevel = NSNormalWindowLevel + 1;
 // Chromium levels itself.
 bool IsOurs(NSWindow* child) {
   static Class panel = NSClassFromString(@"GPUIPanel");
-  return [child isKindOfClass:panel] || child.class == NSWindow.class;
+  return [child isKindOfClass:panel] || child.class == NSWindow.class ||
+         child.class == HostPlateWindow.class;
 }
 
 // A window above the normal level defaults to transient, which Spaces and Mission Control treat
@@ -761,6 +949,51 @@ void LevelOver(NSWindow* parent, bool raised) {
 void AddOver(NSWindow* parent, NSWindow* child) {
   SetOverLevel(child, parent, NSApp.active && parent.mainWindow);
   [parent addChildWindow:child ordered:NSWindowAbove];
+}
+
+// Takes |plate| off screen, in the same turn as its surface goes or stops taking clicks.
+void HidePlateWindow(HostPlateWindow* plate) {
+  if (!plate.parentWindow && !plate.visible) {
+    return;
+  }
+  [plate.parentWindow removeChildWindow:plate];
+  [plate orderOut:nil];
+  fprintf(stderr, "browser: plate window %s hidden\n", plate.name.UTF8String);
+}
+
+// Puts |plate| exactly over |rect|, the plate its surface draws, from the top left of the
+// surface's window, and on screen just above the surface, over |parent|. It's off screen while
+// there's no plate or the surface isn't over |parent|.
+void PlacePlateWindow(HostPlateWindow* plate, NSWindow* parent, NSRect rect) {
+  NSWindow* surface = plate.surface;
+  if (!plate || !parent || NSIsEmptyRect(rect) || surface.parentWindow != parent) {
+    HidePlateWindow(plate);
+    return;
+  }
+  const NSRect frame = surface.frame;
+  const NSRect over = NSMakeRect(NSMinX(frame) + NSMinX(rect), NSMaxY(frame) - NSMaxY(rect),
+                                 NSWidth(rect), NSHeight(rect));
+  const bool moved = !NSEqualRects(plate.frame, over);
+  if (moved) {
+    [plate setFrame:over display:NO];
+  }
+  const bool added = plate.parentWindow != parent;
+  if (added) {
+    [plate.parentWindow removeChildWindow:plate];
+    AddOver(parent, plate);
+    [plate orderWindow:NSWindowAbove relativeTo:surface.windowNumber];
+  }
+  if (moved || added) {
+    // Where the window is and where its surface's plate is, from the browser window's content's
+    // top left, for check.sh to compare.
+    const NSRect content = [parent contentRectForFrameRect:parent.frame];
+    const NSRect at = plate.frame;
+    fprintf(stderr,
+            "browser: plate window %s at %.0f,%.0f %.0fx%.0f, its plate at %.0f,%.0f %.0fx%.0f\n",
+            plate.name.UTF8String, NSMinX(at) - NSMinX(content), NSMaxY(content) - NSMaxY(at),
+            NSWidth(at), NSHeight(at), NSMinX(over) - NSMinX(content),
+            NSMaxY(content) - NSMaxY(over), NSWidth(over), NSHeight(over));
+  }
 }
 
 // The menus AppKit tracks now, the menu bar's and context menus alike, and what waits for them
@@ -1066,6 +1299,12 @@ void SetCaptureCursor() {
   [(g_capture_camera ? g_capture_cursor : NSCursor.arrowCursor) set];
 }
 
+// The toast's plate window, over its plate while the toast shows with buttons.
+void PlaceToastPlate() {
+  PlacePlateWindow(g_toast_plate_window,
+                   g_toast_shown && g_toast_takes ? g_toast_over->window : nil, g_toast_plate);
+}
+
 // At the browser window's top right corner, where the toast draws itself, or in a split view at the
 // focused pane's (host_set_pane_corner), and as wide as that page, so no toast runs past it.
 void PlaceToast() {
@@ -1076,6 +1315,7 @@ void PlaceToast() {
   [g_toast setFrame:NSMakeRect(left, NSMaxY(frame) - g_toast_over->page_top - height,
                                std::max(right - left, 0.0), height)
             display:NO];
+  PlaceToastPlate();
 }
 
 // Where the UI asked, which it has kept inside the browser window, or the overlay it shows over:
@@ -1098,6 +1338,7 @@ void PlaceHoverCard() {
   NSSize size = g_card.frame.size;
   [g_card setFrameOrigin:NSMakePoint(NSMinX(content) + g_card_left - g_card_margin,
                                      NSMaxY(content) - g_card_top + g_card_margin - size.height)];
+  PlacePlateWindow(g_card_plate_window, window, g_card_plate);
 }
 
 // As the tooltip's: where the UI asked, inside the browser window, and its window wider than the
@@ -4350,55 +4591,14 @@ void host_share_png(const uint8_t* png,
   fprintf(stderr, "browser: capture share menu shown\n");
 }
 
-// Lets the mouse through the toast's window, unless it has buttons and the pointer, at |screen|, is
-// on its plate. |event| is the number of the move that put it there, or -1 for none.
-void PlaceToastClicks(NSPoint screen, NSInteger event = -1) {
-  NSPoint at = [g_toast convertPointFromScreen:screen];
-  at.y = NSHeight(g_toast.frame) - at.y;
-  const bool passed = g_toast.ignoresMouseEvents;
-  g_toast.ignoresMouseEvents = !(g_toast_takes && NSPointInRect(at, g_toast_plate));
-  // A move the window server sends has a number and one the app posts, as the driver's, has 0, so
-  // this tells a toast the real pointer left from one a check's pointer did (#3611).
-  if (passed != g_toast.ignoresMouseEvents) {
-    fprintf(stderr, "browser: pointer %s the toast's plate at %.0f,%.0f, event %ld\n",
-            passed ? "on" : "off", at.x, at.y, (long)event);
-  }
-}
-
 void host_toast_takes_clicks(bool takes) {
   g_toast_takes = takes;
-  if (!takes) {
-    [NSEvent removeMonitor:g_toast_monitor];
-    g_toast_monitor = nil;
-    if (!g_toast.ignoresMouseEvents) {
-      fprintf(stderr, "browser: pointer off the toast's plate, its buttons gone\n");
-    }
-    g_toast.ignoresMouseEvents = YES;
-    return;
-  }
-  // The page's view takes the pointer's moves while it's over the page, so the toast's window
-  // doesn't hear them. Only while the toast has buttons, so an idle browser is never woken.
-  if (!g_toast_monitor) {
-    g_toast_monitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskMouseMoved
-                                                            handler:^NSEvent*(NSEvent* event) {
-                                                              NSPoint at = event.locationInWindow;
-                                                              if (event.window) {
-                                                                at = [event.window
-                                                                    convertPointToScreen:at];
-                                                              }
-                                                              PlaceToastClicks(
-                                                                  at, event.eventNumber);
-                                                              return event;
-                                                            }];
-  }
-  PlaceToastClicks(Pointer());
+  PlaceToastPlate();
 }
 
 void host_set_toast_plate(double x, double y, double width, double height) {
   g_toast_plate = NSMakeRect(x, y, width, height);
-  if (g_toast_takes) {
-    PlaceToastClicks(Pointer());
-  }
+  PlaceToastPlate();
 }
 
 void host_add_toast(void* toast_view) {
@@ -4411,6 +4611,7 @@ void host_add_toast(void* toast_view) {
   g_toast.ignoresMouseEvents = YES;
   // Its undo is a click, and the keyboard stays with the browser window, where ⌘Z is.
   NeverKey(g_toast);
+  g_toast_plate_window = MakePlateWindow(g_toast, g_toast_view, @"toast");
 }
 
 void host_show_toast(void* ui_view) {
@@ -4451,6 +4652,7 @@ void host_show_toast(void* ui_view) {
     [g_toast_view.layer displayIfNeeded];
     AddOver(browser->window, g_toast);
     RaiseOverlays(browser, g_toast);
+    PlaceToastPlate();
     fprintf(stderr, "browser: toast window shown\n");
   });
 }
@@ -4461,6 +4663,7 @@ void host_hide_toast(void) {
   }
   g_toast_shown = false;
   g_toast_plate = NSZeroRect;
+  HidePlateWindow(g_toast_plate_window);
   [g_toast_over->window removeChildWindow:g_toast];
   [g_toast orderOut:nil];
 }
@@ -4528,6 +4731,7 @@ void host_add_mini_bar(void* mini_bar_view, double margin) {
   // Its buttons take clicks, and the keyboard stays with the browser window, where the page has
   // the mode's keys.
   NeverKey(g_mini_bar);
+  g_mini_bar_plate_window = MakePlateWindow(g_mini_bar, g_mini_bar_view, @"mini bar");
 }
 
 void host_show_mini_bar(void* ui_view, double x, double y, double width, double height) {
@@ -4551,24 +4755,10 @@ void host_show_mini_bar(void* ui_view, double x, double y, double width, double 
     PlaceMiniBar();
     [g_mini_bar_view.layer setNeedsDisplay];
     [g_mini_bar_view.layer displayIfNeeded];
-    // The page's view takes the pointer's moves while it's over the page, so the bar's window
-    // doesn't hear them. Only while it shows, so an idle browser is never woken.
-    if (!g_mini_bar_monitor) {
-      g_mini_bar_monitor =
-          [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskMouseMoved
-                                                handler:^NSEvent*(NSEvent* event) {
-                                                  NSPoint at = event.locationInWindow;
-                                                  if (event.window) {
-                                                    at = [event.window convertPointToScreen:at];
-                                                  }
-                                                  PlaceMiniBarClicks(at);
-                                                  return event;
-                                                }];
-    }
-    PlaceMiniBarClicks(Pointer());
     if (g_mini_bar.parentWindow != browser->window) {
       AddOver(browser->window, g_mini_bar);
       RaiseOverlays(browser, g_mini_bar);
+      PlaceMiniBar();
       fprintf(stderr, "browser: mini bar shown\n");
     }
   });
@@ -4593,12 +4783,7 @@ void host_hide_mini_bar(void) {
   g_mini_bar_shown = false;
   // Cancels a show still waiting for the bar to draw.
   ++g_mini_bar_changes;
-  // A show still waiting hasn't added it.
-  if (g_mini_bar_monitor) {
-    [NSEvent removeMonitor:g_mini_bar_monitor];
-    g_mini_bar_monitor = nil;
-  }
-  g_mini_bar.ignoresMouseEvents = YES;
+  HidePlateWindow(g_mini_bar_plate_window);
   [g_mini_bar.parentWindow removeChildWindow:g_mini_bar];
   [g_mini_bar orderOut:nil];
   fprintf(stderr, "browser: mini bar hidden\n");
@@ -4749,6 +4934,7 @@ void host_add_hover_card(void* card_view, double margin, void (*away)(void)) {
   // A click on its buttons leaves the keyboard where it was, in the page or the browser window, as
   // the browser window losing it ends the card before the click reaches the button (#818).
   NeverKey(g_card);
+  g_card_plate_window = MakePlateWindow(g_card, g_card_view, @"hover card");
   NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
   void (^left_window)(NSNotification*) = ^(NSNotification*) {
     if (g_card_shown && g_card_away) {
@@ -4769,34 +4955,19 @@ void host_add_hover_card(void* card_view, double margin, void (*away)(void)) {
                   usingBlock:left_window];
 }
 
-// Lets the mouse through the card's window but on its plate, with the pointer at |screen|. Returns
-// whether that changed, as the pointer came onto the plate or left it.
-bool PlaceCardClicks(NSPoint screen) {
+// Whether the pointer at |screen| is on the card's plate.
+bool OnCardPlate(NSPoint screen) {
   NSPoint at = [g_card convertPointFromScreen:screen];
   at.y = NSHeight(g_card.frame) - at.y;
-  const bool was = g_card.ignoresMouseEvents;
-  g_card.ignoresMouseEvents = !NSPointInRect(at, g_card_plate);
-  return was != g_card.ignoresMouseEvents;
+  return NSPointInRect(at, g_card_plate);
 }
 
-// The move onto the plate or off it, to |screen|, went to the window under it, so the card hears
-// it too: on it, or the card would go as the row is left with the pointer on it, and off it, or a
-// hidden sidebar would stay out for it (#830).
-void MovedOverCard(NSPoint screen, NSEvent* move) {
-  [g_card_view mouseMoved:[NSEvent mouseEventWithType:NSEventTypeMouseMoved
-                                             location:[g_card convertPointFromScreen:screen]
-                                        modifierFlags:move.modifierFlags
-                                            timestamp:move.timestamp
-                                         windowNumber:g_card.windowNumber
-                                              context:nil
-                                          eventNumber:0
-                                           clickCount:0
-                                             pressure:0]];
-}
-
-// The pointer moved, or dragged, to where |move| says: the card takes the mouse there or doesn't,
-// and hears the move that changes that. The reveal's monitor asks it first, and the card's own
-// then finds nothing changed.
+// The pointer moved, or dragged, to where |move| says, and the card hears a move that takes it
+// onto its plate or off it before the window under the pointer has it: on it, or the card would go
+// as the row is left with the pointer on it, and off it, or a hidden sidebar would stay out for it
+// (#830). The reveal's monitor asks it first, so the reveal knows the pointer is on the card, and
+// the card's own then finds nothing changed. A move the driver posts brings no tracking area's
+// exit, so this tells the card the pointer left when the plate window can't.
 void CardHearsMove(NSEvent* move) {
   if (!g_card_monitor) {
     return;
@@ -4805,15 +4976,28 @@ void CardHearsMove(NSEvent* move) {
   if (move.window) {
     at = [move.window convertPointToScreen:at];
   }
-  if (PlaceCardClicks(at) && move.window != g_card && move.type == NSEventTypeMouseMoved) {
-    MovedOverCard(at, move);
+  const bool on = OnCardPlate(at);
+  if (on == g_card_pointer_on) {
+    return;
+  }
+  g_card_pointer_on = on;
+  if (move.type == NSEventTypeMouseMoved) {
+    [g_card_view mouseMoved:[NSEvent mouseEventWithType:NSEventTypeMouseMoved
+                                               location:[g_card convertPointFromScreen:at]
+                                          modifierFlags:move.modifierFlags
+                                              timestamp:move.timestamp
+                                           windowNumber:g_card.windowNumber
+                                                context:nil
+                                            eventNumber:0
+                                             clickCount:0
+                                               pressure:0]];
   }
 }
 
 // The pointer's moves over the page go to the page's view, so the card's window doesn't hear them:
-// this sets where it takes the mouse from them, and ends the card on a press or a scroll anywhere
-// else, which still go where they were aimed. The UI ends it on a key. Only while it shows, so an
-// idle browser is never woken.
+// this tells the card of those onto its plate and off it, and ends the card on a press or a scroll
+// anywhere else, which still go where they were aimed. The UI ends it on a key. Only while it
+// shows, so an idle browser is never woken.
 void WatchCard() {
   if (g_card_monitor) {
     return;
@@ -4825,7 +5009,9 @@ void WatchCard() {
                                            kEnds
                                    handler:^NSEvent*(NSEvent* event) {
                                      if (NSEventMaskFromType(event.type) & kEnds) {
-                                       if (event.window != g_card && g_card_shown && g_card_away) {
+                                       if (event.window != g_card &&
+                                           event.window != g_card_plate_window && g_card_shown &&
+                                           g_card_away) {
                                          g_card_away();
                                        }
                                        return event;
@@ -4870,9 +5056,10 @@ void host_show_hover_card(void* ui_view, double left, double top, double width, 
       [g_card.parentWindow removeChildWindow:g_card];
       AddOver(browser->window, g_card);
       RaiseOverlays(browser, g_card);
+      PlacePlateWindow(g_card_plate_window, browser->window, g_card_plate);
     }
     WatchCard();
-    PlaceCardClicks(Pointer());
+    g_card_pointer_on = OnCardPlate(Pointer());
     // check.sh waits for this line, and for the UI's "hover card settled" before a capture.
     fprintf(stderr, "browser: hover card window shown\n");
   });
@@ -4882,7 +5069,7 @@ void host_hide_hover_card() {
   g_card_shown = false;
   // A show still waiting to draw doesn't come after.
   ++g_card_changes;
-  g_card.ignoresMouseEvents = YES;
+  HidePlateWindow(g_card_plate_window);
   [NSEvent removeMonitor:g_card_monitor];
   g_card_monitor = nil;
   [g_card.parentWindow removeChildWindow:g_card];

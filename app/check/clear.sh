@@ -134,11 +134,10 @@ switch "2 cmd" "$c"
 
 # Share on ⇧⌘C's toast, where there's a share sheet, shares the tab's page as Site Controls' Share
 # does; a driven run logs it and shows no sheet. The toast's window is at the page's top left, 228
-# and 10 into the window, and Share is the plate's last chip, 31 wide and 14 in from its right. The
-# window lets the pointer through until a move over its plate, so the first move has it take the
-# pointer and the toast hears the second, as window.sh's new tab's toast does. The toast leaves
-# after 2 s, so the pointer goes on Share at once, which keeps it past its time, and $2, if any, runs
-# before the click, as the window's capture.
+# and 10 into the window, and Share is the plate's last chip, 31 wide and 14 in from its right. It
+# moves there twice, as window.sh's new tab's toast does. The toast leaves after 2 s, so the pointer
+# goes on Share at once, which keeps it past its time, and $2, if any, runs before the click, as the
+# window's capture.
 share_from_url_toast() {
   [ "$(uname)" != Linux ] || return 0
   local what=$1 then=${2:-} share first_move
