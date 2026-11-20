@@ -1057,6 +1057,8 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         .collect();
     ad_block_host::keep_cache_in(&args);
     if std::env::var_os("BROWSER_DRIVE").is_some() {
+        // The checks read where GPUI loses input, which no one else needs (#3329).
+        gpui::log_input(true);
         #[cfg(target_os = "linux")]
         drive::start();
         #[cfg(not(target_os = "linux"))]
