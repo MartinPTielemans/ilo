@@ -1,0 +1,23 @@
+Chrome's passkeys page (chrome://settings/passkeys, which Settings › Passwords › Manage Passkeys…
+opens) says under its title that the passkeys "aren't saved to your Google Account". ilo signs in to
+no Google account, so its words say only where they are: on this Mac, or in Windows Hello on this
+computer (#3619). The page's other words and its edit and delete dialogs name no account. A changed
+message has no translation until one is written, so other languages show these English words.
+
+--- a/chrome/app/settings_strings.grdp
++++ b/chrome/app/settings_strings.grdp
+@@ -838,12 +838,12 @@
+       </message>
+     <if expr="is_win">
+       <message name="IDS_AUTOFILL_MANAGE_PASSKEYS_SUB_TITLE_WIN" desc="A warning on a page where the user can see and delete passkeys saved on their computer. It communicates that the passkeys shown are stored in Windows Hello, which is a Microsoft product name, and not in the user's Google account. For consistency, the word 'passkey' is in the glossary with translations already suggested.">
+-        These passkeys are saved to Windows Hello on this computer. They aren't saved to your Google Account.
++        These passkeys are saved to Windows Hello on this computer.
+       </message>
+     </if>
+     <if expr="is_macosx">
+       <message name="IDS_AUTOFILL_MANAGE_PASSKEYS_SUB_TITLE_MAC" desc="A warning on a page where the user can see and delete passkeys saved on their computer. For consistency, the word 'passkey' is in the glossary with translations already suggested.">
+-        These passkeys are only saved on this device. They aren't saved to your Google Account.
++        These passkeys are saved on this Mac and nowhere else.
+       </message>
+     </if>
+       <message name="IDS_AUTOFILL_MANAGE_PASSKEYS_SEARCH" desc="The label on a field that a user can use to search within a list of passkeys. For consistency, the word 'passkey' is in the glossary with translations already suggested.">

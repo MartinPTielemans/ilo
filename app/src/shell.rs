@@ -310,6 +310,10 @@ const REVEAL_OVERSHOOT: f32 = 8.;
 
 /// The site's demo, in a page's canvas, where wheel events carry no phase.
 const WEB: bool = cfg!(target_family = "wasm");
+/// Whether something blurs what's behind the browser window. Only the Mac's material does: on
+/// Wayland the UI is a subsurface under Chromium's translucent surface, which no compositor's
+/// blur reaches, and on X11 and Windows nothing asks for one (#3676).
+const BLURRED: bool = cfg!(target_os = "macos");
 
 /// The width of the band inside the browser window's edges that resizes it on Linux, as the core's
 /// (`bc_window_start_resize`).
@@ -1881,6 +1885,15 @@ pub struct Shell {
     /// What an agent asks the user first, in every window (agent_question.rs).
     agent_question: Option<crate::agents::Question>,
     agent_question_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Each row of a card of several changes as it was drawn, its text and where the agent's mark
+    /// is in it, which the tests read.
+    #[cfg(test)]
+    agent_question_rows: RefCell<Vec<(gpui::TextLayout, std::ops::Range<usize>)>>,
+    /// Where the request card's "See the whole request" is, which check.sh clicks (#3548).
+    agent_request_see_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The request card's "See the whole request", where Escape in the whole request puts the
+    /// keyboard back (#3548).
+    agent_request_see: FocusHandle,
     /// Every Space's agent tasks' cards, newest first, as the Agents last said (Agent task).
     task_cards: Vec<crate::agents::task::Card>,
     /// The window's tasks' plates at the sidebar's foot, and ⌘T's slot among them.
@@ -2035,9 +2048,10 @@ pub struct Shell {
     /// Whether Top bar is on, as `TopBar` said as the window last drew (`Shell::bar_on`).
     top_bar: bool,
     forced_tone: Option<Tone>,
-    /// What lies under the tint where nothing else does: the preview's, whose window has no
-    /// material and shows the desktop through the tint, as the app's never does (#3033).
-    ground: Option<Rgba>,
+    /// Whether something blurs what's behind the window under its tint, as the Mac's material
+    /// does. Where nothing does, the tint would show what's behind sharp, so the window draws its
+    /// look opaque, over the stand-in (#3676).
+    blurred: bool,
     window_active: bool,
     window_watches: Vec<Subscription>,
     /// Whether the window is the one the user is in, as the host says (host_watch_window_main):
@@ -2340,6 +2354,10 @@ impl Shell {
             question_settling: RefCell::default(),
             agent_question: None,
             agent_question_drawn: Rc::default(),
+            #[cfg(test)]
+            agent_question_rows: RefCell::default(),
+            agent_request_see_drawn: Rc::default(),
+            agent_request_see: cx.focus_handle(),
             task_cards: Vec::new(),
             foot: task_cards::Foot::default(),
             closed_task: None,
@@ -2427,7 +2445,7 @@ impl Shell {
             right: false,
             top_bar: false,
             forced_tone: None,
-            ground: None,
+            blurred: BLURRED,
             window_active: true,
             window_main: true,
             nav_dimmed_drawn: Cell::new(None),
@@ -5189,8 +5207,9 @@ impl Shell {
                     .children(self.chooser_card(cx))
                     .children(self.pair_card(cx))
                     .children(self.cast_card(cx))
-                    .children(self.agent_question_card(cx))
                     .children(self.task_foot(cx))
+                    // Over the tasks' plates, which a tall request's card reaches past (#3548).
+                    .children(self.agent_question_card(cx))
                     // Over the tasks' plates, which its open grows over.
                     .children(self.media_player_cards(cx))
                     // Over the players and the task's foot, which it opens over.

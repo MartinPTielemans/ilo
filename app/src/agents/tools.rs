@@ -12,7 +12,9 @@ pub const INSTRUCTIONS: &str = concat!(
     " is the user's own browser, signed in wherever they are. You work in tabs of your own, \
      which the user can watch on a card in their sidebar with your name; your tabs never take \
      their focus. You can only see and use your own tabs, never the user's, and never \
-     passwords, cookies or autofill.\n\n\
+     passwords, cookies or autofill. When you know what the user asked of you, call title with \
+     a name for it in two to four words, as a tab's title reads, such as “Refund order 1179”, \
+     alongside your first call; call it again only if you move on to another task.\n\n\
      Open a page with open_tab, then click, type, press_key and scroll by ref (like e12), using \
      the page's outline. A new page answers with its outline whole; an action on the same page \
      answers with what changed in it since the last outline you had, and snapshot gives it whole \
@@ -25,13 +27,16 @@ pub const INSTRUCTIONS: &str = concat!(
      takes one out, and list_split says which are together.\n\n\
      Payments, orders, sending messages, banks' sites and every request that may change \
      something ask the user first. If they say no, \
-     don't try again. You can never type into a password field: a sign-in, a 2FA prompt or a \
-     CAPTCHA is the user's to do, so hand the tab to them with hand_off. The user can take a tab \
-     over too; it's theirs until they hand it back, and ask_for_tab asks them for it. Use \
+     don't try again. You can never type into a password field: a sign-in, a 2FA prompt, a \
+     CAPTCHA or a file field is the user's to do, so hand the tab to them with hand_off, and take a snapshot \
+     once they hand it back, as its page will have changed. The user can take a tab over too, \
+     on purpose: it's theirs until they hand it back. Carry on in your other tabs, and only \
+     when the task can't go on without that one, ask for it with ask_for_tab, saying why. Use \
      run_steps for several actions in a row.\n\n\
-     When the same steps repeat across pages, open them all in one turn, then do each step on all \
-     of them in one turn, one call per tab with its tab. Calls on different tabs run at the same \
-     time."
+     Give every call its tab once you have more than one: one without acts on the tab you used \
+     last. When the same steps repeat across pages, open them all in one turn, then do each step \
+     on all of them in one turn, one call per tab with its tab. Calls on different tabs run at \
+     the same time, so that's faster than one tab after another."
 );
 /// What a task's CLI is told, after its own system prompt (Agent task).
 pub const TASK_INSTRUCTIONS: &str = concat!(
@@ -43,14 +48,16 @@ pub const TASK_INSTRUCTIONS: &str = concat!(
      search, so find everything with the browser.\n\n\
      First call title with a name for the task in two to four words and at most 24 characters, as \
      a tab's title reads, such as “Lisbon museum hours”.\n\n\
-     When the same steps repeat across pages, such as one change on ten cases, open them all in \
-     one turn, then do each step on all of them in one turn, one call per tab with its tab. Calls \
-     on different tabs run at the same time.\n\n\
+     Give every call its tab once you have more than one: one without acts on the tab you used \
+     last. When the same steps repeat across pages, such as one change on ten cases, open them \
+     all in one turn, then do each step on all of them in one turn, one call per tab with its \
+     tab. Calls on different tabs run at the same time, so that's faster than one tab after \
+     another.\n\n\
      When you need the user to choose or confirm something, call ask with the question in one \
      short sentence, what they need to know to answer as its context, and up to three short \
      answers when there are a few to pick from. It waits for their answer.\n\n\
      Never ask for a password, a one-time code or a card number in the conversation. A sign-in, \
-     a 2FA prompt or a CAPTCHA is the user's to do: hand them the tab with hand_off.\n\n\
+     a 2FA prompt, a CAPTCHA or a file field is the user's to do: hand them the tab with hand_off.\n\n\
      Never pay, and never place an order, book or send a message unless the user asked you to. \
      When the work ends on a page only the user may finish, such as a checkout, stop there.\n\n\
      When you're done, call finish with the result in a sentence or two, and its summary in one \
@@ -68,8 +75,8 @@ pub fn list(agent: &str) -> Value {
         match super::is_task(agent) {
             true => tools.extend(task_tools()),
             // A task's pages live in the task, in a Space the user doesn't see, so only an agent
-            // from outside pins.
-            false => tools.extend(pin_tools()),
+            // from outside pins. It names its session as a task names itself (#3690).
+            false => tools.extend(pin_tools().into_iter().chain([title_tool()])),
         }
     }
     tools
@@ -117,28 +124,34 @@ fn pin_tools() -> Vec<Value> {
         json!({
             "name": "sort_tabs_by_site",
             "title": "Sort tabs by site",
-            "description": "Sort your Today tabs by site, as the user's Sort Today Tabs by Site does: each site's tabs come together at its first tab's place, in the order they were in. A site is a registrable domain, so docs.example.com and example.com are one. Pinned tabs stay where they are; a split view or a page off the web joins no site and keeps its order among the rest, so sites gathered from below it come above it. Nothing loads or closes. Answers with the new order.",
+            "description": "Sort your Today tabs by site, as the user's Sort Today Tabs by Site does: each site's tabs come together at its first tab's place, in the order they were in. A site is a registrable domain, so docs.example.com and example.com are one. Pinned tabs stay where they are; a split view, a page off the web or a tab the user holds joins no site and keeps its order among the rest, so sites gathered from below it come above it. Nothing loads or closes. Answers with the new order.",
             "inputSchema": { "type": "object", "properties": {} },
             "annotations": tabs,
         }),
     ]
 }
 
+/// The tool that names the task, a ⌘T task's and an outside agent's session alike: its card's
+/// title, in the agent's words, which take no tab and ask nothing (#3690).
+fn title_tool() -> Value {
+    json!({
+        "name": "title",
+        "title": "Name the task",
+        "description": "Name the task in two to four words and at most 24 characters, as a tab's title reads, such as “Lisbon museum hours”, for the user's sidebar.",
+        "inputSchema": {
+            "type": "object",
+            "properties": { "text": { "type": "string", "description": "The task's name, two to four words, at most 24 characters." } },
+            "required": ["text"],
+        },
+        "annotations": { "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false },
+    })
+}
+
 /// A task's own tools: its title, a question for the user, and finishing.
 fn task_tools() -> Vec<Value> {
     let own = json!({ "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false });
     vec![
-        json!({
-            "name": "title",
-            "title": "Name the task",
-            "description": "Name the task in two to four words and at most 24 characters, as a tab's title reads, such as “Lisbon museum hours”, for the user's sidebar.",
-            "inputSchema": {
-                "type": "object",
-                "properties": { "text": { "type": "string", "description": "The task's name, two to four words, at most 24 characters." } },
-                "required": ["text"],
-            },
-            "annotations": own,
-        }),
+        title_tool(),
         json!({
             "name": "ask",
             "title": "Ask the user",
@@ -196,7 +209,7 @@ fn task_tools() -> Vec<Value> {
 fn tab_schema() -> Value {
     json!({
         "type": "integer",
-        "description": "The tab's id, from list_tabs or open_tab. Without it, the tab you used last, else your first."
+        "description": "The tab's id, from list_tabs or open_tab. Give it whenever you have more than one tab: without it, the call takes the tab you used last, else your first."
     })
 }
 
@@ -218,7 +231,7 @@ fn shared() -> Value {
         {
             "name": "list_tabs",
             "title": "List tabs",
-            "description": "List your tabs, pinned first: each one's id, title and URL, then who pinned it if it's pinned. * marks the tab you used last.",
+            "description": "List your tabs, pinned first: each one's id, title and URL, then who pinned it if it's pinned. * marks the tab you used last. A tab the user holds, after a handoff or a take-over, is listed by its id with \"With the user until they hand it back\" and no title or URL, until they hand it back.",
             "inputSchema": { "type": "object", "properties": {} },
             "annotations": { "readOnlyHint": true, "openWorldHint": false },
         },
@@ -414,7 +427,7 @@ fn shared() -> Value {
         {
             "name": "request",
             "title": "Send HTTP requests",
-            "description": "Send HTTP requests from a tab's page to its own site, as the page's own script could, signed in as the page is: for a site's API, such as the JSON its page reads, when that's quicker than its pages. GET and HEAD go at once. Any other method may change something, so it asks the user first, every time: all of a call's changes in one question, and none is sent if they say no. The browser adds the page's cookies, which you never see; you can't set Cookie, Authorization or a header the browser sets. Answers with each request's status, type and text body, never its headers, with values that look like sign-in tokens or secrets hidden. They go one after another; one that gets no answer stops the rest.",
+            "description": "Send HTTP requests from a tab's page to its own site, as the page's own script could, signed in as the page is: for a site's API, such as the JSON its page reads, when that's quicker than its pages. GET and HEAD go at once, unless a method-override header names another method. Anything else may change something, so it asks the user first, every time: give each such request a what, one plain sentence in the user's terms saying what it will do, such as \"Close item 4127 as a duplicate of 4130.\" The user sees your sentence as yours, beside what the browser knows from the method and its override headers (sends, changes or deletes) and the site, so say plainly what it does. The browser reads no meaning into a body: a POST whose body says it's a delete, such as _method=DELETE, shows as sending data, and still asks. All of a call's changes are in one question, and none is sent if they say no. The browser adds the page's cookies, which you never see; you can't set Cookie, Authorization or a header the browser sets. Answers with each request's status, type and text body, never its headers, with values that look like sign-in tokens or secrets hidden. They go one after another; one that gets no answer stops the rest.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -429,6 +442,7 @@ fn shared() -> Value {
                                 "path": { "type": "string", "description": "A path on the tab's site, such as /api/items?page=2, or a whole address on it." },
                                 "headers": { "type": "object", "additionalProperties": { "type": "string" } },
                                 "body": { "description": "JSON, sent as application/json, or a string, sent as text unless headers give its Content-Type. 1 MB at most." },
+                                "what": { "type": "string", "maxLength": super::request::WHAT_MOST, "description": "For any method but GET and HEAD: one plain sentence saying what this request will do, shown to the user before they allow it. 120 characters show on the card; 500 at most." },
                             },
                             "required": ["method", "path"],
                         },
@@ -479,7 +493,7 @@ fn shared() -> Value {
         {
             "name": "hand_off",
             "title": "Hand off to the user",
-            "description": "Hand a tab to the user for a step only they may do: a sign-in, 2FA, a CAPTCHA, or a choice that's theirs. They're asked in the browser, and this waits until they hand the tab back. Meanwhile the tab is theirs, and calls on it are refused.",
+            "description": "Hand a tab to the user for a step only they may do: a sign-in, 2FA, a CAPTCHA, a file to put in a page, or a choice that's theirs. They're asked in the browser, and this waits until they hand the tab back. Meanwhile the tab is theirs, and calls on it are refused. Its page will have changed when it's back: take a snapshot before you act in it.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -493,7 +507,7 @@ fn shared() -> Value {
         {
             "name": "ask_for_tab",
             "title": "Ask for a tab back",
-            "description": "Ask the user to hand back a tab they took over. They're asked in the browser, and this waits for their answer: the tab back, or that they keep it. Don't ask again for a tab they keep.",
+            "description": "Ask the user to hand back a tab they took over, when your task can't go on without it. They took it on purpose, so say why you need it, and carry on in your other tabs if you can. They're asked in the browser, and this waits for their answer: the tab back, or that they keep it. Don't ask again for a tab they keep.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

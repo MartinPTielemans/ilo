@@ -1,5 +1,7 @@
 #include "browser_core/drm_request.h"
 
+#include <stdio.h>
+
 #include <set>
 #include <string>
 #include <string_view>
@@ -9,12 +11,20 @@
 #include "base/memory/weak_ptr.h"
 #include "base/strings/string_util.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
+#include "browser_core/ad_block.h"
 #include "browser_core/drm_request.mojom.h"
 #include "browser_core/host.h"
+#include "browser_core/protected_move_rule.h"
+#include "browser_core/session.h"
 #include "browser_core/system_engine.h"
 #include "browser_core/tab.h"
 #include "browser_core/widevine.h"
+#include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
+#include "chrome/browser/media/webrtc/media_stream_capture_indicator.h"
 #include "chrome/browser/profiles/profile.h"
+#include "components/performance_manager/public/graph/page_node.h"
+#include "components/performance_manager/public/performance_manager.h"
 #include "content/public/browser/document_service.h"
 #include "content/public/browser/page.h"
 #include "content/public/browser/web_contents.h"
@@ -23,6 +33,7 @@
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "url/gurl.h"
+#include "url/origin.h"
 
 namespace browser_core {
 
@@ -61,8 +72,57 @@ bool SameSite(const GURL& a, const GURL& b) {
       a, b, net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
 }
 
+// Whether the user put text into |contents|'s page: a key, an IME's text, a paste or a drop into a
+// field or editable content, as Chrome's Memory Saver keeps such a page. Space or K on a player
+// isn't one.
+bool HadUserEdits(content::WebContents* contents) {
+  base::WeakPtr<performance_manager::PageNode> page =
+      performance_manager::PerformanceManager::GetPrimaryPageNodeForWebContents(contents);
+  return page && page->HadUserEdits();
+}
+
+// Whether |contents| captures the camera, the microphone or the screen, which a reload would end.
+bool Capturing(content::WebContents* contents) {
+  const scoped_refptr<MediaStreamCaptureIndicator> capture =
+      MediaCaptureDevicesDispatcher::GetInstance()->GetMediaStreamCaptureIndicator();
+  return capture->IsCapturingUserMedia(contents) || capture->IsCapturingTab(contents) ||
+         capture->IsCapturingWindow(contents) || capture->IsCapturingDisplay(contents);
+}
+
+// What the rule needs to know of |frame|'s ask in |tab|'s page.
+ProtectedAsk AskOf(content::RenderFrameHost& frame, Tab& tab, content::WebContents* contents) {
+  const GURL& url = contents->GetLastCommittedURL();
+  Profile* profile = Profile::FromBrowserContext(contents->GetBrowserContext());
+  const bc_id id = Tab::IdOf(contents);
+  ProtectedAsk ask = {
+      .now = base::TimeTicks::Now(),
+      .allowed = url.SchemeIsHTTPOrHTTPS() && system_engine::Allowed(id),
+      .preview = system_engine::Previewing(id),
+      .kept_in_chromium = system_engine::KeptInChromium(profile, url),
+      .own_site = net::registry_controlled_domains::SameDomainOrHost(
+          frame.GetLastCommittedOrigin(), url::Origin::Create(url),
+          net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES),
+      .typed = HadUserEdits(contents),
+      .asks_before_leaving = tab.AsksBeforeLeaving(),
+      .capturing = Capturing(contents),
+  };
+  // Only presses on the asking page's document, which is the main frame's even for a frame's ask.
+  tab.presses().Fill(frame.GetPageUkmSourceId(), ask);
+  return ask;
+}
+
+// The moved note's word for the app: whether the ad blocker ran on the site, which the note says
+// doesn't run in the system's engine.
+const char* MovedNote(content::WebContents* contents) {
+  return UserSettings().ad_blocking &&
+                 !AdBlockingOffAt(contents->GetBrowserContext(), contents->GetLastCommittedURL())
+             ? "moved-ad-blocking"
+             : "moved";
+}
+
 // What the app has been told about one tab: the system a page of it was refused that ilo can't
-// play, until the tab goes to another site.
+// play, or why it didn't move, until the tab goes to another site; or that it moved, until its
+// next navigation.
 class Unsupported : public content::WebContentsObserver,
                     public content::WebContentsUserData<Unsupported> {
  public:
@@ -70,20 +130,38 @@ class Unsupported : public content::WebContentsObserver,
   Unsupported& operator=(const Unsupported&) = delete;
   ~Unsupported() override = default;
 
-  // The tab's document was refused |system|.
-  void Asked(const std::string& system) {
-    // Once for each system a document asks for, as pages ask again at every play. A site that was
-    // given one plays with it, as Netflix asks for Widevine before PlayReady on Windows.
+  // The tab's document was refused a system, and the note says |shown|: the system, or "typed" or
+  // "capturing" for why the tab didn't move.
+  void Asked(const std::string& shown) {
+    // Once for each a document asks for, as pages ask again at every play. A site that was given
+    // one plays with it, as Netflix asks for Widevine before PlayReady on Windows.
     const GURL& url = web_contents()->GetLastCommittedURL();
     if (NoteClosed(url) || (!played_at_.is_empty() && SameSite(url, played_at_)) ||
-        !asked_.insert(system).second) {
+        !asked_.insert(shown).second) {
       return;
     }
     if (shown_.empty()) {
       shown_at_ = web_contents()->GetLastCommittedURL();
     }
-    shown_ = system;
+    shown_ = shown;
     Changed();
+  }
+
+  // The user's press asked for what only the system's engine plays: the tab moves there, and the
+  // profile keeps the site, but never for a private window. Posted, as the page's call is part
+  // way through.
+  void Move() {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&Unsupported::Moving, weak_factory_.GetWeakPtr(),
+                                  web_contents()->GetLastCommittedURL()));
+  }
+
+  // The system page committed a document. The first is the moved page's own; the next is a
+  // navigation, which the moved note goes with.
+  void SystemPageCommitted() {
+    if (moved_ && ++moved_commits_ > 1) {
+      Forget();
+    }
   }
 
   bool shown() const { return !shown_.empty(); }
@@ -112,6 +190,7 @@ class Unsupported : public content::WebContentsObserver,
   // with it.
   void Forget() {
     asked_.clear();
+    moved_ = false;
     if (!shown_.empty()) {
       shown_.clear();
       Changed();
@@ -125,8 +204,39 @@ class Unsupported : public content::WebContentsObserver,
       : content::WebContentsObserver(contents),
         content::WebContentsUserData<Unsupported>(*contents) {}
 
+  void Moving(const GURL& url) {
+    Tab* tab = Tab::FromWebContents(web_contents());
+    // The tab went elsewhere meanwhile.
+    if (!tab || tab->system_page() || web_contents()->GetLastCommittedURL() != url) {
+      return;
+    }
+    const char* note = MovedNote(web_contents());
+    if (!tab->UseSystemEngine(url)) {
+      return;
+    }
+    Profile* profile = Profile::FromBrowserContext(web_contents()->GetBrowserContext());
+    if (!profile->IsOffTheRecord()) {
+      system_engine::Remember(profile, url);
+    }
+    // Logged, as no call of the app's made the move.
+    fprintf(stderr, "browser: tab %llu moved to the system's engine on the user's press\n",
+            static_cast<unsigned long long>(Tab::IdOf(web_contents())));
+    // After UseSystemEngine, which took back any note the page had.
+    asked_.clear();
+    shown_at_ = url;
+    shown_ = note;
+    moved_ = true;
+    moved_commits_ = 0;
+    Changed();
+  }
+
   // content::WebContentsObserver:
   void PrimaryPageChanged(content::Page& page) override {
+    // Chromium's page again, as after Move Back: the move's note goes.
+    if (moved_) {
+      Forget();
+      return;
+    }
     // A new document asks again.
     asked_.clear();
     const GURL& now = page.GetMainDocument().GetLastCommittedURL();
@@ -166,6 +276,9 @@ class Unsupported : public content::WebContentsObserver,
   GURL shown_at_;
   // A page at the site that was given a system, if the tab is still at it.
   GURL played_at_;
+  // Whether the note says the tab moved, and the system page's commits since.
+  bool moved_ = false;
+  int moved_commits_ = 0;
   // What the app was last told.
   std::string told_;
   base::WeakPtrFactory<Unsupported> weak_factory_{this};
@@ -206,8 +319,24 @@ class DrmRequest final : public content::DocumentService<mojom::DrmRequest> {
       Unsupported::GetOrCreateForWebContents(contents)->Played();
       return;
     }
-    if (!CanPlay(system)) {
-      Unsupported::GetOrCreateForWebContents(contents)->Asked(std::string(system));
+    Tab* tab = Tab::FromWebContents(contents);
+    if (CanPlay(system) || !tab) {
+      return;
+    }
+    Unsupported* unsupported = Unsupported::GetOrCreateForWebContents(contents);
+    switch (AnswerProtectedAsk(AskOf(frame, *tab, contents))) {
+      case ProtectedAnswer::kNote:
+        unsupported->Asked(std::string(system));
+        break;
+      case ProtectedAnswer::kMove:
+        unsupported->Move();
+        break;
+      case ProtectedAnswer::kAskTyped:
+        unsupported->Asked("typed");
+        break;
+      case ProtectedAnswer::kAskCapturing:
+        unsupported->Asked("capturing");
+        break;
     }
   }
 };
@@ -221,6 +350,12 @@ void PopulateFrameBinders(mojo::BinderMapWithContext<content::RenderFrameHost*>*
 void ForgetMediaUnsupported(content::WebContents* contents) {
   if (Unsupported* unsupported = Unsupported::FromWebContents(contents)) {
     unsupported->Forget();
+  }
+}
+
+void MovedPageCommitted(content::WebContents* contents) {
+  if (Unsupported* unsupported = Unsupported::FromWebContents(contents)) {
+    unsupported->SystemPageCommitted();
   }
 }
 

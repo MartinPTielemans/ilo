@@ -54,6 +54,8 @@ struct Made {
     splits: RefCell<Vec<Vec<u64>>>,
     /// Each mute or unmute asked of a tab, in order.
     muted: RefCell<Vec<(u64, bool)>>,
+    /// Tabs the core holds in a Space that its list of the Space's tabs leaves out.
+    unlisted: RefCell<HashSet<u64>>,
 }
 
 impl Made {
@@ -88,7 +90,7 @@ impl Browser for Made {
 
     fn space_tabs(&self, space: u64, _: &App) -> Vec<TabInfo> {
         (self.tabs.borrow().iter())
-            .filter(|tab| tab.1 == space)
+            .filter(|tab| tab.1 == space && !self.unlisted.borrow().contains(&tab.0))
             .map(|&(id, _, title, url)| TabInfo {
                 id,
                 title: title.into(),
@@ -287,9 +289,13 @@ impl Browser for Made {
         };
     }
 
+    // As the core's: the tab closes with its split.
     fn remove_pinned(&self, tab: u64, cx: &mut App) {
         self.set_pinned(tab, false, cx);
-        self.close_user_tab(tab, cx);
+        for each in self.split(tab, cx) {
+            self.separate(each, cx);
+            self.close_user_tab(each, cx);
+        }
     }
 
     fn close_tab(&self, agent: &str, tab: u64, discard: bool, _: &mut App) -> Closed {
@@ -781,6 +787,61 @@ fn open_tab_as_the_first_call_makes_the_agents_space(cx: &mut TestAppContext) {
     );
 }
 
+/// While the user holds one of the agent's tabs, list_tabs names it by its number and says it's
+/// with the user, with nothing of its page, and sorting by site leaves it where it is, as its place
+/// would tell its site (#3694). Handed back, it's listed as before.
+#[gpui::test]
+fn a_tab_the_user_holds_is_listed_without_its_page(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    browser.tabs.borrow_mut().extend([
+        (21, 2, "Wiki", "https://en.wikipedia.org/wiki/Rust"),
+        (22, 2, "Docs", "https://docs.example.com/"),
+        (25, 2, "More", "https://de.wikipedia.org/wiki/Arc"),
+    ]);
+    let list = |cx: &mut TestAppContext| {
+        call(&agents, "claude-code", "list_tabs", json!({}), cx)
+            .recv()
+            .unwrap()
+            .text
+    };
+    assert!(list(cx).contains("21  Wiki  https://en.wikipedia.org/wiki/Rust"));
+    agents.update(cx, |agents, cx| agents.take_over("claude-code", 21, cx));
+    let held = list(cx);
+    let line = held
+        .lines()
+        .find(|line| line[2..].starts_with("21  "))
+        .unwrap();
+    assert!(
+        line.contains("With the user until they hand it back"),
+        "{held}"
+    );
+    assert!(
+        !held.contains("Wiki") && !held.contains("wikipedia.org/wiki/Rust"),
+        "list_tabs named the held tab's page: {held}"
+    );
+    assert!(
+        held.contains("22  Docs  https://docs.example.com/"),
+        "{held}"
+    );
+
+    let sorted = call(&agents, "claude-code", "sort_tabs_by_site", json!({}), cx)
+        .recv()
+        .unwrap();
+    assert_eq!(
+        sorted,
+        ToolResult::text("Your Today tabs are together by site already."),
+        "the held tab's site moved a tab"
+    );
+    let order: Vec<u64> = (browser.tabs.borrow().iter())
+        .filter(|tab| tab.1 == 2)
+        .map(|tab| tab.0)
+        .collect();
+    assert_eq!(order, [20, 21, 22, 25]);
+
+    agents.update(cx, |agents, cx| agents.hand_back(21, cx));
+    assert!(list(cx).contains("21  Wiki  https://en.wikipedia.org/wiki/Rust"));
+}
+
 /// Two agents each list their own Space's tabs, as the core lists the calling agent's, and neither
 /// the other's nor the user's.
 #[gpui::test]
@@ -1175,6 +1236,43 @@ fn a_request_from_a_tab_not_the_agents_is_refused_for_the_tab(cx: &mut TestAppCo
     assert!(browser.requests.borrow().is_empty(), "a request was sent");
 }
 
+/// A change goes only with the user's answer, whatever the UI's list of the agent's tabs and the
+/// core's check say: a tab the core allows that the UI doesn't list, as a popup the agent's tab
+/// opened might be, gets no question, and its change is refused in the core's words for a tab not
+/// the agent's and sent nowhere; a read in the same call still goes.
+#[gpui::test]
+fn a_change_from_a_tab_the_ui_doesnt_list_is_refused_unasked(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    (browser.tabs.borrow_mut()).push((21, 2, "Tracker", "https://tracker.example/"));
+    browser.unlisted.borrow_mut().insert(21);
+    let requests = json!({ "tab": 21, "requests": [
+        { "method": "GET", "path": "/api/me" },
+        { "method": "POST", "path": "/api/items", "body": { "title": "Milk" },
+          "what": "Add milk to the list." },
+    ] });
+    let answer = call(&agents, "claude-code", "request", requests, cx);
+    cx.run_until_parked();
+    assert!(browser.asked.borrow().is_none(), "the change asked");
+    let sent = browser.requests.borrow().clone();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0].2.method, "GET");
+    let (request, response) = (
+        sent[0].1,
+        request::Response {
+            status: 200,
+            ..Default::default()
+        },
+    );
+    agents.update(cx, |agents, cx| agents.request_done(request, response, cx));
+    cx.run_until_parked();
+    let answered = answer.recv().unwrap();
+    assert!(
+        format!("{answered:?}").contains(&format!("POST /api/items: {NOT_ITS_SPACE}")),
+        "{answered:?}"
+    );
+    assert_eq!(browser.requests.borrow().len(), 1, "the change was sent");
+}
+
 /// Once read, a page still on the empty start page is no web page, as the core's page tools find,
 /// and a tab that became a Board meanwhile is answered as a Board is everywhere else.
 #[gpui::test]
@@ -1445,7 +1543,9 @@ fn an_agents_key_goes_to_the_page_without_an_update_of_the_app(cx: &mut TestAppC
             cx,
         );
         assert_eq!(browser.pages.borrow().last().unwrap().4, key);
-        assert!(!page_done(&agents, &browser, answer, shop_tree(), cx).error);
+        // The search field has the keyboard, so Enter there pays for nothing and asks nothing.
+        let page = checkout_tree(Some("7"));
+        assert!(!page_done(&agents, &browser, answer, page, cx).error);
     }
     // The user's keys, after it, are the app's again.
     assert!(!pressing_key());
@@ -1891,6 +1991,205 @@ fn an_agent_chooses_an_option_by_its_text(cx: &mut TestAppContext) {
     );
 }
 
+/// A checkout's page, with what has the keyboard `focused` by its node's id: a card form with its
+/// Pay now button and a box to save the card, and a search form with nothing that pays.
+fn checkout_tree(focused: Option<&str>) -> String {
+    let mut nodes = vec![
+        json!({ "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Checkout" },
+          "childIds": ["2", "6"] }),
+        json!({ "nodeId": "2", "role": { "value": "form" }, "name": { "value": "" },
+          "backendDOMNodeId": 60, "childIds": ["3", "4", "5"] }),
+        json!({ "nodeId": "3", "role": { "value": "textbox" }, "name": { "value": "Card number" },
+          "backendDOMNodeId": 61 }),
+        json!({ "nodeId": "4", "role": { "value": "button" }, "name": { "value": "Pay now" },
+          "backendDOMNodeId": 62 }),
+        json!({ "nodeId": "5", "role": { "value": "checkbox" },
+          "name": { "value": "Save this card" }, "backendDOMNodeId": 63 }),
+        json!({ "nodeId": "6", "role": { "value": "form" }, "name": { "value": "" },
+          "backendDOMNodeId": 70, "childIds": ["7", "8"] }),
+        json!({ "nodeId": "7", "role": { "value": "searchbox" }, "name": { "value": "Search" },
+          "backendDOMNodeId": 71 }),
+        json!({ "nodeId": "8", "role": { "value": "button" }, "name": { "value": "Go" },
+          "backendDOMNodeId": 72 }),
+    ];
+    focusing(nodes, focused)
+}
+
+/// The tree `nodes` with the node `focused` holding the keyboard, if any.
+fn focusing(mut nodes: Vec<Value>, focused: Option<&str>) -> String {
+    for node in &mut nodes {
+        if Some(node["nodeId"].as_str().unwrap()) == focused {
+            let focused = json!({ "type": "booleanOrUndefined", "value": true });
+            node["properties"] = json!([{ "name": "focused", "value": focused }]);
+        }
+    }
+    json!({ "nodes": nodes }).to_string()
+}
+
+/// A checkout whose Pay now button sits outside the card's form, as a sticky footer's does, tied
+/// to it by the button's form attribute, which the tree doesn't show.
+fn footer_tree(focused: Option<&str>) -> String {
+    let nodes = vec![
+        json!({ "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Checkout" },
+          "childIds": ["2", "4"] }),
+        json!({ "nodeId": "2", "role": { "value": "form" }, "name": { "value": "" },
+          "backendDOMNodeId": 60, "childIds": ["3"] }),
+        json!({ "nodeId": "3", "role": { "value": "textbox" }, "name": { "value": "Card number" },
+          "backendDOMNodeId": 61 }),
+        json!({ "nodeId": "4", "role": { "value": "button" }, "name": { "value": "Pay now" },
+          "backendDOMNodeId": 62 }),
+    ];
+    focusing(nodes, focused)
+}
+
+/// A key press that activates a control asks as a click on it does, on a site that sends no
+/// messages. Enter in a field or on a checkbox submits its form, whose Pay now button a click on
+/// would ask, as typing with submit does, as does a Pay now button outside any form. Space or
+/// Enter on the focused Pay now button is a click on it, wherever the last answer left the
+/// keyboard. Enter in a form with nothing that pays, Space in a field or on a checkbox and Tab ask
+/// nothing (GHSA-hqw3-jp9p-3rhj).
+#[gpui::test]
+fn a_key_press_that_activates_a_control_asks_as_a_click_on_it(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let look = |tree: String, cx: &mut TestAppContext| {
+        let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+        let outline = page_done(&agents, &browser, answer, tree, cx).text;
+        assert!(outline.contains("- button \"Pay now\" [e2]"), "{outline}");
+    };
+    let snapshot =
+        |focused: Option<&str>, cx: &mut TestAppContext| look(checkout_tree(focused), cx);
+    // Calls `tool` and checks it asks `what` before anything reaches the page, then the × answers.
+    let asks = |tool: &str, arguments: Value, what: &str, cx: &mut TestAppContext| {
+        *browser.asked.borrow_mut() = None;
+        let pages = browser.pages.borrow().len();
+        let answer = call(&agents, "claude-code", tool, arguments, cx);
+        let question =
+            (browser.asked.borrow().clone()).unwrap_or_else(|| panic!("{what} didn't ask"));
+        assert_eq!(question.what, what);
+        assert_eq!(question.why, "It looks like a payment or an order.");
+        assert_eq!(
+            browser.pages.borrow().len(),
+            pages,
+            "{what} reached the page unasked"
+        );
+        agents.update(cx, |agents, cx| {
+            agents.answer(question.id, Answer::Dismiss, cx)
+        });
+        assert!(answer.recv().unwrap().error);
+    };
+    // Calls `tool`, which goes to the page without a question, and the page answers with `tree`.
+    let answered = |tool: &str, arguments: Value, tree: String, cx: &mut TestAppContext| {
+        *browser.asked.borrow_mut() = None;
+        let answer = call(&agents, "claude-code", tool, arguments.clone(), cx);
+        assert!(browser.asked.borrow().is_none(), "{tool} {arguments} asked");
+        assert!(!page_done(&agents, &browser, answer, tree, cx).error);
+    };
+    let goes = |tool: &str, arguments: Value, cx: &mut TestAppContext| {
+        answered(tool, arguments, checkout_tree(None), cx)
+    };
+
+    snapshot(None, cx);
+    let card = json!({ "tab": 20, "ref": "e1", "text": "4242", "submit": true });
+    let what = "press Enter, which may click “Pay now” on example.com, after typing “4242” into “Card number”";
+    asks("type", card, what, cx);
+    goes(
+        "type",
+        json!({ "tab": 20, "ref": "e4", "text": "socks", "submit": true }),
+        cx,
+    );
+    goes(
+        "type",
+        json!({ "tab": 20, "ref": "e1", "text": "4242" }),
+        cx,
+    );
+
+    snapshot(Some("3"), cx);
+    let enter = json!({ "tab": 20, "key": "Enter" });
+    asks(
+        "press_key",
+        enter.clone(),
+        "press Enter, which may click “Pay now” on example.com",
+        cx,
+    );
+    snapshot(Some("3"), cx);
+    goes("press_key", json!({ "tab": 20, "key": "Space" }), cx);
+    snapshot(Some("3"), cx);
+    goes("press_key", json!({ "tab": 20, "key": "Tab" }), cx);
+
+    snapshot(Some("4"), cx);
+    let space = json!({ "tab": 20, "key": "Space" });
+    asks(
+        "press_key",
+        space,
+        "press Space to click “Pay now” on example.com",
+        cx,
+    );
+    snapshot(Some("4"), cx);
+    asks(
+        "press_key",
+        enter.clone(),
+        "press Enter to click “Pay now” on example.com",
+        cx,
+    );
+
+    // Enter on a checkbox submits its form too, so it asks as Enter in the form's field does, and
+    // Space on it checks it.
+    snapshot(Some("5"), cx);
+    asks(
+        "press_key",
+        enter.clone(),
+        "press Enter, which may click “Pay now” on example.com",
+        cx,
+    );
+    snapshot(Some("5"), cx);
+    goes("press_key", json!({ "tab": 20, "key": "Space" }), cx);
+
+    // The answer to the action before the press says where the keyboard went, with no look at the
+    // page between: Tab's, and a look at one element's part, whose page the core outlined whole.
+    snapshot(Some("7"), cx);
+    let tab = json!({ "tab": 20, "key": "Tab" });
+    answered("press_key", tab, checkout_tree(Some("4")), cx);
+    asks(
+        "press_key",
+        enter.clone(),
+        "press Enter to click “Pay now” on example.com",
+        cx,
+    );
+    snapshot(Some("7"), cx);
+    let part = json!({ "tab": 20, "ref": "e1" });
+    answered("snapshot", part, checkout_tree(Some("4")), cx);
+    asks(
+        "press_key",
+        enter.clone(),
+        "press Enter to click “Pay now” on example.com",
+        cx,
+    );
+
+    // A Pay now button outside the card's form may be the one its Enter clicks.
+    look(footer_tree(Some("3")), cx);
+    asks(
+        "press_key",
+        enter.clone(),
+        "press Enter, which may click “Pay now” on example.com",
+        cx,
+    );
+
+    // Enter in the search form clicks Go, never the card form's Pay now.
+    snapshot(Some("7"), cx);
+    goes("press_key", enter.clone(), cx);
+    // The page itself has the keyboard: Enter activates nothing.
+    snapshot(Some("1"), cx);
+    goes("press_key", enter.clone(), cx);
+    // The outline doesn't say what has it, so anything on the page that pays asks.
+    snapshot(None, cx);
+    asks(
+        "press_key",
+        enter,
+        "press Enter, which may click “Pay now” on example.com",
+        cx,
+    );
+}
+
 /// scroll with a direction turns the wheel at the middle of the page, or with a ref as well in
 /// that element, such as a panel or a frame, and with a ref alone brings the element into view
 /// (#1445).
@@ -2219,6 +2518,71 @@ fn a_question_left_unanswered_is_refused_after_5_minutes(cx: &mut TestAppContext
     assert_eq!(log(&agents, "claude-code", cx)[0].2, NO_ANSWER);
     let grants = agents.read_with(cx, |agents, _| agents.grants("claude-code"));
     assert!(grants.is_empty());
+}
+
+/// A request's question goes as any question does, and so its whole request with it: left 5
+/// minutes, it's refused and the card clears, and when its client goes, the card clears with it.
+/// Neither sends anything.
+#[gpui::test]
+fn a_requests_question_goes_unanswered_and_with_its_client(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let ask = |cx: &mut TestAppContext| {
+        let change = json!({ "tab": 20, "requests": [
+            { "method": "DELETE", "path": "/api/items/7", "what": "Tidy up the old draft." },
+        ] });
+        let answer = call(&agents, "claude-code", "request", change, cx);
+        let question = browser
+            .asked
+            .borrow()
+            .clone()
+            .expect("the delete didn't ask");
+        assert_eq!(question.changes.len(), 1);
+        answer
+    };
+
+    let answer = ask(cx);
+    cx.executor().advance_clock(ASK_WAIT);
+    let refused = answer.recv().unwrap();
+    assert!(
+        refused
+            .text
+            .starts_with("The user didn't answer in 5 minutes"),
+        "{}",
+        refused.text
+    );
+    assert_eq!(
+        *browser.asked.borrow(),
+        None,
+        "the card stayed past 5 minutes"
+    );
+
+    agents.update(cx, |agents, cx| {
+        let hello = Event::Hello {
+            agent: "claude-code".into(),
+            client: "claude-code".into(),
+        };
+        agents.handle(hello, cx);
+    });
+    let _answer = ask(cx);
+    agents.update(cx, |agents, cx| {
+        agents.handle(
+            Event::Bye {
+                agent: "claude-code".into(),
+            },
+            cx,
+        )
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        *browser.asked.borrow(),
+        None,
+        "the card stayed with its client gone"
+    );
+    assert_eq!(
+        browser.requests.borrow().len(),
+        0,
+        "a request went unanswered"
+    );
 }
 
 /// A check's `--agent-waits` shortens both waits so a run sees each end; a prod build, or a value
@@ -4168,6 +4532,64 @@ const CORE_ALLOWS: [&str; 21] = [
     "unpin_tab",
 ];
 
+/// What the descriptions tell an agent (#3664): each tool that may take a tab says, as the others
+/// do, to give it once there's more than one; the server's instructions and a task's say so too, and
+/// name only tools there are; and ask_for_tab and hand_off say when to use them and what follows.
+#[test]
+fn the_descriptions_say_how_to_use_tabs() {
+    for agent in ["claude-code", "task-1"] {
+        let listed = tools::list(agent);
+        let listed = listed.as_array().unwrap();
+        let names: Vec<&str> = (listed.iter())
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect();
+        // Those where it may be left out: add_to_split's is the one tab it adds.
+        let optional = |tool: &&Value| {
+            let required = tool["inputSchema"]["required"].as_array();
+            !required.is_some_and(|required| required.contains(&json!("tab")))
+        };
+        let tab_said: Vec<&str> = (listed.iter().filter(optional))
+            .filter_map(|tool| tool["inputSchema"]["properties"]["tab"]["description"].as_str())
+            .collect();
+        assert!(tab_said.len() > 10, "{agent}: {tab_said:?}");
+        assert!(
+            tab_said.iter().all(|said| *said == tab_said[0]),
+            "{agent}'s tools say the tab differently: {tab_said:?}"
+        );
+        assert!(tab_said[0].contains("more than one tab"), "{}", tab_said[0]);
+        let instructions = match agent {
+            "task-1" => tools::TASK_INSTRUCTIONS,
+            _ => tools::INSTRUCTIONS,
+        };
+        assert!(
+            instructions.contains("its tab once you have more than one"),
+            "{agent}"
+        );
+        assert!(
+            instructions.contains("Calls on different tabs run at the same time"),
+            "{agent}"
+        );
+        // Every snake_case word in them is a tool the agent has.
+        let words = instructions.split(|c: char| !(c.is_ascii_lowercase() || c == '_'));
+        for word in words.filter(|word| word.contains('_')) {
+            assert!(
+                names.contains(&word),
+                "{agent}'s instructions name {word}, not a tool"
+            );
+        }
+        let said = |name: &str| {
+            let tool = listed.iter().find(|tool| tool["name"] == name);
+            tool.map(|tool| tool["description"].as_str().unwrap().to_string())
+        };
+        if let Some(ask) = said("ask_for_tab") {
+            assert!(ask.contains("can't go on without it"), "{ask}");
+            assert!(ask.contains("say why"), "{ask}");
+        }
+        let hand_off = said("hand_off").unwrap();
+        assert!(hand_off.contains("take a snapshot"), "{hand_off}");
+    }
+}
+
 /// Agents never read or fill a saved password, address, card or passkey (principle 3). The server
 /// offers exactly these tools, and every one asks the core only for an action its allowlist has,
 /// so a tool or action that could reach them fails here until it's added on purpose, with its rule.
@@ -4204,6 +4626,7 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
             "unpin_tab",
             "remove_tab",
             "sort_tabs_by_site",
+            "title",
         ]
     );
 
@@ -4368,6 +4791,40 @@ mod requests {
         })
     }
 
+    /// On a page the agent's outline saw ask for a password, as a sign-in page does, a request's
+    /// answer says the site may have answered as to someone signed out, and names hand_off; on
+    /// one that doesn't, it says nothing of it (#3661).
+    #[gpui::test]
+    fn a_request_on_a_sign_in_page_says_so(cx: &mut TestAppContext) {
+        let (agents, browser, _) = connected(cx);
+        let read = json!({ "tab": 20, "requests": [{ "method": "GET", "path": "/api/me" }] });
+        let snapshot = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+        page_done(&agents, &browser, snapshot, shop_tree(), cx);
+        let answer = call(&agents, "claude-code", "request", read.clone(), cx);
+        answered(&agents, &browser, 401, r#"{"error":"sign in"}"#, cx);
+        let text = answer.recv().unwrap().text;
+        assert!(
+            text.starts_with(
+                "Tab 20's page asks for a password, as a sign-in page does, so its site may have \
+                 answered as to someone signed out. Signing in is the user's to do: hand them the \
+                 tab with hand_off, and send the requests again once they hand it back.\n\n\
+                 GET /api/me → 401"
+            ),
+            "{text}"
+        );
+
+        let signed_in = json!({ "nodes": [
+            { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Shop" } },
+        ]})
+        .to_string();
+        let snapshot = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+        page_done(&agents, &browser, snapshot, signed_in, cx);
+        let answer = call(&agents, "claude-code", "request", read, cx);
+        answered(&agents, &browser, 200, r#"{"name":"Ada"}"#, cx);
+        let text = answer.recv().unwrap().text;
+        assert!(text.starts_with("GET /api/me → 200"), "{text}");
+    }
+
     /// A read goes at once, and its answer is the body without what looks like a credential. A
     /// call's changes ask in one question, every time, whatever the user answered before: none is
     /// sent until they allow it, nor the call's reads, and Always and Never keep nothing.
@@ -4407,21 +4864,34 @@ mod requests {
 
         let changes = json!({ "tab": 20, "requests": [
             { "method": "GET", "path": "/api/items" },
-            { "method": "POST", "path": "/api/items", "body": { "title": "Milk" } },
-            { "method": "DELETE", "path": "/api/items/7" },
+            { "method": "POST", "path": "/api/items", "body": { "title": "Milk" },
+              "what": "Add Milk to the list." },
+            { "method": "DELETE", "path": "/api/items/7",
+              "what": "Tidy up the old draft so your list is cleaner." },
         ] });
         let answer = call(&agents, "claude-code", "request", changes.clone(), cx);
         let question = browser.asked.borrow().clone().expect("a change didn't ask");
         assert_eq!(question.what, "make 2 changes on example.com");
         assert_eq!(question.why, "Changes ask every time.");
-        let listed = [
-            ("POST /api/items", "title: Milk"),
-            ("DELETE /api/items/7", ""),
-        ];
-        let listed = listed.map(|(line, sends)| (line.into(), sends.into()));
+        assert_eq!(question.site, "example.com");
+        // Each change in the agent's words, and what the browser knows from its method alone.
+        let listed: Vec<_> = (question.changes.iter())
+            .map(|change| (change.target(), change.what.as_str(), change.kind()))
+            .collect();
         assert_eq!(
-            (question.changes.as_slice(), question.more),
-            (listed.as_slice(), 0)
+            listed,
+            [
+                (
+                    "POST /api/items".into(),
+                    "Add Milk to the list.",
+                    request::Does::Sends
+                ),
+                (
+                    "DELETE /api/items/7".into(),
+                    "Tidy up the old draft so your list is cleaner.",
+                    request::Does::Deletes
+                ),
+            ]
         );
         assert_eq!(sent(&browser).len(), 1, "it sent before the user answered");
         agents.update(cx, |agents, cx| {
@@ -4472,6 +4942,31 @@ mod requests {
         );
     }
 
+    /// The log keeps the agent's sentence as theirs, without a value after a secret's name; the
+    /// card shows it whole.
+    #[gpui::test]
+    fn the_log_keeps_a_sentence_without_its_secret(cx: &mut TestAppContext) {
+        let (agents, browser, _) = connected(cx);
+        let change = json!({ "tab": 20, "requests": [
+            { "method": "PUT", "path": "/api/settings", "body": { "on": true },
+              "what": "Set the API key to sk-live-123" },
+        ] });
+        let answer = call(&agents, "claude-code", "request", change, cx);
+        let question = (browser.asked.borrow().clone()).expect("the change didn't ask");
+        assert_eq!(question.changes[0].what, "Set the API key to sk-live-123");
+        agents.update(cx, |agents, cx| {
+            agents.answer(question.id, Answer::Never, cx)
+        });
+        assert!(answer.recv().unwrap().error);
+        let kept = agents.read_with(cx, |agents, _| {
+            (agents.activity("claude-code"))
+                .filter(|entry| entry.action == "request")
+                .map(|entry| entry.said.to_string())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(kept, ["Set the API key to (hidden)"]);
+    }
+
     /// A write whose override header names a read still asks, and sends nothing until the user
     /// answers; Deny sends nothing at all, and the log names the method sent (#1439).
     #[gpui::test]
@@ -4479,15 +4974,23 @@ mod requests {
         let (agents, browser, _) = connected(cx);
         let masked = json!({ "tab": 20, "requests": [
             { "method": "POST", "path": "/api/items",
-              "headers": { "X-HTTP-Method-Override": "GET" }, "body": { "title": "Milk" } },
+              "headers": { "X-HTTP-Method-Override": "GET" }, "body": { "title": "Milk" },
+              "what": "Add Milk to the list." },
         ] });
         let answer = call(&agents, "claude-code", "request", masked, cx);
         let question =
             (browser.asked.borrow().clone()).expect("a POST that said it was a GET didn't ask");
         assert_eq!(sent(&browser).len(), 0, "it sent before the user answered");
+        let listed: Vec<_> = (question.changes.iter())
+            .map(|change| (change.target(), change.method.as_str(), change.kind()))
+            .collect();
         assert_eq!(
-            question.changes,
-            [("POST as GET /api/items".into(), "title: Milk".into())]
+            listed,
+            [(
+                "POST as GET /api/items".into(),
+                "POST",
+                request::Does::Changes
+            )]
         );
         agents.update(cx, |agents, cx| {
             agents.answer(question.id, Answer::Never, cx)
@@ -4530,6 +5033,22 @@ mod requests {
         assert!(
             refusals.iter().all(|why| !why.is_empty()) && refusals.len() == 3,
             "{refusals:?}"
+        );
+        // A change without the agent's sentence isn't asked or sent, and the user wasn't asked,
+        // so there's no entry for it.
+        let unsaid =
+            json!([{ "method": "GET", "path": "/a" }, { "method": "PATCH", "path": "/b" }]);
+        let unsaid = refused(unsaid, 20, cx);
+        assert!(
+            unsaid.starts_with("Request 2 (PATCH /b) may change something"),
+            "{unsaid}"
+        );
+        assert!(unsaid.ends_with("Nothing was sent."), "{unsaid}");
+        assert!(sent(&browser).is_empty());
+        assert_eq!(
+            targets(&agents, cx).len(),
+            3,
+            "a call that asked nothing was logged"
         );
 
         let two = json!([{ "method": "GET", "path": "/a" }, { "method": "GET", "path": "/b" }]);
@@ -5025,22 +5544,21 @@ mod tasks {
         for tool in ["title", "ask", "finish", "open_tab", "hand_off"] {
             assert!(names.iter().any(|name| name == tool), "{tool}");
         }
-        assert!(
-            !tools::names("claude-code")
-                .iter()
-                .any(|name| name == "finish")
-        );
+        // An agent from outside names its session as a task does (#3690), and finishes nothing.
+        let outside = tools::names("claude-code");
+        assert!(!outside.iter().any(|name| name == "finish" || name == "ask"));
+        assert!(outside.iter().any(|name| name == "title"));
         let (agents, _, _) = connected(cx);
         let answer = call(
             &agents,
             "claude-code",
-            "title",
-            json!({ "text": "Flights" }),
+            "finish",
+            json!({ "result": "Flights" }),
             cx,
         );
         assert_eq!(
             answer.recv().unwrap(),
-            ToolResult::error("There's no tool title.")
+            ToolResult::error("There's no tool finish.")
         );
         // A task that isn't one the user asked can't call anything.
         let answer = call(&agents, "task-9", "list_tabs", json!({}), cx);
@@ -6937,7 +7455,9 @@ fn the_scripts_switch_comes_back_with_the_settings(cx: &mut TestAppContext) {
 /// connection closes, it waits IDLE for a call, or the user stops it.
 mod sessions {
     use super::*;
-    use crate::agents::task::{Card, Dot, IDLE, Line, TaskAction};
+    use crate::agents::task::{
+        Card, Dot, IDLE, Line, NAMED_RECENTLY, RENAMING, TITLE_KEPT, TaskAction,
+    };
 
     /// Calls `tool` as Claude Code, as call `id`, which `answered` ends.
     fn call_as(
@@ -6947,6 +7467,18 @@ mod sessions {
         arguments: Value,
         cx: &mut TestAppContext,
     ) -> mpsc::Receiver<ToolResult> {
+        call_at(agents, id, tool, arguments, std::time::Instant::now(), cx)
+    }
+
+    /// call_as, made at `at`, as the server stamps a call when it comes.
+    fn call_at(
+        agents: &Entity<Agents>,
+        id: u64,
+        tool: &str,
+        arguments: Value,
+        at: std::time::Instant,
+        cx: &mut TestAppContext,
+    ) -> mpsc::Receiver<ToolResult> {
         let (reply, answer) = mpsc::channel();
         let call = Call {
             id,
@@ -6954,7 +7486,7 @@ mod sessions {
             tool: tool.into(),
             arguments,
             reply,
-            at: std::time::Instant::now(),
+            at,
         };
         agents.update(cx, |agents, cx| agents.handle(Event::Call(call), cx));
         answer
@@ -7015,9 +7547,10 @@ mod sessions {
         let shown = cards(&agents, cx);
         assert_eq!(shown.len(), 1, "a card for each connection");
         let card = &shown[0];
+        // Unnamed, it's titled by the site it works on, its line by its client (#3690).
         assert_eq!(
             (card.name.as_ref(), card.title.as_ref(), card.dot),
-            ("Claude Code", "Claude Code", Dot::Working)
+            ("Claude Code", "example.com", Dot::Working)
         );
         assert!(!card.replies);
         let agent = card.agent.to_string();
@@ -7032,7 +7565,7 @@ mod sessions {
             "{:?}",
             talk.lines
         );
-        assert!(!talk.about.starts_with("Claude Code"), "{}", talk.about);
+        assert_eq!(talk.about.as_ref(), "Claude Code · working");
         // A reply has nowhere to go.
         let replied = agents.update(cx, |agents, cx| {
             agents.task_action(&agent, TaskAction::Reply("and then?".into()), cx)
@@ -7054,11 +7587,194 @@ mod sessions {
         assert_eq!(shown[0].dot, Dot::Working);
     }
 
+    /// A client's earlier card offers only the pages none of its sessions works in now. Its Open
+    /// moves what it offers out of the client's Space, which would take a tab from under the
+    /// agent, whose next call on it is then refused (#3660).
+    #[gpui::test]
+    fn an_earlier_cards_open_leaves_the_pages_a_session_works_in(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        answered(&agents, 2, cx);
+        bye(&agents, cx);
+        // It connects again and works on in the same tab.
+        hello(&agents, "claude-code", "claude-code", cx);
+        call_as(&agents, 3, "read_page", json!({ "tab": 20 }), cx);
+        answered(&agents, 3, cx);
+        let shown = cards(&agents, cx);
+        assert_eq!((shown[0].dot, shown[1].dot), (Dot::Working, Dot::Done));
+        assert!(shown[1].open.is_empty(), "{:?}", shown[1].open);
+        let earlier = shown[1].agent.to_string();
+        let opened = agents.update(cx, |agents, cx| agents.open_result(&earlier, None, cx));
+        assert_eq!(opened, None);
+        let space = browser
+            .tabs
+            .borrow()
+            .iter()
+            .find(|each| each.0 == 20)
+            .unwrap()
+            .1;
+        assert_eq!(space, browser.agent_space("claude-code"));
+        let answer = call_as(&agents, 4, "read_page", json!({ "tab": 20 }), cx);
+        let refused = answer.try_recv().ok().filter(|answer| answer.error);
+        assert!(refused.is_none(), "{refused:?}");
+
+        // Once that session ends, the tab is the user's to open from either card.
+        answered(&agents, 4, cx);
+        bye(&agents, cx);
+        let shown = cards(&agents, cx);
+        assert_eq!(shown[1].open, vec![(20, "example.com".into())]);
+    }
+
+    /// A call on a page of the agent's that left its Space says why it went, and that open_tab
+    /// starts again: the user closed it, moved it to their own Space, or opened it from the card
+    /// of the agent's earlier session, or the agent closed it. One that was never the agent's
+    /// says no more than that it isn't in the agent's Space (#3660).
+    #[gpui::test]
+    fn a_call_on_a_page_that_left_says_why(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        answered(&agents, 2, cx);
+        let refused = |id, tab, cx: &mut TestAppContext| {
+            let answer = call_as(&agents, id, "read_page", json!({ "tab": tab }), cx);
+            let answer = answer.try_recv().expect("an answer at once");
+            assert!(answer.error, "{answer:?}");
+            answer.text
+        };
+        let opened = |cx: &mut TestAppContext| {
+            call_as(
+                &agents,
+                6,
+                "open_tab",
+                json!({ "url": "https://example.org/" }),
+                cx,
+            );
+        };
+        let leave = |tab, space, cx: &mut TestAppContext| {
+            cx.update(|cx| browser.move_tab(tab, space, cx));
+            agents.update(cx, |agents, cx| agents.space_changed(2, cx));
+        };
+
+        // A call on the user's own tab is refused, which doesn't make it a page of the agent's.
+        assert_eq!(refused(7, 10, cx), NOT_ITS_SPACE);
+        // The user moves it to their Space.
+        leave(20, 1, cx);
+        assert_eq!(
+            refused(3, 20, cx),
+            "The user moved tab 20 to one of their own Spaces: it's theirs now. To carry on, \
+             open the page again with open_tab."
+        );
+        // The user closes one the agent opened.
+        opened(cx);
+        browser.tabs.borrow_mut().retain(|each| each.0 != 30);
+        agents.update(cx, |agents, cx| agents.tab_closed(30, cx));
+        assert_eq!(
+            refused(4, 30, cx),
+            "Tab 30 was closed, by the user or by its own page. To carry on, open the page \
+             again with open_tab."
+        );
+        // The user's own tab was never the agent's, though the agent's Space changed since its
+        // call on it.
+        assert_eq!(refused(5, 10, cx), NOT_ITS_SPACE);
+    }
+
+    /// The agent's own remove_tab, the one tool of its that takes a page out of its Space, says
+    /// so of the page and of the rest of its split, which close with it, not that the user closed
+    /// them, though the core says only that they closed (#3660).
+    #[gpui::test]
+    fn a_page_the_agent_removed_says_so(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        answered(&agents, 2, cx);
+        call_as(
+            &agents,
+            3,
+            "open_tab",
+            json!({ "url": "https://example.org/" }),
+            cx,
+        );
+        call_as(&agents, 4, "split_tabs", json!({ "tabs": [20, 30] }), cx);
+        call_as(&agents, 5, "pin_tab", json!({ "tab": 20 }), cx);
+        let answer = call_as(&agents, 6, "remove_tab", json!({ "tab": 20 }), cx);
+        assert!(!answer.try_recv().unwrap().error);
+        let open = (browser.tabs.borrow().iter()).any(|tab| tab.0 == 20 || tab.0 == 30);
+        assert!(!open, "the tab and its split closed");
+        agents.update(cx, |agents, cx| {
+            agents.tab_closed(20, cx);
+            agents.tab_closed(30, cx);
+        });
+        let read = |id, tab, cx: &mut TestAppContext| {
+            let answer = call_as(&agents, id, "read_page", json!({ "tab": tab }), cx);
+            answer.try_recv().unwrap().text
+        };
+        assert_eq!(
+            read(7, 20, cx),
+            "The agent removed tab 20 from its pinned tabs, which closed it. To carry on, open \
+             the page again with open_tab."
+        );
+        assert_eq!(
+            read(8, 30, cx),
+            "Tab 30 closed with its split view, as the agent removed tab 20 from its pinned tabs. \
+             To carry on, open the page again with open_tab."
+        );
+    }
+
+    /// The browser keeps why at most GONE_KEPT pages left, the lowest tab id going first, so a
+    /// long run doesn't grow it without end.
+    #[gpui::test]
+    fn the_reasons_kept_are_bounded(cx: &mut TestAppContext) {
+        let (agents, _) = at_work(cx);
+        let past = GONE_KEPT as u64 + 88;
+        agents.update(cx, |agents, _| {
+            for tab in 1..=past {
+                agents.went(tab, "claude-code", Gone::Closed);
+            }
+            assert_eq!(agents.gone.len(), GONE_KEPT);
+            assert_eq!(agents.gone.keys().min(), Some(&89));
+            assert!(agents.gone.contains_key(&past));
+        });
+    }
+
+    /// The pages of a session that ended are its client's next session's to work in, until the
+    /// user opens them from its card, and the agent hears that, as it does of its own close.
+    #[gpui::test]
+    fn a_call_on_a_page_an_earlier_card_opened_says_so(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        answered(&agents, 2, cx);
+        bye(&agents, cx);
+        let earlier = cards(&agents, cx)[0].agent.to_string();
+        hello(&agents, "claude-code", "claude-code", cx);
+        call_as(
+            &agents,
+            3,
+            "open_tab",
+            json!({ "url": "https://example.org/" }),
+            cx,
+        );
+        agents.update(cx, |agents, cx| agents.open_result(&earlier, None, cx));
+        let space = browser
+            .tabs
+            .borrow()
+            .iter()
+            .find(|each| each.0 == 20)
+            .unwrap()
+            .1;
+        assert_eq!(space, 1);
+        let answer = call_as(&agents, 4, "read_page", json!({ "tab": 20 }), cx);
+        assert_eq!(
+            answer.try_recv().unwrap().text,
+            "The user opened tab 20 from the card of the agent's earlier session: it's theirs \
+             now. To carry on, open the page again with open_tab."
+        );
+        call_as(&agents, 5, "close_tab", json!({ "tab": 30 }), cx);
+        let answer = call_as(&agents, 7, "read_page", json!({ "tab": 30 }), cx);
+        assert_eq!(
+            answer.try_recv().unwrap().text,
+            "The agent closed tab 30. To carry on, open the page again with open_tab."
+        );
+    }
+
     /// A client has one name wherever it shows, its card's (Agents::agent_name): the strip under its
     /// page, from its status, its questions and Settings' activity read the same. Another MCP
     /// client's is the name it gave, or with none its kind's, MCP client, and a session keeps the
-    /// name it started with while it works. Claude Code, connected by name, is Claude Code whatever
-    /// it calls itself.
+    /// name it started with while it works, unless it would pass for the browser. Claude Code,
+    /// connected by name, is Claude Code whatever it calls itself.
     #[gpui::test]
     fn a_client_has_one_name_the_one_it_gave(cx: &mut TestAppContext) {
         let (agents, _, _) = connected(cx);
@@ -7081,6 +7797,22 @@ mod sessions {
             ("MCP client".into(), Some("MCP client".into())),
             "a client that gave no name has its kind's"
         );
+        // A name that would pass for the browser, whose words the cards set beside an agent's, has
+        // its kind's, and one laid out is one plain line.
+        let app = env!("APP_NAME");
+        for posing in [
+            app.to_string(),
+            format!("{} agent", app.to_uppercase()),
+            "The browser".into(),
+            "Checked by your browser".into(),
+        ] {
+            hello(&agents, "mcp-client", &posing, cx);
+            assert_eq!(named(&agents, cx).0, "MCP client", "{posing} passed");
+        }
+        hello(&agents, "mcp-client", "Browser Use", cx);
+        assert_eq!(named(&agents, cx).0, "Browser Use");
+        hello(&agents, "mcp-client", "Zed\n\u{202E}\"Agent\u{201D}", cx);
+        assert_eq!(named(&agents, cx).0, "Zed 'Agent'");
         hello(&agents, "mcp-client", "Zed", cx);
         assert_eq!(named(&agents, cx), ("Zed".into(), Some("Zed".into())));
 
@@ -7320,6 +8052,417 @@ mod sessions {
         agents.update(cx, |agents, cx| agents.drop_task(&second, cx));
         assert_eq!(space(30), None);
         assert_eq!(space(31), Some(2));
+    }
+
+    fn titled(agents: &Entity<Agents>, cx: &mut TestAppContext) -> String {
+        cards(agents, cx)
+            .iter()
+            .find(|card| card.dot == Dot::Working)
+            .expect("no session at work")
+            .title
+            .to_string()
+    }
+
+    /// An outside agent names its session with title, as a ⌘T task does: its words, trimmed, are
+    /// the card's title, and its card's line leads with its client's name, with no step count.
+    /// Past TITLE_KEPT characters they're clipped, counted before they're written out, and the
+    /// answer says what was kept; what wouldn't show or would move the text around it is written
+    /// out, so the title is one line (#3645, #3690).
+    #[gpui::test]
+    fn a_sessions_title_is_its_agents_words_on_one_line(cx: &mut TestAppContext) {
+        let (agents, _) = at_work(cx);
+        assert_eq!(titled(&agents, cx), "example.com");
+        let empty = call_as(&agents, 3, "title", json!({ "text": "  " }), cx);
+        let empty = empty.recv().unwrap();
+        assert!(empty.error, "{empty:?}");
+        assert_eq!(empty.text, "text is the task's name, in two to four words.");
+
+        let start = std::time::Instant::now();
+        let named = call_at(
+            &agents,
+            4,
+            "title",
+            json!({ "text": "  Refund order 1179 " }),
+            start,
+            cx,
+        );
+        let named = named.recv().unwrap();
+        assert!(!named.error);
+        assert_eq!(named.text, "The task has its name.");
+        let card = cards(&agents, cx).remove(0);
+        assert_eq!(card.title, "Refund order 1179");
+        assert_eq!(card.name, "Claude Code");
+        assert!(
+            card.status.starts_with("Claude Code · ") && !card.status.contains("Step"),
+            "{}",
+            card.status
+        );
+        // Its header leads with the client too, its state a fact after it, in lower case.
+        let agent = card.agent.to_string();
+        let talk = agents
+            .read_with(cx, |agents, cx| agents.conversation(&agent, cx))
+            .unwrap();
+        assert_eq!(talk.about, "Claude Code · working");
+
+        let words = format!("Line\none\ttwo\u{202E}{}", "x".repeat(40));
+        let kept: String = words.chars().take(TITLE_KEPT).collect::<String>() + "…";
+        let clipped = call_at(
+            &agents,
+            5,
+            "title",
+            json!({ "text": words }),
+            start + RENAMING,
+            cx,
+        );
+        let clipped = clipped.recv().unwrap();
+        assert!(!clipped.error, "{clipped:?}");
+        assert_eq!(clipped.text, format!("The task has its name: “{kept}”."));
+        let title = titled(&agents, cx);
+        assert_eq!(
+            title,
+            format!(
+                "Line\\u{{000A}}one\\u{{0009}}two\\u{{202E}}{}…",
+                "x".repeat(27)
+            )
+        );
+        assert!(!title.contains(['\n', '\t', '\u{202E}']), "{title:?}");
+    }
+
+    /// A new name waits RENAMING after the last change, so a title can't flicker: the same name
+    /// again changes nothing and is never refused, and a different one sooner is refused and kept
+    /// in the activity log as refused, with the title as it was.
+    #[gpui::test]
+    fn a_session_is_renamed_no_sooner_than_a_minute_after(cx: &mut TestAppContext) {
+        let (agents, _) = at_work(cx);
+        let start = std::time::Instant::now();
+        let name = |id: u64, text: &str, after: Duration, cx: &mut TestAppContext| {
+            let answer = call_at(
+                &agents,
+                id,
+                "title",
+                json!({ "text": text }),
+                start + after,
+                cx,
+            );
+            answer.recv().unwrap()
+        };
+        assert!(!name(3, "Refund order 1179", Duration::ZERO, cx).error);
+        let again = name(4, "Refund order 1179", Duration::from_secs(1), cx);
+        assert_eq!(
+            (again.error, again.text.as_str()),
+            (false, "The task has its name.")
+        );
+        let soon = name(5, "Pay invoice 88", RENAMING - Duration::from_secs(1), cx);
+        assert_eq!((soon.error, soon.text.as_str()), (true, NAMED_RECENTLY));
+        assert_eq!(titled(&agents, cx), "Refund order 1179");
+        let logged = log(&agents, "claude-code", cx);
+        assert!(
+            logged
+                .iter()
+                .any(|(action, _, refused)| action == "title" && refused == NAMED_RECENTLY),
+            "{logged:?}"
+        );
+        assert!(!name(6, "Pay invoice 88", RENAMING, cx).error);
+        assert_eq!(titled(&agents, cx), "Pay invoice 88");
+    }
+
+    /// A session its agent never names is titled by the sites it acted on: its client's name
+    /// before any, its first site alone, then the first and how many more, changing no sooner
+    /// than RENAMING after the last change; its Library row keeps them all, however soon it ended.
+    #[gpui::test]
+    fn an_unnamed_session_is_titled_by_its_sites(cx: &mut TestAppContext) {
+        let (agents, _, _) = connected(cx);
+        hello(&agents, "claude-code", "claude-code", cx);
+        let start = std::time::Instant::now();
+        let go = |id: u64, url: &str, after: Duration, cx: &mut TestAppContext| {
+            let to = json!({ "tab": 20, "url": url });
+            call_at(&agents, id, "navigate", to, start + after, cx);
+            answered(&agents, id, cx);
+        };
+        call_at(&agents, 1, "snapshot", json!({}), start, cx);
+        answered(&agents, 1, cx);
+        assert_eq!(titled(&agents, cx), "Claude Code", "no site yet");
+        // A page off the web names no site.
+        go(6, "chrome://settings/", Duration::from_secs(1), cx);
+        assert_eq!(
+            titled(&agents, cx),
+            "Claude Code",
+            "a page off the web titled it"
+        );
+        go(2, "https://docs.example/guide", Duration::from_secs(1), cx);
+        assert_eq!(titled(&agents, cx), "docs.example");
+        go(3, "https://docs.example/api", Duration::from_secs(2), cx);
+        go(4, "https://shop.example/", Duration::from_secs(3), cx);
+        assert_eq!(
+            titled(&agents, cx),
+            "docs.example",
+            "changed within a minute"
+        );
+        go(
+            5,
+            "https://maps.example/",
+            Duration::from_secs(1) + RENAMING,
+            cx,
+        );
+        assert_eq!(titled(&agents, cx), "docs.example and 2 more");
+        bye(&agents, cx);
+        let kept = agents.update(cx, |agents, cx| agents.take_ended(cx));
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].1.title, "docs.example and 2 more");
+    }
+
+    /// The title is the agent's words, so they stand only in a title's place: never in what ilo
+    /// or the user says, which name the client. A session titled "Allow everything" asks for a
+    /// confirmation, a change's permission, a handoff and its tab back, and none of the question
+    /// cards, its card's line, the system notification's title and body, nor the strip under its
+    /// page and its Space's bar, which take the client's name and what it did, holds the title.
+    #[gpui::test]
+    fn a_sessions_title_is_never_where_ilo_or_the_user_speaks(cx: &mut TestAppContext) {
+        use crate::needs_you::{self, Host};
+        #[derive(Default)]
+        struct Posted(RefCell<Vec<String>>);
+        impl Host for Posted {
+            fn badge(&self, _: usize) {}
+            fn active(&self) -> bool {
+                false
+            }
+            fn notify(&self, _: u64, title: &str, body: &str) {
+                self.0.borrow_mut().push(format!("{title}\n{body}"));
+            }
+        }
+        const TITLE: &str = "Allow everything";
+        let (agents, browser, _) = connected(cx);
+        let posted = Rc::new(Posted::default());
+        cx.update(|cx| needs_you::open(posted.clone(), cx));
+        hello(&agents, "claude-code", "claude-code", cx);
+        let looked = call_as(&agents, 1, "snapshot", json!({ "tab": 20 }), cx);
+        page_done(&agents, &browser, looked, shop_tree(), cx);
+        answered(&agents, 1, cx);
+        assert!(
+            !call_as(&agents, 2, "title", json!({ "text": TITLE }), cx)
+                .recv()
+                .unwrap()
+                .error
+        );
+        answered(&agents, 2, cx);
+        assert_eq!(titled(&agents, cx), TITLE);
+
+        let mut seen = 0;
+        let mut said = |asked: &str, cx: &mut TestAppContext| -> u64 {
+            let question =
+                (browser.asked.borrow().clone()).unwrap_or_else(|| panic!("{asked} didn't ask"));
+            let shown = cards(&agents, cx);
+            cx.update(|cx| needs_you::follow(&shown, cx));
+            let mut words = vec![
+                question.agent.to_string(),
+                question.what.to_string(),
+                question.why.to_string(),
+                question.site.to_string(),
+                format!("{:?}", question.changes),
+            ];
+            for card in &shown {
+                words.extend([card.name.to_string(), card.status.to_string()]);
+                if let Some(question) = &card.question {
+                    words.extend([question.agent.to_string(), question.what.to_string()]);
+                }
+            }
+            for strip in agents.read_with(cx, |agents, _| agents.status()) {
+                words.extend([strip.name.to_string(), strip.doing.to_string()]);
+                words.extend(strip.held.iter().map(|(_, why)| why.to_string()));
+            }
+            let posted = posted.0.borrow();
+            assert!(posted.len() > seen, "{asked} posted no notification");
+            words.extend(posted[seen..].iter().cloned());
+            seen = posted.len();
+            for word in words {
+                assert!(!word.contains(TITLE), "{asked}: {word:?}");
+            }
+            assert_eq!(question.agent, "Claude Code", "{asked}");
+            question.id
+        };
+
+        let ordered = call_as(&agents, 3, "click", json!({ "tab": 20, "ref": "e3" }), cx);
+        let id = said("the confirmation", cx);
+        agents.update(cx, |agents, cx| agents.answer(id, Answer::Dismiss, cx));
+        assert!(ordered.recv().unwrap().error);
+        answered(&agents, 3, cx);
+
+        let change = json!({ "tab": 20, "requests": [
+            { "method": "POST", "path": "/api/items", "what": "Add milk to the list." },
+        ] });
+        let changed = call_as(&agents, 4, "request", change, cx);
+        let id = said("the change's permission", cx);
+        agents.update(cx, |agents, cx| agents.answer(id, Answer::Dismiss, cx));
+        assert!(changed.recv().unwrap().error);
+        answered(&agents, 4, cx);
+
+        let reason = json!({ "tab": 20, "reason": "Sign in to example.com" });
+        let handed = call_as(&agents, 5, "hand_off", reason, cx);
+        said("the handoff", cx);
+        agents.update(cx, |agents, cx| agents.hand_back(20, cx));
+        assert!(!handed.recv().unwrap().error);
+        answered(&agents, 5, cx);
+
+        agents.update(cx, |agents, cx| agents.take_over("claude-code", 20, cx));
+        let reason = json!({ "tab": 20, "reason": "To finish the order" });
+        call_as(&agents, 6, "ask_for_tab", reason, cx);
+        said("asking for the tab", cx);
+        assert_eq!(cards(&agents, cx)[0].title, TITLE, "it kept its title");
+    }
+
+    /// A session's title goes with its Library row: it's in the 30-day file alone, which history
+    /// deleted over the session's time takes, title and all, and history deleted at another time
+    /// leaves it.
+    #[gpui::test]
+    fn a_sessions_title_goes_with_the_history_deleted(cx: &mut TestAppContext) {
+        let (agents, _) = at_work(cx);
+        call_as(
+            &agents,
+            3,
+            "title",
+            json!({ "text": "Refund order 1179" }),
+            cx,
+        );
+        answered(&agents, 2, cx);
+        answered(&agents, 3, cx);
+        bye(&agents, cx);
+        let kept = agents.update(cx, |agents, cx| agents.take_ended(cx));
+        let past = kept[0].1.clone();
+        assert_eq!(past.title, "Refund order 1179");
+        let file = crate::agent_history::write(&[past.clone()]);
+        let read = crate::agent_history::read(&file);
+        assert_eq!(read[0].title, "Refund order 1179");
+        let gone = crate::agent_history::outside(read.clone(), past.started, past.ended + 1);
+        assert!(gone.is_empty(), "{gone:?}");
+        let later = crate::agent_history::outside(read, past.ended + 60, past.ended + 120);
+        assert_eq!(later[0].title, "Refund order 1179");
+    }
+
+    /// A title alone opens the session, so its card has its name from its first frame, but takes
+    /// no tab and asks nothing; a session that only named itself leaves no Library row, and one
+    /// that then worked leaves its row with that name.
+    #[gpui::test]
+    fn a_title_alone_takes_nothing_and_leaves_no_row(cx: &mut TestAppContext) {
+        let (agents, browser, _) = connected(cx);
+        hello(&agents, "claude-code", "claude-code", cx);
+        let named = call_as(
+            &agents,
+            1,
+            "title",
+            json!({ "text": "Refund order 1179" }),
+            cx,
+        );
+        assert!(!named.recv().unwrap().error);
+        assert_eq!(titled(&agents, cx), "Refund order 1179");
+        assert!(browser.asked.borrow().is_none(), "it asked");
+        assert!(browser.checked.borrow().is_empty(), "it acted");
+        assert!(browser.pages.borrow().is_empty() && browser.reads.borrow().is_empty());
+        assert!(
+            agents
+                .read_with(cx, |agents, _| agents.grants("claude-code"))
+                .is_empty()
+        );
+        answered(&agents, 1, cx);
+        bye(&agents, cx);
+        let kept = agents.update(cx, |agents, cx| agents.take_ended(cx));
+        assert!(kept.is_empty(), "a title alone left a row: {kept:?}");
+
+        hello(&agents, "claude-code", "claude-code", cx);
+        call_as(
+            &agents,
+            2,
+            "title",
+            json!({ "text": "Refund order 1179" }),
+            cx,
+        );
+        call_as(&agents, 3, "read_page", json!({ "tab": 20 }), cx);
+        answered(&agents, 2, cx);
+        answered(&agents, 3, cx);
+        bye(&agents, cx);
+        let kept = agents.update(cx, |agents, cx| agents.take_ended(cx));
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].1.title, "Refund order 1179");
+    }
+
+    /// title is refused as any call is to a client the user hasn't connected, before it reaches a
+    /// task: no session and no card.
+    #[gpui::test]
+    fn a_title_from_a_client_not_connected_is_refused(cx: &mut TestAppContext) {
+        let (agents, _, _) = connected(cx);
+        let named = call(
+            &agents,
+            "codex",
+            "title",
+            json!({ "text": "Refund order 1179" }),
+            cx,
+        );
+        let named = named.recv().unwrap();
+        assert_eq!(
+            (named.error, named.text.as_str()),
+            (true, "This agent isn't connected.")
+        );
+        assert!(cards(&agents, cx).is_empty());
+    }
+
+    /// A title after a session ended, at its client's last connection closing or IDLE without a
+    /// call, names the next session, at once; the one that ended keeps the title it had, on its
+    /// card and its Library row.
+    #[gpui::test]
+    fn a_title_after_a_session_ended_names_the_next(cx: &mut TestAppContext) {
+        let (agents, _) = at_work(cx);
+        call_as(
+            &agents,
+            3,
+            "title",
+            json!({ "text": "Refund order 1179" }),
+            cx,
+        );
+        answered(&agents, 2, cx);
+        answered(&agents, 3, cx);
+        bye(&agents, cx);
+        hello(&agents, "claude-code", "claude-code", cx);
+        let next = call_as(&agents, 4, "title", json!({ "text": "Pay invoice 88" }), cx);
+        assert!(
+            !next.recv().unwrap().error,
+            "the next session's name waited"
+        );
+        let titles = |cx: &mut TestAppContext| -> Vec<(String, Dot)> {
+            let shown = cards(&agents, cx);
+            (shown.iter())
+                .map(|card| (card.title.to_string(), card.dot))
+                .collect()
+        };
+        let shown = titles(cx);
+        assert!(
+            shown.contains(&("Refund order 1179".into(), Dot::Done)),
+            "{shown:?}"
+        );
+        assert!(
+            shown.contains(&("Pay invoice 88".into(), Dot::Working)),
+            "{shown:?}"
+        );
+        let kept = agents.update(cx, |agents, cx| agents.take_ended(cx));
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].1.title, "Refund order 1179");
+
+        call_as(&agents, 5, "read_page", json!({ "tab": 20 }), cx);
+        answered(&agents, 4, cx);
+        answered(&agents, 5, cx);
+        cx.executor().advance_clock(IDLE + Duration::from_secs(1));
+        let next = call_as(&agents, 6, "title", json!({ "text": "Book a table" }), cx);
+        assert!(!next.recv().unwrap().error);
+        let shown = titles(cx);
+        assert!(
+            shown.contains(&("Pay invoice 88".into(), Dot::Done)),
+            "{shown:?}"
+        );
+        assert!(
+            shown.contains(&("Book a table".into(), Dot::Working)),
+            "{shown:?}"
+        );
+        let kept = agents.update(cx, |agents, cx| agents.take_ended(cx));
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].1.title, "Pay invoice 88");
     }
 }
 

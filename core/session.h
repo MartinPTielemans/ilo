@@ -210,6 +210,8 @@ struct Settings {
   bool relay_calls = false;
   // Whether a link to another site in a pinned tab or a favorite opens in a link preview.
   bool link_previews = true;
+  // Whether pages may show in the system's engine, where there's one (system_engine.h).
+  bool system_engine = true;
   // Whether a page may take its video or call into Picture in Picture as its tab is hidden, in
   // every profile (ApplyAutoPictureInPicture).
   bool auto_picture_in_picture = true;
