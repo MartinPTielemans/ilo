@@ -1894,17 +1894,19 @@ fn an_agent_chooses_an_option_by_its_text(cx: &mut TestAppContext) {
 }
 
 /// A checkout's page, with what has the keyboard `focused` by its node's id: a card form with its
-/// Pay now button, and a search form with nothing that pays.
+/// Pay now button and a box to save the card, and a search form with nothing that pays.
 fn checkout_tree(focused: Option<&str>) -> String {
     let mut nodes = vec![
         json!({ "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Checkout" },
           "childIds": ["2", "6"] }),
         json!({ "nodeId": "2", "role": { "value": "form" }, "name": { "value": "" },
-          "backendDOMNodeId": 60, "childIds": ["3", "4"] }),
+          "backendDOMNodeId": 60, "childIds": ["3", "4", "5"] }),
         json!({ "nodeId": "3", "role": { "value": "textbox" }, "name": { "value": "Card number" },
           "backendDOMNodeId": 61 }),
         json!({ "nodeId": "4", "role": { "value": "button" }, "name": { "value": "Pay now" },
           "backendDOMNodeId": 62 }),
+        json!({ "nodeId": "5", "role": { "value": "checkbox" },
+          "name": { "value": "Save this card" }, "backendDOMNodeId": 63 }),
         json!({ "nodeId": "6", "role": { "value": "form" }, "name": { "value": "" },
           "backendDOMNodeId": 70, "childIds": ["7", "8"] }),
         json!({ "nodeId": "7", "role": { "value": "searchbox" }, "name": { "value": "Search" },
@@ -1912,6 +1914,11 @@ fn checkout_tree(focused: Option<&str>) -> String {
         json!({ "nodeId": "8", "role": { "value": "button" }, "name": { "value": "Go" },
           "backendDOMNodeId": 72 }),
     ];
+    focusing(nodes, focused)
+}
+
+/// The tree `nodes` with the node `focused` holding the keyboard, if any.
+fn focusing(mut nodes: Vec<Value>, focused: Option<&str>) -> String {
     for node in &mut nodes {
         if Some(node["nodeId"].as_str().unwrap()) == focused {
             let focused = json!({ "type": "booleanOrUndefined", "value": true });
@@ -1921,18 +1928,38 @@ fn checkout_tree(focused: Option<&str>) -> String {
     json!({ "nodes": nodes }).to_string()
 }
 
+/// A checkout whose Pay now button sits outside the card's form, as a sticky footer's does, tied
+/// to it by the button's form attribute, which the tree doesn't show.
+fn footer_tree(focused: Option<&str>) -> String {
+    let nodes = vec![
+        json!({ "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Checkout" },
+          "childIds": ["2", "4"] }),
+        json!({ "nodeId": "2", "role": { "value": "form" }, "name": { "value": "" },
+          "backendDOMNodeId": 60, "childIds": ["3"] }),
+        json!({ "nodeId": "3", "role": { "value": "textbox" }, "name": { "value": "Card number" },
+          "backendDOMNodeId": 61 }),
+        json!({ "nodeId": "4", "role": { "value": "button" }, "name": { "value": "Pay now" },
+          "backendDOMNodeId": 62 }),
+    ];
+    focusing(nodes, focused)
+}
+
 /// A key press that activates a control asks as a click on it does, on a site that sends no
-/// messages. Enter in a field submits its form, whose Pay now button a click on would ask, as
-/// typing with submit does, and Space on the focused Pay now button is a click on it. Enter in a
-/// form with nothing that pays, Space in a field and Tab ask nothing (GHSA-hqw3-jp9p-3rhj).
+/// messages. Enter in a field or on a checkbox submits its form, whose Pay now button a click on
+/// would ask, as typing with submit does, as does a Pay now button outside any form. Space or
+/// Enter on the focused Pay now button is a click on it, wherever the last answer left the
+/// keyboard. Enter in a form with nothing that pays, Space in a field or on a checkbox and Tab ask
+/// nothing (GHSA-hqw3-jp9p-3rhj).
 #[gpui::test]
 fn a_key_press_that_activates_a_control_asks_as_a_click_on_it(cx: &mut TestAppContext) {
     let (agents, browser, _) = connected(cx);
-    let snapshot = |focused: Option<&str>, cx: &mut TestAppContext| {
+    let look = |tree: String, cx: &mut TestAppContext| {
         let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
-        let outline = page_done(&agents, &browser, answer, checkout_tree(focused), cx).text;
+        let outline = page_done(&agents, &browser, answer, tree, cx).text;
         assert!(outline.contains("- button \"Pay now\" [e2]"), "{outline}");
     };
+    let snapshot =
+        |focused: Option<&str>, cx: &mut TestAppContext| look(checkout_tree(focused), cx);
     // Calls `tool` and checks it asks `what` before anything reaches the page, then the × answers.
     let asks = |tool: &str, arguments: Value, what: &str, cx: &mut TestAppContext| {
         *browser.asked.borrow_mut() = None;
@@ -1952,13 +1979,15 @@ fn a_key_press_that_activates_a_control_asks_as_a_click_on_it(cx: &mut TestAppCo
         });
         assert!(answer.recv().unwrap().error);
     };
-    // Calls `tool`, which goes to the page without a question.
-    let goes = |tool: &str, arguments: Value, cx: &mut TestAppContext| {
+    // Calls `tool`, which goes to the page without a question, and the page answers with `tree`.
+    let answered = |tool: &str, arguments: Value, tree: String, cx: &mut TestAppContext| {
         *browser.asked.borrow_mut() = None;
         let answer = call(&agents, "claude-code", tool, arguments.clone(), cx);
         assert!(browser.asked.borrow().is_none(), "{tool} {arguments} asked");
-        let outline = checkout_tree(None);
-        assert!(!page_done(&agents, &browser, answer, outline, cx).error);
+        assert!(!page_done(&agents, &browser, answer, tree, cx).error);
+    };
+    let goes = |tool: &str, arguments: Value, cx: &mut TestAppContext| {
+        answered(tool, arguments, checkout_tree(None), cx)
     };
 
     snapshot(None, cx);
@@ -1968,7 +1997,7 @@ fn a_key_press_that_activates_a_control_asks_as_a_click_on_it(cx: &mut TestAppCo
     asks("type", card, what, cx);
     goes(
         "type",
-        json!({ "tab": 20, "ref": "e3", "text": "socks", "submit": true }),
+        json!({ "tab": 20, "ref": "e4", "text": "socks", "submit": true }),
         cx,
     );
     goes(
@@ -2006,6 +2035,49 @@ fn a_key_press_that_activates_a_control_asks_as_a_click_on_it(cx: &mut TestAppCo
         cx,
     );
 
+    // Enter on a checkbox submits its form too, so it asks as Enter in the form's field does, and
+    // Space on it checks it.
+    snapshot(Some("5"), cx);
+    asks(
+        "press_key",
+        enter.clone(),
+        "press Enter, which can click “Pay now”, on example.com",
+        cx,
+    );
+    snapshot(Some("5"), cx);
+    goes("press_key", json!({ "tab": 20, "key": "Space" }), cx);
+
+    // The answer to the action before the press says where the keyboard went, with no look at the
+    // page between: Tab's, and a look at one element's part, whose page the core outlined whole.
+    snapshot(Some("7"), cx);
+    let tab = json!({ "tab": 20, "key": "Tab" });
+    answered("press_key", tab, checkout_tree(Some("4")), cx);
+    asks(
+        "press_key",
+        enter.clone(),
+        "press Enter on “Pay now” on example.com",
+        cx,
+    );
+    snapshot(Some("7"), cx);
+    let part = json!({ "tab": 20, "ref": "e1" });
+    answered("snapshot", part, checkout_tree(Some("4")), cx);
+    asks(
+        "press_key",
+        enter.clone(),
+        "press Enter on “Pay now” on example.com",
+        cx,
+    );
+
+    // A Pay now button outside the card's form may be the one its Enter clicks.
+    look(footer_tree(Some("3")), cx);
+    asks(
+        "press_key",
+        enter.clone(),
+        "press Enter, which can click “Pay now”, on example.com",
+        cx,
+    );
+
+    // Enter in the search form clicks Go, never the card form's Pay now.
     snapshot(Some("7"), cx);
     goes("press_key", enter.clone(), cx);
     // The page itself has the keyboard: Enter activates nothing.
