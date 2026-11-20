@@ -43,9 +43,9 @@ use browser::settings_card::{self, Card, Paging};
 use browser::settings_column::{self, Section};
 use browser::settings_pictures::{appearance_title, title as side_title};
 use browser::settings_rows::{
-    Chip, Look as RowLook, SLIDE, chevron_slot, chip, detailed_row, end, frame, glyph_plate, group,
-    group_lined, named_button, row, sent_part, stop_button, stop_chip, stop_popup, stop_restore,
-    stop_switch, text,
+    Chip, Look as RowLook, SLIDE, chevron_slot, chip, command_export, command_text, detailed_row,
+    end, frame, glyph_plate, group, group_lined, named_button, row, sent_part, stop_button,
+    stop_chip, stop_popup, stop_restore, stop_switch, text,
 };
 use browser::settings_search::{
     self, EndSearch, Entry, NextControl, PageBottom, PageDown, PageTop, PageUp, PreviousControl,
@@ -3960,6 +3960,12 @@ impl Settings {
         }
         blocks.push(Block::Heading("Apps that connect".into()));
         blocks.push(Block::Group(group(look, clients)));
+        // Shown as Apps that connect are, whether agents are on or off: the command says they're
+        // off when it's run.
+        if agents.read(cx).command_offered() {
+            blocks.push(Block::Heading("Command line".into()));
+            blocks.push(Block::Rows(vec![self.command_line(agents, cx)]));
+        }
         // AppleScript is the Mac's alone.
         if cfg!(target_os = "macos") {
             blocks.extend(self.scripts(agents, accent, cx));
@@ -4473,7 +4479,7 @@ impl Settings {
             format!("Connected in {}", client.config()).into()
         } else if client == Client::Other {
             // Says which it looked for, so one missing from the list isn't a mystery.
-            let missing: Vec<&str> = (Client::ALL.into_iter())
+            let missing: Vec<&str> = (Client::APPS.into_iter())
                 .filter(|client| !listed.contains(client))
                 .map(Client::name)
                 .collect();
@@ -4523,12 +4529,89 @@ impl Settings {
             Client::ClaudeCode => "icons/terminal.svg",
             Client::Codex => "icons/square-terminal.svg",
             Client::Other => "icons/cable.svg",
+            Client::Command => COMMAND_GLYPH,
         };
         let controls = copy
             .into_iter()
             .chain([action.into_any_element()])
             .collect();
         feature_row(look, glyph, client.name(), Some(detail), controls)
+    }
+
+    /// The `ilo` command's row under Command line: Add, or where it's linked with Remove, and the
+    /// line to paste with Copy Line when the user's shell doesn't look there (agents::cli).
+    fn command_line(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> Row {
+        let look = &self.look;
+        let model = agents.read(cx);
+        let client = Client::Command;
+        let state = model.command_state();
+        let failure = model.failure(client);
+        let mono = browser::face::mono(&cx.text_system().all_font_names());
+        let detail = agents::cli::detail(state);
+        let action = |title: &'static str, id: &'static str| {
+            let agents = agents.clone();
+            self.button(id, title)
+                .relative()
+                .child(self.drawn(format!("ilo-command {}", title.to_lowercase())))
+                .on_click(move |_, _, cx| {
+                    agents.update(cx, |agents, cx| match agents.is_connected(client) {
+                        true => agents.disconnect(client, cx),
+                        false => {
+                            // check.sh reads this line.
+                            log!("browser: connect agent {}", client.id());
+                            agents.connect(client, cx)
+                        }
+                    })
+                })
+                .into_any_element()
+        };
+        let mut controls = Vec::new();
+        if state == agents::cli::State::Unsearched {
+            let copy = self
+                .button("copy-command-line", "Copy Line")
+                .relative()
+                .child(self.drawn("ilo-command copy line".into()))
+                .on_click(|_, _, cx| {
+                    log!("browser: ilo command line copied");
+                    cx.write_to_clipboard(ClipboardItem::new_string(
+                        agents::cli::EXPORT.to_string(),
+                    ));
+                });
+            controls.push(copy.into_any_element());
+        }
+        controls.push(match state {
+            agents::cli::State::Off => action("Add", "add-command"),
+            _ => action("Remove", "remove-command"),
+        });
+        let export = (failure.is_none())
+            .then_some(detail.export)
+            .flatten()
+            .map(|export| command_export(look, export, mono));
+        let text = match &failure {
+            Some(why) => text(look, client.name(), Some(why.clone())),
+            None => command_text(look, client.name(), &detail, mono),
+        };
+        let line: SharedString = match failure {
+            Some(why) => why,
+            None => [Some(detail.line.as_str()), detail.export]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .into(),
+        };
+        Row {
+            div: frame()
+                .flex_wrap()
+                .child(glyph_plate(look, COMMAND_GLYPH, true))
+                .child(text)
+                .child(end(controls))
+                .children(export),
+            name: client.name().into(),
+            line: Some(line),
+            keys: None,
+            nested: false,
+        }
     }
 
     /// Google's Widevine module, where the core offers it: where it is, and the ways to get it,
@@ -5489,6 +5572,9 @@ fn feature_row(
         .child(text(look, name, line))
         .when(!controls.is_empty(), |row| row.child(end(controls)))
 }
+
+/// The `ilo` command's glyph, under Command line.
+const COMMAND_GLYPH: &str = "icons/square-code.svg";
 
 /// A setting's row: its name, its line and its controls, as the search reads it.
 fn setting(

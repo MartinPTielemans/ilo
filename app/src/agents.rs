@@ -14,8 +14,10 @@
 //! Settings › Agents and the agent's Space's menu list what the user answered for good, to revoke.
 
 pub mod bridge;
+pub mod cli;
 pub mod clients;
 mod codex;
+pub mod command;
 mod held;
 pub mod page;
 #[cfg(windows)]
@@ -662,6 +664,9 @@ pub struct Agents {
     trouble: Option<SharedString>,
     /// The clients on this computer, as Settings › Agents last looked.
     found: Vec<Client>,
+    /// Whether the user's shell looks in the `ilo` command's folder, as Settings › Agents last
+    /// asked it.
+    command_searched: bool,
     /// The client whose Connect is writing its config, and the client whose last failed, and why.
     connecting: Option<Client>,
     failed: Option<(Client, SharedString)>,
@@ -857,6 +862,7 @@ impl Agents {
             server: None,
             trouble: None,
             found: Vec::new(),
+            command_searched: true,
             connecting: None,
             failed: None,
             live: HashSet::new(),
@@ -1046,7 +1052,8 @@ impl Agents {
     /// Looks again for the clients on this computer, as Settings › Agents shows: one installed
     /// since the last look is listed.
     pub fn look_for_clients(&mut self, cx: &mut Context<Self>) {
-        let found: Vec<Client> = (Client::ALL.into_iter())
+        self.look_for_command(cx);
+        let found: Vec<Client> = (Client::APPS.into_iter())
             .filter(|client| self.clients.found(*client))
             .collect();
         if found != self.found {
@@ -1058,13 +1065,51 @@ impl Agents {
     /// The clients Settings › Agents lists: those found here, any connected, whose Disconnect
     /// stays though the client has gone, and any other MCP client.
     pub fn listed(&self) -> Vec<Client> {
-        (Client::ALL.into_iter())
+        (Client::APPS.into_iter())
             .filter(|client| {
                 *client == Client::Other
                     || self.found.contains(client)
                     || self.is_connected(*client)
             })
             .collect()
+    }
+
+    /// Whether Settings › Agents offers the `ilo` command: not yet on Windows, nor in a Flatpak,
+    /// whose sandbox can't write the user's bin folder.
+    pub fn command_offered(&self) -> bool {
+        cfg!(unix) && self.bridge.first().map(String::as_str) != Some("flatpak")
+    }
+
+    /// The `ilo` command's row: not added, or added in a folder the user's shell looks in or not.
+    pub fn command_state(&self) -> cli::State {
+        match (self.is_connected(Client::Command), self.command_searched) {
+            (false, _) => cli::State::Off,
+            (true, true) => cli::State::On,
+            (true, false) => cli::State::Unsearched,
+        }
+    }
+
+    /// Asks the user's shell, in the background, whether it looks in the `ilo` command's folder,
+    /// as the row says, once it's added.
+    fn look_for_command(&mut self, cx: &mut Context<Self>) {
+        if !self.is_connected(Client::Command) {
+            return;
+        }
+        let clients = self.clients.clone();
+        cx.spawn(async move |agents, cx| {
+            let searched = cx
+                .background_spawn(async move { clients.searches(&cli::folder(&clients::home())) })
+                .await;
+            agents
+                .update(cx, |agents, cx| {
+                    if agents.command_searched != searched {
+                        agents.command_searched = searched;
+                        cx.notify();
+                    }
+                })
+                .ok();
+        })
+        .detach();
     }
 
     pub fn is_connected(&self, client: Client) -> bool {
@@ -1130,6 +1175,9 @@ impl Agents {
                 self.tokens_changed();
                 self.save();
                 self.note(client.id(), "connected", "", "");
+                if client == Client::Command {
+                    self.look_for_command(cx);
+                }
             }
             Err(why) => {
                 log!("browser: agent {} couldn't connect: {why}", client.id());
@@ -1294,6 +1342,9 @@ impl Agents {
                     cx.notify();
                 }
             }
+            // The `ilo` command's connection closes after each command, which isn't its end: its
+            // session ends as an idle one does, and it's live till then (Agents::command_gone).
+            Event::Bye { agent } if agent == Client::Command.id() => {}
             Event::Bye { agent } => {
                 self.end_session(&agent, cx);
                 if self.live.remove(&agent) {
@@ -2418,6 +2469,10 @@ impl Agents {
                 }
                 self.note(agent, "stopped by the user", "", "");
                 self.session_stopped(agent);
+                // No connection of the `ilo` command's is left open to close (Event::Bye).
+                if agent == Client::Command.id() {
+                    self.live.remove(agent);
+                }
             }
             None => self.note(agent, "stopped", "", ""),
         }
