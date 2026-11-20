@@ -289,9 +289,13 @@ impl Browser for Made {
         };
     }
 
+    // As the core's: the tab closes with its split.
     fn remove_pinned(&self, tab: u64, cx: &mut App) {
         self.set_pinned(tab, false, cx);
-        self.close_user_tab(tab, cx);
+        for each in self.split(tab, cx) {
+            self.separate(each, cx);
+            self.close_user_tab(each, cx);
+        }
     }
 
     fn close_tab(&self, agent: &str, tab: u64, discard: bool, _: &mut App) -> Closed {
@@ -7096,10 +7100,67 @@ mod sessions {
         agents.update(cx, |agents, cx| agents.tab_closed(30, cx));
         assert_eq!(
             refused(4, 30, cx),
-            "The user closed tab 30. To carry on, open the page again with open_tab."
+            "Tab 30 was closed, by the user or by its own page. To carry on, open the page \
+             again with open_tab."
         );
         // The user's own tab was never the agent's.
         assert_eq!(refused(5, 10, cx), NOT_ITS_SPACE);
+    }
+
+    /// The agent's own remove_tab, the one tool of its that takes a page out of its Space, says
+    /// so of the page and of the rest of its split, which close with it, not that the user closed
+    /// them, though the core says only that they closed (#3660).
+    #[gpui::test]
+    fn a_page_the_agent_removed_says_so(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        answered(&agents, 2, cx);
+        call_as(
+            &agents,
+            3,
+            "open_tab",
+            json!({ "url": "https://example.org/" }),
+            cx,
+        );
+        call_as(&agents, 4, "split_tabs", json!({ "tabs": [20, 30] }), cx);
+        call_as(&agents, 5, "pin_tab", json!({ "tab": 20 }), cx);
+        let answer = call_as(&agents, 6, "remove_tab", json!({ "tab": 20 }), cx);
+        assert!(!answer.try_recv().unwrap().error);
+        let open = (browser.tabs.borrow().iter()).any(|tab| tab.0 == 20 || tab.0 == 30);
+        assert!(!open, "the tab and its split closed");
+        agents.update(cx, |agents, cx| {
+            agents.tab_closed(20, cx);
+            agents.tab_closed(30, cx);
+        });
+        let read = |id, tab, cx: &mut TestAppContext| {
+            let answer = call_as(&agents, id, "read_page", json!({ "tab": tab }), cx);
+            answer.try_recv().unwrap().text
+        };
+        assert_eq!(
+            read(7, 20, cx),
+            "The agent removed tab 20 from its pinned tabs, which closed it. To carry on, open \
+             the page again with open_tab."
+        );
+        assert_eq!(
+            read(8, 30, cx),
+            "Tab 30 closed with its split view, as the agent removed tab 20 from its pinned tabs. \
+             To carry on, open the page again with open_tab."
+        );
+    }
+
+    /// The browser keeps why at most GONE_KEPT pages left, the lowest tab id going first, so a
+    /// long run doesn't grow it without end.
+    #[gpui::test]
+    fn the_reasons_kept_are_bounded(cx: &mut TestAppContext) {
+        let (agents, _) = at_work(cx);
+        let past = GONE_KEPT as u64 + 88;
+        agents.update(cx, |agents, _| {
+            for tab in 1..=past {
+                agents.went(tab, "claude-code", Gone::Closed);
+            }
+            assert_eq!(agents.gone.len(), GONE_KEPT);
+            assert_eq!(agents.gone.keys().min(), Some(&89));
+            assert!(agents.gone.contains_key(&past));
+        });
     }
 
     /// The pages of a session that ended are its client's next session's to work in, until the
