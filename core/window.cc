@@ -3465,7 +3465,7 @@ void Window::GiveKeyboardToPageEnd(bool last) {
 
 void Window::OverlayTakesKeyboard(bool takes) {
   if (takes) {
-    selected_under_overlay_ = selected_;
+    overlay_lend_.Take(selected_);
     return;
   }
   // The overlay showed another tab, as the command bar does going to a page: its page takes the
@@ -3473,11 +3473,16 @@ void Window::OverlayTakesKeyboard(bool takes) {
   // the keyboard being the overlay's, and on X11 the window holds it for the page until it's active
   // again. Not when the tab it showed closed, as a Space the dialog deleted did: what shows then
   // comes of that, and the UI keeps the keyboard, as the Mac's does.
-  const bc_id under = std::exchange(selected_under_overlay_, 0);
-  if (under != selected_ && shown_ && (!under || Tab::Get(under))) {
-    page_had_keyboard_ = true;
-    GiveKeyboardToPage();
-    return;
+  switch (overlay_lend_.LetGo(selected_, !!shown_, [](bc_id tab) { return !!Tab::Get(tab); })) {
+    case OverlayLend::Goes::kToUI:
+      // Asked for as the overlay's command ran, as New Board's name field is: it has it already.
+      return;
+    case OverlayLend::Goes::kToPage:
+      page_had_keyboard_ = true;
+      GiveKeyboardToPage();
+      return;
+    case OverlayLend::Goes::kBack:
+      break;
   }
 #if BUILDFLAG(IS_LINUX)
   // Otherwise the page or UI that had it has it back, unless what it was went under the overlay,
