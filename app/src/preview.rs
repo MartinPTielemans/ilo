@@ -4633,18 +4633,19 @@ impl gpui::Render for PicturesPage {
         window: &mut gpui::Window,
         cx: &mut gpui::Context<Self>,
     ) -> impl gpui::IntoElement {
+        use browser::agents::cli;
         use browser::palette::{INK, PAPER};
         use browser::settings_card::Colors;
         use browser::settings_column::{self, Section};
         use browser::settings_pictures::{appearance_picker, favorites_picker, picker};
         use browser::settings_rows::{
-            Look, drawn, end, frame, glyph_plate, group, popup, stop_button, stop_switch,
-            text as row_text,
+            Look, command_text, drawn, end, frame, glyph_plate, group, popup, stop_button,
+            stop_switch, text as row_text,
         };
         use browser::theme::Appearance;
         use browser::tokens::palette::{LIGHT_STAND_IN, STAND_IN};
         use browser::tokens::settings::{
-            DETAIL_TOP, HEADING_BOTTOM, HEADING_TOP, NAME, POPUP_WIDTH, SIDE_ROOM, SIDE_TOP, TEXT_X,
+            HEADING_BOTTOM, HEADING_TOP, NAME, POPUP_WIDTH, SIDE_ROOM, SIDE_TOP, TEXT_X,
         };
         use browser::tokens::text;
         use gpui::{FontWeight, ParentElement, Styled, div, rgb};
@@ -4876,10 +4877,10 @@ impl gpui::Render for PicturesPage {
                         vec![button("connect-other", "Connect")],
                     ),
                 ];
-                // The ilo command's action, where the parity sheet waits for it to be drawn.
+                // The ilo command's actions, where the parity sheet waits for them to be drawn.
                 let action = |title: &'static str| {
                     gpui::IntoElement::into_any_element(
-                        stop_button(&look, "ilo-command", title, a11y)
+                        stop_button(&look, title, title, a11y)
                             .relative()
                             .child(drawn(
                                 format!("ilo-command {}", title.to_lowercase()),
@@ -4887,45 +4888,24 @@ impl gpui::Render for PicturesPage {
                             )),
                     )
                 };
-                let name = "ilo command";
-                let glyph = "icons/square-code.svg";
-                let command = match state {
-                    CommandLine::Off => feature(
-                        glyph,
-                        name,
-                        "Lets an agent in a terminal use the browser. Add puts ilo on your PATH.",
-                        vec![action("Add")],
-                    ),
-                    CommandLine::On => feature(
-                        glyph,
-                        name,
-                        "In ~/.local/bin. An agent runs ilo help to start.",
-                        vec![action("Remove")],
-                    ),
-                    CommandLine::Unsearched => {
-                        let fonts = cx.text_system().all_font_names();
-                        let line = div()
-                            .mt(px(DETAIL_TOP))
-                            .text_size(px(text::SMALL))
-                            .font_family(browser::face::mono(&fonts))
-                            .child("export PATH=\"$HOME/.local/bin:$PATH\"");
-                        frame()
-                            .child(glyph_plate(&look, glyph, true))
-                            .child(
-                                row_text(
-                                    &look,
-                                    name,
-                                    Some(
-                                        "In ~/.local/bin, which your shell doesn't search. Add \
-                                         this line to your shell's profile:"
-                                            .into(),
-                                    ),
-                                )
-                                .child(line),
-                            )
-                            .child(end([button("copy-path", "Copy"), action("Remove")]))
-                    }
+                let state = match state {
+                    CommandLine::Off => cli::State::Off,
+                    CommandLine::On => cli::State::On,
+                    CommandLine::Unsearched => cli::State::Unsearched,
                 };
+                let mono = browser::face::mono(&cx.text_system().all_font_names());
+                let mut controls = Vec::new();
+                if state == cli::State::Unsearched {
+                    controls.push(action("Copy Line"));
+                }
+                controls.push(action(match state {
+                    cli::State::Off => "Add",
+                    _ => "Remove",
+                }));
+                let command = frame()
+                    .child(glyph_plate(&look, "icons/square-code.svg", true))
+                    .child(command_text(&look, "ilo CLI", &cli::detail(state), mono))
+                    .child(end(controls));
                 vec![
                     (None, vec![master]),
                     (Some("Apps that connect"), clients),

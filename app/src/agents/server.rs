@@ -75,7 +75,7 @@ pub(super) const END: &str = r#"{"end":true}"#;
 pub type Tokens = Arc<Mutex<HashMap<String, String>>>;
 
 /// The protocol versions the server speaks, newest first.
-const VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
+pub(super) const VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 /// A message may be no longer, which none an agent sends comes near.
 const MAX_LINE: usize = 4 * 1024 * 1024;
 /// Connections at once: a client keeps one.

@@ -445,6 +445,51 @@ pub fn text(look: &Look, name: impl Into<SharedString>, line: Option<SharedStrin
         .children(line)
 }
 
+/// A row's text whose line sets what the user or an agent types in `mono`, the face a terminal
+/// shows it in: a command within the line, and a line to paste under it, as the `ilo` command's
+/// row has (agents::cli::Detail).
+pub fn command_text(
+    look: &Look,
+    name: impl Into<SharedString>,
+    detail: &crate::agents::cli::Detail,
+    mono: &'static str,
+) -> gpui::Div {
+    let run = |len: usize, family: &'static str| gpui::TextRun {
+        len,
+        font: gpui::font(family),
+        color: look.detail.into(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let line = &detail.line;
+    let runs = match &detail.mono {
+        Some(command) => vec![
+            run(command.start, crate::face::UI),
+            run(command.len(), mono),
+            run(line.len() - command.end, crate::face::UI),
+        ],
+        None => vec![run(line.len(), crate::face::UI)],
+    };
+    let runs: Vec<_> = runs.into_iter().filter(|run| run.len > 0).collect();
+    let small = || {
+        div()
+            .mt(px(DETAIL_TOP))
+            .text_size(px(SMALL))
+            .line_height(px(DETAIL_LINE))
+            .text_color(look.detail)
+    };
+    let export = detail
+        .export
+        .map(|export| small().font_family(mono).child(export));
+    div()
+        .flex_1()
+        .min_w_0()
+        .child(div().truncate().child(name.into()))
+        .child(small().child(gpui::StyledText::new(line.clone()).with_runs(runs)))
+        .children(export)
+}
+
 /// A row's end, its controls 20 after its text and 8 apart.
 pub fn end(controls: impl IntoIterator<Item = gpui::AnyElement>) -> gpui::Div {
     div()

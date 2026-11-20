@@ -375,6 +375,8 @@ struct Configs {
     found: Mutex<Vec<Client>>,
     /// What each task CLI answers when looked for; one not here isn't found.
     looked: Mutex<Vec<(crate::agents::runner::Cli, crate::agents::ready::Found)>>,
+    /// Whether the user's shell leaves out the `ilo` command's folder.
+    unsearched: Mutex<bool>,
 }
 
 impl Clients for Configs {
@@ -396,6 +398,10 @@ impl Clients for Configs {
 
     fn found(&self, client: Client) -> bool {
         client == Client::Other || self.found.lock().unwrap().contains(&client)
+    }
+
+    fn searches(&self, _: &std::path::Path) -> bool {
+        !*self.unsearched.lock().unwrap()
     }
 
     /// The tests never run a CLI of this computer's: each answers as `looked` says.
@@ -7300,6 +7306,113 @@ mod sessions {
         agents.update(cx, |agents, cx| agents.drop_task(&second, cx));
         assert_eq!(space(30), None);
         assert_eq!(space(31), Some(2));
+    }
+
+    /// The `ilo` command's connection closes after each command, which isn't its end: its card
+    /// stays at work over the commands, its activity log says it connected once, and it ends as an
+    /// idle session does, after which it has no status and isn't live (#3667).
+    #[gpui::test]
+    fn the_commands_session_lasts_over_its_connections(cx: &mut TestAppContext) {
+        let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+        let agents = agents(&browser, &configs, None, cx);
+        agents.update(cx, |agents, cx| agents.connect(Client::Command, cx));
+        cx.run_until_parked();
+        assert_eq!(
+            agents.read_with(cx, |agents, _| agents.command_state()),
+            crate::agents::cli::State::On
+        );
+        let agent = Client::Command.id();
+        let command = |id: u64, tool: &str, arguments: Value, cx: &mut TestAppContext| {
+            let (reply, answer) = mpsc::channel();
+            let call = Call {
+                id,
+                agent: agent.into(),
+                tool: tool.into(),
+                arguments,
+                reply,
+                at: std::time::Instant::now(),
+            };
+            agents.update(cx, |agents, cx| agents.handle(Event::Call(call), cx));
+            let event = Event::Answered {
+                agent: agent.into(),
+                id,
+                at: std::time::Instant::now(),
+                error: None,
+                image: None,
+            };
+            agents.update(cx, |agents, cx| agents.handle(event, cx));
+            let bye = Event::Bye {
+                agent: agent.into(),
+            };
+            agents.update(cx, |agents, cx| agents.handle(bye, cx));
+            answer
+        };
+        hello(&agents, agent, "Researcher", cx);
+        command(1, "read_page", json!({ "tab": 20 }), cx);
+        // A later command naming another keeps the card's name.
+        hello(&agents, agent, "Someone else", cx);
+        command(2, "snapshot", json!({ "tab": 20 }), cx);
+        let shown = cards(&agents, cx);
+        assert_eq!(shown.len(), 1, "a card for each command: {shown:?}");
+        assert_eq!(shown[0].dot, Dot::Working);
+        assert_eq!(shown[0].name.as_ref(), "Researcher");
+        assert!(agents.read_with(cx, |agents, _| agents.is_live(Client::Command)));
+        assert!(browser.disconnected.borrow().is_empty());
+        let connected = log(&agents, agent, cx)
+            .into_iter()
+            .filter(|(action, _, _)| action == "connected")
+            .count();
+        assert_eq!(connected, 2, "Add's line and the first command's");
+
+        cx.executor().advance_clock(IDLE + Duration::from_secs(1));
+        let shown = cards(&agents, cx);
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0].dot, Dot::Done);
+        assert!(!agents.read_with(cx, |agents, _| agents.is_live(Client::Command)));
+        assert_eq!(*browser.disconnected.borrow(), [agent]);
+        assert!(agents.read_with(cx, |agents, _| agents.status()).is_empty());
+
+        // Its next command is a session of its own, with the name that command gives.
+        hello(&agents, agent, "Writer", cx);
+        command(3, "snapshot", json!({ "tab": 20 }), cx);
+        let shown = cards(&agents, cx);
+        assert_eq!(shown.len(), 2, "{shown:?}");
+        let working: Vec<_> = (shown.iter())
+            .filter(|card| card.dot == Dot::Working)
+            .map(|card| card.name.to_string())
+            .collect();
+        assert_eq!(working, ["Writer"]);
+    }
+
+    /// The command's row is Add until it's added, then says whether the user's shell looks in its
+    /// folder; Remove takes it away as Disconnect does a client, and it's never under Apps that
+    /// connect.
+    #[gpui::test]
+    fn the_commands_row_follows_add_and_remove(cx: &mut TestAppContext) {
+        use crate::agents::cli::State;
+        let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+        let agents = agents(&browser, &configs, None, cx);
+        let state =
+            |cx: &mut TestAppContext| agents.read_with(cx, |agents, _| agents.command_state());
+        assert_eq!(state(cx), State::Off);
+        *configs.unsearched.lock().unwrap() = true;
+        agents.update(cx, |agents, cx| agents.connect(Client::Command, cx));
+        cx.run_until_parked();
+        assert_eq!(state(cx), State::Unsearched);
+        assert_eq!(configs.connected.lock().unwrap()[0].0, Client::Command);
+        *configs.unsearched.lock().unwrap() = false;
+        agents.update(cx, |agents, cx| agents.look_for_clients(cx));
+        cx.run_until_parked();
+        assert_eq!(state(cx), State::On);
+        assert!(
+            !agents
+                .read_with(cx, |agents, _| agents.listed())
+                .contains(&Client::Command)
+        );
+        agents.update(cx, |agents, cx| agents.disconnect(Client::Command, cx));
+        cx.run_until_parked();
+        assert_eq!(state(cx), State::Off);
+        assert_eq!(configs.disconnected.lock().unwrap()[0].0, Client::Command);
     }
 }
 
