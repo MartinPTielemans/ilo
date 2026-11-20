@@ -925,8 +925,35 @@ EOF
     wait "$capturing" || true
     fail "the Mini Player's capture under the pointer didn't get ready: $(tail -1 "$out/mini-player-hover.log")"
   }
+  # The core says when the Mini Player's window hears the pointer come in, and whether Chrome
+  # brought the controls for it, so a move that never reached it is the driver's and one that
+  # brought nothing is the app's (#3354). Its line has Chromium's prefix.
+  pointer_in='browser: mini player pointer in, controls '
+  # Its line comes once each time the pointer comes in since the Mini Player showed, so it has to
+  # be out at the move: nothing of the driver's reaches the Mini Player before it, and the desktop's
+  # pointer only moves in check/pointer.mm's drag above, in an earlier one. Were it in, the move
+  # would log nothing and the red below would name the driver wrongly.
+  early=$(sed -n "/^browser: drive $floated: /,\$p" "$log" | grep "$pointer_in" | head -1)
+  if [ -n "$early" ]; then
+    : > "$go"
+    wait "$capturing" || true
+    fail "the Mini Player heard a pointer come in before the step's move, so the move can't be told from it: $early"
+  fi
+  heard=$(grep -c "$pointer_in" "$log" || true)
   moved_at=$(scrim_ms)
   send pip move $((pw / 8)) $((ph / 2))
+  while [ "$(grep -c "$pointer_in" "$log" || true)" = "$heard" ] &&
+    [ $(($(scrim_ms) - moved_at)) -lt 2000 ]; do
+    sleep 0.02
+  done
+  heard_at=$(($(scrim_ms) - moved_at))
+  if [ "$(grep -c "$pointer_in" "$log" || true)" = "$heard" ]; then
+    : > "$go"
+    wait "$capturing" || true
+    fail "the pointer's move on the Mini Player never reached its window: it logged no \"mini player pointer in\" within 2 s of the move, so the driver's move went elsewhere"
+  fi
+  controls=$(grep "$pointer_in" "$log" | tail -1 | sed 's/.*, controls //')
+  echo "media: the Mini Player's window heard the pointer by +$heard_at ms, the controls $controls"
   while [ $(($(scrim_ms) - moved_at)) -lt 250 ]; do
     sleep 0.02
   done
@@ -951,7 +978,7 @@ EOF
   [ "$in_time" -gt 0 ] ||
     fail "the Mini Player's pictures under the pointer were all asked late, past 2 s from the move, too near the controls' own hide 2.5 s after it to tell the scrim: $readings"
   [ -n "$shown" ] ||
-    fail "the pointer on the Mini Player didn't bring its scrim in any picture asked within 2 s: where the video is about 204 and under the scrim about 133, it read $readings"
+    fail "the pointer on the Mini Player didn't bring its scrim in any picture asked within 2 s, its window having heard it with the controls $controls: where the video is about 204 and under the scrim about 133, it read $readings"
   echo "media: the scrim showed in picture $shown"
   # One flat scrim, as Dia's: over the video, one colour in a frame, it's as dark at a third of
   # the height as at three fifths, off the buttons above and the progress bar below (#2881). An

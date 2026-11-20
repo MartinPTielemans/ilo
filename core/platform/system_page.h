@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "base/functional/callback_forward.h"
+#include "base/time/time.h"
 #include "net/cookies/canonical_cookie.h"
 #include "ui/gfx/native_ui_types.h"
 #include "url/gurl.h"
@@ -26,7 +27,7 @@ struct NativeWebKeyboardEvent;
 
 namespace browser_core::platform {
 
-// What a site's data clearing deletes (ClearSiteAndReload, SystemPage::ClearSite).
+// What a clearing deletes (ClearSiteAndReload, SystemPage::ClearSite and ClearSince).
 enum class SiteData { kCookies, kCache, kAll };
 
 // A page's media, as the sidebar's player shows it (bc_tab_state's media fields).
@@ -137,6 +138,13 @@ class SystemPage {
                         const std::string& domain,
                         SiteData what,
                         base::OnceClosure done);
+  // Deletes every site's |what| that changed since |begin| from |store|, then runs |done|. WebKit
+  // clears from a start to now, as Clear Browsing Data's ranges end now but one, which the core
+  // leaves alone (ClearBothEngines). Loads the system's engine, as DeleteStore.
+  static void ClearSince(const SystemStore& store,
+                         base::Time begin,
+                         SiteData what,
+                         base::OnceClosure done);
 
   SystemPage(const SystemPage&) = delete;
   SystemPage& operator=(const SystemPage&) = delete;
