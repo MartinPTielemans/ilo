@@ -115,15 +115,19 @@ impl Shell {
     /// Safari's engine keeps Chromium's dialog back, as its page isn't the one that asks, until the
     /// tab is back in Chromium.
     pub(super) fn show_page_dialog(&mut self, cx: &mut Context<Self>) {
-        let asked = self.page_dialogs.get(&self.selected);
-        let asked = asked.filter(|_| !self.page(self.selected).system_engine);
         // The user's page is out of the window while a task has the page area, and its dialog
-        // waits for it.
-        let asked = asked.filter(|_| self.task_area.is_none());
-        // A Little ilo window's own page first, then what a tab it sent behind asks to open.
+        // waits for it. A task's page watched there shows its sign-in, which only the user may
+        // answer (#3662); its other dialogs pause the agent until it closes the tab (#3536).
+        let shown = match &self.task_area {
+            None => Some(self.selected),
+            Some(_) => self.watched_task_page().map(|(_, tab)| tab),
+        };
+        let asked = shown.and_then(|tab| Some((tab, self.page_dialogs.get(&tab)?)));
         let asked = asked
-            .map(|dialog| (self.selected, dialog))
-            .or_else(|| self.little_sent_asks());
+            .filter(|(_, dialog)| self.task_area.is_none() || dialog.kind == DialogKind::SignIn);
+        let asked = asked.filter(|(tab, _)| !self.page(*tab).system_engine);
+        // A Little ilo window's own page first, then what a tab it sent behind asks to open.
+        let asked = asked.or_else(|| self.little_sent_asks());
         let wanted = match (asked, self.page_laid) {
             (Some((tab, dialog)), Some(over)) => Some((tab, dialog.clone(), over)),
             _ => None,
