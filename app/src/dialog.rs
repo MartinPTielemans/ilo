@@ -91,6 +91,10 @@ const FADE_IN: f32 = 0.135;
 /// Linux gives the browser window the keyboard back as the dialog starts leaving, and the Mac and
 /// Windows once it has hidden: a page's question is answered then.
 const PAGE_ANSWERED_AS_IT_LEAVES: bool = cfg!(target_os = "linux");
+/// The Mac's dialog lets go of the clicks and the keyboard as it starts leaving, and the keys wait
+/// for its hide all the same, so a click on the page as it leaves isn't lost to it (#3681). Linux's
+/// lets go of both as it holds the keys (overlays::dialog_leaving).
+const LETS_GO_AS_IT_LEAVES: bool = cfg!(target_os = "macos");
 const DROP: f32 = 32.;
 
 /// What a dialog asks.
@@ -183,10 +187,12 @@ pub trait Host {
     /// Hides it, and the browser window gets the keyboard back.
     fn hide(&self);
     /// The dialog was answered and leaves, so no key typed from now may be lost to it: Linux gives
-    /// the browser window the keyboard back at once (overlays::dialog_leaving), the Mac its clicks
-    /// and keyboard (host_dialog_leaving), and the Mac and Windows hold the keys until it has
-    /// hidden (host_hold_keys).
+    /// the browser window the keyboard back at once (overlays::dialog_leaving), and the Mac and
+    /// Windows hold the keys until it has hidden (host_hold_keys).
     fn hold_keys(&self) {}
+    /// The dialog leaves, on the Mac: its window takes no more clicks, and the browser window has
+    /// the keyboard back at once (host_dialog_leaving).
+    fn let_go(&self) {}
     /// Gives the keys held to the window with the keyboard, the browser window once it's hidden
     /// (host_release_held_keys).
     fn give_held_keys(&self) {}
@@ -958,6 +964,9 @@ impl Dialog {
         // Motion never blocks a key (ux-principles): one typed while it leaves, such as ⌥⌘N right
         // after Esc, waits for the browser window rather than reaching the dialog going (#1930).
         self.host.hold_keys();
+        if LETS_GO_AS_IT_LEAVES {
+            self.host.let_go();
+        }
         let (answered, also_chosen) = match answer {
             Some(Answer::Also) => (None, asked.also_chosen.take()),
             Some(answer) => {
