@@ -1971,8 +1971,9 @@ CARD
     changed=$(printf '%s\n' "$changed" | answered "the change")
   }
   change Once 0
+  # The note on a page asking for a password goes before every answer from it (#3661).
   case "$changed" in
-    'POST /api/items → 201 application/json'*'{"id":8,"title":"Milk"}') ;;
+    "Tab $frames_tab's page asks for a password"*'POST /api/items → 201 application/json'*'{"id":8,"title":"Milk"}') ;;
     *) fail "the allowed change answered: $changed" ;;
   esac
   # Awaited, not read once: a read just after the answer missed a line the site had logged (#3314).
