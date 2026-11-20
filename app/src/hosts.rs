@@ -82,6 +82,13 @@ impl dialog::Host for DialogHost {
         };
     }
 
+    fn let_go(&self) {
+        #[cfg(target_os = "macos")]
+        unsafe {
+            platform::host_dialog_leaving()
+        };
+    }
+
     fn give_held_keys(&self) {
         unsafe { platform::host_release_held_keys() };
     }
