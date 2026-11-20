@@ -1494,6 +1494,7 @@ impl Agents {
         }
         // Each goes to the top, so the last goes first.
         for &tab in open.iter().rev() {
+            self.left(tab, super::Gone::Opened);
             self.browser.move_tab(tab, home, cx);
             // Kept, it's the user's tab, with its sound (#1080).
             self.browser.set_muted(tab, false);
@@ -1524,6 +1525,9 @@ impl Agents {
             let pages = self.pages_of(&session, task.space, cx);
             let live = self.worked_in();
             for tab in pages.into_iter().filter(|tab| !live.contains(tab)) {
+                // The task is gone from the list, so `left` wouldn't find whose it was.
+                let why = (session.agent.clone(), super::Gone::PutAway);
+                self.gone.entry(tab).or_insert(why);
                 self.browser.close_user_tab(tab, cx);
             }
             return;
@@ -1535,6 +1539,18 @@ impl Agents {
             self.browser.delete_space(task.space, cx);
         }
         self.remove_task_files(agent);
+    }
+
+    /// `tab`, a session's page, leaves its agent's Space for `gone`, unless it already said why.
+    pub(super) fn left(&mut self, tab: u64, gone: super::Gone) {
+        let whose = (self.tasks.tasks.iter())
+            .filter_map(|task| task.session.as_ref())
+            .find(|session| session.tabs.contains(&tab));
+        if let Some(session) = whose {
+            self.gone
+                .entry(tab)
+                .or_insert((session.agent.clone(), gone));
+        }
     }
 
     /// The tabs the sessions under way have opened or acted on.

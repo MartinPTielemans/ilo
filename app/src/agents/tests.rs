@@ -7113,6 +7113,92 @@ mod sessions {
         assert_eq!(shown[1].open, vec![(20, "example.com".into())]);
     }
 
+    /// A call on a page of the agent's that left its Space says why it went, and that open_tab
+    /// starts again: the user closed it, moved it to their own Space, or opened it from the card
+    /// of the agent's earlier session, or the agent closed it. One that was never the agent's
+    /// says no more than that it isn't in the agent's Space (#3660).
+    #[gpui::test]
+    fn a_call_on_a_page_that_left_says_why(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        answered(&agents, 2, cx);
+        let refused = |id, tab, cx: &mut TestAppContext| {
+            let answer = call_as(&agents, id, "read_page", json!({ "tab": tab }), cx);
+            let answer = answer.try_recv().expect("an answer at once");
+            assert!(answer.error, "{answer:?}");
+            answer.text
+        };
+        let opened = |cx: &mut TestAppContext| {
+            call_as(
+                &agents,
+                6,
+                "open_tab",
+                json!({ "url": "https://example.org/" }),
+                cx,
+            );
+        };
+        let leave = |tab, space, cx: &mut TestAppContext| {
+            cx.update(|cx| browser.move_tab(tab, space, cx));
+            agents.update(cx, |agents, cx| agents.space_changed(2, cx));
+        };
+
+        // The user moves it to their Space.
+        leave(20, 1, cx);
+        assert_eq!(
+            refused(3, 20, cx),
+            "The user moved tab 20 to one of their own Spaces: it's theirs now. To carry on, \
+             open the page again with open_tab."
+        );
+        // The user closes one the agent opened.
+        opened(cx);
+        browser.tabs.borrow_mut().retain(|each| each.0 != 30);
+        agents.update(cx, |agents, cx| agents.tab_closed(30, cx));
+        assert_eq!(
+            refused(4, 30, cx),
+            "The user closed tab 30. To carry on, open the page again with open_tab."
+        );
+        // The user's own tab was never the agent's.
+        assert_eq!(refused(5, 10, cx), NOT_ITS_SPACE);
+    }
+
+    /// The pages of a session that ended are its client's next session's to work in, until the
+    /// user opens them from its card, and the agent hears that, as it does of its own close.
+    #[gpui::test]
+    fn a_call_on_a_page_an_earlier_card_opened_says_so(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        answered(&agents, 2, cx);
+        bye(&agents, cx);
+        let earlier = cards(&agents, cx)[0].agent.to_string();
+        hello(&agents, "claude-code", "claude-code", cx);
+        call_as(
+            &agents,
+            3,
+            "open_tab",
+            json!({ "url": "https://example.org/" }),
+            cx,
+        );
+        agents.update(cx, |agents, cx| agents.open_result(&earlier, None, cx));
+        let space = browser
+            .tabs
+            .borrow()
+            .iter()
+            .find(|each| each.0 == 20)
+            .unwrap()
+            .1;
+        assert_eq!(space, 1);
+        let answer = call_as(&agents, 4, "read_page", json!({ "tab": 20 }), cx);
+        assert_eq!(
+            answer.try_recv().unwrap().text,
+            "The user opened tab 20 from the card of the agent's earlier session: it's theirs \
+             now. To carry on, open the page again with open_tab."
+        );
+        call_as(&agents, 5, "close_tab", json!({ "tab": 30 }), cx);
+        let answer = call_as(&agents, 7, "read_page", json!({ "tab": 30 }), cx);
+        assert_eq!(
+            answer.try_recv().unwrap().text,
+            "The agent closed tab 30. To carry on, open the page again with open_tab."
+        );
+    }
+
     /// A client has one name wherever it shows, its card's (Agents::agent_name): the strip under its
     /// page, from its status, its questions and Settings' activity read the same. Another MCP
     /// client's is the name it gave, or with none its kind's, MCP client, and a session keeps the
