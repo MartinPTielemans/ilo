@@ -960,22 +960,34 @@ fn plain_name(name: &str) -> String {
 
 /// Whether a field by this name holds a secret only when its value reads as one: a `key` or a
 /// `code` is as often a sort's key or a country's code.
-fn named_for_shape(name: &str) -> bool {
+fn shaped_secret(name: &str, value: &str) -> bool {
     let name = plain_name(name);
-    name.ends_with("key") || name.ends_with("code")
+    // These codes are a place's, a phone's or an answer's number, however many digits it has.
+    let numbers = [
+        "zipcode",
+        "postalcode",
+        "postcode",
+        "areacode",
+        "countrycode",
+        "dialcode",
+        "statuscode",
+        "errorcode",
+    ];
+    let digits = !numbers.iter().any(|number| name.ends_with(number));
+    (name.ends_with("key") || name.ends_with("code")) && secret_shaped(value, digits)
 }
 
-/// Whether a value reads as a secret: a one-time code's six to eight digits, or 16 or more of a
-/// credential's letters, digits and marks, with both letters and digits, as an API key or an
-/// authorization code is.
-fn secret_shaped(value: &str) -> bool {
+/// Whether a value reads as a secret: a one-time code's six to eight digits, if `digits`, or 16
+/// or more of a credential's letters, digits and marks, with both letters and digits, as an API
+/// key or an authorization code is.
+fn secret_shaped(value: &str, digits_may_be: bool) -> bool {
     let value = value.trim().as_bytes();
     let digits = value.iter().filter(|byte| byte.is_ascii_digit()).count();
     let letters = value
         .iter()
         .filter(|byte| byte.is_ascii_alphabetic())
         .count();
-    (digits == value.len() && (6..=8).contains(&value.len()))
+    (digits_may_be && digits == value.len() && (6..=8).contains(&value.len()))
         || (value.len() >= 16
             && digits > 0
             && letters > 0
@@ -984,8 +996,7 @@ fn secret_shaped(value: &str) -> bool {
 
 /// Whether the value a field by this name holds is hidden.
 fn secret_field(name: &str, value: &str) -> bool {
-    !value.trim().is_empty()
-        && (secret_name(name) || (named_for_shape(name) && secret_shaped(value)))
+    !value.trim().is_empty() && (secret_name(name) || shaped_secret(name, value))
 }
 
 fn hide_json(value: &mut Value, secret: bool) -> usize {
@@ -1005,7 +1016,7 @@ fn hide_json(value: &mut Value, secret: bool) -> usize {
         Value::Array(items) => items.iter_mut().map(|item| hide_json(item, secret)).sum(),
         Value::Object(fields) => (fields.iter_mut())
             .map(|(name, item)| match item {
-                Value::String(text) if named_for_shape(name) && secret_shaped(text) => {
+                Value::String(text) if shaped_secret(name, text) => {
                     *item = Value::String(HIDDEN.into());
                     1
                 }
@@ -1170,8 +1181,11 @@ fn bare_field(bytes: &[u8], at: usize) -> Option<(Bounds, Bounds)> {
         return None;
     }
     let mut end = at;
-    while end < bytes.len() && word(bytes[end]) {
+    while end < bytes.len() && end - at <= 64 && word(bytes[end]) {
         end += 1;
+    }
+    if end - at > 64 {
+        return None;
     }
     let next = past_spaces(bytes, end);
     match bytes.get(next) {
@@ -1181,7 +1195,7 @@ fn bare_field(bytes: &[u8], at: usize) -> Option<(Bounds, Bounds)> {
         _ => return None,
     }
     let next = past_spaces(bytes, next + 1);
-    if end - at > 64 || !matches!(bytes.get(next), Some(b'"' | b'\'' | b'`')) {
+    if !matches!(bytes.get(next), Some(b'"' | b'\'' | b'`')) {
         return None;
     }
     let value_end = quoted(bytes, next, usize::MAX)?;
@@ -1192,8 +1206,9 @@ fn bare_field(bytes: &[u8], at: usize) -> Option<(Bounds, Bounds)> {
 /// bounds of its name and of its value, which isn't empty.
 fn query_value(bytes: &[u8], from: usize) -> Option<(Bounds, Bounds)> {
     let named = |byte: u8| byte.is_ascii_alphanumeric() || b"_.-%[]".contains(&byte);
+    // A name is short, so its run stops past 64 rather than reading a long word to its end.
     let mut end = from;
-    while end < bytes.len() && named(bytes[end]) {
+    while end < bytes.len() && end - from <= 64 && named(bytes[end]) {
         end += 1;
     }
     if end == from || end - from > 64 || bytes.get(end) != Some(&b'=') {
@@ -1230,8 +1245,10 @@ fn tag_value(text: &str, at: usize) -> Option<(String, Bounds, bool)> {
     let (mut name, mut value, mut password) = (None::<String>, None, false);
     loop {
         next = past_spaces(bytes, next);
+        // A tag ends at the next `<` outside a quoted value as at its `>`, so one left open isn't
+        // read on to the end of the body, and again from each tag after it.
         match bytes.get(next) {
-            None | Some(b'>') => break,
+            None | Some(b'>' | b'<') => break,
             Some(b'/') => {
                 next += 1;
                 continue;
@@ -1240,7 +1257,7 @@ fn tag_value(text: &str, at: usize) -> Option<(String, Bounds, bool)> {
         }
         let start = next;
         while next < bytes.len()
-            && !(bytes[next].is_ascii_whitespace() || b"=>/".contains(&bytes[next]))
+            && !(bytes[next].is_ascii_whitespace() || b"=<>/".contains(&bytes[next]))
         {
             next += 1;
         }
@@ -1258,7 +1275,7 @@ fn tag_value(text: &str, at: usize) -> Option<(String, Bounds, bool)> {
                 _ => {
                     let from = next;
                     while next < bytes.len()
-                        && !(bytes[next].is_ascii_whitespace() || bytes[next] == b'>')
+                        && !(bytes[next].is_ascii_whitespace() || b"<>".contains(&bytes[next]))
                     {
                         next += 1;
                     }
@@ -1825,6 +1842,70 @@ mod tests {
             assert!(kept.contains(shown), "{shown} is hidden in {kept}");
         }
         assert_eq!(hidden, 3, "{kept}");
+    }
+
+    /// A code that's a place's, a phone's or an answer's number shows however many digits it
+    /// has, and a one-time code's digits under any other name ending in code are hidden.
+    #[test]
+    fn a_postal_or_status_code_shows_and_a_one_time_code_is_hidden() {
+        let shown = json!({
+            "zip_code": "94105123",
+            "postalCode": "1234567",
+            "postcode": "123456",
+            "area_code": "1234567",
+            "countryCode": "123456",
+            "dial-code": "1234567",
+            "status_code": "200000",
+            "errorCode": "40400401",
+        });
+        let (kept, hidden) = hide_secrets(&shown.to_string(), true);
+        assert_eq!(hidden, 0, "{kept}");
+        let page = "<input name=\"postal_code\" value=\"1234567\"> ?zipcode=94105123";
+        assert_eq!(hide_secrets(page, false), (page.to_string(), 0));
+
+        let one_time = json!({
+            "code": "481920",
+            "verificationCode": "48192017",
+            "smscode": "4819201",
+            "promo_code": "481920",
+        });
+        let (kept, hidden) = hide_secrets(&one_time.to_string(), true);
+        none_of(&kept, &["481920"]);
+        assert_eq!(hidden, 4, "{kept}");
+    }
+
+    /// A body of a megabyte of tags, fields or quotes that never close is read in a moment, as
+    /// each scan stops at its own end rather than reading on through the rest of the body again
+    /// from the next tag.
+    #[test]
+    fn an_unclosed_tag_or_quote_is_read_once() {
+        let repeated = |unit: &str, end: &str| {
+            let mut body = unit.repeat(MAX_BODY / unit.len());
+            body.push_str(end);
+            body
+        };
+        let bodies = [
+            repeated("<input ", ""),
+            repeated("<meta ", ""),
+            repeated("<input value='", "'"),
+            repeated("<input name=token value=", ""),
+            repeated("\"token\": '", "'"),
+            repeated("token = `", "`"),
+            repeated("&", "a"),
+            repeated("a", "="),
+            repeated("?token_", "=x"),
+        ];
+        for body in bodies {
+            let started = std::time::Instant::now();
+            hide_secrets(&body, false);
+            hide_secrets(&serde_json::to_string(&body).unwrap(), true);
+            let took = started.elapsed();
+            assert!(
+                took < std::time::Duration::from_millis(500),
+                "{took:?} for a body of {:?}",
+                &body[..20]
+            );
+        }
     }
 
     /// A page's hidden inputs and meta tags are hidden by the same names as JSON's fields, and a
