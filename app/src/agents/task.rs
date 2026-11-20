@@ -1768,10 +1768,12 @@ impl Agents {
     }
 
     /// A client said hello: the name its sessions' cards show. One the user connected in
-    /// Settings › Agents by name has that; any other MCP client, the name it gives.
+    /// Settings › Agents by name has that; any other MCP client, the name it gives, as plain text,
+    /// unless it would pass for the browser, whose words the cards set beside an agent's.
     pub(super) fn hello(&mut self, agent: &str, client: &str) {
+        let given = super::request::plain(client);
         let name = match Client::from_id(agent) {
-            Some(Client::Other) if !client.is_empty() => client.to_string(),
+            Some(Client::Other) if !given.is_empty() && !names_the_browser(&given) => given,
             Some(known) => known.name().to_string(),
             None => return,
         };
@@ -2421,7 +2423,7 @@ fn first_words(result: &str) -> SharedString {
 /// What a card's status leads with when a confirmation or a handoff waits on the user, the one
 /// status the card sets heavier (`status_lead`).
 pub const NEEDS_YOU: &str = "Needs you";
-const NEEDS_OK: &str = "Needs your OK";
+pub const NEEDS_OK: &str = "Needs your OK";
 
 /// A task's status while it works, saying how far it has got by its own steps: "Step 5 · Clicking
 /// “Tickets”", the step of the turn it's on, else the last it took, counted among the turn's steps
@@ -2486,7 +2488,33 @@ fn needs_you(question: &Question) -> SharedString {
     match question.handoff {
         Some(_) if question.why.is_empty() => NEEDS_YOU.into(),
         Some(_) => format!("{NEEDS_YOU} · {}", question.why.trim_end_matches('.')).into(),
-        None => format!("{NEEDS_OK} · {}", question.what).into(),
+        // A request's changes: what the browser knows from their methods, never the agent's
+        // words, which the card above quotes as its.
+        None => match &question.changes[..] {
+            [] => format!("{NEEDS_OK} · {}", question.what).into(),
+            [one] => format!("{NEEDS_OK} · {}", one.kind().noun()).into(),
+            many => format!("{NEEDS_OK} · {} changes", many.len()).into(),
+        },
+    }
+}
+
+/// The words a card's foot shows of its `status`, which `fits` its lines or not. A request's that
+/// doesn't fit is "Needs your OK" alone, as the card above says the rest, rather than the words
+/// cut with dots left hanging; any other status shows as it is.
+pub fn foot_words(status: &SharedString, fits: bool) -> SharedString {
+    let request = (status.strip_prefix(NEEDS_OK))
+        .and_then(|rest| rest.strip_prefix(" · "))
+        .is_some_and(|rest| {
+            use super::request::Does;
+            [Does::Sends, Does::Changes, Does::Deletes]
+                .iter()
+                .any(|does| does.noun() == rest)
+                || (rest.strip_suffix(" changes"))
+                    .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+        });
+    match request && !fits {
+        true => NEEDS_OK.into(),
+        false => status.clone(),
     }
 }
 
@@ -2928,4 +2956,66 @@ pub fn model_menu(
         })
         .collect();
     (all, items)
+}
+
+/// Whether a client's name would pass for the browser's own words: one with the app's name as a
+/// word, or that calls itself the browser. "Browser Use" is an agent's.
+fn names_the_browser(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    let app = env!("APP_NAME").to_lowercase();
+    lower
+        .split(|c: char| !c.is_alphanumeric())
+        .any(|word| word == app)
+        || ["the browser", "your browser", "this browser", "web browser"]
+            .iter()
+            .any(|browser| lower.contains(browser))
+        || lower == "browser"
+}
+
+#[cfg(test)]
+mod foot_tests {
+    use super::*;
+    use crate::agents::request::Request;
+
+    fn change(method: &str) -> Request {
+        Request {
+            method: method.into(),
+            url: "https://team.example.com/api/items/7".into(),
+            path: "/api/items/7".into(),
+            headers: Vec::new(),
+            body: String::new(),
+            what: "Tidy up the old draft.".into(),
+        }
+    }
+
+    /// A request's foot that doesn't fit is "Needs your OK" alone; a confirmation's, which says
+    /// what the agent would do, shows as it did before requests asked, fitting or not.
+    #[test]
+    fn only_a_requests_foot_gives_up_its_words() {
+        let order = Question {
+            what: "click “Place order” on shop.example, a long way past the foot's two lines"
+                .into(),
+            ..Question::default()
+        };
+        let status = needs_you(&order);
+        assert_eq!(
+            status.as_ref(),
+            "Needs your OK · click “Place order” on shop.example, a long way past the foot's two lines"
+        );
+        assert_eq!(foot_words(&status, false), status);
+        assert_eq!(foot_words(&status, true), status);
+
+        let one = Question {
+            changes: vec![change("DELETE")].into(),
+            ..Question::default()
+        };
+        assert_eq!(needs_you(&one).as_ref(), "Needs your OK · a delete");
+        assert_eq!(foot_words(&needs_you(&one), true), needs_you(&one));
+        assert_eq!(foot_words(&needs_you(&one), false).as_ref(), NEEDS_OK);
+        let many = Question {
+            changes: vec![change("PATCH"), change("DELETE")].into(),
+            ..Question::default()
+        };
+        assert_eq!(foot_words(&needs_you(&many), false).as_ref(), NEEDS_OK);
+    }
 }

@@ -123,7 +123,7 @@ struct Closing {
 }
 
 /// What an agent asks the user's leave for, as the card in each window asks it.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default)]
 pub struct Question {
     pub id: u64,
     /// The agent's name, as its Space has it.
@@ -140,12 +140,24 @@ pub struct Question {
     /// Whether the agent asks for that tab back (ask_for_tab), which Keep refuses, rather than
     /// handing it to the user.
     pub back: bool,
-    /// The changes a call's requests would make (request), the first `request::LISTED`, each
-    /// what it does and where, then what it sends, or "". They ask every time, so their card has
-    /// no Always or Never.
-    pub changes: Vec<(SharedString, SharedString)>,
-    /// The changes it doesn't list.
-    pub more: usize,
+    /// The requests of a call that may change something (request), each with the agent's own
+    /// sentence for it, all of them. They ask every time, so their card has no Always or Never.
+    /// Shared, as each window's card and the whole request read the same bodies.
+    pub changes: std::rc::Rc<[request::Request]>,
+    /// The site they go to, the tab's, which the card's facts name.
+    pub site: SharedString,
+}
+
+/// The windows' cards ask again whenever a question changes, which is on every Agents change, so
+/// this compares its small fields and its changes by their pointer: they're shared, never copied,
+/// and their bodies may be megabytes.
+impl PartialEq for Question {
+    fn eq(&self, other: &Question) -> bool {
+        (self.id, &self.agent, &self.from, &self.what, &self.why)
+            == (other.id, &other.agent, &other.from, &other.what, &other.why)
+            && (self.handoff, self.back, &self.site) == (other.handoff, other.back, &other.site)
+            && std::rc::Rc::ptr_eq(&self.changes, &other.changes)
+    }
 }
 
 /// What an agent is doing, and what the user holds from it, for the bar in its Space.
@@ -512,6 +524,8 @@ struct Acting {
 struct Sending {
     agent: String,
     tab: u64,
+    /// Whether the user answered the call's question, the one way its changes go.
+    answered: bool,
     sent: Option<request::Request>,
     /// The requests still to send.
     left: std::collections::VecDeque<request::Request>,
@@ -556,6 +570,8 @@ pub struct Activity {
     pub url: SharedString,
     /// What a request sent, or would have, a line a field, without its secrets (#2326).
     pub sent: Vec<request::Sent>,
+    /// What the agent said a request does, in its own words, without their secrets (#3548).
+    pub said: SharedString,
 }
 
 /// A new entry's id: the log's entries are made in more than one place.
@@ -2504,7 +2520,8 @@ impl Agents {
 
     /// Asks the user before the action on `site`, `why`, and waits for their answer.
     fn ask_first(&mut self, act: Act, site: String, why: &'static str, cx: &mut Context<Self>) {
-        // A tab not the agent's is the core's to refuse, without a question.
+        // A tab not the agent's is the core's to refuse, without a question; and if the core would
+        // allow it, `send_next` refuses its changes as unanswered.
         let space = self.browser.agent_space(&act.agent);
         if act.tab != 0
             && !self
@@ -2514,19 +2531,18 @@ impl Agents {
         {
             return self.run(act, cx);
         }
-        let changes: Vec<&request::Request> =
-            act.requests.iter().filter(|each| each.changes()).collect();
-        let listed = changes.iter().take(request::LISTED);
+        let changes = (act.requests.iter())
+            .filter(|each| each.changes())
+            .cloned()
+            .collect();
         let question = Question {
             id: self.next_request,
             agent: self.agent_name(&act.agent),
             from: act.agent.clone().into(),
             what: act.what.clone().into(),
             why: why.into(),
-            changes: listed
-                .map(|each| (each.line().into(), each.summary().into()))
-                .collect(),
-            more: changes.len().saturating_sub(request::LISTED),
+            changes,
+            site: site.clone().into(),
             ..Question::default()
         };
         self.next_request += 1;
@@ -2604,6 +2620,7 @@ impl Agents {
             self.save();
         }
         match answer {
+            Answer::Once | Answer::Always if act.action == "request" => self.send(act, true, cx),
             Answer::Once | Answer::Always => self.run(act, cx),
             Answer::Never | Answer::Dismiss => self.refuse(act, &site, SAID_NO, cx),
         }
@@ -2773,6 +2790,9 @@ impl Agents {
         if act.download != 0 {
             return self.download(act, cx);
         }
+        if act.action == "request" {
+            return self.send(act, false, cx);
+        }
         let Act {
             agent,
             call,
@@ -2785,7 +2805,6 @@ impl Agents {
             mut note,
             show,
             field,
-            requests,
             did,
             reply,
             ..
@@ -2798,21 +2817,6 @@ impl Agents {
                 Err(why) => return self.refuse(act_of(&agent, call, tab, reply), &site, &why, cx),
             };
             return self.closed(&agent, call, tab, true, closed, &site, reply, cx);
-        }
-        if action == "request" {
-            let left = requests.into();
-            let (answers, shown, hidden) = (Vec::new(), request::ALL_SHOWN, 0);
-            let sending = Sending {
-                agent,
-                tab,
-                sent: None,
-                left,
-                answers,
-                shown,
-                hidden,
-                reply,
-            };
-            return self.send_next(sending, cx);
         }
         if action == "open_tab" {
             let site = site(&url);
@@ -2977,12 +2981,35 @@ impl Agents {
 
     /// Sends the call's next request, which the core checks and logs, or answers the call once
     /// there's none left.
+    /// Sends a call's requests one by one, `answered` if the user allowed its changes.
+    fn send(&mut self, act: Act, answered: bool, cx: &mut Context<Self>) {
+        let sending = Sending {
+            agent: act.agent,
+            tab: act.tab,
+            answered,
+            sent: None,
+            left: act.requests.into(),
+            answers: Vec::new(),
+            shown: request::ALL_SHOWN,
+            hidden: 0,
+            reply: act.reply,
+        };
+        self.send_next(sending, cx)
+    }
+
     fn send_next(&mut self, mut sending: Sending, cx: &mut Context<Self>) {
         let Some(next) = sending.left.pop_front() else {
             return finish(sending, false);
         };
         let (agent, tab) = (sending.agent.clone(), sending.tab);
-        let checked = self.may_act(&agent, tab, "request", cx);
+        // A change goes only with the user's answer. One that comes here without a question, as
+        // for a tab the UI doesn't list in the agent's Space (`ask_first`) that the core would
+        // still allow, is refused in the core's words for a tab not the agent's, so the agent
+        // learns nothing it wouldn't from the core.
+        let checked = match next.changes() && !sending.answered {
+            true => Err(NOT_ITS_SPACE.to_string()),
+            false => self.may_act(&agent, tab, "request", cx),
+        };
         let site = site(&self.browser.tab(tab, cx).url);
         let refused = checked.as_ref().err().map_or("", String::as_str);
         self.note_request(&agent, &site, &next, refused);
@@ -3544,13 +3571,16 @@ impl Agents {
 
     /// As `note`, for a request: where it went and what it sent, or would have.
     fn note_request(&mut self, agent: &str, site: &str, sent: &request::Request, refused: &str) {
-        let entry = (sent.url.as_str(), sent.sent());
+        // The agent's words are kept as its, as plain text, without what reads as a secret in
+        // them (`hide_said`). They're the activity log's, in memory, not the past task's file.
+        let said = request::hide_said(&sent.what).0;
+        let entry = (sent.url.as_str(), sent.sent(), said.as_str());
         self.note_entry(agent, "request", site, &sent.target(), refused, entry);
     }
 
     /// As `note`, for what on the page, `target`.
     fn note_on(&mut self, agent: &str, action: &str, site: &str, target: &str, refused: &str) {
-        self.note_entry(agent, action, site, target, refused, ("", Vec::new()))
+        self.note_entry(agent, action, site, target, refused, ("", Vec::new(), ""))
     }
 
     fn note_entry(
@@ -3560,7 +3590,7 @@ impl Agents {
         site: &str,
         target: &str,
         refused: &str,
-        (url, sent): (&str, Vec<request::Sent>),
+        (url, sent, said): (&str, Vec<request::Sent>, &str),
     ) {
         // The rules run reads each entry as Settings › Agents lists it, the app's own refusals too,
         // which never reach the core's line.
@@ -3587,6 +3617,7 @@ impl Agents {
             id: entry_id(),
             url: SharedString::from(url.to_string()),
             sent,
+            said: SharedString::from(said.to_string()),
         };
         if self.stepping.as_deref() == Some(agent) {
             let run = self
@@ -3998,6 +4029,17 @@ pub fn local_time(at: u64) -> String {
     let soon = time.signed_duration_since(Local::now()) < chrono::Duration::hours(20);
     time.format(if soon { "%H:%M" } else { "%a %H:%M" })
         .to_string()
+}
+
+/// An agent's sentence for a request as an opened log entry shows it, marked as its words:
+/// "Claude Code said: “Close item 4127.”". It's plain already, and plain again for one kept
+/// before it was made so.
+pub fn said(agent: &str, words: &str) -> String {
+    format!(
+        "{} said: “{}”",
+        request::plain(agent),
+        request::plain(words)
+    )
 }
 
 /// How long ago `at` was, as the log says it.
