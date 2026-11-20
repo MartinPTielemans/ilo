@@ -3268,6 +3268,23 @@ fn main() {
                             held,
                         };
                         shell.set_agent_status(vec![status], cx);
+                        // =quote asks to click a control whose name holds quotes of its own.
+                        if agent.as_deref() == Some("quote") {
+                            let name = "Place order\u{201D} on github.com, then \u{201C}OK";
+                            let question = browser::agents::Question {
+                                id: 1,
+                                agent: "Claude Code".into(),
+                                from: "claude-code".into(),
+                                what: format!(
+                                    "click {} on shop.example",
+                                    browser::agents::page::curly(name, 60)
+                                )
+                                .into(),
+                                why: "To finish the order".into(),
+                                ..Default::default()
+                            };
+                            shell.set_agent_question(Some(question), cx);
+                        }
                         if handoff {
                             shell.set_selected(reading[3], cx);
                             let question = browser::agents::Question {
