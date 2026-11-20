@@ -2093,9 +2093,9 @@ SEE
   expect '^browser: settings tab General$' "a click on General didn't show its section"
   send key w cmd
   expect '^browser: settings hidden$' "⌘W didn't hide Settings"
-  # A long body shows whole in the whole request, a character that wouldn't show written out, and
-  # Deny sends it nowhere.
-  picnic='{"method":"POST","path":"/api/items","body":{"title":"Picnic","file":"menu\u202etxt.exe","notes":"Meet at the north gate of the park at noon on Saturday. Bring two blankets, the folding table and the blue cooler. Sandwiches: cheese and tomato, egg and cress, and a few plain ones for the children. Fruit: apples, grapes and a melon to cut there. Drinks: lemonade, water and a flask of tea. If it rains we move to the bandstand, and if the bandstand is taken we go to the café by the pond instead. Whoever arrives first saves the spot under the big oak by the lake, with a blanket and a sign.","items":["blankets","table","cooler","plates","cups","knife","bin bags"]},"what":"Save the picnic plan to your list."}'
+  # A long address and body show whole in the whole request, the address breaking at its slashes
+  # and a character that wouldn't show written out, and Deny sends it nowhere.
+  picnic='{"method":"POST","path":"/api/lists/summer-2026/picnics/north-gate/saturday-noon/items/blankets-table-and-cooler/plates-cups-knife-and-bin-bags?draft=1&notify=everyone-on-the-list&note=meet-at-the-north-gate-of-the-park-at-noon","body":{"title":"Picnic","file":"menu\u202etxt.exe","notes":"Meet at the north gate of the park at noon on Saturday. Bring two blankets, the folding table and the blue cooler. Sandwiches: cheese and tomato, egg and cress, and a few plain ones for the children. Fruit: apples, grapes and a melon to cut there. Drinks: lemonade, water and a flask of tea. If it rains we move to the bandstand, and if the bandstand is taken we go to the café by the pond instead. Whoever arrives first saves the spot under the big oak by the lake, with a blanket and a sign.","items":["blankets","table","cooler","plates","cups","knife","bin bags"]},"what":"Save the picnic plan to your list."}'
   change Dismiss 1 "$picnic" '“Save the picnic plan to your list.” Sends data to localhost' \
     agent-request-long agent-request-whole-long
   [ "$changed" = "error: The user said no: you can't make a change on localhost. Don't try again." ] ||
