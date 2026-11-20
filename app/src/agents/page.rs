@@ -208,10 +208,7 @@ pub fn outline(tab: &TabInfo, nodes: &[Value], refs: &mut Refs, part: Option<i64
         notes.push("The outline is cut here. read_page has all of the page's text.");
     }
     if walk.password {
-        notes.push(
-            "This page has a password field, which is off limits to you: signing in is the user's \
-             to do. Hand them the tab with hand_off.",
-        );
+        notes.push(PASSWORD);
     }
     if walk.captcha {
         notes.push(
@@ -233,6 +230,10 @@ pub fn outline(tab: &TabInfo, nodes: &[Value], refs: &mut Refs, part: Option<i64
         editors: walk.editors,
     }
 }
+
+/// What an outline of a page with a password field says of it.
+const PASSWORD: &str = "This page has a password field, which is off limits to you: signing in is \
+                        the user's to do. Hand them the tab with hand_off.";
 
 /// A page's outline, which an answer gives whole, or as what changed since one the agent had.
 #[derive(Clone, Debug, Default)]
@@ -313,6 +314,12 @@ impl Outline {
     /// Whether the element on the DOM node `node` is a rich-text editor.
     pub fn is_editor(&self, node: i64) -> bool {
         self.editors.contains(&node)
+    }
+
+    /// Whether it's of the page at `url` and that page has a password field: a sign-in page, or one
+    /// with a sign-in form.
+    pub fn signs_in_at(&self, url: &str) -> bool {
+        self.page == url.split('#').next().unwrap_or_default() && self.notes.contains(&PASSWORD)
     }
 
     /// Which tab and page it is, without the outline.

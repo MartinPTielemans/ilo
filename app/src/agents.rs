@@ -534,6 +534,9 @@ struct Sending {
     /// What's left of what the call's answers may show, and how many secrets they hid.
     shown: usize,
     hidden: usize,
+    /// Whether the tab's page, as the agent's last outline of it saw it, has a password field,
+    /// which its answer says, as a site's answers may then be those to someone signed out.
+    signs_in: bool,
     reply: mpsc::Sender<ToolResult>,
 }
 
@@ -1284,9 +1287,17 @@ impl Agents {
             "list_tabs" => {
                 // Its first call makes its Space, which the core then lists.
                 self.space(&agent, cx);
-                // A tab of its own off the web is listed by its number alone, so it can close it.
+                // A tab of its own off the web is listed by its number alone, so it can close it,
+                // and one the user holds by its number and theirs, so where they go stays theirs.
                 let tabs: Vec<TabInfo> = (self.browser.agent_tabs(&agent, cx).into_iter())
                     .filter_map(|tab| match self.browser.off_limits(tab.id, cx) {
+                        None | Some(NOT_WEB_PAGE) if self.held.contains_key(&tab.id) => {
+                            Some(TabInfo {
+                                title: WITH_THE_USER.into(),
+                                url: "".into(),
+                                ..tab
+                            })
+                        }
                         None => Some(tab),
                         Some(NOT_WEB_PAGE) => Some(TabInfo {
                             title: OFF_THE_WEB.into(),
@@ -3059,6 +3070,9 @@ impl Agents {
     /// there's none left.
     /// Sends a call's requests one by one, `answered` if the user allowed its changes.
     fn send(&mut self, act: Act, answered: bool, cx: &mut Context<Self>) {
+        let page = self.browser.tab(act.tab, cx).url;
+        let signs_in =
+            (self.outlines.get(&act.tab)).is_some_and(|outline| outline.signs_in_at(&page));
         let sending = Sending {
             agent: act.agent,
             tab: act.tab,
@@ -3068,6 +3082,7 @@ impl Agents {
             answers: Vec::new(),
             shown: request::ALL_SHOWN,
             hidden: 0,
+            signs_in,
             reply: act.reply,
         };
         self.send_next(sending, cx)
@@ -3265,8 +3280,12 @@ impl Agents {
         reply: mpsc::Sender<ToolResult>,
         cx: &mut Context<Self>,
     ) {
-        let today = (self.browser.agent_tabs(agent, cx).into_iter())
-            .filter(|tab| !tab.pinned && self.browser.off_limits(tab.id, cx).is_none());
+        // A tab the user holds stays where it is, as its place among the sites would tell its site.
+        let today = (self.browser.agent_tabs(agent, cx).into_iter()).filter(|tab| {
+            !tab.pinned
+                && self.browser.off_limits(tab.id, cx).is_none()
+                && !self.held.contains_key(&tab.id)
+        });
         let mut rows: Vec<(u64, usize, Option<String>)> = Vec::new();
         for tab in today {
             let split = self.browser.split(tab.id, cx);
@@ -3946,9 +3965,11 @@ const CHANGES_ASK: &str = "Changes ask every time.";
 /// what wasn't sent.
 fn finish(sending: Sending, error: bool) {
     let Sending {
+        tab,
         answers,
         left,
         hidden,
+        signs_in,
         reply,
         ..
     } = sending;
@@ -3958,6 +3979,13 @@ fn finish(sending: Sending, error: bool) {
         false => answer.clone(),
     });
     let mut text = answers.collect::<Vec<_>>().join("\n\n");
+    if signs_in {
+        text = format!(
+            "Tab {tab}'s page asks for a password, as a sign-in page does, so its site may have \
+             answered as to someone signed out. Signing in is the user's to do: hand them the tab \
+             with hand_off, and send the requests again once they hand it back.\n\n{text}"
+        );
+    }
     match left.len() {
         0 => {}
         1 => text.push_str("\n\nThe last request wasn't sent."),
@@ -4045,6 +4073,8 @@ const NOT_WEB_PAGE: &str =
     "The tab's page isn't an http or https page, the only pages agents may use.";
 /// list_tabs' title for a tab of the agent's own off the web, in place of its title and address.
 const OFF_THE_WEB: &str = "A page that isn't http or https";
+/// list_tabs' words for a tab the user holds, in place of its page's title and address (#3694).
+const WITH_THE_USER: &str = "With the user until they hand it back";
 /// The core's refusal of a tab not in the agent's Space (bc_agent_may_act).
 const NOT_ITS_SPACE: &str = "The tab isn't in the agent's own Space.";
 

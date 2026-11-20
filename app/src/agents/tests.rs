@@ -787,6 +787,61 @@ fn open_tab_as_the_first_call_makes_the_agents_space(cx: &mut TestAppContext) {
     );
 }
 
+/// While the user holds one of the agent's tabs, list_tabs names it by its number and says it's
+/// with the user, with nothing of its page, and sorting by site leaves it where it is, as its place
+/// would tell its site (#3694). Handed back, it's listed as before.
+#[gpui::test]
+fn a_tab_the_user_holds_is_listed_without_its_page(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    browser.tabs.borrow_mut().extend([
+        (21, 2, "Wiki", "https://en.wikipedia.org/wiki/Rust"),
+        (22, 2, "Docs", "https://docs.example.com/"),
+        (25, 2, "More", "https://de.wikipedia.org/wiki/Arc"),
+    ]);
+    let list = |cx: &mut TestAppContext| {
+        call(&agents, "claude-code", "list_tabs", json!({}), cx)
+            .recv()
+            .unwrap()
+            .text
+    };
+    assert!(list(cx).contains("21  Wiki  https://en.wikipedia.org/wiki/Rust"));
+    agents.update(cx, |agents, cx| agents.take_over("claude-code", 21, cx));
+    let held = list(cx);
+    let line = held
+        .lines()
+        .find(|line| line[2..].starts_with("21  "))
+        .unwrap();
+    assert!(
+        line.contains("With the user until they hand it back"),
+        "{held}"
+    );
+    assert!(
+        !held.contains("Wiki") && !held.contains("wikipedia.org/wiki/Rust"),
+        "list_tabs named the held tab's page: {held}"
+    );
+    assert!(
+        held.contains("22  Docs  https://docs.example.com/"),
+        "{held}"
+    );
+
+    let sorted = call(&agents, "claude-code", "sort_tabs_by_site", json!({}), cx)
+        .recv()
+        .unwrap();
+    assert_eq!(
+        sorted,
+        ToolResult::text("Your Today tabs are together by site already."),
+        "the held tab's site moved a tab"
+    );
+    let order: Vec<u64> = (browser.tabs.borrow().iter())
+        .filter(|tab| tab.1 == 2)
+        .map(|tab| tab.0)
+        .collect();
+    assert_eq!(order, [20, 21, 22, 25]);
+
+    agents.update(cx, |agents, cx| agents.hand_back(21, cx));
+    assert!(list(cx).contains("21  Wiki  https://en.wikipedia.org/wiki/Rust"));
+}
+
 /// Two agents each list their own Space's tabs, as the core lists the calling agent's, and neither
 /// the other's nor the user's.
 #[gpui::test]
@@ -4531,6 +4586,40 @@ mod requests {
                 .map(|entry| (entry.target.to_string(), entry.refused.to_string()))
                 .collect()
         })
+    }
+
+    /// On a page the agent's outline saw ask for a password, as a sign-in page does, a request's
+    /// answer says the site may have answered as to someone signed out, and names hand_off; on
+    /// one that doesn't, it says nothing of it (#3661).
+    #[gpui::test]
+    fn a_request_on_a_sign_in_page_says_so(cx: &mut TestAppContext) {
+        let (agents, browser, _) = connected(cx);
+        let read = json!({ "tab": 20, "requests": [{ "method": "GET", "path": "/api/me" }] });
+        let snapshot = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+        page_done(&agents, &browser, snapshot, shop_tree(), cx);
+        let answer = call(&agents, "claude-code", "request", read.clone(), cx);
+        answered(&agents, &browser, 401, r#"{"error":"sign in"}"#, cx);
+        let text = answer.recv().unwrap().text;
+        assert!(
+            text.starts_with(
+                "Tab 20's page asks for a password, as a sign-in page does, so its site may have \
+                 answered as to someone signed out. Signing in is the user's to do: hand them the \
+                 tab with hand_off, and send the requests again once they hand it back.\n\n\
+                 GET /api/me → 401"
+            ),
+            "{text}"
+        );
+
+        let signed_in = json!({ "nodes": [
+            { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Shop" } },
+        ]})
+        .to_string();
+        let snapshot = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+        page_done(&agents, &browser, snapshot, signed_in, cx);
+        let answer = call(&agents, "claude-code", "request", read, cx);
+        answered(&agents, &browser, 200, r#"{"name":"Ada"}"#, cx);
+        let text = answer.recv().unwrap().text;
+        assert!(text.starts_with("GET /api/me → 200"), "{text}");
     }
 
     /// A read goes at once, and its answer is the body without what looks like a credential. A
