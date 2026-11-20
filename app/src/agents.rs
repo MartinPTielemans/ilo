@@ -1278,6 +1278,7 @@ impl Agents {
             tool,
             arguments,
             reply,
+            at,
             ..
         } = call;
         // check.sh reads this line.
@@ -1699,7 +1700,8 @@ impl Agents {
                     false => self.ask_first(act, host, CHANGES_ASK, cx),
                 }
             }
-            "title" | "ask" | "finish" if is_task(&agent) => {
+            "title" => self.name_task(&agent, id, &arguments, at, reply, cx),
+            "ask" | "finish" if is_task(&agent) => {
                 self.task_tool(&agent, &tool, &arguments, reply, cx)
             }
             _ => _ = reply.send(ToolResult::error(format!("There's no tool {tool}."))),
@@ -4187,6 +4189,14 @@ pub fn site(url: &str) -> String {
         None => host.split(':').next().unwrap_or_default(),
     };
     host.strip_prefix("www.").unwrap_or(host).to_string()
+}
+
+/// The kinds of page `site` names for a page off the web, whose address it doesn't give.
+const NOT_WEB: [&str; 6] = ["board", "settings", "browser", "file", "extension", "page"];
+
+/// Whether `site`, as `site` gives it, is a web page's host rather than a kind of page.
+pub fn web_site(site: &str) -> bool {
+    !site.is_empty() && !NOT_WEB.contains(&site)
 }
 
 /// The local time `at`, in seconds since 1970, reads on the clock here, such as "18:00", with

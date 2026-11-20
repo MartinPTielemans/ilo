@@ -266,6 +266,7 @@ fn the_server_answers_what_needs_no_browser() {
             "unpin_tab",
             "remove_tab",
             "sort_tabs_by_site",
+            "title",
         ]
     );
     assert_eq!(list["id"], "a");
