@@ -2572,8 +2572,8 @@ mod tests {
         cx.simulate_mouse_move(point(px(600.), px(400.)), None, Modifiers::none());
         cx.run_until_parked();
         assert!(lit(cx), "the row went dark under its menu");
-        // Arc 1.171's order, with Remove Icon (ours) after what it undoes and Export as Markdown…
-        // where Arc shares and exports; the lines between its groups.
+        // Arc 1.171's order, with Remove Icon (ours) after what it undoes, and Export as Markdown…
+        // and Share Space (#680) where Arc shares and exports; the lines between its groups.
         let top: Vec<String> = (host.entries.borrow().iter())
             .filter(|entry| entry.parent.is_none())
             .map(|entry| {
@@ -2595,6 +2595,7 @@ mod tests {
             "Live Folders",
             "—",
             "Export as Markdown…",
+            "Share Space",
             "—",
             "Manage Spaces…",
             "—",

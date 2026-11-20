@@ -26,6 +26,10 @@ impl Host for Recorder {
             .borrow_mut()
             .push(format!("{answer:?} {tab} {username}"));
     }
+
+    fn answer_share(&self, tab: u64, add: bool) {
+        self.0.borrow_mut().push(format!("share {tab} add {add}"));
+    }
 }
 
 fn offer(kind: Kind, usernames: &[&str]) -> Offer {
@@ -386,4 +390,111 @@ fn an_address_or_a_card_saves_with_return_and_declines_with_escape(cx: &mut Test
     prompt.type_text("other@example.test");
     prompt.keys("enter");
     assert_eq!(prompt.calls(), ["Accept 1 other@example.test", "hide"]);
+}
+
+/// The offer over a share's page: return adds it and escape doesn't, through the core's share
+/// answer, never a password's.
+#[gpui::test]
+fn a_share_adds_with_return_and_declines_with_escape(cx: &mut TestAppContext) {
+    let mut prompt = Prompt::new(cx);
+    prompt.calls();
+    let share = || {
+        saving(
+            Kind::Share,
+            &["A folder of 7 tabs goes at the foot of Pinned in Travel."],
+        )
+    };
+    prompt.offered(1, Some(share()));
+    assert_eq!(prompt.calls(), ["show"]);
+    prompt.type_text("x");
+    prompt.keys("enter");
+    assert_eq!(prompt.calls(), ["share 1 add true", "hide"]);
+    prompt.offered(1, Some(share()));
+    prompt.calls();
+    prompt.keys("escape");
+    assert_eq!(prompt.calls(), ["share 1 add false", "hide"]);
+}
+
+/// A share's offer doesn't come back once another tab shows in its tab's place, so the app answers
+/// no for it, as the core would keep it; unless another window still shows the tab. A password's
+/// closes without an answer, as Chrome's bubble does.
+#[gpui::test]
+fn a_share_is_answered_no_once_another_tab_shows(cx: &mut TestAppContext) {
+    let mut prompt = Prompt::new(cx);
+    prompt.calls();
+    prompt.offered(1, Some(saving(Kind::Share, &["Where it goes."])));
+    prompt.calls();
+    prompt.shown(3);
+    assert_eq!(prompt.calls(), ["share 1 add false", "hide"]);
+    prompt.shown(1);
+    assert_eq!(prompt.calls(), ["hide"], "it doesn't come back");
+
+    prompt.offered(1, Some(saving(Kind::Share, &["Where it goes."])));
+    let (_, other) = open_over(2, 1, &mut prompt.cx.cx);
+    prompt.calls();
+    other.0.take();
+    prompt.shown(3);
+    assert_eq!(prompt.calls(), ["hide"], "window 2 still shows tab 1");
+    prompt.cx.cx.update(|cx| window_closed(2, cx));
+    assert_eq!(other.0.take(), ["share 1 add false"]);
+
+    prompt.offered(3, Some(offer(Kind::Save, &["check@example.test"])));
+    prompt.calls();
+    prompt.shown(4);
+    assert_eq!(prompt.calls(), ["hide"]);
+}
+
+struct Toasts;
+
+impl crate::toast::Host for Toasts {
+    fn show(&self) {}
+    fn hide(&self) {}
+    fn take_clicks(&self, _: bool) {}
+    fn plate(&self, _: gpui::Bounds<gpui::Pixels>) {}
+}
+
+/// The offer asks a question at the window's top right, where a toast shows: a toast that only
+/// confirms what was done, such as a shared link copied, leaves as the offer shows, and one that
+/// waits for an answer stays.
+#[gpui::test]
+fn a_toast_that_confirms_leaves_as_the_offer_shows(cx: &mut TestAppContext) {
+    use crate::toast;
+    let mut prompt = Prompt::new(cx);
+    prompt.cx.cx.update(|cx| {
+        toast::open(
+            Rc::new(Toasts),
+            |_| (hsla(0., 0., 0., 1.), Default::default()),
+            cx,
+        )
+    });
+    let copied = "Link to \u{201c}Lisbon\u{201d} copied";
+    prompt.cx.cx.update(|cx| {
+        toast::show_logged_as(
+            copied,
+            "share copied",
+            Vec::new(),
+            std::time::Duration::from_secs(5),
+            cx,
+        )
+    });
+    prompt.cx.run_until_parked();
+    assert!(prompt.cx.cx.update(|cx| toast::showing(copied, cx)));
+    prompt.offered(1, Some(saving(Kind::Share, &["Where it goes."])));
+    assert!(
+        !prompt.cx.cx.update(|cx| toast::showing(copied, cx)),
+        "the copied toast leaves for the share's offer"
+    );
+
+    prompt.keys("escape");
+    let asks = "Send a report of the crash?";
+    prompt
+        .cx
+        .cx
+        .update(|cx| toast::show_until_answered(asks, Vec::new(), cx));
+    prompt.cx.run_until_parked();
+    prompt.offered(1, Some(offer(Kind::Save, &["check@example.test"])));
+    assert!(
+        prompt.cx.cx.update(|cx| toast::showing(asks, cx)),
+        "a toast waiting for an answer stays"
+    );
 }

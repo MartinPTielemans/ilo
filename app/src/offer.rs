@@ -76,6 +76,10 @@ pub enum Kind {
     Address,
     /// To save the card the page's form submitted, to this device.
     Card,
+    /// To add the shared link the tab opened (#680): its title asks, its site is the server's
+    /// host, and its one detail says where it goes, wrapped. The core's offer, not Chrome's, which
+    /// the app answers no once another tab shows in its place, as it doesn't come back.
+    Share,
 }
 
 /// An offer from Chrome's password manager, as the core reports it, in Chrome's words.
@@ -126,6 +130,8 @@ pub trait Host {
     fn hide(&self);
     /// Answers `tab`'s offer with the username as the user left it.
     fn answer(&self, tab: u64, answer: Answer, username: &str);
+    /// Answers `tab`'s share offer: adds the link, or doesn't.
+    fn answer_share(&self, tab: u64, add: bool);
 }
 
 thread_local! {
@@ -227,7 +233,15 @@ pub fn open(
 /// Forgets the offer of the browser window `browser`, which closed.
 pub fn window_closed(browser: u64, cx: &mut App) {
     if cx.has_global::<OfferWindows>() {
-        cx.global_mut::<OfferWindows>().0.remove(&browser);
+        let closed = cx.global_mut::<OfferWindows>().0.remove(&browser);
+        if let Some(closed) = closed {
+            let host = closed
+                .read(cx)
+                .map(|prompt| (prompt.host.clone(), prompt.tab));
+            if let Ok((host, tab)) = host {
+                left(tab, &*host, cx);
+            }
+        }
     }
 }
 
@@ -253,6 +267,8 @@ pub fn changed(tab: u64, offer: Option<Offer>, cx: &mut App) {
                 offer.username,
                 offer.usernames.len()
             ),
+            // Nothing of a share in the log: not its title, nor the server it's on.
+            Kind::Share => log!("browser: offer {tab} share"),
             Kind::Address | Kind::Card => log!(
                 "browser: offer {tab} {} {}",
                 if offer.kind == Kind::Address {
@@ -289,14 +305,28 @@ pub fn tab_shown(browser: u64, tab: u64, cx: &mut App) {
         })
         .ok()
         .flatten();
-    if let Some(left) = left {
-        let still_shown = windows(cx)
-            .into_iter()
-            .any(|window| window.read(cx).is_ok_and(|prompt| prompt.tab == left));
-        if !still_shown {
-            OFFERS.with_borrow_mut(|offers| offers.remove(&left));
+    if let Some(gone) = left {
+        if let Ok(host) = window.read(cx).map(|prompt| prompt.host.clone()) {
+            self::left(gone, &*host, cx);
         }
         show_offer(window, cx);
+    }
+}
+
+/// No window shows `tab` in its place now, unless another still does: its offer closes, and a
+/// share's is answered no, as the core would keep it.
+fn left(tab: u64, host: &dyn Host, cx: &App) {
+    let still_shown = windows(cx)
+        .into_iter()
+        .any(|window| window.read(cx).is_ok_and(|prompt| prompt.tab == tab));
+    if still_shown {
+        return;
+    }
+    let offer = OFFERS.with_borrow_mut(|offers| offers.remove(&tab));
+    if offer.is_some_and(|offer| offer.kind == Kind::Share) {
+        // check.sh reads this line.
+        log!("browser: offer {tab} answered NotNow as another tab shows");
+        host.answer_share(tab, false);
     }
 }
 
@@ -337,6 +367,9 @@ fn show_offer(window: WindowHandle<OfferPrompt>, cx: &mut App) {
                     prompt
                         .input
                         .update(cx, |input, cx| input.reset(offer.username, window, cx));
+                    // The offer asks a question, which a toast would cover, as both sit at the
+                    // window's top right, such as the one saying a shared link was copied.
+                    crate::toast::give_way(cx);
                     prompt.host.show();
                     prompt.settling.start(format!("offer {}", prompt.tab), cx);
                 }
@@ -357,16 +390,17 @@ impl OfferPrompt {
         if answer != Answer::NotNow && !self.settling.settled(cx) {
             return;
         }
-        if OFFERS
-            .with_borrow_mut(|offers| offers.remove(&tab))
-            .is_none()
-        {
+        let Some(kind) = OFFERS.with_borrow_mut(|offers| offers.remove(&tab).map(|o| o.kind))
+        else {
             return;
-        }
+        };
         let username = self.input.read(cx).text().to_string();
         // check.sh reads this line.
         log!("browser: offer {tab} answered {answer:?} {username}");
-        self.host.answer(tab, answer, &username);
+        match kind {
+            Kind::Share => self.host.answer_share(tab, answer == Answer::Accept),
+            _ => self.host.answer(tab, answer, &username),
+        }
         self.host.hide();
         cx.notify();
     }
@@ -546,9 +580,20 @@ impl Render for OfferPrompt {
                 .pr(px(FIELD_X))
                 .child(div().flex_1().min_w_0().truncate().child(text))
         };
-        let (first, second) = match offer.of_login() {
-            true => (username, password),
-            false => (
+        let (first, second) = match (offer.of_login(), offer.kind) {
+            (true, _) => (username, password),
+            // Where a share goes, wrapped in the rows' room, with no plate, as it's read, not
+            // edited.
+            (false, Kind::Share) => (
+                div()
+                    .h(px(ROW * 2.))
+                    .text_color(palette.text(DETAIL))
+                    .line_clamp(3)
+                    .text_ellipsis()
+                    .child(first),
+                div(),
+            ),
+            (false, _) => (
                 line(first),
                 line(rest.join(", ").into()).text_color(palette.text(DETAIL)),
             ),

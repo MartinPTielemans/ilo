@@ -189,6 +189,7 @@ mod translate_host;
 use translate_host::{tab_language, tab_translate_texts};
 mod boosts_host;
 use boosts_host::{tab_boost_zap_ended, tab_boost_zapped};
+mod share_host;
 
 use browser::bc;
 
@@ -1189,6 +1190,10 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         tab_shown_in: Some(tab_shown_in),
         tab_recent_answered: Some(recent_host::tab_recent_answered),
         folder_live_answered: Some(spaces::folder_live_answered),
+        share_made: Some(share_host::share_made),
+        shares_listed: Some(share_host::shares_listed),
+        tab_share_found: Some(share_host::tab_share_found),
+        unshared: Some(share_host::unshared),
         ..Default::default()
     };
     (args, host)

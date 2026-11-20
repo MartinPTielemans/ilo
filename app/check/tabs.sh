@@ -1355,7 +1355,7 @@ expect "^browser: chosen $c $b $a\$" "⇧-click didn't choose the rows from the 
 none_since "^browser: selected " || fail "choosing rows showed another tab"
 ../tools/window-screenshot.sh "$pid" "$out/chosen.png" || fail "no window to capture"
 post rightclick $(today_row 1)
-expect "^browser: menu shown $(cased 'Pin Tabs, Add to Folder › New Folder')\(, [^,]*\)*, $(cased 'Copy URLs, Close Tabs')\$" \
+expect "^browser: menu shown $(cased 'Pin Tabs, Add to Folder › New Folder')\(, [^,]*\)*, $(cased 'Copy URLs, Share Tabs, Close Tabs')\$" \
   "a right-click on a chosen row didn't show their menu: $(grep '^browser: menu shown' "$log" | tail -1)"
 ../tools/window-screenshot.sh "$pid" "$out/chosen-menu.png" || fail "no window to capture"
 links=$(printf '%sthree.html\n%stwo.html\n%sone.html' "$site" "$site" "$site")

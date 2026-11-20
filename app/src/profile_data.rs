@@ -209,6 +209,7 @@ pub(crate) unsafe extern "C" fn sync_changed(_: *mut c_void, state: *const bc::b
         settings: state.settings,
         extensions: state.extensions,
     };
+    share_host::account_changed(state.status);
     if CX.with_borrow(Option::is_none) {
         SYNC_STATE.set(Some(state));
         return;

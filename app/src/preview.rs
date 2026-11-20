@@ -1483,6 +1483,15 @@ impl Browser for Fake {
     fn save_page(&self, _: u64, _: &mut App) {}
 
     fn save_markdown(&self, _: &str, _: String, _: usize, _: &mut App) {}
+    // The preview has no account to share through.
+    fn share_link(
+        &self,
+        _: browser::account::ShareKind,
+        _: Vec<u64>,
+        _: SharedString,
+        _: &mut App,
+    ) {
+    }
     fn close_page_menu(&self, _: u64, _: Option<i32>, _: &mut App) {}
     fn print(&self, _: u64, _: &mut App) {}
 
@@ -4493,6 +4502,63 @@ fn preview_account(state: &str, cx: &mut App) {
         device("2", "MacBook Air", "macOS", false),
         device("3", "ThinkPad X1", "Linux", false),
     ];
+    // The account's shared links (#680): a folder shared today, one whose name is longer than its
+    // row, a Space and chosen tabs before. PREVIEW_SHARES=copied presses the first's Copy Link, and
+    // again each second, so it says Copied however late the picture is taken; unshare presses its
+    // Unshare… and shows the question.
+    let pressed = std::env::var("PREVIEW_SHARES").ok();
+    // A dialog over Settings takes the shown Space's palette, which a light system makes light.
+    palette::set_current(Palette::of(None, preview_tone().unwrap_or_default()), cx);
+    let share = |id: &str, kind, title: &str, tabs, days: f64, color: Option<u32>, icon: &str| {
+        account::SharedLink {
+            id: id.to_string().into(),
+            kind,
+            title: title.to_string().into(),
+            tabs,
+            shared: now() - days * DAY,
+            color: color.map(gpui::rgb),
+            icon: icon.to_string().into(),
+        }
+    };
+    let shares = vec![
+        share(
+            "a",
+            account::ShareKind::Folder,
+            "Lisbon, March",
+            7,
+            0.,
+            None,
+            "",
+        ),
+        share(
+            "d",
+            account::ShareKind::Folder,
+            "Apartments in Lisbon, Porto and Coimbra, with the landlords' replies, the maps, the train \
+             times and the notes from every viewing we went to in March",
+            12,
+            2.,
+            None,
+            "",
+        ),
+        share(
+            "b",
+            account::ShareKind::Space,
+            "Research",
+            5,
+            7.,
+            Some(MORE_COLORS[3]),
+            "glyph:book",
+        ),
+        share(
+            "c",
+            account::ShareKind::Tabs,
+            "3 tabs from Work",
+            3,
+            17.,
+            None,
+            "",
+        ),
+    ];
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         ..Default::default()
@@ -4508,6 +4574,7 @@ fn preview_account(state: &str, cx: &mut App) {
                 account.set_state(state, cx);
                 if status == Status::On {
                     account.set_devices(devices, cx);
+                    account.set_shares(shares, cx);
                 }
                 account
             });
@@ -4525,6 +4592,25 @@ fn preview_account(state: &str, cx: &mut App) {
             }
         });
         window.focus(&page.read(cx).account.focus_handle(cx), cx);
+        let account = page.read(cx).account.clone();
+        match pressed.as_deref() {
+            Some("copied") => {
+                cx.spawn(async move |cx| {
+                    loop {
+                        account.update(cx, |account, cx| account.copy_share("a".into(), cx));
+                        log!("preview: pressed Copy Link");
+                        cx.background_executor().timer(Duration::from_secs(1)).await;
+                    }
+                })
+                .detach();
+            }
+            Some("unshare") => window.on_next_frame(move |window, cx| {
+                account.update(cx, |account, cx| {
+                    account.unshare("a".into(), "Lisbon, March".into(), window, cx)
+                });
+            }),
+            _ => {}
+        }
         if scroll > 0. {
             let scrolled = page.clone();
             window.on_next_frame(move |_, cx| {
@@ -4926,6 +5012,11 @@ struct PreviewAccount {
 impl account::Host for PreviewAccount {
     fn set_server(&self, _: &str) -> bool {
         true
+    }
+    fn day_starts(&self) -> [f64; 4] {
+        let today = now() - now() % DAY;
+        let week = today - ((today / DAY + 3.) % 7.) * DAY;
+        [today, today - DAY, week, week - 7. * DAY]
     }
     fn sign_in(&self) {}
     fn cancel(&self) {}

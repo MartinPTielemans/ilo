@@ -488,6 +488,10 @@ impl offer::Host for OfferHost {
         let username = CString::new(username).unwrap_or_default();
         unsafe { bc::bc_tab_answer_offer(tab, answer as i32, username.as_ptr()) };
     }
+
+    fn answer_share(&self, tab: u64, add: bool) {
+        crate::share_host::answer(tab, add);
+    }
 }
 
 /// The icon picker's requests, to the host's overlay window, over the window that asked.

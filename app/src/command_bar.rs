@@ -425,6 +425,7 @@ fn command_glyph(command: shell::Command) -> &'static str {
         Command::RenameSpace | Command::RenameTab => "icons/pencil.svg",
         Command::EditTheme => "icons/palette.svg",
         Command::ExportSpace => "icons/file.svg",
+        Command::ShareSpace => "icons/share.svg",
         Command::NextTab => "icons/arrow-down.svg",
         Command::PreviousTab => "icons/arrow-up.svg",
         Command::ViewLibrary => "icons/library.svg",

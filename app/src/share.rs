@@ -1,0 +1,233 @@
+//! What sharing as a link says (#680): before the first share, signed out, once the link is
+//! copied, and when one is opened in ilo. The host asks and shows them; the words are here so
+//! they're the same from every menu.
+
+use crate::account::ShareKind;
+
+/// What Share does next, from whether the account is on and whether the user has shared before.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Step {
+    /// Signed out: a link needs the account, so Share points to Settings › Sync.
+    SignIn,
+    /// The first share says who can see what before it goes, once.
+    Explain,
+    /// After that, Share copies at once.
+    Share,
+}
+
+pub fn step(signed_in: bool, shared_before: bool) -> Step {
+    match (signed_in, shared_before) {
+        (false, _) => Step::SignIn,
+        (true, false) => Step::Explain,
+        (true, true) => Step::Share,
+    }
+}
+
+/// "1 tab" or "N tabs".
+pub fn tabs(count: usize) -> String {
+    match count {
+        1 => "1 tab".into(),
+        count => format!("{count} tabs"),
+    }
+}
+
+/// The signed-out dialog's question, its detail and its action.
+pub fn sign_in() -> (String, String, &'static str) {
+    (
+        "Sign in to share links".into(),
+        "A shared link lives on your sync server, so you can unshare it from any of your devices."
+            .into(),
+        "Open Sync Settings",
+    )
+}
+
+/// The first share's question, its detail and its action, for `title` holding `count` tabs.
+pub fn explain(title: &str, count: usize) -> (String, String, &'static str) {
+    let these = match count {
+        1 => "this tab’s name and address".to_string(),
+        count => format!("these {count} tabs’ names and addresses"),
+    };
+    (
+        format!("Share “{title}” as a link?"),
+        format!(
+            "Anyone with the link can see {these}, in any browser. ilo locks them on this computer \
+             before they reach your sync server, which can’t read them. Unshare any time in \
+             Settings › Sync."
+        ),
+        "Copy Link",
+    )
+}
+
+/// The toast once the link is on the clipboard: copied, or the same link updated when `title` was
+/// shared before, now holding `count` tabs, and how many addresses that aren't the web's were left
+/// out on this device.
+pub fn copied(title: &str, replaced: bool, count: usize, left_out: usize) -> String {
+    let mut words = match replaced {
+        false => format!("Link to “{title}” copied"),
+        true => format!("Link to “{title}” updated · now {}", tabs(count)),
+    };
+    if left_out > 0 {
+        words.push_str(&format!(" · {} left out", tabs(left_out)));
+    }
+    words
+}
+
+/// The offer card over a share's page in ilo (tab_share_found): its question, its detail and its
+/// action. A folder or chosen tabs go at the foot of Pinned in `space`, as a folder; a Space comes
+/// as a new one. Adding a link added before adds another, as the core does.
+pub fn offer(
+    kind: ShareKind,
+    title: &str,
+    count: usize,
+    space: &str,
+) -> (String, String, &'static str) {
+    let open = match count {
+        1 => "It opens only when you click it.",
+        _ => "They open only when you click them.",
+    };
+    let tabs = tabs(count);
+    match kind {
+        ShareKind::Space => (
+            format!("Add the Space “{title}”?"),
+            format!(
+                "A new Space with its {tabs} pinned, its colour and its icon, on your current \
+                 profile. {open}"
+            ),
+            "Add to Sidebar",
+        ),
+        _ => (
+            format!("Add “{title}” to your sidebar?"),
+            format!("A folder of {tabs} goes at the foot of Pinned in {space}. {open}"),
+            "Add to Sidebar",
+        ),
+    }
+}
+
+/// Why a share, an unshare or the list didn't go as asked (BC_SHARE_PROBLEM_).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Problem {
+    SignedOut,
+    Empty,
+    TooBig,
+    TooMany,
+    Server,
+}
+
+impl Problem {
+    /// The core's BC_SHARE_PROBLEM_, None for BC_SHARE_PROBLEM_NONE.
+    pub fn from_core(problem: i32) -> Option<Problem> {
+        match problem {
+            0 => None,
+            1 => Some(Problem::SignedOut),
+            2 => Some(Problem::Empty),
+            3 => Some(Problem::TooBig),
+            4 => Some(Problem::TooMany),
+            _ => Some(Problem::Server),
+        }
+    }
+}
+
+/// The toast when `title` wasn't shared, saying what the user can do about it.
+pub fn not_shared(title: &str, problem: Problem) -> String {
+    let why = match problem {
+        Problem::SignedOut => "sign in to Sync to share links",
+        Problem::Empty => "it has no web pages",
+        Problem::TooBig => "it holds more than a link can",
+        Problem::TooMany => "your server takes no more links for now",
+        Problem::Server => "couldn’t reach your sync server · try again",
+    };
+    format!("“{title}” wasn’t shared · {why}")
+}
+
+/// What a shared link's row says in place of what it holds once its unshare didn't go: the link
+/// still opens, for anyone who has it.
+pub fn not_unshared(problem: Problem) -> &'static str {
+    match problem {
+        Problem::SignedOut => "Not unshared: sign in to unshare. The link still opens.",
+        _ => "Not unshared: couldn't reach the server. The link still opens.",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn share_asks_once_and_never_signed_out() {
+        assert_eq!(step(false, false), Step::SignIn);
+        assert_eq!(step(false, true), Step::SignIn);
+        assert_eq!(step(true, false), Step::Explain);
+        assert_eq!(step(true, true), Step::Share);
+    }
+
+    #[test]
+    fn the_first_share_says_who_sees_what() {
+        let (question, detail, action) = explain("Lisbon, March", 7);
+        assert_eq!(question, "Share “Lisbon, March” as a link?");
+        assert!(
+            detail.starts_with("Anyone with the link can see these 7 tabs’ names and addresses")
+        );
+        assert!(detail.ends_with("Unshare any time in Settings › Sync."));
+        assert_eq!(action, "Copy Link");
+        let (_, detail, _) = explain("Notes", 1);
+        assert!(detail.starts_with("Anyone with the link can see this tab’s name and address,"));
+    }
+
+    #[test]
+    fn the_offer_says_where_a_share_goes_and_that_nothing_loads() {
+        let (question, detail, action) = offer(ShareKind::Folder, "Lisbon, March", 7, "Travel");
+        assert_eq!(question, "Add “Lisbon, March” to your sidebar?");
+        assert_eq!(
+            detail,
+            "A folder of 7 tabs goes at the foot of Pinned in Travel. They open only when you \
+             click them."
+        );
+        assert_eq!(action, "Add to Sidebar");
+        let (question, detail, _) = offer(ShareKind::Space, "Research", 5, "Travel");
+        assert_eq!(question, "Add the Space “Research”?");
+        assert!(detail.starts_with("A new Space with its 5 tabs pinned, its colour and its icon"));
+        let (question, detail, action) = offer(ShareKind::Tabs, "Notes", 1, "Work");
+        assert_eq!(question, "Add “Notes” to your sidebar?");
+        assert!(detail.ends_with(
+            "A folder of 1 tab goes at the foot of Pinned in Work. It opens only when you click it."
+        ));
+        assert_eq!(action, "Add to Sidebar");
+    }
+
+    #[test]
+    fn the_toast_says_copied_or_updated_and_what_was_left_out() {
+        assert_eq!(
+            copied("Lisbon, March", false, 7, 0),
+            "Link to “Lisbon, March” copied"
+        );
+        assert_eq!(
+            copied("Lisbon, March", true, 9, 0),
+            "Link to “Lisbon, March” updated · now 9 tabs"
+        );
+        assert_eq!(
+            copied("Lisbon, March", false, 7, 2),
+            "Link to “Lisbon, March” copied · 2 tabs left out"
+        );
+        assert_eq!(
+            copied("Notes", true, 1, 1),
+            "Link to “Notes” updated · now 1 tab · 1 tab left out"
+        );
+    }
+
+    #[test]
+    fn a_share_that_didnt_go_says_why() {
+        assert_eq!(Problem::from_core(0), None);
+        assert_eq!(Problem::from_core(1), Some(Problem::SignedOut));
+        assert_eq!(Problem::from_core(5), Some(Problem::Server));
+        assert_eq!(
+            not_shared("Lisbon, March", Problem::Empty),
+            "“Lisbon, March” wasn’t shared · it has no web pages"
+        );
+        assert_eq!(
+            not_shared("Notes", Problem::Server),
+            "“Notes” wasn’t shared · couldn’t reach your sync server · try again"
+        );
+        assert!(not_unshared(Problem::Server).ends_with("The link still opens."));
+        assert!(not_unshared(Problem::SignedOut).starts_with("Not unshared: sign in"));
+    }
+}

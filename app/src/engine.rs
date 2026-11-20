@@ -854,6 +854,16 @@ impl Browser for Engine {
             .detach();
     }
 
+    fn share_link(
+        &self,
+        kind: crate::account::ShareKind,
+        items: Vec<u64>,
+        title: SharedString,
+        cx: &mut App,
+    ) {
+        crate::share_host::share(self.window, kind, items, title, cx);
+    }
+
     fn close_page_menu(&self, tab: u64, command: Option<i32>, _: &mut App) {
         unsafe { bc::bc_tab_close_page_menu(tab, command.unwrap_or(0)) };
     }

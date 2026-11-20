@@ -306,6 +306,7 @@ const SHORTCUTS: &[(&str, &[(&str, Keys)])] = &[
             ("New Space", Keys::Of(Command::NewSpace)),
             ("Rename Space", Keys::Of(Command::RenameSpace)),
             ("Export Space as Markdown", Keys::Of(Command::ExportSpace)),
+            ("Share Space", Keys::Of(Command::ShareSpace)),
             ("Show/Hide Sidebar", Keys::Of(Command::ToggleSidebar)),
             ("Collapse Pinned Tabs", Keys::Of(Command::CollapsePinned)),
             ("Expand Pinned Tabs", Keys::Of(Command::ExpandPinned)),
@@ -615,6 +616,21 @@ impl account::Host for CoreAccount {
         unsafe { bc::bc_sync_read_devices() };
     }
 
+    fn list_shares(&self) {
+        unsafe { bc::bc_share_list() };
+    }
+
+    fn copy_share(&self, id: &str, cx: &mut App) {
+        crate::share_host::copy(id, cx);
+    }
+
+    fn unshare(&self, id: &str) {
+        // check.sh reads this line, which says nothing of the link.
+        log!("browser: unshare asked");
+        let id = CString::new(id).unwrap_or_default();
+        unsafe { bc::bc_unshare(id.as_ptr()) };
+    }
+
     fn remove_device(&self, id: &str) {
         let id = CString::new(id).unwrap_or_default();
         unsafe { bc::bc_sync_remove_device(id.as_ptr()) };
@@ -749,6 +765,27 @@ pub fn devices_changed(devices: Vec<account::Device>, cx: &mut App) {
     };
     update_made(cx, changed);
 }
+
+/// The account's shared links, as the core listed them.
+pub fn shares_changed(shares: Vec<account::SharedLink>, cx: &mut App) {
+    let changed = move |settings: &mut Settings, cx: &mut Context<Settings>| {
+        settings
+            .account
+            .update(cx, |account, cx| account.set_shares(shares, cx));
+    };
+    update_made(cx, changed);
+}
+
+/// What unsharing `id` came to, which its row says if it didn't go.
+pub fn unshared(id: SharedString, problem: Option<browser::share::Problem>, cx: &mut App) {
+    let changed = move |settings: &mut Settings, cx: &mut Context<Settings>| {
+        settings
+            .account
+            .update(cx, |account, cx| account.unshared(id, problem, cx));
+    };
+    update_made(cx, changed);
+}
+
 /// The activity the Agents tab lists, newest first: the log keeps more, for the run.
 const ACTIVITY_SHOWN: usize = 50;
 
@@ -963,6 +1000,11 @@ pub fn show_shortcuts(cx: &mut App) {
 /// Shows the Settings window on Agents, with each agent's activity.
 pub fn show_agents(cx: &mut App) {
     show_on(Section::Agents, cx);
+}
+
+/// Shows the Settings window on Sync, where the account signs in.
+pub fn show_sync(cx: &mut App) {
+    show_on(Section::Sync, cx);
 }
 
 /// Shows the Settings window on About.

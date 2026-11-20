@@ -81,6 +81,10 @@ impl Host for Recorder {
         self.record("read devices");
     }
 
+    fn list_shares(&self) {
+        self.record("list shares");
+    }
+
     fn activity(&self) -> Activity {
         self.record("activity");
         self.activity.borrow().clone()
@@ -96,6 +100,14 @@ impl Host for Recorder {
 
     fn remove_device(&self, id: &str) {
         self.record(format!("remove {id}"));
+    }
+
+    fn copy_share(&self, id: &str, _: &mut App) {
+        self.record(format!("copy share {id}"));
+    }
+
+    fn unshare(&self, id: &str) {
+        self.record(format!("unshare {id}"));
     }
 
     fn choose(&self, what: Choice, on: bool) {
@@ -356,7 +368,7 @@ fn the_first_device_shows_its_words_once(cx: &mut TestAppContext) {
     assert_eq!(tab.host.take(), ["activity", "copy secret 24 90"]);
     tab.click("done");
     assert!(!tab.showing_words());
-    assert_eq!(tab.host.take(), ["read devices"]);
+    assert_eq!(tab.host.take(), ["read devices", "list shares"]);
     assert!(tab.drawn("sign-out") && tab.drawn("show-words"));
 }
 
@@ -537,7 +549,7 @@ fn the_recovery_words_instead(cx: &mut TestAppContext) {
         tab.account
             .read_with(tab.cx, |account, _| account.entering.is_none())
     );
-    assert_eq!(tab.host.take(), ["activity", "read devices"]);
+    assert_eq!(tab.host.take(), ["activity", "read devices", "list shares"]);
 }
 
 /// Someone with neither another device nor the words starts over from where the words are typed,
@@ -625,11 +637,107 @@ fn back_from_the_words(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_devices_and_remove(cx: &mut TestAppContext) {
     let mut tab = shown(state(Status::On), cx);
-    assert_eq!(tab.host.take(), ["activity", "read devices"]);
+    assert_eq!(tab.host.take(), ["activity", "read devices", "list shares"]);
     tab.set_devices(vec![device("this", true), device("phone", false)]);
     assert!(!tab.drawn("remove this"));
     tab.click("remove phone");
     assert_eq!(tab.host.take(), ["remove phone"]);
+}
+
+fn shared(id: &str, kind: ShareKind) -> SharedLink {
+    SharedLink {
+        id: id.into(),
+        kind,
+        title: format!("Share {id}").into(),
+        tabs: 3,
+        shared: 0.,
+        color: None,
+        icon: "".into(),
+    }
+}
+
+/// Signed in, the account's shared links are listed after its devices, none before the core has
+/// listed them, newest first. Copy Link copies that link and says Copied a while; Unshare asks
+/// first, and unshares only once confirmed.
+#[gpui::test]
+fn the_shared_links_copy_and_unshare(cx: &mut TestAppContext) {
+    let mut tab = shown(state(Status::On), cx);
+    tab.host.take();
+    assert!(!tab.drawn("share 0 copy"));
+    let mut older = shared("a", ShareKind::Folder);
+    older.shared = 1.;
+    let mut newer = shared("b", ShareKind::Space);
+    newer.shared = 2.;
+    tab.account.update(tab.cx, |account, cx| {
+        account.set_shares(vec![older, newer], cx)
+    });
+    tab.cx.run_until_parked();
+    let top = |tab: &mut Shown, name: &str| {
+        let bounds = tab
+            .account
+            .read_with(tab.cx, |account, _| account.drawn(name));
+        bounds.expect("drawn").origin.y
+    };
+    assert!(
+        top(&mut tab, "share 0 copy") < top(&mut tab, "share 1 copy"),
+        "newest first"
+    );
+
+    tab.click("share 0 copy");
+    assert_eq!(tab.host.take(), ["copy share b"]);
+    let says = |tab: &mut Shown| {
+        tab.account.read_with(tab.cx, |account, cx| {
+            let now = cx.background_executor().now();
+            account
+                .copied_share
+                .as_ref()
+                .filter(|(_, at)| now - *at < COPIED)
+                .map(|(id, _)| id.to_string())
+        })
+    };
+    assert_eq!(says(&mut tab).as_deref(), Some("b"));
+    tab.cx.executor().advance_clock(COPIED);
+    tab.cx.run_until_parked();
+    assert_eq!(says(&mut tab), None, "Copied is Copy Link again");
+
+    tab.click("share 1 unshare");
+    assert_eq!(
+        tab.host.take(),
+        ["ask Unshare “Share a”? Unshare"],
+        "nothing goes until confirmed"
+    );
+    tab.confirm();
+    assert_eq!(tab.host.take(), ["unshare a"]);
+
+    // The server didn't delete it: its row says so, and that the link still opens, until it goes.
+    let failed = |tab: &mut Shown| {
+        tab.account
+            .read_with(tab.cx, |account, _| account.unshare_failed.clone())
+    };
+    tab.account.update(tab.cx, |account, cx| {
+        account.unshared("a".into(), Some(crate::share::Problem::Server), cx)
+    });
+    assert_eq!(
+        failed(&mut tab),
+        Some(("a".into(), crate::share::Problem::Server))
+    );
+    tab.account.update(tab.cx, |account, cx| {
+        account.set_shares(vec![shared("b", ShareKind::Space)], cx)
+    });
+    assert_eq!(failed(&mut tab), None, "a went on another try");
+}
+
+/// A link's line says the day it was last shared, not its time.
+#[test]
+fn shared_when_says_the_day() {
+    let today = 10. * 86_400_000.;
+    let days = [today, today - 86_400_000., 0., 0.];
+    assert_eq!(shared_when(today + 3_600_000., days), "today");
+    assert_eq!(shared_when(today - 3_600_000., days), "yesterday");
+    assert_eq!(
+        shared_when(today - 3. * 86_400_000. + 3_600_000., days),
+        "3 days ago"
+    );
 }
 
 /// Signed in, each of what else can sync has its switch, which asks the core for the other way,
