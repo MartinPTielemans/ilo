@@ -604,15 +604,19 @@ case "$closed" in "Closed tab $opener."*) ;; *) fail "closing the opener answere
 
 # An agent's navigate starts its tab a new browsing group, so a site it left keeps no hold on the
 # tab through a pop-up the site opened: the pop-up's message to its opener and its move of it go
-# nowhere (#3595). Before that, while they're related, the same press in the pop-up does both, which
-# is what makes the step's green mean something. 127.0.0.1 is another site than localhost.
+# nowhere (#3595). Before that, while they're related, the same presses in the pop-up do both, which
+# is what makes the step's green mean something. 127.0.0.1 is another site than localhost. The
+# message and the move are two presses: Blink may hold a message posted in a press until it next
+# draws, and a move in the same press can replace the opener's page first, which drops it.
 printf '%s' '<!doctype html><title>Steer</title>
 <button onclick="open(&quot;steers.html&quot;, &quot;&quot;, &quot;popup&quot;)">Pop up</button>
 <script>addEventListener("message", event => document.title = "messaged " + event.data)</script>' \
   > "$out/site/steer.html"
-printf '%s' '<!doctype html><title>Steers</title><script>let tries = 0</script>
-<button onclick="tries++; try { opener.postMessage(&quot;steered&quot;, &quot;*&quot;);
- opener.location = &quot;/steered.html&quot; } catch (error) {} document.title = &quot;tried &quot; + tries">Steer</button>' \
+printf '%s' '<!doctype html><title>Steers</title><script>let sends = 0, tries = 0</script>
+<button onclick="sends++; try { opener.postMessage(&quot;steered&quot;, &quot;*&quot;) } catch (error) {}
+ document.title = &quot;sent &quot; + sends">Message</button>
+<button onclick="tries++; try { opener.location = &quot;/steered.html&quot; } catch (error) {}
+ document.title = &quot;tried &quot; + tries">Steer</button>' \
   > "$out/site/steers.html"
 printf '%s' '<!doctype html><title>Steered</title><p>Steered.</p>' > "$out/site/steered.html"
 printf '%s' '<!doctype html><title>Left</title><p>The site the agent went to.</p>
@@ -628,12 +632,17 @@ await_more "^browser: tab [0-9]* opened by $steer_tab in the background\$" "$beh
   fail "the steer page's Pop up didn't open a tab behind"
 popup_tab=$(sed -n "s/^browser: tab \([0-9]*\) opened by $steer_tab in the background\$/\1/p" "$log" | tail -1)
 await_log "^browser: title $popup_tab Steers\$" "the steer page's pop-up didn't load"
-steer=$(call snapshot "{\"tab\":$popup_tab}" | sed -n 's/.*- button "Steer" \[\(e[0-9]*\)\].*/\1/p' | head -1)
-[ -n "$steer" ] || fail "the snapshot of the steer page's pop-up had no Steer button"
-call click "{\"tab\":$popup_tab,\"ref\":\"$steer\"}" > /dev/null
-await_log "^browser: title $popup_tab tried 1\$" "the pop-up's Steer didn't run"
+buttons=$(call snapshot "{\"tab\":$popup_tab}")
+message=$(printf '%s\n' "$buttons" | sed -n 's/.*- button "Message" \[\(e[0-9]*\)\].*/\1/p' | head -1)
+steer=$(printf '%s\n' "$buttons" | sed -n 's/.*- button "Steer" \[\(e[0-9]*\)\].*/\1/p' | head -1)
+[ -n "$message" ] && [ -n "$steer" ] ||
+  fail "the snapshot of the steer page's pop-up had no Message and Steer buttons: $buttons"
+call click "{\"tab\":$popup_tab,\"ref\":\"$message\"}" > /dev/null
+await_log "^browser: title $popup_tab sent 1\$" "the pop-up's Message didn't run"
 await_log "^browser: title $steer_tab messaged steered\$" \
   "the pop-up's message didn't reach its opener while they were related, so the step can't see one"
+call click "{\"tab\":$popup_tab,\"ref\":\"$steer\"}" > /dev/null
+await_log "^browser: title $popup_tab tried 1\$" "the pop-up's Steer didn't run"
 await_log "^browser: loaded $steer_tab http://localhost:$port/steered.html\$" \
   "the pop-up didn't move its opener while they were related, so the step can't see a move"
 went=$(call navigate "{\"tab\":$steer_tab,\"url\":\"http://127.0.0.1:$port/left.html\"}")
@@ -643,10 +652,13 @@ await_log "^browser: loaded $steer_tab http://127.0.0.1:$port/left.html\$" \
 messaged=$(grep -c "^browser: title $steer_tab messaged steered\$" "$log" || true)
 steered=$(grep -c 'steered\.html' "$out/site.log" || true)
 loads=$(grep -c "^browser: loaded $steer_tab " "$log" || true)
+call click "{\"tab\":$popup_tab,\"ref\":\"$message\"}" > /dev/null
+await_log "^browser: title $popup_tab sent 2\$" "the pop-up's second Message didn't run"
 call click "{\"tab\":$popup_tab,\"ref\":\"$steer\"}" > /dev/null
 # A frame's messages reach the browser in order, so by the title the browser has had the message
 # and the move. The move it let through would start at once, and the control's took well under a
-# second, so 5 s is room to see one.
+# second, so 5 s is room to see one. A message let through isn't dropped by a move here, since the
+# move is refused or fails the step itself.
 await_log "^browser: title $popup_tab tried 2\$" "the pop-up's second Steer didn't run"
 for _ in $(seq 50); do
   [ "$(grep -c "^browser: title $steer_tab messaged steered\$" "$log")" = "$messaged" ] ||
