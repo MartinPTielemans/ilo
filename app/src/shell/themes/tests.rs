@@ -465,6 +465,12 @@ fn the_diagonal_is_drawn_where_it_is_taken_for_what_covers_it() {
 #[gpui::test]
 fn the_window_is_opaque_where_nothing_blurs_what_is_behind_it(cx: &mut TestAppContext) {
     let (shell, cx) = shell(None, None, cx);
+    let blurred = shell.update(cx, |shell, _| shell.blurred);
+    assert_eq!(
+        blurred,
+        cfg!(target_os = "macos"),
+        "only the Mac's material blurs"
+    );
     for tone in [Tone::Dark, Tone::Light] {
         shell.update(cx, |shell, cx| {
             shell.force_tone(Some(tone));
@@ -492,15 +498,4 @@ fn the_window_is_opaque_where_nothing_blurs_what_is_behind_it(cx: &mut TestAppCo
             );
         });
     }
-    #[cfg(target_os = "macos")]
-    shell.update(cx, |shell, _| {
-        assert!(shell.blurred, "the Mac's material blurs")
-    });
-    #[cfg(not(target_os = "macos"))]
-    shell.update(cx, |shell, _| {
-        assert!(
-            !shell.blurred,
-            "nothing blurs what's behind the window off the Mac"
-        )
-    });
 }
