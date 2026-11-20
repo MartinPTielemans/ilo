@@ -4109,7 +4109,14 @@ impl Settings {
         let opened = self.requests_opened.contains(&id);
         let slot = chevron_slot(opens.then_some(opened), look.detail.into());
         let controls = vec![ago.into_any_element(), slot.into_any_element()];
-        let head = line_row(look, what.clone(), detail, controls);
+        // Its name and steps name its path as the whole request writes it, marked so (#3645).
+        let head = browser::settings_rows::frame()
+            .child(browser::settings_rows::marked_text(
+                look,
+                what.clone().into(),
+                detail,
+            ))
+            .child(browser::settings_rows::end(controls));
         if !opens {
             return head;
         }

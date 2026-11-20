@@ -2142,7 +2142,9 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
                 )
                 .child(match shimmers {
                     Some(Some(phase)) => shimmering(&palette, title, phase),
-                    _ => StyledText::new(title),
+                    // A request's name writes out what wouldn't show, marked as the whole
+                    // request marks it (#3645).
+                    _ => crate::agent_request::marked(title, palette.text(SECONDARY), words),
                 }),
         )
         .when(noted, |line| {

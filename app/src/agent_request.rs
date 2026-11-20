@@ -83,6 +83,21 @@ impl Written {
     }
 }
 
+/// Text `request::escaped` wrote, such as a request's name in a trace or the activity, with its
+/// escapes marked as the whole request marks them: in `detail` on the ink at WHOLE_ESCAPE.
+pub fn marked(text: impl Into<SharedString>, detail: gpui::Hsla, ink: gpui::Hsla) -> StyledText {
+    let text = text.into();
+    let mark = HighlightStyle {
+        color: Some(detail),
+        background_color: Some(ink.opacity(WHOLE_ESCAPE)),
+        ..HighlightStyle::default()
+    };
+    let marks: Vec<_> = (request::marks(&text).into_iter())
+        .map(|range| (range, mark))
+        .collect();
+    StyledText::new(text).with_highlights(marks)
+}
+
 /// The most code points a part's reader description names.
 const WRITTEN_NAMED: usize = 8;
 

@@ -445,6 +445,29 @@ pub fn text(look: &Look, name: impl Into<SharedString>, line: Option<SharedStrin
         .children(line)
 }
 
+/// A row's text as `text` draws it, for words an agent's request was written into, its escapes
+/// marked as the whole request marks them (`agent_request::marked`).
+pub fn marked_text(look: &Look, name: SharedString, line: Option<SharedString>) -> gpui::Div {
+    let (ink, detail) = (gpui::Hsla::from(look.ink), gpui::Hsla::from(look.detail));
+    let line = line.map(|line| {
+        div()
+            .mt(px(DETAIL_TOP))
+            .text_size(px(SMALL))
+            .line_height(px(DETAIL_LINE))
+            .text_color(look.detail)
+            .child(crate::agent_request::marked(line, detail, ink))
+    });
+    div()
+        .flex_1()
+        .min_w_0()
+        .child(
+            div()
+                .truncate()
+                .child(crate::agent_request::marked(name, detail, ink)),
+        )
+        .children(line)
+}
+
 /// A row's end, its controls 20 after its text and 8 apart.
 pub fn end(controls: impl IntoIterator<Item = gpui::AnyElement>) -> gpui::Div {
     div()
@@ -729,7 +752,15 @@ pub fn sent_part(
         true => line,
         false => line.truncate(),
     };
-    let to = cut(small(url.to_string().into()).min_w_0().text_color(ink));
+    // What the agent wrote, written out as the whole request writes it and marked so.
+    let written = |text: &str| {
+        let text = crate::agents::request::escaped(text, false).0;
+        div()
+            .text_size(px(SMALL))
+            .line_height(px(DETAIL_LINE))
+            .child(crate::agent_request::marked(text, detail, ink))
+    };
+    let to = cut(written(url).min_w_0().text_color(ink));
     let (shown, more) = sent_shown(sent.len(), all);
     let mut lines: Vec<gpui::AnyElement> = (sent.iter().take(shown))
         .map(|line| {
@@ -739,21 +770,19 @@ pub fn sent_part(
                 .pl(px(SENT_INDENT * f32::from(line.depth)));
             let row = match (line.name.is_empty(), line.value.is_empty()) {
                 // An object's name, over its fields.
-                (false, true) => row.child(small(line.name.clone().into()).text_color(detail)),
-                (true, _) => {
-                    row.child(cut(small(line.value.clone().into()).min_w_0()).text_color(ink))
-                }
+                (false, true) => row.child(written(&line.name).text_color(detail)),
+                (true, _) => row.child(cut(written(&line.value).min_w_0()).text_color(ink)),
                 (false, false) => {
                     let value = match line.hidden() {
                         true => detail,
                         false => ink,
                     };
                     row.child(
-                        small(format!("{}: ", line.name).into())
+                        written(&format!("{}: ", line.name))
                             .flex_none()
                             .text_color(detail),
                     )
-                    .child(cut(small(line.value.clone().into()).min_w_0()).text_color(value))
+                    .child(cut(written(&line.value).min_w_0()).text_color(value))
                 }
             };
             row.into_any_element()
