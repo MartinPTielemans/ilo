@@ -278,10 +278,19 @@ pub enum Wrong {
 
 /// The call's requests, checked against the page at `page`, the tab's address.
 pub fn parse(arguments: &Value, page: &str) -> Result<Vec<Request>, Wrong> {
-    let malformed = |why: &str| Wrong::Malformed(why.into());
     // Never what the page's address is: an agent may name a tab that isn't its own.
     let origin = origin(page).ok_or_else(|| {
-        malformed("The tab has no site's page loaded. Look at it with snapshot first.")
+        let why = match page.is_empty() || page == "about:blank" {
+            true => {
+                "The tab has no page loaded yet, so no site to send requests to. Go to the \
+                     site's page with navigate first."
+            }
+            false => {
+                "The tab shows no site's page, so no site to send requests to. Go to the \
+                      site's page with navigate first."
+            }
+        };
+        Wrong::Malformed(why.into())
     })?;
     let asked = arguments.get("requests").and_then(Value::as_array);
     let asked = asked.filter(|asked| (1..=MAX).contains(&asked.len()));
@@ -306,7 +315,7 @@ fn one(asked: &Value, origin: &str) -> Result<Request, Wrong> {
         )));
     }
     let Some(path) = text("path") else {
-        return malformed("path is a path on the tab's site, such as /api/items.");
+        return malformed(PATH);
     };
     let (url, path) = resolve(origin, path)?;
     let mut headers = Vec::new();
@@ -391,18 +400,40 @@ fn origin(url: &str) -> Option<String> {
     Some(format!("{scheme}://{host}"))
 }
 
+/// What a path is, for an agent that gave none.
+const PATH: &str = "path is a path on the tab's site, such as /api/items?q=red, or a whole address \
+                    on it.";
+
 /// The whole address and the path of `path` on `origin`: a path from its root, or a whole address
-/// on that origin and no other.
+/// on that origin and no other. A space in it is %20, as the address bar makes it; any other
+/// whitespace or control character is refused by name and place, as a server may read it either
+/// way (#3661).
 fn resolve(origin: &str, path: &str) -> Result<(String, String), Wrong> {
-    let malformed =
-        || Wrong::Malformed("path is a path on the tab's site, such as /api/items.".into());
-    if path.is_empty()
-        || path
-            .chars()
-            .any(|char| char.is_whitespace() || char.is_control())
-    {
-        return Err(malformed());
+    let malformed = |why: String| Err(Wrong::Malformed(why));
+    if path.is_empty() {
+        return malformed(PATH.into());
     }
+    let odd = (path.chars().enumerate())
+        .find(|(_, char)| *char != ' ' && (char.is_whitespace() || char.is_control()));
+    if let Some((at, char)) = odd {
+        let name = match char {
+            '\t' => "a tab".to_string(),
+            '\n' => "a line break".to_string(),
+            '\r' => "a carriage return".to_string(),
+            char => format!("the character U+{:04X}", char as u32),
+        };
+        let mut bytes = [0; 4];
+        let encoded: String = (char.encode_utf8(&mut bytes).bytes())
+            .map(|byte| format!("%{byte:02X}"))
+            .collect();
+        let before: String = path.chars().take(at).collect();
+        return malformed(format!(
+            "path is a path on the tab's site, without {name}: there's one at character {}, \
+             after “{before}”. Encode it as {encoded} to send it.",
+            at + 1
+        ));
+    }
+    let path = path.replace(' ', "%20");
     let path = path.split('#').next().unwrap_or_default();
     let lower = path.to_ascii_lowercase();
     if lower.starts_with("http://") || lower.starts_with("https://") {
@@ -421,8 +452,18 @@ fn resolve(origin: &str, path: &str) -> Result<(String, String), Wrong> {
         return Ok((format!("{origin}{shown}"), shown));
     }
     // "//host" and "/\host" name another host, as a browser reads them.
-    if !path.starts_with('/') || path.starts_with("//") || path.starts_with("/\\") {
-        return Err(malformed());
+    if path.starts_with("//") || path.starts_with("/\\") {
+        return malformed(format!(
+            "path is a path on the tab's site, from its root: one starting with {} is read as \
+             another site's host. Start it with a single /.",
+            &path[..2]
+        ));
+    }
+    if !path.starts_with('/') {
+        return malformed(format!(
+            "path is a path on the tab's site, from its root, as /{path} is, or a whole address \
+             on it."
+        ));
     }
     Ok((format!("{origin}{path}"), path.to_string()))
 }
@@ -940,7 +981,7 @@ mod tests {
             "//evil.example/a",
             "/\\evil.example/a",
             "api/items",
-            "/a b",
+            "/a\tb",
             "",
         ] {
             let asked = json!([{ "method": "GET", "path": wrong }]);
@@ -949,11 +990,57 @@ mod tests {
                 "{wrong:?} went"
             );
         }
-        let blank = parse(
-            &json!({ "requests": [{ "method": "GET", "path": "/" }] }),
-            "about:blank",
+        for page in ["about:blank", ""] {
+            let blank = parse(
+                &json!({ "requests": [{ "method": "GET", "path": "/" }] }),
+                page,
+            );
+            assert!(matches!(blank, Err(Wrong::Malformed(_))));
+        }
+    }
+
+    /// A path an agent wrote as it would type it in the address bar goes as the address bar sends
+    /// it: a space as %20, a quote as it is, for the page's fetch to encode. Any other whitespace
+    /// or control character is refused by name and place, with how to encode it, and a path not
+    /// from the root says how it would be (#3661).
+    #[test]
+    fn a_path_says_what_it_wont_take_and_where() {
+        let path = |path: &str| parsed(json!([{ "method": "GET", "path": path }]));
+        let sent = path("/search?q=\"red shoes\" size 9").unwrap();
+        assert_eq!(
+            sent[0].url,
+            "https://team.example.com/search?q=\"red%20shoes\"%20size%209"
         );
-        assert!(matches!(blank, Err(Wrong::Malformed(_))));
+        assert_eq!(sent[0].path, "/search?q=\"red%20shoes\"%20size%209");
+        let whole = path("https://team.example.com/a b").unwrap();
+        assert_eq!(whole[0].url, "https://team.example.com/a%20b");
+        let wrong = |given: &str| match path(given) {
+            Err(Wrong::Malformed(why)) => why,
+            other => panic!("{given:?} answered {other:?}"),
+        };
+        assert_eq!(
+            wrong("/search?q=red\nshoes"),
+            "path is a path on the tab's site, without a line break: there's one at character \
+             14, after “/search?q=red”. Encode it as %0A to send it."
+        );
+        assert_eq!(
+            wrong("/a\u{a0}b"),
+            "path is a path on the tab's site, without the character U+00A0: there's one at \
+             character 3, after “/a”. Encode it as %C2%A0 to send it."
+        );
+        assert_eq!(
+            wrong("api/items"),
+            "path is a path on the tab's site, from its root, as /api/items is, or a whole \
+             address on it."
+        );
+        assert!(wrong("//evil.example/a").starts_with(
+            "path is a path on the tab's site, from its root: one starting with // is read"
+        ));
+        assert_eq!(
+            wrong(""),
+            "path is a path on the tab's site, such as /api/items?q=red, or a whole address on \
+             it."
+        );
     }
 
     /// The headers the browser sets are the browser's, Authorization is a credential, and a

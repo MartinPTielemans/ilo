@@ -520,6 +520,9 @@ struct Sending {
     /// What's left of what the call's answers may show, and how many secrets they hid.
     shown: usize,
     hidden: usize,
+    /// Whether the tab's page, as the agent's last outline of it saw it, has a password field,
+    /// which its answer says, as a site's answers may then be those to someone signed out.
+    signs_in: bool,
     reply: mpsc::Sender<ToolResult>,
 }
 
@@ -2802,6 +2805,9 @@ impl Agents {
         if action == "request" {
             let left = requests.into();
             let (answers, shown, hidden) = (Vec::new(), request::ALL_SHOWN, 0);
+            let page = self.browser.tab(tab, cx).url;
+            let signs_in =
+                (self.outlines.get(&tab)).is_some_and(|outline| outline.signs_in_at(&page));
             let sending = Sending {
                 agent,
                 tab,
@@ -2810,6 +2816,7 @@ impl Agents {
                 answers,
                 shown,
                 hidden,
+                signs_in,
                 reply,
             };
             return self.send_next(sending, cx);
@@ -3818,9 +3825,11 @@ const CHANGES_ASK: &str = "Changes ask every time.";
 /// what wasn't sent.
 fn finish(sending: Sending, error: bool) {
     let Sending {
+        tab,
         answers,
         left,
         hidden,
+        signs_in,
         reply,
         ..
     } = sending;
@@ -3830,6 +3839,13 @@ fn finish(sending: Sending, error: bool) {
         false => answer.clone(),
     });
     let mut text = answers.collect::<Vec<_>>().join("\n\n");
+    if signs_in {
+        text = format!(
+            "Tab {tab}'s page asks for a password, as a sign-in page does, so its site may have \
+             answered as to someone signed out. Signing in is the user's to do: hand them the tab \
+             with hand_off, and send the requests again once they hand it back.\n\n{text}"
+        );
+    }
     match left.len() {
         0 => {}
         1 => text.push_str("\n\nThe last request wasn't sent."),

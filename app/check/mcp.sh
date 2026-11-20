@@ -1930,8 +1930,10 @@ addEventListener("message", (event) => {
   # seeing it: reads go at once, their answers without the cookie the site sets or the token in its
   # body, and a change asks first, every time, in a card whose Allow sends it and Deny doesn't.
   sent=$(call request "{\"tab\":$frames_tab,\"requests\":[{\"method\":\"GET\",\"path\":\"/api/me\"},{\"method\":\"GET\",\"path\":\"/api/me\"}]}")
+  # The frame's password field, which the outline has, puts a line before the answers: the page
+  # asks for a password, so the site may have answered as to someone signed out (#3661).
   case "$sent" in
-    "1. GET /api/me → 200 application/json"*"Ada"*"2. GET /api/me → 200"*) ;;
+    "Tab $frames_tab's page asks for a password, as a sign-in page does"*"hand_off"*"1. GET /api/me → 200 application/json"*"Ada"*"2. GET /api/me → 200"*) ;;
     *) fail "request answered: $sent" ;;
   esac
   case "$sent" in *s3cret* | *tok-*) fail "the request's answer held the session: $sent" ;; esac

@@ -4166,6 +4166,40 @@ mod requests {
         })
     }
 
+    /// On a page the agent's outline saw ask for a password, as a sign-in page does, a request's
+    /// answer says the site may have answered as to someone signed out, and names hand_off; on
+    /// one that doesn't, it says nothing of it (#3661).
+    #[gpui::test]
+    fn a_request_on_a_sign_in_page_says_so(cx: &mut TestAppContext) {
+        let (agents, browser, _) = connected(cx);
+        let read = json!({ "tab": 20, "requests": [{ "method": "GET", "path": "/api/me" }] });
+        let snapshot = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+        page_done(&agents, &browser, snapshot, shop_tree(), cx);
+        let answer = call(&agents, "claude-code", "request", read.clone(), cx);
+        answered(&agents, &browser, 401, r#"{"error":"sign in"}"#, cx);
+        let text = answer.recv().unwrap().text;
+        assert!(
+            text.starts_with(
+                "Tab 20's page asks for a password, as a sign-in page does, so its site may have \
+                 answered as to someone signed out. Signing in is the user's to do: hand them the \
+                 tab with hand_off, and send the requests again once they hand it back.\n\n\
+                 GET /api/me → 401"
+            ),
+            "{text}"
+        );
+
+        let signed_in = json!({ "nodes": [
+            { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Shop" } },
+        ]})
+        .to_string();
+        let snapshot = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+        page_done(&agents, &browser, snapshot, signed_in, cx);
+        let answer = call(&agents, "claude-code", "request", read, cx);
+        answered(&agents, &browser, 200, r#"{"name":"Ada"}"#, cx);
+        let text = answer.recv().unwrap().text;
+        assert!(text.starts_with("GET /api/me → 200"), "{text}");
+    }
+
     /// A read goes at once, and its answer is the body without what looks like a credential. A
     /// call's changes ask in one question, every time, whatever the user answered before: none is
     /// sent until they allow it, nor the call's reads, and Always and Never keep nothing.
