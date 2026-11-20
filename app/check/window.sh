@@ -20,7 +20,8 @@
 # double-click there zooms it, and one in the
 # sidebar below the rows opens a new tab. ⌘S, with the page or the UI focused, and the sidebar
 # button hide the sidebar and the window's buttons, and the card takes its place, through a resize;
-# ⌘S brings them back, and the core hears the page moves for each motion and is still after it. The
+# ⌘S brings them back, and the core hears the page moves for each motion and is still after it, or
+# the page goes to its place in one step when the motion is over by its first frame. The
 # pointer kept at the window's edge brings the hidden sidebar out, and one passing it doesn't, from
 # the right edge too with the sidebar put on the right. A tab opened with the sidebar hidden says
 # so in a toast, a second one bumps it, and a click on it brings the sidebar back. The sidebar's
@@ -930,33 +931,60 @@ toggle() {
     check_layout "after $3"
     check_buttons "after $3"
   fi
+  [ -z "$one_step" ] || one_step_rested
 }
-# moved <what>: the sidebar's motion moved the page's frame every step, so the core heard the page
-# moves before the first and is still after the last (issue #166). A check can't see the jiggle that
-# stops. Not for docking the sidebar out, which takes its place in one frame. Before toggle, whose
-# layout starts a new driver step that both lines precede.
+# moved <what> <hidden|shown>: the sidebar's motion moved the page's frame every step, so the core
+# heard the page moves before the first and is still after the last (issue #166). A check can't see
+# the jiggle that stops. Not for docking the sidebar out, which takes its place in one frame. Before
+# toggle, whose layout starts a new driver step that both lines precede.
+# A motion is over by its first frame when that frame comes later than the motion's length, as a
+# slow runner's can (#3736): the page goes to its place in one step, with none for the core to hear
+# of. Then toggle sees that the page was resized only to where it rests (one_step_rested).
+one_step=
 moved() {
-  expect '^browser: page moving 1$' "$1 didn't tell the core the page moves"
-  expect '^browser: page moving 0$' "$1 didn't tell the core the page is still"
+  motion_from=${view#* }
+  motion_at=$step
+  expect "^browser: \(page moving 1\|sidebar $2\)\$" "$1 didn't move the sidebar"
+  if since "$motion_at" | sed "/^browser: sidebar $2\$/q" | grep -q '^browser: page moving 1$'; then
+    expect '^browser: page moving 0$' "$1 didn't tell the core the page is still"
+  else
+    one_step=$1
+  fi
+}
+# Once toggle has laid out the page at rest: the motion moved, but the core wasn't told it moves,
+# and the page was resized straight to where it rests, from where it was. A size between is #166.
+one_step_rested() {
+  motion_rest=${view#* }
+  expect "^browser: title [0-9]* resized [0-9]* times, to $motion_rest\$" \
+    "$one_step: its motion was over by its first frame, and the page didn't come to $motion_rest" \
+    "$motion_at"
+  motion_between=$(since "$motion_at" | sed -n 's/^browser: title [0-9]* resized [0-9]* times, to //p' |
+    grep -v -e "^$motion_rest\$" -e "^$motion_from\$" || true)
+  [ -z "$motion_between" ] ||
+    fail "$one_step didn't tell the core the page moves, and it was $(echo $motion_between) on its way"
+  echo "window: $one_step was over by its first frame: the page went from $motion_from to $motion_rest"
+  one_step=
 }
 send click $page_point
+# Where the page rests before the first ⌘S, which moved reads.
+check_layout "before ⌘S"
 send key s cmd
-# The capture waits for the line, not a time, so it lands in the motion if the motion outlasts the
+# The capture waits for a line, not a time, so it lands in the motion if the motion outlasts the
 # capture, and just after it if not.
-expect '^browser: page moving 1$' "⌘S with the page focused didn't tell the core the page moves"
+expect '^browser: \(page moving 1\|sidebar hidden\)$' "⌘S with the page focused didn't move the sidebar"
 ../tools/window-screenshot.sh "$pid" "$out/sidebar-moving.png" || fail "no window to capture"
-moved "⌘S with the page focused"
+moved "⌘S with the page focused" hidden
 toggle page hidden "⌘S with the page focused"
 ../tools/window-screenshot.sh "$pid" "$out/sidebar-hidden.png" || fail "no window to capture"
 send key s cmd
-moved "⌘S again with the page focused"
+moved "⌘S again with the page focused" shown
 toggle page shown "⌘S again with the page focused"
 send click 110 400
 send key s cmd
-moved "⌘S with the UI focused"
+moved "⌘S with the UI focused" hidden
 toggle ui hidden "⌘S with the UI focused"
 send key s cmd
-moved "⌘S again with the UI focused"
+moved "⌘S again with the UI focused" shown
 toggle ui shown "⌘S again with the UI focused"
 send click 93 24
 toggle sidebar hidden "a click on the sidebar button"
