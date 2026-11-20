@@ -90,5 +90,61 @@ TEST(ProtectedMoveRuleTest, NoMoveWhereTheTabOrSiteStays) {
   }
 }
 
+// The documents of a tab's page, as their UKM source ids: the page an address was typed over, and
+// the one the tab went to.
+constexpr int64_t kPageBefore = 7;
+constexpr int64_t kPageAfter = 8;
+
+// ⌘L's key-down reached the page before, which left it to the browser to open the command bar,
+// and the page typed in it asks as it loads, a second later: the note, as for any page that does,
+// not a move (clear.sh's drm.html, #3593).
+TEST(ProtectedMoveRuleTest, APressOnThePageBeforeGetsTheNote) {
+  ProtectedAsk ask = Ask();
+  DocumentPresses presses;
+  presses.Users(kPageBefore, ask.now - base::Seconds(1), std::nullopt);
+  presses.Fill(kPageAfter, ask);
+  EXPECT_EQ(AnswerProtectedAsk(ask), Answer::kNote);
+  // The same press moves the tab had the page it reached asked.
+  presses.Fill(kPageBefore, ask);
+  EXPECT_EQ(AnswerProtectedAsk(ask), Answer::kMove);
+}
+
+// So too an agent's: it never blocks the user's press on the page that asks.
+TEST(ProtectedMoveRuleTest, AnAgentsInputOnThePageBeforeDoesntCount) {
+  ProtectedAsk ask = Ask();
+  DocumentPresses presses;
+  presses.Users(kPageAfter, ask.now - base::Seconds(2), std::nullopt);
+  presses.Agents(kPageBefore, ask.now - base::Seconds(1));
+  presses.Fill(kPageAfter, ask);
+  EXPECT_EQ(AnswerProtectedAsk(ask), Answer::kMove);
+}
+
+TEST(ProtectedMoveRuleTest, AKeyTheBrowserRanGivesThePageNoPress) {
+  const base::TimeTicks key = base::TimeTicks() + base::Minutes(59);
+  ProtectedAsk ask = Ask();
+  DocumentPresses presses;
+  // A key the page left that the browser ran, such as ⌘L, on the page that asks.
+  presses.Users(kPageAfter, ask.now - base::Seconds(1), key);
+  presses.TakenBack(key);
+  presses.Fill(kPageAfter, ask);
+  EXPECT_EQ(AnswerProtectedAsk(ask), Answer::kNote);
+  // A click before the key stands, as the key took nothing from it.
+  presses.Users(kPageAfter, ask.now - base::Seconds(2), std::nullopt);
+  presses.Users(kPageAfter, ask.now - base::Seconds(1), key);
+  presses.TakenBack(key);
+  presses.Fill(kPageAfter, ask);
+  EXPECT_EQ(ask.users_input, ask.now - base::Seconds(2));
+  EXPECT_EQ(AnswerProtectedAsk(ask), Answer::kMove);
+  // A key the page kept, such as a game's space, is the user's press on it.
+  presses.Users(kPageAfter, ask.now - base::Seconds(1), key);
+  presses.Fill(kPageAfter, ask);
+  EXPECT_EQ(ask.users_input, ask.now - base::Seconds(1));
+  // And a click after a key is the user's whatever the browser did with the key.
+  presses.Users(kPageAfter, ask.now - base::Milliseconds(500), std::nullopt);
+  presses.TakenBack(key);
+  presses.Fill(kPageAfter, ask);
+  EXPECT_EQ(ask.users_input, ask.now - base::Milliseconds(500));
+}
+
 }  // namespace
 }  // namespace browser_core
