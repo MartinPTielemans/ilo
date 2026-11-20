@@ -1488,7 +1488,9 @@ fn an_agents_key_goes_to_the_page_without_an_update_of_the_app(cx: &mut TestAppC
             cx,
         );
         assert_eq!(browser.pages.borrow().last().unwrap().4, key);
-        assert!(!page_done(&agents, &browser, answer, shop_tree(), cx).error);
+        // The search field has the keyboard, so Enter there pays for nothing and asks nothing.
+        let page = checkout_tree(Some("7"));
+        assert!(!page_done(&agents, &browser, answer, page, cx).error);
     }
     // The user's keys, after it, are the app's again.
     assert!(!pressing_key());
@@ -1931,6 +1933,134 @@ fn an_agent_chooses_an_option_by_its_text(cx: &mut TestAppContext) {
         browser.pages.borrow().len(),
         pages,
         "it chose before the user answered"
+    );
+}
+
+/// A checkout's page, with what has the keyboard `focused` by its node's id: a card form with its
+/// Pay now button, and a search form with nothing that pays.
+fn checkout_tree(focused: Option<&str>) -> String {
+    let mut nodes = vec![
+        json!({ "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Checkout" },
+          "childIds": ["2", "6"] }),
+        json!({ "nodeId": "2", "role": { "value": "form" }, "name": { "value": "" },
+          "backendDOMNodeId": 60, "childIds": ["3", "4"] }),
+        json!({ "nodeId": "3", "role": { "value": "textbox" }, "name": { "value": "Card number" },
+          "backendDOMNodeId": 61 }),
+        json!({ "nodeId": "4", "role": { "value": "button" }, "name": { "value": "Pay now" },
+          "backendDOMNodeId": 62 }),
+        json!({ "nodeId": "6", "role": { "value": "form" }, "name": { "value": "" },
+          "backendDOMNodeId": 70, "childIds": ["7", "8"] }),
+        json!({ "nodeId": "7", "role": { "value": "searchbox" }, "name": { "value": "Search" },
+          "backendDOMNodeId": 71 }),
+        json!({ "nodeId": "8", "role": { "value": "button" }, "name": { "value": "Go" },
+          "backendDOMNodeId": 72 }),
+    ];
+    for node in &mut nodes {
+        if Some(node["nodeId"].as_str().unwrap()) == focused {
+            let focused = json!({ "type": "booleanOrUndefined", "value": true });
+            node["properties"] = json!([{ "name": "focused", "value": focused }]);
+        }
+    }
+    json!({ "nodes": nodes }).to_string()
+}
+
+/// A key press that activates a control asks as a click on it does, on a site that sends no
+/// messages. Enter in a field submits its form, whose Pay now button a click on would ask, as
+/// typing with submit does, and Space on the focused Pay now button is a click on it. Enter in a
+/// form with nothing that pays, Space in a field and Tab ask nothing (GHSA-hqw3-jp9p-3rhj).
+#[gpui::test]
+fn a_key_press_that_activates_a_control_asks_as_a_click_on_it(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let snapshot = |focused: Option<&str>, cx: &mut TestAppContext| {
+        let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+        let outline = page_done(&agents, &browser, answer, checkout_tree(focused), cx).text;
+        assert!(outline.contains("- button \"Pay now\" [e2]"), "{outline}");
+    };
+    // Calls `tool` and checks it asks `what` before anything reaches the page, then the × answers.
+    let asks = |tool: &str, arguments: Value, what: &str, cx: &mut TestAppContext| {
+        *browser.asked.borrow_mut() = None;
+        let pages = browser.pages.borrow().len();
+        let answer = call(&agents, "claude-code", tool, arguments, cx);
+        let question =
+            (browser.asked.borrow().clone()).unwrap_or_else(|| panic!("{what} didn't ask"));
+        assert_eq!(question.what, what);
+        assert_eq!(question.why, "It looks like a payment or an order.");
+        assert_eq!(
+            browser.pages.borrow().len(),
+            pages,
+            "{what} reached the page unasked"
+        );
+        agents.update(cx, |agents, cx| {
+            agents.answer(question.id, Answer::Dismiss, cx)
+        });
+        assert!(answer.recv().unwrap().error);
+    };
+    // Calls `tool`, which goes to the page without a question.
+    let goes = |tool: &str, arguments: Value, cx: &mut TestAppContext| {
+        *browser.asked.borrow_mut() = None;
+        let answer = call(&agents, "claude-code", tool, arguments.clone(), cx);
+        assert!(browser.asked.borrow().is_none(), "{tool} {arguments} asked");
+        let outline = checkout_tree(None);
+        assert!(!page_done(&agents, &browser, answer, outline, cx).error);
+    };
+
+    snapshot(None, cx);
+    let card = json!({ "tab": 20, "ref": "e1", "text": "4242", "submit": true });
+    let what =
+        "type “4242” into “Card number” and press Enter, which can click “Pay now”, on example.com";
+    asks("type", card, what, cx);
+    goes(
+        "type",
+        json!({ "tab": 20, "ref": "e3", "text": "socks", "submit": true }),
+        cx,
+    );
+    goes(
+        "type",
+        json!({ "tab": 20, "ref": "e1", "text": "4242" }),
+        cx,
+    );
+
+    snapshot(Some("3"), cx);
+    let enter = json!({ "tab": 20, "key": "Enter" });
+    asks(
+        "press_key",
+        enter.clone(),
+        "press Enter, which can click “Pay now”, on example.com",
+        cx,
+    );
+    snapshot(Some("3"), cx);
+    goes("press_key", json!({ "tab": 20, "key": "Space" }), cx);
+    snapshot(Some("3"), cx);
+    goes("press_key", json!({ "tab": 20, "key": "Tab" }), cx);
+
+    snapshot(Some("4"), cx);
+    let space = json!({ "tab": 20, "key": "Space" });
+    asks(
+        "press_key",
+        space,
+        "press Space on “Pay now” on example.com",
+        cx,
+    );
+    snapshot(Some("4"), cx);
+    asks(
+        "press_key",
+        enter.clone(),
+        "press Enter on “Pay now” on example.com",
+        cx,
+    );
+
+    snapshot(Some("7"), cx);
+    goes("press_key", enter.clone(), cx);
+    // The page itself has the keyboard: Enter activates nothing.
+    snapshot(Some("1"), cx);
+    goes("press_key", enter.clone(), cx);
+    // The outline doesn't say what has it, so anything on the page that pays asks.
+    snapshot(None, cx);
+    asks(
+        "press_key",
+        enter,
+        "press Enter, which can click “Pay now”, on example.com",
+        cx,
     );
 }
 
