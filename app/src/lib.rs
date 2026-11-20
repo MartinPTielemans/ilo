@@ -4,12 +4,25 @@
 // The agents' tools are one json! list, which takes more than the default 128 to expand.
 #![recursion_limit = "256"]
 
-/// Writes a line to stderr, as `eprintln!` does, but in one write where `eprintln!` makes one for
-/// each piece, so a line Chromium logs at the same time can't land inside it, where the checks
-/// wouldn't find it.
+/// Writes a line to stderr when the checks run the app, and else does nothing, its arguments never
+/// formatted: many lines name what the user browses or types, and a desktop can keep an app's
+/// stderr, as GNOME's journal does (#3725). A line that holds nothing of the user's and must show
+/// in every launch goes through `log_always!`.
+#[macro_export]
+macro_rules! log {
+    ($($arg:tt)*) => {{
+        if $crate::checked() {
+            $crate::log_always!($($arg)*);
+        }
+    }};
+}
+
+/// Writes a line to stderr in every launch, as `eprintln!` does, but in one write where `eprintln!`
+/// makes one for each piece, so a line Chromium logs at the same time can't land inside it, where
+/// the checks wouldn't find it. tools/check-lints.py holds the lines that may use it.
 #[macro_export]
 #[cfg(not(target_family = "wasm"))]
-macro_rules! log {
+macro_rules! log_always {
     ($($arg:tt)*) => {{
         use std::io::Write as _;
         _ = std::io::stderr().write_all(format!("{}\n", format_args!($($arg)*)).as_bytes());
@@ -19,10 +32,28 @@ macro_rules! log {
 /// The web has no stderr; the page's console is where its lines go.
 #[macro_export]
 #[cfg(target_family = "wasm")]
-macro_rules! log {
+macro_rules! log_always {
     ($($arg:tt)*) => {
         web_sys::console::log_1(&format!($($arg)*).into())
     };
+}
+
+static CHECKED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// Whether `log!` writes its lines: when the checks run the app, under their driver (BROWSER_DRIVE)
+/// or check.sh (BROWSER_CHECK), read once. The web demo, which has no environment, writes them.
+pub fn checked() -> bool {
+    *CHECKED.get_or_init(|| {
+        cfg!(target_family = "wasm")
+            || std::env::var_os("BROWSER_DRIVE").is_some()
+            || std::env::var_os("BROWSER_CHECK").is_some()
+    })
+}
+
+/// Has `log!` write every line, for the preview, whose tabs are made up and which never ships.
+/// Called before its first line.
+pub fn log_every_line() {
+    _ = CHECKED.set(true);
 }
 
 /// Milliseconds on macOS's uptime clock, the one Chromium's `TimeTicks` and the host's lines read,
