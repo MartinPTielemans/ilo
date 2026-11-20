@@ -27,7 +27,6 @@ use browser::shell::{
     ExtensionAction, ExtensionCommand, FilePreview, Folders, MediaAction, MenuEntry, Page,
     PagePicture, Shell, SidePanel, Split, Trouble, Volume, WindowButton,
 };
-use browser::text_input::{Copy, Cut, Paste, PasteAndMatchStyle, Redo, SelectAll, Undo};
 use browser::theme::Appearance;
 use browser::widevine::Widevine;
 use browser::window_frames::{self, Frame};
@@ -39,9 +38,8 @@ use browser::{
 };
 use gpui::{
     AnyWindowHandle, App, ApplicationHandle, AsyncApp, Bounds, Context, Focusable, Image,
-    ImageFormat, KeyBinding, Menu, MenuItem, OsAction, Pixels, Point, SharedString, Size,
-    SystemMenuType, WeakEntity, Window, WindowBackgroundAppearance, WindowHandle, WindowOptions,
-    actions, point, prelude::*, px, size,
+    ImageFormat, KeyBinding, Menu, Pixels, Point, SharedString, Size, WeakEntity, Window,
+    WindowBackgroundAppearance, WindowHandle, WindowOptions, point, prelude::*, px, size,
 };
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
@@ -588,7 +586,13 @@ unsafe extern "C" fn started(_: *mut c_void) {
             KeyBinding::new("alt-cmd-h", HideOthers, Some(shell::KEY_CONTEXT)),
             KeyBinding::new("cmd-m", Minimize, Some(shell::KEY_CONTEXT)),
         ]);
-        cx.set_menus(menus(&shell::MenuBar::default(), None, None, false));
+        cx.set_menus(menus(
+            &shell::MenuBar::default(),
+            None,
+            None,
+            false,
+            updates_available(),
+        ));
         // check.sh reads this line, as launches are timed from it.
         log!("browser: started at {:.1} ms", unsafe {
             platform::host_since_launch()

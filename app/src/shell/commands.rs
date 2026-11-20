@@ -13,6 +13,11 @@ use crate::build_info::{self, BuildInfo};
 use crate::theme::Appearance;
 use crate::usage::{self, Usage};
 
+use super::command_names::{
+    CONVERT_HORIZONTAL, CONVERT_VERTICAL, DEVELOPER_MODE_OFF, DEVELOPER_MODE_ON, DONT_STAY_ON_TOP,
+    ENTER_FULL_SCREEN, EXIT_FULL_SCREEN, HIDE_SIDEBAR, HIDE_TOP_BAR, PIN_TAB, SHOW_TOP_BAR,
+    SIDEBAR_TO_LEFT, SIDEBAR_TO_RIGHT, STAY_ON_TOP, TOGGLE_SIDEBAR, UNPIN_TAB,
+};
 use super::{
     COPIED_TIME, Edit, Section, Shell, Space, Swapped, UserKeys, What, agent_bar, boost,
     browser::WindowButton,
@@ -434,20 +439,6 @@ pub(super) const SHORTCUTS: &[(&str, Command, bool)] = &[
     ("ctrl-9", Command::SelectSpace(8), false),
 ];
 
-/// The name of the sidebar's second row in the command bar, which it lists only while there's a
-/// sidebar to hide.
-const HIDE_SIDEBAR: &str = "Hide Sidebar";
-
-/// Window › Stay On Top, and the command bar's row that ends it while it's on.
-pub const STAY_ON_TOP: &str = "Stay On Top";
-const DONT_STAY_ON_TOP: &str = "Don't Stay On Top";
-
-/// The command bar's rows for Sidebar position, of which it lists the one that would move it.
-const SIDEBAR_TO_RIGHT: &str = "Move Sidebar to the Right";
-const SIDEBAR_TO_LEFT: &str = "Move Sidebar to the Left";
-pub(super) const SHOW_TOP_BAR: &str = "Show Top Bar";
-pub(super) const HIDE_TOP_BAR: &str = "Hide Top Bar";
-
 /// Top bar's item in a menu and its row in the command bar, by whether it's on.
 pub(super) fn top_bar_title(on: bool) -> &'static str {
     match on {
@@ -455,11 +446,6 @@ pub(super) fn top_bar_title(on: bool) -> &'static str {
         false => SHOW_TOP_BAR,
     }
 }
-
-/// The page's Developer Mode's rows in the command bar, of which it lists the one that would change
-/// it (Arc's, in sentence case).
-const DEVELOPER_MODE_ON: &str = "Turn on Developer Mode for this site";
-const DEVELOPER_MODE_OFF: &str = "Turn off Developer Mode for this site";
 
 /// What turns Developer Mode the other way, for a page in it or not.
 pub(super) fn developer_mode_title(on: bool) -> &'static str {
@@ -470,11 +456,6 @@ pub(super) fn developer_mode_title(on: bool) -> &'static str {
     }
 }
 
-/// The split's orientation's rows in the command bar, Arc's names, of which it lists the one that
-/// would turn it: horizontal is side by side, vertical stacked (Arc 1.171).
-const CONVERT_VERTICAL: &str = "Convert to Vertical Split View";
-const CONVERT_HORIZONTAL: &str = "Convert to Horizontal Split View";
-
 /// What turns a split the other way, for one `stacked` or side by side.
 pub(super) fn orientation_title(stacked: bool) -> &'static str {
     if stacked {
@@ -484,151 +465,78 @@ pub(super) fn orientation_title(stacked: bool) -> &'static str {
     }
 }
 
+/// The command bar's row for `command`, by its name, which `words` find too.
+const fn row(
+    command: Command,
+    words: &'static [&'static str],
+) -> (&'static str, Command, &'static [&'static str]) {
+    (command.title(), command, words)
+}
+
 /// The commands the command bar finds, with the words besides their names' that find them, in
 /// lowercase: Arc's bar's names and words where they're known, else its menus' names and ours
 /// (docs/ux-spec.md › Command bar › Commands). Among equal matches, the first here comes first.
 pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
-    ("Pin Tab", Command::TogglePin, &["unpin"]),
-    ("Next Tab", Command::NextTab, &[]),
-    (
-        "Search Tabs…",
-        Command::SearchTabs,
-        &["switch tab", "open tabs"],
-    ),
-    ("Archive Tab", Command::CloseTab, &["close tab"]),
-    ("Clear Today", Command::Clear, &["unpinned tabs"]),
-    (
-        "Sort Today Tabs by Site",
-        Command::SortBySite,
-        &["group tabs by site", "tidy tabs"],
-    ),
-    (
-        "Clear Cache and Refresh",
-        Command::ClearCacheAndRefresh,
-        &[],
-    ),
-    (
-        "Clear Cookies and Refresh",
-        Command::ClearCookiesAndRefresh,
-        &[],
-    ),
-    ("Clear Archive", Command::ClearArchive, &[]),
-    ("Favorite Tab", Command::FavoriteTab, &["add to favorites"]),
-    ("Collapse All Folders", Command::CollapseFolders, &[]),
-    (
-        "Collapse Pinned Tabs",
-        Command::CollapsePinned,
-        &["hide pinned"],
-    ),
-    (
-        "Expand Pinned Tabs",
-        Command::ExpandPinned,
-        &["show pinned"],
-    ),
-    ("Expand All Folders", Command::ExpandFolders, &[]),
-    ("Reveal Tab in Sidebar", Command::RevealTab, &["locate"]),
-    (
-        "Focus Sidebar",
-        Command::FocusSidebar,
-        &["keyboard", "arrow keys"],
-    ),
-    ("New Folder…", Command::NewFolder, &[]),
-    (
-        "Back to Pinned URL",
-        Command::BackToPinnedUrl,
-        &["reset tab"],
-    ),
-    ("Mute/Unmute Tab", Command::ToggleMute, &["sound", "audio"]),
-    (
-        "Turn Off Battery Saver for Now",
-        Command::TurnOffBatterySaver,
-        &["energy saver", "power"],
-    ),
-    (
-        "Translate Page",
-        Command::TranslatePage,
-        &["translation", "language"],
-    ),
-    (
-        "Use Original",
+    (PIN_TAB, Command::TogglePin, &["unpin"]),
+    row(Command::NextTab, &[]),
+    row(Command::SearchTabs, &["switch tab", "open tabs"]),
+    row(Command::CloseTab, &["close tab"]),
+    row(Command::Clear, &["unpinned tabs"]),
+    row(Command::SortBySite, &["group tabs by site", "tidy tabs"]),
+    row(Command::ClearCacheAndRefresh, &[]),
+    row(Command::ClearCookiesAndRefresh, &[]),
+    row(Command::ClearArchive, &[]),
+    row(Command::FavoriteTab, &["add to favorites"]),
+    row(Command::CollapseFolders, &[]),
+    row(Command::CollapsePinned, &["hide pinned"]),
+    row(Command::ExpandPinned, &["show pinned"]),
+    row(Command::ExpandFolders, &[]),
+    row(Command::RevealTab, &["locate"]),
+    row(Command::FocusSidebar, &["keyboard", "arrow keys"]),
+    row(Command::NewFolder, &[]),
+    row(Command::BackToPinnedUrl, &["reset tab"]),
+    row(Command::ToggleMute, &["sound", "audio"]),
+    row(Command::TurnOffBatterySaver, &["energy saver", "power"]),
+    row(Command::TranslatePage, &["translation", "language"]),
+    row(
         Command::UseOriginal,
         &["translation", "untranslate", "show original"],
     ),
-    (
-        "Mute All Tabs",
-        Command::MuteAll(true),
-        &["sound", "audio", "silence"],
-    ),
-    (
-        "Unmute All Tabs",
-        Command::MuteAll(false),
-        &["sound", "audio"],
-    ),
-    ("Exit", Command::Exit, &["escape"]),
-    ("Enter Full Screen", Command::ToggleFullScreen, &["toggle"]),
-    ("Exit Full Screen", Command::ToggleFullScreen, &["toggle"]),
-    (
-        "New Profile",
-        Command::ChangeProfile(None),
-        &["add profile"],
-    ),
-    ("Copy URL", Command::CopyUrl, &["link"]),
-    ("Copy URL as Markdown", Command::CopyMarkdownLink, &["link"]),
-    (
-        "Paste URL as New Tab",
-        Command::PasteUrlAsTab,
-        &["clipboard", "open"],
-    ),
-    ("Share…", Command::Share, &["send"]),
-    ("New Window", Command::NewWindow, &["duplicate", "copy"]),
-    ("Duplicate Current Tab", Command::DuplicateTab, &["copy"]),
-    (
-        "New Incognito Window",
-        Command::NewPrivateWindow,
-        &["private"],
-    ),
-    (
-        "New Little ilo Window",
-        Command::NewLittleWindow,
-        &["little arc", "small window"],
-    ),
-    (
-        "New Blank Window",
-        Command::NewBlankWindow,
-        &["empty window", "unsaved"],
-    ),
-    (
-        "Open in Main Window",
-        Command::OpenInMainWindow,
-        &["little", "move"],
-    ),
-    ("Close Window", Command::CloseWindow, &[]),
-    (
-        "Restore Last Closed Tab",
-        Command::ReopenClosedTab,
-        &["reopen", "undo close"],
-    ),
-    ("Find…", Command::Find, &[]),
-    ("Site Controls", Command::SiteControls, &["permissions"]),
-    ("Cast…", Command::Cast, &["chromecast", "tv", "mirror"]),
-    ("Go Back", Command::Back, &[]),
-    ("Go Forward", Command::Forward, &[]),
-    ("Refresh the Page", Command::Reload, &["reload"]),
-    (
-        "Force Refresh the Page",
-        Command::ForceReload,
-        &["reload", "hard reload"],
-    ),
-    ("Stop Loading", Command::Stop, &[]),
-    ("Zoom In", Command::ZoomIn, &[]),
-    ("Zoom Out", Command::ZoomOut, &[]),
-    ("Zoom to Actual Size", Command::ActualSize, &["reset zoom"]),
-    ("Add Split View", Command::AddSplit, &["side by side"]),
-    ("Close this Split Pane", Command::CloseSplitPane, &[]),
-    ("Separate Page from Split View", Command::SeparatePane, &[]),
-    ("Expand Current Split", Command::ExpandSplit, &[]),
+    row(Command::MuteAll(true), &["sound", "audio", "silence"]),
+    row(Command::MuteAll(false), &["sound", "audio"]),
+    row(Command::Exit, &["escape"]),
+    (ENTER_FULL_SCREEN, Command::ToggleFullScreen, &["toggle"]),
+    (EXIT_FULL_SCREEN, Command::ToggleFullScreen, &["toggle"]),
+    row(Command::ChangeProfile(None), &["add profile"]),
+    row(Command::CopyUrl, &["link"]),
+    row(Command::CopyMarkdownLink, &["link"]),
+    row(Command::PasteUrlAsTab, &["clipboard", "open"]),
+    row(Command::Share, &["send"]),
+    row(Command::NewWindow, &["duplicate", "copy"]),
+    row(Command::DuplicateTab, &["copy"]),
+    row(Command::NewPrivateWindow, &["private"]),
+    row(Command::NewLittleWindow, &["little arc", "small window"]),
+    row(Command::NewBlankWindow, &["empty window", "unsaved"]),
+    row(Command::OpenInMainWindow, &["little", "move"]),
+    row(Command::CloseWindow, &[]),
+    row(Command::ReopenClosedTab, &["reopen", "undo close"]),
+    row(Command::Find, &[]),
+    row(Command::SiteControls, &["permissions"]),
+    row(Command::Cast, &["chromecast", "tv", "mirror"]),
+    row(Command::Back, &[]),
+    row(Command::Forward, &[]),
+    row(Command::Reload, &["reload"]),
+    row(Command::ForceReload, &["reload", "hard reload"]),
+    row(Command::Stop, &[]),
+    row(Command::ZoomIn, &[]),
+    row(Command::ZoomOut, &[]),
+    row(Command::ActualSize, &["reset zoom"]),
+    row(Command::AddSplit, &["side by side"]),
+    row(Command::CloseSplitPane, &[]),
+    row(Command::SeparatePane, &[]),
+    row(Command::ExpandSplit, &[]),
     // Dia's (docs/ux-spec.md › Split view).
-    ("Flip Split View", Command::FlipSplit, &[]),
+    row(Command::FlipSplit, &[]),
     // Arc's names, with Dia's among the words.
     (
         CONVERT_VERTICAL,
@@ -640,72 +548,49 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         Command::ChangeOrientation,
         &["change orientation", "side by side"],
     ),
-    ("Move Pane Left", Command::MovePaneLeft, &[]),
-    ("Move Pane Right", Command::MovePaneRight, &[]),
-    (
-        "Separate All Tabs",
-        Command::SeparateSplit,
-        &["separate all pages"],
-    ),
-    (
-        "New Note",
+    row(Command::MovePaneLeft, &[]),
+    row(Command::MovePaneRight, &[]),
+    row(Command::SeparateSplit, &["separate all pages"]),
+    row(
         Command::NewNote,
         &["document", "notion", "google docs", "word", "confluence"],
     ),
-    (
-        "New Note Split",
-        Command::NewNoteSplit,
-        &["document", "side by side"],
-    ),
-    (
-        "New Board",
+    row(Command::NewNoteSplit, &["document", "side by side"]),
+    row(
         Command::NewBoard,
         &["canvas", "whiteboard", "moodboard", "easel", "sketch"],
     ),
-    (
-        "Duplicate Board",
+    row(
         Command::DuplicateBoard,
         &["copy", "canvas", "whiteboard", "moodboard", "easel"],
     ),
-    (
-        "View Boards…",
+    row(
         Command::ViewBoards,
         &["canvas", "whiteboard", "moodboard", "easel", "sketch"],
     ),
-    ("Toggle Sidebar", Command::ToggleSidebar, &["hide", "show"]),
-    (
-        "Automatic Appearance",
+    (TOGGLE_SIDEBAR, Command::ToggleSidebar, &["hide", "show"]),
+    row(
         Command::Appearance(Appearance::Automatic),
         &["system", "app theme"],
     ),
-    (
-        "Light Appearance",
+    row(
         Command::Appearance(Appearance::Light),
         &["light mode", "app theme"],
     ),
-    (
-        "Dark Appearance",
+    row(
         Command::Appearance(Appearance::Dark),
         &["dark mode", "app theme"],
     ),
     (HIDE_SIDEBAR, Command::ToggleSidebar, &[]),
-    ("Capture…", Command::CapturePortion, &["screenshot"]),
-    (
-        "Capture Full Page",
-        Command::CaptureFullPage,
-        &["screenshot"],
-    ),
-    (
-        "Capture in Portrait Mode",
-        Command::CapturePortrait,
-        &["screenshot", "share"],
-    ),
-    ("Save Page As", Command::SavePage, &[]),
-    ("Print", Command::Print, &["pdf"]),
-    ("View Source", Command::ViewSource, &[]),
-    ("Developer Tools", Command::DevTools, &["devtools"]),
-    ("Inspect Elements", Command::InspectElements, &[]),
-    ("JavaScript Console", Command::JavaScriptConsole, &[]),
+    row(Command::CapturePortion, &["screenshot"]),
+    row(Command::CaptureFullPage, &["screenshot"]),
+    row(Command::CapturePortrait, &["screenshot", "share"]),
+    row(Command::SavePage, &[]),
+    row(Command::Print, &["pdf"]),
+    row(Command::ViewSource, &[]),
+    row(Command::DevTools, &["devtools"]),
+    row(Command::InspectElements, &[]),
+    row(Command::JavaScriptConsole, &[]),
     (
         DEVELOPER_MODE_ON,
         Command::ToggleDeveloperMode,
@@ -716,7 +601,7 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         Command::ToggleDeveloperMode,
         &["dev mode", "localhost"],
     ),
-    ("Open Task Manager", Command::TaskManager, &[]),
+    row(Command::TaskManager, &[]),
     (
         STAY_ON_TOP,
         Command::StayOnTop,
@@ -757,72 +642,32 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         Command::RecordTrace,
         &["performance", "tracing"],
     ),
-    (
-        "Manage Extensions…",
-        Command::ManageExtensions,
-        &["plugins"],
-    ),
-    ("Add Extension…", Command::AddExtension, &[]),
-    ("New Space…", Command::NewSpace, &[]),
-    ("Rename Space", Command::RenameSpace, &[]),
+    row(Command::ManageExtensions, &["plugins"]),
+    row(Command::AddExtension, &[]),
+    row(Command::NewSpace, &[]),
+    row(Command::RenameSpace, &[]),
     // Arc's bar's name, where its Space menu says Edit Theme Color…. "theme" finds it before the
     // Appearance rows, whose "app theme" it finds as a later word.
-    (
-        "Edit Theme…",
-        Command::EditTheme,
-        &["theme", "color", "colour"],
-    ),
-    (
-        "Export Space as Markdown…",
-        Command::ExportSpace,
-        &["save", "links", "backup"],
-    ),
-    ("Rename Current Tab…", Command::RenameTab, &["title"]),
-    ("Next Space", Command::NextSpace, &[]),
-    ("Previous Space", Command::PreviousSpace, &[]),
-    ("Previous Tab", Command::PreviousTab, &[]),
-    ("Open Library…", Command::ViewLibrary, &["view library"]),
-    ("View Archive…", Command::ViewArchive, &[]),
-    ("View Downloads…", Command::ViewDownloads, &[]),
-    (
-        "View Media…",
-        Command::ViewMedia,
-        &["screenshots", "captures"],
-    ),
-    (
-        "View Agents…",
-        Command::ViewAgents,
-        &["agent history", "past tasks"],
-    ),
-    ("New Boost", Command::NewBoost, &["zap", "css", "style"]),
-    ("Edit Boost", Command::EditBoost, &["zap", "css", "style"]),
-    (
-        "View Boosts…",
-        Command::ViewBoosts,
-        &["zap", "css", "style"],
-    ),
-    ("View History", Command::ViewHistory, &[]),
-    (
-        "Site Search Settings",
-        Command::SiteSearchSettings,
-        &["search engines", "keywords"],
-    ),
-    (
-        "Clear Browsing Data…",
-        Command::ClearBrowsingData,
-        &["history", "cookies", "cache"],
-    ),
-    ("Settings", Command::Settings, &["preferences"]),
-    (
-        "Essential Keyboard Shortcuts",
-        Command::KeyboardShortcuts,
-        &["keys"],
-    ),
-    (
-        concat!("About ", env!("APP_NAME")),
-        Command::About,
-        &["version", "credits", "licence"],
-    ),
+    row(Command::EditTheme, &["theme", "color", "colour"]),
+    row(Command::ExportSpace, &["save", "links", "backup"]),
+    row(Command::RenameTab, &["title"]),
+    row(Command::NextSpace, &[]),
+    row(Command::PreviousSpace, &[]),
+    row(Command::PreviousTab, &[]),
+    row(Command::ViewLibrary, &["view library"]),
+    row(Command::ViewArchive, &[]),
+    row(Command::ViewDownloads, &[]),
+    row(Command::ViewMedia, &["screenshots", "captures"]),
+    row(Command::ViewAgents, &["agent history", "past tasks"]),
+    row(Command::NewBoost, &["zap", "css", "style"]),
+    row(Command::EditBoost, &["zap", "css", "style"]),
+    row(Command::ViewBoosts, &["zap", "css", "style"]),
+    row(Command::ViewHistory, &[]),
+    row(Command::SiteSearchSettings, &["search engines", "keywords"]),
+    row(Command::ClearBrowsingData, &["history", "cookies", "cache"]),
+    row(Command::Settings, &["preferences"]),
+    row(Command::KeyboardShortcuts, &["keys"]),
+    row(Command::About, &["version", "credits", "licence"]),
     // The app menu's, which Linux shows no bar for, and its name once an update is ready.
     (
         crate::updates::CHECK_FOR_UPDATES,
@@ -834,40 +679,16 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         Command::CheckForUpdates,
         &["update", "upgrade", "relaunch"],
     ),
-    (
-        "Import from Other Browsers…",
-        Command::Import,
-        &["bookmarks"],
-    ),
-    (
-        "Privacy Policy",
-        Command::PrivacyPolicy,
-        &["data", "tracking"],
-    ),
-    ("Passwords", Command::Passwords, &["logins", "keychain"]),
-    (
-        concat!("Welcome to ", env!("APP_NAME")),
-        Command::Welcome,
-        &["onboarding", "intro"],
-    ),
-    ("Help Center", Command::HelpCenter, &["help", "support"]),
-    (
-        "What's New",
-        Command::WhatsNew,
-        &["release notes", "changelog"],
-    ),
-    (
-        "Report a Problem…",
-        Command::ReportProblem,
-        &["bug", "feedback", "issue"],
-    ),
-    (
-        "Restore Earlier Sidebar…",
-        Command::RestoreEarlierSidebar,
-        &["backup", "restore data"],
-    ),
-    ("Copy Build Info", Command::CopyBuildInfo, &["version"]),
-    (concat!("Quit ", env!("APP_NAME")), Command::Quit, &[]),
+    row(Command::Import, &["bookmarks"]),
+    row(Command::PrivacyPolicy, &["data", "tracking"]),
+    row(Command::Passwords, &["logins", "keychain"]),
+    row(Command::Welcome, &["onboarding", "intro"]),
+    row(Command::HelpCenter, &["help", "support"]),
+    row(Command::WhatsNew, &["release notes", "changelog"]),
+    row(Command::ReportProblem, &["bug", "feedback", "issue"]),
+    row(Command::RestoreEarlierSidebar, &["backup", "restore data"]),
+    row(Command::CopyBuildInfo, &["version"]),
+    row(Command::Quit, &[]),
 ];
 
 /// BAR_COMMANDS' names in lowercase, made once, since the bar matches them on every key.
@@ -2506,7 +2327,7 @@ impl Shell {
             return None;
         }
         match command {
-            Command::TogglePin if self.pinned().contains(&self.selected) => Some("Unpin Tab"),
+            Command::TogglePin if self.pinned().contains(&self.selected) => Some(UNPIN_TAB),
             // The appearance chosen already would do nothing.
             Command::Appearance(appearance) => (appearance != self.app_appearance).then_some(name),
             Command::ToggleSidebar if name == HIDE_SIDEBAR => {
@@ -2522,8 +2343,8 @@ impl Shell {
             Command::RecordTrace => (name == trace::title(trace::recording(cx))).then_some(name),
             Command::ToggleFullScreen => {
                 let title = match self.full_screen {
-                    true => "Exit Full Screen",
-                    false => "Enter Full Screen",
+                    true => EXIT_FULL_SCREEN,
+                    false => ENTER_FULL_SCREEN,
                 };
                 (name == title).then_some(name)
             }
