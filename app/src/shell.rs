@@ -5152,12 +5152,10 @@ impl Shell {
                     .child(form)
             }
             (None, Some(form), _) => sidebar.child(self.space_form(form, None, cx)),
-            (None, None, Some((form, left))) => {
-                let left = left.elapsed().as_secs_f32();
-                sidebar.child(self.space_form(form, Some(left), cx))
-            }
-            // The URL field and the favorites are the Space's page's, and page with it.
-            (None, None, None) => {
+            // The URL field and the favorites are the Space's page's, and page with it. While the
+            // form leaves, the page is there under it, unseen until it's gone (Spaces › Creating),
+            // and takes keys and clicks, as motion never blocks them (#3554).
+            (None, None, leaving) => {
                 self.drawn_top
                     .replace((self.top_offset(), self.drawn_tiles()));
                 let rest = self.rest_press_listener(Self::press_top_at_rest, cx);
@@ -5166,7 +5164,14 @@ impl Shell {
                     .top(px(URL_FIELD_TOP))
                     .left_0()
                     .w(px(self.width()));
-                sidebar
+                let page = div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left_0()
+                    .w(px(self.width()))
+                    .when(leaving.is_some(), |page| page.opacity(0.));
+                let page = page
                     .children((!self.bar_on()).then(|| self.with_page(self.url_field(cx))))
                     .children(self.scroll_edge_line().map(|line| self.with_page(line)))
                     .children(self.foot_edge_line().map(|line| self.with_page(line)))
@@ -5192,7 +5197,11 @@ impl Shell {
                     .children(self.update_banner(cx))
                     .children(self.safe_start_card(cx))
                     .children(self.task_ghosts())
-                    .children(self.drm_note_card(cx))
+                    .children(self.drm_note_card(cx));
+                let form = leaving.map(|(form, left)| {
+                    self.space_form(form, Some(left.elapsed().as_secs_f32()), cx)
+                });
+                sidebar.child(page).children(form)
             }
         };
         sidebar
