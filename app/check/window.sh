@@ -1434,14 +1434,9 @@ send layout
 content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
   sed 's/^browser: layout content \([0-9]*\)x[0-9]*,.*/\1/')
 show="$((content - $5 + $1 + $3 - 14 - 25)) $(($2 + $4 / 2))"
-send move $show
-first_move=$step
-send move $show
-expect '^browser: toast hovered true$' "the pointer at $show wasn't on the new tab's toast" "$first_move"
-recorded
-../tools/window-screenshot.sh "$pid" "$out/new-tab-toast.png" || fail "no window to capture"
-# On the Mac its plate window stays over its plate as the window moves, narrows and widens back,
-# the toast kept by the pointer on it.
+# On the Mac its plate window stays over its plate as the window moves, narrows and widens back.
+# That's within the toast's time and before the pointer goes on it: a window moved takes the toast
+# off the pointer, and a toast past its time leaves with its plate window as the pointer does.
 if [ "$(uname)" = Darwin ]; then
   plate_window_over "with the new tab's toast up"
   send order
@@ -1457,6 +1452,12 @@ if [ "$(uname)" = Darwin ]; then
     "widened back, the window's toast didn't tell where its plate is now"
   plate_window_over "with the window back where it was under the new tab's toast"
 fi
+send move $show
+first_move=$step
+send move $show
+expect '^browser: toast hovered true$' "the pointer at $show wasn't on the new tab's toast" "$first_move"
+recorded
+../tools/window-screenshot.sh "$pid" "$out/new-tab-toast.png" || fail "no window to capture"
 send click $show
 expect '^browser: toast button show$' "a click on the new tab's toast's Show at $show didn't take"
 expect '^browser: sidebar shown$' "the new tab's toast's Show didn't bring the sidebar back"

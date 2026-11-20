@@ -351,7 +351,6 @@ void StripTint(CALayer* layer) {
 
 - (void)mouseUp:(NSEvent*)event {
   [self.target mouseUp:[self surfaceEvent:event]];
-  [self released:event];
 }
 
 - (void)rightMouseDown:(NSEvent*)event {
@@ -364,7 +363,6 @@ void StripTint(CALayer* layer) {
 
 - (void)rightMouseUp:(NSEvent*)event {
   [self.target rightMouseUp:[self surfaceEvent:event]];
-  [self released:event];
 }
 
 - (void)otherMouseDown:(NSEvent*)event {
@@ -377,7 +375,6 @@ void StripTint(CALayer* layer) {
 
 - (void)otherMouseUp:(NSEvent*)event {
   [self.target otherMouseUp:[self surfaceEvent:event]];
-  [self released:event];
 }
 
 - (void)mouseMoved:(NSEvent*)event {
@@ -390,32 +387,18 @@ void StripTint(CALayer* layer) {
 }
 
 // A move outside the surface's window, as GPUI's leave is on Linux and Windows: the pointer is off
-// the plate, and its margin lets the pointer through.
-- (void)left:(NSEvent*)event {
+// the plate, and its margin lets the pointer through. Not while a button is down, as the drags and
+// the release that follow still come here, with the pointer's place: the surface hears the release
+// where it is, off the plate, and drops the hover itself.
+- (void)mouseExited:(NSEvent*)event {
+  if (NSEvent.pressedMouseButtons) {
+    return;
+  }
   NSWindow* surface = ((HostPlateWindow*)self.window).surface;
   const NSPoint outside = NSMakePoint(-1, NSHeight(surface.frame) + 1);
   [self.target mouseMoved:[self surfaceEvent:event
                                         type:NSEventTypeMouseMoved
                                           at:[surface convertPointToScreen:outside]]];
-}
-
-// Not while a button is down, as the drags and the release that follow still come here, with the
-// pointer's place.
-- (void)mouseExited:(NSEvent*)event {
-  if (NSEvent.pressedMouseButtons) {
-    return;
-  }
-  [self left:event];
-}
-
-// A drag that began on the plate and left it ends with the last button's release off the plate,
-// after which no exit comes, so the release says the pointer left.
-- (void)released:(NSEvent*)event {
-  const NSUInteger others = NSEvent.pressedMouseButtons & ~(NSUInteger{1} << event.buttonNumber);
-  if (!others && !NSPointInRect([self convertPoint:event.locationInWindow fromView:nil],
-                                self.bounds)) {
-    [self left:event];
-  }
 }
 
 // None of the three scrolls, and a scroll on its plate went to the surface's view, which had

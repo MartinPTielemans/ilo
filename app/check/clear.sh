@@ -193,7 +193,8 @@ clipboard_holds "[Clear two](${site}clear-two.html)" ||
   fail "⌥⇧⌘C left the clipboard holding \"$(WAYLAND_DISPLAY="$BROWSER_HEADLESS" wl-paste -n)\""
 # On the Mac, a press on ⇧⌘C's toast's plate let go on the page leaves the toast unhovered, so it
 # goes on time: the release is the last the plate hears of a drag that left it, and no exit comes
-# after, so the release says the pointer left. The moves between are left out, so it alone does.
+# after, so the toast takes the pointer's place from the release. The moves between are left out,
+# so it alone does.
 if [ "$(uname)" = Darwin ]; then
   expect '^browser: toast hidden$' "⌥⇧⌘C's toast stayed past its time"
   send key c cmd shift
@@ -212,6 +213,13 @@ if [ "$(uname)" = Darwin ]; then
   expect '^browser: toast hovered false$' \
     "a press on ⇧⌘C's toast's plate let go on the page at $off left the toast hovered"
   expect '^browser: toast hidden$' "⇧⌘C's toast stayed after a press on its plate was let go off it"
+  # That ⇧⌘C put the URL in place of the Markdown link, for which ⌥⌘V below opens nothing, so it's
+  # copied again, as above, from the UI.
+  send click $sidebar_point
+  send key c cmd shift alt
+  expect "^browser: copied \\[Clear two](${site}clear-two.html)\$" \
+    "⌥⇧⌘C didn't copy the Markdown link again after the press on ⇧⌘C's toast"
+  expect '^browser: toast settled$' "⌥⇧⌘C's toast again didn't settle"
 fi
 
 # ⌥⌘V, from the UI and the page, and the command bar's Paste URL as New Tab open the copied link in
