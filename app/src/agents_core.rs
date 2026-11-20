@@ -96,6 +96,12 @@ impl Browser for Core {
         }
     }
 
+    fn loading(&self, tab: u64, cx: &App) -> bool {
+        let shell = WINDOWS.with_borrow(|windows| windows.first().map(|w| w.shell.clone()));
+        let shell = shell.and_then(|shell| shell.upgrade());
+        shell.is_some_and(|shell| shell.read(cx).page(tab).loading)
+    }
+
     fn off_limits(&self, tab: u64, cx: &App) -> Option<&'static str> {
         // A pinned tab not yet loaded has no page, only the URL it's pinned to.
         agents::off_limits(&self.tab(tab, cx).url, &name(bc::bc_tab_pinned_url, tab))

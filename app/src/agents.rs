@@ -27,10 +27,12 @@ pub mod scripts;
 mod server;
 pub mod task;
 pub mod tools;
+mod wait;
 
 pub use server::address;
+pub use wait::waiting;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, mpsc};
@@ -214,6 +216,8 @@ pub trait Browser {
     fn off_limits(&self, tab: u64, cx: &App) -> Option<&'static str> {
         off_limits(&self.tab(tab, cx).url, "")
     }
+    /// Whether `tab`'s page is loading, as the core last said (bc_tab_state).
+    fn loading(&self, tab: u64, cx: &App) -> bool;
     /// The Space that has `tab`, or 0 if none does: it closed, or is closing.
     fn space_of(&self, tab: u64, cx: &App) -> u64;
     /// Asks the core whether the agent may do `action` to `tab` (bc_agent_may_act): nothing, or
@@ -685,6 +689,15 @@ pub struct Agents {
     /// Settings › Agents' Tasks from the command bar is off: asking an agent from ⌘T and letting
     /// an app connect are two trust decisions, so tasks have a switch of their own under agents'.
     tasks_off: bool,
+    /// The calls waiting for an event in their agent's tabs (wait_for_event), by a number of their own.
+    waits: HashMap<u64, wait::Wait>,
+    /// Each agent's downloads that ended after their call answered, or with none to, until a wait
+    /// tells them: the last few, which go with its session.
+    untold: HashMap<String, VecDeque<String>>,
+    /// Each tab's URL, by agent and tab, as the agent's last answer on it left it.
+    told: HashMap<(String, u64), SharedString>,
+    /// The tab each call under way names, by call, whose answer `told` keeps.
+    on_tab: HashMap<u64, u64>,
 }
 
 /// A run of steps (run_steps): one at a time, each as its tool would run alone.
@@ -846,6 +859,10 @@ impl Agents {
             scripts: false,
             script_event: 0,
             tasks_off: false,
+            waits: HashMap::new(),
+            untold: HashMap::new(),
+            told: HashMap::new(),
+            on_tab: HashMap::new(),
         }
     }
 
@@ -1252,7 +1269,10 @@ impl Agents {
                 at,
                 error,
                 image,
-            } => self.answered(&agent, id, at, error, image, cx),
+            } => {
+                self.told_on(&agent, id, cx);
+                self.answered(&agent, id, at, error, image, cx)
+            }
         }
     }
 
@@ -1276,7 +1296,11 @@ impl Agents {
         // check.sh reads this line.
         log!("browser: agent {agent} calls {tool}");
         self.live.insert(agent.clone());
+        if let Ok(Some(tab)) = tools::tab_argument(&arguments) {
+            self.on_tab.insert(id, tab);
+        }
         match tool.as_str() {
+            "wait_for_event" => self.wait_for_event(agent, &arguments, reply, cx),
             "list_tabs" => {
                 // Its first call makes its Space, which the core then lists.
                 self.space(&agent, cx);
@@ -1293,6 +1317,9 @@ impl Agents {
                     })
                     .collect();
                 self.note(&agent, "list_tabs", "", "");
+                for tab in &tabs {
+                    self.told.insert((agent.clone(), tab.id), tab.url.clone());
+                }
                 cx.notify();
                 let mine: Vec<u64> = (self.pins.iter())
                     .filter(|(_, by)| **by == agent)
@@ -2081,6 +2108,7 @@ impl Agents {
     pub fn tab_closed(&mut self, tab: u64, cx: &mut Context<Self>) {
         self.dialogs.remove(&tab);
         self.let_go(tab, held::Event::Closed, cx);
+        self.wait_closed(tab, cx);
     }
 
     /// `tab`'s page shows its own dialog of `kind`, or none any more (pages::tab_dialog). In an
@@ -2107,6 +2135,7 @@ impl Agents {
     /// `space`'s tabs changed (spaces::space_changed). A held tab that left its agent's Space
     /// closed, or the user moved it to one of theirs, and its hold ends either way.
     pub fn space_changed(&mut self, space: u64, cx: &mut Context<Self>) {
+        self.waits_left(space, cx);
         if self.held.is_empty() {
             return;
         }
@@ -2197,6 +2226,7 @@ impl Agents {
         if actions.has(A::CARD) {
             self.asked(cx);
         }
+        self.wait_held(tab, &agent, event, life == held::Life::Free, cx);
     }
 
     /// The user stops the agent: what it waits on is refused, its questions go and its sessions
@@ -2220,6 +2250,7 @@ impl Agents {
         for tab in self.held_from(agent) {
             self.let_go(tab, held::Event::Stop { holder: true }, cx);
         }
+        self.stop_waits(agent, STOPPED);
         self.browser.disconnected(agent, cx);
         // An outside client stopped stops for good: its connections close once the calls stopped
         // have their answer, so it shows the browser's server as gone until the user reconnects
@@ -2743,6 +2774,7 @@ impl Agents {
         self.acting.retain(|_, acting| acting.agent != agent);
         self.sending.retain(|_, sending| sending.agent != agent);
         self.runs.retain(|run| run.agent != agent);
+        self.forget_waits(agent);
         for tab in self.held_from(agent) {
             self.let_go(tab, held::Event::Gone { holder: true }, cx);
         }
@@ -2941,7 +2973,9 @@ impl Agents {
         cx.notify();
         self.browser.answer_download(download, true);
         if let Some(end) = self.ended.remove(&download) {
-            _ = reply.send(download_answer(&name, end));
+            if let Err(mpsc::SendError(answer)) = reply.send(download_answer(&name, end)) {
+                self.download_untold(&agent, answer.text, cx);
+            }
             return self.advance(cx);
         }
         self.downloading
@@ -2949,12 +2983,14 @@ impl Agents {
         cx.spawn(async move |agents, cx| {
             cx.background_executor().timer(DOWNLOAD_WAIT).await;
             _ = agents.update(cx, |agents, cx| {
-                let Some(Downloading { name, reply, .. }) = agents.downloading.remove(&download)
-                else {
+                let Some(downloading) = agents.downloading.get_mut(&download) else {
                     return;
                 };
+                // Its end, with no call left to answer, is for a wait to tell (wait_for_event).
+                let reply = std::mem::replace(&mut downloading.reply, mpsc::channel().0);
                 _ = reply.send(ToolResult::text(format!(
-                    "{name} is still downloading, to the user's downloads. {NO_FILES}"
+                    "{} is still downloading, to the user's downloads. {NO_FILES}",
+                    downloading.name
                 )));
                 agents.advance(cx);
             });
@@ -2964,7 +3000,7 @@ impl Agents {
 
     /// How a download the user let an agent's page make ended, which answers its action.
     pub fn download_ended(&mut self, download: u64, end: DownloadEnd, cx: &mut Context<Self>) {
-        let Some(Downloading { name, reply, .. }) = self.downloading.remove(&download) else {
+        let Some(Downloading { agent, name, reply }) = self.downloading.remove(&download) else {
             // Ended before the user answered for it, which the yes answers with.
             if self
                 .asking
@@ -2975,7 +3011,10 @@ impl Agents {
             }
             return;
         };
-        _ = reply.send(download_answer(&name, end));
+        // A page's own download has no call to answer, and a slow one's call answered already.
+        if let Err(mpsc::SendError(answer)) = reply.send(download_answer(&name, end)) {
+            self.download_untold(&agent, answer.text, cx);
+        }
         self.advance(cx);
     }
 
@@ -3778,6 +3817,20 @@ fn answer_of(tab: u64, event: held::Event) -> ToolResult {
 pub fn page_dialog(tab: u64, kind: Option<DialogKind>, cx: &mut App) {
     if let Some(agents) = global(cx) {
         agents.update(cx, |agents, cx| agents.page_dialog(tab, kind, cx));
+    }
+}
+
+/// `tab` loaded `url` (tabs::tab_loaded), which a call waiting may be for.
+pub fn tab_loaded(tab: u64, url: &str, cx: &mut App) {
+    if let Some(agents) = global(cx).filter(|_| waiting()) {
+        agents.update(cx, |agents, cx| agents.wait_loaded(tab, url, cx));
+    }
+}
+
+/// `tab`'s page is at `url` (tabs::tab_state_changed), which a call waiting may be for.
+pub fn tab_page(tab: u64, url: &str, cx: &mut App) {
+    if let Some(agents) = global(cx).filter(|_| waiting()) {
+        agents.update(cx, |agents, cx| agents.wait_page(tab, url, cx));
     }
 }
 

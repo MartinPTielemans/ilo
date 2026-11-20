@@ -2154,6 +2154,13 @@ impl Agents {
             "list_tabs" | "ask" => {
                 (did.site, did.tab, did.page) = (String::new(), None, String::new())
             }
+            "wait_for_event" => {
+                // Without a tab it waits on all the agent's, not the one it used last.
+                if !matches!(tools::tab_argument(arguments), Ok(Some(_))) {
+                    (did.site, did.tab, did.page) = (String::new(), None, String::new());
+                }
+                did.target = super::wait::target(arguments, &did.site);
+            }
             _ => {}
         }
         did
