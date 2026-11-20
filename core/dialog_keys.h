@@ -7,6 +7,9 @@
 namespace content {
 class WebContents;
 }
+namespace input {
+struct NativeWebKeyboardEvent;
+}
 namespace views {
 class Widget;
 }
@@ -25,6 +28,12 @@ void Watch(views::Widget* window);
 // page beside the dialog gives it on the Mac: the page drops every key while its dialog shows, so
 // ilo's shortcuts would be lost (#2625).
 void PageFocused(content::WebContents* page);
+
+// Says, under the test driver alone, where a ⌃ or ⌘ key a tab's dialog is asking the app about was
+// kept or let go, |why|, on its way from the dialog's handler to tab_key_before_page, so a check
+// names the gate a lost shortcut stopped at (#3717). Nothing for any other key, and only the key's
+// code and modifiers: nothing of the page.
+void KeyGate(const input::NativeWebKeyboardEvent& key, const char* why);
 
 #if !BUILDFLAG(IS_MAC)
 // The same, for the page whose view holds |view|, or is held by it, which took aura's focus. A page
