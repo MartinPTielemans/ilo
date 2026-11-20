@@ -1167,6 +1167,14 @@ typedef struct bc_host {
   // protected video is kept off the screen, as the display connection's protection (HDCP) isn't
   // enough for it: once a tab and site, with the empty one as the tab goes to another site or back
   // to Chromium. Closing that note is the app's alone.
+  // Where the profile has the system's engine on (bc_system_engine_on), a page that asks on the
+  // user's press moves there by itself (bc_tab_set_system_engine). Then |key_system| says what
+  // happened instead of naming a system: "moved" once the tab moved, or "moved-ad-blocking" where
+  // the ad blocker ran on the site, for a note that says the move and offers the way back; "typed"
+  // where it didn't move as the user typed into the page or it asks before leaving, or "capturing"
+  // as it captures the camera, microphone or screen, for a note that asks first. "moved" and
+  // "moved-ad-blocking" come with the empty one at the tab's next navigation, and closing that note
+  // is the app's alone, as the output's is.
   void (*tab_media_unsupported)(void* context, bc_id tab, const char* key_system);
   // Google's Widevine module is now |state|, a BC_WIDEVINE_ value (bc_widevine).
   void (*widevine_changed)(void* context, int state);
@@ -1824,8 +1832,9 @@ BC_EXPORT size_t bc_agent_disconnected(const char* agent);
 // tab_opened tells of the tab, then spaces_changed. Agent code calls it.
 BC_EXPORT bc_id bc_agent_open_tab(const char* agent, const char* url);
 
-// Loads the http(s) |url| in |tab|, if it's in the Space of the agent with the id |agent|, and
-// returns whether it does: never another URL. Agent code calls it after bc_agent_may_act.
+// Loads the http(s) |url| in |tab| as bc_tab_follow does, if it's in the Space of the agent with
+// the id |agent|, and returns whether it does: never another URL. Agent code calls it after
+// bc_agent_may_act.
 BC_EXPORT bool bc_agent_navigate(const char* agent, bc_id tab, const char* url);
 
 // What bc_agent_close_tab did, and what agent_close_answered says a pending close came to.
@@ -2935,6 +2944,14 @@ BC_EXPORT void bc_tab_navigate(bc_id tab, const char* url);
 // it.
 BC_EXPORT void bc_tab_navigate_typed(bc_id tab, const char* url, const char* typed);
 
+// Loads the http(s) |url| in |tab| itself, for an address the user picks from what the tab's site
+// gave, such as a row of its card: a pinned tab goes away from its pinned URL, with its way back
+// (bc_tab_back_to_pinned_url), where bc_tab_navigate opens a pinned tab's other address in a tab of
+// its own. It loads as a link, but with no page as its initiator or referrer, which a link in the
+// page would have. Any other scheme loads nothing. A tab without its page is given one.
+// bc_agent_navigate loads an agent's URL this way once its rules allow it.
+BC_EXPORT void bc_tab_follow(bc_id tab, const char* url);
+
 // Goes back, or forward, in the tab's history, if it has a page that way.
 BC_EXPORT void bc_tab_go_back(bc_id tab);
 BC_EXPORT void bc_tab_go_forward(bc_id tab);
@@ -2976,35 +2993,61 @@ BC_EXPORT void bc_tab_clear_site(bc_id tab, bool cookies);
 // Deletes the profile's cookies, storage and cache for the site of the tab's page, then loads it
 // again bypassing the cache: what Clear Site Data and Reload does. Storage is local storage,
 // IndexedDB, service workers, Cache Storage and file systems. A site, the page's scheme and the
-// system's engine's store are as bc_tab_clear_site's.
+// system's engine's store are as bc_tab_clear_site's. It also forgets what the profile kept for the
+// site in the system's engine or in Chromium, and whether its protected-media note was closed.
 BC_EXPORT void bc_tab_clear_site_data(bc_id tab);
 
-// The system's engine, WebKit on the Mac, plays the protected video Chromium can't (decision 1).
-// A short built-in list of streaming services opens in it from the first visit, until
-// bc_tab_set_system_engine turns one off, which the profile keeps. Any other site's pages show in
-// it once the user switches a tab there, from the protected-media note, and the profile keeps the
-// site, never a listed one: its pages open there from then on, in any of the profile's tabs,
-// until bc_tab_set_system_engine turns it off. Its own store, apart from Chromium's and Safari's,
-// one a profile, and one that keeps nothing for a private window. The user's session with the site
-// goes along inside the profile: the site's cookies and localStorage in Chromium are copied into
-// the system's store before a tab's first load there, and the system's back to Chromium as the
-// site is turned off. A tab goes back to Chromium for a link the user follows to another site,
-// a URL typed for one, or back from its first page; redirects through other sites, as a sign-in's,
-// stay. Agents' tabs never switch, and bc_agent_may_act refuses agents a tab that has.
+// The system's engine, WebKit on the Mac, plays the protected video Chromium can't (decision 1). A
+// short built-in list of streaming services opens in it from the first visit, until
+// bc_tab_set_system_engine turns one off, which the profile keeps. Any other site's tab moves there
+// by itself once its page, or a frame of its own site, asks for Widevine or PlayReady within a
+// moment of the user's own press on it, not an agent's, unless the user typed into the page, it
+// asks before leaving, or it captures the camera, microphone or screen: tab_media_unsupported then
+// asks first. The user can also switch a tab there from the protected-media note. Either way the
+// profile keeps the site, never a listed one: its pages open there from then on, in any of the
+// profile's tabs, until bc_tab_set_system_engine turns it off, which the profile keeps too, so it
+// never moves by itself again. A preview's tab never moves. Off in bc_set_system_engine_on keeps
+// every page in Chromium. Its own store, apart from Chromium's and Safari's, one a profile, and one
+// that keeps nothing for a private window. The user's session with the site goes along inside the
+// profile: the site's cookies and localStorage in Chromium are copied into the system's store
+// before a tab's first load there, and the system's back to Chromium as the site is turned off. A
+// tab goes back to Chromium for a link the user follows to another site, a URL typed for one, or
+// back from its first page; redirects through other sites, as a sign-in's, stay. Agents' tabs never
+// switch, and bc_agent_may_act refuses agents a tab that has.
 
 // Whether the platform has a system engine that keeps a store a profile: macOS 14 or later.
 // Answers without loading it.
 BC_EXPORT bool bc_system_engine_available(void);
 
+// Whether pages may show in the system's engine at all, where it's available: on unless the user
+// turned it off. Off, no tab moves or opens there, listed services included, and each tab showing a
+// page there goes back to Chromium. The core keeps it with the Spaces. The user's: agents get none.
+BC_EXPORT bool bc_system_engine_on(void);
+BC_EXPORT void bc_set_system_engine_on(bool on);
+
+// Copies the sites |profile| keeps for the system's engine into |sites| as bc_space_name does, one a
+// line in the order it took them, each a registrable domain or a host alone: the sites it moved or
+// the user switched, never a listed service. Empty for a profile that isn't loaded.
+BC_EXPORT size_t bc_system_engine_sites(bc_id profile, char* sites, size_t capacity);
+// Copies the sites |profile| keeps in Chromium into |sites| the same way: the listed services the
+// user turned off, each as its entry, such as tv.apple.com, and the other sites the user turned off
+// or whose note they closed, which never move by themselves.
+BC_EXPORT size_t bc_system_engine_kept_sites(bc_id profile, char* sites, size_t capacity);
+// Has |profile| keep |site|, one of bc_system_engine_sites or bc_system_engine_kept_sites, for the
+// system's engine if |on|, else in Chromium, as bc_tab_set_system_engine does for a tab at the site:
+// off, its tabs showing the site there go back to Chromium; on, they load there at their next
+// navigation. The user's: agents get none.
+BC_EXPORT void bc_system_engine_use_site(bc_id profile, const char* site, bool on);
+
 // With |on|, shows the tab's page in the system's engine, loading its URL there, and has the
-// profile keep its site for it, or take back its off for a listed service. Else has the profile
-// forget the site, or keep a listed service off across launches and list updates, and each of the
-// profile's tabs that shows one of its pages there goes back to Chromium at that page, once the
-// site's cookies and those pages' localStorage are in Chromium's store; the site then counts as one
-// whose note was closed (bc_tab_close_media_note). Returns whether it did: not for a page that
-// isn't http(s), nor where there's no system engine, nor for an agent's tab. Then
-// tab_state_changed, tab_media_unsupported with an empty key system, and tab_site_controls if
-// watched. The user's: agents get none.
+// profile keep its site for it, or take back its off for a listed service, and no longer count its
+// note closed. Else has the profile forget the site, or keep a listed service off across launches
+// and list updates, and each of the profile's tabs that shows one of its pages there goes back to
+// Chromium at that page, once the site's cookies and those pages' localStorage are in Chromium's
+// store; the site then counts as one whose note was closed (bc_tab_close_media_note). Returns
+// whether it did: not for a page that isn't http(s), nor where there's no system engine, nor for an
+// agent's tab. Then tab_state_changed, tab_media_unsupported with an empty key system, and
+// tab_site_controls if watched. The user's: agents get none.
 BC_EXPORT bool bc_tab_set_system_engine(bc_id tab, bool on);
 
 // The user closed the tab's protected-media note: its profile keeps the site of its page from

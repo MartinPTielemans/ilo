@@ -32,8 +32,21 @@ impl Host for Recorder {
         self.1.borrow_mut().push("hold");
     }
 
+    fn let_go(&self) {
+        self.1.borrow_mut().push("let go");
+    }
+
     fn give_held_keys(&self) {
         self.1.borrow_mut().push("give");
+    }
+}
+
+/// What the dialog asks of the host about the keys as it starts leaving: it holds them, and on the
+/// Mac it lets go of the clicks and the keyboard too (#3681).
+fn leaving() -> &'static [&'static str] {
+    match LETS_GO_AS_IT_LEAVES {
+        true => &["hold", "let go"],
+        false => &["hold"],
     }
 }
 
@@ -90,13 +103,66 @@ impl Asking {
 fn the_keys_typed_as_it_leaves_wait_for_the_window(cx: &mut TestAppContext) {
     let mut dialog = Asking::new(cx);
     dialog.keys("escape");
+    let leaving = leaving();
     assert_eq!(
         *dialog.host.1.borrow(),
-        ["hold"],
+        leaving,
         "it didn't hold the keys as it left"
     );
     dialog.calls();
-    assert_eq!(*dialog.host.1.borrow(), ["hold", "hide", "give"]);
+    assert_eq!(
+        *dialog.host.1.borrow(),
+        [leaving, &["hide", "give"]].concat()
+    );
+}
+
+/// On the Mac a page's question taken back, as its tab closed, lets go of the clicks and the
+/// keyboard as it starts to leave, and still holds the keys until it has hidden: a click on the
+/// page as it leaves reaches the page, and a key typed after it goes there (#3681).
+#[gpui::test]
+fn a_question_taken_back_lets_go_as_it_leaves_on_the_mac(cx: &mut TestAppContext) {
+    let mut dialog = Asking::page(page_question(Vec::new(), None), cx);
+    dialog.cx.cx.update(withdraw_page);
+    let leaving = leaving();
+    assert_eq!(
+        *dialog.host.1.borrow(),
+        leaving,
+        "taken back, it didn't let go as it started to leave"
+    );
+    dialog.calls();
+    assert_eq!(
+        *dialog.host.1.borrow(),
+        [leaving, &["hide", "give"]].concat()
+    );
+}
+
+/// A question answered or taken back keeps the app's shortcuts waiting no longer, though it still
+/// draws its leaving: on Linux the keys are the browser window's at once (#3617).
+#[gpui::test]
+fn the_apps_shortcuts_wait_only_while_it_awaits_its_answer(cx: &mut TestAppContext) {
+    let mut dialog = Asking::page(page_question(Vec::new(), None), cx);
+    let awaits = |dialog: &mut Asking| dialog.cx.cx.update(|cx| (asking(cx), awaits_answer(cx)));
+    assert_eq!(
+        awaits(&mut dialog),
+        (true, true),
+        "it didn't wait for its answer"
+    );
+    dialog.cx.cx.update(withdraw_page);
+    assert_eq!(
+        awaits(&mut dialog),
+        (true, false),
+        "taken back, it kept the shortcuts waiting as it left"
+    );
+    dialog.calls();
+    assert_eq!(awaits(&mut dialog), (false, false));
+
+    let mut dialog = Asking::new(cx);
+    dialog.keys("escape");
+    assert_eq!(
+        awaits(&mut dialog),
+        (true, false),
+        "answered, it kept the shortcuts waiting as it left"
+    );
 }
 
 #[gpui::test]
@@ -589,7 +655,7 @@ fn a_pages_question_is_answered_once_the_page_has_the_keyboard_back(cx: &mut Tes
     dialog.keys("escape");
     let answered = dialog.host.0.borrow().iter().any(|call| call == "cancel ");
     assert_eq!(answered, PAGE_ANSWERED_AS_IT_LEAVES);
-    assert_eq!(*dialog.host.1.borrow(), ["hold"], "it hid before leaving");
+    assert_eq!(*dialog.host.1.borrow(), leaving(), "it hid before leaving");
 }
 
 #[gpui::test]

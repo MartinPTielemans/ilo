@@ -243,15 +243,17 @@ double host_since_launch(void);
 void host_forget_window(void* ui_view);
 
 // The overlays: the command bar, the Space's icon and theme pickers, a closed folder's preview, the
-// Boost editor and the switcher a held ⌃Tab shows. One shows at a time.
+// Boost editor, the switcher a held ⌃Tab shows and the whole of an agent's request beside its
+// question. One shows at a time.
 #define HOST_COMMAND_BAR 0
 #define HOST_ICON_PICKER 1
 #define HOST_THEME_PICKER 2
 #define HOST_FOLDER_PREVIEW 3
 #define HOST_BOOST_EDITOR 4
 #define HOST_TAB_SWITCHER 5
+#define HOST_AGENT_REQUEST 6
 // The Site Controls take the same elevation call, though they aren't one of the overlays.
-#define HOST_SITE_CONTROLS 6
+#define HOST_SITE_CONTROLS 7
 
 // Gives the |overlay| (or the Site Controls) the shadow its elevation level draws, in Core
 // Animation's terms: a black line round its shape and a black drop shadow, each with an opacity
@@ -429,6 +431,13 @@ void host_show_dialog(void* ui_view, double x, double y, double width, double he
 // Hides the dialog's window. The browser window gets the keyboard back, with the focus where it
 // was.
 void host_hide_dialog(void);
+
+// The dialog was answered or taken back and draws its leaving: its window takes no more clicks,
+// and the browser window has the keyboard back at once, with the focus where it was, so a click on
+// the page or the UI as it leaves reaches them (#3681). Keys are still held until it hides
+// (host_hold_keys), as the page's question is answered then. The Mac's alone: Linux's dialog does
+// it in overlays::dialog_leaving, and Windows' holds the keys until it hides.
+void host_dialog_leaving(void);
 
 // Makes the window of |view| the Site Controls', which float over a browser window as its child
 // when shown, translucent over a blur in their shape, with a shadow. It starts hidden. |dismissed|

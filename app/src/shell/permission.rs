@@ -246,17 +246,22 @@ pub(super) fn card_button_as(
 }
 
 impl Shell {
-    /// The card the page's question and the DRM note are: under the URL field, as wide as it, in
-    /// the window's fill with a line inside its edge.
-    pub(super) fn plate(&self, id: &'static str) -> Stateful<Div> {
+    /// Where a card's top left is in the window.
+    pub(super) fn plate_at(&self) -> (f32, f32) {
         // A Little ilo window has no URL field: its bar is where the page's site shows, and a
         // card hangs under it, where the page makes room for it (little_card).
-        let (top, left) = match self.little.is_some() {
+        match self.little.is_some() {
             true => (LITTLE_BAR, CARD_INSET),
             // Under the bar, at the top of the sidebar's list, where the field was.
             false if self.bar_on() => (URL_FIELD_TOP, PLATE_INSET),
             false => (URL_FIELD_TOP + URL_FIELD_HEIGHT + GAP, PLATE_INSET),
-        };
+        }
+    }
+
+    /// The card the page's question and the DRM note are: under the URL field, as wide as it, in
+    /// the window's fill with a line inside its edge.
+    pub(super) fn plate(&self, id: &'static str) -> Stateful<Div> {
+        let (top, left) = self.plate_at();
         div()
             .id(id)
             .absolute()

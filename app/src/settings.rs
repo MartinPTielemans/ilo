@@ -3738,6 +3738,14 @@ impl Settings {
             .relative()
             .child(self.drawn("manage passwords".into()))
             .on_click(move |_, _, cx| manage_passwords(profile, cx));
+        // The passkeys kept on this Mac, which Chrome's password manager links to only once there's
+        // one, and which have no other list: where the user sees and deletes them.
+        let passkeys = cfg!(target_os = "macos").then(|| {
+            self.button("manage-passkeys", "Manage Passkeys…")
+                .relative()
+                .child(self.drawn("manage passkeys".into()))
+                .on_click(move |_, _, cx| manage_passkeys(profile, cx))
+        });
         let mut blocks = Vec::new();
         if let Some(chooser) = chooser {
             blocks.push(Block::Group(group(&look, [chooser])));
@@ -3751,7 +3759,13 @@ impl Settings {
             blocks.push(Block::Heading("Never saved".into()));
             blocks.push(Block::Group(group(&look, never)));
         }
-        blocks.push(Block::Under(div().flex().child(manage)));
+        blocks.push(Block::Under(
+            div()
+                .flex()
+                .gap(px(CONTROL_GAP))
+                .child(manage)
+                .children(passkeys),
+        ));
         // Each only while it has one, as Chrome offers to save them as forms are filled.
         if !addresses.is_empty() {
             blocks.push(Block::Heading("Addresses".into()));
@@ -3989,7 +4003,9 @@ impl Settings {
                     let ago = div()
                         .text_color(look.detail)
                         .child(agents::ago(entry.at, now));
-                    self.request_row(agents, entry, what, detail, ago, cx)
+                    let said =
+                        (!entry.said.is_empty()).then(|| agents::said(client.name(), &entry.said));
+                    self.request_row(agents, entry, what, detail, said, ago, cx)
                 })
                 .collect();
             if grants.is_none() && entries.is_empty() {
@@ -4101,6 +4117,7 @@ impl Settings {
         entry: &agents::Activity,
         what: String,
         detail: Option<SharedString>,
+        said: Option<String>,
         ago: gpui::Div,
         cx: &Context<Self>,
     ) -> gpui::Div {
@@ -4144,6 +4161,7 @@ impl Settings {
         let part = opened.then(|| {
             sent_part(
                 ("request-all", id),
+                said,
                 &entry.url,
                 &entry.sent,
                 refused,
@@ -4185,10 +4203,17 @@ impl Settings {
                     entry.url.clone(),
                     entry.refused.is_empty(),
                     said(&entry.sent),
+                    entry.said.clone(),
                 )
             });
+        if let (true, Some((.., words))) = (opened, &found)
+            && !words.is_empty()
+        {
+            // check.sh reads this line: the agent's words, first, as plain text.
+            log!("browser: settings request {id} said: {words}");
+        }
         // check.sh reads this line: where it went, and what it sent, secrets hidden.
-        match (opened, found) {
+        match (opened, found.map(|(url, ok, sent, _)| (url, ok, sent))) {
             (true, Some((url, true, sent))) => {
                 log!("browser: settings request {id} opened to {url}, sent: {sent}")
             }
@@ -5422,6 +5447,15 @@ fn manage_passwords(profile: u64, cx: &mut App) {
     // check.sh waits for this line.
     log!("browser: manage passwords {profile}");
     crate::open_in_profile(profile, "chrome://password-manager/passwords");
+    hide(cx);
+}
+
+/// Opens Chrome's list of the passkeys this Mac keeps for `profile` in a new tab of one of its
+/// Spaces and goes to it, where each can be renamed or deleted.
+fn manage_passkeys(profile: u64, cx: &mut App) {
+    // check.sh waits for this line.
+    log!("browser: manage passkeys {profile}");
+    crate::open_in_profile(profile, "chrome://settings/passkeys");
     hide(cx);
 }
 

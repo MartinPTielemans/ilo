@@ -91,6 +91,10 @@ const FADE_IN: f32 = 0.135;
 /// Linux gives the browser window the keyboard back as the dialog starts leaving, and the Mac and
 /// Windows once it has hidden: a page's question is answered then.
 const PAGE_ANSWERED_AS_IT_LEAVES: bool = cfg!(target_os = "linux");
+/// The Mac's dialog lets go of the clicks and the keyboard as it starts leaving, and the keys wait
+/// for its hide all the same, so a click on the page as it leaves isn't lost to it (#3681). Linux's
+/// lets go of both as it holds the keys (overlays::dialog_leaving).
+const LETS_GO_AS_IT_LEAVES: bool = cfg!(target_os = "macos");
 const DROP: f32 = 32.;
 
 /// What a dialog asks.
@@ -186,6 +190,9 @@ pub trait Host {
     /// the browser window the keyboard back at once (overlays::dialog_leaving), and the Mac and
     /// Windows hold the keys until it has hidden (host_hold_keys).
     fn hold_keys(&self) {}
+    /// The dialog leaves, on the Mac: its window takes no more clicks, and the browser window has
+    /// the keyboard back at once (host_dialog_leaving).
+    fn let_go(&self) {}
     /// Gives the keys held to the window with the keyboard, the browser window once it's hidden
     /// (host_release_held_keys).
     fn give_held_keys(&self) {}
@@ -483,6 +490,16 @@ pub fn asking(cx: &App) -> bool {
     cx.try_global::<DialogWindow>()
         .and_then(|dialog| dialog.0.read(cx).ok())
         .is_some_and(|dialog| dialog.asked.is_some())
+}
+
+/// Whether the dialog waits for its answer, so the app's shortcuts wait too: it asks, and hasn't
+/// been answered or taken back. Once it has, the keys it leaves to are the browser window's, at
+/// once on Linux, as it draws its leaving, and a ⌘T typed then opens the bar (#3617).
+pub fn awaits_answer(cx: &App) -> bool {
+    cx.try_global::<DialogWindow>()
+        .and_then(|dialog| dialog.0.read(cx).ok())
+        .and_then(|dialog| dialog.asked.as_ref())
+        .is_some_and(|asked| asked.answered_at.is_none())
 }
 
 /// Whether `pose` asks now: there's a dialog to ask in, or one to be made as it's first asked, and
@@ -947,6 +964,9 @@ impl Dialog {
         // Motion never blocks a key (ux-principles): one typed while it leaves, such as ⌥⌘N right
         // after Esc, waits for the browser window rather than reaching the dialog going (#1930).
         self.host.hold_keys();
+        if LETS_GO_AS_IT_LEAVES {
+            self.host.let_go();
+        }
         let (answered, also_chosen) = match answer {
             Some(Answer::Also) => (None, asked.also_chosen.take()),
             Some(answer) => {

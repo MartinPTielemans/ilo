@@ -944,6 +944,14 @@ expect '^browser: command next-pane via ui$' "⌃⇧] with the sidebar's keyboar
 send key escape
 expect '^browser: sidebar keys left by escape$' "escape didn't take F6's sidebar keyboard away"
 in_browser RenderWidgetHostViewCocoa "after escape left the sidebar F6 gave the keyboard"
+# The page's ⌃⇧2 on a layout whose ⇧2 types ", as the Danish and German do, is Go to Pane 2 too:
+# on the Mac the core names a digit held with ⌃⇧ by its place, not by what it types (#3522). The
+# Mac's driver posts that key, the 2's, typing ".
+if [ "$(uname)" = Darwin ]; then
+  send key '"' ctrl shift
+  expect '^browser: command focus-pane via page$' \
+    "⌃⇧2 typing \" with the page focused didn't run Go to Pane 2"
+fi
 
 # Tab past the page's last control rings the shown tab's row, and Tab from the ring gives the
 # page its first control, ⇧Tab before the first and back its last, so the keyboard always has a

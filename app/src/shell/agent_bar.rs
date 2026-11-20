@@ -77,7 +77,7 @@ fn same_press_as_hand_back(keystroke: &str, cx: &App) -> bool {
 /// before it sees it (`run_agent_key`).
 pub(super) fn bind(cx: &mut App) {
     cx.intercept_keystrokes(|event, _, cx| {
-        if crate::dialog::asking(cx) {
+        if crate::dialog::awaits_answer(cx) {
             return;
         }
         let Some(shell) = super::commands::key_shell(cx) else {
