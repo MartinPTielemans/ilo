@@ -7052,24 +7052,35 @@ mod sessions {
             "a client that gave no name has its kind's"
         );
         // A name that would pass for the browser, whose words the cards set beside an agent's, has
-        // its kind's, and one laid out is one plain line.
+        // its kind's.
         let app = env!("APP_NAME");
         for posing in [
             app.to_string(),
             format!("{} agent", app.to_uppercase()),
             "The browser".into(),
             "Checked by your browser".into(),
-            // Another client's name is that client's.
+            // Another client's name is that client's, however it's spaced, joined or stopped, and
+            // so is one holding an app's name.
             " claude code ".into(),
             "Codex".into(),
+            "Claude  Code".into(),
+            "Claude-Code".into(),
+            "Claude Code.".into(),
+            "Claude Code 2".into(),
+            "My Codex".into(),
+            "ilo-CLI".into(),
+            // A letter that only looks like one, and anything outside printable ASCII, isn't
+            // taken.
+            "Cl\u{0430}ude Code".into(),
+            "Zed\n\u{202E}\"Agent\u{201D}".into(),
         ] {
             hello(&agents, "mcp-client", &posing, cx);
             assert_eq!(named(&agents, cx).0, "MCP client", "{posing} passed");
         }
-        hello(&agents, "mcp-client", "Browser Use", cx);
-        assert_eq!(named(&agents, cx).0, "Browser Use");
-        hello(&agents, "mcp-client", "Zed\n\u{202E}\"Agent\u{201D}", cx);
-        assert_eq!(named(&agents, cx).0, "Zed 'Agent'");
+        for taken in ["Browser Use", "Checker"] {
+            hello(&agents, "mcp-client", taken, cx);
+            assert_eq!(named(&agents, cx).0, taken);
+        }
         hello(&agents, "mcp-client", "Zed", cx);
         assert_eq!(named(&agents, cx), ("Zed".into(), Some("Zed".into())));
 
@@ -7351,7 +7362,14 @@ mod sessions {
             answer
         };
         // A command can't pass for an app the user connected.
-        for posing in ["Claude Code", " CODEX"] {
+        for posing in [
+            "Claude Code",
+            " CODEX",
+            "Claude-Code.",
+            "My Codex",
+            "MCP  client",
+            "C\u{043E}dex",
+        ] {
             hello(&agents, agent, posing, cx);
             let name = agents.read_with(cx, |agents, _| agents.agent_name(agent).to_string());
             assert_eq!(name, "ilo CLI", "{posing} passed");

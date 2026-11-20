@@ -1781,7 +1781,7 @@ impl Agents {
         let name = match Client::from_id(agent) {
             Some(Client::Command) if under_way => return,
             Some(Client::Other | Client::Command)
-                if !given.is_empty() && !names_the_browser(&given) && !names_a_client(&given) =>
+                if !given.is_empty() && !names_the_browser(&given) && !names_a_client(client) =>
             {
                 given
             }
@@ -2983,15 +2983,26 @@ pub fn model_menu(
     (all, items)
 }
 
-/// Whether a client's name would pass for the browser's own words: one with the app's name as a
-/// word, or that calls itself the browser. "Browser Use" is an agent's.
-/// Whether a name is one of the clients' own, so a card saying "Claude Code" is always Claude
-/// Code's connection.
+/// Whether a given name could pass for a client's own, so a card saying "Claude Code" is always
+/// Claude Code's connection: read by its letters and digits alone, one holding an app's name or
+/// being another client's, and any with a character outside printable ASCII, which can look like
+/// a letter of one or hide.
 fn names_a_client(name: &str) -> bool {
-    let name = name.trim().to_lowercase();
-    (Client::ALL.iter()).any(|client| client.name().to_lowercase() == name)
+    let skeleton = |name: &str| -> String {
+        let kept = name.chars().filter(char::is_ascii_alphanumeric);
+        kept.collect::<String>().to_ascii_lowercase()
+    };
+    let given = skeleton(name);
+    name.chars().any(|c| !(' '..='~').contains(&c))
+        || (Client::ALL.iter()).any(|&client| {
+            let own = skeleton(client.name());
+            let app = matches!(client, Client::ClaudeCode | Client::Codex);
+            given == own || app && given.contains(&own)
+        })
 }
 
+/// Whether a client's name would pass for the browser's own words: one with the app's name as a
+/// word, or that calls itself the browser. "Browser Use" is an agent's.
 fn names_the_browser(name: &str) -> bool {
     let lower = name.to_lowercase();
     let app = env!("APP_NAME").to_lowercase();
