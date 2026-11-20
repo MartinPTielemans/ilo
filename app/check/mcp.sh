@@ -2749,6 +2749,10 @@ CARD
   done
   # The driver's own lines say what it typed.
   grep -v '^browser: drive ' "$log" | grep -q lovelace && fail "the password typed in the agent's sign-in reached the log"
+  # The steps below scroll the tab, which the signed-in page, shorter than the view, can't do.
+  longs=$(grep -c "^browser: title $opened_tab Long page\$" "$log" || true)
+  call navigate "{\"tab\":$opened_tab,\"url\":\"localhost:$port/long.html\"}" > /dev/null
+  await_more "^browser: title $opened_tab Long page\$" "$longs" || fail "the long page didn't load again after the sign-in"
   before=$(grep -c "^browser: task page $opened_tab back\$" "$log" || true)
   shrunk=$(grep -c "$thumbnail" "$log" || true)
   send key escape
