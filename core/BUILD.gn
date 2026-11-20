@@ -361,6 +361,21 @@ source_set("overlay_lend") {
   deps = [ "//base" ]
 }
 
+# A shared link's snapshot, sealed and opened under the caps, and the page the core shows for it,
+# apart so browser_core_unittests tests it alone.
+source_set("share_snapshot") {
+  sources = [
+    "share_snapshot.cc",
+    "share_snapshot.h",
+  ]
+  deps = [
+    "//base",
+    "//crypto",
+    "//third_party/zlib",
+    "//url",
+  ]
+}
+
 # The key a page's key is named by for the app's shortcuts, apart so browser_core_unittests tests it
 # alone.
 source_set("shortcut_key") {
@@ -690,6 +705,8 @@ source_set("browser_core") {
     "mini_player.h",
     "native_ad_block.cc",
     "native_ad_block.h",
+    "network_refuser.cc",
+    "network_refuser.h",
     "notes.cc",
     "notes.h",
     "open_app_dialog.cc",
@@ -730,6 +747,8 @@ source_set("browser_core") {
     "search.h",
     "session.cc",
     "session.h",
+    "share.cc",
+    "share.h",
     "side_panel.cc",
     "side_panel.h",
     "sign_in_dialog.cc",
@@ -805,6 +824,7 @@ source_set("browser_core") {
     ":sync_spaces_newer",
     ":sync_trouble",
     ":link_card_rule",
+    ":share_snapshot",
     ":shortcut_key",
     ":typed_http",
     ":typing_keys",
@@ -1116,6 +1136,7 @@ test("browser_core_unittests") {
     "leveldb_cache_unittest.cc",
     "link_card_rule_unittest.cc",
     "mini_player_place_unittest.cc",
+    "share_snapshot_unittest.cc",
 
     # The engine patch that gives a history match its last visit, which the core's suggestions
     # read.
@@ -1184,6 +1205,7 @@ test("browser_core_unittests") {
     ":sync_spaces_newer",
     ":sync_trouble",
     ":link_card_rule",
+    ":share_snapshot",
     ":shortcut_key",
     ":typed_http",
     ":typing_keys",
@@ -1209,6 +1231,7 @@ test("browser_core_unittests") {
     "//components/sync:test_support",
     "//components/sync_preferences:test_support",
     "//components/variations:test_support",
+    "//crypto",
     "//mojo/core/embedder",
     "//services/network:test_support",
     "//services/network/public/cpp",
@@ -1216,6 +1239,7 @@ test("browser_core_unittests") {
     "//testing/gmock",
     "//testing/gtest",
     "//third_party/leveldatabase",
+    "//third_party/zlib",
     "//third_party/metrics_proto",
     "//ui/gfx/geometry",
     "//url",

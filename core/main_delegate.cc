@@ -56,6 +56,7 @@
 #include "browser_core/profiles.h"
 #include "browser_core/search.h"
 #include "browser_core/session.h"
+#include "browser_core/share.h"
 #include "browser_core/sign_in_dialog.h"
 #include "browser_core/sync.h"
 #include "browser_core/system_engine.h"
@@ -500,6 +501,7 @@ class ContentBrowserClient : public ChromeContentBrowserClient {
     ChromeContentBrowserClient::CreateThrottlesForNavigation(registry);
     system_engine::CreateThrottlesForNavigation(registry);
     AddLinkPreviewThrottle(registry);
+    AddShareThrottle(registry);
     AddAdBlockHold(registry);
   }
 

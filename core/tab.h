@@ -187,6 +187,8 @@ class Tab : public content::WebContentsObserver,
 
   // The name the user gave the tab, which it shows for its title, or empty for its page's.
   const std::string& name() const { return name_; }
+  // The favicon it shows, its page's or the profile's for its URL, or an empty image.
+  const gfx::Image& favicon() const { return favicon_; }
   // Names the tab and tells the app its title from a task of its own. Empty gives it back its
   // page's title.
   void Rename(const std::string& name);
