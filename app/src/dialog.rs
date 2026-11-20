@@ -485,6 +485,16 @@ pub fn asking(cx: &App) -> bool {
         .is_some_and(|dialog| dialog.asked.is_some())
 }
 
+/// Whether the dialog waits for its answer, so the app's shortcuts wait too: it asks, and hasn't
+/// been answered or taken back. Once it has, the keys it leaves to are the browser window's, at
+/// once on Linux, as it draws its leaving, and a ⌘T typed then opens the bar (#3617).
+pub fn awaits_answer(cx: &App) -> bool {
+    cx.try_global::<DialogWindow>()
+        .and_then(|dialog| dialog.0.read(cx).ok())
+        .and_then(|dialog| dialog.asked.as_ref())
+        .is_some_and(|asked| asked.answered_at.is_none())
+}
+
 /// Whether `pose` asks now: there's a dialog to ask in, or one to be made as it's first asked, and
 /// it isn't asking another question.
 pub fn can_pose(cx: &App) -> bool {

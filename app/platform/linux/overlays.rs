@@ -606,6 +606,8 @@ struct Dialog {
     insets: [f64; 4],
     /// Answered, it draws as it leaves with the keyboard back with the browser window.
     leaving: bool,
+    /// Left for ilo's menu over the browser window, which has the keys until it closes (#3616).
+    after_menu: bool,
 }
 
 thread_local! {
@@ -615,6 +617,7 @@ thread_local! {
             over: None,
             insets: [0.; 4],
             leaving: false,
+            after_menu: false,
         })
     };
 }
@@ -683,6 +686,7 @@ pub extern "C" fn host_show_dialog(ui_view: *mut c_void, x: f64, y: f64, width: 
     DIALOG.with_borrow_mut(|dialog| {
         dialog.over = Some((ui_view, window));
         dialog.leaving = false;
+        dialog.after_menu = false;
     });
     lend_keyboard(window, view, true);
     gpui_linux::set_overlay_pointer(view, None);
@@ -723,6 +727,21 @@ pub(crate) fn dialog_leaving() {
     browser::log!("browser: dialog gives the keyboard back");
 }
 
+/// ilo's menu that the dialog left the keys to has closed: it takes them again, unless it's gone
+/// or another overlay took them from the menu, as the icon picker its Change Icon… opens.
+pub(crate) fn menu_hidden() {
+    let back = DIALOG.with_borrow_mut(|dialog| {
+        let after_menu = std::mem::take(&mut dialog.after_menu);
+        let (_, window) = dialog.over.filter(|_| after_menu && !dialog.leaving)?;
+        Some((dialog.view, window))
+    });
+    if let Some((view, window)) = back
+        && !keyboard_lent_to_another(window, view)
+    {
+        gpui_linux::take_overlay_keyboard(view, left_dialog);
+    }
+}
+
 /// Places the dialog again if it shows over the browser window of `ui_view`, as its content
 /// changed size.
 pub(crate) fn place_dialog(ui_view: *mut c_void) {
@@ -751,6 +770,13 @@ fn left_dialog(view: *mut c_void) {
     }
     // To ilo's menu over it, its field's, which gives the keyboard back as it closes.
     if crate::menu_window::over(view) {
+        gpui_linux::set_overlay_keyboard(view, true, left_dialog);
+        return;
+    }
+    // To ilo's menu over the browser window, as a row's, which took them as it opened: taken back
+    // now, they'd close it (#3616). The dialog takes them once it has closed (`menu_hidden`).
+    if crate::menu_window::shown().is_some() {
+        DIALOG.with_borrow_mut(|dialog| dialog.after_menu = true);
         gpui_linux::set_overlay_keyboard(view, true, left_dialog);
         return;
     }
