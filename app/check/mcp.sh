@@ -2943,8 +2943,9 @@ $(grep 'browser: agent .*download' "$log" | tail -3)"
     [ -n "$shop_tab" ] && [ -n "$card_ref" ] && [ -n "$save_ref" ] ||
       fail "the checkout didn't open with its fields: $opened"
   }
-  # Calls $1 with $2, which asks first with the words matching $3, and answers Allow Once with a
-  # click, as answer_bank does below, capturing the card as $4.png. Sets paid to the answer.
+  # Calls $1 with $2, which asks first with the words matching $3, and answers Allow with a click,
+  # capturing the card as $4.png. Sets paid to the answer. A payment's card asks every time, so it
+  # has a request's two buttons, Deny and Allow, on its last row.
   pay_asks() {
     before=$(grep -c "$3" "$log" || true)
     request "$1" "$2" >&4
@@ -2956,9 +2957,9 @@ $(grep 'browser: agent .*download' "$log" | tail -3)"
 $(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
 CARD
     ../tools/window-screenshot.sh "$pid" "$out/$4.png" || fail "no window to capture"
-    send click $((qx + qw * 3 / 4)) $((qy + qh - 26 - 36))
+    send click $((qx + qw * 3 / 4)) $((qy + qh - 26))
     await_log "^browser: agent mcp-client answered $q Once\$" \
-      "Allow Once didn't answer the key press's question"
+      "Allow didn't answer the key press's question"
     paid=$(next_answer) || fail "the browser didn't answer $1 $2"
     paid=$(printf '%s\n' "$paid" | answered "$1")
     case "$paid" in
@@ -3011,7 +3012,7 @@ CARD
   # it, and an order asks in another language (GHSA-6qxg-jpw9-5jrr): a forum's Comment with its
   # form's multi-line field empty asks nothing, and with the agent's text in it asks; a chat's
   # Send in no form asks beside a rich-text editor holding text; a Danish shop's Betal asks.
-  # Allow Once does each.
+  # Allow does each.
   printf '%s' "<title>Forum</title>
 <form onsubmit=\"event.preventDefault(); document.title = document.title + ' posted'\">
 <textarea aria-label=\"Body\"></textarea><button>Comment</button></form>" > "$out/site/forum.html"
@@ -3031,7 +3032,9 @@ CARD
     [ -n "$said_tab" ] && [ -n "$said_ref" ] || fail "$1 didn't open with its $4 “$3”: $opened"
   }
   # Clicks $1 in said_tab, which asks with the words $2 and is allowed once with a click on the
-  # card, captured as $3.png, and then answers with the page titled $4.
+  # card, captured as $3.png, and then answers with the page titled $4. With $5, spends, it's a
+  # payment's card, Deny and Allow on its last row; without, Allow Once is the right of the row
+  # above Always Allow.
   said_asks() {
     before=$(grep -c "$2" "$log" || true)
     request click "{\"tab\":$said_tab,\"ref\":\"$1\"}" >&4
@@ -3043,8 +3046,10 @@ CARD
 $(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
 CARD
     ../tools/window-screenshot.sh "$pid" "$out/$3.png" || fail "no window to capture"
-    send click $((qx + qw * 3 / 4)) $((qy + qh - 26 - 36))
-    await_log "^browser: agent mcp-client answered $q Once\$" "Allow Once didn't answer the click's question"
+    y=$((qh - 26 - 36))
+    [ -z "$5" ] || y=$((qh - 26))
+    send click $((qx + qw * 3 / 4)) $((qy + y))
+    await_log "^browser: agent mcp-client answered $q Once\$" "Allow didn't answer the click's question"
     said=$(next_answer) || fail "the browser didn't answer the click on $1"
     said=$(printf '%s\n' "$said" | answered click)
     case "$said" in
@@ -3079,7 +3084,7 @@ CARD
   saying butik.html butik Betal button
   said_asks "$said_ref" \
     '^browser: agent mcp-client asks [0-9]*: click “Betal” on butik\.localhost$' \
-    agent-pays-danish Betalt
+    agent-pays-danish Betalt spends
   # A payment asks every time, whatever was allowed before, and a Send allowed for good goes on
   # unasked.
   printf '%s' "<meta charset=utf-8><title>Market</title>
@@ -3111,7 +3116,7 @@ CARD
   case "$said" in *"Tab $said_tab: Asked"*) ;; *) fail "the next Send, allowed always, asked or didn't send: $said" ;; esac
   said_asks "$buy_ref" \
     '^browser: agent mcp-client asks [0-9]*: click “Buy now” on market\.localhost$' \
-    agent-buys-after-always Bought
+    agent-buys-after-always Bought spends
 
   # A bank's site asks first, in a card in the window, and Allow Once opens it.
   bank="{\"url\":\"bank.localhost:$port/fields.html\"}"
@@ -3151,7 +3156,7 @@ CARD
   saying move.html bank Overfør button
   said_asks "$said_ref" \
     '^browser: agent mcp-client asks [0-9]*: click “Overfør” on bank\.localhost$' \
-    agent-moves-money Overført
+    agent-moves-money Overført spends
 
   # Settings › Agents lists the permission with its Revoke, which the space menu of the agent's
   # Space did before #1080. Under Xvfb's 800-point screen the button is drawn below its bottom, so

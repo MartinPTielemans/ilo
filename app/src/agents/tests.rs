@@ -2421,17 +2421,11 @@ fn a_tab_the_agents_click_opens_is_named(cx: &mut TestAppContext) {
     );
 }
 
-/// An order asks the user first, in the card: Allow Once lets it go this time and asks again
-/// next time, Always Allow lets it go on the site from then on, and is saved.
+/// An order asks the user first, in a card that asks every time: Allow lets it go this time, and
+/// the next asks again.
 #[gpui::test]
 fn an_order_asks_the_user_first(cx: &mut TestAppContext) {
-    let dir = std::env::temp_dir().join(format!("agents-test-{}", random_token()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("Agents");
-    let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
-    let agents = agents(&browser, &configs, Some(path.clone()), cx);
-    agents.update(cx, |agents, cx| agents.connect(Client::ClaudeCode, cx));
-    cx.run_until_parked();
+    let (agents, browser, _) = connected(cx);
     let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
     page_done(&agents, &browser, answer, shop_tree(), cx);
     let pages = browser.pages.borrow().len();
@@ -2454,6 +2448,7 @@ fn an_order_asks_the_user_first(cx: &mut TestAppContext) {
     assert_eq!(question.agent, "Claude Code");
     assert_eq!(question.what, "click “Place order” on example.com");
     assert_eq!(question.why, "It looks like a payment or an order.");
+    assert!(question.each_time, "its card offers Always");
     assert_eq!(
         browser.pages.borrow().len(),
         pages,
@@ -2467,26 +2462,8 @@ fn an_order_asks_the_user_first(cx: &mut TestAppContext) {
     let clicked = page_done(&agents, &browser, answer, shop_tree(), cx);
     assert!(clicked.text.starts_with("Clicked button “Place order”."));
 
-    let answer = order(cx);
-    let question = browser
-        .asked
-        .borrow()
-        .clone()
-        .expect("once let it go again");
-    agents.update(cx, |agents, cx| {
-        agents.answer(question.id, Answer::Always, cx)
-    });
-    assert!(!page_done(&agents, &browser, answer, shop_tree(), cx).error);
-    let answer = order(cx);
-    assert_eq!(*browser.asked.borrow(), None, "always asked again");
-    assert!(!page_done(&agents, &browser, answer, shop_tree(), cx).error);
-
-    let saved = std::fs::read_to_string(&path).unwrap();
-    let later = self::agents(&browser, &configs, None, cx);
-    later.update(cx, |agents, cx| agents.load(&saved, cx));
-    let grants = later.read_with(cx, |agents, _| agents.grants.clone());
-    assert_eq!(grants["claude-code"]["example.com"], true);
-    std::fs::remove_dir_all(dir).ok();
+    let _answer = order(cx);
+    assert!(browser.asked.borrow().is_some(), "once let it go again");
 }
 
 /// The tree for tab 20's page with a message in its field and a Send, which sends it.
@@ -2756,30 +2733,22 @@ fn a_handoff_not_handed_back_answers_after_15_minutes(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_permission_given_for_good_is_listed_and_revoked(cx: &mut TestAppContext) {
     let (agents, browser, _) = connected(cx);
-    let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
-    page_done(&agents, &browser, answer, shop_tree(), cx);
-    let order = |cx: &mut TestAppContext| {
+    let open = |site: &str, cx: &mut TestAppContext| {
         call(
             &agents,
             "claude-code",
-            "click",
-            json!({ "tab": 20, "ref": "e3" }),
+            "open_tab",
+            json!({ "url": site }),
             cx,
         )
     };
-    let answer = order(cx);
+    let answer = open("nordea.dk", cx);
     let question = browser.asked.borrow().clone().unwrap();
     agents.update(cx, |agents, cx| {
         agents.answer(question.id, Answer::Always, cx)
     });
     page_done(&agents, &browser, answer, shop_tree(), cx);
-    let answer = call(
-        &agents,
-        "claude-code",
-        "open_tab",
-        json!({ "url": "chase.com" }),
-        cx,
-    );
+    let answer = open("chase.com", cx);
     let question = browser.asked.borrow().clone().unwrap();
     agents.update(cx, |agents, cx| {
         agents.answer(question.id, Answer::Never, cx)
@@ -2789,18 +2758,18 @@ fn a_permission_given_for_good_is_listed_and_revoked(cx: &mut TestAppContext) {
         |cx: &mut TestAppContext| agents.read_with(cx, |agents, _| agents.grants("claude-code"));
     assert_eq!(
         grants(cx),
-        [("chase.com".into(), false), ("example.com".into(), true)]
+        [("chase.com".into(), false), ("nordea.dk".into(), true)]
     );
 
     agents.update(cx, |agents, cx| {
-        agents.revoke("claude-code", Some("example.com"), cx)
+        agents.revoke("claude-code", Some("nordea.dk"), cx)
     });
     assert_eq!(grants(cx), [("chase.com".into(), false)]);
     assert_eq!(
         log(&agents, "claude-code", cx)[0],
-        ("revoked".into(), "example.com".into(), "".into())
+        ("revoked".into(), "nordea.dk".into(), "".into())
     );
-    let answer = order(cx);
+    let answer = open("nordea.dk", cx);
     let question = browser
         .asked
         .borrow()

@@ -146,6 +146,8 @@ pub struct Question {
     pub changes: std::rc::Rc<[request::Request]>,
     /// The site they go to, the tab's, which the card's facts name.
     pub site: SharedString,
+    /// Whether it asks every time, as a payment does, so its card has no Always or Never.
+    pub each_time: bool,
 }
 
 /// The windows' cards ask again whenever a question changes, which is on every Agents change, so
@@ -156,6 +158,7 @@ impl PartialEq for Question {
         (self.id, &self.agent, &self.from, &self.what, &self.why)
             == (other.id, &other.agent, &other.from, &other.what, &other.why)
             && (self.handoff, self.back, &self.site) == (other.handoff, other.back, &other.site)
+            && self.each_time == other.each_time
             && std::rc::Rc::ptr_eq(&self.changes, &other.changes)
     }
 }
@@ -2593,11 +2596,15 @@ impl Agents {
             return self.run(act, cx);
         };
         act.did = Did::of(why);
-        match self
-            .grants
-            .get(&self.answers_of(&act.agent))
-            .and_then(|sites| sites.get(&site))
-        {
+        // A payment asks every time, as a request's changes do (#1439): what the user allowed for
+        // good covers opening a site and sending on it, as they gave it, and never spending.
+        let granted = match why {
+            page::ORDER => None,
+            _ => (self.grants.get(&self.answers_of(&act.agent)))
+                .and_then(|sites| sites.get(&site))
+                .copied(),
+        };
+        match granted {
             Some(true) => self.run(act, cx),
             Some(false) => self.refuse(act, &site, SAID_NEVER, cx),
             None => self.ask_first(act, site, why, cx),
@@ -2629,6 +2636,7 @@ impl Agents {
             why: why.into(),
             changes,
             site: site.clone().into(),
+            each_time: why == page::ORDER,
             ..Question::default()
         };
         self.next_request += 1;
@@ -2694,11 +2702,17 @@ impl Agents {
         else {
             return self.answer_back(id, answer, cx);
         };
-        let Asking { site, act, .. } = self.asking.remove(at);
+        let Asking {
+            site,
+            act,
+            question,
+            ..
+        } = self.asking.remove(at);
         // check.sh reads this line.
         log!("browser: agent {} answered {id} {answer:?}", act.agent);
-        // A request's changes ask every time, whatever answered.
+        // A request's changes and a payment ask every time, whatever answered.
         if act.action != "request"
+            && !question.each_time
             && let Answer::Always | Answer::Never = answer
         {
             let sites = self.grants.entry(self.answers_of(&act.agent)).or_default();
