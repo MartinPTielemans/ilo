@@ -217,8 +217,14 @@ pub trait Browser {
     /// The Space that has `tab`, or 0 if none does: it closed, or is closing.
     fn space_of(&self, tab: u64, cx: &App) -> u64;
     /// Asks the core whether the agent may do `action` to `tab` (bc_agent_may_act): nothing, or
-    /// why not.
-    fn may_act(&self, agent: &str, tab: u64, action: &str, cx: &mut App) -> Result<(), String>;
+    /// why not, its code and its words.
+    fn may_act(
+        &self,
+        agent: &str,
+        tab: u64,
+        action: &str,
+        cx: &mut App,
+    ) -> Result<(), (Failure, String)>;
     /// Asks the core for the text of `tab`'s page (bc_tab_read_text), which comes to
     /// `Agents::text_read` with `request`.
     fn read_text(&self, tab: u64, request: u64);
@@ -319,6 +325,7 @@ pub enum Event {
         id: u64,
         at: Instant,
         error: Option<String>,
+        kind: Option<tools::Kind>,
         image: Option<String>,
     },
 }
@@ -342,6 +349,8 @@ pub struct ToolResult {
     pub error: bool,
     /// A picture, as a JPEG in base64.
     pub image: Option<String>,
+    /// Of an error, the kind a task's card says it in, if any.
+    pub kind: Option<tools::Kind>,
 }
 
 impl ToolResult {
@@ -351,6 +360,7 @@ impl ToolResult {
             text: tools::capped(text.into()),
             error: false,
             image: None,
+            kind: None,
         }
     }
 
@@ -359,6 +369,15 @@ impl ToolResult {
             text: tools::capped(text.into()),
             error: true,
             image: None,
+            kind: None,
+        }
+    }
+
+    /// The error `text`, of the kind a task's card says it in.
+    pub fn failed(kind: tools::Kind, text: impl Into<String>) -> Self {
+        ToolResult {
+            kind: Some(kind),
+            ..ToolResult::error(text)
         }
     }
 
@@ -367,6 +386,7 @@ impl ToolResult {
             text: String::new(),
             error: false,
             image: Some(jpeg),
+            kind: None,
         }
     }
 
@@ -1309,8 +1329,9 @@ impl Agents {
                 id,
                 at,
                 error,
+                kind,
                 image,
-            } => self.answered(&agent, id, at, error, image, cx),
+            } => self.answered(&agent, id, at, error, kind, image, cx),
         }
     }
 
@@ -1438,7 +1459,8 @@ impl Agents {
                     reply,
                 };
                 if !is_web(&act.url) {
-                    return self.refuse(act, &host, WEB_ONLY, cx);
+                    let refused = Refused::of(tools::Kind::NotWebPage, WEB_ONLY);
+                    return self.refuse(act, &host, refused, cx);
                 }
                 let risk = page::opening_risk(&host);
                 self.check(act, host, risk, cx);
@@ -1450,7 +1472,8 @@ impl Agents {
                     Ok(None) => match self.default_tab(&agent, cx) {
                         Some(tab) => tab,
                         None => {
-                            _ = reply.send(ToolResult::error(
+                            _ = reply.send(ToolResult::failed(
+                                tools::Kind::NotFound,
                                 "You have no tab open yet. Open one with open_tab.",
                             ));
                             return;
@@ -1552,7 +1575,10 @@ impl Agents {
                 }
                 let (life, actions) = self.held_step(tab, held::Event::HandOff);
                 if !self.browser.hand_off(&agent, tab) || life != held::Life::HandedOff {
-                    _ = reply.send(ToolResult::error("The tab is the user's already."));
+                    _ = reply.send(ToolResult::failed(
+                        tools::Kind::Yours,
+                        "The tab is the user's already.",
+                    ));
                     return;
                 }
                 // check.sh reads this line.
@@ -1707,7 +1733,7 @@ impl Agents {
                 {
                     let site = site(&self.browser.tab(tab, cx).url);
                     self.note(&agent, "ask_for_tab", &site, why);
-                    _ = reply.send(ToolResult::error(why));
+                    _ = reply.send(off_limits_refused(why).into());
                     return;
                 }
                 let why = arguments
@@ -1724,16 +1750,19 @@ impl Agents {
                 let site = site(&self.browser.tab(tab, cx).url);
                 let holder = self.held.get(&tab).is_some_and(|held| held.agent == agent);
                 let (life, actions) = self.held_step(tab, held::Event::Ask { holder });
-                let refused = if actions.has(held::Actions::NOT_HELD) {
-                    NOT_HELD
+                let (refused, kind) = if actions.has(held::Actions::NOT_HELD) {
+                    (NOT_HELD, Some(tools::Kind::Yours))
                 } else if actions.has(held::Actions::WAITING) {
-                    "You're waiting on the user for this tab already."
+                    ("You're waiting on the user for this tab already.", None)
                 } else {
-                    ""
+                    ("", None)
                 };
                 self.note(&agent, "ask_for_tab", &site, refused);
                 if !refused.is_empty() {
-                    _ = reply.send(ToolResult::error(refused));
+                    _ = reply.send(ToolResult {
+                        kind,
+                        ..ToolResult::error(refused)
+                    });
                     return;
                 }
                 // check.sh reads this line.
@@ -1755,14 +1784,14 @@ impl Agents {
                 if let Some(why) = self.off_limits(&agent, tab, cx) {
                     self.note(&agent, "request", &host, why);
                     cx.notify();
-                    _ = reply.send(ToolResult::error(why));
+                    _ = reply.send(off_limits_refused(why).into());
                     return;
                 }
                 if !self.owns(&agent, tab, cx) {
-                    if let Err(why) = self.may_act(&agent, tab, "request", cx) {
-                        self.note(&agent, "request", &host, &why);
+                    if let Err(refused) = self.may_act(&agent, tab, "request", cx) {
+                        self.note(&agent, "request", &host, &refused.why);
                         cx.notify();
-                        _ = reply.send(ToolResult::error(why));
+                        _ = reply.send(refused.into());
                         return;
                     }
                 }
@@ -1884,7 +1913,9 @@ impl Agents {
                 act.what,
                 run_so_far(&run.done)
             );
-            _ = run.reply.send(ToolResult::error(answer));
+            _ = run
+                .reply
+                .send(ToolResult::failed(tools::Kind::NeedsOk, answer));
             return;
         }
         self.runs.push(run);
@@ -2029,24 +2060,31 @@ impl Agents {
                         }
                     });
                 }
+                // What it said, and whether it failed, with the kind a card says it in.
                 let said = match (goes, shows) {
-                    (false, true) => Some((format!("“{text}” showed."), false)),
-                    (true, false) => Some((format!("“{text}” went."), false)),
-                    (false, false) if late => {
-                        Some((format!("“{text}” didn't show in {seconds} s."), true))
-                    }
-                    (true, true) if late => {
-                        Some((format!("“{text}” was still there after {seconds} s."), true))
-                    }
+                    (false, true) => Some((format!("“{text}” showed."), None)),
+                    (true, false) => Some((format!("“{text}” went."), None)),
+                    (false, false) if late => Some((
+                        format!("“{text}” didn't show in {seconds} s."),
+                        Some(Some(tools::Kind::DidntShow)),
+                    )),
+                    (true, true) if late => Some((
+                        format!("“{text}” was still there after {seconds} s."),
+                        Some(None),
+                    )),
                     _ => None,
                 };
                 match said {
                     // The run ends here, so with the outline as its last step's.
-                    Some((why, true)) => {
+                    Some((why, Some(kind))) => {
                         let show = run.show;
-                        return Some(ToolResult::error(self.answer_with(&agent, tab, why, show)));
+                        let why = self.answer_with(&agent, tab, why, show);
+                        return Some(ToolResult {
+                            kind,
+                            ..ToolResult::error(why)
+                        });
                     }
-                    Some((note, false)) => {
+                    Some((note, None)) => {
                         return Some(ToolResult::text(self.answer_with(&agent, tab, note, show)));
                     }
                     None => {}
@@ -2180,7 +2218,13 @@ impl Agents {
             Ok(Some(tab)) => return Some(tab),
             Ok(None) => match self.default_tab(agent, cx) {
                 Some(tab) => return Some(tab),
-                None => "You have no tab open yet. Open one with open_tab.".into(),
+                None => {
+                    _ = reply.send(ToolResult::failed(
+                        tools::Kind::NotFound,
+                        "You have no tab open yet. Open one with open_tab.",
+                    ));
+                    return None;
+                }
             },
             Err(why) => why,
         };
@@ -2389,7 +2433,7 @@ impl Agents {
     pub fn stop_agent(&mut self, agent: &str, cx: &mut Context<Self>) {
         // check.sh reads this line.
         log!("browser: agent {agent} stopped");
-        let stopped = || ToolResult::error(STOPPED);
+        let stopped = || ToolResult::failed(tools::Kind::Stopped, STOPPED);
         for (_, reading) in self.reading.extract_if(|_, reading| reading.agent == agent) {
             _ = reading.reply.send(stopped());
         }
@@ -2476,7 +2520,7 @@ impl Agents {
         // Before its ref is looked up, so an outline's refs say nothing of a page off limits.
         if let Some(why) = self.off_limits(agent, tab, cx) {
             self.note(agent, tool, &host, why);
-            _ = reply.send(ToolResult::error(why));
+            _ = reply.send(off_limits_refused(why).into());
             return;
         }
         let string = |name: &str| {
@@ -2489,9 +2533,13 @@ impl Agents {
             Some(name) => match self.refs.get(&tab).and_then(|refs| refs.get(&name)) {
                 Some(element) => Some(element.clone()),
                 None => {
-                    _ = reply.send(ToolResult::error(format!(
-                        "There's no element {name} in tab {tab}. Use a ref from its latest outline."
-                    )));
+                    _ = reply.send(ToolResult::failed(
+                        tools::Kind::NotFound,
+                        format!(
+                            "There's no element {name} in tab {tab}. Use a ref from its latest \
+                             outline."
+                        ),
+                    ));
                     return;
                 }
             },
@@ -2543,7 +2591,8 @@ impl Agents {
                         act.what = format!("open {to}");
                         act.url = url;
                         if !is_web(&act.url) {
-                            return self.refuse(act, &to, WEB_ONLY, cx);
+                            let refused = Refused::of(tools::Kind::NotWebPage, WEB_ONLY);
+                            return self.refuse(act, &to, refused, cx);
                         }
                         // What asks is the site it goes to.
                         return self.check(act, to.clone(), page::opening_risk(&to), cx);
@@ -2580,7 +2629,8 @@ impl Agents {
                 };
                 act.action = "type";
                 if element.password {
-                    return self.refuse(act, &host, PASSWORDS, cx);
+                    let refused = Refused::of(tools::Kind::Password, PASSWORDS);
+                    return self.refuse(act, &host, refused, cx);
                 }
                 let submit = arguments
                     .get("submit")
@@ -2735,7 +2785,9 @@ impl Agents {
             .and_then(|sites| sites.get(&site))
         {
             Some(true) => self.run(act, cx),
-            Some(false) => self.refuse(act, &site, SAID_NEVER, cx),
+            Some(false) => {
+                self.refuse(act, &site, Refused::of(tools::Kind::SaidNo, SAID_NEVER), cx)
+            }
             None => self.ask_first(act, site, why, cx),
         }
     }
@@ -2796,7 +2848,7 @@ impl Agents {
         };
         let Asking { site, act, .. } = self.asking.remove(at);
         log!("browser: agent {} asked {id} with no answer", act.agent);
-        self.refuse(act, &site, NO_ANSWER, cx);
+        self.refuse(act, &site, Refused::new(NO_ANSWER), cx);
         self.asked(cx);
     }
 
@@ -2844,7 +2896,9 @@ impl Agents {
         match answer {
             Answer::Once | Answer::Always if act.action == "request" => self.send(act, true, cx),
             Answer::Once | Answer::Always => self.run(act, cx),
-            Answer::Never | Answer::Dismiss => self.refuse(act, &site, SAID_NO, cx),
+            Answer::Never | Answer::Dismiss => {
+                self.refuse(act, &site, Refused::of(tools::Kind::SaidNo, SAID_NO), cx)
+            }
         }
         self.asked(cx);
     }
@@ -2974,7 +3028,9 @@ impl Agents {
     }
 
     /// Answers the action with why it's refused, which the log has.
-    fn refuse(&mut self, act: Act, site: &str, why: &str, cx: &mut Context<Self>) {
+    fn refuse(&mut self, act: Act, site: &str, refused: Refused, cx: &mut Context<Self>) {
+        let Refused { why, kind } = refused;
+        let why = why.as_str();
         if act.download != 0 {
             self.browser.answer_download(act.download, false);
             self.ended.remove(&act.download);
@@ -3004,7 +3060,10 @@ impl Agents {
             }
             _ => why.to_string(),
         };
-        _ = act.reply.send(ToolResult::error(answer));
+        _ = act.reply.send(ToolResult {
+            kind,
+            ..ToolResult::error(answer)
+        });
     }
 
     /// Does the action: the core checks it and logs it, and answers with the page.
@@ -3036,7 +3095,9 @@ impl Agents {
             let site = site(&self.browser.tab(tab, cx).url);
             let closed = match self.may_act(&agent, tab, "close_tab", cx) {
                 Ok(()) => self.browser.close_tab(&agent, tab, true, cx),
-                Err(why) => return self.refuse(act_of(&agent, call, tab, reply), &site, &why, cx),
+                Err(refused) => {
+                    return self.refuse(act_of(&agent, call, tab, reply), &site, refused, cx);
+                }
             };
             return self.closed(&agent, call, tab, true, closed, &site, reply, cx);
         }
@@ -3226,7 +3287,7 @@ impl Agents {
 
     fn send_next(&mut self, mut sending: Sending, cx: &mut Context<Self>) {
         let Some(next) = sending.left.pop_front() else {
-            return finish(sending, false);
+            return finish(sending, false, None);
         };
         let (agent, tab) = (sending.agent.clone(), sending.tab);
         // A change goes only with the user's answer. One that comes here without a question, as
@@ -3234,16 +3295,21 @@ impl Agents {
         // still allow, is refused in the core's words for a tab not the agent's, so the agent
         // learns nothing it wouldn't from the core.
         let checked = match next.changes() && !sending.answered {
-            true => Err(NOT_ITS_SPACE.to_string()),
+            true => Err(Refused::new(NOT_ITS_SPACE)),
             false => self.may_act(&agent, tab, "request", cx),
         };
         let site = site(&self.browser.tab(tab, cx).url);
-        let refused = checked.as_ref().err().map_or("", String::as_str);
+        let refused = checked
+            .as_ref()
+            .err()
+            .map_or("", |refused| refused.why.as_str());
         self.note_request(&agent, &site, &next, refused);
         cx.notify();
-        if let Err(why) = checked {
-            sending.answers.push(format!("{}: {why}", next.target()));
-            return finish(sending, true);
+        if let Err(refused) = checked {
+            sending
+                .answers
+                .push(format!("{}: {}", next.target(), refused.why));
+            return finish(sending, true, refused.kind);
         }
         self.current.insert(agent.clone(), tab);
         let request = self.next_request;
@@ -3278,7 +3344,7 @@ impl Agents {
             .push(request::answer(&sent, &response, shown, hidden));
         match response.status {
             // Whatever stopped it may stop the rest, which wait for the agent to look again.
-            0 => finish(sending, true),
+            0 => finish(sending, true, None),
             _ => self.send_next(sending, cx),
         }
     }
@@ -3290,10 +3356,16 @@ impl Agents {
         Some(format!("e{number}"))
     }
 
-    /// The core's answer to the action `request`: with `error`, why it couldn't; else a
-    /// screenshot's JPEG in base64, or the page's tree, whose nodes the answer outlines, and
+    /// The core's answer to the action `request`: with `error`, its code and why it couldn't; else
+    /// a screenshot's JPEG in base64, or the page's tree, whose nodes the answer outlines, and
     /// whether the page was still busy when the core stopped waiting for it.
-    pub fn page_done(&mut self, request: u64, text: String, error: bool, cx: &mut Context<Self>) {
+    pub fn page_done(
+        &mut self,
+        request: u64,
+        text: String,
+        error: Option<Failure>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(Acting {
             agent,
             call,
@@ -3321,13 +3393,16 @@ impl Agents {
                 .trim_start()
                 .into();
         }
-        if error {
+        if let Some(failure) = error {
             // As a page still loading: the agent can look at the tab it opened later (#1461).
             let text = match opened {
                 true => format!("{note} {text}"),
                 false => text,
             };
-            _ = reply.send(ToolResult::error(text));
+            _ = reply.send(ToolResult {
+                kind: failure.kind(),
+                ..ToolResult::error(text)
+            });
             return self.advance(cx);
         }
         if let Some(did) = did {
@@ -3496,11 +3571,11 @@ impl Agents {
             self.may_act(agent, tab, action, cx)
                 .and_then(|()| match (action, pinned, theirs) {
                     ("pin_tab", _, _) => Ok(()),
-                    (_, false, _) => Err(format!("Tab {tab} isn't pinned.")),
-                    (_, true, true) => Err(format!(
+                    (_, false, _) => Err(Refused::new(format!("Tab {tab} isn't pinned."))),
+                    (_, true, true) => Err(Refused::new(format!(
                         "The user pinned tab {tab}, so only they {} it.",
                         action.trim_end_matches("_tab")
-                    )),
+                    ))),
                     (_, true, false) => Ok(()),
                 });
         let site = site(&self.browser.tab(tab, cx).url);
@@ -3508,11 +3583,14 @@ impl Agents {
             agent,
             action,
             &site,
-            checked.as_ref().err().map_or("", String::as_str),
+            checked
+                .as_ref()
+                .err()
+                .map_or("", |refused| refused.why.as_str()),
         );
         cx.notify();
-        if let Err(why) = checked {
-            _ = reply.send(ToolResult::error(why));
+        if let Err(refused) = checked {
+            _ = reply.send(refused.into());
             return;
         }
         self.current.insert(agent.into(), tab);
@@ -3582,23 +3660,29 @@ impl Agents {
     /// for a tab that's off limits, whatever its Space (`off_limits`).
     /// Closing one of its own off the web reads nothing of it, and is the agent's way out of a tab
     /// that went there.
-    fn may_act(&self, agent: &str, tab: u64, action: &str, cx: &mut App) -> Result<(), String> {
+    fn may_act(&self, agent: &str, tab: u64, action: &str, cx: &mut App) -> Result<(), Refused> {
         match self.off_limits(agent, tab, cx) {
             Some(NOT_WEB_PAGE) if action == "close_tab" => {}
-            Some(why) => return Err(why.into()),
+            Some(why) => return Err(off_limits_refused(why)),
             None => {}
         }
         self.browser
             .may_act(agent, tab, action, cx)
-            .map_err(|why| match (why == NOT_ITS_SPACE, self.gone.get(&tab)) {
-                (true, Some((whose, gone))) if whose == agent => gone.why(tab),
-                _ => why,
+            .map_err(|(failure, why)| match (failure, self.gone.get(&tab)) {
+                (Failure::NotItsSpace, Some((whose, gone))) if whose == agent => {
+                    Refused::new(gone.why(tab))
+                }
+                _ => Refused {
+                    why,
+                    kind: failure.kind(),
+                },
             })?;
         // Only once the tab is known to be the agent's, so another's page says nothing.
         match self.dialogs.get(&tab) {
-            Some(&kind) if action != "close_tab" => {
-                Err(showing_dialog(tab, kind, self.opened.contains(&tab)))
-            }
+            Some(&kind) if action != "close_tab" => Err(Refused {
+                kind: (kind == DialogKind::SignIn).then_some(tools::Kind::Password),
+                ..Refused::new(showing_dialog(tab, kind, self.opened.contains(&tab)))
+            }),
             _ => Ok(()),
         }
     }
@@ -3636,7 +3720,10 @@ impl Agents {
     ) -> bool {
         let checked = self.may_act(agent, tab, action, cx);
         let site = site(&self.browser.tab(tab, cx).url);
-        let refused = checked.as_ref().err().map_or("", String::as_str);
+        let refused = checked
+            .as_ref()
+            .err()
+            .map_or("", |refused| refused.why.as_str());
         self.note(agent, logged, &site, refused);
         cx.notify();
         match checked {
@@ -3644,8 +3731,8 @@ impl Agents {
                 self.current.insert(agent.into(), tab);
                 true
             }
-            Err(why) => {
-                _ = reply.send(ToolResult::error(why));
+            Err(refused) => {
+                _ = reply.send(refused.into());
                 false
             }
         }
@@ -3664,8 +3751,8 @@ impl Agents {
         cx: &mut Context<Self>,
     ) {
         let site = site(&self.browser.tab(tab, cx).url);
-        if let Err(why) = self.may_act(agent, tab, "close_tab", cx) {
-            return self.refuse(act_of(agent, call, tab, reply), &site, &why, cx);
+        if let Err(refused) = self.may_act(agent, tab, "close_tab", cx) {
+            return self.refuse(act_of(agent, call, tab, reply), &site, refused, cx);
         }
         // The agent's own tab, discarded while its page is asked, doesn't wait for the page. Nor
         // does one whose page shows its dialog, which can't answer before it's gone (#3536).
@@ -3805,9 +3892,14 @@ impl Agents {
             _ => {}
         }
         cx.notify();
+        // A tab that stayed open as the user had a say in it is theirs.
+        let yours = matches!(closed, Closed::Stays | Closed::Pending);
         _ = reply.send(match answer {
             Ok(text) => ToolResult::text(text),
-            Err(why) => ToolResult::error(why),
+            Err(why) => ToolResult {
+                kind: yours.then_some(tools::Kind::Yours),
+                ..ToolResult::error(why)
+            },
         });
     }
 
@@ -4022,6 +4114,81 @@ fn name(agent: &str) -> &str {
     Client::from_id(agent).map_or(agent, |client| client.name())
 }
 
+/// Why the core didn't do an agent's call, as its code says it (bc_agent_failure, #3702): the
+/// app decides on this, never on the words that come with it, which may change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Failure {
+    /// Failed with nothing for the app to decide on.
+    Other,
+    Action,
+    Restarted,
+    NotItsSpace,
+    Held,
+    Pointing,
+    SystemEngine,
+    NotWebPage,
+    Loading,
+    PasswordField,
+    NoOption,
+}
+
+impl Failure {
+    /// The kind a task's card says it in, if any.
+    pub fn kind(self) -> Option<tools::Kind> {
+        match self {
+            Failure::Held => Some(tools::Kind::Yours),
+            Failure::NotWebPage => Some(tools::Kind::NotWebPage),
+            Failure::Loading => Some(tools::Kind::StillLoading),
+            Failure::PasswordField => Some(tools::Kind::Password),
+            Failure::NoOption => Some(tools::Kind::NotFound),
+            _ => None,
+        }
+    }
+}
+
+/// An agent's call refused: why, for the agent and the user to read, and the kind of it a task's
+/// card says, if any.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Refused {
+    pub why: String,
+    pub kind: Option<tools::Kind>,
+}
+
+impl Refused {
+    fn new(why: impl Into<String>) -> Self {
+        Refused {
+            why: why.into(),
+            kind: None,
+        }
+    }
+
+    fn of(kind: tools::Kind, why: impl Into<String>) -> Self {
+        Refused {
+            kind: Some(kind),
+            ..Refused::new(why)
+        }
+    }
+}
+
+impl From<Refused> for ToolResult {
+    fn from(refused: Refused) -> Self {
+        ToolResult {
+            kind: refused.kind,
+            ..ToolResult::error(refused.why)
+        }
+    }
+}
+
+/// The refusal for a tab off limits (`off_limits`), whose page off the web a card says so of.
+fn off_limits_refused(why: &'static str) -> Refused {
+    // Compared with the app's own constant, not a copy of its words, so rewording it can't
+    // change the kind.
+    Refused {
+        kind: (why == NOT_WEB_PAGE).then_some(tools::Kind::NotWebPage),
+        ..Refused::new(why)
+    }
+}
+
 /// What a call of an agent's the user stopped answers.
 const STOPPED: &str = "The user stopped you. Don't carry on until they ask you to.";
 const NOT_HELD: &str = "The user doesn't have that tab from you, so there's nothing to ask for.";
@@ -4035,17 +4202,20 @@ fn answer_of(tab: u64, event: held::Event) -> ToolResult {
         held::Event::Keep => ToolResult::error(format!(
             "The user keeps tab {tab}. Don't ask for it again unless they say so."
         )),
-        held::Event::Timer => ToolResult::error(format!(
-            "The user hasn't handed tab {tab} back in 15 minutes. It stays theirs; ask them \
-             where you started the task before you go on there."
-        )),
+        held::Event::Timer => ToolResult::failed(
+            tools::Kind::Yours,
+            format!(
+                "The user hasn't handed tab {tab} back in 15 minutes. It stays theirs; ask \
+                 them where you started the task before you go on there."
+            ),
+        ),
         held::Event::Closed => {
             ToolResult::error(format!("Tab {tab} closed while the user had it."))
         }
         held::Event::Moved => ToolResult::error(format!(
             "The user moved tab {tab} to a Space of their own. It's theirs now."
         )),
-        _ => ToolResult::error(STOPPED),
+        _ => ToolResult::failed(tools::Kind::Stopped, STOPPED),
     }
 }
 
@@ -4122,7 +4292,7 @@ const CHANGES_ASK: &str = "Changes ask every time.";
 
 /// Answers a call's requests with what each answered, numbered if there were more than one, and
 /// what wasn't sent.
-fn finish(sending: Sending, error: bool) {
+fn finish(sending: Sending, error: bool, kind: Option<tools::Kind>) {
     let Sending {
         tab,
         answers,
@@ -4156,10 +4326,17 @@ fn finish(sending: Sending, error: bool) {
              user's sessions, and never hold their credentials.",
         );
     }
+    // A page that asks for a password is what its answer says first.
+    let kind = if signs_in {
+        Some(tools::Kind::Password)
+    } else {
+        kind
+    };
     _ = reply.send(ToolResult {
         text,
         error,
         image: None,
+        kind: kind.filter(|_| error),
     });
 }
 

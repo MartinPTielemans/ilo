@@ -939,59 +939,37 @@ pub fn step_glyph(tool: &str) -> &'static str {
     }
 }
 
-/// Why a step failed, in a few words, from its call's error: "not found", "timed out", "504".
-/// Empty when the error gives no reason, as the step's title already says it couldn't.
-pub fn reason(error: &str) -> String {
-    let error = error.to_lowercase();
-    let has = |words: &[&str]| words.iter().any(|word| error.contains(word));
-    // An HTTP error's status, as "HTTP 504" or "status 504" says it.
-    let words: Vec<&str> = error
-        .split(|char: char| !char.is_ascii_alphanumeric())
-        .collect();
-    let status = words.windows(2).find_map(|pair| {
-        let [before, code] = pair else { return None };
-        let status = code.len() == 3
-            && code
-                .parse::<u16>()
-                .is_ok_and(|code| (400..600).contains(&code));
-        (matches!(*before, "http" | "status" | "error") && status).then_some(*code)
-    });
-    let reason = if has(&["stopped you", "turned agents off", "connection closed"]) {
-        "stopped"
-    } else if has(&["you said no", "said never", "the user said no", "declined"]) {
-        "you said no"
-    } else if has(&["asks the user first"]) {
-        "needs your OK"
-    } else if has(&["password"]) {
-        "password field"
-    } else if has(&["http or https", "only http and https"]) {
-        "not a web page"
-    } else if has(&[
-        "there's no element",
-        "there's no option",
-        "no tab",
-        "isn't open",
-        "not found",
-        "404",
-    ]) {
-        "not found"
-    } else if has(&["timed out", "timeout", "took too long"]) {
-        "timed out"
-    } else if has(&["still loading", "hasn't loaded", "is loading"]) {
-        "still loading"
-    } else if let Some(code) = status {
-        code
-    } else if has(&["didn't show"]) {
-        "didn't show"
-    } else if has(&[
-        "user's already",
-        "user has",
-        "user doesn't have",
-        "took it over",
-    ]) {
-        "it's yours"
-    } else {
-        ""
+/// Why a step failed, of the kinds a task's card says in a few words (#3702). Each is set where
+/// its failure is known, from the core's code or the app's own reason, so no wording decides it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    Stopped,
+    SaidNo,
+    NeedsOk,
+    Password,
+    NotWebPage,
+    NotFound,
+    StillLoading,
+    DidntShow,
+    Yours,
+}
+
+/// Why a step failed, in a few words, from its call's kind: "not found", "it's yours".
+/// Empty with none, as the step's title already says it couldn't.
+pub fn reason(kind: Option<Kind>) -> String {
+    let Some(kind) = kind else {
+        return String::new();
+    };
+    let reason = match kind {
+        Kind::Stopped => "stopped",
+        Kind::SaidNo => "you said no",
+        Kind::NeedsOk => "needs your OK",
+        Kind::Password => "password field",
+        Kind::NotWebPage => "not a web page",
+        Kind::NotFound => "not found",
+        Kind::StillLoading => "still loading",
+        Kind::DidntShow => "didn't show",
+        Kind::Yours => "it's yours",
     };
     reason.to_string()
 }
