@@ -1483,6 +1483,48 @@ mod tests {
         assert_eq!(opening_risk("notchase.com"), None);
     }
 
+    /// What asks first beyond the word and site lists, each named when it doesn't ask as it
+    /// should: an order in other words and languages, a Send or Comment with a message to send on
+    /// a site off the list, opening a bank's site off the list, and moving money on one.
+    #[test]
+    fn what_asks_first_beyond_the_lists() {
+        let mut missed = Vec::new();
+        for (host, label) in [
+            ("shop.example", "Complete order"),
+            ("shop.example", "Confirm booking"),
+            ("butik.example", "Betal"),
+            ("butik.example", "Køb nu"),
+            ("laden.example", "Jetzt kaufen"),
+            ("mail.proton.me", "Send"),
+            ("teams.microsoft.com", "Send"),
+            ("github.com", "Comment"),
+            ("meta.discourse.org", "Create Topic"),
+            ("www.binance.com", "Withdraw"),
+            ("netbank.nordea.dk", "Overfør"),
+            ("netbank.nordea.dk", "Send"),
+            ("online.mybank.example", "Confirm"),
+        ] {
+            if risk(host, label).is_none() {
+                missed.push(format!("{label} on {host} asks nothing"));
+            }
+        }
+        for host in [
+            "www.nordea.dk",
+            "n26.com",
+            "www.hsbc.co.uk",
+            "www.binance.com",
+            "bcol.barclaycard.co.uk",
+        ] {
+            if opening_risk(host).is_none() {
+                missed.push(format!("opening {host} asks nothing"));
+            }
+        }
+        if risk("shop.example", "Confirm").is_some() {
+            missed.push("Confirm off the money sites asks".into());
+        }
+        assert!(missed.is_empty(), "{}", missed.join("\n"));
+    }
+
     #[test]
     fn a_name_is_clipped() {
         assert_eq!(clip("Example", 3), "Exa…");
