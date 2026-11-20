@@ -3453,6 +3453,82 @@ fn a_kept_close_names_what_the_agent_changed(cx: &mut TestAppContext) {
     );
 }
 
+/// A click on a custom listbox's option chooses, as a select does, so it keeps a close for its
+/// page's answer and the kept close names it.
+#[gpui::test]
+fn a_clicked_option_keeps_a_close_for_its_page(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let opened = call(
+        &agents,
+        "claude-code",
+        "open_tab",
+        json!({ "url": "docs.example" }),
+        cx,
+    );
+    let sizes = json!({ "nodes": [
+        { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Shop" },
+          "childIds": ["2"] },
+        { "nodeId": "2", "role": { "value": "listbox" }, "name": { "value": "Size" },
+          "childIds": ["3"] },
+        { "nodeId": "3", "role": { "value": "option" }, "name": { "value": "Large" },
+          "backendDOMNodeId": 31 },
+    ]})
+    .to_string();
+    _ = page_done(&agents, &browser, opened, sizes.clone(), cx);
+    browser.asks.borrow_mut().insert(30);
+    let clicked = call(
+        &agents,
+        "claude-code",
+        "click",
+        json!({ "tab": 30, "ref": "e1" }),
+        cx,
+    );
+    _ = page_done(&agents, &browser, clicked, sizes, cx);
+    let kept = call(
+        &agents,
+        "claude-code",
+        "close_tab",
+        json!({ "tab": 30 }),
+        cx,
+    );
+    page_answers(&agents, &browser, 30, Closed::Asks, cx);
+    assert_eq!(
+        kept.recv().unwrap().text,
+        "Tab 30 stays open: its page asks before it's left, and you clicked option “Large” there. \
+         close_tab with discard: true closes it without saving."
+    );
+}
+
+/// A type step of run_steps is recorded as the type call is, so it keeps a close for its page's
+/// answer the same way.
+#[gpui::test]
+fn a_type_step_in_a_run_keeps_a_close_as_a_type_call_does(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    opened_with_handler(&agents, &browser, cx);
+    let step = json!({ "action": "type", "ref": "e1", "text": "SAVE10" });
+    let ran = call(
+        &agents,
+        "claude-code",
+        "run_steps",
+        json!({ "tab": 30, "steps": [step] }),
+        cx,
+    );
+    _ = page_done(&agents, &browser, ran, shop_tree(), cx);
+    let kept = call(
+        &agents,
+        "claude-code",
+        "close_tab",
+        json!({ "tab": 30 }),
+        cx,
+    );
+    page_answers(&agents, &browser, 30, Closed::Asks, cx);
+    assert_eq!(
+        kept.recv().unwrap().text,
+        "Tab 30 stays open: its page asks before it's left, and you typed into textbox “Coupon” \
+         there. close_tab with discard: true closes it without saving."
+    );
+}
+
 /// A tab the user held, taken over or handed to them, keeps a close for its page's answer even
 /// where the agent changed nothing, as they type only in a tab they hold, and the answer says
 /// what's unsaved may be theirs.

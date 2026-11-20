@@ -2417,11 +2417,19 @@ impl Agents {
                 };
                 act.action = "click";
                 act.page = PageAction::Click;
-                // A click changes what's unsaved only where it ticks or chooses; any other's is a
-                // link or a button's, which a page's own handler sends or keeps itself.
+                // A click changes what's unsaved only where it ticks or chooses, as a custom
+                // listbox's option is a select's choice by another name; any other's is a link or
+                // a button's, which a page's own handler sends or keeps itself.
                 if matches!(
                     element.role.as_str(),
-                    "checkbox" | "radio" | "switch" | "menuitemcheckbox" | "menuitemradio"
+                    "checkbox"
+                        | "radio"
+                        | "switch"
+                        | "menuitemcheckbox"
+                        | "menuitemradio"
+                        | "option"
+                        | "slider"
+                        | "spinbutton"
                 ) {
                     act.edits = format!("clicked {}", field(element));
                 }
