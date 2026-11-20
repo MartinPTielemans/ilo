@@ -25,11 +25,20 @@ namespace browser_core {
 
 namespace {
 
-// Loads the tab's page again, in whichever engine shows it, if the tab's still open.
+// Loads the tab's page again, if the tab's still open: in the engine that shows it, unless the
+// profile no longer keeps the site for the system's engine, as once its choices were cleared.
 void Reload(bc_id tab, bool bypass_cache) {
-  if (content::WebContents* contents = Tab::FromId(tab)) {
-    Tab::FromWebContents(contents)->Reload(bypass_cache);
+  content::WebContents* contents = Tab::FromId(tab);
+  if (!contents) {
+    return;
   }
+  Tab* reloading = Tab::FromWebContents(contents);
+  platform::SystemPage* page = reloading->system_page();
+  if (page && !system_engine::Remembered(reloading->profile(), page->url())) {
+    reloading->UseChromium(page->url());
+    return;
+  }
+  reloading->Reload(bypass_cache);
 }
 
 // Runs |done| once the remover's task is done, then goes.
@@ -93,6 +102,11 @@ void ClearSiteAndReload(bc_id tab, platform::SiteData what) {
   // The system's engine keeps the site's data apart, once the profile has used it, and the page
   // loads again once both have let it go. A reload after the cache's clearing also fetches again
   // what the page loads from other sites.
+  // The site's settings go with its data, which engine it opens in among them: a listed service
+  // opens in the system's engine again, and any other site in Chromium, until it asks again.
+  if (what == platform::SiteData::kAll) {
+    system_engine::ForgetChoices(profile, url);
+  }
   const bool system_store = system_engine::StoreUsed(profile);
   const base::RepeatingClosure done = base::BarrierClosure(
       system_store ? 2 : 1, base::BindOnce(&Reload, tab, what != platform::SiteData::kCookies));
