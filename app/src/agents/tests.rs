@@ -7076,6 +7076,43 @@ mod sessions {
         assert_eq!(shown[0].dot, Dot::Working);
     }
 
+    /// A client's earlier card offers only the pages none of its sessions works in now. Its Open
+    /// moves what it offers out of the client's Space, which would take a tab from under the
+    /// agent, whose next call on it is then refused (#3660).
+    #[gpui::test]
+    fn an_earlier_cards_open_leaves_the_pages_a_session_works_in(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        answered(&agents, 2, cx);
+        bye(&agents, cx);
+        // It connects again and works on in the same tab.
+        hello(&agents, "claude-code", "claude-code", cx);
+        call_as(&agents, 3, "read_page", json!({ "tab": 20 }), cx);
+        answered(&agents, 3, cx);
+        let shown = cards(&agents, cx);
+        assert_eq!((shown[0].dot, shown[1].dot), (Dot::Working, Dot::Done));
+        assert!(shown[1].open.is_empty(), "{:?}", shown[1].open);
+        let earlier = shown[1].agent.to_string();
+        let opened = agents.update(cx, |agents, cx| agents.open_result(&earlier, None, cx));
+        assert_eq!(opened, None);
+        let space = browser
+            .tabs
+            .borrow()
+            .iter()
+            .find(|each| each.0 == 20)
+            .unwrap()
+            .1;
+        assert_eq!(space, browser.agent_space("claude-code"));
+        let answer = call_as(&agents, 4, "read_page", json!({ "tab": 20 }), cx);
+        let refused = answer.try_recv().ok().filter(|answer| answer.error);
+        assert!(refused.is_none(), "{refused:?}");
+
+        // Once that session ends, the tab is the user's to open from either card.
+        answered(&agents, 4, cx);
+        bye(&agents, cx);
+        let shown = cards(&agents, cx);
+        assert_eq!(shown[1].open, vec![(20, "example.com".into())]);
+    }
+
     /// A client has one name wherever it shows, its card's (Agents::agent_name): the strip under its
     /// page, from its status, its questions and Settings' activity read the same. Another MCP
     /// client's is the name it gave, or with none its kind's, MCP client, and a session keeps the
