@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/memory/weak_ptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "browser_core/page_dialog.h"
@@ -142,7 +143,11 @@ void ScriptDialogs::WillRunDialog() {}
 void ScriptDialogs::DidCloseDialog() {}
 
 void ScriptDialogs::SetTabNeedsAttention(bool attention) {
-  // The alert waits for its tab to show, and the app shows it then.
+  // The alert waits for its tab to show, and the app shows it then. Chromium holds it from here,
+  // with nothing for the app to see, so the checks hear it from this line (#3549).
+  if (attention) {
+    LOG(ERROR) << "browser: tab " << Tab::IdOf(contents_) << " dialog held";
+  }
 }
 
 bool ScriptDialogs::IsWebContentsForemost() {

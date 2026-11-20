@@ -618,18 +618,20 @@ else
 fi
 send move $page_point
 # A page out of sight that asks with an alert, which Chromium holds until its tab shows, is let go by
-# the idle check once it looks 2 hours unseen, its alert with it, and ilo goes on (#3549). It asks
-# the run's server first and alerts on the answer: a title changed out of sight is Chrome's sign of
-# a page at work in the background, which keeps it. Neither the app nor the core logs an alert held
-# for its tab, so the alert is asked a moment after the request, seconds before the idle check runs.
+# the idle check once it looks 2 hours unseen, its alert with it, and ilo goes on (#3549). It
+# changes nothing else as it asks: a title changed out of sight is Chrome's sign of a page at work
+# in the background, which keeps it. The core says when Chromium holds the alert for its tab.
 printf '%s' '<!doctype html><title>Asks out of sight</title><script>
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden) setTimeout(() => fetch("/asking").finally(() => alert("out of sight")), 100)
+  if (document.hidden) setTimeout(() => alert("out of sight"), 100)
 })</script>' > "$out/site/asks-hidden.html"
 open_from_bar "${site}asks-hidden.html"
 asking=$tab
+hidden=$((step + 1))
 open_from_bar "${site}"
-served "127.0.0.1:$port/asking" "the page out of sight didn't ask with its alert"
+# After Chromium's prefix.
+expect "browser: tab $asking dialog held\$" \
+  "the page out of sight didn't ask with its alert, held for its tab" "$hidden"
 send age 7200
 aged=$step
 open_from_bar "${site}"
