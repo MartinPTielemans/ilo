@@ -1079,18 +1079,18 @@ none_after() { ! tail -n "+$(($1 + 1))" "$log" | grep -q "$2"; }
 go_from_bar "localhost:$port/drm.html"
 expect "^browser: page $tab needs com.widevine.alpha\$" \
   "localhost's page asking for Widevine brought no note"
-# 127.0.0.1's note goes as the tab leaves its site, but when localhost's page asks before the next
-# frame, the note stays drawn where it was, which logs no line. So it's the last line about it.
-send layout
-drawn=
-for _ in $(seq 20); do
-  if grep -E "^browser: drm note ($tab at |hidden\$)" "$log" | tail -1 | grep -q ' at '; then
-    drawn=1
-    break
-  fi
-  sleep 0.1
-done
-[ -n "$drawn" ] || fail "localhost's note wasn't drawn"
+# One site's note goes as the tab leaves it, but when the next site's page asks before the next
+# frame, the note stays drawn where it was, which logs no line. So it's the last line about it:
+# the same note, whose × and button act on the tab's page as it is when pressed.
+note_drawn() {
+  send layout
+  for _ in $(seq 20); do
+    grep -E "^browser: drm note ($tab at |hidden\$)" "$log" | tail -1 | grep -q ' at ' && return 0
+    sleep 0.1
+  done
+  return 1
+}
+note_drawn || fail "localhost's note wasn't drawn"
 read -r nx ny nw nh <<EOF
 $(grep "^browser: drm note $tab at " "$log" | tail -1 | cut -d' ' -f6-)
 EOF
@@ -1617,8 +1617,8 @@ if [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 1
   go_from_bar "127.0.0.1:$port/drm.html"
   expect "^browser: page $tab needs com.widevine.alpha\$" \
     "after Delete for all time, 127.0.0.1 opened in Safari's engine: $(engine_sites)"
-  expect "^browser: drm note $tab at " "127.0.0.1's note wasn't drawn after Delete"
-  send layout
+  # localhost's note, drawn just before, stays drawn when 127.0.0.1's page asks before a frame.
+  note_drawn || fail "127.0.0.1's note wasn't drawn after Delete"
   read -r nx ny nw nh <<EOF
 $(grep "^browser: drm note $tab at " "$log" | tail -1 | cut -d' ' -f6-)
 EOF
