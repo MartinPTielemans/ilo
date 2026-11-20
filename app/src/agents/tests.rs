@@ -7557,6 +7557,42 @@ mod waits {
         assert!(!waiting());
     }
 
+    /// Settings › Agents says a wait's entry as the card said its step, never by an event's name.
+    #[gpui::test]
+    fn the_activity_log_says_a_wait_as_the_card_does(cx: &mut TestAppContext) {
+        let (agents, _, _) = connected(cx);
+        let loaded = wait(&agents, json!({ "events": ["loaded"], "tab": 20 }), cx);
+        _ = line(&loaded);
+        let quiet = wait(&agents, json!({ "events": ["closed"], "seconds": 1 }), cx);
+        cx.executor().advance_clock(Duration::from_secs(1));
+        _ = line(&quiet);
+        let titles = agents.read_with(cx, |agents, _| {
+            (agents.activity(AGENT))
+                .map(|entry| {
+                    let did = tools::Did {
+                        tool: entry.action.to_string(),
+                        site: entry.site.to_string(),
+                        target: entry.target.to_string(),
+                        ..Default::default()
+                    };
+                    tools::step_title(&did, tools::Tense::Done)
+                })
+                .collect::<Vec<_>>()
+        });
+        assert!(
+            titles
+                .iter()
+                .any(|title| title == "Waited for example.com to load"),
+            "{titles:?}"
+        );
+        assert!(
+            titles
+                .iter()
+                .any(|title| title == "Waited for a tab to close"),
+            "{titles:?}"
+        );
+    }
+
     /// A download whose call answered before it ended is told once, to the next wait for one,
     /// and only the last few are kept.
     #[gpui::test]

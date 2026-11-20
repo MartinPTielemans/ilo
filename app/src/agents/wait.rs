@@ -172,11 +172,16 @@ pub fn target(arguments: &Value, on: &str) -> String {
     let events = parse(arguments)
         .map(|(events, _)| events)
         .unwrap_or_default();
+    words(&events, on)
+}
+
+/// `events` in the card's words, which the activity log's entry says too.
+fn words(events: &[Awaited], on: &str) -> String {
     let on = |none: &str| match on.is_empty() {
         true => none.to_string(),
         false => on.to_string(),
     };
-    match events.as_slice() {
+    match events {
         [Awaited::Loaded] => format!("{} to load", on("a page")),
         [Awaited::Navigated] => format!("{} to move on", on("a page")),
         [Awaited::Closed] => format!("{} to close", on("a tab")),
@@ -344,7 +349,9 @@ impl Agents {
         if let Happened::Loaded { .. } | Happened::Navigated { .. } = happened {
             self.told.insert((agent.to_string(), tab), url.clone());
         }
-        self.note_on(agent, "wait_for_event", &site(&url), event, "");
+        // Settings › Agents says the entry as the card said the step.
+        let (site, heard) = (site(&url), happened.event());
+        self.note_on(agent, "wait_for_event", &site, &words(&[heard], &site), "");
         cx.notify();
         _ = reply.send(ToolResult::text(happened.line()));
     }
@@ -357,7 +364,8 @@ impl Agents {
         WAITING.set(!self.waits.is_empty());
         // check.sh reads this line.
         log!("browser: agent {} waited nothing", wait.agent);
-        self.note(&wait.agent, "wait_for_event", "", "");
+        let waited = words(&wait.events, "");
+        self.note_on(&wait.agent, "wait_for_event", "", &waited, "");
         cx.notify();
         _ = wait.reply.send(ToolResult::text(nothing(wait.seconds)));
     }
