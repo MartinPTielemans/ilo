@@ -148,6 +148,8 @@ pub struct Question {
     pub changes: std::rc::Rc<[request::Request]>,
     /// The site they go to, the tab's, which the card's facts name.
     pub site: SharedString,
+    /// Whether it asks every time, as a payment does, so its card has no Always or Never.
+    pub each_time: bool,
 }
 
 /// The windows' cards ask again whenever a question changes, which is on every Agents change, so
@@ -158,6 +160,7 @@ impl PartialEq for Question {
         (self.id, &self.agent, &self.from, &self.what, &self.why)
             == (other.id, &other.agent, &other.from, &other.what, &other.why)
             && (self.handoff, self.back, &self.site) == (other.handoff, other.back, &other.site)
+            && self.each_time == other.each_time
             && std::rc::Rc::ptr_eq(&self.changes, &other.changes)
     }
 }
@@ -2624,7 +2627,9 @@ impl Agents {
                 act.page = PageAction::Click;
                 act.note = format!("Clicked {} {}.", element.role, label(element));
                 act.what = format!("click {} on {host}", label(element));
-                risk = page::risk(&host, &element.name);
+                let outline = self.outlines.get(&tab);
+                let message = outline.is_some_and(|outline| outline.sends_message(element.form));
+                risk = page::risk(&host, &element.name, message);
             }
             "type" => {
                 let (Some(element), Some(text)) = (&element, string("text")) else {
@@ -2653,8 +2658,13 @@ impl Agents {
                 );
                 act.what = format!("send “{}” on {host}", page::clip(&text, 60));
                 // Its Enter asks as a click on what it submits would, and else as a message sent.
+                // A line break in a rich-text editor is that Enter, as a chat's composer sends
+                // on it.
                 let outline = self.outlines.get(&tab);
-                let pressing = (submit
+                let broken = text.contains(['\n', '\r'])
+                    && outline.is_some_and(|outline| outline.is_editor(element.node));
+                let enter = submit || broken;
+                let pressing = (enter
                     .then(|| page::pressing_risk(&host, outline, "Enter", Some(element))))
                 .flatten();
                 risk = match pressing {
@@ -2675,7 +2685,7 @@ impl Agents {
                         };
                         Some(pressing.why)
                     }
-                    None => submit.then(|| page::risk(&host, "send")).flatten(),
+                    None => enter.then(|| page::risk(&host, "send", false)).flatten(),
                 };
                 act.text = text;
             }
@@ -2699,7 +2709,10 @@ impl Agents {
                 act.note = format!("Chose {chose} in the {}.", act.field);
                 act.what = format!("choose {chose} in {} on {host}", label(element));
                 // As a click on the field or the option would.
-                risk = page::risk(&host, &element.name).or_else(|| page::risk(&host, &option));
+                let outline = self.outlines.get(&tab);
+                let message = outline.is_some_and(|outline| outline.sends_message(element.form));
+                risk = page::risk(&host, &element.name, message)
+                    .or_else(|| page::risk(&host, &option, message));
                 act.text = option;
             }
             "press_key" => {
@@ -2728,7 +2741,7 @@ impl Agents {
                         Some(pressing.why)
                     }
                     None => (key == "Enter")
-                        .then(|| page::risk(&host, "send"))
+                        .then(|| page::risk(&host, "send", false))
                         .flatten(),
                 };
                 act.text = key;
@@ -2784,11 +2797,14 @@ impl Agents {
             return self.run(act, cx);
         };
         act.did = Did::of(why);
-        match self
-            .grants
-            .get(&self.answers_of(&act.agent))
+        // A payment asks every time, as a request's changes do (#1439): what the user allowed for
+        // good covers opening a site and sending on it, as they gave it, and never spending. A
+        // Never for the site still refuses it.
+        let granted = (self.grants.get(&self.answers_of(&act.agent)))
             .and_then(|sites| sites.get(&site))
-        {
+            .copied()
+            .filter(|may| !may || why != page::ORDER);
+        match granted {
             Some(true) => self.run(act, cx),
             Some(false) => self.refuse(act, &site, SAID_NEVER, cx),
             None => self.ask_first(act, site, why, cx),
@@ -2820,6 +2836,7 @@ impl Agents {
             why: why.into(),
             changes,
             site: site.clone().into(),
+            each_time: why == page::ORDER,
             ..Question::default()
         };
         self.next_request += 1;
@@ -2885,11 +2902,17 @@ impl Agents {
         else {
             return self.answer_back(id, answer, cx);
         };
-        let Asking { site, act, .. } = self.asking.remove(at);
+        let Asking {
+            site,
+            act,
+            question,
+            ..
+        } = self.asking.remove(at);
         // check.sh reads this line.
         log!("browser: agent {} answered {id} {answer:?}", act.agent);
-        // A request's changes ask every time, whatever answered.
+        // A request's changes and a payment ask every time, whatever answered.
         if act.action != "request"
+            && !question.each_time
             && let Answer::Always | Answer::Never = answer
         {
             let sites = self.grants.entry(self.answers_of(&act.agent)).or_default();

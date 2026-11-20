@@ -3050,8 +3050,9 @@ $(grep 'browser: agent .*download' "$log" | tail -3)"
     [ -n "$shop_tab" ] && [ -n "$card_ref" ] && [ -n "$save_ref" ] ||
       fail "the checkout didn't open with its fields: $opened"
   }
-  # Calls $1 with $2, which asks first with the words matching $3, and answers Allow Once with a
-  # click, as answer_bank does below, capturing the card as $4.png. Sets paid to the answer.
+  # Calls $1 with $2, which asks first with the words matching $3, and answers Allow with a click,
+  # capturing the card as $4.png. Sets paid to the answer. A payment's card asks every time, so it
+  # has a request's two buttons, Deny and Allow, on its last row.
   pay_asks() {
     before=$(grep -c "$3" "$log" || true)
     request "$1" "$2" >&4
@@ -3063,9 +3064,9 @@ $(grep 'browser: agent .*download' "$log" | tail -3)"
 $(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
 CARD
     ../tools/window-screenshot.sh "$pid" "$out/$4.png" || fail "no window to capture"
-    send click $((qx + qw * 3 / 4)) $((qy + qh - 26 - 36))
+    send click $((qx + qw * 3 / 4)) $((qy + qh - 26))
     await_log "^browser: agent mcp-client answered $q Once\$" \
-      "Allow Once didn't answer the key press's question"
+      "Allow didn't answer the key press's question"
     paid=$(next_answer) || fail "the browser didn't answer $1 $2"
     paid=$(printf '%s\n' "$paid" | answered "$1")
     case "$paid" in
@@ -3114,6 +3115,125 @@ CARD
     agent-pays-checkbox
   # The last checkout stays open: the tab an agent last acted in shows it at work until it goes.
 
+  # A Send asks on a site that isn't one of the messaging sites once the page holds a message for
+  # it, and an order asks in another language (GHSA-6qxg-jpw9-5jrr): a forum's Comment with its
+  # form's multi-line field empty asks nothing, and with the agent's text in it asks; a chat's
+  # Send in no form asks beside a rich-text editor holding text; a Danish shop's Betal asks.
+  # Allow does each.
+  printf '%s' "<title>Forum</title>
+<form onsubmit=\"event.preventDefault(); document.title = document.title + ' posted'\">
+<textarea aria-label=\"Body\"></textarea><button>Comment</button></form>" > "$out/site/forum.html"
+  printf '%s' "<title>Chat</title>
+<div contenteditable role=\"textbox\" aria-label=\"Message\"></div>
+<button onclick=\"document.title = 'Sent'\">Send</button>" > "$out/site/chat.html"
+  printf '%s' "<title>Butik</title>
+<button onclick=\"document.title = 'Betalt'\">Betal</button>" > "$out/site/butik.html"
+  # Opens $1 on the site $2 in a tab of the agent's, closing the last of these, and sets said_tab
+  # and said_ref to the ref of its element named $3, of the role $4.
+  said_tab=
+  saying() {
+    [ -z "$said_tab" ] || call close_tab "{\"tab\":$said_tab}" > /dev/null
+    opened=$(call open_tab "{\"url\":\"$2.localhost:$port/$1\"}")
+    said_tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+    said_ref=$(printf '%s\n' "$opened" | sed -n "s/.*- $4 \"$3\" \[\(e[0-9]*\)\].*/\1/p" | head -1)
+    [ -n "$said_tab" ] && [ -n "$said_ref" ] || fail "$1 didn't open with its $4 “$3”: $opened"
+  }
+  # Clicks $1 in said_tab, which asks with the words $2 and is allowed once with a click on the
+  # card, captured as $3.png, and then answers with the page titled $4. With $5, spends, it's a
+  # payment's card, Deny and Allow on its last row; without, Allow Once is the right of the row
+  # above Always Allow.
+  said_asks() {
+    before=$(grep -c "$2" "$log" || true)
+    request click "{\"tab\":$said_tab,\"ref\":\"$1\"}" >&4
+    await_more "$2" "$before" ||
+      fail "the click on $1 in tab $said_tab didn't ask first: $(grep '^browser: agent mcp-client asks' "$log" | tail -1); it answered: $(next_answer 5 | answered click)"
+    q=$(grep '^browser: agent mcp-client asks' "$log" | tail -1 | cut -d' ' -f5 | tr -d :)
+    await_log "^browser: agent question $q at " "the click's question wasn't drawn"
+    read -r qx qy qw qh <<CARD
+$(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
+CARD
+    ../tools/window-screenshot.sh "$pid" "$out/$3.png" || fail "no window to capture"
+    y=$((qh - 26 - 36))
+    [ -z "$5" ] || y=$((qh - 26))
+    send click $((qx + qw * 3 / 4)) $((qy + y))
+    await_log "^browser: agent mcp-client answered $q Once\$" "Allow didn't answer the click's question"
+    said=$(next_answer) || fail "the browser didn't answer the click on $1"
+    said=$(printf '%s\n' "$said" | answered click)
+    case "$said" in
+      *"Tab $said_tab: $4"*) ;;
+      *) fail "the click on $1, allowed once, didn't do it: $said" ;;
+    esac
+  }
+  saying forum.html forum Comment button
+  comment_ref=$said_ref
+  body_ref=$(printf '%s\n' "$opened" | sed -n 's/.*- textbox "Body" \[\(e[0-9]*\)\].*/\1/p')
+  [ -n "$body_ref" ] || fail "the forum didn't open with its Body field: $opened"
+  posted=$(call click "{\"tab\":$said_tab,\"ref\":\"$comment_ref\"}")
+  case "$posted" in
+    *"Tab $said_tab: Forum posted"*) ;;
+    *) fail "a Comment with nothing in its form's field asked or didn't post: $posted" ;;
+  esac
+  saying forum.html forum Comment button
+  comment_ref=$said_ref
+  body_ref=$(printf '%s\n' "$opened" | sed -n 's/.*- textbox "Body" \[\(e[0-9]*\)\].*/\1/p')
+  call type "{\"tab\":$said_tab,\"ref\":\"$body_ref\",\"text\":\"Looks good\"}" > /dev/null
+  said_asks "$comment_ref" \
+    '^browser: agent mcp-client asks [0-9]*: click “Comment” on forum\.localhost$' \
+    agent-sends-comment "Forum posted"
+  saying chat.html chat Send button
+  send_ref=$said_ref
+  message_ref=$(printf '%s\n' "$opened" | sed -n 's/.*- textbox "Message" \[\(e[0-9]*\)\].*/\1/p')
+  [ -n "$message_ref" ] || fail "the chat didn't open with its Message editor: $opened"
+  call type "{\"tab\":$said_tab,\"ref\":\"$message_ref\",\"text\":\"On my way\"}" > /dev/null
+  said_asks "$send_ref" \
+    '^browser: agent mcp-client asks [0-9]*: click “Send” on chat\.localhost$' \
+    agent-sends-chat Sent
+  saying butik.html butik Betal button
+  said_asks "$said_ref" \
+    '^browser: agent mcp-client asks [0-9]*: click “Betal” on butik\.localhost$' \
+    agent-pays-danish Betalt spends
+  # A payment asks every time, whatever was allowed before, and a Send allowed for good goes on
+  # unasked.
+  printf '%s' "<meta charset=utf-8><title>Market</title>
+<form onsubmit=\"event.preventDefault(); document.title = 'Asked'\">
+<textarea aria-label=\"Message\"></textarea><button>Send</button></form>
+<button onclick=\"document.title = 'Bought'\">Buy now</button>" > "$out/site/market.html"
+  saying market.html market Send button
+  send_ref=$said_ref
+  message_ref=$(printf '%s\n' "$opened" | sed -n 's/.*- textbox "Message" \[\(e[0-9]*\)\].*/\1/p')
+  buy_ref=$(printf '%s\n' "$opened" | sed -n 's/.*- button "Buy now" \[\(e[0-9]*\)\].*/\1/p')
+  [ -n "$message_ref" ] && [ -n "$buy_ref" ] || fail "the market didn't open with its fields: $opened"
+  call type "{\"tab\":$said_tab,\"ref\":\"$message_ref\",\"text\":\"Is it in stock?\"}" > /dev/null
+  before=$(grep -c '^browser: agent mcp-client asks [0-9]*: click “Send” on market\.localhost$' "$log" || true)
+  request click "{\"tab\":$said_tab,\"ref\":\"$send_ref\"}" >&4
+  await_more '^browser: agent mcp-client asks [0-9]*: click “Send” on market\.localhost$' "$before" ||
+    fail "the market's Send with a message didn't ask first"
+  q=$(grep '^browser: agent mcp-client asks' "$log" | tail -1 | cut -d' ' -f5 | tr -d :)
+  await_log "^browser: agent question $q at " "the Send's question wasn't drawn"
+  read -r qx qy qw qh <<CARD
+$(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
+CARD
+  # Always Allow, the card's last row, across its width.
+  send click $((qx + qw / 2)) $((qy + qh - 26))
+  await_log "^browser: agent mcp-client answered $q Always\$" "Always Allow didn't answer the Send's question"
+  said=$(next_answer) || fail "the browser didn't answer the market's Send"
+  said=$(printf '%s\n' "$said" | answered click)
+  case "$said" in *"Tab $said_tab: Asked"*) ;; *) fail "the Send, allowed always, didn't send: $said" ;; esac
+  said=$(call click "{\"tab\":$said_tab,\"ref\":\"$send_ref\"}")
+  case "$said" in *"Tab $said_tab: Asked"*) ;; *) fail "the next Send, allowed always, asked or didn't send: $said" ;; esac
+  said_asks "$buy_ref" \
+    '^browser: agent mcp-client asks [0-9]*: click “Buy now” on market\.localhost$' \
+    agent-buys-after-always Bought spends
+  # The user's Never for files.localhost, on the download above, still refuses a payment there
+  # unasked.
+  saying butik.html files Betal button
+  before=$(grep -c '^browser: agent mcp-client asks' "$log" || true)
+  said=$(call click "{\"tab\":$said_tab,\"ref\":\"$said_ref\"}")
+  [ "$said" = "error: The user said never on files.localhost: you can't click “Betal” on files.localhost. Don't try again." ] ||
+    fail "a payment on a site answered Never answered: $said"
+  [ "$(grep -c '^browser: agent mcp-client asks' "$log")" = "$before" ] ||
+    fail "a payment on a site answered Never asked"
+
   # A bank's site asks first, in a card in the window, and Allow Once opens it.
   bank="{\"url\":\"bank.localhost:$port/fields.html\"}"
   asks='^browser: agent mcp-client asks [0-9]*: open bank\.localhost$'
@@ -3145,6 +3265,14 @@ CARD
   allowed=$(call open_tab "$bank")
   case "$allowed" in "Opened tab "*) ;; *) fail "after Always Allow, open_tab answered: $allowed" ;; esac
   [ "$(grep -c "$asks" "$log")" = "$before" ] || fail "Always Allow asked again"
+  # A yes to opening a bank's site isn't one to moving money there: its Overfør still asks.
+  # Its charset said, as the site's server says none and the page would read as Latin-1.
+  printf '%s' "<meta charset=utf-8><title>Konto</title>
+<button onclick=\"document.title = 'Overført'\">Overfør</button>" > "$out/site/move.html"
+  saying move.html bank Overfør button
+  said_asks "$said_ref" \
+    '^browser: agent mcp-client asks [0-9]*: click “Overfør” on bank\.localhost$' \
+    agent-moves-money Overført spends
 
   # Settings › Agents lists the permission with its Revoke, which the space menu of the agent's
   # Space did before #1080. Under Xvfb's 800-point screen the button is drawn below its bottom, so
@@ -3180,13 +3308,14 @@ if [ "$driven" = 1 ]; then
   await_log "^browser: agent session ended mcp-client $agent_tab disconnected\$" \
     "ending the client's session didn't end its session with the tab"
   # Its card ends on its receipt, which names only what had consequences (#1080): the five key
-  # presses allowed to pay are its orders, the bank's site it was allowed to open is no order or
-  # message, and its pages are Open's to count.
+  # presses allowed to pay, the Danish Betal, the market's Buy now and the bank's Overfør are its
+  # orders, the Comment, the chat's Send and the market's two Sends its messages, the bank's site it was allowed to open is no order or message,
+  # and its pages are Open's to count.
   # Library › Agents keeps it, in its agent's profile (#1080).
   await_log '^browser: agents history keeps session-[0-9]*-[0-9]* in profile [1-9]' \
     "the client's ended session wasn't kept for Library › Agents: $(grep '^browser: agents history' "$log" | tail -1)"
-  await_log '^browser: task card session-[0-9]* Done Done · 5 orders placed$' \
-    "the client's card didn't count the five orders it placed: $(grep '^browser: task card session-[0-9]* Done ' "$log" | tail -1)"
+  await_log '^browser: task card session-[0-9]* Done Done · 8 orders placed · 4 messages sent$' \
+    "the client's card didn't count the eight orders it placed and four messages it sent: $(grep '^browser: task card session-[0-9]* Done ' "$log" | tail -1)"
   grep '^browser: task card session-[0-9]* Done ' "$log" | grep -q '[0-9] pages\{0,1\}' &&
     fail "the client's receipt counted its pages, which Open counts: $(grep '^browser: task card session-[0-9]* Done ' "$log" | tail -1)"
   # The agent is at work in the tab it last acted in, which is still open.
@@ -3594,7 +3723,7 @@ quit
 trap cleanup EXIT
 rm -f "$agents_file" "$out/mcp-in" "$out/mcp-out"
 if [ "$driven" = 1 ]; then
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), the tabs its page opens kept in its Space, behind$opened_said, without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, pins, unpins and removes its own tab but not the user's, sends requests to its tab's site with the tab's session it never sees, a change asking each time, refused unasked without its sentence, its question on screen as the log draws it ($follows% of its place changed) with the sentence cut at a word over the method's facts, a delete's too, and the whole request beside it until Escape, unanswered, each opening in Settings › Agents to the agent's sentence, where it went and what it sent or didn't, asks a page's beforeunload handler first, with no dialog, closing one that doesn't ask at the first call and keeping one the agent clicked or typed in that asks until it discards it, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, opens its tabs muted, is refused a tab the user took over with a press in its page until they hand it back and Keep answers its ask, has a tab the user holds listed as with them and nothing of its page, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, its download asks first and answers with the file, a refused one leaving none, a key press that pays asks as a click on Pay now does, typing with submit, Enter in the card's field, Space after Tab asking on $space_said, Enter after Tab, and Enter on the box to save the card, a bank's site asks first until Always Allow, which Settings › Agents lists$needs_said, and off takes the socket away; an action waits for its element and its page to settle ($settle), a tab's id from before a relaunch is refused as such, done ends its task once its handoff is answered and not before, its next task ends 3 s after its last page closed, a passkey its page asks for $passkey_said, and a launch after the window quit in its Space shows the page it opens; a screenshot of a tab just opened out of sight answers ($fresh_picture), and with the UI holding the keyboard with its picture"
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), the tabs its page opens kept in its Space, behind$opened_said, without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, pins, unpins and removes its own tab but not the user's, sends requests to its tab's site with the tab's session it never sees, a change asking each time, refused unasked without its sentence, its question on screen as the log draws it ($follows% of its place changed) with the sentence cut at a word over the method's facts, a delete's too, and the whole request beside it until Escape, unanswered, each opening in Settings › Agents to the agent's sentence, where it went and what it sent or didn't, asks a page's beforeunload handler first, with no dialog, closing one that doesn't ask at the first call and keeping one the agent clicked or typed in that asks until it discards it, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, opens its tabs muted, is refused a tab the user took over with a press in its page until they hand it back and Keep answers its ask, has a tab the user holds listed as with them and nothing of its page, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, its download asks first and answers with the file, a refused one leaving none, a key press that pays asks as a click on Pay now does, typing with submit, Enter in the card's field, Space after Tab asking on $space_said, Enter after Tab, and Enter on the box to save the card, a Send off the messaging sites asks once its page holds a message, a forum's Comment and a chat's Send in no form, and not with its field empty, a Danish Betal asks, a payment asks every time, whatever was allowed before, a bank's site asks first until Always Allow, which Settings › Agents lists, its Overfør asking still$needs_said, and off takes the socket away; an action waits for its element and its page to settle ($settle), a tab's id from before a relaunch is refused as such, done ends its task once its handoff is answered and not before, its next task ends 3 s after its last page closed, a passkey its page asks for $passkey_said, and a launch after the window quit in its Space shows the page it opens; a screenshot of a tab just opened out of sight answers ($fresh_picture), and with the UI holding the keyboard with its picture"
 else
   echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own and is refused the user's tab, is answered that a link to an app opens nothing, its tab staying on its page, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), and its actions wait for their element and their page to settle ($settle), and the tabs its page opens are kept in its Space, behind$opened_said. A tab's id from before a relaunch is refused as such, done ends its task once its handoff is answered and not before, its next task ends 3 s after its last page closed, and a passkey its page asks for $passkey_said. skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
 fi
