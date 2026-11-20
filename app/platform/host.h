@@ -432,6 +432,13 @@ void host_show_dialog(void* ui_view, double x, double y, double width, double he
 // was.
 void host_hide_dialog(void);
 
+// The dialog was answered or taken back and draws its leaving: its window takes no more clicks,
+// and the browser window has the keyboard back at once, with the focus where it was, so a click on
+// the page or the UI as it leaves reaches them (#3681). Keys are still held until it hides
+// (host_hold_keys), as the page's question is answered then. The Mac's alone: Linux's dialog does
+// it in overlays::dialog_leaving, and Windows' holds the keys until it hides.
+void host_dialog_leaving(void);
+
 // Makes the window of |view| the Site Controls', which float over a browser window as its child
 // when shown, translucent over a blur in their shape, with a shadow. It starts hidden. |dismissed|
 // runs, after the event, when the user leaves them: a click outside them, another window taking

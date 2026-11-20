@@ -349,6 +349,7 @@ unsafe extern "C" {
     pub fn host_add_dialog(dialog_view: *mut c_void);
     pub fn host_show_dialog(ui_view: *mut c_void, x: f64, y: f64, width: f64, height: f64);
     pub fn host_hide_dialog();
+    pub fn host_dialog_leaving();
     pub fn host_add_site_controls(view: *mut c_void, dismissed: extern "C" fn());
     pub fn host_add_menu_window(
         view: *mut c_void,
