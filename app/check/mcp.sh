@@ -2369,11 +2369,11 @@ PY
   printf '%s\n' "$listed" | grep -q "^. $closing  " && fail "list_tabs listed the closed tab"
   [ "$(sed -n 's/^browser: archive \([0-9]*\) tabs$/\1/p' "$log" | tail -1)" = "$archived" ] ||
     fail "the tab the agent closed went in the user's archive"
-  # A close asks a page with a beforeunload handler as the user's close does, and the answer
-  # waits for it (#3256). Chromium lets a handler ask only in a frame that was clicked or typed in,
+  # A close asks a page with a beforeunload handler as the user's close does, where the agent
+  # changed something or the user had the tab, and the answer waits for it (#3256, #3654). Chromium lets a handler ask only in a frame that was clicked or typed in,
   # so the agent's click or typing first, as the user's would. Never a leave dialog, and each close
   # has one activity-log entry, written as the page answered, after the core's line.
-  printf '%s\n' '<!doctype html><title>Quiet</title><button>Note</button>
+  printf '%s\n' '<!doctype html><title>Quiet</title><label>Note <input></label>
 <script>addEventListener("beforeunload", () => {})</script>' > "$out/site/quiet.html"
   printf '%s\n' '<!doctype html><title>Leave</title><p>Unsaved changes.</p><button>Note</button>
 <script>addEventListener("beforeunload", event => event.preventDefault())</script>' > "$out/site/leave.html"
@@ -2405,11 +2405,11 @@ addEventListener("beforeunload", event => { if (dirty) event.preventDefault() })
     grep -q "^browser: page $1 dialog [^n]" "$log" && fail "closing tab $1 showed a dialog"
     return 0
   }
-  # A handler that doesn't ask: the first call closes the tab, as the core closes any, out of the
-  # agent's list and out of the user's archive.
-  set -- $(open_with quiet.html button Note)
+  # A handler that doesn't ask, in a page the agent typed in, so its page is asked: the first call
+  # closes the tab, as the core closes any, out of the agent's list and out of the user's archive.
+  set -- $(open_with quiet.html textbox Note)
   quiet=$1
-  call click "{\"tab\":$quiet,\"ref\":\"$2\"}" > /dev/null
+  call type "{\"tab\":$quiet,\"ref\":\"$2\",\"text\":\"by-the-agent\"}" > /dev/null
   archived=$(sed -n 's/^browser: archive \([0-9]*\) tabs$/\1/p' "$log" | tail -1)
   closed=$(call close_tab "{\"tab\":$quiet}")
   [ "$closed" = "Closed tab $quiet." ] || fail "closing a page whose handler doesn't ask answered: $closed"
@@ -2418,54 +2418,78 @@ addEventListener("beforeunload", event => { if (dirty) event.preventDefault() })
   call list_tabs '{}' | grep -q "^. $quiet  " && fail "list_tabs listed the closed tab"
   [ "$(sed -n 's/^browser: archive \([0-9]*\) tabs$/\1/p' "$log" | tail -1)" = "$archived" ] ||
     fail "the tab the agent closed went in the user's archive"
-  # A handler that asks, in a page no one clicked or typed in, can't: it closes as the user's
-  # close of it would, without a dialog.
+  # A handler that asks, in a page no one clicked or typed in, can't, and nothing there is unsaved:
+  # the agent's own tab closes without its page asked, and without a dialog (#3654).
   set -- $(open_with leave.html button Note)
   untouched=$1
   closed=$(call close_tab "{\"tab\":$untouched}")
   [ "$closed" = "Closed tab $untouched." ] || fail "closing a page no one clicked in answered: $closed"
-  asked_page "$untouched" 0 '$'
-  # Once the agent clicked in it, it asks: the tab stays, and the answer says why. With discard it's
-  # asked again, and the agent's own tab closes without saving (#1447).
+  grep -q "browser: agent close $untouched asks its page\$" "$log" &&
+    fail "closing a page no one clicked in asked it"
+  # A click of the agent's lets the handler ask, but changes nothing a page keeps: the agent's own
+  # tab closes at the first call, without asking its page, as nothing there is unsaved (#3654).
   set -- $(open_with leave.html button Note)
-  leaving=$1
-  call click "{\"tab\":$leaving,\"ref\":\"$2\"}" > /dev/null
-  kept=$(call close_tab "{\"tab\":$leaving}")
-  case "$kept" in
-    "error: Tab $leaving stays open: its page asks before it's left"*"discard: true"*) ;;
-    *) fail "closing a page that asks before it's left answered: $kept" ;;
-  esac
-  asked_page "$leaving" 3 " refused: Tab $leaving stays open"
-  call list_tabs '{}' | grep -q "^. $leaving  " || fail "a close that kept the tab took it out"
-  closed=$(call close_tab "{\"tab\":$leaving,\"discard\":true}")
-  case "$closed" in
-    "Closed tab $leaving without saving."*) ;;
-    *) fail "discarding the agent's own tab answered: $closed" ;;
-  esac
-  [ "$(grep -c "browser: agent close $leaving asks its page\$" "$log")" = 2 ] ||
-    fail "the discard didn't ask the page first"
-  # The activity log has it as a discard, once, after the page was asked again. The permission
-  # check's "agent activity" line at the call names the tool, close_tab.
-  await_log "^browser: agent logged mcp-client discard_tab localhost\$" \
-    "the discard didn't reach the activity log"
-  asked=$(grep -n "browser: agent close $leaving asks its page\$" "$log" | tail -1 | cut -d: -f1)
-  [ "$(sed -n "$asked,\$p" "$log" | grep -c '^browser: agent logged mcp-client discard_tab localhost$')" = 1 ] ||
-    fail "the discard wasn't logged once after its page was asked"
-  call list_tabs '{}' | grep -q "^. $leaving  " && fail "list_tabs listed the discarded tab"
-  grep -q "^browser: page $leaving dialog [^n]" "$log" && fail "closing the leaving page showed a dialog"
-  # A form the agent typed in asks, as one the user typed in would.
+  clicked=$1
+  call click "{\"tab\":$clicked,\"ref\":\"$2\"}" > /dev/null
+  closed=$(call close_tab "{\"tab\":$clicked}")
+  [ "$closed" = "Closed tab $clicked." ] || fail "closing a page the agent only clicked in answered: $closed"
+  grep -q "browser: agent close $clicked asks its page\$" "$log" &&
+    fail "closing a page the agent only clicked in asked it"
+  await_log "^browser: agent logged mcp-client close_tab localhost\$" \
+    "the close of a page the agent only clicked in wasn't logged"
+  grep -q "^browser: page $clicked dialog [^n]" "$log" && fail "closing the clicked page showed a dialog"
+  # A form the agent typed in asks, as one the user typed in would: the tab stays, and the answer
+  # names the field. With discard it's asked again, and the agent's own tab closes without saving
+  # (#1447).
   set -- $(open_with form.html textbox Note)
   form=$1
   call type "{\"tab\":$form,\"ref\":\"$2\",\"text\":\"by-the-agent\"}" > /dev/null
   kept=$(call close_tab "{\"tab\":$form}")
   case "$kept" in
-    "error: Tab $form stays open: its page asks before it's left"*) ;;
+    "error: Tab $form stays open: its page asks before it's left, and you typed into textbox “Note” there."*"discard: true"*) ;;
     *) fail "closing a form the agent typed in answered: $kept" ;;
   esac
   asked_page "$form" 3 " refused: Tab $form stays open"
+  call list_tabs '{}' | grep -q "^. $form  " || fail "a close that kept the tab took it out"
   closed=$(call close_tab "{\"tab\":$form,\"discard\":true}")
   [ "$closed" = "Closed tab $form without saving." ] || fail "discarding the form answered: $closed"
+  [ "$(grep -c "browser: agent close $form asks its page\$" "$log")" = 2 ] ||
+    fail "the discard didn't ask the page first"
+  # The activity log has it as a discard, once, after the page was asked again. The permission
+  # check's "agent activity" line at the call names the tool, close_tab.
+  await_log "^browser: agent logged mcp-client discard_tab localhost\$" \
+    "the discard didn't reach the activity log"
+  asked=$(grep -n "browser: agent close $form asks its page\$" "$log" | tail -1 | cut -d: -f1)
+  [ "$(sed -n "$asked,\$p" "$log" | grep -c '^browser: agent logged mcp-client discard_tab localhost$')" = 1 ] ||
+    fail "the discard wasn't logged once after its page was asked"
+  call list_tabs '{}' | grep -q "^. $form  " && fail "list_tabs listed the discarded tab"
   grep -q "^browser: page $form dialog [^n]" "$log" && fail "closing the form showed a dialog"
+  # A tab the user had keeps a close for its page's answer, though the agent only clicked there:
+  # the user types only in a tab they hold, so what's unsaved may be theirs (#3654). It's handed
+  # to them and back with the card's Hand Back.
+  set -- $(open_with leave.html button Note)
+  held=$1
+  call click "{\"tab\":$held,\"ref\":\"$2\"}" > /dev/null
+  cards=$(grep -c '^browser: agent question [0-9]* at ' "$log" || true)
+  request hand_off "{\"tab\":$held,\"reason\":\"Look over the note\"}" >&4
+  await_log "^browser: agent mcp-client hands off $held: Look over the note\$" \
+    "hand_off didn't hand tab $held to the user"
+  await_more '^browser: agent question [0-9]* at ' "$cards" || fail "the note's handoff wasn't drawn"
+  q=$(grep '^browser: agent question [0-9]* at ' "$log" | tail -1 | cut -d' ' -f4)
+  read -r qx qy qw qh <<CARD
+$(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
+CARD
+  # Hand Back, at the left of the card's buttons.
+  send click $((qx + 30)) $((qy + qh - 26))
+  await_log "^browser: agent mcp-client handed back $held\$" "Hand Back didn't hand tab $held back"
+  next_answer > /dev/null || fail "the browser didn't answer the note's hand_off"
+  kept=$(call close_tab "{\"tab\":$held}")
+  case "$kept" in
+    "error: Tab $held stays open: its page asks before it's left, and the user had the tab, so what's unsaved may be theirs."*) ;;
+    *) fail "closing a tab the user had answered: $kept" ;;
+  esac
+  closed=$(call close_tab "{\"tab\":$held,\"discard\":true}")
+  [ "$closed" = "Closed tab $held without saving." ] || fail "discarding the tab the user had answered: $closed"
   # A page's own dialog in the agent's tab is the user's to answer, and no tool answers it (#3536).
   # A call on the tab answers at once, naming the dialog, and reaches no page, and the activity log
   # says the dialog paused the agent, without its words. close_tab closes the tab without asking
@@ -3222,7 +3246,7 @@ quit
 trap cleanup EXIT
 rm -f "$agents_file" "$out/mcp-in" "$out/mcp-out"
 if [ "$driven" = 1 ]; then
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), the tabs its page opens kept in its Space, behind$opened_said, without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, pins, unpins and removes its own tab but not the user's, sends requests to its tab's site with the tab's session it never sees, a change asking each time, refused unasked without its sentence, its question on screen as the log draws it ($follows% of its place changed) with the sentence cut at a word over the method's facts, a delete's too, and the whole request beside it until Escape, unanswered, each opening in Settings › Agents to the agent's sentence, where it went and what it sent or didn't, asks a page's beforeunload handler first, with no dialog, closing one that doesn't ask at the first call and keeping one the agent clicked or typed in that asks until it discards it, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, opens its tabs muted, is refused a tab the user took over with a press in its page until they hand it back and Keep answers its ask, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, its download asks first and answers with the file, a refused one leaving none, a bank's site asks first until Always Allow, which Settings › Agents lists$needs_said, and off takes the socket away; an action waits for its element and its page to settle ($settle), a tab's id from before a relaunch is refused as such, and a launch after the window quit in its Space shows the page it opens; a screenshot of a tab just opened out of sight answers ($fresh_picture), and with the UI holding the keyboard with its picture"
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), the tabs its page opens kept in its Space, behind$opened_said, without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, pins, unpins and removes its own tab but not the user's, sends requests to its tab's site with the tab's session it never sees, a change asking each time, refused unasked without its sentence, its question on screen as the log draws it ($follows% of its place changed) with the sentence cut at a word over the method's facts, a delete's too, and the whole request beside it until Escape, unanswered, each opening in Settings › Agents to the agent's sentence, where it went and what it sent or didn't, asks a page's beforeunload handler first, with no dialog, closing one that doesn't ask, and one the agent only read or clicked in, at the first call, and keeping one the agent typed in or the user had that asks until it discards it, its answer saying what may be unsaved, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, opens its tabs muted, is refused a tab the user took over with a press in its page until they hand it back and Keep answers its ask, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, its download asks first and answers with the file, a refused one leaving none, a bank's site asks first until Always Allow, which Settings › Agents lists$needs_said, and off takes the socket away; an action waits for its element and its page to settle ($settle), a tab's id from before a relaunch is refused as such, and a launch after the window quit in its Space shows the page it opens; a screenshot of a tab just opened out of sight answers ($fresh_picture), and with the UI holding the keyboard with its picture"
 else
   echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own and is refused the user's tab, is answered that a link to an app opens nothing, its tab staying on its page, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), and its actions wait for their element and their page to settle ($settle), and the tabs its page opens are kept in its Space, behind$opened_said. A tab's id from before a relaunch is refused as such. skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
 fi

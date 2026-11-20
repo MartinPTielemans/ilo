@@ -410,6 +410,9 @@ struct Act {
     download: u64,
     /// The HTTP requests it sends (request).
     requests: Vec<request::Request>,
+    /// What it changes in the page that may stay unsaved, as a close it keeps says it: "typed
+    /// into textbox “Note”", or empty.
+    edits: String,
     /// What it does that asked first, once allowed, for its session's receipt.
     did: Option<Did>,
     reply: mpsc::Sender<ToolResult>,
@@ -642,6 +645,10 @@ pub struct Agents {
     /// The tabs agents opened, which one may close past its page's unsaved changes: in any other,
     /// they may be the user's.
     opened: HashSet<u64>,
+    /// What may be unsaved in each tab: what its agent changed, and whether the user held it. A
+    /// tab of the agent's with neither closes without asking its page, as only a click or a read
+    /// of the agent's woke its handler (#3654).
+    edited: HashMap<u64, Edited>,
     /// The closes waiting on their page's answer, by tab: one answer for each tab.
     closing: HashMap<u64, Vec<Closing>>,
     /// The actions waiting on the core, by request.
@@ -751,6 +758,37 @@ const BUSY: &str = "The page was still busy after 5 s, so it may change yet.";
 /// keeps one, while what it shows held still: no reason to wait for it (#2355).
 const REQUESTS: &str = "The page held still, with requests it made still open after 5 s.";
 
+/// What may be unsaved in a tab, which a close of it keeps for: what its agent changed there, and
+/// whether the user held it, as they type only in a tab they hold.
+#[derive(Default)]
+struct Edited {
+    changes: Vec<String>,
+    user: bool,
+}
+
+impl Edited {
+    /// The most changes a kept close names.
+    const NAMED: usize = 3;
+
+    /// Why a close of the tab whose page asks keeps it: "you typed into textbox “Note” there".
+    fn why(&self) -> String {
+        let mut named: Vec<String> = self.changes.iter().take(Self::NAMED).cloned().collect();
+        if self.changes.len() > Self::NAMED {
+            named.push(format!("{} more", self.changes.len() - Self::NAMED));
+        }
+        let changed = match named.split_last() {
+            None => String::new(),
+            Some((last, [])) => format!("you {last} there"),
+            Some((last, rest)) => format!("you {} and {last} there", rest.join(", ")),
+        };
+        match (changed.is_empty(), self.user) {
+            (true, true) => "the user had the tab, so what's unsaved may be theirs".into(),
+            (false, true) => format!("{changed}, and the user had the tab"),
+            (_, false) => changed,
+        }
+    }
+}
+
 /// A tab the user holds from its agent: handed to them, or taken over.
 struct Held {
     agent: String,
@@ -823,6 +861,7 @@ impl Agents {
             next_request: 1,
             current: HashMap::new(),
             opened: HashSet::new(),
+            edited: HashMap::new(),
             closing: HashMap::new(),
             acting: HashMap::new(),
             sending: HashMap::new(),
@@ -1195,6 +1234,7 @@ impl Agents {
                 reply: None,
                 timer: None,
             };
+            self.edited.entry(tab).or_default().user = true;
             self.held.insert(tab, held);
             self.carry(tab, held::Event::Passkey, life, actions, cx);
         }
@@ -1345,6 +1385,7 @@ impl Agents {
                     download: 0,
                     field: String::new(),
                     requests: Vec::new(),
+                    edits: String::new(),
                     reply,
                 };
                 if !is_web(&act.url) {
@@ -1460,6 +1501,7 @@ impl Agents {
                     reply: Some(reply),
                     timer: None,
                 };
+                self.edited.entry(tab).or_default().user = true;
                 self.held.insert(tab, held);
                 self.carry(tab, held::Event::HandOff, life, actions, cx);
             }
@@ -1675,6 +1717,7 @@ impl Agents {
                     field: String::new(),
                     download: 0,
                     requests,
+                    edits: String::new(),
                     did: None,
                     reply,
                 };
@@ -2048,6 +2091,7 @@ impl Agents {
             reply: None,
             timer: None,
         };
+        self.edited.entry(tab).or_default().user = true;
         self.held.insert(tab, held);
         // The core ends the agent's session there, which logs it.
         self.carry(tab, held::Event::TakeOver, life, actions, cx);
@@ -2080,6 +2124,7 @@ impl Agents {
     /// The core closed `tab` (tabs::tab_closed). A hold on it ends.
     pub fn tab_closed(&mut self, tab: u64, cx: &mut Context<Self>) {
         self.dialogs.remove(&tab);
+        self.edited.remove(&tab);
         self.let_go(tab, held::Event::Closed, cx);
     }
 
@@ -2316,6 +2361,11 @@ impl Agents {
             true => element.role.clone(),
             false => format!("“{}”", page::clip(&element.name, 60)),
         };
+        // A field as a close it keeps names it: "textbox “Note”".
+        let field = |element: &page::Element| match element.name.is_empty() {
+            true => element.role.clone(),
+            false => format!("{} {}", element.role, label(element)),
+        };
         let mut act = Act {
             agent: agent.into(),
             call,
@@ -2331,6 +2381,7 @@ impl Agents {
             what: String::new(),
             download: 0,
             requests: Vec::new(),
+            edits: String::new(),
             did: None,
             reply,
         };
@@ -2382,6 +2433,22 @@ impl Agents {
                 };
                 act.action = "click";
                 act.page = PageAction::Click;
+                // A click changes what's unsaved only where it ticks or chooses, as a custom
+                // listbox's option is a select's choice by another name; any other's is a link or
+                // a button's, which a page's own handler sends or keeps itself.
+                if matches!(
+                    element.role.as_str(),
+                    "checkbox"
+                        | "radio"
+                        | "switch"
+                        | "menuitemcheckbox"
+                        | "menuitemradio"
+                        | "option"
+                        | "slider"
+                        | "spinbutton"
+                ) {
+                    act.edits = format!("clicked {}", field(element));
+                }
                 act.note = format!("Clicked {} {}.", element.role, label(element));
                 act.what = format!("click {} on {host}", label(element));
                 risk = page::risk(&host, &element.name);
@@ -2394,6 +2461,7 @@ impl Agents {
                     return;
                 };
                 act.action = "type";
+                act.edits = format!("typed into {}", field(element));
                 if element.password {
                     return self.refuse(act, &host, PASSWORDS, cx);
                 }
@@ -2425,6 +2493,7 @@ impl Agents {
                 };
                 act.action = "select_option";
                 act.page = PageAction::Select;
+                act.edits = format!("chose in {}", field(element));
                 act.field = match element.name.is_empty() {
                     true => element.role.clone(),
                     false => format!("{} {}", element.role, label(element)),
@@ -2449,6 +2518,10 @@ impl Agents {
                 }
                 act.action = "press_key";
                 act.page = PageAction::Key;
+                // Keys that only move the keyboard or the page change nothing a page keeps.
+                if !matches!(key.as_str(), "Tab" | "Escape" | "PageUp" | "PageDown") {
+                    act.edits = format!("pressed {key}");
+                }
                 act.note = format!("Pressed {key}.");
                 act.what = format!("press Enter to send on {host}");
                 risk = (key == "Enter")
@@ -2805,6 +2878,7 @@ impl Agents {
             mut note,
             show,
             field,
+            edits,
             did,
             reply,
             ..
@@ -2844,6 +2918,13 @@ impl Agents {
             if action == "navigate" && !self.browser.navigate(&agent, tab, &url, cx) {
                 _ = reply.send(ToolResult::error("The tab couldn't go there."));
                 return;
+            }
+            // Sent, it may have changed the page, whatever its answer says.
+            if !edits.is_empty() {
+                let changes = &mut self.edited.entry(tab).or_default().changes;
+                if !changes.contains(&edits) {
+                    changes.push(edits);
+                }
             }
         }
         let request = self.next_request;
@@ -2921,6 +3002,7 @@ impl Agents {
             field: String::new(),
             download: id,
             requests: Vec::new(),
+            edits: String::new(),
             did: None,
             reply,
         };
@@ -3399,9 +3481,14 @@ impl Agents {
         // does one whose page shows its dialog, which can't answer before it's gone (#3536).
         let asked = discard && self.closing.contains_key(&tab);
         let stuck = self.dialogs.contains_key(&tab);
-        if self.opened.contains(&tab) && (asked || stuck) {
+        // Nor does one where nothing may be unsaved: the agent changed nothing there, and the user
+        // never held it. Its page asking is a click's or a read's doing, and keeping it would teach
+        // the agent to discard everywhere (#3654).
+        let untouched = !self.edited.contains_key(&tab);
+        if self.opened.contains(&tab) && (asked || stuck || untouched) {
             let closed = self.browser.close_tab(agent, tab, true, cx);
-            return self.closed(agent, call, tab, discard, closed, &site, reply, cx);
+            let discarded = discard && (asked || stuck);
+            return self.closed(agent, call, tab, discarded, closed, &site, reply, cx);
         }
         let closing = Closing {
             agent: agent.into(),
@@ -3484,25 +3571,30 @@ impl Agents {
         reply: mpsc::Sender<ToolResult>,
         cx: &mut Context<Self>,
     ) {
+        const DIALOG: &str =
+            "its page shows its own dialog, so it can't be asked whether it has unsaved changes";
+        const ASKS: &str = "its page asks before it's left, as it may have unsaved changes";
+        let dialog = self.dialogs.contains_key(&tab);
+        let once = match self.opened.contains(&tab) {
+            true => "",
+            false => ", once the user says yes",
+        };
+        let kept = |why: String| {
+            format!(
+                "Tab {tab} stays open: {why}. close_tab with discard: true closes it without saving{once}."
+            )
+        };
         let answer = match closed {
             Closed::Closed if discarded => Ok(format!("Closed tab {tab} without saving.")),
             Closed::Closed => Ok(format!("Closed tab {tab}.")),
             Closed::Pinned => Err(format!("Tab {tab} stays open: the user pinned it.")),
-            Closed::Asks => Err(format!(
-                "Tab {tab} stays open: {}. close_tab with discard: true closes it without \
-                 saving{}.",
-                match self.dialogs.contains_key(&tab) {
-                    true =>
-                        "its page shows its own dialog, so it can't be asked whether it has \
-                             unsaved changes",
-                    false => "its page asks before it's left, as it may have unsaved changes",
-                },
-                if self.opened.contains(&tab) {
-                    ""
-                } else {
-                    ", once the user says yes"
+            Closed::Asks => Err(kept(match (dialog, self.edited.get(&tab)) {
+                (true, _) => DIALOG.to_string(),
+                (false, Some(edited)) if self.opened.contains(&tab) => {
+                    format!("its page asks before it's left, and {}", edited.why())
                 }
-            )),
+                (false, _) => ASKS.into(),
+            })),
             Closed::Refused => Err("The tab isn't in the agent's own Space.".into()),
             Closed::Stays | Closed::Pending => Err(format!(
                 "Tab {tab} stays open: before its page answered, it went to another page, was \
@@ -3514,12 +3606,14 @@ impl Agents {
         } else {
             "close_tab"
         };
-        self.note(
-            agent,
-            logged,
-            site,
-            answer.as_ref().err().map_or("", String::as_str),
-        );
+        // The answer names what may be unsaved, for the agent. The log, drawn in Settings and the
+        // Library and kept 30 days, keeps no page text nor what else the agent did there (#2326):
+        // a kept close is logged with the sentence that names neither.
+        let refused = match closed {
+            Closed::Asks => kept(if dialog { DIALOG } else { ASKS }.into()),
+            _ => answer.as_ref().err().cloned().unwrap_or_default(),
+        };
+        self.note(agent, logged, site, &refused);
         if closed == Closed::Closed {
             self.opened.remove(&tab);
         }
@@ -3837,6 +3931,7 @@ fn act_of(agent: &str, call: u64, tab: u64, reply: mpsc::Sender<ToolResult>) -> 
         field: String::new(),
         download: 0,
         requests: Vec::new(),
+        edits: String::new(),
         did: None,
         reply,
     }
