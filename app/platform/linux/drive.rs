@@ -136,9 +136,55 @@ const G_PRIORITY_LOW: c_int = 300;
 /// early while frames draw without a break.
 const IDLE_WAIT: c_uint = 250;
 
+/// The last command the main thread started, and the last it reported done, for `watch_stalls`.
+static STARTED: AtomicU64 = AtomicU64::new(0);
+static FINISHED: AtomicU64 = AtomicU64::new(0);
+
+/// Says, from a thread of its own, when a command has gone 10 s without being done, and what the
+/// main thread is waiting in then: one that's blocked can't say it itself, and a check's red
+/// otherwise ends at the command's own line, with nothing to tell a blocked loop from a slow
+/// answer (#3624).
+fn watch_stalls() {
+    std::thread::spawn(|| {
+        let (mut seen, mut since, mut said) = (0, 0, 0);
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+            let started = STARTED.load(Ordering::Relaxed);
+            if started == 0 || FINISHED.load(Ordering::Relaxed) >= started {
+                continue;
+            }
+            if started != seen {
+                (seen, since) = (started, 0);
+            }
+            since += 1;
+            if since >= 10 && said != started {
+                said = started;
+                let main = std::process::id();
+                let read = |what| {
+                    std::fs::read_to_string(format!("/proc/self/task/{main}/{what}"))
+                        .map(|text| text.trim().to_owned())
+                        .unwrap_or_default()
+                };
+                // The state is the letter after the name's closing bracket.
+                let stat = read("stat");
+                let state = stat
+                    .rsplit(") ")
+                    .next()
+                    .and_then(|rest| rest.split(' ').next());
+                log!(
+                    "browser: drive {started} not done after 10 s, main thread {} in {}",
+                    state.unwrap_or("?"),
+                    read("wchan")
+                );
+            }
+        }
+    });
+}
+
 /// Starts reading commands from stdin.
 pub fn start() {
     crate::drive_wayland::start();
+    watch_stalls();
     std::thread::spawn(|| {
         let mut number = 0;
         for line in std::io::stdin().lock().lines() {
@@ -153,6 +199,7 @@ pub fn start() {
                     release_held_modifiers();
                 }
                 log!("browser: drive {n}: {line}");
+                STARTED.store(n, Ordering::Relaxed);
                 // It's done once the title has come, which it reports itself.
                 if let Some(text) = line.strip_prefix("title ").filter(|text| !text.is_empty()) {
                     await_key_title(n, text.to_owned(), 100);
@@ -313,6 +360,7 @@ fn settle(n: u64) {
                 active as u8
             );
             UNDONE.with_borrow_mut(|undone| undone.remove(&n));
+            FINISHED.fetch_max(n, Ordering::Relaxed);
             let ready = WAITING.with_borrow_mut(|waiting| {
                 let first = UNDONE.with_borrow(|undone| undone.first().copied());
                 let (ready, still) = std::mem::take(waiting)

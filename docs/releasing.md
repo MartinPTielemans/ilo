@@ -124,6 +124,17 @@ Every other release in this repository, such as `updates` and `nightly`, is made
 
 The Mac and Windows builds carry the key's public half from `app/branding/update-key`, or from an `UPDATE_PUBLIC_KEY` secret, which overrides the file when it's set.
 
+The Mac's Developer ID provisioning profile isn't a secret: every release carries it, so it's committed as `app/entitlements/developer-id.provisionprofile`, and a release never asks Apple's API for it. `tools/check-profile.sh`, which the Mac job runs before the build and `tools/release.sh` before signing, refuses a profile that:
+- doesn't list the certificate in `MAC_CERTIFICATE_P12`;
+- isn't for the App ID `938WK3V9K9.app.ilo.browser`;
+- doesn't grant every key in `app/entitlements/release.plist`;
+- expires within 30 days, by its own date;
+- or lists a certificate that has expired.
+
+A certificate within 60 days of its end only warns: a release signed in its last days is as good as any other, and a security release mustn't wait on a visit to the portal. After `tools/release.sh` signs the app, and again on the DMG in the Mac job, `tools/start-signed.sh` starts the signed app as far as macOS's check of its profile and keys, where a mismatch stops it, and the release stops with it.
+
+The profile's own date is 18 years out, but the certificate it lists expires on 2027-02-01, and a new certificate needs a new profile. So does a new key in `release.plist`, such as the passkey entitlement once Apple grants it. The release's API key can't make profiles. The owner makes one in the developer portal (Profiles › Distribution › Developer ID, App ID `app.ilo.browser`, the current certificate), downloads it, and commits it in place of the file.
+
 **Crash reports' symbols** go to the collector `app/branding/crash-reports` names only with the secret `SENTRY_AUTH_TOKEN`, an organization auth token that may upload debug files, and the variables `SENTRY_URL`, `SENTRY_ORG` and `SENTRY_PROJECT`: for ilo's, `https://de.sentry.io` (Sentry's EU region), `ilo-rg` and `ilo`. Each OS's job uploads its own (`tools/symbols.sh`), and `app/build.sh prod` uploads the Mac's with the same four in its environment, with the engine's dSYMs the Mac job fetches first (`engine/fetch.sh symbols`). An engine released without them makes a release with a warning, and Mac symbols (`mac-symbols.yml`) uploads them for that version once its release has them. Without the token the packages are still built, and say no symbols were uploaded.
 
 **Linux.** Installs from GitHub update from ilo's Flatpak repository, a static OSTree repository in a Cloudflare R2 bucket (`tools/flatpak-repo.sh`). The bundle and `ilo.flatpakref` name it and carry its public key. The Linux files are built only with these, and without them nothing goes to the Flatpak repository and the draft isn't made:

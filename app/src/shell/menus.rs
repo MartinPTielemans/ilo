@@ -175,16 +175,25 @@ impl MenuEntry {
 
 /// What a profile's Delete confirmation says goes with it, counting the `favorites` its tabs hold.
 /// A profile with no Space can hold favorites no Space shows (#1524). Under Every Space the other
-/// profiles keep those sites, so none of them goes.
-pub fn profile_goes_with(scope: FavoritesScope, favorites: usize) -> String {
-    match if scope == FavoritesScope::Every {
+/// profiles keep those sites, so none of them goes. Where a profile can keep `passkeys` on this
+/// computer they go too, and nothing gets one back, so it says so for every profile: whether this
+/// one has any is the Keychain's to answer.
+pub fn profile_goes_with(scope: FavoritesScope, favorites: usize, passkeys: bool) -> String {
+    let favorites = if scope == FavoritesScope::Every {
         0
     } else {
         favorites
-    } {
+    };
+    let kept = if passkeys {
+        "history, cookies, logins, passkeys"
+    } else {
+        "history, cookies, logins"
+    };
+    match favorites {
+        0 if passkeys => "Its history, cookies, logins and passkeys go with it.".into(),
         0 => "Its history, cookies and logins go with it.".into(),
-        1 => "Its history, cookies, logins and 1 favorite go with it.".into(),
-        count => format!("Its history, cookies, logins and {count} favorites go with it."),
+        1 => format!("Its {kept} and 1 favorite go with it."),
+        count => format!("Its {kept} and {count} favorites go with it."),
     }
 }
 
@@ -666,7 +675,11 @@ impl Shell {
             .count();
         self.browser.confirm(
             format!("Delete “{name}”?"),
-            profile_goes_with(self.browser.favorites_scope(cx), favorites),
+            profile_goes_with(
+                self.browser.favorites_scope(cx),
+                favorites,
+                self.browser.keeps_passkeys(),
+            ),
             "Delete",
             Box::new(move |cx| {
                 shell
@@ -1994,6 +2007,44 @@ mod tests {
         // Under Each Space a favorite is its Space's, so no profile holds one.
         shell.update(cx, |shell, cx| shell.set_favorites(vec![(21, 1)], cx));
         assert_eq!(says(FavoritesScope::Space, "Work", cx), kept);
+    }
+
+    /// Where a profile can keep passkeys on this computer, which nothing gets back once its
+    /// profile is deleted, its Delete confirmation names them with the rest; where it can't, the
+    /// confirmation doesn't.
+    #[gpui::test]
+    fn a_profile_that_can_keep_passkeys_says_they_go_with_it(cx: &mut TestAppContext) {
+        let (shell, host) = shell_with(cx, &[], &[10], Folders::default());
+        shell.update(cx, |shell, cx| {
+            shell.set_profiles(vec![(0, "Default".into()), (5, "Work".into())], cx);
+            shell.set_favorites(vec![(21, 5)], cx);
+        });
+        let says = |scope, passkeys, cx: &mut TestAppContext| {
+            host.favorites_scope.set(scope);
+            host.passkeys.set(passkeys);
+            shell.update(cx, |shell, cx| {
+                shell.space_menu(1, point(px(100.), px(200.)), cx)
+            });
+            cx.update(|cx| host.choose("Delete “Work”", cx));
+            let (_, detail, _) = host.confirming.take().expect("Delete to ask first");
+            detail
+        };
+        assert_eq!(
+            says(FavoritesScope::Profile, true, cx),
+            "Its history, cookies, logins, passkeys and 1 favorite go with it."
+        );
+        assert_eq!(
+            says(FavoritesScope::Every, true, cx),
+            "Its history, cookies, logins and passkeys go with it."
+        );
+        assert_eq!(
+            says(FavoritesScope::Profile, false, cx),
+            "Its history, cookies, logins and 1 favorite go with it."
+        );
+        assert_eq!(
+            says(FavoritesScope::Every, false, cx),
+            "Its history, cookies and logins go with it."
+        );
     }
 
     /// Settings › Profiles says why a profile has no Delete: what keeps it, and what the user does

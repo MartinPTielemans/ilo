@@ -1182,4 +1182,100 @@ mod tests {
             "escape left it open"
         );
     }
+
+    /// Pressed and let go, as a keyboard sends it: a button clicks on the release.
+    fn press(key: &'static str, cx: &mut VisualTestContext) {
+        cx.simulate_keystrokes(key);
+        let keystroke = gpui::Keystroke::parse(key).unwrap();
+        cx.update(|window, cx| {
+            use gpui::InputEvent as _;
+            window.dispatch_event(gpui::KeyUpEvent { keystroke }.to_platform_input(), cx);
+        });
+        cx.run_until_parked();
+    }
+
+    /// Whether a screen reader finds a button named `name`.
+    fn has_button(name: &str, cx: &mut VisualTestContext) -> bool {
+        let tree = cx.a11y_tree().expect("GPUI built a tree");
+        (tree.nodes.iter())
+            .any(|(_, node)| node.role() == Role::Button && node.label().as_deref() == Some(name))
+    }
+
+    /// With no Boards, the list offers New Board (#3575): Tab from the search field reaches it,
+    /// read as "New Board" without its key, and Space, Return or a click asks the core for a Board,
+    /// as New Board's key does, closing the Library so the new row's name field takes the keyboard.
+    #[gpui::test]
+    fn the_empty_boards_list_s_new_board_makes_one_from_the_keys(cx: &mut TestAppContext) {
+        let (shell, host, cx) = window(Section::Boards, cx);
+        // A click leaves the keyboard in the search field, where the Library put it.
+        for (made, key) in [(1, "space"), (2, "enter"), (3, "click")] {
+            run(&shell, Command::ViewLibrary, cx);
+            assert_eq!(keyed(cx), (Role::TextInput, "Search Boards".into()));
+            if key == "click" {
+                let drawn = shell.read_with(cx, |shell, _| {
+                    shell
+                        .library
+                        .as_ref()
+                        .and_then(|library| library.new_board_drawn.get())
+                });
+                let at = drawn.expect("New Board wasn't drawn").center();
+                cx.simulate_click(at, gpui::Modifiers::none());
+                cx.run_until_parked();
+            } else {
+                cx.simulate_keystrokes("tab");
+                assert_eq!(keyed(cx), (Role::Button, "New Board".into()));
+                press(key, cx);
+            }
+            shell.update(cx, |shell, cx| {
+                settle(shell);
+                cx.notify();
+            });
+            cx.run_until_parked();
+            assert_eq!(host.boards.borrow().len(), made, "{key} made no Board");
+            assert!(
+                !shell.read_with(cx, |shell, _| shell.library_open),
+                "the Library stayed over the new Board's name, after {key}"
+            );
+            let named = cx.update(|window, cx| {
+                let shell = shell.read(cx);
+                let renaming = shell
+                    .renaming
+                    .as_ref()
+                    .expect("no field for the Board's name");
+                assert!(matches!(renaming.naming, crate::shell::Naming::Tab(_)));
+                gpui::Focusable::focus_handle(renaming.name.read(cx), cx).is_focused(window)
+            });
+            assert!(
+                named,
+                "the Board's name field hasn't the keyboard, after {key}"
+            );
+            shell.update(cx, |shell, _| shell.renaming = None);
+        }
+    }
+
+    /// A search that matches no Board keeps "No Boards match." and offers no New Board: the list
+    /// isn't empty, the search is.
+    #[gpui::test]
+    fn a_search_matching_no_board_offers_no_new_board(cx: &mut TestAppContext) {
+        let (shell, host, cx) = window(Section::Boards, cx);
+        run(&shell, Command::ViewLibrary, cx);
+        assert!(
+            has_button("New Board", cx),
+            "the empty list offers no New Board"
+        );
+        cx.simulate_input("porch");
+        cx.run_until_parked();
+        assert!(
+            !has_button("New Board", cx),
+            "a search matching nothing offered New Board"
+        );
+        let line = shell.read_with(cx, |shell, _| {
+            let query = &shell.library.as_ref().unwrap().query;
+            shell.empty_line(Section::Boards, query.is_empty())
+        });
+        assert_eq!(line, "No Boards match.");
+        cx.simulate_keystrokes("tab");
+        assert_ne!(keyed(cx), (Role::Button, "New Board".into()));
+        assert!(host.boards.borrow().is_empty());
+    }
 }
