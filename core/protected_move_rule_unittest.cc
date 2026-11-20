@@ -100,7 +100,7 @@ constexpr int64_t kPageAfter = 8;
 // not a move (clear.sh's drm.html, #3593).
 TEST(ProtectedMoveRuleTest, APressOnThePageBeforeGetsTheNote) {
   ProtectedAsk ask = Ask();
-  PagePresses presses;
+  DocumentPresses presses;
   presses.Users(kPageBefore, ask.now - base::Seconds(1), std::nullopt);
   presses.Fill(kPageAfter, ask);
   EXPECT_EQ(AnswerProtectedAsk(ask), Answer::kNote);
@@ -112,7 +112,7 @@ TEST(ProtectedMoveRuleTest, APressOnThePageBeforeGetsTheNote) {
 // So too an agent's: it never blocks the user's press on the page that asks.
 TEST(ProtectedMoveRuleTest, AnAgentsInputOnThePageBeforeDoesntCount) {
   ProtectedAsk ask = Ask();
-  PagePresses presses;
+  DocumentPresses presses;
   presses.Users(kPageAfter, ask.now - base::Seconds(2), std::nullopt);
   presses.Agents(kPageBefore, ask.now - base::Seconds(1));
   presses.Fill(kPageAfter, ask);
@@ -122,7 +122,7 @@ TEST(ProtectedMoveRuleTest, AnAgentsInputOnThePageBeforeDoesntCount) {
 TEST(ProtectedMoveRuleTest, AKeyTheBrowserRanGivesThePageNoPress) {
   const base::TimeTicks key = base::TimeTicks() + base::Minutes(59);
   ProtectedAsk ask = Ask();
-  PagePresses presses;
+  DocumentPresses presses;
   // A key the page left that the browser ran, such as ⌘L, on the page that asks.
   presses.Users(kPageAfter, ask.now - base::Seconds(1), key);
   presses.TakenBack(key);

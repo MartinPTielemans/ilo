@@ -52,7 +52,7 @@ enum class ProtectedAnswer {
 // document it reached, known by its page's UKM source id, which a main-frame document change gives
 // anew. A press is its document's alone, as Chromium's activation is: the page a tab goes to next
 // never counts one made on the page before, as ⌘L's on the page an address is typed over (#3593).
-class PagePresses {
+class DocumentPresses {
  public:
   // The user's press, a button, finger or key going down, at |at| on |document|'s page. A key's
   // |key| is its event's time stamp, which tells it when the page leaves it (TakenBack).

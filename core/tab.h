@@ -280,8 +280,8 @@ class Tab : public content::WebContentsObserver,
   // The user's last press that reached the page, a button, finger or key going down, and an
   // agent's last input, which comes through DevTools, each with its document. A page asking for
   // protected media moves only on the user's, made on it (protected_move_rule.h).
-  const PagePresses& presses() const { return presses_; }
-  // The page left the key stamped |key| and the browser ran it (PagePresses::TakenBack).
+  const DocumentPresses& presses() const { return presses_; }
+  // The page left the key stamped |key| and the browser ran it (DocumentPresses::TakenBack).
   void PageKeyTakenBack(base::TimeTicks key) { presses_.TakenBack(key); }
 
   // Whether the tab was opened as a link preview (Window::OpenPreview), which it stays until a
@@ -475,7 +475,7 @@ class Tab : public content::WebContentsObserver,
   gfx::PointF last_click_;
   bool last_press_held_command_ = false;
   base::TimeTicks last_press_at_;
-  PagePresses presses_;
+  DocumentPresses presses_;
   bool opened_as_preview_ = false;
   bool last_press_held_alt_ = false;
   // Whether the app was last told the page is full screen.
