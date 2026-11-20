@@ -253,8 +253,8 @@ void StripTint(CALayer* layer) {
 @property(weak) NSView* surfaceView;
 // The surface's, in its log lines.
 @property(copy) NSString* name;
-// The view the UI draws in, in the window the plate is over, and whether it has heard the pointer
-// leave for the plate since it came onto it.
+// GPUI's view in the window the plate is over, and whether it has heard the pointer leave for
+// the plate since it came onto it.
 @property(weak) NSView* parentView;
 @property BOOL parentLeft;
 @end
@@ -394,6 +394,9 @@ void StripTint(CALayer* layer) {
     return;
   }
   plate.parentLeft = YES;
+  // A log can then say whether the window heard it, as its UI's hover lines alone can't.
+  fprintf(stderr, "browser: plate window %s told the window the pointer left\n",
+          plate.name.UTF8String);
   [view mouseMoved:[NSEvent mouseEventWithType:NSEventTypeMouseMoved
                                       location:NSMakePoint(-1, NSHeight(parent.frame) + 1)
                                  modifierFlags:event.modifierFlags
@@ -1021,7 +1024,14 @@ void PlacePlateWindow(HostPlateWindow* plate, NSWindow* parent, NSRect rect) {
   if (added) {
     [plate.parentWindow removeChildWindow:plate];
     Browser* browser = BrowserOf(parent);
-    plate.parentView = browser ? browser->ui_view : nil;
+    plate.parentView = nil;
+    // GPUI's own view, which the GPUI patch puts inside the UI's: the UI's view is a container,
+    // and a move sent to it goes up the responder chain rather than to GPUI.
+    for (NSView* each in browser ? browser->ui_view.subviews : nil) {
+      if ([each isKindOfClass:NSClassFromString(@"GPUIView")]) {
+        plate.parentView = each;
+      }
+    }
     plate.parentLeft = NO;
     AddOver(parent, plate);
     [plate orderWindow:NSWindowAbove relativeTo:surface.windowNumber];
