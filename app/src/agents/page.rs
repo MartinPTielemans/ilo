@@ -825,6 +825,18 @@ pub fn risk(host: &str, label: &str) -> Option<&'static str> {
 /// Roles a key types in, where Space is a space and Enter submits the form.
 const FIELDS: &[&str] = &["textbox", "searchbox", "combobox", "spinbutton"];
 
+/// Roles Enter clicks, as Chromium names them: a summary is a "DisclosureTriangle". Enter on any
+/// other control, such as a checkbox, radio or slider, submits its form as Enter in a field does.
+const ENTER_CLICKS: &[&str] = &[
+    "button",
+    "link",
+    "menuitem",
+    "menuitemcheckbox",
+    "menuitemradio",
+    "tab",
+    "DisclosureTriangle",
+];
+
 /// A key press that asks first, as a click on `control` would, for `why`. `surely` when the press
 /// is a click on it, and not when it's one of the controls the press may click.
 #[derive(Debug, PartialEq)]
@@ -834,12 +846,13 @@ pub struct Pressing {
     pub surely: bool,
 }
 
-/// Whether pressing `key` asks the user first, as a click would on what it activates. Enter or
-/// Space activates the control that has the keyboard, as a click on it does, and Enter in a field,
-/// `typed_in` or the one with the keyboard, submits its form, as a click on its submit button
-/// does. The outline doesn't say which button that is, so any control of the form that would ask
-/// asks, or of the page outside a form or when the outline doesn't say what has the keyboard
-/// (GHSA-hqw3-jp9p-3rhj).
+/// Whether pressing `key` asks the user first, as a click would on what it activates. Space
+/// activates the control that has the keyboard, and Enter a button, link, menu item, tab or
+/// summary, as a click on it does. Enter elsewhere, in a field (`typed_in` or the one with the
+/// keyboard) or on another control, submits its form, as a click on its submit button does. The
+/// outline doesn't say which button that is, nor whether one outside the form belongs to it, so
+/// any control of the form or outside every form that would ask asks, or of the page when the
+/// control has no form or the outline doesn't say what has the keyboard (GHSA-hqw3-jp9p-3rhj).
 pub fn pressing_risk(
     host: &str,
     outline: Option<&Outline>,
@@ -867,17 +880,26 @@ pub fn pressing_risk(
     };
     let form = match &focus {
         Focus::Page => return None,
-        Focus::On(field) if FIELDS.contains(&field.role.as_str()) => match key {
-            "Enter" => field.form,
-            _ => return None,
-        },
-        Focus::On(control) => return asks(true)(control),
+        Focus::On(control) => {
+            let role = control.role.as_str();
+            let clicks = match key {
+                "Space" => !FIELDS.contains(&role),
+                _ => ENTER_CLICKS.contains(&role),
+            };
+            match (clicks, key) {
+                (true, _) => return asks(true)(control),
+                // Space in a field types a space.
+                (false, "Space") => return None,
+                (false, _) => control.form,
+            }
+        }
         Focus::Unknown => None,
     };
     let elements = outline.map(|outline| outline.elements.as_slice());
     let mut elements = elements.unwrap_or_default().iter();
     match form {
-        Some(form) => (elements.filter(|each| each.form == Some(form))).find_map(asks(false)),
+        Some(form) => (elements.filter(|each| each.form.is_none_or(|each| each == form)))
+            .find_map(asks(false)),
         None => elements.find_map(asks(false)),
     }
 }

@@ -3203,17 +3203,20 @@ impl Agents {
         }
         let info = self.browser.tab(tab, cx);
         let refs = self.refs.entry(tab).or_default();
+        // The page's whole outline is stored even when the answer shows a part, since what has
+        // the keyboard decides what a key press asks next (GHSA-hqw3-jp9p-3rhj).
+        let whole = page::outline(&info, &nodes, refs, None);
         let text = match show {
             Show::Element(node) => {
                 let part = page::outline(&info, &nodes, refs, Some(node)).text();
+                self.outlines.insert(tab, whole);
                 match note.is_empty() {
                     true => part,
                     false => format!("{note}\n\n{part}"),
                 }
             }
             show => {
-                self.outlines
-                    .insert(tab, page::outline(&info, &nodes, refs, None));
+                self.outlines.insert(tab, whole);
                 self.answer_with(&agent, tab, note, show)
             }
         };
