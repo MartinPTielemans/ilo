@@ -2,11 +2,11 @@
 
 Each entry gives what was decided, why, and what would make us revisit it. Newest last.
 
-## 1. Engine: Chromium, with the system's engine for protected video
+## 1. Engine: Chromium on the desktop, WebKit on the iPhone
 
-Chromium, not WebKit, Gecko, Servo or Ladybird, renders every page by default.
+On the desktop Chromium, not WebKit, Gecko, Servo or Ladybird, renders every page by default.
 
-- The product runs on Mac, Windows and Linux; WebKit is first-class only on macOS.
+- It runs on Mac, Windows and Linux; WebKit is first-class only on macOS.
 - Chrome extensions and site compatibility are requirements.
 - Chromium browsers feel slow from bloat, UI layers and background work, not the engine, and we control those.
 
@@ -15,9 +15,11 @@ A tab can show its page in the system's engine (WebKit on the Mac): a short buil
 - **A short list, then opt-in per site.** Netflix, Disney+, HBO Max, Prime Video, Hulu, Apple TV+, Paramount+, Peacock and the Spotify web player open there from the first load, their main content being protected video or audio. A list, not a switch at a page's first DRM request: some sites check for DRM on load and never play. It stays short: extensions don't run there, so a listed site loses the user's ad blocker and password manager. An entry is the service, never its domain: tv.apple.com, not apple.com. Other sites the user turns on from the note, per profile. Either way its pages open there, and a link to another site goes back to Chromium, unless its redirects come back, as a sign-in through an identity site does. Site Controls show it on and turn it off; Off for a listed service stays in the profile, across launches and list updates, until On. A listed service never joins the user's own sites, and there's no global setting: per-site Off is the way out.
 - **No extensions and no agents.** The core refuses and logs every agent call on such a tab, and an agent's Space never switches a tab: the browser can't enforce decision 8's rules in an engine it doesn't own.
 - **Kept apart per profile.** Each profile has its own WebKit store; a private window's keeps nothing. Deleting a profile deletes its store; Clear Cookies and Clear Site Data clear both engines. The site's session follows its tab within the profile, so the user stays signed in: as a tab enters the system's engine, before the page's first request and script, the core copies the profile's cookies for the site and its subdomains (HttpOnly too) and its localStorage into the profile's WebKit store. Turning the site off copies them back. A private window copies only between its own two stores; nothing crosses profiles or leaves them. Other storage (sessionStorage, IndexedDB, service workers) stays where it was made.
-- **Started only when used.** No WebKit view, store or process starts before a page needs one, so launch and other tabs don't pay for it. (System frameworks Chromium links map WebKit's code at launch anyway: AuthenticationServices, SafariServices, Quartz.) It needs macOS 14 for per-profile stores; on 13 the note offers Safari.
+- **Started only when used.** No WebKit view, store or process starts before a page needs one, so launch and other tabs don't pay for it. (System frameworks Chromium links map WebKit's code at launch anyway: AuthenticationServices, SafariServices, Quartz.)
 
 Revisit when Chromium can play these sites on the Mac (a Widevine CDM we ship, or the platform's), when they refuse Chromium PlayReady on Windows (WebView2 then), or when two engines cost more than the sites are worth.
+
+The iPhone app, `mobile/ios`, is native Swift on WebKit (`WKWebView`), the only engine iOS gives an app outside the EU and Japan. It syncs with the desktop through the ilo account.
 
 ## 2. Base: ungoogled-chromium, with Helium and Ardia as patch sources
 
@@ -41,7 +43,7 @@ Ardia's design: Chrome's `chrome_framework` with our layer linked in. One native
 
 On Windows two things differ, both forced by Chromium. Aura draws all of a widget's views into its one HWND, so nothing native can sit between GPUI and a page in it: GPUI's window is a child HWND filling the browser window, and each shown page is in a child widget's HWND above it (`core/platform/win/window_views.cc`). The sandbox needs every process to be Chromium's own `chrome.exe`, so the app can't be the executable calling `bc_main`: it's `Browser.dll` beside it, which the core loads in the browser process as Chromium starts (`bc_main` in `core/public/browser_core.h`).
 
-On Linux the same two hold, and Wayland adds a third. The zygote starts every process from Chromium's own `chrome`, so the app is `libBrowser.so` beside it, loaded the same way (`core/platform/linux/app_library.cc`). Wayland nests surfaces only if made on one connection, and GPUI and Chromium each open their own. So Linux comes in two steps, both needed before it ships. First X11, under XWayland on Wayland desktops: GPUI's window is an X window the core reparents over the browser's, with holes in its shape where pages show. Pages are aura windows in the browser window, as in Chrome, so keys reach them through its focus, after the browser's shortcuts (`core/platform/linux/window_views.cc`). Then native Wayland: GPUI draws as a subsurface through Chromium's Wayland connection, in an embedded mode like the Mac's GPUI patch. On both, the core routes focus, IME and the clipboard between GPUI and the page.
+On Linux the same two hold, and Wayland adds a third. The zygote starts every process from Chromium's own `chrome`, so the app is `libBrowser.so` beside it, loaded the same way (`core/platform/linux/app_library.cc`). Wayland nests surfaces only if made on one connection, and GPUI and Chromium each open their own. So Linux runs two ways: on X11, XWayland included, GPUI's window is an X window the core reparents over the browser's, with holes in its shape where pages show, and on native Wayland GPUI draws as a subsurface through Chromium's connection, in an embedded mode like the Mac's GPUI patch (`core/platform/linux/wayland.cc`). Pages are aura windows in the browser window, as in Chrome, so keys reach them through its focus, after the browser's shortcuts (`core/platform/linux/window_views.cc`). On both, the core routes focus, IME and the clipboard between GPUI and the page.
 
 ## 4. UI: GPUI, with Chromium Views as the fallback
 
@@ -67,8 +69,7 @@ The look is ilo's own: colour, window material, corner radii, type, icons, shado
 
 Dia's surfaces built around its assistant aren't copied: ilo has none, and the user's agents (decision 8) are asked from Arc's bar. So ⌘T opens Arc's command bar over the page, not Dia's New Tab page, whose box is the assistant's chat field and whose card holds its answers: without the assistant, it's Arc's bar moved into a card that hides the page.
 
-- Start from Ardia's measured `docs/dia-spec.md` and `docs/dia-feature-parity.md` (Apache-2.0, credited).
-- Measure Arc ourselves before it shuts down on 2026-12-22.
+- The spec holds Ardia's Dia values (Apache-2.0, credited) and our Arc 1.170 measurements; #2177 lists what's left.
 - Never ship their assets or names.
 
 Revisit the look if Arc users moving over say ilo doesn't feel like Arc continued, traced to the look rather than layout or motion.

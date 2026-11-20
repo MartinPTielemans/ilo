@@ -1,7 +1,8 @@
 # check.sh runs this at 690.
-# A Board (#3073). New Board's key makes one in the Space's profile, a pinned tab whose row's name
-# is there to type over; ↩ keeps the name in the Board's folder and gives the page the keyboard,
-# where the first note's field takes the keys typed next. The page saves the note a second later, in
+# A Board (#3073). The empty Library › Boards list's New Board makes one in the Space's profile
+# and closes the Library (#3575), a pinned tab whose row's name is there to type over; ↩ keeps
+# the name in the Board's folder and gives the page the keyboard, where the first note's field
+# takes the keys typed next. The page saves the note a second later, in
 # its own Board's folder alone, and no log line says what the note or the name is. Library › Boards
 # lists it. Renamed while open, opened from the command bar by the start of its name, unpinned,
 # archived and reopened, it's still only "(a Board)" in the log, never its name, and the reopened
@@ -63,15 +64,25 @@ rm -f "$agents_file"
 socket=$(grep '^browser: agents server on' "$log" | tail -1 | sed 's/^browser: agents server on //')
 if windows; then bridge="$app/mcp-bridge.exe"; else bridge="$(dirname "$browser")/mcp-bridge"; fi
 
-# New Board, from its key.
-send key e ctrl shift
-expect '^browser: command new-board via ' "⌃⇧E didn't run New Board"
+# New Board, from the empty Library › Boards list's button, clicked where it logged itself. It runs
+# New Board as its key does, and the Library goes, so the name typed next is the row's (#3572).
+bar_command view-boards "View Boards…" "view boards"
+expect '^browser: library shown$' "View Boards… didn't open the Library on its empty Boards list"
+expect '^browser: library new board at [0-9-]* [0-9-]* [0-9]* [0-9]*$' \
+  "the empty Library › Boards list drew no New Board button"
+../tools/window-screenshot.sh "$pid" "$out/board-library-empty.png" || fail "no window to capture"
+set -- $(grep '^browser: library new board at ' "$log" | tail -1 | cut -d' ' -f6-9)
+post click $(($1 + $3 / 2)) $(($2 + $4 / 2))
+expect '^browser: command new-board via library$' \
+  "a click on the empty Boards list's New Board didn't run New Board"
 expect '^browser: new board [0-9a-f]\{32\} tab [0-9]*$' \
   "New Board made no Board: $(grep '^browser: new board ' "$log" | tail -1)"
 made=$(grep '^browser: new board [0-9a-f]\{32\} tab ' "$log" | tail -1)
 id=$(echo "$made" | cut -d' ' -f4)
 board=$(echo "$made" | cut -d' ' -f6)
 expect "^browser: name board $board\$" "the new Board's row didn't offer its name to type over"
+expect '^browser: library hidden$' \
+  "New Board from the empty Boards list left the Library over the Board's name"
 folder=$(find "$profile_dir" -type d -path "*/Boards/$id" | head -1)
 [ -n "$folder" ] || fail "New Board made no folder for $id in the profile ($profile_dir)"
 boards=$(dirname "$folder")
@@ -482,8 +493,23 @@ archive "the File menu"
 send layout
 height=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
   sed 's/^browser: layout content [0-9]*x\([0-9]*\),.*/\1/')
+# On Linux, a menu shown in the dispatch that hides the last one keeps the keyboard it took
+# (#3572): the + pressed while a row's menu shows opens its own in that menu's place, then ↓ rings
+# one of its rows. On the Mac and Windows a press outside a menu goes no further than closing it.
+replaced=
+if [ "$(uname)" = Linux ]; then
+  replaced=", pressed while a row's menu showed,"
+  post rightclick $(row 0)
+  expect '^browser: menu shown ' "a right-click on the sidebar's first row didn't show its menu"
+fi
 post click 204 $((height - 25))
-expect "^browser: menu shown .*$(cased 'New Board')" "the sidebar's + didn't offer New Board"
+expect "^browser: menu shown .*$(cased 'New Board')" "the sidebar's +$replaced didn't offer New Board"
+if [ -n "$replaced" ]; then
+  expect '^browser: menu at .* closed by ' "the row's menu didn't close as the sidebar's + opened its own"
+  expect '^browser: menu window at ' "the + menu's window didn't take the keyboard"
+  send key down
+  expect '^browser: menu highlights .* at ' "↓ in the + menu, opened in a row's menu's place, rang no row: it hasn't the keyboard"
+fi
 send choose "$(cased 'New Board')"
 expect '^browser: command new-board via ' "the + menu's New Board didn't run New Board"
 made porch "the sidebar's +"
@@ -537,6 +563,35 @@ grep -q cherry "$boards/$copy/board.json" ||
   fail "the copy is named \"$(cat "$boards/$copy/name")\", not \"garden copy\""
 expect "^browser: loaded [0-9]* chrome://board/$copy\$" "the Board's copy didn't open in a tab"
 copy_tab=$(grep "^browser: loaded [0-9]* chrome://board/$copy\$" "$log" | tail -1 | cut -d' ' -f3)
+# garden hid as its copy opened, which is when a Board takes its picture for the Library. Its one
+# note has to be on it: a note's card keeps no height, as its words size it, and a picture drawn at
+# that height has nothing on it (#3568).
+inked() {
+  python3 -I - "$1" << 'PY'
+import struct, sys, zlib
+data = open(sys.argv[1], "rb").read()
+at, idat, width = 8, b"", 0
+while at < len(data):
+    size, kind = struct.unpack_from(">I4s", data, at)
+    if kind == b"IHDR":
+        width, _, depth, colour = struct.unpack_from(">IIBB", data, at + 8)
+        if (depth, colour) != (8, 6):
+            sys.exit("not the 8-bit RGBA a canvas writes: depth %d, colour type %d" % (depth, colour))
+    elif kind == b"IDAT":
+        idat += data[at + 8:at + 8 + size]
+    at += size + 12
+# A row filtered from nothing but clear pixels is all zeros past its filter byte, whichever filter.
+rows, stride = zlib.decompress(idat), 1 + width * 4
+sys.exit(0 if any(rows[i + 1:i + stride].strip(b"\0") for i in range(0, len(rows), stride)) else 1)
+PY
+}
+picture="$boards/$garden/thumb.png"
+for _ in $(seq 50); do
+  [ -f "$picture" ] && inked "$picture" && break
+  sleep 0.1
+done
+[ -f "$picture" ] && inked "$picture" ||
+  fail "the Library's picture of garden, taken as its copy opened over it, has nothing drawn though garden has a note: $([ -f "$picture" ] && echo "$(wc -c < "$picture") bytes, all clear" || echo "no picture")"
 bar_command view-boards "View Boards…" "view boards"
 expect '^browser: library shown$' "View Boards… didn't open the Library to duplicate a Board from"
 send key down
@@ -585,6 +640,7 @@ for each in light dark; do
   post rightclick $(($1 + $3 / 2)) $(($2 + $4 / 2))
   expect "^browser: menu shown $(cased 'Open, Duplicate, Delete')\$" "a right-click on a Board's row didn't show its menu, $each"
   ../tools/window-screenshot.sh "$pid" "$out/board-duplicate-menu-$each.png" all || fail "no window to capture"
+  expect '^browser: menu window at ' "the menu's window didn't take the keyboard"
   send key escape
   expect '^browser: menu closed' "escape didn't close a Board's row's menu, $each"
   send key escape
