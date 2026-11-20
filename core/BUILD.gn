@@ -1026,13 +1026,18 @@ source_set("browser_core") {
       "platform/mac/system_page.mm",
       "platform/mac/window_views.mm",
     ]
-    # The keyboard's layouts, for keyboard.mm.
-    frameworks = [ "Carbon.framework" ]
+    # The keyboard's layouts, for keyboard.mm, and the app's own entitlements, for keychain.mm.
+    frameworks = [
+      "Carbon.framework",
+      "Security.framework",
+    ]
     # WebKit isn't linked: system_page.mm starts it with the first system page, so a launch that
     # shows none starts no WebKit process.
     deps += [
       "//chrome/browser:chrome_browser_application_mac",
+      "//chrome/browser/webauthn",
       "//components/os_crypt/common:keychain_password_mac",
+      "//device/fido",
       "//media",
       "//components/remote_cocoa/app_shim",
       "//components/remote_cocoa/common:mojo",

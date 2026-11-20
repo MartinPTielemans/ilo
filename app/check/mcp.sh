@@ -3139,6 +3139,46 @@ case "$handed" in
   "error: The user hasn't handed tab $waits_tab back in 15 minutes."*) ;;
   *) fail "the handoff not handed back answered: $handed" ;;
 esac
+# A page in the agent's tab that asks for a passkey never gets one for the agent (principle 3).
+# The agent's tab is out of the user's sight, its page unfocused, so Blink refuses the request
+# itself, as the page doesn't have focus. A page that has the focus reaches Chrome, where the
+# core hands the tab to the user before Chrome's dialog asks, with Touch ID's authenticator among
+# those found where the Mac has one, and the agent is refused the tab until they hand it back
+# (g_browser_core_refuse_passkey). Either way no passkey is made, and the run says which it saw.
+printf '%s' '<title>loading</title>
+<script>
+onload = () => {
+  document.title = "asking";
+  navigator.credentials.create({ publicKey: {
+    rp: { id: "localhost", name: "Check" },
+    user: { id: new Uint8Array(16), name: "ada@check.test", displayName: "Ada" },
+    challenge: crypto.getRandomValues(new Uint8Array(32)),
+    pubKeyCredParams: [{ type: "public-key", alg: -7 }],
+  } }).then(() => document.title = "made",
+    error => document.title = "failed " + error.name + ": " + error.message);
+};
+</script>' > "$out/site/passkey-agent.html"
+opened=$(call open_tab "{\"url\":\"localhost:$port/passkey-agent.html\"}")
+passkey_tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+[ -n "$passkey_tab" ] || fail "open_tab passkey-agent.html answered: $opened"
+await_log "^browser: \(agent mcp-client hands off $passkey_tab: passkey\|title $passkey_tab \(made\|failed .*\)\)\$" \
+  "a passkey request in the agent's tab neither reached the user nor ended"
+grep -q "^browser: title $passkey_tab made\$" "$log" && fail "the agent's page made a passkey"
+if grep -q "^browser: agent mcp-client hands off $passkey_tab: passkey\$" "$log"; then
+  refused=$(call scroll "{\"tab\":$passkey_tab}")
+  case "$refused" in
+    "error: The user has this tab until they hand it back."*) ;;
+    *) fail "acting in the tab its passkey request handed to the user answered: $refused" ;;
+  esac
+  passkey_said="handed the tab to the user, the agent refused it"
+else
+  failed=$(grep "^browser: title $passkey_tab failed " "$log" | tail -1 | cut -d' ' -f5-)
+  case "$failed" in
+    "NotAllowedError: The operation is not allowed at this time because the page does not have focus.") ;;
+    *) fail "the agent's page's passkey request failed otherwise than for its unfocused page: $failed" ;;
+  esac
+  passkey_said="was refused by Blink, the agent's page being unfocused"
+fi
 exec 4>&- 5<&-
 quit
 forget_login
@@ -3159,9 +3199,9 @@ quit
 trap cleanup EXIT
 rm -f "$agents_file" "$out/mcp-in" "$out/mcp-out"
 if [ "$driven" = 1 ]; then
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), the tabs its page opens kept in its Space, behind$opened_said, without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, pins, unpins and removes its own tab but not the user's, sends requests to its tab's site with the tab's session it never sees, a change asking each time, its question on screen as the log draws it ($follows% of its place changed), each opening in Settings › Agents to where it went and what it sent or didn't, asks a page's beforeunload handler first, with no dialog, closing one that doesn't ask at the first call and keeping one the agent clicked or typed in that asks until it discards it, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, opens its tabs muted, is refused a tab the user took over with a press in its page until they hand it back and Keep answers its ask, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, its download asks first and answers with the file, a refused one leaving none, a bank's site asks first until Always Allow, which Settings › Agents lists$needs_said, and off takes the socket away; an action waits for its element and its page to settle ($settle), a tab's id from before a relaunch is refused as such, and a launch after the window quit in its Space shows the page it opens; a screenshot of a tab just opened out of sight answers ($fresh_picture), and with the UI holding the keyboard with its picture"
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), the tabs its page opens kept in its Space, behind$opened_said, without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, pins, unpins and removes its own tab but not the user's, sends requests to its tab's site with the tab's session it never sees, a change asking each time, its question on screen as the log draws it ($follows% of its place changed), each opening in Settings › Agents to where it went and what it sent or didn't, asks a page's beforeunload handler first, with no dialog, closing one that doesn't ask at the first call and keeping one the agent clicked or typed in that asks until it discards it, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, opens its tabs muted, is refused a tab the user took over with a press in its page until they hand it back and Keep answers its ask, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, its download asks first and answers with the file, a refused one leaving none, a bank's site asks first until Always Allow, which Settings › Agents lists$needs_said, and off takes the socket away; an action waits for its element and its page to settle ($settle), a tab's id from before a relaunch is refused as such, a passkey its page asks for $passkey_said, and a launch after the window quit in its Space shows the page it opens; a screenshot of a tab just opened out of sight answers ($fresh_picture), and with the UI holding the keyboard with its picture"
 else
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own and is refused the user's tab, is answered that a link to an app opens nothing, its tab staying on its page, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), and its actions wait for their element and their page to settle ($settle), and the tabs its page opens are kept in its Space, behind$opened_said. A tab's id from before a relaunch is refused as such. skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own and is refused the user's tab, is answered that a link to an app opens nothing, its tab staying on its page, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), and its actions wait for their element and their page to settle ($settle), and the tabs its page opens are kept in its Space, behind$opened_said. A tab's id from before a relaunch is refused as such, and a passkey its page asks for $passkey_said. skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
 fi
 if [ -n "${toast_skip:-}" ]; then
   echo "skip: the needs' toast showing, as Windows shows toasts only for an installed copy, which the run's isn't: it counted on the taskbar button and asked for the toast."
