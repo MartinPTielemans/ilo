@@ -351,7 +351,6 @@ void StripTint(CALayer* layer) {
 
 - (void)mouseUp:(NSEvent*)event {
   [self.target mouseUp:[self surfaceEvent:event]];
-  [self released:event];
 }
 
 - (void)rightMouseDown:(NSEvent*)event {
@@ -364,7 +363,6 @@ void StripTint(CALayer* layer) {
 
 - (void)rightMouseUp:(NSEvent*)event {
   [self.target rightMouseUp:[self surfaceEvent:event]];
-  [self released:event];
 }
 
 - (void)otherMouseDown:(NSEvent*)event {
@@ -377,7 +375,6 @@ void StripTint(CALayer* layer) {
 
 - (void)otherMouseUp:(NSEvent*)event {
   [self.target otherMouseUp:[self surfaceEvent:event]];
-  [self released:event];
 }
 
 - (void)mouseMoved:(NSEvent*)event {
