@@ -313,6 +313,7 @@ for look in dark light; do
   expect "^browser: menu shown $reload_menu\$" \
     "a right-click on reload didn't show its menu: $(grep '^browser: menu shown' "$log" | tail -1)"
   ../tools/window-screenshot.sh "$pid" "$out/reload-menu-$look.png" || fail "no window to capture"
+  expect '^browser: menu window at ' "the menu's window didn't take the keyboard"
   send key escape
   expect '^browser: menu closed' "escape didn't close reload's menu"
 done

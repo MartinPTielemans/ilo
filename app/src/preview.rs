@@ -547,14 +547,19 @@ impl Fake {
 }
 
 /// PREVIEW_LIBRARY=boards: four made-up Boards in a profile folder of their own, two with a
-/// picture, changed hours to a week ago, the last never named.
+/// picture, changed hours to a week ago, the last never named; =boards-empty, none.
 fn preview_boards_folder() -> Option<std::path::PathBuf> {
-    (std::env::var("PREVIEW_LIBRARY").ok()? == "boards").then_some(())?;
+    let which = std::env::var("PREVIEW_LIBRARY").ok()?;
+    (which == "boards" || which == "boards-empty").then_some(())?;
     static FOLDER: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
     FOLDER
         .get_or_init(|| {
             let folder =
                 std::env::temp_dir().join(format!("ilo-preview-boards-{}", std::process::id()));
+            if which == "boards-empty" {
+                std::fs::create_dir_all(&folder).ok()?;
+                return Some(folder);
+            }
             let now = std::time::SystemTime::now();
             let hours = |hours: u64| now - std::time::Duration::from_secs(hours * 3600);
             let boards = [
@@ -578,14 +583,16 @@ fn preview_boards_folder() -> Option<std::path::PathBuf> {
                     browser::boards::write_name(&folder, &id, name).ok()?;
                 }
                 if let Some([r, g, b]) = colour {
-                    // A Board's picture as its page saves it: cards on the page's ground.
+                    // A Board's picture as its page saves it, with no ground: a note in its
+                    // fill and a plain one in the picture's grey.
+                    let [_, gr, gg, gb] = browser::tokens::board::PICTURE.to_be_bytes();
                     let thumb = image::RgbaImage::from_fn(96, 96, |x, y| {
-                        let card = (12..44).contains(&x) && (14..50).contains(&y)
-                            || (52..86).contains(&x) && (34..78).contains(&y);
-                        image::Rgba(if card {
+                        image::Rgba(if (12..44).contains(&x) && (14..50).contains(&y) {
                             [r, g, b, 255]
+                        } else if (52..86).contains(&x) && (34..78).contains(&y) {
+                            [gr, gg, gb, 255]
                         } else {
-                            [246, 244, 240, 255]
+                            [0, 0, 0, 0]
                         })
                     });
                     thumb.save(board.join("thumb.png")).ok()?;
@@ -1384,9 +1391,10 @@ impl Browser for Fake {
         self.later(cx, move |shell, cx| shell.set_cast(tab, None, cx));
     }
 
-    // Safari's engine is the Mac's alone, so elsewhere the note offers what each system's does.
+    // Safari's engine is the Mac's alone, so elsewhere the note offers what each system's does. A
+    // note only the Mac's engine gives (preview_moves) draws as on the Mac anywhere.
     fn can_use_system_engine(&self) -> bool {
-        cfg!(target_os = "macos")
+        cfg!(target_os = "macos") || preview_moves().is_some()
     }
 
     // PREVIEW_DRM=default draws the note as where ilo is the system's default browser.
@@ -1413,6 +1421,17 @@ impl Browser for Fake {
                 ..shell.page(tab)
             };
             shell.set_page(tab, page, cx);
+        });
+    }
+
+    fn leave_system_engine(&self, tab: u64, cx: &mut App) {
+        self.later(cx, move |shell, cx| {
+            let page = Page {
+                system_engine: false,
+                ..shell.page(tab)
+            };
+            shell.set_page(tab, page, cx);
+            shell.set_media_unsupported(tab, "", cx);
         });
     }
 
@@ -1849,6 +1868,10 @@ impl Browser for Fake {
 
     fn favorites_scope(&self, _: &mut App) -> shell::FavoritesScope {
         shell::FavoritesScope::default()
+    }
+
+    fn keeps_passkeys(&self) -> bool {
+        false
     }
 
     // The preview's window is GPUI's own, which has the keyboard already.
@@ -3124,8 +3147,19 @@ fn main() {
                         shell.set_page(tab, page, cx);
                     }
                     // PREVIEW_DRM=1 has the first tab's page ask for video ilo can't play, so its
-                    // note shows, offering what this system's does (#2468).
-                    if std::env::var_os("PREVIEW_DRM").is_some() {
+                    // note shows, offering what this system's does (#2468). =moved,
+                    // moved-ad-blocking, typed or capturing shows the note the core gives on a press
+                    // of play instead, the moved ones in Safari's engine.
+                    if let Some(note) = preview_moves() {
+                        if note.starts_with("moved") {
+                            let page = Page {
+                                system_engine: true,
+                                ..shell.page(1)
+                            };
+                            shell.set_page(1, page, cx);
+                        }
+                        shell.set_media_unsupported(1, note, cx);
+                    } else if std::env::var_os("PREVIEW_DRM").is_some() {
                         shell.set_media_unsupported(1, "com.widevine.alpha", cx);
                     }
                     // PREVIEW_CHOOSER=serial, hid, usb, bluetooth, stopped, none, off or denied has the
@@ -3393,8 +3427,8 @@ fn main() {
             let shell_window = window.as_ref().ok().copied();
             match window {
                 // PREVIEW_LIBRARY=1 opens the Library, and PREVIEW_LIBRARY=downloads, =spaces,
-                // =history, =agents or =boards opens it there; =rename opens its Spaces with the first card's
-                // name in its field.
+                // =history, =agents, =boosts, =boards or =boards-empty opens it there; =rename opens
+                // its Spaces with the first card's name in its field.
                 Ok(window) if std::env::var_os("PREVIEW_LIBRARY").is_some() => {
                     window
                         .update(cx, |shell, window, cx| {
@@ -3403,7 +3437,10 @@ fn main() {
                                 Ok("spaces") => shell.show_spaces(cx),
                                 Ok("agents") => shell.show_agents(cx),
                                 Ok("history") => shell.show_visited(cx),
-                                Ok("boards") => shell.run(Command::ViewBoards, "preview", cx),
+                                Ok("boosts") => shell.run(Command::ViewBoosts, "preview", cx),
+                                Ok("boards" | "boards-empty") => {
+                                    shell.run(Command::ViewBoards, "preview", cx)
+                                }
                                 Ok("rename") => {
                                     shell.show_spaces(cx);
                                     shell.preview_rename_card(window, cx);
@@ -3964,6 +4001,14 @@ thread_local! {
 /// then a failed ask; loading never answers.
 fn preview_recent() -> Option<String> {
     std::env::var("PREVIEW_RECENT").ok()
+}
+
+/// PREVIEW_DRM's note of a press of play on the Mac (drm_note), if it names one.
+fn preview_moves() -> Option<&'static str> {
+    let drm = std::env::var("PREVIEW_DRM").ok()?;
+    ["moved", "moved-ad-blocking", "typed", "capturing"]
+        .into_iter()
+        .find(|note| *note == drm)
 }
 
 fn recent_answers(state: &str) -> Vec<browser::recent::Answer> {

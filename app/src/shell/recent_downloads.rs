@@ -581,7 +581,7 @@ impl Shell {
                     .flex_col()
                     .children(rows),
             )
-            .children(live.then(|| self.download_press_listeners(cx)).flatten());
+            .children(live.then(|| self.download_press_listeners(cx)));
         vec![shade.into_any_element(), area.into_any_element()]
     }
 

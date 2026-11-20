@@ -139,36 +139,74 @@ async function save() {
   return done !== false;
 }
 
-// The Library's picture, 268 × 188 at twice that, of what's in view.
+// Round the cards in the Library's picture, and the least it shows of the Board, in its own units:
+// one note of the usual width fills half its square, a block that reads at the row's 18 points.
+const PICTURE_MARGIN = 24, PICTURE_LEAST = 480;
+
+// A card's height in the Board's own units: a note's card keeps 0, as its words size it as it shows.
+function cardHeight(card) {
+  return card.h || byId.get(card.id)?.offsetHeight || 0;
+}
+
+// The cards' bounds in the Board's own units, or null for an empty Board.
+function cardsBounds() {
+  let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+  const take = (x0, y0, x1, y1) => {
+    left = Math.min(left, x0);
+    top = Math.min(top, y0);
+    right = Math.max(right, x1);
+    bottom = Math.max(bottom, y1);
+  };
+  for (const card of cards) {
+    if (card.kind === "stroke") {
+      const r = card.width / 2;
+      for (const [px, py] of card.points) take(card.x + px - r, card.y + py - r, card.x + px + r, card.y + py + r);
+    } else {
+      take(card.x, card.y, card.x + card.w, card.y + cardHeight(card));
+    }
+  }
+  return left === Infinity ? null : { left, top, right, bottom };
+}
+
+// The Library's picture, 268 × 188 at twice that, of what's on the Board rather than what's in
+// view: the cards' bounds, at least PICTURE_LEAST across, in its middle square, which is all of it
+// the Library's row shows. The Library shows it on the paper of whichever look the window has, not
+// the one it was taken in, so it has no ground of its own and draws only in colours that read on
+// either: a note's fill as its swatch, and every other plate and the ink as --picture. A plate's
+// words are left out, as they're too small to read there; a note with no plate is its words.
 async function saveThumb() {
   const scale = 2, w = 268, h = 188;
   const canvas = new OffscreenCanvas(w * scale, h * scale);
   const g = canvas.getContext("2d");
   const style = getComputedStyle(document.documentElement);
-  g.fillStyle = style.getPropertyValue("--canvas");
-  g.fillRect(0, 0, canvas.width, canvas.height);
-  const fit = Math.min(w / innerWidth, h / innerHeight) * scale;
-  g.scale(fit, fit);
-  g.translate(camera.x, camera.y);
-  g.scale(camera.zoom, camera.zoom);
+  const swatch = (name) => style.getPropertyValue(SWATCHES.includes(name) ? `--fill-${name}` : "--picture").trim();
+  const bounds = cardsBounds();
+  if (bounds) {
+    const across = Math.max(PICTURE_LEAST, bounds.right - bounds.left + 2 * PICTURE_MARGIN);
+    const down = Math.max(PICTURE_LEAST, bounds.bottom - bounds.top + 2 * PICTURE_MARGIN);
+    const fit = Math.min(h / across, h / down) * scale;
+    g.translate((w * scale) / 2, (h * scale) / 2);
+    g.scale(fit, fit);
+    g.translate(-(bounds.left + bounds.right) / 2, -(bounds.top + bounds.bottom) / 2);
+  }
   for (const card of cards) {
     const el = byId.get(card.id);
     if (card.kind === "stroke") {
-      g.strokeStyle = inkColor(card.color, style);
+      g.strokeStyle = swatch(card.color);
       g.lineWidth = card.width;
       g.lineCap = g.lineJoin = "round";
       g.stroke(new Path2D(strokePath(card)));
     } else if (card.kind === "picture" && el?.firstChild?.complete) {
       g.drawImage(el.firstChild, card.x, card.y, card.w, card.h);
-    } else {
-      g.fillStyle = card.fill === "none" ? "transparent" : el ? getComputedStyle(el).backgroundColor : "transparent";
+    } else if (card.fill !== "none") {
+      g.fillStyle = swatch(card.fill);
       g.beginPath();
-      g.roundRect(card.x, card.y, card.w, card.h, 10);
+      g.roundRect(card.x, card.y, card.w, cardHeight(card), 10);
       g.fill();
-      g.fillStyle = style.getPropertyValue("--ink");
+    } else {
+      g.fillStyle = swatch();
       g.font = `${card.size === "l" ? 28 : 15}px system-ui`;
-      g.fillText((card.text ?? card.title ?? card.url ?? "").split("\n")[0].slice(0, 60),
-        card.x + 12, card.y + 28, card.w - 24);
+      g.fillText((card.text ?? "").split("\n")[0].slice(0, 60), card.x + 12, card.y + 28, card.w - 24);
     }
   }
   const png = new Uint8Array(await (await canvas.convertToBlob({ type: "image/png" })).arrayBuffer());

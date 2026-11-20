@@ -1,0 +1,203 @@
+# Runs checks on a published release's Mac app, signed as users get it, rather than on an ad-hoc
+# build: what the signature decides, such as the keychain group Chrome keeps passkeys in (#2354),
+# can only be seen on the release's own app. It downloads the tag's DMG, checks it against the
+# release's published sha256, and runs each check asked for with check.sh against a fresh copy of the
+# app in it (CHECK_APP), with the check files of the ref it's dispatched on. It uploads the runs'
+# logs and captures, and nothing else.
+# By hand only: gh workflow run signed-mac-probe.yml --ref <branch> -f tag=v0.2.2 -f runs=passkeys
+# It reads releases and never changes one, and uses no secret.
+name: Signed Mac probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The release's tag, such as v0.2.2, nightly, or a try release's nightly-<name>
+        required: true
+      runs:
+        description: The check runs, as check.sh names them, separated by spaces
+        required: false
+        default: passkeys profiles
+
+permissions:
+  contents: read
+
+concurrency:
+  group: signed-mac-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    runs-on: macos-26
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      # The inputs, checked before any use, are only ever read from the environment, quoted.
+      - name: Inputs
+        env:
+          TAG: ${{ inputs.tag }}
+          RUNS: ${{ inputs.runs }}
+        run: |
+          [[ $TAG =~ ^(v[0-9]+\.[0-9]+\.[0-9]+|nightly(-[a-z0-9-]+)?)$ ]] ||
+            { echo "::error::The tag must be vX.Y.Z, nightly or nightly-<name>"; exit 1; }
+          [[ $RUNS =~ ^[a-z][a-z0-9-]*( [a-z][a-z0-9-]*)*$ ]] ||
+            { echo "::error::The runs must be check.sh's run names, separated by spaces"; exit 1; }
+          known=" $(sh check.sh --runs) "
+          for run in $RUNS; do
+            [[ $known == *" $run "* ]] || { echo "::error::check.sh has no run named $run"; exit 1; }
+          done
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "RUNS=$RUNS" >> "$GITHUB_ENV"
+
+      # The tag's Mac DMG: ilo-mac-arm64.dmg in a release, the newest ilo-mac-arm64-<build>.dmg in a
+      # nightly. GitHub publishes each asset's sha256 as its digest, and a release also lists them
+      # in SHA256SUMS; the download must match each the release has.
+      - name: DMG
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          dir=$RUNNER_TEMP/release
+          mkdir -p "$dir"
+          gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets > "$dir/assets.json"
+          name=$(jq -r '[.assets[] | select(.name | test("^ilo-mac-arm64(-[0-9]+)?\\.dmg$"))]
+            | sort_by(.createdAt) | last | .name // ""' "$dir/assets.json")
+          [[ $name =~ ^ilo-mac-arm64(-[0-9]+)?\.dmg$ ]] || { echo "::error::$TAG has no Mac DMG"; exit 1; }
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D "$dir" -p "$name"
+          sum=$(shasum -a 256 "$dir/$name" | cut -d' ' -f1)
+          checked=
+          digest=$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .digest // ""' "$dir/assets.json")
+          if [ -n "$digest" ]; then
+            [ "$digest" = "sha256:$sum" ] || { echo "::error::$name is $sum, but $TAG publishes $digest"; exit 1; }
+            checked="its digest"
+          fi
+          if jq -e '.assets[] | select(.name == "SHA256SUMS")' "$dir/assets.json" > /dev/null; then
+            gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D "$dir" -p SHA256SUMS
+            listed=$(awk -v name="$name" '$2 == name || $2 == "*" name { print $1 }' "$dir/SHA256SUMS")
+            [ "$listed" = "$sum" ] || { echo "::error::$name is $sum, but $TAG's SHA256SUMS lists '$listed'"; exit 1; }
+            checked="${checked:+$checked and }SHA256SUMS"
+          fi
+          [ -n "$checked" ] || { echo "::error::$TAG publishes no sha256 for $name"; exit 1; }
+          # The app, out of the DMG, which each run copies afresh: Sparkle installs an update it
+          # found over the copy as the app quits.
+          hdiutil attach -nobrowse -readonly -mountpoint "$dir/volume" "$dir/$name" > /dev/null
+          apps=("$dir"/volume/*.app)
+          [ "${#apps[@]}" = 1 ] && [ -d "${apps[0]}" ] || { echo "::error::$name holds no one app"; exit 1; }
+          ditto --norsrc --noextattr "${apps[0]}" "$dir/app/$(basename "${apps[0]}")"
+          hdiutil detach "$dir/volume" > /dev/null
+          app=$(echo "$dir"/app/*.app)
+          plist=$app/Contents/Info.plist
+          version="$(plutil -extract CFBundleShortVersionString raw -o - "$plist") ($(plutil -extract CFBundleVersion raw -o - "$plist"))"
+          codesign --verify --deep --strict "$app"
+          groups=$(codesign -d --entitlements - --xml "$app" 2> /dev/null |
+            plutil -extract keychain-access-groups json -o - - 2> /dev/null || echo none)
+          echo "APP=$app" >> "$GITHUB_ENV"
+          {
+            echo "## $TAG: $name, ilo $version"
+            echo
+            echo "- sha256 $sum, matching $checked"
+            echo "- keychain-access-groups: \`$groups\`"
+            echo
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # As check-mac.yml sets the runner up: a screen the checks' windows fit, transparency and
+      # motion on.
+      - run: |
+          swift ../.github/scripts/display-mode.swift 1920 1080
+          for setting in reduceTransparency reduceMotion; do
+            defaults write com.apple.universalaccess "$setting" -bool false
+            [ "$(defaults read com.apple.universalaccess "$setting")" = 0 ] ||
+              { echo "::error::$setting stayed on"; exit 1; }
+          done
+
+      # macOS asks Screen Recording and Input Monitoring of the process responsible for the app, the
+      # runner's agent, so the job grants them to the processes it runs under, as check-mac.yml does,
+      # and replayd lets the app's executables record. Each grant is read back.
+      - run: |
+          now=$(date +%s)
+          db="/Library/Application Support/com.apple.TCC/TCC.db"
+          grant() { # <service> <client path>
+            sudo sqlite3 -cmd '.timeout 30000' "$db" "INSERT OR REPLACE INTO access (service, client,
+              client_type, auth_value, auth_reason, auth_version, indirect_object_identifier, flags,
+              last_modified) VALUES ('$1', '$2', 1, 2, 4, 1, 'UNUSED', 0, $now)"
+            [ "$(sudo sqlite3 -cmd '.timeout 30000' "$db" \
+              "SELECT auth_value FROM access WHERE service = '$1' AND client = '$2'")" = 2 ] ||
+              { echo "::error::$1 wasn't granted to $2"; exit 1; }
+          }
+          approvals="$HOME/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals"
+          paths=$(find -L "$APP" -path '*/Contents/MacOS/*' -type f -perm -u+x)
+          pid=$$
+          while [ "$pid" -gt 1 ]; do
+            path=$(ps -o comm= -p "$pid")
+            case $path in
+            /*)
+              grant kTCCServiceScreenCapture "$path"
+              grant kTCCServiceListenEvent "$path"
+              paths="$paths
+          $path"
+              ;;
+            esac
+            pid=$(ps -o ppid= -p "$pid" | tr -d ' ')
+          done
+          echo "$paths" | sed 's/^ *//' | while read -r path; do
+            [ -n "$path" ] || continue
+            defaults write "$approvals" "$path" -date "3000-01-01 00:00:00 +0000"
+          done
+          sudo killall tccd || true
+          launchctl kickstart -k "gui/$(id -u)/com.apple.tccd"
+          killall replayd || true
+
+      # Each run alone, on its own copy of the app, as check-mac.yml runs them.
+      - name: Runs
+        run: |
+          out=$RUNNER_TEMP/check
+          mkdir -p "$out"
+          {
+            echo "| Run | Result |"
+            echo "|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          failed=0
+          for run in $RUNS; do
+            copy=$RUNNER_TEMP/copy/$(basename "$APP")
+            rm -rf "${copy:?}"
+            ditto --norsrc --noextattr "$APP" "$copy"
+            status=0
+            CHECK_APP=$copy ./check.sh "$run" > "$out/$run.log" 2>&1 || status=$?
+            [ ! -d build/check ] || mv build/check "$out/$run"
+            pkill -9 -f "$copy/" || true
+            skipped=$(grep '^skip: ' "$out/$run.log" | cut -c7- | tr '|\n' '/;' | sed 's/;$//') || true
+            if [ "$status" = 0 ]; then
+              result="passed${skipped:+, skipping: $skipped}"
+            else
+              failed=1
+              result="failed ($status): $(grep -m1 '^FAIL' "$out/$run.log" | cut -c7- | tr '|' '/')" || true
+              echo "::error::The $run run failed. Its log: $run.log in the artifact."
+            fi
+            echo "| $run | $result |" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+          exit "$failed"
+
+      # Whether the release's Chromium left its key in the runner's login keychain, which with the
+      # runs' quits and nothing stalled says it took the keychain without a prompt (#3614). The
+      # item's presence alone: never its secret (-w, -g) or its attributes in the log.
+      - name: Login keychain
+        if: ${{ always() }}
+        run: |
+          if security find-generic-password -s "$(cat branding/name) Safe Storage" > /dev/null 2>&1; then
+            echo "item present"
+          else
+            echo "item absent"
+          fi
+
+      # The runs' logs and window captures alone: no profile, download or copy of the app.
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-mac-probe
+          path: |
+            ${{ runner.temp }}/check/**/*.log
+            ${{ runner.temp }}/check/**/*.png
+          if-no-files-found: ignore

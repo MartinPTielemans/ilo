@@ -171,7 +171,7 @@ impl Shell {
     }
 
     /// The Create a Space form, in place of the URL field and the Space's tabs, and as it leaves,
-    /// `left` seconds after Create.
+    /// `left` seconds after Create, over the Space's page, which takes the mouse then.
     pub(super) fn space_form(
         &self,
         form: &SpaceForm,
@@ -202,7 +202,8 @@ impl Shell {
                 .flex()
                 .items_center()
                 .rounded(px(FORM_RADIUS))
-                .block_mouse_except_scroll()
+                // Leaving, it lets the Space's page under it take the mouse.
+                .when(left.is_none(), |plate| plate.block_mouse_except_scroll())
         };
         let a11y = self.a11y && left.is_none();
         let title = div()
@@ -344,7 +345,9 @@ impl Shell {
                     button.a11y_synthetic_children(|builder| builder.parent_node().set_disabled())
                 })
             })
-            .on_click(cx.listener(|shell, _, window, cx| shell.create_space(window, cx)));
+            .when(left.is_none(), |button| {
+                button.on_click(cx.listener(|shell, _, window, cx| shell.create_space(window, cx)))
+            });
         let cancel = div()
             .absolute()
             .bottom(px(CANCEL_BOTTOM))
@@ -360,15 +363,20 @@ impl Shell {
                     .h_full()
                     .flex()
                     .items_center()
-                    .block_mouse_except_scroll()
                     .text_size(px(text::SMALL))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(self.palette.text(SECONDARY))
+                    .child("Cancel")
                     // It brightens to the form's text under the pointer (ours: Arc's isn't
                     // recorded). Create Space doesn't change, as Arc's doesn't.
-                    .hover(|style| style.text_color(self.palette.text(FORM_TEXT)))
-                    .child("Cancel")
-                    .on_click(cx.listener(|shell, _, window, cx| shell.cancel_space(window, cx))),
+                    .when(left.is_none(), |button| {
+                        button
+                            .block_mouse_except_scroll()
+                            .hover(|style| style.text_color(self.palette.text(FORM_TEXT)))
+                            .on_click(
+                                cx.listener(|shell, _, window, cx| shell.cancel_space(window, cx)),
+                            )
+                    }),
             );
         div()
             .id("space-form")
@@ -424,14 +432,20 @@ impl Shell {
 
 #[cfg(test)]
 mod tests {
-    use std::rc::Rc;
+    use std::{rc::Rc, time::Duration};
 
     use gpui::{
-        Entity, TestAppContext, VisualTestContext,
+        Bounds, Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext,
         accesskit::{Action, HasPopup, Node, NodeId, Role},
+        point, px, size,
     };
+    use web_time::Instant;
 
-    use crate::shell::{Command, Shell, SpaceEntry, recorder::Recorder};
+    use crate::shell::{
+        Command, FORM_FIELD_TOP, FORM_PROFILE_TOP, FORM_THEME_TOP, Shell, SpaceEntry,
+        recorder::Recorder,
+    };
+    use crate::tokens::shell::{CREATE_BOTTOM, FORM_PLATE_HEIGHT, NAME_HEIGHT};
 
     fn space(id: u64, name: &str) -> SpaceEntry {
         (
@@ -652,6 +666,112 @@ mod tests {
             shell.read_with(cx, |shell, _| shell.form.is_none()),
             "the form stayed"
         );
+    }
+
+    /// ↩ makes the Space, and puts the form 150 ms into its 280 ms leave.
+    fn mid_leave(shell: &Entity<Shell>, cx: &mut VisualTestContext, host: &Recorder) {
+        cx.simulate_keystrokes("enter");
+        assert_eq!(host.take_edits(), ["rename space 7 Trips"]);
+        shell.update(cx, |shell, cx| {
+            let (_, left) = shell.leaving_form.as_mut().expect("the form isn't leaving");
+            *left = Instant::now() - Duration::from_millis(150);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert!(
+            shell.read_with(cx, |shell, _| shell.leaving_form.is_some()),
+            "the form had gone"
+        );
+    }
+
+    /// While the form leaves, the new Space's sidebar takes the mouse, as motion never blocks a
+    /// click: a right-click on its name shows its menu, and a click on the URL field opens the
+    /// command bar over it (#3554).
+    #[gpui::test]
+    fn mid_leave_a_right_click_on_the_name_shows_the_space_menu(cx: &mut TestAppContext) {
+        let (shell, cx, host) = form(cx);
+        mid_leave(&shell, cx, &host);
+        host.menus.borrow_mut().clear();
+        let name = shell.read_with(cx, |shell, _| shell.drawn_list_top() + NAME_HEIGHT / 2.);
+        let at = point(px(60.), px(name));
+        cx.simulate_mouse_down(at, MouseButton::Right, Modifiers::none());
+        cx.simulate_mouse_up(at, MouseButton::Right, Modifiers::none());
+        cx.run_until_parked();
+        let first = host.menus.borrow().first().map(|menu| menu[0].0.clone());
+        assert_eq!(first.as_deref(), Some("Change Space Icon…"));
+    }
+
+    #[gpui::test]
+    fn mid_leave_a_click_on_the_url_field_opens_the_command_bar(cx: &mut TestAppContext) {
+        let (shell, cx, host) = form(cx);
+        mid_leave(&shell, cx, &host);
+        host.command_bars.take();
+        cx.simulate_click(point(px(100.), px(64.)), Modifiers::none());
+        let field = Bounds::new(point(px(8.), px(46.)), size(px(212.), px(36.)));
+        assert_eq!(host.command_bars.take(), [Some(field)]);
+    }
+
+    /// The menus a right-click at each of `ys`, 60 in, shows.
+    fn right_clicks(cx: &mut VisualTestContext, host: &Recorder, ys: &[f32]) -> Vec<Vec<String>> {
+        ys.iter()
+            .map(|&y| {
+                host.menus.borrow_mut().clear();
+                let at = point(px(60.), px(y));
+                cx.simulate_mouse_down(at, MouseButton::Right, Modifiers::none());
+                cx.simulate_mouse_up(at, MouseButton::Right, Modifiers::none());
+                cx.run_until_parked();
+                let menus = host.menus.borrow();
+                let first = menus.iter().filter_map(|menu| menu.first());
+                first.map(|(title, _)| title.to_string()).collect()
+            })
+            .collect()
+    }
+
+    /// The leaving form's plates let the mouse through: a right-click on the field's, a row's or
+    /// Create Space's place mid-leave does what it does there once the form has gone.
+    #[gpui::test]
+    fn mid_leave_the_forms_plates_let_the_mouse_through(cx: &mut TestAppContext) {
+        let (shell, cx, host) = form(cx);
+        mid_leave(&shell, cx, &host);
+        let middle = FORM_PLATE_HEIGHT / 2.;
+        let bottom = cx.update(|window, _| f32::from(window.viewport_size().height));
+        let ys = [
+            FORM_FIELD_TOP + middle,
+            FORM_PROFILE_TOP + middle,
+            FORM_THEME_TOP + middle,
+            bottom - CREATE_BOTTOM - middle,
+        ];
+        let leaving = right_clicks(cx, &host, &ys);
+        shell.update(cx, |shell, cx| {
+            let (_, left) = shell.leaving_form.as_mut().expect("the form had gone");
+            *left = Instant::now() - Duration::from_secs(1);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert!(
+            shell.read_with(cx, |shell, _| shell.leaving_form.is_none()),
+            "the form stayed"
+        );
+        let gone = right_clicks(cx, &host, &ys);
+        assert!(gone.iter().any(|menus| !menus.is_empty()), "{gone:?}");
+        assert_eq!(leaving, gone);
+    }
+
+    /// While the form leaves, the keyboard is the Space's, as it is once the form has gone: ⌘T
+    /// opens the command bar for a new tab, and what's typed goes nowhere near the form's name.
+    #[gpui::test]
+    fn mid_leave_keys_go_to_the_space(cx: &mut TestAppContext) {
+        let (shell, cx, host) = form(cx);
+        mid_leave(&shell, cx, &host);
+        cx.simulate_input("x");
+        let name = shell.read_with(cx, |shell, cx| {
+            let (form, _) = shell.leaving_form.as_ref().expect("the form had gone");
+            form.name.read(cx).text().to_string()
+        });
+        assert_eq!(name, "Trips", "a key went to the leaving form");
+        host.command_bars.take();
+        cx.simulate_keystrokes("cmd-t");
+        assert_eq!(host.command_bars.take(), [None]);
     }
 
     #[gpui::test]

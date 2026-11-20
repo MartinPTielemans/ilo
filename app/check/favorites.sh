@@ -63,6 +63,7 @@ post rightclick $(row 1)
 expect "^browser: menu shown $(cased "Copy Link$share, Change Icon…, Rename…, Mute (disabled), New Boost…, Add Split View, Duplicate, Add to Folder › New Folder, Move to › [^,]* (checked), Move to › New Space…, Archive Tab, Archive Tabs Below (disabled)")\$" \
   "a right-click on the bottom Today row didn't show Arc's tab menu"
 expect '^browser: menu drawn ' "the Today tab's menu didn't draw"
+expect '^browser: menu window at ' "the menu's window didn't take the keyboard"
 # With ⌥ held, its Copy Link is Copy Link as Markdown, as Arc's menu copies a link as Markdown.
 send flags alt
 expect "^browser: menu drawn with ⌥ held $(cased 'Copy Link as Markdown'), " \

@@ -77,9 +77,15 @@ impl Shell {
         };
         let when = history_when(board.changed, library.starts, crate::clock::twelve_hour());
         let picture = match &board.thumb {
-            Some(thumb) => img(thumb.clone())
+            // On the Board's paper in the window's look, as the page saves its picture with no
+            // ground, so it shows in either look whichever it was taken in.
+            Some(thumb) => div()
                 .size(px(FAVICON_SIZE))
-                .object_fit(ObjectFit::Cover)
+                .bg(gpui::rgb(match self.palette.tone {
+                    crate::palette::Tone::Dark => crate::tokens::board::CANVAS_DARK,
+                    crate::palette::Tone::Light => crate::tokens::board::CANVAS,
+                }))
+                .child(img(thumb.clone()).size_full().object_fit(ObjectFit::Cover))
                 .into_any_element(),
             None => svg()
                 .path("icons/presentation.svg")

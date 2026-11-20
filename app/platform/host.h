@@ -915,6 +915,11 @@ void host_day_starts(double starts[4]);
 // cookies and passwords.
 bool host_keep_keychain_key(void);
 
+// On the Mac, whether this build's signature holds a keychain group for passkeys, one of its
+// keychain-access-groups ending in ".webauthn", as the core reads it (core/platform/mac/keychain.mm):
+// only then can a profile keep passkeys on this Mac, and they go with it when it's deleted.
+bool host_keeps_passkeys(void);
+
 // Whether this build updates itself: a release build that carries the updater, its feed and its
 // key, and on Windows not an MSIX from the Microsoft Store, which the Store updates.
 bool host_updates_available(void);

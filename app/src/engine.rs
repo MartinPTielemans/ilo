@@ -1328,6 +1328,10 @@ impl Browser for Engine {
         shell::FavoritesScope::from_core(unsafe { bc::bc_favorites_scope() })
     }
 
+    fn keeps_passkeys(&self) -> bool {
+        crate::platform::keeps_passkeys()
+    }
+
     fn context_menu(
         &self,
         items: Vec<MenuEntry>,
@@ -1616,6 +1620,10 @@ impl Browser for Engine {
 
     fn use_system_engine(&self, tab: u64, _: &mut App) {
         use_system_engine(tab);
+    }
+
+    fn leave_system_engine(&self, tab: u64, _: &mut App) {
+        leave_system_engine(tab);
     }
 
     fn close_media_note(&self, tab: u64, _: &mut App) {

@@ -166,9 +166,7 @@ impl site_controls::Host for SiteControlsHost {
         match on {
             // As the protected-video note's button does.
             true => use_system_engine(tab),
-            false => {
-                unsafe { bc::bc_tab_set_system_engine(tab, false) };
-            }
+            false => leave_system_engine(tab),
         }
     }
 

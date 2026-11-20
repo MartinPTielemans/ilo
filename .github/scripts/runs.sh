@@ -5,8 +5,8 @@
 # about 60 minutes each on Windows and 45 on the Mac. A new run goes in the first.
 # `runs.sh all` prints check.sh's runs, then the ones it does only when named.
 # `runs.sh shard <n> [2]` prints the runs of job n of 3, or all of them for 0. With 2, of two jobs,
-# the third's long runs in the first, for the Windows check's default runs, none of which is long
-# (#2618).
+# the third's long runs in the first, for the Windows and Mac checks' default runs, none of which
+# is long (#2618, #3444).
 # `runs.sh missing <dir> [runs]` prints each of check.sh's runs, and each run named, that no
 # results file in <dir> has a line for (<run>, a tab, its result), and fails if there's one.
 set -euo pipefail

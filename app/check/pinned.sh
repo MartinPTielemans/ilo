@@ -790,6 +790,7 @@ expect "^browser: menu shown $(cased 'Rename Folder, Change Icon…, Duplicate, 
   "the folder's menu isn't Rename Folder, Change Icon…, Duplicate, Move to Space, Copy All Links … Delete Folder"
 expect '^browser: menu drawn ' "the folder's menu didn't draw"
 ../tools/window-screenshot.sh "$pid" "$out/folder-menu.png" || fail "no window to capture"
+expect '^browser: menu window at ' "the menu's window didn't take the keyboard"
 # With ⌥ held, Copy All Links is Copy All Links as Markdown, as in Arc's.
 send flags alt
 expect "^browser: menu drawn with ⌥ held $(cased 'Rename Folder, Change Icon…, Duplicate, Move to Space (disabled), Copy All Links as Markdown'), " \
@@ -898,6 +899,10 @@ expect "^browser: selected $s\$" "the dropped text's search didn't show"
 searching 'dogs+and+cats' \
   "the dropped text didn't start a search for it: $(grep "^browser: page $s " "$log" | tail -1)" "$s"
 ../tools/window-screenshot.sh "$pid" "$out/dropped-text.png" || fail "no window to capture"
+# The search's live page can put up its own cards, as one asking for the location over the top
+# of the sidebar, which would take the pointer from the name row below (#3628): the dropped
+# link's tab, a page of the run's own site, shows for the name row's steps.
+switch "4 cmd" "$d"
 
 # Under the pointer the Space's name row lights as a tab row does, with its chevron after the name
 # (in the icon's slot with an icon) and its ••• at its end, and a press anywhere on it but the •••
@@ -987,6 +992,7 @@ expect "^browser: sidebar keyed $d\$" "Focus Sidebar didn't ring the tab shown's
 send key f10 shift
 expect "^browser: menu shown $(cased 'Copy Link, ')" "⇧F10 didn't open the ringed row's menu"
 expect '^browser: menu highlights .* at ' "the row's menu from ⇧F10 didn't highlight its first item"
+expect '^browser: menu window at ' "the menu's window didn't take the keyboard"
 send key escape
 expect '^browser: menu closed$' "escape didn't close the row's menu"
 none_since '^browser: sidebar keys left' || fail "closing the row's menu ended the ring"

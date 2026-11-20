@@ -259,8 +259,12 @@ fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static st
     if held_escape::keeps_from_page(unsafe { &*key }) {
         return (true, "held escape");
     }
-    // Any key ends the hover card, as in Dia, the page's as the UI's.
-    update_app(hover_card::close);
+    // Any key ends the hover card, as in Dia, the page's as the UI's, but a modifier alone, which
+    // starts a ⌘- or ⌥-click on its rows: the UI hears those as modifiers changed, never as a key.
+    let name = unsafe { CStr::from_ptr((*key).key) };
+    if ![c"Shift", c"Control", c"Alt", c"Meta"].contains(&name) {
+        update_app(hover_card::close);
+    }
     // The page has the keyboard, so the sidebar's ring of Focus Sidebar has gone stale.
     update_tab_window(tab, |shell, cx| shell.leave_keys("page", cx));
     if let Some(kept) = link_card_key(tab, unsafe { &*key }) {

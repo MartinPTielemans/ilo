@@ -14,7 +14,7 @@
 # Mac the run answers macOS's question for the local network that looking for devices brings, and
 # any it asks as the call starts. A video's page menu floats it in Picture in Picture, the Mini
 # Player, 10 in from the top right of the screen, with Dia's corners and rim, and its flat scrim
-# under the pointer, on the Mac in mini-player-rest.png and mini-player-hover.png. A scroll or a
+# under the pointer, on the Mac in mini-player-rest.png and mini-player-hover*.png. A scroll or a
 # drag moves it, ⌘ or Ctrl with a scroll sizes it, and a double-click puts it back in its tab,
 # shown. On Windows a drag let go after a rest leaves it there, with window contents shown while
 # dragging or not. On the Mac a throw settles it 10 in at a corner, and a slow release near a side
@@ -452,6 +452,12 @@ if pip_driven; then
   px=0 py=0 pw=0 ph=0
   send pip
   mini_player_at 1 "the floating call had no window"
+  # Chromium floats it in the screen's bottom right. At the top left, where it has now and then
+  # floated on X11, the drag below can't move it up and would fail for a fault that isn't the
+  # drag's, so that place gets a line of its own (#3623).
+  if ! wayland && [ "$px $py" = "0 0" ]; then
+    fail "the floating call floated at the screen's top left, not its bottom right"
+  fi
   # Up and left, as it floats in the screen's bottom right: the window manager moves it with the
   # pointer from where Chromium hands the drag over, at the press or past the drag's threshold.
   send pip press $((pw / 2)) 17
@@ -899,36 +905,60 @@ EOF
   rest=$(lightness "$out/mini-player-rest.png")
   [ "$rest" -ge 170 ] ||
     fail "the Mini Player at rest was dark over its video, at $rest where the video is about 204"
-  # Captured until the scrim, which fades in over 200 ms from the pointer's move, has come.
-  # Each capture's time from the move is logged, so a red tells captures after the controls'
-  # own hide, 2.5 s after the move, from a scrim never shown (#3354).
+  # The scrim fades in over 200 ms from the pointer's move, and the controls hide 2.5 s after it.
+  # The capture gets ready before the move and is asked for its pictures once the fade is due:
+  # started after the move, its Swift took 1 to 4 s to start on a hosted runner, and a picture
+  # past the hide showed no scrim (#3354). It takes three back to back, so a fade that starts late
+  # on a busy runner still shows in a later one, and a hover that brings no controls shows in none.
+  # Only a picture asked within 2 s of the move counts: one nearer the hide can't tell.
   scrim_ms() { perl -MTime::HiRes=time -e 'printf "%d\n", time * 1000'; }
+  ready="$out/mini-player-hover.ready" go="$out/mini-player-hover.go"
+  rm -f "$ready" "$go"
+  PICTURES=3 FRAME="$at" READY="$ready" GO="$go" ../tools/window-screenshot.sh "$pid" \
+    "$out/mini-player-hover.png" floating > "$out/mini-player-hover.times" \
+    2> "$out/mini-player-hover.log" &
+  capturing=$!
+  while [ ! -e "$ready" ] && kill -0 "$capturing" 2> /dev/null; do
+    sleep 0.05
+  done
+  [ -e "$ready" ] || {
+    wait "$capturing" || true
+    fail "the Mini Player's capture under the pointer didn't get ready: $(tail -1 "$out/mini-player-hover.log")"
+  }
   moved_at=$(scrim_ms)
   send pip move $((pw / 8)) $((ph / 2))
-  capture=0
-  for _ in $(seq 20); do
-    capture=$((capture + 1))
-    began=$(($(scrim_ms) - moved_at))
-    [ "$capture" -gt 1 ] || first_capture=$began
-    FRAME="$at" ../tools/window-screenshot.sh "$pid" "$out/mini-player-hover.png" floating ||
-      fail "no Mini Player to capture"
-    hovered=$(lightness "$out/mini-player-hover.png")
-    echo "media: scrim capture $capture began at +$began ms from the move, lightness $hovered"
-    [ "$hovered" -lt 170 ] && break
+  while [ $(($(scrim_ms) - moved_at)) -lt 250 ]; do
+    sleep 0.02
   done
-  if [ "$first_capture" -gt 2500 ]; then
-    first_when="after the controls' own hide 2.5 s after the move"
-  else
-    first_when="before the controls' own hide 2.5 s after the move"
-  fi
-  [ "$hovered" -lt 170 ] ||
-    fail "the pointer on the Mini Player didn't bring its scrim: it stayed at $hovered, where the video is about 204 and under the scrim about 133; the first of $capture captures began at +$first_capture ms, $first_when"
+  : > "$go"
+  wait "$capturing" ||
+    fail "no Mini Player to capture under the pointer: $(tail -1 "$out/mini-player-hover.log")"
+  rm -f "$ready" "$go"
+  shown='' readings='' in_time=0
+  while read -r _ n _ asked_at _ back_at; do
+    asked=$((asked_at - moved_at)) came=$((back_at - moved_at))
+    picture="$out/mini-player-hover.png"
+    [ "$n" = 1 ] || picture="$out/mini-player-hover-$n.png"
+    hovered=$(lightness "$picture")
+    echo "media: scrim picture $n asked at +$asked ms from the move, back at +$came ms, lightness $hovered"
+    readings="$readings${readings:+, }$hovered in picture $n asked at +$asked ms and back at +$came ms"
+    [ "$asked" -le 2000 ] || continue
+    in_time=$((in_time + 1))
+    [ -z "$shown" ] && [ "$hovered" -lt 170 ] && shown=$n scrim=$picture
+  done < "$out/mini-player-hover.times"
+  [ -n "$readings" ] ||
+    fail "the Mini Player's capture under the pointer said no picture's times: $(tail -1 "$out/mini-player-hover.log")"
+  [ "$in_time" -gt 0 ] ||
+    fail "the Mini Player's pictures under the pointer were all asked late, past 2 s from the move, too near the controls' own hide 2.5 s after it to tell the scrim: $readings"
+  [ -n "$shown" ] ||
+    fail "the pointer on the Mini Player didn't bring its scrim in any picture asked within 2 s: where the video is about 204 and under the scrim about 133, it read $readings"
+  echo "media: the scrim showed in picture $shown"
   # One flat scrim, as Dia's: over the video, one colour in a frame, it's as dark at a third of
   # the height as at three fifths, off the buttons above and the progress bar below (#2881). An
   # engine older than its core has Chrome's gradients.
   if engine_has ../core/mini_player.cc; then
-    upper=$(pixel "$out/mini-player-hover.png" 0.125 0.3)
-    lower=$(pixel "$out/mini-player-hover.png" 0.125 0.6)
+    upper=$(pixel "$scrim" 0.125 0.3)
+    lower=$(pixel "$scrim" 0.125 0.6)
     echo "$upper $lower" |
       awk '{ for (i = 1; i <= 3; i++) { d = $i - $(i + 3); if (d * d > 16) exit 1 } }' ||
       fail "the Mini Player's scrim wasn't flat: $upper a third down, $lower three fifths down"
