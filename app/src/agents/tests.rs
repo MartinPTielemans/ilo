@@ -787,6 +787,61 @@ fn open_tab_as_the_first_call_makes_the_agents_space(cx: &mut TestAppContext) {
     );
 }
 
+/// While the user holds one of the agent's tabs, list_tabs names it by its number and says it's
+/// with the user, with nothing of its page, and sorting by site leaves it where it is, as its place
+/// would tell its site (#3694). Handed back, it's listed as before.
+#[gpui::test]
+fn a_tab_the_user_holds_is_listed_without_its_page(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    browser.tabs.borrow_mut().extend([
+        (21, 2, "Wiki", "https://en.wikipedia.org/wiki/Rust"),
+        (22, 2, "Docs", "https://docs.example.com/"),
+        (25, 2, "More", "https://de.wikipedia.org/wiki/Arc"),
+    ]);
+    let list = |cx: &mut TestAppContext| {
+        call(&agents, "claude-code", "list_tabs", json!({}), cx)
+            .recv()
+            .unwrap()
+            .text
+    };
+    assert!(list(cx).contains("21  Wiki  https://en.wikipedia.org/wiki/Rust"));
+    agents.update(cx, |agents, cx| agents.take_over("claude-code", 21, cx));
+    let held = list(cx);
+    let line = held
+        .lines()
+        .find(|line| line[2..].starts_with("21  "))
+        .unwrap();
+    assert!(
+        line.contains("With the user until they hand it back"),
+        "{held}"
+    );
+    assert!(
+        !held.contains("Wiki") && !held.contains("wikipedia.org/wiki/Rust"),
+        "list_tabs named the held tab's page: {held}"
+    );
+    assert!(
+        held.contains("22  Docs  https://docs.example.com/"),
+        "{held}"
+    );
+
+    let sorted = call(&agents, "claude-code", "sort_tabs_by_site", json!({}), cx)
+        .recv()
+        .unwrap();
+    assert_eq!(
+        sorted,
+        ToolResult::text("Your Today tabs are together by site already."),
+        "the held tab's site moved a tab"
+    );
+    let order: Vec<u64> = (browser.tabs.borrow().iter())
+        .filter(|tab| tab.1 == 2)
+        .map(|tab| tab.0)
+        .collect();
+    assert_eq!(order, [20, 21, 22, 25]);
+
+    agents.update(cx, |agents, cx| agents.hand_back(21, cx));
+    assert!(list(cx).contains("21  Wiki  https://en.wikipedia.org/wiki/Rust"));
+}
+
 /// Two agents each list their own Space's tabs, as the core lists the calling agent's, and neither
 /// the other's nor the user's.
 #[gpui::test]
