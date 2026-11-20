@@ -472,6 +472,10 @@ done
 case "$closed" in "Closed tab $documents."*) ;; *) fail "closing the documents tab answered: $closed" ;; esac
 [ "$heard" = "Tab $documents closed." ] ||
   fail "a wait on all the agent's tabs heard the close as: $heard"
+# A wait nothing answers ends by its seconds.
+heard=$(call wait_for_event '{"events":["closed"],"seconds":1}')
+[ "$heard" = "Nothing happened in 1 s." ] || fail "a wait nothing answered ended as: $heard"
+await_log '^browser: agent mcp-client waited nothing$' "a wait's seconds logged no line"
 
 # A tab an agent's tab opens follows the agent's rules from when it's made, as the agent's own tab
 # does, whether a link, a page's window.open or a redirect in it leads there (#2660).
