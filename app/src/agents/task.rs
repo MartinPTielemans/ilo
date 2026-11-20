@@ -1781,7 +1781,7 @@ impl Agents {
         let name = match Client::from_id(agent) {
             Some(Client::Command) if under_way => return,
             Some(Client::Other | Client::Command)
-                if !given.is_empty() && !names_the_browser(&given) =>
+                if !given.is_empty() && !names_the_browser(&given) && !names_a_client(&given) =>
             {
                 given
             }
@@ -2985,6 +2985,13 @@ pub fn model_menu(
 
 /// Whether a client's name would pass for the browser's own words: one with the app's name as a
 /// word, or that calls itself the browser. "Browser Use" is an agent's.
+/// Whether a name is one of the clients' own, so a card saying "Claude Code" is always Claude
+/// Code's connection.
+fn names_a_client(name: &str) -> bool {
+    let name = name.trim().to_lowercase();
+    (Client::ALL.iter()).any(|client| client.name().to_lowercase() == name)
+}
+
 fn names_the_browser(name: &str) -> bool {
     let lower = name.to_lowercase();
     let app = env!("APP_NAME").to_lowercase();

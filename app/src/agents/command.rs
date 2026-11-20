@@ -21,7 +21,7 @@ pub mod exit {
     pub const REFUSED: i32 = 1;
     /// The command line isn't one the command takes.
     pub const USAGE: i32 = 2;
-    /// The browser isn't running with agents on.
+    /// The browser isn't running, or agents are off.
     pub const NOT_RUNNING: i32 = 3;
     /// The browser doesn't know the command's agent: Remove or Revoke took it away.
     pub const UNKNOWN: i32 = 4;
@@ -112,8 +112,8 @@ pub fn call(
     let known = WORDS.iter().find(|word| word.word == first);
     let tool = known.map_or(first.as_str(), |word| word.tool);
     let schema = schema(tools, tool)
-        .ok_or_else(|| format!("There's no command {first}. Run ilo help for the commands."))?;
-    let (positional, mut arguments) = options(rest, schema)?;
+        .ok_or_else(|| format!("There's no command “{first}”. Run ilo help for the commands."))?;
+    let (positional, mut arguments) = options(rest, schema, first)?;
     let positional = positional.as_slice();
     match (known.map(|word| word.word), positional) {
         (Some("scroll"), [where_]) => {
@@ -241,7 +241,7 @@ fn step(line: &str) -> Result<Value, String> {
                         json!(seconds.ok_or("--for takes seconds.")?),
                     );
                 }
-                _ => return Err(format!("A step takes no --{option}.")),
+                _ => return Err(format!("There's no option --{option} in a step.")),
             }
             continue;
         }
@@ -293,7 +293,11 @@ fn split(line: &str) -> Result<Vec<String>, String> {
 
 /// The words before the options, and the options as the tool's arguments: `-t N` its tab, and
 /// `--name value`, or `--name` alone for a boolean, any property the tool takes.
-fn options(words: &[String], schema: &Value) -> Result<(Vec<String>, Map<String, Value>), String> {
+fn options(
+    words: &[String],
+    schema: &Value,
+    command: &str,
+) -> Result<(Vec<String>, Map<String, Value>), String> {
     let mut positional = Vec::new();
     let mut arguments = Map::new();
     let mut words = words.iter();
@@ -313,7 +317,9 @@ fn options(words: &[String], schema: &Value) -> Result<(Vec<String>, Map<String,
             _ => property(schema, &name).map(|property| kind(property)),
         };
         let Some(kind) = kind else {
-            return Err(format!("There's no option {word} here."));
+            return Err(format!(
+                "There's no option {word} here. Run ilo help {command} for its options."
+            ));
         };
         let value = match kind {
             "boolean" => json!(true),
@@ -411,7 +417,7 @@ pub fn help(about: Option<&str>, instructions: &str, tools: &[Value]) -> Result<
     };
     let Some(about) = about else {
         let mut text = format!(
-            "{instructions}\n\nCommands, each with -t <tab> for a tab and --json for JSON:\n"
+            "{instructions}\n\nCommands (each accepts -t <tab> to target a tab, --json for JSON):\n"
         );
         for word in WORDS {
             let Some(tool) = find(word.tool) else {
@@ -430,7 +436,8 @@ pub fn help(about: Option<&str>, instructions: &str, tools: &[Value]) -> Result<
     };
     let word = WORDS.iter().find(|word| word.word == about);
     let name = word.map_or(about, |word| word.tool);
-    let tool = find(name).ok_or_else(|| format!("There's no command {about}."))?;
+    let tool = find(name)
+        .ok_or_else(|| format!("There's no command “{about}”. Run ilo help for the commands."))?;
     let mut text = match word {
         Some(word) => format!("{}\n{}\n", synopsis(word), description(tool)),
         None => format!("ilo {about}\n{}\n", description(tool)),
@@ -462,6 +469,53 @@ pub struct Printed {
     pub code: i32,
 }
 
+/// A picture of a page, which may be a signed-in one, is the user's alone to read.
+#[cfg(unix)]
+fn private(options: &mut std::fs::OpenOptions) -> &mut std::fs::OpenOptions {
+    std::os::unix::fs::OpenOptionsExt::mode(options, 0o600)
+}
+
+#[cfg(not(unix))]
+fn private(options: &mut std::fs::OpenOptions) -> &mut std::fs::OpenOptions {
+    options
+}
+
+/// Writes `bytes` to a file at `path`, which the caller chose with -o, only the user's to read
+/// when the run makes it.
+fn save_at(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut options = std::fs::OpenOptions::new();
+    private(options.write(true).create(true).truncate(true))
+        .open(path)?
+        .write_all(bytes)
+}
+
+/// Writes `bytes` to a new file of its own in `dir`, a shared one such as /tmp: under a name no
+/// one can guess, made by this run, so nothing already there, a file or a link, is written
+/// through, and only the user's to read.
+fn save_new(dir: &Path, bytes: &[u8]) -> std::io::Result<PathBuf> {
+    let mut tries = 0;
+    loop {
+        let mut random = [0u8; 12];
+        getrandom::fill(&mut random).map_err(std::io::Error::other)?;
+        let name: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+        let path = dir.join(format!("ilo-shot-{name}.png"));
+        match write_new(&path, bytes) {
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && tries < 8 => {
+                tries += 1;
+            }
+            written => return written.map(|()| path),
+        }
+    }
+}
+
+/// Writes `bytes` to a file at `path` that this call makes, never one that's there.
+fn write_new(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut options = std::fs::OpenOptions::new();
+    private(options.write(true).create_new(true))
+        .open(path)?
+        .write_all(bytes)
+}
+
 /// The tool's `result` as the run prints it: its text on stdout, or on stderr if it's an error;
 /// a picture in `output`, or a file of its own, whose path it prints.
 pub fn printed(result: &Value, json: bool, output: Option<&Path>) -> Printed {
@@ -478,16 +532,17 @@ pub fn printed(result: &Value, json: bool, output: Option<&Path>) -> Printed {
             }
             Some("image") => {
                 let data = item.get("data").and_then(Value::as_str).unwrap_or_default();
-                let path = output.map(PathBuf::from).unwrap_or_else(|| {
-                    std::env::temp_dir().join(format!("ilo-shot-{}.png", std::process::id()))
-                });
                 let written = (base64::engine::general_purpose::STANDARD.decode(data))
                     .map_err(|error| error.to_string())
                     .and_then(|bytes| {
-                        std::fs::write(&path, bytes).map_err(|error| error.to_string())
+                        let saved = match output {
+                            Some(path) => save_at(path, &bytes).map(|()| path.to_path_buf()),
+                            None => save_new(&std::env::temp_dir(), &bytes),
+                        };
+                        saved.map_err(|error| error.to_string())
                     });
                 match written {
-                    Ok(()) => image = Some(path),
+                    Ok(path) => image = Some(path),
                     Err(why) => text.push(format!("The screenshot couldn't be saved: {why}")),
                 }
             }
@@ -607,7 +662,7 @@ impl Session {
             (
                 exit::NOT_RUNNING,
                 format!(
-                    "{} isn't running with agents on. Turn them on in Settings › Agents.",
+                    "{0} isn't running, or agents are off. Open {0} and turn agents on in Settings › Agents.",
                     env!("APP_NAME")
                 ),
             )
@@ -662,7 +717,7 @@ impl Session {
             }
             if let Some(error) = answer.get("error") {
                 let message = error.get("message").and_then(Value::as_str);
-                return Err(message.unwrap_or("The browser refused.").into());
+                return Err(message.unwrap_or("The browser refused the command.").into());
             }
             return Ok(answer.get("result").cloned().unwrap_or_default());
         }
@@ -796,7 +851,7 @@ mod tests {
         assert!(
             called("fly")
                 .unwrap_err()
-                .contains("There's no command fly")
+                .contains("There's no command “fly”")
         );
         assert!(called("click").unwrap_err().contains("click needs ref"));
         assert!(called("click e2 --fast").is_err());
@@ -880,6 +935,41 @@ mod tests {
         assert_eq!(shown["image"], file.display().to_string());
         assert_eq!(std::fs::read(&file).unwrap(), b"ilo");
         _ = std::fs::remove_file(&file);
+    }
+
+    /// A screenshot without -o is a new file only the user can read, under a name of its own: a
+    /// file or a link already at a path it would take isn't written through.
+    #[cfg(unix)]
+    #[test]
+    fn a_screenshot_is_a_new_file_only_the_user_reads() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("ilo-shot-test-{}", std::process::id()));
+        _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+
+        let first = save_new(&dir, b"ilo").unwrap();
+        let second = save_new(&dir, b"ilo").unwrap();
+        assert_ne!(first, second);
+        assert_eq!(first.parent(), Some(dir.as_path()));
+        assert_eq!(std::fs::read(&first).unwrap(), b"ilo");
+        assert_eq!(mode(&first), 0o600);
+
+        let there = dir.join("there.png");
+        std::fs::write(&there, b"theirs").unwrap();
+        assert!(write_new(&there, b"ilo").is_err());
+        assert_eq!(std::fs::read(&there).unwrap(), b"theirs");
+        let target = dir.join("target");
+        std::fs::write(&target, b"theirs").unwrap();
+        let link = dir.join("link.png");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(write_new(&link, b"ilo").is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"theirs");
+
+        let chosen = dir.join("chosen.png");
+        save_at(&chosen, b"ilo").unwrap();
+        assert_eq!(mode(&chosen), 0o600);
+        _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Without an agent file there's nothing to connect as, and the run says where to add it.

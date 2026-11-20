@@ -43,9 +43,9 @@ use browser::settings_card::{self, Card, Paging};
 use browser::settings_column::{self, Section};
 use browser::settings_pictures::{appearance_title, title as side_title};
 use browser::settings_rows::{
-    Chip, Look as RowLook, SLIDE, chevron_slot, chip, command_text, detailed_row, end, frame,
-    glyph_plate, group, group_lined, named_button, row, sent_part, stop_button, stop_chip,
-    stop_popup, stop_restore, stop_switch, text,
+    Chip, Look as RowLook, SLIDE, chevron_slot, chip, command_export, command_text, detailed_row,
+    end, frame, glyph_plate, group, group_lined, named_button, row, sent_part, stop_button,
+    stop_chip, stop_popup, stop_restore, stop_switch, text,
 };
 use browser::settings_search::{
     self, EndSearch, Entry, NextControl, PageBottom, PageDown, PageTop, PageUp, PreviousControl,
@@ -4569,6 +4569,10 @@ impl Settings {
             agents::cli::State::Off => action("Add", "add-command"),
             _ => action("Remove", "remove-command"),
         });
+        let export = (failure.is_none())
+            .then_some(detail.export)
+            .flatten()
+            .map(|export| command_export(look, export, mono));
         let text = match &failure {
             Some(why) => text(look, client.name(), Some(why.clone())),
             None => command_text(look, client.name(), &detail, mono),
@@ -4584,9 +4588,11 @@ impl Settings {
         };
         Row {
             div: frame()
+                .flex_wrap()
                 .child(glyph_plate(look, COMMAND_GLYPH, true))
                 .child(text)
-                .child(end(controls)),
+                .child(end(controls))
+                .children(export),
             name: client.name().into(),
             line: Some(line),
             keys: None,

@@ -4644,8 +4644,8 @@ impl gpui::Render for PicturesPage {
         use browser::settings_column::{self, Section};
         use browser::settings_pictures::{appearance_picker, favorites_picker, picker};
         use browser::settings_rows::{
-            Look, command_text, drawn, end, frame, glyph_plate, group, popup, stop_button,
-            stop_switch, text as row_text,
+            Look, command_export, command_text, drawn, end, frame, glyph_plate, group, popup,
+            stop_button, stop_switch, text as row_text,
         };
         use browser::theme::Appearance;
         use browser::tokens::palette::{LIGHT_STAND_IN, STAND_IN};
@@ -4907,10 +4907,14 @@ impl gpui::Render for PicturesPage {
                     cli::State::Off => "Add",
                     _ => "Remove",
                 }));
+                let detail = cli::detail(state);
+                let export = (detail.export).map(|export| command_export(&look, export, mono));
                 let command = frame()
+                    .flex_wrap()
                     .child(glyph_plate(&look, "icons/square-code.svg", true))
-                    .child(command_text(&look, "ilo CLI", &cli::detail(state), mono))
-                    .child(end(controls));
+                    .child(command_text(&look, "ilo CLI", &detail, mono))
+                    .child(end(controls))
+                    .children(export);
                 vec![
                     (None, vec![master]),
                     (Some("Apps that connect"), clients),

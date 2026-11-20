@@ -95,34 +95,35 @@ pub fn searched(path: &str, folder: &Path) -> bool {
         .any(|each| !each.is_empty() && Path::new(each) == folder)
 }
 
-/// The agent file's lines: the server's address, the agent's token, and whether Add made the
-/// folder, which Remove then takes away too once it's empty.
+/// The agent file's lines: the server's address, the agent's token, and the folders Add made,
+/// the deepest first, which Remove then takes away too once they're empty.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Agent {
     pub address: PathBuf,
     pub token: String,
-    pub made_folder: bool,
+    pub made: Vec<PathBuf>,
 }
 
 impl Agent {
     fn text(&self) -> String {
-        let made = if self.made_folder {
-            "made-folder\n"
-        } else {
-            ""
-        };
-        format!("{}\n{}\n{made}", self.address.display(), self.token)
+        let mut text = format!("{}\n{}\n", self.address.display(), self.token);
+        for folder in &self.made {
+            text.push_str(&format!("made {}\n", folder.display()));
+        }
+        text
     }
 
     pub fn parse(text: &str) -> Option<Agent> {
         let mut lines = text.lines();
         let address = PathBuf::from(lines.next().filter(|line| !line.is_empty())?);
         let token = lines.next().filter(|line| !line.is_empty())?.to_string();
-        let made_folder = lines.next() == Some("made-folder");
+        let made = (lines.filter_map(|line| line.strip_prefix("made ")))
+            .map(PathBuf::from)
+            .collect();
         Some(Agent {
             address,
             token,
-            made_folder,
+            made,
         })
     }
 
@@ -143,7 +144,7 @@ pub struct Install {
 /// What Add says when the folder has an `ilo` of another program's, which it leaves.
 pub fn taken(folder: &str) -> String {
     format!(
-        "{folder}/{LINK} is another program's, so {} left it.",
+        "{folder}/{LINK} isn't {0}'s, so it wasn't replaced. Move or remove it, then Add again.",
         env!("APP_NAME")
     )
 }
@@ -175,8 +176,14 @@ impl Install {
         use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
         let failed = |error: io::Error| error.to_string();
         let link = self.link();
-        let made_folder = !self.folder.exists();
-        let made_before = Agent::read(&self.file).is_some_and(|agent| agent.made_folder);
+        // A home with no `~/.local` gets both folders, and Remove takes back both.
+        let made_now: Vec<PathBuf> = (self.folder.ancestors())
+            .take_while(|folder| !folder.exists())
+            .map(Path::to_path_buf)
+            .collect();
+        let mut made = Agent::read(&self.file).map_or(Vec::new(), |agent| agent.made);
+        made.retain(|folder| !made_now.contains(folder));
+        made.splice(0..0, made_now.iter().cloned());
         std::fs::create_dir_all(&self.folder).map_err(failed)?;
         match std::fs::symlink_metadata(&link) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -187,7 +194,7 @@ impl Install {
         let agent = Agent {
             address: address.into(),
             token: token.into(),
-            made_folder: made_folder || made_before,
+            made,
         };
         let wrote = (std::fs::OpenOptions::new())
             .write(true)
@@ -202,8 +209,8 @@ impl Install {
             });
         if let Err(error) = wrote {
             _ = std::fs::remove_file(&link);
-            if made_folder {
-                _ = std::fs::remove_dir(&self.folder);
+            for folder in &made_now {
+                _ = std::fs::remove_dir(folder);
             }
             return Err(failed(error));
         }
@@ -216,10 +223,10 @@ impl Install {
     }
 
     /// Takes away what Add made: the link, if it's still the command's, the agent file, and the
-    /// folder if Add made it and nothing else is in it now.
+    /// folders Add made, each if nothing else is in it now.
     pub fn remove(&self) -> Result<(), String> {
         let failed = |error: io::Error| error.to_string();
-        let made_folder = Agent::read(&self.file).is_some_and(|agent| agent.made_folder);
+        let made = Agent::read(&self.file).map_or(Vec::new(), |agent| agent.made);
         if self.ours() {
             std::fs::remove_file(self.link()).map_err(failed)?;
         }
@@ -227,9 +234,9 @@ impl Install {
             Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(failed(error)),
             _ => {}
         }
-        if made_folder {
-            // Only an empty one goes; a file the user put there since keeps it.
-            _ = std::fs::remove_dir(&self.folder);
+        for folder in made {
+            // Only an empty one goes; a file the user put there since keeps it, and its parent.
+            _ = std::fs::remove_dir(folder);
         }
         Ok(())
     }
@@ -322,12 +329,36 @@ mod tests {
             Some(Agent {
                 address: "/profile/Agents.sock".into(),
                 token: "a-token".into(),
-                made_folder: false,
+                made: Vec::new(),
             })
         );
         install.remove().unwrap();
         assert!(!install.added());
         assert_eq!(contents(&temp.0), before);
+
+        // A home with no `~/.local` gets `~/.local/bin`, and Remove takes both back.
+        let temp = Temp::new("bare-home");
+        let install = self::install(&temp);
+        let local = install.folder.parent().unwrap().to_path_buf();
+        std::fs::create_dir_all(local.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(install.file.parent().unwrap()).unwrap();
+        let before = contents(&temp.0);
+        install.add(Path::new("/s"), "t").unwrap();
+        assert!(install.added());
+        let made = Agent::read(&install.file).unwrap().made;
+        assert_eq!(made, [install.folder.clone(), local.clone()]);
+        install.remove().unwrap();
+        assert_eq!(contents(&temp.0), before, "~/.local is left behind");
+
+        // A file the user put in `~/.local` since keeps it, and the bin folder still goes.
+        install.add(Path::new("/s"), "t").unwrap();
+        std::fs::write(local.join("share"), "the user's").unwrap();
+        install.remove().unwrap();
+        assert!(!install.folder.exists());
+        assert_eq!(
+            std::fs::read_to_string(local.join("share")).unwrap(),
+            "the user's"
+        );
     }
 
     /// The agent file holds the token, so only the user may read it, though a file left there

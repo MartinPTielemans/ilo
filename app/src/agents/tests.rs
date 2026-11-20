@@ -7059,6 +7059,9 @@ mod sessions {
             format!("{} agent", app.to_uppercase()),
             "The browser".into(),
             "Checked by your browser".into(),
+            // Another client's name is that client's.
+            " claude code ".into(),
+            "Codex".into(),
         ] {
             hello(&agents, "mcp-client", &posing, cx);
             assert_eq!(named(&agents, cx).0, "MCP client", "{posing} passed");
@@ -7347,6 +7350,12 @@ mod sessions {
             agents.update(cx, |agents, cx| agents.handle(bye, cx));
             answer
         };
+        // A command can't pass for an app the user connected.
+        for posing in ["Claude Code", " CODEX"] {
+            hello(&agents, agent, posing, cx);
+            let name = agents.read_with(cx, |agents, _| agents.agent_name(agent).to_string());
+            assert_eq!(name, "ilo CLI", "{posing} passed");
+        }
         hello(&agents, agent, "Researcher", cx);
         command(1, "read_page", json!({ "tab": 20 }), cx);
         // A later command naming another keeps the card's name.
