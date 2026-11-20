@@ -478,6 +478,7 @@ at=$step
 expect '^browser: library row menu [0-9]* 0$' "⇧F10 from History's field didn't open the ringed row's menu"
 expect '^browser: menu shown Open in new tab' "⇧F10 from History's field didn't show its ringed row's menu"
 expect '^browser: menu highlights .* at ' "the row's menu from ⇧F10 didn't highlight its first item"
+expect '^browser: menu window at ' "the menu's window didn't take the keyboard"
 press escape
 expect '^browser: menu closed$' "escape didn't close History's row's menu"
 tail -n 4 "$focus_file" | grep -q '^UI Automation focus: [A-Za-z ]* "Search History", framework AccessKit' ||

@@ -586,11 +586,13 @@ expect "^browser: profile $work archive tabs after 7 days\$" "choosing 7 days di
 post clickkey $(drawn "archive $default")
 expect '^browser: menu shown 12 hours (default) (checked), 24 hours, 7 days, 30 days, Never$' \
   "the second profile's time changed the first's"
+expect '^browser: menu window at ' "the menu's window didn't take the keyboard"
 send key escape
 expect '^browser: menu closed$' "escape didn't close the first profile's times"
 post clickkey $(drawn "archive $work")
 expect '^browser: menu shown 12 hours (default), 24 hours, 7 days (checked), 30 days, Never$' \
   "the second profile didn't keep 7 days"
+expect '^browser: menu window at ' "the menu's window didn't take the keyboard"
 send key escape
 expect '^browser: menu closed$' "escape didn't close the second profile's times"
 ../tools/window-screenshot.sh "$pid" "$out/settings-profile-settings.png" || fail "no window to capture"
@@ -837,6 +839,7 @@ expect "^browser: menu shown $(cased 'New Space…, New Folder…, New Split Vie
   "the footer's + didn't show its menu with New Note off"
 grep '^browser: menu shown ' "$log" | tail -1 | grep -q "$(cased 'New Note')" &&
   fail "the footer's + offered New Note while it's off: $(grep '^browser: menu shown ' "$log" | tail -1)"
+expect '^browser: menu window at ' "the menu's window didn't take the keyboard"
 send key escape
 expect '^browser: menu closed$' "escape didn't close the footer's menu"
 new_note_switch on

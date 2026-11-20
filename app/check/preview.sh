@@ -531,6 +531,7 @@ post rightclick $link_point
 expect "^browser: menu shown $in_tab, $in_window, " \
   "with previews off, the link's menu didn't go from $in_tab to $in_window: \
 $(grep '^browser: menu shown' "$log" | tail -1)"
+expect '^browser: menu window at ' "the menu's window didn't take the keyboard"
 send key escape
 expect '^browser: menu closed$' "Esc didn't close the link's menu"
 send click $link_point shift

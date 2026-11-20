@@ -3545,7 +3545,11 @@ impl Settings {
         cx: &mut Context<Self>,
     ) {
         let message = format!("Delete “{name}”?");
-        let detail = shell::profile_goes_with(favorites_scope(), favorites);
+        let detail = shell::profile_goes_with(
+            favorites_scope(),
+            favorites,
+            crate::platform::keeps_passkeys(),
+        );
         #[cfg(target_os = "linux")]
         dialog::ask_in(
             &self.dialog,

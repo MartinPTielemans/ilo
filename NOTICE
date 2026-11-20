@@ -256,6 +256,30 @@ file beside it:
   uBlock Origin - a comprehensive, efficient content blocker
   Copyright (C) 2014-present Raymond Hill
 
+Filter lists in ilo for iPhone
+Shipped converted, in the iPhone app's Rules folder: mobile/ios/Blocking/build.sh turns each list
+into WebKit content-blocking rules with Brave's adblock-rust (https://github.com/brave/adblock-rust,
+Mozilla Public License 2.0, a build tool only) and mobile/ios/Blocking/convert, which is the record
+of each change: rules WebKit can't express are left out, and the rest are split into rule lists.
+The lists are the ones uBlock Origin 1.75.0 above carries and turns on, as app/ublock.ini pins it:
+- uBlock filters, with its Badware risks, Privacy, Unbreak and Quick fixes
+  (https://github.com/uBlockOrigin/uAssets), GNU General Public License v3.0 or later;
+- EasyList and EasyPrivacy (https://easylist.to/), GNU General Public License v3.0 or later, or
+  Creative Commons Attribution-ShareAlike 3.0;
+- Peter Lowe's ad and tracking server list (https://pgl.yoyo.org/as/), the McRae General Public
+  License version 4.r53;
+- the Online Malicious URL Blocklist (https://gitlab.com/malware-filter/urlhaus-filter), CC0 1.0;
+and two for cookie notices, from https://github.com/uBlockOrigin/uAssetsCDN at the commit
+mobile/ios/Blocking/lists.ini pins:
+- EasyList – Cookie Notices (https://easylist.to/), GNU General Public License v3.0 or later, or
+  Creative Commons Attribution-ShareAlike 3.0;
+- uBlock filters – Cookie Notices (https://github.com/uBlockOrigin/uAssets), GNU General Public
+  License v3.0 or later.
+The tracking parameters it takes off links, in mobile/ios/App/Blocking/TrackingParameters.swift,
+are the names in Mozilla's query-stripping list for Firefox
+(https://firefox.settings.services.mozilla.com/v1/buckets/main/collections/query-stripping/records),
+Mozilla Public License 2.0.
+
 GPUI (https://github.com/zed-industries/zed), Apache License 2.0
 Built into every build of the app: Zed's crates gpui, gpui_macros, gpui_platform, gpui_macos,
 gpui_apple, gpui_windows, gpui_linux, gpui_wgpu, gpui_util, gpui_shared_string, collections,

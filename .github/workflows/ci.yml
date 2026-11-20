@@ -37,6 +37,7 @@ jobs:
       app_mac: ${{ steps.proven.outputs.app_mac }}
       engine_windows: ${{ steps.detect.outputs.engine_windows }}
       app_windows: ${{ steps.proven.outputs.app_windows }}
+      mobile_ios: ${{ steps.proven.outputs.mobile_ios }}
     steps:
       # History without file contents, for the merge base, and only the files the decision reads.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -77,11 +78,15 @@ jobs:
           CORE_LINUX: ${{ steps.detect.outputs.core_linux }}
           APP_MAC: ${{ steps.detect.outputs.app_mac }}
           APP_WINDOWS: ${{ steps.detect.outputs.app_windows }}
+          MOBILE_IOS: ${{ steps.detect.outputs.mobile_ios }}
           BRANCH_PUSH: ${{ github.event_name == 'push' && github.ref != 'refs/heads/main' }}
         run: |
-          for job in core_linux app_mac; do
-            needed=$CORE_LINUX
-            [ "$job" = core_linux ] || needed=$APP_MAC
+          for job in core_linux app_mac mobile_ios; do
+            case $job in
+              core_linux) needed=$CORE_LINUX ;;
+              app_mac) needed=$APP_MAC ;;
+              mobile_ios) needed=$MOBILE_IOS ;;
+            esac
             if [ "$MAIN" = true ] && [ "$needed" = true ] &&
               [ -n "$(.github/scripts/tree-proven.sh "ci-$job" "$TREE")" ]; then
               needed=false
@@ -123,6 +128,16 @@ jobs:
     with:
       from_ci: true
 
+  # The iPhone app, for a change to mobile/ or to what it reads of the desktop's, and for no other
+  # (.github/scripts/ci-changes.cjs). A change to mobile/ alone runs this and none of the jobs above.
+  mobile_ios:
+    name: ilo for iPhone
+    needs: changes
+    if: needs.changes.outputs.mobile_ios == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/mobile-ios.yml
+
   # To hook in app-linux.yml or engine-windows.yml: replace its push and pull_request triggers with
   # `on: workflow_call`, add a job like core_linux gated on needs.changes.outputs.app_linux (or
   # engine_windows), and add the job to Check's needs. The job's key must match its output's name.
@@ -130,7 +145,7 @@ jobs:
   check:
     name: Check
     if: always() && needs.changes.result != 'skipped'
-    needs: [changes, core_linux, app_mac, app_windows]
+    needs: [changes, core_linux, app_mac, app_windows, mobile_ios]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions: {}

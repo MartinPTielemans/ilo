@@ -1,0 +1,244 @@
+# ilo for iPhone (mobile/AGENTS.md) on GitHub's hosted Macs, in two jobs at once: IloSync's tests
+# against an ilo-server of the run's own, and the app's tests on a simulator with its Release
+# compile for a device, unsigned.
+# ci.yml calls it for a change to mobile/ or to what the phone reads of the desktop's
+# (.github/scripts/ci-changes.cjs), so Check covers it, and a change to neither starts it. By hand,
+# on any ref, which on main also saves its caches: gh workflow run mobile-ios.yml --ref <branch>
+# IloSync is a package of Swift 6.0's with the system's frameworks alone, so its tests run on
+# macos-26, a released image. The app needs Xcode 27's SDK, which of GitHub's free runners only the
+# xcode-27 image has, a preview still on 2026-11-18, whose queue GitHub doesn't promise: macos-26
+# stops at Xcode 26.6. Never xcode-27-xlarge, a larger runner, which is paid. That image's
+# simulators are iOS 27's alone, so nothing here runs the app on iOS 26, the oldest it runs on. When
+# macOS 27's image leaves preview, its label goes in the app job's runs-on.
+# It signs nothing, sends nothing to Apple and holds no secret: a TestFlight build is uploaded by
+# hand, until Xcode Cloud is connected for it (mobile/AGENTS.md), which has the certificates these
+# runners never get.
+name: ilo for iPhone
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # ilo-server's commit, the one check-mac.yml builds, so the phone and the desktop are checked
+  # against one server: move them together.
+  ILO_SERVER_COMMIT: 882f2736e5a3b228543ae33b821aeeb52f80426d
+
+jobs:
+  sync:
+    name: IloSync's tests
+    runs-on: macos-26
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: mobile/ios
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # IloSync's tests sign in to an ilo-server of their own, on SQLite with throwaway addresses,
+      # never the hosted one, and skip without its binary, which they look for at this path. Only
+      # the binary is kept, and main alone saves it, as for every cache here (#1969).
+      - id: server-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/ilo-ios-spike/ilo-server-target/release/ilo-server
+          key: ilo-server-ios-${{ env.ILO_SERVER_COMMIT }}
+
+      - if: ${{ steps.server-cache.outputs.cache-hit != 'true' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: MartinPTielemans/ilo-server
+          ref: ${{ env.ILO_SERVER_COMMIT }}
+          path: mobile/ios/.deps/ilo-server
+          persist-credentials: false
+
+      - name: ilo-server
+        run: |
+          target=$HOME/.cache/ilo-ios-spike/ilo-server-target
+          # The server's passkeys link Homebrew's OpenSSL, which a kept binary loads too.
+          brew list openssl@3 > /dev/null 2>&1 || brew install openssl@3
+          if [ ! -x "$target/release/ilo-server" ]; then
+            cd .deps/ilo-server
+            OPENSSL_DIR=$(brew --prefix openssl@3) CARGO_TARGET_DIR=$target cargo build --release --locked
+          fi
+          # The desktop's name for it (app/check/ilo-server.sh), for when the tests read that.
+          echo "ILO_SERVER=$target/release/ilo-server" >> "$GITHUB_ENV"
+
+      - if: ${{ steps.server-cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/ilo-ios-spike/ilo-server-target/release/ilo-server
+          key: ilo-server-ios-${{ env.ILO_SERVER_COMMIT }}
+
+      # With the image's own Swift, an earlier one than the app's Xcode has: the package says 6.0.
+      # The summary says how many tests were skipped, as a skipped test isn't a passed one.
+      - name: IloSync's tests
+        working-directory: mobile/ios/Sync
+        run: |
+          echo "- IloSync's tests run with $(swift --version 2>&1 | head -n 1)." >> "$GITHUB_STEP_SUMMARY"
+          status=0
+          swift test 2>&1 | tee "$RUNNER_TEMP/sync-tests.log" || status=$?
+          grep -E 'Executed [0-9]+ tests?' "$RUNNER_TEMP/sync-tests.log" | tail -n 1 |
+            sed 's/^[[:space:]]*/- IloSync: /' >> "$GITHUB_STEP_SUMMARY" || true
+          exit "$status"
+
+  app:
+    name: The app's tests and Release compile
+    runs-on: xcode-27
+    timeout-minutes: 90
+    env:
+      # The Xcode the app is built with (mobile/AGENTS.md), not the image's default, which moves.
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
+    defaults:
+      run:
+        working-directory: mobile/ios
+    steps:
+      # All of the repo: the app's tests and its blocking rules read the desktop's files by path.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Xcode
+        run: |
+          if [ ! -d "$DEVELOPER_DIR" ]; then
+            echo "::error::The runner's image has no Xcode at $DEVELOPER_DIR. It has: $(echo /Applications/Xcode_*.app)"
+            exit 1
+          fi
+          xcodebuild -version
+
+      # The blocking rules the app comes with, which Blocking/build.sh makes of pinned lists and
+      # the tree doesn't hold: the same rules for the same pins, so they're kept by the pins.
+      - id: rules-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: mobile/ios/Blocking/Rules
+          key: ios-rules-${{ hashFiles('mobile/ios/Blocking/**', 'app/ublock.ini') }}
+
+      # The script Xcode Cloud runs after it clones, so it's proven here before a release needs it:
+      # the rules, unless the cache had them, and the project, which XcodeGen writes from
+      # project.yml.
+      - name: Rules and project
+        run: ci_scripts/ci_post_clone.sh
+
+      - if: ${{ steps.rules-cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: mobile/ios/Blocking/Rules
+          key: ${{ steps.rules-cache.outputs.cache-primary-key }}
+
+      # A numbered model, such as iPhone 17, on the newest iOS that has one and that this Xcode has
+      # the SDK for: a later Xcode's runtime isn't this one's to run.
+      - id: simulator
+        name: Simulator
+        run: |
+          sdk=$(xcrun --sdk iphonesimulator --show-sdk-version)
+          xcrun simctl list devices available --json > "$RUNNER_TEMP/simulators.json"
+          chosen=$(jq -r --arg sdk "$sdk" '
+            ($sdk | split(".") | map(tonumber)) as $max
+            | [.devices | to_entries[]
+                | (.key | capture("SimRuntime\\.iOS-(?<major>[0-9]+)-(?<minor>[0-9]+)")?) as $os
+                | select($os != null)
+                | [($os.major | tonumber), ($os.minor | tonumber)] as $version
+                | select($version <= $max)
+                | .value[] | select(.name | test("^iPhone"))
+                | {numbered: (.name | test("^iPhone [0-9]+$")), $version, name, udid}]
+            | sort_by([.numbered, .version]) | last
+            | if . then "\(.udid) \(.name), iOS \(.version | map(tostring) | join("."))" else empty end
+            ' "$RUNNER_TEMP/simulators.json")
+          if [ -z "$chosen" ]; then
+            echo "::error::The runner has no iPhone simulator on iOS $sdk or earlier."
+            xcrun simctl list devices available
+            exit 1
+          fi
+          echo "udid=${chosen%% *}" >> "$GITHUB_OUTPUT"
+          echo "- The app's tests run on ${chosen#* }, with Xcode $(xcodebuild -version | sed -n 's/^Xcode //p')." >> "$GITHUB_STEP_SUMMARY"
+
+      # The Release compile runs whatever the tests did, so one run reports both failures; Verdict
+      # fails the job for them. A summary line says how many tests were skipped, as a skipped test
+      # isn't a passed one. The runner's simulator holds a page's load for a minute or more at
+      # times in its first ten minutes or so, and a test run again at once meets the same hold. So
+      # the suites with a failed test are run once more after the rest, when it has settled, and
+      # theirs is the result. The summary names them, so a suite that fails often stays in sight.
+      - id: tests
+        name: The app's tests
+        continue-on-error: true
+        env:
+          SIMULATOR: ${{ steps.simulator.outputs.udid }}
+        run: |
+          tests() {
+            bundle=$1
+            shift
+            xcodebuild -project ilo.xcodeproj -scheme ilo -configuration Debug \
+              -destination "platform=iOS Simulator,id=$SIMULATOR" -resultBundlePath "$bundle" "$@"
+          }
+          counts() {
+            xcrun xcresulttool get test-results summary --path "$1" --compact 2> /dev/null |
+              jq -r --arg what "$2" '"- \($what): \(.totalTestCount) tests, \(.passedTests) passed, \(.failedTests) failed, \(.skippedTests) skipped."' \
+                >> "$GITHUB_STEP_SUMMARY" || true
+          }
+          status=0
+          tests "$RUNNER_TEMP/ilo-tests.xcresult" test || status=$?
+          counts "$RUNNER_TEMP/ilo-tests.xcresult" "The app"
+          [ "$status" -eq 0 ] && exit 0
+          # A run that failed with no failed test, as one that didn't compile, has none to run again.
+          suites=$(xcrun xcresulttool get test-results tests --path "$RUNNER_TEMP/ilo-tests.xcresult" --compact 2> /dev/null |
+            jq -r '[.. | objects
+              | select(.nodeType? == "Test Suite" and any(.children[]?; .nodeType == "Test Case" and .result == "Failed"))
+              | .name] | unique | .[]' || true)
+          [ -n "$suites" ] || exit "$status"
+          only=()
+          for suite in $suites; do only+=("-only-testing:iloTests/$suite"); done
+          echo "again=true" >> "$GITHUB_OUTPUT"
+          status=0
+          tests "$RUNNER_TEMP/ilo-tests-again.xcresult" "${only[@]}" test-without-building || status=$?
+          counts "$RUNNER_TEMP/ilo-tests-again.xcresult" "Run again after a failed test, $(printf '%s' "$suites" | tr '\n' ' ')"
+          exit "$status"
+
+      # What the simulator's Debug build doesn't compile: the optimizer's checks and a device's
+      # SDK. Unsigned, as the runner has no certificate and needs none to compile.
+      - id: release
+        name: Release compile for a device
+        continue-on-error: true
+        run: |
+          xcodebuild -project ilo.xcodeproj -scheme ilo -configuration Release \
+            -destination 'generic/platform=iOS' build CODE_SIGNING_ALLOWED=NO
+
+      - name: Verdict
+        env:
+          TESTS: ${{ steps.tests.outcome }}
+          RELEASE: ${{ steps.release.outcome }}
+        run: |
+          {
+            echo "- The app's tests: $TESTS"
+            echo "- Release compile for a device: $RELEASE"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          [ "$TESTS" = success ] && [ "$RELEASE" = success ]
+
+      # Each failed test with its attachments, to open in Xcode: the first run's, and the second's
+      # where there was one.
+      - if: ${{ !cancelled() && (steps.tests.outcome == 'failure' || steps.tests.outputs.again == 'true') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ilo-ios-tests
+          path: ${{ runner.temp }}/ilo-tests*.xcresult
+          retention-days: 7
+
+  # The tree has passed once both jobs have, which neither can record alone.
+  proven:
+    name: Both passed
+    needs: [sync, app]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions/tree-proof
+      - uses: ./.github/actions/tree-proof
+        with:
+          job: ci-mobile_ios
