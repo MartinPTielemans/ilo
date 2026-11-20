@@ -7538,6 +7538,57 @@ mod waits {
         assert_eq!(line(&closed), "Tab 20 closed.");
     }
 
+    /// While the user holds a tab, a wait on it hears nothing of its page, at once or later: where
+    /// they went never reaches the agent, only where the page is once they hand it back.
+    #[gpui::test]
+    fn a_tab_the_user_holds_tells_nothing_of_its_page(cx: &mut TestAppContext) {
+        let (agents, browser, _) = connected(cx);
+        _ = call(&agents, AGENT, "list_tabs", json!({}), cx);
+        agents.update(cx, |agents, cx| agents.take_over(AGENT, 20, cx));
+        let page = json!({ "events": ["loaded", "navigated"], "tab": 20 });
+        let named = wait(&agents, page.clone(), cx);
+        let any = wait(&agents, json!({ "events": ["loaded", "navigated"] }), cx);
+        browser.loading.borrow_mut().insert(20);
+        go(&browser, 20, "https://www.example.com/private");
+        agents.update(cx, |agents, cx| {
+            agents.wait_page(20, "https://www.example.com/private", cx)
+        });
+        browser.loading.borrow_mut().remove(&20);
+        go(&browser, 20, "https://www.example.com/where");
+        agents.update(cx, |agents, cx| {
+            agents.wait_page(20, "https://www.example.com/where", cx);
+            agents.wait_loaded(20, "https://www.example.com/where", cx);
+        });
+        assert!(
+            named.try_recv().is_err(),
+            "the held tab's page reached its wait"
+        );
+        assert!(
+            any.try_recv().is_err(),
+            "the held tab's page reached a wait on all"
+        );
+        let asked = wait(&agents, page.clone(), cx);
+        assert!(asked.try_recv().is_err(), "a held tab answered at once");
+
+        agents.update(cx, |agents, cx| agents.hand_back(20, cx));
+        assert!(
+            named.try_recv().is_err(),
+            "the hand back was a load or a move"
+        );
+        agents.update(cx, |agents, cx| {
+            agents.wait_page(20, "https://www.example.com/where", cx)
+        });
+        assert_eq!(
+            line(&named),
+            "Tab 20 went to https://www.example.com/where."
+        );
+        assert_eq!(line(&any), "Tab 20 went to https://www.example.com/where.");
+        assert_eq!(
+            line(&asked),
+            "Tab 20 went to https://www.example.com/where."
+        );
+    }
+
     /// A wait answers once its seconds pass with nothing, and Stop answers it at once. With no
     /// wait, nothing listens to the pages.
     #[gpui::test]

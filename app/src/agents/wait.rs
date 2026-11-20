@@ -166,8 +166,8 @@ pub fn nothing(seconds: u64) -> String {
     format!("Nothing happened in {seconds} s.")
 }
 
-/// What a wait waits for, as its step on the card says it: "maat.pt to load", "a download", "an
-/// event". `on` is the named tab's site, or empty for any of the agent's tabs.
+/// What a wait waits for, as its step on the card says it: "maat.pt to load", "a download", "a
+/// change". `on` is the named tab's site, or empty for any of the agent's tabs.
 pub fn target(arguments: &Value, on: &str) -> String {
     let events = parse(arguments)
         .map(|(events, _)| events)
@@ -183,12 +183,12 @@ fn words(events: &[Awaited], on: &str) -> String {
     };
     match events {
         [Awaited::Loaded] => format!("{} to load", on("a page")),
-        [Awaited::Navigated] => format!("{} to move on", on("a page")),
+        [Awaited::Navigated] => format!("{} to change address", on("a page")),
         [Awaited::Closed] => format!("{} to close", on("a tab")),
         [Awaited::Download] => "a download".into(),
-        [Awaited::Taken] => format!("you to take {}", on("a tab")),
+        [Awaited::Taken] => format!("you to take over {}", on("a tab")),
         [Awaited::HandedBack] => format!("{} back", on("a tab")),
-        _ => "an event".into(),
+        _ => "a change".into(),
     }
 }
 
@@ -270,14 +270,14 @@ impl Agents {
                 if let Some(now) = self.already(&agent, tab, &events, cx) {
                     return self.tell_wait(&agent, now, reply, cx);
                 }
-                vec![self.seen_now(tab, cx)]
+                vec![self.seen_now(&agent, tab, cx)]
             }
             // Edges alone: a state such as loaded would hold on some tab at once.
             None => {
                 let space = self.browser.agent_space(&agent);
                 let tabs = self.browser.space_tabs(space, cx).into_iter();
                 let tabs = tabs.filter(|tab| self.seen(tab.id, cx));
-                tabs.map(|tab| self.seen_now(tab.id, cx)).collect()
+                tabs.map(|tab| self.seen_now(&agent, tab.id, cx)).collect()
             }
         };
         let id = self.next_request;
@@ -301,8 +301,17 @@ impl Agents {
         WAITING.set(true);
     }
 
-    /// `tab` as a wait sees it now.
-    fn seen_now(&self, tab: u64, cx: &gpui::App) -> Seen {
+    /// `tab` as `agent`'s wait sees it now: one the user holds as the agent was last told of it.
+    fn seen_now(&self, agent: &str, tab: u64, cx: &gpui::App) -> Seen {
+        if self.held.contains_key(&tab) {
+            let told = self.told.get(&(agent.to_string(), tab)).cloned();
+            let url = told.unwrap_or_default();
+            return Seen {
+                tab,
+                url,
+                loading: false,
+            };
+        }
         let url = self.browser.tab(tab, cx).url;
         let loading = self.browser.loading(tab, cx);
         Seen { tab, url, loading }
@@ -318,7 +327,8 @@ impl Agents {
         matches!(self.browser.off_limits(tab, cx), None | Some(NOT_WEB_PAGE))
     }
 
-    /// What of `events` is so of the agent's `tab` already, the first in the call's order.
+    /// What of `events` is so of the agent's `tab` already, the first in the call's order. Of a tab
+    /// the user holds, only that they hold it: its page is theirs until they hand it back.
     fn already(
         &self,
         agent: &str,
@@ -330,6 +340,7 @@ impl Agents {
         let told = self.told.get(&(agent.to_string(), tab));
         let held = self.held.contains_key(&tab);
         events.iter().find_map(|event| match event {
+            Awaited::Loaded | Awaited::Navigated if held => None,
             Awaited::Loaded => (!self.browser.loading(tab, cx)).then(|| Happened::Loaded {
                 tab,
                 url: url.clone(),
@@ -421,7 +432,7 @@ impl Agents {
                 .map(|(&id, _)| id)
                 .collect();
             for id in joins {
-                let seen = self.seen_now(tab, cx);
+                let seen = self.seen_now(&agent, tab, cx);
                 self.waits
                     .get_mut(&id)
                     .expect("it was just found")
@@ -432,8 +443,11 @@ impl Agents {
         Some(agent)
     }
 
-    /// `tab` loaded `url` (tabs::tab_loaded).
+    /// `tab` loaded `url` (tabs::tab_loaded). A tab the user holds tells nothing of its page.
     pub fn wait_loaded(&mut self, tab: u64, url: &str, cx: &mut Context<Self>) {
+        if self.held.contains_key(&tab) {
+            return;
+        }
         if let Some(agent) = self.waiting_owner(tab, cx) {
             let url = shown(url);
             self.hear(Happened::Loaded { tab, url }, &agent, cx);
@@ -441,8 +455,13 @@ impl Agents {
     }
 
     /// `tab`'s page is at `url` (tabs::tab_state_changed): to a wait that saw it elsewhere, it
-    /// navigated, and to one that saw it loading and sees it no longer, it loaded.
+    /// navigated, and to one that saw it loading and sees it no longer, it loaded. While the user
+    /// holds the tab, its waits keep what they saw before, so where the user went never comes out,
+    /// only where the page is once handed back.
     pub fn wait_page(&mut self, tab: u64, url: &str, cx: &mut Context<Self>) {
+        if self.held.contains_key(&tab) {
+            return;
+        }
         let Some(agent) = self.waiting_owner(tab, cx) else {
             return;
         };
@@ -546,6 +565,15 @@ impl Agents {
             (held::Event::HandBack, true) => Happened::HandedBack { tab },
             _ => return,
         };
+        // A load the user started isn't one for the agent's waits to hear end.
+        if let Happened::HandedBack { .. } = happened {
+            let loading = self.browser.loading(tab, cx);
+            for wait in self.waits.values_mut() {
+                for seen in wait.tabs.iter_mut().filter(|seen| seen.tab == tab) {
+                    seen.loading = loading;
+                }
+            }
+        }
         if !self.waits.is_empty() {
             self.hear(happened, agent, cx);
         }
@@ -647,6 +675,6 @@ mod tests {
         assert_eq!(target(json!(["loaded"]), "maat.pt"), "maat.pt to load");
         assert_eq!(target(json!(["loaded"]), ""), "a page to load");
         assert_eq!(target(json!(["download"]), "maat.pt"), "a download");
-        assert_eq!(target(json!(["loaded", "closed"]), "maat.pt"), "an event");
+        assert_eq!(target(json!(["loaded", "closed"]), "maat.pt"), "a change");
     }
 }

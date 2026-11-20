@@ -508,7 +508,7 @@ fn shared() -> Value {
         {
             "name": "wait_for_event",
             "title": "Wait for an event",
-            "description": "Wait until one of the events you name happens in your own tabs, or until seconds pass, in place of calling snapshot or list_tabs again and again. Answers with one line: what happened, on which tab, or that nothing did. With a tab, an event that's a state already true answers at once: loaded when the tab isn't loading, navigated when its URL isn't the one your last answer on it gave, taken while the user holds it, handed_back while nobody does, closed when it isn't yours. Without one, it waits on all your tabs for the next event to happen. A download that ended after its call answered is told once, either way.",
+            "description": "Wait until one of the events you name happens in your own tabs, or until seconds pass, in place of calling snapshot or list_tabs again and again. Answers with one line: what happened, on which tab, or that nothing did. With a tab, an event that's a state already true answers at once: loaded when the tab isn't loading, navigated when its URL isn't the one your last answer on it gave, taken while the user holds it, handed_back while nobody does, closed when it isn't yours. While the user holds a tab, a wait on it hears only taken, handed_back and closed, and nothing of its page. Without one, it waits on all your tabs for the next event to happen. A download that ended after its call answered is told once, either way.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -836,7 +836,7 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
             "Waiting for",
             "Waited for",
             "Couldn't wait for",
-            target("an event"),
+            target("a change"),
         ),
         "thought" => ("Thinking", "Thought", "Thought", String::new()),
         action => return describe(action).to_string(),
@@ -995,7 +995,7 @@ pub fn describe(action: &str) -> &'static str {
         "kept" => "You kept the tab",
         "run_steps" => "Ran steps",
         "wait" => "Waited for the page",
-        "wait_for_event" => "Waited for an event",
+        "wait_for_event" => "Waited for a change",
         "revoked" => "You revoked its permission",
         "revoked all" => "You revoked all its permissions",
         "title" => "Named the task",
