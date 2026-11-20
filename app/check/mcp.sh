@@ -493,7 +493,8 @@ case "$article_read" in
 esac
 article_next=$(call read_page "{\"tab\":$article,\"from\":10000}")
 case "$article_next" in
-  *"10. The river rose"*) ;;
+  # Its 10,000th character is in the 15th paragraph, each about 700.
+  *"15. The river rose"*) ;;
   *) fail "read_page from 10000 didn't go on with the article: $(printf '%s' "$article_next" | head -c 300)" ;;
 esac
 case "$article_text" in
