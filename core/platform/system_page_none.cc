@@ -27,6 +27,10 @@ void SystemPage::ListStores(base::OnceCallback<void(std::vector<std::string>)> d
 
 void SystemPage::ReleaseStore(const std::string&) {}
 
+void SystemPage::WriteStores(base::OnceCallback<void(StoresWritten)> done) {
+  std::move(done).Run(StoresWritten::kNone);
+}
+
 void SystemPage::ClearSite(const SystemStore&,
                            const std::string&,
                            SiteData,
