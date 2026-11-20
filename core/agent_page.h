@@ -145,9 +145,9 @@ class AgentPage : public content::WebContentsObserver,
   // Runs the next job once the one before has answered.
   void Next();
   void Run();
-  // Whether the tab's page is one agents may use, and if not, why, for the agent.
+  // Whether the tab's page is one agents may use, and if not, fails the job with why.
   bool IsWebPage();
-  std::string NotWebPage();
+  void FailNotWebPage();
   // Runs |then| once the page has stopped loading, or after a while.
   void AfterLoad(base::OnceClosure then);
 
@@ -295,8 +295,9 @@ class AgentPage : public content::WebContentsObserver,
                     std::set<int64_t> passwords,
                     std::vector<std::pair<int64_t, FieldFacts>> filled,
                     size_t next);
-  void Answer(std::string text, bool error);
-  void Fail(std::string why);
+  // With |error|, |failure| is what agent code decides on, as Report gives it.
+  void Answer(std::string text, bool error, bc_agent_failure failure = BC_AGENT_FAILURE_NONE);
+  void Fail(std::string why, bc_agent_failure failure = BC_AGENT_FAILURE_NONE);
   // Ends the job, which its page's dialog or the limit stopped waiting on, with |why|, and with
   // |unstarted| the jobs queued behind it.
   void EndWaiting(std::string why, std::optional<std::string> unstarted);
@@ -377,6 +378,7 @@ class AgentPage : public content::WebContentsObserver,
     uint64_t request;
     std::string text;
     bool error;
+    bc_agent_failure failure;
   };
   std::optional<Held> held_;
   base::OneShotTimer download_starting_;

@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <string>
 
+#include "browser_core/public/browser_core.h"
+
 namespace content {
 class WebContents;
 }  // namespace content
@@ -19,9 +21,11 @@ void SendAgentRequest(content::WebContents& contents,
                       const std::string& headers,
                       std::string body);
 
-// Answers |request| with |why| it wasn't sent, from a task of its own, as an answer never comes
-// before its call returns.
-void RefuseAgentRequest(uint64_t request, std::string why);
+// Answers |request| with |why| it wasn't sent, and |failure| for agent code to decide on, from a
+// task of its own, as an answer never comes before its call returns.
+void RefuseAgentRequest(uint64_t request,
+                        std::string why,
+                        bc_agent_failure failure = BC_AGENT_FAILURE_NONE);
 
 }  // namespace browser_core
 
