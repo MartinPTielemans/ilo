@@ -761,6 +761,9 @@ void SetUpMiniPlayer() {
   g_browser_core_mini_player_place = &Placed;
   g_browser_core_mini_player_left = &Left;
   g_browser_core_mini_player_laid_out = &LaidOut;
+}
+
+void WatchFloatingPages() {
   PictureInPictureWindowManager::GetInstance()->AddObserver(&FloatingPage());
 }
 
