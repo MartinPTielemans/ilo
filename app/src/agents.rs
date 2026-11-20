@@ -534,6 +534,9 @@ struct Sending {
     /// What's left of what the call's answers may show, and how many secrets they hid.
     shown: usize,
     hidden: usize,
+    /// Whether the tab's page, as the agent's last outline of it saw it, has a password field,
+    /// which its answer says, as a site's answers may then be those to someone signed out.
+    signs_in: bool,
     reply: mpsc::Sender<ToolResult>,
 }
 
@@ -1284,9 +1287,17 @@ impl Agents {
             "list_tabs" => {
                 // Its first call makes its Space, which the core then lists.
                 self.space(&agent, cx);
-                // A tab of its own off the web is listed by its number alone, so it can close it.
+                // A tab of its own off the web is listed by its number alone, so it can close it,
+                // and one the user holds by its number and theirs, so where they go stays theirs.
                 let tabs: Vec<TabInfo> = (self.browser.agent_tabs(&agent, cx).into_iter())
                     .filter_map(|tab| match self.browser.off_limits(tab.id, cx) {
+                        None | Some(NOT_WEB_PAGE) if self.held.contains_key(&tab.id) => {
+                            Some(TabInfo {
+                                title: WITH_THE_USER.into(),
+                                url: "".into(),
+                                ..tab
+                            })
+                        }
                         None => Some(tab),
                         Some(NOT_WEB_PAGE) => Some(TabInfo {
                             title: OFF_THE_WEB.into(),
@@ -2440,8 +2451,32 @@ impl Agents {
                     if submit { " and pressed Enter" } else { "" }
                 );
                 act.what = format!("send {} on {host}", page::curly(&text, 60));
+                // Its Enter asks as a click on what it submits would, and else as a message sent.
+                let outline = self.outlines.get(&tab);
+                let pressing = (submit
+                    .then(|| page::pressing_risk(&host, outline, "Enter", Some(element))))
+                .flatten();
+                risk = match pressing {
+                    Some(pressing) => {
+                        // The control and the site come before the typed text, which a
+                        // long one can't then push out of the sidebar's row or the strip.
+                        let control = label(&pressing.control);
+                        let typed = format!("{} into {}", page::curly(&text, 60), label(element));
+                        act.what = match pressing.surely {
+                            true => {
+                                format!(
+                                    "press Enter to click {control} on {host} after typing {typed}"
+                                )
+                            }
+                            false => format!(
+                                "press Enter, which may click {control} on {host}, after typing {typed}"
+                            ),
+                        };
+                        Some(pressing.why)
+                    }
+                    None => submit.then(|| page::risk(&host, "send")).flatten(),
+                };
                 act.text = text;
-                risk = submit.then(|| page::risk(&host, "send")).flatten();
             }
             "select" => {
                 let option = string("option").unwrap_or_default().trim().to_string();
@@ -2479,9 +2514,22 @@ impl Agents {
                 act.page = PageAction::Key;
                 act.note = format!("Pressed {key}.");
                 act.what = format!("press Enter to send on {host}");
-                risk = (key == "Enter")
-                    .then(|| page::risk(&host, "send"))
-                    .flatten();
+                // What the key activates asks as a click on it would (GHSA-hqw3-jp9p-3rhj), and
+                // Enter else as a message sent.
+                let outline = self.outlines.get(&tab);
+                risk = match page::pressing_risk(&host, outline, &key, None) {
+                    Some(pressing) => {
+                        let control = label(&pressing.control);
+                        act.what = match pressing.surely {
+                            true => format!("press {key} to click {control} on {host}"),
+                            false => format!("press {key}, which may click {control} on {host}"),
+                        };
+                        Some(pressing.why)
+                    }
+                    None => (key == "Enter")
+                        .then(|| page::risk(&host, "send"))
+                        .flatten(),
+                };
                 act.text = key;
             }
             _ => {
@@ -3012,6 +3060,9 @@ impl Agents {
     /// there's none left.
     /// Sends a call's requests one by one, `answered` if the user allowed its changes.
     fn send(&mut self, act: Act, answered: bool, cx: &mut Context<Self>) {
+        let page = self.browser.tab(act.tab, cx).url;
+        let signs_in =
+            (self.outlines.get(&act.tab)).is_some_and(|outline| outline.signs_in_at(&page));
         let sending = Sending {
             agent: act.agent,
             tab: act.tab,
@@ -3021,6 +3072,7 @@ impl Agents {
             answers: Vec::new(),
             shown: request::ALL_SHOWN,
             hidden: 0,
+            signs_in,
             reply: act.reply,
         };
         self.send_next(sending, cx)
@@ -3165,17 +3217,20 @@ impl Agents {
         }
         let info = self.browser.tab(tab, cx);
         let refs = self.refs.entry(tab).or_default();
+        // The page's whole outline is stored even when the answer shows a part, since what has
+        // the keyboard decides what a key press asks next (GHSA-hqw3-jp9p-3rhj).
+        let whole = page::outline(&info, &nodes, refs, None);
         let text = match show {
             Show::Element(node) => {
                 let part = page::outline(&info, &nodes, refs, Some(node)).text();
+                self.outlines.insert(tab, whole);
                 match note.is_empty() {
                     true => part,
                     false => format!("{note}\n\n{part}"),
                 }
             }
             show => {
-                self.outlines
-                    .insert(tab, page::outline(&info, &nodes, refs, None));
+                self.outlines.insert(tab, whole);
                 self.answer_with(&agent, tab, note, show)
             }
         };
@@ -3215,8 +3270,12 @@ impl Agents {
         reply: mpsc::Sender<ToolResult>,
         cx: &mut Context<Self>,
     ) {
-        let today = (self.browser.agent_tabs(agent, cx).into_iter())
-            .filter(|tab| !tab.pinned && self.browser.off_limits(tab.id, cx).is_none());
+        // A tab the user holds stays where it is, as its place among the sites would tell its site.
+        let today = (self.browser.agent_tabs(agent, cx).into_iter()).filter(|tab| {
+            !tab.pinned
+                && self.browser.off_limits(tab.id, cx).is_none()
+                && !self.held.contains_key(&tab.id)
+        });
         let mut rows: Vec<(u64, usize, Option<String>)> = Vec::new();
         for tab in today {
             let split = self.browser.split(tab.id, cx);
@@ -3896,9 +3955,11 @@ const CHANGES_ASK: &str = "Changes ask every time.";
 /// what wasn't sent.
 fn finish(sending: Sending, error: bool) {
     let Sending {
+        tab,
         answers,
         left,
         hidden,
+        signs_in,
         reply,
         ..
     } = sending;
@@ -3908,6 +3969,13 @@ fn finish(sending: Sending, error: bool) {
         false => answer.clone(),
     });
     let mut text = answers.collect::<Vec<_>>().join("\n\n");
+    if signs_in {
+        text = format!(
+            "Tab {tab}'s page asks for a password, as a sign-in page does, so its site may have \
+             answered as to someone signed out. Signing in is the user's to do: hand them the tab \
+             with hand_off, and send the requests again once they hand it back.\n\n{text}"
+        );
+    }
     match left.len() {
         0 => {}
         1 => text.push_str("\n\nThe last request wasn't sent."),
@@ -3995,6 +4063,8 @@ const NOT_WEB_PAGE: &str =
     "The tab's page isn't an http or https page, the only pages agents may use.";
 /// list_tabs' title for a tab of the agent's own off the web, in place of its title and address.
 const OFF_THE_WEB: &str = "A page that isn't http or https";
+/// list_tabs' words for a tab the user holds, in place of its page's title and address (#3694).
+const WITH_THE_USER: &str = "With the user until they hand it back";
 /// The core's refusal of a tab not in the agent's Space (bc_agent_may_act).
 const NOT_ITS_SPACE: &str = "The tab isn't in the agent's own Space.";
 
