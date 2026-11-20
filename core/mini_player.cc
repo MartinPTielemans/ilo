@@ -673,87 +673,6 @@ void LaidOut(VideoOverlayWindowViews* window) {
              << (minimize && minimize->GetVisible() ? minimize->bounds().ToString() : "none");
 }
 
-// Where a page's own floating window, such as a call's, was placed and where it first moved, as a
-// log for #3623: on X11 a call has now and then floated at the screen's top left rather than its
-// bottom right. Chrome places the window on the display nearest its opener's window as the page
-// asks (browser_navigator.cc), so the core reads that display then too, and the window a task
-// later, once Chrome has made it.
-class FloatingPageWatch : public PictureInPictureWindowManager::Observer,
-                          public views::WidgetObserver {
- public:
-  void OnEnterPictureInPicture() override {
-    PictureInPictureWindowManager* manager = PictureInPictureWindowManager::GetInstance();
-    content::WebContents* page = manager->GetChildWebContents();
-    content::WebContents* opener = manager->GetWebContents();
-    if (!page || !opener) {
-      return;
-    }
-    Window* window = Window::Holding(Tab::IdOf(opener));
-    views::Widget* widget = window ? window->widget() : nullptr;
-    const display::Screen* screen = display::Screen::Get();
-    std::string from;
-    display::Display display;
-    if (widget && widget->GetNativeWindow()) {
-      from = "from a window at " + widget->GetWindowBoundsInScreen().ToString() +
-             (widget->IsVisible() ? " shown" : " hidden");
-      display = screen->GetDisplayNearestWindow(widget->GetNativeWindow());
-    } else {
-      from = "from no window";
-      display = screen->GetDisplayForNewWindows();
-    }
-    from += display.is_valid() ? " on a display at " + display.bounds().ToString() +
-                                     " with its work area at " + display.work_area().ToString()
-                               : " with no display";
-    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(&FloatingPageWatch::Made, base::Unretained(this),
-                                  page->GetWeakPtr(), std::move(from)));
-  }
-
-  void OnWidgetBoundsChanged(views::Widget* widget, const gfx::Rect&) override {
-    const gfx::Rect bounds = widget->GetWindowBoundsInScreen();
-    if (bounds.origin() == placed_.origin()) {
-      return;
-    }
-    // The first move alone: a window manager's place, or the user's first drag.
-    observation_.Reset();
-    LOG(ERROR) << "browser: floating page moved to " << bounds.ToString() << " on " << On(widget);
-  }
-
-  void OnWidgetDestroying(views::Widget* widget) override { observation_.Reset(); }
-
- private:
-  void Made(base::WeakPtr<content::WebContents> page, const std::string& from) {
-    views::Widget* widget =
-        page ? views::Widget::GetTopLevelWidgetForNativeView(page->GetNativeView()) : nullptr;
-    if (!widget) {
-      LOG(ERROR) << "browser: floating page had no window a task after it asked, opened " << from;
-      return;
-    }
-    placed_ = widget->GetWindowBoundsInScreen();
-    observation_.Reset();
-    observation_.Observe(widget);
-    LOG(ERROR) << "browser: floating page placed at " << placed_.ToString() << " on " << On(widget)
-               << (widget->IsVisible() ? ", shown" : ", not shown yet") << ", opened " << from;
-  }
-
-  // The display |widget| is on, as Chrome reads it for the window's later places.
-  static std::string On(views::Widget* widget) {
-    const display::Display display =
-        display::Screen::Get()->GetDisplayNearestWindow(widget->GetNativeWindow());
-    return display.is_valid() ? "a display at " + display.bounds().ToString() +
-                                    " with its work area at " + display.work_area().ToString()
-                              : "no display";
-  }
-
-  gfx::Rect placed_;
-  base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{this};
-};
-
-FloatingPageWatch& FloatingPage() {
-  static base::NoDestructor<FloatingPageWatch> watch;
-  return *watch;
-}
-
 }  // namespace
 
 void SetUpMiniPlayer() {
@@ -761,7 +680,6 @@ void SetUpMiniPlayer() {
   g_browser_core_mini_player_place = &Placed;
   g_browser_core_mini_player_left = &Left;
   g_browser_core_mini_player_laid_out = &LaidOut;
-  PictureInPictureWindowManager::GetInstance()->AddObserver(&FloatingPage());
 }
 
 void RegisterMiniPlayerPrefs(PrefRegistrySimple* registry) {
