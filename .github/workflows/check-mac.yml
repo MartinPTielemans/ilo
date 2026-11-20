@@ -266,11 +266,12 @@ jobs:
             app/target
           key: ${{ steps.cache.outputs.cache-primary-key }}
 
-      # The sync-account, sync-devices and sync-extensions runs sign in to an ilo-server of their
-      # own, on SQLite with a throwaway account, never the hosted one: built from the server's repo
-      # at the commit check-linux.yml builds, when the runs include one, as the default ones do.
+      # The sync-account, sync-devices, sync-extensions and share-send runs sign in to an ilo-server
+      # of their own, on SQLite with a throwaway account, never the hosted one: built from the
+      # server's repo at the commit check-linux.yml builds, when the runs include one, as the
+      # default ones do.
       - id: server
-        if: ${{ steps.engine.outputs.found == 'true' && (contains(steps.runs.outputs.list, ' sync-account ') || contains(steps.runs.outputs.list, ' sync-devices ') || contains(steps.runs.outputs.list, ' sync-extensions ')) }}
+        if: ${{ steps.engine.outputs.found == 'true' && (contains(steps.runs.outputs.list, ' sync-account ') || contains(steps.runs.outputs.list, ' sync-devices ') || contains(steps.runs.outputs.list, ' sync-extensions ') || contains(steps.runs.outputs.list, ' share-send ')) }}
         uses: actions/checkout@v4
         with:
           repository: MartinPTielemans/ilo-server
