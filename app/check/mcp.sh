@@ -2,7 +2,9 @@
 # An MCP client reaches the browser through the bridge beside it once Settings › Agents is on and
 # it's connected, as the saved settings say here. The socket is the user's alone, and the bridge
 # gets nowhere without the agent's token. Its first call makes its Space, which no window lists, and
-# its first call that acts on a tab starts its card, one for all its connections. It may list and read
+# its first call that acts on a tab starts its card, one for all its connections. Unnamed, the card
+# is titled by the web site it first acted on; title names it, its line leading with the client's
+# name, and a second name within a minute is refused. It may list and read
 # only the tabs there: its list leaves out the user's tab, a read of the user's tab is refused, with
 # an activity-log entry, and a read of the check's agent.html, opened in its Space, gives the page's text. A
 # link to an app (ms-word:) opens nothing and asks nothing, the tab staying on its page, and the
@@ -614,6 +616,24 @@ sessions=$(grep -c '^browser: session session-[0-9]* of agent mcp-client as chec
 [ "$sessions" = 1 ] || fail "the client's two connections had $sessions cards, not one"
 session=$(sed -n 's/^browser: session \(session-[0-9]*\) of agent mcp-client as check$/\1/p' "$log")
 await_log "^browser: task plate task-${session#session-} at " "the client's card wasn't drawn"
+# Unnamed, it's titled by the web site it first acted on, the user's page off the web naming
+# none; named with title, it's the agent's words, and its line leads with the client's name, with
+# no step count. A different name within a minute is refused and changes nothing (#3690).
+await_log "^browser: task card $session titled localhost\$" \
+  "the unnamed card wasn't titled by its site: $(grep "^browser: task card $session titled " "$log" | tail -1)"
+named=$(call title '{"text":"Check the pages"}')
+[ "$named" = "The task has its name." ] || fail "title answered: $named"
+await_log "^browser: task card $session titled Check the pages\$" "the card didn't take the agent's title"
+line=$(grep "^browser: task card $session [A-Z][a-z]* " "$log" | tail -1 | cut -d' ' -f6-)
+case "$line" in
+  "check · "*) ;;
+  *) fail "the card's line didn't lead with the client's name: $line" ;;
+esac
+case "$line" in *"Step "*) fail "the card's line counted its steps: $line" ;; esac
+renamed=$(call title '{"text":"Another name"}')
+[ "$renamed" = "error: The task was named under a minute ago; name it again when you move on to another task." ] ||
+  fail "a second title within a minute answered: $renamed"
+grep -q "^browser: task card $session titled Another name\$" "$log" && fail "a second title within a minute took"
 # The agent's own page, with text to read and a link to follow, once a live site's (#3144).
 printf '%s' '<!doctype html><title>Agent page</title><h1>Agent page</h1>
 <p>A page of the check for the agent to read.</p><p><a href="two.html">Two</a></p>' \
@@ -2899,6 +2919,13 @@ if [ "$driven" = 1 ]; then
   await_log "^browser: agent question $pending gone\$" "a gone agent's question stayed open"
   # The card on its receipt, its status rolled in by now.
   ../tools/window-screenshot.sh "$pid" "$out/agent-receipt.png" || fail "no window to capture"
+  # Library › Agents lists it under the title the agent gave it (#3690).
+  send menu 'View Agents…'
+  expect '^browser: library section agents$' "View Agents… didn't open the Library on Agents"
+  await '^browser: library shown$' || fail "the Library didn't settle open on Agents"
+  ../tools/window-screenshot.sh "$pid" "$out/agent-library.png" || fail "no window to capture"
+  send menu 'View Agents…'
+  expect '^browser: library hidden$' "View Agents… didn't close the Library"
 
   # Reconnected, the client's next call on a tab is a card of its own. Its conversation's Stop
   # answers the call under way that the user stopped it, then closes the client's connection,
