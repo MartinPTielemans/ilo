@@ -236,7 +236,7 @@ fn shared() -> Value {
         {
             "name": "close_tab",
             "title": "Close tab",
-            "description": "Close one of your tabs. A page that may have unsaved changes stays open unless discard is true.",
+            "description": "Close one of your tabs. Where you typed, chose an option, ticked a box or pressed an editing key, or the user had the tab, a page that asks before it's left stays open unless discard is true; any other tab closes at once.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

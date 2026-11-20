@@ -3117,6 +3117,14 @@ fn opened_with_handler(agents: &Entity<Agents>, browser: &Made, cx: &mut TestApp
     browser.asks.borrow_mut().insert(30);
 }
 
+/// The same tab, where the agent typed into the Coupon field, which may be unsaved.
+fn typed_in_with_handler(agents: &Entity<Agents>, browser: &Made, cx: &mut TestAppContext) {
+    opened_with_handler(agents, browser, cx);
+    let typing = json!({ "tab": 30, "ref": "e1", "text": "SAVE10" });
+    let typed = call(agents, "claude-code", "type", typing, cx);
+    _ = page_done(agents, browser, typed, shop_tree(), cx);
+}
+
 /// The page of `tab` shows its own dialog of `kind`, or none any more, as the core reports it.
 fn page_dialog(
     agents: &Entity<Agents>,
@@ -3318,7 +3326,7 @@ fn another_spaces_dialog_says_nothing(cx: &mut TestAppContext) {
 #[gpui::test]
 fn an_agent_discards_only_a_page_it_opened(cx: &mut TestAppContext) {
     let (agents, browser, _) = connected(cx);
-    opened_with_handler(&agents, &browser, cx);
+    typed_in_with_handler(&agents, &browser, cx);
 
     let kept = call(
         &agents,
@@ -3339,8 +3347,8 @@ fn an_agent_discards_only_a_page_it_opened(cx: &mut TestAppContext) {
     assert!(kept.error);
     assert_eq!(
         kept.text,
-        "Tab 30 stays open: its page asks before it's left, as it may have unsaved changes. \
-         close_tab with discard: true closes it without saving."
+        "Tab 30 stays open: its page asks before it's left, and you typed into textbox \
+         “Coupon” there. close_tab with discard: true closes it without saving."
     );
     assert!(
         browser.tabs.borrow().iter().any(|tab| tab.0 == 30),
@@ -3369,6 +3377,107 @@ fn an_agent_discards_only_a_page_it_opened(cx: &mut TestAppContext) {
         *browser.asked.borrow(),
         None,
         "the agent's own tab asked the user"
+    );
+}
+
+/// The agent's own tab where it changed nothing closes at the first call without asking its page,
+/// whose handler only a read or a click of the agent's woke: nothing there is unsaved, so keeping
+/// it would cost a call and teach the agent to discard everywhere. Its answer and log say a close,
+/// not a discard (#3654).
+#[gpui::test]
+fn a_tab_the_agent_only_read_and_clicked_in_closes_at_the_first_call(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    opened_with_handler(&agents, &browser, cx);
+    let clicked = call(
+        &agents,
+        "claude-code",
+        "click",
+        json!({ "tab": 30, "ref": "e1" }),
+        cx,
+    );
+    _ = page_done(&agents, &browser, clicked, shop_tree(), cx);
+    let closed = call(
+        &agents,
+        "claude-code",
+        "close_tab",
+        json!({ "tab": 30 }),
+        cx,
+    );
+    cx.run_until_parked();
+    let closed = closed.try_recv().expect("an answer at once");
+    assert_eq!(
+        (closed.error, closed.text.as_str()),
+        (false, "Closed tab 30.")
+    );
+    assert_eq!(*browser.closes.borrow(), [(30, true)], "its page was asked");
+    let entry = log(&agents, "claude-code", cx).remove(0);
+    assert_eq!(
+        entry,
+        ("close_tab".into(), "docs.example".into(), "".into())
+    );
+    assert_eq!(*browser.asked.borrow(), None, "asked the user");
+}
+
+/// What the agent changes keeps a close for its page's answer, and a kept close names each change:
+/// a key that edits, a choice, a box ticked. A key that only moves the keyboard, as Tab, doesn't.
+#[gpui::test]
+fn a_kept_close_names_what_the_agent_changed(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    opened_with_handler(&agents, &browser, cx);
+    let tab = json!({ "tab": 30, "key": "Tab" });
+    let moved = call(&agents, "claude-code", "press_key", tab, cx);
+    _ = page_done(&agents, &browser, moved, shop_tree(), cx);
+    assert!(agents.read_with(cx, |agents, _| !agents.edited.contains_key(&30)));
+    for key in ["Backspace", "Backspace", "Enter"] {
+        let pressed = call(
+            &agents,
+            "claude-code",
+            "press_key",
+            json!({ "tab": 30, "key": key }),
+            cx,
+        );
+        _ = page_done(&agents, &browser, pressed, shop_tree(), cx);
+    }
+    let kept = call(
+        &agents,
+        "claude-code",
+        "close_tab",
+        json!({ "tab": 30 }),
+        cx,
+    );
+    page_answers(&agents, &browser, 30, Closed::Asks, cx);
+    assert_eq!(
+        kept.recv().unwrap().text,
+        "Tab 30 stays open: its page asks before it's left, and you pressed Backspace and pressed \
+         Enter there. close_tab with discard: true closes it without saving."
+    );
+}
+
+/// A tab the user held, taken over or handed to them, keeps a close for its page's answer even
+/// where the agent changed nothing, as they type only in a tab they hold, and the answer says
+/// what's unsaved may be theirs.
+#[gpui::test]
+fn a_tab_the_user_held_keeps_a_close_for_its_page(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    opened_with_handler(&agents, &browser, cx);
+    agents.update(cx, |agents, cx| {
+        agents.take_over("claude-code", 30, cx);
+        agents.hand_back(30, cx);
+    });
+    cx.run_until_parked();
+    let kept = call(
+        &agents,
+        "claude-code",
+        "close_tab",
+        json!({ "tab": 30 }),
+        cx,
+    );
+    assert!(kept.try_recv().is_err(), "answered before the page did");
+    page_answers(&agents, &browser, 30, Closed::Asks, cx);
+    assert_eq!(
+        kept.recv().unwrap().text,
+        "Tab 30 stays open: its page asks before it's left, and the user had the tab, so what's \
+         unsaved may be theirs. close_tab with discard: true closes it without saving."
     );
 }
 
@@ -3402,7 +3511,7 @@ fn a_page_that_doesnt_ask_closes_at_the_first_call(cx: &mut TestAppContext) {
 #[gpui::test]
 fn closes_while_the_page_is_asked_share_its_answer(cx: &mut TestAppContext) {
     let (agents, browser, _) = connected(cx);
-    opened_with_handler(&agents, &browser, cx);
+    typed_in_with_handler(&agents, &browser, cx);
     let first = call(
         &agents,
         "claude-code",
@@ -3447,7 +3556,7 @@ fn closes_while_the_page_is_asked_share_its_answer(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_tab_that_changed_meanwhile_stays(cx: &mut TestAppContext) {
     let (agents, browser, _) = connected(cx);
-    opened_with_handler(&agents, &browser, cx);
+    typed_in_with_handler(&agents, &browser, cx);
     let kept = call(
         &agents,
         "claude-code",
@@ -5860,6 +5969,11 @@ mod tasks {
         let shop = (basket, space, "Shop", "https://shop.example/basket");
         browser.tabs.borrow_mut().push(shop);
         browser.asks.borrow_mut().insert(draft);
+        // The agent wrote in the draft, so its close waits for the page (#3654).
+        agents.update(cx, |agents, _| {
+            let edited = agents.edited.entry(draft).or_default();
+            edited.changes.push("typed into textbox “Text”".into());
+        });
         let basket = json!({ "tab": basket });
         assert!(!traced(&agents, &browser, &agent, "close_tab", basket, None, cx).error);
         // The core asks the draft's page, a discard too, and the page answers from a task of its
