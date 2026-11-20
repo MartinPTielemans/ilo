@@ -124,7 +124,9 @@ for key, entry in assets.items():
                 f.write(body)
             kept.append(key)
             break
-with open(os.path.join(folder, "snapshot.txt"), "w") as f:
+# Lines end in \n alone: Windows' Python would end them in \r\n, and a list's name that keeps its
+# \r in the loop below names no file to copy.
+with open(os.path.join(folder, "snapshot.txt"), "w", newline="\n") as f:
     f.write(time.strftime("%Y-%m-%dT%H:%M:%SZ\n", time.gmtime()) + "\n".join(kept) + "\n")
 print(f"{len(kept)} lists downloaded: {', '.join(kept)}")
 PY

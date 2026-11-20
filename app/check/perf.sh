@@ -819,7 +819,8 @@ chrome_quit() {
     sleep 0.5
   done
   echo "Chrome didn't quit in ${1:-20} s, so it's ended"
-  python3 -I -c 'import json, sys; print("\n".join(json.load(open(sys.argv[1]))["procs"]))' \
+  # As bytes: text stdout on Windows ends a line in \r\n, and taskkill takes no PID with a \r.
+  python3 -I -c 'import json, sys; sys.stdout.buffer.write("".join("%s\n" % p for p in json.load(open(sys.argv[1]))["procs"]).encode())' \
     "$perf_dir/chrome-left.json" | while read -r left; do
     if windows; then taskkill //F //PID "$left" > /dev/null 2>&1; else kill -9 "$left" 2> /dev/null; fi
   done || true
