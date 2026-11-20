@@ -3704,8 +3704,109 @@ fn a_tab_the_user_held_keeps_a_close_for_its_page(cx: &mut TestAppContext) {
     assert_eq!(
         kept.recv().unwrap().text,
         "Tab 30 stays open: its page asks before it's left, and the user had the tab, so what's \
-         unsaved may be theirs. close_tab with discard: true closes it without saving."
+         unsaved may be theirs. close_tab with discard: true closes it without saving, once the \
+         user says yes."
     );
+}
+
+/// The agent's own tab, held by the user and given back: its page asked to stay. A discard asks
+/// the user first with the question a tab the agent didn't open gets, and what's unsaved may be
+/// theirs (#3675).
+fn held_and_kept(agents: &Entity<Agents>, browser: &Made, cx: &mut TestAppContext) {
+    opened_with_handler(agents, browser, cx);
+    agents.update(cx, |agents, cx| {
+        agents.take_over("claude-code", 30, cx);
+        agents.hand_back(30, cx);
+    });
+    cx.run_until_parked();
+    let kept = call(agents, "claude-code", "close_tab", json!({ "tab": 30 }), cx);
+    page_answers(agents, browser, 30, Closed::Asks, cx);
+    assert!(kept.recv().unwrap().error);
+}
+
+/// A discard of the agent's own tab that the user held asks them, once its page asked again, and
+/// their yes closes it without saving, logged as a discard (#3675).
+#[gpui::test]
+fn discarding_a_tab_the_user_held_asks_them(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    held_and_kept(&agents, &browser, cx);
+
+    let discard = json!({ "tab": 30, "discard": true });
+    let closed = call(&agents, "claude-code", "close_tab", discard, cx);
+    assert_eq!(*browser.asked.borrow(), None, "asked before the page did");
+    page_answers(&agents, &browser, 30, Closed::Asks, cx);
+    assert!(
+        closed.try_recv().is_err(),
+        "closed before the user said yes"
+    );
+    let question = (browser.asked.borrow().clone()).expect("the discard didn't ask the user");
+    assert_eq!(
+        question.what,
+        "close the tab on docs.example without saving"
+    );
+    assert_eq!(question.why, UNSAVED);
+    assert!(browser.tabs.borrow().iter().any(|tab| tab.0 == 30));
+    agents.update(cx, |agents, cx| {
+        agents.answer(question.id, Answer::Once, cx)
+    });
+    let closed = closed.recv().unwrap();
+    assert_eq!(
+        (closed.error, closed.text.as_str()),
+        (false, "Closed tab 30 without saving.")
+    );
+    assert!(browser.tabs.borrow().iter().all(|tab| tab.0 != 30));
+    assert_eq!(
+        log(&agents, "claude-code", cx).remove(0),
+        ("discard_tab".into(), "docs.example".into(), "".into())
+    );
+}
+
+/// The user's no keeps the tab they held open, and the agent hears it (#3675).
+#[gpui::test]
+fn a_no_keeps_a_tab_the_user_held(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    held_and_kept(&agents, &browser, cx);
+
+    let discard = json!({ "tab": 30, "discard": true });
+    let refused = call(&agents, "claude-code", "close_tab", discard, cx);
+    page_answers(&agents, &browser, 30, Closed::Asks, cx);
+    let question = (browser.asked.borrow().clone()).expect("the discard didn't ask the user");
+    agents.update(cx, |agents, cx| {
+        agents.answer(question.id, Answer::Dismiss, cx)
+    });
+    let refused = refused.recv().unwrap();
+    assert!(refused.error);
+    assert!(
+        refused.text.starts_with("The user said no"),
+        "{}",
+        refused.text
+    );
+    assert!(
+        browser.tabs.borrow().iter().any(|tab| tab.0 == 30),
+        "a no closed the tab"
+    );
+}
+
+/// A tab the user held whose page shows its own dialog can't be asked: its discard asks the user
+/// at once, where the agent's own tab the user never held closes (#3536, #3675).
+#[gpui::test]
+fn discarding_a_held_tab_under_its_dialog_asks_the_user(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    held_and_kept(&agents, &browser, cx);
+    page_dialog(&agents, 30, Some(DialogKind::Alert), cx);
+
+    let discard = json!({ "tab": 30, "discard": true });
+    let closed = call(&agents, "claude-code", "close_tab", discard, cx);
+    let question = (browser.asked.borrow().clone()).expect("the discard didn't ask the user");
+    assert_eq!(
+        question.what,
+        "close the tab on docs.example without saving"
+    );
+    assert!(
+        closed.try_recv().is_err(),
+        "closed before the user said yes"
+    );
+    assert!(browser.tabs.borrow().iter().any(|tab| tab.0 == 30));
 }
 
 /// A page whose handler doesn't ask closes at the first call, discard or not, with nothing lost
