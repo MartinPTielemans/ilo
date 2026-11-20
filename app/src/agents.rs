@@ -2403,17 +2403,20 @@ impl Agents {
                 .flatten();
                 risk = match pressing {
                     Some(pressing) => {
-                        act.what = format!(
-                            "type “{}” into {} and press Enter, {} {}, on {host}",
-                            page::clip(&text, 60),
-                            label(element),
-                            if pressing.surely {
-                                "to click"
-                            } else {
-                                "which can click"
-                            },
-                            label(&pressing.control),
-                        );
+                        // The control and the site come before the typed text, which a
+                        // long one can't then push out of the sidebar's row or the strip.
+                        let control = label(&pressing.control);
+                        let typed = format!("“{}” into {}", page::clip(&text, 60), label(element));
+                        act.what = match pressing.surely {
+                            true => {
+                                format!(
+                                    "press Enter to click {control} on {host} after typing {typed}"
+                                )
+                            }
+                            false => format!(
+                                "press Enter, which may click {control} on {host}, after typing {typed}"
+                            ),
+                        };
                         Some(pressing.why)
                     }
                     None => submit.then(|| page::risk(&host, "send")).flatten(),
@@ -2461,14 +2464,10 @@ impl Agents {
                 let outline = self.outlines.get(&tab);
                 risk = match page::pressing_risk(&host, outline, &key, None) {
                     Some(pressing) => {
+                        let control = label(&pressing.control);
                         act.what = match pressing.surely {
-                            true => {
-                                format!("press {key} on {} on {host}", label(&pressing.control))
-                            }
-                            false => format!(
-                                "press {key}, which can click {}, on {host}",
-                                label(&pressing.control)
-                            ),
+                            true => format!("press {key} to click {control} on {host}"),
+                            false => format!("press {key}, which may click {control} on {host}"),
                         };
                         Some(pressing.why)
                     }

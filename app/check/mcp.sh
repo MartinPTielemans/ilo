@@ -2803,10 +2803,10 @@ CARD
     esac
   }
   shop=' on shop\.localhost$'
-  pays=" and press Enter, which can click “Pay now”,$shop"
+  pays="press Enter, which may click “Pay now” on shop\\.localhost, after typing “4242” into “Card number”\$"
   checkout
   pay_asks type "{\"tab\":$shop_tab,\"ref\":\"$card_ref\",\"text\":\"4242\",\"submit\":true}" \
-    "^browser: agent mcp-client asks [0-9]*: type “4242” into “Card number”$pays" agent-pays-typed
+    "^browser: agent mcp-client asks [0-9]*: $pays" agent-pays-typed
   checkout
   typed=$(call type "{\"tab\":$shop_tab,\"ref\":\"$card_ref\",\"text\":\"4242\"}")
   case "$typed" in
@@ -2814,22 +2814,22 @@ CARD
     *) fail "typing in the card's field answered: $typed" ;;
   esac
   pay_asks press_key "{\"tab\":$shop_tab,\"key\":\"Enter\"}" \
-    "^browser: agent mcp-client asks [0-9]*: press Enter, which can click “Pay now”,$shop" \
+    "^browser: agent mcp-client asks [0-9]*: press Enter, which may click “Pay now”$shop" \
     agent-pays-enter
   checkout
   call type "{\"tab\":$shop_tab,\"ref\":\"$card_ref\",\"text\":\"4242\"}" > /dev/null
   call press_key "{\"tab\":$shop_tab,\"key\":\"Tab\"}" > /dev/null
-  space='press Space\( on “Pay now”\|, which can click “Pay now”,\)'
+  space='press Space\( to click\|, which may click\) “Pay now”'
   pay_asks press_key "{\"tab\":$shop_tab,\"key\":\"Space\"}" \
     "^browser: agent mcp-client asks [0-9]*: $space$shop" agent-pays-space
   case "$(grep '^browser: agent mcp-client asks' "$log" | tail -1)" in
-    *"press Space on "*) space_said="the button it had the keyboard on" ;;
+    *"press Space to click "*) space_said="the button it had the keyboard on" ;;
     *) space_said="the page's paying button, its outline not saying what had the keyboard" ;;
   esac
   checkout
   call type "{\"tab\":$shop_tab,\"ref\":\"$card_ref\",\"text\":\"4242\"}" > /dev/null
   call press_key "{\"tab\":$shop_tab,\"key\":\"Tab\"}" > /dev/null
-  button='press Enter\( on “Pay now”\|, which can click “Pay now”,\)'
+  button='press Enter\( to click\|, which may click\) “Pay now”'
   pay_asks press_key "{\"tab\":$shop_tab,\"key\":\"Enter\"}" \
     "^browser: agent mcp-client asks [0-9]*: $button$shop" agent-pays-enter-button
   checkout
@@ -2839,7 +2839,7 @@ CARD
     *"Tab $shop_tab: Paid"*) fail "a click on the box to save the card paid: $saved" ;;
   esac
   pay_asks press_key "{\"tab\":$shop_tab,\"key\":\"Enter\"}" \
-    "^browser: agent mcp-client asks [0-9]*: press Enter, which can click “Pay now”,$shop" \
+    "^browser: agent mcp-client asks [0-9]*: press Enter, which may click “Pay now”$shop" \
     agent-pays-checkbox
   # The last checkout stays open: the tab an agent last acted in shows it at work until it goes.
 
