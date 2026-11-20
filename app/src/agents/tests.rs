@@ -2325,14 +2325,16 @@ fn a_requests_question_goes_unanswered_and_with_its_client(cx: &mut TestAppConte
     );
 }
 
-/// A check's `--agent-waits` shortens both waits so a run sees each end; a prod build, or a value
-/// that isn't two whole seconds, keeps the spec's.
+/// A check's `--agent-waits` shortens both waits so a run sees each end, and the quiet end's when
+/// it gives a third; a prod build, or a value that isn't two or three whole seconds, keeps the
+/// spec's.
 #[test]
 fn a_checks_waits_stand_in_for_the_specs_outside_prod() {
     let given = |args: &[&str]| args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
     let spec = Waits {
         ask: ASK_WAIT,
         handoff: HANDOFF_WAIT,
+        quiet: task::QUIET,
     };
     assert_eq!(Waits::new(&given(&[]), false), spec);
     assert_eq!(
@@ -2340,8 +2342,14 @@ fn a_checks_waits_stand_in_for_the_specs_outside_prod() {
         Waits {
             ask: Duration::from_secs(2),
             handoff: Duration::from_secs(3),
+            quiet: task::QUIET,
         }
     );
+    assert_eq!(
+        Waits::new(&given(&["--agent-waits=2,3,4"]), false).quiet,
+        Duration::from_secs(4)
+    );
+    assert_eq!(Waits::new(&given(&["--agent-waits=2,3,4,5"]), false), spec);
     assert_eq!(
         Waits::new(&given(&["--agent-waits=2,3"]), true),
         spec,

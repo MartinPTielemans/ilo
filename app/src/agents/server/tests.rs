@@ -655,3 +655,28 @@ fn a_stopped_agents_connection_closes_once_it_has_answered() {
     }
     assert!(bye, "the UI didn't hear the stopped agent's bye");
 }
+
+/// done has no tab, so on its connection it waits for the calls before it, as a task's finish does:
+/// sent while a hand_off waits on the user, it's answered once that is, never beside a question
+/// (#3652).
+#[test]
+fn done_waits_for_the_calls_before_it() {
+    let line = |tool: &str, arguments: &str| {
+        format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"{tool}","arguments":{arguments}}}}}"#
+        )
+    };
+    let done = lanes(&line("done", "{}"));
+    for (tool, arguments) in [
+        ("hand_off", r#"{"tab":7,"reason":"Sign in"}"#),
+        ("ask", r#"{"question":"Which one?"}"#),
+        ("click", r#"{"tab":7,"ref":"e1"}"#),
+    ] {
+        let before = lanes(&line(tool, arguments));
+        assert!(
+            done.iter()
+                .any(|lane| before.iter().any(|other| lane.meets(*other))),
+            "done didn't wait for {tool}"
+        );
+    }
+}

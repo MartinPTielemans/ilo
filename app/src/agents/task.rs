@@ -2079,7 +2079,9 @@ impl Agents {
         };
         let key = key.to_string();
         session.quiet = Some(cx.spawn(async move |agents, cx| {
-            cx.background_executor().timer(QUIET).await;
+            cx.background_executor()
+                .timer(super::Waits::launch().quiet)
+                .await;
             _ = agents.update(cx, |agents, cx| agents.quiet(&key, cx));
         }));
     }
@@ -2096,9 +2098,10 @@ impl Agents {
         if !session.calls.is_empty() || !open.is_empty() {
             return;
         }
+        // check.sh reads this line.
         log!(
             "browser: session {key} quiet for {} s after its last page",
-            QUIET.as_secs()
+            super::Waits::launch().quiet.as_secs()
         );
         self.session_done(key, cx);
     }
