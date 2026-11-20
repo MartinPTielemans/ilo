@@ -728,15 +728,20 @@ impl Agents {
         (task.asking.as_ref()).is_some_and(|(id, _)| self.first_prompt(&task.agent) == Some(*id))
     }
 
-    /// Done's tabs to open, with their sites, those still in the task's Space.
+    /// Done's tabs to open, with their sites, those still in the task's Space. A session's are
+    /// in its client's Space, where its next session may work in them: those stay the agent's
+    /// until it ends too, or Open would take them from under it (#3660).
     fn open_tabs(&self, task: &Task, cx: &App) -> Vec<(u64, SharedString)> {
         let State::Done { tabs, .. } = &task.state else {
             return Vec::new();
         };
         let own = self.browser.space_tab_ids(task.space, cx);
-        (tabs.iter().filter(|tab| own.contains(tab)))
-            .map(|&tab| (tab, site(&self.browser.tab(tab, cx).url).into()))
-            .collect()
+        let working = self.worked_in();
+        (tabs
+            .iter()
+            .filter(|tab| own.contains(tab) && !working.contains(tab)))
+        .map(|&tab| (tab, site(&self.browser.tab(tab, cx).url).into()))
+        .collect()
     }
 
     /// The cards of the tasks shown at the top of `home`'s Today, newest first.
@@ -1489,6 +1494,7 @@ impl Agents {
         }
         // Each goes to the top, so the last goes first.
         for &tab in open.iter().rev() {
+            self.left(tab, super::Gone::Opened);
             self.browser.move_tab(tab, home, cx);
             // Kept, it's the user's tab, with its sound (#1080).
             self.browser.set_muted(tab, false);
@@ -1517,12 +1523,12 @@ impl Agents {
         // close, but for any a session under way works in.
         if let Some(session) = task.session {
             let pages = self.pages_of(&session, task.space, cx);
-            let live = (self.tasks.tasks.iter())
-                .filter(|other| other.state == State::Working)
-                .filter_map(|other| other.session.as_ref())
-                .flat_map(|other| other.tabs.clone())
-                .collect::<Vec<_>>();
+            let live = self.worked_in();
             for tab in pages.into_iter().filter(|tab| !live.contains(tab)) {
+                // The task is gone from the list, so `left` wouldn't find whose it was.
+                if !self.gone.contains_key(&tab) {
+                    self.went(tab, &session.agent, super::Gone::PutAway);
+                }
                 self.browser.close_user_tab(tab, cx);
             }
             return;
@@ -1534,6 +1540,26 @@ impl Agents {
             self.browser.delete_space(task.space, cx);
         }
         self.remove_task_files(agent);
+    }
+
+    /// `tab`, a session's page, leaves its agent's Space for `gone`, unless it already said why.
+    pub(super) fn left(&mut self, tab: u64, gone: super::Gone) {
+        let whose = (self.tasks.tasks.iter())
+            .filter_map(|task| task.session.as_ref())
+            .find(|session| session.tabs.contains(&tab))
+            .map(|session| session.agent.clone());
+        if let Some(agent) = whose.filter(|_| !self.gone.contains_key(&tab)) {
+            self.went(tab, &agent, gone);
+        }
+    }
+
+    /// The tabs the sessions under way have opened or acted on.
+    fn worked_in(&self) -> Vec<u64> {
+        (self.tasks.tasks.iter())
+            .filter(|task| task.state == State::Working)
+            .filter_map(|task| task.session.as_ref())
+            .flat_map(|session| session.tabs.iter().copied())
+            .collect()
     }
 
     /// A session's pages still in its client's Space `space`.
