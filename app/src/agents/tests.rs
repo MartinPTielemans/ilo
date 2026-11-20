@@ -1327,10 +1327,15 @@ fn a_long_page_is_cut() {
         url: "https://long.example/".into(),
         ..TabInfo::default()
     };
-    let text = "é".repeat(tools::MAX_TEXT);
-    let answer = tools::page_text(&tab, &text);
-    assert!(answer.ends_with("[The page goes on: this is its first part.]"));
-    assert!(answer.len() < tools::MAX_TEXT + 200);
+    let text = format!("{}ab", "é".repeat(tools::MAX_TEXT));
+    let answer = tools::page_text(&tab, &text, 0);
+    assert!(answer.ends_with("[The page goes on: read_page with from 10000 reads the next part.]"));
+    assert!(answer.chars().count() < tools::MAX_TEXT + 200);
+    // The next part starts where the last ended, in characters, not bytes.
+    let next = tools::page_text(&tab, &text, tools::MAX_TEXT);
+    assert!(next.ends_with("\n\nab"), "{next}");
+    let past = tools::page_text(&tab, &text, 20_000);
+    assert!(past.ends_with("[The page's text is 10002 characters, so none starts at 20000.]"));
 }
 
 /// An agent the user hasn't connected, or one they disconnected, gets nothing.
@@ -1458,6 +1463,76 @@ fn shop_tree() -> String {
           "backendDOMNodeId": 51 },
     ]})
     .to_string()
+}
+
+/// navigate answers with the page's text when the agent asks for it, to read the page, once the
+/// core has read it, and the page's refs stay for what the agent does next (#3657). open_tab takes
+/// the same answer.
+#[gpui::test]
+fn navigate_answers_with_the_text_it_asks_for(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let wrong = call(
+        &agents,
+        "claude-code",
+        "navigate",
+        json!({ "tab": 20, "url": "iana.org", "answer": "page" }),
+        cx,
+    );
+    assert_eq!(
+        wrong.recv().unwrap(),
+        ToolResult::error("answer is outline, text or none.")
+    );
+    let answer = call(
+        &agents,
+        "claude-code",
+        "navigate",
+        json!({ "tab": 20, "url": "iana.org", "answer": "text" }),
+        cx,
+    );
+    let request = browser.pages.borrow().last().unwrap().1;
+    agents.update(cx, |agents, cx| {
+        agents.page_done(request, shop_tree(), false, cx)
+    });
+    assert!(
+        answer.try_recv().is_err(),
+        "it answered before the text came"
+    );
+    let (tab, read) = *browser.reads.borrow().last().unwrap();
+    assert_eq!(tab, 20);
+    agents.update(cx, |agents, cx| {
+        agents.text_read(read, Some("Basket\nTwo items".into()), cx)
+    });
+    let text = answer.recv().unwrap();
+    assert!(!text.error, "{}", text.text);
+    assert!(
+        text.text.ends_with("\n\nBasket\nTwo items"),
+        "{}",
+        text.text
+    );
+    assert!(!text.text.contains("[e"), "{}", text.text);
+    let pages = browser.pages.borrow().len();
+    let click = call(
+        &agents,
+        "claude-code",
+        "click",
+        json!({ "tab": 20, "ref": "e1" }),
+        cx,
+    );
+    assert_eq!(browser.pages.borrow().len(), pages + 1);
+    assert!(!page_done(&agents, &browser, click, shop_tree(), cx).error);
+}
+
+/// Every answer is 12,000 characters at most, whatever the tool, and says where it's cut.
+#[test]
+fn an_answer_is_cut_at_its_limit() {
+    let long = ToolResult::text("é".repeat(30_000));
+    assert_eq!(long.text.chars().count(), tools::MAX_ANSWER);
+    assert!(
+        long.text
+            .ends_with("[The answer is cut here, at its limit of 12,000 characters.]")
+    );
+    let short = "é".repeat(tools::MAX_ANSWER);
+    assert_eq!(ToolResult::text(short.clone()).text, short);
 }
 
 /// The core's answer to the agents' last request of it, and the call's answer.
