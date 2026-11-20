@@ -15,7 +15,9 @@ passkeys_check() {
   # failed with the error's name. "r" registers ada@check.test, "s" signs in with that passkey. A
   # passkey's site is a host, never an address, so the page is at localhost. Signing in names the
   # passkey: asked for any, Chrome lists the key's accounts to choose from, even one, and the
-  # ceremony waits on that choice, which no touch makes.
+  # ceremony waits on that choice, which no touch makes. At ?platform it says instead whether the
+  # device has an authenticator of its own, which isUserVerifyingPlatformAuthenticatorAvailable()
+  # answers.
   printf '%s' '<title>loading</title>
 <script>
 const bytes = n => crypto.getRandomValues(new Uint8Array(n));
@@ -45,7 +47,12 @@ const run = async key => {
   }
 };
 onkeydown = e => e.metaKey || e.ctrlKey || e.altKey || run(e.key);
-requestAnimationFrame(() => setTimeout(() => document.title = "ready"));
+if (location.search == "?platform") {
+  PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()
+    .then(available => document.title = "platform " + available);
+} else {
+  requestAnimationFrame(() => setTimeout(() => document.title = "ready"));
+}
 </script>' > "$out/site/passkey.html"
   page="http://localhost:$port/passkey.html"
   log="$out/passkeys.log"
@@ -206,11 +213,49 @@ requestAnimationFrame(() => setTimeout(() => document.title = "ready"));
     fi
     expect "^browser: title $tab failed NotAllowedError\$" \
       "escape didn't close Chrome's passkey dialog and fail the page's request"
+    # On the Mac, the Touch ID authenticator keeps passkeys on this Mac in the keychain access group
+    # the app's signature holds for them, its keychain-access-groups entry ending in ".webauthn", and
+    # with none, as in a dev build, in the engine's own, which names no team, so no signed app holds
+    # it: it's unavailable, and says so with the group it expected (#2354). A tab with no virtual key asks, as the virtual key
+    # answers for its own tab.
+    said=
+    if [ "$(uname)" = Darwin ]; then
+      app=${browser%/Contents/MacOS/*}
+      group=$(codesign -d --entitlements - --xml "$app" 2>/dev/null |
+        grep -o '<string>[^<]*\.webauthn</string>' | head -1 | sed 's/<[^>]*>//g' || true)
+      send key t cmd
+      expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+      send type "localhost:$port/passkey.html?platform"
+      send key return
+      expect '^browser: command bar hidden$' "going to the passkey page's ?platform didn't close the command bar"
+      await "^browser: title [0-9]* platform \(true\|false\)\$" ||
+        fail "the page didn't hear whether the Mac has an authenticator of its own"
+      platform=$(grep '^browser: title [0-9]* platform ' "$log" | tail -1 | cut -d' ' -f5)
+      unavailable='Touch ID authenticator unavailable because keychain-access-group entitlement is missing or incorrect. Expected value: '
+      expected=$(grep -o "$unavailable.*" "$log" | tail -1 | sed "s/^$unavailable//" | tr -d '\r')
+      if [ -z "$group" ]; then
+        # The engine's branding's bundle id, after an empty team.
+        case $expected in
+          .?*.webauthn) ;;
+          *) fail "with no keychain group for passkeys in its signature, the Touch ID authenticator" \
+            "didn't say it wanted the engine's own, with no team, but \"${expected:-nothing}\"" ;;
+        esac
+        [ "$platform" = false ] ||
+          fail "with no keychain group for passkeys, the page heard the Mac has an authenticator"
+      else
+        [ -z "$expected" ] ||
+          fail "signed with $group, the Touch ID authenticator still wanted $expected"
+      fi
+      send key w cmd
+      used="the engine's own, $expected"
+      [ -z "$group" ] || used=$group
+      said="; asked on its own, the Mac's authenticator answered $platform, its keychain group $used"
+    fi
     exec 3>&- 5>&-
     quit
     echo "ok: a local page registered a passkey on a virtual security key and signed in with it," \
       "and untouched, the key left Chrome's dialog up${dialog:+, a child window at $dialog centred}" \
-      "${view:+across the page at $view,} which escape closed. Window: $out/passkeys-dialog.png"
+      "${view:+across the page at $view,} which escape closed$said. Window: $out/passkeys-dialog.png"
   fi
   kill "$helper" 2>/dev/null || true
   helper=

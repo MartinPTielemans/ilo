@@ -1,0 +1,54 @@
+Lets the core name the keychain access group that passkeys kept on this Mac use
+(//browser_core/hooks.h). Chrome builds the group from its branding's team and bundle ids, and
+the engine's branding, ungoogled-chromium's, has no team, so its group is
+".io.ungoogled-software.ungoogled-chromium.webauthn", which no signed app can hold: the Touch ID
+authenticator checks the main executable's keychain-access-groups entitlement for it, finds none,
+and is never available. The core reads the group from the entitlement ilo's release is signed
+with. With none, as in a dev build or a fork that signs without one, the group stays the engine's
+and nothing changes.
+
+--- a/chrome/browser/webauthn/chrome_web_authentication_delegate.cc
++++ b/chrome/browser/webauthn/chrome_web_authentication_delegate.cc
+@@ -3,6 +3,7 @@
+ // found in the LICENSE file.
+ 
+ #include "chrome/browser/webauthn/chrome_web_authentication_delegate.h"
++#include "browser_core/hooks.h"  // nogncheck
+ 
+ #include <algorithm>
+ #include <cstdint>
+@@ -387,12 +388,25 @@
+ }
+ 
+ #if BUILDFLAG(IS_MAC)
++// browser_core: the keychain access group the app is signed with for its
++// passkeys, or empty for the engine's own (//browser_core/hooks.h).
++std::string (*g_browser_core_touch_id_keychain_group)() = nullptr;
++
+ // static
+ ChromeWebAuthenticationDelegate::TouchIdAuthenticatorConfig
+ ChromeWebAuthenticationDelegate::TouchIdAuthenticatorConfigForProfile(
+     Profile* profile) {
+   constexpr char kKeychainAccessGroup[] =
+       MAC_TEAM_IDENTIFIER_STRING "." MAC_BUNDLE_IDENTIFIER_STRING ".webauthn";
++  // browser_core: the engine's branding names no team, so its group is no app's;
++  // the app's signature names the one it holds.
++  std::string keychain_access_group =
++      g_browser_core_touch_id_keychain_group
++          ? g_browser_core_touch_id_keychain_group()
++          : std::string();
++  if (keychain_access_group.empty()) {
++    keychain_access_group = kKeychainAccessGroup;
++  }
+ 
+   std::string metadata_secret = profile->GetPrefs()->GetString(
+       webauthn::pref_names::kWebAuthnTouchIdMetadataSecretPrefName);
+@@ -405,7 +419,7 @@
+   }
+ 
+   return TouchIdAuthenticatorConfig{
+-      .keychain_access_group = kKeychainAccessGroup,
++      .keychain_access_group = std::move(keychain_access_group),
+       .metadata_secret = std::move(metadata_secret)};
+ }
+ 

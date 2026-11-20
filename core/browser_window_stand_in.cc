@@ -610,6 +610,20 @@ content::KeyboardEventProcessingResult BrowserWindowStandIn::PreHandleKeyboardEv
 }
 
 bool BrowserWindowStandIn::HandleKeyboardEvent(const input::NativeWebKeyboardEvent& event) {
+  // Read first, as what the key runs can close the tab, the window and this with it, and |event|.
+  content::WebContents* contents =
+      browser_ ? browser_->GetTabStripModel()->GetActiveWebContents() : nullptr;
+  const bc_id tab = contents ? Tab::IdOf(contents) : 0;
+  const base::TimeTicks key = event.TimeStamp();
+  const bool ran = RunPageLeftKey(event);
+  // What the page left and the browser ran was pressed for the browser, not the page (#3593).
+  if (Tab* each = ran && tab ? Tab::Get(tab) : nullptr) {
+    each->PageKeyTakenBack(key);
+  }
+  return ran;
+}
+
+bool BrowserWindowStandIn::RunPageLeftKey(const input::NativeWebKeyboardEvent& event) {
   views::Widget* widget = this->widget();
   views::FocusManager* focus_manager = widget ? widget->GetFocusManager() : nullptr;
   // A tab's dialog, such as print preview off the Mac, hands on the keys its page doesn't use, and
