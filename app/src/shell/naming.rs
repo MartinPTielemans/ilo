@@ -690,6 +690,8 @@ impl Shell {
             }
             self.name_left(window, cx)
         }
+        // Once the field is left, from where the focus has gone.
+        self.page_took_keyboard(window, cx);
     }
 
     pub(super) fn cancel_name(&mut self, window: &mut Window, cx: &mut Context<Self>) {

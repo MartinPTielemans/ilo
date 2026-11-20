@@ -402,6 +402,26 @@ fn a_tasks_page_watched_shows_its_sign_in(cx: &mut TestAppContext) {
     assert_eq!(dialogs(&host), ["page dialog none"]);
 }
 
+/// A task's page watched asks for its sign-in while the user types in the command bar: the dialog
+/// waits, and goes up as the bar closes.
+#[gpui::test]
+fn a_tasks_sign_in_waits_while_the_user_types(cx: &mut TestAppContext) {
+    use crate::shell::DialogKind;
+    let (shell, host, cx) = shell_with_task(cx);
+    watching(&shell, &host, cx);
+    host.bar_open.set(true);
+    shell.update(cx, |shell, cx| {
+        shell.set_page_dialog(30, Some(page_dialog(1, DialogKind::SignIn)), cx)
+    });
+    draw(&shell, cx);
+    draw(&shell, cx);
+    assert!(dialogs(&host).is_empty(), "the sign-in came over the bar");
+    host.bar_open.set(false);
+    shell.update(cx, |shell, cx| shell.command_bar_dismissed(cx));
+    cx.run_until_parked();
+    assert_eq!(dialogs(&host), ["page dialog 30 1"]);
+}
+
 /// With motion, the page zooms out of its thumbnail, laid out out of the window till it's in
 /// place, and back into it from a picture of it as it is.
 #[gpui::test]

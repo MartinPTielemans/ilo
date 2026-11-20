@@ -192,6 +192,11 @@ pub(super) struct Recorder {
     pub(super) searched_tabs: RefCell<Vec<Vec<u64>>>,
     /// The command bar shows, until a test plays the app's report that it was dismissed.
     pub(super) bar_open: Cell<bool>,
+    /// The find bar has the keyboard, as a test sets it.
+    pub(super) find_typing: Cell<bool>,
+    /// Whether the page has the keyboard, as a core that keeps it says, or None to leave it to the
+    /// host's word, as the Mac's and Windows' do.
+    pub(super) page_keys: Cell<Option<bool>>,
     /// Each New Note: the Space whose profile's service it opens, and the tab it splits with.
     pub(super) notes: RefCell<Vec<(u64, Option<u64>)>>,
     /// The Spaces New Board made a Board in. Each opens as tab 900 and on.
@@ -1831,6 +1836,14 @@ impl Browser for Recorder {
 
     fn command_bar_open(&self, _: &App) -> bool {
         self.bar_open.get()
+    }
+
+    fn field_window_typing(&self, _: &mut App) -> bool {
+        self.find_typing.get()
+    }
+
+    fn page_has_keyboard(&self, _: &App) -> Option<bool> {
+        self.page_keys.get()
     }
 
     /// A bar that follows opens a new tab, as one ⌘T opened.
