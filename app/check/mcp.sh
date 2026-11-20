@@ -3113,7 +3113,8 @@ CARD
   case "$allowed" in "Opened tab "*) ;; *) fail "after Always Allow, open_tab answered: $allowed" ;; esac
   [ "$(grep -c "$asks" "$log")" = "$before" ] || fail "Always Allow asked again"
   # A yes to opening a bank's site isn't one to moving money there: its Overfør still asks.
-  printf '%s' "<title>Konto</title>
+  # Its charset said, as the site's server says none and the page would read as Latin-1.
+  printf '%s' "<meta charset=utf-8><title>Konto</title>
 <button onclick=\"document.title = 'Overført'\">Overfør</button>" > "$out/site/move.html"
   saying move.html bank Overfør button
   said_asks "$said_ref" \
