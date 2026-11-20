@@ -1881,6 +1881,15 @@ pub struct Shell {
     /// What an agent asks the user first, in every window (agent_question.rs).
     agent_question: Option<crate::agents::Question>,
     agent_question_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Each row of a card of several changes as it was drawn, its text and where the agent's mark
+    /// is in it, which the tests read.
+    #[cfg(test)]
+    agent_question_rows: RefCell<Vec<(gpui::TextLayout, std::ops::Range<usize>)>>,
+    /// Where the request card's "See the whole request" is, which check.sh clicks (#3548).
+    agent_request_see_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The request card's "See the whole request", where Escape in the whole request puts the
+    /// keyboard back (#3548).
+    agent_request_see: FocusHandle,
     /// Every Space's agent tasks' cards, newest first, as the Agents last said (Agent task).
     task_cards: Vec<crate::agents::task::Card>,
     /// The window's tasks' plates at the sidebar's foot, and ⌘T's slot among them.
@@ -2340,6 +2349,10 @@ impl Shell {
             question_settling: RefCell::default(),
             agent_question: None,
             agent_question_drawn: Rc::default(),
+            #[cfg(test)]
+            agent_question_rows: RefCell::default(),
+            agent_request_see_drawn: Rc::default(),
+            agent_request_see: cx.focus_handle(),
             task_cards: Vec::new(),
             foot: task_cards::Foot::default(),
             closed_task: None,
@@ -5189,8 +5202,9 @@ impl Shell {
                     .children(self.chooser_card(cx))
                     .children(self.pair_card(cx))
                     .children(self.cast_card(cx))
-                    .children(self.agent_question_card(cx))
                     .children(self.task_foot(cx))
+                    // Over the tasks' plates, which a tall request's card reaches past (#3548).
+                    .children(self.agent_question_card(cx))
                     // Over the tasks' plates, which its open grows over.
                     .children(self.media_player_cards(cx))
                     // Over the players and the task's foot, which it opens over.
