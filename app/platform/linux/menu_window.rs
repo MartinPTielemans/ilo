@@ -126,10 +126,8 @@ pub extern "C" fn host_hide_menu_window() {
     // A page's alert that left the keys to the menu takes them back once it has hidden (#3616),
     // after the core has heard the menu let go, so the alert never takes them from a menu the
     // core thinks still has them.
-    if window != 0 && crate::WAYLAND.get() {
-        overlays::lend_keyboard(window, view, false);
-        gpui_linux::hide_overlay(view, overlays::menu_hidden);
-    } else {
+    // Never to land: Wayland takes the late let-go too, as before #3586, for #3649's probe.
+    {
         gpui_linux::hide_overlay(view, move || {
             // A menu that opened again in the window before this hide ran keeps the keyboard it
             // took, and the alert waits for that one's hide.
