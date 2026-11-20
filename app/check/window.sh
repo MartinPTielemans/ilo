@@ -1435,9 +1435,62 @@ black_space() {
   expect '^browser: theme picker hidden$' "escape didn't close the theme picker"
   send move $page_point
 }
+# The window over another app's, a full-screen window in black and then white behind it, in
+# tools/headless.sh's sway session: sway blurs nothing behind a window, so the sidebar reads the
+# same over both, opaque, rather than showing what's behind sharp through the tint (#3676).
+# Waits, at 0.1 s a capture, for the capture $1 of the screen to show $2 ("r g b") at ($3, $4).
+screen_shows() {
+  for _ in $(seq 50); do
+    ../tools/window-screenshot.sh "$pid" "$1" all || fail "no screen to capture"
+    [ "$(pixel "$1" "$3" "$4")" = "$2" ] && return 0
+    sleep 0.1
+  done
+  fail "the screen didn't show $2 at $3, $4: $(pixel "$1" "$3" "$4")"
+}
+see_through() {
+  # The output's size, and the window's frame and sway's id for it, the largest of the app's.
+  screen=$(swaymsg -t get_outputs | jq -r '.[0].rect | "\(.width) \(.height)"')
+  # shellcheck disable=SC2086 # the frame's five numbers
+  set -- $(swaymsg -t get_tree | jq -r --argjson pid "$pid" '[.. | select(.pid? == $pid and
+    .visible? == true)] | max_by(.rect.width * .rect.height) |
+    "\(.id) \(.rect.x) \(.rect.y) \(.rect.width) \(.rect.height)"')
+  [ $# -eq 5 ] || fail "sway didn't list the window"
+  # A point of the empty sidebar, as the Mac's material step reads, and the screen's middle.
+  sidebar=$(echo "$2 $3 $screen" | awk '{ print ($1 + 60) / $3, ($2 + 450) / $4 }')
+  seen=
+  for backdrop in "black 0 0 0" "white 255 255 255"; do
+    name=${backdrop%% *}
+    DISPLAY=${DISPLAY:-${BROWSER_XWAYLAND:-}} display -title backdrop \
+      -geometry "${screen% *}x${screen#* }+0+0" -size "${screen% *}x${screen#* }" "xc:$name" \
+      > "$out/backdrop.log" 2>&1 &
+    backdrop_pid=$!
+    # It opens in front, taking the keyboard, and then the window goes back in front of it.
+    screen_shows "$out/backdrop-$name-front.png" "${backdrop#* }" 0.5 0.5
+    swaymsg "[con_id=$1] focus" > /dev/null || fail "sway couldn't bring the window in front"
+    for _ in $(seq 50); do
+      send state
+      [ "$active" = 1 ] && break
+      sleep 0.1
+    done
+    [ "$active" = 1 ] || fail "the window didn't take the keyboard back from the $name window"
+    ../tools/window-screenshot.sh "$pid" "$out/see-through-$name.png" all ||
+      fail "no screen to capture"
+    seen="$seen$name $(pixel "$out/see-through-$name.png" $sidebar), "
+    kill "$backdrop_pid" 2> /dev/null || true
+    wait "$backdrop_pid" 2> /dev/null || true
+  done
+  material="opaque, the sidebar over black and white: ${seen%, }"
+  echo "$material"
+  echo "$seen" | awk -F', ' '{ split($1, b, " "); split($2, w, " "); off = 0
+    for (i = 2; i <= 4; i++) if (w[i] - b[i] > 2 || b[i] - w[i] > 2) off = 1
+    exit off }' ||
+    fail "the sidebar shows what's behind the window, which nothing blurs: ${seen%, }; $out/see-through-black.png, $out/see-through-white.png"
+}
 # Windows' and Linux's windows have no material under the UI, whose tint is the window's look, so
 # there's none to measure there, and kern.hv_vmm_present is the Mac's alone (#3327).
-if [ "$(uname)" = Linux ]; then
+if [ "$(uname)" = Linux ] && [ "${BROWSER_HEADLESS:-xvfb}" != xvfb ]; then
+  see_through
+elif [ "$(uname)" = Linux ]; then
   material="none on Linux, whose window has no material under the UI"
 elif windows; then
   material="none on Windows, whose window has no material under the UI"
