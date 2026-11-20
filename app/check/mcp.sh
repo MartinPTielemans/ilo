@@ -2119,6 +2119,13 @@ SEE
   grep "^browser: settings request $picnic_id opened " "$log" | tail -1 |
     grep -q "not sent: .*menu$(printf '\342\200\256')txt\.exe" ||
     fail "the picnic's request opened to: $(grep "^browser: settings request $picnic_id opened " "$log" | tail -1)"
+  # Its To and Sent lines open under the row, past the card's edge: the card scrolls to them, as
+  # far as it goes, and the capture waits for the row drawn after the scroll.
+  sight=$(grep '^browser: settings card shows ' "$log" | tail -1 | cut -d' ' -f5-)
+  [ -n "$sight" ] || fail "Settings › Agents didn't say what its card shows"
+  send scrollkey "${at% *}" $(((${sight%% to *} + ${sight##* to }) / 2)) 400 1
+  drawn_after "request $picnic_id POST" "^browser: drive $step: " > /dev/null ||
+    fail "Settings › Agents didn't draw the picnic's request after the scroll"
   ../tools/window-screenshot.sh "$pid" "$out/settings-agents-written.png" || fail "no window to capture"
   send clickkey $(drawn "toolbar General")
   expect '^browser: settings tab General$' "a click on General didn't show its section"
