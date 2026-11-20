@@ -8,6 +8,7 @@
 #include "base/functional/bind.h"
 #include "base/no_destructor.h"
 #include "base/task/single_thread_task_runner.h"
+#include "browser_core/agent_page.h"
 #include "browser_core/host.h"
 
 namespace browser_core {
@@ -38,8 +39,11 @@ std::map<bc_id, bc_id>& Told() {
 // static
 bc_id PageDialog::Ask(bc_id tab, Words words, Answered answered) {
   const bc_id id = NewId();
+  const int kind = words.kind;
   Dialogs().push_back(Asked{id, tab, std::move(words), std::move(answered)});
   Changed(tab);
+  // After the report is posted, so the app hears of the dialog before the job's answer.
+  AgentPage::DialogShown(tab, kind);
   return id;
 }
 

@@ -1452,6 +1452,7 @@ else
       post rightclick 100 112
       expect "^browser: menu shown $(cased 'Change Space Icon…')" "a right-click on the Space's name showed no menu"
       ../tools/window-screenshot.sh "$pid" "$out/light-menu.png" || fail "no window to capture"
+      expect '^browser: menu window at ' "the menu's window didn't take the keyboard"
       send key escape
       expect '^browser: menu closed$' "escape didn't close the Space's menu"
       send move $page_point

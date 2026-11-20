@@ -4351,11 +4351,18 @@ void host_share_png(const uint8_t* png,
 }
 
 // Lets the mouse through the toast's window, unless it has buttons and the pointer, at |screen|, is
-// on its plate.
-void PlaceToastClicks(NSPoint screen) {
+// on its plate. |event| is the number of the move that put it there, or -1 for none.
+void PlaceToastClicks(NSPoint screen, NSInteger event = -1) {
   NSPoint at = [g_toast convertPointFromScreen:screen];
   at.y = NSHeight(g_toast.frame) - at.y;
+  const bool passed = g_toast.ignoresMouseEvents;
   g_toast.ignoresMouseEvents = !(g_toast_takes && NSPointInRect(at, g_toast_plate));
+  // A move the window server sends has a number and one the app posts, as the driver's, has 0, so
+  // this tells a toast the real pointer left from one a check's pointer did (#3611).
+  if (passed != g_toast.ignoresMouseEvents) {
+    fprintf(stderr, "browser: pointer %s the toast's plate at %.0f,%.0f, event %ld\n",
+            passed ? "on" : "off", at.x, at.y, (long)event);
+  }
 }
 
 void host_toast_takes_clicks(bool takes) {
@@ -4363,6 +4370,9 @@ void host_toast_takes_clicks(bool takes) {
   if (!takes) {
     [NSEvent removeMonitor:g_toast_monitor];
     g_toast_monitor = nil;
+    if (!g_toast.ignoresMouseEvents) {
+      fprintf(stderr, "browser: pointer off the toast's plate, its buttons gone\n");
+    }
     g_toast.ignoresMouseEvents = YES;
     return;
   }
@@ -4376,7 +4386,8 @@ void host_toast_takes_clicks(bool takes) {
                                                                 at = [event.window
                                                                     convertPointToScreen:at];
                                                               }
-                                                              PlaceToastClicks(at);
+                                                              PlaceToastClicks(
+                                                                  at, event.eventNumber);
                                                               return event;
                                                             }];
   }

@@ -1035,6 +1035,7 @@ for how in tap press rightclick; do
 New Folder…, Live Folders › GitHub Pull Requests, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
     "a $how on the sidebar out over the page didn't show the Space's menu"
   expect '^browser: menu drawn ' "the Space's menu from a $how on the sidebar out didn't come on screen"
+  expect '^browser: menu window at ' "the menu's window didn't take the keyboard"
   if [ $how = press ]; then send release $reveal_edit; fi
   ../tools/window-screenshot.sh "$pid" "$out/space-edit-reveal-$how.png" || fail "no window to capture"
   menu_over_reveal "the Space's menu from a $how"

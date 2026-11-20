@@ -77,7 +77,7 @@ fn same_press_as_hand_back(keystroke: &str, cx: &App) -> bool {
 /// before it sees it (`run_agent_key`).
 pub(super) fn bind(cx: &mut App) {
     cx.intercept_keystrokes(|event, _, cx| {
-        if crate::dialog::asking(cx) {
+        if crate::dialog::awaits_answer(cx) {
             return;
         }
         let Some(shell) = super::commands::key_shell(cx) else {
@@ -144,10 +144,11 @@ impl Shell {
     }
 
     /// A press on the page of the agent's tab `tab`, which a window shows, or on its dialog
-    /// (tab_page_pressed). In a page of the task the window watches while its agent works there,
-    /// the one watched or one beside it in its split view, the user takes that tab over, as Take
-    /// Over does, and the press goes on to the page (#1080, #3243). In a tab the user holds it's a
-    /// press like any other.
+    /// (tab_page_pressed). In a page of the task the window watches, the one watched or one beside
+    /// it in its split view, the user takes that tab over, as Take Over does, and the press goes on
+    /// to the page (#1080, #3243): whose tab it is decides, not where the agent acted last, so a
+    /// press after another of its tabs was taken over takes this one too (#3503). In a tab the user
+    /// holds, or once the agent's session has ended, it's a press like any other.
     pub fn page_pressed(&mut self, tab: u64, cx: &mut Context<Self>) {
         // The core keeps a task's split views: what the window shows of the task watched is the
         // page watched and those beside it.
@@ -161,9 +162,7 @@ impl Shell {
         let Some(status) = self.agent_status.iter().find(|each| each.space == space) else {
             return;
         };
-        if status.held.iter().any(|(held, _)| *held == tab)
-            || !self.agents_at.contains_key(&status.agent)
-        {
+        if status.held.iter().any(|(held, _)| *held == tab) {
             return;
         }
         let agent = status.agent.clone();

@@ -289,11 +289,14 @@ expect '^browser: onboarding agents at ' "dark: the opt-ins step didn't draw the
 send click $(grep '^browser: onboarding agents at ' "$log" | tail -1 | cut -d' ' -f5-6)
 expect '^browser: onboarding agents on$' "dark: a click on the agents' row didn't turn them on"
 expect '^browser: agents server on ' "dark: the agents' switch didn't start their server"
-# The keyboard reaches the switches too: ⇥ to the count's, the first, where Space turns it on, ⇥ on
-# and ⇧⇥ back to it, and Space turns it off again, so Esc still leaves it as it was (#2985).
+# The keyboard reaches the switches too: from Continue, where the step rests (#3498), ⇥ past Skip
+# to the count's, the first, where Space turns it on, ⇥ on and ⇧⇥ back to it, and Space turns it
+# off again, so Esc still leaves it as it was (#2985). The click on the agents' row moved no focus.
+send key tab
 send key tab
 send key space
-expect '^browser: onboarding daily-count on$' "dark: ⇥ then Space didn't turn the count's switch on"
+expect '^browser: onboarding daily-count on$' \
+  "dark: ⇥ twice from Continue, past Skip, then Space didn't turn the count's switch on"
 # Captured once the knob has slid all the way on.
 expect '^browser: onboarding daily-count slid$' "dark: the count's switch didn't finish its slide on"
 capture_step dark-opt-ins-keys

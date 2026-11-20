@@ -1135,6 +1135,7 @@ impl TalkView {
                                     .update(cx, |shell, cx| shell.toggle_mute(tab, cx))
                                     .ok();
                             })
+                            .when(look.behind, |sound| sound.relative().child(unpressed()))
                     });
                 let caption = div()
                     .mt(px(SITE_GAP))
@@ -2178,6 +2179,8 @@ struct Look {
     now: Instant,
     still: bool,
     asked_favicon: Option<Arc<Image>>,
+    /// A page watched is going back into its picture over it, which hides what's under it.
+    behind: bool,
 }
 
 impl Look {
@@ -2213,6 +2216,7 @@ impl Render for TalkView {
                 now,
                 still,
                 asked_favicon,
+                behind: shell.task_page_going_back(),
             }
         }) else {
             return div().into_any_element();
@@ -2269,6 +2273,11 @@ impl Render for TalkView {
                 .justify_center()
                 .child(div().w_full().max_w(px(COLUMN)).child(child))
         };
+        // Under a page going back, only the pictures take a press (#3496).
+        let shut = |part: gpui::Div| {
+            part.relative()
+                .when(look.behind, |part| part.child(unpressed()))
+        };
         let middle = match self.on_pages() {
             true => div()
                 .flex_1()
@@ -2277,19 +2286,21 @@ impl Render for TalkView {
                 .flex()
                 .mb(px(REPLY_GAP))
                 .child(self.grid(&look, cx)),
-            false => div()
-                .flex_1()
-                .min_h_0()
-                .w_full()
-                .flex()
-                .justify_center()
-                .mb(px(REPLY_GAP))
-                .child(
-                    div()
-                        .size_full()
-                        .max_w(px(COLUMN + 2. * TRACE_HANG))
-                        .child(lines),
-                ),
+            false => shut(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .flex()
+                    .justify_center()
+                    .mb(px(REPLY_GAP))
+                    .child(
+                        div()
+                            .size_full()
+                            .max_w(px(COLUMN + 2. * TRACE_HANG))
+                            .child(lines),
+                    ),
+            ),
         };
         let column = div()
             .size_full()
@@ -2298,9 +2309,9 @@ impl Render for TalkView {
             .text_size(px(text::BODY))
             .line_height(px(TEXT_LINE))
             .text_color(palette.text(TITLE))
-            .child(on_column(self.header(&look, cx).into_any_element()))
+            .child(shut(on_column(self.header(&look, cx).into_any_element())))
             .child(middle)
-            .child(on_column(self.reply(&look, cx).into_any_element()));
+            .child(shut(on_column(self.reply(&look, cx).into_any_element())));
         let drawn = self.drawn_at.clone();
         div()
             .id("conversation")
@@ -2326,6 +2337,17 @@ impl Render for TalkView {
             .children(self.ghost(&look))
             .into_any_element()
     }
+}
+
+/// What covers a part of the conversation while a page goes back over it, which takes a press there
+/// and does nothing: the user can't see yet what it would stop or change (#3496).
+fn unpressed() -> gpui::Div {
+    div()
+        .absolute()
+        .left_0()
+        .top_0()
+        .size_full()
+        .block_mouse_except_scroll()
 }
 
 /// What a page's picture says under its site: why the user holds it from the agent, `held`, as

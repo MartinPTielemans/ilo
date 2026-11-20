@@ -579,6 +579,8 @@ pub trait Browser {
     fn delete_profile(&self, profile: u64, cx: &mut App);
     /// Who shares the favorites, as Settings has it.
     fn favorites_scope(&self, cx: &mut App) -> super::FavoritesScope;
+    /// Whether a profile can keep passkeys on this computer, which go with it when it's deleted.
+    fn keeps_passkeys(&self) -> bool;
     /// Shows ilo's own menu of `items` at `position` in the window, or in the reveal's panel if
     /// `in_reveal`, in `look`, as a right-click there does, or with the item marked `over` on
     /// `position`, its title's top left there, as a pop-up button's menu does. Then calls `chosen`
@@ -739,6 +741,9 @@ pub trait Browser {
     /// Shows `tab`'s page in Safari's engine, in the tab, and has its profile keep the site for it.
     /// The user's: agents get none.
     fn use_system_engine(&self, _tab: u64, _cx: &mut App) {}
+    /// Shows `tab`'s page in Chromium again, and has its profile keep the site there. The user's:
+    /// agents get none.
+    fn leave_system_engine(&self, _tab: u64, _cx: &mut App) {}
     /// Where Google's Widevine module is, which the core offers on Linux alone.
     fn widevine(&self) -> crate::widevine::Widevine {
         crate::widevine::Widevine::None

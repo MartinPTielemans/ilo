@@ -136,6 +136,8 @@ impl Shell {
         // A click elsewhere ends the rows' ring, as the field's keys move it.
         if library.keyed_row.is_some() && !search.is_focused(window) {
             library.keyed_row = None;
+            // check/screen-reader.sh reads this line.
+            log!("browser: library rows ring ended");
         }
         if let Some(card) = library.keyed_card.filter(|_| asked) {
             log!("browser: library card keyed {card}");
@@ -285,6 +287,11 @@ impl Shell {
             .on_action(cx.listener(|shell, _: &RowDown, _, cx| shell.row_step(true, cx)))
             .on_action(cx.listener(|shell, _: &RowUp, _, cx| shell.row_step(false, cx)))
             .on_action(cx.listener(|shell, _: &RowOpen, _, cx| shell.row_open(cx)))
+            // The field's own menu keys, ⇧F10 and the menu key, as the sidebar's rows have them,
+            // are the ringed row's while one is ringed.
+            .capture_action(
+                cx.listener(|shell, _: &crate::text_input::OpenMenu, _, cx| shell.row_menu(cx)),
+            )
     }
 
     /// The rows the ring goes over, in order: each by its line in the list and, in Media, its
@@ -576,6 +583,61 @@ impl Shell {
                 }
             }
             Item::Heading(_) | Item::Clear | Item::PastSite(_) => {}
+        }
+    }
+
+    /// ⇧F10 or the menu key from the field with a row ringed: the row's menu under it, as a
+    /// right-click on it shows, with the keyboard on its first item, as the sidebar's keys do. The
+    /// ring stays, so Escape from the menu leaves it on the row. A row with no menu shows none, as
+    /// a right-click on it does; with no row ringed, the field shows its own.
+    fn row_menu(&mut self, cx: &mut Context<Self>) {
+        let Some(library) = &self.library else {
+            return;
+        };
+        let Some((line, column)) = library.keyed_row else {
+            return;
+        };
+        cx.stop_propagation();
+        let Some(item) = library.items.get(line).copied() else {
+            return;
+        };
+        let under = (library.row_drawn.get())
+            .map(|bounds| point(bounds.left(), bounds.bottom()))
+            .unwrap_or_default();
+        let visit = match item {
+            Item::Visit(page) => {
+                (library.history.pages.get(page)).map(|visit| (visit.page.url.clone(), visit.day))
+            }
+            _ => None,
+        };
+        let shown = match item {
+            Item::Tab(tab) => (self.archive.get(tab).map(|tab| tab.id))
+                .map(|id| self.archived_menu(id, under, cx)),
+            Item::Visit(_) => visit.map(|(url, day)| self.visited_menu(url, day, under, cx)),
+            Item::Task(task) => (self.archived_tasks.get(task).map(|task| task.agent.clone()))
+                .map(|agent| self.archived_task_menu(agent, under, cx)),
+            Item::Boost(boost) => (self.boost_list.get(boost).map(|boost| boost.site.clone()))
+                .map(|site| self.boost_menu(site, under, cx)),
+            Item::Board(board) => (self.board_list.get(board).map(|board| board.id.clone()))
+                .map(|id| self.board_menu(id, under, cx)),
+            Item::Download(download) => (self.downloads.get(download).map(|each| each.id))
+                .map(|id| self.download_menu(id, under, cx)),
+            Item::Media(tiles) => match tiles.get(column).copied().flatten() {
+                Some(Medium::Capture(index)) => (self.captures.get(index))
+                    .map(|each| each.path.clone())
+                    .map(|path| self.capture_menu(path, under, cx)),
+                Some(Medium::Download(index)) => (self.downloads.get(index).map(|each| each.id))
+                    .map(|id| self.download_menu(id, under, cx)),
+                None => None,
+            },
+            Item::Past(_) | Item::PastHead(_) | Item::PastStep(..) => None,
+            Item::Heading(_) | Item::Clear | Item::PastSite(_) => None,
+        };
+        if shown.is_some() {
+            // check.sh waits for this line.
+            log!("browser: library row menu {line} {column}");
+            // After the host's own deferred show, where overlays open for a shortcut.
+            cx.defer(crate::menu::highlight_first);
         }
     }
 
@@ -888,6 +950,69 @@ mod tests {
         cx.run_until_parked();
     }
 
+    /// The menu keys from the field, ⇧F10 and the menu key, open the ringed row's menu under it,
+    /// as a right-click on the row does. Its close leaves the ring on the row and the keyboard in
+    /// the field, where ↓ goes on. With no row ringed, they open the field's own menu, as before.
+    #[gpui::test]
+    fn the_menu_keys_open_the_ringed_rows_menu(cx: &mut TestAppContext) {
+        let (shell, host, cx) = window(Section::Archive, cx);
+        let field_menus = Rc::new(std::cell::Cell::new(0));
+        let shown = field_menus.clone();
+        cx.update(|_, cx| {
+            cx.set_global(crate::text_input::FieldMenu(Rc::new(
+                move |_, _, _, _, _, _| shown.set(shown.get() + 1),
+            )))
+        });
+        archive(&shell, &[7, 8], cx);
+        cx.simulate_keystrokes("cmd-shift-l");
+        shell.update(cx, |shell, _| settle(shell));
+        cx.run_until_parked();
+        cx.simulate_keystrokes("shift-f10");
+        assert_eq!(field_menus.get(), 1, "no row ringed, and no field menu");
+        assert!(host.menus.borrow().is_empty(), "{:?}", host.menus.borrow());
+        let ring = |cx: &mut VisualTestContext| {
+            shell.read_with(cx, |shell, _| {
+                let library = shell.library.as_ref().expect("the Library");
+                (library.keyed_row, library.row_drawn.get())
+            })
+        };
+        for (key, row) in [("shift-f10", (1, 0)), ("menu", (2, 0))] {
+            cx.simulate_keystrokes("down");
+            cx.run_until_parked();
+            let (ringed, drawn) = ring(cx);
+            assert_eq!(ringed, Some(row), "↓ didn't ring the next row before {key}");
+            let drawn = drawn.expect("the ring drawn");
+            cx.simulate_keystrokes(key);
+            cx.run_until_parked();
+            let menu =
+                (host.menus.borrow_mut().pop()).unwrap_or_else(|| panic!("no menu for {key}"));
+            let titles: Vec<&str> = menu.iter().map(|(title, _)| title.as_ref()).collect();
+            assert_eq!(
+                titles,
+                ["Reopen Tab", "Copy URL", "", "Delete from Archive"]
+            );
+            let under = gpui::point(drawn.left(), drawn.bottom());
+            assert_eq!(
+                host.menu_at.get(),
+                Some(under),
+                "{key}'s menu isn't under the row"
+            );
+            cx.update(|_, cx| host.dismiss(cx));
+            cx.run_until_parked();
+            assert_eq!(
+                ring(cx).0,
+                Some(row),
+                "the menu's close took the ring off the row"
+            );
+            assert_eq!(keyed(cx), (Role::TextInput, "Search History".into()));
+        }
+        assert_eq!(
+            field_menus.get(),
+            1,
+            "a ringed row's key opened the field's menu too"
+        );
+    }
+
     /// Opened by its key, the Library's empty search field has the keyboard, and ⌘Z after Clear
     /// Archive brings the tabs back, as its toast offers, and ⇧⌘Z clears them again (#3306).
     #[gpui::test]
@@ -1056,5 +1181,101 @@ mod tests {
             !shell.read_with(cx, |shell, _| shell.library_open),
             "escape left it open"
         );
+    }
+
+    /// Pressed and let go, as a keyboard sends it: a button clicks on the release.
+    fn press(key: &'static str, cx: &mut VisualTestContext) {
+        cx.simulate_keystrokes(key);
+        let keystroke = gpui::Keystroke::parse(key).unwrap();
+        cx.update(|window, cx| {
+            use gpui::InputEvent as _;
+            window.dispatch_event(gpui::KeyUpEvent { keystroke }.to_platform_input(), cx);
+        });
+        cx.run_until_parked();
+    }
+
+    /// Whether a screen reader finds a button named `name`.
+    fn has_button(name: &str, cx: &mut VisualTestContext) -> bool {
+        let tree = cx.a11y_tree().expect("GPUI built a tree");
+        (tree.nodes.iter())
+            .any(|(_, node)| node.role() == Role::Button && node.label().as_deref() == Some(name))
+    }
+
+    /// With no Boards, the list offers New Board (#3575): Tab from the search field reaches it,
+    /// read as "New Board" without its key, and Space, Return or a click asks the core for a Board,
+    /// as New Board's key does, closing the Library so the new row's name field takes the keyboard.
+    #[gpui::test]
+    fn the_empty_boards_list_s_new_board_makes_one_from_the_keys(cx: &mut TestAppContext) {
+        let (shell, host, cx) = window(Section::Boards, cx);
+        // A click leaves the keyboard in the search field, where the Library put it.
+        for (made, key) in [(1, "space"), (2, "enter"), (3, "click")] {
+            run(&shell, Command::ViewLibrary, cx);
+            assert_eq!(keyed(cx), (Role::TextInput, "Search Boards".into()));
+            if key == "click" {
+                let drawn = shell.read_with(cx, |shell, _| {
+                    shell
+                        .library
+                        .as_ref()
+                        .and_then(|library| library.new_board_drawn.get())
+                });
+                let at = drawn.expect("New Board wasn't drawn").center();
+                cx.simulate_click(at, gpui::Modifiers::none());
+                cx.run_until_parked();
+            } else {
+                cx.simulate_keystrokes("tab");
+                assert_eq!(keyed(cx), (Role::Button, "New Board".into()));
+                press(key, cx);
+            }
+            shell.update(cx, |shell, cx| {
+                settle(shell);
+                cx.notify();
+            });
+            cx.run_until_parked();
+            assert_eq!(host.boards.borrow().len(), made, "{key} made no Board");
+            assert!(
+                !shell.read_with(cx, |shell, _| shell.library_open),
+                "the Library stayed over the new Board's name, after {key}"
+            );
+            let named = cx.update(|window, cx| {
+                let shell = shell.read(cx);
+                let renaming = shell
+                    .renaming
+                    .as_ref()
+                    .expect("no field for the Board's name");
+                assert!(matches!(renaming.naming, crate::shell::Naming::Tab(_)));
+                gpui::Focusable::focus_handle(renaming.name.read(cx), cx).is_focused(window)
+            });
+            assert!(
+                named,
+                "the Board's name field hasn't the keyboard, after {key}"
+            );
+            shell.update(cx, |shell, _| shell.renaming = None);
+        }
+    }
+
+    /// A search that matches no Board keeps "No Boards match." and offers no New Board: the list
+    /// isn't empty, the search is.
+    #[gpui::test]
+    fn a_search_matching_no_board_offers_no_new_board(cx: &mut TestAppContext) {
+        let (shell, host, cx) = window(Section::Boards, cx);
+        run(&shell, Command::ViewLibrary, cx);
+        assert!(
+            has_button("New Board", cx),
+            "the empty list offers no New Board"
+        );
+        cx.simulate_input("porch");
+        cx.run_until_parked();
+        assert!(
+            !has_button("New Board", cx),
+            "a search matching nothing offered New Board"
+        );
+        let line = shell.read_with(cx, |shell, _| {
+            let query = &shell.library.as_ref().unwrap().query;
+            shell.empty_line(Section::Boards, query.is_empty())
+        });
+        assert_eq!(line, "No Boards match.");
+        cx.simulate_keystrokes("tab");
+        assert_ne!(keyed(cx), (Role::Button, "New Board".into()));
+        assert!(host.boards.borrow().is_empty());
     }
 }

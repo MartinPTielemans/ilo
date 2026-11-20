@@ -1593,6 +1593,9 @@ pub struct Shell {
     /// ⌘L, from where it came, pressed after the tab shown closed and before the core said which
     /// shows next, which the bar then opens on (#2953).
     edit_url_waits: Option<String>,
+    /// ⌘W pressed after the tab shown closed and before the core said which shows next, with the
+    /// Space it was pressed in and how many times: each closes the tab it shows next (#3570).
+    close_waits: Option<(u64, usize)>,
     drag: Option<Drag>,
     /// A tab's row dragged out of the window, as the system drags it, until it's let go.
     window_drag: Option<drag::WindowDrag>,
@@ -1811,6 +1814,10 @@ pub struct Shell {
     /// What the menu bar was last given for this window, and the window's title.
     menus: MenuBar,
     window_title: SharedString,
+    /// The name of the window's root node, its Space's, and whether the window is still to take it
+    /// (`update_title`).
+    root_name: SharedString,
+    root_name_due: bool,
     /// What the URL field said when it last drew, for its log line.
     url_field_drawn: RefCell<SharedString>,
     /// Whether the header last drew reload or stop, for its log line.
@@ -2194,6 +2201,7 @@ impl Shell {
             press_closed_bar: false,
             bar_follows: false,
             edit_url_waits: None,
+            close_waits: None,
             drag: None,
             window_drag: None,
             dragged: false,
@@ -2298,6 +2306,8 @@ impl Shell {
             sidebar_backups: HashMap::new(),
             menus: MenuBar::default(),
             window_title: SharedString::default(),
+            root_name: SharedString::default(),
+            root_name_due: false,
             url_field_drawn: RefCell::default(),
             reload_drawn: Cell::default(),
             back_drawn: Cell::default(),
@@ -3112,6 +3122,10 @@ impl Shell {
 
     /// The Space the window shows. Which of its tabs shows follows in set_selected.
     pub fn set_space(&mut self, space: u64, cx: &mut Context<Self>) {
+        // Another Space shown ends ⌘W's wait for the tab its own showed next (#3570).
+        if self.close_waits.is_some_and(|(waits, _)| waits != space) {
+            self.close_waits = None;
+        }
         if self.task_space_shown(space, cx) {
             return;
         }
@@ -3494,6 +3508,8 @@ impl Shell {
     }
 
     pub fn set_selected(&mut self, tab: u64, cx: &mut Context<Self>) {
+        // ⌘W's wait is for this selection only, whichever way it goes (#3570).
+        let close_waits = self.close_waits.take();
         if self.task_tab_shown(tab, cx) {
             return;
         }
@@ -3570,6 +3586,16 @@ impl Shell {
         }
         if let Some(from) = self.edit_url_waits.take() {
             self.edit_url(&from, cx);
+        }
+        // A Space left empty shows none, and the press was for a tab, so the window stays; nor
+        // does it close a tab of another Space shown since. Each press left waits for the
+        // selection after this close.
+        if let Some((space, presses)) = close_waits
+            && tab != 0
+            && self.spot_of(tab).is_some_and(|spot| spot.space == space)
+        {
+            self.close_shown(cx);
+            self.close_waits = (presses > 1).then_some((space, presses - 1));
         }
         self.update_title(cx);
         self.update_menus(cx);
@@ -4120,6 +4146,8 @@ impl Shell {
     }
 
     fn select(&mut self, tab: u64, cx: &mut Context<Self>) {
+        // The tab the user picks is the one they want, so ⌘W's wait for the next ends (#3570).
+        self.close_waits = None;
         // While a task's page shows, the core shows the task's Space, so the user's tab selected is
         // shown again by selecting it.
         let core_away = self.task_core != 0;
@@ -4514,6 +4542,14 @@ impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.a11y = window.is_a11y_active();
         self.watch_appearance(window, cx);
+        // After the frame, which takes the root's name as it starts and asks for none while it's
+        // drawn, so another comes with it.
+        if std::mem::take(&mut self.root_name_due) {
+            cx.defer_in(window, |shell, window, _| {
+                window.set_accessible_window_title(&shell.root_name);
+                window.refresh();
+            });
+        }
         // A Space shown with a Live Folder asks for their lists once its switch is drawn, so the
         // fetch never holds a frame of it. Deferred, as the window's ask is: a next-frame callback
         // asks for a frame of its own (#3004).
@@ -4931,7 +4967,7 @@ impl Render for Shell {
                     )
                     .children(self.picture_element(cx))
                     .children(self.empty_card(cx))
-                    .children(self.crash_cards(cx))
+                    .children(self.crash_cards(self.page_frame(self.viewport).0, cx))
                     .children(self.pane_gaps(cx))
                     .children(self.pane_handles(cx))
             })
@@ -5116,12 +5152,10 @@ impl Shell {
                     .child(form)
             }
             (None, Some(form), _) => sidebar.child(self.space_form(form, None, cx)),
-            (None, None, Some((form, left))) => {
-                let left = left.elapsed().as_secs_f32();
-                sidebar.child(self.space_form(form, Some(left), cx))
-            }
-            // The URL field and the favorites are the Space's page's, and page with it.
-            (None, None, None) => {
+            // The URL field and the favorites are the Space's page's, and page with it. While the
+            // form leaves, the page is there under it, unseen until it's gone (Spaces › Creating),
+            // and takes keys and clicks, as motion never blocks them (#3554).
+            (None, None, leaving) => {
                 self.drawn_top
                     .replace((self.top_offset(), self.drawn_tiles()));
                 let rest = self.rest_press_listener(Self::press_top_at_rest, cx);
@@ -5130,7 +5164,14 @@ impl Shell {
                     .top(px(URL_FIELD_TOP))
                     .left_0()
                     .w(px(self.width()));
-                sidebar
+                let page = div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left_0()
+                    .w(px(self.width()))
+                    .when(leaving.is_some(), |page| page.opacity(0.));
+                let page = page
                     .children((!self.bar_on()).then(|| self.with_page(self.url_field(cx))))
                     .children(self.scroll_edge_line().map(|line| self.with_page(line)))
                     .children(self.foot_edge_line().map(|line| self.with_page(line)))
@@ -5156,7 +5197,11 @@ impl Shell {
                     .children(self.update_banner(cx))
                     .children(self.safe_start_card(cx))
                     .children(self.task_ghosts())
-                    .children(self.drm_note_card(cx))
+                    .children(self.drm_note_card(cx));
+                let form = leaving.map(|(form, left)| {
+                    self.space_form(form, Some(left.elapsed().as_secs_f32()), cx)
+                });
+                sidebar.child(page).children(form)
             }
         };
         sidebar

@@ -53,7 +53,7 @@
 //! where the Mac's moves the content by points. choose works on ilo's menu and on ilo's dialog,
 //! whose buttons it presses by their labels as drive.mm does an alert's, and dismiss on the menu;
 //! Linux shows no alerts yet. fullscreen toggles the window's full screen through the core. ime on types as
-//! drive.mm's scripted input method does: on X11 in the UI's fields alone, as a page's input method
+//! drive.mm's scripted input method does, and ime ko as its 2-set Korean one: on X11 in the UI's fields alone, as a page's input method
 //! is Chromium's, out of the driver's reach; under Wayland in the field sway gives the input
 //! method, a page's too, and ime on fails, saying why, if the seat has another. dragover and
 //! dragdrop are XDND's source, as
@@ -136,9 +136,55 @@ const G_PRIORITY_LOW: c_int = 300;
 /// early while frames draw without a break.
 const IDLE_WAIT: c_uint = 250;
 
+/// The last command the main thread started, and the last it reported done, for `watch_stalls`.
+static STARTED: AtomicU64 = AtomicU64::new(0);
+static FINISHED: AtomicU64 = AtomicU64::new(0);
+
+/// Says, from a thread of its own, when a command has gone 10 s without being done, and what the
+/// main thread is waiting in then: one that's blocked can't say it itself, and a check's red
+/// otherwise ends at the command's own line, with nothing to tell a blocked loop from a slow
+/// answer (#3624).
+fn watch_stalls() {
+    std::thread::spawn(|| {
+        let (mut seen, mut since, mut said) = (0, 0, 0);
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+            let started = STARTED.load(Ordering::Relaxed);
+            if started == 0 || FINISHED.load(Ordering::Relaxed) >= started {
+                continue;
+            }
+            if started != seen {
+                (seen, since) = (started, 0);
+            }
+            since += 1;
+            if since >= 10 && said != started {
+                said = started;
+                let main = std::process::id();
+                let read = |what| {
+                    std::fs::read_to_string(format!("/proc/self/task/{main}/{what}"))
+                        .map(|text| text.trim().to_owned())
+                        .unwrap_or_default()
+                };
+                // The state is the letter after the name's closing bracket.
+                let stat = read("stat");
+                let state = stat
+                    .rsplit(") ")
+                    .next()
+                    .and_then(|rest| rest.split(' ').next());
+                log!(
+                    "browser: drive {started} not done after 10 s, main thread {} in {}",
+                    state.unwrap_or("?"),
+                    read("wchan")
+                );
+            }
+        }
+    });
+}
+
 /// Starts reading commands from stdin.
 pub fn start() {
     crate::drive_wayland::start();
+    watch_stalls();
     std::thread::spawn(|| {
         let mut number = 0;
         for line in std::io::stdin().lock().lines() {
@@ -153,6 +199,7 @@ pub fn start() {
                     release_held_modifiers();
                 }
                 log!("browser: drive {n}: {line}");
+                STARTED.store(n, Ordering::Relaxed);
                 // It's done once the title has come, which it reports itself.
                 if let Some(text) = line.strip_prefix("title ").filter(|text| !text.is_empty()) {
                     await_key_title(n, text.to_owned(), 100);
@@ -313,6 +360,7 @@ fn settle(n: u64) {
                 active as u8
             );
             UNDONE.with_borrow_mut(|undone| undone.remove(&n));
+            FINISHED.fetch_max(n, Ordering::Relaxed);
             let ready = WAITING.with_borrow_mut(|waiting| {
                 let first = UNDONE.with_borrow(|undone| undone.first().copied());
                 let (ready, still) = std::mem::take(waiting)
@@ -444,6 +492,9 @@ thread_local! {
     /// Whether the scripted input method types (`ime_key`), and what it composes, if anything.
     static IME_ON: Cell<bool> = const { Cell::new(false) };
     static COMPOSITION: RefCell<Option<String>> = const { RefCell::new(None) };
+    /// Whether it types `ime ko`'s Korean, and the syllable it composes.
+    static KOREAN: Cell<bool> = const { Cell::new(false) };
+    static SYLLABLE: Cell<Syllable> = const { Cell::new([None; 3]) };
 }
 
 fn server() -> Option<Rc<(RustConnection, xproto::Window)>> {
@@ -1362,6 +1413,129 @@ fn marked() -> Option<std::ops::Range<usize>> {
 /// deactivates it: the text input it composed for has been reset, and the composition with it.
 pub(super) fn input_method_reset() {
     COMPOSITION.set(None);
+    SYLLABLE.set([None; 3]);
+}
+
+/// A letter of `ime ko`'s 2-set (dubeolsik) Korean keyboard: its key, its compatibility letter for
+/// it composing alone, and its index as a syllable's first consonant (or None for a vowel), its
+/// last (or 0) and its vowel (or None for a consonant).
+struct Jamo {
+    key: u8,
+    alone: char,
+    first: Option<u32>,
+    last: u32,
+    vowel: Option<u32>,
+}
+
+const fn consonant(key: u8, alone: char, first: u32, last: u32) -> Jamo {
+    let (first, vowel) = (Some(first), None);
+    Jamo {
+        key,
+        alone,
+        first,
+        last,
+        vowel,
+    }
+}
+
+const fn vowel(key: u8, alone: char, vowel: u32) -> Jamo {
+    let (first, last, vowel) = (None, 0, Some(vowel));
+    Jamo {
+        key,
+        alone,
+        first,
+        last,
+        vowel,
+    }
+}
+
+/// drive.mm's table: the plain consonants and vowels, without the compound ones, which "한글" and
+/// "안녕하세요" don't need.
+const JAMO: [Jamo; 26] = [
+    consonant(b'r', 'ㄱ', 0, 1),
+    consonant(b's', 'ㄴ', 2, 4),
+    consonant(b'e', 'ㄷ', 3, 7),
+    consonant(b'f', 'ㄹ', 5, 8),
+    consonant(b'a', 'ㅁ', 6, 16),
+    consonant(b'q', 'ㅂ', 7, 17),
+    consonant(b't', 'ㅅ', 9, 19),
+    consonant(b'd', 'ㅇ', 11, 21),
+    consonant(b'w', 'ㅈ', 12, 22),
+    consonant(b'c', 'ㅊ', 14, 23),
+    consonant(b'z', 'ㅋ', 15, 24),
+    consonant(b'x', 'ㅌ', 16, 25),
+    consonant(b'v', 'ㅍ', 17, 26),
+    consonant(b'g', 'ㅎ', 18, 27),
+    vowel(b'k', 'ㅏ', 0),
+    vowel(b'o', 'ㅐ', 1),
+    vowel(b'i', 'ㅑ', 2),
+    vowel(b'j', 'ㅓ', 4),
+    vowel(b'p', 'ㅔ', 5),
+    vowel(b'u', 'ㅕ', 6),
+    vowel(b'h', 'ㅗ', 8),
+    vowel(b'y', 'ㅛ', 12),
+    vowel(b'n', 'ㅜ', 13),
+    vowel(b'b', 'ㅠ', 17),
+    vowel(b'm', 'ㅡ', 18),
+    vowel(b'l', 'ㅣ', 20),
+];
+
+/// The syllable `ime ko` composes, as its letters' places in JAMO: its first consonant, vowel and
+/// last consonant, each None if it has none.
+type Syllable = [Option<u8>; 3];
+
+/// What `syllable` shows: a whole syllable once it has a first consonant and a vowel, or its one
+/// letter alone, or nothing.
+fn syllable_text([first, vowel, last]: Syllable) -> String {
+    let jamo = |at: Option<u8>| at.map(|at| &JAMO[usize::from(at)]);
+    let (first, vowel, last) = (jamo(first), jamo(vowel), jamo(last));
+    if let (Some(first), Some(vowel)) = (first, vowel) {
+        let (first, vowel) = (first.first.unwrap_or(0), vowel.vowel.unwrap_or(0));
+        let at = 0xAC00 + (first * 21 + vowel) * 28 + last.map_or(0, |last| last.last);
+        return char::from_u32(at).map(String::from).unwrap_or_default();
+    }
+    first
+        .or(vowel)
+        .map(|jamo| jamo.alone.to_string())
+        .unwrap_or_default()
+}
+
+/// What `ime ko` does with `key` while it composes `syllable`, as macOS's 2-Set Korean makes the
+/// calls (#2457), drive.mm's KoreanKey: the syllable it commits, if any, the syllable it composes
+/// after, and whether it takes the key. A letter that can't join the syllable commits it and
+/// starts the next, and a vowel after a last consonant takes that consonant into the next syllable
+/// (핫 then ㅔ gives 하 and 세). Backspace takes the last letter off, and any other key commits
+/// what's composing and goes on to the window, return too, unlike Japanese input.
+fn korean_key(syllable: Syllable, key: &str) -> (Option<String>, Syllable, bool) {
+    let [first, vowel, last] = syllable;
+    let composing = syllable != [None; 3];
+    let Some(at) = JAMO.iter().position(|jamo| key.as_bytes() == [jamo.key]) else {
+        if !composing {
+            return (None, syllable, false);
+        }
+        if key == "backspace" {
+            let shorter = match syllable {
+                [_, _, Some(_)] => [first, vowel, None],
+                [Some(_), Some(_), None] => [first, None, None],
+                _ => [None; 3],
+            };
+            return (None, shorter, true);
+        }
+        return (Some(syllable_text(syllable)), [None; 3], false);
+    };
+    let jamo = &JAMO[at];
+    let at = Some(at as u8);
+    let committed = |kept: Syllable| composing.then(|| syllable_text(kept));
+    let (committed, next) = match jamo.vowel {
+        None if first.is_some() && vowel.is_some() && last.is_none() && jamo.last != 0 => {
+            (None, [first, vowel, at])
+        }
+        None => (committed(syllable), [at, None, None]),
+        Some(_) if first.is_some() && vowel.is_none() => (None, [first, at, None]),
+        // The last consonant moves on to start the syllable this vowel is in.
+        Some(_) => (committed([first, vowel, None]), [last, at, None]),
+    };
+    (committed, next, true)
 }
 
 /// Handles `key` as drive.mm's scripted input method does, with the calls a Japanese one makes in
@@ -1394,6 +1568,9 @@ pub(super) fn ime_key(key: &str, state: u16) -> Option<bool> {
         }
     }
     let field = Field::with_keys()?;
+    if KOREAN.get() {
+        return korean_ime_key(field, key);
+    }
     let composition = COMPOSITION.take();
     let mark = |text: &str, selected: std::ops::Range<usize>| {
         let handled = field.compose(text, Some(selected));
@@ -1420,6 +1597,25 @@ pub(super) fn ime_key(key: &str, state: u16) -> Option<bool> {
         return None;
     }
     Some(true)
+}
+
+/// `ime_key` for `ime ko`: commits and composes in `field` as `korean_key` says.
+fn korean_ime_key(field: Field, key: &str) -> Option<bool> {
+    let (committed, next, taken) = korean_key(SYLLABLE.get(), key);
+    let text = syllable_text(next);
+    let committed_ok = committed
+        .as_deref()
+        .is_none_or(|committed| field.commit(committed));
+    // A commit ends the composition, so only a syllable after it is composed again.
+    let end = text.encode_utf16().count();
+    let cursor = (!text.is_empty()).then_some(end..end);
+    let composed = committed.is_some() && text.is_empty() || field.compose(&text, cursor);
+    if !(committed_ok && composed) {
+        return None;
+    }
+    SYLLABLE.set(next);
+    COMPOSITION.set((!text.is_empty()).then_some(text));
+    Some(taken)
 }
 
 /// Sends `key`'s events of `kinds` as `key` does. A held key's repeats are presses without
@@ -2928,9 +3124,10 @@ fn run_command(line: &str) -> Option<()> {
         "type" => rest.chars().try_for_each(|c| key(&c.to_string(), none)),
         "insert" => insert(rest),
         "ime" => {
-            let on = match words.next()? {
-                "on" => true,
-                "off" => false,
+            let (on, korean) = match words.next()? {
+                "on" => (true, false),
+                "ko" => (true, true),
+                "off" => (false, false),
                 _ => return None,
             };
             // Under Wayland the driver is sway's input method from here, or refuses to be.
@@ -2938,7 +3135,8 @@ fn run_command(line: &str) -> Option<()> {
                 crate::drive_wayland::input_method()?;
             }
             IME_ON.set(on);
-            COMPOSITION.set(None);
+            KOREAN.set(korean);
+            input_method_reset();
             Some(())
         }
         // As the window manager's full-screen key, through the core, as the Mac's goes through the
@@ -3591,6 +3789,51 @@ fn relative_to(to: Target, window: xproto::Window) -> Option<Target> {
 mod tests {
     use super::{WmGrab, await_uncovered, wm_grab_after, xproto, xtest_delay, xtest_verdict};
     use std::time::{Duration, Instant};
+
+    // ime ko types Korean a syllable at a time, as drive.mm's does, for keys' Korean typed right
+    // after Ctrl+L under Wayland (#3403).
+    #[test]
+    fn ime_ko_composes_a_syllable_at_a_time_from_a_2_set_keyboard() {
+        use super::{Syllable, korean_key, syllable_text};
+        let typed = |keys: &str| {
+            let mut committed = String::new();
+            let mut syllable: Syllable = [None; 3];
+            for key in keys.chars() {
+                let (commit, next, taken) = korean_key(syllable, &key.to_string());
+                assert!(taken, "{key} wasn't taken");
+                committed += &commit.unwrap_or_default();
+                syllable = next;
+            }
+            (committed, syllable)
+        };
+        // A vowel after a last consonant takes it into the next syllable: 안 then ㅕ gives 안 and 녀.
+        let (committed, syllable) = typed("dkssudgktpdy");
+        assert_eq!(
+            (committed.as_str(), syllable_text(syllable).as_str()),
+            ("안녕하세", "요")
+        );
+        // A consonant after a last one commits the syllable and starts the next.
+        let (committed, syllable) = typed("gksrmf");
+        assert_eq!(
+            (committed.as_str(), syllable_text(syllable).as_str()),
+            ("한", "글")
+        );
+        // Backspace takes the last letter off, and escape commits what's left and goes on.
+        let (commit, syllable, taken) = korean_key(syllable, "backspace");
+        assert_eq!(
+            (commit, syllable_text(syllable).as_str(), taken),
+            (None, "그", true)
+        );
+        let (commit, syllable, taken) = korean_key(syllable, "escape");
+        assert_eq!(
+            (commit.as_deref(), syllable, taken),
+            (Some("그"), [None; 3], false)
+        );
+        // With nothing composing, a key that isn't a letter is the window's.
+        assert_eq!(korean_key([None; 3], "escape"), (None, [None; 3], false));
+        // A letter alone shows as its own letter.
+        assert_eq!(syllable_text(typed("k").1), "ㅏ");
+    }
 
     // KWin's input-only window over the screen's corner took the press the driver sent with the
     // move there, before KWin heard the pointer come and took the window away (#2765).
