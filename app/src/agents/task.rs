@@ -1526,8 +1526,9 @@ impl Agents {
             let live = self.worked_in();
             for tab in pages.into_iter().filter(|tab| !live.contains(tab)) {
                 // The task is gone from the list, so `left` wouldn't find whose it was.
-                let why = (session.agent.clone(), super::Gone::PutAway);
-                self.gone.entry(tab).or_insert(why);
+                if !self.gone.contains_key(&tab) {
+                    self.went(tab, &session.agent, super::Gone::PutAway);
+                }
                 self.browser.close_user_tab(tab, cx);
             }
             return;
@@ -1545,11 +1546,10 @@ impl Agents {
     pub(super) fn left(&mut self, tab: u64, gone: super::Gone) {
         let whose = (self.tasks.tasks.iter())
             .filter_map(|task| task.session.as_ref())
-            .find(|session| session.tabs.contains(&tab));
-        if let Some(session) = whose {
-            self.gone
-                .entry(tab)
-                .or_insert((session.agent.clone(), gone));
+            .find(|session| session.tabs.contains(&tab))
+            .map(|session| session.agent.clone());
+        if let Some(agent) = whose.filter(|_| !self.gone.contains_key(&tab)) {
+            self.went(tab, &agent, gone);
         }
     }
 

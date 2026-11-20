@@ -2081,8 +2081,20 @@ impl Agents {
         cx.notify();
     }
 
+    /// Keeps why `agent`'s page `tab` left its Space, in place of any reason before, as the
+    /// agent's own acts know why. Past GONE_KEPT, the lowest tab id, the oldest, goes.
+    fn went(&mut self, tab: u64, agent: &str, gone: Gone) {
+        self.gone.insert(tab, (agent.into(), gone));
+        while self.gone.len() > GONE_KEPT {
+            let Some(&oldest) = self.gone.keys().min() else {
+                break;
+            };
+            self.gone.remove(&oldest);
+        }
+    }
+
     /// The core closed `tab` (tabs::tab_closed). A hold on it ends. A session's page that the
-    /// agent or the browser didn't close, the user did.
+    /// agent or the browser didn't close, the user or its own page did.
     pub fn tab_closed(&mut self, tab: u64, cx: &mut Context<Self>) {
         self.dialogs.remove(&tab);
         self.left(tab, Gone::Closed);
@@ -3292,10 +3304,20 @@ impl Agents {
                 format!("Unpinned tab {tab}. It's at the top of your Today tabs.")
             }
             _ => {
+                // Removing closes the tab with its split, so each says why before the core's
+                // close would read as the user's, and one whose page kept it open says nothing.
+                let split = self.browser.split(tab, cx);
+                for &each in &split {
+                    self.went(each, agent, Gone::Removed(tab));
+                }
                 self.browser.remove_pinned(tab, cx);
                 self.pins.remove(&tab);
                 let space = self.browser.agent_space(agent);
-                let open = (self.browser.space_tabs(space, cx).iter()).any(|each| each.id == tab);
+                let still = self.browser.space_tab_ids(space, cx);
+                for each in split.iter().filter(|each| still.contains(each)) {
+                    self.gone.remove(each);
+                }
+                let open = still.contains(&tab);
                 match open {
                     true => format!(
                         "Tab {tab} is unpinned but stays open: its page asks the user before it's \
@@ -3507,7 +3529,7 @@ impl Agents {
         cx: &mut Context<Self>,
     ) {
         if closed == Closed::Closed {
-            self.gone.insert(tab, (agent.into(), Gone::Itself));
+            self.went(tab, agent, Gone::Itself);
         }
         let answer = match closed {
             Closed::Closed if discarded => Ok(format!("Closed tab {tab} without saving.")),
@@ -3976,10 +3998,13 @@ const OFF_THE_WEB: &str = "A page that isn't http or https";
 /// The core's refusal of a tab not in the agent's Space (bc_agent_may_act).
 const NOT_ITS_SPACE: &str = "The tab isn't in the agent's own Space.";
 
+/// How many pages' reasons for leaving Agents::gone keeps.
+const GONE_KEPT: usize = 512;
+
 /// Why a session's page left its agent's Space (Agents::gone).
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Gone {
-    /// The user closed it.
+    /// The user closed it, or its own page did.
     Closed,
     /// The user moved it to a Space of theirs.
     Moved,
@@ -3991,13 +4016,15 @@ enum Gone {
     Itself,
     /// It closed as its download started, as it showed no page.
     Download,
+    /// It closed as the agent removed this tab, it or one of its split, from its pinned tabs.
+    Removed(u64),
 }
 
 impl Gone {
     /// What a call on `tab` answers, in place of NOT_ITS_SPACE.
     fn why(self, tab: u64) -> String {
         let went = match self {
-            Gone::Closed => format!("The user closed tab {tab}."),
+            Gone::Closed => format!("Tab {tab} was closed, by the user or by its own page."),
             Gone::Moved => {
                 format!("The user moved tab {tab} to one of their own Spaces: it's theirs now.")
             }
@@ -4012,6 +4039,13 @@ impl Gone {
             Gone::Download => {
                 format!("Tab {tab} closed as its download started, as it showed no page.")
             }
+            Gone::Removed(removed) if removed == tab => {
+                format!("The agent removed tab {tab} from its pinned tabs, which closed it.")
+            }
+            Gone::Removed(removed) => format!(
+                "Tab {tab} closed with its split view, as the agent removed tab {removed} from its \
+                 pinned tabs."
+            ),
         };
         format!("{went} To carry on, open the page again with open_tab.")
     }
