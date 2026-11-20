@@ -130,7 +130,7 @@ impl Shell {
                         .font_weight(FontWeight::MEDIUM)
                         // Kept together, so "to" doesn't wrap alone under a long site, which breaks
                         // between its parts (#3748).
-                        .child(crate::address_wrap::drawn(&format!(
+                        .child(crate::address_wrap::text(&format!(
                             "{} wants\u{a0}to",
                             question.site
                         ))),
