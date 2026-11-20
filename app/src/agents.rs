@@ -1284,17 +1284,9 @@ impl Agents {
             "list_tabs" => {
                 // Its first call makes its Space, which the core then lists.
                 self.space(&agent, cx);
-                // A tab of its own off the web is listed by its number alone, so it can close it,
-                // and one the user holds by its number and theirs, so where they go stays theirs.
+                // A tab of its own off the web is listed by its number alone, so it can close it.
                 let tabs: Vec<TabInfo> = (self.browser.agent_tabs(&agent, cx).into_iter())
                     .filter_map(|tab| match self.browser.off_limits(tab.id, cx) {
-                        None | Some(NOT_WEB_PAGE) if self.held.contains_key(&tab.id) => {
-                            Some(TabInfo {
-                                title: WITH_THE_USER.into(),
-                                url: "".into(),
-                                ..tab
-                            })
-                        }
                         None => Some(tab),
                         Some(NOT_WEB_PAGE) => Some(TabInfo {
                             title: OFF_THE_WEB.into(),
@@ -3223,12 +3215,8 @@ impl Agents {
         reply: mpsc::Sender<ToolResult>,
         cx: &mut Context<Self>,
     ) {
-        // A tab the user holds stays where it is, as its place among the sites would tell its site.
-        let today = (self.browser.agent_tabs(agent, cx).into_iter()).filter(|tab| {
-            !tab.pinned
-                && self.browser.off_limits(tab.id, cx).is_none()
-                && !self.held.contains_key(&tab.id)
-        });
+        let today = (self.browser.agent_tabs(agent, cx).into_iter())
+            .filter(|tab| !tab.pinned && self.browser.off_limits(tab.id, cx).is_none());
         let mut rows: Vec<(u64, usize, Option<String>)> = Vec::new();
         for tab in today {
             let split = self.browser.split(tab.id, cx);
@@ -4007,8 +3995,6 @@ const NOT_WEB_PAGE: &str =
     "The tab's page isn't an http or https page, the only pages agents may use.";
 /// list_tabs' title for a tab of the agent's own off the web, in place of its title and address.
 const OFF_THE_WEB: &str = "A page that isn't http or https";
-/// list_tabs' words for a tab the user holds, in place of its page's title and address (#3694).
-const WITH_THE_USER: &str = "With the user until they hand it back";
 /// The core's refusal of a tab not in the agent's Space (bc_agent_may_act).
 const NOT_ITS_SPACE: &str = "The tab isn't in the agent's own Space.";
 
