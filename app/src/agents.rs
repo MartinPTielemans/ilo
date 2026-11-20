@@ -398,6 +398,8 @@ struct Act {
     download: u64,
     /// The HTTP requests it sends (request).
     requests: Vec<request::Request>,
+    /// The text open_tab or navigate waits for in the page once it settles.
+    wait: Option<WaitText>,
     /// What it does that asked first, once allowed, for its session's receipt.
     did: Option<Did>,
     reply: mpsc::Sender<ToolResult>,
@@ -506,6 +508,17 @@ struct Acting {
     reply: mpsc::Sender<ToolResult>,
     /// The tabs its page opened meanwhile, in the agent's Space, which its answer names.
     opened_tabs: Vec<u64>,
+    /// The text it waits for once its page settles, looking again until it shows.
+    wait: Option<WaitText>,
+}
+
+/// A text open_tab or navigate waits for in the page's outline once it has settled, as a wait
+/// step's does (#3658).
+struct WaitText {
+    text: String,
+    seconds: f64,
+    /// When it stops looking, from the first answer on.
+    until: Option<Instant>,
 }
 
 /// A call's requests, one at a time, while the one sent waits on the core's answer.
@@ -1312,6 +1325,9 @@ impl Agents {
                 let Some(url) = self.url_argument(&arguments, &reply) else {
                     return;
                 };
+                let Some(wait) = wait_text(&arguments, &reply) else {
+                    return;
+                };
                 let host = site(&url);
                 let act = Act {
                     agent: agent.clone(),
@@ -1329,6 +1345,7 @@ impl Agents {
                     download: 0,
                     field: String::new(),
                     requests: Vec::new(),
+                    wait,
                     reply,
                 };
                 if !is_web(&act.url) {
@@ -1659,6 +1676,7 @@ impl Agents {
                     field: String::new(),
                     download: 0,
                     requests,
+                    wait: None,
                     did: None,
                     reply,
                 };
@@ -1926,6 +1944,7 @@ impl Agents {
             field: String::new(),
             reply,
             opened_tabs: vec![],
+            wait: None,
         };
         self.acting.insert(request, acting);
         self.act_in_page(agent, tab, request, action, 0, "");
@@ -2315,6 +2334,7 @@ impl Agents {
             what: String::new(),
             download: 0,
             requests: Vec::new(),
+            wait: None,
             did: None,
             reply,
         };
@@ -2322,6 +2342,10 @@ impl Agents {
         match tool {
             "navigate" => {
                 act.show = show.whole();
+                let Some(wait) = wait_text(arguments, &act.reply) else {
+                    return;
+                };
+                act.wait = wait;
                 let url = string("url").unwrap_or_default();
                 match url.trim() {
                     "back" => {
@@ -2788,6 +2812,7 @@ impl Agents {
             requests,
             did,
             reply,
+            wait,
             ..
         } = act;
         // The user said yes to closing a page the agent didn't open without saving.
@@ -2857,6 +2882,7 @@ impl Agents {
             field,
             reply,
             opened_tabs: vec![],
+            wait,
         };
         self.acting.insert(request, acting);
         self.act_in_page(&agent, tab, request, page, element, &text);
@@ -2917,6 +2943,7 @@ impl Agents {
             field: String::new(),
             download: id,
             requests: Vec::new(),
+            wait: None,
             did: None,
             reply,
         };
@@ -3051,11 +3078,14 @@ impl Agents {
             field,
             reply,
             opened_tabs,
+            wait,
             ..
         }) = self.acting.remove(&request)
         else {
             return;
         };
+        // What it did, as a look again for the text it waits for says it too.
+        let did_note = note.clone();
         if !opened_tabs.is_empty() {
             let tabs = opened_tabs
                 .iter()
@@ -3118,13 +3148,65 @@ impl Agents {
                 }
             }
             show => {
-                self.outlines
-                    .insert(tab, page::outline(&info, &nodes, refs, None));
+                let outline = page::outline(&info, &nodes, refs, None);
+                if let Some(mut wait) = wait {
+                    let now = cx.background_executor().now();
+                    let until =
+                        *(wait.until).get_or_insert(now + Duration::from_secs_f64(wait.seconds));
+                    let shows = (outline.text().to_lowercase()).contains(&wait.text.to_lowercase());
+                    if !shows && now < until {
+                        let acting = Acting {
+                            agent,
+                            call,
+                            did: None,
+                            tab,
+                            element: 0,
+                            note: did_note,
+                            show,
+                            opened,
+                            field,
+                            reply,
+                            opened_tabs,
+                            wait: Some(wait),
+                        };
+                        let after = LOOK_EVERY.min(until.saturating_duration_since(now));
+                        return self.look_again(acting, after, cx);
+                    }
+                    let (text, seconds) = (page::clip(&wait.text, 60), wait.seconds);
+                    let said = match shows {
+                        true => format!("“{text}” showed."),
+                        false => format!("“{text}” didn't show in {seconds} s."),
+                    };
+                    note = match note.is_empty() {
+                        true => said,
+                        false => format!("{note} {said}"),
+                    };
+                }
+                self.outlines.insert(tab, outline);
                 self.answer_with(&agent, tab, note, show)
             }
         };
         _ = reply.send(ToolResult::text(text));
         self.advance(cx);
+    }
+
+    /// Reads the page of `acting`, whose text hasn't shown yet, again after `after`, unless its
+    /// call has gone meanwhile.
+    fn look_again(&mut self, acting: Acting, after: Duration, cx: &mut Context<Self>) {
+        let request = self.next_request;
+        self.next_request += 1;
+        self.acting.insert(request, acting);
+        cx.spawn(async move |agents, cx| {
+            cx.background_executor().timer(after).await;
+            _ = agents.update(cx, |agents, _| {
+                let Some(acting) = agents.acting.get(&request) else {
+                    return;
+                };
+                let (agent, tab) = (acting.agent.clone(), acting.tab);
+                agents.act_in_page(&agent, tab, request, PageAction::Snapshot, 0, "");
+            });
+        })
+        .detach();
     }
 
     /// `note`, what an action did, then the tab's latest outline as `show` says, which is the
@@ -3790,6 +3872,32 @@ fn showing_dialog(tab: u64, kind: DialogKind, opened: bool) -> String {
 }
 
 /// An action on `tab` for the call `call` with nothing more to it, as a close is.
+/// The text open_tab or navigate is to wait for, from `arguments`, or None having answered why it
+/// can't (#3658).
+fn wait_text(arguments: &Value, reply: &mpsc::Sender<ToolResult>) -> Option<Option<WaitText>> {
+    let text = arguments["wait_for"].as_str().unwrap_or("").trim();
+    if text.is_empty() {
+        return Some(None);
+    }
+    let seconds = match arguments["seconds"].as_f64() {
+        None => Some(tools::WAIT),
+        seconds => seconds.filter(|seconds| *seconds > 0.0 && *seconds <= tools::MAX_WAIT),
+    };
+    let Some(seconds) = seconds else {
+        _ = reply.send(ToolResult::error(format!(
+            "seconds is how long wait_for waits, more than 0 and at most {}.",
+            tools::MAX_WAIT
+        )));
+        return None;
+    };
+    let (text, until) = (text.to_string(), None);
+    Some(Some(WaitText {
+        text,
+        seconds,
+        until,
+    }))
+}
+
 fn act_of(agent: &str, call: u64, tab: u64, reply: mpsc::Sender<ToolResult>) -> Act {
     Act {
         agent: agent.into(),
@@ -3806,6 +3914,7 @@ fn act_of(agent: &str, call: u64, tab: u64, reply: mpsc::Sender<ToolResult>) -> 
         field: String::new(),
         download: 0,
         requests: Vec::new(),
+        wait: None,
         did: None,
         reply,
     }

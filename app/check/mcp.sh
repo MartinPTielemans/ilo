@@ -11,7 +11,8 @@
 # turn, a turn's ten calls answered at once, which logs the turns and how long they took. A page
 # that hasn't come once an action has waited for it is still loading, as the answer says. An app
 # in another site's frame, whose content comes after its load, is answered with its content or
-# as busy, never as its splash alone. A tab
+# as busy, never as its splash alone, and navigate waits for a text it names past the page's
+# settling. A tab
 # its page opens, by a link or window.open, goes in its Space, behind, and the click's answer names
 # it. A page with fields gives its prose and none of their values in its text. Its outline gives
 # the page's own values and the agent's own typing, and of the rest only that they're filled: the
@@ -562,7 +563,8 @@ case "$closed" in "Closed tab $settle_tab."*) ;; *) fail "closing the settle pag
 # An app that loads in a frame (#3658): the page's own document is done at once, with a splash,
 # and the app is a frame of another site's that shows a progress bar until its content comes after
 # its load, by a fetch or by its own script alone. open_tab and navigate answer with the content,
-# or say the page was still busy, and never with the splash alone. Each answer's time is in
+# or say the page was still busy, and never with the splash alone: the fetch is heard from the
+# page's commit on, and a frame that shows only a progress bar is a splash. Each answer's time is in
 # framed.txt.
 printf '%s' "<!doctype html><title>Framed</title><p id=splash>Loading Mail</p>
 <iframe title=App></iframe>
@@ -576,8 +578,9 @@ const show = () => {
   app.innerHTML = "<h1>Inbox</h1><button>Compose</button>";
   parent.postMessage("ready", "*");
 };
-addEventListener("load", () => location.search === "?by=fetch"
-  ? fetch("slow").then(show) : setTimeout(show, 1500));
+if (location.search === "?by=late") app.innerHTML = "<p>Starting</p>";
+addEventListener("load", () => location.search === "?by=fetch" ? fetch("slow").then(show)
+  : setTimeout(show, location.search === "?by=late" ? 6000 : 1500));
 </script>' > "$out/site/framed-app.html"
 now_ms() { perl -MTime::HiRes=time -e 'printf "%d\n", time * 1000'; }
 framed_tab=
@@ -606,6 +609,17 @@ done
 framed="$(paste -sd, - < "$out/framed.txt" | sed 's/,/, /g')"
 [ -z "$framed_wrong" ] ||
   fail "the framed app's answers had neither its content nor that it was busy${framed_wrong}: all were $framed"
+# One whose content comes after the page has settled, past the 5 s an answer waits, with nothing
+# that says it's loading, is answered once wait_for's text shows.
+started=$(now_ms)
+late=$(call navigate "{\"tab\":$framed_tab,\"url\":\"localhost:$port/framed.html?by=late\",\"wait_for\":\"Inbox\",\"seconds\":15}")
+took=$(($(now_ms) - started))
+printf '%s\n' "$late" > "$out/framed-navigate-late.txt"
+case "$late" in
+  "“Inbox” showed."*Compose*) ;;
+  *) fail "navigate waiting for the late app's Inbox answered in $took ms: $late" ;;
+esac
+framed="$framed, navigate waiting for Inbox in $took ms"
 closed=$(call close_tab "{\"tab\":$framed_tab}")
 case "$closed" in "Closed tab $framed_tab."*) ;; *) fail "closing the framed app answered: $closed" ;; esac
 

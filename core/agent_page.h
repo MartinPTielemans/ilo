@@ -166,8 +166,16 @@ class AgentPage : public content::WebContentsObserver,
   void Settle();
   // Waits until the page has stopped loading and has had no request for a while.
   void Quiet();
-  // Reads the main frame's tree until it's the same twice, a frame apart, then the snapshot.
-  void Still(base::ListValue last);
+  // Reads the page's trees, its frames' too, until they're the same twice, a frame apart, and are
+  // more than a splash, then the snapshot. Past the job's deadline it answers as busy.
+  void Still(std::vector<base::ListValue> last);
+  // The trees of the main frame and of each frame a snapshot reads, in |frames| from |next| on,
+  // added to |trees|: what an app in a frame shows is in its frame's tree alone (#3658). Nothing if
+  // the main frame's couldn't be read.
+  void ReadTrees(std::vector<Frame> frames,
+                 size_t next,
+                 std::vector<base::ListValue> trees,
+                 base::OnceCallback<void(std::optional<std::vector<base::ListValue>>)> then);
 
   void Click();
   // Presses the job's element once it's ready. One outside the page's view, where scrolling
