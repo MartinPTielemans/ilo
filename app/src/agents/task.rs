@@ -2121,7 +2121,7 @@ impl Agents {
             .and_then(|(name, tab)| self.refs.get(&tab)?.get(name).cloned());
         let named = |element: &page::Element| match element.name.trim().is_empty() {
             true => format!("the {}", element.role),
-            false => format!("“{}”", page::clip(element.name.trim(), 40)),
+            false => page::curly(element.name.trim(), 40),
         };
         let (on, page) = (site(&url), address(&url));
         let mut did = tools::Did {
@@ -2180,8 +2180,8 @@ impl Agents {
                 let (text, gone) = (string("text"), string("gone"));
                 let seconds = arguments.get("seconds").and_then(Value::as_f64);
                 did.target = match (text.is_empty(), gone.is_empty(), seconds) {
-                    (false, _, _) => format!("“{}”", page::clip(&text, 40)),
-                    (true, false, _) => format!("“{}” to go", page::clip(&gone, 40)),
+                    (false, _, _) => page::curly(&text, 40),
+                    (true, false, _) => format!("{} to go", page::curly(&gone, 40)),
                     _ if string("until") == "quiet" => tools::SETTLE.into(),
                     (true, true, Some(seconds)) => duration(seconds.round().max(1.) as u64),
                     (true, true, None) => String::new(),
@@ -2402,7 +2402,8 @@ pub fn first_message(asked: &str, page: Option<&AskedOn>) -> String {
     match page {
         Some(page) => format!(
             "{asked}\n\n(I'm on “{}”, {}. Open it in a tab of your own if you need it.)",
-            page.title, page.url
+            page::straight(&page.title),
+            page.url
         ),
         None => asked.to_string(),
     }

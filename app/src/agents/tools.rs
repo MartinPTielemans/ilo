@@ -708,9 +708,13 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
             let into = target("a field");
             return match (tense, did.text.is_empty()) {
                 (Tense::Now, true) => format!("Typing in {into}"),
-                (Tense::Now, false) => format!("Typing “{}” in {into}", did.text),
+                (Tense::Now, false) => {
+                    format!("Typing {} in {into}", page::curly(&did.text, TYPED_SHOWN))
+                }
                 (Tense::Done, true) => format!("Typed in {into}"),
-                (Tense::Done, false) => format!("Typed “{}” in {into}", did.text),
+                (Tense::Done, false) => {
+                    format!("Typed {} in {into}", page::curly(&did.text, TYPED_SHOWN))
+                }
                 (Tense::Failed, _) => format!("Couldn't type in {into}"),
             };
         }
@@ -718,11 +722,18 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
             let into = target("a list");
             return match (tense, did.text.is_empty()) {
                 (Tense::Now, true) => format!("Choosing in {into}"),
-                (Tense::Now, false) => format!("Choosing “{}” in {into}", did.text),
+                (Tense::Now, false) => {
+                    format!("Choosing {} in {into}", page::curly(&did.text, TYPED_SHOWN))
+                }
                 (Tense::Done, true) => format!("Chose in {into}"),
-                (Tense::Done, false) => format!("Chose “{}” in {into}", did.text),
+                (Tense::Done, false) => {
+                    format!("Chose {} in {into}", page::curly(&did.text, TYPED_SHOWN))
+                }
                 (Tense::Failed, true) => format!("Couldn't choose in {into}"),
-                (Tense::Failed, false) => format!("Couldn't choose “{}” in {into}", did.text),
+                (Tense::Failed, false) => format!(
+                    "Couldn't choose {} in {into}",
+                    page::curly(&did.text, TYPED_SHOWN)
+                ),
             };
         }
         "press_key" => ("Pressing", "Pressed", "Couldn't press", target("a key")),

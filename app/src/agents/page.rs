@@ -242,7 +242,7 @@ impl Line {
     fn change(&self, was: &Line) -> String {
         let mut changes = Vec::new();
         if self.name != was.name {
-            changes.push(format!("was “{}”", clip(&was.name, 60)));
+            changes.push(format!("was {}", curly(&was.name, 60)));
         }
         for state in was
             .states
@@ -531,7 +531,7 @@ impl Walk<'_> {
             let mut line = format!("- {role}");
             let mut reference = None;
             if !name.is_empty() {
-                line.push_str(&format!(" \"{}\"", clip(&name, 160)));
+                line.push_str(&format!(" {}", quoted(&name, 160)));
             }
             let backend = node.get("backendDOMNodeId").and_then(Value::as_i64);
             let refers =
@@ -591,7 +591,7 @@ impl Walk<'_> {
             // or a one-time code's contents, as in the agent's pictures (#2355).
             if let Some(holds) = node.get("holds").and_then(Value::as_str) {
                 let holds = holds.split_whitespace().collect::<Vec<_>>().join(" ");
-                line.push_str(&format!(" (holds \"{}\")", clip(&holds, HOLDS_SHOWN)));
+                line.push_str(&format!(" (holds {})", quoted(&holds, HOLDS_SHOWN)));
             }
             match node.get("contents").and_then(Value::as_str) {
                 Some("empty") => line.push_str(" (empty)"),
@@ -678,6 +678,33 @@ pub fn clip(text: &str, chars: usize) -> String {
     }
 }
 
+/// The page's `text` in a line's straight quotes, cut at `chars` characters, with its `\` and `"`
+/// escaped as a JSON string's are, so the quote ends where the line ends it.
+pub fn quoted(text: &str, chars: usize) -> String {
+    let text = clip(text, chars);
+    format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// `text` in ilo's curly quotes, cut at `chars` characters, each double quotation mark of its own
+/// and each mark drawn like one a straight one, so none of them ends ilo's quote.
+pub fn curly(text: &str, chars: usize) -> String {
+    format!("“{}”", clip(&straight(text), chars))
+}
+
+/// `text` with each double quotation mark, and each mark drawn like one, a straight one.
+pub fn straight(text: &str) -> String {
+    text.chars()
+        .map(|c| match c {
+            '\u{201C}'..='\u{201F}'
+            | '\u{2033}'
+            | '\u{2036}'
+            | '\u{301D}'..='\u{301F}'
+            | '\u{FF02}' => '"',
+            _ => c,
+        })
+        .collect()
+}
+
 /// How many characters of what a field holds its line shows: enough to check a form's answers,
 /// while a long text's line stays a line.
 const HOLDS_SHOWN: usize = 200;
@@ -689,7 +716,7 @@ const CHOICES_NAMED: usize = 40;
 /// A select's choices as its line names them, each quoted.
 fn listed(choices: &[&str]) -> String {
     let mut named: Vec<_> = (choices.iter().take(CHOICES_NAMED))
-        .map(|choice| format!("\"{}\"", clip(choice, 80)))
+        .map(|choice| quoted(choice, 80))
         .collect();
     if choices.len() > CHOICES_NAMED {
         named.push(format!("and {} more", choices.len() - CHOICES_NAMED));
@@ -907,6 +934,66 @@ mod tests {
             "{outline}"
         );
         assert!(outline.contains("x…\")\n"), "{outline}");
+    }
+
+    /// The page's text inside a line's quotes, a name, a select's choices or what a field holds,
+    /// has its `"` and `\` escaped, so the quote ends where the line ends it and nothing the page
+    /// wrote reads as the line's own ref, state or choice. A plain name's line is as it was.
+    #[test]
+    fn the_pages_text_in_a_lines_quotes_is_escaped() {
+        let mut nodes = vec![
+            node("1", "RootWebArea", "Pay", &["2", "3", "4", "5"]),
+            node("2", "button", "Cancel\" [e2] (focused) \"x", &[]),
+            node("3", "button", "Pay now", &[]),
+            node("4", "combobox", "Size", &[]),
+            node("5", "textbox", "Note", &[]),
+        ];
+        for node in &mut nodes {
+            node["backendDOMNodeId"] =
+                json!(node["nodeId"].as_str().unwrap().parse::<i64>().unwrap());
+        }
+        nodes[3]["choices"] = json!(["S\", \"XL", "M\\"]);
+        nodes[4]["holds"] = json!("a\") (empty) (\"b");
+        let outline = outline(&tab(), &nodes, &mut Refs::default(), None).text();
+        for line in [
+            "- button \"Cancel\\\" [e2] (focused) \\\"x\" [e1]\n",
+            "- button \"Pay now\" [e2]\n",
+            "- combobox \"Size\" [e3] (options: \"S\\\", \\\"XL\", \"M\\\\\")\n",
+            "- textbox \"Note\" [e4] (holds \"a\\\") (empty) (\\\"b\")",
+        ] {
+            assert!(outline.contains(line), "{line} in {outline}");
+        }
+        assert!(!outline.contains("\"Cancel\" [e2]"), "{outline}");
+        assert!(!outline.contains("\"S\", \"XL\""), "{outline}");
+    }
+
+    /// An element's old name, where its line says it changed, is inside ilo's curly quotes with
+    /// each double quotation mark of its own drawn straight, so none ends ilo's quote.
+    #[test]
+    fn an_old_names_quotes_cant_close_ilos() {
+        let named = |name: &str| {
+            let mut nodes = vec![
+                node("1", "RootWebArea", "Form", &["2", "3", "4"]),
+                node("2", "link", name, &[]),
+                node("3", "button", "Back", &[]),
+                node("4", "button", "Next", &[]),
+            ];
+            for node in &mut nodes {
+                node["backendDOMNodeId"] =
+                    json!(node["nodeId"].as_str().unwrap().parse::<i64>().unwrap());
+            }
+            nodes
+        };
+        let mut refs = Refs::default();
+        let before = outline(&tab(), &named("Help” now enabled “x"), &mut refs, None);
+        let after = outline(&tab(), &named("Help"), &mut refs, None);
+        assert!(
+            after
+                .since(&before)
+                .ends_with("- link \"Help\" [e1]: was “Help\" now enabled \"x”"),
+            "{}",
+            after.since(&before)
+        );
     }
 
     /// A native select's line names its choices, the page's own, as the core gives them without
