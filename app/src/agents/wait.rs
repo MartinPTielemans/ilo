@@ -197,14 +197,23 @@ pub(super) struct Wait {
     agent: String,
     events: Vec<Awaited>,
     seconds: u64,
-    /// The tabs it's on, each with the URL it was at when last seen: the one it names, else the
-    /// agent's, those it gets while the wait lasts too.
-    tabs: Vec<(u64, SharedString)>,
+    /// The tabs it's on, as last seen: the one it names, else the agent's, those it gets while the
+    /// wait lasts too.
+    tabs: Vec<Seen>,
     /// Whether it names its tab, which no other tab joins.
     named: bool,
     reply: mpsc::Sender<ToolResult>,
     /// Answers once its seconds pass. Dropped with the wait, it never fires.
     _timer: Task<()>,
+}
+
+/// A tab a wait is on, as the wait last saw it.
+struct Seen {
+    tab: u64,
+    url: SharedString,
+    /// Its page was loading, whose end is a load: the core's report of it can come before the
+    /// wait, while the shell still says it's loading.
+    loading: bool,
 }
 
 /// The most downloads ended after their call answered that an agent's waits keep to tell.
@@ -261,14 +270,14 @@ impl Agents {
                 if let Some(now) = self.already(&agent, tab, &events, cx) {
                     return self.tell_wait(&agent, now, reply, cx);
                 }
-                vec![(tab, self.browser.tab(tab, cx).url)]
+                vec![self.seen_now(tab, cx)]
             }
             // Edges alone: a state such as loaded would hold on some tab at once.
             None => {
                 let space = self.browser.agent_space(&agent);
                 let tabs = self.browser.space_tabs(space, cx).into_iter();
                 let tabs = tabs.filter(|tab| self.seen(tab.id, cx));
-                tabs.map(|tab| (tab.id, tab.url)).collect()
+                tabs.map(|tab| self.seen_now(tab.id, cx)).collect()
             }
         };
         let id = self.next_request;
@@ -290,6 +299,13 @@ impl Agents {
         };
         self.waits.insert(id, wait);
         WAITING.set(true);
+    }
+
+    /// `tab` as a wait sees it now.
+    fn seen_now(&self, tab: u64, cx: &gpui::App) -> Seen {
+        let url = self.browser.tab(tab, cx).url;
+        let loading = self.browser.loading(tab, cx);
+        Seen { tab, url, loading }
     }
 
     /// Whether the agent may hear of `tab`: in its Space, and listed by list_tabs.
@@ -378,7 +394,7 @@ impl Agents {
             .filter(|(_, wait)| {
                 wait.agent == agent
                     && wait.events.contains(&event)
-                    && (tab == 0 || wait.tabs.iter().any(|(each, _)| *each == tab))
+                    && (tab == 0 || wait.tabs.iter().any(|seen| seen.tab == tab))
             })
             .map(|(&id, _)| id)
             .collect();
@@ -399,12 +415,18 @@ impl Agents {
             .find(|agent| space != 0 && self.browser.agent_space(agent) == space)?
             .clone();
         if self.seen(tab, cx) {
-            let url = self.browser.tab(tab, cx).url;
-            for wait in self.waits.values_mut() {
-                let new = !wait.tabs.iter().any(|(each, _)| *each == tab);
-                if wait.agent == agent && !wait.named && new {
-                    wait.tabs.push((tab, url.clone()));
-                }
+            let joins: Vec<u64> = (self.waits.iter())
+                .filter(|(_, wait)| wait.agent == agent && !wait.named)
+                .filter(|(_, wait)| !wait.tabs.iter().any(|seen| seen.tab == tab))
+                .map(|(&id, _)| id)
+                .collect();
+            for id in joins {
+                let seen = self.seen_now(tab, cx);
+                self.waits
+                    .get_mut(&id)
+                    .expect("it was just found")
+                    .tabs
+                    .push(seen);
             }
         }
         Some(agent)
@@ -419,27 +441,44 @@ impl Agents {
     }
 
     /// `tab`'s page is at `url` (tabs::tab_state_changed): to a wait that saw it elsewhere, it
-    /// navigated.
+    /// navigated, and to one that saw it loading and sees it no longer, it loaded.
     pub fn wait_page(&mut self, tab: u64, url: &str, cx: &mut Context<Self>) {
         let Some(agent) = self.waiting_owner(tab, cx) else {
             return;
         };
-        let mut moved = Vec::new();
+        let loading = self.browser.loading(tab, cx);
+        let (mut moved, mut loaded) = (Vec::new(), Vec::new());
         for (&id, wait) in &mut self.waits {
-            for (each, seen) in &mut wait.tabs {
-                if *each == tab && seen.as_ref() != url {
-                    *seen = url.to_string().into();
+            for seen in wait.tabs.iter_mut().filter(|seen| seen.tab == tab) {
+                if seen.url.as_ref() != url {
+                    seen.url = url.to_string().into();
                     moved.extend(wait.events.contains(&Awaited::Navigated).then_some(id));
                 }
+                if seen.loading && !loading {
+                    loaded.extend(wait.events.contains(&Awaited::Loaded).then_some(id));
+                }
+                seen.loading = loading;
             }
         }
-        let happened = Happened::Navigated {
+        let url = shown(url);
+        let navigated = Happened::Navigated {
             tab,
-            url: shown(url),
+            url: url.clone(),
         };
-        for id in moved {
+        let heard = (moved.into_iter().map(|id| (id, navigated.clone()))).chain(
+            loaded.into_iter().map(|id| {
+                (
+                    id,
+                    Happened::Loaded {
+                        tab,
+                        url: url.clone(),
+                    },
+                )
+            }),
+        );
+        for (id, happened) in heard.collect::<Vec<_>>() {
             if let Some(wait) = self.waits.remove(&id) {
-                self.tell_wait(&agent, happened.clone(), wait.reply, cx);
+                self.tell_wait(&agent, happened, wait.reply, cx);
             }
         }
         WAITING.set(!self.waits.is_empty());
@@ -450,7 +489,7 @@ impl Agents {
     pub(super) fn wait_gone(&mut self, tab: u64, gone: Gone, agent: &str, cx: &mut Context<Self>) {
         self.hear(Happened::Closed { tab, gone }, agent, cx);
         for wait in self.waits.values_mut() {
-            wait.tabs.retain(|(each, _)| *each != tab);
+            wait.tabs.retain(|seen| seen.tab != tab);
         }
         self.told.retain(|(_, each), _| *each != tab);
     }
@@ -458,7 +497,7 @@ impl Agents {
     /// `tab` closed (tabs::tab_closed).
     pub(super) fn wait_closed(&mut self, tab: u64, cx: &mut Context<Self>) {
         let mut agents: Vec<String> = (self.waits.values())
-            .filter(|wait| wait.tabs.iter().any(|(each, _)| *each == tab))
+            .filter(|wait| wait.tabs.iter().any(|seen| seen.tab == tab))
             .map(|wait| wait.agent.clone())
             .collect();
         agents.dedup();
@@ -478,8 +517,8 @@ impl Agents {
         let left: Vec<(u64, String)> = (self.waits.values())
             .filter(|wait| self.browser.agent_space(&wait.agent) == space)
             .flat_map(|wait| {
-                let left = wait.tabs.iter().filter(|(tab, _)| !tabs.contains(tab));
-                left.map(|(tab, _)| (*tab, wait.agent.clone()))
+                let left = wait.tabs.iter().filter(|seen| !tabs.contains(&seen.tab));
+                left.map(|seen| (seen.tab, wait.agent.clone()))
             })
             .collect();
         for (tab, agent) in left {

@@ -7557,6 +7557,28 @@ mod waits {
         assert!(!waiting());
     }
 
+    /// The core can report a load before the wait for it comes, while the shell still says the
+    /// page loads: the shell's end of the load answers it then.
+    #[gpui::test]
+    fn a_wait_on_a_loading_tab_hears_its_end_as_the_shell_sees_it(cx: &mut TestAppContext) {
+        let (agents, browser, _) = connected(cx);
+        browser.loading.borrow_mut().insert(20);
+        let loaded = wait(&agents, json!({ "events": ["loaded"], "tab": 20 }), cx);
+        let page = |cx: &mut TestAppContext| {
+            agents.update(cx, |agents, cx| {
+                agents.wait_page(20, "https://www.example.com/", cx)
+            })
+        };
+        page(cx);
+        assert!(
+            loaded.try_recv().is_err(),
+            "it answered while the page loaded"
+        );
+        browser.loading.borrow_mut().remove(&20);
+        page(cx);
+        assert_eq!(line(&loaded), "Tab 20 loaded https://www.example.com/.");
+    }
+
     /// Settings › Agents says a wait's entry as the card said its step, never by an event's name.
     #[gpui::test]
     fn the_activity_log_says_a_wait_as_the_card_does(cx: &mut TestAppContext) {
