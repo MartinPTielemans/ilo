@@ -442,7 +442,8 @@ if engine_has ../core/ad_block.cc; then
   log="$out/adblock-launch-5.log"
   step=0
   BROWSER_DRIVE=1 BROWSER_URL="$ads?5" BROWSER_PROFILE_DIR="$profile_dir" \
-    "$browser" --ad-block-filters="$filters" --ad-block-lists="$lists" < "$out/drive" > "$log" 2>&1 &
+    "$browser" --ad-block-engine=ublock --ad-block-filters="$filters" --ad-block-lists="$lists" \
+    < "$out/drive" > "$log" 2>&1 &
   pid=$!
   exec 3> "$out/drive"
   await "^browser: loaded [0-9]* $ads?5\$" ||
