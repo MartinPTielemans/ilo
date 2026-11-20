@@ -2342,7 +2342,7 @@ impl Agents {
         };
         let label = |element: &page::Element| match element.name.is_empty() {
             true => element.role.clone(),
-            false => format!("“{}”", page::clip(&element.name, 60)),
+            false => page::curly(&element.name, 60),
         };
         let mut act = Act {
             agent: agent.into(),
@@ -2439,7 +2439,7 @@ impl Agents {
                     label(element),
                     if submit { " and pressed Enter" } else { "" }
                 );
-                act.what = format!("send “{}” on {host}", page::clip(&text, 60));
+                act.what = format!("send {} on {host}", page::curly(&text, 60));
                 act.text = text;
                 risk = submit.then(|| page::risk(&host, "send")).flatten();
             }
@@ -2459,7 +2459,7 @@ impl Agents {
                 };
                 // A line of the question the user may be asked, as of the answer, so a line break
                 // in it is a space there.
-                let chose = format!("“{}”", page::clip(&page::one_line(&option), 60));
+                let chose = page::curly(&page::one_line(&option), 60);
                 act.note = format!("Chose {chose} in the {}.", act.field);
                 act.what = format!("choose {chose} in {} on {host}", label(element));
                 // As a click on the field or the option would.
@@ -3159,7 +3159,7 @@ impl Agents {
         // names it, and else says the page may have undone it.
         if !field.is_empty() {
             note = match tree["chosen"].as_str() {
-                Some(option) => format!("The {field} now holds “{}”.", page::clip(option, 60)),
+                Some(option) => format!("The {field} now holds {}.", page::curly(option, 60)),
                 None => format!("{note} {UNSHOWN}"),
             };
         }
