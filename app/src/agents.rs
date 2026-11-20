@@ -2889,7 +2889,7 @@ impl Agents {
             reply,
             ..
         } = act;
-        // The user said yes to closing a page the agent didn't open without saving.
+        // The user said yes to closing a page the agent didn't open, or they held, without saving.
         if action == "discard_tab" {
             let site = site(&self.browser.tab(tab, cx).url);
             let closed = match self.may_act(&agent, tab, "close_tab", cx) {
@@ -3469,7 +3469,8 @@ impl Agents {
 
     /// Closes the agent's `tab`, asking its page first as the user's close does, discard or not.
     /// A page that asks to stay stays open, unless `discard`: then one the agent opened closes,
-    /// and any other asks the user first, as what it holds unsaved may be theirs.
+    /// and any other, or one the user held, asks the user first, as what it holds unsaved may be
+    /// theirs (#3675).
     fn close_tab(
         &mut self,
         agent: &str,
@@ -3491,7 +3492,7 @@ impl Agents {
         // never held it. Its page asking is a click's or a read's doing, and keeping it would teach
         // the agent to discard everywhere (#3654).
         let untouched = !self.edited.contains_key(&tab);
-        if self.opened.contains(&tab) && (asked || stuck || untouched) {
+        if self.opened.contains(&tab) && !self.user_held(tab) && (asked || stuck || untouched) {
             let closed = self.browser.close_tab(agent, tab, true, cx);
             let discarded = discard && (asked || stuck);
             return self.closed(agent, call, tab, discarded, closed, &site, reply, cx);
@@ -3503,8 +3504,8 @@ impl Agents {
             site,
             reply,
         };
-        // In a tab it didn't open, what's unsaved may be the user's, and the page can't say: it
-        // goes as one that asks before it's left, so a discard asks the user.
+        // In a tab it didn't open or the user held, what's unsaved may be the user's, and the page
+        // can't say: it goes as one that asks before it's left, so a discard asks the user.
         if stuck {
             self.close_came_to(tab, closing, Closed::Asks, cx);
             return;
@@ -3529,8 +3530,8 @@ impl Agents {
     }
 
     /// Answers `closing` of `tab`, which came to `closed`: a page that asked to stay is discarded
-    /// if the agent said to, asking the user first in a tab the agent didn't open. Returns what
-    /// it came to then, Pending while the user is asked.
+    /// if the agent said to, asking the user first in a tab the agent didn't open or the user
+    /// held. Returns what it came to then, Pending while the user is asked.
     fn close_came_to(
         &mut self,
         tab: u64,
@@ -3546,7 +3547,7 @@ impl Agents {
             reply,
         } = closing;
         let discarded = closed == Closed::Asks && discard;
-        if discarded && !self.opened.contains(&tab) {
+        if discarded && (!self.opened.contains(&tab) || self.user_held(tab)) {
             let what = format!("close the tab on {site} without saving");
             let act = Act {
                 action: "discard_tab",
@@ -3562,6 +3563,12 @@ impl Agents {
         };
         self.closed(&agent, call, tab, discarded, closed, &site, reply, cx);
         closed
+    }
+
+    /// Whether the user held `tab` from its agent, taken over, handed to them or held for a
+    /// passkey, since it opened: what's unsaved there may be theirs.
+    fn user_held(&self, tab: u64) -> bool {
+        self.edited.get(&tab).is_some_and(|edited| edited.user)
     }
 
     /// Answers the agent's close `call` of `tab` on `site` with what happened, and logs it.
@@ -3595,7 +3602,7 @@ impl Agents {
                         "its page asks before it's left, as it may have unsaved changes".into()
                     }
                 },
-                if self.opened.contains(&tab) {
+                if self.opened.contains(&tab) && !self.user_held(tab) {
                     ""
                 } else {
                     ", once the user says yes"
