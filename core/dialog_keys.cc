@@ -88,15 +88,21 @@ class DialogKeys : public ui::EventHandler, public views::WidgetObserver {
     }
 #endif
     const ui::KeyEvent& down = pressed ? *pressed : *event;
-    if (down.is_char() || DialogKeeps(down)) {
+    const bool before = event->phase() == ui::EP_PRETARGET;
+    if (down.is_char()) {
+      LetGo(before, down, "a char");
       return;
     }
-    const bool before = event->phase() == ui::EP_PRETARGET;
+    if (DialogKeeps(down)) {
+      LetGo(before, down, "the dialog keeps it");
+      return;
+    }
     if (!before && event->handled()) {
       return;
     }
     content::WebContents* page = ShownPage(window_);
     if (!page || !page->GetDelegate()) {
+      LetGo(before, down, "no shown page");
       return;
     }
     const input::NativeWebKeyboardEvent key(down);
@@ -181,6 +187,19 @@ class DialogKeys : public ui::EventHandler, public views::WidgetObserver {
   }
 
  private:
+  // Says why a shortcut's key wasn't asked about, once a key as it goes into the dialog, so a
+  // shortcut that doesn't reach the app from a dialog names its gate (#3230). Only a key held
+  // with ⌃ or ⌘: one typed as text in the dialog's field may be a password's.
+  static void LetGo(bool before, const ui::KeyEvent& key, const char* why) {
+    if (!before || !(key.flags() & (ui::EF_CONTROL_DOWN | ui::EF_COMMAND_DOWN))) {
+      return;
+    }
+    fprintf(stderr, "browser: tab dialog let %s%s%s%skey 0x%x go: %s\n",
+            key.IsControlDown() ? "ctrl-" : "", key.IsAltDown() ? "alt-" : "",
+            key.IsShiftDown() ? "shift-" : "", key.IsCommandDown() ? "cmd-" : "",
+            static_cast<unsigned>(key.key_code()), why);
+  }
+
   // Return, Escape and Tab answer, cancel and move through the dialog, and its own shortcuts stay
   // its own: the keys its page would keep, as a page keeps ⌘F in Docs.
   bool DialogKeeps(const ui::KeyEvent& event) const {
@@ -230,6 +249,8 @@ void Watch(views::Widget* window) {
       continue;
     }
     Watched().emplace(dialog, std::make_unique<DialogKeys>(dialog, window));
+    // What a check waits on before it presses a key in a tab's dialog (#3230).
+    fprintf(stderr, "browser: tab dialog's keys heard\n");
   }
 }
 

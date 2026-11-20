@@ -289,9 +289,13 @@ impl Browser for Made {
         };
     }
 
+    // As the core's: the tab closes with its split.
     fn remove_pinned(&self, tab: u64, cx: &mut App) {
         self.set_pinned(tab, false, cx);
-        self.close_user_tab(tab, cx);
+        for each in self.split(tab, cx) {
+            self.separate(each, cx);
+            self.close_user_tab(each, cx);
+        }
     }
 
     fn close_tab(&self, agent: &str, tab: u64, discard: bool, _: &mut App) -> Closed {
@@ -781,6 +785,61 @@ fn open_tab_as_the_first_call_makes_the_agents_space(cx: &mut TestAppContext) {
         1,
         "the agent got a second Space"
     );
+}
+
+/// While the user holds one of the agent's tabs, list_tabs names it by its number and says it's
+/// with the user, with nothing of its page, and sorting by site leaves it where it is, as its place
+/// would tell its site (#3694). Handed back, it's listed as before.
+#[gpui::test]
+fn a_tab_the_user_holds_is_listed_without_its_page(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    browser.tabs.borrow_mut().extend([
+        (21, 2, "Wiki", "https://en.wikipedia.org/wiki/Rust"),
+        (22, 2, "Docs", "https://docs.example.com/"),
+        (25, 2, "More", "https://de.wikipedia.org/wiki/Arc"),
+    ]);
+    let list = |cx: &mut TestAppContext| {
+        call(&agents, "claude-code", "list_tabs", json!({}), cx)
+            .recv()
+            .unwrap()
+            .text
+    };
+    assert!(list(cx).contains("21  Wiki  https://en.wikipedia.org/wiki/Rust"));
+    agents.update(cx, |agents, cx| agents.take_over("claude-code", 21, cx));
+    let held = list(cx);
+    let line = held
+        .lines()
+        .find(|line| line[2..].starts_with("21  "))
+        .unwrap();
+    assert!(
+        line.contains("With the user until they hand it back"),
+        "{held}"
+    );
+    assert!(
+        !held.contains("Wiki") && !held.contains("wikipedia.org/wiki/Rust"),
+        "list_tabs named the held tab's page: {held}"
+    );
+    assert!(
+        held.contains("22  Docs  https://docs.example.com/"),
+        "{held}"
+    );
+
+    let sorted = call(&agents, "claude-code", "sort_tabs_by_site", json!({}), cx)
+        .recv()
+        .unwrap();
+    assert_eq!(
+        sorted,
+        ToolResult::text("Your Today tabs are together by site already."),
+        "the held tab's site moved a tab"
+    );
+    let order: Vec<u64> = (browser.tabs.borrow().iter())
+        .filter(|tab| tab.1 == 2)
+        .map(|tab| tab.0)
+        .collect();
+    assert_eq!(order, [20, 21, 22, 25]);
+
+    agents.update(cx, |agents, cx| agents.hand_back(21, cx));
+    assert!(list(cx).contains("21  Wiki  https://en.wikipedia.org/wiki/Rust"));
 }
 
 /// Two agents each list their own Space's tabs, as the core lists the calling agent's, and neither
@@ -4078,6 +4137,64 @@ const CORE_ALLOWS: [&str; 21] = [
     "unpin_tab",
 ];
 
+/// What the descriptions tell an agent (#3664): each tool that may take a tab says, as the others
+/// do, to give it once there's more than one; the server's instructions and a task's say so too, and
+/// name only tools there are; and ask_for_tab and hand_off say when to use them and what follows.
+#[test]
+fn the_descriptions_say_how_to_use_tabs() {
+    for agent in ["claude-code", "task-1"] {
+        let listed = tools::list(agent);
+        let listed = listed.as_array().unwrap();
+        let names: Vec<&str> = (listed.iter())
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect();
+        // Those where it may be left out: add_to_split's is the one tab it adds.
+        let optional = |tool: &&Value| {
+            let required = tool["inputSchema"]["required"].as_array();
+            !required.is_some_and(|required| required.contains(&json!("tab")))
+        };
+        let tab_said: Vec<&str> = (listed.iter().filter(optional))
+            .filter_map(|tool| tool["inputSchema"]["properties"]["tab"]["description"].as_str())
+            .collect();
+        assert!(tab_said.len() > 10, "{agent}: {tab_said:?}");
+        assert!(
+            tab_said.iter().all(|said| *said == tab_said[0]),
+            "{agent}'s tools say the tab differently: {tab_said:?}"
+        );
+        assert!(tab_said[0].contains("more than one tab"), "{}", tab_said[0]);
+        let instructions = match agent {
+            "task-1" => tools::TASK_INSTRUCTIONS,
+            _ => tools::INSTRUCTIONS,
+        };
+        assert!(
+            instructions.contains("its tab once you have more than one"),
+            "{agent}"
+        );
+        assert!(
+            instructions.contains("Calls on different tabs run at the same time"),
+            "{agent}"
+        );
+        // Every snake_case word in them is a tool the agent has.
+        let words = instructions.split(|c: char| !(c.is_ascii_lowercase() || c == '_'));
+        for word in words.filter(|word| word.contains('_')) {
+            assert!(
+                names.contains(&word),
+                "{agent}'s instructions name {word}, not a tool"
+            );
+        }
+        let said = |name: &str| {
+            let tool = listed.iter().find(|tool| tool["name"] == name);
+            tool.map(|tool| tool["description"].as_str().unwrap().to_string())
+        };
+        if let Some(ask) = said("ask_for_tab") {
+            assert!(ask.contains("can't go on without it"), "{ask}");
+            assert!(ask.contains("say why"), "{ask}");
+        }
+        let hand_off = said("hand_off").unwrap();
+        assert!(hand_off.contains("take a snapshot"), "{hand_off}");
+    }
+}
+
 /// Agents never read or fill a saved password, address, card or passkey (principle 3). The server
 /// offers exactly these tools, and every one asks the core only for an action its allowlist has,
 /// so a tool or action that could reach them fails here until it's added on purpose, with its rule.
@@ -4278,6 +4395,40 @@ mod requests {
                 .map(|entry| (entry.target.to_string(), entry.refused.to_string()))
                 .collect()
         })
+    }
+
+    /// On a page the agent's outline saw ask for a password, as a sign-in page does, a request's
+    /// answer says the site may have answered as to someone signed out, and names hand_off; on
+    /// one that doesn't, it says nothing of it (#3661).
+    #[gpui::test]
+    fn a_request_on_a_sign_in_page_says_so(cx: &mut TestAppContext) {
+        let (agents, browser, _) = connected(cx);
+        let read = json!({ "tab": 20, "requests": [{ "method": "GET", "path": "/api/me" }] });
+        let snapshot = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+        page_done(&agents, &browser, snapshot, shop_tree(), cx);
+        let answer = call(&agents, "claude-code", "request", read.clone(), cx);
+        answered(&agents, &browser, 401, r#"{"error":"sign in"}"#, cx);
+        let text = answer.recv().unwrap().text;
+        assert!(
+            text.starts_with(
+                "Tab 20's page asks for a password, as a sign-in page does, so its site may have \
+                 answered as to someone signed out. Signing in is the user's to do: hand them the \
+                 tab with hand_off, and send the requests again once they hand it back.\n\n\
+                 GET /api/me → 401"
+            ),
+            "{text}"
+        );
+
+        let signed_in = json!({ "nodes": [
+            { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Shop" } },
+        ]})
+        .to_string();
+        let snapshot = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+        page_done(&agents, &browser, snapshot, signed_in, cx);
+        let answer = call(&agents, "claude-code", "request", read, cx);
+        answered(&agents, &browser, 200, r#"{"name":"Ada"}"#, cx);
+        let text = answer.recv().unwrap().text;
+        assert!(text.starts_with("GET /api/me → 200"), "{text}");
     }
 
     /// A read goes at once, and its answer is the body without what looks like a credential. A
@@ -7026,6 +7177,189 @@ mod sessions {
         let shown = cards(&agents, cx);
         assert_eq!(shown.len(), 2);
         assert_eq!(shown[0].dot, Dot::Working);
+    }
+
+    /// A client's earlier card offers only the pages none of its sessions works in now. Its Open
+    /// moves what it offers out of the client's Space, which would take a tab from under the
+    /// agent, whose next call on it is then refused (#3660).
+    #[gpui::test]
+    fn an_earlier_cards_open_leaves_the_pages_a_session_works_in(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        answered(&agents, 2, cx);
+        bye(&agents, cx);
+        // It connects again and works on in the same tab.
+        hello(&agents, "claude-code", "claude-code", cx);
+        call_as(&agents, 3, "read_page", json!({ "tab": 20 }), cx);
+        answered(&agents, 3, cx);
+        let shown = cards(&agents, cx);
+        assert_eq!((shown[0].dot, shown[1].dot), (Dot::Working, Dot::Done));
+        assert!(shown[1].open.is_empty(), "{:?}", shown[1].open);
+        let earlier = shown[1].agent.to_string();
+        let opened = agents.update(cx, |agents, cx| agents.open_result(&earlier, None, cx));
+        assert_eq!(opened, None);
+        let space = browser
+            .tabs
+            .borrow()
+            .iter()
+            .find(|each| each.0 == 20)
+            .unwrap()
+            .1;
+        assert_eq!(space, browser.agent_space("claude-code"));
+        let answer = call_as(&agents, 4, "read_page", json!({ "tab": 20 }), cx);
+        let refused = answer.try_recv().ok().filter(|answer| answer.error);
+        assert!(refused.is_none(), "{refused:?}");
+
+        // Once that session ends, the tab is the user's to open from either card.
+        answered(&agents, 4, cx);
+        bye(&agents, cx);
+        let shown = cards(&agents, cx);
+        assert_eq!(shown[1].open, vec![(20, "example.com".into())]);
+    }
+
+    /// A call on a page of the agent's that left its Space says why it went, and that open_tab
+    /// starts again: the user closed it, moved it to their own Space, or opened it from the card
+    /// of the agent's earlier session, or the agent closed it. One that was never the agent's
+    /// says no more than that it isn't in the agent's Space (#3660).
+    #[gpui::test]
+    fn a_call_on_a_page_that_left_says_why(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        answered(&agents, 2, cx);
+        let refused = |id, tab, cx: &mut TestAppContext| {
+            let answer = call_as(&agents, id, "read_page", json!({ "tab": tab }), cx);
+            let answer = answer.try_recv().expect("an answer at once");
+            assert!(answer.error, "{answer:?}");
+            answer.text
+        };
+        let opened = |cx: &mut TestAppContext| {
+            call_as(
+                &agents,
+                6,
+                "open_tab",
+                json!({ "url": "https://example.org/" }),
+                cx,
+            );
+        };
+        let leave = |tab, space, cx: &mut TestAppContext| {
+            cx.update(|cx| browser.move_tab(tab, space, cx));
+            agents.update(cx, |agents, cx| agents.space_changed(2, cx));
+        };
+
+        // A call on the user's own tab is refused, which doesn't make it a page of the agent's.
+        assert_eq!(refused(7, 10, cx), NOT_ITS_SPACE);
+        // The user moves it to their Space.
+        leave(20, 1, cx);
+        assert_eq!(
+            refused(3, 20, cx),
+            "The user moved tab 20 to one of their own Spaces: it's theirs now. To carry on, \
+             open the page again with open_tab."
+        );
+        // The user closes one the agent opened.
+        opened(cx);
+        browser.tabs.borrow_mut().retain(|each| each.0 != 30);
+        agents.update(cx, |agents, cx| agents.tab_closed(30, cx));
+        assert_eq!(
+            refused(4, 30, cx),
+            "Tab 30 was closed, by the user or by its own page. To carry on, open the page \
+             again with open_tab."
+        );
+        // The user's own tab was never the agent's, though the agent's Space changed since its
+        // call on it.
+        assert_eq!(refused(5, 10, cx), NOT_ITS_SPACE);
+    }
+
+    /// The agent's own remove_tab, the one tool of its that takes a page out of its Space, says
+    /// so of the page and of the rest of its split, which close with it, not that the user closed
+    /// them, though the core says only that they closed (#3660).
+    #[gpui::test]
+    fn a_page_the_agent_removed_says_so(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        answered(&agents, 2, cx);
+        call_as(
+            &agents,
+            3,
+            "open_tab",
+            json!({ "url": "https://example.org/" }),
+            cx,
+        );
+        call_as(&agents, 4, "split_tabs", json!({ "tabs": [20, 30] }), cx);
+        call_as(&agents, 5, "pin_tab", json!({ "tab": 20 }), cx);
+        let answer = call_as(&agents, 6, "remove_tab", json!({ "tab": 20 }), cx);
+        assert!(!answer.try_recv().unwrap().error);
+        let open = (browser.tabs.borrow().iter()).any(|tab| tab.0 == 20 || tab.0 == 30);
+        assert!(!open, "the tab and its split closed");
+        agents.update(cx, |agents, cx| {
+            agents.tab_closed(20, cx);
+            agents.tab_closed(30, cx);
+        });
+        let read = |id, tab, cx: &mut TestAppContext| {
+            let answer = call_as(&agents, id, "read_page", json!({ "tab": tab }), cx);
+            answer.try_recv().unwrap().text
+        };
+        assert_eq!(
+            read(7, 20, cx),
+            "The agent removed tab 20 from its pinned tabs, which closed it. To carry on, open \
+             the page again with open_tab."
+        );
+        assert_eq!(
+            read(8, 30, cx),
+            "Tab 30 closed with its split view, as the agent removed tab 20 from its pinned tabs. \
+             To carry on, open the page again with open_tab."
+        );
+    }
+
+    /// The browser keeps why at most GONE_KEPT pages left, the lowest tab id going first, so a
+    /// long run doesn't grow it without end.
+    #[gpui::test]
+    fn the_reasons_kept_are_bounded(cx: &mut TestAppContext) {
+        let (agents, _) = at_work(cx);
+        let past = GONE_KEPT as u64 + 88;
+        agents.update(cx, |agents, _| {
+            for tab in 1..=past {
+                agents.went(tab, "claude-code", Gone::Closed);
+            }
+            assert_eq!(agents.gone.len(), GONE_KEPT);
+            assert_eq!(agents.gone.keys().min(), Some(&89));
+            assert!(agents.gone.contains_key(&past));
+        });
+    }
+
+    /// The pages of a session that ended are its client's next session's to work in, until the
+    /// user opens them from its card, and the agent hears that, as it does of its own close.
+    #[gpui::test]
+    fn a_call_on_a_page_an_earlier_card_opened_says_so(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        answered(&agents, 2, cx);
+        bye(&agents, cx);
+        let earlier = cards(&agents, cx)[0].agent.to_string();
+        hello(&agents, "claude-code", "claude-code", cx);
+        call_as(
+            &agents,
+            3,
+            "open_tab",
+            json!({ "url": "https://example.org/" }),
+            cx,
+        );
+        agents.update(cx, |agents, cx| agents.open_result(&earlier, None, cx));
+        let space = browser
+            .tabs
+            .borrow()
+            .iter()
+            .find(|each| each.0 == 20)
+            .unwrap()
+            .1;
+        assert_eq!(space, 1);
+        let answer = call_as(&agents, 4, "read_page", json!({ "tab": 20 }), cx);
+        assert_eq!(
+            answer.try_recv().unwrap().text,
+            "The user opened tab 20 from the card of the agent's earlier session: it's theirs \
+             now. To carry on, open the page again with open_tab."
+        );
+        call_as(&agents, 5, "close_tab", json!({ "tab": 30 }), cx);
+        let answer = call_as(&agents, 7, "read_page", json!({ "tab": 30 }), cx);
+        assert_eq!(
+            answer.try_recv().unwrap().text,
+            "The agent closed tab 30. To carry on, open the page again with open_tab."
+        );
     }
 
     /// A client has one name wherever it shows, its card's (Agents::agent_name): the strip under its

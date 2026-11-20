@@ -26,12 +26,15 @@ pub const INSTRUCTIONS: &str = concat!(
      Payments, orders, sending messages, banks' sites and every request that may change \
      something ask the user first. If they say no, \
      don't try again. You can never type into a password field: a sign-in, a 2FA prompt or a \
-     CAPTCHA is the user's to do, so hand the tab to them with hand_off. The user can take a tab \
-     over too; it's theirs until they hand it back, and ask_for_tab asks them for it. Use \
+     CAPTCHA is the user's to do, so hand the tab to them with hand_off, and take a snapshot \
+     once they hand it back, as its page will have changed. The user can take a tab over too, \
+     on purpose: it's theirs until they hand it back. Carry on in your other tabs, and only \
+     when the task can't go on without that one, ask for it with ask_for_tab, saying why. Use \
      run_steps for several actions in a row.\n\n\
-     When the same steps repeat across pages, open them all in one turn, then do each step on all \
-     of them in one turn, one call per tab with its tab. Calls on different tabs run at the same \
-     time.\n\n\
+     Give every call its tab once you have more than one: one without acts on the tab you used \
+     last. When the same steps repeat across pages, open them all in one turn, then do each step \
+     on all of them in one turn, one call per tab with its tab. Calls on different tabs run at \
+     the same time, so that's faster than one tab after another.\n\n\
      When your task is finished, call done: the user's card says it's done. Closing your last \
      page ends your task too, unless you call again within 60 seconds."
 );
@@ -45,9 +48,11 @@ pub const TASK_INSTRUCTIONS: &str = concat!(
      search, so find everything with the browser.\n\n\
      First call title with a name for the task in two to four words and at most 24 characters, as \
      a tab's title reads, such as “Lisbon museum hours”.\n\n\
-     When the same steps repeat across pages, such as one change on ten cases, open them all in \
-     one turn, then do each step on all of them in one turn, one call per tab with its tab. Calls \
-     on different tabs run at the same time.\n\n\
+     Give every call its tab once you have more than one: one without acts on the tab you used \
+     last. When the same steps repeat across pages, such as one change on ten cases, open them \
+     all in one turn, then do each step on all of them in one turn, one call per tab with its \
+     tab. Calls on different tabs run at the same time, so that's faster than one tab after \
+     another.\n\n\
      When you need the user to choose or confirm something, call ask with the question in one \
      short sentence, what they need to know to answer as its context, and up to three short \
      answers when there are a few to pick from. It waits for their answer.\n\n\
@@ -122,7 +127,7 @@ fn pin_tools() -> Vec<Value> {
         json!({
             "name": "sort_tabs_by_site",
             "title": "Sort tabs by site",
-            "description": "Sort your Today tabs by site, as the user's Sort Today Tabs by Site does: each site's tabs come together at its first tab's place, in the order they were in. A site is a registrable domain, so docs.example.com and example.com are one. Pinned tabs stay where they are; a split view or a page off the web joins no site and keeps its order among the rest, so sites gathered from below it come above it. Nothing loads or closes. Answers with the new order.",
+            "description": "Sort your Today tabs by site, as the user's Sort Today Tabs by Site does: each site's tabs come together at its first tab's place, in the order they were in. A site is a registrable domain, so docs.example.com and example.com are one. Pinned tabs stay where they are; a split view, a page off the web or a tab the user holds joins no site and keeps its order among the rest, so sites gathered from below it come above it. Nothing loads or closes. Answers with the new order.",
             "inputSchema": { "type": "object", "properties": {} },
             "annotations": tabs,
         }),
@@ -213,7 +218,7 @@ fn task_tools() -> Vec<Value> {
 fn tab_schema() -> Value {
     json!({
         "type": "integer",
-        "description": "The tab's id, from list_tabs or open_tab. Without it, the tab you used last, else your first."
+        "description": "The tab's id, from list_tabs or open_tab. Give it whenever you have more than one tab: without it, the call takes the tab you used last, else your first."
     })
 }
 
@@ -235,7 +240,7 @@ fn shared() -> Value {
         {
             "name": "list_tabs",
             "title": "List tabs",
-            "description": "List your tabs, pinned first: each one's id, title and URL, then who pinned it if it's pinned. * marks the tab you used last.",
+            "description": "List your tabs, pinned first: each one's id, title and URL, then who pinned it if it's pinned. * marks the tab you used last. A tab the user holds, after a handoff or a take-over, is listed by its id with \"With the user until they hand it back\" and no title or URL, until they hand it back.",
             "inputSchema": { "type": "object", "properties": {} },
             "annotations": { "readOnlyHint": true, "openWorldHint": false },
         },
@@ -497,7 +502,7 @@ fn shared() -> Value {
         {
             "name": "hand_off",
             "title": "Hand off to the user",
-            "description": "Hand a tab to the user for a step only they may do: a sign-in, 2FA, a CAPTCHA, or a choice that's theirs. They're asked in the browser, and this waits until they hand the tab back. Meanwhile the tab is theirs, and calls on it are refused.",
+            "description": "Hand a tab to the user for a step only they may do: a sign-in, 2FA, a CAPTCHA, or a choice that's theirs. They're asked in the browser, and this waits until they hand the tab back. Meanwhile the tab is theirs, and calls on it are refused. Its page will have changed when it's back: take a snapshot before you act in it.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -511,7 +516,7 @@ fn shared() -> Value {
         {
             "name": "ask_for_tab",
             "title": "Ask for a tab back",
-            "description": "Ask the user to hand back a tab they took over. They're asked in the browser, and this waits for their answer: the tab back, or that they keep it. Don't ask again for a tab they keep.",
+            "description": "Ask the user to hand back a tab they took over, when your task can't go on without it. They took it on purpose, so say why you need it, and carry on in your other tabs if you can. They're asked in the browser, and this waits for their answer: the tab back, or that they keep it. Don't ask again for a tab they keep.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

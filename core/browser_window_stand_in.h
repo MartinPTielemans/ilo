@@ -369,6 +369,10 @@ class BrowserWindowStandIn : public BrowserWindow,
 
   views::Widget* widget() const;
 
+  // HandleKeyboardEvent's work: whether the dialog's keys, the app or the window's menus ran a key
+  // the page left.
+  bool RunPageLeftKey(const input::NativeWebKeyboardEvent& event);
+
   // Takes the window full screen for the page, or back, on |display_id| going.
   void PutFullscreen(bool fullscreen, int64_t display_id);
 
