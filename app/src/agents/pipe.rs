@@ -12,11 +12,13 @@ use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::ptr::{null, null_mut};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_BROKEN_PIPE, ERROR_IO_PENDING, ERROR_NO_DATA, ERROR_OPERATION_ABORTED,
     ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, GENERIC_READ, GENERIC_WRITE,
-    GetLastError, HANDLE, INVALID_HANDLE_VALUE, LocalFree, WAIT_OBJECT_0,
+    GetLastError, HANDLE, INVALID_HANDLE_VALUE, LocalFree, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo,
@@ -96,6 +98,8 @@ struct Connection {
     closed: Handle,
     /// Whether this is the server's end, which closing disconnects.
     server: bool,
+    /// How long a read waits, in ms, as a socket's read timeout does: every clone's.
+    read_wait: AtomicU32,
 }
 
 /// One end of a connection, which a thread reads or writes while another does the other.
@@ -111,6 +115,7 @@ impl Pipe {
             pipe,
             closed: event()?,
             server,
+            read_wait: AtomicU32::new(INFINITE),
         };
         Ok(Pipe {
             connection: Arc::new(connection),
@@ -173,6 +178,18 @@ impl Pipe {
         }
     }
 
+    /// How long a read waits before it fails with TimedOut, or None for as long as it takes, as
+    /// `UnixStream::set_read_timeout` has it.
+    pub fn set_read_timeout(&self, wait: Option<Duration>) -> io::Result<()> {
+        let ms = match wait {
+            None => INFINITE,
+            Some(wait) if wait.is_zero() => return Err(io::ErrorKind::InvalidInput.into()),
+            Some(wait) => wait.as_millis().clamp(1, u128::from(INFINITE - 1)) as u32,
+        };
+        self.connection.read_wait.store(ms, Ordering::SeqCst);
+        Ok(())
+    }
+
     fn is_closed(&self) -> bool {
         unsafe { WaitForSingleObject(self.connection.closed.0, 0) == WAIT_OBJECT_0 }
     }
@@ -185,8 +202,8 @@ impl Pipe {
     }
 
     /// Waits for the operation `started` began, with `overlapped`, to finish, or for the
-    /// connection to close, which cancels it. Gives how many bytes it moved.
-    fn finish(&self, overlapped: &mut OVERLAPPED, started: i32) -> io::Result<usize> {
+    /// connection to close or `wait` ms to pass, which cancel it. Gives how many bytes it moved.
+    fn finish(&self, overlapped: &mut OVERLAPPED, started: i32, wait: u32) -> io::Result<usize> {
         if started == 0 {
             let error = unsafe { GetLastError() };
             if error != ERROR_IO_PENDING {
@@ -194,7 +211,7 @@ impl Pipe {
             }
         }
         let waits = [self.event.0, self.connection.closed.0];
-        let woke = unsafe { WaitForMultipleObjects(2, waits.as_ptr(), 0, INFINITE) };
+        let woke = unsafe { WaitForMultipleObjects(2, waits.as_ptr(), 0, wait) };
         let pipe = self.connection.pipe.0;
         if woke != WAIT_OBJECT_0 {
             unsafe { CancelIoEx(pipe, &*overlapped) };
@@ -202,6 +219,10 @@ impl Pipe {
         // Waits for the cancel too, as `overlapped` is the kernel's until the operation ends.
         let mut moved = 0;
         if unsafe { GetOverlappedResult(pipe, &*overlapped, &mut moved, 1) } == 0 {
+            // Cancelled as the wait ran out, unless it finished first.
+            if woke == WAIT_TIMEOUT {
+                return Err(io::ErrorKind::TimedOut.into());
+            }
             return Err(io::Error::last_os_error());
         }
         Ok(moved as usize)
@@ -238,7 +259,8 @@ impl Read for Pipe {
                 &mut overlapped,
             )
         };
-        match self.finish(&mut overlapped, started) {
+        let wait = self.connection.read_wait.load(Ordering::SeqCst);
+        match self.finish(&mut overlapped, started, wait) {
             Err(error) if ended(&error) => Ok(0),
             read => read,
         }
@@ -255,7 +277,7 @@ impl Write for Pipe {
         let pipe = self.connection.pipe.0;
         let started =
             unsafe { WriteFile(pipe, bytes.as_ptr(), length, null_mut(), &mut overlapped) };
-        match self.finish(&mut overlapped, started) {
+        match self.finish(&mut overlapped, started, INFINITE) {
             Err(error) if ended(&error) => Err(io::ErrorKind::BrokenPipe.into()),
             wrote => wrote,
         }
@@ -308,7 +330,7 @@ impl Listener {
             let started = unsafe { ConnectNamedPipe(pipe, &mut overlapped) };
             // A client that connected between the instance's making and now is connected.
             let connected = (started == 0 && unsafe { GetLastError() } == ERROR_PIPE_CONNECTED)
-                || self.next.finish(&mut overlapped, started).is_ok();
+                || self.next.finish(&mut overlapped, started, INFINITE).is_ok();
             let made = instance(&self.name, &self.security, false)?;
             let taken = std::mem::replace(&mut self.next, made);
             // A client that went before it was taken leaves its instance behind.
