@@ -678,6 +678,34 @@ NSWindow* WindowAt(NSWindow* browser, double x, double y) {
   return browser;
 }
 
+// Each window of the app's but |browser| over (x, y) in it, as a click there went to |browser|:
+// whether the window server lists it at that point and whether it lets the mouse through. That
+// tells a window that let a click through, such as a toast's before the pointer is on its plate,
+// from one the lookup missed (#3611).
+void LogPassed(NSWindow* browser, double x, double y) {
+  NSPoint screen = [browser convertPointToScreen:NSMakePoint(x, NSHeight(browser.frame) - y)];
+  NSMutableSet<NSNumber*>* listed = [NSMutableSet set];
+  NSInteger number = 0;
+  while ((number = [NSWindow windowNumberAtPoint:screen belowWindowWithWindowNumber:number]) &&
+         listed.count < 64) {
+    [listed addObject:@(number)];
+  }
+  for (NSWindow* window in NSApp.windows) {
+    if (window == browser || !window.visible || window.alphaValue == 0 ||
+        !NSPointInRect(screen, window.frame)) {
+      continue;
+    }
+    const NSRect frame = window.frame;
+    fprintf(stderr,
+            "browser: drive click passed %s %ld at %.0f,%.0f %.0fx%.0f, listed %d, ignores mouse "
+            "%d, level %ld, on screen %d\n",
+            NSStringFromClass([window class]).UTF8String, (long)window.windowNumber,
+            frame.origin.x, frame.origin.y, frame.size.width, frame.size.height,
+            [listed containsObject:@(window.windowNumber)], window.ignoresMouseEvents,
+            (long)window.level, (window.occlusionState & NSWindowOcclusionStateVisible) != 0);
+  }
+}
+
 // Moves the pointer to (x, y) from |target|'s top-left, without a button down. It goes to the view
 // under the pointer and to the tracking areas holding it, as a real move does, which is how GPUI's
 // view, under the page's, hears the pointer over the page. It's also posted, for the app's event
@@ -1681,6 +1709,8 @@ bool Run(const std::string& line, void (^done)(void)) {
       fprintf(stderr, "browser: drive click went to %s %ld at %.0f,%.0f %.0fx%.0f\n",
               NSStringFromClass([target class]).UTF8String, (long)target.windowNumber,
               frame.origin.x, frame.origin.y, frame.size.width, frame.size.height);
+    } else {
+      LogPassed(window, x, y);
     }
     Convert(window, target, &x, &y);
     Click(target, x, y, 1, Modifiers(words) | walk);
