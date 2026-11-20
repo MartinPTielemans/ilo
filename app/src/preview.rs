@@ -4587,11 +4587,16 @@ fn preview_pictures(shown: Pictures, cx: &mut App) {
         Ok("linux") => Buttons::Linux,
         _ => Buttons::HERE,
     };
+    // PREVIEW_SETTINGS_WIDTH=<points> narrows the window, to Settings' least for one.
+    let width = std::env::var("PREVIEW_SETTINGS_WIDTH")
+        .ok()
+        .and_then(|width| width.parse().ok())
+        .unwrap_or(WIDTH);
     let (mut x, mut y) = (0., 0.);
-    unsafe { host_centered(WIDTH as f64, HEIGHT as f64, &mut x, &mut y) };
+    unsafe { host_centered(width as f64, HEIGHT as f64, &mut x, &mut y) };
     let bounds = Bounds::new(
         point(px(x as f32), px(y as f32)),
-        size(px(WIDTH), px(HEIGHT)),
+        size(px(width), px(HEIGHT)),
     );
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),

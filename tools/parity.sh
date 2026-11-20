@@ -26,9 +26,10 @@
 # and the protected-media note, whose card a Board's refused save follows in the page (#3073), the
 # keyboard's ring on New Tab's row in an empty Space, light and dark (#3151), and on Library ›
 # Boards' second row, light and dark (#3238), and Settings › Agents with the ilo command's row not
-# there, there, and in a folder the shell doesn't search, light and dark (#3667). The preview's
-# Linux host places no window, so sway puts Site Controls, the icon picker and the tooltip in the
-# middle rather than where the Mac's host would.
+# there, there, and in a folder the shell doesn't search, light and dark, and its two longest
+# lines in Settings' narrowest window (#3667). The preview's Linux host places no window, so sway
+# puts Site Controls, the icon picker and the tooltip in the middle rather than where the Mac's host
+# would.
 # It reports: a screen that won't capture is a gap in the sheet and a line on stderr, never a
 # failure.
 # Usage: tools/parity.sh <preview> <output directory>
@@ -103,6 +104,8 @@ screens=(
   "command-line-on-dark|settings ilo-command|PREVIEW_COMMAND_LINE=on PREVIEW_APPEARANCE=dark"
   "command-line-unsearched-light|settings ilo-command|PREVIEW_COMMAND_LINE=unsearched PREVIEW_APPEARANCE=light"
   "command-line-unsearched-dark|settings ilo-command|PREVIEW_COMMAND_LINE=unsearched PREVIEW_APPEARANCE=dark"
+  "command-line-off-narrow|settings ilo-command|PREVIEW_COMMAND_LINE=off PREVIEW_APPEARANCE=light PREVIEW_SETTINGS_WIDTH=720"
+  "command-line-unsearched-narrow|settings ilo-command|PREVIEW_COMMAND_LINE=unsearched PREVIEW_APPEARANCE=light PREVIEW_SETTINGS_WIDTH=720"
 )
 case $(uname -s) in
   MINGW* | MSYS*) systems=(windows) drag= ;;
