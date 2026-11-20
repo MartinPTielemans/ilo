@@ -1272,6 +1272,7 @@ void Tab::SystemPageCommitted() {
   // before the next report, and when it's the last page's, it would go untold.
   system_page_title_.reset();
   ForgetOutputRestricted(url);
+  MovedPageCommitted(web_contents());
   StateChanged();
 }
 
@@ -1730,6 +1731,17 @@ void Tab::DidGetUserInteraction(const blink::WebInputEvent& event) {
   // over the tab pressed, not that one (#3243). An agent's own input comes through DevTools and
   // reaches here as the user's does, marked kFromDebugger: it takes nothing over.
   const bool users = !(event.GetModifiers() & blink::WebInputEvent::kFromDebugger);
+  // The page the press reached, which a navigation's commit hasn't yet replaced if it's under way.
+  const int64_t document = web_contents()->GetPrimaryMainFrame()->GetPageUkmSourceId();
+  // A scroll gives the page no activation, so only the others are the user's press.
+  if (!users) {
+    presses_.Agents(document, base::TimeTicks::Now());
+  } else if (event.GetType() != blink::WebInputEvent::Type::kGestureScrollBegin) {
+    presses_.Users(document, base::TimeTicks::Now(),
+                   blink::WebInputEvent::IsKeyboardEventType(event.GetType())
+                       ? std::optional(event.TimeStamp())
+                       : std::nullopt);
+  }
   if (users && (event.GetType() == blink::WebInputEvent::Type::kMouseDown ||
                 event.GetType() == blink::WebInputEvent::Type::kTouchStart)) {
     Window::PagePressed(web_contents());

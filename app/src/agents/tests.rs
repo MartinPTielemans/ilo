@@ -7179,6 +7179,8 @@ mod sessions {
             agents.update(cx, |agents, cx| agents.space_changed(2, cx));
         };
 
+        // A call on the user's own tab is refused, which doesn't make it a page of the agent's.
+        assert_eq!(refused(7, 10, cx), NOT_ITS_SPACE);
         // The user moves it to their Space.
         leave(20, 1, cx);
         assert_eq!(
@@ -7195,7 +7197,8 @@ mod sessions {
             "Tab 30 was closed, by the user or by its own page. To carry on, open the page \
              again with open_tab."
         );
-        // The user's own tab was never the agent's.
+        // The user's own tab was never the agent's, though the agent's Space changed since its
+        // call on it.
         assert_eq!(refused(5, 10, cx), NOT_ITS_SPACE);
     }
 
