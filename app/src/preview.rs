@@ -2954,6 +2954,18 @@ fn main() {
                 preview_pictures(Pictures::Favorites(chosen), cx);
                 return;
             }
+            // PREVIEW_COMMAND_LINE=off, on or unsearched shows Settings › Agents' apps that connect
+            // and the ilo command's row under them, not there, there, or there in a folder the
+            // shell doesn't search (#3667).
+            if let Ok(state) = std::env::var("PREVIEW_COMMAND_LINE") {
+                let state = match state.as_str() {
+                    "on" => CommandLine::On,
+                    "unsearched" => CommandLine::Unsearched,
+                    _ => CommandLine::Off,
+                };
+                preview_pictures(Pictures::CommandLine(state), cx);
+                return;
+            }
             // PREVIEW_ACCOUNT=signed-out, no-server, words, waiting or signed-in shows Settings ›
             // Account in that state, alone, no-server's for a build that names no sync server; =approve
             // shows another device's request over the browser window.
@@ -4551,6 +4563,17 @@ enum Pictures {
     Appearance(browser::theme::Appearance),
     /// Tabs & Sidebar's Share favorites, the scope chosen, in its group of one.
     Favorites(browser::shell::FavoritesScope),
+    /// Agents' first row, its apps that connect, and the ilo command's row under them.
+    CommandLine(CommandLine),
+}
+
+/// Where the ilo command is (#3667).
+#[derive(Clone, Copy)]
+enum CommandLine {
+    Off,
+    On,
+    /// In a folder the user's shell doesn't search.
+    Unsearched,
 }
 
 /// `shown`'s group in a window of Settings' size. PREVIEW_BUTTONS=mac, windows or linux draws that
@@ -4615,12 +4638,13 @@ impl gpui::Render for PicturesPage {
         use browser::settings_column::{self, Section};
         use browser::settings_pictures::{appearance_picker, favorites_picker, picker};
         use browser::settings_rows::{
-            Look, end, frame, group, popup, stop_switch, text as row_text,
+            Look, drawn, end, frame, glyph_plate, group, popup, stop_button, stop_switch,
+            text as row_text,
         };
         use browser::theme::Appearance;
         use browser::tokens::palette::{LIGHT_STAND_IN, STAND_IN};
         use browser::tokens::settings::{
-            HEADING_BOTTOM, NAME, POPUP_WIDTH, SIDE_ROOM, SIDE_TOP, TEXT_X,
+            DETAIL_TOP, HEADING_BOTTOM, HEADING_TOP, NAME, POPUP_WIDTH, SIDE_ROOM, SIDE_TOP, TEXT_X,
         };
         use browser::tokens::text;
         use gpui::{FontWeight, ParentElement, Styled, div, rgb};
@@ -4643,6 +4667,7 @@ impl gpui::Render for PicturesPage {
         let section = match self.shown {
             Pictures::Sidebar { .. } | Pictures::Favorites(_) => Section::TabsAndSidebar,
             Pictures::Appearance(_) => Section::General,
+            Pictures::CommandLine(_) => Section::Agents,
         };
         let column = settings_column::column(
             &Default::default(),
@@ -4656,7 +4681,7 @@ impl gpui::Render for PicturesPage {
             a11y,
         );
         let page = cx.entity().downgrade();
-        let (heading, rows) = match self.shown {
+        let blocks: Vec<(Option<&str>, Vec<gpui::Div>)> = match self.shown {
             Pictures::Sidebar { right } => {
                 let pair = picker(
                     &look,
@@ -4721,7 +4746,7 @@ impl gpui::Render for PicturesPage {
                         Some("Press and let go of ⌥ with no other key.".into()),
                     ))
                     .child(switch("option", false));
-                (Some("The sidebar"), vec![position, edge, option])
+                vec![(Some("The sidebar"), vec![position, edge, option])]
             }
             Pictures::Appearance(chosen) => {
                 let three = appearance_picker(
@@ -4771,7 +4796,7 @@ impl gpui::Render for PicturesPage {
                         POPUP_WIDTH,
                         false,
                     ))]));
-                (Some("Look"), vec![appearance, zoom])
+                vec![(Some("Look"), vec![appearance, zoom])]
             }
             Pictures::Favorites(chosen) => {
                 let three = favorites_picker(
@@ -4805,17 +4830,126 @@ impl gpui::Render for PicturesPage {
                             .ml(px(-SIDE_ROOM))
                             .child(three),
                     );
-                (None, vec![shared])
+                vec![(None, vec![shared])]
+            }
+            Pictures::CommandLine(state) => {
+                let button = |id: &'static str, title: &'static str| {
+                    gpui::IntoElement::into_any_element(stop_button(&look, id, title, a11y))
+                };
+                let feature = |glyph, name: &'static str, line: &str, controls| {
+                    frame()
+                        .child(glyph_plate(&look, glyph, true))
+                        .child(row_text(&look, name, Some(line.to_string().into())))
+                        .child(end(controls))
+                };
+                let master = feature(
+                    Section::Agents.glyph(),
+                    "Let agents use the browser",
+                    "On: a connected client reaches the browser through the bridge beside it.",
+                    vec![gpui::IntoElement::into_any_element(stop_switch(
+                        &look,
+                        "agents",
+                        "Let agents use the browser",
+                        true,
+                        1.,
+                        look.accent,
+                        a11y,
+                    ))],
+                );
+                let clients = vec![
+                    feature(
+                        "icons/terminal.svg",
+                        "Claude Code",
+                        "Connected in ~/.claude.json",
+                        vec![button("disconnect-claude", "Disconnect")],
+                    ),
+                    feature(
+                        "icons/square-terminal.svg",
+                        "Codex",
+                        "Not connected. Connect adds the browser to ~/.codex/config.toml",
+                        vec![button("connect-codex", "Connect")],
+                    ),
+                    feature(
+                        "icons/cable.svg",
+                        "MCP client",
+                        "Any MCP client",
+                        vec![button("connect-other", "Connect")],
+                    ),
+                ];
+                // The ilo command's action, where the parity sheet waits for it to be drawn.
+                let action = |title: &'static str| {
+                    gpui::IntoElement::into_any_element(
+                        stop_button(&look, "ilo-command", title, a11y)
+                            .relative()
+                            .child(drawn(
+                                format!("ilo-command {}", title.to_lowercase()),
+                                self.logged.clone(),
+                            )),
+                    )
+                };
+                let name = "ilo command";
+                let glyph = "icons/square-code.svg";
+                let command = match state {
+                    CommandLine::Off => feature(
+                        glyph,
+                        name,
+                        "Lets an agent in a terminal use the browser. Add puts ilo on your PATH.",
+                        vec![action("Add")],
+                    ),
+                    CommandLine::On => feature(
+                        glyph,
+                        name,
+                        "In ~/.local/bin. An agent runs ilo help to start.",
+                        vec![action("Remove")],
+                    ),
+                    CommandLine::Unsearched => {
+                        let fonts = cx.text_system().all_font_names();
+                        let line = div()
+                            .mt(px(DETAIL_TOP))
+                            .text_size(px(text::SMALL))
+                            .font_family(browser::face::mono(&fonts))
+                            .child("export PATH=\"$HOME/.local/bin:$PATH\"");
+                        frame()
+                            .child(glyph_plate(&look, glyph, true))
+                            .child(
+                                row_text(
+                                    &look,
+                                    name,
+                                    Some(
+                                        "In ~/.local/bin, which your shell doesn't search. Add \
+                                         this line to your shell's profile:"
+                                            .into(),
+                                    ),
+                                )
+                                .child(line),
+                            )
+                            .child(end([button("copy-path", "Copy"), action("Remove")]))
+                    }
+                };
+                vec![
+                    (None, vec![master]),
+                    (Some("Apps that connect"), clients),
+                    (Some("Command line"), vec![command]),
+                ]
             }
         };
-        let heading = heading.map(|heading| {
-            div()
-                .px(px(TEXT_X))
-                .mb(px(HEADING_BOTTOM))
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(look.heading)
-                .child(heading)
-        });
+        let blocks = blocks
+            .into_iter()
+            .enumerate()
+            .map(|(index, (heading, rows))| {
+                let heading = heading.map(|heading| {
+                    div()
+                        .px(px(TEXT_X))
+                        .mb(px(HEADING_BOTTOM))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(look.heading)
+                        .child(heading)
+                });
+                div()
+                    .mt(px(if index > 0 { HEADING_TOP } else { 0. }))
+                    .children(heading)
+                    .child(group(&look, rows))
+            });
         let colors = Colors {
             line: look.line,
             name: base.opacity(NAME),
@@ -4823,11 +4957,7 @@ impl gpui::Render for PicturesPage {
         };
         let card = self.card.draw(
             section.name(),
-            div()
-                .flex()
-                .flex_col()
-                .children(heading)
-                .child(group(&look, rows)),
+            div().flex().flex_col().children(blocks),
             dark,
             colors,
         );
