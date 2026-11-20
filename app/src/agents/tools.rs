@@ -67,8 +67,29 @@ pub const TASK_INSTRUCTIONS: &str = concat!(
      act there themselves: pay, sign, submit, or take over a session. Otherwise give none. Keep \
      what you say to the user short and plain."
 );
-/// A page's text an agent gets at most, as a long page would fill its context.
-pub const MAX_TEXT: usize = 40_000;
+/// The characters an answer holds at most, whatever the tool: an agent uses little of a long one,
+/// which fills its context (#3657). Each tool's own cut comes first, where it can say how to get
+/// the rest.
+pub const MAX_ANSWER: usize = 12_000;
+/// The characters of a page's text a read_page answer gives at most, leaving room under
+/// `MAX_ANSWER` for which page it is and what an action did.
+pub const MAX_TEXT: usize = 10_000;
+
+/// `text`, cut at `MAX_ANSWER` characters, saying so.
+pub fn capped(text: String) -> String {
+    const CUT: &str = "\n\n[The answer is cut here, at its limit of 12,000 characters.]";
+    match text.char_indices().nth(MAX_ANSWER) {
+        None => text,
+        Some(_) => {
+            let keep = MAX_ANSWER - CUT.chars().count();
+            let end = text
+                .char_indices()
+                .nth(keep)
+                .map_or(text.len(), |(at, _)| at);
+            format!("{}{CUT}", &text[..end])
+        }
+    }
+}
 
 /// The tools `agent` may call, for tools/list: a task's own too.
 pub fn list(agent: &str) -> Value {
@@ -238,7 +259,12 @@ fn shared() -> Value {
     let outline = json!({
         "type": "string",
         "enum": ["changes", "full", "none"],
-        "description": "What of the page's outline the answer gives: what changed since the last outline you had of the tab (changes, the default, which is the whole outline on a new page), all of it (full), or only what the action did (none)."
+        "description": "What of the page's outline the answer gives: what changed since the last outline you had of the tab (changes, the default, which is the whole outline on a new page), all of it (full), or only what the action did (none). changes is enough to check what an action did: take a snapshot only when you need what it doesn't show."
+    });
+    let answer = json!({
+        "type": "string",
+        "enum": ["outline", "text", "none"],
+        "description": "What the answer gives of the page: its outline (the default), to act on it; its text, as read_page reads it, to read an article or a document; or only which page it is (none)."
     });
     let acts = json!({ "readOnlyHint": false, "destructiveHint": false, "openWorldHint": true });
     let tabs = json!({ "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false });
@@ -253,10 +279,10 @@ fn shared() -> Value {
         {
             "name": "open_tab",
             "title": "Open tab",
-            "description": "Open a URL, or search for words, in a new tab of your own. Answers with the page's outline.",
+            "description": "Open a URL, or search for words, in a new tab of your own. Answers with the page's outline, or with its text when answer is text: pick text to read a page. Every answer is 12,000 characters at most.",
             "inputSchema": {
                 "type": "object",
-                "properties": { "url": { "type": "string", "description": "A URL, or words to search for." } },
+                "properties": { "url": { "type": "string", "description": "A URL, or words to search for." }, "answer": answer },
                 "required": ["url"],
             },
             "annotations": acts,
@@ -328,11 +354,12 @@ fn shared() -> Value {
         {
             "name": "navigate",
             "title": "Navigate",
-            "description": "Go to a URL, or search for words, in a tab. \"back\" and \"forward\" move through its history. Answers with the page's outline.",
+            "description": "Go to a URL, or search for words, in a tab. \"back\" and \"forward\" move through its history. Answers with the page's outline, or with its text when answer is text: pick text to read a page.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "url": { "type": "string", "description": "A URL, words to search for, \"back\" or \"forward\"." },
+                    "answer": answer,
                     "tab": tab,
                 },
                 "required": ["url"],
@@ -342,7 +369,7 @@ fn shared() -> Value {
         {
             "name": "snapshot",
             "title": "Snapshot",
-            "description": "The page's outline, whole, from its accessibility tree. Elements you can act on have refs like [e12]. With a ref, only that element's part, such as a form without the page's menus.",
+            "description": "The page's outline, whole, from its accessibility tree, 10,000 characters at most, with a table's rows and a list's items a line each. Elements you can act on have refs like [e12]. With a ref, only that element's part, such as a form without the page's menus, or a list where a long outline was cut.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -355,8 +382,14 @@ fn shared() -> Value {
         {
             "name": "read_page",
             "title": "Read page",
-            "description": "Read the text of a page in one of your tabs, as a screen reader would.",
-            "inputSchema": { "type": "object", "properties": { "tab": tab } },
+            "description": "Read the text of a page in one of your tabs, as a screen reader would, 10,000 characters at a time.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "from": { "type": "integer", "minimum": 0, "description": "The character to start at, for the part after one an answer ended, as it says. 0 by default." },
+                    "tab": tab,
+                },
+            },
             "annotations": { "readOnlyHint": true, "openWorldHint": true },
         },
         {
@@ -589,23 +622,30 @@ pub fn split_list(tab: u64, split: &[u64]) -> String {
     }
 }
 
-/// read_page's answer: which page it is, then its text, cut at `MAX_TEXT` bytes.
-pub fn page_text(tab: &TabInfo, text: &str) -> String {
-    let mut end = text.len().min(MAX_TEXT);
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    let cut = match end < text.len() {
-        true => "\n\n[The page goes on: this is its first part.]",
-        false => "",
+/// read_page's answer: which page it is, then its text from the character `from`, cut at
+/// `MAX_TEXT` characters, saying where the next part starts.
+pub fn page_text(tab: &TabInfo, text: &str, from: usize) -> String {
+    let at = |chars: usize| text.char_indices().nth(chars).map(|(at, _)| at);
+    let head = format!("Tab {}: {}\nURL: {}", tab.id, tab.title, tab.url);
+    let Some(start) = at(from).or((from == 0).then_some(text.len())) else {
+        let all = text.chars().count();
+        return format!(
+            "{head}\n\n[The page's text is {all} characters, so none starts at {from}.]"
+        );
     };
-    format!(
-        "Tab {}: {}\nURL: {}\n\n{}{cut}",
-        tab.id,
-        tab.title,
-        tab.url,
-        &text[..end]
-    )
+    let rest = &text[start..];
+    let end = rest
+        .char_indices()
+        .nth(MAX_TEXT)
+        .map_or(rest.len(), |(at, _)| at);
+    let cut = match end < rest.len() {
+        true => format!(
+            "\n\n[The page goes on: read_page with from {} reads the next part.]",
+            from + MAX_TEXT
+        ),
+        false => String::new(),
+    };
+    format!("{head}\n\n{}{cut}", &rest[..end])
 }
 
 /// The `tab` argument, as a number or a string of one.

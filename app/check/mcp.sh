@@ -24,6 +24,7 @@
 # is refused rather than answered as done.
 # It puts tabs of its own in a split view, adds one, lists it and separates one, each in the
 # activity log, and is refused a tab of the user's.
+# Every answer is 12,000 characters at most: an article's, a 120-row table's, a JSON response's.
 # A page's frames, of its own site and of another, are in its outline, where the agent clicks and
 # types, each answered with what changed in the outline alone, and not into a frame's password
 # field. Its text leaves out a frame an extension puts in the page, which isn't the page's. Nor is
@@ -444,6 +445,84 @@ case "$read" in
 esac
 closed=$(call close_tab "{\"tab\":$documents}")
 case "$closed" in "Closed tab $documents."*) ;; *) fail "closing the documents tab answered: $closed" ;; esac
+
+# Every answer is 12,000 characters at most, on pages far bigger than that (#3657): an article,
+# which navigate answers with its text when asked and read_page reads in parts; a table of 120
+# orders, its rows a line each with their refs, which a click that draws it again answers with a
+# line; and a JSON response, which gives its start. Each answer's size goes in answer-sizes.txt,
+# all of them before any is checked, for the same pages on another build.
+chars() { python3 -I -c 'import sys; print(len(sys.stdin.buffer.read().decode()))'; }
+sized() { printf '%s %s\n' "$1" "$(printf '%s' "$2" | chars)" | tee -a "$out/answer-sizes.txt"; }
+python3 -I - "$out/site" << 'EOF'
+import json, sys
+site = sys.argv[1]
+words = "The river rose in the night and by morning the low road was gone under it. "
+with open(f"{site}/article.html", "w") as page:
+    page.write("<!doctype html><title>River</title><h1>River</h1>")
+    page.write("".join(f"<p>{n}. {words * 9}</p>" for n in range(60)))
+rows = "".join(
+    f"<tr><td>Order {n}</td><td>Paid</td><td><a href='#{n}'>Refund</a></td></tr>"
+    for n in range(120)
+)
+with open(f"{site}/orders.html", "w") as page:
+    page.write(
+        "<!doctype html><title>Orders</title><button onclick='redraw()'>Sort</button>"
+        f"<table><caption>Orders</caption><tbody id=rows>{rows}</tbody></table>"
+        "<script>function redraw() { const rows = document.getElementById('rows');"
+        " rows.innerHTML = rows.innerHTML; document.title = 'Sorted' }</script>"
+    )
+with open(f"{site}/orders.json", "w") as data:
+    json.dump({"orders": [{"id": n, "state": "paid", "lines": [1, 2, 3]} for n in range(4000)]}, data)
+EOF
+rm -f "$out/answer-sizes.txt"
+article_opened=$(call open_tab "{\"url\":\"localhost:$port/article.html\"}")
+sized open_tab_article "$article_opened"
+article=$(printf '%s\n' "$article_opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+article_read=$(call read_page "{\"tab\":$article}")
+sized read_page_article "$article_read"
+article_text=$(call navigate "{\"tab\":$article,\"url\":\"localhost:$port/article.html?again\",\"answer\":\"text\"}")
+sized navigate_article_text "$article_text"
+orders_opened=$(call open_tab "{\"url\":\"localhost:$port/orders.html\"}")
+sized open_tab_orders "$orders_opened"
+orders=$(printf '%s\n' "$orders_opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+sort_ref=$(printf '%s\n' "$orders_opened" | sed -n 's/.*- button "Sort" \[\(e[0-9]*\)\].*/\1/p' | head -1)
+orders_sorted=$(call click "{\"tab\":$orders,\"ref\":\"$sort_ref\"}")
+sized click_orders_redrawn "$orders_sorted"
+json_opened=$(call open_tab "{\"url\":\"localhost:$port/orders.json\"}")
+sized open_tab_json "$json_opened"
+json=$(printf '%s\n' "$json_opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+while read -r answer size; do
+  [ "$size" -le 12000 ] || fail "$answer answered $size characters, over the 12,000 an answer"
+done < "$out/answer-sizes.txt"
+case "$article_read" in
+  *"[The page goes on: read_page with from 10000 reads the next part.]") ;;
+  *) fail "read_page of a long article didn't say how to read on: $(printf '%s' "$article_read" | tail -c 300)" ;;
+esac
+article_next=$(call read_page "{\"tab\":$article,\"from\":10000}")
+case "$article_next" in
+  # Its 10,000th character is in the 15th paragraph, each about 700.
+  *"15. The river rose"*) ;;
+  *) fail "read_page from 10000 didn't go on with the article: $(printf '%s' "$article_next" | head -c 300)" ;;
+esac
+case "$article_text" in
+  *"[e"[0-9]*) fail "navigate with the text answer gave refs: $(printf '%s' "$article_text" | head -c 300)" ;;
+  *"0. The river rose"*) ;;
+  *) fail "navigate with the text answer didn't give the article's text: $(printf '%s' "$article_text" | head -c 300)" ;;
+esac
+printf '%s\n' "$orders_opened" | grep -q '^ *- row \[e[0-9]*\]: "Order 119" \[e[0-9]*\] · "Paid" \[e[0-9]*\] · link "Refund" \[e[0-9]*\]$' ||
+  fail "the table's last order wasn't a line with its refs: $(printf '%s\n' "$orders_opened" | tail -3)"
+case "$orders_sorted" in
+  *"Most of the outline's elements are new, though it reads much as before"*) ;;
+  *) fail "a click that drew the table again answered: $(printf '%s' "$orders_sorted" | head -c 300)" ;;
+esac
+case "$json_opened" in
+  *'- text: {"orders": [{"id": 0,'*"This tab shows a response"*) ;;
+  *) fail "a JSON response's tab answered: $(printf '%s' "$json_opened" | head -c 300)" ;;
+esac
+for tab in "$article" "$orders" "$json"; do
+  closed=$(call close_tab "{\"tab\":$tab}")
+  case "$closed" in "Closed tab $tab."*) ;; *) fail "closing tab $tab answered: $closed" ;; esac
+done
 
 # A tab an agent's tab opens follows the agent's rules from when it's made, as the agent's own tab
 # does, whether a link, a page's window.open or a redirect in it leads there (#2660).
@@ -1701,7 +1780,8 @@ painted(() => document.title = "console");
   await_log "^browser: title $console_tab console\$" "the console page didn't paint"
   outline=$(call snapshot "{\"tab\":$console_tab}")
   printf '%s\n' "$outline" > "$out/mcp-console.txt"
-  row=$(printf '%s\n' "$outline" | sed -n 's/.*- row "web-3[^"]*" \[\(e[0-9]*\)\].*/\1/p' | head -1)
+  # A row is a line, its ref first and then its cells' (#3657).
+  row=$(printf '%s\n' "$outline" | sed -n 's/.*- row \[\(e[0-9]*\)\]: "web-3" .*/\1/p' | head -1)
   volumes=$(ref_of listitem Volumes)
   agree=$(ref_of checkbox "I agree")
   [ -n "$row" ] && [ -n "$volumes" ] && [ -n "$agree" ] ||
