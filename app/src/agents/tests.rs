@@ -3779,13 +3779,17 @@ fn run_steps_runs_its_steps_in_order(cx: &mut TestAppContext) {
     let (agents, browser, _) = connected(cx);
     let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
     page_done(&agents, &browser, answer, shop_tree(), cx);
-    let wrong = json!({ "tab": 20, "steps": [{ "action": "screenshot" }] });
-    assert!(
+    let pages = browser.pages.borrow().len();
+    let wrong = json!({ "tab": 20, "steps": [{ "action": "screenshot" }, { "action": "scroll" }] });
+    assert_eq!(
         call(&agents, "claude-code", "run_steps", wrong, cx)
             .recv()
-            .unwrap()
-            .error
+            .unwrap(),
+        ToolResult::error(
+            "A screenshot is only the last step, as its picture is the run's answer."
+        )
     );
+    assert_eq!(browser.pages.borrow().len(), pages, "the run took a step");
 
     let steps = json!({ "tab": 20, "steps": [
         { "action": "type", "ref": "e1", "text": "SAVE10" },
@@ -3937,6 +3941,204 @@ fn a_wait_step_waits_for_its_text_in_the_page(cx: &mut TestAppContext) {
             .unwrap()
             .text
             .starts_with("Ran 1 steps.\n1. Waited 2 s.\n\nTab 20")
+    );
+}
+
+/// A run's last step can be a screenshot, checked as one alone: the run answers with what each
+/// step did and the picture, as an agent that wants to see the page it acted on would call
+/// screenshot next (#3659).
+#[gpui::test]
+fn a_run_ends_with_a_screenshot(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let steps = json!({ "tab": 20, "steps": [{ "action": "scroll" }, { "action": "screenshot" }] });
+    let run = call(&agents, "claude-code", "run_steps", steps, cx);
+    shop_done(&agents, &browser, cx);
+    assert_eq!(
+        browser.pages.borrow().last().unwrap().2,
+        PageAction::Screenshot
+    );
+    assert_eq!(browser.checked.borrow().last().unwrap(), "screenshot");
+    let ran = page_done(&agents, &browser, run, "/9j/4AAQ".into(), cx);
+    assert!(!ran.error);
+    assert_eq!(
+        ran.to_json()["content"],
+        json!([
+            { "type": "text", "text": "Ran 2 steps.\n1. Scrolled down.\n2. Took a screenshot of the page." },
+            { "type": "image", "data": "/9j/4AAQ", "mimeType": "image/jpeg" },
+        ])
+    );
+    let entry = agents.read_with(cx, |agents, _| agents.recent().next().unwrap().clone());
+    let steps: Vec<&str> = entry
+        .steps
+        .iter()
+        .map(|step| step.action.as_ref())
+        .collect();
+    assert_eq!(steps, ["scroll", "screenshot"]);
+}
+
+/// A check step looks at the page once, checked as a snapshot and logged as a check: the run
+/// answers in its one line if the text is there, else fails with the page's outline, as a wait
+/// that ran out does (#3659).
+#[gpui::test]
+fn a_check_step_looks_once_for_its_text(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let looks = || browser.pages.borrow().len();
+    let wrongs = [
+        json!({}),
+        json!({ "text": "Coupon", "seconds": 5 }),
+        json!({ "gone": "Coupon" }),
+        json!({ "text": "Coupon", "until": "quiet" }),
+    ];
+    for wrong in wrongs {
+        let mut step = json!({ "action": "check" });
+        step.as_object_mut()
+            .unwrap()
+            .extend(wrong.as_object().unwrap().clone());
+        let steps = json!({ "tab": 20, "steps": [step] });
+        let refused = call(&agents, "claude-code", "run_steps", steps, cx)
+            .recv()
+            .unwrap();
+        assert!(
+            refused.text.starts_with("Step 1 failed: check needs text"),
+            "{}",
+            refused.text
+        );
+    }
+    assert_eq!(looks(), 0, "a check without its text looked");
+
+    let check = json!({ "action": "check", "text": "coupon" });
+    let steps = json!({ "tab": 20, "steps": [{ "action": "scroll" }, check] });
+    let run = call(&agents, "claude-code", "run_steps", steps, cx);
+    shop_done(&agents, &browser, cx);
+    assert_eq!(
+        browser.pages.borrow().last().unwrap().2,
+        PageAction::Snapshot
+    );
+    assert_eq!(browser.checked.borrow().last().unwrap(), "snapshot");
+    let ran = page_done(&agents, &browser, run, shop_tree(), cx);
+    assert_eq!(
+        ran,
+        ToolResult::text("Ran 2 steps.\n1. Scrolled down.\n2. “coupon” is on the page.")
+    );
+    let entry = agents.read_with(cx, |agents, _| agents.recent().next().unwrap().clone());
+    let steps: Vec<&str> = entry
+        .steps
+        .iter()
+        .map(|step| step.action.as_ref())
+        .collect();
+    assert_eq!(steps, ["scroll", "check"]);
+
+    let steps = json!({ "tab": 20, "steps": [{ "action": "check", "text": "Thanks" }] });
+    let run = call(&agents, "claude-code", "run_steps", steps, cx);
+    let before = looks();
+    let failed = page_done(&agents, &browser, run, shop_tree(), cx);
+    assert!(failed.error);
+    assert!(
+        failed
+            .text
+            .starts_with("Step 1 failed: “Thanks” isn't on the page.\n\nTab 20"),
+        "{}",
+        failed.text
+    );
+    cx.executor().advance_clock(Duration::from_secs(5));
+    assert_eq!(looks(), before, "the check looked again");
+}
+
+/// A wait for text can take minutes, as a page's search can, up to MAX_TEXT_WAIT, while a wait for
+/// a time or for the page to settle stays within MAX_WAIT. The longer it has waited, the less
+/// often it looks, up to every 5 s (#3659).
+#[gpui::test]
+fn a_wait_for_text_takes_minutes_and_looks_less_often(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let look = |tree: String, cx: &mut TestAppContext| {
+        let request = browser.pages.borrow().last().unwrap().1;
+        agents.update(cx, |agents, cx| agents.page_done(request, tree, false, cx));
+        cx.run_until_parked();
+    };
+    let looks = || browser.pages.borrow().len();
+    let refused = |step: Value, cx: &mut TestAppContext| {
+        let steps = json!({ "tab": 20, "steps": [step] });
+        call(&agents, "claude-code", "run_steps", steps, cx)
+            .recv()
+            .unwrap()
+            .text
+    };
+    let most = tools::MAX_TEXT_WAIT;
+    for step in [
+        json!({ "action": "wait", "text": "Thanks", "seconds": most + 1. }),
+        json!({ "action": "wait", "gone": "Basket", "seconds": most + 1. }),
+        json!({ "action": "wait", "seconds": tools::MAX_WAIT + 1. }),
+        json!({ "action": "wait", "until": "quiet", "seconds": tools::MAX_WAIT + 1. }),
+    ] {
+        let text = refused(step, cx);
+        assert!(text.starts_with("Step 1 failed: wait needs text"), "{text}");
+    }
+    assert_eq!(looks(), 0);
+
+    let wait = json!({ "action": "wait", "text": "Thanks", "seconds": most });
+    let run = call(
+        &agents,
+        "claude-code",
+        "run_steps",
+        json!({ "tab": 20, "steps": [wait] }),
+        cx,
+    );
+    assert_eq!(looks(), 1);
+    look(shop_tree(), cx);
+    cx.executor().advance_clock(Duration::from_millis(500));
+    assert_eq!(
+        looks(),
+        2,
+        "the wait didn't look again at first as often as it does"
+    );
+    // The core answers a minute in, as a page that took that long would.
+    cx.executor().advance_clock(Duration::from_secs(60));
+    look(shop_tree(), cx);
+    cx.executor().advance_clock(Duration::from_millis(4900));
+    assert_eq!(looks(), 2, "a wait a minute in looked within 5 s");
+    cx.executor().advance_clock(Duration::from_millis(100));
+    assert_eq!(looks(), 3);
+    assert!(run.try_recv().is_err());
+    let thanks = json!({ "nodes": [
+        { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Thanks" } },
+    ]})
+    .to_string();
+    look(thanks, cx);
+    let ran = run.recv().unwrap();
+    assert!(
+        ran.text.starts_with("Ran 1 steps.\n1. “Thanks” showed."),
+        "{}",
+        ran.text
+    );
+}
+
+/// A check and a screenshot in a run go through the rules their tools do: on a tab of the user's
+/// each is refused and logged, and nothing reaches its page.
+#[gpui::test]
+fn a_runs_check_and_screenshot_keep_to_the_rules(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    for (step, logged) in [
+        (json!({ "action": "check", "text": "Main Page" }), "check"),
+        (json!({ "action": "screenshot" }), "screenshot"),
+    ] {
+        let steps = json!({ "tab": 10, "steps": [step] });
+        let refused = call(&agents, "claude-code", "run_steps", steps, cx)
+            .recv()
+            .unwrap();
+        assert_eq!(
+            refused,
+            ToolResult::error("Step 1 failed: The tab isn't in the agent's own Space.")
+        );
+        let entry = agents.read_with(cx, |agents, _| agents.recent().next().unwrap().clone());
+        assert_eq!(entry.action, "run_steps");
+        let steps: Vec<(&str, &str)> = (entry.steps.iter())
+            .map(|step| (step.action.as_ref(), step.refused.as_ref()))
+            .collect();
+        assert_eq!(steps, [(logged, "The tab isn't in the agent's own Space.")]);
+    }
+    assert!(
+        browser.pages.borrow().is_empty(),
+        "a refused step reached a page"
     );
 }
 
