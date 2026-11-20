@@ -213,12 +213,12 @@ expect "^browser: title $page signed out\$" "a cancelled sign-in didn't show wha
 sign_in again
 send type ada
 send key tab
-send type lovelace
+send type zq7lovelace
 send key return
 expect "^browser: page $page dialog answered accept\$" "↩ didn't sign in"
 expect "^browser: title $page signed in ada\$" "the site didn't take the username and password"
 # The driver's own lines say what it typed.
-grep -v '^browser: drive ' "$log" | grep -q lovelace && fail "the password reached the log"
+grep -v '^browser: drive ' "$log" | grep -q zq7lovelace && fail "the password reached the log"
 
 # The pointer on and off the served page's link, over and over, shows and hides the link target's
 # window, with the command bar and a tab's menu opened and closed between. Each is a window the UI

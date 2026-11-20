@@ -2725,7 +2725,7 @@ CARD
   await_more '^browser: dialog settled$' "$settled" || fail "the second sign-in didn't show over the page watched"
   send type ada
   send key tab
-  send type lovelace
+  send type zq7lovelace
   send key return
   await_log "^browser: page $opened_tab dialog answered accept\$" "↩ didn't sign in in the agent's tab"
   await_log "^browser: title $opened_tab signed in ada\$" "the site didn't take the user's sign-in"
@@ -2745,10 +2745,10 @@ CARD
     *) fail "the agent didn't read the page the user signed in to: $signed_said" ;;
   esac
   for said in "$waited" "$signed_said"; do
-    case "$said" in *lovelace*) fail "the password typed in the sign-in reached the agent: $said" ;; esac
+    case "$said" in *zq7lovelace*) fail "the password typed in the sign-in reached the agent: $said" ;; esac
   done
   # The driver's own lines say what it typed.
-  grep -v '^browser: drive ' "$log" | grep -q lovelace && fail "the password typed in the agent's sign-in reached the log"
+  grep -v '^browser: drive ' "$log" | grep -q zq7lovelace && fail "the password typed in the agent's sign-in reached the log"
   # The steps below scroll the tab, which the signed-in page, shorter than the view, can't do.
   longs=$(grep -c "^browser: title $opened_tab Long page\$" "$log" || true)
   call navigate "{\"tab\":$opened_tab,\"url\":\"localhost:$port/long.html\"}" > /dev/null
@@ -3540,7 +3540,7 @@ exec 4>&- 5<&-
 quit
 # Nothing of the password typed in the agent's sign-in is kept in the profile, the agents' 30-day
 # file in it among it (#3662).
-if grep -rlF lovelace "$profile_dir" > "$out/mcp-sign-in-kept.txt" 2> /dev/null; then
+if grep -rlF zq7lovelace "$profile_dir" > "$out/mcp-sign-in-kept.txt" 2> /dev/null; then
   fail "the password typed in the agent's sign-in was kept: $(tr '\n' ' ' < "$out/mcp-sign-in-kept.txt")"
 fi
 forget_login
