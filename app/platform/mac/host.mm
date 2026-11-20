@@ -4360,8 +4360,9 @@ void PlaceToastClicks(NSPoint screen, NSInteger event = -1) {
   // A move the window server sends has a number and one the app posts, as the driver's, has 0, so
   // this tells a toast the real pointer left from one a check's pointer did (#3611).
   if (passed != g_toast.ignoresMouseEvents) {
-    fprintf(stderr, "browser: pointer %s the toast's plate at %.0f,%.0f, event %ld\n",
-            passed ? "on" : "off", at.x, at.y, (long)event);
+    fprintf(stderr, "browser: pointer %s the toast's plate at %.0f,%.0f, event %ld, t %.0f\n",
+            passed ? "on" : "off", at.x, at.y, (long)event,
+            NSProcessInfo.processInfo.systemUptime * 1000);
   }
 }
 

@@ -678,31 +678,79 @@ NSWindow* WindowAt(NSWindow* browser, double x, double y) {
   return browser;
 }
 
+// Milliseconds since the Mac started, the clock the host's toast lines use too.
+double Ms() {
+  return NSProcessInfo.processInfo.systemUptime * 1000;
+}
+
+// Whether the window server lists window |number| at |screen| going down from the top.
+bool Listed(NSPoint screen, NSInteger number) {
+  NSInteger below = 0;
+  for (int walked = 0; walked < 64; walked++) {
+    below = [NSWindow windowNumberAtPoint:screen belowWindowWithWindowNumber:below];
+    if (!below || below == number) {
+      return below == number;
+    }
+  }
+  return false;
+}
+
+// The window server's own record of |window|: whether it's on screen, where, and at which layer.
+NSString* ServerRecord(NSWindow* window) {
+  NSArray* list = CFBridgingRelease(CGWindowListCopyWindowInfo(
+      kCGWindowListOptionIncludingWindow, (CGWindowID)window.windowNumber));
+  NSDictionary* info = list.firstObject;
+  if (!info) {
+    return @"server none";
+  }
+  CGRect bounds;
+  CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)info[(id)kCGWindowBounds],
+                                         &bounds);
+  return [NSString
+      stringWithFormat:@"server on screen %d at %.0f,%.0f %.0fx%.0f, layer %@, alpha %@",
+                       [info[(id)kCGWindowIsOnscreen] boolValue], bounds.origin.x,
+                       bounds.origin.y, bounds.size.width, bounds.size.height,
+                       info[(id)kCGWindowLayer], info[(id)kCGWindowAlpha]];
+}
+
 // Each window of the app's but |browser| over (x, y) in it, as a click there went to |browser|:
 // whether the window server lists it at that point and whether it lets the mouse through. That
 // tells a window that let a click through, such as a toast's before the pointer is on its plate,
-// from one the lookup missed (#3611).
+// from one the lookup missed (#3611). One the lookup missed is looked up again on the next turn of
+// the run loop and later, to tell a moment's miss from one lasting as long as the window is up.
 void LogPassed(NSWindow* browser, double x, double y) {
   NSPoint screen = [browser convertPointToScreen:NSMakePoint(x, NSHeight(browser.frame) - y)];
-  NSMutableSet<NSNumber*>* listed = [NSMutableSet set];
-  NSInteger number = 0;
-  while ((number = [NSWindow windowNumberAtPoint:screen belowWindowWithWindowNumber:number]) &&
-         listed.count < 64) {
-    [listed addObject:@(number)];
-  }
+  const double clicked = Ms();
   for (NSWindow* window in NSApp.windows) {
     if (window == browser || !window.visible || window.alphaValue == 0 ||
         !NSPointInRect(screen, window.frame)) {
       continue;
     }
     const NSRect frame = window.frame;
+    const bool listed = Listed(screen, window.windowNumber);
     fprintf(stderr,
             "browser: drive click passed %s %ld at %.0f,%.0f %.0fx%.0f, listed %d, ignores mouse "
-            "%d, level %ld, on screen %d\n",
+            "%d, level %ld, on screen %d, t %.0f, %s\n",
             NSStringFromClass([window class]).UTF8String, (long)window.windowNumber,
-            frame.origin.x, frame.origin.y, frame.size.width, frame.size.height,
-            [listed containsObject:@(window.windowNumber)], window.ignoresMouseEvents,
-            (long)window.level, (window.occlusionState & NSWindowOcclusionStateVisible) != 0);
+            frame.origin.x, frame.origin.y, frame.size.width, frame.size.height, listed,
+            window.ignoresMouseEvents, (long)window.level,
+            (window.occlusionState & NSWindowOcclusionStateVisible) != 0, clicked,
+            ServerRecord(window).UTF8String);
+    if (listed || window.ignoresMouseEvents) {
+      continue;
+    }
+    for (int64_t after : {0, 20, 100, 500, 2000}) {
+      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, after * NSEC_PER_MSEC),
+                     dispatch_get_main_queue(), ^{
+                       fprintf(stderr,
+                               "browser: drive click relook %s %ld, listed %d, ignores mouse %d, "
+                               "visible %d, %.0f ms after the click, %s\n",
+                               NSStringFromClass([window class]).UTF8String,
+                               (long)window.windowNumber, Listed(screen, window.windowNumber),
+                               window.ignoresMouseEvents, window.visible, Ms() - clicked,
+                               ServerRecord(window).UTF8String);
+                     });
+    }
   }
 }
 
