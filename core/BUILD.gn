@@ -351,6 +351,16 @@ source_set("link_card_rule") {
   ]
 }
 
+# Where the keyboard goes as an overlay of the app's lets it go, apart so browser_core_unittests
+# tests the rule alone (#3587).
+source_set("overlay_lend") {
+  sources = [
+    "overlay_lend.cc",
+    "overlay_lend.h",
+  ]
+  deps = [ "//base" ]
+}
+
 # The key a page's key is named by for the app's shortcuts, apart so browser_core_unittests tests it
 # alone.
 source_set("shortcut_key") {
@@ -764,6 +774,7 @@ source_set("browser_core") {
     ":archive_rule",
     ":arrange_rule",
     ":focus_leaving_rule",
+    ":overlay_lend",
     ":live_folder_rule",
     ":pinned_url",
     ":tab_recent_rule",
@@ -1110,6 +1121,7 @@ test("browser_core_unittests") {
     # read.
     "omnibox_last_visit_unittest.cc",
     "other_tabs_unittest.cc",
+    "overlay_lend_unittest.cc",
     "popup_hold_unittest.cc",
     "search_default_unittest.cc",
     "select_choices_unittest.cc",
@@ -1141,6 +1153,7 @@ test("browser_core_unittests") {
     ":archive_rule",
     ":arrange_rule",
     ":focus_leaving_rule",
+    ":overlay_lend",
     ":live_folder_rule",
     ":native_ad_block_lists",
     ":pinned_url",
