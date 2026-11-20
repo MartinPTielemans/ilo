@@ -2438,7 +2438,12 @@ fn working(task: &Task) -> SharedString {
         Some(step) => format!(
             "Step {} · {}",
             taken.len(),
-            tools::step_title(&step.did, tense(step))
+            // A request's path is the agent's own text, so it's written out here as in the trace.
+            crate::agent_request::Written::step(
+                step.did.tool == "request",
+                &tools::step_title(&step.did, tense(step)),
+            )
+            .text
         )
         .into(),
         None => "Thinking · no steps yet".into(),
