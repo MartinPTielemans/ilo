@@ -213,6 +213,9 @@ fn shared() -> Value {
         "description": "What of the page's outline the answer gives: what changed since the last outline you had of the tab (changes, the default, which is the whole outline on a new page), all of it (full), or only what the action did (none)."
     });
     let acts = json!({ "readOnlyHint": false, "destructiveHint": false, "openWorldHint": true });
+    // As a wait step's text, for an app whose content comes after its page has settled (#3658).
+    let wait_for = json!({ "type": "string", "description": "Text to wait for in the page, as an app's content that comes after its page has loaded. The answer says whether it showed." });
+    let wait_seconds = json!({ "type": "number", "exclusiveMinimum": 0, "maximum": MAX_WAIT, "description": "How long wait_for waits, in seconds; 5 if not given." });
     let tabs = json!({ "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false });
     json!([
         {
@@ -225,10 +228,14 @@ fn shared() -> Value {
         {
             "name": "open_tab",
             "title": "Open tab",
-            "description": "Open a URL, or search for words, in a new tab of your own. Answers with the page's outline.",
+            "description": "Open a URL, or search for words, in a new tab of your own. Answers with the page's outline once it has settled, or once wait_for's text shows in it.",
             "inputSchema": {
                 "type": "object",
-                "properties": { "url": { "type": "string", "description": "A URL, or words to search for." } },
+                "properties": {
+                    "url": { "type": "string", "description": "A URL, or words to search for." },
+                    "wait_for": wait_for,
+                    "seconds": wait_seconds,
+                },
                 "required": ["url"],
             },
             "annotations": acts,
@@ -300,11 +307,13 @@ fn shared() -> Value {
         {
             "name": "navigate",
             "title": "Navigate",
-            "description": "Go to a URL, or search for words, in a tab. \"back\" and \"forward\" move through its history. Answers with the page's outline.",
+            "description": "Go to a URL, or search for words, in a tab. \"back\" and \"forward\" move through its history. Answers with the page's outline once it has settled, or once wait_for's text shows in it.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "url": { "type": "string", "description": "A URL, words to search for, \"back\" or \"forward\"." },
+                    "wait_for": wait_for,
+                    "seconds": wait_seconds,
                     "tab": tab,
                 },
                 "required": ["url"],
