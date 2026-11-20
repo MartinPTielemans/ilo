@@ -1515,12 +1515,6 @@ void RaiseOverlays(Browser* browser, NSWindow* window) {
       [overlay.window orderWindow:NSWindowAbove relativeTo:window.windowNumber];
     }
   }
-  HostPlateWindow* plates[] = {g_toast_plate_window, g_card_plate_window, g_mini_bar_plate_window};
-  for (HostPlateWindow* plate : plates) {
-    if (plate.surface == window && plate.parentWindow) {
-      [plate orderWindow:NSWindowAbove relativeTo:window.windowNumber];
-    }
-  }
 }
 
 // 8 points below the find bar while it shows, where the HUD would cover it.
