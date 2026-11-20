@@ -644,6 +644,9 @@ pub struct Agents {
     opened: HashSet<u64>,
     /// The closes waiting on their page's answer, by tab: one answer for each tab.
     closing: HashMap<u64, Vec<Closing>>,
+    /// Why each session's page that left its agent's Space went, and whose it was, for that
+    /// agent's next call on it (#3660).
+    gone: HashMap<u64, (String, Gone)>,
     /// The actions waiting on the core, by request.
     acting: HashMap<u64, Acting>,
     /// The calls whose requests wait on the core, by the request sent.
@@ -824,6 +827,7 @@ impl Agents {
             current: HashMap::new(),
             opened: HashSet::new(),
             closing: HashMap::new(),
+            gone: HashMap::new(),
             acting: HashMap::new(),
             sending: HashMap::new(),
             refs: HashMap::new(),
@@ -2077,9 +2081,11 @@ impl Agents {
         cx.notify();
     }
 
-    /// The core closed `tab` (tabs::tab_closed). A hold on it ends.
+    /// The core closed `tab` (tabs::tab_closed). A hold on it ends. A session's page that the
+    /// agent or the browser didn't close, the user did.
     pub fn tab_closed(&mut self, tab: u64, cx: &mut Context<Self>) {
         self.dialogs.remove(&tab);
+        self.left(tab, Gone::Closed);
         self.let_go(tab, held::Event::Closed, cx);
     }
 
@@ -2107,10 +2113,20 @@ impl Agents {
     /// `space`'s tabs changed (spaces::space_changed). A held tab that left its agent's Space
     /// closed, or the user moved it to one of theirs, and its hold ends either way.
     pub fn space_changed(&mut self, space: u64, cx: &mut Context<Self>) {
+        // A session's page that left its agent's Space and is still open, the user moved.
+        let tabs = self.browser.space_tab_ids(space, cx);
+        let moved: Vec<u64> = (self.tasks.tasks.iter())
+            .filter_map(|task| task.session.as_ref())
+            .filter(|session| self.browser.agent_space(&session.agent) == space)
+            .flat_map(|session| session.tabs.iter().copied())
+            .filter(|tab| !tabs.contains(tab) && self.browser.space_of(*tab, cx) != 0)
+            .collect();
+        for tab in moved {
+            self.left(tab, Gone::Moved);
+        }
         if self.held.is_empty() {
             return;
         }
-        let tabs = self.browser.space_tab_ids(space, cx);
         let left: Vec<u64> = (self.held.iter())
             .filter(|(tab, held)| {
                 !tabs.contains(tab) && self.browser.agent_space(&held.agent) == space
@@ -2901,6 +2917,7 @@ impl Agents {
             None => mpsc::channel().0,
         };
         if tab_empty {
+            self.left(tab, Gone::Download);
             self.browser.close_user_tab(tab, cx);
         }
         let host = site(&url);
@@ -3321,7 +3338,12 @@ impl Agents {
             Some(why) => return Err(why.into()),
             None => {}
         }
-        self.browser.may_act(agent, tab, action, cx)?;
+        self.browser
+            .may_act(agent, tab, action, cx)
+            .map_err(|why| match (why == NOT_ITS_SPACE, self.gone.get(&tab)) {
+                (true, Some((whose, gone))) if whose == agent => gone.why(tab),
+                _ => why,
+            })?;
         // Only once the tab is known to be the agent's, so another's page says nothing.
         match self.dialogs.get(&tab) {
             Some(&kind) if action != "close_tab" => {
@@ -3484,6 +3506,9 @@ impl Agents {
         reply: mpsc::Sender<ToolResult>,
         cx: &mut Context<Self>,
     ) {
+        if closed == Closed::Closed {
+            self.gone.insert(tab, (agent.into(), Gone::Itself));
+        }
         let answer = match closed {
             Closed::Closed if discarded => Ok(format!("Closed tab {tab} without saving.")),
             Closed::Closed => Ok(format!("Closed tab {tab}.")),
@@ -3950,6 +3975,47 @@ const NOT_WEB_PAGE: &str =
 const OFF_THE_WEB: &str = "A page that isn't http or https";
 /// The core's refusal of a tab not in the agent's Space (bc_agent_may_act).
 const NOT_ITS_SPACE: &str = "The tab isn't in the agent's own Space.";
+
+/// Why a session's page left its agent's Space (Agents::gone).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Gone {
+    /// The user closed it.
+    Closed,
+    /// The user moved it to a Space of theirs.
+    Moved,
+    /// The user opened it from the card of the agent's earlier session.
+    Opened,
+    /// It closed with the agent's earlier session, as the user put its card away.
+    PutAway,
+    /// The agent closed it.
+    Itself,
+    /// It closed as its download started, as it showed no page.
+    Download,
+}
+
+impl Gone {
+    /// What a call on `tab` answers, in place of NOT_ITS_SPACE.
+    fn why(self, tab: u64) -> String {
+        let went = match self {
+            Gone::Closed => format!("The user closed tab {tab}."),
+            Gone::Moved => {
+                format!("The user moved tab {tab} to one of their own Spaces: it's theirs now.")
+            }
+            Gone::Opened => format!(
+                "The user opened tab {tab} from the card of the agent's earlier session: it's \
+                 theirs now."
+            ),
+            Gone::PutAway => format!(
+                "Tab {tab} closed with the agent's earlier session, as the user put its card away."
+            ),
+            Gone::Itself => format!("The agent closed tab {tab}."),
+            Gone::Download => {
+                format!("Tab {tab} closed as its download started, as it showed no page.")
+            }
+        };
+        format!("{went} To carry on, open the page again with open_tab.")
+    }
+}
 /// Why an agent can't type into a password field.
 const PASSWORDS: &str = "Password fields are off limits to agents: signing in is the user's to do. \
     Hand them the tab with hand_off.";
