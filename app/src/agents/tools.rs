@@ -949,15 +949,12 @@ pub enum Kind {
     Password,
     NotWebPage,
     NotFound,
-    TimedOut,
     StillLoading,
-    /// An HTTP error's status.
-    Status(u16),
     DidntShow,
     Yours,
 }
 
-/// Why a step failed, in a few words, from its call's kind: "not found", "timed out", "504".
+/// Why a step failed, in a few words, from its call's kind: "not found", "it's yours".
 /// Empty with none, as the step's title already says it couldn't.
 pub fn reason(kind: Option<Kind>) -> String {
     let Some(kind) = kind else {
@@ -970,9 +967,7 @@ pub fn reason(kind: Option<Kind>) -> String {
         Kind::Password => "password field",
         Kind::NotWebPage => "not a web page",
         Kind::NotFound => "not found",
-        Kind::TimedOut => "timed out",
         Kind::StillLoading => "still loading",
-        Kind::Status(code) => return code.to_string(),
         Kind::DidntShow => "didn't show",
         Kind::Yours => "it's yours",
     };

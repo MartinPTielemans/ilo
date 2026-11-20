@@ -6807,9 +6807,7 @@ mod tasks {
             (Some(Kind::Password), "password field"),
             (Some(Kind::NotWebPage), "not a web page"),
             (Some(Kind::NotFound), "not found"),
-            (Some(Kind::TimedOut), "timed out"),
             (Some(Kind::StillLoading), "still loading"),
-            (Some(Kind::Status(504)), "504"),
             (Some(Kind::DidntShow), "didn't show"),
             (Some(Kind::Yours), "it's yours"),
         ];
@@ -6829,8 +6827,8 @@ mod tasks {
             after: 0,
             started: now,
             ended: Some(now),
-            error: Some("Timed out waiting for the page.".into()),
-            kind: Some(Kind::TimedOut),
+            error: Some("Agents may open only http and https pages.".into()),
+            kind: Some(Kind::NotWebPage),
             picture: None,
             close: None,
         };
@@ -6843,9 +6841,9 @@ mod tasks {
         };
         assert_eq!(
             (step.title.as_ref(), step.description.as_ref(), step.failed),
-            ("Couldn't open maat.pt", "timed out", true)
+            ("Couldn't open maat.pt", "not a web page", true)
         );
-        let opens = format!("{url}\nTimed out waiting for the page.");
+        let opens = format!("{url}\nAgents may open only http and https pages.");
         assert!(
             matches!(&step.opens, Opens::Text(text) if *text == opens),
             "{:?}",
@@ -6895,10 +6893,7 @@ mod tasks {
             ("That's a password field.", Kind::Password),
             ("Tab 30 isn't an http or https page.", Kind::NotWebPage),
             ("There's no element e12 in tab 30.", Kind::NotFound),
-            ("The page answered 404.", Kind::NotFound),
-            ("Timed out waiting for the page.", Kind::TimedOut),
             ("The page is still loading.", Kind::StillLoading),
-            ("The page answered HTTP 504.", Kind::Status(504)),
             ("“Basket” didn't show in 5 s.", Kind::DidntShow),
             ("The tab is the user's already.", Kind::Yours),
         ];

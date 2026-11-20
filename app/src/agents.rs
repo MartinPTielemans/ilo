@@ -4181,6 +4181,8 @@ impl From<Refused> for ToolResult {
 
 /// The refusal for a tab off limits (`off_limits`), whose page off the web a card says so of.
 fn off_limits_refused(why: &'static str) -> Refused {
+    // Compared with the app's own constant, not a copy of its words, so rewording it can't
+    // change the kind.
     Refused {
         kind: (why == NOT_WEB_PAGE).then_some(tools::Kind::NotWebPage),
         ..Refused::new(why)
