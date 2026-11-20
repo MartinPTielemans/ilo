@@ -1,7 +1,7 @@
 //! The server as an MCP client's bridge reaches it, over a real socket, or on Windows a real named
 //! pipe.
 
-use std::io::{BufReader, Cursor, Write};
+use std::io::{BufReader, Cursor, Read, Write};
 #[cfg(unix)]
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::sync::atomic::AtomicUsize;
@@ -25,6 +25,11 @@ pub fn socket() -> PathBuf {
 
 /// A server with Claude Code's token.
 fn server() -> (Server, Tokens, UnboundedReceiver<Event>) {
+    server_waiting(TOKEN_WAIT)
+}
+
+/// A server with Claude Code's token that gives a connection `token_wait` to send one.
+fn server_waiting(token_wait: Duration) -> (Server, Tokens, UnboundedReceiver<Event>) {
     let tokens: Tokens = Arc::default();
     tokens
         .lock()
@@ -32,7 +37,7 @@ fn server() -> (Server, Tokens, UnboundedReceiver<Event>) {
         .insert(TOKEN.into(), "claude-code".into());
     let (events, handed) = futures::channel::mpsc::unbounded();
     (
-        Server::start(&socket(), tokens.clone(), events).unwrap(),
+        Server::listen(&socket(), tokens.clone(), events, token_wait).unwrap(),
         tokens,
         handed,
     )
@@ -168,6 +173,51 @@ fn a_connection_without_a_valid_token_is_refused() {
         next(&mut handed).is_none(),
         "a refused connection reached the UI"
     );
+}
+
+/// A client that finds every place taken is told so, through its bridge, rather than turned away
+/// without a word (#3700).
+#[test]
+fn a_full_server_says_so() {
+    use super::super::bridge;
+    // Long enough that no connection gives way while the test runs.
+    let (server, _, _handed) = server_waiting(Duration::from_secs(60));
+    let _silent: Vec<Client> = (0..MAX_CONNECTIONS)
+        .map(|_| Client::open(&server))
+        .collect();
+    let refused = bridge::run(
+        server.path(),
+        TOKEN,
+        Cursor::new(Vec::new()),
+        Output::default(),
+    );
+    assert_eq!(refused.unwrap_err(), FULL);
+}
+
+/// A connection that sends no token is closed once its time is up, so connections that send
+/// nothing can't keep a client out (#3700).
+#[test]
+fn connections_that_send_no_token_give_way() {
+    let (server, _, _handed) = server_waiting(Duration::from_millis(200));
+    let silent: Vec<Client> = (0..MAX_CONNECTIONS)
+        .map(|_| Client::open(&server))
+        .collect();
+    for mut client in silent {
+        // Bounds the test where the server keeps them: the server's close is what it waits for.
+        let reader = client.reader.get_ref();
+        reader
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let mut byte = [0];
+        let read = client.reader.read(&mut byte);
+        assert!(
+            matches!(read, Ok(0)),
+            "a connection that sent no token was still open 10 s on: {read:?}"
+        );
+    }
+    let mut client = Client::connect(&server);
+    let answer = client.ask(json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" }));
+    assert_eq!(answer, json!({ "jsonrpc": "2.0", "id": 1, "result": {} }));
 }
 
 /// initialize begins a session, in the version the client asked for, says what the server is and
