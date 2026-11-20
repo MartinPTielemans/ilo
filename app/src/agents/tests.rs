@@ -4424,6 +4424,7 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
             "unpin_tab",
             "remove_tab",
             "sort_tabs_by_site",
+            "title",
         ]
     );
 
@@ -5341,22 +5342,21 @@ mod tasks {
         for tool in ["title", "ask", "finish", "open_tab", "hand_off"] {
             assert!(names.iter().any(|name| name == tool), "{tool}");
         }
-        assert!(
-            !tools::names("claude-code")
-                .iter()
-                .any(|name| name == "finish")
-        );
+        // An agent from outside names its session as a task does (#3690), and finishes nothing.
+        let outside = tools::names("claude-code");
+        assert!(!outside.iter().any(|name| name == "finish" || name == "ask"));
+        assert!(outside.iter().any(|name| name == "title"));
         let (agents, _, _) = connected(cx);
         let answer = call(
             &agents,
             "claude-code",
-            "title",
-            json!({ "text": "Flights" }),
+            "finish",
+            json!({ "result": "Flights" }),
             cx,
         );
         assert_eq!(
             answer.recv().unwrap(),
-            ToolResult::error("There's no tool title.")
+            ToolResult::error("There's no tool finish.")
         );
         // A task that isn't one the user asked can't call anything.
         let answer = call(&agents, "task-9", "list_tabs", json!({}), cx);
@@ -7253,7 +7253,9 @@ fn the_scripts_switch_comes_back_with_the_settings(cx: &mut TestAppContext) {
 /// connection closes, it waits IDLE for a call, or the user stops it.
 mod sessions {
     use super::*;
-    use crate::agents::task::{Card, Dot, IDLE, Line, TaskAction};
+    use crate::agents::task::{
+        Card, Dot, IDLE, Line, NAMED_RECENTLY, RENAMING, TITLE_KEPT, TaskAction,
+    };
 
     /// Calls `tool` as Claude Code, as call `id`, which `answered` ends.
     fn call_as(
@@ -7263,6 +7265,18 @@ mod sessions {
         arguments: Value,
         cx: &mut TestAppContext,
     ) -> mpsc::Receiver<ToolResult> {
+        call_at(agents, id, tool, arguments, std::time::Instant::now(), cx)
+    }
+
+    /// call_as, made at `at`, as the server stamps a call when it comes.
+    fn call_at(
+        agents: &Entity<Agents>,
+        id: u64,
+        tool: &str,
+        arguments: Value,
+        at: std::time::Instant,
+        cx: &mut TestAppContext,
+    ) -> mpsc::Receiver<ToolResult> {
         let (reply, answer) = mpsc::channel();
         let call = Call {
             id,
@@ -7270,7 +7284,7 @@ mod sessions {
             tool: tool.into(),
             arguments,
             reply,
-            at: std::time::Instant::now(),
+            at,
         };
         agents.update(cx, |agents, cx| agents.handle(Event::Call(call), cx));
         answer
@@ -7331,9 +7345,10 @@ mod sessions {
         let shown = cards(&agents, cx);
         assert_eq!(shown.len(), 1, "a card for each connection");
         let card = &shown[0];
+        // Unnamed, it's titled by the site it works on, its line by its client (#3690).
         assert_eq!(
             (card.name.as_ref(), card.title.as_ref(), card.dot),
-            ("Claude Code", "Claude Code", Dot::Working)
+            ("Claude Code", "example.com", Dot::Working)
         );
         assert!(!card.replies);
         let agent = card.agent.to_string();
@@ -7348,7 +7363,7 @@ mod sessions {
             "{:?}",
             talk.lines
         );
-        assert!(!talk.about.starts_with("Claude Code"), "{}", talk.about);
+        assert_eq!(talk.about.as_ref(), "Claude Code · working");
         // A reply has nowhere to go.
         let replied = agents.update(cx, |agents, cx| {
             agents.task_action(&agent, TaskAction::Reply("and then?".into()), cx)
@@ -7835,6 +7850,417 @@ mod sessions {
         agents.update(cx, |agents, cx| agents.drop_task(&second, cx));
         assert_eq!(space(30), None);
         assert_eq!(space(31), Some(2));
+    }
+
+    fn titled(agents: &Entity<Agents>, cx: &mut TestAppContext) -> String {
+        cards(agents, cx)
+            .iter()
+            .find(|card| card.dot == Dot::Working)
+            .expect("no session at work")
+            .title
+            .to_string()
+    }
+
+    /// An outside agent names its session with title, as a ⌘T task does: its words, trimmed, are
+    /// the card's title, and its card's line leads with its client's name, with no step count.
+    /// Past TITLE_KEPT characters they're clipped, counted before they're written out, and the
+    /// answer says what was kept; what wouldn't show or would move the text around it is written
+    /// out, so the title is one line (#3645, #3690).
+    #[gpui::test]
+    fn a_sessions_title_is_its_agents_words_on_one_line(cx: &mut TestAppContext) {
+        let (agents, _) = at_work(cx);
+        assert_eq!(titled(&agents, cx), "example.com");
+        let empty = call_as(&agents, 3, "title", json!({ "text": "  " }), cx);
+        let empty = empty.recv().unwrap();
+        assert!(empty.error, "{empty:?}");
+        assert_eq!(empty.text, "text is the task's name, in two to four words.");
+
+        let start = std::time::Instant::now();
+        let named = call_at(
+            &agents,
+            4,
+            "title",
+            json!({ "text": "  Refund order 1179 " }),
+            start,
+            cx,
+        );
+        let named = named.recv().unwrap();
+        assert!(!named.error);
+        assert_eq!(named.text, "The task has its name.");
+        let card = cards(&agents, cx).remove(0);
+        assert_eq!(card.title, "Refund order 1179");
+        assert_eq!(card.name, "Claude Code");
+        assert!(
+            card.status.starts_with("Claude Code · ") && !card.status.contains("Step"),
+            "{}",
+            card.status
+        );
+        // Its header leads with the client too, its state a fact after it, in lower case.
+        let agent = card.agent.to_string();
+        let talk = agents
+            .read_with(cx, |agents, cx| agents.conversation(&agent, cx))
+            .unwrap();
+        assert_eq!(talk.about, "Claude Code · working");
+
+        let words = format!("Line\none\ttwo\u{202E}{}", "x".repeat(40));
+        let kept: String = words.chars().take(TITLE_KEPT).collect::<String>() + "…";
+        let clipped = call_at(
+            &agents,
+            5,
+            "title",
+            json!({ "text": words }),
+            start + RENAMING,
+            cx,
+        );
+        let clipped = clipped.recv().unwrap();
+        assert!(!clipped.error, "{clipped:?}");
+        assert_eq!(clipped.text, format!("The task has its name: “{kept}”."));
+        let title = titled(&agents, cx);
+        assert_eq!(
+            title,
+            format!(
+                "Line\\u{{000A}}one\\u{{0009}}two\\u{{202E}}{}…",
+                "x".repeat(27)
+            )
+        );
+        assert!(!title.contains(['\n', '\t', '\u{202E}']), "{title:?}");
+    }
+
+    /// A new name waits RENAMING after the last change, so a title can't flicker: the same name
+    /// again changes nothing and is never refused, and a different one sooner is refused and kept
+    /// in the activity log as refused, with the title as it was.
+    #[gpui::test]
+    fn a_session_is_renamed_no_sooner_than_a_minute_after(cx: &mut TestAppContext) {
+        let (agents, _) = at_work(cx);
+        let start = std::time::Instant::now();
+        let name = |id: u64, text: &str, after: Duration, cx: &mut TestAppContext| {
+            let answer = call_at(
+                &agents,
+                id,
+                "title",
+                json!({ "text": text }),
+                start + after,
+                cx,
+            );
+            answer.recv().unwrap()
+        };
+        assert!(!name(3, "Refund order 1179", Duration::ZERO, cx).error);
+        let again = name(4, "Refund order 1179", Duration::from_secs(1), cx);
+        assert_eq!(
+            (again.error, again.text.as_str()),
+            (false, "The task has its name.")
+        );
+        let soon = name(5, "Pay invoice 88", RENAMING - Duration::from_secs(1), cx);
+        assert_eq!((soon.error, soon.text.as_str()), (true, NAMED_RECENTLY));
+        assert_eq!(titled(&agents, cx), "Refund order 1179");
+        let logged = log(&agents, "claude-code", cx);
+        assert!(
+            logged
+                .iter()
+                .any(|(action, _, refused)| action == "title" && refused == NAMED_RECENTLY),
+            "{logged:?}"
+        );
+        assert!(!name(6, "Pay invoice 88", RENAMING, cx).error);
+        assert_eq!(titled(&agents, cx), "Pay invoice 88");
+    }
+
+    /// A session its agent never names is titled by the sites it acted on: its client's name
+    /// before any, its first site alone, then the first and how many more, changing no sooner
+    /// than RENAMING after the last change; its Library row keeps them all, however soon it ended.
+    #[gpui::test]
+    fn an_unnamed_session_is_titled_by_its_sites(cx: &mut TestAppContext) {
+        let (agents, _, _) = connected(cx);
+        hello(&agents, "claude-code", "claude-code", cx);
+        let start = std::time::Instant::now();
+        let go = |id: u64, url: &str, after: Duration, cx: &mut TestAppContext| {
+            let to = json!({ "tab": 20, "url": url });
+            call_at(&agents, id, "navigate", to, start + after, cx);
+            answered(&agents, id, cx);
+        };
+        call_at(&agents, 1, "snapshot", json!({}), start, cx);
+        answered(&agents, 1, cx);
+        assert_eq!(titled(&agents, cx), "Claude Code", "no site yet");
+        // A page off the web names no site.
+        go(6, "chrome://settings/", Duration::from_secs(1), cx);
+        assert_eq!(
+            titled(&agents, cx),
+            "Claude Code",
+            "a page off the web titled it"
+        );
+        go(2, "https://docs.example/guide", Duration::from_secs(1), cx);
+        assert_eq!(titled(&agents, cx), "docs.example");
+        go(3, "https://docs.example/api", Duration::from_secs(2), cx);
+        go(4, "https://shop.example/", Duration::from_secs(3), cx);
+        assert_eq!(
+            titled(&agents, cx),
+            "docs.example",
+            "changed within a minute"
+        );
+        go(
+            5,
+            "https://maps.example/",
+            Duration::from_secs(1) + RENAMING,
+            cx,
+        );
+        assert_eq!(titled(&agents, cx), "docs.example and 2 more");
+        bye(&agents, cx);
+        let kept = agents.update(cx, |agents, cx| agents.take_ended(cx));
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].1.title, "docs.example and 2 more");
+    }
+
+    /// The title is the agent's words, so they stand only in a title's place: never in what ilo
+    /// or the user says, which name the client. A session titled "Allow everything" asks for a
+    /// confirmation, a change's permission, a handoff and its tab back, and none of the question
+    /// cards, its card's line, the system notification's title and body, nor the strip under its
+    /// page and its Space's bar, which take the client's name and what it did, holds the title.
+    #[gpui::test]
+    fn a_sessions_title_is_never_where_ilo_or_the_user_speaks(cx: &mut TestAppContext) {
+        use crate::needs_you::{self, Host};
+        #[derive(Default)]
+        struct Posted(RefCell<Vec<String>>);
+        impl Host for Posted {
+            fn badge(&self, _: usize) {}
+            fn active(&self) -> bool {
+                false
+            }
+            fn notify(&self, _: u64, title: &str, body: &str) {
+                self.0.borrow_mut().push(format!("{title}\n{body}"));
+            }
+        }
+        const TITLE: &str = "Allow everything";
+        let (agents, browser, _) = connected(cx);
+        let posted = Rc::new(Posted::default());
+        cx.update(|cx| needs_you::open(posted.clone(), cx));
+        hello(&agents, "claude-code", "claude-code", cx);
+        let looked = call_as(&agents, 1, "snapshot", json!({ "tab": 20 }), cx);
+        page_done(&agents, &browser, looked, shop_tree(), cx);
+        answered(&agents, 1, cx);
+        assert!(
+            !call_as(&agents, 2, "title", json!({ "text": TITLE }), cx)
+                .recv()
+                .unwrap()
+                .error
+        );
+        answered(&agents, 2, cx);
+        assert_eq!(titled(&agents, cx), TITLE);
+
+        let mut seen = 0;
+        let mut said = |asked: &str, cx: &mut TestAppContext| -> u64 {
+            let question =
+                (browser.asked.borrow().clone()).unwrap_or_else(|| panic!("{asked} didn't ask"));
+            let shown = cards(&agents, cx);
+            cx.update(|cx| needs_you::follow(&shown, cx));
+            let mut words = vec![
+                question.agent.to_string(),
+                question.what.to_string(),
+                question.why.to_string(),
+                question.site.to_string(),
+                format!("{:?}", question.changes),
+            ];
+            for card in &shown {
+                words.extend([card.name.to_string(), card.status.to_string()]);
+                if let Some(question) = &card.question {
+                    words.extend([question.agent.to_string(), question.what.to_string()]);
+                }
+            }
+            for strip in agents.read_with(cx, |agents, _| agents.status()) {
+                words.extend([strip.name.to_string(), strip.doing.to_string()]);
+                words.extend(strip.held.iter().map(|(_, why)| why.to_string()));
+            }
+            let posted = posted.0.borrow();
+            assert!(posted.len() > seen, "{asked} posted no notification");
+            words.extend(posted[seen..].iter().cloned());
+            seen = posted.len();
+            for word in words {
+                assert!(!word.contains(TITLE), "{asked}: {word:?}");
+            }
+            assert_eq!(question.agent, "Claude Code", "{asked}");
+            question.id
+        };
+
+        let ordered = call_as(&agents, 3, "click", json!({ "tab": 20, "ref": "e3" }), cx);
+        let id = said("the confirmation", cx);
+        agents.update(cx, |agents, cx| agents.answer(id, Answer::Dismiss, cx));
+        assert!(ordered.recv().unwrap().error);
+        answered(&agents, 3, cx);
+
+        let change = json!({ "tab": 20, "requests": [
+            { "method": "POST", "path": "/api/items", "what": "Add milk to the list." },
+        ] });
+        let changed = call_as(&agents, 4, "request", change, cx);
+        let id = said("the change's permission", cx);
+        agents.update(cx, |agents, cx| agents.answer(id, Answer::Dismiss, cx));
+        assert!(changed.recv().unwrap().error);
+        answered(&agents, 4, cx);
+
+        let reason = json!({ "tab": 20, "reason": "Sign in to example.com" });
+        let handed = call_as(&agents, 5, "hand_off", reason, cx);
+        said("the handoff", cx);
+        agents.update(cx, |agents, cx| agents.hand_back(20, cx));
+        assert!(!handed.recv().unwrap().error);
+        answered(&agents, 5, cx);
+
+        agents.update(cx, |agents, cx| agents.take_over("claude-code", 20, cx));
+        let reason = json!({ "tab": 20, "reason": "To finish the order" });
+        call_as(&agents, 6, "ask_for_tab", reason, cx);
+        said("asking for the tab", cx);
+        assert_eq!(cards(&agents, cx)[0].title, TITLE, "it kept its title");
+    }
+
+    /// A session's title goes with its Library row: it's in the 30-day file alone, which history
+    /// deleted over the session's time takes, title and all, and history deleted at another time
+    /// leaves it.
+    #[gpui::test]
+    fn a_sessions_title_goes_with_the_history_deleted(cx: &mut TestAppContext) {
+        let (agents, _) = at_work(cx);
+        call_as(
+            &agents,
+            3,
+            "title",
+            json!({ "text": "Refund order 1179" }),
+            cx,
+        );
+        answered(&agents, 2, cx);
+        answered(&agents, 3, cx);
+        bye(&agents, cx);
+        let kept = agents.update(cx, |agents, cx| agents.take_ended(cx));
+        let past = kept[0].1.clone();
+        assert_eq!(past.title, "Refund order 1179");
+        let file = crate::agent_history::write(&[past.clone()]);
+        let read = crate::agent_history::read(&file);
+        assert_eq!(read[0].title, "Refund order 1179");
+        let gone = crate::agent_history::outside(read.clone(), past.started, past.ended + 1);
+        assert!(gone.is_empty(), "{gone:?}");
+        let later = crate::agent_history::outside(read, past.ended + 60, past.ended + 120);
+        assert_eq!(later[0].title, "Refund order 1179");
+    }
+
+    /// A title alone opens the session, so its card has its name from its first frame, but takes
+    /// no tab and asks nothing; a session that only named itself leaves no Library row, and one
+    /// that then worked leaves its row with that name.
+    #[gpui::test]
+    fn a_title_alone_takes_nothing_and_leaves_no_row(cx: &mut TestAppContext) {
+        let (agents, browser, _) = connected(cx);
+        hello(&agents, "claude-code", "claude-code", cx);
+        let named = call_as(
+            &agents,
+            1,
+            "title",
+            json!({ "text": "Refund order 1179" }),
+            cx,
+        );
+        assert!(!named.recv().unwrap().error);
+        assert_eq!(titled(&agents, cx), "Refund order 1179");
+        assert!(browser.asked.borrow().is_none(), "it asked");
+        assert!(browser.checked.borrow().is_empty(), "it acted");
+        assert!(browser.pages.borrow().is_empty() && browser.reads.borrow().is_empty());
+        assert!(
+            agents
+                .read_with(cx, |agents, _| agents.grants("claude-code"))
+                .is_empty()
+        );
+        answered(&agents, 1, cx);
+        bye(&agents, cx);
+        let kept = agents.update(cx, |agents, cx| agents.take_ended(cx));
+        assert!(kept.is_empty(), "a title alone left a row: {kept:?}");
+
+        hello(&agents, "claude-code", "claude-code", cx);
+        call_as(
+            &agents,
+            2,
+            "title",
+            json!({ "text": "Refund order 1179" }),
+            cx,
+        );
+        call_as(&agents, 3, "read_page", json!({ "tab": 20 }), cx);
+        answered(&agents, 2, cx);
+        answered(&agents, 3, cx);
+        bye(&agents, cx);
+        let kept = agents.update(cx, |agents, cx| agents.take_ended(cx));
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].1.title, "Refund order 1179");
+    }
+
+    /// title is refused as any call is to a client the user hasn't connected, before it reaches a
+    /// task: no session and no card.
+    #[gpui::test]
+    fn a_title_from_a_client_not_connected_is_refused(cx: &mut TestAppContext) {
+        let (agents, _, _) = connected(cx);
+        let named = call(
+            &agents,
+            "codex",
+            "title",
+            json!({ "text": "Refund order 1179" }),
+            cx,
+        );
+        let named = named.recv().unwrap();
+        assert_eq!(
+            (named.error, named.text.as_str()),
+            (true, "This agent isn't connected.")
+        );
+        assert!(cards(&agents, cx).is_empty());
+    }
+
+    /// A title after a session ended, at its client's last connection closing or IDLE without a
+    /// call, names the next session, at once; the one that ended keeps the title it had, on its
+    /// card and its Library row.
+    #[gpui::test]
+    fn a_title_after_a_session_ended_names_the_next(cx: &mut TestAppContext) {
+        let (agents, _) = at_work(cx);
+        call_as(
+            &agents,
+            3,
+            "title",
+            json!({ "text": "Refund order 1179" }),
+            cx,
+        );
+        answered(&agents, 2, cx);
+        answered(&agents, 3, cx);
+        bye(&agents, cx);
+        hello(&agents, "claude-code", "claude-code", cx);
+        let next = call_as(&agents, 4, "title", json!({ "text": "Pay invoice 88" }), cx);
+        assert!(
+            !next.recv().unwrap().error,
+            "the next session's name waited"
+        );
+        let titles = |cx: &mut TestAppContext| -> Vec<(String, Dot)> {
+            let shown = cards(&agents, cx);
+            (shown.iter())
+                .map(|card| (card.title.to_string(), card.dot))
+                .collect()
+        };
+        let shown = titles(cx);
+        assert!(
+            shown.contains(&("Refund order 1179".into(), Dot::Done)),
+            "{shown:?}"
+        );
+        assert!(
+            shown.contains(&("Pay invoice 88".into(), Dot::Working)),
+            "{shown:?}"
+        );
+        let kept = agents.update(cx, |agents, cx| agents.take_ended(cx));
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].1.title, "Refund order 1179");
+
+        call_as(&agents, 5, "read_page", json!({ "tab": 20 }), cx);
+        answered(&agents, 4, cx);
+        answered(&agents, 5, cx);
+        cx.executor().advance_clock(IDLE + Duration::from_secs(1));
+        let next = call_as(&agents, 6, "title", json!({ "text": "Book a table" }), cx);
+        assert!(!next.recv().unwrap().error);
+        let shown = titles(cx);
+        assert!(
+            shown.contains(&("Pay invoice 88".into(), Dot::Done)),
+            "{shown:?}"
+        );
+        assert!(
+            shown.contains(&("Book a table".into(), Dot::Working)),
+            "{shown:?}"
+        );
+        let kept = agents.update(cx, |agents, cx| agents.take_ended(cx));
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].1.title, "Pay invoice 88");
     }
 }
 
