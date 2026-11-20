@@ -248,7 +248,7 @@ EOF
   defaults delete "$app_id" > /dev/null 2>&1 || true
   rm -rf "$scratch"
   scratch=
-  app=$saved_app browser=$saved_browser procs=$saved_procs app_id=dev.browser.app
+  app=$saved_app browser=$saved_browser procs=$saved_procs app_id=$checked_app_id
 }
 # About's row and Restart to Update, on the Mac, from launch to the relaunch into the update.
 about_updates() {
