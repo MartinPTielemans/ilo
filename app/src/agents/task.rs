@@ -2404,6 +2404,7 @@ impl Agents {
                     (true, true, None) => String::new(),
                 };
             }
+            "check" => did.target = format!("“{}”", page::clip(&string("text"), 40)),
             "list_tabs" | "ask" => {
                 (did.site, did.tab, did.page) = (String::new(), None, String::new())
             }
