@@ -1480,6 +1480,21 @@ impl Agents {
                 self.carry(tab, held::Event::HandOff, life, actions, cx);
             }
             "sort_tabs_by_site" if !is_task(&agent) => self.sort_by_site(&agent, reply, cx),
+            // The agent's word that its task is done (#3652): it ends only its own card, so it
+            // needs no permission, and the activity log says so.
+            "done" if !is_task(&agent) => {
+                let said = self.said_done(&agent, id, cx);
+                match &said {
+                    Ok(text) if text.starts_with("Your task") => self.note(&agent, "done", "", ""),
+                    Err(why) => self.note(&agent, "done", "", why),
+                    Ok(_) => {}
+                }
+                cx.notify();
+                _ = reply.send(match said {
+                    Ok(text) => ToolResult::text(text),
+                    Err(why) => ToolResult::error(why),
+                });
+            }
             "pin_tab" | "unpin_tab" | "remove_tab" if !is_task(&agent) => {
                 let Some(tab) = self.tab_for(&agent, &arguments, &reply, cx) else {
                     return;
@@ -4004,16 +4019,18 @@ const NO_ANSWER: &str = "No answer in 5 minutes.";
 const ASK_WAIT: Duration = Duration::from_secs(5 * 60);
 /// The spec's: how long a handoff's call waits for the user to hand the tab back.
 const HANDOFF_WAIT: Duration = Duration::from_secs(15 * 60);
-/// A check's waits in place of ASK_WAIT and HANDOFF_WAIT, in seconds, as
-/// `--agent-waits=<ask>,<handoff>`, so a run sees each end without waiting minutes. Not read in a
-/// prod build.
+/// A check's waits in place of ASK_WAIT, HANDOFF_WAIT and task::QUIET, in seconds, as
+/// `--agent-waits=<ask>,<handoff>[,<quiet>]`, so a run sees each end without waiting minutes, or a
+/// run whose own work pauses its calls keeps one task. Not read in a prod build.
 const WAITS_SWITCH: &str = "--agent-waits";
 
-/// How long an ask and a handoff wait: the spec's, or a check's from the launch's arguments.
+/// How long an ask and a handoff wait, and a session quiet after its last page: the spec's, or a
+/// check's from the launch's arguments.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Waits {
     ask: Duration,
     handoff: Duration,
+    quiet: Duration,
 }
 
 impl Waits {
@@ -4021,6 +4038,7 @@ impl Waits {
         let spec = Waits {
             ask: ASK_WAIT,
             handoff: HANDOFF_WAIT,
+            quiet: task::QUIET,
         };
         let prefix = format!("{WAITS_SWITCH}=");
         let Some(value) = (!prod)
@@ -4030,12 +4048,13 @@ impl Waits {
             return spec;
         };
         let seconds = |word: &str| word.parse::<u64>().ok().map(Duration::from_secs);
-        match value.split_once(',') {
-            Some((ask, handoff)) => Waits {
+        match value.split(',').collect::<Vec<_>>()[..] {
+            [ask, handoff, ref quiet @ ..] if quiet.len() <= 1 => Waits {
                 ask: seconds(ask).unwrap_or(spec.ask),
                 handoff: seconds(handoff).unwrap_or(spec.handoff),
+                quiet: (quiet.first().and_then(|quiet| seconds(quiet))).unwrap_or(spec.quiet),
             },
-            None => spec,
+            _ => spec,
         }
     }
 

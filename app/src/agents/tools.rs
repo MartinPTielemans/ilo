@@ -36,7 +36,9 @@ pub const INSTRUCTIONS: &str = concat!(
      Give every call its tab once you have more than one: one without acts on the tab you used \
      last. When the same steps repeat across pages, open them all in one turn, then do each step \
      on all of them in one turn, one call per tab with its tab. Calls on different tabs run at \
-     the same time, so that's faster than one tab after another."
+     the same time, so that's faster than one tab after another.\n\n\
+     When your task is finished, call done: the user's card says it's done. Closing your last \
+     page ends your task too, unless you call again within 60 seconds."
 );
 /// What a task's CLI is told, after its own system prompt (Agent task).
 pub const TASK_INSTRUCTIONS: &str = concat!(
@@ -75,8 +77,9 @@ pub fn list(agent: &str) -> Value {
         match super::is_task(agent) {
             true => tools.extend(task_tools()),
             // A task's pages live in the task, in a Space the user doesn't see, so only an agent
-            // from outside pins. It names its session as a task names itself (#3690).
-            false => tools.extend(pin_tools().into_iter().chain([title_tool()])),
+            // from outside pins. It names its session as a task names itself (#3690), and says
+            // when its task is done (#3652).
+            false => tools.extend(pin_tools().into_iter().chain([title_tool(), done_tool()])),
         }
     }
     tools
@@ -129,6 +132,18 @@ fn pin_tools() -> Vec<Value> {
             "annotations": tabs,
         }),
     ]
+}
+
+/// An outside agent's word that its task is done, which ends its card (#3652). A ⌘T task has
+/// finish, with its result.
+fn done_tool() -> Value {
+    json!({
+        "name": "done",
+        "title": "Done",
+        "description": "Say your task is done: the user's card for it says so. Pages of yours still open stay for the user to open. Call it once nothing of yours is under way, such as a hand_off the user hasn't answered. Your next call starts a new task.",
+        "inputSchema": { "type": "object", "properties": {} },
+        "annotations": { "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false },
+    })
 }
 
 /// The tool that names the task, a ⌘T task's and an outside agent's session alike: its card's
@@ -983,6 +998,7 @@ pub fn describe(action: &str) -> &'static str {
         "ask" => "Asked you",
         "answered" => "You answered",
         "finish" => "Finished",
+        "done" => "Marked the task done",
         _ => "Acted",
     }
 }

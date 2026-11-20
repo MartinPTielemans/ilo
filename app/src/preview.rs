@@ -2592,6 +2592,28 @@ fn task_cards(home: u64) -> Vec<TaskCard> {
         command: None,
     };
     let mut cards: Vec<TaskCard> = (FIRST_TASK..).zip(TASKS).map(card).collect();
+    // PREVIEW_SESSION=working, done or open shows an outside agent's card alone: at work after it
+    // closed its last page, done with nothing open, and done with its page to open (#3652).
+    if let Ok(which) = std::env::var("PREVIEW_SESSION") {
+        let (status, dot, open) = match which.as_str() {
+            "working" => ("Step 4 · Closed example.com", Dot::Working, Vec::new()),
+            "open" => {
+                let page = (FIRST_TASK + 100, "example.com".into());
+                ("Done · 10:42", Dot::Done, vec![page])
+            }
+            _ => ("Done · 10:42", Dot::Done, Vec::new()),
+        };
+        return vec![TaskCard {
+            agent: "session-1".into(),
+            name: "Claude Code".into(),
+            replies: false,
+            title: "Claude Code".into(),
+            status: status.into(),
+            dot,
+            open,
+            ..card((FIRST_TASK, TASKS[0]))
+        }];
+    }
     // PREVIEW_TASK_STEP=long gives the working task a step line too long for a narrow window's
     // strip.
     if std::env::var("PREVIEW_TASK_STEP").as_deref() == Ok("long") {

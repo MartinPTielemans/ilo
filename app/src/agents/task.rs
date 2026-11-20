@@ -39,6 +39,10 @@ pub const NO_ANSWER: Duration = Duration::from_secs(180);
 /// How long an outside agent's session waits for its next call, with none under way, before it's
 /// done (#1080, for now): a client can stay connected long after its user has moved on.
 pub const IDLE: Duration = Duration::from_secs(10 * 60);
+/// How long a session waits for its next call once the agent closed its last page, before it's
+/// done (#3652). It's the end for an agent that doesn't call done, so it's patient: a model can
+/// think for most of a minute between closing one page and opening the next.
+pub const QUIET: Duration = Duration::from_secs(60);
 
 /// How much of the agent's name for its task is kept: the tool asks for 24 characters, which a
 /// model overshoots by a few, and each surface cuts at its own width as any title does (#3690).
@@ -329,6 +333,11 @@ pub struct Session {
     pub(super) calls: Vec<u64>,
     /// What ends it once it has waited IDLE for its next call.
     idle: Option<gpui::Task<()>>,
+    /// What ends it once it has waited QUIET for its next call after closing its last page.
+    quiet: Option<gpui::Task<()>>,
+    /// When its last call ended, by the executor's clock: when its work stopped, which its card
+    /// says whatever ends it.
+    last: Option<Instant>,
     /// When its title from its sites last changed, which the next change waits RENAMING after.
     renamed: Option<Instant>,
 }
@@ -631,7 +640,7 @@ impl Agents {
             State::Working => "Working".to_string(),
             State::Asking { .. } => "Waiting for you".to_string(),
             State::Done { .. } => match task.ended {
-                Some(at) => format!("Done {}", super::local_time(seconds(at))),
+                Some(at) => done_at(&super::local_time(seconds(at))),
                 None => "Done".to_string(),
             },
             State::Limit { resets } => limit_words(&task.name, resets),
@@ -812,7 +821,9 @@ impl Agents {
         let open = self.open_tabs(task, cx);
         // The core's auto-archive can take a task's page it never showed (window.cc), and a task
         // lives for one run, so its card says where they went rather than offer them.
+        // A session's pages are its own to close, so it keeps its receipt (#3652).
         let status = match &task.state {
+            _ if task.session.is_some() => status,
             State::Done { tabs, .. } if open.is_empty() && tabs.len() == 1 => {
                 "Its page went to the Archive".into()
             }
@@ -1852,13 +1863,26 @@ impl Agents {
         let Some(task) = self.task_mut(&key) else {
             return;
         };
+        let now = cx.background_executor().now();
         if let Some(session) = &mut task.session {
             session.calls.retain(|each| *each != call);
+            session.last = Some(now);
         }
         let idle = (task.session.as_ref())
             .is_some_and(|session| session.calls.is_empty() && task.state == State::Working);
+        // The agent's own close of a page, done: with none of its pages left open, its task is
+        // done unless it calls again within QUIET. The user's close isn't a call, so starts none.
+        let closed = (task.trace.iter().rev())
+            .find(|step| step.call == call && step.ended.is_none())
+            .is_some_and(|step| {
+                error.is_none() && matches!(step.did.tool.as_str(), "close_tab" | "remove_tab")
+            });
         if idle {
             self.idle_from_now(&key, cx);
+            let left = self.task(&key).map(|task| self.pages(task, cx));
+            if closed && left.is_some_and(|left| left.is_empty()) {
+                self.quiet_from_now(&key, cx);
+            }
         }
         let Some(task) = self.task_mut(&key) else {
             return;
@@ -1921,9 +1945,11 @@ impl Agents {
             let session = task.session.as_mut().expect("a session, as found");
             session.calls.push(call.id);
             session.idle = None;
+            session.quiet = None;
             return Some(task.agent.clone());
         }
-        if call.tool == "list_tabs" {
+        // Listing its tabs isn't work, and done with no task under way has none to end.
+        if matches!(call.tool.as_str(), "list_tabs" | "done") {
             return None;
         }
         self.tasks.next += 1;
@@ -1939,6 +1965,8 @@ impl Agents {
             messages: 0,
             calls: vec![call.id],
             idle: None,
+            quiet: None,
+            last: None,
             renamed: None,
         };
         self.tasks.tasks.push(Task {
@@ -2140,8 +2168,83 @@ impl Agents {
             task.ended = Some(SystemTime::now());
             if let Some(session) = &mut task.session {
                 session.idle = None;
+                session.quiet = None;
             }
         }
+    }
+
+    /// `agent`'s call `call` said its task is done (#3652): its session under way is, unless
+    /// another call of its own is still under way, such as one waiting on the user, which it
+    /// names. A done never leaves a question behind.
+    pub(super) fn said_done(
+        &mut self,
+        agent: &str,
+        call: u64,
+        cx: &mut Context<Self>,
+    ) -> Result<String, String> {
+        let live = (self.tasks.tasks.iter()).find(|task| {
+            task.state == State::Working
+                && (task.session.as_ref())
+                    .is_some_and(|session| session.agent == agent && session.calls.contains(&call))
+        });
+        let Some(task) = live else {
+            return Ok("No task of yours is under way.".into());
+        };
+        let session = task.session.as_ref().expect("a session, as found");
+        let under_way = (session.calls.iter()).filter(|each| **each != call).min();
+        if let Some(&other) = under_way {
+            let step = (task.trace.iter()).find(|step| step.call == other);
+            let tool = step.map_or("call", |step| step.did.tool.as_str());
+            let on = match step.and_then(|step| step.did.tab) {
+                Some(tab) => format!(" on tab {tab}"),
+                None => String::new(),
+            };
+            return Err(format!(
+                "Your {tool}{on} is still under way: call done once it's answered."
+            ));
+        }
+        let key = task.agent.clone();
+        self.session_done(&key, cx);
+        Ok(
+            "Your task is done: its card says so. Pages of yours still open stay in your Space \
+            for the user to open from it. Your next call starts a new task."
+                .into(),
+        )
+    }
+
+    /// From now, the session ends once QUIET passes without a call, if none of its pages is
+    /// open then.
+    fn quiet_from_now(&mut self, key: &str, cx: &mut Context<Self>) {
+        let Some(session) = self.task_mut(key).and_then(|task| task.session.as_mut()) else {
+            return;
+        };
+        let key = key.to_string();
+        session.quiet = Some(cx.spawn(async move |agents, cx| {
+            cx.background_executor()
+                .timer(super::Waits::launch().quiet)
+                .await;
+            _ = agents.update(cx, |agents, cx| agents.quiet(&key, cx));
+        }));
+    }
+
+    fn quiet(&mut self, key: &str, cx: &mut Context<Self>) {
+        let Some(task) = self.task(key) else { return };
+        let open = self.pages(task, cx);
+        let Some(session) = self.task_mut(key).and_then(|task| task.session.as_mut()) else {
+            return;
+        };
+        if let Some(timer) = session.quiet.take() {
+            timer.detach();
+        }
+        if !session.calls.is_empty() || !open.is_empty() {
+            return;
+        }
+        // check.sh reads this line.
+        log!(
+            "browser: session {key} quiet for {} s after its last page",
+            super::Waits::launch().quiet.as_secs()
+        );
+        self.session_done(key, cx);
     }
 
     /// From now, the session ends once IDLE passes without a call.
@@ -2182,6 +2285,14 @@ impl Agents {
         }
         let mut tabs = self.pages_of(session, task.space, cx);
         tabs.truncate(PAGES);
+        // Its work stopped when its last call ended, however long it then waited to end.
+        let since = match (session.calls.is_empty(), session.last) {
+            (true, Some(last)) => cx
+                .background_executor()
+                .now()
+                .saturating_duration_since(last),
+            _ => Duration::ZERO,
+        };
         let Some(task) = self.task_mut(key) else {
             return;
         };
@@ -2190,9 +2301,10 @@ impl Agents {
             summary: None,
             tabs,
         };
-        task.ended = Some(SystemTime::now());
+        task.ended = Some(SystemTime::now() - since);
         if let Some(session) = &mut task.session {
             session.idle = None;
+            session.quiet = None;
         }
         // check.sh reads this line.
         log!("browser: session {key} done");
@@ -3079,9 +3191,14 @@ fn picture(base64: &str) -> Option<Arc<gpui::Image>> {
     )))
 }
 
+/// When a task was done, "Done · 10:42", as its card and its conversation say it.
+fn done_at(time: &str) -> String {
+    format!("Done · {time}")
+}
+
 /// A session's receipt as it ends: what it did that had consequences, the orders and messages the
 /// user allowed it, once done, "Done · 1 order placed · 2 messages sent". Its pages are Open's
-/// button's to count. With none of them, "Done 13:28", when it ended.
+/// button's to count. With none of them, "Done · 13:28", when its work stopped.
 fn receipt(session: &Session, ended: &str) -> String {
     let count = |n: usize, one: &str, many: &str| match n {
         0 => None,
@@ -3096,7 +3213,8 @@ fn receipt(session: &Session, ended: &str) -> String {
     .flatten()
     .collect();
     match did.is_empty() {
-        true => format!("Done {ended}").trim_end().to_string(),
+        true if ended.is_empty() => "Done".to_string(),
+        true => done_at(ended),
         false => format!("Done · {}", did.join(" · ")),
     }
 }
