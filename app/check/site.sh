@@ -518,6 +518,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if self.path == "/wait":
             time.sleep(3600)
             return
+        # A file whose headers come s seconds after it was asked for, sent as a download named name
+        # (#3655, a probe never to land).
+        if path == "/late":
+            fields = urllib.parse.parse_qs(query)
+            time.sleep(float(fields["s"][0]))
+            body = b"late\n"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Disposition", "attachment; filename=" + fields["name"][0])
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if path == "/slow":
             time.sleep(1)
             body = b"slow"

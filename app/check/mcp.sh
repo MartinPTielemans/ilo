@@ -705,6 +705,87 @@ CHIP
   ../tools/window-screenshot.sh "$pid" "$out/agent-watched.png" || fail "no window to capture"
 fi
 
+# Probe for #3655, never to land: which shapes of an agent's download ask the user, what the call
+# answers, whether the file lands and whether the activity log has it as the agent's. Each shape
+# logs a probe-3655 line; one that isn't asked or logged is named in one fail at the run's end, so
+# the rest of the run still runs. A host of its own, as files.localhost gets a Never below.
+probe_red=
+if [ "$driven" = 1 ]; then
+  for stem in probe-redirect probe-s2 probe-s7 probe-w2 probe-w7; do
+    printf 'probe\n' > "$out/site/$stem.docx"
+  done
+  printf '%s' '<!doctype html><title>Probe</title><script>
+const q = new URLSearchParams(location.search);
+onload = () => setTimeout(() => { location.href = q.get("file"); }, Number(q.get("ms")));
+</script>' > "$out/site/probe-script.html"
+  probe_logged='^browser: agent logged mcp-client download probe\.localhost$'
+  probe_asks() {
+    grep -c "^browser: agent mcp-client asks [0-9]*: download $1\.docx from probe\.localhost\$" "$log" || true
+  }
+  # After $1.docx's download was set off, with $2 of its asks and $3 logged lines before: waits up
+  # to $4 s for its question, answers Allow Once with a click if it comes, and logs the shape $5.
+  # $6 is 1 where an open_tab sent before it waits on its answer.
+  probe_result() {
+    asked=0
+    for _ in $(seq $(($4 * 10))); do
+      [ "$(probe_asks "$1")" -gt "$2" ] && { asked=1; break; }
+      sleep 0.1
+    done
+    if [ "$asked" = 1 ]; then
+      q=$(grep "^browser: agent mcp-client asks [0-9]*: download $1\.docx " "$log" | tail -1 |
+        cut -d' ' -f5 | tr -d :)
+      await_log "^browser: agent question $q at " "the probe's question for $1 wasn't drawn"
+      read -r qx qy qw qh <<CARD
+$(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
+CARD
+      send click $((qx + qw * 3 / 4)) $((qy + qh - 26 - 36))
+      await_log "^browser: agent mcp-client answered $q Once\$" "Allow Once didn't answer the probe's $1"
+    fi
+    said="no call"
+    if [ "$6" = 1 ]; then
+      if raw=$(next_answer 40); then
+        said=$(printf '%s\n' "$raw" | answered "the probe's open_tab")
+      else
+        said="no answer in 40 s"
+      fi
+    fi
+    landed=0
+    for _ in $(seq 50); do
+      [ -f "$out/downloads/$1.docx" ] && { landed=1; break; }
+      sleep 0.1
+    done
+    logged=0
+    [ "$(grep -c "$probe_logged" "$log" || true)" -gt "$3" ] && logged=1
+    line="$5: asked $asked, answer \"$said\", file $landed, logged as the agent's $logged"
+    echo "probe-3655: $line"
+    [ "$asked" = 1 ] && [ "$logged" = 1 ] || probe_red="$probe_red; $line"
+  }
+  # Tabs the agent opens while the conversation watches another are hidden.
+  a=$(probe_asks probe-redirect) l=$(grep -c "$probe_logged" "$log" || true)
+  request open_tab "{\"url\":\"probe.localhost:$port/bounce?to=http://probe.localhost:$port/probe-redirect.docx\"}" >&4
+  probe_result probe-redirect "$a" "$l" 15 "open_tab redirected to the file, hidden" 1
+  a=$(probe_asks probe-late) l=$(grep -c "$probe_logged" "$log" || true)
+  request open_tab "{\"url\":\"probe.localhost:$port/late?s=6&name=probe-late.docx\"}" >&4
+  probe_result probe-late "$a" "$l" 20 "open_tab at a file whose headers come after 6 s, hidden" 1
+  for ms in 2000 7000; do
+    stem=probe-s${ms%000}
+    a=$(probe_asks $stem) l=$(grep -c "$probe_logged" "$log" || true)
+    opened=$(call open_tab "{\"url\":\"probe.localhost:$port/probe-script.html?ms=$ms&file=$stem.docx\"}")
+    echo "probe-3655: the script page's open_tab answered: $(printf '%s\n' "$opened" | head -1)"
+    probe_result $stem "$a" "$l" $((ms / 1000 + 10)) "a script's download ${ms%000} s after load, hidden" 0
+  done
+  # The tab the conversation watches.
+  for ms in 2000 7000; do
+    stem=probe-w${ms%000}
+    a=$(probe_asks $stem) l=$(grep -c "$probe_logged" "$log" || true)
+    went=$(call navigate "{\"tab\":$agent_tab,\"url\":\"probe.localhost:$port/probe-script.html?ms=$ms&file=$stem.docx\"}")
+    echo "probe-3655: the watched tab's navigate answered: $(printf '%s\n' "$went" | head -1)"
+    ../tools/window-screenshot.sh "$pid" "$out/probe-3655-watched-$stem.png" || true
+    probe_result $stem "$a" "$l" $((ms / 1000 + 10)) "a script's download ${ms%000} s after load, in the watched tab" 0
+  done
+  call navigate "{\"tab\":$agent_tab,\"url\":\"localhost:$port/agent.html\"}" > /dev/null
+fi
+
 # Split views (#1597): the agent puts two tabs of its own side by side, adds a third, lists them
 # and separates one, each through the core's split calls and checked by its rules, with its entry
 # in the activity log. A tab of the user's is refused, and the split stays as it was. Each page is
@@ -3221,6 +3302,7 @@ send state
 quit
 trap cleanup EXIT
 rm -f "$agents_file" "$out/mcp-in" "$out/mcp-out"
+[ -z "$probe_red" ] || fail "probe-3655: shapes not asked or not logged as the agent's:$probe_red"
 if [ "$driven" = 1 ]; then
   echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), the tabs its page opens kept in its Space, behind$opened_said, without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, pins, unpins and removes its own tab but not the user's, sends requests to its tab's site with the tab's session it never sees, a change asking each time, refused unasked without its sentence, its question on screen as the log draws it ($follows% of its place changed) with the sentence cut at a word over the method's facts, a delete's too, and the whole request beside it until Escape, unanswered, each opening in Settings › Agents to the agent's sentence, where it went and what it sent or didn't, asks a page's beforeunload handler first, with no dialog, closing one that doesn't ask at the first call and keeping one the agent clicked or typed in that asks until it discards it, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, opens its tabs muted, is refused a tab the user took over with a press in its page until they hand it back and Keep answers its ask, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, its download asks first and answers with the file, a refused one leaving none, a bank's site asks first until Always Allow, which Settings › Agents lists$needs_said, and off takes the socket away; an action waits for its element and its page to settle ($settle), a tab's id from before a relaunch is refused as such, and a launch after the window quit in its Space shows the page it opens; a screenshot of a tab just opened out of sight answers ($fresh_picture), and with the UI holding the keyboard with its picture"
 else
