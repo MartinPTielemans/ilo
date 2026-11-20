@@ -12,7 +12,9 @@ pub const INSTRUCTIONS: &str = concat!(
     " is the user's own browser, signed in wherever they are. You work in tabs of your own, \
      which the user can watch on a card in their sidebar with your name; your tabs never take \
      their focus. You can only see and use your own tabs, never the user's, and never \
-     passwords, cookies or autofill.\n\n\
+     passwords, cookies or autofill. When you know what the user asked of you, call title with \
+     a name for it in two to four words, as a tab's title reads, such as “Refund order 1179”, \
+     alongside your first call; call it again only if you move on to another task.\n\n\
      Open a page with open_tab, then click, type, press_key and scroll by ref (like e12), using \
      the page's outline. A new page answers with its outline whole; an action on the same page \
      answers with what changed in it since the last outline you had, and snapshot gives it whole \
@@ -75,11 +77,9 @@ pub fn list(agent: &str) -> Value {
         match super::is_task(agent) {
             true => tools.extend(task_tools()),
             // A task's pages live in the task, in a Space the user doesn't see, so only an agent
-            // from outside pins.
-            false => {
-                tools.extend(pin_tools());
-                tools.push(done_tool());
-            }
+            // from outside pins. It names its session as a task names itself (#3690), and says
+            // when its task is done (#3652).
+            false => tools.extend(pin_tools().into_iter().chain([title_tool(), done_tool()])),
         }
     }
     tools
@@ -146,21 +146,27 @@ fn done_tool() -> Value {
     })
 }
 
+/// The tool that names the task, a ⌘T task's and an outside agent's session alike: its card's
+/// title, in the agent's words, which take no tab and ask nothing (#3690).
+fn title_tool() -> Value {
+    json!({
+        "name": "title",
+        "title": "Name the task",
+        "description": "Name the task in two to four words and at most 24 characters, as a tab's title reads, such as “Lisbon museum hours”, for the user's sidebar.",
+        "inputSchema": {
+            "type": "object",
+            "properties": { "text": { "type": "string", "description": "The task's name, two to four words, at most 24 characters." } },
+            "required": ["text"],
+        },
+        "annotations": { "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false },
+    })
+}
+
 /// A task's own tools: its title, a question for the user, and finishing.
 fn task_tools() -> Vec<Value> {
     let own = json!({ "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false });
     vec![
-        json!({
-            "name": "title",
-            "title": "Name the task",
-            "description": "Name the task in two to four words and at most 24 characters, as a tab's title reads, such as “Lisbon museum hours”, for the user's sidebar.",
-            "inputSchema": {
-                "type": "object",
-                "properties": { "text": { "type": "string", "description": "The task's name, two to four words, at most 24 characters." } },
-                "required": ["text"],
-            },
-            "annotations": own,
-        }),
+        title_tool(),
         json!({
             "name": "ask",
             "title": "Ask the user",
