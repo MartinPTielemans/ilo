@@ -2405,17 +2405,26 @@ mod tests {
                 body: body.clone().into_bytes(),
                 ..Response::default()
             };
-            let started = std::time::Instant::now();
-            hide_secrets(&body, false);
-            hide_secrets(&serde_json::to_string(&body).unwrap(), true);
-            let (mut left, mut hidden) = (ALL_SHOWN, 0);
-            answer(sent, &page, &mut left, &mut hidden);
-            let took = started.elapsed();
-            assert!(
-                took < std::time::Duration::from_millis(500),
-                "{took:?} for a body of {:?}",
-                &body[..20]
-            );
+            let json = serde_json::to_string(&body).unwrap();
+            // Each is one answer's work: as text, as JSON, and as a page through its outline.
+            let passes: [(&str, &dyn Fn()); 3] = [
+                ("text", &|| _ = hide_secrets(&body, false)),
+                ("JSON", &|| _ = hide_secrets(&json, true)),
+                ("a page", &|| {
+                    let (mut left, mut hidden) = (ALL_SHOWN, 0);
+                    answer(sent, &page, &mut left, &mut hidden);
+                }),
+            ];
+            for (read_as, pass) in passes {
+                let started = std::time::Instant::now();
+                pass();
+                let took = started.elapsed();
+                assert!(
+                    took < std::time::Duration::from_millis(500),
+                    "{took:?} read as {read_as} for a body of {:?}",
+                    &body[..20]
+                );
+            }
         }
     }
 
