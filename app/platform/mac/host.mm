@@ -4043,6 +4043,10 @@ void host_show_dialog(void* ui_view, double x, double y, double width, double he
     [g_dialog_view.layer displayIfNeeded];
     AddOver(browser->window, g_dialog);
     [g_dialog makeKeyAndOrderFront:nil];
+    // Never to land: the toast's plate parted from its surface, over the dialog.
+    if (g_toast_plate_window.parentWindow == browser->window) {
+      [g_toast_plate_window orderWindow:NSWindowAbove relativeTo:g_dialog.windowNumber];
+    }
     fprintf(stderr, "browser: dialog window shown\n");
   });
 }
