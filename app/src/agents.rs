@@ -2597,13 +2597,12 @@ impl Agents {
         };
         act.did = Did::of(why);
         // A payment asks every time, as a request's changes do (#1439): what the user allowed for
-        // good covers opening a site and sending on it, as they gave it, and never spending.
-        let granted = match why {
-            page::ORDER => None,
-            _ => (self.grants.get(&self.answers_of(&act.agent)))
-                .and_then(|sites| sites.get(&site))
-                .copied(),
-        };
+        // good covers opening a site and sending on it, as they gave it, and never spending. A
+        // Never for the site still refuses it.
+        let granted = (self.grants.get(&self.answers_of(&act.agent)))
+            .and_then(|sites| sites.get(&site))
+            .copied()
+            .filter(|may| !may || why != page::ORDER);
         match granted {
             Some(true) => self.run(act, cx),
             Some(false) => self.refuse(act, &site, SAID_NEVER, cx),

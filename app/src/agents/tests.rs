@@ -2553,6 +2553,39 @@ fn a_payments_answer_keeps_nothing(cx: &mut TestAppContext) {
     }
 }
 
+/// A site the user answered Never for refuses a payment there unasked, as it refuses the rest.
+#[gpui::test]
+fn a_site_answered_never_refuses_a_payment_unasked(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let answer = click_on(&agents, &browser, post_tree(), "Send", cx);
+    let question = browser.asked.borrow().clone().expect("the Send didn't ask");
+    agents.update(cx, |agents, cx| {
+        agents.answer(question.id, Answer::Never, cx)
+    });
+    assert!(answer.recv().unwrap().error);
+
+    let answer = click_on(&agents, &browser, shop_tree(), "Place order", cx);
+    assert_eq!(
+        *browser.asked.borrow(),
+        None,
+        "a payment on a site answered Never asked"
+    );
+    let refused = answer
+        .try_recv()
+        .expect("a payment on a site answered Never wasn't refused");
+    assert!(refused.error);
+    assert_eq!(
+        refused.text,
+        "The user said never on example.com: you can't click “Place order” on example.com. Don't \
+         try again."
+    );
+    assert_eq!(
+        browser.pages.borrow().last().unwrap().2,
+        PageAction::Snapshot,
+        "it clicked"
+    );
+}
+
 /// A site allowed for good goes on letting the agent send messages there unasked.
 #[gpui::test]
 fn a_site_allowed_for_good_still_sends_unasked(cx: &mut TestAppContext) {

@@ -3117,6 +3117,15 @@ CARD
   said_asks "$buy_ref" \
     '^browser: agent mcp-client asks [0-9]*: click “Buy now” on market\.localhost$' \
     agent-buys-after-always Bought spends
+  # The user's Never for files.localhost, on the download above, still refuses a payment there
+  # unasked.
+  saying butik.html files Betal button
+  before=$(grep -c '^browser: agent mcp-client asks' "$log" || true)
+  said=$(call click "{\"tab\":$said_tab,\"ref\":\"$said_ref\"}")
+  [ "$said" = "error: The user said never on files.localhost: you can't click “Betal” on files.localhost. Don't try again." ] ||
+    fail "a payment on a site answered Never answered: $said"
+  [ "$(grep -c '^browser: agent mcp-client asks' "$log")" = "$before" ] ||
+    fail "a payment on a site answered Never asked"
 
   # A bank's site asks first, in a card in the window, and Allow Once opens it.
   bank="{\"url\":\"bank.localhost:$port/fields.html\"}"
