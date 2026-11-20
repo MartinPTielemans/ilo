@@ -183,8 +183,9 @@ pub trait Host {
     /// Hides it, and the browser window gets the keyboard back.
     fn hide(&self);
     /// The dialog was answered and leaves, so no key typed from now may be lost to it: Linux gives
-    /// the browser window the keyboard back at once (overlays::dialog_leaving), and the Mac and
-    /// Windows hold the keys until it has hidden (host_hold_keys).
+    /// the browser window the keyboard back at once (overlays::dialog_leaving), the Mac its clicks
+    /// and keyboard (host_dialog_leaving), and the Mac and Windows hold the keys until it has
+    /// hidden (host_hold_keys).
     fn hold_keys(&self) {}
     /// Gives the keys held to the window with the keyboard, the browser window once it's hidden
     /// (host_release_held_keys).
