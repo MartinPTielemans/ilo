@@ -2396,8 +2396,29 @@ impl Agents {
                     if submit { " and pressed Enter" } else { "" }
                 );
                 act.what = format!("send “{}” on {host}", page::clip(&text, 60));
+                // Its Enter asks as a click on what it submits would, and else as a message sent.
+                let outline = self.outlines.get(&tab);
+                let pressing = (submit
+                    .then(|| page::pressing_risk(&host, outline, "Enter", Some(element))))
+                .flatten();
+                risk = match pressing {
+                    Some(pressing) => {
+                        act.what = format!(
+                            "type “{}” into {} and press Enter, {} {}, on {host}",
+                            page::clip(&text, 60),
+                            label(element),
+                            if pressing.surely {
+                                "to click"
+                            } else {
+                                "which can click"
+                            },
+                            label(&pressing.control),
+                        );
+                        Some(pressing.why)
+                    }
+                    None => submit.then(|| page::risk(&host, "send")).flatten(),
+                };
                 act.text = text;
-                risk = submit.then(|| page::risk(&host, "send")).flatten();
             }
             "select" => {
                 let option = string("option").unwrap_or_default().trim().to_string();
@@ -2435,9 +2456,26 @@ impl Agents {
                 act.page = PageAction::Key;
                 act.note = format!("Pressed {key}.");
                 act.what = format!("press Enter to send on {host}");
-                risk = (key == "Enter")
-                    .then(|| page::risk(&host, "send"))
-                    .flatten();
+                // What the key activates asks as a click on it would (GHSA-hqw3-jp9p-3rhj), and
+                // Enter else as a message sent.
+                let outline = self.outlines.get(&tab);
+                risk = match page::pressing_risk(&host, outline, &key, None) {
+                    Some(pressing) => {
+                        act.what = match pressing.surely {
+                            true => {
+                                format!("press {key} on {} on {host}", label(&pressing.control))
+                            }
+                            false => format!(
+                                "press {key}, which can click {}, on {host}",
+                                label(&pressing.control)
+                            ),
+                        };
+                        Some(pressing.why)
+                    }
+                    None => (key == "Enter")
+                        .then(|| page::risk(&host, "send"))
+                        .flatten(),
+                };
                 act.text = key;
             }
             _ => {
