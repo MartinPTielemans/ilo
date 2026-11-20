@@ -1388,10 +1388,15 @@ fn a_long_page_is_cut() {
         url: "https://long.example/".into(),
         ..TabInfo::default()
     };
-    let text = "é".repeat(tools::MAX_TEXT);
-    let answer = tools::page_text(&tab, &text);
-    assert!(answer.ends_with("[The page goes on: this is its first part.]"));
-    assert!(answer.len() < tools::MAX_TEXT + 200);
+    let text = format!("{}ab", "é".repeat(tools::MAX_TEXT));
+    let answer = tools::page_text(&tab, &text, 0);
+    assert!(answer.ends_with("[The page goes on: read_page with from 10000 reads the next part.]"));
+    assert!(answer.chars().count() < tools::MAX_TEXT + 200);
+    // The next part starts where the last ended, in characters, not bytes.
+    let next = tools::page_text(&tab, &text, tools::MAX_TEXT);
+    assert!(next.ends_with("\n\nab"), "{next}");
+    let past = tools::page_text(&tab, &text, 20_000);
+    assert!(past.ends_with("[The page's text is 10002 characters, so none starts at 20000.]"));
 }
 
 /// An agent the user hasn't connected, or one they disconnected, gets nothing.
@@ -1519,6 +1524,76 @@ fn shop_tree() -> String {
           "backendDOMNodeId": 51 },
     ]})
     .to_string()
+}
+
+/// navigate answers with the page's text when the agent asks for it, to read the page, once the
+/// core has read it, and the page's refs stay for what the agent does next (#3657). open_tab takes
+/// the same answer.
+#[gpui::test]
+fn navigate_answers_with_the_text_it_asks_for(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let wrong = call(
+        &agents,
+        "claude-code",
+        "navigate",
+        json!({ "tab": 20, "url": "iana.org", "answer": "page" }),
+        cx,
+    );
+    assert_eq!(
+        wrong.recv().unwrap(),
+        ToolResult::error("answer is outline, text or none.")
+    );
+    let answer = call(
+        &agents,
+        "claude-code",
+        "navigate",
+        json!({ "tab": 20, "url": "iana.org", "answer": "text" }),
+        cx,
+    );
+    let request = browser.pages.borrow().last().unwrap().1;
+    agents.update(cx, |agents, cx| {
+        agents.page_done(request, shop_tree(), false, cx)
+    });
+    assert!(
+        answer.try_recv().is_err(),
+        "it answered before the text came"
+    );
+    let (tab, read) = *browser.reads.borrow().last().unwrap();
+    assert_eq!(tab, 20);
+    agents.update(cx, |agents, cx| {
+        agents.text_read(read, Some("Basket\nTwo items".into()), cx)
+    });
+    let text = answer.recv().unwrap();
+    assert!(!text.error, "{}", text.text);
+    assert!(
+        text.text.ends_with("\n\nBasket\nTwo items"),
+        "{}",
+        text.text
+    );
+    assert!(!text.text.contains("[e"), "{}", text.text);
+    let pages = browser.pages.borrow().len();
+    let click = call(
+        &agents,
+        "claude-code",
+        "click",
+        json!({ "tab": 20, "ref": "e1" }),
+        cx,
+    );
+    assert_eq!(browser.pages.borrow().len(), pages + 1);
+    assert!(!page_done(&agents, &browser, click, shop_tree(), cx).error);
+}
+
+/// Every answer is 12,000 characters at most, whatever the tool, and says where it's cut.
+#[test]
+fn an_answer_is_cut_at_its_limit() {
+    let long = ToolResult::text("é".repeat(30_000));
+    assert_eq!(long.text.chars().count(), tools::MAX_ANSWER);
+    assert!(
+        long.text
+            .ends_with("[The answer is cut here, at its limit of 12,000 characters.]")
+    );
+    let short = "é".repeat(tools::MAX_ANSWER);
+    assert_eq!(ToolResult::text(short.clone()).text, short);
 }
 
 /// The core's answer to the agents' last request of it, and the call's answer.
@@ -2591,14 +2666,16 @@ fn a_requests_question_goes_unanswered_and_with_its_client(cx: &mut TestAppConte
     );
 }
 
-/// A check's `--agent-waits` shortens both waits so a run sees each end; a prod build, or a value
-/// that isn't two whole seconds, keeps the spec's.
+/// A check's `--agent-waits` shortens both waits so a run sees each end, and the quiet end's when
+/// it gives a third; a prod build, or a value that isn't two or three whole seconds, keeps the
+/// spec's.
 #[test]
 fn a_checks_waits_stand_in_for_the_specs_outside_prod() {
     let given = |args: &[&str]| args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
     let spec = Waits {
         ask: ASK_WAIT,
         handoff: HANDOFF_WAIT,
+        quiet: task::QUIET,
     };
     assert_eq!(Waits::new(&given(&[]), false), spec);
     assert_eq!(
@@ -2606,8 +2683,14 @@ fn a_checks_waits_stand_in_for_the_specs_outside_prod() {
         Waits {
             ask: Duration::from_secs(2),
             handoff: Duration::from_secs(3),
+            quiet: task::QUIET,
         }
     );
+    assert_eq!(
+        Waits::new(&given(&["--agent-waits=2,3,4"]), false).quiet,
+        Duration::from_secs(4)
+    );
+    assert_eq!(Waits::new(&given(&["--agent-waits=2,3,4,5"]), false), spec);
     assert_eq!(
         Waits::new(&given(&["--agent-waits=2,3"]), true),
         spec,
@@ -4431,6 +4514,7 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
             "remove_tab",
             "sort_tabs_by_site",
             "title",
+            "done",
         ]
     );
 
@@ -4477,6 +4561,7 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
         ("list_split", tab(json!({}))),
         ("separate_tab", tab(json!({}))),
         ("close_tab", json!({ "tab": 30 })),
+        ("done", json!({})),
     ];
     for (tool, arguments) in calls {
         let pages = browser.pages.borrow().len();
@@ -7260,7 +7345,7 @@ fn the_scripts_switch_comes_back_with_the_settings(cx: &mut TestAppContext) {
 mod sessions {
     use super::*;
     use crate::agents::task::{
-        Card, Dot, IDLE, Line, NAMED_RECENTLY, RENAMING, TITLE_KEPT, TaskAction,
+        Card, Dot, IDLE, Line, NAMED_RECENTLY, QUIET, RENAMING, TITLE_KEPT, TaskAction,
     };
 
     /// Calls `tool` as Claude Code, as call `id`, which `answered` ends.
@@ -7745,9 +7830,9 @@ mod sessions {
         answered(&agents, 5, cx);
         bye(&agents, cx);
         let card = cards(&agents, cx).remove(0);
-        assert!(card.status.starts_with("Done "), "{}", card.status);
+        assert!(card.status.starts_with("Done · "), "{}", card.status);
         assert!(
-            !card.status.contains('·'),
+            !card.status.contains("placed") && !card.status.contains("sent"),
             "a session that only looked has a receipt: {}",
             card.status
         );
@@ -7771,6 +7856,172 @@ mod sessions {
         let shown = cards(&agents, cx);
         assert_eq!(shown.len(), 1);
         assert_eq!(shown[0].dot, Dot::Done);
+        // Its time is when its last call ended, not IDLE later (#3652).
+        let kept = agents.update(cx, |agents, cx| agents.take_ended(cx));
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let ended = kept[0].1.ended;
+        assert!(
+            now - ended >= IDLE.as_secs(),
+            "it ended {} s ago, at its end, not at its last call",
+            now - ended
+        );
+    }
+
+    /// Claude Code at work in tab 20, then closing it with call 3: its last page (#3652).
+    fn closes_its_last_page(cx: &mut TestAppContext) -> (Entity<Agents>, Rc<Made>) {
+        let (agents, browser) = at_work(cx);
+        answered(&agents, 2, cx);
+        let closed = call_as(&agents, 3, "close_tab", json!({ "tab": 20 }), cx);
+        assert_eq!(closed.recv().unwrap().text, "Closed tab 20.");
+        answered(&agents, 3, cx);
+        (agents, browser)
+    }
+
+    /// An agent that closes its last page and doesn't call again within QUIET is done (#3652):
+    /// Claude Code keeps its connection open after its work, so without this its card said
+    /// Working for IDLE over nothing. It has nothing to open, and says when it was done.
+    #[gpui::test]
+    fn an_agent_that_closed_its_last_page_is_done_once_quiet(cx: &mut TestAppContext) {
+        let (agents, _) = closes_its_last_page(cx);
+        cx.executor().advance_clock(QUIET - Duration::from_secs(1));
+        assert_eq!(cards(&agents, cx)[0].dot, Dot::Working, "quiet isn't over");
+        cx.executor().advance_clock(Duration::from_secs(1));
+        let card = cards(&agents, cx).remove(0);
+        assert_eq!(card.dot, Dot::Done, "{}", card.status);
+        assert!(card.status.starts_with("Done · "), "{}", card.status);
+        assert!(card.open.is_empty());
+    }
+
+    /// A call within QUIET of its last close is the same task, on the same card, and one that
+    /// closes nothing starts no quiet end: IDLE ends it.
+    #[gpui::test]
+    fn a_call_within_quiet_keeps_the_task_on_its_card(cx: &mut TestAppContext) {
+        let (agents, _) = closes_its_last_page(cx);
+        cx.executor().advance_clock(QUIET - Duration::from_secs(1));
+        call_as(&agents, 4, "list_tabs", json!({}), cx);
+        answered(&agents, 4, cx);
+        cx.executor().advance_clock(QUIET);
+        let shown = cards(&agents, cx);
+        assert_eq!(shown.len(), 1, "one task, one card");
+        assert_eq!(shown[0].dot, Dot::Working);
+        cx.executor().advance_clock(IDLE);
+        assert_eq!(cards(&agents, cx)[0].dot, Dot::Done);
+    }
+
+    /// The user closing the agent's last page doesn't end its task: it may well open it again,
+    /// which would split one task over two cards. IDLE ends it.
+    #[gpui::test]
+    fn the_users_close_of_its_last_page_leaves_it_at_work(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        answered(&agents, 2, cx);
+        agents.update(cx, |agents, cx| {
+            browser.close_user_tab(20, cx);
+            agents.tab_closed(20, cx);
+        });
+        cx.executor().advance_clock(QUIET * 2);
+        assert_eq!(cards(&agents, cx)[0].dot, Dot::Working);
+        cx.executor().advance_clock(IDLE);
+        assert_eq!(cards(&agents, cx)[0].dot, Dot::Done);
+    }
+
+    /// `done` is the agent's word that its task is done (#3652): its card is, with the pages it
+    /// left open to open, and it's in its activity log. Its next call is a new task on a card of
+    /// its own, which keeps nothing of the last but its tabs: an order the user allowed once
+    /// asks again.
+    #[gpui::test]
+    fn done_ends_the_task_with_its_pages_to_open(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        let looked = call_as(&agents, 3, "snapshot", json!({ "tab": 20 }), cx);
+        answered(&agents, 2, cx);
+        page_done(&agents, &browser, looked, shop_tree(), cx);
+        answered(&agents, 3, cx);
+        let order = |id: u64, cx: &mut TestAppContext| {
+            browser.asked.replace(None);
+            let reply = call_as(&agents, id, "click", json!({ "tab": 20, "ref": "e3" }), cx);
+            let question = browser.asked.borrow().clone();
+            let question = question.expect("the order didn't ask");
+            agents.update(cx, |agents, cx| {
+                agents.answer(question.id, Answer::Once, cx)
+            });
+            assert!(!page_done(&agents, &browser, reply, shop_tree(), cx).error);
+            answered(&agents, id, cx);
+        };
+        order(4, cx);
+        let said = call_as(&agents, 5, "done", json!({}), cx).recv().unwrap();
+        assert!(!said.error, "{}", said.text);
+        assert!(said.text.starts_with("Your task is done"), "{}", said.text);
+        answered(&agents, 5, cx);
+        let card = cards(&agents, cx).remove(0);
+        assert_eq!(
+            (card.dot, card.status.as_ref()),
+            (Dot::Done, "Done · 1 order placed")
+        );
+        assert_eq!(card.open, vec![(20, "example.com".into())]);
+        assert!(
+            (log(&agents, "claude-code", cx).iter()).any(|entry| entry.0 == "done"),
+            "its log has no done"
+        );
+        // Nothing under way: it says so, and it's no error.
+        let again = call_as(&agents, 6, "done", json!({}), cx).recv().unwrap();
+        assert_eq!(again, ToolResult::text("No task of yours is under way."));
+        assert_eq!(cards(&agents, cx).len(), 1, "done started a card");
+
+        let looked = call_as(&agents, 7, "snapshot", json!({ "tab": 20 }), cx);
+        page_done(&agents, &browser, looked, shop_tree(), cx);
+        answered(&agents, 7, cx);
+        let shown = cards(&agents, cx);
+        assert_eq!(shown.len(), 2, "its next call is a new task");
+        assert_eq!(shown[0].dot, Dot::Working);
+        order(8, cx);
+    }
+
+    /// `done` while a call of its own waits on the user, a handoff here, is refused, so it never
+    /// leaves a question behind: its card still asks.
+    #[gpui::test]
+    fn done_waits_for_a_handoff_to_be_answered(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        answered(&agents, 2, cx);
+        let reason = json!({ "tab": 20, "reason": "Sign in to example.com" });
+        let _handed = call_as(&agents, 3, "hand_off", reason, cx);
+        assert!(browser.asked.borrow().is_some(), "the handoff didn't ask");
+        let refused = call_as(&agents, 4, "done", json!({}), cx).recv().unwrap();
+        assert_eq!(
+            refused,
+            ToolResult::error(
+                "Your hand_off on tab 20 is still under way: call done once it's answered."
+            )
+        );
+        answered(&agents, 4, cx);
+        let card = cards(&agents, cx).remove(0);
+        assert_eq!(card.dot, Dot::Waiting);
+        assert!(card.question.is_some());
+    }
+
+    /// A question still with the user is never dismissed by an end: with an open that asks first
+    /// waiting, its last page closing starts no quiet end, and `done` is refused.
+    #[gpui::test]
+    fn a_question_open_holds_off_the_quiet_end(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        answered(&agents, 2, cx);
+        let _opening = call_as(&agents, 3, "open_tab", json!({ "url": "chase.com" }), cx);
+        assert!(
+            browser.asked.borrow().is_some(),
+            "the bank's open didn't ask"
+        );
+        call_as(&agents, 4, "close_tab", json!({ "tab": 20 }), cx);
+        answered(&agents, 4, cx);
+        cx.executor().advance_clock(QUIET * 2);
+        let card = cards(&agents, cx).remove(0);
+        assert_eq!(card.dot, Dot::Waiting, "{}", card.status);
+        assert!(card.question.is_some());
+        let refused = call_as(&agents, 5, "done", json!({}), cx).recv().unwrap();
+        assert_eq!(
+            refused,
+            ToolResult::error("Your open_tab is still under way: call done once it's answered.")
+        );
     }
 
     /// The card's Stop stops the client on every connection: its calls under way are answered that

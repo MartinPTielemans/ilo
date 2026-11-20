@@ -36,7 +36,9 @@ pub const INSTRUCTIONS: &str = concat!(
      Give every call its tab once you have more than one: one without acts on the tab you used \
      last. When the same steps repeat across pages, open them all in one turn, then do each step \
      on all of them in one turn, one call per tab with its tab. Calls on different tabs run at \
-     the same time, so that's faster than one tab after another."
+     the same time, so that's faster than one tab after another.\n\n\
+     When your task is finished, call done: the user's card says it's done. Closing your last \
+     page ends your task too, unless you call again within 60 seconds."
 );
 /// What a task's CLI is told, after its own system prompt (Agent task).
 pub const TASK_INSTRUCTIONS: &str = concat!(
@@ -65,8 +67,29 @@ pub const TASK_INSTRUCTIONS: &str = concat!(
      act there themselves: pay, sign, submit, or take over a session. Otherwise give none. Keep \
      what you say to the user short and plain."
 );
-/// A page's text an agent gets at most, as a long page would fill its context.
-pub const MAX_TEXT: usize = 40_000;
+/// The characters an answer holds at most, whatever the tool: an agent uses little of a long one,
+/// which fills its context (#3657). Each tool's own cut comes first, where it can say how to get
+/// the rest.
+pub const MAX_ANSWER: usize = 12_000;
+/// The characters of a page's text a read_page answer gives at most, leaving room under
+/// `MAX_ANSWER` for which page it is and what an action did.
+pub const MAX_TEXT: usize = 10_000;
+
+/// `text`, cut at `MAX_ANSWER` characters, saying so.
+pub fn capped(text: String) -> String {
+    const CUT: &str = "\n\n[The answer is cut here, at its limit of 12,000 characters.]";
+    match text.char_indices().nth(MAX_ANSWER) {
+        None => text,
+        Some(_) => {
+            let keep = MAX_ANSWER - CUT.chars().count();
+            let end = text
+                .char_indices()
+                .nth(keep)
+                .map_or(text.len(), |(at, _)| at);
+            format!("{}{CUT}", &text[..end])
+        }
+    }
+}
 
 /// The tools `agent` may call, for tools/list: a task's own too.
 pub fn list(agent: &str) -> Value {
@@ -75,8 +98,9 @@ pub fn list(agent: &str) -> Value {
         match super::is_task(agent) {
             true => tools.extend(task_tools()),
             // A task's pages live in the task, in a Space the user doesn't see, so only an agent
-            // from outside pins. It names its session as a task names itself (#3690).
-            false => tools.extend(pin_tools().into_iter().chain([title_tool()])),
+            // from outside pins. It names its session as a task names itself (#3690), and says
+            // when its task is done (#3652).
+            false => tools.extend(pin_tools().into_iter().chain([title_tool(), done_tool()])),
         }
     }
     tools
@@ -129,6 +153,18 @@ fn pin_tools() -> Vec<Value> {
             "annotations": tabs,
         }),
     ]
+}
+
+/// An outside agent's word that its task is done, which ends its card (#3652). A ⌘T task has
+/// finish, with its result.
+fn done_tool() -> Value {
+    json!({
+        "name": "done",
+        "title": "Done",
+        "description": "Say your task is done: the user's card for it says so. Pages of yours still open stay for the user to open. Call it once nothing of yours is under way, such as a hand_off the user hasn't answered. Your next call starts a new task.",
+        "inputSchema": { "type": "object", "properties": {} },
+        "annotations": { "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false },
+    })
 }
 
 /// The tool that names the task, a ⌘T task's and an outside agent's session alike: its card's
@@ -223,7 +259,12 @@ fn shared() -> Value {
     let outline = json!({
         "type": "string",
         "enum": ["changes", "full", "none"],
-        "description": "What of the page's outline the answer gives: what changed since the last outline you had of the tab (changes, the default, which is the whole outline on a new page), all of it (full), or only what the action did (none)."
+        "description": "What of the page's outline the answer gives: what changed since the last outline you had of the tab (changes, the default, which is the whole outline on a new page), all of it (full), or only what the action did (none). changes is enough to check what an action did: take a snapshot only when you need what it doesn't show."
+    });
+    let answer = json!({
+        "type": "string",
+        "enum": ["outline", "text", "none"],
+        "description": "What the answer gives of the page: its outline (the default), to act on it; its text, as read_page reads it, to read an article or a document; or only which page it is (none)."
     });
     let acts = json!({ "readOnlyHint": false, "destructiveHint": false, "openWorldHint": true });
     let tabs = json!({ "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false });
@@ -238,10 +279,10 @@ fn shared() -> Value {
         {
             "name": "open_tab",
             "title": "Open tab",
-            "description": "Open a URL, or search for words, in a new tab of your own. Answers with the page's outline.",
+            "description": "Open a URL, or search for words, in a new tab of your own. Answers with the page's outline, or with its text when answer is text: pick text to read a page. Every answer is 12,000 characters at most.",
             "inputSchema": {
                 "type": "object",
-                "properties": { "url": { "type": "string", "description": "A URL, or words to search for." } },
+                "properties": { "url": { "type": "string", "description": "A URL, or words to search for." }, "answer": answer },
                 "required": ["url"],
             },
             "annotations": acts,
@@ -313,11 +354,12 @@ fn shared() -> Value {
         {
             "name": "navigate",
             "title": "Navigate",
-            "description": "Go to a URL, or search for words, in a tab. \"back\" and \"forward\" move through its history. Answers with the page's outline.",
+            "description": "Go to a URL, or search for words, in a tab. \"back\" and \"forward\" move through its history. Answers with the page's outline, or with its text when answer is text: pick text to read a page.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "url": { "type": "string", "description": "A URL, words to search for, \"back\" or \"forward\"." },
+                    "answer": answer,
                     "tab": tab,
                 },
                 "required": ["url"],
@@ -327,7 +369,7 @@ fn shared() -> Value {
         {
             "name": "snapshot",
             "title": "Snapshot",
-            "description": "The page's outline, whole, from its accessibility tree. Elements you can act on have refs like [e12]. With a ref, only that element's part, such as a form without the page's menus.",
+            "description": "The page's outline, whole, from its accessibility tree, 10,000 characters at most, with a table's rows and a list's items a line each. Elements you can act on have refs like [e12]. With a ref, only that element's part, such as a form without the page's menus, or a list where a long outline was cut.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -340,8 +382,14 @@ fn shared() -> Value {
         {
             "name": "read_page",
             "title": "Read page",
-            "description": "Read the text of a page in one of your tabs, as a screen reader would.",
-            "inputSchema": { "type": "object", "properties": { "tab": tab } },
+            "description": "Read the text of a page in one of your tabs, as a screen reader would, 10,000 characters at a time.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "from": { "type": "integer", "minimum": 0, "description": "The character to start at, for the part after one an answer ended, as it says. 0 by default." },
+                    "tab": tab,
+                },
+            },
             "annotations": { "readOnlyHint": true, "openWorldHint": true },
         },
         {
@@ -427,7 +475,7 @@ fn shared() -> Value {
         {
             "name": "request",
             "title": "Send HTTP requests",
-            "description": "Send HTTP requests from a tab's page to its own site, as the page's own script could, signed in as the page is: for a site's API, such as the JSON its page reads, when that's quicker than its pages. GET and HEAD go at once, unless a method-override header names another method. Anything else may change something, so it asks the user first, every time: give each such request a what, one plain sentence in the user's terms saying what it will do, such as \"Close item 4127 as a duplicate of 4130.\" The user sees your sentence as yours, beside what the browser knows from the method and its override headers (sends, changes or deletes) and the site, so say plainly what it does. The browser reads no meaning into a body: a POST whose body says it's a delete, such as _method=DELETE, shows as sending data, and still asks. All of a call's changes are in one question, and none is sent if they say no. The browser adds the page's cookies, which you never see; you can't set Cookie, Authorization or a header the browser sets. Answers with each request's status, type and text body, never its headers, with values that look like sign-in tokens or secrets hidden. They go one after another; one that gets no answer stops the rest.",
+            "description": "Send HTTP requests from a tab's page to its own site, as the page's own script could, signed in as the page is: for a site's API, such as the JSON its page reads, when that's quicker than its pages. GET and HEAD go at once, unless a method-override header names another method. Anything else may change something, so it asks the user first, every time: give each such request a what, one plain sentence in the user's terms saying what it will do, such as \"Close item 4127 as a duplicate of 4130.\" The user sees your sentence as yours, beside what the browser knows from the method and its override headers (sends, changes or deletes) and the site, so say plainly what it does. The browser reads no meaning into a body: a POST whose body says it's a delete, such as _method=DELETE, shows as sending data, and still asks. All of a call's changes are in one question, and none is sent if they say no. The browser adds the page's cookies, which you never see; you can't set Cookie, Authorization or a header the browser sets. Answers with each request's status, type and text body, never its headers, with values that look like sign-in tokens or secrets hidden; a page comes as its outline, not its source, so send a form from the page itself. They go one after another; one that gets no answer stops the rest.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -574,23 +622,30 @@ pub fn split_list(tab: u64, split: &[u64]) -> String {
     }
 }
 
-/// read_page's answer: which page it is, then its text, cut at `MAX_TEXT` bytes.
-pub fn page_text(tab: &TabInfo, text: &str) -> String {
-    let mut end = text.len().min(MAX_TEXT);
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    let cut = match end < text.len() {
-        true => "\n\n[The page goes on: this is its first part.]",
-        false => "",
+/// read_page's answer: which page it is, then its text from the character `from`, cut at
+/// `MAX_TEXT` characters, saying where the next part starts.
+pub fn page_text(tab: &TabInfo, text: &str, from: usize) -> String {
+    let at = |chars: usize| text.char_indices().nth(chars).map(|(at, _)| at);
+    let head = format!("Tab {}: {}\nURL: {}", tab.id, tab.title, tab.url);
+    let Some(start) = at(from).or((from == 0).then_some(text.len())) else {
+        let all = text.chars().count();
+        return format!(
+            "{head}\n\n[The page's text is {all} characters, so none starts at {from}.]"
+        );
     };
-    format!(
-        "Tab {}: {}\nURL: {}\n\n{}{cut}",
-        tab.id,
-        tab.title,
-        tab.url,
-        &text[..end]
-    )
+    let rest = &text[start..];
+    let end = rest
+        .char_indices()
+        .nth(MAX_TEXT)
+        .map_or(rest.len(), |(at, _)| at);
+    let cut = match end < rest.len() {
+        true => format!(
+            "\n\n[The page goes on: read_page with from {} reads the next part.]",
+            from + MAX_TEXT
+        ),
+        false => String::new(),
+    };
+    format!("{head}\n\n{}{cut}", &rest[..end])
 }
 
 /// The `tab` argument, as a number or a string of one.
@@ -983,6 +1038,7 @@ pub fn describe(action: &str) -> &'static str {
         "ask" => "Asked you",
         "answered" => "You answered",
         "finish" => "Finished",
+        "done" => "Marked the task done",
         _ => "Acted",
     }
 }
