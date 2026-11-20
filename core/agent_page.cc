@@ -83,6 +83,9 @@ constexpr base::TimeDelta kBusy = base::Seconds(5);
 constexpr base::TimeDelta kQuiet = base::Milliseconds(500);
 // A frame, at the rate pages draw, between the looks that tell whether something holds still.
 constexpr base::TimeDelta kFrame = base::Hertz(60);
+// Between the reads of a splash that holds still: each reads every frame's whole tree in the
+// renderer whose content the job waits for, so not a frame's pace (#3658).
+constexpr base::TimeDelta kSplashLook = base::Milliseconds(100);
 // What the wheel starts, a scroll or nothing to scroll, has started by then (#1627).
 constexpr base::TimeDelta kSettle = base::Milliseconds(400);
 // What an agent hears when the input would reach an extension's control, which the activity log
@@ -920,12 +923,13 @@ void AgentPage::Still(std::vector<base::ListValue> last) {
     Fail("The tab's page isn't an http or https page, the only pages agents may use.");
     return;
   }
+  const uint64_t request = job_->request;
   ReadTrees(
-      Frames(), 0, {},
+      request, Frames(), 0, {},
       base::BindOnce(
-          [](base::WeakPtr<AgentPage> page, std::vector<base::ListValue> last,
+          [](base::WeakPtr<AgentPage> page, uint64_t request, std::vector<base::ListValue> last,
              std::optional<std::vector<base::ListValue>> trees) {
-            if (!page || !page->job_) {
+            if (!page || !page->job_ || page->job_->request != request) {
               return;
             }
             if (!trees) {
@@ -936,18 +940,21 @@ void AgentPage::Still(std::vector<base::ListValue> last) {
             const bool same = *trees == last;
             const bool splash = IsSplash(*trees);
             const bool early = base::TimeTicks::Now() < page->job_->deadline;
+            // A tree that's changing is read again a frame on, and a splash that holds still less
+            // often.
             if ((!same && (last.empty() || early)) || (splash && early)) {
-              page->wait_.Start(FROM_HERE, kFrame,
+              page->wait_.Start(FROM_HERE, same ? kSplashLook : kFrame,
                                 base::BindOnce(&AgentPage::Still, page, std::move(*trees)));
               return;
             }
             page->job_->busy |= !same || splash;
             page->Read(std::move(trees->front()));
           },
-          weak_factory_.GetWeakPtr(), std::move(last)));
+          weak_factory_.GetWeakPtr(), request, std::move(last)));
 }
 
 void AgentPage::ReadTrees(
+    uint64_t request,
     std::vector<Frame> frames,
     size_t next,
     std::vector<base::ListValue> trees,
@@ -963,11 +970,13 @@ void AgentPage::ReadTrees(
   const int slot = frames[next].slot;
   Send("Accessibility.getFullAXTree", std::move(params),
        base::BindOnce(
-           [](base::WeakPtr<AgentPage> page, std::vector<Frame> frames, size_t next,
-              std::vector<base::ListValue> trees,
+           [](base::WeakPtr<AgentPage> page, uint64_t request, std::vector<Frame> frames,
+              size_t next, std::vector<base::ListValue> trees,
               base::OnceCallback<void(std::optional<std::vector<base::ListValue>>)> then,
               const base::DictValue* result) {
-             if (!page) {
+             // A reply owed to a job that ended, as the reply limit or a dialog ends one, stops
+             // here, not in the next job.
+             if (!page || !page->job_ || page->job_->request != request) {
                return;
              }
              const base::ListValue* nodes = result ? result->FindList("nodes") : nullptr;
@@ -977,9 +986,10 @@ void AgentPage::ReadTrees(
              }
              // A frame that went meanwhile reads as empty, which the next read may not be.
              trees.push_back(nodes ? nodes->Clone() : base::ListValue());
-             page->ReadTrees(std::move(frames), next + 1, std::move(trees), std::move(then));
+             page->ReadTrees(request, std::move(frames), next + 1, std::move(trees),
+                             std::move(then));
            },
-           weak_factory_.GetWeakPtr(), std::move(frames), next, std::move(trees),
+           weak_factory_.GetWeakPtr(), request, std::move(frames), next, std::move(trees),
            std::move(then)),
        slot);
 }

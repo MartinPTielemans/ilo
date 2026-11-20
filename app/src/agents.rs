@@ -1910,7 +1910,7 @@ impl Agents {
     fn look_after(&self, id: u64, after: Duration, cx: &mut Context<Self>) -> Task<()> {
         cx.spawn(async move |agents, cx| {
             cx.background_executor().timer(after).await;
-            _ = agents.update(cx, |agents, _| {
+            _ = agents.update(cx, |agents, cx| {
                 let waiting = agents.runs.iter_mut().find_map(|run| {
                     let wait = run.wait.as_mut().filter(|wait| wait.id == id)?;
                     let action = match wait.what {
@@ -1920,7 +1920,14 @@ impl Agents {
                     Some((run.agent.clone(), run.tab, action, wait.look.take()?))
                 });
                 if let Some((agent, tab, action, look)) = waiting {
-                    agents.look(&agent, tab, action, look);
+                    agents.stepping = Some(agent.clone());
+                    let may = agents.may_look_again(&agent, tab, "wait", &look, cx);
+                    agents.stepping = None;
+                    match may {
+                        true => agents.look(&agent, tab, action, look),
+                        // Its run ends on the refusal, as on any step's.
+                        false => agents.advance(cx),
+                    }
                 }
             });
         })
@@ -3198,15 +3205,46 @@ impl Agents {
         self.acting.insert(request, acting);
         cx.spawn(async move |agents, cx| {
             cx.background_executor().timer(after).await;
-            _ = agents.update(cx, |agents, _| {
+            _ = agents.update(cx, |agents, cx| {
                 let Some(acting) = agents.acting.get(&request) else {
                     return;
                 };
                 let (agent, tab) = (acting.agent.clone(), acting.tab);
+                let action = if acting.opened {
+                    "open_tab"
+                } else {
+                    "navigate"
+                };
+                let reply = acting.reply.clone();
+                if !agents.may_look_again(&agent, tab, action, &reply, cx) {
+                    agents.acting.remove(&request);
+                    return;
+                }
                 agents.act_in_page(&agent, tab, request, PageAction::Snapshot, 0, "");
             });
         })
         .detach();
+    }
+
+    /// Whether a call under way may look at `tab` again: the user may have taken it between two
+    /// looks. If not, the call ends as one on that tab would, refused and logged as `action`. Each
+    /// look it may take isn't logged, as the call was once.
+    fn may_look_again(
+        &mut self,
+        agent: &str,
+        tab: u64,
+        action: &str,
+        reply: &mpsc::Sender<ToolResult>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Err(why) = self.may_act(agent, tab, "snapshot", cx) else {
+            return true;
+        };
+        let site = site(&self.browser.tab(tab, cx).url);
+        self.note(agent, action, &site, &why);
+        cx.notify();
+        _ = reply.send(ToolResult::error(why));
+        false
     }
 
     /// `note`, what an action did, then the tab's latest outline as `show` says, which is the

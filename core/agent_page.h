@@ -171,8 +171,9 @@ class AgentPage : public content::WebContentsObserver,
   void Still(std::vector<base::ListValue> last);
   // The trees of the main frame and of each frame a snapshot reads, in |frames| from |next| on,
   // added to |trees|: what an app in a frame shows is in its frame's tree alone (#3658). Nothing if
-  // the main frame's couldn't be read.
-  void ReadTrees(std::vector<Frame> frames,
+  // the main frame's couldn't be read. Its replies stop once |request|'s job has ended.
+  void ReadTrees(uint64_t request,
+                 std::vector<Frame> frames,
                  size_t next,
                  std::vector<base::ListValue> trees,
                  base::OnceCallback<void(std::optional<std::vector<base::ListValue>>)> then);

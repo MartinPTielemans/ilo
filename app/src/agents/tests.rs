@@ -2919,6 +2919,53 @@ fn navigate_and_open_tab_wait_for_their_text(cx: &mut TestAppContext) {
     assert!(refused.recv().unwrap().error);
 }
 
+/// A wait's next look at a tab the user took over between two looks reads nothing: navigate's
+/// wait_for and run_steps' wait step each end as a call on a tab the user holds does.
+#[gpui::test]
+fn a_wait_reads_nothing_once_the_user_takes_the_tab(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let look = |tree: String, cx: &mut TestAppContext| {
+        let request = browser.pages.borrow().last().unwrap().1;
+        agents.update(cx, |agents, cx| agents.page_done(request, tree, false, cx));
+        cx.run_until_parked();
+    };
+    let looks = || browser.pages.borrow().len();
+
+    let arguments = json!({ "tab": 20, "url": "iana.org", "wait_for": "Thanks" });
+    let answer = call(&agents, "claude-code", "navigate", arguments, cx);
+    look(shop_tree(), cx);
+    agents.update(cx, |agents, cx| agents.take_over("claude-code", 20, cx));
+    let before = looks();
+    cx.executor().advance_clock(Duration::from_millis(500));
+    assert_eq!(looks(), before, "navigate's wait looked at the user's tab");
+    let refused = answer.try_recv().expect("navigate's wait didn't answer");
+    assert!(refused.error);
+    assert_eq!(refused.text, HELD);
+    let entry = agents.read_with(cx, |agents, _| agents.recent().next().unwrap().clone());
+    assert_eq!(
+        (entry.action.as_ref(), entry.refused.as_ref()),
+        ("navigate", HELD)
+    );
+    agents.update(cx, |agents, cx| agents.hand_back(20, cx));
+
+    let wait = json!({ "action": "wait", "text": "Thanks", "seconds": 2 });
+    let run = call(
+        &agents,
+        "claude-code",
+        "run_steps",
+        json!({ "tab": 20, "steps": [wait] }),
+        cx,
+    );
+    look(shop_tree(), cx);
+    agents.update(cx, |agents, cx| agents.take_over("claude-code", 20, cx));
+    let before = looks();
+    cx.executor().advance_clock(Duration::from_millis(500));
+    assert_eq!(looks(), before, "the wait step looked at the user's tab");
+    let refused = run.try_recv().expect("the run didn't answer");
+    assert!(refused.error);
+    assert!(refused.text.contains(HELD), "{}", refused.text);
+}
+
 /// hand_off holds the tab for the user and asks them in the card, and its call waits: the agent's
 /// calls on the tab are refused meanwhile. Hand Back gives the tab back and answers it.
 #[gpui::test]
