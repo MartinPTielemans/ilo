@@ -170,6 +170,9 @@ card_button() {
 # Rests on the row at $1 $2 till tab $3's card is at rest with the button $4, then clicks it as a
 # hand would: onto the card, which lets the card's window take the mouse, then on it again.
 click_card_button() {
+  # Without it, the browser window keeps the row under the pointer's last place hovered (#3644).
+  ! grep -q '^browser: plate window .* finds no GPUIView' "$log" ||
+    fail "a plate window found no GPUI view to tell the pointer left"
   send move "$1" "$2"
   expect "^browser: hover card shown $3 \(.* \)\{0,1\}$4 " \
     "tab $3's card didn't show with its $4 button"

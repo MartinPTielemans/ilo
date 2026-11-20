@@ -1032,6 +1032,13 @@ void PlacePlateWindow(HostPlateWindow* plate, NSWindow* parent, NSRect rect) {
         plate.parentView = each;
       }
     }
+    // Once, so a check fails on this rather than on the row the window then keeps hovered.
+    static bool said_none = false;
+    if (browser && !plate.parentView && !said_none && getenv("BROWSER_DRIVE")) {
+      said_none = true;
+      fprintf(stderr, "browser: plate window %s finds no GPUIView to tell the pointer left\n",
+              plate.name.UTF8String);
+    }
     plate.parentLeft = NO;
     AddOver(parent, plate);
     [plate orderWindow:NSWindowAbove relativeTo:surface.windowNumber];
