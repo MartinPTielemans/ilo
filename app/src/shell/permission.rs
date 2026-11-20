@@ -128,8 +128,12 @@ impl Shell {
                         .pr(px(BESIDE_CLOSE))
                         .text_color(self.palette.text(TITLE))
                         .font_weight(FontWeight::MEDIUM)
-                        // Kept together, so "to" doesn't wrap alone under a long site.
-                        .child(format!("{} wants\u{a0}to", question.site)),
+                        // Kept together, so "to" doesn't wrap alone under a long site, which breaks
+                        // between its parts (#3748).
+                        .child(crate::address_wrap::drawn(&format!(
+                            "{} wants\u{a0}to",
+                            question.site
+                        ))),
                 )
                 .children(question.permissions.iter().map(|permission| {
                     div()

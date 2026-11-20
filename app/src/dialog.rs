@@ -1309,8 +1309,9 @@ impl Render for Dialog {
                 .line_height(px(DETAIL_LINE))
                 .text_size(px(text::BODY))
                 .text_color(palette.on_overlay(DETAIL))
+                // A page's address, such as a sign-in's, breaks between its parts (#3748).
                 .when(!question.detail.is_empty(), |text| {
-                    text.child(question.detail.clone())
+                    text.child(crate::address_wrap::drawn(&question.detail))
                 })
                 .when(!question.list.is_empty(), |text| {
                     text.child(
@@ -1401,7 +1402,7 @@ impl Render for Dialog {
                         .flex_1()
                         .min_w_0()
                         .child(drawn_into(&asked.check_drawn, |drawn, at| drawn.label = at))
-                        .child(check),
+                        .child(crate::address_wrap::drawn(&check)),
                 )
                 .on_click(cx.listener(|dialog, _, _, cx| dialog.toggle_check(cx)))
         });
