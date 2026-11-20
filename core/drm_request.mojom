@@ -4,7 +4,8 @@ module browser_core.mojom;
 // media module (engine/patches/ours/chromium-drm-request.patch). One interface a frame, one call a
 // request. Nothing comes back: what an answer means is the browser's to decide, and the string is
 // the page's own, so the browser trusts none of it. A renderer that lies can only hide or show the
-// note that explains its own page.
+// note that explains its own page, or within a moment of the user's press on it, move its own tab
+// to the system's engine, which a page that wants no extensions could have by asking anyway.
 interface DrmRequest {
   KeySystemAnswered(string key_system, bool granted);
 };

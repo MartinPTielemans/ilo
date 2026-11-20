@@ -32,6 +32,7 @@
 #include "browser_core/system_engine.h"
 #include "browser_core/webrtc.h"
 #include "browser_core/window.h"
+#include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/lifetime/browser_shutdown.h"
@@ -62,6 +63,10 @@
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/base_window.h"
+
+#if BUILDFLAG(IS_MAC)
+#include "browser_core/platform/keychain.h"
+#endif
 
 namespace browser_core {
 
@@ -609,13 +614,25 @@ bool DeleteProfile(bc_id profile) {
   // couldn't take them out first (#1524).
   Favorites::ProfileDeleting(dir);
   // Let go first: Chrome deletes it once it's unloaded, and a window may have built on it.
-  if (Profile* loaded = ProfileFor(dir); DirOf(loaded) == dir) {
+  Profile* loaded = ProfileFor(dir);
+  if (DirOf(loaded) == dir) {
     Window::LetProfileGo(loaded);
+  } else {
+    loaded = nullptr;
   }
   Used().erase(dir);
   // The system's engine keeps the profile's cookies apart, and no tab of it is open. Whether it
   // has a store is read from the profile before Chrome deletes it.
-  system_engine::DeleteStore(PathOf(dir), base::BindOnce(&ScheduleDeletion, PathOf(dir)));
+  base::OnceClosure delete_store =
+      base::BindOnce(&system_engine::DeleteStore, PathOf(dir),
+                     base::BindOnce(&ScheduleDeletion, PathOf(dir)));
+#if BUILDFLAG(IS_MAC)
+  // Its passkeys kept on this Mac go first, while its secret, which tells them apart, is still
+  // there to read.
+  platform::DeletePasskeys(loaded, PathOf(dir), std::move(delete_store));
+#else
+  std::move(delete_store).Run();
+#endif
   Ids().erase(dir);
   ReportChanged();
   return true;
