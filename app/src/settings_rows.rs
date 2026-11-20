@@ -445,9 +445,13 @@ pub fn text(look: &Look, name: impl Into<SharedString>, line: Option<SharedStrin
         .children(line)
 }
 
-/// A row's text as `text` draws it, for words an agent's request was written into, its escapes
-/// marked as the whole request marks them (`agent_request::marked`).
-pub fn marked_text(look: &Look, name: SharedString, line: Option<SharedString>) -> gpui::Div {
+/// A row's text as `text` draws it, with what the browser wrote out of an agent's request marked
+/// as the whole request marks it.
+pub fn written_text(
+    look: &Look,
+    name: &crate::agent_request::Written,
+    line: Option<&crate::agent_request::Written>,
+) -> gpui::Div {
     let (ink, detail) = (gpui::Hsla::from(look.ink), gpui::Hsla::from(look.detail));
     let line = line.map(|line| {
         div()
@@ -455,16 +459,12 @@ pub fn marked_text(look: &Look, name: SharedString, line: Option<SharedString>) 
             .text_size(px(SMALL))
             .line_height(px(DETAIL_LINE))
             .text_color(look.detail)
-            .child(crate::agent_request::marked(line, detail, ink))
+            .child(line.drawn(detail, ink))
     });
     div()
         .flex_1()
         .min_w_0()
-        .child(
-            div()
-                .truncate()
-                .child(crate::agent_request::marked(name, detail, ink)),
-        )
+        .child(div().truncate().child(name.drawn(detail, ink)))
         .children(line)
 }
 
@@ -754,11 +754,10 @@ pub fn sent_part(
     };
     // What the agent wrote, written out as the whole request writes it and marked so.
     let written = |text: &str| {
-        let text = crate::agents::request::escaped(text, false).0;
         div()
             .text_size(px(SMALL))
             .line_height(px(DETAIL_LINE))
-            .child(crate::agent_request::marked(text, detail, ink))
+            .child(crate::agent_request::Written::of(text, false).drawn(detail, ink))
     };
     let to = cut(written(url).min_w_0().text_color(ink));
     let (shown, more) = sent_shown(sent.len(), all);

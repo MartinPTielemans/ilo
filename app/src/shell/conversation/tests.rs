@@ -38,6 +38,7 @@ fn step(key: usize, title: &str, running: bool) -> TraceStep {
         key,
         glyph: "icons/globe.svg",
         title: title.to_string().into(),
+        request: false,
         description: "".into(),
         running,
         failed: false,

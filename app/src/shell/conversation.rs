@@ -1565,6 +1565,7 @@ impl TalkView {
         let mut line = TraceLine::new(fold, step.title.clone(), step.description.clone());
         line.glyph = glyph.then_some(step.glyph);
         line.failed = step.failed;
+        line.request = step.request;
         line.chevron = opens.then(|| self.chevron(fold, open, look));
         line.shimmers = step.running.then(|| look.shimmer(self.made));
         self.crossfade(Fold::Step(step.key), &mut line, look);
@@ -1995,6 +1996,8 @@ struct TraceLine {
     glyph: Option<&'static str>,
     failed: bool,
     title: SharedString,
+    /// Whether the title names a request, written out and marked as the whole request is.
+    request: bool,
     note: SharedString,
     chevron: Option<f32>,
     shimmers: Option<Option<f32>>,
@@ -2012,6 +2015,7 @@ impl TraceLine {
             glyph: None,
             failed: false,
             title,
+            request: false,
             note,
             chevron: None,
             shimmers: None,
@@ -2032,6 +2036,7 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
         glyph,
         failed,
         title,
+        request,
         note: description,
         chevron,
         shimmers,
@@ -2040,6 +2045,9 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
         chevron_alpha,
         rolled,
     } = line;
+    // A request's name writes out what wouldn't show, marked as the whole request marks it
+    // (#3645); any other title is drawn as it is.
+    let title = crate::agent_request::Written::step(request, &title);
     let (id, group): (ElementId, SharedString) = match fold {
         Fold::Trace(key) => (("trace", key).into(), format!("trace-{key}").into()),
         Fold::Step(key) => (
@@ -2141,10 +2149,8 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
                     },
                 )
                 .child(match shimmers {
-                    Some(Some(phase)) => shimmering(&palette, title, phase),
-                    // A request's name writes out what wouldn't show, marked as the whole
-                    // request marks it (#3645).
-                    _ => crate::agent_request::marked(title, palette.text(SECONDARY), words),
+                    Some(Some(phase)) => shimmering(&palette, title.text, phase),
+                    _ => title.drawn(palette.text(SECONDARY), words),
                 }),
         )
         .when(noted, |line| {

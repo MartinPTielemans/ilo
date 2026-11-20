@@ -2588,6 +2588,7 @@ fn task_conversation(agent: SharedString) -> Conversation {
         key,
         glyph,
         title: title.into(),
+        request: false,
         description: description.into(),
         running,
         failed,

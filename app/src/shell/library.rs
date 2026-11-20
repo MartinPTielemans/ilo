@@ -3179,17 +3179,13 @@ impl Shell {
                     .pl(px(ARCHIVED_TEXT_X))
                     .pr(px(8.))
                     .child(element_line(
-                        crate::agent_request::marked(title.clone(), secondary, ink),
+                        crate::agent_request::Written::step(each.action == "request", &title)
+                            .drawn(secondary, ink),
                         text::BODY,
                         17.,
                         ink,
                     ))
-                    .child(element_line(
-                        crate::agent_request::marked(under, secondary, ink),
-                        text::SMALL,
-                        15.,
-                        secondary,
-                    )),
+                    .child(text_line(under.into(), text::SMALL, 15., secondary)),
             )
             .child(crate::settings_rows::chevron_slot(
                 opens.then_some(opened),

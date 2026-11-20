@@ -11,6 +11,10 @@ use super::page::clip;
 
 /// The requests one call sends at most.
 pub const MAX: usize = 20;
+/// The headers one request carries at most. A page's own fetch sends a handful (a type, a token,
+/// an Accept) and a server such as Apache refuses past 100, so 32 is room for any real call, and
+/// the whole request draws no more than 32 rows of a request's headers, each cut at PART_SHOWN.
+pub const MAX_HEADERS: usize = 32;
 /// The most a request's body may be, in bytes.
 pub const MAX_BODY: usize = 1 << 20;
 /// The most of a `what` the tool takes, once it's plain text: a sentence, not a page.
@@ -120,11 +124,9 @@ impl Request {
         !(self.says().iter()).all(|each| matches!(each.as_str(), "GET" | "HEAD"))
     }
 
-    /// What it is, for the log, the answer and the activity row's head: "POST /api/items", with
-    /// what wouldn't show in the path written out as the whole request writes it (`escaped`).
+    /// What it is, for the log and the answer: "POST /api/items".
     pub fn target(&self) -> String {
-        let path = escaped(&clip(&self.path, 60), false).0;
-        format!("{} {path}", self.methods())
+        format!("{} {}", self.methods(), clip(&self.path, 60))
     }
 
     /// The method sent, then every other an override names, once each: "POST as GET, DELETE". A
@@ -377,6 +379,12 @@ fn one(asked: &Value, origin: &str, number: usize) -> Result<Request, Wrong> {
     let mut headers = Vec::new();
     match asked.get("headers") {
         None | Some(Value::Null) => {}
+        Some(Value::Object(asked)) if asked.len() > MAX_HEADERS => {
+            return Err(Wrong::Malformed(format!(
+                "Request {number} has {} headers; give {MAX_HEADERS} at most. Nothing was sent.",
+                asked.len()
+            )));
+        }
         Some(Value::Object(asked)) => {
             for (name, value) in asked {
                 let Some(value) = value.as_str() else {
@@ -585,25 +593,6 @@ pub fn escaped(text: &str, lines: bool) -> (String, Vec<std::ops::Range<usize>>)
         }
     }
     (shown, marks)
-}
-
-/// Where the escapes are in text `escaped` wrote, found again from the text alone: as it writes
-/// out a backslash before "u{" too, every `\u{…}` of hex digits in its text is one of its own.
-pub fn marks(text: &str) -> Vec<std::ops::Range<usize>> {
-    let mut marks = Vec::new();
-    let mut at = 0;
-    while let Some(found) = text[at..].find("\\u{") {
-        let start = at + found;
-        let digits = &text[start + 3..];
-        let hex = digits.bytes().take_while(u8::is_ascii_hexdigit).count();
-        if (4..=6).contains(&hex) && digits[hex..].starts_with('}') {
-            marks.push(start..start + 3 + hex + 1);
-            at = start + 3 + hex + 1;
-        } else {
-            at = start + 1;
-        }
-    }
-    marks
 }
 
 /// A sentence as the question's card shows it: whole up to WHAT_SHOWN, else cut with "…", at a
@@ -1108,8 +1097,11 @@ pub fn described(arguments: &Value) -> String {
     match requests.map(Vec::as_slice) {
         Some([one]) => {
             let text = |name: &str| one.get(name).and_then(Value::as_str).unwrap_or("").trim();
-            let method = text("method").to_ascii_uppercase();
-            escaped(&format!("{method} {}", clip(text("path"), 40)), false).0
+            format!(
+                "{} {}",
+                text("method").to_ascii_uppercase(),
+                clip(text("path"), 40)
+            )
         }
         Some(many) if !many.is_empty() => format!("{} requests", many.len()),
         _ => String::new(),
@@ -1623,6 +1615,29 @@ mod tests {
         assert_eq!(read[0].what, "");
     }
 
+    /// A request carries MAX_HEADERS headers at most, or nothing is sent, so the whole request
+    /// draws a bounded number of rows however many the agent names.
+    #[test]
+    fn a_request_has_a_bounded_number_of_headers() {
+        let with = |count: usize| {
+            let headers: serde_json::Map<String, Value> = (0..count)
+                .map(|at| (format!("X-Note-{at}"), json!("a")))
+                .collect();
+            parsed(json!([
+                { "method": "GET", "path": "/a" },
+                { "method": "GET", "path": "/b", "headers": headers },
+            ]))
+        };
+        assert_eq!(with(MAX_HEADERS).unwrap()[1].headers.len(), MAX_HEADERS);
+        let Err(Wrong::Malformed(many)) = with(MAX_HEADERS + 1) else {
+            panic!("a request of {} headers went", MAX_HEADERS + 1);
+        };
+        assert_eq!(
+            many,
+            "Request 2 has 33 headers; give 32 at most. Nothing was sent."
+        );
+    }
+
     /// The sentence is one paragraph of plain text: line breaks, tabs and control characters are
     /// a space, and direction overrides and invisible characters go, so nothing in it can read as
     /// the browser's own line or turn its words around.
@@ -1686,34 +1701,6 @@ mod tests {
         );
         assert_eq!(plain("a \u{FE0F}\u{200D}b"), "a b");
         assert_eq!(plain("x\u{2EE}y\u{2DD} z`\u{2BC}\u{201A}'w"), "x'y' z`w");
-    }
-
-    /// Where text `escaped` wrote has its escapes is found again from the text alone, however the
-    /// agent's own backslashes and `u{` fall, so a line kept as text can still mark them.
-    #[test]
-    fn written_escapes_are_found_again_from_the_text() {
-        for typed in [
-            "/pay/\u{202E}gro\u{202C}",
-            "a\\u{202E}b",
-            "\\\\u{202E}\u{202E}",
-            "\\\u{2066}x\\u{zz} \\u{12} \\u{1234567}",
-            "plain /path?q=1",
-            "\u{1F469}\u{200D}\u{1F467}\u{E0001}",
-        ] {
-            let (text, marks) = escaped(typed, false);
-            assert_eq!(super::marks(&text), marks, "{typed:?} wrote {text:?}");
-        }
-    }
-
-    /// The activity row's head, the log, the answer and a task's trace name a request with what
-    /// wouldn't show in its path written out, as the whole request does.
-    #[test]
-    fn a_requests_name_writes_out_what_wouldnt_show() {
-        let asked = json!([{ "method": "POST", "path": "/pay/\u{202E}gro", "what": "Pay." }]);
-        let sent = parsed(asked).unwrap();
-        assert_eq!(sent[0].target(), "POST /pay/\\u{202E}gro");
-        let asked = json!({ "requests": [{ "method": "post\u{2066}", "path": "/a\u{202E}b" }] });
-        assert_eq!(described(&asked), "POST\\u{2066} /a\\u{202E}b");
     }
 
     /// The whole request writes out what wouldn't show, so an override can't turn its text
