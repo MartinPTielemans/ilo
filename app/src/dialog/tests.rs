@@ -41,6 +41,15 @@ impl Host for Recorder {
     }
 }
 
+/// What the dialog asks of the host about the keys as it starts leaving: it holds them, and on the
+/// Mac it lets go of the clicks and the keyboard too (#3681).
+fn leaving() -> &'static [&'static str] {
+    match LETS_GO_AS_IT_LEAVES {
+        true => &["hold", "let go"],
+        false => &["hold"],
+    }
+}
+
 /// The dialog, asking to delete a Space. The action records itself on the host when it runs.
 struct Asking {
     cx: VisualTestContext,
@@ -94,10 +103,7 @@ impl Asking {
 fn the_keys_typed_as_it_leaves_wait_for_the_window(cx: &mut TestAppContext) {
     let mut dialog = Asking::new(cx);
     dialog.keys("escape");
-    let leaving: &[&str] = match LETS_GO_AS_IT_LEAVES {
-        true => &["hold", "let go"],
-        false => &["hold"],
-    };
+    let leaving = leaving();
     assert_eq!(
         *dialog.host.1.borrow(),
         leaving,
@@ -117,10 +123,7 @@ fn the_keys_typed_as_it_leaves_wait_for_the_window(cx: &mut TestAppContext) {
 fn a_question_taken_back_lets_go_as_it_leaves_on_the_mac(cx: &mut TestAppContext) {
     let mut dialog = Asking::page(page_question(Vec::new(), None), cx);
     dialog.cx.cx.update(withdraw_page);
-    let leaving: &[&str] = match LETS_GO_AS_IT_LEAVES {
-        true => &["hold", "let go"],
-        false => &["hold"],
-    };
+    let leaving = leaving();
     assert_eq!(
         *dialog.host.1.borrow(),
         leaving,
@@ -652,7 +655,7 @@ fn a_pages_question_is_answered_once_the_page_has_the_keyboard_back(cx: &mut Tes
     dialog.keys("escape");
     let answered = dialog.host.0.borrow().iter().any(|call| call == "cancel ");
     assert_eq!(answered, PAGE_ANSWERED_AS_IT_LEAVES);
-    assert_eq!(*dialog.host.1.borrow(), ["hold"], "it hid before leaving");
+    assert_eq!(*dialog.host.1.borrow(), leaving(), "it hid before leaving");
 }
 
 #[gpui::test]
