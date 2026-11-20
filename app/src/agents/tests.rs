@@ -4106,6 +4106,7 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
             "unpin_tab",
             "remove_tab",
             "sort_tabs_by_site",
+            "done",
         ]
     );
 
@@ -4152,6 +4153,7 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
         ("list_split", tab(json!({}))),
         ("separate_tab", tab(json!({}))),
         ("close_tab", json!({ "tab": 30 })),
+        ("done", json!({})),
     ];
     for (tool, arguments) in calls {
         let pages = browser.pages.borrow().len();
@@ -6901,7 +6903,7 @@ fn the_scripts_switch_comes_back_with_the_settings(cx: &mut TestAppContext) {
 /// connection closes, it waits IDLE for a call, or the user stops it.
 mod sessions {
     use super::*;
-    use crate::agents::task::{Card, Dot, IDLE, Line, TaskAction};
+    use crate::agents::task::{Card, Dot, IDLE, Line, QUIET, TaskAction};
 
     /// Calls `tool` as Claude Code, as call `id`, which `answered` ends.
     fn call_as(
@@ -7175,9 +7177,9 @@ mod sessions {
         answered(&agents, 5, cx);
         bye(&agents, cx);
         let card = cards(&agents, cx).remove(0);
-        assert!(card.status.starts_with("Done "), "{}", card.status);
+        assert!(card.status.starts_with("Done · "), "{}", card.status);
         assert!(
-            !card.status.contains('·'),
+            !card.status.contains("placed") && !card.status.contains("sent"),
             "a session that only looked has a receipt: {}",
             card.status
         );
@@ -7201,6 +7203,172 @@ mod sessions {
         let shown = cards(&agents, cx);
         assert_eq!(shown.len(), 1);
         assert_eq!(shown[0].dot, Dot::Done);
+        // Its time is when its last call ended, not IDLE later (#3652).
+        let kept = agents.update(cx, |agents, cx| agents.take_ended(cx));
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let ended = kept[0].1.ended;
+        assert!(
+            now - ended >= IDLE.as_secs(),
+            "it ended {} s ago, at its end, not at its last call",
+            now - ended
+        );
+    }
+
+    /// Claude Code at work in tab 20, then closing it with call 3: its last page (#3652).
+    fn closes_its_last_page(cx: &mut TestAppContext) -> (Entity<Agents>, Rc<Made>) {
+        let (agents, browser) = at_work(cx);
+        answered(&agents, 2, cx);
+        let closed = call_as(&agents, 3, "close_tab", json!({ "tab": 20 }), cx);
+        assert_eq!(closed.recv().unwrap().text, "Closed tab 20.");
+        answered(&agents, 3, cx);
+        (agents, browser)
+    }
+
+    /// An agent that closes its last page and doesn't call again within QUIET is done (#3652):
+    /// Claude Code keeps its connection open after its work, so without this its card said
+    /// Working for IDLE over nothing. It has nothing to open, and says when it was done.
+    #[gpui::test]
+    fn an_agent_that_closed_its_last_page_is_done_once_quiet(cx: &mut TestAppContext) {
+        let (agents, _) = closes_its_last_page(cx);
+        cx.executor().advance_clock(QUIET - Duration::from_secs(1));
+        assert_eq!(cards(&agents, cx)[0].dot, Dot::Working, "quiet isn't over");
+        cx.executor().advance_clock(Duration::from_secs(1));
+        let card = cards(&agents, cx).remove(0);
+        assert_eq!(card.dot, Dot::Done, "{}", card.status);
+        assert!(card.status.starts_with("Done · "), "{}", card.status);
+        assert!(card.open.is_empty());
+    }
+
+    /// A call within QUIET of its last close is the same task, on the same card, and one that
+    /// closes nothing starts no quiet end: IDLE ends it.
+    #[gpui::test]
+    fn a_call_within_quiet_keeps_the_task_on_its_card(cx: &mut TestAppContext) {
+        let (agents, _) = closes_its_last_page(cx);
+        cx.executor().advance_clock(QUIET - Duration::from_secs(1));
+        call_as(&agents, 4, "list_tabs", json!({}), cx);
+        answered(&agents, 4, cx);
+        cx.executor().advance_clock(QUIET);
+        let shown = cards(&agents, cx);
+        assert_eq!(shown.len(), 1, "one task, one card");
+        assert_eq!(shown[0].dot, Dot::Working);
+        cx.executor().advance_clock(IDLE);
+        assert_eq!(cards(&agents, cx)[0].dot, Dot::Done);
+    }
+
+    /// The user closing the agent's last page doesn't end its task: it may well open it again,
+    /// which would split one task over two cards. IDLE ends it.
+    #[gpui::test]
+    fn the_users_close_of_its_last_page_leaves_it_at_work(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        answered(&agents, 2, cx);
+        agents.update(cx, |agents, cx| {
+            browser.close_user_tab(20, cx);
+            agents.tab_closed(20, cx);
+        });
+        cx.executor().advance_clock(QUIET * 2);
+        assert_eq!(cards(&agents, cx)[0].dot, Dot::Working);
+        cx.executor().advance_clock(IDLE);
+        assert_eq!(cards(&agents, cx)[0].dot, Dot::Done);
+    }
+
+    /// `done` is the agent's word that its task is done (#3652): its card is, with the pages it
+    /// left open to open, and it's in its activity log. Its next call is a new task on a card of
+    /// its own, which keeps nothing of the last but its tabs: an order the user allowed once
+    /// asks again.
+    #[gpui::test]
+    fn done_ends_the_task_with_its_pages_to_open(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        let looked = call_as(&agents, 3, "snapshot", json!({ "tab": 20 }), cx);
+        answered(&agents, 2, cx);
+        page_done(&agents, &browser, looked, shop_tree(), cx);
+        answered(&agents, 3, cx);
+        let order = |id: u64, cx: &mut TestAppContext| {
+            browser.asked.replace(None);
+            let reply = call_as(&agents, id, "click", json!({ "tab": 20, "ref": "e3" }), cx);
+            let question = browser.asked.borrow().clone();
+            let question = question.expect("the order didn't ask");
+            agents.update(cx, |agents, cx| {
+                agents.answer(question.id, Answer::Once, cx)
+            });
+            assert!(!page_done(&agents, &browser, reply, shop_tree(), cx).error);
+            answered(&agents, id, cx);
+        };
+        order(4, cx);
+        let said = call_as(&agents, 5, "done", json!({}), cx).recv().unwrap();
+        assert!(!said.error, "{}", said.text);
+        assert!(said.text.starts_with("Your task is done"), "{}", said.text);
+        answered(&agents, 5, cx);
+        let card = cards(&agents, cx).remove(0);
+        assert_eq!(
+            (card.dot, card.status.as_ref()),
+            (Dot::Done, "Done · 1 order placed")
+        );
+        assert_eq!(card.open, vec![(20, "example.com".into())]);
+        assert!(
+            (log(&agents, "claude-code", cx).iter()).any(|entry| entry.0 == "done"),
+            "its log has no done"
+        );
+        // Nothing under way: it says so, and it's no error.
+        let again = call_as(&agents, 6, "done", json!({}), cx).recv().unwrap();
+        assert_eq!(again, ToolResult::text("No task of yours is under way."));
+        assert_eq!(cards(&agents, cx).len(), 1, "done started a card");
+
+        let looked = call_as(&agents, 7, "snapshot", json!({ "tab": 20 }), cx);
+        page_done(&agents, &browser, looked, shop_tree(), cx);
+        answered(&agents, 7, cx);
+        let shown = cards(&agents, cx);
+        assert_eq!(shown.len(), 2, "its next call is a new task");
+        assert_eq!(shown[0].dot, Dot::Working);
+        order(8, cx);
+    }
+
+    /// `done` while a call of its own waits on the user, a handoff here, is refused, so it never
+    /// leaves a question behind: its card still asks.
+    #[gpui::test]
+    fn done_waits_for_a_handoff_to_be_answered(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        answered(&agents, 2, cx);
+        let reason = json!({ "tab": 20, "reason": "Sign in to example.com" });
+        let _handed = call_as(&agents, 3, "hand_off", reason, cx);
+        assert!(browser.asked.borrow().is_some(), "the handoff didn't ask");
+        let refused = call_as(&agents, 4, "done", json!({}), cx).recv().unwrap();
+        assert_eq!(
+            refused,
+            ToolResult::error(
+                "Your hand_off on tab 20 is still under way: call done once it's answered."
+            )
+        );
+        answered(&agents, 4, cx);
+        let card = cards(&agents, cx).remove(0);
+        assert_eq!(card.dot, Dot::Waiting);
+        assert!(card.question.is_some());
+    }
+
+    /// A question still with the user is never dismissed by an end: with an open that asks first
+    /// waiting, its last page closing starts no quiet end, and `done` is refused.
+    #[gpui::test]
+    fn a_question_open_holds_off_the_quiet_end(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        answered(&agents, 2, cx);
+        let _opening = call_as(&agents, 3, "open_tab", json!({ "url": "chase.com" }), cx);
+        assert!(
+            browser.asked.borrow().is_some(),
+            "the bank's open didn't ask"
+        );
+        call_as(&agents, 4, "close_tab", json!({ "tab": 20 }), cx);
+        answered(&agents, 4, cx);
+        cx.executor().advance_clock(QUIET * 2);
+        let card = cards(&agents, cx).remove(0);
+        assert_eq!(card.dot, Dot::Waiting, "{}", card.status);
+        assert!(card.question.is_some());
+        let refused = call_as(&agents, 5, "done", json!({}), cx).recv().unwrap();
+        assert_eq!(
+            refused,
+            ToolResult::error("Your open_tab is still under way: call done once it's answered.")
+        );
     }
 
     /// The card's Stop stops the client on every connection: its calls under way are answered that

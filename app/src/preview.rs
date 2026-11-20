@@ -2599,9 +2599,9 @@ fn task_cards(home: u64) -> Vec<TaskCard> {
             "working" => ("Step 4 · Closed example.com", Dot::Working, Vec::new()),
             "open" => {
                 let page = (FIRST_TASK + 100, "example.com".into());
-                ("Done 10:42", Dot::Done, vec![page])
+                ("Done · 10:42", Dot::Done, vec![page])
             }
-            _ => ("Done 10:42", Dot::Done, Vec::new()),
+            _ => ("Done · 10:42", Dot::Done, Vec::new()),
         };
         return vec![TaskCard {
             agent: "session-1".into(),

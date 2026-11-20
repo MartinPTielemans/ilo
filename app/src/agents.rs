@@ -1464,6 +1464,21 @@ impl Agents {
                 self.carry(tab, held::Event::HandOff, life, actions, cx);
             }
             "sort_tabs_by_site" if !is_task(&agent) => self.sort_by_site(&agent, reply, cx),
+            // The agent's word that its task is done (#3652): it ends only its own card, so it
+            // needs no permission, and the activity log says so.
+            "done" if !is_task(&agent) => {
+                let said = self.said_done(&agent, id, cx);
+                match &said {
+                    Ok(text) if text.starts_with("Your task") => self.note(&agent, "done", "", ""),
+                    Err(why) => self.note(&agent, "done", "", why),
+                    Ok(_) => {}
+                }
+                cx.notify();
+                _ = reply.send(match said {
+                    Ok(text) => ToolResult::text(text),
+                    Err(why) => ToolResult::error(why),
+                });
+            }
             "pin_tab" | "unpin_tab" | "remove_tab" if !is_task(&agent) => {
                 let Some(tab) = self.tab_for(&agent, &arguments, &reply, cx) else {
                     return;
