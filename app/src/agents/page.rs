@@ -1873,6 +1873,44 @@ mod tests {
         );
     }
 
+    /// A row holding a form of its own is outlined line by line, as one holding a list is, so its
+    /// field and buttons have that form, and Enter in the field asks as a click on its own form's
+    /// button would, not on the button of the form around the list.
+    #[test]
+    fn a_row_holding_a_form_keeps_its_form() {
+        let mut nodes = vec![
+            node("1", "RootWebArea", "Checkout", &["2"]),
+            node("2", "form", "", &["3", "4"]),
+            node("3", "button", "Place your order", &[]),
+            node("4", "list", "", &["5"]),
+            node("5", "listitem", "", &["6"]),
+            node("6", "form", "", &["7", "8"]),
+            node("7", "textbox", "Card number", &[]),
+            node("8", "button", "Pay now", &[]),
+        ];
+        for node in &mut nodes {
+            node["backendDOMNodeId"] =
+                json!(node["nodeId"].as_str().unwrap().parse::<i64>().unwrap());
+        }
+        nodes[6]["properties"] = json!([{ "name": "focused", "value": { "value": true } }]);
+        let outline = outline(&tab(), &nodes, &mut Refs::default(), None);
+        let text = outline.text();
+        assert!(
+            text.contains("\n    - textbox \"Card number\" [e"),
+            "{text}"
+        );
+        let pressing = pressing_risk("shop.example", Some(&outline), "Enter", None).unwrap();
+        // Enter in a field submits its form, which may click this button: the outline can't say.
+        assert_eq!(
+            (
+                pressing.control.name.as_str(),
+                pressing.control.form,
+                pressing.surely
+            ),
+            ("Pay now", Some(6), false)
+        );
+    }
+
     /// A tab showing a response, not a page, gives its start and says how to read the rest.
     #[test]
     fn a_response_gives_its_start() {
