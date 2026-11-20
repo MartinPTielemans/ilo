@@ -2,5 +2,4 @@
 # open (check/quarantine.sh says how). A line lasts 14 days:
 # <run> #<issue> <YYYY-MM-DD> [<its FAIL line's start, as the summary shows it>]
 switch-frames #2248 2026-11-10 the page area showed no page through a switch
-history #3230 2026-11-19 Go to Pane 1 (⌃⇧1) on
 media #3354 2026-11-19 the pointer on the Mini Player didn't bring its scrim
