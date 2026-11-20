@@ -372,13 +372,25 @@ $(grep '^browser: update' "$log" | tr '\n' ';')"
     sleep 0.1
   done
 }
-# The dependency a cargo build's log $1 says it couldn't fetch over the network, or nothing.
+# What a build's log $1 says it couldn't fetch over the network, as "<tool> couldn't fetch <what>",
+# or nothing: setup.sh's git clone of GPUI, then one of cargo's crates or git dependencies.
 fetch_failed() {
+  local what
+  what=$(sed -n "s/^fatal: unable to access '\([^']*\)'.*/\1/p" "$1" | head -n 1)
+  if [ -z "$what" ] && grep -qE '^error: RPC failed|^fatal: early EOF|^fatal: the remote end hung up' "$1"; then
+    what=$(sed -n "s/^Cloning into '\([^']*\)'.*/\1/p" "$1" | tail -n 1)
+    what=${what:-a git repository}
+  fi
+  if [ -n "$what" ]; then
+    echo "git couldn't fetch $what"
+    return 0
+  fi
   grep -qE 'network failure seems to have happened|spurious network error|failed to download' "$1" ||
     return 0
-  sed -n -e 's/^error: failed to get `\([^`]*\)` as a dependency.*/\1/p' \
+  what=$(sed -n -e 's/^error: failed to get `\([^`]*\)` as a dependency.*/\1/p' \
     -e 's/^error: failed to download `\([^`]*\)`.*/\1/p' \
-    -e 's/^error: failed to download from `\([^`]*\)`.*/\1/p' "$1" | head -n 1
+    -e 's/^error: failed to download from `\([^`]*\)`.*/\1/p' "$1" | head -n 1)
+  [ -z "$what" ] || echo "cargo couldn't fetch $what"
 }
 flatpak_updates_check() {
   local id=app.ilo.browser remote=ilo-updates-check portal= tool
@@ -400,10 +412,10 @@ flatpak_updates_check() {
     return 0
   fi
   if ! ../tools/flatpak.sh > "$out/updates-flatpak.log" 2>&1; then
-    # A fetch that failed on the network says so, so it doesn't read as the Flatpak's (#3632).
+    # A clone or fetch that failed on the network says so, so it reads as the network's (#3632).
     local fetch
     fetch=$(fetch_failed "$out/updates-flatpak.log")
-    [ -z "$fetch" ] || fail "tools/flatpak.sh didn't build the Flatpak: $out/updates-flatpak.log, as cargo couldn't fetch $fetch over the runner's network"
+    [ -z "$fetch" ] || fail "tools/flatpak.sh didn't build the Flatpak: $out/updates-flatpak.log, as $fetch over the runner's network"
     fail "tools/flatpak.sh didn't build the Flatpak: $out/updates-flatpak.log"
   fi
   scratch=$(mktemp -d)
