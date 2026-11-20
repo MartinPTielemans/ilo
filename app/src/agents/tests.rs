@@ -3603,53 +3603,6 @@ fn a_clicked_option_keeps_a_close_for_its_page(cx: &mut TestAppContext) {
     );
 }
 
-/// The field a kept close names is the page's text, drawn in Settings and the Library and kept for
-/// 30 days, so what wouldn't show in it is written out as a request's is.
-#[gpui::test]
-fn a_kept_closes_field_writes_out_what_wouldnt_show(cx: &mut TestAppContext) {
-    let (agents, browser, _) = connected(cx);
-    let opened = call(
-        &agents,
-        "claude-code",
-        "open_tab",
-        json!({ "url": "docs.example" }),
-        cx,
-    );
-    let sizes = json!({ "nodes": [
-        { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Shop" },
-          "childIds": ["2"] },
-        { "nodeId": "2", "role": { "value": "listbox" }, "name": { "value": "Size" },
-          "childIds": ["3"] },
-        { "nodeId": "3", "role": { "value": "option" },
-          "name": { "value": "Large\u{202E}txt.exe" }, "backendDOMNodeId": 31 },
-    ]})
-    .to_string();
-    _ = page_done(&agents, &browser, opened, sizes.clone(), cx);
-    browser.asks.borrow_mut().insert(30);
-    let clicked = call(
-        &agents,
-        "claude-code",
-        "click",
-        json!({ "tab": 30, "ref": "e1" }),
-        cx,
-    );
-    _ = page_done(&agents, &browser, clicked, sizes, cx);
-    let kept = call(
-        &agents,
-        "claude-code",
-        "close_tab",
-        json!({ "tab": 30 }),
-        cx,
-    );
-    page_answers(&agents, &browser, 30, Closed::Asks, cx);
-    let answer = kept.recv().unwrap().text;
-    assert!(!answer.contains('\u{202E}'), "{answer}");
-    assert!(
-        answer.contains(r"you clicked option “Large\u{202E}txt.exe” there"),
-        "{answer}"
-    );
-}
-
 /// A type step of run_steps is recorded as the type call is, so it keeps a close for its page's
 /// answer the same way.
 #[gpui::test]
@@ -7320,6 +7273,53 @@ mod sessions {
         hello(&agents, "claude-code", "claude-code", cx);
         let claude = agents.read_with(cx, |agents, _| agents.agent_name("claude-code"));
         assert_eq!(claude, "Claude Code");
+    }
+
+    /// A close kept after the agent typed names the field to the agent alone: the activity log,
+    /// drawn in Settings and the Library, and the 30-day file keep the sentence that names no page
+    /// text nor what else the agent did there (#2326, #3654).
+    #[gpui::test]
+    fn a_kept_close_logs_no_label(cx: &mut TestAppContext) {
+        let (agents, browser, _) = connected(cx);
+        hello(&agents, "claude-code", "claude-code", cx);
+        typed_in_with_handler(&agents, &browser, cx);
+        let kept = call(
+            &agents,
+            "claude-code",
+            "close_tab",
+            json!({ "tab": 30 }),
+            cx,
+        );
+        page_answers(&agents, &browser, 30, Closed::Asks, cx);
+        let kept = kept.recv().unwrap();
+        assert!(kept.text.contains("textbox “Coupon”"), "{}", kept.text);
+        let plain = "Tab 30 stays open: its page asks before it's left, as it may have unsaved \
+                     changes. close_tab with discard: true closes it without saving.";
+        let logged = log(&agents, "claude-code", cx);
+        let refused = logged.iter().find(|entry| entry.0 == "close_tab");
+        assert_eq!(
+            refused.map(|entry| entry.2.as_str()),
+            Some(plain),
+            "{logged:?}"
+        );
+
+        bye(&agents, cx);
+        let ended = agents.update(cx, |agents, cx| agents.take_ended(cx));
+        let (_, past) = &ended[0];
+        let step = past.steps.iter().find(|step| step.action == "close_tab");
+        assert_eq!(
+            step.map(|step| step.refused.as_str()),
+            Some(plain),
+            "{:?}",
+            past.steps
+        );
+        assert!(
+            past.steps
+                .iter()
+                .all(|step| !step.refused.contains("Coupon")),
+            "{:?}",
+            past.steps
+        );
     }
 
     /// A session's card, once it ends, is its receipt (#1080): the orders the user allowed it, done,

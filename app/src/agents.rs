@@ -2361,16 +2361,10 @@ impl Agents {
             true => element.role.clone(),
             false => format!("“{}”", page::clip(&element.name, 60)),
         };
-        // A field as a close it keeps names it: "textbox “Note”". Its name is the page's text,
-        // and the sentence is drawn in Settings and the Library and kept for 30 days, so what
-        // wouldn't show is written out as a request's is (#3645).
+        // A field as a close it keeps names it: "textbox “Note”".
         let field = |element: &page::Element| match element.name.is_empty() {
             true => element.role.clone(),
-            false => format!(
-                "{} “{}”",
-                element.role,
-                request::escaped(&page::clip(&element.name, 60), false).0
-            ),
+            false => format!("{} {}", element.role, label(element)),
         };
         let mut act = Act {
             agent: agent.into(),
@@ -3577,30 +3571,30 @@ impl Agents {
         reply: mpsc::Sender<ToolResult>,
         cx: &mut Context<Self>,
     ) {
+        const DIALOG: &str =
+            "its page shows its own dialog, so it can't be asked whether it has unsaved changes";
+        const ASKS: &str = "its page asks before it's left, as it may have unsaved changes";
+        let dialog = self.dialogs.contains_key(&tab);
+        let once = match self.opened.contains(&tab) {
+            true => "",
+            false => ", once the user says yes",
+        };
+        let kept = |why: String| {
+            format!(
+                "Tab {tab} stays open: {why}. close_tab with discard: true closes it without saving{once}."
+            )
+        };
         let answer = match closed {
             Closed::Closed if discarded => Ok(format!("Closed tab {tab} without saving.")),
             Closed::Closed => Ok(format!("Closed tab {tab}.")),
             Closed::Pinned => Err(format!("Tab {tab} stays open: the user pinned it.")),
-            Closed::Asks => Err(format!(
-                "Tab {tab} stays open: {}. close_tab with discard: true closes it without \
-                 saving{}.",
-                match (self.dialogs.contains_key(&tab), self.edited.get(&tab)) {
-                    (true, _) => "its page shows its own dialog, so it can't be asked whether it \
-                                  has unsaved changes"
-                        .to_string(),
-                    (false, Some(edited)) if self.opened.contains(&tab) => {
-                        format!("its page asks before it's left, and {}", edited.why())
-                    }
-                    (false, _) => {
-                        "its page asks before it's left, as it may have unsaved changes".into()
-                    }
-                },
-                if self.opened.contains(&tab) {
-                    ""
-                } else {
-                    ", once the user says yes"
+            Closed::Asks => Err(kept(match (dialog, self.edited.get(&tab)) {
+                (true, _) => DIALOG.to_string(),
+                (false, Some(edited)) if self.opened.contains(&tab) => {
+                    format!("its page asks before it's left, and {}", edited.why())
                 }
-            )),
+                (false, _) => ASKS.into(),
+            })),
             Closed::Refused => Err("The tab isn't in the agent's own Space.".into()),
             Closed::Stays | Closed::Pending => Err(format!(
                 "Tab {tab} stays open: before its page answered, it went to another page, was \
@@ -3612,12 +3606,14 @@ impl Agents {
         } else {
             "close_tab"
         };
-        self.note(
-            agent,
-            logged,
-            site,
-            answer.as_ref().err().map_or("", String::as_str),
-        );
+        // The answer names what may be unsaved, for the agent. The log, drawn in Settings and the
+        // Library and kept 30 days, keeps no page text nor what else the agent did there (#2326):
+        // a kept close is logged with the sentence that names neither.
+        let refused = match closed {
+            Closed::Asks => kept(if dialog { DIALOG } else { ASKS }.into()),
+            _ => answer.as_ref().err().cloned().unwrap_or_default(),
+        };
+        self.note(agent, logged, site, &refused);
         if closed == Closed::Closed {
             self.opened.remove(&tab);
         }
