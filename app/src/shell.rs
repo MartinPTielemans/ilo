@@ -310,6 +310,10 @@ const REVEAL_OVERSHOOT: f32 = 8.;
 
 /// The site's demo, in a page's canvas, where wheel events carry no phase.
 const WEB: bool = cfg!(target_family = "wasm");
+/// Whether something blurs what's behind the browser window. Only the Mac's material does: on
+/// Wayland the UI is a subsurface under Chromium's translucent surface, which no compositor's
+/// blur reaches, and on X11 and Windows nothing asks for one (#3676).
+const BLURRED: bool = cfg!(target_os = "macos");
 
 /// The width of the band inside the browser window's edges that resizes it on Linux, as the core's
 /// (`bc_window_start_resize`).
@@ -2044,9 +2048,10 @@ pub struct Shell {
     /// Whether Top bar is on, as `TopBar` said as the window last drew (`Shell::bar_on`).
     top_bar: bool,
     forced_tone: Option<Tone>,
-    /// What lies under the tint where nothing else does: the preview's, whose window has no
-    /// material and shows the desktop through the tint, as the app's never does (#3033).
-    ground: Option<Rgba>,
+    /// Whether something blurs what's behind the window under its tint, as the Mac's material
+    /// does. Where nothing does, the tint would show what's behind sharp, so the window draws its
+    /// look opaque, over the stand-in (#3676).
+    blurred: bool,
     window_active: bool,
     window_watches: Vec<Subscription>,
     /// Whether the window is the one the user is in, as the host says (host_watch_window_main):
@@ -2440,7 +2445,7 @@ impl Shell {
             right: false,
             top_bar: false,
             forced_tone: None,
-            ground: None,
+            blurred: BLURRED,
             window_active: true,
             window_main: true,
             nav_dimmed_drawn: Cell::new(None),
