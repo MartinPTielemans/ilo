@@ -603,6 +603,7 @@ std::optional<std::string> ToJson(const Saved& saved) {
                            .Set("send_crash_reports", saved.settings.send_crash_reports)
                            .Set("relay_calls", saved.settings.relay_calls)
                            .Set("link_previews", saved.settings.link_previews)
+                           .Set("system_engine", saved.settings.system_engine)
                            .Set("auto_picture_in_picture",
                                 saved.settings.auto_picture_in_picture)
                            .Set("option_reveals_sidebar", saved.settings.option_reveals_sidebar)
@@ -903,6 +904,7 @@ std::optional<Saved> Read(const base::FilePath& path) {
         settings->FindBool("send_crash_reports").value_or(false);
     saved.settings.relay_calls = settings->FindBool("relay_calls").value_or(false);
     saved.settings.link_previews = settings->FindBool("link_previews").value_or(true);
+    saved.settings.system_engine = settings->FindBool("system_engine").value_or(true);
     saved.settings.auto_picture_in_picture =
         settings->FindBool("auto_picture_in_picture").value_or(true);
     saved.settings.option_reveals_sidebar =

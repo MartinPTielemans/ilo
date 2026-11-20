@@ -509,6 +509,16 @@ source_set("agent_close_rule") {
   ]
 }
 
+# Whether a page refused protected media moves its tab to the system's engine, apart so
+# browser_core_unittests tests the rule alone (#3593).
+source_set("protected_move_rule") {
+  sources = [
+    "protected_move_rule.cc",
+    "protected_move_rule.h",
+  ]
+  deps = [ "//base" ]
+}
+
 # How long an agent's job waits on its page's renderer, apart so browser_core_unittests tests the
 # limit alone (#3536).
 source_set("agent_reply_limit") {
@@ -813,6 +823,7 @@ source_set("browser_core") {
     ":agent_close_rule",
     ":agent_reply_limit",
     ":popup_hold",
+    ":protected_move_rule",
     ":search_default",
     ":select_choices",
     ":agent_download_hold",
@@ -1146,6 +1157,7 @@ test("browser_core_unittests") {
     "omnibox_last_visit_unittest.cc",
     "other_tabs_unittest.cc",
     "popup_hold_unittest.cc",
+    "protected_move_rule_unittest.cc",
     "search_default_unittest.cc",
     "select_choices_unittest.cc",
     "shortcut_key_unittest.cc",
@@ -1196,6 +1208,7 @@ test("browser_core_unittests") {
     ":mini_player_place",
     ":other_tabs",
     ":popup_hold",
+    ":protected_move_rule",
     ":search_default",
     ":select_choices",
     ":sidebar_backups",
