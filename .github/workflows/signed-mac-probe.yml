@@ -180,6 +180,18 @@ jobs:
           done
           exit "$failed"
 
+      # Whether the release's Chromium left its key in the runner's login keychain, which with the
+      # runs' quits and nothing stalled says it took the keychain without a prompt (#3614). The
+      # item's presence alone: never its secret (-w, -g) or its attributes in the log.
+      - name: Login keychain
+        if: ${{ always() }}
+        run: |
+          if security find-generic-password -s "$(cat branding/name) Safe Storage" > /dev/null 2>&1; then
+            echo "item present"
+          else
+            echo "item absent"
+          fi
+
       # The runs' logs and window captures alone: no profile, download or copy of the app.
       - if: ${{ always() }}
         uses: actions/upload-artifact@v4

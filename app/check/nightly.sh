@@ -95,7 +95,7 @@ nightly_check() {
     nightly_registry remove
   else
     defaults delete "$app_id" > /dev/null 2>&1 || true
-    app_id=dev.browser.app
+    app_id=$checked_app_id
   fi
   rm -rf "$scratch"
   scratch=
