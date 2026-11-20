@@ -2821,7 +2821,7 @@ CARD
     *"press Space on "*) space_said="the button it had the keyboard on" ;;
     *) space_said="the page's paying button, its outline not saying what had the keyboard" ;;
   esac
-  call close_tab "{\"tab\":$shop_tab}" > /dev/null
+  # The last checkout stays open: the tab an agent last acted in shows it at work until it goes.
 
   # A bank's site asks first, in a card in the window, and Allow Once opens it.
   bank="{\"url\":\"bank.localhost:$port/fields.html\"}"
