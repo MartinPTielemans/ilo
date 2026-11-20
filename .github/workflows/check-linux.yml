@@ -375,9 +375,11 @@ jobs:
       - if: ${{ steps.engine.outputs.found == 'true' && steps.own.outputs.own != 'true' }}
         run: ../.github/scripts/app-artifact.sh unpack "$(../engine/fetch.sh)" "$RUNNER_TEMP/app/app.tar"
 
-      # main's build cache, which the build job saves.
+      # main's build cache, which the build job saves. An updates leg takes it even with the build
+      # job's app, as its Flatpak's prod build would otherwise fetch every crate and git dependency
+      # from scratch while the check runs, where one failed fetch fails the run (#3632).
       - id: cache
-        if: ${{ steps.own.outputs.own == 'true' }}
+        if: ${{ steps.own.outputs.own == 'true' || (steps.engine.outputs.found == 'true' && contains(format(' {0} ', matrix.runs), ' updates ')) }}
         uses: actions/cache/restore@v4
         with:
           path: |

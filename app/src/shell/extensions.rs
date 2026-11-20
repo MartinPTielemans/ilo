@@ -125,7 +125,7 @@ pub fn pin_menu_item(extension: &Extension) -> MenuItem {
 pub(super) fn bind(cx: &mut App) {
     // While the UI has the keyboard. The page hands its keys over before it sees them.
     cx.intercept_keystrokes(|event, _, cx| {
-        if crate::dialog::asking(cx) {
+        if crate::dialog::awaits_answer(cx) {
             return;
         }
         let Some(shell) = super::commands::key_shell(cx) else {
@@ -141,7 +141,7 @@ pub(super) fn bind(cx: &mut App) {
     })
     .detach();
     cx.on_action(|run: &RunExtension, cx| {
-        if crate::dialog::asking(cx) {
+        if crate::dialog::awaits_answer(cx) {
             return;
         }
         if let Some(shell) = super::commands::key_shell(cx) {
@@ -151,7 +151,7 @@ pub(super) fn bind(cx: &mut App) {
         }
     });
     cx.on_action(|pin: &PinExtension, cx| {
-        if crate::dialog::asking(cx) {
+        if crate::dialog::awaits_answer(cx) {
             return;
         }
         if let Some(shell) = super::commands::key_shell(cx) {

@@ -398,6 +398,8 @@ const std::map<std::string, unsigned short> kKeyCodes = {
     {"pageup", 116}, {"pagedown", 121}, {"/", 44}, {"?", 44}, {"=", 24}, {"&", 26}, {"_", 27},
     {":", 41}, {"@", 19}, {"!", 18}, {"(", 25}, {")", 29}, {"%", 23}, {"#", 20}, {"f12", 111},
     {"f10", 109}, {"f6", 97},
+    // ⇧2 on the Danish and German layouts, whose ⌃⇧2 types it (#3522).
+    {"\"", 19},
 };
 // AppKit's characters for the arrows are NSUpArrowFunctionKey to NSRightArrowFunctionKey, and for
 // the others NSDeleteFunctionKey, NSPageUpFunctionKey, NSPageDownFunctionKey, NSF12FunctionKey,

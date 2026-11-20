@@ -383,15 +383,7 @@ fn families(fonts: &[String]) -> Vec<(Option<Face>, SharedString)> {
                     "Liberation Serif",
                 ]),
                 Some(Face::Rounded) => first(&["SF Pro Rounded"]),
-                Some(Face::Mono) => first(&[
-                    "SF Mono",
-                    "Menlo",
-                    "Cascadia Mono",
-                    "Consolas",
-                    "Noto Sans Mono",
-                    "DejaVu Sans Mono",
-                    "Liberation Mono",
-                ]),
+                Some(Face::Mono) => crate::face::mono(fonts),
             };
             (face, family.into())
         })

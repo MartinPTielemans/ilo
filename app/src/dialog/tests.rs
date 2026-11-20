@@ -99,6 +99,35 @@ fn the_keys_typed_as_it_leaves_wait_for_the_window(cx: &mut TestAppContext) {
     assert_eq!(*dialog.host.1.borrow(), ["hold", "hide", "give"]);
 }
 
+/// A question answered or taken back keeps the app's shortcuts waiting no longer, though it still
+/// draws its leaving: on Linux the keys are the browser window's at once (#3617).
+#[gpui::test]
+fn the_apps_shortcuts_wait_only_while_it_awaits_its_answer(cx: &mut TestAppContext) {
+    let mut dialog = Asking::page(page_question(Vec::new(), None), cx);
+    let awaits = |dialog: &mut Asking| dialog.cx.cx.update(|cx| (asking(cx), awaits_answer(cx)));
+    assert_eq!(
+        awaits(&mut dialog),
+        (true, true),
+        "it didn't wait for its answer"
+    );
+    dialog.cx.cx.update(withdraw_page);
+    assert_eq!(
+        awaits(&mut dialog),
+        (true, false),
+        "taken back, it kept the shortcuts waiting as it left"
+    );
+    dialog.calls();
+    assert_eq!(awaits(&mut dialog), (false, false));
+
+    let mut dialog = Asking::new(cx);
+    dialog.keys("escape");
+    assert_eq!(
+        awaits(&mut dialog),
+        (true, false),
+        "answered, it kept the shortcuts waiting as it left"
+    );
+}
+
 #[gpui::test]
 fn escape_cancels(cx: &mut TestAppContext) {
     let mut dialog = Asking::new(cx);
