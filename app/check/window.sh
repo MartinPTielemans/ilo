@@ -1479,12 +1479,12 @@ see_through() {
     kill "$backdrop_pid" 2> /dev/null || true
     wait "$backdrop_pid" 2> /dev/null || true
   done
-  material="opaque, the sidebar over black and white: ${seen%, }"
-  echo "$material"
+  echo "the sidebar over black and white: ${seen%, }"
   echo "$seen" | awk -F', ' '{ split($1, b, " "); split($2, w, " "); off = 0
     for (i = 2; i <= 4; i++) if (w[i] - b[i] > 2 || b[i] - w[i] > 2) off = 1
     exit off }' ||
     fail "the sidebar shows what's behind the window, which nothing blurs: ${seen%, }; $out/see-through-black.png, $out/see-through-white.png"
+  material="opaque, the sidebar over black and white: ${seen%, }"
 }
 # Windows' and Linux's windows have no material under the UI, whose tint is the window's look, so
 # there's none to measure there, and kern.hv_vmm_present is the Mac's alone (#3327).
