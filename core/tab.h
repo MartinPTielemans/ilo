@@ -16,6 +16,7 @@
 #include "base/time/time.h"
 #include "browser_core/agent_job_voter.h"
 #include "browser_core/platform/system_page.h"
+#include "browser_core/protected_move_rule.h"
 #include "browser_core/public/browser_core.h"
 #include "browser_core/session.h"
 #include "chrome/browser/media/webrtc/media_stream_capture_indicator.h"
@@ -276,11 +277,12 @@ class Tab : public content::WebContentsObserver,
   base::TimeTicks last_press_at() const { return last_press_at_; }
   // And ⌥ (Alt), which tells ⇧⌥-click on a link from ⇧-click on Linux, as both ask for a window.
   bool last_press_held_alt() const { return last_press_held_alt_; }
-  // When the user's last press reached the page, a button, finger or key going down, and when an
-  // agent's last input did, which comes through DevTools: null if none has. A page asking for
-  // protected media moves only on the user's (protected_move_rule.h).
-  base::TimeTicks users_input_at() const { return users_input_at_; }
-  base::TimeTicks agents_input_at() const { return agents_input_at_; }
+  // The user's last press that reached the page, a button, finger or key going down, and an
+  // agent's last input, which comes through DevTools, each with its document. A page asking for
+  // protected media moves only on the user's, made on it (protected_move_rule.h).
+  const PagePresses& presses() const { return presses_; }
+  // The page left the key stamped |key| and the browser ran it (PagePresses::TakenBack).
+  void PageKeyTakenBack(base::TimeTicks key) { presses_.TakenBack(key); }
 
   // Whether the tab was opened as a link preview (Window::OpenPreview), which it stays until a
   // Space or the favorites take it.
@@ -473,8 +475,7 @@ class Tab : public content::WebContentsObserver,
   gfx::PointF last_click_;
   bool last_press_held_command_ = false;
   base::TimeTicks last_press_at_;
-  base::TimeTicks users_input_at_;
-  base::TimeTicks agents_input_at_;
+  PagePresses presses_;
   bool opened_as_preview_ = false;
   bool last_press_held_alt_ = false;
   // Whether the app was last told the page is full screen.

@@ -21,4 +21,27 @@ ProtectedAnswer AnswerProtectedAsk(const ProtectedAsk& ask) {
   return ProtectedAnswer::kMove;
 }
 
+void PagePresses::Users(int64_t document, base::TimeTicks at, std::optional<base::TimeTicks> key) {
+  before_key_ = users_;
+  key_ = key;
+  users_ = {document, at};
+}
+
+void PagePresses::Agents(int64_t document, base::TimeTicks at) {
+  agents_ = {document, at};
+}
+
+void PagePresses::TakenBack(base::TimeTicks key) {
+  // A later press of the user's is theirs, whatever came of the key before it.
+  if (key_ == key) {
+    users_ = before_key_;
+    key_.reset();
+  }
+}
+
+void PagePresses::Fill(int64_t document, ProtectedAsk& ask) const {
+  ask.users_input = users_.document == document ? users_.at : base::TimeTicks();
+  ask.agents_input = agents_.document == document ? agents_.at : base::TimeTicks();
+}
+
 }  // namespace browser_core

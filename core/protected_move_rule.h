@@ -1,6 +1,9 @@
 #ifndef BROWSER_CORE_PROTECTED_MOVE_RULE_H_
 #define BROWSER_CORE_PROTECTED_MOVE_RULE_H_
 
+#include <cstdint>
+#include <optional>
+
 #include "base/time/time.h"
 
 namespace browser_core {
@@ -43,6 +46,35 @@ enum class ProtectedAnswer {
   // It stays, and the note asks first: it would lose what was typed, or the capture.
   kAskTyped,
   kAskCapturing,
+};
+
+// The last of the user's presses and of an agent's input that reached a tab's page, each with the
+// document it reached, known by its page's UKM source id, which a main-frame document change gives
+// anew. A press is its document's alone, as Chromium's activation is: the page a tab goes to next
+// never counts one made on the page before, as ⌘L's on the page an address is typed over (#3593).
+class PagePresses {
+ public:
+  // The user's press, a button, finger or key going down, at |at| on |document|'s page. A key's
+  // |key| is its event's time stamp, which tells it when the page leaves it (TakenBack).
+  void Users(int64_t document, base::TimeTicks at, std::optional<base::TimeTicks> key);
+  void Agents(int64_t document, base::TimeTicks at);
+  // The page left the key stamped |key| and the browser ran it, as ⌘L: pressed for the browser, so
+  // it gives the page nothing, and the user's press before it stands. A key the browser keeps
+  // before the page never reaches it, so never comes here.
+  void TakenBack(base::TimeTicks key);
+  // The ask's inputs for a page showing |document|: none made on another.
+  void Fill(int64_t document, ProtectedAsk& ask) const;
+
+ private:
+  struct Press {
+    int64_t document = 0;
+    base::TimeTicks at;
+  };
+  Press users_;
+  Press agents_;
+  // While the user's last press is a key the page may still leave: its stamp and the press before.
+  std::optional<base::TimeTicks> key_;
+  Press before_key_;
 };
 
 // Moves only on the user's own press: their input inside kPressLifespan of the ask, and newer than

@@ -94,10 +94,8 @@ ProtectedAsk AskOf(content::RenderFrameHost& frame, Tab& tab, content::WebConten
   const GURL& url = contents->GetLastCommittedURL();
   Profile* profile = Profile::FromBrowserContext(contents->GetBrowserContext());
   const bc_id id = Tab::IdOf(contents);
-  return {
+  ProtectedAsk ask = {
       .now = base::TimeTicks::Now(),
-      .users_input = tab.users_input_at(),
-      .agents_input = tab.agents_input_at(),
       .allowed = url.SchemeIsHTTPOrHTTPS() && system_engine::Allowed(id),
       .preview = system_engine::Previewing(id),
       .kept_in_chromium = system_engine::KeptInChromium(profile, url),
@@ -108,6 +106,9 @@ ProtectedAsk AskOf(content::RenderFrameHost& frame, Tab& tab, content::WebConten
       .asks_before_leaving = tab.AsksBeforeLeaving(),
       .capturing = Capturing(contents),
   };
+  // Only presses on the asking page's document, which is the main frame's even for a frame's ask.
+  tab.presses().Fill(frame.GetPageUkmSourceId(), ask);
+  return ask;
 }
 
 // The moved note's word for the app: whether the ad blocker ran on the site, which the note says
