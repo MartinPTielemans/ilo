@@ -2361,10 +2361,16 @@ impl Agents {
             true => element.role.clone(),
             false => format!("“{}”", page::clip(&element.name, 60)),
         };
-        // A field as a close it keeps names it: "textbox “Note”".
+        // A field as a close it keeps names it: "textbox “Note”". Its name is the page's text,
+        // and the sentence is drawn in Settings and the Library and kept for 30 days, so what
+        // wouldn't show is written out as a request's is (#3645).
         let field = |element: &page::Element| match element.name.is_empty() {
             true => element.role.clone(),
-            false => format!("{} {}", element.role, label(element)),
+            false => format!(
+                "{} “{}”",
+                element.role,
+                request::escaped(&page::clip(&element.name, 60), false).0
+            ),
         };
         let mut act = Act {
             agent: agent.into(),

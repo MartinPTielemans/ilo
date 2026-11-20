@@ -3603,6 +3603,53 @@ fn a_clicked_option_keeps_a_close_for_its_page(cx: &mut TestAppContext) {
     );
 }
 
+/// The field a kept close names is the page's text, drawn in Settings and the Library and kept for
+/// 30 days, so what wouldn't show in it is written out as a request's is.
+#[gpui::test]
+fn a_kept_closes_field_writes_out_what_wouldnt_show(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let opened = call(
+        &agents,
+        "claude-code",
+        "open_tab",
+        json!({ "url": "docs.example" }),
+        cx,
+    );
+    let sizes = json!({ "nodes": [
+        { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Shop" },
+          "childIds": ["2"] },
+        { "nodeId": "2", "role": { "value": "listbox" }, "name": { "value": "Size" },
+          "childIds": ["3"] },
+        { "nodeId": "3", "role": { "value": "option" },
+          "name": { "value": "Large\u{202E}txt.exe" }, "backendDOMNodeId": 31 },
+    ]})
+    .to_string();
+    _ = page_done(&agents, &browser, opened, sizes.clone(), cx);
+    browser.asks.borrow_mut().insert(30);
+    let clicked = call(
+        &agents,
+        "claude-code",
+        "click",
+        json!({ "tab": 30, "ref": "e1" }),
+        cx,
+    );
+    _ = page_done(&agents, &browser, clicked, sizes, cx);
+    let kept = call(
+        &agents,
+        "claude-code",
+        "close_tab",
+        json!({ "tab": 30 }),
+        cx,
+    );
+    page_answers(&agents, &browser, 30, Closed::Asks, cx);
+    let answer = kept.recv().unwrap().text;
+    assert!(!answer.contains('\u{202E}'), "{answer}");
+    assert!(
+        answer.contains(r"you clicked option “Large\u{202E}txt.exe” there"),
+        "{answer}"
+    );
+}
+
 /// A type step of run_steps is recorded as the type call is, so it keeps a close for its page's
 /// answer the same way.
 #[gpui::test]
