@@ -386,8 +386,16 @@ impl Outline {
             .sum();
         if 2 * (changes.len() - said) > whole {
             // A view the page put in place of the last is new to the agent, and its outline
-            // whole; the same one drawn again, its elements new, is what the agent had.
-            return match reads_as(&last.lines, &self.lines) {
+            // whole; the same one drawn again, most of its lines new elements that read as the
+            // ones gone, is what the agent had. A list that closed leaves no new lines.
+            let added: Vec<&Line> = (self.lines.iter().enumerate())
+                .filter_map(|(at, line)| same[at].is_none().then_some(line))
+                .collect();
+            let gone: Vec<&Line> = (last.lines.iter().enumerate())
+                .filter_map(|(at, line)| (!kept.contains(&at)).then_some(line))
+                .collect();
+            let redrawn = 2 * added.len() > self.lines.len() && reads_as(&gone, &added);
+            return match redrawn {
                 true => (
                     self.with_notes(format!("{}\n\n{MOSTLY_CHANGED}", self.head)),
                     false,
@@ -413,7 +421,7 @@ impl Outline {
 
 /// Whether most of `new`'s lines read as lines of `old` do, their refs aside: the same view drawn
 /// again, as a grid redraws its rows after a click.
-fn reads_as(old: &[Line], new: &[Line]) -> bool {
+fn reads_as(old: &[&Line], new: &[&Line]) -> bool {
     let unreferenced = |line: &Line| {
         let mut text = String::with_capacity(line.text.len());
         let mut rest = line.text.as_str();
@@ -1731,6 +1739,16 @@ mod tests {
             format!("Tab 20: Shop\nURL: https://shop.example/\n\n{MOSTLY_CHANGED}")
         );
         assert!(!has);
+        // A list that closes takes most of a small outline with it, which reads as before, but
+        // nothing in it is new: it's answered whole, with the refs the agent acts on next.
+        let open = outline(&tab(), &shop(true), &mut refs, None);
+        let mut closed = shop(false);
+        closed[0]["childIds"] = json!(["3", "5", "6"]);
+        let closed = outline(&tab(), &closed, &mut refs, None);
+        let (text, has) = closed.since(&open);
+        assert_eq!(text, closed.text());
+        assert!(text.contains("- button \"Add to basket\" [e"), "{text}");
+        assert!(has);
         let mut other = vec![
             node("1", "RootWebArea", "Shop", &["2", "3"]),
             node("2", "heading", "Your basket", &[]),
