@@ -2402,7 +2402,7 @@ pub fn first_message(asked: &str, page: Option<&AskedOn>) -> String {
     match page {
         Some(page) => format!(
             "{asked}\n\n(I'm on “{}”, {}. Open it in a tab of your own if you need it.)",
-            page::straight(&page.title),
+            super::request::plain(&page.title),
             page.url
         ),
         None => asked.to_string(),

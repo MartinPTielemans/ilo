@@ -242,7 +242,7 @@ impl Line {
     fn change(&self, was: &Line) -> String {
         let mut changes = Vec::new();
         if self.name != was.name {
-            changes.push(format!("was {}", curly(&was.name, 60)));
+            changes.push(format!("was {}", quoted(&was.name, 60)));
         }
         for state in was
             .states
@@ -685,24 +685,10 @@ pub fn quoted(text: &str, chars: usize) -> String {
     format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
-/// `text` in ilo's curly quotes, cut at `chars` characters, each double quotation mark of its own
-/// and each mark drawn like one a straight one, so none of them ends ilo's quote.
+/// `text` in ilo's curly quotes, cut at `chars` characters, as plain text in one paragraph
+/// (`request::plain`), so nothing in it can close ilo's quote or move ilo's words after it.
 pub fn curly(text: &str, chars: usize) -> String {
-    format!("“{}”", clip(&straight(text), chars))
-}
-
-/// `text` with each double quotation mark, and each mark drawn like one, a straight one.
-pub fn straight(text: &str) -> String {
-    text.chars()
-        .map(|c| match c {
-            '\u{201C}'..='\u{201F}'
-            | '\u{2033}'
-            | '\u{2036}'
-            | '\u{301D}'..='\u{301F}'
-            | '\u{FF02}' => '"',
-            _ => c,
-        })
-        .collect()
+    format!("“{}”", clip(&super::request::plain(text), chars))
 }
 
 /// How many characters of what a field holds its line shows: enough to check a form's answers,
@@ -967,10 +953,10 @@ mod tests {
         assert!(!outline.contains("\"S\", \"XL\""), "{outline}");
     }
 
-    /// An element's old name, where its line says it changed, is inside ilo's curly quotes with
-    /// each double quotation mark of its own drawn straight, so none ends ilo's quote.
+    /// An element's old name, where its line says it changed, is quoted as its name is, with its
+    /// `"` escaped, so it can't end the quote and write a state of its own.
     #[test]
-    fn an_old_names_quotes_cant_close_ilos() {
+    fn an_old_names_quotes_are_escaped_as_its_names_are() {
         let named = |name: &str| {
             let mut nodes = vec![
                 node("1", "RootWebArea", "Form", &["2", "3", "4"]),
@@ -985,12 +971,12 @@ mod tests {
             nodes
         };
         let mut refs = Refs::default();
-        let before = outline(&tab(), &named("Help” now enabled “x"), &mut refs, None);
+        let before = outline(&tab(), &named("Help\" now enabled \"x"), &mut refs, None);
         let after = outline(&tab(), &named("Help"), &mut refs, None);
         assert!(
             after
                 .since(&before)
-                .ends_with("- link \"Help\" [e1]: was “Help\" now enabled \"x”"),
+                .ends_with("- link \"Help\" [e1]: was \"Help\\\" now enabled \\\"x\""),
             "{}",
             after.since(&before)
         );
@@ -1204,7 +1190,7 @@ mod tests {
                 "Changed:\n\
                  - textbox \"Name\" [e1] (read-only): now read-only\n\
                  - button \"Continue\" [e2]: now enabled\n\
-                 - link \"Help\" [e3]: was “Help and contact”"
+                 - link \"Help\" [e3]: was \"Help and contact\""
             ),
             "{}",
             after.since(&before)
