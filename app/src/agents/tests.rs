@@ -2035,8 +2035,7 @@ fn a_key_press_that_activates_a_control_asks_as_a_click_on_it(cx: &mut TestAppCo
 
     snapshot(None, cx);
     let card = json!({ "tab": 20, "ref": "e1", "text": "4242", "submit": true });
-    let what =
-        "type “4242” into “Card number” and press Enter, which can click “Pay now”, on example.com";
+    let what = "press Enter, which may click “Pay now” on example.com, after typing “4242” into “Card number”";
     asks("type", card, what, cx);
     goes(
         "type",
@@ -2054,7 +2053,7 @@ fn a_key_press_that_activates_a_control_asks_as_a_click_on_it(cx: &mut TestAppCo
     asks(
         "press_key",
         enter.clone(),
-        "press Enter, which can click “Pay now”, on example.com",
+        "press Enter, which may click “Pay now” on example.com",
         cx,
     );
     snapshot(Some("3"), cx);
@@ -2067,14 +2066,14 @@ fn a_key_press_that_activates_a_control_asks_as_a_click_on_it(cx: &mut TestAppCo
     asks(
         "press_key",
         space,
-        "press Space on “Pay now” on example.com",
+        "press Space to click “Pay now” on example.com",
         cx,
     );
     snapshot(Some("4"), cx);
     asks(
         "press_key",
         enter.clone(),
-        "press Enter on “Pay now” on example.com",
+        "press Enter to click “Pay now” on example.com",
         cx,
     );
 
@@ -2084,7 +2083,7 @@ fn a_key_press_that_activates_a_control_asks_as_a_click_on_it(cx: &mut TestAppCo
     asks(
         "press_key",
         enter.clone(),
-        "press Enter, which can click “Pay now”, on example.com",
+        "press Enter, which may click “Pay now” on example.com",
         cx,
     );
     snapshot(Some("5"), cx);
@@ -2098,7 +2097,7 @@ fn a_key_press_that_activates_a_control_asks_as_a_click_on_it(cx: &mut TestAppCo
     asks(
         "press_key",
         enter.clone(),
-        "press Enter on “Pay now” on example.com",
+        "press Enter to click “Pay now” on example.com",
         cx,
     );
     snapshot(Some("7"), cx);
@@ -2107,7 +2106,7 @@ fn a_key_press_that_activates_a_control_asks_as_a_click_on_it(cx: &mut TestAppCo
     asks(
         "press_key",
         enter.clone(),
-        "press Enter on “Pay now” on example.com",
+        "press Enter to click “Pay now” on example.com",
         cx,
     );
 
@@ -2116,7 +2115,7 @@ fn a_key_press_that_activates_a_control_asks_as_a_click_on_it(cx: &mut TestAppCo
     asks(
         "press_key",
         enter.clone(),
-        "press Enter, which can click “Pay now”, on example.com",
+        "press Enter, which may click “Pay now” on example.com",
         cx,
     );
 
@@ -2131,7 +2130,7 @@ fn a_key_press_that_activates_a_control_asks_as_a_click_on_it(cx: &mut TestAppCo
     asks(
         "press_key",
         enter,
-        "press Enter, which can click “Pay now”, on example.com",
+        "press Enter, which may click “Pay now” on example.com",
         cx,
     );
 }
