@@ -939,6 +939,11 @@ fn outline(html: &str) -> (String, usize) {
             at += 1;
             continue;
         };
+        // A value left open is the rest of the page, which is withheld as a field's is.
+        if tag.open {
+            withheld += 1;
+            break;
+        }
         at = tag.end;
         let value = |name: &str| {
             (tag.attributes.iter())
@@ -1642,7 +1647,7 @@ fn query_value(bytes: &[u8], from: usize) -> Option<(Bounds, Bounds)> {
 /// whether it's a password's: an input's `value` by its `name` or else its `id`, and a meta tag's
 /// `content` by its `name` or else its `property`, `itemprop` or `http-equiv`.
 fn tag_value(text: &str, at: usize) -> Option<(String, Bounds, bool)> {
-    let tag = tag(text, at).filter(|tag| !tag.closing)?;
+    let tag = tag(text, at).filter(|tag| !tag.closing && !tag.open)?;
     let input = match tag.name.as_str() {
         "input" => true,
         "meta" => false,
@@ -1666,12 +1671,15 @@ fn tag_value(text: &str, at: usize) -> Option<(String, Bounds, bool)> {
 }
 
 /// A markup tag: its name in lower case, whether it closes, its attributes' names in lower case
-/// and their values' bounds, and where it ends, past its `>`.
+/// and their values' bounds, and where it ends, past its `>`. One with a quoted value left open is
+/// `open`, its attributes those before that value, and ends at the end of the text, as a browser
+/// reads the rest as that value.
 struct Tag {
     name: String,
     closing: bool,
     attributes: Vec<(String, Bounds)>,
     end: usize,
+    open: bool,
 }
 
 /// The tag at the `<` at `at`, if one starts there.
@@ -1720,7 +1728,16 @@ fn tag(text: &str, at: usize) -> Option<Tag> {
             next = past_spaces(bytes, next + 1);
             match bytes.get(next) {
                 Some(&quote @ (b'"' | b'\'')) => {
-                    let close = (next + 1..bytes.len()).find(|&at| bytes[at] == quote)?;
+                    let Some(close) = (next + 1..bytes.len()).find(|&at| bytes[at] == quote) else {
+                        let end = bytes.len();
+                        return Some(Tag {
+                            name,
+                            closing,
+                            attributes,
+                            end,
+                            open: true,
+                        });
+                    };
                     bounds = (next + 1, close);
                     next = close + 1;
                 }
@@ -1746,6 +1763,7 @@ fn tag(text: &str, at: usize) -> Option<Tag> {
         closing,
         attributes,
         end: next,
+        open: false,
     })
 }
 
@@ -2643,6 +2661,33 @@ mod tests {
             !read.contains("outline") && read.contains("<b>plain</b>"),
             "{read}"
         );
+    }
+
+    /// A quoted value left open runs to the end of the page, as a browser reads it, so the outline
+    /// ends there: a page cut inside a field's value, or one whose quote never closes, shows its
+    /// text before that tag and nothing of the value or after it.
+    #[test]
+    fn a_page_left_inside_a_quoted_value_ends_its_outline_there() {
+        let sent = &parsed(json!([{ "method": "GET", "path": "/a" }])).unwrap()[0];
+        let cut = r#"<!DOCTYPE html><html><body><p>Before the cut</p>
+            <form method="post" action="/session">
+            <input type="hidden" name="csrf_token" value="made-up-cut-1"#;
+        let unclosed = r#"<!DOCTYPE html><html><body><p>Shown first</p>
+            <input name="login" value='made-up-open-2><p>made-up-after-2</p>
+            <input type="hidden" value="made-up-after-3"><p>made-up-after-4</p></body></html>"#;
+        for (page, shown) in [(cut, "Before the cut"), (unclosed, "Shown first")] {
+            let response = Response {
+                status: 200,
+                kind: "text/html".into(),
+                body: page.as_bytes().to_vec(),
+                ..Response::default()
+            };
+            let (mut left, mut hidden) = (ALL_SHOWN, 0);
+            let read = answer(sent, &response, &mut left, &mut hidden);
+            none_of(&read, &["made-up"]);
+            assert!(read.contains(shown), "{shown} isn't in {read}");
+            assert!(read.contains("1 value was withheld"), "{read}");
+        }
     }
 
     /// A call's answers together show what one may, and each says where it's cut.
