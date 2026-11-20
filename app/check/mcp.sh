@@ -2101,6 +2101,29 @@ SEE
   [ "$changed" = "error: The user said no: you can't make a change on localhost. Don't try again." ] ||
     fail "the denied long change answered: $changed"
   grep -q 'Picnic' "$out/site.log" && fail "the denied long change reached the site"
+  # Settings › Agents opens the picnic's row to what it would have sent, its file name's
+  # right-to-left mark written out on a plate as in the whole request (#3645). The log keeps the
+  # value as sent; the capture shows it drawn.
+  send menu Settings…
+  expect '^browser: settings shown ' "Settings… didn't show Settings"
+  settings_drew
+  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Agents$'; then
+    send clickkey $(drawn "toolbar Agents")
+    expect '^browser: settings tab Agents$' "a click on Agents didn't show its section"
+  fi
+  settings_drew Agents
+  picnic_id=$(sed -n 's/^browser: settings request \([0-9]*\) POST at .*/\1/p' "$log" | sort -nu | tail -1)
+  in_sight "request $picnic_id POST" || fail "Settings › Agents didn't draw the picnic's request"
+  send clickkey $at
+  expect "^browser: settings request $picnic_id opened " "a click on the picnic's request didn't open it"
+  grep "^browser: settings request $picnic_id opened " "$log" | tail -1 |
+    grep -q "not sent: .*menu$(printf '\342\200\256')txt\.exe" ||
+    fail "the picnic's request opened to: $(grep "^browser: settings request $picnic_id opened " "$log" | tail -1)"
+  ../tools/window-screenshot.sh "$pid" "$out/settings-agents-written.png" || fail "no window to capture"
+  send clickkey $(drawn "toolbar General")
+  expect '^browser: settings tab General$' "a click on General didn't show its section"
+  send key w cmd
+  expect '^browser: settings hidden$' "⌘W didn't hide Settings"
   # Several changes in one call ask once, each its own row marked as the agent's words, the whole
   # request shows them all, and Deny sends none of them.
   bread='{"method":"POST","path":"/api/items","body":{"title":"Bread"},"what":"Add Bread to the list."}'
