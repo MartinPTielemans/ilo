@@ -443,3 +443,58 @@ fn a_share_is_answered_no_once_another_tab_shows(cx: &mut TestAppContext) {
     prompt.shown(4);
     assert_eq!(prompt.calls(), ["hide"]);
 }
+
+struct Toasts;
+
+impl crate::toast::Host for Toasts {
+    fn show(&self) {}
+    fn hide(&self) {}
+    fn take_clicks(&self, _: bool) {}
+    fn plate(&self, _: gpui::Bounds<gpui::Pixels>) {}
+}
+
+/// The offer asks a question at the window's top right, where a toast shows: a toast that only
+/// confirms what was done, such as a shared link copied, leaves as the offer shows, and one that
+/// waits for an answer stays.
+#[gpui::test]
+fn a_toast_that_confirms_leaves_as_the_offer_shows(cx: &mut TestAppContext) {
+    use crate::toast;
+    let mut prompt = Prompt::new(cx);
+    prompt.cx.cx.update(|cx| {
+        toast::open(
+            Rc::new(Toasts),
+            |_| (hsla(0., 0., 0., 1.), Default::default()),
+            cx,
+        )
+    });
+    let copied = "Link to \u{201c}Lisbon\u{201d} copied";
+    prompt.cx.cx.update(|cx| {
+        toast::show_logged_as(
+            copied,
+            "share copied",
+            Vec::new(),
+            std::time::Duration::from_secs(5),
+            cx,
+        )
+    });
+    prompt.cx.run_until_parked();
+    assert!(prompt.cx.cx.update(|cx| toast::showing(copied, cx)));
+    prompt.offered(1, Some(saving(Kind::Share, &["Where it goes."])));
+    assert!(
+        !prompt.cx.cx.update(|cx| toast::showing(copied, cx)),
+        "the copied toast leaves for the share's offer"
+    );
+
+    prompt.keys("escape");
+    let asks = "Send a report of the crash?";
+    prompt
+        .cx
+        .cx
+        .update(|cx| toast::show_until_answered(asks, Vec::new(), cx));
+    prompt.cx.run_until_parked();
+    prompt.offered(1, Some(offer(Kind::Save, &["check@example.test"])));
+    assert!(
+        prompt.cx.cx.update(|cx| toast::showing(asks, cx)),
+        "a toast waiting for an answer stays"
+    );
+}

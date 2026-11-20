@@ -175,6 +175,8 @@ struct Shown {
     held: Option<u64>,
     /// Whether it's the resting toast, which comes back after the others.
     resting: bool,
+    /// Whether it leaves on its own time, as one that only confirms what was done does.
+    timed: bool,
     _timer: Task<()>,
 }
 
@@ -446,6 +448,24 @@ pub fn hide_undo(cx: &mut App) {
         .ok();
 }
 
+/// A question shows over the page, such as an offer to save a password or add a shared link: a
+/// toast that only confirms what was done leaves for it, rather than covering it. One that offers the undo, says
+/// how to leave full screen, or waits for an answer stays.
+pub fn give_way(cx: &mut App) {
+    let Some(window) = cx.try_global::<ToastWindow>().map(|toast| toast.0) else {
+        return;
+    };
+    window
+        .update(cx, |toast, _, cx| {
+            let confirms =
+                |shown: &Shown| shown.timed && !shown.full_screen && !shown.offers_undo();
+            if toast.shown.as_ref().is_some_and(confirms) {
+                toast.leave(cx);
+            }
+        })
+        .ok();
+}
+
 /// Shows how to leave full screen, as the window has gone full screen or another Space shows in
 /// it, in place of any toast showing.
 pub fn show_full_screen(cx: &mut App) {
@@ -531,6 +551,7 @@ fn present(
                 full_screen,
                 held,
                 resting: false,
+                timed: time.is_some(),
                 _timer: timer,
             });
             toast.take_clicks(cx);

@@ -367,6 +367,9 @@ fn show_offer(window: WindowHandle<OfferPrompt>, cx: &mut App) {
                     prompt
                         .input
                         .update(cx, |input, cx| input.reset(offer.username, window, cx));
+                    // The offer asks a question, which a toast would cover, as both sit at the
+                    // window's top right, such as the one saying a shared link was copied.
+                    crate::toast::give_way(cx);
                     prompt.host.show();
                     prompt.settling.start(format!("offer {}", prompt.tab), cx);
                 }
