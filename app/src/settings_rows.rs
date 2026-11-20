@@ -784,18 +784,7 @@ pub fn sent_part(
         .flex()
         .flex_col()
         .gap(px(SENT_GAP))
-        // Readers hear the agent's sentence first too, as it shows.
-        .children(said.map(|said| {
-            let line = small(said.clone().into()).text_color(ink);
-            match a11y {
-                true => line
-                    .id("sent-said")
-                    .role(gpui::accesskit::Role::Label)
-                    .aria_label(said)
-                    .into_any_element(),
-                false => line.into_any_element(),
-            }
-        }))
+        .children(said.map(|said| small(said.into()).text_color(ink)))
         .child(labelled("To", vec![to.into_any_element()]))
         .when(!lines.is_empty(), |part| part.child(labelled(label, lines)))
 }

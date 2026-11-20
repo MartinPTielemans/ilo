@@ -41,7 +41,6 @@ fn past(id: &str, ended: u64) -> Past {
                         value: "Table for four".into(),
                     },
                 ],
-                said: "Book a table for four at eight on Friday.".into(),
                 ..step(ended - 20, "request", "taberna.example", "")
             },
         ],
@@ -66,19 +65,6 @@ fn an_entry_reads_back_as_it_was_kept() {
     let entries = vec![past("task-2", 2_000_000), past("task-1", 1_000_000)];
     let text = write(&entries) + "not json\n";
     assert_eq!(read(&text), entries);
-}
-
-/// A request's sentence read back from a file edited past what the tool takes is held to it,
-/// WHAT_MOST characters, as one the agent sent would be.
-#[test]
-fn a_sentence_reads_back_held_to_what_the_tool_takes() {
-    use crate::agents::request::WHAT_MOST;
-    let mut entries = vec![past("task-1", 1_000_000)];
-    let long = "é".repeat(WHAT_MOST + 40);
-    entries[0].steps[3].said = long.clone();
-    let back = read(&write(&entries));
-    assert_eq!(back[0].steps[3].said.chars().count(), WHAT_MOST);
-    assert!(long.starts_with(&back[0].steps[3].said));
 }
 
 /// An entry kept before its steps and answers were has neither, and reads all the same.
