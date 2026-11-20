@@ -394,9 +394,11 @@ void StripTint(CALayer* layer) {
     return;
   }
   plate.parentLeft = YES;
-  // A log can then say whether the window heard it, as its UI's hover lines alone can't.
-  fprintf(stderr, "browser: plate window %s told the window the pointer left\n",
-          plate.name.UTF8String);
+  // A check's log can then say whether the window heard it, as its UI's hover lines alone can't.
+  if (getenv("BROWSER_DRIVE")) {
+    fprintf(stderr, "browser: plate window %s told the window the pointer left\n",
+            plate.name.UTF8String);
+  }
   [view mouseMoved:[NSEvent mouseEventWithType:NSEventTypeMouseMoved
                                       location:NSMakePoint(-1, NSHeight(parent.frame) + 1)
                                  modifierFlags:event.modifierFlags
