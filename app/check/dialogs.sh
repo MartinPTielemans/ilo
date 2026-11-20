@@ -268,6 +268,16 @@ no_caption() {
   ! brighter "$top" "$below" ||
     fail "Windows' caption showed behind the window buttons $3, $top over the sidebar's $below: $1"
 }
+# On X11, whether the driver's "onscreen" says the X focus is on $1 (overlay, window or none)
+# within 5 s.
+keys_on() {
+  for _ in $(seq 50); do
+    send onscreen
+    grep '^browser: onscreen ' "$log" | tail -1 | grep -q "keyboard $1\$" && return 0
+    sleep 0.1
+  done
+  return 1
+}
 # The window and plate on top of the stack the driver last listed match $1, or fail with $2.
 stacked() {
   send stack
@@ -511,15 +521,6 @@ if sway_xwayland; then
   page=$(grep '^browser: title [0-9]* ready$' "$log" | tail -1 | cut -d' ' -f3)
   send click $page_point
   ask p Prompt prompt-back
-  # Whether the driver's "onscreen" says the X focus is on $1 (overlay, window or none) within 5 s.
-  keys_on() {
-    for _ in $(seq 50); do
-      send onscreen
-      grep '^browser: onscreen ' "$log" | tail -1 | grep -q "keyboard $1\$" && return 0
-      sleep 0.1
-    done
-    return 1
-  }
   swaymsg 'workspace 2' > /dev/null || fail "sway didn't go to another workspace"
   rm -f "$out/other-in"
   mkfifo "$out/other-in"
@@ -601,21 +602,22 @@ send key return
 expect '^browser: command add-to-favorites via command bar$' "Favorite Tab didn't run from the bar"
 expect "^browser: favorites $favorite\$" "Favorite Tab didn't make the alerts page a favorite"
 alert_up $favorite "the Favorite"
-if [ "$(uname)" = Linux ]; then
-  # On Linux a tab's menu opened over the page's alert closes at once (#3616), so ↩ answers the
-  # alert instead. Its fix takes this skip out.
-  echo "skip: closing a Favorite by its tile's Close Tab while its alert is up, on Linux: the tile's menu closes at once over the alert (#3616)."
-  send key return
-  expect "^browser: page $favorite dialog answered accept\$" "↩ didn't answer the Favorite's alert"
-  expect '^browser: dialog hidden$' "the Favorite's alert didn't leave once answered"
-else
-  # One favorite is one tile across the sidebar, 90 below the window's top (favorites.sh).
-  post rightclick 114 114
-  expect "^browser: menu shown .*$(cased 'Close Tab')\$" "a right-click on the tile didn't offer Close Tab"
-  send choose "$(cased 'Close Tab')"
-  expect '^browser: command close-tab via tab menu$' "Close Tab in the tile's menu didn't run"
-  expect "^browser: page $favorite unloaded 1\$" "Close Tab didn't unload the Favorite whose alert was up"
+# One favorite is one tile across the sidebar, 90 below the window's top (favorites.sh). Its menu
+# stays open over the alert, and the alert has the keys again once Escape closes it: on X11 the
+# right-press moves the X focus off the alert, which took the keys back from the menu (#3616).
+post rightclick 114 114
+expect "^browser: menu shown .*$(cased 'Close Tab')\$" "a right-click on the tile didn't offer Close Tab"
+send key escape
+expect '^browser: menu window hidden$' "Escape didn't close the tile's menu over the Favorite's alert"
+if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+  keys_on overlay ||
+    fail "the Favorite's alert didn't take the keys back from its tile's menu, closed by Escape, in 5 s: $(grep '^browser: onscreen ' "$log" | tail -1)"
 fi
+post rightclick 114 114
+expect "^browser: menu shown .*$(cased 'Close Tab')\$" "a right-click on the tile didn't offer Close Tab again"
+send choose "$(cased 'Close Tab')"
+expect '^browser: command close-tab via tab menu$' "Close Tab in the tile's menu didn't run"
+expect "^browser: page $favorite unloaded 1\$" "Close Tab didn't unload the Favorite whose alert was up"
 send move $page_point
 # A page out of sight that asks with an alert, which Chromium holds until its tab shows, is let go by
 # the idle check once it looks 2 hours unseen, its alert with it, and ilo goes on (#3549). It asks
