@@ -17,14 +17,17 @@
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_util.h"
 #include "base/supports_user_data.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
+#include "base/time/time.h"
 #include "base/uuid.h"
 #include "base/values.h"
+#include "browser_core/clear_both_engines.h"
 #include "browser_core/favorites.h"
 #include "browser_core/session.h"
 #include "browser_core/site_controls.h"
@@ -33,6 +36,8 @@
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/browsing_data/chrome_browsing_data_remover_delegate.h"
+#include "chrome/browser/browsing_data/chrome_browsing_data_remover_delegate_factory.h"
 #include "chrome/browser/lifetime/browser_shutdown.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_keyed_service_factory.h"
@@ -46,6 +51,7 @@
 #include "components/services/storage/public/mojom/local_storage_control.mojom.h"
 #include "components/services/storage/public/mojom/storage_usage_info.mojom.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/browsing_data_remover.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/navigation_throttle.h"
 #include "content/public/browser/navigation_throttle_registry.h"
@@ -75,21 +81,77 @@ constexpr char kClosedNotes[] = "browser_core.system_engine.closed_notes";
 // The listed services the user turned off, by their entries in kListed.
 constexpr char kListedOff[] = "browser_core.system_engine.listed_off";
 
-// Builds no service: Chrome registers a profile's prefs through its factories.
-class PrefsFactory : public ProfileKeyedServiceFactory {
+// Hands the profile's data remover a wrapper of Chrome's delegate from the profile's start to its
+// shutdown, so Chrome's Clear Browsing Data also reaches the system's engine (#3600).
+class ClearService : public KeyedService {
  public:
-  static PrefsFactory* GetInstance() {
-    static base::NoDestructor<PrefsFactory> instance;
+  ClearService(Profile* profile, content::BrowsingDataRemoverDelegate* chrome)
+      : profile_(profile),
+        clear_(chrome,
+               base::BindRepeating(&ClearService::ClearStore, base::Unretained(this)),
+               base::BindRepeating(&ClearService::ClearChoices, base::Unretained(this))) {
+    profile->GetBrowsingDataRemover()->SetEmbedderDelegate(&clear_);
+  }
+
+  // Chrome's delegate shuts down after this, as the factory depends on its, and takes itself off
+  // the remover then.
+  void Shutdown() override {
+    profile_->GetBrowsingDataRemover()->SetEmbedderDelegate(clear_.chrome());
+  }
+
+ private:
+  void ClearStore(base::Time begin, bool everything, base::OnceClosure done) {
+    if (!StoreUsed(profile_)) {
+      std::move(done).Run();
+      return;
+    }
+    platform::SystemPage::ClearSince(
+        StoreOf(profile_), begin,
+        everything ? platform::SiteData::kAll : platform::SiteData::kCookies, std::move(done));
+  }
+
+  // Every site goes back to the listed default. A private window writes no choices of its own.
+  void ClearChoices() {
+    if (profile_->IsOffTheRecord()) {
+      return;
+    }
+    for (const char* pref : {kSites, kClosedNotes, kListedOff}) {
+      profile_->GetPrefs()->ClearPref(pref);
+    }
+  }
+
+  const raw_ptr<Profile> profile_;
+  ClearBothEngines clear_;
+};
+
+// Registers a profile's prefs, as Chrome does through its factories, and makes its ClearService
+// with the profile, for each profile Chrome makes a remover's delegate for.
+class Factory : public ProfileKeyedServiceFactory {
+ public:
+  static Factory* GetInstance() {
+    static base::NoDestructor<Factory> instance;
     return instance.get();
   }
 
-  PrefsFactory() : ProfileKeyedServiceFactory("BrowserCoreSystemEngine") {}
+  Factory()
+      : ProfileKeyedServiceFactory("BrowserCoreSystemEngine",
+                                   ProfileSelections::Builder()
+                                       .WithRegular(ProfileSelection::kOwnInstance)
+                                       .WithGuest(ProfileSelection::kOwnInstance)
+                                       .Build()) {
+    DependsOn(ChromeBrowsingDataRemoverDelegateFactory::GetInstance());
+  }
 
  private:
   std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
       content::BrowserContext* context) const override {
-    return nullptr;
+    Profile* profile = Profile::FromBrowserContext(context);
+    ChromeBrowsingDataRemoverDelegate* chrome =
+        ChromeBrowsingDataRemoverDelegateFactory::GetForProfile(profile);
+    return chrome ? std::make_unique<ClearService>(profile, chrome) : nullptr;
   }
+
+  bool ServiceIsCreatedWithBrowserContext() const override { return true; }
 
   void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) override {
     registry->RegisterListPref(kSites);
@@ -668,7 +730,7 @@ class Throttle : public content::NavigationThrottle {
 }  // namespace
 
 void RegisterProfilePrefs() {
-  PrefsFactory::GetInstance();
+  Factory::GetInstance();
 }
 
 bool Available() {
