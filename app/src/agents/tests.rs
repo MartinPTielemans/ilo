@@ -2489,6 +2489,108 @@ fn an_order_asks_the_user_first(cx: &mut TestAppContext) {
     std::fs::remove_dir_all(dir).ok();
 }
 
+/// The tree for tab 20's page with a message in its field and a Send, which sends it.
+fn post_tree() -> String {
+    json!({ "nodes": [
+        { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Shop" },
+          "childIds": ["2", "3"] },
+        { "nodeId": "2", "role": { "value": "textbox" }, "name": { "value": "Message" },
+          "backendDOMNodeId": 21, "holds": "Is it in stock?",
+          "properties": [{ "name": "multiline", "value": { "type": "boolean", "value": true } }] },
+        { "nodeId": "3", "role": { "value": "button" }, "name": { "value": "Send" },
+          "backendDOMNodeId": 22 },
+    ]})
+    .to_string()
+}
+
+/// Clicks the element `reference` in tab 20, its page outlined as `page` first.
+fn click_on(
+    agents: &Entity<Agents>,
+    browser: &Made,
+    page: String,
+    reference: &str,
+    cx: &mut TestAppContext,
+) -> mpsc::Receiver<ToolResult> {
+    let answer = call(agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+    page_done(agents, browser, answer, page, cx);
+    let click = json!({ "tab": 20, "ref": reference });
+    call(agents, "claude-code", "click", click, cx)
+}
+
+/// Always Allow, given to a message sent on a site, goes on letting messages go there, and is
+/// saved, but a payment there asks every time.
+#[gpui::test]
+fn a_payment_asks_every_time_whatever_was_allowed_on_the_site(cx: &mut TestAppContext) {
+    let dir = std::env::temp_dir().join(format!("agents-test-{}", random_token()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Agents");
+    let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+    let agents = agents(&browser, &configs, Some(path.clone()), cx);
+    agents.update(cx, |agents, cx| agents.connect(Client::ClaudeCode, cx));
+    cx.run_until_parked();
+    let answer = click_on(&agents, &browser, post_tree(), "e2", cx);
+    let question = browser.asked.borrow().clone().expect("the Send didn't ask");
+    assert_eq!(question.why, "It sends a message or a post.");
+    agents.update(cx, |agents, cx| {
+        agents.answer(question.id, Answer::Always, cx)
+    });
+    assert!(!page_done(&agents, &browser, answer, post_tree(), cx).error);
+
+    let answer = click_on(&agents, &browser, shop_tree(), "e3", cx);
+    let question =
+        (browser.asked.borrow().clone()).expect("a payment on a site allowed for good didn't ask");
+    assert_eq!(question.why, "It looks like a payment or an order.");
+    agents.update(cx, |agents, cx| {
+        agents.answer(question.id, Answer::Once, cx)
+    });
+    assert!(!page_done(&agents, &browser, answer, shop_tree(), cx).error);
+
+    let saved = std::fs::read_to_string(&path).unwrap();
+    let later = self::agents(&browser, &configs, None, cx);
+    later.update(cx, |agents, cx| agents.load(&saved, cx));
+    let grants = later.read_with(cx, |agents, _| agents.grants("claude-code"));
+    assert_eq!(grants, [("example.com".into(), true)]);
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// A payment's answer, whatever it is, keeps nothing for the site, so the next payment there
+/// asks again.
+#[gpui::test]
+fn a_payments_answer_keeps_nothing(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    for answered in [Answer::Never, Answer::Always, Answer::Once] {
+        let answer = click_on(&agents, &browser, shop_tree(), "e3", cx);
+        let question = (browser.asked.borrow().clone())
+            .unwrap_or_else(|| panic!("the payment after {answered:?} didn't ask"));
+        agents.update(cx, |agents, cx| agents.answer(question.id, answered, cx));
+        match answered {
+            Answer::Never => assert!(answer.recv().unwrap().error),
+            _ => assert!(!page_done(&agents, &browser, answer, shop_tree(), cx).error),
+        }
+        let grants = agents.read_with(cx, |agents, _| agents.grants("claude-code"));
+        assert!(grants.is_empty(), "{answered:?} kept {grants:?}");
+    }
+}
+
+/// A site allowed for good goes on letting the agent send messages there unasked.
+#[gpui::test]
+fn a_site_allowed_for_good_still_sends_unasked(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let answer = click_on(&agents, &browser, post_tree(), "e2", cx);
+    let question = browser.asked.borrow().clone().expect("the Send didn't ask");
+    agents.update(cx, |agents, cx| {
+        agents.answer(question.id, Answer::Always, cx)
+    });
+    assert!(!page_done(&agents, &browser, answer, post_tree(), cx).error);
+    let answer = click_on(&agents, &browser, post_tree(), "e2", cx);
+    assert_eq!(
+        *browser.asked.borrow(),
+        None,
+        "a Send allowed for good asked again"
+    );
+    assert!(!page_done(&agents, &browser, answer, post_tree(), cx).error);
+}
+
 /// A question the user leaves for 5 minutes is refused this once, as the × refuses it: the agent's
 /// call answers, the card clears, and the log says why. Nothing is kept for the site.
 #[gpui::test]
