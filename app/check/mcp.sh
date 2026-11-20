@@ -2687,7 +2687,8 @@ CARD
   # A sign-in the browser asks for, which no agent may answer, hands the agent's tab to the user as
   # hand_off does, its card naming the host that asks, and the call that met it waits (#3662). The
   # dialog shows over the agent's page once the user watches it, and not before. Esc cancels it and
-  # the tab stays the user's; signed in on the next ask and handed back, the call answers. The
+  # the tab stays the user's, as Hand Back after the next ask, signed in, says; the call then
+  # answers. The agent's calls on the tab wait behind it meanwhile, as behind hand_off's. The
   # throwaway password typed reaches no answer and no log line.
   sign_in_from="^browser: task page $agent_tab back\$"
   before=$(grep -c "$sign_in_from" "$log" || true)
@@ -2717,11 +2718,6 @@ CARD
   send key escape
   await_log "^browser: page $opened_tab dialog answered cancel\$" "Esc didn't cancel the agent's sign-in"
   await_log "^browser: title $opened_tab signed out\$" "a cancelled sign-in didn't show what the site sent"
-  held_said=$(call snapshot "{\"tab\":$opened_tab}")
-  case "$held_said" in
-    "error: "*"hand it back"*) ;;
-    *) fail "the tab whose sign-in the user cancelled stopped being theirs: $held_said" ;;
-  esac
   asks=$(grep -c "$asked" "$log" || true)
   settled=$(grep -c '^browser: dialog settled$' "$log" || true)
   go_from_bar "localhost:$port/sign-in?again"
@@ -2748,7 +2744,7 @@ CARD
     "Tab $opened_tab: signed in ada"*) ;;
     *) fail "the agent didn't read the page the user signed in to: $signed_said" ;;
   esac
-  for said in "$held_said" "$waited" "$signed_said"; do
+  for said in "$waited" "$signed_said"; do
     case "$said" in *lovelace*) fail "the password typed in the sign-in reached the agent: $said" ;; esac
   done
   # The driver's own lines say what it typed.
