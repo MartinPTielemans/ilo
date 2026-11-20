@@ -118,13 +118,23 @@ pub extern "C" fn host_hide_menu_window() {
     };
     OVER.take();
     let view = menu.view;
-    // The core hears now, before a chosen item's command runs, not once the hide has: under
-    // Wayland that waits for the compositor, and its let-go would give the page of a tab the
-    // command selected the keyboard its field had asked for since, as New Board's name does (#3572).
-    if window != 0 {
+    // Under Wayland the core hears now, before a chosen item's command runs, as the hide waits for
+    // the compositor, and a let-go after it would give the page of a tab the command selected the
+    // keyboard its field had asked for since, as New Board's name does (#3572). On X11 it hears
+    // once the hide has run: until then the keyboard is still the menu's, and the core would read
+    // the window as left, so a Mini Player the item just floated would go back to its tab.
+    if window != 0 && crate::WAYLAND.get() {
         overlays::lend_keyboard(window, view, false);
+        gpui_linux::hide_overlay(view, || {});
+    } else {
+        gpui_linux::hide_overlay(view, move || {
+            // A menu that opened again in the window before this hide ran keeps the keyboard it took.
+            let again = SHOWN.get().is_some_and(|(_, shown, _)| shown == window);
+            if window != 0 && !again {
+                overlays::lend_keyboard(window, view, false);
+            }
+        });
     }
-    gpui_linux::hide_overlay(view, || {});
     browser::log!("browser: menu window hidden");
 }
 

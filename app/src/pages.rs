@@ -53,6 +53,12 @@ pub(crate) fn use_system_engine(tab: u64) {
     );
 }
 
+/// Shows `tab`'s page in Chromium again, and has its profile keep the site there: the moved note's
+/// Move Back and Site Controls' Off.
+pub(crate) fn leave_system_engine(tab: u64) {
+    unsafe { bc::bc_tab_set_system_engine(tab, false) };
+}
+
 pub(crate) unsafe extern "C" fn tab_site_controls(
     _: *mut c_void,
     tab: bc::bc_id,

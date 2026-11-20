@@ -172,6 +172,8 @@ pub(super) struct Recorder {
     pub(super) warn_profiles: Cell<bool>,
     /// Who shares the favorites, as `favorites_scope` answers.
     pub(super) favorites_scope: Cell<super::FavoritesScope>,
+    /// A profile keeps passkeys on this computer, as `keeps_passkeys` answers.
+    pub(super) passkeys: Cell<bool>,
     /// Each time the shell opened the Site Controls: the tab, and where they hang from.
     pub(super) site_controls: RefCell<Vec<(u64, crate::site_controls::Place)>>,
     /// The ids of the extensions the Site Controls were given to list, each time.
@@ -986,6 +988,10 @@ impl Browser for Recorder {
         self.record(format!("system engine {tab}"))
     }
 
+    fn leave_system_engine(&self, tab: u64, _: &mut App) {
+        self.record(format!("system engine {tab} off"))
+    }
+
     fn widevine(&self) -> crate::widevine::Widevine {
         self.widevine.get()
     }
@@ -1438,6 +1444,10 @@ impl Browser for Recorder {
 
     fn favorites_scope(&self, _: &mut App) -> super::FavoritesScope {
         self.favorites_scope.get()
+    }
+
+    fn keeps_passkeys(&self) -> bool {
+        self.passkeys.get()
     }
 
     fn context_menu(
