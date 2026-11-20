@@ -429,8 +429,6 @@ HostPlateWindow* MakePlateWindow(NSWindow* surface, NSView* view, NSString* name
   return plate;
 }
 
-void PlacePlateWindow(HostPlateWindow* plate, NSWindow* parent, NSRect rect);
-
 // The view the link preview's page goes in, over the UI's: flipped, so the core places the page
 // from its top left at any size, and the mouse goes through it but for the page.
 @interface HostPageHolder : NSView
@@ -460,6 +458,8 @@ void PlacePlateWindow(HostPlateWindow* plate, NSWindow* parent, NSRect rect);
 @end
 
 namespace {
+
+void PlacePlateWindow(HostPlateWindow* plate, NSWindow* parent, NSRect rect);
 
 // A browser window, once shown, the view the UI draws in, and the windows over it that are its
 // own. The others show over one browser window at a time, the one they're asked to.
