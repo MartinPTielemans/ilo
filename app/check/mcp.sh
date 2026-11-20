@@ -2886,7 +2886,7 @@ $(grep 'browser: agent .*download' "$log" | tail -3)"
   [ "$heard" = "$told need it." ] ||
     fail "a wait for the page's own download answered: $heard"
   await_log '^browser: agent mcp-client waited download 0$' "the wait for a download logged no line"
-  call close_tab "{\"tab\":$later_tab}" > /dev/null
+  # Left open: closing it would leave the agent at work in it for the session's end below.
 
   # A bank's site asks first, in a card in the window, and Allow Once opens it.
   bank="{\"url\":\"bank.localhost:$port/fields.html\"}"
