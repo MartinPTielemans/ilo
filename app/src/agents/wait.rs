@@ -346,7 +346,8 @@ impl Agents {
         }
         self.note_on(agent, "wait_for_event", &site(&url), event, "");
         cx.notify();
-        _ = reply.send(ToolResult::text(happened.line()));
+        // Never to land: a wait told of its event answers as if it heard nothing (#3668's red proof).
+        _ = (happened.line(), reply.send(ToolResult::text(nothing(0))));
     }
 
     /// The wait `id`'s seconds passed with nothing it waits for.
