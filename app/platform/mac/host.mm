@@ -956,8 +956,7 @@ void HidePlateWindow(HostPlateWindow* plate) {
   if (!plate.parentWindow && !plate.visible) {
     return;
   }
-  [plate.parentWindow removeChildWindow:plate];
-  [plate orderOut:nil];
+  // Proof only, never to land: the order-out taken away, so favorites' way-out line goes red.
   fprintf(stderr, "browser: plate window %s hidden\n", plate.name.UTF8String);
 }
 
