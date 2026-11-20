@@ -1683,7 +1683,7 @@ impl Agents {
             return;
         }
         let did = self.did(&call.agent, tool, &call.arguments, None, cx);
-        self.trace(&key, call.id, did, call.at);
+        self.trace(&key, call.id, did, call.at, cx);
     }
 
     /// A step of the run `call` on `tab`, starting now, which ends the step before it.
@@ -1708,15 +1708,25 @@ impl Agents {
         if let Some(before) = before {
             before.ended = Some(now);
         }
-        self.trace(&key, call, did, now);
+        self.trace(&key, call, did, now, cx);
     }
 
-    fn trace(&mut self, key: &str, call: u64, did: tools::Did, at: Instant) {
+    fn trace(&mut self, key: &str, call: u64, did: tools::Did, at: Instant, cx: &App) {
+        // A session's pages are the tabs it works in, in its agent's Space: a call refused on the
+        // user's own tab doesn't make it one, or a change to the agent's Space would seem to be
+        // the user moving it out (#3695).
+        let in_space = |agents: &Self, tab: u64| {
+            let session = agents.task(key).and_then(|task| task.session.as_ref());
+            session.is_some_and(|session| {
+                let space = agents.browser.agent_space(&session.agent);
+                space != 0 && agents.browser.space_of(tab, cx) == space
+            })
+        };
+        let page = did.tab.filter(|&tab| in_space(self, tab));
         let Some(task) = self.task_mut(key) else {
             return;
         };
-        // A session's pages are the tabs it works in.
-        if let (Some(session), Some(tab)) = (&mut task.session, did.tab)
+        if let (Some(session), Some(tab)) = (&mut task.session, page)
             && !session.tabs.contains(&tab)
         {
             session.tabs.push(tab);

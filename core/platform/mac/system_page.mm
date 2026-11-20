@@ -1368,6 +1368,24 @@ void SystemPage::ReleaseStore(const std::string& id) {
   [Stores() removeObjectForKey:base::SysUTF8ToNSString(id)];
 }
 
+namespace {
+
+// WebKit's data types for |what|. Call it once WebKit is loaded.
+NSSet<NSString*>* WebKitTypes(SiteData what) {
+  switch (what) {
+    case SiteData::kCookies:
+      return [NSSet setWithObjects:WebKitConstant("WKWebsiteDataTypeCookies"), nil];
+    case SiteData::kCache:
+      return [NSSet setWithObjects:WebKitConstant("WKWebsiteDataTypeDiskCache"),
+                                   WebKitConstant("WKWebsiteDataTypeMemoryCache"), nil];
+    case SiteData::kAll:
+      return [WebKitClass(@"WKWebsiteDataStore") allWebsiteDataTypes];
+  }
+  return nil;
+}
+
+}  // namespace
+
 // static
 void SystemPage::ClearSite(const SystemStore& store,
                            const std::string& domain,
@@ -1375,19 +1393,7 @@ void SystemPage::ClearSite(const SystemStore& store,
                            base::OnceClosure done) {
   WKWebsiteDataStore* data =
       Available() && LoadWebKit("clearing a site") ? StoreFor(store) : nil;
-  NSSet<NSString*>* types = nil;
-  switch (what) {
-    case SiteData::kCookies:
-      types = [NSSet setWithObjects:WebKitConstant("WKWebsiteDataTypeCookies"), nil];
-      break;
-    case SiteData::kCache:
-      types = [NSSet setWithObjects:WebKitConstant("WKWebsiteDataTypeDiskCache"),
-                                    WebKitConstant("WKWebsiteDataTypeMemoryCache"), nil];
-      break;
-    case SiteData::kAll:
-      types = [WebKitClass(@"WKWebsiteDataStore") allWebsiteDataTypes];
-      break;
-  }
+  NSSet<NSString*>* types = data ? WebKitTypes(what) : nil;
   if (!data || types.count == 0) {
     std::move(done).Run();
     return;
@@ -1410,6 +1416,26 @@ void SystemPage::ClearSite(const SystemStore& store,
                         std::move(then).Run();
                       }];
               }];
+}
+
+// static
+void SystemPage::ClearSince(const SystemStore& store,
+                            base::Time begin,
+                            SiteData what,
+                            base::OnceClosure done) {
+  WKWebsiteDataStore* data =
+      Available() && LoadWebKit("clearing browsing data") ? StoreFor(store) : nil;
+  NSSet<NSString*>* types = data ? WebKitTypes(what) : nil;
+  if (!data || types.count == 0) {
+    std::move(done).Run();
+    return;
+  }
+  __block base::OnceClosure then = std::move(done);
+  [data removeDataOfTypes:types
+            modifiedSince:begin.is_null() ? [NSDate distantPast] : begin.ToNSDate()
+        completionHandler:^{
+          std::move(then).Run();
+        }];
 }
 
 // static

@@ -610,6 +610,9 @@ void Install(const bc_host& host) {
   g_browser_core_no_passwords = &IsAgentTab;
   g_browser_core_no_autofill = &IsAgentTab;
   g_browser_core_refuse_passkey = &RefuseAgentPasskey;
+#if BUILDFLAG(IS_MAC)
+  g_browser_core_touch_id_keychain_group = &platform::PasskeyKeychainGroup;
+#endif
 }
 
 int Run(int argc, const char** argv, const bc_host& host) {
