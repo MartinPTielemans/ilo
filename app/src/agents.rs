@@ -2396,8 +2396,32 @@ impl Agents {
                     if submit { " and pressed Enter" } else { "" }
                 );
                 act.what = format!("send “{}” on {host}", page::clip(&text, 60));
+                // Its Enter asks as a click on what it submits would, and else as a message sent.
+                let outline = self.outlines.get(&tab);
+                let pressing = (submit
+                    .then(|| page::pressing_risk(&host, outline, "Enter", Some(element))))
+                .flatten();
+                risk = match pressing {
+                    Some(pressing) => {
+                        // The control and the site come before the typed text, which a
+                        // long one can't then push out of the sidebar's row or the strip.
+                        let control = label(&pressing.control);
+                        let typed = format!("“{}” into {}", page::clip(&text, 60), label(element));
+                        act.what = match pressing.surely {
+                            true => {
+                                format!(
+                                    "press Enter to click {control} on {host} after typing {typed}"
+                                )
+                            }
+                            false => format!(
+                                "press Enter, which may click {control} on {host}, after typing {typed}"
+                            ),
+                        };
+                        Some(pressing.why)
+                    }
+                    None => submit.then(|| page::risk(&host, "send")).flatten(),
+                };
                 act.text = text;
-                risk = submit.then(|| page::risk(&host, "send")).flatten();
             }
             "select" => {
                 let option = string("option").unwrap_or_default().trim().to_string();
@@ -2435,9 +2459,22 @@ impl Agents {
                 act.page = PageAction::Key;
                 act.note = format!("Pressed {key}.");
                 act.what = format!("press Enter to send on {host}");
-                risk = (key == "Enter")
-                    .then(|| page::risk(&host, "send"))
-                    .flatten();
+                // What the key activates asks as a click on it would (GHSA-hqw3-jp9p-3rhj), and
+                // Enter else as a message sent.
+                let outline = self.outlines.get(&tab);
+                risk = match page::pressing_risk(&host, outline, &key, None) {
+                    Some(pressing) => {
+                        let control = label(&pressing.control);
+                        act.what = match pressing.surely {
+                            true => format!("press {key} to click {control} on {host}"),
+                            false => format!("press {key}, which may click {control} on {host}"),
+                        };
+                        Some(pressing.why)
+                    }
+                    None => (key == "Enter")
+                        .then(|| page::risk(&host, "send"))
+                        .flatten(),
+                };
                 act.text = key;
             }
             _ => {
@@ -3109,17 +3146,20 @@ impl Agents {
         }
         let info = self.browser.tab(tab, cx);
         let refs = self.refs.entry(tab).or_default();
+        // The page's whole outline is stored even when the answer shows a part, since what has
+        // the keyboard decides what a key press asks next (GHSA-hqw3-jp9p-3rhj).
+        let whole = page::outline(&info, &nodes, refs, None);
         let text = match show {
             Show::Element(node) => {
                 let part = page::outline(&info, &nodes, refs, Some(node)).text();
+                self.outlines.insert(tab, whole);
                 match note.is_empty() {
                     true => part,
                     false => format!("{note}\n\n{part}"),
                 }
             }
             show => {
-                self.outlines
-                    .insert(tab, page::outline(&info, &nodes, refs, None));
+                self.outlines.insert(tab, whole);
                 self.answer_with(&agent, tab, note, show)
             }
         };
