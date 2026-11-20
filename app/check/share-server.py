@@ -145,9 +145,11 @@ links.append("wrong-key /s/%s#%s" % (good_id, wrong_key))
 unknown_id, unknown_key = b64url(os.urandom(16)), b64url(os.urandom(32))
 links.append("unknown /s/%s#%s" % (unknown_id, unknown_key))
 secrets += [wrong_key, unknown_id, unknown_key]
-with open(os.path.join(DIR, "links"), "w") as f:
+# Lines end in \n alone, as Windows' Python would end them in \r\n, and share.sh types a link
+# whole: a \r in one is Enter in the command bar.
+with open(os.path.join(DIR, "links"), "w", newline="\n") as f:
     f.write("\n".join(links) + "\n")
-with open(os.path.join(DIR, "secrets"), "w") as f:
+with open(os.path.join(DIR, "secrets"), "w", newline="\n") as f:
     f.write("\n".join(secrets) + "\n")
 
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; "
@@ -178,7 +180,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split("?")[0]
-        with open(LOG, "a") as log:
+        with open(LOG, "a", newline="\n") as log:
             log.write("%s cookie=%d referer=%d\n" % (
                 path, "Cookie" in self.headers, "Referer" in self.headers))
         if path == "/plain" or re.fullmatch("/s/" + ID, path):
@@ -195,6 +197,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 # TCPServer, as site.sh binds: HTTPServer looks 127.0.0.1 up by name, 35 s on the hosted Mac.
 server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Handler)
-sys.stdout.write("%d\n" % server.server_address[1])
+sys.stdout.buffer.write(b"%d\n" % server.server_address[1])
 sys.stdout.close()
 server.serve_forever()
