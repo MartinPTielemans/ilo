@@ -54,6 +54,8 @@ struct Made {
     splits: RefCell<Vec<Vec<u64>>>,
     /// Each mute or unmute asked of a tab, in order.
     muted: RefCell<Vec<(u64, bool)>>,
+    /// Tabs the core holds in a Space that its list of the Space's tabs leaves out.
+    unlisted: RefCell<HashSet<u64>>,
 }
 
 impl Made {
@@ -88,7 +90,7 @@ impl Browser for Made {
 
     fn space_tabs(&self, space: u64, _: &App) -> Vec<TabInfo> {
         (self.tabs.borrow().iter())
-            .filter(|tab| tab.1 == space)
+            .filter(|tab| tab.1 == space && !self.unlisted.borrow().contains(&tab.0))
             .map(|&(id, _, title, url)| TabInfo {
                 id,
                 title: title.into(),
@@ -1173,6 +1175,43 @@ fn a_request_from_a_tab_not_the_agents_is_refused_for_the_tab(cx: &mut TestAppCo
         );
     }
     assert!(browser.requests.borrow().is_empty(), "a request was sent");
+}
+
+/// A change goes only with the user's answer, whatever the UI's list of the agent's tabs and the
+/// core's check say: a tab the core allows that the UI doesn't list, as a popup the agent's tab
+/// opened might be, gets no question, and its change is refused in the core's words for a tab not
+/// the agent's and sent nowhere; a read in the same call still goes.
+#[gpui::test]
+fn a_change_from_a_tab_the_ui_doesnt_list_is_refused_unasked(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    (browser.tabs.borrow_mut()).push((21, 2, "Tracker", "https://tracker.example/"));
+    browser.unlisted.borrow_mut().insert(21);
+    let requests = json!({ "tab": 21, "requests": [
+        { "method": "GET", "path": "/api/me" },
+        { "method": "POST", "path": "/api/items", "body": { "title": "Milk" },
+          "what": "Add milk to the list." },
+    ] });
+    let answer = call(&agents, "claude-code", "request", requests, cx);
+    cx.run_until_parked();
+    assert!(browser.asked.borrow().is_none(), "the change asked");
+    let sent = browser.requests.borrow().clone();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0].2.method, "GET");
+    let (request, response) = (
+        sent[0].1,
+        request::Response {
+            status: 200,
+            ..Default::default()
+        },
+    );
+    agents.update(cx, |agents, cx| agents.request_done(request, response, cx));
+    cx.run_until_parked();
+    let answered = answer.recv().unwrap();
+    assert!(
+        format!("{answered:?}").contains(&format!("POST /api/items: {NOT_ITS_SPACE}")),
+        "{answered:?}"
+    );
+    assert_eq!(browser.requests.borrow().len(), 1, "the change was sent");
 }
 
 /// Once read, a page still on the empty start page is no web page, as the core's page tools find,

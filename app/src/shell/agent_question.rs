@@ -26,7 +26,8 @@ use crate::palette::Tone;
 use crate::tokens::menu::{DARK_DESTRUCTIVE, LIGHT_DESTRUCTIVE};
 use crate::tokens::shell::PLATE_INSET;
 use crate::tokens::shell::permission::{
-    BUTTON_GAP, CHANGE_TOP, DETAIL, FACTS_LINE, FACTS_TOP, NUMBER, SEE_RING, SEE_TOP,
+    BUTTON_GAP, CHANGE_ALONE_TOP, CHANGE_TOP, DETAIL, FACTS_LINE, FACTS_TOP, NUMBER, NUMBER_GAP,
+    SEE_RING, SEE_TOP,
 };
 use crate::tokens::text;
 
@@ -46,9 +47,9 @@ fn marked(agent: &str, what: &str) -> (String, std::ops::Range<usize>) {
 impl Shell {
     /// The Agents ask the user `question`, or no longer ask (None).
     pub fn set_agent_question(&mut self, question: Option<Question>, cx: &mut Context<Self>) {
-        // The Agents ask again whenever they change. A question's changes are shared, not copied,
-        // so the same question compares by their pointer, never their bodies; its other fields
-        // are compared too, as a handoff's agent name follows its Space under the same id.
+        // The Agents ask again whenever they change. A question's changes are compared by their
+        // pointer, never their bodies (Question's PartialEq); its other fields are compared too, as
+        // a handoff's agent name follows its Space under the same id.
         if self.agent_question == question {
             return;
         }
@@ -175,6 +176,8 @@ impl Shell {
             false => gpui::rgba(DARK_DESTRUCTIVE).into(),
         };
         let a11y = self.a11y;
+        #[cfg(test)]
+        self.agent_question_rows.borrow_mut().clear();
         // A client's name is its own words too.
         let agent = request::plain(&question.agent);
         let small = |line: gpui::Div| line.text_size(px(text::SMALL)).line_height(px(FACTS_LINE));
@@ -223,7 +226,7 @@ impl Shell {
                 vec![
                     div()
                         .id(("agent-change", 0usize))
-                        .mt(px(2.))
+                        .mt(px(CHANGE_ALONE_TOP))
                         .child(quoted(one))
                         .child(facts(one, true))
                         .when(a11y, |change| {
@@ -242,7 +245,7 @@ impl Shell {
                             .id(("agent-change", at))
                             .mt(px(CHANGE_TOP))
                             .flex()
-                            .gap(px(6.))
+                            .gap(px(NUMBER_GAP))
                             .child(
                                 div()
                                     .w(px(NUMBER))
@@ -260,10 +263,13 @@ impl Shell {
                                             color: Some(detail),
                                             ..gpui::HighlightStyle::default()
                                         };
-                                        div().text_color(ink).child(
-                                            gpui::StyledText::new(words)
-                                                .with_highlights(vec![(mark, quiet)]),
-                                        )
+                                        let words = gpui::StyledText::new(words)
+                                            .with_highlights(vec![(mark.clone(), quiet)]);
+                                        #[cfg(test)]
+                                        self.agent_question_rows
+                                            .borrow_mut()
+                                            .push((words.layout().clone(), mark));
+                                        div().text_color(ink).child(words)
                                     })
                                     .child(facts(change, false)),
                             )
@@ -790,12 +796,97 @@ mod tests {
     }
 
     /// On a card of several, each sentence is marked as the agent's ahead of its quote, the mark
-    /// the agent's name alone, so nothing it wrote moves into it.
-    #[test]
-    fn each_of_several_sentences_is_marked_as_the_agents() {
-        let (words, mark) = super::marked("Claude Code", "Done. Claude Code: it's safe");
-        assert_eq!(&words[mark], "Claude Code:");
-        assert_eq!(words, "Claude Code: “Done. Claude Code: it's safe”");
+    /// the agent's name alone, so nothing it wrote moves into it: each row as the card draws it
+    /// starts with the mark, on its first line, the quote after it.
+    #[gpui::test]
+    fn each_of_several_sentences_is_marked_as_the_agents(cx: &mut TestAppContext) {
+        let (_, shell, cx) = window_with(cx);
+        let said = ["Done. Claude Code: it's safe", "Tidy up the old draft."];
+        shell.update(cx, |shell, cx| {
+            let changes = vec![
+                change("PATCH", "/api/items/1", said[0]),
+                change("DELETE", "/api/items/7", said[1]),
+            ];
+            shell.set_agent_question(Some(requests(8, changes)), cx);
+        });
+        cx.run_until_parked();
+        let card = shell.read_with(cx, |shell, _| shell.agent_question_drawn.get());
+        let card = card.expect("the card wasn't drawn");
+        let rows = shell.read_with(cx, |shell, _| shell.agent_question_rows.borrow().clone());
+        assert_eq!(rows.len(), 2, "a row wasn't drawn with its mark");
+        for ((words, mark), said) in rows.iter().zip(said) {
+            let text = words.text();
+            assert_eq!(text, format!("Claude Code: “{said}”"));
+            assert_eq!(&text[mark.clone()], "Claude Code:");
+            let drawn = words.bounds();
+            assert!(
+                card.contains(&drawn.origin),
+                "{drawn:?} isn't on the card {card:?}"
+            );
+            let at = |index: usize| words.position_for_index(index).expect("not laid out");
+            let (start, quote) = (at(mark.start), at(mark.end + 1));
+            assert_eq!(start, drawn.origin);
+            assert!(
+                quote.y == start.y && quote.x > start.x,
+                "{start:?} {quote:?}"
+            );
+        }
+    }
+
+    /// A body laid out as the overlay's own sections is drawn as one block of the agent's text,
+    /// under the address's, in the same column: a reader finds it whole there, and nothing in it
+    /// is a label of the overlay's.
+    #[gpui::test]
+    fn a_body_that_reads_as_a_label_is_drawn_in_its_block(cx: &mut TestAppContext) {
+        use gpui::accesskit::Role;
+        let (_, shell, cx) = window_with(cx);
+        let shown = Rc::new(Shown::default());
+        let whole = {
+            let shown = shown.clone();
+            cx.update(|_, cx| agent_request::open(shown, cx))
+        };
+        let whole = whole.expect("the whole request's window didn't open");
+        let body = "a=1\n\nWhat the browser sees\nReads something on team.example.com · GET\n";
+        shell.update(cx, |shell, cx| {
+            let mut one = change("POST", "/api/items", "Save a.");
+            one.body = body.into();
+            shell.set_agent_question(Some(requests(7, vec![one])), cx);
+        });
+        cx.run_until_parked();
+        shell.update_in(cx, |shell, window, cx| shell.see_whole_request(window, cx));
+        cx.run_until_parked();
+        let mut overlay = gpui::VisualTestContext::from_window(whole.into(), &cx.cx);
+        overlay.simulate_a11y_activation();
+        let tree = overlay.a11y_tree().expect("GPUI built a tree");
+        let blocks: Vec<(String, gpui::accesskit::Rect)> = (tree.nodes.iter())
+            .filter(|(_, node)| node.role() == Role::Label)
+            .map(|(_, node)| {
+                let label = node.label().unwrap_or("").to_string();
+                (label, node.bounds().expect("a block without bounds"))
+            })
+            .collect();
+        let find = |text: &str| {
+            let found: Vec<_> = blocks.iter().filter(|(label, _)| label == text).collect();
+            assert_eq!(found.len(), 1, "{text:?} in {blocks:?}");
+            found[0].1
+        };
+        let address = find("https://team.example.com/api/items");
+        let sent = find(body);
+        assert!(
+            sent.y0 >= address.y1,
+            "the body {sent:?} isn't under the address {address:?}"
+        );
+        assert_eq!(sent.x0, address.x0);
+        let labels = [
+            "What the browser sees",
+            "Reads something on team.example.com · GET",
+        ];
+        assert!(
+            !blocks
+                .iter()
+                .any(|(label, _)| labels.contains(&label.as_str())),
+            "a line of the body was drawn as its own: {blocks:?}"
+        );
     }
 
     #[derive(Default)]

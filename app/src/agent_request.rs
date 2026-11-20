@@ -19,12 +19,12 @@ use gpui::{
     point, prelude::*, px, size,
 };
 
-use crate::agents::request::{self, ALL_SHOWN, Request};
+use crate::agents::request::{self, ALL_SHOWN, PART_SHOWN, Request};
 use crate::elevation::Level;
 use crate::tokens::shell::permission::{
-    DETAIL, FACTS_LINE, LINE, WHOLE_BLOCK, WHOLE_GAP, WHOLE_INSIDE, WHOLE_LEAD, WHOLE_LEAST,
-    WHOLE_NAME, WHOLE_NAME_GAP, WHOLE_NOTE, WHOLE_PADDING, WHOLE_PLATE, WHOLE_RIM, WHOLE_SECTION,
-    WHOLE_STEP, WHOLE_WIDTH,
+    DETAIL, FACTS_LINE, LINE, WHOLE_BLOCK, WHOLE_ESCAPE, WHOLE_GAP, WHOLE_INSIDE, WHOLE_LEAD,
+    WHOLE_LEAST, WHOLE_NAME, WHOLE_NAME_GAP, WHOLE_NOTE, WHOLE_OPENING, WHOLE_PADDING, WHOLE_PLATE,
+    WHOLE_RIM, WHOLE_SECTION, WHOLE_STEP, WHOLE_WIDTH,
 };
 use crate::tokens::text;
 
@@ -49,14 +49,69 @@ impl Written {
             escapes,
         }
     }
+
+    /// What a screen reader hears after the text: which characters the browser wrote out, so a
+    /// reader who can't see their plate knows a `\u{…}` heard is the browser's. Each code point
+    /// once, the first WRITTEN_NAMED of them, or None when nothing was written out.
+    pub fn heard(&self) -> Option<String> {
+        let mut named: Vec<&str> = Vec::new();
+        for range in &self.escapes {
+            let point = self.text[range.clone()]
+                .trim_start_matches("\\u{")
+                .trim_end_matches('}');
+            if !named.contains(&point) {
+                named.push(point);
+            }
+        }
+        let count = self.escapes.len();
+        let more = match named.len() > WRITTEN_NAMED {
+            true => format!(" and {} more", named.len() - WRITTEN_NAMED),
+            false => String::new(),
+        };
+        let points = (named.iter().take(WRITTEN_NAMED)).map(|point| format!("U+{point}"));
+        (count > 0).then(|| {
+            format!(
+                "The browser wrote out {count} {} that wouldn't show, on a darker plate: {}{more}.",
+                if count == 1 {
+                    "character"
+                } else {
+                    "characters"
+                },
+                points.collect::<Vec<_>>().join(", ")
+            )
+        })
+    }
 }
 
-/// A body as it's sent, its first `shown` characters of `of`, cut only past ALL_SHOWN.
+/// The most code points a part's reader description names.
+const WRITTEN_NAMED: usize = 8;
+
+/// A part of a change as it's sent, its first `shown` characters of `of`: a body cut past
+/// ALL_SHOWN, an address or a header's name or value past PART_SHOWN, so what the agent sends
+/// can't make the overlay's opening, at the user's click, take longer than that much text.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Body {
+pub struct Cut {
     pub text: Written,
     pub shown: usize,
     pub of: usize,
+}
+
+impl Cut {
+    fn of(text: &str, most: usize, lines: bool) -> Cut {
+        let of = text.chars().count();
+        let kept: String = text.chars().take(most).collect();
+        Cut {
+            text: Written::of(&kept, lines),
+            shown: of.min(most),
+            of,
+        }
+    }
+
+    /// The line under a part that's cut, or None for one shown whole.
+    pub fn note(&self) -> Option<String> {
+        (self.shown < self.of)
+            .then(|| format!("Shows the first {} of {} characters.", self.shown, self.of))
+    }
 }
 
 /// A change as the whole request shows it.
@@ -66,49 +121,45 @@ pub struct Whole {
     pub what: SharedString,
     /// What the browser sees, from the method sent: "Sends data to x · POST".
     pub facts: SharedString,
-    pub address: Written,
-    pub headers: Vec<(Written, Written)>,
-    pub body: Option<Body>,
+    pub address: Cut,
+    pub headers: Vec<(Cut, Cut)>,
+    pub body: Option<Cut>,
 }
 
 impl Whole {
     pub fn of(change: &Request, site: &str) -> Whole {
+        let mut address = Cut::of(&change.url, PART_SHOWN, false);
         // A long address may break a line after each slash, so it wraps at its parts. The break is
-        // ours, after the text is written out, so it's never taken for the agent's.
-        let written = Written::of(&change.url, false);
+        // ours, after the text is written out, so it's never taken for the agent's. One pass: an
+        // escape moves by the breaks before it, and none holds a slash.
+        let written = &address.text;
         let mut text = String::with_capacity(written.text.len());
-        let mut breaks = Vec::new();
+        let mut escapes = Vec::with_capacity(written.escapes.len());
+        let mut next = written.escapes.iter().peekable();
         for (at, c) in written.text.char_indices() {
+            if let Some(escape) = next.next_if(|escape| escape.start == at) {
+                escapes.push(text.len()..text.len() + escape.len());
+            }
             text.push(c);
             if c == '/' {
                 text.push('\u{200B}');
-                breaks.push(at + 1);
             }
         }
-        let moved = |at: usize| at + 3 * breaks.iter().filter(|each| **each <= at).count();
-        let address = Written {
+        address.text = Written {
             text: text.into(),
-            escapes: (written.escapes.iter())
-                .map(|each| moved(each.start)..moved(each.start) + each.len())
-                .collect(),
+            escapes,
         };
-        let body = (!change.body.is_empty()).then(|| {
-            let of = change.body.chars().count();
-            let kept: String = change.body.chars().take(ALL_SHOWN).collect();
-            Body {
-                text: Written::of(&kept, true),
-                shown: of.min(ALL_SHOWN),
-                of,
-            }
-        });
         Whole {
             what: change.what.clone().into(),
             facts: format!("{} · {}", change.kind().facts(site), change.method).into(),
             address,
             headers: (change.headers.iter())
-                .map(|(name, value)| (Written::of(name, false), Written::of(value, false)))
+                .map(|(name, value)| {
+                    let name = Cut::of(name, PART_SHOWN, false);
+                    (name, Cut::of(value, PART_SHOWN, false))
+                })
                 .collect(),
-            body,
+            body: (!change.body.is_empty()).then(|| Cut::of(&change.body, ALL_SHOWN, true)),
         }
     }
 }
@@ -177,7 +228,7 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<AgentReques
         KeyBinding::new("pagedown", PageDown, Some(KEYS)),
         KeyBinding::new("space", PageDown, Some(KEYS)),
     ]);
-    let bounds = Bounds::new(point(px(0.), px(0.)), size(px(WIDTH), px(400.)));
+    let bounds = Bounds::new(point(px(0.), px(0.)), size(px(WIDTH), px(WHOLE_OPENING)));
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: Some(TitlebarOptions {
@@ -409,14 +460,23 @@ impl Render for AgentRequest {
                 .child(text)
         };
         let mono = self.mono.clone().unwrap_or(crate::face::UI.into());
-        // What the agent wrote, on its plate in the monospaced face, its escapes in the detail.
-        let block = |written: &Written| {
+        // What the agent wrote, on its plate in the monospaced face, its escapes in the detail on
+        // a darker plate, so they're told from typed text without colour; a reader hears the text
+        // and then which characters the browser wrote out.
+        let block = |id: String, written: &Written| {
             let escape = HighlightStyle {
                 color: Some(detail),
+                background_color: Some(palette.plate(WHOLE_ESCAPE)),
                 ..HighlightStyle::default()
             };
             let marks = (written.escapes.iter()).map(|range| (range.clone(), escape));
             div()
+                .id(SharedString::from(id))
+                .role(Role::Label)
+                .aria_label(written.text.replace('\u{200B}', ""))
+                .when_some(written.heard(), |block, heard| {
+                    block.aria_description(heard)
+                })
                 .mt(px(WHOLE_GAP))
                 .min_w_0()
                 .px(px(WHOLE_BLOCK))
@@ -432,24 +492,49 @@ impl Render for AgentRequest {
                         .with_highlights(marks.collect::<Vec<_>>()),
                 )
         };
+        // Under a part that's cut, how much of it shows.
+        let note = |cut: &Cut| {
+            cut.note().map(|note| {
+                div()
+                    .mt(px(WHOLE_GAP))
+                    .text_size(px(text::SMALL))
+                    .line_height(px(FACTS_LINE))
+                    .text_color(detail)
+                    .child(note)
+            })
+        };
         let many = self.whole.len() > 1;
         let changes =
             self.whole.iter().enumerate().map(|(at, change)| {
-                let headers = change.headers.iter().map(|(name, value)| {
-                    div()
-                        .mt(px(WHOLE_GAP))
-                        .flex()
-                        .gap(px(WHOLE_NAME_GAP))
-                        .child(
-                            div()
-                                .w(px(WHOLE_NAME))
-                                .flex_none()
-                                .mt(px(WHOLE_BLOCK / 2.))
-                                .text_color(detail)
-                                .child(StyledText::new(name.text.clone())),
-                        )
-                        .child(div().flex_1().min_w_0().child(block(value).mt_0()))
-                });
+                let headers = change
+                    .headers
+                    .iter()
+                    .enumerate()
+                    .map(|(row, (name, value))| {
+                        div()
+                            .mt(px(WHOLE_GAP))
+                            .flex()
+                            .gap(px(WHOLE_NAME_GAP))
+                            .child(
+                                div()
+                                    .w(px(WHOLE_NAME))
+                                    .flex_none()
+                                    .mt(px(WHOLE_BLOCK / 2.))
+                                    .text_color(detail)
+                                    .child(StyledText::new(name.text.text.clone()))
+                                    .children(note(name)),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(
+                                        block(format!("whole-{at}-header-{row}"), &value.text)
+                                            .mt_0(),
+                                    )
+                                    .children(note(value)),
+                            )
+                    });
                 let said = format!("{} says", shown.agent);
                 div()
                 .when(at > 0, |change| change.mt(px(2. * WHOLE_SECTION)))
@@ -466,7 +551,8 @@ impl Render for AgentRequest {
                 .child(label("What the browser sees".into()))
                 .child(div().mt(px(WHOLE_GAP)).text_color(ink).child(change.facts.clone()))
                 .child(label("Address".into()))
-                .child(block(&change.address))
+                .child(block(format!("whole-{at}-address"), &change.address.text))
+                .children(note(&change.address))
                 .when(!change.headers.is_empty(), |change| {
                     change.child(label("Headers".into())).children(headers)
                 })
@@ -486,20 +572,8 @@ impl Render for AgentRequest {
                     None => each.child(label("Sends nothing else".into())),
                     Some(body) => each
                         .child(label("Sends".into()))
-                        .child(block(&body.text))
-                        .when(body.shown < body.of, |each| {
-                            each.child(
-                                div()
-                                    .mt(px(WHOLE_GAP))
-                                    .text_size(px(text::SMALL))
-                                    .line_height(px(FACTS_LINE))
-                                    .text_color(detail)
-                                    .child(format!(
-                                        "Shows the first {} of {} characters.",
-                                        body.shown, body.of
-                                    )),
-                            )
-                        }),
+                        .child(block(format!("whole-{at}-body"), &body.text))
+                        .children(note(body)),
                 })
             });
         let content = div()
@@ -563,8 +637,8 @@ impl Render for AgentRequest {
 mod tests {
     use serde_json::json;
 
-    use super::Whole;
-    use crate::agents::request::{ALL_SHOWN, Request, parse};
+    use super::{Whole, Written};
+    use crate::agents::request::{ALL_SHOWN, PART_SHOWN, Request, parse};
 
     fn sent(asked: serde_json::Value) -> Request {
         let asked = json!({ "requests": [asked] });
@@ -633,7 +707,7 @@ mod tests {
                                       "body": "ok", "what": "Note it." }));
         change.url = "https://team.example.com/pay/\u{202E}gro".into();
         let whole = Whole::of(&change, "team.example.com");
-        let address = &whole.address;
+        let address = &whole.address.text;
         assert_eq!(
             address.text.replace('\u{200B}', ""),
             "https://team.example.com/pay/\\u{202E}gro"
@@ -643,13 +717,92 @@ mod tests {
             .collect();
         assert_eq!(marked, ["\\u{202E}"]);
         let (name, value) = (whole.headers.iter())
-            .find(|(name, _)| name.text.as_ref() == "X-Note")
+            .find(|(name, _)| name.text.text.as_ref() == "X-Note")
             .unwrap();
+        let value = &value.text;
         assert_eq!(
-            (name.text.as_ref(), value.text.as_ref()),
+            (name.text.text.as_ref(), value.text.as_ref()),
             ("X-Note", "pay \\u{202E}001$")
         );
         assert_eq!(&value.text[value.escapes[0].clone()], "\\u{202E}");
+    }
+
+    /// Each escape in an address of many parts is marked where it is, past every break after a
+    /// slash before it, and the marks are the escapes and nothing else.
+    #[test]
+    fn escapes_in_an_address_of_many_parts_are_marked_where_they_are() {
+        let mut change = sent(json!({ "method": "PUT", "path": "/a", "body": "ok",
+                                      "what": "Note it." }));
+        let parts: String = (0..300).map(|at| format!("/p{at}\u{2066}")).collect();
+        change.url = format!("https://team.example.com{parts}/end\u{202E}");
+        let whole = Whole::of(&change, "team.example.com");
+        let address = &whole.address.text;
+        assert_eq!(address.escapes.len(), 301);
+        let marked: Vec<&str> = (address.escapes.iter())
+            .map(|at| &address.text[at.clone()])
+            .collect();
+        assert!(
+            marked[..300].iter().all(|each| *each == "\\u{2066}"),
+            "{marked:?}"
+        );
+        assert_eq!(marked[300], "\\u{202E}");
+        // Every slash breaks after it, and nothing else does.
+        assert_eq!(
+            address.text.matches('\u{200B}').count(),
+            address.text.matches('/').count()
+        );
+        assert!(address.text.contains("/\u{200B}p299\\u{2066}/\u{200B}end"));
+    }
+
+    /// An address or a header's value past PART_SHOWN characters shows its first PART_SHOWN and
+    /// says how many of how many, as a body does past ALL_SHOWN: an address of one slash and
+    /// fifty thousand direction overrides opens at once, cut.
+    #[test]
+    fn a_long_address_or_header_is_cut_and_says_what_it_shows() {
+        let mut change = sent(json!({ "method": "PUT", "path": "/a",
+                                      "headers": { "X-Note": "n".repeat(PART_SHOWN + 3) },
+                                      "body": "ok", "what": "Note it." }));
+        change.url = format!("/{}", "\u{202E}".repeat(50_000));
+        let whole = Whole::of(&change, "team.example.com");
+        let address = &whole.address;
+        assert_eq!((address.shown, address.of), (PART_SHOWN, 50_001));
+        assert_eq!(address.text.escapes.len(), PART_SHOWN - 1);
+        assert_eq!(
+            address.note().as_deref(),
+            Some(format!("Shows the first {PART_SHOWN} of 50001 characters.").as_str())
+        );
+        let (name, value) = &whole.headers[0];
+        assert_eq!((value.shown, value.of), (PART_SHOWN, PART_SHOWN + 3));
+        assert_eq!(value.text.text.chars().count(), PART_SHOWN);
+        assert!(value.note().is_some());
+        assert_eq!((name.note(), whole.body.unwrap().note()), (None, None));
+    }
+
+    /// A reader hears which characters the browser wrote out after the text, each once, so a
+    /// typed `\u{…}` is told from the browser's without seeing the plate; a part with none
+    /// has no description.
+    #[test]
+    fn a_reader_hears_what_the_browser_wrote_out() {
+        let written = Written::of("pay \u{202E}001$\u{202E} \\u{2066}", false);
+        assert_eq!(
+            written.heard().as_deref(),
+            Some(
+                "The browser wrote out 3 characters that wouldn't show, on a darker plate: \
+                 U+202E, U+005C."
+            )
+        );
+        let one = Written::of("a\u{00A0}b", false);
+        assert_eq!(
+            one.heard().as_deref(),
+            Some(
+                "The browser wrote out 1 character that wouldn't show, on a darker plate: U+00A0."
+            )
+        );
+        let many =
+            "\u{202A}\u{202B}\u{202C}\u{202D}\u{202E}\u{2066}\u{2067}\u{2068}\u{2069}\u{200B}";
+        let heard = Written::of(many, false).heard().unwrap();
+        assert!(heard.ends_with("U+2068 and 2 more."), "{heard}");
+        assert_eq!(Written::of("plain text", false).heard(), None);
     }
 
     /// A body laid out as the overlay's own sections stays one block of the agent's text, its

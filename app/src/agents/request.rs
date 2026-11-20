@@ -21,6 +21,9 @@ pub const WHAT_SHOWN: usize = 120;
 /// The characters of an answer's body the agent reads at most, and of all a call's together.
 const SHOWN: usize = 20_000;
 pub const ALL_SHOWN: usize = 100_000;
+/// The most characters of an address or a header's name or value the whole request shows. Nothing
+/// earlier bounds them, and a server takes far fewer: an address past this is no real one.
+pub const PART_SHOWN: usize = 10_000;
 /// The headers that name a method for a server to take in the sent one's place.
 const OVERRIDES: [&str; 3] = [
     "x-http-method-override",
@@ -479,7 +482,14 @@ fn joins(c: char) -> bool {
 fn single_quote(c: char) -> bool {
     matches!(
         c,
-        '\'' | '\u{2018}' | '\u{2019}' | '\u{201B}' | '\u{2032}' | '\u{FF07}'
+        '\'' | '`'
+            | '\u{2BC}'
+            | '\u{2018}'
+            | '\u{2019}'
+            | '\u{201A}'
+            | '\u{201B}'
+            | '\u{2032}'
+            | '\u{FF07}'
     )
 }
 
@@ -496,7 +506,11 @@ pub fn plain(text: &str) -> String {
     let mut last = None;
     for (at, &c) in chars.iter().enumerate() {
         if invisible(c) {
-            let before = last.is_some_and(shows);
+            // A joiner after an emoji's colour selector joins the emoji it's on: the rainbow flag.
+            let before = last.is_some_and(|last| match c {
+                '\u{FE0F}' => shows(last),
+                _ => shows(last) || last == '\u{FE0F}',
+            });
             let after = chars.get(at + 1).is_some_and(|next| shows(*next));
             let kept = match c {
                 '\u{FE0F}' => before,
@@ -512,6 +526,8 @@ pub fn plain(text: &str) -> String {
             _ if c.is_control() || c.is_whitespace() || blank(c) => ' ',
             '"'
             | '\u{2BA}'
+            | '\u{2DD}'
+            | '\u{2EE}'
             | '\u{5F4}'
             | '\u{201C}'
             | '\u{201D}'
@@ -546,15 +562,18 @@ pub fn plain(text: &str) -> String {
 /// Text an agent wrote as the whole request shows it, exactly, with what wouldn't show or would
 /// move what's around it written out instead, as `\u{202E}`: control characters, invisible and
 /// format characters, blank glyphs and every space but the plain one. A line break stays one
-/// where `lines` is set, as a body's are its own. Gives the text and where each escape is in it.
+/// where `lines` is set, as a body's are its own. A backslash before "u{" is written out too, as
+/// `\u{005C}`, so every `\u{…}` that isn't one is the browser's, and marked. Gives the text and
+/// where each escape is in it.
 pub fn escaped(text: &str, lines: bool) -> (String, Vec<std::ops::Range<usize>>) {
     let mut shown = String::with_capacity(text.len());
     let mut marks = Vec::new();
-    for c in text.chars() {
+    for (at, c) in text.char_indices() {
         let written = (c.is_control() && !(lines && c == '\n'))
             || invisible(c)
             || blank(c)
-            || (c.is_whitespace() && c != ' ' && c != '\n');
+            || (c.is_whitespace() && c != ' ' && c != '\n')
+            || (c == '\\' && text[at + 1..].starts_with("u{"));
         if written {
             let start = shown.len();
             shown.push_str(&format!("\\u{{{:04X}}}", u32::from(c)));
@@ -819,10 +838,12 @@ pub fn hide_secrets(text: &str, json: bool) -> (String, usize) {
     hide_text(text)
 }
 
-/// An agent's sentence as the log and the activity file keep it, without what reads as a secret:
-/// what `hide_secrets` hides in text, and a word that follows a secret's name, such as "API key"
-/// or "password:", past "to", "is", "=" or ":", or with a digit in it. The card shows the
-/// sentence whole; it's never kept.
+/// An agent's sentence as the log and Settings › Agents' activity keep it, in memory, without
+/// what reads as a secret: what `hide_secrets` hides in text, and the word after a secret's name,
+/// such as "API key" or "password:", and the first "to", "is", "=" or ":" within NEAR words of it
+/// ("the password for bob to hunter2"), or right after the name with a digit in it. It's a best
+/// effort, never whole: a sentence can say a secret in more ways than words can be told apart,
+/// which is why no file keeps the sentence. The card shows it whole.
 pub fn hide_said(what: &str) -> (String, usize) {
     let (text, mut hidden) = hide_text(what);
     let core = |word: &str| -> String {
@@ -864,6 +885,11 @@ pub fn hide_said(what: &str) -> (String, usize) {
         let mut next = at + if two { 2 } else { 1 };
         let named = &words[next - 1];
         let mut past = named.ends_with(':') || named.ends_with('=');
+        // Past a few words between: "the password for bob to hunter2", "the secret key to …".
+        let mut near = next..(next + NEAR).min(words.len());
+        if !past && let Some(filler_at) = near.find(|&word| filler(&words[word])) {
+            next = filler_at;
+        }
         while next < words.len() && filler(&words[next]) {
             past = true;
             next += 1;
@@ -884,6 +910,9 @@ pub fn hide_said(what: &str) -> (String, usize) {
     }
     (words.join(" "), hidden)
 }
+
+/// How many words after a secret's name `hide_said` looks for the "to" or "is" before its value.
+const NEAR: usize = 3;
 
 /// Whether a field by this name holds a secret. A CSRF token is the page's own, no use without
 /// its cookie, and what a change may need, so it shows.
@@ -1632,6 +1661,13 @@ mod tests {
             plain("Done.'' ''Checked'\u{2019} it's"),
             "Done.' 'Checked' it's"
         );
+        let rainbow = "\u{1F3F3}\u{FE0F}\u{200D}\u{1F308}";
+        assert_eq!(
+            plain(&format!("Fly {rainbow} today")),
+            format!("Fly {rainbow} today")
+        );
+        assert_eq!(plain("a \u{FE0F}\u{200D}b"), "a b");
+        assert_eq!(plain("x\u{2EE}y\u{2DD} z`\u{2BC}\u{201A}'w"), "x'y' z`w");
     }
 
     /// The whole request writes out what wouldn't show, so an override can't turn its text
@@ -1661,9 +1697,29 @@ mod tests {
         );
     }
 
-    /// The log and the activity file keep the sentence without what reads as a secret: a word
-    /// after a secret's name and a filler or a colon, or with a digit, and every JWT and bearer
-    /// credential. A word after the name with neither, and the words around, stay.
+    /// A `\u{…}` the agent typed reads as one the browser wrote but for its mark, so the
+    /// backslash before it is written out itself, marked: every unmarked `\u{` is the browser's
+    /// own. A backslash before anything else stays.
+    #[test]
+    fn a_typed_escape_has_its_backslash_written_out() {
+        let (shown, marks) = escaped("a\\u{202E}b \\u202E C:\\dir \\u", true);
+        assert_eq!(shown, "a\\u{005C}u{202E}b \\u202E C:\\dir \\u");
+        assert_eq!(
+            marks
+                .iter()
+                .map(|at| &shown[at.clone()])
+                .collect::<Vec<_>>(),
+            ["\\u{005C}"]
+        );
+        let (shown, marks) = escaped("\\u{202E}\u{202E}", false);
+        assert_eq!(shown, "\\u{005C}u{202E}\\u{202E}");
+        assert_eq!(marks, [0..8, 15..23]);
+    }
+
+    /// The log and Settings › Agents' activity keep the sentence without what reads as a secret:
+    /// the word after a secret's name and a filler or a colon, the filler a few words on, or a
+    /// word with a digit right after the name, and every JWT and bearer credential. A word after
+    /// the name with neither, and the words around, stay.
     #[test]
     fn a_sentence_is_kept_without_its_secrets() {
         let hid = |what: &str| hide_said(what).0;
@@ -1696,6 +1752,19 @@ mod tests {
             "Send Bearer (hidden) on"
         );
         assert_eq!(hid("Close item 4127."), "Close item 4127.");
+        assert_eq!(
+            hid("Change the password for bob to hunter2"),
+            "Change the password for bob to (hidden)"
+        );
+        assert_eq!(
+            hid("Set the secret key to sk-live-123"),
+            "Set the secret key to (hidden)"
+        );
+        // Past NEAR words, a "to" is the sentence's own.
+        assert_eq!(
+            hid("Reset the password for the whole team to Friday"),
+            "Reset the password for the whole team to Friday"
+        );
     }
 
     /// The card shows a sentence whole up to WHAT_SHOWN, and a longer one up to a word, with "…".

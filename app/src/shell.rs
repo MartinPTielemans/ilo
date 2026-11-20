@@ -1878,6 +1878,10 @@ pub struct Shell {
     /// What an agent asks the user first, in every window (agent_question.rs).
     agent_question: Option<crate::agents::Question>,
     agent_question_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Each row of a card of several changes as it was drawn, its text and where the agent's mark
+    /// is in it, which the tests read.
+    #[cfg(test)]
+    agent_question_rows: RefCell<Vec<(gpui::TextLayout, std::ops::Range<usize>)>>,
     /// Where the request card's "See the whole request" is, which check.sh clicks (#3548).
     agent_request_see_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The request card's "See the whole request", where Escape in the whole request puts the
@@ -2341,6 +2345,8 @@ impl Shell {
             question_settling: RefCell::default(),
             agent_question: None,
             agent_question_drawn: Rc::default(),
+            #[cfg(test)]
+            agent_question_rows: RefCell::default(),
             agent_request_see_drawn: Rc::default(),
             agent_request_see: cx.focus_handle(),
             task_cards: Vec::new(),
