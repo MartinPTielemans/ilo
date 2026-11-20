@@ -24,6 +24,7 @@ use web_time::Instant;
 use futures::channel::mpsc::UnboundedSender;
 use serde_json::{Value, json};
 
+use super::tools::Kind;
 use super::{Call, Event, ToolResult, tools};
 
 #[cfg(unix)]
@@ -763,28 +764,34 @@ fn call(shared: &Shared, number: u64, agent: &str, tool: &str, arguments: Value)
     {
         let connections = shared.connections.lock().unwrap();
         match connections.get(&number) {
-            None => return ToolResult::error("The connection closed."),
+            None => return ToolResult::failed(Kind::Stopped, "The connection closed."),
             // Stopped, it closes once it has answered: no call reaches the UI from then on.
-            Some(connection) if connection.stopping => return ToolResult::error(super::STOPPED),
+            Some(connection) if connection.stopping => {
+                return ToolResult::failed(Kind::Stopped, super::STOPPED);
+            }
             Some(_) => {}
         }
         if shared.events.unbounded_send(Event::Call(call)).is_err() {
-            return ToolResult::error("The browser has turned agents off.");
+            return ToolResult::failed(Kind::Stopped, OFF);
         }
     }
     // The UI drops the call unanswered when the user turns agents off or disconnects the agent.
     let result = answer
         .recv()
-        .unwrap_or_else(|_| ToolResult::error("The browser has turned agents off."));
+        .unwrap_or_else(|_| ToolResult::failed(Kind::Stopped, OFF));
     _ = shared.events.unbounded_send(Event::Answered {
         agent: agent.into(),
         id,
         at: Instant::now(),
         error: result.error.then(|| result.text.clone()),
+        kind: result.kind,
         image: result.image.clone(),
     });
     result
 }
+
+/// What a call answers once the user turned agents off.
+const OFF: &str = "The browser has turned agents off.";
 
 /// The connection closed. The agent's last session ending tells the UI it's gone.
 fn end(shared: &Shared, number: u64) {
