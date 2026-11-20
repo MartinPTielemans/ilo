@@ -900,38 +900,9 @@ fn set_reduce_motion(reduce: bool, cx: &mut App) {
     }
 }
 
-/// Where Chromium keeps the profiles, and the app the user's keys. A dev build keeps a profile of
-/// its own, never the owner's, since the checks delete what the last run saved. The prod build
-/// keeps the user's in Application Support, under the product's name, or in Local AppData on
-/// Windows.
+/// Where Chromium keeps the profiles, and the app the user's keys (browser::profile_dir).
 fn profile_dir() -> String {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let name = include_str!("../branding/name").trim();
-    std::env::var("BROWSER_PROFILE_DIR").unwrap_or_else(|_| {
-        if cfg!(target_os = "windows") {
-            let local = std::env::var("LOCALAPPDATA").unwrap_or_default();
-            if cfg!(feature = "prod") {
-                format!(r"{local}\{name}\User Data")
-            } else {
-                format!(r"{local}\browser-app")
-            }
-        } else if cfg!(target_os = "linux") {
-            // A Flatpak points XDG_CONFIG_HOME at its own folder, the only one it may write.
-            if cfg!(feature = "prod") {
-                let config = std::env::var("XDG_CONFIG_HOME")
-                    .ok()
-                    .filter(|dir| !dir.is_empty())
-                    .unwrap_or_else(|| format!("{home}/.config"));
-                format!("{config}/{name}")
-            } else {
-                format!("{home}/.cache/browser-app")
-            }
-        } else if cfg!(feature = "prod") {
-            format!("{home}/Library/Application Support/{name}")
-        } else {
-            format!("{home}/Library/Caches/browser-app")
-        }
-    })
+    browser::profile_dir()
 }
 
 /// What the app gives the core to start with: Chromium's switches, from the arguments the process

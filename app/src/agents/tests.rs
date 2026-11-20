@@ -379,6 +379,8 @@ struct Configs {
     found: Mutex<Vec<Client>>,
     /// What each task CLI answers when looked for; one not here isn't found.
     looked: Mutex<Vec<(crate::agents::runner::Cli, crate::agents::ready::Found)>>,
+    /// Whether the user's shell leaves out the `ilo` command's folder.
+    unsearched: Mutex<bool>,
 }
 
 impl Clients for Configs {
@@ -400,6 +402,10 @@ impl Clients for Configs {
 
     fn found(&self, client: Client) -> bool {
         client == Client::Other || self.found.lock().unwrap().contains(&client)
+    }
+
+    fn searches(&self, _: &std::path::Path) -> bool {
+        !*self.unsearched.lock().unwrap()
     }
 
     /// The tests never run a CLI of this computer's: each answers as `looked` says.
@@ -7883,21 +7889,35 @@ mod sessions {
             "a client that gave no name has its kind's"
         );
         // A name that would pass for the browser, whose words the cards set beside an agent's, has
-        // its kind's, and one laid out is one plain line.
+        // its kind's.
         let app = env!("APP_NAME");
         for posing in [
             app.to_string(),
             format!("{} agent", app.to_uppercase()),
             "The browser".into(),
             "Checked by your browser".into(),
+            // Another client's name is that client's, however it's spaced, joined or stopped, and
+            // so is one holding an app's name.
+            " claude code ".into(),
+            "Codex".into(),
+            "Claude  Code".into(),
+            "Claude-Code".into(),
+            "Claude Code.".into(),
+            "Claude Code 2".into(),
+            "My Codex".into(),
+            "ilo-CLI".into(),
+            // A letter that only looks like one, and anything outside printable ASCII, isn't
+            // taken.
+            "Cl\u{0430}ude Code".into(),
+            "Zed\n\u{202E}\"Agent\u{201D}".into(),
         ] {
             hello(&agents, "mcp-client", &posing, cx);
             assert_eq!(named(&agents, cx).0, "MCP client", "{posing} passed");
         }
-        hello(&agents, "mcp-client", "Browser Use", cx);
-        assert_eq!(named(&agents, cx).0, "Browser Use");
-        hello(&agents, "mcp-client", "Zed\n\u{202E}\"Agent\u{201D}", cx);
-        assert_eq!(named(&agents, cx).0, "Zed 'Agent'");
+        for taken in ["Browser Use", "Checker"] {
+            hello(&agents, "mcp-client", taken, cx);
+            assert_eq!(named(&agents, cx).0, taken);
+        }
         hello(&agents, "mcp-client", "Zed", cx);
         assert_eq!(named(&agents, cx), ("Zed".into(), Some("Zed".into())));
 
@@ -8303,6 +8323,126 @@ mod sessions {
         agents.update(cx, |agents, cx| agents.drop_task(&second, cx));
         assert_eq!(space(30), None);
         assert_eq!(space(31), Some(2));
+    }
+
+    /// The `ilo` command's connection closes after each command, which isn't its end: its card
+    /// stays at work over the commands, its activity log says it connected once, and it ends as an
+    /// idle session does, after which it has no status and isn't live (#3667).
+    #[gpui::test]
+    fn the_commands_session_lasts_over_its_connections(cx: &mut TestAppContext) {
+        let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+        let agents = agents(&browser, &configs, None, cx);
+        agents.update(cx, |agents, cx| agents.connect(Client::Command, cx));
+        cx.run_until_parked();
+        assert_eq!(
+            agents.read_with(cx, |agents, _| agents.command_state()),
+            crate::agents::cli::State::On
+        );
+        let agent = Client::Command.id();
+        let command = |id: u64, tool: &str, arguments: Value, cx: &mut TestAppContext| {
+            let (reply, answer) = mpsc::channel();
+            let call = Call {
+                id,
+                agent: agent.into(),
+                tool: tool.into(),
+                arguments,
+                reply,
+                at: std::time::Instant::now(),
+            };
+            agents.update(cx, |agents, cx| agents.handle(Event::Call(call), cx));
+            let event = Event::Answered {
+                agent: agent.into(),
+                id,
+                at: std::time::Instant::now(),
+                error: None,
+                image: None,
+            };
+            agents.update(cx, |agents, cx| agents.handle(event, cx));
+            let bye = Event::Bye {
+                agent: agent.into(),
+            };
+            agents.update(cx, |agents, cx| agents.handle(bye, cx));
+            answer
+        };
+        // A command can't pass for an app the user connected.
+        for posing in [
+            "Claude Code",
+            " CODEX",
+            "Claude-Code.",
+            "My Codex",
+            "MCP  client",
+            "C\u{043E}dex",
+        ] {
+            hello(&agents, agent, posing, cx);
+            let name = agents.read_with(cx, |agents, _| agents.agent_name(agent).to_string());
+            assert_eq!(name, "ilo CLI", "{posing} passed");
+        }
+        hello(&agents, agent, "Researcher", cx);
+        command(1, "read_page", json!({ "tab": 20 }), cx);
+        // A later command naming another keeps the card's name.
+        hello(&agents, agent, "Someone else", cx);
+        command(2, "snapshot", json!({ "tab": 20 }), cx);
+        let shown = cards(&agents, cx);
+        assert_eq!(shown.len(), 1, "a card for each command: {shown:?}");
+        assert_eq!(shown[0].dot, Dot::Working);
+        assert_eq!(shown[0].name.as_ref(), "Researcher");
+        assert!(agents.read_with(cx, |agents, _| agents.is_live(Client::Command)));
+        assert!(browser.disconnected.borrow().is_empty());
+        let connected = log(&agents, agent, cx)
+            .into_iter()
+            .filter(|(action, _, _)| action == "connected")
+            .count();
+        assert_eq!(connected, 2, "Add's line and the first command's");
+
+        cx.executor().advance_clock(IDLE + Duration::from_secs(1));
+        let shown = cards(&agents, cx);
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0].dot, Dot::Done);
+        assert!(!agents.read_with(cx, |agents, _| agents.is_live(Client::Command)));
+        assert_eq!(*browser.disconnected.borrow(), [agent]);
+        assert!(agents.read_with(cx, |agents, _| agents.status()).is_empty());
+
+        // Its next command is a session of its own, with the name that command gives.
+        hello(&agents, agent, "Writer", cx);
+        command(3, "snapshot", json!({ "tab": 20 }), cx);
+        let shown = cards(&agents, cx);
+        assert_eq!(shown.len(), 2, "{shown:?}");
+        let working: Vec<_> = (shown.iter())
+            .filter(|card| card.dot == Dot::Working)
+            .map(|card| card.name.to_string())
+            .collect();
+        assert_eq!(working, ["Writer"]);
+    }
+
+    /// The command's row is Add until it's added, then says whether the user's shell looks in its
+    /// folder; Remove takes it away as Disconnect does a client, and it's never under Apps that
+    /// connect.
+    #[gpui::test]
+    fn the_commands_row_follows_add_and_remove(cx: &mut TestAppContext) {
+        use crate::agents::cli::State;
+        let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+        let agents = agents(&browser, &configs, None, cx);
+        let state =
+            |cx: &mut TestAppContext| agents.read_with(cx, |agents, _| agents.command_state());
+        assert_eq!(state(cx), State::Off);
+        *configs.unsearched.lock().unwrap() = true;
+        agents.update(cx, |agents, cx| agents.connect(Client::Command, cx));
+        cx.run_until_parked();
+        assert_eq!(state(cx), State::Unsearched);
+        assert_eq!(configs.connected.lock().unwrap()[0].0, Client::Command);
+        *configs.unsearched.lock().unwrap() = false;
+        agents.update(cx, |agents, cx| agents.look_for_clients(cx));
+        cx.run_until_parked();
+        assert_eq!(state(cx), State::On);
+        assert!(
+            !agents
+                .read_with(cx, |agents, _| agents.listed())
+                .contains(&Client::Command)
+        );
+        agents.update(cx, |agents, cx| agents.disconnect(Client::Command, cx));
+        cx.run_until_parked();
+        assert_eq!(state(cx), State::Off);
+        assert_eq!(configs.disconnected.lock().unwrap()[0].0, Client::Command);
     }
 
     fn titled(agents: &Entity<Agents>, cx: &mut TestAppContext) -> String {
