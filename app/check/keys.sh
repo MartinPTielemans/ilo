@@ -621,6 +621,19 @@ settings_drew
 send clickkey $(drawn "toolbar Shortcuts")
 expect '^browser: settings tab Shortcuts$' "a click on Shortcuts didn't show its tab"
 settings_drew Shortcuts
+# Probe for #3746, never to land: the Shortcuts rows whose names it changes.
+send clickkey $(drawn "search")
+send type actual
+expect '^browser: settings search "actual" finds ' "probe: the search for actual didn't end"
+../tools/window-screenshot.sh "$pid" "$out/probe-3746-actual.png" || fail "no window to capture"
+send key a cmd
+send type library
+expect '^browser: settings search "library" finds ' "probe: the search for library didn't end"
+../tools/window-screenshot.sh "$pid" "$out/probe-3746-library.png" || fail "no window to capture"
+grep '^browser: settings search "\(actual\|library\)" finds ' "$log" | sed 's/^/probe-3746: /'
+send key a cmd
+send key backspace
+expect '^browser: settings search cleared$' "probe: ⌫ didn't clear the search"
 send clickkey $(drawn "search")
 send type new tab
 # Paste URL as New Tab has the words too, under it.
@@ -711,6 +724,14 @@ send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 send key t cmd
 expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+# Probe for #3746, never to land: the command bar's Settings row.
+send type settings
+expect '^browser: command bar drew "settings"$' "probe: the bar didn't draw settings"
+../tools/window-screenshot.sh "$pid" "$out/probe-3746-bar-settings.png" || fail "no window to capture"
+grep '^browser: command bar lists "settings": ' "$log" | tail -1 | sed 's/^/probe-3746: /'
+send key a cmd
+send key backspace
+expect '^browser: command bar drew ""$' "probe: the bar didn't empty"
 send type peek
 expect '^browser: command bar settings "peek": Peek — Settings$' "⌘T didn't list Peek — Settings"
 for _ in 1 2 3 4 5; do
