@@ -543,6 +543,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
         browser::face::register(cx);
         // The user's keys, before the shortcuts are bound to them.
         settings::read_shortcuts(cx);
+        shell::follow_layout(cx);
         settings::read_look(cx);
         settings::read_portrait_background(cx);
         settings::read_new_note(cx);
