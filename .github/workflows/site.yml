@@ -70,8 +70,6 @@ jobs:
     concurrency:
       group: site-deploy
       cancel-in-progress: false
-    env:
-      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Switch
         id: switch
@@ -111,6 +109,9 @@ jobs:
       # than one that would publish every dated entry.
       - name: Releases
         if: ${{ steps.switch.outputs.mode != 'none' }}
+        # The only step that calls gh, so Install and Build run with no token, as with the secrets.
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[]
