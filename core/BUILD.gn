@@ -74,6 +74,21 @@ source_set("ad_block_off_sites") {
   public_deps = [ "//base" ]
 }
 
+# What a profile chose about sites for the system's engine, with the listed services, over its
+# prefs alone, apart so browser_core_unittests tests them alone (#3593).
+source_set("system_engine_choices") {
+  sources = [
+    "system_engine_choices.cc",
+    "system_engine_choices.h",
+  ]
+  deps = [
+    "//components/prefs",
+    "//net",
+    "//url",
+  ]
+  public_deps = [ "//base" ]
+}
+
 # The site searches a new profile has, and the one a word typed starts (#1397).
 source_set("site_searches") {
   sources = [
@@ -881,6 +896,7 @@ source_set("browser_core") {
     ":ad_block_list_check",
     ":native_ad_block_lists",
     ":ad_block_off_sites",
+    ":system_engine_choices",
     ":ad_block_page",
     ":saved_read",
     ":saved_read_rule",
@@ -1221,6 +1237,7 @@ test("browser_core_unittests") {
     "ad_block_carry_unittest.cc",
     "ad_block_list_check_unittest.cc",
     "ad_block_off_sites_unittest.cc",
+    "system_engine_choices_unittest.cc",
     "archive_rule_unittest.cc",
     "arrange_rule_unittest.cc",
     "focus_leaving_rule_unittest.cc",
@@ -1289,6 +1306,7 @@ test("browser_core_unittests") {
     ":ad_block_carry",
     ":ad_block_list_check",
     ":ad_block_off_sites",
+    ":system_engine_choices",
     ":archive_rule",
     ":arrange_rule",
     ":focus_leaving_rule",
