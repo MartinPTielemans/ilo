@@ -167,8 +167,18 @@ probe_stuck=0
 probe_goes=""
 # The report's ⌘T comes straight after ⌘N, before the new window's bar shows: on a bar that
 # shows, ⌘T closes it again, as Arc's does, and the typing then goes to no field.
+# Run 2: a second display, the main one, as the owner's external monitor is. ⌘N opens the new
+# window there, and the first stays on the Mac's own, so every second go moves the bar between them.
+send display add 1280 800 main
+probe_display=$(since | grep -m1 '^browser: display ')
+case "$probe_display" in
+"browser: display added at 0 0 1280 800") ;;
+*) fail "probe #3830: no second display that is the main one: $probe_display" ;;
+esac
 send key n cmd
 expect '^browser: window opened [0-9]' "⌘N didn't open a second window"
+send order
+probe_frames=$(since | grep '^browser: frame window ' | tr '\n' ';')
 probe_second=$(grep -c '^browser: window opened ' "$log")
 send key t cmd
 # expect's grep is a basic one, with no alternation, so each way is looked for in turn.
@@ -235,7 +245,9 @@ done
 send key w cmd shift
 expect '^browser: window closed [0-9]' "⇧⌘W didn't close the second window"
 send window 1
-echo "probe #3830: $probe_first; the bar stopped drawing in $probe_stuck of 20 goes:$probe_goes" >&2
+send display remove
+expect '^browser: display removed$' "probe #3830: the second display didn't go away"
+echo "probe #3830: windows $probe_frames $probe_first; the bar stopped drawing in $probe_stuck of 20 goes:$probe_goes" >&2
 grep -E '^browser: frames .*(refused|failed)' "$log" | sort | uniq -c | sort -rn | head -20 >&2 || true
 [ "$probe_stuck" = 0 ] ||
   fail "probe #3830: the bar stopped drawing in $probe_stuck of 20 goes:$probe_goes see probe-3830-go-*.log"
