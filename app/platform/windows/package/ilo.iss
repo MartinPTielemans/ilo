@@ -191,3 +191,85 @@ begin
   end;
   Result := ModelId;
 end;
+
+function SendMessageTimeout(Window: HWND; Msg: Cardinal; WParam: Longint; LParam: String;
+  Flags: Cardinal; Timeout: Cardinal; var Answer: Cardinal): Longint;
+  external 'SendMessageTimeoutW@user32.dll stdcall';
+
+// The entry Settings › Agents › Command line put on the user's PATH, as the ilo command's agent
+// file records it (app/src/agents/cli.rs), or '' when it put none there.
+function CommandEntry: String;
+var
+  Lines: TArrayOfString;
+  I: Integer;
+begin
+  Result := '';
+  if LoadStringsFromFile(ExpandConstant('{localappdata}\{#AppName}\User Data\ilo-command'), Lines) then
+    for I := 0 to GetArrayLength(Lines) - 1 do
+      if Copy(Lines[I], 1, 5) = 'path ' then
+        Result := Copy(Lines[I], 6, Length(Lines[I]));
+end;
+
+// Path without Entry, as cli.rs's path_without takes it out: the last entry that is exactly it,
+// with `;` between entries but not within quotes, so every other entry and `;` stays as it was.
+function PathWithout(Path, Entry: String; var Without: String): Boolean;
+var
+  Items: TArrayOfString;
+  I, Start, Count, Last: Integer;
+  Quoted, Ends: Boolean;
+begin
+  Count := 0;
+  Start := 1;
+  Quoted := False;
+  for I := 1 to Length(Path) + 1 do begin
+    Ends := I > Length(Path);
+    if not Ends then
+      if Path[I] = '"' then
+        Quoted := not Quoted
+      else
+        Ends := (Path[I] = ';') and not Quoted;
+    if Ends then begin
+      SetArrayLength(Items, Count + 1);
+      Items[Count] := Copy(Path, Start, I - Start);
+      Count := Count + 1;
+      Start := I + 1;
+    end;
+  end;
+  Last := -1;
+  for I := 0 to Count - 1 do
+    if Items[I] = Entry then
+      Last := I;
+  Result := Last >= 0;
+  Without := '';
+  Start := 0;
+  for I := 0 to Count - 1 do
+    if I <> Last then begin
+      if Start > 0 then
+        Without := Without + ';';
+      Without := Without + Items[I];
+      Start := 1;
+    end;
+end;
+
+// Uninstalling takes the ilo command's folder off the user's PATH, as Remove does, so no folder
+// that's gone stays on it. A PATH that can't be read isn't written, and RegWriteStringValue keeps
+// a REG_EXPAND_SZ one so.
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  Path, Entry, Without: String;
+  Answer: Cardinal;
+begin
+  if CurUninstallStep <> usUninstall then
+    exit;
+  Entry := CommandEntry;
+  if (Entry = '') or not RegQueryStringValue(HKCU, 'Environment', 'Path', Path) then
+    exit;
+  if not PathWithout(Path, Entry, Without) then
+    exit;
+  if Without = '' then
+    RegDeleteValue(HKCU, 'Environment', 'Path')
+  else
+    RegWriteStringValue(HKCU, 'Environment', 'Path', Without);
+  // HWND_BROADCAST, WM_SETTINGCHANGE and SMTO_ABORTIFHUNG: terminals opened after don't have it.
+  SendMessageTimeout($FFFF, $1A, 0, 'Environment', 2, 5000, Answer);
+end;
