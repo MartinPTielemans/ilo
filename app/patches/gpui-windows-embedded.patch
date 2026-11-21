@@ -1399,7 +1399,7 @@ index e7a45a034d..b6ecc87f7c 100644
  pub(crate) use destination_list::*;
  pub(crate) use direct_write::*;
 diff --git a/crates/gpui_windows/src/keyboard.rs b/crates/gpui_windows/src/keyboard.rs
-index 8164bc1564..447fc5d335 100644
+index 8164bc1564..3f79550b4d 100644
 --- a/crates/gpui_windows/src/keyboard.rs
 +++ b/crates/gpui_windows/src/keyboard.rs
 @@ -2,10 +2,11 @@ use anyhow::Result;
@@ -1418,7 +1418,7 @@ index 8164bc1564..447fc5d335 100644
      },
      WindowsAndMessaging::KL_NAMELENGTH,
  };
-@@ -150,6 +151,28 @@ pub(crate) fn get_keystroke_key(
+@@ -150,6 +151,27 @@ pub(crate) fn get_keystroke_key(
      scan_code: u32,
      modifiers: &mut Modifiers,
  ) -> Option<String> {
@@ -1437,8 +1437,7 @@ index 8164bc1564..447fc5d335 100644
 +    modifiers: &mut Modifiers,
 +    by_place: Option<&[char]>,
 +) -> Option<String> {
-+    let base = get_key_from_vkey(vkey).and_then(|key| key.parse::<char>().ok());
-+    if let Some(key) = split_key(scan_code, base, modifiers, by_place) {
++    if let Some(key) = split_key(scan_code, modifiers, by_place) {
 +        return Some(key);
 +    }
 +    if let Some(key) = shortcut_key(vkey, get_key_from_vkey(vkey).as_deref(), modifiers) {
@@ -1447,7 +1446,7 @@ index 8164bc1564..447fc5d335 100644
      if modifiers.shift && need_to_convert_to_shifted_key(vkey) {
          get_shifted_key(vkey, scan_code).inspect(|_| {
              modifiers.shift = false;
-@@ -159,6 +182,164 @@ pub(crate) fn get_keystroke_key(
+@@ -159,6 +181,156 @@ pub(crate) fn get_keystroke_key(
      }
  }
  
@@ -1506,27 +1505,19 @@ index 8164bc1564..447fc5d335 100644
 +    modifiers: &Modifiers,
 +    base: impl Fn(u32) -> Option<char>,
 +) -> Option<String> {
-+    let own = base(scan_code);
-+    split_key(scan_code, own, modifiers, Some(&split_keys_of(base)))
++    split_key(scan_code, modifiers, Some(&split_keys_of(base)))
 +}
 +
 +/// With Ctrl or Alt and shift held, which type no text, a split key, [ ] or -, is named so with
-+/// shift kept on the key whose own character, `base`, it is, where it was ctrl-{ on the US
-+/// layout. And it's named so on the key at its US place where the layout has no key of its own
-+/// for it (`by_place`): Ctrl Shift and Danish's å is ctrl-shift-[. AltGr, Ctrl and Alt, is left to
-+/// the layout.
-+fn split_key(
-+    scan_code: u32,
-+    base: Option<char>,
-+    modifiers: &Modifiers,
-+    by_place: Option<&[char]>,
-+) -> Option<String> {
++/// shift kept on the key at its US place where the layout has no key of its own for it
++/// (`by_place`): Ctrl Shift and Danish's å is ctrl-shift-[. A layout's own [ ] and - keys are left
++/// as GPUI names them, as its keyboard mapper binds ctrl-shift-] to the key the layout types ]
++/// with, as ctrl-} on the US layout and ctrl-shift-- as ctrl-= on JIS. AltGr, Ctrl and Alt, is
++/// left to the layout.
++fn split_key(scan_code: u32, modifiers: &Modifiers, by_place: Option<&[char]>) -> Option<String> {
 +    let by_place = by_place?;
 +    if !modifiers.shift || modifiers.control == modifiers.alt || modifiers.platform {
 +        return None;
-+    }
-+    if let Some(own) = base.filter(|key| gpui::SPLIT_KEYS.contains(key)) {
-+        return Some(own.to_string());
 +    }
 +    let place = SPLIT_PLACES.iter().position(|&place| place == scan_code)?;
 +    let key = gpui::SPLIT_KEYS[place];
@@ -1612,7 +1603,7 @@ index 8164bc1564..447fc5d335 100644
  fn get_key_from_vkey(vkey: VIRTUAL_KEY) -> Option<String> {
      let key_data = unsafe { MapVirtualKeyW(vkey.0 as u32, MAPVK_VK_TO_CHAR) };
      if key_data == 0 {
-@@ -318,6 +499,42 @@ const CANDIDATE_VKEYS: &[VIRTUAL_KEY] = &[
+@@ -318,6 +490,42 @@ const CANDIDATE_VKEYS: &[VIRTUAL_KEY] = &[
  mod tests {
      use crate::WindowsKeyboardMapper;
      use gpui::{Keystroke, Modifiers, PlatformKeyboardMapper};

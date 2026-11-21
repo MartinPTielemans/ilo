@@ -2138,22 +2138,10 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn windows_split_keys_are_named_by_place_on_danish_and_german() {
-        use windows::Win32::UI::Input::KeyboardAndMouse::{
-            VIRTUAL_KEY, VK_OEM_1, VK_OEM_4, VK_OEM_6, VK_OEM_MINUS, VK_OEM_PLUS,
-        };
-        // Scan code, virtual key and its character on the layout.
-        let danish: &[(u32, VIRTUAL_KEY, char)] = &[
-            (0x1A, VK_OEM_6, 'å'),
-            (0x1B, VK_OEM_1, '¨'),
-            (0x0C, VK_OEM_PLUS, '+'),
-            (0x35, VK_OEM_MINUS, '-'),
-        ];
-        let german: &[(u32, VIRTUAL_KEY, char)] = &[
-            (0x1A, VK_OEM_1, 'ü'),
-            (0x1B, VK_OEM_PLUS, '+'),
-            (0x0C, VK_OEM_4, 'ß'),
-            (0x35, VK_OEM_MINUS, '-'),
-        ];
+        // Scan code and its character on the layout, whose virtual keys are Danish's OEM_6,
+        // OEM_1, OEM_PLUS and OEM_MINUS, and German's OEM_1, OEM_PLUS, OEM_4 and OEM_MINUS.
+        let danish: &[(u32, char)] = &[(0x1A, 'å'), (0x1B, '¨'), (0x0C, '+'), (0x35, '-')];
+        let german: &[(u32, char)] = &[(0x1A, 'ü'), (0x1B, '+'), (0x0C, 'ß'), (0x35, '-')];
         let control_shift = Modifiers::control_shift();
         let alt_shift = Modifiers {
             alt: true,
@@ -2169,15 +2157,16 @@ mod tests {
         for (name, layout) in [("Danish", danish), ("German", german)] {
             let base = |scan: u32| {
                 (layout.iter())
-                    .find(|&&(at, ..)| at == scan)
-                    .map(|&(.., c)| c)
+                    .find(|&&(at, _)| at == scan)
+                    .map(|&(_, c)| c)
             };
             for held in [control_shift, alt_shift] {
                 let named = |scan| gpui_windows::split_key_on(scan, &held, base);
                 assert_eq!(named(0x1A).as_deref(), Some("["), "{name}");
                 assert_eq!(named(0x1B).as_deref(), Some("]"), "{name}");
-                // Its own - key, at the US / place, is -, and the key at the US - place isn't.
-                assert_eq!(named(0x35).as_deref(), Some("-"), "{name}");
+                // Its own - key, at the US / place, is left to the keyboard mapper, which binds
+                // ctrl-shift-- to it, and the key at the US - place isn't -.
+                assert_eq!(named(0x35), None, "{name}");
                 assert_eq!(named(0x0C), None, "{name}");
             }
             assert_eq!(
@@ -2190,8 +2179,8 @@ mod tests {
                 None
             );
         }
-        // The US layout's own keys are named by their character, shift kept, where Ctrl Shift [
-        // was ctrl-{.
+        // The US layout's own keys are left to the keyboard mapper, which binds ctrl-shift-[ as
+        // ctrl-{, as GPUI names the key.
         let us = |scan: u32| match scan {
             0x1A => Some('['),
             0x1B => Some(']'),
@@ -2199,11 +2188,9 @@ mod tests {
             0x35 => Some('/'),
             _ => None,
         };
-        let named = |scan| gpui_windows::split_key_on(scan, &control_shift, us);
-        assert_eq!(named(0x1A).as_deref(), Some("["));
-        assert_eq!(named(0x1B).as_deref(), Some("]"));
-        assert_eq!(named(0x0C).as_deref(), Some("-"));
-        assert_eq!(named(0x35), None);
+        for scan in [0x1A, 0x1B, 0x0C, 0x35] {
+            assert_eq!(gpui_windows::split_key_on(scan, &control_shift, us), None);
+        }
     }
 
     /// A key the user gave a command by the name GPUI gave it before #3509 still runs the
