@@ -3461,7 +3461,9 @@ CARD
   read=$(call read_page "{\"tab\":$fence_tab}")
   case "$read" in *"Balance 1234"*) ;; *) fail "the tab let stay asked again or answered: $read" ;; esac
   # Back off the site and forward onto it again asks again, as coming back does, whether the page
-  # comes back from the back-forward cache or loads again; which it was goes in mcp-fence.txt.
+  # comes back from the back-forward cache or loads again; which it was goes in mcp-fence.txt. It
+  # guards the order the fence rests on: the core's report of the page's address reaches the app
+  # before the forward's answer, a restore's too, or the answer would carry the page.
   went=$(call navigate "{\"tab\":$fence_tab,\"url\":\"back\"}")
   case "$went" in "Went back."*'link "Pension"'*) ;; *) fail "back off the listed site answered: $went" ;; esac
   loads=$(grep -c "^browser: loaded $fence_tab http://pension\.localhost:$port/pension\.html\$" "$log" || true)
