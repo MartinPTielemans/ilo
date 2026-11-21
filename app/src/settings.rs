@@ -4547,35 +4547,39 @@ impl Settings {
         let state = model.command_state();
         let failure = model.failure(client);
         let mono = browser::face::mono(&cx.text_system().all_font_names());
-        let detail = agents::cli::detail(state, model.command_windows_folder().as_deref());
+        let detail = agents::cli::detail(
+            state,
+            model.command_flatpak_line().as_deref(),
+            model.command_windows_folder().as_deref(),
+        );
         let action = |title: &'static str, id: &'static str| {
             let agents = agents.clone();
             self.button(id, title)
                 .relative()
                 .child(self.drawn(format!("ilo-command {}", title.to_lowercase())))
                 .on_click(move |_, _, cx| {
-                    agents.update(cx, |agents, cx| match agents.is_connected(client) {
-                        true => agents.disconnect(client, cx),
-                        false => {
+                    // Add follows the row, not the agent: on Windows a command whose PATH entry
+                    // was taken off is still connected, and Add puts the entry back (#3783).
+                    agents.update(cx, |agents, cx| match agents.command_state() {
+                        agents::cli::State::Off => {
                             // check.sh reads this line.
                             log!("browser: connect agent {}", client.id());
                             agents.connect(client, cx)
                         }
+                        _ => agents.disconnect(client, cx),
                     })
                 })
                 .into_any_element()
         };
         let mut controls = Vec::new();
-        if state == agents::cli::State::Unsearched {
+        if let Some(export) = detail.export.clone() {
             let copy = self
                 .button("copy-command-line", "Copy Line")
                 .relative()
                 .child(self.drawn("ilo-command copy line".into()))
-                .on_click(|_, _, cx| {
+                .on_click(move |_, _, cx| {
                     log!("browser: ilo command line copied");
-                    cx.write_to_clipboard(ClipboardItem::new_string(
-                        agents::cli::EXPORT.to_string(),
-                    ));
+                    cx.write_to_clipboard(ClipboardItem::new_string(export.clone()));
                 });
             controls.push(copy.into_any_element());
         }
@@ -4584,7 +4588,7 @@ impl Settings {
             _ => action("Remove", "remove-command"),
         });
         let export = (failure.is_none())
-            .then_some(detail.export)
+            .then_some(detail.export.clone())
             .flatten()
             .map(|export| command_export(look, export, mono));
         let text = match &failure {
@@ -4593,7 +4597,7 @@ impl Settings {
         };
         let line: SharedString = match failure {
             Some(why) => why,
-            None => [Some(detail.line.as_str()), detail.export]
+            None => [Some(detail.line.as_str()), detail.export.as_deref()]
                 .into_iter()
                 .flatten()
                 .collect::<Vec<_>>()

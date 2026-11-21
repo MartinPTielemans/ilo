@@ -5718,6 +5718,10 @@ impl Shell {
                     .children(self.nav_buttons(cx))
             }))
             .child(self.reveal_listener(cx))
+            // The mouse's back and forward buttons over the panel page the Spaces, as over the
+            // docked sidebar, its window hearing them as the browser window does; on the web the
+            // panel is in that window, which hears them already.
+            .children((!WEB).then(|| self.navigate_listener(cx)))
             .into_any_element();
         self.breath.arm(cx);
         panel

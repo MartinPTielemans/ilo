@@ -398,8 +398,8 @@ impl Shell {
 
     /// A mouse's back and forward buttons anywhere over the UI walk the row a swipe pages, the
     /// Library, the Spaces and a new Space, a step a press (the owner's call, #1852); over a page,
-    /// the page takes them itself and goes back and forward. The window hears them, as the
-    /// sidebar keeps its presses from what's under it.
+    /// the page takes them itself and goes back and forward. The window hears them, and the
+    /// reveal's window over the page, as the sidebar keeps its presses from what's under it.
     pub(super) fn navigate_listener(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let shell = cx.weak_entity();
         canvas(

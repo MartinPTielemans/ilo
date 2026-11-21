@@ -1081,10 +1081,15 @@ impl Agents {
             .collect()
     }
 
-    /// Whether Settings › Agents offers the `ilo` command: not yet in a Flatpak, whose sandbox
-    /// can't write the user's bin folder.
+    /// Whether Settings › Agents offers the `ilo` command.
     pub fn command_offered(&self) -> bool {
-        cfg!(any(unix, windows)) && self.bridge.first().map(String::as_str) != Some("flatpak")
+        cfg!(any(unix, windows))
+    }
+
+    /// In a Flatpak, the line the `ilo` command's row gives to run on the host, since the sandbox
+    /// can't write the user's bin folder (cli::flatpak_line).
+    pub fn command_flatpak_line(&self) -> Option<String> {
+        cli::flatpak_line(&self.bridge)
     }
 
     /// The folder the `ilo` command's row names on Windows, where the command is beside the
@@ -1100,18 +1105,19 @@ impl Agents {
     }
 
     /// The `ilo` command's row: not added, or added in a folder the user's shell looks in or not.
+    /// On Windows, added in a folder no longer on the user's PATH is Add again (#3783). A
+    /// Flatpak's sandbox can't ask the host's shell, so there the row gives its line either way.
     pub fn command_state(&self) -> cli::State {
-        match (self.is_connected(Client::Command), self.command_searched) {
-            (false, _) => cli::State::Off,
-            (true, true) => cli::State::On,
-            (true, false) => cli::State::Unsearched,
-        }
+        let added = self.is_connected(Client::Command);
+        let flatpak = self.command_flatpak_line().is_some();
+        cli::state(added, self.command_searched || flatpak, cfg!(windows))
     }
 
     /// Asks the user's shell, in the background, whether it looks in the `ilo` command's folder,
-    /// as the row says, once it's added.
+    /// as the row says, once it's added: on Windows, whether Add's entry is still on the user's
+    /// PATH.
     fn look_for_command(&mut self, cx: &mut Context<Self>) {
-        if !self.is_connected(Client::Command) {
+        if !self.is_connected(Client::Command) || self.command_flatpak_line().is_some() {
             return;
         }
         let clients = self.clients.clone();
@@ -1121,6 +1127,9 @@ impl Agents {
                 .await;
             agents
                 .update(cx, |agents, cx| {
+                    // check.sh reads this line.
+                    let found = if searched { "found" } else { "not found" };
+                    log!("browser: agent ilo-command looked: {found}");
                     if agents.command_searched != searched {
                         agents.command_searched = searched;
                         cx.notify();
@@ -2633,7 +2642,7 @@ impl Agents {
         };
         let label = |element: &page::Element| match element.name.is_empty() {
             true => element.role.clone(),
-            false => format!("“{}”", page::clip(&element.name, 60)),
+            false => page::curly(&element.name, 60),
         };
         let mut act = Act {
             agent: agent.into(),
@@ -2732,7 +2741,7 @@ impl Agents {
                     label(element),
                     if submit { " and pressed Enter" } else { "" }
                 );
-                act.what = format!("send “{}” on {host}", page::clip(&text, 60));
+                act.what = format!("send {} on {host}", page::curly(&text, 60));
                 // Its Enter asks as a click on what it submits would, and else as a message sent.
                 // A line break in a rich-text editor is that Enter, as a chat's composer sends
                 // on it.
@@ -2748,7 +2757,7 @@ impl Agents {
                         // The control and the site come before the typed text, which a
                         // long one can't then push out of the sidebar's row or the strip.
                         let control = label(&pressing.control);
-                        let typed = format!("“{}” into {}", page::clip(&text, 60), label(element));
+                        let typed = format!("{} into {}", page::curly(&text, 60), label(element));
                         act.what = match pressing.surely {
                             true => {
                                 format!(
@@ -2781,7 +2790,7 @@ impl Agents {
                 };
                 // A line of the question the user may be asked, as of the answer, so a line break
                 // in it is a space there.
-                let chose = format!("“{}”", page::clip(&page::one_line(&option), 60));
+                let chose = page::curly(&page::one_line(&option), 60);
                 act.note = format!("Chose {chose} in the {}.", act.field);
                 act.what = format!("choose {chose} in {} on {host}", label(element));
                 // As a click on the field or the option would.
@@ -3518,7 +3527,7 @@ impl Agents {
         // names it, and else says the page may have undone it.
         if !field.is_empty() {
             note = match tree["chosen"].as_str() {
-                Some(option) => format!("The {field} now holds “{}”.", page::clip(option, 60)),
+                Some(option) => format!("The {field} now holds {}.", page::curly(option, 60)),
                 None => format!("{note} {UNSHOWN}"),
             };
         }
