@@ -5,6 +5,8 @@
 //! (crate::saved_reads). What a read answered never reaches the agent but as rows or a state:
 //! never the address it landed on, nor where a redirect went.
 
+pub mod rows;
+
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 use std::sync::mpsc;

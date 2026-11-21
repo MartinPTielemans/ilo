@@ -1137,6 +1137,11 @@ word-gap = 6.0
 # the rest.
 status-dot = 7.0
 status-dot-gap = 6.0
+# Ours (#3822): a saved read that needs a sign-in says so in this amber, its dot too, in light and
+# in dark: a state the user can fix, between the detail's grey and the destructive red. Light is
+# the lightest amber of the mocks' hue that reads at 4.5:1 on a group (saved_read_row.rs).
+warning-light = 0x9860_00ff
+warning-dark = 0xe0a4_3aff
 word-space = 4.0
 # Ours: rows drawn on another view's ground, the first launch's, take its fill and text colour,
 # and their lines, controls and grey text are that text over the fill by as much as Settings' are
