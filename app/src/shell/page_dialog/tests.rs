@@ -545,3 +545,56 @@ fn the_ui_taking_the_keyboard_back_by_key_holds_a_dialog(cx: &mut TestAppContext
     assert!(!shell.read_with(cx, |shell, _| shell.library_open));
     assert_eq!(dialogs(&host), ["page dialog 10 2"]);
 }
+
+/// Beside a pane's dialog, the keys that move between panes are ilo's before the page's, as the
+/// page may share the asking page's stopped renderer; other shortcuts and other times, the page's
+/// first (#3231).
+#[gpui::test]
+fn beside_a_panes_dialog_the_pane_keys_come_before_the_page(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx);
+    shell.update(cx, |shell, cx| {
+        let split = Split {
+            tabs: vec![10, 20],
+            ..Default::default()
+        };
+        shell.set_tabs(
+            1,
+            Vec::new(),
+            vec![10, 20],
+            vec![split],
+            Folders::default(),
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    let first = |shell: &Entity<Shell>, cx: &mut VisualTestContext, tab, keystroke| {
+        shell.update(cx, |shell, cx| {
+            shell.run_pane_key_beside_dialog(tab, keystroke, cx)
+        })
+    };
+    assert!(
+        !first(&shell, cx, 10, "ctrl-shift-2"),
+        "a pane key came first with no dialog"
+    );
+    ask(&shell, cx, 20, Some(prompt(1)));
+    assert!(
+        !first(&shell, cx, 10, "cmd-l"),
+        "another shortcut came before the page"
+    );
+    host.take();
+    assert!(
+        first(&shell, cx, 10, "ctrl-shift-2"),
+        "⌃⇧2 beside the dialog waited for the page"
+    );
+    cx.run_until_parked();
+    assert!(
+        host.take().contains(&"select 20".to_string()),
+        "⌃⇧2 didn't focus the asking pane"
+    );
+    select(&shell, cx, 20);
+    // In the asking pane, the dialog has the keys.
+    assert!(
+        !first(&shell, cx, 20, "ctrl-shift-1"),
+        "a pane key under the dialog came first"
+    );
+}
