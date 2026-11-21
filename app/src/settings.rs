@@ -4547,7 +4547,7 @@ impl Settings {
         let state = model.command_state();
         let failure = model.failure(client);
         let mono = browser::face::mono(&cx.text_system().all_font_names());
-        let detail = agents::cli::detail(state);
+        let detail = agents::cli::detail(state, model.command_windows_folder().as_deref());
         let action = |title: &'static str, id: &'static str| {
             let agents = agents.clone();
             self.button(id, title)

@@ -4934,7 +4934,7 @@ impl gpui::Render for PicturesPage {
                     cli::State::Off => "Add",
                     _ => "Remove",
                 }));
-                let detail = cli::detail(state);
+                let detail = cli::detail(state, None);
                 let export = (detail.export).map(|export| command_export(&look, export, mono));
                 let command = frame()
                     .flex_wrap()

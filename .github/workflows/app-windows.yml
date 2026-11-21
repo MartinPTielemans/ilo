@@ -99,8 +99,9 @@ jobs:
       - run: ./setup.sh
       - run: cargo test --release --lib
       - run: cargo build --release --bin preview
-      # The bridge an agent's MCP client runs to reach the browser's named pipe.
-      - run: cargo build --release --bin mcp-bridge
+      # The bridge an agent's MCP client runs to reach the browser's named pipe, and the ilo command,
+      # which reaches it as one more client.
+      - run: cargo build --release --bin mcp-bridge --bin ilo-command
       # The browser, Browser.dll, unlinked, as it links the engine: its Windows code and the driver's.
       - run: cargo check --release --manifest-path windows/Cargo.toml --target-dir target
       # What follows decides nothing, so this tree has passed.

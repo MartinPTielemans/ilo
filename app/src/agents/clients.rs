@@ -173,18 +173,28 @@ impl Clients for System {
 }
 
 /// Where Add puts the `ilo` command: its link in the user's bin folder, to the program beside the
-/// bridge `entry` runs, and its agent file in the profile directory, where the command looks.
+/// bridge `entry` runs, or on Windows the folder beside the bridge's that holds it, and its agent
+/// file in the profile directory, where the command looks.
 fn command_install(entry: &Entry) -> Result<super::cli::Install, String> {
-    let program = match entry.command.as_str() {
+    let bridge = match entry.command.as_str() {
         "" => std::env::current_exe()
             .unwrap_or_default()
-            .with_file_name(super::cli::PROGRAM),
-        bridge => Path::new(bridge).with_file_name(super::cli::PROGRAM),
+            .with_file_name(super::bridge::NAME),
+        bridge => PathBuf::from(bridge),
     };
+    let file = super::cli::agent_file(Path::new(&crate::profile_dir()));
+    #[cfg(windows)]
+    return Ok(super::cli::Install::windows(
+        &bridge,
+        &std::env::var("LOCALAPPDATA").unwrap_or_default(),
+        file,
+    ));
+    #[cfg(not(windows))]
     Ok(super::cli::Install {
         folder: super::cli::folder(&home()),
-        program,
-        file: super::cli::agent_file(Path::new(&crate::profile_dir())),
+        program: bridge.with_file_name(super::cli::PROGRAM),
+        file,
+        store: false,
     })
 }
 
