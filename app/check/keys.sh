@@ -870,10 +870,11 @@ expect '^browser: settings shown Shortcuts$' \
 settings_drew Shortcuts
 # Where the app drew it: its place depends on how wide the keys' chip beside it is, ⌃⌘T on the Mac
 # and Ctrl+Alt+T elsewhere. Settings comes back scrolled to Go Back, a card's height and more below,
-# and its place is this show's, not the one the last Settings drew it at (#3841).
+# and its place is this show's, not the one the last Settings drew it at (#3841). The show starts at
+# the command: on the Mac, "settings shown" comes only after Settings has drawn.
 restore_new_tab() {
   local at sight top bottom y by rest
-  whole_in_sight "restore new-tab" '^browser: settings shown Shortcuts$' ||
+  whole_in_sight "restore new-tab" '^browser: command settings via ' ||
     fail "Settings didn't draw New Tab's ↺ after it showed again"
   send clickkey $at
 }
