@@ -487,18 +487,22 @@ pub fn command_text(
 }
 
 /// The line to paste under a `frame().flex_wrap()` row's text and controls, across the row from
-/// its text's edge, so it stays one line down to Settings' least width.
-pub fn command_export(look: &Look, export: &'static str, mono: &'static str) -> gpui::Div {
+/// its text's edge, so the shell profile's line stays one line down to Settings' least width. A
+/// Flatpak's longer one wraps at its spaces, and Copy Line copies it whole.
+pub fn command_export(
+    look: &Look,
+    export: impl Into<SharedString>,
+    mono: &'static str,
+) -> gpui::Div {
     div()
         .w_full()
         .mt(px(DETAIL_TOP))
         .pl(px(GLYPH_PLATE + GLYPH_PLATE_GAP))
-        .whitespace_nowrap()
         .font_family(mono)
         .text_size(px(SMALL))
         .line_height(px(DETAIL_LINE))
         .text_color(look.detail)
-        .child(export)
+        .child(export.into())
 }
 
 /// A row's end, its controls 20 after its text and 8 apart.

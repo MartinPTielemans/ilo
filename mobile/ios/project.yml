@@ -10,7 +10,7 @@ settings:
     SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
     SWIFT_APPROACHABLE_CONCURRENCY: YES
     MARKETING_VERSION: 0.1.0
-    CURRENT_PROJECT_VERSION: 19
+    CURRENT_PROJECT_VERSION: 20
     DEVELOPMENT_TEAM: 938WK3V9K9
     CODE_SIGN_STYLE: Automatic
 packages:
@@ -38,9 +38,10 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: ilo
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
-        # Apple's default-browser entitlement, com.apple.developer.web-browser. YES once Apple
-        # has granted it to the team: before that no profile carries it and signing fails.
-        DEFAULT_BROWSER_ENTITLEMENT: NO
+        # Apple's default-browser entitlement, com.apple.developer.web-browser, which Apple has
+        # granted the owner's team. NO for another team: no profile of its own carries it, and
+        # signing fails.
+        DEFAULT_BROWSER_ENTITLEMENT: YES
         CODE_SIGN_ENTITLEMENTS: $(DEFAULT_BROWSER_ENTITLEMENTS_$(DEFAULT_BROWSER_ENTITLEMENT))
         DEFAULT_BROWSER_ENTITLEMENTS_YES: App/System/DefaultBrowser.entitlements
         DEFAULT_BROWSER_ENTITLEMENTS_NO: ""
