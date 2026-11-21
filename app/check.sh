@@ -7,9 +7,10 @@
 # touches nothing shared (#2562). ./check.sh tabs spaces does only those runs, in that order.
 # ./check.sh --runs prints the runs, and --runs default or --runs named those of one kind.
 # Every run but load and crash needs Browser to be the active app, and window, find and updates
-# take it full screen for a moment. Passkeys, scripting and sidebar-right are the Mac's alone. Updates makes
-# build/Updates.app on the Mac, a copy with Sparkle and a feed of its own (build.sh updates), and
-# ilo's Flatpak on Linux, which a repository of the run's own updates (check/updates.sh).
+# take it full screen for a moment. Passkeys and scripting are the Mac's alone, and sidebar-right
+# the Mac's and Windows', as Linux has no launch picture. Updates makes build/Updates.app on the
+# Mac, a copy with Sparkle and a feed of its own (build.sh updates), and ilo's Flatpak on Linux,
+# which a repository of the run's own updates (check/updates.sh).
 # In a check VM the check turns the Mac's appearance dark for the runs, which read the window's
 # dark look, and puts back the one it had after. Filled hides the VM's Dock and menu bar for its
 # run, and runs only in one.
