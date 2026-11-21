@@ -155,12 +155,13 @@ impl Shell {
                         .when(close.is_some(), |title| title.pr(px(BESIDE_CLOSE)))
                         .text_color(self.palette.text(TITLE))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .child(title),
+                        .child(crate::address_wrap::text(&title)),
                 )
                 .child(
                     div()
                         .text_color(self.palette.on_overlay(DETAIL))
-                        .child(question.why.clone()),
+                        // A handoff's host, such as a sign-in's, breaks between its parts (#3748).
+                        .child(crate::address_wrap::text(&question.why)),
                 )
                 // Three labels don't fit a row of the sidebar at its default width, so the last
                 // takes a row of its own, as wide as the card, rather than running past its edge.
@@ -348,7 +349,7 @@ impl Shell {
                 div()
                     .mt(px(SEE_TOP))
                     .text_color(detail)
-                    .child(question.why.clone()),
+                    .child(crate::address_wrap::text(&question.why)),
             )
             .child(see)
             .child(
