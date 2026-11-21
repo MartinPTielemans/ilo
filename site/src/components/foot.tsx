@@ -19,7 +19,7 @@ export function Foot({ children }: { children?: ReactNode }) {
         <a href="/privacy">Privacy</a>
         <a href={GITHUB}>GitHub</a>
         <a href={`${GITHUB}/blob/main/LICENSE`}>GPL-3.0</a>
-        <a href="https://github.com/MartinPTielemans/ilo-site">This site's code</a>
+        <a href={`${GITHUB}/tree/main/site`}>This site's code</a>
         <a href="/ilo">What ilo means</a>
       </nav>
       <p className="when">2026 · No cookies, no tracking</p>

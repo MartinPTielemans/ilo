@@ -1,8 +1,9 @@
-# ilo-site
+# ilobrowser.com
 
-The website for ilo, the open-source Arc-style browser. The browser itself is
-[MartinPTielemans/ilo](https://github.com/MartinPTielemans/ilo); its `AGENTS.md`
-doesn't apply here, and nothing here is built into the browser.
+The website for ilo, the open-source Arc-style browser, in `site/` of the browser's repository.
+The repository's `AGENTS.md` is the browser's and doesn't apply here, nothing here is built into
+the browser, and the site is MIT (`LICENSE`) where the browser is GPL. Run every command below in
+`site/`.
 
 The site is [TanStack Start](https://tanstack.com/start) (React) on
 [Vite+](https://viteplus.dev/guide), whose `vp` CLI runs everything: `vp install`, `vp dev`,
@@ -61,14 +62,18 @@ serve.
 - `public/llms.txt` is the site's summary for AI answer engines, written by hand: a new page, a new
   platform or a change in what ilo needs goes there too. The answers in `src/faq.ts` reach search
   engines as structured data, so each has to stand alone and say no more than the site does.
-- `public/demo` is the browser repo's build of the live interface (GPL), committed as built and
-  left out of fmt and lint. Publishing a release in the browser repo replaces it:
-  `.github/workflows/release.yml` takes the release's `ilo-demo.tar.gz`, points
-  `public/demo/SOURCE` at the tag's commit, which the home page's fine print links to as the GPL's
-  offer of source, commits that to main as github-actions and deploys. Swap it by hand only in the same
-  shape: the files, the licences and SOURCE's commit in one commit.
-- Every push to main deploys to Cloudflare (`.github/workflows/deploy.yml`, `wrangler.jsonc`) once
-  `vp check`, `vp test` and `vp build` pass, so main is always what ilobrowser.com serves.
+- `public/demo` holds the live interface's licences and `SOURCE`, but not its build: the deploy
+  (`.github/workflows/site.yml`) takes `ilo-demo.tar.gz` from the newest published release, unpacks
+  it there and points `SOURCE` at the tag's commit, which the home page's fine print links to as the
+  GPL's offer of source. Never commit `ilo_demo.js` or `ilo_demo_bg.wasm` (`.gitignore`). Without
+  them, as in the checks and a local build, the site builds and passes, and the home page gives the
+  live interface up (`giveUp` in `src/live.ts`) and shows the hero's clip, as on a phone.
+- A change to `site/` runs the site's checks and nothing of the browser's
+  (`.github/scripts/ci-changes.cjs`). On main it then deploys to Cloudflare (`wrangler.jsonc`), so
+  main is what ilobrowser.com serves. Publishing a release deploys too.
+- The changelog shows a release only once it's published: the deploy lists the published versions
+  in `ILO_PUBLISHED`, and `isOut` in `src/changelog.ts` reads it. Unset, as in the checks and
+  `vp dev`, every dated release shows.
 - The download buttons link to `releases/latest/download/<file>` in the browser repo, with each
   platform's fixed file name from `src/downloads.ts`. GitHub serves whichever release is marked
   Latest, so every other release there (the engine builds) has to be made with `--latest=false`,
@@ -86,5 +91,6 @@ serve.
   certification.
 - Authorship is human only: no `Co-Authored-By` trailers and no "Generated with" lines.
 - Conventional commit titles in plain language, describing the outcome.
-- Never open a PR unless asked. The body follows `.github/pull_request_template.md`. A visual
-  change carries before-and-after captures, and motion a short video.
+- Never open a PR unless asked. The body follows the repository's
+  `.github/pull_request_template.md`. A visual change carries before-and-after captures, and
+  motion a short video.

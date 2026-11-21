@@ -388,10 +388,8 @@ function Privacy() {
         <h2>Questions and changes</h2>
         <p>
           Ask on <a href={`${SOURCE}/issues`}>GitHub</a>. Every change to this page is in{" "}
-          <a href="https://github.com/MartinPTielemans/ilo-site/commits/main/src/routes/privacy.tsx">
-            the site's history
-          </a>
-          . Last changed 18 November 2026.
+          <a href={`${SOURCE}/commits/main/site/src/routes/privacy.tsx`}>the site's history</a>.
+          Last changed 18 November 2026.
         </p>
       </section>
     </TextPage>
