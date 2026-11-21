@@ -418,13 +418,11 @@ split_rests() {
   send click $(confirm_since "$rested")
   expect "^browser: page $page dialog answered accept\$" "a click on the resting alert's OK didn't answer it ($2)"
   expect '^browser: dialog hidden$' "the alert answered at rest didn't leave ($2)"
-  # Sharing the alert's process, the page beside heard nothing until it was answered, and then
-  # the xy typed into it at rest.
-  if [ -n "$shared" ]; then
-    since "$clicked" | sed "/^browser: page $page dialog answered/q" | grep -q "^browser: title $beside beside has" &&
-      fail "the page beside took keys while the alert asked, so it doesn't share the alert's renderer process ($2)"
-    expect "^browser: title $beside beside has xy\$" \
-      "the keys typed into the page beside the resting alert didn't reach it once the alert was answered ($2)" "$rested"
+  # Sharing the alert's process, the page beside heard nothing while it was asked: Chromium drops
+  # the keys of a page whose renderer a dialog stopped, as Chrome's (#3770).
+  if [ -n "$shared" ] &&
+    since "$clicked" | sed "/^browser: page $page dialog answered/q" | grep -q "^browser: title $beside beside has"; then
+    fail "the page beside took keys while the alert asked, so it doesn't share the alert's renderer process ($2)"
   fi
   # The page beside closes, leaving the dialogs page the card's.
   send click $(in_pane 2)
