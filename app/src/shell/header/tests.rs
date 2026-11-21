@@ -384,6 +384,18 @@ fn mouse_buttons_on_the_revealed_sidebar_page_the_spaces(cx: &mut TestAppContext
     shell.update(&mut panel, |shell, cx| shell.set_space(2, cx));
     assert_eq!(navigate(true, &mut panel, &host).0, [1]);
     assert!(shell.read_with(&panel, |shell, _| shell.revealed));
+    // A wheel's tick across the panel pages too, as the swipe it shares a path with does.
+    shell.update(&mut panel, |shell, cx| shell.set_space(1, cx));
+    assert_eq!(navigate(false, &mut panel, &host).0, [2]);
+    shell.update(&mut panel, |shell, cx| shell.set_space(2, cx));
+    panel.simulate_event(gpui::ScrollWheelEvent {
+        position: point(px(100.), px(300.)),
+        delta: gpui::ScrollDelta::Lines(point(1., 0.)),
+        ..Default::default()
+    });
+    panel.run_until_parked();
+    assert_eq!(host.shown.take(), [1]);
+    assert!(shell.read_with(&panel, |shell, _| shell.revealed));
 }
 
 /// Whether the pointer is over the sidebar and Clear and the URL field's buttons show, once the
