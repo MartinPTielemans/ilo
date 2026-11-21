@@ -52,6 +52,7 @@
 #include "browser_core/page_menu.h"
 #include "browser_core/password_offer.h"
 #include "browser_core/permission_question.h"
+#include "browser_core/platform/keyboard.h"
 #include "browser_core/platform/keychain.h"
 #include "browser_core/platform/native_hosts.h"
 #include "browser_core/profiles.h"
@@ -315,6 +316,7 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
     FlushSession();
     Window::CloseAll();
     Tab::StopHearingCaptures();
+    platform::StopHearingLayouts();
     ReleaseProfiles();
     if (g_host.stopping) {
       g_host.stopping(g_host.context);
