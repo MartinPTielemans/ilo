@@ -155,7 +155,9 @@ jobs:
       # sandbox by Flatpak, as the script the row's line writes runs it (#3667): help lists the
       # server's tools, and a screenshot without -o is a file the host has at the path printed,
       # under Downloads, since the sandbox's /tmp is its own. The agent file and its token are
-      # seeded as Add writes them, which the UI's check drives elsewhere.
+      # seeded as Add writes them, which the UI's check drives elsewhere. BROWSER_CHECK has the app
+      # log the server's address, and the onboarding, which the start above left unplayed, is
+      # skipped, as check.sh skips it.
       - name: The ilo command
         id: command
         if: ${{ steps.engine.outputs.found == 'true' && !inputs.release }}
@@ -171,7 +173,7 @@ jobs:
           status=0
           TOKEN=$token PROFILE=$profile dbus-run-session -- xvfb-run -a -s '-screen 0 1280x800x24' bash -c '
             set -u
-            flatpak run app.ilo.browser > ilo.log 2>&1 &
+            flatpak run --env=BROWSER_CHECK=1 --env=BROWSER_ONBOARDING=skip app.ilo.browser > ilo.log 2>&1 &
             pid=$!
             for _ in $(seq 120); do
               grep -q "^browser: agents server on " ilo.log && break
