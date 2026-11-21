@@ -786,9 +786,13 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
             let into = target("a field");
             return match (tense, did.text.is_empty()) {
                 (Tense::Now, true) => format!("Typing in {into}"),
-                (Tense::Now, false) => format!("Typing “{}” in {into}", did.text),
+                (Tense::Now, false) => {
+                    format!("Typing {} in {into}", page::curly(&did.text, TYPED_SHOWN))
+                }
                 (Tense::Done, true) => format!("Typed in {into}"),
-                (Tense::Done, false) => format!("Typed “{}” in {into}", did.text),
+                (Tense::Done, false) => {
+                    format!("Typed {} in {into}", page::curly(&did.text, TYPED_SHOWN))
+                }
                 (Tense::Failed, _) => format!("Couldn't type in {into}"),
             };
         }
@@ -796,11 +800,18 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
             let into = target("a list");
             return match (tense, did.text.is_empty()) {
                 (Tense::Now, true) => format!("Choosing in {into}"),
-                (Tense::Now, false) => format!("Choosing “{}” in {into}", did.text),
+                (Tense::Now, false) => {
+                    format!("Choosing {} in {into}", page::curly(&did.text, TYPED_SHOWN))
+                }
                 (Tense::Done, true) => format!("Chose in {into}"),
-                (Tense::Done, false) => format!("Chose “{}” in {into}", did.text),
+                (Tense::Done, false) => {
+                    format!("Chose {} in {into}", page::curly(&did.text, TYPED_SHOWN))
+                }
                 (Tense::Failed, true) => format!("Couldn't choose in {into}"),
-                (Tense::Failed, false) => format!("Couldn't choose “{}” in {into}", did.text),
+                (Tense::Failed, false) => format!(
+                    "Couldn't choose {} in {into}",
+                    page::curly(&did.text, TYPED_SHOWN)
+                ),
             };
         }
         "press_key" => ("Pressing", "Pressed", "Couldn't press", target("a key")),
@@ -831,6 +842,14 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
             _ => ("Waiting", "Waited", "Couldn't wait", target("")),
         },
         "check" => ("Looking for", "Saw", "Didn't see", target("text")),
+        super::fence::ASKED_ACTION => {
+            let (now, done, failed) = super::fence::ASKED;
+            (now, done, failed, site("a site"))
+        }
+        super::fence::CAME_ACTION => {
+            let (now, done, failed) = super::fence::CAME;
+            (now, done, failed, site("a site"))
+        }
         "list_tabs" => (
             "Looking over",
             "Looked over",
@@ -1057,6 +1076,8 @@ pub fn describe(action: &str) -> &'static str {
         "answered" => "You answered",
         "finish" => "Finished",
         "done" => "Marked the task done",
+        super::fence::ASKED_ACTION => super::fence::ASKED_DONE,
+        super::fence::CAME_ACTION => super::fence::CAME_DONE,
         _ => "Acted",
     }
 }

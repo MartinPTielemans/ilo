@@ -90,7 +90,7 @@ impl Shell {
                     }
                     // The PIN field takes the keyboard, as Chrome's dialog's does.
                     if asks_pin {
-                        self.browser.focus_ui(cx);
+                        self.take_keyboard(cx);
                         self.pair_wants_keyboard = true;
                     }
                 }

@@ -998,8 +998,7 @@ impl Shell {
         // keys would never reach it. By the flow's first frame on screen the window is key, and
         // the keyboard stays the UI's. Deferred, as AppKit tells GPUI the change at once.
         if window.is_visible() && !std::mem::replace(&mut onboarding.keyboard, true) {
-            let browser = self.browser.clone();
-            cx.defer(move |cx| browser.focus_ui(cx));
+            cx.defer_in(window, |shell, _, cx| shell.take_keyboard(cx));
         }
         // Each step takes the keyboard as it comes, from the window or from the step before, so an
         // assistive app reads it; never from a field that has it.

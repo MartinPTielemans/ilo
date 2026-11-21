@@ -48,6 +48,7 @@ jobs:
           sparse-checkout: |
             .github/scripts/tree-proven.sh
             .github/scripts/ci-changes.cjs
+            .github/scripts/ci-changes.test.cjs
             .github/actions/ci-changes/
             tools/core-same.sh
             tools/core-same-test.sh
@@ -64,6 +65,8 @@ jobs:
       - run: tools/nightly-commit-test.sh
       # And the engine a checkout takes, the batch's at its landing (#2913).
       - run: tools/engine-fetch-test.sh
+      # And the gate's answer for paths whose jobs aren't plain from their directory (#3800).
+      - run: node --test .github/scripts/ci-changes.test.cjs
 
       - id: detect
         uses: ./.github/actions/ci-changes

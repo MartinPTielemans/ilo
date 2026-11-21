@@ -387,3 +387,21 @@ fn an_address_or_a_card_saves_with_return_and_declines_with_escape(cx: &mut Test
     prompt.keys("enter");
     assert_eq!(prompt.calls(), ["Accept 1 other@example.test", "hide"]);
 }
+
+/// A page dialog waits while the user types the offer's username, and not once it has gone.
+#[gpui::test]
+fn its_username_counts_as_typing_while_it_shows(cx: &mut TestAppContext) {
+    let mut prompt = Prompt::new(cx);
+    prompt.cx.update(|window, _| window.activate_window());
+    prompt.offered(1, Some(offer(Kind::Save, &["check@example.test"])));
+    assert!(prompt.cx.cx.update(|cx| typing(1, cx)));
+    assert!(
+        !prompt.cx.cx.update(|cx| typing(2, cx)),
+        "another window's offer counted"
+    );
+    prompt.keys("escape");
+    assert!(
+        !prompt.cx.cx.update(|cx| typing(1, cx)),
+        "an offer gone still counted"
+    );
+}

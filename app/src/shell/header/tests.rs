@@ -342,6 +342,62 @@ fn mouse_buttons_in_the_library_leave_the_space_behind_it(cx: &mut TestAppContex
     assert!(!library_open(&shell, cx));
 }
 
+/// The reveal's window, which draws the shell's panel, as the app's does.
+struct Reveal(Entity<Shell>);
+
+impl gpui::Render for Reveal {
+    fn render(
+        &mut self,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        self.0
+            .update(cx, |shell, cx| shell.render_reveal(window, cx))
+    }
+}
+
+/// With the sidebar hidden and brought out over the page, the mouse's buttons on its panel page
+/// the Spaces as on the docked sidebar, and never the page's history behind it (#3811).
+#[gpui::test]
+fn mouse_buttons_on_the_revealed_sidebar_page_the_spaces(cx: &mut TestAppContext) {
+    let (shell, cx, host) = two_spaces(cx);
+    let reveal = shell.clone();
+    let window = cx.update(|_, cx| {
+        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(260.), px(600.)));
+        let options = gpui::WindowOptions {
+            window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
+            ..Default::default()
+        };
+        cx.open_window(options, |_, cx| cx.new(|_| Reveal(reveal)))
+            .unwrap()
+    });
+    let mut panel = VisualTestContext::from_window(window.into(), cx);
+    shell.update(&mut panel, |shell, cx| {
+        shell.toggle_sidebar(cx);
+        shell.set_revealed(true, cx);
+        shell.reveal_motion = None;
+    });
+    panel.run_until_parked();
+    host.take();
+    host.shown.take();
+    assert_eq!(navigate(false, &mut panel, &host).0, [2]);
+    shell.update(&mut panel, |shell, cx| shell.set_space(2, cx));
+    assert_eq!(navigate(true, &mut panel, &host).0, [1]);
+    assert!(shell.read_with(&panel, |shell, _| shell.revealed));
+    // A wheel's tick across the panel pages too, as the swipe it shares a path with does.
+    shell.update(&mut panel, |shell, cx| shell.set_space(1, cx));
+    assert_eq!(navigate(false, &mut panel, &host).0, [2]);
+    shell.update(&mut panel, |shell, cx| shell.set_space(2, cx));
+    panel.simulate_event(gpui::ScrollWheelEvent {
+        position: point(px(100.), px(300.)),
+        delta: gpui::ScrollDelta::Lines(point(1., 0.)),
+        ..Default::default()
+    });
+    panel.run_until_parked();
+    assert_eq!(host.shown.take(), [1]);
+    assert!(shell.read_with(&panel, |shell, _| shell.revealed));
+}
+
 /// Whether the pointer is over the sidebar and Clear and the URL field's buttons show, once the
 /// sidebar has stopped moving.
 fn tools(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> (bool, bool) {
