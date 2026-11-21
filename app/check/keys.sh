@@ -816,7 +816,8 @@ expect '^browser: shortcut recording back$' "a click on Go Back's second key did
 ../tools/window-screenshot.sh "$pid" "$out/shortcuts-recording.png" || fail "no window to capture"
 send key backspace
 expect '^browser: shortcut back cmd-\[$' "⌫ didn't take only Go Back's second key away"
-restore=$(drawn_after "restore back" '^browser: shortcut back cmd-\[$') || fail "Settings didn't draw Go Back's ↺ once its key was gone"
+# awk -v reads \[ as [, so the state's bracket is a one-character class.
+restore=$(drawn_after "restore back" '^browser: shortcut back cmd-[[]$') || fail "Settings didn't draw Go Back's ↺ once its key was gone"
 send clickkey $restore
 expect '^browser: shortcut back cmd-\[ cmd-left$' "↺ didn't give Go Back both its keys back"
 send key w cmd
