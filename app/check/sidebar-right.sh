@@ -46,6 +46,9 @@ exec 3> "$out/drive"
 await '^browser: first frame at ' || fail "the window didn't draw after the relaunch"
 grep -q '^browser: launch picture shown$' "$log" ||
   fail "the launch after Ctrl+Q on the right didn't show the sidebar's picture: $(grep '^browser: launch picture' "$log")"
+# Windows captures the launch window as it takes it down, on the frame after the first, just before
+# the UI comes out from under it (#3518).
+await '^browser: UI shown at ' || fail "the UI didn't come out from under the launch picture"
 [ -s "$out/sidebar-right-launch.png" ] || fail "the launch window wasn't captured"
 move_sidebar Left
 [ ! -e "$profile_dir/sidebar-right" ] || fail "Left isn't kept: sidebar-right is still in the profile"

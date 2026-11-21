@@ -1119,10 +1119,22 @@ impl Agents {
             .collect()
     }
 
-    /// Whether Settings › Agents offers the `ilo` command: not yet on Windows, nor in a Flatpak,
-    /// whose sandbox can't write the user's bin folder.
+    /// Whether Settings › Agents offers the `ilo` command: not yet in a Flatpak, whose sandbox
+    /// can't write the user's bin folder.
     pub fn command_offered(&self) -> bool {
-        cfg!(unix) && self.bridge.first().map(String::as_str) != Some("flatpak")
+        cfg!(any(unix, windows)) && self.bridge.first().map(String::as_str) != Some("flatpak")
+    }
+
+    /// The folder the `ilo` command's row names on Windows, where the command is beside the
+    /// bridge's and not in ~/.local/bin.
+    pub fn command_windows_folder(&self) -> Option<String> {
+        if !cfg!(windows) {
+            return None;
+        }
+        let local = std::env::var("LOCALAPPDATA").unwrap_or_default();
+        let bridge = std::path::Path::new(self.bridge.first()?);
+        let install = cli::Install::windows(bridge, &local, Default::default());
+        Some(cli::shown(&install.folder, &local))
     }
 
     /// The `ilo` command's row: not added, or added in a folder the user's shell looks in or not.

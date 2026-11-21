@@ -214,8 +214,9 @@ jobs:
             exit 1
           fi
           cargo build --release --features prod
-          # The bridge an agent's MCP client runs, which package.sh puts beside Browser.dll.
-          cargo build --release --features prod --manifest-path ../Cargo.toml --bin mcp-bridge --target-dir target
+          # The bridge an agent's MCP client runs, which package.sh puts beside Browser.dll, and the
+          # ilo command an agent in a terminal runs, which it puts in bin.
+          cargo build --release --features prod --manifest-path ../Cargo.toml --bin mcp-bridge --bin ilo-command --target-dir target
 
       # The packaging is app/platform/windows/package's, under the release's names. --release stops
       # on a missing engine and on windows-store.ini's placeholder identity, and only its release
