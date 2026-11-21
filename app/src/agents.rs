@@ -713,8 +713,9 @@ pub struct Agents {
     /// The tabs the user holds from agents, by tab.
     held: HashMap<u64, Held>,
     /// The tabs whose page shows its own dialog, such as its alert(), by tab, as the core reports
-    /// it (`page_dialog`): nothing more is done on one until it's gone (#3536).
-    dialogs: HashMap<u64, DialogKind>,
+    /// it (`page_dialog`), with who asks for a sign-in: nothing more is done on one until it's
+    /// gone (#3536).
+    dialogs: HashMap<u64, (DialogKind, String)>,
     /// The runs of steps under way, each waiting on its step's answer.
     runs: Vec<Run>,
     /// The agent whose run's step is starting, whose log entries go under the run's.
@@ -817,6 +818,9 @@ struct Held {
     reply: Option<mpsc::Sender<ToolResult>>,
     /// Answers a handoff's call once HANDOFF_WAIT passes with the tab still the user's.
     timer: Option<Task<()>>,
+    /// Whether the browser handed the tab off for its page's sign-in, which the agent's call
+    /// that met it waits on (`sign_in_hand_off`), so its answer says why.
+    sign_in: bool,
 }
 
 impl Held {
@@ -1289,6 +1293,7 @@ impl Agents {
                 back: None,
                 reply: None,
                 timer: None,
+                sign_in: false,
             };
             self.held.insert(tab, held);
             self.carry(tab, held::Event::Passkey, life, actions, cx);
@@ -1622,6 +1627,7 @@ impl Agents {
                     back: None,
                     reply: Some(reply),
                     timer: None,
+                    sign_in: false,
                 };
                 self.held.insert(tab, held);
                 self.carry(tab, held::Event::HandOff, life, actions, cx);
@@ -2242,6 +2248,47 @@ impl Agents {
         None
     }
 
+    /// Hands `tab` to the user for the sign-in its page asks for, as `agent`'s hand_off would,
+    /// with `reply`, for its call `call` that met it, waiting as a handoff's call does: its card,
+    /// the log's line and Hand Back are a handoff's. No agent can answer the browser's sign-in
+    /// (#3662). Gives `reply` back if the page asks for none, or the tab is the user's already.
+    fn sign_in_hand_off(
+        &mut self,
+        agent: &str,
+        call: u64,
+        tab: u64,
+        reply: mpsc::Sender<ToolResult>,
+        cx: &mut Context<Self>,
+    ) -> Result<(), mpsc::Sender<ToolResult>> {
+        let Some((DialogKind::SignIn, from)) = self.dialogs.get(&tab) else {
+            return Err(reply);
+        };
+        let why = sign_in_why(from);
+        let (life, actions) = self.held_step(tab, held::Event::HandOff);
+        if life != held::Life::HandedOff || !self.browser.hand_off(agent, tab) {
+            return Err(reply);
+        }
+        let site = site(&self.browser.tab(tab, cx).url);
+        self.note(agent, "hand_off", &site, "");
+        // check.sh reads this line.
+        log!("browser: agent {agent} hands off {tab}: {why}");
+        let question = self.next_request;
+        self.next_request += 1;
+        let held = Held {
+            agent: agent.into(),
+            call,
+            why,
+            question,
+            back: None,
+            reply: Some(reply),
+            timer: None,
+            sign_in: true,
+        };
+        self.held.insert(tab, held);
+        self.carry(tab, held::Event::HandOff, life, actions, cx);
+        Ok(())
+    }
+
     /// The user takes the tab the agent is at work in over: the agent may not act in it until
     /// they hand it back. A press in its page does, as Take Over did (Shell::page_pressed).
     pub fn take_over(&mut self, agent: &str, tab: u64, cx: &mut Context<Self>) {
@@ -2262,6 +2309,7 @@ impl Agents {
             back: None,
             reply: None,
             timer: None,
+            sign_in: false,
         };
         self.held.insert(tab, held);
         // The core ends the agent's session there, which logs it.
@@ -2312,14 +2360,25 @@ impl Agents {
         self.let_go(tab, held::Event::Closed, cx);
     }
 
-    /// `tab`'s page shows its own dialog of `kind`, or none any more (pages::tab_dialog). In an
-    /// agent's tab it pauses the agent there, which the log says without the dialog's words.
-    pub fn page_dialog(&mut self, tab: u64, kind: Option<DialogKind>, cx: &mut Context<Self>) {
+    /// `tab`'s page shows its own dialog of `kind`, or none any more (pages::tab_dialog), with
+    /// its `message`, whose first line names who asks for a sign-in. In an agent's tab it pauses
+    /// the agent there, which the log says without the dialog's words.
+    pub fn page_dialog(
+        &mut self,
+        tab: u64,
+        kind: Option<DialogKind>,
+        message: &str,
+        cx: &mut Context<Self>,
+    ) {
         let Some(kind) = kind else {
             self.dialogs.remove(&tab);
             return;
         };
-        if self.dialogs.insert(tab, kind).is_some() {
+        let from = match kind {
+            DialogKind::SignIn => message.lines().next().unwrap_or_default().into(),
+            _ => String::new(),
+        };
+        if self.dialogs.insert(tab, (kind, from)).is_some() {
             return;
         }
         let space = self.browser.space_of(tab, cx);
@@ -2402,7 +2461,12 @@ impl Agents {
             if let Some(reply) = reply
                 && actions.has(A::ANSWER)
             {
-                _ = reply.send(answer_of(tab, event));
+                let mut answer = answer_of(tab, event);
+                // The call that met the sign-in asked for no handoff, so it hears why it waited.
+                if held.sign_in {
+                    answer.text = format!("{SIGNED_IN} {}", answer.text);
+                }
+                _ = reply.send(answer);
             }
         }
         if life == held::Life::Free {
@@ -3400,6 +3464,12 @@ impl Agents {
                 .into();
         }
         if error {
+            // The call ended as its page asked for a sign-in, which is the user's: it waits on
+            // them as a handoff's call does.
+            let reply = match self.sign_in_hand_off(&agent, call, tab, reply, cx) {
+                Ok(()) => return self.advance(cx),
+                Err(reply) => reply,
+            };
             // As a page still loading: the agent can look at the tab it opened later (#1461).
             let text = match opened {
                 true => format!("{note} {text}"),
@@ -3674,7 +3744,7 @@ impl Agents {
             })?;
         // Only once the tab is known to be the agent's, so another's page says nothing.
         match self.dialogs.get(&tab) {
-            Some(&kind) if action != "close_tab" => {
+            Some(&(kind, _)) if action != "close_tab" => {
                 Err(showing_dialog(tab, kind, self.opened.contains(&tab)))
             }
             _ => Ok(()),
@@ -4127,10 +4197,11 @@ fn answer_of(tab: u64, event: held::Event) -> ToolResult {
     }
 }
 
-/// `tab`'s page shows its own dialog of `kind`, or none any more (pages::tab_dialog).
-pub fn page_dialog(tab: u64, kind: Option<DialogKind>, cx: &mut App) {
+/// `tab`'s page shows its own dialog of `kind`, with its `message`, or none any more
+/// (pages::tab_dialog).
+pub fn page_dialog(tab: u64, kind: Option<DialogKind>, message: &str, cx: &mut App) {
     if let Some(agents) = global(cx) {
-        agents.update(cx, |agents, cx| agents.page_dialog(tab, kind, cx));
+        agents.update(cx, |agents, cx| agents.page_dialog(tab, kind, message, cx));
     }
 }
 
@@ -4160,6 +4231,21 @@ fn showing_dialog(tab: u64, kind: DialogKind, opened: bool) -> String {
         DialogKind::SignIn => "a dialog asking for a user name and password",
         DialogKind::OpenApp => "a dialog asking to open another app",
     };
+    // Only the user may sign in (#3662).
+    if kind == DialogKind::SignIn {
+        let close = match opened {
+            true => "close_tab to close the tab and its dialog",
+            false => {
+                "close_tab with discard: true to close the tab and its dialog. You did not open \
+                 this tab, so the user may be asked first"
+            }
+        };
+        return format!(
+            "Tab {tab} shows a browser sign-in dialog, which only the user can answer. No other \
+             calls work on the tab while it is open: use hand_off to let the user sign in, or \
+             {close}."
+        );
+    }
     let close = match opened {
         true => "close_tab closes the tab, and the dialog with it",
         false => {
@@ -4378,6 +4464,22 @@ const PASSWORDS: &str = "Password fields are off limits to agents: signing in is
 const UNSHOWN: &str = "It doesn't show it as chosen, so the page may have changed it back.";
 /// What the user reads in the bar of a tab whose page asked for their passkey.
 const PASSKEY: &str = "The page asks for your passkey. Sign in, then hand the tab back.";
+
+/// What a handoff for a sign-in the browser asks for tells the user, by `from`, the first line of
+/// its dialog's message: the address the request it challenged went to, as Chrome shows it, or a
+/// proxy's line. Its host names who asks, which can be a frame's or a request's, not the page's.
+fn sign_in_why(from: &str) -> String {
+    match site(from) {
+        host if web_site(&host) => {
+            format!("{host} asks you to sign in. Hand the tab back when you’re done.")
+        }
+        _ => "A proxy asks you to sign in. Hand the tab back when you’re done.".into(),
+    }
+}
+
+/// What the call that met a sign-in hears first once its wait ends (`sign_in_hand_off`).
+const SIGNED_IN: &str = "A browser sign-in dialog opened on the tab, so the browser handed the \
+    tab to the user and this call waited. Nothing they typed is shown.";
 
 /// Why no agent may see or act on a tab showing `url`, or pinned to `pinned`, even in its own
 /// Space, or None. A Board's tab, by either, is the user's alone, as a Board and what's on it are,

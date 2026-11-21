@@ -19,6 +19,8 @@
 # Closing a pinned tab from its row, by its − or a middle-click, or a Favorite by its tile's Close Tab,
 # while its page's alert is up unloads it, and ilo goes on. A page out of sight whose alert waits
 # for its tab is let go by the idle check once it looks 2 hours unseen, and ilo goes on (#3549).
+# An alert that comes while the user types in the command bar waits, every key going to the bar,
+# and shows once the bar closes.
 
 serve
 log="$out/dialogs.log"
@@ -140,6 +142,32 @@ if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && ! sway_xwayland; t
   esac
 fi
 
+# A page's dialog waits while the user types in a field of ilo's: the page alerts as the driver
+# types in the command bar, every key lands in the bar, and the alert shows once the bar closes.
+send click $page_point
+rm -f "$out/site/held.go"
+send key l
+expect "^browser: title $page waiting\$" "\"l\" in the page didn't start waiting for /held"
+served "127.0.0.1:$port/held" "the page didn't ask for /held"
+send key l cmd
+expect '^browser: command bar shown$' "⌘L didn't open the command bar"
+send type wait
+expect '^browser: command bar rows for "wait" in ' "what was typed didn't reach the command bar"
+touch "$out/site/held.go"
+expect "^browser: page $page dialog Alert .* says\$" "the page didn't alert once /held came"
+expect "^browser: page $page dialog [0-9]* waits for the field\$" \
+  "the page's alert didn't wait while the command bar had the keyboard"
+waited=$step
+send type ing
+expect '^browser: command bar rows for "waiting" in ' "keys typed as the alert came didn't all reach the command bar"
+sed -n "/^browser: drive $waited: /,\$p" "$log" | grep -q '^browser: dialog shown' &&
+  fail "the page's alert showed while the command bar had the keyboard"
+send key escape
+expect '^browser: command bar hidden$' "Esc didn't close the command bar"
+expect '^browser: dialog shown .* says$' "the alert didn't show once the command bar closed"
+expect '^browser: dialog settled$' "the alert that waited didn't settle"
+answer return accept "alerted later"
+
 # Another tab takes the alert down, and its own brings it back.
 open_from_bar "http://localhost:$port/one.html"
 other=$tab
@@ -213,12 +241,12 @@ expect "^browser: title $page signed out\$" "a cancelled sign-in didn't show wha
 sign_in again
 send type ada
 send key tab
-send type lovelace
+send type zq7lovelace
 send key return
 expect "^browser: page $page dialog answered accept\$" "↩ didn't sign in"
 expect "^browser: title $page signed in ada\$" "the site didn't take the username and password"
 # The driver's own lines say what it typed.
-grep -v '^browser: drive ' "$log" | grep -q lovelace && fail "the password reached the log"
+grep -v '^browser: drive ' "$log" | grep -q zq7lovelace && fail "the password reached the log"
 
 # The pointer on and off the served page's link, over and over, shows and hides the link target's
 # window, with the command bar and a tab's menu opened and closed between. Each is a window the UI

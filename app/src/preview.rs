@@ -1911,6 +1911,14 @@ impl Browser for Fake {
         cfg!(target_family = "wasm") && command_bar::is_open(cx)
     }
 
+    fn field_window_typing(&self, _: &mut App) -> bool {
+        false
+    }
+
+    fn page_has_keyboard(&self, _: &App) -> Option<bool> {
+        None
+    }
+
     fn command_bar_follows(&self, _: Vec<BarTab>, _: Vec<BarTab>, _: &mut App) -> bool {
         false
     }

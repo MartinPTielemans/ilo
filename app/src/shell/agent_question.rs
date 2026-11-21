@@ -390,7 +390,7 @@ impl Shell {
             _ = handle.update(cx, |_, window, cx| {
                 _ = shell.update(cx, |shell, cx| {
                     // From the page too, if it had the keyboard before the request was opened.
-                    shell.browser.focus_ui(cx);
+                    shell.take_keyboard(cx);
                     window.focus(&shell.agent_request_see, cx);
                     // check.sh reads this line.
                     log!("browser: agent request keyboard back on see");

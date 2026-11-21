@@ -1899,6 +1899,22 @@ impl Browser for Engine {
         command_bar::is_open(cx)
     }
 
+    fn field_window_typing(&self, cx: &mut App) -> bool {
+        find_bar::typing(self.window, cx)
+            || offer::typing(self.window, cx)
+            || icon_picker::typing(cx)
+            || boost_editor::typing(cx)
+            || folder_preview::typing(cx)
+    }
+
+    fn page_has_keyboard(&self, _: &App) -> Option<bool> {
+        // The core routes every key between page and UI there, X11's by the X server's focus.
+        #[cfg(target_os = "linux")]
+        return Some(unsafe { !bc::bc_window_keyboard_is_ui(self.window) });
+        #[cfg(not(target_os = "linux"))]
+        None
+    }
+
     fn command_bar_follows(&self, tabs: Vec<BarTab>, open_tabs: Vec<BarTab>, cx: &mut App) -> bool {
         // The bar shows over the window in front; another's Space, as an agent's, isn't its.
         self.window == front().0 && command_bar::space_shown(tabs, open_tabs, cx)
