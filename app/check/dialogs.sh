@@ -331,7 +331,7 @@ split_rests() {
   clicked=$step
   expect "^browser: selected $beside\( in .*\)\{0,1\}\$" \
     "a click on the page beside the alert, in a $2 split, didn't focus its pane: $(since "$clicked" | grep -e '^browser: drive' -e '^browser: selected' -e '^browser: dialog' | tail -6 | tr '\n' ' ')"
-  [ "$(uname)" = Linux ] ||
+  [ "$(uname)" != Darwin ] ||
     expect '^browser: a press in the pane beside takes the keyboard from the dialog$' \
       "the click on the page beside the alert didn't take the keyboard from it ($2)" "$clicked"
   expect '^browser: dialog at rest$' "the alert didn't rest with its pane no longer focused ($2)"

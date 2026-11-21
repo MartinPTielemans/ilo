@@ -76,8 +76,6 @@ extern "C" bool browser_log_on(const char* area);
 extern "C" uint32_t browser_overlay_step(uint8_t life, uint8_t event, uint8_t flags);
 // Below, for Disown, which hides the menu as the UI would.
 extern "C" void host_hide_menu_window(void);
-// Below, for Disown: the hook that hears a press beside a page's dialog.
-extern "C" void WatchDialogPresses(bool watch);
 
 namespace {
 
@@ -1486,12 +1484,10 @@ Floating g_hud;
 double g_hud_right = 0, g_hud_top = 0, g_hud_margin = 0;
 Floating g_drop_targets;
 Floating g_dialog;
-// Whether the dialog covers part of its window, as a page's does its tab's card or pane.
-bool g_dialog_part = false;
-// The browser window that has the keyboard for the page beside a page's dialog in a split view:
-// the user pressed that page, which the UI then answers by bringing the dialog to rest, or the
-// dialog shows at rest. It lasts until the dialog is pressed, the UI shows it live, or it hides
-// (#3231, #3461).
+// The browser window that keeps the keyboard for the page beside a page's dialog in a split view,
+// as the UI shows the dialog at rest, until it shows it live or it hides (#3231, #3461). A press
+// on the page beside needs nothing of its own: the core's notice that its pane has the focus
+// brings the dialog to rest.
 HWND g_dialog_lent = nullptr;
 Floating g_site_controls;
 
@@ -2091,8 +2087,6 @@ void Disown(HWND root) {
       // The dialog goes with its window, which the UI may never tell the host as it closes.
       if (floating == &g_dialog) {
         g_dialog_lent = nullptr;
-        g_dialog_part = false;
-        WatchDialogPresses(false);
       }
       SetWindowLongPtrW(hwnd, GWLP_HWNDPARENT, 0);
     }
@@ -3815,63 +3809,6 @@ void host_watch_ui_keyboard(void (*left)(void* ui_view)) {
   g_ui_keyboard_left = left;
 }
 
-bool IsButtonDown(UINT message) {
-  return message == WM_LBUTTONDOWN || message == WM_RBUTTONDOWN || message == WM_MBUTTONDOWN ||
-         message == WM_XBUTTONDOWN;
-}
-
-// A mouse button going down in |hwnd| at |screen| while a page's dialog covers part of its window.
-// On the dialog, the dialog has the keyboard again. In a page of its browser window, beside the
-// dialog's pane in a split view, that window keeps the keyboard it takes for the page
-// (KeepsKeyboard), so the press focuses that pane as a press in a page without a dialog does
-// (#3231). Not GPUI's window over the page nor where the window's frame answers: Chromium takes a
-// page's input in the browser window itself, or a child of it.
-void DialogPaneBesidePressedAt(HWND hwnd, POINT screen) {
-  const HWND root = hwnd ? GetAncestor(hwnd, GA_ROOT) : nullptr;
-  if (!root) {
-    return;
-  }
-  if (root == g_dialog.hwnd) {
-    g_dialog_lent = nullptr;
-    return;
-  }
-  if (!g_dialog_part || !g_dialog.hwnd || !IsWindowVisible(g_dialog.hwnd) ||
-      GetWindow(g_dialog.hwnd, GW_OWNER) != root) {
-    return;
-  }
-  void* ui_view = UiViewOf(root);
-  if (!ui_view) {
-    return;
-  }
-  const HWND ui = Hwnd(ui_view);
-  if (hwnd == ui || IsChild(ui, hwnd) || (hwnd == root && FrameHit(root, screen))) {
-    return;
-  }
-  g_dialog_lent = root;
-  fprintf(stderr, "browser: a press in the pane beside takes the keyboard from the dialog\n");
-}
-
-// The thread's hook sees each press of the pointer before the window it goes to does. It's there
-// only while a page's dialog covers part of its window, so no other press pays for it.
-HHOOK g_dialog_press_hook = nullptr;
-
-LRESULT CALLBACK DialogPressHook(int code, WPARAM wparam, LPARAM lparam) {
-  if (code == HC_ACTION && IsButtonDown(static_cast<UINT>(wparam))) {
-    const auto* press = reinterpret_cast<MOUSEHOOKSTRUCT*>(lparam);
-    DialogPaneBesidePressedAt(press->hwnd, press->pt);
-  }
-  return CallNextHookEx(nullptr, code, wparam, lparam);
-}
-
-void WatchDialogPresses(bool watch) {
-  if (watch && !g_dialog_press_hook) {
-    g_dialog_press_hook =
-        SetWindowsHookExW(WH_MOUSE, DialogPressHook, nullptr, GetCurrentThreadId());
-  } else if (!watch && g_dialog_press_hook) {
-    UnhookWindowsHookEx(g_dialog_press_hook);
-    g_dialog_press_hook = nullptr;
-  }
-}
 // A window's menu bar isn't replaced while it's open on Windows: it's modal and runs no tasks.
 bool host_after_menus(void (*)(void)) { return false; }
 
@@ -4315,8 +4252,6 @@ void host_show_dialog(void* ui_view, double x, double y, double width, double he
   } else if (!shown || back) {
     g_dialog_lent = nullptr;
   }
-  g_dialog_part = width > 0;
-  WatchDialogPresses(g_dialog_part);
   // Without a rect, it covers all of the window.
   if (width <= 0) {
     x = y = 0;
@@ -4356,7 +4291,6 @@ void host_hide_dialog(void) {
   Hide(g_dialog);
   g_dialog_lent = nullptr;
   g_dialog_rests = false;
-  WatchDialogPresses(false);
   // Answered or gone before the user came to it, it asks no more.
   if (g_dialog_asking && IsWindow(g_dialog_asking) && GetForegroundWindow() != g_dialog_asking) {
     FLASHWINFO stop{sizeof stop, g_dialog_asking, FLASHW_STOP, 0, 0};
@@ -6150,10 +6084,6 @@ bool host_drive_pointer(unsigned message, long x, long y) {
   const POINT point{x, y};
   if (message == WM_MOUSEMOVE && g_mouse_hook) {
     PointerMoved(point);
-  }
-  // The driver posts its presses, which the thread's hook never sees.
-  if (g_dialog_press_hook && IsButtonDown(message)) {
-    DialogPaneBesidePressedAt(WindowFromPoint(point), point);
   }
   return g_menu_mouse_hook && MenuTakesPointer(message, point);
 }
