@@ -391,21 +391,33 @@ mod tests {
         }
     }
 
-    /// Where GPUI breaks `text` wrapped at `chars` characters a line: the index each line after
-    /// the first starts at. Tests draw every character as wide as any other.
-    fn breaks(text: &str, chars: f32, cx: &gpui::TestAppContext) -> Vec<usize> {
-        use gpui::{IndentAdjustment, LineFragment, px};
+    /// Where GPUI breaks `text` drawn wrapped at `chars` characters a line: the index each line
+    /// after the first starts at. Tests draw every character as wide as any other.
+    fn breaks(text: &str, chars: f32, cx: &mut gpui::VisualTestContext) -> Vec<usize> {
+        use gpui::{TextRun, px};
         let (font, size) = (gpui::font(crate::face::UI), px(10.));
-        let system = cx.text_system();
-        let each = system
-            .advance(system.resolve_font(&font), size, 'a')
-            .unwrap()
-            .width;
-        let mut wrapper = system.line_wrapper(font, size);
-        let fragments = [LineFragment::text(text)];
-        (wrapper.wrap_line(&fragments, each * chars, IndentAdjustment::NoIndent))
-            .map(|boundary| boundary.ix)
-            .collect()
+        let run = TextRun {
+            len: text.len(),
+            font: font.clone(),
+            color: Default::default(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let text = gpui::SharedString::from(text.to_string());
+        cx.update(|window, _| {
+            let system = window.text_system();
+            let each = system
+                .advance(system.resolve_font(&font), size, 'm')
+                .unwrap()
+                .width;
+            let shaped = system.shape_text(text, size, &[run], Some(each * chars), None);
+            let line = shaped.unwrap().into_iter().next().unwrap();
+            let runs = &line.unwrapped_layout.runs;
+            (line.wrap_boundaries.iter())
+                .map(|at| runs[at.run_ix].glyphs[at.glyph_ix].index)
+                .collect()
+        })
     }
 
     /// GPUI's wrapping, which every text and each part here uses (app/patches/gpui-scale.patch): a
@@ -413,7 +425,8 @@ mod tests {
     /// and a sentence breaks at its spaces (#3790).
     #[gpui::test]
     fn a_path_that_fits_a_line_wraps_whole(cx: &mut gpui::TestAppContext) {
-        let within = |text: &str, path: &str, cx: &gpui::TestAppContext, chars: f32| {
+        let cx = cx.add_empty_window();
+        let within = |text: &str, path: &str, cx: &mut gpui::VisualTestContext, chars: f32| {
             let start = text.find(path).unwrap();
             let all = breaks(text, chars, cx);
             let inside = (all.iter().copied()).filter(|&at| at > start && at < start + path.len());
