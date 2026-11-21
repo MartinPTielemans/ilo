@@ -3395,6 +3395,14 @@ CARD
     fail "Always ask first didn't draw again once its site was removed"
   fence_add
   in_sight "unfence pension.localhost" || fail "Always ask first didn't list the site added again"
+  # At the Settings window's least size, the foot under Add Site… wraps whole.
+  send resizekey 720 480
+  await_log '^browser: settings drawn at 720x480$' \
+    "Settings didn't draw at its least size: $(grep '^browser: settings drawn at ' "$log" | tail -1)"
+  in_sight "fence open" || fail "Always ask first didn't draw Add Site… at the least size"
+  ../tools/window-screenshot.sh "$pid" "$out/settings-agents-fence-least.png" || fail "no window to capture"
+  send resizekey 820 660
+  await_log '^browser: settings drawn at 820x660$' "Settings didn't draw at its size again"
   send key w cmd
   expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 
@@ -3495,6 +3503,20 @@ CARD
   case "$read" in "error: The user said never on pension.localhost"*) ;; *) fail "after Never, the read answered: $read" ;; esac
   [ "$(grep -c '^browser: agent mcp-client asks' "$log")" = "$before" ] ||
     fail "after Never, a read on the listed site asked"
+  # Settings › Agents' log has the answers at the tab that came there, in the words of using the
+  # site: its newest entries, from the read refused after Never back.
+  send menu Settings…
+  expect '^browser: settings shown ' "Settings… didn't show Settings for the fence's log"
+  settings_drew
+  send clickkey $(drawn "toolbar Agents")
+  expect '^browser: settings tab Agents$' "a click on Agents didn't show its section for the log"
+  settings_drew Agents
+  newest=$(sed -n 's/^browser: settings request \([0-9]*\) .* at .*/\1/p' "$log" | sort -n | tail -1)
+  [ -n "$newest" ] || fail "Settings › Agents drew no entry of the agent's"
+  in_sight "request $newest " || fail "Settings › Agents didn't draw its newest entry"
+  ../tools/window-screenshot.sh "$pid" "$out/settings-agents-fence-log.png" || fail "no window to capture"
+  send key w cmd
+  expect '^browser: settings hidden$' "⌘W didn't hide Settings after the fence's log"
   # The tab stays open, as the agent's last at work, which the end of its session reads.
   # Another bank's site asks, as the answer was for bank.localhost alone.
   asks='^browser: agent mcp-client asks [0-9]*: open otherbank\.localhost$'
