@@ -4,11 +4,13 @@
 #include <utility>
 
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/no_destructor.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/task/thread_pool.h"
 #include "browser_core/agent_page.h"
 #include "browser_core/agent_session.h"
 #include "browser_core/host.h"
@@ -37,6 +39,23 @@ bc_id g_next_field = 1;
 const Space::Agent* AgentOf(bc_id tab) {
   const Space* space = Space::Holding(tab);
   return space && space->agent() ? &*space->agent() : nullptr;
+}
+
+// Whether |tab| is still in the Space of the agent |agent|, not only of any agent.
+bool IsAgents(bc_id tab, const std::string& agent) {
+  const Space::Agent* now = AgentOf(tab);
+  return now && now->id == agent;
+}
+
+// Whether any of |files| is a folder, as a Mac package (.app, .rtfd) the open panel lets the user
+// pick is: Chrome would hand the page that folder's path, and read access under it.
+bool AnyFolder(const std::vector<std::string>& files) {
+  for (const std::string& file : files) {
+    if (base::DirectoryExists(base::FilePath::FromUTF8Unsafe(file))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // What the dialog filters by, from the field's accept, or none to show every file.
@@ -69,6 +88,7 @@ std::string PathOf(const ui::SelectedFileInfo& file) {
 
 AgentFileField::AgentFileField(bc_id id,
                                bc_id tab,
+                               std::string agent,
                                int64_t element,
                                content::WeakDocumentPtr document,
                                FileFieldPlace place,
@@ -76,6 +96,7 @@ AgentFileField::AgentFileField(bc_id id,
                                std::vector<std::string> accepts)
     : id_(id),
       tab_(tab),
+      agent_(std::move(agent)),
       element_(element),
       document_(std::move(document)),
       place_(std::move(place)),
@@ -96,9 +117,16 @@ bc_id AgentFileField::Shown(bc_id tab,
                             FileFieldPlace place,
                             bool many,
                             std::vector<std::string> accepts) {
+  const Space::Agent* agent = AgentOf(tab);
+  if (!agent) {
+    return 0;
+  }
+  // One field a tab, so what's kept is bounded by tabs whatever an agent asks.
+  TabEnded(tab);
   const bc_id id = g_next_field++;
-  Fields()[id] = base::WrapUnique(new AgentFileField(
-      id, tab, element, frame.GetWeakDocumentPtr(), std::move(place), many, std::move(accepts)));
+  Fields()[id] = base::WrapUnique(new AgentFileField(id, tab, agent->id, element,
+                                                     frame.GetWeakDocumentPtr(), std::move(place),
+                                                     many, std::move(accepts)));
   LOG(ERROR) << "browser: file field " << id << " shown in " << tab;
   return id;
 }
@@ -114,7 +142,8 @@ bool AgentFileField::Choose(bc_id id, bc_id window) {
   AgentFileField& field = *found->second;
   field.asked_ = true;
   // A field that left before the press, as its tab did, gets no dialog.
-  if (!field.document_.AsRenderFrameHostIfValid() || !AgentOf(field.tab_) || IsHeld(field.tab_)) {
+  if (!field.document_.AsRenderFrameHostIfValid() || !IsAgents(field.tab_, field.agent_) ||
+      IsHeld(field.tab_)) {
     LOG(ERROR) << "browser: file field " << id << " left before the dialog";
     End(id, BC_FILE_FIELD_LEFT, 0);
     return true;
@@ -204,12 +233,37 @@ void AgentFileField::Picked(bc_id id, std::vector<std::string> files) {
   AgentFileField& field = *found->second;
   field.dialog_.reset();
   field.types_.reset();
+  LOG(ERROR) << "browser: file field " << id << " chose " << files.size();
+  if (files.empty()) {
+    End(id, BC_FILE_FIELD_NONE, 0);
+    return;
+  }
+  std::vector<std::string> checked = files;
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
+      base::BindOnce(&AnyFolder, std::move(checked)),
+      base::BindOnce(&AgentFileField::Checked, id, std::move(files)));
+}
+
+// static
+void AgentFileField::Checked(bc_id id, std::vector<std::string> files, bool folder) {
+  auto found = Fields().find(id);
+  if (found == Fields().end()) {
+    return;
+  }
+  AgentFileField& field = *found->second;
+  // A folder isn't a file, so the user chose none: the field and its page are as they were, which
+  // the agent's next snapshot would find for nothing if it heard the field left.
+  if (folder) {
+    LOG(ERROR) << "browser: file field " << id << " chose a folder";
+    End(id, BC_FILE_FIELD_NONE, 0);
+    return;
+  }
   content::WebContents* contents = Tab::FromId(field.tab_);
   AgentPage* page = contents ? AgentPage::FromWebContents(contents) : nullptr;
   const size_t count = files.size();
-  LOG(ERROR) << "browser: file field " << id << " chose " << count;
-  if (!page || !count) {
-    End(id, count ? BC_FILE_FIELD_LEFT : BC_FILE_FIELD_NONE, 0);
+  if (!page) {
+    End(id, BC_FILE_FIELD_LEFT, 0);
     return;
   }
   page->Fill(field.element_, std::move(files), base::BindOnce(&AgentFileField::Lands, id, count),
@@ -232,7 +286,7 @@ bool AgentFileField::Lands(bc_id id, size_t count, const FileFieldNow& read) {
   content::RenderFrameHost* frame = field.document_.AsRenderFrameHostIfValid();
   now.same_document =
       frame && frame->GetDevToolsFrameToken().ToString() == field.place_.frame;
-  now.agents = AgentOf(field.tab_) != nullptr;
+  now.agents = IsAgents(field.tab_, field.agent_);
   now.held = IsHeld(field.tab_);
   return FilesLand(field.place_, now, count);
 }

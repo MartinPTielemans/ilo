@@ -33,7 +33,8 @@ class AgentFileField : public ui::SelectFileDialog::Listener {
   ~AgentFileField() override;
 
   // The field |element| of |tab|, in |frame| at |place|, which the agent's card names, for
-  // bc_file_field_choose: its id.
+  // bc_file_field_choose: its id, or 0 if the tab is in no agent's Space. It ends the tab's
+  // earlier field, if any.
   static bc_id Shown(bc_id tab,
                      int64_t element,
                      content::RenderFrameHost& frame,
@@ -54,6 +55,7 @@ class AgentFileField : public ui::SelectFileDialog::Listener {
  private:
   AgentFileField(bc_id id,
                  bc_id tab,
+                 std::string agent,
                  int64_t element,
                  content::WeakDocumentPtr document,
                  FileFieldPlace place,
@@ -70,6 +72,8 @@ class AgentFileField : public ui::SelectFileDialog::Listener {
   // The user picked |files| for the field |id|, which go into it if it's still the one the card
   // named, or none.
   static void Picked(bc_id id, std::vector<std::string> files);
+  // The same, once a blocking task said whether any of |files| is a folder, which never goes in.
+  static void Checked(bc_id id, std::vector<std::string> files, bool folder);
   // The field as it is, |read|, whose frame's document and tab this fills in: whether |count|
   // files go into the field |id| names.
   static bool Lands(bc_id id, size_t count, const FileFieldNow& read);
@@ -79,6 +83,8 @@ class AgentFileField : public ui::SelectFileDialog::Listener {
 
   const bc_id id_;
   const bc_id tab_;
+  // The agent whose card it is, whose Space the tab must still be in at the press and the pick.
+  const std::string agent_;
   const int64_t element_;
   // The document the field was in as the card showed: invalid once its frame has another.
   const content::WeakDocumentPtr document_;

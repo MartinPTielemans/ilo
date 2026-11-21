@@ -1,5 +1,7 @@
 #include "browser_core/agent_file_field_rule.h"
 
+#include <utility>
+
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace browser_core {
@@ -116,6 +118,38 @@ TEST(AgentFileFieldRuleTest, AFieldThePageChangedGetsNothing) {
   FileFieldNow many = Unchanged();
   many.facts = Input({"type", "file", "multiple", ""});
   EXPECT_TRUE(FilesLand(Shown(), many, 2));
+}
+
+// A sandboxed or data: frame has no site for the card to name, so it's refused before the card,
+// and its "null" origin never matches itself at the pick.
+TEST(AgentFileFieldRuleTest, AFrameWithNoSiteIsRefused) {
+  EXPECT_EQ(FileFieldPlaceRefusal(Shown()), std::nullopt);
+  const std::optional<std::string> refused = FileFieldPlaceRefusal({"F00D", "null"});
+  ASSERT_TRUE(refused);
+  EXPECT_NE(refused->find("hand_off"), std::string::npos);
+  EXPECT_TRUE(FileFieldPlaceRefusal({"", "https://jobs.example"}));
+  FileFieldNow opaque = Unchanged();
+  opaque.place.origin = "null";
+  EXPECT_FALSE(FilesLand({"F00D", "null"}, opaque, 1));
+}
+
+DocumentChild Child(int type, std::string name, std::string frame = "", bool holds = false) {
+  return {type, std::move(name), std::move(frame), holds};
+}
+
+// A field's frame is its document's, named on that document's element child, and only when that
+// child isn't a frame owner, which DevTools gives its content frame's id too.
+TEST(AgentFileFieldRuleTest, TheFrameIsTheDocumentsOwn) {
+  const DocumentChild doctype = Child(10, "html");
+  EXPECT_EQ(DocumentFrame({doctype, Child(1, "HTML", "F00D")}), "F00D");
+  EXPECT_EQ(DocumentFrame({Child(8, "#comment"), Child(1, "svg", "F00D")}), "F00D");
+  for (const char* owner : {"IFRAME", "frame", "Object", "EMBED", "fencedframe"}) {
+    EXPECT_EQ(DocumentFrame({doctype, Child(1, owner, "BEEF")}), "");
+  }
+  EXPECT_EQ(DocumentFrame({Child(1, "x-root", "BEEF", /*holds=*/true)}), "");
+  // A frame id on anything but the element child names no document's frame.
+  EXPECT_EQ(DocumentFrame({Child(10, "html", "F00D")}), "");
+  EXPECT_EQ(DocumentFrame({}), "");
 }
 
 TEST(AgentFileFieldRuleTest, NoFilesAreNoPick) {

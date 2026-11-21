@@ -318,18 +318,17 @@ class AgentPage : public content::WebContentsObserver,
   void Owe(Job& job, const std::string& why);
 
   // FILE_FIELD: describes the job's element for the user's card, which may ask for a file for it
-  // only if it's a file input that isn't a folder's, and keeps where it is for the user's pick.
+  // only if it's a file input that isn't a folder's, in a frame with a site, and keeps where it is
+  // for the user's pick.
   void FileField();
   // A Fill's job.
   void FillField();
   // The field |node| in the session at |slot| as it is now: what DevTools says of its node, whether
   // it's in its document, the frame it's in, with that frame's origin, and its accessible name.
-  // None if DevTools knows no such node.
+  // None if DevTools knows no such node, and an empty frame if its document's can't be told.
   using FieldRead = base::OnceCallback<void(std::optional<FileFieldNow> now, std::string label)>;
   void ReadField(int slot, int node, FieldRead then);
-  // The DevTools id of the frame at the top of the session at |slot|, and the page's frame with
-  // the DevTools id |id|, or null.
-  std::string TopFrameOf(int slot);
+  // The page's frame with the DevTools id |id|, or null.
   content::RenderFrameHost* FrameById(const std::string& id);
   // Ends the job, which its page's dialog or the limit stopped waiting on, with |why|, and with
   // |unstarted| the jobs queued behind it.

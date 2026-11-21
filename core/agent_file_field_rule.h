@@ -40,10 +40,32 @@ struct FileFieldPlace {
   std::string origin;
 };
 
+// A child of a document as DevTools describes it (DOM.describeNode, depth 1): its node type and
+// name, the frame id DevTools gives it, if any, and whether it holds a document of its own.
+struct DocumentChild {
+  int type = 0;
+  std::string name;
+  std::string frame;
+  bool holds_document = false;
+};
+
+// The DevTools id of the frame whose document has |children|, which DevTools gives that document's
+// element child, or empty if it can't be told. An element child that is itself a frame owner, as
+// a page's script can make one, gets its content frame's id too: Blink sets that first and the
+// document's own over it (InspectorDOMAgent::BuildObjectForNode), so one more frame id there would
+// name another site's frame for a field in this document. Such a child is refused, whatever the
+// order.
+std::string DocumentFrame(const std::vector<DocumentChild>& children);
+
+// Why the user can't be asked for a file for a field at |place|, for the agent, or none if they
+// can: its frame must have a site the card can name, which one with an opaque origin, as a
+// sandboxed or data: frame's, hasn't.
+std::optional<std::string> FileFieldPlaceRefusal(const FileFieldPlace& place);
+
 // The field as the user picks |count| files for it.
 struct FileFieldNow {
   // Whether the frame still has the document it had as the card showed, the tab is still in the
-  // agent's Space, and the user holds it.
+  // Space of the agent the card was for, and the user holds it.
   bool same_document = false;
   bool agents = false;
   bool held = false;
@@ -55,8 +77,9 @@ struct FileFieldNow {
 };
 
 // Whether the user's |count| files go into the field the card at |shown| named: the same node, in
-// the same document of the same frame, from the same origin, still a file field that takes them,
-// in a tab still the agent's that the user doesn't hold. Any miss, and they go nowhere.
+// the same document of the same frame, from the same origin, one with a site, still a file field
+// that takes them, in a tab still that agent's that the user doesn't hold. Any miss, and they go
+// nowhere.
 bool FilesLand(const FileFieldPlace& shown, const FileFieldNow& now, size_t count);
 
 }  // namespace browser_core
