@@ -61,6 +61,10 @@ pub struct UserKeys {
     /// The commands a page gets the keys of first that the user has run before the page instead,
     /// as Arc's Prefer Arc does.
     ilo_first: Vec<Command>,
+    /// The keys the current layout names otherwise than before #3509, as the user may have
+    /// recorded them then, and as they're named now: Danish's ⌃⇧å, ctrl-{ on Linux before, is
+    /// ctrl-shift-[. A command given the first runs on the second, and the file keeps the first.
+    renamed: Vec<(String, String)>,
 }
 
 /// The Shortcuts file's line for favorites_unnumbered, which no command is named.
@@ -77,6 +81,7 @@ static DEFAULTS: UserKeys = UserKeys {
     favorites_unnumbered: false,
     last_tab_ninth: false,
     ilo_first: Vec::new(),
+    renamed: Vec::new(),
 };
 
 /// How soon after a page kept a shortcut a second press of it runs ilo's command, as Arc's does.
@@ -510,16 +515,51 @@ impl UserKeys {
             .is_some_and(Command::opens_field)
     }
 
+    /// The command `keystroke` runs: the one given the key's name before #3509 first, as the user
+    /// gave it the key they now press, then the one given the key, then the default.
     fn command_with(&self, keystroke: &str) -> Option<Command> {
-        let user = self
-            .set
-            .iter()
-            .find(|(_, keys)| keys.iter().any(|key| key == keystroke));
-        user.map(|&(command, _)| command).or_else(|| {
+        let given = |key: &str| {
+            (self.set.iter())
+                .find(|(_, keys)| keys.iter().any(|each| each == key))
+                .map(|&(command, _)| command)
+        };
+        let renamed = (self.renamed.iter())
+            .filter(|(_, now)| now == keystroke)
+            .find_map(|(before, _)| given(before));
+        renamed.or_else(|| given(keystroke)).or_else(|| {
             (SHORTCUTS.iter())
                 .find(|&&(key, command, _)| key == keystroke && !self.is_set(command))
                 .map(|&(_, command, _)| command)
         })
+    }
+
+    /// The keys that run `command`, with the names the layout gives now to keys given it by their
+    /// names before #3509 (renamed).
+    fn heard_keys(&self, command: Command) -> Vec<&str> {
+        let mut keys = self.keys(command);
+        if self.is_set(command) {
+            for key in keys.clone() {
+                if let Some(now) = self.now_named(key)
+                    && !keys.contains(&now)
+                {
+                    keys.push(now);
+                }
+            }
+        }
+        keys
+    }
+
+    /// What the layout names `key` now, if #3509 renamed it.
+    fn now_named(&self, key: &str) -> Option<&str> {
+        (self.renamed.iter())
+            .find(|(before, _)| before == key)
+            .map(|(_, now)| now.as_str())
+    }
+
+    /// Has the keys the user gave commands by their names before #3509 run them by the names the
+    /// current layout gives them now, `renamed` (split_keys_renamed).
+    pub fn set_renamed(&mut self, renamed: Vec<(String, String)>) {
+        self.renamed = renamed;
     }
 
     /// How a menu shows the first key that runs `command`, if one does.
@@ -549,8 +589,13 @@ impl UserKeys {
             .filter(|&&(key, command, _)| !self.is_set(command) && applies(key, off_the_mac));
         let user = (self.set.iter())
             .flat_map(|(command, keys)| keys.iter().map(|key| (key.as_str(), *command)));
+        // After the others, so GPUI matches a renamed key to the command given it before.
+        let renamed = (self.set.iter()).flat_map(|(command, keys)| {
+            (keys.iter()).filter_map(move |key| Some((self.now_named(key)?, *command)))
+        });
         (defaults.map(|&(key, command, _)| (key, command)))
             .chain(user)
+            .chain(renamed)
             .collect()
     }
 
@@ -574,8 +619,14 @@ impl UserKeys {
         }
         let mut losers = Vec::new();
         for key in &keys {
-            if let Some(holder) = self.command_with(key).filter(|&holder| holder != command) {
-                let left = self.keys(holder).into_iter().filter(|each| each != key);
+            // Two commands can hold a key: one by its name now, one by its name before #3509.
+            for _ in 0..2 {
+                let Some(holder) = self.command_with(key).filter(|&holder| holder != command)
+                else {
+                    break;
+                };
+                let left = (self.keys(holder).into_iter())
+                    .filter(|&each| each != key && self.now_named(each) != Some(key));
                 let left = left.map(str::to_string).collect();
                 self.put(holder, left);
                 if !losers.contains(&holder) {
@@ -595,7 +646,11 @@ impl UserKeys {
 
     /// Every command's default keys, the favorites numbered again and ⌘9 the last tab.
     pub fn reset_all(&mut self) {
-        *self = UserKeys::default();
+        let renamed = std::mem::take(&mut self.renamed);
+        *self = UserKeys {
+            renamed,
+            ..UserKeys::default()
+        };
     }
 
     /// Whether ⌘1–⌘8 count the favorites before the Space's tabs (Settings › Shortcuts).
@@ -687,20 +742,22 @@ pub fn change_keys<R>(cx: &mut App, change: impl FnOnce(&mut UserKeys) -> R) -> 
     let result = change(&mut after);
     let mut changed: Vec<Command> = Vec::new();
     for &(command, _) in before.set.iter().chain(&after.set) {
-        if !changed.contains(&command) && before.keys(command) != after.keys(command) {
+        if !changed.contains(&command) && before.heard_keys(command) != after.heard_keys(command) {
             changed.push(command);
         }
     }
     // GPUI's keymap can't take a binding out. A later NoAction on the same key and context
     // disables the earlier ones, for keystrokes and for the menus' key equivalents, and the
     // bindings after it win again.
-    let old = changed.iter().flat_map(|&command| before.keys(command));
+    let old = changed
+        .iter()
+        .flat_map(|&command| before.heard_keys(command));
     let old: Vec<KeyBinding> = old
         .flat_map(|key| bindings_of(key, Box::new(NoAction), cx))
         .collect();
     let app: &App = cx;
     let new = changed.iter().flat_map(|&command| {
-        let keys = after.keys(command).into_iter();
+        let keys = after.heard_keys(command).into_iter();
         keys.flat_map(move |key| bindings_of(key, Box::new(Run(command)), app))
     });
     let new: Vec<KeyBinding> = new.collect();
@@ -731,6 +788,50 @@ pub fn change_keys<R>(cx: &mut App, change: impl FnOnce(&mut UserKeys) -> R) -> 
         shell.update(cx, |shell, cx| shell.refresh_menus(cx)).ok();
     }
     result
+}
+
+/// The keys the platform's GPUI names otherwise on the current layout than before #3509, with
+/// what it named each before and names it now.
+fn split_keys_renamed() -> Vec<(Keystroke, Keystroke)> {
+    #[cfg(target_os = "macos")]
+    return gpui_macos::split_keys_renamed();
+    #[cfg(target_os = "windows")]
+    return gpui_windows::split_keys_renamed();
+    #[cfg(target_os = "linux")]
+    return gpui_linux::split_keys_renamed();
+    #[allow(unreachable_code)]
+    Vec::new()
+}
+
+/// The names `renamed` gives keys as the Shortcuts file writes them: each name the user could
+/// have recorded the key by before, with the one it records it by now.
+pub fn renamed_names(renamed: &[(Keystroke, Keystroke)]) -> Vec<(String, String)> {
+    let mut names = Vec::new();
+    for (before, now) in renamed {
+        let (Ok(before), Some(now)) = (
+            recorded(before),
+            recorded(now).ok().and_then(|now| now.into_iter().next()),
+        ) else {
+            continue;
+        };
+        names.extend(before.into_iter().map(|before| (before, now.clone())));
+    }
+    names
+}
+
+/// Keeps the keys the user gave commands before #3509 running on the current layout, which
+/// names some of them otherwise now, and again each time the layout changes. Before the
+/// shortcuts are bound.
+pub fn follow_layout(cx: &mut App) {
+    let renamed = renamed_names(&split_keys_renamed());
+    cx.default_global::<UserKeys>().set_renamed(renamed);
+    cx.on_keyboard_layout_change(|cx| {
+        let renamed = renamed_names(&split_keys_renamed());
+        if user_keys(cx).renamed != renamed {
+            change_keys(cx, |keys| keys.set_renamed(renamed));
+        }
+    })
+    .detach();
 }
 
 /// GPUI's bindings for the keys the store has now.
@@ -1671,8 +1772,14 @@ mod tests {
         const TWO: u16 = 0x13;
         const A: u16 = 0x00;
         let heard = |code, control, shift, unshifted: &str, shifted: &str| {
-            let (key, shift) =
-                gpui_macos::layout_key(code, control, shift, unshifted.into(), shifted.into());
+            let (key, shift) = gpui_macos::layout_key(
+                code,
+                control,
+                shift,
+                unshifted.into(),
+                shifted.into(),
+                Some(&[]),
+            );
             let modifiers = Modifiers {
                 control,
                 shift,
@@ -1770,5 +1877,380 @@ mod tests {
             assert_eq!(unparse(heard(layout, &[SHIFT], A)), "shift-a", "{layout}");
             assert_eq!(unparse(heard(layout, &[], A)), "a", "{layout}");
         }
+    }
+
+    /// The split keys' lines in core/split_keys_layouts.txt, which the core's tests read too: a
+    /// layout, the base characters at the US places it names, and the US place of the key each
+    /// of [, ] and - runs on, if any.
+    struct SplitLayout {
+        name: &'static str,
+        base: Vec<(char, char)>,
+        runs_on: [Option<char>; 3],
+    }
+
+    fn split_layouts() -> Vec<SplitLayout> {
+        let text = include_str!("../../../core/split_keys_layouts.txt");
+        let lines = text
+            .lines()
+            .filter(|line| !line.starts_with('#') && !line.is_empty());
+        lines
+            .map(|line| {
+                let words: Vec<&'static str> = line.split_whitespace().collect();
+                let (base, runs_on) = words[1..].split_at(words.len() - 4);
+                let base = base.iter().map(|pair| {
+                    let mut chars = pair.chars();
+                    let place = chars.next().unwrap();
+                    assert_eq!(chars.next(), Some('='), "{line}");
+                    (place, chars.next().unwrap())
+                });
+                let runs_on = runs_on.iter().map(|&place| match place {
+                    "none" => None,
+                    place => place.chars().next(),
+                });
+                SplitLayout {
+                    name: words[0],
+                    base: base.collect(),
+                    runs_on: runs_on.collect::<Vec<_>>().try_into().unwrap(),
+                }
+            })
+            .collect()
+    }
+
+    const SPLIT_COMMANDS: [Command; 3] = [
+        Command::PreviousPane,
+        Command::NextPane,
+        Command::CloseSplitPane,
+    ];
+
+    /// The split commands `heard` runs, matching it to SHORTCUTS' keys as GPUI's bindings of
+    /// them do, with the symbols shift makes taken without it (bindings_of).
+    fn split_commands_run_by(heard: &Keystroke, off_the_mac: bool) -> Vec<Command> {
+        let os = match off_the_mac {
+            true => OperatingSystem::Linux,
+            false => OperatingSystem::Mac,
+        };
+        let same = |key: &str| {
+            Keystroke::parse_with_os(key, os)
+                .is_ok_and(|key| (&key.key, key.modifiers) == (&heard.key, heard.modifiers))
+        };
+        let mut run = Vec::new();
+        for &(key, command, _) in SHORTCUTS {
+            let pressed = match off_the_mac {
+                true => pressed_off_the_mac(key),
+                false => vec![key.to_string()],
+            };
+            let runs = pressed
+                .iter()
+                .any(|key| same(key) || without_shift(key).is_some_and(|key| same(&key)));
+            if runs && SPLIT_COMMANDS.contains(&command) && !run.contains(&command) {
+                run.push(command);
+            }
+        }
+        run
+    }
+
+    /// Each layout's split keys run on the keys the rule in core/split_keys_layouts.txt says,
+    /// the made-up one's too, where the key at the US [ place types ], which keeps it.
+    #[test]
+    fn split_keys_run_on_the_keys_the_layouts_table_says() {
+        for layout in split_layouts() {
+            let base = |place: char| {
+                layout
+                    .base
+                    .iter()
+                    .find(|&&(at, _)| at == place)
+                    .map(|&(_, c)| c)
+            };
+            let own = |key: char| layout.base.iter().any(|&(_, c)| c == key);
+            let by_place = gpui::split_keys_by_place(own, base);
+            for (index, key) in gpui::SPLIT_KEYS.into_iter().enumerate() {
+                let runs_on = match by_place.contains(&key) {
+                    true => Some(key),
+                    false => layout
+                        .base
+                        .iter()
+                        .find(|&&(_, c)| c == key)
+                        .map(|&(at, _)| at),
+                };
+                assert_eq!(runs_on, layout.runs_on[index], "{} {key}", layout.name);
+            }
+        }
+    }
+
+    /// Linux's GPUI runs the split keys on the keys the layouts table says, by xkb's own layouts,
+    /// with Alt or Ctrl and shift, and no other key of the table's runs one. AltGr's keys are
+    /// left to the layout.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_split_keys_run_on_the_keys_the_layouts_table_says() {
+        use xkbcommon::xkb;
+        const SHIFT: u32 = 50;
+        const CTRL: u32 = 37;
+        const ALT: u32 = 64;
+        const ALT_GR: u32 = 108;
+        // xkb's keycodes of the US places the table names.
+        let code = |place| match place {
+            '[' => 34,
+            ']' => 35,
+            '-' => 20,
+            '\\' => 51,
+            '/' => 61,
+            '6' => 15,
+            place => panic!("no keycode for the US {place} place"),
+        };
+        let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+        for layout in split_layouts()
+            .into_iter()
+            .filter(|layout| layout.name != "x")
+        {
+            let keymap = xkb::Keymap::new_from_names(
+                &context,
+                "evdev",
+                "pc105",
+                layout.name,
+                "",
+                None,
+                xkb::COMPILE_NO_FLAGS,
+            )
+            .unwrap_or_else(|| panic!("xkb has no {} layout", layout.name));
+            let heard = |held: &[u32], key: u32| {
+                let mut state = xkb::State::new(&keymap);
+                for &code in held {
+                    state.update_key(xkb::Keycode::new(code), xkb::KeyDirection::Down);
+                }
+                let modifiers = Modifiers {
+                    shift: held.contains(&SHIFT),
+                    control: held.contains(&CTRL),
+                    alt: held.contains(&ALT),
+                    ..Default::default()
+                };
+                gpui_linux::keystroke_from_xkb(&state, modifiers, xkb::Keycode::new(key))
+            };
+            let places = (layout.base.iter().map(|&(place, _)| place)).chain(gpui::SPLIT_KEYS);
+            for place in places {
+                let runs: Vec<Command> = (SPLIT_COMMANDS.into_iter().zip(layout.runs_on))
+                    .filter(|&(_, on)| on == Some(place))
+                    .map(|(command, _)| command)
+                    .collect();
+                // Alt is ⌃ off the Mac. Ctrl, ⌘ there, names the key as Alt does.
+                let key = heard(&[ALT, SHIFT], code(place));
+                assert_eq!(
+                    split_commands_run_by(&key, true),
+                    runs,
+                    "{} at the US {place} place heard as {}",
+                    layout.name,
+                    key.unparse(OperatingSystem::Linux)
+                );
+                // By the split key's own name, which the page's will be too, not what shift makes.
+                if let Some(index) = layout.runs_on.iter().position(|&on| on == Some(place)) {
+                    let split = gpui::SPLIT_KEYS[index].to_string();
+                    assert_eq!(
+                        (&key.key, key.modifiers.shift),
+                        (&split, true),
+                        "{}",
+                        layout.name
+                    );
+                }
+                let with_ctrl = heard(&[CTRL, SHIFT], code(place));
+                assert_eq!(
+                    (&with_ctrl.key, with_ctrl.modifiers.shift),
+                    (&key.key, key.modifiers.shift),
+                    "{} at the US {place} place",
+                    layout.name
+                );
+            }
+        }
+        // Danish's AltGr+8 types [, and AltGr with shift on å isn't the [ place.
+        let keymap = xkb::Keymap::new_from_names(&context, "evdev", "pc105", "dk", "", None, 0)
+            .expect("xkb has dk");
+        let mut state = xkb::State::new(&keymap);
+        for code in [ALT_GR, SHIFT] {
+            state.update_key(xkb::Keycode::new(code), xkb::KeyDirection::Down);
+        }
+        let shift = Modifiers {
+            shift: true,
+            ..Default::default()
+        };
+        let alt_gr = gpui_linux::keystroke_from_xkb(&state, shift, xkb::Keycode::new(34));
+        assert_ne!(alt_gr.key, "[");
+    }
+
+    /// The Mac's GPUI runs the split keys on the keys the layouts table says, with ⌃⇧, from each
+    /// layout's characters, and no other key of the table's runs one.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_split_keys_run_on_the_keys_the_layouts_table_says() {
+        // Carbon's key codes of the US places the table names.
+        let code = |place| match place {
+            '[' => 0x21,
+            ']' => 0x1E,
+            '-' => 0x1B,
+            '\\' => 0x2A,
+            '/' => 0x2C,
+            '6' => 0x16,
+            place => panic!("no key code for the US {place} place"),
+        };
+        for layout in split_layouts() {
+            let base = |key_code: u16| {
+                (layout.base.iter())
+                    .find(|&&(place, _)| code(place) == key_code)
+                    .map(|&(_, c)| c)
+            };
+            let by_place = gpui_macos::split_keys_on(base);
+            let places = (layout.base.iter().map(|&(place, _)| place)).chain(gpui::SPLIT_KEYS);
+            for place in places {
+                let runs: Vec<Command> = (SPLIT_COMMANDS.into_iter().zip(layout.runs_on))
+                    .filter(|&(_, on)| on == Some(place))
+                    .map(|(command, _)| command)
+                    .collect();
+                // What ⇧ types with the key no longer matters to a split key: JIS's ⇧- is =.
+                let typed = base(code(place)).map(String::from).unwrap_or_default();
+                let (key, shift) = gpui_macos::layout_key(
+                    code(place),
+                    true,
+                    true,
+                    typed,
+                    String::new(),
+                    Some(&by_place),
+                );
+                let heard = Keystroke {
+                    modifiers: Modifiers {
+                        control: true,
+                        shift,
+                        ..Default::default()
+                    },
+                    key,
+                    key_char: None,
+                };
+                assert_eq!(
+                    split_commands_run_by(&heard, false),
+                    runs,
+                    "{} at the US {place} place",
+                    layout.name
+                );
+            }
+        }
+    }
+
+    /// Windows' GPUI names the keys at the split keys' US places by their place where the layout
+    /// has no key of its own for them, from the Danish and German layouts' scan codes and virtual
+    /// keys. AltGr, Ctrl and Alt, and shift alone are left to the layout.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_split_keys_are_named_by_place_on_danish_and_german() {
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
+            VIRTUAL_KEY, VK_OEM_1, VK_OEM_4, VK_OEM_6, VK_OEM_MINUS, VK_OEM_PLUS,
+        };
+        // Scan code, virtual key and its character on the layout.
+        let danish: &[(u32, VIRTUAL_KEY, char)] = &[
+            (0x1A, VK_OEM_6, 'å'),
+            (0x1B, VK_OEM_1, '¨'),
+            (0x0C, VK_OEM_PLUS, '+'),
+            (0x35, VK_OEM_MINUS, '-'),
+        ];
+        let german: &[(u32, VIRTUAL_KEY, char)] = &[
+            (0x1A, VK_OEM_1, 'ü'),
+            (0x1B, VK_OEM_PLUS, '+'),
+            (0x0C, VK_OEM_4, 'ß'),
+            (0x35, VK_OEM_MINUS, '-'),
+        ];
+        let control_shift = Modifiers::control_shift();
+        let alt_shift = Modifiers {
+            alt: true,
+            shift: true,
+            ..Default::default()
+        };
+        let alt_gr = Modifiers {
+            control: true,
+            alt: true,
+            shift: true,
+            ..Default::default()
+        };
+        for (name, layout) in [("Danish", danish), ("German", german)] {
+            let base = |scan: u32| {
+                (layout.iter())
+                    .find(|&&(at, ..)| at == scan)
+                    .map(|&(.., c)| c)
+            };
+            for held in [control_shift, alt_shift] {
+                let named = |scan| gpui_windows::split_key_on(scan, &held, base);
+                assert_eq!(named(0x1A).as_deref(), Some("["), "{name}");
+                assert_eq!(named(0x1B).as_deref(), Some("]"), "{name}");
+                // Its own - key, at the US / place, is -, and the key at the US - place isn't.
+                assert_eq!(named(0x35).as_deref(), Some("-"), "{name}");
+                assert_eq!(named(0x0C), None, "{name}");
+            }
+            assert_eq!(
+                gpui_windows::split_key_on(0x1A, &alt_gr, base),
+                None,
+                "{name}"
+            );
+            assert_eq!(
+                gpui_windows::split_key_on(0x1A, &Modifiers::shift(), base),
+                None
+            );
+        }
+        // The US layout's own keys are named by their character, shift kept, where Ctrl Shift [
+        // was ctrl-{.
+        let us = |scan: u32| match scan {
+            0x1A => Some('['),
+            0x1B => Some(']'),
+            0x0C => Some('-'),
+            0x35 => Some('/'),
+            _ => None,
+        };
+        let named = |scan| gpui_windows::split_key_on(scan, &control_shift, us);
+        assert_eq!(named(0x1A).as_deref(), Some("["));
+        assert_eq!(named(0x1B).as_deref(), Some("]"));
+        assert_eq!(named(0x0C).as_deref(), Some("-"));
+        assert_eq!(named(0x35), None);
+    }
+
+    /// A key the user gave a command by the name GPUI gave it before #3509 still runs the
+    /// command once the layout names it by its place: on Danish under Linux, ⌃⇧å, recorded as
+    /// ctrl-{, is ctrl-shift-[ now. It wins over Previous Pane, which kept ctrl-shift-[ when the
+    /// user took its ctrl-{ away, and the file keeps the name the user recorded.
+    #[test]
+    fn a_key_recorded_by_its_name_before_runs_its_command_by_its_name_now() {
+        let mut user = UserKeys::default();
+        // As Settings records ⌃⇧å there, taking ctrl-shift-{ from Previous Pane.
+        user.set(Command::NewNote, keys(&["ctrl-{", "ctrl-shift-{"]))
+            .unwrap();
+        let written = user.to_text();
+        assert!(written.contains("ctrl-{"), "{written}");
+        let renamed = |before: &str, now: &str| {
+            let parse = |key| Keystroke::parse_with_os(key, OperatingSystem::Mac).unwrap();
+            renamed_names(&[(parse(before), parse(now))])
+        };
+        let mut user = UserKeys::parse(&written);
+        assert_eq!(
+            user.command_with("ctrl-shift-["),
+            Some(Command::PreviousPane)
+        );
+        user.set_renamed(renamed("ctrl-{", "ctrl-shift-["));
+        assert_eq!(user.command_with("ctrl-shift-["), Some(Command::NewNote));
+        assert_eq!(user.command_with("ctrl-{"), Some(Command::NewNote));
+        assert!(user.heard_keys(Command::NewNote).contains(&"ctrl-shift-["));
+        assert!(
+            user.bindings()
+                .iter()
+                .rev()
+                .find(|&&(key, _)| key == "ctrl-shift-[")
+                .is_some_and(|&(_, command)| command == Command::NewNote)
+        );
+        assert_eq!(user.to_text(), written);
+        // Giving the key, by its name now, to another command takes it from the first.
+        user.set(Command::NewBoard, keys(&["ctrl-shift-["]))
+            .unwrap();
+        assert_eq!(user.command_with("ctrl-shift-["), Some(Command::NewBoard));
+        assert!(!user.keys(Command::NewNote).contains(&"ctrl-{"));
+        assert!(!user.keys(Command::PreviousPane).contains(&"ctrl-shift-["));
+        // On a layout that names nothing otherwise, the key runs as it did.
+        let mut user = UserKeys::parse(&written);
+        user.set_renamed(Vec::new());
+        assert_eq!(
+            user.command_with("ctrl-shift-["),
+            Some(Command::PreviousPane)
+        );
     }
 }
