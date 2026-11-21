@@ -60,7 +60,7 @@ From that squash until the release's branch is cut at its version commit, main t
 
    A quarantined line that is a bug a user can meet goes in the notes' Known gaps, and a check's own flake doesn't. The release run's summary lists both.
 
-   A lightweight tag fails the run, since the notes come from the message. Running the workflow by hand before the tag exists tries the release: it builds everything, its notes say it isn't for publishing, and it makes no release.
+   A lightweight tag fails the run, since the notes come from the message. Running the workflow by hand before the tag exists tries the release: it builds everything, its notes say it isn't for publishing, and it makes no release, uploads no crash reports' symbols and stages nothing in the Flatpak repository's bucket.
 6. **Check the draft release's files, then publish it.**
 7. **Open a pull request** to [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs) with the manifests in the run's `winget` artifact.
 
