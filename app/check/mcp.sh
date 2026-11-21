@@ -87,7 +87,9 @@ forget_login
 trap 'cleanup; forget_login' EXIT
 agents_file="$(dirname "$saved")/Agents"
 token=$(python3 -I -c 'import secrets; print(secrets.token_hex(32))')
-printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}]}' "$token" > "$agents_file"
+# With a hook of the user's, which runs when a tab is handed to them (#3668).
+printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}],"hooks":[{"event":"handed_to_you","command":"exit 0"}]}' \
+  "$token" > "$agents_file"
 chmod 600 "$agents_file"
 # An extension of the check's own, whose content script puts a frame of its page in the frames
 # page, as a password manager puts its own in pages. The frame tells the page it's there. In the
@@ -2571,6 +2573,9 @@ addEventListener("beforeunload", event => { if (dirty) event.preventDefault() })
   request hand_off "{\"tab\":$opened_tab,\"reason\":\"Sign in for the check\"}" >&4
   await_log "^browser: agent mcp-client hands off $opened_tab: Sign in for the check\$" \
     "hand_off didn't hand the tab to the user"
+  # The user's hook on a tab handed to them runs, off the UI thread, and ends (#3668).
+  await_log '^browser: hook handed_to_you ran$' \
+    "the user's hook on a tab handed to them didn't run: $(grep '^browser: hook ' "$log" | tail -1)"
   await_more '^browser: agent question [0-9]* at ' "$cards" || fail "the handoff wasn't drawn"
   q=$(grep '^browser: agent question [0-9]* at ' "$log" | tail -1 | cut -d' ' -f4)
   read -r qx qy qw qh <<CARD
@@ -2931,6 +2936,20 @@ CARD
   settings_drew Agents
   drawn "revoke bank.localhost" > /dev/null || fail "Settings › Agents didn't list the bank's permission to revoke"
   ../tools/window-screenshot.sh "$pid" "$out/settings-agents-revoke.png" || fail "no window to capture"
+  # Hooks lists the user's hook with its last run and its Remove (#3668). Add Hook… opens a row whose
+  # field takes the keyboard, and Return there adds a hook, run when a task ends, which its Remove
+  # takes away again.
+  in_sight "remove hook 0" || fail "Settings › Agents didn't list the saved hook"
+  ../tools/window-screenshot.sh "$pid" "$out/settings-agents-hooks.png" || fail "no window to capture"
+  click_in_sight "add hook"
+  expect '^browser: field Hook command has the keyboard$' \
+    "Add Hook… didn't give the hook's field the keyboard in a frame drawn"
+  send insert "exit 0"
+  ../tools/window-screenshot.sh "$pid" "$out/settings-agents-hook-adding.png" || fail "no window to capture"
+  send key return
+  expect '^browser: hook added task_ended$' "Return in the hook's field didn't add a hook"
+  click_in_sight "remove hook 1"
+  expect '^browser: hook removed task_ended$' "Remove didn't take the hook added away"
   send key w cmd
   expect '^browser: settings hidden$' "⌘W didn't hide Settings"
   # Another bank's site asks, as the answer was for bank.localhost alone.

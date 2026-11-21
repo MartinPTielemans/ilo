@@ -2360,6 +2360,102 @@ fn a_checks_waits_stand_in_for_the_specs_outside_prod() {
     );
 }
 
+/// The user's hooks (#3668) run on their event, a handoff's here, and on no other. One still
+/// running skips its event and counts it. They're saved with the agents' settings and come back,
+/// and no agent's tools name them.
+#[gpui::test]
+fn a_hook_runs_on_its_event_alone(cx: &mut TestAppContext) {
+    let dir = std::env::temp_dir().join(format!("agents-test-{}", random_token()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Agents");
+    let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+    let agents = agents(&browser, &configs, Some(path.clone()), cx);
+    agents.update(cx, |agents, cx| agents.connect(Client::ClaudeCode, cx));
+    cx.run_until_parked();
+    agents.update(cx, |agents, cx| {
+        agents.add_hook(hooks::Event::HandedToYou, "exit 0", cx);
+        agents.add_hook(hooks::Event::Asked, "exit 0", cx);
+        agents.add_hook(hooks::Event::TaskEnded, "  ", cx);
+    });
+    let ran = |agents: &Entity<Agents>, cx: &mut TestAppContext| {
+        agents.read_with(cx, |agents, _| {
+            (agents.hooks().iter())
+                .map(|hook| {
+                    (
+                        hook.event,
+                        hook.running,
+                        hook.last.as_ref().map(|last| last.skipped),
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+    };
+    assert_eq!(
+        ran(&agents, cx),
+        [
+            (hooks::Event::HandedToYou, false, None),
+            (hooks::Event::Asked, false, None)
+        ],
+        "an empty command was added"
+    );
+
+    let reason = json!({ "tab": 20, "reason": "Sign in to example.com" });
+    let _handed = call(&agents, "claude-code", "hand_off", reason, cx);
+    assert_eq!(
+        ran(&agents, cx),
+        [
+            (hooks::Event::HandedToYou, true, Some(0)),
+            (hooks::Event::Asked, false, None)
+        ]
+    );
+    agents.update(cx, |agents, cx| {
+        agents.fire_hooks(hooks::Event::HandedToYou, "claude-code", None, cx)
+    });
+    assert_eq!(
+        ran(&agents, cx)[0],
+        (hooks::Event::HandedToYou, true, Some(1))
+    );
+    // It ends on its own, and says it ran.
+    cx.run_until_parked();
+    assert_eq!(
+        ran(&agents, cx)[0],
+        (hooks::Event::HandedToYou, false, Some(1))
+    );
+    let failed = agents.read_with(cx, |agents, _| {
+        agents.hooks()[0].last.clone().unwrap().failed
+    });
+    assert_eq!(failed, None);
+
+    let later = self::agents(&browser, &configs, None, cx);
+    later.update(cx, |agents, cx| {
+        agents.load(&std::fs::read_to_string(&path).unwrap(), cx)
+    });
+    let kept = later.read_with(cx, |agents, _| {
+        (agents.hooks().iter())
+            .map(|hook| (hook.event, hook.command.clone(), hook.last.clone()))
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        kept,
+        [
+            (hooks::Event::HandedToYou, "exit 0".to_string(), None),
+            (hooks::Event::Asked, "exit 0".to_string(), None)
+        ]
+    );
+    let id = later.read_with(cx, |agents, _| agents.hooks()[0].id);
+    later.update(cx, |agents, cx| agents.remove_hook(id, cx));
+    assert_eq!(later.read_with(cx, |agents, _| agents.hooks().len()), 1);
+    std::fs::remove_dir_all(dir).ok();
+
+    for agent in ["claude-code", "codex", "task-1"] {
+        let names = tools::names(agent);
+        assert!(
+            !names.iter().any(|name| name.contains("hook")),
+            "{agent}: {names:?}"
+        );
+    }
+}
+
 /// A handoff not handed back in 15 minutes answers the agent's call, so it isn't left waiting.
 /// The tab stays the user's, and Hand Back still gives it back.
 #[gpui::test]
