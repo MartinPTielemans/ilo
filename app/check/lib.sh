@@ -687,9 +687,15 @@ drawn_after() {
 # <bottom>"). One drawn past them, as a section with more rows than the window's height puts at its
 # foot, is under the card's edge, where a press lands on nothing, so the card scrolls it into
 # sight first, from its middle, and at is where the frame after that draws it (#1950). Returns 1
-# if it never drew it.
+# if it never drew it. With $2, the place is one drawn after the last line matching it, as
+# drawn_after's: after a show, a place from before it is where an earlier show left the card
+# scrolled, and the scroll from there goes the wrong distance (#3841).
 in_sight() {
-  at=$(drawn "$1") || return 1
+  if [ -n "${2:-}" ]; then
+    at=$(drawn_after "$1" "$2") || return 1
+  else
+    at=$(drawn "$1") || return 1
+  fi
   sight=$(grep '^browser: settings card shows ' "$log" | tail -1 | cut -d' ' -f5-)
   [ -n "$sight" ] || return 0
   top=${sight%% to *}
