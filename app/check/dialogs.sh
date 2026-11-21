@@ -15,7 +15,8 @@
 # ilo's, the link target and the hover card show under it, and the link target over ilo's window
 # again once it's gone (#1419). An alert that comes while another app has the foreground goes over
 # ilo's window but under the other app's, its taskbar button asking for attention, and has the
-# keyboard once ilo's window comes to the front (#1365). Alt+F4 in a page's dialog cancels it as Esc
+# keyboard once ilo's window comes to the front (#1365). Back from another app in front, with the
+# Library's search beside the page that has the keyboard, an alert shows at once (#3758). Alt+F4 in a page's dialog cancels it as Esc
 # does, and the next question asks again (#1362). On Windows and the Mac, with a second
 # window beside the first and the first in front, the pointer resting on a row of the second
 # shows its card over the second, and on a row of the first over the first (#1432).
@@ -670,6 +671,56 @@ if windows; then
   answer return accept "alerted later"
 fi
 
+# On Windows, the page the user clicked into keeps the keyboard through another app in front, with
+# the Library's search beside it still showing its cursor: once ilo is back, the page's alert shows
+# at once, where it waited for the field until a click in the page (#3758).
+came_back=
+if windows && [ "$background_dialog" = "the foreground away" ]; then
+  send key l cmd shift
+  expect '^browser: command view-library via ' "Ctrl+Shift+L didn't open the Library"
+  expect '^browser: library shown$' "Ctrl+Shift+L didn't show the Library"
+  send click $page_point
+  [ "$focus" = RenderWidgetHostViewCocoa ] ||
+    fail "a click on the page beside the Library didn't give it the keyboard: $focus"
+  rm -f "$out/site/held.go" "$out/front"
+  send key l
+  expect "^browser: title $page waiting\$" "\"l\" in the page didn't start waiting for /held"
+  served "127.0.0.1:$port/held" "the page didn't ask for /held"
+  python3 -I -u check/app-windows.py cover "$(cat "/proc/$pid/winpid")" away "$out/front" \
+    > "$out/cover-came-back.log" 2>&1 &
+  helper=$!
+  for _ in $(seq 100); do
+    grep -q '^cover ' "$out/cover-came-back.log" || ! kill -0 "$helper" 2>/dev/null && break
+    sleep 0.1
+  done
+  grep -q '^cover .*, foreground away$' "$out/cover-came-back.log" ||
+    fail "another app didn't come in front of ilo's window with the foreground: $(cat "$out/cover-came-back.log")"
+  touch "$out/front"
+  for _ in $(seq 50); do
+    send state
+    [ "$active" = 1 ] && break
+    sleep 0.1
+  done
+  [ "$active" = 1 ] || fail "ilo's window didn't come back to the front"
+  [ "$focus" = RenderWidgetHostViewCocoa ] ||
+    fail "the page didn't have the keyboard again with ilo back: $focus"
+  winpid=$(cat "/proc/$helper/winpid" 2>/dev/null) && taskkill //F //PID "$winpid" > /dev/null 2>&1 ||
+    true
+  helper=
+  touch "$out/site/held.go"
+  expect "^browser: page $page dialog Alert .* says\$" "the page didn't alert once /held came"
+  expect '^browser: dialog shown .* says$' \
+    "the page's alert waited for the Library's search, which the page had the keyboard from: $(grep "^browser: page $page dialog [0-9]* waits" "$log" | tail -1)"
+  none_since "^browser: page $page dialog [0-9]* waits for the field\$" ||
+    fail "the page's alert waited for the Library's search, which the page had the keyboard from"
+  expect '^browser: dialog settled$' "the alert didn't settle with ilo back"
+  answer return accept "alerted later"
+  send key l cmd shift
+  expect '^browser: library hidden$' "Ctrl+Shift+L didn't close the Library"
+  send click $page_point
+  came_back=1
+fi
+
 # On Windows Alt+F4 in a page's dialog cancels it as Esc does, where Windows destroyed the dialog's
 # window, which the app shows again for the next question (#1362).
 closed_dialog=
@@ -947,6 +998,8 @@ echo "  tab is let go by the idle check after 2 hours unseen, and ilo goes on (#
   "window ($background_dialog) went under that app's window and over ilo's, and took the keyboard" \
   "as ilo's window came to the front, with no caption of Windows' behind the window buttons there" \
   "or in the launch picture: $out/dialog-background.png $out/dialog-launch-picture.png"
+[ -z "$came_back" ] || echo "  With the Library's search beside the page that had the keyboard," \
+  "an alert that came once ilo was back from another app in front showed at once."
 [ -z "$closed_dialog" ] || echo "  Alt+F4 in a page's dialog cancels it as Esc does, and the" \
   "dialog asks again, with no caption of Windows' behind the window buttons:" \
   "$out/dialog-after-close.png"
