@@ -135,7 +135,7 @@ enum Block {
 struct Row {
     name: SharedString,
     line: Option<SharedString>,
-    /// The keys its chip shows, a shortcut's.
+    /// The keys its chips show, a shortcut's, a line each.
     keys: Option<String>,
     /// A feature's own setting, under it in its group with its text where the feature's name is.
     nested: bool,
@@ -482,8 +482,8 @@ pub struct Settings {
     renaming: Option<Renaming>,
     /// Whether the field takes the keyboard once its row is drawn.
     focus_renaming: bool,
-    /// The command whose next key Shortcuts takes.
-    recording: Option<Command>,
+    /// The command whose next key Shortcuts takes, and which of its chips the key goes in.
+    recording: Option<(Command, usize)>,
     /// Why the key pressed for this command wasn't given to it.
     refused: Option<(Command, SharedString)>,
     /// The search at the column's top, whose rows found replace the section's page while it
@@ -4757,16 +4757,29 @@ impl Settings {
     ) -> AnyElement {
         let look = &self.look;
         let user = shell::user_keys(cx);
-        if !shell::rebindable(command) {
-            let keys = user.label(command).unwrap_or_default();
-            return self.chip(keys.into(), Chip::Fixed).into_any_element();
-        }
-        let recording = self.recording == Some(command);
-        let (keys, kind) = match user.label(command) {
-            _ if recording => ("Type Keys".into(), Chip::Keys),
-            Some(keys) => (keys.into(), Chip::Keys),
-            None => ("None".into(), Chip::None),
+        let shown = user.shown_keys(command);
+        // Chrome's Alt keys that follow a key off the Mac, as Alt+Left does ⌘←, which only change
+        // with it.
+        let twins = |chip: usize| {
+            let key = shown.get(chip).and_then(|keys| keys.first());
+            (key.map(|key| shell::chrome_twins(key))
+                .unwrap_or_default()
+                .into_iter())
+            .map(|twin| self.chip(shell::pressed_label(twin).into(), Chip::Fixed))
+            .map(IntoElement::into_any_element)
         };
+        if !shell::rebindable(command) {
+            let chips = (0..shown.len()).flat_map(|chip| {
+                let keys = shell::keystroke_label(shown[chip][0]).into();
+                std::iter::once(self.chip(keys, Chip::Fixed).into_any_element()).chain(twins(chip))
+            });
+            return div()
+                .flex()
+                .items_center()
+                .gap(px(CHIP_GAP))
+                .children(chips.collect::<Vec<_>>())
+                .into_any_element();
+        }
         let said = |text: SharedString| div().text_color(look.detail).child(text);
         let refused = (self.refused.as_ref())
             .filter(|(refused, _)| *refused == command)
@@ -4781,22 +4794,42 @@ impl Settings {
                 .child(self.drawn(format!("restore {}", command.key_name())))
                 .on_click(cx.listener(move |settings, _, _, cx| settings.restore(command, cx)))
         });
-        let id = SharedString::from(command.key_name());
-        let chip = stop_chip(look, self.base(), id, name, keys, kind, self.a11y)
-            .when(recording, |chip| {
-                chip.text_color(accent).border_1().border_color(accent)
-            })
-            .on_click(cx.listener(move |settings, _, window, cx| {
-                settings.start_recording(command, window, cx)
-            }))
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(move |settings, event: &MouseDownEvent, window, cx| {
-                    settings.choose_preference(command, event.position, window, cx)
-                }),
-            )
-            .relative()
-            .child(self.drawn(format!("shortcut {}", command.key_name())));
+        // A chip each key, None when there's none, each recording only its own key. The first's
+        // names are the command's, as check.sh clicks them.
+        let chips = (0..shown.len().max(1)).flat_map(|chip| {
+            let recording = self.recording == Some((command, chip));
+            let (keys, kind) = match shown.get(chip) {
+                _ if recording => ("Type Keys".into(), Chip::Keys),
+                Some(keys) => (shell::keystroke_label(keys[0]).into(), Chip::Keys),
+                None => ("None".into(), Chip::None),
+            };
+            let (id, drawn) = match chip {
+                0 => (
+                    command.key_name().to_string(),
+                    command.key_name().to_string(),
+                ),
+                _ => (
+                    format!("{}-{}", command.key_name(), chip + 1),
+                    format!("{} {}", command.key_name(), chip + 1),
+                ),
+            };
+            let shown = stop_chip(look, self.base(), id, name, keys, kind, self.a11y)
+                .when(recording, |chip| {
+                    chip.text_color(accent).border_1().border_color(accent)
+                })
+                .on_click(cx.listener(move |settings, _, window, cx| {
+                    settings.start_recording(command, chip, window, cx)
+                }))
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |settings, event: &MouseDownEvent, window, cx| {
+                        settings.choose_preference(command, event.position, window, cx)
+                    }),
+                )
+                .relative()
+                .child(self.drawn(format!("shortcut {drawn}")));
+            std::iter::once(shown.into_any_element()).chain(twins(chip))
+        });
         div()
             .flex()
             .items_center()
@@ -4804,7 +4837,7 @@ impl Settings {
             .children(refused)
             .children(preferred)
             .children(restore)
-            .child(chip)
+            .children(chips.collect::<Vec<_>>())
             .into_any_element()
     }
 
@@ -5013,25 +5046,33 @@ impl Settings {
         );
     }
 
-    /// Takes the next keys pressed for `command`, or stops if it's taking them already.
-    fn start_recording(&mut self, command: Command, window: &mut Window, cx: &mut Context<Self>) {
+    /// Takes the next keys pressed for `command`'s `chip`th chip, or stops if it's taking them
+    /// already.
+    fn start_recording(
+        &mut self,
+        command: Command,
+        chip: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.refused = None;
-        self.recording = match self.recording == Some(command) {
+        self.recording = match self.recording == Some((command, chip)) {
             true => None,
             false => {
                 // check.sh waits for this line.
                 log!("browser: shortcut recording {}", command.key_name());
-                Some(command)
+                Some((command, chip))
             }
         };
         window.focus(&self.focus, cx);
         cx.notify();
     }
 
-    /// Gives the command being recorded `keystroke`, unless it's escape, which leaves its keys,
-    /// or ⌫, which takes them away. Keys that can't be its stay recording, saying why.
+    /// Gives the command being recorded `keystroke` in place of the chip's key, unless it's
+    /// escape, which leaves it, or ⌫, which takes it away. Keys that can't be its stay
+    /// recording, saying why.
     fn record(&mut self, keystroke: &Keystroke, cx: &mut Context<Self>) {
-        let Some(command) = self.recording else {
+        let Some((command, chip)) = self.recording else {
             return;
         };
         cx.stop_propagation();
@@ -5046,7 +5087,8 @@ impl Settings {
             "backspace" if plain => Ok(Vec::new()),
             _ => shell::recorded(keystroke),
         };
-        let set = keys.and_then(|keys| shell::change_keys(cx, |user| user.set(command, keys)));
+        let set =
+            keys.and_then(|keys| shell::change_keys(cx, |user| user.set_key(command, chip, keys)));
         match set {
             Ok(_) => {
                 self.recording = None;
@@ -5663,10 +5705,18 @@ fn command_name(command: Command) -> &'static str {
         .unwrap_or("another command")
 }
 
-/// The keys a Shortcuts row's chip shows, which the search finds it by.
+/// The keys a Shortcuts row's chips show, a line each, which the search finds it by.
 fn keys_label(keys: &Keys, cx: &App) -> Option<String> {
     match keys {
-        Keys::Of(command) => shell::user_keys(cx).label(*command),
+        Keys::Of(command) => {
+            let shown = shell::user_keys(cx).shown_keys(*command);
+            let labels = shown.iter().flat_map(|chip| {
+                let twins = shell::chrome_twins(chip[0]).into_iter();
+                std::iter::once(shell::keystroke_label(chip[0]))
+                    .chain(twins.map(shell::pressed_label))
+            });
+            Some(labels.collect::<Vec<_>>().join("\n")).filter(|labels| !labels.is_empty())
+        }
         Keys::FavoritesNumbered | Keys::LastTabNinth => None,
         _ => keys.fixed(),
     }

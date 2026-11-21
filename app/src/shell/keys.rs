@@ -232,6 +232,40 @@ fn without_shift(key: &str) -> Option<String> {
     })
 }
 
+/// Whether `a` and `b` are one press written two ways: with and without its shift, as recording
+/// gives ⌃⇧@ and ⌃@, or as its key and what shift makes of it on a US keyboard, as SHORTCUTS gives
+/// FocusPane ⌃⇧2 and ⌃⇧@, since GPUI may name either.
+fn one_press(a: &str, b: &str) -> bool {
+    const SHIFTED: [(&str, &str); 21] = [
+        ("1", "!"),
+        ("2", "@"),
+        ("3", "#"),
+        ("4", "$"),
+        ("5", "%"),
+        ("6", "^"),
+        ("7", "&"),
+        ("8", "*"),
+        ("9", "("),
+        ("0", ")"),
+        ("-", "_"),
+        ("=", "+"),
+        ("[", "{"),
+        ("]", "}"),
+        ("\\", "|"),
+        (";", ":"),
+        ("'", "\""),
+        ("`", "~"),
+        (",", "<"),
+        (".", ">"),
+        ("/", "?"),
+    ];
+    let ((held_a, key_a), (held_b, key_b)) = (held(a), held(b));
+    let shifted = (SHIFTED.iter()).any(|&pair| pair == (key_a, key_b) || pair == (key_b, key_a));
+    without_shift(a).as_deref() == Some(b)
+        || without_shift(b).as_deref() == Some(a)
+        || (held_a == held_b && held_a[2] && shifted)
+}
+
 /// Off the Mac, as on Linux and Windows, the keys SHORTCUTS writes the Mac's way are pressed with
 /// Ctrl for ⌘ and Alt for ⌃ (docs/ux-spec.md › Keyboard). The tests run the Mac's keys everywhere.
 pub const OFF_THE_MAC: bool = cfg!(not(any(target_os = "macos", test)));
@@ -247,6 +281,20 @@ const CHROME_ALT_KEYS: &[(&str, Option<&str>)] = &[
     ("alt-e", None),
     ("alt-f", None),
 ];
+
+/// Chrome's Alt keys, as this platform presses them, that run what `key`, as SHORTCUTS writes
+/// it, runs, as Alt+Left does Back's ⌘← off the Mac. They follow `key`, so Settings › Shortcuts
+/// shows them beside it and can't change them apart from it.
+pub fn chrome_twins(key: &str) -> Vec<&'static str> {
+    chrome_twins_on(key, OFF_THE_MAC)
+}
+
+fn chrome_twins_on(key: &str, off_the_mac: bool) -> Vec<&'static str> {
+    (CHROME_ALT_KEYS.iter())
+        .filter(|&&(_, ours)| off_the_mac && ours == Some(key))
+        .map(|&(chrome, _)| chrome)
+        .collect()
+}
 
 /// `key`, as SHORTCUTS writes it, as this platform's keyboard presses it: none, one way or more.
 pub(super) fn pressed_as(key: &str) -> Vec<String> {
@@ -562,6 +610,71 @@ impl UserKeys {
         self.renamed = renamed;
     }
 
+    /// The keys that run `command` here, as Settings › Shortcuts shows them, a chip each, the one
+    /// menus show first first (#3328). The ways one press is written (one_press) share a chip.
+    pub fn shown_keys(&self, command: Command) -> Vec<Vec<&str>> {
+        let keys: Vec<&str> = (self.keys(command).into_iter())
+            .filter(|key| applies(key, OFF_THE_MAC))
+            .collect();
+        // Each key's chip, named by its first key, joined through any key between them, as ⇧⌘+
+        // joins ⌘+ and ⇧⌘=.
+        let mut chip: Vec<usize> = (0..keys.len()).collect();
+        for key in 0..keys.len() {
+            for before in 0..key {
+                if one_press(keys[before], keys[key]) {
+                    let (from, to) = (chip[key].max(chip[before]), chip[key].min(chip[before]));
+                    chip.iter_mut()
+                        .filter(|each| **each == from)
+                        .for_each(|each| *each = to);
+                }
+            }
+        }
+        let mut shown: Vec<Vec<&str>> = Vec::new();
+        let mut firsts: Vec<usize> = Vec::new();
+        for (key, first) in keys.into_iter().zip(chip) {
+            match firsts.iter().position(|&each| each == first) {
+                Some(at) => shown[at].push(key),
+                None => {
+                    firsts.push(first);
+                    shown.push(vec![key]);
+                }
+            }
+        }
+        shown
+    }
+
+    /// Gives `command` `keys` in place of those its `chip`th chip shows (shown_keys), or after its
+    /// last if it has no such chip, keeping its others, those another platform presses too, so
+    /// recording one of a command's keys leaves the rest. No keys takes that chip's away. Refused
+    /// and taken as set does.
+    pub fn set_key(
+        &mut self,
+        command: Command,
+        chip: usize,
+        keys: Vec<String>,
+    ) -> Result<Vec<Command>, Refused> {
+        let replaced: Vec<String> = (self.shown_keys(command).get(chip).into_iter().flatten())
+            .map(|key| key.to_string())
+            .collect();
+        let mut all: Vec<String> = Vec::new();
+        let mut keys = Some(keys);
+        for key in self.keys(command) {
+            match replaced.iter().any(|each| each == key) {
+                true => all.extend(keys.take().unwrap_or_default()),
+                false => all.push(key.to_string()),
+            }
+        }
+        all.extend(keys.unwrap_or_default());
+        let mut given = Vec::new();
+        all.retain(|key| {
+            !given.contains(key) && {
+                given.push(key.clone());
+                true
+            }
+        });
+        self.set(command, all)
+    }
+
     /// How a menu shows the first key that runs `command`, if one does.
     pub fn label(&self, command: Command) -> Option<String> {
         self.keys(command).first().map(|&key| keystroke_label(key))
@@ -842,8 +955,9 @@ pub(super) fn key_bindings(cx: &App) -> Vec<KeyBinding> {
 }
 
 /// Whether the Shortcuts tab's search for `typed` finds the row for `name`, whose keys a menu
-/// shows as `keys`: every word typed starts a word of its name, or what's typed names its keys, as
-/// "cmd d", "shift cmd a" or ⌘D, which finds them among others held with the same key (Arc).
+/// shows as `keys`, a line each: every word typed starts a word of its name, or what's typed names
+/// one of its keys, as "cmd d", "shift cmd a" or ⌘D, which finds them among others held with the
+/// same key (Arc).
 pub fn shortcut_found(typed: &str, name: &str, keys: Option<&str>) -> bool {
     let name = name.to_lowercase();
     let starts_a_word = |typed: &str| name.split([' ', '/']).any(|word| word.starts_with(typed));
@@ -856,10 +970,13 @@ pub fn shortcut_found(typed: &str, name: &str, keys: Option<&str>) -> bool {
     let Some((held, key)) = keys_named_in(typed).filter(|&(held, _)| held != 0) else {
         return false;
     };
-    let Some((row_held, row_key)) = keys.and_then(keys_named_in) else {
-        return false;
-    };
-    held & row_held == held && key.is_none_or(|key| Some(key) == row_key)
+    (keys
+        .into_iter()
+        .flat_map(str::lines)
+        .filter_map(keys_named_in))
+    .any(|(row_held, row_key)| {
+        held & row_held == held && key.as_ref().is_none_or(|key| row_key.as_ref() == Some(key))
+    })
 }
 
 /// The modifiers `text` names, a bit each, and the one other key it names, if any, from words such
@@ -1044,6 +1161,12 @@ mod tests {
         assert!(found("alt ←", "Alt+Left Arrow"));
         assert!(!found("alt right", "Alt+Left Arrow"));
         assert!(!found("ctrl page up", "Ctrl+Page Down"));
+        // A row with more than one key is found by any of them (#3328).
+        let back = "Ctrl+[\nCtrl+Left Arrow\nAlt+Left Arrow";
+        assert!(found("ctrl left", back));
+        assert!(found("alt left", back));
+        assert!(found("ctrl [", back));
+        assert!(!found("ctrl right", back));
     }
 
     /// A window of the UI with the keyboard, as the shell's root has it.
@@ -1482,6 +1605,116 @@ mod tests {
         assert_eq!(user.set(Command::EditUrl, vec![]), Ok(vec![]));
         assert_eq!(user.command_for("cmd-k", false), None);
         assert_eq!(user.label(Command::EditUrl), None);
+    }
+
+    /// Settings › Shortcuts shows each of a command's keys, so Back's ⌘← is seen beside ⌘[, and
+    /// recording one of them, or taking it away, leaves the others (#3328).
+    #[test]
+    fn each_of_a_commands_keys_is_shown_and_changed_alone() {
+        let mut user = UserKeys::default();
+        assert_eq!(user.shown_keys(Command::Back), [["cmd-["], ["cmd-left"]]);
+        assert_eq!(user.command_for("ctrl-cmd-j", false), None);
+        assert_eq!(
+            user.set_key(Command::Back, 0, keys(&["ctrl-cmd-j"])),
+            Ok(vec![])
+        );
+        assert_eq!(
+            user.shown_keys(Command::Back),
+            [["ctrl-cmd-j"], ["cmd-left"]]
+        );
+        assert_eq!(user.command_for("cmd-left", false), Some(Command::Back));
+        assert_eq!(user.command_for("cmd-[", false), None);
+        assert_eq!(user.set_key(Command::Back, 1, vec![]), Ok(vec![]));
+        assert_eq!(user.shown_keys(Command::Back), [["ctrl-cmd-j"]]);
+        assert_eq!(user.command_for("cmd-left", false), None);
+        // A command with no keys takes the one recorded on its None chip.
+        user.set(Command::EditUrl, vec![]).unwrap();
+        assert!(user.shown_keys(Command::EditUrl).is_empty());
+        assert_eq!(
+            user.set_key(Command::EditUrl, 0, keys(&["cmd-k"])),
+            Ok(vec![])
+        );
+        assert_eq!(user.shown_keys(Command::EditUrl), [["cmd-k"]]);
+        // A key another command had is taken from it, as set takes it.
+        assert_eq!(
+            user.set_key(Command::Back, 1, keys(&["cmd-k"])),
+            Ok(vec![Command::EditUrl])
+        );
+        assert_eq!(user.shown_keys(Command::Back), [["ctrl-cmd-j"], ["cmd-k"]]);
+        assert!(user.shown_keys(Command::EditUrl).is_empty());
+    }
+
+    /// A key taken off one chip comes back with the row's ↺ or the page's Restore Defaults, which
+    /// give the command its default keys, all its chips again (#3328).
+    #[test]
+    fn a_removed_key_comes_back_with_the_commands_defaults() {
+        let mut user = UserKeys::default();
+        assert!(!user.changed(Command::Back));
+        assert_eq!(user.set_key(Command::Back, 1, vec![]), Ok(vec![]));
+        assert_eq!(user.shown_keys(Command::Back), [["cmd-["]]);
+        // The row shows ↺ once its keys aren't the defaults.
+        assert!(user.changed(Command::Back));
+        assert_eq!(user.reset(Command::Back), Ok(vec![]));
+        assert_eq!(user.shown_keys(Command::Back), [["cmd-["], ["cmd-left"]]);
+        assert!(!user.changed(Command::Back));
+        user.set_key(Command::Back, 1, vec![]).unwrap();
+        user.reset_all();
+        assert_eq!(user.shown_keys(Command::Back), [["cmd-["], ["cmd-left"]]);
+    }
+
+    /// The two ways one press is written, recorded with and without its shift, are one chip, and
+    /// a new key in its place replaces both.
+    #[test]
+    fn one_press_written_two_ways_is_one_chip() {
+        let mut user = UserKeys::default();
+        assert_eq!(user.command_for("ctrl-alt-#", false), None);
+        let pair = keys(&["ctrl-alt-shift-#", "ctrl-alt-#"]);
+        assert_eq!(user.set(Command::EditUrl, pair), Ok(vec![]));
+        assert_eq!(
+            user.shown_keys(Command::EditUrl),
+            [["ctrl-alt-shift-#", "ctrl-alt-#"]]
+        );
+        assert_eq!(
+            user.set_key(Command::EditUrl, 0, keys(&["cmd-k"])),
+            Ok(vec![])
+        );
+        assert_eq!(user.shown_keys(Command::EditUrl), [["cmd-k"]]);
+        // SHORTCUTS writes a split view's keys by their digit and what shift makes of it.
+        assert_eq!(
+            user.shown_keys(Command::FocusPane(1)),
+            [["ctrl-shift-2", "ctrl-shift-@"]]
+        );
+        assert_eq!(
+            user.shown_keys(Command::NextPane),
+            [["ctrl-shift-]", "ctrl-shift-}"]]
+        );
+        assert_eq!(
+            user.shown_keys(Command::ZoomIn),
+            [vec!["cmd-+", "shift-cmd-=", "shift-cmd-+"], vec!["cmd-="]]
+        );
+        assert_eq!(
+            user.shown_keys(Command::CloseSplitPane),
+            [["ctrl-shift--", "ctrl-shift-_"]]
+        );
+        assert!(
+            !one_press("cmd-2", "cmd-@"),
+            "a digit's symbol needs its shift"
+        );
+        assert!(!one_press("ctrl-shift-2", "shift-cmd-@"));
+    }
+
+    /// Off the Mac, Chrome's Alt+Left and Alt+Right follow Back's and Forward's ⌘← and ⌘→, and
+    /// ⌘[ has none. On the Mac, no key has one.
+    #[test]
+    fn chromes_alt_keys_follow_ours_off_the_mac() {
+        assert_eq!(chrome_twins_on("cmd-left", true), ["alt-left"]);
+        assert_eq!(chrome_twins_on("cmd-right", true), ["alt-right"]);
+        assert!(chrome_twins_on("cmd-[", true).is_empty());
+        assert!(chrome_twins_on("cmd-left", false).is_empty());
+        assert_eq!(
+            super::super::commands::pressed_label_on("alt-left", true),
+            "Alt+Left Arrow"
+        );
     }
 
     /// A tooltip shows a chip for each key of the shortcut a menu shows first, in the menus'
