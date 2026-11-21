@@ -534,10 +534,9 @@ private struct Turned<Content: View>: View {
     // the top there is at the top upright, a line of the upright page at most from it.
     tab.webView.frame = CGRect(origin: .zero, size: Room.side)
     #expect(await eventually { await rests(tab, wide: Room.side.width, within: 2) })
-    // A finger on the page takes it from the turn, which holds its mark for a moment after.
+    // Nothing holds the page once the turn has put its text back: a page scrolled after it stays.
     _ = try await tab.webView.callAsyncJavaScript(
-      "dispatchEvent(new Event('touchstart')); scrollTo(0, document.getElementById('p60').getBoundingClientRect().top + scrollY)",
-      contentWorld: .defaultClient)
+      "scrollTo(0, document.getElementById('p60').getBoundingClientRect().top + scrollY)", contentWorld: .defaultClient)
     #expect(await eventually { await rests(tab, at: "p60", wide: Room.side.width, within: 1) })
     tab.webView.frame = CGRect(origin: .zero, size: Room.upright)
     #expect(await eventually { await rests(tab, at: "p60", wide: Room.upright.width, within: 30) })
