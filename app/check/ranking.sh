@@ -156,6 +156,47 @@ type_for() {
   ../tools/window-screenshot.sh "$pid" "$out/$3" || fail "no window to capture"
 }
 
+# Probe for #3830, never to land: twenty goes of ⌘T and 40 keys at a typing pace, 120 to 300 ms
+# apart, around the display link's 200 ms run-on. Each go waits for the bar to draw all 40; a go
+# it stops drawing in is counted, its frames lines kept, and the run fails at the end with them.
+probe_text=thequickbrownfoxjumpsoverthelazydogsxyzw
+probe_stuck=0
+probe_goes=""
+for go in $(seq 20); do
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T didn't open the command bar (go $go)"
+  go_from=$step
+  i=0
+  while [ "$i" -lt "${#probe_text}" ]; do
+    i=$((i + 1))
+    post type "$(printf '%s' "$probe_text" | cut -c"$i")"
+    case $((i % 4)) in
+    0) sleep 0.12 ;;
+    1) sleep 0.18 ;;
+    2) sleep 0.24 ;;
+    3) sleep 0.3 ;;
+    esac
+  done
+  drawn=no
+  for _ in $(seq 30); do
+    logged "^browser: command bar drew \"$probe_text\"\$" "$go_from" && drawn=yes && break
+    sleep 0.1
+  done
+  if [ "$drawn" = no ]; then
+    probe_stuck=$((probe_stuck + 1))
+    last=$(sed -n "/^browser: drive $go_from: /,\$p" "$log" | grep '^browser: command bar drew ' | tail -1)
+    probe_goes="$probe_goes go $go (last: $last);"
+    sed -n "/^browser: drive $go_from: /,\$p" "$log" |
+      grep -E '^browser: (frames|command bar drew|drive [0-9]+:)' > "$out/probe-3830-go-$go.log"
+  fi
+  send key escape
+  expect '^browser: command bar hidden$' "escape didn't close the command bar (go $go)"
+done
+echo "probe #3830: the bar stopped drawing in $probe_stuck of 20 goes:$probe_goes" >&2
+grep -E '^browser: frames .*(refused|failed)' "$log" | sort | uniq -c | sort -rn | head -20 >&2 || true
+[ "$probe_stuck" = 0 ] ||
+  fail "probe #3830: the bar stopped drawing in $probe_stuck of 20 goes:$probe_goes see probe-3830-go-*.log"
+
 # The page shown goes last: with Ranking one shown and Ranking two in history, "ranking" lists two
 # before one, and one at the end (Arc's derankCurrentItemURL).
 one="${site}ranking-one.html"
