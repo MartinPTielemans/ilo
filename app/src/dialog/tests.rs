@@ -725,16 +725,30 @@ impl Asking {
 #[gpui::test]
 fn a_pages_question_at_rest_leaves_the_keyboard_and_shortcuts(cx: &mut TestAppContext) {
     let mut dialog = Asking::resting(cx);
+    let waits = |dialog: &mut Asking| dialog.cx.cx.update(|cx| (asking(cx), awaits_answer(cx)));
     assert_eq!(dialog.calls(), ["show over 100 at rest"]);
-    assert!(!dialog.cx.cx.update(|cx| asking(cx)));
+    // The app's shortcuts wait for no question at rest: they're the page beside's.
+    assert_eq!(
+        waits(&mut dialog),
+        (false, false),
+        "at rest it held the keys"
+    );
     assert!(dialog.cx.cx.update(|cx| asks_page(cx)));
     // Its pane focused, it's live with the keyboard, and back at rest when the user leaves it.
     dialog.rest(false);
     assert_eq!(dialog.calls(), ["show over 100"]);
-    assert!(dialog.cx.cx.update(|cx| asking(cx)));
+    assert_eq!(
+        waits(&mut dialog),
+        (true, true),
+        "live, it didn't hold the keys"
+    );
     dialog.rest(true);
     assert_eq!(dialog.calls(), ["show over 100 at rest"]);
-    assert!(!dialog.cx.cx.update(|cx| asking(cx)));
+    assert_eq!(
+        waits(&mut dialog),
+        (false, false),
+        "back at rest it held the keys"
+    );
 }
 
 #[gpui::test]
