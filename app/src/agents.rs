@@ -1100,16 +1100,15 @@ impl Agents {
     }
 
     /// The `ilo` command's row: not added, or added in a folder the user's shell looks in or not.
+    /// On Windows, added in a folder no longer on the user's PATH is Add again (#3783).
     pub fn command_state(&self) -> cli::State {
-        match (self.is_connected(Client::Command), self.command_searched) {
-            (false, _) => cli::State::Off,
-            (true, true) => cli::State::On,
-            (true, false) => cli::State::Unsearched,
-        }
+        let added = self.is_connected(Client::Command);
+        cli::state(added, self.command_searched, cfg!(windows))
     }
 
     /// Asks the user's shell, in the background, whether it looks in the `ilo` command's folder,
-    /// as the row says, once it's added.
+    /// as the row says, once it's added: on Windows, whether Add's entry is still on the user's
+    /// PATH.
     fn look_for_command(&mut self, cx: &mut Context<Self>) {
         if !self.is_connected(Client::Command) {
             return;
@@ -1121,6 +1120,9 @@ impl Agents {
                 .await;
             agents
                 .update(cx, |agents, cx| {
+                    // check.sh reads this line.
+                    let found = if searched { "found" } else { "not found" };
+                    log!("browser: agent ilo-command looked: {found}");
                     if agents.command_searched != searched {
                         agents.command_searched = searched;
                         cx.notify();
