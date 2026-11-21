@@ -711,12 +711,12 @@ class WindowViews : public views::WidgetObserver,
     }
   }
 
-  // The app's scale, from its points to the window's pixels: the window's DPI, which GPUI draws
-  // at. The window's own, which Windows changes before WM_DPICHANGED, not its display's, which
-  // lagged as the window crossed to a display of another scale (#1823). Windows' Text size isn't
-  // in it, as it isn't in GPUI's (#3621).
+  // The app's scale, from its points to the window's pixels: the DPI GPUI draws at, the last
+  // WM_DPICHANGED's, or the window's before one, not its display's, which lagged as the window
+  // crossed to a display of another scale (#1823). Windows' Text size isn't in it, as it isn't in
+  // GPUI's (#3621).
   float UIScale() const {
-    const UINT dpi = GetDpiForWindow(window());
+    const UINT dpi = dpi_ ? dpi_ : GetDpiForWindow(window());
     return dpi ? dpi / static_cast<float>(USER_DEFAULT_SCREEN_DPI) : 1;
   }
 
@@ -981,6 +981,7 @@ class WindowViews : public views::WidgetObserver,
       }
       SizeChanged(w_param);
     } else if (message == WM_DPICHANGED) {
+      dpi_ = LOWORD(w_param);
       // The pages go again at the new scale once Chromium has taken it and the window's new rect,
       // as the window's size in DIPs may stay the same, which lays nothing out (#1823).
       base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
@@ -1034,6 +1035,8 @@ class WindowViews : public views::WidgetObserver,
   HWND pressed_ = nullptr;
   // Between going to the back and coming forward, while presses::Wait() counts it.
   bool in_back_ = false;
+  // The DPI the last WM_DPICHANGED carried, 0 before one comes (UIScale).
+  UINT dpi_ = 0;
   bool minimized_ = false;
   // The pages DrawUnseen holds.
   aura::WindowTracker unseen_;
@@ -1220,9 +1223,13 @@ void ScalePages(views::Widget*, double) {}
 gfx::PointF LaidOutPagePoint(gfx::NativeView page, const gfx::PointF& point) {
   // In the page's DIPs, which Windows' Text size makes fewer than the app's points (#3621).
   aura::WindowTreeHost* host = page ? page->GetHost() : nullptr;
-  const UINT dpi = host ? GetDpiForWindow(host->GetAcceleratedWidget()) : 0;
-  return dpi ? gfx::ScalePoint(point, host->device_scale_factor() * USER_DEFAULT_SCREEN_DPI / dpi)
-             : point;
+  const HWND root = host ? GetAncestor(host->GetAcceleratedWidget(), GA_ROOT) : nullptr;
+  for (const auto& each : AllWindowViews()) {
+    if (root && each.second->window() == root) {
+      return gfx::ScalePoint(point, host->device_scale_factor() / each.second->UIScale());
+    }
+  }
+  return point;
 }
 
 void HoldPagesForResize(views::Widget* widget) {
