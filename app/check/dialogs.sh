@@ -195,10 +195,12 @@ expect '^browser: dialog hidden$' "the alert that came back didn't leave once an
 # quiet and without the keyboard (#3461): the typing after reaches that page, Japanese input
 # composes there, and a resize keeps the keys there. A click on the resting card's body focuses
 # its pane and brings it live, answering nothing. ⌃⇧2 and ⌃⇧1 rest it and bring it back from the
-# keys, and a click on the resting OK answers it. split_rests runs it with the page beside at $1,
-# named $2 in its captures: here another site's, in a renderer process of its own, and further on,
-# with $3, the one the dialogs page opens itself, which shares its renderer process and so is
-# blocked while the alert asks: its keys wait until the alert is answered.
+# keys, ⌘T from the page beside opens the command bar and leaves it resting, and a click on the
+# resting OK answers it. Then ⌘W from the page beside, the alert asked again and resting, closes
+# that page alone. split_rests runs it with the page beside at $1, named $2 in its captures: here
+# another site's, in a renderer process of its own, and further on, with $3, the one the dialogs
+# page opens itself, which shares its renderer process and so is blocked while the alert asks: the
+# page gets none of its keys until then, but ilo's shortcuts work from it (#3770).
 printf '%s' '<title>beside</title>
 <input id=field style="position:fixed;inset:0;font-size:40px" oninput="document.title = `beside has ${field.value}`">
 <script>
@@ -226,21 +228,6 @@ in_pane() {
 confirm_since() {
   expect '^browser: dialog confirm at ' "the alert didn't say where it draws OK" "$1"
   grep '^browser: dialog confirm at ' "$log" | tail -1 | sed 's/.* at //'
-}
-# Brings the alert resting since command $1 live from the page beside: ⌃⇧1, or a click on its
-# card when that page shares the alert's renderer, which the alert stops, as Chromium drops the
-# keys of a stopped renderer's page before ilo's shortcuts (#3770).
-live_from_beside() {
-  way=⌃⇧1
-  if [ -z "$shared" ]; then
-    send key 1 ctrl shift
-    return
-  fi
-  way="a click on the resting alert's card"
-  confirm=$(confirm_since "$1")
-  pane=$(echo "$panes" | sed -n 1p)
-  pane_w=${pane##* }
-  send click $((${pane%%,*} + ${pane_w%%x*} / 2)) $((${confirm#* } - 50))
 }
 # Fails with $1 if the alert went from its pane since command $2.
 stayed() {
@@ -388,8 +375,6 @@ split_rests() {
   since "$body" | grep -q "^browser: page $page dialog answered" &&
     fail "a click on the resting alert's card answered it ($2)"
   # From the keys: ⌃⇧2 rests it, the page beside taking the keys, and ⌃⇧1 brings it live.
-  [ -z "$shared" ] ||
-    echo "skip: dialogs: ⌃⇧1 from the page beside the resting alert in a $2 split, which shares its stopped renderer, whose keys Chromium drops before ilo's shortcuts (#3770): a click on the card brings it live"
   send key 2 ctrl shift
   at=$step
   expect "^browser: selected $beside\( in .*\)\{0,1\}\$" "⌃⇧2 from the alert didn't focus the pane beside ($2)"
@@ -399,17 +384,27 @@ split_rests() {
     expect "^browser: title $beside beside has ${typed}zq\$" \
       "after ⌃⇧2 from the alert the page beside didn't have the keys ($2): the keyboard is in $key, on $focus"
   }
-  live_from_beside "$at"
-  expect "^browser: selected $page\( in .*\)\{0,1\}\$" "$way didn't focus the alert's pane ($2)"
-  expect '^browser: dialog live$' "$way didn't bring the alert live ($2)"
+  # ⌘T from the page beside opens the command bar, and Escape closes it, the alert resting still.
+  send key t cmd
+  expect '^browser: command bar shown$' \
+    "⌘T from the page beside the resting alert didn't open the command bar ($2): $(since | grep -e '^browser: drive' -e '^browser: key' -e '^browser: dialog' | tail -6 | tr '\n' ' ')"
+  send key escape
+  expect '^browser: command bar hidden$' "Escape didn't close the command bar opened beside the resting alert ($2)"
+  none_since '^browser: dialog live$' "$at" ||
+    fail "the command bar opened from the page beside brought the resting alert live ($2)"
+  stayed "the alert left its pane while the command bar was open beside it ($2)" "$at"
+  send key 1 ctrl shift
+  expect "^browser: selected $page\( in .*\)\{0,1\}\$" \
+    "⌃⇧1 from the page beside the resting alert didn't focus the alert's pane ($2): $(since | grep -e '^browser: drive' -e '^browser: key' -e '^browser: selected' | tail -6 | tr '\n' ' ')"
+  expect '^browser: dialog live$' "⌃⇧1 from the page beside didn't bring the alert live ($2)"
   capture "alert-split-$2-live-dark"
   # Live in the light tone, chosen while it rests.
   send key 2 ctrl shift
   at=$step
   expect '^browser: dialog at rest$' "⌃⇧2 from the alert didn't rest it again ($2)"
   tone light
-  live_from_beside "$at"
-  expect '^browser: dialog live$' "$way didn't bring the alert live again ($2)"
+  send key 1 ctrl shift
+  expect '^browser: dialog live$' "⌃⇧1 from the page beside didn't bring the alert live again ($2)"
   capture "alert-split-$2-live-light"
   send key 2 ctrl shift
   rested=$step
@@ -419,18 +414,33 @@ split_rests() {
   expect "^browser: page $page dialog answered accept\$" "a click on the resting alert's OK didn't answer it ($2)"
   expect '^browser: dialog hidden$' "the alert answered at rest didn't leave ($2)"
   # Sharing the alert's process, the page beside heard nothing while it was asked: Chromium drops
-  # the keys of a page whose renderer a dialog stopped, as Chrome's (#3770).
+  # the keys of a page whose renderer a dialog stopped, as Chrome's, after ilo's shortcuts (#3770).
   if [ -n "$shared" ] &&
     since "$clicked" | sed "/^browser: page $page dialog answered/q" | grep -q "^browser: title $beside beside has"; then
     fail "the page beside took keys while the alert asked, so it doesn't share the alert's renderer process ($2)"
   fi
-  # The page beside closes, leaving the dialogs page the card's.
+  # ⌘W from the page beside, the alert asked again and resting, closes that page alone, leaving the
+  # alert's tab shown and its alert there, unanswered, live once its pane is the only one.
+  send click $(in_pane 1)
+  expect "^browser: selected $page\( in .*\)\{0,1\}\$" "a click on the dialogs page's pane didn't focus it again ($2)"
+  ask a Alert "alert-split-$2-again"
   send click $(in_pane 2)
+  closing=$step
   expect "^browser: selected $beside\( in .*\)\{0,1\}\$" "a click on the page beside didn't focus it ($2)"
+  expect '^browser: dialog at rest$' "the alert asked again didn't rest with the page beside focused ($2)"
   send key w cmd
-  expect "^browser: tab $beside closed\$" "⌘W didn't close the page beside the dialogs page ($2)"
+  closed=$step
+  expect "^browser: tab $beside closed\$" \
+    "⌘W from the page beside the resting alert didn't close that page ($2): $(since | grep -e '^browser: drive' -e '^browser: key' -e '^browser: tab' | tail -6 | tr '\n' ' ')"
   expect "^browser: selected $page\( in .*\)\{0,1\}\$" \
     "closing the page beside it didn't leave the dialogs page shown ($2): $(since | grep -e '^browser: selected' -e '^browser: splits' | tail -3 | tr '\n' ' ')"
+  none_since "^browser: tab $page closed\$" "$closing" || fail "⌘W from the page beside closed the alert's tab too ($2)"
+  none_since "^browser: page $page dialog answered" "$closing" || fail "⌘W from the page beside answered the alert ($2)"
+  stayed "closing the page beside took the alert from its tab ($2)" "$closing"
+  expect '^browser: dialog live$' "with the page beside closed, the alert didn't come live in its tab ($2)" "$closed"
+  send key return
+  expect "^browser: page $page dialog answered accept\$" "↩ didn't answer the alert left in its tab ($2)"
+  expect '^browser: dialog hidden$' "the alert left in its tab didn't leave once answered ($2)"
 }
 split_rests "http://localhost:$port/beside.html" two-site
 
