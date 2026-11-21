@@ -3372,7 +3372,7 @@ void AgentPage::WebContentsDestroyed() {
 
 void AgentPage::FileField() {
   if (!job_->element) {
-    Fail("upload needs the file field's element, from a snapshot.");
+    Fail("upload needs a file field element from snapshot.");
     return;
   }
   ReadField(

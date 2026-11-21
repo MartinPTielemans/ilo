@@ -201,8 +201,7 @@ bool AgentFileField::PageMayOpen(content::WebContents* contents, int kind) {
         .agent = agent->id.c_str(),
         .tab = tab,
         .action = kind == 1 ? "file_dialog file_input" : "file_dialog file_system_access",
-        .refused = "The page asked to open a file dialog, which agents can't use, so it heard a "
-                   "cancel. upload asks the user for a file for a field.",
+        .refused = "Agents can't use system file dialogs, so ilo told the page it was cancelled.",
     };
     Host().agent_activity(Host().context, &entry);
   }
