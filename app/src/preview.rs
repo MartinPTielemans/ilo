@@ -2684,6 +2684,9 @@ fn task_conversation(agent: SharedString) -> Conversation {
             key: 0,
             running: true,
             took: None,
+            steps: (items.iter())
+                .filter(|item| matches!(item, TraceItem::Step(_)))
+                .count(),
             items,
         })],
         tabs: vec![

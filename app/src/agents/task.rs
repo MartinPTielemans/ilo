@@ -174,13 +174,14 @@ pub struct Trace {
     pub took: Option<u64>,
     /// Its steps, with what the agent said between them.
     pub items: Vec<TraceItem>,
+    /// How many steps its lines hold, as `Traced::steps` counts them: a line may hold several,
+    /// or a thought's none (#3824).
+    pub steps: usize,
 }
 
 impl Trace {
     pub fn steps(&self) -> usize {
-        (self.items.iter())
-            .filter(|item| matches!(item, TraceItem::Step(_)))
-            .count()
+        self.steps
     }
 
     /// Its summary line's title and description.
@@ -247,6 +248,19 @@ pub struct Traced {
     pub picture: Option<Arc<gpui::Image>>,
     /// How a close ended when its page had a say.
     pub close: Option<tools::Close>,
+    /// How many requests a request call sent or had refused, as the log lists each.
+    pub requests: usize,
+}
+
+impl Traced {
+    /// The steps it stands for, as the activity log has them (#3824): a request call one for
+    /// each request the log lists, a question to the user or a thought none.
+    pub fn steps(&self) -> usize {
+        match tools::is_step(&self.did.tool) {
+            true => self.requests.max(1),
+            false => 0,
+        }
+    }
 }
 
 /// The page the user was on when they asked, which goes as its address and title only.
@@ -632,7 +646,7 @@ impl Agents {
             .map(|tab| (tab, site(&self.browser.tab(tab, cx).url).into()))
             .collect();
         let progress = match task.state == State::Working && !self.waits_on_user(task) {
-            true => progress(turn_steps(task).len(), tabs.len()),
+            true => progress(turn_count(task), tabs.len()),
             false => String::new(),
         };
         let about = match &task.state {
@@ -1251,6 +1265,7 @@ impl Agents {
                     error: None,
                     picture: None,
                     close: None,
+                    requests: 0,
                 });
             }
             Out::Ended(None) => {
@@ -1754,6 +1769,7 @@ impl Agents {
             error: None,
             picture: None,
             close: None,
+            requests: 0,
         });
         // Its first step: it's under way, and what it wrote before it was said along the way.
         task.waiting = None;
@@ -1914,6 +1930,20 @@ impl Agents {
             (task.trace.iter_mut().rev()).find(|step| step.call == call && step.ended.is_none());
         if let Some(step) = step {
             step.close = Some(close);
+        }
+    }
+
+    /// `agent`'s request `call` sent a request or had one refused, which the log lists as an entry,
+    /// and so a step, of its own (#3824).
+    pub(super) fn requested(&mut self, agent: &str, call: u64) {
+        let Some(key) = self.tracer(agent, call) else {
+            return;
+        };
+        let Some(task) = self.task_mut(&key) else {
+            return;
+        };
+        if let Some(step) = (task.trace.iter_mut().rev()).find(|step| step.call == call) {
+            step.requests += 1;
         }
     }
 
@@ -2707,7 +2737,7 @@ fn working(task: &Task) -> SharedString {
         .into(),
         (Some(step), None) => format!(
             "Step {} · {}",
-            taken.len(),
+            turn_count(task),
             tools::step_title(&step.did, tense(step))
         )
         .into(),
@@ -2739,14 +2769,19 @@ fn fallback(trace: &[Traced]) -> Option<String> {
     }
 }
 
-/// The steps of the turn under way, newest first, its thoughts left out: what the card and the
-/// conversation's header count.
+/// The steps of the turn under way, newest first, its thoughts and questions left out: what the
+/// card and the conversation's header show.
 fn turn_steps(task: &Task) -> Vec<&Traced> {
     let turn = task.turn();
     (task.trace.iter().rev())
         .take_while(|step| step.after >= turn)
-        .filter(|step| step.did.tool != "thought")
+        .filter(|step| step.steps() > 0)
         .collect()
+}
+
+/// How many steps the turn under way took, as `Traced::steps` counts them (#3824).
+fn turn_count(task: &Task) -> usize {
+    turn_steps(task).into_iter().map(Traced::steps).sum()
 }
 
 /// `text` with its first letter in lower case, as a fact after " · " reads (#3690).
@@ -2777,10 +2812,7 @@ fn progress(steps: usize, pages: usize) -> String {
 /// A stopped task's status: how far it got before the user stopped it, by its steps, its thoughts
 /// left out.
 fn stopped(task: &Task) -> SharedString {
-    match (task.trace.iter())
-        .filter(|step| step.did.tool != "thought")
-        .count()
-    {
+    match task.trace.iter().map(Traced::steps).sum() {
         0 => "Stopped".into(),
         1 => "Stopped after 1 step".into(),
         steps => format!("Stopped after {steps} steps").into(),
@@ -2972,6 +3004,12 @@ impl<'a> Stretch<'a> {
     fn flush(&mut self, lines: &mut Vec<Line>, running: bool, end: Option<Instant>) {
         let gathered = std::mem::take(&mut self.gathered);
         let (key, started, ended) = (self.key.take(), self.started.take(), self.ended.take());
+        let steps = (gathered.iter())
+            .map(|item| match item {
+                Gathered::Step(_, step) => step.steps(),
+                Gathered::Said(_) => 0,
+            })
+            .sum();
         let Some(key) = key else {
             lines.extend(gathered.into_iter().filter_map(|item| match item {
                 Gathered::Said(text) => Some(Line::Said(text)),
@@ -3009,6 +3047,7 @@ impl<'a> Stretch<'a> {
             running,
             took,
             items,
+            steps,
         }));
     }
 }

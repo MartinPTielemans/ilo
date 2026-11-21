@@ -1241,7 +1241,7 @@ impl Shell {
                     // check.sh reads this line.
                     log!(
                         "browser: agents history shows {id}: {} steps, {} sites, answers {}",
-                        past.steps.len(),
+                        past.step_count(),
                         library.sites.len(),
                         if allowed.is_empty() {
                             "none".to_string()

@@ -56,6 +56,8 @@ struct Made {
     muted: RefCell<Vec<(u64, bool)>>,
     /// Tabs the core holds in a Space that its list of the Space's tabs leaves out.
     unlisted: RefCell<HashSet<u64>>,
+    /// The id the next tab open_tab opens takes, each after it the next, or 0 for 30 each time.
+    next_tab: std::cell::Cell<u64>,
 }
 
 impl Made {
@@ -156,15 +158,22 @@ impl Browser for Made {
         self.disconnected.borrow_mut().push(agent.into());
     }
 
-    /// The new tab is 30. As the core, none opens for an agent without a Space.
+    /// The new tab is 30, or `next_tab`. As the core, none opens for an agent without a Space.
     fn open_tab(&self, agent: &str, url: &str, _: &mut App) -> u64 {
         let space = self.agent_space(agent);
         if space == 0 {
             return 0;
         }
         let url: &'static str = Box::leak(url.to_string().into_boxed_str());
-        self.tabs.borrow_mut().push((30, space, "Opened", url));
-        30
+        let tab = match self.next_tab.get() {
+            0 => 30,
+            tab => {
+                self.next_tab.set(tab + 1);
+                tab
+            }
+        };
+        self.tabs.borrow_mut().push((tab, space, "Opened", url));
+        tab
     }
 
     fn navigate(&self, _: &str, tab: u64, url: &str, _: &mut App) -> bool {
@@ -6453,7 +6462,8 @@ mod tasks {
         );
         assert!(waiting(cx), "nothing ends a CLI that never answers");
 
-        // Its first step takes the line's place, as a trace under way.
+        // Its first thought takes the line's place, as a trace under way, which counts no step, as
+        // a thought isn't one (#3824).
         said(
             &agents,
             &agent,
@@ -6464,7 +6474,7 @@ mod tasks {
             cx,
         );
         assert!(
-            matches!(&lines(cx)[..], [Line::Trace(trace)] if trace.running && trace.steps() == 1),
+            matches!(&lines(cx)[..], [Line::Trace(trace)] if trace.running && trace.steps() == 0),
             "{:?}",
             lines(cx)
         );
@@ -6825,6 +6835,220 @@ mod tasks {
         };
         agents.update(cx, |agents, cx| agents.handle(answered, cx));
         result
+    }
+
+    /// A page of the ten-case batch's form (check/cases.py): its status button, the status it
+    /// chooses and Save, refs e1 to e3 in that order.
+    fn case_tree() -> String {
+        json!({ "nodes": [
+            { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Case" },
+              "childIds": ["2", "3", "4", "5"] },
+            { "nodeId": "2", "role": { "value": "heading" }, "name": { "value": "Ready" } },
+            { "nodeId": "3", "role": { "value": "button" }, "name": { "value": "Open" },
+              "backendDOMNodeId": 31 },
+            { "nodeId": "4", "role": { "value": "option" }, "name": { "value": "Closed" },
+              "backendDOMNodeId": 41 },
+            { "nodeId": "5", "role": { "value": "button" }, "name": { "value": "Save" },
+              "backendDOMNodeId": 51 },
+        ]})
+        .to_string()
+    }
+
+    /// Sends a turn's calls at once, as the server takes an agent's turn, gives each page the
+    /// core is asked for `page` until no call waits on one, and says each call answered, in the
+    /// calls' order.
+    fn turn(
+        agents: &Entity<Agents>,
+        browser: &Made,
+        agent: &str,
+        calls: Vec<(&str, Value)>,
+        page: fn() -> String,
+        cx: &mut TestAppContext,
+    ) -> Vec<ToolResult> {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1_000_000);
+        let (mut sent, mut done) = (Vec::new(), browser.pages.borrow().len());
+        for (tool, arguments) in calls {
+            let tool = tool.to_string();
+            let id = NEXT.fetch_add(1, Ordering::Relaxed);
+            let (reply, receiver) = mpsc::channel();
+            let call = Call {
+                id,
+                agent: agent.into(),
+                tool: tool.clone(),
+                arguments,
+                reply,
+                at: std::time::Instant::now(),
+            };
+            agents.update(cx, |agents, cx| agents.handle(Event::Call(call), cx));
+            sent.push((id, tool, receiver));
+        }
+        loop {
+            cx.run_until_parked();
+            let asked: Vec<u64> = (browser.pages.borrow()[done..].iter())
+                .map(|page| page.1)
+                .collect();
+            if asked.is_empty() {
+                break;
+            }
+            done += asked.len();
+            for request in asked {
+                agents.update(cx, |agents, cx| {
+                    agents.page_done(request, page(), false, cx)
+                });
+            }
+        }
+        (sent.into_iter())
+            .map(|(id, tool, receiver)| {
+                let result = (receiver.try_recv())
+                    .unwrap_or_else(|_| panic!("{tool} wasn't answered in its turn"));
+                let answered = Event::Answered {
+                    agent: agent.into(),
+                    id,
+                    at: std::time::Instant::now(),
+                    error: result.error.then(|| result.text.clone()),
+                    image: result.image.clone(),
+                };
+                agents.update(cx, |agents, cx| agents.handle(answered, cx));
+                result
+            })
+            .collect()
+    }
+
+    /// The three counts of a task's steps: its conversation's summaries', its card's once
+    /// stopped, and its 30-day record's, as Library › Agents counts them.
+    fn counts(
+        agents: &Entity<Agents>,
+        agent: &str,
+        cx: &mut TestAppContext,
+    ) -> (usize, String, usize) {
+        use crate::agents::task::Line;
+        let conversation =
+            agents.read_with(cx, |agents, cx| agents.conversation(agent, cx).unwrap());
+        let summaries = (conversation.lines.iter())
+            .map(|line| match line {
+                Line::Trace(trace) => trace.steps(),
+                _ => 0,
+            })
+            .sum();
+        agents.update(cx, |agents, cx| agents.stop_task(agent, cx));
+        let status = card_of(agents, cx).status.to_string();
+        let kept = agents.update(cx, |agents, cx| agents.take_ended(cx));
+        assert_eq!(kept.len(), 1);
+        (summaries, status, kept[0].1.step_count())
+    }
+
+    /// One step is one action the browser took for the agent, and the card's conversation, its
+    /// status and its 30-day record count in it (#3824). The ten-case batch (check/cases.py),
+    /// asked as a task: ten cases opened in a turn, then a turn a step, one call a tab, two runs
+    /// among them, then the ten closed. Its 70 calls are 80 actions, as its runs' first take two
+    /// steps each. On main its conversation said 8 steps, as it counted lines, the same step on
+    /// ten tabs one line, where its card said 80.
+    #[gpui::test]
+    fn the_ten_case_batchs_steps_are_one_count_everywhere(cx: &mut TestAppContext) {
+        let (agents, browser) = ready(None, cx);
+        let agent = start(&agents, "Close the ten cases", cx);
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Working
+        });
+        browser.next_tab.set(40);
+        let tabs: Vec<u64> = (40..50).collect();
+        let each = |call: &dyn Fn(u64) -> (&'static str, Value)| -> Vec<(&'static str, Value)> {
+            tabs.iter().map(|&tab| call(tab)).collect()
+        };
+        let opened = turn(
+            &agents,
+            &browser,
+            &agent,
+            (1..=10)
+                .map(|n| {
+                    (
+                        "open_tab",
+                        json!({ "url": format!("https://cases.example/?n={n}") }),
+                    )
+                })
+                .collect(),
+            case_tree,
+            cx,
+        );
+        assert!(
+            opened[9].text.starts_with("Opened tab 49."),
+            "{}",
+            opened[9].text
+        );
+        let wait = |text: &str| json!({ "action": "wait", "text": text });
+        let runs = [
+            vec![wait("Ready"), json!({ "action": "snapshot" })],
+            vec![],
+            vec![],
+            vec![],
+            vec![wait("Ready")],
+        ];
+        for (n, steps) in runs.into_iter().enumerate() {
+            let calls = match steps.is_empty() {
+                true => each(&|tab| {
+                    let pick = format!("e{n}");
+                    ("click", json!({ "tab": tab, "ref": pick }))
+                }),
+                false => each(&|tab| ("run_steps", json!({ "tab": tab, "steps": steps }))),
+            };
+            let answers = turn(&agents, &browser, &agent, calls, case_tree, cx);
+            assert!(answers.iter().all(|answer| !answer.error), "{answers:?}");
+        }
+        let closed = turn(
+            &agents,
+            &browser,
+            &agent,
+            each(&|tab| ("close_tab", json!({ "tab": tab }))),
+            case_tree,
+            cx,
+        );
+        assert!(closed.iter().all(|answer| !answer.error), "{closed:?}");
+        let (summaries, status, record) = counts(&agents, &agent, cx);
+        assert_eq!(
+            (summaries, status.as_str(), record),
+            (80, "Stopped after 80 steps", 80)
+        );
+    }
+
+    /// A request call's requests are a step each, as its record lists each. On main its
+    /// conversation and card said 1 step, its record 2.
+    #[gpui::test]
+    fn a_request_calls_requests_are_a_step_each(cx: &mut TestAppContext) {
+        let (agents, browser) = ready(None, cx);
+        let agent = start(&agents, "Check the basket", cx);
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Working
+        });
+        browser
+            .tabs
+            .borrow_mut()
+            .push((30, 100, "Shop", "https://shop.example/basket"));
+        let requests = json!({ "tab": 30, "requests": [
+            { "method": "GET", "path": "/api/basket" },
+            { "method": "GET", "path": "/api/coupons" },
+        ] });
+        let answer = call(&agents, &agent, "request", requests, cx);
+        for n in 0..2 {
+            cx.run_until_parked();
+            let request = browser.requests.borrow()[n].1;
+            let response = request::Response {
+                status: 200,
+                ..Default::default()
+            };
+            agents.update(cx, |agents, cx| agents.request_done(request, response, cx));
+        }
+        cx.run_until_parked();
+        assert!(!answer.recv().unwrap().error);
+        assert!(
+            card_of(&agents, cx).status.starts_with("Step 2 · "),
+            "{}",
+            card_of(&agents, cx).status
+        );
+        let (summaries, status, record) = counts(&agents, &agent, cx);
+        assert_eq!(
+            (summaries, status.as_str(), record),
+            (2, "Stopped after 2 steps", 2)
+        );
     }
 
     /// A card's status says how far its task has got, from its own steps and never a clock (#1080):
@@ -7224,6 +7448,7 @@ mod tasks {
             error: Some("Timed out waiting for the page.".into()),
             picture: None,
             close: None,
+            requests: 0,
         };
         let lines = fold(&[], &[failed], true, false, None);
         let [Line::Trace(trace)] = lines.as_slice() else {
@@ -7392,6 +7617,7 @@ mod tasks {
             error: None,
             picture: None,
             close: None,
+            requests: 0,
         };
         let mut messages = vec![message(Who::User, "Museum hours", 0)];
         let mut trace = vec![step("open_tab", 1, 1, Some(3))];
@@ -7461,6 +7687,7 @@ mod tasks {
             error: None,
             picture: None,
             close: None,
+            requests: 0,
         }];
         let mut messages = vec![
             message(Who::User, "Museum hours", 0),
@@ -7498,6 +7725,7 @@ mod tasks {
             error: None,
             picture: None,
             close: None,
+            requests: 0,
         };
         let messages = [Message {
             who: Who::User,
