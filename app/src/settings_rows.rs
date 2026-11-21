@@ -445,6 +445,62 @@ pub fn text(look: &Look, name: impl Into<SharedString>, line: Option<SharedStrin
         .children(line)
 }
 
+/// A row's text whose line sets what the user or an agent types in `mono`, the face a terminal
+/// shows it in, as the `ilo` command's row has (agents::cli::Detail). Its line to paste goes
+/// under the row (`command_export`).
+pub fn command_text(
+    look: &Look,
+    name: impl Into<SharedString>,
+    detail: &crate::agents::cli::Detail,
+    mono: &'static str,
+) -> gpui::Div {
+    let run = |len: usize, family: &'static str| gpui::TextRun {
+        len,
+        font: gpui::font(family),
+        color: look.detail.into(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let line = &detail.line;
+    let runs = match &detail.mono {
+        Some(command) => vec![
+            run(command.start, crate::face::UI),
+            run(command.len(), mono),
+            run(line.len() - command.end, crate::face::UI),
+        ],
+        None => vec![run(line.len(), crate::face::UI)],
+    };
+    let runs: Vec<_> = runs.into_iter().filter(|run| run.len > 0).collect();
+    let small = || {
+        div()
+            .mt(px(DETAIL_TOP))
+            .text_size(px(SMALL))
+            .line_height(px(DETAIL_LINE))
+            .text_color(look.detail)
+    };
+    div()
+        .flex_1()
+        .min_w_0()
+        .child(div().truncate().child(name.into()))
+        .child(small().child(gpui::StyledText::new(line.clone()).with_runs(runs)))
+}
+
+/// The line to paste under a `frame().flex_wrap()` row's text and controls, across the row from
+/// its text's edge, so it stays one line down to Settings' least width.
+pub fn command_export(look: &Look, export: &'static str, mono: &'static str) -> gpui::Div {
+    div()
+        .w_full()
+        .mt(px(DETAIL_TOP))
+        .pl(px(GLYPH_PLATE + GLYPH_PLATE_GAP))
+        .whitespace_nowrap()
+        .font_family(mono)
+        .text_size(px(SMALL))
+        .line_height(px(DETAIL_LINE))
+        .text_color(look.detail)
+        .child(export)
+}
+
 /// A row's end, its controls 20 after its text and 8 apart.
 pub fn end(controls: impl IntoIterator<Item = gpui::AnyElement>) -> gpui::Div {
     div()

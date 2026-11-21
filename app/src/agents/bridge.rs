@@ -26,10 +26,16 @@ pub const NAME: &str = if cfg!(windows) {
 /// given the bridge's path there broke with each Store update (#1442).
 pub fn store_alias(local_app_data: &str) -> PathBuf {
     format!(
-        r"{local_app_data}\Microsoft\WindowsApps\{}-mcp-bridge.exe",
+        r"{}\{}-mcp-bridge.exe",
+        store_aliases(local_app_data),
         env!("APP_NAME")
     )
     .into()
+}
+
+/// The folder Windows keeps a package's aliases in, which is on the user's PATH.
+pub fn store_aliases(local_app_data: &str) -> String {
+    format!(r"{local_app_data}\Microsoft\WindowsApps")
 }
 
 /// What a client runs to reach the server through the bridge at `bridge`, before the socket. In
@@ -80,19 +86,22 @@ pub fn run(
     use super::server;
     let stream = server::connect(socket).map_err(|_| {
         format!(
-            "{} isn't running with agents on. Turn them on in Settings › Agents.",
+            "{0} isn't running, or agents are off. Open {0} and turn agents on in Settings › Agents.",
             env!("APP_NAME")
         )
     })?;
     let failed = |error: io::Error| format!("The browser closed the connection: {error}");
     let mut writer = stream.try_clone().map_err(failed)?;
-    writeln!(writer, "{}", json!({ "token": token })).map_err(failed)?;
+    // A server with no place free says so and closes before it reads the token, so its answer is
+    // read even if the token couldn't be written.
+    let wrote = writeln!(writer, "{}", json!({ "token": token }));
     let mut reader = BufReader::new(stream);
     let answer = super::server::read_line(&mut reader).unwrap_or_default();
     let answer: Value = serde_json::from_str(&answer).unwrap_or_default();
     if let Some(refused) = answer.get("error").and_then(Value::as_str) {
         return Err(refused.into());
     }
+    wrote.map_err(failed)?;
     if answer.get("ok").is_none() {
         return Err("The browser didn't answer.".into());
     }

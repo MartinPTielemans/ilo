@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use browser::account::{self, Account};
 use browser::ad_block::choice::{self as ad_blocker, EngineRow};
+use browser::agents::hooks::{self, Hook};
 use browser::agents::ready::Ready;
 use browser::agents::runner::Cli;
 use browser::agents::{self, Agents, Client};
@@ -43,9 +44,9 @@ use browser::settings_card::{self, Card, Paging};
 use browser::settings_column::{self, Section};
 use browser::settings_pictures::{appearance_title, title as side_title};
 use browser::settings_rows::{
-    Chip, Look as RowLook, SLIDE, chevron_slot, chip, detailed_row, end, frame, glyph_plate, group,
-    group_lined, named_button, row, sent_part, stop_button, stop_chip, stop_popup, stop_restore,
-    stop_switch, text,
+    Chip, Look as RowLook, SLIDE, chevron_slot, chip, command_export, command_text, detailed_row,
+    end, frame, glyph_plate, group, group_lined, named_button, row, sent_part, stop_button,
+    stop_chip, stop_popup, stop_restore, stop_switch, text,
 };
 use browser::settings_search::{
     self, EndSearch, Entry, NextControl, PageBottom, PageDown, PageTop, PageUp, PreviousControl,
@@ -55,10 +56,11 @@ use browser::tokens::palette::{LIGHT_STAND_IN, NO_THEME_ACCENT, SELECTION, STAND
 use browser::tokens::radius;
 use browser::tokens::settings::{
     BUTTONS_TOP, CHIP_GAP, CONTROL_GAP, CONTROL_HEIGHT, CONTROL_PADDING, CONTROL_RADIUS, DETAIL,
-    DETAIL_LINE, DETAIL_TOP, END_GAP, FIELD_PADDING, FIRST_GROUP, FOUND_FLASH, FOUND_FLASH_TIME,
-    GLYPH_PLATE, GLYPH_PLATE_GAP, GROUP_GAP, HEADING_BOTTOM, HEADING_TOP, HEIGHT, LEDE_LINE,
-    LEDE_TOP, MIN_HEIGHT, MIN_WIDTH, NAME, PAGE_WIDTH, POPUP_WIDTH, ROW_X, SECTION_TEXT, SENT_TUCK,
-    SHORT_PADDING, SHORT_ROW, SIDE_ROOM, SIDE_TOP, TEXT_X, TITLE, WIDTH,
+    DETAIL_LINE, DETAIL_TOP, DISCLOSURE_GAP, DISCLOSURE_GLYPH, END_GAP, FIELD_PADDING, FIRST_GROUP,
+    FOUND_FLASH, FOUND_FLASH_TIME, GLYPH_PLATE, GLYPH_PLATE_GAP, GROUP_GAP, HEADING_BOTTOM,
+    HEADING_TOP, HEIGHT, LEDE_LINE, LEDE_TOP, MIN_HEIGHT, MIN_WIDTH, NAME, PAGE_WIDTH, POPUP_WIDTH,
+    ROW_X, SECTION_TEXT, SENT_TUCK, SHORT_PADDING, SHORT_ROW, SIDE_ROOM, SIDE_TOP, TEXT_X, TITLE,
+    WIDTH,
 };
 use browser::tokens::shell::library::{TITLE_LINE, TITLE_SIZE};
 use browser::tokens::shell::{
@@ -135,7 +137,7 @@ enum Block {
 struct Row {
     name: SharedString,
     line: Option<SharedString>,
-    /// The keys its chip shows, a shortcut's.
+    /// The keys its chips show, a shortcut's, a line each.
     keys: Option<String>,
     /// A feature's own setting, under it in its group with its text where the feature's name is.
     nested: bool,
@@ -439,6 +441,8 @@ enum Popup {
     TaskModel(Cli),
     /// General's Page zoom.
     PageZoom,
+    /// The event a hook being added runs on, in Agents.
+    HookEvent,
 }
 
 impl Popup {
@@ -453,6 +457,7 @@ impl Popup {
             Popup::TaskAgent => "Run tasks on".into(),
             Popup::TaskModel(cli) => format!("{} model", cli.name()).into(),
             Popup::PageZoom => "Page zoom".into(),
+            Popup::HookEvent => "Event".into(),
         }
     }
 }
@@ -482,8 +487,8 @@ pub struct Settings {
     renaming: Option<Renaming>,
     /// Whether the field takes the keyboard once its row is drawn.
     focus_renaming: bool,
-    /// The command whose next key Shortcuts takes.
-    recording: Option<Command>,
+    /// The command whose next key Shortcuts takes, and which of its chips the key goes in.
+    recording: Option<(Command, usize)>,
     /// Why the key pressed for this command wasn't given to it.
     refused: Option<(Command, SharedString)>,
     /// The search at the column's top, whose rows found replace the section's page while it
@@ -491,6 +496,10 @@ pub struct Settings {
     search: Entity<TextInput>,
     /// Ad Blocking's field that adds a filter to My filters.
     filter: Entity<TextInput>,
+    /// Agents' field for a hook's command, and the event of the hook it adds while its row is
+    /// open (#3668).
+    hook: Entity<TextInput>,
+    adding_hook: Option<hooks::Event>,
     /// What the search last logged it found, for check.sh.
     searched: String,
     /// The row a click on a found section's name showed, which flashes once, and when.
@@ -551,7 +560,7 @@ struct InWindow;
 
 #[cfg(target_os = "linux")]
 impl dialog::Host for InWindow {
-    fn show(&self, _: Option<u64>, _: Option<Bounds<gpui::Pixels>>) {}
+    fn show(&self, _: Option<u64>, _: Option<Bounds<gpui::Pixels>>, _: bool) {}
 
     fn hide(&self) {}
 }
@@ -1348,6 +1357,12 @@ fn view(cx: &mut App) -> Entity<Settings> {
                 .caret_color(look.ink)
                 .spoken("New filter")
         });
+        let hook = cx.new(|cx| {
+            TextInput::new("Command", cx)
+                .placeholder_color(look.detail)
+                .caret_color(look.ink)
+                .spoken("Hook command")
+        });
         // ⇥ stops at the field, after the sections.
         let _ = search.read(cx).focus_handle(cx).tab_stop(true);
         Settings {
@@ -1377,6 +1392,8 @@ fn view(cx: &mut App) -> Entity<Settings> {
             refused: None,
             search,
             filter,
+            hook,
+            adding_hook: None,
             searched: String::new(),
             flash: None,
             focus_row: None,
@@ -3738,6 +3755,14 @@ impl Settings {
             .relative()
             .child(self.drawn("manage passwords".into()))
             .on_click(move |_, _, cx| manage_passwords(profile, cx));
+        // The passkeys kept on this Mac, which Chrome's password manager links to only once there's
+        // one, and which have no other list: where the user sees and deletes them.
+        let passkeys = cfg!(target_os = "macos").then(|| {
+            self.button("manage-passkeys", "Manage Passkeys…")
+                .relative()
+                .child(self.drawn("manage passkeys".into()))
+                .on_click(move |_, _, cx| manage_passkeys(profile, cx))
+        });
         let mut blocks = Vec::new();
         if let Some(chooser) = chooser {
             blocks.push(Block::Group(group(&look, [chooser])));
@@ -3751,7 +3776,13 @@ impl Settings {
             blocks.push(Block::Heading("Never saved".into()));
             blocks.push(Block::Group(group(&look, never)));
         }
-        blocks.push(Block::Under(div().flex().child(manage)));
+        blocks.push(Block::Under(
+            div()
+                .flex()
+                .gap(px(CONTROL_GAP))
+                .child(manage)
+                .children(passkeys),
+        ));
         // Each only while it has one, as Chrome offers to save them as forms are filled.
         if !addresses.is_empty() {
             blocks.push(Block::Heading("Addresses".into()));
@@ -3946,10 +3977,17 @@ impl Settings {
         }
         blocks.push(Block::Heading("Apps that connect".into()));
         blocks.push(Block::Group(group(look, clients)));
+        // Shown as Apps that connect are, whether agents are on or off: the command says they're
+        // off when it's run.
+        if agents.read(cx).command_offered() {
+            blocks.push(Block::Heading("Command line".into()));
+            blocks.push(Block::Rows(vec![self.command_line(agents, cx)]));
+        }
         // AppleScript is the Mac's alone.
         if cfg!(target_os = "macos") {
             blocks.extend(self.scripts(agents, accent, cx));
         }
+        blocks.extend(self.hooks(agents, cx));
         // A list for each agent, as each has its own Space (decision 8): what the user let it do
         // or never do on a site, to revoke, then what it did.
         let model = agents.read(cx);
@@ -4036,6 +4074,191 @@ impl Settings {
             "Agents never see your passwords, cookies or autofill.",
             blocks,
         )
+    }
+
+    /// Hooks (#3668): the user's commands that run on an agent's events, each with its last run
+    /// and Remove, and Add Hook… under them, which opens a row to add one. They're the user's
+    /// alone: no agent sees, adds or runs one.
+    fn hooks(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> Vec<Block> {
+        let look = &self.look;
+        let now = std::time::SystemTime::now();
+        let mut rows: Vec<gpui::Div> = (agents.read(cx).hooks().iter())
+            .map(|hook| {
+                let remove = {
+                    let agents = agents.clone();
+                    let id = hook.id;
+                    self.button(("hook-remove", id), "Remove")
+                        .relative()
+                        .child(self.drawn(format!("remove hook {id}")))
+                        .on_click(move |_, _, cx| {
+                            agents.update(cx, |agents, cx| agents.remove_hook(id, cx))
+                        })
+                };
+                // Its last run goes under its command, where a failure's reason has the row's
+                // width to wrap in, down to Settings' least width.
+                frame()
+                    .child(
+                        text(look, hook.event.name(), Some(hook.command.clone().into()))
+                            .child(hook_ran(look, hook, now)),
+                    )
+                    .child(end([remove.into_any_element()]))
+            })
+            .collect();
+        if rows.is_empty() && self.adding_hook.is_none() {
+            rows.push(line_row(
+                look,
+                "No hooks",
+                Some(
+                    "Run a command when a task ends, or when an agent asks you something or hands \
+                     you a tab."
+                        .into(),
+                ),
+                Vec::new(),
+            ));
+        }
+        if let Some(event) = self.adding_hook {
+            rows.push(self.adding_hook_row(agents, event, cx));
+        }
+        let note = div()
+            .px(px(TEXT_X))
+            .mt(px(BUTTONS_TOP))
+            .text_size(px(text::SMALL))
+            .line_height(px(DETAIL_LINE))
+            .text_color(look.detail)
+            .child(
+                "Hooks run in the system shell for up to 30 seconds. Each gets the environment \
+                 variables ILO_EVENT, ILO_AGENT, ILO_ENDED and ILO_TASK (the task's title from the \
+                 agent, cleaned and shortened), never a page's address. Agents can't see, add or \
+                 run hooks.",
+            );
+        let mut under = div().flex().flex_col();
+        if self.adding_hook.is_none() {
+            let add = self
+                .button("hook-add-open", "Add Hook…")
+                .relative()
+                .child(self.drawn("add hook".into()))
+                .on_click(cx.listener(|settings, _, window, cx| {
+                    settings.adding_hook = Some(hooks::Event::TaskEnded);
+                    let field = settings.hook.focus_handle(cx);
+                    window.focus(&field, cx);
+                    cx.notify();
+                }));
+            under = under.child(div().flex().child(add));
+        }
+        vec![
+            Block::Heading("Hooks".into()),
+            Block::Group(group(look, rows)),
+            Block::Under(under.child(note)),
+        ]
+    }
+
+    /// The row Add Hook… opens: the event, the command's field, Cancel and Add.
+    fn adding_hook_row(
+        &self,
+        agents: &Entity<Agents>,
+        event: hooks::Event,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let look = &self.look;
+        let choose = self
+            .popup(
+                Popup::HookEvent,
+                event.name().into(),
+                HOOK_EVENT_WIDTH,
+                cx.listener(|settings, _, window, cx| settings.choose_hook_event(window, cx)),
+            )
+            .child(self.drawn("hook event".into()));
+        let added = agents.clone();
+        let field = div()
+            .relative()
+            .flex_1()
+            .min_w(px(HOOK_FIELD_LEAST))
+            .h(px(CONTROL_HEIGHT))
+            .px(px(FIELD_PADDING))
+            .flex()
+            .items_center()
+            .rounded(px(CONTROL_RADIUS))
+            .bg(look.control)
+            .key_context("Naming")
+            .on_action(cx.listener(move |settings, _: &KeepName, window, cx| {
+                settings.add_hook(&added, window, cx)
+            }))
+            .on_action(cx.listener(|settings, _: &CancelName, window, cx| {
+                settings.close_hook_row(window, cx)
+            }))
+            .child(self.drawn("hook field".into()))
+            .child(self.hook.clone());
+        let cancel = self
+            .button("hook-cancel", "Cancel")
+            .relative()
+            .child(self.drawn("hook cancel".into()))
+            .on_click(cx.listener(|settings, _, window, cx| settings.close_hook_row(window, cx)));
+        let agents = agents.clone();
+        let add = self
+            .button("hook-add", "Add")
+            .relative()
+            .child(self.drawn("add hook command".into()))
+            .on_click(
+                cx.listener(move |settings, _, window, cx| settings.add_hook(&agents, window, cx)),
+            );
+        // Where the field would be narrower than a short command, it goes under the event with
+        // Cancel and Add, down to Settings' least width.
+        frame()
+            .flex_wrap()
+            .gap(px(CONTROL_GAP))
+            .child(choose)
+            .child(field)
+            .child(cancel)
+            .child(add)
+    }
+
+    /// Opens the event menu of the hook being added.
+    fn choose_hook_event(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let chosen = self.adding_hook;
+        let items = (hooks::Event::ALL.iter())
+            .map(|&event| {
+                let on = Some(event) == chosen;
+                MenuEntry {
+                    checked: on,
+                    over: on,
+                    ..MenuEntry::named(event.name(), true)
+                }
+            })
+            .collect();
+        let settings = cx.weak_entity();
+        let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
+            _ = settings.update(cx, |settings, cx| {
+                if let Some(&event) = picked.and_then(|index| hooks::Event::ALL.get(index))
+                    && settings.adding_hook.is_some()
+                {
+                    settings.adding_hook = Some(event);
+                }
+                settings.chose(cx)
+            });
+        });
+        self.pop_up(Popup::HookEvent, items, picked, window, cx);
+    }
+
+    /// Add on the hook row: adds the hook typed, and closes the row. With nothing typed, it does
+    /// nothing, as My filters' Add does.
+    fn add_hook(&mut self, agents: &Entity<Agents>, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(event) = self.adding_hook else {
+            return;
+        };
+        let typed = self.hook.read(cx).text().trim().to_string();
+        if typed.is_empty() {
+            return;
+        }
+        agents.update(cx, |agents, cx| agents.add_hook(event, &typed, cx));
+        self.close_hook_row(window, cx);
+    }
+
+    /// Cancel or Esc on the hook row: closes it, emptied.
+    fn close_hook_row(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.adding_hook = None;
+        (self.hook).update(cx, |field, cx| field.reset("".into(), window, cx));
+        window.focus(&self.focus, cx);
+        cx.notify();
     }
 
     /// Scripts (#704): the switch that lets AppleScript in, off at first, and what each script
@@ -4459,7 +4682,7 @@ impl Settings {
             format!("Connected in {}", client.config()).into()
         } else if client == Client::Other {
             // Says which it looked for, so one missing from the list isn't a mystery.
-            let missing: Vec<&str> = (Client::ALL.into_iter())
+            let missing: Vec<&str> = (Client::APPS.into_iter())
                 .filter(|client| !listed.contains(client))
                 .map(Client::name)
                 .collect();
@@ -4509,12 +4732,91 @@ impl Settings {
             Client::ClaudeCode => "icons/terminal.svg",
             Client::Codex => "icons/square-terminal.svg",
             Client::Other => "icons/cable.svg",
+            Client::Command => COMMAND_GLYPH,
         };
         let controls = copy
             .into_iter()
             .chain([action.into_any_element()])
             .collect();
         feature_row(look, glyph, client.name(), Some(detail), controls)
+    }
+
+    /// The `ilo` command's row under Command line: Add, or where it's linked with Remove, and the
+    /// line to paste with Copy Line when the user's shell doesn't look there (agents::cli).
+    fn command_line(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> Row {
+        let look = &self.look;
+        let model = agents.read(cx);
+        let client = Client::Command;
+        let state = model.command_state();
+        let failure = model.failure(client);
+        let mono = browser::face::mono(&cx.text_system().all_font_names());
+        let detail = agents::cli::detail(state, model.command_windows_folder().as_deref());
+        let action = |title: &'static str, id: &'static str| {
+            let agents = agents.clone();
+            self.button(id, title)
+                .relative()
+                .child(self.drawn(format!("ilo-command {}", title.to_lowercase())))
+                .on_click(move |_, _, cx| {
+                    // Add follows the row, not the agent: on Windows a command whose PATH entry
+                    // was taken off is still connected, and Add puts the entry back (#3783).
+                    agents.update(cx, |agents, cx| match agents.command_state() {
+                        agents::cli::State::Off => {
+                            // check.sh reads this line.
+                            log!("browser: connect agent {}", client.id());
+                            agents.connect(client, cx)
+                        }
+                        _ => agents.disconnect(client, cx),
+                    })
+                })
+                .into_any_element()
+        };
+        let mut controls = Vec::new();
+        if state == agents::cli::State::Unsearched {
+            let copy = self
+                .button("copy-command-line", "Copy Line")
+                .relative()
+                .child(self.drawn("ilo-command copy line".into()))
+                .on_click(|_, _, cx| {
+                    log!("browser: ilo command line copied");
+                    cx.write_to_clipboard(ClipboardItem::new_string(
+                        agents::cli::EXPORT.to_string(),
+                    ));
+                });
+            controls.push(copy.into_any_element());
+        }
+        controls.push(match state {
+            agents::cli::State::Off => action("Add", "add-command"),
+            _ => action("Remove", "remove-command"),
+        });
+        let export = (failure.is_none())
+            .then_some(detail.export)
+            .flatten()
+            .map(|export| command_export(look, export, mono));
+        let text = match &failure {
+            Some(why) => text(look, client.name(), Some(why.clone())),
+            None => command_text(look, client.name(), &detail, mono),
+        };
+        let line: SharedString = match failure {
+            Some(why) => why,
+            None => [Some(detail.line.as_str()), detail.export]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .into(),
+        };
+        Row {
+            div: frame()
+                .flex_wrap()
+                .child(glyph_plate(look, COMMAND_GLYPH, true))
+                .child(text)
+                .child(end(controls))
+                .children(export),
+            name: client.name().into(),
+            line: Some(line),
+            keys: None,
+            nested: false,
+        }
     }
 
     /// Google's Widevine module, where the core offers it: where it is, and the ways to get it,
@@ -4660,16 +4962,29 @@ impl Settings {
     ) -> AnyElement {
         let look = &self.look;
         let user = shell::user_keys(cx);
-        if !shell::rebindable(command) {
-            let keys = user.label(command).unwrap_or_default();
-            return self.chip(keys.into(), Chip::Fixed).into_any_element();
-        }
-        let recording = self.recording == Some(command);
-        let (keys, kind) = match user.label(command) {
-            _ if recording => ("Type Keys".into(), Chip::Keys),
-            Some(keys) => (keys.into(), Chip::Keys),
-            None => ("None".into(), Chip::None),
+        let shown = user.shown_keys(command);
+        // Chrome's Alt keys that follow a key off the Mac, as Alt+Left does ⌘←, which only change
+        // with it.
+        let twins = |chip: usize| {
+            let key = shown.get(chip).and_then(|keys| keys.first());
+            (key.map(|key| shell::chrome_twins(key))
+                .unwrap_or_default()
+                .into_iter())
+            .map(|twin| self.chip(shell::pressed_label(twin).into(), Chip::Fixed))
+            .map(IntoElement::into_any_element)
         };
+        if !shell::rebindable(command) {
+            let chips = (0..shown.len()).flat_map(|chip| {
+                let keys = shell::keystroke_label(shown[chip][0]).into();
+                std::iter::once(self.chip(keys, Chip::Fixed).into_any_element()).chain(twins(chip))
+            });
+            return div()
+                .flex()
+                .items_center()
+                .gap(px(CHIP_GAP))
+                .children(chips.collect::<Vec<_>>())
+                .into_any_element();
+        }
         let said = |text: SharedString| div().text_color(look.detail).child(text);
         let refused = (self.refused.as_ref())
             .filter(|(refused, _)| *refused == command)
@@ -4684,22 +4999,42 @@ impl Settings {
                 .child(self.drawn(format!("restore {}", command.key_name())))
                 .on_click(cx.listener(move |settings, _, _, cx| settings.restore(command, cx)))
         });
-        let id = SharedString::from(command.key_name());
-        let chip = stop_chip(look, self.base(), id, name, keys, kind, self.a11y)
-            .when(recording, |chip| {
-                chip.text_color(accent).border_1().border_color(accent)
-            })
-            .on_click(cx.listener(move |settings, _, window, cx| {
-                settings.start_recording(command, window, cx)
-            }))
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(move |settings, event: &MouseDownEvent, window, cx| {
-                    settings.choose_preference(command, event.position, window, cx)
-                }),
-            )
-            .relative()
-            .child(self.drawn(format!("shortcut {}", command.key_name())));
+        // A chip each key, None when there's none, each recording only its own key. The first's
+        // names are the command's, as check.sh clicks them.
+        let chips = (0..shown.len().max(1)).flat_map(|chip| {
+            let recording = self.recording == Some((command, chip));
+            let (keys, kind) = match shown.get(chip) {
+                _ if recording => ("Type Keys".into(), Chip::Keys),
+                Some(keys) => (shell::keystroke_label(keys[0]).into(), Chip::Keys),
+                None => ("None".into(), Chip::None),
+            };
+            let (id, drawn) = match chip {
+                0 => (
+                    command.key_name().to_string(),
+                    command.key_name().to_string(),
+                ),
+                _ => (
+                    format!("{}-{}", command.key_name(), chip + 1),
+                    format!("{} {}", command.key_name(), chip + 1),
+                ),
+            };
+            let shown = stop_chip(look, self.base(), id, name, keys, kind, self.a11y)
+                .when(recording, |chip| {
+                    chip.text_color(accent).border_1().border_color(accent)
+                })
+                .on_click(cx.listener(move |settings, _, window, cx| {
+                    settings.start_recording(command, chip, window, cx)
+                }))
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |settings, event: &MouseDownEvent, window, cx| {
+                        settings.choose_preference(command, event.position, window, cx)
+                    }),
+                )
+                .relative()
+                .child(self.drawn(format!("shortcut {drawn}")));
+            std::iter::once(shown.into_any_element()).chain(twins(chip))
+        });
         div()
             .flex()
             .items_center()
@@ -4707,7 +5042,7 @@ impl Settings {
             .children(refused)
             .children(preferred)
             .children(restore)
-            .child(chip)
+            .children(chips.collect::<Vec<_>>())
             .into_any_element()
     }
 
@@ -4916,25 +5251,33 @@ impl Settings {
         );
     }
 
-    /// Takes the next keys pressed for `command`, or stops if it's taking them already.
-    fn start_recording(&mut self, command: Command, window: &mut Window, cx: &mut Context<Self>) {
+    /// Takes the next keys pressed for `command`'s `chip`th chip, or stops if it's taking them
+    /// already.
+    fn start_recording(
+        &mut self,
+        command: Command,
+        chip: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.refused = None;
-        self.recording = match self.recording == Some(command) {
+        self.recording = match self.recording == Some((command, chip)) {
             true => None,
             false => {
                 // check.sh waits for this line.
                 log!("browser: shortcut recording {}", command.key_name());
-                Some(command)
+                Some((command, chip))
             }
         };
         window.focus(&self.focus, cx);
         cx.notify();
     }
 
-    /// Gives the command being recorded `keystroke`, unless it's escape, which leaves its keys,
-    /// or ⌫, which takes them away. Keys that can't be its stay recording, saying why.
+    /// Gives the command being recorded `keystroke` in place of the chip's key, unless it's
+    /// escape, which leaves it, or ⌫, which takes it away. Keys that can't be its stay
+    /// recording, saying why.
     fn record(&mut self, keystroke: &Keystroke, cx: &mut Context<Self>) {
-        let Some(command) = self.recording else {
+        let Some((command, chip)) = self.recording else {
             return;
         };
         cx.stop_propagation();
@@ -4949,7 +5292,8 @@ impl Settings {
             "backspace" if plain => Ok(Vec::new()),
             _ => shell::recorded(keystroke),
         };
-        let set = keys.and_then(|keys| shell::change_keys(cx, |user| user.set(command, keys)));
+        let set =
+            keys.and_then(|keys| shell::change_keys(cx, |user| user.set_key(command, chip, keys)));
         match set {
             Ok(_) => {
                 self.recording = None;
@@ -5436,9 +5780,78 @@ fn manage_passwords(profile: u64, cx: &mut App) {
     hide(cx);
 }
 
+/// Opens Chrome's list of the passkeys this Mac keeps for `profile` in a new tab of one of its
+/// Spaces and goes to it, where each can be renamed or deleted.
+fn manage_passkeys(profile: u64, cx: &mut App) {
+    // check.sh waits for this line.
+    log!("browser: manage passkeys {profile}");
+    crate::open_in_profile(profile, "chrome://settings/passkeys");
+    hide(cx);
+}
+
 /// A request's method, the first word of its target ("POST /api/items").
 fn method(target: &str) -> &str {
     target.split(' ').next().unwrap_or_default()
+}
+
+/// The width of the hook row's event pop-up: its longest name, "When an agent hands you a tab", is
+/// 195 wide in Inter at 13, which runs wider than SF, with 33 of padding and chevrons around it.
+const HOOK_EVENT_WIDTH: f32 = 230.;
+
+/// The hook row's least command field, for a short command such as "notify-send done" whole.
+const HOOK_FIELD_LEAST: f32 = 200.;
+
+/// A hook's last run, under its command: not yet, running, when it ran, or when and how it failed,
+/// with the alert glyph, and how many of its events it skipped while it ran.
+fn hook_ran(look: &RowLook, hook: &Hook, now: std::time::SystemTime) -> AnyElement {
+    let Some(ran) = &hook.last else {
+        return hook_line(look)
+            .child("Not run since ilo opened")
+            .into_any_element();
+    };
+    let ago = agents::ago(ran.at, now);
+    // The count goes before a failure's colon, so the reason after it stays the command's own.
+    let skipped = match ran.skipped {
+        0 => String::new(),
+        skipped => format!(" · {skipped} skipped"),
+    };
+    let said = match (&ran.failed, hook.running) {
+        (_, true) => format!("Running{skipped}"),
+        (Some(why), false) => format!("Failed {}{skipped}: {why}", ago.to_lowercase()),
+        (None, false) => format!("Ran {}{skipped}", ago.to_lowercase()),
+    };
+    let failed = ran.failed.is_some() && !hook.running;
+    hook_line(look)
+        .flex()
+        .items_start()
+        .gap(px(DISCLOSURE_GAP))
+        .when(failed, |row| {
+            // Centred on the first line of a reason that wraps.
+            row.child(
+                div()
+                    .flex_none()
+                    .h(px(DETAIL_LINE))
+                    .flex()
+                    .items_center()
+                    .child(
+                        svg()
+                            .path("icons/circle-alert.svg")
+                            .size(px(DISCLOSURE_GLYPH))
+                            .text_color(look.detail),
+                    ),
+            )
+        })
+        .child(div().min_w_0().child(said))
+        .into_any_element()
+}
+
+/// A line under a hook's command, as the row's own line is.
+fn hook_line(look: &RowLook) -> gpui::Div {
+    div()
+        .mt(px(DETAIL_TOP))
+        .text_size(px(text::SMALL))
+        .line_height(px(DETAIL_LINE))
+        .text_color(look.detail)
 }
 
 /// A row: its name, the line under it, if any, and its controls at its end.
@@ -5466,6 +5879,9 @@ fn feature_row(
         .child(text(look, name, line))
         .when(!controls.is_empty(), |row| row.child(end(controls)))
 }
+
+/// The `ilo` command's glyph, under Command line.
+const COMMAND_GLYPH: &str = "icons/square-code.svg";
 
 /// A setting's row: its name, its line and its controls, as the search reads it.
 fn setting(
@@ -5554,10 +5970,18 @@ fn command_name(command: Command) -> &'static str {
         .unwrap_or("another command")
 }
 
-/// The keys a Shortcuts row's chip shows, which the search finds it by.
+/// The keys a Shortcuts row's chips show, a line each, which the search finds it by.
 fn keys_label(keys: &Keys, cx: &App) -> Option<String> {
     match keys {
-        Keys::Of(command) => shell::user_keys(cx).label(*command),
+        Keys::Of(command) => {
+            let shown = shell::user_keys(cx).shown_keys(*command);
+            let labels = shown.iter().flat_map(|chip| {
+                let twins = shell::chrome_twins(chip[0]).into_iter();
+                std::iter::once(shell::keystroke_label(chip[0]))
+                    .chain(twins.map(shell::pressed_label))
+            });
+            Some(labels.collect::<Vec<_>>().join("\n")).filter(|labels| !labels.is_empty())
+        }
         Keys::FavoritesNumbered | Keys::LastTabNinth => None,
         _ => keys.fixed(),
     }

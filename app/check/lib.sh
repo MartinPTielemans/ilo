@@ -694,20 +694,18 @@ in_sight() {
   [ -n "$sight" ] || return 0
   top=${sight%% to *}
   bottom=${sight##* to }
-  y=${at#* }
-  [ "$y" -ge "$top" ] && [ "$y" -le "$bottom" ] && return 0
-  # Past it by its row's half, 24, and a little more.
-  if [ "$y" -gt "$bottom" ]; then by=$((y - bottom + 32)); else by=$((y - top - 32)); fi
-  send scrollkey "${at% *}" $(((top + bottom) / 2)) "$by" 1
-  at=$(drawn_after "$1" "^browser: drive $step: ") || return 1
   # GPUI on Windows takes the driver's wheel messages for lines, about two thirds of the points
-  # asked, which can leave the row under the edge: scroll the rest. Where the card can't scroll
-  # further, nothing draws again and at stays where it was.
-  y=${at#* }
-  [ "$y" -ge "$top" ] && [ "$y" -le "$bottom" ] && return 0
-  if [ "$y" -gt "$bottom" ]; then by=$((y - bottom + 32)); else by=$((y - top - 32)); fi
-  send scrollkey "${at% *}" $(((top + bottom) / 2)) "$by" 1
-  rest=$(drawn_after "$1" "^browser: drive $step: ") && at=$rest
+  # asked, so each scroll can leave the row under the edge: scroll the rest, each time less, until
+  # it's in sight. Where the card can't scroll further, nothing draws again and at stays where it
+  # was.
+  for _ in 1 2 3; do
+    y=${at#* }
+    [ "$y" -ge "$top" ] && [ "$y" -le "$bottom" ] && return 0
+    if [ "$y" -gt "$bottom" ]; then by=$((y - bottom + 32)); else by=$((y - top - 32)); fi
+    send scrollkey "${at% *}" $(((top + bottom) / 2)) "$by" 1
+    rest=$(drawn_after "$1" "^browser: drive $step: ") || return 0
+    at=$rest
+  done
   return 0
 }
 # Clicks Settings' control $1 in the card, where the card shows it whole, as in_sight scrolls it:
@@ -715,7 +713,7 @@ in_sight() {
 # driver's command, clickkey unless named. in_sight's variables are its own here, so a caller's at,
 # a mark it awaits from, keeps.
 click_in_sight() {
-  local at sight top bottom y by rest
+  local at sight top bottom y by rest scrolls
   in_sight "$1" || fail "Settings didn't draw $1"
   send "${2:-clickkey}" $at
 }

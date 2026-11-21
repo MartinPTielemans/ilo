@@ -59,11 +59,13 @@ pub(crate) fn show_menu(
 pub(crate) struct DialogHost;
 
 impl dialog::Host for DialogHost {
-    fn show(&self, window: Option<u64>, over: Option<Bounds<Pixels>>) {
+    fn show(&self, window: Option<u64>, over: Option<Bounds<Pixels>>, keyboard: bool) {
         // A window's own question goes over it, else over the one in front, as the app's do.
         let view = window.and_then(ui_view_of).unwrap_or(front().1);
         let over = rect(over.unwrap_or_default());
-        unsafe { platform::host_show_dialog(view, over.x, over.y, over.width, over.height) };
+        unsafe {
+            platform::host_show_dialog(view, over.x, over.y, over.width, over.height, keyboard)
+        };
     }
 
     fn hide(&self) {
@@ -79,6 +81,13 @@ impl dialog::Host for DialogHost {
         #[cfg(not(target_os = "linux"))]
         unsafe {
             platform::host_hold_keys()
+        };
+    }
+
+    fn let_go(&self) {
+        #[cfg(target_os = "macos")]
+        unsafe {
+            platform::host_dialog_leaving()
         };
     }
 
@@ -465,6 +474,12 @@ impl zoom_hud::Host for HudHost {
     }
 }
 
+/// A window of a field the user may type in went away, so a page dialog waiting on it can show.
+/// Later: a window hides from inside the update that closes it.
+fn field_window_hidden() {
+    update_app_later(|cx| update_shells_in(cx, |shell, cx| shell.field_let_go(cx)));
+}
+
 /// A browser window's password offer's requests, to the host's offer window over it and the core.
 pub(crate) struct OfferHost {
     pub(crate) ui_view: *mut c_void,
@@ -477,6 +492,7 @@ impl offer::Host for OfferHost {
 
     fn hide(&self) {
         unsafe { platform::host_hide_offer(self.ui_view) };
+        field_window_hidden();
     }
 
     fn answer(&self, tab: u64, answer: offer::Answer, username: &str) {
@@ -504,6 +520,7 @@ impl icon_picker::Host for PickerHost {
 
     fn hide(&self) {
         unsafe { platform::host_hide_overlay(ICON_PICKER) };
+        field_window_hidden();
     }
 
     fn keep_recents(&self, recents: &str) {
@@ -587,6 +604,7 @@ impl folder_preview::Host for FolderPreviewHost {
 
     fn hide(&self) {
         unsafe { platform::host_hide_overlay(FOLDER_PREVIEW) };
+        field_window_hidden();
     }
 }
 
@@ -700,6 +718,7 @@ impl boost_editor::Host for BoostEditorHost {
 
     fn hide(&self) {
         unsafe { platform::host_hide_overlay(BOOST_EDITOR) };
+        field_window_hidden();
     }
 }
 

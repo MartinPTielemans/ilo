@@ -40,7 +40,10 @@ pid_of() {
 page='data:text/html,<title>crash</title><h1>crash</h1>'
 launch() {
   log=$out/$1.log
-  flatpak run --env=BROWSER_URL="$page" app.ilo.browser > "$log" 2>&1 &
+  # A checked launch, as off a check the app has Chromium write no ERROR line (#3731). The
+  # "without ptrace" lines counted below are Crashpad's handler's, which never reads that switch,
+  # and this keeps the count from depending on it.
+  flatpak run --env=BROWSER_URL="$page" --env=BROWSER_CHECK=1 app.ilo.browser > "$log" 2>&1 &
   fpid=$!
   for _ in $(seq 120); do
     grep -q '^browser: UI shown' "$log" && break

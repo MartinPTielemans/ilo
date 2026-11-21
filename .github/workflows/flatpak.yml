@@ -11,13 +11,16 @@ name: Flatpak
 on:
   # Branches only: an engine release's tag, pushed with the owner's token, starts nothing here. Also
   # the check runs its steps do (Sign in, Policies, Paste and Page menu) and sync-account's server,
-  # which change apart from the packaging (#3059).
+  # which change apart from the packaging (#3059), and the action and script it installs its
+  # packages with (#3760).
   push:
     branches: ['**']
     paths:
       - app/platform/linux/flatpak/**
       - tools/flatpak.sh
       - .github/workflows/flatpak.yml
+      - .github/actions/apt-install/**
+      - .github/scripts/apt-mirrors.sh
       - app/check/sync-account.sh
       - app/check/ilo-server.sh
       - app/check/policies.sh
