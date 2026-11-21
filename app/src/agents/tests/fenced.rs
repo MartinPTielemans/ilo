@@ -654,7 +654,10 @@ fn a_download_from_a_fenced_site_gives_the_agent_no_name(cx: &mut TestAppContext
     agents.update(cx, |agents, cx| {
         agents.download_started(download(request, 900), cx)
     });
-    let answer = answer.recv().unwrap();
+    // At once, while the user is asked: it waits on nothing of theirs.
+    let answer = answer
+        .try_recv()
+        .expect("the download wasn't answered at once");
     assert_eq!(answer, ToolResult::text(fence::download("mybank.example")));
     let question = browser
         .asked
