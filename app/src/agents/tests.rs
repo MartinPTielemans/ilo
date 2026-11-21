@@ -8165,18 +8165,40 @@ mod sessions {
             "Claude Code 2".into(),
             "My Codex".into(),
             "ilo-CLI".into(),
-            // A letter that only looks like one, and anything outside printable ASCII, isn't
-            // taken.
+            // So is one that only reads as one (#3585): a word mixing scripts, letters of one
+            // script that look like another's, compatibility forms, marks that don't show or
+            // join, and any case.
             "Cl\u{0430}ude Code".into(),
-            "Zed\n\u{202E}\"Agent\u{201D}".into(),
+            "\u{0456}lo agent".into(),
+            "\u{0421}\u{043E}\u{0501}\u{0435}\u{0445}".into(),
+            "\u{0131}lo agent".into(),
+            "\u{FF49}\u{FF4C}\u{FF4F} agent".into(),
+            "\u{FF23}\u{FF4F}\u{FF44}\u{FF45}\u{FF58}".into(),
+            "\u{1D402}\u{1D428}\u{1D41D}\u{1D41E}\u{1D431}".into(),
+            "Clau\u{200D}de Code".into(),
+            "Co\u{200B}dex".into(),
+            "i\u{034F}lo agent".into(),
+            "Cla\u{0301}ude Code".into(),
+            "cLaUdE cOdE".into(),
+            "CODEX".into(),
         ] {
             hello(&agents, "mcp-client", &posing, cx);
             assert_eq!(named(&agents, cx).0, "MCP client", "{posing} passed");
         }
-        for taken in ["Browser Use", "Checker"] {
+        // A name of its own is shown as given, in any script, and without what doesn't show.
+        for taken in [
+            "Browser Use",
+            "Checker",
+            "\u{0410}\u{0433}\u{0435}\u{043D}\u{0442}",
+            "\u{30A8}\u{30FC}\u{30B8}\u{30A7}\u{30F3}\u{30C8}",
+            "\u{81EA}\u{52D5}\u{30C6}\u{30B9}\u{30C8}",
+            "\u{039A}\u{03CE}\u{03B4}\u{03B9}\u{03BA}\u{03B1}\u{03C2} 2",
+        ] {
             hello(&agents, "mcp-client", taken, cx);
             assert_eq!(named(&agents, cx).0, taken);
         }
+        hello(&agents, "mcp-client", "Zed\n\u{202E}Agent", cx);
+        assert_eq!(named(&agents, cx).0, "Zed Agent");
         hello(&agents, "mcp-client", "Zed", cx);
         assert_eq!(named(&agents, cx), ("Zed".into(), Some("Zed".into())));
 
