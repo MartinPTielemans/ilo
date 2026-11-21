@@ -1,6 +1,7 @@
 //! Where a web address in a line that wraps may break: after a scheme's `//`, after each dot of
-//! its host and before its `:port`, so a long host fills each line with whole parts of itself
-//! rather than "http:/" over "/sign-in…localhos" over "t:49217" (#3748). The address is never
+//! its host (and each hyphen of a long label) and before its `:port`, so a long host fills each
+//! line with whole parts of itself rather than "http:/" over "/sign-in…localhos" over "t:49217"
+//! (#3748). The address is never
 //! shortened, elided or reordered, and what is copied, sent or logged stays the text as it is.
 //!
 //! A break hint in the string can't do it: GPUI finds a line's breaks from the shaped glyphs, and
@@ -15,6 +16,11 @@ use gpui::{AnyElement, IntoElement, ParentElement, SharedString, Styled, div};
 
 /// Where a part ends, in the marked text, drawn as nothing.
 const BREAK: char = '\u{200B}';
+
+/// A label longer than this also breaks after its hyphens, so it flows in the row with the rest of
+/// the line: as one part, a label wider than the line takes a line of its own, the rest of the
+/// text starting under it, and a preview deployment's or a bucket's labels are that long.
+const LONG_LABEL: usize = 20;
 
 /// `text` drawn so each web address in it wraps between its parts.
 pub fn text(text: &str) -> AnyElement {
@@ -143,7 +149,7 @@ fn broken(word: &str) -> Option<String> {
         false => {
             let mut labels = host.split('.').peekable();
             while let Some(label) = labels.next() {
-                out.push_str(label);
+                hyphens_broken(label, &mut out);
                 if labels.peek().is_some() {
                     out.push('.');
                     out.push(BREAK);
@@ -157,6 +163,22 @@ fn broken(word: &str) -> Option<String> {
     }
     out.push_str(path);
     Some(out)
+}
+
+/// `label` onto `out`, with a BREAK after each of its hyphens if it's long. A run of hyphens, such
+/// as punycode's `xn--`, stays whole, so no part starts with a hyphen.
+fn hyphens_broken(label: &str, out: &mut String) {
+    if label.chars().count() <= LONG_LABEL {
+        out.push_str(label);
+        return;
+    }
+    let mut chars = label.chars().peekable();
+    while let Some(c) = chars.next() {
+        out.push(c);
+        if c == '-' && chars.peek().is_some_and(|next| *next != '-') {
+            out.push(BREAK);
+        }
+    }
 }
 
 fn is_scheme(scheme: &str) -> bool {
@@ -204,10 +226,10 @@ mod tests {
 
     #[test]
     fn an_address_breaks_after_its_slashes_its_dots_and_before_its_port() {
-        let address = "http://sign-in.accounts.a-long-example-host-for-the-dialog.localhost:49217";
+        let address = "http://sign-in.accounts.example-host.localhost:49217";
         assert_eq!(
             shown(address),
-            "http://|sign-in.|accounts.|a-long-example-host-for-the-dialog.|localhost|:49217"
+            "http://|sign-in.|accounts.|example-host.|localhost|:49217"
         );
         same_text(address);
     }
@@ -218,8 +240,8 @@ mod tests {
                     in. Hand the tab back when you’re done.";
         assert_eq!(
             shown(card),
-            "sign-in.|accounts.|a-long-example-host-for-the-card.|localhost asks you to sign in. \
-             Hand the tab back when you’re done."
+            "sign-in.|accounts.|a-|long-|example-|host-|for-|the-|card.|localhost asks you to \
+             sign in. Hand the tab back when you’re done."
         );
         same_text(card);
     }
@@ -251,6 +273,34 @@ mod tests {
         );
         assert_eq!(shown("[::1]"), "[::1]");
         same_text("http://[2001:db8::1]:8443/");
+    }
+
+    #[test]
+    fn a_long_label_also_breaks_after_its_hyphens_and_a_short_one_does_not() {
+        assert_eq!(
+            shown("https://my-app-git-feature-branch-team.example.app/"),
+            "https://|my-|app-|git-|feature-|branch-|team.|example.|app/"
+        );
+        // Twenty characters, so it's whole.
+        assert_eq!(
+            shown("one-two-three-four-5.example.com"),
+            "one-two-three-four-5.|example.|com"
+        );
+        same_text("https://my-app-git-feature-branch-team.example.app/");
+    }
+
+    #[test]
+    fn a_long_punycode_label_keeps_its_prefix_whole() {
+        let host = "xn--a-long-label-for-the-test-qva.example";
+        assert_eq!(
+            shown(host),
+            "xn--|a-|long-|label-|for-|the-|test-|qva.|example"
+        );
+        same_text(host);
+        // Each part ends at a hyphen or a dot, and none starts with one.
+        let parts: Vec<String> = lines(host).unwrap().concat();
+        assert!(parts.iter().all(|part| !part.starts_with('-')), "{parts:?}");
+        assert_eq!(parts.concat(), host);
     }
 
     #[test]
