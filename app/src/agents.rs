@@ -1081,10 +1081,15 @@ impl Agents {
             .collect()
     }
 
-    /// Whether Settings › Agents offers the `ilo` command: not yet in a Flatpak, whose sandbox
-    /// can't write the user's bin folder.
+    /// Whether Settings › Agents offers the `ilo` command.
     pub fn command_offered(&self) -> bool {
-        cfg!(any(unix, windows)) && self.bridge.first().map(String::as_str) != Some("flatpak")
+        cfg!(any(unix, windows))
+    }
+
+    /// In a Flatpak, the line the `ilo` command's row gives to run on the host, since the sandbox
+    /// can't write the user's bin folder (cli::flatpak_line).
+    pub fn command_flatpak_line(&self) -> Option<String> {
+        cli::flatpak_line(&self.bridge)
     }
 
     /// The folder the `ilo` command's row names on Windows, where the command is beside the
@@ -1100,17 +1105,19 @@ impl Agents {
     }
 
     /// The `ilo` command's row: not added, or added in a folder the user's shell looks in or not.
-    /// On Windows, added in a folder no longer on the user's PATH is Add again (#3783).
+    /// On Windows, added in a folder no longer on the user's PATH is Add again (#3783). A
+    /// Flatpak's sandbox can't ask the host's shell, so there the row gives its line either way.
     pub fn command_state(&self) -> cli::State {
         let added = self.is_connected(Client::Command);
-        cli::state(added, self.command_searched, cfg!(windows))
+        let flatpak = self.command_flatpak_line().is_some();
+        cli::state(added, self.command_searched || flatpak, cfg!(windows))
     }
 
     /// Asks the user's shell, in the background, whether it looks in the `ilo` command's folder,
     /// as the row says, once it's added: on Windows, whether Add's entry is still on the user's
     /// PATH.
     fn look_for_command(&mut self, cx: &mut Context<Self>) {
-        if !self.is_connected(Client::Command) {
+        if !self.is_connected(Client::Command) || self.command_flatpak_line().is_some() {
             return;
         }
         let clients = self.clients.clone();
