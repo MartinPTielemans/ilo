@@ -889,7 +889,6 @@ function offerFirstNote() {
   el.classList.add("first", "editing");
   const field = el.querySelector(".text");
   field.contentEditable = "plaintext-only";
-  editing = { card, before: null, text: "", first: true };
   const appear = () => {
     field.removeEventListener("beforeinput", appear);
     field.removeEventListener("compositionstart", appear);
@@ -899,6 +898,8 @@ function offerFirstNote() {
     editing = { card, before: undos.at(-1), text: "" };
     el.classList.remove("first");
   };
+  // The keys held while the Board opened make it appear too (opened, below).
+  editing = { card, before: null, text: "", first: true, appear };
   field.addEventListener("beforeinput", appear);
   field.addEventListener("compositionstart", appear);
   field.addEventListener("input", typed);
@@ -906,6 +907,36 @@ function offerFirstNote() {
 }
 
 // --- Keys ---
+
+// The page has the keyboard as soon as it loads, but whether its Board is empty, and so whether
+// it offers the first note's field, waits for the host's hello and the Board's file. A key typed
+// before then would land on the canvas, so the keys that type are held until the Board is open
+// (#3424): typed into the first note's field, the way typing there goes, or given to the canvas
+// in order on a Board with cards.
+let opening = true;
+const early = [];
+document.addEventListener(
+  "keydown",
+  (e) => {
+    if (!opening || e.metaKey || e.ctrlKey || e.altKey || [...e.key].length !== 1) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    early.push(e.key);
+  },
+  true,
+);
+function opened() {
+  opening = false;
+  const keys = early.splice(0);
+  if (!keys.length) return;
+  if (editing?.first) {
+    editing.appear();
+    return document.execCommand("insertText", false, keys.join(""));
+  }
+  for (const key of keys) {
+    for (const type of ["keydown", "keyup"]) document.body.dispatchEvent(new KeyboardEvent(type, { key, bubbles: true }));
+  }
+}
 
 document.addEventListener("keydown", (e) => {
   const command = e.metaKey || e.ctrlKey;
@@ -1160,4 +1191,4 @@ document.addEventListener("visibilitychange", () => {
   else land();
 });
 
-open_();
+open_().finally(opened);
