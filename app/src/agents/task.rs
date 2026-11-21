@@ -3354,19 +3354,32 @@ pub fn model_menu(
     (all, items)
 }
 
+/// A name as it reads: compatibility forms as the letters they show, each letter as the one it
+/// passes for (UTS #39's skeleton, which drops what doesn't show), in lower case, words of letters
+/// and digits split by one space. Two names that read alike read the same here.
+fn reads_as(name: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    let folded = name.nfkc().collect::<String>().to_lowercase();
+    let read = unicode_security::skeleton(&folded).collect::<String>();
+    let read = read.to_lowercase();
+    let words = read.split(|c: char| !c.is_alphanumeric());
+    words
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Whether a given name could pass for a client's own, so a card saying "Claude Code" is always
-/// Claude Code's connection: read by its letters and digits alone, one holding an app's name or
-/// being another client's, and any with a character outside printable ASCII, which can look like
-/// a letter of one or hide.
+/// Claude Code's connection: one that reads as another client's or holds an app's name, or with a
+/// word mixing scripts, which a real name doesn't and a lookalike does.
 fn names_a_client(name: &str) -> bool {
-    let skeleton = |name: &str| -> String {
-        let kept = name.chars().filter(char::is_ascii_alphanumeric);
-        kept.collect::<String>().to_ascii_lowercase()
-    };
-    let given = skeleton(name);
-    name.chars().any(|c| !(' '..='~').contains(&c))
+    use unicode_normalization::UnicodeNormalization;
+    use unicode_security::MixedScript;
+    let given = reads_as(name).replace(' ', "");
+    let folded = name.nfkc().collect::<String>();
+    (folded.split(|c: char| !c.is_alphanumeric())).any(|word| !word.is_single_script())
         || (Client::ALL.iter()).any(|&client| {
-            let own = skeleton(client.name());
+            let own = reads_as(client.name()).replace(' ', "");
             let app = matches!(client, Client::ClaudeCode | Client::Codex);
             given == own || app && given.contains(&own)
         })
@@ -3375,15 +3388,13 @@ fn names_a_client(name: &str) -> bool {
 /// Whether a client's name would pass for the browser's own words: one with the app's name as a
 /// word, or that calls itself the browser. "Browser Use" is an agent's.
 fn names_the_browser(name: &str) -> bool {
-    let lower = name.to_lowercase();
-    let app = env!("APP_NAME").to_lowercase();
-    lower
-        .split(|c: char| !c.is_alphanumeric())
-        .any(|word| word == app)
+    let read = reads_as(name);
+    let app = reads_as(env!("APP_NAME"));
+    read.split(' ').any(|word| word == app)
         || ["the browser", "your browser", "this browser", "web browser"]
             .iter()
-            .any(|browser| lower.contains(browser))
-        || lower == "browser"
+            .any(|browser| read.contains(&reads_as(browser)))
+        || read == reads_as("browser")
 }
 
 #[cfg(test)]
