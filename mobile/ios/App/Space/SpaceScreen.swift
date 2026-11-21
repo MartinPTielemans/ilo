@@ -60,7 +60,7 @@ struct SpaceScreen: View {
           lie {
             if !bare { PinTiles(turn: turn) }
             SearchBar(
-              query: $query, site: $site, focused: $focused, fieldOff: account.spaces.isEmpty, docked: true,
+              query: $query, site: $site, focused: $focused, open: focused, fieldOff: account.spaces.isEmpty, docked: true,
               // While a file has begun or ended since the list was looked at, the chevron leads there.
               menu: { browser.sheet = browser.downloads.news ? .downloads : .settings }, submit: submit
             )
@@ -160,6 +160,10 @@ struct SearchBar: View {
   /// The site the field searches instead, once its name and two spaces are typed.
   @Binding var site: SiteSearch?
   var focused: FocusState<Bool>.Binding
+  /// Whether the field has the keyboard, as the caller reads its own `focused`. Read through
+  /// the binding in here, the first focus after the field is made went unseen, and the field
+  /// stayed drawn closed with the keyboard up until something else redrew it (#3838).
+  let open: Bool
   /// Over a page the field opens with the page's address selected, to type over.
   var selectsAll = false
   /// With no Space to open a tab in, the field takes nothing. The chevron stays in use: it's
@@ -206,7 +210,6 @@ struct SearchBar: View {
   }
 
   var body: some View {
-    let open = focused.wrappedValue
     HStack(spacing: Dock.gap) {
       field(open: open)
         .fieldGlass(open: open, apart: !docked && !open && menu != nil, docked: docked) { if !fieldOff { focused.wrappedValue = true } }
