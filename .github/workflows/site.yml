@@ -1,0 +1,167 @@
+# ilobrowser.com, from site/ (site/AGENTS.md). ci.yml calls it for a change to site/, which runs the
+# site's checks and nothing else, and on a push to main deploys once they pass. release.yml calls it
+# when the owner publishes a release, which puts that release's demo and changelog entry on the
+# site. By hand on main, it uploads a preview to the Worker ilo-site-preview on workers.dev
+# (site/wrangler.jsonc's env.preview), which never touches ilobrowser.com, or deploys with live.
+#
+# Only the deploy job reads the Cloudflare secrets: they're the GitHub environment ilobrowser.com's,
+# which only main and v* tags may use (docs/releasing.md). With either missing, it deploys nothing
+# and says so. A live deploy also waits for that environment's SITE_DEPLOY variable to be `live`, so
+# this repo deploys ilobrowser.com only once the owner switches the old site repo's deploy off.
+name: Site
+
+on:
+  workflow_call:
+    inputs:
+      deploy:
+        description: Deploy after the checks
+        type: boolean
+        default: false
+  workflow_dispatch:
+    inputs:
+      live:
+        description: Deploy ilobrowser.com, rather than upload a preview
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      commit: ${{ steps.commit.outputs.commit }}
+    steps:
+      # A published release's event is on its tag, and the site deploys main.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'release' && 'refs/heads/main' || github.sha }}
+          persist-credentials: false
+          sparse-checkout: site
+
+      - id: commit
+        run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: voidzero-dev/setup-vp@cab1ab9eaff52d4857875f4f2c016e36af8f2c76 # v1.22.0
+        with:
+          node-version: "24"
+          working-directory: site
+          cache: true
+          cache-dependency-path: site/pnpm-lock.yaml
+
+      # No demo here: it's the release's, and the site builds and passes without it.
+      - working-directory: site
+        run: |
+          vp check
+          vp test
+          vp build
+
+  deploy:
+    name: Deploy
+    needs: check
+    if: ${{ inputs.deploy || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: ilobrowser.com
+    # One at a time, never cancelled half way.
+    concurrency:
+      group: site-deploy
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Switch
+        id: switch
+        env:
+          TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SITE_DEPLOY: ${{ vars.SITE_DEPLOY }}
+          LIVE: ${{ inputs.live }}
+        run: |
+          if [ -z "$TOKEN" ] || [ -z "$ACCOUNT" ]; then
+            echo "::notice::No CLOUDFLARE_API_TOKEN or CLOUDFLARE_ACCOUNT_ID in the ilobrowser.com environment (docs/releasing.md), so nothing is deployed."
+            echo "mode=none" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "::error::The site deploys from main only, not $GITHUB_REF."
+            exit 1
+          fi
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$LIVE" != true ]; then
+            echo "mode=preview" >> "$GITHUB_OUTPUT"
+          elif [ "$SITE_DEPLOY" = live ]; then
+            echo "mode=live" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::The ilobrowser.com environment's SITE_DEPLOY isn't live (docs/releasing.md), so nothing is deployed."
+            echo "mode=none" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: ${{ steps.switch.outputs.mode != 'none' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.check.outputs.commit }}
+          persist-credentials: false
+          sparse-checkout: site
+
+      # The changelog shows only published releases (site/src/changelog.ts), and the demo is the
+      # newest one's that has it. A list that can't be read, or is empty, fails the deploy, rather
+      # than one that would publish every dated entry.
+      - name: Releases
+        if: ${{ steps.switch.outputs.mode != 'none' }}
+        run: |
+          set -euo pipefail
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[]
+            | select((.draft | not) and (.prerelease | not) and (.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")))
+            | [.tag_name, ([.assets[].name] | index("ilo-demo.tar.gz") != null)] | @tsv' > "$RUNNER_TEMP/releases"
+          if [ ! -s "$RUNNER_TEMP/releases" ]; then
+            echo "::error::No published release of ilo listed, so the changelog would show none."
+            exit 1
+          fi
+          published=$(cut -f1 "$RUNNER_TEMP/releases" | sed 's/^v//' | sort -V | tr '\n' ' ')
+          echo "ILO_PUBLISHED=$published" >> "$GITHUB_ENV"
+          echo "Published: $published" >> "$GITHUB_STEP_SUMMARY"
+          tag=$(awk -F'\t' '$2 == "true" { print $1 }' "$RUNNER_TEMP/releases" | sort -V | tail -n 1)
+          if [ -z "$tag" ]; then
+            echo "::error::No published release has ilo-demo.tar.gz, so the home page would have no live demo."
+            exit 1
+          fi
+          commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha)
+          gh release download "$tag" -R "$GITHUB_REPOSITORY" -p ilo-demo.tar.gz -D "$RUNNER_TEMP"
+          cd site/public/demo
+          rm -rf ilo_demo.js ilo_demo_bg.wasm snippets
+          tar xzf "$RUNNER_TEMP/ilo-demo.tar.gz"
+          # The home page's fine print links this commit, as the GPL's offer of the demo's source.
+          cat > SOURCE <<EOF
+          ilo_demo.js and ilo_demo_bg.wasm are ilo's interface built for the web from the browser repo,
+          under the GPL in LICENSE, at this commit (release $tag):
+
+          https://github.com/$GITHUB_REPOSITORY/tree/$commit
+
+          The fonts in it are Outfit (OFL.txt) and Inter (Inter-OFL.txt), under the SIL Open Font License.
+          EOF
+          echo "Demo: $tag, $commit" >> "$GITHUB_STEP_SUMMARY"
+
+      # Without the dependency cache, so the job that holds the token runs nothing another run wrote.
+      - if: ${{ steps.switch.outputs.mode != 'none' }}
+        uses: voidzero-dev/setup-vp@cab1ab9eaff52d4857875f4f2c016e36af8f2c76 # v1.22.0
+        with:
+          node-version: "24"
+          working-directory: site
+
+      - name: Build and deploy
+        if: ${{ steps.switch.outputs.mode != 'none' }}
+        working-directory: site
+        env:
+          MODE: ${{ steps.switch.outputs.mode }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          vp build
+          if [ "$MODE" = live ]; then
+            npx --yes wrangler@4.151.2 deploy
+          else
+            npx --yes wrangler@4.151.2 deploy --env preview
+          fi
