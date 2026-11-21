@@ -333,6 +333,9 @@ pub struct Session {
     /// Its pages: the tabs it opened or acted in, in that order, but for one another session
     /// under way has among its own.
     pub tabs: Vec<u64>,
+    /// The tabs it acted in, its own and another session's alike: while it works on, they stay
+    /// out of an ended card's Open, and stay open when that card goes (#3837).
+    pub(super) acted: Vec<u64>,
     /// The orders it placed and the messages it sent, each once the user allowed it and it was
     /// done, for its receipt. For this run only, as the session is.
     pub(super) orders: usize,
@@ -1601,12 +1604,12 @@ impl Agents {
         }
     }
 
-    /// The tabs the sessions under way have opened or acted on.
+    /// The tabs the sessions under way have opened or acted on, another's page among them.
     fn worked_in(&self) -> Vec<u64> {
         (self.tasks.tasks.iter())
             .filter(|task| task.state == State::Working)
             .filter_map(|task| task.session.as_ref())
-            .flat_map(|session| session.tabs.iter().copied())
+            .flat_map(|session| session.tabs.iter().chain(&session.acted).copied())
             .collect()
     }
 
@@ -1775,12 +1778,16 @@ impl Agents {
                     && (task.session.as_ref()).is_some_and(|session| session.tabs.contains(&tab))
             })
         };
-        let page = did
-            .tab
-            .filter(|&tab| in_space(self, tab) && !others(self, tab));
+        let acted = did.tab.filter(|&tab| in_space(self, tab));
+        let page = acted.filter(|&tab| !others(self, tab));
         let Some(task) = self.task_mut(key) else {
             return;
         };
+        if let (Some(session), Some(tab)) = (&mut task.session, acted)
+            && !session.acted.contains(&tab)
+        {
+            session.acted.push(tab);
+        }
         if let (Some(session), Some(tab)) = (&mut task.session, page)
             && !session.tabs.contains(&tab)
         {
@@ -2053,6 +2060,7 @@ impl Agents {
             agent: call.agent.clone(),
             connection: call.connection,
             tabs: Vec::new(),
+            acted: Vec::new(),
             orders: 0,
             messages: 0,
             calls: vec![call.id],
