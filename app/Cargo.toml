@@ -20,6 +20,10 @@ path = "src/preview.rs"
 name = "mcp-bridge"
 path = "src/bridge.rs"
 
+[[bin]]
+name = "ilo-command"
+path = "src/ilo_command.rs"
+
 [features]
 # The build for daily use (`build.sh prod`): the user's profile and the real Keychain.
 prod = []

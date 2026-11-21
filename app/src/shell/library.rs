@@ -3282,6 +3282,7 @@ impl Shell {
             });
             crate::settings_rows::sent_part(
                 ("past-step-all", step),
+                None,
                 &each.url,
                 &each.sent,
                 !each.refused.is_empty(),

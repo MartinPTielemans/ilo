@@ -268,6 +268,19 @@ source_set("live_folder_rule") {
   public_deps = [ "//url" ]
 }
 
+# What bc_tab_follow and bc_agent_navigate load, apart so browser_core_unittests tests the rule
+# alone (#3576).
+source_set("tab_follow_rule") {
+  sources = [
+    "tab_follow_rule.cc",
+    "tab_follow_rule.h",
+  ]
+  public_deps = [
+    "//ui/base",
+    "//url",
+  ]
+}
+
 # Which tabs' hover cards ask a site what's recent, and what each is answered, apart so
 # browser_core_unittests tests the rule alone (#3074).
 source_set("tab_recent_rule") {
@@ -491,6 +504,16 @@ source_set("agent_splash_rule") {
   deps = [ "//base" ]
 }
 
+# Whether a page refused protected media moves its tab to the system's engine, apart so
+# browser_core_unittests tests the rule alone (#3593).
+source_set("protected_move_rule") {
+  sources = [
+    "protected_move_rule.cc",
+    "protected_move_rule.h",
+  ]
+  deps = [ "//base" ]
+}
+
 # How long an agent's job waits on its page's renderer, apart so browser_core_unittests tests the
 # limit alone (#3536).
 source_set("agent_reply_limit") {
@@ -565,6 +588,20 @@ source_set("system_stores") {
     "//base",
     "//chrome/common:constants",
     "//components/prefs",
+  ]
+}
+
+# Chrome's delegate for a profile's data removal, wrapped so Clear Browsing Data also reaches the
+# system's engine, apart so browser_core_unittests tests it with Chrome's delegate stubbed (#3600).
+source_set("clear_both_engines") {
+  sources = [
+    "clear_both_engines.cc",
+    "clear_both_engines.h",
+  ]
+  public_deps = [ "//content/public/browser" ]
+  deps = [
+    "//base",
+    "//chrome/browser/browsing_data:constants",
   ]
 }
 
@@ -776,12 +813,14 @@ source_set("browser_core") {
     ":focus_leaving_rule",
     ":live_folder_rule",
     ":pinned_url",
+    ":tab_follow_rule",
     ":tab_recent_rule",
     ":arrangement",
     ":board_store",
     ":ax_text",
     ":boost_colors",
     ":boost_script",
+    ":clear_both_engines",
     ":drm_request",
     ":history_removal",
     ":idle_check",
@@ -791,6 +830,7 @@ source_set("browser_core") {
     ":agent_splash_rule",
     ":agent_reply_limit",
     ":popup_hold",
+    ":protected_move_rule",
     ":search_default",
     ":select_choices",
     ":agent_download_hold",
@@ -992,13 +1032,18 @@ source_set("browser_core") {
       "platform/mac/system_page.mm",
       "platform/mac/window_views.mm",
     ]
-    # The keyboard's layouts, for keyboard.mm.
-    frameworks = [ "Carbon.framework" ]
+    # The keyboard's layouts, for keyboard.mm, and the app's own entitlements, for keychain.mm.
+    frameworks = [
+      "Carbon.framework",
+      "Security.framework",
+    ]
     # WebKit isn't linked: system_page.mm starts it with the first system page, so a launch that
     # shows none starts no WebKit process.
     deps += [
       "//chrome/browser:chrome_browser_application_mac",
+      "//chrome/browser/webauthn",
       "//components/os_crypt/common:keychain_password_mac",
+      "//device/fido",
       "//media",
       "//components/remote_cocoa/app_shim",
       "//components/remote_cocoa/common:mojo",
@@ -1109,6 +1154,7 @@ test("browser_core_unittests") {
     "agent_job_voter_unittest.cc",
     "boost_colors_unittest.cc",
     "boost_script_unittest.cc",
+    "clear_both_engines_unittest.cc",
     # The removals the Library's History and the command bar undo on ⌘Z, on a history service.
     "history_removal_unittest.cc",
     "idle_check_unittest.cc",
@@ -1123,6 +1169,7 @@ test("browser_core_unittests") {
     "omnibox_last_visit_unittest.cc",
     "other_tabs_unittest.cc",
     "popup_hold_unittest.cc",
+    "protected_move_rule_unittest.cc",
     "search_default_unittest.cc",
     "select_choices_unittest.cc",
     "shortcut_key_unittest.cc",
@@ -1140,6 +1187,7 @@ test("browser_core_unittests") {
     "sync_trouble_unittest.cc",
     "sync_updates_unittest.cc",
     "system_stores_unittest.cc",
+    "tab_follow_rule_unittest.cc",
     "tab_recent_rule_unittest.cc",
     "typed_http_unittest.cc",
     "typing_keys_unittest.cc",
@@ -1156,6 +1204,7 @@ test("browser_core_unittests") {
     ":live_folder_rule",
     ":native_ad_block_lists",
     ":pinned_url",
+    ":tab_follow_rule",
     ":tab_recent_rule",
     ":arrangement",
     ":board_store",
@@ -1167,11 +1216,13 @@ test("browser_core_unittests") {
     ":agent_reply_limit",
     ":boost_colors",
     ":boost_script",
+    ":clear_both_engines",
     ":history_removal",
     ":idle_check",
     ":mini_player_place",
     ":other_tabs",
     ":popup_hold",
+    ":protected_move_rule",
     ":search_default",
     ":select_choices",
     ":sidebar_backups",
@@ -1192,6 +1243,7 @@ test("browser_core_unittests") {
     "//base",
     "//base/test:run_all_unittests",
     "//base/test:test_support",
+    "//chrome/browser/browsing_data:constants",
     "//components/history/core/browser",
     "//components/history/core/test",
     "//components/omnibox/browser",
