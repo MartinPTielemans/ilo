@@ -1081,9 +1081,9 @@ impl Agents {
             .collect()
     }
 
-    /// Whether Settings › Agents offers the `ilo` command: not yet on Windows.
+    /// Whether Settings › Agents offers the `ilo` command.
     pub fn command_offered(&self) -> bool {
-        cfg!(unix)
+        cfg!(any(unix, windows))
     }
 
     /// In a Flatpak, the line the `ilo` command's row gives to run on the host, since the sandbox
@@ -1092,20 +1092,30 @@ impl Agents {
         cli::flatpak_line(&self.bridge)
     }
 
-    /// The `ilo` command's row: not added, or added in a folder the user's shell looks in or not.
-    /// A Flatpak's sandbox can't ask the host's shell, so there the row gives its line either way.
-    pub fn command_state(&self) -> cli::State {
-        let flatpak = self.command_flatpak_line().is_some();
-        match (self.is_connected(Client::Command), self.command_searched) {
-            (false, _) => cli::State::Off,
-            (true, true) => cli::State::On,
-            (true, _) if flatpak => cli::State::On,
-            (true, false) => cli::State::Unsearched,
+    /// The folder the `ilo` command's row names on Windows, where the command is beside the
+    /// bridge's and not in ~/.local/bin.
+    pub fn command_windows_folder(&self) -> Option<String> {
+        if !cfg!(windows) {
+            return None;
         }
+        let local = std::env::var("LOCALAPPDATA").unwrap_or_default();
+        let bridge = std::path::Path::new(self.bridge.first()?);
+        let install = cli::Install::windows(bridge, &local, Default::default());
+        Some(cli::shown(&install.folder, &local))
+    }
+
+    /// The `ilo` command's row: not added, or added in a folder the user's shell looks in or not.
+    /// On Windows, added in a folder no longer on the user's PATH is Add again (#3783). A
+    /// Flatpak's sandbox can't ask the host's shell, so there the row gives its line either way.
+    pub fn command_state(&self) -> cli::State {
+        let added = self.is_connected(Client::Command);
+        let flatpak = self.command_flatpak_line().is_some();
+        cli::state(added, self.command_searched || flatpak, cfg!(windows))
     }
 
     /// Asks the user's shell, in the background, whether it looks in the `ilo` command's folder,
-    /// as the row says, once it's added.
+    /// as the row says, once it's added: on Windows, whether Add's entry is still on the user's
+    /// PATH.
     fn look_for_command(&mut self, cx: &mut Context<Self>) {
         if !self.is_connected(Client::Command) || self.command_flatpak_line().is_some() {
             return;
@@ -1117,6 +1127,9 @@ impl Agents {
                 .await;
             agents
                 .update(cx, |agents, cx| {
+                    // check.sh reads this line.
+                    let found = if searched { "found" } else { "not found" };
+                    log!("browser: agent ilo-command looked: {found}");
                     if agents.command_searched != searched {
                         agents.command_searched = searched;
                         cx.notify();

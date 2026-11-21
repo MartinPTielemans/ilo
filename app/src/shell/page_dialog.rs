@@ -243,14 +243,6 @@ impl Shell {
         self.browser.hold_keyboard_for_page(cx);
     }
 
-    /// The app is the active one again. Windows' word that the page took the keyboard also comes
-    /// as the app goes to the background, and its keys come back to the UI with it unsaid, so the
-    /// word no longer holds: a field still drawn with the focus counts until the next press in the
-    /// page, which the host tells again.
-    pub fn app_came_back(&mut self) {
-        self.page_keyboard = None;
-    }
-
     /// Whether the page has the keyboard: as the core says where it keeps that, else since the
     /// host said the page took it, unless GPUI's focus has moved since, as the UI giving a field
     /// the keyboard moves it.

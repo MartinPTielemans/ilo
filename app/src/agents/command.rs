@@ -617,6 +617,16 @@ pub struct Agent {
     pub token: String,
 }
 
+/// The agent the agent file in the profile directory `profile` names, which Add writes: none
+/// before, as in the Store's copy, whose `ilo` is on PATH from install.
+pub fn added(profile: &Path) -> Option<Agent> {
+    let agent = super::cli::Agent::read(&super::cli::agent_file(profile))?;
+    Some(Agent {
+        address: agent.address,
+        token: agent.token,
+    })
+}
+
 /// Runs the command line `args` as the agent the agent file names, with `input` for stdin.
 pub fn run(
     args: Vec<String>,
@@ -1029,5 +1039,24 @@ mod tests {
         let printed = run(vec!["tabs".into()], None, None, String::new);
         assert_eq!(printed.code, exit::UNKNOWN);
         assert!(printed.err.contains("Command line"));
+    }
+
+    /// The command before Add, as the Store's alias is from install: the profile's server hears
+    /// nothing of it, and it ends not added.
+    #[cfg(unix)]
+    #[test]
+    fn before_add_nothing_reaches_the_server() {
+        let profile = std::env::temp_dir().join(format!("ilo-inert-{}", std::process::id()));
+        _ = std::fs::remove_dir_all(&profile);
+        std::fs::create_dir_all(&profile).unwrap();
+        let listener =
+            std::os::unix::net::UnixListener::bind(super::super::server::address(&profile))
+                .unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let printed = run(vec!["tabs".into()], None, added(&profile), String::new);
+        assert_eq!(printed.code, exit::UNKNOWN);
+        let heard = listener.accept().map(|_| ()).map_err(|error| error.kind());
+        assert_eq!(heard, Err(std::io::ErrorKind::WouldBlock));
+        _ = std::fs::remove_dir_all(&profile);
     }
 }

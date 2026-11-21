@@ -4938,7 +4938,7 @@ impl gpui::Render for PicturesPage {
                     CommandLine::On | CommandLine::FlatpakOn => cli::State::On,
                     CommandLine::Unsearched => cli::State::Unsearched,
                 };
-                let detail = cli::detail(state, flatpak.as_deref());
+                let detail = cli::detail(state, flatpak.as_deref(), None);
                 let mono = browser::face::mono(&cx.text_system().all_font_names());
                 let mut controls = Vec::new();
                 if detail.export.is_some() {

@@ -1112,6 +1112,19 @@ pub(super) fn keystroke_label_on(keystroke: &str, off_the_mac: bool) -> String {
     }
 }
 
+/// How a menu would show `pressed`, a key as this platform's keyboard presses it rather than as
+/// SHORTCUTS writes it, as Chrome's Alt+Left Arrow.
+pub fn pressed_label(pressed: &str) -> String {
+    pressed_label_on(pressed, super::keys::OFF_THE_MAC)
+}
+
+pub(super) fn pressed_label_on(pressed: &str, off_the_mac: bool) -> String {
+    match off_the_mac {
+        true => keys_named(pressed, true).join("+"),
+        false => keys_named(pressed, false).concat(),
+    }
+}
+
 /// The keys of `keystroke` as a menu shows them, one by one, for a chip each: ⇧, ⌘ and K for
 /// shift-cmd-k, and Ctrl, Shift and K off the Mac. None if it can't be pressed here.
 pub fn keystroke_keys(keystroke: &str) -> Vec<String> {

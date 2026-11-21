@@ -99,7 +99,8 @@ pub trait Clients: Send + Sync {
     /// Whether the client is on this computer, for Settings › Agents to list it. Other is always.
     fn found(&self, client: Client) -> bool;
     /// Whether a terminal opened now looks for commands in `folder`, as the `ilo` command's row
-    /// says. Slow: it runs the user's shell.
+    /// says. Slow: it runs the user's shell. On Windows, whether the entry Add put on the user's
+    /// PATH is still there, which an uninstall takes off (#3783).
     fn searches(&self, _folder: &Path) -> bool {
         true
     }
@@ -170,23 +171,41 @@ impl Clients for System {
     fn searches(&self, folder: &Path) -> bool {
         shell_path().is_some_and(|path| super::cli::searched(&path, folder))
     }
+
+    #[cfg(windows)]
+    fn searches(&self, _folder: &Path) -> bool {
+        match command_install(&Entry::default()) {
+            Ok(install) => install.on_path(&super::cli::Registry),
+            Err(_) => true,
+        }
+    }
 }
 
 /// Where Add puts the `ilo` command: its link in the user's bin folder, to the program beside the
-/// bridge `entry` runs, and its agent file in the profile directory, where the command looks. A
-/// Flatpak's sandbox can't write the bin folder, so there it's the agent file alone.
+/// bridge `entry` runs, or on Windows the folder beside the bridge's that holds it, and its agent
+/// file in the profile directory, where the command looks. A Flatpak's sandbox can't write the bin
+/// folder, so there it's the agent file alone.
 fn command_install(entry: &Entry) -> Result<super::cli::Install, String> {
-    let program = match entry.command.as_str() {
+    let bridge = match entry.command.as_str() {
         "" => std::env::current_exe()
             .unwrap_or_default()
-            .with_file_name(super::cli::PROGRAM),
-        bridge => Path::new(bridge).with_file_name(super::cli::PROGRAM),
+            .with_file_name(super::bridge::NAME),
+        bridge => PathBuf::from(bridge),
     };
+    let file = super::cli::agent_file(Path::new(&crate::profile_dir()));
+    #[cfg(windows)]
+    return Ok(super::cli::Install::windows(
+        &bridge,
+        &std::env::var("LOCALAPPDATA").unwrap_or_default(),
+        file,
+    ));
+    #[cfg(not(windows))]
     Ok(super::cli::Install {
         folder: super::cli::folder(&home()),
-        program,
-        file: super::cli::agent_file(Path::new(&crate::profile_dir())),
+        program: bridge.with_file_name(super::cli::PROGRAM),
+        file,
         linked: super::bridge::flatpak_id().is_none(),
+        store: false,
     })
 }
 
