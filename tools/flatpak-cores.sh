@@ -67,7 +67,10 @@ read_cores() {
       -iex "set sysroot $root" -iex 'set print frame-arguments none' -iex 'set print entry-values no' \
       -ex 'echo == The thread that died\n' -ex 'bt 40' \
       -ex 'echo == Every thread\n' -ex 'info threads' -ex 'thread apply all bt 40' \
-      "$exe" "$core" > "$out/$name.txt" 2>&1 || true
+      "$exe" "$core" 2>&1 |
+      # Paths as the sandbox has them, without a line for each mapped file gdb has no copy of.
+      grep -v 'during file-backed mapping note processing' | sed "s#$root/#/#g" | cat -s \
+        > "$out/$name.txt" || true
     rm -f "$core"
     echo "::warning::The Flatpak's ${exe##*/} died on signal $signal at $when. Its backtrace is $name.txt in the artifact ilo-flatpak-traces."
     grep -E '^(Core was generated|Program terminated)' "$out/$name.txt" || true
