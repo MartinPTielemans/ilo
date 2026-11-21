@@ -1911,6 +1911,14 @@ impl Browser for Fake {
         cfg!(target_family = "wasm") && command_bar::is_open(cx)
     }
 
+    fn field_window_typing(&self, _: &mut App) -> bool {
+        false
+    }
+
+    fn page_has_keyboard(&self, _: &App) -> Option<bool> {
+        None
+    }
+
     fn command_bar_follows(&self, _: Vec<BarTab>, _: Vec<BarTab>, _: &mut App) -> bool {
         false
     }
@@ -2916,6 +2924,7 @@ fn main() {}
 
 #[cfg(not(target_family = "wasm"))]
 fn main() {
+    browser::log_every_line();
     gpui_platform::application()
         .with_assets(shell::Assets)
         .run(|cx| {
@@ -4320,7 +4329,7 @@ impl link_preview::Host for PreviewPeek {
 struct PreviewDialog;
 
 impl dialog::Host for PreviewDialog {
-    fn show(&self, _: Option<u64>, _: Option<Bounds<Pixels>>) {}
+    fn show(&self, _: Option<u64>, _: Option<Bounds<Pixels>>, _: bool) {}
 
     fn hide(&self) {}
 }
@@ -4925,7 +4934,7 @@ impl gpui::Render for PicturesPage {
                     cli::State::Off => "Add",
                     _ => "Remove",
                 }));
-                let detail = cli::detail(state);
+                let detail = cli::detail(state, None);
                 let export = (detail.export).map(|export| command_export(&look, export, mono));
                 let command = frame()
                     .flex_wrap()

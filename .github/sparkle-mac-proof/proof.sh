@@ -77,7 +77,8 @@ ilo_pid() { pgrep -n -f "^$installed/Contents/MacOS/" || true; }
 launch() { # <log> <what>
   # Last checked long ago, so Sparkle checks once the updater starts, as a copy left a day would.
   defaults write "$id" SULastCheckTime -date "2020-01-01 00:00:00 +0000"
-  open -n -a "$installed" --stdout "$1" --stderr "$1" \
+  # open passes no environment, and the app writes its lines only when a check runs it (#3725).
+  open -n -a "$installed" --stdout "$1" --stderr "$1" --env BROWSER_CHECK=1 \
     --env 'BROWSER_URL=data:text/html,<title>Proof tab</title><h1>Proof tab</h1>' ||
     fail "$2 didn't open"
   pid=

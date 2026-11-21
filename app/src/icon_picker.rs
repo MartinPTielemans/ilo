@@ -346,6 +346,16 @@ pub fn is_open(cx: &App) -> bool {
     open_for(cx).is_some()
 }
 
+/// Whether the user types in the picker's search.
+pub fn typing(cx: &mut App) -> bool {
+    let Some(picker) = cx.try_global::<IconPickerWindow>().map(|picker| picker.0) else {
+        return false;
+    };
+    is_open(cx)
+        && (picker.update(cx, |_, window, cx| text_input::window_typed_in(window, cx)))
+            .unwrap_or(false)
+}
+
 /// What the picker shows for, if it shows.
 pub fn open_for(cx: &App) -> Option<Subject> {
     let picker = cx.try_global::<IconPickerWindow>()?.0.read(cx).ok()?;
@@ -1054,6 +1064,7 @@ impl Focusable for IconPicker {
 
 impl Render for IconPicker {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        text_input::drawing(window);
         self.a11y = window.is_a11y_active();
         let root = div()
             .key_context(KEY_CONTEXT)

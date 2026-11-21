@@ -933,6 +933,19 @@ pub(super) fn keystroke_label_on(keystroke: &str, off_the_mac: bool) -> String {
     }
 }
 
+/// How a menu would show `pressed`, a key as this platform's keyboard presses it rather than as
+/// SHORTCUTS writes it, as Chrome's Alt+Left Arrow.
+pub fn pressed_label(pressed: &str) -> String {
+    pressed_label_on(pressed, super::keys::OFF_THE_MAC)
+}
+
+pub(super) fn pressed_label_on(pressed: &str, off_the_mac: bool) -> String {
+    match off_the_mac {
+        true => keys_named(pressed, true).join("+"),
+        false => keys_named(pressed, false).concat(),
+    }
+}
+
 /// The keys of `keystroke` as a menu shows them, one by one, for a chip each: ⇧, ⌘ and K for
 /// shift-cmd-k, and Ctrl, Shift and K off the Mac. None if it can't be pressed here.
 pub fn keystroke_keys(keystroke: &str) -> Vec<String> {
@@ -1268,6 +1281,14 @@ pub(super) fn heard_key(shell: &WeakEntity<Shell>) {
     });
 }
 
+/// Whether `command` moves to another pane of a split, which a page dialog's keys may do (#3461).
+pub(super) fn moves_pane(command: Command) -> bool {
+    matches!(
+        command,
+        Command::NextPane | Command::PreviousPane | Command::FocusPane(_)
+    )
+}
+
 /// The key context at the root of the browser's windows, where its shortcuts apply. GPUI ranks a
 /// binding with no context above every other, so without one the shortcuts would take keys a
 /// focused field binds for itself, such as escape and ⌘←.
@@ -1285,8 +1306,10 @@ pub fn bind_keys(cx: &mut App) {
     super::bind_conversation_keys(cx);
     cx.on_action(|run: &Run, cx| {
         // The menu's keys reach it from the dialog's window too, and the dialog has to be
-        // answered first, as an alert's does.
-        if crate::dialog::awaits_answer(cx) {
+        // answered first, as an alert's does. A page's blocks its own pane alone, so the keys
+        // to another pane leave it, at rest (#3461).
+        let leaves = moves_pane(run.0) && crate::dialog::asks_page(cx);
+        if crate::dialog::awaits_answer(cx) && !leaves {
             return;
         }
         // A shortcut in the UI opens its field before GPUI has read the keys typed after it, which

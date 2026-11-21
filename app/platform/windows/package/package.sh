@@ -1,9 +1,9 @@
 #!/bin/bash
 # Packs the Windows app for a release (#454), in Git Bash on Windows, from Browser.dll, which
-# `cargo build --release --features prod` in app/windows makes, the agents' bridge, which
-# `cargo build --release --features prod --manifest-path ../Cargo.toml --bin mcp-bridge
-# --target-dir target` there makes, and the engine setup.sh puts in .deps/engine, whose chrome.exe
-# runs it:
+# `cargo build --release --features prod` in app/windows makes, the agents' bridge and the `ilo`
+# command, which `cargo build --release --features prod --manifest-path ../Cargo.toml --bin
+# mcp-bridge --bin ilo-command --target-dir target` there makes, and the engine setup.sh puts in
+# .deps/engine, whose chrome.exe runs it:
 #   <out>/ilo-<version>-x64.msix, for the Microsoft Store, unsigned, as the Store signs it, with
 #     the identity in branding/windows-store.ini, which the Store updates;
 #   <out>/ilo-<version>-x64-setup.exe, the per-user installer (ilo.iss) for winget and direct
@@ -38,6 +38,8 @@ engine=$app/.deps/engine
 [ -f "$dll" ] || fail "no $dll. Build it with cargo build --release --features prod in app/windows."
 bridge=$app/windows/target/release/mcp-bridge.exe
 [ -f "$bridge" ] || fail "no $bridge, the agents' bridge. Build it as this file's head says."
+command=$app/windows/target/release/ilo-command.exe
+[ -f "$command" ] || fail "no $command, the ilo command. Build it as this file's head says."
 
 alone=
 if [ ! -f "$engine/chrome.exe" ]; then
@@ -64,6 +66,11 @@ if [ -z "$alone" ]; then
   rm -f "$stage/app/chrome.dll.lib" "$stage/app/.from"
 fi
 cp "$dll" "$bridge" "$here/Assets/ilo.ico" "$stage/app/"
+# The ilo command (src/agents/cli.rs) in a folder of its own, which Add puts on the user's PATH in
+# the installer's copy: chrome.exe's folder there would bring the engine's programs with it. The
+# MSIX runs it by its alias.
+mkdir "$stage/app/bin"
+cp "$command" "$stage/app/bin/ilo.exe"
 # uBlock Origin and a Board's page beside chrome.exe, where the core loads them, and the licences
 # About opens, as build.sh puts them beside the engine.
 cp -R "$("$app/fetch-ublock.sh")" "$stage/app/ublock"
