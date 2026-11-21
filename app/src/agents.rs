@@ -25,6 +25,7 @@ mod pipe;
 pub mod ready;
 pub mod request;
 pub mod runner;
+pub mod saved_read;
 pub mod scripts;
 mod server;
 pub mod task;
@@ -303,7 +304,14 @@ pub trait Browser {
     /// Sends `sent` from the page in the agent's `tab`, as the page's own script could, to its own
     /// site (bc_agent_request). Its answer comes to `Agents::request_done` with `request`.
     fn request(&self, agent: &str, tab: u64, request: u64, sent: &request::Request);
+    /// Reads `url` with one GET on `profile`'s own session, with no tab (bc_profile_read), with up
+    /// to `max_bytes` of its body after up to `timeout_ms`. Its answer comes to
+    /// `Agents::read_done` with `read`.
+    fn read(&self, profile: u64, read: u64, url: &str, max_bytes: usize, timeout_ms: i64);
 }
+
+/// What waits on a saved read's answer (Agents::read).
+type ReadDone = Box<dyn FnOnce(saved_read::Answer, &mut Context<Agents>)>;
 
 /// What the server's threads hand the UI thread.
 pub enum Event {
@@ -693,6 +701,8 @@ pub struct Agents {
     acting: HashMap<u64, Acting>,
     /// The calls whose requests wait on the core, by the request sent.
     sending: HashMap<u64, Sending>,
+    /// What waits on each saved read under way, by read.
+    saved_reading: HashMap<u64, ReadDone>,
     /// Each tab's refs, from its outlines.
     refs: HashMap<u64, page::Refs>,
     /// Each tab's latest outline, and the last one an agent had, which its next answer gives the
@@ -882,6 +892,7 @@ impl Agents {
             gone: HashMap::new(),
             acting: HashMap::new(),
             sending: HashMap::new(),
+            saved_reading: HashMap::new(),
             refs: HashMap::new(),
             outlines: HashMap::new(),
             had: HashMap::new(),
@@ -3413,6 +3424,34 @@ impl Agents {
         self.browser.request(&agent, tab, request, &next);
         sending.sent = Some(next);
         self.sending.insert(request, sending);
+    }
+
+    /// Reads `url` on `profile`'s own session (Browser::read), within the core's caps, then runs
+    /// `done` once with what it answered. Gives the read's id.
+    pub fn read(
+        &mut self,
+        profile: u64,
+        url: &str,
+        max_bytes: usize,
+        timeout_ms: i64,
+        done: impl FnOnce(saved_read::Answer, &mut Context<Self>) + 'static,
+    ) -> u64 {
+        let read = self.next_request;
+        self.next_request += 1;
+        self.saved_reading.insert(read, Box::new(done));
+        let (max_bytes, timeout_ms) = (
+            max_bytes.min(saved_read::MAX_BYTES),
+            timeout_ms.min(saved_read::MAX_MILLISECONDS),
+        );
+        self.browser.read(profile, read, url, max_bytes, timeout_ms);
+        read
+    }
+
+    /// The core's answer to the saved read `read`, for what waits on it.
+    pub fn read_done(&mut self, read: u64, answer: saved_read::Answer, cx: &mut Context<Self>) {
+        if let Some(done) = self.saved_reading.remove(&read) {
+            done(answer, cx);
+        }
     }
 
     /// The core's answer to the request `request`: the next goes, unless none came.
