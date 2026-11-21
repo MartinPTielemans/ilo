@@ -123,8 +123,9 @@ pub trait Browser {
     fn over_page_blends(&self) -> bool;
     /// Loads a pinned tab's pinned URL, unless it's there already.
     fn back_to_pinned_url(&self, tab: u64, cx: &mut App);
-    /// Loads `url` in `tab`, as a row of what's recent on its card does (#3074).
-    fn navigate(&self, _tab: u64, _url: &str, _cx: &mut App) {}
+    /// Loads `url`, picked from what `tab` shows of its site such as a row of its card, in the tab
+    /// itself: a pinned one goes away from its pinned URL, with its way back (#3576).
+    fn follow(&self, _tab: u64, _url: &str, _cx: &mut App) {}
     /// Whether the core can ask a site what's recent for a tab's card (#3074).
     fn recent_reached(&self) -> bool {
         crate::recent::REACHED
