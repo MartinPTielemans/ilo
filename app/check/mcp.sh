@@ -3447,6 +3447,14 @@ CARD
   # Settings › Agents lists the permission with its Revoke, which the space menu of the agent's
   # Space did before #1080. Under Xvfb's 800-point screen the button is drawn below its bottom, so
   # the click isn't driven; the Agents' tests revoke.
+  # A hook still running from the last ask gives its row its last run's line when it ends, which
+  # moves the rows under it: Settings opens once each hook has ended.
+  for event in asked handed_to_you; do
+    ended=$(grep -c "^browser: hook $event \(ran\|failed: \)" "$log" || true)
+    [ "$(grep -c "^browser: hook $event runs\$" "$log" || true)" -gt "$ended" ] || continue
+    await_more "^browser: hook $event \(ran\|failed: \)" "$ended" ||
+      fail "the hook on $event didn't end: $(grep "^browser: hook $event " "$log" | tail -1)"
+  done
   send menu Settings…
   expect '^browser: settings shown ' "Settings… didn't show Settings"
   settings_drew
