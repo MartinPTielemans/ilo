@@ -520,6 +520,33 @@ typedef struct bc_cast_device {
 } bc_cast_device;
 
 
+// Why the core didn't do an agent's call, for agent code to decide on: the words that come with it
+// are for the agent and the user to read, and may change (#3702). Only what agent code decides or
+// sorts on has a value; a call done, or failed otherwise, is BC_AGENT_FAILURE_NONE.
+typedef enum bc_agent_failure {
+  BC_AGENT_FAILURE_NONE = 0,
+  // An action no agent may do, such as devtools, or one there's none of.
+  BC_AGENT_FAILURE_ACTION = 1,
+  // A tab id from before ilo last started.
+  BC_AGENT_FAILURE_RESTARTED = 2,
+  // The tab isn't in the agent's own Space.
+  BC_AGENT_FAILURE_NOT_ITS_SPACE = 3,
+  // The user has the tab until they hand it back.
+  BC_AGENT_FAILURE_HELD = 4,
+  // The user is pointing at the tab's page.
+  BC_AGENT_FAILURE_POINTING = 5,
+  // The tab shows its page in the system's engine.
+  BC_AGENT_FAILURE_SYSTEM_ENGINE = 6,
+  // The tab's page, or the one it was to go to, isn't an http(s) page.
+  BC_AGENT_FAILURE_NOT_WEB_PAGE = 7,
+  // The tab's first http(s) page was still loading when the action stopped waiting for it.
+  BC_AGENT_FAILURE_LOADING = 8,
+  // The element is a password field, which agents never type in.
+  BC_AGENT_FAILURE_PASSWORD_FIELD = 9,
+  // The select has no option with the text asked for.
+  BC_AGENT_FAILURE_NO_OPTION = 10,
+} bc_agent_failure;
+
 // An agent's call the core checked, for the activity log (bc_agent_may_act).
 typedef struct bc_agent_activity {
   // The agent's id, as its client gives it.
@@ -529,6 +556,8 @@ typedef struct bc_agent_activity {
   const char* action;
   // Why the core refused it, for the user and the agent to read, or empty if the agent may act.
   const char* refused;
+  // A bc_agent_failure value, BC_AGENT_FAILURE_NONE if the agent may act.
+  int failure;
 } bc_agent_activity;
 
 // The answer to an agent's HTTP request (bc_agent_request, agent_request_done).
@@ -543,6 +572,8 @@ typedef struct bc_agent_response {
   bool cut;
   // Why it couldn't be sent, or broke off, for the agent to read, or null.
   const char* error;
+  // With |error|, a bc_agent_failure value, else BC_AGENT_FAILURE_NONE.
+  int failure;
 } bc_agent_response;
 
 // What fills a Live Folder (bc_folder_live_create, #2979): 0 for a plain folder.
@@ -1310,7 +1341,13 @@ typedef struct bc_host {
   // accessibility tree as a JSON object: DevTools' Accessibility.getFullAXTree nodes in "nodes",
   // and "busy": true if the page hadn't settled when the action stopped waiting for it.
   // and after SELECT, "chosen": the name of the option it chose, if the field then shows it.
-  void (*agent_page_done)(void* context, bc_id tab, uint64_t request, const char* text, bool error);
+  // With |error|, |failure| is a bc_agent_failure value, else BC_AGENT_FAILURE_NONE.
+  void (*agent_page_done)(void* context,
+                          bc_id tab,
+                          uint64_t request,
+                          const char* text,
+                          bool error,
+                          int failure);
   // The element bc_agent_page's |request| for |tab| is about to click or type in, scrolled into
   // view: its box in points from the top-left of the tab's page view, for the agent's pointer.
   void (*agent_page_element)(void* context, bc_id tab, uint64_t request, bc_rect box);
@@ -1804,13 +1841,15 @@ BC_EXPORT size_t bc_space_agent_name(bc_id space, char* name, size_t capacity);
 // timing, download folder, offers to save and saved data, and Clear Browsing Data) and any other
 // action are refused. Agent code calls it once for each call an agent makes on a tab, before
 // acting. If refused, copies why into |reason| as bc_space_name does, else an empty string: for a
-// tab id from before ilo last started, that it restarted. Either way, then agent_activity, for the
-// activity log.
+// tab id from before ilo last started, that it restarted. Sets |failure| to a bc_agent_failure
+// value, BC_AGENT_FAILURE_NONE if the agent may act, for agent code to decide on in place of
+// |reason|'s words. Either way, then agent_activity, for the activity log.
 BC_EXPORT bool bc_agent_may_act(const char* agent,
                                 bc_id tab,
                                 const char* action,
                                 char* reason,
-                                size_t capacity);
+                                size_t capacity,
+                                int* failure);
 
 // An agent's session with a tab, which the app shows as the agent at work there, lasts from the
 // first call bc_agent_may_act lets it make in the tab until one of these three ends it, each then
