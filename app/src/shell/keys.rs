@@ -194,30 +194,35 @@ fn valid(key: &str) -> bool {
     !key.contains(char::is_whitespace) && parsed.is_ok()
 }
 
-/// GPUI's bindings of `key` to `action` while the UI has the keyboard, one for each way this
-/// platform presses it.
-fn bindings_of(key: &str, action: Box<dyn Action>, cx: &App) -> Vec<KeyBinding> {
-    let Ok(context) = KeyBindingContextPredicate::parse(KEY_CONTEXT) else {
-        return Vec::new();
+/// GPUI's bindings of `key` to `action` for `command` while the UI has the keyboard, one for each
+/// way this platform presses it. A pane's key is bound in a page dialog's window too, which has no
+/// menu bar to hand it over off the Mac, so it can leave that dialog for another pane (#3461).
+fn bindings_of(key: &str, command: Command, action: Box<dyn Action>, cx: &App) -> Vec<KeyBinding> {
+    let contexts: &[&str] = match super::commands::moves_pane(command) {
+        true => &[KEY_CONTEXT, crate::dialog::KEY_CONTEXT],
+        false => &[KEY_CONTEXT],
     };
-    let context = std::rc::Rc::new(context);
-    let load = |key: String| {
-        let action = action.boxed_clone();
-        KeyBinding::load(&key, action, Some(context.clone()), false, None, cx).ok()
-    };
-    let pressed = pressed_as(key);
-    // GPUI hears a key whose shift makes a symbol with the shift taken into it, as ⌃⇧2 is ⌃@ on
-    // the Mac and Alt+@ under X11, where a page hands the browser the key with shift. The binding
-    // with shift comes first, so the menus show it.
-    let unshifted: Vec<String> = pressed
-        .iter()
-        .filter_map(|key| without_shift(key))
-        .collect();
-    pressed
-        .into_iter()
-        .chain(unshifted)
-        .filter_map(load)
-        .collect()
+    let mut bindings = Vec::new();
+    for &context_name in contexts {
+        let Ok(context) = KeyBindingContextPredicate::parse(context_name) else {
+            continue;
+        };
+        let context = std::rc::Rc::new(context);
+        let load = |key: String| {
+            let action = action.boxed_clone();
+            KeyBinding::load(&key, action, Some(context.clone()), false, None, cx).ok()
+        };
+        let pressed = pressed_as(key);
+        // GPUI hears a key whose shift makes a symbol with the shift taken into it, as ⌃⇧2 is ⌃@
+        // on the Mac and Alt+@ under X11, where a page hands the browser the key with shift. The
+        // binding with shift comes first, so the menus show it.
+        let unshifted: Vec<String> = pressed
+            .iter()
+            .filter_map(|key| without_shift(key))
+            .collect();
+        bindings.extend(pressed.into_iter().chain(unshifted).filter_map(load));
+    }
+    bindings
 }
 
 /// `key` without its shift, when what it presses with shift is a symbol shift makes, as
@@ -749,16 +754,17 @@ pub fn change_keys<R>(cx: &mut App, change: impl FnOnce(&mut UserKeys) -> R) -> 
     // GPUI's keymap can't take a binding out. A later NoAction on the same key and context
     // disables the earlier ones, for keystrokes and for the menus' key equivalents, and the
     // bindings after it win again.
-    let old = changed
-        .iter()
-        .flat_map(|&command| before.heard_keys(command));
+    let old = changed.iter().flat_map(|&command| {
+        let keys = before.heard_keys(command).into_iter();
+        keys.map(move |key| (key, command))
+    });
     let old: Vec<KeyBinding> = old
-        .flat_map(|key| bindings_of(key, Box::new(NoAction), cx))
+        .flat_map(|(key, command)| bindings_of(key, command, Box::new(NoAction), cx))
         .collect();
     let app: &App = cx;
     let new = changed.iter().flat_map(|&command| {
         let keys = after.heard_keys(command).into_iter();
-        keys.flat_map(move |key| bindings_of(key, Box::new(Run(command)), app))
+        keys.flat_map(move |key| bindings_of(key, command, Box::new(Run(command)), app))
     });
     let new: Vec<KeyBinding> = new.collect();
     cx.bind_keys(old);
@@ -837,7 +843,7 @@ pub fn follow_layout(cx: &mut App) {
 /// GPUI's bindings for the keys the store has now.
 pub(super) fn key_bindings(cx: &App) -> Vec<KeyBinding> {
     (user_keys(cx).bindings().into_iter())
-        .flat_map(|(key, command)| bindings_of(key, Box::new(Run(command)), cx))
+        .flat_map(|(key, command)| bindings_of(key, command, Box::new(Run(command)), cx))
         .collect()
 }
 
@@ -1056,6 +1062,67 @@ mod tests {
                 .track_focus(&self.0)
                 .size_full()
         }
+    }
+
+    /// A page dialog's window has no menu bar to hand the browser's keys over off the Mac, so the
+    /// pane keys are bound there as well, as the user has them, and no other shortcut is (#3461).
+    #[gpui::test]
+    fn the_pane_keys_reach_the_shell_from_a_page_dialogs_window(cx: &mut TestAppContext) {
+        struct Dialog(FocusHandle);
+
+        impl Render for Dialog {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div()
+                    .key_context(crate::dialog::KEY_CONTEXT)
+                    .track_focus(&self.0)
+                    .size_full()
+            }
+        }
+
+        let ran: Rc<RefCell<Vec<Command>>> = Rc::default();
+        let runs = ran.clone();
+        cx.update(|cx| {
+            cx.bind_keys(key_bindings(cx));
+            cx.on_action(move |run: &Run, _| runs.borrow_mut().push(run.0));
+        });
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |window, cx| {
+                cx.new(|cx| {
+                    let focus = cx.focus_handle();
+                    window.focus(&focus, cx);
+                    Dialog(focus)
+                })
+            })
+        });
+        let mut cx = VisualTestContext::from_window(window.unwrap().into(), cx);
+        cx.simulate_keystrokes("ctrl-shift-2 ctrl-shift-[ ctrl-shift-] cmd-t cmd-l");
+        assert_eq!(
+            ran.take(),
+            [
+                Command::FocusPane(1),
+                Command::PreviousPane,
+                Command::NextPane
+            ]
+        );
+        // As the Mac's window and X11 hear ⌃⇧2 and ⌃⇧], the shift in the character.
+        cx.simulate_keystrokes("ctrl-@ ctrl-} ctrl-!");
+        assert_eq!(
+            ran.take(),
+            [
+                Command::FocusPane(1),
+                Command::NextPane,
+                Command::FocusPane(0)
+            ]
+        );
+        // A pane key the user moves follows there too.
+        cx.update(|_, cx| {
+            change_keys(cx, |user| {
+                user.set(Command::NextPane, keys(&["ctrl-shift-k"]))
+            })
+        })
+        .unwrap();
+        cx.simulate_keystrokes("ctrl-shift-] ctrl-shift-k");
+        assert_eq!(ran.take(), [Command::NextPane]);
     }
 
     /// Off the Mac, Ctrl+Alt+N in the UI opens Little ilo, as ⌥⌘N does on the Mac, and Blank

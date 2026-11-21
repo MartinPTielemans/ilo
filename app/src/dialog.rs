@@ -19,9 +19,9 @@ use web_time::Instant;
 
 use gpui::{
     AnyElement, App, Bounds, BoxShadow, Context, Div, Entity, FocusHandle, Focusable, FontWeight,
-    Global, Hsla, Image, KeyBinding, MouseButton, Pixels, Point, SharedString, Stateful, Task,
-    TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind,
-    WindowOptions,
+    Global, Hsla, Image, KeyBinding, MouseButton, Pixels, Point, SharedString, Stateful,
+    Subscription, Task, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds,
+    WindowHandle, WindowKind, WindowOptions,
     accesskit::{Role, Toggled},
     actions, canvas, div, img, point,
     prelude::*,
@@ -67,7 +67,9 @@ use crate::tokens::dialog::ICON_GAP;
 use crate::tokens::dialog::LABEL_X;
 use crate::tokens::dialog::LIST_GAP;
 use crate::tokens::dialog::LIST_TOP;
+use crate::tokens::dialog::PANE_MARGIN;
 use crate::tokens::dialog::RADIUS;
+use crate::tokens::dialog::REST_DIM_OPACITY;
 use crate::tokens::dialog::RETURN_BORDER;
 use crate::tokens::dialog::RETURN_FILL;
 use crate::tokens::dialog::RETURN_GLYPH;
@@ -182,8 +184,10 @@ enum Answer {
 /// What the dialog asks of its window.
 pub trait Host {
     /// Shows the dialog's window over all of browser window `window`, the one whose question it
-    /// is, else the one in front, or over `over` in it, a tab's card, with the keyboard.
-    fn show(&self, window: Option<u64>, over: Option<Bounds<Pixels>>);
+    /// is, else the one in front, or over `over` in it, a tab's card or a split view's pane, with
+    /// the keyboard if `keyboard`, else at rest, the keyboard left with the page beside (#3461).
+    /// Shown already, it moves to `over` and takes the keyboard or gives it up.
+    fn show(&self, window: Option<u64>, over: Option<Bounds<Pixels>>, keyboard: bool);
     /// Hides it, and the browser window gets the keyboard back.
     fn hide(&self);
     /// The dialog was answered and leaves, so no key typed from now may be lost to it: Linux gives
@@ -264,6 +268,10 @@ struct Request {
     over: Option<(Bounds<Pixels>, f32)>,
     /// A page's question's tab and id, by which it's asked again as its card moves.
     page: Option<(u64, u64)>,
+    /// A page's question at rest over a split view's pane the user isn't in (`ask_page`).
+    rests: bool,
+    /// Focuses a page's pane, for a click on its question at rest.
+    focus_pane: Option<Rc<dyn Fn(&mut App)>>,
     answered: Box<dyn FnOnce(Reply, &mut App)>,
 }
 
@@ -275,6 +283,10 @@ struct Asked {
     source: Source,
     over: Option<(Bounds<Pixels>, f32)>,
     page: Option<(u64, u64)>,
+    /// At rest: shown without the keyboard, which the page beside has, its keys' chips and its
+    /// action's fill left out, the dim quiet (#3461).
+    rests: bool,
+    focus_pane: Option<Rc<dyn Fn(&mut App)>>,
     fields: Vec<Entity<TextInput>>,
     checked: bool,
     answered: Option<Box<dyn FnOnce(Reply, &mut App)>>,
@@ -294,6 +306,8 @@ struct Asked {
     /// The button held down, and the one the last frame drew so.
     pressed: Option<&'static str>,
     drawn_press: Option<&'static str>,
+    /// The window's tone the last frame drew in.
+    drawn_tone: Option<palette::Tone>,
     /// Where each button was said to be drawn, in the browser window.
     buttons_drawn: Rc<RefCell<HashMap<&'static str, Point<Pixels>>>>,
     /// Where the card, the checkbox and its label were drawn last, in the dialog's window.
@@ -361,6 +375,7 @@ pub struct Dialog {
     next_account: Option<Request>,
     /// A page's, waiting the same way, after Chrome's.
     next_page: Option<Request>,
+    _palette: Subscription,
 }
 
 struct DialogWindow(WindowHandle<Dialog>);
@@ -424,11 +439,14 @@ pub fn open_at(
     }
 }
 
+/// The key context at the root of the dialog's window.
+pub const KEY_CONTEXT: &str = "Dialog";
+
 fn bind_keys(cx: &mut App) {
     cx.bind_keys([
-        KeyBinding::new("enter", Confirm, Some("Dialog")),
-        KeyBinding::new("escape", Cancel, Some("Dialog")),
-        KeyBinding::new("tab", NextField, Some("Dialog")),
+        KeyBinding::new("enter", Confirm, Some(KEY_CONTEXT)),
+        KeyBinding::new("escape", Cancel, Some(KEY_CONTEXT)),
+        KeyBinding::new("tab", NextField, Some(KEY_CONTEXT)),
     ]);
 }
 
@@ -485,21 +503,33 @@ pub fn cover(dialog: &Entity<Dialog>, cx: &App) -> Option<AnyElement> {
     })
 }
 
-/// Whether the dialog is asking, or leaving after the answer.
+/// Whether the dialog is asking, or leaving after the answer, with the keyboard: a page's at rest
+/// leaves the keys and the window's shortcuts to the page beside.
 pub fn asking(cx: &App) -> bool {
     cx.try_global::<DialogWindow>()
         .and_then(|dialog| dialog.0.read(cx).ok())
-        .is_some_and(|dialog| dialog.asked.is_some())
+        .and_then(|dialog| dialog.asked.as_ref())
+        .is_some_and(|asked| !asked.rests)
 }
 
-/// Whether the dialog waits for its answer, so the app's shortcuts wait too: it asks, and hasn't
-/// been answered or taken back. Once it has, the keys it leaves to are the browser window's, at
-/// once on Linux, as it draws its leaving, and a ⌘T typed then opens the bar (#3617).
+/// Whether the dialog asks a page's question, and not yet answered: one over a split view's pane
+/// lets the keys that move between panes through, which bring it to rest.
+pub fn asks_page(cx: &App) -> bool {
+    cx.try_global::<DialogWindow>()
+        .and_then(|dialog| dialog.0.read(cx).ok())
+        .and_then(|dialog| dialog.asked.as_ref())
+        .is_some_and(|asked| asked.page.is_some() && asked.answered_at.is_none())
+}
+
+/// Whether the dialog waits for its answer, so the app's shortcuts wait too: it asks, not at rest,
+/// and hasn't been answered or taken back. Once it has, the keys it leaves to are the browser
+/// window's, at once on Linux, as it draws its leaving, and a ⌘T typed then opens the bar (#3617).
+/// A page's at rest leaves them to the page beside (#3461).
 pub fn awaits_answer(cx: &App) -> bool {
     cx.try_global::<DialogWindow>()
         .and_then(|dialog| dialog.0.read(cx).ok())
         .and_then(|dialog| dialog.asked.as_ref())
-        .is_some_and(|asked| asked.answered_at.is_none())
+        .is_some_and(|asked| !asked.rests && asked.answered_at.is_none())
 }
 
 /// Whether `pose` asks now: there's a dialog to ask in, or one to be made as it's first asked, and
@@ -630,13 +660,15 @@ fn ask_granting(
         window: None,
         over: None,
         page: None,
+        rests: false,
+        focus_pane: None,
         answered,
     });
     window
         .update(cx, |dialog, window, cx| {
             dialog.withdraw(source, cx);
             let request = request.take().expect("asked once");
-            match (dialog.asked.is_some(), source) {
+            match (dialog.asked.is_some() && !dialog.yield_resting(cx), source) {
                 (false, _) => dialog.show(request, window, cx),
                 (true, Source::Account) => dialog.next_account = Some(request),
                 (true, _) => dialog.next = Some(request),
@@ -675,14 +707,19 @@ pub fn choose(label: &str, cx: &mut App) -> bool {
         .unwrap_or(false)
 }
 
-/// Asks a page's `question`, the dialog `id` of `tab`, over its tab's card, `over` in the window
-/// with corners of `radius`, in place of any page's that shows or waits, once any other dialog has
-/// gone, and calls `answered` with the answer once the dialog has gone. Asked again, it only moves
-/// to `over`, with what was typed. A click on the card's dim does nothing, as the page waits.
+/// Asks a page's `question`, the dialog `id` of `tab`, over its tab's card or pane, `over` in the
+/// window with corners of `radius`, in place of any page's that shows or waits, once any other
+/// dialog has gone, and calls `answered` with the answer once the dialog has gone. Asked again, it
+/// only moves to `over`, with what was typed, and comes to rest or goes live. A click on the
+/// card's dim does nothing, as the page waits. At rest (`rests`), over a split view's pane the
+/// user isn't in, it shows without the keyboard: a click on a button answers, and one anywhere
+/// else on it calls `focus_pane`, whose pane's focus brings it live (#3461).
 pub fn ask_page(
     (tab, id): (u64, u64),
     question: Question,
     over: (Bounds<Pixels>, f32),
+    rests: bool,
+    focus_pane: Rc<dyn Fn(&mut App)>,
     answered: Box<dyn FnOnce(Reply, &mut App)>,
     cx: &mut App,
 ) {
@@ -699,23 +736,34 @@ pub fn ask_page(
         window: None,
         over: Some(over),
         page,
+        rests,
+        focus_pane: Some(focus_pane),
         answered,
     };
     window
         .update(cx, |dialog, window, cx| {
             if let Some(asked) = &mut dialog.asked
                 && asked.page == page
-                && asked.answered_at.is_none()
             {
-                asked.over = Some(over);
-                dialog.host.show(None, Some(over.0));
-                cx.notify();
-                return;
+                if asked.answered_at.is_none() {
+                    asked.over = Some(over);
+                    dialog.set_rests(rests, window, cx);
+                    dialog.host.show(None, Some(over.0), !rests);
+                    cx.notify();
+                    return;
+                }
+                // Answered, it leaves with its answer, which the page hears once it has gone, so
+                // the question asked again till then, as its pane's focus moves, isn't new. Taken
+                // back, it has no answer, and it's asked again below, as its tab shows again.
+                if asked.answered.is_none() {
+                    return;
+                }
             }
             if let Some(next) = &mut dialog.next_page
                 && next.page == page
             {
                 next.over = Some(over);
+                next.rests = rests;
                 return;
             }
             dialog.withdraw(Source::Page, cx);
@@ -747,6 +795,13 @@ impl Dialog {
             next: None,
             next_account: None,
             next_page: None,
+            // View › Appearance redraws the windows before the shell gives the new palette, and a
+            // card at rest stays on screen through it, so it draws again in the palette's tone.
+            _palette: cx.observe_global::<palette::Palette>(|dialog, cx| {
+                if dialog.asked.is_some() {
+                    cx.notify();
+                }
+            }),
         }
     }
 
@@ -758,7 +813,7 @@ impl Dialog {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.asked.is_some() {
+        if self.asked.is_some() && !self.yield_resting(cx) {
             return;
         }
         let answered = Box::new(move |reply: Reply, cx: &mut App| {
@@ -773,9 +828,68 @@ impl Dialog {
             window: over,
             over: None,
             page: None,
+            rests: false,
+            focus_pane: None,
             answered,
         };
         self.show(request, window, cx);
+    }
+
+    /// A page's question at rest makes way for another that asks, the browser's or Chrome's, and
+    /// waits behind it with what was typed, so the page beside never has a shortcut that does
+    /// nothing. Returns whether it did.
+    fn yield_resting(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(asked) = self.asked.as_mut() else {
+            return false;
+        };
+        if !asked.rests || asked.answered_at.is_some() {
+            return false;
+        }
+        let Some(answered) = asked.answered.take() else {
+            return false;
+        };
+        let mut asked = self.asked.take().expect("asked");
+        for (field, typed) in asked.question.fields.iter_mut().zip(&asked.fields) {
+            field.text = typed.read(cx).text().to_owned().into();
+        }
+        // A page's that asked since waits in its place.
+        self.next_page.get_or_insert(Request {
+            question: asked.question,
+            source: asked.source,
+            window: None,
+            over: asked.over,
+            page: asked.page,
+            rests: asked.rests,
+            focus_pane: asked.focus_pane,
+            answered,
+        });
+        self.host.hide();
+        // check.sh reads this line.
+        log!("browser: dialog at rest waits for another");
+        true
+    }
+
+    /// A page's question comes to rest, the keyboard going to the page beside, or goes live and
+    /// takes it, as its pane's focus goes or comes (#3461).
+    fn set_rests(&mut self, rests: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(asked) = &mut self.asked else {
+            return;
+        };
+        if asked.rests == rests {
+            return;
+        }
+        asked.rests = rests;
+        if !rests {
+            match asked.fields.first() {
+                Some(field) => window.focus(&field.focus_handle(cx), cx),
+                None => window.focus(&self.focus, cx),
+            }
+        }
+        // check.sh reads these lines.
+        match rests {
+            true => log!("browser: dialog at rest"),
+            false => log!("browser: dialog live"),
+        }
     }
 
     fn show(&mut self, request: Request, window: &mut Window, cx: &mut Context<Self>) {
@@ -785,10 +899,16 @@ impl Dialog {
             window: asker,
             over,
             page,
+            rests,
+            focus_pane,
             answered,
         } = request;
         // check.sh reads this line.
         log!("browser: dialog shown {}", question.message);
+        if rests {
+            // check.sh reads this line.
+            log!("browser: dialog at rest");
+        }
         let (also, also_chosen) = question.also.take().unzip();
         let palette = palette::current(cx);
         let fields: Vec<_> = question
@@ -806,6 +926,7 @@ impl Dialog {
             })
             .collect();
         match fields.first() {
+            _ if rests => {}
             Some(field) => window.focus(&field.focus_handle(cx), cx),
             None => window.focus(&self.focus, cx),
         }
@@ -816,6 +937,8 @@ impl Dialog {
             source,
             over,
             page,
+            rests,
+            focus_pane,
             fields,
             checked: false,
             answered: Some(answered),
@@ -829,10 +952,11 @@ impl Dialog {
             drawn_hover: None,
             pressed: None,
             drawn_press: None,
+            drawn_tone: None,
             buttons_drawn: Rc::default(),
             check_drawn: Rc::default(),
         });
-        self.host.show(asker, over.map(|(over, _)| over));
+        self.host.show(asker, over.map(|(over, _)| over), !rests);
         cx.notify();
     }
 
@@ -963,7 +1087,10 @@ impl Dialog {
         asked.answered_at = Some((Instant::now(), asked.pose()));
         // Motion never blocks a key (ux-principles): one typed while it leaves, such as ⌥⌘N right
         // after Esc, waits for the browser window rather than reaching the dialog going (#1930).
-        self.host.hold_keys();
+        // At rest the page beside has the keys already.
+        if !asked.rests {
+            self.host.hold_keys();
+        }
         if LETS_GO_AS_IT_LEAVES {
             self.host.let_go();
         }
@@ -1083,6 +1210,30 @@ fn button_frame(name: &'static str, asked: &Asked) -> impl IntoElement + use<> {
     .size_full()
 }
 
+/// `element`, which at rest with `focus_pane` focuses its pane on a press anywhere on it, which
+/// brings the dialog live, while a click on a button also answers, as a button in a window behind
+/// does on the Mac. After the event, as the pane's focus asks this window again.
+fn focus_on_press<E: InteractiveElement>(
+    element: E,
+    focus_pane: Option<Rc<dyn Fn(&mut App)>>,
+) -> E {
+    match focus_pane {
+        Some(focus_pane) => element.capture_any_mouse_down(move |_, _, cx| {
+            let focus_pane = focus_pane.clone();
+            // check.sh reads this line.
+            log!("browser: dialog at rest pressed");
+            cx.defer(move |cx| focus_pane(cx));
+        }),
+        None => element,
+    }
+}
+
+/// The card's width over a page's card or pane `over` wide: its own, or the pane's less its
+/// margins where that's less.
+fn card_width(over: Pixels) -> f32 {
+    WIDTH.min(f32::from(over) - 2. * PANE_MARGIN).max(0.)
+}
+
 /// A key's chip on a button.
 fn chip() -> Div {
     div()
@@ -1110,7 +1261,7 @@ impl Render for Dialog {
         let a11y = window.is_a11y_active();
         let root = div()
             .id("dialog-window")
-            .key_context("Dialog")
+            .key_context(KEY_CONTEXT)
             .track_focus(&self.focus)
             .size_full()
             .font_family(crate::face::UI);
@@ -1153,25 +1304,41 @@ impl Render for Dialog {
                 asked.pressed.unwrap_or("none")
             );
         }
-        let question = &asked.question;
         let palette = palette::current(cx);
+        // As the hover line, for a capture after the window's tone changed under the card, which
+        // draws in a window of its own.
+        if asked.drawn_tone != Some(palette.tone) {
+            asked.drawn_tone = Some(palette.tone);
+            log!(
+                "browser: dialog drawn light {}",
+                palette.tone == palette::Tone::Light
+            );
+        }
+        let question = &asked.question;
         let page = asked.source == Source::Page;
+        // At rest the keys aren't its, so no button carries one's chip or the action's fill.
+        let rests = asked.rests;
         // An alert has only its action.
         let cancel = (!question.cancel.is_empty()).then(|| {
-            button(
-                "dialog-cancel",
-                question.cancel.clone(),
+            let esc = (!rests).then(|| {
                 chip()
                     .px(px(6.5))
                     .bg(palette.plate(ESC_FILL))
                     .text_size(px(text::SMALL))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(palette.on_overlay(ESC_TEXT))
-                    .child("ESC"),
+                    .child("ESC")
+            });
+            button(
+                "dialog-cancel",
+                question.cancel.clone(),
+                div().children(esc),
             )
             // Its border is inside its edge, where Arc's label and chip are measured from.
             .pl(px(LABEL_X - 1.))
             .pr(px(CHIP_END - 1.))
+            // Without its chip, its label is as far in from each side.
+            .when(rests, |button| button.gap_0().pr(px(LABEL_X - 1.)))
             .border_1()
             .border_color(palette.plate(CANCEL_BORDER))
             .bg(palette.plate(CANCEL_FILL))
@@ -1236,7 +1403,7 @@ impl Render for Dialog {
                     )
                 }
             };
-        let return_chip = (question.on_return == Return::Action).then(|| {
+        let return_chip = (question.on_return == Return::Action && !rests).then(|| {
             chip()
                 .w(px(RETURN_WIDTH))
                 .border_1()
@@ -1256,14 +1423,29 @@ impl Render for Dialog {
                 div().children(return_chip),
             )
             // Without its chip, its label is as far in from each side.
-            .when(question.on_return != Return::Action, |button| {
+            .when(question.on_return != Return::Action || rests, |button| {
                 button.gap_0().pr(px(LABEL_X))
             })
-            .bg(fill)
-            .hover(move |style| style.bg(hovered))
-            .active(move |style| style.bg(pressed))
-            .shadow(vec![shadow(ledge, 2., 0., 0.)])
-            .text_color(label)
+            .when(!rests, |button| {
+                button
+                    .bg(fill)
+                    .hover(move |style| style.bg(hovered))
+                    .active(move |style| style.bg(pressed))
+                    .shadow(vec![shadow(ledge, 2., 0., 0.)])
+                    .text_color(label)
+            })
+            // At rest, in Cancel's look: what fills is the answer ↩ gives, and ↩ isn't its.
+            .when(rests, |button| {
+                button
+                    .pl(px(LABEL_X - 1.))
+                    .pr(px(LABEL_X - 1.))
+                    .border_1()
+                    .border_color(palette.plate(CANCEL_BORDER))
+                    .bg(palette.plate(CANCEL_FILL))
+                    .hover(move |style| style.bg(palette.plate(CANCEL_HOVERED)))
+                    .active(move |style| style.bg(palette.state(CANCEL_FILL, STATE_PRESSED)))
+                    .text_color(palette.on_overlay(CANCEL_TEXT))
+            })
             .relative()
             .child(button_frame("confirm", asked))
             .when(a11y, |button| {
@@ -1410,14 +1592,20 @@ impl Render for Dialog {
             true => BUTTONS_TOP,
             false => BUTTONS_UNDER_TITLE,
         };
-        let card = div()
+        // Over a pane narrower than the card, the card takes its width from the pane, never
+        // clipped, live and at rest alike.
+        let width = asked
+            .over
+            .map_or(WIDTH, |(over, _)| card_width(over.size.width));
+        // The card occludes the dim under it, so it hears its own presses.
+        let card = focus_on_press(div(), asked.focus_pane.clone().filter(|_| rests))
             .id("dialog")
             // Clicks on the card stay on it, and one around it cancels.
             .occlude()
             .relative()
             .child(drawn_into(&asked.check_drawn, |drawn, at| drawn.card = at))
             .top(px(-pose.raised))
-            .w(px(WIDTH))
+            .w(px(width))
             .pt(px(TEXT_INSET))
             .pl(px(TEXT_INSET))
             .pr(px(BUTTON_INSET))
@@ -1465,14 +1653,22 @@ impl Render for Dialog {
                     ),
             );
         let radius = asked.over.map_or(0., |(_, radius)| radius);
+        // At rest a screen reader can reach it but doesn't announce it, as it isn't asking the
+        // user yet: a dialog only once it's live.
         let root = root.when(a11y, |root| {
             let root = root
-                .role(Role::AlertDialog)
+                .role(if rests {
+                    Role::Group
+                } else {
+                    Role::AlertDialog
+                })
                 .aria_label(question.message.clone());
             root.when(!question.detail.is_empty(), |root| {
                 root.aria_description(question.detail.clone())
             })
         });
+        let root = focus_on_press(root, asked.focus_pane.clone().filter(|_| rests));
+        let dim = if rests { REST_DIM_OPACITY } else { DIM_OPACITY };
         root.on_action(cx.listener(|dialog, _: &Confirm, _, cx| dialog.confirm(cx)))
             .on_action(cx.listener(|dialog, _: &Cancel, _, cx| dialog.answer(Answer::Cancel, cx)))
             .on_action(
@@ -1490,7 +1686,7 @@ impl Render for Dialog {
             .flex()
             .items_center()
             .justify_center()
-            .bg(Hsla::from(rgb(DIM)).opacity(DIM_OPACITY * pose.dim))
+            .bg(Hsla::from(rgb(DIM)).opacity(dim * pose.dim))
             .child(card)
     }
 }

@@ -1447,6 +1447,14 @@ pub(super) fn heard_key(shell: &WeakEntity<Shell>) {
     });
 }
 
+/// Whether `command` moves to another pane of a split, which a page dialog's keys may do (#3461).
+pub(super) fn moves_pane(command: Command) -> bool {
+    matches!(
+        command,
+        Command::NextPane | Command::PreviousPane | Command::FocusPane(_)
+    )
+}
+
 /// The key context at the root of the browser's windows, where its shortcuts apply. GPUI ranks a
 /// binding with no context above every other, so without one the shortcuts would take keys a
 /// focused field binds for itself, such as escape and ⌘←.
@@ -1464,8 +1472,10 @@ pub fn bind_keys(cx: &mut App) {
     super::bind_conversation_keys(cx);
     cx.on_action(|run: &Run, cx| {
         // The menu's keys reach it from the dialog's window too, and the dialog has to be
-        // answered first, as an alert's does.
-        if crate::dialog::awaits_answer(cx) {
+        // answered first, as an alert's does. A page's blocks its own pane alone, so the keys
+        // to another pane leave it, at rest (#3461).
+        let leaves = moves_pane(run.0) && crate::dialog::asks_page(cx);
+        if crate::dialog::awaits_answer(cx) && !leaves {
             return;
         }
         // A shortcut in the UI opens its field before GPUI has read the keys typed after it, which

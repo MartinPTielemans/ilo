@@ -2010,10 +2010,10 @@ pub struct Shell {
     hang_noted: Option<u64>,
     /// The dialogs the tabs' pages ask, such as an alert(): the tab shown's goes over its card.
     page_dialogs: HashMap<u64, PageDialog>,
-    /// What the window told last of its page's dialog: the one asked over the card, by its tab
-    /// and id, and where, or none. Untold once it comes to the front, when the dialog shown may
-    /// be another window's.
-    page_dialog_shown: Option<Option<(u64, u64, (Bounds<Pixels>, f32))>>,
+    /// What the window told last of its page's dialog: the one asked over the card or a pane, by
+    /// its tab and id, where, and whether at rest, or none. Untold once it comes to the front,
+    /// when the dialog shown may be another window's.
+    page_dialog_shown: Option<Option<(u64, u64, (Bounds<Pixels>, f32), bool)>>,
     /// The page's dialog up over the card, by its tab and id, which a field taking the keyboard
     /// after it came doesn't take down.
     page_dialog_up: Option<(u64, u64)>,

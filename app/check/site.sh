@@ -232,6 +232,9 @@ onkeydown = e => {
   if (e.key == "o") {
     location = "'"$app_link"'";
   }
+  if (e.key == "w") {
+    open("beside.html");
+  }
 };
 </script>' > "$out/site/dialogs.html"
 # The devices page asks for a device from each click, whose activation USB's and Bluetooth's
