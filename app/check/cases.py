@@ -1,5 +1,7 @@
 """The mcp run's agent of ten cases (check/mcp.sh): the check's MCP client, on its own connection,
-which mcp.sh gives it as stdin and stdout, so the cases are steps of the client's one card. It does
+which mcp.sh hands it over pipes on stdin and stdout, so the cases are steps of the client's one
+card. Its last message is a ping with the id "cases-done", whose answer tells mcp.sh's relay that
+the answers after it are mcp.sh's again. It does
 what an agent does to move ten cases of a web toolkit to Closed, each the same form on a
 page of its own: it opens the ten pages in one turn, then takes each step on all ten in one turn,
 one call a tab, as the server's instructions tell an agent to, and the server answers a turn's
@@ -18,6 +20,7 @@ last:
 It fails with why, there too, and exit status 1.
 """
 
+import atexit
 import json
 import os
 import re
@@ -39,6 +42,10 @@ next_id = 10000
 
 def send(message):
     os.write(sys.stdout.fileno(), (json.dumps(message) + "\n").encode())
+
+
+# On every way out, failing ones too, so the relay never waits on an answer that isn't coming.
+atexit.register(send, {"jsonrpc": "2.0", "id": "cases-done", "method": "ping"})
 
 
 def read_answer():
@@ -144,6 +151,6 @@ timed("wait for Saved", [
     for tab in tabs
 ])
 took = time.monotonic() - started
+turn([("close_tab", {"tab": tab}) for tab in tabs])
 print(f"cases: {CASES} cases in {turns} turns of {calls} calls, {took:.1f} s", file=sys.stderr,
       flush=True)
-turn([("close_tab", {"tab": tab}) for tab in tabs])

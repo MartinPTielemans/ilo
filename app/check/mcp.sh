@@ -595,8 +595,21 @@ save.onclick = () => setTimeout(() => {
 }, 300);
 painted(() => { state.textContent = "Ready"; document.title = "case " + n; });
 </script>' > "$out/site/case.html"
-python3 -I check/cases.py "localhost:$port/case.html" <&5 >&4 2> "$out/cases.log" ||
-  fail "$(tail -1 "$out/cases.log")"
+# Over pipes, as Python on Windows can't use a Git Bash fifo's descriptor as its stdin or stdout:
+# perl hands it the connection's answers, a byte at a time so as to take only its own, until the
+# answer to its closing ping, and cat sends on what it writes. The pipeline's status is cat's, so
+# its last line, there once the cases and their tabs' closing are done, says how it went.
+perl -e '$SIG{PIPE} = "IGNORE"; $| = 1; alarm 300; my $line = "";
+  while (sysread STDIN, my $byte, 1) {
+    $line .= $byte;
+    next unless $byte eq "\n";
+    exit 0 if $line =~ /"id":"cases-done"/;
+    print $line;
+    $line = "";
+  }
+  exit 1' <&5 |
+  python3 -I check/cases.py "localhost:$port/case.html" 2> "$out/cases.log" | cat >&4
+grep -q '^cases: 10 cases in ' "$out/cases.log" || fail "$(tail -1 "$out/cases.log")"
 await_log '^browser: agent mcp-client answered 10 calls at once$' \
   "the server answered a turn's ten calls one after another"
 for n in $(seq 10); do
