@@ -12,7 +12,8 @@
 # - Requests off the tab's site: another host, a port, https, a scheme-relative path, a redirect
 #   off the site, a Cookie or Authorization header and CONNECT or TRACE, none reaching a site.
 # - Writes: PUT, PATCH, DELETE and two changes in one call each ask first, nothing sent until the
-#   user answers, and Deny sends none.
+#   user answers, and Deny sends none. A change without a `what`, the sentence the user reads before
+#   allowing it, is refused with nothing sent and nothing asked (#3555).
 # - A held tab: while a hand_off waits on the user, every tool on that tab is refused.
 # - Hostile pages: text, hidden text, a title, labels, a comment and a frame of another site tell
 #   the agent to do each of the above, and one forges a tool's answer. What read_page and snapshot
@@ -301,6 +302,19 @@ off_site() {
 }
 off_site "$own_tab" "the agent's own tab"
 
+# A change says what it will do, for the user to read before they allow it: one that doesn't is
+# refused before it can ask, with nothing sent (#3555).
+tries=$((tries + 1))
+asks=$(grep -c '^browser: agent mcp-client asks ' "$log" || true)
+got=$(call request "{\"tab\":$own_tab,\"requests\":[{\"method\":\"PUT\",\"path\":\"/api/rules-change-unsaid\",\"body\":{}}]}")
+case "$got" in
+  "error: Request 1 (PUT /api/rules-change-unsaid) may change something, so it needs a \`what\`"*"Nothing was sent.") ;;
+  *) missed "the agent's own tab: a PUT with no \`what\` answered: $got" ;;
+esac
+[ "$(grep -c '^browser: agent mcp-client asks ' "$log" || true)" = "$asks" ] ||
+  missed "the agent's own tab: a PUT with no \`what\` asked the user rather than being refused"
+if grep -q "rules-change-unsaid" "$out/site.log"; then missed "a PUT with no \`what\` reached the site"; fi
+
 # Changes, which ask first, every time: nothing goes until the user answers, and Deny sends none.
 # Asks for the change $2 with the requests $3 and answers with a click on the card's Deny.
 denied() {
@@ -329,12 +343,20 @@ CARD
   esac
   if grep -q "rules-change-" "$out/site.log"; then missed "$2 reached the site though the user said no"; fi
 }
+# The sentence a change by the method $1 gives the user to read: made up, as the page is.
+what() {
+  case "$1" in
+    PUT) echo "Replace the made-up note on the rules page." ;;
+    PATCH) echo "Edit the made-up note on the rules page." ;;
+    DELETE) echo "Remove the made-up note from the rules page." ;;
+  esac
+}
 changes() {
   for method in PUT PATCH DELETE; do
-    denied "$1" "$2: a $method" "[{\"method\":\"$method\",\"path\":\"/api/rules-change-$method\",\"body\":{}}]"
+    denied "$1" "$2: a $method" "[{\"method\":\"$method\",\"path\":\"/api/rules-change-$method\",\"body\":{},\"what\":\"$(what "$method")\"}]"
   done
   denied "$1" "$2: two changes in one call" \
-    "[{\"method\":\"POST\",\"path\":\"/api/rules-change-a\",\"body\":{}},{\"method\":\"DELETE\",\"path\":\"/api/rules-change-b\"}]"
+    "[{\"method\":\"POST\",\"path\":\"/api/rules-change-a\",\"body\":{},\"what\":\"Add a made-up note to the rules page.\"},{\"method\":\"DELETE\",\"path\":\"/api/rules-change-b\",\"what\":\"Remove the made-up note b.\"}]"
 }
 [ "$driven" = 1 ] && changes "$own_tab" "the agent's own tab"
 
@@ -488,7 +510,7 @@ if [ "$driven" = 1 ] && [ "${BROWSER_DRIVE_REAL:-}" = 1 ] && [ -z "$missing" ]; 
   expect '^browser: hover card settled$' \
     "the agent's own tab, asked with a tab's hover card shown: the card came on screen and never settled"
   denied "$own_tab" "the agent's own tab, asked with a tab's hover card shown: a PUT" \
-    "[{\"method\":\"PUT\",\"path\":\"/api/rules-change-PUT\",\"body\":{}}]"
+    "[{\"method\":\"PUT\",\"path\":\"/api/rules-change-PUT\",\"body\":{},\"what\":\"$(what PUT)\"}]"
 fi
 
 exec 4>&-
@@ -498,7 +520,7 @@ quit
 rm -f "$out/rules-in" "$out/rules-out"
 [ -z "$missing" ] || fail "of $tries tries, these got past a rule:$missing"
 if [ "$driven" = 1 ]; then
-  echo "ok: of $tries tries an MCP client made, every one was refused or asked the user first, and logged: every tool on the user's tab and on another agent's, pages that aren't http or https, tools agents don't have, requests off the tab's site, with the session's headers, CONNECT and TRACE, a redirect off the site stopped there, changes asking each time and none sent when denied, and every tool on a tab held for the user. A hostile page's text, hidden text, labels, frame and forged answer changed none of it, and no answer held a page's secrets or the user's page. What it handed over: $out/rules-hostile-read.txt, $out/rules-hostile-snapshot.txt"
+  echo "ok: of $tries tries an MCP client made, every one was refused or asked the user first, and logged: every tool on the user's tab and on another agent's, pages that aren't http or https, tools agents don't have, requests off the tab's site, with the session's headers, CONNECT and TRACE, a redirect off the site stopped there, changes asking each time and none sent when denied, a change with no \`what\` refused before it asked, and every tool on a tab held for the user. A hostile page's text, hidden text, labels, frame and forged answer changed none of it, and no answer held a page's secrets or the user's page. What it handed over: $out/rules-hostile-read.txt, $out/rules-hostile-snapshot.txt"
 else
-  echo "ok: of $tries tries an MCP client made, every one was refused and logged: every tool on the user's tab and on another agent's, pages that aren't http or https, tools agents don't have and requests off the tab's site; a hostile page changed none of it, and no answer held its secrets. skip: changes asking first and a held tab. Browser wasn't the active app, so the cards' buttons couldn't be clicked."
+  echo "ok: of $tries tries an MCP client made, every one was refused and logged: every tool on the user's tab and on another agent's, pages that aren't http or https, tools agents don't have and requests off the tab's site, and a change with no \`what\` was refused with nothing sent; a hostile page changed none of it, and no answer held its secrets. skip: changes asking first and a held tab. Browser wasn't the active app, so the cards' buttons couldn't be clicked."
 fi
