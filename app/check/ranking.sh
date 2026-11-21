@@ -235,6 +235,7 @@ expect '^browser: command bar hidden$' "escape didn't close the command bar"
 # are tried before a miss fails, so a run shows each.
 frames_missed=
 frames_last=
+frames_unhealed=
 if [ "$(uname)" = Darwin ]; then
   for fault in start display; do
     send key t cmd
@@ -252,18 +253,17 @@ if [ "$(uname)" = Darwin ]; then
       drew=$(since "$fault_step" | grep '^browser: command bar drew ' | tail -1)
       frames_missed="$frames_missed the $fault fault: the bar didn't draw \"abcd\" in 5 s, its last since the fault being \"${drew:-none}\", with these frame lines since: $(since "$fault_step" | grep 'frame\|display link' | tail -6 | tr '\n' ';');"
     fi
-    frames_last="$frames_last $fault: $(since "$fault_step" | grep 'frames asked for again' | head -1 | sed 's/^browser: gpui frame lost: //');"
+    healed=$(since "$fault_step" | grep "^browser: frames asked for again after the drive's fault: " | head -1)
+    frames_last="$frames_last $fault: ${healed#browser: frames asked for again after the drive*s fault: };"
+    [ -n "$healed" ] || frames_unhealed="$frames_unhealed $fault"
     send key escape
     expect '^browser: command bar hidden$' "escape didn't close the command bar after the $fault fault"
   done
   [ -z "$frames_missed" ] ||
     fail "the command bar was left undrawn while its keys landed, after a display link start that gave no frames (#3830):$frames_missed"
-  # The start fault is the first heal of the run, and its line is said: they're said at most one
-  # in 5 s.
-  case $frames_last in
-  *"start: frames asked for again: "*) ;;
-  *) fail "the command bar drew after the start fault, but no line says its frames were asked for again, so it drew for another reason: $frames_last" ;;
-  esac
+  # The fault's heal says so in a line of its own, which no other heal's line holds back.
+  [ -z "$frames_unhealed" ] ||
+    fail "the command bar drew after the$frames_unhealed fault, but no line says its frames were asked for again after it, so it drew some other way and the fault tested nothing: $frames_last"
   # An idle bar and an idle window still stop their links, and no look for a first frame is left
   # waiting: nothing watches a window that wants no frame.
   send key t cmd
