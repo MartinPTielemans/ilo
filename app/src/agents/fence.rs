@@ -43,9 +43,20 @@ pub fn requests(count: usize, site: &str) -> String {
 /// What an answer says in place of the page, once the tab came to a fenced site by itself.
 pub fn withheld(tab: u64, site: &str) -> String {
     format!(
-        "Tab {tab} is now on {site}, where the user asked to be asked first: your next call on \
-         it asks them."
+        "Tab {tab} is now on {site}, where the user wants to be asked first. Your next call on \
+         this tab will ask them."
     )
+}
+
+/// What a call on such a tab answers while its page shows a dialog: the call did nothing.
+pub fn refused(tab: u64, site: &str) -> String {
+    format!("Nothing was done. {}", withheld(tab, site))
+}
+
+/// The activity log's words for that refusal, which the user reads: by the entry of their list
+/// the site matched, so a subdomain's names what they wrote.
+pub fn logged(entry: &str) -> String {
+    format!("{entry} is on Always ask first; you'll be asked next.")
 }
 
 /// The title list_tabs gives such a tab, with no address.

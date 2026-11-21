@@ -805,3 +805,33 @@ fn back_and_forward_onto_a_fenced_site_ask_again(cx: &mut TestAppContext) {
     arrives(&agents, &browser, 20, "https://mybank.example/", cx);
     asks_next(&agents, &browser, 20, "mybank.example", cx);
 }
+
+/// A call refused on a tab that came to a subdomain of a fenced site while its page shows a dialog
+/// tells the agent nothing was done, and the log the user reads names the entry of their list the
+/// site matched, not the tab's host (#3724).
+#[gpui::test]
+fn a_refusal_at_the_fence_tells_the_agent_and_the_log_each_in_its_words(cx: &mut TestAppContext) {
+    let (agents, browser) = fenced(cx);
+    arrives(&agents, &browser, 20, "https://login.mybank.example/", cx);
+    agents.update(cx, |agents, cx| {
+        agents.page_dialog(20, Some(DialogKind::Alert), "Your balance is 1,234", cx)
+    });
+    for tool in ["list_split", "pin_tab"] {
+        let answer = call(&agents, "claude-code", tool, json!({ "tab": 20 }), cx);
+        assert_eq!(
+            answer.recv().unwrap(),
+            ToolResult::error(
+                "Nothing was done. Tab 20 is now on login.mybank.example, where the user wants to \
+                 be asked first. Your next call on this tab will ask them."
+            ),
+            "{tool}"
+        );
+        let logged = (log(&agents, "claude-code", cx).into_iter())
+            .find(|(action, ..)| action == tool)
+            .unwrap_or_else(|| panic!("{tool} wasn't logged"));
+        assert_eq!(
+            logged.2, "mybank.example is on Always ask first; you'll be asked next.",
+            "{tool}"
+        );
+    }
+}
