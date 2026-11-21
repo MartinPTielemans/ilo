@@ -233,7 +233,9 @@ expect '^browser: command bar hidden$' "escape didn't close the command bar"
 for go in $(seq 20); do
   send key t cmd
   expect '^browser: command bar shown$' "go $go: ⌘T didn't open the command bar"
-  expect '^browser: command bar first frame in ' "go $go: the command bar's first frame didn't come"
+  # The first-frame line comes only from a frame drawn once AppKit says the bar shows, which a
+  # bar drawn before it's shown may not need.
+  expect '^browser: command bar drew ""$' "go $go: the command bar didn't draw"
   sleep 0.5
   send type a
   expect '^browser: command bar drew "a"$' "go $go: the command bar didn't draw \"a\""
