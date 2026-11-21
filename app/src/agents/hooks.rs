@@ -127,12 +127,21 @@ pub fn environment(
 }
 
 /// `text` with only letters and digits of any script, the plain space and `. , - _ :`, the same
-/// on every OS. An agent names its task and itself, and cmd.exe expands a variable before it parses
-/// the line it's in, so what a hook is given can't hold what a shell would act on.
+/// on every OS, and no word starting with `-`. An agent names its task and itself, and cmd.exe
+/// expands a variable before it parses the line it's in, so what a hook is given can't hold what a
+/// shell would act on. sh splits an unquoted variable into words, so none may pass the user's
+/// command an option.
 pub fn clean(text: &str) -> String {
-    (text.chars())
-        .filter(|char| char.is_alphanumeric() || matches!(char, ' ' | '.' | ',' | '-' | '_' | ':'))
-        .collect()
+    let kept = (text.chars())
+        .filter(|char| char.is_alphanumeric() || matches!(char, ' ' | '.' | ',' | '-' | '_' | ':'));
+    let mut clean = String::new();
+    for char in kept {
+        if char == '-' && matches!(clean.chars().last(), None | Some(' ')) {
+            continue;
+        }
+        clean.push(char);
+    }
+    clean
 }
 
 /// Runs `command` in the user's shell, from their home folder, with `given` in its environment,
@@ -243,11 +252,22 @@ mod tests {
             assert_eq!(clean(&format!("a{char}b")), "ab", "{char:?}");
         }
         assert_eq!(
-            clean("Book: a table, at 8.30 - Lisboa_2"),
-            "Book: a table, at 8.30 - Lisboa_2"
+            clean("Book: a table, at 8.30, Lisboa_2"),
+            "Book: a table, at 8.30, Lisboa_2"
         );
         assert_eq!(clean("Réserver 東京 مرحبا"), "Réserver 東京 مرحبا");
         assert_eq!(clean("Pay & echo no %PATH%"), "Pay  echo no PATH");
+        // No word starts with -, so an unquoted $ILO_TASK hands sh's command no option.
+        assert_eq!(clean("-rf ."), "rf .");
+        assert_eq!(clean("a -o b"), "a o b");
+        assert_eq!(clean("--x"), "x");
+        assert_eq!(clean("a  ---x"), "a  x");
+        assert_eq!(clean("a &-x"), "a x");
+        assert_eq!(clean("Book - a table"), "Book  a table");
+        assert_eq!(clean("re-run 2-3"), "re-run 2-3");
+        let given = environment(Event::Asked, "-x Codex", "-rf . --all", None);
+        assert_eq!(given[1].1, "x Codex");
+        assert_eq!(given[2].1, "rf . all");
         let given = environment(
             Event::TaskEnded,
             "Claude & Co",
