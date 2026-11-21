@@ -4125,8 +4125,10 @@ impl Settings {
             .line_height(px(DETAIL_LINE))
             .text_color(look.detail)
             .child(
-                "Each runs on its own, given the event, the agent's name and the task's title as \
-                 the agent named it, never a page's address. Agents can't see, add or run hooks.",
+                "Hooks run in the system shell for up to 30 seconds. Each gets the environment \
+                 variables ILO_EVENT, ILO_AGENT, ILO_ENDED and ILO_TASK (the task's title from the \
+                 agent, cleaned and shortened), never a page's address. Agents can't see, add or \
+                 run hooks.",
             );
         let mut under = div().flex().flex_col();
         if self.adding_hook.is_none() {
