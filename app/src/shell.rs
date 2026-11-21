@@ -4577,6 +4577,7 @@ impl Render for Shell {
                 cx.defer_in(window, |shell, _, cx| shell.live_space_shown(cx));
             }
         }
+        self.see_gone_keyboard(window, cx);
         self.lone_header = cx
             .try_global::<LoneSpaceHeader>()
             .is_some_and(|kept| kept.0);
