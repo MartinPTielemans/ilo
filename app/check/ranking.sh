@@ -256,13 +256,17 @@ if [ "$(uname)" = Darwin ]; then
     send framefault "$fault"
     fault_step=$step
     send type jv
+    # Drawn after its rows are listed, as no key comes after them: GPUI draws a dirty window as it
+    # takes a key too, and presents nothing then, so a drew line from the keys says nothing.
     for _ in $(seq 50); do
-      since "$fault_step" | grep -q '^browser: command bar drew "zqxjv"$' && break
+      since "$fault_step" | sed -n '/^browser: command bar lists "zqxjv"/,$p' |
+        grep -q '^browser: command bar drew "zqxjv"$' && break
       sleep 0.1
     done
-    if ! since "$fault_step" | grep -q '^browser: command bar drew "zqxjv"$'; then
+    if ! since "$fault_step" | sed -n '/^browser: command bar lists "zqxjv"/,$p' |
+      grep -q '^browser: command bar drew "zqxjv"$'; then
       drew=$(since "$fault_step" | grep '^browser: command bar drew ' | tail -1)
-      frames_missed="$frames_missed the $fault fault: the bar didn't draw \"zqxjv\" in 5 s, its last since the fault being \"${drew:-none}\", with these frame lines since: $(since "$fault_step" | grep 'frame\|display link' | tail -6 | tr '\n' ';');"
+      frames_missed="$frames_missed the $fault fault: the bar didn't draw \"zqxjv\" in 5 s after listing its rows, its last since the fault being \"${drew:-none}\", with these frame lines since: $(since "$fault_step" | grep 'frame\|display link' | tail -6 | tr '\n' ';');"
     fi
     healed=$(since "$fault_step" | grep "^browser: frames asked for again after the drive's fault: " | head -1)
     frames_last="$frames_last $fault: ${healed#browser: frames asked for again after the drive*s fault: };"
@@ -273,8 +277,8 @@ if [ "$(uname)" = Darwin ]; then
   [ -z "$frames_missed" ] ||
     fail "the command bar was left undrawn while its keys landed, after a display link start that gave no frames (#3830):$frames_missed"
   # The fault's heal says so in a line of its own, which no other heal's line holds back.
-  # The drew line alone can't say it: it's the bar's render, which GPUI also runs as it takes a
-  # key, with no frame presented.
+  # A draw after the rows could still come another way, such as the bar becoming key, so the heal's
+  # line says the heal did it.
   [ -z "$frames_unhealed" ] ||
     fail "the command bar drew after the$frames_unhealed fault, but no line says its frames were asked for again after it, so it drew some other way and the fault tested nothing: $frames_last"
   # An idle bar and an idle window still stop their links, and no look for a first frame is left
