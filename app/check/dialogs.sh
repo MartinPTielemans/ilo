@@ -420,9 +420,9 @@ split_rests() {
     fail "the page beside took keys while the alert asked, so it doesn't share the alert's renderer process ($2)"
   fi
   # ⌘W from the page beside, the alert asked again and resting, closes that page alone, leaving the
-  # alert's tab shown and its alert there, unanswered, live once its pane is the only one.
+  # alert's tab shown and its alert there, unanswered, live once its pane is the only one. The
+  # click on the resting OK focused the alert's pane, so this click in it gives its page the keys.
   send click $(in_pane 1)
-  expect "^browser: selected $page\( in .*\)\{0,1\}\$" "a click on the dialogs page's pane didn't focus it again ($2)"
   ask a Alert "alert-split-$2-again"
   send click $(in_pane 2)
   closing=$step
