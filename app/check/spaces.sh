@@ -450,7 +450,8 @@ fi
 send key w cmd
 expect_tabs "$a" "$a" "after closing the last-used check's tab"
 # A tab opened from the command bar closes back to the tab it opened over until the user shows
-# another Space: back from there, ⌘W shows the tab under it (#3813).
+# another Space: back from there, ⌘W with the sidebar focused shows the tab under it (#3813). The
+# last ⌘W, with the page focused, leaves the page the keyboard, as the steps below need.
 open_from_bar "http://localhost:$port/two.html"
 c=$tab
 send click "$(row 1)"
@@ -465,7 +466,9 @@ expect_tabs "$d $c $a" "$d" "back in the first Space, the tab opened over $a"
 send key w cmd
 expect_tabs "$c $a" "$c" \
   "after a Space switch, closing the tab opened over $a didn't show the tab under it"
+send click $page_point
 send key w cmd
+expect '^browser: command close-tab via page$' "⌘W with the page focused didn't reach the UI"
 expect_tabs "$a" "$a" "after closing the tab opened before it"
 
 # Two fingers across the sidebar page between Spaces. Past halfway they go on to the next Space, a
