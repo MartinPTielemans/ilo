@@ -14,8 +14,10 @@
 //! Settings › Agents and the agent's Space's menu list what the user answered for good, to revoke.
 
 pub mod bridge;
+pub mod cli;
 pub mod clients;
 mod codex;
+pub mod command;
 mod held;
 pub mod page;
 #[cfg(windows)]
@@ -146,6 +148,8 @@ pub struct Question {
     pub changes: std::rc::Rc<[request::Request]>,
     /// The site they go to, the tab's, which the card's facts name.
     pub site: SharedString,
+    /// Whether it asks every time, as a payment does, so its card has no Always or Never.
+    pub each_time: bool,
 }
 
 /// The windows' cards ask again whenever a question changes, which is on every Agents change, so
@@ -156,6 +160,7 @@ impl PartialEq for Question {
         (self.id, &self.agent, &self.from, &self.what, &self.why)
             == (other.id, &other.agent, &other.from, &other.what, &other.why)
             && (self.handoff, self.back, &self.site) == (other.handoff, other.back, &other.site)
+            && self.each_time == other.each_time
             && std::rc::Rc::ptr_eq(&self.changes, &other.changes)
     }
 }
@@ -345,9 +350,10 @@ pub struct ToolResult {
 }
 
 impl ToolResult {
+    /// An answer, cut at `tools::MAX_ANSWER` characters, whatever the tool (#3657).
     pub fn text(text: impl Into<String>) -> Self {
         ToolResult {
-            text: text.into(),
+            text: tools::capped(text.into()),
             error: false,
             image: None,
         }
@@ -355,7 +361,7 @@ impl ToolResult {
 
     pub fn error(text: impl Into<String>) -> Self {
         ToolResult {
-            text: text.into(),
+            text: tools::capped(text.into()),
             error: true,
             image: None,
         }
@@ -371,10 +377,14 @@ impl ToolResult {
 
     pub fn to_json(&self) -> Value {
         match &self.image {
-            Some(jpeg) => json!({
-                "content": [{ "type": "image", "data": jpeg, "mimeType": "image/jpeg" }],
-                "isError": self.error,
-            }),
+            Some(jpeg) => {
+                let picture = json!({ "type": "image", "data": jpeg, "mimeType": "image/jpeg" });
+                let content = match self.text.is_empty() {
+                    true => vec![picture],
+                    false => vec![json!({ "type": "text", "text": self.text }), picture],
+                };
+                json!({ "content": content, "isError": self.error })
+            }
             None => {
                 json!({ "content": [{ "type": "text", "text": self.text }], "isError": self.error })
             }
@@ -467,6 +477,17 @@ impl Did {
     }
 }
 
+/// A read of a tab's text waiting on the core: read_page's, or a page tool's that answers with the
+/// text (`Show::Text`), after what it did, its `note`.
+struct Reading {
+    agent: String,
+    tab: u64,
+    reply: mpsc::Sender<ToolResult>,
+    note: String,
+    /// The character of the text the answer starts at.
+    from: usize,
+}
+
 /// What of the page's outline an action answers with, as its `outline` argument says.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Show {
@@ -477,6 +498,9 @@ enum Show {
     Nothing,
     /// The outline of the element with this DOM node alone: snapshot's ref.
     Element(i64),
+    /// The page's text, as read_page gives it, for a page the agent reads: open_tab's and
+    /// navigate's `answer` (#3657).
+    Text,
 }
 
 impl Show {
@@ -491,11 +515,23 @@ impl Show {
         }
     }
 
-    /// As a new page answers: the outline whole, unless none.
+    /// As a new page answers: the outline whole, unless none or the text.
     fn whole(self) -> Show {
         match self {
-            Show::Nothing => Show::Nothing,
+            Show::Nothing | Show::Text => self,
             _ => Show::Full,
+        }
+    }
+
+    /// open_tab's and navigate's `answer`: "outline", as without it, "text" or "none". Without
+    /// it, navigate's `outline`, as before.
+    fn answer(arguments: &Value) -> Result<Show, String> {
+        match arguments.get("answer") {
+            None | Some(Value::Null) => Show::argument(arguments),
+            Some(Value::String(show)) if show == "outline" => Ok(Show::Full),
+            Some(Value::String(show)) if show == "text" => Ok(Show::Text),
+            Some(Value::String(show)) if show == "none" => Ok(Show::Nothing),
+            Some(_) => Err("answer is outline, text or none.".into()),
         }
     }
 }
@@ -631,6 +667,9 @@ pub struct Agents {
     trouble: Option<SharedString>,
     /// The clients on this computer, as Settings › Agents last looked.
     found: Vec<Client>,
+    /// Whether the user's shell looks in the `ilo` command's folder, as Settings › Agents last
+    /// asked it.
+    command_searched: bool,
     /// The client whose Connect is writing its config, and the client whose last failed, and why.
     connecting: Option<Client>,
     failed: Option<(Client, SharedString)>,
@@ -638,7 +677,7 @@ pub struct Agents {
     live: HashSet<String>,
     log: Vec<Activity>,
     /// The reads waiting on the core, by request.
-    reading: HashMap<u64, (String, u64, mpsc::Sender<ToolResult>)>,
+    reading: HashMap<u64, Reading>,
     next_request: u64,
     /// The tab each agent used last, which a call without a tab uses.
     current: HashMap<String, u64>,
@@ -727,7 +766,10 @@ impl Run {
 struct Wait {
     id: u64,
     what: WaitFor,
+    /// A check step's one look, which answers in one line.
+    check: bool,
     seconds: f64,
+    started: Instant,
     until: Instant,
     /// The next look's answer, for the timer to give the core.
     look: Option<mpsc::Sender<ToolResult>>,
@@ -748,8 +790,10 @@ enum WaitFor {
 }
 
 /// How often a wait looks at the page for its text, in a run under way: no more than the page's
-/// own settling after an action takes.
+/// own settling after an action takes, at first, then a tenth of the time it has waited, up to
+/// LOOK_MOST, as a wait of minutes is for something slow.
 const LOOK_EVERY: Duration = Duration::from_millis(500);
+const LOOK_MOST: Duration = Duration::from_secs(5);
 
 /// What an answer starts with when the core stopped waiting for its page to settle.
 const BUSY: &str = "The page was still busy after 5 s, so it may change yet.";
@@ -821,6 +865,7 @@ impl Agents {
             server: None,
             trouble: None,
             found: Vec::new(),
+            command_searched: true,
             connecting: None,
             failed: None,
             live: HashSet::new(),
@@ -1010,7 +1055,8 @@ impl Agents {
     /// Looks again for the clients on this computer, as Settings › Agents shows: one installed
     /// since the last look is listed.
     pub fn look_for_clients(&mut self, cx: &mut Context<Self>) {
-        let found: Vec<Client> = (Client::ALL.into_iter())
+        self.look_for_command(cx);
+        let found: Vec<Client> = (Client::APPS.into_iter())
             .filter(|client| self.clients.found(*client))
             .collect();
         if found != self.found {
@@ -1022,13 +1068,51 @@ impl Agents {
     /// The clients Settings › Agents lists: those found here, any connected, whose Disconnect
     /// stays though the client has gone, and any other MCP client.
     pub fn listed(&self) -> Vec<Client> {
-        (Client::ALL.into_iter())
+        (Client::APPS.into_iter())
             .filter(|client| {
                 *client == Client::Other
                     || self.found.contains(client)
                     || self.is_connected(*client)
             })
             .collect()
+    }
+
+    /// Whether Settings › Agents offers the `ilo` command: not yet on Windows, nor in a Flatpak,
+    /// whose sandbox can't write the user's bin folder.
+    pub fn command_offered(&self) -> bool {
+        cfg!(unix) && self.bridge.first().map(String::as_str) != Some("flatpak")
+    }
+
+    /// The `ilo` command's row: not added, or added in a folder the user's shell looks in or not.
+    pub fn command_state(&self) -> cli::State {
+        match (self.is_connected(Client::Command), self.command_searched) {
+            (false, _) => cli::State::Off,
+            (true, true) => cli::State::On,
+            (true, false) => cli::State::Unsearched,
+        }
+    }
+
+    /// Asks the user's shell, in the background, whether it looks in the `ilo` command's folder,
+    /// as the row says, once it's added.
+    fn look_for_command(&mut self, cx: &mut Context<Self>) {
+        if !self.is_connected(Client::Command) {
+            return;
+        }
+        let clients = self.clients.clone();
+        cx.spawn(async move |agents, cx| {
+            let searched = cx
+                .background_spawn(async move { clients.searches(&cli::folder(&clients::home())) })
+                .await;
+            agents
+                .update(cx, |agents, cx| {
+                    if agents.command_searched != searched {
+                        agents.command_searched = searched;
+                        cx.notify();
+                    }
+                })
+                .ok();
+        })
+        .detach();
     }
 
     pub fn is_connected(&self, client: Client) -> bool {
@@ -1094,6 +1178,9 @@ impl Agents {
                 self.tokens_changed();
                 self.save();
                 self.note(client.id(), "connected", "", "");
+                if client == Client::Command {
+                    self.look_for_command(cx);
+                }
             }
             Err(why) => {
                 log!("browser: agent {} couldn't connect: {why}", client.id());
@@ -1114,7 +1201,8 @@ impl Agents {
         self.agents.retain(|agent| agent.client != client);
         self.tokens_changed();
         self.save();
-        self.reading.retain(|_, (agent, _, _)| agent != client.id());
+        self.reading
+            .retain(|_, reading| reading.agent != client.id());
         self.forget_waiting(client.id(), cx);
         if let Some((server, _)) = &self.server {
             server.disconnect(client.id());
@@ -1214,7 +1302,14 @@ impl Agents {
 
     /// The core's answer to the read `request`: the page's text, or None if it had none.
     pub fn text_read(&mut self, request: u64, text: Option<String>, cx: &mut Context<Self>) {
-        let Some((agent, tab, reply)) = self.reading.remove(&request) else {
+        let Some(Reading {
+            agent,
+            tab,
+            reply,
+            note,
+            from,
+        }) = self.reading.remove(&request)
+        else {
             return;
         };
         // Read once it loaded, as the page tools look once they've acted: the tab may have gone
@@ -1225,11 +1320,18 @@ impl Agents {
         let refused = refused.or_else(|| (!is_web(&tab.url)).then_some(NOT_WEB_PAGE));
         _ = reply.send(match (text, refused) {
             (Some(_), Some(why)) => ToolResult::error(why),
-            (Some(text), None) => ToolResult::text(tools::page_text(&tab, &text)),
+            (Some(text), None) => {
+                let text = tools::page_text(&tab, &text, from);
+                ToolResult::text(match note.is_empty() {
+                    true => text,
+                    false => format!("{note}\n\n{text}"),
+                })
+            }
             (None, _) => ToolResult::error(
                 "The tab has no page loaded: it loads once the user shows it. Try another tab.",
             ),
         });
+        self.advance(cx);
     }
 
     /// What the server's threads hand over.
@@ -1243,6 +1345,9 @@ impl Agents {
                     cx.notify();
                 }
             }
+            // The `ilo` command's connection closes after each command, which isn't its end: its
+            // session ends as an idle one does, and it's live till then (Agents::command_gone).
+            Event::Bye { agent } if agent == Client::Command.id() => {}
             Event::Bye { agent } => {
                 self.end_session(&agent, cx);
                 if self.live.remove(&agent) {
@@ -1332,17 +1437,40 @@ impl Agents {
                         return;
                     }
                 };
+                let from = match arguments.get("from") {
+                    None | Some(Value::Null) => 0,
+                    Some(from) => match from.as_u64() {
+                        Some(from) => from as usize,
+                        None => {
+                            _ = reply.send(ToolResult::error(
+                                "from is a character of the page's text to start at, from 0.",
+                            ));
+                            return;
+                        }
+                    },
+                };
                 if !self.act(&agent, tab, "read_page", &reply, cx) {
                     return;
                 }
-                let request = self.next_request;
-                self.next_request += 1;
-                self.reading.insert(request, (agent, tab, reply));
-                self.browser.read_text(tab, request);
+                let note = String::new();
+                self.read_page(Reading {
+                    agent,
+                    tab,
+                    reply,
+                    note,
+                    from,
+                });
             }
             "open_tab" => {
                 let Some(url) = self.url_argument(&arguments, &reply) else {
                     return;
+                };
+                let show = match Show::answer(&arguments) {
+                    Ok(show) => show.whole(),
+                    Err(why) => {
+                        _ = reply.send(ToolResult::error(why));
+                        return;
+                    }
                 };
                 let host = site(&url);
                 let act = Act {
@@ -1357,7 +1485,7 @@ impl Agents {
                     element: 0,
                     text: String::new(),
                     note: String::new(),
-                    show: Show::Full,
+                    show,
                     download: 0,
                     field: String::new(),
                     requests: Vec::new(),
@@ -1387,7 +1515,11 @@ impl Agents {
                         return;
                     }
                 };
-                let show = match Show::argument(&arguments) {
+                let show = match tool.as_str() {
+                    "navigate" => Show::answer(&arguments),
+                    _ => Show::argument(&arguments),
+                };
+                let show = match show {
                     Ok(show) => show,
                     Err(why) => {
                         _ = reply.send(ToolResult::error(why));
@@ -1402,9 +1534,13 @@ impl Agents {
                 };
                 let steps = arguments.get("steps").and_then(Value::as_array).cloned();
                 let steps = steps.unwrap_or_default();
+                let action = |step: &Value| {
+                    step.get("action")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                };
                 let wrong = steps.iter().position(|step| {
-                    let action = step.get("action").and_then(Value::as_str);
-                    !action.is_some_and(|action| tools::STEPS.contains(&action))
+                    !action(step).is_some_and(|action| tools::STEPS.contains(&action.as_str()))
                 });
                 if steps.is_empty() || steps.len() > tools::MAX_STEPS || wrong.is_some() {
                     _ = reply.send(ToolResult::error(format!(
@@ -1412,6 +1548,17 @@ impl Agents {
                         tools::MAX_STEPS,
                         tools::STEPS.join(", ")
                     )));
+                    return;
+                }
+                // Its picture is the run's answer, so nothing comes after it.
+                let pictures = steps.iter().rev().skip(1);
+                if pictures
+                    .filter_map(action)
+                    .any(|action| action == "screenshot")
+                {
+                    _ = reply.send(ToolResult::error(
+                        "A screenshot is only the last step, as its picture is the run's answer.",
+                    ));
                     return;
                 }
                 let show = match Show::argument(&arguments) {
@@ -1480,6 +1627,21 @@ impl Agents {
                 self.carry(tab, held::Event::HandOff, life, actions, cx);
             }
             "sort_tabs_by_site" if !is_task(&agent) => self.sort_by_site(&agent, reply, cx),
+            // The agent's word that its task is done (#3652): it ends only its own card, so it
+            // needs no permission, and the activity log says so.
+            "done" if !is_task(&agent) => {
+                let said = self.said_done(&agent, id, cx);
+                match &said {
+                    Ok(text) if text.starts_with("Your task") => self.note(&agent, "done", "", ""),
+                    Err(why) => self.note(&agent, "done", "", why),
+                    Ok(_) => {}
+                }
+                cx.notify();
+                _ = reply.send(match said {
+                    Ok(text) => ToolResult::text(text),
+                    Err(why) => ToolResult::error(why),
+                });
+            }
             "pin_tab" | "unpin_tab" | "remove_tab" if !is_task(&agent) => {
                 let Some(tab) = self.tab_for(&agent, &arguments, &reply, cx) else {
                     return;
@@ -1749,7 +1911,7 @@ impl Agents {
         let (reply, answer) = mpsc::channel();
         run.step = answer;
         self.trace_step(&run.agent, run.call, run.tab, &step, cx);
-        if tool == "wait" {
+        if tool == "wait" || tool == "check" {
             return self.wait(run, &step, reply, cx);
         }
         let asked = self.asking.len();
@@ -1782,7 +1944,8 @@ impl Agents {
         self.runs.push(run);
     }
 
-    /// Starts a wait step: checked as a snapshot, which each of its looks is, but logged as itself.
+    /// Starts a wait step, or a check step, which looks once: checked as a snapshot, which each of
+    /// its looks is, but logged as itself.
     fn wait(
         &mut self,
         mut run: Run,
@@ -1797,37 +1960,57 @@ impl Agents {
                 .trim()
                 .to_string()
         };
+        let check = string("action") == "check";
+        let given = step.get("seconds").and_then(Value::as_f64);
         let what = match (string("text"), string("gone"), string("until").as_str()) {
+            (text, gone, "") if check => (!text.is_empty() && gone.is_empty() && given.is_none())
+                .then_some(WaitFor::Shows(text)),
             (text, gone, "") if text.is_empty() && gone.is_empty() => Some(WaitFor::Time),
             (text, gone, "") if gone.is_empty() => Some(WaitFor::Shows(text)),
             (text, gone, "") if text.is_empty() => Some(WaitFor::Goes(gone)),
             (text, gone, "quiet") if text.is_empty() && gone.is_empty() => Some(WaitFor::Quiet),
             _ => None,
         };
-        let seconds = match step.get("seconds").and_then(Value::as_f64) {
+        // Text can take minutes to come, as a search's results; the page settles in seconds.
+        let most = match what {
+            Some(WaitFor::Shows(_) | WaitFor::Goes(_)) => tools::MAX_TEXT_WAIT,
+            _ => tools::MAX_WAIT,
+        };
+        let seconds = match given {
+            _ if check => Some(0.0),
             None if !matches!(what, Some(WaitFor::Time)) => Some(tools::WAIT),
-            seconds => seconds.filter(|seconds| *seconds > 0.0 && *seconds <= tools::MAX_WAIT),
+            seconds => seconds.filter(|seconds| *seconds > 0.0 && *seconds <= most),
         };
         let (Some(what), Some(seconds)) = (what, seconds) else {
-            _ = reply.send(ToolResult::error(format!(
-                "wait needs text to wait for, gone with text to wait to go, until \"quiet\" to \
-                 wait for the page to settle, or seconds, at most {}.",
-                tools::MAX_WAIT
-            )));
+            let why = match check {
+                true => "check needs text to look for, once; to wait for it, use wait.".into(),
+                false => format!(
+                    "wait needs text to wait for, or gone with text to wait to go, up to seconds, \
+                     at most {}; until \"quiet\" to wait for the page to settle, or seconds alone, \
+                     at most {}.",
+                    tools::MAX_TEXT_WAIT,
+                    tools::MAX_WAIT
+                ),
+            };
+            _ = reply.send(ToolResult::error(why));
             return self.runs.push(run);
         };
         self.stepping = Some(run.agent.clone());
-        let may = self.act_as(&run.agent, run.tab, "snapshot", "wait", &reply, cx);
+        let logged = if check { "check" } else { "wait" };
+        let may = self.act_as(&run.agent, run.tab, "snapshot", logged, &reply, cx);
         self.stepping = None;
         if may {
             let id = self.next_request;
             self.next_request += 1;
             let time = Duration::from_secs_f64(seconds);
-            let until = cx.background_executor().now() + time;
+            let started = cx.background_executor().now();
+            let until = started + time;
             let mut wait = Wait {
                 id,
                 what,
+                check,
                 seconds,
+                started,
                 until,
                 look: None,
                 timer: None,
@@ -1862,7 +2045,8 @@ impl Agents {
         let now = cx.background_executor().now();
         let late = now >= wait.until;
         // The core waits for the page to settle itself, so a quiet wait looks again at once.
-        let mut next = LOOK_EVERY.min(wait.until.saturating_duration_since(now));
+        let every = (now.saturating_duration_since(wait.started) / 10).clamp(LOOK_EVERY, LOOK_MOST);
+        let mut next = every.min(wait.until.saturating_duration_since(now));
         match &wait.what {
             WaitFor::Time => {
                 let note = format!("Waited {seconds} s.");
@@ -1889,6 +2073,16 @@ impl Agents {
                 let shows = outline.to_lowercase().contains(&text.to_lowercase());
                 let goes = matches!(wait.what, WaitFor::Goes(_));
                 let text = page::clip(text, 60);
+                // A check answers in its one line, or fails with the outline, as a wait does.
+                if wait.check {
+                    return Some(match shows {
+                        true => ToolResult::text(format!("“{text}” is on the page.")),
+                        false => {
+                            let why = format!("“{text}” isn't on the page.");
+                            ToolResult::error(self.answer_with(&agent, tab, why, run.show))
+                        }
+                    });
+                }
                 let said = match (goes, shows) {
                     (false, true) => Some((format!("“{text}” showed."), false)),
                     (true, false) => Some((format!("“{text}” went."), false)),
@@ -2011,8 +2205,12 @@ impl Agents {
                     } else if run.steps.is_empty() {
                         let done = run.done.iter().map(|note| format!("{note}\n"));
                         let done: String = done.collect();
-                        let text = format!("Ran {n} steps.\n{done}{n}. {}", answer.text);
-                        _ = run.reply.send(ToolResult::text(text));
+                        let last = match (&answer.image, answer.text.is_empty()) {
+                            (Some(_), true) => "Took a screenshot of the page.",
+                            _ => answer.text.as_str(),
+                        };
+                        let text = format!("Ran {n} steps.\n{done}{n}. {last}");
+                        _ = run.reply.send(ToolResult { text, ..answer });
                     } else {
                         let note = answer.text.split("\n\n").next().unwrap_or_default();
                         run.done.push(format!("{n}. {note}"));
@@ -2246,8 +2444,8 @@ impl Agents {
         // check.sh reads this line.
         log!("browser: agent {agent} stopped");
         let stopped = || ToolResult::error(STOPPED);
-        for (_, (_, _, reply)) in self.reading.extract_if(|_, (each, _, _)| each == agent) {
-            _ = reply.send(stopped());
+        for (_, reading) in self.reading.extract_if(|_, reading| reading.agent == agent) {
+            _ = reading.reply.send(stopped());
         }
         for (_, acting) in self.acting.extract_if(|_, acting| acting.agent == agent) {
             _ = acting.reply.send(stopped());
@@ -2274,6 +2472,10 @@ impl Agents {
                 }
                 self.note(agent, "stopped by the user", "", "");
                 self.session_stopped(agent);
+                // No connection of the `ilo` command's is left open to close (Event::Bye).
+                if agent == Client::Command.id() {
+                    self.live.remove(agent);
+                }
             }
             None => self.note(agent, "stopped", "", ""),
         }
@@ -2425,7 +2627,9 @@ impl Agents {
                 act.page = PageAction::Click;
                 act.note = format!("Clicked {} {}.", element.role, label(element));
                 act.what = format!("click {} on {host}", label(element));
-                risk = page::risk(&host, &element.name);
+                let outline = self.outlines.get(&tab);
+                let message = outline.is_some_and(|outline| outline.sends_message(element.form));
+                risk = page::risk(&host, &element.name, message);
             }
             "type" => {
                 let (Some(element), Some(text)) = (&element, string("text")) else {
@@ -2454,8 +2658,13 @@ impl Agents {
                 );
                 act.what = format!("send “{}” on {host}", page::clip(&text, 60));
                 // Its Enter asks as a click on what it submits would, and else as a message sent.
+                // A line break in a rich-text editor is that Enter, as a chat's composer sends
+                // on it.
                 let outline = self.outlines.get(&tab);
-                let pressing = (submit
+                let broken = text.contains(['\n', '\r'])
+                    && outline.is_some_and(|outline| outline.is_editor(element.node));
+                let enter = submit || broken;
+                let pressing = (enter
                     .then(|| page::pressing_risk(&host, outline, "Enter", Some(element))))
                 .flatten();
                 risk = match pressing {
@@ -2476,7 +2685,7 @@ impl Agents {
                         };
                         Some(pressing.why)
                     }
-                    None => submit.then(|| page::risk(&host, "send")).flatten(),
+                    None => enter.then(|| page::risk(&host, "send", false)).flatten(),
                 };
                 act.text = text;
             }
@@ -2500,7 +2709,10 @@ impl Agents {
                 act.note = format!("Chose {chose} in the {}.", act.field);
                 act.what = format!("choose {chose} in {} on {host}", label(element));
                 // As a click on the field or the option would.
-                risk = page::risk(&host, &element.name).or_else(|| page::risk(&host, &option));
+                let outline = self.outlines.get(&tab);
+                let message = outline.is_some_and(|outline| outline.sends_message(element.form));
+                risk = page::risk(&host, &element.name, message)
+                    .or_else(|| page::risk(&host, &option, message));
                 act.text = option;
             }
             "press_key" => {
@@ -2529,7 +2741,7 @@ impl Agents {
                         Some(pressing.why)
                     }
                     None => (key == "Enter")
-                        .then(|| page::risk(&host, "send"))
+                        .then(|| page::risk(&host, "send", false))
                         .flatten(),
                 };
                 act.text = key;
@@ -2585,11 +2797,14 @@ impl Agents {
             return self.run(act, cx);
         };
         act.did = Did::of(why);
-        match self
-            .grants
-            .get(&self.answers_of(&act.agent))
+        // A payment asks every time, as a request's changes do (#1439): what the user allowed for
+        // good covers opening a site and sending on it, as they gave it, and never spending. A
+        // Never for the site still refuses it.
+        let granted = (self.grants.get(&self.answers_of(&act.agent)))
             .and_then(|sites| sites.get(&site))
-        {
+            .copied()
+            .filter(|may| !may || why != page::ORDER);
+        match granted {
             Some(true) => self.run(act, cx),
             Some(false) => self.refuse(act, &site, SAID_NEVER, cx),
             None => self.ask_first(act, site, why, cx),
@@ -2621,6 +2836,7 @@ impl Agents {
             why: why.into(),
             changes,
             site: site.clone().into(),
+            each_time: why == page::ORDER,
             ..Question::default()
         };
         self.next_request += 1;
@@ -2686,11 +2902,17 @@ impl Agents {
         else {
             return self.answer_back(id, answer, cx);
         };
-        let Asking { site, act, .. } = self.asking.remove(at);
+        let Asking {
+            site,
+            act,
+            question,
+            ..
+        } = self.asking.remove(at);
         // check.sh reads this line.
         log!("browser: agent {} answered {id} {answer:?}", act.agent);
-        // A request's changes ask every time, whatever answered.
+        // A request's changes and a payment ask every time, whatever answered.
         if act.action != "request"
+            && !question.each_time
             && let Answer::Always | Answer::Never = answer
         {
             let sites = self.grants.entry(self.answers_of(&act.agent)).or_default();
@@ -3191,7 +3413,8 @@ impl Agents {
         }
         if !text.starts_with('{') {
             _ = reply.send(ToolResult::image(text));
-            return;
+            // A run's last step, whose picture is its answer.
+            return self.advance(cx);
         }
         let tree: Value = serde_json::from_str(&text).unwrap_or_default();
         let nodes = tree["nodes"]
@@ -3231,6 +3454,18 @@ impl Agents {
                     false => format!("{note}\n\n{part}"),
                 }
             }
+            // The refs stay the page's, for an action the agent takes after reading it.
+            Show::Text => {
+                self.outlines
+                    .insert(tab, page::outline(&info, &nodes, refs, None));
+                return self.read_page(Reading {
+                    agent,
+                    tab,
+                    reply,
+                    note,
+                    from: 0,
+                });
+            }
             show => {
                 self.outlines.insert(tab, whole);
                 self.answer_with(&agent, tab, note, show)
@@ -3238,6 +3473,15 @@ impl Agents {
         };
         _ = reply.send(ToolResult::text(text));
         self.advance(cx);
+    }
+
+    /// Asks the core for the text of `reading`'s tab, which `text_read` answers with.
+    fn read_page(&mut self, reading: Reading) {
+        let request = self.next_request;
+        self.next_request += 1;
+        let tab = reading.tab;
+        self.reading.insert(request, reading);
+        self.browser.read_text(tab, request);
     }
 
     /// `note`, what an action did, then the tab's latest outline as `show` says, which is the
@@ -3249,12 +3493,13 @@ impl Agents {
         let had = (self.had.get(&tab))
             .filter(|(whose, _)| whose == agent)
             .map(|(_, had)| had);
-        let page = match (show, had) {
-            (Show::Nothing, _) => outline.head().to_string(),
+        let (page, has) = match (show, had) {
+            (Show::Nothing | Show::Text, _) => (outline.head().to_string(), false),
             (Show::Changes, Some(had)) => outline.since(had),
-            _ => outline.text(),
+            _ => (outline.text(), true),
         };
-        if show != Show::Nothing {
+        // A line saying most of it changed leaves the agent with the outline it had.
+        if has {
             self.had.insert(tab, (agent.to_string(), outline.clone()));
         }
         match note.is_empty() {
@@ -4004,16 +4249,18 @@ const NO_ANSWER: &str = "No answer in 5 minutes.";
 const ASK_WAIT: Duration = Duration::from_secs(5 * 60);
 /// The spec's: how long a handoff's call waits for the user to hand the tab back.
 const HANDOFF_WAIT: Duration = Duration::from_secs(15 * 60);
-/// A check's waits in place of ASK_WAIT and HANDOFF_WAIT, in seconds, as
-/// `--agent-waits=<ask>,<handoff>`, so a run sees each end without waiting minutes. Not read in a
-/// prod build.
+/// A check's waits in place of ASK_WAIT, HANDOFF_WAIT and task::QUIET, in seconds, as
+/// `--agent-waits=<ask>,<handoff>[,<quiet>]`, so a run sees each end without waiting minutes, or a
+/// run whose own work pauses its calls keeps one task. Not read in a prod build.
 const WAITS_SWITCH: &str = "--agent-waits";
 
-/// How long an ask and a handoff wait: the spec's, or a check's from the launch's arguments.
+/// How long an ask and a handoff wait, and a session quiet after its last page: the spec's, or a
+/// check's from the launch's arguments.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Waits {
     ask: Duration,
     handoff: Duration,
+    quiet: Duration,
 }
 
 impl Waits {
@@ -4021,6 +4268,7 @@ impl Waits {
         let spec = Waits {
             ask: ASK_WAIT,
             handoff: HANDOFF_WAIT,
+            quiet: task::QUIET,
         };
         let prefix = format!("{WAITS_SWITCH}=");
         let Some(value) = (!prod)
@@ -4030,12 +4278,13 @@ impl Waits {
             return spec;
         };
         let seconds = |word: &str| word.parse::<u64>().ok().map(Duration::from_secs);
-        match value.split_once(',') {
-            Some((ask, handoff)) => Waits {
+        match value.split(',').collect::<Vec<_>>()[..] {
+            [ask, handoff, ref quiet @ ..] if quiet.len() <= 1 => Waits {
                 ask: seconds(ask).unwrap_or(spec.ask),
                 handoff: seconds(handoff).unwrap_or(spec.handoff),
+                quiet: (quiet.first().and_then(|quiet| seconds(quiet))).unwrap_or(spec.quiet),
             },
-            None => spec,
+            _ => spec,
         }
     }
 

@@ -379,6 +379,8 @@ struct Configs {
     found: Mutex<Vec<Client>>,
     /// What each task CLI answers when looked for; one not here isn't found.
     looked: Mutex<Vec<(crate::agents::runner::Cli, crate::agents::ready::Found)>>,
+    /// Whether the user's shell leaves out the `ilo` command's folder.
+    unsearched: Mutex<bool>,
 }
 
 impl Clients for Configs {
@@ -400,6 +402,10 @@ impl Clients for Configs {
 
     fn found(&self, client: Client) -> bool {
         client == Client::Other || self.found.lock().unwrap().contains(&client)
+    }
+
+    fn searches(&self, _: &std::path::Path) -> bool {
+        !*self.unsearched.lock().unwrap()
     }
 
     /// The tests never run a CLI of this computer's: each answers as `looked` says.
@@ -1382,10 +1388,15 @@ fn a_long_page_is_cut() {
         url: "https://long.example/".into(),
         ..TabInfo::default()
     };
-    let text = "é".repeat(tools::MAX_TEXT);
-    let answer = tools::page_text(&tab, &text);
-    assert!(answer.ends_with("[The page goes on: this is its first part.]"));
-    assert!(answer.len() < tools::MAX_TEXT + 200);
+    let text = format!("{}ab", "é".repeat(tools::MAX_TEXT));
+    let answer = tools::page_text(&tab, &text, 0);
+    assert!(answer.ends_with("[The page goes on: read_page with from 10000 reads the next part.]"));
+    assert!(answer.chars().count() < tools::MAX_TEXT + 200);
+    // The next part starts where the last ended, in characters, not bytes.
+    let next = tools::page_text(&tab, &text, tools::MAX_TEXT);
+    assert!(next.ends_with("\n\nab"), "{next}");
+    let past = tools::page_text(&tab, &text, 20_000);
+    assert!(past.ends_with("[The page's text is 10002 characters, so none starts at 20000.]"));
 }
 
 /// An agent the user hasn't connected, or one they disconnected, gets nothing.
@@ -1513,6 +1524,76 @@ fn shop_tree() -> String {
           "backendDOMNodeId": 51 },
     ]})
     .to_string()
+}
+
+/// navigate answers with the page's text when the agent asks for it, to read the page, once the
+/// core has read it, and the page's refs stay for what the agent does next (#3657). open_tab takes
+/// the same answer.
+#[gpui::test]
+fn navigate_answers_with_the_text_it_asks_for(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let wrong = call(
+        &agents,
+        "claude-code",
+        "navigate",
+        json!({ "tab": 20, "url": "iana.org", "answer": "page" }),
+        cx,
+    );
+    assert_eq!(
+        wrong.recv().unwrap(),
+        ToolResult::error("answer is outline, text or none.")
+    );
+    let answer = call(
+        &agents,
+        "claude-code",
+        "navigate",
+        json!({ "tab": 20, "url": "iana.org", "answer": "text" }),
+        cx,
+    );
+    let request = browser.pages.borrow().last().unwrap().1;
+    agents.update(cx, |agents, cx| {
+        agents.page_done(request, shop_tree(), false, cx)
+    });
+    assert!(
+        answer.try_recv().is_err(),
+        "it answered before the text came"
+    );
+    let (tab, read) = *browser.reads.borrow().last().unwrap();
+    assert_eq!(tab, 20);
+    agents.update(cx, |agents, cx| {
+        agents.text_read(read, Some("Basket\nTwo items".into()), cx)
+    });
+    let text = answer.recv().unwrap();
+    assert!(!text.error, "{}", text.text);
+    assert!(
+        text.text.ends_with("\n\nBasket\nTwo items"),
+        "{}",
+        text.text
+    );
+    assert!(!text.text.contains("[e"), "{}", text.text);
+    let pages = browser.pages.borrow().len();
+    let click = call(
+        &agents,
+        "claude-code",
+        "click",
+        json!({ "tab": 20, "ref": "e1" }),
+        cx,
+    );
+    assert_eq!(browser.pages.borrow().len(), pages + 1);
+    assert!(!page_done(&agents, &browser, click, shop_tree(), cx).error);
+}
+
+/// Every answer is 12,000 characters at most, whatever the tool, and says where it's cut.
+#[test]
+fn an_answer_is_cut_at_its_limit() {
+    let long = ToolResult::text("é".repeat(30_000));
+    assert_eq!(long.text.chars().count(), tools::MAX_ANSWER);
+    assert!(
+        long.text
+            .ends_with("[The answer is cut here, at its limit of 12,000 characters.]")
+    );
+    let short = "é".repeat(tools::MAX_ANSWER);
+    assert_eq!(ToolResult::text(short.clone()).text, short);
 }
 
 /// The core's answer to the agents' last request of it, and the call's answer.
@@ -2421,17 +2502,11 @@ fn a_tab_the_agents_click_opens_is_named(cx: &mut TestAppContext) {
     );
 }
 
-/// An order asks the user first, in the card: Allow Once lets it go this time and asks again
-/// next time, Always Allow lets it go on the site from then on, and is saved.
+/// An order asks the user first, in a card that asks every time: Allow lets it go this time, and
+/// the next asks again.
 #[gpui::test]
 fn an_order_asks_the_user_first(cx: &mut TestAppContext) {
-    let dir = std::env::temp_dir().join(format!("agents-test-{}", random_token()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("Agents");
-    let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
-    let agents = agents(&browser, &configs, Some(path.clone()), cx);
-    agents.update(cx, |agents, cx| agents.connect(Client::ClaudeCode, cx));
-    cx.run_until_parked();
+    let (agents, browser, _) = connected(cx);
     let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
     page_done(&agents, &browser, answer, shop_tree(), cx);
     let pages = browser.pages.borrow().len();
@@ -2454,6 +2529,7 @@ fn an_order_asks_the_user_first(cx: &mut TestAppContext) {
     assert_eq!(question.agent, "Claude Code");
     assert_eq!(question.what, "click “Place order” on example.com");
     assert_eq!(question.why, "It looks like a payment or an order.");
+    assert!(question.each_time, "its card offers Always");
     assert_eq!(
         browser.pages.borrow().len(),
         pages,
@@ -2467,26 +2543,147 @@ fn an_order_asks_the_user_first(cx: &mut TestAppContext) {
     let clicked = page_done(&agents, &browser, answer, shop_tree(), cx);
     assert!(clicked.text.starts_with("Clicked button “Place order”."));
 
-    let answer = order(cx);
-    let question = browser
-        .asked
-        .borrow()
-        .clone()
-        .expect("once let it go again");
+    let _answer = order(cx);
+    assert!(browser.asked.borrow().is_some(), "once let it go again");
+}
+
+/// The tree for tab 20's page with a message in its field and a Send, which sends it.
+fn post_tree() -> String {
+    json!({ "nodes": [
+        { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Shop" },
+          "childIds": ["2", "3"] },
+        { "nodeId": "2", "role": { "value": "textbox" }, "name": { "value": "Message" },
+          "backendDOMNodeId": 21, "holds": "Is it in stock?",
+          "properties": [{ "name": "multiline", "value": { "type": "boolean", "value": true } }] },
+        { "nodeId": "3", "role": { "value": "button" }, "name": { "value": "Send" },
+          "backendDOMNodeId": 22 },
+    ]})
+    .to_string()
+}
+
+/// Clicks the button `name` in tab 20, its page outlined as `page` first, by the ref the outline
+/// gave it, as refs go on counting across a tab's outlines.
+fn click_on(
+    agents: &Entity<Agents>,
+    browser: &Made,
+    page: String,
+    name: &str,
+    cx: &mut TestAppContext,
+) -> mpsc::Receiver<ToolResult> {
+    let answer = call(agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+    let snapshot = page_done(agents, browser, answer, page, cx).text;
+    let named = format!("button \"{name}\" [");
+    let at = snapshot.find(&named).expect("no such button") + named.len();
+    let reference = &snapshot[at..at + snapshot[at..].find(']').unwrap()];
+    let click = json!({ "tab": 20, "ref": reference });
+    call(agents, "claude-code", "click", click, cx)
+}
+
+/// Always Allow, given to a message sent on a site, goes on letting messages go there, and is
+/// saved, but a payment there asks every time.
+#[gpui::test]
+fn a_payment_asks_every_time_whatever_was_allowed_on_the_site(cx: &mut TestAppContext) {
+    let dir = std::env::temp_dir().join(format!("agents-test-{}", random_token()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Agents");
+    let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+    let agents = agents(&browser, &configs, Some(path.clone()), cx);
+    agents.update(cx, |agents, cx| agents.connect(Client::ClaudeCode, cx));
+    cx.run_until_parked();
+    let answer = click_on(&agents, &browser, post_tree(), "Send", cx);
+    let question = browser.asked.borrow().clone().expect("the Send didn't ask");
+    assert_eq!(question.why, "It sends a message or a post.");
     agents.update(cx, |agents, cx| {
         agents.answer(question.id, Answer::Always, cx)
     });
-    assert!(!page_done(&agents, &browser, answer, shop_tree(), cx).error);
-    let answer = order(cx);
-    assert_eq!(*browser.asked.borrow(), None, "always asked again");
+    assert!(!page_done(&agents, &browser, answer, post_tree(), cx).error);
+
+    let answer = click_on(&agents, &browser, shop_tree(), "Place order", cx);
+    let question =
+        (browser.asked.borrow().clone()).expect("a payment on a site allowed for good didn't ask");
+    assert_eq!(question.why, "It looks like a payment or an order.");
+    agents.update(cx, |agents, cx| {
+        agents.answer(question.id, Answer::Once, cx)
+    });
     assert!(!page_done(&agents, &browser, answer, shop_tree(), cx).error);
 
     let saved = std::fs::read_to_string(&path).unwrap();
     let later = self::agents(&browser, &configs, None, cx);
     later.update(cx, |agents, cx| agents.load(&saved, cx));
-    let grants = later.read_with(cx, |agents, _| agents.grants.clone());
-    assert_eq!(grants["claude-code"]["example.com"], true);
+    let grants = later.read_with(cx, |agents, _| agents.grants("claude-code"));
+    assert_eq!(grants, [("example.com".into(), true)]);
     std::fs::remove_dir_all(dir).ok();
+}
+
+/// A payment's answer, whatever it is, keeps nothing for the site, so the next payment there
+/// asks again.
+#[gpui::test]
+fn a_payments_answer_keeps_nothing(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    for answered in [Answer::Never, Answer::Always, Answer::Once] {
+        let answer = click_on(&agents, &browser, shop_tree(), "Place order", cx);
+        let question = (browser.asked.borrow().clone())
+            .unwrap_or_else(|| panic!("the payment after {answered:?} didn't ask"));
+        agents.update(cx, |agents, cx| agents.answer(question.id, answered, cx));
+        match answered {
+            Answer::Never => assert!(answer.recv().unwrap().error),
+            _ => assert!(!page_done(&agents, &browser, answer, shop_tree(), cx).error),
+        }
+        let grants = agents.read_with(cx, |agents, _| agents.grants("claude-code"));
+        assert!(grants.is_empty(), "{answered:?} kept {grants:?}");
+    }
+}
+
+/// A site the user answered Never for refuses a payment there unasked, as it refuses the rest.
+#[gpui::test]
+fn a_site_answered_never_refuses_a_payment_unasked(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let answer = click_on(&agents, &browser, post_tree(), "Send", cx);
+    let question = browser.asked.borrow().clone().expect("the Send didn't ask");
+    agents.update(cx, |agents, cx| {
+        agents.answer(question.id, Answer::Never, cx)
+    });
+    assert!(answer.recv().unwrap().error);
+
+    let answer = click_on(&agents, &browser, shop_tree(), "Place order", cx);
+    assert_eq!(
+        *browser.asked.borrow(),
+        None,
+        "a payment on a site answered Never asked"
+    );
+    let refused = answer
+        .try_recv()
+        .expect("a payment on a site answered Never wasn't refused");
+    assert!(refused.error);
+    assert_eq!(
+        refused.text,
+        "The user said never on example.com: you can't click “Place order” on example.com. Don't \
+         try again."
+    );
+    assert_eq!(
+        browser.pages.borrow().last().unwrap().2,
+        PageAction::Snapshot,
+        "it clicked"
+    );
+}
+
+/// A site allowed for good goes on letting the agent send messages there unasked.
+#[gpui::test]
+fn a_site_allowed_for_good_still_sends_unasked(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let answer = click_on(&agents, &browser, post_tree(), "Send", cx);
+    let question = browser.asked.borrow().clone().expect("the Send didn't ask");
+    agents.update(cx, |agents, cx| {
+        agents.answer(question.id, Answer::Always, cx)
+    });
+    assert!(!page_done(&agents, &browser, answer, post_tree(), cx).error);
+    let answer = click_on(&agents, &browser, post_tree(), "Send", cx);
+    assert_eq!(
+        *browser.asked.borrow(),
+        None,
+        "a Send allowed for good asked again"
+    );
+    assert!(!page_done(&agents, &browser, answer, post_tree(), cx).error);
 }
 
 /// A question the user leaves for 5 minutes is refused this once, as the × refuses it: the agent's
@@ -2585,14 +2782,16 @@ fn a_requests_question_goes_unanswered_and_with_its_client(cx: &mut TestAppConte
     );
 }
 
-/// A check's `--agent-waits` shortens both waits so a run sees each end; a prod build, or a value
-/// that isn't two whole seconds, keeps the spec's.
+/// A check's `--agent-waits` shortens both waits so a run sees each end, and the quiet end's when
+/// it gives a third; a prod build, or a value that isn't two or three whole seconds, keeps the
+/// spec's.
 #[test]
 fn a_checks_waits_stand_in_for_the_specs_outside_prod() {
     let given = |args: &[&str]| args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
     let spec = Waits {
         ask: ASK_WAIT,
         handoff: HANDOFF_WAIT,
+        quiet: task::QUIET,
     };
     assert_eq!(Waits::new(&given(&[]), false), spec);
     assert_eq!(
@@ -2600,8 +2799,14 @@ fn a_checks_waits_stand_in_for_the_specs_outside_prod() {
         Waits {
             ask: Duration::from_secs(2),
             handoff: Duration::from_secs(3),
+            quiet: task::QUIET,
         }
     );
+    assert_eq!(
+        Waits::new(&given(&["--agent-waits=2,3,4"]), false).quiet,
+        Duration::from_secs(4)
+    );
+    assert_eq!(Waits::new(&given(&["--agent-waits=2,3,4,5"]), false), spec);
     assert_eq!(
         Waits::new(&given(&["--agent-waits=2,3"]), true),
         spec,
@@ -2650,30 +2855,22 @@ fn a_handoff_not_handed_back_answers_after_15_minutes(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_permission_given_for_good_is_listed_and_revoked(cx: &mut TestAppContext) {
     let (agents, browser, _) = connected(cx);
-    let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
-    page_done(&agents, &browser, answer, shop_tree(), cx);
-    let order = |cx: &mut TestAppContext| {
+    let open = |site: &str, cx: &mut TestAppContext| {
         call(
             &agents,
             "claude-code",
-            "click",
-            json!({ "tab": 20, "ref": "e3" }),
+            "open_tab",
+            json!({ "url": site }),
             cx,
         )
     };
-    let answer = order(cx);
+    let answer = open("nordea.dk", cx);
     let question = browser.asked.borrow().clone().unwrap();
     agents.update(cx, |agents, cx| {
         agents.answer(question.id, Answer::Always, cx)
     });
     page_done(&agents, &browser, answer, shop_tree(), cx);
-    let answer = call(
-        &agents,
-        "claude-code",
-        "open_tab",
-        json!({ "url": "chase.com" }),
-        cx,
-    );
+    let answer = open("chase.com", cx);
     let question = browser.asked.borrow().clone().unwrap();
     agents.update(cx, |agents, cx| {
         agents.answer(question.id, Answer::Never, cx)
@@ -2683,18 +2880,18 @@ fn a_permission_given_for_good_is_listed_and_revoked(cx: &mut TestAppContext) {
         |cx: &mut TestAppContext| agents.read_with(cx, |agents, _| agents.grants("claude-code"));
     assert_eq!(
         grants(cx),
-        [("chase.com".into(), false), ("example.com".into(), true)]
+        [("chase.com".into(), false), ("nordea.dk".into(), true)]
     );
 
     agents.update(cx, |agents, cx| {
-        agents.revoke("claude-code", Some("example.com"), cx)
+        agents.revoke("claude-code", Some("nordea.dk"), cx)
     });
     assert_eq!(grants(cx), [("chase.com".into(), false)]);
     assert_eq!(
         log(&agents, "claude-code", cx)[0],
-        ("revoked".into(), "example.com".into(), "".into())
+        ("revoked".into(), "nordea.dk".into(), "".into())
     );
-    let answer = order(cx);
+    let answer = open("nordea.dk", cx);
     let question = browser
         .asked
         .borrow()
@@ -4143,13 +4340,17 @@ fn run_steps_runs_its_steps_in_order(cx: &mut TestAppContext) {
     let (agents, browser, _) = connected(cx);
     let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
     page_done(&agents, &browser, answer, shop_tree(), cx);
-    let wrong = json!({ "tab": 20, "steps": [{ "action": "screenshot" }] });
-    assert!(
+    let pages = browser.pages.borrow().len();
+    let wrong = json!({ "tab": 20, "steps": [{ "action": "screenshot" }, { "action": "scroll" }] });
+    assert_eq!(
         call(&agents, "claude-code", "run_steps", wrong, cx)
             .recv()
-            .unwrap()
-            .error
+            .unwrap(),
+        ToolResult::error(
+            "A screenshot is only the last step, as its picture is the run's answer."
+        )
     );
+    assert_eq!(browser.pages.borrow().len(), pages, "the run took a step");
 
     let steps = json!({ "tab": 20, "steps": [
         { "action": "type", "ref": "e1", "text": "SAVE10" },
@@ -4304,6 +4505,204 @@ fn a_wait_step_waits_for_its_text_in_the_page(cx: &mut TestAppContext) {
     );
 }
 
+/// A run's last step can be a screenshot, checked as one alone: the run answers with what each
+/// step did and the picture, as an agent that wants to see the page it acted on would call
+/// screenshot next (#3659).
+#[gpui::test]
+fn a_run_ends_with_a_screenshot(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let steps = json!({ "tab": 20, "steps": [{ "action": "scroll" }, { "action": "screenshot" }] });
+    let run = call(&agents, "claude-code", "run_steps", steps, cx);
+    shop_done(&agents, &browser, cx);
+    assert_eq!(
+        browser.pages.borrow().last().unwrap().2,
+        PageAction::Screenshot
+    );
+    assert_eq!(browser.checked.borrow().last().unwrap(), "screenshot");
+    let ran = page_done(&agents, &browser, run, "/9j/4AAQ".into(), cx);
+    assert!(!ran.error);
+    assert_eq!(
+        ran.to_json()["content"],
+        json!([
+            { "type": "text", "text": "Ran 2 steps.\n1. Scrolled down.\n2. Took a screenshot of the page." },
+            { "type": "image", "data": "/9j/4AAQ", "mimeType": "image/jpeg" },
+        ])
+    );
+    let entry = agents.read_with(cx, |agents, _| agents.recent().next().unwrap().clone());
+    let steps: Vec<&str> = entry
+        .steps
+        .iter()
+        .map(|step| step.action.as_ref())
+        .collect();
+    assert_eq!(steps, ["scroll", "screenshot"]);
+}
+
+/// A check step looks at the page once, checked as a snapshot and logged as a check: the run
+/// answers in its one line if the text is there, else fails with the page's outline, as a wait
+/// that ran out does (#3659).
+#[gpui::test]
+fn a_check_step_looks_once_for_its_text(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let looks = || browser.pages.borrow().len();
+    let wrongs = [
+        json!({}),
+        json!({ "text": "Coupon", "seconds": 5 }),
+        json!({ "gone": "Coupon" }),
+        json!({ "text": "Coupon", "until": "quiet" }),
+    ];
+    for wrong in wrongs {
+        let mut step = json!({ "action": "check" });
+        step.as_object_mut()
+            .unwrap()
+            .extend(wrong.as_object().unwrap().clone());
+        let steps = json!({ "tab": 20, "steps": [step] });
+        let refused = call(&agents, "claude-code", "run_steps", steps, cx)
+            .recv()
+            .unwrap();
+        assert!(
+            refused.text.starts_with("Step 1 failed: check needs text"),
+            "{}",
+            refused.text
+        );
+    }
+    assert_eq!(looks(), 0, "a check without its text looked");
+
+    let check = json!({ "action": "check", "text": "coupon" });
+    let steps = json!({ "tab": 20, "steps": [{ "action": "scroll" }, check] });
+    let run = call(&agents, "claude-code", "run_steps", steps, cx);
+    shop_done(&agents, &browser, cx);
+    assert_eq!(
+        browser.pages.borrow().last().unwrap().2,
+        PageAction::Snapshot
+    );
+    assert_eq!(browser.checked.borrow().last().unwrap(), "snapshot");
+    let ran = page_done(&agents, &browser, run, shop_tree(), cx);
+    assert_eq!(
+        ran,
+        ToolResult::text("Ran 2 steps.\n1. Scrolled down.\n2. “coupon” is on the page.")
+    );
+    let entry = agents.read_with(cx, |agents, _| agents.recent().next().unwrap().clone());
+    let steps: Vec<&str> = entry
+        .steps
+        .iter()
+        .map(|step| step.action.as_ref())
+        .collect();
+    assert_eq!(steps, ["scroll", "check"]);
+
+    let steps = json!({ "tab": 20, "steps": [{ "action": "check", "text": "Thanks" }] });
+    let run = call(&agents, "claude-code", "run_steps", steps, cx);
+    let before = looks();
+    let failed = page_done(&agents, &browser, run, shop_tree(), cx);
+    assert!(failed.error);
+    assert!(
+        failed
+            .text
+            .starts_with("Step 1 failed: “Thanks” isn't on the page.\n\nTab 20"),
+        "{}",
+        failed.text
+    );
+    cx.executor().advance_clock(Duration::from_secs(5));
+    assert_eq!(looks(), before, "the check looked again");
+}
+
+/// A wait for text can take minutes, as a page's search can, up to MAX_TEXT_WAIT, while a wait for
+/// a time or for the page to settle stays within MAX_WAIT. The longer it has waited, the less
+/// often it looks, up to every 5 s (#3659).
+#[gpui::test]
+fn a_wait_for_text_takes_minutes_and_looks_less_often(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let look = |tree: String, cx: &mut TestAppContext| {
+        let request = browser.pages.borrow().last().unwrap().1;
+        agents.update(cx, |agents, cx| agents.page_done(request, tree, false, cx));
+        cx.run_until_parked();
+    };
+    let looks = || browser.pages.borrow().len();
+    let refused = |step: Value, cx: &mut TestAppContext| {
+        let steps = json!({ "tab": 20, "steps": [step] });
+        call(&agents, "claude-code", "run_steps", steps, cx)
+            .recv()
+            .unwrap()
+            .text
+    };
+    let most = tools::MAX_TEXT_WAIT;
+    for step in [
+        json!({ "action": "wait", "text": "Thanks", "seconds": most + 1. }),
+        json!({ "action": "wait", "gone": "Basket", "seconds": most + 1. }),
+        json!({ "action": "wait", "seconds": tools::MAX_WAIT + 1. }),
+        json!({ "action": "wait", "until": "quiet", "seconds": tools::MAX_WAIT + 1. }),
+    ] {
+        let text = refused(step, cx);
+        assert!(text.starts_with("Step 1 failed: wait needs text"), "{text}");
+    }
+    assert_eq!(looks(), 0);
+
+    let wait = json!({ "action": "wait", "text": "Thanks", "seconds": most });
+    let run = call(
+        &agents,
+        "claude-code",
+        "run_steps",
+        json!({ "tab": 20, "steps": [wait] }),
+        cx,
+    );
+    assert_eq!(looks(), 1);
+    look(shop_tree(), cx);
+    cx.executor().advance_clock(Duration::from_millis(500));
+    assert_eq!(
+        looks(),
+        2,
+        "the wait didn't look again at first as often as it does"
+    );
+    // The core answers a minute in, as a page that took that long would.
+    cx.executor().advance_clock(Duration::from_secs(60));
+    look(shop_tree(), cx);
+    cx.executor().advance_clock(Duration::from_millis(4900));
+    assert_eq!(looks(), 2, "a wait a minute in looked within 5 s");
+    cx.executor().advance_clock(Duration::from_millis(100));
+    assert_eq!(looks(), 3);
+    assert!(run.try_recv().is_err());
+    let thanks = json!({ "nodes": [
+        { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Thanks" } },
+    ]})
+    .to_string();
+    look(thanks, cx);
+    let ran = run.recv().unwrap();
+    assert!(
+        ran.text.starts_with("Ran 1 steps.\n1. “Thanks” showed."),
+        "{}",
+        ran.text
+    );
+}
+
+/// A check and a screenshot in a run go through the rules their tools do: on a tab of the user's
+/// each is refused and logged, and nothing reaches its page.
+#[gpui::test]
+fn a_runs_check_and_screenshot_keep_to_the_rules(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    for (step, logged) in [
+        (json!({ "action": "check", "text": "Main Page" }), "check"),
+        (json!({ "action": "screenshot" }), "screenshot"),
+    ] {
+        let steps = json!({ "tab": 10, "steps": [step] });
+        let refused = call(&agents, "claude-code", "run_steps", steps, cx)
+            .recv()
+            .unwrap();
+        assert_eq!(
+            refused,
+            ToolResult::error("Step 1 failed: The tab isn't in the agent's own Space.")
+        );
+        let entry = agents.read_with(cx, |agents, _| agents.recent().next().unwrap().clone());
+        assert_eq!(entry.action, "run_steps");
+        let steps: Vec<(&str, &str)> = (entry.steps.iter())
+            .map(|step| (step.action.as_ref(), step.refused.as_ref()))
+            .collect();
+        assert_eq!(steps, [(logged, "The tab isn't in the agent's own Space.")]);
+    }
+    assert!(
+        browser.pages.borrow().is_empty(),
+        "a refused step reached a page"
+    );
+}
+
 /// The actions the core lets an agent take in its tabs, agent_session.cc's RefusedAction: each a
 /// thing the user does in a page, or handing the tab to them.
 const CORE_ALLOWS: [&str; 21] = [
@@ -4425,6 +4824,7 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
             "remove_tab",
             "sort_tabs_by_site",
             "title",
+            "done",
         ]
     );
 
@@ -4471,6 +4871,7 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
         ("list_split", tab(json!({}))),
         ("separate_tab", tab(json!({}))),
         ("close_tab", json!({ "tab": 30 })),
+        ("done", json!({})),
     ];
     for (tool, arguments) in calls {
         let pages = browser.pages.borrow().len();
@@ -7254,7 +7655,7 @@ fn the_scripts_switch_comes_back_with_the_settings(cx: &mut TestAppContext) {
 mod sessions {
     use super::*;
     use crate::agents::task::{
-        Card, Dot, IDLE, Line, NAMED_RECENTLY, RENAMING, TITLE_KEPT, TaskAction,
+        Card, Dot, IDLE, Line, NAMED_RECENTLY, QUIET, RENAMING, TITLE_KEPT, TaskAction,
     };
 
     /// Calls `tool` as Claude Code, as call `id`, which `answered` ends.
@@ -7596,21 +7997,35 @@ mod sessions {
             "a client that gave no name has its kind's"
         );
         // A name that would pass for the browser, whose words the cards set beside an agent's, has
-        // its kind's, and one laid out is one plain line.
+        // its kind's.
         let app = env!("APP_NAME");
         for posing in [
             app.to_string(),
             format!("{} agent", app.to_uppercase()),
             "The browser".into(),
             "Checked by your browser".into(),
+            // Another client's name is that client's, however it's spaced, joined or stopped, and
+            // so is one holding an app's name.
+            " claude code ".into(),
+            "Codex".into(),
+            "Claude  Code".into(),
+            "Claude-Code".into(),
+            "Claude Code.".into(),
+            "Claude Code 2".into(),
+            "My Codex".into(),
+            "ilo-CLI".into(),
+            // A letter that only looks like one, and anything outside printable ASCII, isn't
+            // taken.
+            "Cl\u{0430}ude Code".into(),
+            "Zed\n\u{202E}\"Agent\u{201D}".into(),
         ] {
             hello(&agents, "mcp-client", &posing, cx);
             assert_eq!(named(&agents, cx).0, "MCP client", "{posing} passed");
         }
-        hello(&agents, "mcp-client", "Browser Use", cx);
-        assert_eq!(named(&agents, cx).0, "Browser Use");
-        hello(&agents, "mcp-client", "Zed\n\u{202E}\"Agent\u{201D}", cx);
-        assert_eq!(named(&agents, cx).0, "Zed 'Agent'");
+        for taken in ["Browser Use", "Checker"] {
+            hello(&agents, "mcp-client", taken, cx);
+            assert_eq!(named(&agents, cx).0, taken);
+        }
         hello(&agents, "mcp-client", "Zed", cx);
         assert_eq!(named(&agents, cx), ("Zed".into(), Some("Zed".into())));
 
@@ -7725,9 +8140,9 @@ mod sessions {
         answered(&agents, 5, cx);
         bye(&agents, cx);
         let card = cards(&agents, cx).remove(0);
-        assert!(card.status.starts_with("Done "), "{}", card.status);
+        assert!(card.status.starts_with("Done · "), "{}", card.status);
         assert!(
-            !card.status.contains('·'),
+            !card.status.contains("placed") && !card.status.contains("sent"),
             "a session that only looked has a receipt: {}",
             card.status
         );
@@ -7751,6 +8166,172 @@ mod sessions {
         let shown = cards(&agents, cx);
         assert_eq!(shown.len(), 1);
         assert_eq!(shown[0].dot, Dot::Done);
+        // Its time is when its last call ended, not IDLE later (#3652).
+        let kept = agents.update(cx, |agents, cx| agents.take_ended(cx));
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let ended = kept[0].1.ended;
+        assert!(
+            now - ended >= IDLE.as_secs(),
+            "it ended {} s ago, at its end, not at its last call",
+            now - ended
+        );
+    }
+
+    /// Claude Code at work in tab 20, then closing it with call 3: its last page (#3652).
+    fn closes_its_last_page(cx: &mut TestAppContext) -> (Entity<Agents>, Rc<Made>) {
+        let (agents, browser) = at_work(cx);
+        answered(&agents, 2, cx);
+        let closed = call_as(&agents, 3, "close_tab", json!({ "tab": 20 }), cx);
+        assert_eq!(closed.recv().unwrap().text, "Closed tab 20.");
+        answered(&agents, 3, cx);
+        (agents, browser)
+    }
+
+    /// An agent that closes its last page and doesn't call again within QUIET is done (#3652):
+    /// Claude Code keeps its connection open after its work, so without this its card said
+    /// Working for IDLE over nothing. It has nothing to open, and says when it was done.
+    #[gpui::test]
+    fn an_agent_that_closed_its_last_page_is_done_once_quiet(cx: &mut TestAppContext) {
+        let (agents, _) = closes_its_last_page(cx);
+        cx.executor().advance_clock(QUIET - Duration::from_secs(1));
+        assert_eq!(cards(&agents, cx)[0].dot, Dot::Working, "quiet isn't over");
+        cx.executor().advance_clock(Duration::from_secs(1));
+        let card = cards(&agents, cx).remove(0);
+        assert_eq!(card.dot, Dot::Done, "{}", card.status);
+        assert!(card.status.starts_with("Done · "), "{}", card.status);
+        assert!(card.open.is_empty());
+    }
+
+    /// A call within QUIET of its last close is the same task, on the same card, and one that
+    /// closes nothing starts no quiet end: IDLE ends it.
+    #[gpui::test]
+    fn a_call_within_quiet_keeps_the_task_on_its_card(cx: &mut TestAppContext) {
+        let (agents, _) = closes_its_last_page(cx);
+        cx.executor().advance_clock(QUIET - Duration::from_secs(1));
+        call_as(&agents, 4, "list_tabs", json!({}), cx);
+        answered(&agents, 4, cx);
+        cx.executor().advance_clock(QUIET);
+        let shown = cards(&agents, cx);
+        assert_eq!(shown.len(), 1, "one task, one card");
+        assert_eq!(shown[0].dot, Dot::Working);
+        cx.executor().advance_clock(IDLE);
+        assert_eq!(cards(&agents, cx)[0].dot, Dot::Done);
+    }
+
+    /// The user closing the agent's last page doesn't end its task: it may well open it again,
+    /// which would split one task over two cards. IDLE ends it.
+    #[gpui::test]
+    fn the_users_close_of_its_last_page_leaves_it_at_work(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        answered(&agents, 2, cx);
+        agents.update(cx, |agents, cx| {
+            browser.close_user_tab(20, cx);
+            agents.tab_closed(20, cx);
+        });
+        cx.executor().advance_clock(QUIET * 2);
+        assert_eq!(cards(&agents, cx)[0].dot, Dot::Working);
+        cx.executor().advance_clock(IDLE);
+        assert_eq!(cards(&agents, cx)[0].dot, Dot::Done);
+    }
+
+    /// `done` is the agent's word that its task is done (#3652): its card is, with the pages it
+    /// left open to open, and it's in its activity log. Its next call is a new task on a card of
+    /// its own, which keeps nothing of the last but its tabs: an order the user allowed once
+    /// asks again.
+    #[gpui::test]
+    fn done_ends_the_task_with_its_pages_to_open(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        let looked = call_as(&agents, 3, "snapshot", json!({ "tab": 20 }), cx);
+        answered(&agents, 2, cx);
+        page_done(&agents, &browser, looked, shop_tree(), cx);
+        answered(&agents, 3, cx);
+        let order = |id: u64, cx: &mut TestAppContext| {
+            browser.asked.replace(None);
+            let reply = call_as(&agents, id, "click", json!({ "tab": 20, "ref": "e3" }), cx);
+            let question = browser.asked.borrow().clone();
+            let question = question.expect("the order didn't ask");
+            agents.update(cx, |agents, cx| {
+                agents.answer(question.id, Answer::Once, cx)
+            });
+            assert!(!page_done(&agents, &browser, reply, shop_tree(), cx).error);
+            answered(&agents, id, cx);
+        };
+        order(4, cx);
+        let said = call_as(&agents, 5, "done", json!({}), cx).recv().unwrap();
+        assert!(!said.error, "{}", said.text);
+        assert!(said.text.starts_with("Your task is done"), "{}", said.text);
+        answered(&agents, 5, cx);
+        let card = cards(&agents, cx).remove(0);
+        assert_eq!(
+            (card.dot, card.status.as_ref()),
+            (Dot::Done, "Done · 1 order placed")
+        );
+        assert_eq!(card.open, vec![(20, "example.com".into())]);
+        assert!(
+            (log(&agents, "claude-code", cx).iter()).any(|entry| entry.0 == "done"),
+            "its log has no done"
+        );
+        // Nothing under way: it says so, and it's no error.
+        let again = call_as(&agents, 6, "done", json!({}), cx).recv().unwrap();
+        assert_eq!(again, ToolResult::text("No task of yours is under way."));
+        assert_eq!(cards(&agents, cx).len(), 1, "done started a card");
+
+        let looked = call_as(&agents, 7, "snapshot", json!({ "tab": 20 }), cx);
+        page_done(&agents, &browser, looked, shop_tree(), cx);
+        answered(&agents, 7, cx);
+        let shown = cards(&agents, cx);
+        assert_eq!(shown.len(), 2, "its next call is a new task");
+        assert_eq!(shown[0].dot, Dot::Working);
+        order(8, cx);
+    }
+
+    /// `done` while a call of its own waits on the user, a handoff here, is refused, so it never
+    /// leaves a question behind: its card still asks.
+    #[gpui::test]
+    fn done_waits_for_a_handoff_to_be_answered(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        answered(&agents, 2, cx);
+        let reason = json!({ "tab": 20, "reason": "Sign in to example.com" });
+        let _handed = call_as(&agents, 3, "hand_off", reason, cx);
+        assert!(browser.asked.borrow().is_some(), "the handoff didn't ask");
+        let refused = call_as(&agents, 4, "done", json!({}), cx).recv().unwrap();
+        assert_eq!(
+            refused,
+            ToolResult::error(
+                "Your hand_off on tab 20 is still under way: call done once it's answered."
+            )
+        );
+        answered(&agents, 4, cx);
+        let card = cards(&agents, cx).remove(0);
+        assert_eq!(card.dot, Dot::Waiting);
+        assert!(card.question.is_some());
+    }
+
+    /// A question still with the user is never dismissed by an end: with an open that asks first
+    /// waiting, its last page closing starts no quiet end, and `done` is refused.
+    #[gpui::test]
+    fn a_question_open_holds_off_the_quiet_end(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        answered(&agents, 2, cx);
+        let _opening = call_as(&agents, 3, "open_tab", json!({ "url": "chase.com" }), cx);
+        assert!(
+            browser.asked.borrow().is_some(),
+            "the bank's open didn't ask"
+        );
+        call_as(&agents, 4, "close_tab", json!({ "tab": 20 }), cx);
+        answered(&agents, 4, cx);
+        cx.executor().advance_clock(QUIET * 2);
+        let card = cards(&agents, cx).remove(0);
+        assert_eq!(card.dot, Dot::Waiting, "{}", card.status);
+        assert!(card.question.is_some());
+        let refused = call_as(&agents, 5, "done", json!({}), cx).recv().unwrap();
+        assert_eq!(
+            refused,
+            ToolResult::error("Your open_tab is still under way: call done once it's answered.")
+        );
     }
 
     /// The card's Stop stops the client on every connection: its calls under way are answered that
@@ -7850,6 +8431,126 @@ mod sessions {
         agents.update(cx, |agents, cx| agents.drop_task(&second, cx));
         assert_eq!(space(30), None);
         assert_eq!(space(31), Some(2));
+    }
+
+    /// The `ilo` command's connection closes after each command, which isn't its end: its card
+    /// stays at work over the commands, its activity log says it connected once, and it ends as an
+    /// idle session does, after which it has no status and isn't live (#3667).
+    #[gpui::test]
+    fn the_commands_session_lasts_over_its_connections(cx: &mut TestAppContext) {
+        let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+        let agents = agents(&browser, &configs, None, cx);
+        agents.update(cx, |agents, cx| agents.connect(Client::Command, cx));
+        cx.run_until_parked();
+        assert_eq!(
+            agents.read_with(cx, |agents, _| agents.command_state()),
+            crate::agents::cli::State::On
+        );
+        let agent = Client::Command.id();
+        let command = |id: u64, tool: &str, arguments: Value, cx: &mut TestAppContext| {
+            let (reply, answer) = mpsc::channel();
+            let call = Call {
+                id,
+                agent: agent.into(),
+                tool: tool.into(),
+                arguments,
+                reply,
+                at: std::time::Instant::now(),
+            };
+            agents.update(cx, |agents, cx| agents.handle(Event::Call(call), cx));
+            let event = Event::Answered {
+                agent: agent.into(),
+                id,
+                at: std::time::Instant::now(),
+                error: None,
+                image: None,
+            };
+            agents.update(cx, |agents, cx| agents.handle(event, cx));
+            let bye = Event::Bye {
+                agent: agent.into(),
+            };
+            agents.update(cx, |agents, cx| agents.handle(bye, cx));
+            answer
+        };
+        // A command can't pass for an app the user connected.
+        for posing in [
+            "Claude Code",
+            " CODEX",
+            "Claude-Code.",
+            "My Codex",
+            "MCP  client",
+            "C\u{043E}dex",
+        ] {
+            hello(&agents, agent, posing, cx);
+            let name = agents.read_with(cx, |agents, _| agents.agent_name(agent).to_string());
+            assert_eq!(name, "ilo CLI", "{posing} passed");
+        }
+        hello(&agents, agent, "Researcher", cx);
+        command(1, "read_page", json!({ "tab": 20 }), cx);
+        // A later command naming another keeps the card's name.
+        hello(&agents, agent, "Someone else", cx);
+        command(2, "snapshot", json!({ "tab": 20 }), cx);
+        let shown = cards(&agents, cx);
+        assert_eq!(shown.len(), 1, "a card for each command: {shown:?}");
+        assert_eq!(shown[0].dot, Dot::Working);
+        assert_eq!(shown[0].name.as_ref(), "Researcher");
+        assert!(agents.read_with(cx, |agents, _| agents.is_live(Client::Command)));
+        assert!(browser.disconnected.borrow().is_empty());
+        let connected = log(&agents, agent, cx)
+            .into_iter()
+            .filter(|(action, _, _)| action == "connected")
+            .count();
+        assert_eq!(connected, 2, "Add's line and the first command's");
+
+        cx.executor().advance_clock(IDLE + Duration::from_secs(1));
+        let shown = cards(&agents, cx);
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0].dot, Dot::Done);
+        assert!(!agents.read_with(cx, |agents, _| agents.is_live(Client::Command)));
+        assert_eq!(*browser.disconnected.borrow(), [agent]);
+        assert!(agents.read_with(cx, |agents, _| agents.status()).is_empty());
+
+        // Its next command is a session of its own, with the name that command gives.
+        hello(&agents, agent, "Writer", cx);
+        command(3, "snapshot", json!({ "tab": 20 }), cx);
+        let shown = cards(&agents, cx);
+        assert_eq!(shown.len(), 2, "{shown:?}");
+        let working: Vec<_> = (shown.iter())
+            .filter(|card| card.dot == Dot::Working)
+            .map(|card| card.name.to_string())
+            .collect();
+        assert_eq!(working, ["Writer"]);
+    }
+
+    /// The command's row is Add until it's added, then says whether the user's shell looks in its
+    /// folder; Remove takes it away as Disconnect does a client, and it's never under Apps that
+    /// connect.
+    #[gpui::test]
+    fn the_commands_row_follows_add_and_remove(cx: &mut TestAppContext) {
+        use crate::agents::cli::State;
+        let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+        let agents = agents(&browser, &configs, None, cx);
+        let state =
+            |cx: &mut TestAppContext| agents.read_with(cx, |agents, _| agents.command_state());
+        assert_eq!(state(cx), State::Off);
+        *configs.unsearched.lock().unwrap() = true;
+        agents.update(cx, |agents, cx| agents.connect(Client::Command, cx));
+        cx.run_until_parked();
+        assert_eq!(state(cx), State::Unsearched);
+        assert_eq!(configs.connected.lock().unwrap()[0].0, Client::Command);
+        *configs.unsearched.lock().unwrap() = false;
+        agents.update(cx, |agents, cx| agents.look_for_clients(cx));
+        cx.run_until_parked();
+        assert_eq!(state(cx), State::On);
+        assert!(
+            !agents
+                .read_with(cx, |agents, _| agents.listed())
+                .contains(&Client::Command)
+        );
+        agents.update(cx, |agents, cx| agents.disconnect(Client::Command, cx));
+        cx.run_until_parked();
+        assert_eq!(state(cx), State::Off);
+        assert_eq!(configs.disconnected.lock().unwrap()[0].0, Client::Command);
     }
 
     fn titled(agents: &Entity<Agents>, cx: &mut TestAppContext) -> String {
