@@ -90,7 +90,7 @@ impl Shell {
     pub(super) fn focus_form(&mut self, cx: &mut Context<Self>) {
         // The panel never takes the keyboard, and goes when the pointer leaves it.
         self.dock(cx);
-        self.browser.focus_ui(cx);
+        self.take_keyboard(cx);
         self.focus_form = true;
         cx.notify();
     }

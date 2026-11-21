@@ -353,3 +353,66 @@ fn the_cores_word_on_the_keyboard_comes_first(cx: &mut TestAppContext) {
     ask(&shell, cx, 10, Some(prompt(2)));
     assert_eq!(dialogs(&host), ["page dialog none"]);
 }
+
+/// The UI taking the keyboard back by a key, with GPUI's focus on the field it had when the page
+/// took it, holds the next prompt as a press there would.
+#[gpui::test]
+fn the_ui_taking_the_keyboard_back_by_key_holds_a_dialog(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        crate::shell::commands::bind_keys(cx);
+        crate::text_input::bind_keys(cx);
+    });
+    let (shell, cx, host) = window(cx);
+    cx.update(|window, _| window.activate_window());
+    use crate::shell::Command;
+    let library =
+        |shell: &Entity<Shell>, command: Command, from: &str, cx: &mut VisualTestContext| {
+            shell.update(cx, |shell, cx| {
+                shell.run(command, from, cx);
+                shell.library_motion = None;
+                shell.sidebar_fade = None;
+            });
+            cx.run_until_parked();
+        };
+    library(&shell, Command::ViewLibrary, "ui", cx);
+    // The Library's search has the keyboard, drawn.
+    let search = cx.update(|window, cx| window.focused(cx).expect("nothing has the keyboard"));
+    assert!(cx.update(|window, cx| crate::text_input::typing_in(window, cx)));
+    let on_search = |cx: &mut VisualTestContext| {
+        cx.update(|window, cx| window.focused(cx).as_ref() == Some(&search))
+    };
+
+    shell.update_in(cx, |shell, window, cx| shell.page_took_keyboard(window, cx));
+    cx.run_until_parked();
+    ask(&shell, cx, 10, Some(prompt(1)));
+    assert_eq!(
+        dialogs(&host),
+        ["page dialog 10 1"],
+        "the page's prompt waited"
+    );
+    let reply = PageReply {
+        accept: true,
+        text: "".into(),
+        password: "".into(),
+        checked: false,
+    };
+    shell.update(cx, |shell, cx| shell.answer_page_dialog(10, 1, reply, cx));
+    cx.run_until_parked();
+    host.take();
+
+    // Tab into the open Library gives its search, which GPUI's focus never left, the keyboard
+    // back, with no press.
+    shell.update(cx, |shell, cx| assert!(shell.tab_into_library(cx)));
+    cx.run_until_parked();
+    assert!(on_search(cx), "the key moved the focus off the search");
+    assert!(
+        host.take().contains(&"focus ui".to_owned()),
+        "the UI didn't take the keyboard"
+    );
+    ask(&shell, cx, 10, Some(prompt(2)));
+    assert!(dialogs(&host).is_empty(), "the prompt came over the search");
+    // The Library's key closes it, and its search lets go.
+    library(&shell, Command::ViewLibrary, "ui", cx);
+    assert!(!shell.read_with(cx, |shell, _| shell.library_open));
+    assert_eq!(dialogs(&host), ["page dialog 10 2"]);
+}

@@ -180,6 +180,19 @@ impl Shell {
         self.field_let_go(cx);
     }
 
+    /// Gives the UI the keyboard, from the page if the page has it. Every way the shell takes it
+    /// comes here, so the note that the page has the keys never outlives them.
+    pub(crate) fn take_keyboard(&mut self, cx: &mut App) {
+        self.page_keyboard = None;
+        self.browser.focus_ui(cx);
+    }
+
+    /// With no page shown, gives the UI the keyboard until a page shows, as `take_keyboard`.
+    pub(super) fn hold_keyboard_for_page(&mut self, cx: &mut App) {
+        self.page_keyboard = None;
+        self.browser.hold_keyboard_for_page(cx);
+    }
+
     /// The app is the active one again. Windows' word that the page took the keyboard also comes
     /// as the app goes to the background, and its keys come back to the UI with it unsaid, so the
     /// word no longer holds: a field still drawn with the focus counts until the next press in the

@@ -63,7 +63,7 @@ impl Shell {
         });
         // As for the form.
         self.dock(cx);
-        self.browser.focus_ui(cx);
+        self.take_keyboard(cx);
         self.focus_renaming = true;
         cx.notify();
     }
@@ -108,7 +108,7 @@ impl Shell {
             in_library: true,
             _watches: Vec::new(),
         });
-        self.browser.focus_ui(cx);
+        self.take_keyboard(cx);
         self.focus_renaming = true;
         cx.notify();
     }
@@ -139,7 +139,7 @@ impl Shell {
         });
         // As for a Space's name.
         self.dock(cx);
-        self.browser.focus_ui(cx);
+        self.take_keyboard(cx);
         self.focus_renaming = true;
         cx.notify();
     }
@@ -162,7 +162,7 @@ impl Shell {
             _watches: Vec::new(),
         });
         self.dock(cx);
-        self.browser.focus_ui(cx);
+        self.take_keyboard(cx);
         self.focus_renaming = true;
         cx.notify();
     }
@@ -516,7 +516,7 @@ impl Shell {
         });
         // As for a Space's name.
         self.dock(cx);
-        self.browser.focus_ui(cx);
+        self.take_keyboard(cx);
         self.focus_renaming = true;
         cx.notify();
     }
@@ -567,7 +567,7 @@ impl Shell {
         // Boards list or with its key leaves it.
         self.set_library(false, cx);
         self.dock(cx);
-        self.browser.focus_ui(cx);
+        self.take_keyboard(cx);
         self.focus_renaming = true;
         cx.notify();
     }
@@ -592,7 +592,7 @@ impl Shell {
             in_library: false,
             _watches: Vec::new(),
         });
-        self.browser.focus_ui(cx);
+        self.take_keyboard(cx);
         self.focus_renaming = true;
         cx.notify();
     }

@@ -3587,7 +3587,7 @@ impl Shell {
         // them, unless the UI has them, and the next page shown, as a window's first, has them back
         // (#895).
         if tab == 0 && cfg!(any(target_os = "linux", target_os = "windows")) {
-            self.browser.hold_keyboard_for_page(cx);
+            self.hold_keyboard_for_page(cx);
         }
         // The command bar open over the Space before lists this one's tabs and suggestions now, so
         // a pick never goes to the other or its profile (Arc).

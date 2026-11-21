@@ -616,7 +616,8 @@ pub trait Browser {
         confirmed: Box<dyn FnOnce(Vec<String>, &mut App)>,
         cx: &mut App,
     ) -> bool;
-    /// Gives the UI the keyboard, from the page if the page has it.
+    /// Gives the UI the keyboard, from the page if the page has it. The shell asks through
+    /// `Shell::take_keyboard`, which also drops its note that the page has the keys.
     fn focus_ui(&self, cx: &mut App);
     /// With no page shown, gives the UI the keyboard until a page shows, which then has it, as the
     /// Mac's window holds the keys for the next page.
