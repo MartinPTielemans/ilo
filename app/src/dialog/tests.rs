@@ -797,6 +797,17 @@ fn a_resting_ok_answered_isnt_asked_again_as_its_pane_comes_live(cx: &mut TestAp
     assert!(dialog.calls().is_empty());
 }
 
+/// A page's question taken back, as its tab no longer shows, and asked again while it leaves, as
+/// the tab shows again, comes back once it has gone.
+#[gpui::test]
+fn a_pages_question_taken_back_and_asked_again_as_it_leaves_comes_back(cx: &mut TestAppContext) {
+    let mut dialog = Asking::resting(cx);
+    dialog.calls();
+    dialog.cx.cx.update(withdraw_page);
+    dialog.rest(true);
+    assert_eq!(dialog.calls(), ["hide", "show over 100 at rest"]);
+}
+
 /// A card at rest stays on screen while the user picks View › Appearance, which redraws every
 /// window before the shell gives the new palette, so the card draws again once the palette changes,
 /// where it kept the old tone on the dialogs run under Wayland.

@@ -745,16 +745,19 @@ pub fn ask_page(
             if let Some(asked) = &mut dialog.asked
                 && asked.page == page
             {
-                // Answered, it leaves, and the page hears the answer once it has gone, so a
-                // question the shell asks again till then, as its pane's focus moves, isn't new.
-                if asked.answered_at.is_some() {
+                if asked.answered_at.is_none() {
+                    asked.over = Some(over);
+                    dialog.set_rests(rests, window, cx);
+                    dialog.host.show(None, Some(over.0), !rests);
+                    cx.notify();
                     return;
                 }
-                asked.over = Some(over);
-                dialog.set_rests(rests, window, cx);
-                dialog.host.show(None, Some(over.0), !rests);
-                cx.notify();
-                return;
+                // Answered, it leaves with its answer, which the page hears once it has gone, so
+                // the question asked again till then, as its pane's focus moves, isn't new. Taken
+                // back, it has no answer, and it's asked again below, as its tab shows again.
+                if asked.answered.is_none() {
+                    return;
+                }
             }
             if let Some(next) = &mut dialog.next_page
                 && next.page == page
