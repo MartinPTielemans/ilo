@@ -45,6 +45,14 @@
 
 #include "../host.h"
 
+// Whether the checks run the app, under their driver or check.sh, read once: a line naming an
+// address, a title or the user's own words is written only then, as log! lines are (#3725).
+static bool Checked() {
+  static const bool checked = GetEnvironmentVariableW(L"BROWSER_DRIVE", nullptr, 0) > 0 ||
+                              GetEnvironmentVariableW(L"BROWSER_CHECK", nullptr, 0) > 0;
+  return checked;
+}
+
 // UrlCreateFromPathW, for the files dragged onto the UI.
 #pragma comment(lib, "shlwapi.lib")
 
@@ -3210,10 +3218,14 @@ void LittleHiding(HWND root) {
   // other app, and the app's next window has the keyboard once the window is gone.
   if (!SetForegroundWindow(behind)) {
     g_gave_way = true;
-    fprintf(stderr, "browser: little window couldn't give way to %s\n", Utf8(title).c_str());
+    if (Checked()) {
+      fprintf(stderr, "browser: little window couldn't give way to %s\n", Utf8(title).c_str());
+    }
     return;
   }
-  fprintf(stderr, "browser: little window gave way to %s\n", Utf8(title).c_str());
+  if (Checked()) {
+    fprintf(stderr, "browser: little window gave way to %s\n", Utf8(title).c_str());
+  }
 }
 
 void OtherAppInFront() {
@@ -4718,7 +4730,9 @@ void host_save_png(void* ui_view, const uint8_t* png, size_t size) {
     WriteFile(file, png.data(), static_cast<DWORD>(png.size()), &written, nullptr);
     CloseHandle(file);
     // check.sh reads this line.
-    fprintf(stderr, "browser: capture saved %s\n", Utf8(path).c_str());
+    if (Checked()) {
+      fprintf(stderr, "browser: capture saved %s\n", Utf8(path).c_str());
+    }
   });
 }
 
@@ -5171,7 +5185,9 @@ HRESULT CALLBACK AlertEvent(HWND hwnd, UINT event, WPARAM, LPARAM, LONG_PTR text
     g_alert = hwnd;
     // check.sh reads this line, as the Mac's host writes it for its alert, once host_choose can
     // answer it.
-    fprintf(stderr, "browser: alert shown %s\n", g_alert_message.c_str());
+    if (Checked()) {
+      fprintf(stderr, "browser: alert shown %s\n", g_alert_message.c_str());
+    }
     // Its texts and buttons, as the Mac's driver logs an alert's, for check.sh to wait for.
     if (GetEnvironmentVariableW(L"BROWSER_DRIVE", nullptr, 0) > 0) {
       fprintf(stderr, "browser: modal shown %s\n", reinterpret_cast<const char*>(texts));
@@ -5918,7 +5934,9 @@ void host_open_elsewhere(const char* url) {
     return;
   }
   // A driven run only logs it, so checks never launch another browser.
-  fprintf(stderr, "browser: open in default browser %s\n", url);
+  if (Checked()) {
+    fprintf(stderr, "browser: open in default browser %s\n", url);
+  }
   if (GetEnvironmentVariableW(L"BROWSER_DRIVE", nullptr, 0) > 0) {
     return;
   }
@@ -5943,7 +5961,9 @@ void host_share(void* ui_view,
   }
   // check.sh reads this line. A driven run doesn't show the sheet, which would take the keyboard
   // from the window and wait on a choice.
-  fprintf(stderr, "browser: share %s\n", url);
+  if (Checked()) {
+    fprintf(stderr, "browser: share %s\n", url);
+  }
   if (GetEnvironmentVariableW(L"BROWSER_DRIVE", nullptr, 0) > 0) {
     return;
   }
@@ -6262,8 +6282,10 @@ void WriteJumpListNow(const std::wstring& id,
   // check.sh reads these lines.
   fprintf(stderr, "browser: jump list set\n");
   if (!little_title.empty()) {
-    fprintf(stderr, "browser: jump list task %ls: %ls\n", little_title.c_str(),
-            little_arguments.c_str());
+    if (Checked()) {
+      fprintf(stderr, "browser: jump list task %ls: %ls\n", little_title.c_str(),
+              little_arguments.c_str());
+    }
   }
 }
 

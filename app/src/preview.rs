@@ -2924,6 +2924,7 @@ fn main() {}
 
 #[cfg(not(target_family = "wasm"))]
 fn main() {
+    browser::log_every_line();
     gpui_platform::application()
         .with_assets(shell::Assets)
         .run(|cx| {
