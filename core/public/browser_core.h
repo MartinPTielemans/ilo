@@ -576,6 +576,24 @@ typedef struct bc_agent_response {
   int failure;
 } bc_agent_response;
 
+// How a saved read ended (bc_profile_read, profile_read_done).
+typedef struct bc_read_answer {
+  // The HTTP status, such as 200 or 401, or 0 if none came.
+  int status;
+  // The address that answered, after redirects on the asked address's own origin, or "".
+  const char* url;
+  // A redirect to another origin, which the read told and didn't follow, or null.
+  const char* redirect;
+  // The body's MIME type, or "".
+  const char* type;
+  // The body, |size| bytes, not NUL-terminated, the first part of it with |cut|.
+  const char* body;
+  size_t size;
+  bool cut;
+  // Why it wasn't sent, or broke off, or null.
+  const char* error;
+} bc_read_answer;
+
 // What fills a Live Folder (bc_folder_live_create, #2979): 0 for a plain folder.
 // The pull requests waiting on the review of the user signed in to GitHub in the Space's profile,
 // and their own open ones.
@@ -1678,6 +1696,9 @@ typedef struct bc_host {
   // What came of bc_file_field_choose for |field|: a BC_FILE_FIELD_ |result|, and with PUT the
   // |count| of files that went in, else 0. Never a file's name or path.
   void (*file_field_done)(void* context, bc_id field, int result, int count);
+  // How |read| (bc_profile_read) ended, from a task of its own, once a call, and never once the
+  // app is quitting. |answer| lasts only for the call.
+  void (*profile_read_done)(void* context, uint64_t read, const bc_read_answer* answer);
 } bc_host;
 
 // Runs Chromium in this process with these arguments (Chromium's switches) and returns its exit
@@ -2216,6 +2237,21 @@ BC_EXPORT bool bc_profile_offers_to_save(bc_id profile, int what, bool* offers);
 // Has the profile offer to save |what|, or not, and returns whether it will: not for a profile
 // that isn't loaded, or one a policy sets.
 BC_EXPORT bool bc_profile_set_offers_to_save(bc_id profile, int what, bool offer);
+// Reads |url|, an http(s) address, with one GET on |profile|'s own session, with no tab, as the
+// site's own page would read it: with the profile's cookies for it and the site as the first
+// party, nothing taken from the HTTP cache or put in it, and no history. Cookies the answer sets
+// are saved. A redirect on |url|'s origin is followed; one to another origin, an http to https one
+// too, is told in the answer and not followed. Then profile_read_done with |read|, from a task of
+// its own, never inside this call, with up to |max_bytes| of the body, at most 4 MiB, after up to
+// |timeout_ms|, at most 30 s; never the headers. Refused, with an error, for a profile the core
+// didn't give, an address with a user name, password or fragment, anything but http(s), or no
+// size or time. A profile that isn't loaded is loaded first. The core sends nothing else: no
+// method, header or body is the caller's.
+BC_EXPORT void bc_profile_read(bc_id profile,
+                               uint64_t read,
+                               const char* url,
+                               size_t max_bytes,
+                               int64_t timeout_ms);
 // Copies the search engines the user picks the profile's default from, each "keyword\tname" on a
 // line of its own, UTF-8, into |engines| as bc_space_name does. Nothing for a profile that isn't
 // loaded, until its engines have, or while a policy or an extension picks its default.

@@ -73,6 +73,7 @@
 #include "browser_core/platform/playready.h"
 #include "browser_core/platform/window_views.h"
 #include "browser_core/point.h"
+#include "browser_core/profile_reads.h"
 #include "browser_core/profiles.h"
 #include "browser_core/public/browser_core.h"
 #include "browser_core/search.h"
@@ -982,6 +983,14 @@ bool bc_profile_set_offers_to_save(bc_id profile_id, int what, bool offer) {
   }
   prefs->SetBoolean(pref, offer);
   return true;
+}
+
+void bc_profile_read(bc_id profile,
+                     uint64_t read,
+                     const char* url,
+                     size_t max_bytes,
+                     int64_t timeout_ms) {
+  browser_core::ReadOnProfile(profile, read, url ? GURL(url) : GURL(), max_bytes, timeout_ms);
 }
 
 size_t bc_profile_search_engines(bc_id profile, char* engines, size_t capacity) {
