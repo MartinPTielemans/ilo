@@ -3076,6 +3076,9 @@ CARD
   send click 600 60
   for _ in $(seq 30); do [ "$(children)" -gt "$shown" ] && break; done
   [ "$(children)" -gt "$shown" ] || fail "the held tab's username field offered no saved login"
+  # children sends its layout from a subshell, whose steps the count here didn't keep: without
+  # them, each send after waits on an earlier step's line, and reads the frame before its own.
+  step=$(sed -n 's/^browser: drive \([0-9]*\)[: ].*/\1/p' "$log" | sort -n | tail -1)
   ../tools/window-screenshot.sh "$pid" "$out/agent-login-filled.png" || fail "no window to capture"
   send key escape
   before=$(grep -c "$handed" "$log" || true)
@@ -3577,8 +3580,6 @@ if [ "$driven" = 1 ]; then
   # dots' clock, and the driver reads its commands meanwhile, whatever the renderer (#1700).
   hello='^browser: agent mcp-client hello from check$'
   initialize='{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"check","version":"1"}}}'
-  # children sends its layout from a subshell, whose steps the count here didn't keep.
-  step=$(sed -n 's/^browser: drive \([0-9]*\)[: ].*/\1/p' "$log" | sort -n | tail -1)
   bridge_on
   hellos=$(grep -c "$hello" "$log" || true)
   mcp "$initialize" > /dev/null
