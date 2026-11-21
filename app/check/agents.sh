@@ -469,6 +469,22 @@ EOF
     expect '^browser: agent ilo-command hello from Checker$' "ilo tabs didn't reach the browser as the ilo command"
     help=$(ilo help 2>&1) || fail "ilo help failed ($?): $help"
     case $help in *"ilo click <ref>"*) ;; *) fail "ilo help listed no click: $help" ;; esac
+    # An uninstall takes Add's entry off the PATH and leaves the profile, so after a reinstall the
+    # agent file still records it (#3783). With the entry taken off as the uninstaller does, the
+    # row says the command isn't added, and Add puts the entry back.
+    python3 -I "$out/user-path.py" restore "$out/user-path.json" || fail "couldn't take the entry off the PATH"
+    settings_tab General
+    settings_tab Agents
+    in_sight "ilo-command add" ||
+      fail "with Add's entry taken off the PATH, the row drew no Add: it still says the command is added"
+    ../tools/window-screenshot.sh "$pid" "$out/command-off-path.png" || fail "no window to capture"
+    click_in_sight "ilo-command add"
+    expect '^browser: connect agent ilo-command$' "a click on Add, with the entry off the PATH, didn't add the ilo command again"
+    expect_late '^browser: agent ilo-command \(connected\|couldn.t connect: .*\)$' "Add again didn't finish"
+    logged '^browser: agent ilo-command connected$' ||
+      fail "Add again failed: $(sed -n 's/^browser: agent ilo-command couldn.t connect: //p' "$log" | tail -1)"
+    last=$(python3 -I "$out/user-path.py" last "$out/user-path.json" | tr -d '\r')
+    [ "$last" = "$entry" ] || fail "Add again didn't put $entry back last on the user's PATH: its last entry is '$last'"
     settings_tab General
     settings_tab Agents
     in_sight "ilo-command remove" || fail "the added row drew no Remove"
@@ -485,7 +501,7 @@ EOF
     code=0
     gone=$(ilo tabs 2>&1) || code=$?
     [ "$code" = 4 ] || fail "ilo after Remove ended $code, not 4: $gone"
-    commanded="; Add puts bin\\ilo.exe's folder last on the user's PATH, which reaches the browser as its own agent with help from its tools, and Remove leaves the PATH as it was"
+    commanded="; Add puts bin\\ilo.exe's folder last on the user's PATH, which reaches the browser as its own agent with help from its tools, with the entry taken off as an uninstall does the row is Add again and Add puts it back, and Remove leaves the PATH as it was"
   fi
   quit
   rm -f "$agents_file"
