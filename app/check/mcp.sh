@@ -1340,9 +1340,9 @@ upload_page() {
   upload_tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
   [ -n "$upload_tab" ] || fail "open_tab of $1 answered: $opened"
 }
-folder_why="That field takes a folder: hand the tab to the user with hand_off."
-button_why="That element isn't a file field. upload takes an input of type file, which a snapshot shows as a button, often named Choose File or Browse."
-no_site_why="That field is in a frame with no site of its own: hand the tab to the user with hand_off."
+folder_why="That field takes a folder. Hand the tab to the user with hand_off."
+button_why="That element isn't a file field. Call upload on an input type=file (listed in snapshot as a button, usually “Choose File” or “Browse”)."
+no_site_why="That field is in a frame with no site of its own, so ilo can't say which site is asking. Hand the tab to the user with hand_off."
 upload_page "localhost:$port/upload-refused.html"
 refused_tab=$upload_tab
 await_log "^browser: title $refused_tab upload refused\$" "the upload page's sandboxed frame didn't load"

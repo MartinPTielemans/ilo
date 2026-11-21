@@ -1045,6 +1045,9 @@ pub fn describe(action: &str) -> &'static str {
         "stopped by the user" => "You stopped it, which closed its connection",
         "hand_off" => "Handed you a tab",
         "upload" => "Added a file to a page",
+        "file_dialog file_input" | "file_dialog file_system_access" => {
+            "Page tried to open a file dialog"
+        }
         "close_tab" => "Closed a tab",
         "page_dialog" => "Paused: the page shows a dialog",
         "discard_tab" => "Closed a tab without saving",
