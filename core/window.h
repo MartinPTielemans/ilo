@@ -15,6 +15,7 @@
 #include "base/observer_list.h"
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
+#include "browser_core/overlay_lend.h"
 #include "browser_core/public/browser_core.h"
 #include "browser_core/session.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
@@ -281,6 +282,9 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // An overlay of the app's took the window's keyboard, or gave it back
   // (bc_window_overlay_takes_keyboard).
   void OverlayTakesKeyboard(bool takes);
+  // The UI asked for the keyboard (bc_window_ui_takes_keyboard), which it keeps as an overlay that
+  // had it lets it go (OverlayLend).
+  void UIAsksForKeyboard() { overlay_lend_.UIAsked(); }
 
   // Closes the Today tabs of the Space the window shows, all but those any window shows, or all of
   // them if it shows every one, for UndoClear to bring back. Returns the Clear's id, or 0 if it
@@ -577,8 +581,8 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // handle, as F12 to close them (#1120).
   base::WeakPtr<content::WebContents> devtools_to_show_;
   base::WeakPtr<content::WebContents> devtools_to_focus_;
-  // The tab selected as an overlay took the keyboard, while it has it.
-  bc_id selected_under_overlay_ = 0;
+  // An overlay's lend of the keyboard, while it has it.
+  OverlayLend overlay_lend_;
   // What hears the answer AskAboutDownloads waits for.
   base::OnceCallback<void(bool)> downloads_answer_;
   // The tab whose page the navigation being made opens a tab beside, until that tab is inserted.

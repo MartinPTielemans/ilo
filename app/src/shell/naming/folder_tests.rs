@@ -110,7 +110,7 @@ fn a_double_click_on_a_folder_after_a_press_in_the_page_names_it(cx: &mut TestAp
     click(cx, at, 1);
     click(cx, at, 2);
     shell.update_in(cx, |shell, window, cx| {
-        shell.keyboard_left(pressed, window, cx)
+        shell.keyboard_left(pressed, true, window, cx)
     });
     cx.run_until_parked();
     opened(&shell, cx);

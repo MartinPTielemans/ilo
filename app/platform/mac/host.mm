@@ -24,6 +24,13 @@
 
 #include "../host.h"
 
+// Whether the checks run the app, under their driver or check.sh, read once: a line naming an
+// address, a title or the user's own words is written only then, as log! lines are (#3725).
+static bool Checked() {
+  static const bool checked = getenv("BROWSER_DRIVE") || getenv("BROWSER_CHECK");
+  return checked;
+}
+
 // menu_window.mm's: ilo's menu over an overlay takes the keyboard without the user leaving it.
 bool HostIsMenuWindow(NSWindow* window);
 
@@ -500,6 +507,10 @@ NSTimeInterval g_active_since = 0;
 // What the dialog covers, as insets from the browser window's content edges: none for all of it,
 // or a tab's card for a page's dialog, which keeps them as the window resizes.
 NSEdgeInsets g_dialog_insets;
+// The browser window has the keyboard for the page beside a page's dialog in a split view: the
+// user pressed that page, which the UI then answers by bringing the dialog to rest, or the dialog
+// shows at rest. It lasts until the UI shows the dialog live again, or it hides (#3231, #3461).
+bool g_dialog_lent = false;
 
 // The Site Controls' window and view, the browser they show over, and where their top left goes
 // there. Released, they're on screen only for the motion of their leaving, and take no clicks.
@@ -1358,26 +1369,62 @@ void ReleaseKeys(NSWindow* from) {
   [g_held_keys removeAllObjects];
 }
 
+// The key events let through, the newest kPassedKeys of them. Chromium sends a key its page didn't
+// keep through the app again once the page's handler returns, which can be after an alert the
+// handler asked was answered and a bar opened (#3791): that's a key already typed, so it's neither
+// held nor given to the window with the keyboard now, where it would be typed a second time. An
+// event is known by its time and type alone, which no two of a keyboard's share, so nothing of
+// what was typed is kept.
+struct PassedKey {
+  NSTimeInterval timestamp;
+  NSEventType type;
+};
+constexpr size_t kPassedKeys = 256;
+PassedKey g_passed_keys[kPassedKeys];
+size_t g_passed_count = 0;
+
+bool KeyPassed(NSEvent* event) {
+  for (size_t i = 0; i < std::min(g_passed_count, kPassedKeys); i++) {
+    const PassedKey& passed = g_passed_keys[i];
+    if (passed.timestamp == event.timestamp && passed.type == event.type) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void PassKey(NSEvent* event) {
+  g_passed_keys[g_passed_count++ % kPassedKeys] = {event.timestamp, event.type};
+}
+
+// From launch, so the first key a page doesn't keep is known when it comes back.
+void WatchHeldKeys() {
+  if (g_held_keys) {
+    return;
+  }
+  g_held_keys = [NSMutableArray array];
+  constexpr NSEventMask kKeys = NSEventMaskKeyDown | NSEventMaskKeyUp | NSEventMaskFlagsChanged;
+  [NSEvent addLocalMonitorForEventsMatchingMask:kKeys
+                                        handler:^NSEvent*(NSEvent* event) {
+                                          if (KeyPassed(event)) {
+                                            return event;
+                                          }
+                                          if (g_holding_keys && !HoldsFor(event)) {
+                                            [g_held_keys addObject:event];
+                                            return nil;
+                                          }
+                                          PassKey(event);
+                                          if (g_keys_to && event.timestamp <= g_keys_released) {
+                                            return Retarget(event, g_keys_to);
+                                          }
+                                          g_keys_to = nil;
+                                          return event;
+                                        }];
+}
+
 // Holds the keys typed from now until |window|, or if nil whichever bar opens, has the keyboard.
 void HoldKeys(NSWindow* window) {
-  if (!g_held_keys) {
-    g_held_keys = [NSMutableArray array];
-    constexpr NSEventMask kKeys =
-        NSEventMaskKeyDown | NSEventMaskKeyUp | NSEventMaskFlagsChanged;
-    [NSEvent addLocalMonitorForEventsMatchingMask:kKeys
-                                          handler:^NSEvent*(NSEvent* event) {
-                                            if (g_holding_keys && !HoldsFor(event)) {
-                                              [g_held_keys addObject:event];
-                                              return nil;
-                                            }
-                                            if (g_keys_to &&
-                                                event.timestamp <= g_keys_released) {
-                                              return Retarget(event, g_keys_to);
-                                            }
-                                            g_keys_to = nil;
-                                            return event;
-                                          }];
-  }
+  WatchHeldKeys();
   g_holding_keys = true;
   g_keys_for = window;
   // The key being handled is the shortcut that holds the keys after it.
@@ -1604,8 +1651,9 @@ OSErr LogQuitEvent(const AppleEvent* event, AppleEvent* reply, SRefCon) {
       sender ? [NSRunningApplication runningApplicationWithProcessIdentifier:sender].localizedName
              : nil;
   const char why[5] = {char(reason >> 24), char(reason >> 16), char(reason >> 8), char(reason), 0};
+  // The sender's name, another of the user's apps, only when the checks run the app (#3776).
   fprintf(stderr, "browser: quit Apple Event from %d %s, reason %s\n", sender,
-          name ? name.UTF8String : "unknown", reason ? why : "none");
+          name && Checked() ? name.UTF8String : "unknown", reason ? why : "none");
   return g_quit_handler(event, reply, g_quit_refcon);
 }
 
@@ -1639,6 +1687,7 @@ void host_watch_finished_launching(void (*finished)(void)) {
                   object:nil
                    queue:nil
               usingBlock:^(NSNotification*) {
+                WatchHeldKeys();
                 // AppKit has its handler by now. Without one there's nothing to hand on to.
                 if (AEGetEventHandler(kCoreEventClass, kAEQuitApplication, &g_quit_handler,
                                       &g_quit_refcon, false) == noErr &&
@@ -1970,7 +2019,9 @@ static void OrderLittleOut(NSWindow* self, SEL selector, id sender) {
     }
   }
   // check.sh reads this line.
-  fprintf(stderr, "browser: little window gave way to %s\n", to.localizedName.UTF8String ?: "");
+  if (Checked()) {
+    fprintf(stderr, "browser: little window gave way to %s\n", to.localizedName.UTF8String ?: "");
+  }
 }
 
 // Little ilo windows order out through OrderLittleOut. They're Chromium's class, whose browser
@@ -2114,6 +2165,24 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
                                                     hitTest:event.locationInWindow];
                                                 if (hit && [hit isDescendantOf:content] &&
                                                     ![hit isDescendantOf:each->ui_view]) {
+                                                  // The page in the pane beside a page's dialog,
+                                                  // which covers its own pane alone: the window
+                                                  // takes the keyboard first, so the press lands
+                                                  // and focuses that pane, as a press in a page
+                                                  // without a dialog does (#3231).
+                                                  if (g_dialog_shown &&
+                                                      g_dialog_over == each.get() &&
+                                                      g_dialog.keyWindow &&
+                                                      !NSEdgeInsetsEqual(g_dialog_insets,
+                                                                         NSEdgeInsetsZero) &&
+                                                      NSApp.isActive &&
+                                                      event.timestamp > g_active_since) {
+                                                    g_dialog_lent = true;
+                                                    fprintf(stderr,
+                                                            "browser: a press in the pane beside "
+                                                            "takes the keyboard from the dialog\n");
+                                                    [each->window makeKeyWindow];
+                                                  }
                                                   if (g_ui_keyboard_left) {
                                                     g_ui_keyboard_left(
                                                         (__bridge void*)each->ui_view);
@@ -3742,7 +3811,11 @@ void host_add_dialog(void* dialog_view) {
                   object:nil
                    queue:nil
               usingBlock:^(NSNotification* notification) {
-                if (g_dialog_shown && !g_dialog_leaving && notification.object != g_dialog &&
+                if (notification.object == g_dialog) {
+                  g_dialog_lent = false;
+                }
+                if (g_dialog_shown && !g_dialog_lent && !g_dialog_leaving &&
+                    notification.object != g_dialog &&
                     !HostIsMenuWindow(notification.object) &&
                     (NSEdgeInsetsEqual(g_dialog_insets, NSEdgeInsetsZero) ||
                      notification.object == g_dialog_over->window)) {
@@ -3751,7 +3824,8 @@ void host_add_dialog(void* dialog_view) {
               }];
 }
 
-void host_show_dialog(void* ui_view, double x, double y, double width, double height) {
+void host_show_dialog(void* ui_view, double x, double y, double width, double height,
+                      bool keyboard) {
   Browser* browser = BrowserWithView(ui_view);
   if (!g_dialog || !browser || !browser->window) {
     return;
@@ -3761,13 +3835,28 @@ void host_show_dialog(void* ui_view, double x, double y, double width, double he
                                                  NSWidth(content) - x - width)
                               : NSEdgeInsetsZero;
   if (g_dialog_shown) {
-    // The card it's over moved, such as when the sidebar hid.
-    if (g_dialog_over == browser) {
-      [g_dialog setFrame:DialogFrame(browser) display:YES];
+    if (g_dialog_over != browser) {
+      return;
+    }
+    // The card or pane it's over moved, such as when the sidebar hid.
+    [g_dialog setFrame:DialogFrame(browser) display:YES];
+    if (!keyboard) {
+      // At rest: the browser window keeps the keyboard for the page beside, through a resize too.
+      g_dialog_lent = true;
+      if (g_dialog.isKeyWindow) {
+        [browser->window makeKeyWindow];
+      }
+    } else if (g_dialog_lent) {
+      // Live again, its pane focused: it takes the keyboard back, unless another window has it.
+      g_dialog_lent = false;
+      if (browser->window.isKeyWindow) {
+        [g_dialog makeKeyWindow];
+      }
     }
     return;
   }
   g_dialog_shown = true;
+  g_dialog_lent = !keyboard;
   g_dialog_leaving = false;
   g_dialog.ignoresMouseEvents = NO;
   g_dialog_over = browser;
@@ -3781,8 +3870,12 @@ void host_show_dialog(void* ui_view, double x, double y, double width, double he
     [g_dialog_view.layer setNeedsDisplay];
     [g_dialog_view.layer displayIfNeeded];
     AddOver(browser->window, g_dialog);
-    [g_dialog makeKeyAndOrderFront:nil];
-    fprintf(stderr, "browser: dialog window shown\n");
+    if (g_dialog_lent) {
+      [g_dialog orderFront:nil];
+    } else {
+      [g_dialog makeKeyAndOrderFront:nil];
+    }
+    fprintf(stderr, "browser: dialog window shown%s\n", g_dialog_lent ? " at rest" : "");
   });
 }
 
@@ -3791,6 +3884,7 @@ void host_hide_dialog(void) {
     return;
   }
   g_dialog_shown = false;
+  g_dialog_lent = false;
   g_dialog_leaving = false;
   g_dialog.ignoresMouseEvents = NO;
   Browser* browser = g_dialog_over;
@@ -5585,14 +5679,18 @@ void host_open_elsewhere(const char* url) {
     return;
   }
   // check.sh reads this line. A driven run opens nothing, so checks never launch Safari.
-  fprintf(stderr, "browser: open in safari %s\n", url);
+  if (Checked()) {
+    fprintf(stderr, "browser: open in safari %s\n", url);
+  }
   if (getenv("BROWSER_DRIVE")) {
     return;
   }
   NSURL* safari =
       [NSWorkspace.sharedWorkspace URLForApplicationWithBundleIdentifier:@"com.apple.Safari"];
   if (!safari) {
-    fprintf(stderr, "browser: no Safari to open %s\n", url);
+    if (Checked()) {
+      fprintf(stderr, "browser: no Safari to open %s\n", url);
+    }
     return;
   }
   [NSWorkspace.sharedWorkspace openURLs:@[ page ]
@@ -5631,7 +5729,9 @@ void host_share(void* ui_view,
     rect = [content convertRect:[browser->window convertRectFromScreen:on_screen] fromView:nil];
   }
   // check.sh reads this line. A driven run doesn't show the menu, which would wait on a choice.
-  fprintf(stderr, "browser: share %s\n", url);
+  if (Checked()) {
+    fprintf(stderr, "browser: share %s\n", url);
+  }
   if (getenv("BROWSER_DRIVE")) {
     return;
   }
@@ -5681,7 +5781,9 @@ void host_share_with(const char* url, const char* title, size_t index) {
   NSSharingService* service = services[index];
   // check.sh reads this line. A driven run shares nothing, as the service takes the page to
   // another app.
-  fprintf(stderr, "browser: share %s with %s\n", url, service.menuItemTitle.UTF8String ?: "");
+  if (Checked()) {
+    fprintf(stderr, "browser: share %s with %s\n", url, service.menuItemTitle.UTF8String ?: "");
+  }
   if (getenv("BROWSER_DRIVE")) {
     return;
   }
@@ -5990,7 +6092,9 @@ int host_ask(const char* message, const char* detail, const char* const* buttons
     alert.buttons.firstObject.keyEquivalent = @"";
   }
   g_alert = alert;
-  fprintf(stderr, "browser: alert shown %s\n", message);
+  if (Checked()) {
+    fprintf(stderr, "browser: alert shown %s\n", message);
+  }
   NSModalResponse response = [alert runModal];
   g_alert = nil;
   return static_cast<int>(response - NSAlertFirstButtonReturn);

@@ -268,12 +268,22 @@ public static class Capture {
       return null;
     }
     var printed = new List<string>();
+    var front = windows.IndexOf(mains[0]);
     using (var image = new Bitmap(area.Width, area.Height, PixelFormat.Format32bppArgb))
-    using (var graphics = Graphics.FromImage(image)) {
+    using (var graphics = Graphics.FromImage(image))
+    using (var shape = new Region()) {
+      shape.MakeEmpty();
+      foreach (var w in shown)
+        using (var outline = Shape(w, area.Location)) shape.Union(outline);
+      graphics.Clip = shape;
       for (int i = windows.Count - 1; i >= 0; i--) {
         var top = windows[i];
         while (GetWindow(top, GW_OWNER) != IntPtr.Zero) top = GetWindow(top, GW_OWNER);
-        if (!(all ? mains.Contains(top) : top == mains[0])) continue;
+        // What a copy of the screen holds: the windows of the process in front of the main one
+        // show over it too, such as Settings, whatever else is in front elsewhere (#3795).
+        var held = all ? mains.Contains(top) :
+            top == mains[0] || (i < front && Shown(windows[i]).IntersectsWith(area));
+        if (!held) continue;
         if (!Draw(windows[i], graphics, area.Location, grab)) printed.Add(ClassOf(windows[i]));
       }
       Say("saving the picture");

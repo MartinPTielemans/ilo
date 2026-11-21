@@ -78,8 +78,8 @@ if [ ! -f "$dir/manifest.json" ] || ! grep -qF "\"key\": \"$key\"" "$dir/manifes
   # which can be empty then (uBlock-issues#1547). The core gives it its managed settings before it
   # loads, and the reload unloaded it under the first pages, as Chromium then resets every frame's
   # URL loader factories, dropping a subresource they were asking for (#954).
-  edit js/start.js "    if ( lastVersionInt === 0 && vAPI.webextFlavor.soup.has('chromium') ) {" \
-    '    if ( false ) {'
+  edit js/start.js "        if ( lastVersionInt === 0 && vAPI.webextFlavor.soup.has('chromium') ) {" \
+    '        if ( false ) {'
   # Chromium sends a request only to the listeners there are as it starts, and uBlock Origin starts
   # with the first pages and is ready seconds later, so the core holds a page until it says it's
   # ready (#744): it listens to an event only ChromeOS's kiosk apps are sent (core/ad_block.cc).
@@ -102,7 +102,9 @@ if [ ! -f "$dir/manifest.json" ] || ! grep -qF "\"key\": \"$key\"" "$dir/manifes
   cp ublock-settings.js "$dir.part/uBlock0.chromium/js/ilo.js"
   edit js/start.js "import µb from './background.js';" \
     "import µb from './background.js';"$'\n'"import settingsFromIlo from './ilo.js';"
-  edit js/start.js 'µb.isReadyResolve();' $'µb.isReadyResolve();\nsettingsFromIlo();'
+  # It starts applying them where it logs that it's all ready, before its first list update.
+  edit js/start.js '    ubolog(`All ready ${µb.supportStats.allReadyAfter} after launch`);' \
+    $'    ubolog(`All ready ${µb.supportStats.allReadyAfter} after launch`);\n    settingsFromIlo();'
   edit managed_storage.json '    "toOverwrite": {' '    "ilo": {
       "title": "Settings › Ad blocking, from ilo: the lists to turn on and off, and My filters",
       "type": "object",

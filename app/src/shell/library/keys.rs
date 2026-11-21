@@ -106,12 +106,12 @@ impl Shell {
     /// Library closes.
     pub(super) fn step_library_keys(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let first = self.spaces.first().map(|space| space.id);
-        let Some(library) = &mut self.library else {
+        let Some(library) = &self.library else {
             return;
         };
+        let (search, cards) = (library.search.focus_handle(cx), library.cards.clone());
         let keys = &mut self.library_keys;
         let asked = std::mem::take(&mut keys.asked) && self.library_open;
-        let (search, cards) = (library.search.focus_handle(cx), library.cards.clone());
         // Who has the keyboard as the Library takes it: the page, if the key came from it, as
         // GPUI's focus doesn't see the page's, else the UI's focus.
         if let Some(from_page) = keys.opened.take().filter(|_| asked) {
@@ -122,7 +122,12 @@ impl Shell {
         }
         if asked {
             // The page may have the keyboard.
-            self.browser.focus_ui(cx);
+            self.take_keyboard(cx);
+        }
+        let Some(library) = &mut self.library else {
+            return;
+        };
+        if asked {
             match self.section {
                 Section::Spaces => {
                     library.keyed_card = first;

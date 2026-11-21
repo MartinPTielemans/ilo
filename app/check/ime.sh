@@ -347,7 +347,7 @@ for mode in $modes; do
   x11=; [ "$mode" = x11 ] && x11=--x11
   # Each leg its own profile, as the last one's browser may not be gone yet.
   dbus-run-session --config-file="$home/bus.conf" -- \
-    env BROWSER_PROFILE_DIR="$home/profile-$mode" BROWSER_URL="$url" \
+    env BROWSER_PROFILE_DIR="$home/profile-$mode" BROWSER_URL="$url" BROWSER_CHECK=1 \
     ../tools/headless.sh $x11 --then "$PWD/check/ime.sh --steps $mode $out" \
     "$out/$mode.png" 'browser: loaded' "$home/run.sh" "$mode" build/Browser/chrome \
     > "$out/$mode-run.log" 2>&1 || true

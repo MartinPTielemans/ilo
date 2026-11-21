@@ -57,6 +57,7 @@
 #include "browser_core/profiles.h"
 #include "browser_core/search.h"
 #include "browser_core/session.h"
+#include "browser_core/share.h"
 #include "browser_core/sign_in_dialog.h"
 #include "browser_core/sync.h"
 #include "browser_core/system_engine.h"
@@ -277,6 +278,8 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
   void PreBrowserStart() override {
     // A tab's "Leave site?" asks with the app's dialog, in place of the NSAlert Chrome installed.
     LeaveDialog::Install();
+    // Before any Browser, so before any page can float a window.
+    WatchFloatingPages();
     keep_alive_ = std::make_unique<ScopedKeepAlive>(KeepAliveOrigin::APP_CONTROLLER,
                                                     KeepAliveRestartOption::DISABLED);
     // A quit can start in Chrome too, such as from the Dock or the system logging out, and Chrome
@@ -360,6 +363,8 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
     // reason before this, and the system's Apple Event on the Mac too.
     fprintf(stderr, "browser: terminating, %s\n",
             ShutdownName(browser_shutdown::GetShutdownType()));
+    // Before the app's own hold goes, so the quit waits for the system's engine's stores.
+    system_engine::WriteStoresAtQuit();
     keep_alive_.reset();
     // The session keeps each regular window's frame and state while Chrome still has its native
     // window: it closes them all as this returns (OnAppExiting's CloseAllWidgets), and a quit no
@@ -499,6 +504,7 @@ class ContentBrowserClient : public ChromeContentBrowserClient {
     ChromeContentBrowserClient::CreateThrottlesForNavigation(registry);
     system_engine::CreateThrottlesForNavigation(registry);
     AddLinkPreviewThrottle(registry);
+    AddShareThrottle(registry);
     AddAdBlockHold(registry);
   }
 
@@ -571,7 +577,9 @@ bool FromEarlierLaunch(bc_id id) {
   return id < g_first_of_launch;
 }
 
-// Keeps the app's callbacks and puts the core's hooks in Chrome.
+// Keeps the app's callbacks and puts the core's hooks in Chrome. It runs before ChromeMain makes
+// the AtExitManager, so nothing here or in what it calls may reach a Chromium Singleton (#3636
+// crashed every launch so); that waits for ExtraParts.
 void Install(const bc_host& host) {
   g_host = host;
   g_browser_core_supplies_windows = true;
