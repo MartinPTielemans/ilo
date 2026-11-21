@@ -71,13 +71,15 @@ pub fn detail(state: State, flatpak: Option<&str>) -> Detail {
     match (state, flatpak) {
         (State::Off, Some(_)) => Detail {
             line: format!(
-                "{what} ilo's sandbox can't add it to {FOLDER_SHOWN}, so Add gives a line to run once in a terminal."
+                "{what} ilo's sandbox can't write to {FOLDER_SHOWN}, so Add gives a line to run once in a terminal."
             ),
             mono: None,
             export: None,
         },
         (_, Some(line)) => Detail {
-            line: format!("Added. Run this once in a terminal to put ilo in {FOLDER_SHOWN}:"),
+            line: format!(
+                "Added in ilo. Run this once in a terminal to put ilo in {FOLDER_SHOWN}:"
+            ),
             mono: None,
             export: Some(line.into()),
         },
