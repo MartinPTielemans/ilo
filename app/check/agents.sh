@@ -329,7 +329,9 @@ PY
       fail "the server Claude Code got didn't take its token as Claude Code's"
     settings_tab General
     settings_tab Agents
-    ../tools/window-screenshot.sh "$pid" "$out/connected-$2.png" || fail "no window to capture"
+    # Settings is a window of its own, smaller than the browser window, which a capture takes
+    # alone without all (#3795).
+    ../tools/window-screenshot.sh "$pid" "$out/connected-$2.png" all || fail "no window to capture"
     click_in_sight "disconnect claude-code"
     expect '^browser: agent claude-code disconnected$' "a click on Disconnect didn't disconnect Claude Code"
     calls_reach "$calls" 3 || fail "Disconnect didn't run claude"
@@ -371,7 +373,7 @@ PY
     "Connect with no claude didn't say it isn't installed"
   settings_tab General
   settings_tab Agents
-  ../tools/window-screenshot.sh "$pid" "$out/not-installed.png" || fail "no window to capture"
+  ../tools/window-screenshot.sh "$pid" "$out/not-installed.png" all || fail "no window to capture"
   # The ilo command (#3667), on the Mac: Add links ilo in the run's ~/.local/bin to the program
   # beside the browser's and writes its agent file, only the user's to read, in the profile; ilo
   # then reaches the browser as its own agent, and help lists the server's tools. With the folder
@@ -399,13 +401,13 @@ PY
     settings_tab General
     settings_tab Agents
     in_sight "ilo-command remove" || fail "the added row drew no Remove"
-    ../tools/window-screenshot.sh "$pid" "$out/command-added.png" || fail "no window to capture"
+    ../tools/window-screenshot.sh "$pid" "$out/command-added.png" all || fail "no window to capture"
     # The shell no longer puts the folder on PATH: the row gives the line to paste.
     echo 'export PATH="$HOME/.node/bin:$PATH"' > "$home/.zshrc"
     settings_tab General
     settings_tab Agents
     in_sight "ilo-command copy line" || fail "with ~/.local/bin off PATH the row drew no Copy Line"
-    ../tools/window-screenshot.sh "$pid" "$out/command-unsearched.png" || fail "no window to capture"
+    ../tools/window-screenshot.sh "$pid" "$out/command-unsearched.png" all || fail "no window to capture"
     click_in_sight "ilo-command remove"
     expect '^browser: agent ilo-command disconnected$' "a click on Remove didn't remove the ilo command"
     for _ in $(seq 100); do
@@ -472,7 +474,7 @@ EOF
     settings_tab General
     settings_tab Agents
     in_sight "ilo-command remove" || fail "the added row drew no Remove"
-    ../tools/window-screenshot.sh "$pid" "$out/command-added.png" || fail "no window to capture"
+    ../tools/window-screenshot.sh "$pid" "$out/command-added.png" all || fail "no window to capture"
     click_in_sight "ilo-command remove"
     expect '^browser: agent ilo-command disconnected$' "a click on Remove didn't remove the ilo command"
     for _ in $(seq 100); do
@@ -688,7 +690,7 @@ EOF
       sleep 0.1
     done
     grep -q "\"$3\"" "$agents_file" || fail "Codex at $2 didn't list its model $3: $(cat "$agents_file")"
-    ../tools/window-screenshot.sh "$pid" "$out/task-agents-$3.png" || fail "no window to capture"
+    ../tools/window-screenshot.sh "$pid" "$out/task-agents-$3.png" all || fail "no window to capture"
     send key w cmd
     expect '^browser: settings hidden$' "⌘W didn't hide Settings"
     # A task from ⌘T on each, Claude first, as the agent listed first, then Codex, below it.
