@@ -232,9 +232,9 @@ expect '^browser: command bar hidden$' "escape didn't close the command bar"
 # leave the bar undrawn while its keys land, as GPUI asks for frames only as a drawn window turns
 # dirty (#3830): the start's look for its first frame, or the next key, asks for them again. The
 # driver's fault stops the bar's link first, as an idle bar's is, so the next key starts it. Both
-# are tried before a miss fails, so a run shows each. The text matches nothing, so its rows and the
-# bar's height stay as they were across the fault: a resize has AppKit draw the bar, which would
-# draw it past the fault and test nothing.
+# are tried before a miss fails, so a run shows each. The fault holds back AppKit's draws too until
+# a heal, as a check's 1x display redraws the bar for each listing of its rows, which drew it past
+# the fault; the text matches nothing, so its rows stay as they were.
 frames_missed=
 frames_last=
 frames_unhealed=
