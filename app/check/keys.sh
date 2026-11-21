@@ -821,8 +821,9 @@ shortcut_shown() {
   ../tools/window-screenshot.sh "$pid" "$out/$2" || fail "no window to capture"
 }
 drawn "shortcut next-tab 2" >/dev/null || fail "Settings didn't draw Next Tab's second key (#3328)"
-# Down to Last Used Tab, whose ⌃⇥ the Mac draws in its own font.
-shortcut_shown "shortcut recent-tab" shortcuts-tabs.png
+# Down past Last Used Tab, whose ⌃⇥ the Mac draws in its own font. Its keys can't change, so its
+# chip has no place drawn: the switch two rows under it does.
+shortcut_shown "switch favorites numbered" shortcuts-tabs.png
 shortcut_shown "shortcut stop 2" shortcuts-page.png
 click_in_sight "shortcut back 2"
 expect '^browser: shortcut recording back$' "a click on Go Back's second key didn't record it"
