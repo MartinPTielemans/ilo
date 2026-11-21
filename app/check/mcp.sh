@@ -3468,7 +3468,9 @@ CARD
   send key down
   send key down
   send key return
-  expect '^browser: menu closed$' "Return in the event menu didn't close it"
+  expect '^browser: menu chose When an agent hands you a tab$' \
+    "Return in the event menu didn't pick When an agent hands you a tab"
+  expect '^browser: menu at .* closed by picked$' "Return in the event menu didn't close it"
   ../tools/window-screenshot.sh "$pid" "$out/settings-agents-hook-adding.png" || fail "no window to capture"
   click_in_sight "add hook command"
   expect '^browser: hook added handed_to_you$' \
@@ -3513,7 +3515,7 @@ CARD
   expect '^browser: menu window at ' "the event menu's window didn't take the keyboard"
   ../tools/window-screenshot.sh "$pid" "$out/settings-agents-hook-events-least.png" || fail "no window to capture"
   send key escape
-  expect '^browser: menu closed$' "⎋ didn't close the event menu"
+  expect '^browser: menu at .* closed by escape$' "⎋ didn't close the event menu"
   click_in_sight "hook cancel"
   click_in_sight "remove hook 1"
   expect '^browser: hook removed asked$' "Remove didn't take the hook on asking away"
