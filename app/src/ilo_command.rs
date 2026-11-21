@@ -3,14 +3,10 @@
 
 use std::io::{Read, Write};
 
-use browser::agents::{cli, command};
+use browser::agents::command;
 
 fn main() {
-    let file = cli::agent_file(std::path::Path::new(&browser::profile_dir()));
-    let agent = cli::Agent::read(&file).map(|agent| command::Agent {
-        address: agent.address,
-        token: agent.token,
-    });
+    let agent = command::added(std::path::Path::new(&browser::profile_dir()));
     let named = std::env::var(command::NAME).ok();
     let input = || {
         let mut text = String::new();
