@@ -11,24 +11,25 @@ use std::net::Ipv4Addr;
 pub const HEADING: &str = "Always ask first";
 /// The one row while the list is empty, and its line.
 pub const NONE: &str = "No sites";
-pub const NONE_LINE: &str = "Add a site where agents always ask you first, such as your bank's.";
+pub const NONE_LINE: &str = "Add a site where agents always ask you first, such as your bank.";
 /// The button under the list that opens the field, and the field's own words.
 pub const ADD_SITE: &str = "Add Site…";
 pub const PLACEHOLDER: &str = "Site or address";
-pub const SPOKEN: &str = "Site where agents ask first";
+pub const SPOKEN: &str = "Site where agents always ask first";
 /// The sentence under the list.
-pub const FOOT: &str = "On these sites and their subdomains, an agent asks you before it opens a \
-                        page or uses one it came to, and before each click or form it sends, \
-                        whatever you answered before. Agents can't see or change this list.";
+pub const FOOT: &str = "On these sites and their subdomains, an agent asks you before opening a page \
+                        or using one it reached, and before each click, key or form it sends. \
+                        Earlier answers don't count here, and agents can't see or change this list.";
 
 /// Why the card asks, under what the agent wants: the user's own list.
 pub fn why(site: &str) -> String {
-    format!("You asked to be asked first on {site}.")
+    format!("You set agents to always ask first on {site}.")
 }
 
-/// What an agent's call on a tab it came to without an open asks, as an open asks.
+/// What an agent's call on a tab it came to without an open asks: the tab is there already, so
+/// it asks to use the site where an open asks to open it, with the same answers.
 pub fn arrival(site: &str) -> String {
-    format!("open {site}")
+    format!("use {site}")
 }
 
 /// What the request tool asks on a fenced site, where its reads ask too.
@@ -78,10 +79,10 @@ pub const ASKED: (&str, &str, &str) = (
     "Asked you first on",
     "Couldn't ask you first on",
 );
-pub const CAME: (&str, &str, &str) = ("Coming to", "Came to", "Couldn't stay on");
+pub const CAME: (&str, &str, &str) = ("Asking to use", "Allowed to use", "Not allowed to use");
 /// The same, as the agent bar says what it did last.
 pub const ASKED_DONE: &str = "Asked you first";
-pub const CAME_DONE: &str = "Came to a page";
+pub const CAME_DONE: &str = "Allowed to use a page";
 
 /// The log's actions for them.
 pub const ASKED_ACTION: &str = "asked_first";

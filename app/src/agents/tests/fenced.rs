@@ -63,8 +63,8 @@ fn withheld(answer: &ToolResult, tab: u64, site: &str) {
     assert!(!answer.text.contains("Balance"), "{}", answer.text);
 }
 
-/// The agent's next call on `tab`, a snapshot, asks the user first with an open's question for
-/// `site`, before the core is asked anything of the page.
+/// The agent's next call on `tab`, a snapshot, asks the user first to use `site`, with an open's
+/// answers, before the core is asked anything of the page.
 fn asks_next(
     agents: &Entity<Agents>,
     browser: &Made,

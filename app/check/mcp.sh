@@ -3379,7 +3379,7 @@ CARD
     added=$(grep -c '^browser: agents fenced pension\.localhost$' "$log" || true)
     click_in_sight "fence open"
     expect '^browser: settings fence field open$' "Add Site… didn't open Always ask first's field"
-    expect '^browser: field Site where agents ask first has the keyboard$' \
+    expect '^browser: field Site where agents always ask first has the keyboard$' \
       "Add Site… didn't give Always ask first's field the keyboard"
     send type pension.localhost
     send key return
@@ -3407,7 +3407,10 @@ CARD
     > "$out/site/pension.html"
   printf '%s' "<!doctype html><title>To the pension</title>
 <p><a href=\"http://pension.localhost:$port/pension.html\">Pension</a></p>" > "$out/site/to-pension.html"
-  fence_asks='^browser: agent mcp-client asks [0-9]*: open pension\.localhost$'
+  # An open of the site asks to open it, and a call on a tab already there asks to use it.
+  fence_opens='^browser: agent mcp-client asks [0-9]*: open pension\.localhost$'
+  fence_uses='^browser: agent mcp-client asks [0-9]*: use pension\.localhost$'
+  fence_asks=$fence_opens
   # Waits for the fence's question after the call $3 sent, captured as $2.png, answers it $1 with
   # a click on the card, and sets fenced to the call's answer. Never and Allow Once share the
   # card's last row, Never at the left, and it has no Always Allow.
@@ -3445,6 +3448,7 @@ CARD
     esac
     await_log "^browser: loaded $fence_tab http://pension\.localhost:$port/pension\.html\$" \
       "the link didn't take the tab to the listed site"
+    fence_asks=$fence_uses
     before=$(grep -c "$fence_asks" "$log" || true)
     request read_page "{\"tab\":$fence_tab}" >&4
     fence_answer "$1" "agent-fence-came-$1" "the read of a tab that came to the listed site"
