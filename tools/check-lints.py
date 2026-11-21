@@ -21,6 +21,11 @@
   app/platform/ but mac/, and core/ but core/platform/mac/ (CONTRIBUTING.md#portability, #3392):
   no file of theirs, no Objective-C reached from Rust, and none of its syntax in a C++ file. The
   checks' own Mac helpers in app/check/ and CI's scripts aren't the product's.
+- The app's log lines are written only when the checks run it, as many name what the user
+  browses or types, and a desktop can keep an app's stderr, as GNOME's journal does (#3725):
+  `log!` in app/src/lib.rs tests `checked()` before it formats, `log_always!` writes only the
+  lines in ALWAYS, and no other write to stderr or stdout in the app's Rust formats a value. The
+  MCP bridge's binary, which speaks to its client, the preview and the tests aren't the app's.
 
 Run from anywhere in the checkout. Prints each finding and exits 1 if there are any.
 """
@@ -351,10 +356,58 @@ def mac_outside_platform():
     return found
 
 
+# The lines `log_always!` writes in every launch, by their format strings, each holding nothing
+# of what the user browses or types: BROWSER_LOG's areas, which the user turns on and whose lines
+# name nothing browsed (app/src/logging.rs), its warning, and the time flatpak.yml reads.
+ALWAYS = {
+    "browser: [{}] {}",
+    "browser: BROWSER_LOG names no area {}; the areas are {}",
+    "browser: UI shown at {:.1} ms",
+}
+# Not the app's: the MCP bridge's binary, the preview, whose tabs are made up, and test code.
+NOT_THE_APP = ("app/src/bridge.rs", "app/src/agents/bridge.rs", "app/src/preview.rs",
+               "app/src/shell/swipe/model.rs")
+RAW_WRITE = re.compile(r"\b(e?println|e?print)!\(|\bio::std(err|out)\(\)")
+MACRO = re.compile(r"macro_rules!\s+log\s*\{(.*?)\n\}", re.S)
+
+
+def is_test(path):
+    return bool(re.search(r"(^|/)tests?(\.rs|/)|_tests\.rs$", path))
+
+
+def quiet_log_lines():
+    found = []
+    lib = "app/src/lib.rs"
+    bodies = MACRO.findall(read(lib))
+    if not bodies or any("$crate::checked()" not in body or re.search(r"format|write", body)
+                         for body in bodies):
+        found.append((lib, 1, "log! writes or formats without testing checked() first, so every "
+                      "launch writes lines that can name what the user browses (#3725). Write "
+                      "through log_always! inside `if $crate::checked()`."))
+    for path in tracked("app/src", "app/platform"):
+        if not path.endswith(".rs") or is_test(path) or path in NOT_THE_APP or path == lib:
+            continue
+        text = read(path)
+        for m in re.finditer(r"\blog_always!\(\s*\"((?:[^\"\\]|\\.)*)\"", text):
+            if m.group(1) not in ALWAYS:
+                n = text[:m.start()].count("\n") + 1
+                found.append((path, n, f"log_always! writes {m.group(1)!r} in every launch, which "
+                              "isn't one of ALWAYS in tools/check-lints.py. Use log!, which only the "
+                              "checks' runs write, or add it to ALWAYS with why it holds nothing "
+                              "of the user's."))
+        for m in RAW_WRITE.finditer(text):
+            line = text[:m.start()].count("\n")
+            call = text[m.start():text.find(";", m.start())]
+            if "{" in "".join(STRING.findall(call)) or "io::std" in m.group(0):
+                found.append((path, line + 1, "a write to stderr or stdout that formats a value, "
+                              "in every launch. Use log!, which only the checks' runs write (#3725)."))
+    return found
+
+
 def main():
     found = (unread_markers() + bare_sleeps() + quiet_after_send() + run_places() +
              openbox_takes() + dollar_before_choice() +
-             mac_outside_platform())
+             mac_outside_platform() + quiet_log_lines())
     for path, line, message in found:
         print(f"::error file={path},line={line}::{message}")
     print(f"{len(found)} found")

@@ -41,6 +41,9 @@ export BROWSER_SPACE_HEADER=shown
 # prints its stack beside them a piece at a time, so a line could start mid-way through one. So no
 # process prints its stack (#2496).
 export BROWSER_STACK_TRACES=off
+# The app writes its log lines, many naming what the user browses, only when the checks run it,
+# its driver or this (#3725).
+export BROWSER_CHECK=1
 cd "$(dirname "$0")"
 # The runs of kind $1, default or named, or of both, from the first line of each run's file, the
 # default ones first, each kind in its numbers' order and a tie in its names'.

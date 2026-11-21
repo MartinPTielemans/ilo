@@ -464,7 +464,8 @@ pub(crate) fn open_window_as(
             cx.spawn(async move |cx| {
                 unsafe { platform::host_close_launch_window() };
                 // check.sh reads this line: the UI comes out from under the launch picture.
-                log!("browser: UI shown at {:.1} ms", unsafe {
+                // In every launch: flatpak.yml reads it with no check flag, and it holds a time.
+                log_always!("browser: UI shown at {:.1} ms", unsafe {
                     platform::host_since_launch()
                 });
                 // Unless the compositor's answer to the full screen undone has put it there.
