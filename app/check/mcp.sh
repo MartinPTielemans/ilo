@@ -3494,24 +3494,52 @@ CARD
     await_log "^browser: agent logged mcp-client upload $(printf '%s' "$site" | sed 's/\./\\./g') refused: You said no\\.\$" \
       "the upload refused for the field in $what isn't in the activity log under $site"
   done
-  # Choose File… with the dialog up, the page closes its own tab.
-  upload_page "a.localhost:$port/upload-closes.html"
-  closes_ref=$(ref_in "$opened" button "Closing file")
-  [ -n "$closes_ref" ] || fail "the page that closes its tab had no ref for its field: $opened"
-  upload_asks "$upload_tab" "$closes_ref" "the field whose page closes its tab"
-  upload_chosen "the field whose page closes its tab"
-  await_log "browser: file field $upload_field dialog over window [0-9]*\$" \
-    "Choose File… opened no file dialog: $(grep "browser: file field $upload_field " "$log" | tail -2 | tr '\n' ' ')"
-  ../tools/window-screenshot.sh "$pid" "$out/agent-upload-dialog.png" || fail "no window to capture"
-  : > "$out/site/upload-closes.go"
-  await_log "^browser: agent mcp-client file field $upload_field closed 0\$" \
-    "the file field's tab closing with its dialog up didn't end it as closed: $(grep "browser: .*file field $upload_field " "$log" | tail -3 | tr '\n' ' ')"
-  chosen=$(next_answer) || fail "the browser didn't answer the upload whose tab closed"
-  chosen=$(printf '%s\n' "$chosen" | answered upload)
-  [ "$chosen" = "error: The file dialog closed before the user chose a file." ] ||
-    fail "the upload whose tab closed with its dialog up answered: $chosen"
-  grep -q "browser: file field $upload_field chose" "$log" &&
-    fail "the dialog of the field whose tab closed answered with a choice: $(grep "browser: file field $upload_field chose" "$log")"
+  # Choose File… with the dialog up, the page closes its own tab. Windows can't close the system's
+  # dialog from outside, where it would then hold the window for the rest of the run (#3759), and
+  # Linux may have none, when neither a toolkit nor the portal answers.
+  dialog_said="opening a dialog that closes with its tab"
+  if windows; then
+    dialog_said="not tried with a dialog up, as Windows can't close one from outside (#3759),"
+    echo "skip: Choose File… on a field whose page closes its tab. Windows can't close the system's file dialog from outside, so it would hold the window (#3759)."
+  else
+    upload_page "a.localhost:$port/upload-closes.html"
+    closes_ref=$(ref_in "$opened" button "Closing file")
+    [ -n "$closes_ref" ] || fail "the page that closes its tab had no ref for its field: $opened"
+    upload_asks "$upload_tab" "$closes_ref" "the field whose page closes its tab"
+    upload_chosen "the field whose page closes its tab"
+    dialog=
+    for _ in $(seq 300); do
+      grep -q "browser: file field $upload_field dialog over window [0-9]*\$" "$log" && dialog=up && break
+      grep -q "browser: file field $upload_field has no dialog\$" "$log" && dialog=none && break
+      kill -0 "$pid" 2>/dev/null || fail "the app exited"
+      sleep 0.1
+    done
+    case "$dialog" in
+    up)
+      ../tools/window-screenshot.sh "$pid" "$out/agent-upload-dialog.png" || fail "no window to capture"
+      : > "$out/site/upload-closes.go"
+      await_log "^browser: agent mcp-client file field $upload_field closed 0\$" \
+        "the file field's tab closing with its dialog up didn't end it as closed: $(grep "browser: .*file field $upload_field " "$log" | tail -3 | tr '\n' ' ')"
+      chosen=$(next_answer) || fail "the browser didn't answer the upload whose tab closed"
+      chosen=$(printf '%s\n' "$chosen" | answered upload)
+      [ "$chosen" = "error: The file dialog closed before the user chose a file." ] ||
+        fail "the upload whose tab closed with its dialog up answered: $chosen"
+      grep -q "browser: file field $upload_field chose" "$log" &&
+        fail "the dialog of the field whose tab closed answered with a choice: $(grep "browser: file field $upload_field chose" "$log")"
+      ;;
+    none)
+      [ "$(uname)" = Linux ] || fail "Choose File… found no system file dialog off Linux"
+      chosen=$(next_answer) || fail "the browser didn't answer the upload with no file dialog"
+      chosen=$(printf '%s\n' "$chosen" | answered upload)
+      [ "$chosen" = "error: The file dialog couldn't open." ] ||
+        fail "the upload with no file dialog to open answered: $chosen"
+      dialog_said="answering that no dialog could open, as this Linux has none"
+      echo "skip: a file dialog closing with its tab. This Linux has no system file dialog, so Choose File… answered that none could open."
+      : > "$out/site/upload-closes.go"
+      ;;
+    *) fail "Choose File… opened no file dialog: $(grep "browser: file field $upload_field " "$log" | tail -2 | tr '\n' ' ')" ;;
+    esac
+  fi
   # Choose File… once the field's frame went to another page.
   upload_page "a.localhost:$port/upload-moves.html"
   moves_tab=$upload_tab
@@ -3974,7 +4002,7 @@ quit
 trap cleanup EXIT
 rm -f "$agents_file" "$out/mcp-in" "$out/mcp-out"
 if [ "$driven" = 1 ]; then
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), the tabs its page opens kept in its Space, behind$opened_said, without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, pins, unpins and removes its own tab but not the user's, sends requests to its tab's site with the tab's session it never sees, a change asking each time, refused unasked without its sentence, its question on screen as the log draws it ($follows% of its place changed) with the sentence cut at a word over the method's facts, a delete's too, and the whole request beside it until Escape, unanswered, each opening in Settings › Agents to the agent's sentence, where it went and what it sent or didn't, asks a page's beforeunload handler first, with no dialog, closing one that doesn't ask at the first call and keeping one the agent clicked or typed in that asks until it discards it, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, opens its tabs muted, is refused a tab the user took over with a press in its page until they hand it back and Keep answers its ask, has a tab the user holds listed as with them and nothing of its page, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, its download asks first and answers with the file, a refused one leaving none, its upload asks in a card naming the field's frame's site, Don't Allow saying no, Choose File… opening a dialog that closes with its tab and none for a field whose frame went, and is refused unasked for a folder's field, a button, a sandboxed frame's field and a document whose root frames none, a key press that pays asks as a click on Pay now does, typing with submit, Enter in the card's field, Space after Tab asking on $space_said, Enter after Tab, and Enter on the box to save the card, a Send off the messaging sites asks once its page holds a message, a forum's Comment and a chat's Send in no form, and not with its field empty, a Danish Betal asks, a payment asks every time, whatever was allowed before, a bank's site asks first until Always Allow, which Settings › Agents lists, its Overfør asking still$needs_said, and off takes the socket away; an action waits for its element and its page to settle ($settle), a tab's id from before a relaunch is refused as such, done ends its task once its handoff is answered and not before, its next task ends 3 s after its last page closed, a passkey its page asks for $passkey_said, and a launch after the window quit in its Space shows the page it opens; a screenshot of a tab just opened out of sight answers ($fresh_picture), and with the UI holding the keyboard with its picture"
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), the tabs its page opens kept in its Space, behind$opened_said, without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, pins, unpins and removes its own tab but not the user's, sends requests to its tab's site with the tab's session it never sees, a change asking each time, refused unasked without its sentence, its question on screen as the log draws it ($follows% of its place changed) with the sentence cut at a word over the method's facts, a delete's too, and the whole request beside it until Escape, unanswered, each opening in Settings › Agents to the agent's sentence, where it went and what it sent or didn't, asks a page's beforeunload handler first, with no dialog, closing one that doesn't ask at the first call and keeping one the agent clicked or typed in that asks until it discards it, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, opens its tabs muted, is refused a tab the user took over with a press in its page until they hand it back and Keep answers its ask, has a tab the user holds listed as with them and nothing of its page, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, its download asks first and answers with the file, a refused one leaving none, its upload asks in a card naming the field's frame's site, Don't Allow saying no, Choose File… $dialog_said and none for a field whose frame went, and is refused unasked for a folder's field, a button, a sandboxed frame's field and a document whose root frames none, a key press that pays asks as a click on Pay now does, typing with submit, Enter in the card's field, Space after Tab asking on $space_said, Enter after Tab, and Enter on the box to save the card, a Send off the messaging sites asks once its page holds a message, a forum's Comment and a chat's Send in no form, and not with its field empty, a Danish Betal asks, a payment asks every time, whatever was allowed before, a bank's site asks first until Always Allow, which Settings › Agents lists, its Overfør asking still$needs_said, and off takes the socket away; an action waits for its element and its page to settle ($settle), a tab's id from before a relaunch is refused as such, done ends its task once its handoff is answered and not before, its next task ends 3 s after its last page closed, a passkey its page asks for $passkey_said, and a launch after the window quit in its Space shows the page it opens; a screenshot of a tab just opened out of sight answers ($fresh_picture), and with the UI holding the keyboard with its picture"
 else
   echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own and is refused the user's tab, is answered that a link to an app opens nothing, its tab staying on its page, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), and its actions wait for their element and their page to settle ($settle), and the tabs its page opens are kept in its Space, behind$opened_said. Its upload is refused unasked for a folder's field, a button, a sandboxed frame's field and a document whose root frames none. A tab's id from before a relaunch is refused as such, done ends its task once its handoff is answered and not before, its next task ends 3 s after its last page closed, and a passkey its page asks for $passkey_said. skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
 fi
