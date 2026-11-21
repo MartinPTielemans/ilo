@@ -1134,9 +1134,13 @@ PICTURE
   if [ "$(uname)" = Linux ]; then
     echo "skip: mcp: the watched split view's two pages in the layout, on Linux: the driver lists the shell's one frame for them. $out/agent-split-warning.png shows them."
   else
-    panes=$(echo "$laid" | grep -o 'WebContentsViewCocoa [0-9,]* [0-9x]*' | sed 's/^WebContentsViewCocoa //')
-    [ "$(echo "$panes" | wc -l)" -eq 2 ] ||
-      fail "watching tab $warned didn't show its split view's two pages: $laid"
+    # A tab switch keeps the page it left in the window, past the content's right edge, until the
+    # page it shows draws (#3769), so only the pages within the content are the split's.
+    width=$(echo "$laid" | sed -n 's/^browser: layout content \([0-9]*\)x.*/\1/p')
+    panes=$(echo "$laid" | grep -o 'WebContentsViewCocoa [0-9,]* [0-9x]*' | sed 's/^WebContentsViewCocoa //' |
+      awk -v width="$width" '{ split($1, at, ","); split($2, size, "x"); if (at[1] + size[1] <= width) print }')
+    [ -n "$width" ] && [ "$(echo "$panes" | wc -l)" -eq 2 ] ||
+      fail "watching tab $warned didn't show its split view's two pages within the content, ${width:-?} wide: $laid"
   fi
   ../tools/window-screenshot.sh "$pid" "$out/agent-split-warning.png" || fail "no window to capture"
   # The click on the agent's warning, a press on its tab's dialog, took the tab over, as a press
