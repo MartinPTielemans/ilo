@@ -3480,6 +3480,65 @@ fn navigate_and_open_tab_wait_for_their_text(cx: &mut TestAppContext) {
     assert!(refused.recv().unwrap().error);
 }
 
+/// answer and wait_for go together: navigate and open_tab wait for their text, then read the page
+/// for an answer of text, saying first that it showed (#3658, #3657).
+#[gpui::test]
+fn the_text_answer_comes_after_wait_for(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let look = |tree: String, cx: &mut TestAppContext| {
+        let request = browser.pages.borrow().last().unwrap().1;
+        agents.update(cx, |agents, cx| agents.page_done(request, tree, false, cx));
+        cx.run_until_parked();
+    };
+    let splash = json!({ "nodes": [
+        { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Shop" },
+          "childIds": ["2"] },
+        { "nodeId": "2", "role": { "value": "StaticText" }, "name": { "value": "Loading" } },
+    ]})
+    .to_string();
+    for (tool, arguments) in [
+        (
+            "navigate",
+            json!({ "tab": 20, "url": "iana.org", "answer": "text", "wait_for": "place order" }),
+        ),
+        (
+            "open_tab",
+            json!({ "url": "docs.example", "answer": "text", "wait_for": "place order" }),
+        ),
+    ] {
+        let answer = call(&agents, "claude-code", tool, arguments, cx);
+        let reads = browser.reads.borrow().len();
+        look(splash.clone(), cx);
+        assert_eq!(
+            browser.reads.borrow().len(),
+            reads,
+            "{tool} read the splash"
+        );
+        cx.executor().advance_clock(Duration::from_millis(500));
+        look(shop_tree(), cx);
+        assert!(
+            answer.try_recv().is_err(),
+            "{tool} answered before the text came"
+        );
+        let (_, read) = *browser.reads.borrow().last().unwrap();
+        agents.update(cx, |agents, cx| {
+            agents.text_read(read, Some("Basket\nTwo items".into()), cx)
+        });
+        let text = answer.recv().unwrap();
+        assert!(!text.error, "{}", text.text);
+        assert!(
+            text.text.contains("“place order” showed."),
+            "{tool}: {}",
+            text.text
+        );
+        assert!(
+            text.text.ends_with("\n\nBasket\nTwo items"),
+            "{tool}: {}",
+            text.text
+        );
+    }
+}
+
 /// A wait's next look at a tab the user took over between two looks reads nothing: navigate's
 /// wait_for and run_steps' wait step each end as a call on a tab the user holds does.
 #[gpui::test]
