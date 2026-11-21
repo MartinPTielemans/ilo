@@ -3811,6 +3811,83 @@ send state
 [ "$(grep '^browser: window [0-9]* shows ' "$log" | tail -1 | cut -d' ' -f5)" = "$front_tab" ] ||
   fail "the relaunch's page, tab $front_tab, isn't the one the window shows: $(grep '^browser: window [0-9]* shows ' "$log" | tail -1)"
 quit
+# An agent's tab has a page size of its own, whatever the user's window shows (#3788): on a new
+# profile's Welcome, with no page for Chromium's tab strip to size it by, it's still pictured, and
+# with a page in a smaller window it's pictured at the same size, laid out alike. The page's
+# buttons follow its width, so its outline says which layout it has.
+own_size_said=
+if engine_has ../core/window.cc ../core/agent_page.cc; then
+  printf '%s' '<!doctype html><title>Widths</title><style>
+#narrow, #middle, #wide { display: none }
+@media (max-width: 499.98px) { #narrow { display: block } }
+@media (min-width: 500px) and (max-width: 849.98px) { #middle { display: block } }
+@media (min-width: 850px) { #wide { display: block } }
+</style><button id=narrow>Narrow layout</button><button id=middle>Middle layout</button>
+<button id=wide>Wide layout</button>' > "$out/site/widths.html"
+  printf '%s' '<!doctype html><title>yours</title><script>
+const middle = matchMedia("(min-width: 500px) and (max-width: 849.98px)");
+const say = () => document.title = "yours " + (middle.matches ? "middle" : "other");
+say(); middle.onchange = say;
+</script>' > "$out/site/widths-yours.html"
+  rm -rf "$profile_dir"
+  mkdir -p "$profile_dir/Default"
+  printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}]}' "$token" > "$agents_file"
+  # The agent's tab of the widths page, pictured, as "<size> <layout> <answer>".
+  own_size() {
+    mcp '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"check","version":"1"}}}' \
+      > /dev/null
+    mcp '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+    opened=$(call open_tab "{\"url\":\"localhost:$port/widths.html\"}")
+    sized_tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+    [ -n "$sized_tab" ] || fail "open_tab of the widths page answered: $opened"
+    picture=$(call screenshot "{\"tab\":$sized_tab}")
+    size=$(grep "browser: agent picture of tab $sized_tab at " "$log" | tail -1 | sed 's/.* at //')
+    layout=$(call snapshot "{\"tab\":$sized_tab}" | grep -o '"[A-Z][a-z]* layout"' | tr -d '"' | head -1)
+    echo "${size:-none} ${layout:-none} $picture"
+  }
+  log="$out/mcp-own-size.log"
+  step=0
+  BROWSER_DRIVE=1 "$browser" < "$out/drive" > "$log" 2>&1 &
+  pid=$!
+  exec 3> "$out/drive"
+  await_log '^browser: welcome shown$' "a new profile's launch didn't show the Welcome"
+  await_log "$on" "the new profile's launch didn't start the server"
+  socket=$(grep '^browser: agents server on' "$log" | tail -1 | sed 's/^browser: agents server on //')
+  bridge_on
+  welcome=$(own_size)
+  exec 4>&- 5<&-
+  quit
+  log="$out/mcp-own-size-page.log"
+  step=0
+  BROWSER_DRIVE=1 BROWSER_URL="http://localhost:$port/widths-yours.html" "$browser" < "$out/drive" \
+    > "$log" 2>&1 &
+  pid=$!
+  exec 3> "$out/drive"
+  await_log '^browser: title [0-9]* yours other$' "the user's page didn't load"
+  # Narrower than the window a new profile opens, so the user's page takes its middle layout.
+  send resize 900 640
+  await_log '^browser: title [0-9]* yours middle$' \
+    "the user's page didn't take its middle layout in the window made 900 by 640"
+  await_log "$on" "the relaunch didn't start the server"
+  socket=$(grep '^browser: agents server on' "$log" | tail -1 | sed 's/^browser: agents server on //')
+  bridge_on
+  paged=$(own_size)
+  exec 4>&- 5<&-
+  quit
+  echo "Welcome: $welcome" > "$out/mcp-own-size.txt"
+  echo "A page in a 900 by 640 window: $paged" >> "$out/mcp-own-size.txt"
+  case "$welcome" in
+    *" image/jpeg "[1-9]*) ;;
+    *) fail "the agent's tab opened while the user's window showed the Welcome wasn't pictured: $welcome" ;;
+  esac
+  [ "${welcome%% *}" = "${paged%% *}" ] ||
+    fail "the agent's page took another size with a page in the user's smaller window: $(cat "$out/mcp-own-size.txt")"
+  [ "$(echo "$welcome" | cut -d' ' -f2)" = "$(echo "$paged" | cut -d' ' -f2)" ] ||
+    fail "the agent's page was laid out otherwise with a page in the user's smaller window: $(cat "$out/mcp-own-size.txt")"
+  own_size_said="ok: an agent's tab has a page size of its own, ${welcome%% *}, pictured on a new profile's Welcome and laid out alike with a page in the user's smaller window"
+else
+  own_size_said="skip: an agent's tab's own page size (#3788): not run on an engine without it"
+fi
 trap cleanup EXIT
 rm -f "$agents_file" "$out/mcp-in" "$out/mcp-out"
 if [ "$driven" = 1 ]; then
@@ -3818,6 +3895,7 @@ if [ "$driven" = 1 ]; then
 else
   echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own and is refused the user's tab, is answered that a link to an app opens nothing, its tab staying on its page, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), and its actions wait for their element and their page to settle ($settle), and the tabs its page opens are kept in its Space, behind$opened_said. A tab's id from before a relaunch is refused as such, done ends its task once its handoff is answered and not before, its next task ends 3 s after its last page closed, and a passkey its page asks for $passkey_said. skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
 fi
+echo "$own_size_said"
 if [ -n "${toast_skip:-}" ]; then
   echo "skip: the needs' toast showing, as Windows shows toasts only for an installed copy, which the run's isn't: it counted on the taskbar button and asked for the toast."
 fi

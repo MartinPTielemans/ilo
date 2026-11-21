@@ -88,6 +88,7 @@
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "content/public/common/referrer.h"
@@ -502,6 +503,21 @@ class HeldLoad : public content::WebContentsUserData<HeldLoad> {
 
 WEB_CONTENTS_USER_DATA_KEY_IMPL(HeldLoad);
 
+// The page area of a new window at its default size, in CSS pixels: the app's 1280 by 800
+// (window_opening.rs, WINDOW_SIZE) less the sidebar's 228 and the card's inset of 10 at the right
+// and 10 above and below (tokens.toml, [shell]). An agent's tab has it until a window shows it:
+// Chromium's tab strip gives a tab added behind the active one that tab's size, and with no active
+// tab none, which nothing can picture (#3788).
+constexpr gfx::Size kAgentPageSize(1042, 780);
+
+// Sizes |contents| to kAgentPageSize unless a window shows it, whose page area it then has.
+void SizeForAgent(content::WebContents* contents) {
+  content::RenderWidgetHostView* view = contents ? contents->GetRenderWidgetHostView() : nullptr;
+  if (contents && !(view && view->IsShowing())) {
+    contents->Resize(gfx::Rect(kAgentPageSize));
+  }
+}
+
 // Makes the new tab |params| asks for as Chrome's Navigate makes it (CreateTargetContents), for
 // |space| to hold from when its tab strip has it until the window places it, and leaves it to
 // Navigate to insert. Its page starts once inserted (HeldLoad::Start), as Chrome's Navigate starts
@@ -520,6 +536,7 @@ void MakeHeldBy(Space& space, NavigateParams& params) {
   }
   create.opened_by_another_window = params.opened_by_another_window;
   create.initially_hidden = params.disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB;
+  create.initial_size = kAgentPageSize;
 #if defined(USE_AURA)
   // In the window's compositor, which draws its page out of sight while an agent acts on it, as
   // Chrome's tabs are. A page in none draws no frame, and its input waits for one.
@@ -529,10 +546,12 @@ void MakeHeldBy(Space& space, NavigateParams& params) {
 #endif
   std::unique_ptr<content::WebContents> made = content::WebContents::Create(create);
   HeldLoad::CreateForWebContents(made.get(), space.id(), params);
-  // A tab strip no window watches still loads it, once Navigate has inserted it.
+  // A tab strip no window watches still loads it, once Navigate has inserted it. The tab strip
+  // sizes a tab added behind the active one to that tab's page, so it takes its own size back.
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(
                      [](base::WeakPtr<content::WebContents> contents) {
+                       SizeForAgent(contents.get());
                        HeldLoad::Start(contents.get());
                      },
                      made->GetWeakPtr()));
@@ -1849,6 +1868,7 @@ content::WebContents* Window::OpenHeld(Space& space, Profile* profile, const GUR
   // The app hears only of the tabs it didn't open.
   base::AutoReset<bool> opening(&opening_tab_, true);
   Navigate(&params);
+  SizeForAgent(params.navigated_or_inserted_contents);
   HeldLoad::Start(params.navigated_or_inserted_contents);
   return params.navigated_or_inserted_contents;
 }
