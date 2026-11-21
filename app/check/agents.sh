@@ -475,8 +475,9 @@ EOF
     python3 -I "$out/user-path.py" restore "$out/user-path.json" || fail "couldn't take the entry off the PATH"
     settings_tab General
     settings_tab Agents
-    in_sight "ilo-command add" ||
-      fail "with Add's entry taken off the PATH, the row drew no Add: it still says the command is added"
+    expect '^browser: agent ilo-command looked: not found$' \
+      "with Add's entry taken off the PATH, the row didn't look for it and find it gone: it still says the command is added"
+    in_sight "ilo-command add" || fail "with Add's entry taken off the PATH, the row drew no Add"
     ../tools/window-screenshot.sh "$pid" "$out/command-off-path.png" || fail "no window to capture"
     click_in_sight "ilo-command add"
     expect '^browser: connect agent ilo-command$' "a click on Add, with the entry off the PATH, didn't add the ilo command again"
@@ -487,6 +488,7 @@ EOF
     [ "$last" = "$entry" ] || fail "Add again didn't put $entry back last on the user's PATH: its last entry is '$last'"
     settings_tab General
     settings_tab Agents
+    expect '^browser: agent ilo-command looked: found$' "with the entry back on the PATH, the row didn't find it"
     in_sight "ilo-command remove" || fail "the added row drew no Remove"
     ../tools/window-screenshot.sh "$pid" "$out/command-added.png" || fail "no window to capture"
     click_in_sight "ilo-command remove"
