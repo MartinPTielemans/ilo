@@ -677,7 +677,15 @@ impl Shell {
     /// The window's keyboard went from its UI, to its page or elsewhere, which GPUI's focus doesn't
     /// see. The field's own menu takes it only for a moment, and gives it back to the field.
     /// `opened` is how many fields had opened as the press that gave the page the keyboard came.
-    pub fn keyboard_left(&mut self, opened: u64, window: &mut Window, cx: &mut Context<Self>) {
+    /// `to_page` is false for Windows' word as the app goes to the background, whose keys come
+    /// back to where they were with the app (#3758).
+    pub fn keyboard_left(
+        &mut self,
+        opened: u64,
+        to_page: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let renaming = self.renaming.as_ref();
         if renaming.is_some_and(|renaming| renaming.opened > opened) {
             // For a run's log, where the field would otherwise have closed at once.
@@ -691,7 +699,9 @@ impl Shell {
             self.name_left(window, cx)
         }
         // Once the field is left, from where the focus has gone.
-        self.page_took_keyboard(window, cx);
+        if to_page {
+            self.page_took_keyboard(window, cx);
+        }
     }
 
     pub(super) fn cancel_name(&mut self, window: &mut Window, cx: &mut Context<Self>) {

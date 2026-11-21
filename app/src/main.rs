@@ -853,8 +853,6 @@ extern "C" fn became_active() {
         import_host::became_active(cx);
         daily_count_host::became_active(cx);
         browser::shell::follow_scroll_bars(cx);
-        #[cfg(target_os = "windows")]
-        update_shells_in(cx, |shell, _| shell.app_came_back());
         // GTK's settings file, Linux's last word, says nothing as it changes.
         #[cfg(target_os = "linux")]
         follow_reduce_motion(cx);
