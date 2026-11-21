@@ -364,9 +364,10 @@ ALWAYS = {
     "browser: BROWSER_LOG names no area {}; the areas are {}",
     "browser: UI shown at {:.1} ms",
 }
-# Not the app's: the MCP bridge's binary, the preview, whose tabs are made up, and test code.
-NOT_THE_APP = ("app/src/bridge.rs", "app/src/agents/bridge.rs", "app/src/preview.rs",
-               "app/src/shell/swipe/model.rs")
+# Not the app's: the MCP bridge's binary and the `ilo` command's, whose output is their answer to
+# the agent, the preview, whose tabs are made up, and test code.
+NOT_THE_APP = ("app/src/bridge.rs", "app/src/agents/bridge.rs", "app/src/ilo_command.rs",
+               "app/src/preview.rs", "app/src/shell/swipe/model.rs")
 RAW_WRITE = re.compile(r"\b(e?println|e?print)!\(|\bio::std(err|out)\(\)")
 MACRO = re.compile(r"macro_rules!\s+log\s*\{(.*?)\n\}", re.S)
 
