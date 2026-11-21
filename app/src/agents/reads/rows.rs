@@ -2,7 +2,9 @@
 //! the line its state needs under them, and what the row shows opened. Only the definition and its
 //! state are kept, never a row a read gave, so nothing here holds a site's text but its host.
 
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
+
+use web_time::{SystemTime, UNIX_EPOCH};
 
 use crate::saved_reads::definition::Kind;
 use crate::saved_reads::{Saved, State};
@@ -113,7 +115,14 @@ fn read_ago(at: SystemTime, now: SystemTime) -> String {
 
 /// The day `at` falls on in the user's calendar, as "Nov 19", with its year if it isn't `now`'s.
 fn day(at: SystemTime, now: SystemTime) -> String {
-    let local = |time: SystemTime| chrono::DateTime::<chrono::Local>::from(time);
+    // From its seconds, as chrono takes std's clock and the preview's is web_time's.
+    let local = |time: SystemTime| {
+        let seconds = time
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |since| since.as_secs());
+        let utc = chrono::DateTime::from_timestamp(seconds as i64, 0).unwrap_or_default();
+        utc.with_timezone(&chrono::Local)
+    };
     let (at, now) = (local(at), local(now));
     match chrono::Datelike::year(&at) == chrono::Datelike::year(&now) {
         true => at.format("%b %-d").to_string(),
