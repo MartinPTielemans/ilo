@@ -29,6 +29,7 @@
 #include "base/values.h"
 #include "browser_core/clear_both_engines.h"
 #include "browser_core/favorites.h"
+#include "browser_core/quit_stores_wait.h"
 #include "browser_core/session.h"
 #include "browser_core/site_controls.h"
 #include "browser_core/space.h"
@@ -43,6 +44,8 @@
 #include "chrome/browser/profiles/profile_keyed_service_factory.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/common/pref_names.h"
+#include "components/keep_alive_registry/keep_alive_types.h"
+#include "components/keep_alive_registry/scoped_keep_alive.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_registry_simple.h"
@@ -1079,6 +1082,22 @@ void SweepStores() {
                        FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
                        base::BindOnce(&StoresNamedOnDisk, folder), base::BindOnce(&Sweep));
                  }));
+}
+
+void WriteStoresAtQuit() {
+  // The run loop goes on while it's held, so nothing waits on the UI thread.
+  auto held = std::make_unique<ScopedKeepAlive>(KeepAliveOrigin::APP_CONTROLLER,
+                                                KeepAliveRestartOption::DISABLED);
+  WaitForStores(base::BindOnce(&platform::SystemPage::WriteStores),
+                base::BindOnce(
+                    // The keep-alive goes as this returns, and with it the quit's hold.
+                    [](std::unique_ptr<ScopedKeepAlive>, std::optional<std::string> line) {
+                      // check.sh reads these lines.
+                      if (line) {
+                        fprintf(stderr, "browser: quit: %s\n", line->c_str());
+                      }
+                    },
+                    std::move(held)));
 }
 
 void CreateThrottlesForNavigation(content::NavigationThrottleRegistry& registry) {

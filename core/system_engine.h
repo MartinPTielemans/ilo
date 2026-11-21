@@ -120,6 +120,12 @@ void MarkNewDataFolder();
 // profiles that are gone.
 void SweepStores();
 
+// As a quit goes ahead, which is once every Browser has closed and its system pages with it: holds
+// the quit until the system's engine has written the session's stores to the disk, a second at
+// most, and logs how it went (#3685). A session that made no store waits for nothing and logs
+// nothing.
+void WriteStoresAtQuit();
+
 // For ContentBrowserClient::CreateThrottlesForNavigation: a navigation of a tab's page in
 // Chromium to a site its profile keeps for the system's engine loads there instead, and a tab
 // showing a system page loads nothing in Chromium.
