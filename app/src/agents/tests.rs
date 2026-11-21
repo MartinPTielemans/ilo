@@ -8689,7 +8689,13 @@ mod sessions {
         *configs.unsearched.lock().unwrap() = true;
         agents.update(cx, |agents, cx| agents.connect(Client::Command, cx));
         cx.run_until_parked();
-        assert_eq!(state(cx), State::Unsearched);
+        // On Windows Add puts the folder on PATH itself, so a folder off it is Add again (#3783).
+        let unsearched = if cfg!(windows) {
+            State::Off
+        } else {
+            State::Unsearched
+        };
+        assert_eq!(state(cx), unsearched);
         assert_eq!(configs.connected.lock().unwrap()[0].0, Client::Command);
         *configs.unsearched.lock().unwrap() = false;
         agents.update(cx, |agents, cx| agents.look_for_clients(cx));

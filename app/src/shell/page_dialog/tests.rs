@@ -545,3 +545,48 @@ fn the_ui_taking_the_keyboard_back_by_key_holds_a_dialog(cx: &mut TestAppContext
     assert!(!shell.read_with(cx, |shell, _| shell.library_open));
     assert_eq!(dialogs(&host), ["page dialog 10 2"]);
 }
+
+/// Windows' word that the UI lost the keyboard as another app comes to the front leaves where the
+/// keys were (#3758): back in the app, a prompt goes up at once if the page had them, and waits if
+/// the Library's search still drawn with GPUI's focus had them.
+#[gpui::test]
+fn the_app_going_to_the_background_leaves_the_keyboard_where_it_was(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        crate::shell::commands::bind_keys(cx);
+        crate::text_input::bind_keys(cx);
+    });
+    let (shell, cx, host) = window(cx);
+    cx.update(|window, _| window.activate_window());
+    shell.update(cx, |shell, cx| {
+        shell.run(crate::shell::Command::ViewLibrary, "ui", cx);
+        shell.library_motion = None;
+        shell.sidebar_fade = None;
+    });
+    cx.run_until_parked();
+    assert!(cx.update(|window, cx| crate::text_input::typing_in(window, cx)));
+    let background = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        let opened = crate::shell::fields_opened();
+        shell.update_in(cx, |shell, window, cx| {
+            shell.keyboard_left(opened, false, window, cx)
+        });
+        cx.run_until_parked();
+    };
+
+    // The search has the keys as another app comes to the front.
+    background(&shell, cx);
+    ask(&shell, cx, 10, Some(prompt(1)));
+    assert!(dialogs(&host).is_empty(), "the prompt came over the search");
+    ask(&shell, cx, 10, None);
+    host.take();
+
+    // The user went to the page, then to another app.
+    shell.update_in(cx, |shell, window, cx| shell.page_took_keyboard(window, cx));
+    cx.run_until_parked();
+    background(&shell, cx);
+    ask(&shell, cx, 10, Some(prompt(2)));
+    assert_eq!(
+        dialogs(&host),
+        ["page dialog 10 2"],
+        "the page's prompt waited for the search"
+    );
+}

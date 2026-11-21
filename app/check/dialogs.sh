@@ -15,7 +15,8 @@
 # ilo's, the link target and the hover card show under it, and the link target over ilo's window
 # again once it's gone (#1419). An alert that comes while another app has the foreground goes over
 # ilo's window but under the other app's, its taskbar button asking for attention, and has the
-# keyboard once ilo's window comes to the front (#1365). Alt+F4 in a page's dialog cancels it as Esc
+# keyboard once ilo's window comes to the front (#1365). Back from another app in front, with the
+# Library's search beside the page that has the keyboard, an alert shows at once (#3758). Alt+F4 in a page's dialog cancels it as Esc
 # does, and the next question asks again (#1362). On Windows and the Mac, with a second
 # window beside the first and the first in front, the pointer resting on a row of the second
 # shows its card over the second, and on a row of the first over the first (#1432).
@@ -23,13 +24,14 @@
 # while its page's alert is up unloads it, and ilo goes on. A page out of sight whose alert waits
 # for its tab is let go by the idle check once it looks 2 hours unseen, and ilo goes on (#3549).
 # An alert that comes while the user types in the command bar waits, every key going to the bar,
-# and shows once the bar closes.
+# and shows once the bar closes. A key the page answers only after its alert, once the command bar
+# has opened, never reaches the bar (#3791).
 
 serve
 log="$out/dialogs.log"
 step=0
 rm -f "$saved"
-BROWSER_DRIVE=1 BROWSER_URL="${site}dialogs.html" "$browser" \
+BROWSER_LOG=keys BROWSER_DRIVE=1 BROWSER_URL="${site}dialogs.html" "$browser" \
   < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
@@ -170,6 +172,34 @@ expect '^browser: command bar hidden$' "Esc didn't close the command bar"
 expect '^browser: dialog shown .* says$' "the alert didn't show once the command bar closed"
 expect '^browser: dialog settled$' "the alert that waited didn't settle"
 answer return accept "alerted later"
+
+# A key the page didn't keep comes back to the app once the page's handler returns, which can be
+# after the alert it asked was answered: it never reaches the command bar a shortcut after it
+# opens, where on the Mac it was typed (#3791). The page's "h" alerts, then waits for /held, so
+# ⌘L after it, which the page gets first, holds the keys typed after it until the page answers it,
+# and the page's "h" comes back while they're held.
+send click $page_point
+rm -f "$out/site/held.go"
+send key h
+expect "^browser: page $page dialog Alert .* says\$" "\"h\" in the page didn't alert"
+expect '^browser: dialog settled$' "the page's alert from \"h\" didn't settle"
+send key return
+expect "^browser: page $page dialog answered accept\$" "↩ didn't answer the page's alert from \"h\""
+expect '^browser: dialog hidden$' "the page's alert from \"h\" didn't leave once answered"
+served "127.0.0.1:$port/held" "the page didn't ask for /held once its alert was answered"
+send key l cmd
+expect "^browser: \[keys\] [a-z]*-l before the page: page, holding the keys after it\$" \
+  "⌘L with the page busy didn't go to the page first, holding the keys after it"
+touch "$out/site/held.go"
+expect "^browser: title $page held back\$" "the page's \"h\" handler didn't end"
+expect "^browser: \[keys\] a character the page didn't keep: " \
+  "the page's \"h\" didn't come back to the app once its handler returned"
+expect '^browser: command bar shown$' "⌘L didn't open the command bar once the page answered it"
+send type x
+expect '^browser: command bar rows for "x" in ' \
+  "the page's \"h\" reached the command bar, or what was typed didn't"
+send key escape
+expect '^browser: command bar hidden$' "Esc didn't close the command bar"
 
 # Another tab takes the alert down, and its own brings it back.
 open_from_bar "http://localhost:$port/one.html"
@@ -670,6 +700,56 @@ if windows; then
   answer return accept "alerted later"
 fi
 
+# On Windows, the page the user clicked into keeps the keyboard through another app in front, with
+# the Library's search beside it still showing its cursor: once ilo is back, the page's alert shows
+# at once, where it waited for the field until a click in the page (#3758).
+came_back=
+if windows && [ "$background_dialog" = "the foreground away" ]; then
+  send key l cmd shift
+  expect '^browser: command view-library via ' "Ctrl+Shift+L didn't open the Library"
+  expect '^browser: library shown$' "Ctrl+Shift+L didn't show the Library"
+  send click $page_point
+  [ "$focus" = RenderWidgetHostViewCocoa ] ||
+    fail "a click on the page beside the Library didn't give it the keyboard: $focus"
+  rm -f "$out/site/held.go" "$out/front"
+  send key l
+  expect "^browser: title $page waiting\$" "\"l\" in the page didn't start waiting for /held"
+  served "127.0.0.1:$port/held" "the page didn't ask for /held"
+  python3 -I -u check/app-windows.py cover "$(cat "/proc/$pid/winpid")" away "$out/front" \
+    > "$out/cover-came-back.log" 2>&1 &
+  helper=$!
+  for _ in $(seq 100); do
+    grep -q '^cover ' "$out/cover-came-back.log" || ! kill -0 "$helper" 2>/dev/null && break
+    sleep 0.1
+  done
+  grep -q '^cover .*, foreground away$' "$out/cover-came-back.log" ||
+    fail "another app didn't come in front of ilo's window with the foreground: $(cat "$out/cover-came-back.log")"
+  touch "$out/front"
+  for _ in $(seq 50); do
+    send state
+    [ "$active" = 1 ] && break
+    sleep 0.1
+  done
+  [ "$active" = 1 ] || fail "ilo's window didn't come back to the front"
+  [ "$focus" = RenderWidgetHostViewCocoa ] ||
+    fail "the page didn't have the keyboard again with ilo back: $focus"
+  winpid=$(cat "/proc/$helper/winpid" 2>/dev/null) && taskkill //F //PID "$winpid" > /dev/null 2>&1 ||
+    true
+  helper=
+  touch "$out/site/held.go"
+  expect "^browser: page $page dialog Alert .* says\$" "the page didn't alert once /held came"
+  expect '^browser: dialog shown .* says$' \
+    "the page's alert waited for the Library's search, which the page had the keyboard from: $(grep "^browser: page $page dialog [0-9]* waits" "$log" | tail -1)"
+  none_since "^browser: page $page dialog [0-9]* waits for the field\$" ||
+    fail "the page's alert waited for the Library's search, which the page had the keyboard from"
+  expect '^browser: dialog settled$' "the alert didn't settle with ilo back"
+  answer return accept "alerted later"
+  send key l cmd shift
+  expect '^browser: library hidden$' "Ctrl+Shift+L didn't close the Library"
+  send click $page_point
+  came_back=1
+fi
+
 # On Windows Alt+F4 in a page's dialog cancels it as Esc does, where Windows destroyed the dialog's
 # window, which the app shows again for the next question (#1362).
 closed_dialog=
@@ -947,6 +1027,8 @@ echo "  tab is let go by the idle check after 2 hours unseen, and ilo goes on (#
   "window ($background_dialog) went under that app's window and over ilo's, and took the keyboard" \
   "as ilo's window came to the front, with no caption of Windows' behind the window buttons there" \
   "or in the launch picture: $out/dialog-background.png $out/dialog-launch-picture.png"
+[ -z "$came_back" ] || echo "  With the Library's search beside the page that had the keyboard," \
+  "an alert that came once ilo was back from another app in front showed at once."
 [ -z "$closed_dialog" ] || echo "  Alt+F4 in a page's dialog cancels it as Esc does, and the" \
   "dialog asks again, with no caption of Windows' behind the window buttons:" \
   "$out/dialog-after-close.png"

@@ -1119,23 +1119,34 @@ impl Agents {
             .collect()
     }
 
-    /// Whether Settings › Agents offers the `ilo` command: not yet on Windows, nor in a Flatpak,
-    /// whose sandbox can't write the user's bin folder.
+    /// Whether Settings › Agents offers the `ilo` command: not yet in a Flatpak, whose sandbox
+    /// can't write the user's bin folder.
     pub fn command_offered(&self) -> bool {
-        cfg!(unix) && self.bridge.first().map(String::as_str) != Some("flatpak")
+        cfg!(any(unix, windows)) && self.bridge.first().map(String::as_str) != Some("flatpak")
+    }
+
+    /// The folder the `ilo` command's row names on Windows, where the command is beside the
+    /// bridge's and not in ~/.local/bin.
+    pub fn command_windows_folder(&self) -> Option<String> {
+        if !cfg!(windows) {
+            return None;
+        }
+        let local = std::env::var("LOCALAPPDATA").unwrap_or_default();
+        let bridge = std::path::Path::new(self.bridge.first()?);
+        let install = cli::Install::windows(bridge, &local, Default::default());
+        Some(cli::shown(&install.folder, &local))
     }
 
     /// The `ilo` command's row: not added, or added in a folder the user's shell looks in or not.
+    /// On Windows, added in a folder no longer on the user's PATH is Add again (#3783).
     pub fn command_state(&self) -> cli::State {
-        match (self.is_connected(Client::Command), self.command_searched) {
-            (false, _) => cli::State::Off,
-            (true, true) => cli::State::On,
-            (true, false) => cli::State::Unsearched,
-        }
+        let added = self.is_connected(Client::Command);
+        cli::state(added, self.command_searched, cfg!(windows))
     }
 
     /// Asks the user's shell, in the background, whether it looks in the `ilo` command's folder,
-    /// as the row says, once it's added.
+    /// as the row says, once it's added: on Windows, whether Add's entry is still on the user's
+    /// PATH.
     fn look_for_command(&mut self, cx: &mut Context<Self>) {
         if !self.is_connected(Client::Command) {
             return;
@@ -1147,6 +1158,9 @@ impl Agents {
                 .await;
             agents
                 .update(cx, |agents, cx| {
+                    // check.sh reads this line.
+                    let found = if searched { "found" } else { "not found" };
+                    log!("browser: agent ilo-command looked: {found}");
                     if agents.command_searched != searched {
                         agents.command_searched = searched;
                         cx.notify();
