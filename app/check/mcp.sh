@@ -822,6 +822,9 @@ printf '%s' '<!doctype html><title>Second page</title><p>A page of the second co
 opened=$(second "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"open_tab\",\"arguments\":{\"url\":\"localhost:$port/second.html\"}}}" | answered open_tab)
 second_tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
 [ -n "$second_tab" ] || fail "open_tab on the second connection answered: $opened"
+# The before picture for #3835, never to land: both connections' steps on one card.
+sleep 2
+../tools/window-screenshot.sh "$pid" "$out/cards-before.png" || fail "no window to capture"
 await_log '^browser: session session-[0-9]* of agent mcp-client as second$' \
   "the client's second connection had no card of its own: $(grep -c '^browser: session ' "$log") cards"
 second_session=$(sed -n 's/^browser: session \(session-[0-9]*\) of agent mcp-client as second$/\1/p' "$log")
