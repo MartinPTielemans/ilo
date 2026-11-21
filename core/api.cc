@@ -1473,14 +1473,25 @@ bool bc_tab_set_split_stacked(bc_id id, bool stacked) {
   return true;
 }
 
+// The user's switch to |space|: the Space |window| leaves forgets which tabs opened which, as a
+// switch to an unrelated tab makes it (bc_window_select), so a tab's close no longer leads back.
+static void ForgetOpenersLeaving(const browser_core::Window& window, bc_id space) {
+  browser_core::Space* left = browser_core::Space::FromId(window.space());
+  if (left && left->id() != space) {
+    left->ForgetOpeners();
+  }
+}
+
 void bc_window_show_space(bc_id window_id, bc_id space) {
   if (browser_core::Window* window = browser_core::Window::FromId(window_id)) {
+    ForgetOpenersLeaving(*window, space);
     window->ShowSpace(space);
   }
 }
 
 void bc_window_show_space_empty(bc_id window_id, bc_id space) {
   if (browser_core::Window* window = browser_core::Window::FromId(window_id)) {
+    ForgetOpenersLeaving(*window, space);
     window->ShowSpace(space, false);
   }
 }
@@ -2007,7 +2018,13 @@ static bc_id OpenTyped(bc_id window_id, const char* url, bool when_shown, const 
   }
   const bc_id tab = browser_core::Tab::IdOf(contents);
   if (browser_core::Space* space = browser_core::Space::FromId(window->space())) {
-    space->Add(tab, /*opener=*/0, /*foreground=*/false);
+    // One to show now opens over the tab shown, which closing it shows again (#3813). One opened
+    // behind to load once shown, as ⌘↩'s, is shown later by the user's own switch.
+    if (when_shown) {
+      space->Add(tab, /*opener=*/0, /*foreground=*/false);
+    } else {
+      space->AddOpenedOver(tab, window->selected());
+    }
   }
   return tab;
 }
