@@ -10,13 +10,11 @@ Ardia's Dia spec and parity list, merged with captures of Arc (60 fps recordings
 
 ## Phase 1: architecture spike
 
-GPUI and a prebuilt Chromium in one Mac process, to settle the run loop, the native page view, overlays over the page, focus, keyboard and IME. A no-go meant Chromium Views.
-
 **Met, go:** `spikes/gpui-cef/` and `spikes/gpui-ardia/` at 91ddfe6 (decision 4).
 
 ## Phase 2: engine
 
-ungoogled-chromium built as Chrome's framework from `engine/series`, with embedding hooks, Manifest V2 kept and the password manager on. Prebuilt engines download, so UI work never waits on a build. CI compiles the core on Linux.
+ungoogled-chromium built as Chrome's framework from `engine/series`, with embedding hooks, Manifest V2 kept and the password manager on. CI compiles the core on Linux.
 
 **Done when** a prebuilt framework downloads and links into the app. **Met:** `engine/fetch.sh`, and Core on Linux (#2010).
 
@@ -56,7 +54,6 @@ Measured on every release against Chrome, Helium and Ardia, following the method
 **Not held.** `./check.sh perf` (#2142) measures only against Chrome, on CI runners, and not on every release (#456).
 
 - Memory at 10 and 20 tabs is 12–62 % over Chrome's (#2138).
-- A launch's page waits 2 s for uBlock Origin (#2139).
 - A tab switch takes 15–20 ms.
 
 | Metric | Target |

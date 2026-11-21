@@ -78,7 +78,11 @@ step=0
 ms() { perl -MTime::HiRes=time -e 'printf "%d\n", time * 1000'; }
 scratch=$(mktemp -d)
 engine_switch=
-case $engine in ublock | off) ;; *) engine_switch=--ad-block-engine=$engine ;; esac
+# The browser's own is the build's default (#2111), so uBlock Origin's runs, off's too, name it.
+case $engine in
+off) engine_switch=--ad-block-engine=ublock ;;
+*) engine_switch=--ad-block-engine=$engine ;;
+esac
 # Both engines block with the same copy of each list, or a list's authors' edits between the two
 # runs read as one engine's miss: foxnews let rockspreading.com through on the Mac, which only that
 # day's EasyPrivacy named (#2111). The baseline's run downloads each list it starts with once, into
@@ -160,7 +164,6 @@ for list in $(sed 1d "$lists/snapshot.txt"); do
   # Copied now, so younger than any list's updateAfter: the core's update finds none due.
   cp "$lists/$list.txt" "$dir/profile/Ad Blocking/Lists/"
 done
-# Its own switch: a set engine_switch is what says this run asked for an engine of the browser's.
 lists_switch="--ad-block-lists=${site}parity-lists/assets.json"
 # A site's ask to show notifications or the like would hold the keyboard from the next ⌘L, so
 # Chrome answers each with no; without uBlock Origin's lists, sites' scripts ask (nypost.com).
@@ -202,10 +205,11 @@ while [ "$engine" != off ] && ! grep -q "^browser: title $tab ad script blocked"
     sleep 0.1
   done
 done
-# A build without the engine --ad-block-engine names (#2116) blocks with uBlock Origin, so the run
-# would compare uBlock Origin with itself, where live sites alone make it look worse (#2284).
+# A build without the browser's own engine (#2116) blocks with uBlock Origin, so the run would
+# compare uBlock Origin with itself, where live sites alone make it look worse (#2284). uBlock
+# Origin's and off's runs name ublock, as the browser's own is the default, and load no engine.
 engine_log='^browser: ad block engine \(loaded\|compiled\) in '
-if [ -n "$engine_switch" ] && ! grep -q "$engine_log" "$log"; then
+if [ "$engine" != ublock ] && [ "$engine" != off ] && ! grep -q "$engine_log" "$log"; then
   exec 3>&- 5>&-
   quit
   rm -rf "$scratch"

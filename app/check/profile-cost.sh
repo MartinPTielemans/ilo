@@ -2,23 +2,22 @@
 # Only when named, as it takes 12 minutes.
 # What each profile costs at launch (#2138, #2500), for 1, 2 and 4 profiles, each with a Space, the
 # last session's tab in the first profile's Space and a Today tab in the second's. Two launches
-# each, measured 30 s and 60 s after launch, with the page restored (uBlock Origin's process is
-# still settling at 30 s): the profiles whose files the browser's processes hold open, the browser
-# process's memory and the whole tree's, the processes by kind, launch to the window on screen, and
-# when each profile the window doesn't show arrived. In the last, the second profile's Space is
-# shown once (⌃2), and 30 s on it's measured again, then the first Space is shown again (⌃1) so the
-# next launch restores it. Then a launch traced with Chromium's browser and startup categories says
-# each profile's loading spans. Results in profile-cost/results.txt.
+# each, measured 30 s and 60 s after launch, with the page restored: the profiles whose files the
+# browser's processes hold open, the browser process's memory and the whole tree's, the processes by
+# kind, launch to the window on screen, and when each profile the window doesn't show arrived. In
+# the last, the second profile's Space is shown once (⌃2), and 30 s on it's measured again, then the
+# first Space is shown again (⌃1) so the next launch restores it. Then a launch traced with
+# Chromium's browser and startup categories says each profile's loading spans. Results in
+# profile-cost/results.txt.
 #
 # What it checks, with the core of #2500: the window comes on screen before the profiles of the
-# Spaces it doesn't show have loaded, and each of them arrives after. An extension still starts in
-# each profile, its Space never shown, as each profile's uBlock Origin does. ⌃2 sent the moment the
-# window is on screen shows the second profile's Space, while its profile may still be loading, and
-# its tab's page paints once it's in; what that first switch costs is in the results. A quit leaves
-# Chrome no profile to load before the window, and a profile Chrome lists anyway, as a crash leaves
-# it, still arrives once (#3349). With 4
-# profiles, a quit the moment the window is on screen, during the late loads, ends clean. Linux's
-# numbers only, so it runs only when named.
+# Spaces it doesn't show have loaded, and each of them arrives after. No profile starts an
+# extension's process, as the browser's own ad blocker is in the browser (#2111). ⌃2 sent the moment
+# the window is on screen shows the second profile's Space, while its profile may still be loading,
+# and its tab's page paints once it's in; what that first switch costs is in the results. A quit
+# leaves Chrome no profile to load before the window, and a profile Chrome lists anyway, as a crash
+# leaves it, still arrives once (#3349). With 4 profiles, a quit the moment the window is on screen,
+# during the late loads, ends clean. Linux's numbers only, so it runs only when named.
 
 if [ "$(uname)" != Linux ]; then
   echo "skip: profile-cost. The profiles' launch numbers are Linux's."
@@ -182,8 +181,8 @@ for n in 1 2 4; do
     pc_until 60
     pc_measure "$name-60s" "$dir"
     extensions=$(python3 -I check/profile_cost.py count "$pc_dir/$name-60s.json" extension)
-    [ "$extensions" = "$n" ] ||
-      fail "$name: $extensions extension processes at 60 s for $n profiles, not one a profile"
+    [ "$extensions" = 0 ] ||
+      fail "$name: $extensions extension processes at 60 s for $n profiles, where the browser's own ad blocker starts none"
     if [ "$round" = 2 ] && [ "$n" -gt 1 ]; then
       # The second profile's Space, its profile loaded long since.
       pc_space 2

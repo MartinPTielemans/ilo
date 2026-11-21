@@ -143,4 +143,9 @@ Where a page's web platform default differs from Chrome's, it's listed here, eac
 | Default | Chrome's | ilo's | Why | Revisit if |
 |---|---|---|---|---|
 | Screen sharing needs a gesture | A page calls `getDisplayMedia()` whenever it likes, and the picker comes up unasked | Only within a click's or a key's activation, as the spec and the other two engines have it. Otherwise the page's promise is refused with `InvalidStateError`, and ilo shows nothing. An administrator's `ScreenCaptureWithoutGestureAllowedForOrigins` exempts an origin (the orchestrator's call, listed for the owner, 2026-11-12, #2456) | No page can put a share picker in front of the user they didn't ask for | Chrome turns `GetDisplayMediaRequiresUserActivation` on, or a named site breaks on it |
-| WebRTC addresses | `default` | `default_public_interface_only` | Decision 10 | Decision 10 |
+
+## 13. Ad blocking: the browser's own engine
+
+The browser blocks with Brave's adblock-rust, in the app, on uBlock Origin's lists (owner, 2026-11-10: "i want to go native", #2111). uBlock Origin, an extension, held each launch's first page, ran out of memory on Windows (#2069) and needs Manifest V2.
+
+Revisit if adblock-rust stops being maintained.
