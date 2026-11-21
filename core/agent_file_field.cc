@@ -140,16 +140,22 @@ bool AgentFileField::Choose(bc_id id, bc_id window) {
     return false;
   }
   AgentFileField& field = *found->second;
-  field.asked_ = true;
   // A field that left before the press, as its tab did, gets no dialog.
   if (!field.document_.AsRenderFrameHostIfValid() || !IsAgents(field.tab_, field.agent_) ||
       IsHeld(field.tab_)) {
+    field.asked_ = true;
     LOG(ERROR) << "browser: file field " << id << " left before the dialog";
     End(id, BC_FILE_FIELD_LEFT, 0);
     return true;
   }
-  field.types_ = TypesOf(field.accepts_);
   field.dialog_ = ui::SelectFileDialog::Create(&field, /*policy=*/nullptr);
+  // Linux has none when neither a toolkit nor the portal answers, which Chrome's pickers allow for.
+  if (!field.dialog_) {
+    LOG(ERROR) << "browser: file field " << id << " has no dialog";
+    return false;
+  }
+  field.asked_ = true;
+  field.types_ = TypesOf(field.accepts_);
   LOG(ERROR) << "browser: file field " << id << " dialog over window " << window;
   // Kept, as the dialog may answer before SelectFile returns, which ends the field.
   scoped_refptr<ui::SelectFileDialog> dialog = field.dialog_;
