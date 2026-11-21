@@ -3685,8 +3685,159 @@ fn page_dialog(
     kind: Option<DialogKind>,
     cx: &mut TestAppContext,
 ) {
-    agents.update(cx, |agents, cx| agents.page_dialog(tab, kind, cx));
+    agents.update(cx, |agents, cx| agents.page_dialog(tab, kind, "", cx));
     cx.run_until_parked();
+}
+
+/// Tab `tab`'s page asks for a sign-in in the browser's own dialog, for a request to `from`, as
+/// the core reports it, and the core ends the call running there as it does for any dialog.
+fn asks_for_sign_in(
+    agents: &Entity<Agents>,
+    browser: &Made,
+    tab: u64,
+    from: &str,
+    cx: &mut TestAppContext,
+) {
+    let message = format!("{from}\nYour connection to this site is not private");
+    let kind = Some(DialogKind::SignIn);
+    agents.update(cx, |agents, cx| agents.page_dialog(tab, kind, &message, cx));
+    let request = browser.pages.borrow().last().unwrap().1;
+    let ended = "The tab's page showed a dialog asking for a user name and password while the \
+                 action ran. Nothing more can be done on the tab while it's up, and no tool \
+                 answers it. close_tab closes the tab, and the dialog with it.";
+    agents.update(cx, |agents, cx| {
+        agents.page_done(request, ended.into(), true, cx)
+    });
+    cx.run_until_parked();
+}
+
+/// A call whose page asks for a sign-in in the browser's own dialog, which no agent may answer,
+/// becomes a handoff to the user, as hand_off makes, naming the host that asks, not the page's
+/// site: the card asks, the tab is held and the log says so, and the call waits. Hand Back
+/// answers it, saying why it waited (#3662).
+#[gpui::test]
+fn a_sign_in_the_browser_asks_for_hands_the_tab_to_the_user(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let opened = call(
+        &agents,
+        "claude-code",
+        "open_tab",
+        json!({ "url": "docs.example" }),
+        cx,
+    );
+    cx.run_until_parked();
+    asks_for_sign_in(&agents, &browser, 30, "http://auth.example:8080", cx);
+    let question = (browser.asked.borrow().clone()).expect("the sign-in didn't ask");
+    let why = "auth.example asks you to sign in. Hand the tab back when you’re done.";
+    assert_eq!((question.handoff, question.why.as_ref()), (Some(30), why));
+    assert!(browser.held.borrow().contains(&30));
+    let status = agents.read_with(cx, |agents, _| agents.status());
+    assert_eq!(status[0].held, [(30, why.into())]);
+    let entries = log(&agents, "claude-code", cx);
+    assert!(
+        entries.contains(&("hand_off".into(), "docs.example".into(), "".into())),
+        "{entries:?}"
+    );
+    assert!(
+        opened.try_recv().is_err(),
+        "the call answered before the tab came back"
+    );
+    let refused = call(&agents, "claude-code", "snapshot", json!({ "tab": 30 }), cx);
+    assert_eq!(refused.recv().unwrap(), ToolResult::error(HELD));
+
+    agents.update(cx, |agents, cx| agents.hand_back(30, cx));
+    let back = opened.recv().unwrap();
+    assert!(!back.error);
+    assert!(
+        back.text.starts_with(SIGNED_IN)
+            && back.text.ends_with(
+                "The user handed tab 30 back. \
+                                                              Take a snapshot to see where it \
+                                                              is now."
+            ),
+        "{}",
+        back.text
+    );
+    assert_eq!(*browser.asked.borrow(), None);
+    assert_eq!(log(&agents, "claude-code", cx)[0].0, "handed back");
+
+    // Handed back with the dialog still up, the agent is told to hand it off.
+    let again = call(&agents, "claude-code", "snapshot", json!({ "tab": 30 }), cx);
+    let again = again.recv().unwrap();
+    assert!(again.error);
+    assert!(
+        again.text.starts_with(
+            "Tab 30 shows a browser sign-in dialog, which only the user can answer. No other \
+             calls work on the tab while it is open: use hand_off to let the user sign in, or \
+             close_tab to close the tab and its dialog."
+        ),
+        "{}",
+        again.text
+    );
+}
+
+/// A tab the agent didn't open, its sign-in up, is closed with discard, which may ask the user.
+#[test]
+fn a_sign_in_on_a_tab_not_opened_says_discard() {
+    assert_eq!(
+        showing_dialog(7, DialogKind::SignIn, false),
+        "Tab 7 shows a browser sign-in dialog, which only the user can answer. No other calls \
+         work on the tab while it is open: use hand_off to let the user sign in, or close_tab \
+         with discard: true to close the tab and its dialog. You did not open this tab, so the \
+         user may be asked first."
+    );
+}
+
+/// A sign-in's handoff not handed back answers in 15 minutes, as any handoff does, and a proxy's
+/// is named as one. Another dialog ending a call answers it at once (#3536).
+#[gpui::test]
+fn a_sign_in_handoff_answers_after_15_minutes(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let snapshot = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+    cx.run_until_parked();
+    asks_for_sign_in(
+        &agents,
+        &browser,
+        20,
+        "The proxy http://proxy.example:3128 requires a username and password",
+        cx,
+    );
+    let question = (browser.asked.borrow().clone()).expect("the sign-in didn't ask");
+    assert_eq!(
+        question.why,
+        "A proxy asks you to sign in. Hand the tab back when you’re done."
+    );
+    cx.executor().advance_clock(HANDOFF_WAIT);
+    let answer = snapshot.recv().unwrap();
+    assert!(answer.error);
+    assert!(
+        answer.text.starts_with(&format!(
+            "{SIGNED_IN} The user hasn't handed tab 20 back in 15 minutes."
+        )),
+        "{}",
+        answer.text
+    );
+    assert!(browser.held.borrow().contains(&20), "the tab left the user");
+
+    let opened = call(
+        &agents,
+        "claude-code",
+        "open_tab",
+        json!({ "url": "docs.example" }),
+        cx,
+    );
+    _ = page_done(&agents, &browser, opened, shop_tree(), cx);
+    let looked = call(&agents, "claude-code", "snapshot", json!({ "tab": 30 }), cx);
+    cx.run_until_parked();
+    agents.update(cx, |agents, cx| {
+        agents.page_dialog(30, Some(DialogKind::Confirm), "", cx)
+    });
+    let request = browser.pages.borrow().last().unwrap().1;
+    agents.update(cx, |agents, cx| {
+        agents.page_done(request, "ended".into(), true, cx)
+    });
+    assert_eq!(looked.recv().unwrap(), ToolResult::error("ended"));
+    assert!(!browser.held.borrow().contains(&30));
 }
 
 /// While its page shows its own dialog, a call on the agent's tab answers at once, naming the

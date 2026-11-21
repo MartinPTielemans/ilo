@@ -2014,6 +2014,14 @@ pub struct Shell {
     /// and id, and where, or none. Untold once it comes to the front, when the dialog shown may
     /// be another window's.
     page_dialog_shown: Option<Option<(u64, u64, (Bounds<Pixels>, f32))>>,
+    /// The page's dialog up over the card, by its tab and id, which a field taking the keyboard
+    /// after it came doesn't take down.
+    page_dialog_up: Option<(u64, u64)>,
+    /// The page's dialog waiting while the user types in a field of ilo's, by its tab and id.
+    page_dialog_waits: Option<(u64, u64)>,
+    /// The host said the page took the keyboard, with GPUI's focus where it was then, until a press
+    /// in the UI gives the UI the keyboard back, as each host does, or the focus moves on.
+    page_keyboard: Option<Option<gpui::WeakFocusHandle>>,
     /// The tab or Space the user asked for and when, until it's shown.
     switching: Option<(Switch, Instant)>,
     /// Where the window's background was pressed, until the pointer moves past DRAG_START and it
@@ -2422,6 +2430,9 @@ impl Shell {
             hang_noted: None,
             page_dialogs: HashMap::new(),
             page_dialog_shown: Some(None),
+            page_dialog_up: None,
+            page_dialog_waits: None,
+            page_keyboard: None,
             picker_pending: None,
             theme_preview: None,
             name_row_drawn: Rc::default(),
@@ -3576,7 +3587,7 @@ impl Shell {
         // them, unless the UI has them, and the next page shown, as a window's first, has them back
         // (#895).
         if tab == 0 && cfg!(any(target_os = "linux", target_os = "windows")) {
-            self.browser.hold_keyboard_for_page(cx);
+            self.hold_keyboard_for_page(cx);
         }
         // The command bar open over the Space before lists this one's tabs and suggestions now, so
         // a pick never goes to the other or its profile (Arc).
@@ -3642,6 +3653,7 @@ impl Shell {
 
     /// The command bar closed with no tab chosen in it: the user left it, or its ask ran a task.
     pub fn command_bar_dismissed(&mut self, cx: &mut Context<Self>) {
+        self.field_let_go(cx);
         self.set_bar_over_card(false, cx);
         self.set_new_tab(false, cx);
         if self.adding_pane.take().is_some() {
@@ -4369,6 +4381,26 @@ impl Shell {
         .size_full()
     }
 
+    /// A press anywhere in the window's own view, which gives the UI the keyboard on every host:
+    /// what the host said of the page taking it no longer holds. The window's, as the rows and
+    /// fields keep their presses from the root.
+    fn ui_press_listener(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let shell = cx.weak_entity();
+        canvas(
+            |_, _, _| {},
+            move |_, _, window, _| {
+                let shell = shell.clone();
+                window.on_mouse_event(move |_: &MouseDownEvent, phase, _, cx| {
+                    if phase == DispatchPhase::Capture {
+                        shell.update(cx, |shell, _| shell.page_keyboard = None).ok();
+                    }
+                });
+            },
+        )
+        .absolute()
+        .size_full()
+    }
+
     /// The pointer leaving the window's own view, for the page's or another window, which ends a
     /// wait at the edge and the sidebar's hover. The window's, not the sidebar's: with the sidebar
     /// hidden no listener of its heard the leave on Linux and Windows, whose pages are windows the
@@ -4558,6 +4590,7 @@ impl Focusable for Shell {
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::text_input::drawing(window);
         self.a11y = window.is_a11y_active();
         self.watch_appearance(window, cx);
         // After the frame, which takes the root's name as it starts and asks for none while it's
@@ -4801,7 +4834,10 @@ impl Render for Shell {
         for line in self.logged_once_laid.drain(..) {
             log!("{line}");
         }
-        self.show_page_dialog(cx);
+        // Once the frame has drawn, which says whether a field of ilo's has the keyboard.
+        cx.defer_in(window, |shell, window, cx| {
+            shell.show_page_dialog(window, cx)
+        });
         self.show_mini_bar(cx);
         self.show_foot_bar(cx);
         let card_left = self.card_left();
@@ -4972,6 +5008,7 @@ impl Render for Shell {
             .children((!WEB).then(|| self.window_background()))
             .children(WEB.then(|| self.web_backdrop()).into_iter().flatten())
             .child(self.leave_listener(cx))
+            .child(self.ui_press_listener(cx))
             // The page views go over the cards, as native views. A task the page area shows takes
             // the card's place, the Space's page pushed out of the window (task_area.rs).
             .when(normal, |shell| {

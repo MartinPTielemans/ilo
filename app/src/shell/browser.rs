@@ -616,7 +616,8 @@ pub trait Browser {
         confirmed: Box<dyn FnOnce(Vec<String>, &mut App)>,
         cx: &mut App,
     ) -> bool;
-    /// Gives the UI the keyboard, from the page if the page has it.
+    /// Gives the UI the keyboard, from the page if the page has it. The shell asks through
+    /// `Shell::take_keyboard`, which also drops its note that the page has the keys.
     fn focus_ui(&self, cx: &mut App);
     /// With no page shown, gives the UI the keyboard until a page shows, which then has it, as the
     /// Mac's window holds the keys for the next page.
@@ -916,6 +917,13 @@ pub trait Browser {
     /// Whether the command bar shows, which stays true through a click outside it until the app
     /// calls `Shell::command_bar_dismissed`, so a click on what opens it can tell it has closed it.
     fn command_bar_open(&self, cx: &App) -> bool;
+    /// Whether the user types in a field of a window over this one: find, the password offer, the
+    /// icon picker, the Boost editor or the folder preview. Find doesn't count once the user has
+    /// gone back to the page with it still showing.
+    fn field_window_typing(&self, cx: &mut App) -> bool;
+    /// Whether this window's page has the keyboard rather than its UI, where the core keeps that
+    /// itself (Linux), or None where the shell follows the host's word (`Shell::keyboard_left`).
+    fn page_has_keyboard(&self, cx: &App) -> Option<bool>;
     /// The window shows another Space: the command bar, if it shows over this window, lists
     /// `tabs` from it, or `open_tabs` for Search Tabs, and its profile's suggestions (decision 5).
     /// Returns whether its pick opens a new tab, for New Tab to keep its plate.
