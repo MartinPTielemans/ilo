@@ -1372,11 +1372,12 @@ void ReleaseKeys(NSWindow* from) {
 // The key events let through, the newest kPassedKeys of them. Chromium sends a key its page didn't
 // keep through the app again once the page's handler returns, which can be after an alert the
 // handler asked was answered and a bar opened (#3791): that's a key already typed, so it's neither
-// held nor given to the window with the keyboard now, where it would be typed a second time.
+// held nor given to the window with the keyboard now, where it would be typed a second time. An
+// event is known by its time and type alone, which no two of a keyboard's share, so nothing of
+// what was typed is kept.
 struct PassedKey {
   NSTimeInterval timestamp;
   NSEventType type;
-  unsigned short key_code;
 };
 constexpr size_t kPassedKeys = 256;
 PassedKey g_passed_keys[kPassedKeys];
@@ -1385,8 +1386,7 @@ size_t g_passed_count = 0;
 bool KeyPassed(NSEvent* event) {
   for (size_t i = 0; i < std::min(g_passed_count, kPassedKeys); i++) {
     const PassedKey& passed = g_passed_keys[i];
-    if (passed.timestamp == event.timestamp && passed.type == event.type &&
-        passed.key_code == event.keyCode) {
+    if (passed.timestamp == event.timestamp && passed.type == event.type) {
       return true;
     }
   }
@@ -1394,7 +1394,7 @@ bool KeyPassed(NSEvent* event) {
 }
 
 void PassKey(NSEvent* event) {
-  g_passed_keys[g_passed_count++ % kPassedKeys] = {event.timestamp, event.type, event.keyCode};
+  g_passed_keys[g_passed_count++ % kPassedKeys] = {event.timestamp, event.type};
 }
 
 // From launch, so the first key a page doesn't keep is known when it comes back.
