@@ -3813,8 +3813,9 @@ send state
 quit
 # An agent's tab has a page size of its own, whatever the user's window shows (#3788): on a new
 # profile's Welcome, with no page for Chromium's tab strip to size it by, it's still pictured, and
-# with a page in a smaller window it's pictured at the same size, laid out alike. The page's
-# buttons follow its width, so its outline says which layout it has.
+# with a page in a smaller window it's pictured at the same size, laid out alike. A pop-up its
+# page opens has its size too. The page's buttons follow its width, so its outline says which
+# layout it has.
 own_size_said=
 if engine_has ../core/window.cc ../core/agent_page.cc; then
   printf '%s' '<!doctype html><title>Widths</title><style>
@@ -3823,7 +3824,9 @@ if engine_has ../core/window.cc ../core/agent_page.cc; then
 @media (min-width: 500px) and (max-width: 849.98px) { #middle { display: block } }
 @media (min-width: 850px) { #wide { display: block } }
 </style><button id=narrow>Narrow layout</button><button id=middle>Middle layout</button>
-<button id=wide>Wide layout</button>' > "$out/site/widths.html"
+<button id=wide>Wide layout</button>
+<button onclick="open(&quot;widths.html?popup&quot;, &quot;&quot;, &quot;popup&quot;)">Pop up</button>' \
+    > "$out/site/widths.html"
   printf '%s' '<!doctype html><title>yours</title><script>
 const middle = matchMedia("(min-width: 500px) and (max-width: 849.98px)");
 const say = () => document.title = "yours " + (middle.matches ? "middle" : "other");
@@ -3832,7 +3835,12 @@ say(); middle.onchange = say;
   rm -rf "$profile_dir"
   mkdir -p "$profile_dir/Default"
   printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}]}' "$token" > "$agents_file"
-  # The agent's tab of the widths page, pictured, as "<size> <layout> <answer>".
+  # The size the agent's last picture of |tab| had, as WxH.
+  pictured_at() {
+    grep "browser: agent picture of tab $1 at " "$log" | tail -1 | sed 's/.* at //'
+  }
+  # The agent's tab of the widths page, pictured, then the pop-up it opens, as
+  # "<size> <layout> <pop-up's size> <answer>".
   own_size() {
     mcp '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"check","version":"1"}}}' \
       > /dev/null
@@ -3841,9 +3849,18 @@ say(); middle.onchange = say;
     sized_tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
     [ -n "$sized_tab" ] || fail "open_tab of the widths page answered: $opened"
     picture=$(call screenshot "{\"tab\":$sized_tab}")
-    size=$(grep "browser: agent picture of tab $sized_tab at " "$log" | tail -1 | sed 's/.* at //')
+    size=$(pictured_at "$sized_tab")
     layout=$(call snapshot "{\"tab\":$sized_tab}" | grep -o '"[A-Z][a-z]* layout"' | tr -d '"' | head -1)
-    echo "${size:-none} ${layout:-none} $picture"
+    ref=$(printf '%s\n' "$opened" | sed -n 's/.*- button "Pop up" \[\(e[0-9]*\)\].*/\1/p' | head -1)
+    behind=$(grep -c "^browser: tab [0-9]* opened by $sized_tab in the background\$" "$log" || true)
+    call click "{\"tab\":$sized_tab,\"ref\":\"$ref\"}" > /dev/null
+    await_more "^browser: tab [0-9]* opened by $sized_tab in the background\$" "$behind" ||
+      fail "the widths page's Pop up, which the agent clicked, opened no tab behind"
+    popup=$(sed -n "s/^browser: tab \([0-9]*\) opened by $sized_tab in the background\$/\1/p" "$log" |
+      tail -1)
+    call screenshot "{\"tab\":$popup}" > /dev/null
+    popup_size=$(pictured_at "$popup")
+    echo "${size:-no-size} ${layout:-no-layout} ${popup_size:-no-size} $picture"
   }
   log="$out/mcp-own-size.log"
   step=0
@@ -3880,11 +3897,26 @@ say(); middle.onchange = say;
     *" image/jpeg "[1-9]*) ;;
     *) fail "the agent's tab opened while the user's window showed the Welcome wasn't pictured: $welcome" ;;
   esac
+  # Each picture's size, from the core's line, and each layout, from the outline, was read.
+  for said in "$welcome" "$paged"; do
+    for field in 1 3; do
+      echo "$said" | cut -d' ' -f$field | grep -q '^[1-9][0-9]*x[1-9][0-9]*$' ||
+        fail "no size of the agent's page above 0 by 0 was read from its pictures (line \"browser: agent picture of tab <id> at WxH\"): $(cat "$out/mcp-own-size.txt")"
+    done
+    case "$(echo "$said" | cut -d' ' -f2)" in
+      Narrow | Middle | Wide) ;;
+      *) fail "the agent's widths page gave no layout in its outline: $(cat "$out/mcp-own-size.txt")" ;;
+    esac
+  done
+  for said in "$welcome" "$paged"; do
+    [ "$(echo "$said" | cut -d' ' -f1)" = "$(echo "$said" | cut -d' ' -f3)" ] ||
+      fail "the pop-up the agent's page opened took another size than its opener's: $(cat "$out/mcp-own-size.txt")"
+  done
   [ "${welcome%% *}" = "${paged%% *}" ] ||
     fail "the agent's page took another size with a page in the user's smaller window: $(cat "$out/mcp-own-size.txt")"
   [ "$(echo "$welcome" | cut -d' ' -f2)" = "$(echo "$paged" | cut -d' ' -f2)" ] ||
     fail "the agent's page was laid out otherwise with a page in the user's smaller window: $(cat "$out/mcp-own-size.txt")"
-  own_size_said="ok: an agent's tab has a page size of its own, ${welcome%% *}, pictured on a new profile's Welcome and laid out alike with a page in the user's smaller window"
+  own_size_said="ok: an agent's tab has a page size of its own, ${welcome%% *}, pictured on a new profile's Welcome and laid out alike with a page in the user's smaller window, and a pop-up its page opens has it too"
 else
   own_size_said="skip: an agent's tab's own page size (#3788): not run on an engine without it"
 fi

@@ -536,7 +536,6 @@ void MakeHeldBy(Space& space, NavigateParams& params) {
   }
   create.opened_by_another_window = params.opened_by_another_window;
   create.initially_hidden = params.disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB;
-  create.initial_size = kAgentPageSize;
 #if defined(USE_AURA)
   // In the window's compositor, which draws its page out of sight while an agent acts on it, as
   // Chrome's tabs are. A page in none draws no frame, and its input waits for one.
@@ -1065,6 +1064,16 @@ void Window::AdjustNavigate(NavigateParams& params) {
     // Windows, showing a window already on screen gives the window itself the user's keyboard.
     params.window_action = NavigateParams::WindowAction::kNoAction;
     window->agent_opener_ = source_id;
+    // A pop-up content made doesn't pass MakeHeldBy, and Navigate's tab strip sizes it as it does
+    // any tab added behind, so it takes the agent's size the task after (#3788).
+    if (params.contents_to_insert) {
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, base::BindOnce(
+                         [](base::WeakPtr<content::WebContents> contents) {
+                           SizeForAgent(contents.get());
+                         },
+                         params.contents_to_insert->GetWeakPtr()));
+    }
   }
   // ⌥⌘-click on a link opens it in a Little ilo window, as Arc's does in Little Arc (the owner's
   // call over Chrome's split, 2026-10-29). The page asks for a split view, as for ⌥-click, so the
