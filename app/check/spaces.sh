@@ -498,6 +498,47 @@ expect '^browser: command select-space via mouse$' "the back side button over th
 expect "^browser: space $first in " "the back side button over the sidebar didn't show the first Space"
 expect_tabs "$a" "$a" "after the back side button showed the first Space"
 expect "^browser: settled space $first\$" "the first Space's page didn't settle after the side buttons"
+# The same over the sidebar hidden and out over the page, whose panel is a window of its own, 5 in
+# from the browser window's top left (#3811), and a wheel's tick there, which pages with the swipe.
+# Neither walks the history of the page under it.
+send key s cmd
+expect '^browser: sidebar hidden$' "⌘S didn't hide the sidebar for the side buttons out over the page"
+send move $page_point
+send move 3 300
+send move 3 306
+expect '^browser: reveal shown$' "the pointer at the window's edge didn't bring the sidebar out for the side buttons"
+expect '^browser: reveal window shown$' "the sidebar out didn't come on screen for the side buttons"
+set -- $swipe_point
+reveal_point="$(($1 + 5)) $(($2 + 5))"
+send move $reveal_point
+# $1 is how the driver presses, $2 its source, $3 the Space it shows and $4 that Space's tab.
+reveal_to() {
+  send $1
+  expect "^browser: command select-space via $2\$" "a $1 on the sidebar out over the page didn't page"
+  expect "^browser: space $3 in " "a $1 on the sidebar out over the page didn't show Space $3"
+  expect_tabs "$4" "$4" "after a $1 on the sidebar out showed Space $3"
+}
+presses=$((step + 1))
+reveal_to "sideclick $reveal_point forward" mouse "$second" "$b"
+# The Mac's driver posts a wheel, and fingers, to the browser window, not to the window under the
+# point as it does a click, so there the tick would reach the page beside the panel. The UI's test
+# turns a wheel on the panel (header/tests.rs).
+if [ "$(uname)" = Darwin ]; then
+  echo "skip: a wheel's tick on the sidebar out over the page, on the Mac, whose driver posts" \
+    "wheels to the browser window alone (#3818)."
+  reveal_to "sideclick $reveal_point back" mouse "$first" "$a"
+else
+  reveal_to "wheel $reveal_point 1" wheel "$first" "$a"
+fi
+reveal_to "sideclick $reveal_point forward" mouse "$second" "$b"
+reveal_to "sideclick $reveal_point back" mouse "$first" "$a"
+expect "^browser: settled space $first\$" "the first Space's page didn't settle after the side buttons out over the page"
+none_since '^browser: loaded ' $presses || fail "a side button on the sidebar out over the page loaded a page"
+none_since '^browser: reveal hidden$' $presses || fail "the side buttons sent the sidebar out over the page away"
+send move $page_point
+expect '^browser: reveal hidden$' "the pointer past the sidebar out didn't send it away after its side buttons"
+send key s cmd
+expect '^browser: sidebar shown$' "⌘S didn't bring the sidebar back after the side buttons out over the page"
 # Past the first Space is the Library. Held partway it shows beside the page, and let go short of
 # halfway it goes back. A flick brings it out and one the other way puts it back, and so do a
 # wheel's ticks.
