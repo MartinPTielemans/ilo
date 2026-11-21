@@ -1,0 +1,144 @@
+# The core's Windows compile, checked in minutes on GitHub's hosted Windows rather than in the next
+# Windows engine build, where an error costs the build (#3105), as Core Mac syntax does for the Mac.
+# Each finished Windows engine build packs what a compile of //browser_core reads besides the core
+# and Microsoft's compiler and SDK: the tree's and the build's headers, libc++, and the core's
+# compile variables (engine/core_syntax.py). This takes the newest pack of pins.ini's Chromium
+# major, Chromium's Windows clang at the revision that tree names, and runs clang-cl /Zs, with the
+# build's own flags, on each core file the engine compiled, as the branch has it. A .cc the branch
+# adds in platform/win/ or outside platform/ is checked with the core's flags. The pack's headers
+# are first brought from the engine patches its engine was built with to the branch's, as on the
+# Mac.
+# A limit: Windows' own headers are the runner's, from its Visual Studio. The engine is built with
+# the SDK build/vs_toolchain.py names (10.0.28000.0 for Chromium 157), and the runner has
+# 10.0.26100.0 at most, so an error only one of the two SDKs gives is missed here, or reported where
+# the engine builds fine. Nothing of Microsoft's is downloaded or installed for it, and none is in
+# the pack.
+# Not checked: a file the branch adds in another OS's platform/, a changed .mojom or .proto (the
+# pack has the engine's generated headers), a BUILD.gn change to a target's flags, Rust, and the
+# link.
+name: Core Windows syntax
+
+on:
+  push:
+    # Main and the merge queue's branches were checked on the branch they came from.
+    branches-ignore: [main, 'gh-readonly-queue/**']
+    paths:
+      - core/**
+      - engine/core_syntax.py
+      - engine/series
+      - engine/patches/**
+      - .github/workflows/core-windows-syntax.yml
+  # A push runs it only for commits new to the repo; this runs it on any ref.
+  workflow_dispatch:
+
+concurrency:
+  group: core-windows-syntax-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  syntax:
+    runs-on: windows-2025
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      # The pack, from an Engine on Windows (cross-compiled) run.
+      actions: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # The engine's patches apply to the pack's headers as they were written, with Unix line ends.
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            core
+            engine/core_syntax.py
+            engine/pins.ini
+            engine/series
+            engine/patches
+
+      # The newest unexpired pack of pins.ini's major, from the newest Windows engine run that has
+      # one. None yet means no Windows engine has been built since the packs began: nothing to
+      # check.
+      - id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(git config -f engine/pins.ini chromium.version)
+          major=${version%%.*}
+          for id in $(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/engine-windows-cross.yml/runs?per_page=30" --jq '.workflow_runs[].id'); do
+            name=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/artifacts?per_page=100" --jq \
+              ".artifacts[] | select((.expired | not) and (.name | startswith(\"engine-windows-core-$major.\"))) | .name" | tail -1)
+            if [ -n "$name" ]; then
+              sha=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id" --jq .head_sha)
+              printf 'run=%s\nname=%s\nsha=%s\n' "$id" "$name" "$sha" >> "$GITHUB_OUTPUT"
+              echo "Checking against run $id's $name, built at $sha." | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+          done
+          echo "::notice::No Windows engine run has packed the core's headers for Chromium $major yet, so nothing is checked."
+      - if: steps.find.outputs.run != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.find.outputs.name }}
+          path: ${{ runner.temp }}/pack
+          run-id: ${{ steps.find.outputs.run }}
+          github-token: ${{ github.token }}
+
+      # The engine patches the pack's engine was built with: its run's commit's series and patches.
+      - if: steps.find.outputs.run != ''
+        name: The engine's patches
+        env:
+          SHA: ${{ steps.find.outputs.sha }}
+        run: |
+          git fetch -q --depth=1 --no-tags origin "$SHA"
+          mkdir -p "$RUNNER_TEMP/built"
+          git archive "$SHA" engine/series engine/patches | tar -xf - -C "$RUNNER_TEMP/built"
+
+      # Chromium's own package of clang for Windows, at the revision the pack's tree builds with.
+      - if: steps.find.outputs.run != ''
+        id: clang
+        run: |
+          zstd -dc "$RUNNER_TEMP/pack/core-syntax.tar.zst" | tar -xf - -C "$RUNNER_TEMP/pack"
+          update=$RUNNER_TEMP/pack/src/tools/clang/scripts/update.py
+          rev=$(sed -n "s/^CLANG_REVISION = '\(.*\)'.*/\1/p" "$update")
+          sub=$(sed -n 's/^CLANG_SUB_REVISION = \([0-9]*\).*/\1/p' "$update")
+          [ -n "$rev" ] && [ -n "$sub" ] || { echo "No clang revision in the pack's update.py."; exit 1; }
+          echo "package=clang-$rev-$sub" >> "$GITHUB_OUTPUT"
+      - if: steps.find.outputs.run != ''
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/clang
+          key: ${{ steps.clang.outputs.package }}-win
+      - if: steps.find.outputs.run != '' && steps.cache.outputs.cache-hit != 'true'
+        env:
+          PACKAGE: ${{ steps.clang.outputs.package }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/clang"
+          curl -fsSL --retry 3 "https://commondatastorage.googleapis.com/chromium-browser-clang/Win/$PACKAGE.tar.xz" |
+            tar -xJf - -C "$RUNNER_TEMP/clang"
+
+      # INCLUDE is where clang-cl finds Windows' and the C runtime's headers, which the build gives
+      # it from the engine machine's toolchain instead.
+      - if: steps.find.outputs.run != ''
+        name: Visual Studio's environment
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          cmd /c "`"$vs\VC\Auxiliary\Build\vcvars64.bat`" >nul && set" |
+            Where-Object { $_ -match '^(INCLUDE|WindowsSDKVersion)=' } |
+            Add-Content -Path $env:GITHUB_ENV -Encoding utf8
+
+      # Each error also shows on the commit as an annotation at its line.
+      - if: steps.find.outputs.run != ''
+        name: Check
+        run: |
+          mkdir -p "$RUNNER_TEMP/pack/src/third_party/llvm-build"
+          cp -R "$RUNNER_TEMP/clang" "$RUNNER_TEMP/pack/src/third_party/llvm-build/Release+Asserts"
+          python -X utf8 -I engine/core_syntax.py check "$RUNNER_TEMP/pack" "$GITHUB_WORKSPACE" "$RUNNER_TEMP/built/engine"
