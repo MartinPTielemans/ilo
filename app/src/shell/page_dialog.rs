@@ -1,6 +1,7 @@
 //! A page's own dialogs, such as its alert(), which the core reports for each tab in place of
-//! Chrome's: the tab shown asks with the browser's dialog over its card, and the others' wait
-//! until their tab shows again (docs/ux-spec.md › Page dialogs).
+//! Chrome's: the tab shown asks with the browser's dialog over its card, or its pane in a split
+//! view, where the pane the user isn't in keeps its page's at rest, and the others' wait until
+//! their tab shows again (docs/ux-spec.md › Page dialogs).
 
 use std::fmt;
 
@@ -62,8 +63,9 @@ impl fmt::Debug for PageReply {
     }
 }
 
-/// The dialog shown over the card, by its tab and id, and where.
-pub type ShownPageDialog = (u64, PageDialog, (Bounds<Pixels>, f32));
+/// The dialog shown over the card or a pane, by its tab and id, where, and whether it rests, over
+/// a split view's pane the user isn't in, without the keyboard (#3461).
+pub type ShownPageDialog = (u64, PageDialog, (Bounds<Pixels>, f32), bool);
 
 impl Shell {
     /// The core reports the dialog `tab`'s page asks, or that it asks none.
@@ -112,24 +114,37 @@ impl Shell {
     }
 
     /// Shows the dialog of the tab shown over its card, once the window has drawn, or takes back
-    /// the one shown once its tab no longer shows or its page no longer asks. A tab showing its
-    /// page in Safari's engine keeps Chromium's dialog back, as its page isn't the one that asks,
-    /// until the tab is back in Chromium. A dialog not yet up waits while the user types in a
-    /// field of ilo's, the command bar's and find's among them, and goes up on the first draw
-    /// after the field lets go; one up stays. A Leave doesn't wait: it answers the user's own
-    /// close, quit or navigation.
+    /// the one shown once its tab no longer shows or its page no longer asks. In a split view the
+    /// focused pane's page asks first, and while it asks nothing another pane's rests over its
+    /// pane, so the user sees what that page waits on (#3461). A tab showing its page in Safari's
+    /// engine keeps Chromium's dialog back, as its page isn't the one that asks, until the tab is
+    /// back in Chromium. A dialog not yet up waits while the user types in a field of ilo's, the
+    /// command bar's and find's among them, and goes up on the first draw after the field lets
+    /// go; one up stays. A Leave doesn't wait: it answers the user's own close, quit or
+    /// navigation.
     pub(super) fn show_page_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // The user's page is out of the window while a task has the page area, and its dialog
         // waits for it. A task's page watched there shows its sign-in, which only the user may
         // answer (#3662); its other dialogs pause the agent until it closes the tab (#3536).
-        let shown = match &self.task_area {
-            None => Some(self.selected),
-            Some(_) => self.watched_task_page().map(|(_, tab)| tab),
+        let shown: Vec<u64> = match &self.task_area {
+            None => {
+                let panes = self.panes(self.selected);
+                std::iter::once(self.selected)
+                    .chain(panes.into_iter().filter(|&tab| tab != self.selected))
+                    .collect()
+            }
+            Some(_) => self
+                .watched_task_page()
+                .map(|(_, tab)| tab)
+                .into_iter()
+                .collect(),
         };
-        let asked = shown.and_then(|tab| Some((tab, self.page_dialogs.get(&tab)?)));
+        let asked = shown.into_iter().find_map(|tab| {
+            let dialog = self.page_dialogs.get(&tab)?;
+            (!self.page(tab).system_engine).then_some((tab, dialog))
+        });
         let asked = asked
             .filter(|(_, dialog)| self.task_area.is_none() || dialog.kind == DialogKind::SignIn);
-        let asked = asked.filter(|(tab, _)| !self.page(*tab).system_engine);
         // A Little ilo window's own page first, then what a tab it sent behind asks to open.
         let asked = asked.or_else(|| self.little_sent_asks());
         let asked = asked.map(|(tab, dialog)| (tab, dialog.clone()));
@@ -150,18 +165,53 @@ impl Shell {
         self.page_dialog_waits = waiting;
         let asked = asked.filter(|_| !waits);
         let wanted = match (asked, self.page_laid) {
-            (Some((tab, dialog)), Some(over)) => Some((tab, dialog, over)),
+            (Some((tab, dialog)), Some(laid)) => Some((
+                tab,
+                dialog,
+                self.pane_laid(tab, laid),
+                self.dialog_rests(tab),
+            )),
             _ => None,
         };
-        self.page_dialog_up = wanted.as_ref().map(|(tab, dialog, _)| (*tab, dialog.id));
+        self.page_dialog_up = wanted.as_ref().map(|(tab, dialog, _, _)| (*tab, dialog.id));
         let key = wanted
             .as_ref()
-            .map(|(tab, dialog, over)| (*tab, dialog.id, *over));
+            .map(|(tab, dialog, over, rests)| (*tab, dialog.id, *over, *rests));
         if self.page_dialog_shown == Some(key) {
             return;
         }
         self.page_dialog_shown = Some(key);
         self.browser.show_page_dialog(wanted, cx);
+    }
+
+    /// Whether `tab`'s dialog rests: it's in a split view's pane the user isn't in, so the page
+    /// beside keeps the keyboard and the window's shortcuts.
+    fn dialog_rests(&self, tab: u64) -> bool {
+        tab != self.selected && self.panes(self.selected).contains(&tab)
+    }
+
+    /// Focuses `tab`'s pane, for a click on its dialog at rest, which then goes live with it.
+    pub fn focus_dialog_pane(&mut self, tab: u64, cx: &mut Context<Self>) {
+        if self.dialog_rests(tab) {
+            self.select(tab, cx);
+        }
+    }
+
+    /// Where `tab`'s page is in the page area `laid`: its pane in a split view, as Chrome shows a
+    /// tab's dialog over its own page, so the page beside stays usable (#3231), else all of it.
+    fn pane_laid(&self, tab: u64, laid: (Bounds<Pixels>, f32)) -> (Bounds<Pixels>, f32) {
+        let panes = self.panes(self.selected);
+        let Some(index) = panes.iter().position(|&pane| pane == tab) else {
+            return laid;
+        };
+        if panes.len() < 2 {
+            return laid;
+        }
+        let (stacked, shares) = (self.stacked(self.selected), self.shares(self.selected));
+        (
+            super::panes::pane_frames(laid.0, panes.len(), stacked, &shares)[index],
+            laid.1,
+        )
     }
 
     /// A field of ilo's over the window let the keyboard go, which the window's own focus doesn't
@@ -191,14 +241,6 @@ impl Shell {
     pub(super) fn hold_keyboard_for_page(&mut self, cx: &mut App) {
         self.page_keyboard = None;
         self.browser.hold_keyboard_for_page(cx);
-    }
-
-    /// The app is the active one again. Windows' word that the page took the keyboard also comes
-    /// as the app goes to the background, and its keys come back to the UI with it unsaid, so the
-    /// word no longer holds: a field still drawn with the focus counts until the next press in the
-    /// page, which the host tells again.
-    pub fn app_came_back(&mut self) {
-        self.page_keyboard = None;
     }
 
     /// Whether the page has the keyboard: as the core says where it keeps that, else since the

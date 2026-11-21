@@ -1484,6 +1484,11 @@ Floating g_hud;
 double g_hud_right = 0, g_hud_top = 0, g_hud_margin = 0;
 Floating g_drop_targets;
 Floating g_dialog;
+// The browser window that keeps the keyboard for the page beside a page's dialog in a split view,
+// as the UI shows the dialog at rest, until it shows it live or it hides (#3231, #3461). A press
+// on the page beside needs nothing of its own: the core's notice that its pane has the focus
+// brings the dialog to rest.
+HWND g_dialog_lent = nullptr;
 Floating g_site_controls;
 
 // The link preview (platform/host.h), as Linux's (link_preview_window.rs): its window, the dim and
@@ -2079,6 +2084,10 @@ void Disown(HWND root) {
       } else {
         Hide(*floating);
       }
+      // The dialog goes with its window, which the UI may never tell the host as it closes.
+      if (floating == &g_dialog) {
+        g_dialog_lent = nullptr;
+      }
       SetWindowLongPtrW(hwnd, GWLP_HWNDPARENT, 0);
     }
   }
@@ -2197,7 +2206,7 @@ HWND KeepsKeyboard(HWND root) {
   HWND keeps = nullptr;
   for (auto& [hwnd, floating] : FloatingByHwnd()) {
     if (Shows(floating->life) && IsWindowVisible(hwnd) && GetWindow(hwnd, GW_OWNER) == root &&
-        (floating == &g_dialog || (floating->keyboard && !keeps))) {
+        (floating == &g_dialog ? root != g_dialog_lent : floating->keyboard && !keeps)) {
       keeps = hwnd;
     }
   }
@@ -2552,8 +2561,9 @@ bool host_app_icon(const char* app, size_t size, uint8_t* rgba) {
         SUCCEEDED(item) ? factory->GetImage({static_cast<LONG>(pixels), static_cast<LONG>(pixels)},
                                             SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK, &bitmap)
                         : item;
-    if (FAILED(image) || !bitmap) {
-      // check.sh shows this line when a row it gave an icon has none.
+    // check.sh shows this line when a row it gave an icon has none. |app| can be a path, which
+    // names the user's folders.
+    if ((FAILED(image) || !bitmap) && Checked()) {
       fprintf(stderr, "browser: import icon for %s failed: 0x%08lx\n", app,
               static_cast<unsigned long>(image));
     }
@@ -4227,15 +4237,38 @@ void host_add_dialog(void* dialog_view) {
 
 // The browser window whose taskbar button flashes for the dialog shown over it in the background.
 static HWND g_dialog_asking = nullptr;
+// The dialog rests over a split view's pane the user isn't in, without the keyboard (#3461).
+static bool g_dialog_rests = false;
 
-void host_show_dialog(void* ui_view, double x, double y, double width, double height) {
+void host_show_dialog(void* ui_view, double x, double y, double width, double height,
+                      bool keyboard) {
+  HWND root = Root(ui_view);
+  const bool shown = g_dialog.hwnd && IsWindowVisible(g_dialog.hwnd);
+  // At rest the browser window keeps the keyboard for the page beside, through a resize too, and
+  // live again, its pane focused by a click on the dialog or a key, the dialog takes it back.
+  const bool back = keyboard && shown && g_dialog_rests;
+  g_dialog_rests = !keyboard;
+  if (!keyboard) {
+    g_dialog_lent = root;
+  } else if (!shown || back) {
+    g_dialog_lent = nullptr;
+  }
   // Without a rect, it covers all of the window.
   if (width <= 0) {
     x = y = 0;
-    ContentSize(Root(ui_view), &width, &height);
+    ContentSize(root, &width, &height);
   }
-  Show(g_dialog, ui_view, x, y, width, height, true);
-  HWND root = Root(ui_view);
+  Show(g_dialog, ui_view, x, y, width, height, keyboard);
+  if (!keyboard) {
+    if (g_dialog.hwnd && GetForegroundWindow() == g_dialog.hwnd) {
+      GiveKeyboard(root);
+    }
+    // A dialog at rest blocks nothing the user is in, so it asks for no one's attention.
+    return;
+  }
+  if (back && root && GetForegroundWindow() == root) {
+    SetForegroundWindow(g_dialog.hwnd);
+  }
   // Shown with another app in front, it's its thread's active window meanwhile, as a modal dialog
   // of Windows' own is, without coming in front. The taskbar button and Alt+Tab bring an app back
   // with that window, so it comes back with the keyboard: its browser window, active before it,
@@ -4257,6 +4290,8 @@ void host_show_dialog(void* ui_view, double x, double y, double width, double he
 
 void host_hide_dialog(void) {
   Hide(g_dialog);
+  g_dialog_lent = nullptr;
+  g_dialog_rests = false;
   // Answered or gone before the user came to it, it asks no more.
   if (g_dialog_asking && IsWindow(g_dialog_asking) && GetForegroundWindow() != g_dialog_asking) {
     FLASHWINFO stop{sizeof stop, g_dialog_asking, FLASHW_STOP, 0, 0};

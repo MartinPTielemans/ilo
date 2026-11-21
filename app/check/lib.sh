@@ -701,13 +701,17 @@ in_sight() {
   send scrollkey "${at% *}" $(((top + bottom) / 2)) "$by" 1
   at=$(drawn_after "$1" "^browser: drive $step: ") || return 1
   # GPUI on Windows takes the driver's wheel messages for lines, about two thirds of the points
-  # asked, which can leave the row under the edge: scroll the rest. Where the card can't scroll
-  # further, nothing draws again and at stays where it was.
-  y=${at#* }
-  [ "$y" -ge "$top" ] && [ "$y" -le "$bottom" ] && return 0
-  if [ "$y" -gt "$bottom" ]; then by=$((y - bottom + 32)); else by=$((y - top - 32)); fi
-  send scrollkey "${at% *}" $(((top + bottom) / 2)) "$by" 1
-  rest=$(drawn_after "$1" "^browser: drive $step: ") && at=$rest
+  # asked, so each scroll can leave the row under the edge: scroll the rest, each time less, until
+  # it's in sight. Where the card can't scroll further, nothing draws again and at stays where it
+  # was.
+  for _ in 1 2 3; do
+    y=${at#* }
+    [ "$y" -ge "$top" ] && [ "$y" -le "$bottom" ] && return 0
+    if [ "$y" -gt "$bottom" ]; then by=$((y - bottom + 32)); else by=$((y - top - 32)); fi
+    send scrollkey "${at% *}" $(((top + bottom) / 2)) "$by" 1
+    rest=$(drawn_after "$1" "^browser: drive $step: ") || return 0
+    at=$rest
+  done
   return 0
 }
 # Clicks Settings' control $1 in the card, where the card shows it whole, as in_sight scrolls it:
@@ -982,9 +986,9 @@ check_layout() {
   send layout
   layout=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout')
   content=$(echo "$layout" | sed 's/^browser: layout content \([0-9]*x[0-9]*\),.*/\1/')
-  view=$(echo "$layout" | sed -n 's/.*WebContentsViewCocoa \([0-9,]* [0-9x]*\).*/\1/p')
-  radius=$(echo "$layout" | sed -n 's/.*WebContentsViewCocoa [0-9,]* [0-9x]* radius \([0-9]*\).*/\1/p')
-  ui=$(echo "$layout" | sed -n 's/.*GPUIView \([0-9,]* [0-9x]*\).*/\1/p')
+  view=$(echo "$layout" | sed -n 's/.*WebContentsViewCocoa \([-0-9,]* [0-9x]*\).*/\1/p')
+  radius=$(echo "$layout" | sed -n 's/.*WebContentsViewCocoa [-0-9,]* [0-9x]* radius \([0-9]*\).*/\1/p')
+  ui=$(echo "$layout" | sed -n 's/.*GPUIView \([-0-9,]* [0-9x]*\).*/\1/p')
   width=${content%x*}
   height=${content#*x}
   # Past the sidebar, 228 wide unless $2 gives its width.

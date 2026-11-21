@@ -62,7 +62,7 @@ pub fn read(bytes: &[u8], mime: &str, url: &str) -> Page {
 /// The page's text: its byte order mark first, then the charset the server named, then its own
 /// <meta>'s, then UTF-8 if it's valid, else Windows-1252, as a browser falls back to for the web's
 /// unlabelled pages.
-fn decode(bytes: &[u8], mime: &str) -> String {
+pub(crate) fn decode(bytes: &[u8], mime: &str) -> String {
     if let Some((encoding, _)) = Encoding::for_bom(bytes) {
         return encoding.decode_with_bom_removal(bytes).0.into_owned();
     }
@@ -210,7 +210,7 @@ fn each_tag(text: &str, mut each: impl FnMut(&str, &str)) {
 }
 
 /// Where a tag's ">" is in |rest|, past quoted attribute values.
-fn tag_end(rest: &str) -> Option<usize> {
+pub(crate) fn tag_end(rest: &str) -> Option<usize> {
     let mut quote = None;
     for (i, c) in rest.char_indices() {
         match (quote, c) {
@@ -224,7 +224,7 @@ fn tag_end(rest: &str) -> Option<usize> {
 }
 
 /// The value of |name| in a tag's |attributes|, quoted or not; entities left for the caller.
-fn attribute(attributes: &str, name: &str) -> Option<String> {
+pub(crate) fn attribute(attributes: &str, name: &str) -> Option<String> {
     let bytes = attributes.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
@@ -275,7 +275,7 @@ fn attribute(attributes: &str, name: &str) -> Option<String> {
     None
 }
 
-fn find_ascii_ci(haystack: &str, needle: &str) -> Option<usize> {
+pub(crate) fn find_ascii_ci(haystack: &str, needle: &str) -> Option<usize> {
     let (hay, needle) = (haystack.as_bytes(), needle.as_bytes());
     (0..=hay.len().saturating_sub(needle.len())).find(|&i| {
         hay.len() >= needle.len() && hay[i..i + needle.len()].eq_ignore_ascii_case(needle)
@@ -284,7 +284,7 @@ fn find_ascii_ci(haystack: &str, needle: &str) -> Option<usize> {
 
 /// |text| with its character references replaced: every numeric one, and the named ones pages'
 /// titles and descriptions use. Any other stays as written.
-fn entities(text: &str) -> String {
+pub(crate) fn entities(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(amp) = rest.find('&') {

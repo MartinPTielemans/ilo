@@ -59,11 +59,13 @@ pub(crate) fn show_menu(
 pub(crate) struct DialogHost;
 
 impl dialog::Host for DialogHost {
-    fn show(&self, window: Option<u64>, over: Option<Bounds<Pixels>>) {
+    fn show(&self, window: Option<u64>, over: Option<Bounds<Pixels>>, keyboard: bool) {
         // A window's own question goes over it, else over the one in front, as the app's do.
         let view = window.and_then(ui_view_of).unwrap_or(front().1);
         let over = rect(over.unwrap_or_default());
-        unsafe { platform::host_show_dialog(view, over.x, over.y, over.width, over.height) };
+        unsafe {
+            platform::host_show_dialog(view, over.x, over.y, over.width, over.height, keyboard)
+        };
     }
 
     fn hide(&self) {

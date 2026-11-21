@@ -518,6 +518,36 @@ fn write_new(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 
 /// The tool's `result` as the run prints it: its text on stdout, or on stderr if it's an error;
 /// a picture in `output`, or a file of its own, whose path it prints.
+/// Where a screenshot without `-o` goes: the system's temporary folder, or in a Flatpak, whose
+/// /tmp the host can't see, the user's Downloads folder, which the sandbox shares with the host at
+/// the same path, so the path printed is right there.
+fn shots() -> PathBuf {
+    if super::bridge::flatpak_id().is_none() {
+        return std::env::temp_dir();
+    }
+    let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
+    let config = (std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from))
+        .unwrap_or_else(|| home.join(".config"));
+    let user_dirs = std::fs::read_to_string(config.join("user-dirs.dirs")).ok();
+    downloads(&home, user_dirs.as_deref())
+}
+
+/// The Downloads folder a user-dirs.dirs file's `user_dirs` names, `$HOME` being `home`, or
+/// `~/Downloads` without one.
+pub fn downloads(home: &Path, user_dirs: Option<&str>) -> PathBuf {
+    let named = (user_dirs.unwrap_or_default().lines())
+        .filter_map(|line| line.trim().strip_prefix("XDG_DOWNLOAD_DIR="))
+        .filter_map(|value| value.strip_prefix('"')?.strip_suffix('"'))
+        .find_map(|value| match value.strip_prefix("$HOME") {
+            Some(rest) => Some(home.join(rest.trim_start_matches('/'))),
+            None => value.starts_with('/').then(|| PathBuf::from(value)),
+        });
+    // The spec's "$HOME/" names the home itself, which is no Downloads folder.
+    named
+        .filter(|folder| folder != home)
+        .unwrap_or_else(|| home.join("Downloads"))
+}
+
 pub fn printed(result: &Value, json: bool, output: Option<&Path>) -> Printed {
     let error = result.get("isError").and_then(Value::as_bool) == Some(true);
     let content = (result.get("content").and_then(Value::as_array))
@@ -537,7 +567,7 @@ pub fn printed(result: &Value, json: bool, output: Option<&Path>) -> Printed {
                     .and_then(|bytes| {
                         let saved = match output {
                             Some(path) => save_at(path, &bytes).map(|()| path.to_path_buf()),
-                            None => save_new(&std::env::temp_dir(), &bytes),
+                            None => save_new(&shots(), &bytes),
                         };
                         saved.map_err(|error| error.to_string())
                     });
@@ -585,6 +615,16 @@ pub fn printed(result: &Value, json: bool, output: Option<&Path>) -> Printed {
 pub struct Agent {
     pub address: PathBuf,
     pub token: String,
+}
+
+/// The agent the agent file in the profile directory `profile` names, which Add writes: none
+/// before, as in the Store's copy, whose `ilo` is on PATH from install.
+pub fn added(profile: &Path) -> Option<Agent> {
+    let agent = super::cli::Agent::read(&super::cli::agent_file(profile))?;
+    Some(Agent {
+        address: agent.address,
+        token: agent.token,
+    })
 }
 
 /// Runs the command line `args` as the agent the agent file names, with `input` for stdin.
@@ -937,6 +977,27 @@ mod tests {
         _ = std::fs::remove_file(&file);
     }
 
+    /// In a Flatpak a screenshot without -o goes in the Downloads folder the user's user-dirs.dirs
+    /// names, which the host shares at the same path, or ~/Downloads without one.
+    #[test]
+    fn a_flatpaks_screenshot_goes_in_downloads() {
+        let home = Path::new("/home/someone");
+        let named = |text: &str| downloads(home, Some(text));
+        assert_eq!(downloads(home, None), home.join("Downloads"));
+        assert_eq!(
+            named(
+                "# written by xdg-user-dirs-update\nXDG_DESKTOP_DIR=\"$HOME/Desktop\"\nXDG_DOWNLOAD_DIR=\"$HOME/Téléchargements\"\n"
+            ),
+            home.join("Téléchargements")
+        );
+        assert_eq!(
+            named("XDG_DOWNLOAD_DIR=\"/data/downloads\""),
+            Path::new("/data/downloads")
+        );
+        assert_eq!(named("XDG_DOWNLOAD_DIR=\"$HOME/\""), home.join("Downloads"));
+        assert_eq!(named("XDG_DOWNLOAD_DIR=relative"), home.join("Downloads"));
+    }
+
     /// A screenshot without -o is a new file only the user can read, under a name of its own: a
     /// file or a link already at a path it would take isn't written through.
     #[cfg(unix)]
@@ -978,5 +1039,24 @@ mod tests {
         let printed = run(vec!["tabs".into()], None, None, String::new);
         assert_eq!(printed.code, exit::UNKNOWN);
         assert!(printed.err.contains("Command line"));
+    }
+
+    /// The command before Add, as the Store's alias is from install: the profile's server hears
+    /// nothing of it, and it ends not added.
+    #[cfg(unix)]
+    #[test]
+    fn before_add_nothing_reaches_the_server() {
+        let profile = std::env::temp_dir().join(format!("ilo-inert-{}", std::process::id()));
+        _ = std::fs::remove_dir_all(&profile);
+        std::fs::create_dir_all(&profile).unwrap();
+        let listener =
+            std::os::unix::net::UnixListener::bind(super::super::server::address(&profile))
+                .unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let printed = run(vec!["tabs".into()], None, added(&profile), String::new);
+        assert_eq!(printed.code, exit::UNKNOWN);
+        let heard = listener.accept().map(|_| ()).map_err(|error| error.kind());
+        assert_eq!(heard, Err(std::io::ErrorKind::WouldBlock));
+        _ = std::fs::remove_dir_all(&profile);
     }
 }

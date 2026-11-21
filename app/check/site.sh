@@ -195,7 +195,9 @@ autofill_form address name 'address-line1 address-level2 address-level1 postal-c
 autofill_form card cc-name 'cc-number cc-exp-month cc-exp-year' > "$out/site/card.html"
 # The dialogs page asks with "a" alert(), "c" confirm() and "p" prompt(), each from a key in the
 # page, and puts what the user answered in the title. "l" alerts once /held comes, which the run
-# lets go of later, as a page that asks while the user is in another app. "u" has it ask before
+# lets go of later, as a page that asks while the user is in another app. "h" alerts and then waits
+# for /held before its handler returns, so the key comes back to the app unkept only once the run
+# lets go of /held, as a page that's slow to answer a key. "u" has it ask before
 # it's left, and "o" goes to a link another app opens: maps:, which macOS opens in Maps, or on
 # Windows, which no longer has a Maps app, ms-settings:, which every Windows 10 and 11 opens in
 # Settings.
@@ -211,6 +213,13 @@ onkeydown = e => {
   if (e.key == "a") {
     alert("The check says hello.");
     document.title = "alerted";
+  }
+  if (e.key == "h") {
+    alert("The check says hello.");
+    const held = new XMLHttpRequest();
+    held.open("GET", "held", false);
+    held.send();
+    document.title = "held back";
   }
   if (e.key == "c") {
     document.title = "confirm " + confirm("Go on?");
@@ -231,6 +240,9 @@ onkeydown = e => {
   }
   if (e.key == "o") {
     location = "'"$app_link"'";
+  }
+  if (e.key == "w") {
+    open("beside.html");
   }
 };
 </script>' > "$out/site/dialogs.html"
@@ -316,6 +328,19 @@ navigator.requestMediaKeySystemAccess("org.w3.clearkey", [{
   videoCapabilities: [{contentType: `video/webm; codecs="vp8"`}],
 }]).catch(() => 0).then(() => document.title = "clearkey asked");
 </script>' > "$out/site/clearkey.html"
+# A page that asks for Widevine only on a click, on the button covering it, as a player's Play does.
+# Its title says "press ready" once painted, which the click waits for, and "press asked" once its
+# request is answered.
+printf '%s' '<title>loading</title>
+<button id=b style="position:fixed;left:0;top:0;width:100%;height:100%;font:24px system-ui">Play</button>
+<script src="painted.js"></script>
+<script>
+painted(() => document.title = "press ready");
+b.onclick = () => navigator.requestMediaKeySystemAccess("com.widevine.alpha", [{
+  initDataTypes: ["cenc"],
+  videoCapabilities: [{contentType: `video/mp4; codecs="avc1.42E01E"`}],
+}]).catch(() => 0).then(() => document.title = "press asked");
+</script>' > "$out/site/drm-press.html"
 # A page that names the engine showing it: Safari's sends Safari's user agent, without Chrome's name.
 # A text field covers it, so a click anywhere in it lands there, and the field's title says what it
 # did: a press, counted, its value, what ⌘A selected and ⌘C copied, and a committed composition.

@@ -690,7 +690,7 @@ impl Browser for Engine {
         if self.window != front().0 {
             return;
         }
-        let Some((tab, asked, over)) = shown else {
+        let Some((tab, asked, over, rests)) = shown else {
             dialog::withdraw_page(cx);
             return;
         };
@@ -732,6 +732,20 @@ impl Browser for Engine {
             },
         };
         let window = self.window;
+        let shell_of = move || {
+            WINDOWS.with_borrow(|windows| {
+                windows
+                    .iter()
+                    .find(|w| w.id == window)
+                    .and_then(|w| w.shell.upgrade())
+            })
+        };
+        // A click on the dialog at rest focuses its pane, which brings it live.
+        let focus_pane = Rc::new(move |cx: &mut App| {
+            if let Some(shell) = shell_of() {
+                shell.update(cx, |shell, cx| shell.focus_dialog_pane(tab, cx));
+            }
+        });
         let kind = asked.kind;
         let answered = Box::new(move |reply: dialog::Reply, cx: &mut App| {
             let mut texts = reply.texts.into_iter();
@@ -749,13 +763,7 @@ impl Browser for Engine {
                 password,
                 checked: reply.checked,
             };
-            let shell = WINDOWS.with_borrow(|windows| {
-                windows
-                    .iter()
-                    .find(|w| w.id == window)
-                    .map(|w| w.shell.clone())
-            });
-            match shell.and_then(|shell| shell.upgrade()) {
+            match shell_of() {
                 Some(shell) => shell.update(cx, |shell, cx| {
                     shell.answer_page_dialog(tab, asked.id, reply, cx)
                 }),
@@ -763,7 +771,15 @@ impl Browser for Engine {
                 None => answer_page_dialog(tab, asked.id, reply),
             }
         });
-        dialog::ask_page((tab, asked.id), question, over, answered, cx);
+        dialog::ask_page(
+            (tab, asked.id),
+            question,
+            over,
+            rests,
+            focus_pane,
+            answered,
+            cx,
+        );
     }
 
     fn answer_page_dialog(&self, tab: u64, id: u64, reply: shell::PageReply, _: &mut App) {

@@ -184,8 +184,8 @@ pub use commands::{
     BAR_ROWS, BAR_TABS_SHOWN, BarCommand, BarSpace, BarTab, CancelName, Command, CreateSpace,
     KEY_CONTEXT, KeepName, Match, Run, STAY_ON_TOP, agents_page_shown, bar_commands, bind_keys,
     copy_from_bar, copy_url_of_preview, find_commands, key_name, keystroke_keys, keystroke_label,
-    menu_item, pane_added, run_from_bar, shown_tab, task_page_shown, window_became_key,
-    with_named_rows,
+    menu_item, pane_added, pressed_label, run_from_bar, shown_tab, task_page_shown,
+    window_became_key, with_named_rows,
 };
 pub use display_face::display_text;
 pub use drag::{WindowDragEnd, dropped_urls};
@@ -198,7 +198,7 @@ pub use favorites::FavoritesScope;
 use fly_in::Flight;
 pub use history::HistoryPage;
 pub use keys::{
-    Holder, OFF_THE_MAC, Refused, SecondPress, UserKeys, change_keys, follow_layout,
+    Holder, OFF_THE_MAC, Refused, SecondPress, UserKeys, change_keys, chrome_twins, follow_layout,
     page_key_answer, page_keystroke, rebindable, recorded, reserved, shortcut_found, user_keys,
     view_binding, web_keystroke, written_as,
 };
@@ -2010,10 +2010,10 @@ pub struct Shell {
     hang_noted: Option<u64>,
     /// The dialogs the tabs' pages ask, such as an alert(): the tab shown's goes over its card.
     page_dialogs: HashMap<u64, PageDialog>,
-    /// What the window told last of its page's dialog: the one asked over the card, by its tab
-    /// and id, and where, or none. Untold once it comes to the front, when the dialog shown may
-    /// be another window's.
-    page_dialog_shown: Option<Option<(u64, u64, (Bounds<Pixels>, f32))>>,
+    /// What the window told last of its page's dialog: the one asked over the card or a pane, by
+    /// its tab and id, where, and whether at rest, or none. Untold once it comes to the front,
+    /// when the dialog shown may be another window's.
+    page_dialog_shown: Option<Option<(u64, u64, (Bounds<Pixels>, f32), bool)>>,
     /// The page's dialog up over the card, by its tab and id, which a field taking the keyboard
     /// after it came doesn't take down.
     page_dialog_up: Option<(u64, u64)>,
@@ -5718,6 +5718,10 @@ impl Shell {
                     .children(self.nav_buttons(cx))
             }))
             .child(self.reveal_listener(cx))
+            // The mouse's back and forward buttons over the panel page the Spaces, as over the
+            // docked sidebar, its window hearing them as the browser window does; on the web the
+            // panel is in that window, which hears them already.
+            .children((!WEB).then(|| self.navigate_listener(cx)))
             .into_any_element();
         self.breath.arm(cx);
         panel

@@ -384,7 +384,10 @@ fn a_tasks_page_watched_shows_its_sign_in(cx: &mut TestAppContext) {
     assert!(dialogs(&host).iter().all(|call| call == "page dialog none"));
     watching(&shell, &host, cx);
     let shown = shell.read_with(cx, |shell, _| shell.page_dialog_shown);
-    assert_eq!(shown.flatten().map(|(tab, id, _)| (tab, id)), Some((30, 1)));
+    assert_eq!(
+        shown.flatten().map(|(tab, id, _, _)| (tab, id)),
+        Some((30, 1))
+    );
 
     ask(cx, 30, Some(page_dialog(3, DialogKind::Confirm)));
     assert_eq!(dialogs(&host), ["page dialog none"]);
@@ -1630,4 +1633,50 @@ fn a_press_on_the_crash_card_of_the_agents_page_takes_it_over(cx: &mut TestAppCo
     );
     cx.simulate_click(reload.center(), gpui::Modifiers::none());
     assert_eq!(host.take(), ["take over task-1 30", "reload 30"]);
+}
+
+/// An agent's tab never takes the user's keyboard with its page's alert (#3461): split in its own
+/// Space, which no user's split shares, and watched in the task area, neither pane's alert shows,
+/// live or at rest. Only a sign-in shows there, which only the user may answer (#3662).
+#[gpui::test]
+fn an_agents_split_never_shows_its_pages_dialogs(cx: &mut TestAppContext) {
+    use crate::shell::{DialogKind, PageDialog, Split};
+    let (shell, host, cx) = shell_with_task(cx);
+    shell.update(cx, |shell, cx| {
+        let split = Split {
+            tabs: vec![30, 31],
+            ..Default::default()
+        };
+        shell.set_tabs(
+            3,
+            Vec::new(),
+            vec![30, 31],
+            vec![split],
+            Folders::default(),
+            cx,
+        );
+    });
+    watching(&shell, &host, cx);
+    let alert = |id| PageDialog {
+        id,
+        kind: DialogKind::Alert,
+        title: "example.org says".into(),
+        message: "Hello".into(),
+        text: "".into(),
+        accept: "OK".into(),
+        cancel: "".into(),
+        check: "".into(),
+        username: "".into(),
+        password: "".into(),
+    };
+    for tab in [30, 31] {
+        shell.update(cx, |shell, cx| {
+            shell.set_page_dialog(tab, Some(alert(tab)), cx)
+        });
+        draw(&shell, cx);
+    }
+    let shown: Vec<String> = (host.take().into_iter())
+        .filter(|call| call.starts_with("page dialog ") && call != "page dialog none")
+        .collect();
+    assert!(shown.is_empty(), "{shown:?}");
 }

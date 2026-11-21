@@ -110,6 +110,57 @@ fn text_gets_in_from_the_frame_that_draws_the_field_with_the_keyboard(cx: &mut T
     );
 }
 
+struct Hides(Entity<TextInput>, bool);
+
+impl Render for Hides {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().children(self.1.then(|| self.0.clone()))
+    }
+}
+
+// A field hidden with the keyboard, such as Always ask first's once it adds a site, is drawn
+// with it again only by a frame after it's shown again and reset: text sent before that frame
+// is lost as at first (#2847, #3724).
+#[gpui::test]
+fn a_field_shown_again_says_it_has_the_keyboard_from_its_next_frame(cx: &mut TestAppContext) {
+    cx.update(bind_keys);
+    let (hides, cx) = cx.add_window_view(|window, cx| {
+        let input = cx.new(|cx| TextInput::new("Site", cx));
+        window.focus(&input.focus_handle(cx), cx);
+        Hides(input, true)
+    });
+    let input = cx.read(|cx| hides.read(cx).0.clone());
+    cx.run_until_parked();
+    let drawn = |cx: &mut VisualTestContext| input.read_with(cx, |input, _| input.keyboard_drawn());
+    assert!(
+        drawn(cx),
+        "a frame drew the field focused, and it doesn't say text gets in"
+    );
+    hides.update(cx, |hides, cx| {
+        hides.1 = false;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let at_show = hides.update_in(cx, |hides, window, cx| {
+        hides.1 = true;
+        hides
+            .0
+            .update(cx, |input, cx| input.reset("".into(), window, cx));
+        window.focus(&hides.0.focus_handle(cx), cx);
+        cx.notify();
+        hides.0.read(cx).keyboard_drawn()
+    });
+    assert!(
+        !at_show,
+        "the field shown again says text gets in before a frame has drawn it"
+    );
+    cx.run_until_parked();
+    assert!(
+        drawn(cx),
+        "a frame drew the field shown again, and it doesn't say text gets in"
+    );
+}
+
 /// The field and its text run, as an assistive app reads them.
 fn read(cx: &mut VisualTestContext) -> (Node, Node, NodeId) {
     let tree: TreeUpdate = cx.a11y_tree().expect("GPUI built a tree");
