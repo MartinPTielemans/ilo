@@ -1,0 +1,13 @@
+{
+  "name": "crates-top",
+  "title": "Most downloaded crates, as crates.io's front page draws them",
+  "site": "https://crates.io",
+  "read": {
+    "kind": "page",
+    "path": "/",
+    "wait": { "selector": "section:has(a[href='/crates?sort=downloads']) li .downloads", "min": 10 },
+    "rows": "section:has(a[href='/crates?sort=downloads']) li",
+    "fields": { "name": ".title", "about": ".subtitle", "downloads": ".downloads", "url": { "sel": "a", "attr": "href" } }
+  },
+  "shape": { "columns": { "name": "text", "downloads": "text", "url": "url" }, "min_rows": 5 }
+}

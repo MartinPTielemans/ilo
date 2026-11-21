@@ -1,0 +1,12 @@
+{
+  "name": "buildings",
+  "title": "Tallest buildings in the world",
+  "site": "https://en.wikipedia.org",
+  "read": {
+    "kind": "html",
+    "path": "/wiki/List_of_tallest_buildings",
+    "table": { "columns": { "name": "Name", "height_m": "Height", "city": "City", "country": "Country", "year": "Year" } },
+    "limit": 100
+  },
+  "shape": { "columns": { "name": "text", "height_m": "number", "city": "text", "country": "text", "year": "number" }, "min_rows": 50 }
+}

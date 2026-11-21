@@ -1,0 +1,13 @@
+{
+  "name": "trending-tags",
+  "title": "Trending hashtags on mastodon.social",
+  "site": "https://mastodon.social",
+  "read": {
+    "kind": "json",
+    "path": "/api/v1/trends/tags?limit={limit}",
+    "rows": "",
+    "fields": { "tag": "name", "uses": "history.0.uses", "people": "history.0.accounts", "url": "url" }
+  },
+  "params": { "limit": { "type": "integer", "min": 1, "max": 20, "default": 10 } },
+  "shape": { "columns": { "tag": "text", "uses": "number", "people": "number", "url": "url" }, "min_rows": 3 }
+}
