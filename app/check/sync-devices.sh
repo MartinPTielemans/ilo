@@ -39,14 +39,24 @@ await_spaces() {
   done
   fail "$2: $(spaces) Spaces"
 }
-# Makes a Space named $1 in the device's window, from the Spaces menu, as spaces.sh does.
+# Makes a Space named $1 in the device's window, from the Spaces menu, as spaces.sh does. The name
+# is typed once its field has the keyboard, as the app logs (#2847): keys typed before land
+# nowhere, and the Space keeps its own name (#3860). The keyboard line is then looked for between
+# the menu's command and the typing, so typing on the Space's count alone, the old order, fails
+# here whenever the keyboard came later.
 new_space() {
+  local asked
   had=$(spaces)
   forward
   send menu New Space…
+  asked=$step
   expect '^browser: command new-space via ui$' "New Space in the menu didn't run new-space on $on"
   await_spaces $((had + 1)) "New Space didn't make a Space on $on"
+  expect '^browser: field Space name has the keyboard$' "New Space's name didn't have the keyboard on $on"
   send type "$1"
+  sed -n "/^browser: drive $asked: /,/^browser: drive $step: /p" "$log" |
+    grep -q '^browser: field Space name has the keyboard$' ||
+    fail "the name for New Space went in before its field had the keyboard on $on"
   send key return
 }
 # The format that marks what clipboard managers are to skip (#641): on the Mac, nspasteboard.org's.
