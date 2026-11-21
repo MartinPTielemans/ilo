@@ -1081,17 +1081,25 @@ impl Agents {
             .collect()
     }
 
-    /// Whether Settings › Agents offers the `ilo` command: not yet on Windows, nor in a Flatpak,
-    /// whose sandbox can't write the user's bin folder.
+    /// Whether Settings › Agents offers the `ilo` command: not yet on Windows.
     pub fn command_offered(&self) -> bool {
-        cfg!(unix) && self.bridge.first().map(String::as_str) != Some("flatpak")
+        cfg!(unix)
+    }
+
+    /// In a Flatpak, the line the `ilo` command's row gives to run on the host, since the sandbox
+    /// can't write the user's bin folder (cli::flatpak_line).
+    pub fn command_flatpak_line(&self) -> Option<String> {
+        cli::flatpak_line(&self.bridge)
     }
 
     /// The `ilo` command's row: not added, or added in a folder the user's shell looks in or not.
+    /// A Flatpak's sandbox can't ask the host's shell, so there the row gives its line either way.
     pub fn command_state(&self) -> cli::State {
+        let flatpak = self.command_flatpak_line().is_some();
         match (self.is_connected(Client::Command), self.command_searched) {
             (false, _) => cli::State::Off,
             (true, true) => cli::State::On,
+            (true, _) if flatpak => cli::State::On,
             (true, false) => cli::State::Unsearched,
         }
     }
@@ -1099,7 +1107,7 @@ impl Agents {
     /// Asks the user's shell, in the background, whether it looks in the `ilo` command's folder,
     /// as the row says, once it's added.
     fn look_for_command(&mut self, cx: &mut Context<Self>) {
-        if !self.is_connected(Client::Command) {
+        if !self.is_connected(Client::Command) || self.command_flatpak_line().is_some() {
             return;
         }
         let clients = self.clients.clone();

@@ -151,6 +151,70 @@ jobs:
           cat ilo.log
           grep -q "browser: UI shown" ilo.log
 
+      # The ilo command reaches the browser from the host as a client's bridge does, run in the
+      # sandbox by Flatpak, as the script the row's line writes runs it (#3667): help lists the
+      # server's tools, and a screenshot without -o is a file the host has at the path printed,
+      # under Downloads, since the sandbox's /tmp is its own. The agent file and its token are
+      # seeded as Add writes them, which the UI's check drives elsewhere. BROWSER_CHECK has the app
+      # log the server's address, and the onboarding, which the start above left unplayed, is
+      # skipped, as check.sh skips it.
+      - name: The ilo command
+        id: command
+        if: ${{ steps.engine.outputs.found == 'true' && !inputs.release }}
+        run: |
+          profile="$HOME/.var/app/app.ilo.browser/config/$(cat app/branding/name)"
+          token=$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')
+          mkdir -p "$profile" "$HOME/Downloads" app/build/flatpak-command
+          printf '{"on":true,"agents":[{"client":"ilo-command","token":"%s"}]}' "$token" > "$profile/Agents"
+          cd app/build/flatpak-command
+          printf '<title>Shot</title><p>A page to take a picture of.</p>' > index.html
+          python3 -m http.server --bind 127.0.0.1 8765 > server.log 2>&1 &
+          server=$!
+          status=0
+          TOKEN=$token PROFILE=$profile dbus-run-session -- xvfb-run -a -s '-screen 0 1280x800x24' bash -c '
+            set -u
+            flatpak run --env=BROWSER_CHECK=1 --env=BROWSER_ONBOARDING=skip app.ilo.browser > ilo.log 2>&1 &
+            pid=$!
+            for _ in $(seq 120); do
+              grep -q "^browser: agents server on " ilo.log && break
+              kill -0 $pid 2>/dev/null || break
+              sleep 1
+            done
+            address=$(sed -n "s/^browser: agents server on //p" ilo.log | tail -1)
+            status=0
+            if [ -z "$address" ]; then
+              echo "::error::The Flatpak started no agents server with agents on in its Agents file."
+              status=1
+            else
+              (umask 077 && printf "%s\n%s\n" "$address" "$TOKEN" > "$PROFILE/ilo-command")
+              ilo() { flatpak run --command=/app/ilo/ilo-command app.ilo.browser "$@"; }
+              help=$(ilo help 2>&1) || { echo "::error::ilo help failed ($?): $help"; status=1; }
+              case $help in *"ilo click <ref>"*) ;; *) echo "::error::ilo help listed no click: $help"; status=1 ;; esac
+              opened=$(ilo open http://127.0.0.1:8765/ --as Checker 2>&1) ||
+                { echo "::error::ilo open failed ($?): $opened"; status=1; }
+              shot=$(ilo shot --as Checker 2>&1) || { echo "::error::ilo shot failed ($?): $shot"; status=1; }
+              path=$(printf "%s\n" "$shot" | tail -1)
+              case $path in
+                "$HOME/Downloads/"*) ;;
+                *) echo "::error::ilo shot saved its picture outside ~/Downloads, which the host can'"'"'t see: $shot"; status=1 ;;
+              esac
+              [ -s "$path" ] || { echo "::error::ilo shot printed $path, which the host has no file at: $shot"; status=1; }
+              import -window root command.png || true
+            fi
+            flatpak kill app.ilo.browser || true
+            wait $pid || true
+            exit $status' || status=$?
+          kill $server || true
+          cat ilo.log
+          exit $status
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() && steps.command.outcome != 'skipped' }}
+        with:
+          name: ilo-flatpak-command
+          path: app/build/flatpak-command
+          if-no-files-found: ignore
+
       # A crash of each kind of process leaves a minidump in the sandbox (#2454), once the engine
       # has the patch that reads a crashed process without ptrace, which Flatpak's seccomp refuses.
       - name: Crash dumps
