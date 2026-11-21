@@ -2561,8 +2561,9 @@ bool host_app_icon(const char* app, size_t size, uint8_t* rgba) {
         SUCCEEDED(item) ? factory->GetImage({static_cast<LONG>(pixels), static_cast<LONG>(pixels)},
                                             SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK, &bitmap)
                         : item;
-    if (FAILED(image) || !bitmap) {
-      // check.sh shows this line when a row it gave an icon has none.
+    // check.sh shows this line when a row it gave an icon has none. |app| can be a path, which
+    // names the user's folders.
+    if ((FAILED(image) || !bitmap) && Checked()) {
       fprintf(stderr, "browser: import icon for %s failed: 0x%08lx\n", app,
               static_cast<unsigned long>(image));
     }
