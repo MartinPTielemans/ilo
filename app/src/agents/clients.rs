@@ -99,7 +99,8 @@ pub trait Clients: Send + Sync {
     /// Whether the client is on this computer, for Settings › Agents to list it. Other is always.
     fn found(&self, client: Client) -> bool;
     /// Whether a terminal opened now looks for commands in `folder`, as the `ilo` command's row
-    /// says. Slow: it runs the user's shell.
+    /// says. Slow: it runs the user's shell. On Windows, whether the entry Add put on the user's
+    /// PATH is still there, which an uninstall takes off (#3783).
     fn searches(&self, _folder: &Path) -> bool {
         true
     }
@@ -169,6 +170,14 @@ impl Clients for System {
     #[cfg(not(windows))]
     fn searches(&self, folder: &Path) -> bool {
         shell_path().is_some_and(|path| super::cli::searched(&path, folder))
+    }
+
+    #[cfg(windows)]
+    fn searches(&self, _folder: &Path) -> bool {
+        match command_install(&Entry::default()) {
+            Ok(install) => install.on_path(&super::cli::Registry),
+            Err(_) => true,
+        }
     }
 }
 

@@ -99,6 +99,18 @@ pub fn detail(state: State, windows: Option<&str>) -> Detail {
     }
 }
 
+/// The row's state: not added, or added and found or not by a terminal opened now. On Windows a
+/// command that isn't found is one whose PATH entry was taken off since Add put it there, which
+/// Add puts back, so the row says it isn't added: there's no line to paste there (#3783).
+pub fn state(added: bool, searched: bool, windows: bool) -> State {
+    match (added, searched) {
+        (false, _) => State::Off,
+        (true, true) => State::On,
+        (true, false) if windows => State::Off,
+        (true, false) => State::Unsearched,
+    }
+}
+
 /// Whether `folder` is one of a PATH's, as a shell gives it, `:` between them.
 pub fn searched(path: &str, folder: &Path) -> bool {
     path.split(':')
@@ -333,6 +345,21 @@ impl Install {
     #[cfg(windows)]
     pub fn remove(&self) -> Result<(), String> {
         self.remove_on_windows(&Registry)
+    }
+
+    /// Whether a terminal opened now finds the command, with the user's PATH in `path`. The entry
+    /// Add put there may have been taken off since, by an uninstall or by the user, while the
+    /// agent file stays in the profile (#3783). An entry of the user's, or the Store's alias, isn't
+    /// Add's to watch, and a PATH that can't be read says nothing either way.
+    pub fn on_path(&self, path: &dyn PathStore) -> bool {
+        let Some(entry) = Agent::read(&self.file).and_then(|agent| agent.path) else {
+            return true;
+        };
+        match path.read() {
+            Ok(value) => value
+                .is_some_and(|value| (entries(&value.text).iter()).any(|each| names(each, &entry))),
+            Err(_) => true,
+        }
     }
 
     /// Takes away what Add made: the link, if it's still the command's, the agent file, and the
@@ -779,6 +806,64 @@ mod windows_tests {
         install.remove_on_windows(&path).unwrap();
         assert!(!install.file.exists());
         assert_eq!(*path.writes.borrow(), 0);
+    }
+
+    /// After an uninstall takes Add's entry off the user's PATH, and a reinstall, the agent file
+    /// still records it: the command isn't found, the row says it isn't added, and Add puts the
+    /// entry back. Nothing else on the PATH counts, and an entry of the user's never goes stale.
+    #[test]
+    fn an_entry_taken_off_the_path_is_added_again() {
+        let temp = Temp::new("taken-off");
+        let install = temp.install();
+        let path = Store::new(value(r"C:\Tools", true));
+        assert!(install.on_path(&path), "nothing added, nothing to find");
+        install.add_on_windows(&path, Path::new("/s"), "t").unwrap();
+        assert!(install.on_path(&path));
+        let folder = install.folder.to_string_lossy().into_owned();
+        // The uninstaller takes back exactly Add's entry, and leaves the profile.
+        let uninstalled = path_without(path.value.borrow().as_ref().unwrap(), &folder).unwrap();
+        *path.value.borrow_mut() = Some(uninstalled);
+        assert!(Agent::read(&install.file).unwrap().path.is_some());
+        assert!(!install.on_path(&path));
+        assert_eq!(state(true, install.on_path(&path), true), State::Off);
+        install.add_on_windows(&path, Path::new("/s"), "u").unwrap();
+        assert!(install.on_path(&path));
+        assert_eq!(
+            path.value.borrow().as_ref().unwrap().text,
+            format!(r"C:\Tools;{folder}")
+        );
+        assert_eq!(
+            Agent::read(&install.file).unwrap().path,
+            Some(folder.clone())
+        );
+        // The entry back in another case, as the user may write it, is found.
+        *path.value.borrow_mut() = value(&folder.to_uppercase(), true);
+        assert!(install.on_path(&path));
+        // With no PATH at all it isn't, and a PATH that can't be read says nothing.
+        *path.value.borrow_mut() = None;
+        assert!(!install.on_path(&path));
+        let mut unreadable = Store::new(None);
+        unreadable.unreadable = true;
+        assert!(install.on_path(&unreadable));
+        // The user's own entry, which Add recorded nothing for, isn't Add's to watch.
+        install.remove_on_windows(&Store::new(None)).unwrap();
+        let theirs = Store::new(value(&folder, true));
+        install
+            .add_on_windows(&theirs, Path::new("/s"), "t")
+            .unwrap();
+        *theirs.value.borrow_mut() = None;
+        assert!(install.on_path(&theirs));
+    }
+
+    /// The row's states: on Windows a command added but not found is Add again, as there's no line
+    /// to paste there; elsewhere it's the line to paste.
+    #[test]
+    fn a_command_not_found_is_add_on_windows() {
+        assert_eq!(state(false, true, true), State::Off);
+        assert_eq!(state(true, true, true), State::On);
+        assert_eq!(state(true, false, true), State::Off);
+        assert_eq!(state(true, false, false), State::Unsearched);
+        assert_eq!(state(false, false, false), State::Off);
     }
 
     /// On Windows the row says neither that Add links nor what to paste, and names the folder
