@@ -9,7 +9,11 @@ name: Agent Context Budget
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled]
-    paths: ['**.md', tools/agent-context.sh, .github/workflows/agent-context-budget.yml]
+    paths:
+      - '**.md'
+      - tools/agent-context.sh
+      - tools/agent-context-test.sh
+      - .github/workflows/agent-context-budget.yml
 
 permissions: {}
 
@@ -39,6 +43,13 @@ jobs:
         with:
           fetch-depth: 2
           persist-credentials: false
+
+      # A report, never a limit, until the list is short (#2565): it fails only if the tool does.
+      - name: Source files over 2,000 lines
+        run: |
+          tools/agent-context-test.sh
+          tools/agent-context.sh --source HEAD | tee "$RUNNER_TEMP/source"
+          { echo '```'; cat "$RUNNER_TEMP/source"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Compare with the base
         run: |
