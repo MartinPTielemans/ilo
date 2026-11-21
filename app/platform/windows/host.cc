@@ -76,6 +76,8 @@ extern "C" bool browser_log_on(const char* area);
 extern "C" uint32_t browser_overlay_step(uint8_t life, uint8_t event, uint8_t flags);
 // Below, for Disown, which hides the menu as the UI would.
 extern "C" void host_hide_menu_window(void);
+// Below, for Disown: the hook that hears a press beside a page's dialog.
+extern "C" void WatchDialogPresses(bool watch);
 
 namespace {
 
@@ -1491,8 +1493,6 @@ bool g_dialog_part = false;
 // dialog shows at rest. It lasts until the dialog is pressed, the UI shows it live, or it hides
 // (#3231, #3461).
 HWND g_dialog_lent = nullptr;
-// Below: the hook that hears a press beside the dialog, there while it covers part of its window.
-void WatchDialogPresses(bool watch);
 Floating g_site_controls;
 
 // The link preview (platform/host.h), as Linux's (link_preview_window.rs): its window, the dim and
