@@ -801,6 +801,41 @@ index 6cb33874b2..0066ba74a2 100644
  }
  
  #[cfg_attr(
+diff --git a/crates/gpui/src/text_system/line_layout.rs b/crates/gpui/src/text_system/line_layout.rs
+index f0bf121111..582029c712 100644
+--- a/crates/gpui/src/text_system/line_layout.rs
++++ b/crates/gpui/src/text_system/line_layout.rs
+@@ -200,6 +200,9 @@ impl LineLayout {
+         let mut first_non_whitespace_ix = None;
+         let mut last_candidate_ix = None;
+         let mut last_candidate_x = px(0.);
++        // A slash inside a path or URL, a weaker break than a space: taken only when the line has
++        // no other place to break, so a path that fits a line goes down whole.
++        let mut last_slash = None;
+         let mut last_boundary = WrapBoundary {
+             run_ix: 0,
+             glyph_ix: 0,
+@@ -234,6 +237,8 @@ impl LineLayout {
+                     last_candidate_ix = Some(boundary);
+                     last_candidate_x = x;
+                 }
++            } else if ch == '/' && prev_ch != ' ' && first_non_whitespace_ix.is_some() {
++                last_slash = Some((boundary, x));
+             } else {
+                 if ch != ' ' && first_non_whitespace_ix.is_some() {
+                     last_candidate_ix = Some(boundary);
+@@ -259,6 +264,11 @@ impl LineLayout {
+                 if let Some(last_candidate_ix) = last_candidate_ix.take() {
+                     last_boundary = last_candidate_ix;
+                     last_boundary_x = last_candidate_x;
++                } else if let Some((slash, slash_x)) =
++                    last_slash.filter(|(slash, _)| *slash > last_boundary)
++                {
++                    last_boundary = slash;
++                    last_boundary_x = slash_x;
+                 } else {
+                     last_boundary = boundary;
+                     last_boundary_x = x;
 diff --git a/crates/gpui/src/text_system/line_wrapper.rs b/crates/gpui/src/text_system/line_wrapper.rs
 index ca821bbbb4..575310b261 100644
 --- a/crates/gpui/src/text_system/line_wrapper.rs
