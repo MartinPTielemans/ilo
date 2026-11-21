@@ -390,4 +390,56 @@ mod tests {
             assert_eq!(parts, text);
         }
     }
+
+    /// Where GPUI breaks `text` wrapped at `chars` characters a line: the index each line after
+    /// the first starts at. Tests draw every character as wide as any other.
+    fn breaks(text: &str, chars: f32, cx: &gpui::TestAppContext) -> Vec<usize> {
+        use gpui::{IndentAdjustment, LineFragment, px};
+        let (font, size) = (gpui::font(crate::face::UI), px(10.));
+        let system = cx.text_system();
+        let each = system
+            .advance(system.resolve_font(&font), size, 'a')
+            .unwrap()
+            .width;
+        let mut wrapper = system.line_wrapper(font, size);
+        let fragments = [LineFragment::text(text)];
+        (wrapper.wrap_line(&fragments, each * chars, IndentAdjustment::NoIndent))
+            .map(|boundary| boundary.ix)
+            .collect()
+    }
+
+    /// GPUI's wrapping, which every text and each part here uses (app/patches/gpui-scale.patch): a
+    /// path that fits a line goes down whole, one longer than a line breaks before its slashes,
+    /// and a sentence breaks at its spaces (#3790).
+    #[gpui::test]
+    fn a_path_that_fits_a_line_wraps_whole(cx: &mut gpui::TestAppContext) {
+        let within = |text: &str, path: &str, cx: &gpui::TestAppContext, chars: f32| {
+            let start = text.find(path).unwrap();
+            let all = breaks(text, chars, cx);
+            let inside = (all.iter().copied()).filter(|&at| at > start && at < start + path.len());
+            (all.clone(), inside.collect::<Vec<_>>())
+        };
+        let path = "~/.codex/config.toml";
+        let text = format!("Connect adds the browser to {path} for Codex.");
+        let (all, inside) = within(&text, path, cx, 22.);
+        assert!(
+            !all.is_empty() && inside.is_empty(),
+            "{text:?} broke at {all:?}"
+        );
+
+        let long = "/usr/local/share/applications/ilo/bin/ilo-command";
+        let text = format!("Run it from {long} once.");
+        let (all, inside) = within(&text, long, cx, 20.);
+        assert!(!inside.is_empty(), "{text:?} broke at {all:?}");
+        for at in inside {
+            assert_eq!(&text[at..at + 1], "/", "{text:?} broke at {all:?}");
+        }
+
+        let text = "A row's detail line wraps at its spaces as any sentence does.";
+        let all = breaks(text, 20., cx);
+        assert!(all.len() > 1, "{all:?}");
+        for at in all {
+            assert_eq!(&text[at - 1..at], " ", "{text:?} broke at {at}");
+        }
+    }
 }
