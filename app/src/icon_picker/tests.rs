@@ -515,3 +515,21 @@ fn voiceover_reads_the_emoji_tab(cx: &mut TestAppContext) {
     );
     has(&mut picker, Role::Button, "Skin Tone, Default");
 }
+
+/// A page dialog waits while the user types in the search, and not once the picker has gone.
+#[gpui::test]
+fn its_search_counts_as_typing_until_it_goes(cx: &mut TestAppContext) {
+    let mut picker = Picker::new("🙂", cx);
+    (picker
+        .window
+        .update(&mut picker.cx.cx, |picker, window, cx| {
+            window.activate_window();
+            window.focus(&picker.search.focus_handle(cx), cx)
+        }))
+    .unwrap();
+    picker.cx.run_until_parked();
+    assert!(picker.cx.cx.update(typing));
+    picker.cx.cx.update(dismissed);
+    picker.cx.run_until_parked();
+    assert!(!picker.cx.cx.update(typing), "a picker gone still counted");
+}

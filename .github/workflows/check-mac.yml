@@ -509,7 +509,21 @@ jobs:
           path: app/build/adblock-parity-lists
           overwrite: true
 
+      # The results first, a few hundred bytes, so complete still names each run's result when
+      # the check folder's upload fails or doesn't end, as on Windows (#3471, #3720).
       - if: ${{ always() && steps.engine.outputs.found == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-mac-${{ matrix.shard }}
+          path: ${{ runner.temp }}/results
+          if-no-files-found: ignore
+      # Up to 500 MB, which takes 15 to 55 s. Its failure, such as GitHub's side timing out on
+      # making the artifact, or a stall ended at the limit, doesn't make the job's result: the
+      # Runs step's exit does, so a passed check stays green and a failed one red (#3720).
+      - id: folder
+        if: ${{ always() && steps.engine.outputs.found == 'true' }}
+        timeout-minutes: 10
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: check-mac${{ matrix.shard != 0 && format('-{0}', matrix.shard) || '' }}
@@ -518,12 +532,10 @@ jobs:
             ${{ runner.temp }}/check
             !${{ runner.temp }}/check/**/*.app
           if-no-files-found: ignore
-      - if: ${{ always() && steps.engine.outputs.found == 'true' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: results-mac-${{ matrix.shard }}
-          path: ${{ runner.temp }}/results
-          if-no-files-found: ignore
+      - if: ${{ always() && steps.folder.outcome == 'failure' }}
+        run: |
+          echo "::warning::The check folder's artifact didn't upload, so this job's run logs and captures are missing; each run's result stands, in results-mac-${{ matrix.shard }} and the summary."
+          echo "The check folder's artifact didn't upload; the results above stand." >> "$GITHUB_STEP_SUMMARY"
 
   # A run with no result, such as one its job's time ran out before, fails the check, so a run
   # missing from the summary can't read as passed (#2271).

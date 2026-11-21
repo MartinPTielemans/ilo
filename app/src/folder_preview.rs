@@ -178,6 +178,17 @@ struct PreviewWindow(WindowHandle<FolderPreview>);
 
 impl Global for PreviewWindow {}
 
+/// Whether the user types in the preview's search, while it shows.
+pub fn typing(cx: &mut App) -> bool {
+    let Some(preview) = cx.try_global::<PreviewWindow>().map(|preview| preview.0) else {
+        return false;
+    };
+    (preview.update(cx, |preview, window, cx| {
+        preview.shown.is_some() && crate::text_input::window_typed_in(window, cx)
+    }))
+    .unwrap_or(false)
+}
+
 /// Opens the preview's window, hidden, for `host` to show over the browser window, ahead of time
 /// as the icon picker's is.
 pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<FolderPreview>> {
@@ -584,7 +595,8 @@ impl Focusable for FolderPreview {
 }
 
 impl Render for FolderPreview {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::text_input::drawing(window);
         let root = div()
             .key_context(KEY_CONTEXT)
             .size_full()

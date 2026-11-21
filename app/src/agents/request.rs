@@ -2,8 +2,9 @@
 //! as the page's own script could send them, with its cookies, which the browser adds and never
 //! shows. A read goes as asked. Every change asks the user, every time, with no Always: an API
 //! call does whatever its site makes it do, and no name tells what, as a button's does. What comes
-//! back is the body alone, without its headers, and with values that look like sign-in tokens or
-//! secrets hidden, so an agent gets the user's session, never a credential to carry off.
+//! back is the body alone, without its headers, a page as its outline rather than its source, and
+//! with values that look like sign-in tokens or secrets hidden, by their names or by their look,
+//! so an agent gets the user's session, never a credential to carry off.
 
 use serde_json::Value;
 
@@ -18,9 +19,10 @@ pub const WHAT_MOST: usize = 500;
 /// The most of a `what` the question's card shows, ended at a word: one plain sentence naming the
 /// thing and the change fits, and at the sidebar's least width Deny and Allow stay in view.
 pub const WHAT_SHOWN: usize = 120;
-/// The characters of an answer's body the agent reads at most, and of all a call's together.
-const SHOWN: usize = 20_000;
-pub const ALL_SHOWN: usize = 100_000;
+/// The characters of an answer's body the agent reads at most, and of all a call's together, which
+/// leaves room under the answer's cap (`tools::MAX_ANSWER`) for each request's line.
+const SHOWN: usize = 10_000;
+pub const ALL_SHOWN: usize = 11_000;
 /// The most characters of an address or a header's name or value the whole request shows. Nothing
 /// earlier bounds them, and a server takes far fewer: an address past this is no real one.
 pub const PART_SHOWN: usize = 10_000;
@@ -339,10 +341,19 @@ pub enum Wrong {
 
 /// The call's requests, checked against the page at `page`, the tab's address.
 pub fn parse(arguments: &Value, page: &str) -> Result<Vec<Request>, Wrong> {
-    let malformed = |why: &str| Wrong::Malformed(why.into());
     // Never what the page's address is: an agent may name a tab that isn't its own.
     let origin = origin(page).ok_or_else(|| {
-        malformed("The tab has no site's page loaded. Look at it with snapshot first.")
+        let why = match page.is_empty() || page == "about:blank" {
+            true => {
+                "The tab has no page loaded yet, so no site to send requests to. Go to the \
+                     site's page with navigate first."
+            }
+            false => {
+                "The tab shows no site's page, so no site to send requests to. Go to the \
+                      site's page with navigate first."
+            }
+        };
+        Wrong::Malformed(why.into())
     })?;
     let asked = arguments.get("requests").and_then(Value::as_array);
     let asked = asked.filter(|asked| (1..=MAX).contains(&asked.len()));
@@ -369,7 +380,7 @@ fn one(asked: &Value, origin: &str, number: usize) -> Result<Request, Wrong> {
         )));
     }
     let Some(path) = text("path") else {
-        return malformed("path is a path on the tab's site, such as /api/items.");
+        return malformed(PATH);
     };
     let (url, path) = resolve(origin, path)?;
     let mut headers = Vec::new();
@@ -618,18 +629,40 @@ fn origin(url: &str) -> Option<String> {
     Some(format!("{scheme}://{host}"))
 }
 
+/// What a path is, for an agent that gave none.
+const PATH: &str = "path is a path on the tab's site, such as /api/items?q=red, or a whole address \
+                    on it.";
+
 /// The whole address and the path of `path` on `origin`: a path from its root, or a whole address
-/// on that origin and no other.
+/// on that origin and no other. A space in it is %20, as the address bar makes it; any other
+/// whitespace or control character is refused by name and place, as a server may read it either
+/// way (#3661).
 fn resolve(origin: &str, path: &str) -> Result<(String, String), Wrong> {
-    let malformed =
-        || Wrong::Malformed("path is a path on the tab's site, such as /api/items.".into());
-    if path.is_empty()
-        || path
-            .chars()
-            .any(|char| char.is_whitespace() || char.is_control())
-    {
-        return Err(malformed());
+    let malformed = |why: String| Err(Wrong::Malformed(why));
+    if path.is_empty() {
+        return malformed(PATH.into());
     }
+    let odd = (path.chars().enumerate())
+        .find(|(_, char)| *char != ' ' && (char.is_whitespace() || char.is_control()));
+    if let Some((at, char)) = odd {
+        let name = match char {
+            '\t' => "a tab".to_string(),
+            '\n' => "a line break".to_string(),
+            '\r' => "a carriage return".to_string(),
+            char => format!("the character U+{:04X}", char as u32),
+        };
+        let mut bytes = [0; 4];
+        let encoded: String = (char.encode_utf8(&mut bytes).bytes())
+            .map(|byte| format!("%{byte:02X}"))
+            .collect();
+        let before: String = path.chars().take(at).collect();
+        return malformed(format!(
+            "path is a path on the tab's site, without {name}: there's one at character {}, \
+             after “{before}”. Encode it as {encoded} to send it.",
+            at + 1
+        ));
+    }
+    let path = path.replace(' ', "%20");
     let path = path.split('#').next().unwrap_or_default();
     let lower = path.to_ascii_lowercase();
     if lower.starts_with("http://") || lower.starts_with("https://") {
@@ -648,8 +681,18 @@ fn resolve(origin: &str, path: &str) -> Result<(String, String), Wrong> {
         return Ok((format!("{origin}{shown}"), shown));
     }
     // "//host" and "/\host" name another host, as a browser reads them.
-    if !path.starts_with('/') || path.starts_with("//") || path.starts_with("/\\") {
-        return Err(malformed());
+    if path.starts_with("//") || path.starts_with("/\\") {
+        return malformed(format!(
+            "path is a path on the tab's site, from its root: one starting with {} is read as \
+             another site's host. Start it with a single /.",
+            &path[..2]
+        ));
+    }
+    if !path.starts_with('/') {
+        return malformed(format!(
+            "path is a path on the tab's site, from its root, as /{path} is, or a whole address \
+             on it."
+        ));
     }
     Ok((format!("{origin}{path}"), path.to_string()))
 }
@@ -793,8 +836,18 @@ pub fn answer(sent: &Request, response: &Response, left: &mut usize, hidden: &mu
         );
         return answer;
     }
+    // A page comes as its outline, as the agent reads a tab's, so nothing of its source that the
+    // user doesn't see, such as a form's hidden fields or a meta tag, reaches the agent.
+    let page = is_html(&response.kind, &text);
+    let (text, withheld) = match page {
+        true => outline(&text),
+        false => (text, 0),
+    };
     let (text, hid) = hide_secrets(&text, response.kind.contains("json"));
     *hidden += hid;
+    if page {
+        answer.push_str(&format!("\n{}", outlined(withheld + hid)));
+    }
     let chars = text.chars().count();
     let shown = chars.min(SHOWN).min(*left);
     *left -= shown;
@@ -825,8 +878,216 @@ fn is_text(kind: &str) -> bool {
             .any(|each| kind.contains(each))
 }
 
+/// Whether an answer is a page: of an HTML type, or of none with markup that says it's one.
+fn is_html(kind: &str, text: &str) -> bool {
+    let kind = kind.to_ascii_lowercase();
+    if !kind.is_empty() {
+        return kind.contains("html");
+    }
+    let start = text.trim_start_matches(['\u{feff}', ' ', '\t', '\r', '\n']);
+    let head = start.get(..14).unwrap_or(start).to_ascii_lowercase();
+    head.starts_with("<!doctype html") || head.starts_with("<html")
+}
+
+/// The elements whose content isn't a page's text: what runs, styles or draws it, what shows when
+/// one doesn't, and a text field's value.
+const UNREAD: [&str; 8] = [
+    "script", "style", "template", "noscript", "svg", "iframe", "object", "textarea",
+];
+
+/// The elements a page's text breaks a line at.
+const BLOCKS: &str = "address article aside blockquote br caption dd details div dl dt fieldset \
+    figcaption figure footer form h1 h2 h3 h4 h5 h6 header hr li main nav ol p section table tr";
+
+fn is_block(name: &str) -> bool {
+    BLOCKS.split_whitespace().any(|block| block == name)
+}
+
+/// A page as an agent reads it in its outline rather than its source: its text, a link's address,
+/// an image's description, a form's method and address, and its fields' names and buttons, but
+/// no script, style, comment or meta tag, and no field's value. The values it leaves out, a meta
+/// tag's and a field's, are counted.
+fn outline(html: &str) -> (String, usize) {
+    let bytes = html.as_bytes();
+    let (mut out, mut withheld) = (String::new(), 0);
+    let mut link: Option<String> = None;
+    let mut at = 0;
+    let close_link = |out: &mut String, link: &mut Option<String>| {
+        if let Some(href) = link.take() {
+            out.push_str(&format!(" ({href})"));
+        }
+    };
+    while at < bytes.len() {
+        if bytes[at] != b'<' {
+            let end = (at..bytes.len()).find(|&next| bytes[next] == b'<');
+            let end = end.unwrap_or(bytes.len());
+            out.push_str(&decoded(&html[at..end]));
+            at = end;
+            continue;
+        }
+        if html[at..].starts_with("<!--") {
+            at = html[at..]
+                .find("-->")
+                .map_or(bytes.len(), |end| at + end + 3);
+            continue;
+        }
+        if matches!(bytes.get(at + 1), Some(b'!' | b'?')) {
+            at = html[at..].find('>').map_or(bytes.len(), |end| at + end + 1);
+            continue;
+        }
+        let Some(tag) = tag(html, at) else {
+            out.push('<');
+            at += 1;
+            continue;
+        };
+        // A value left open is the rest of the page, which is withheld as a field's is.
+        if tag.open {
+            withheld += 1;
+            break;
+        }
+        at = tag.end;
+        let value = |name: &str| {
+            (tag.attributes.iter())
+                .find(|(attribute, _)| attribute == name)
+                .map(|(_, bounds)| decoded(&html[bounds.0..bounds.1]).trim().to_string())
+                .filter(|value| !value.is_empty())
+        };
+        let field = value("name").or_else(|| value("id")).unwrap_or_default();
+        let name = tag.name.as_str();
+        if tag.closing {
+            if name == "a" {
+                close_link(&mut out, &mut link);
+            }
+            if is_block(name) {
+                out.push('\n');
+            }
+            continue;
+        }
+        if UNREAD.contains(&name) {
+            let end = (at..bytes.len()).find(|&next| {
+                bytes[next..].starts_with(b"</")
+                    && (bytes.get(next + 2..next + 2 + name.len()))
+                        .is_some_and(|word| word.eq_ignore_ascii_case(name.as_bytes()))
+            });
+            let end = end.unwrap_or(bytes.len());
+            if name == "textarea" {
+                out.push_str(&format!(" [text field: {field}] "));
+                withheld += usize::from(!html[at..end].trim().is_empty());
+            }
+            at = html[end..]
+                .find('>')
+                .map_or(bytes.len(), |close| end + close + 1);
+            continue;
+        }
+        match name {
+            "a" => {
+                close_link(&mut out, &mut link);
+                link = value("href");
+            }
+            "img" => {
+                if let Some(alt) = value("alt") {
+                    out.push_str(&format!(" [image: {alt}] "));
+                }
+            }
+            "input" => {
+                let kind = value("type").unwrap_or_else(|| "text".into());
+                let kind = kind.to_ascii_lowercase();
+                match kind.as_str() {
+                    "submit" | "button" | "reset" => {
+                        let label = value("value").unwrap_or(kind.clone());
+                        out.push_str(&format!(" [button: {label}] "));
+                    }
+                    "image" => {
+                        let label = value("alt").unwrap_or_default();
+                        out.push_str(&format!(" [button: {label}] "));
+                    }
+                    _ => {
+                        if kind != "hidden" {
+                            out.push_str(&format!(" [{kind} field: {field}] "));
+                        }
+                        withheld += usize::from(value("value").is_some());
+                    }
+                }
+            }
+            "select" => out.push_str(&format!(" [choice: {field}] ")),
+            "form" => {
+                let method = value("method").unwrap_or_else(|| "get".into());
+                let action = value("action").unwrap_or_default();
+                out.push_str(&format!("\n[form: {} {action}]\n", method.to_uppercase()));
+            }
+            "meta" => withheld += usize::from(value("content").is_some()),
+            _ if is_block(name) => out.push('\n'),
+            _ => {}
+        }
+    }
+    close_link(&mut out, &mut link);
+    // Spaces as a page draws them: one between words, and no empty lines.
+    let lines = (out.lines()).map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "));
+    let lines: Vec<String> = lines.filter(|line| !line.is_empty()).collect();
+    (lines.join("\n"), withheld)
+}
+
+/// Markup's text with its character references read: the named ones text has most, and numbers.
+fn decoded(text: &str) -> String {
+    if !text.contains('&') {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        rest = &rest[amp..];
+        // An entity's name is short, so its `;` is looked for only that far, not to the end.
+        let end = (rest.bytes().take(11)).position(|byte| byte == b';');
+        let read = end.and_then(|end| {
+            let name = &rest[1..end];
+            let read = match name {
+                "amp" => Some('&'),
+                "lt" => Some('<'),
+                "gt" => Some('>'),
+                "quot" => Some('"'),
+                "apos" => Some('\''),
+                "nbsp" => Some(' '),
+                _ => match name.strip_prefix('#') {
+                    Some(hex) if hex.starts_with(['x', 'X']) => u32::from_str_radix(&hex[1..], 16)
+                        .ok()
+                        .and_then(char::from_u32),
+                    Some(number) => number.parse().ok().and_then(char::from_u32),
+                    None => None,
+                },
+            };
+            read.map(|read| (read, end))
+        });
+        match read {
+            Some((read, end)) => {
+                out.push(read);
+                rest = &rest[end + 1..];
+            }
+            None => {
+                out.push('&');
+                rest = &rest[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The line an answer that's a page starts with: that it's the page's outline, and how many of
+/// its values were withheld.
+fn outlined(withheld: usize) -> String {
+    let said = "This is the page's outline, not its source";
+    match withheld {
+        0 => format!("{said}."),
+        1 => format!("{said}: 1 value was withheld."),
+        many => format!("{said}: {many} values were withheld."),
+    }
+}
+
 /// `text` without the values that look like secrets, and how many there were: JSON's fields named
-/// as a token, key, password or session's id is, and anywhere a JWT or a bearer credential.
+/// as a token, password, session's id or one-time code is, or a key or code whose value reads as
+/// a secret, and the same in an address's query, markup and script; and anywhere a JWT or a
+/// bearer credential.
 pub fn hide_secrets(text: &str, json: bool) -> (String, usize) {
     if json && let Ok(mut value) = serde_json::from_str::<Value>(text) {
         let hidden = hide_json(&mut value, false);
@@ -914,22 +1175,19 @@ pub fn hide_said(what: &str) -> (String, usize) {
 /// How many words after a secret's name `hide_said` looks for the "to" or "is" before its value.
 const NEAR: usize = 3;
 
-/// Whether a field by this name holds a secret. A CSRF token is the page's own, no use without
-/// its cookie, and what a change may need, so it shows.
+/// Whether a field by this name holds a secret whatever its value. A CSRF token is the page's own,
+/// no use without its cookie, and what a change may need, so it shows.
 fn secret_name(name: &str) -> bool {
-    let name: String = (name.chars()).filter(char::is_ascii_alphanumeric).collect();
-    let name = name.to_ascii_lowercase();
-    if ["csrf", "xsrf", "authenticity"]
-        .iter()
-        .any(|word| name.contains(word))
-    {
+    if kept_name(name) {
         return false;
     }
+    let name = plain_name(name);
     let words = [
         "token",
         "secret",
         "password",
         "passwd",
+        "passcode",
         "apikey",
         "accesskey",
         "privatekey",
@@ -938,10 +1196,196 @@ fn secret_name(name: &str) -> bool {
         "cookie",
         "sessionid",
         "sessionkey",
+        "sessid",
         "jwt",
         "bearer",
     ];
-    matches!(name.as_str(), "sid" | "pwd" | "auth") || words.iter().any(|word| name.contains(word))
+    // A session's id, a refresh token and a one-time code go by these names alone.
+    matches!(
+        name.as_str(),
+        "sid" | "pwd" | "auth" | "session" | "refresh"
+    ) || name.ends_with("otp")
+        || words.iter().any(|word| name.contains(word))
+}
+
+/// Whether a field by this name shows whatever its value looks like: a CSRF token's, which a
+/// site's API needs for a change, and every change asks the user first.
+fn kept_name(name: &str) -> bool {
+    let name = plain_name(name);
+    ["csrf", "xsrf", "authenticity"]
+        .iter()
+        .any(|word| name.contains(word))
+}
+
+/// A field's name as `secret_name` reads it: its letters and digits, in lower case.
+fn plain_name(name: &str) -> String {
+    let name: String = (name.chars()).filter(char::is_ascii_alphanumeric).collect();
+    name.to_ascii_lowercase()
+}
+
+/// Whether a field by this name holds a secret only when its value reads as one: a `key` or a
+/// `code` is as often a sort's key or a country's code.
+fn shaped_secret(name: &str, value: &str) -> bool {
+    let name = plain_name(name);
+    // These codes are a place's, a phone's or an answer's number, however many digits it has.
+    let numbers = [
+        "zipcode",
+        "postalcode",
+        "postcode",
+        "areacode",
+        "countrycode",
+        "dialcode",
+        "statuscode",
+        "errorcode",
+    ];
+    let digits = !numbers.iter().any(|number| name.ends_with(number));
+    (name.ends_with("key") || name.ends_with("code")) && secret_shaped(value, digits)
+}
+
+/// Whether a value reads as a secret: a one-time code's six to eight digits, if `digits`, or 16
+/// or more of a credential's letters, digits and marks, with both letters and digits, as an API
+/// key or an authorization code is.
+fn secret_shaped(value: &str, digits_may_be: bool) -> bool {
+    let value = value.trim().as_bytes();
+    let digits = value.iter().filter(|byte| byte.is_ascii_digit()).count();
+    let letters = value
+        .iter()
+        .filter(|byte| byte.is_ascii_alphabetic())
+        .count();
+    (digits_may_be && digits == value.len() && (6..=8).contains(&value.len()))
+        || (value.len() >= 16
+            && digits > 0
+            && letters > 0
+            && (value.iter()).all(|&byte| base64url(byte) || b".~+/=".contains(&byte)))
+}
+
+/// Whether the value a field by this name holds is hidden.
+fn secret_field(name: &str, value: &str) -> bool {
+    !value.trim().is_empty() && (secret_name(name) || shaped_secret(name, value))
+}
+
+/// Whether a byte is in a run `random_run` reads: a token's letters, digits and joins.
+fn run_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || b"_-+=".contains(&byte)
+}
+
+/// Whether a run reads as a random secret, whatever names it: a piece of it between `-`, `_`, `+`,
+/// `=` and `.` that's 16 or more of mixed case and digits, or 20 or more of one case and digits,
+/// spread as a random draw is. Hex is never one, nor digits alone, since commits, digests and ids
+/// are written so, nor a `sha512-` digest; and a piece that reads as words isn't, such as a file
+/// named for what it shows.
+fn random_run(run: &str) -> bool {
+    if ["sha256-", "sha384-", "sha512-"]
+        .iter()
+        .any(|digest| run.starts_with(digest))
+    {
+        return false;
+    }
+    (run.trim_end_matches('='))
+        .split(['-', '_', '+', '=', '.'])
+        .any(random_piece)
+}
+
+fn random_piece(piece: &str) -> bool {
+    let bytes = piece.as_bytes();
+    let upper = bytes.iter().any(u8::is_ascii_uppercase);
+    let lower = bytes.iter().any(u8::is_ascii_lowercase);
+    let digit = bytes.iter().any(u8::is_ascii_digit);
+    let hex = piece
+        .strip_prefix("0x")
+        .or_else(|| piece.strip_prefix("0X"))
+        .unwrap_or(piece);
+    if !(upper || lower) || hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return false;
+    }
+    let spread = entropy(bytes);
+    (bytes.len() >= 16 && upper && lower && digit && spread >= 3.5 && !words(piece))
+        || (bytes.len() >= 20 && digit && upper != lower && spread >= 3.6)
+}
+
+/// Bits a byte of `bytes` carries, by how often each comes.
+fn entropy(bytes: &[u8]) -> f64 {
+    let mut counts = [0usize; 256];
+    for &byte in bytes {
+        counts[byte as usize] += 1;
+    }
+    let length = bytes.len() as f64;
+    (counts.iter().filter(|&&count| count > 0))
+        .map(|&count| {
+            let share = count as f64 / length;
+            -share * share.log2()
+        })
+        .sum()
+}
+
+/// Whether mixed case reads as words: at least 30% of its letters vowels, as a word's are and a
+/// random draw's (about 19%) aren't, and words of three letters or more on average, in the
+/// `CamelCase` or `WORDWord` way, where a random draw changes case every letter or two.
+fn words(piece: &str) -> bool {
+    let bytes = piece.as_bytes();
+    let letters = bytes
+        .iter()
+        .filter(|byte| byte.is_ascii_alphabetic())
+        .count();
+    let vowels = (bytes.iter())
+        .filter(|byte| b"aeiouAEIOU".contains(byte))
+        .count();
+    let starts = (0..bytes.len())
+        .filter(|&at| {
+            let letter = |at: usize| bytes.get(at).is_some_and(u8::is_ascii_alphabetic);
+            let lower = |at: usize| bytes.get(at).is_some_and(u8::is_ascii_lowercase);
+            letter(at)
+                && (at == 0
+                    || !letter(at - 1)
+                    || bytes[at].is_ascii_uppercase() && (lower(at - 1) || lower(at + 1)))
+        })
+        .count();
+    letters > 0 && vowels * 10 >= letters * 3 && letters >= starts * 3
+}
+
+/// In the run `from..end` of `text`, the bounds of what `random_run` hides, if any: its value if
+/// it's a `name=value`, nothing under a name `kept_name` keeps, and not an escape's two digits
+/// before it ("%2F"). A hidden value runs on over the runs a `/` joins it to, of eight or more,
+/// as base64 has them.
+fn random_span(text: &str, from: usize, end: usize) -> Option<Bounds> {
+    let bytes = text.as_bytes();
+    let mut start = from;
+    if from > 0 && bytes[from - 1] == b'%' {
+        start = (from + 2).min(end);
+    }
+    if let Some(equals) = text[start..end].find('=') {
+        let (name, value) = (&text[start..start + equals], &text[start + equals + 1..end]);
+        let named = name
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphabetic());
+        if named && !value.trim_start_matches('=').is_empty() {
+            if kept_name(name) {
+                return None;
+            }
+            start += equals + 1;
+        }
+    }
+    if !random_run(&text[start..end]) {
+        return None;
+    }
+    let joined = |at: usize, step: isize| {
+        let mut length = 0;
+        let mut next = at as isize + step;
+        while next >= 0 && (next as usize) < bytes.len() && run_byte(bytes[next as usize]) {
+            length += 1;
+            next += step;
+        }
+        length
+    };
+    let (mut start, mut end) = (start, end);
+    while end < bytes.len() && bytes[end] == b'/' && joined(end, 1) >= 8 {
+        end += 1 + joined(end, 1);
+    }
+    while start > 0 && bytes[start - 1] == b'/' && joined(start - 1, -1) >= 8 {
+        start -= 1 + joined(start - 1, -1);
+    }
+    Some((start, end))
 }
 
 fn hide_json(value: &mut Value, secret: bool) -> usize {
@@ -950,9 +1394,30 @@ fn hide_json(value: &mut Value, secret: bool) -> usize {
             *value = Value::String(HIDDEN.into());
             1
         }
+        // A string can hold an address, markup or script, whose secrets go as the text's do.
+        Value::String(text) => {
+            let (kept, hidden) = hide_text(text);
+            if hidden > 0 {
+                *text = kept;
+            }
+            hidden
+        }
         Value::Array(items) => items.iter_mut().map(|item| hide_json(item, secret)).sum(),
         Value::Object(fields) => (fields.iter_mut())
-            .map(|(name, item)| hide_json(item, secret || secret_name(name)))
+            .map(|(name, item)| match item {
+                Value::String(text) if kept_name(name) => match token_like(text) {
+                    true => {
+                        *item = Value::String(HIDDEN.into());
+                        1
+                    }
+                    false => 0,
+                },
+                Value::String(text) if shaped_secret(name, text) => {
+                    *item = Value::String(HIDDEN.into());
+                    1
+                }
+                _ => hide_json(item, secret || secret_name(name)),
+            })
             .sum(),
         _ => 0,
     }
@@ -995,8 +1460,10 @@ fn jwt(text: &[u8]) -> usize {
     at
 }
 
-/// As `hide_secrets`, in text that isn't JSON whole, such as a page's script or a body cut short:
-/// each quoted field's value, and each JWT and bearer credential.
+/// As `hide_secrets`, in text that isn't JSON whole, such as a page, its script or a form's body,
+/// by the same names as JSON's fields: a field's value, its name quoted once, twice or not at all,
+/// as a script's variables are too; an input's value and a meta tag's content; and the values in
+/// an address's query or a form's. And each JWT and bearer credential, whatever its name.
 fn hide_text(text: &str) -> (String, usize) {
     let bytes = text.as_bytes();
     let (mut kept, mut hidden) = (String::with_capacity(text.len()), 0);
@@ -1007,17 +1474,64 @@ fn hide_text(text: &str) -> (String, usize) {
         *copied = to;
         hidden += 1;
     };
+    let said = |(from, to): (usize, usize)| &text[from..to];
     while at < bytes.len() {
         let starts = at == 0 || !base64url(bytes[at - 1]);
-        if bytes[at] == b'"' {
-            if let Some((name, value)) = field(bytes, at) {
-                if secret_name(&text[name.0..name.1]) && value.1 > value.0 {
-                    hide(&mut kept, &mut copied, value.0, value.1);
-                }
-                at = value.1 + 1;
+        if bytes[at] == b'<'
+            && let Some((name, value, password)) = tag_value(text, at)
+        {
+            if password && value.1 > value.0 || secret_field(&name, said(value)) {
+                hide(&mut kept, &mut copied, value.0, value.1);
+                at = value.1;
                 continue;
             }
-        } else if starts && bytes[at] == b'e' {
+            if kept_name(&name) {
+                at = value.1;
+                continue;
+            }
+        }
+        if matches!(bytes[at], b'"' | b'\'') {
+            if let Some((name, value)) = field(bytes, at) {
+                if secret_field(said(name), said(value)) {
+                    hide(&mut kept, &mut copied, value.0, value.1);
+                    at = value.1 + 1;
+                } else if kept_name(said(name)) {
+                    at = value.1 + 1;
+                } else {
+                    // Its value is looked through as text, as it may be an address.
+                    at = name.1 + 1;
+                }
+                continue;
+            }
+        }
+        let query = match bytes[at] {
+            b'?' | b'&' | b'#' | b';' => Some(at + 1),
+            _ if at == 0 => Some(0),
+            _ => None,
+        };
+        if let Some((name, value)) = query.and_then(|from| query_value(bytes, from)) {
+            if secret_field(said(name), said(value)) {
+                hide(&mut kept, &mut copied, value.0, value.1);
+                at = value.1;
+                continue;
+            }
+            if kept_name(said(name)) {
+                at = value.1;
+                continue;
+            }
+        }
+        if let Some((name, value)) = bare_field(bytes, at) {
+            if secret_field(said(name), said(value)) {
+                hide(&mut kept, &mut copied, value.0, value.1);
+                at = value.1 + 1;
+            } else if kept_name(said(name)) {
+                at = value.1 + 1;
+            } else {
+                at = value.0;
+            }
+            continue;
+        }
+        if starts && bytes[at] == b'e' {
             let length = jwt(&bytes[at..]);
             if length > 0 {
                 hide(&mut kept, &mut copied, at, at + length);
@@ -1038,43 +1552,240 @@ fn hide_text(text: &str) -> (String, usize) {
                 continue;
             }
         }
+        if run_byte(bytes[at]) && (at == 0 || !run_byte(bytes[at - 1])) {
+            let end = (at..bytes.len())
+                .find(|&next| !run_byte(bytes[next]))
+                .unwrap_or(bytes.len());
+            if let Some((from, to)) = random_span(text, at, end) {
+                let from = from.max(copied);
+                hide(&mut kept, &mut copied, from, to);
+                at = to;
+                continue;
+            }
+        }
         at += 1;
     }
     kept.push_str(&text[copied..]);
     (kept, hidden)
 }
 
-/// The quoted name at `at`, then a colon, then a quoted value: the bounds of the name's text and
-/// the value's, inside their quotes.
-fn field(bytes: &[u8], at: usize) -> Option<((usize, usize), (usize, usize))> {
+/// The bounds of a byte range in `hide_text`'s text.
+type Bounds = (usize, usize);
+
+/// The name quoted at `at`, then a colon, then a quoted value: the bounds of the name's text and
+/// the value's, inside their quotes. Either may be in double or single quotes, and the value in
+/// a script's backquotes.
+fn field(bytes: &[u8], at: usize) -> Option<(Bounds, Bounds)> {
     // A name is short; a longer string is a value, which is looked through as text.
     let name_end = quoted(bytes, at, 64)?;
-    let mut next = name_end + 1;
-    while bytes.get(next).is_some_and(u8::is_ascii_whitespace) {
-        next += 1;
-    }
+    let next = past_spaces(bytes, name_end + 1);
     if bytes.get(next) != Some(&b':') {
         return None;
     }
-    next += 1;
-    while bytes.get(next).is_some_and(u8::is_ascii_whitespace) {
-        next += 1;
-    }
-    if bytes.get(next) != Some(&b'"') {
+    let next = past_spaces(bytes, next + 1);
+    if !matches!(bytes.get(next), Some(b'"' | b'\'' | b'`')) {
         return None;
     }
     let value_end = quoted(bytes, next, usize::MAX)?;
     Some(((at + 1, name_end), (next + 1, value_end)))
 }
 
-/// Where the string quoted at `at` closes, if within `most` bytes and on its line.
+/// A script's name, unquoted, at `at`, then a colon or `=`, then a quoted value, as `field` has
+/// them: `token: "…"` in an object or `window.apiKey = "…"`.
+fn bare_field(bytes: &[u8], at: usize) -> Option<(Bounds, Bounds)> {
+    let word = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$';
+    let first = bytes[at];
+    if !(first.is_ascii_alphabetic() || first == b'_' || first == b'$')
+        || (at > 0 && word(bytes[at - 1]))
+    {
+        return None;
+    }
+    let mut end = at;
+    while end < bytes.len() && end - at <= 64 && word(bytes[end]) {
+        end += 1;
+    }
+    if end - at > 64 {
+        return None;
+    }
+    let next = past_spaces(bytes, end);
+    match bytes.get(next) {
+        Some(b':') => {}
+        // Not a comparison or an arrow.
+        Some(b'=') if !matches!(bytes.get(next + 1), Some(b'=' | b'>')) => {}
+        _ => return None,
+    }
+    let next = past_spaces(bytes, next + 1);
+    if !matches!(bytes.get(next), Some(b'"' | b'\'' | b'`')) {
+        return None;
+    }
+    let value_end = quoted(bytes, next, usize::MAX)?;
+    Some(((at, end), (next + 1, value_end)))
+}
+
+/// A query's or form's `name=value` from `from`, as an address or a form's body has it: the
+/// bounds of its name and of its value, which isn't empty.
+fn query_value(bytes: &[u8], from: usize) -> Option<(Bounds, Bounds)> {
+    let named = |byte: u8| byte.is_ascii_alphanumeric() || b"_.-%[]".contains(&byte);
+    // A name is short, so its run stops past 64 rather than reading a long word to its end.
+    let mut end = from;
+    while end < bytes.len() && end - from <= 64 && named(bytes[end]) {
+        end += 1;
+    }
+    if end == from || end - from > 64 || bytes.get(end) != Some(&b'=') {
+        return None;
+    }
+    let start = end + 1;
+    let mut stop = start;
+    while stop < bytes.len()
+        && !(bytes[stop].is_ascii_whitespace() || b"&#?;,\"'`<>\\()".contains(&bytes[stop]))
+    {
+        stop += 1;
+    }
+    (stop > start).then_some(((from, end), (start, stop)))
+}
+
+/// At an `<input` or `<meta` tag, the name its value goes by, the bounds of that value, and
+/// whether it's a password's: an input's `value` by its `name` or else its `id`, and a meta tag's
+/// `content` by its `name` or else its `property`, `itemprop` or `http-equiv`.
+fn tag_value(text: &str, at: usize) -> Option<(String, Bounds, bool)> {
+    let tag = tag(text, at).filter(|tag| !tag.closing && !tag.open)?;
+    let input = match tag.name.as_str() {
+        "input" => true,
+        "meta" => false,
+        _ => return None,
+    };
+    let (mut name, mut value, mut password) = (None::<String>, None, false);
+    for (attribute, bounds) in tag.attributes {
+        let said = &text[bounds.0..bounds.1];
+        match attribute.as_str() {
+            "name" => name = Some(said.to_string()),
+            "id" | "property" | "itemprop" | "http-equiv" if name.is_none() => {
+                name = Some(said.to_string())
+            }
+            "value" if input => value = Some(bounds),
+            "content" if !input => value = Some(bounds),
+            "type" if input => password = said.trim().eq_ignore_ascii_case("password"),
+            _ => {}
+        }
+    }
+    Some((name.unwrap_or_default(), value?, password))
+}
+
+/// A markup tag: its name in lower case, whether it closes, its attributes' names in lower case
+/// and their values' bounds, and where it ends, past its `>`. One with a quoted value left open is
+/// `open`, its attributes those before that value, and ends at the end of the text, as a browser
+/// reads the rest as that value.
+struct Tag {
+    name: String,
+    closing: bool,
+    attributes: Vec<(String, Bounds)>,
+    end: usize,
+    open: bool,
+}
+
+/// The tag at the `<` at `at`, if one starts there.
+fn tag(text: &str, at: usize) -> Option<Tag> {
+    let bytes = text.as_bytes();
+    let mut next = at + 1;
+    let closing = bytes.get(next) == Some(&b'/');
+    if closing {
+        next += 1;
+    }
+    let start = next;
+    if !bytes.get(start).is_some_and(u8::is_ascii_alphabetic) {
+        return None;
+    }
+    while next < bytes.len() && (bytes[next].is_ascii_alphanumeric() || bytes[next] == b'-') {
+        next += 1;
+    }
+    let name = text[start..next].to_ascii_lowercase();
+    let mut attributes = Vec::new();
+    loop {
+        next = past_spaces(bytes, next);
+        // A tag ends at the next `<` outside a quoted value as at its `>`, so one left open isn't
+        // read on to the end of the body, and again from each tag after it.
+        match bytes.get(next) {
+            None | Some(b'<') => break,
+            Some(b'>') => {
+                next += 1;
+                break;
+            }
+            Some(b'/') => {
+                next += 1;
+                continue;
+            }
+            _ => {}
+        }
+        let start = next;
+        while next < bytes.len()
+            && !(bytes[next].is_ascii_whitespace() || b"=<>/".contains(&bytes[next]))
+        {
+            next += 1;
+        }
+        let attribute = text[start..next].to_ascii_lowercase();
+        next = past_spaces(bytes, next);
+        let mut bounds = (next, next);
+        if bytes.get(next) == Some(&b'=') {
+            next = past_spaces(bytes, next + 1);
+            match bytes.get(next) {
+                Some(&quote @ (b'"' | b'\'')) => {
+                    let Some(close) = (next + 1..bytes.len()).find(|&at| bytes[at] == quote) else {
+                        let end = bytes.len();
+                        return Some(Tag {
+                            name,
+                            closing,
+                            attributes,
+                            end,
+                            open: true,
+                        });
+                    };
+                    bounds = (next + 1, close);
+                    next = close + 1;
+                }
+                _ => {
+                    let from = next;
+                    while next < bytes.len()
+                        && !(bytes[next].is_ascii_whitespace() || b"<>".contains(&bytes[next]))
+                    {
+                        next += 1;
+                    }
+                    bounds = (from, next);
+                }
+            }
+        }
+        if next == start {
+            next += 1;
+        } else {
+            attributes.push((attribute, bounds));
+        }
+    }
+    Some(Tag {
+        name,
+        closing,
+        attributes,
+        end: next,
+        open: false,
+    })
+}
+
+/// The first byte from `at` that isn't a space.
+fn past_spaces(bytes: &[u8], mut at: usize) -> usize {
+    while bytes.get(at).is_some_and(u8::is_ascii_whitespace) {
+        at += 1;
+    }
+    at
+}
+
+/// Where the string quoted at `at`, by the quote there, closes, if within `most` bytes and on its
+/// line.
 fn quoted(bytes: &[u8], at: usize, most: usize) -> Option<usize> {
+    let quote = bytes[at];
     let mut next = at + 1;
     while next < bytes.len() && next - at <= most {
         match bytes[next] {
             b'\\' => next += 2,
-            b'"' => return Some(next),
             b'\n' => return None,
+            byte if byte == quote => return Some(next),
             _ => next += 1,
         }
     }
@@ -1211,7 +1922,7 @@ mod tests {
             "//evil.example/a",
             "/\\evil.example/a",
             "api/items",
-            "/a b",
+            "/a\tb",
             "",
         ] {
             let asked = json!([{ "method": "GET", "path": wrong }]);
@@ -1220,11 +1931,57 @@ mod tests {
                 "{wrong:?} went"
             );
         }
-        let blank = parse(
-            &json!({ "requests": [{ "method": "GET", "path": "/" }] }),
-            "about:blank",
+        for page in ["about:blank", ""] {
+            let blank = parse(
+                &json!({ "requests": [{ "method": "GET", "path": "/" }] }),
+                page,
+            );
+            assert!(matches!(blank, Err(Wrong::Malformed(_))));
+        }
+    }
+
+    /// A path an agent wrote as it would type it in the address bar goes as the address bar sends
+    /// it: a space as %20, a quote as it is, for the page's fetch to encode. Any other whitespace
+    /// or control character is refused by name and place, with how to encode it, and a path not
+    /// from the root says how it would be (#3661).
+    #[test]
+    fn a_path_says_what_it_wont_take_and_where() {
+        let path = |path: &str| parsed(json!([{ "method": "GET", "path": path }]));
+        let sent = path("/search?q=\"red shoes\" size 9").unwrap();
+        assert_eq!(
+            sent[0].url,
+            "https://team.example.com/search?q=\"red%20shoes\"%20size%209"
         );
-        assert!(matches!(blank, Err(Wrong::Malformed(_))));
+        assert_eq!(sent[0].path, "/search?q=\"red%20shoes\"%20size%209");
+        let whole = path("https://team.example.com/a b").unwrap();
+        assert_eq!(whole[0].url, "https://team.example.com/a%20b");
+        let wrong = |given: &str| match path(given) {
+            Err(Wrong::Malformed(why)) => why,
+            other => panic!("{given:?} answered {other:?}"),
+        };
+        assert_eq!(
+            wrong("/search?q=red\nshoes"),
+            "path is a path on the tab's site, without a line break: there's one at character \
+             14, after “/search?q=red”. Encode it as %0A to send it."
+        );
+        assert_eq!(
+            wrong("/a\u{a0}b"),
+            "path is a path on the tab's site, without the character U+00A0: there's one at \
+             character 3, after “/a”. Encode it as %C2%A0 to send it."
+        );
+        assert_eq!(
+            wrong("api/items"),
+            "path is a path on the tab's site, from its root, as /api/items is, or a whole \
+             address on it."
+        );
+        assert!(wrong("//evil.example/a").starts_with(
+            "path is a path on the tab's site, from its root: one starting with // is read"
+        ));
+        assert_eq!(
+            wrong(""),
+            "path is a path on the tab's site, such as /api/items?q=red, or a whole address on \
+             it."
+        );
     }
 
     /// The headers the browser sets are the browser's, Authorization is a credential, and a
@@ -1542,6 +2299,396 @@ mod tests {
             answer(sent, &none, &mut left, &mut hidden),
             "GET /api/auth/session: No answer came: ERR_TIMED_OUT"
         );
+    }
+
+    /// What a hidden value was, for the tests' messages: none of `values` is in `kept`.
+    fn none_of(kept: &str, values: &[&str]) {
+        for value in values {
+            assert!(!kept.contains(value), "{value} shows in {kept}");
+        }
+    }
+
+    /// Fields that only ever hold a secret are hidden whatever their value: a session's id, a
+    /// one-time code, a passcode and a refresh token.
+    #[test]
+    fn a_session_id_one_time_code_and_refresh_token_are_hidden() {
+        let body = json!({
+            "session": "made-up-session-1",
+            "PHPSESSID": "made-up-session-2",
+            "JSESSIONID": "made-up-session-3",
+            "otp": "made-up-otp-1",
+            "totp": "made-up-otp-2",
+            "passcode": "made-up-pass-1",
+            "refresh": "made-up-refresh-1",
+            "user": "Ada",
+        });
+        let (kept, hidden) = hide_secrets(&body.to_string(), true);
+        none_of(
+            &kept,
+            &[
+                "made-up-session",
+                "made-up-otp",
+                "made-up-pass",
+                "made-up-refresh",
+            ],
+        );
+        assert!(kept.contains("Ada"), "{kept}");
+        assert_eq!(hidden, 7, "{kept}");
+    }
+
+    /// `key` and `code` are common names for harmless values, so only a value shaped as a secret
+    /// is hidden under them: a long one of letters and digits, or a one-time code's digits.
+    #[test]
+    fn a_key_or_code_is_hidden_when_it_reads_as_a_secret() {
+        let body = json!({
+            "key": "Mk7Qw2Lp9Zx4Vb8Nc3Rt",
+            "code": "481920",
+            "grant": { "code": "Zq8LmN3pR7sT1vX5yB9c" },
+            "items": [
+                { "key": "sidebar-width", "code": "US" },
+                { "key": "title", "code": "ERR_TIMEOUT", "zip_code": "10115" },
+            ],
+        });
+        let (kept, hidden) = hide_secrets(&body.to_string(), true);
+        none_of(&kept, &["Mk7Qw2", "481920", "Zq8LmN"]);
+        for shown in ["sidebar-width", "\"US\"", "title", "ERR_TIMEOUT", "10115"] {
+            assert!(kept.contains(shown), "{shown} is hidden in {kept}");
+        }
+        assert_eq!(hidden, 3, "{kept}");
+    }
+
+    /// A code that's a place's, a phone's or an answer's number shows however many digits it
+    /// has, and a one-time code's digits under any other name ending in code are hidden.
+    #[test]
+    fn a_postal_or_status_code_shows_and_a_one_time_code_is_hidden() {
+        let shown = json!({
+            "zip_code": "94105123",
+            "postalCode": "1234567",
+            "postcode": "123456",
+            "area_code": "1234567",
+            "countryCode": "123456",
+            "dial-code": "1234567",
+            "status_code": "200000",
+            "errorCode": "40400401",
+        });
+        let (kept, hidden) = hide_secrets(&shown.to_string(), true);
+        assert_eq!(hidden, 0, "{kept}");
+        let page = "<input name=\"postal_code\" value=\"1234567\"> ?zipcode=94105123";
+        assert_eq!(hide_secrets(page, false), (page.to_string(), 0));
+
+        let one_time = json!({
+            "code": "481920",
+            "verificationCode": "48192017",
+            "smscode": "4819201",
+            "promo_code": "481920",
+        });
+        let (kept, hidden) = hide_secrets(&one_time.to_string(), true);
+        none_of(&kept, &["481920"]);
+        assert_eq!(hidden, 4, "{kept}");
+    }
+
+    /// A body of a megabyte of tags, fields or quotes that never close is read in a moment, as
+    /// each scan stops at its own end rather than reading on through the rest of the body again
+    /// from the next tag.
+    #[test]
+    fn an_unclosed_tag_or_quote_is_read_once() {
+        let repeated = |unit: &str, end: &str| {
+            let mut body = unit.repeat(MAX_BODY / unit.len());
+            body.push_str(end);
+            body
+        };
+        let bodies = [
+            repeated("<input ", ""),
+            repeated("<meta ", ""),
+            repeated("<input value='", "'"),
+            repeated("<input name=token value=", ""),
+            repeated("\"token\": '", "'"),
+            repeated("token = `", "`"),
+            repeated("&", "a"),
+            repeated("a", "="),
+            repeated("?token_", "=x"),
+            repeated("<script>", ""),
+            repeated("<textarea>", ""),
+            repeated("<!-- ", ""),
+            repeated("<!x ", ""),
+            repeated("<a href='", "'"),
+            repeated("&#x", ""),
+            repeated("Mk7Qw2Lp/", ""),
+        ];
+        let sent = &parsed(json!([{ "method": "GET", "path": "/" }])).unwrap()[0];
+        for body in bodies {
+            let page = Response {
+                status: 200,
+                kind: "text/html".into(),
+                body: body.clone().into_bytes(),
+                ..Response::default()
+            };
+            let json = serde_json::to_string(&body).unwrap();
+            // Each is one answer's work: as text, as JSON, and as a page through its outline.
+            let passes: [(&str, &dyn Fn()); 3] = [
+                ("text", &|| _ = hide_secrets(&body, false)),
+                ("JSON", &|| _ = hide_secrets(&json, true)),
+                ("a page", &|| {
+                    let (mut left, mut hidden) = (ALL_SHOWN, 0);
+                    answer(sent, &page, &mut left, &mut hidden);
+                }),
+            ];
+            for (read_as, pass) in passes {
+                let started = std::time::Instant::now();
+                pass();
+                let took = started.elapsed();
+                assert!(
+                    took < std::time::Duration::from_millis(500),
+                    "{took:?} read as {read_as} for a body of {:?}",
+                    &body[..20]
+                );
+            }
+        }
+    }
+
+    /// A page's hidden inputs and meta tags are hidden by the same names as JSON's fields, and a
+    /// form's CSRF token and a search's words show.
+    #[test]
+    fn a_pages_hidden_inputs_and_meta_tags_are_hidden_by_their_names() {
+        let page = r#"<form><input type="hidden" name="session_id" value="made-up-session-4">
+            <input type='hidden' name='otp' value='made-up-otp-3'>
+            <input value="Mk7Qw2Lp9Zx4Vb8Nc3Rt" type="hidden" name="key">
+            <input type="hidden" name="authenticity_token" value="keep-csrf">
+            <input name="q" value="shoes"></form>
+            <meta name="api-key" content="made-up-key-1"><meta name="description" content="A shop">"#;
+        let (kept, hidden) = hide_secrets(page, false);
+        none_of(
+            &kept,
+            &["made-up-session", "made-up-otp", "Mk7Qw2", "made-up-key"],
+        );
+        for shown in ["keep-csrf", "shoes", "A shop"] {
+            assert!(kept.contains(shown), "{shown} is hidden in {kept}");
+        }
+        assert_eq!(hidden, 4, "{kept}");
+    }
+
+    /// A script's fields are hidden by the same names as JSON's, whether their names are quoted
+    /// once, twice or not at all, and so are its variables'.
+    #[test]
+    fn a_scripts_fields_are_hidden_by_their_names_however_quoted() {
+        let script = "var config = {token: \"made-up-token-1\", 'secret': 'made-up-secret-1', \
+             title: 'Board', key: `Mk7Qw2Lp9Zx4Vb8Nc3Rt`, code: 'ok'};\n\
+             window.apiKey = \"made-up-key-2\";";
+        let (kept, hidden) = hide_secrets(script, false);
+        none_of(
+            &kept,
+            &["made-up-token", "made-up-secret", "Mk7Qw2", "made-up-key"],
+        );
+        assert!(kept.contains("'Board'") && kept.contains("'ok'"), "{kept}");
+        assert_eq!(hidden, 4, "{kept}");
+    }
+
+    /// An address's query, in JSON, a page or a form's body, is hidden by the same names, and
+    /// its other values show.
+    #[test]
+    fn an_addresss_query_is_hidden_by_the_same_names() {
+        let body = json!({
+            "next": "https://example.com/done?state=s1&access_token=made-up-token-2&page=2",
+            "reset": "/reset?code=Zq8LmN3pR7sT1vX5yB9c",
+        });
+        let (kept, hidden) = hide_secrets(&body.to_string(), true);
+        none_of(&kept, &["made-up-token", "Zq8LmN"]);
+        assert!(
+            kept.contains("state=s1") && kept.contains("page=2"),
+            "{kept}"
+        );
+        assert_eq!(hidden, 2, "{kept}");
+
+        let page = r#"<a href="/login;jsessionid=made-up-session-5?lang=en">In</a>
+            <a href="/feed?a=1&amp;session=made-up-session-6">Feed</a>"#;
+        let (kept, hidden) = hide_secrets(page, false);
+        none_of(&kept, &["made-up-session"]);
+        assert!(kept.contains("lang=en") && kept.contains("a=1"), "{kept}");
+        assert_eq!(hidden, 2, "{kept}");
+
+        let (kept, hidden) = hide_secrets("user=ada&refresh=made-up-refresh-2&remember=1", false);
+        none_of(&kept, &["made-up-refresh"]);
+        assert!(
+            kept.contains("user=ada") && kept.contains("remember=1"),
+            "{kept}"
+        );
+        assert_eq!(hidden, 1, "{kept}");
+    }
+
+    /// A value that reads as a random draw is hidden under any name or none, in JSON, a query
+    /// and text: a token of mixed case and digits, one of one case and digits, one after a
+    /// prefix, and base64 split by a `/`, which goes whole.
+    #[test]
+    fn a_value_that_reads_as_random_is_hidden_wherever_it_stands() {
+        let body = json!({
+            "note": "Mk7Qw2Lp9Zx4Vb8Nc3Rt",
+            "seed": "KZ4Q7MXW2RT6PL3NB5VY",
+            "pair": "q7x2m9w4k8z3v6n1p5r0t",
+            "item": "mu_Zq8LmN3pR7sT1vX5yB9cWd",
+            "link": "/files?item=Hv3Kp8Rw2Nz6Qm4Tx9Lc",
+            "pem": "Tf6Yh2Wq9Lz4Kd8Rm3Xp/Nb7Vc1Gs5Ju0Ea8Ho",
+            "title": "Board",
+        });
+        let (kept, hidden) = hide_secrets(&body.to_string(), true);
+        none_of(
+            &kept,
+            &[
+                "Mk7Qw2", "KZ4Q7M", "q7x2m9", "Zq8LmN", "Hv3Kp8", "Tf6Yh2", "Nb7Vc1",
+            ],
+        );
+        assert!(kept.contains("/files?item=(hidden)"), "{kept}");
+        assert!(kept.contains("Board"), "{kept}");
+        assert_eq!(hidden, 6, "{kept}");
+
+        let (kept, hidden) = hide_secrets("Your key is Mk7Qw2Lp9Zx4Vb8Nc3Rt, keep it.", false);
+        assert_eq!(kept, "Your key is (hidden), keep it.");
+        assert_eq!(hidden, 1);
+    }
+
+    /// What an agent passes back to a site reads as random but shows: a commit's or a digest's
+    /// hex, a UUID, digits, an integrity digest, and names and file names made of words.
+    #[test]
+    fn hex_uuids_digests_and_words_show() {
+        let shown = [
+            "3f786850e387550fdab836ed7e6dc881de23001b",
+            "9b74c9897bac770ffc029102a200c5de1a7f4b1e3d5c9a8b7e6f5d4c3b2a1908",
+            "0x9E3779B97F4A7C15F39CC0605CEDC834",
+            "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+            "123456789012345678901234",
+            "sha512-Mk7Qw2Lp9Zx4Vb8Nc3RtZq8LmN3pR7sT1vX5yB9c==",
+            "userNameDisplayConfiguration",
+            "RunnerLowAutumnSunriseBlack8Gold",
+            "NoteRefLovelace1843",
+        ];
+        for value in shown {
+            let (kept, hidden) = hide_secrets(&json!({ "value": value }).to_string(), true);
+            assert_eq!(hidden, 0, "{value} is hidden: {kept}");
+        }
+        let escaped = "/commit%2F3f786850e387550fdab836ed7e6dc881de23001b?x=1";
+        assert_eq!(hide_secrets(escaped, false), (escaped.to_string(), 0));
+    }
+
+    /// A name kept today, a CSRF token's, keeps its value however random it reads, in JSON, a
+    /// form's body and script, since a change may need it; the same value under another name is
+    /// hidden.
+    #[test]
+    fn a_csrf_token_shows_and_the_same_value_under_another_name_is_hidden() {
+        let token = "Mk7Qw2Lp9Zx4Vb8Nc3Rt";
+        let kept_as = [
+            json!({ "csrf_token": token }).to_string(),
+            format!("csrf_token={token}&page=2"),
+            format!("var config = {{xsrfToken: '{token}'}};"),
+            format!("<meta name=\"csrf-token\" content=\"{token}\">"),
+        ];
+        for text in kept_as {
+            let (kept, hidden) = hide_secrets(&text, text.starts_with('{'));
+            assert!(kept.contains(token) && hidden == 0, "{kept}");
+        }
+        let hidden_as = [
+            json!({ "state": token }).to_string(),
+            format!("state={token}&page=2"),
+            format!("var config = {{state: '{token}'}};"),
+        ];
+        for text in hidden_as {
+            let (kept, hidden) = hide_secrets(&text, text.starts_with('{'));
+            assert!(!kept.contains(token) && hidden == 1, "{kept}");
+        }
+    }
+
+    /// A page comes as its outline: its text, links, form and fields' names, never its script,
+    /// meta tags or fields' values, and says so, with how many values that withheld.
+    #[test]
+    fn a_page_comes_as_its_outline() {
+        let sent = &parsed(json!([{ "method": "GET", "path": "/login" }])).unwrap()[0];
+        let page = r#"<!DOCTYPE html><html><head><title>Sign in &amp; more</title>
+            <meta name="request-id" content="made-up-meta-1">
+            <script>window.boot = {"post": "made-up-script-1"};</script>
+            <style>.a { color: red }</style></head>
+            <body><!-- made-up-comment-1 --><h1>Sign in</h1>
+            <form method="post" action="/session">
+            <input type="hidden" name="csrf_token" value="made-up-csrf-1">
+            <input name="login" value="made-up-login-1"><input type="password" name="password">
+            <textarea name="note">made-up-note-1</textarea>
+            <input type="submit" value="Sign in"></form>
+            <p>New here? <a href="/join?ref=home">Make an account</a></p>
+            <img src="/a.png" alt="A logo"></body></html>"#;
+        let response = Response {
+            status: 200,
+            kind: "text/html; charset=utf-8".into(),
+            body: page.as_bytes().to_vec(),
+            ..Response::default()
+        };
+        let (mut left, mut hidden) = (ALL_SHOWN, 0);
+        let read = answer(sent, &response, &mut left, &mut hidden);
+        assert!(
+            read.starts_with(
+                "GET /login → 200 text/html; charset=utf-8\nThis is the page's outline, not \
+                 its source: 4 values were withheld.\n\n"
+            ),
+            "{read}"
+        );
+        none_of(&read, &["made-up", "color", "boot"]);
+        for shown in [
+            "Sign in & more",
+            "[form: POST /session]",
+            "[text field: login]",
+            "[password field: password]",
+            "[text field: note]",
+            "[button: Sign in]",
+            "New here? Make an account (/join?ref=home)",
+            "[image: A logo]",
+        ] {
+            assert!(read.contains(shown), "{shown} isn't in {read}");
+        }
+        assert_eq!(hidden, 0);
+
+        // A page of no type said is read as one, and text isn't.
+        let untyped = Response {
+            kind: String::new(),
+            ..response.clone()
+        };
+        let read = answer(sent, &untyped, &mut left, &mut hidden);
+        assert!(
+            read.contains("outline") && !read.contains("made-up"),
+            "{read}"
+        );
+        let text = Response {
+            kind: "text/plain".into(),
+            body: b"<b>plain</b>".to_vec(),
+            ..response
+        };
+        let read = answer(sent, &text, &mut left, &mut hidden);
+        assert!(
+            !read.contains("outline") && read.contains("<b>plain</b>"),
+            "{read}"
+        );
+    }
+
+    /// A quoted value left open runs to the end of the page, as a browser reads it, so the outline
+    /// ends there: a page cut inside a field's value, or one whose quote never closes, shows its
+    /// text before that tag and nothing of the value or after it.
+    #[test]
+    fn a_page_left_inside_a_quoted_value_ends_its_outline_there() {
+        let sent = &parsed(json!([{ "method": "GET", "path": "/a" }])).unwrap()[0];
+        let cut = r#"<!DOCTYPE html><html><body><p>Before the cut</p>
+            <form method="post" action="/session">
+            <input type="hidden" name="csrf_token" value="made-up-cut-1"#;
+        let unclosed = r#"<!DOCTYPE html><html><body><p>Shown first</p>
+            <input name="login" value='made-up-open-2><p>made-up-after-2</p>
+            <input type="hidden" value="made-up-after-3"><p>made-up-after-4</p></body></html>"#;
+        for (page, shown) in [(cut, "Before the cut"), (unclosed, "Shown first")] {
+            let response = Response {
+                status: 200,
+                kind: "text/html".into(),
+                body: page.as_bytes().to_vec(),
+                ..Response::default()
+            };
+            let (mut left, mut hidden) = (ALL_SHOWN, 0);
+            let read = answer(sent, &response, &mut left, &mut hidden);
+            none_of(&read, &["made-up"]);
+            assert!(read.contains(shown), "{shown} isn't in {read}");
+            assert!(read.contains("1 value was withheld"), "{read}");
+        }
     }
 
     /// A call's answers together show what one may, and each says where it's cut.

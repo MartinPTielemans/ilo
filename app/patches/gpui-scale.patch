@@ -550,6 +550,33 @@ index 27c20c00ba..2835e76b38 100644
      /// The 'select all' action
      SelectAll,
  
+diff --git a/crates/gpui/src/platform/keystroke.rs b/crates/gpui/src/platform/keystroke.rs
+index aa89e62f3c..eafa9276c6 100644
+--- a/crates/gpui/src/platform/keystroke.rs
++++ b/crates/gpui/src/platform/keystroke.rs
+@@ -803,3 +803,22 @@ fn unparse(modifiers: &Modifiers, key: &str, os: OperatingSystem) -> String {
+     result.push_str(&key);
+     result
+ }
++
++/// The characters of the split view's keys, ⌃⇧[ ⌃⇧] and ⌃⇧- (ilo #3509).
++pub const SPLIT_KEYS: [char; 3] = ['[', ']', '-'];
++
++/// The split keys a layout names by their place on the US layout. A split key runs on the key
++/// whose own character on the layout, with no shift or AltGr, is the split key's, which `own`
++/// says one has. Where none is, as Danish and German have no [ or ] key, it runs on the key at
++/// its US place, unless `at_us_place`, that key's own character, is another split key's, which
++/// keeps its own.
++pub fn split_keys_by_place(
++    own: impl Fn(char) -> bool,
++    at_us_place: impl Fn(char) -> Option<char>,
++) -> Vec<char> {
++    let others = |at: Option<char>| at.is_some_and(|at| SPLIT_KEYS.contains(&at));
++    SPLIT_KEYS
++        .into_iter()
++        .filter(|&key| !own(key) && !others(at_us_place(key)))
++        .collect()
++}
 diff --git a/crates/gpui/src/platform/test/platform.rs b/crates/gpui/src/platform/test/platform.rs
 index b5c081009a..a34b59b46c 100644
 --- a/crates/gpui/src/platform/test/platform.rs

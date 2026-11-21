@@ -12,7 +12,9 @@ pub const INSTRUCTIONS: &str = concat!(
     " is the user's own browser, signed in wherever they are. You work in tabs of your own, \
      which the user can watch on a card in their sidebar with your name; your tabs never take \
      their focus. You can only see and use your own tabs, never the user's, and never \
-     passwords, cookies or autofill.\n\n\
+     passwords, cookies or autofill. When you know what the user asked of you, call title with \
+     a name for it in two to four words, as a tab's title reads, such as “Refund order 1179”, \
+     alongside your first call; call it again only if you move on to another task.\n\n\
      Open a page with open_tab, then click, type, press_key and scroll by ref (like e12), using \
      the page's outline. A new page answers with its outline whole; an action on the same page \
      answers with what changed in it since the last outline you had, and snapshot gives it whole \
@@ -25,8 +27,8 @@ pub const INSTRUCTIONS: &str = concat!(
      takes one out, and list_split says which are together.\n\n\
      Payments, orders, sending messages, banks' sites and every request that may change \
      something ask the user first. If they say no, \
-     don't try again. You can never type into a password field: a sign-in, a 2FA prompt or a \
-     CAPTCHA is the user's to do, so hand the tab to them with hand_off, and take a snapshot \
+     don't try again. You can never type into a password field: a sign-in, a 2FA prompt, a \
+     CAPTCHA or a file field is the user's to do, so hand the tab to them with hand_off, and take a snapshot \
      once they hand it back, as its page will have changed. The user can take a tab over too, \
      on purpose: it's theirs until they hand it back. Carry on in your other tabs, and only \
      when the task can't go on without that one, ask for it with ask_for_tab, saying why. Use \
@@ -34,7 +36,9 @@ pub const INSTRUCTIONS: &str = concat!(
      Give every call its tab once you have more than one: one without acts on the tab you used \
      last. When the same steps repeat across pages, open them all in one turn, then do each step \
      on all of them in one turn, one call per tab with its tab. Calls on different tabs run at \
-     the same time, so that's faster than one tab after another."
+     the same time, so that's faster than one tab after another.\n\n\
+     When your task is finished, call done: the user's card says it's done. Closing your last \
+     page ends your task too, unless you call again within 60 seconds."
 );
 /// What a task's CLI is told, after its own system prompt (Agent task).
 pub const TASK_INSTRUCTIONS: &str = concat!(
@@ -55,7 +59,7 @@ pub const TASK_INSTRUCTIONS: &str = concat!(
      short sentence, what they need to know to answer as its context, and up to three short \
      answers when there are a few to pick from. It waits for their answer.\n\n\
      Never ask for a password, a one-time code or a card number in the conversation. A sign-in, \
-     a 2FA prompt or a CAPTCHA is the user's to do: hand them the tab with hand_off.\n\n\
+     a 2FA prompt, a CAPTCHA or a file field is the user's to do: hand them the tab with hand_off.\n\n\
      Never pay, and never place an order, book or send a message unless the user asked you to. \
      When the work ends on a page only the user may finish, such as a checkout, stop there.\n\n\
      When you're done, call finish with the result in a sentence or two, and its summary in one \
@@ -63,8 +67,29 @@ pub const TASK_INSTRUCTIONS: &str = concat!(
      act there themselves: pay, sign, submit, or take over a session. Otherwise give none. Keep \
      what you say to the user short and plain."
 );
-/// A page's text an agent gets at most, as a long page would fill its context.
-pub const MAX_TEXT: usize = 40_000;
+/// The characters an answer holds at most, whatever the tool: an agent uses little of a long one,
+/// which fills its context (#3657). Each tool's own cut comes first, where it can say how to get
+/// the rest.
+pub const MAX_ANSWER: usize = 12_000;
+/// The characters of a page's text a read_page answer gives at most, leaving room under
+/// `MAX_ANSWER` for which page it is and what an action did.
+pub const MAX_TEXT: usize = 10_000;
+
+/// `text`, cut at `MAX_ANSWER` characters, saying so.
+pub fn capped(text: String) -> String {
+    const CUT: &str = "\n\n[The answer is cut here, at its limit of 12,000 characters.]";
+    match text.char_indices().nth(MAX_ANSWER) {
+        None => text,
+        Some(_) => {
+            let keep = MAX_ANSWER - CUT.chars().count();
+            let end = text
+                .char_indices()
+                .nth(keep)
+                .map_or(text.len(), |(at, _)| at);
+            format!("{}{CUT}", &text[..end])
+        }
+    }
+}
 
 /// The tools `agent` may call, for tools/list: a task's own too.
 pub fn list(agent: &str) -> Value {
@@ -73,8 +98,9 @@ pub fn list(agent: &str) -> Value {
         match super::is_task(agent) {
             true => tools.extend(task_tools()),
             // A task's pages live in the task, in a Space the user doesn't see, so only an agent
-            // from outside pins.
-            false => tools.extend(pin_tools()),
+            // from outside pins. It names its session as a task names itself (#3690), and says
+            // when its task is done (#3652).
+            false => tools.extend(pin_tools().into_iter().chain([title_tool(), done_tool()])),
         }
     }
     tools
@@ -122,28 +148,46 @@ fn pin_tools() -> Vec<Value> {
         json!({
             "name": "sort_tabs_by_site",
             "title": "Sort tabs by site",
-            "description": "Sort your Today tabs by site, as the user's Sort Today Tabs by Site does: each site's tabs come together at its first tab's place, in the order they were in. A site is a registrable domain, so docs.example.com and example.com are one. Pinned tabs stay where they are; a split view or a page off the web joins no site and keeps its order among the rest, so sites gathered from below it come above it. Nothing loads or closes. Answers with the new order.",
+            "description": "Sort your Today tabs by site, as the user's Sort Today Tabs by Site does: each site's tabs come together at its first tab's place, in the order they were in. A site is a registrable domain, so docs.example.com and example.com are one. Pinned tabs stay where they are; a split view, a page off the web or a tab the user holds joins no site and keeps its order among the rest, so sites gathered from below it come above it. Nothing loads or closes. Answers with the new order.",
             "inputSchema": { "type": "object", "properties": {} },
             "annotations": tabs,
         }),
     ]
 }
 
+/// An outside agent's word that its task is done, which ends its card (#3652). A ⌘T task has
+/// finish, with its result.
+fn done_tool() -> Value {
+    json!({
+        "name": "done",
+        "title": "Done",
+        "description": "Say your task is done: the user's card for it says so. Pages of yours still open stay for the user to open. Call it once nothing of yours is under way, such as a hand_off the user hasn't answered. Your next call starts a new task.",
+        "inputSchema": { "type": "object", "properties": {} },
+        "annotations": { "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false },
+    })
+}
+
+/// The tool that names the task, a ⌘T task's and an outside agent's session alike: its card's
+/// title, in the agent's words, which take no tab and ask nothing (#3690).
+fn title_tool() -> Value {
+    json!({
+        "name": "title",
+        "title": "Name the task",
+        "description": "Name the task in two to four words and at most 24 characters, as a tab's title reads, such as “Lisbon museum hours”, for the user's sidebar.",
+        "inputSchema": {
+            "type": "object",
+            "properties": { "text": { "type": "string", "description": "The task's name, two to four words, at most 24 characters." } },
+            "required": ["text"],
+        },
+        "annotations": { "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false },
+    })
+}
+
 /// A task's own tools: its title, a question for the user, and finishing.
 fn task_tools() -> Vec<Value> {
     let own = json!({ "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false });
     vec![
-        json!({
-            "name": "title",
-            "title": "Name the task",
-            "description": "Name the task in two to four words and at most 24 characters, as a tab's title reads, such as “Lisbon museum hours”, for the user's sidebar.",
-            "inputSchema": {
-                "type": "object",
-                "properties": { "text": { "type": "string", "description": "The task's name, two to four words, at most 24 characters." } },
-                "required": ["text"],
-            },
-            "annotations": own,
-        }),
+        title_tool(),
         json!({
             "name": "ask",
             "title": "Ask the user",
@@ -215,7 +259,12 @@ fn shared() -> Value {
     let outline = json!({
         "type": "string",
         "enum": ["changes", "full", "none"],
-        "description": "What of the page's outline the answer gives: what changed since the last outline you had of the tab (changes, the default, which is the whole outline on a new page), all of it (full), or only what the action did (none)."
+        "description": "What of the page's outline the answer gives: what changed since the last outline you had of the tab (changes, the default, which is the whole outline on a new page), all of it (full), or only what the action did (none). changes is enough to check what an action did: take a snapshot only when you need what it doesn't show."
+    });
+    let answer = json!({
+        "type": "string",
+        "enum": ["outline", "text", "none"],
+        "description": "What the answer gives of the page: its outline (the default), to act on it; its text, as read_page reads it, to read an article or a document; or only which page it is (none)."
     });
     let acts = json!({ "readOnlyHint": false, "destructiveHint": false, "openWorldHint": true });
     let tabs = json!({ "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false });
@@ -223,17 +272,17 @@ fn shared() -> Value {
         {
             "name": "list_tabs",
             "title": "List tabs",
-            "description": "List your tabs, pinned first: each one's id, title and URL, then who pinned it if it's pinned. * marks the tab you used last.",
+            "description": "List your tabs, pinned first: each one's id, title and URL, then who pinned it if it's pinned. * marks the tab you used last. A tab the user holds, after a handoff or a take-over, is listed by its id with \"With the user until they hand it back\" and no title or URL, until they hand it back.",
             "inputSchema": { "type": "object", "properties": {} },
             "annotations": { "readOnlyHint": true, "openWorldHint": false },
         },
         {
             "name": "open_tab",
             "title": "Open tab",
-            "description": "Open a URL, or search for words, in a new tab of your own. Answers with the page's outline.",
+            "description": "Open a URL, or search for words, in a new tab of your own. Answers with the page's outline, or with its text when answer is text: pick text to read a page. Every answer is 12,000 characters at most.",
             "inputSchema": {
                 "type": "object",
-                "properties": { "url": { "type": "string", "description": "A URL, or words to search for." } },
+                "properties": { "url": { "type": "string", "description": "A URL, or words to search for." }, "answer": answer },
                 "required": ["url"],
             },
             "annotations": acts,
@@ -305,11 +354,12 @@ fn shared() -> Value {
         {
             "name": "navigate",
             "title": "Navigate",
-            "description": "Go to a URL, or search for words, in a tab. \"back\" and \"forward\" move through its history. Answers with the page's outline.",
+            "description": "Go to a URL, or search for words, in a tab. \"back\" and \"forward\" move through its history. Answers with the page's outline, or with its text when answer is text: pick text to read a page.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "url": { "type": "string", "description": "A URL, words to search for, \"back\" or \"forward\"." },
+                    "answer": answer,
                     "tab": tab,
                 },
                 "required": ["url"],
@@ -319,7 +369,7 @@ fn shared() -> Value {
         {
             "name": "snapshot",
             "title": "Snapshot",
-            "description": "The page's outline, whole, from its accessibility tree. Elements you can act on have refs like [e12]. With a ref, only that element's part, such as a form without the page's menus.",
+            "description": "The page's outline, whole, from its accessibility tree, 10,000 characters at most, with a table's rows and a list's items a line each. Elements you can act on have refs like [e12]. With a ref, only that element's part, such as a form without the page's menus, or a list where a long outline was cut.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -332,14 +382,20 @@ fn shared() -> Value {
         {
             "name": "read_page",
             "title": "Read page",
-            "description": "Read the text of a page in one of your tabs, as a screen reader would.",
-            "inputSchema": { "type": "object", "properties": { "tab": tab } },
+            "description": "Read the text of a page in one of your tabs, as a screen reader would, 10,000 characters at a time.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "from": { "type": "integer", "minimum": 0, "description": "The character to start at, for the part after one an answer ended, as it says. 0 by default." },
+                    "tab": tab,
+                },
+            },
             "annotations": { "readOnlyHint": true, "openWorldHint": true },
         },
         {
             "name": "click",
             "title": "Click",
-            "description": "Click an element by its ref. Answers with what changed in the page's outline.",
+            "description": "Click an element by its ref. Answers with what changed in the page's outline. To fill in a form, give its fields, choices and the click that sends it as one run_steps call.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "ref": element, "outline": outline, "tab": tab },
@@ -350,7 +406,7 @@ fn shared() -> Value {
         {
             "name": "type",
             "title": "Type",
-            "description": "Type text into a field by its ref, in place of what it holds. submit presses Enter after. Answers with what changed in the page's outline.",
+            "description": "Type text into a field by its ref, in place of what it holds. submit presses Enter after. Answers with what changed in the page's outline. To fill in a form, give its fields, choices and the click that sends it as one run_steps call.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -419,7 +475,7 @@ fn shared() -> Value {
         {
             "name": "request",
             "title": "Send HTTP requests",
-            "description": "Send HTTP requests from a tab's page to its own site, as the page's own script could, signed in as the page is: for a site's API, such as the JSON its page reads, when that's quicker than its pages. GET and HEAD go at once, unless a method-override header names another method. Anything else may change something, so it asks the user first, every time: give each such request a what, one plain sentence in the user's terms saying what it will do, such as \"Close item 4127 as a duplicate of 4130.\" The user sees your sentence as yours, beside what the browser knows from the method and its override headers (sends, changes or deletes) and the site, so say plainly what it does. The browser reads no meaning into a body: a POST whose body says it's a delete, such as _method=DELETE, shows as sending data, and still asks. All of a call's changes are in one question, and none is sent if they say no. The browser adds the page's cookies, which you never see; you can't set Cookie, Authorization or a header the browser sets. Answers with each request's status, type and text body, never its headers, with values that look like sign-in tokens or secrets hidden. They go one after another; one that gets no answer stops the rest.",
+            "description": "Send HTTP requests from a tab's page to its own site, as the page's own script could, signed in as the page is: for a site's API, such as the JSON its page reads, when that's quicker than its pages. GET and HEAD go at once, unless a method-override header names another method. Anything else may change something, so it asks the user first, every time: give each such request a what, one plain sentence in the user's terms saying what it will do, such as \"Close item 4127 as a duplicate of 4130.\" The user sees your sentence as yours, beside what the browser knows from the method and its override headers (sends, changes or deletes) and the site, so say plainly what it does. The browser reads no meaning into a body: a POST whose body says it's a delete, such as _method=DELETE, shows as sending data, and still asks. All of a call's changes are in one question, and none is sent if they say no. The browser adds the page's cookies, which you never see; you can't set Cookie, Authorization or a header the browser sets. Answers with each request's status, type and text body, never its headers, with values that look like sign-in tokens or secrets hidden; a page comes as its outline, not its source, so send a form from the page itself. They go one after another; one that gets no answer stops the rest.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -448,7 +504,7 @@ fn shared() -> Value {
         {
             "name": "run_steps",
             "title": "Run steps",
-            "description": "Run several actions in a tab in one call, in order: each is checked as it would be alone. Stops at the first that fails, asks the user first, or is refused. Answers with what each did, then what changed in the page's outline, as outline says.",
+            "description": "Run several actions in a tab in one call, in order, such as a form's fields, its choices and the click that sends it: each is checked as it would be alone. Stops at the first that fails, asks the user first, or is refused. Answers with what each did, then what changed in the page's outline, as outline says, or a last screenshot's picture.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -469,11 +525,11 @@ fn shared() -> Value {
                                 "direction": { "type": "string", "enum": ["down", "up"] },
                                 "gone": { "type": "string" },
                                 "until": { "type": "string", "enum": ["quiet"] },
-                                "seconds": { "type": "number", "exclusiveMinimum": 0, "maximum": MAX_WAIT },
+                                "seconds": { "type": "number", "exclusiveMinimum": 0, "maximum": MAX_TEXT_WAIT },
                             },
                             "required": ["action"],
                         },
-                        "description": "Each step is an action and what that tool takes: click and scroll a ref, type a ref and text, select a ref and an option, press_key a key, navigate a url. wait waits for text to show in the page, for gone text to go from it, or until \"quiet\", for the page to settle, each up to seconds (5 if not given); or with none of those, waits the seconds.",
+                        "description": format!("Each step is an action and what that tool takes: click and scroll a ref, type a ref and text, select a ref and an option, press_key a key, navigate a url. wait waits for text to show in the page or for gone text to go from it, up to seconds (5 if not given, {MAX_TEXT_WAIT} at most); until \"quiet\", for the page to settle, up to seconds (5 if not given, {MAX_WAIT} at most); or with none of those, waits the seconds, {MAX_WAIT} at most. check looks once for text in the page: the run answers in that one line if it's there, and fails with the outline if not. screenshot, as the last step only, answers with a picture of the page."),
                     },
                     "outline": outline,
                     "tab": tab,
@@ -485,7 +541,7 @@ fn shared() -> Value {
         {
             "name": "hand_off",
             "title": "Hand off to the user",
-            "description": "Hand a tab to the user for a step only they may do: a sign-in, 2FA, a CAPTCHA, or a choice that's theirs. They're asked in the browser, and this waits until they hand the tab back. Meanwhile the tab is theirs, and calls on it are refused. Its page will have changed when it's back: take a snapshot before you act in it.",
+            "description": "Hand a tab to the user for a step only they may do: a sign-in, 2FA, a CAPTCHA, a file to put in a page, or a choice that's theirs. They're asked in the browser, and this waits until they hand the tab back. Meanwhile the tab is theirs, and calls on it are refused. Its page will have changed when it's back: take a snapshot before you act in it.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -513,8 +569,9 @@ fn shared() -> Value {
     ])
 }
 
-/// The actions run_steps takes: those of the tools that act in a tab, not a screenshot, and wait.
-pub const STEPS: [&str; 8] = [
+/// The actions run_steps takes: those of the tools that act in a tab, wait and check, and a
+/// screenshot as the last.
+pub const STEPS: [&str; 10] = [
     "navigate",
     "snapshot",
     "click",
@@ -523,6 +580,8 @@ pub const STEPS: [&str; 8] = [
     "press_key",
     "scroll",
     "wait",
+    "check",
+    "screenshot",
 ];
 /// The tabs a split view holds at most, as the core keeps it (bc_tab_split_with).
 pub const SPLIT_TABS: usize = 3;
@@ -530,9 +589,11 @@ pub const SPLIT_TABS: usize = 3;
 pub const MAX_STEPS: usize = 20;
 /// What a wait step until "quiet" waits for, as its title says it.
 pub const SETTLE: &str = "the page to settle";
-/// How long a wait step waits for its text, in seconds, unless it says, and at most.
+/// How long a wait step waits, in seconds, unless it says; at most for a time or the page to
+/// settle; and at most for its text, as a page's search or upload can take minutes (#3659).
 pub const WAIT: f64 = 5.0;
 pub const MAX_WAIT: f64 = 30.0;
+pub const MAX_TEXT_WAIT: f64 = 300.0;
 
 /// list_tabs' answer.
 pub fn tab_list(tabs: &[TabInfo], current: Option<u64>, mine: &[u64]) -> String {
@@ -566,23 +627,30 @@ pub fn split_list(tab: u64, split: &[u64]) -> String {
     }
 }
 
-/// read_page's answer: which page it is, then its text, cut at `MAX_TEXT` bytes.
-pub fn page_text(tab: &TabInfo, text: &str) -> String {
-    let mut end = text.len().min(MAX_TEXT);
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    let cut = match end < text.len() {
-        true => "\n\n[The page goes on: this is its first part.]",
-        false => "",
+/// read_page's answer: which page it is, then its text from the character `from`, cut at
+/// `MAX_TEXT` characters, saying where the next part starts.
+pub fn page_text(tab: &TabInfo, text: &str, from: usize) -> String {
+    let at = |chars: usize| text.char_indices().nth(chars).map(|(at, _)| at);
+    let head = format!("Tab {}: {}\nURL: {}", tab.id, tab.title, tab.url);
+    let Some(start) = at(from).or((from == 0).then_some(text.len())) else {
+        let all = text.chars().count();
+        return format!(
+            "{head}\n\n[The page's text is {all} characters, so none starts at {from}.]"
+        );
     };
-    format!(
-        "Tab {}: {}\nURL: {}\n\n{}{cut}",
-        tab.id,
-        tab.title,
-        tab.url,
-        &text[..end]
-    )
+    let rest = &text[start..];
+    let end = rest
+        .char_indices()
+        .nth(MAX_TEXT)
+        .map_or(rest.len(), |(at, _)| at);
+    let cut = match end < rest.len() {
+        true => format!(
+            "\n\n[The page goes on: read_page with from {} reads the next part.]",
+            from + MAX_TEXT
+        ),
+        false => String::new(),
+    };
+    format!("{head}\n\n{}{cut}", &rest[..end])
 }
 
 /// The `tab` argument, as a number or a string of one.
@@ -752,6 +820,7 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
             ),
             _ => ("Waiting", "Waited", "Couldn't wait", target("")),
         },
+        "check" => ("Looking for", "Saw", "Didn't see", target("text")),
         "list_tabs" => (
             "Looking over",
             "Looked over",
@@ -858,6 +927,7 @@ pub fn step_glyph(tool: &str) -> &'static str {
         "screenshot" => "icons/eye.svg",
         "request" => "icons/arrow-left-right.svg",
         "wait" => "icons/clock.svg",
+        "check" => "icons/text-search.svg",
         "list_tabs" | "close_tab" | "remove_tab" | "hand_off" | "ask_for_tab" | "split_tabs"
         | "add_to_split" | "separate_tab" | "list_split" | "sort_tabs_by_site" => {
             "icons/app-window.svg"
@@ -969,12 +1039,14 @@ pub fn describe(action: &str) -> &'static str {
         "kept" => "You kept the tab",
         "run_steps" => "Ran steps",
         "wait" => "Waited for the page",
+        "check" => "Looked for text on the page",
         "revoked" => "You revoked its permission",
         "revoked all" => "You revoked all its permissions",
         "title" => "Named the task",
         "ask" => "Asked you",
         "answered" => "You answered",
         "finish" => "Finished",
+        "done" => "Marked the task done",
         _ => "Acted",
     }
 }

@@ -87,8 +87,17 @@ const STATES: &[&str] = &[
 ];
 /// A frame's element, under which the core puts its document.
 const FRAMES: &[&str] = &["Iframe", "IframePresentational"];
-/// The outline's bytes at most, as a long page would fill the agent's context.
-pub const MAX_OUTLINE: usize = 30_000;
+/// The outline's characters at most, leaving room under the answer's cap (`tools::MAX_ANSWER`)
+/// for what the action did and the outline's notes.
+pub const MAX_OUTLINE: usize = 10_000;
+/// The characters of a text's line the outline shows: a paragraph's start, as read_page has the
+/// page's text whole.
+const TEXT_SHOWN: usize = 300;
+/// A text this long in one piece, on a page with next to nothing to act on, is a response the tab
+/// shows, such as JSON, XML or plain text, and not a page's text.
+const RESPONSE_TEXT: usize = 4_000;
+/// The characters of a response its outline shows.
+const RESPONSE_SHOWN: usize = 1_000;
 
 /// The keys press_key presses, as the core knows them.
 pub const KEYS: &[&str] = &[
@@ -116,6 +125,20 @@ pub struct Element {
     pub role: String,
     pub name: String,
     pub password: bool,
+    /// The DOM node of the form it's in, if it's in one.
+    pub form: Option<i64>,
+}
+
+/// What has the keyboard in a page, as its outline says.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum Focus {
+    /// The page itself, with no element of it.
+    Page,
+    /// An element with a ref.
+    On(Element),
+    /// The outline doesn't say, or it's on an element without a ref.
+    #[default]
+    Unknown,
 }
 
 /// A tab's refs, which stay the same for an element while its page is the same.
@@ -136,6 +159,13 @@ impl Refs {
     /// The number of the ref naming the element whose DOM node is `node`.
     pub fn number(&self, node: i64) -> Option<u32> {
         self.by_node.get(&node).copied()
+    }
+
+    /// Forgets the refs named after the `last`th, as an outline that named them won't show them.
+    fn forget_after(&mut self, last: u32) {
+        self.by_node.retain(|_, number| *number <= last);
+        self.by_ref.retain(|number, _| *number <= last);
+        self.next = last;
     }
 
     fn name(&mut self, element: Element) -> u32 {
@@ -172,27 +202,40 @@ pub fn outline(tab: &TabInfo, nodes: &[Value], refs: &mut Refs, part: Option<i64
         size: 0,
         password: false,
         captcha: false,
+        form: None,
+        focus: Focus::Unknown,
+        elements: Vec::new(),
+        messages: Vec::new(),
+        editors: Vec::new(),
     };
     let backend = |node: &&Value| node.get("backendDOMNodeId").and_then(Value::as_i64);
     let root = match part {
         Some(part) => nodes.iter().find(|node| backend(node) == Some(part)),
         None => nodes.first(),
     };
-    if let Some(root) = root {
-        walk.node(root, 0, "", 0);
-    }
     let mut notes = Vec::new();
+    match (part, response(nodes)) {
+        (None, Some(text)) => {
+            walk.add(Line {
+                text: format!("- text: {}", clip(&text, RESPONSE_SHOWN)),
+                ..Line::default()
+            });
+            notes.push(RESPONSE);
+        }
+        _ => {
+            if let Some(root) = root {
+                walk.node(root, 0, "", 0);
+            }
+        }
+    }
     if root.is_none() && part.is_some() {
         notes.push("That element isn't on the page any more. Take a snapshot without a ref.");
     }
     if walk.size > MAX_OUTLINE {
-        notes.push("The outline is cut here. read_page has all of the page's text.");
+        notes.push(CUT);
     }
     if walk.password {
-        notes.push(
-            "This page has a password field, which is off limits to you: signing in is the user's \
-             to do. Hand them the tab with hand_off.",
-        );
+        notes.push(PASSWORD);
     }
     if walk.captcha {
         notes.push(
@@ -208,8 +251,40 @@ pub fn outline(tab: &TabInfo, nodes: &[Value], refs: &mut Refs, part: Option<i64
         document: nodes.first().as_ref().and_then(backend),
         lines: walk.lines,
         notes,
+        focus: walk.focus,
+        elements: walk.elements,
+        messages: walk.messages,
+        editors: walk.editors,
     }
 }
+
+/// What an outline too long for its answer says where it's cut.
+pub const CUT: &str = "The outline is cut here. snapshot with the ref of a part, such as a list or \
+     the main region, outlines that part alone, and read_page reads the page's text.";
+/// What an action's answer says when most of the outline changed, on the same page.
+pub const MOSTLY_CHANGED: &str = "Most of the outline's elements are new, though it reads much as \
+     before, as when a page draws a table again: snapshot gives it whole, with their refs.";
+/// What the outline of a response says, below its start.
+pub const RESPONSE: &str = "This tab shows a response, such as JSON, XML or plain text, not a page: \
+     above is its start. read_page reads it in parts, and request fetches it from the site with \
+     its status and type.";
+
+/// The text of a response the tab shows (`RESPONSE_TEXT`), if it shows one.
+fn response(nodes: &[Value]) -> Option<String> {
+    let acts = (nodes.iter())
+        .filter(|node| INTERACTIVE.contains(&role(node)))
+        .count();
+    if acts > 2 {
+        return None;
+    }
+    (nodes.iter())
+        .filter(|node| role(node) == "StaticText")
+        .map(name)
+        .find(|text| text.chars().count() > RESPONSE_TEXT)
+}
+/// What an outline of a page with a password field says of it.
+const PASSWORD: &str = "This page has a password field, which is off limits to you: signing in is \
+                        the user's to do. Hand them the tab with hand_off.";
 
 /// A page's outline, which an answer gives whole, or as what changed since one the agent had.
 #[derive(Clone, Debug, Default)]
@@ -222,6 +297,14 @@ pub struct Outline {
     document: Option<i64>,
     lines: Vec<Line>,
     notes: Vec<&'static str>,
+    /// What has the keyboard, and each element with a ref, for what a key press activates.
+    focus: Focus,
+    elements: Vec<Element>,
+    /// The form of each message the page holds, a multi-line field or a rich-text editor that
+    /// isn't empty, or none for one in no form: what a Send control would send.
+    messages: Vec<Option<i64>>,
+    /// The DOM node of each rich-text editor, where a line break may send what it holds.
+    editors: Vec<i64>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -272,6 +355,24 @@ impl Line {
 }
 
 impl Outline {
+    /// Whether a Send control in `form`, or in no form, would send a message the page holds: one
+    /// in that form or in no form, or, for a control in no form, anywhere on the page, as a
+    /// composer's Send often sits outside every form.
+    pub fn sends_message(&self, form: Option<i64>) -> bool {
+        (self.messages.iter()).any(|each| form.is_none() || each.is_none() || *each == form)
+    }
+
+    /// Whether the element on the DOM node `node` is a rich-text editor.
+    pub fn is_editor(&self, node: i64) -> bool {
+        self.editors.contains(&node)
+    }
+
+    /// Whether it's of the page at `url` and that page has a password field: a sign-in page, or one
+    /// with a sign-in form.
+    pub fn signs_in_at(&self, url: &str) -> bool {
+        self.page == url.split('#').next().unwrap_or_default() && self.notes.contains(&PASSWORD)
+    }
+
     /// Which tab and page it is, without the outline.
     pub fn head(&self) -> &str {
         &self.head
@@ -287,13 +388,15 @@ impl Outline {
 
     /// What changed since `last`, the outline the agent had: the lines added, changed or gone,
     /// each the same line as before by its element's ref, else by its text in the same order. A
-    /// new page, or changes of more than half the outline, are answered with the outline whole.
-    pub fn since(&self, last: &Outline) -> String {
+    /// new page is answered with the outline whole. Changes of more than half the outline are
+    /// answered with a line saying so, as sending the page again would cost the agent as much as
+    /// a snapshot it may not need (#3657). With it, whether the agent has this outline now.
+    pub fn since(&self, last: &Outline) -> (String, bool) {
         if (self.page.as_str(), self.document) != (last.page.as_str(), last.document) {
-            return self.text();
+            return (self.text(), true);
         }
         let Some(same) = same_lines(&last.lines, &self.lines) else {
-            return self.text();
+            return (self.text(), true);
         };
         let kept: std::collections::HashSet<usize> = same.iter().flatten().copied().collect();
         // Each changed line, with what changed in it.
@@ -317,7 +420,8 @@ impl Outline {
             parts.push(format!("Gone:\n{gone}"));
         }
         if parts.is_empty() {
-            return self.with_notes(format!("{}\n\nNothing in the outline changed.", self.head));
+            let text = format!("{}\n\nNothing in the outline changed.", self.head);
+            return (self.with_notes(text), true);
         }
         let changes = parts.join("\n\n");
         // What it says of each change counts for nothing here: how much changed does.
@@ -330,10 +434,29 @@ impl Outline {
             .map(|line| 2 * line.depth + line.text.len() + 1)
             .sum();
         if 2 * (changes.len() - said) > whole {
-            return self.text();
+            // A view the page put in place of the last is new to the agent, and its outline
+            // whole; the same one drawn again, most of its lines new elements that read as the
+            // ones gone, is what the agent had. A list that closed leaves no new lines.
+            let added: Vec<&Line> = (self.lines.iter().enumerate())
+                .filter_map(|(at, line)| same[at].is_none().then_some(line))
+                .collect();
+            let gone: Vec<&Line> = (last.lines.iter().enumerate())
+                .filter_map(|(at, line)| (!kept.contains(&at)).then_some(line))
+                .collect();
+            let redrawn = 2 * added.len() > self.lines.len() && reads_as(&gone, &added);
+            return match redrawn {
+                true => (
+                    self.with_notes(format!("{}\n\n{MOSTLY_CHANGED}", self.head)),
+                    false,
+                ),
+                false => (self.text(), true),
+            };
         }
         let since = "What changed since the last outline you had of this tab:";
-        self.with_notes(format!("{}\n\n{since}\n\n{changes}", self.head))
+        (
+            self.with_notes(format!("{}\n\n{since}\n\n{changes}", self.head)),
+            true,
+        )
     }
 
     fn with_notes(&self, mut text: String) -> String {
@@ -343,6 +466,40 @@ impl Outline {
         }
         text
     }
+}
+
+/// Whether most of `new`'s lines read as lines of `old` do, their refs aside: the same view drawn
+/// again, as a grid redraws its rows after a click.
+fn reads_as(old: &[&Line], new: &[&Line]) -> bool {
+    let unreferenced = |line: &Line| {
+        let mut text = String::with_capacity(line.text.len());
+        let mut rest = line.text.as_str();
+        while let Some(at) = rest.find(" [e") {
+            text.push_str(&rest[..at]);
+            rest = &rest[at + 3..];
+            let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+            match rest[digits..].strip_prefix(']') {
+                Some(after) if digits > 0 => rest = after,
+                _ => text.push_str(" [e"),
+            }
+        }
+        text.push_str(rest);
+        text
+    };
+    let mut had: HashMap<String, usize> = HashMap::new();
+    for line in old {
+        *had.entry(unreferenced(line)).or_default() += 1;
+    }
+    let same = (new.iter())
+        .filter(|line| match had.get_mut(&unreferenced(line)) {
+            Some(left) if *left > 0 => {
+                *left -= 1;
+                true
+            }
+            _ => false,
+        })
+        .count();
+    2 * same > new.len()
 }
 
 /// For each of `new`'s lines, the line of `old` it is, if any: the same element by its ref, else
@@ -435,19 +592,34 @@ struct Walk<'a> {
     field_names: Vec<String>,
     refs: &'a mut Refs,
     lines: Vec<Line>,
+    /// The outline's characters so far, each line's indent and break too.
     size: usize,
     password: bool,
     captcha: bool,
+    /// The form the walk is in, and what it found has the keyboard and can be acted on.
+    form: Option<i64>,
+    focus: Focus,
+    elements: Vec<Element>,
+    messages: Vec<Option<i64>>,
+    editors: Vec<i64>,
 }
 
-impl Walk<'_> {
+impl<'a> Walk<'a> {
     fn add(&mut self, line: Line) {
         if self.size > MAX_OUTLINE {
             return;
         }
-        // Its indent and line break too.
-        self.size += 2 * line.depth + line.text.len() + 1;
+        self.size += 2 * line.depth + line.text.chars().count() + 1;
         self.lines.push(line);
+    }
+
+    /// Whether `name` asks the user to prove they're human.
+    fn looks_for_captcha(&mut self, name: &str) {
+        let lower = name.to_lowercase();
+        let human = ["captcha", "not a robot", "verify you are human"];
+        if human.iter().any(|words| lower.contains(words)) {
+            self.captcha = true;
+        }
     }
 
     /// The text a row or list item holds, if that's all it holds: no element to act on, which it
@@ -468,16 +640,226 @@ impl Walk<'_> {
     /// The text of what the node holds, if that's all it holds.
     fn text_inside(&self, node: &Value, levels: usize) -> Option<String> {
         let mut text = Vec::new();
-        let children = node.get("childIds").and_then(Value::as_array);
-        for child in children.into_iter().flatten() {
-            if let Some(child) = child.as_str().and_then(|id| self.by_id.get(id).copied()) {
-                let each = self.text_of(child, levels + 1)?;
-                if !each.is_empty() {
-                    text.push(each);
-                }
+        for child in self.children(node) {
+            let each = self.text_of(child, levels + 1)?;
+            if !each.is_empty() {
+                text.push(each);
             }
         }
         Some(text.join(" "))
+    }
+
+    fn children(&self, node: &Value) -> Vec<&'a Value> {
+        let children = node.get("childIds").and_then(Value::as_array);
+        (children.into_iter().flatten())
+            .filter_map(|child| child.as_str().and_then(|id| self.by_id.get(id).copied()))
+            .collect()
+    }
+
+    /// An element's line without its indent or dash, as `button "Pay" [e4] (disabled)`, with
+    /// its ref, which it names in the tab's refs if it's one an agent acts on or scrolls in, and
+    /// its states. A row's line gives its name in its parts instead (`row`).
+    fn element(
+        &mut self,
+        node: &Value,
+        role: &str,
+        name: &str,
+        named: bool,
+    ) -> (String, Option<u32>, Vec<String>) {
+        let mut line = role.to_string();
+        let mut reference = None;
+        if named && !name.is_empty() {
+            line.push_str(&format!(" \"{}\"", clip(name, 160)));
+        }
+        let backend = node.get("backendDOMNodeId").and_then(Value::as_i64);
+        let refers =
+            INTERACTIVE.contains(&role) || SCROLLS.contains(&role) || PARTS.contains(&role);
+        if let (true, Some(backend)) = (refers, backend) {
+            let password = node
+                .get("password")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let element = Element {
+                node: backend,
+                role: role.into(),
+                name: name.into(),
+                password,
+                form: self.form,
+            };
+            if state(node, "focused") {
+                self.focus = Focus::On(element.clone());
+            }
+            self.elements.push(element.clone());
+            let number = self.refs.name(element);
+            reference = Some(number);
+            line.push_str(&format!(" [e{number}]"));
+            if password {
+                self.password = true;
+                line.push_str(" (password: off limits)");
+            }
+        }
+        let mut states = Vec::new();
+        for property in node
+            .get("properties")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let Some(state) = property.get("name").and_then(Value::as_str) else {
+                continue;
+            };
+            if !STATES.contains(&state) {
+                continue;
+            }
+            let value = property.pointer("/value/value");
+            let shown = if state == "readonly" {
+                "read-only"
+            } else {
+                state
+            };
+            match (state, value) {
+                ("level", _) if role == "listitem" => {}
+                ("level", Some(level)) => states.push(format!("level {level}")),
+                (_, Some(Value::Bool(true))) => states.push(shown.into()),
+                (_, Some(Value::String(text))) if text == "true" => states.push(shown.into()),
+                _ => {}
+            }
+        }
+        for state in &states {
+            line.push_str(&format!(" ({state})"));
+        }
+        // What a field holds, where the core can name its source as the agent's own typing,
+        // unchanged, or the page's own value, and else only whether it holds anything: never
+        // the user's typing, autofill's or a password manager's fill, or a password's, a card's
+        // or a one-time code's contents, as in the agent's pictures (#2355).
+        if let Some(holds) = node.get("holds").and_then(Value::as_str) {
+            let holds = holds.split_whitespace().collect::<Vec<_>>().join(" ");
+            line.push_str(&format!(" (holds \"{}\")", clip(&holds, HOLDS_SHOWN)));
+        }
+        match node.get("contents").and_then(Value::as_str) {
+            Some("empty") => line.push_str(" (empty)"),
+            Some("filled") => line.push_str(" (filled)"),
+            Some("changed") => line.push_str(" (filled, not as you typed it)"),
+            _ => {}
+        }
+        // A native select's choices, the page's own: the core leaves out which one is chosen.
+        let choices = node.get("choices").and_then(Value::as_array);
+        let choices: Vec<_> = choices
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        if !choices.is_empty() {
+            line.push_str(&format!(" (options: {})", listed(&choices)));
+        }
+        (line, reference, states)
+    }
+
+    /// A row of a table or an item of a list as one line, its parts in order: each cell's text and
+    /// ref, each element's line and the text between them, so a long table or list fits the
+    /// outline with its refs instead of being cut above them (#3657). None when it holds what a
+    /// line can't: a list, a table or a landmark of its own, or more than `ROW_PARTS` parts.
+    fn row(
+        &mut self,
+        node: &Value,
+        depth: usize,
+        role: &str,
+        name: &str,
+        levels: usize,
+    ) -> Option<Line> {
+        let (line, reference, _) = self.element(node, role, name, false);
+        let mut line = format!("- {line}");
+        let mut parts = Vec::new();
+        self.parts(node, "", &mut parts, levels)?;
+        // A link alone, as a menu's item holds, is its own line, shorter without the item's.
+        if parts.is_empty() || (parts.len() == 1 && !parts[0].plain) {
+            return None;
+        }
+        match parts.iter().all(|part| part.plain) {
+            // Text alone, as a list of facts has it: the item named by it, as before.
+            true => {
+                let text: Vec<&str> = parts.iter().map(|part| part.text.as_str()).collect();
+                let text = clip(&text.join(" "), 160);
+                line = match reference {
+                    Some(number) => format!("- {role} \"{text}\" [e{number}]"),
+                    None => format!("- {role} \"{text}\""),
+                };
+            }
+            false => {
+                let parts: Vec<String> = (parts.iter())
+                    .map(|part| match part.plain {
+                        true => format!("\"{}\"", part.text),
+                        false => part.text.clone(),
+                    })
+                    .collect();
+                line.push_str(": ");
+                line.push_str(&parts.join(" · "));
+            }
+        }
+        Some(Line {
+            depth,
+            text: line,
+            element: reference,
+            ..Line::default()
+        })
+    }
+
+    /// The parts of what `node` holds, for `row`, or None if a line can't hold them.
+    fn parts(
+        &mut self,
+        node: &Value,
+        parent_name: &str,
+        parts: &mut Vec<Part>,
+        levels: usize,
+    ) -> Option<()> {
+        for child in self.children(node) {
+            if levels > 200 || parts.len() > ROW_PARTS {
+                return None;
+            }
+            let role = role(child);
+            if NESTED.contains(&role) {
+                return None;
+            }
+            let ignored = (child.get("ignored").and_then(Value::as_bool)).unwrap_or(false);
+            let name = name(child);
+            self.looks_for_captcha(&name);
+            // As node() does: an element with a ref then says it has the keyboard (`element`).
+            if state(child, "focused") {
+                self.focus = Focus::Unknown;
+            }
+            if ignored || role == "ListMarker" {
+                continue;
+            }
+            if role == "StaticText" {
+                let repeated = parent_name.contains(&name) || self.field_names.contains(&name);
+                if !name.is_empty() && !repeated {
+                    let text = clip(&name, ROW_TEXT_SHOWN);
+                    parts.push(Part { text, plain: true });
+                }
+                continue;
+            }
+            let cell = ROW_CELLS.contains(&role);
+            let acts = INTERACTIVE.contains(&role);
+            // A cell with something to act on in it is acted on by that.
+            let cell = cell && !name.is_empty() && self.text_of(child, 0).is_some();
+            if acts || (cell && child.get("backendDOMNodeId").is_some()) {
+                let (text, _, _) = self.element(child, role, &name, true);
+                let text = match cell {
+                    true => text
+                        .strip_prefix(role)
+                        .unwrap_or(&text)
+                        .trim_start()
+                        .to_string(),
+                    false => text,
+                };
+                parts.push(Part { text, plain: false });
+                self.parts(child, &name, parts, levels + 1)?;
+                continue;
+            }
+            // Its text is a part: a heading's, a paragraph's, a cell's without a ref.
+            self.parts(child, parent_name, parts, levels + 1)?;
+        }
+        Some(())
     }
 
     fn node(&mut self, node: &Value, depth: usize, parent_name: &str, levels: usize) {
@@ -491,11 +873,20 @@ impl Walk<'_> {
             .unwrap_or(false);
         let role = role(node);
         let name = name(node);
-        let lower = name.to_lowercase();
-        let human = ["captcha", "not a robot", "verify you are human"];
-        if human.iter().any(|words| lower.contains(words)) {
-            self.captcha = true;
+        let rich = editable(node) == Some("richtext");
+        if let (false, true, Some(backend)) = (ignored, rich, node.get("backendDOMNodeId")) {
+            self.editors.extend(backend.as_i64());
         }
+        if !ignored && (rich || (role == "textbox" && state(node, "multiline"))) && holds(node) {
+            self.messages.push(self.form);
+        }
+        if state(node, "focused") {
+            self.focus = match role {
+                "RootWebArea" => Focus::Page,
+                _ => Focus::Unknown,
+            };
+        }
+        self.looks_for_captcha(&name);
         // A list's bullet or number, which its indent already says.
         if role == "ListMarker" {
             return;
@@ -505,11 +896,23 @@ impl Walk<'_> {
             if !name.is_empty() && !repeated {
                 self.add(Line {
                     depth,
-                    text: format!("- text: {name}"),
+                    text: format!("- text: {}", clip(&name, TEXT_SHOWN)),
                     ..Line::default()
                 });
             }
             return;
+        }
+        // A row or a list item that a line can hold is one line; else it's outlined line by line.
+        if !ignored && ROWS.contains(&role) {
+            let last = (self.refs.next, self.elements.len());
+            match self.row(node, depth, role, &name, levels) {
+                Some(line) => return self.add(line),
+                // Its refs and elements are named again as its lines show them.
+                None => {
+                    self.refs.forget_after(last.0);
+                    self.elements.truncate(last.1);
+                }
+            }
         }
         let name = match (role, name.is_empty()) {
             ("listitem" | "row", true) => (self.text_of(node, 0))
@@ -528,91 +931,11 @@ impl Walk<'_> {
         // Where a frame's element's line went, and the size before it.
         let mut frame = None;
         if !ignored && !FLATTEN.contains(&role) && shown {
-            let mut line = format!("- {role}");
-            let mut reference = None;
-            if !name.is_empty() {
-                line.push_str(&format!(" \"{}\"", clip(&name, 160)));
-            }
-            let backend = node.get("backendDOMNodeId").and_then(Value::as_i64);
-            let refers =
-                INTERACTIVE.contains(&role) || SCROLLS.contains(&role) || PARTS.contains(&role);
-            if let (true, Some(backend)) = (refers, backend) {
-                let password = node
-                    .get("password")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                let element = Element {
-                    node: backend,
-                    role: role.into(),
-                    name: name.clone(),
-                    password,
-                };
-                let number = self.refs.name(element);
-                reference = Some(number);
-                line.push_str(&format!(" [e{number}]"));
-                if password {
-                    self.password = true;
-                    line.push_str(" (password: off limits)");
-                }
-            }
-            let mut states = Vec::new();
-            for property in node
-                .get("properties")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-            {
-                let Some(state) = property.get("name").and_then(Value::as_str) else {
-                    continue;
-                };
-                if !STATES.contains(&state) {
-                    continue;
-                }
-                let value = property.pointer("/value/value");
-                let shown = if state == "readonly" {
-                    "read-only"
-                } else {
-                    state
-                };
-                match (state, value) {
-                    ("level", _) if role == "listitem" => {}
-                    ("level", Some(level)) => states.push(format!("level {level}")),
-                    (_, Some(Value::Bool(true))) => states.push(shown.into()),
-                    (_, Some(Value::String(text))) if text == "true" => states.push(shown.into()),
-                    _ => {}
-                }
-            }
-            for state in &states {
-                line.push_str(&format!(" ({state})"));
-            }
-            // What a field holds, where the core can name its source as the agent's own typing,
-            // unchanged, or the page's own value, and else only whether it holds anything: never
-            // the user's typing, autofill's or a password manager's fill, or a password's, a card's
-            // or a one-time code's contents, as in the agent's pictures (#2355).
-            if let Some(holds) = node.get("holds").and_then(Value::as_str) {
-                let holds = holds.split_whitespace().collect::<Vec<_>>().join(" ");
-                line.push_str(&format!(" (holds \"{}\")", clip(&holds, HOLDS_SHOWN)));
-            }
-            match node.get("contents").and_then(Value::as_str) {
-                Some("empty") => line.push_str(" (empty)"),
-                Some("filled") => line.push_str(" (filled)"),
-                Some("changed") => line.push_str(" (filled, not as you typed it)"),
-                _ => {}
-            }
-            // A native select's choices, the page's own: the core leaves out which one is chosen.
-            let choices = node.get("choices").and_then(Value::as_array);
-            let choices: Vec<_> = choices
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-                .collect();
-            if !choices.is_empty() {
-                line.push_str(&format!(" (options: {})", listed(&choices)));
-            }
+            let (text, reference, states) = self.element(node, role, &name, true);
             let before = (self.lines.len(), self.size);
             self.add(Line {
                 depth,
-                text: line,
+                text: format!("- {text}"),
                 element: reference,
                 name: name.clone(),
                 states,
@@ -623,12 +946,17 @@ impl Walk<'_> {
             next = depth + 1;
             next_name = name;
         }
-        let children = node.get("childIds").and_then(Value::as_array);
-        for child in children.into_iter().flatten() {
-            if let Some(child) = child.as_str().and_then(|id| self.by_id.get(id).copied()) {
-                self.node(child, next, &next_name, levels + 1);
-            }
+        let outer = self.form;
+        if role == "form" {
+            self.form = node
+                .get("backendDOMNodeId")
+                .and_then(Value::as_i64)
+                .or(outer);
         }
+        for child in self.children(node) {
+            self.node(child, next, &next_name, levels + 1);
+        }
+        self.form = outer;
         // A frame with nothing under its line, as a site's helper frames have, says nothing
         // (#1444).
         if let Some((at, size)) = frame
@@ -638,6 +966,74 @@ impl Walk<'_> {
             self.size = size;
         }
     }
+}
+
+/// How the node is editable, as Chromium says: "plaintext" or "richtext", the latter for a
+/// contenteditable editor.
+fn editable(node: &Value) -> Option<&str> {
+    let properties = node.get("properties").and_then(Value::as_array);
+    let property = (properties.into_iter().flatten())
+        .find(|property| property.get("name").and_then(Value::as_str) == Some("editable"))?;
+    property.pointer("/value/value").and_then(Value::as_str)
+}
+
+/// Whether a field holds anything, as the core says: the agent's own typing or the page's value,
+/// or that it's filled.
+fn holds(node: &Value) -> bool {
+    let shown = node.get("holds").and_then(Value::as_str);
+    let contents = node.get("contents").and_then(Value::as_str);
+    shown.is_some_and(|holds| !holds.trim().is_empty())
+        || matches!(contents, Some("filled" | "changed"))
+}
+
+/// A part of a row's line (`Walk::row`): text, or a cell's or an element's line.
+struct Part {
+    text: String,
+    plain: bool,
+}
+
+/// What `Walk::row` puts on one line.
+const ROWS: &[&str] = &["row", "listitem"];
+/// The cells a row's line gives with their refs, by their text.
+const ROW_CELLS: &[&str] = &["cell", "gridcell", "rowheader", "columnheader"];
+/// What a row's line can't hold, as it has lines of its own.
+const NESTED: &[&str] = &[
+    "row",
+    "listitem",
+    "list",
+    "table",
+    "grid",
+    "treegrid",
+    "tree",
+    "form",
+    "dialog",
+    "alertdialog",
+    "region",
+    "main",
+    "navigation",
+    "complementary",
+    "article",
+    "feed",
+    "tabpanel",
+    "Iframe",
+    "IframePresentational",
+];
+/// The parts a row's line holds at most, as a wider row reads better line by line.
+const ROW_PARTS: usize = 30;
+/// The characters of a text a row's line shows.
+const ROW_TEXT_SHOWN: usize = 100;
+
+/// Whether the node has the state `name`, such as "focused".
+fn state(node: &Value, name: &str) -> bool {
+    let properties = node.get("properties").and_then(Value::as_array);
+    properties.into_iter().flatten().any(|property| {
+        property.get("name").and_then(Value::as_str) == Some(name)
+            && match property.pointer("/value/value") {
+                Some(Value::Bool(value)) => *value,
+                Some(Value::String(value)) => value == "true",
+                _ => false,
+            }
+    })
 }
 
 fn role(node: &Value) -> &str {
@@ -711,12 +1107,103 @@ const PAYMENT: &[&str] = &[
     "subscribe",
     "donate",
     "transfer",
+    "complete order",
+    "confirm order",
+    "confirm purchase",
+    "confirm and pay",
+    "confirm booking",
+    "book now",
+    "reserve",
+    "bid",
+    "pledge",
+    // Danish.
+    "betal",
+    "køb",
+    "bestil",
+    "bekræft ordre",
+    "støt",
+    "donér",
+    // German.
+    "kaufen",
+    "bezahlen",
+    "bestellen",
+    "buchen",
+    "spenden",
+    // French.
+    "payer",
+    "acheter",
+    "commander",
+    "faire un don",
+    // Spanish.
+    "pagar",
+    "comprar",
+    "donar",
+    // Dutch, whose "bestellen" is German's too.
+    "betalen",
+    "doneren",
+    // Swedish.
+    "betala",
+    "köp",
+    "beställ",
+    "skänk",
 ];
 /// Words that send, as a button's name has them.
 const SEND: &[&str] = &[
-    "send", "submit", "post", "publish", "reply", "tweet", "comment",
+    "send",
+    "submit",
+    "post",
+    "publish",
+    "reply",
+    "tweet",
+    "comment",
+    "forward",
+    "share",
+    "sende",
+    "senden",
+    "antworten",
+    "envoyer",
+    "enviar",
+    "verzenden",
+    "skicka",
+    "create topic",
 ];
+/// Words that move money, as a button's name has them, which ask on a bank's or money site
+/// alone: a yes to opening one isn't a yes to what's done there.
+const MOVES: &[&str] = &[
+    "withdraw",
+    "transfer",
+    "confirm",
+    // Danish.
+    "hæv",
+    "overfør",
+    "bekræft",
+    // German.
+    "abheben",
+    "überweisen",
+    "bestätigen",
+    // French.
+    "retirer",
+    "virement",
+    "transférer",
+    "confirmer",
+    // Spanish.
+    "retirar",
+    "transferir",
+    "confirmar",
+    // Dutch.
+    "opnemen",
+    "overboeken",
+    "overmaken",
+    "bevestigen",
+    // Swedish.
+    "ta ut",
+    "överför",
+    "bekräfta",
+];
+/// Sites that send messages, where a Send control asks even with no message the outline shows:
+/// one composed where the outline doesn't see it, as in a frame of its own.
 const MESSAGING: &[&str] = &[
+    "mail.proton.me",
     "mail.google.com",
     "outlook.live.com",
     "outlook.office.com",
@@ -732,36 +1219,171 @@ const MESSAGING: &[&str] = &[
     "web.telegram.org",
     "reddit.com",
 ];
+/// Banks' and money sites without "bank" in their host, each a site whole, as each country's
+/// site is one of its own.
 const BANKS: &[&str] = &[
-    "chase",
-    "wellsfargo",
-    "bankofamerica",
-    "citi",
-    "capitalone",
-    "schwab",
-    "fidelity",
-    "vanguard",
-    "paypal",
-    "venmo",
-    "revolut",
-    "wise",
-    "monzo",
-    "coinbase",
+    "chase.com",
+    "wellsfargo.com",
+    "bankofamerica.com",
+    "citi.com",
+    "capitalone.com",
+    "schwab.com",
+    "fidelity.com",
+    "vanguard.com",
+    "paypal.com",
+    "venmo.com",
+    "revolut.com",
+    "wise.com",
+    "monzo.com",
+    "coinbase.com",
+    "americanexpress.com",
+    "discover.com",
+    "pnc.com",
+    "td.com",
+    "ally.com",
+    "sofi.com",
+    "robinhood.com",
+    "etoro.com",
+    "interactivebrokers.com",
+    "binance.com",
+    "kraken.com",
+    "bitstamp.net",
+    "crypto.com",
+    "klarna.com",
+    "n26.com",
+    "bunq.com",
+    "hsbc.com",
+    "hsbc.co.uk",
+    "barclays.co.uk",
+    "barclaycard.co.uk",
+    "natwest.com",
+    "nationwide.co.uk",
+    "halifax.co.uk",
+    "santander.co.uk",
+    "santander.de",
+    "santander.es",
+    "ing.com",
+    "ing.de",
+    "ing.nl",
+    "sparkasse.de",
+    "dkb.de",
+    "comdirect.de",
+    "postfinance.ch",
+    "ubs.com",
+    "nordea.com",
+    "nordea.dk",
+    "nordea.se",
+    "nordea.no",
+    "nordea.fi",
+    "nykredit.dk",
+    "lsb.dk",
+    "lunar.app",
+    "mobilepay.dk",
+    "vipps.no",
 ];
 
 /// Why acting on the element named `label` on `host` asks the user first, if it does: it looks
-/// like a payment or an order, or it sends a message or post from a site that sends them. Typing
-/// with submit and pressing Enter are "send".
-pub fn risk(host: &str, label: &str) -> Option<&'static str> {
+/// like a payment or an order, or it sends a message or post, from a site that sends them or
+/// with a `message` in its form, or the page's for one in no form, for it to send, or it sends or
+/// moves money on a bank's or money site (GHSA-6qxg-jpw9-5jrr). Typing with submit and pressing
+/// Enter are "send".
+pub fn risk(host: &str, label: &str, message: bool) -> Option<&'static str> {
     let label = label.to_lowercase();
     if PAYMENT.iter().any(|words| has_words(&label, words)) {
         return Some(ORDER);
     }
     let sends = SEND.iter().any(|words| has_words(&label, words));
-    if sends && MESSAGING.iter().any(|site| on(host, site)) {
+    let moves = || MOVES.iter().any(|words| has_words(&label, words));
+    if (sends || moves()) && opening_risk(host).is_some() {
+        return Some(ORDER);
+    }
+    if sends && (message || MESSAGING.iter().any(|site| on(host, site))) {
         return Some(SENDS);
     }
     None
+}
+
+/// Roles a key types in, where Space is a space and Enter submits the form.
+const FIELDS: &[&str] = &["textbox", "searchbox", "combobox", "spinbutton"];
+
+/// Roles Enter clicks, as Chromium names them: a summary is a "DisclosureTriangle". Enter on any
+/// other control, such as a checkbox, radio or slider, submits its form as Enter in a field does.
+const ENTER_CLICKS: &[&str] = &[
+    "button",
+    "link",
+    "menuitem",
+    "menuitemcheckbox",
+    "menuitemradio",
+    "tab",
+    "DisclosureTriangle",
+];
+
+/// A key press that asks first, as a click on `control` would, for `why`. `surely` when the press
+/// is a click on it, and not when it's one of the controls the press may click.
+#[derive(Debug, PartialEq)]
+pub struct Pressing {
+    pub why: &'static str,
+    pub control: Element,
+    pub surely: bool,
+}
+
+/// Whether pressing `key` asks the user first, as a click would on what it activates. Space
+/// activates the control that has the keyboard, and Enter a button, link, menu item, tab or
+/// summary, as a click on it does. Enter elsewhere, in a field (`typed_in` or the one with the
+/// keyboard) or on another control, submits its form, as a click on its submit button does. The
+/// outline doesn't say which button that is, nor whether one outside the form belongs to it, so
+/// any control of the form or outside every form that would ask asks, or of the page when the
+/// control has no form or the outline doesn't say what has the keyboard (GHSA-hqw3-jp9p-3rhj).
+pub fn pressing_risk(
+    host: &str,
+    outline: Option<&Outline>,
+    key: &str,
+    typed_in: Option<&Element>,
+) -> Option<Pressing> {
+    if key != "Enter" && key != "Space" {
+        return None;
+    }
+    let asks = |surely: bool| {
+        move |element: &Element| {
+            let message = outline.is_some_and(|outline| outline.sends_message(element.form));
+            let why = risk(host, &element.name, message)?;
+            let control = element.clone();
+            Some(Pressing {
+                why,
+                control,
+                surely,
+            })
+        }
+    };
+    let focus = match (typed_in, outline) {
+        (Some(field), _) => Focus::On(field.clone()),
+        (None, Some(outline)) => outline.focus.clone(),
+        (None, None) => Focus::Unknown,
+    };
+    let form = match &focus {
+        Focus::Page => return None,
+        Focus::On(control) => {
+            let role = control.role.as_str();
+            let clicks = match key {
+                "Space" => !FIELDS.contains(&role),
+                _ => ENTER_CLICKS.contains(&role),
+            };
+            match (clicks, key) {
+                (true, _) => return asks(true)(control),
+                // Space in a field types a space.
+                (false, "Space") => return None,
+                (false, _) => control.form,
+            }
+        }
+        Focus::Unknown => None,
+    };
+    let elements = outline.map(|outline| outline.elements.as_slice());
+    let mut elements = elements.unwrap_or_default().iter();
+    match form {
+        Some(form) => (elements.filter(|each| each.form.is_none_or(|each| each == form)))
+            .find_map(asks(false)),
+        None => elements.find_map(asks(false)),
+    }
 }
 
 /// Why a payment or an order asks first, which a session's receipt counts as an order placed.
@@ -772,7 +1394,7 @@ pub const SENDS: &str = "It sends a message or a post.";
 /// Why opening a page on `host` asks the user first, if it does: it's a bank's.
 pub fn opening_risk(host: &str) -> Option<&'static str> {
     let host = host.to_lowercase();
-    let bank = BANKS.iter().any(|bank| on(&host, &format!("{bank}.com"))) || host.contains("bank");
+    let bank = BANKS.iter().any(|bank| on(&host, bank)) || host.contains("bank");
     bank.then_some("It's a bank's site.")
 }
 
@@ -1023,7 +1645,7 @@ mod tests {
         let head = "Tab 20: Shop\nURL: https://shop.example/\n\n";
         let since = "What changed since the last outline you had of this tab:\n\n";
         assert_eq!(
-            open.since(&closed),
+            open.since(&closed).0,
             format!(
                 "{head}{since}New:\n\
                  - listbox \"Size\" [e8]\n  - option \"S\" [e9]\n  - option \"M\" [e10]\n\n\
@@ -1031,14 +1653,14 @@ mod tests {
             )
         );
         assert_eq!(
-            closed.since(&open),
+            closed.since(&open).0,
             format!(
                 "{head}{since}Changed:\n- combobox \"Size\" [e6]: now collapsed\n\n\
                  Gone:\n- listbox \"Size\" [e8]\n  - option \"S\" [e9]\n  - option \"M\" [e10]"
             )
         );
         assert_eq!(
-            open.since(&open),
+            open.since(&open).0,
             format!("{head}Nothing in the outline changed.")
         );
 
@@ -1047,14 +1669,14 @@ mod tests {
         moved[1]["childIds"] = json!(["21", "23", "22", "24"]);
         let moved = outline(&tab(), &moved, &mut refs, None);
         assert_eq!(
-            moved.since(&closed),
+            moved.since(&closed).0,
             format!("{head}Nothing in the outline changed.")
         );
         // Text is the same line by its text, in order.
         let mut text = shop(false);
         text[8]["name"]["value"] = json!("Heavy linen.");
         let text = outline(&tab(), &text, &mut refs, None);
-        assert!(text.since(&closed).ends_with(
+        assert!(text.since(&closed).0.ends_with(
             "New:\n- text: Heavy linen.\n\nGone:\n- text: Light linen, cut loose, for long summer days."
         ));
     }
@@ -1113,19 +1735,20 @@ mod tests {
         let after = outline(&tab(), &form(true), &mut refs, None);
         assert!(after.text().contains("- textbox \"Name\" [e1] (read-only)"));
         assert!(
-            after.since(&before).ends_with(
+            after.since(&before).0.ends_with(
                 "Changed:\n\
                  - textbox \"Name\" [e1] (read-only): now read-only\n\
                  - button \"Continue\" [e2]: now enabled\n\
                  - link \"Help\" [e3]: was “Help and contact”"
             ),
             "{}",
-            after.since(&before)
+            after.since(&before).0
         );
     }
 
-    /// A table's rows and cells and a list's items have refs, as a person may click them; an item
-    /// holding only text is named by it, and one holding a link leaves the ref to the link.
+    /// A table's rows and cells and a list's items have refs, as a person may click them, a row's
+    /// line with its cells' (#3657); an item holding only text is named by it, and one holding a
+    /// link alone leaves the ref to the link.
     #[test]
     fn rows_and_items_have_refs() {
         let mut nodes = vec![
@@ -1156,9 +1779,7 @@ mod tests {
             outline(&tab(), &nodes, &mut refs, None).text(),
             "Tab 20: Console\nURL: https://shop.example/\n\n\
              - table \"Instances\"\n\
-             \x20 - row \"web-1 Running\" [e1]\n\
-             \x20   - cell \"web-1\" [e2]\n\
-             \x20   - cell \"Running\" [e3]\n\
+             \x20 - row [e1]: \"web-1\" [e2] · \"Running\" [e3]\n\
              - listitem \"Instances\" [e4]\n\
              - link \"Volumes\" [e5]"
         );
@@ -1216,11 +1837,11 @@ mod tests {
             ..tab()
         };
         let elsewhere = outline(&basket, &shop(false), &mut refs, None);
-        assert_eq!(elsewhere.since(&closed), elsewhere.text());
+        assert_eq!(elsewhere.since(&closed).0, elsewhere.text());
         let mut reloaded = shop(false);
         reloaded[0]["backendDOMNodeId"] = json!(100);
         let reloaded = outline(&tab(), &reloaded, &mut refs, None);
-        assert_eq!(reloaded.since(&closed), reloaded.text());
+        assert_eq!(reloaded.since(&closed).0, reloaded.text());
         let reviews = TabInfo {
             url: "https://shop.example/#reviews".into(),
             ..tab()
@@ -1229,6 +1850,7 @@ mod tests {
         assert!(
             reviews
                 .since(&closed)
+                .0
                 .ends_with("Nothing in the outline changed.")
         );
 
@@ -1236,7 +1858,7 @@ mod tests {
         thanks[0]["childIds"] = json!(["3"]);
         thanks[6]["name"]["value"] = json!("Thanks for your order");
         let thanks = outline(&tab(), &thanks, &mut refs, None);
-        assert_eq!(thanks.since(&closed), thanks.text());
+        assert_eq!(thanks.since(&closed).0, thanks.text());
     }
 
     /// With an element, the outline is of it alone; one gone from the page says so.
@@ -1321,26 +1943,407 @@ mod tests {
         );
         let outline = outline(&tab(), &nodes, &mut Refs::default(), None).text();
         assert!(outline.len() < MAX_OUTLINE + 1000);
-        assert!(outline.ends_with("read_page has all of the page's text."));
+        assert!(outline.ends_with(CUT));
+    }
+
+    /// A table too big for the outline's elements a line each fits it with a row a line, each
+    /// with its refs; a long text gives its start.
+    #[test]
+    fn a_big_table_fits_with_its_rows_as_lines() {
+        let mut nodes = vec![
+            node("1", "RootWebArea", "Orders", &["2", "9"]),
+            node("9", "StaticText", &"Terms. ".repeat(100), &[]),
+        ];
+        let rows: Vec<String> = (0..120).map(|row| format!("r{row}")).collect();
+        nodes.push(node(
+            "2",
+            "table",
+            "Orders",
+            &rows.iter().map(String::as_str).collect::<Vec<_>>(),
+        ));
+        for (at, row) in rows.iter().enumerate() {
+            let (cell, link) = (format!("{row}c"), format!("{row}l"));
+            nodes.push(node(row, "row", "", &[&cell, &link]));
+            nodes.push(node(
+                &cell,
+                "cell",
+                &format!("Order {at}"),
+                &[&format!("{cell}t")],
+            ));
+            nodes.push(node(
+                &format!("{cell}t"),
+                "StaticText",
+                &format!("Order {at}"),
+                &[],
+            ));
+            nodes.push(node(&link, "link", "Refund", &[]));
+        }
+        for (at, node) in nodes.iter_mut().enumerate() {
+            node["backendDOMNodeId"] = json!(at);
+        }
+        let mut refs = Refs::default();
+        let outline = outline(&tab(), &nodes, &mut refs, None).text();
+        assert!(!outline.ends_with(CUT), "{outline}");
+        assert!(outline.chars().count() < MAX_OUTLINE);
+        let text_line = outline
+            .lines()
+            .find(|line| line.starts_with("- text: "))
+            .unwrap();
+        assert!(
+            text_line.chars().count() <= "- text: ".len() + TEXT_SHOWN + 1,
+            "{text_line}"
+        );
+        assert!(
+            outline.contains("  - row [e358]: \"Order 119\" [e359] · link \"Refund\" [e360]"),
+            "{outline}"
+        );
+        assert_eq!(
+            refs.get("e360").map(|element| element.name.as_str()),
+            Some("Refund")
+        );
+    }
+
+    /// A row a line can't hold, as one holding a list, is outlined line by line, its refs
+    /// numbered as if it had never been tried as a line; a checkbox's state shows on the row's
+    /// line.
+    #[test]
+    fn a_row_holding_a_list_is_outlined_line_by_line() {
+        let mut nodes = vec![
+            node("1", "RootWebArea", "Mail", &["2"]),
+            node("2", "list", "", &["3", "4"]),
+            node("3", "listitem", "", &["31", "32"]),
+            node("31", "checkbox", "Select", &[]),
+            node("32", "list", "", &["33"]),
+            node("33", "listitem", "", &["34"]),
+            node("34", "StaticText", "Reply", &[]),
+            node("4", "listitem", "", &["41", "42"]),
+            node("41", "checkbox", "Select", &[]),
+            node("42", "StaticText", "From Ana", &[]),
+        ];
+        for node in &mut nodes {
+            node["backendDOMNodeId"] =
+                json!(node["nodeId"].as_str().unwrap().parse::<i64>().unwrap());
+        }
+        nodes[8]["properties"] = json!([{ "name": "checked", "value": { "value": "true" } }]);
+        let outline = outline(&tab(), &nodes, &mut Refs::default(), None).text();
+        assert!(
+            outline.ends_with(
+                "\n\n- checkbox \"Select\" [e1]\n\
+                 - listitem \"Reply\" [e2]\n\
+                 - listitem [e3]: checkbox \"Select\" [e4] (checked) · \"From Ana\""
+            ),
+            "{outline}"
+        );
+    }
+
+    /// A control in a row that's a line has the keyboard as one on a line of its own does, so
+    /// Enter on it asks first as a click on it would.
+    #[test]
+    fn a_row_says_what_in_it_has_the_keyboard() {
+        let mut nodes = vec![
+            node("1", "RootWebArea", "Basket", &["2"]),
+            node("2", "list", "", &["3"]),
+            node("3", "listitem", "", &["31", "32"]),
+            node("31", "StaticText", "Two shirts", &[]),
+            node("32", "button", "Pay now", &[]),
+        ];
+        for node in &mut nodes {
+            node["backendDOMNodeId"] =
+                json!(node["nodeId"].as_str().unwrap().parse::<i64>().unwrap());
+        }
+        nodes[4]["properties"] = json!([{ "name": "focused", "value": { "value": true } }]);
+        let outline = outline(&tab(), &nodes, &mut Refs::default(), None);
+        let text = outline.text();
+        assert!(
+            text.ends_with("\n- listitem [e1]: \"Two shirts\" · button \"Pay now\" [e2]"),
+            "{text}"
+        );
+        let pressing = pressing_risk("shop.example", Some(&outline), "Enter", None).unwrap();
+        assert_eq!(
+            (pressing.control.name.as_str(), pressing.surely),
+            ("Pay now", true)
+        );
+    }
+
+    /// A row holding a form of its own is outlined line by line, as one holding a list is, so its
+    /// field and buttons have that form, and Enter in the field asks as a click on its own form's
+    /// button would, not on the button of the form around the list.
+    #[test]
+    fn a_row_holding_a_form_keeps_its_form() {
+        let mut nodes = vec![
+            node("1", "RootWebArea", "Checkout", &["2"]),
+            node("2", "form", "", &["3", "4"]),
+            node("3", "button", "Place your order", &[]),
+            node("4", "list", "", &["5"]),
+            node("5", "listitem", "", &["6"]),
+            node("6", "form", "", &["7", "8"]),
+            node("7", "textbox", "Card number", &[]),
+            node("8", "button", "Pay now", &[]),
+        ];
+        for node in &mut nodes {
+            node["backendDOMNodeId"] =
+                json!(node["nodeId"].as_str().unwrap().parse::<i64>().unwrap());
+        }
+        nodes[6]["properties"] = json!([{ "name": "focused", "value": { "value": true } }]);
+        let outline = outline(&tab(), &nodes, &mut Refs::default(), None);
+        let text = outline.text();
+        assert!(
+            text.contains("\n    - textbox \"Card number\" [e"),
+            "{text}"
+        );
+        let pressing = pressing_risk("shop.example", Some(&outline), "Enter", None).unwrap();
+        // Enter in a field submits its form, which may click this button: the outline can't say.
+        assert_eq!(
+            (
+                pressing.control.name.as_str(),
+                pressing.control.form,
+                pressing.surely
+            ),
+            ("Pay now", Some(6), false)
+        );
+    }
+
+    /// A tab showing a response, not a page, gives its start and says how to read the rest.
+    #[test]
+    fn a_response_gives_its_start() {
+        let json = format!("{{\"items\": [{}]}}", "{\"id\": 1}, ".repeat(1_000));
+        let nodes = vec![
+            node("1", "RootWebArea", "", &["2"]),
+            node("2", "generic", "", &["3"]),
+            node("3", "StaticText", &json, &[]),
+        ];
+        let outline = outline(&tab(), &nodes, &mut Refs::default(), None).text();
+        let start: String = json.chars().take(RESPONSE_SHOWN).collect();
+        assert!(outline.contains(&format!("- text: {start}")), "{outline}");
+        assert!(outline.ends_with(RESPONSE), "{outline}");
+        assert!(outline.chars().count() < RESPONSE_SHOWN + 500);
+        // A page with its own text is a page.
+        let page = vec![
+            node("1", "RootWebArea", "", &["2", "3", "4", "5"]),
+            node("2", "StaticText", &json, &[]),
+            node("3", "link", "Home", &[]),
+            node("4", "link", "Docs", &[]),
+            node("5", "button", "Sign in", &[]),
+        ];
+        assert!(!outline_of(&page).contains(RESPONSE));
+    }
+
+    fn outline_of(nodes: &[Value]) -> String {
+        outline(&tab(), nodes, &mut Refs::default(), None).text()
+    }
+
+    /// The same view drawn again, its elements new, answers with a line, and the agent keeps the
+    /// outline it had; a new view in the same page answers whole.
+    #[test]
+    fn a_view_drawn_again_answers_with_a_line() {
+        let mut refs = Refs::default();
+        let before = outline(&tab(), &shop(false), &mut refs, None);
+        let mut again = shop(false);
+        // Its document is the same; its elements are new.
+        for node in &mut again[1..] {
+            let id = node["backendDOMNodeId"].as_i64().unwrap();
+            node["backendDOMNodeId"] = json!(id + 1_000);
+        }
+        let again = outline(&tab(), &again, &mut refs, None);
+        let (text, has) = again.since(&before);
+        assert_eq!(
+            text,
+            format!("Tab 20: Shop\nURL: https://shop.example/\n\n{MOSTLY_CHANGED}")
+        );
+        assert!(!has);
+        // A list that closes takes most of a small outline with it, which reads as before, but
+        // nothing in it is new: it's answered whole, with the refs the agent acts on next.
+        let open = outline(&tab(), &shop(true), &mut refs, None);
+        let mut closed = shop(false);
+        closed[0]["childIds"] = json!(["3", "5", "6"]);
+        let closed = outline(&tab(), &closed, &mut refs, None);
+        let (text, has) = closed.since(&open);
+        assert_eq!(text, closed.text());
+        assert!(text.contains("- button \"Add to basket\" [e"), "{text}");
+        assert!(has);
+        let mut other = vec![
+            node("1", "RootWebArea", "Shop", &["2", "3"]),
+            node("2", "heading", "Your basket", &[]),
+            node("3", "button", "Check out", &[]),
+        ];
+        other[2]["backendDOMNodeId"] = json!(5_000);
+        let other = outline(&tab(), &other, &mut refs, None);
+        let (text, has) = other.since(&before);
+        assert_eq!(text, other.text());
+        assert!(has);
     }
 
     /// Payments and orders ask first anywhere, sending on a site that sends messages, and opening
     /// a bank's site; the words have to be words, not inside others.
     #[test]
     fn what_asks_the_user_first() {
-        assert!(risk("shop.example", "Place your order").is_some());
-        assert!(risk("shop.example", "Proceed to checkout").is_some());
-        assert!(risk("shop.example", "Pay now").is_some());
-        assert_eq!(risk("shop.example", "Payment methods"), None);
-        assert_eq!(risk("shop.example", "Send"), None);
-        assert!(risk("mail.google.com", "Send").is_some());
-        assert!(risk("old.reddit.com", "send").is_some());
-        assert_eq!(risk("notreddit.com", "send"), None);
-        assert_eq!(risk("mail.google.com", "Sender"), None);
+        assert!(risk("shop.example", "Place your order", false).is_some());
+        assert!(risk("shop.example", "Proceed to checkout", false).is_some());
+        assert!(risk("shop.example", "Pay now", false).is_some());
+        assert_eq!(risk("shop.example", "Payment methods", false), None);
+        assert_eq!(risk("butik.example", "Betalingsmetoder", false), None);
+        assert_eq!(risk("shop.example", "Send", false), None);
+        assert!(risk("shop.example", "Send", true).is_some());
+        assert!(risk("mail.google.com", "Send", false).is_some());
+        assert!(risk("old.reddit.com", "send", false).is_some());
+        assert_eq!(risk("notreddit.com", "send", false), None);
+        assert_eq!(risk("mail.google.com", "Sender", false), None);
         assert!(opening_risk("www.chase.com").is_some());
+        assert!(opening_risk("netbank.nordea.dk").is_some());
+        assert_eq!(opening_risk("notnordea.dk"), None);
         assert!(opening_risk("online.mybank.example").is_some());
         assert_eq!(opening_risk("example.com"), None);
         assert_eq!(opening_risk("notchase.com"), None);
+    }
+
+    /// What asks first beyond the word and site lists, each named when it doesn't ask as it
+    /// should: an order in other words and languages, a Send or Comment with a message to send on
+    /// a site off the list, opening a bank's site off the list, and moving money on one.
+    #[test]
+    fn what_asks_first_beyond_the_lists() {
+        let mut missed = Vec::new();
+        for (host, label) in [
+            ("shop.example", "Complete order"),
+            ("shop.example", "Confirm booking"),
+            ("butik.example", "Betal"),
+            ("butik.example", "Køb nu"),
+            ("laden.example", "Jetzt kaufen"),
+            ("mail.proton.me", "Send"),
+            ("www.binance.com", "Withdraw"),
+            ("netbank.nordea.dk", "Overfør"),
+            ("netbank.nordea.dk", "Send"),
+            ("online.mybank.example", "Confirm"),
+        ] {
+            if risk(host, label, false).is_none() {
+                missed.push(format!("{label} on {host} asks nothing"));
+            }
+        }
+        for (host, label) in [
+            ("teams.microsoft.com", "Send"),
+            ("github.com", "Comment"),
+            ("meta.discourse.org", "Create Topic"),
+        ] {
+            let (outline, control) = composed(label, true, Some("filled"));
+            let message = outline.sends_message(control.form);
+            if risk(host, &control.name, message).is_none() {
+                missed.push(format!("{label} on {host}, with a message, asks nothing"));
+            }
+        }
+        for host in [
+            "www.nordea.dk",
+            "n26.com",
+            "www.hsbc.co.uk",
+            "www.binance.com",
+            "bcol.barclaycard.co.uk",
+        ] {
+            if opening_risk(host).is_none() {
+                missed.push(format!("opening {host} asks nothing"));
+            }
+        }
+        if risk("shop.example", "Confirm", false).is_some() {
+            missed.push("Confirm off the money sites asks".into());
+        }
+        assert!(missed.is_empty(), "{}", missed.join("\n"));
+    }
+
+    /// A page with a message field and a Send control named `send`: the field a multi-line one
+    /// in the control's form, or with `rich`, a rich-text editor in no form, as a chat's is, its
+    /// `contents` as the core says. Returns its outline and the control.
+    fn composed(send: &str, rich: bool, contents: Option<&str>) -> (Outline, Element) {
+        let mut nodes = match rich {
+            true => vec![
+                node("1", "RootWebArea", "Chat", &["2", "3"]),
+                node("2", "textbox", "Message", &[]),
+                node("3", "button", send, &[]),
+            ],
+            false => vec![
+                node("1", "RootWebArea", "Issue", &["4"]),
+                node("4", "form", "", &["2", "3"]),
+                node("2", "textbox", "Body", &[]),
+                node("3", "button", send, &[]),
+            ],
+        };
+        let property = match rich {
+            true => {
+                json!({ "name": "editable", "value": { "type": "token", "value": "richtext" } })
+            }
+            false => json!({ "name": "multiline", "value": { "type": "boolean", "value": true } }),
+        };
+        for each in &mut nodes {
+            let id: i64 = each["nodeId"].as_str().unwrap().parse().unwrap();
+            each["backendDOMNodeId"] = json!(id * 10);
+            if id == 2 {
+                each["properties"] = json!([property]);
+                if let Some(contents) = contents {
+                    each["contents"] = json!(contents);
+                }
+            }
+        }
+        let outline = outline(&tab(), &nodes, &mut Refs::default(), None);
+        let control = outline
+            .elements
+            .iter()
+            .find(|each| each.name == send)
+            .cloned();
+        (outline, control.unwrap())
+    }
+
+    /// A Send control asks on any site when the page holds a message for it to send: a
+    /// multi-line field in its form or a rich-text editor in no form, holding anything. A
+    /// single-line field, an empty one, or one in another form doesn't make it ask, and a
+    /// line break in an editor is its Enter.
+    #[test]
+    fn a_message_the_page_holds_makes_its_send_ask() {
+        for (rich, label) in [(false, "Comment"), (true, "Send")] {
+            let (outline, control) = composed(label, rich, Some("filled"));
+            assert!(outline.sends_message(control.form), "{label}");
+            assert_eq!(risk("site.example", label, true), Some(SENDS));
+            let (empty, control) = composed(label, rich, Some("empty"));
+            assert!(
+                !empty.sends_message(control.form),
+                "{label} with nothing to send"
+            );
+            let (unknown, control) = composed(label, rich, None);
+            assert!(
+                !unknown.sends_message(control.form),
+                "{label} with nothing said"
+            );
+        }
+        // What the agent typed counts, and a Send of another form doesn't send it.
+        let mut nodes = vec![
+            node("1", "RootWebArea", "Shop", &["4", "5"]),
+            node("4", "form", "", &["2", "3"]),
+            node("2", "textbox", "Notes", &[]),
+            node("3", "button", "Comment", &[]),
+            node("5", "form", "", &["6"]),
+            node("6", "button", "Submit", &[]),
+        ];
+        for (at, backend) in [(1, 40), (2, 20), (3, 30), (4, 50), (5, 60)] {
+            nodes[at]["backendDOMNodeId"] = json!(backend);
+        }
+        nodes[2]["properties"] =
+            json!([{ "name": "multiline", "value": { "type": "boolean", "value": true } }]);
+        nodes[2]["holds"] = json!("Looks good");
+        let page = outline(&tab(), &nodes, &mut Refs::default(), None);
+        let named = |name: &str| page.elements.iter().find(|each| each.name == name).unwrap();
+        assert!(page.sends_message(named("Comment").form));
+        assert!(
+            !page.sends_message(named("Submit").form),
+            "a Submit in another form"
+        );
+        // A single-line field holding text is no message.
+        nodes[2]["properties"] = json!([]);
+        let single = outline(&tab(), &nodes, &mut Refs::default(), None);
+        assert!(!single.sends_message(Some(40)));
+        // Enter in the chat's editor, as a line break typed there is, asks as a click on Send.
+        let (chat, _) = composed("Send", true, Some("filled"));
+        assert!(chat.is_editor(20));
+        let editor = chat.elements.iter().find(|each| each.node == 20).unwrap();
+        let pressing = pressing_risk("chat.example", Some(&chat), "Enter", Some(editor));
+        assert_eq!(
+            pressing.map(|pressing| pressing.control.name),
+            Some("Send".into())
+        );
     }
 
     #[test]

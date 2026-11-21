@@ -262,6 +262,7 @@ elif [ -n "$mac" ]; then
   exec 3> "$out/drive"
   await '^browser: agents server on /.*/Agents\.sock$' || fail "the saved switch didn't start the server"
 fi
+commanded=
 if windows || [ -n "$mac" ]; then
   socket=$(grep '^browser: agents server on' "$log" | tail -1 | sed 's/^browser: agents server on //')
   name="$(echo "$app_name" | tr '[:upper:]' '[:lower:]')-dev"
@@ -371,6 +372,121 @@ PY
   settings_tab General
   settings_tab Agents
   ../tools/window-screenshot.sh "$pid" "$out/not-installed.png" || fail "no window to capture"
+  # The ilo command (#3667), on the Mac: Add links ilo in the run's ~/.local/bin to the program
+  # beside the browser's and writes its agent file, only the user's to read, in the profile; ilo
+  # then reaches the browser as its own agent, and help lists the server's tools. With the folder
+  # off the shell's PATH the row gives the line to paste. Remove leaves the folder as it was.
+  if [ -n "$mac" ]; then
+    bin="$home/.local/bin"
+    mkdir -p "$bin"
+    echo kept > "$bin/tool"
+    profile="${BROWSER_PROFILE_DIR:-$profile_dir}"
+    program="$(dirname "$browser")/ilo-command"
+    ilo() { HOME="$home" BROWSER_PROFILE_DIR="$profile" "$@"; }
+    click_in_sight "ilo-command add"
+    expect '^browser: connect agent ilo-command$' "a click on Add didn't add the ilo command"
+    expect_late '^browser: agent ilo-command \(connected\|couldn.t connect: .*\)$' "Add didn't finish"
+    logged '^browser: agent ilo-command connected$' ||
+      fail "Add failed: $(sed -n 's/^browser: agent ilo-command couldn.t connect: //p' "$log" | tail -1)"
+    [ "$(readlink "$bin/ilo")" = "$program" ] ||
+      fail "Add linked ~/.local/bin/ilo to '$(readlink "$bin/ilo")', not $program"
+    [ "$(stat -f %Lp "$profile/ilo-command")" = 600 ] ||
+      fail "the agent file is mode $(stat -f %Lp "$profile/ilo-command"), not 600"
+    tabs=$(ilo "$bin/ilo" tabs --as Checker 2>&1) || fail "ilo tabs failed ($?): $tabs"
+    expect '^browser: agent ilo-command hello from Checker$' "ilo tabs didn't reach the browser as the ilo command"
+    help=$(ilo "$bin/ilo" help 2>&1) || fail "ilo help failed ($?): $help"
+    case $help in *"ilo click <ref>"*) ;; *) fail "ilo help listed no click: $help" ;; esac
+    settings_tab General
+    settings_tab Agents
+    in_sight "ilo-command remove" || fail "the added row drew no Remove"
+    ../tools/window-screenshot.sh "$pid" "$out/command-added.png" || fail "no window to capture"
+    # The shell no longer puts the folder on PATH: the row gives the line to paste.
+    echo 'export PATH="$HOME/.node/bin:$PATH"' > "$home/.zshrc"
+    settings_tab General
+    settings_tab Agents
+    in_sight "ilo-command copy line" || fail "with ~/.local/bin off PATH the row drew no Copy Line"
+    ../tools/window-screenshot.sh "$pid" "$out/command-unsearched.png" || fail "no window to capture"
+    click_in_sight "ilo-command remove"
+    expect '^browser: agent ilo-command disconnected$' "a click on Remove didn't remove the ilo command"
+    for _ in $(seq 100); do
+      [ -e "$bin/ilo" ] || [ -L "$bin/ilo" ] || [ -e "$profile/ilo-command" ] || break
+      sleep 0.1
+    done
+    [ ! -L "$bin/ilo" ] || fail "Remove left the link"
+    [ ! -e "$profile/ilo-command" ] || fail "Remove left the agent file"
+    [ "$(ls "$bin")" = tool ] && [ "$(cat "$bin/tool")" = kept ] ||
+      fail "Remove didn't leave ~/.local/bin as it was: $(ls -l "$bin")"
+    code=0
+    gone=$(ilo "$program" tabs 2>&1) || code=$?
+    [ "$code" = 4 ] || fail "ilo after Remove ended $code, not 4: $gone"
+    commanded="; Add links ilo in ~/.local/bin, which reaches the browser as its own agent with help from its tools, the row gives the line to paste once the folder is off PATH, and Remove leaves the folder as it was"
+  elif windows; then
+    # The ilo command (#3667), on Windows: Add puts bin, beside chrome.exe, on the user's PATH in
+    # the registry, last, and writes its agent file in the profile; bin\ilo.exe then reaches the
+    # browser as its own agent, and help lists the server's tools. Remove takes back that entry,
+    # leaving the runner's PATH as it was, and the agent file. The runner's PATH is saved first and
+    # put back as the run ends, however it ends.
+    cat > "$out/user-path.py" << 'EOF'
+import json, sys, winreg
+command, saved = sys.argv[1], sys.argv[2]
+key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0,
+                     winreg.KEY_QUERY_VALUE | winreg.KEY_SET_VALUE)
+try:
+    value = list(winreg.QueryValueEx(key, "Path"))
+except FileNotFoundError:
+    value = None
+if command == "save":
+    with open(saved, "w", encoding="utf-8") as file:
+        json.dump(value, file)
+elif command == "restore":
+    with open(saved, encoding="utf-8") as file:
+        was = json.load(file)
+    if was != value and was is None:
+        winreg.DeleteValue(key, "Path")
+    elif was != value:
+        winreg.SetValueEx(key, "Path", 0, was[1], was[0])
+elif command == "same":
+    with open(saved, encoding="utf-8") as file:
+        was = json.load(file)
+    print(json.dumps(value) if was != value else "")
+elif command == "last":
+    print(([entry for entry in value[0].split(";") if entry] or [""])[-1] if value else "")
+EOF
+    python3 -I "$out/user-path.py" save "$out/user-path.json" || fail "couldn't read the runner's PATH"
+    run_undo="python3 -I $out/user-path.py restore $out/user-path.json"
+    profile="${BROWSER_PROFILE_DIR:-$profile_dir}"
+    entry=$(cygpath -w "$app/bin")
+    click_in_sight "ilo-command add"
+    expect '^browser: connect agent ilo-command$' "a click on Add didn't add the ilo command"
+    expect_late '^browser: agent ilo-command \(connected\|couldn.t connect: .*\)$' "Add didn't finish"
+    logged '^browser: agent ilo-command connected$' ||
+      fail "Add failed: $(sed -n 's/^browser: agent ilo-command couldn.t connect: //p' "$log" | tail -1)"
+    last=$(python3 -I "$out/user-path.py" last "$out/user-path.json" | tr -d '\r')
+    [ "$last" = "$entry" ] || fail "Add didn't put $entry last on the user's PATH: its last entry is '$last'"
+    [ -s "$profile/ilo-command" ] || fail "Add wrote no agent file in $profile"
+    ilo() { BROWSER_PROFILE_DIR=$(cygpath -w "$profile") "$app/bin/ilo.exe" "$@"; }
+    tabs=$(ilo tabs --as Checker 2>&1) || fail "ilo tabs failed ($?): $tabs"
+    expect '^browser: agent ilo-command hello from Checker$' "ilo tabs didn't reach the browser as the ilo command"
+    help=$(ilo help 2>&1) || fail "ilo help failed ($?): $help"
+    case $help in *"ilo click <ref>"*) ;; *) fail "ilo help listed no click: $help" ;; esac
+    settings_tab General
+    settings_tab Agents
+    in_sight "ilo-command remove" || fail "the added row drew no Remove"
+    ../tools/window-screenshot.sh "$pid" "$out/command-added.png" || fail "no window to capture"
+    click_in_sight "ilo-command remove"
+    expect '^browser: agent ilo-command disconnected$' "a click on Remove didn't remove the ilo command"
+    for _ in $(seq 100); do
+      [ -e "$profile/ilo-command" ] || break
+      sleep 0.1
+    done
+    [ ! -e "$profile/ilo-command" ] || fail "Remove left the agent file"
+    changed=$(python3 -I "$out/user-path.py" same "$out/user-path.json" | tr -d '\r')
+    [ -z "$changed" ] || fail "Remove didn't leave the user's PATH as it was: it's $changed"
+    code=0
+    gone=$(ilo tabs 2>&1) || code=$?
+    [ "$code" = 4 ] || fail "ilo after Remove ended $code, not 4: $gone"
+    commanded="; Add puts bin\\ilo.exe's folder last on the user's PATH, which reaches the browser as its own agent with help from its tools, and Remove leaves the PATH as it was"
+  fi
   quit
   rm -f "$agents_file"
   rm -rf "$home"
@@ -631,7 +747,7 @@ PY
   tasks_found="; on Windows the task agents find claude.exe and codex.cmd, then claude.cmd and codex.exe, off the PATH, each signed in, Codex's models listed, a task from ⌘T starts on each and its CLI gets its instructions whole and the first message, and no console window shows"
 fi
 if [ "$driven" = 1 ]; then
-  echo "ok: $made, the switcher and ⌃1 to ⌃9, as a task's does, refuses an agent the user's tab, ad blocking, passwords, DevTools, a profile's settings and any action agents lack, with why in the activity log, and comes back as no Space of the user's$session_page$connected$tasks_found. The user's tab came from the run's own server."
+  echo "ok: $made, the switcher and ⌃1 to ⌃9, as a task's does, refuses an agent the user's tab, ad blocking, passwords, DevTools, a profile's settings and any action agents lack, with why in the activity log, and comes back as no Space of the user's$session_page$connected$commanded$tasks_found. The user's tab came from the run's own server."
 else
-  echo "ok: $made and the switcher, as a task's does, refuses an agent the user's tab and what agents lack, with why in the activity log, and comes back as no Space of the user's$connected$tasks_found. The user's tab came from the run's own server. skip: ⌃2 and ⌃3, and a past task's page. Browser wasn't the active app, so the page ignored the click."
+  echo "ok: $made and the switcher, as a task's does, refuses an agent the user's tab and what agents lack, with why in the activity log, and comes back as no Space of the user's$connected$commanded$tasks_found. The user's tab came from the run's own server. skip: ⌃2 and ⌃3, and a past task's page. Browser wasn't the active app, so the page ignored the click."
 fi

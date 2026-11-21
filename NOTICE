@@ -233,8 +233,8 @@ app/assets/fonts/Inter-OFL.txt, and at the end of this file.
 
 uBlock Origin (https://github.com/gorhill/uBlock), GNU General Public License v3.0 or later
 Shipped modified, in the app's framework's resources on the Mac and beside the engine's chrome
-elsewhere, as app/build.sh puts it there: release 1.75.0, the version and sha256 app/ublock.ini
-pins, whose source is at https://github.com/gorhill/uBlock/tree/1.75.0. app/fetch-ublock.sh adds a "key" to its manifest
+elsewhere, as app/build.sh puts it there: release 1.76.6, the version and sha256 app/ublock.ini
+pins, whose source is at https://github.com/gorhill/uBlock/tree/1.76.6. app/fetch-ublock.sh adds a "key" to its manifest
 and changes js/tab.js and js/traffic.js, each saying so on its first line, so its housekeeping
 timers don't wake an idle browser; the script is the record of each change. The license travels
 with it, as its LICENSE.txt. What it bundles keeps its own license, in its file's header or in a
@@ -261,7 +261,7 @@ Shipped converted, in the iPhone app's Rules folder: mobile/ios/Blocking/build.s
 into WebKit content-blocking rules with Brave's adblock-rust (https://github.com/brave/adblock-rust,
 Mozilla Public License 2.0, a build tool only) and mobile/ios/Blocking/convert, which is the record
 of each change: rules WebKit can't express are left out, and the rest are split into rule lists.
-The lists are the ones uBlock Origin 1.75.0 above carries and turns on, as app/ublock.ini pins it:
+The lists are the ones uBlock Origin 1.76.6 above carries and turns on, as app/ublock.ini pins it:
 - uBlock filters, with its Badware risks, Privacy, Unbreak and Quick fixes
   (https://github.com/uBlockOrigin/uAssets), GNU General Public License v3.0 or later;
 - EasyList and EasyPrivacy (https://easylist.to/), GNU General Public License v3.0 or later, or
