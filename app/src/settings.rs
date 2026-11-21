@@ -551,7 +551,7 @@ struct InWindow;
 
 #[cfg(target_os = "linux")]
 impl dialog::Host for InWindow {
-    fn show(&self, _: Option<u64>, _: Option<Bounds<gpui::Pixels>>) {}
+    fn show(&self, _: Option<u64>, _: Option<Bounds<gpui::Pixels>>, _: bool) {}
 
     fn hide(&self) {}
 }
