@@ -22,6 +22,7 @@
 #include "browser_core/address_import.h"
 #include "browser_core/agent_autofill.h"
 #include "browser_core/agent_close.h"
+#include "browser_core/agent_file_field.h"
 #include "browser_core/agent_page.h"
 #include "browser_core/agent_request.h"
 #include "browser_core/agent_session.h"
@@ -731,6 +732,14 @@ bool bc_tab_hand_back(bc_id tab) {
 
 bool bc_tab_held(bc_id tab) {
   return browser_core::IsHeld(tab);
+}
+
+bool bc_file_field_choose(bc_id field, bc_id window) {
+  return browser_core::AgentFileField::Choose(field, window);
+}
+
+void bc_file_field_drop(bc_id field) {
+  browser_core::AgentFileField::Drop(field);
 }
 
 bc_id bc_agent_open_tab(const char* agent, const char* url) {

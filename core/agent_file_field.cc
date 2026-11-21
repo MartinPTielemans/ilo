@@ -1,0 +1,262 @@
+#include "browser_core/agent_file_field.h"
+
+#include <map>
+#include <utility>
+
+#include "base/files/file_path.h"
+#include "base/functional/bind.h"
+#include "base/logging.h"
+#include "base/memory/ptr_util.h"
+#include "base/no_destructor.h"
+#include "base/task/single_thread_task_runner.h"
+#include "browser_core/agent_page.h"
+#include "browser_core/agent_session.h"
+#include "browser_core/host.h"
+#include "browser_core/space.h"
+#include "browser_core/tab.h"
+#include "browser_core/window.h"
+#include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/web_contents.h"
+#include "net/base/mime_util.h"
+#include "ui/shell_dialogs/selected_file_info.h"
+#include "ui/views/widget/widget.h"
+
+namespace browser_core {
+
+namespace {
+
+std::map<bc_id, std::unique_ptr<AgentFileField>>& Fields() {
+  static base::NoDestructor<std::map<bc_id, std::unique_ptr<AgentFileField>>> fields;
+  return *fields;
+}
+
+bc_id g_next_field = 1;
+
+// The agent whose Space has |tab|, or null.
+const Space::Agent* AgentOf(bc_id tab) {
+  const Space* space = Space::Holding(tab);
+  return space && space->agent() ? &*space->agent() : nullptr;
+}
+
+// What the dialog filters by, from the field's accept, or none to show every file.
+std::unique_ptr<ui::SelectFileDialog::FileTypeInfo> TypesOf(
+    const std::vector<std::string>& accepts) {
+  std::vector<base::FilePath::StringType> extensions;
+  for (const std::string& type : accepts) {
+    if (type.starts_with('.')) {
+      extensions.push_back(base::FilePath::FromUTF8Unsafe(type.substr(1)).value());
+    } else {
+      net::GetExtensionsForMimeType(type, &extensions);
+    }
+  }
+  if (extensions.empty()) {
+    return nullptr;
+  }
+  auto types = std::make_unique<ui::SelectFileDialog::FileTypeInfo>();
+  types->extensions.push_back(std::move(extensions));
+  // As a page's own dialog has it, the user may still show every file.
+  types->include_all_files = true;
+  types->allowed_paths = ui::SelectFileDialog::FileTypeInfo::NATIVE_PATH;
+  return types;
+}
+
+std::string PathOf(const ui::SelectedFileInfo& file) {
+  return file.path().AsUTF8Unsafe();
+}
+
+}  // namespace
+
+AgentFileField::AgentFileField(bc_id id,
+                               bc_id tab,
+                               int64_t element,
+                               content::WeakDocumentPtr document,
+                               FileFieldPlace place,
+                               bool many,
+                               std::vector<std::string> accepts)
+    : id_(id),
+      tab_(tab),
+      element_(element),
+      document_(std::move(document)),
+      place_(std::move(place)),
+      many_(many),
+      accepts_(std::move(accepts)) {}
+
+AgentFileField::~AgentFileField() {
+  // A dialog still up closes as the last reference to it goes, with no answer to this.
+  if (dialog_) {
+    dialog_->ListenerDestroyed();
+  }
+}
+
+// static
+bc_id AgentFileField::Shown(bc_id tab,
+                            int64_t element,
+                            content::RenderFrameHost& frame,
+                            FileFieldPlace place,
+                            bool many,
+                            std::vector<std::string> accepts) {
+  const bc_id id = g_next_field++;
+  Fields()[id] = base::WrapUnique(new AgentFileField(
+      id, tab, element, frame.GetWeakDocumentPtr(), std::move(place), many, std::move(accepts)));
+  LOG(ERROR) << "browser: file field " << id << " shown in " << tab;
+  return id;
+}
+
+// static
+bool AgentFileField::Choose(bc_id id, bc_id window) {
+  auto found = Fields().find(id);
+  Window* owner = Window::FromId(window);
+  views::Widget* widget = owner ? owner->widget() : nullptr;
+  if (found == Fields().end() || found->second->asked_ || !widget) {
+    return false;
+  }
+  AgentFileField& field = *found->second;
+  field.asked_ = true;
+  // A field that left before the press, as its tab did, gets no dialog.
+  if (!field.document_.AsRenderFrameHostIfValid() || !AgentOf(field.tab_) || IsHeld(field.tab_)) {
+    LOG(ERROR) << "browser: file field " << id << " left before the dialog";
+    End(id, BC_FILE_FIELD_LEFT, 0);
+    return true;
+  }
+  field.types_ = TypesOf(field.accepts_);
+  field.dialog_ = ui::SelectFileDialog::Create(&field, /*policy=*/nullptr);
+  LOG(ERROR) << "browser: file field " << id << " dialog over window " << window;
+  // Kept, as the dialog may answer before SelectFile returns, which ends the field.
+  scoped_refptr<ui::SelectFileDialog> dialog = field.dialog_;
+  // Over the window whose card the user pressed, where the system starts it: no title, folder or
+  // name of the page's or the agent's.
+  dialog->SelectFile(
+      field.many_ ? ui::SelectFileDialog::SELECT_OPEN_MULTI_FILE
+                  : ui::SelectFileDialog::SELECT_OPEN_FILE,
+      std::u16string(), base::FilePath(), field.types_.get(), field.types_ ? 1 : 0,
+      base::FilePath::StringType(), widget->GetNativeWindow());
+  return true;
+}
+
+// static
+void AgentFileField::Drop(bc_id id) {
+  End(id, BC_FILE_FIELD_CLOSED, 0);
+}
+
+// static
+void AgentFileField::TabEnded(bc_id tab) {
+  std::vector<bc_id> ended;
+  for (const auto& [id, field] : Fields()) {
+    if (field->tab_ == tab) {
+      ended.push_back(id);
+    }
+  }
+  for (bc_id id : ended) {
+    End(id, BC_FILE_FIELD_CLOSED, 0);
+  }
+}
+
+// static
+bool AgentFileField::PageMayOpen(content::WebContents* contents, int kind) {
+  const bc_id tab = contents ? Tab::IdOf(contents) : 0;
+  const Space::Agent* agent = tab ? AgentOf(tab) : nullptr;
+  if (PageMayOpenFileDialog(agent != nullptr, tab && IsHeld(tab))) {
+    return true;
+  }
+  LOG(ERROR) << "browser: page file dialog " << tab << " kind " << kind
+             << " refused: an agent's tab";
+  if (Host().agent_activity) {
+    const bc_agent_activity entry = {
+        .agent = agent->id.c_str(),
+        .tab = tab,
+        .action = kind == 1 ? "file_dialog file_input" : "file_dialog file_system_access",
+        .refused = "The page asked to open a file dialog, which agents can't use, so it heard a "
+                   "cancel. upload asks the user for a file for a field.",
+    };
+    Host().agent_activity(Host().context, &entry);
+  }
+  return false;
+}
+
+void AgentFileField::FileSelected(const ui::SelectedFileInfo& file, int index) {
+  Answered({PathOf(file)});
+}
+
+void AgentFileField::MultiFilesSelected(const std::vector<ui::SelectedFileInfo>& files) {
+  std::vector<std::string> paths;
+  for (const ui::SelectedFileInfo& file : files) {
+    paths.push_back(PathOf(file));
+  }
+  Answered(std::move(paths));
+}
+
+void AgentFileField::FileSelectionCanceled() {
+  Answered({});
+}
+
+void AgentFileField::Answered(std::vector<std::string> files) {
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(&AgentFileField::Picked, id_, std::move(files)));
+}
+
+// static
+void AgentFileField::Picked(bc_id id, std::vector<std::string> files) {
+  auto found = Fields().find(id);
+  if (found == Fields().end()) {
+    return;
+  }
+  AgentFileField& field = *found->second;
+  field.dialog_.reset();
+  field.types_.reset();
+  content::WebContents* contents = Tab::FromId(field.tab_);
+  AgentPage* page = contents ? AgentPage::FromWebContents(contents) : nullptr;
+  const size_t count = files.size();
+  LOG(ERROR) << "browser: file field " << id << " chose " << count;
+  if (!page || !count) {
+    End(id, count ? BC_FILE_FIELD_LEFT : BC_FILE_FIELD_NONE, 0);
+    return;
+  }
+  page->Fill(field.element_, std::move(files), base::BindOnce(&AgentFileField::Lands, id, count),
+             base::BindOnce(
+                 [](bc_id id, int count, bool put) {
+                   LOG(ERROR) << "browser: file field " << id << (put ? " filled" : " left");
+                   End(id, put ? BC_FILE_FIELD_PUT : BC_FILE_FIELD_LEFT, put ? count : 0);
+                 },
+                 id, static_cast<int>(count)));
+}
+
+// static
+bool AgentFileField::Lands(bc_id id, size_t count, const FileFieldNow& read) {
+  auto found = Fields().find(id);
+  if (found == Fields().end()) {
+    return false;
+  }
+  const AgentFileField& field = *found->second;
+  FileFieldNow now = read;
+  content::RenderFrameHost* frame = field.document_.AsRenderFrameHostIfValid();
+  now.same_document =
+      frame && frame->GetDevToolsFrameToken().ToString() == field.place_.frame;
+  now.agents = AgentOf(field.tab_) != nullptr;
+  now.held = IsHeld(field.tab_);
+  return FilesLand(field.place_, now, count);
+}
+
+// static
+void AgentFileField::End(bc_id id, int result, int count) {
+  auto found = Fields().find(id);
+  if (found == Fields().end()) {
+    return;
+  }
+  const bool asked = found->second->asked_;
+  // Its destructor closes a dialog still up.
+  Fields().erase(found);
+  if (!asked) {
+    return;
+  }
+  // Posted, so the app never hears inside its own call.
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(
+                     [](bc_id id, int result, int count) {
+                       if (Host().file_field_done) {
+                         Host().file_field_done(Host().context, id, result, count);
+                       }
+                     },
+                     id, result, count));
+}
+
+}  // namespace browser_core
