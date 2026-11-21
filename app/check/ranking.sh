@@ -232,7 +232,9 @@ expect '^browser: command bar hidden$' "escape didn't close the command bar"
 # leave the bar undrawn while its keys land, as GPUI asks for frames only as a drawn window turns
 # dirty (#3830): the start's look for its first frame, or the next key, asks for them again. The
 # driver's fault stops the bar's link first, as an idle bar's is, so the next key starts it. Both
-# are tried before a miss fails, so a run shows each.
+# are tried before a miss fails, so a run shows each. The text matches nothing, so its rows and the
+# bar's height stay as they were across the fault: a resize has AppKit draw the bar, which would
+# draw it past the fault and test nothing.
 frames_missed=
 frames_last=
 frames_unhealed=
@@ -240,18 +242,27 @@ if [ "$(uname)" = Darwin ]; then
   for fault in start display; do
     send key t cmd
     expect '^browser: command bar shown$' "⌘T didn't open the command bar for the $fault fault"
-    send type ab
-    expect '^browser: command bar drew "ab"$' "the command bar didn't draw \"ab\" before the $fault fault"
-    send framefault "$fault"
-    fault_step=$step
-    send type cd
+    send type zqx
+    typed_step=$step
+    # Drawn once its rows are listed and the bar has its height for them.
     for _ in $(seq 50); do
-      since "$fault_step" | grep -q '^browser: command bar drew "abcd"$' && break
+      since "$typed_step" | sed -n '/^browser: command bar lists "zqx"/,$p' |
+        grep -q '^browser: command bar drew "zqx"$' && break
       sleep 0.1
     done
-    if ! since "$fault_step" | grep -q '^browser: command bar drew "abcd"$'; then
+    since "$typed_step" | sed -n '/^browser: command bar lists "zqx"/,$p' |
+      grep -q '^browser: command bar drew "zqx"$' ||
+      fail "the command bar didn't draw \"zqx\" in 5 s after listing its rows, before the $fault fault, its lines since being: $(since "$typed_step" | grep '^browser: command bar ' | tail -6 | tr '\n' ';')"
+    send framefault "$fault"
+    fault_step=$step
+    send type jv
+    for _ in $(seq 50); do
+      since "$fault_step" | grep -q '^browser: command bar drew "zqxjv"$' && break
+      sleep 0.1
+    done
+    if ! since "$fault_step" | grep -q '^browser: command bar drew "zqxjv"$'; then
       drew=$(since "$fault_step" | grep '^browser: command bar drew ' | tail -1)
-      frames_missed="$frames_missed the $fault fault: the bar didn't draw \"abcd\" in 5 s, its last since the fault being \"${drew:-none}\", with these frame lines since: $(since "$fault_step" | grep 'frame\|display link' | tail -6 | tr '\n' ';');"
+      frames_missed="$frames_missed the $fault fault: the bar didn't draw \"zqxjv\" in 5 s, its last since the fault being \"${drew:-none}\", with these frame lines since: $(since "$fault_step" | grep 'frame\|display link' | tail -6 | tr '\n' ';');"
     fi
     healed=$(since "$fault_step" | grep "^browser: frames asked for again after the drive's fault: " | head -1)
     frames_last="$frames_last $fault: ${healed#browser: frames asked for again after the drive*s fault: };"
@@ -262,6 +273,8 @@ if [ "$(uname)" = Darwin ]; then
   [ -z "$frames_missed" ] ||
     fail "the command bar was left undrawn while its keys landed, after a display link start that gave no frames (#3830):$frames_missed"
   # The fault's heal says so in a line of its own, which no other heal's line holds back.
+  # The drew line alone can't say it: it's the bar's render, which GPUI also runs as it takes a
+  # key, with no frame presented.
   [ -z "$frames_unhealed" ] ||
     fail "the command bar drew after the$frames_unhealed fault, but no line says its frames were asked for again after it, so it drew some other way and the fault tested nothing: $frames_last"
   # An idle bar and an idle window still stop their links, and no look for a first frame is left
