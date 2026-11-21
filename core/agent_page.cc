@@ -3556,10 +3556,12 @@ void AgentPage::ReadField(int slot, int node, FieldRead then) {
                                     continue;
                                   }
                                   const std::string* name = child->FindString("nodeName");
+                                  const std::string* local = child->FindString("localName");
                                   const std::string* id = child->FindString("frameId");
                                   each.push_back({
                                       .type = child->FindInt("nodeType").value_or(0),
                                       .name = name ? *name : std::string(),
+                                      .local_name = local ? *local : std::string(),
                                       .frame = id ? *id : std::string(),
                                       .holds_document = child->Find("contentDocument") != nullptr,
                                   });

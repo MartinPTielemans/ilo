@@ -133,8 +133,12 @@ TEST(AgentFileFieldRuleTest, AFrameWithNoSiteIsRefused) {
   EXPECT_FALSE(FilesLand({"F00D", "null"}, opaque, 1));
 }
 
-DocumentChild Child(int type, std::string name, std::string frame = "", bool holds = false) {
-  return {type, std::move(name), std::move(frame), holds};
+DocumentChild Child(int type,
+                    std::string name,
+                    std::string frame = "",
+                    bool holds = false,
+                    std::string local_name = "") {
+  return {type, std::move(name), std::move(local_name), std::move(frame), holds};
 }
 
 // A field's frame is its document's, named on that document's element child, and only when that
@@ -147,6 +151,7 @@ TEST(AgentFileFieldRuleTest, TheFrameIsTheDocumentsOwn) {
     EXPECT_EQ(DocumentFrame({doctype, Child(1, owner, "BEEF")}), "");
   }
   EXPECT_EQ(DocumentFrame({Child(1, "x-root", "BEEF", /*holds=*/true)}), "");
+  EXPECT_EQ(DocumentFrame({Child(1, "h:iframe", "BEEF", /*holds=*/false, "iframe")}), "");
   // A frame id on anything but the element child names no document's frame.
   EXPECT_EQ(DocumentFrame({Child(10, "html", "F00D")}), "");
   EXPECT_EQ(DocumentFrame({}), "");

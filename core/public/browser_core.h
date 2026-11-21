@@ -2008,9 +2008,9 @@ BC_EXPORT bool bc_tab_held(bc_id tab);
 // that field alone, as DevTools' DOM.setFileInputFiles puts them, and only if it's the same node,
 // in the same document of the same frame, from the same origin, in a tab still in the Space of the
 // agent whose card it was, that the user doesn't hold. Then file_field_done, once, from a task of
-// its own. Returns false, with no answer, for a field it doesn't know, one already chosen for, or a
-// window that isn't the core's. The user's: agents get none, and no name or path of a file is told
-// to anyone or logged.
+// its own. Returns false, with no answer, for a field it doesn't know, one already chosen for, a
+// window that isn't the core's, or when the system has no file dialog, as Linux may not. The
+// user's: agents get none, and no name or path of a file is told to anyone or logged.
 BC_EXPORT bool bc_file_field_choose(bc_id field, bc_id window);
 
 // Forgets |field|: for the card's Don't Allow, the call's time running out, or the agent stopping.
