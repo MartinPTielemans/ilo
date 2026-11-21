@@ -3,8 +3,11 @@
 # captured while it's up: alert(), confirm() and prompt() from the served page's keys. ↩ answers
 # OK, with what was typed in a prompt, and Esc Cancel, and the page puts the answer in its title.
 # The confirm's Cancel and OK are captured with the pointer on each. An alert goes with its tab
-# and comes back with it. Leaving a page whose beforeunload handler asks says "Leave site?": Esc
-# stays, and on X11 ⌘L the moment it has closed opens the command bar (#1711), and ↩ leaves. A site's HTTP sign-in asks for a username and password: Esc shows the page
+# and comes back with it. In a split view it covers its own pane, and a click or a key to the page
+# beside rests it there, the page beside keeping the keys, Japanese input and a resize; a click on
+# the resting card brings it live, and one on its OK answers it, with the page beside on another
+# site and on the same one (#3231, #3461). Leaving a page whose beforeunload handler asks says "Leave
+# site?": Esc stays, and on X11 ⌘L the moment it has closed opens the command bar (#1711), and ↩ leaves. A site's HTTP sign-in asks for a username and password: Esc shows the page
 # the site sends without them, and ↩ signs in, with the password in no log. A link to another app
 # asks first, and ↩ there opens nothing. The pointer on and off a link 20 times shows and hides the
 # link target each time, with the command bar and a tab's menu opened and closed between, and the
@@ -184,6 +187,252 @@ expect '^browser: dialog shown .* says$' "the alert didn't come back with its ta
 expect '^browser: dialog settled$' "the alert didn't settle again"
 send key return
 expect "^browser: page $page dialog answered accept\$" "↩ didn't answer the alert that came back"
+# Gone first: on X11 Add Split View, from the menu while the answered alert was leaving, ran nothing.
+expect '^browser: dialog hidden$' "the alert that came back didn't leave once answered"
+
+# In a split view an alert covers its own pane alone, as Chrome's do, where it covered both (#3231).
+# A click on the page beside it lands there, focusing that pane, and the alert rests where it is,
+# quiet and without the keyboard (#3461): the typing after reaches that page, Japanese input
+# composes there, and a resize keeps the keys there. A click on the resting card's body focuses
+# its pane and brings it live, answering nothing. ⌃⇧2 and ⌃⇧1 rest it and bring it back from the
+# keys, and a click on the resting OK answers it. split_rests runs it with the page beside at $1,
+# named $2 in its captures: here another site's, in a renderer process of its own, and further on,
+# with $3, the one the dialogs page opens itself, which shares its renderer process and so is
+# blocked while the alert asks: its keys wait until the alert is answered.
+printf '%s' '<title>beside</title>
+<input id=field style="position:fixed;inset:0;font-size:40px" oninput="document.title = `beside has ${field.value}`">
+<script>
+requestAnimationFrame(() => requestAnimationFrame(() => document.title = "beside ready"));
+</script>' > "$out/site/beside.html"
+# The pages' frames in the window, left first, once both are laid out, in $panes.
+read_panes() {
+  for _ in $(seq 50); do
+    send layout
+    panes=$(since | grep -m1 '^browser: layout' | grep -o 'WebContentsViewCocoa [0-9,]* [0-9x]*' |
+      sed 's/^WebContentsViewCocoa //')
+    [ "$(echo "$panes" | wc -l)" -eq 2 ] && break
+    sleep 0.1
+  done
+  [ "$(echo "$panes" | wc -l)" -eq 2 ] ||
+    fail "the layout didn't show two pages beside each other: $(since | grep -m1 '^browser: layout')"
+}
+# A point 100 in from the top left of pane $1.
+in_pane() {
+  pane=$(echo "$panes" | sed -n "$1p")
+  pane_y=${pane#*,}
+  echo "$((${pane%%,*} + 100)) $((${pane_y%% *} + 100))"
+}
+# Where the dialog last drew OK, once it has drawn it since command $1.
+confirm_since() {
+  expect '^browser: dialog confirm at ' "the alert didn't say where it draws OK" "$1"
+  grep '^browser: dialog confirm at ' "$log" | tail -1 | sed 's/.* at //'
+}
+# Brings the alert resting since command $1 live from the page beside: ⌃⇧1, or a click on its
+# card when that page shares the alert's renderer, which the alert stops, as Chromium drops the
+# keys of a stopped renderer's page before ilo's shortcuts (#3770).
+live_from_beside() {
+  way=⌃⇧1
+  if [ -z "$shared" ]; then
+    send key 1 ctrl shift
+    return
+  fi
+  way="a click on the resting alert's card"
+  confirm=$(confirm_since "$1")
+  pane=$(echo "$panes" | sed -n 1p)
+  pane_w=${pane##* }
+  send click $((${pane%%,*} + ${pane_w%%x*} / 2)) $((${confirm#* } - 50))
+}
+# Fails with $1 if the alert went from its pane since command $2.
+stayed() {
+  since "$2" | grep -q -e '^browser: dialog hidden$' -e '^browser: dialog withdrawn$' && fail "$1"
+  true
+}
+# The window in the tone $1, light or dark, from View › Appearance, which waits while a dialog
+# has the keyboard, so it's chosen with the alert at rest, and the alert's card drawn in it.
+tone() {
+  local light=false
+  [ "$1" = light ] && light=true
+  if ! grep '^browser: window light ' "$log" | tail -1 | grep -q " $light\$"; then
+    send menu "Appearance › $([ "$1" = light ] && echo Light || echo Dark)"
+    toned=$step
+    expect "^browser: window light $light\$" "View › Appearance didn't make the window $1"
+    # The card is a window of its own, which draws the tone a frame or more later.
+    expect "^browser: dialog drawn light $light\$" "the alert didn't draw in the window's $1 tone" "$toned"
+  fi
+}
+# The window captured as $out/dialog-$1.png.
+capture() {
+  ../tools/window-screenshot.sh "$pid" "$out/dialog-$1.png" || fail "no window to capture"
+}
+# The driver's scripted input method composes in a page on the Mac, and under Wayland as sway's
+# input method; on Windows it's Microsoft's Japanese IME, where the runner has it. On X11 the Linux
+# driver can't reach a page's (keys.sh says the same).
+ime="ime on"
+japanese=
+if windows; then
+  powershell.exe -NoProfile -NonInteractive -Command "(Get-WinUserLanguageList).InputMethodTips" \
+    2> /dev/null | grep -qi 03B5835F-F03C-411B-9CE2-AA23E1171E36 && japanese=1 && ime="ime ja"
+fi
+# The sidebar row of tab $1, before any split.
+row_of() {
+  n=0
+  for id in $(today); do
+    [ "$id" = "$1" ] && echo $n && return
+    n=$((n + 1))
+  done
+}
+split_rests() {
+  shared=${3:-}
+  if [ -z "$shared" ]; then
+    send menu Add Split View
+    expect '^browser: command add-split via ' "Add Split View didn't run ($2)"
+    expect '^browser: command bar shown$' "Add Split View didn't open the command bar ($2)"
+    send type "$1"
+    send key return
+  else
+    # A page's open() keeps the page it opens in its own browsing instance, so on its site in its
+    # renderer process, which two tabs typed in the bar never share. ⌥-click on its row joins it
+    # to the page shown.
+    # The two windows' steps left this one half the screen wide, where an X press at the page's
+    # usual point misses it, so it's near the size the two-site split had, and clicked in its
+    # middle. Not that size, or the resize the rest goes through below would change nothing.
+    send resize 1180 760
+    for _ in $(seq 50); do
+      send layout
+      alone=$(since | grep -m1 '^browser: layout' | grep -o 'WebContentsViewCocoa [0-9,]* [0-9x]*' |
+        sed 's/^WebContentsViewCocoa //' | head -1)
+      [ -n "$alone" ] && break
+      sleep 0.1
+    done
+    [ -n "$alone" ] || fail "the layout didn't show the dialogs page ($2)"
+    alone_y=${alone#*,}
+    alone_size=${alone##* }
+    send click $((${alone%%,*} + ${alone_size%%x*} / 2)) $((${alone_y%% *} + ${alone_size##*x} / 2))
+    [ "$focus" = RenderWidgetHostViewCocoa ] ||
+      fail "a click in the dialogs page didn't give it the keyboard ($2): $key, $focus"
+    send key w
+    expect "^browser: tab [0-9]* opened by $page in the foreground\$" "\"w\" in the dialogs page didn't open beside.html ($2)"
+    beside=$(grep "^browser: tab [0-9]* opened by $page " "$log" | tail -1 | cut -d' ' -f3)
+    expect "^browser: title $beside beside ready\$" "beside.html, opened by the dialogs page, didn't draw ($2)"
+    send click $(row "$(row_of "$page")")
+    expect "^browser: selected $page\( in .*\)\{0,1\}\$" "a click on the dialogs page's row didn't show it ($2)"
+    send click $(row "$(row_of "$beside")") alt
+  fi
+  expect "^browser: splits .*$page+[0-9][0-9]*" \
+    "beside.html didn't open beside the dialogs page ($2): $(grep '^browser: splits' "$log" | tail -1)"
+  beside=$(grep '^browser: splits' "$log" | tail -1 | grep -o "$page+[0-9]*" | cut -d+ -f2)
+  [ -n "$shared" ] || expect "^browser: title $beside beside ready\$" "beside.html didn't draw in the split ($2)"
+  read_panes
+  send click $(in_pane 1)
+  expect "^browser: selected $page\( in .*\)\{0,1\}\$" \
+    "a click on the dialogs page's pane didn't focus it ($2)"
+  ask a Alert "alert-split-$2"
+  send click $(in_pane 2)
+  clicked=$step
+  expect "^browser: selected $beside\( in .*\)\{0,1\}\$" \
+    "a click on the page beside the alert, in a $2 split, didn't focus its pane: $(since "$clicked" | grep -e '^browser: drive' -e '^browser: selected' -e '^browser: dialog' | tail -6 | tr '\n' ' ')"
+  [ "$(uname)" != Darwin ] ||
+    expect '^browser: a press in the pane beside takes the keyboard from the dialog$' \
+      "the click on the page beside the alert didn't take the keyboard from it ($2)" "$clicked"
+  expect '^browser: dialog at rest$' "the alert didn't rest with its pane no longer focused ($2)"
+  send key x
+  send key y
+  [ -n "$shared" ] ||
+    expect "^browser: title $beside beside has xy\$" \
+      "typing after a click on the page beside the alert, in a $2 split, didn't reach that page: the keyboard is in $key, on $focus: $(since "$clicked" | grep -e '^browser: drive' -e "^browser: title $beside " -e '^browser: dialog' | tail -6 | tr '\n' ' ')"
+  # What the user sees of a page waiting on its alert while the page beside has the keys, in each
+  # tone, as the review of its look asks.
+  for each in light dark; do
+    tone $each
+    capture "alert-split-$2-rest-$each"
+  done
+  # Japanese input composes in the page beside, and its commit is that page's.
+  typed=xy
+  if [ -n "$shared" ]; then
+    echo "skip: Japanese input in the page beside the resting alert ($2): that page shares the alert's renderer process, blocked while it asks, so nothing it's typed shows until then."
+  elif [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+    echo "skip: Japanese input in the page beside the resting alert ($2): on X11 the Linux driver types plain keys in a page; check/ime.sh composes in pages with a real input method."
+  elif windows && [ -z "$japanese" ]; then
+    echo "skip: Japanese input in the page beside the resting alert ($2): the runner has no Japanese IME, and the Windows driver's own composes in the UI's fields alone."
+  else
+    send $ime
+    send type nihongo
+    send key space
+    # The page shows the conversion before return commits it, as keys.sh reads it; the z typed
+    # after the resize says the commit was the page's and did nothing more.
+    expect "^browser: title $beside beside has xy日本語\$" \
+      "Japanese input in the page beside the resting alert didn't reach it ($2): marked $marked, the keyboard in $key, on $focus"
+    send key return
+    send ime off
+    typed=xy日本語
+  fi
+  # Through a resize the keys stay with the page beside, the alert at rest over its pane.
+  send resize 1100 720
+  resized=$step
+  read_panes
+  [ -n "$shared" ] || {
+    send key z
+    expect "^browser: title $beside beside has ${typed}z\$" \
+      "after a resize the page beside the resting alert lost the keys ($2): the keyboard is in $key, on $focus"
+  }
+  stayed "the alert left its pane at rest ($2)" "$clicked"
+  # A click on the resting card's body, above OK, focuses its pane and brings it live, unanswered.
+  confirm=$(confirm_since "$resized")
+  pane=$(echo "$panes" | sed -n 1p)
+  pane_w=${pane##* }
+  send click $((${pane%%,*} + ${pane_w%%x*} / 2)) $((${confirm#* } - 50))
+  body=$step
+  expect "^browser: selected $page\( in .*\)\{0,1\}\$" \
+    "a click on the resting alert's card didn't focus its pane ($2)"
+  expect '^browser: dialog live$' "a click on the resting alert's card didn't bring it live ($2)"
+  since "$body" | grep -q "^browser: page $page dialog answered" &&
+    fail "a click on the resting alert's card answered it ($2)"
+  # From the keys: ⌃⇧2 rests it, the page beside taking the keys, and ⌃⇧1 brings it live.
+  [ -z "$shared" ] ||
+    echo "skip: dialogs: ⌃⇧1 from the page beside the resting alert in a $2 split, which shares its stopped renderer, whose keys Chromium drops before ilo's shortcuts (#3770): a click on the card brings it live"
+  send key 2 ctrl shift
+  at=$step
+  expect "^browser: selected $beside\( in .*\)\{0,1\}\$" "⌃⇧2 from the alert didn't focus the pane beside ($2)"
+  expect '^browser: dialog at rest$' "⌃⇧2 from the alert didn't rest it ($2)"
+  [ -n "$shared" ] || {
+    send key q
+    expect "^browser: title $beside beside has ${typed}zq\$" \
+      "after ⌃⇧2 from the alert the page beside didn't have the keys ($2): the keyboard is in $key, on $focus"
+  }
+  live_from_beside "$at"
+  expect "^browser: selected $page\( in .*\)\{0,1\}\$" "$way didn't focus the alert's pane ($2)"
+  expect '^browser: dialog live$' "$way didn't bring the alert live ($2)"
+  capture "alert-split-$2-live-dark"
+  # Live in the light tone, chosen while it rests.
+  send key 2 ctrl shift
+  at=$step
+  expect '^browser: dialog at rest$' "⌃⇧2 from the alert didn't rest it again ($2)"
+  tone light
+  live_from_beside "$at"
+  expect '^browser: dialog live$' "$way didn't bring the alert live again ($2)"
+  capture "alert-split-$2-live-light"
+  send key 2 ctrl shift
+  rested=$step
+  expect '^browser: dialog at rest$' "⌃⇧2 from the alert didn't rest it once more ($2)"
+  # A click on the resting OK answers it, as a button in a background window does on the Mac.
+  send click $(confirm_since "$rested")
+  expect "^browser: page $page dialog answered accept\$" "a click on the resting alert's OK didn't answer it ($2)"
+  expect '^browser: dialog hidden$' "the alert answered at rest didn't leave ($2)"
+  # Sharing the alert's process, the page beside heard nothing while it was asked: Chromium drops
+  # the keys of a page whose renderer a dialog stopped, as Chrome's (#3770).
+  if [ -n "$shared" ] &&
+    since "$clicked" | sed "/^browser: page $page dialog answered/q" | grep -q "^browser: title $beside beside has"; then
+    fail "the page beside took keys while the alert asked, so it doesn't share the alert's renderer process ($2)"
+  fi
+  # The page beside closes, leaving the dialogs page the card's.
+  send click $(in_pane 2)
+  expect "^browser: selected $beside\( in .*\)\{0,1\}\$" "a click on the page beside didn't focus it ($2)"
+  send key w cmd
+  expect "^browser: tab $beside closed\$" "⌘W didn't close the page beside the dialogs page ($2)"
+  expect "^browser: selected $page\( in .*\)\{0,1\}\$" \
+    "closing the page beside it didn't leave the dialogs page shown ($2): $(since | grep -e '^browser: selected' -e '^browser: splits' | tail -3 | tr '\n' ' ')"
+}
+split_rests "http://localhost:$port/beside.html" two-site
 
 # ↩ doesn't open the app, so a key the page timed can't.
 send click $page_point
@@ -538,6 +787,14 @@ SCREEN
 else
   echo "skip: the hover card over the window behind another, under Wayland or on sway's Xwayland: the compositor places the windows."
 fi
+# The same steps with the page beside opened by the dialogs page, whose renderer process it shares,
+# so its page is blocked while the alert asks, and the core focuses its pane for the press (#3454).
+# After the steps that need no split, which this one's failing would hide.
+send window 1
+go_from_bar "${site}dialogs.html"
+expect '^browser: title [0-9]* ready$' "the dialogs page didn't load again for the same-site split"
+page=$(grep '^browser: title [0-9]* ready$' "$log" | tail -1 | cut -d' ' -f3)
+split_rests "${site}beside.html" same-site shared
 # On sway's Xwayland the prompt takes the keys back once its window has sway's focus again after
 # another app's window had it: back from that window's workspace, and as that window, beside the
 # browser's, quits. wlroots gives the X focus to the browser's window, not to the prompt (#2894).
@@ -669,7 +926,11 @@ send move $page_point
 exec 3>&-
 quit
 echo "ok: a page's alert, confirm and prompt ask over its card, answer with ↩ and Esc, and an alert"
-echo "  comes back with its tab. The confirm's Cancel and OK show the pointer on them. Leave site?"
+echo "  comes back with its tab. In a split view it covers its own pane and rests there as the page"
+echo "  beside takes a click or ⌃⇧2, the keys, Japanese input and a resize; a click on the resting"
+echo "  card brings it live and one on its OK answers, the page beside on another site and the same:"
+echo "  $out/dialog-alert-split-{two,same}-site-{rest,live}-{light,dark}.png. The confirm's Cancel and OK show the"
+echo "  pointer on them. Leave site?"
 echo "  stays with Esc and leaves with ↩. A site's sign-in cancels with Esc and signs in with ↩, and"
 echo "  the password reaches no log. A link to Maps asks, and ↩ opens nothing. The link target shows"
 echo "  and hides 20 times, between the command bar and a tab's menu, with no panic. A pinned tab"

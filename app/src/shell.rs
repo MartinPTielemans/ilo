@@ -198,9 +198,9 @@ pub use favorites::FavoritesScope;
 use fly_in::Flight;
 pub use history::HistoryPage;
 pub use keys::{
-    Holder, OFF_THE_MAC, Refused, SecondPress, UserKeys, change_keys, page_key_answer,
-    page_keystroke, rebindable, recorded, reserved, shortcut_found, user_keys, view_binding,
-    web_keystroke, written_as,
+    Holder, OFF_THE_MAC, Refused, SecondPress, UserKeys, change_keys, follow_layout,
+    page_key_answer, page_keystroke, rebindable, recorded, reserved, shortcut_found, user_keys,
+    view_binding, web_keystroke, written_as,
 };
 pub(crate) use library::bytes;
 pub use library::{Archived, Captured, Download, DownloadAction, DownloadState, Visited};
@@ -2010,10 +2010,10 @@ pub struct Shell {
     hang_noted: Option<u64>,
     /// The dialogs the tabs' pages ask, such as an alert(): the tab shown's goes over its card.
     page_dialogs: HashMap<u64, PageDialog>,
-    /// What the window told last of its page's dialog: the one asked over the card, by its tab
-    /// and id, and where, or none. Untold once it comes to the front, when the dialog shown may
-    /// be another window's.
-    page_dialog_shown: Option<Option<(u64, u64, (Bounds<Pixels>, f32))>>,
+    /// What the window told last of its page's dialog: the one asked over the card or a pane, by
+    /// its tab and id, where, and whether at rest, or none. Untold once it comes to the front,
+    /// when the dialog shown may be another window's.
+    page_dialog_shown: Option<Option<(u64, u64, (Bounds<Pixels>, f32), bool)>>,
     /// The page's dialog up over the card, by its tab and id, which a field taking the keyboard
     /// after it came doesn't take down.
     page_dialog_up: Option<(u64, u64)>,
