@@ -3437,6 +3437,8 @@ CARD
   await_log '^browser: settings drawn at 720x480$' \
     "Settings didn't draw at its least size: $(grep '^browser: settings drawn at ' "$log" | tail -1)"
   in_sight "fence open" || fail "Always ask first didn't draw Add Site… at the least size"
+  # The foot's last line can be under the card's edge while Add Site… is in sight.
+  in_sight "fence foot" || fail "Always ask first didn't draw its foot at the least size"
   ../tools/window-screenshot.sh "$pid" "$out/settings-agents-fence-least.png" || fail "no window to capture"
   send resizekey 820 660
   await_log '^browser: settings drawn at 820x660$' "Settings didn't draw at its size again"
