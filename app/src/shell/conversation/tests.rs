@@ -9,7 +9,9 @@ use super::Fold;
 
 use crate::agents::task::{Card, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep};
 use crate::shell::picture::PagePicture;
-use crate::shell::{Command, Folders, Shell, recorder::Recorder};
+use crate::shell::{Command, Folders, Page, Shell, recorder::Recorder};
+use crate::tokens::shell::conversation::{SITE, SITE_GAP};
+use crate::tokens::text;
 
 fn card() -> Card {
     Card {
@@ -452,6 +454,105 @@ fn a_picture_shows_its_page(cx: &mut TestAppContext) {
     assert!(
         cx.update(|window, _| reply.is_focused(window)),
         "the reply field has the keys back"
+    );
+}
+
+/// While the page watched goes back into its picture, the conversation under it takes a press on a
+/// picture alone, which watches its page (#3496). The rest of it, which the user can't see yet,
+/// takes none: Stop doesn't stop the task, a picture's speaker mutes nothing, and the reply field
+/// doesn't take the keyboard.
+#[gpui::test]
+fn under_a_page_going_back_only_the_pictures_take_a_press(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shown(cx);
+    let mut talk = conversation(1);
+    talk.tabs = vec![
+        (30, "tickets.example".into()),
+        (31, "seatmap.example".into()),
+    ];
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(
+            3,
+            Vec::new(),
+            vec![30, 31],
+            Vec::new(),
+            Folders::default(),
+            cx,
+        );
+        shell.set_conversation(Some(talk), cx);
+    });
+    let playing = Page {
+        url: "https://seatmap.example/".into(),
+        audible: true,
+        ..Default::default()
+    };
+    shell.update(cx, |shell, cx| shell.set_page(31, playing, cx));
+    shell.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let picture = |tab: u64, cx: &mut VisualTestContext| {
+        view.read_with(cx, |view, _| {
+            let drawn = view.drawn.borrow();
+            drawn
+                .iter()
+                .find(|(each, _)| *each == tab)
+                .expect("its picture")
+                .1
+        })
+    };
+    let (tickets, seatmap) = (picture(30, cx), picture(31, cx));
+    let stop = view.read_with(cx, |view, _| view.stop_logged.get().expect("Stop"));
+    let reply = view.read_with(cx, |view, _| {
+        view.reply_drawn.get().expect("the reply field")
+    });
+    // The speaker starts the playing page's site line, under its picture.
+    let speaker = point(
+        seatmap.left() + px((text::SMALL + 1.) / 2.),
+        seatmap.bottom() + px(SITE_GAP + SITE / 2.),
+    );
+    cx.simulate_click(tickets.center(), Modifiers::none());
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, Some(30)))
+    );
+    cx.update(|window, cx| {
+        cx.set_reduce_motion(false);
+        window.focus(&shell.read(cx).focus_handle.clone(), cx);
+    });
+    shell.update(cx, |shell, cx| {
+        shell.hold_task_page_going_back();
+        cx.notify();
+    });
+    cx.run_until_parked();
+    host.take();
+
+    // The strip under the page covers the reply field but for its top, which the page covers.
+    let field = point(reply.center().x, reply.top() + px(2.));
+    for at in [stop.center(), speaker, field] {
+        cx.simulate_click(at, Modifiers::none());
+    }
+    let asked = host.take();
+    assert!(
+        !asked.contains(&"task task-1 Stop".to_string()),
+        "Stop under the page stopped the task: {asked:?}"
+    );
+    assert!(
+        host.muted.borrow().is_empty(),
+        "the speaker under the page muted it"
+    );
+    let reply = view.read_with(cx, |view, cx| view.reply.focus_handle(cx));
+    assert!(
+        !cx.update(|window, _| reply.is_focused(window)),
+        "the reply field under the page took the keyboard"
+    );
+
+    cx.simulate_click(seatmap.center(), Modifiers::none());
+    assert!(
+        host.take().contains(&"select 31".to_string()),
+        "the picture under the page didn't watch it"
+    );
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, Some(31)))
     );
 }
 

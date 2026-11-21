@@ -24,6 +24,13 @@
 
 #include "../host.h"
 
+// Whether the checks run the app, under their driver or check.sh, read once: a line naming an
+// address, a title or the user's own words is written only then, as log! lines are (#3725).
+static bool Checked() {
+  static const bool checked = getenv("BROWSER_DRIVE") || getenv("BROWSER_CHECK");
+  return checked;
+}
+
 // menu_window.mm's: ilo's menu over an overlay takes the keyboard without the user leaving it.
 bool HostIsMenuWindow(NSWindow* window);
 
@@ -334,8 +341,6 @@ std::vector<std::unique_ptr<Browser>> g_browsers;
 
 // Told of a press in a browser window's page, which takes the keyboard from its UI.
 void (*g_ui_keyboard_left)(void* ui_view);
-// The UI's, which hears a press in a page (host_watch_page_presses).
-void (*g_page_pressed)(void* ui_view);
 
 // The browser whose UI draws in |ui_view|, or null.
 Browser* BrowserWithView(void* ui_view) {
@@ -459,7 +464,8 @@ struct Overlay {
 };
 
 Overlay g_overlays[] = {Overlay("command bar"), Overlay("icon picker"), Overlay("theme picker"),
-                        Overlay("folder preview"), Overlay("boost editor"), Overlay("tab switcher")};
+                        Overlay("folder preview"), Overlay("boost editor"), Overlay("tab switcher"),
+                        Overlay("agent request")};
 
 // The Site Controls: an overlay for its blur and shadow alone, outside g_overlays, so the tooltip
 // shows over it.
@@ -492,6 +498,9 @@ Browser* g_dialog_over;
 NSWindow* g_dialog;
 NSView* g_dialog_view;
 bool g_dialog_shown = false;
+// The dialog shown is leaving: it goes on drawing, but takes no click and doesn't take the keyboard
+// back (host_dialog_leaving).
+bool g_dialog_leaving = false;
 // When the app last became the active one, in the system's uptime, as events' timestamps are: a
 // press from before it is the one that activated the app.
 NSTimeInterval g_active_since = 0;
@@ -1972,7 +1981,9 @@ static void OrderLittleOut(NSWindow* self, SEL selector, id sender) {
     }
   }
   // check.sh reads this line.
-  fprintf(stderr, "browser: little window gave way to %s\n", to.localizedName.UTF8String ?: "");
+  if (Checked()) {
+    fprintf(stderr, "browser: little window gave way to %s\n", to.localizedName.UTF8String ?: "");
+  }
 }
 
 // Little ilo windows order out through OrderLittleOut. They're Chromium's class, whose browser
@@ -2136,10 +2147,6 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
                                                   }
                                                   if (g_ui_keyboard_left) {
                                                     g_ui_keyboard_left(
-                                                        (__bridge void*)each->ui_view);
-                                                  }
-                                                  if (g_page_pressed) {
-                                                    g_page_pressed(
                                                         (__bridge void*)each->ui_view);
                                                   }
                                                 }
@@ -2603,11 +2610,6 @@ void host_watch_swipes(bool (*swiped)(void* ui_view, double x, double y, bool ba
 
 void host_watch_ui_keyboard(void (*left)(void* ui_view)) {
   g_ui_keyboard_left = left;
-}
-
-// The monitor of presses in the browser windows (host_show_window_behind) tells a page's apart.
-void host_watch_page_presses(void (*pressed)(void* ui_view)) {
-  g_page_pressed = pressed;
 }
 
 void host_watch_option_taps(void (*tapped)(void* ui_view)) {
@@ -3774,7 +3776,8 @@ void host_add_dialog(void* dialog_view) {
                 if (notification.object == g_dialog) {
                   g_dialog_lent = false;
                 }
-                if (g_dialog_shown && !g_dialog_lent && notification.object != g_dialog &&
+                if (g_dialog_shown && !g_dialog_lent && !g_dialog_leaving &&
+                    notification.object != g_dialog &&
                     !HostIsMenuWindow(notification.object) &&
                     (NSEdgeInsetsEqual(g_dialog_insets, NSEdgeInsetsZero) ||
                      notification.object == g_dialog_over->window)) {
@@ -3816,6 +3819,8 @@ void host_show_dialog(void* ui_view, double x, double y, double width, double he
   }
   g_dialog_shown = true;
   g_dialog_lent = !keyboard;
+  g_dialog_leaving = false;
+  g_dialog.ignoresMouseEvents = NO;
   g_dialog_over = browser;
   // After the UI's update that asked, since the window draws here: at its frame, before it shows,
   // since it keeps the last frame it drew.
@@ -3842,6 +3847,8 @@ void host_hide_dialog(void) {
   }
   g_dialog_shown = false;
   g_dialog_lent = false;
+  g_dialog_leaving = false;
+  g_dialog.ignoresMouseEvents = NO;
   Browser* browser = g_dialog_over;
   // Unless another window took the keyboard, such as from a page's dialog.
   const bool key = g_dialog.isKeyWindow || !NSApp.keyWindow;
@@ -3850,6 +3857,18 @@ void host_hide_dialog(void) {
   if (key) {
     [KeyWindowOver(browser) makeKeyWindow];
   }
+}
+
+void host_dialog_leaving(void) {
+  if (!g_dialog_shown || g_dialog_leaving) {
+    return;
+  }
+  g_dialog_leaving = true;
+  g_dialog.ignoresMouseEvents = YES;
+  if (g_dialog.isKeyWindow) {
+    [KeyWindowOver(g_dialog_over) makeKeyWindow];
+  }
+  fprintf(stderr, "browser: dialog gives the keyboard back\n");
 }
 
 void host_add_site_controls(void* view, void (*dismissed)(void)) {
@@ -4408,11 +4427,18 @@ void host_share_png(const uint8_t* png,
 }
 
 // Lets the mouse through the toast's window, unless it has buttons and the pointer, at |screen|, is
-// on its plate.
-void PlaceToastClicks(NSPoint screen) {
+// on its plate. |event| is the number of the move that put it there, or -1 for none.
+void PlaceToastClicks(NSPoint screen, NSInteger event = -1) {
   NSPoint at = [g_toast convertPointFromScreen:screen];
   at.y = NSHeight(g_toast.frame) - at.y;
+  const bool passed = g_toast.ignoresMouseEvents;
   g_toast.ignoresMouseEvents = !(g_toast_takes && NSPointInRect(at, g_toast_plate));
+  // A move the window server sends has a number and one the app posts, as the driver's, has 0, so
+  // this tells a toast the real pointer left from one a check's pointer did (#3611).
+  if (passed != g_toast.ignoresMouseEvents) {
+    fprintf(stderr, "browser: pointer %s the toast's plate at %.0f,%.0f, event %ld\n",
+            passed ? "on" : "off", at.x, at.y, (long)event);
+  }
 }
 
 void host_toast_takes_clicks(bool takes) {
@@ -4420,6 +4446,9 @@ void host_toast_takes_clicks(bool takes) {
   if (!takes) {
     [NSEvent removeMonitor:g_toast_monitor];
     g_toast_monitor = nil;
+    if (!g_toast.ignoresMouseEvents) {
+      fprintf(stderr, "browser: pointer off the toast's plate, its buttons gone\n");
+    }
     g_toast.ignoresMouseEvents = YES;
     return;
   }
@@ -4433,7 +4462,8 @@ void host_toast_takes_clicks(bool takes) {
                                                                 at = [event.window
                                                                     convertPointToScreen:at];
                                                               }
-                                                              PlaceToastClicks(at);
+                                                              PlaceToastClicks(
+                                                                  at, event.eventNumber);
                                                               return event;
                                                             }];
   }
@@ -5611,14 +5641,18 @@ void host_open_elsewhere(const char* url) {
     return;
   }
   // check.sh reads this line. A driven run opens nothing, so checks never launch Safari.
-  fprintf(stderr, "browser: open in safari %s\n", url);
+  if (Checked()) {
+    fprintf(stderr, "browser: open in safari %s\n", url);
+  }
   if (getenv("BROWSER_DRIVE")) {
     return;
   }
   NSURL* safari =
       [NSWorkspace.sharedWorkspace URLForApplicationWithBundleIdentifier:@"com.apple.Safari"];
   if (!safari) {
-    fprintf(stderr, "browser: no Safari to open %s\n", url);
+    if (Checked()) {
+      fprintf(stderr, "browser: no Safari to open %s\n", url);
+    }
     return;
   }
   [NSWorkspace.sharedWorkspace openURLs:@[ page ]
@@ -5657,7 +5691,9 @@ void host_share(void* ui_view,
     rect = [content convertRect:[browser->window convertRectFromScreen:on_screen] fromView:nil];
   }
   // check.sh reads this line. A driven run doesn't show the menu, which would wait on a choice.
-  fprintf(stderr, "browser: share %s\n", url);
+  if (Checked()) {
+    fprintf(stderr, "browser: share %s\n", url);
+  }
   if (getenv("BROWSER_DRIVE")) {
     return;
   }
@@ -5707,7 +5743,9 @@ void host_share_with(const char* url, const char* title, size_t index) {
   NSSharingService* service = services[index];
   // check.sh reads this line. A driven run shares nothing, as the service takes the page to
   // another app.
-  fprintf(stderr, "browser: share %s with %s\n", url, service.menuItemTitle.UTF8String ?: "");
+  if (Checked()) {
+    fprintf(stderr, "browser: share %s with %s\n", url, service.menuItemTitle.UTF8String ?: "");
+  }
   if (getenv("BROWSER_DRIVE")) {
     return;
   }
@@ -6016,7 +6054,9 @@ int host_ask(const char* message, const char* detail, const char* const* buttons
     alert.buttons.firstObject.keyEquivalent = @"";
   }
   g_alert = alert;
-  fprintf(stderr, "browser: alert shown %s\n", message);
+  if (Checked()) {
+    fprintf(stderr, "browser: alert shown %s\n", message);
+  }
   NSModalResponse response = [alert runModal];
   g_alert = nil;
   return static_cast<int>(response - NSAlertFirstButtonReturn);

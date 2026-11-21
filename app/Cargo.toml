@@ -1,6 +1,6 @@
 [package]
 name = "browser"
-version = "0.2.0"
+version = "0.2.3"
 edition = "2024"
 publish = false
 license = "GPL-3.0-or-later"
@@ -19,6 +19,10 @@ path = "src/preview.rs"
 [[bin]]
 name = "mcp-bridge"
 path = "src/bridge.rs"
+
+[[bin]]
+name = "ilo-command"
+path = "src/ilo_command.rs"
 
 [features]
 # The build for daily use (`build.sh prod`): the user's profile and the real Keychain.

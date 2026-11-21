@@ -12,11 +12,11 @@ use std::{
 use web_time::Instant;
 
 use gpui::{
-    AnyElement, Bounds, ClickEvent, Context, DispatchPhase, Div, DragMoveEvent, Entity, Focusable,
-    FontWeight, HitboxBehavior, Hsla, Image, ListAlignment, ListState, Modifiers, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, Point, RenderImage, Role,
-    SharedString, Stateful, StyledText, Subscription, WeakEntity, Window, canvas, div, img,
-    linear_color_stop, linear_gradient, list, prelude::*, px, relative, svg,
+    AnyElement, App, Bounds, ClickEvent, Context, DispatchPhase, Div, DragMoveEvent, Entity,
+    Focusable, FontWeight, HitboxBehavior, Hsla, Image, ListAlignment, ListState, Modifiers,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, Point,
+    RenderImage, Role, SharedString, Stateful, StyledText, Subscription, WeakEntity, Window,
+    canvas, div, img, linear_color_stop, linear_gradient, list, prelude::*, px, relative, svg,
 };
 
 use super::{
@@ -454,6 +454,8 @@ pub(super) struct Library {
     /// where it was last drawn, for return to open it from there as a click does.
     keyed_row: Option<(usize, usize)>,
     row_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Where the empty Boards list's New Board button was last drawn, for check.sh to click.
+    new_board_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The search the list shows, to skip notes from the field that leave its text as it was.
     query: String,
     items: Vec<Item>,
@@ -1066,6 +1068,7 @@ impl Shell {
             keyed_card: None,
             keyed_row: None,
             row_drawn: Rc::default(),
+            new_board_drawn: Rc::default(),
         });
         // check.sh waits for these lines.
         log!("browser: library section {}", section.name());
@@ -1713,6 +1716,67 @@ impl Shell {
         );
     }
 
+    /// The empty Boards list's way to make its first Board (#3575): New Board, as its key and the
+    /// + menu run it, with that key beside it as a menu row shows one. Tab reaches it from the
+    /// search field, and a screen reader reads its name without the key.
+    fn new_board_button(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let drawn = self
+            .library
+            .as_ref()
+            .map(|library| library.new_board_drawn.clone());
+        let log_drawn = canvas(
+            |_, _, _| {},
+            move |bounds: Bounds<Pixels>, _, _, _| {
+                let Some(drawn) = &drawn else {
+                    return;
+                };
+                if drawn.replace(Some(bounds)) != Some(bounds) {
+                    // check/board.sh clicks it where this line says.
+                    log!(
+                        "browser: library new board at {:.0} {:.0} {:.0} {:.0}",
+                        f32::from(bounds.origin.x),
+                        f32::from(bounds.origin.y),
+                        f32::from(bounds.size.width),
+                        f32::from(bounds.size.height)
+                    );
+                }
+            },
+        )
+        .absolute()
+        .size_full();
+        let label = div()
+            .flex()
+            .items_start()
+            .line_height(px(crate::tokens::shell::permission::LINE))
+            .gap(px(crate::tokens::menu::GAP))
+            .child("New Board")
+            .child(
+                div()
+                    .relative()
+                    .top(key_drop(cx))
+                    .font_weight(FontWeight::NORMAL)
+                    .text_size(px(text::SMALL))
+                    .text_color(self.palette.text(SECONDARY))
+                    .child(keystroke_label("ctrl-shift-e")),
+            );
+        let button = super::permission::card_button_as(
+            &self.palette,
+            "library-new-board",
+            label,
+            super::permission::Look::Quiet,
+        )
+        .flex_none()
+        .relative()
+        .text_size(px(text::BODY))
+        .on_click(cx.listener(|shell, _, _, cx| shell.run(Command::NewBoard, "library", cx)))
+        .child(log_drawn);
+        div()
+            .flex()
+            .justify_center()
+            .mt(px(12.))
+            .child(self.stop(button, "New Board".into()))
+    }
+
     /// The line a section's list holds while it has nothing to list: what fills it, or with a
     /// search, that nothing matches.
     fn empty_line(&self, section: Section, unsearched: bool) -> &'static str {
@@ -1731,9 +1795,13 @@ impl Shell {
             },
             (Section::Agents, true) => "Your agents' finished tasks stay here for 30 days.",
             (Section::Agents, false) => "No tasks match.",
-            (Section::Boosts, true) => "New Boost makes one for the page shown.",
+            (Section::Boosts, true) => {
+                "A Boost restyles a site. Open the site, then pick Boost in its Site Controls."
+            }
             (Section::Boosts, false) => "No Boosts match.",
-            (Section::Boards, true) => "New Board makes one, from the + menu.",
+            (Section::Boards, true) => {
+                "A Board holds notes, pictures, links and drawings, laid out as you like."
+            }
             (Section::Boards, false) => "No Boards match.",
             (Section::Downloads, true) => "Files you download show here.",
             (Section::Downloads, false) => "No downloads match.",
@@ -1884,7 +1952,7 @@ impl Shell {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |shell, _, window, cx| {
-                    shell.browser.focus_ui(cx);
+                    shell.take_keyboard(cx);
                     window.focus(&search.focus_handle(cx), cx);
                 }),
             )
@@ -1972,6 +2040,12 @@ impl Shell {
                 .text_size(px(text::SMALL))
                 .text_color(self.palette.text(SECONDARY))
                 .child(div().relative().child(line).child(log_drawn))
+                // The list's own way to make its first Board, with the key that does it from
+                // anywhere (#3575); a search that matched nothing has nothing to make.
+                .children(
+                    (self.section == Section::Boards && library.query.is_empty())
+                        .then(|| self.new_board_button(cx)),
+                )
                 .into_any_element()
         } else {
             let item =
@@ -2027,7 +2101,7 @@ impl Shell {
                         .w(px(ARCHIVE_WIDTH))
                         .child(archive),
                 )
-                .children(self.download_press_listeners(cx)),
+                .child(self.download_press_listeners(cx)),
         };
         match clip {
             Some(from) => div()
@@ -3208,6 +3282,7 @@ impl Shell {
             });
             crate::settings_rows::sent_part(
                 ("past-step-all", step),
+                None,
                 &each.url,
                 &each.sent,
                 !each.refused.is_empty(),
@@ -4110,48 +4185,53 @@ impl Shell {
     }
 
     /// The pointer's presses, moves and release anywhere in the window while a download's row is
-    /// pressed, which only hears the pointer while it's over it.
+    /// pressed, which only hears the pointer while it's over it. They're there in every frame the
+    /// rows are, not only from the one after a press: a press and a move with no frame between
+    /// them, as a quick flick or the check's driver makes, would start no drag (#3610).
     pub(super) fn download_press_listeners(
         &self,
         cx: &mut Context<Self>,
-    ) -> Option<impl IntoElement + use<>> {
-        self.download_press.filter(|(_, _, dragged)| !dragged)?;
+    ) -> impl IntoElement + use<> {
         let shell = cx.weak_entity();
-        Some(
-            canvas(
-                |_, _, _| {},
-                move |_, _, window, _| {
-                    let pressed = shell.clone();
-                    window.on_mouse_event(move |_: &MouseDownEvent, phase, _, cx| {
-                        // Before the row pressed, if it's one, hears it.
-                        if phase == DispatchPhase::Capture {
-                            pressed
-                                .update(cx, |shell, _| shell.download_press = None)
-                                .ok();
-                        }
-                    });
-                    let moved = shell.clone();
-                    window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
-                        if phase == DispatchPhase::Capture && event.dragging() {
-                            let position = event.position;
-                            moved
-                                .update(cx, |shell, cx| shell.drag_download(position, cx))
-                                .ok();
-                        }
-                    });
-                    window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
-                        // Before the row's click, which hears no press then and opens.
-                        if phase == DispatchPhase::Capture && event.button == MouseButton::Left {
-                            shell
-                                .update(cx, |shell, _| shell.download_press = None)
-                                .ok();
-                        }
-                    });
-                },
-            )
-            .absolute()
-            .size_0(),
+        canvas(
+            |_, _, _| {},
+            move |_, _, window, _| {
+                let pressed = shell.clone();
+                window.on_mouse_event(move |_: &MouseDownEvent, phase, _, cx| {
+                    // Before the row pressed, if it's one, hears it.
+                    if phase == DispatchPhase::Capture {
+                        pressed
+                            .update(cx, |shell, _| shell.let_go_of_download())
+                            .ok();
+                    }
+                });
+                let moved = shell.clone();
+                window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+                    if phase == DispatchPhase::Capture && event.dragging() {
+                        let position = event.position;
+                        moved
+                            .update(cx, |shell, cx| shell.drag_download(position, cx))
+                            .ok();
+                    }
+                });
+                window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
+                    // Before the row's click, which hears no press then and opens.
+                    if phase == DispatchPhase::Capture && event.button == MouseButton::Left {
+                        shell.update(cx, |shell, _| shell.let_go_of_download()).ok();
+                    }
+                });
+            },
         )
+        .absolute()
+        .size_0()
+    }
+
+    /// Forgets a press on a download's row that hasn't become a drag. One that has stays until the
+    /// row's click takes it, as GPUI never hears the release that ends the system's drag.
+    fn let_go_of_download(&mut self) {
+        if matches!(self.download_press, Some((_, _, false))) {
+            self.download_press = None;
+        }
     }
 
     /// The footer's button that opens the Library, at its left (Arc). While downloads run, it keeps
@@ -4352,6 +4432,22 @@ pub(super) fn of(received: i64, total: i64) -> String {
     }
 }
 
+/// How far the New Board button's key drops below the top of its label's line for the two to
+/// share a baseline, as a menu row's label and key do. GPUI's text gives the layout no baseline,
+/// so `items_baseline` lines up the two boxes' bottoms, and each line centres its own glyphs: the
+/// smaller key sat a point below the label's baseline.
+fn key_drop(cx: &App) -> Pixels {
+    let system = cx.text_system();
+    let baseline = |size: f32, weight: FontWeight| {
+        let font = system.resolve_font(&gpui::Font {
+            weight,
+            ..gpui::font(crate::face::UI)
+        });
+        system.baseline_offset(font, px(size), px(crate::tokens::shell::permission::LINE))
+    };
+    baseline(text::BODY, FontWeight::MEDIUM) - baseline(text::SMALL, FontWeight::NORMAL)
+}
+
 #[cfg(test)]
 mod agents_tests;
 #[cfg(test)]
@@ -4372,16 +4468,20 @@ mod task_tests;
 #[cfg(test)]
 mod tests {
     use super::{
-        ARCHIVE_TOP, ARCHIVE_WIDTH, ARCHIVED_LEFT, Archived, CARD_WIDTH, COLUMN_WIDTH, Captured,
-        Download, DownloadAction, DownloadChoice, DownloadState, FILTER_WIDTH, FILTER_X,
-        HEADING_BOTTOM, HEADING_HEIGHT, HEADING_TOP, HEADING_X, Item, LIBRARY_BAND, Line,
-        MEDIA_GAP, MEDIA_TILE, Medium, SEARCH_HEIGHT, SEARCH_TOP, SECTION_WIDTH, SECTION_X, Space,
-        bar_drawn, card_x, download_menu_items, downloads_progress, library_band, panel_at_rest,
-        past_end, plus_x, receded_opacity, spaces_width,
+        ARCHIVE_TOP, ARCHIVE_WIDTH, ARCHIVED_LEFT, ARCHIVED_PITCH, Archived, CARD_WIDTH,
+        COLUMN_WIDTH, Captured, Download, DownloadAction, DownloadChoice, DownloadState,
+        FILTER_WIDTH, FILTER_X, HEADING_BOTTOM, HEADING_HEIGHT, HEADING_TOP, HEADING_X, Item,
+        LIBRARY_BAND, Line, MEDIA_GAP, MEDIA_TILE, Medium, SEARCH_HEIGHT, SEARCH_TOP,
+        SECTION_WIDTH, SECTION_X, Space, bar_drawn, card_x, download_menu_items,
+        downloads_progress, library_band, panel_at_rest, past_end, plus_x, receded_opacity,
+        spaces_width,
     };
     use std::rc::Rc;
 
-    use gpui::{Modifiers, MouseButton, TestAppContext, point, px};
+    use gpui::{
+        InputEvent as _, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, TestAppContext,
+        point, px,
+    };
 
     use crate::shell::recorder::Recorder;
     use crate::shell::sidebar::window_buttons_at;
@@ -4770,6 +4870,56 @@ mod tests {
             opened
                 .iter()
                 .any(|call| call.starts_with("open file:///tmp/my%20photo.jpg "))
+        );
+        assert!(
+            !shell.read_with(cx, |shell, _| shell.library_open),
+            "the Library stayed open"
+        );
+    }
+
+    /// A finished download's row pressed and moved past the drag's start before a frame comes
+    /// between them, as the check's driver can, still hands its file to the system's drag, and
+    /// the Library closes (#3610).
+    #[gpui::test]
+    fn a_download_s_row_dragged_before_the_next_frame_drags_its_file(cx: &mut TestAppContext) {
+        let host = Rc::new(Recorder::default());
+        let browser = host.clone();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+        shell.update(cx, |shell, cx| {
+            shell.set_downloads(vec![download(DownloadState::Done, false)], cx);
+            shell.section = Section::Downloads;
+            shell.set_library(true, cx);
+            shell.library_motion = None;
+            shell.sidebar_fade = None;
+        });
+        cx.run_until_parked();
+        host.take();
+        // The first row, under the first heading.
+        let top = ARCHIVE_TOP + HEADING_TOP + HEADING_HEIGHT + HEADING_BOTTOM;
+        let row = point(
+            px(COLUMN_WIDTH + ARCHIVED_LEFT + 60.),
+            px(top + ARCHIVED_PITCH / 2.),
+        );
+        cx.update(|window, cx| {
+            let press = MouseDownEvent {
+                button: MouseButton::Left,
+                position: row,
+                click_count: 1,
+                ..Default::default()
+            };
+            window.dispatch_event(press.to_platform_input(), cx);
+            let moved = MouseMoveEvent {
+                position: row + point(px(0.), px(29.)),
+                pressed_button: Some(MouseButton::Left),
+                ..Default::default()
+            };
+            window.dispatch_event(moved.to_platform_input(), cx);
+        });
+        cx.run_until_parked();
+        let calls = host.take();
+        assert!(
+            calls.contains(&"drag file /Users/someone/Downloads/report.pdf".to_string()),
+            "no drag of the file: {calls:?}"
         );
         assert!(
             !shell.read_with(cx, |shell, _| shell.library_open),

@@ -9,6 +9,19 @@ pub fn centered(width: f64, height: f64) -> (f64, f64) {
     browser::window_frames::whole_point((x, y))
 }
 
+/// Whether a profile can keep passkeys on this computer, which go with it when it's deleted: on the
+/// Mac, when this build's signature holds a keychain group for them. The signature doesn't change
+/// while the app runs. Elsewhere a passkey is the system's (Windows Hello) or a security key's.
+pub fn keeps_passkeys() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        static KEEPS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *KEEPS.get_or_init(|| unsafe { host_keeps_passkeys() })
+    }
+    #[cfg(not(target_os = "macos"))]
+    false
+}
+
 unsafe extern "C" {
     #[cfg(target_os = "macos")]
     pub fn host_set_scripting(scripting: *const host_scripting);
@@ -122,8 +135,6 @@ unsafe extern "C" {
     pub fn host_watch_option_taps(tapped: extern "C" fn(*mut c_void));
     #[cfg(not(target_os = "linux"))]
     pub fn host_watch_ui_keyboard(left: extern "C" fn(*mut c_void));
-    #[cfg(not(target_os = "linux"))]
-    pub fn host_watch_page_presses(pressed: extern "C" fn(*mut c_void));
     pub fn host_after_menus(apply: extern "C" fn()) -> bool;
     pub fn host_watch_resigning_active(resigning: extern "C" fn());
     pub fn host_watch_active(became_active: extern "C" fn());
@@ -345,6 +356,7 @@ unsafe extern "C" {
         keyboard: bool,
     );
     pub fn host_hide_dialog();
+    pub fn host_dialog_leaving();
     pub fn host_add_site_controls(view: *mut c_void, dismissed: extern "C" fn());
     pub fn host_add_menu_window(
         view: *mut c_void,
@@ -452,6 +464,9 @@ unsafe extern "C" {
     pub fn host_mouse_down() -> bool;
     #[cfg(target_os = "macos")]
     pub fn host_keep_keychain_key() -> bool;
+    // Through `keeps_passkeys` alone, which reads it once.
+    #[cfg(target_os = "macos")]
+    fn host_keeps_passkeys() -> bool;
     #[cfg(not(target_os = "linux"))]
     pub fn host_updates_available() -> bool;
     #[cfg(not(target_os = "linux"))]

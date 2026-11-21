@@ -347,6 +347,18 @@ pub fn is_open(cx: &App) -> bool {
     open_for(cx).is_some()
 }
 
+/// Whether the user types in the editor's name.
+pub fn typing(cx: &mut App) -> bool {
+    let Some(editor) = cx.try_global::<BoostEditorWindow>().map(|editor| editor.0) else {
+        return false;
+    };
+    is_open(cx)
+        && (editor.update(cx, |_, window, cx| {
+            crate::text_input::window_typed_in(window, cx)
+        }))
+        .unwrap_or(false)
+}
+
 /// The faces the editor offers, the site's own first: those this computer has, so no tile shows
 /// another's face in its place.
 pub fn faces() -> Vec<Option<Face>> {
@@ -383,15 +395,7 @@ fn families(fonts: &[String]) -> Vec<(Option<Face>, SharedString)> {
                     "Liberation Serif",
                 ]),
                 Some(Face::Rounded) => first(&["SF Pro Rounded"]),
-                Some(Face::Mono) => first(&[
-                    "SF Mono",
-                    "Menlo",
-                    "Cascadia Mono",
-                    "Consolas",
-                    "Noto Sans Mono",
-                    "DejaVu Sans Mono",
-                    "Liberation Mono",
-                ]),
+                Some(Face::Mono) => crate::face::mono(fonts),
             };
             (face, family.into())
         })
@@ -987,6 +991,7 @@ impl Focusable for BoostEditor {
 
 impl Render for BoostEditor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::text_input::drawing(window);
         let root = div()
             .key_context(KEY_CONTEXT)
             .size_full()

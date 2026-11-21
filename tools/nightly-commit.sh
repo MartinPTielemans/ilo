@@ -4,7 +4,8 @@
 # so a nightly never pairs the app with an older core. Windows joins when its engine fits that
 # commit too; otherwise its previous build stays in the feed. The appcast is signed beside the
 # Mac's build, as a release's is, so while the Mac engine is behind main's core, the night's commit
-# stays where it was, and the feed, which has it already, waits for the engine.
+# stays where it was, and the feed, which has it already, waits for the engine. Nor is a commit that
+# changed only mobile/, the iPhone app's, a night's: the night is the commit before it.
 # Prints commit=<sha> and windows=true|false, for GITHUB_OUTPUT, and says why on stderr.
 # Usage: tools/nightly-commit.sh
 set -euo pipefail
@@ -94,9 +95,20 @@ fits mac "$commit" || {
   echo "The Mac engine engine/fetch.sh takes at ${commit:0:12} has another core." >&2
   exit 1
 }
+# A commit that changed only mobile/, the iPhone app's, builds the browser its parent builds, so the
+# night is the parent, whose build the feed has already, and a merge of phone work alone makes no
+# new nightly. Only while the parent takes the same engines: one built from such a commit isn't in
+# its parent's history.
 windows=true
-if ! fits windows "$commit"; then
-  windows=false
+fits windows "$commit" || windows=false
+while parent=$(git rev-parse -q --verify "$commit^") &&
+  git diff --quiet "$parent" "$commit" -- . ':(exclude)mobile' &&
+  fits mac "$parent" && { [ "$windows" = false ] || fits windows "$parent"; }; do
+  echo "${commit:0:12} changed only mobile/, the iPhone app's, so the nightly is ${parent:0:12}," \
+    "the commit before it." >&2
+  commit=$parent
+done
+if [ "$windows" = false ]; then
   echo "No Windows engine has the core of ${commit:0:12}, so the feed keeps Windows' previous" \
     "build." >&2
 fi

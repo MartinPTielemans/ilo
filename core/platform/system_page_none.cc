@@ -34,6 +34,10 @@ void SystemPage::ClearSite(const SystemStore&,
   std::move(done).Run();
 }
 
+void SystemPage::ClearSince(const SystemStore&, base::Time, SiteData, base::OnceClosure done) {
+  std::move(done).Run();
+}
+
 void SystemPage::SetCookies(const SystemStore&,
                             const std::vector<net::CanonicalCookie>&,
                             base::OnceCallback<void(size_t)> done) {

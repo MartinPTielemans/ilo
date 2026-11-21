@@ -579,6 +579,8 @@ pub trait Browser {
     fn delete_profile(&self, profile: u64, cx: &mut App);
     /// Who shares the favorites, as Settings has it.
     fn favorites_scope(&self, cx: &mut App) -> super::FavoritesScope;
+    /// Whether a profile can keep passkeys on this computer, which go with it when it's deleted.
+    fn keeps_passkeys(&self) -> bool;
     /// Shows ilo's own menu of `items` at `position` in the window, or in the reveal's panel if
     /// `in_reveal`, in `look`, as a right-click there does, or with the item marked `over` on
     /// `position`, its title's top left there, as a pop-up button's menu does. Then calls `chosen`
@@ -614,7 +616,8 @@ pub trait Browser {
         confirmed: Box<dyn FnOnce(Vec<String>, &mut App)>,
         cx: &mut App,
     ) -> bool;
-    /// Gives the UI the keyboard, from the page if the page has it.
+    /// Gives the UI the keyboard, from the page if the page has it. The shell asks through
+    /// `Shell::take_keyboard`, which also drops its note that the page has the keys.
     fn focus_ui(&self, cx: &mut App);
     /// With no page shown, gives the UI the keyboard until a page shows, which then has it, as the
     /// Mac's window holds the keys for the next page.
@@ -739,6 +742,9 @@ pub trait Browser {
     /// Shows `tab`'s page in Safari's engine, in the tab, and has its profile keep the site for it.
     /// The user's: agents get none.
     fn use_system_engine(&self, _tab: u64, _cx: &mut App) {}
+    /// Shows `tab`'s page in Chromium again, and has its profile keep the site there. The user's:
+    /// agents get none.
+    fn leave_system_engine(&self, _tab: u64, _cx: &mut App) {}
     /// Where Google's Widevine module is, which the core offers on Linux alone.
     fn widevine(&self) -> crate::widevine::Widevine {
         crate::widevine::Widevine::None
@@ -911,6 +917,13 @@ pub trait Browser {
     /// Whether the command bar shows, which stays true through a click outside it until the app
     /// calls `Shell::command_bar_dismissed`, so a click on what opens it can tell it has closed it.
     fn command_bar_open(&self, cx: &App) -> bool;
+    /// Whether the user types in a field of a window over this one: find, the password offer, the
+    /// icon picker, the Boost editor or the folder preview. Find doesn't count once the user has
+    /// gone back to the page with it still showing.
+    fn field_window_typing(&self, cx: &mut App) -> bool;
+    /// Whether this window's page has the keyboard rather than its UI, where the core keeps that
+    /// itself (Linux), or None where the shell follows the host's word (`Shell::keyboard_left`).
+    fn page_has_keyboard(&self, cx: &App) -> Option<bool>;
     /// The window shows another Space: the command bar, if it shows over this window, lists
     /// `tabs` from it, or `open_tabs` for Search Tabs, and its profile's suggestions (decision 5).
     /// Returns whether its pick opens a new tab, for New Tab to keep its plate.
@@ -1008,9 +1021,6 @@ pub trait Browser {
     fn take_over(&self, agent: SharedString, tab: u64, cx: &mut App);
     /// The user hands `tab` back to its agent.
     fn hand_back(&self, tab: u64, cx: &mut App);
-    /// Whether the host hears presses in the pages for Shell::page_pressed, `on` while an agent
-    /// works: on X11 it listens to the screen's presses for that, and the other hosts always hear.
-    fn hear_page_presses(&self, _on: bool, _cx: &mut App) {}
     /// The user does `action` to the task whose agent is `agent` (Agent task).
     fn task(&self, agent: SharedString, action: crate::agents::task::TaskAction, cx: &mut App);
     /// The page area shows the conversation of `agent`'s task: the Agents send it now, and as it

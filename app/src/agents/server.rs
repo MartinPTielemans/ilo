@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread;
+use std::time::Duration;
 use web_time::Instant;
 
 use futures::channel::mpsc::UnboundedSender;
@@ -43,6 +44,10 @@ pub(super) enum Stream {}
 #[cfg(not(any(unix, windows)))]
 impl Stream {
     pub(super) fn try_clone(&self) -> io::Result<Stream> {
+        match *self {}
+    }
+
+    fn set_read_timeout(&self, _: Option<Duration>) -> io::Result<()> {
         match *self {}
     }
 }
@@ -75,11 +80,17 @@ pub(super) const END: &str = r#"{"end":true}"#;
 pub type Tokens = Arc<Mutex<HashMap<String, String>>>;
 
 /// The protocol versions the server speaks, newest first.
-const VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
+pub(super) const VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 /// A message may be no longer, which none an agent sends comes near.
 const MAX_LINE: usize = 4 * 1024 * 1024;
 /// Connections at once: a client keeps one.
 const MAX_CONNECTIONS: usize = 32;
+/// How long a connection has to send its token before it's closed, so that connections sending
+/// nothing can't hold every place. The bridge sends it as soon as it connects, so this is only
+/// room for a machine that's stalled.
+const TOKEN_WAIT: Duration = Duration::from_secs(5);
+/// What a client is told when every place is taken.
+const FULL: &str = "ilo is at its limit for connected clients. Quit another client session, then reconnect or restart this one.";
 
 /// The server, running until it's dropped.
 pub struct Server {
@@ -94,6 +105,7 @@ struct Shared {
     path: PathBuf,
     stopped: AtomicBool,
     tokens: Tokens,
+    token_wait: Duration,
     /// The connections open, by a number of their own.
     connections: Mutex<HashMap<u64, Connection>>,
     next_connection: AtomicU64,
@@ -112,13 +124,23 @@ struct Connection {
 }
 
 impl Server {
-    /// Listens on a socket at `path`, readable and writable by the user alone, in place of any
-    /// socket a browser that didn't stop left there.
-    #[cfg(unix)]
+    /// Starts the server for the profile whose address is `path`.
     pub fn start(
         path: &Path,
         tokens: Tokens,
         events: UnboundedSender<Event>,
+    ) -> io::Result<Server> {
+        Server::listen(path, tokens, events, TOKEN_WAIT)
+    }
+
+    /// Listens on a socket at `path`, readable and writable by the user alone, in place of any
+    /// socket a browser that didn't stop left there.
+    #[cfg(unix)]
+    fn listen(
+        path: &Path,
+        tokens: Tokens,
+        events: UnboundedSender<Event>,
+        token_wait: Duration,
     ) -> io::Result<Server> {
         use std::os::unix::fs::PermissionsExt;
         // Made under another name and moved into place once it's the user's alone, so no one
@@ -136,6 +158,7 @@ impl Server {
             path: path.into(),
             stopped: AtomicBool::new(false),
             tokens,
+            token_wait,
             connections: Mutex::default(),
             next_connection: AtomicU64::new(0),
             events,
@@ -149,22 +172,24 @@ impl Server {
 
     /// On the web there's nothing for a client to connect to, so the server never starts.
     #[cfg(not(any(unix, windows)))]
-    pub fn start(_: &Path, _: Tokens, _: UnboundedSender<Event>) -> io::Result<Server> {
+    fn listen(_: &Path, _: Tokens, _: UnboundedSender<Event>, _: Duration) -> io::Result<Server> {
         Err(io::ErrorKind::Unsupported.into())
     }
 
     /// Makes the named pipe at `path`, which only the user can open, unless it's there already.
     #[cfg(windows)]
-    pub fn start(
+    fn listen(
         path: &Path,
         tokens: Tokens,
         events: UnboundedSender<Event>,
+        token_wait: Duration,
     ) -> io::Result<Server> {
         let listener = pipe::Listener::bind(path)?;
         let shared = Arc::new(Shared {
             path: path.into(),
             stopped: AtomicBool::new(false),
             tokens,
+            token_wait,
             connections: Mutex::default(),
             next_connection: AtomicU64::new(0),
             events,
@@ -316,12 +341,18 @@ fn accept(mut listener: pipe::Listener, shared: Arc<Shared>) {
     }
 }
 
-/// Keeps a new connection and serves it on a thread of its own, unless there are too many.
-fn welcome(stream: Stream, shared: &Arc<Shared>) {
+/// Keeps a new connection and serves it on a thread of its own, unless there are too many, which
+/// it says before it closes. That line, about 110 bytes and the first written to the connection,
+/// fits what a socket buffers (8 KiB on the Mac, more on Linux) and what the pipe does (64 KiB,
+/// pipe.rs's BUFFER), so writing it on the accept thread never waits on a client, which may never
+/// read. It isn't flushed, which on the pipe waits for the client to read: dropping the stream
+/// closes its handle without disconnecting it, and the client still reads what was written.
+fn welcome(mut stream: Stream, shared: &Arc<Shared>) {
     let number = shared.next_connection.fetch_add(1, Ordering::SeqCst);
     {
         let mut connections = shared.connections.lock().unwrap();
         if connections.len() >= MAX_CONNECTIONS {
+            _ = writeln!(stream, "{}", json!({ "error": FULL }));
             return;
         }
         let Ok(kept) = stream.try_clone() else {
@@ -353,7 +384,10 @@ fn serve(stream: Stream, number: u64, shared: &Shared) {
     let Ok(mut writer) = stream.try_clone() else {
         return;
     };
-    let mut reader = BufReader::new(stream);
+    let mut reader = BufReader::new(Incoming {
+        stream,
+        token_by: Some(Instant::now() + shared.token_wait),
+    });
     let Some(first) = read_line(&mut reader) else {
         return;
     };
@@ -367,6 +401,9 @@ fn serve(stream: Stream, number: u64, shared: &Shared) {
         _ = writeln!(writer, "{}", json!({ "error": refused })).and_then(|()| writer.flush());
         return;
     };
+    if reader.get_mut().token_taken().is_err() {
+        return;
+    }
     if let Some(connection) = shared.connections.lock().unwrap().get_mut(&number) {
         connection.agent = agent.clone();
     }
@@ -402,6 +439,34 @@ fn serve(stream: Stream, number: u64, shared: &Shared) {
         answering.close();
         end(shared, number);
     });
+}
+
+/// A connection's reading end, whose reads fail once the time for its token has passed, until the
+/// token is taken. The socket's or pipe's own read timeout waits, so nothing else wakes.
+struct Incoming {
+    stream: Stream,
+    token_by: Option<Instant>,
+}
+
+impl Incoming {
+    /// Its reads wait as long as they need from now on.
+    fn token_taken(&mut self) -> io::Result<()> {
+        self.token_by = None;
+        self.stream.set_read_timeout(None)
+    }
+}
+
+impl Read for Incoming {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if let Some(token_by) = self.token_by {
+            let left = token_by.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Err(io::ErrorKind::TimedOut.into());
+            }
+            self.stream.set_read_timeout(Some(left))?;
+        }
+        self.stream.read(buffer)
+    }
 }
 
 /// Messages a connection answers at once, at most: a turn's calls across ten tabs, with room.

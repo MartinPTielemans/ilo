@@ -148,7 +148,7 @@ home=$(mktemp -d)
 # Chromium's sandboxed helpers may still be writing the profile as they go.
 trap 'rm -rf "$home" 2> /dev/null || true' EXIT
 env BROWSER_PROFILE_DIR="$home/profile" BROWSER_URL='data:text/html,<title>drops</title>' \
-  BROWSER_ONBOARDING=skip \
+  BROWSER_ONBOARDING=skip BROWSER_CHECK=1 \
   ../tools/headless.sh --run check/drops.sh --steps "$out" > "$out/run.log" 2>&1 || true
 if [ ! -f "$out/line.png" ] || [ -f "$out/failed" ]; then
   failed=1

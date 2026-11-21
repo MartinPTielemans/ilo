@@ -547,14 +547,19 @@ impl Fake {
 }
 
 /// PREVIEW_LIBRARY=boards: four made-up Boards in a profile folder of their own, two with a
-/// picture, changed hours to a week ago, the last never named.
+/// picture, changed hours to a week ago, the last never named; =boards-empty, none.
 fn preview_boards_folder() -> Option<std::path::PathBuf> {
-    (std::env::var("PREVIEW_LIBRARY").ok()? == "boards").then_some(())?;
+    let which = std::env::var("PREVIEW_LIBRARY").ok()?;
+    (which == "boards" || which == "boards-empty").then_some(())?;
     static FOLDER: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
     FOLDER
         .get_or_init(|| {
             let folder =
                 std::env::temp_dir().join(format!("ilo-preview-boards-{}", std::process::id()));
+            if which == "boards-empty" {
+                std::fs::create_dir_all(&folder).ok()?;
+                return Some(folder);
+            }
             let now = std::time::SystemTime::now();
             let hours = |hours: u64| now - std::time::Duration::from_secs(hours * 3600);
             let boards = [
@@ -578,14 +583,16 @@ fn preview_boards_folder() -> Option<std::path::PathBuf> {
                     browser::boards::write_name(&folder, &id, name).ok()?;
                 }
                 if let Some([r, g, b]) = colour {
-                    // A Board's picture as its page saves it: cards on the page's ground.
+                    // A Board's picture as its page saves it, with no ground: a note in its
+                    // fill and a plain one in the picture's grey.
+                    let [_, gr, gg, gb] = browser::tokens::board::PICTURE.to_be_bytes();
                     let thumb = image::RgbaImage::from_fn(96, 96, |x, y| {
-                        let card = (12..44).contains(&x) && (14..50).contains(&y)
-                            || (52..86).contains(&x) && (34..78).contains(&y);
-                        image::Rgba(if card {
+                        image::Rgba(if (12..44).contains(&x) && (14..50).contains(&y) {
                             [r, g, b, 255]
+                        } else if (52..86).contains(&x) && (34..78).contains(&y) {
+                            [gr, gg, gb, 255]
                         } else {
-                            [246, 244, 240, 255]
+                            [0, 0, 0, 0]
                         })
                     });
                     thumb.save(board.join("thumb.png")).ok()?;
@@ -1384,9 +1391,10 @@ impl Browser for Fake {
         self.later(cx, move |shell, cx| shell.set_cast(tab, None, cx));
     }
 
-    // Safari's engine is the Mac's alone, so elsewhere the note offers what each system's does.
+    // Safari's engine is the Mac's alone, so elsewhere the note offers what each system's does. A
+    // note only the Mac's engine gives (preview_moves) draws as on the Mac anywhere.
     fn can_use_system_engine(&self) -> bool {
-        cfg!(target_os = "macos")
+        cfg!(target_os = "macos") || preview_moves().is_some()
     }
 
     // PREVIEW_DRM=default draws the note as where ilo is the system's default browser.
@@ -1413,6 +1421,17 @@ impl Browser for Fake {
                 ..shell.page(tab)
             };
             shell.set_page(tab, page, cx);
+        });
+    }
+
+    fn leave_system_engine(&self, tab: u64, cx: &mut App) {
+        self.later(cx, move |shell, cx| {
+            let page = Page {
+                system_engine: false,
+                ..shell.page(tab)
+            };
+            shell.set_page(tab, page, cx);
+            shell.set_media_unsupported(tab, "", cx);
         });
     }
 
@@ -1851,6 +1870,10 @@ impl Browser for Fake {
         shell::FavoritesScope::default()
     }
 
+    fn keeps_passkeys(&self) -> bool {
+        false
+    }
+
     // The preview's window is GPUI's own, which has the keyboard already.
     fn focus_ui(&self, _: &mut App) {}
 
@@ -1886,6 +1909,14 @@ impl Browser for Fake {
     // No command bar here but the web's, as for a new tab, and no split views but the made-up one.
     fn command_bar_open(&self, cx: &App) -> bool {
         cfg!(target_family = "wasm") && command_bar::is_open(cx)
+    }
+
+    fn field_window_typing(&self, _: &mut App) -> bool {
+        false
+    }
+
+    fn page_has_keyboard(&self, _: &App) -> Option<bool> {
+        None
     }
 
     fn command_bar_follows(&self, _: Vec<BarTab>, _: Vec<BarTab>, _: &mut App) -> bool {
@@ -2569,6 +2600,28 @@ fn task_cards(home: u64) -> Vec<TaskCard> {
         command: None,
     };
     let mut cards: Vec<TaskCard> = (FIRST_TASK..).zip(TASKS).map(card).collect();
+    // PREVIEW_SESSION=working, done or open shows an outside agent's card alone: at work after it
+    // closed its last page, done with nothing open, and done with its page to open (#3652).
+    if let Ok(which) = std::env::var("PREVIEW_SESSION") {
+        let (status, dot, open) = match which.as_str() {
+            "working" => ("Step 4 · Closed example.com", Dot::Working, Vec::new()),
+            "open" => {
+                let page = (FIRST_TASK + 100, "example.com".into());
+                ("Done · 10:42", Dot::Done, vec![page])
+            }
+            _ => ("Done · 10:42", Dot::Done, Vec::new()),
+        };
+        return vec![TaskCard {
+            agent: "session-1".into(),
+            name: "Claude Code".into(),
+            replies: false,
+            title: "Claude Code".into(),
+            status: status.into(),
+            dot,
+            open,
+            ..card((FIRST_TASK, TASKS[0]))
+        }];
+    }
     // PREVIEW_TASK_STEP=long gives the working task a step line too long for a narrow window's
     // strip.
     if std::env::var("PREVIEW_TASK_STEP").as_deref() == Ok("long") {
@@ -2871,6 +2924,7 @@ fn main() {}
 
 #[cfg(not(target_family = "wasm"))]
 fn main() {
+    browser::log_every_line();
     gpui_platform::application()
         .with_assets(shell::Assets)
         .run(|cx| {
@@ -2929,6 +2983,18 @@ fn main() {
                     _ => browser::shell::FavoritesScope::Profile,
                 };
                 preview_pictures(Pictures::Favorites(chosen), cx);
+                return;
+            }
+            // PREVIEW_COMMAND_LINE=off, on or unsearched shows Settings › Agents' apps that connect
+            // and the ilo command's row under them, not there, there, or there in a folder the
+            // shell doesn't search (#3667).
+            if let Ok(state) = std::env::var("PREVIEW_COMMAND_LINE") {
+                let state = match state.as_str() {
+                    "on" => CommandLine::On,
+                    "unsearched" => CommandLine::Unsearched,
+                    _ => CommandLine::Off,
+                };
+                preview_pictures(Pictures::CommandLine(state), cx);
                 return;
             }
             // PREVIEW_ACCOUNT=signed-out, no-server, words, waiting or signed-in shows Settings ›
@@ -3076,10 +3142,6 @@ fn main() {
                         _ => Shell::new(browser, cx),
                     };
                     shell.force_tone(preview_tone());
-                    // The app's UI there lies over the core's window, which is black under the
-                    // tint; the preview's would show the desktop through it (#3033).
-                    #[cfg(any(target_os = "windows", target_os = "linux"))]
-                    shell.set_ground(gpui::black().into());
                     shell.set_profiles(preview_profiles(), cx);
                     shell.set_spaces(spaces, cx);
                     shell.set_space(first_space, cx);
@@ -3123,8 +3185,19 @@ fn main() {
                         shell.set_page(tab, page, cx);
                     }
                     // PREVIEW_DRM=1 has the first tab's page ask for video ilo can't play, so its
-                    // note shows, offering what this system's does (#2468).
-                    if std::env::var_os("PREVIEW_DRM").is_some() {
+                    // note shows, offering what this system's does (#2468). =moved,
+                    // moved-ad-blocking, typed or capturing shows the note the core gives on a press
+                    // of play instead, the moved ones in Safari's engine.
+                    if let Some(note) = preview_moves() {
+                        if note.starts_with("moved") {
+                            let page = Page {
+                                system_engine: true,
+                                ..shell.page(1)
+                            };
+                            shell.set_page(1, page, cx);
+                        }
+                        shell.set_media_unsupported(1, note, cx);
+                    } else if std::env::var_os("PREVIEW_DRM").is_some() {
                         shell.set_media_unsupported(1, "com.widevine.alpha", cx);
                     }
                     // PREVIEW_CHOOSER=serial, hid, usb, bluetooth, stopped, none, off or denied has the
@@ -3392,8 +3465,8 @@ fn main() {
             let shell_window = window.as_ref().ok().copied();
             match window {
                 // PREVIEW_LIBRARY=1 opens the Library, and PREVIEW_LIBRARY=downloads, =spaces,
-                // =history, =agents or =boards opens it there; =rename opens its Spaces with the first card's
-                // name in its field.
+                // =history, =agents, =boosts, =boards or =boards-empty opens it there; =rename opens
+                // its Spaces with the first card's name in its field.
                 Ok(window) if std::env::var_os("PREVIEW_LIBRARY").is_some() => {
                     window
                         .update(cx, |shell, window, cx| {
@@ -3402,7 +3475,10 @@ fn main() {
                                 Ok("spaces") => shell.show_spaces(cx),
                                 Ok("agents") => shell.show_agents(cx),
                                 Ok("history") => shell.show_visited(cx),
-                                Ok("boards") => shell.run(Command::ViewBoards, "preview", cx),
+                                Ok("boosts") => shell.run(Command::ViewBoosts, "preview", cx),
+                                Ok("boards" | "boards-empty") => {
+                                    shell.run(Command::ViewBoards, "preview", cx)
+                                }
                                 Ok("rename") => {
                                     shell.show_spaces(cx);
                                     shell.preview_rename_card(window, cx);
@@ -3965,6 +4041,14 @@ fn preview_recent() -> Option<String> {
     std::env::var("PREVIEW_RECENT").ok()
 }
 
+/// PREVIEW_DRM's note of a press of play on the Mac (drm_note), if it names one.
+fn preview_moves() -> Option<&'static str> {
+    let drm = std::env::var("PREVIEW_DRM").ok()?;
+    ["moved", "moved-ad-blocking", "typed", "capturing"]
+        .into_iter()
+        .find(|note| *note == drm)
+}
+
 fn recent_answers(state: &str) -> Vec<browser::recent::Answer> {
     use browser::recent::{Answer, List, Row};
     let row = |list, repo: &str, number, title: &str, draft| Row {
@@ -4417,15 +4501,17 @@ fn preview_account(state: &str, cx: &mut App) {
         _ => Status::SignedOut,
     };
     let no_server = state == "no-server";
+    // PREVIEW_SERVER=<address> signs in to a server of the user's, which the line names by its host.
+    let own = std::env::var("PREVIEW_SERVER").ok();
     let state = State {
         status,
         problem: None,
-        server: if no_server {
-            "".into()
-        } else {
-            "https://sync.ilo.app".into()
+        server: match (&own, no_server) {
+            (_, true) => "".into(),
+            (Some(own), false) => own.clone().into(),
+            (None, false) => "https://sync.ilo.app".into(),
         },
-        default_server: !no_server,
+        default_server: !no_server && own.is_none(),
         email: "sam@example.com".into(),
         code: if status == Status::Pairing {
             "312568".into()
@@ -4504,6 +4590,17 @@ enum Pictures {
     Appearance(browser::theme::Appearance),
     /// Tabs & Sidebar's Share favorites, the scope chosen, in its group of one.
     Favorites(browser::shell::FavoritesScope),
+    /// Agents' first row, its apps that connect, and the ilo command's row under them.
+    CommandLine(CommandLine),
+}
+
+/// Where the ilo command is (#3667).
+#[derive(Clone, Copy)]
+enum CommandLine {
+    Off,
+    On,
+    /// In a folder the user's shell doesn't search.
+    Unsearched,
 }
 
 /// `shown`'s group in a window of Settings' size. PREVIEW_BUTTONS=mac, windows or linux draws that
@@ -4517,11 +4614,16 @@ fn preview_pictures(shown: Pictures, cx: &mut App) {
         Ok("linux") => Buttons::Linux,
         _ => Buttons::HERE,
     };
+    // PREVIEW_SETTINGS_WIDTH=<points> narrows the window, to Settings' least for one.
+    let width = std::env::var("PREVIEW_SETTINGS_WIDTH")
+        .ok()
+        .and_then(|width| width.parse().ok())
+        .unwrap_or(WIDTH);
     let (mut x, mut y) = (0., 0.);
-    unsafe { host_centered(WIDTH as f64, HEIGHT as f64, &mut x, &mut y) };
+    unsafe { host_centered(width as f64, HEIGHT as f64, &mut x, &mut y) };
     let bounds = Bounds::new(
         point(px(x as f32), px(y as f32)),
-        size(px(WIDTH), px(HEIGHT)),
+        size(px(width), px(HEIGHT)),
     );
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -4563,17 +4665,19 @@ impl gpui::Render for PicturesPage {
         window: &mut gpui::Window,
         cx: &mut gpui::Context<Self>,
     ) -> impl gpui::IntoElement {
+        use browser::agents::cli;
         use browser::palette::{INK, PAPER};
         use browser::settings_card::Colors;
         use browser::settings_column::{self, Section};
         use browser::settings_pictures::{appearance_picker, favorites_picker, picker};
         use browser::settings_rows::{
-            Look, end, frame, group, popup, stop_switch, text as row_text,
+            Look, command_export, command_text, drawn, end, frame, glyph_plate, group, popup,
+            stop_button, stop_switch, text as row_text,
         };
         use browser::theme::Appearance;
         use browser::tokens::palette::{LIGHT_STAND_IN, STAND_IN};
         use browser::tokens::settings::{
-            HEADING_BOTTOM, NAME, POPUP_WIDTH, SIDE_ROOM, SIDE_TOP, TEXT_X,
+            HEADING_BOTTOM, HEADING_TOP, NAME, POPUP_WIDTH, SIDE_ROOM, SIDE_TOP, TEXT_X,
         };
         use browser::tokens::text;
         use gpui::{FontWeight, ParentElement, Styled, div, rgb};
@@ -4596,6 +4700,7 @@ impl gpui::Render for PicturesPage {
         let section = match self.shown {
             Pictures::Sidebar { .. } | Pictures::Favorites(_) => Section::TabsAndSidebar,
             Pictures::Appearance(_) => Section::General,
+            Pictures::CommandLine(_) => Section::Agents,
         };
         let column = settings_column::column(
             &Default::default(),
@@ -4609,7 +4714,7 @@ impl gpui::Render for PicturesPage {
             a11y,
         );
         let page = cx.entity().downgrade();
-        let (heading, rows) = match self.shown {
+        let blocks: Vec<(Option<&str>, Vec<gpui::Div>)> = match self.shown {
             Pictures::Sidebar { right } => {
                 let pair = picker(
                     &look,
@@ -4674,7 +4779,7 @@ impl gpui::Render for PicturesPage {
                         Some("Press and let go of ⌥ with no other key.".into()),
                     ))
                     .child(switch("option", false));
-                (Some("The sidebar"), vec![position, edge, option])
+                vec![(Some("The sidebar"), vec![position, edge, option])]
             }
             Pictures::Appearance(chosen) => {
                 let three = appearance_picker(
@@ -4724,7 +4829,7 @@ impl gpui::Render for PicturesPage {
                         POPUP_WIDTH,
                         false,
                     ))]));
-                (Some("Look"), vec![appearance, zoom])
+                vec![(Some("Look"), vec![appearance, zoom])]
             }
             Pictures::Favorites(chosen) => {
                 let three = favorites_picker(
@@ -4758,17 +4863,109 @@ impl gpui::Render for PicturesPage {
                             .ml(px(-SIDE_ROOM))
                             .child(three),
                     );
-                (None, vec![shared])
+                vec![(None, vec![shared])]
+            }
+            Pictures::CommandLine(state) => {
+                let button = |id: &'static str, title: &'static str| {
+                    gpui::IntoElement::into_any_element(stop_button(&look, id, title, a11y))
+                };
+                let feature = |glyph, name: &'static str, line: &str, controls| {
+                    frame()
+                        .child(glyph_plate(&look, glyph, true))
+                        .child(row_text(&look, name, Some(line.to_string().into())))
+                        .child(end(controls))
+                };
+                let master = feature(
+                    Section::Agents.glyph(),
+                    "Let agents use the browser",
+                    "On: a connected client reaches the browser through the bridge beside it.",
+                    vec![gpui::IntoElement::into_any_element(stop_switch(
+                        &look,
+                        "agents",
+                        "Let agents use the browser",
+                        true,
+                        1.,
+                        look.accent,
+                        a11y,
+                    ))],
+                );
+                let clients = vec![
+                    feature(
+                        "icons/terminal.svg",
+                        "Claude Code",
+                        "Connected in ~/.claude.json",
+                        vec![button("disconnect-claude", "Disconnect")],
+                    ),
+                    feature(
+                        "icons/square-terminal.svg",
+                        "Codex",
+                        "Not connected. Connect adds the browser to ~/.codex/config.toml",
+                        vec![button("connect-codex", "Connect")],
+                    ),
+                    feature(
+                        "icons/cable.svg",
+                        "MCP client",
+                        "Any MCP client",
+                        vec![button("connect-other", "Connect")],
+                    ),
+                ];
+                // The ilo command's actions, where the parity sheet waits for them to be drawn.
+                let action = |title: &'static str| {
+                    gpui::IntoElement::into_any_element(
+                        stop_button(&look, title, title, a11y)
+                            .relative()
+                            .child(drawn(
+                                format!("ilo-command {}", title.to_lowercase()),
+                                self.logged.clone(),
+                            )),
+                    )
+                };
+                let state = match state {
+                    CommandLine::Off => cli::State::Off,
+                    CommandLine::On => cli::State::On,
+                    CommandLine::Unsearched => cli::State::Unsearched,
+                };
+                let mono = browser::face::mono(&cx.text_system().all_font_names());
+                let mut controls = Vec::new();
+                if state == cli::State::Unsearched {
+                    controls.push(action("Copy Line"));
+                }
+                controls.push(action(match state {
+                    cli::State::Off => "Add",
+                    _ => "Remove",
+                }));
+                let detail = cli::detail(state);
+                let export = (detail.export).map(|export| command_export(&look, export, mono));
+                let command = frame()
+                    .flex_wrap()
+                    .child(glyph_plate(&look, "icons/square-code.svg", true))
+                    .child(command_text(&look, "ilo CLI", &detail, mono))
+                    .child(end(controls))
+                    .children(export);
+                vec![
+                    (None, vec![master]),
+                    (Some("Apps that connect"), clients),
+                    (Some("Command line"), vec![command]),
+                ]
             }
         };
-        let heading = heading.map(|heading| {
-            div()
-                .px(px(TEXT_X))
-                .mb(px(HEADING_BOTTOM))
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(look.heading)
-                .child(heading)
-        });
+        let blocks = blocks
+            .into_iter()
+            .enumerate()
+            .map(|(index, (heading, rows))| {
+                let heading = heading.map(|heading| {
+                    div()
+                        .px(px(TEXT_X))
+                        .mb(px(HEADING_BOTTOM))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(look.heading)
+                        .child(heading)
+                });
+                div()
+                    .mt(px(if index > 0 { HEADING_TOP } else { 0. }))
+                    .children(heading)
+                    .child(group(&look, rows))
+            });
         let colors = Colors {
             line: look.line,
             name: base.opacity(NAME),
@@ -4776,11 +4973,7 @@ impl gpui::Render for PicturesPage {
         };
         let card = self.card.draw(
             section.name(),
-            div()
-                .flex()
-                .flex_col()
-                .children(heading)
-                .child(group(&look, rows)),
+            div().flex().flex_col().children(blocks),
             dark,
             colors,
         );
@@ -4896,23 +5089,35 @@ impl account::Host for PreviewAccount {
     fn read_devices(&self) {}
     fn remove_device(&self, _: &str) {}
     fn choose(&self, _: account::Choice, _: bool) {}
-    // PREVIEW_SYNC=never, unreachable, throttled, stopped or update shows that line, else synced at
-    // 15:04.
+    // PREVIEW_SYNC=never, offline, server-error, refused, sign-in, throttled, stopped or update
+    // shows that line, else synced at 15:04.
     fn activity(&self) -> account::Activity {
         let shown = std::env::var("PREVIEW_SYNC").unwrap_or_default();
         let trouble = match shown.as_str() {
-            "unreachable" => Some(account::Trouble::Unreachable),
+            "offline" => Some(account::Trouble::Offline),
+            "server-error" => Some(account::Trouble::ServerError),
+            "refused" => Some(account::Trouble::Refused {
+                kind: account::Kind::Spaces,
+                count: 3,
+            }),
+            "sign-in" => Some(account::Trouble::SignIn),
             "throttled" => Some(account::Trouble::Throttled),
             "stopped" => Some(account::Trouble::Stopped),
             "update" => Some(account::Trouble::Update),
             _ => None,
         };
         let synced = if shown == "never" { "" } else { "at 15:04" };
+        let lasting = matches!(
+            shown.as_str(),
+            "offline" | "server-error" | "refused" | "sign-in"
+        );
         account::Activity {
             synced: synced.into(),
             trouble,
+            since: if lasting { "since 14:52" } else { "" }.into(),
         }
     }
+    fn open_sync_details(&self, _: &mut App) {}
     fn delete_account(&self) {}
     fn copy_secret(&self, _: &str, _: Duration, _: &mut App) {}
     fn confirm(

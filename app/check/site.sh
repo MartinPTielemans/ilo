@@ -14,7 +14,8 @@
 # across the page's top half and its password field across the bottom, that posts to /login,
 # which sends the browser on to welcome.html, as a site that took the login would.
 # signup.html is the same form asking for a new password, which posts to /signup, as /login.
-# /sign-in, with any query, asks for HTTP basic sign-in and takes ada with the password lovelace.
+# /sign-in, with any query, asks for HTTP basic sign-in and takes ada with the password zq7lovelace,
+# a word in no filter list, which mcp.sh looks for in the whole profile.
 # address.html and card.html are an address's form and a card's, their first field across the
 # page's top 40%, which put their name in the title once painted, post as the login does, and put
 # "filled" in the title while Chrome fills that field, and "unfocused" once the page's focus leaves
@@ -340,6 +341,10 @@ f.addEventListener("compositionend", e => document.title = "committed " + e.data
 let escapes = 0;
 onkeydown = e => { if (e.key == "Escape") { e.preventDefault(); document.title = "escape " + ++escapes; } };
 </script>' > "$out/site/engine.html"
+# A page with an icon of its own, the orange square, whose title names the engine showing it.
+printf '%s' '<title>loading</title><link rel="icon" href="icon.png">
+<script>document.title = "icon " + (/Chrome\//.test(navigator.userAgent) ? "chromium" : "safari");</script>' \
+  > "$out/site/icon.html"
 # The session page, whose title says the engine showing it and which of the check's values its
 # script finds, in this order, or none: the cookies h, hw, n, p and w, and the localStorage items
 # item, back and mine. It names what it found and never a value, since the app logs every title.
@@ -552,7 +557,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return
         if path == "/sign-in":
             signed_in = self.headers.get("Authorization") == "Basic " + base64.b64encode(
-                b"ada:lovelace").decode()
+                b"ada:zq7lovelace").decode()
             body = b"<title>signed in ada</title>" if signed_in else b"<title>signed out</title>"
             self.send_response(200 if signed_in else 401)
             if not signed_in:

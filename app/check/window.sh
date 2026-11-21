@@ -20,7 +20,8 @@
 # double-click there zooms it, and one in the
 # sidebar below the rows opens a new tab. ⌘S, with the page or the UI focused, and the sidebar
 # button hide the sidebar and the window's buttons, and the card takes its place, through a resize;
-# ⌘S brings them back, and the core hears the page moves for each motion and is still after it. The
+# ⌘S brings them back, and the core hears the page moves for each motion and is still after it, or
+# the page goes to its place in one step when the motion is over by its first frame. The
 # pointer kept at the window's edge brings the hidden sidebar out, and one passing it doesn't, from
 # the right edge too with the sidebar put on the right. A tab opened with the sidebar hidden says
 # so in a toast, a second one bumps it, and a click on it brings the sidebar back. The sidebar's
@@ -930,33 +931,60 @@ toggle() {
     check_layout "after $3"
     check_buttons "after $3"
   fi
+  [ -z "$one_step" ] || one_step_rested
 }
-# moved <what>: the sidebar's motion moved the page's frame every step, so the core heard the page
-# moves before the first and is still after the last (issue #166). A check can't see the jiggle that
-# stops. Not for docking the sidebar out, which takes its place in one frame. Before toggle, whose
-# layout starts a new driver step that both lines precede.
+# moved <what> <hidden|shown>: the sidebar's motion moved the page's frame every step, so the core
+# heard the page moves before the first and is still after the last (issue #166). A check can't see
+# the jiggle that stops. Not for docking the sidebar out, which takes its place in one frame. Before
+# toggle, whose layout starts a new driver step that both lines precede.
+# A motion is over by its first frame when that frame comes later than the motion's length, as a
+# slow runner's can (#3736): the page goes to its place in one step, with none for the core to hear
+# of. Then toggle sees that the page was resized only to where it rests (one_step_rested).
+one_step=
 moved() {
-  expect '^browser: page moving 1$' "$1 didn't tell the core the page moves"
-  expect '^browser: page moving 0$' "$1 didn't tell the core the page is still"
+  motion_from=${view#* }
+  motion_at=$step
+  expect "^browser: \(page moving 1\|sidebar $2\)\$" "$1 didn't move the sidebar"
+  if since "$motion_at" | sed "/^browser: sidebar $2\$/q" | grep -q '^browser: page moving 1$'; then
+    expect '^browser: page moving 0$' "$1 didn't tell the core the page is still"
+  else
+    one_step=$1
+  fi
+}
+# Once toggle has laid out the page at rest: the motion moved, but the core wasn't told it moves,
+# and the page was resized straight to where it rests, from where it was. A size between is #166.
+one_step_rested() {
+  motion_rest=${view#* }
+  expect "^browser: title [0-9]* resized [0-9]* times, to $motion_rest\$" \
+    "$one_step: its motion was over by its first frame, and the page didn't come to $motion_rest" \
+    "$motion_at"
+  motion_between=$(since "$motion_at" | sed -n 's/^browser: title [0-9]* resized [0-9]* times, to //p' |
+    grep -v -e "^$motion_rest\$" -e "^$motion_from\$" || true)
+  [ -z "$motion_between" ] ||
+    fail "$one_step didn't tell the core the page moves, and it was $(echo $motion_between) on its way"
+  echo "window: $one_step was over by its first frame: the page went from $motion_from to $motion_rest"
+  one_step=
 }
 send click $page_point
+# Where the page rests before the first ⌘S, which moved reads.
+check_layout "before ⌘S"
 send key s cmd
-# The capture waits for the line, not a time, so it lands in the motion if the motion outlasts the
+# The capture waits for a line, not a time, so it lands in the motion if the motion outlasts the
 # capture, and just after it if not.
-expect '^browser: page moving 1$' "⌘S with the page focused didn't tell the core the page moves"
+expect '^browser: \(page moving 1\|sidebar hidden\)$' "⌘S with the page focused didn't move the sidebar"
 ../tools/window-screenshot.sh "$pid" "$out/sidebar-moving.png" || fail "no window to capture"
-moved "⌘S with the page focused"
+moved "⌘S with the page focused" hidden
 toggle page hidden "⌘S with the page focused"
 ../tools/window-screenshot.sh "$pid" "$out/sidebar-hidden.png" || fail "no window to capture"
 send key s cmd
-moved "⌘S again with the page focused"
+moved "⌘S again with the page focused" shown
 toggle page shown "⌘S again with the page focused"
 send click 110 400
 send key s cmd
-moved "⌘S with the UI focused"
+moved "⌘S with the UI focused" hidden
 toggle ui hidden "⌘S with the UI focused"
 send key s cmd
-moved "⌘S again with the UI focused"
+moved "⌘S again with the UI focused" shown
 toggle ui shown "⌘S again with the UI focused"
 send click 93 24
 toggle sidebar hidden "a click on the sidebar button"
@@ -1435,9 +1463,62 @@ black_space() {
   expect '^browser: theme picker hidden$' "escape didn't close the theme picker"
   send move $page_point
 }
+# The window over another app's, a full-screen window in black and then white behind it, in
+# tools/headless.sh's sway session: sway blurs nothing behind a window, so the sidebar reads the
+# same over both, opaque, rather than showing what's behind sharp through the tint (#3676).
+# Waits, at 0.1 s a capture, for the capture $1 of the screen to show $2 ("r g b") at ($3, $4).
+screen_shows() {
+  for _ in $(seq 50); do
+    ../tools/window-screenshot.sh "$pid" "$1" all || fail "no screen to capture"
+    [ "$(pixel "$1" "$3" "$4")" = "$2" ] && return 0
+    sleep 0.1
+  done
+  fail "the screen didn't show $2 at $3, $4: $(pixel "$1" "$3" "$4")"
+}
+see_through() {
+  # The output's size, and the window's frame and sway's id for it, the largest of the app's.
+  screen=$(swaymsg -t get_outputs | jq -r '.[0].rect | "\(.width) \(.height)"')
+  # shellcheck disable=SC2086 # the frame's five numbers
+  set -- $(swaymsg -t get_tree | jq -r --argjson pid "$pid" '[.. | select(.pid? == $pid and
+    .visible? == true)] | max_by(.rect.width * .rect.height) |
+    "\(.id) \(.rect.x) \(.rect.y) \(.rect.width) \(.rect.height)"')
+  [ $# -eq 5 ] || fail "sway didn't list the window"
+  # A point of the empty sidebar, as the Mac's material step reads, and the screen's middle.
+  sidebar=$(echo "$2 $3 $screen" | awk '{ print ($1 + 60) / $3, ($2 + 450) / $4 }')
+  seen=
+  for backdrop in "black 0 0 0" "white 255 255 255"; do
+    name=${backdrop%% *}
+    DISPLAY=${DISPLAY:-${BROWSER_XWAYLAND:-}} display -title backdrop \
+      -geometry "${screen% *}x${screen#* }+0+0" -size "${screen% *}x${screen#* }" "xc:$name" \
+      > "$out/backdrop.log" 2>&1 &
+    backdrop_pid=$!
+    # It opens in front, taking the keyboard, and then the window goes back in front of it.
+    screen_shows "$out/backdrop-$name-front.png" "${backdrop#* }" 0.5 0.5
+    swaymsg "[con_id=$1] focus" > /dev/null || fail "sway couldn't bring the window in front"
+    for _ in $(seq 50); do
+      send state
+      [ "$active" = 1 ] && break
+      sleep 0.1
+    done
+    [ "$active" = 1 ] || fail "the window didn't take the keyboard back from the $name window"
+    ../tools/window-screenshot.sh "$pid" "$out/see-through-$name.png" all ||
+      fail "no screen to capture"
+    seen="$seen$name $(pixel "$out/see-through-$name.png" $sidebar), "
+    kill "$backdrop_pid" 2> /dev/null || true
+    wait "$backdrop_pid" 2> /dev/null || true
+  done
+  echo "the sidebar over black and white: ${seen%, }"
+  echo "$seen" | awk -F', ' '{ split($1, b, " "); split($2, w, " "); off = 0
+    for (i = 2; i <= 4; i++) if (w[i] - b[i] > 2 || b[i] - w[i] > 2) off = 1
+    exit off }' ||
+    fail "the sidebar shows what's behind the window, which nothing blurs: ${seen%, }; $out/see-through-black.png, $out/see-through-white.png"
+  material="opaque, the sidebar over black and white: ${seen%, }"
+}
 # Windows' and Linux's windows have no material under the UI, whose tint is the window's look, so
 # there's none to measure there, and kern.hv_vmm_present is the Mac's alone (#3327).
-if [ "$(uname)" = Linux ]; then
+if [ "$(uname)" = Linux ] && [ "${BROWSER_HEADLESS:-xvfb}" != xvfb ]; then
+  see_through
+elif [ "$(uname)" = Linux ]; then
   material="none on Linux, whose window has no material under the UI"
 elif windows; then
   material="none on Windows, whose window has no material under the UI"
@@ -1463,6 +1544,7 @@ else
       post rightclick 100 112
       expect "^browser: menu shown $(cased 'Change Space Icon…')" "a right-click on the Space's name showed no menu"
       ../tools/window-screenshot.sh "$pid" "$out/light-menu.png" || fail "no window to capture"
+      expect '^browser: menu window at ' "the menu's window didn't take the keyboard"
       send key escape
       expect '^browser: menu closed$' "escape didn't close the Space's menu"
       send move $page_point

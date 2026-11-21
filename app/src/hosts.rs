@@ -16,8 +16,11 @@ pub(crate) const BOOST_EDITOR: c_int = 4;
 
 pub(crate) const TAB_SWITCHER: c_int = 5;
 
+/// The whole of an agent's request, beside its question's card (#3548).
+pub(crate) const AGENT_REQUEST: c_int = 6;
+
 /// The Site Controls aren't one of the host's overlays, but its elevation call takes them too.
-pub(crate) const SITE_CONTROLS: c_int = 6;
+pub(crate) const SITE_CONTROLS: c_int = 7;
 
 /// Shows ilo's menu of `items` at `at` in the content of `ui_view`'s window, any of the app's, or
 /// of its reveal's panel if `in_reveal`, in `look`, and calls `chosen` once it closes.
@@ -78,6 +81,13 @@ impl dialog::Host for DialogHost {
         #[cfg(not(target_os = "linux"))]
         unsafe {
             platform::host_hold_keys()
+        };
+    }
+
+    fn let_go(&self) {
+        #[cfg(target_os = "macos")]
+        unsafe {
+            platform::host_dialog_leaving()
         };
     }
 
@@ -165,9 +175,7 @@ impl site_controls::Host for SiteControlsHost {
         match on {
             // As the protected-video note's button does.
             true => use_system_engine(tab),
-            false => {
-                unsafe { bc::bc_tab_set_system_engine(tab, false) };
-            }
+            false => leave_system_engine(tab),
         }
     }
 
@@ -466,6 +474,12 @@ impl zoom_hud::Host for HudHost {
     }
 }
 
+/// A window of a field the user may type in went away, so a page dialog waiting on it can show.
+/// Later: a window hides from inside the update that closes it.
+fn field_window_hidden() {
+    update_app_later(|cx| update_shells_in(cx, |shell, cx| shell.field_let_go(cx)));
+}
+
 /// A browser window's password offer's requests, to the host's offer window over it and the core.
 pub(crate) struct OfferHost {
     pub(crate) ui_view: *mut c_void,
@@ -478,6 +492,7 @@ impl offer::Host for OfferHost {
 
     fn hide(&self) {
         unsafe { platform::host_hide_offer(self.ui_view) };
+        field_window_hidden();
     }
 
     fn answer(&self, tab: u64, answer: offer::Answer, username: &str) {
@@ -505,6 +520,7 @@ impl icon_picker::Host for PickerHost {
 
     fn hide(&self) {
         unsafe { platform::host_hide_overlay(ICON_PICKER) };
+        field_window_hidden();
     }
 
     fn keep_recents(&self, recents: &str) {
@@ -535,6 +551,34 @@ pub(crate) extern "C" fn icon_picker_dismissed() {
     update_app(icon_picker::dismissed);
 }
 
+pub(crate) struct AgentRequestHost;
+
+impl agent_request::Host for AgentRequestHost {
+    fn show(&self, window: u64, left: f32, top: f32, height: f32) {
+        let Some(view) = ui_view_of(window) else {
+            return;
+        };
+        let (left, top, width) = (left.into(), top.into(), agent_request::WIDTH.into());
+        unsafe {
+            platform::host_set_overlay_height(AGENT_REQUEST, height.into());
+            platform::host_show_overlay(AGENT_REQUEST, view, false, left, top, width);
+        }
+    }
+
+    fn set_height(&self, height: f32) {
+        unsafe { platform::host_set_overlay_height(AGENT_REQUEST, height.into()) };
+    }
+
+    fn hide(&self) {
+        unsafe { platform::host_hide_overlay(AGENT_REQUEST) };
+    }
+}
+
+/// The user left the whole request, such as with a click outside it.
+pub(crate) extern "C" fn agent_request_dismissed() {
+    update_app(agent_request::dismissed);
+}
+
 pub(crate) struct FolderPreviewHost;
 
 impl folder_preview::Host for FolderPreviewHost {
@@ -560,6 +604,7 @@ impl folder_preview::Host for FolderPreviewHost {
 
     fn hide(&self) {
         unsafe { platform::host_hide_overlay(FOLDER_PREVIEW) };
+        field_window_hidden();
     }
 }
 
@@ -673,6 +718,7 @@ impl boost_editor::Host for BoostEditorHost {
 
     fn hide(&self) {
         unsafe { platform::host_hide_overlay(BOOST_EDITOR) };
+        field_window_hidden();
     }
 }
 

@@ -313,6 +313,7 @@ for look in dark light; do
   expect "^browser: menu shown $reload_menu\$" \
     "a right-click on reload didn't show its menu: $(grep '^browser: menu shown' "$log" | tail -1)"
   ../tools/window-screenshot.sh "$pid" "$out/reload-menu-$look.png" || fail "no window to capture"
+  expect '^browser: menu window at ' "the menu's window didn't take the keyboard"
   send key escape
   expect '^browser: menu closed' "escape didn't close reload's menu"
 done
@@ -427,6 +428,7 @@ requestAnimationFrame(() => requestAnimationFrame(() => document.title = "beside
   expect '^browser: command bar shown$' "Add Split View didn't open the command bar"
   send type "$plain"
   send key return
+  opened=$step
   expect "^browser: splits .*$beside+[0-9][0-9]*" \
     "$plain didn't open beside $nearby:$port/beside.html: $(grep '^browser: splits' "$log" | tail -1)"
   warned_tab=$(grep '^browser: splits' "$log" | tail -1 | grep -o "$beside+[0-9]*" | cut -d+ -f2)
@@ -447,37 +449,36 @@ requestAnimationFrame(() => requestAnimationFrame(() => document.title = "beside
     fail "a click on Chrome's warning before http at $warning, beside a page in a split, didn't give it the keyboard: $key, $focus"
   # Go to Pane 1 and 2, with the warning's keyboard, reach the UI as its other shortcuts do, and
   # move the focus between the panes, the warning hiding and showing again with it (#3214). No
-  # menu item has them, so on the Mac too the core asks the app about them from the warning (#3230).
-  # On the Mac they pass on the check VM and fail on the hosted runner, with the cause not found
-  # (#3230), so they're skipped there. The steps after don't need them: the click above gave the
-  # warning the keyboard, which it still has for the click into the page beside it.
-  if [ "$(uname)" = Darwin ]; then
-    echo "skip: Go to Pane 1 and 2 (⌃⇧1, ⌃⇧2) on Chrome's warning before http in a split, and the click on the warning they show again, on the Mac: they pass on the check VM and fail on the hosted runner, where ⌃⇧1 in the warning runs no command, cause not found (#3230)."
-  else
-    send key 1 ctrl shift
-    shortcut=$step
-    expect "^browser: selected $beside in [0-9.]* ms\$" \
-      "Go to Pane 1 (⌃⇧1) on $warned_tab's warning before http, in a split, didn't focus the pane beside it: $(since "$shortcut" | grep -e '^browser: drive' -e '^browser: command ' -e '^browser: selected' | tail -4 | tr '\n' ' ')"
-    since "$shortcut" | grep -q '^browser: command focus-pane via ' ||
-      fail "⌃⇧1 on $warned_tab's warning before http focused the pane beside it, but not as Go to Pane 1: $(since "$shortcut" | grep '^browser: command ' | tr '\n' ' ')"
-    # The warning hides as its pane loses the focus. On Windows it had the keyboard, which the host
-    # gives the browser window, as Chromium hides a window without activating another (#3330).
-    ! windows || expect "^browser: a tab's dialog hid with the keyboard, which goes to its window\$" \
-      "the warning before http hid after Go to Pane 1 with the keyboard, which its window didn't get"
-    send key 2 ctrl shift
-    expect "^browser: selected $warned_tab in [0-9.]* ms\$" \
-      "Go to Pane 2 (⌃⇧2), after ⌃⇧1 on its warning before http, didn't focus $warned_tab's pane again: $(since "$shortcut" | grep -e '^browser: drive' -e '^browser: command ' -e '^browser: selected' | tail -4 | tr '\n' ' ')"
-    for _ in $(seq 50); do
-      send layout
-      sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q '^browser: layout child ' && break
-      sleep 0.1
-    done
-    warning_box
-    send click $((warning_x + warning_width / 2)) $((warning_y + 8))
-    send state
-    [ "$key" = NativeWidgetMacNSWindow ] ||
-      fail "a click on Chrome's warning before http at $warning, shown again by Go to Pane 2, didn't give it the keyboard: $key, $focus"
-  fi
+  # menu item has them, so on the Mac too the core asks the app about them from the warning, even
+  # when AppKit hands the key to the warning as the text it types (#3230).
+  # The core asks about the warning's keys once it watches it, which on the Mac is once the warning
+  # is on screen, as it may be only as its pane takes the focus (#3230).
+  expect "browser: tab dialog's keys heard\$" \
+    "the core never heard the keys of $warned_tab's warning before http, so it can't ask the app about its shortcuts: $(since "$opened" | grep -e '^browser: drive' -e '^browser: selected' -e 'browser: tab dialog' | tail -4 | tr '\n' ' ')" \
+    "$opened"
+  send key 1 ctrl shift
+  shortcut=$step
+  expect "^browser: selected $beside in [0-9.]* ms\$" \
+    "Go to Pane 1 (⌃⇧1) on $warned_tab's warning before http, in a split, didn't focus the pane beside it: $(since "$shortcut" | grep -e '^browser: drive' -e '^browser: command ' -e '^browser: selected' -e 'browser: tab dialog let' | tail -4 | tr '\n' ' ')"
+  since "$shortcut" | grep -q '^browser: command focus-pane via ' ||
+    fail "⌃⇧1 on $warned_tab's warning before http focused the pane beside it, but not as Go to Pane 1: $(since "$shortcut" | grep '^browser: command ' | tr '\n' ' ')"
+  # The warning hides as its pane loses the focus. On Windows it had the keyboard, which the host
+  # gives the browser window, as Chromium hides a window without activating another (#3330).
+  ! windows || expect "^browser: a tab's dialog hid with the keyboard, which goes to its window\$" \
+    "the warning before http hid after Go to Pane 1 with the keyboard, which its window didn't get"
+  send key 2 ctrl shift
+  expect "^browser: selected $warned_tab in [0-9.]* ms\$" \
+    "Go to Pane 2 (⌃⇧2), after ⌃⇧1 on its warning before http, didn't focus $warned_tab's pane again: $(since "$shortcut" | grep -e '^browser: drive' -e '^browser: command ' -e '^browser: selected' | tail -4 | tr '\n' ' ')"
+  for _ in $(seq 50); do
+    send layout
+    sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q '^browser: layout child ' && break
+    sleep 0.1
+  done
+  warning_box
+  send click $((warning_x + warning_width / 2)) $((warning_y + 8))
+  send state
+  [ "$key" = NativeWidgetMacNSWindow ] ||
+    fail "a click on Chrome's warning before http at $warning, shown again by Go to Pane 2, didn't give it the keyboard: $key, $focus"
   # The page beside it, on the left. On the Mac the press is the window's first click while the
   # warning's window has the keyboard, which reaches the page as elsewhere (#3210).
   pane=$(echo "$panes" | sed -n 1p)
@@ -520,12 +521,12 @@ requestAnimationFrame(() => requestAnimationFrame(() => document.title = "beside
     fail "a key after a click on $warned_tab's page below its warning before http reached the page beside it"
   since "$pressed" | grep -q "^browser: page $warned_tab back [01] forward [01] loading 1 " &&
     fail "a click on $warned_tab's page below its warning before http reached the page under the warning: $(since "$pressed" | grep "^browser: page $warned_tab " | tail -3 | tr '\n' ' ')"
-  # The page beside it again, for the ⌘W that closes it.
-  pane=$(echo "$panes" | sed -n 1p)
-  pane_x=${pane%%,*} pane_y=${pane#*,}
-  pane_y=${pane_y%% *}
-  send click $((pane_x + 100)) $((pane_y + 100))
-  expect "^browser: selected $beside\$" "a click on the page beside $warned_tab's warning before http, after the warned pane's, didn't focus its pane again"
+  # The page beside it again, for the ⌘W that closes it, by Go to Pane 1 from the warning: shown
+  # again with its pane, it still has its shortcuts asked about (#3230).
+  send key 1 ctrl shift
+  again=$step
+  expect "^browser: selected $beside in [0-9.]* ms\$" \
+    "Go to Pane 1 (⌃⇧1) on $warned_tab's warning before http, shown again as its pane took the focus, didn't focus the pane beside it: $(since "$again" | grep -e '^browser: drive' -e '^browser: command ' -e '^browser: selected' -e 'browser: tab dialog let' | tail -4 | tr '\n' ' ')"
   send key w cmd
   expect "^browser: tab $beside closed\$" "⌘W didn't close the pane beside $warned_tab's warning before http"
   expect "^browser: panes $warned_tab\$" "⌘W on the pane beside the warning didn't leave $warned_tab alone"
@@ -573,6 +574,31 @@ if [ "$major" -ge 157 ]; then
   if [ "$(uname)" != Linux ]; then
     [ "$key" = NativeWidgetMacNSWindow ] ||
       fail "the command bar closing over Chrome's warning before http gave the keyboard to $key, on $focus, not back to the warning"
+  fi
+  # F6 over Chrome's warning before http rings the tab's row, and Tab from there goes into the page
+  # under the warning, whose taking the keyboard hands it to the warning. Before #3443 the warning
+  # took it back from the ring, as F6 activating the window focused the page first. Windows alone,
+  # whose pane the warning took it back from.
+  if windows; then
+    send key f6
+    expect '^browser: sidebar keyed ' "F6 from Chrome's warning before http didn't ring the tab's row"
+    send state
+    in_browser AccessKitSubclassOfGPUIView "after F6 over Chrome's warning before http"
+    # The ring hearing Tab says the sidebar kept the keyboard past the tasks F6 left, which come
+    # before Tab's.
+    send key tab
+    expect '^browser: sidebar keys left by tab$' \
+      "Tab after F6 over Chrome's warning before http didn't reach the ring: the warning took the keyboard back from it"
+    expect '^browser: ring gave the page its first control$' \
+      "Tab from the ring didn't go into the page under Chrome's warning before http"
+    # The warning then has it, which the state can't tell from the page under it: Return on its
+    # focused Go back leaves the warning, where the page would drop the key (#2625). Windows hands
+    # the warning's window the keyboard before the core's take-back asks, which then logs nothing
+    # (44451704979). The warning comes again for the steps after.
+    send key return
+    expect "^browser: page $tab trouble fine\$" \
+      "Return after Tab from the ring didn't leave Chrome's warning before http: the page under it had the keyboard, not the warning"
+    warned
   fi
   # A click on the page beside the warning: the page drops it, but on the Mac AppKit gives the
   # page's view the keyboard all the same, where every key is dropped. The core gives it back to

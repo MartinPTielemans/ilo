@@ -464,7 +464,8 @@ pub(crate) fn open_window_as(
             cx.spawn(async move |cx| {
                 unsafe { platform::host_close_launch_window() };
                 // check.sh reads this line: the UI comes out from under the launch picture.
-                log!("browser: UI shown at {:.1} ms", unsafe {
+                // In every launch: flatpak.yml reads it with no check flag, and it holds a time.
+                log_always!("browser: UI shown at {:.1} ms", unsafe {
                     platform::host_since_launch()
                 });
                 // Unless the compositor's answer to the full screen undone has put it there.
@@ -643,8 +644,6 @@ pub(crate) fn finish_opening(
         platform::host_watch_option_taps(option_tapped);
         #[cfg(not(target_os = "linux"))]
         platform::host_watch_ui_keyboard(ui_keyboard_left);
-        #[cfg(not(target_os = "linux"))]
-        platform::host_watch_page_presses(page_pressed);
         platform::host_watch_resigning_active(launch_picture_on_resigning);
         platform::host_watch_active(became_active);
     }
@@ -689,6 +688,19 @@ pub(crate) fn finish_opening(
                     let (x, y) = icon_picker::ARROW_TIP;
                     platform::host_set_overlay_growth(ICON_PICKER, x.into(), y.into());
                 }
+            }
+        },
+        cx,
+    );
+    when_asked::<agent_request::AgentRequest>(
+        |cx| {
+            if let Some(shown) = agent_request::open(Rc::new(AgentRequestHost), cx)
+                && let Ok(view) = shown.update(cx, |_, window, _| ns_view(window))
+            {
+                let radius = agent_request::RADIUS.into();
+                elevate(AGENT_REQUEST, Level::Popover);
+                let dismissed = agent_request_dismissed;
+                unsafe { platform::host_add_overlay(AGENT_REQUEST, view, radius, dismissed) };
             }
         },
         cx,

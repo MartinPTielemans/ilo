@@ -202,12 +202,6 @@ void host_watch_option_taps(void (*tapped)(void* ui_view));
 // else. Linux's UI hears it itself, through GPUI's patch and the overlays it shows.
 void host_watch_ui_keyboard(void (*left)(void* ui_view));
 
-// Calls |pressed| with the UI's view of a browser window whose page the user presses a mouse
-// button in, as the press goes on to the page: a click in an agent's page takes it over (#1080).
-// Never for a press in the UI or the window's frame, nor for the wheel. On Linux the app hears
-// them itself, from GPUI under Wayland and from the X server while an agent works (page_presses.rs).
-void host_watch_page_presses(void (*pressed)(void* ui_view));
-
 // Whether a menu is open, the menu bar's or a context menu, and if so calls |apply| once none is,
 // instead of any function an earlier call left waiting. AppKit can crash when the main menu is
 // replaced while it tracks one, and the core's callbacks still come in while it does.
@@ -249,15 +243,17 @@ double host_since_launch(void);
 void host_forget_window(void* ui_view);
 
 // The overlays: the command bar, the Space's icon and theme pickers, a closed folder's preview, the
-// Boost editor and the switcher a held ⌃Tab shows. One shows at a time.
+// Boost editor, the switcher a held ⌃Tab shows and the whole of an agent's request beside its
+// question. One shows at a time.
 #define HOST_COMMAND_BAR 0
 #define HOST_ICON_PICKER 1
 #define HOST_THEME_PICKER 2
 #define HOST_FOLDER_PREVIEW 3
 #define HOST_BOOST_EDITOR 4
 #define HOST_TAB_SWITCHER 5
+#define HOST_AGENT_REQUEST 6
 // The Site Controls take the same elevation call, though they aren't one of the overlays.
-#define HOST_SITE_CONTROLS 6
+#define HOST_SITE_CONTROLS 7
 
 // Gives the |overlay| (or the Site Controls) the shadow its elevation level draws, in Core
 // Animation's terms: a black line round its shape and a black drop shadow, each with an opacity
@@ -438,6 +434,13 @@ void host_show_dialog(void* ui_view, double x, double y, double width, double he
 // Hides the dialog's window. The browser window gets the keyboard back, with the focus where it
 // was.
 void host_hide_dialog(void);
+
+// The dialog was answered or taken back and draws its leaving: its window takes no more clicks,
+// and the browser window has the keyboard back at once, with the focus where it was, so a click on
+// the page or the UI as it leaves reaches them (#3681). Keys are still held until it hides
+// (host_hold_keys), as the page's question is answered then. The Mac's alone: Linux's dialog does
+// it in overlays::dialog_leaving, and Windows' holds the keys until it hides.
+void host_dialog_leaving(void);
 
 // Makes the window of |view| the Site Controls', which float over a browser window as its child
 // when shown, translucent over a blur in their shape, with a shadow. It starts hidden. |dismissed|
@@ -921,6 +924,11 @@ void host_day_starts(double starts[4]);
 // and the app quits before Chromium starts. Without the key, Chromium can't read the profile's
 // cookies and passwords.
 bool host_keep_keychain_key(void);
+
+// On the Mac, whether this build's signature holds a keychain group for passkeys, one of its
+// keychain-access-groups ending in ".webauthn", as the core reads it (core/platform/mac/keychain.mm):
+// only then can a profile keep passkeys on this Mac, and they go with it when it's deleted.
+bool host_keeps_passkeys(void);
 
 // Whether this build updates itself: a release build that carries the updater, its feed and its
 // key, and on Windows not an MSIX from the Microsoft Store, which the Store updates.

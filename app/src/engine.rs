@@ -654,14 +654,6 @@ impl Browser for Engine {
         agents_core::update(move |agents, cx| agents.hand_back(tab, cx));
     }
 
-    #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
-    fn hear_page_presses(&self, on: bool, cx: &mut App) {
-        // The Mac's and Windows' hosts always tell the app (host_watch_page_presses), and Wayland's
-        // GPUI does; X11 tells the host only while it listens.
-        #[cfg(target_os = "linux")]
-        crate::page_presses::hear(on, cx);
-    }
-
     fn stop_agent(&self, agent: SharedString, _: &mut App) {
         // A task's Stop, from its page's strip too, ends its turn as well as what it's doing.
         agents_core::update(move |agents, cx| match browser::agents::is_task(&agent) {
@@ -1352,6 +1344,10 @@ impl Browser for Engine {
         shell::FavoritesScope::from_core(unsafe { bc::bc_favorites_scope() })
     }
 
+    fn keeps_passkeys(&self) -> bool {
+        crate::platform::keeps_passkeys()
+    }
+
     fn context_menu(
         &self,
         items: Vec<MenuEntry>,
@@ -1642,6 +1638,10 @@ impl Browser for Engine {
         use_system_engine(tab);
     }
 
+    fn leave_system_engine(&self, tab: u64, _: &mut App) {
+        leave_system_engine(tab);
+    }
+
     fn close_media_note(&self, tab: u64, _: &mut App) {
         unsafe { bc::bc_tab_close_media_note(tab) };
     }
@@ -1913,6 +1913,22 @@ impl Browser for Engine {
 
     fn command_bar_open(&self, cx: &App) -> bool {
         command_bar::is_open(cx)
+    }
+
+    fn field_window_typing(&self, cx: &mut App) -> bool {
+        find_bar::typing(self.window, cx)
+            || offer::typing(self.window, cx)
+            || icon_picker::typing(cx)
+            || boost_editor::typing(cx)
+            || folder_preview::typing(cx)
+    }
+
+    fn page_has_keyboard(&self, _: &App) -> Option<bool> {
+        // The core routes every key between page and UI there, X11's by the X server's focus.
+        #[cfg(target_os = "linux")]
+        return Some(unsafe { !bc::bc_window_keyboard_is_ui(self.window) });
+        #[cfg(not(target_os = "linux"))]
+        None
     }
 
     fn command_bar_follows(&self, tabs: Vec<BarTab>, open_tabs: Vec<BarTab>, cx: &mut App) -> bool {

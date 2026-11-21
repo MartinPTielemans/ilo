@@ -32,10 +32,10 @@ use browser::theme::Appearance;
 use browser::widevine::Widevine;
 use browser::window_frames::{self, Frame};
 use browser::{
-    account, boost_editor, capture, command_bar, dialog, dock_dot, elevation::Level,
+    account, agent_request, boost_editor, capture, command_bar, dialog, dock_dot, elevation::Level,
     folder_preview, hover_card, icon_picker, launch, launch_picture, link_preview, link_target,
-    log, log_in, menu, offer, passwords, site_controls, tab_switcher, theme_picker, toast, tooltip,
-    updates, zoom_hud,
+    log, log_always, log_in, menu, offer, passwords, site_controls, tab_switcher, theme_picker,
+    toast, tooltip, updates, zoom_hud,
 };
 use gpui::{
     AnyWindowHandle, App, ApplicationHandle, AsyncApp, Bounds, Context, Focusable, Image,
@@ -106,8 +106,6 @@ mod needs_you;
 #[path = "../platform/linux/overlays.rs"]
 mod overlays;
 #[cfg(target_os = "linux")]
-#[path = "../platform/linux/page_presses.rs"]
-mod page_presses;
 #[cfg(target_os = "linux")]
 #[path = "../platform/linux/panels.rs"]
 mod panels;
@@ -261,8 +259,12 @@ fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static st
     if held_escape::keeps_from_page(unsafe { &*key }) {
         return (true, "held escape");
     }
-    // Any key ends the hover card, as in Dia, the page's as the UI's.
-    update_app(hover_card::close);
+    // Any key ends the hover card, as in Dia, the page's as the UI's, but a modifier alone, which
+    // starts a ⌘- or ⌥-click on its rows: the UI hears those as modifiers changed, never as a key.
+    let name = unsafe { CStr::from_ptr((*key).key) };
+    if ![c"Shift", c"Control", c"Alt", c"Meta"].contains(&name) {
+        update_app(hover_card::close);
+    }
     // The page has the keyboard, so the sidebar's ring of Focus Sidebar has gone stale.
     update_tab_window(tab, |shell, cx| shell.leave_keys("page", cx));
     if let Some(kept) = link_card_key(tab, unsafe { &*key }) {
@@ -456,11 +458,10 @@ unsafe extern "C" fn started(_: *mut c_void) {
                 }
             },
             // The page is in the window's own surface, so GPUI's focus doesn't see it take the
-            // keyboard, nor the Shell hear the press (page_pressed).
+            // keyboard.
             page_pressed: |surface| {
                 if let Some(window) = window_in(surface) {
                     ui_keyboard_left_in(window);
-                    page_pressed_in(window);
                 }
             },
             is_ui: |surface| {
@@ -851,6 +852,8 @@ extern "C" fn became_active() {
         import_host::became_active(cx);
         daily_count_host::became_active(cx);
         browser::shell::follow_scroll_bars(cx);
+        #[cfg(target_os = "windows")]
+        update_shells_in(cx, |shell, _| shell.app_came_back());
         // GTK's settings file, Linux's last word, says nothing as it changes.
         #[cfg(target_os = "linux")]
         follow_reduce_motion(cx);
@@ -899,38 +902,9 @@ fn set_reduce_motion(reduce: bool, cx: &mut App) {
     }
 }
 
-/// Where Chromium keeps the profiles, and the app the user's keys. A dev build keeps a profile of
-/// its own, never the owner's, since the checks delete what the last run saved. The prod build
-/// keeps the user's in Application Support, under the product's name, or in Local AppData on
-/// Windows.
+/// Where Chromium keeps the profiles, and the app the user's keys (browser::profile_dir).
 fn profile_dir() -> String {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let name = include_str!("../branding/name").trim();
-    std::env::var("BROWSER_PROFILE_DIR").unwrap_or_else(|_| {
-        if cfg!(target_os = "windows") {
-            let local = std::env::var("LOCALAPPDATA").unwrap_or_default();
-            if cfg!(feature = "prod") {
-                format!(r"{local}\{name}\User Data")
-            } else {
-                format!(r"{local}\browser-app")
-            }
-        } else if cfg!(target_os = "linux") {
-            // A Flatpak points XDG_CONFIG_HOME at its own folder, the only one it may write.
-            if cfg!(feature = "prod") {
-                let config = std::env::var("XDG_CONFIG_HOME")
-                    .ok()
-                    .filter(|dir| !dir.is_empty())
-                    .unwrap_or_else(|| format!("{home}/.config"));
-                format!("{config}/{name}")
-            } else {
-                format!("{home}/.cache/browser-app")
-            }
-        } else if cfg!(feature = "prod") {
-            format!("{home}/Library/Application Support/{name}")
-        } else {
-            format!("{home}/Library/Caches/browser-app")
-        }
-    })
+    browser::profile_dir()
 }
 
 /// What the app gives the core to start with: Chromium's switches, from the arguments the process
@@ -1122,6 +1096,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         tab_press_before_page: Some(tab_press_before_page),
         tab_press_moved: Some(tab_press_moved),
         tab_press_released: Some(tab_press_released),
+        tab_page_pressed: Some(tab_page_pressed),
         tab_boost_zapped: Some(tab_boost_zapped),
         tab_boost_zap_ended: Some(tab_boost_zap_ended),
         tab_arrange_state: Some(boosts_host::tab_arrange_state),

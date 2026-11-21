@@ -63,7 +63,7 @@ impl Shell {
         });
         // As for the form.
         self.dock(cx);
-        self.browser.focus_ui(cx);
+        self.take_keyboard(cx);
         self.focus_renaming = true;
         cx.notify();
     }
@@ -108,7 +108,7 @@ impl Shell {
             in_library: true,
             _watches: Vec::new(),
         });
-        self.browser.focus_ui(cx);
+        self.take_keyboard(cx);
         self.focus_renaming = true;
         cx.notify();
     }
@@ -139,7 +139,7 @@ impl Shell {
         });
         // As for a Space's name.
         self.dock(cx);
-        self.browser.focus_ui(cx);
+        self.take_keyboard(cx);
         self.focus_renaming = true;
         cx.notify();
     }
@@ -162,7 +162,7 @@ impl Shell {
             _watches: Vec::new(),
         });
         self.dock(cx);
-        self.browser.focus_ui(cx);
+        self.take_keyboard(cx);
         self.focus_renaming = true;
         cx.notify();
     }
@@ -516,7 +516,7 @@ impl Shell {
         });
         // As for a Space's name.
         self.dock(cx);
-        self.browser.focus_ui(cx);
+        self.take_keyboard(cx);
         self.focus_renaming = true;
         cx.notify();
     }
@@ -563,8 +563,11 @@ impl Shell {
             _watches: Vec::new(),
         });
         self.board_named = Some(tab);
+        // The field is in the sidebar, which the Library covers, as New Board from its empty
+        // Boards list or with its key leaves it.
+        self.set_library(false, cx);
         self.dock(cx);
-        self.browser.focus_ui(cx);
+        self.take_keyboard(cx);
         self.focus_renaming = true;
         cx.notify();
     }
@@ -589,7 +592,7 @@ impl Shell {
             in_library: false,
             _watches: Vec::new(),
         });
-        self.browser.focus_ui(cx);
+        self.take_keyboard(cx);
         self.focus_renaming = true;
         cx.notify();
     }
@@ -687,6 +690,8 @@ impl Shell {
             }
             self.name_left(window, cx)
         }
+        // Once the field is left, from where the focus has gone.
+        self.page_took_keyboard(window, cx);
     }
 
     pub(super) fn cancel_name(&mut self, window: &mut Window, cx: &mut Context<Self>) {

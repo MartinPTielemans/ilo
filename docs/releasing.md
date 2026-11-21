@@ -37,7 +37,7 @@ A release's core batch lands first, as one squash PR from `batch/<version>`, or 
 
 From that squash until the release's branch is cut at its version commit, main takes only PRs that change checks, CI or docs, plus the fixes the orchestrator names for the release. A PR that changes `app/src`, `app/platform`, `core` or `engine` waits until the branch is cut, so the release is the tree its gate proved, plus fixes each proven on their own.
 
-1. **Move the version** on the release's branch, or on main until the nightly track is on. That's `app/Cargo.toml`, `app/Cargo.lock` and the metainfo's release line, merged as any change is.
+1. **Move the version** on the release's branch, or on main until the nightly track is on. That's `app/Cargo.toml`, `app/Cargo.lock` and the metainfo's release line, merged as any change is. It's in before the gate starts, since the gate runs on the commit that gets the tag. Main moves to the next version as soon as a release is cut, so a batch that lands for it already carries it; 0.2.1's batch landed on 0.2.0, and its tag went on a version-only child of the gated commit.
 2. **Make sure each OS has an engine for that commit.** Each OS's job stops without one, or packs an older core.
    - **On main:** Linux and Windows build nightly, so dispatch both on it: `gh workflow run engine-linux.yml --ref main` and `gh workflow run engine-windows-cross.yml --ref main`, with main at that commit. Then wait for their releases `engine-linux-<commit>` and `engine-windows-<commit>`. The Mac engine must exist for the commit too.
    - **On a release branch:** dispatch the same two with `--ref release/0.<minor>`. The Mac's is built on the owner's MacBook from the branch's commit, with `engine/build.sh`, then `tools/mac-engine-publish.sh`. `tools/mac-nightly.sh` builds main only.
@@ -73,6 +73,7 @@ Publish each draft before building the next: a Linux build doesn't follow a draf
 - **The night's commit** is the newest on main whose core and engine are those of the Mac engine that `engine/fetch.sh` takes there (`tools/nightly-commit.sh`).
   - Windows joins when its engine fits that commit too. Otherwise the feed keeps Windows's previous build.
   - The appcast is signed beside the Mac's build, so while the Mac engine is behind main's core (the MacBook slept), the night builds nothing new.
+  - A commit that changed only `mobile/`, the iPhone app's, isn't a night's: the night is the commit before it, so a merge of phone work alone builds nothing.
   - A night whose commit the feed has already builds nothing.
 - **What it builds** is the release's own jobs, so each night rehearses a release:
   - the Mac DMG, signed and notarized;
@@ -122,6 +123,17 @@ Every other release in this repository, such as `updates` and `nightly`, is made
 | `UPDATE_PRIVATE_KEY` | The updates' signing key: the contents of the file `generate_keys --account ilo -x <file>` writes (`tools/appcast.sh`) |
 
 The Mac and Windows builds carry the key's public half from `app/branding/update-key`, or from an `UPDATE_PUBLIC_KEY` secret, which overrides the file when it's set.
+
+The Mac's Developer ID provisioning profile isn't a secret: every release carries it, so it's committed as `app/entitlements/developer-id.provisionprofile`, and a release never asks Apple's API for it. `tools/check-profile.sh`, which the Mac job runs before the build and `tools/release.sh` before signing, refuses a profile that:
+- doesn't list the certificate in `MAC_CERTIFICATE_P12`;
+- isn't for the App ID `938WK3V9K9.app.ilo.browser`;
+- doesn't grant every key in `app/entitlements/release.plist`;
+- expires within 30 days, by its own date;
+- or lists a certificate that has expired.
+
+A certificate within 60 days of its end only warns: a release signed in its last days is as good as any other, and a security release mustn't wait on a visit to the portal. After `tools/release.sh` signs the app, and again on the DMG in the Mac job, `tools/start-signed.sh` starts the signed app as far as macOS's check of its profile and keys, where a mismatch stops it, and the release stops with it.
+
+The profile's own date is 18 years out, but the certificate it lists expires on 2027-02-01, and a new certificate needs a new profile. So does a new key in `release.plist`, such as the passkey entitlement once Apple grants it. The release's API key can't make profiles. The owner makes one in the developer portal (Profiles › Distribution › Developer ID, App ID `app.ilo.browser`, the current certificate), downloads it, and commits it in place of the file.
 
 **Crash reports' symbols** go to the collector `app/branding/crash-reports` names only with the secret `SENTRY_AUTH_TOKEN`, an organization auth token that may upload debug files, and the variables `SENTRY_URL`, `SENTRY_ORG` and `SENTRY_PROJECT`: for ilo's, `https://de.sentry.io` (Sentry's EU region), `ilo-rg` and `ilo`. Each OS's job uploads its own (`tools/symbols.sh`), and `app/build.sh prod` uploads the Mac's with the same four in its environment, with the engine's dSYMs the Mac job fetches first (`engine/fetch.sh symbols`). An engine released without them makes a release with a warning, and Mac symbols (`mac-symbols.yml`) uploads them for that version once its release has them. Without the token the packages are still built, and say no symbols were uploaded.
 

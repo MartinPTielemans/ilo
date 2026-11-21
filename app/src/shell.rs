@@ -310,6 +310,10 @@ const REVEAL_OVERSHOOT: f32 = 8.;
 
 /// The site's demo, in a page's canvas, where wheel events carry no phase.
 const WEB: bool = cfg!(target_family = "wasm");
+/// Whether something blurs what's behind the browser window. Only the Mac's material does: on
+/// Wayland the UI is a subsurface under Chromium's translucent surface, which no compositor's
+/// blur reaches, and on X11 and Windows nothing asks for one (#3676).
+const BLURRED: bool = cfg!(target_os = "macos");
 
 /// The width of the band inside the browser window's edges that resizes it on Linux, as the core's
 /// (`bc_window_start_resize`).
@@ -1593,6 +1597,9 @@ pub struct Shell {
     /// ⌘L, from where it came, pressed after the tab shown closed and before the core said which
     /// shows next, which the bar then opens on (#2953).
     edit_url_waits: Option<String>,
+    /// ⌘W pressed after the tab shown closed and before the core said which shows next, with the
+    /// Space it was pressed in and how many times: each closes the tab it shows next (#3570).
+    close_waits: Option<(u64, usize)>,
     drag: Option<Drag>,
     /// A tab's row dragged out of the window, as the system drags it, until it's let go.
     window_drag: Option<drag::WindowDrag>,
@@ -1811,6 +1818,10 @@ pub struct Shell {
     /// What the menu bar was last given for this window, and the window's title.
     menus: MenuBar,
     window_title: SharedString,
+    /// The name of the window's root node, its Space's, and whether the window is still to take it
+    /// (`update_title`).
+    root_name: SharedString,
+    root_name_due: bool,
     /// What the URL field said when it last drew, for its log line.
     url_field_drawn: RefCell<SharedString>,
     /// Whether the header last drew reload or stop, for its log line.
@@ -1874,6 +1885,15 @@ pub struct Shell {
     /// What an agent asks the user first, in every window (agent_question.rs).
     agent_question: Option<crate::agents::Question>,
     agent_question_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Each row of a card of several changes as it was drawn, its text and where the agent's mark
+    /// is in it, which the tests read.
+    #[cfg(test)]
+    agent_question_rows: RefCell<Vec<(gpui::TextLayout, std::ops::Range<usize>)>>,
+    /// Where the request card's "See the whole request" is, which check.sh clicks (#3548).
+    agent_request_see_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The request card's "See the whole request", where Escape in the whole request puts the
+    /// keyboard back (#3548).
+    agent_request_see: FocusHandle,
     /// Every Space's agent tasks' cards, newest first, as the Agents last said (Agent task).
     task_cards: Vec<crate::agents::task::Card>,
     /// The window's tasks' plates at the sidebar's foot, and ⌘T's slot among them.
@@ -1903,6 +1923,8 @@ pub struct Shell {
     task_core: u64,
     task_live_logged: Option<u64>,
     task_strip_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The words the strip last said, and for which tab, which check.sh reads as they change.
+    task_strip_said: RefCell<Option<(u64, String)>>,
     /// The tabs whose player × put away until their page plays again.
     media_dismissed: HashSet<u64>,
     /// The players last drawn, as the log has them, and where the bottom one is.
@@ -1992,6 +2014,14 @@ pub struct Shell {
     /// its tab and id, where, and whether at rest, or none. Untold once it comes to the front,
     /// when the dialog shown may be another window's.
     page_dialog_shown: Option<Option<(u64, u64, (Bounds<Pixels>, f32), bool)>>,
+    /// The page's dialog up over the card, by its tab and id, which a field taking the keyboard
+    /// after it came doesn't take down.
+    page_dialog_up: Option<(u64, u64)>,
+    /// The page's dialog waiting while the user types in a field of ilo's, by its tab and id.
+    page_dialog_waits: Option<(u64, u64)>,
+    /// The host said the page took the keyboard, with GPUI's focus where it was then, until a press
+    /// in the UI gives the UI the keyboard back, as each host does, or the focus moves on.
+    page_keyboard: Option<Option<gpui::WeakFocusHandle>>,
     /// The tab or Space the user asked for and when, until it's shown.
     switching: Option<(Switch, Instant)>,
     /// Where the window's background was pressed, until the pointer moves past DRAG_START and it
@@ -2026,9 +2056,10 @@ pub struct Shell {
     /// Whether Top bar is on, as `TopBar` said as the window last drew (`Shell::bar_on`).
     top_bar: bool,
     forced_tone: Option<Tone>,
-    /// What lies under the tint where nothing else does: the preview's, whose window has no
-    /// material and shows the desktop through the tint, as the app's never does (#3033).
-    ground: Option<Rgba>,
+    /// Whether something blurs what's behind the window under its tint, as the Mac's material
+    /// does. Where nothing does, the tint would show what's behind sharp, so the window draws its
+    /// look opaque, over the stand-in (#3676).
+    blurred: bool,
     window_active: bool,
     window_watches: Vec<Subscription>,
     /// Whether the window is the one the user is in, as the host says (host_watch_window_main):
@@ -2192,6 +2223,7 @@ impl Shell {
             press_closed_bar: false,
             bar_follows: false,
             edit_url_waits: None,
+            close_waits: None,
             drag: None,
             window_drag: None,
             dragged: false,
@@ -2296,6 +2328,8 @@ impl Shell {
             sidebar_backups: HashMap::new(),
             menus: MenuBar::default(),
             window_title: SharedString::default(),
+            root_name: SharedString::default(),
+            root_name_due: false,
             url_field_drawn: RefCell::default(),
             reload_drawn: Cell::default(),
             back_drawn: Cell::default(),
@@ -2328,6 +2362,10 @@ impl Shell {
             question_settling: RefCell::default(),
             agent_question: None,
             agent_question_drawn: Rc::default(),
+            #[cfg(test)]
+            agent_question_rows: RefCell::default(),
+            agent_request_see_drawn: Rc::default(),
+            agent_request_see: cx.focus_handle(),
             task_cards: Vec::new(),
             foot: task_cards::Foot::default(),
             closed_task: None,
@@ -2342,6 +2380,7 @@ impl Shell {
             task_core: 0,
             task_live_logged: None,
             task_strip_drawn: Rc::default(),
+            task_strip_said: RefCell::default(),
             media_dismissed: HashSet::new(),
             media_logged: RefCell::default(),
             media_stack: Default::default(),
@@ -2391,6 +2430,9 @@ impl Shell {
             hang_noted: None,
             page_dialogs: HashMap::new(),
             page_dialog_shown: Some(None),
+            page_dialog_up: None,
+            page_dialog_waits: None,
+            page_keyboard: None,
             picker_pending: None,
             theme_preview: None,
             name_row_drawn: Rc::default(),
@@ -2414,7 +2456,7 @@ impl Shell {
             right: false,
             top_bar: false,
             forced_tone: None,
-            ground: None,
+            blurred: BLURRED,
             window_active: true,
             window_main: true,
             nav_dimmed_drawn: Cell::new(None),
@@ -3109,6 +3151,10 @@ impl Shell {
 
     /// The Space the window shows. Which of its tabs shows follows in set_selected.
     pub fn set_space(&mut self, space: u64, cx: &mut Context<Self>) {
+        // Another Space shown ends ⌘W's wait for the tab its own showed next (#3570).
+        if self.close_waits.is_some_and(|(waits, _)| waits != space) {
+            self.close_waits = None;
+        }
         if self.task_space_shown(space, cx) {
             return;
         }
@@ -3491,6 +3537,8 @@ impl Shell {
     }
 
     pub fn set_selected(&mut self, tab: u64, cx: &mut Context<Self>) {
+        // ⌘W's wait is for this selection only, whichever way it goes (#3570).
+        let close_waits = self.close_waits.take();
         if self.task_tab_shown(tab, cx) {
             return;
         }
@@ -3539,7 +3587,7 @@ impl Shell {
         // them, unless the UI has them, and the next page shown, as a window's first, has them back
         // (#895).
         if tab == 0 && cfg!(any(target_os = "linux", target_os = "windows")) {
-            self.browser.hold_keyboard_for_page(cx);
+            self.hold_keyboard_for_page(cx);
         }
         // The command bar open over the Space before lists this one's tabs and suggestions now, so
         // a pick never goes to the other or its profile (Arc).
@@ -3568,6 +3616,16 @@ impl Shell {
         if let Some(from) = self.edit_url_waits.take() {
             self.edit_url(&from, cx);
         }
+        // A Space left empty shows none, and the press was for a tab, so the window stays; nor
+        // does it close a tab of another Space shown since. Each press left waits for the
+        // selection after this close.
+        if let Some((space, presses)) = close_waits
+            && tab != 0
+            && self.spot_of(tab).is_some_and(|spot| spot.space == space)
+        {
+            self.close_shown(cx);
+            self.close_waits = (presses > 1).then_some((space, presses - 1));
+        }
         self.update_title(cx);
         self.update_menus(cx);
         cx.notify();
@@ -3595,6 +3653,7 @@ impl Shell {
 
     /// The command bar closed with no tab chosen in it: the user left it, or its ask ran a task.
     pub fn command_bar_dismissed(&mut self, cx: &mut Context<Self>) {
+        self.field_let_go(cx);
         self.set_bar_over_card(false, cx);
         self.set_new_tab(false, cx);
         if self.adding_pane.take().is_some() {
@@ -4117,6 +4176,8 @@ impl Shell {
     }
 
     fn select(&mut self, tab: u64, cx: &mut Context<Self>) {
+        // The tab the user picks is the one they want, so ⌘W's wait for the next ends (#3570).
+        self.close_waits = None;
         // While a task's page shows, the core shows the task's Space, so the user's tab selected is
         // shown again by selecting it.
         let core_away = self.task_core != 0;
@@ -4320,6 +4381,26 @@ impl Shell {
         .size_full()
     }
 
+    /// A press anywhere in the window's own view, which gives the UI the keyboard on every host:
+    /// what the host said of the page taking it no longer holds. The window's, as the rows and
+    /// fields keep their presses from the root.
+    fn ui_press_listener(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let shell = cx.weak_entity();
+        canvas(
+            |_, _, _| {},
+            move |_, _, window, _| {
+                let shell = shell.clone();
+                window.on_mouse_event(move |_: &MouseDownEvent, phase, _, cx| {
+                    if phase == DispatchPhase::Capture {
+                        shell.update(cx, |shell, _| shell.page_keyboard = None).ok();
+                    }
+                });
+            },
+        )
+        .absolute()
+        .size_full()
+    }
+
     /// The pointer leaving the window's own view, for the page's or another window, which ends a
     /// wait at the edge and the sidebar's hover. The window's, not the sidebar's: with the sidebar
     /// hidden no listener of its heard the leave on Linux and Windows, whose pages are windows the
@@ -4509,8 +4590,17 @@ impl Focusable for Shell {
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::text_input::drawing(window);
         self.a11y = window.is_a11y_active();
         self.watch_appearance(window, cx);
+        // After the frame, which takes the root's name as it starts and asks for none while it's
+        // drawn, so another comes with it.
+        if std::mem::take(&mut self.root_name_due) {
+            cx.defer_in(window, |shell, window, _| {
+                window.set_accessible_window_title(&shell.root_name);
+                window.refresh();
+            });
+        }
         // A Space shown with a Live Folder asks for their lists once its switch is drawn, so the
         // fetch never holds a frame of it. Deferred, as the window's ask is: a next-frame callback
         // asks for a frame of its own (#3004).
@@ -4520,6 +4610,7 @@ impl Render for Shell {
                 cx.defer_in(window, |shell, _, cx| shell.live_space_shown(cx));
             }
         }
+        self.see_gone_keyboard(window, cx);
         self.lone_header = cx
             .try_global::<LoneSpaceHeader>()
             .is_some_and(|kept| kept.0);
@@ -4743,7 +4834,10 @@ impl Render for Shell {
         for line in self.logged_once_laid.drain(..) {
             log!("{line}");
         }
-        self.show_page_dialog(cx);
+        // Once the frame has drawn, which says whether a field of ilo's has the keyboard.
+        cx.defer_in(window, |shell, window, cx| {
+            shell.show_page_dialog(window, cx)
+        });
         self.show_mini_bar(cx);
         self.show_foot_bar(cx);
         let card_left = self.card_left();
@@ -4914,6 +5008,7 @@ impl Render for Shell {
             .children((!WEB).then(|| self.window_background()))
             .children(WEB.then(|| self.web_backdrop()).into_iter().flatten())
             .child(self.leave_listener(cx))
+            .child(self.ui_press_listener(cx))
             // The page views go over the cards, as native views. A task the page area shows takes
             // the card's place, the Space's page pushed out of the window (task_area.rs).
             .when(normal, |shell| {
@@ -4928,7 +5023,7 @@ impl Render for Shell {
                     )
                     .children(self.picture_element(cx))
                     .children(self.empty_card(cx))
-                    .children(self.crash_cards(cx))
+                    .children(self.crash_cards(self.page_frame(self.viewport).0, cx))
                     .children(self.pane_gaps(cx))
                     .children(self.pane_handles(cx))
             })
@@ -5113,12 +5208,10 @@ impl Shell {
                     .child(form)
             }
             (None, Some(form), _) => sidebar.child(self.space_form(form, None, cx)),
-            (None, None, Some((form, left))) => {
-                let left = left.elapsed().as_secs_f32();
-                sidebar.child(self.space_form(form, Some(left), cx))
-            }
-            // The URL field and the favorites are the Space's page's, and page with it.
-            (None, None, None) => {
+            // The URL field and the favorites are the Space's page's, and page with it. While the
+            // form leaves, the page is there under it, unseen until it's gone (Spaces › Creating),
+            // and takes keys and clicks, as motion never blocks them (#3554).
+            (None, None, leaving) => {
                 self.drawn_top
                     .replace((self.top_offset(), self.drawn_tiles()));
                 let rest = self.rest_press_listener(Self::press_top_at_rest, cx);
@@ -5127,7 +5220,14 @@ impl Shell {
                     .top(px(URL_FIELD_TOP))
                     .left_0()
                     .w(px(self.width()));
-                sidebar
+                let page = div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left_0()
+                    .w(px(self.width()))
+                    .when(leaving.is_some(), |page| page.opacity(0.));
+                let page = page
                     .children((!self.bar_on()).then(|| self.with_page(self.url_field(cx))))
                     .children(self.scroll_edge_line().map(|line| self.with_page(line)))
                     .children(self.foot_edge_line().map(|line| self.with_page(line)))
@@ -5145,15 +5245,20 @@ impl Shell {
                     .children(self.chooser_card(cx))
                     .children(self.pair_card(cx))
                     .children(self.cast_card(cx))
-                    .children(self.agent_question_card(cx))
                     .children(self.task_foot(cx))
+                    // Over the tasks' plates, which a tall request's card reaches past (#3548).
+                    .children(self.agent_question_card(cx))
                     // Over the tasks' plates, which its open grows over.
                     .children(self.media_player_cards(cx))
                     // Over the players and the task's foot, which it opens over.
                     .children(self.update_banner(cx))
                     .children(self.safe_start_card(cx))
                     .children(self.task_ghosts())
-                    .children(self.drm_note_card(cx))
+                    .children(self.drm_note_card(cx));
+                let form = leaving.map(|(form, left)| {
+                    self.space_form(form, Some(left.elapsed().as_secs_f32()), cx)
+                });
+                sidebar.child(page).children(form)
             }
         };
         sidebar

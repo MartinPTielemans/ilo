@@ -45,6 +45,14 @@
 
 #include "../host.h"
 
+// Whether the checks run the app, under their driver or check.sh, read once: a line naming an
+// address, a title or the user's own words is written only then, as log! lines are (#3725).
+static bool Checked() {
+  static const bool checked = GetEnvironmentVariableW(L"BROWSER_DRIVE", nullptr, 0) > 0 ||
+                              GetEnvironmentVariableW(L"BROWSER_CHECK", nullptr, 0) > 0;
+  return checked;
+}
+
 // UrlCreateFromPathW, for the files dragged onto the UI.
 #pragma comment(lib, "shlwapi.lib")
 
@@ -1419,11 +1427,12 @@ void WatchForeground() {
   (void)hid;
 }
 
-Floating g_overlays[6];
+Floating g_overlays[7];
 // What check.sh calls each overlay, as the Mac's and Linux's hosts do.
 const char* const kOverlayNames[std::size(g_overlays)] = {"command bar", "icon picker",
                                                          "theme picker", "folder preview",
-                                                         "boost editor", "tab switcher"};
+                                                         "boost editor", "tab switcher",
+                                                         "agent request"};
 int const kFolderPreview = 3;
 // Hides overlay |index| if it's shown, on screen or not, saying so, and whether it was, as the
 // Mac's host does: its show waits for the UI's next frame, and Windows hides it with its minimized
@@ -3216,10 +3225,14 @@ void LittleHiding(HWND root) {
   // other app, and the app's next window has the keyboard once the window is gone.
   if (!SetForegroundWindow(behind)) {
     g_gave_way = true;
-    fprintf(stderr, "browser: little window couldn't give way to %s\n", Utf8(title).c_str());
+    if (Checked()) {
+      fprintf(stderr, "browser: little window couldn't give way to %s\n", Utf8(title).c_str());
+    }
     return;
   }
-  fprintf(stderr, "browser: little window gave way to %s\n", Utf8(title).c_str());
+  if (Checked()) {
+    fprintf(stderr, "browser: little window gave way to %s\n", Utf8(title).c_str());
+  }
 }
 
 void OtherAppInFront() {
@@ -3794,23 +3807,31 @@ void host_watch_ui_keyboard(void (*left)(void* ui_view)) {
   g_ui_keyboard_left = left;
 }
 
-// The UI's, which hears a press in a page (host_watch_page_presses).
-void (*g_page_pressed)(void* ui_view) = nullptr;
-
 bool IsButtonDown(UINT message) {
   return message == WM_LBUTTONDOWN || message == WM_RBUTTONDOWN || message == WM_MBUTTONDOWN ||
          message == WM_XBUTTONDOWN;
 }
 
-// A mouse button going down in |hwnd| at |screen| in a page: in a browser window, but not GPUI's
-// window over it nor where the window's frame answers. Chromium takes a page's input in the
-// browser window itself, or a child of it; the wheel's messages aren't presses.
-void PagePressedAt(HWND hwnd, POINT screen) {
+// A mouse button going down in |hwnd| at |screen| while a page's dialog covers part of its window.
+// On the dialog, the dialog has the keyboard again. In a page of its browser window, beside the
+// dialog's pane in a split view, that window keeps the keyboard it takes for the page
+// (KeepsKeyboard), so the press focuses that pane as a press in a page without a dialog does
+// (#3231). Not GPUI's window over the page nor where the window's frame answers: Chromium takes a
+// page's input in the browser window itself, or a child of it.
+void DialogPaneBesidePressedAt(HWND hwnd, POINT screen) {
   const HWND root = hwnd ? GetAncestor(hwnd, GA_ROOT) : nullptr;
-  if (root && root == g_dialog.hwnd) {
-    g_dialog_lent = nullptr;
+  if (!root) {
+    return;
   }
-  void* ui_view = g_page_pressed ? UiViewOf(root) : nullptr;
+  if (root == g_dialog.hwnd) {
+    g_dialog_lent = nullptr;
+    return;
+  }
+  if (!g_dialog_part || !g_dialog.hwnd || !IsWindowVisible(g_dialog.hwnd) ||
+      GetWindow(g_dialog.hwnd, GW_OWNER) != root) {
+    return;
+  }
+  void* ui_view = UiViewOf(root);
   if (!ui_view) {
     return;
   }
@@ -3818,33 +3839,31 @@ void PagePressedAt(HWND hwnd, POINT screen) {
   if (hwnd == ui || IsChild(ui, hwnd) || (hwnd == root && FrameHit(root, screen))) {
     return;
   }
-  // The page beside a page's dialog in a split view, which covers its own pane alone: its window
-  // keeps the keyboard it takes for the page (KeepsKeyboard), so the press focuses that pane as a
-  // press in a page without a dialog does (#3231).
-  if (g_dialog_part && g_dialog.hwnd && IsWindowVisible(g_dialog.hwnd) &&
-      GetWindow(g_dialog.hwnd, GW_OWNER) == root) {
-    g_dialog_lent = root;
-    fprintf(stderr, "browser: a press in the pane beside takes the keyboard from the dialog\n");
-  }
-  g_page_pressed(ui_view);
+  g_dialog_lent = root;
+  fprintf(stderr, "browser: a press in the pane beside takes the keyboard from the dialog\n");
 }
 
-// The thread's hook sees each press of the pointer before the window it goes to does.
-LRESULT CALLBACK PagePressHook(int code, WPARAM wparam, LPARAM lparam) {
+// The thread's hook sees each press of the pointer before the window it goes to does. It's there
+// only while a page's dialog covers part of its window, so no other press pays for it.
+HHOOK g_dialog_press_hook = nullptr;
+
+LRESULT CALLBACK DialogPressHook(int code, WPARAM wparam, LPARAM lparam) {
   if (code == HC_ACTION && IsButtonDown(static_cast<UINT>(wparam))) {
     const auto* press = reinterpret_cast<MOUSEHOOKSTRUCT*>(lparam);
-    PagePressedAt(press->hwnd, press->pt);
+    DialogPaneBesidePressedAt(press->hwnd, press->pt);
   }
   return CallNextHookEx(nullptr, code, wparam, lparam);
 }
 
-void host_watch_page_presses(void (*pressed)(void* ui_view)) {
-  g_page_pressed = pressed;
-  static const HHOOK hook =
-      SetWindowsHookExW(WH_MOUSE, PagePressHook, nullptr, GetCurrentThreadId());
-  (void)hook;
+void WatchDialogPresses(bool watch) {
+  if (watch && !g_dialog_press_hook) {
+    g_dialog_press_hook =
+        SetWindowsHookExW(WH_MOUSE, DialogPressHook, nullptr, GetCurrentThreadId());
+  } else if (!watch && g_dialog_press_hook) {
+    UnhookWindowsHookEx(g_dialog_press_hook);
+    g_dialog_press_hook = nullptr;
+  }
 }
-
 // A window's menu bar isn't replaced while it's open on Windows: it's modal and runs no tasks.
 bool host_after_menus(void (*)(void)) { return false; }
 
@@ -4289,6 +4308,7 @@ void host_show_dialog(void* ui_view, double x, double y, double width, double he
     g_dialog_lent = nullptr;
   }
   g_dialog_part = width > 0;
+  WatchDialogPresses(g_dialog_part);
   // Without a rect, it covers all of the window.
   if (width <= 0) {
     x = y = 0;
@@ -4328,6 +4348,7 @@ void host_hide_dialog(void) {
   Hide(g_dialog);
   g_dialog_lent = nullptr;
   g_dialog_rests = false;
+  WatchDialogPresses(false);
   // Answered or gone before the user came to it, it asks no more.
   if (g_dialog_asking && IsWindow(g_dialog_asking) && GetForegroundWindow() != g_dialog_asking) {
     FLASHWINFO stop{sizeof stop, g_dialog_asking, FLASHW_STOP, 0, 0};
@@ -4801,7 +4822,9 @@ void host_save_png(void* ui_view, const uint8_t* png, size_t size) {
     WriteFile(file, png.data(), static_cast<DWORD>(png.size()), &written, nullptr);
     CloseHandle(file);
     // check.sh reads this line.
-    fprintf(stderr, "browser: capture saved %s\n", Utf8(path).c_str());
+    if (Checked()) {
+      fprintf(stderr, "browser: capture saved %s\n", Utf8(path).c_str());
+    }
   });
 }
 
@@ -5254,7 +5277,9 @@ HRESULT CALLBACK AlertEvent(HWND hwnd, UINT event, WPARAM, LPARAM, LONG_PTR text
     g_alert = hwnd;
     // check.sh reads this line, as the Mac's host writes it for its alert, once host_choose can
     // answer it.
-    fprintf(stderr, "browser: alert shown %s\n", g_alert_message.c_str());
+    if (Checked()) {
+      fprintf(stderr, "browser: alert shown %s\n", g_alert_message.c_str());
+    }
     // Its texts and buttons, as the Mac's driver logs an alert's, for check.sh to wait for.
     if (GetEnvironmentVariableW(L"BROWSER_DRIVE", nullptr, 0) > 0) {
       fprintf(stderr, "browser: modal shown %s\n", reinterpret_cast<const char*>(texts));
@@ -6001,7 +6026,9 @@ void host_open_elsewhere(const char* url) {
     return;
   }
   // A driven run only logs it, so checks never launch another browser.
-  fprintf(stderr, "browser: open in default browser %s\n", url);
+  if (Checked()) {
+    fprintf(stderr, "browser: open in default browser %s\n", url);
+  }
   if (GetEnvironmentVariableW(L"BROWSER_DRIVE", nullptr, 0) > 0) {
     return;
   }
@@ -6026,7 +6053,9 @@ void host_share(void* ui_view,
   }
   // check.sh reads this line. A driven run doesn't show the sheet, which would take the keyboard
   // from the window and wait on a choice.
-  fprintf(stderr, "browser: share %s\n", url);
+  if (Checked()) {
+    fprintf(stderr, "browser: share %s\n", url);
+  }
   if (GetEnvironmentVariableW(L"BROWSER_DRIVE", nullptr, 0) > 0) {
     return;
   }
@@ -6115,8 +6144,8 @@ bool host_drive_pointer(unsigned message, long x, long y) {
     PointerMoved(point);
   }
   // The driver posts its presses, which the thread's hook never sees.
-  if (IsButtonDown(message)) {
-    PagePressedAt(WindowFromPoint(point), point);
+  if (g_dialog_press_hook && IsButtonDown(message)) {
+    DialogPaneBesidePressedAt(WindowFromPoint(point), point);
   }
   return g_menu_mouse_hook && MenuTakesPointer(message, point);
 }
@@ -6349,8 +6378,10 @@ void WriteJumpListNow(const std::wstring& id,
   // check.sh reads these lines.
   fprintf(stderr, "browser: jump list set\n");
   if (!little_title.empty()) {
-    fprintf(stderr, "browser: jump list task %ls: %ls\n", little_title.c_str(),
-            little_arguments.c_str());
+    if (Checked()) {
+      fprintf(stderr, "browser: jump list task %ls: %ls\n", little_title.c_str(),
+              little_arguments.c_str());
+    }
   }
 }
 

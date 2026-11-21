@@ -9,7 +9,12 @@
 //! A single-line text field, with IME support through GPUI's input handler. GPUI has no text
 //! field of its own; Zed's is its editor.
 
-use std::{cell::Cell, ops::Range, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    ops::Range,
+    rc::Rc,
+};
 
 use crate::menu::Closed;
 use crate::shell::MenuEntry;
@@ -20,8 +25,9 @@ use gpui::{
     ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable, Global,
     GlobalElementId, Hsla, KeyBinding, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, PaintQuad, Pixels, Point, Role, ShapedLine, SharedString, Style, Subscription,
-    TextRun, UTF16Selection, UnderlineStyle, WeakEntity, Window, accesskit, actions, div, fill,
-    hsla, linear_color_stop, linear_gradient, point, prelude::*, px, relative, rgb, size,
+    TextRun, UTF16Selection, UnderlineStyle, WeakEntity, WeakFocusHandle, Window, WindowId,
+    accesskit, actions, div, fill, hsla, linear_color_stop, linear_gradient, point, prelude::*, px,
+    relative, rgb, size,
 };
 use unicode_segmentation::*;
 
@@ -153,12 +159,56 @@ thread_local! {
     static HAS_KEYBOARD: Cell<fn(&Window) -> bool> = const { Cell::new(Window::is_window_active) };
 }
 
+thread_local! {
+    /// The field each window's frame drew with the keyboard, since its root began to draw it.
+    static TYPING: RefCell<HashMap<WindowId, WeakFocusHandle>> = RefCell::default();
+}
+
+/// The window's root begins to draw it, before any field does: no field has drawn with its
+/// keyboard in this frame yet.
+pub fn drawing(window: &Window) {
+    TYPING.with_borrow_mut(|typing| typing.remove(&window.window_handle().window_id()));
+}
+
+/// Whether a field of `window`'s has its keyboard: GPUI's focus is on a field the window's last
+/// frame drew with it, composing or not. A field gone, or one that keeps GPUI's focus but is no
+/// longer drawn, doesn't count. Asked once the frame has drawn.
+pub fn typing_in(window: &Window, cx: &App) -> bool {
+    let Some(focused) = window.focused(cx) else {
+        return false;
+    };
+    TYPING.with_borrow(|typing| {
+        typing
+            .get(&window.window_handle().window_id())
+            .is_some_and(|field| *field == focused)
+    })
+}
+
 /// Asks `has_keyboard` whether a field's window has the keyboard, for one whose platform knows
 /// sooner than GPUI. On the Mac, GPUI hears a window became key in a task of its own, which can
 /// come after the field heard of the menu's window taking the keyboard, so it ended a field the
 /// menu's choice had just opened (#2019).
 pub fn set_window_has_keyboard(has_keyboard: fn(&Window) -> bool) {
     HAS_KEYBOARD.set(has_keyboard);
+}
+
+impl TextInput {
+    /// Where the field was drawn last, for a test's press on it.
+    #[cfg(test)]
+    pub(crate) fn drawn_bounds(&self) -> Option<Bounds<Pixels>> {
+        self.last_bounds
+    }
+}
+
+/// Whether `window` has the keyboard now, as its platform says (`set_window_has_keyboard`).
+pub fn window_has_keyboard(window: &Window) -> bool {
+    HAS_KEYBOARD.get()(window)
+}
+
+/// Whether the user types in a field of `window`, a window of its own over a browser window: it
+/// has the keyboard, and a field of its last frame has that.
+pub fn window_typed_in(window: &Window, cx: &App) -> bool {
+    window_has_keyboard(window) && typing_in(window, cx)
 }
 
 /// Whether the field's window is inactive, with no menu of the field's up.
@@ -1582,6 +1632,10 @@ impl Element for TextElement {
             }
             input.keyboard_drawn = focused;
         });
+        if focused {
+            let window_id = window.window_handle().window_id();
+            TYPING.with_borrow_mut(|typing| typing.insert(window_id, focus_handle.downgrade()));
+        }
     }
 }
 
@@ -1696,5 +1750,7 @@ pub(crate) mod korean;
 mod leave_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod typing_tests;
 #[cfg(test)]
 mod word_tests;

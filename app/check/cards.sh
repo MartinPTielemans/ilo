@@ -6,7 +6,8 @@
 # each make their call on the first click (#818). It comes in and goes out in Dia's motion, which
 # card-motion.mp4 records. The card takes the Space's look, dark and light. Over a hidden sidebar
 # out, the card counts as the sidebar's (#830). Reports how long the switches take, beside the tabs
-# run's.
+# run's. A row of a pinned GitHub tab's pull requests opens shown in a tab of its own, ⌘-click
+# behind and ⌥-click beside the page (#3576), on the run's own GitHub.
 
 # A page of colour, so its picture shows in the card.
 page='data:text/html,<title>loading</title>
@@ -211,3 +212,183 @@ quit
 app_ms=$(sed -n 's/^browser: selected [0-9]* in \([0-9.]*\) ms$/\1/p' "$log" | summary)
 echo "ok: resting on a tab's row shows its card beside the rows, with a picture of its page once it's hidden and the switch quiet, and none for the tab shown; the next row swaps in at once, leaving the rows, a scroll or a key typed in the page lets it go, it comes and goes in Dia's motion, the card takes a light Space's look, a hidden sidebar out stays out while the pointer is on a row's card and goes with it once the pointer leaves both, and its Pin, Unpin, Favorite, Remove from Favorites and Split each make their call on the first click."
 echo "  Switch, key to the core's report, with cards pictured: $app_ms. Windows: $out/card-dark.png, $out/card-shown-tab.png, $out/card-light.png, $out/card-reveal.png, $out/card-reveal-away.png, and $out/card-<button>-before.png and -after.png for each button. Motion: $out/card-motion.mp4"
+
+# A row of what's recent on a pinned tab's card opens in a Today tab the pinned tab opened, as
+# another address in a pinned tab does, and that tab is shown with its page focused (#3576),
+# whether the pinned tab hasn't been shown since launch, as most pinned tabs haven't after a
+# relaunch, or has. Closing it shows the pinned tab again. ⌘-click opens the row in a tab behind
+# and ⌥-click beside the page, each keeping the tab shown. GitHub is the run's own server
+# over https: its pages, and its search answering signed in with three pull requests asking for
+# review and none of the user's own, in the shape the core reads (core/live_folder_rule.cc).
+MSYS2_ARG_CONV_EXCL=/CN= openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=github.com \
+  -addext subjectAltName=DNS:github.com -keyout "$out/cards-tls.key" \
+  -out "$out/cards-tls.pem" 2> /dev/null || fail "openssl didn't make GitHub's certificate"
+spki=$(openssl x509 -in "$out/cards-tls.pem" -pubkey -noout | openssl pkey -pubin -outform der |
+  openssl dgst -sha256 -binary | base64)
+expr "$spki" : '[A-Za-z0-9+/]\{43\}=$' > /dev/null ||
+  fail "openssl gave \"$spki\" as GitHub's certificate's key, not a SHA-256 in base64"
+rm -f "$out/cards-tls.port"
+mkfifo "$out/cards-tls.port"
+python3 -I -u -c '
+import http.server, json, socketserver, ssl, sys
+def row(number):
+    return {"number": number, "hl_title": "Pull request %d" % number, "state": "open",
+            "repo": {"repository": {"owner_login": "ilo-check", "name": "cards"}}}
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        print("github: GET %s" % self.path, file=sys.stderr, flush=True)
+        if self.path.startswith("/search?"):
+            rows = [row(n) for n in (7, 8, 9)] if "review-requested" in self.path else []
+            search = {"logged_in": True, "results": rows}
+            body = json.dumps({"payload": {"blackbirdSearchRoute": search}}).encode()
+            kind = "application/json"
+        else:
+            title = "GitHub" if self.path == "/" else self.path.strip("/").replace("/", " ")
+            body = ("<!doctype html><title>%s</title><h1>%s</h1>" % (title, title)).encode()
+            kind = "text/html; charset=utf-8"
+        self.send_response(200)
+        self.send_header("Content-Type", kind)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *args):
+        pass
+# TCPServer, as site.sh binds: HTTPServer looks 127.0.0.1 up by name, 35 s on the hosted Mac.
+class Server(socketserver.ThreadingTCPServer):
+    # A handshake the browser ends, as for a certificate it refuses, is logged (#2673).
+    def get_request(self):
+        try:
+            return super().get_request()
+        except OSError as error:
+            print("handshake failed: %s" % error, file=sys.stderr, flush=True)
+            raise
+server = Server(("127.0.0.1", 0), Handler)
+tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+tls.load_cert_chain(sys.argv[1], sys.argv[2])
+server.socket = tls.wrap_socket(server.socket, server_side=True)
+# As bytes: text stdout on Windows ends a line with \r, which the driver typed as return (#1196).
+sys.stdout.buffer.write(b"%d\n" % server.server_address[1])
+sys.stdout.close()
+server.serve_forever()
+' "$out/cards-tls.pem" "$out/cards-tls.key" > "$out/cards-tls.port" 2> "$out/cards-tls.log" \
+  3>&- 4>&- 5>&- &
+tls=$!
+read -r tls_port < "$out/cards-tls.port" || true
+[ -n "$tls_port" ] || fail "GitHub's https server didn't start: $(cat "$out/cards-tls.log")"
+pull=https://github.com/ilo-check/cards/pull
+
+# recent_row <tab> <n> [modifiers…]: rests on pinned tab <tab>'s row till its card has its rows,
+# then clicks row <n>, counting from 0, as a hand would, onto the card first. Under the box's
+# padding, one heading, the review requests', is over the rows. A card shown again with the rows
+# kept says so as it shows, and draws no new line, as what it holds hasn't changed.
+recent_row() {
+  local tab=$1 n=$2
+  shift 2
+  send move $page_point
+  send move $(pinned_row 0)
+  expect "^browser: hover card \(drawn\|shown\) $tab\( .*\)\{0,1\} recent-rows\$" \
+    "the pinned tab's card didn't show its pull requests"
+  expect '^browser: hover card settled$' "the pinned tab's card didn't come to rest"
+  at=$(grep '^browser: hover card at ' "$log" | tail -1 | cut -d' ' -f5- |
+    awk -v n="$n" '{ printf "%d %d\n", $1 + $3 / 2, $2 + 4 + 22 + 44 * n + 22 }')
+  ../tools/window-screenshot.sh "$pid" "$out/card-recent-$n.png" || fail "no window to capture"
+  send move $at
+  send move $at
+  send click $at "$@"
+}
+# opened_from_row <n> <what>: row <n> loaded in a tab the pinned tab opened, which is the tab
+# shown once it has, its page with the keyboard. Then ⌘W closes it, which shows the pinned tab.
+opened_from_row() {
+  local clicked=$step opened shown
+  expect "^browser: command recent-here via hover card\$" "a click on row $1 of $2's card didn't open it"
+  expect "^browser: tab [0-9]* opened by $p in the foreground\$" \
+    "a click on row $1 of $2's card didn't open it in a tab of its own"
+  opened=$(since | sed -n "s/^browser: tab \([0-9]*\) opened by $p in the foreground\$/\1/p" | head -1)
+  expect "^browser: loaded $opened $pull/$(($1 + 7))\$" \
+    "a click on row $1 of $2's card didn't load it in the tab it opened"
+  # The tab selected last since the click, as the core shows the one it opened and the app could
+  # select another after it.
+  shown=$(since "$clicked" | sed -n 's/^browser: selected \([0-9]*\).*/\1/p' | tail -1)
+  [ "$shown" = "$opened" ] ||
+    fail "a click on row $1 of $2's card opened it in tab $opened, but tab $shown is shown"
+  send move $page_point
+  in_browser RenderWidgetHostViewCocoa "after a click on row $1 of $2's card"
+  send key w cmd
+  expect "^browser: selected $p\( in .*\)\{0,1\}\$" "⌘W on the tab row $1 opened didn't show the pinned tab again"
+}
+# GitHub's page pinned, and another shown: a row of the pinned tab, shown since launch. Then
+# launched again, so the pinned tab comes back unloaded and never shown.
+log="$out/cards-recent.log"
+step=0
+rm -f "$saved"
+BROWSER_DRIVE=1 BROWSER_URL=https://github.com/ "$browser" \
+  --host-resolver-rules="MAP github.com 127.0.0.1:$tls_port" \
+  --ignore-certificate-errors-spki-list="$spki" \
+  < "$out/drive" > "$log" 2>&1 &
+pid=$!
+exec 3> "$out/drive"
+await_load
+await '^browser: title [0-9]* GitHub$' ||
+  fail "GitHub's page from the run's server didn't draw: $(cat "$out/cards-tls.log")"
+p=$(today)
+send click $page_point
+if [ "$active" != 1 ]; then
+  exec 3>&-
+  quit
+  kill "$tls" 2>/dev/null || true
+  echo "skip: a pinned tab's recent rows. Browser wasn't the active app, so the page ignored the click."
+  exit 0
+fi
+send key d cmd
+expect "^browser: pinned $p\$" "⌘D didn't pin GitHub's tab"
+open_from_bar "http://localhost:$port/one.html"
+b=$tab
+recent_row "$p" 1
+opened_from_row 1 "the pinned tab shown since launch"
+switch "2 cmd" "$b"
+quit_by_key
+await '^browser: command quit via ' || fail "⌘Q didn't reach the UI"
+exited
+log="$out/cards-recent-restored.log"
+step=0
+BROWSER_DRIVE=1 "$browser" \
+  --host-resolver-rules="MAP github.com 127.0.0.1:$tls_port" \
+  --ignore-certificate-errors-spki-list="$spki" \
+  < "$out/drive" > "$log" 2>&1 &
+pid=$!
+exec 3> "$out/drive"
+await '^browser: restored in ' || fail "the relaunch didn't restore the Space"
+# A relaunch gives the restored tabs new numbers.
+await '^browser: pinned [0-9][0-9]*$' || fail "GitHub's tab didn't come back pinned"
+await '^browser: today [0-9][0-9]*$' || fail "one.html's tab didn't come back"
+p=$(pinned)
+b=$(today)
+await "^browser: selected $b\$" || fail "the relaunch didn't show one.html's tab"
+await "^browser: loaded $b http://localhost:$port/one.html\$" || fail "one.html didn't load"
+await "^browser: page $p unloaded 1\$" || fail "the pinned tab didn't come back unloaded"
+send click $page_point
+
+recent_row "$p" 0
+opened_from_row 0 "the pinned tab never shown since launch"
+# ⌘-click: a tab behind, with the tab shown kept.
+switch "2 cmd" "$b"
+recent_row "$p" 2 cmd
+expect '^browser: command recent-behind via hover card$' "⌘-click on a row of the card didn't open it behind"
+# A tab opened behind loads once it's shown (open_behind), so it's read at the row's address.
+expect "^browser: page [0-9]* back 0 forward 0 loading 0 $pull/9\$" \
+  "⌘-click on a row of the card didn't open it in a tab"
+behind=$(grep "^browser: page [0-9]* back 0 forward 0 loading 0 $pull/9\$" "$log" | tail -1 | cut -d' ' -f3)
+[ "$behind" != "$p" ] || fail "⌘-click on a row of the card opened it in the pinned tab, not a tab behind"
+none_since "^browser: selected $p" || fail "⌘-click on a row of the card showed the pinned tab"
+none_since "^browser: selected $behind\$" || fail "⌘-click on a row of the card showed the tab it opened"
+# ⌥-click: beside the page, with the tab shown kept.
+recent_row "$p" 0 alt
+expect '^browser: command recent-beside via hover card$' "⌥-click on a row of the card didn't open it beside the page"
+expect "^browser: splits \(.*[ +]\)\{0,1\}$b\([+ ].*\)\{0,1\}\$" "⌥-click on a row of the card didn't open it beside one.html"
+none_since "^browser: selected $p" || fail "⌥-click on a row of the card showed the pinned tab"
+../tools/window-screenshot.sh "$pid" "$out/card-recent-beside.png" || fail "no window to capture"
+exec 3>&-
+quit
+kill "$tls" 2>/dev/null || true
+tls=
+echo "ok: a click on a row of a pinned tab's pull requests opens it shown in a tab of its own with its page focused, whether the pinned tab was shown since launch or not, and closing it shows the pinned tab; ⌘-click opens it behind and ⌥-click beside the page, keeping the tab shown. Windows: $out/card-recent-<row>.png, $out/card-recent-beside.png"

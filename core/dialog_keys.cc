@@ -1,5 +1,6 @@
 #include "browser_core/dialog_keys.h"
 
+#include <cstdio>
 #include <map>
 #include <memory>
 
@@ -10,6 +11,7 @@
 #include "base/no_destructor.h"
 #include "base/scoped_observation.h"
 #include "base/task/single_thread_task_runner.h"
+#include "browser_core/platform/keyboard.h"
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
 #include "build/build_config.h"
@@ -55,7 +57,7 @@ content::WebContents* ShownPage(views::Widget* window) {
 
 // Hears the keys of |dialog| in its root view, as views gives them to it on every OS: before the
 // dialog for ilo's reserved and Prefer ilo shortcuts (tab_key_before_page), and after it for those
-// it didn't use (tab_key_unhandled), as the core's page gives them.
+// it didn't use (tab_key_unhandled), as the core's page gives them. And its presses.
 class DialogKeys : public ui::EventHandler, public views::WidgetObserver {
  public:
   DialogKeys(views::Widget* dialog, views::Widget* window) : dialog_(dialog), window_(window) {
@@ -74,19 +76,36 @@ class DialogKeys : public ui::EventHandler, public views::WidgetObserver {
 
   // ui::EventHandler:
   void OnKeyEvent(ui::KeyEvent* event) override {
-    // A page's keys are asked about as they go down, not as the characters they type.
-    if (event->type() != ui::EventType::kKeyPressed || event->is_char() || DialogKeeps(*event)) {
+    if (event->type() != ui::EventType::kKeyPressed) {
       return;
     }
+    // A page's keys are asked about as they go down, not as the characters they type. On the Mac a
+    // key AppKit made text comes as its character alone, so it's asked about as the key (#3230).
+    std::unique_ptr<ui::KeyEvent> pressed;
+#if BUILDFLAG(IS_MAC)
+    if (event->is_char()) {
+      pressed = platform::KeyBehindCharacter(*event);
+    }
+#endif
+    const ui::KeyEvent& down = pressed ? *pressed : *event;
     const bool before = event->phase() == ui::EP_PRETARGET;
+    if (down.is_char()) {
+      LetGo(before, down, "a char");
+      return;
+    }
+    if (DialogKeeps(down)) {
+      LetGo(before, down, "the dialog keeps it");
+      return;
+    }
     if (!before && event->handled()) {
       return;
     }
     content::WebContents* page = ShownPage(window_);
     if (!page || !page->GetDelegate()) {
+      LetGo(before, down, "no shown page");
       return;
     }
-    const input::NativeWebKeyboardEvent key(*event);
+    const input::NativeWebKeyboardEvent key(down);
     if (before) {
       const content::KeyboardEventProcessingResult result =
           page->GetDelegate()->PreHandleKeyboardEvent(page, key);
@@ -99,6 +118,21 @@ class DialogKeys : public ui::EventHandler, public views::WidgetObserver {
     // The tab, the window and the dialog can go in it: nothing here is touched after.
     if (page->GetDelegate()->HandleKeyboardEvent(page, key)) {
       event->StopPropagation();
+    }
+  }
+
+  // A press on the dialog: one on an agent's tab's, such as answering its warning before http,
+  // acts on the agent's tab, so the app takes the tab over as a press in its page does (#3243).
+  // The dialog still gets it.
+  void OnMouseEvent(ui::MouseEvent* event) override {
+    if (event->type() == ui::EventType::kMousePressed && event->phase() == ui::EP_PRETARGET) {
+      Window::DialogPressed(window_, dialog_);
+    }
+  }
+  // A finger on a touch screen, which views gives the dialog as a touch, not a mouse press.
+  void OnTouchEvent(ui::TouchEvent* event) override {
+    if (event->type() == ui::EventType::kTouchPressed && event->phase() == ui::EP_PRETARGET) {
+      Window::DialogPressed(window_, dialog_);
     }
   }
 
@@ -126,6 +160,7 @@ class DialogKeys : public ui::EventHandler, public views::WidgetObserver {
                 }
               }
               dialog->Activate();
+              fprintf(stderr, "browser: tab dialog took the keyboard back\n");
             },
             dialog_->GetWeakPtr(), window_->GetWeakPtr()));
   }
@@ -152,6 +187,19 @@ class DialogKeys : public ui::EventHandler, public views::WidgetObserver {
   }
 
  private:
+  // Says why a shortcut's key wasn't asked about, once a key as it goes into the dialog, so a
+  // shortcut that doesn't reach the app from a dialog names its gate (#3230). Only a key held
+  // with ⌃ or ⌘: one typed as text in the dialog's field may be a password's.
+  static void LetGo(bool before, const ui::KeyEvent& key, const char* why) {
+    if (!before || !(key.flags() & (ui::EF_CONTROL_DOWN | ui::EF_COMMAND_DOWN))) {
+      return;
+    }
+    fprintf(stderr, "browser: tab dialog let %s%s%s%skey 0x%x go: %s\n",
+            key.IsControlDown() ? "ctrl-" : "", key.IsAltDown() ? "alt-" : "",
+            key.IsShiftDown() ? "shift-" : "", key.IsCommandDown() ? "cmd-" : "",
+            static_cast<unsigned>(key.key_code()), why);
+  }
+
   // Return, Escape and Tab answer, cancel and move through the dialog, and its own shortcuts stay
   // its own: the keys its page would keep, as a page keeps ⌘F in Docs.
   bool DialogKeeps(const ui::KeyEvent& event) const {
@@ -201,6 +249,8 @@ void Watch(views::Widget* window) {
       continue;
     }
     Watched().emplace(dialog, std::make_unique<DialogKeys>(dialog, window));
+    // What a check waits on before it presses a key in a tab's dialog (#3230).
+    fprintf(stderr, "browser: tab dialog's keys heard\n");
   }
 }
 

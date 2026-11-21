@@ -211,7 +211,7 @@ impl Shell {
             if let Some(area) = &mut self.task_area {
                 area.page = None;
             }
-            self.browser.focus_ui(cx);
+            self.take_keyboard(cx);
             self.show_users_page(cx);
         }
         self.forget_closed(cx);
@@ -343,7 +343,7 @@ impl Shell {
         // check.sh reads these lines.
         log!("browser: task area {space} opens");
         log!("browser: task area {space} open");
-        self.browser.focus_ui(cx);
+        self.take_keyboard(cx);
         cx.notify();
     }
 
@@ -405,7 +405,7 @@ impl Shell {
         self.lay_out_page(cx);
         match self.agent_bar() {
             Some(Bar::Held { tab: held, .. }) if held == tab => self.browser.focus_page(cx),
-            _ => self.browser.focus_ui(cx),
+            _ => self.take_keyboard(cx),
         }
         cx.notify();
         true
@@ -440,7 +440,7 @@ impl Shell {
         }
         // check.sh reads this line.
         log!("browser: task page {tab} back");
-        self.browser.focus_ui(cx);
+        self.take_keyboard(cx);
         // The reply field has the keyboard again, as when the conversation opened.
         self.focus_talk = true;
         cx.notify();
@@ -465,6 +465,22 @@ impl Shell {
             .as_ref()
             .filter(|page| !matches!(page.zoom, Zoom::In(_)))?;
         Some((area.space, page.tab))
+    }
+
+    /// Whether the page watched is going back into its picture, over a conversation the user
+    /// can't see yet: only its pictures take a press meanwhile (#3496).
+    pub(super) fn task_page_going_back(&self) -> bool {
+        (self.task_area.as_ref())
+            .and_then(|area| area.page.as_ref())
+            .is_some_and(|page| matches!(page.zoom, Zoom::In(_)))
+    }
+
+    /// The page watched held where its zoom back starts, for a test to press under it.
+    #[cfg(test)]
+    pub(super) fn hold_task_page_going_back(&mut self) {
+        if let Some(page) = self.task_area.as_mut().and_then(|area| area.page.as_mut()) {
+            page.zoom = Zoom::In(Instant::now() + Duration::from_secs(60));
+        }
     }
 
     /// The task's tab whose page is in place in the area, live, as the core shows it.
@@ -708,7 +724,7 @@ impl Shell {
                     .is_some_and(|area| area.page.is_some())
                 {
                     self.leave_task_page_now(cx);
-                    self.browser.focus_ui(cx);
+                    self.take_keyboard(cx);
                 }
                 return false;
             }
@@ -804,10 +820,12 @@ impl Shell {
         let (card_frame, _) = self.page_frame(self.viewport);
         let now = Instant::now();
         let zoom = area.page.as_ref().map_or(0., |page| page.zoom.at(now));
+        let back = self.task_page_going_back();
         let mut layer = div().absolute().size_full();
         // The Space's page goes out of the window on its card.
-        // The conversation is in the card's place, and fades under a page coming out of it.
-        if zoom < 1. {
+        // The conversation is in the card's place, and fades under a page coming out of it. Under
+        // a page going back it takes clicks from the zoom's first frame, before it shows (#3496).
+        if zoom < 1. || back {
             let view = div()
                 .absolute()
                 .left_0()
@@ -859,7 +877,10 @@ impl Shell {
             );
         }
         if in_place {
-            layer = layer.child(card(place, self.card_radius(), self.palette.page));
+            // A page that died leaves its place to its card, as in the user's own Space.
+            layer = layer
+                .child(card(place, self.card_radius(), self.palette.page))
+                .children(self.crash_cards(place, cx));
         } else {
             layer = layer.child(self.task_page_picture(page, between(page.thumb, place, zoom), cx));
         }
@@ -902,13 +923,17 @@ impl Shell {
             .h(bounds.size.height)
             .rounded(radius)
             .bg(self.palette.page)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|shell, _, _, cx| {
-                    cx.stop_propagation();
-                    shell.press_task_page(cx);
-                }),
-            )
+            // Going back, it lets a press through to the conversation under it, so a click on
+            // another picture there watches that page (#3496).
+            .when(!matches!(page.zoom, Zoom::In(_)), |zooming| {
+                zooming.on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|shell, _, _, cx| {
+                        cx.stop_propagation();
+                        shell.press_task_page(cx);
+                    }),
+                )
+            })
             .children(picture)
             .into_any_element()
     }
@@ -1097,6 +1122,14 @@ impl Shell {
         );
         let page_name = self.strip_page_name(tab, &title, &detail);
         let detail = (!detail.is_empty()).then(|| format!(" · {detail}"));
+        let words = format!("{title}{}", detail.as_deref().unwrap_or_default());
+        let mut said = self.task_strip_said.borrow_mut();
+        if said.as_ref() != Some(&(tab, words.clone())) {
+            // check.sh reads this line: the strip says who has the page, as the bar did.
+            log!("browser: task strip {tab} says {words}");
+            *said = Some((tab, words));
+        }
+        drop(said);
         div()
             .id("task-strip")
             .absolute()

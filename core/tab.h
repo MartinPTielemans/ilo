@@ -16,6 +16,7 @@
 #include "base/time/time.h"
 #include "browser_core/agent_job_voter.h"
 #include "browser_core/platform/system_page.h"
+#include "browser_core/protected_move_rule.h"
 #include "browser_core/public/browser_core.h"
 #include "browser_core/session.h"
 #include "chrome/browser/media/webrtc/media_stream_capture_indicator.h"
@@ -35,6 +36,7 @@
 
 class BrowserWindowInterface;
 class Profile;
+class SkBitmap;
 namespace content {
 class RenderWidgetHost;
 struct DropData;
@@ -273,6 +275,17 @@ class Tab : public content::WebContentsObserver,
   base::TimeTicks last_press_at() const { return last_press_at_; }
   // And ⌥ (Alt), which tells ⇧⌥-click on a link from ⇧-click on Linux, as both ask for a window.
   bool last_press_held_alt() const { return last_press_held_alt_; }
+  // The user's last press that reached the page, a button, finger or key going down, and an
+  // agent's last input, which comes through DevTools, each with its document. A page asking for
+  // protected media moves only on the user's, made on it (protected_move_rule.h).
+  const DocumentPresses& presses() const { return presses_; }
+  // The page left the key stamped |key| and the browser ran it (DocumentPresses::TakenBack).
+  void PageKeyTakenBack(base::TimeTicks key) { presses_.TakenBack(key); }
+
+  // Whether the tab was opened as a link preview (Window::OpenPreview), which it stays until a
+  // Space or the favorites take it.
+  bool opened_as_preview() const { return opened_as_preview_; }
+  void set_opened_as_preview() { opened_as_preview_ = true; }
 
   // When a window last stopped showing the tab, else when it opened, for the auto-archive and for
   // unloading tabs unseen a while.
@@ -345,6 +358,7 @@ class Tab : public content::WebContentsObserver,
   bool SystemPageFocusLeft(bool reverse) override;
   void SystemPageClicked() override;
   void SystemPageOutputRestricted() override;
+  void SystemPageIcon(const GURL& icon_url, std::vector<uint8_t> bytes) override;
 
   // favicon::FaviconDriverObserver:
   void OnFaviconUpdated(favicon::FaviconDriver* driver,
@@ -420,6 +434,17 @@ class Tab : public content::WebContentsObserver,
   void EngineChanged();
   // Finds the favicon of the system page's URL among the profile's, as Chrome's driver can't.
   void FetchSystemPageFavicon();
+  // Decodes the system page's own icon for its |document|, and shows it, and keeps it in the
+  // profile's favicons if |keep|.
+  void DecodeSystemPageIcon(int document,
+                            const GURL& icon_url,
+                            std::vector<uint8_t> bytes,
+                            bool keep);
+  void SystemPageIconDecoded(int document, const GURL& icon_url, bool keep, const SkBitmap& bitmap);
+  // The system page's |document| has no icon of its own that decodes.
+  void SystemPageHasNoIcon(int document);
+  // Tells the app the system page's icon, |png|, or none.
+  void ShowSystemPageIcon(const uint8_t* png, size_t size);
 
   const bc_id id_;
   base::WeakPtr<Profile> profile_;
@@ -448,6 +473,8 @@ class Tab : public content::WebContentsObserver,
   gfx::PointF last_click_;
   bool last_press_held_command_ = false;
   base::TimeTicks last_press_at_;
+  DocumentPresses presses_;
+  bool opened_as_preview_ = false;
   bool last_press_held_alt_ = false;
   // Whether the app was last told the page is full screen.
   bool fullscreen_ = false;
@@ -490,6 +517,23 @@ class Tab : public content::WebContentsObserver,
   // goes to another site or back to Chromium.
   GURL output_restricted_at_;
   base::CancelableTaskTracker favicon_tracker_;
+  // The system page's documents, counted as they commit, and where its row's icon stands for the
+  // last one. Until it shows that document's own, the row keeps what it showed, so it never goes to
+  // none and back.
+  int system_page_document_ = 0;
+  enum class SystemPageIconState {
+    // The profile's favicons haven't answered yet.
+    kAsking,
+    // They know none for the page or its site: the row shows the last page's until the page's own
+    // has decoded, or none once it's known to have none.
+    kNoneKnown,
+    // The row shows the document's: the profile's for the page or site, its own, or none for good.
+    // The page's own still replaces the profile's.
+    kShown,
+  };
+  SystemPageIconState system_page_icon_ = SystemPageIconState::kShown;
+  // The page said it has no icon before the profile's favicons answered.
+  bool system_page_icon_none_ = false;
   base::WeakPtrFactory<Tab> weak_factory_{this};
 };
 

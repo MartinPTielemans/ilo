@@ -51,10 +51,12 @@ if [ "$(uname)" != Darwin ]; then
 $(grep '^browser: menu shown' "$log" | tail -1)"
   expect '^browser: menu drawn ' "the menu control's menu didn't come on screen"
   ../tools/window-screenshot.sh "$pid" "$out/app-menu.png" || fail "no window to capture"
+  expect '^browser: menu window at ' "the menu's window didn't take the keyboard"
   send key escape
   expect '^browser: menu closed' "escape didn't close the menu control's menu"
   post click $control
   expect "^browser: menu shown $app_menu\$" "a second click on the menu control didn't show its menu"
+  expect '^browser: menu window at ' "the menu's window didn't take the keyboard"
   send key down
   send key return
   expect '^browser: command settings via footer$' "down and return in the menu control's menu didn't run Settings…"

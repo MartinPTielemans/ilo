@@ -360,6 +360,12 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
     fprintf(stderr, "browser: terminating, %s\n",
             ShutdownName(browser_shutdown::GetShutdownType()));
     keep_alive_.reset();
+    // The session keeps each regular window's frame and state while Chrome still has its native
+    // window: it closes them all as this returns (OnAppExiting's CloseAllWidgets), and a quit no
+    // page's tab kept as it closed would otherwise be kept at Window::CloseAll, with none (#3494).
+    if (std::ranges::any_of(Window::All(), [](const Window* each) { return !each->own_space(); })) {
+      KeepSession();
+    }
     // A remote-debugging switch, with the window Chrome doesn't open at startup, has Chrome hold
     // the browser up until a client closes it over the protocol, so the user's quit never ended.
     ChromeDevToolsManagerDelegate::AllowBrowserToClose();
@@ -604,6 +610,9 @@ void Install(const bc_host& host) {
   g_browser_core_no_passwords = &IsAgentTab;
   g_browser_core_no_autofill = &IsAgentTab;
   g_browser_core_refuse_passkey = &RefuseAgentPasskey;
+#if BUILDFLAG(IS_MAC)
+  g_browser_core_touch_id_keychain_group = &platform::PasskeyKeychainGroup;
+#endif
 }
 
 int Run(int argc, const char** argv, const bc_host& host) {
