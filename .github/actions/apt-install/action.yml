@@ -72,6 +72,16 @@ runs:
         if [ ! -e "$RUNNER_TEMP/apt-updated" ]; then
           sh "$GITHUB_ACTION_PATH/../../scripts/apt-mirrors.sh"
           "${apt[@]}" update -q
+          # A runner whose sources named no Ubuntu archive read packages.microsoft.com's index
+          # alone, and apt said only that each package couldn't be found (#3756). An empty or
+          # missing mirror list, or a mirror without the index, fails the update itself.
+          policy=$(apt-cache policy)
+          if ! grep -q 'o=Ubuntu,' <<< "$policy"; then
+            echo "::error::apt read no Ubuntu index, so it can't find any package: this runner's apt sources name no Ubuntu archive (#3756). Its sources:"
+            ls -l /etc/apt/sources.list /etc/apt/sources.list.d/ || true
+            grep -Hv '^[[:space:]]*\(#\|$\)' /etc/apt/sources.list /etc/apt/sources.list.d/* || true
+            exit 1
+          fi
           touch "$RUNNER_TEMP/apt-updated"
         fi
         # apt takes a restored .deb whose version and hash match the index, and fetches the rest.
