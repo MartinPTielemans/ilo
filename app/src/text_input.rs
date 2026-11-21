@@ -1139,6 +1139,9 @@ impl TextInput {
         self.pasted = false;
         self.last_layout = None;
         self.last_bounds = None;
+        // A field reset to be shown again may have been hidden with the keyboard: it says it has
+        // it again from the next frame that draws it so (#2847).
+        self.keyboard_drawn = false;
         self.scroll = px(0.);
         self.is_selecting = false;
         self.word_drag = None;

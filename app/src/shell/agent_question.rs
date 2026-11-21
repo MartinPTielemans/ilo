@@ -668,6 +668,22 @@ pub(super) fn buttons(question: &Question) -> Vec<Button> {
                 Does::Answer(Answer::Once),
             ),
         ],
+        // A site the user fenced asks every time it's on (#3724): Never stays, and an Always
+        // would pass nothing.
+        None if question.fenced => vec![
+            button(
+                "agent-question-never",
+                "Never",
+                Look::Quiet,
+                Does::Answer(Answer::Never),
+            ),
+            button(
+                "agent-question-once",
+                "Allow Once",
+                Look::Primary,
+                Does::Answer(Answer::Once),
+            ),
+        ],
         // A request's changes, and a payment, ask every time: Allow lets them go alone, so there's
         // no Always.
         None if !question.changes.is_empty() || question.each_time => vec![
@@ -810,6 +826,40 @@ mod tests {
         );
         cx.run_until_parked();
         assert!(host.take().contains(&"answer agent 9 Never".to_string()));
+    }
+
+    /// A question on a site the user fenced has Never and Allow Once side by side in its last row
+    /// and no Always Allow, as the fence would pass none (#3724).
+    #[gpui::test]
+    fn a_fenced_sites_card_has_no_always(cx: &mut TestAppContext) {
+        let fenced = |id| Question {
+            what: "open mybank.example".into(),
+            why: crate::agents::fence::why("mybank.example").into(),
+            site: "mybank.example".into(),
+            fenced: true,
+            ..question(id)
+        };
+        let labels: Vec<_> = (super::buttons(&fenced(1)).iter())
+            .map(|button| button.label)
+            .collect();
+        assert_eq!(labels, ["Never", "Allow Once"]);
+        let (host, shell, cx) = window_with(cx);
+        for (id, at, answered) in [(11, 0.75, "Once"), (12, 0.25, "Never")] {
+            shell.update(cx, |shell, cx| {
+                shell.set_agent_question(Some(fenced(id)), cx)
+            });
+            cx.run_until_parked();
+            let card = shell.read_with(cx, |shell, _| shell.agent_question_drawn.get());
+            let card = card.expect("the card wasn't drawn");
+            let last = card.bottom() - px(PADDING + BUTTON_HEIGHT / 2.);
+            cx.simulate_click(
+                point(card.left() + card.size.width * at, last),
+                Modifiers::none(),
+            );
+            cx.run_until_parked();
+            let answer = format!("answer agent {id} {answered}");
+            assert!(host.take().contains(&answer), "no {answer}");
+        }
     }
 
     fn change(method: &str, path: &str, what: &str) -> Request {

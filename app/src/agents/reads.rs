@@ -13,7 +13,7 @@ use gpui::{Context, SharedString};
 use serde_json::{Map, Value, json};
 
 use super::saved_read::{self, Answer as CoreAnswer};
-use super::{Act, Agents, Asking, PageAction, Question, Show, ToolResult, Waits};
+use super::{Act, Agents, Asking, Fenced, PageAction, Question, Show, ToolResult, Waits};
 use crate::saved_reads::{self, Definition, Outcome, Row, Saved, State, Store};
 
 /// The rows a proposal's card shows at most.
@@ -448,6 +448,7 @@ impl Agents {
             download: 0,
             requests: Vec::new(),
             did: None,
+            fenced: Fenced::No,
             reply,
         };
         let question = Question {
