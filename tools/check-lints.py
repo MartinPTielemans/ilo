@@ -26,6 +26,11 @@
   `log!` in app/src/lib.rs tests `checked()` before it formats, `log_always!` writes only the
   lines in ALWAYS, and no other write to stderr or stdout in the app's Rust formats a value. The
   MCP bridge's binary, which speaks to its client, the preview and the tests aren't the app's.
+- The same holds for the hosts' C++ and Objective-C in app/platform/ (#3776): a print to stderr
+  or stdout there that formats a string (%s, %@, %ls) sits under a test of Checked() or of the
+  checks' variables, or each string it formats is a literal, or one in FIXED, which says why it
+  names nothing of the user's. Numbers pass: a size, a count or an id says nothing of a page.
+  The drivers, which run only under BROWSER_DRIVE, aren't the app's.
 
 Run from anywhere in the checkout. Prints each finding and exits 1 if there are any.
 """
@@ -405,10 +410,220 @@ def quiet_log_lines():
     return found
 
 
+# --- The hosts' log lines --------------------------------------------------------------------
+
+# The strings the hosts write in every launch, by file and the expression the print formats, each
+# naming nothing the user browses or types. A name like `what` passes anywhere in its file.
+FIXED = {
+    # An overlay's or floating window's name, a literal in the host's table: the command bar, Peek.
+    ("app/platform/mac/host.mm", "overlay.name"),
+    ("app/platform/mac/host.mm", "overlay->name"),
+    ("app/platform/mac/host.mm", "each->name"),
+    ("app/platform/windows/host.cc", "floating.name"),
+    ("app/platform/windows/host.cc", "FloatingName(hwnd)"),
+    ("app/platform/windows/host.cc", "kOverlayNames[index]"),
+    ("app/platform/windows/host.cc", "kOverlayNames[overlay]"),
+    ("app/platform/windows/host.cc", "name"),
+    # A class's name, AppKit's or the host's, saying which view has the keys.
+    ("app/platform/mac/host.mm", "ClassName(responder)"),
+    ("app/platform/mac/host.mm", "ClassName(window)"),
+    ("app/platform/mac/host.mm", "ClassName(window.firstResponder)"),
+    ("app/platform/mac/host.mm", "ClassName(key.firstResponder)"),
+    ("app/platform/mac/host.mm", "NSStringFromClass(to.class).UTF8String"),
+    # The names the code gave the thread and the queue that went through exit() (#937), and the quit
+    # Apple Event's four-letter reason.
+    ("app/platform/mac/host.mm", "name"),
+    ("app/platform/mac/host.mm", "dispatch_queue_get_label(DISPATCH_CURRENT_QUEUE_LABEL)"),
+    ("app/platform/mac/host.mm", "why"),
+    # A literal from the function's callers in the file: how Little ilo's window opened, which
+    # window showed, the jump list's step, why updates are off or an update wasn't kept.
+    ("app/platform/mac/host.mm", "how"),
+    ("app/platform/windows/host.cc", "what"),
+    ("app/platform/windows/host.cc", "step"),
+    ("app/platform/windows/updates.cc", "off"),
+    ("app/platform/windows/updates.cc", "wrong"),
+    # The Settings window's title, a section's name (Section::name in app/src/settings.rs).
+    ("app/platform/mac/host.mm", "g_settings.title.UTF8String"),
+    ("app/platform/windows/host.cc", "Utf8(title).c_str()"),
+    # The Dock icon's colour as hex, or green or system; the badge's count.
+    ("app/platform/mac/dock.mm", "name.UTF8String"),
+    ("app/platform/mac/needs_you.mm", "NSApp.dockTile.badgeLabel.UTF8String"),
+    ("app/platform/windows/host.cc", "std::to_string(count).c_str()"),
+    # The system's words for an error, or Sparkle's, naming nothing browsed.
+    ("app/platform/mac/needs_you.mm", "error.localizedDescription.UTF8String"),
+    ("app/platform/windows/host.cc", "error.message().c_str()"),
+    ("app/platform/mac/updates.mm", "error.domain"),
+    ("app/platform/mac/updates.mm", "error.localizedDescription"),
+    ('app/platform/mac/updates.mm', 'error.userInfo[@"SUNoUpdateFoundReason"]'),
+    ('app/platform/mac/updates.mm', '[@" " stringByAppendingString:cause.description]'),
+    ("app/platform/mac/updates.mm", "outcome"),
+    # An update's version, the build's number and its feed or download's address: ilo's own service
+    # or a fork's, never a page; the first line of its notes, from that feed; the app's own
+    # signature.
+    ("app/platform/mac/updates.mm", "version"),
+    ("app/platform/mac/updates.mm", "item.versionString"),
+    ("app/platform/mac/updates.mm", "latest.versionString"),
+    ("app/platform/mac/updates.mm", "update.versionString"),
+    ("app/platform/mac/updates.mm", "feed"),
+    ("app/platform/mac/updates.mm", "first"),
+    ("app/platform/mac/updates.mm", "signature"),
+    ("app/platform/mac/updates.mm",
+     '[NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleVersion"]'),
+    ("app/platform/windows/updates.cc", "update.version.c_str()"),
+    ("app/platform/windows/updates.cc", "APP_BUILD"),
+    ("app/platform/windows/updates.cc", "url"),
+    ("app/platform/windows/updates.cc", "url.c_str()"),
+    # updates.mm's Log, whose values this rule reads at each call to it.
+    ("app/platform/mac/updates.mm", "line.UTF8String"),
+    # The file a driver's command names, as only drive.cc asks for a window's picture.
+    ("app/platform/windows/host.cc", "path"),
+}
+# The drivers, started only under BROWSER_DRIVE (app/src/main.rs).
+DRIVERS = ("app/platform/mac/drive.mm", "app/platform/windows/drive.cc")
+HOST_PRINT = re.compile(r"\b(?:fprintf\s*\(\s*std(?:err|out)\s*,|printf\s*\(|NSLog\s*\(|"
+                        r"Log\s*\(\s*\[NSString\s+stringWithFormat:|std::c(?:err|out)\b)")
+# A printf or NSString specifier: its width, its precision, which a * takes from the arguments,
+# and its conversion, s, S or @ for a string.
+SPECIFIER = re.compile(r"%(?:%|[-+ #0]*(\*|\d+)?(?:\.(\*|\d+))?(?:hh|h|ll|l|L|z|j|t|q)?"
+                       r"([a-zA-Z@]))")
+GATE = re.compile(r"(?<!!)(?<!! )\b(?:Checked\(\)|getenv\(\"BROWSER_(?:DRIVE|CHECK)\"\)|"
+                  r"GetEnvironmentVariableW\(L\"BROWSER_(?:DRIVE|CHECK)\")")
+
+
+def gated(condition):
+    """Whether `condition` holds only when the checks run the app: it tests them, and nothing
+    else can make it true."""
+    condition = re.sub(r"^(else\s+)?if\s*", "", condition.strip())
+    depth, either = 0, False
+    # The if's own brackets, or a choice's around all of it, hold the whole condition.
+    while condition.startswith("(") and split_top(condition, 1, len(condition), "") == [
+            len(condition) - 1]:
+        condition = condition[1:-1].strip()
+    for i, c in enumerate(condition):
+        depth += (c in "([") - (c in ")]")
+        either |= depth == 0 and condition.startswith("||", i)
+    return bool(GATE.search(condition)) and not either
+
+
+def blank(text, strings=True):
+    """`text` with its comments, and its strings' insides if `strings`, as spaces, so offsets
+    and lines stay where they were."""
+    out, i, n = [], 0, len(text)
+    while i < n:
+        if text.startswith("//", i) or text.startswith("/*", i):
+            j = text.find("\n" if text[i + 1] == "/" else "*/", i)
+            j = n if j < 0 else j + (0 if text[i + 1] == "/" else 2)
+        elif text[i] in "\"'":
+            j = i + 1
+            while j < n and text[j] not in (text[i], "\n"):
+                j += 2 if text[j] == "\\" else 1
+            if not strings:
+                out.append(text[i:j + 1])
+                i = j + 1
+                continue
+            out.append(text[i] + " " * (j - i - 1) + text[i:j + 1][-1:])
+            i = j + 1
+            continue
+        else:
+            out.append(text[i])
+            i += 1
+            continue
+        out.append(re.sub(r"[^\n]", " ", text[i:j]))
+        i = j
+    return "".join(out)
+
+
+def split_top(code, start, end, at):
+    """The offsets in code[start:end] of the characters in `at` outside brackets, but a `::`'s,
+    and of the bracket that closes the one before `start`, if it's there, last."""
+    depth, out = 0, []
+    for i in range(start, end):
+        c = code[i]
+        if c in ")]}" and depth == 0:
+            return out + [i]
+        depth += (c in "([{") - (c in ")]}")
+        if depth == 0 and c in at and "::" not in code[i - 1:i + 2]:
+            out.append(i)
+    return out
+
+
+def unfixed(path, text, code, start, end):
+    """The part of the expression text[start:end] that's neither a literal, a choice between
+    literals, nor in FIXED, or None if there's none."""
+    while start < end and text[start].isspace():
+        start += 1
+    while end > start and text[end - 1].isspace():
+        end -= 1
+    expr = " ".join(text[start:end].split())
+    if re.fullmatch(r'@?"(?:[^"\\]|\\.)*"(\s*@?"(?:[^"\\]|\\.)*")*', expr) or (path, expr) in FIXED:
+        return None
+    asks = split_top(code, start, end, "?")
+    colons = split_top(code, asks[0] + 1, end, ":") if asks else []
+    if not colons:
+        return expr
+    # `a ? b : c` writes b or c, and `a ?: c` a or c, but b only under the checks when a tests them.
+    q, colon = asks[0], colons[0]
+    first = (start, q) if colon == q + 1 else (q + 1, colon)
+    checked_only = colon != q + 1 and gated(text[start:q])
+    return ((None if checked_only else unfixed(path, text, code, *first)) or
+            unfixed(path, text, code, colon + 1, end))
+
+
+def quiet_host_lines():
+    found = []
+    for path in tracked("app/platform"):
+        if not path.endswith((".cc", ".mm", ".h", ".cpp", ".m", ".c")) or path in DRIVERS:
+            continue
+        text = read(path)
+        code, gates = blank(text), blank(text, strings=False)
+        opened = []
+        prints = {m.start(): m for m in HOST_PRINT.finditer(code)}
+        for i, c in enumerate(code):
+            if c in "{}":
+                if c == "}":
+                    opened = opened[:-1]
+                    continue
+                k = max(code.rfind(";", 0, i), code.rfind("{", 0, i), code.rfind("}", 0, i))
+                opened.append(" ".join(gates[k + 1:i].split()))
+                continue
+            m = prints.get(i)
+            if not m:
+                continue
+            k = max(code.rfind(";", 0, i), code.rfind("{", 0, i), code.rfind("}", 0, i))
+            around = opened + [" ".join(gates[k + 1:i].split())]
+            if any(re.match(r"(else\s+)?if\b", s) and gated(s) for s in around):
+                continue
+            if m.group(0).startswith("std::c"):
+                found.append((path, text.count("\n", 0, i) + 1, "a stream to stderr or stdout "
+                              "in every launch, which this rule can't read (#3776). Write with "
+                              "fprintf, under `if (Checked())` if it names a value of the user's."))
+                continue
+            *commas, end = split_top(code, m.end(), len(code), ",")
+            args = list(zip([m.end()] + [c + 1 for c in commas], commas + [end]))
+            form = "".join(re.findall(r'"((?:[^"\\]|\\.)*)"', text[slice(*args[0])]))
+            strings, at = [], 1
+            for s in SPECIFIER.finditer(form):
+                if s.group(0) == "%%":
+                    continue
+                at += (s.group(1) == "*") + (s.group(2) == "*")
+                if s.group(3) in "s@S" and at < len(args):
+                    strings.append(args[at])
+                at += 1
+            for value in strings:
+                expr = unfixed(path, text, code, *value)
+                if expr:
+                    line = text.count("\n", 0, i) + 1
+                    found.append((path, line, f"a print that writes {expr} in every launch, which "
+                                  "can name what the user browses or types (#3776). Put it under "
+                                  "`if (Checked())`, or add it to FIXED in tools/check-lints.py "
+                                  "with why it names nothing of the user's."))
+    return found
+
+
 def main():
     found = (unread_markers() + bare_sleeps() + quiet_after_send() + run_places() +
              openbox_takes() + dollar_before_choice() +
-             mac_outside_platform() + quiet_log_lines())
+             mac_outside_platform() + quiet_log_lines() + quiet_host_lines())
     for path, line, message in found:
         print(f"::error file={path},line={line}::{message}")
     print(f"{len(found)} found")
