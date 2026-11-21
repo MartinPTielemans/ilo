@@ -744,8 +744,12 @@ pub fn ask_page(
         .update(cx, |dialog, window, cx| {
             if let Some(asked) = &mut dialog.asked
                 && asked.page == page
-                && asked.answered_at.is_none()
             {
+                // Answered, it leaves, and the page hears the answer once it has gone, so a
+                // question the shell asks again till then, as its pane's focus moves, isn't new.
+                if asked.answered_at.is_some() {
+                    return;
+                }
                 asked.over = Some(over);
                 dialog.set_rests(rests, window, cx);
                 dialog.host.show(None, Some(over.0), !rests);

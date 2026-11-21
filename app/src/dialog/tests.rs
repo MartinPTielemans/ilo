@@ -774,6 +774,29 @@ fn a_click_on_a_resting_ok_answers_it(cx: &mut TestAppContext) {
     assert!(calls.contains(&"focus pane".to_string()), "{calls:?}");
 }
 
+/// The click on a resting OK focuses its pane, so the shell asks again, live, while the card leaves
+/// with its answer, before the shell hears it: the answered question never shows again (#3231).
+#[gpui::test]
+fn a_resting_ok_answered_isnt_asked_again_as_its_pane_comes_live(cx: &mut TestAppContext) {
+    let mut dialog = Asking::resting(cx);
+    dialog.calls();
+    let (x, y) = dialog.on_ok();
+    dialog.click(x, y);
+    dialog.rest(false);
+    let calls = dialog.calls();
+    assert!(calls.contains(&"accept ".to_string()), "{calls:?}");
+    let hidden = calls.iter().position(|call| call == "hide");
+    assert!(
+        hidden.is_some(),
+        "the answered card didn't leave: {calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|call| call.starts_with("show")),
+        "the answered question showed again: {calls:?}"
+    );
+    assert!(dialog.calls().is_empty());
+}
+
 /// A card at rest stays on screen while the user picks View › Appearance, which redraws every
 /// window before the shell gives the new palette, so the card draws again once the palette changes,
 /// where it kept the old tone on the dialogs run under Wayland.
