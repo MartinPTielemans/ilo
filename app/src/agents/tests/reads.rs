@@ -541,3 +541,96 @@ fn remove_read_and_undo_bring_it_back_in_place(cx: &mut TestAppContext) {
     );
     assert!(missing.try_recv().unwrap().text.starts_with("not_found:"));
 }
+
+/// Lib test 7: with its site on Always ask first a saved read is paused: list_reads says so, a use
+/// reads nothing and says why, and a new proposal there is refused with no card. Off the list,
+/// the read reads again.
+#[gpui::test]
+fn always_ask_first_pauses_reads_and_refuses_proposals(cx: &mut TestAppContext) {
+    let (agents, browser, answer) = proposed(cx);
+    let asked = question(&browser);
+    agents.update(cx, |agents, cx| agents.answer(asked.id, Answer::Once, cx));
+    assert!(!answer.try_recv().expect("Save Read didn't answer").error);
+    agents.update(cx, |agents, cx| {
+        agents.fence("example.com", cx);
+    });
+    let state = |cx: &mut TestAppContext| {
+        let listed = call(&agents, "claude-code", "list_reads", json!({}), cx)
+            .try_recv()
+            .expect("list_reads didn't answer");
+        let listed: Value = serde_json::from_str(&listed.text).unwrap();
+        listed["reads"][0]["state"]
+            .as_str()
+            .unwrap_or("")
+            .to_string()
+    };
+    assert_eq!(state(cx), "paused");
+
+    let reads = browser.saved_reads.borrow().len();
+    let used = call(
+        &agents,
+        "claude-code",
+        "use_read",
+        json!({ "name": "city buildings" }),
+        cx,
+    )
+    .try_recv()
+    .expect("a paused read didn't answer");
+    assert!(used.error);
+    assert_eq!(
+        used.text,
+        "paused: www.example.com is on Always ask first, so saved reads for it are stopped."
+    );
+    assert_eq!(
+        browser.saved_reads.borrow().len(),
+        reads,
+        "a paused read read"
+    );
+    assert_eq!(
+        titles(&agents, cx)[0],
+        (
+            "Paused: city buildings".to_string(),
+            Some("www.example.com is on Always ask first".to_string())
+        )
+    );
+
+    let mut again = proposal();
+    again["name"] = json!("other buildings");
+    let refused = call(&agents, "claude-code", "propose_read", again, cx)
+        .try_recv()
+        .expect("a proposal on a fenced site didn't answer");
+    assert!(refused.error);
+    assert_eq!(
+        refused.text,
+        "not_allowed: www.example.com is on Always ask first, so reads can't be saved for it. \
+         Open www.example.com in a tab to ask the user instead."
+    );
+    assert_eq!(*browser.asked.borrow(), None, "a card asked");
+    assert_eq!(
+        browser.saved_reads.borrow().len(),
+        reads,
+        "the proposal read"
+    );
+    assert_eq!(
+        titles(&agents, cx)[0],
+        (
+            "Can't save a read of www.example.com".to_string(),
+            Some("Always ask first".to_string())
+        )
+    );
+
+    agents.update(cx, |agents, cx| agents.unfence("example.com", cx));
+    assert_eq!(state(cx), "ready");
+    let _used = call(
+        &agents,
+        "claude-code",
+        "use_read",
+        json!({ "name": "city buildings" }),
+        cx,
+    );
+    assert_eq!(
+        browser.saved_reads.borrow().len(),
+        reads + 1,
+        "off the list, the read didn't read"
+    );
+}

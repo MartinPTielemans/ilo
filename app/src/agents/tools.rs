@@ -879,7 +879,8 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
         // Saved reads (#3822): the read's name is the agent's, in quotes, as a title is (#3690).
         "use_read" | "propose_read" | "list_reads" | "save_read" | "change_read"
         | "remove_read" | "decline_read" | "unanswered_read" | "read_not_found"
-        | "read_needs_sign_in" | "read_broken" | "read_unreachable" => {
+        | "read_needs_sign_in" | "read_broken" | "read_unreachable" | "read_paused"
+        | "read_not_allowed" => {
             return read_title(did, tense);
         }
         "scroll" => {
@@ -1032,6 +1033,8 @@ fn read_title(did: &Did, tense: Tense) -> String {
         ("read_needs_sign_in", _) => format!("Needs a sign-in on {}", site()),
         ("read_broken", _) => format!("Broken: {}", did.target),
         ("read_unreachable", _) => format!("Couldn't reach {}", site()),
+        ("read_paused", _) => format!("Paused: {}", did.target),
+        ("read_not_allowed", _) => format!("Can't save a read of {}", site()),
         _ => String::new(),
     }
 }
@@ -1045,6 +1048,8 @@ pub fn read_detail(action: &str, site: &str, target: &str) -> Option<String> {
         "remove_read" => format!("{target} · by you"),
         "use_read" | "read_broken" | "decline_read" | "unanswered_read" => site.to_string(),
         "read_needs_sign_in" | "read_unreachable" => target.to_string(),
+        "read_paused" => format!("{site} is on {}", super::fence::HEADING),
+        "read_not_allowed" => super::fence::HEADING.to_string(),
         _ => return None,
     };
     Some(detail).filter(|detail| !detail.is_empty())
@@ -1161,6 +1166,8 @@ pub fn describe(action: &str) -> &'static str {
         "read_needs_sign_in" => "A read needs a sign-in",
         "read_broken" => "A read is broken",
         "read_unreachable" => "A read's site didn't answer",
+        "read_paused" => "A read is paused",
+        "read_not_allowed" => "Couldn't save a read",
         "connected" => "Connected",
         "disconnected" => "Disconnected",
         "released" => "Let go of the tab",

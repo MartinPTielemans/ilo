@@ -100,6 +100,19 @@ pub(super) struct Reads {
     removed: Vec<(u64, Saved, usize)>,
 }
 
+/// The agent's text for a read of a site on the user's Always ask first list, which stops it.
+fn paused(site: &str) -> String {
+    format!("paused: {site} is on Always ask first, so saved reads for it are stopped.")
+}
+
+/// The agent's text for a proposal on a site on that list, which can't be saved.
+fn not_allowed(site: &str) -> String {
+    format!(
+        "not_allowed: {site} is on Always ask first, so reads can't be saved for it. Open {site} \
+         in a tab to ask the user instead."
+    )
+}
+
 /// The agent's text for a read the site wants a sign-in for.
 fn needs_sign_in(site: &str) -> String {
     format!(
@@ -255,6 +268,12 @@ impl Agents {
         self.reads.removed.clear();
     }
 
+    /// Whether the read of `origin` is of a site on the user's Always ask first list, or under one
+    /// of its entries.
+    pub fn fenced_read(&self, origin: &str) -> bool {
+        self.fence_of(&super::site(origin)).is_some()
+    }
+
     /// list_reads: the profile's saved reads, each its name, site, columns, parameters and state.
     pub(super) fn list_reads(
         &mut self,
@@ -279,7 +298,10 @@ impl Agents {
                     "site": shown(&read.site),
                     "columns": columns,
                     "params": params,
-                    "state": saved.state.id(),
+                    "state": match self.fenced_read(&read.site) {
+                        true => "paused",
+                        false => saved.state.id(),
+                    },
                 })
             })
             .collect();
@@ -321,6 +343,15 @@ impl Agents {
             ));
             return;
         };
+        // A site on Always ask first asks at every step, so a read that never asks can't be saved
+        // for it (#3787), even on a tab the user let stay there.
+        if self.fenced_read(&origin) {
+            let host = shown(&origin);
+            self.note(agent, "read_not_allowed", &host, "");
+            cx.notify();
+            _ = reply.send(ToolResult::error(not_allowed(&host)));
+            return;
+        }
         let read = match definition(arguments, &origin) {
             Ok(read) => read,
             Err(why) => {
@@ -591,6 +622,15 @@ impl Agents {
             )));
             return;
         };
+        // Paused while its site is on Always ask first, and read again once it's off: nothing of
+        // the read's own changes.
+        if self.fenced_read(&saved.read.site) {
+            let site = shown(&saved.read.site);
+            self.note_on(agent, "read_paused", &site, &saved.read.name, "");
+            cx.notify();
+            _ = reply.send(ToolResult::error(paused(&site)));
+            return;
+        }
         let address = match saved_reads::address(&saved.read, &params) {
             Ok(address) => address,
             Err(saved_reads::Refused(why)) => {
