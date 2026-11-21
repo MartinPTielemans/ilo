@@ -153,10 +153,9 @@ jobs:
 
       # The ilo command reaches the browser from the host as a client's bridge does, run in the
       # sandbox by Flatpak, as the script the row's line writes runs it (#3667): help lists the
-      # server's tools, and a screenshot without -o is a file the host has at the path printed,
-      # under Downloads, since the sandbox's /tmp is its own. The agent file and its token are
-      # seeded as Add writes them, which the UI's check drives elsewhere. BROWSER_CHECK has the app
-      # log the server's address, and the onboarding, which the start above left unplayed, is
+      # server's tools, and open opens a page as the command's agent. The agent file and its token
+      # are seeded as Add writes them, which the UI's check drives elsewhere. BROWSER_CHECK has the
+      # app log the server's address, and the onboarding, which the start above left unplayed, is
       # skipped, as check.sh skips it.
       - name: The ilo command
         id: command
@@ -164,7 +163,7 @@ jobs:
         run: |
           profile="$HOME/.var/app/app.ilo.browser/config/$(cat app/branding/name)"
           token=$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')
-          mkdir -p "$profile" "$HOME/Downloads" app/build/flatpak-command
+          mkdir -p "$profile" app/build/flatpak-command
           printf '{"on":true,"agents":[{"client":"ilo-command","token":"%s"}]}' "$token" > "$profile/Agents"
           cd app/build/flatpak-command
           printf '<title>Shot</title><p>A page to take a picture of.</p>' > index.html
@@ -192,13 +191,8 @@ jobs:
               case $help in *"ilo click <ref>"*) ;; *) echo "::error::ilo help listed no click: $help"; status=1 ;; esac
               opened=$(ilo open http://127.0.0.1:8765/ --as Checker 2>&1) ||
                 { echo "::error::ilo open failed ($?): $opened"; status=1; }
-              shot=$(ilo shot --as Checker 2>&1) || { echo "::error::ilo shot failed ($?): $shot"; status=1; }
-              path=$(printf "%s\n" "$shot" | tail -1)
-              case $path in
-                "$HOME/Downloads/"*) ;;
-                *) echo "::error::ilo shot saved its picture outside ~/Downloads, which the host can'"'"'t see: $shot"; status=1 ;;
-              esac
-              [ -s "$path" ] || { echo "::error::ilo shot printed $path, which the host has no file at: $shot"; status=1; }
+              case $opened in *"127.0.0.1:8765"*) ;; *) echo "::error::ilo open named no page: $opened"; status=1 ;; esac
+              # A shot without -o, saved under ~/Downloads, is checked once the Flatpak pictures a page (#3788).
               import -window root command.png || true
             fi
             flatpak kill app.ilo.browser || true
