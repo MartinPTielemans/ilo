@@ -24,6 +24,13 @@
 
 #include "../host.h"
 
+// Whether the checks run the app, under their driver or check.sh, read once: a line naming an
+// address, a title or the user's own words is written only then, as log! lines are (#3725).
+static bool Checked() {
+  static const bool checked = getenv("BROWSER_DRIVE") || getenv("BROWSER_CHECK");
+  return checked;
+}
+
 // menu_window.mm's: ilo's menu over an overlay takes the keyboard without the user leaving it.
 bool HostIsMenuWindow(NSWindow* window);
 
@@ -1970,7 +1977,9 @@ static void OrderLittleOut(NSWindow* self, SEL selector, id sender) {
     }
   }
   // check.sh reads this line.
-  fprintf(stderr, "browser: little window gave way to %s\n", to.localizedName.UTF8String ?: "");
+  if (Checked()) {
+    fprintf(stderr, "browser: little window gave way to %s\n", to.localizedName.UTF8String ?: "");
+  }
 }
 
 // Little ilo windows order out through OrderLittleOut. They're Chromium's class, whose browser
@@ -5585,14 +5594,18 @@ void host_open_elsewhere(const char* url) {
     return;
   }
   // check.sh reads this line. A driven run opens nothing, so checks never launch Safari.
-  fprintf(stderr, "browser: open in safari %s\n", url);
+  if (Checked()) {
+    fprintf(stderr, "browser: open in safari %s\n", url);
+  }
   if (getenv("BROWSER_DRIVE")) {
     return;
   }
   NSURL* safari =
       [NSWorkspace.sharedWorkspace URLForApplicationWithBundleIdentifier:@"com.apple.Safari"];
   if (!safari) {
-    fprintf(stderr, "browser: no Safari to open %s\n", url);
+    if (Checked()) {
+      fprintf(stderr, "browser: no Safari to open %s\n", url);
+    }
     return;
   }
   [NSWorkspace.sharedWorkspace openURLs:@[ page ]
@@ -5631,7 +5644,9 @@ void host_share(void* ui_view,
     rect = [content convertRect:[browser->window convertRectFromScreen:on_screen] fromView:nil];
   }
   // check.sh reads this line. A driven run doesn't show the menu, which would wait on a choice.
-  fprintf(stderr, "browser: share %s\n", url);
+  if (Checked()) {
+    fprintf(stderr, "browser: share %s\n", url);
+  }
   if (getenv("BROWSER_DRIVE")) {
     return;
   }
@@ -5681,7 +5696,9 @@ void host_share_with(const char* url, const char* title, size_t index) {
   NSSharingService* service = services[index];
   // check.sh reads this line. A driven run shares nothing, as the service takes the page to
   // another app.
-  fprintf(stderr, "browser: share %s with %s\n", url, service.menuItemTitle.UTF8String ?: "");
+  if (Checked()) {
+    fprintf(stderr, "browser: share %s with %s\n", url, service.menuItemTitle.UTF8String ?: "");
+  }
   if (getenv("BROWSER_DRIVE")) {
     return;
   }
@@ -5990,7 +6007,9 @@ int host_ask(const char* message, const char* detail, const char* const* buttons
     alert.buttons.firstObject.keyEquivalent = @"";
   }
   g_alert = alert;
-  fprintf(stderr, "browser: alert shown %s\n", message);
+  if (Checked()) {
+    fprintf(stderr, "browser: alert shown %s\n", message);
+  }
   NSModalResponse response = [alert runModal];
   g_alert = nil;
   return static_cast<int>(response - NSAlertFirstButtonReturn);
