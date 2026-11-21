@@ -1,0 +1,18 @@
+# Where the split view's keys run on each layout (#3509): ⌃⇧[ Previous Pane, ⌃⇧] Next Pane and
+# ⌃⇧- Close Split Pane, pressed as Alt+Shift off the Mac. The app's tests of the names GPUI gives
+# keys read it, and the core's tests of the names a page's keys get, so a key that runs in the UI
+# runs with the page focused too.
+#
+# The rule: a split key runs on the key whose base character on the layout, with no shift or
+# AltGr, is the split key's. Where the layout has no such key, it runs on the key at its US
+# place, unless that key's base character is another split key's, which keeps it.
+#
+# A line is a layout, then the base characters of the keys at the US places that matter, written
+# US place=character, then the US place of the key [, ] and - run on, or none. The last layout is
+# made up: no key of its own types [, and the one at the US [ place types ].
+us  [=[ ]=] -=-          [ ] -
+jp  [=@ ]=[ \=] -=-      ] \ -
+dk  [=å ]=¨ -=+ /=-      [ ] /
+de  [=ü ]=+ -=ß /=-      [ ] /
+fr  [=^ ]=$ -=) 6=-      [ ] 6
+x   [=] ]=' -=-          none [ -

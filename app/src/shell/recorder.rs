@@ -602,8 +602,8 @@ impl Browser for Recorder {
         self.record(format!("back to pinned url {tab}"))
     }
 
-    fn navigate(&self, tab: u64, url: &str, _: &mut App) {
-        self.record(format!("navigate {tab} {url}"))
+    fn follow(&self, tab: u64, url: &str, _: &mut App) {
+        self.record(format!("follow {tab} {url}"))
     }
 
     fn recent_reached(&self) -> bool {

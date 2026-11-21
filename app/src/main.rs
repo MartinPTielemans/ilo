@@ -543,6 +543,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
         browser::face::register(cx);
         // The user's keys, before the shortcuts are bound to them.
         settings::read_shortcuts(cx);
+        shell::follow_layout(cx);
         settings::read_look(cx);
         settings::read_portrait_background(cx);
         settings::read_new_note(cx);
@@ -1015,6 +1016,9 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
     // every launch as safe start's is.
     let ad_blocker = ad_block_host::prepare(&given, &profile);
     args.extend(ad_blocker.switches());
+    // Chromium writes no ERROR line off a check, as the app's own log lines aren't (#3731). On
+    // Windows and Linux too, the core adds this before Chromium starts its logging.
+    args.extend(launch::quiet_log_level(browser::checked(), &given));
     let given = given.into_iter().filter(|arg| {
         !arg.starts_with(browser::safe_start::SWITCH)
             && ad_blocker.passes(arg)
