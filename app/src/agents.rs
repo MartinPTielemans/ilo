@@ -1430,6 +1430,10 @@ impl Agents {
     /// first, as an open there does, and goes as it came once they let the tab stay (#3724).
     /// Every other call goes on, as it is.
     fn fence_call(&mut self, call: Call, cx: &mut Context<Self>) -> Option<Call> {
+        // Never to land: the arrival gate off, to show mcp.sh's new step red (#3724).
+        if !FENCE_ASKS.is_empty() {
+            return Some(call);
+        }
         if !FENCE_ASKS.contains(&call.tool.as_str()) {
             return Some(call);
         }
