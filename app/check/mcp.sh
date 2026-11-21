@@ -3508,8 +3508,11 @@ CARD
   send menu Settings…
   expect '^browser: settings shown ' "Settings… didn't show Settings for the fence's log"
   settings_drew
-  send clickkey $(drawn "toolbar Agents")
-  expect '^browser: settings tab Agents$' "a click on Agents didn't show its section for the log"
+  # Settings shows the section it was last on, Agents since the foot's capture.
+  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Agents$'; then
+    send clickkey $(drawn "toolbar Agents")
+    expect '^browser: settings tab Agents$' "a click on Agents didn't show its section for the log"
+  fi
   settings_drew Agents
   newest=$(sed -n 's/^browser: settings request \([0-9]*\) .* at .*/\1/p' "$log" | sort -n | tail -1)
   [ -n "$newest" ] || fail "Settings › Agents drew no entry of the agent's"
