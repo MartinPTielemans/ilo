@@ -3257,7 +3257,10 @@ impl Agents {
 
     /// The site of `tab`'s page if it's under a fenced entry the user hasn't let the tab stay
     /// under: it came there without an open they allowed, so nothing of its page reaches the
-    /// agent until they do.
+    /// agent until they do. The model's address is the page an answer is about: the core reports a
+    /// tab's state from the commit, a restore from the back-forward cache included, in a task on
+    /// the UI thread posted before the page settles and the action's answer is posted, so the
+    /// report reaches the app first (mcp.sh's forward step guards it).
     fn came_to(&self, tab: u64, cx: &App) -> Option<String> {
         let site = site(&self.browser.tab(tab, cx).url);
         let entry = self.fence_of(&site)?;
@@ -3280,11 +3283,11 @@ impl Agents {
     /// history included: once it's off the entry the user let it stay under, coming back asks
     /// again. Before it gets there, only the page it was on keeps the yes.
     pub fn tab_at(&mut self, tab: u64, url: &str) {
-        let under = fence::entry_for(&self.fenced, &site(url)).map(str::to_string);
+        // Every tab's every report comes here, and almost none has a yes to follow.
         let Some(cleared) = self.cleared.get_mut(&tab) else {
             return;
         };
-        if under.as_ref() == Some(&cleared.entry) {
+        if fence::entry_for(&self.fenced, &site(url)) == Some(cleared.entry.as_str()) {
             cleared.arrived = true;
         } else if cleared.arrived || (url != cleared.from && is_web(url)) {
             self.cleared.remove(&tab);
