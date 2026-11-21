@@ -3270,13 +3270,19 @@ pub fn model_menu(
 }
 
 /// A name as it reads: compatibility forms as the letters they show, each letter as the one it
-/// passes for (UTS #39's skeleton, which drops what doesn't show), in lower case, words of letters
-/// and digits split by one space. Two names that read alike read the same here.
+/// passes for (UTS #39's skeleton, which drops what doesn't show), in lower case and without
+/// accents, and i, l and 1 as one letter, as a capital I and a small l draw alike; then words of
+/// letters and digits split by one space. Two names that read alike read the same here. Only for
+/// comparing: a name is shown as given.
 fn reads_as(name: &str) -> String {
     use unicode_normalization::UnicodeNormalization;
+    use unicode_properties::{GeneralCategoryGroup, UnicodeGeneralCategory};
     let folded = name.nfkc().collect::<String>().to_lowercase();
     let read = unicode_security::skeleton(&folded).collect::<String>();
-    let read = read.to_lowercase();
+    let read = (read.to_lowercase().chars())
+        .filter(|c| c.general_category_group() != GeneralCategoryGroup::Mark)
+        .map(|c| if matches!(c, 'l' | '1') { 'i' } else { c })
+        .collect::<String>();
     let words = read.split(|c: char| !c.is_alphanumeric());
     words
         .filter(|word| !word.is_empty())
