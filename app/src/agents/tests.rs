@@ -52,6 +52,8 @@ struct Made {
     downloads: RefCell<Vec<(u64, bool)>>,
     /// The HTTP requests the agents sent: the tab, the request and what it sent.
     requests: RefCell<Vec<(u64, u64, request::Request)>>,
+    /// The saved reads sent: the profile, the read, the address, its size and its time.
+    saved_reads: RefCell<Vec<(u64, u64, String, usize, i64)>>,
     /// The split views, each its tabs left to right.
     splits: RefCell<Vec<Vec<u64>>>,
     /// Each mute or unmute asked of a tab, in order.
@@ -367,6 +369,12 @@ impl Browser for Made {
         self.requests
             .borrow_mut()
             .push((tab, request, sent.clone()));
+    }
+
+    fn read(&self, profile: u64, read: u64, url: &str, max_bytes: usize, timeout_ms: i64) {
+        self.saved_reads
+            .borrow_mut()
+            .push((profile, read, url.into(), max_bytes, timeout_ms));
     }
 }
 
@@ -10017,4 +10025,59 @@ fn an_agents_http_address_is_never_a_typed_one(cx: &mut TestAppContext) {
         *browser.navigated.borrow(),
         [(30, "http://other.example.com/".to_string())]
     );
+}
+
+mod saved_reads {
+    use super::*;
+    use crate::agents::saved_read::{self, Answer};
+
+    #[gpui::test]
+    fn a_read_goes_to_the_core_within_its_caps_and_answers_once(cx: &mut TestAppContext) {
+        let (agents, browser, _) = connected(cx);
+        let answered = Rc::new(RefCell::new(Vec::new()));
+        let url = "https://www.example.test/inbox";
+        let read = agents.update(cx, |agents, _| {
+            let answered = answered.clone();
+            agents.read(7, url, 1 << 30, 600_000, move |answer, _| {
+                answered.borrow_mut().push(answer)
+            })
+        });
+        assert_eq!(
+            *browser.saved_reads.borrow(),
+            [(
+                7,
+                read,
+                url.to_string(),
+                saved_read::MAX_BYTES,
+                saved_read::MAX_MILLISECONDS
+            )]
+        );
+        assert!(answered.borrow().is_empty());
+
+        let answer = Answer {
+            status: 200,
+            url: url.into(),
+            body: b"rows".to_vec(),
+            ..Default::default()
+        };
+        agents.update(cx, |agents, cx| {
+            agents.read_done(read, answer.clone(), cx);
+            // A second answer, or one for a read nobody sent, reaches no one.
+            agents.read_done(read, Answer::default(), cx);
+            agents.read_done(read + 100, Answer::default(), cx);
+        });
+        assert_eq!(*answered.borrow(), [answer]);
+    }
+
+    #[gpui::test]
+    fn a_read_within_the_caps_goes_as_asked(cx: &mut TestAppContext) {
+        let (agents, browser, _) = connected(cx);
+        let read = agents.update(cx, |agents, _| {
+            agents.read(3, "https://www.example.test/", 1000, 200, |_, _| {})
+        });
+        assert_eq!(
+            *browser.saved_reads.borrow(),
+            [(3, read, "https://www.example.test/".to_string(), 1000, 200)]
+        );
+    }
 }
