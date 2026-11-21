@@ -20,7 +20,8 @@
     "@vitejs/plugin-react": "6.1.2",
     "typescript": "^6.0.2",
     "vite": "npm:@voidzero-dev/vite-plus-core@1.4.0",
-    "vite-plus": "1.4.0"
+    "vite-plus": "1.4.0",
+    "wrangler": "4.151.2"
   },
   "packageManager": "pnpm@12.15.0"
 }
