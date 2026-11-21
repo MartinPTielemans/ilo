@@ -29,6 +29,17 @@ describe("the changelog's feed", () => {
     expect(feed).toContain("Tabs &amp;amp; &amp;lt;Spaces&amp;gt;.");
   });
 
+  it("leaves out a dated release the deploy doesn't list as published", () => {
+    const releases = [
+      { version: "0.0.3", date: "3 November 2026", summary: "Tagged.", notes: [] },
+      { version: "0.0.2", date: "2 November 2026", summary: "Out.", notes: [] },
+    ];
+    const feed = changelogFeed(releases, "0.0.1 0.0.2");
+    expect(feed).not.toContain("0.0.3");
+    expect(feed).toContain("changelog#0.0.2");
+    expect(changelogFeed(releases)).toContain("changelog#0.0.3");
+  });
+
   it("says no release's summary twice", () => {
     for (const release of RELEASES) {
       const notes = release.notes.map((note) => (typeof note === "string" ? note : note.text));

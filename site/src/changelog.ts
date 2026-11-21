@@ -10,12 +10,24 @@ export type Release = {
   notes: Note[];
 };
 
+/**
+ * Whether a release is out: it has its day and, where the build was given the versions published
+ * on GitHub (`published`, ILO_PUBLISHED, which the deploy sets from the releases), it's one of
+ * them. An entry merged before its release is published so stays off the live site until the
+ * release's own deploy (#3798). The checks and `vp dev` have no list, and show every dated release.
+ */
+export function isOut(release: Release, published?: string) {
+  const listed = !published || published.split(/\s+/).includes(release.version);
+  return Boolean(release.date) && listed;
+}
+
 /** Where a clip's files are: NAME.mp4, NAME.webp (its first frame) and NAME-still.webp. */
 export const CLIPS = "/media/changelog";
 
-// Newest first. A release's notes go here when it's published, with its date: the app's What's New
-// and the notes each update shows link to /changelog#<version>. A clip is the files
-// tools/clip.sh makes from a recording and its name here, on the note it shows.
+// Newest first. A release's notes go here before it's tagged, with the day it's tagged, and show
+// once it's published (isOut): the app's What's New and the notes each update shows link to
+// /changelog#<version>. A clip is the files tools/clip.sh makes from a recording and its name
+// here, on the note it shows.
 export const RELEASES: Release[] = [
   {
     version: "0.2.3",

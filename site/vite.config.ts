@@ -5,6 +5,10 @@ import { defineConfig } from "vite-plus";
 import { changelogFeed } from "./src/feed";
 import { FEED } from "./src/seo";
 
+// The versions published on GitHub, which the deploy lists (.github/workflows/site.yml), so a
+// changelog entry shows once its release is out. Unset, as in the checks, every dated entry shows.
+const PUBLISHED = process.env.ILO_PUBLISHED;
+
 export default defineConfig({
   plugins: [
     // Every page is rendered to HTML at build time, so the site is static files any host can serve.
@@ -25,12 +29,13 @@ export default defineConfig({
       name: "ilo:changelog-feed",
       generateBundle() {
         if (this.environment.name !== "client") return;
-        this.emitFile({ type: "asset", fileName: FEED.slice(1), source: changelogFeed() });
+        const source = changelogFeed(undefined, PUBLISHED);
+        this.emitFile({ type: "asset", fileName: FEED.slice(1), source });
       },
       configureServer(server) {
         server.middlewares.use(FEED, (_, response) => {
           response.setHeader("content-type", "application/atom+xml; charset=utf-8");
-          response.end(changelogFeed());
+          response.end(changelogFeed(undefined, PUBLISHED));
         });
       },
     },
@@ -45,6 +50,8 @@ export default defineConfig({
       },
     },
   ],
+  // ILO_PUBLISHED reaches the pages as import.meta.env.ILO_PUBLISHED, unset when it's unset.
+  envPrefix: ["VITE_", "ILO_PUBLISHED"],
   // The live interface is the browser repo's build in public/demo. Its SOURCE file names the commit
   // it was built from, and the hero's caption links there, as the GPL asks of a site that serves it.
   define: {
