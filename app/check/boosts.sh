@@ -36,8 +36,16 @@ printf '%s\n' 'body { background: rgb(0, 0, 128) !important; }' > "$file"
 # launch shows this run's site's page and quits once the server has sent it. Each OS's launcher
 # hands the app's stderr to the log, Windows' (git-bash.sh) as the Mac's and Linux's.
 log="$out/boosts-quiet.log"
-env -u BROWSER_CHECK -u BROWSER_DRIVE -u BROWSER_LOG BROWSER_URL="${site}boost.html" \
-  "$browser" < /dev/null > "$log" 2>&1 &
+(
+  # A subshell rather than env -u, which can't run Windows' and the Flatpak's launchers, functions
+  # that exec the app themselves. Either way $! is the app's, as quit_app needs.
+  unset BROWSER_CHECK BROWSER_DRIVE BROWSER_LOG
+  export BROWSER_URL="${site}boost.html"
+  case $browser in
+    /*) exec "$browser" ;;
+    *) "$browser" ;;
+  esac
+) < /dev/null > "$log" 2>&1 &
 pid=$!
 served "^GET chromium [^ ]*/boost\.html " \
   "a launch the checks don't run didn't load the site's page: $(tail -5 "$log" | tr '\n' '|')"
