@@ -1176,7 +1176,7 @@ class SystemPageMac : public SystemPage {
   // No downloads in this engine, nor other apps' schemes, such as mailto: the page goes nowhere.
   if (action.shouldPerformDownload ||
       !(url.SchemeIsHTTPOrHTTPS() || url.SchemeIs("about") || url.SchemeIs("blob"))) {
-    if (Checked()) {
+    if (browser_core::Checked()) {
       LOG(WARNING) << "browser: system page refused " << url.possibly_invalid_spec();
     }
     decide(WKNavigationActionPolicyCancel);
@@ -1206,7 +1206,7 @@ class SystemPageMac : public SystemPage {
   }
   // What the page can't show would be a download, which this engine doesn't do.
   if (response.forMainFrame && !response.canShowMIMEType) {
-    if (Checked()) {
+    if (browser_core::Checked()) {
       LOG(WARNING) << "browser: system page refused a download of "
                    << net::GURLWithNSURL(response.response.URL).possibly_invalid_spec();
     }
