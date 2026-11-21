@@ -29,6 +29,7 @@
 #include "base/time/time.h"
 #include "browser_core/agent_file_field.h"
 #include "browser_core/agent_job_voter.h"
+#include "browser_core/agent_splash_rule.h"
 #include "browser_core/ax_text.h"
 #include "browser_core/host.h"
 #include "browser_core/platform/window_views.h"
@@ -84,6 +85,9 @@ constexpr base::TimeDelta kBusy = base::Seconds(5);
 constexpr base::TimeDelta kQuiet = base::Milliseconds(500);
 // A frame, at the rate pages draw, between the looks that tell whether something holds still.
 constexpr base::TimeDelta kFrame = base::Hertz(60);
+// Between the reads of a splash that holds still: each reads every frame's whole tree in the
+// renderer whose content the job waits for, so not a frame's pace (#3658).
+constexpr base::TimeDelta kSplashLook = base::Milliseconds(100);
 // What the wheel starts, a scroll or nothing to scroll, has started by then (#1627).
 constexpr base::TimeDelta kSettle = base::Milliseconds(400);
 // What an agent hears when the input would reach an extension's control, which the activity log
@@ -751,6 +755,12 @@ void AgentPage::Run() {
       Screenshot();
       return;
     case BC_AGENT_PAGE_QUIET:
+      // Heard since its page committed (DidFinishNavigation), its time to settle from now.
+      if (listening_) {
+        job_->deadline = base::TimeTicks::Now() + kBusy;
+        Settle();
+        return;
+      }
       Listen(base::BindOnce(&AgentPage::Settle, weak_factory_.GetWeakPtr()));
       return;
     case BC_AGENT_PAGE_SELECT:
@@ -920,13 +930,13 @@ void AgentPage::Quiet() {
     } else {
       job_->requests = true;
     }
-    Still(base::ListValue());
+    Still({});
     return;
   }
   if (!GetWebContents().IsLoading() && requests_.empty()) {
     if (now >= last_request_ + kQuiet) {
       settling_ = false;
-      Still(base::ListValue());
+      Still({});
       return;
     }
     next = std::min(next, last_request_ + kQuiet);
@@ -935,35 +945,82 @@ void AgentPage::Quiet() {
   wait_.Start(FROM_HERE, next - now, base::BindOnce(&AgentPage::Quiet, base::Unretained(this)));
 }
 
-void AgentPage::Still(base::ListValue last) {
+void AgentPage::Still(std::vector<base::ListValue> last) {
   // After an action, the page may have gone somewhere agents may not.
   if (!IsWebPage()) {
     Fail("The tab's page isn't an http or https page, the only pages agents may use.",
          BC_AGENT_FAILURE_NOT_WEB_PAGE);
     return;
   }
-  Send("Accessibility.getFullAXTree", base::DictValue(),
+  const uint64_t request = job_->request;
+  ReadTrees(
+      request, Frames(), 0, {},
+      base::BindOnce(
+          [](base::WeakPtr<AgentPage> page, uint64_t request, std::vector<base::ListValue> last,
+             std::optional<std::vector<base::ListValue>> trees) {
+            if (!page || !page->job_ || page->job_->request != request) {
+              return;
+            }
+            if (!trees) {
+              page->Fail("The page's tree couldn't be read.");
+              return;
+            }
+            // The first read is always compared with a second, even past the deadline.
+            const bool same = *trees == last;
+            const bool splash = IsSplash(*trees);
+            const bool early = base::TimeTicks::Now() < page->job_->deadline;
+            // A tree that's changing is read again a frame on, and a splash that holds still less
+            // often.
+            if ((!same && (last.empty() || early)) || (splash && early)) {
+              page->wait_.Start(FROM_HERE, same ? kSplashLook : kFrame,
+                                base::BindOnce(&AgentPage::Still, page, std::move(*trees)));
+              return;
+            }
+            page->job_->busy |= !same || splash;
+            page->Read(std::move(trees->front()));
+          },
+          weak_factory_.GetWeakPtr(), request, std::move(last)));
+}
+
+void AgentPage::ReadTrees(
+    uint64_t request,
+    std::vector<Frame> frames,
+    size_t next,
+    std::vector<base::ListValue> trees,
+    base::OnceCallback<void(std::optional<std::vector<base::ListValue>>)> then) {
+  if (next >= frames.size()) {
+    std::move(then).Run(std::move(trees));
+    return;
+  }
+  base::DictValue params;
+  if (next) {
+    params.Set("frameId", frames[next].id);
+  }
+  const int slot = frames[next].slot;
+  Send("Accessibility.getFullAXTree", std::move(params),
        base::BindOnce(
-           [](base::WeakPtr<AgentPage> page, base::ListValue last, const base::DictValue* result) {
-             if (!page || !page->job_) {
+           [](base::WeakPtr<AgentPage> page, uint64_t request, std::vector<Frame> frames,
+              size_t next, std::vector<base::ListValue> trees,
+              base::OnceCallback<void(std::optional<std::vector<base::ListValue>>)> then,
+              const base::DictValue* result) {
+             // A reply owed to a job that ended, as the reply limit or a dialog ends one, stops
+             // here, not in the next job.
+             if (!page || !page->job_ || page->job_->request != request) {
                return;
              }
              const base::ListValue* nodes = result ? result->FindList("nodes") : nullptr;
-             if (!nodes) {
-               page->Fail("The page's tree couldn't be read.");
+             if (!nodes && !next) {
+               std::move(then).Run(std::nullopt);
                return;
              }
-             // The first read is always compared with a second, even past the deadline.
-             const bool same = *nodes == last;
-             if (!same && (last.empty() || base::TimeTicks::Now() < page->job_->deadline)) {
-               page->wait_.Start(FROM_HERE, kFrame,
-                                 base::BindOnce(&AgentPage::Still, page, nodes->Clone()));
-               return;
-             }
-             page->job_->busy |= !same;
-             page->Read(nodes->Clone());
+             // A frame that went meanwhile reads as empty, which the next read may not be.
+             trees.push_back(nodes ? nodes->Clone() : base::ListValue());
+             page->ReadTrees(request, std::move(frames), next + 1, std::move(trees),
+                             std::move(then));
            },
-           weak_factory_.GetWeakPtr(), std::move(last)));
+           weak_factory_.GetWeakPtr(), request, std::move(frames), next, std::move(trees),
+           std::move(then)),
+       slot);
 }
 
 void AgentPage::Click() {
@@ -3366,6 +3423,13 @@ void AgentPage::DidFinishNavigation(content::NavigationHandle* navigation) {
   if (navigation->IsInPrimaryMainFrame() && navigation->HasCommitted() &&
       !navigation->IsSameDocument()) {
     typed_.clear();
+  }
+  // A page a job waits to settle once it has loaded, as navigate's, is heard from its commit on:
+  // the requests an app in a frame makes as it loads are its content still to come, though they
+  // start before the load stops, when the job would listen otherwise (#3658).
+  if (navigation->IsInPrimaryMainFrame() && navigation->HasCommitted() && job_ && loaded_ &&
+      job_->action == BC_AGENT_PAGE_QUIET && !listening_ && IsWebPage()) {
+    Listen(base::DoNothing());
   }
   if (navigation->IsDownload() && job_) {
     download_starting_.Start(FROM_HERE, kDownloadStart,
