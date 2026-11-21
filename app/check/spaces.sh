@@ -520,7 +520,16 @@ reveal_to() {
 }
 presses=$((step + 1))
 reveal_to "sideclick $reveal_point forward" mouse "$second" "$b"
-reveal_to "wheel $reveal_point 1" wheel "$first" "$a"
+# The Mac's driver posts a wheel, and fingers, to the browser window, not to the window under the
+# point as it does a click, so there the tick would reach the page beside the panel. The UI's test
+# turns a wheel on the panel (header/tests.rs).
+if [ "$(uname)" = Darwin ]; then
+  echo "skip: a wheel's tick on the sidebar out over the page, on the Mac, whose driver posts" \
+    "wheels to the browser window alone."
+  reveal_to "sideclick $reveal_point back" mouse "$first" "$a"
+else
+  reveal_to "wheel $reveal_point 1" wheel "$first" "$a"
+fi
 reveal_to "sideclick $reveal_point forward" mouse "$second" "$b"
 reveal_to "sideclick $reveal_point back" mouse "$first" "$a"
 expect "^browser: settled space $first\$" "the first Space's page didn't settle after the side buttons out over the page"
