@@ -3514,9 +3514,14 @@ CARD
     expect '^browser: settings tab Agents$' "a click on Agents didn't show its section for the log"
   fi
   settings_drew Agents
-  newest=$(sed -n 's/^browser: settings request \([0-9]*\) .* at .*/\1/p' "$log" | sort -n | tail -1)
-  [ -n "$newest" ] || fail "Settings › Agents drew no entry of the agent's"
-  in_sight "request $newest " || fail "Settings › Agents didn't draw its newest entry"
+  # The agent's log starts under its grants, whose last row is Revoke All: up to the card's top, its
+  # newest entries show under it. They're the came-to rows, which open nothing, so draw no name.
+  at=$(drawn "revoke all") || fail "Settings › Agents drew no grants above the agent's log"
+  sight=$(grep '^browser: settings card shows ' "$log" | tail -1 | cut -d' ' -f5-)
+  top=${sight%% to *} bottom=${sight##* to }
+  send scrollkey "${at% *}" $(((top + bottom) / 2)) $((${at#* } - top - 32)) 1
+  drawn_after "revoke all" "^browser: drive $step: " > /dev/null ||
+    fail "Settings › Agents didn't draw again, scrolled to the agent's log"
   ../tools/window-screenshot.sh "$pid" "$out/settings-agents-fence-log.png" || fail "no window to capture"
   send key w cmd
   expect '^browser: settings hidden$' "⌘W didn't hide Settings after the fence's log"
