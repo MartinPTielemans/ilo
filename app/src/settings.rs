@@ -4571,7 +4571,7 @@ impl Settings {
                 .button("copy-command-line", "Copy Line")
                 .relative()
                 .child(self.drawn("ilo-command copy line".into()))
-                .on_click(|_, _, cx| {
+                .on_click(move |_, _, cx| {
                     log!("browser: ilo command line copied");
                     cx.write_to_clipboard(ClipboardItem::new_string(export.clone()));
                 });
