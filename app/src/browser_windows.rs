@@ -167,6 +167,12 @@ pub(crate) extern "C" fn ui_keyboard_left(ui_view: *mut c_void) {
 pub(crate) fn ui_keyboard_left_in(id: bc::bc_id) {
     // As the press comes, before what's queued behind it opens a field (#2260).
     let opened = crate::shell::fields_opened();
+    // Windows tells it too as another app comes to the front, after the app has stopped being the
+    // active one: that isn't the page taking the keys (#3758).
+    #[cfg(target_os = "windows")]
+    let to_page = unsafe { crate::platform::host_app_active() };
+    #[cfg(not(target_os = "windows"))]
+    let to_page = true;
     let Some((handle, shell)) = WINDOWS.with(|windows| {
         let windows = windows.try_borrow().ok()?;
         let window = windows.iter().find(|window| window.id == id)?;
@@ -178,7 +184,9 @@ pub(crate) fn ui_keyboard_left_in(id: bc::bc_id) {
         handle
             .update(cx, |_, window, cx| {
                 shell
-                    .update(cx, |shell, cx| shell.keyboard_left(opened, window, cx))
+                    .update(cx, |shell, cx| {
+                        shell.keyboard_left(opened, to_page, window, cx)
+                    })
                     .ok()
             })
             .ok();
