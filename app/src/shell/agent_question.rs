@@ -26,8 +26,9 @@ use crate::palette::Tone;
 use crate::tokens::menu::{DARK_DESTRUCTIVE, LIGHT_DESTRUCTIVE};
 use crate::tokens::shell::PLATE_INSET;
 use crate::tokens::shell::permission::{
-    BUTTON_GAP, CHANGE_ALONE_TOP, CHANGE_TOP, DETAIL, FACTS_LINE, FACTS_TOP, NUMBER, NUMBER_GAP,
-    SEE_RING, SEE_TOP,
+    ASK_TOP, BUTTON_GAP, CHANGE_ALONE_TOP, CHANGE_TOP, DETAIL, FACTS_LINE, FACTS_TOP, NUMBER,
+    NUMBER_GAP, READ_GLYPH, READ_GLYPH_GAP, READ_INSET, READ_INSET_Y, READ_LINE_TOP, READ_PLATE,
+    READ_RADIUS, READ_TOP, SEE_RING, SEE_TOP,
 };
 use crate::tokens::text;
 
@@ -38,9 +39,10 @@ const AROUND_CHANGES: f32 = 190.;
 
 /// The most a saved read's card has around its sample rows: its head, the read's name and column
 /// heads, "{n} more rows", where it's read from, the sample's values, why it asks and its buttons,
-/// with its padding, at the sidebar's least width. The rows that fit in what's left show, so those
-/// stay in view and the card never scrolls.
-const AROUND_READ: f32 = 270.;
+/// with its padding, at the sidebar's least width: 333 measured with a short site's name, and a
+/// line more for one that wraps. The rows that fit in what's left show, so those stay in view and
+/// the card never scrolls.
+const AROUND_READ: f32 = 350.;
 
 /// A sample row's height on a read's card: one line, as a cell never wraps.
 const SAMPLE_ROW: f32 = FACTS_LINE + CHANGE_ALONE_TOP;
@@ -430,50 +432,63 @@ impl Shell {
                 .text_color(ink)
                 .when(a11y, |row| row.role(Role::Row).aria_label(spoken))
         });
+        let site = read.site();
+        let below = |words: String| {
+            small(div().mt(px(READ_LINE_TOP)))
+                .text_color(detail)
+                .child(crate::address_wrap::text(&words))
+        };
+        let from = format!("Read by {} from {site}", env!("APP_NAME"));
         let block = div()
             .id("agent-read")
-            .mt(px(CHANGE_TOP))
+            .mt(px(READ_TOP))
+            .px(px(READ_INSET))
+            .py(px(READ_INSET_Y))
+            .rounded(px(READ_RADIUS))
+            .bg(self.palette.plate(READ_PLATE))
             .child(
                 div()
-                    .truncate()
-                    .text_color(ink)
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(crate::saved_reads::text(
-                        &read.read.name,
-                        crate::agents::task::TITLE_KEPT,
-                    )),
+                    .flex()
+                    .items_center()
+                    .gap(px(READ_GLYPH_GAP))
+                    .child(
+                        gpui::svg()
+                            .path("icons/database.svg")
+                            .flex_none()
+                            .size(px(READ_GLYPH))
+                            .text_color(detail),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(ink)
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(crate::saved_reads::text(
+                                &read.read.name,
+                                crate::agents::task::TITLE_KEPT,
+                            )),
+                    ),
             )
             .child(
                 small(line(heads.clone()))
-                    .mt(px(FACTS_TOP))
+                    .mt(px(READ_LINE_TOP))
                     .text_color(detail)
                     .font_weight(FontWeight::MEDIUM),
             )
             .children(rows)
             .children((more > 0).then(|| {
-                small(div().mt(px(CHANGE_ALONE_TOP)))
-                    .text_color(detail)
-                    .child(match more {
-                        1 => "1 more row".to_string(),
-                        n => format!("{n} more rows"),
-                    })
+                below(match more {
+                    1 => "1 more row".to_string(),
+                    n => format!("{n} more rows"),
+                })
             }))
+            .child(below(from))
+            .children(read.sample_line().map(below))
             .when(a11y, |block| {
                 block.role(Role::Group).aria_label(read.heard())
             });
-        let site = read.site();
-        let from =
-            small(div().mt(px(FACTS_TOP)))
-                .text_color(detail)
-                .child(crate::address_wrap::text(&format!(
-                    "Read by {} from {site}",
-                    env!("APP_NAME")
-                )));
-        let sample = read.sample_line().map(|words| {
-            small(div().mt(px(FACTS_TOP)))
-                .text_color(detail)
-                .child(words)
-        });
         let buttons = buttons(question).into_iter().map(|button| {
             card_button_as(&self.palette, button.id, button.label, button.look)
                 .when(a11y, |control| {
@@ -500,11 +515,17 @@ impl Shell {
                     .pr(px(BESIDE_CLOSE))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(detail)
-                    .child(crate::address_wrap::text(&named)),
+                    .child(format!("{agent} asks")),
+            )
+            .child(
+                div()
+                    .mt(px(ASK_TOP))
+                    .pr(px(BESIDE_CLOSE))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(ink)
+                    .child(crate::address_wrap::text(&question.what)),
             )
             .child(block)
-            .child(from)
-            .children(sample)
             .child(div().mt(px(SEE_TOP)).text_color(detail).child(READ_WHY))
             .child(
                 div()
