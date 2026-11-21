@@ -165,11 +165,21 @@ type_for() {
 probe_text="this is a test of how it stops"
 probe_stuck=0
 probe_goes=""
+# The report's ⌘T comes straight after ⌘N, before the new window's bar shows: on a bar that
+# shows, ⌘T closes it again, as Arc's does, and the typing then goes to no field.
 send key n cmd
 expect '^browser: window opened [0-9]' "⌘N didn't open a second window"
-expect '^browser: command new-tab via new window$' "the new window didn't open the command bar"
-expect '^browser: command bar shown$' "the new window's command bar didn't show"
 probe_second=$(grep -c '^browser: window opened ' "$log")
+probe_first="⌘T straight after ⌘N opened the new window's bar"
+send key t cmd
+expect '^browser: command (new-tab via (ui|page)|bar closes again on new-tab)$' \
+  "⌘T straight after ⌘N was neither the browser's new tab nor the bar's close"
+if logged '^browser: command bar closes again on new-tab$' "$step"; then
+  probe_first="⌘T straight after ⌘N closed the new window's bar"
+  expect '^browser: command bar hidden$' "the bar ⌘T closed didn't hide"
+  send key t cmd
+fi
+expect '^browser: command bar shown$' "the new window's command bar didn't show after ⌘N and ⌘T"
 for go in $(seq 20); do
   if [ "$go" -gt 1 ] && [ $((go % 2)) = 0 ]; then
     send window 1
@@ -181,8 +191,10 @@ for go in $(seq 20); do
     expect '^browser: command bar hidden$' "escape didn't close the first window's command bar (go $go)"
     send window "$probe_second"
   fi
-  send key t cmd
-  [ "$go" = 1 ] || expect '^browser: command bar shown$' "⌘T didn't open the command bar (go $go)"
+  if [ "$go" -gt 1 ]; then
+    send key t cmd
+    expect '^browser: command bar shown$' "⌘T didn't open the command bar (go $go)"
+  fi
   go_from=$step
   i=0
   while [ "$i" -lt "${#probe_text}" ]; do
@@ -217,7 +229,7 @@ done
 send key w cmd shift
 expect '^browser: window closed [0-9]' "⇧⌘W didn't close the second window"
 send window 1
-echo "probe #3830: the bar stopped drawing in $probe_stuck of 20 goes:$probe_goes" >&2
+echo "probe #3830: $probe_first; the bar stopped drawing in $probe_stuck of 20 goes:$probe_goes" >&2
 grep -E '^browser: frames .*(refused|failed)' "$log" | sort | uniq -c | sort -rn | head -20 >&2 || true
 [ "$probe_stuck" = 0 ] ||
   fail "probe #3830: the bar stopped drawing in $probe_stuck of 20 goes:$probe_goes see probe-3830-go-*.log"
