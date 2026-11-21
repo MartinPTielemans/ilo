@@ -855,9 +855,9 @@ expect '^browser: settings shown Shortcuts$' \
   "Settings… didn't show the Shortcuts tab it showed last"
 settings_drew Shortcuts
 # Where the app drew it: its place depends on how wide the keys' chip beside it is, ⌃⌘T on the Mac
-# and Ctrl+Alt+T elsewhere.
-restore=$(drawn "restore new-tab") || fail "Settings didn't draw New Tab's ↺"
-send clickkey $restore
+# and Ctrl+Alt+T elsewhere. Settings comes back scrolled to Go Back, so the card scrolls it into
+# sight first.
+click_in_sight "restore new-tab"
 expect '^browser: shortcut new-tab cmd-t$' "↺ didn't give New Tab ⌘T back"
 # The app menu's About opens Settings on its About tab: the version, the engine's and the credits.
 # Settings has the keyboard from the click on ↺, so the menu's command runs inside its window's
