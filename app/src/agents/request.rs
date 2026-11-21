@@ -469,7 +469,7 @@ fn one(asked: &Value, origin: &str, number: usize) -> Result<Request, Wrong> {
 
 /// Characters drawn as nothing: direction overrides and marks, joiners, variation selectors, tags
 /// and other format characters.
-fn invisible(c: char) -> bool {
+pub(crate) fn invisible(c: char) -> bool {
     matches!(c,
         '\u{AD}' | '\u{34F}' | '\u{61C}' | '\u{115F}' | '\u{1160}' | '\u{17B4}' | '\u{17B5}'
         | '\u{180B}'..='\u{180F}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}'
@@ -479,7 +479,7 @@ fn invisible(c: char) -> bool {
 }
 
 /// Glyphs drawn blank that aren't spaces, such as the Braille blank.
-fn blank(c: char) -> bool {
+pub(crate) fn blank(c: char) -> bool {
     matches!(c, '\u{2800}' | '\u{1D159}' | '\u{16FE4}')
 }
 
@@ -613,7 +613,7 @@ pub fn shown(what: &str) -> String {
 
 /// The origin of an http(s) address, as "https://host[:port]" in lower case without a default
 /// port, or None for any other.
-fn origin(url: &str) -> Option<String> {
+pub(crate) fn origin(url: &str) -> Option<String> {
     let (scheme, rest) = url.split_once("://")?;
     let scheme = scheme.to_ascii_lowercase();
     if scheme != "http" && scheme != "https" {
