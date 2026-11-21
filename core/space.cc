@@ -16,6 +16,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "browser_core/auto_archive.h"
 #include "browser_core/boost_colors.h"
+#include "browser_core/favorites.h"
 #include "browser_core/host.h"
 #include "browser_core/session.h"
 
@@ -354,6 +355,14 @@ void Space::SetTheme(std::string theme) {
 void Space::SetProfile(std::string profile) {
   profile_ = std::move(profile);
   ReportSpacesChanged();
+}
+
+void Space::AddOpenedOver(bc_id tab, bc_id shown) {
+  Add(tab, /*opener=*/0, /*foreground=*/false);
+  if (shown) {
+    ForgetOpeners();
+    openers_[tab] = shown;
+  }
 }
 
 void Space::Add(bc_id tab, bc_id opener, bool foreground) {
@@ -823,7 +832,7 @@ bc_id Space::NextAfterLeaving(bc_id leaving, base::FunctionRef<bool(bc_id)> load
     if (bc_id sibling = NearestOpenedBy(opener, index)) {
       return sibling;
     }
-    if (Has(opener)) {
+    if (Has(opener) || Favorites::ShownIn(opener, *this)) {
       return opener;
     }
   }
