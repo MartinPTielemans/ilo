@@ -4554,13 +4554,15 @@ impl Settings {
                 .relative()
                 .child(self.drawn(format!("ilo-command {}", title.to_lowercase())))
                 .on_click(move |_, _, cx| {
-                    agents.update(cx, |agents, cx| match agents.is_connected(client) {
-                        true => agents.disconnect(client, cx),
-                        false => {
+                    // Add follows the row, not the agent: on Windows a command whose PATH entry
+                    // was taken off is still connected, and Add puts the entry back (#3783).
+                    agents.update(cx, |agents, cx| match agents.command_state() {
+                        agents::cli::State::Off => {
                             // check.sh reads this line.
                             log!("browser: connect agent {}", client.id());
                             agents.connect(client, cx)
                         }
+                        _ => agents.disconnect(client, cx),
                     })
                 })
                 .into_any_element()
