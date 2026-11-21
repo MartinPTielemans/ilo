@@ -173,8 +173,10 @@ expect '^browser: dialog settled$' "the alert that waited didn't settle"
 answer return accept "alerted later"
 
 # A key the page didn't keep comes back to the app once the page's handler returns, which can be
-# after the alert it asked was answered and the command bar opened: it never reaches the bar,
-# where on the Mac it was typed (#3791). The page's "h" alerts, then waits for /held.
+# after the alert it asked was answered: it never reaches the command bar a shortcut after it
+# opens, where on the Mac it was typed (#3791). The page's "h" alerts, then waits for /held, so
+# ⌘L after it, which the page gets first, holds the keys typed after it until the page answers it,
+# and the page's "h" comes back while they're held.
 send click $page_point
 rm -f "$out/site/held.go"
 send key h
@@ -184,17 +186,19 @@ send key return
 expect "^browser: page $page dialog answered accept\$" "↩ didn't answer the page's alert from \"h\""
 expect '^browser: dialog hidden$' "the page's alert from \"h\" didn't leave once answered"
 served "127.0.0.1:$port/held" "the page didn't ask for /held once its alert was answered"
-send key t cmd
-expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+send key l cmd
+expect "^browser: \[keys\] [a-z]*-l before the page: page, holding the keys after it\$" \
+  "⌘L with the page busy didn't go to the page first, holding the keys after it"
 touch "$out/site/held.go"
+expect "^browser: title $page held back\$" "the page's \"h\" handler didn't end"
 expect "^browser: \[keys\] a character the page didn't keep: " \
   "the page's \"h\" didn't come back to the app once its handler returned"
+expect '^browser: command bar shown$' "⌘L didn't open the command bar once the page answered it"
 send type x
 expect '^browser: command bar rows for "x" in ' \
   "the page's \"h\" reached the command bar, or what was typed didn't"
 send key escape
 expect '^browser: command bar hidden$' "Esc didn't close the command bar"
-expect "^browser: title $page held back\$" "the page's \"h\" handler didn't end"
 
 # Another tab takes the alert down, and its own brings it back.
 open_from_bar "http://localhost:$port/one.html"
