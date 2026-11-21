@@ -214,7 +214,7 @@ class SavedReadNetworkTest : public testing::Test {
 
   std::unique_ptr<net::test_server::HttpResponse> Answer(
       const net::test_server::HttpRequest& request) {
-    const std::string path = request.GetURL().path();
+    const std::string path(request.GetURL().path());
     auto response = std::make_unique<net::test_server::BasicHttpResponse>();
     response->set_content_type("text/plain");
     if (path == "/sign-in") {
