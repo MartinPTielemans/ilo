@@ -2036,6 +2036,8 @@ requestAnimationFrame(() => setTimeout(say));
   pid=$!
   exec 3> "$out/drive"
   await_load
+  # Never to land: the capture before the margins' check, so a red on main shows the page.
+  ../tools/window-screenshot.sh "$pid" "$out/text-size-before.png" || fail "no window to capture"
   check_layout "at Windows' Text size 110 %"
   # Its width over 1.1, as it may round either way.
   view_width=${view#* }
