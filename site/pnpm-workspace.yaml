@@ -1,0 +1,12 @@
+packages:
+  - .
+allowBuilds:
+  esbuild: true
+  lightningcss: true
+# Plugins that ask for Vite get Vite+'s build of it.
+overrides:
+  vite: npm:@voidzero-dev/vite-plus-core@1.4.0
+# Vite+'s build carries its own version number, so plugins asking for Vite 8 take it as is.
+peerDependencyRules:
+  allowAny:
+    - vite

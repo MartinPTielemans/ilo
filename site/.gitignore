@@ -1,0 +1,7 @@
+node_modules
+dist
+.tanstack
+.output
+.DS_Store
+.taste-skill/
+.wrangler
