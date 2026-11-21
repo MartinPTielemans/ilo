@@ -83,6 +83,16 @@ impl Shell {
         cx.notify();
     }
 
+    /// With the keyboard on "See the whole request" when its card goes (answered, gone or covered),
+    /// the window takes it: no drawn element holds it then, and GPUI matches a key's bindings from
+    /// the focused element, so ⌘T opened nothing (#3715).
+    pub(super) fn see_gone_keyboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let see = self.agent_question().is_some_and(|q| !q.changes.is_empty());
+        if !see && self.agent_request_see.is_focused(window) {
+            window.focus(&self.focus_handle, cx);
+        }
+    }
+
     /// The agent's question the card shows, unless a page's question or chooser has the place.
     pub(super) fn agent_question(&self) -> Option<&Question> {
         self.agent_question.as_ref().filter(|_| !self.page_asks())
@@ -970,6 +980,57 @@ mod tests {
         shell.update(cx, |shell, cx| shell.set_agent_question(None, cx));
         cx.run_until_parked();
         assert_eq!(cx.update(|_, cx| agent_request::showing(cx)), None);
+    }
+
+    /// Deny, after Escape in the whole request gave the keyboard back to "See the whole request",
+    /// takes the card and the button away, and the window's shortcuts still work (#3715).
+    #[gpui::test]
+    fn shortcuts_work_after_deny_from_the_whole_request(cx: &mut TestAppContext) {
+        cx.update(crate::shell::commands::bind_keys);
+        let (host, shell, cx) = window_with(cx);
+        let whole = cx.update(|_, cx| agent_request::open(Rc::new(Shown::default()), cx));
+        let whole = whole.expect("the whole request's window didn't open");
+        shell.update(cx, |shell, cx| {
+            let one = change("PUT", "/api/note", "Replace the note.");
+            shell.set_agent_question(Some(requests(7, vec![one])), cx);
+        });
+        cx.run_until_parked();
+        let see = shell.read_with(cx, |shell, _| shell.agent_question_drawn.get());
+        let card = see.expect("the card wasn't drawn");
+        let row = card.bottom() - px(PADDING + BUTTON_HEIGHT + BUTTONS_TOP + LINE / 2.);
+        cx.simulate_click(
+            point(card.left() + px(PADDING + 8.), row),
+            Modifiers::none(),
+        );
+        cx.run_until_parked();
+        whole
+            .update(cx, |_, window, cx| {
+                window.dispatch_action(Box::new(agent_request::Dismiss), cx)
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let back = shell.read_with(cx, |shell, _| shell.agent_request_see.clone());
+        cx.update(|window, _| assert!(back.is_focused(window), "the keyboard isn't on See"));
+
+        // Deny is the buttons' row's first.
+        let deny = card.bottom() - px(PADDING + BUTTON_HEIGHT / 2.);
+        cx.simulate_click(
+            point(card.left() + px(PADDING + 8.), deny),
+            Modifiers::none(),
+        );
+        cx.run_until_parked();
+        assert!(
+            host.take()
+                .iter()
+                .any(|did| did.starts_with("answer agent")),
+            "the click wasn't on Deny"
+        );
+        let asked = shell.read_with(cx, |shell, _| shell.agent_question().is_some());
+        assert!(!asked, "Deny left the question asked");
+        host.bar_open.set(false);
+        cx.simulate_keystrokes("cmd-t");
+        cx.run_until_parked();
+        assert!(host.bar_open.take(), "⌘T after Deny opened no new tab");
     }
 
     /// The whole request shows only beside its question's card: it goes when the question is
