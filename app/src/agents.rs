@@ -1935,7 +1935,8 @@ impl Agents {
                 }
                 if !self.owns(&agent, tab, cx) {
                     if let Err(why) = self.may_act(&agent, tab, "request", cx) {
-                        self.note(&agent, "request", &host, &why);
+                        let logged = self.log_words(tab, &why, cx);
+                        self.note(&agent, "request", &host, &logged);
                         cx.notify();
                         _ = reply.send(ToolResult::error(why));
                         return;
@@ -3260,6 +3261,16 @@ impl Agents {
         (self.cleared.get(&tab).map(|cleared| &cleared.entry) != Some(&entry)).then_some(site)
     }
 
+    /// The log's words for `why`, a refusal of a call on `tab`: the agent's own, but for a tab that
+    /// came to a fenced site, whose refusal the user reads by the entry it matched.
+    fn log_words(&self, tab: u64, why: &str, cx: &App) -> String {
+        let site = site(&self.browser.tab(tab, cx).url);
+        match self.fence_of(&site) {
+            Some(entry) if why == fence::refused(tab, &site) => fence::logged(&entry),
+            _ => why.into(),
+        }
+    }
+
     /// Lets `tab` stay under `entry`, as the user said, and gives what it had before.
     fn clear(&mut self, tab: u64, entry: String, cx: &App) -> Option<Cleared> {
         let from = self.browser.tab(tab, cx).url.to_string();
@@ -3700,8 +3711,11 @@ impl Agents {
             false => self.may_act(&agent, tab, "request", cx),
         };
         let site = site(&self.browser.tab(tab, cx).url);
-        let refused = checked.as_ref().err().map_or("", String::as_str);
-        self.note_request(&agent, &site, &next, refused);
+        let refused = checked
+            .as_ref()
+            .err()
+            .map_or(String::new(), |why| self.log_words(tab, why, cx));
+        self.note_request(&agent, &site, &next, &refused);
         cx.notify();
         if let Err(why) = checked {
             sending.answers.push(format!("{}: {why}", next.target()));
@@ -3998,12 +4012,11 @@ impl Agents {
                     (_, true, false) => Ok(()),
                 });
         let site = site(&self.browser.tab(tab, cx).url);
-        self.note(
-            agent,
-            action,
-            &site,
-            checked.as_ref().err().map_or("", String::as_str),
-        );
+        let refused = checked
+            .as_ref()
+            .err()
+            .map_or(String::new(), |why| self.log_words(tab, why, cx));
+        self.note(agent, action, &site, &refused);
         cx.notify();
         if let Err(why) = checked {
             _ = reply.send(ToolResult::error(why));
@@ -4092,7 +4105,7 @@ impl Agents {
         match self.dialogs.get(&tab) {
             // Not even which dialog, on a fenced site the tab came to (#3724).
             Some(&(kind, _)) if action != "close_tab" => match self.came_to(tab, cx) {
-                Some(site) => Err(fence::withheld(tab, &site)),
+                Some(site) => Err(fence::refused(tab, &site)),
                 None => Err(showing_dialog(tab, kind, self.opened.contains(&tab))),
             },
             _ => Ok(()),
@@ -4132,8 +4145,11 @@ impl Agents {
     ) -> bool {
         let checked = self.may_act(agent, tab, action, cx);
         let site = site(&self.browser.tab(tab, cx).url);
-        let refused = checked.as_ref().err().map_or("", String::as_str);
-        self.note(agent, logged, &site, refused);
+        let refused = checked
+            .as_ref()
+            .err()
+            .map_or(String::new(), |why| self.log_words(tab, why, cx));
+        self.note(agent, logged, &site, &refused);
         cx.notify();
         match checked {
             Ok(()) => {

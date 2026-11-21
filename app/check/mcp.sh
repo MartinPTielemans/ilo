@@ -3482,7 +3482,7 @@ CARD
   went=$(call navigate "{\"tab\":$fence_tab,\"url\":\"forward\"}")
   case "$went" in
     *Balance* | *"Pension balance"*) fail "forward onto the listed site answered its page: $went" ;;
-    "Went forward."*"Tab $fence_tab is now on pension.localhost, where the user asked"*) ;;
+    "Went forward."*"Tab $fence_tab is now on pension.localhost, where the user wants"*) ;;
     *) fail "forward onto the listed site answered: $went" ;;
   esac
   before=$(grep -c "$fence_asks" "$log" || true)
