@@ -293,6 +293,9 @@ void bc_window_ui_takes_keyboard(bc_id id) {
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
   browser_core::platform::UITakesKeyboard(OpenWidget(id), /*until_page=*/false);
 #endif
+  if (browser_core::Window* window = browser_core::Window::FromId(id)) {
+    window->UIAsksForKeyboard();
+  }
 }
 
 void bc_window_ui_holds_keyboard(bc_id id) {
