@@ -16,6 +16,7 @@
 #include "base/i18n/case_conversion.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
+#include "base/logging.h"
 #include "base/strings/strcat.h"
 #include "base/scoped_multi_source_observation.h"
 #include "base/strings/string_number_conversions.h"
@@ -1797,10 +1798,12 @@ void AgentPage::Copy(std::optional<gfx::Rect> area,
                      Pictured done,
                      std::optional<Boxes> before) {
   content::RenderWidgetHostView* view = GetWebContents().GetRenderWidgetHostView();
+  const gfx::Size page = view ? view->GetViewBounds().size() : gfx::Size();
+  // check.sh reads the size its page has for a picture (#3788); the app quiets this outside them.
+  LOG(ERROR) << "browser: agent picture of tab " << tab_ << " at " << page.width() << "x"
+             << page.height();
   const gfx::Rect source =
-      !view ? gfx::Rect()
-            : gfx::IntersectRects(area.value_or(gfx::Rect(view->GetViewBounds().size())),
-                                  gfx::Rect(view->GetViewBounds().size()));
+      !view ? gfx::Rect() : gfx::IntersectRects(area.value_or(gfx::Rect(page)), gfx::Rect(page));
   if (!before || source.IsEmpty()) {
     std::move(done).Run(base::unexpected(before ? kNoPicture : kPictureChanged));
     return;
