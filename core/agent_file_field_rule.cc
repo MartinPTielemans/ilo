@@ -44,11 +44,11 @@ bool PageMayOpenFileDialog(bool agents, bool held) {
 
 std::optional<std::string> FileFieldRefusal(const FileFieldFacts& field) {
   if (!IsFileInput(field)) {
-    return "That element isn't a file field. upload takes an input of type file, which a "
-           "snapshot shows as a button, often named Choose File or Browse.";
+    return "That element isn't a file field. Call upload on an input type=file (listed in "
+           "snapshot as a button, usually “Choose File” or “Browse”).";
   }
   if (Attribute(field, "webkitdirectory")) {
-    return "That field takes a folder: hand the tab to the user with hand_off.";
+    return "That field takes a folder. Hand the tab to the user with hand_off.";
   }
   return std::nullopt;
 }
@@ -75,8 +75,8 @@ std::string DocumentFrame(const std::vector<DocumentChild>& children) {
 std::optional<std::string> FileFieldPlaceRefusal(const FileFieldPlace& place) {
   // An opaque origin serializes as "null", which would equal another opaque one's.
   if (place.frame.empty() || place.origin.empty() || place.origin == "null") {
-    return "That field is in a frame with no site of its own: hand the tab to the user with "
-           "hand_off.";
+    return "That field is in a frame with no site of its own, so ilo can't say which site is "
+           "asking. Hand the tab to the user with hand_off.";
   }
   return std::nullopt;
 }
