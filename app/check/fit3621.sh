@@ -1,8 +1,9 @@
 # check.sh runs this at 990, only when named.
 # A probe for #3621, never to land: on Windows, where the page view sits against the window's
 # client area and the display's work area, at launch, maximized, restored and resized, with the
-# sidebar shown and hidden, and what size the page itself takes. It runs the 0.2.2 release, the
-# report's, then the check's build. It measures; it fails only when it can't.
+# sidebar shown and hidden, with Settings' Top bar off and on, and what size the page itself takes.
+# It runs the 0.2.2 release, the report's, then the check's build. It measures; it fails only
+# when it can't.
 
 if ! windows; then
   echo "skip: fit3621 is a Windows probe"
@@ -132,6 +133,17 @@ PS
     send key s cmd
     send maximize
     fit_measure "maximized again" maximized-again
+    # The report's window has Settings' Top bar on, with the sidebar hidden.
+    send key d cmd shift
+    fit_measure "maximized, top bar" top
+    send key s cmd
+    fit_measure "maximized, top bar, sidebar hidden" top-hidden
+    send maximize
+    fit_measure "restored, top bar, sidebar hidden" top-hidden-restored
+    send maximize
+    fit_measure "maximized again, top bar, sidebar hidden" top-hidden-again
+    send key s cmd
+    fit_measure "maximized, top bar, sidebar shown" top-shown
     exec 3>&-
     quit
   }
