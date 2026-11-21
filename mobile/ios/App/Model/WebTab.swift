@@ -632,8 +632,7 @@ private final class PageWebView: WKWebView {
     builder.insertSibling(ours, beforeMenu: .learn)
   }
 
-  // The page is asked to keep its place before WebKit hears of the new width, so it marks the
-  // text at its top as it stood.
+  // The page marks the text at its top as it stood, before WebKit hears of the new width.
   override var frame: CGRect {
     willSet { if Self.turns(from: frame.size, to: newValue.size) { keepPlace() } }
   }
@@ -648,8 +647,28 @@ private final class PageWebView: WKWebView {
     old.width > 0 && old.height > 0 && new.width > 0 && new.height > 0 && (old.width > old.height) != (new.width > new.height)
   }
 
+  /// The scroll view's content size as a turn starts, until WebKit gives it the page laid out
+  /// for the new width.
+  private var turning: CGSize?
+  private var sizes: NSKeyValueObservation?
+
   private func keepPlace() {
-    callAsyncJavaScript(PageScripts.keepPlace, arguments: [:], in: nil, in: .defaultClient)
+    callAsyncJavaScript(PageScripts.markPlace, arguments: [:], in: nil, in: .defaultClient)
+    turning = scrollView.contentSize
+    if sizes == nil {
+      sizes = scrollView.observe(\.contentSize) { [weak self] scroll, _ in
+        MainActor.assumeIsolated { self?.sized(scroll.contentSize) }
+      }
+    }
+  }
+
+  /// WebKit sets the page's scroll offset in the same commit that first gives the scroll view
+  /// the page laid out for its new width. Text put back before that has WebKit's move added to
+  /// it; put back after it, the text stays.
+  private func sized(_ size: CGSize) {
+    guard let turning, size.width != turning.width else { return }
+    self.turning = nil
+    callAsyncJavaScript(PageScripts.putPlace, arguments: [:], in: nil, in: .defaultClient)
   }
 
   override func didMoveToWindow() {

@@ -5,6 +5,10 @@
 //! the server's address and the agent's token. Remove takes away exactly those, never a line of
 //! the user's shell profile: the user pastes that line themselves.
 //!
+//! In a Flatpak, whose sandbox can't write the host's bin folder, Add writes the agent file alone,
+//! and the row gives a line to run once in a terminal, which puts a script named `ilo` there that
+//! runs the command in the sandbox, as a client on the host runs the bridge.
+//!
 //! On Windows the program is `ilo.exe` in a folder of its own. In the installer's copy that's
 //! `bin` beside chrome.exe, whose own folder on PATH would bring the engine's programs with it,
 //! and Add puts `bin` on the user's PATH, which Remove and the uninstaller take back. In the
@@ -58,20 +62,35 @@ pub enum State {
 }
 
 /// The row's line under its name: its words, the part of them set in the mono face, as a command
-/// the agent types, and the line to paste, if any, under them.
+/// the agent types, and the line to paste, if any, under them, which Copy Line copies.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Detail {
     pub line: String,
     pub mono: Option<std::ops::Range<usize>>,
-    pub export: Option<&'static str>,
+    pub export: Option<String>,
 }
 
-/// What the row says in `state`. `windows` is the folder the command is in on Windows, as the row
-/// names it, where Add links nothing and needs no line pasted.
-pub fn detail(state: State, windows: Option<&str>) -> Detail {
+/// What the row says in `state`. In a Flatpak, `flatpak` is the line that puts `ilo` in the bin
+/// folder, which the row gives once it's added (`flatpak_line`). `windows` is the folder the
+/// command is in on Windows, as the row names it, where Add links nothing and needs no line pasted.
+pub fn detail(state: State, flatpak: Option<&str>, windows: Option<&str>) -> Detail {
     let what = "Lets an agent in a terminal use the browser.";
-    match state {
-        State::Off => Detail {
+    match (state, flatpak) {
+        (State::Off, Some(_)) => Detail {
+            line: format!(
+                "{what} ilo's sandbox can't write to {FOLDER_SHOWN}, so Add gives a line to run once in a terminal."
+            ),
+            mono: None,
+            export: None,
+        },
+        (_, Some(line)) => Detail {
+            line: format!(
+                "Added in ilo. Run this once in a terminal to put ilo in {FOLDER_SHOWN}:"
+            ),
+            mono: None,
+            export: Some(line.into()),
+        },
+        (State::Off, None) => Detail {
             line: match windows {
                 Some(_) => what.into(),
                 None => format!("{what} Add links ilo in {FOLDER_SHOWN}."),
@@ -79,7 +98,7 @@ pub fn detail(state: State, windows: Option<&str>) -> Detail {
             mono: None,
             export: None,
         },
-        State::On => {
+        (State::On, None) => {
             let folder = windows.unwrap_or(FOLDER_SHOWN);
             let start = format!("Added in {folder}. Agents can run ");
             let command = "ilo help";
@@ -89,14 +108,36 @@ pub fn detail(state: State, windows: Option<&str>) -> Detail {
                 export: None,
             }
         }
-        State::Unsearched => Detail {
+        (State::Unsearched, None) => Detail {
             line: format!(
                 "Added in {FOLDER_SHOWN}, which isn't on PATH. Add this to your shell profile:"
             ),
             mono: None,
-            export: Some(EXPORT),
+            export: Some(EXPORT.into()),
         },
     }
+}
+
+/// In a Flatpak, whose bridge a client on the host runs as `bridge` gives it (bridge::launch), the
+/// line that writes a script named `ilo` in the host's bin folder, which runs the command beside
+/// the bridge the same way: in the sandbox, with its permissions, so it opens no new way in.
+pub fn flatpak_line(bridge: &[String]) -> Option<String> {
+    let [flatpak, run, command, id] = bridge else {
+        return None;
+    };
+    let bridge = command.strip_prefix("--command=")?;
+    if flatpak != "flatpak" || run != "run" {
+        return None;
+    }
+    let program = Path::new(bridge).with_file_name(PROGRAM);
+    let script = format!(
+        r#"#!/bin/sh\nexec flatpak run --command={} {id} "$@"\n"#,
+        program.display()
+    );
+    let link = format!("{FOLDER_SHOWN}/{LINK}");
+    Some(format!(
+        "mkdir -p {FOLDER_SHOWN} && printf '{script}' > {link} && chmod +x {link}"
+    ))
 }
 
 /// The row's state: not added, or added and found or not by a terminal opened now. On Windows a
@@ -163,13 +204,16 @@ impl Agent {
     }
 }
 
-/// Where Add puts the command, and what the link points at. On Windows the folder holds the
-/// program itself, and `store` says it's the Store's alias, on PATH from install.
+/// Where Add puts the command, and what the link points at. Without `linked`, as in a Flatpak or
+/// on Windows, Add makes no link: in a Flatpak it writes the agent file alone, and the user's
+/// script stands for the link, and on Windows the folder holds the program itself. `store` says
+/// it's the Store's alias, on PATH from install.
 #[derive(Clone, Debug)]
 pub struct Install {
     pub folder: PathBuf,
     pub program: PathBuf,
     pub file: PathBuf,
+    pub linked: bool,
     pub store: bool,
 }
 
@@ -203,6 +247,7 @@ impl Install {
             folder,
             program,
             file,
+            linked: false,
             store,
         }
     }
@@ -219,9 +264,9 @@ impl Install {
                 .is_ok_and(|to| to.file_name() == Some(PROGRAM.as_ref()))
     }
 
-    /// Whether Add made the link, or on Windows the agent file, as Settings › Agents shows the row.
+    /// Whether Add made the link, or without one the agent file, as Settings › Agents shows it.
     pub fn added(&self) -> bool {
-        (cfg!(windows) || self.ours()) && Agent::read(&self.file).is_some()
+        (!self.linked || self.ours()) && Agent::read(&self.file).is_some()
     }
 
     /// Makes the link to the program, and the agent file with the server's `address` and the
@@ -229,9 +274,16 @@ impl Install {
     /// else named `ilo` there it leaves, and says so.
     #[cfg(unix)]
     pub fn add(&self, address: &Path, token: &str) -> Result<(), String> {
-        use std::io::Write;
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
         let failed = |error: io::Error| error.to_string();
+        if !self.linked {
+            let agent = Agent {
+                address: address.into(),
+                token: token.into(),
+                made: Vec::new(),
+                path: None,
+            };
+            return self.write_agent(&agent).map_err(failed);
+        }
         let link = self.link();
         // A home with no `~/.local` gets both folders, and Remove takes back both.
         let made_now: Vec<PathBuf> = (self.folder.ancestors())
@@ -254,7 +306,22 @@ impl Install {
             made,
             path: None,
         };
-        let wrote = (std::fs::OpenOptions::new())
+        if let Err(error) = self.write_agent(&agent) {
+            _ = std::fs::remove_file(&link);
+            for folder in &made_now {
+                _ = std::fs::remove_dir(folder);
+            }
+            return Err(failed(error));
+        }
+        Ok(())
+    }
+
+    /// Writes the agent file, only the user's to read.
+    #[cfg(unix)]
+    fn write_agent(&self, agent: &Agent) -> io::Result<()> {
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        (std::fs::OpenOptions::new())
             .write(true)
             .create(true)
             .truncate(true)
@@ -264,15 +331,7 @@ impl Install {
                 // A file left from before keeps the mode it had, which open doesn't change.
                 file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
                 file.write_all(agent.text().as_bytes())
-            });
-        if let Err(error) = wrote {
-            _ = std::fs::remove_file(&link);
-            for folder in &made_now {
-                _ = std::fs::remove_dir(folder);
-            }
-            return Err(failed(error));
-        }
-        Ok(())
+            })
     }
 
     #[cfg(windows)]
@@ -368,7 +427,7 @@ impl Install {
     pub fn remove(&self) -> Result<(), String> {
         let failed = |error: io::Error| error.to_string();
         let made = Agent::read(&self.file).map_or(Vec::new(), |agent| agent.made);
-        if self.ours() {
+        if self.linked && self.ours() {
             std::fs::remove_file(self.link()).map_err(failed)?;
         }
         match std::fs::remove_file(&self.file) {
@@ -873,10 +932,10 @@ mod windows_tests {
         let local = r"C:\Users\someone\AppData\Local";
         let shown = super::shown(Path::new(&format!(r"{local}\Programs\ilo\bin")), local);
         assert_eq!(shown, r"%LOCALAPPDATA%\Programs\ilo\bin");
-        let on = detail(State::On, Some(&shown));
+        let on = detail(State::On, None, Some(&shown));
         assert!(on.line.starts_with(&format!("Added in {shown}.")));
         assert_eq!(&on.line[on.mono.clone().unwrap()], "ilo help");
-        let off = detail(State::Off, Some(&shown));
+        let off = detail(State::Off, None, Some(&shown));
         assert!(!off.line.contains("~/.local/bin"));
         assert_eq!(super::shown(Path::new(r"D:\ilo\bin"), local), r"D:\ilo\bin");
     }
@@ -941,6 +1000,7 @@ mod tests {
             folder: folder(&temp.0.join("home")),
             program: temp.0.join("app").join(PROGRAM),
             file: agent_file(&temp.0.join("profile")),
+            linked: true,
             store: false,
         }
     }
@@ -1070,10 +1130,13 @@ mod tests {
     /// gives the line to paste only when the shell doesn't look in the folder.
     #[test]
     fn the_row_says_where_and_what_to_run() {
-        let on = detail(State::On, None);
+        let on = detail(State::On, None, None);
         assert_eq!(&on.line[on.mono.clone().unwrap()], "ilo help");
         assert_eq!(on.export, None);
-        assert_eq!(detail(State::Unsearched, None).export, Some(EXPORT));
+        assert_eq!(
+            detail(State::Unsearched, None, None).export.as_deref(),
+            Some(EXPORT)
+        );
         assert!(EXPORT.contains("$HOME/.local/bin"));
         let home = Path::new("/home/someone");
         assert!(searched("/usr/bin:/home/someone/.local/bin", &folder(home)));
@@ -1083,5 +1146,75 @@ mod tests {
         ));
         assert!(!searched("/usr/bin:/home/other/.local/bin", &folder(home)));
         assert!(!searched("", &folder(home)));
+    }
+
+    /// In a Flatpak, Add writes the agent file alone, since the sandbox can't write the bin
+    /// folder, and Remove takes it back: nothing else is made or touched, though a link of a copy
+    /// outside the sandbox is there.
+    #[test]
+    fn a_flatpaks_add_writes_the_agent_file_alone() {
+        let temp = Temp::new("flatpak");
+        let install = Install {
+            linked: false,
+            ..install(&temp)
+        };
+        std::fs::create_dir_all(install.file.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(&install.folder).unwrap();
+        std::os::unix::fs::symlink(Path::new("/opt/ilo").join(PROGRAM), install.link()).unwrap();
+        let before = contents(&temp.0);
+        assert!(!install.added());
+        install.add(Path::new("/s"), "t").unwrap();
+        assert!(install.added());
+        let mut after = before.clone();
+        after.insert(install.file.clone(), "/s\nt\n 600".into());
+        assert_eq!(contents(&temp.0), after);
+        install.remove().unwrap();
+        assert!(!install.added());
+        assert_eq!(contents(&temp.0), before);
+    }
+
+    /// A Flatpak's row, before Add and after it, gives the line to run on the host, which Copy
+    /// Line copies; run there, the line makes `ilo` a script that runs the command where Flatpak
+    /// runs the bridge, the words the agent typed after it.
+    #[test]
+    fn a_flatpaks_line_makes_ilo_run_the_command_in_the_sandbox() {
+        let bridge =
+            super::super::bridge::launch(Path::new("/app/ilo/mcp-bridge"), Some("app.ilo.browser"));
+        let line = flatpak_line(&bridge).unwrap();
+        assert_eq!(flatpak_line(&["/opt/ilo/mcp-bridge".into()]), None);
+        assert_eq!(detail(State::Off, Some(&line), None).export, None);
+        assert_eq!(
+            detail(State::On, Some(&line), None).export,
+            Some(line.clone())
+        );
+
+        let temp = Temp::new("flatpak-line");
+        let ran = crate::child::command("/bin/sh")
+            .args(["-c", &line])
+            .env("HOME", &temp.0)
+            .status()
+            .unwrap();
+        assert!(ran.success());
+        let script = folder(&temp.0).join(LINK);
+        assert_eq!(
+            std::fs::read_to_string(&script).unwrap(),
+            "#!/bin/sh\nexec flatpak run --command=/app/ilo/ilo-command app.ilo.browser \"$@\"\n"
+        );
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&script).unwrap().permissions().mode();
+        assert_eq!(mode & 0o100, 0o100, "the script isn't executable");
+
+        // Run again, as after an update, it writes the same script.
+        let ran = crate::child::command("/bin/sh")
+            .args(["-c", &line])
+            .env("HOME", &temp.0)
+            .status()
+            .unwrap();
+        assert!(ran.success());
+        assert!(
+            std::fs::read_to_string(&script)
+                .unwrap()
+                .contains("app.ilo.browser")
+        );
     }
 }
