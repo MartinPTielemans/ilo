@@ -277,10 +277,28 @@ fn response(nodes: &[Value]) -> Option<String> {
     if acts > 2 {
         return None;
     }
-    (nodes.iter())
+    let long = (nodes.iter())
         .filter(|node| role(node) == "StaticText")
-        .map(name)
-        .find(|text| text.chars().count() > RESPONSE_TEXT)
+        .find(|node| name(node).chars().count() > RESPONSE_TEXT)?;
+    // A large body can reach the page as several text nodes, by how its bytes arrived, so its text
+    // is its parent's text nodes together, in order, from the first (#3827). They're joined before
+    // their white space is made one space, which keeps a space where one was split.
+    let id = long.get("nodeId").and_then(Value::as_str);
+    let parent = nodes
+        .iter()
+        .find(|node| child_ids(node).any(|child| Some(child) == id));
+    let Some(parent) = parent else {
+        return Some(name(long));
+    };
+    let texts: HashMap<&str, &Value> = (nodes.iter())
+        .filter(|node| role(node) == "StaticText")
+        .filter_map(|node| Some((node.get("nodeId")?.as_str()?, node)))
+        .collect();
+    let raw = child_ids(parent)
+        .filter_map(|child| texts.get(child))
+        .filter_map(|node| node.pointer("/name/value").and_then(Value::as_str))
+        .collect::<String>();
+    Some(raw.split_whitespace().collect::<Vec<_>>().join(" "))
 }
 /// What an outline of a page with a password field says of it.
 const PASSWORD: &str = "This page has a password field, which is off limits to you: signing in is \
@@ -1034,6 +1052,12 @@ fn state(node: &Value, name: &str) -> bool {
                 _ => false,
             }
     })
+}
+
+fn child_ids(node: &Value) -> impl Iterator<Item = &str> {
+    (node.get("childIds").and_then(Value::as_array).into_iter())
+        .flatten()
+        .filter_map(Value::as_str)
 }
 
 fn role(node: &Value) -> &str {
@@ -2126,6 +2150,28 @@ mod tests {
             node("5", "button", "Sign in", &[]),
         ];
         assert!(!outline_of(&page).contains(RESPONSE));
+    }
+
+    /// A large response can reach the page as several text nodes, by how its bytes arrived, its
+    /// first shorter than a response's: it still reads from its start, with the space where it
+    /// was split (#3827).
+    #[test]
+    fn a_response_in_several_text_nodes_reads_from_its_start() {
+        let json = format!("{{\"items\": [{}]}}", "{\"id\": 1}, ".repeat(1_000));
+        // The first ends at a comma, before its space.
+        let (first, rest) = json.split_at(1_000);
+        let (second, third) = rest.split_at(9_000);
+        let nodes = vec![
+            node("1", "RootWebArea", "", &["2"]),
+            node("2", "generic", "", &["3", "4", "5"]),
+            node("3", "StaticText", first, &[]),
+            node("4", "StaticText", second, &[]),
+            node("5", "StaticText", third, &[]),
+        ];
+        let outline = outline_of(&nodes);
+        let start: String = json.chars().take(RESPONSE_SHOWN).collect();
+        assert!(outline.contains(&format!("- text: {start}")), "{outline}");
+        assert!(outline.ends_with(RESPONSE), "{outline}");
     }
 
     fn outline_of(nodes: &[Value]) -> String {
