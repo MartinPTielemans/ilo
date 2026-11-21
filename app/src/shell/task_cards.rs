@@ -693,6 +693,10 @@ impl Shell {
                     card.status
                 );
             }
+            if was.is_none_or(|was| was.title != card.title) {
+                // check.sh reads this line: a title is one line, written out (#3690).
+                log!("browser: task card {} titled {}", card.agent, card.title);
+            }
         }
         let fresh = |card: &&Card| !self.task_cards.iter().any(|old| old.agent == card.agent);
         let ran = self

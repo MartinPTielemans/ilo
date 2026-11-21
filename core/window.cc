@@ -1895,9 +1895,14 @@ content::WebContents* Window::OpenPreview(content::WebContents& opener,
   // The app shows it in its card until it draws, so it shows the window's page colour until then,
   // as the panes do, not Chromium's white (#2742). Nothing has asked for its id yet, so its tab is
   // made here, which keeps the colour for the page's view once that's made.
-  if (Tab* tab = Tab::Get(Tab::IdOf(preview)); tab && page_color_) {
+  Tab* tab = Tab::Get(Tab::IdOf(preview));
+  if (tab && page_color_) {
     tab->SetPageColor(
         SkColorSetRGB(*page_color_ >> 16, *page_color_ >> 8 & 0xff, *page_color_ & 0xff));
+  }
+  // Its card draws Chromium's page, so its load stays there (system_engine.h).
+  if (tab) {
+    tab->set_opened_as_preview();
   }
   // Inserting a background tab sized it to the active tab's page.
   preview->Resize(gfx::Rect(size));
@@ -3120,6 +3125,11 @@ gfx::NativeView Window::GetHostView() const {
 }
 
 gfx::Point Window::GetDialogPosition(const gfx::Size& size) {
+  // Chrome places a tab's dialog through this each time it shows it again, after making it
+  // visible, as its tab comes to the front or its pane takes the focus. The Mac lists a child
+  // window only while it's on screen, so a dialog that came on screen after the moments
+  // AddObserver watches at, as a split pane's warning can, is watched here, from then (#3230).
+  dialog_keys::Watch(widget_.get());
   // As in Chrome's window: a tab's dialog, such as print preview, is centred over the page, at its
   // top. In a split view, over the focused page.
   return gfx::Point(focused_frame_.CenterPoint().x() - size.width() / 2, focused_frame_.y());

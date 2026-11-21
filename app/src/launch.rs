@@ -97,6 +97,26 @@ fn is_switch(arg: &str) -> bool {
         .any(|prefix| arg.len() > prefix.len() && arg.starts_with(prefix))
 }
 
+/// The switch that keeps Chromium to its FATAL lines in a launch the checks don't run (`checked`),
+/// unless the arguments it was `given` ask for its logging, as a launch to debug it does. A
+/// release build writes Chromium's ERROR lines to stderr, which a desktop can keep, and the core's
+/// and Chromium's own can name a site the user browses (#3731). A check reads the core's lines, so
+/// a launch it runs keeps them.
+pub fn quiet_log_level(checked: bool, given: &[String]) -> Option<String> {
+    const ASKED: [&str; 4] = ["enable-logging", "v", "vmodule", "log-level"];
+    // Chromium reads what follows a bare "--" as arguments, never switches.
+    let asked = given
+        .iter()
+        .take_while(|arg| *arg != "--")
+        .filter(|arg| is_switch(arg))
+        .any(|arg| {
+            let name = arg.trim_start_matches(['-', '/']);
+            ASKED.contains(&name.split('=').next().unwrap_or(name))
+        });
+    // 3 is logging::LOGGING_FATAL, which Chromium writes at any level.
+    (!checked && !asked).then(|| "--log-level=3".to_string())
+}
+
 /// Whether this launch will exit as soon as Chromium has read the `profile`'s lock, as it reads it
 /// just after the app's `launching`: it hands its links to the ilo that holds the lock, or the
 /// lock is another computer's (ProcessSingleton::NotifyOtherProcessWithTimeout). Work the app
@@ -150,6 +170,41 @@ pub fn exits_at_lock(profile: &std::path::Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chromium_writes_no_error_line_unless_a_check_runs_it_or_its_logging_was_asked_for() {
+        let given = |args: &[&str]| args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
+        let quiet = Some("--log-level=3".to_string());
+        assert_eq!(
+            quiet_log_level(false, &given(&["Browser"])),
+            quiet,
+            "a user's launch"
+        );
+        assert_eq!(
+            quiet_log_level(false, &given(&["Browser", "--verbose", "--", "--v=1"])),
+            quiet,
+            "neither another switch nor an argument after -- asks"
+        );
+        assert_eq!(
+            quiet_log_level(true, &given(&["Browser"])),
+            None,
+            "a check's"
+        );
+        for asked in [
+            "--enable-logging=stderr",
+            "--enable-logging",
+            "--v=1",
+            "--vmodule=platform_auth_policy_observer=1",
+            "--log-level=0",
+            "-v=2",
+        ] {
+            assert_eq!(
+                quiet_log_level(false, &given(&["Browser", asked])),
+                None,
+                "{asked}"
+            );
+        }
+    }
 
     #[cfg(target_os = "linux")]
     #[test]

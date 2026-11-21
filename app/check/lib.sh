@@ -695,23 +695,18 @@ in_sight() {
   top=${sight%% to *}
   bottom=${sight##* to }
   # GPUI on Windows takes the driver's wheel messages for lines, about two thirds of the points
-  # asked, so a row far under the edge needs the rest scrolled more than once. Where the card can't
-  # scroll further, nothing draws again and at stays where it was.
-  scrolls=0
-  while :; do
+  # asked, so each scroll can leave the row under the edge: scroll the rest, each time less, until
+  # it's in sight. Where the card can't scroll further, nothing draws again and at stays where it
+  # was.
+  for _ in 1 2 3; do
     y=${at#* }
     [ "$y" -ge "$top" ] && [ "$y" -le "$bottom" ] && return 0
-    [ "$scrolls" -lt 4 ] || return 0
-    scrolls=$((scrolls + 1))
-    # Past it by its row's half, 24, and a little more.
     if [ "$y" -gt "$bottom" ]; then by=$((y - bottom + 32)); else by=$((y - top - 32)); fi
     send scrollkey "${at% *}" $(((top + bottom) / 2)) "$by" 1
-    if ! rest=$(drawn_after "$1" "^browser: drive $step: "); then
-      [ "$scrolls" -gt 1 ] || return 1
-      return 0
-    fi
+    rest=$(drawn_after "$1" "^browser: drive $step: ") || return 0
     at=$rest
   done
+  return 0
 }
 # Clicks Settings' control $1 in the card, where the card shows it whole, as in_sight scrolls it:
 # one at $(drawn …) under a short window's edge takes the click on nothing (#2503). $2 is the

@@ -328,6 +328,12 @@ detail = 0.78
 # The window under the card: #151515 at 0.62.
 dim = 0x151515
 dim-opacity = 0.62
+# A page's dialog at rest over a split view's other pane, the keyboard with the page beside: the
+# same dim, quiet, as the card says what waits (#3461).
+rest-dim-opacity = 0.1
+# The least room left each side of the card over a pane narrower than it, which takes the card's
+# width from it rather than clip it.
+pane-margin = 16.0
 button-height = 36.0
 button-radius = 6.0
 # A button's label starts 12 in from its left edge, and its key's chip ends 12 in from its

@@ -94,13 +94,23 @@ focus_button() {
   # once the match the find leaves gives its button the keyboard. A key before that back can reach
   # the page before the button has the keyboard, and does nothing (#2798), so it waits for it.
   find_tab=$(sed -n "/^browser: drive $step: /,\$s/^browser: find \([0-9]*\) closed\$/\1/p" "$log" | tail -1)
-  if grep "^browser: page $find_tab back " "$log" | tail -1 |
-    grep -q ' back [1-9][0-9]* forward 0 loading 0 https://chromewebstore\.google\.com/'; then
+  if find_entry "$find_tab" <"$log"; then
     expect "^browser: page $find_tab back [0-9]* forward [1-9]" \
       "the store's page didn't go back from the entry it added for the find, as it does once \"$1\" has the keyboard"
   fi
   send state
   in_browser RenderWidgetHostViewCocoa "after the find for \"$1\""
+}
+# Whether the store's page $1 last moved in its history to an entry it added between a ⌘F and the
+# find bar hiding, the entry it goes back from. It can add it before the bar is shown. One it moves
+# to once a find has closed, as after a find that found nothing, it never goes back from (#3692).
+# The bar's lines end in a carriage return on Windows.
+find_entry() {
+  awk -v page="browser: page $1 back " '
+    /^browser: drive [0-9]*: key f cmd/ { finding = 1 }
+    /^browser: find bar hidden/ { finding = 0 }
+    index($0, page) == 1 { added = finding && / back [1-9][0-9]* forward 0 loading 0 https:\/\/chromewebstore\.google\.com\// }
+    END { exit !added }'
 }
 # Whether the last Extensions menu lists the extension.
 listed() {

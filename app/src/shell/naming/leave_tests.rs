@@ -105,7 +105,7 @@ fn leave(shell: &Entity<Shell>, cx: &mut VisualTestContext, way: Way) {
             press(cx, at, MouseButton::Left, 1);
         }
         Way::Page => shell.update_in(cx, |shell, window, cx| {
-            shell.keyboard_left(fields_opened(), window, cx)
+            shell.keyboard_left(fields_opened(), true, window, cx)
         }),
         Way::Window => cx.deactivate_window(),
     }
@@ -121,7 +121,7 @@ fn a_field_opened_after_a_press_in_the_page_stays(cx: &mut TestAppContext) {
     let pressed = fields_opened();
     rename(&shell, cx, &host, 3);
     shell.update_in(cx, |shell, window, cx| {
-        shell.keyboard_left(pressed, window, cx)
+        shell.keyboard_left(pressed, true, window, cx)
     });
     cx.run_until_parked();
     assert!(
