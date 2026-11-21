@@ -2,8 +2,8 @@
 # A probe for #3621, never to land: on Windows, where the page view sits against the window's
 # client area and the display's work area, at launch, maximized, restored and resized, with the
 # sidebar shown and hidden, with Settings' Top bar off and on, and what size the page itself takes.
-# It runs the 0.2.2 release, the report's, then the check's build. It measures; it fails only
-# when it can't.
+# It runs the 0.2.2 release, the report's, then the check's build, with Windows' Text size at 110 %.
+# It measures; it fails only when it can't.
 
 if ! windows; then
   echo "skip: fit3621 is a Windows probe"
@@ -148,6 +148,18 @@ PS
     quit
   }
   : > "$out/fit3621.txt"
+  # fit_text_scale <percent>: Windows' Text size, as Settings › Accessibility › Text size keeps it,
+  # for apps started after, and what an app reads back from UISettings, as Chromium does.
+  fit_text_scale() {
+    timeout 60 powershell.exe -NoProfile -NonInteractive -Command "
+      \$key = 'HKCU:\Software\Microsoft\Accessibility'
+      if (!(Test-Path \$key)) { New-Item -Path \$key | Out-Null }
+      Set-ItemProperty -Path \$key -Name TextScaleFactor -Value $1 -Type DWord
+      \$ui = [Windows.UI.ViewManagement.UISettings,Windows.UI.ViewManagement,ContentType=WindowsRuntime]
+      'fit text scale set $1, read ' + \$ui::new().TextScaleFactor
+    " | tr -d '\r' | tee -a "$out/fit3621.txt"
+  }
+  fit_text_scale 110
   # The 0.2.2 release's own files, from its MSIX, which the release packs from the same build as
   # the installer the report's is from (release.yml's Package step). The installer itself, run
   # silently on the runner, never ended (the probe's first two runs).
@@ -167,5 +179,6 @@ PS
   rm -rf "$profile_dir"
   mkdir -p "$profile_dir/Default"
   fit_run build
+  fit_text_scale 100
   echo "fit3621: measured; see fit3621.txt"
 fi
