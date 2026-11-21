@@ -22,7 +22,7 @@ pub fn on(area: &str) -> bool {
     ON.get_or_init(|| {
         let (on, unknown) = parse(&std::env::var("BROWSER_LOG").unwrap_or_default());
         if !unknown.is_empty() {
-            crate::log!(
+            crate::log_always!(
                 "browser: BROWSER_LOG names no area {}; the areas are {}",
                 unknown.join(", "),
                 AREAS.join(", ")
@@ -55,7 +55,8 @@ fn parse(value: &str) -> (Vec<&'static str>, Vec<String>) {
 macro_rules! log_in {
     ($area:literal, $($arg:tt)*) => {
         if $crate::logging::on($area) {
-            $crate::log!("browser: [{}] {}", $area, format_args!($($arg)*));
+            // The user turns an area on, for that run; its lines hold nothing they browse.
+            $crate::log_always!("browser: [{}] {}", $area, format_args!($($arg)*));
         }
     };
 }
@@ -101,6 +102,30 @@ pub extern "C" fn browser_log_on(area: *const std::ffi::c_char) -> bool {
 mod tests {
     use super::*;
     use crate::bc;
+
+    /// Counts each time it's formatted, as a line's address would be.
+    struct Counted<'a>(&'a std::sync::atomic::AtomicUsize);
+
+    impl std::fmt::Display for Counted<'_> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            f.write_str("https://example.com/")
+        }
+    }
+
+    #[test]
+    fn a_launch_the_checks_dont_run_formats_no_line() {
+        let formatted = std::sync::atomic::AtomicUsize::new(0);
+        crate::log!("browser: command bar go {}", Counted(&formatted));
+        // cargo test runs with neither BROWSER_DRIVE nor BROWSER_CHECK, as a user's launch does.
+        let lines = usize::from(crate::checked());
+        assert_eq!(formatted.load(std::sync::atomic::Ordering::Relaxed), lines);
+        if std::env::var_os("BROWSER_DRIVE").is_none()
+            && std::env::var_os("BROWSER_CHECK").is_none()
+        {
+            assert_eq!(lines, 0, "log! writes with neither flag set");
+        }
+    }
 
     #[test]
     fn names_the_areas_it_knows_and_the_rest_apart() {

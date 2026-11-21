@@ -891,6 +891,83 @@ mod tests {
         assert_eq!(host.told.borrow().len(), 1);
     }
 
+    /// A dialog's host that shows nothing, for a test that needs a dialog asking.
+    struct NoDialogHost;
+
+    impl crate::dialog::Host for NoDialogHost {
+        fn show(&self, _: Option<u64>, _: Option<gpui::Bounds<gpui::Pixels>>, _: bool) {}
+        fn hide(&self) {}
+    }
+
+    /// An extension's menu item, one of the shortcuts that wait for a dialog's answer, runs while
+    /// a page's dialog rests over a split view's other pane, as the page beside has the keys, and
+    /// waits while the dialog is live (#3461).
+    #[gpui::test]
+    fn an_extensions_item_runs_beside_a_resting_dialog_and_waits_for_a_live_one(
+        cx: &mut TestAppContext,
+    ) {
+        let host = Rc::new(Recorder::default());
+        let shell = cx.new(|cx| Shell::new(host.clone(), cx));
+        cx.update(|cx| {
+            crate::shell::bind_keys(cx);
+            cx.set_global(crate::shell::commands::ShellHandle(shell.downgrade()));
+        });
+        shell.update(cx, |shell, cx| {
+            let space = (
+                1,
+                "Space 1".into(),
+                None,
+                0,
+                "".into(),
+                "".into(),
+                "".into(),
+            );
+            shell.set_spaces(vec![space], cx);
+            shell.set_extensions(0, vec![extension("notes", true, &[])], cx);
+            shell.set_space(1, cx);
+        });
+        cx.update(|cx| crate::dialog::open(Rc::new(NoDialogHost), cx));
+        let ask = |rests: bool, cx: &mut TestAppContext| {
+            cx.update(|cx| {
+                let question = crate::dialog::Question {
+                    icon: None,
+                    message: "example.org says".into(),
+                    detail: "Go on?".into(),
+                    list: Vec::new(),
+                    action: "OK".into(),
+                    cancel: "".into(),
+                    tone: crate::dialog::Tone::Accent,
+                    also: None,
+                    fields: Vec::new(),
+                    check: None,
+                    on_return: crate::dialog::Return::Action,
+                };
+                let over = (
+                    gpui::Bounds::new(point(px(0.), px(0.)), gpui::size(px(400.), px(300.))),
+                    10.,
+                );
+                crate::dialog::ask_page(
+                    (20, 1),
+                    question,
+                    over,
+                    rests,
+                    Rc::new(|_| {}),
+                    Box::new(|_, _| {}),
+                    cx,
+                );
+            });
+            cx.run_until_parked();
+        };
+        let pinned = |cx: &mut TestAppContext| {
+            cx.update(|cx| cx.dispatch_action(&super::PinExtension("notes".into())));
+            host.take().iter().any(|call| call == "pin 0 notes true")
+        };
+        ask(true, cx);
+        assert!(pinned(cx), "the item waited for a dialog at rest beside");
+        ask(false, cx);
+        assert!(!pinned(cx), "the item ran over a live dialog");
+    }
+
     /// The browser's own ad blocker comes back at each launch, so its menu offers no Remove: the
     /// user turns it off in Settings.
     #[gpui::test]

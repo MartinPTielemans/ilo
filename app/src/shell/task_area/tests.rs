@@ -338,6 +338,93 @@ fn a_tasks_page_shows_in_place_and_steps_back(cx: &mut TestAppContext) {
     );
 }
 
+/// A dialog asked by tab `tab`'s page, as the core reports it.
+fn page_dialog(id: u64, kind: crate::shell::DialogKind) -> crate::shell::PageDialog {
+    crate::shell::PageDialog {
+        id,
+        kind,
+        title: "Sign in".into(),
+        message: "http://auth.example\nYour connection to this site is not private".into(),
+        text: "".into(),
+        accept: "Sign in".into(),
+        cancel: "Cancel".into(),
+        check: "".into(),
+        username: "Username".into(),
+        password: "Password".into(),
+    }
+}
+
+/// What the shell asked about page dialogs since the last time.
+fn dialogs(host: &Recorder) -> Vec<String> {
+    (host.take().into_iter())
+        .filter(|call| call.contains("dialog"))
+        .collect()
+}
+
+/// A task's page watched shows its sign-in over it, which only the user may answer (#3662), and
+/// takes it back as the area goes back to the conversation. Its other dialogs wait, as does the
+/// user's own page's while it's out of the window.
+#[gpui::test]
+fn a_tasks_page_watched_shows_its_sign_in(cx: &mut TestAppContext) {
+    use crate::shell::DialogKind;
+    let (shell, host, cx) = shell_with_task(cx);
+    let ask = |cx: &mut VisualTestContext, tab, dialog| {
+        shell.update(cx, |shell, cx| shell.set_page_dialog(tab, dialog, cx));
+        draw(&shell, cx);
+    };
+    ask(cx, 30, Some(page_dialog(1, DialogKind::SignIn)));
+    ask(cx, 10, Some(page_dialog(2, DialogKind::Confirm)));
+    assert_eq!(dialogs(&host), ["page dialog 10 2"]);
+    ask(cx, 10, None);
+    host.take();
+
+    let view = conversation(cx);
+    shell.update(cx, |shell, cx| shell.open_task(3, view, cx));
+    draw(&shell, cx);
+    assert!(dialogs(&host).iter().all(|call| call == "page dialog none"));
+    watching(&shell, &host, cx);
+    let shown = shell.read_with(cx, |shell, _| shell.page_dialog_shown);
+    assert_eq!(
+        shown.flatten().map(|(tab, id, _, _)| (tab, id)),
+        Some((30, 1))
+    );
+
+    ask(cx, 30, Some(page_dialog(3, DialogKind::Confirm)));
+    assert_eq!(dialogs(&host), ["page dialog none"]);
+    ask(cx, 30, Some(page_dialog(4, DialogKind::SignIn)));
+    assert_eq!(dialogs(&host), ["page dialog 30 4"]);
+    ask(cx, 10, Some(page_dialog(5, DialogKind::SignIn)));
+    assert!(
+        dialogs(&host).is_empty(),
+        "the user's page asked over the task's"
+    );
+
+    shell.update(cx, |shell, cx| shell.run(Command::Stop, "ui", cx));
+    core_shows_users(&shell, cx);
+    draw(&shell, cx);
+    assert_eq!(dialogs(&host), ["page dialog none"]);
+}
+
+/// A task's page watched asks for its sign-in while the user types in the command bar: the dialog
+/// waits, and goes up as the bar closes.
+#[gpui::test]
+fn a_tasks_sign_in_waits_while_the_user_types(cx: &mut TestAppContext) {
+    use crate::shell::DialogKind;
+    let (shell, host, cx) = shell_with_task(cx);
+    watching(&shell, &host, cx);
+    host.bar_open.set(true);
+    shell.update(cx, |shell, cx| {
+        shell.set_page_dialog(30, Some(page_dialog(1, DialogKind::SignIn)), cx)
+    });
+    draw(&shell, cx);
+    draw(&shell, cx);
+    assert!(dialogs(&host).is_empty(), "the sign-in came over the bar");
+    host.bar_open.set(false);
+    shell.update(cx, |shell, cx| shell.command_bar_dismissed(cx));
+    cx.run_until_parked();
+    assert_eq!(dialogs(&host), ["page dialog 30 1"]);
+}
+
 /// With motion, the page zooms out of its thumbnail, laid out out of the window till it's in
 /// place, and back into it from a picture of it as it is.
 #[gpui::test]
@@ -1546,4 +1633,50 @@ fn a_press_on_the_crash_card_of_the_agents_page_takes_it_over(cx: &mut TestAppCo
     );
     cx.simulate_click(reload.center(), gpui::Modifiers::none());
     assert_eq!(host.take(), ["take over task-1 30", "reload 30"]);
+}
+
+/// An agent's tab never takes the user's keyboard with its page's alert (#3461): split in its own
+/// Space, which no user's split shares, and watched in the task area, neither pane's alert shows,
+/// live or at rest. Only a sign-in shows there, which only the user may answer (#3662).
+#[gpui::test]
+fn an_agents_split_never_shows_its_pages_dialogs(cx: &mut TestAppContext) {
+    use crate::shell::{DialogKind, PageDialog, Split};
+    let (shell, host, cx) = shell_with_task(cx);
+    shell.update(cx, |shell, cx| {
+        let split = Split {
+            tabs: vec![30, 31],
+            ..Default::default()
+        };
+        shell.set_tabs(
+            3,
+            Vec::new(),
+            vec![30, 31],
+            vec![split],
+            Folders::default(),
+            cx,
+        );
+    });
+    watching(&shell, &host, cx);
+    let alert = |id| PageDialog {
+        id,
+        kind: DialogKind::Alert,
+        title: "example.org says".into(),
+        message: "Hello".into(),
+        text: "".into(),
+        accept: "OK".into(),
+        cancel: "".into(),
+        check: "".into(),
+        username: "".into(),
+        password: "".into(),
+    };
+    for tab in [30, 31] {
+        shell.update(cx, |shell, cx| {
+            shell.set_page_dialog(tab, Some(alert(tab)), cx)
+        });
+        draw(&shell, cx);
+    }
+    let shown: Vec<String> = (host.take().into_iter())
+        .filter(|call| call.starts_with("page dialog ") && call != "page dialog none")
+        .collect();
+    assert!(shown.is_empty(), "{shown:?}");
 }
