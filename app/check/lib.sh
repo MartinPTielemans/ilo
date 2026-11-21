@@ -986,9 +986,9 @@ check_layout() {
   send layout
   layout=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout')
   content=$(echo "$layout" | sed 's/^browser: layout content \([0-9]*x[0-9]*\),.*/\1/')
-  view=$(echo "$layout" | sed -n 's/.*WebContentsViewCocoa \([0-9,]* [0-9x]*\).*/\1/p')
-  radius=$(echo "$layout" | sed -n 's/.*WebContentsViewCocoa [0-9,]* [0-9x]* radius \([0-9]*\).*/\1/p')
-  ui=$(echo "$layout" | sed -n 's/.*GPUIView \([0-9,]* [0-9x]*\).*/\1/p')
+  view=$(echo "$layout" | sed -n 's/.*WebContentsViewCocoa \([-0-9,]* [0-9x]*\).*/\1/p')
+  radius=$(echo "$layout" | sed -n 's/.*WebContentsViewCocoa [-0-9,]* [0-9x]* radius \([0-9]*\).*/\1/p')
+  ui=$(echo "$layout" | sed -n 's/.*GPUIView \([-0-9,]* [0-9x]*\).*/\1/p')
   width=${content%x*}
   height=${content#*x}
   # Past the sidebar, 228 wide unless $2 gives its width.

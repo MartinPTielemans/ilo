@@ -97,6 +97,7 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "crypto/hash.h"
+#include "crypto/kdf.h"
 #include "crypto/random.h"
 #include "google_apis/gaia/core_account_id.h"
 #include "google_apis/gaia/gaia_id.h"
@@ -157,6 +158,35 @@ constexpr net::NetworkTrafficAnnotationTag kAccount =
         setting: "Settings › Account: Sign Out."
         policy_exception_justification: "Only while the user is signed in to an account."
       })");
+
+// A share link's snapshot sent, replaced or unshared, and the account's links listed.
+constexpr net::NetworkTrafficAnnotationTag kShares =
+    net::DefineNetworkTrafficAnnotation("browser_core_share_links", R"(
+      semantics {
+        sender: "Share links"
+        description:
+          "Sends the account's server a snapshot of a folder, a Space or tabs the user shares as a "
+          "link, sealed with the link's key; lists the account's links for Settings; and unshares "
+          "one. The link's key goes to the server only inside the link's list entry, sealed under "
+          "a key derived from the account's secret, which the server doesn't have, so the server "
+          "reads neither the snapshot nor the key."
+        trigger:
+          "The user shares a folder, a Space or tabs, opens Settings › Sync's Shared Links, or "
+          "unshares a link."
+        data:
+          "The sealed snapshot and its sealed list entry, the link's id, and the access token."
+        destination: OTHER
+        destination_other: "The account's server: the build's own, or one the user named."
+      }
+      policy {
+        cookies_allowed: NO
+        setting: "Sharing needs an account: Settings › Sync: Sign Out."
+        policy_exception_justification: "Only on the user's own request, while signed in."
+      })");
+
+// How long the account's server has to answer a request, so a stalled one ends as one the server
+// couldn't take, and what waits on it, a share or an unshare, hears so.
+constexpr base::TimeDelta kAccountTimeout = base::Seconds(30);
 
 std::string Base64Url(base::span<const uint8_t> bytes) {
   std::string encoded;
@@ -502,6 +532,37 @@ class Account : public syncer::SyncServiceObserver,
     static base::NoDestructor<Account> account;
     return *account;
   }
+  // For share links, as sync.h says.
+  GURL ShareServer() const { return SignedIn() ? Server() : GURL(); }
+  std::optional<std::array<uint8_t, 32>> ShareKey(std::string_view info) const {
+    if (!SignedIn() || !secret_) {
+      return std::nullopt;
+    }
+    return crypto::kdf::Hkdf<32>(crypto::hash::kSha256, *secret_, base::span<const uint8_t>(),
+                                 base::as_byte_span(info));
+  }
+  void AskForShares(std::string method,
+                    std::string path,
+                    std::string json,
+                    ShareAnswered done) {
+    if (!SignedIn()) {
+      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, base::BindOnce(std::move(done), 0, std::string()));
+      return;
+    }
+    const GURL url = Server().Resolve(path);
+    WithToken(base::BindOnce(
+        [](base::WeakPtr<Account> account, std::string method, GURL url, std::string json,
+           ShareAnswered done, const std::string& token) {
+          if (!account || token.empty()) {
+            std::move(done).Run(0, std::string());
+            return;
+          }
+          account->SendForShares(method, url, token, std::move(json), std::move(done));
+        },
+        weak_factory_.GetWeakPtr(), std::move(method), url, std::move(json), std::move(done)));
+  }
+
 
   // Hooks.
 
@@ -1108,6 +1169,7 @@ class Account : public syncer::SyncServiceObserver,
       (*it)->AttachStringForUpload(form, content_type);
     }
     (*it)->SetAllowHttpErrorResults(true);
+    (*it)->SetTimeoutDuration(kAccountTimeout);
     (*it)->DownloadToString(
         g_browser_process->shared_url_loader_factory().get(),
         base::BindOnce(&Account::FetchDone, weak_factory_.GetWeakPtr(), it, std::move(done)),
@@ -1125,6 +1187,45 @@ class Account : public syncer::SyncServiceObserver,
       json = base::JSONReader::ReadDict(*body, base::JSON_PARSE_RFC);
     }
     std::move(done).Run(status, std::move(json));
+  }
+
+  // As Fetch, for share links, and never logged: its path holds a link's id.
+  void SendForShares(const std::string& method,
+                     const GURL& url,
+                     const std::string& bearer,
+                     std::string json,
+                     ShareAnswered done) {
+    auto request = std::make_unique<network::ResourceRequest>();
+    request->url = url;
+    request->method = method;
+    request->credentials_mode = network::mojom::CredentialsMode::kOmit;
+    request->headers.SetHeader("Authorization", "Bearer " + bearer);
+    auto it = loaders_.insert(loaders_.end(),
+                              network::SimpleURLLoader::Create(std::move(request), kShares));
+    if (!json.empty()) {
+      (*it)->AttachStringForUpload(json, "application/json");
+    }
+    (*it)->SetAllowHttpErrorResults(true);
+    (*it)->SetTimeoutDuration(kAccountTimeout);
+    // A blob of 1 MiB is 1.4 MiB in base64, and the list holds an entry for each of the account's
+    // links.
+    (*it)->DownloadToString(
+        g_browser_process->shared_url_loader_factory().get(),
+        base::BindOnce(
+            [](base::WeakPtr<Account> account,
+               std::list<std::unique_ptr<network::SimpleURLLoader>>::iterator it,
+               ShareAnswered done, std::optional<std::string> body) {
+              if (!account) {
+                std::move(done).Run(0, std::string());
+                return;
+              }
+              const network::mojom::URLResponseHead* head = (*it)->ResponseInfo();
+              const int status = head && head->headers ? head->headers->response_code() : 0;
+              account->loaders_.erase(it);
+              std::move(done).Run(status, std::move(body).value_or(std::string()));
+            },
+            weak_factory_.GetWeakPtr(), it, std::move(done)),
+        4 << 20);
   }
 
   // Takes tokens from /token's answer, and the account and device from its ID token, which came
@@ -2051,6 +2152,19 @@ void AnswerPairing(const std::string& id, bool add) {
 
 void ReadDevices() {
   Account::Get().ReadDevices();
+}
+
+GURL ShareServer() {
+  return Account::Get().ShareServer();
+}
+
+std::optional<std::array<uint8_t, 32>> ShareKey(std::string_view info) {
+  return Account::Get().ShareKey(info);
+}
+
+void AskForShares(std::string method, std::string path, std::string json, ShareAnswered done) {
+  Account::Get().AskForShares(std::move(method), std::move(path), std::move(json),
+                              std::move(done));
 }
 
 void RemoveDevice(const std::string& id) {
