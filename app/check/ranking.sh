@@ -228,6 +228,20 @@ esac
 send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar"
 
+# The probe (#3830, never to land): 20 goes of ⌘T, then one key half a second after the bar's
+# first frame, as a first key comes after the link's idle stop, for the open and first key times.
+for go in $(seq 20); do
+  send key t cmd
+  expect '^browser: command bar shown$' "go $go: ⌘T didn't open the command bar"
+  expect '^browser: command bar first frame in ' "go $go: the command bar's first frame didn't come"
+  sleep 0.5
+  send type a
+  expect '^browser: command bar drew "a"$' "go $go: the command bar didn't draw \"a\""
+  send key escape
+  expect '^browser: command bar hidden$' "go $go: escape didn't close the command bar"
+done
+echo "probe: open ms $(grep '^browser: command bar first frame in ' "$log" | tail -20 | sed 's/.* in //;s/ ms//' | tr '\n' ' ')"
+
 exec 3>&-
 quit
 # Its server stops with it, as the runs after it in the call start their own (#3345).
