@@ -1310,6 +1310,9 @@ typedef struct bc_host {
   // accessibility tree as a JSON object: DevTools' Accessibility.getFullAXTree nodes in "nodes",
   // and "busy": true if the page hadn't settled when the action stopped waiting for it.
   // and after SELECT, "chosen": the name of the option it chose, if the field then shows it.
+  // FILE_FIELD's is a JSON object of its own: the "field" for bc_file_field_choose, the field's
+  // accessible name in "label", "" if it has none, the "site" whose frame it's in, which gets the
+  // file and may not be the tab's, without "www.", and "many": true if the user may pick several.
   void (*agent_page_done)(void* context, bc_id tab, uint64_t request, const char* text, bool error);
   // The element bc_agent_page's |request| for |tab| is about to click or type in, scrolled into
   // view: its box in points from the top-left of the tab's page view, for the agent's pointer.
@@ -1542,6 +1545,9 @@ typedef struct bc_host {
                             const char* mime,
                             const uint8_t* bytes,
                             size_t size);
+  // What came of bc_file_field_choose for |field|: a BC_FILE_FIELD_ |result|, and with PUT the
+  // |count| of files that went in, else 0. Never a file's name or path.
+  void (*file_field_done)(void* context, bc_id field, int result, int count);
 } bc_host;
 
 // Runs Chromium in this process with these arguments (Chromium's switches) and returns its exit
@@ -1910,6 +1916,15 @@ BC_EXPORT size_t bc_agent_list_tabs(const char* agent, bc_id* tabs, size_t capac
 #define BC_AGENT_PAGE_SELECT 11
 // Scrolls the element into view.
 #define BC_AGENT_PAGE_SCROLL_TO 12
+// Describes the element, a file field, for the card that asks the user for a file for it
+// (bc_file_field_choose): it answers at once, with no tree. Refused, with why, for an element that
+// isn't an input of type file, for one that takes a folder (webkitdirectory), which the user
+// fills in a tab they hold, and for one in a frame with no site to name (an opaque origin, as a
+// sandboxed or data: frame's). A tab has one such field at a time: the next ends the one before,
+// with BC_FILE_FIELD_CLOSED if its Choose File… is unanswered. A page's own file dialogs never
+// open in an agent's tab the user doesn't hold, the file input's or File System Access', so the
+// page hears a cancel.
+#define BC_AGENT_PAGE_FILE_FIELD 13
 
 // Does |action|, a BC_AGENT_PAGE_ value, in |tab| for the agent with the id |agent|, to |element|,
 // a backendDOMNodeId from the tree, or 0, with |text| as the action says, else null. Then
@@ -1971,6 +1986,39 @@ BC_EXPORT bool bc_tab_hand_back(bc_id tab);
 
 // Whether the user holds |tab| from agents.
 BC_EXPORT bool bc_tab_held(bc_id tab);
+
+// What came of bc_file_field_choose (file_field_done).
+// The user's files are in the field, |count| of them.
+#define BC_FILE_FIELD_PUT 0
+// The user closed the dialog choosing none, or chose a folder, as a Mac package, which never goes
+// in.
+#define BC_FILE_FIELD_NONE 1
+// The field the card named left before the user's files could go into it: the page removed or
+// replaced it, its frame went to another page or origin, or its tab left the Space of the agent
+// whose card it was, or the user took it. The files went nowhere.
+#define BC_FILE_FIELD_LEFT 2
+// bc_file_field_drop, the tab closed, the agent's session there ended, or another field was
+// described in the tab, with the dialog up: it closed, and nothing went into the field.
+#define BC_FILE_FIELD_CLOSED 3
+
+// The user pressed Choose File… on the card for |field|, from BC_AGENT_PAGE_FILE_FIELD's answer, in
+// |window|: the system's file dialog opens over |window|, where the system starts it. Nothing of
+// the page's or the agent's names its folder, file or title; the field's accept only filters it,
+// and only a field that takes several lets the user pick several. The files the user picks go into
+// that field alone, as DevTools' DOM.setFileInputFiles puts them, and only if it's the same node,
+// in the same document of the same frame, from the same origin, in a tab still in the Space of the
+// agent whose card it was, that the user doesn't hold. Then file_field_done, once, from a task of
+// its own. Returns false, with no answer, for a field it doesn't know, one already chosen for, a
+// window that isn't the core's, or when the system has no file dialog, as Linux may not. The
+// user's: agents get none, and no name or path of a file is told to anyone or logged.
+BC_EXPORT bool bc_file_field_choose(bc_id field, bc_id window);
+
+// Forgets |field|: for the card's Don't Allow, the call's time running out, or the agent stopping.
+// Its dialog, if it's up, closes on the Mac and Linux; Windows' can't be closed from outside, and
+// what the user picks in it goes nowhere. file_field_done answers BC_FILE_FIELD_CLOSED if
+// bc_file_field_choose hadn't been answered. A tab that closes, or whose agent's session ends,
+// drops its fields itself.
+BC_EXPORT void bc_file_field_drop(bc_id field);
 
 // The user gives the agent whose Space is |space| their |tab|, which moves there as
 // bc_tab_move_to_space moves a tab, and the agent may act in it as in its own from then on. Only

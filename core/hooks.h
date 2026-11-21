@@ -356,4 +356,10 @@ extern void (*g_browser_core_register_local_state)(PrefRegistrySimple* registry)
 // it its Browser's active tab, before it activates the window.
 extern void (*g_browser_core_activate_contents)(content::WebContents* contents);
 
+// chrome/browser/ui/select_file_policy/chrome_select_file_policy.cc: whether the page in
+// |contents| may open a file dialog, a file input's (kind 1) or a File System Access picker
+// (kind 2), as it asks. False keeps it from opening, with no infobar, and the page hears a cancel.
+// The browser's own dialogs, as a download's Save As, aren't asked about.
+extern bool (*g_browser_core_page_file_dialog)(content::WebContents* contents, int kind);
+
 #endif  // BROWSER_CORE_HOOKS_H_

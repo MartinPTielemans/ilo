@@ -24,6 +24,7 @@
 #include "base/time/time.h"
 #include "browser_core/ad_block.h"
 #include "browser_core/agent_autofill.h"
+#include "browser_core/agent_file_field.h"
 #include "browser_core/agent_job_voter.h"
 #include "browser_core/agent_page.h"
 #include "browser_core/arrange.h"
@@ -586,6 +587,7 @@ void Install(const bc_host& host) {
   content::SetPageLinkDragHandler(&Tab::LinkDragged);
   g_browser_core_permission_prompt = &PermissionQuestion::Create;
   g_browser_core_device_chooser = &DeviceChooser::Show;
+  g_browser_core_page_file_dialog = &AgentFileField::PageMayOpen;
   g_browser_core_bluetooth_pair = &BluetoothPair::Show;
   g_browser_core_extension_install_dialog = &InstallQuestion::Ask;
   g_browser_core_populate_frame_binders = &PopulateFrameBinders;
