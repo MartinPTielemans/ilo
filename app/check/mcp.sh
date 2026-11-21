@@ -806,16 +806,17 @@ else
     2>> "$out/mcp-bridge.log" &
 fi
 second_pid=$!
-exec 6> "$out/mcp2-in" 7< "$out/mcp2-out"
+# 8 and 9, as 6 and 7 are the notification server's and the other client's.
+exec 8> "$out/mcp2-in" 9< "$out/mcp2-out"
 # Sends $1 on the second connection and prints its answer, as mcp does on the first.
 second() {
-  printf '%s\n' "$1" >&6
+  printf '%s\n' "$1" >&8
   perl -e 'alarm 30; my $line = "";
     while (sysread STDIN, my $byte, 1) { $line .= $byte; last if $byte eq "\n" }
-    print $line; exit($line =~ /\n\z/ ? 0 : 1)' <&7 || fail "the second connection didn't answer $1"
+    print $line; exit($line =~ /\n\z/ ? 0 : 1)' <&9 || fail "the second connection didn't answer $1"
 }
 second '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"second","version":"1"}}}' > /dev/null
-printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}' >&6
+printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}' >&8
 await_log '^browser: agent mcp-client hello from second$' "the app didn't hear the second connection's hello"
 printf '%s' '<!doctype html><title>Second page</title><p>A page of the second connection.' \
   > "$out/site/second.html"
@@ -831,7 +832,7 @@ await_log "^browser: task card $second_session [A-Z][a-z]* second · " \
   fail "the second connection's step reached the first card: $(grep "^browser: task card $session [A-Z][a-z]* " "$log" | tail -1)"
 closed=$(second "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"close_tab\",\"arguments\":{\"tab\":$second_tab}}}" | answered close_tab)
 case "$closed" in "Closed tab $second_tab."*) ;; *) fail "close_tab on the second connection answered: $closed" ;; esac
-exec 6>&- 7<&-
+exec 8>&- 9<&-
 for _ in $(seq 100); do kill -0 "$second_pid" 2>/dev/null || break; sleep 0.1; done
 await_log "^browser: session $second_session done\$" "closing the second connection didn't end its card"
 grep -q "^browser: session $session done\$" "$log" && fail "closing the second connection ended the first's card"
