@@ -371,7 +371,9 @@ fn use_read_answers_by_what_the_read_came_to(cx: &mut TestAppContext) {
     let broken = broken.try_recv().unwrap();
     assert!(broken.error);
     assert!(
-        broken.text.starts_with("broken: www.example.com changed: "),
+        broken
+            .text
+            .starts_with("broken: www.example.com didn't match the saved read. "),
         "{}",
         broken.text
     );
@@ -477,7 +479,7 @@ fn a_proposal_reads_only_its_tabs_site(cx: &mut TestAppContext) {
     away["url"] = json!("http://www.example.com/buildings");
     let refused = call(&agents, "claude-code", "propose_read", away, cx);
     let refused = refused.try_recv().unwrap();
-    assert!(refused.error && refused.text.contains("never reads another site"));
+    assert!(refused.error && refused.text.contains("can't target another site or scheme"));
     assert!(
         browser.saved_reads.borrow().is_empty(),
         "it read another site"
@@ -615,7 +617,7 @@ fn always_ask_first_pauses_reads_and_refuses_proposals(cx: &mut TestAppContext) 
         titles(&agents, cx)[0],
         (
             "Can't save a read of www.example.com".to_string(),
-            Some("Always ask first".to_string())
+            Some("On your Always ask first list".to_string())
         )
     );
 

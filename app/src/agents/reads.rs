@@ -337,13 +337,13 @@ impl Agents {
         }
         if !self.owns(agent, tab, cx) {
             _ = reply.send(ToolResult::error(
-                "propose_read reads the site of a tab of your own. Open the site with open_tab.",
+                "propose_read requires one of your own tabs. Open the site with open_tab.",
             ));
             return;
         }
         let Some(origin) = crate::agents::request::origin(&url) else {
             _ = reply.send(ToolResult::error(
-                "The tab isn't on a web page: a read is of an http(s) site.",
+                "The tab isn't on a web page. Reads only work on http(s) sites.",
             ));
             return;
         };
@@ -367,7 +367,7 @@ impl Agents {
         let saved = match self.store(profile) {
             None => {
                 _ = reply.send(ToolResult::error(
-                    "A private window keeps no saved reads. Read the site in your tab instead.",
+                    "Can't save reads in a private window. Read the site in your tab instead.",
                 ));
                 return;
             }
@@ -375,7 +375,7 @@ impl Agents {
         };
         if saved.as_ref() == Some(&read) {
             _ = reply.send(ToolResult::text(format!(
-                "saved: \"{}\" is saved as proposed. Call use_read with its name.",
+                "saved: \"{}\" is already saved as proposed. Call use_read with its name.",
                 read.name
             )));
             return;
@@ -385,7 +385,7 @@ impl Agents {
             Some(Value::Object(sample)) => sample.clone(),
             Some(_) => {
                 _ = reply.send(ToolResult::error(
-                    "sample is an object of a value for each parameter, which the user's card reads with.",
+                    "sample must be an object with a value for each parameter, used to preview the read on the user's card.",
                 ));
                 return;
             }
@@ -427,7 +427,7 @@ impl Agents {
                     }
                     Came::Outcome(Outcome::Broken(broken)) => {
                         _ = reply.send(ToolResult::error(format!(
-                            "broken: {host} didn't give these rows. {} Fix the definition and propose it again.",
+                            "broken: {host} didn't return matching rows. {} Fix the definition and call propose_read again.",
                             broken.0
                         )));
                         return;
@@ -579,7 +579,7 @@ impl Agents {
             Some(Err(_)) => Err(format!(
                 "\"{name}\" changed while the user was asked. Call list_reads, then propose it again."
             )),
-            None => Err("A private window keeps no saved reads.".to_string()),
+            None => Err("Can't save reads in a private window.".to_string()),
         };
         cx.notify();
         _ = act.reply.send(match answer {
@@ -599,7 +599,7 @@ impl Agents {
     ) {
         let Some(name) = arguments.get("name").and_then(Value::as_str) else {
             _ = reply.send(ToolResult::error(
-                "name is the saved read's, as list_reads gives it.",
+                "name must be a saved read's name, as returned by list_reads.",
             ));
             return;
         };
@@ -608,7 +608,7 @@ impl Agents {
             Some(Value::Object(params)) => params.clone(),
             Some(_) => {
                 _ = reply.send(ToolResult::error(
-                    "params is an object of a value for each parameter.",
+                    "params must be an object with a value for each parameter.",
                 ));
                 return;
             }
@@ -719,7 +719,7 @@ impl Agents {
             ),
             Came::Outcome(Outcome::Broken(broken)) => {
                 let text = format!(
-                    "broken: {host} changed: {} Open {host} in a tab to inspect it and call propose_read to update it.",
+                    "broken: {host} didn't match the saved read. {} Open {host} in a tab to inspect it and call propose_read to update it.",
                     broken.0
                 );
                 (Some(State::Broken(broken.0)), ToolResult::error(text))
@@ -784,7 +784,7 @@ pub fn shown(origin: &str) -> String {
 
 /// The agent's text when no whole answer came.
 fn unreachable(site: &str) -> String {
-    format!("unreachable: {site} didn't answer the read. Try use_read again later.")
+    format!("unreachable: {site} didn't respond. Try use_read again later.")
 }
 
 /// A parameter as list_reads gives it.
@@ -802,19 +802,21 @@ fn param_json(param: &saved_reads::definition::Param) -> Value {
 /// tab gives an https read, which HSTS's upgrade would otherwise send off its origin).
 fn definition(arguments: &Value, origin: &str) -> Result<Definition, String> {
     let Some(given) = arguments.as_object() else {
-        return Err("propose_read takes the read's name, kind, url and columns.".into());
+        return Err(
+            "propose_read arguments must be an object with name, kind, url and columns.".into(),
+        );
     };
     let shown = self::shown(origin);
     if given.contains_key("site") {
         return Err(format!(
-            "propose_read takes no site: a read is of the tab's site, {shown}."
+            "propose_read takes no site argument; it reads the tab's site ({shown})."
         ));
     }
     if let Some(url) = given.get("url").and_then(Value::as_str)
         && (!url.starts_with('/') || url.starts_with("//"))
     {
         return Err(format!(
-            "url is a path on the tab's site, {shown}, such as /api/items/{{id}}: a read never reads another site, nor the same site over another scheme."
+            "url must be a path on the tab's site ({shown}), such as /api/items/{{id}}. Reads can't target another site or scheme."
         ));
     }
     let mut value: Map<String, Value> = (given.iter())
@@ -849,12 +851,18 @@ mod tests {
             let mut other = arguments.clone();
             other["url"] = json!(url);
             let why = definition(&other, "https://reads.test").unwrap_err();
-            assert!(why.contains("never reads another site"), "{url}: {why}");
+            assert!(
+                why.contains("can't target another site or scheme"),
+                "{url}: {why}"
+            );
         }
         let mut sited = arguments.clone();
         sited["site"] = json!("https://away.reads.test");
         let why = definition(&sited, "https://reads.test").unwrap_err();
-        assert!(why.starts_with("propose_read takes no site"), "{why}");
+        assert!(
+            why.starts_with("propose_read takes no site argument"),
+            "{why}"
+        );
     }
 
     #[test]

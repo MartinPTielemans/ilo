@@ -189,7 +189,7 @@ for url in "http://away.localhost:$port/reads/items-A-7.json" "https://$origin/r
   before=$(grep -c "$asks" "$log" || true)
   refused=$(reads_call propose_read "$(table_read table.html | sed "s|\"/reads/table.html\"|\"$url\"|")")
   case "$refused" in
-    "error: url is a path on the tab's site, $origin, "*) ;;
+    "error: url must be a path on the tab's site ($origin), "*) ;;
     *) fail "propose_read of $url answered: $refused" ;;
   esac
   [ "$(grep -c "$asks" "$log")" = "$before" ] || fail "propose_read of $url showed a card"
@@ -260,14 +260,14 @@ done
 reads_table Building 'Tower Three' > "$reads/table.html"
 broken=$(reads_call use_read '{"name":"city buildings"}')
 case "$broken" in
-  "error: broken: $origin changed: "*) ;;
+  "error: broken: $origin didn't match the saved read. "*) ;;
   *) fail "a use after the page changed answered: $broken" ;;
 esac
 case "$broken" in *Tower*) fail "the broken read gave rows: $broken" ;; esac
 await "^browser: agent logged mcp-client read_broken $host_rx\$" || fail "the broken read wasn't logged"
 cp "$reads/twice.html" "$reads/table.html"
 broken=$(reads_call use_read '{"name":"city buildings"}')
-case "$broken" in "error: broken: $origin changed: "*) ;; *) fail "a page with two tables answered: $broken" ;; esac
+case "$broken" in "error: broken: $origin didn't match the saved read. "*) ;; *) fail "a page with two tables answered: $broken" ;; esac
 reads_table Name 'Tower Three' > "$reads/table.html"
 
 # 8, d: a site that wants a sign-in needs one, until the user signs in in a tab, which the driver
