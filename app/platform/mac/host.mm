@@ -1611,8 +1611,9 @@ OSErr LogQuitEvent(const AppleEvent* event, AppleEvent* reply, SRefCon) {
       sender ? [NSRunningApplication runningApplicationWithProcessIdentifier:sender].localizedName
              : nil;
   const char why[5] = {char(reason >> 24), char(reason >> 16), char(reason >> 8), char(reason), 0};
+  // The sender's name, another of the user's apps, only when the checks run the app (#3776).
   fprintf(stderr, "browser: quit Apple Event from %d %s, reason %s\n", sender,
-          name ? name.UTF8String : "unknown", reason ? why : "none");
+          name && Checked() ? name.UTF8String : "unknown", reason ? why : "none");
   return g_quit_handler(event, reply, g_quit_refcon);
 }
 
