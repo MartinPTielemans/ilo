@@ -2509,6 +2509,45 @@ fn a_names_direction_marks_dont_reach_the_cards(cx: &mut TestAppContext) {
         question.what,
         "click \u{201C}Place ordermoc.buhtig now\u{201D} on example.com"
     );
+    agents.update(cx, |agents, cx| {
+        agents.answer(question.id, Answer::Dismiss, cx)
+    });
+
+    // A key press's question names the control, the field and the typed text, none with them.
+    let mut tree: Value = serde_json::from_str(&checkout_tree(None)).unwrap();
+    for node in tree["nodes"].as_array_mut().unwrap() {
+        let name = match node["name"]["value"].as_str().unwrap() {
+            "Card number" => "Card \u{202E}\"number\u{2066}",
+            "Pay now" => "Pay now \"\u{202E}moc.buhtig\u{2066}",
+            _ => continue,
+        };
+        node["name"]["value"] = json!(name);
+    }
+    let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+    let outline = page_done(&agents, &browser, answer, tree.to_string(), cx).text;
+    let card = outline
+        .lines()
+        .find(|line| line.contains("textbox") && line.contains("Card"))
+        .and_then(|line| {
+            line.rsplit_once('[')
+                .map(|(_, at)| at.trim_end_matches(']'))
+        })
+        .unwrap_or_else(|| panic!("no card field in {outline}"))
+        .to_string();
+    *browser.asked.borrow_mut() = None;
+    let typed = json!({ "tab": 20, "ref": card, "text": "42\u{202E}42", "submit": true });
+    let _answer = call(&agents, "claude-code", "type", typed, cx);
+    let question = (browser.asked.borrow().clone()).expect("the card's Enter didn't ask");
+    assert!(
+        !question.what.contains(['\u{202E}', '\u{2066}', '"']),
+        "{:?}",
+        question.what
+    );
+    assert_eq!(
+        question.what,
+        "press Enter, which may click \u{201C}Pay now 'moc.buhtig\u{201D} on example.com, after \
+         typing \u{201C}4242\u{201D} into \u{201C}Card 'number\u{201D}"
+    );
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
