@@ -2937,19 +2937,28 @@ CARD
   drawn "revoke bank.localhost" > /dev/null || fail "Settings › Agents didn't list the bank's permission to revoke"
   ../tools/window-screenshot.sh "$pid" "$out/settings-agents-revoke.png" || fail "no window to capture"
   # Hooks lists the user's hook with its last run and its Remove (#3668). Add Hook… opens a row whose
-  # field takes the keyboard, and Return there adds a hook, run when a task ends, which its Remove
-  # takes away again.
+  # field takes the keyboard. Its event pop-up's menu picks the longest event's name, which the
+  # pop-up then shows whole (the capture), and Add adds the hook, which its Remove takes away again.
   in_sight "remove hook 0" || fail "Settings › Agents didn't list the saved hook"
   ../tools/window-screenshot.sh "$pid" "$out/settings-agents-hooks.png" || fail "no window to capture"
   click_in_sight "add hook"
   expect '^browser: field Hook command has the keyboard$' \
     "Add Hook… didn't give the hook's field the keyboard in a frame drawn"
   send insert "exit 0"
-  ../tools/window-screenshot.sh "$pid" "$out/settings-agents-hook-adding.png" || fail "no window to capture"
+  click_in_sight "hook event"
+  expect '^browser: menu shown ' "the hook's event pop-up didn't open its menu"
+  expect '^browser: menu window at ' "the event menu's window didn't take the keyboard"
+  ../tools/window-screenshot.sh "$pid" "$out/settings-agents-hook-events.png" || fail "no window to capture"
+  send key down
+  send key down
   send key return
-  expect '^browser: hook added task_ended$' "Return in the hook's field didn't add a hook"
+  expect '^browser: menu closed$' "Return in the event menu didn't close it"
+  ../tools/window-screenshot.sh "$pid" "$out/settings-agents-hook-adding.png" || fail "no window to capture"
+  click_in_sight "add hook command"
+  expect '^browser: hook added handed_to_you$' \
+    "Add didn't add a hook on the event picked in its menu: $(grep '^browser: hook ' "$log" | tail -1)"
   click_in_sight "remove hook 1"
-  expect '^browser: hook removed task_ended$' "Remove didn't take the hook added away"
+  expect '^browser: hook removed handed_to_you$' "Remove didn't take the hook added away"
   send key w cmd
   expect '^browser: settings hidden$' "⌘W didn't hide Settings"
   # Another bank's site asks, as the answer was for bank.localhost alone.

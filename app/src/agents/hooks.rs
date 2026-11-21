@@ -64,7 +64,7 @@ impl Event {
         match self {
             Event::TaskEnded => "When a task ends",
             Event::Asked => "When an agent asks you",
-            Event::HandedToYou => "When a tab is handed to you",
+            Event::HandedToYou => "When an agent hands you a tab",
         }
     }
 }
@@ -173,7 +173,7 @@ fn run_for(command: &str, given: &[(&'static str, String)], limit: Duration) -> 
         .name("hook".into())
         .spawn(move || _ = done.send(wait(child, stderr)));
     if waiting.is_err() {
-        return Err("didn't start: no thread for it".into());
+        return Err("didn't start: couldn't create a thread".into());
     }
     match ended.recv_timeout(limit) {
         Ok(result) => result,
@@ -182,7 +182,7 @@ fn run_for(command: &str, given: &[(&'static str, String)], limit: Duration) -> 
                 Ok(group) => group.kill(),
                 Err(error) => crate::log!("browser: a hook's group couldn't be made: {error}"),
             }
-            Err(format!("still running after {} s", limit.as_secs()))
+            Err(format!("timed out after {} s", limit.as_secs()))
         }
     }
 }
@@ -229,8 +229,8 @@ fn wait(mut child: Child, stderr: Option<std::process::ChildStderr>) -> Result<(
     let said = String::from_utf8_lossy(&tail);
     let last = said.lines().rev().find(|line| !line.trim().is_empty());
     let exit = match status.code() {
-        Some(code) => format!("exit {code}"),
-        None => "killed".into(),
+        Some(code) => format!("exit code {code}"),
+        None => "killed by a signal".into(),
     };
     Err(match last {
         Some(line) => format!("{exit}: {}", super::page::clip(line.trim(), 200)),
@@ -295,9 +295,9 @@ mod tests {
         assert_eq!(run("test \"$ILO_TASK\" = 'Find a table'", &given), Ok(()));
         assert_eq!(
             run("echo first >&2; echo 'went wrong' >&2; exit 3", &given),
-            Err("exit 3: went wrong".into())
+            Err("exit code 3: went wrong".into())
         );
-        assert_eq!(run("exit 1", &given), Err("exit 1".into()));
+        assert_eq!(run("exit 1", &given), Err("exit code 1".into()));
     }
 
     /// A hook still running at its limit is killed with what it started, though that's still
@@ -311,7 +311,7 @@ mod tests {
         // What it started would leave a file once the limit has passed, unless it's killed too.
         let command = format!("(sleep 0.5; touch '{}') & wait", late.display());
         let ran = run_for(&command, &[], Duration::from_millis(200));
-        assert_eq!(ran, Err("still running after 0 s".into()));
+        assert_eq!(ran, Err("timed out after 0 s".into()));
         std::thread::sleep(Duration::from_millis(800));
         let outlived = late.exists();
         std::fs::remove_dir_all(&folder).unwrap();

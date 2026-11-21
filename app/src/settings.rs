@@ -4088,7 +4088,7 @@ impl Settings {
                 look,
                 "No hooks",
                 Some(
-                    "Run a command of yours when an agent finishes, asks you something, or hands \
+                    "Run a command when a task ends, or when an agent asks you something or hands \
                      you a tab."
                         .into(),
                 ),
@@ -4137,12 +4137,14 @@ impl Settings {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let look = &self.look;
-        let choose = self.popup(
-            Popup::HookEvent,
-            event.name().into(),
-            HOOK_EVENT_WIDTH,
-            cx.listener(|settings, _, window, cx| settings.choose_hook_event(window, cx)),
-        );
+        let choose = self
+            .popup(
+                Popup::HookEvent,
+                event.name().into(),
+                HOOK_EVENT_WIDTH,
+                cx.listener(|settings, _, window, cx| settings.choose_hook_event(window, cx)),
+            )
+            .child(self.drawn("hook event".into()));
         let added = agents.clone();
         let field = div()
             .relative()
@@ -5634,9 +5636,9 @@ fn method(target: &str) -> &str {
     target.split(' ').next().unwrap_or_default()
 }
 
-/// A row: its name, the line under it, if any, and its controls at its end.
-/// The ell of the hook row's event pop-up, which holds its longest name.
-const HOOK_EVENT_WIDTH: f32 = 200.;
+/// The width of the hook row's event pop-up: its longest name, "When an agent hands you a tab", is
+/// 195 wide in Inter at 13, which runs wider than SF, with 33 of padding and chevrons around it.
+const HOOK_EVENT_WIDTH: f32 = 230.;
 
 /// A hook's last run, before its Remove: not yet, running, when it ran, or when and how it failed,
 /// with the alert glyph, and how many of its events it skipped while it ran.
@@ -5644,18 +5646,19 @@ fn hook_ran(look: &RowLook, hook: &Hook, now: std::time::SystemTime) -> AnyEleme
     let Some(ran) = &hook.last else {
         return div()
             .text_color(look.detail)
-            .child("Not run yet")
+            .child("Not run since ilo opened")
             .into_any_element();
     };
     let ago = agents::ago(ran.at, now);
-    let said = match (&ran.failed, hook.running) {
-        (_, true) => "Running".to_string(),
-        (Some(why), false) => format!("Failed {}: {why}", ago.to_lowercase()),
-        (None, false) => format!("Ran {}", ago.to_lowercase()),
+    // The count goes before a failure's colon, so the reason after it stays the command's own.
+    let skipped = match ran.skipped {
+        0 => String::new(),
+        skipped => format!(" · {skipped} skipped"),
     };
-    let said = match ran.skipped {
-        0 => said,
-        skipped => format!("{said}, skipped {skipped}"),
+    let said = match (&ran.failed, hook.running) {
+        (_, true) => format!("Running{skipped}"),
+        (Some(why), false) => format!("Failed {}{skipped}: {why}", ago.to_lowercase()),
+        (None, false) => format!("Ran {}{skipped}", ago.to_lowercase()),
     };
     let failed = ran.failed.is_some() && !hook.running;
     div()
@@ -5675,6 +5678,7 @@ fn hook_ran(look: &RowLook, hook: &Hook, now: std::time::SystemTime) -> AnyEleme
         .into_any_element()
 }
 
+/// A row: its name, the line under it, if any, and its controls at its end.
 fn line_row(
     look: &RowLook,
     name: impl Into<SharedString>,
