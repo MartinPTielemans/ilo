@@ -94,9 +94,15 @@ forget_login
 trap 'cleanup; forget_login' EXIT
 agents_file="$(dirname "$saved")/Agents"
 token=$(python3 -I -c 'import secrets; print(secrets.token_hex(32))')
-# With a hook of the user's, which runs when a tab is handed to them (#3668).
-printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}],"hooks":[{"event":"handed_to_you","command":"exit 0"}]}' \
-  "$token" > "$agents_file"
+# With two hooks of the user's (#3668): one that runs when a tab is handed to them, and one on an
+# agent asking them, which fails after 2 s, saying why on stderr, in the shell of the OS.
+if windows; then
+  slow_fail='ping -n 3 127.0.0.1 >nul & echo went wrong 1>&2 & exit 3'
+else
+  slow_fail='sleep 2; echo went wrong >&2; exit 3'
+fi
+printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}],"hooks":[{"event":"handed_to_you","command":"exit 0"},{"event":"asked","command":"%s"}]}' \
+  "$token" "$slow_fail" > "$agents_file"
 chmod 600 "$agents_file"
 # An extension of the check's own, whose content script puts a frame of its page in the frames
 # page, as a password manager puts its own in pages. The frame tells the page it's there. In the
@@ -3467,17 +3473,60 @@ CARD
   click_in_sight "add hook command"
   expect '^browser: hook added handed_to_you$' \
     "Add didn't add a hook on the event picked in its menu: $(grep '^browser: hook ' "$log" | tail -1)"
-  click_in_sight "remove hook 1"
+  click_in_sight "remove hook 2"
   expect '^browser: hook removed handed_to_you$' "Remove didn't take the hook added away"
   send key w cmd
   expect '^browser: settings hidden$' "⌘W didn't hide Settings"
   # Another bank's site asks, as the answer was for bank.localhost alone.
   asks='^browser: agent mcp-client asks [0-9]*: open otherbank\.localhost$'
+  # The hook on asking has failed on each ask so far.
+  failed=$(grep -c '^browser: hook asked failed: ' "$log" || true)
   request open_tab "{\"url\":\"otherbank.localhost:$port/fields.html\"}" >&4
   await_more "$asks" 0 || fail "another bank's site didn't ask"
   # Left unanswered, for the client to go with.
   pending=$(grep '^browser: agent mcp-client asks' "$log" | tail -1 | cut -d' ' -f5 | tr -d :)
+  # A third bank's asks at once, while the hook on asking still runs, so it's skipped, and the
+  # hook's run fails. Both questions are left for the client to go with.
+  request open_tab "{\"url\":\"thirdbank.localhost:$port/fields.html\"}" >&4
+  await_log '^browser: agent mcp-client asks [0-9]*: open thirdbank\.localhost$' "a third bank's site didn't ask"
   await_log "^browser: agent question $pending at " "the agent's question wasn't drawn"
+  await_more '^browser: hook asked failed: exit code 3: went wrong$' "$failed" ||
+    fail "the hook on asking didn't fail as its command did: $(grep '^browser: hook asked' "$log" | tail -1)"
+  # Hooks at the Settings window's least size (#3668): a hook that ran, one that failed with the
+  # event it skipped, the adding row with its event menu open, and the section with none left.
+  send menu Settings…
+  expect '^browser: settings shown ' "Settings… didn't show Settings again"
+  settings_drew
+  send clickkey $(drawn "toolbar Agents")
+  expect '^browser: settings tab Agents$' "a click on Agents didn't show its section again"
+  settings_drew Agents
+  send resizekey 720 480
+  await_log '^browser: settings drawn at 720x480$' \
+    "Settings didn't draw at its least size: $(grep '^browser: settings drawn at ' "$log" | tail -1)"
+  in_sight "remove hook 1" || fail "Settings › Agents didn't list the hook on asking"
+  ../tools/window-screenshot.sh "$pid" "$out/settings-agents-hooks-least.png" || fail "no window to capture"
+  click_in_sight "add hook"
+  expect '^browser: field Hook command has the keyboard$' \
+    "Add Hook… at the least size didn't give the hook's field the keyboard"
+  click_in_sight "hook event"
+  expect '^browser: menu shown ' "the hook's event pop-up at the least size didn't open its menu"
+  expect '^browser: menu window at ' "the event menu's window didn't take the keyboard"
+  ../tools/window-screenshot.sh "$pid" "$out/settings-agents-hook-events-least.png" || fail "no window to capture"
+  send key escape
+  expect '^browser: menu closed$' "⎋ didn't close the event menu"
+  click_in_sight "hook cancel"
+  click_in_sight "remove hook 1"
+  expect '^browser: hook removed asked$' "Remove didn't take the hook on asking away"
+  click_in_sight "remove hook 0"
+  expect '^browser: hook removed handed_to_you$' "Remove didn't take the saved hook away"
+  # Add Hook… under No hooks, from a frame drawn since: the row was closed and the hooks gone.
+  drawn_after "add hook" '^browser: hook removed handed_to_you$' > /dev/null ||
+    fail "Hooks didn't draw Add Hook… again once its hooks were removed"
+  ../tools/window-screenshot.sh "$pid" "$out/settings-agents-hooks-none.png" || fail "no window to capture"
+  send resizekey 820 660
+  await_log '^browser: settings drawn at 820x660$' "Settings didn't draw at its size again"
+  send key w cmd
+  expect '^browser: settings hidden$' "⌘W didn't hide Settings again"
 fi
 # The client closing its end ends its session, which ends its session with the tab.
 exec 4>&-

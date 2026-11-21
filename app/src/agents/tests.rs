@@ -4993,10 +4993,12 @@ fn the_descriptions_say_how_to_use_tabs() {
         let names: Vec<&str> = (listed.iter())
             .map(|tool| tool["name"].as_str().unwrap())
             .collect();
-        // Those where it may be left out: add_to_split's is the one tab it adds.
+        // Those where it may be left out: add_to_split's is the one tab it adds, and
+        // wait_for_event's narrows a wait that without it hears all the agent's tabs.
         let optional = |tool: &&Value| {
             let required = tool["inputSchema"]["required"].as_array();
             !required.is_some_and(|required| required.contains(&json!("tab")))
+                && tool["name"] != "wait_for_event"
         };
         let tab_said: Vec<&str> = (listed.iter().filter(optional))
             .filter_map(|tool| tool["inputSchema"]["properties"]["tab"]["description"].as_str())

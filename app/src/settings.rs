@@ -4189,6 +4189,8 @@ impl Settings {
             .child(self.hook.clone());
         let cancel = self
             .button("hook-cancel", "Cancel")
+            .relative()
+            .child(self.drawn("hook cancel".into()))
             .on_click(cx.listener(|settings, _, window, cx| settings.close_hook_row(window, cx)));
         let agents = agents.clone();
         let add = self
