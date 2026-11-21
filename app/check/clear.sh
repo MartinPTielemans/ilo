@@ -1658,6 +1658,9 @@ if [ "$drm_done" = "Safari's engine" ]; then
   expect "^browser: copied [0-9]* cookies and [0-9]* storage items for localhost into the system's engine\$" \
     "the tab moved on the click isn't in Safari's engine"
   expect "^browser: page $tab needs moved" "the note didn't say the tab moved to Safari's engine"
+  # The note says so while Safari's engine is still loading the page, so the capture waits for the
+  # page to say it has painted there, or it pictures the reload.
+  expect "^browser: title $tab press ready\$" "the page moved to Safari's engine didn't say it had painted there"
   ../tools/window-screenshot.sh "$pid" "$out/drm-moved.png" || fail "no window to capture"
   exec 3>&-
   quit
