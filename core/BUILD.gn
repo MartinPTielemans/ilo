@@ -736,6 +736,8 @@ source_set("browser_core") {
     "card_video.h",
     "cast_dialog.cc",
     "cast_dialog.h",
+    "checked.cc",
+    "checked.h",
     "clear_site.cc",
     "clear_site.h",
     "crash_reports.cc",
