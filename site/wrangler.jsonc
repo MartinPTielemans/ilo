@@ -12,4 +12,13 @@
   },
   "routes": [{ "pattern": "ilobrowser.com", "custom_domain": true }],
   "workers_dev": false,
+  "env": {
+    // A copy on workers.dev alone, to compare with the live site: `wrangler deploy --env
+    // preview` (site.yml by hand), and `wrangler delete --env preview` when it's done with.
+    "preview": {
+      "name": "ilo-site-preview",
+      "routes": [],
+      "workers_dev": true,
+    },
+  },
 }

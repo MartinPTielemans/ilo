@@ -946,24 +946,17 @@ jobs:
           aws s3 rm "$bucket/pending/$TAG" --recursive --endpoint-url "$R2_ENDPOINT" --only-show-errors
           echo "$TAG is live in the Flatpak repository." >> "$GITHUB_STEP_SUMMARY"
 
-  # The owner published a draft: ilobrowser.com's release workflow puts its demo on the site and
-  # deploys it now, rather than at its next half-hourly check. GitHub's own token can't start
-  # another repository's workflow, so SITE_DISPATCH_TOKEN is a fine-grained token with Contents
-  # read and write on MartinPTielemans/ilo-site alone (docs/releasing.md).
+  # The owner published a draft: ilobrowser.com shows its changelog entry and its demo now
+  # (site.yml). `published` never comes for a draft, and a prerelease isn't a release of ilo.
   site:
-    if: ${{ github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v') }}
-    runs-on: ubuntu-24.04
-    steps:
-      - env:
-          TAG: ${{ github.event.release.tag_name }}
-          GH_TOKEN: ${{ secrets.SITE_DISPATCH_TOKEN }}
-        run: |
-          if [ -z "$GH_TOKEN" ]; then
-            echo "::notice::No SITE_DISPATCH_TOKEN (docs/releasing.md), so the site takes $TAG at its next half-hourly check."
-            exit 0
-          fi
-          gh api repos/MartinPTielemans/ilo-site/dispatches -f event_type=ilo-release -f "client_payload[tag]=$TAG"
-          echo "ilobrowser.com is updating to $TAG: https://github.com/MartinPTielemans/ilo-site/actions" >> "$GITHUB_STEP_SUMMARY"
+    if: >-
+      ${{ github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v') &&
+      !github.event.release.prerelease }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/site.yml
+    with:
+      deploy: true
 
   # The owner published a draft: the bot that announces releases hears of it now, rather than at its
   # next check-in, and its answer never fails or holds up the release (docs/releasing.md).
