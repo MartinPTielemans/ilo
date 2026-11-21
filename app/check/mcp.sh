@@ -3499,8 +3499,11 @@ CARD
   send menu Settings…
   expect '^browser: settings shown ' "Settings… didn't show Settings again"
   settings_drew
-  send clickkey $(drawn "toolbar Agents")
-  expect '^browser: settings tab Agents$' "a click on Agents didn't show its section again"
+  # Settings shows the section it was last on, which may be Agents already.
+  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Agents$'; then
+    send clickkey $(drawn "toolbar Agents")
+    expect '^browser: settings tab Agents$' "a click on Agents didn't show its section again"
+  fi
   settings_drew Agents
   send resizekey 720 480
   await_log '^browser: settings drawn at 720x480$' \
