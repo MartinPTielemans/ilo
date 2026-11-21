@@ -3376,19 +3376,23 @@ CARD
   # Always ask first (#3724): Add Site… opens a field with the keyboard, where Return adds the site
   # typed, which the list then shows with its Remove, and Remove takes it off.
   fence_add() {
+    added=$(grep -c '^browser: agents fenced pension\.localhost$' "$log" || true)
     click_in_sight "fence open"
     expect '^browser: settings fence field open$' "Add Site… didn't open Always ask first's field"
     expect '^browser: field Site where agents ask first has the keyboard$' \
       "Add Site… didn't give Always ask first's field the keyboard"
     send type pension.localhost
     send key return
-    expect '^browser: agents fenced pension\.localhost$' \
-      "Return in Always ask first's field didn't add the site"
+    await_more '^browser: agents fenced pension\.localhost$' "$added" ||
+      fail "Return in Always ask first's field didn't add the site"
   }
   fence_add
   ../tools/window-screenshot.sh "$pid" "$out/settings-agents-fence.png" || fail "no window to capture"
   click_in_sight "unfence pension.localhost"
   expect '^browser: agents unfenced pension\.localhost$' "Remove didn't take the site off Always ask first"
+  # Add Site… moves up with the row gone: its place from a frame drawn since, not the one before.
+  drawn_after "fence open" '^browser: agents unfenced pension\.localhost$' > /dev/null ||
+    fail "Always ask first didn't draw again once its site was removed"
   fence_add
   in_sight "unfence pension.localhost" || fail "Always ask first didn't list the site added again"
   send key w cmd
@@ -3466,8 +3470,7 @@ CARD
   case "$read" in "error: The user said never on pension.localhost"*) ;; *) fail "after Never, the read answered: $read" ;; esac
   [ "$(grep -c '^browser: agent mcp-client asks' "$log")" = "$before" ] ||
     fail "after Never, a read on the listed site asked"
-  closed=$(call close_tab "{\"tab\":$fence_tab}")
-  case "$closed" in "Closed tab $fence_tab."*) ;; *) fail "closing the listed site's tab answered: $closed" ;; esac
+  # The tab stays open, as the agent's last at work, which the end of its session reads.
   # Another bank's site asks, as the answer was for bank.localhost alone.
   asks='^browser: agent mcp-client asks [0-9]*: open otherbank\.localhost$'
   request open_tab "{\"url\":\"otherbank.localhost:$port/fields.html\"}" >&4
