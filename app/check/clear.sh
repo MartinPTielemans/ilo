@@ -1655,7 +1655,8 @@ if [ "$drm_done" = "Safari's engine" ]; then
   # Safari's engine may still be starting, as for the note's button above.
   expect_late "^browser: tab $tab moved to the system's engine on the user's press\$" \
     "a click on the button that asks for Widevine didn't move its tab to Safari's engine"
-  expect "^browser: system engine $tab on\$" "the tab moved on the click isn't in Safari's engine"
+  expect "^browser: copied [0-9]* cookies and [0-9]* storage items for localhost into the system's engine\$" \
+    "the tab moved on the click isn't in Safari's engine"
   expect "^browser: page $tab needs moved" "the note didn't say the tab moved to Safari's engine"
   ../tools/window-screenshot.sh "$pid" "$out/drm-moved.png" || fail "no window to capture"
   exec 3>&-
