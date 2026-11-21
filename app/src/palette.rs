@@ -592,6 +592,11 @@ impl Palette {
         let blurred = gpui_linux::overlays_blur();
         #[cfg(not(target_os = "linux"))]
         let blurred = cfg!(target_os = "macos");
+        self.card_where(blurred)
+    }
+
+    /// The pickers' card where the host does or doesn't blur what's behind a picker.
+    fn card_where(&self, blurred: bool) -> Rgba {
         if blurred {
             return self.card;
         }
