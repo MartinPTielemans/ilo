@@ -4094,13 +4094,14 @@ impl Settings {
                             agents.update(cx, |agents, cx| agents.remove_hook(id, cx))
                         })
                 };
-                let controls = vec![hook_ran(look, hook, now), remove.into_any_element()];
-                line_row(
-                    look,
-                    hook.event.name(),
-                    Some(hook.command.clone().into()),
-                    controls,
-                )
+                // Its last run goes under its command, where a failure's reason has the row's
+                // width to wrap in, down to Settings' least width.
+                frame()
+                    .child(
+                        text(look, hook.event.name(), Some(hook.command.clone().into()))
+                            .child(hook_ran(look, hook, now)),
+                    )
+                    .child(end([remove.into_any_element()]))
             })
             .collect();
         if rows.is_empty() && self.adding_hook.is_none() {
@@ -4171,7 +4172,7 @@ impl Settings {
         let field = div()
             .relative()
             .flex_1()
-            .min_w_0()
+            .min_w(px(HOOK_FIELD_LEAST))
             .h(px(CONTROL_HEIGHT))
             .px(px(FIELD_PADDING))
             .flex()
@@ -4200,7 +4201,10 @@ impl Settings {
             .on_click(
                 cx.listener(move |settings, _, window, cx| settings.add_hook(&agents, window, cx)),
             );
+        // Where the field would be narrower than a short command, it goes under the event with
+        // Cancel and Add, down to Settings' least width.
         frame()
+            .flex_wrap()
             .gap(px(CONTROL_GAP))
             .child(choose)
             .child(field)
@@ -5794,12 +5798,14 @@ fn method(target: &str) -> &str {
 /// 195 wide in Inter at 13, which runs wider than SF, with 33 of padding and chevrons around it.
 const HOOK_EVENT_WIDTH: f32 = 230.;
 
-/// A hook's last run, before its Remove: not yet, running, when it ran, or when and how it failed,
+/// The hook row's least command field, for a short command such as "notify-send done" whole.
+const HOOK_FIELD_LEAST: f32 = 200.;
+
+/// A hook's last run, under its command: not yet, running, when it ran, or when and how it failed,
 /// with the alert glyph, and how many of its events it skipped while it ran.
 fn hook_ran(look: &RowLook, hook: &Hook, now: std::time::SystemTime) -> AnyElement {
     let Some(ran) = &hook.last else {
-        return div()
-            .text_color(look.detail)
+        return hook_line(look)
             .child("Not run since ilo opened")
             .into_any_element();
     };
@@ -5815,21 +5821,37 @@ fn hook_ran(look: &RowLook, hook: &Hook, now: std::time::SystemTime) -> AnyEleme
         (None, false) => format!("Ran {}{skipped}", ago.to_lowercase()),
     };
     let failed = ran.failed.is_some() && !hook.running;
-    div()
+    hook_line(look)
         .flex()
-        .items_center()
+        .items_start()
         .gap(px(DISCLOSURE_GAP))
-        .text_color(look.detail)
         .when(failed, |row| {
+            // Centred on the first line of a reason that wraps.
             row.child(
-                svg()
-                    .path("icons/circle-alert.svg")
-                    .size(px(DISCLOSURE_GLYPH))
-                    .text_color(look.detail),
+                div()
+                    .flex_none()
+                    .h(px(DETAIL_LINE))
+                    .flex()
+                    .items_center()
+                    .child(
+                        svg()
+                            .path("icons/circle-alert.svg")
+                            .size(px(DISCLOSURE_GLYPH))
+                            .text_color(look.detail),
+                    ),
             )
         })
-        .child(said)
+        .child(div().min_w_0().child(said))
         .into_any_element()
+}
+
+/// A line under a hook's command, as the row's own line is.
+fn hook_line(look: &RowLook) -> gpui::Div {
+    div()
+        .mt(px(DETAIL_TOP))
+        .text_size(px(text::SMALL))
+        .line_height(px(DETAIL_LINE))
+        .text_color(look.detail)
 }
 
 /// A row: its name, the line under it, if any, and its controls at its end.
