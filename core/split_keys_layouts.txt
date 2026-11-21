@@ -16,3 +16,4 @@ dk  [=å ]=¨ -=+ /=-      [ ] /
 de  [=ü ]=+ -=ß /=-      [ ] /
 fr  [=^ ]=$ -=) 6=-      [ ] 6
 x   [=] ]=' -=-          none [ -
+# A line never to land: a push touching only this table, for #3800.
