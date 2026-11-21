@@ -268,6 +268,35 @@ source_set("live_folder_rule") {
   public_deps = [ "//url" ]
 }
 
+# What a saved read (bc_profile_read, #3820) reads and refuses, apart so browser_core_unittests
+# tests the rule alone.
+source_set("saved_read_rule") {
+  sources = [
+    "saved_read_rule.cc",
+    "saved_read_rule.h",
+  ]
+  deps = [ "//url" ]
+}
+
+# A saved read's GET on a session's loader, apart from the profile so browser_core_unittests drives
+# it with a test loader factory or a network context of its own.
+source_set("saved_read") {
+  sources = [
+    "saved_read.cc",
+    "saved_read.h",
+  ]
+  public_deps = [
+    "//base",
+    "//url",
+  ]
+  deps = [
+    ":saved_read_rule",
+    "//net",
+    "//services/network/public/cpp",
+    "//services/network/public/mojom",
+  ]
+}
+
 # What bc_tab_follow and bc_agent_navigate load, apart so browser_core_unittests tests the rule
 # alone (#3576).
 source_set("tab_follow_rule") {
@@ -748,6 +777,8 @@ source_set("browser_core") {
     "point.h",
     "popular_sites.cc",
     "popular_sites.h",
+    "profile_reads.cc",
+    "profile_reads.h",
     "profiles.cc",
     "profiles.h",
     "public/browser_core.h",
@@ -798,6 +829,8 @@ source_set("browser_core") {
     ":native_ad_block_lists",
     ":ad_block_off_sites",
     ":ad_block_page",
+    ":saved_read",
+    ":saved_read_rule",
     ":archive_rule",
     ":arrange_rule",
     ":focus_leaving_rule",
@@ -1131,8 +1164,11 @@ test("browser_core_unittests") {
     "arrange_rule_unittest.cc",
     "focus_leaving_rule_unittest.cc",
     "live_folder_rule_unittest.cc",
+    "mojo_once_for_testing.h",
     "native_ad_block_lists_unittest.cc",
     "pinned_url_unittest.cc",
+    "saved_read_rule_unittest.cc",
+    "saved_read_unittest.cc",
     "arrangement_unittest.cc",
     "board_store_unittest.cc",
     "ax_text_unittest.cc",
@@ -1192,6 +1228,8 @@ test("browser_core_unittests") {
     ":live_folder_rule",
     ":native_ad_block_lists",
     ":pinned_url",
+    ":saved_read",
+    ":saved_read_rule",
     ":tab_follow_rule",
     ":tab_recent_rule",
     ":arrangement",
@@ -1249,7 +1287,11 @@ test("browser_core_unittests") {
     "//components/sync_preferences:test_support",
     "//components/variations:test_support",
     "//mojo/core/embedder",
+    "//net",
+    "//net:test_support",
+    "//services/network:network_service",
     "//services/network:test_support",
+    "//services/network/public/mojom",
     "//services/network/public/cpp",
     "//skia",
     "//testing/gmock",

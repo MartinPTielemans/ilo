@@ -351,6 +351,27 @@ impl Browser for Core {
             )
         };
     }
+
+    fn read(&self, profile: u64, read: u64, url: &str, max_bytes: usize, timeout_ms: i64) {
+        let Ok(url) = CString::new(url) else {
+            let answer = agents::saved_read::Answer {
+                error: Some("The address can't hold a NUL character.".to_string()),
+                ..Default::default()
+            };
+            return update(move |agents, cx| agents.read_done(read, answer, cx));
+        };
+        unsafe { bc::bc_profile_read(profile, read, url.as_ptr(), max_bytes, timeout_ms) };
+    }
+}
+
+/// The core's answer to a saved read (bc_profile_read), for what waits on it.
+pub unsafe extern "C" fn profile_read_done(
+    _: *mut std::ffi::c_void,
+    read: u64,
+    answer: *const bc::bc_read_answer,
+) {
+    let answer = unsafe { agents::saved_read::Answer::from_core(&*answer) };
+    update(move |agents, cx| agents.read_done(read, answer, cx));
 }
 
 /// The tabs `copy` copies of `space`, as bc_space_today does.
