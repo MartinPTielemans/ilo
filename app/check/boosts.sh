@@ -44,13 +44,13 @@ if [ "$(uname)" = Linux ]; then
   await '^browser: UI shown at ' || fail "a launch the checks don't run showed no UI"
   quit_app
   exited
-  # A launch writes these in any run, holding nothing of the user's: when its UI showed, the
-  # Linux host's activation and how many sidebar backups a profile directory has.
-  said=$(grep -v -e '^browser: UI shown at ' -e '^browser: app active [01]$' \
-    -e '^browser: sidebar backups of [^ ]*: [0-9]*$' "$log" |
-    grep -F -e 'browser: ' -e "$host" | head -5) || true
-  [ -z "$said" ] || fail "a launch the checks don't run wrote these lines of the app's or the" \
-    "core's, or naming the site: $(printf '%s\n' "$said" | tr '\n' '|')"
+  # Chromium's lines, the core's among them, start with its "[pid:tid:time:LEVEL:file]". The lines
+  # without, the app's and the core's own fprintf's in any launch, hold times, states and the
+  # profile directory's name, and #3732 keeps the app's others to the checks.
+  said=$({ grep '^\[[0-9]*:[0-9]*:[0-9/.]*:[A-Z_]*:' "$log"; grep -F "$host" "$log"; } |
+    head -5 | tr '\n' '|') || true
+  [ -z "$said" ] ||
+    fail "a launch the checks don't run wrote Chromium's lines, or the site's host: $said"
 fi
 
 log="$out/boosts.log"
