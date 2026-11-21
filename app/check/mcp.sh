@@ -54,7 +54,9 @@
 # opens each request to the agent's sentence, where it went and what it sent, or that the denied one
 # wasn't, and names each by the method sent. A bank's site asks first, in a card whose Allow Once
 # opens it. Always Allow
-# opens it from then on, as Settings › Agents lists with its Revoke. A login the
+# opens it from then on, as Settings › Agents lists with its Revoke. A site the user adds to
+# Settings › Agents' Always ask first asks before the agent opens it and before its next call on a
+# tab that came there by a link, which gives nothing of the page meanwhile (#3724). A login the
 # user saved fills in neither as the agent's tab loads it nor from a dropdown, and fills once the
 # user takes the tab over, without a reload. Closing the client's end ends its session with the tab.
 # Reconnected, its next call is a card of its own, whose Stop answers the call under way and closes
@@ -3017,6 +3019,9 @@ CARD
   send click 600 60
   for _ in $(seq 30); do [ "$(children)" -gt "$shown" ] && break; done
   [ "$(children)" -gt "$shown" ] || fail "the held tab's username field offered no saved login"
+  # children sends its layout from a subshell, whose steps the count here didn't keep: without
+  # them, each send after waits on an earlier step's line, and reads the frame before its own.
+  step=$(sed -n 's/^browser: drive \([0-9]*\)[: ].*/\1/p' "$log" | sort -n | tail -1)
   ../tools/window-screenshot.sh "$pid" "$out/agent-login-filled.png" || fail "no window to capture"
   send key escape
   before=$(grep -c "$handed" "$log" || true)
@@ -3371,8 +3376,159 @@ CARD
   settings_drew Agents
   drawn "revoke bank.localhost" > /dev/null || fail "Settings › Agents didn't list the bank's permission to revoke"
   ../tools/window-screenshot.sh "$pid" "$out/settings-agents-revoke.png" || fail "no window to capture"
+  # Always ask first (#3724): Add Site… opens a field with the keyboard, where Return adds the site
+  # typed, which the list then shows with its Remove, and Remove takes it off.
+  fence_add() {
+    added=$(grep -c '^browser: agents fenced pension\.localhost$' "$log" || true)
+    click_in_sight "fence open"
+    expect '^browser: settings fence field open$' "Add Site… didn't open Always ask first's field"
+    expect '^browser: field Site where agents always ask first has the keyboard$' \
+      "Add Site… didn't give Always ask first's field the keyboard"
+    send type pension.localhost
+    send key return
+    await_more '^browser: agents fenced pension\.localhost$' "$added" ||
+      fail "Return in Always ask first's field didn't add the site"
+  }
+  fence_add
+  ../tools/window-screenshot.sh "$pid" "$out/settings-agents-fence.png" || fail "no window to capture"
+  click_in_sight "unfence pension.localhost"
+  expect '^browser: agents unfenced pension\.localhost$' "Remove didn't take the site off Always ask first"
+  # Add Site… moves up with the row gone: its place from a frame drawn since, not the one before.
+  drawn_after "fence open" '^browser: agents unfenced pension\.localhost$' > /dev/null ||
+    fail "Always ask first didn't draw again once its site was removed"
+  fence_add
+  in_sight "unfence pension.localhost" || fail "Always ask first didn't list the site added again"
+  # At the Settings window's least size, the foot under Add Site… wraps whole.
+  send resizekey 720 480
+  await_log '^browser: settings drawn at 720x480$' \
+    "Settings didn't draw at its least size: $(grep '^browser: settings drawn at ' "$log" | tail -1)"
+  in_sight "fence open" || fail "Always ask first didn't draw Add Site… at the least size"
+  ../tools/window-screenshot.sh "$pid" "$out/settings-agents-fence-least.png" || fail "no window to capture"
+  send resizekey 820 660
+  await_log '^browser: settings drawn at 820x660$' "Settings didn't draw at its size again"
   send key w cmd
   expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+
+  # The site the user listed asks before the agent opens it, in a card of Never and Allow Once
+  # alone, and Allow Once opens it. A tab that comes there by any other way, a link here, asks
+  # before the agent's next call on it, a read included, and the click's answer gives nothing of
+  # the page; Allow Once lets the tab stay, until it leaves. Never refuses the site from then on,
+  # unasked, as an open's Never does (#3724). Each question and answer is in the activity log.
+  printf '%s' '<!doctype html><title>Pension balance</title><p>Balance 1234</p>' \
+    > "$out/site/pension.html"
+  printf '%s' "<!doctype html><title>To the pension</title>
+<p><a href=\"http://pension.localhost:$port/pension.html\">Pension</a></p>" > "$out/site/to-pension.html"
+  # An open of the site asks to open it, and a call on a tab already there asks to use it.
+  fence_opens='^browser: agent mcp-client asks [0-9]*: open pension\.localhost$'
+  fence_uses='^browser: agent mcp-client asks [0-9]*: use pension\.localhost$'
+  fence_asks=$fence_opens
+  # Waits for the fence's question after the call $3 sent, captured as $2.png, answers it $1 with
+  # a click on the card, and sets fenced to the call's answer. Never and Allow Once share the
+  # card's last row, Never at the left, and it has no Always Allow.
+  fence_answer() {
+    await_more "$fence_asks" "$before" ||
+      fail "$3 didn't ask first: $(grep '^browser: agent mcp-client asks' "$log" | tail -1)"
+    q=$(grep '^browser: agent mcp-client asks' "$log" | tail -1 | cut -d' ' -f5 | tr -d :)
+    await_log "^browser: agent question $q at " "the question before $3 wasn't drawn"
+    read -r qx qy qw qh <<CARD
+$(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
+CARD
+    ../tools/window-screenshot.sh "$pid" "$out/$2.png" || fail "no window to capture"
+    case "$1" in Once) x=$((qw * 3 / 4)) ;; Never) x=$((qw / 4)) ;; esac
+    send click $((qx + x)) $((qy + qh - 26))
+    await_log "^browser: agent mcp-client answered $q $1\$" "$1 didn't answer the question before $3"
+    fenced=$(next_answer) || fail "the browser didn't answer $3"
+    fenced=$(printf '%s\n' "$fenced" | answered "$3")
+  }
+  before=$(grep -c "$fence_asks" "$log" || true)
+  request open_tab "{\"url\":\"pension.localhost:$port/pension.html\"}" >&4
+  fence_answer Once agent-fence-open "the open of a site the user listed"
+  fence_tab=$(printf '%s\n' "$fenced" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  [ -n "$fence_tab" ] || fail "the allowed open of a site the user listed answered: $fenced"
+  read=$(call read_page "{\"tab\":$fence_tab}")
+  case "$read" in *"Balance 1234"*) ;; *) fail "the tab allowed open on the site asked or answered: $read" ;; esac
+  closed=$(call close_tab "{\"tab\":$fence_tab}")
+  case "$closed" in "Closed tab $fence_tab."*) ;; *) fail "closing the listed site's tab answered: $closed" ;; esac
+  # Comes to the site by the link, and asks before reading it, answered $1.
+  linked() {
+    link=$(printf '%s\n' "$went" | sed -n 's/.*- link "Pension" \[\(e[0-9]*\)\].*/\1/p' | head -1)
+    [ -n "$link" ] || fail "the page with a link to the listed site answered: $went"
+    clicked=$(call click "{\"tab\":$fence_tab,\"ref\":\"$link\"}")
+    case "$clicked" in
+      "error: "* | *Balance* | *"Pension balance"*) fail "the click that came to the listed site answered: $clicked" ;;
+    esac
+    await_log "^browser: loaded $fence_tab http://pension\.localhost:$port/pension\.html\$" \
+      "the link didn't take the tab to the listed site"
+    fence_asks=$fence_uses
+    before=$(grep -c "$fence_asks" "$log" || true)
+    request read_page "{\"tab\":$fence_tab}" >&4
+    fence_answer "$1" "agent-fence-came-$1" "the read of a tab that came to the listed site"
+  }
+  went=$(call open_tab "{\"url\":\"localhost:$port/to-pension.html\"}")
+  fence_tab=$(printf '%s\n' "$went" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  [ -n "$fence_tab" ] || fail "open_tab to-pension.html answered: $went"
+  linked Once
+  case "$fenced" in *"Balance 1234"*) ;; *) fail "the read allowed once answered: $fenced" ;; esac
+  await_log '^browser: agent logged mcp-client asked_first pension\.localhost$' \
+    "the fence's question didn't reach the activity log"
+  await_log '^browser: agent logged mcp-client came_to pension\.localhost$' \
+    "the fence's Allow Once didn't reach the activity log"
+  read=$(call read_page "{\"tab\":$fence_tab}")
+  case "$read" in *"Balance 1234"*) ;; *) fail "the tab let stay asked again or answered: $read" ;; esac
+  # Back off the site and forward onto it again asks again, as coming back does, whether the page
+  # comes back from the back-forward cache or loads again; which it was goes in mcp-fence.txt. It
+  # guards the order the fence rests on: the core's report of the page's address reaches the app
+  # before the forward's answer, a restore's too, or the answer would carry the page.
+  went=$(call navigate "{\"tab\":$fence_tab,\"url\":\"back\"}")
+  case "$went" in "Went back."*'link "Pension"'*) ;; *) fail "back off the listed site answered: $went" ;; esac
+  loads=$(grep -c "^browser: loaded $fence_tab http://pension\.localhost:$port/pension\.html\$" "$log" || true)
+  went=$(call navigate "{\"tab\":$fence_tab,\"url\":\"forward\"}")
+  case "$went" in
+    *Balance* | *"Pension balance"*) fail "forward onto the listed site answered its page: $went" ;;
+    "Went forward."*"Tab $fence_tab is now on pension.localhost, where the user wants"*) ;;
+    *) fail "forward onto the listed site answered: $went" ;;
+  esac
+  before=$(grep -c "$fence_asks" "$log" || true)
+  request read_page "{\"tab\":$fence_tab}" >&4
+  fence_answer Once agent-fence-forward "the read after forward onto the listed site"
+  case "$fenced" in *"Balance 1234"*) ;; *) fail "the read after forward, allowed once, answered: $fenced" ;; esac
+  case "$(grep -c "^browser: loaded $fence_tab http://pension\.localhost:$port/pension\.html\$" "$log")" in
+    "$loads") echo "forward onto the listed site: restored from the back-forward cache, no load" ;;
+    *) echo "forward onto the listed site: loaded again" ;;
+  esac >> "$out/mcp-fence.txt"
+  went=$(call navigate "{\"tab\":$fence_tab,\"url\":\"localhost:$port/to-pension.html\"}")
+  linked Never
+  case "$fenced" in "error: "*) ;; *) fail "the read answered Never answered: $fenced" ;; esac
+  await_log '^browser: agent logged mcp-client came_to pension\.localhost refused: ' \
+    "the fence's Never didn't reach the activity log"
+  before=$(grep -c '^browser: agent mcp-client asks' "$log" || true)
+  read=$(call read_page "{\"tab\":$fence_tab}")
+  case "$read" in "error: The user said never on pension.localhost"*) ;; *) fail "after Never, the read answered: $read" ;; esac
+  [ "$(grep -c '^browser: agent mcp-client asks' "$log")" = "$before" ] ||
+    fail "after Never, a read on the listed site asked"
+  # Settings › Agents' log has the answers at the tab that came there, in the words of using the
+  # site: its newest entries, from the read refused after Never back.
+  send menu Settings…
+  expect '^browser: settings shown ' "Settings… didn't show Settings for the fence's log"
+  settings_drew
+  # Settings shows the section it was last on, Agents since the foot's capture.
+  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Agents$'; then
+    send clickkey $(drawn "toolbar Agents")
+    expect '^browser: settings tab Agents$' "a click on Agents didn't show its section for the log"
+  fi
+  settings_drew Agents
+  # The agent's log starts under its grants, whose last row is Revoke All: up to the card's top, its
+  # newest entries show under it. They're the came-to rows, which open nothing, so draw no name.
+  at=$(drawn "revoke all") || fail "Settings › Agents drew no grants above the agent's log"
+  sight=$(grep '^browser: settings card shows ' "$log" | tail -1 | cut -d' ' -f5-)
+  top=${sight%% to *} bottom=${sight##* to }
+  send scrollkey "${at% *}" $(((top + bottom) / 2)) $((${at#* } - top - 32)) 1
+  drawn_after "revoke all" "^browser: drive $step: " > /dev/null ||
+    fail "Settings › Agents didn't draw again, scrolled to the agent's log"
+  ../tools/window-screenshot.sh "$pid" "$out/settings-agents-fence-log.png" || fail "no window to capture"
+  send key w cmd
+  expect '^browser: settings hidden$' "⌘W didn't hide Settings after the fence's log"
+  # The tab stays open, as the agent's last at work, which the end of its session reads.
   # Another bank's site asks, as the answer was for bank.localhost alone.
   asks='^browser: agent mcp-client asks [0-9]*: open otherbank\.localhost$'
   request open_tab "{\"url\":\"otherbank.localhost:$port/fields.html\"}" >&4
@@ -3425,8 +3581,6 @@ if [ "$driven" = 1 ]; then
   # dots' clock, and the driver reads its commands meanwhile, whatever the renderer (#1700).
   hello='^browser: agent mcp-client hello from check$'
   initialize='{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"check","version":"1"}}}'
-  # children sends its layout from a subshell, whose steps the count here didn't keep.
-  step=$(sed -n 's/^browser: drive \([0-9]*\)[: ].*/\1/p' "$log" | sort -n | tail -1)
   bridge_on
   hellos=$(grep -c "$hello" "$log" || true)
   mcp "$initialize" > /dev/null
