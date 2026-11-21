@@ -800,16 +800,29 @@ new_tab_key=ctrl-cmd-t
 [ "$(uname)" = Darwin ] || new_tab_key=alt-cmd-t
 expect "^browser: shortcut new-tab $new_tab_key\$" "⌃⌘T didn't become New Tab's key"
 ../tools/window-screenshot.sh "$pid" "$out/shortcuts.png" || fail "no window to capture"
+# in_sight, until the card shows $1 whole: GPUI on Windows scrolls about two thirds of the points
+# asked, so in_sight's two scrolls can fall short of a row a card's height away. It sets its
+# caller's locals, as in_sight does.
+whole_in_sight() {
+  for _ in 1 2 3 4; do
+    in_sight "$1" || return 1
+    y=${at#* }
+    [ -z "$sight" ] || { [ "$y" -ge "$top" ] && [ "$y" -le "$bottom" ]; } && return 0
+  done
+  return 0
+}
 # A command's every key has a chip of its own (#3328): Next Tab's ⇧⌘] after ⌥⌘↓, Stop Loading's ⎋
 # after ⌘., and off the Mac Go Back's Alt+Left Arrow, which can't change, after Ctrl+Left Arrow.
 # A click on Go Back's second chip records over that key alone, ⌫ takes only it away, and ↺ gives
 # it back.
 shortcut_shown() {
   local at sight top bottom y by rest
-  in_sight "$1" || fail "Settings didn't draw $1, a command's second key (#3328)"
+  whole_in_sight "$1" || fail "Settings didn't draw $1 (#3328)"
   ../tools/window-screenshot.sh "$pid" "$out/$2" || fail "no window to capture"
 }
-shortcut_shown "shortcut next-tab 2" shortcuts-tabs.png
+drawn "shortcut next-tab 2" >/dev/null || fail "Settings didn't draw Next Tab's second key (#3328)"
+# Down to Last Used Tab, whose ⌃⇥ the Mac draws in its own font.
+shortcut_shown "shortcut recent-tab" shortcuts-tabs.png
 shortcut_shown "shortcut stop 2" shortcuts-page.png
 click_in_sight "shortcut back 2"
 expect '^browser: shortcut recording back$' "a click on Go Back's second key didn't record it"
@@ -855,16 +868,10 @@ expect '^browser: settings shown Shortcuts$' \
   "Settings… didn't show the Shortcuts tab it showed last"
 settings_drew Shortcuts
 # Where the app drew it: its place depends on how wide the keys' chip beside it is, ⌃⌘T on the Mac
-# and Ctrl+Alt+T elsewhere. Settings comes back scrolled to Go Back, a card's height and more below
-# it, which in_sight's two scrolls can fall short of on Windows (GPUI there scrolls about two
-# thirds of the points asked), so the card scrolls until the row is whole.
+# and Ctrl+Alt+T elsewhere. Settings comes back scrolled to Go Back, a card's height and more below.
 restore_new_tab() {
   local at sight top bottom y by rest
-  for _ in 1 2 3 4; do
-    in_sight "restore new-tab" || fail "Settings didn't draw New Tab's ↺"
-    y=${at#* }
-    [ -z "$sight" ] || { [ "$y" -ge "$top" ] && [ "$y" -le "$bottom" ]; } && break
-  done
+  whole_in_sight "restore new-tab" || fail "Settings didn't draw New Tab's ↺"
   send clickkey $at
 }
 restore_new_tab
