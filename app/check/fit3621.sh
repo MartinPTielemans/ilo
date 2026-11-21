@@ -137,29 +137,39 @@ PS
     quit
   }
   : > "$out/fit3621.txt"
-  fit_run build
-  # The 0.2.2 release, from its installer, for this user alone, into the check's folder.
+  # The 0.2.2 release, from its installer, for this user alone, into the check's folder, with
+  # Inno's log, given 3 minutes. If it doesn't finish, the same installer's files, unpacked by
+  # innoextract, which are what it installs.
   curl -fsSL -o "$out/ilo-022-setup.exe" \
     https://github.com/MartinPTielemans/ilo/releases/download/v0.2.2/ilo-windows-x64-setup.exe ||
     fail "the 0.2.2 installer didn't download"
-  "$out/ilo-022-setup.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CURRENTUSER \
-    "/DIR=$(cygpath -w "$PWD/$out/ilo-022")" || fail "the 0.2.2 installer failed"
-  for _ in $(seq 100); do
-    [ -e "$out/ilo-022/chrome.exe" ] && break
-    sleep 0.5
-  done
-  [ -e "$out/ilo-022/chrome.exe" ] || fail "the 0.2.2 installer left no chrome.exe"
-  # The installer opens nothing when silent; anything it started from the folder ends first.
-  for _ in $(seq 100); do
-    pgrep -f "$(cygpath -m "$PWD/$out/ilo-022")" > /dev/null || break
-    sleep 0.2
-  done
+  release="$PWD/$out/ilo-022"
+  timeout 180 "$out/ilo-022-setup.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CURRENTUSER \
+    "/DIR=$(cygpath -w "$release")" "/LOG=$(cygpath -w "$PWD/$out/ilo-022-setup.log")"
+  echo "fit3621: the installer ended $? with chrome.exe $([ -e "$release/chrome.exe" ] && echo there || echo missing)"
+  if [ ! -e "$release/chrome.exe" ]; then
+    taskkill //F //IM ilo-022-setup.exe //T > /dev/null 2>&1 || true
+    taskkill //F //IM ilo-022-setup.tmp //T > /dev/null 2>&1 || true
+    curl -fsSL -o "$out/innoextract.zip" \
+      https://github.com/dscharrer/innoextract/releases/download/1.9/innoextract-1.9-windows.zip ||
+      fail "innoextract didn't download"
+    (cd "$out" && unzip -oq innoextract.zip -d innoextract) || fail "innoextract didn't unzip"
+    rm -rf "$out/ilo-022-x"
+    "$out/innoextract/innoextract.exe" -s -d "$(cygpath -w "$PWD/$out/ilo-022-x")" \
+      "$(cygpath -w "$PWD/$out/ilo-022-setup.exe")" || fail "innoextract couldn't unpack 0.2.2"
+    release="$PWD/$out/ilo-022-x/app"
+    [ -e "$release/chrome.exe" ] || fail "0.2.2 unpacked with no app/chrome.exe: $(ls "$out/ilo-022-x")"
+    echo "fit3621: 0.2.2 unpacked by innoextract"
+  fi
+  # Anything the installer started from the folder ends first.
+  pkill -f "$(cygpath -m "$release")" 2> /dev/null || true
   build_app=$app build_procs=$procs
-  app="$PWD/$out/ilo-022"
+  app=$release
   procs="$(cygpath -m "$app/chrome.exe")"
-  rm -rf "$profile_dir"
-  mkdir -p "$profile_dir/Default"
   fit_run release-022
   app=$build_app procs=$build_procs
+  rm -rf "$profile_dir"
+  mkdir -p "$profile_dir/Default"
+  fit_run build
   echo "fit3621: measured; see fit3621.txt"
 fi
