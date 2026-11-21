@@ -190,26 +190,6 @@ impl Shell {
         tab != self.selected && self.panes(self.selected).contains(&tab)
     }
 
-    /// Runs the command of `keystroke`, typed in `tab`'s page, before that page gets it, when the
-    /// page is beside another pane's dialog and the command moves between panes. That's the way
-    /// back to the dialog, and a page that shares the asking page's renderer, stopped until the
-    /// answer, never answers a key (#3231). The window's other shortcuts are still the page's first.
-    pub fn run_pane_key_beside_dialog(
-        &mut self,
-        tab: u64,
-        keystroke: &str,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        let beside = tab == self.selected
-            && (self.panes(tab).into_iter())
-                .any(|pane| pane != tab && self.page_dialogs.contains_key(&pane));
-        let command = super::keys::user_keys(cx).command_for(keystroke, false);
-        match command.filter(|&command| beside && super::commands::moves_pane(command)) {
-            Some(command) => self.run_for_page(command, cx),
-            None => false,
-        }
-    }
-
     /// Focuses `tab`'s pane, for a click on its dialog at rest, which then goes live with it.
     pub fn focus_dialog_pane(&mut self, tab: u64, cx: &mut Context<Self>) {
         if self.dialog_rests(tab) {

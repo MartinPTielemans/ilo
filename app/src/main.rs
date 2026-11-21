@@ -284,13 +284,6 @@ fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static st
     {
         return (true, "agent bar");
     }
-    if update_tab_window(tab, |shell, cx| {
-        shell.run_pane_key_beside_dialog(tab, &keystroke, cx)
-    })
-    .unwrap_or(false)
-    {
-        return (true, "pane beside a dialog");
-    }
     // Escape ends Zap or Arrange on the page, which the page doesn't see (shell/boost.rs).
     if keystroke == "escape"
         && update_tab_window(tab, |shell, cx| {
