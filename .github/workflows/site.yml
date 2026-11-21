@@ -150,8 +150,23 @@ jobs:
         with:
           node-version: "24"
           working-directory: site
+          run-install: false
 
-      - name: Build and deploy
+      # wrangler too comes from the lockfile, hashes and all, not from the registry at deploy.
+      - name: Install
+        if: ${{ steps.switch.outputs.mode != 'none' }}
+        working-directory: site
+        run: vp install --frozen-lockfile
+
+      # Neither secret here: only the Deploy step's wrangler gets them, not the build's plugins.
+      - name: Build
+        if: ${{ steps.switch.outputs.mode != 'none' }}
+        working-directory: site
+        run: |
+          : "${ILO_PUBLISHED:?The Releases step sets it; a build without it would publish every dated entry}"
+          vp build
+
+      - name: Deploy
         if: ${{ steps.switch.outputs.mode != 'none' }}
         working-directory: site
         env:
@@ -159,9 +174,8 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          vp build
           if [ "$MODE" = live ]; then
-            npx --yes wrangler@4.151.2 deploy
+            vp exec wrangler deploy
           else
-            npx --yes wrangler@4.151.2 deploy --env preview
+            vp exec wrangler deploy --env preview
           fi
