@@ -470,6 +470,7 @@ fn call(
     let call = Call {
         id: 0,
         agent: agent.into(),
+        connection: 1,
         tool: tool.into(),
         arguments,
         reply,
@@ -1422,6 +1423,7 @@ fn disconnect_ends_the_agents_sessions_and_forgets_its_token(cx: &mut TestAppCon
     agents.update(cx, |agents, cx| {
         let hello = Event::Hello {
             agent: "claude-code".into(),
+            connection: 1,
             client: "claude-code".into(),
         };
         agents.handle(hello, cx)
@@ -2756,12 +2758,20 @@ fn a_requests_question_goes_unanswered_and_with_its_client(cx: &mut TestAppConte
     agents.update(cx, |agents, cx| {
         let hello = Event::Hello {
             agent: "claude-code".into(),
+            connection: 1,
             client: "claude-code".into(),
         };
         agents.handle(hello, cx);
     });
     let _answer = ask(cx);
     agents.update(cx, |agents, cx| {
+        agents.handle(
+            Event::Closed {
+                agent: "claude-code".into(),
+                connection: 1,
+            },
+            cx,
+        );
         agents.handle(
             Event::Bye {
                 agent: "claude-code".into(),
@@ -3074,6 +3084,13 @@ fn a_denied_download_leaves_no_file(cx: &mut TestAppContext) {
     );
     agents.update(cx, |agents, cx| {
         agents.handle(
+            Event::Closed {
+                agent: "claude-code".into(),
+                connection: 1,
+            },
+            cx,
+        );
+        agents.handle(
             Event::Bye {
                 agent: "claude-code".into(),
             },
@@ -3148,7 +3165,15 @@ fn a_question_goes_with_its_agent(cx: &mut TestAppContext) {
         agents.handle(
             Event::Hello {
                 agent: "claude-code".into(),
+                connection: 1,
                 client: "check".into(),
+            },
+            cx,
+        );
+        agents.handle(
+            Event::Closed {
+                agent: "claude-code".into(),
+                connection: 1,
             },
             cx,
         );
@@ -3491,6 +3516,11 @@ fn an_agent_whose_session_ended_has_no_status(cx: &mut TestAppContext) {
         ["claude-code"]
     );
 
+    let closed = Event::Closed {
+        agent: "claude-code".into(),
+        connection: 1,
+    };
+    agents.update(cx, |agents, cx| agents.handle(closed, cx));
     let bye = Event::Bye {
         agent: "claude-code".into(),
     };
@@ -6677,6 +6707,7 @@ mod tasks {
         let call = Call {
             id,
             agent: agent.into(),
+            connection: 1,
             tool: tool.into(),
             arguments,
             reply,
@@ -7800,13 +7831,14 @@ fn the_scripts_switch_comes_back_with_the_settings(cx: &mut TestAppContext) {
     );
 }
 
-/// An outside agent's session (#1080): one task card for each client the user connected, from its
-/// first call that opens or acts on a tab, whichever of its connections it comes on, until its last
-/// connection closes, it waits IDLE for a call, or the user stops it.
+/// An outside agent's session (#1080): one task card for each connection of a client the user
+/// connected, from its first call that opens or acts on a tab, until that connection closes, it
+/// waits IDLE for a call, or the user stops it. The `ilo` command's spans its connections.
 mod sessions {
     use super::*;
     use crate::agents::task::{
-        Card, Dot, IDLE, Line, NAMED_RECENTLY, QUIET, RENAMING, TITLE_KEPT, TaskAction,
+        Card, Conversation, Dot, IDLE, Line, NAMED_RECENTLY, Opens, QUIET, RENAMING, TITLE_KEPT,
+        TaskAction, TraceStep,
     };
 
     /// Calls `tool` as Claude Code, as call `id`, which `answered` ends.
@@ -7829,10 +7861,24 @@ mod sessions {
         at: std::time::Instant,
         cx: &mut TestAppContext,
     ) -> mpsc::Receiver<ToolResult> {
+        call_on(agents, 1, id, tool, arguments, at, cx)
+    }
+
+    /// call_at, on Claude Code's connection `connection`.
+    fn call_on(
+        agents: &Entity<Agents>,
+        connection: u64,
+        id: u64,
+        tool: &str,
+        arguments: Value,
+        at: std::time::Instant,
+        cx: &mut TestAppContext,
+    ) -> mpsc::Receiver<ToolResult> {
         let (reply, answer) = mpsc::channel();
         let call = Call {
             id,
             agent: "claude-code".into(),
+            connection,
             tool: tool.into(),
             arguments,
             reply,
@@ -7855,14 +7901,36 @@ mod sessions {
     }
 
     fn hello(agents: &Entity<Agents>, agent: &str, client: &str, cx: &mut TestAppContext) {
+        hello_on(agents, agent, 1, client, cx);
+    }
+
+    fn hello_on(
+        agents: &Entity<Agents>,
+        agent: &str,
+        connection: u64,
+        client: &str,
+        cx: &mut TestAppContext,
+    ) {
         let event = Event::Hello {
             agent: agent.into(),
+            connection,
             client: client.into(),
         };
         agents.update(cx, |agents, cx| agents.handle(event, cx));
     }
 
+    /// Claude Code's connection `connection` closed, and it has others.
+    fn closed(agents: &Entity<Agents>, connection: u64, cx: &mut TestAppContext) {
+        let event = Event::Closed {
+            agent: "claude-code".into(),
+            connection,
+        };
+        agents.update(cx, |agents, cx| agents.handle(event, cx));
+    }
+
+    /// Claude Code's one connection closed, which was its last.
     fn bye(agents: &Entity<Agents>, cx: &mut TestAppContext) {
+        closed(agents, 1, cx);
         let event = Event::Bye {
             agent: "claude-code".into(),
         };
@@ -7871,6 +7939,31 @@ mod sessions {
 
     fn cards(agents: &Entity<Agents>, cx: &mut TestAppContext) -> Vec<Card> {
         agents.read_with(cx, |agents, cx| agents.shown_cards(cx))
+    }
+
+    fn card(agents: &Entity<Agents>, key: &str, cx: &mut TestAppContext) -> Card {
+        let shown = cards(agents, cx);
+        (shown.into_iter().find(|card| card.agent == key)).expect("its card")
+    }
+
+    fn conversation(agents: &Entity<Agents>, key: &str, cx: &mut TestAppContext) -> Conversation {
+        agents
+            .read_with(cx, |agents, cx| agents.conversation(key, cx))
+            .expect("its conversation")
+    }
+
+    /// A conversation's steps, a same step on several tabs each its own.
+    fn steps(talk: &Conversation) -> usize {
+        (talk.lines.iter())
+            .map(|line| match line {
+                Line::Step(TraceStep {
+                    opens: Opens::Steps(steps),
+                    ..
+                }) => steps.len(),
+                Line::Step(_) => 1,
+                _ => 0,
+            })
+            .sum()
     }
 
     /// Claude Code connected and said hello, at work in its tab 20.
@@ -7884,57 +7977,375 @@ mod sessions {
         (agents, browser)
     }
 
-    /// The first call that acts on a tab starts the client's card, with its name, and the calls of
-    /// its other connections are steps of the same card. Its conversation is its steps, with no
-    /// ask, and the user talks to it where they started it. Its last connection closing ends it,
-    /// with the pages it worked in to open, and its next call is a session of its own.
+    /// The first call that acts on a tab starts its connection's card, with its name, and a
+    /// second connection of the client's is a card of its own, each with only its own steps. Its
+    /// conversation is its steps, with no ask, and the user talks to it where they started it. Its
+    /// connection closing ends it, with the pages it worked in to open, while the other's works
+    /// on, and a call on a new connection is a session of its own.
     #[gpui::test]
-    fn a_clients_work_is_one_card_until_it_disconnects(cx: &mut TestAppContext) {
-        let (agents, _) = at_work(cx);
+    fn each_connection_is_a_card_of_its_own_until_it_closes(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        let first = cards(&agents, cx)[0].agent.to_string();
+        browser
+            .tabs
+            .borrow_mut()
+            .push((31, 2, "Other", "https://example.org/"));
         // A second connection of Claude Code's.
-        hello(&agents, "claude-code", "claude-code", cx);
-        call_as(&agents, 3, "snapshot", json!({ "tab": 20 }), cx);
+        hello_on(&agents, "claude-code", 2, "claude-code", cx);
+        call_on(
+            &agents,
+            2,
+            3,
+            "snapshot",
+            json!({ "tab": 31 }),
+            std::time::Instant::now(),
+            cx,
+        );
         let shown = cards(&agents, cx);
-        assert_eq!(shown.len(), 1, "a card for each connection");
-        let card = &shown[0];
-        // Unnamed, it's titled by the site it works on, its line by its client (#3690).
-        assert_eq!(
-            (card.name.as_ref(), card.title.as_ref(), card.dot),
-            ("Claude Code", "example.com", Dot::Working)
-        );
-        assert!(!card.replies);
-        let agent = card.agent.to_string();
-        assert!(agent.starts_with("session-"), "{agent}");
-        let talk = agents
-            .read_with(cx, |agents, cx| agents.conversation(&agent, cx))
-            .unwrap();
-        assert!(talk.asked.is_empty());
-        assert_eq!(talk.lines.len(), 2, "{:?}", talk.lines);
-        assert!(
-            talk.lines.iter().all(|line| matches!(line, Line::Step(_))),
-            "{:?}",
-            talk.lines
-        );
-        assert_eq!(talk.about.as_ref(), "Claude Code · working");
+        assert_eq!(shown.len(), 2, "one card for two connections");
+        let second = shown[0].agent.to_string();
+        assert_ne!(first, second);
+        for (card, site) in shown.iter().zip(["example.org", "example.com"]) {
+            // Unnamed, it's titled by the site it works on, its line by its client (#3690).
+            assert_eq!(
+                (card.name.as_ref(), card.title.as_ref(), card.dot),
+                ("Claude Code", site, Dot::Working)
+            );
+            assert!(!card.replies);
+            assert!(card.agent.starts_with("session-"), "{}", card.agent);
+            let talk = conversation(&agents, &card.agent, cx);
+            assert!(talk.asked.is_empty());
+            assert_eq!(steps(&talk), 1, "{:?}", talk.lines);
+            assert_eq!(talk.lines.len(), 1, "{:?}", talk.lines);
+            assert_eq!(talk.about.as_ref(), "Claude Code · working");
+        }
         // A reply has nowhere to go.
         let replied = agents.update(cx, |agents, cx| {
-            agents.task_action(&agent, TaskAction::Reply("and then?".into()), cx)
+            agents.task_action(&first, TaskAction::Reply("and then?".into()), cx)
         });
         assert_eq!(replied, (None, None));
 
         answered(&agents, 2, cx);
         answered(&agents, 3, cx);
-        bye(&agents, cx);
-        let card = cards(&agents, cx).remove(0);
-        assert_eq!(card.dot, Dot::Done);
-        assert!(card.status.starts_with("Done "), "{}", card.status);
-        assert_eq!(card.open, vec![(20, "example.com".into())]);
+        closed(&agents, 1, cx);
+        let ended = card(&agents, &first, cx);
+        assert_eq!(ended.dot, Dot::Done);
+        assert!(ended.status.starts_with("Done "), "{}", ended.status);
+        assert_eq!(ended.open, vec![(20, "example.com".into())]);
+        assert_eq!(card(&agents, &second, cx).dot, Dot::Working);
 
-        hello(&agents, "claude-code", "claude-code", cx);
-        call_as(&agents, 4, "read_page", json!({ "tab": 20 }), cx);
+        hello_on(&agents, "claude-code", 3, "claude-code", cx);
+        call_on(
+            &agents,
+            3,
+            4,
+            "read_page",
+            json!({ "tab": 20 }),
+            std::time::Instant::now(),
+            cx,
+        );
         let shown = cards(&agents, cx);
-        assert_eq!(shown.len(), 2);
+        assert_eq!(shown.len(), 3);
         assert_eq!(shown[0].dot, Dot::Working);
+        assert!(![first, second].contains(&shown[0].agent.to_string()));
+    }
+
+    /// One connection's calls are one card's steps, those its subagents make beside each other on
+    /// other tabs included, as they share their session's connection.
+    #[gpui::test]
+    fn a_connections_calls_and_its_subagents_are_one_card(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        browser
+            .tabs
+            .borrow_mut()
+            .push((31, 2, "Other", "https://example.org/"));
+        // A subagent's call while the first is under way.
+        call_as(&agents, 3, "snapshot", json!({ "tab": 31 }), cx);
+        answered(&agents, 2, cx);
+        call_as(&agents, 4, "read_page", json!({ "tab": 20 }), cx);
+        answered(&agents, 3, cx);
+        answered(&agents, 4, cx);
+        let shown = cards(&agents, cx);
+        assert_eq!(shown.len(), 1, "a card for a subagent");
+        let talk = conversation(&agents, &shown[0].agent, cx);
+        assert_eq!(steps(&talk), 3, "{:?}", talk.lines);
+        let pages: Vec<u64> = talk.tabs.iter().map(|tab| tab.0).collect();
+        assert_eq!(pages, [20, 31]);
+    }
+
+    /// A call with no tab acts on its own connection's last tab, never another connection's. With
+    /// none yet, a Space of one tab gives that one, and one of two is answered as a call that must
+    /// name its tab is, acting on nothing.
+    #[gpui::test]
+    fn each_connections_default_tab_is_its_own(cx: &mut TestAppContext) {
+        let (agents, browser, _) = connected(cx);
+        hello_on(&agents, "claude-code", 1, "claude-code", cx);
+        hello_on(&agents, "claude-code", 2, "claude-code", cx);
+        let read = |connection, id, arguments, cx: &mut TestAppContext| {
+            let before = browser.reads.borrow().len();
+            let answer = call_on(
+                &agents,
+                connection,
+                id,
+                "read_page",
+                arguments,
+                std::time::Instant::now(),
+                cx,
+            );
+            let read = browser.reads.borrow().get(before).map(|read| read.0);
+            (read, answer)
+        };
+        // The Space's one tab.
+        assert_eq!(read(1, 1, json!({}), cx).0, Some(20));
+        browser
+            .tabs
+            .borrow_mut()
+            .push((31, 2, "Other", "https://example.org/"));
+        assert_eq!(read(1, 2, json!({}), cx).0, Some(20), "not its own last");
+        // The second connection has none of its own, and the Space has two.
+        let (none, answer) = read(2, 3, json!({}), cx);
+        assert_eq!(none, None, "it read a tab it didn't name");
+        let answer = answer.try_recv().expect("an answer at once");
+        assert_eq!(answer, ToolResult::error(crate::agents::tools::NOT_A_TAB));
+        assert_eq!(read(2, 4, json!({ "tab": 31 }), cx).0, Some(31));
+        assert_eq!(read(2, 5, json!({}), cx).0, Some(31));
+        assert_eq!(read(1, 6, json!({}), cx).0, Some(20), "the other's last");
+    }
+
+    /// The 30-day record of each connection's card has its own connection's steps alone.
+    #[gpui::test]
+    fn each_cards_record_has_its_own_connections_steps(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        let first = cards(&agents, cx)[0].agent.to_string();
+        browser
+            .tabs
+            .borrow_mut()
+            .push((31, 2, "Other", "https://example.org/"));
+        hello_on(&agents, "claude-code", 2, "claude-code", cx);
+        let looked = call_on(
+            &agents,
+            2,
+            3,
+            "snapshot",
+            json!({ "tab": 31 }),
+            std::time::Instant::now(),
+            cx,
+        );
+        page_done(&agents, &browser, looked, shop_tree(), cx);
+        answered(&agents, 2, cx);
+        answered(&agents, 3, cx);
+        closed(&agents, 2, cx);
+        bye(&agents, cx);
+        let kept = agents.update(cx, |agents, cx| agents.take_ended(cx));
+        assert_eq!(kept.len(), 2);
+        for (_, past) in &kept {
+            let actions: Vec<&str> = past.steps.iter().map(|step| step.action.as_str()).collect();
+            let sites: Vec<&str> = past.steps.iter().map(|step| step.site.as_str()).collect();
+            if past.id.starts_with(&format!("{first}-")) {
+                assert_eq!(actions, ["read_page"], "{:?}", past.steps);
+                assert_eq!(sites, ["example.com"]);
+            } else {
+                assert_eq!(actions, ["snapshot"], "{:?}", past.steps);
+                assert_eq!(sites, ["example.org"]);
+            }
+        }
+    }
+
+    /// A question, a handoff and a refusal each show on the card of the connection that asked or
+    /// was refused, and never on the other's.
+    #[gpui::test]
+    fn a_question_a_handoff_and_a_refusal_show_on_their_own_card(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        answered(&agents, 2, cx);
+        let first = cards(&agents, cx)[0].agent.to_string();
+        hello_on(&agents, "claude-code", 2, "claude-code", cx);
+        let opening = call_on(
+            &agents,
+            2,
+            3,
+            "open_tab",
+            json!({ "url": "chase.com" }),
+            std::time::Instant::now(),
+            cx,
+        );
+        let second = cards(&agents, cx)[0].agent.to_string();
+        assert_ne!(first, second);
+        let asks = |key: &str, cx: &mut TestAppContext| card(&agents, key, cx).question.is_some();
+        assert!(asks(&second, cx), "the bank's open didn't ask on its card");
+        assert!(!asks(&first, cx), "the other's question is on its card");
+
+        // Refused, which only its own record keeps.
+        let question = browser.asked.borrow().clone().unwrap();
+        agents.update(cx, |agents, cx| {
+            agents.answer(question.id, Answer::Dismiss, cx)
+        });
+        assert!(opening.recv().unwrap().error);
+        answered(&agents, 3, cx);
+        assert!(!asks(&second, cx));
+
+        let reason = json!({ "tab": 20, "reason": "Sign in to example.com" });
+        let _handed = call_as(&agents, 4, "hand_off", reason, cx);
+        assert!(asks(&first, cx), "the handoff didn't ask on its card");
+        assert!(!asks(&second, cx), "the other's handoff is on its card");
+
+        closed(&agents, 2, cx);
+        bye(&agents, cx);
+        let kept = agents.update(cx, |agents, cx| agents.take_ended(cx));
+        let refused = |key: &str| {
+            let of = |past: &&crate::agent_history::Past| past.id.starts_with(&format!("{key}-"));
+            let past = kept.iter().map(|each| &each.1).find(of).unwrap();
+            (past.steps.iter())
+                .filter(|step| !step.refused.is_empty())
+                .map(|step| step.action.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(refused(&second), ["open_tab"]);
+        assert!(refused(&first).is_empty(), "{:?}", refused(&first));
+    }
+
+    /// A page is the card's of the connection that opened it: a step on it by another connection
+    /// is a step of that one's card, and the page stays its opener's.
+    #[gpui::test]
+    fn a_page_is_its_openers_card_whoever_steps_on_it(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        answered(&agents, 2, cx);
+        let first = cards(&agents, cx)[0].agent.to_string();
+        let answer = call_as(&agents, 3, "open_tab", json!({ "url": "example.org" }), cx);
+        let opened = page_done(&agents, &browser, answer, shop_tree(), cx);
+        assert!(opened.text.starts_with("Opened tab 30."), "{}", opened.text);
+        answered(&agents, 3, cx);
+
+        hello_on(&agents, "claude-code", 2, "claude-code", cx);
+        let looked = call_on(
+            &agents,
+            2,
+            4,
+            "snapshot",
+            json!({ "tab": 30 }),
+            std::time::Instant::now(),
+            cx,
+        );
+        page_done(&agents, &browser, looked, shop_tree(), cx);
+        answered(&agents, 4, cx);
+        let second = cards(&agents, cx)[0].agent.to_string();
+        assert_ne!(first, second);
+
+        let opener = conversation(&agents, &first, cx);
+        let other = conversation(&agents, &second, cx);
+        assert_eq!(steps(&opener), 2, "{:?}", opener.lines);
+        assert_eq!(steps(&other), 1, "{:?}", other.lines);
+        let pages = |talk: &Conversation| talk.tabs.iter().map(|tab| tab.0).collect::<Vec<_>>();
+        assert_eq!(pages(&opener), [20, 30]);
+        assert!(pages(&other).is_empty(), "{:?}", other.tabs);
+
+        // Both done, the page is its opener's card's to open.
+        closed(&agents, 2, cx);
+        bye(&agents, cx);
+        let open = card(&agents, &first, cx).open;
+        assert_eq!(
+            open,
+            vec![(20, "example.com".into()), (30, "example.org".into())]
+        );
+        assert!(card(&agents, &second, cx).open.is_empty());
+    }
+
+    /// One connection closing ends its own card alone: the other's works on, and its question
+    /// stays up for the user.
+    #[gpui::test]
+    fn a_connection_closing_ends_its_card_alone(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        answered(&agents, 2, cx);
+        let first = cards(&agents, cx)[0].agent.to_string();
+        hello_on(&agents, "claude-code", 2, "claude-code", cx);
+        let opening = call_on(
+            &agents,
+            2,
+            3,
+            "open_tab",
+            json!({ "url": "chase.com" }),
+            std::time::Instant::now(),
+            cx,
+        );
+        let second = cards(&agents, cx)[0].agent.to_string();
+        assert!(browser.asked.borrow().is_some());
+
+        closed(&agents, 1, cx);
+        assert_eq!(card(&agents, &first, cx).dot, Dot::Done);
+        let waiting = card(&agents, &second, cx);
+        assert_eq!(waiting.dot, Dot::Waiting, "{}", waiting.status);
+        assert!(waiting.question.is_some());
+        assert!(browser.asked.borrow().is_some(), "its question went");
+        assert!(matches!(opening.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        assert!(agents.read_with(cx, |agents, _| agents.is_live(Client::ClaudeCode)));
+        assert!(browser.disconnected.borrow().is_empty());
+    }
+
+    /// A client connecting again starts a card of its own at its first acting call, which nothing
+    /// ties to the last, and keeps what the user allowed it for good.
+    #[gpui::test]
+    fn a_reconnect_is_a_new_card_and_keeps_its_grants(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        answered(&agents, 2, cx);
+        let first = cards(&agents, cx)[0].agent.to_string();
+        let order = |connection, id, cx: &mut TestAppContext| {
+            browser.asked.replace(None);
+            let arguments = json!({ "tab": 20, "ref": "e3" });
+            let reply = call_on(
+                &agents,
+                connection,
+                id,
+                "click",
+                arguments,
+                std::time::Instant::now(),
+                cx,
+            );
+            let question = browser.asked.borrow().clone();
+            if let Some(question) = question {
+                agents.update(cx, |agents, cx| {
+                    agents.answer(question.id, Answer::Always, cx)
+                });
+            }
+            assert!(!page_done(&agents, &browser, reply, shop_tree(), cx).error);
+            answered(&agents, id, cx);
+        };
+        let looked = call_as(&agents, 3, "snapshot", json!({ "tab": 20 }), cx);
+        page_done(&agents, &browser, looked, shop_tree(), cx);
+        answered(&agents, 3, cx);
+        order(1, 4, cx);
+        bye(&agents, cx);
+        assert_eq!(card(&agents, &first, cx).dot, Dot::Done);
+
+        hello_on(&agents, "claude-code", 2, "claude-code", cx);
+        let looked = call_on(
+            &agents,
+            2,
+            5,
+            "snapshot",
+            json!({ "tab": 20 }),
+            std::time::Instant::now(),
+            cx,
+        );
+        page_done(&agents, &browser, looked, shop_tree(), cx);
+        answered(&agents, 5, cx);
+        let shown = cards(&agents, cx);
+        assert_eq!(
+            shown.len(),
+            2,
+            "its new connection's calls went on the last card"
+        );
+        assert_ne!(shown[0].agent.to_string(), first);
+        assert_eq!(shown[0].dot, Dot::Working);
+        let talk = conversation(&agents, &shown[0].agent, cx);
+        assert_eq!(steps(&talk), 1, "{:?}", talk.lines);
+        order(2, 6, cx);
+        let asked = (log(&agents, "claude-code", cx).into_iter())
+            .filter(|entry| entry.0 == "click")
+            .count();
+        assert_eq!(asked, 2);
+        assert!(
+            browser.asked.borrow().is_none(),
+            "the order asked again on the new connection"
+        );
     }
 
     /// A client's earlier card offers only the pages none of its sessions works in now. Its Open
@@ -8185,6 +8596,7 @@ mod sessions {
         let call = Call {
             id: 1,
             agent: "mcp-client".into(),
+            connection: 1,
             tool: "read_page".into(),
             arguments: json!({ "tab": 20 }),
             reply,
@@ -8485,12 +8897,13 @@ mod sessions {
         );
     }
 
-    /// The card's Stop stops the client on every connection: its calls under way are answered that
-    /// the user stopped it, and its connections close, so it shows the browser's server as gone,
-    /// with "stopped by the user" in its activity log. Reconnected, its next call is a card of its
-    /// own, and ⌘. from its page, which stops the client, stops that card too.
+    /// The card's Stop stops the client on every connection, and each connection's card: its calls
+    /// under way are answered that the user stopped it, and its connections close, so it shows the
+    /// browser's server as gone, with "stopped by the user" in its activity log. Reconnected, its
+    /// next call is a card of its own, and ⌘. from its page, which stops the client, stops that
+    /// card too.
     #[gpui::test]
-    fn stop_closes_the_clients_connections_and_its_card(cx: &mut TestAppContext) {
+    fn stop_closes_the_clients_connections_and_their_cards(cx: &mut TestAppContext) {
         let (agents, browser) = at_work(cx);
         agents.update(cx, |agents, cx| agents.set_on(true, cx));
         let (socket, token) = agents.read_with(cx, |agents, _| {
@@ -8517,12 +8930,25 @@ mod sessions {
         let mut connections = [open(), open()];
         let waiting = call_as(&agents, 3, "read_page", json!({ "tab": 20 }), cx);
         let agent = cards(&agents, cx)[0].agent.to_string();
+        // Its second connection's card, which the client's Stop stops too.
+        hello_on(&agents, "claude-code", 2, "claude-code", cx);
+        let other = call_on(
+            &agents,
+            2,
+            9,
+            "read_page",
+            json!({ "tab": 20 }),
+            std::time::Instant::now(),
+            cx,
+        );
+        assert_eq!(cards(&agents, cx).len(), 2);
         agents.update(cx, |agents, cx| {
             agents.task_action(&agent, TaskAction::Stop, cx)
         });
         assert_eq!(waiting.recv().unwrap().text, STOPPED);
+        assert_eq!(other.recv().unwrap().text, STOPPED);
         assert_eq!(*browser.disconnected.borrow(), ["claude-code"]);
-        assert_eq!(cards(&agents, cx)[0].dot, Dot::Ended);
+        assert!(cards(&agents, cx).iter().all(|card| card.dot == Dot::Ended));
         for reader in &mut connections {
             assert_eq!(server::read_line(reader), None, "a connection stayed open");
         }
@@ -8600,9 +9026,11 @@ mod sessions {
         let agent = Client::Command.id();
         let command = |id: u64, tool: &str, arguments: Value, cx: &mut TestAppContext| {
             let (reply, answer) = mpsc::channel();
+            // Each command comes on a connection of its own, as the `ilo` command makes one a call.
             let call = Call {
                 id,
                 agent: agent.into(),
+                connection: id,
                 tool: tool.into(),
                 arguments,
                 reply,
@@ -8617,6 +9045,11 @@ mod sessions {
                 image: None,
             };
             agents.update(cx, |agents, cx| agents.handle(event, cx));
+            let closed = Event::Closed {
+                agent: agent.into(),
+                connection: id,
+            };
+            agents.update(cx, |agents, cx| agents.handle(closed, cx));
             let bye = Event::Bye {
                 agent: agent.into(),
             };

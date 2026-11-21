@@ -670,8 +670,11 @@ pub fn tab_id(id: &Value) -> Option<u64> {
     }
 }
 
+/// What a call is told when its `tab` names no tab, or it has to name one.
+pub const NOT_A_TAB: &str = "tab is a tab's id, a number from list_tabs.";
+
 fn not_a_tab() -> String {
-    "tab is a tab's id, a number from list_tabs.".into()
+    NOT_A_TAB.into()
 }
 
 /// A step of an agent's work, as a task's trace, its card and the activity log say it.
