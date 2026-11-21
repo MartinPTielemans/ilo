@@ -47,7 +47,7 @@ fn step(key: usize, title: &str, running: bool) -> TraceStep {
 
 /// Task-1's conversation as it works, `steps` steps in.
 fn conversation(steps: usize) -> Conversation {
-    let items = (0..steps)
+    let items: Vec<TraceItem> = (0..steps)
         .map(|key| TraceItem::Step(step(key, "Opened skyscanner.net", key + 1 == steps)))
         .collect();
     Conversation {
@@ -62,6 +62,9 @@ fn conversation(steps: usize) -> Conversation {
             key: 0,
             running: true,
             took: None,
+            steps: (items.iter())
+                .filter(|item| matches!(item, TraceItem::Step(_)))
+                .count(),
             items,
         })],
         tabs: vec![(30, "skyscanner.net".into())],
@@ -610,6 +613,9 @@ fn a_step_on_many_tabs_opens_to_each_tabs_line(cx: &mut TestAppContext) {
         key: 0,
         running: true,
         took: None,
+        steps: (items.iter())
+            .filter(|item| matches!(item, TraceItem::Step(_)))
+            .count(),
         items,
     })];
     shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
@@ -717,6 +723,7 @@ fn a_sent_reply_thinks_until_the_first_step(cx: &mut TestAppContext) {
         running: true,
         took: None,
         items: vec![TraceItem::Step(step(1, "Reading the page", true))],
+        steps: 1,
     };
     talk.lines.push(Line::Trace(first));
     shell.update(cx, |shell, cx| {

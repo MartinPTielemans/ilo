@@ -1007,6 +1007,40 @@ pub fn reason(error: &str) -> String {
     reason.to_string()
 }
 
+/// What the log notes around an agent's work rather than as its call: a connection, the user's
+/// stop, answer or revoke, a page's dialog or download, the core's end of a tab's session, and a
+/// handoff's way back (`held::Event::way`).
+const EVENTS: [&str; 19] = [
+    "connected",
+    "disconnected",
+    "done",
+    "stopped",
+    "stopped by the user",
+    "revoked",
+    "revoked all",
+    "answered",
+    "page_dialog",
+    "download",
+    "released",
+    "taken back",
+    "given",
+    "passkey",
+    "handed back",
+    "kept",
+    "not handed back",
+    "closed",
+    "moved",
+];
+
+/// Whether a call or a log entry of `action` is a step, the one unit the card, its conversation
+/// and the past task count in (#3824): an action the browser took, or was asked to take and
+/// refused, for the agent, a run's each step and a request call's each request one. A question to
+/// the user, a thought, the task's name or end, and the log's events (`EVENTS`) aren't.
+pub fn is_step(action: &str) -> bool {
+    !matches!(action, "ask" | "thought" | "title" | "finish" | "run_steps")
+        && !EVENTS.contains(&action)
+}
+
 /// What an action an agent took is, for the activity log, by the name the core's entry gives it.
 pub fn describe(action: &str) -> &'static str {
     match action {

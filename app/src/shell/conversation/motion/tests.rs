@@ -34,6 +34,7 @@ fn trace(running: bool, steps: usize) -> Line {
         running,
         took: (!running).then_some(4),
         items,
+        steps,
     })
 }
 

@@ -559,6 +559,8 @@ struct Acting {
 /// A call's requests, one at a time, while the one sent waits on the core's answer.
 struct Sending {
     agent: String,
+    /// The call the requests are of, whose step counts each.
+    call: u64,
     tab: u64,
     /// Whether the user answered the call's question, the one way its changes go.
     answered: bool,
@@ -3148,6 +3150,7 @@ impl Agents {
             requests => {
                 for each in requests {
                     self.note_request(&act.agent, site, each, why);
+                    self.requested(&act.agent, act.call);
                 }
             }
         }
@@ -3374,6 +3377,7 @@ impl Agents {
             (self.outlines.get(&act.tab)).is_some_and(|outline| outline.signs_in_at(&page));
         let sending = Sending {
             agent: act.agent,
+            call: act.call,
             tab: act.tab,
             answered,
             sent: None,
@@ -3403,6 +3407,7 @@ impl Agents {
         let site = site(&self.browser.tab(tab, cx).url);
         let refused = checked.as_ref().err().map_or("", String::as_str);
         self.note_request(&agent, &site, &next, refused);
+        self.requested(&agent, sending.call);
         cx.notify();
         if let Err(why) = checked {
             sending.answers.push(format!("{}: {why}", next.target()));

@@ -64,6 +64,14 @@ pub struct Past {
 }
 
 impl Past {
+    /// How many steps its log holds, in the card's unit: its events, such as connected or
+    /// stopped, are listed with them but aren't steps (#3824).
+    pub fn step_count(&self) -> usize {
+        (self.steps.iter())
+            .filter(|step| crate::agents::tools::is_step(&step.action))
+            .count()
+    }
+
     /// What its row says under its title: "Claude Code · 14:02 · 1 order placed · 3 pages".
     pub fn about(&self) -> String {
         let count = |n: usize, one: &str, many: &str| match n {
