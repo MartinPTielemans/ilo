@@ -801,6 +801,60 @@ index 6cb33874b2..0066ba74a2 100644
  }
  
  #[cfg_attr(
+diff --git a/crates/gpui/src/text_system/line_wrapper.rs b/crates/gpui/src/text_system/line_wrapper.rs
+index ca821bbbb4..575310b261 100644
+--- a/crates/gpui/src/text_system/line_wrapper.rs
++++ b/crates/gpui/src/text_system/line_wrapper.rs
+@@ -60,6 +60,10 @@ impl LineWrapper {
+         let mut base_indent = None;
+         let mut last_candidate_ix = 0;
+         let mut last_candidate_width = px(0.);
++        // A slash inside a path or URL, a weaker break than a space: taken only when the line has
++        // no other place to break, so a path that fits a line goes down whole.
++        let mut last_slash_ix = 0;
++        let mut last_slash_width = px(0.);
+         let mut last_wrap_ix = 0;
+         let mut prev_c = '\0';
+         let mut index = 0;
+@@ -85,7 +89,10 @@ impl LineWrapper {
+                             }
+                         } else {
+                             // CJK may not be space separated, e.g.: `Hello world你好世界`
+-                            if c != ' ' && first_non_whitespace_ix.is_some() {
++                            if c == '/' && prev_c != ' ' && first_non_whitespace_ix.is_some() {
++                                last_slash_ix = ix;
++                                last_slash_width = width;
++                            } else if c != ' ' && first_non_whitespace_ix.is_some() {
+                                 last_candidate_ix = ix;
+                                 last_candidate_width = width;
+                             }
+@@ -120,9 +127,14 @@ impl LineWrapper {
+                 if width > wrap_width && ix > last_wrap_ix {
+                     let wrap_at_candidate =
+                         last_candidate_ix > 0 && width - last_candidate_width <= wrap_width;
++                    let wrap_at_slash = !wrap_at_candidate
++                        && last_slash_ix > last_wrap_ix
++                        && width - last_slash_width <= wrap_width;
+ 
+                     let carried_width = if wrap_at_candidate {
+                         width - last_candidate_width
++                    } else if wrap_at_slash {
++                        width - last_slash_width
+                     } else {
+                         item_width
+                     };
+@@ -168,6 +180,11 @@ impl LineWrapper {
+                     if wrap_at_candidate {
+                         last_wrap_ix = last_candidate_ix;
+                         width -= last_candidate_width;
++                        // A slash carried down with the path stays a place its next line can break.
++                        last_slash_width -= last_candidate_width;
++                    } else if wrap_at_slash {
++                        last_wrap_ix = last_slash_ix;
++                        width -= last_slash_width;
+                     } else {
+                         last_wrap_ix = ix;
+                         width = item_width;
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
 index c559412e56..d0d40dd300 100644
 --- a/crates/gpui/src/window.rs
