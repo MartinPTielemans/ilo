@@ -40,11 +40,13 @@ struct FileFieldPlace {
   std::string origin;
 };
 
-// A child of a document as DevTools describes it (DOM.describeNode, depth 1): its node type and
-// name, the frame id DevTools gives it, if any, and whether it holds a document of its own.
+// A child of a document as DevTools describes it (DOM.describeNode, depth 1): its node type, name
+// and local name, the frame id DevTools gives it, if any, and whether it holds a document of its
+// own.
 struct DocumentChild {
   int type = 0;
   std::string name;
+  std::string local_name;
   std::string frame;
   bool holds_document = false;
 };

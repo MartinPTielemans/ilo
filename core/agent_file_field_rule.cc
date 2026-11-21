@@ -60,10 +60,12 @@ std::string DocumentFrame(const std::vector<DocumentChild>& children) {
   if (element == children.end() || element->holds_document) {
     return std::string();
   }
-  // HTMLFrameOwnerElement's kinds, named in any case, as an XML document keeps its own.
+  // HTMLFrameOwnerElement's kinds, named in any case, as an XML document keeps its own, and by
+  // local name too, as one there can be named with a prefix (h:iframe).
   const std::string name = Lower(element->name);
+  const std::string local_name = Lower(element->local_name);
   for (const char* owner : {"iframe", "frame", "object", "embed", "fencedframe"}) {
-    if (name == owner) {
+    if (name == owner || local_name == owner) {
       return std::string();
     }
   }
