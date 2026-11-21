@@ -50,6 +50,19 @@ pub fn withheld(tab: u64, site: &str) -> String {
 /// The title list_tabs gives such a tab, with no address.
 pub const LISTED: &str = "Asks the user first";
 
+/// Why close_tab leaves such a tab open, which says neither that its page shows a dialog nor that
+/// it asks before it's left.
+pub const STAYS_OPEN: &str = "its page may have unsaved changes";
+
+/// What a download from a fenced site answers the agent at once, while the user is asked: neither
+/// the file's name nor how it ends.
+pub fn download(site: &str) -> String {
+    format!(
+        "A download from {site}, where the user asked to be asked first, is theirs to answer: its \
+         name and how it ends aren't shown."
+    )
+}
+
 /// A run's answer when its step's tab came to a fenced site.
 pub fn run_stopped(step: usize, tab: u64, site: &str) -> String {
     format!(

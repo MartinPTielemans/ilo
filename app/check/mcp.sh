@@ -3460,6 +3460,25 @@ CARD
     "the fence's Allow Once didn't reach the activity log"
   read=$(call read_page "{\"tab\":$fence_tab}")
   case "$read" in *"Balance 1234"*) ;; *) fail "the tab let stay asked again or answered: $read" ;; esac
+  # Back off the site and forward onto it again asks again, as coming back does, whether the page
+  # comes back from the back-forward cache or loads again; which it was goes in mcp-fence.txt.
+  went=$(call navigate "{\"tab\":$fence_tab,\"url\":\"back\"}")
+  case "$went" in "Went back."*'link "Pension"'*) ;; *) fail "back off the listed site answered: $went" ;; esac
+  loads=$(grep -c "^browser: loaded $fence_tab http://pension\.localhost:$port/pension\.html\$" "$log" || true)
+  went=$(call navigate "{\"tab\":$fence_tab,\"url\":\"forward\"}")
+  case "$went" in
+    *Balance* | *"Pension balance"*) fail "forward onto the listed site answered its page: $went" ;;
+    "Went forward."*"Tab $fence_tab is now on pension.localhost, where the user asked"*) ;;
+    *) fail "forward onto the listed site answered: $went" ;;
+  esac
+  before=$(grep -c "$fence_asks" "$log" || true)
+  request read_page "{\"tab\":$fence_tab}" >&4
+  fence_answer Once agent-fence-forward "the read after forward onto the listed site"
+  case "$fenced" in *"Balance 1234"*) ;; *) fail "the read after forward, allowed once, answered: $fenced" ;; esac
+  case "$(grep -c "^browser: loaded $fence_tab http://pension\.localhost:$port/pension\.html\$" "$log")" in
+    "$loads") echo "forward onto the listed site: restored from the back-forward cache, no load" ;;
+    *) echo "forward onto the listed site: loaded again" ;;
+  esac >> "$out/mcp-fence.txt"
   went=$(call navigate "{\"tab\":$fence_tab,\"url\":\"localhost:$port/to-pension.html\"}")
   linked Never
   case "$fenced" in "error: "*) ;; *) fail "the read answered Never answered: $fenced" ;; esac
