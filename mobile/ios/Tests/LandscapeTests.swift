@@ -388,6 +388,22 @@ private struct Turned<Content: View>: View {
   }
 }
 
+/// Counts the frames the screen draws.
+@MainActor private final class DrawnFrames: NSObject {
+  private(set) var count = 0
+  private var link: CADisplayLink?
+
+  override init() {
+    super.init()
+    link = CADisplayLink(target: self, selector: #selector(drew))
+    link?.add(to: .main, forMode: .common)
+  }
+
+  @objc private func drew() { count += 1 }
+
+  func stop() { link?.invalidate() }
+}
+
 /// The Space on a phone on its side.
 @Suite(.serialized, .timeLimit(.minutes(5))) @MainActor struct LandscapeSpaceTests {
   @Test func `the search field is inside the clear edges on its side, and keeps the keyboard through the turn and back`() async throws {
@@ -397,15 +413,21 @@ private struct Turned<Content: View>: View {
     #expect(await eventually { stage.first(UITextField.self)?.isFirstResponder == true })
     let upright = try #require(stage.first(UITextField.self))
     func place() -> CGRect { upright.convert(upright.bounds, to: stage.window) }
-    // Where the field comes to rest: the dock moves as the field takes the keyboard.
+    // Where the field comes to rest: the dock moves as the field takes the keyboard, and the field
+    // opens. Rest is counted in frames drawn, not in time: on the first Space a process shows, the
+    // main thread can be away for a few hundred milliseconds as the field takes the keyboard, and
+    // the field opens only after it, which time alone took as a rest at the closed place (#3838).
+    let frames = DrawnFrames()
+    defer { frames.stop() }
     var last = place()
-    var since = ContinuousClock.now
+    var since = frames.count
     let rested = await eventually {
       if place() != last {
         last = place()
-        since = .now
+        since = frames.count
       }
-      return ContinuousClock.now - since > .milliseconds(300)
+      // The 300 ms it took before, at 60 frames a second.
+      return frames.count - since > 18
     }
     #expect(rested)
     let before = last
