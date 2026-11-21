@@ -707,7 +707,7 @@ index 4b48188131..66886fff2a 100644
          drop(lock);
          callback();
 diff --git a/crates/gpui_macos/src/window.rs b/crates/gpui_macos/src/window.rs
-index f2208d35ec..1cbac0d95e 100644
+index f2208d35ec..f6a02fd454 100644
 --- a/crates/gpui_macos/src/window.rs
 +++ b/crates/gpui_macos/src/window.rs
 @@ -11,7 +11,7 @@ use dispatch2::DispatchQueue;
@@ -1052,7 +1052,7 @@ index f2208d35ec..1cbac0d95e 100644
      fn move_traffic_light(&mut self) {
          if let Some(traffic_light_position) = self.traffic_light_position {
              if self.is_fullscreen() && !self.is_exiting_fullscreen {
-@@ -816,23 +1024,166 @@ impl MacWindowState {
+@@ -816,23 +1024,178 @@ impl MacWindowState {
  
      fn start_display_link(&mut self) {
          self.stop_display_link();
@@ -1198,8 +1198,8 @@ index f2208d35ec..1cbac0d95e 100644
 +        self.own_frame_source().request_frame();
 +    }
 +
-+    /// A start doesn't count on its first frame: a one-shot look, while a frame is owed, makes the
-+    /// link again if none came, and ends with the look (#3830).
++    /// A start doesn't count on its first frame: a one-shot look, FRAME_STALL after the last start
++    /// while a frame is owed, makes the link again if none came, and ends with the look (#3830).
 +    fn watch_first_frame(&mut self) {
 +        if self.frame_watch || !self.frame_owed() {
 +            return;
@@ -1209,7 +1209,10 @@ index f2208d35ec..1cbac0d95e 100644
 +        };
 +        self.frame_watch = true;
 +        let state = Arc::downgrade(&state);
-+        let timer = self.background_executor.timer(FRAME_STALL);
++        let wait = self
++            .frame_started_at
++            .map_or(FRAME_STALL, |at| FRAME_STALL.saturating_sub(at.elapsed()));
++        let timer = self.background_executor.timer(wait);
 +        self.foreground_executor
 +            .spawn(async move {
 +                timer.await;
@@ -1218,15 +1221,24 @@ index f2208d35ec..1cbac0d95e 100644
 +                };
 +                let mut lock = state.lock();
 +                lock.frame_watch = false;
-+                if lock.frame_owed() && lock.link_silent() {
++                if !lock.frame_owed() {
++                    return;
++                }
++                if lock.link_silent() {
 +                    lock.restore_frames("got no frame from its display link's start");
++                } else if lock
++                    .frame_started_at
++                    .is_some_and(|at| at.elapsed() < FRAME_STALL)
++                {
++                    // A start since this look began, which found it waiting, gets its own.
++                    lock.watch_first_frame();
 +                }
 +            })
 +            .detach();
      }
  
      fn stop_display_link(&mut self) {
-@@ -909,10 +1260,14 @@ impl MacWindowState {
+@@ -909,10 +1272,14 @@ impl MacWindowState {
      }
  
      fn content_size(&self) -> Size<Pixels> {
@@ -1245,7 +1257,7 @@ index f2208d35ec..1cbac0d95e 100644
          size(px(width as f32), px(height as f32))
      }
  
-@@ -960,6 +1315,19 @@ impl MacWindow {
+@@ -960,6 +1327,19 @@ impl MacWindow {
          renderer_context: renderer::Context,
          marker: MainThreadMarker,
      ) -> Self {
@@ -1265,7 +1277,7 @@ index f2208d35ec..1cbac0d95e 100644
          autoreleasepool(|_| unsafe {
              let allows_automatic_window_tabbing = tabbing_identifier.is_some();
              if allows_automatic_window_tabbing {
-@@ -1061,67 +1429,26 @@ impl MacWindow {
+@@ -1061,67 +1441,26 @@ impl MacWindow {
              let native_view: *mut AnyObject = msg_send![native_view, initWithFrame: content_bounds];
              assert!(!native_view.is_null());
  
@@ -1347,7 +1359,7 @@ index f2208d35ec..1cbac0d95e 100644
              let mut window = Self(state, marker);
  
              (*native_window)
-@@ -1289,6 +1616,97 @@ impl MacWindow {
+@@ -1289,6 +1628,97 @@ impl MacWindow {
          })
      }
  
@@ -1445,7 +1457,7 @@ index f2208d35ec..1cbac0d95e 100644
      pub fn active_window() -> Option<AnyWindowHandle> {
          unsafe {
              let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-@@ -1366,6 +1784,19 @@ impl Drop for MacWindow {
+@@ -1366,6 +1796,19 @@ impl Drop for MacWindow {
          // renderer's command queue are actually released with the window.
          drop(this.accesskit_adapter.take());
          this.renderer.destroy();
@@ -1465,7 +1477,7 @@ index f2208d35ec..1cbac0d95e 100644
          let window = this.native_window;
          let sheet_parent = this.sheet_parent.take();
          this.frame_source.take();
-@@ -1683,6 +2114,15 @@ impl PlatformWindow for MacWindow {
+@@ -1683,6 +2126,15 @@ impl PlatformWindow for MacWindow {
          self.0.as_ref().lock().input_handler.take()
      }
  
@@ -1481,7 +1493,7 @@ index f2208d35ec..1cbac0d95e 100644
      fn prompt(
          &self,
          level: PromptLevel,
-@@ -1841,6 +2281,10 @@ impl PlatformWindow for MacWindow {
+@@ -1841,6 +2293,10 @@ impl PlatformWindow for MacWindow {
  
          let opaque = background_appearance == WindowBackgroundAppearance::Opaque;
          this.renderer.update_transparency(!opaque);
@@ -1492,7 +1504,7 @@ index f2208d35ec..1cbac0d95e 100644
  
          unsafe {
              let _: () = msg_send![this.native_window, setOpaque: opaque.to_objc()];
-@@ -1993,6 +2437,27 @@ impl PlatformWindow for MacWindow {
+@@ -1993,6 +2449,27 @@ impl PlatformWindow for MacWindow {
          }
      }
  
@@ -1520,7 +1532,7 @@ index f2208d35ec..1cbac0d95e 100644
      fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>) {
          self.0.as_ref().lock().request_frame_callback = Some(callback);
      }
-@@ -2315,9 +2780,6 @@ impl PlatformWindow for MacWindow {
+@@ -2315,9 +2792,6 @@ impl PlatformWindow for MacWindow {
              ];
  
              let started = !session.is_null();
@@ -1530,7 +1542,7 @@ index f2208d35ec..1cbac0d95e 100644
              log::debug!(
                  "start_external_drag completed: started={}, item_count={}",
                  started,
-@@ -2345,12 +2807,22 @@ impl PlatformWindow for MacWindow {
+@@ -2345,12 +2819,22 @@ impl PlatformWindow for MacWindow {
          };
          let action_handler = A11yActionHandler(callbacks.action);
  
@@ -1558,7 +1570,7 @@ index f2208d35ec..1cbac0d95e 100644
          };
  
          lock.accesskit_adapter = Some(adapter);
-@@ -2477,6 +2949,26 @@ extern "C" fn dealloc_view(this: &AnyObject, _: Sel) {
+@@ -2477,6 +2961,26 @@ extern "C" fn dealloc_view(this: &AnyObject, _: Sel) {
      }
  }
  
@@ -1585,7 +1597,7 @@ index f2208d35ec..1cbac0d95e 100644
  fn add_mouse_tracking_area(native_view: &NSView) {
      let options = NSTrackingAreaOptions::MouseEnteredAndExited
          | NSTrackingAreaOptions::MouseMoved
-@@ -2555,13 +3047,58 @@ extern "C" fn handle_key_equivalent(
+@@ -2555,13 +3059,58 @@ extern "C" fn handle_key_equivalent(
      _: Sel,
      native_event: *mut AnyObject,
  ) -> Bool {
@@ -1644,7 +1656,7 @@ index f2208d35ec..1cbac0d95e 100644
  extern "C" fn handle_key_up(this: &AnyObject, _: Sel, native_event: *mut AnyObject) {
      handle_key_event(this, native_event, false);
  }
-@@ -2637,6 +3174,9 @@ extern "C" fn handle_key_event(
+@@ -2637,6 +3186,9 @@ extern "C" fn handle_key_event(
  ) -> Bool {
      let window_state = unsafe { get_window_state(this) };
      let mut lock = window_state.as_ref().lock();
@@ -1654,7 +1666,7 @@ index f2208d35ec..1cbac0d95e 100644
  
      let window_height = lock.content_size().height;
      let event = unsafe { platform_input_from_native(native_event, Some(window_height)) };
-@@ -2645,15 +3185,40 @@ extern "C" fn handle_key_event(
+@@ -2645,15 +3197,40 @@ extern "C" fn handle_key_event(
          return Bool::NO;
      };
  
@@ -1702,7 +1714,7 @@ index f2208d35ec..1cbac0d95e 100644
      };
  
      match event {
-@@ -2728,6 +3293,12 @@ extern "C" fn handle_key_event(
+@@ -2728,6 +3305,12 @@ extern "C" fn handle_key_event(
                      }
                  };
                  window_state.as_ref().lock().keystroke_for_do_command.take();
@@ -1715,7 +1727,7 @@ index f2208d35ec..1cbac0d95e 100644
                  if let Some(handled) = window_state.as_ref().lock().do_command_handled.take() {
                      return handled.to_objc();
                  } else if handled == Bool::YES {
-@@ -2785,8 +3356,10 @@ extern "C" fn handle_key_event(
+@@ -2785,8 +3368,10 @@ extern "C" fn handle_key_event(
  
  extern "C" fn handle_view_event(this: &AnyObject, _: Sel, native_event: *mut AnyObject) {
      let window_state = unsafe { get_window_state(this) };
@@ -1727,7 +1739,7 @@ index f2208d35ec..1cbac0d95e 100644
      let window_height = lock.content_size().height;
      let native_event_type: NSEventType = unsafe { msg_send![native_event, type] };
      match native_event_type {
-@@ -2886,33 +3459,6 @@ extern "C" fn handle_view_event(this: &AnyObject, _: Sel, native_event: *mut Any
+@@ -2886,33 +3471,6 @@ extern "C" fn handle_view_event(this: &AnyObject, _: Sel, native_event: *mut Any
                  }
                  lock = window_state.as_ref().lock();
              }
@@ -1761,7 +1773,7 @@ index f2208d35ec..1cbac0d95e 100644
              PlatformInput::ModifiersChanged(ModifiersChangedEvent {
                  modifiers,
                  capslock,
-@@ -2934,14 +3480,145 @@ extern "C" fn handle_view_event(this: &AnyObject, _: Sel, native_event: *mut Any
+@@ -2934,11 +3492,142 @@ extern "C" fn handle_view_event(this: &AnyObject, _: Sel, native_event: *mut Any
              _ => {}
          }
  
@@ -1777,10 +1789,10 @@ index f2208d35ec..1cbac0d95e 100644
 +            // Input that comes while the window handles another event, as a nested pump delivers
 +            // it, waits for that one; what doesn't wait is dropped as before.
 +            lock.held.push_back(MacHeld::Input(event));
-         }
-     }
- }
- 
++        }
++    }
++}
++
 +/// What a window holds until it can be handed on (#2658, #2672).
 +enum MacHeld {
 +    Input(PlatformInput),
@@ -1897,19 +1909,16 @@ index f2208d35ec..1cbac0d95e 100644
 +                schedule_hand_on(window_state);
 +            }
 +            return;
-+        }
+         }
 +        let Some(MacHeld::Input(held)) = lock.held.pop_front() else {
 +            unreachable!()
 +        };
 +        drop(lock);
 +        callback(held);
-+    }
-+}
-+
- fn visibility(state: &MacWindowState) -> WindowVisibility {
-     let is_visible = state
-         .native_window()
-@@ -3200,6 +3877,7 @@ extern "C" fn window_did_change_key_status(this: &AnyObject, selector: Sel, _: *
+     }
+ }
+ 
+@@ -3200,6 +3889,7 @@ extern "C" fn window_did_change_key_status(this: &AnyObject, selector: Sel, _: *
  
          if lock.activated_least_once {
              if let Some(mut callback) = lock.request_frame_callback.take() {
@@ -1917,7 +1926,7 @@ index f2208d35ec..1cbac0d95e 100644
                  lock.renderer.set_presents_with_transaction(true);
                  lock.stop_display_link();
                  drop(lock);
-@@ -3325,7 +4003,14 @@ extern "C" fn display_layer(this: &AnyObject, _: Sel, _: *mut AnyObject) {
+@@ -3325,7 +4015,14 @@ extern "C" fn display_layer(this: &AnyObject, _: Sel, _: *mut AnyObject) {
      let signal_at = PlatformFrameSignal::capture(scheduler::Instant::now);
      let window_state = unsafe { get_window_state(this) };
      let mut lock = window_state.lock();
@@ -1932,7 +1941,7 @@ index f2208d35ec..1cbac0d95e 100644
          lock.renderer.set_presents_with_transaction(true);
          lock.stop_display_link();
          drop(lock);
-@@ -3339,15 +4024,85 @@ extern "C" fn display_layer(this: &AnyObject, _: Sel, _: *mut AnyObject) {
+@@ -3339,15 +4036,85 @@ extern "C" fn display_layer(this: &AnyObject, _: Sel, _: *mut AnyObject) {
          lock.request_frame_callback = Some(callback);
          lock.renderer.set_presents_with_transaction(false);
          lock.start_display_link();
@@ -2018,7 +2027,7 @@ index f2208d35ec..1cbac0d95e 100644
          let (signal_at, signal_source) = lock
              .frame_source
              .as_ref()
-@@ -3362,10 +4117,44 @@ extern "C" fn step(view: *mut c_void) {
+@@ -3362,10 +4129,44 @@ extern "C" fn step(view: *mut c_void) {
              signal_source,
              ..Default::default()
          });
@@ -2064,7 +2073,7 @@ index f2208d35ec..1cbac0d95e 100644
  extern "C" fn valid_attributes_for_marked_text(_: &AnyObject, _: Sel) -> *mut AnyObject {
      unsafe { msg_send![class!(NSArray), array] }
  }
-@@ -3451,11 +4240,9 @@ extern "C" fn insert_text(
+@@ -3451,11 +4252,9 @@ extern "C" fn insert_text(
              text
          };
  
@@ -2079,7 +2088,7 @@ index f2208d35ec..1cbac0d95e 100644
      }
  }
  
-@@ -3473,16 +4260,14 @@ extern "C" fn set_marked_text(
+@@ -3473,16 +4272,14 @@ extern "C" fn set_marked_text(
          } else {
              text
          };
@@ -2101,7 +2110,7 @@ index f2208d35ec..1cbac0d95e 100644
  }
  
  extern "C" fn attributed_substring_for_proposed_range(
-@@ -3521,19 +4306,22 @@ extern "C" fn do_command_by_selector(this: &AnyObject, _: Sel, _: Sel) {
+@@ -3521,19 +4318,22 @@ extern "C" fn do_command_by_selector(this: &AnyObject, _: Sel, _: Sel) {
      let state = unsafe { get_window_state(this) };
      let mut lock = state.as_ref().lock();
      let keystroke = lock.keystroke_for_do_command.take();
@@ -2131,7 +2140,7 @@ index f2208d35ec..1cbac0d95e 100644
  }
  
  extern "C" fn view_did_change_effective_appearance(this: &AnyObject, _: Sel) {
-@@ -3555,6 +4343,10 @@ extern "C" fn view_did_change_effective_appearance(this: &AnyObject, _: Sel) {
+@@ -3555,6 +4355,10 @@ extern "C" fn view_did_change_effective_appearance(this: &AnyObject, _: Sel) {
      }
  }
  
@@ -2142,7 +2151,7 @@ index f2208d35ec..1cbac0d95e 100644
  extern "C" fn accepts_first_mouse(this: &AnyObject, _: Sel, _: *mut AnyObject) -> Bool {
      let window_state = unsafe { get_window_state(this) };
      let mut lock = window_state.as_ref().lock();
-@@ -3717,54 +4509,11 @@ extern "C" fn dragging_session_ended(
+@@ -3717,54 +4521,11 @@ extern "C" fn dragging_session_ended(
      let window_state = unsafe { get_window_state(this) };
      {
          let mut lock = window_state.lock();
@@ -2197,7 +2206,7 @@ index f2208d35ec..1cbac0d95e 100644
  /// Sends the specified FileDropEvent using `PlatformInput::FileDrop` to the window
  /// state and updates the window state according to the event passed.
  fn send_file_drop_event(
-@@ -3781,10 +4530,9 @@ fn send_file_drop_event(
+@@ -3781,10 +4542,9 @@ fn send_file_drop_event(
      if let Some(mut callback) = lock.event_callback.take() {
          drop(lock);
          callback(PlatformInput::FileDrop(file_drop_event));
