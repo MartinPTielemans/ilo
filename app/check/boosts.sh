@@ -30,6 +30,36 @@ rm -rf "$boosts" "$profile_dir/Default/Boosts off" "$profile_dir/no-boosts"
 mkdir -p "$boosts"
 printf '%s\n' 'body { background: rgb(0, 0, 128) !important; }' > "$file"
 
+# A launch the checks don't run writes none of the core's lines, nor any naming the site it shows:
+# Chromium writes ERROR lines to stderr in any build, which a desktop can keep, and the core's can
+# name a site the user browses, as its Boost's script runs or Zap hides an element (#3731). The
+# launch shows this run's site's page and quits once the server has sent it. Each OS's launcher
+# hands the app's stderr to the log, Windows' (git-bash.sh) as the Mac's and Linux's.
+log="$out/boosts-quiet.log"
+(
+  # A subshell rather than env -u, which can't run Windows' and the Flatpak's launchers, functions
+  # that exec the app themselves. Either way $! is the app's, as quit_app needs.
+  unset BROWSER_CHECK BROWSER_DRIVE BROWSER_LOG
+  export BROWSER_URL="${site}boost.html"
+  case $browser in
+    /*) exec "$browser" ;;
+    *) "$browser" ;;
+  esac
+) < /dev/null > "$log" 2>&1 &
+pid=$!
+served "^GET chromium [^ ]*/boost\.html " \
+  "a launch the checks don't run didn't load the site's page: $(tail -5 "$log" | tr '\n' '|')"
+await '^browser: UI shown at ' || fail "a launch the checks don't run showed no UI"
+quit_app
+exited
+# Chromium's lines, the core's among them, start with its "[pid:tid:time:LEVEL:file]". The lines
+# without, the app's and the core's own fprintf's in any launch, hold times, states and the profile
+# directory's name, and #3732 keeps the app's others to the checks.
+said=$({ grep '^\[[0-9]*:[0-9]*:[0-9/.]*:[A-Z_]*:' "$log"; grep -F "$host" "$log"; } |
+  head -5 | tr '\n' '|') || true
+[ -z "$said" ] ||
+  fail "a launch the checks don't run wrote Chromium's lines, or the site's host: $said"
+
 log="$out/boosts.log"
 step=0
 rm -f "$saved" "$launch_frame"
@@ -37,6 +67,9 @@ BROWSER_DRIVE=1 BROWSER_URL="${site}boost.html" "$browser" < "$out/drive" > "$lo
 pid=$!
 exec 3> "$out/drive"
 await_load
+# And a launch the checks run, under the driver, still has the core's lines, which they read.
+await ':ERROR:[^]]*] browser: ' ||
+  fail "a launch under the driver wrote none of the core's lines"
 await '^browser: boosts of profile [0-9]* read: 1$' || fail "the app didn't read the profile's Boost"
 await "^browser: boost shown $host " || fail "the app didn't give the core the site's Boost"
 await '^browser: title [0-9]* ad block rgb(0, 0, 128)$' ||

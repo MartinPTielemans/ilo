@@ -296,9 +296,9 @@ impl Browser for Engine {
         unsafe { bc::bc_tab_back_to_pinned_url(tab) };
     }
 
-    fn navigate(&self, tab: u64, url: &str, _: &mut App) {
+    fn follow(&self, tab: u64, url: &str, _: &mut App) {
         let url = CString::new(url).unwrap_or_default();
-        unsafe { bc::bc_tab_navigate(tab, url.as_ptr()) };
+        unsafe { bc::bc_tab_follow(tab, url.as_ptr()) };
     }
 
     fn set_muted(&self, tab: u64, muted: bool, _: &mut App) {
