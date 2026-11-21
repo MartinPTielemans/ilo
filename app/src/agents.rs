@@ -1120,6 +1120,9 @@ impl Agents {
                 .await;
             agents
                 .update(cx, |agents, cx| {
+                    // check.sh reads this line.
+                    let found = if searched { "found" } else { "not found" };
+                    log!("browser: agent ilo-command looked: {found}");
                     if agents.command_searched != searched {
                         agents.command_searched = searched;
                         cx.notify();
