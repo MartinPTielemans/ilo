@@ -30,6 +30,29 @@ rm -rf "$boosts" "$profile_dir/Default/Boosts off" "$profile_dir/no-boosts"
 mkdir -p "$boosts"
 printf '%s\n' 'body { background: rgb(0, 0, 128) !important; }' > "$file"
 
+# On Linux, a launch the checks don't run writes none of the core's lines, nor any naming the site
+# it shows: Chromium writes ERROR lines to stderr in any build, which a desktop keeps, and the
+# core's can name a site the user browses, as its Boost's script runs or Zap hides an element
+# (#3731). The launch writes this run's site's page and quits once the server has sent it.
+if [ "$(uname)" = Linux ]; then
+  log="$out/boosts-quiet.log"
+  env -u BROWSER_CHECK -u BROWSER_DRIVE -u BROWSER_LOG BROWSER_URL="${site}boost.html" \
+    "$browser" > "$log" 2>&1 &
+  pid=$!
+  served "^GET chromium [^ ]*/boost\.html " \
+    "a launch the checks don't run didn't load the site's page: $(tail -5 "$log" | tr '\n' '|')"
+  await '^browser: UI shown at ' || fail "a launch the checks don't run showed no UI"
+  quit_app
+  exited
+  # A launch writes these in any run, holding nothing of the user's: when its UI showed, the
+  # Linux host's activation and how many sidebar backups a profile directory has.
+  said=$(grep -v -e '^browser: UI shown at ' -e '^browser: app active [01]$' \
+    -e '^browser: sidebar backups of [^ ]*: [0-9]*$' "$log" |
+    grep -F -e 'browser: ' -e "$host" | head -5) || true
+  [ -z "$said" ] || fail "a launch the checks don't run wrote these lines of the app's or the" \
+    "core's, or naming the site: $(printf '%s\n' "$said" | tr '\n' '|')"
+fi
+
 log="$out/boosts.log"
 step=0
 rm -f "$saved" "$launch_frame"
@@ -37,6 +60,10 @@ BROWSER_DRIVE=1 BROWSER_URL="${site}boost.html" "$browser" < "$out/drive" > "$lo
 pid=$!
 exec 3> "$out/drive"
 await_load
+# And a launch the checks run, under the driver, still has the core's lines, which they read.
+if [ "$(uname)" = Linux ]; then
+  await ':ERROR:[^]]*] browser: ' || fail "a launch under the driver wrote none of the core's lines"
+fi
 await '^browser: boosts of profile [0-9]* read: 1$' || fail "the app didn't read the profile's Boost"
 await "^browser: boost shown $host " || fail "the app didn't give the core the site's Boost"
 await '^browser: title [0-9]* ad block rgb(0, 0, 128)$' ||
