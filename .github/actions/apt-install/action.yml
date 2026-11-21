@@ -79,7 +79,8 @@ runs:
           if ! grep -q 'o=Ubuntu,' <<< "$policy"; then
             echo "::error::apt read no Ubuntu index, so it can't find any package: this runner's apt sources name no Ubuntu archive (#3756). Its sources:"
             ls -l /etc/apt/sources.list /etc/apt/sources.list.d/ || true
-            grep -Hv '^[[:space:]]*\(#\|$\)' /etc/apt/sources.list /etc/apt/sources.list.d/* || true
+            # The log is public, and on our own runners a source's URL can hold user:token@.
+            grep -Hv '^[[:space:]]*\(#\|$\)' /etc/apt/sources.list /etc/apt/sources.list.d/* | sed 's|//[^/@[:space:]]*@|//|g' || true
             exit 1
           fi
           touch "$RUNNER_TEMP/apt-updated"
