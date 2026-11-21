@@ -23,13 +23,14 @@
 # while its page's alert is up unloads it, and ilo goes on. A page out of sight whose alert waits
 # for its tab is let go by the idle check once it looks 2 hours unseen, and ilo goes on (#3549).
 # An alert that comes while the user types in the command bar waits, every key going to the bar,
-# and shows once the bar closes.
+# and shows once the bar closes. A key the page answers only after its alert, once the command bar
+# has opened, never reaches the bar (#3791).
 
 serve
 log="$out/dialogs.log"
 step=0
 rm -f "$saved"
-BROWSER_DRIVE=1 BROWSER_URL="${site}dialogs.html" "$browser" \
+BROWSER_LOG=keys BROWSER_DRIVE=1 BROWSER_URL="${site}dialogs.html" "$browser" \
   < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
@@ -170,6 +171,30 @@ expect '^browser: command bar hidden$' "Esc didn't close the command bar"
 expect '^browser: dialog shown .* says$' "the alert didn't show once the command bar closed"
 expect '^browser: dialog settled$' "the alert that waited didn't settle"
 answer return accept "alerted later"
+
+# A key the page didn't keep comes back to the app once the page's handler returns, which can be
+# after the alert it asked was answered and the command bar opened: it never reaches the bar,
+# where on the Mac it was typed (#3791). The page's "h" alerts, then waits for /held.
+send click $page_point
+rm -f "$out/site/held.go"
+send key h
+expect "^browser: page $page dialog Alert .* says\$" "\"h\" in the page didn't alert"
+expect '^browser: dialog settled$' "the page's alert from \"h\" didn't settle"
+send key return
+expect "^browser: page $page dialog answered accept\$" "↩ didn't answer the page's alert from \"h\""
+expect '^browser: dialog hidden$' "the page's alert from \"h\" didn't leave once answered"
+served "127.0.0.1:$port/held" "the page didn't ask for /held once its alert was answered"
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+touch "$out/site/held.go"
+expect "^browser: \[keys\] a character the page didn't keep: " \
+  "the page's \"h\" didn't come back to the app once its handler returned"
+send type x
+expect '^browser: command bar rows for "x" in ' \
+  "the page's \"h\" reached the command bar, or what was typed didn't"
+send key escape
+expect '^browser: command bar hidden$' "Esc didn't close the command bar"
+expect "^browser: title $page held back\$" "the page's \"h\" handler didn't end"
 
 # Another tab takes the alert down, and its own brings it back.
 open_from_bar "http://localhost:$port/one.html"
