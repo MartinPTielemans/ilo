@@ -9173,6 +9173,7 @@ fn an_agent_sorts_its_own_today_tabs_by_site(cx: &mut TestAppContext) {
     assert!(!tools::names("task-1").contains(&"sort_tabs_by_site".to_string()));
 }
 
+mod fenced;
 mod holds;
 
 /// An agent's http:// is never one the user typed (#2417): open_tab and navigate hand the core the

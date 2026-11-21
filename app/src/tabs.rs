@@ -242,7 +242,10 @@ pub(crate) unsafe extern "C" fn tab_loaded(_: *mut c_void, tab: bc::bc_id, url: 
     let url = unsafe { CStr::from_ptr(url) }.to_string_lossy();
     log!("browser: loaded {tab} {url}");
     let owned = url.to_string();
-    update_app_later(move |cx| crate::sign_in_close::tab_loaded(tab, &owned, cx));
+    update_app_later(move |cx| {
+        crate::sign_in_close::tab_loaded(tab, &owned, cx);
+        browser::agents::tab_loaded(tab, &owned, cx);
+    });
     sample_foot_bar(tab);
     sample_mini_bar(tab);
 }

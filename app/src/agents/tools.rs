@@ -821,6 +821,14 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
             _ => ("Waiting", "Waited", "Couldn't wait", target("")),
         },
         "check" => ("Looking for", "Saw", "Didn't see", target("text")),
+        super::fence::ASKED_ACTION => {
+            let (now, done, failed) = super::fence::ASKED;
+            (now, done, failed, site("a site"))
+        }
+        super::fence::CAME_ACTION => {
+            let (now, done, failed) = super::fence::CAME;
+            (now, done, failed, site("a site"))
+        }
         "list_tabs" => (
             "Looking over",
             "Looked over",
@@ -1047,6 +1055,8 @@ pub fn describe(action: &str) -> &'static str {
         "answered" => "You answered",
         "finish" => "Finished",
         "done" => "Marked the task done",
+        super::fence::ASKED_ACTION => super::fence::ASKED_DONE,
+        super::fence::CAME_ACTION => super::fence::CAME_DONE,
         _ => "Acted",
     }
 }
