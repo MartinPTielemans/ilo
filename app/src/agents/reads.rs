@@ -238,6 +238,7 @@ impl Agents {
             return;
         };
         self.keep_reads(profile);
+        // check.sh reads this line.
         crate::log!("browser: saved read removed in profile {profile}");
         if let Some(agent) = self.asker(&saved) {
             let host = shown(&saved.read.site);
@@ -260,6 +261,7 @@ impl Agents {
             return false;
         }
         self.keep_reads(profile);
+        // check.sh reads this line.
         crate::log!("browser: saved read restored in profile {profile}");
         cx.notify();
         true

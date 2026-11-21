@@ -4212,6 +4212,7 @@ impl Settings {
                             if opened {
                                 settings.reads_opened.insert(key.clone());
                             }
+                            // check.sh reads this line.
                             log!("browser: settings saved read {at} opened {opened}");
                             cx.notify();
                         });
