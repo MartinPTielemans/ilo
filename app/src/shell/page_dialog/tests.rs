@@ -326,6 +326,41 @@ fn a_dialog_waits_while_a_sidebar_field_has_the_keyboard(cx: &mut TestAppContext
     assert_eq!(dialogs(&host), ["page dialog 10 1"]);
 }
 
+/// A dialog that waited for a field shows in a split as it would have at once: at rest over the
+/// pane beside, live over the one the user is in (#3461).
+#[gpui::test]
+fn a_dialog_that_waited_for_the_bar_rests_or_goes_live_by_its_pane(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx);
+    shell.update(cx, |shell, cx| {
+        let split = Split {
+            tabs: vec![10, 20],
+            ..Default::default()
+        };
+        shell.set_tabs(
+            1,
+            Vec::new(),
+            vec![10, 20],
+            vec![split],
+            Folders::default(),
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    host.take();
+    open_bar(&host);
+    ask(&shell, cx, 20, Some(prompt(2)));
+    assert!(dialogs(&host).is_empty(), "the dialog came over the bar");
+    close_bar(&shell, cx, &host);
+    assert_eq!(dialogs(&host), ["page dialog 20 2 at rest"]);
+    ask(&shell, cx, 20, None);
+    host.take();
+    open_bar(&host);
+    ask(&shell, cx, 10, Some(prompt(1)));
+    assert!(dialogs(&host).is_empty(), "the dialog came over the bar");
+    close_bar(&shell, cx, &host);
+    assert_eq!(dialogs(&host), ["page dialog 10 1"]);
+}
+
 #[gpui::test]
 fn a_leave_doesnt_wait(cx: &mut TestAppContext) {
     let (shell, cx, host) = window(cx);
