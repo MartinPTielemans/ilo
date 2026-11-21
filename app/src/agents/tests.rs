@@ -9106,14 +9106,21 @@ mod sessions {
             "Cla\u{0301}ude Code".into(),
             "cLaUdE cOdE".into(),
             "CODEX".into(),
+            "\u{00ED}lo agent".into(),
+            "C\u{0049}aude Code".into(),
+            "C\u{0031}aude Code".into(),
+            "\u{006C}\u{006C}o agent".into(),
+            "\u{0031}lo agent".into(),
         ] {
             hello(&agents, "mcp-client", &posing, cx);
             assert_eq!(named(&agents, cx).0, "MCP client", "{posing} passed");
         }
-        // A name of its own is shown as given, in any script, and without what doesn't show.
+        // A name of its own is shown as given, in any script, accents and all, and without what
+        // doesn't show.
         for taken in [
             "Browser Use",
             "Checker",
+            "Ren\u{00E9}e",
             "\u{0410}\u{0433}\u{0435}\u{043D}\u{0442}",
             "\u{30A8}\u{30FC}\u{30B8}\u{30A7}\u{30F3}\u{30C8}",
             "\u{81EA}\u{52D5}\u{30C6}\u{30B9}\u{30C8}",
