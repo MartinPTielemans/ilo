@@ -903,6 +903,31 @@ fn is_block(name: &str) -> bool {
     BLOCKS.split_whitespace().any(|block| block == name)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The bytes the reader's scans have read on this thread, and how many its test allows.
+    static SCANNED: std::cell::Cell<(usize, usize)> =
+        const { std::cell::Cell::new((0, usize::MAX)) };
+}
+
+/// Counts `bytes` read by one of the reader's scans, in tests, which stop it once it's past what
+/// they allow: each scan stops at its own end, so a body is read a few times over in all rather
+/// than again from each byte.
+fn scanned(bytes: usize) {
+    #[cfg(test)]
+    SCANNED.with(|scanned| {
+        let (read, most) = scanned.get();
+        let read = read.saturating_add(bytes);
+        scanned.set((read, most));
+        assert!(
+            read <= most,
+            "the reader read {read} bytes, past the {most} allowed"
+        );
+    });
+    #[cfg(not(test))]
+    let _ = bytes;
+}
+
 /// A page as an agent reads it in its outline rather than its source: its text, a link's address,
 /// an image's description, a form's method and address, and its fields' names and buttons, but
 /// no script, style, comment or meta tag, and no field's value. The values it leaves out, a meta
@@ -921,18 +946,23 @@ fn outline(html: &str) -> (String, usize) {
         if bytes[at] != b'<' {
             let end = (at..bytes.len()).find(|&next| bytes[next] == b'<');
             let end = end.unwrap_or(bytes.len());
+            scanned(end - at);
             out.push_str(&decoded(&html[at..end]));
             at = end;
             continue;
         }
         if html[at..].starts_with("<!--") {
+            let from = at;
             at = html[at..]
                 .find("-->")
                 .map_or(bytes.len(), |end| at + end + 3);
+            scanned(at - from);
             continue;
         }
         if matches!(bytes.get(at + 1), Some(b'!' | b'?')) {
+            let from = at;
             at = html[at..].find('>').map_or(bytes.len(), |end| at + end + 1);
+            scanned(at - from);
             continue;
         }
         let Some(tag) = tag(html, at) else {
@@ -970,6 +1000,7 @@ fn outline(html: &str) -> (String, usize) {
                         .is_some_and(|word| word.eq_ignore_ascii_case(name.as_bytes()))
             });
             let end = end.unwrap_or(bytes.len());
+            scanned(end - at);
             if name == "textarea" {
                 out.push_str(&format!(" [text field: {field}] "));
                 withheld += usize::from(!html[at..end].trim().is_empty());
@@ -977,6 +1008,7 @@ fn outline(html: &str) -> (String, usize) {
             at = html[end..]
                 .find('>')
                 .map_or(bytes.len(), |close| end + close + 1);
+            scanned(at - end);
             continue;
         }
         match name {
@@ -1035,6 +1067,7 @@ fn decoded(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(amp) = rest.find('&') {
+        scanned(amp);
         out.push_str(&rest[..amp]);
         rest = &rest[amp..];
         // An entity's name is short, so its `;` is looked for only that far, not to the end.
@@ -1376,6 +1409,7 @@ fn random_span(text: &str, from: usize, end: usize) -> Option<Bounds> {
             length += 1;
             next += step;
         }
+        scanned(length);
         length
     };
     let (mut start, mut end) = (start, end);
@@ -1448,6 +1482,7 @@ fn jwt(text: &[u8]) -> usize {
         while at < text.len() && base64url(text[at]) {
             at += 1;
         }
+        scanned(at - start);
         if part == 2 {
             break;
         }
@@ -1546,6 +1581,7 @@ fn hide_text(text: &str) -> (String, usize) {
             while to < bytes.len() && (base64url(bytes[to]) || b".~+/=".contains(&bytes[to])) {
                 to += 1;
             }
+            scanned(to - from);
             if to - from >= 8 {
                 hide(&mut kept, &mut copied, from, to);
                 at = to;
@@ -1556,6 +1592,7 @@ fn hide_text(text: &str) -> (String, usize) {
             let end = (at..bytes.len())
                 .find(|&next| !run_byte(bytes[next]))
                 .unwrap_or(bytes.len());
+            scanned(end - at);
             if let Some((from, to)) = random_span(text, at, end) {
                 let from = from.max(copied);
                 hide(&mut kept, &mut copied, from, to);
@@ -1641,6 +1678,7 @@ fn query_value(bytes: &[u8], from: usize) -> Option<(Bounds, Bounds)> {
     {
         stop += 1;
     }
+    scanned(stop - start);
     (stop > start).then_some(((from, end), (start, stop)))
 }
 
@@ -1698,6 +1736,7 @@ fn tag(text: &str, at: usize) -> Option<Tag> {
     while next < bytes.len() && (bytes[next].is_ascii_alphanumeric() || bytes[next] == b'-') {
         next += 1;
     }
+    scanned(next - start);
     let name = text[start..next].to_ascii_lowercase();
     let mut attributes = Vec::new();
     loop {
@@ -1722,6 +1761,7 @@ fn tag(text: &str, at: usize) -> Option<Tag> {
         {
             next += 1;
         }
+        scanned(next - start);
         let attribute = text[start..next].to_ascii_lowercase();
         next = past_spaces(bytes, next);
         let mut bounds = (next, next);
@@ -1729,7 +1769,9 @@ fn tag(text: &str, at: usize) -> Option<Tag> {
             next = past_spaces(bytes, next + 1);
             match bytes.get(next) {
                 Some(&quote @ (b'"' | b'\'')) => {
-                    let Some(close) = (next + 1..bytes.len()).find(|&at| bytes[at] == quote) else {
+                    let close = (next + 1..bytes.len()).find(|&at| bytes[at] == quote);
+                    scanned(close.unwrap_or(bytes.len()) - next);
+                    let Some(close) = close else {
                         let end = bytes.len();
                         return Some(Tag {
                             name,
@@ -1749,6 +1791,7 @@ fn tag(text: &str, at: usize) -> Option<Tag> {
                     {
                         next += 1;
                     }
+                    scanned(next - from);
                     bounds = (from, next);
                 }
             }
@@ -1769,10 +1812,12 @@ fn tag(text: &str, at: usize) -> Option<Tag> {
 }
 
 /// The first byte from `at` that isn't a space.
-fn past_spaces(bytes: &[u8], mut at: usize) -> usize {
+fn past_spaces(bytes: &[u8], from: usize) -> usize {
+    let mut at = from;
     while bytes.get(at).is_some_and(u8::is_ascii_whitespace) {
         at += 1;
     }
+    scanned(at - from);
     at
 }
 
@@ -1784,11 +1829,15 @@ fn quoted(bytes: &[u8], at: usize, most: usize) -> Option<usize> {
     while next < bytes.len() && next - at <= most {
         match bytes[next] {
             b'\\' => next += 2,
-            b'\n' => return None,
-            byte if byte == quote => return Some(next),
+            b'\n' => break,
+            byte if byte == quote => {
+                scanned(next - at);
+                return Some(next);
+            }
             _ => next += 1,
         }
     }
+    scanned(next - at);
     None
 }
 
@@ -2387,11 +2436,15 @@ mod tests {
         assert_eq!(hidden, 4, "{kept}");
     }
 
-    /// A body of a megabyte of tags, fields or quotes that never close is read in a moment, as
-    /// each scan stops at its own end rather than reading on through the rest of the body again
-    /// from the next tag.
+    /// A body of a megabyte of tags, fields or quotes that never close is read a few times over at
+    /// most, as each scan stops at its own end rather than reading on through the rest of the body
+    /// again from the next tag. The scans count what they read, so a slow machine can't fail it
+    /// and a fast one can't hide a read that goes on (#3831).
     #[test]
     fn an_unclosed_tag_or_quote_is_read_once() {
+        // The reads a body's bytes may take in all: about three at most today. One read again from
+        // each tag or quote would take tens of thousands.
+        const READS: usize = 8;
         let repeated = |unit: &str, end: &str| {
             let mut body = unit.repeat(MAX_BODY / unit.len());
             body.push_str(end);
@@ -2434,12 +2487,17 @@ mod tests {
                 }),
             ];
             for (read_as, pass) in passes {
-                let started = std::time::Instant::now();
-                pass();
-                let took = started.elapsed();
+                let length = match read_as {
+                    "JSON" => json.len(),
+                    _ => body.len(),
+                };
+                // The count stops a reader that reads on, rather than waiting out its minutes.
+                SCANNED.with(|scanned| scanned.set((0, READS * length)));
+                let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(pass));
+                let (count, _) = SCANNED.with(|scanned| scanned.replace((0, usize::MAX)));
                 assert!(
-                    took < std::time::Duration::from_millis(500),
-                    "{took:?} read as {read_as} for a body of {:?}",
+                    read.is_ok(),
+                    "{count} bytes read as {read_as} for a body of {length} bytes, {:?}",
                     &body[..20]
                 );
             }
