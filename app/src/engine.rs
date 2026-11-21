@@ -646,6 +646,10 @@ impl Browser for Engine {
         agents_core::update(move |agents, cx| agents.answer(question, answer, cx));
     }
 
+    fn choose_agent_file(&self, question: u64, window: u64, _: &mut App) {
+        agents_core::update(move |agents, cx| agents.choose_file(question, window, cx));
+    }
+
     fn take_over(&self, agent: SharedString, tab: u64, _: &mut App) {
         agents_core::update(move |agents, cx| agents.take_over(&agent, tab, cx));
     }
