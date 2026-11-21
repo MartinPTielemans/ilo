@@ -38,6 +38,36 @@ day() {
   date -u -d "$1" +%s 2> /dev/null || date -u -j -f %Y-%m-%d "$1" +%s 2> /dev/null
 }
 
+# Sets state to issue $1's, OPEN or CLOSED, or to why it's unread. GitHub's API now and then times
+# out on an open issue (HTTP 504, #3564), so a lookup that fails asks again 5, 15 and 30 s on. An
+# issue that doesn't exist is an answer, asked once. Once an issue goes unread after every try,
+# later ones are asked once each, so an outage still ends within Check scripts' 5 minutes. An
+# issue's answer serves each line naming it.
+known= gave_up=
+state_of() {
+  case $known in
+  *" $1:"*)
+    state=${known#*" $1:"}
+    state=${state%% *}
+    return
+    ;;
+  esac
+  tries=0
+  for wait in 5 15 30 ''; do
+    tries=$((tries + 1))
+    if state=$(gh issue view "$1" --repo "$repo" --json state -q .state 2>&1); then
+      known="$known $1:$state "
+      return
+    fi
+    case $state in *"Could not resolve to an issue"*) return ;; esac
+    [ -z "$gave_up" ] && [ -n "$wait" ] || break
+    sleep "$wait"
+  done
+  gave_up=1
+  if [ "$tries" = 1 ]; then times=once; else times="$tries times"; fi
+  state="unread, asked $times: $state"
+}
+
 case ${1:-} in
 match)
   [ $# = 5 ] || { echo "usage: quarantine.sh match <os> <run> <session> <FAIL line>" >&2; exit 2; }
@@ -122,8 +152,7 @@ lint)
       '#'*:*[!0-9]* | *: | [!#]*) bad "$file" "$n" "the second field is the issue that owns it, such as #2197, not \"$issue\"" ;;
       *)
         named="$named $number"
-        state=$(gh issue view "$number" --repo "$repo" --json state -q .state 2>&1) ||
-          state="unread: $state"
+        state_of "$number"
         [ "$state" = OPEN ] || bad "$file" "$n" "its issue $issue isn't open ($state): a fixed run leaves the list"
         ;;
       esac
