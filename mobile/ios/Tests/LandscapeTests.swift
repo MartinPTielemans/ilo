@@ -456,15 +456,32 @@ private struct Turned<Content: View>: View {
 /// A page through a turn of the phone.
 @Suite(.serialized, .timeLimit(.minutes(5))) @MainActor struct LandscapePageTests {
   /// A long page of text that reflows with its width, each paragraph marked with its number.
-  private static let article: String = {
+  private static let article = page()
+
+  /// The article, with a script that works for 600 ms each time the page is laid out for a new
+  /// width, as a page that lays out a chart or a feed itself does on a slow phone. WebKit places
+  /// the page for its new size only once that work is done.
+  private static let slowArticle = page(script: """
+    let laid = 0;
+    new ResizeObserver(() => {
+      const width = document.documentElement.clientWidth;
+      if (width === laid) return;
+      const first = laid === 0;
+      laid = width;
+      if (first) return;
+      for (const end = performance.now() + 600; performance.now() < end; ) {}
+    }).observe(document.documentElement);
+    """)
+
+  private static func page(script: String = "") -> String {
     let words = String(repeating: "Tea leaves are withered and rolled before they are dried. ", count: 6)
     let paragraphs = (0..<80).map { "<p id=\"p\($0)\">\(words)</p>" }.joined()
     return """
       <html data-mark="article"><head><meta name="viewport" content="width=device-width, initial-scale=1">
       <style>html { -webkit-text-size-adjust: 100% } body { margin: 16px; font: 17px/1.4 -apple-system } p { margin: 0 0 12px }</style></head>
-      <body>\(paragraphs)</body></html>
+      <body>\(paragraphs)<script>\(script)</script></body></html>
       """
-  }()
+  }
 
   private func top(of id: String, in tab: WebTab) async -> CGFloat? {
     let script = "return document.getElementById(id).getBoundingClientRect().top"
@@ -472,6 +489,14 @@ private struct Turned<Content: View>: View {
   }
 
   @Test func `the paragraph at the top of the page is still there after a turn, and after the turn back`() async throws {
+    try await turns(Self.article)
+  }
+
+  @Test func `the paragraph at the top of a page slow to lay out a new width is still there after a turn, and after the turn back`() async throws {
+    try await turns(Self.slowArticle)
+  }
+
+  private func turns(_ page: String) async throws {
     let tab = WebTab(id: "tab", role: .today, browser: stageBrowser())
     let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
     let window = UIWindow(windowScene: scene)
@@ -482,7 +507,7 @@ private struct Turned<Content: View>: View {
     tab.webView.frame = CGRect(origin: .zero, size: Room.upright)
     controller.view.addSubview(tab.webView)
 
-    tab.webView.loadHTMLString(Self.article, baseURL: URL(string: "https://example.org/"))
+    tab.webView.loadHTMLString(page, baseURL: URL(string: "https://example.org/"))
     #expect(
       await eventually {
         (try? await tab.webView.callAsyncJavaScript("return document.documentElement.dataset.mark || ''", contentWorld: .defaultClient))
@@ -518,10 +543,13 @@ private struct Turned<Content: View>: View {
     #expect(await eventually { await rests(tab, at: "p60", wide: Room.upright.width, within: 30) })
   }
 
-  /// Whether the page has the width its web view has, is scrolled to where the web view says,
-  /// and has the paragraph's top within `slack` of the screen's.
+  /// Whether the page is laid out for the width its web view has, is scrolled to where the web
+  /// view says, and has the paragraph's top within `slack` of the screen's. `innerWidth` can't
+  /// say the first: it can have the new width before the page is laid out for it.
   private func rests(_ tab: WebTab, at id: String = "p40", wide: CGFloat, within slack: CGFloat) async -> Bool {
-    let said = try? await tab.webView.callAsyncJavaScript("return [innerWidth, scrollY]", contentWorld: .defaultClient) as? [Double]
+    let said =
+      try? await tab.webView.callAsyncJavaScript("return [document.documentElement.clientWidth, scrollY]", contentWorld: .defaultClient)
+      as? [Double]
     guard let said, said.count == 2, CGFloat(said[0]) == wide else { return false }
     guard abs(CGFloat(said[1]) - tab.webView.scrollView.contentOffset.y) < 1, let top = await top(of: id, in: tab) else { return false }
     return abs(top) < slack
