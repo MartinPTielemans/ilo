@@ -802,10 +802,10 @@ expect "^browser: shortcut new-tab $new_tab_key\$" "⌃⌘T didn't become New Ta
 ../tools/window-screenshot.sh "$pid" "$out/shortcuts.png" || fail "no window to capture"
 # in_sight, until the card shows $1 whole: GPUI on Windows scrolls about two thirds of the points
 # asked, so in_sight's two scrolls can fall short of a row a card's height away. It sets its
-# caller's locals, as in_sight does.
+# caller's locals, as in_sight does. $2, if given, is in_sight's.
 whole_in_sight() {
   for _ in 1 2 3 4; do
-    in_sight "$1" || return 1
+    in_sight "$1" "${2:-}" || return 1
     y=${at#* }
     [ -z "$sight" ] || { [ "$y" -ge "$top" ] && [ "$y" -le "$bottom" ]; } && return 0
   done
@@ -869,10 +869,12 @@ expect '^browser: settings shown Shortcuts$' \
   "Settings… didn't show the Shortcuts tab it showed last"
 settings_drew Shortcuts
 # Where the app drew it: its place depends on how wide the keys' chip beside it is, ⌃⌘T on the Mac
-# and Ctrl+Alt+T elsewhere. Settings comes back scrolled to Go Back, a card's height and more below.
+# and Ctrl+Alt+T elsewhere. Settings comes back scrolled to Go Back, a card's height and more below,
+# and its place is this show's, not the one the last Settings drew it at (#3841).
 restore_new_tab() {
   local at sight top bottom y by rest
-  whole_in_sight "restore new-tab" || fail "Settings didn't draw New Tab's ↺"
+  whole_in_sight "restore new-tab" '^browser: settings shown Shortcuts$' ||
+    fail "Settings didn't draw New Tab's ↺ after it showed again"
   send clickkey $at
 }
 restore_new_tab

@@ -1056,6 +1056,9 @@ fn show_now(cx: &mut App) {
                 window.focus(&settings.focus, cx);
             }
             settings.shown = true;
+            // Each show logs where its controls are drawn again, so check.sh can take a place from
+            // this show rather than from one before it, which a hidden window's scroll left (#3841).
+            settings.drawn_logged.borrow_mut().clear();
             if settings.section == Section::Agents {
                 look_for_clients(cx);
             }
