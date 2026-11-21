@@ -4719,7 +4719,7 @@ fn a_runs_check_and_screenshot_keep_to_the_rules(cx: &mut TestAppContext) {
 
 /// The actions the core lets an agent take in its tabs, agent_session.cc's RefusedAction: each a
 /// thing the user does in a page, or handing the tab to them.
-const CORE_ALLOWS: [&str; 21] = [
+const CORE_ALLOWS: [&str; 22] = [
     "add_to_split",
     "back",
     "click",
@@ -4741,6 +4741,7 @@ const CORE_ALLOWS: [&str; 21] = [
     "split_tabs",
     "type",
     "unpin_tab",
+    "upload",
 ];
 
 /// What the descriptions tell an agent (#3664): each tool that may take a tab says, as the others

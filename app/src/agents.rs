@@ -2973,8 +2973,7 @@ impl Agents {
         cx: &mut Context<Self>,
     ) {
         let host = site(&self.browser.tab(tab, cx).url);
-        // The core checks it as the click on the field it stands in for, which its rules know.
-        if let Err(why) = self.may_act(agent, tab, "click", cx) {
+        if let Err(why) = self.may_act(agent, tab, "upload", cx) {
             self.note(agent, "upload", &host, &why);
             cx.notify();
             _ = reply.send(ToolResult::error(why));
