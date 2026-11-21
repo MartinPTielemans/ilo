@@ -1491,6 +1491,8 @@ bool g_dialog_part = false;
 // dialog shows at rest. It lasts until the dialog is pressed, the UI shows it live, or it hides
 // (#3231, #3461).
 HWND g_dialog_lent = nullptr;
+// Below: the hook that hears a press beside the dialog, there while it covers part of its window.
+void WatchDialogPresses(bool watch);
 Floating g_site_controls;
 
 // The link preview (platform/host.h), as Linux's (link_preview_window.rs): its window, the dim and
@@ -2085,6 +2087,12 @@ void Disown(HWND root) {
         DismissOverlay(floating->overlay);
       } else {
         Hide(*floating);
+      }
+      // The dialog goes with its window, which the UI may never tell the host as it closes.
+      if (floating == &g_dialog) {
+        g_dialog_lent = nullptr;
+        g_dialog_part = false;
+        WatchDialogPresses(false);
       }
       SetWindowLongPtrW(hwnd, GWLP_HWNDPARENT, 0);
     }
