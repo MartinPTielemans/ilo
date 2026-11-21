@@ -118,6 +118,19 @@ TEST(AgentFileFieldRuleTest, AFieldThePageChangedGetsNothing) {
   EXPECT_TRUE(FilesLand(Shown(), many, 2));
 }
 
+// A sandboxed or data: frame has no site for the card to name, so it's refused before the card,
+// and its "null" origin never matches itself at the pick.
+TEST(AgentFileFieldRuleTest, AFrameWithNoSiteIsRefused) {
+  EXPECT_EQ(FileFieldPlaceRefusal(Shown()), std::nullopt);
+  const std::optional<std::string> refused = FileFieldPlaceRefusal({"F00D", "null"});
+  ASSERT_TRUE(refused);
+  EXPECT_NE(refused->find("hand_off"), std::string::npos);
+  EXPECT_TRUE(FileFieldPlaceRefusal({"", "https://jobs.example"}));
+  FileFieldNow opaque = Unchanged();
+  opaque.place.origin = "null";
+  EXPECT_FALSE(FilesLand({"F00D", "null"}, opaque, 1));
+}
+
 TEST(AgentFileFieldRuleTest, NoFilesAreNoPick) {
   EXPECT_FALSE(FilesLand(Shown(), Unchanged(), 0));
 }

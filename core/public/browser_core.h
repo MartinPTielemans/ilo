@@ -1918,9 +1918,12 @@ BC_EXPORT size_t bc_agent_list_tabs(const char* agent, bc_id* tabs, size_t capac
 #define BC_AGENT_PAGE_SCROLL_TO 12
 // Describes the element, a file field, for the card that asks the user for a file for it
 // (bc_file_field_choose): it answers at once, with no tree. Refused, with why, for an element that
-// isn't an input of type file, and for one that takes a folder (webkitdirectory), which the user
-// fills in a tab they hold. A page's own file dialogs never open in an agent's tab the user doesn't
-// hold, the file input's or File System Access', so the page hears a cancel.
+// isn't an input of type file, for one that takes a folder (webkitdirectory), which the user
+// fills in a tab they hold, and for one in a frame with no site to name (an opaque origin, as a
+// sandboxed or data: frame's). A tab has one such field at a time: the next ends the one before,
+// with BC_FILE_FIELD_CLOSED if its Choose File… is unanswered. A page's own file dialogs never
+// open in an agent's tab the user doesn't hold, the file input's or File System Access', so the
+// page hears a cancel.
 #define BC_AGENT_PAGE_FILE_FIELD 13
 
 // Does |action|, a BC_AGENT_PAGE_ value, in |tab| for the agent with the id |agent|, to |element|,
@@ -1987,26 +1990,27 @@ BC_EXPORT bool bc_tab_held(bc_id tab);
 // What came of bc_file_field_choose (file_field_done).
 // The user's files are in the field, |count| of them.
 #define BC_FILE_FIELD_PUT 0
-// The user closed the dialog choosing none.
+// The user closed the dialog choosing none, or chose a folder, as a Mac package, which never goes
+// in.
 #define BC_FILE_FIELD_NONE 1
 // The field the card named left before the user's files could go into it: the page removed or
-// replaced it, its frame went to another page or origin, or its tab left the agent's Space or the
-// user took it. The files went nowhere.
+// replaced it, its frame went to another page or origin, or its tab left the Space of the agent
+// whose card it was, or the user took it. The files went nowhere.
 #define BC_FILE_FIELD_LEFT 2
-// bc_file_field_drop, or the tab closed or the agent's session there ended, with the dialog up:
-// it closed, and nothing went into the field.
+// bc_file_field_drop, the tab closed, the agent's session there ended, or another field was
+// described in the tab, with the dialog up: it closed, and nothing went into the field.
 #define BC_FILE_FIELD_CLOSED 3
 
-// The user pressed Choose File… on the card for |field|, from BC_AGENT_PAGE_FILE_FIELD's answer,
-// in |window|: the system's file dialog opens over |window|, where the system starts it. Nothing
-// of the page's or the agent's names its folder, file or title; the field's accept only filters
-// it, and only a field that takes several lets the user pick several. The files the user picks go
-// into that field alone, as DevTools' DOM.setFileInputFiles puts them, and only if it's the same
-// node, in the same document of the same frame, from the same origin, in a tab still in the
-// agent's Space that the user doesn't hold. Then file_field_done, once, from a task of its own.
-// Returns false, with no answer, for a field it doesn't know, one already chosen for, or a window
-// that isn't the core's. The user's: agents get none, and no name or path of a file is told to
-// anyone or logged.
+// The user pressed Choose File… on the card for |field|, from BC_AGENT_PAGE_FILE_FIELD's answer, in
+// |window|: the system's file dialog opens over |window|, where the system starts it. Nothing of
+// the page's or the agent's names its folder, file or title; the field's accept only filters it,
+// and only a field that takes several lets the user pick several. The files the user picks go into
+// that field alone, as DevTools' DOM.setFileInputFiles puts them, and only if it's the same node,
+// in the same document of the same frame, from the same origin, in a tab still in the Space of the
+// agent whose card it was, that the user doesn't hold. Then file_field_done, once, from a task of
+// its own. Returns false, with no answer, for a field it doesn't know, one already chosen for, or a
+// window that isn't the core's. The user's: agents get none, and no name or path of a file is told
+// to anyone or logged.
 BC_EXPORT bool bc_file_field_choose(bc_id field, bc_id window);
 
 // Forgets |field|: for the card's Don't Allow, the call's time running out, or the agent stopping.

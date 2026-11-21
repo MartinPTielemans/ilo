@@ -3390,6 +3390,10 @@ void AgentPage::FileField() {
               page->Fail(*std::move(refused));
               return;
             }
+            if (std::optional<std::string> refused = FileFieldPlaceRefusal(now->place)) {
+              page->Fail(*std::move(refused));
+              return;
+            }
             content::RenderFrameHost* frame = page->FrameById(now->place.frame);
             if (!frame || !IsWebFrame(frame)) {
               page->Fail(kFieldGone);
@@ -3405,6 +3409,10 @@ void AgentPage::FileField() {
             const bc_id field = AgentFileField::Shown(page->tab_, page->job_->element, *frame,
                                                       now->place, many,
                                                       FileFieldAccepts(now->facts));
+            if (!field) {
+              page->Fail(kFieldGone);
+              return;
+            }
             std::optional<std::string> answer = base::WriteJson(
                 base::DictValue()
                     .Set("field", static_cast<double>(field))
@@ -3427,8 +3435,10 @@ void AgentPage::FillField() {
             if (!page || !page->job_) {
               return;
             }
-            // The rule reads the field in the same task as the files go to it, so nothing the
-            // page does comes between.
+            // The page's script may still run between this read and the set, which is another
+            // message to its renderer. What it can do there is bounded: a node gone or no longer
+            // a file input makes the set fail, and one moved into another document went by
+            // script with that document's own origin, so the files reach no other origin.
             if (!now || !std::move(page->job_->lands).Run(*now)) {
               page->Fail(kFieldGone);
               return;
@@ -3491,13 +3501,15 @@ void AgentPage::ReadField(int slot, int node, FieldRead then) {
                       // nearest up, which one in its document always has, the document's own at
                       // least. One the page took out of its document has none.
                       now.in_page = nodes && nodes->size() > 1;
-                      std::optional<double> owner;
-                      for (size_t i = 1; nodes && i < nodes->size() && !owner; ++i) {
+                      // The nearest root web area above it is its own document, whatever holds
+                      // that: an iframe, an object, an embed, a frameset's frame, or the tab.
+                      std::optional<double> document;
+                      for (size_t i = 1; nodes && i < nodes->size() && !document; ++i) {
                         const base::DictValue* each = (*nodes)[i].GetIfDict();
                         const std::string* role =
                             each ? each->FindStringByDottedPath("role.value") : nullptr;
-                        if (role && (*role == "Iframe" || *role == "IframePresentational")) {
-                          owner = each->FindDouble("backendDOMNodeId");
+                        if (role && *role == "RootWebArea") {
+                          document = each->FindDouble("backendDOMNodeId");
                         }
                       }
                       auto placed = base::BindOnce(
@@ -3514,22 +3526,34 @@ void AgentPage::ReadField(int slot, int node, FieldRead then) {
                             std::move(then).Run(std::move(now), std::move(label));
                           },
                           page, std::move(now), std::move(label), std::move(then));
-                      // A field in a frame of the page's own process sits under that frame's
-                      // element, whose frame it's in. Else it's in the session's top frame.
-                      if (!owner) {
-                        std::move(placed).Run(page->TopFrameOf(slot));
+                      // A field whose document can't be told is refused, never taken for the
+                      // top's.
+                      if (!document) {
+                        std::move(placed).Run(std::string());
                         return;
                       }
+                      // DevTools names a document's frame on its element child, as <html>.
                       page->Send(
                           "DOM.describeNode",
-                          base::DictValue().Set("backendNodeId", static_cast<int>(*owner)),
+                          base::DictValue()
+                              .Set("backendNodeId", static_cast<int>(*document))
+                              .Set("depth", 1),
                           base::BindOnce(
                               [](base::OnceCallback<void(std::string)> placed,
                                  const base::DictValue* described) {
-                                const std::string* frame =
-                                    described ? described->FindStringByDottedPath("node.frameId")
+                                const base::ListValue* children =
+                                    described ? described->FindListByDottedPath("node.children")
                                               : nullptr;
-                                std::move(placed).Run(frame ? *frame : std::string());
+                                std::string frame;
+                                for (size_t i = 0; children && i < children->size(); ++i) {
+                                  const base::DictValue* child = (*children)[i].GetIfDict();
+                                  const std::string* id =
+                                      child ? child->FindString("frameId") : nullptr;
+                                  if (id && frame.empty()) {
+                                    frame = *id;
+                                  }
+                                }
+                                std::move(placed).Run(std::move(frame));
                               },
                               std::move(placed)),
                           slot);
@@ -3539,14 +3563,6 @@ void AgentPage::ReadField(int slot, int node, FieldRead then) {
           },
           weak_factory_.GetWeakPtr(), slot, node, std::move(then)),
       slot);
-}
-
-std::string AgentPage::TopFrameOf(int slot) {
-  if (slot == 0) {
-    return GetWebContents().GetPrimaryMainFrame()->GetDevToolsFrameToken().ToString();
-  }
-  return slot > 0 && static_cast<size_t>(slot) < targets_.size() ? targets_[slot].frame
-                                                                  : std::string();
 }
 
 content::RenderFrameHost* AgentPage::FrameById(const std::string& id) {

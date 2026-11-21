@@ -40,10 +40,15 @@ struct FileFieldPlace {
   std::string origin;
 };
 
+// Why the user can't be asked for a file for a field at |place|, for the agent, or none if they
+// can: its frame must have a site the card can name, which one with an opaque origin, as a
+// sandboxed or data: frame's, hasn't.
+std::optional<std::string> FileFieldPlaceRefusal(const FileFieldPlace& place);
+
 // The field as the user picks |count| files for it.
 struct FileFieldNow {
   // Whether the frame still has the document it had as the card showed, the tab is still in the
-  // agent's Space, and the user holds it.
+  // Space of the agent the card was for, and the user holds it.
   bool same_document = false;
   bool agents = false;
   bool held = false;
@@ -55,8 +60,9 @@ struct FileFieldNow {
 };
 
 // Whether the user's |count| files go into the field the card at |shown| named: the same node, in
-// the same document of the same frame, from the same origin, still a file field that takes them,
-// in a tab still the agent's that the user doesn't hold. Any miss, and they go nowhere.
+// the same document of the same frame, from the same origin, one with a site, still a file field
+// that takes them, in a tab still that agent's that the user doesn't hold. Any miss, and they go
+// nowhere.
 bool FilesLand(const FileFieldPlace& shown, const FileFieldNow& now, size_t count);
 
 }  // namespace browser_core

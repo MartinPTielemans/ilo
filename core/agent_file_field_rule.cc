@@ -53,6 +53,15 @@ std::optional<std::string> FileFieldRefusal(const FileFieldFacts& field) {
   return std::nullopt;
 }
 
+std::optional<std::string> FileFieldPlaceRefusal(const FileFieldPlace& place) {
+  // An opaque origin serializes as "null", which would equal another opaque one's.
+  if (place.frame.empty() || place.origin.empty() || place.origin == "null") {
+    return "That field is in a frame with no site of its own: hand the tab to the user with "
+           "hand_off.";
+  }
+  return std::nullopt;
+}
+
 bool FileFieldTakesMany(const FileFieldFacts& field) {
   return Attribute(field, "multiple").has_value();
 }
@@ -78,7 +87,8 @@ std::vector<std::string> FileFieldAccepts(const FileFieldFacts& field) {
 bool FilesLand(const FileFieldPlace& shown, const FileFieldNow& now, size_t count) {
   return count > 0 && now.same_document && now.agents && !now.held && now.in_page &&
          now.place.frame == shown.frame && now.place.origin == shown.origin &&
-         !FileFieldRefusal(now.facts) && (count == 1 || FileFieldTakesMany(now.facts));
+         !FileFieldPlaceRefusal(now.place) && !FileFieldRefusal(now.facts) &&
+         (count == 1 || FileFieldTakesMany(now.facts));
 }
 
 }  // namespace browser_core
