@@ -11,7 +11,10 @@
 # click's answer names the scheme. Ten
 # cases, each the same form in a tab of its own the user isn't looking at, move to Closed a step a
 # turn, a turn's ten calls answered at once, which logs the turns and how long they took. A page
-# that hasn't come once an action has waited for it is still loading, as the answer says. A tab
+# that hasn't come once an action has waited for it is still loading, as the answer says. An app
+# in another site's frame, whose content comes after its load, is answered with its content or
+# as busy, never as its splash alone, and navigate waits for a text it names past the page's
+# settling. A tab
 # its page opens, by a link or window.open, goes in its Space, behind, and the click's answer names
 # it. A page with fields gives its prose and none of their values in its text. Its outline gives
 # the page's own values and the agent's own typing, and of the rest only that they're filled: the
@@ -647,6 +650,69 @@ case "$stalled" in *"may change yet"*) fail "the click on Stall said the page ma
 settle="the settle page's click waited $(($(date +%s) - started)) s in all"
 closed=$(call close_tab "{\"tab\":$settle_tab}")
 case "$closed" in "Closed tab $settle_tab."*) ;; *) fail "closing the settle page answered: $closed" ;; esac
+
+# An app that loads in a frame (#3658): the page's own document is done at once, with a splash,
+# and the app is a frame of another site's that shows a progress bar until its content comes after
+# its load, by a fetch or by its own script alone. open_tab and navigate answer with the content,
+# or say the page was still busy, and never with the splash alone: the fetch is heard from the
+# page's commit on, and a frame that shows only a progress bar is a splash. Each answer's time is in
+# framed.txt.
+printf '%s' "<!doctype html><title>Framed</title><p id=splash>Loading Mail</p>
+<iframe title=App></iframe>
+<script>
+document.querySelector('iframe').src = 'http://127.0.0.1:$port/framed-app.html' + location.search;
+addEventListener('message', () => splash.remove());
+</script>" > "$out/site/framed.html"
+printf '%s' '<!doctype html><title>App</title><div id=app><div role=progressbar aria-label=Loading></div></div>
+<script>
+const show = () => {
+  app.innerHTML = "<h1>Inbox</h1><button>Compose</button>";
+  parent.postMessage("ready", "*");
+};
+if (location.search === "?by=late") app.innerHTML = "<p>Starting</p>";
+addEventListener("load", () => location.search === "?by=fetch" ? fetch("slow").then(show)
+  : setTimeout(show, location.search === "?by=late" ? 6000 : 1500));
+</script>' > "$out/site/framed-app.html"
+now_ms() { perl -MTime::HiRes=time -e 'printf "%d\n", time * 1000'; }
+framed_tab=
+framed_wrong=
+for how in "open_tab fetch" "navigate timer" "navigate timer#inbox" "navigate fetch"; do
+  set -- $how
+  started=$(now_ms)
+  case $1 in
+    open_tab) answer=$(call open_tab "{\"url\":\"localhost:$port/framed.html?by=$2\"}") ;;
+    *) answer=$(call navigate "{\"tab\":$framed_tab,\"url\":\"localhost:$port/framed.html?by=$2\"}") ;;
+  esac
+  took=$(($(now_ms) - started))
+  [ -n "$framed_tab" ] ||
+    framed_tab=$(printf '%s\n' "$answer" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  [ -n "$framed_tab" ] || fail "open_tab of the framed app answered: $answer"
+  case "$answer" in
+    *Inbox*) said=content ;;
+    *"still busy"*) said=busy ;;
+    *Loading*) said=splash ;;
+    *) said=else ;;
+  esac
+  printf '%s\n' "$1 by $2: $took ms, $said, ${#answer} characters" >> "$out/framed.txt"
+  printf '%s\n' "$answer" > "$out/framed-$1-$(printf '%s' "$2" | tr -c 'a-z\n' -).txt"
+  case $said in content | busy) ;; *) framed_wrong="$framed_wrong; $1 by $2: $said in $took ms" ;; esac
+done
+framed="$(paste -sd, - < "$out/framed.txt" | sed 's/,/, /g')"
+[ -z "$framed_wrong" ] ||
+  fail "the framed app's answers had neither its content nor that it was busy${framed_wrong}: all were $framed"
+# One whose content comes after the page has settled, past the 5 s an answer waits, with nothing
+# that says it's loading, is answered once wait_for's text shows.
+started=$(now_ms)
+late=$(call navigate "{\"tab\":$framed_tab,\"url\":\"localhost:$port/framed.html?by=late\",\"wait_for\":\"Inbox\",\"seconds\":15}")
+took=$(($(now_ms) - started))
+printf '%s\n' "$late" > "$out/framed-navigate-late.txt"
+case "$late" in
+  "“Inbox” showed."*Compose*) ;;
+  *) fail "navigate waiting for the late app's Inbox answered in $took ms: $late" ;;
+esac
+framed="$framed, navigate waiting for Inbox in $took ms"
+closed=$(call close_tab "{\"tab\":$framed_tab}")
+case "$closed" in "Closed tab $framed_tab."*) ;; *) fail "closing the framed app answered: $closed" ;; esac
 
 # A page whose first load hasn't committed once an action has waited 15 s for it (kLoadTimeout in
 # agent_page.cc) is still loading, which the answer says, naming the tab it opened, and not a page
@@ -3723,9 +3789,9 @@ quit
 trap cleanup EXIT
 rm -f "$agents_file" "$out/mcp-in" "$out/mcp-out"
 if [ "$driven" = 1 ]; then
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), the tabs its page opens kept in its Space, behind$opened_said, without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, pins, unpins and removes its own tab but not the user's, sends requests to its tab's site with the tab's session it never sees, a change asking each time, refused unasked without its sentence, its question on screen as the log draws it ($follows% of its place changed) with the sentence cut at a word over the method's facts, a delete's too, and the whole request beside it until Escape, unanswered, each opening in Settings › Agents to the agent's sentence, where it went and what it sent or didn't, asks a page's beforeunload handler first, with no dialog, closing one that doesn't ask at the first call and keeping one the agent clicked or typed in that asks until it discards it, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, opens its tabs muted, is refused a tab the user took over with a press in its page until they hand it back and Keep answers its ask, has a tab the user holds listed as with them and nothing of its page, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, its download asks first and answers with the file, a refused one leaving none, a key press that pays asks as a click on Pay now does, typing with submit, Enter in the card's field, Space after Tab asking on $space_said, Enter after Tab, and Enter on the box to save the card, a Send off the messaging sites asks once its page holds a message, a forum's Comment and a chat's Send in no form, and not with its field empty, a Danish Betal asks, a payment asks every time, whatever was allowed before, a bank's site asks first until Always Allow, which Settings › Agents lists, its Overfør asking still$needs_said, and off takes the socket away; an action waits for its element and its page to settle ($settle), a tab's id from before a relaunch is refused as such, done ends its task once its handoff is answered and not before, its next task ends 3 s after its last page closed, a passkey its page asks for $passkey_said, and a launch after the window quit in its Space shows the page it opens; a screenshot of a tab just opened out of sight answers ($fresh_picture), and with the UI holding the keyboard with its picture"
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), the tabs its page opens kept in its Space, behind$opened_said, without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, pins, unpins and removes its own tab but not the user's, sends requests to its tab's site with the tab's session it never sees, a change asking each time, refused unasked without its sentence, its question on screen as the log draws it ($follows% of its place changed) with the sentence cut at a word over the method's facts, a delete's too, and the whole request beside it until Escape, unanswered, each opening in Settings › Agents to the agent's sentence, where it went and what it sent or didn't, asks a page's beforeunload handler first, with no dialog, closing one that doesn't ask at the first call and keeping one the agent clicked or typed in that asks until it discards it, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, opens its tabs muted, is refused a tab the user took over with a press in its page until they hand it back and Keep answers its ask, has a tab the user holds listed as with them and nothing of its page, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, its download asks first and answers with the file, a refused one leaving none, a key press that pays asks as a click on Pay now does, typing with submit, Enter in the card's field, Space after Tab asking on $space_said, Enter after Tab, and Enter on the box to save the card, a Send off the messaging sites asks once its page holds a message, a forum's Comment and a chat's Send in no form, and not with its field empty, a Danish Betal asks, a payment asks every time, whatever was allowed before, a bank's site asks first until Always Allow, which Settings › Agents lists, its Overfør asking still$needs_said, and off takes the socket away; an action waits for its element and its page to settle ($settle), an app in a frame answers with its content or as busy ($framed), a tab's id from before a relaunch is refused as such, done ends its task once its handoff is answered and not before, its next task ends 3 s after its last page closed, a passkey its page asks for $passkey_said, and a launch after the window quit in its Space shows the page it opens; a screenshot of a tab just opened out of sight answers ($fresh_picture), and with the UI holding the keyboard with its picture"
 else
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own and is refused the user's tab, is answered that a link to an app opens nothing, its tab staying on its page, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), and its actions wait for their element and their page to settle ($settle), and the tabs its page opens are kept in its Space, behind$opened_said. A tab's id from before a relaunch is refused as such, done ends its task once its handoff is answered and not before, its next task ends 3 s after its last page closed, and a passkey its page asks for $passkey_said. skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own and is refused the user's tab, is answered that a link to an app opens nothing, its tab staying on its page, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), and its actions wait for their element and their page to settle ($settle), an app in a frame answering with its content or as busy ($framed), and the tabs its page opens are kept in its Space, behind$opened_said. A tab's id from before a relaunch is refused as such, done ends its task once its handoff is answered and not before, its next task ends 3 s after its last page closed, and a passkey its page asks for $passkey_said. skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
 fi
 if [ -n "${toast_skip:-}" ]; then
   echo "skip: the needs' toast showing, as Windows shows toasts only for an installed copy, which the run's isn't: it counted on the taskbar button and asked for the toast."

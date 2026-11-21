@@ -3408,6 +3408,184 @@ fn a_wait_step_waits_for_text_to_go(cx: &mut TestAppContext) {
     );
 }
 
+/// navigate and open_tab with wait_for answer once the page has settled and the text shows in it,
+/// looking again as a wait step does, and past their seconds answer that it didn't show (#3658).
+#[gpui::test]
+fn navigate_and_open_tab_wait_for_their_text(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let look = |tree: String, cx: &mut TestAppContext| {
+        let request = browser.pages.borrow().last().unwrap().1;
+        agents.update(cx, |agents, cx| agents.page_done(request, tree, false, cx));
+        cx.run_until_parked();
+    };
+    let looks = || browser.pages.borrow().len();
+    let splash = json!({ "nodes": [
+        { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Mail" },
+          "childIds": ["2"] },
+        { "nodeId": "2", "role": { "value": "StaticText" }, "name": { "value": "Loading" } },
+    ]})
+    .to_string();
+
+    let arguments = json!({ "tab": 20, "url": "iana.org", "wait_for": "place order" });
+    let answer = call(&agents, "claude-code", "navigate", arguments, cx);
+    assert_eq!(browser.pages.borrow().last().unwrap().2, PageAction::Quiet);
+    look(splash.clone(), cx);
+    assert!(answer.try_recv().is_err(), "it answered with the splash");
+    let before = looks();
+    cx.executor().advance_clock(Duration::from_millis(500));
+    assert_eq!(looks(), before + 1);
+    assert_eq!(
+        browser.pages.borrow().last().unwrap().2,
+        PageAction::Snapshot
+    );
+    look(shop_tree(), cx);
+    let answered = answer.recv().unwrap();
+    assert!(!answered.error);
+    assert!(
+        answered.text.starts_with("“place order” showed.\n\n"),
+        "{}",
+        answered.text
+    );
+
+    let arguments = json!({ "tab": 20, "url": "iana.org", "wait_for": "Inbox", "seconds": 1 });
+    let answer = call(&agents, "claude-code", "navigate", arguments, cx);
+    for _ in 0..2 {
+        look(splash.clone(), cx);
+        assert!(answer.try_recv().is_err());
+        cx.executor().advance_clock(Duration::from_millis(500));
+    }
+    look(splash.clone(), cx);
+    let answered = answer.recv().unwrap();
+    assert!(!answered.error);
+    assert!(
+        answered.text.starts_with("“Inbox” didn't show in 1 s.\n\n"),
+        "{}",
+        answered.text
+    );
+
+    let arguments = json!({ "url": "docs.example", "wait_for": "Basket" });
+    let answer = call(&agents, "claude-code", "open_tab", arguments, cx);
+    look(splash, cx);
+    cx.executor().advance_clock(Duration::from_millis(500));
+    look(shop_tree(), cx);
+    let answered = answer.recv().unwrap();
+    assert!(
+        answered.text.contains(". “Basket” showed.\n\n"),
+        "{}",
+        answered.text
+    );
+
+    let arguments = json!({ "tab": 20, "url": "iana.org", "wait_for": "Inbox", "seconds": 60 });
+    let refused = call(&agents, "claude-code", "navigate", arguments, cx);
+    assert!(refused.recv().unwrap().error);
+}
+
+/// answer and wait_for go together: navigate and open_tab wait for their text, then read the page
+/// for an answer of text, saying first that it showed (#3658, #3657).
+#[gpui::test]
+fn the_text_answer_comes_after_wait_for(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let look = |tree: String, cx: &mut TestAppContext| {
+        let request = browser.pages.borrow().last().unwrap().1;
+        agents.update(cx, |agents, cx| agents.page_done(request, tree, false, cx));
+        cx.run_until_parked();
+    };
+    let splash = json!({ "nodes": [
+        { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Shop" },
+          "childIds": ["2"] },
+        { "nodeId": "2", "role": { "value": "StaticText" }, "name": { "value": "Loading" } },
+    ]})
+    .to_string();
+    for (tool, arguments) in [
+        (
+            "navigate",
+            json!({ "tab": 20, "url": "iana.org", "answer": "text", "wait_for": "place order" }),
+        ),
+        (
+            "open_tab",
+            json!({ "url": "docs.example", "answer": "text", "wait_for": "place order" }),
+        ),
+    ] {
+        let answer = call(&agents, "claude-code", tool, arguments, cx);
+        let reads = browser.reads.borrow().len();
+        look(splash.clone(), cx);
+        assert_eq!(
+            browser.reads.borrow().len(),
+            reads,
+            "{tool} read the splash"
+        );
+        cx.executor().advance_clock(Duration::from_millis(500));
+        look(shop_tree(), cx);
+        assert!(
+            answer.try_recv().is_err(),
+            "{tool} answered before the text came"
+        );
+        let (_, read) = *browser.reads.borrow().last().unwrap();
+        agents.update(cx, |agents, cx| {
+            agents.text_read(read, Some("Basket\nTwo items".into()), cx)
+        });
+        let text = answer.recv().unwrap();
+        assert!(!text.error, "{}", text.text);
+        assert!(
+            text.text.contains("“place order” showed."),
+            "{tool}: {}",
+            text.text
+        );
+        assert!(
+            text.text.ends_with("\n\nBasket\nTwo items"),
+            "{tool}: {}",
+            text.text
+        );
+    }
+}
+
+/// A wait's next look at a tab the user took over between two looks reads nothing: navigate's
+/// wait_for and run_steps' wait step each end as a call on a tab the user holds does.
+#[gpui::test]
+fn a_wait_reads_nothing_once_the_user_takes_the_tab(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let look = |tree: String, cx: &mut TestAppContext| {
+        let request = browser.pages.borrow().last().unwrap().1;
+        agents.update(cx, |agents, cx| agents.page_done(request, tree, false, cx));
+        cx.run_until_parked();
+    };
+    let looks = || browser.pages.borrow().len();
+
+    let arguments = json!({ "tab": 20, "url": "iana.org", "wait_for": "Thanks" });
+    let answer = call(&agents, "claude-code", "navigate", arguments, cx);
+    look(shop_tree(), cx);
+    agents.update(cx, |agents, cx| agents.take_over("claude-code", 20, cx));
+    let before = looks();
+    cx.executor().advance_clock(Duration::from_millis(500));
+    assert_eq!(looks(), before, "navigate's wait looked at the user's tab");
+    let refused = answer.try_recv().expect("navigate's wait didn't answer");
+    assert!(refused.error);
+    assert_eq!(refused.text, HELD);
+    let entry = agents.read_with(cx, |agents, _| agents.recent().next().unwrap().clone());
+    assert_eq!(
+        (entry.action.as_ref(), entry.refused.as_ref()),
+        ("navigate", HELD)
+    );
+    agents.update(cx, |agents, cx| agents.hand_back(20, cx));
+
+    let wait = json!({ "action": "wait", "text": "Thanks", "seconds": 2 });
+    let run = call(
+        &agents,
+        "claude-code",
+        "run_steps",
+        json!({ "tab": 20, "steps": [wait] }),
+        cx,
+    );
+    look(shop_tree(), cx);
+    agents.update(cx, |agents, cx| agents.take_over("claude-code", 20, cx));
+    let before = looks();
+    cx.executor().advance_clock(Duration::from_millis(500));
+    assert_eq!(looks(), before, "the wait step looked at the user's tab");
+    let refused = run.try_recv().expect("the run didn't answer");
+    assert!(refused.error);
+    assert!(refused.text.contains(HELD), "{}", refused.text);
+}
+
 /// hand_off holds the tab for the user and asks them in the card, and its call waits: the agent's
 /// calls on the tab are refused meanwhile. Hand Back gives the tab back and answers it.
 #[gpui::test]
