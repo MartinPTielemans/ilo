@@ -413,7 +413,8 @@ def quiet_log_lines():
 # --- The hosts' log lines --------------------------------------------------------------------
 
 # The strings the hosts write in every launch, by file and the expression the print formats, each
-# naming nothing the user browses or types. A name like `what` passes anywhere in its file.
+# naming nothing the user browses or types. A bare name, which says less of where it comes from,
+# passes only in its line, so the key holds its format, without its \n.
 FIXED = {
     # An overlay's or floating window's name, a literal in the host's table: the command bar, Peek.
     ("app/platform/mac/host.mm", "overlay.name"),
@@ -423,7 +424,9 @@ FIXED = {
     ("app/platform/windows/host.cc", "FloatingName(hwnd)"),
     ("app/platform/windows/host.cc", "kOverlayNames[index]"),
     ("app/platform/windows/host.cc", "kOverlayNames[overlay]"),
-    ("app/platform/windows/host.cc", "name"),
+    ("app/platform/windows/host.cc",
+     "browser: %s leaves the keyboard: its window is no longer in front", "name"),
+    ("app/platform/windows/host.cc", "browser: %s takes the keyboard back from its window", "name"),
     # A class's name, AppKit's or the host's, saying which view has the keys.
     ("app/platform/mac/host.mm", "ClassName(responder)"),
     ("app/platform/mac/host.mm", "ClassName(window)"),
@@ -432,16 +435,16 @@ FIXED = {
     ("app/platform/mac/host.mm", "NSStringFromClass(to.class).UTF8String"),
     # The names the code gave the thread and the queue that went through exit() (#937), and the quit
     # Apple Event's four-letter reason.
-    ("app/platform/mac/host.mm", "name"),
+    ("app/platform/mac/host.mm", "browser: exit on thread %llx %s, queue %s", "name"),
     ("app/platform/mac/host.mm", "dispatch_queue_get_label(DISPATCH_CURRENT_QUEUE_LABEL)"),
-    ("app/platform/mac/host.mm", "why"),
+    ("app/platform/mac/host.mm", "browser: quit Apple Event from %d %s, reason %s", "why"),
     # A literal from the function's callers in the file: how Little ilo's window opened, which
     # window showed, the jump list's step, why updates are off or an update wasn't kept.
-    ("app/platform/mac/host.mm", "how"),
-    ("app/platform/windows/host.cc", "what"),
-    ("app/platform/windows/host.cc", "step"),
-    ("app/platform/windows/updates.cc", "off"),
-    ("app/platform/windows/updates.cc", "wrong"),
+    ("app/platform/mac/host.mm", "browser: little window %s", "how"),
+    ("app/platform/windows/host.cc", "browser: %s window shown", "what"),
+    ("app/platform/windows/host.cc", "browser: jump list refused at %s: 0x%08lx", "step"),
+    ("app/platform/windows/updates.cc", "browser: no updates: %s", "off"),
+    ("app/platform/windows/updates.cc", "browser: update %s: %s", "wrong"),
     # The Settings window's title, a section's name (Section::name in app/src/settings.rs).
     ("app/platform/mac/host.mm", "g_settings.title.UTF8String"),
     ("app/platform/windows/host.cc", "Utf8(title).c_str()"),
@@ -449,34 +452,37 @@ FIXED = {
     ("app/platform/mac/dock.mm", "name.UTF8String"),
     ("app/platform/mac/needs_you.mm", "NSApp.dockTile.badgeLabel.UTF8String"),
     ("app/platform/windows/host.cc", "std::to_string(count).c_str()"),
-    # The system's words for an error, or Sparkle's, naming nothing browsed.
+    # The system's words for an error, or Sparkle's, which a user's report of a failed update needs:
+    # they may name a path in the app's own folders, never a page.
     ("app/platform/mac/needs_you.mm", "error.localizedDescription.UTF8String"),
     ("app/platform/windows/host.cc", "error.message().c_str()"),
     ("app/platform/mac/updates.mm", "error.domain"),
     ("app/platform/mac/updates.mm", "error.localizedDescription"),
     ('app/platform/mac/updates.mm', 'error.userInfo[@"SUNoUpdateFoundReason"]'),
     ('app/platform/mac/updates.mm', '[@" " stringByAppendingString:cause.description]'),
-    ("app/platform/mac/updates.mm", "outcome"),
+    ("app/platform/mac/updates.mm", "update %@ prewarmed in %.0f ms, %@", "outcome"),
+    ("app/platform/mac/updates.mm", "update cycle ended: %@", "outcome"),
     # An update's version, the build's number and its feed or download's address: ilo's own service
     # or a fork's, never a page; the first line of its notes, from that feed; the app's own
     # signature.
-    ("app/platform/mac/updates.mm", "version"),
+    ("app/platform/mac/updates.mm", "update %@ prewarmed in %.0f ms, %@", "version"),
+    ("app/platform/mac/updates.mm", "update %@ signature checked in %.0f ms", "version"),
     ("app/platform/mac/updates.mm", "item.versionString"),
     ("app/platform/mac/updates.mm", "latest.versionString"),
     ("app/platform/mac/updates.mm", "update.versionString"),
-    ("app/platform/mac/updates.mm", "feed"),
-    ("app/platform/mac/updates.mm", "first"),
-    ("app/platform/mac/updates.mm", "signature"),
+    ("app/platform/mac/updates.mm", "update feed %@", "feed"),
+    ("app/platform/mac/updates.mm", "update %@ notes %@", "first"),
+    ("app/platform/mac/updates.mm", "the cookie key regranted to %@: %d", "signature"),
     ("app/platform/mac/updates.mm",
      '[NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleVersion"]'),
     ("app/platform/windows/updates.cc", "update.version.c_str()"),
-    ("app/platform/windows/updates.cc", "APP_BUILD"),
-    ("app/platform/windows/updates.cc", "url"),
+    ("app/platform/windows/updates.cc", "browser: update: none newer than build %s", "APP_BUILD"),
+    ("app/platform/windows/updates.cc", "browser: update feed %s", "url"),
     ("app/platform/windows/updates.cc", "url.c_str()"),
     # updates.mm's Log, whose values this rule reads at each call to it.
     ("app/platform/mac/updates.mm", "line.UTF8String"),
     # The file a driver's command names, as only drive.cc asks for a window's picture.
-    ("app/platform/windows/host.cc", "path"),
+    ("app/platform/windows/host.cc", "browser: drive: can't write %s", "path"),
 }
 # The drivers, started only under BROWSER_DRIVE (app/src/main.rs).
 DRIVERS = ("app/platform/mac/drive.mm", "app/platform/windows/drive.cc")
@@ -547,15 +553,17 @@ def split_top(code, start, end, at):
     return out
 
 
-def unfixed(path, text, code, start, end):
-    """The part of the expression text[start:end] that's neither a literal, a choice between
-    literals, nor in FIXED, or None if there's none."""
+def unfixed(path, form, text, code, start, end):
+    """The part of the expression text[start:end], written by the print whose format is `form`,
+    that's neither a literal, a choice between literals, nor in FIXED, or None if there's none."""
     while start < end and text[start].isspace():
         start += 1
     while end > start and text[end - 1].isspace():
         end -= 1
     expr = " ".join(text[start:end].split())
-    if re.fullmatch(r'@?"(?:[^"\\]|\\.)*"(\s*@?"(?:[^"\\]|\\.)*")*', expr) or (path, expr) in FIXED:
+    # A bare name says less of where it comes from, so FIXED lists it with its line's format.
+    key = (path, form, expr) if re.fullmatch(r"[A-Za-z_]\w*", expr) else (path, expr)
+    if re.fullmatch(r'@?"(?:[^"\\]|\\.)*"(\s*@?"(?:[^"\\]|\\.)*")*', expr) or key in FIXED:
         return None
     asks = split_top(code, start, end, "?")
     colons = split_top(code, asks[0] + 1, end, ":") if asks else []
@@ -565,8 +573,8 @@ def unfixed(path, text, code, start, end):
     q, colon = asks[0], colons[0]
     first = (start, q) if colon == q + 1 else (q + 1, colon)
     checked_only = colon != q + 1 and gated(text[start:q])
-    return ((None if checked_only else unfixed(path, text, code, *first)) or
-            unfixed(path, text, code, colon + 1, end))
+    return ((None if checked_only else unfixed(path, form, text, code, *first)) or
+            unfixed(path, form, text, code, colon + 1, end))
 
 
 def quiet_host_lines():
@@ -601,6 +609,7 @@ def quiet_host_lines():
             *commas, end = split_top(code, m.end(), len(code), ",")
             args = list(zip([m.end()] + [c + 1 for c in commas], commas + [end]))
             form = "".join(re.findall(r'"((?:[^"\\]|\\.)*)"', text[slice(*args[0])]))
+            form = form.removesuffix("\\n")
             strings, at = [], 1
             for s in SPECIFIER.finditer(form):
                 if s.group(0) == "%%":
@@ -610,13 +619,14 @@ def quiet_host_lines():
                     strings.append(args[at])
                 at += 1
             for value in strings:
-                expr = unfixed(path, text, code, *value)
+                expr = unfixed(path, form, text, code, *value)
                 if expr:
                     line = text.count("\n", 0, i) + 1
                     found.append((path, line, f"a print that writes {expr} in every launch, which "
                                   "can name what the user browses or types (#3776). Put it under "
                                   "`if (Checked())`, or add it to FIXED in tools/check-lints.py "
-                                  "with why it names nothing of the user's."))
+                                  f"with why it names nothing of the user's, a bare name with its "
+                                  f"format {form!r}."))
     return found
 
 
