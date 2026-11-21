@@ -6,6 +6,7 @@
 #include <memory>
 #include <string>
 
+#include "browser_core/shortcut_key.h"
 #include "build/build_config.h"
 
 namespace input {
@@ -24,6 +25,15 @@ namespace browser_core::platform {
 // nothing there, and on platforms without such layouts. On Windows it's the key's place on the US
 // layout, on every layout, as Chrome's Ctrl shortcuts there match by the virtual key.
 std::string LatinKey(const input::NativeWebKeyboardEvent& event);
+
+// The layout typing |event|'s key, for naming the split view's keys (SplitKeyName). Read only while
+// they're held (SplitKeysHeld), and made again only when the layout has changed since: on the Mac
+// and X11 when they say so, and on Wayland and Windows when the layout's identity isn't the one it
+// was made for. Every other key reads nothing.
+const SplitLayout& SplitLayoutOf(const input::NativeWebKeyboardEvent& event);
+
+// Stops hearing of the layout's changes, as the core stops.
+void StopHearingLayouts();
 
 #if BUILDFLAG(IS_MAC)
 // The key AppKit is handing out that views gave a widget as |character| alone, or null. A key that
