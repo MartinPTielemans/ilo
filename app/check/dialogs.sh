@@ -227,6 +227,21 @@ confirm_since() {
   expect '^browser: dialog confirm at ' "the alert didn't say where it draws OK" "$1"
   grep '^browser: dialog confirm at ' "$log" | tail -1 | sed 's/.* at //'
 }
+# Brings the alert resting since command $1 live from the page beside: ⌃⇧1, or a click on its
+# card when that page shares the alert's renderer, which the alert stops, as Chromium drops the
+# keys of a stopped renderer's page before ilo's shortcuts (#3770).
+live_from_beside() {
+  way=⌃⇧1
+  if [ -z "$shared" ]; then
+    send key 1 ctrl shift
+    return
+  fi
+  way="a click on the resting alert's card"
+  confirm=$(confirm_since "$1")
+  pane=$(echo "$panes" | sed -n 1p)
+  pane_w=${pane##* }
+  send click $((${pane%%,*} + ${pane_w%%x*} / 2)) $((${confirm#* } - 50))
+}
 # Fails with $1 if the alert went from its pane since command $2.
 stayed() {
   since "$2" | grep -q -e '^browser: dialog hidden$' -e '^browser: dialog withdrawn$' && fail "$1"
@@ -373,7 +388,10 @@ split_rests() {
   since "$body" | grep -q "^browser: page $page dialog answered" &&
     fail "a click on the resting alert's card answered it ($2)"
   # From the keys: ⌃⇧2 rests it, the page beside taking the keys, and ⌃⇧1 brings it live.
+  [ -z "$shared" ] ||
+    echo "skip: dialogs: ⌃⇧1 from the page beside the resting alert in a $2 split, which shares its stopped renderer, whose keys Chromium drops before ilo's shortcuts (#3770): a click on the card brings it live"
   send key 2 ctrl shift
+  at=$step
   expect "^browser: selected $beside\( in .*\)\{0,1\}\$" "⌃⇧2 from the alert didn't focus the pane beside ($2)"
   expect '^browser: dialog at rest$' "⌃⇧2 from the alert didn't rest it ($2)"
   [ -n "$shared" ] || {
@@ -381,16 +399,17 @@ split_rests() {
     expect "^browser: title $beside beside has ${typed}zq\$" \
       "after ⌃⇧2 from the alert the page beside didn't have the keys ($2): the keyboard is in $key, on $focus"
   }
-  send key 1 ctrl shift
-  expect "^browser: selected $page\( in .*\)\{0,1\}\$" "⌃⇧1 didn't focus the alert's pane ($2)"
-  expect '^browser: dialog live$' "⌃⇧1 didn't bring the alert live ($2)"
+  live_from_beside "$at"
+  expect "^browser: selected $page\( in .*\)\{0,1\}\$" "$way didn't focus the alert's pane ($2)"
+  expect '^browser: dialog live$' "$way didn't bring the alert live ($2)"
   capture "alert-split-$2-live-dark"
   # Live in the light tone, chosen while it rests.
   send key 2 ctrl shift
+  at=$step
   expect '^browser: dialog at rest$' "⌃⇧2 from the alert didn't rest it again ($2)"
   tone light
-  send key 1 ctrl shift
-  expect '^browser: dialog live$' "⌃⇧1 didn't bring the alert live again ($2)"
+  live_from_beside "$at"
+  expect '^browser: dialog live$' "$way didn't bring the alert live again ($2)"
   capture "alert-split-$2-live-light"
   send key 2 ctrl shift
   rested=$step
