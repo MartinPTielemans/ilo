@@ -34,8 +34,8 @@ use browser::window_frames::{self, Frame};
 use browser::{
     account, boost_editor, capture, command_bar, dialog, dock_dot, elevation::Level,
     folder_preview, hover_card, icon_picker, launch, launch_picture, link_preview, link_target,
-    log, log_in, menu, offer, passwords, site_controls, tab_switcher, theme_picker, toast, tooltip,
-    updates, zoom_hud,
+    log, log_always, log_in, menu, offer, passwords, site_controls, tab_switcher, theme_picker,
+    toast, tooltip, updates, zoom_hud,
 };
 use gpui::{
     AnyWindowHandle, App, ApplicationHandle, AsyncApp, Bounds, Context, Focusable, Image,
@@ -1038,6 +1038,9 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
     // every launch as safe start's is.
     let ad_blocker = ad_block_host::prepare(&given, &profile);
     args.extend(ad_blocker.switches());
+    // Chromium writes no ERROR line off a check, as the app's own log lines aren't (#3731). On
+    // Windows and Linux too, the core adds this before Chromium starts its logging.
+    args.extend(launch::quiet_log_level(browser::checked(), &given));
     let given = given.into_iter().filter(|arg| {
         !arg.starts_with(browser::safe_start::SWITCH)
             && ad_blocker.passes(arg)
