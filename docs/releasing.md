@@ -46,7 +46,7 @@ From that squash until the release's branch is cut at its version commit, main t
    - **The only reds allowed** are the runs, or steps of runs, in `app/check/quarantine.<os>`. They still run, but they don't fail a check, and each check's summary lists them under its runs.
    - **Any other red stops the release.** Fix it, or quarantine it under an open issue (`app/check/quarantine.sh` says how), before tagging. Never accept it at the gate.
    - **A quarantine line lasts 14 days.** Check scripts fails on a line older than that, or on one whose issue has closed.
-4. **Write the release's changelog entry** in [ilo-site](https://github.com/MartinPTielemans/ilo-site)'s `src/changelog.ts` from the notes, and merge it before tagging. Each update's notes and its first launch open `/changelog#<version>` on the site (`tools/appcast.sh`).
+4. **Write the release's changelog entry** in `site/src/changelog.ts` from the notes, with the day of the tag, and merge it before tagging. It stays off ilobrowser.com until the release is published, as the site's build shows only the releases GitHub lists as published (`.github/workflows/site.yml`). Each update's notes and its first launch open `/changelog#<version>` on the site (`tools/appcast.sh`).
 5. **Tag the commit and push the tag.** The release's notes are the tag's message, written in Markdown with no title line, since GitHub shows the release's name above them:
 
    ```bash
@@ -105,8 +105,8 @@ Once the draft is published:
 
 - The `publish` job puts its `appcast.xml` in the release `updates`, the feed the Mac and Windows builds read (`app/branding/update-feed`).
 - The Linux build, already in the Flatpak repository unseen, goes live.
-- [ilo-site](https://github.com/MartinPTielemans/ilo-site)'s release workflow puts the demo on [ilobrowser.com](https://ilobrowser.com), links its source to the tag and deploys the site, whose download buttons link the newest release. It checks every half hour, or at once with `SITE_DISPATCH_TOKEN`.
-- Martin's Grok bot announces it: it records clips and a film of the new features on the published build, adds the clips to the site's changelog through its own ilo-site pull request, and drafts the post. With `RELEASE_WEBHOOK_URL` and `RELEASE_WEBHOOK_KEY` set, the `announce` job tells it at once; without them, it finds the release at one of its three daily check-ins, at 10:00, 16:00 and 21:00 Copenhagen time. The release never waits for it.
+- The `site` job deploys [ilobrowser.com](https://ilobrowser.com) (`.github/workflows/site.yml`). Its changelog shows the release's entry, its live demo becomes the release's `ilo-demo.tar.gz` with its source linked to the tag's commit, and its download buttons link the newest release. A prerelease deploys nothing.
+- Martin's Grok bot announces it: it records clips and a film of the new features on the published build, adds the clips to the site's changelog through its own pull request, and drafts the post. With `RELEASE_WEBHOOK_URL` and `RELEASE_WEBHOOK_KEY` set, the `announce` job tells it at once; without them, it finds the release at one of its three daily check-ins, at 10:00, 16:00 and 21:00 Copenhagen time. The release never waits for it.
 
 Every other release in this repository, such as `updates` and `nightly`, is made with `--latest=false`, or the site's buttons would link it. The prebuilt engines live in [ilo-engine](https://github.com/MartinPTielemans/ilo-engine), the repository `engine/prebuilt.ini` names, as `engine-mac-`, `engine-linux-` and `engine-windows-<commit>`, also with `--latest=false`.
 
@@ -148,11 +148,20 @@ The profile's own date is 18 years out, but the certificate it lists expires on 
 
 and the repository variable `FLATPAK_REPO_URL`, the bucket's public address, such as `https://flatpak.<domain>/`.
 
+**The site.** ilobrowser.com is a Cloudflare Worker (`site/wrangler.jsonc`), and its secrets belong to the GitHub environment `ilobrowser.com`, whose deployment rule allows `main` and `v*` tags alone, so `site.yml`'s deploy job is the only job that can read them:
+
+| In the environment | What |
+|---|---|
+| `CLOUDFLARE_API_TOKEN` (secret) | A token with Workers Scripts Edit on the account |
+| `CLOUDFLARE_ACCOUNT_ID` (secret) | The account's ID |
+| `SITE_DEPLOY` (variable) | `live` to deploy ilobrowser.com from a push to main and from a published release. Unset, only a preview goes up |
+
+Without the secrets the deploy job deploys nothing and says so. With them, `gh workflow run site.yml --ref main` uploads the site to the Worker `ilo-site-preview` on workers.dev to compare with the live site, and once `SITE_DEPLOY` is `live`, `-f live=true` deploys ilobrowser.com.
+
 **Outside this repository.**
 
 | Secret | What |
 |---|---|
-| `SITE_DISPATCH_TOKEN` | A fine-grained token with Contents read and write on `MartinPTielemans/ilo-site` alone, so the site takes a release at once |
 | `ENGINE_RELEASE_TOKEN` | A fine-grained token with Contents read and write on `MartinPTielemans/ilo-engine` alone, for the engine workflows |
 | `RELEASE_WEBHOOK_URL` | The announcement bot's webhook, which a published release POSTs `{"tag", "url"}` to, so the bot hears of it at once |
 | `RELEASE_WEBHOOK_KEY` | The bearer key that webhook takes |

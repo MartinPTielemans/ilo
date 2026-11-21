@@ -1,0 +1,3 @@
+# Cloudflare reads this at deploy. 0.1.0 and 0.1.1 open /whats-new from Help › What's New, so it
+# leads to the changelog that replaced it, and a browser keeps the #version on the way.
+/whats-new /changelog 301
