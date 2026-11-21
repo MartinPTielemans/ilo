@@ -54,6 +54,18 @@ impl Proposal {
         ))
     }
 
+    /// A proposal of the read `arguments` describe on `origin`, which gave `rows`, as a card shows.
+    #[cfg(test)]
+    pub(crate) fn of(arguments: &Value, origin: &str, rows: Vec<Row>) -> Proposal {
+        Proposal {
+            read: definition(arguments, origin).expect("not a read"),
+            sample: Vec::new(),
+            rows,
+            changes: Vec::new(),
+            profile: 1,
+        }
+    }
+
     /// The read block's name for a screen reader: "{name}, {n} columns: {columns}".
     pub fn heard(&self) -> String {
         let columns: Vec<&str> = (self.read.columns.iter())
