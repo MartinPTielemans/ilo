@@ -1,9 +1,8 @@
 # check.sh runs this at 990, only when named.
 # A probe for #3621, never to land: on Windows, where the page view sits against the window's
 # client area and the display's work area, at launch, maximized, restored and resized, with the
-# sidebar shown and hidden, and what size the page itself takes. It runs the check's build, then
-# the 0.2.2 release from its installer, as the report's is. It measures; it fails only when it
-# can't.
+# sidebar shown and hidden, and what size the page itself takes. It runs the 0.2.2 release, the
+# report's, then the check's build. It measures; it fails only when it can't.
 
 if ! windows; then
   echo "skip: fit3621 is a Windows probe"
@@ -137,32 +136,17 @@ PS
     quit
   }
   : > "$out/fit3621.txt"
-  # The 0.2.2 release, from its installer, for this user alone, into the check's folder, with
-  # Inno's log, given 3 minutes. If it doesn't finish, the same installer's files, unpacked by
-  # innoextract, which are what it installs.
-  curl -fsSL -o "$out/ilo-022-setup.exe" \
-    https://github.com/MartinPTielemans/ilo/releases/download/v0.2.2/ilo-windows-x64-setup.exe ||
-    fail "the 0.2.2 installer didn't download"
+  # The 0.2.2 release's own files, from its MSIX, which the release packs from the same build as
+  # the installer the report's is from (release.yml's Package step). The installer itself, run
+  # silently on the runner, never ended (the probe's first two runs).
+  curl -fsSL -o "$out/ilo-022.msix" \
+    https://github.com/MartinPTielemans/ilo/releases/download/v0.2.2/ilo-windows-x64.msix ||
+    fail "the 0.2.2 MSIX didn't download"
   release="$PWD/$out/ilo-022"
-  timeout 180 "$out/ilo-022-setup.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CURRENTUSER \
-    "/DIR=$(cygpath -w "$release")" "/LOG=$(cygpath -w "$PWD/$out/ilo-022-setup.log")"
-  echo "fit3621: the installer ended $? with chrome.exe $([ -e "$release/chrome.exe" ] && echo there || echo missing)"
-  if [ ! -e "$release/chrome.exe" ]; then
-    taskkill //F //IM ilo-022-setup.exe //T > /dev/null 2>&1 || true
-    taskkill //F //IM ilo-022-setup.tmp //T > /dev/null 2>&1 || true
-    curl -fsSL -o "$out/innoextract.zip" \
-      https://github.com/dscharrer/innoextract/releases/download/1.9/innoextract-1.9-windows.zip ||
-      fail "innoextract didn't download"
-    (cd "$out" && unzip -oq innoextract.zip -d innoextract) || fail "innoextract didn't unzip"
-    rm -rf "$out/ilo-022-x"
-    "$out/innoextract/innoextract.exe" -s -d "$(cygpath -w "$PWD/$out/ilo-022-x")" \
-      "$(cygpath -w "$PWD/$out/ilo-022-setup.exe")" || fail "innoextract couldn't unpack 0.2.2"
-    release="$PWD/$out/ilo-022-x/app"
-    [ -e "$release/chrome.exe" ] || fail "0.2.2 unpacked with no app/chrome.exe: $(ls "$out/ilo-022-x")"
-    echo "fit3621: 0.2.2 unpacked by innoextract"
-  fi
-  # Anything the installer started from the folder ends first.
-  pkill -f "$(cygpath -m "$release")" 2> /dev/null || true
+  rm -rf "$release"
+  unzip -oq "$out/ilo-022.msix" -d "$release" || fail "the 0.2.2 MSIX didn't unzip"
+  [ -e "$release/chrome.exe" ] || fail "the 0.2.2 MSIX has no chrome.exe: $(ls "$release" | head)"
+  echo "fit3621: 0.2.2 unpacked from its MSIX"
   build_app=$app build_procs=$procs
   app=$release
   procs="$(cygpath -m "$app/chrome.exe")"
