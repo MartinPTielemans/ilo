@@ -11,13 +11,14 @@ name: Flatpak
 on:
   # Branches only: an engine release's tag, pushed with the owner's token, starts nothing here. Also
   # the check runs its steps do (Sign in, Policies, Paste and Page menu) and sync-account's server,
-  # which change apart from the packaging (#3059), and the action and script it installs its
-  # packages with (#3760).
+  # which change apart from the packaging (#3059), the action and script it installs its packages
+  # with (#3760), and the script that keeps the app's backtraces (#3859).
   push:
     branches: ['**']
     paths:
       - app/platform/linux/flatpak/**
       - tools/flatpak.sh
+      - tools/flatpak-cores.sh
       - .github/workflows/flatpak.yml
       - .github/actions/apt-install/**
       - .github/scripts/apt-mirrors.sh
@@ -131,6 +132,13 @@ jobs:
           path: app/build/ilo.flatpak
           retention-days: 14
 
+      # When the app dies on a signal in a step below, its backtrace is kept as text (#3859).
+      - name: Catch the app's cores
+        id: catch
+        if: ${{ steps.engine.outputs.found == 'true' }}
+        continue-on-error: true
+        run: tools/flatpak-cores.sh catch "$RUNNER_TEMP/cores"
+
       - name: Install and start
         if: ${{ steps.engine.outputs.found == 'true' }}
         run: |
@@ -219,6 +227,9 @@ jobs:
             echo "::notice::Skipped crash dumps: the engine (${engine:0:12}) predates the patch for them."
             exit 0
           fi
+          # It crashes the app on purpose, so no core of it is kept.
+          touch "$RUNNER_TEMP/cores/hold"
+          trap 'rm -f "$RUNNER_TEMP/cores/hold"' EXIT
           dbus-run-session -- xvfb-run -a -s '-screen 0 1280x800x24' \
             tools/flatpak-crashes.sh app/build/flatpak-crashes
 
@@ -351,6 +362,29 @@ jobs:
         with:
           name: ilo-flatpak-page-menu
           path: app/build/check
+          if-no-files-found: ignore
+
+      # Nothing runs past this on a job whose app never died on a signal.
+      - id: cores
+        if: ${{ always() && steps.catch.outcome == 'success' }}
+        run: |
+          if compgen -G "$RUNNER_TEMP/cores/*.core" > /dev/null; then
+            echo found=true >> "$GITHUB_OUTPUT"
+          fi
+      - if: ${{ always() && steps.cores.outputs.found == 'true' }}
+        continue-on-error: true
+        uses: ./.github/actions/apt-install
+        with:
+          packages: gdb
+      - name: Crash traces
+        if: ${{ always() && steps.cores.outputs.found == 'true' }}
+        continue-on-error: true
+        run: tools/flatpak-cores.sh read "$RUNNER_TEMP/cores" app/build/flatpak-traces
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() && steps.cores.outputs.found == 'true' }}
+        with:
+          name: ilo-flatpak-traces
+          path: app/build/flatpak-traces
           if-no-files-found: ignore
 
       - uses: actions/upload-artifact@v4
