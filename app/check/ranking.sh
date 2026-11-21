@@ -170,12 +170,18 @@ probe_goes=""
 send key n cmd
 expect '^browser: window opened [0-9]' "⌘N didn't open a second window"
 probe_second=$(grep -c '^browser: window opened ' "$log")
-probe_first="⌘T straight after ⌘N opened the new window's bar"
 send key t cmd
-expect '^browser: command (new-tab via (ui|page)|bar closes again on new-tab)$' \
-  "⌘T straight after ⌘N was neither the browser's new tab nor the bar's close"
+# expect's grep is a basic one, with no alternation, so each way is looked for in turn.
+probe_t=
+for _ in $(seq 100); do
+  for way in 'command new-tab via ui' 'command new-tab via page' 'command bar closes again on new-tab'; do
+    logged "^browser: $way\$" && probe_t=$way && break 2
+  done
+  sleep 0.1
+done
+[ -n "$probe_t" ] || fail "⌘T straight after ⌘N was neither the browser's new tab nor the bar's close in 10 s: $(since | tail -20)"
+probe_first="⌘T straight after ⌘N logged \"$probe_t\""
 if logged '^browser: command bar closes again on new-tab$' "$step"; then
-  probe_first="⌘T straight after ⌘N closed the new window's bar"
   expect '^browser: command bar hidden$' "the bar ⌘T closed didn't hide"
   send key t cmd
 fi
