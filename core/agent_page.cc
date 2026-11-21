@@ -363,9 +363,9 @@ std::string ChoiceSelector(std::string_view kind, const std::optional<std::strin
   return selector;
 }
 
-void Report(bc_id tab, uint64_t request, std::string text, bool error) {
+void Report(bc_id tab, uint64_t request, std::string text, bool error, bc_agent_failure failure) {
   if (Host().agent_page_done) {
-    Host().agent_page_done(Host().context, tab, request, text.c_str(), error);
+    Host().agent_page_done(Host().context, tab, request, text.c_str(), error, failure);
   }
 }
 
@@ -660,7 +660,7 @@ bool AgentPage::IsWebPage() {
   return GetWebContents().GetLastCommittedURL().SchemeIsHTTPOrHTTPS();
 }
 
-std::string AgentPage::NotWebPage() {
+void AgentPage::FailNotWebPage() {
   content::WebContents& contents = GetWebContents();
   // A tab whose first page hasn't committed is still on its empty start page, which isn't the
   // page's fault: the agent can wait for it (#1461).
@@ -671,18 +671,20 @@ std::string AgentPage::NotWebPage() {
     if (base::StartsWith(site, "www.")) {
       site.remove_prefix(4);
     }
-    return base::StrCat({site, " is still loading after ",
-                         base::NumberToString(kLoadTimeout.InSeconds()),
-                         " s. Wait, or try again."});
+    Fail(base::StrCat({site, " is still loading after ",
+                       base::NumberToString(kLoadTimeout.InSeconds()), " s. Wait, or try again."}),
+         BC_AGENT_FAILURE_LOADING);
+    return;
   }
-  return "The tab's page isn't an http or https page, the only pages agents may use.";
+  Fail("The tab's page isn't an http or https page, the only pages agents may use.",
+       BC_AGENT_FAILURE_NOT_WEB_PAGE);
 }
 
 void AgentPage::Run() {
   const int action = job_->action;
   const bool history = action == BC_AGENT_PAGE_BACK || action == BC_AGENT_PAGE_FORWARD;
   if (!history && !IsWebPage()) {
-    Fail(NotWebPage());
+    FailNotWebPage();
     return;
   }
   // An element in a frame that's gone, or now holds what isn't a web page's, is off limits.
@@ -910,7 +912,8 @@ void AgentPage::Quiet() {
 void AgentPage::Still(base::ListValue last) {
   // After an action, the page may have gone somewhere agents may not.
   if (!IsWebPage()) {
-    Fail("The tab's page isn't an http or https page, the only pages agents may use.");
+    Fail("The tab's page isn't an http or https page, the only pages agents may use.",
+         BC_AGENT_FAILURE_NOT_WEB_PAGE);
     return;
   }
   Send("Accessibility.getFullAXTree", base::DictValue(),
@@ -1199,7 +1202,7 @@ void AgentPage::Choose(const base::ListValue& nodes, const std::vector<std::stri
     if (choosing_ == Choosing::kOpened) {
       why += " Clicking the element showed them, so they may still be open.";
     }
-    Fail(std::move(why));
+    Fail(std::move(why), matches.empty() ? BC_AGENT_FAILURE_NO_OPTION : BC_AGENT_FAILURE_NONE);
     return;
   }
   const Option& option = *matches.front();
@@ -1364,7 +1367,8 @@ void AgentPage::Type(bool submit) {
                    if (*password) {
                      page->Fail(
                          "Password fields are off limits to agents: signing in is the "
-                         "user's to do.");
+                         "user's to do.",
+                         BC_AGENT_FAILURE_PASSWORD_FIELD);
                      return;
                    }
                    // Where it is, for the agent's pointer, then the typing, which focusing
@@ -1654,7 +1658,8 @@ void AgentPage::History(bool forward) {
   }
   content::NavigationEntry* entry = controller.GetEntryAtOffset(forward ? 1 : -1);
   if (!entry || !entry->GetURL().SchemeIsHTTPOrHTTPS()) {
-    Fail("That page isn't an http or https page, the only pages agents may open.");
+    Fail("That page isn't an http or https page, the only pages agents may open.",
+         BC_AGENT_FAILURE_NOT_WEB_PAGE);
     return;
   }
   [[maybe_unused]] auto navigations = forward ? controller.GoForward() : controller.GoBack();
@@ -2184,7 +2189,7 @@ void AgentPage::KeepTyped(int64_t element, std::u16string sent) {
 void AgentPage::Snapshot() {
   // After an action, the page may have gone somewhere agents may not.
   if (!IsWebPage()) {
-    Fail(NotWebPage());
+    FailNotWebPage();
     return;
   }
   Send("Accessibility.getFullAXTree", base::DictValue(),
@@ -2985,7 +2990,7 @@ void AgentPage::AppRefused(content::WebContents* contents, const GURL& url) {
           page->weak_factory_.GetWeakPtr(), url));
 }
 
-void AgentPage::Answer(std::string text, bool error) {
+void AgentPage::Answer(std::string text, bool error, bc_agent_failure failure) {
   if (!job_) {
     return;
   }
@@ -3015,11 +3020,11 @@ void AgentPage::Answer(std::string text, bool error) {
   } else if (download_starting_.IsRunning()) {
     // Its page didn't change, or the tab has none, as the navigation became a download.
     AnswerHeld();
-    held_ = Held{request, std::move(text), error};
+    held_ = Held{request, std::move(text), error, failure};
   } else {
     // Posted, so the app never hears inside its own bc_agent_page.
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(&Report, tab_, request, std::move(text), error));
+        FROM_HERE, base::BindOnce(&Report, tab_, request, std::move(text), error, failure));
   }
   Next();
   if (!job_) {
@@ -3031,8 +3036,8 @@ void AgentPage::Answer(std::string text, bool error) {
   }
 }
 
-void AgentPage::Fail(std::string why) {
-  Answer(std::move(why), /*error=*/true);
+void AgentPage::Fail(std::string why, bc_agent_failure failure) {
+  Answer(std::move(why), /*error=*/true, failure);
 }
 
 void AgentPage::EndWaiting(std::string why, std::optional<std::string> unstarted) {
@@ -3046,7 +3051,8 @@ void AgentPage::EndWaiting(std::string why, std::optional<std::string> unstarted
   Fail(std::move(why));
   for (const Job& job : queued) {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(&Report, tab_, job.request, *unstarted, true));
+        FROM_HERE,
+        base::BindOnce(&Report, tab_, job.request, *unstarted, true, BC_AGENT_FAILURE_NONE));
   }
 }
 
@@ -3087,8 +3093,8 @@ void AgentPage::DialogShown(bc_id tab, int kind) {
 void AgentPage::AnswerHeld() {
   if (std::optional<Held> held = std::exchange(held_, std::nullopt)) {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE,
-        base::BindOnce(&Report, tab_, held->request, std::move(held->text), held->error));
+        FROM_HERE, base::BindOnce(&Report, tab_, held->request, std::move(held->text), held->error,
+                                  held->failure));
   }
 }
 
@@ -3105,7 +3111,8 @@ void AgentPage::LetGo() {
   for (const Job& job : owed) {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(&Report, tab_, job.request,
-                                  std::string("The agent's session with the tab ended."), true));
+                                  std::string("The agent's session with the tab ended."), true,
+                                  BC_AGENT_FAILURE_NONE));
   }
   weak_factory_.InvalidateWeakPtrs();
   // What the agent typed is kept only to compare with while its session lasts.

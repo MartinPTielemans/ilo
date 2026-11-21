@@ -614,26 +614,32 @@ bool bc_agent_may_act(const char* agent,
                       bc_id tab,
                       const char* action,
                       char* reason,
-                      size_t capacity) {
+                      size_t capacity,
+                      int* failure) {
   content::WebContents* contents = browser_core::Tab::FromId(tab);
   // An action no agent may do is refused whatever the tab, so that's the reason given.
   std::string refused = browser_core::RefusedAction(action ? action : "");
+  bc_agent_failure code = refused.empty() ? BC_AGENT_FAILURE_NONE : BC_AGENT_FAILURE_ACTION;
   if (refused.empty() && tab && !browser_core::Tab::Get(tab) &&
       browser_core::FromEarlierLaunch(tab)) {
     // Its id is from before ilo last started, and names no tab now (#1449).
     refused = "ilo restarted, so the tabs you knew are gone. Call list_tabs for the tabs open now.";
+    code = BC_AGENT_FAILURE_RESTARTED;
   }
   if (refused.empty() && (!agent || !*agent || !browser_core::Space::AgentMayAct(agent, tab))) {
     refused = "The tab isn't in the agent's own Space.";
+    code = BC_AGENT_FAILURE_NOT_ITS_SPACE;
   }
   if (refused.empty() && browser_core::IsHeld(tab)) {
     refused = "The user has this tab until they hand it back. Ask for it with ask_for_tab.";
+    code = BC_AGENT_FAILURE_HELD;
   }
   if (refused.empty() && contents) {
     // The user's clicks there are Point's until they send or close it.
     const browser_core::PagePoint* point = browser_core::PagePoint::FromWebContents(contents);
     if (point && point->on()) {
       refused = "The user is pointing at this page. Try again once they've answered.";
+      code = BC_AGENT_FAILURE_POINTING;
     }
   }
   if (refused.empty() && contents &&
@@ -642,14 +648,19 @@ bool bc_agent_may_act(const char* agent,
     refused =
         "The tab shows its page in the system's engine, where the browser can't keep an agent's "
         "rules.";
+    code = BC_AGENT_FAILURE_SYSTEM_ENGINE;
   }
   CopyString(refused, reason, capacity);
+  if (failure) {
+    *failure = code;
+  }
   if (browser_core::Host().agent_activity) {
     const bc_agent_activity entry = {
         .agent = agent ? agent : "",
         .tab = tab,
         .action = action ? action : "",
         .refused = refused.c_str(),
+        .failure = code,
     };
     browser_core::Host().agent_activity(browser_core::Host().context, &entry);
   }
@@ -817,7 +828,8 @@ void bc_agent_page(const char* agent,
                          if (browser_core::Host().agent_page_done) {
                            browser_core::Host().agent_page_done(
                                browser_core::Host().context, tab, request,
-                               "The tab isn't in the agent's own Space.", true);
+                               "The tab isn't in the agent's own Space.", true,
+                               BC_AGENT_FAILURE_NOT_ITS_SPACE);
                          }
                        },
                        tab, request));
@@ -840,7 +852,8 @@ void bc_agent_request(const char* agent,
       agent && browser_core::Space::AgentMayAct(agent, tab) && !browser_core::IsHeld(tab);
   content::WebContents* contents = may ? browser_core::Window::PageOf(tab) : nullptr;
   if (!contents) {
-    browser_core::RefuseAgentRequest(request, "The tab isn't in the agent's own Space.");
+    browser_core::RefuseAgentRequest(request, "The tab isn't in the agent's own Space.",
+                                     BC_AGENT_FAILURE_NOT_ITS_SPACE);
     return;
   }
   browser_core::SendAgentRequest(*contents, request, method ? method : "", url ? url : "",

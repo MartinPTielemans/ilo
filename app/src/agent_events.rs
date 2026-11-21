@@ -71,6 +71,7 @@ pub(crate) unsafe extern "C" fn agent_page_done(
     request: u64,
     text: *const c_char,
     error: bool,
+    _failure: c_int,
 ) {
     let text = unsafe { CStr::from_ptr(text) }
         .to_string_lossy()
