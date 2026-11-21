@@ -8897,9 +8897,10 @@ mod sessions {
         );
     }
 
-    /// The card's Stop stops the client on every connection, and each connection's card: its calls
-    /// under way are answered that the user stopped it, and its connections close, so it shows the
-    /// browser's server as gone, with "stopped by the user" in its activity log. Reconnected, its
+    /// Either card's Stop stops the client on every connection, and each connection's card, which
+    /// says it stopped: its calls under way are answered that the user stopped it, and its
+    /// connections close, so it shows the browser's server as gone, with one "stopped by the user"
+    /// in its activity log, which each card's record has once. Reconnected, its
     /// next call is a card of its own, and ⌘. from its page, which stops the client, stops that
     /// card too.
     #[gpui::test]
@@ -8941,22 +8942,43 @@ mod sessions {
             std::time::Instant::now(),
             cx,
         );
-        assert_eq!(cards(&agents, cx).len(), 2);
+        let shown = cards(&agents, cx);
+        assert_eq!(shown.len(), 2);
+        // The second card's Stop, which stops the client and so the first card too.
+        let second = (shown.iter().find(|card| card.agent != agent.as_str()))
+            .map(|card| card.agent.to_string())
+            .expect("the second connection's card");
         agents.update(cx, |agents, cx| {
-            agents.task_action(&agent, TaskAction::Stop, cx)
+            agents.task_action(&second, TaskAction::Stop, cx)
         });
         assert_eq!(waiting.recv().unwrap().text, STOPPED);
         assert_eq!(other.recv().unwrap().text, STOPPED);
         assert_eq!(*browser.disconnected.borrow(), ["claude-code"]);
-        assert!(cards(&agents, cx).iter().all(|card| card.dot == Dot::Ended));
+        for card in cards(&agents, cx) {
+            assert_eq!(card.dot, Dot::Ended);
+            assert!(card.status.starts_with("Stopped"), "{:?}", card.status);
+        }
         for reader in &mut connections {
             assert_eq!(server::read_line(reader), None, "a connection stayed open");
         }
-        assert!(
-            log(&agents, "claude-code", cx)
-                .iter()
-                .any(|entry| entry.0 == "stopped by the user")
+        let stops = |actions: Vec<&str>| {
+            (actions.into_iter())
+                .filter(|action| *action == "stopped by the user")
+                .count()
+        };
+        let logged = log(&agents, "claude-code", cx);
+        assert_eq!(
+            stops(logged.iter().map(|entry| entry.0.as_str()).collect()),
+            1,
+            "{logged:?}"
         );
+        // Each card's record has the one Stop, as the client's.
+        let kept = agents.update(cx, |agents, cx| agents.take_ended(cx));
+        assert_eq!(kept.len(), 2);
+        for (_, past) in &kept {
+            let actions = past.steps.iter().map(|step| step.action.as_str()).collect();
+            assert_eq!(stops(actions), 1, "{:?}", past.steps);
+        }
 
         call_as(&agents, 4, "read_page", json!({ "tab": 20 }), cx);
         assert_eq!(cards(&agents, cx)[0].dot, Dot::Working, "a new session");

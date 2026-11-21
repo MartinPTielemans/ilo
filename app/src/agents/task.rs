@@ -1394,24 +1394,24 @@ impl Agents {
         if !matches!(task.state, State::Working | State::Asking { .. }) {
             return;
         }
-        task.state = State::Stopped;
-        task.ended = Some(SystemTime::now());
         task.asking = None;
         task.writing = None;
         task.waiting = None;
+        // A session's agent is its client's, whose calls under way the user stops, on each of its
+        // connections, as the agent path always has. Its Stop is logged before each of its
+        // sessions ends, this one too, so each one's record has it (session_stopped).
+        if let Some(session) = &task.session {
+            let client = session.agent.clone();
+            self.stop_agent(&client, cx);
+            cx.notify();
+            return;
+        }
+        task.state = State::Stopped;
+        task.ended = Some(SystemTime::now());
         if let Some(process) = task.process.as_mut() {
             process.interrupt();
         }
-        // A session's agent is its client's, whose calls under way the user stops, on each of its
-        // connections, as the agent path always has.
-        let driver = match &mut task.session {
-            Some(session) => {
-                session.idle = None;
-                session.agent.clone()
-            }
-            None => agent.to_string(),
-        };
-        self.stop_agent(&driver, cx);
+        self.stop_agent(agent, cx);
         cx.notify();
     }
 
@@ -2145,8 +2145,8 @@ impl Agents {
                 .collect();
             // Its activity log: the entries of its agent, a session's client's or the task's own,
             // from when it started to when it ended, a run's steps each its own.
-            // A session's, of its own connection's alone, as its client's others are cards of their
-            // own.
+            // A session's, of its own connection's and its client's own, as a Stop's, its client's
+            // other connections being cards of their own.
             let (logged_as, connection, answers) = match (&task.session, task.cli) {
                 (Some(session), _) => {
                     let agent = session.agent.clone();
@@ -2159,7 +2159,7 @@ impl Agents {
             let entries = (self.log.iter())
                 .filter(|entry| {
                     entry.agent == logged_as
-                        && entry.connection == connection
+                        && (entry.connection == connection || entry.connection == 0)
                         && entry.at >= from
                         && entry.at <= to
                 })
@@ -2248,7 +2248,7 @@ impl Agents {
     /// are stopped.
     pub(super) fn session_stopped(&mut self, agent: &str) {
         let live = (self.tasks.tasks.iter_mut()).filter(|task| {
-            task.state == State::Working
+            matches!(task.state, State::Working | State::Asking { .. })
                 && (task.session.as_ref()).is_some_and(|session| session.agent == agent)
         });
         for task in live {
