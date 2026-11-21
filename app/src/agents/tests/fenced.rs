@@ -26,7 +26,7 @@ fn arrives(agents: &Entity<Agents>, browser: &Made, tab: u64, url: &str, cx: &mu
         each.2 = "MyBank";
         each.3 = url;
     }
-    agents.update(cx, |agents, _| agents.tab_loaded(tab, url));
+    agents.update(cx, |agents, _| agents.tab_at(tab, url));
 }
 
 /// A page with a button that goes somewhere.
@@ -438,4 +438,367 @@ fn the_fenced_sites_are_kept(cx: &mut TestAppContext) {
     let kept = later.read_with(cx, |agents, _| agents.fenced().to_vec());
     assert_eq!(kept, ["localhost"]);
     std::fs::remove_dir_all(dir).ok();
+}
+
+/// A wait or a check whose tab a page takes to a fenced site while it looks ends at once with that
+/// alone: the same bytes whether the text it looks for is on the page or not, and whether the page
+/// is busy or settled, so no try tells the agent anything of the page; and it isn't read for the
+/// agent again (#3724).
+#[gpui::test]
+fn a_wait_on_a_tab_that_came_to_a_fenced_site_says_the_same_whatever_the_page(
+    cx: &mut TestAppContext,
+) {
+    let busy = |tree: String| {
+        let mut tree: Value = serde_json::from_str(&tree).unwrap();
+        tree["busy"] = json!(true);
+        tree.to_string()
+    };
+    let mut answers = Vec::new();
+    for (step, tree) in [
+        (
+            json!({ "action": "wait", "text": "Balance" }),
+            Some(bank_tree()),
+        ),
+        (
+            json!({ "action": "wait", "text": "Balance" }),
+            Some(more_tree()),
+        ),
+        (
+            json!({ "action": "check", "text": "Balance" }),
+            Some(bank_tree()),
+        ),
+        (
+            json!({ "action": "check", "text": "Balance" }),
+            Some(more_tree()),
+        ),
+        (
+            json!({ "action": "wait", "gone": "Balance" }),
+            Some(bank_tree()),
+        ),
+        (
+            json!({ "action": "wait", "gone": "Balance" }),
+            Some(more_tree()),
+        ),
+        (
+            json!({ "action": "wait", "until": "quiet" }),
+            Some(bank_tree()),
+        ),
+        (
+            json!({ "action": "wait", "until": "quiet" }),
+            Some(busy(bank_tree())),
+        ),
+        // A wait of time alone looks once its time is up: by then the page is the fence's.
+        (json!({ "action": "wait", "seconds": 1 }), None),
+    ] {
+        let (agents, browser) = fenced(cx);
+        let steps = json!({ "tab": 20, "steps": [step.clone()] });
+        let run = call(&agents, "claude-code", "run_steps", steps, cx);
+        arrives(&agents, &browser, 20, "https://mybank.example/", cx);
+        if let Some(tree) = tree {
+            let request = browser.pages.borrow().last().unwrap().1;
+            agents.update(cx, |agents, cx| agents.page_done(request, tree, false, cx));
+        }
+        let looks = browser.pages.borrow().len();
+        cx.executor().advance_clock(Duration::from_secs(6));
+        cx.run_until_parked();
+        assert_eq!(
+            browser.pages.borrow().len(),
+            looks,
+            "{step}: it read the page again"
+        );
+        answers.push((step, run.recv().unwrap()));
+    }
+    let said = format!("Ran 1 steps.\n1. {}", fence::withheld(20, "mybank.example"));
+    for (step, answer) in answers {
+        assert_eq!(answer, ToolResult::text(said.clone()), "{step}");
+    }
+}
+
+/// What an answer about a tab that came to a fenced site may say: its number, and the site in the
+/// withheld line alone, with no title, address or words of its page, nor which dialog it shows.
+fn says_nothing_of_the_page(what: &str, answer: &ToolResult) {
+    let text = answer
+        .text
+        .replace(&fence::withheld(20, "mybank.example"), "");
+    for told in ["mybank", "MyBank", "Balance", "balance", "alert", "dialog"] {
+        assert!(
+            !text.contains(told),
+            "{what} told {told:?}: {}",
+            answer.text
+        );
+    }
+}
+
+/// Every other answer about a tab that came to a fenced site, the split views', pins', a close, a
+/// handoff, asking for it back and sorting by site, says nothing of its page; sorting places it as
+/// a tab of no site, not beside its site's others; and so with its page showing a dialog (#3724).
+#[gpui::test]
+fn every_other_answer_about_a_tab_that_came_to_a_fenced_site_is_without_its_page(
+    cx: &mut TestAppContext,
+) {
+    let tab = |tab| json!({ "tab": tab });
+    let reason = json!({ "tab": 20, "reason": "Check the balance" });
+    let calls: [&[(&str, Value)]; 11] = [
+        &[("list_split", tab(20))],
+        &[("split_tabs", json!({ "tabs": [20, 21] }))],
+        &[("add_to_split", json!({ "tab": 20, "split": 21 }))],
+        &[
+            ("split_tabs", json!({ "tabs": [20, 21] })),
+            ("separate_tab", tab(20)),
+        ],
+        &[("pin_tab", tab(20))],
+        &[("pin_tab", tab(20)), ("unpin_tab", tab(20))],
+        &[("pin_tab", tab(20)), ("remove_tab", tab(20))],
+        &[("close_tab", tab(20))],
+        &[("ask_for_tab", reason.clone())],
+        &[("sort_tabs_by_site", json!({}))],
+        &[("hand_off", reason)],
+    ];
+    for (dialog, calls) in [false, true]
+        .into_iter()
+        .flat_map(|dialog| calls.map(|calls| (dialog, calls)))
+    {
+        let (agents, browser) = fenced(cx);
+        (browser.tabs.borrow_mut()).extend([
+            (21, 2, "Docs", "https://docs.example.com/"),
+            (22, 2, "Docs", "https://docs.example.com/b"),
+        ]);
+        browser.splits.borrow_mut().push(vec![21, 22]);
+        arrives(&agents, &browser, 20, "https://mybank.example/account", cx);
+        if dialog {
+            agents.update(cx, |agents, cx| {
+                agents.page_dialog(20, Some(DialogKind::Alert), "Your balance is 1,234", cx)
+            });
+        }
+        for (tool, arguments) in calls {
+            let what = format!("{tool} (dialog {dialog})");
+            let answer = call(&agents, "claude-code", tool, arguments.clone(), cx);
+            // A handoff's card is its own, not the fence's.
+            let asked = browser.asked.borrow().clone();
+            assert!(
+                asked.is_none_or(|asked| asked.handoff.is_some()),
+                "{what} asked"
+            );
+            let answer = match *tool {
+                "hand_off" if !dialog => {
+                    assert!(
+                        answer.try_recv().is_err(),
+                        "{what} answered before the user"
+                    );
+                    agents.update(cx, |agents, cx| agents.hand_back(20, cx));
+                    answer.recv().unwrap()
+                }
+                _ => answer.recv().unwrap(),
+            };
+            says_nothing_of_the_page(&what, &answer);
+            if *tool == "close_tab" && dialog {
+                assert!(
+                    answer.text.contains(fence::STAYS_OPEN),
+                    "{what}: {}",
+                    answer.text
+                );
+            }
+            if *tool == "hand_off" && !dialog {
+                // The user had the tab: handing it back isn't an open's yes either.
+                asks_next(&agents, &browser, 20, "mybank.example", cx);
+            }
+        }
+    }
+
+    // Sorting by site: the tab of the site the agent opened stays where it is, not beside it.
+    let (agents, browser) = fenced(cx);
+    (browser.tabs.borrow_mut()).push((21, 2, "Docs", "https://docs.example.com/"));
+    let opening = call(
+        &agents,
+        "claude-code",
+        "open_tab",
+        json!({ "url": "https://app.mybank.example/" }),
+        cx,
+    );
+    let question = browser.asked.borrow().clone().expect("open_tab didn't ask");
+    agents.update(cx, |agents, cx| {
+        agents.answer(question.id, Answer::Once, cx)
+    });
+    assert!(!page_done(&agents, &browser, opening, bank_tree(), cx).error);
+    arrives(&agents, &browser, 20, "https://mybank.example/account", cx);
+    let sorted = call(&agents, "claude-code", "sort_tabs_by_site", json!({}), cx);
+    assert_eq!(
+        sorted.recv().unwrap(),
+        ToolResult::text("Your Today tabs are together by site already.")
+    );
+    let order: Vec<u64> = (browser.tabs.borrow().iter())
+        .filter(|tab| tab.1 == 2)
+        .map(|tab| tab.0)
+        .collect();
+    assert_eq!(order, [20, 21, 30]);
+}
+
+/// A download from a fenced site the tab came to answers the agent's call without its name or how
+/// it ends, while the user is asked as for any download; one the user allowed opening keeps its
+/// name (#3724).
+#[gpui::test]
+fn a_download_from_a_fenced_site_gives_the_agent_no_name(cx: &mut TestAppContext) {
+    let download = |request, id| Download {
+        agent: "claude-code".into(),
+        tab: 20,
+        request,
+        id,
+        name: "statement-1234.pdf".into(),
+        url: "https://mybank.example/statement-1234.pdf".into(),
+        tab_empty: false,
+    };
+    let (agents, browser) = fenced(cx);
+    let answer = click_on(&agents, &browser, more_tree(), "Show more", cx);
+    let request = browser.pages.borrow().last().unwrap().1;
+    arrives(&agents, &browser, 20, "https://mybank.example/", cx);
+    agents.update(cx, |agents, cx| {
+        agents.download_started(download(request, 900), cx)
+    });
+    let answer = answer.recv().unwrap();
+    assert_eq!(answer, ToolResult::text(fence::download("mybank.example")));
+    let question = browser
+        .asked
+        .borrow()
+        .clone()
+        .expect("the download didn't ask");
+    assert_eq!(
+        question.what,
+        "download statement-1234.pdf from mybank.example"
+    );
+    agents.update(cx, |agents, cx| {
+        agents.answer(question.id, Answer::Once, cx)
+    });
+    let done = DownloadEnd::Done {
+        name: "statement-1234.pdf".into(),
+        bytes: 48_213,
+        path: "/Users/someone/Downloads/statement-1234.pdf".into(),
+    };
+    agents.update(cx, |agents, cx| agents.download_ended(900, done, cx));
+
+    // An open of it the user allowed is their yes.
+    let (agents, browser) = fenced(cx);
+    let go = json!({ "tab": 20, "url": "https://mybank.example/statement-1234.pdf" });
+    let answer = call(&agents, "claude-code", "navigate", go, cx);
+    let question = browser.asked.borrow().clone().expect("the open didn't ask");
+    agents.update(cx, |agents, cx| {
+        agents.answer(question.id, Answer::Once, cx)
+    });
+    let request = browser.pages.borrow().last().unwrap().1;
+    agents.update(cx, |agents, cx| {
+        agents.download_started(download(request, 901), cx)
+    });
+    let question = browser
+        .asked
+        .borrow()
+        .clone()
+        .expect("the download didn't ask");
+    agents.update(cx, |agents, cx| {
+        agents.answer(question.id, Answer::Once, cx)
+    });
+    let done = DownloadEnd::Done {
+        name: "statement-1234.pdf".into(),
+        bytes: 48_213,
+        path: "/Users/someone/Downloads/statement-1234.pdf".into(),
+    };
+    agents.update(cx, |agents, cx| agents.download_ended(901, done, cx));
+    assert!(
+        answer
+            .recv()
+            .unwrap()
+            .text
+            .starts_with("Downloaded statement-1234.pdf")
+    );
+    // The open didn't take the tab there, so a later way there asks.
+    arrives(&agents, &browser, 20, "https://mybank.example/", cx);
+    asks_next(&agents, &browser, 20, "mybank.example", cx);
+}
+
+/// A navigate the user allowed that fails takes their yes back, so the tab coming there later by a
+/// link asks; a tab let stay on the site before keeps that (#3724).
+#[gpui::test]
+fn a_failed_open_takes_its_yes_back(cx: &mut TestAppContext) {
+    let (agents, browser) = fenced(cx);
+    let go = |url: &str| json!({ "tab": 20, "url": url });
+    *browser.cant_go.borrow_mut() = true;
+    let answer = call(&agents, "claude-code", "navigate", go("mybank.example"), cx);
+    let question = browser.asked.borrow().clone().expect("the open didn't ask");
+    agents.update(cx, |agents, cx| {
+        agents.answer(question.id, Answer::Once, cx)
+    });
+    assert_eq!(
+        answer.recv().unwrap(),
+        ToolResult::error("The tab couldn't go there.")
+    );
+    arrives(&agents, &browser, 20, "https://mybank.example/", cx);
+    let (answer, question) = asks_next(&agents, &browser, 20, "mybank.example", cx);
+
+    // Let stay, then an open further in that fails: the tab stays let stay where it is.
+    agents.update(cx, |agents, cx| {
+        agents.answer(question.id, Answer::Once, cx)
+    });
+    page_done(&agents, &browser, answer, bank_tree(), cx);
+    let answer = call(
+        &agents,
+        "claude-code",
+        "navigate",
+        go("app.mybank.example"),
+        cx,
+    );
+    let question = browser.asked.borrow().clone().expect("the open didn't ask");
+    agents.update(cx, |agents, cx| {
+        agents.answer(question.id, Answer::Once, cx)
+    });
+    assert!(answer.recv().unwrap().error);
+    let read = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+    assert_eq!(*browser.asked.borrow(), None, "the tab let stay asked");
+    assert!(!page_done(&agents, &browser, read, bank_tree(), cx).error);
+}
+
+/// The yes ends once the tab is off the entry by any address the core reports, going back or
+/// forward included, a page the back-forward cache restores being one that loads nothing; and an
+/// allowed open that went elsewhere, by a redirect, ends it too (#3724).
+#[gpui::test]
+fn back_and_forward_onto_a_fenced_site_ask_again(cx: &mut TestAppContext) {
+    let (agents, browser) = fenced(cx);
+    let go = json!({ "tab": 20, "url": "mybank.example" });
+    let answer = call(&agents, "claude-code", "navigate", go.clone(), cx);
+    let question = browser.asked.borrow().clone().expect("the open didn't ask");
+    agents.update(cx, |agents, cx| {
+        agents.answer(question.id, Answer::Once, cx)
+    });
+    arrives(&agents, &browser, 20, "https://mybank.example/", cx);
+    assert!(!page_done(&agents, &browser, answer, bank_tree(), cx).error);
+
+    // Back to where it was, and forward again, each restored with no load.
+    for (way, url) in [
+        ("back", "https://www.example.com/"),
+        ("forward", "https://mybank.example/"),
+    ] {
+        let moved = call(
+            &agents,
+            "claude-code",
+            "navigate",
+            json!({ "tab": 20, "url": way }),
+            cx,
+        );
+        assert_eq!(*browser.asked.borrow(), None, "{way} asked");
+        arrives(&agents, &browser, 20, url, cx);
+        let moved = page_done(&agents, &browser, moved, bank_tree(), cx);
+        if way == "forward" {
+            withheld(&moved, 20, "mybank.example");
+        }
+    }
+    asks_next(&agents, &browser, 20, "mybank.example", cx);
+
+    // An allowed open whose page redirected off the site, then a link back onto it.
+    let (agents, browser) = fenced(cx);
+    let answer = call(&agents, "claude-code", "navigate", go, cx);
+    let question = browser.asked.borrow().clone().expect("the open didn't ask");
+    agents.update(cx, |agents, cx| {
+        agents.answer(question.id, Answer::Once, cx)
+    });
+    arrives(&agents, &browser, 20, "https://other.example/", cx);
+    page_done(&agents, &browser, answer, more_tree(), cx);
+    arrives(&agents, &browser, 20, "https://mybank.example/", cx);
+    asks_next(&agents, &browser, 20, "mybank.example", cx);
 }

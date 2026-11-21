@@ -30,6 +30,8 @@ struct Made {
     /// element and the text.
     pages: RefCell<Vec<(u64, u64, PageAction, i64, String)>>,
     navigated: RefCell<Vec<(u64, String)>>,
+    /// Whether the core can't send a tab where navigate asks.
+    cant_go: RefCell<bool>,
     /// The question each window shows, as the agents last told them.
     asked: RefCell<Option<Question>>,
     /// The tabs the user holds from agents, as the core keeps them.
@@ -169,7 +171,7 @@ impl Browser for Made {
 
     fn navigate(&self, _: &str, tab: u64, url: &str, _: &mut App) -> bool {
         self.navigated.borrow_mut().push((tab, url.into()));
-        true
+        !*self.cant_go.borrow()
     }
 
     fn page(&self, _: &str, tab: u64, request: u64, action: PageAction, element: i64, text: &str) {

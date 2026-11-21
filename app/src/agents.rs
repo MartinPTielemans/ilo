@@ -441,6 +441,15 @@ enum Fenced {
     Came(String, Box<Call>),
 }
 
+/// A tab the user let stay under a fenced entry (#3724). An open they allowed may not get there:
+/// until the tab is under the entry, only the page it was on when they answered keeps their yes.
+struct Cleared {
+    entry: String,
+    /// The tab's address when they answered, and whether it has been under the entry since.
+    from: String,
+    arrived: bool,
+}
+
 /// A download a page in an agent's Space started, which the core holds until the user answers
 /// (agent_download).
 pub struct Download {
@@ -726,8 +735,8 @@ pub struct Agents {
     grants: HashMap<String, HashMap<String, bool>>,
     /// The hosts the user fenced, where agents always ask first (fence.rs), as they added them.
     fenced: Vec<String>,
-    /// The tabs the user let stay under a fence's entry, by tab, until their page loads off it.
-    cleared: HashMap<u64, String>,
+    /// The tabs the user let stay under a fence's entry, by tab, until their page is off it.
+    cleared: HashMap<u64, Cleared>,
     /// What each agent did last, as the log says it.
     doing: HashMap<String, SharedString>,
     /// The tabs the user holds from agents, by tab.
@@ -2146,6 +2155,11 @@ impl Agents {
         cx: &mut Context<Self>,
     ) -> Option<ToolResult> {
         let (agent, tab, seconds) = (run.agent.clone(), run.tab, wait.seconds);
+        // The tab came to a fenced site while it waited: the wait ends with that alone, whatever
+        // the page shows or does, so no try tells the agent anything of it (#3724).
+        if let Some(site) = self.came_to(tab, cx) {
+            return Some(ToolResult::text(fence::withheld(tab, &site)));
+        }
         let show = run.show_now();
         let outline = self
             .outlines
@@ -2241,7 +2255,7 @@ impl Agents {
     fn look_after(&self, id: u64, after: Duration, cx: &mut Context<Self>) -> Task<()> {
         cx.spawn(async move |agents, cx| {
             cx.background_executor().timer(after).await;
-            _ = agents.update(cx, |agents, _| {
+            _ = agents.update(cx, |agents, cx| {
                 let waiting = agents.runs.iter_mut().find_map(|run| {
                     let wait = run.wait.as_mut().filter(|wait| wait.id == id)?;
                     let action = match wait.what {
@@ -2250,9 +2264,16 @@ impl Agents {
                     };
                     Some((run.agent.clone(), run.tab, action, wait.look.take()?))
                 });
-                if let Some((agent, tab, action, look)) = waiting {
-                    agents.look(&agent, tab, action, look);
+                let Some((agent, tab, action, look)) = waiting else {
+                    return;
+                };
+                // A page on a fenced site the tab came to isn't read for the agent (#3724): the
+                // wait ends at its next look, unread.
+                if agents.came_to(tab, cx).is_some() {
+                    _ = look.send(ToolResult::text(String::new()));
+                    return agents.advance(cx);
                 }
+                agents.look(&agent, tab, action, look);
             });
         })
     }
@@ -3200,7 +3221,7 @@ impl Agents {
         let before = self.fenced.len();
         self.fenced.retain(|each| each != host);
         if self.fenced.len() != before {
-            self.cleared.retain(|_, entry| entry != host);
+            self.cleared.retain(|_, cleared| cleared.entry != host);
             self.save();
             // check.sh waits for this line.
             log!("browser: agents unfenced {host}");
@@ -3219,16 +3240,46 @@ impl Agents {
     fn came_to(&self, tab: u64, cx: &App) -> Option<String> {
         let site = site(&self.browser.tab(tab, cx).url);
         let entry = self.fence_of(&site)?;
-        (self.cleared.get(&tab) != Some(&entry)).then_some(site)
+        (self.cleared.get(&tab).map(|cleared| &cleared.entry) != Some(&entry)).then_some(site)
     }
 
-    /// `tab` loaded `url`: once its page is off the entry the user let it stay under, coming back
-    /// asks again.
-    pub fn tab_loaded(&mut self, tab: u64, url: &str) {
-        if let Some(entry) = self.cleared.get(&tab)
-            && self.fence_of(&site(url)).as_ref() != Some(entry)
-        {
+    /// Lets `tab` stay under `entry`, as the user said, and gives what it had before.
+    fn clear(&mut self, tab: u64, entry: String, cx: &App) -> Option<Cleared> {
+        let from = self.browser.tab(tab, cx).url.to_string();
+        let arrived = self.fence_of(&site(&from)).as_ref() == Some(&entry);
+        let cleared = Cleared {
+            entry,
+            from,
+            arrived,
+        };
+        self.cleared.insert(tab, cleared)
+    }
+
+    /// `tab` is at `url`, from each address the core reports for it, back and forward through
+    /// history included: once it's off the entry the user let it stay under, coming back asks
+    /// again. Before it gets there, only the page it was on keeps the yes.
+    pub fn tab_at(&mut self, tab: u64, url: &str) {
+        let under = fence::entry_for(&self.fenced, &site(url)).map(str::to_string);
+        let Some(cleared) = self.cleared.get_mut(&tab) else {
+            return;
+        };
+        if under.as_ref() == Some(&cleared.entry) {
+            cleared.arrived = true;
+        } else if cleared.arrived || (url != cleared.from && is_web(url)) {
             self.cleared.remove(&tab);
+        }
+    }
+
+    /// The open the user allowed on `tab` has answered: if it didn't take the tab under its entry,
+    /// their yes ends, so a later way there asks.
+    fn settle(&mut self, tab: u64, cx: &App) {
+        let Some(cleared) = self.cleared.get(&tab).filter(|cleared| !cleared.arrived) else {
+            return;
+        };
+        let url = self.browser.tab(tab, cx).url;
+        match self.fence_of(&site(&url)).as_ref() == Some(&cleared.entry) {
+            true => self.cleared.get_mut(&tab).unwrap().arrived = true,
+            false => _ = self.cleared.remove(&tab),
         }
     }
 
@@ -3370,7 +3421,7 @@ impl Agents {
         let open = match std::mem::replace(&mut act.fenced, Fenced::No) {
             Fenced::Came(entry, call) => {
                 let site = site(&self.browser.tab(act.tab, cx).url);
-                self.cleared.insert(act.tab, entry);
+                self.clear(act.tab, entry, cx);
                 self.note(&act.agent, fence::CAME_ACTION, &site, "");
                 return self.dispatch(*call, cx);
             }
@@ -3425,7 +3476,7 @@ impl Agents {
             self.opened(&agent, call, tab);
             self.opened.insert(tab);
             if let Some(entry) = open {
-                self.cleared.insert(tab, entry);
+                self.clear(tab, entry, cx);
             }
             // An agent's tab is quiet until the user wants to hear it (#1080).
             self.browser.set_muted(tab, true);
@@ -3434,10 +3485,15 @@ impl Agents {
             if !self.act(&agent, tab, action, &reply, cx) {
                 return;
             }
-            if let Some(entry) = open.filter(|_| action == "navigate") {
-                self.cleared.insert(tab, entry);
-            }
+            let before =
+                (open.filter(|_| action == "navigate")).map(|entry| self.clear(tab, entry, cx));
             if action == "navigate" && !self.browser.navigate(&agent, tab, &url, cx) {
+                // It didn't go, so the user's yes for where it was to go goes with it.
+                match before {
+                    Some(Some(cleared)) => _ = self.cleared.insert(tab, cleared),
+                    Some(None) => _ = self.cleared.remove(&tab),
+                    None => {}
+                }
                 _ = reply.send(ToolResult::error("The tab couldn't go there."));
                 return;
             }
@@ -3491,16 +3547,30 @@ impl Agents {
             url,
             tab_empty,
         } = download;
-        let reply = match self.acting.remove(&request) {
+        let mut reply = match self.acting.remove(&request) {
             Some(acting) => acting.reply,
             // A page's own download, with no action of the agent's to answer, still asks.
             None => mpsc::channel().0,
         };
+        // From a fenced site the tab wasn't let stay on, the file is the user's to answer, and its
+        // name, which the site gave, never reaches the agent, nor how it ends (#3724). An open of
+        // it the user allowed is their yes.
+        let host = site(&url);
+        let fenced = self.came_to(tab, cx).or_else(|| {
+            let entry = self.fence_of(&host)?;
+            let cleared = self.cleared.get(&tab).map(|cleared| &cleared.entry);
+            (cleared != Some(&entry)).then(|| host.clone())
+        });
+        if let Some(site) = fenced {
+            _ = reply.send(ToolResult::text(fence::download(&site)));
+            reply = mpsc::channel().0;
+        }
+        // A download is the open's whole answer, so its yes ends here unless the tab got there.
+        self.settle(tab, cx);
         if tab_empty {
             self.left(tab, Gone::Download);
             self.browser.close_user_tab(tab, cx);
         }
-        let host = site(&url);
         let act = Act {
             agent,
             // A page's download comes from no call of the agent's.
@@ -3696,6 +3766,22 @@ impl Agents {
                 .trim_start()
                 .into();
         }
+        self.settle(tab, cx);
+        // What it did took the tab to a fenced site: nothing of that page reaches the agent until
+        // the user lets it stay (#3724), the outline an action answers with included, nor whether
+        // the page failed it. A sign-in there waits until they do.
+        if let Some(site) = self.came_to(tab, cx) {
+            if let Some(did) = did {
+                self.counted(&agent, call, did);
+            }
+            let withheld = fence::withheld(tab, &site);
+            let text = match note.is_empty() {
+                true => withheld,
+                false => format!("{note} {withheld}"),
+            };
+            _ = reply.send(ToolResult::text(text));
+            return self.advance(cx);
+        }
         if error {
             // The call ended as its page asked for a sign-in, which is the user's: it waits on
             // them as a handoff's call does.
@@ -3713,17 +3799,6 @@ impl Agents {
         }
         if let Some(did) = did {
             self.counted(&agent, call, did);
-        }
-        // What it did took the tab to a fenced site: nothing of that page reaches the agent until
-        // the user lets it stay (#3724), the outline an action answers with included.
-        if let Some(site) = self.came_to(tab, cx) {
-            let withheld = fence::withheld(tab, &site);
-            let text = match note.is_empty() {
-                true => withheld,
-                false => format!("{note} {withheld}"),
-            };
-            _ = reply.send(ToolResult::text(text));
-            return self.advance(cx);
         }
         if !text.starts_with('{') {
             _ = reply.send(ToolResult::image(text));
@@ -3852,7 +3927,9 @@ impl Agents {
             if split.first().is_some_and(|&first| first != tab.id) {
                 continue;
             }
-            let alone = split.len() <= 1;
+            // One on a fenced site it came to goes as a tab of no site, as its place would tell
+            // its site (#3724).
+            let alone = split.len() <= 1 && self.came_to(tab.id, cx).is_none();
             let site = alone.then(|| self.browser.url_site(&tab.url)).flatten();
             rows.push((tab.id, split.len().max(1), site));
         }
@@ -3996,9 +4073,11 @@ impl Agents {
             })?;
         // Only once the tab is known to be the agent's, so another's page says nothing.
         match self.dialogs.get(&tab) {
-            Some(&(kind, _)) if action != "close_tab" => {
-                Err(showing_dialog(tab, kind, self.opened.contains(&tab)))
-            }
+            // Not even which dialog, on a fenced site the tab came to (#3724).
+            Some(&(kind, _)) if action != "close_tab" => match self.came_to(tab, cx) {
+                Some(site) => Err(fence::withheld(tab, &site)),
+                None => Err(showing_dialog(tab, kind, self.opened.contains(&tab))),
+            },
             _ => Ok(()),
         }
     }
@@ -4166,11 +4245,18 @@ impl Agents {
             Closed::Asks => Err(format!(
                 "Tab {tab} stays open: {}. close_tab with discard: true closes it without \
                  saving{}.",
-                match self.dialogs.contains_key(&tab) {
-                    true =>
+                // Staying open tells that much, and on a fenced site the tab came to no more:
+                // not whether a dialog holds it (#3724).
+                match (
+                    self.dialogs.contains_key(&tab),
+                    self.came_to(tab, cx).is_some()
+                ) {
+                    (_, true) => fence::STAYS_OPEN,
+                    (true, false) =>
                         "its page shows its own dialog, so it can't be asked whether it has \
                              unsaved changes",
-                    false => "its page asks before it's left, as it may have unsaved changes",
+                    (false, false) =>
+                        "its page asks before it's left, as it may have unsaved changes",
                 },
                 if self.opened.contains(&tab) {
                     ""
@@ -4465,10 +4551,12 @@ pub fn tab_closed(tab: u64, cx: &mut App) {
     }
 }
 
-/// The core loaded `url` in `tab` (tabs::tab_loaded).
-pub fn tab_loaded(tab: u64, url: &str, cx: &mut App) {
+/// The core says `tab` is at `url`: it loaded it (tabs::tab_loaded), or its address changed, as
+/// going back or forward does, a page the back-forward cache restores included, which loads
+/// nothing (tabs::tab_state_changed).
+pub fn tab_at(tab: u64, url: &str, cx: &mut App) {
     if let Some(agents) = global(cx) {
-        agents.update(cx, |agents, _| agents.tab_loaded(tab, url));
+        agents.update(cx, |agents, _| agents.tab_at(tab, url));
     }
 }
 
