@@ -120,11 +120,13 @@ impl Shell {
         let Some(question) = self.agent_question() else {
             // Drawn again, it's logged again.
             self.agent_question_drawn.set(None);
+            self.agent_request_see_drawn.set(None);
             return None;
         };
         if !question.changes.is_empty() {
             return Some(self.request_card(question, cx));
         }
+        self.agent_request_see_drawn.set(None);
         let listener = card_listener("agent question", &self.agent_question_drawn, question.id);
         let buttons = buttons(question).into_iter().map(|button| {
             let row = button.look == Look::Text;
@@ -1031,6 +1033,30 @@ mod tests {
         cx.simulate_keystrokes("cmd-t");
         cx.run_until_parked();
         assert!(host.bar_open.take(), "⌘T after Deny opened no new tab");
+    }
+
+    /// The next request's "See the whole request", drawn where the last one's was, has its place
+    /// logged again, as a check finds the button by that line (#3715).
+    #[gpui::test]
+    fn see_is_logged_again_for_the_next_request(cx: &mut TestAppContext) {
+        let (_, shell, cx) = window_with(cx);
+        let ask = |id: u64, cx: &mut gpui::VisualTestContext| {
+            shell.update(cx, |shell, cx| {
+                let one = change("PUT", "/api/note", "Replace the note.");
+                shell.set_agent_question(Some(requests(id, vec![one])), cx);
+            });
+            cx.run_until_parked();
+            shell.read_with(cx, |shell, _| shell.agent_request_see_drawn.get())
+        };
+        let first = ask(2, cx).expect("the first request's See wasn't drawn");
+        shell.update(cx, |shell, cx| shell.set_agent_question(None, cx));
+        cx.run_until_parked();
+        let gone = shell.read_with(cx, |shell, _| shell.agent_request_see_drawn.get());
+        assert_eq!(
+            gone, None,
+            "See's place outlived its card, so the next isn't logged"
+        );
+        assert_eq!(ask(3, cx), Some(first));
     }
 
     /// The whole request shows only beside its question's card: it goes when the question is
