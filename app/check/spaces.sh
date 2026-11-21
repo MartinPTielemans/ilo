@@ -525,7 +525,7 @@ reveal_to "sideclick $reveal_point forward" mouse "$second" "$b"
 # turns a wheel on the panel (header/tests.rs).
 if [ "$(uname)" = Darwin ]; then
   echo "skip: a wheel's tick on the sidebar out over the page, on the Mac, whose driver posts" \
-    "wheels to the browser window alone."
+    "wheels to the browser window alone (#3818)."
   reveal_to "sideclick $reveal_point back" mouse "$first" "$a"
 else
   reveal_to "wheel $reveal_point 1" wheel "$first" "$a"
