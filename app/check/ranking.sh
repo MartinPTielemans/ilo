@@ -156,20 +156,39 @@ type_for() {
   ../tools/window-screenshot.sh "$pid" "$out/$3" || fail "no window to capture"
 }
 
-# Probe for #3830, never to land: twenty goes of ⌘T and 40 keys at a typing pace, 120 to 300 ms
-# apart, around the display link's 200 ms run-on. Each go waits for the bar to draw all 40; a go
-# it stops drawing in is counted, its frames lines kept, and the run fails at the end with them.
-probe_text=thequickbrownfoxjumpsoverthelazydogsxyzw
+# Probe for #3830, never to land, as the report has it: ⌘N, then twenty goes of ⌘T and the
+# reporter's phrase, spaces too, at a typing pace, 120 to 300 ms apart, around the display link's
+# 200 ms run-on, in the new window's bar. Before every second go the first window's bar is used
+# last, so both panels have been on the display's link. Each go waits for the bar to draw the
+# whole phrase; a go it stops drawing in is counted, its frames lines kept, and the run fails at
+# the end with them.
+probe_text="this is a test of how it stops"
 probe_stuck=0
 probe_goes=""
+send key n cmd
+expect '^browser: window opened [0-9]' "⌘N didn't open a second window"
+expect '^browser: command new-tab via new window$' "the new window didn't open the command bar"
+expect '^browser: command bar shown$' "the new window's command bar didn't show"
+probe_second=$(grep -c '^browser: window opened ' "$log")
 for go in $(seq 20); do
+  if [ "$go" -gt 1 ] && [ $((go % 2)) = 0 ]; then
+    send window 1
+    send key t cmd
+    expect '^browser: command bar shown$' "⌘T didn't open the first window's command bar (go $go)"
+    post type x
+    expect '^browser: command bar drew "x"$' "the first window's bar didn't draw x (go $go)"
+    send key escape
+    expect '^browser: command bar hidden$' "escape didn't close the first window's command bar (go $go)"
+    send window "$probe_second"
+  fi
   send key t cmd
-  expect '^browser: command bar shown$' "⌘T didn't open the command bar (go $go)"
+  [ "$go" = 1 ] || expect '^browser: command bar shown$' "⌘T didn't open the command bar (go $go)"
   go_from=$step
   i=0
   while [ "$i" -lt "${#probe_text}" ]; do
     i=$((i + 1))
-    post type "$(printf '%s' "$probe_text" | cut -c"$i")"
+    c=$(printf '%s' "$probe_text" | cut -c"$i")
+    if [ "$c" = " " ]; then post key space; else post type "$c"; fi
     case $((i % 4)) in
     0) sleep 0.12 ;;
     1) sleep 0.18 ;;
@@ -182,6 +201,9 @@ for go in $(seq 20); do
     logged "^browser: command bar drew \"$probe_text\"\$" "$go_from" && drawn=yes && break
     sleep 0.1
   done
+  # A bar that closed under the typing isn't a bar that stopped drawing.
+  ! logged '^browser: command bar hidden$' "$go_from" ||
+    fail "probe #3830: the command bar closed while the phrase was typed (go $go), so the go says nothing about drawing"
   if [ "$drawn" = no ]; then
     probe_stuck=$((probe_stuck + 1))
     last=$(sed -n "/^browser: drive $go_from: /,\$p" "$log" | grep '^browser: command bar drew ' | tail -1)
@@ -192,6 +214,9 @@ for go in $(seq 20); do
   send key escape
   expect '^browser: command bar hidden$' "escape didn't close the command bar (go $go)"
 done
+send key w cmd shift
+expect '^browser: window closed [0-9]' "⇧⌘W didn't close the second window"
+send window 1
 echo "probe #3830: the bar stopped drawing in $probe_stuck of 20 goes:$probe_goes" >&2
 grep -E '^browser: frames .*(refused|failed)' "$log" | sort | uniq -c | sort -rn | head -20 >&2 || true
 [ "$probe_stuck" = 0 ] ||
