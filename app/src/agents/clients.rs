@@ -19,10 +19,20 @@ pub enum Client {
     Codex,
     /// Any other MCP client, which the user sets up with what Copy Setup copies.
     Other,
+    /// The `ilo` command an agent in a terminal runs (agents::cli), under Command line.
+    Command,
 }
 
 impl Client {
-    pub const ALL: [Client; 3] = [Client::ClaudeCode, Client::Codex, Client::Other];
+    pub const ALL: [Client; 4] = [
+        Client::ClaudeCode,
+        Client::Codex,
+        Client::Other,
+        Client::Command,
+    ];
+
+    /// The clients under Apps that connect.
+    pub const APPS: [Client; 3] = [Client::ClaudeCode, Client::Codex, Client::Other];
 
     /// The id of its agent, which its Space and the core know it by.
     pub fn id(self) -> &'static str {
@@ -30,6 +40,7 @@ impl Client {
             Client::ClaudeCode => "claude-code",
             Client::Codex => "codex",
             Client::Other => "mcp-client",
+            Client::Command => "ilo-command",
         }
     }
 
@@ -43,6 +54,7 @@ impl Client {
             Client::ClaudeCode => "Claude Code",
             Client::Codex => "Codex",
             Client::Other => "MCP client",
+            Client::Command => "ilo CLI",
         }
     }
 
@@ -51,13 +63,13 @@ impl Client {
         match self {
             Client::ClaudeCode => "~/.claude.json",
             Client::Codex => "~/.codex/config.toml",
-            Client::Other => "",
+            Client::Other | Client::Command => "",
         }
     }
 }
 
 /// The server as a client's config names it.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Entry {
     /// The name the client lists it by: the browser's.
     pub name: String,
@@ -86,6 +98,12 @@ pub trait Clients: Send + Sync {
     fn disconnect(&self, client: Client, name: &str) -> Result<(), String>;
     /// Whether the client is on this computer, for Settings › Agents to list it. Other is always.
     fn found(&self, client: Client) -> bool;
+    /// Whether a terminal opened now looks for commands in `folder`, as the `ilo` command's row
+    /// says. Slow: it runs the user's shell. On Windows, whether the entry Add put on the user's
+    /// PATH is still there, which an uninstall takes off (#3783).
+    fn searches(&self, _folder: &Path) -> bool {
+        true
+    }
     /// Whether a CLI that runs agent tasks is on this computer and signed in, which runs it.
     fn look_for_task_cli(&self, cli: super::runner::Cli) -> super::ready::Found {
         super::ready::look(cli)
@@ -115,6 +133,10 @@ impl Clients for System {
                 write(&path, &codex_with(&text, entry))
             }
             Client::Other => Ok(()),
+            Client::Command => {
+                let socket = entry.args.last().map(PathBuf::from).unwrap_or_default();
+                command_install(entry)?.add(&socket, &entry.token)
+            }
         }
     }
 
@@ -129,6 +151,7 @@ impl Clients for System {
                 }
             }
             Client::Other => Ok(()),
+            Client::Command => command_install(&Entry::default())?.remove(),
         }
     }
 
@@ -140,9 +163,48 @@ impl Clients for System {
                 home().join(".claude.json").exists() || home().join(".claude").is_dir()
             }
             Client::Codex => codex_config().parent().is_some_and(Path::is_dir),
-            Client::Other => true,
+            Client::Other | Client::Command => true,
         }
     }
+
+    #[cfg(not(windows))]
+    fn searches(&self, folder: &Path) -> bool {
+        shell_path().is_some_and(|path| super::cli::searched(&path, folder))
+    }
+
+    #[cfg(windows)]
+    fn searches(&self, _folder: &Path) -> bool {
+        match command_install(&Entry::default()) {
+            Ok(install) => install.on_path(&super::cli::Registry),
+            Err(_) => true,
+        }
+    }
+}
+
+/// Where Add puts the `ilo` command: its link in the user's bin folder, to the program beside the
+/// bridge `entry` runs, or on Windows the folder beside the bridge's that holds it, and its agent
+/// file in the profile directory, where the command looks.
+fn command_install(entry: &Entry) -> Result<super::cli::Install, String> {
+    let bridge = match entry.command.as_str() {
+        "" => std::env::current_exe()
+            .unwrap_or_default()
+            .with_file_name(super::bridge::NAME),
+        bridge => PathBuf::from(bridge),
+    };
+    let file = super::cli::agent_file(Path::new(&crate::profile_dir()));
+    #[cfg(windows)]
+    return Ok(super::cli::Install::windows(
+        &bridge,
+        &std::env::var("LOCALAPPDATA").unwrap_or_default(),
+        file,
+    ));
+    #[cfg(not(windows))]
+    Ok(super::cli::Install {
+        folder: super::cli::folder(&home()),
+        program: bridge.with_file_name(super::cli::PROGRAM),
+        file,
+        store: false,
+    })
 }
 
 pub fn home() -> PathBuf {

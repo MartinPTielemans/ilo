@@ -607,6 +607,9 @@ struct Dialog {
     insets: [f64; 4],
     /// Answered, it draws as it leaves with the keyboard back with the browser window.
     leaving: bool,
+    /// At rest over a split view's pane the user isn't in: it shows and takes clicks, and the
+    /// browser window keeps the keyboard for the page beside (#3461).
+    rests: bool,
     /// Left for ilo's menu over the browser window, which has the keys until it closes (#3616).
     after_menu: bool,
 }
@@ -618,6 +621,7 @@ thread_local! {
             over: None,
             insets: [0.; 4],
             leaving: false,
+            rests: false,
             after_menu: false,
         })
     };
@@ -650,11 +654,19 @@ pub extern "C" fn host_add_dialog(dialog_view: *mut c_void) {
     gpui_linux::set_overlay_managed(dialog_view);
 }
 
-/// Shows the dialog over all of the browser window of `ui_view`, or over the tab's card at `x`,
-/// `y`, `width` and `height` in its content, with the keyboard, as it's answered before anything
-/// else. Asked again, it goes where the card went, such as when the sidebar hid.
+/// Shows the dialog over all of the browser window of `ui_view`, or over the tab's card or pane at
+/// `x`, `y`, `width` and `height` in its content, with the keyboard, as it's answered before
+/// anything else, or without it at rest. Asked again, it goes where the card went, such as when the
+/// sidebar hid, and takes the keyboard or gives it back.
 #[unsafe(no_mangle)]
-pub extern "C" fn host_show_dialog(ui_view: *mut c_void, x: f64, y: f64, width: f64, height: f64) {
+pub extern "C" fn host_show_dialog(
+    ui_view: *mut c_void,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    keyboard: bool,
+) {
     let Some(content) = gpui_linux::embedder_size(ui_view) else {
         return;
     };
@@ -676,8 +688,19 @@ pub extern "C" fn host_show_dialog(ui_view: *mut c_void, x: f64, y: f64, width: 
     if view.is_null() {
         return;
     }
-    if over.is_some() {
+    if let Some((over, window)) = over {
         place_dialog(ui_view);
+        let changed = DIALOG.with_borrow_mut(|dialog| {
+            let changed = over == ui_view && !dialog.leaving && dialog.rests == keyboard;
+            if changed {
+                dialog.rests = !keyboard;
+            }
+            changed
+        });
+        if changed {
+            gpui_linux::set_overlay_keyboard(view, keyboard, left_dialog);
+            lend_keyboard(window, view, keyboard);
+        }
         return;
     }
     let Some((bounds, radius)) = dialog_bounds(ui_view, insets) else {
@@ -687,12 +710,16 @@ pub extern "C" fn host_show_dialog(ui_view: *mut c_void, x: f64, y: f64, width: 
     DIALOG.with_borrow_mut(|dialog| {
         dialog.over = Some((ui_view, window));
         dialog.leaving = false;
+        dialog.rests = !keyboard;
         dialog.after_menu = false;
     });
-    lend_keyboard(window, view, true);
+    if keyboard {
+        lend_keyboard(window, view, true);
+    }
     gpui_linux::set_overlay_pointer(view, None);
-    show_over(view, ui_view, bounds, radius, true, left_dialog);
-    browser::log!("browser: dialog window shown");
+    show_over(view, ui_view, bounds, radius, keyboard, left_dialog);
+    let rests = if keyboard { "" } else { " at rest" };
+    browser::log!("browser: dialog window shown{rests}");
 }
 
 #[unsafe(no_mangle)]
@@ -765,8 +792,9 @@ pub(crate) fn forget_window(ui_view: *mut c_void) {
 /// The user left the dialog, such as for the sidebar beside a page's, or Chromium took its
 /// window's keyboard as a page committed: it takes the keyboard back, unless another app has it.
 fn left_dialog(view: *mut c_void) {
-    // One leaving has given the keyboard back for good.
-    if DIALOG.with_borrow(|dialog| dialog.leaving) {
+    // One leaving has given the keyboard back for good, and one at rest leaves it to the page
+    // beside until its pane is focused.
+    if DIALOG.with_borrow(|dialog| dialog.leaving || dialog.rests) {
         return;
     }
     // To ilo's menu over it, its field's, which gives the keyboard back as it closes.

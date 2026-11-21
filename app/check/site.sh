@@ -14,7 +14,8 @@
 # across the page's top half and its password field across the bottom, that posts to /login,
 # which sends the browser on to welcome.html, as a site that took the login would.
 # signup.html is the same form asking for a new password, which posts to /signup, as /login.
-# /sign-in, with any query, asks for HTTP basic sign-in and takes ada with the password lovelace.
+# /sign-in, with any query, asks for HTTP basic sign-in and takes ada with the password zq7lovelace,
+# a word in no filter list, which mcp.sh looks for in the whole profile.
 # address.html and card.html are an address's form and a card's, their first field across the
 # page's top 40%, which put their name in the title once painted, post as the login does, and put
 # "filled" in the title while Chrome fills that field, and "unfocused" once the page's focus leaves
@@ -194,7 +195,9 @@ autofill_form address name 'address-line1 address-level2 address-level1 postal-c
 autofill_form card cc-name 'cc-number cc-exp-month cc-exp-year' > "$out/site/card.html"
 # The dialogs page asks with "a" alert(), "c" confirm() and "p" prompt(), each from a key in the
 # page, and puts what the user answered in the title. "l" alerts once /held comes, which the run
-# lets go of later, as a page that asks while the user is in another app. "u" has it ask before
+# lets go of later, as a page that asks while the user is in another app. "h" alerts and then waits
+# for /held before its handler returns, so the key comes back to the app unkept only once the run
+# lets go of /held, as a page that's slow to answer a key. "u" has it ask before
 # it's left, and "o" goes to a link another app opens: maps:, which macOS opens in Maps, or on
 # Windows, which no longer has a Maps app, ms-settings:, which every Windows 10 and 11 opens in
 # Settings.
@@ -210,6 +213,13 @@ onkeydown = e => {
   if (e.key == "a") {
     alert("The check says hello.");
     document.title = "alerted";
+  }
+  if (e.key == "h") {
+    alert("The check says hello.");
+    const held = new XMLHttpRequest();
+    held.open("GET", "held", false);
+    held.send();
+    document.title = "held back";
   }
   if (e.key == "c") {
     document.title = "confirm " + confirm("Go on?");
@@ -230,6 +240,9 @@ onkeydown = e => {
   }
   if (e.key == "o") {
     location = "'"$app_link"'";
+  }
+  if (e.key == "w") {
+    open("beside.html");
   }
 };
 </script>' > "$out/site/dialogs.html"
@@ -553,7 +566,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return
         if path == "/sign-in":
             signed_in = self.headers.get("Authorization") == "Basic " + base64.b64encode(
-                b"ada:lovelace").decode()
+                b"ada:zq7lovelace").decode()
             body = b"<title>signed in ada</title>" if signed_in else b"<title>signed out</title>"
             self.send_response(200 if signed_in else 401)
             if not signed_in:

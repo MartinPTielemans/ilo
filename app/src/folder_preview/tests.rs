@@ -411,3 +411,20 @@ fn a_preview_opens_toward_the_page_from_a_sidebar_on_the_right() {
     };
     assert_eq!(place(mirrored, height(3)).0, 1000. - left - WIDTH);
 }
+
+/// A page dialog waits while the user types in the preview's search, and not once it has gone.
+#[gpui::test]
+fn its_search_counts_as_typing_while_it_shows(cx: &mut TestAppContext) {
+    let preview = open_preview(cx);
+    preview.shown(1, cx);
+    (preview.window.update(cx, |preview, window, cx| {
+        window.activate_window();
+        window.focus(&preview.search.focus_handle(cx), cx)
+    }))
+    .unwrap();
+    cx.run_until_parked();
+    assert!(cx.update(typing));
+    cx.update(dismissed);
+    cx.run_until_parked();
+    assert!(!cx.update(typing), "a preview gone still counted");
+}

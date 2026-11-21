@@ -195,6 +195,21 @@ pub fn window_closed(browser: bc::bc_id, cx: &mut App) {
     }
 }
 
+/// Whether the find bar over the browser window `browser` has the keyboard: it shows, its window
+/// has the keyboard and its field has it. One the user left for the page, still showing, doesn't.
+pub fn typing(browser: bc::bc_id, cx: &mut App) -> bool {
+    let Some(window) = window(browser, cx) else {
+        return false;
+    };
+    window
+        .update(cx, |bar, window, cx| {
+            let open = FINDS.with_borrow(|finds| finds.get(&bar.tab).is_some_and(|find| find.open));
+            open && browser::text_input::window_has_keyboard(window)
+                && browser::text_input::typing_in(window, cx)
+        })
+        .unwrap_or(false)
+}
+
 /// The bar over the browser window `browser`.
 fn window(browser: bc::bc_id, cx: &App) -> Option<WindowHandle<FindBar>> {
     cx.try_global::<FindBars>()
@@ -391,6 +406,9 @@ impl FindBar {
             }
         });
         unsafe { platform::host_hide_find_bar(self.ui_view) };
+        crate::browser_windows::update_window_in(self.browser, cx, |shell, cx| {
+            shell.field_let_go(cx)
+        });
     }
 
     /// What the page found for the text, once it has looked: which match of how many, or none,
@@ -517,6 +535,7 @@ impl FindBar {
 
 impl Render for FindBar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        browser::text_input::drawing(window);
         let a11y = window.is_a11y_active();
         let found = self.found();
         let status = find_status::count(found);

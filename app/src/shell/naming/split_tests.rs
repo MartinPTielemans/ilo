@@ -168,7 +168,7 @@ fn an_empty_name_is_taken_off_only_by_return(cx: &mut TestAppContext) {
     cx.run_until_parked();
     cx.simulate_keystrokes("backspace");
     shell.update_in(cx, |shell, window, cx| {
-        shell.keyboard_left(fields_opened(), window, cx)
+        shell.keyboard_left(fields_opened(), true, window, cx)
     });
     cx.run_until_parked();
     assert!(!naming(&shell, cx), "the field stayed");

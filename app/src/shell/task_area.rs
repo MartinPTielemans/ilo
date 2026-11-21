@@ -211,7 +211,7 @@ impl Shell {
             if let Some(area) = &mut self.task_area {
                 area.page = None;
             }
-            self.browser.focus_ui(cx);
+            self.take_keyboard(cx);
             self.show_users_page(cx);
         }
         self.forget_closed(cx);
@@ -343,7 +343,7 @@ impl Shell {
         // check.sh reads these lines.
         log!("browser: task area {space} opens");
         log!("browser: task area {space} open");
-        self.browser.focus_ui(cx);
+        self.take_keyboard(cx);
         cx.notify();
     }
 
@@ -405,7 +405,7 @@ impl Shell {
         self.lay_out_page(cx);
         match self.agent_bar() {
             Some(Bar::Held { tab: held, .. }) if held == tab => self.browser.focus_page(cx),
-            _ => self.browser.focus_ui(cx),
+            _ => self.take_keyboard(cx),
         }
         cx.notify();
         true
@@ -440,7 +440,7 @@ impl Shell {
         }
         // check.sh reads this line.
         log!("browser: task page {tab} back");
-        self.browser.focus_ui(cx);
+        self.take_keyboard(cx);
         // The reply field has the keyboard again, as when the conversation opened.
         self.focus_talk = true;
         cx.notify();
@@ -724,7 +724,7 @@ impl Shell {
                     .is_some_and(|area| area.page.is_some())
                 {
                     self.leave_task_page_now(cx);
-                    self.browser.focus_ui(cx);
+                    self.take_keyboard(cx);
                 }
                 return false;
             }
