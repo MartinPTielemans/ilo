@@ -298,6 +298,9 @@ def record(message):
             line["redirect"] = True
         if top_document(params):
             line["document"] = True
+        # A beacon, which adblock-parity alone may count blocked by the app's log (#3602).
+        if params.get("type") == "Ping":
+            line["ping"] = True
     elif method == "Network.loadingFailed":
         line = {"event": "failed", "id": params["requestId"], "error": params["errorText"]}
     elif method == "Network.responseReceived":

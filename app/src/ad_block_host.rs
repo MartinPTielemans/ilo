@@ -54,6 +54,9 @@ impl choice::Host for Choice {
 
 static BLOCKER: LazyLock<Arc<Blocker>> = LazyLock::new(|| Arc::new(Blocker::new()));
 
+/// Whether the checks' driver runs the app (BROWSER_DRIVE), read once, as each request asks.
+static DRIVEN: LazyLock<bool> = LazyLock::new(|| std::env::var_os("BROWSER_DRIVE").is_some());
+
 /// The browser's own engine while it blocks, for a request the core makes itself, which no ad
 /// blocker sees, as a link card's picture: Some(None) while it blocks and its first engine hasn't
 /// loaded, and None with blocking off or uBlock Origin the blocker. Never waits.
@@ -123,6 +126,11 @@ pub(crate) unsafe extern "C" fn ad_block_request(
             // check.sh reads this line: the core closes the tab.
             if kind == "popup" {
                 browser::log!("browser: ad block closed a pop-up at {url}");
+            }
+            // check.sh reads this line: adblock-parity counts a beacon whose page went before
+            // DevTools heard it fail (#3602). Only under the driver, so no user's log holds it.
+            if *DRIVEN && kind == "ping" {
+                browser::log!("browser: ad block blocked a ping at {url}");
             }
             bc::BC_AD_BLOCK_BLOCK as c_int
         }
