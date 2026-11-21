@@ -6,14 +6,15 @@ name: UI on Windows
 
 on:
   # Main alone: a branch runs this at queue:ready, below (#2199). An engine release's tag, pushed
-  # with the owner's token, starts nothing here.
+  # with the owner's token, starts nothing here. The action and script its jobs run are its own
+  # too (#3760).
   push:
     branches: [main]
-    paths: [app/**, core/public/**, tools/parity.sh, tools/window-capture.ps1, .github/workflows/app-windows.yml, '!**/*.md']
+    paths: [app/**, core/public/**, tools/parity.sh, tools/window-capture.ps1, .github/workflows/app-windows.yml, .github/actions/tree-proof/**, .github/scripts/tree-proven.sh, '!**/*.md']
   # A pull request as it's labelled queue:ready, and each push to it after; a fork's on each push.
   pull_request:
     types: [opened, synchronize, reopened, labeled]
-    paths: [app/**, core/public/**, tools/parity.sh, tools/window-capture.ps1, .github/workflows/app-windows.yml, '!**/*.md']
+    paths: [app/**, core/public/**, tools/parity.sh, tools/window-capture.ps1, .github/workflows/app-windows.yml, .github/actions/tree-proof/**, .github/scripts/tree-proven.sh, '!**/*.md']
   # A branch's head before its pull request is ready, such as a lane's Windows code.
   workflow_dispatch:
   # CI's run for a branch's push that touches what only Windows compiles (.github/scripts/ci-changes.cjs).
