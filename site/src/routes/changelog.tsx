@@ -3,7 +3,7 @@ import { FEED, pageHead } from "../seo";
 import { TextPage } from "../components/text-page";
 import { Clip } from "../components/clip";
 import { SOURCE } from "../downloads";
-import { RELEASES } from "../changelog";
+import { RELEASES, isOut } from "../changelog";
 
 export const Route = createFileRoute("/changelog")({
   head: () =>
@@ -17,6 +17,7 @@ export const Route = createFileRoute("/changelog")({
 });
 
 function Changelog() {
+  const out = RELEASES.filter((release) => isOut(release, import.meta.env.ILO_PUBLISHED));
   return (
     <TextPage
       title="Changelog"
@@ -28,8 +29,8 @@ function Changelog() {
         </>
       }
     >
-      {/* A release without its date isn't out, so the page doesn't name it yet. */}
-      {RELEASES.filter((release) => release.date).map((release) => {
+      {/* A release that isn't out, without its date or not yet published, isn't named yet. */}
+      {out.map((release) => {
         const shown = release.notes.filter((note) => typeof note !== "string");
         const listed = release.notes.filter((note) => typeof note === "string");
         return (

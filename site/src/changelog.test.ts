@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { describe, expect, it } from "vite-plus/test";
-import { CLIPS, RELEASES } from "./changelog";
+import { CLIPS, RELEASES, isOut } from "./changelog";
 
 describe("the changelog", () => {
   it("has every file each clip it names needs", () => {
@@ -15,5 +15,14 @@ describe("the changelog", () => {
     const versions = RELEASES.map((release) => release.version);
     expect(new Set(versions).size).toBe(versions.length);
     for (const version of versions) expect(version).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+
+  it("shows a release once it has its day and, where the deploy lists them, is published", () => {
+    const tagged = { version: "0.2.5", date: "22 November 2026", summary: "", notes: [] };
+    expect(isOut(tagged)).toBe(true);
+    expect(isOut(tagged, "0.2.3 0.2.4")).toBe(false);
+    expect(isOut(tagged, "0.2.4 0.2.5")).toBe(true);
+    expect(isOut({ ...tagged, version: "0.2.50" }, "0.2.5")).toBe(false);
+    expect(isOut({ version: "0.2.5", summary: "", notes: [] }, "0.2.5")).toBe(false);
   });
 });

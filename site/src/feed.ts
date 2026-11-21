@@ -1,4 +1,4 @@
-import { RELEASES, type Release } from "./changelog";
+import { RELEASES, isOut, type Release } from "./changelog";
 import { FEED, SITE } from "./seo";
 
 // The changelog as an Atom feed, for anyone who'd rather be told of a release than come and look.
@@ -37,8 +37,8 @@ function notes(release: Release) {
 }
 
 /** The feed: every release that's out, newest first, each linking to its place in the changelog. */
-export function changelogFeed(releases: Release[] = RELEASES) {
-  const out = releases.filter((release) => release.date);
+export function changelogFeed(releases: Release[] = RELEASES, published?: string) {
+  const out = releases.filter((release) => isOut(release, published));
   const page = `${SITE}/changelog`;
   const entries = out.map((release) => {
     const url = `${page}#${release.version}`;

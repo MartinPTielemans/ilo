@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { RELEASES } from "../changelog";
+import { RELEASES, isOut } from "../changelog";
 import { PLATFORMS, type Platform } from "../downloads";
 import { DownloadLink } from "./download";
 import { TextPage } from "./text-page";
@@ -71,7 +71,7 @@ export function PlatformPage({ id }: { id: Id }) {
   const one = platform(id);
   const copy = COPY[id];
   // The newest version the changelog has, with the day it came out.
-  const newest = RELEASES.find((release) => release.date);
+  const newest = RELEASES.find((release) => isOut(release, import.meta.env.ILO_PUBLISHED));
   const updates =
     id === "linux"
       ? "Flatpak updates ilo with your other Flatpak apps."
