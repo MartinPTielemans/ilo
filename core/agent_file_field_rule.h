@@ -40,6 +40,23 @@ struct FileFieldPlace {
   std::string origin;
 };
 
+// A child of a document as DevTools describes it (DOM.describeNode, depth 1): its node type and
+// name, the frame id DevTools gives it, if any, and whether it holds a document of its own.
+struct DocumentChild {
+  int type = 0;
+  std::string name;
+  std::string frame;
+  bool holds_document = false;
+};
+
+// The DevTools id of the frame whose document has |children|, which DevTools gives that document's
+// element child, or empty if it can't be told. An element child that is itself a frame owner, as
+// a page's script can make one, gets its content frame's id too: Blink sets that first and the
+// document's own over it (InspectorDOMAgent::BuildObjectForNode), so one more frame id there would
+// name another site's frame for a field in this document. Such a child is refused, whatever the
+// order.
+std::string DocumentFrame(const std::vector<DocumentChild>& children);
+
 // Why the user can't be asked for a file for a field at |place|, for the agent, or none if they
 // can: its frame must have a site the card can name, which one with an opaque origin, as a
 // sandboxed or data: frame's, hasn't.

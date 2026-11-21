@@ -325,7 +325,7 @@ class AgentPage : public content::WebContentsObserver,
   void FillField();
   // The field |node| in the session at |slot| as it is now: what DevTools says of its node, whether
   // it's in its document, the frame it's in, with that frame's origin, and its accessible name.
-  // None if DevTools knows no such node.
+  // None if DevTools knows no such node, and an empty frame if its document's can't be told.
   using FieldRead = base::OnceCallback<void(std::optional<FileFieldNow> now, std::string label)>;
   void ReadField(int slot, int node, FieldRead then);
   // The page's frame with the DevTools id |id|, or null.

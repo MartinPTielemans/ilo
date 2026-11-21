@@ -3515,6 +3515,12 @@ void AgentPage::ReadField(int slot, int node, FieldRead then) {
                       auto placed = base::BindOnce(
                           [](base::WeakPtr<AgentPage> page, FileFieldNow now, std::string label,
                              FieldRead then, std::string frame) {
+                            // A frame that can't be told has no site to name, so it's refused as
+                            // one with none (FileFieldPlaceRefusal), never taken for the top's.
+                            if (frame.empty()) {
+                              std::move(then).Run(std::move(now), std::move(label));
+                              return;
+                            }
                             content::RenderFrameHost* host =
                                 page ? page->FrameById(frame) : nullptr;
                             if (!host) {
@@ -3526,13 +3532,12 @@ void AgentPage::ReadField(int slot, int node, FieldRead then) {
                             std::move(then).Run(std::move(now), std::move(label));
                           },
                           page, std::move(now), std::move(label), std::move(then));
-                      // A field whose document can't be told is refused, never taken for the
-                      // top's.
                       if (!document) {
                         std::move(placed).Run(std::string());
                         return;
                       }
-                      // DevTools names a document's frame on its element child, as <html>.
+                      // DevTools names a document's frame on its element child, as <html>, unless
+                      // that child is itself a frame owner (DocumentFrame).
                       page->Send(
                           "DOM.describeNode",
                           base::DictValue()
@@ -3544,16 +3549,22 @@ void AgentPage::ReadField(int slot, int node, FieldRead then) {
                                 const base::ListValue* children =
                                     described ? described->FindListByDottedPath("node.children")
                                               : nullptr;
-                                std::string frame;
+                                std::vector<DocumentChild> each;
                                 for (size_t i = 0; children && i < children->size(); ++i) {
                                   const base::DictValue* child = (*children)[i].GetIfDict();
-                                  const std::string* id =
-                                      child ? child->FindString("frameId") : nullptr;
-                                  if (id && frame.empty()) {
-                                    frame = *id;
+                                  if (!child) {
+                                    continue;
                                   }
+                                  const std::string* name = child->FindString("nodeName");
+                                  const std::string* id = child->FindString("frameId");
+                                  each.push_back({
+                                      .type = child->FindInt("nodeType").value_or(0),
+                                      .name = name ? *name : std::string(),
+                                      .frame = id ? *id : std::string(),
+                                      .holds_document = child->Find("contentDocument") != nullptr,
+                                  });
                                 }
-                                std::move(placed).Run(std::move(frame));
+                                std::move(placed).Run(DocumentFrame(each));
                               },
                               std::move(placed)),
                           slot);

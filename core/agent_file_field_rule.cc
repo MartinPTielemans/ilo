@@ -53,6 +53,23 @@ std::optional<std::string> FileFieldRefusal(const FileFieldFacts& field) {
   return std::nullopt;
 }
 
+std::string DocumentFrame(const std::vector<DocumentChild>& children) {
+  // DOM's Node.ELEMENT_NODE, of which a document has one at most.
+  constexpr int kElement = 1;
+  const auto element = std::ranges::find(children, kElement, &DocumentChild::type);
+  if (element == children.end() || element->holds_document) {
+    return std::string();
+  }
+  // HTMLFrameOwnerElement's kinds, named in any case, as an XML document keeps its own.
+  const std::string name = Lower(element->name);
+  for (const char* owner : {"iframe", "frame", "object", "embed", "fencedframe"}) {
+    if (name == owner) {
+      return std::string();
+    }
+  }
+  return element->frame;
+}
+
 std::optional<std::string> FileFieldPlaceRefusal(const FileFieldPlace& place) {
   // An opaque origin serializes as "null", which would equal another opaque one's.
   if (place.frame.empty() || place.origin.empty() || place.origin == "null") {
