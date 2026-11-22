@@ -77,6 +77,14 @@ db.commit()
 ' "$logins" || fail "the check's profile kept its logins"
 done
 start a "$profile_dir" 5
+# A yield the driver refuses says why: once macOS didn't find A's running copy by its pid, and the
+# driver said only that it couldn't (#3921). The check's own shell is no app, so it's refused.
+if [ "$(uname)" = Darwin ]; then
+  post yield $$
+  await "^browser: drive $step done" || fail "the driver didn't finish \"yield $$\""
+  logged "^browser: yield to $$ refused: " || fail "the driver refused a yield to the check's \
+shell, $$, without saying why: $(since | grep "^browser: drive $step: \|^browser: yield " | tr '\n' ' ')"
+fi
 open_sign_in
 sign_in first
 await '^browser: account FirstDevice None$' ||
