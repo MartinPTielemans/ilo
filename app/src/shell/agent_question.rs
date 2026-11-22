@@ -404,7 +404,7 @@ impl Shell {
         let a11y = self.a11y;
         let agent = request::plain(&question.agent);
         let small = |line: gpui::Div| line.text_size(px(text::SMALL)).line_height(px(FACTS_LINE));
-        let cell = |words: String| div().flex_1().min_w_0().truncate().child(words);
+        let cell = |words: String| div().flex_1().min_w_0().child(words);
         let line = |cells: Vec<String>| {
             div()
                 .flex()
