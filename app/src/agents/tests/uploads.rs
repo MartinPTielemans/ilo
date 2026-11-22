@@ -146,7 +146,7 @@ fn the_card_names_the_field_and_how_many_files(cx: &mut TestAppContext) {
             "You choose the file. Claude Code sees only what the page shows of it."
         );
         assert_eq!(question.site, "example.com");
-        let field = described["field"].as_u64().unwrap();
+        let field = described["field"].as_f64().unwrap() as u64;
         assert_eq!(question.file, Some(FileAsk { field, many }));
         agents.update(cx, |agents, cx| {
             agents.answer(question.id, Answer::Dismiss, cx)
