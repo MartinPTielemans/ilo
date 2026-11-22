@@ -17,6 +17,7 @@
 #include "browser_core/ad_block.h"
 #include "browser_core/auto_archive.h"
 #include "browser_core/host.h"
+#include "browser_core/notifications.h"
 #include "browser_core/profiles.h"
 #include "browser_core/session.h"
 #include "browser_core/sync_guard.h"
@@ -64,6 +65,7 @@ constexpr Switch kSwitches[] = {
     {"auto_picture_in_picture", &Settings::auto_picture_in_picture},
     {"ask_where_to_save", &Settings::ask_where_to_save},
     {"notification_prompts", &Settings::notification_prompts},
+    {"favorite_notification_badges", &Settings::favorite_notification_badges},
     {"space_header", &Settings::space_header},
 };
 // And the numbers: seconds, bc_hover_kinds' four bits and bc_appearance's choice.
@@ -154,6 +156,9 @@ void Apply(const std::vector<Entity>& entities) {
   }
   if (changed("notification_prompts")) {
     ApplyEveryday(Everyday::kNotificationPrompts);
+  }
+  if (changed("favorite_notification_badges") && !UserSettings().favorite_notification_badges) {
+    ClearFavoriteNotificationCounts();
   }
   if (changed(kLittleArchiveAfter)) {
     ScheduleAutoArchive();

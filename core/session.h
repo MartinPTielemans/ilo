@@ -231,6 +231,10 @@ struct Settings {
   bool ask_where_to_save = false;
   double page_zoom = 1;
   bool notification_prompts = true;
+  // Whether the sidebar's favorite tiles count the notifications their pages posted while the
+  // tab wasn't shown (bc_tab_state's notifications), a count the app draws as a badge. Off, the
+  // core counts none.
+  bool favorite_notification_badges = true;
   // View › Appearance's choice, as bc_appearance has it, and whether Show Space Header keeps a lone
   // unnamed Space's name row. The app draws both; the core keeps them so they follow the account.
   int appearance = 0;

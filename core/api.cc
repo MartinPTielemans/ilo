@@ -63,6 +63,7 @@
 #include "browser_core/live_folder.h"
 #include "browser_core/main_delegate.h"
 #include "browser_core/notes.h"
+#include "browser_core/notifications.h"
 #include "browser_core/page_dialog.h"
 #include "browser_core/page_menu.h"
 #include "browser_core/page_text.h"
@@ -1863,6 +1864,18 @@ void bc_set_notification_prompts(bool on) {
   browser_core::SessionChanged();
 }
 
+bool bc_favorite_notification_badges(void) {
+  return browser_core::UserSettings().favorite_notification_badges;
+}
+
+void bc_set_favorite_notification_badges(bool on) {
+  browser_core::UserSettings().favorite_notification_badges = on;
+  if (!on) {
+    browser_core::ClearFavoriteNotificationCounts();
+  }
+  browser_core::SessionChanged();
+}
+
 bool bc_ad_blocking(void) {
   return browser_core::UserSettings().ad_blocking;
 }
@@ -2930,6 +2943,11 @@ void bc_tab_set_icon(bc_id id, const char* icon) {
   if (browser_core::Tab* tab = browser_core::Tab::Get(id)) {
     tab->SetIcon(icon ? icon : "");
   }
+}
+
+int bc_tab_notifications(bc_id id) {
+  const browser_core::Tab* tab = browser_core::Tab::Get(id);
+  return tab ? tab->notifications() : 0;
 }
 
 void bc_tab_set_page_may_close(bc_id id, bool may) {

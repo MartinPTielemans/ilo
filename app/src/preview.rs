@@ -3131,18 +3131,27 @@ fn main() {
                     shell.set_favorites(favorites.iter().map(|&tab| (tab, 0)).collect(), cx);
                     for (&tab, (title, url, icon)) in favorites.iter().zip(FAVORITES) {
                         shell.set_title(tab, title.into(), cx);
-                        shell.set_page(
-                            tab,
-                            Page {
-                                url: url.into(),
-                                ..Default::default()
-                            },
-                            cx,
-                        );
+                        let page = Page {
+                            url: url.into(),
+                            ..Default::default()
+                        };
+                        shell.set_page(tab, page, cx);
                         let favicon = icon.png().map(|png| {
                             Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, png))
                         });
                         shell.set_favicon(tab, favicon, cx);
+                    }
+                    // PREVIEW_NOTIFICATIONS=<count> gives the first favorite unseen notifications,
+                    // as a page that posted them while its tab wasn't shown, for its badge.
+                    if let Ok(count) = std::env::var("PREVIEW_NOTIFICATIONS") {
+                        if let Ok(count) = count.parse::<u32>() {
+                            let tab = favorites[0];
+                            let page = Page {
+                                notifications: count,
+                                ..shell.page(tab)
+                            };
+                            shell.set_page(tab, page, cx);
+                        }
                     }
                     for (index, (title, url)) in TABS.iter().enumerate() {
                         let tab = index as u64 + 1;

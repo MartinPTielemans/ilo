@@ -107,6 +107,8 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     "site-controls.beak-foot-radius",
     "shell.split-targets.half-glyph-radius",
     "shell.extensions.badge-radius",
+    // A favorite tile's badge is a pill too, its corners half its height (Site notifications).
+    "shell.tile-badge-radius",
     "shell.recent-downloads.preview-radius",
     "menu.radius",
     // A drawing of the window, its corners and its page card's at the drawing's scale (#2407).
@@ -208,6 +210,7 @@ fn a_corner_inside_another_is_concentric() {
     assert_eq!(menu::RADIUS, radius::CONTROL + menu::PADDING);
     // A pill's corners are half its height.
     assert_eq!(extensions::BADGE_RADIUS, extensions::BADGE_HEIGHT / 2.);
+    assert_eq!(shell::TILE_BADGE_RADIUS, shell::TILE_BADGE_HEIGHT / 2.);
 }
 
 #[test]

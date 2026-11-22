@@ -15,6 +15,7 @@
 #include "base/task/cancelable_task_tracker.h"
 #include "base/time/time.h"
 #include "browser_core/agent_job_voter.h"
+#include "browser_core/notification_count.h"
 #include "browser_core/platform/system_page.h"
 #include "browser_core/protected_move_rule.h"
 #include "browser_core/public/browser_core.h"
@@ -71,6 +72,10 @@ class Tab : public content::WebContentsObserver,
   static content::WebContents* FromId(bc_id id);
   // Every tab, with its page or without.
   static std::vector<Tab*> All();
+  // The tab of |profile|'s whose page is at |document|, the URL a non-persistent notification
+  // names for the page that posted it (notifications.cc), or null if none: its page may have
+  // closed, or be one no window holds, or one of another profile's.
+  static Tab* HoldingDocument(const GURL& document, Profile* profile);
   // Whether |id| has its page loaded, which it hasn't without one, nor once unloaded in place by
   // Chrome, nor while opened behind and not yet shown.
   static bool Loaded(bc_id id);
@@ -216,6 +221,15 @@ class Tab : public content::WebContentsObserver,
   // Plays, pauses or skips the page's media, as bc_tab_media.
   void Media(int action);
   bool muted() const;
+
+  // The notifications the page has posted that the user hasn't seen, as bc_tab_notifications has
+  // them: one the page posted while the tab wasn't shown, cleared as the window shows the tab
+  // again. NotificationCount holds the rule, apart so its unittests test it alone.
+  int notifications() const { return notifications_.count(); }
+  // The page posted |notification| while the tab wasn't shown, as the app's badge counts it.
+  void NotificationPosted(const std::string& notification);
+  // The window shows the tab again, so its unseen notifications are seen.
+  void Shown();
 
   // Whether the page may close the tab with window.close(), as bc_tab_set_page_may_close.
   void SetPageMayClose(bool may);
@@ -539,6 +553,13 @@ class Tab : public content::WebContentsObserver,
   SystemPageIconState system_page_icon_ = SystemPageIconState::kShown;
   // The page said it has no icon before the profile's favicons answered.
   bool system_page_icon_none_ = false;
+  // The page's unseen notifications (notifications.cc), apart so its rule is tested alone: the
+  // count the app's badge draws, and the ids it counted, so one Chromium holds for two
+  // notifications, once it's displayed twice for one (NotificationDisplayQueue re-displays a
+  // queued one as a blocker lifts), doesn't count twice. Cleared as the window shows the tab
+  // again. Not kept across a quit: a notification that came while the browser wasn't running is
+  // gone with it.
+  NotificationCount notifications_;
   base::WeakPtrFactory<Tab> weak_factory_{this};
 };
 

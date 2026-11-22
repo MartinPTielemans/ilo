@@ -2011,6 +2011,16 @@ void Window::Show(content::WebContents* contents, const gfx::Rect& frame) {
       Seen(pane);
     }
   }
+  // A pane entering shows its page in this window now, so its unseen notifications are seen
+  // (Tab::Shown), as a pane leaving was seen until now. The tab selected shows too, and a pane
+  // the window shows already is counted by none (notifications.cc).
+  for (bc_id pane : panes) {
+    if (!std::ranges::contains(panes_, pane)) {
+      if (Tab* entering = Tab::Get(pane)) {
+        entering->Shown();
+      }
+    }
+  }
   panes_ = std::move(panes);
   const bool newly_shown = shown_.get() != contents;
   shown_ = contents->GetWeakPtr();

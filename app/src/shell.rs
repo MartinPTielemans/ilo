@@ -3900,6 +3900,11 @@ impl Shell {
                 flag(page.developer_mode)
             );
         }
+        // A favorite's badge counts them, drawn outside the tab it's of, so check.sh can wait for
+        // the change. keep_page reports it with the page's other changes, so the tiles redraw.
+        if page.notifications != entry.page.notifications {
+            log!("browser: page {tab} notifications {}", page.notifications);
+        }
         let now = self.clock.now();
         (self.swaps).page_changed(tab, self.selected, &entry.page, &page, now);
         let trouble = (page.trouble != entry.page.trouble).then_some(page.trouble);
@@ -6437,6 +6442,12 @@ mod tests {
             ..page.clone()
         }));
         assert!(tab.keep_page(Page {
+            audible: true,
+            loading: true,
+            ..page.clone()
+        }));
+        assert!(tab.keep_page(Page {
+            notifications: 3,
             audible: true,
             loading: true,
             ..page.clone()

@@ -81,6 +81,10 @@ typedef struct bc_tab_state {
   // The tab is pinned or a favorite, and its page isn't the one it was pinned or made a favorite
   // at. bc_tab_back_to_pinned_url goes back there.
   bool away_from_pinned_url;
+  // The notifications the page has posted that the user hasn't seen, as its favorite's badge
+  // counts them (bc_tab_notifications): one a notification the page posted while the tab wasn't
+  // shown, cleared as a window shows it again. Not kept across a quit.
+  int notifications;
   // The page is playing sound, muted or not, or was in the last 2 s, as Chrome's speaker shows.
   bool audible;
   // The tab's sound is muted, by bc_tab_set_muted or an extension.
@@ -2944,6 +2948,11 @@ BC_EXPORT void bc_set_page_zoom(double factor);
 // question by default; a site the user allowed or blocked keeps its own choice.
 BC_EXPORT bool bc_notification_prompts(void);
 BC_EXPORT void bc_set_notification_prompts(bool on);
+// Whether the sidebar's favorite tiles count the notifications their pages posted while the tab
+// wasn't shown and draw the count as a badge: on unless the user turned it off, which clears the
+// counts they had.
+BC_EXPORT bool bc_favorite_notification_badges(void);
+BC_EXPORT void bc_set_favorite_notification_badges(bool on);
 // Whether a page's WebRTC, its calls and what it sends straight to other browsers, goes only
 // through the TURN relays the page names, in every profile and its private windows: off unless the
 // user turned it on, when a page with no relay can't connect. Off, WebRTC gathers on the default
@@ -3965,6 +3974,11 @@ BC_EXPORT void bc_tab_rename(bc_id tab, const char* name);
 // Gives the tab |icon|, an emoji, UTF-8, to show in place of its page's favicon, kept as its name
 // is; empty gives it back its favicon. Then tab_state_changed.
 BC_EXPORT void bc_tab_set_icon(bc_id tab, const char* icon);
+
+// The notifications the tab's page has posted that the user hasn't seen, as its favorite's badge
+// counts them: one a notification the page posted while the tab wasn't shown, cleared as a window
+// shows it again. Not kept across a quit. Read from the tab's tab_state_changed too.
+BC_EXPORT int bc_tab_notifications(bc_id tab);
 
 // Mutes or unmutes the tab, whatever page it's at. Duplicating it and ⇧⌘T keep it muted; a quit
 // doesn't. Then tab_state_changed.

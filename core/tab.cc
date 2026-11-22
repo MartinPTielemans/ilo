@@ -319,6 +319,20 @@ std::vector<Tab*> Tab::All() {
 }
 
 // static
+Tab* Tab::HoldingDocument(const GURL& document, Profile* profile) {
+  for (Tab* tab : All()) {
+    // The page the notification's document names, as Chrome matches it to its renderer's
+    // documents: the page's own URL, not the site's. Only the profile's own tabs, as a page of
+    // another profile's at the same URL is another notification's.
+    if (tab->profile() == profile && tab->web_contents() &&
+        tab->web_contents()->GetLastCommittedURL() == document) {
+      return tab;
+    }
+  }
+  return nullptr;
+}
+
+// static
 bc_id Tab::Restore(Profile* profile, const SavedTab& saved) {
   return profile ? Make(profile, std::string(), saved) : 0;
 }
@@ -1379,6 +1393,20 @@ bool Tab::muted() const {
   return web_contents() ? web_contents()->IsAudioMuted() : unloaded_ && unloaded_->muted;
 }
 
+void Tab::NotificationPosted(const std::string& notification) {
+  if (!notifications_.Posted(notification)) {
+    return;
+  }
+  ReportStateSoon();
+}
+
+void Tab::Shown() {
+  if (!notifications_.Shown()) {
+    return;
+  }
+  ReportStateSoon();
+}
+
 void Tab::DidOpenRequestedURL(content::WebContents* new_contents,
                               content::RenderFrameHost* source_render_frame_host,
                               const GURL& url,
@@ -1498,6 +1526,7 @@ void Tab::ReportState() {
         .loading = false,
         .unloaded = true,
         .away_from_pinned_url = pinned_url.is_valid() && !At(pinned_url),
+        .notifications = notifications(),
         .audible = false,
         .muted = muted(),
         .icon = icon_.c_str(),
@@ -1551,6 +1580,7 @@ void Tab::ReportState() {
       .loading = page ? page->loading() : contents->ShouldShowLoadingUI(),
       .unloaded = !page && (history.NeedsReload() || waiting_),
       .away_from_pinned_url = pinned_url.is_valid() && !At(pinned_url),
+      .notifications = notifications(),
       .audible = page ? page->audible() : audible && audible->WasRecentlyAudible(),
       .muted = page ? page->muted() : contents->IsAudioMuted(),
       .volume = volume_,
