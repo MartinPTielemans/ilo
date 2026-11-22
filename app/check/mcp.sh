@@ -1031,6 +1031,28 @@ const q = new URLSearchParams(location.search);
 onload = () => setTimeout(() => { location.href = q.get("file"); }, Number(q.get("ms")));
 </script>' > "$out/site/later.html"
   later_logged='^browser: agent logged mcp-client download later\.localhost$'
+  # Focus Agent Question's key (#3869), ⌥⇧⌘A on the Mac and Alt+Shift+A elsewhere, gives the card
+  # the keyboard and answers nothing; ↩ straight after it is ignored, the key again gives the
+  # keyboard back, and ↩ once the protection's 500 ms have passed presses Allow Once, which the
+  # activity log records as a click's answer.
+  if [ "$(uname)" = Darwin ]; then card_key="a alt shift cmd"; else card_key="a ctrl shift"; fi
+  answer_by_keys() {
+    send key $card_key
+    expect "^browser: agent card keys on $1 Allow Once\$" \
+      "Focus Agent Question's key didn't give the later download's card the keyboard on Allow Once"
+    send key return
+    expect "^browser: agent card key ignored, " "↩ straight after Focus Agent Question's key wasn't ignored"
+    send key $card_key
+    expect "^browser: agent card keys back by key\$" "Focus Agent Question's key again didn't give the keyboard back"
+    ! grep -q "^browser: agent mcp-client answered $1 " "$log" ||
+      fail "Focus Agent Question's key, or ↩ straight after it, answered the later download: $(grep "^browser: agent mcp-client answered $1 " "$log")"
+    send key $card_key
+    expect "^browser: agent card keys on $1 Allow Once\$" "Focus Agent Question's key didn't give the card the keyboard a second time"
+    # The protection's own interval, which no line marks the end of.
+    sleep 0.6
+    send key return
+    expect "^browser: agent card keys back by card\$" "↩ after the protection didn't answer, giving the keyboard back"
+  }
   for ms in 2000 7000; do
     stem=later-${ms%000}
     printf 'later\n' > "$out/site/$stem.docx"
@@ -1046,7 +1068,10 @@ onload = () => setTimeout(() => { location.href = q.get("file"); }, Number(q.get
     read -r qx qy qw qh <<CARD
 $(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
 CARD
-    send click $((qx + qw * 3 / 4)) $((qy + qh - 26 - 36))
+    case $ms in
+      2000) send click $((qx + qw * 3 / 4)) $((qy + qh - 26 - 36)) ;;
+      *) answer_by_keys "$q" ;;
+    esac
     await_log "^browser: agent mcp-client answered $q Once\$" "Allow Once didn't answer the later download"
     await_more "$later_logged" "$logged" ||
       fail "the watched tab's later download isn't in the activity log as the agent's"

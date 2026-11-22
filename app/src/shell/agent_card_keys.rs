@@ -128,7 +128,6 @@ impl Shell {
     /// ended: the key from the page gives the card the keyboard again rather than back.
     pub fn leave_card_keys(&mut self, cx: &mut Context<Self>) {
         if self.card_keys.take().is_some() {
-            // check.sh waits for this line.
             log!("browser: agent card keys left by page");
             cx.notify();
         }
@@ -166,7 +165,6 @@ impl Shell {
                     window.focus(&self.agent_card_buttons[keys.at], cx);
                 } else if !on_card {
                     self.card_keys = None;
-                    // check.sh waits for this line.
                     log!("browser: agent card keys left by focus");
                 }
                 return;
