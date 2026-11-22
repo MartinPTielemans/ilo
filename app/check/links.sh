@@ -447,6 +447,7 @@ if [ "$driven" = 1 ]; then
   send menu New Space…
   expect "^browser: spaces $first [0-9]*\$" "New Space didn't make a second Space"
   second=$(grep '^browser: spaces' "$log" | tail -1 | cut -d' ' -f4)
+  expect '^browser: field Space name has the keyboard$' "New Space's name didn't have the keyboard"
   send type work
   send key return
   expect "^browser: create space $second work\$" "return didn't name the second Space"
