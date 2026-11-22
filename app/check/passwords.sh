@@ -369,8 +369,9 @@ click_in_sight "switch save and fill addresses"
 expect '^browser: save and fill addresses on$' "a second click didn't switch addresses back on"
 # Manage Passwords…, under the box of the login's row, opens Chrome's password manager page in a
 # new tab, where a search for the username finds the login. Its device check guards only Show,
-# Copy, a login's details and Export, which the run never asks for, so no prompt comes. ⌘W closes
-# it, and ⌘2 shows the login page's tab again, under the welcome page's.
+# Copy, a login's details and Export, which the run never asks for, so no prompt comes. It opened
+# over the login page's tab, which ⌘W shows again (#3813); ⌘1 and ⌘2 then go to the welcome page's
+# tab above it and back.
 post clickkey $(drawn "manage passwords")
 expect '^browser: manage passwords [0-9]*$' "a click on Manage Passwords… didn't run it"
 expect '^browser: settings hidden$' "Manage Passwords… didn't hide Settings"
@@ -397,8 +398,12 @@ done
 ../tools/window-screenshot.sh "$pid" "$out/password-manager.png" || fail "no window to capture"
 send key w cmd
 expect "^browser: tab $manager closed\$" "⌘W didn't close Chrome's password manager page"
-send key 2 cmd
-expect "^browser: selected $tab\( in .*\)\{0,1\}\$" "⌘2 didn't show the login's tab again"
+expect "^browser: selected $tab\( in .*\)\{0,1\}\$" \
+  "closing Chrome's password manager page didn't show the login's tab it opened over"
+welcome=$(today | cut -d' ' -f1)
+[ "$welcome" != "$tab" ] || fail "the welcome page's tab isn't above the login's: Today is \"$(today)\""
+switch "$(($(pinned | wc -w) + 1)) cmd" "$welcome"
+switch "$(($(pinned | wc -w) + 2)) cmd" "$tab"
 # On the Mac, Manage Passkeys… beside it opens Chrome's list of the passkeys the Mac keeps for the
 # profile, in a new tab, where each can be deleted: the one place they're listed, which Chrome's
 # password manager links to only once there's one (#2354). The run's build holds no keychain group
@@ -424,8 +429,10 @@ if [ "$(uname)" = Darwin ]; then
   ../tools/window-screenshot.sh "$pid" "$out/passkeys-list.png" || fail "no window to capture"
   send key w cmd
   expect "^browser: tab $passkeys closed\$" "⌘W didn't close Chrome's list of passkeys"
-  send key 2 cmd
-  expect "^browser: selected $tab\( in .*\)\{0,1\}\$" "⌘2 didn't show the login's tab again"
+  expect "^browser: selected $tab\( in .*\)\{0,1\}\$" \
+    "closing Chrome's list of passkeys didn't show the login's tab it opened over"
+  switch "$(($(pinned | wc -w) + 1)) cmd" "$welcome"
+  switch "$(($(pinned | wc -w) + 2)) cmd" "$tab"
 fi
 
 # The row's Remove closes the panel and asks in the browser window's dialog, where return removes
