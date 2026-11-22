@@ -259,6 +259,24 @@ start_arranging
 send click $(slot 0)
 expect "^browser: arrange $tab Selected None selected " "a click in the mode didn't select a thing"
 expect "^browser: mini bar \(window \)\{0,1\}shown\$" "the mini bar wasn't shown over the thing selected"
+# Probe for #3871, never to land: every window on the runner's screen, front to back, and the
+# screen itself, as the mini bar shows, so a red says what AppKit took to cover it.
+if [ "$(uname)" = Darwin ]; then
+  swift - > "$out/windows-at-bar.txt" 2>&1 <<'SWIFT' || true
+import CoreGraphics
+import Foundation
+let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+for w in list {
+  let b = w[kCGWindowBounds as String] as? [String: Any] ?? [:]
+  print("window", w[kCGWindowNumber as String] ?? 0, w[kCGWindowOwnerName as String] ?? "?",
+        "pid", w[kCGWindowOwnerPID as String] ?? 0, "layer", w[kCGWindowLayer as String] ?? 0,
+        "alpha", w[kCGWindowAlpha as String] ?? 0, "at", b["X"] ?? 0, b["Y"] ?? 0, b["Width"] ?? 0,
+        b["Height"] ?? 0, w[kCGWindowName as String] ?? "")
+}
+SWIFT
+  screencapture -x "$out/screen-at-bar.png" || true
+  sed 's/^/probe: /' "$out/windows-at-bar.txt"
+fi
 expect '^browser: mini bar drawn over [0-9]*$' "the mini bar didn't draw"
 shows "$own" "a click in the mode reached the page"
 [ "$(said | sed 's/.* at \([0-9-]*,[0-9-]*\) first .*/\1/')" = "${landed% *},${landed#* }" ] ||
