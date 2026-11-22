@@ -3308,7 +3308,8 @@ impl Agents {
             return;
         }
         let field: Value = serde_json::from_str(&text).unwrap_or_default();
-        let id = field.get("field").and_then(Value::as_u64).unwrap_or(0);
+        // The core writes ids as JSON doubles, which Chromium's writer gives a ".0".
+        let id = field.get("field").and_then(Value::as_f64).unwrap_or(0.0) as u64;
         let label = field.get("label").and_then(Value::as_str).unwrap_or("");
         // The page's words, kept inside the quotes they're shown in.
         let label = page::clip(&request::plain(label), 60);

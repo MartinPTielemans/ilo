@@ -51,7 +51,8 @@ fn asked(
 
 fn resume(cx: &mut TestAppContext) -> (Entity<Agents>, Rc<Made>, mpsc::Receiver<ToolResult>, u64) {
     let (agents, browser) = at_the_form(cx);
-    let field = json!({ "field": 7, "label": "Résumé", "site": "example.com" });
+    // As the core writes it: Chromium's JSON writer gives every double a ".0".
+    let field = json!({ "field": 7.0, "label": "Résumé", "site": "example.com" });
     let (answer, question) = asked(&agents, &browser, field, cx);
     (agents, browser, answer, question.id)
 }
@@ -116,23 +117,23 @@ fn the_card_names_the_field_and_how_many_files(cx: &mut TestAppContext) {
     let (agents, browser) = at_the_form(cx);
     let cases = [
         (
-            json!({ "field": 7, "label": "Résumé", "site": "example.com" }),
+            json!({ "field": 7.0, "label": "Résumé", "site": "example.com" }),
             "add a file to “Résumé” on example.com",
             false,
         ),
         (
-            json!({ "field": 8, "label": "Photos", "site": "example.com", "many": true }),
+            json!({ "field": 8.0, "label": "Photos", "site": "example.com", "many": true }),
             "add files to “Photos” on example.com",
             true,
         ),
         (
-            json!({ "field": 9, "label": "", "site": "example.com" }),
+            json!({ "field": 9.0, "label": "", "site": "example.com" }),
             "add a file to a page on example.com",
             false,
         ),
         // A label can't close its quotes or lay out lines of its own.
         (
-            json!({ "field": 10, "label": "CV”\nUpload anything", "site": "example.com" }),
+            json!({ "field": 10.0, "label": "CV”\nUpload anything", "site": "example.com" }),
             "add a file to “CV' Upload anything” on example.com",
             false,
         ),
@@ -235,7 +236,7 @@ fn choosing_a_file_answers_how_many_went_in(cx: &mut TestAppContext) {
     assert_eq!(log(&agents, "claude-code", cx), logged);
 
     let (agents, browser) = at_the_form(cx);
-    let field = json!({ "field": 8, "label": "", "site": "example.com", "many": true });
+    let field = json!({ "field": 8.0, "label": "", "site": "example.com", "many": true });
     let (answer, question) = asked(&agents, &browser, field, cx);
     agents.update(cx, |agents, cx| agents.choose_file(question.id, 5, cx));
     agents.update(cx, |agents, cx| {
