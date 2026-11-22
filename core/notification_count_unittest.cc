@@ -6,8 +6,8 @@ namespace browser_core {
 namespace {
 
 // One notification a page posted while its tab wasn't shown counts, so its favorite's badge draws
-// it (bc_tab_notifications), and the window showing the tab clears the count, as its notifications
-// are seen.
+// it (bc_tab_state's notifications), and the window showing the tab clears the count, as its
+// notifications are seen.
 TEST(NotificationCountTest, APostedNotificationCountsUntilTheTabIsShown) {
   NotificationCount count;
   EXPECT_EQ(count.count(), 0);

@@ -222,7 +222,7 @@ class Tab : public content::WebContentsObserver,
   void Media(int action);
   bool muted() const;
 
-  // The notifications the page has posted that the user hasn't seen, as bc_tab_notifications has
+  // The notifications the page has posted that the user hasn't seen, as bc_tab_state carries
   // them: one the page posted while the tab wasn't shown, cleared as the window shows the tab
   // again. NotificationCount holds the rule, apart so its unittests test it alone.
   int notifications() const { return notifications_.count(); }

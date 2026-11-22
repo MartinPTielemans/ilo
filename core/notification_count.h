@@ -7,8 +7,8 @@
 namespace browser_core {
 
 // The notifications a page has posted that the user hasn't seen, as its favorite's badge counts
-// them (bc_tab_notifications): one a notification the page posted while its tab wasn't shown,
-// cleared as a window shows the tab again. A notification Chromium holds for two displays
+// them (bc_tab_state's notifications): one a notification the page posted while its tab wasn't
+// shown, cleared as a window shows the tab again. A notification Chromium holds for two displays
 // (NotificationDisplayQueue re-displays a queued one as a blocker lifts) counts once, by its id.
 // Apart from content so browser_core_unittests tests the rule alone.
 class NotificationCount {

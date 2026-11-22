@@ -3131,11 +3131,14 @@ fn main() {
                     shell.set_favorites(favorites.iter().map(|&tab| (tab, 0)).collect(), cx);
                     for (&tab, (title, url, icon)) in favorites.iter().zip(FAVORITES) {
                         shell.set_title(tab, title.into(), cx);
-                        let page = Page {
-                            url: url.into(),
-                            ..Default::default()
-                        };
-                        shell.set_page(tab, page, cx);
+                        shell.set_page(
+                            tab,
+                            Page {
+                                url: url.into(),
+                                ..Default::default()
+                            },
+                            cx,
+                        );
                         let favicon = icon.png().map(|png| {
                             Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, png))
                         });

@@ -2945,11 +2945,6 @@ void bc_tab_set_icon(bc_id id, const char* icon) {
   }
 }
 
-int bc_tab_notifications(bc_id id) {
-  const browser_core::Tab* tab = browser_core::Tab::Get(id);
-  return tab ? tab->notifications() : 0;
-}
-
 void bc_tab_set_page_may_close(bc_id id, bool may) {
   // Never an agent's tab, which a page's close would take from under the agent.
   browser_core::Space* space = browser_core::Space::Holding(id);

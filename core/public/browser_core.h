@@ -82,8 +82,8 @@ typedef struct bc_tab_state {
   // at. bc_tab_back_to_pinned_url goes back there.
   bool away_from_pinned_url;
   // The notifications the page has posted that the user hasn't seen, as its favorite's badge
-  // counts them (bc_tab_notifications): one a notification the page posted while the tab wasn't
-  // shown, cleared as a window shows it again. Not kept across a quit.
+  // counts them: one a notification the page posted while the tab wasn't shown, cleared as a
+  // window shows it again. Not kept across a quit.
   int notifications;
   // The page is playing sound, muted or not, or was in the last 2 s, as Chrome's speaker shows.
   bool audible;
@@ -3974,11 +3974,6 @@ BC_EXPORT void bc_tab_rename(bc_id tab, const char* name);
 // Gives the tab |icon|, an emoji, UTF-8, to show in place of its page's favicon, kept as its name
 // is; empty gives it back its favicon. Then tab_state_changed.
 BC_EXPORT void bc_tab_set_icon(bc_id tab, const char* icon);
-
-// The notifications the tab's page has posted that the user hasn't seen, as its favorite's badge
-// counts them: one a notification the page posted while the tab wasn't shown, cleared as a window
-// shows it again. Not kept across a quit. Read from the tab's tab_state_changed too.
-BC_EXPORT int bc_tab_notifications(bc_id tab);
 
 // Mutes or unmutes the tab, whatever page it's at. Duplicating it and ⇧⌘T keep it muted; a quit
 // doesn't. Then tab_state_changed.
