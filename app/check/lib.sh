@@ -447,9 +447,37 @@ app_pid() {
 window_pid() {
   awk '/^NSpid:/ { print $NF }' "/proc/$(app_pid)/status"
 }
-# Turns the Mac's appearance dark (true) or light (false), as System Settings › Appearance does.
+# Waits, up to 30 s, until System Events answers an Apple event: one that's starting or quitting
+# turns events away with -600 or -609, and one that's busy lets them time out with -1712 (#3889).
+# Any other refusal, such as the check not being allowed to control it, ends the wait at once. When
+# it doesn't answer, what osascript said goes to stderr.
+system_events_answers() {
+  deadline=$((SECONDS + 30))
+  while ! said=$(osascript -e 'with timeout of 5 seconds' \
+    -e 'tell application "System Events" to get name' -e 'end timeout' 2>&1 > /dev/null); do
+    case $said in
+      *'(-600)'* | *'(-609)'* | *'(-1712)'*)
+        if [ "$SECONDS" -lt "$deadline" ]; then
+          sleep 0.5
+          continue
+        fi
+        echo "System Events didn't answer an Apple event in 30 s: $said" >&2
+        ;;
+      *) echo "System Events turned an Apple event away: ${said:-osascript said nothing}" >&2 ;;
+    esac
+    return 1
+  done
+}
+# The Mac's appearance, true when dark, once System Events answers.
+dark_mode_now() {
+  system_events_answers &&
+    osascript -e 'tell application "System Events" to tell appearance preferences to get dark mode'
+}
+# Turns the Mac's appearance dark (true) or light (false), as System Settings › Appearance does,
+# once System Events answers. When it can't, what osascript said goes to stderr.
 appearance() {
-  osascript -e "tell application \"System Events\" to tell appearance preferences to set dark mode to $1"
+  system_events_answers && osascript -e 'tell application "System Events"' \
+    -e "tell appearance preferences to set dark mode to $1" -e 'end tell' > /dev/null
 }
 # Hides the Dock and, for the apps launched after, the menu bar, as System Settings › Desktop &
 # Dock and Control Center do, keeping what they were in $bars for show_bars.
