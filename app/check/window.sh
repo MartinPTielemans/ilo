@@ -1003,7 +1003,8 @@ toggle ui shown "⌘S after a resize"
 # With the sidebar hidden, the pointer at the window's left edge brings it out over the page in a
 # window of its own, which takes clicks and leaves the keyboard to the browser window, and the
 # pointer well past it sends it away. A click on its sidebar button, or ⌘S, docks the sidebar.
-# check_reveal <what> [shown]: the reveal's window covers the left edge, or there's none.
+# check_reveal <what> [shown [width]]: the reveal's window covers the left edge, its panel 228 wide
+# or <width>, or there's none.
 check_reveal() {
   # The UI logs its rest before the host takes its window in from the spring's overshoot, a turn
   # of the run loop later, so a layout or two may still see the wider window.
@@ -1014,7 +1015,7 @@ check_reveal() {
     height=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
       sed 's/^browser: layout content [0-9]*x\([0-9]*\),.*/\1/')
     expected=
-    [ "${2:-}" = shown ] && expected="0,0 233x$height"
+    [ "${2:-}" = shown ] && expected="0,0 $((5 + ${3:-228}))x$height"
     [ "$child" = "$expected" ] && return
   done
   fail "$1: the reveal's window is at ${child:-none}, not ${expected:-none}"
@@ -1094,6 +1095,20 @@ check_reveal "with the sidebar out" shown
 check_layout "with the sidebar out" inset
 check_buttons "with the sidebar out" hidden
 ../tools/window-screenshot.sh "$pid" "$out/sidebar-reveal.png" || fail "no window to capture"
+# The panel's edge drags the width too, inside its own 10 (#3942). Pressed 5 in and held, the panel
+# follows the pointer out over the page, its window with it, and stays out; let go over it, it
+# keeps the width, the docked sidebar's, and the page doesn't move. A double-click puts back 228.
+send press 228 300
+send dragto 278 300
+send dragto 328 300
+../tools/window-screenshot.sh "$pid" "$out/reveal-edge-drag.png" || fail "no window to capture"
+send release 328 300
+expect '^browser: sidebar width 328$' "dragging the edge of the sidebar out didn't widen it to 328"
+check_reveal "with the edge of the sidebar out dragged to 328" shown 328
+check_layout "with the edge of the sidebar out dragged" inset
+send doubleclick 328 300
+expect '^browser: sidebar width 228$' "a double-click on the edge of the sidebar out didn't put back 228"
+check_reveal "with the edge of the sidebar out put back" shown
 send move 200 300
 send move 250 300
 if [ "$(uname)" = Linux ]; then

@@ -1714,6 +1714,8 @@ pub struct Shell {
     /// Where across the window the pointer was last, for the reveal, and whether it's on a row's
     /// hover card, which keeps the sidebar out as the panel does.
     reveal_x: f32,
+    /// How wide the reveal's window was last asked to be, which it is while it shows.
+    reveal_window: f32,
     /// While the pointer is in the strip at the window's left edge: where up or down it came in,
     /// and whether it has moved `REVEAL_MOVE` from there since.
     reveal_strip: Option<(f32, bool)>,
@@ -2276,6 +2278,7 @@ impl Shell {
             reveal_motion: None,
             reveal_wait: None,
             reveal_x: 0.,
+            reveal_window: 0.,
             reveal_strip: None,
             legacy_scroller: false,
             scroller: Default::default(),
@@ -4935,7 +4938,7 @@ impl Render for Shell {
             && self.library.is_none();
         // A drag already going, a tab's, a Space's or a swipe's, keeps the pointer as it passes.
         let dragging = self.drag.is_some() || self.swipe.is_some() || cx.has_active_drag();
-        let edge = (docked && !dragging).then(|| self.sidebar_edge(cx));
+        let edge = (docked && !dragging).then(|| self.sidebar_edge(false, cx));
         let own_buttons = self
             .draws_own_window_buttons()
             .then(|| self.window_buttons(self.viewport.width, cx));
@@ -5618,8 +5621,7 @@ impl Shell {
                 // check.sh waits for these lines.
                 if self.revealed {
                     log!("browser: reveal shown");
-                    // Its window ends at its edge, so the page past it takes clicks again.
-                    self.browser.show_reveal(REVEAL_INSET + self.width(), cx);
+                    self.size_reveal(cx);
                 } else {
                     log!("browser: reveal hidden");
                     self.browser.hide_reveal(cx);
@@ -5632,6 +5634,13 @@ impl Shell {
             return div().into_any_element();
         }
         if self.list_moving() {
+            window.request_animation_frame();
+        }
+        // Its window follows its edge dragged, or settling after a double-click.
+        if self.reveal_motion.is_none() {
+            self.size_reveal(cx);
+        }
+        if self.width_motion.is_some() {
             window.request_animation_frame();
         }
         self.step_retip(cx);
@@ -5656,6 +5665,10 @@ impl Shell {
             true => span - left - self.width(),
             false => left,
         };
+        // At rest, its edge drags the width as the docked sidebar's does.
+        let dragging = self.drag.is_some() || cx.has_active_drag();
+        let edge = (self.revealed && self.reveal_motion.is_none() && !dragging)
+            .then(|| self.sidebar_edge(true, cx));
         // Unless a field in the panel has it. On the web the panel is in the shell's own window.
         if !WEB && !self.reveal_focus.contains_focused(window, cx) {
             window.focus(&self.reveal_focus, cx);
@@ -5699,6 +5712,7 @@ impl Shell {
                     .bg(self.gradient(Some(self.palette.underlay.into())))
                     .children((!self.bar_on()).then(|| self.window_buttons(px(self.width()), cx)))
                     .child(self.sidebar(cx).left_0())
+                    .children(edge)
                     .child(self.scroll_listener(false, cx)),
             )
             // Its window spans the bar's end over the sidebar's column, so it draws the bar's
