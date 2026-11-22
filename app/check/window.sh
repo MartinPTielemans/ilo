@@ -572,6 +572,8 @@ stop_trace() {
   expect_late '^browser: trace save panel shown$' "$when, Stop didn't ask where to save the trace"
   send savecancel
   expect '^browser: save panel cancelled$' "$when, the trace's save panel didn't cancel"
+  # The real pointer goes on to the page, off the toasts to come, which it would hover as they drew.
+  ! real_pointer || real move $page_point
 }
 record_trace() {
   send menu "Record a Trace"

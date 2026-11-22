@@ -224,20 +224,21 @@ else
       expect '^browser: toast shown Recording a trace \[stop\]$' "no toast said a trace was recording"
       expect '^browser: toast plate [0-9]* [0-9]* [0-9]* [0-9]* in [0-9]* [0-9]*$' \
         "the trace's toast didn't tell where its plate is" "$recording"
-      expect '^browser: plate window toast at ' "the trace's toast put no window over its plate" \
-        "$recording"
       set -- $(grep '^browser: toast plate' "$log" | tail -1 | sed 's/^browser: toast plate //; s/ in / /')
       send layout
       content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
         sed 's/^browser: layout content \([0-9]*\)x.*/\1/')
       stop="$((content - $5 + $1 + $3 - 38)) $(($2 + $4 / 2))"
-      size=$(grep '^browser: plate window toast at ' "$log" | tail -1 | cut -d' ' -f7 | tr -d ,)
       send order
       frame=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: frame window 1 ' |
         cut -d' ' -f5-6)
+      # Read before the window over the plate is looked for, so a run without it has them too.
       toast_windows="$out/access-toast-windows.txt"
       ../tools/ax-windows.sh "$pid" $((${frame% *} + ${stop% *})) $((${frame#* } + ${stop#* })) \
         > "$toast_windows"
+      expect '^browser: plate window toast at ' "the trace's toast put no window over its plate" \
+        "$recording"
+      size=$(grep '^browser: plate window toast at ' "$log" | tail -1 | cut -d' ' -f7 | tr -d ,)
       sed -n '/^AXWindows:/,/^hit at /p' "$toast_windows" | grep -q " $size\$" &&
         fail "the toast's plate window, $size, is one of the app's windows to $screen_reader: $toast_windows"
       grep -q "^hit at .*: $button \"Stop\"\$" "$toast_windows" ||

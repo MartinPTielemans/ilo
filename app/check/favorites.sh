@@ -411,6 +411,8 @@ expect "^browser: menu shown $(cased 'Back to Favorite URL (disabled), Replace F
 send choose "$(cased 'Remove Icon')"
 expect "^browser: page $a icon none\$" "Remove Icon on the restored tile didn't take its icon out"
 expect "^browser: tile $a drawn with icon none\$" "the restored tile didn't draw its favicon again"
+# The real pointer on the page, wherever an earlier check left it, so the toast comes up off it.
+! real_pointer || real move $page_point
 post rightclick $tile
 expect "^browser: menu shown $(cased 'Back to Favorite URL (disabled), Replace Favorite URL with Current (disabled), Duplicate Tab, Remove from Favorites, Change Icon…, Close Tab')\$" \
   "a right-click on the restored tile didn't show the favorite's menu"

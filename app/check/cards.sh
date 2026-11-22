@@ -172,6 +172,9 @@ card_button() {
 # window it goes to, and the button takes it, not the window under the card (#3611). Else the
 # driver's: onto the card, then on it again.
 click_card_button() {
+  # The real pointer, left on the last card's button, goes off the rows first, where the driver's
+  # isn't, so it hovers none. Not after the click, as its order would come after the click's lines.
+  ! real_pointer || real move $page_point
   send move "$1" "$2"
   expect "^browser: hover card shown $3 \(.* \)\{0,1\}$4 " \
     "tab $3's card didn't show with its $4 button"
@@ -188,8 +191,6 @@ click_card_button() {
   expect "^browser: hover card $4 $3\$" "a click on the card's $4 button didn't reach it"
   expect "^browser: command $4 via hover card\$" "the card's $4 button didn't make its call"
   expect '^browser: hover card hidden$' "the card didn't go after its $4 button"
-  # Off the rows, where the driver's pointer goes next, so the real one hovers none.
-  ! real_pointer || real move $page_point
 }
 # Pin moves the row up into the pinned tabs, and its card then offers Unpin, which puts it back.
 click_card_button $(row 1) "$a" pin

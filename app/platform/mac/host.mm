@@ -285,27 +285,44 @@ void StripTint(CALayer* layer) {
   return NO;
 }
 
+// Asked of the surface's content view, which has its accessibility tree: the surface's window
+// answered with itself.
 - (id)accessibilityHitTest:(NSPoint)point {
-  return [self.surface accessibilityHitTest:point];
+  return [self.surface.contentView accessibilityHitTest:point];
 }
 @end
 
 @interface HostPlateView : NSView
 // Whether the plate had a press that isn't let go yet.
 @property BOOL pressed;
+- (void)track;
 @end
 
 @implementation HostPlateView
 - (instancetype)initWithFrame:(NSRect)frame {
   self = [super initWithFrame:frame];
+  [self track];
+  return self;
+}
+
+// Its tracking area, made again for where its window is now. AppKit tells an area of the pointer
+// crossing its edge, and took this one's pointer to be outside, as it was when the window had no
+// frame: a plate placed under a pointer at rest heard no exit as the pointer left, and its
+// surface, which takes its hover from where the pointer is as it draws, kept it, so a toast
+// outstayed its time (#3644). With the pointer inside, the new area's first event is that exit.
+- (void)track {
+  for (NSTrackingArea* each in self.trackingAreas) {
+    [self removeTrackingArea:each];
+  }
+  const bool inside = self.window && NSPointInRect(NSEvent.mouseLocation, self.window.frame);
   [self addTrackingArea:[[NSTrackingArea alloc]
                             initWithRect:NSZeroRect
                                  options:NSTrackingMouseEnteredAndExited |
                                          NSTrackingMouseMoved | NSTrackingActiveAlways |
-                                         NSTrackingInVisibleRect
+                                         NSTrackingInVisibleRect |
+                                         (inside ? NSTrackingAssumeInside : 0)
                                    owner:self
                                 userInfo:nil]];
-  return self;
 }
 
 // |event|, a mouse event of the plate window's, as the surface's window would have had it there,
@@ -1038,6 +1055,9 @@ void PlacePlateWindow(HostPlateWindow* plate, NSWindow* parent, NSRect rect) {
     if (surface.visible && surface.onActiveSpace) {
       [plate orderWindow:NSWindowAbove relativeTo:surface.windowNumber];
     }
+  }
+  if (moved || added) {
+    [(HostPlateView*)plate.contentView track];
   }
   const double took = (NSProcessInfo.processInfo.systemUptime - began) * 1000;
   if ((moved || added) && Checked()) {
