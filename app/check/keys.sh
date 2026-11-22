@@ -1107,6 +1107,11 @@ none_since '^browser: command bar hidden$' || fail "escape while composing close
 [ "$marked" = none ] || fail "escape didn't cancel the composition: marked $marked"
 send type nihongo
 send key space
+# The driver ends a step whose timer is 2 s late with the key still queued, so the bar may draw the
+# conversion after the step's line: marked is read once it has.
+expect '^browser: command bar drew "日本語"$' "space didn't convert the composition in the command bar: \
+$(since | grep '^browser: command bar drew \|^browser: drive: ' | tail -4 | tr '\n' ' ')"
+send state
 [ "$marked" = 0,3 ] || fail "the command bar didn't take the conversion: marked $marked"
 ../tools/window-screenshot.sh "$pid" "$out/ime.png" || fail "no window to capture"
 committed=$((step + 1))
