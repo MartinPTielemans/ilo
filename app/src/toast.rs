@@ -4,8 +4,8 @@
 //! over the browser window's top right corner, as its child, and the mouse goes through it to the
 //! page, unless it has buttons, as Capture's does. What it asks of its window goes through `Host`.
 
+use std::time::Instant;
 use std::{cell::Cell, rc::Rc, time::Duration};
-use web_time::Instant;
 
 use gpui::{
     App, Bounds, ClickEvent, Context, FontWeight, Global, Hsla, Pixels, Point, Role, SharedString,

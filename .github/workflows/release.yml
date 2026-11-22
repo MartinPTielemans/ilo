@@ -7,7 +7,6 @@
 #   ilo.flatpakref               updates from, and the repository's entry (tools/flatpak-repo.sh)
 #   SHA256SUMS, and appcast.xml  the updates feed's next state (tools/appcast.sh)
 #   ilo-mac-arm64-<a>-to-<b>.delta  Sparkle's deltas to the DMG's app from the three builds before
-#   ilo-demo.tar.gz              the site's live demo, when the commit has one (demo.yml)
 # and, in the run rather than the release, winget's manifests for the Windows installer.
 # On a pushed v* tag, or by hand with the tag's name. The tag must be app/Cargo.toml's version, and
 # its message is the release's notes, which the release's body follows with its new contributors.
@@ -298,11 +297,6 @@ jobs:
       symbols: ${{ needs.version.outputs.nightly != 'true' && needs.version.outputs.trial != 'true' }}
     secrets:
       SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-
-  demo:
-    needs: version
-    if: ${{ needs.version.outputs.nightly != 'true' }}
-    uses: ./.github/workflows/demo.yml
 
   # The Linux build in ilo's Flatpak repository, which installs from GitHub update from, and the
   # release's Linux files from it (tools/flatpak-repo.sh). Its objects and deltas go to the R2 bucket
@@ -682,10 +676,9 @@ jobs:
 
   # The draft, once the Mac's and Linux's packages and, with a signed DMG, the appcast are built.
   # Windows's join it when they built; 0.1.0's Windows packages wait on a Windows engine and the
-  # Store's identity. The site's demo joins it when it built, and a release without one leaves the
-  # site's demo as it was.
+  # Store's identity.
   release:
-    needs: [version, windows, flatpak-repo, mac, appcast, demo]
+    needs: [version, windows, flatpak-repo, mac, appcast]
     if: >-
       ${{ !cancelled() && needs.version.outputs.nightly != 'true' && needs.mac.result == 'success' &&
       needs.flatpak-repo.result == 'success' &&
@@ -719,11 +712,6 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: linux
-          path: assets
-      - uses: actions/download-artifact@v4
-        if: ${{ needs.demo.result == 'success' && needs.demo.outputs.built == 'true' }}
-        with:
-          name: ilo-demo
           path: assets
       - uses: actions/download-artifact@v4
         with:
@@ -798,8 +786,6 @@ jobs:
             printf '\nThe Windows packages are not in this release yet.\n' >> notes/notes.md
             echo "No Windows packages: the Windows job failed. The draft has the Mac's and Linux's." >> "$GITHUB_STEP_SUMMARY"
           fi
-          [ -f assets/ilo-demo.tar.gz ] ||
-            echo "No site demo in the draft: publishing it leaves the site's demo as it was." >> "$GITHUB_STEP_SUMMARY"
           [ ! -f notes/contributors.md ] || cat notes/contributors.md >> notes/notes.md
           # A try makes no release, not even a draft, which would hold the tag's name: its packages
           # are the run's artifact release-try instead.
@@ -946,8 +932,7 @@ jobs:
           aws s3 rm "$bucket/pending/$TAG" --recursive --endpoint-url "$R2_ENDPOINT" --only-show-errors
           echo "$TAG is live in the Flatpak repository." >> "$GITHUB_STEP_SUMMARY"
 
-  # The owner published a draft: ilobrowser.com shows its changelog entry and its demo now
-  # (site.yml). `published` never comes for a draft, and a prerelease isn't a release of ilo.
+  # The owner published a draft: ilobrowser.com shows its changelog entry now (site.yml). `published` never comes for a draft, and a prerelease isn't a release of ilo.
   site:
     if: >-
       ${{ github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v') &&

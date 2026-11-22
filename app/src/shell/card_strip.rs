@@ -1,7 +1,7 @@
 //! The Library's Spaces cards once they don't fit: they scroll across under two fingers and a
 //! wheel, as Arc 1.171's do, one to one and elastic at both ends.
 
-use web_time::Instant;
+use std::time::Instant;
 
 use gpui::Context;
 

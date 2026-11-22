@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use web_time::Instant;
+use std::time::Instant;
 
 use super::*;
 
@@ -45,7 +45,7 @@ fn shown(rows: &[LiveRow]) -> Vec<String> {
 
 #[test]
 fn an_answer_the_core_kept_reads_as_old_as_the_sites() {
-    let now = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH);
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
     let now = now.unwrap().as_millis() as i64;
     let mut folder = LiveFolder::default();
     // The core kept it from 90 s ago, inside its two minutes, and gives it again with that time.

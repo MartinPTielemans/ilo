@@ -2,8 +2,8 @@
 //! hidden, its reveal over the page (docs/ux-spec.md › Sidebar reveal); its gradient in the
 //! Space's colour; and the marker for the selected tab's row scrolled out of the list.
 
+use std::time::Instant;
 use std::{rc::Rc, time::Duration};
-use web_time::Instant;
 
 use gpui::{
     App, Bounds, ClickEvent, Context, CursorStyle, DispatchPhase, Hsla, MouseButton,
