@@ -14,6 +14,7 @@
 #include "browser_core/held_keys.h"
 #include "build/build_config.h"
 #include "browser_core/autofill_offer.h"
+#include "browser_core/dialog_keys.h"
 #include "browser_core/host.h"
 #include "browser_core/platform/window_views.h"
 #include "browser_core/side_panel.h"
@@ -55,6 +56,9 @@ bool AskApp(bool (*callback)(void*, bc_id, const bc_key*),
             const input::NativeWebKeyboardEvent& event) {
   content::WebContents* contents =
       browser ? browser->GetTabStripModel()->GetActiveWebContents() : nullptr;
+  if (!contents) {
+    dialog_keys::KeyGate(event, "let go: the window has no active page");
+  }
   return contents && Tab::AskAppAboutKey(callback, Tab::IdOf(contents), event,
                                          contents->IsFocusedElementEditable());
 }
@@ -602,6 +606,7 @@ content::KeyboardEventProcessingResult BrowserWindowStandIn::PreHandleKeyboardEv
       browser_ ? browser_->GetTabStripModel()->GetActiveWebContents() : nullptr;
   // Typed after a shortcut that opens a field of the app's, for the field.
   if (contents && held_keys::Holds(Tab::IdOf(contents), event)) {
+    dialog_keys::KeyGate(event, "kept: held for a field of the app's");
     return content::KeyboardEventProcessingResult::HANDLED;
   }
   return AskApp(Host().tab_key_before_page, browser_, event)

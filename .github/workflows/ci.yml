@@ -38,6 +38,7 @@ jobs:
       engine_windows: ${{ steps.detect.outputs.engine_windows }}
       app_windows: ${{ steps.proven.outputs.app_windows }}
       mobile_ios: ${{ steps.proven.outputs.mobile_ios }}
+      site: ${{ steps.detect.outputs.site }}
     steps:
       # History without file contents, for the merge base, and only the files the decision reads.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -141,6 +142,19 @@ jobs:
       contents: read
     uses: ./.github/workflows/mobile-ios.yml
 
+  # The website, for a change to site/ and for no other, and none of the jobs above for it. On a
+  # push to main it deploys too (site.yml), so it's never in the proven skip: main is what the site
+  # serves.
+  site:
+    name: Site
+    needs: changes
+    if: needs.changes.outputs.site == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/site.yml
+    with:
+      deploy: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
   # To hook in app-linux.yml or engine-windows.yml: replace its push and pull_request triggers with
   # `on: workflow_call`, add a job like core_linux gated on needs.changes.outputs.app_linux (or
   # engine_windows), and add the job to Check's needs. The job's key must match its output's name.
@@ -148,7 +162,7 @@ jobs:
   check:
     name: Check
     if: always() && needs.changes.result != 'skipped'
-    needs: [changes, core_linux, app_mac, app_windows, mobile_ios]
+    needs: [changes, core_linux, app_mac, app_windows, mobile_ios, site]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions: {}

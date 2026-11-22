@@ -13,7 +13,6 @@
 
 #include "base/barrier_callback.h"
 #include "base/command_line.h"
-#include "base/containers/fixed_flat_set.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -62,7 +61,6 @@
 #include "content/public/browser/web_contents.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "net/cookies/canonical_cookie.h"
 #include "net/cookies/cookie_access_result.h"
 #include "net/cookies/cookie_options.h"
@@ -75,14 +73,6 @@
 namespace browser_core::system_engine {
 
 namespace {
-
-// The sites a profile keeps for the system's engine. The id of its store, once it has one, is
-// kSystemStorePref: the system's engine is only loaded for a profile with one.
-constexpr char kSites[] = "browser_core.system_engine.sites";
-// The sites whose protected-media note the user closed.
-constexpr char kClosedNotes[] = "browser_core.system_engine.closed_notes";
-// The listed services the user turned off, by their entries in kListed.
-constexpr char kListedOff[] = "browser_core.system_engine.listed_off";
 
 // Hands the profile's data remover a wrapper of Chrome's delegate from the profile's start to its
 // shutdown, so Chrome's Clear Browsing Data also reaches the system's engine (#3600).
@@ -118,9 +108,7 @@ class ClearService : public KeyedService {
     if (profile_->IsOffTheRecord()) {
       return;
     }
-    for (const char* pref : {kSites, kClosedNotes, kListedOff}) {
-      profile_->GetPrefs()->ClearPref(pref);
-    }
+    Choices(*profile_->GetPrefs()).Clear();
   }
 
   const raw_ptr<Profile> profile_;
@@ -157,50 +145,26 @@ class Factory : public ProfileKeyedServiceFactory {
   bool ServiceIsCreatedWithBrowserContext() const override { return true; }
 
   void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) override {
-    registry->RegisterListPref(kSites);
-    registry->RegisterListPref(kClosedNotes);
-    registry->RegisterListPref(kListedOff);
+    // The choices are kept by site. The id of the profile's store, once it has one, is
+    // kSystemStorePref: the system's engine is only loaded for a profile with one.
+    RegisterChoicePrefs(registry);
     registry->RegisterStringPref(kSystemStorePref, std::string());
   }
 };
-
-// The streaming services whose main content is protected video or audio, which open in the system's
-// engine from the first visit. Add an entry only for such a service, as its own host, or as its
-// registrable domain where nothing else is at that domain: each matches its host and subdomains.
-constexpr auto kListed = base::MakeFixedFlatSet<std::string_view>({
-    "disneyplus.com",
-    "hbomax.com",
-    "hulu.com",
-    "max.com",
-    "music.apple.com",
-    "netflix.com",
-    "open.spotify.com",
-    "paramountplus.com",
-    "peacocktv.com",
-    "primevideo.com",
-    "tv.apple.com",
-});
 
 // For the app's check, which never loads a real service: a host of its own server, listed as the
 // services are. Only a dev build of the app passes it (main.rs).
 constexpr char kTestHostSwitch[] = "streaming-test-host";
 
-// |url|'s entry in kListed, else empty: a lookup for each of its host's few labels.
-std::string_view ListedEntry(const GURL& url) {
+// The test host, else empty.
+std::string_view TestHost() {
   static const base::NoDestructor<std::string> test_host(
       base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(kTestHostSwitch));
-  std::string_view host = url.host();
-  if (!test_host->empty() && host == *test_host) {
-    return *test_host;
-  }
-  while (!host.empty()) {
-    if (auto entry = kListed.find(host); entry != kListed.end()) {
-      return *entry;
-    }
-    const size_t dot = host.find('.');
-    host = dot == std::string_view::npos ? std::string_view() : host.substr(dot + 1);
-  }
-  return std::string_view();
+  return *test_host;
+}
+
+Choices ChoicesOf(Profile* profile) {
+  return Choices(*profile->GetPrefs(), TestHost());
 }
 
 // A private session's store, which keeps nothing on disk and goes with the session's profile.
@@ -598,21 +562,6 @@ class ChromiumWriter {
   base::WeakPtrFactory<ChromiumWriter> weak_factory_{this};
 };
 
-bool Holds(Profile* profile, const char* pref, std::string_view value) {
-  const base::ListValue& list = profile->GetPrefs()->GetList(pref);
-  return !list.empty() && std::ranges::contains(list, base::Value(value));
-}
-
-std::vector<std::string> Strings(Profile* profile, const char* pref) {
-  std::vector<std::string> all;
-  for (const base::Value& each : profile->GetPrefs()->GetList(pref)) {
-    if (each.is_string()) {
-      all.push_back(each.GetString());
-    }
-  }
-  return all;
-}
-
 // Whether a tab of |profile| shows a page of |site| in the system's engine.
 bool ShowsSite(Profile* profile, const std::string& site) {
   return std::ranges::any_of(Tab::Pages(), [&](content::WebContents* each) {
@@ -774,100 +723,42 @@ bool Previewing(bc_id tab) {
   return each && each->opened_as_preview() && !Space::Holding(tab) && !Favorites::Has(tab);
 }
 
-std::string SiteOf(const GURL& url) {
-  const std::string domain = net::registry_controlled_domains::GetDomainAndRegistry(
-      url, net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
-  // An IP address or a bare host name is a site of its own, as the core clears sites.
-  return domain.empty() ? std::string(url.host()) : domain;
-}
-
 bool Remembered(Profile* profile, const GURL& url) {
-  if (!profile || !url.SchemeIsHTTPOrHTTPS() || !Available() || !On()) {
-    return false;
-  }
-  if (const std::string_view entry = ListedEntry(url); !entry.empty()) {
-    const base::ListValue& off = profile->GetPrefs()->GetList(kListedOff);
-    if (!std::ranges::contains(off, base::Value(entry))) {
-      return true;
-    }
-  }
-  const base::ListValue& sites = profile->GetPrefs()->GetList(kSites);
-  return !sites.empty() && std::ranges::contains(sites, base::Value(SiteOf(url)));
+  return profile && Available() && On() && ChoicesOf(profile).Remembered(url);
 }
 
 void Remember(Profile* profile, const GURL& url) {
-  if (!profile || !url.SchemeIsHTTPOrHTTPS()) {
-    return;
-  }
-  // Kept for the system's engine, the site no longer counts as kept in Chromium.
-  if (NoteClosed(profile, url)) {
-    ScopedListPrefUpdate(profile->GetPrefs(), kClosedNotes)->EraseValue(base::Value(SiteOf(url)));
-  }
-  // A listed service is never kept: turning it on takes back the user's off.
-  if (const std::string_view entry = ListedEntry(url); !entry.empty()) {
-    ScopedListPrefUpdate(profile->GetPrefs(), kListedOff)->EraseValue(base::Value(entry));
-    return;
-  }
-  if (!Holds(profile, kSites, SiteOf(url))) {
-    ScopedListPrefUpdate(profile->GetPrefs(), kSites)->Append(SiteOf(url));
+  if (profile) {
+    ChoicesOf(profile).Remember(url);
   }
 }
 
 void Forget(Profile* profile, const GURL& url) {
-  if (!profile || !url.SchemeIsHTTPOrHTTPS()) {
-    return;
-  }
-  ScopedListPrefUpdate(profile->GetPrefs(), kSites)->EraseValue(base::Value(SiteOf(url)));
-  const std::string_view entry = ListedEntry(url);
-  if (!entry.empty() &&
-      !std::ranges::contains(profile->GetPrefs()->GetList(kListedOff), base::Value(entry))) {
-    ScopedListPrefUpdate(profile->GetPrefs(), kListedOff)->Append(std::string(entry));
+  if (profile) {
+    ChoicesOf(profile).Forget(url);
   }
 }
 
 bool NoteClosed(Profile* profile, const GURL& url) {
-  if (!profile || !url.SchemeIsHTTPOrHTTPS()) {
-    return false;
-  }
-  const base::ListValue& sites = profile->GetPrefs()->GetList(kClosedNotes);
-  return !sites.empty() && std::ranges::contains(sites, base::Value(SiteOf(url)));
+  return profile && ChoicesOf(profile).NoteClosed(url);
 }
 
 void CloseNote(Profile* profile, const GURL& url) {
-  if (!profile || !url.SchemeIsHTTPOrHTTPS() || NoteClosed(profile, url)) {
-    return;
+  if (profile) {
+    ChoicesOf(profile).CloseNote(url);
   }
-  ScopedListPrefUpdate(profile->GetPrefs(), kClosedNotes)->Append(SiteOf(url));
 }
 
 bool KeptInChromium(Profile* profile, const GURL& url) {
-  if (!profile || !url.SchemeIsHTTPOrHTTPS()) {
-    return false;
-  }
-  const std::string_view entry = ListedEntry(url);
-  return NoteClosed(profile, url) || (!entry.empty() && Holds(profile, kListedOff, entry));
+  return profile && ChoicesOf(profile).KeptInChromium(url);
 }
 
 std::vector<std::string> Sites(Profile* profile) {
-  return profile ? Strings(profile, kSites) : std::vector<std::string>();
+  return profile ? ChoicesOf(profile).Sites() : std::vector<std::string>();
 }
 
 std::vector<std::string> KeptSites(Profile* profile) {
-  if (!profile) {
-    return {};
-  }
-  std::vector<std::string> kept = Strings(profile, kListedOff);
-  // A listed service turned off also closed its site's note, which is the same choice.
-  std::set<std::string> listed_sites;
-  for (const std::string& entry : kept) {
-    listed_sites.insert(SiteOf(GURL("https://" + entry + "/")));
-  }
-  for (std::string& site : Strings(profile, kClosedNotes)) {
-    if (!listed_sites.contains(site)) {
-      kept.push_back(std::move(site));
-    }
-  }
-  return kept;
+  return profile ? ChoicesOf(profile).KeptSites() : std::vector<std::string>();
 }
 
 void UseSite(Profile* profile, const std::string& site, bool on) {
@@ -875,10 +766,8 @@ void UseSite(Profile* profile, const std::string& site, bool on) {
     return;
   }
   // Only a site the list gave: the app can't make the profile keep one the user never saw.
-  const bool listed = Holds(profile, kSites, site) || Holds(profile, kListedOff, site) ||
-                      Holds(profile, kClosedNotes, site);
   const GURL url("https://" + site + "/");
-  if (!listed || !url.is_valid()) {
+  if (!ChoicesOf(profile).Offered(site) || !url.is_valid()) {
     return;
   }
   if (on) {
@@ -896,14 +785,8 @@ void UseSite(Profile* profile, const std::string& site, bool on) {
 }
 
 void ForgetChoices(Profile* profile, const GURL& url) {
-  if (!profile || !url.SchemeIsHTTPOrHTTPS()) {
-    return;
-  }
-  const std::string site = SiteOf(url);
-  ScopedListPrefUpdate(profile->GetPrefs(), kSites)->EraseValue(base::Value(site));
-  ScopedListPrefUpdate(profile->GetPrefs(), kClosedNotes)->EraseValue(base::Value(site));
-  if (const std::string_view entry = ListedEntry(url); !entry.empty()) {
-    ScopedListPrefUpdate(profile->GetPrefs(), kListedOff)->EraseValue(base::Value(entry));
+  if (profile) {
+    ChoicesOf(profile).ForgetChoices(url);
   }
 }
 

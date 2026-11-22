@@ -229,6 +229,69 @@ fn in_a_split_the_dialog_covers_its_own_pane(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn closing_the_page_beside_keeps_the_resting_dialog_up(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx);
+    let split = Split {
+        tabs: vec![10, 20],
+        ..Default::default()
+    };
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(
+            1,
+            Vec::new(),
+            vec![10, 20],
+            vec![split],
+            Folders::default(),
+            cx,
+        );
+        shell.set_selected(20, cx);
+    });
+    cx.run_until_parked();
+    host.take();
+    ask(&shell, cx, 10, Some(prompt(1)));
+    assert_eq!(dialogs(&host), ["page dialog 10 1 at rest"]);
+    // ⌘W closes the page beside. The core reports the Space without it before it says the window
+    // shows the dialog's tab, and a frame drawn in between shows no tab: the dialog stays.
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(1, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(dialogs(&host), Vec::<String>::new());
+    // Shown alone, its tab has it live.
+    select(&shell, cx, 10);
+    assert_eq!(dialogs(&host), ["page dialog 10 1"]);
+}
+
+#[gpui::test]
+fn closing_the_tab_shown_takes_back_the_dialog_of_a_tab_that_isnt(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx);
+    let split = Split {
+        tabs: vec![10, 20],
+        ..Default::default()
+    };
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(
+            1,
+            Vec::new(),
+            vec![10, 20],
+            vec![split],
+            Folders::default(),
+            cx,
+        );
+        shell.set_selected(20, cx);
+    });
+    cx.run_until_parked();
+    ask(&shell, cx, 10, Some(prompt(1)));
+    host.take();
+    // The dialog's own tab closes with the tab shown: nothing keeps it.
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(1, Vec::new(), vec![30], Vec::new(), Folders::default(), cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(dialogs(&host), ["page dialog none"]);
+}
+
+#[gpui::test]
 fn in_a_split_the_focused_panes_dialog_asks_first(cx: &mut TestAppContext) {
     let (shell, cx, host) = window(cx);
     shell.update(cx, |shell, cx| {

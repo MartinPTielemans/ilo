@@ -57,11 +57,15 @@ if [ "$active" != 1 ]; then
   echo "skip: passwords. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi
-# Logs in on the page shown with password $1: the username field has the keyboard.
+# Logs in on the page shown with password $1, once a click has put the caret in its username field.
+# Each field is typed into only once the page says it has the caret: a click or Tab the page drops
+# would put the password in the username field, and the form would go with none (#3846).
 log_in() {
+  expect "^browser: title $tab user [0-9]*\$" "the click didn't put the caret in the username field"
   send key a cmd
   send type check@example.test
   send key tab
+  expect "^browser: title $tab pass [0-9]*\$" "Tab didn't move the caret to the password field"
   send key a cmd
   send type "$1"
   send key return
@@ -369,8 +373,9 @@ click_in_sight "switch save and fill addresses"
 expect '^browser: save and fill addresses on$' "a second click didn't switch addresses back on"
 # Manage Passwords…, under the box of the login's row, opens Chrome's password manager page in a
 # new tab, where a search for the username finds the login. Its device check guards only Show,
-# Copy, a login's details and Export, which the run never asks for, so no prompt comes. ⌘W closes
-# it, and ⌘2 shows the login page's tab again, under the welcome page's.
+# Copy, a login's details and Export, which the run never asks for, so no prompt comes. It opened
+# over the login page's tab, but the search typed in its address ends the way back, as Chrome's
+# does, so ⌘W shows the top Today tab, the welcome page's, and ⌘2 the login page's under it.
 post clickkey $(drawn "manage passwords")
 expect '^browser: manage passwords [0-9]*$' "a click on Manage Passwords… didn't run it"
 expect '^browser: settings hidden$' "Manage Passwords… didn't hide Settings"
@@ -397,8 +402,12 @@ done
 ../tools/window-screenshot.sh "$pid" "$out/password-manager.png" || fail "no window to capture"
 send key w cmd
 expect "^browser: tab $manager closed\$" "⌘W didn't close Chrome's password manager page"
-send key 2 cmd
-expect "^browser: selected $tab\( in .*\)\{0,1\}\$" "⌘2 didn't show the login's tab again"
+expect '^browser: today ' "closing Chrome's password manager page didn't change Today"
+welcome=$(today | cut -d' ' -f1)
+[ "$welcome" != "$tab" ] || fail "the welcome page's tab isn't above the login's: Today is \"$(today)\""
+expect "^browser: selected $welcome\( in .*\)\{0,1\}\$" \
+  "closing Chrome's password manager page, searched from the bar, didn't show the top Today tab"
+switch "$(($(pinned | wc -w) + 2)) cmd" "$tab"
 # On the Mac, Manage Passkeys… beside it opens Chrome's list of the passkeys the Mac keeps for the
 # profile, in a new tab, where each can be deleted: the one place they're listed, which Chrome's
 # password manager links to only once there's one (#2354). The run's build holds no keychain group
@@ -424,8 +433,12 @@ if [ "$(uname)" = Darwin ]; then
   ../tools/window-screenshot.sh "$pid" "$out/passkeys-list.png" || fail "no window to capture"
   send key w cmd
   expect "^browser: tab $passkeys closed\$" "⌘W didn't close Chrome's list of passkeys"
-  send key 2 cmd
-  expect "^browser: selected $tab\( in .*\)\{0,1\}\$" "⌘2 didn't show the login's tab again"
+  # Nothing typed in it, it goes back to the login page's tab it opened over (#3813), and ⌘1 and
+  # ⌘2 then go to the welcome page's tab above it and back.
+  expect "^browser: selected $tab\( in .*\)\{0,1\}\$" \
+    "closing Chrome's list of passkeys didn't show the login's tab it opened over"
+  switch "$(($(pinned | wc -w) + 1)) cmd" "$welcome"
+  switch "$(($(pinned | wc -w) + 2)) cmd" "$tab"
 fi
 
 # The row's Remove closes the panel and asks in the browser window's dialog, where return removes

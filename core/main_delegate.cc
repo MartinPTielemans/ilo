@@ -24,6 +24,7 @@
 #include "base/time/time.h"
 #include "browser_core/ad_block.h"
 #include "browser_core/agent_autofill.h"
+#include "browser_core/agent_file_field.h"
 #include "browser_core/agent_job_voter.h"
 #include "browser_core/agent_page.h"
 #include "browser_core/arrange.h"
@@ -51,6 +52,7 @@
 #include "browser_core/page_menu.h"
 #include "browser_core/password_offer.h"
 #include "browser_core/permission_question.h"
+#include "browser_core/platform/keyboard.h"
 #include "browser_core/platform/keychain.h"
 #include "browser_core/platform/native_hosts.h"
 #include "browser_core/profiles.h"
@@ -314,6 +316,7 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
     FlushSession();
     Window::CloseAll();
     Tab::StopHearingCaptures();
+    platform::StopHearingLayouts();
     ReleaseProfiles();
     if (g_host.stopping) {
       g_host.stopping(g_host.context);
@@ -594,6 +597,7 @@ void Install(const bc_host& host) {
   content::SetPageLinkDragHandler(&Tab::LinkDragged);
   g_browser_core_permission_prompt = &PermissionQuestion::Create;
   g_browser_core_device_chooser = &DeviceChooser::Show;
+  g_browser_core_page_file_dialog = &AgentFileField::PageMayOpen;
   g_browser_core_bluetooth_pair = &BluetoothPair::Show;
   g_browser_core_extension_install_dialog = &InstallQuestion::Ask;
   g_browser_core_populate_frame_binders = &PopulateFrameBinders;

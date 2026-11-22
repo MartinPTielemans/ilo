@@ -389,15 +389,24 @@ console_keys() {
   send key a cmd
   send type "allow pasting"
   send key return
-  send type pasted-
-  send key v cmd
   # The console copies once its renderer has the keys, after the driver's done with them, so a
   # read straight after ⌘C can come before the copy: the second copy is tried until it holds the
-  # paste too.
+  # paste too. Where the guard is off, ↩ runs the line only once the console has checked it's
+  # whole, which can be after the keys typed next, so the line it runs and clears can take them:
+  # each try types them again, and copies the word again if the paste's source went with them.
   for _ in $(seq 50); do
+    send key a cmd
+    send type pasted-
+    send key v cmd
     send key a cmd
     send key c cmd
     holds "pasted-$word" && pasted=1 && break
+    holds "$word" || {
+      send key a cmd
+      send type "$word"
+      send key a cmd
+      send key c cmd
+    }
   done
   [ -n "$pasted" ] || {
     ../tools/window-screenshot.sh "$pid" "$out/devtools-$1-paste.png" all || true
