@@ -102,6 +102,8 @@ fn save_read_keeps_the_proposal_and_logs_it(cx: &mut TestAppContext) {
     assert_eq!(read.rows[0].0, ["Torre A", "Lisboa"]);
     assert!(!asked.what.contains("city buildings"), "{}", asked.what);
     assert_eq!(asked.what.as_ref(), "save a read of www.example.com");
+    // Not an action on the tab's page, so no "On <site>" head: its sentence stays whole.
+    assert_eq!(asked.asks.as_ref(), "");
     assert!(
         answer.try_recv().is_err(),
         "it answered before the user did"

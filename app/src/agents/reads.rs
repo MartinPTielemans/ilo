@@ -485,6 +485,9 @@ impl Agents {
             note: String::new(),
             show: Show::Nothing,
             what: format!("save a read of {host}"),
+            // Not an action on the tab's page: the site is the read's, which the agent names, so
+            // the card has no "On <site>" head, the tab's own, and keeps its sentence whole.
+            asks: String::new(),
             field: String::new(),
             download: 0,
             requests: Vec::new(),
