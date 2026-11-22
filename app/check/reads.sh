@@ -169,6 +169,7 @@ answer_card() {
 # one line, cut where its column ends, and moves nothing after it.
 proposed "$(table_read table.html)" reads-card
 plain_h=$qh
+plain_bottom=$((qy + qh))
 answer_card Dismiss
 hostile_tab=$(reads_call open_tab "{\"url\":\"$origin/reads/hostile.html\"}" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
 [ -n "$hostile_tab" ] || fail "open_tab of the hostile table opened nothing"
@@ -367,11 +368,14 @@ proposed "{\"tab\":$tab,\"name\":\"items\",\"kind\":\"json\",\"url\":\"/reads/it
 answer_card Once
 await "^browser: agent logged mcp-client change_read $host_rx\$" || fail "the changed read's Save wasn't logged as a change"
 
-# 13: the card keeps its buttons in a short window and stays over the page in full screen.
-send resize 900 420
-expect '^browser: drawn at 900x420$' "the window didn't draw at 900 by 420"
+# 13: the card keeps its buttons in a short window and stays over the page in full screen. The
+# window is 10 points shorter than the plain card's foot, too short for all its rows and well
+# taller than the card with one.
+short=$((plain_bottom - 10))
+send resize 900 $short
+expect "^browser: drawn at 900x$short\$" "the window didn't draw at 900 by $short"
 proposed "$(table_read table.html keys)" reads-card-short
-[ $((qy + qh)) -le 420 ] || fail "in a 420-point window the card ends at $((qy + qh)), past its foot: its buttons aren't on screen"
+[ $((qy + qh)) -le $short ] || fail "in a $short-point window the card ends at $((qy + qh)), past its foot: its buttons aren't on screen"
 [ "$qh" -lt "$plain_h" ] || fail "in a short window the card is $qh high, as tall as the plain one, $plain_h: it kept every row"
 answer_card Once
 case "$said" in "saved: "*) ;; *) fail "Save Read in a short window answered: $said" ;; esac
