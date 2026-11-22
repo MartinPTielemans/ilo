@@ -596,6 +596,7 @@ std::optional<std::string> ToJson(const Saved& saved) {
                            .Set("warn_before_quitting", saved.settings.warn_before_quitting)
                            .Set("archive_noted", saved.settings.archive_noted)
                            .Set("restore_windows", saved.settings.restore_windows)
+                           .Set("restore_pinned_urls", saved.settings.restore_pinned_urls)
                            .Set("warn_moving_profiles", saved.settings.warn_moving_profiles)
                            .Set("favorites_scope", ScopeName(saved.settings.favorites_scope))
                            .Set("unload_idle_tabs", saved.settings.unload_idle_tabs)
@@ -885,6 +886,8 @@ std::optional<Saved> Read(const base::FilePath& path) {
     saved.settings.warn_moving_profiles =
         settings->FindBool("warn_moving_profiles").value_or(true);
     saved.settings.restore_windows = settings->FindBool("restore_windows").value_or(true);
+    saved.settings.restore_pinned_urls =
+        settings->FindBool("restore_pinned_urls").value_or(false);
     if (const std::string* scope = settings->FindString("favorites_scope")) {
       saved.settings.favorites_scope = ScopeFromName(*scope);
     }
@@ -1491,10 +1494,17 @@ Space* RestoreSpace(Window& window,
     if (bc_id tab = pinned_ids[j] = restore(saved_tab, j)) {
       // Saved before pinned tabs kept their pinned URL, it's pinned where it is.
       nodes[tab] = saved_tab.node;
-      space->AddPinned(tab, in(saved_tab.folder), space->pinned_rows().size(),
-                       saved_tab.pinned_url.is_valid()
-                           ? saved_tab.pinned_url
-                           : saved_tab.history[saved_tab.current].virtual_url());
+      const GURL pinned_url = saved_tab.pinned_url.is_valid()
+                                  ? saved_tab.pinned_url
+                                  : saved_tab.history[saved_tab.current].virtual_url();
+      space->AddPinned(tab, in(saved_tab.folder), space->pinned_rows().size(), pinned_url);
+      // A pinned tab comes back at the page it was left on; with the setting on, one away from
+      // its pinned URL comes back home instead, without loading it, as ⌘↩ leaves a tab unloaded.
+      if (UserSettings().restore_pinned_urls) {
+        if (Tab* tab_back = Tab::Get(tab); tab_back && !tab_back->At(pinned_url)) {
+          tab_back->Repoint(pinned_url, std::u16string());
+        }
+      }
     }
   }
   restore_folders(saved_space.pinned.size());

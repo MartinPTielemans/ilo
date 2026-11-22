@@ -1845,10 +1845,30 @@ impl Settings {
         }
     }
 
-    /// Tabs & Sidebar: when Today tabs are archived and unloaded, whether Battery Saver comes on, who
-    /// shares the favorites, which side the sidebar is on and how it comes while hidden.
+    /// Tabs & Sidebar: what a launch brings pinned tabs back to, when Today tabs are archived and
+    /// unloaded, whether Battery Saver comes on, who shares the favorites, which side the sidebar is
+    /// on and how it comes while hidden.
     fn tabs_and_sidebar(&self, profiles: &[Profile], accent: Rgba, cx: &mut Context<Self>) -> Page {
         let look = &self.look;
+        // Pinned tabs, above Today's: the setting holds what every launch brings them back to.
+        let home = self.toggle(
+            "restore pinned urls",
+            "Always restore pinned tabs",
+            unsafe { bc::bc_restore_pinned_urls() },
+            set_restore_pinned_urls,
+            accent,
+            cx,
+        );
+        let home = setting(
+            look,
+            "Always restore pinned tabs",
+            Some(
+                "On, a launch brings every pinned tab back to the URL it was pinned at, not the \
+                 page it was left on."
+                    .into(),
+            ),
+            vec![home],
+        );
         let reopen = shell::keystroke_label("shift-cmd-t");
         let archive = self.per_profile(
             profiles,
@@ -1969,6 +1989,8 @@ impl Settings {
             vec![moving],
         );
         let mut blocks = vec![
+            Block::Heading("Pinned tabs".into()),
+            Block::Rows(vec![home]),
             Block::Heading("Today tabs".into()),
             Block::Rows(
                 archive
@@ -2117,7 +2139,8 @@ impl Settings {
         }
         Page::new(
             Section::TabsAndSidebar,
-            "When Today tabs leave, and how the sidebar comes and goes.",
+            "What a launch brings pinned tabs back to, when Today tabs leave, and how the sidebar \
+             comes and goes.",
             blocks,
         )
     }
@@ -5193,6 +5216,11 @@ fn set_relay_calls(on: bool, _: &mut App) {
 /// Off, the next launch opens one window with no Today tabs, theirs going in the archive.
 fn set_restore_windows(restore: bool, _: &mut App) {
     unsafe { bc::bc_set_restore_windows(restore) };
+}
+
+/// On, a launch brings each pinned tab back to its pinned URL, rather than the page it was left on.
+fn set_restore_pinned_urls(restore: bool, _: &mut App) {
+    unsafe { bc::bc_set_restore_pinned_urls(restore) };
 }
 
 fn set_haptics(haptics: bool, _: &mut App) {

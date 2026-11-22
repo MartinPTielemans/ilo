@@ -190,6 +190,9 @@ struct Settings {
   // Whether a launch brings back the last session's windows with their Today tabs, else one window
   // showing no tab (RestoreSession).
   bool restore_windows = true;
+  // Whether each pinned tab a launch brings back goes to the URL it was pinned at, rather than the
+  // page it was left on (RestoreSpace).
+  bool restore_pinned_urls = false;
   // Whether the app warns before moving a tab to another profile's Space, which it does once.
   bool warn_moving_profiles = true;
   // Who shares the favorites: a BC_FAVORITES_ value.

@@ -1787,6 +1787,15 @@ void bc_set_restore_windows(bool restore) {
   browser_core::SessionChanged();
 }
 
+bool bc_restore_pinned_urls(void) {
+  return browser_core::UserSettings().restore_pinned_urls;
+}
+
+void bc_set_restore_pinned_urls(bool restore) {
+  browser_core::UserSettings().restore_pinned_urls = restore;
+  browser_core::SessionChanged();
+}
+
 bool bc_warn_moving_profiles(void) {
   return browser_core::UserSettings().warn_moving_profiles;
 }
