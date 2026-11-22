@@ -1285,9 +1285,25 @@ post rightclick 114 114
 expect "^browser: menu shown .*$(cased 'Remove from Favorites, Change Icon…, Close Tab')\$" \
   "a right-click on the favorite's tile didn't show its menu"
 send choose "$(cased 'Close Tab')"
-expect '^browser: favorites $' "Close Tab in the tile's menu didn't close the favorite"
-expect "^browser: selected $x\( in .*\)\{0,1\}\$" \
-  "closing the favorite didn't show the top Today tab"
+# A favorite keeps its tile, and only its page goes, as Arc's does. The app shows the tab shown
+# before it that's still open, the Today tab ⌘T's tab first opened over, as Arc 1.170 does.
+expect "^browser: selected $u\( in .*\)\{0,1\}\$" \
+  "closing the favorite didn't show the tab shown before it"
+expect "^browser: page $fav unloaded 1\$" "Close Tab in the tile's menu didn't unload the favorite"
+none_since '^browser: favorites ' || fail "Close Tab in the tile's menu took the favorite away"
+# Out of the favorites, it's the top of Today with no tab to go back to, the bar's tab having
+# taken its way back, so ⌘W on it shows the tab under it.
+post rightclick 114 114
+expect "^browser: menu shown .*$(cased 'Remove from Favorites, Change Icon…, Close Tab')\$" \
+  "a right-click on the closed favorite's tile didn't show its menu"
+send choose "$(cased 'Remove from Favorites')"
+expect '^browser: favorites $' "Remove from Favorites left the closed favorite's tile"
+expect "^browser: today $fav $x $kept\$" \
+  "Remove from Favorites didn't put the closed favorite at the top of Today: Today is \"$(today)\""
+send click $(row 0)
+expect "^browser: selected $fav in " "a click on the former favorite's row didn't show it"
+send key w cmd
+expect_tabs "$x $kept" "$x" "closing the former favorite didn't show the Today tab under it"
 before=$kept
 # Tabs › Reset all tabs in this Space takes the Space's pinned tabs away from their pinned URLs back
 # there, as Arc's does, but only those loaded: one unloaded stays as it is until it's shown. Edit…
