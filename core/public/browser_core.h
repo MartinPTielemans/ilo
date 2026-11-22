@@ -520,6 +520,33 @@ typedef struct bc_cast_device {
 } bc_cast_device;
 
 
+// Why the core didn't do an agent's call, for agent code to decide on: the words that come with it
+// are for the agent and the user to read, and may change (#3702). Only what agent code decides or
+// sorts on has a value; a call done, or failed otherwise, is BC_AGENT_FAILURE_NONE.
+typedef enum bc_agent_failure {
+  BC_AGENT_FAILURE_NONE = 0,
+  // An action no agent may do, such as devtools, or one there's none of.
+  BC_AGENT_FAILURE_ACTION = 1,
+  // A tab id from before ilo last started.
+  BC_AGENT_FAILURE_RESTARTED = 2,
+  // The tab isn't in the agent's own Space.
+  BC_AGENT_FAILURE_NOT_ITS_SPACE = 3,
+  // The user has the tab until they hand it back.
+  BC_AGENT_FAILURE_HELD = 4,
+  // The user is pointing at the tab's page.
+  BC_AGENT_FAILURE_POINTING = 5,
+  // The tab shows its page in the system's engine.
+  BC_AGENT_FAILURE_SYSTEM_ENGINE = 6,
+  // The tab's page, or the one it was to go to, isn't an http(s) page.
+  BC_AGENT_FAILURE_NOT_WEB_PAGE = 7,
+  // The tab's first http(s) page was still loading when the action stopped waiting for it.
+  BC_AGENT_FAILURE_LOADING = 8,
+  // The element is a password field, which agents never type in.
+  BC_AGENT_FAILURE_PASSWORD_FIELD = 9,
+  // The select has no option with the text asked for.
+  BC_AGENT_FAILURE_NO_OPTION = 10,
+} bc_agent_failure;
+
 // An agent's call the core checked, for the activity log (bc_agent_may_act).
 typedef struct bc_agent_activity {
   // The agent's id, as its client gives it.
@@ -529,6 +556,8 @@ typedef struct bc_agent_activity {
   const char* action;
   // Why the core refused it, for the user and the agent to read, or empty if the agent may act.
   const char* refused;
+  // A bc_agent_failure value, BC_AGENT_FAILURE_NONE if the agent may act.
+  int failure;
 } bc_agent_activity;
 
 // The answer to an agent's HTTP request (bc_agent_request, agent_request_done).
@@ -543,7 +572,27 @@ typedef struct bc_agent_response {
   bool cut;
   // Why it couldn't be sent, or broke off, for the agent to read, or null.
   const char* error;
+  // With |error|, a bc_agent_failure value, else BC_AGENT_FAILURE_NONE.
+  int failure;
 } bc_agent_response;
+
+// How a saved read ended (bc_profile_read, profile_read_done).
+typedef struct bc_read_answer {
+  // The HTTP status, such as 200 or 401, or 0 if none came.
+  int status;
+  // The address that answered, after redirects on the asked address's own origin, or "".
+  const char* url;
+  // A redirect to another origin, which the read told and didn't follow, or null.
+  const char* redirect;
+  // The body's MIME type, or "".
+  const char* type;
+  // The body, |size| bytes, not NUL-terminated, the first part of it with |cut|.
+  const char* body;
+  size_t size;
+  bool cut;
+  // Why it wasn't sent, or broke off, or null.
+  const char* error;
+} bc_read_answer;
 
 // What fills a Live Folder (bc_folder_live_create, #2979): 0 for a plain folder.
 // The pull requests waiting on the review of the user signed in to GitHub in the Space's profile,
@@ -1377,7 +1426,16 @@ typedef struct bc_host {
   // accessibility tree as a JSON object: DevTools' Accessibility.getFullAXTree nodes in "nodes",
   // and "busy": true if the page hadn't settled when the action stopped waiting for it.
   // and after SELECT, "chosen": the name of the option it chose, if the field then shows it.
-  void (*agent_page_done)(void* context, bc_id tab, uint64_t request, const char* text, bool error);
+  // FILE_FIELD's is a JSON object of its own: the "field" for bc_file_field_choose, the field's
+  // accessible name in "label", "" if it has none, the "site" whose frame it's in, which gets the
+  // file and may not be the tab's, without "www.", and "many": true if the user may pick several.
+  // With |error|, |failure| is a bc_agent_failure value, else BC_AGENT_FAILURE_NONE.
+  void (*agent_page_done)(void* context,
+                          bc_id tab,
+                          uint64_t request,
+                          const char* text,
+                          bool error,
+                          int failure);
   // The element bc_agent_page's |request| for |tab| is about to click or type in, scrolled into
   // view: its box in points from the top-left of the tab's page view, for the agent's pointer.
   void (*agent_page_element)(void* context, bc_id tab, uint64_t request, bc_rect box);
@@ -1635,6 +1693,12 @@ typedef struct bc_host {
   // had no such link, else why not, and the link still opens for anyone who has it. The user's
   // alone: agents hear none. |id| lasts only for the call.
   void (*unshared)(void* context, const char* id, int problem);
+  // What came of bc_file_field_choose for |field|: a BC_FILE_FIELD_ |result|, and with PUT the
+  // |count| of files that went in, else 0. Never a file's name or path.
+  void (*file_field_done)(void* context, bc_id field, int result, int count);
+  // How |read| (bc_profile_read) ended, from a task of its own, once a call, and never once the
+  // app is quitting. |answer| lasts only for the call.
+  void (*profile_read_done)(void* context, uint64_t read, const bc_read_answer* answer);
 } bc_host;
 
 // Runs Chromium in this process with these arguments (Chromium's switches) and returns its exit
@@ -1897,13 +1961,15 @@ BC_EXPORT size_t bc_space_agent_name(bc_id space, char* name, size_t capacity);
 // timing, download folder, offers to save and saved data, and Clear Browsing Data) and any other
 // action are refused. Agent code calls it once for each call an agent makes on a tab, before
 // acting. If refused, copies why into |reason| as bc_space_name does, else an empty string: for a
-// tab id from before ilo last started, that it restarted. Either way, then agent_activity, for the
-// activity log.
+// tab id from before ilo last started, that it restarted. Sets |failure| to a bc_agent_failure
+// value, BC_AGENT_FAILURE_NONE if the agent may act, for agent code to decide on in place of
+// |reason|'s words. Either way, then agent_activity, for the activity log.
 BC_EXPORT bool bc_agent_may_act(const char* agent,
                                 bc_id tab,
                                 const char* action,
                                 char* reason,
-                                size_t capacity);
+                                size_t capacity,
+                                int* failure);
 
 // An agent's session with a tab, which the app shows as the agent at work there, lasts from the
 // first call bc_agent_may_act lets it make in the tab until one of these three ends it, each then
@@ -2003,6 +2069,15 @@ BC_EXPORT size_t bc_agent_list_tabs(const char* agent, bc_id* tabs, size_t capac
 #define BC_AGENT_PAGE_SELECT 11
 // Scrolls the element into view.
 #define BC_AGENT_PAGE_SCROLL_TO 12
+// Describes the element, a file field, for the card that asks the user for a file for it
+// (bc_file_field_choose): it answers at once, with no tree. Refused, with why, for an element that
+// isn't an input of type file, for one that takes a folder (webkitdirectory), which the user
+// fills in a tab they hold, and for one in a frame with no site to name (an opaque origin, as a
+// sandboxed or data: frame's). A tab has one such field at a time: the next ends the one before,
+// with BC_FILE_FIELD_CLOSED if its Choose File… is unanswered. A page's own file dialogs never
+// open in an agent's tab the user doesn't hold, the file input's or File System Access', so the
+// page hears a cancel.
+#define BC_AGENT_PAGE_FILE_FIELD 13
 
 // Does |action|, a BC_AGENT_PAGE_ value, in |tab| for the agent with the id |agent|, to |element|,
 // a backendDOMNodeId from the tree, or 0, with |text| as the action says, else null. Then
@@ -2064,6 +2139,39 @@ BC_EXPORT bool bc_tab_hand_back(bc_id tab);
 
 // Whether the user holds |tab| from agents.
 BC_EXPORT bool bc_tab_held(bc_id tab);
+
+// What came of bc_file_field_choose (file_field_done).
+// The user's files are in the field, |count| of them.
+#define BC_FILE_FIELD_PUT 0
+// The user closed the dialog choosing none, or chose a folder, as a Mac package, which never goes
+// in.
+#define BC_FILE_FIELD_NONE 1
+// The field the card named left before the user's files could go into it: the page removed or
+// replaced it, its frame went to another page or origin, or its tab left the Space of the agent
+// whose card it was, or the user took it. The files went nowhere.
+#define BC_FILE_FIELD_LEFT 2
+// bc_file_field_drop, the tab closed, the agent's session there ended, or another field was
+// described in the tab, with the dialog up: it closed, and nothing went into the field.
+#define BC_FILE_FIELD_CLOSED 3
+
+// The user pressed Choose File… on the card for |field|, from BC_AGENT_PAGE_FILE_FIELD's answer, in
+// |window|: the system's file dialog opens over |window|, where the system starts it. Nothing of
+// the page's or the agent's names its folder, file or title; the field's accept only filters it,
+// and only a field that takes several lets the user pick several. The files the user picks go into
+// that field alone, as DevTools' DOM.setFileInputFiles puts them, and only if it's the same node,
+// in the same document of the same frame, from the same origin, in a tab still in the Space of the
+// agent whose card it was, that the user doesn't hold. Then file_field_done, once, from a task of
+// its own. Returns false, with no answer, for a field it doesn't know, one already chosen for, a
+// window that isn't the core's, or when the system has no file dialog, as Linux may not. The
+// user's: agents get none, and no name or path of a file is told to anyone or logged.
+BC_EXPORT bool bc_file_field_choose(bc_id field, bc_id window);
+
+// Forgets |field|: for the card's Don't Allow, the call's time running out, or the agent stopping.
+// Its dialog, if it's up, closes on the Mac and Linux; Windows' can't be closed from outside, and
+// what the user picks in it goes nowhere. file_field_done answers BC_FILE_FIELD_CLOSED if
+// bc_file_field_choose hadn't been answered. A tab that closes, or whose agent's session ends,
+// drops its fields itself.
+BC_EXPORT void bc_file_field_drop(bc_id field);
 
 // The user gives the agent whose Space is |space| their |tab|, which moves there as
 // bc_tab_move_to_space moves a tab, and the agent may act in it as in its own from then on. Only
@@ -2129,6 +2237,21 @@ BC_EXPORT bool bc_profile_offers_to_save(bc_id profile, int what, bool* offers);
 // Has the profile offer to save |what|, or not, and returns whether it will: not for a profile
 // that isn't loaded, or one a policy sets.
 BC_EXPORT bool bc_profile_set_offers_to_save(bc_id profile, int what, bool offer);
+// Reads |url|, an http(s) address, with one GET on |profile|'s own session, with no tab, as the
+// site's own page would read it: with the profile's cookies for it and the site as the first
+// party, nothing taken from the HTTP cache or put in it, and no history. Cookies the answer sets
+// are saved. A redirect on |url|'s origin is followed; one to another origin, an http to https one
+// too, is told in the answer and not followed. Then profile_read_done with |read|, from a task of
+// its own, never inside this call, with up to |max_bytes| of the body, at most 4 MiB, after up to
+// |timeout_ms|, at most 30 s; never the headers. Refused, with an error, for a profile the core
+// didn't give, an address with a user name, password or fragment, anything but http(s), or no
+// size or time. A profile that isn't loaded is loaded first. The core sends nothing else: no
+// method, header or body is the caller's.
+BC_EXPORT void bc_profile_read(bc_id profile,
+                               uint64_t read,
+                               const char* url,
+                               size_t max_bytes,
+                               int64_t timeout_ms);
 // Copies the search engines the user picks the profile's default from, each "keyword\tname" on a
 // line of its own, UTF-8, into |engines| as bc_space_name does. Nothing for a profile that isn't
 // loaded, until its engines have, or while a policy or an extension picks its default.

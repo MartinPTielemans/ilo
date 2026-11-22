@@ -123,6 +123,18 @@ impl Shell {
     /// go; one up stays. A Leave doesn't wait: it answers the user's own close, quit or
     /// navigation.
     pub(super) fn show_page_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // The tab shown closed, and the core says what the window shows next after it reports the
+        // Space without it: a frame drawn in between shows no tab, and the dialog of a page still
+        // open, still asking, stays as it is rather than leaving and coming back.
+        if self.task_area.is_none()
+            && self.selected != 0
+            && !self.tab_open(self.selected)
+            && self.page_dialog_up.is_some_and(|(tab, id)| {
+                self.tab_open(tab) && self.page_dialogs.get(&tab).is_some_and(|d| d.id == id)
+            })
+        {
+            return;
+        }
         // The user's page is out of the window while a task has the page area, and its dialog
         // waits for it. A task's page watched there shows its sign-in, which only the user may
         // answer (#3662); its other dialogs pause the agent until it closes the tab (#3536).

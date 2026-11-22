@@ -1414,6 +1414,7 @@ send key down alt cmd
 expect '^browser: command next-tab via ' "⌥⌘↓ in ⌘L's bar didn't reach the UI"
 expect '^browser: command bar follows the tab shown$' \
   "the command bar didn't follow the tab ⌥⌘↓ showed: $(grep '^browser: selected ' "$log" | tail -1)"
+followed=$(grep '^browser: selected ' "$log" | tail -1 | cut -d' ' -f3)
 ../tools/window-screenshot.sh "$pid" "$out/bar-follows.png" || fail "no window to capture"
 send insert 'data:text/html,<title>typed</title>'
 send key return
@@ -1422,6 +1423,13 @@ typed=$(grep '^browser: loaded [0-9]* data:text/html,<title>typed</title>$' "$lo
 [ "$typed" != "$left" ] || fail "↩ in ⌘L's bar loaded in tab $left, which ⌥⌘↓ had left"
 send key w cmd
 expect "^browser: tab $typed closed\$" "⌘W didn't close the typed page's tab"
+# It opened over the tab the bar followed, which closing it shows again (#3813), and ⌥⌘↑ from
+# there goes back to the tab ⌥⌘↓ left.
+expect "^browser: selected $followed\( in .*\)\{0,1\}\$" \
+  "closing the typed page's tab didn't show tab $followed, the one the bar followed and it opened over"
+send key up alt cmd
+expect '^browser: command previous-tab via ' "⌥⌘↑ after closing the typed page's tab didn't reach the UI"
+expect "^browser: selected $left\( in .*\)\{0,1\}\$" "⌥⌘↑ didn't go back to tab $left, which ⌥⌘↓ left"
 send key w cmd
 expect "^browser: tab $left closed\$" "⌘W didn't close the tab ⌥⌘↓ left"
 expect "^browser: today $before\$" "Today isn't as it was after the steps for #3428"

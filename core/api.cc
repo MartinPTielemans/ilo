@@ -22,6 +22,7 @@
 #include "browser_core/address_import.h"
 #include "browser_core/agent_autofill.h"
 #include "browser_core/agent_close.h"
+#include "browser_core/agent_file_field.h"
 #include "browser_core/agent_page.h"
 #include "browser_core/agent_request.h"
 #include "browser_core/agent_session.h"
@@ -72,6 +73,7 @@
 #include "browser_core/platform/playready.h"
 #include "browser_core/platform/window_views.h"
 #include "browser_core/point.h"
+#include "browser_core/profile_reads.h"
 #include "browser_core/profiles.h"
 #include "browser_core/public/browser_core.h"
 #include "browser_core/search.h"
@@ -614,26 +616,32 @@ bool bc_agent_may_act(const char* agent,
                       bc_id tab,
                       const char* action,
                       char* reason,
-                      size_t capacity) {
+                      size_t capacity,
+                      int* failure) {
   content::WebContents* contents = browser_core::Tab::FromId(tab);
   // An action no agent may do is refused whatever the tab, so that's the reason given.
   std::string refused = browser_core::RefusedAction(action ? action : "");
+  bc_agent_failure code = refused.empty() ? BC_AGENT_FAILURE_NONE : BC_AGENT_FAILURE_ACTION;
   if (refused.empty() && tab && !browser_core::Tab::Get(tab) &&
       browser_core::FromEarlierLaunch(tab)) {
     // Its id is from before ilo last started, and names no tab now (#1449).
     refused = "ilo restarted, so the tabs you knew are gone. Call list_tabs for the tabs open now.";
+    code = BC_AGENT_FAILURE_RESTARTED;
   }
   if (refused.empty() && (!agent || !*agent || !browser_core::Space::AgentMayAct(agent, tab))) {
     refused = "The tab isn't in the agent's own Space.";
+    code = BC_AGENT_FAILURE_NOT_ITS_SPACE;
   }
   if (refused.empty() && browser_core::IsHeld(tab)) {
     refused = "The user has this tab until they hand it back. Ask for it with ask_for_tab.";
+    code = BC_AGENT_FAILURE_HELD;
   }
   if (refused.empty() && contents) {
     // The user's clicks there are Point's until they send or close it.
     const browser_core::PagePoint* point = browser_core::PagePoint::FromWebContents(contents);
     if (point && point->on()) {
       refused = "The user is pointing at this page. Try again once they've answered.";
+      code = BC_AGENT_FAILURE_POINTING;
     }
   }
   if (refused.empty() && contents &&
@@ -642,14 +650,19 @@ bool bc_agent_may_act(const char* agent,
     refused =
         "The tab shows its page in the system's engine, where the browser can't keep an agent's "
         "rules.";
+    code = BC_AGENT_FAILURE_SYSTEM_ENGINE;
   }
   CopyString(refused, reason, capacity);
+  if (failure) {
+    *failure = code;
+  }
   if (browser_core::Host().agent_activity) {
     const bc_agent_activity entry = {
         .agent = agent ? agent : "",
         .tab = tab,
         .action = action ? action : "",
         .refused = refused.c_str(),
+        .failure = code,
     };
     browser_core::Host().agent_activity(browser_core::Host().context, &entry);
   }
@@ -737,6 +750,14 @@ bool bc_tab_held(bc_id tab) {
   return browser_core::IsHeld(tab);
 }
 
+bool bc_file_field_choose(bc_id field, bc_id window) {
+  return browser_core::AgentFileField::Choose(field, window);
+}
+
+void bc_file_field_drop(bc_id field) {
+  browser_core::AgentFileField::Drop(field);
+}
+
 bc_id bc_agent_open_tab(const char* agent, const char* url) {
   const GURL target(url ? url : "");
   if (!agent || !*agent || !target.SchemeIsHTTPOrHTTPS()) {
@@ -817,7 +838,8 @@ void bc_agent_page(const char* agent,
                          if (browser_core::Host().agent_page_done) {
                            browser_core::Host().agent_page_done(
                                browser_core::Host().context, tab, request,
-                               "The tab isn't in the agent's own Space.", true);
+                               "The tab isn't in the agent's own Space.", true,
+                               BC_AGENT_FAILURE_NOT_ITS_SPACE);
                          }
                        },
                        tab, request));
@@ -840,7 +862,8 @@ void bc_agent_request(const char* agent,
       agent && browser_core::Space::AgentMayAct(agent, tab) && !browser_core::IsHeld(tab);
   content::WebContents* contents = may ? browser_core::Window::PageOf(tab) : nullptr;
   if (!contents) {
-    browser_core::RefuseAgentRequest(request, "The tab isn't in the agent's own Space.");
+    browser_core::RefuseAgentRequest(request, "The tab isn't in the agent's own Space.",
+                                     BC_AGENT_FAILURE_NOT_ITS_SPACE);
     return;
   }
   browser_core::SendAgentRequest(*contents, request, method ? method : "", url ? url : "",
@@ -960,6 +983,14 @@ bool bc_profile_set_offers_to_save(bc_id profile_id, int what, bool offer) {
   }
   prefs->SetBoolean(pref, offer);
   return true;
+}
+
+void bc_profile_read(bc_id profile,
+                     uint64_t read,
+                     const char* url,
+                     size_t max_bytes,
+                     int64_t timeout_ms) {
+  browser_core::ReadOnProfile(profile, read, url ? GURL(url) : GURL(), max_bytes, timeout_ms);
 }
 
 size_t bc_profile_search_engines(bc_id profile, char* engines, size_t capacity) {
@@ -1442,14 +1473,25 @@ bool bc_tab_set_split_stacked(bc_id id, bool stacked) {
   return true;
 }
 
+// The user's switch to |space|: the Space |window| leaves forgets which tabs opened which, as a
+// switch to an unrelated tab makes it (bc_window_select), so a tab's close no longer leads back.
+static void ForgetOpenersLeaving(const browser_core::Window& window, bc_id space) {
+  browser_core::Space* left = browser_core::Space::FromId(window.space());
+  if (left && left->id() != space) {
+    left->ForgetOpeners();
+  }
+}
+
 void bc_window_show_space(bc_id window_id, bc_id space) {
   if (browser_core::Window* window = browser_core::Window::FromId(window_id)) {
+    ForgetOpenersLeaving(*window, space);
     window->ShowSpace(space);
   }
 }
 
 void bc_window_show_space_empty(bc_id window_id, bc_id space) {
   if (browser_core::Window* window = browser_core::Window::FromId(window_id)) {
+    ForgetOpenersLeaving(*window, space);
     window->ShowSpace(space, false);
   }
 }
@@ -1976,7 +2018,13 @@ static bc_id OpenTyped(bc_id window_id, const char* url, bool when_shown, const 
   }
   const bc_id tab = browser_core::Tab::IdOf(contents);
   if (browser_core::Space* space = browser_core::Space::FromId(window->space())) {
-    space->Add(tab, /*opener=*/0, /*foreground=*/false);
+    // One to show now opens over the tab shown, which closing it shows again (#3813). One opened
+    // behind to load once shown, as ⌘↩'s, is shown later by the user's own switch.
+    if (when_shown) {
+      space->Add(tab, /*opener=*/0, /*foreground=*/false);
+    } else {
+      space->AddOpenedOver(tab, window->selected());
+    }
   }
   return tab;
 }
