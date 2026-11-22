@@ -5,7 +5,7 @@
 //! callbacks, and this keeps what it last said and asks it to check or to restart. Where the build
 //! carries a nightly feed beside its own, About's next row chooses which of the two it reads.
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::rc::Rc;
 use web_time::Instant;
 
@@ -503,7 +503,7 @@ pub fn words(
 pub struct VersionRow {
     version: SharedString,
     /// Where its button is drawn, logged for check.sh to click.
-    logged: Rc<RefCell<Vec<String>>>,
+    logged: crate::settings_rows::Drawn,
     /// Where its button is drawn, for the tests to click.
     drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The colours of the window it's in, dark until Settings says.
@@ -579,7 +579,7 @@ impl Render for VersionRow {
 /// line on what that means here, and its switch.
 pub struct NightlyRow {
     /// Where its switch is drawn, logged for check.sh to click.
-    logged: Rc<RefCell<Vec<String>>>,
+    logged: crate::settings_rows::Drawn,
     /// Where its switch is drawn, for the tests to click.
     drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// When the switch was last clicked, which its knob slides from.

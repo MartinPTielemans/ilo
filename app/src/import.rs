@@ -34,7 +34,6 @@ pub mod suggested;
 pub(crate) mod tests;
 mod tiles;
 
-use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
@@ -598,7 +597,7 @@ pub struct ImportView {
     drawn: Option<&'static str>,
     /// Where Import and Done were logged as drawn, emptied with each step so each logs them anew:
     /// check.sh clicks them there, as a summary that wraps, or a taller row, moves them.
-    drawn_at: Rc<RefCell<Vec<String>>>,
+    drawn_at: crate::settings_rows::Drawn,
     /// The system it runs on, for where the browsers it names export their passwords.
     os: Os,
     /// The bookmark folders of the browser picked, to choose from.

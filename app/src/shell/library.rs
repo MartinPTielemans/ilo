@@ -4,7 +4,7 @@
 //! over it, or for Spaces a card for each (docs/ux-spec.md › Archive and Downloads).
 
 use std::{
-    cell::{Cell, RefCell},
+    cell::Cell,
     hash::{DefaultHasher, Hash, Hasher},
     rc::Rc,
     sync::Arc,
@@ -475,7 +475,7 @@ pub(super) struct Library {
     /// false for Never, None while it asks first.
     sites: Vec<(String, Option<bool>)>,
     /// Where the page's controls were drawn, as the log said, for check.sh to click them.
-    drawn: Rc<RefCell<Vec<String>>>,
+    drawn: crate::settings_rows::Drawn,
     /// The page's requests opened to show where each went and what it sent (#2326), by their
     /// past task's id and step, and those of them showing every line.
     steps_opened: Vec<(String, usize)>,
