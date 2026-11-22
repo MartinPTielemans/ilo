@@ -224,14 +224,19 @@ EOF
   fail "$3: $(grep '^browser: mini bar at ' "$log" | tail -1)"
 }
 # Presses the mini bar's first button, or its last with $1 "last": 10 into it past the bar's 3 pt
-# inset. The pointer goes onto the bar first, as the Mac's bar window takes the mouse only on the
-# bar where the pointer is.
+# inset. With the real pointer, a hand's click with no move onto the bar first: the window server
+# picks the window it goes to, and the bar takes it, not the page under it (#3611). Else the
+# driver's pointer goes onto the bar first, then clicks.
 press_mini_bar() {
   mini_bar "the mini bar to press $2"
   x=$((mx + 13))
   [ "${1:-}" = last ] && x=$((mx + mw - 13))
-  send move $x $((my + mh / 2))
-  send click $x $((my + mh / 2))
+  if real_pointer; then
+    real click $x $((my + mh / 2))
+  else
+    send move $x $((my + mh / 2))
+    send click $x $((my + mh / 2))
+  fi
   expect "^browser: mini bar $2 pressed\$" "a click on the mini bar's $2 didn't press it"
 }
 # The mini bar went after $1, as the Mac's and Linux's hosts say. Windows' prints no line as it
