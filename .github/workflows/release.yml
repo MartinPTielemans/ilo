@@ -271,8 +271,9 @@ jobs:
           if-no-files-found: error
 
       # The engine's executables and libraries with their PDBs, from its release, and Browser.dll
-      # with its own.
+      # with its own. A trial's builds aren't the release's, so it uploads none (#3866).
       - name: Crash reports' symbols
+        if: ${{ needs.version.outputs.trial != 'true' }}
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           SENTRY_URL: ${{ vars.SENTRY_URL }}
@@ -287,14 +288,14 @@ jobs:
           if-no-files-found: error
 
   # A nightly builds the bundle of the workflow's own commit only to check it, and skips it without
-  # an engine, as the Flatpak follows the branch it's installed from.
+  # an engine, as the Flatpak follows the branch it's installed from. A trial uploads no symbols.
   linux:
     needs: version
     if: ${{ needs.version.outputs.go == 'true' }}
     uses: ./.github/workflows/flatpak.yml
     with:
       release: ${{ needs.version.outputs.nightly != 'true' }}
-      symbols: ${{ needs.version.outputs.nightly != 'true' }}
+      symbols: ${{ needs.version.outputs.nightly != 'true' && needs.version.outputs.trial != 'true' }}
     secrets:
       SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
 
@@ -336,11 +337,12 @@ jobs:
           for name in FLATPAK_GPG_KEY FLATPAK_REPO_URL R2_BUCKET R2_ENDPOINT R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY; do
             [ -n "$(printenv "$name")" ] || missing="$missing $name"
           done
-          if [ -z "$missing" ]; then
-            echo "sync=true" >> "$GITHUB_OUTPUT"
-          elif [ "$TRIAL" = true ]; then
-            echo "::notice::No$missing: this try signs the Flatpak repository with a key of its own and keeps it in the run."
+          # A trial stages nothing in the bucket (#3866), so it never syncs, whatever is set.
+          if [ "$TRIAL" = true ]; then
+            echo "::notice::This try signs the Flatpak repository with a key of its own and keeps it in the run."
             echo "sync=false" >> "$GITHUB_OUTPUT"
+          elif [ -z "$missing" ]; then
+            echo "sync=true" >> "$GITHUB_OUTPUT"
           else
             echo "::error::The Linux release needs$missing (docs/releasing.md). Without them nothing goes to the Flatpak repository and the draft isn't made."
             exit 1
@@ -527,12 +529,13 @@ jobs:
         if: ${{ steps.secrets.outputs.signed == 'true' }}
         run: ../tools/check-profile.sh "$SIGN_IDENTITY"
 
-      # It uploads the crash reports' symbols too (tools/symbols.sh). A nightly is marked as one.
+      # It uploads the crash reports' symbols too (tools/symbols.sh), except in a trial, which gets
+      # no token (#3866). A nightly is marked as one.
       - name: Build
         env:
           APP_TRACK: ${{ needs.version.outputs.nightly == 'true' && 'nightly' || '' }}
           UPDATE_PUBLIC_KEY: ${{ secrets.UPDATE_PUBLIC_KEY }}
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_AUTH_TOKEN: ${{ needs.version.outputs.trial != 'true' && secrets.SENTRY_AUTH_TOKEN || '' }}
           SENTRY_URL: ${{ vars.SENTRY_URL }}
           SENTRY_ORG: ${{ vars.SENTRY_ORG }}
           SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
