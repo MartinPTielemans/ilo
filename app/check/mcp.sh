@@ -4104,7 +4104,9 @@ say(); middle.onchange = say;
     [ -n "$sized_tab" ] || fail "open_tab of the widths page answered: $opened"
     picture=$(call screenshot "{\"tab\":$sized_tab}")
     size=$(pictured_at "$sized_tab")
-    layout=$(call snapshot "{\"tab\":$sized_tab}" | grep -o '"[A-Z][a-z]* layout"' | tr -d '"' | head -1)
+    # Its first word alone, as the size and the answer around it are split on spaces.
+    layout=$(call snapshot "{\"tab\":$sized_tab}" | grep -o '"[A-Z][a-z]* layout"' | tr -d '"' |
+      head -1 | cut -d' ' -f1)
     ref=$(printf '%s\n' "$opened" | sed -n 's/.*- button "Pop up" \[\(e[0-9]*\)\].*/\1/p' | head -1)
     behind=$(grep -c "^browser: tab [0-9]* opened by $sized_tab in the background\$" "$log" || true)
     call click "{\"tab\":$sized_tab,\"ref\":\"$ref\"}" > /dev/null
