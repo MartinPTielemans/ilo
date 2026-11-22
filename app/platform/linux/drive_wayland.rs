@@ -743,6 +743,57 @@ fn awaiting_pointer(
     done();
 }
 
+/// The first scroll in Settings after it shows, at (`x`, `y`) in its content. sway focuses Settings
+/// once it has mapped it, and moves it where it lists it only once the app has drawn again (#1180,
+/// #1897): a swipe before then went by the browser window's place, and Settings never had it
+/// (#3841). So the swipe waits, with the loop running for the app to draw, until sway has focused
+/// Settings and GPUI has the pointer at (`x`, `y`) in it, as settings_click's press does. It waits
+/// up to 5 s, as the 2 s a click's focus waits fell short, inside the 30 s check.sh gives a
+/// command. `focused` is how long sway took to focus it, once it has.
+fn settings_scroll(
+    (x, y): (f64, f64),
+    by: (f64, f64),
+    count: u32,
+    since: Instant,
+    focused: Option<u128>,
+    done: Box<dyn FnOnce()>,
+) {
+    let settings = focused_settings(&ours());
+    let focused = focused.or_else(|| settings.as_ref().map(|_| since.elapsed().as_millis()));
+    let at = settings_pointer();
+    let there = at.is_some_and(|(px, py)| (px - x).abs() < 1. && (py - y).abs() < 1.);
+    if !(settings.is_some() && there) && since.elapsed() < Duration::from_secs(5) {
+        if let Some(settings) = &settings {
+            motion(settings.x + x, settings.y + y);
+        }
+        let retry = move || settings_scroll((x, y), by, count, since, focused, done);
+        drive::after(10, Box::new(retry));
+        return;
+    }
+    // check.sh's logs say how long sway took to focus Settings and to put it where it lists it.
+    let ms = since.elapsed().as_millis();
+    match (focused, there, at) {
+        (Some(focus), true, _) => log!(
+            "browser: drive's scroll at {x:.0},{y:.0} in Settings after {ms} ms, focused after {focus} ms"
+        ),
+        (Some(focus), false, Some((px, py))) => log!(
+            "browser: drive's pointer at {px:.0},{py:.0} in Settings, not {x:.0},{y:.0}, after {ms} ms, focused after {focus} ms"
+        ),
+        (Some(focus), false, None) => {
+            log!(
+                "browser: drive's pointer isn't in Settings after {ms} ms, focused after {focus} ms"
+            )
+        }
+        (None, ..) => log!("browser: sway didn't focus Settings in {ms} ms"),
+    }
+    match key_origin() {
+        Some((left, top)) if motion(left + x, top + y).is_some() && fingers(by).is_some() => {
+            swiping(by, count - 1, 0, done)
+        }
+        _ => done(),
+    }
+}
+
 /// Where GPUI last had the pointer in Settings' window, in its content.
 fn settings_pointer() -> Option<(f64, f64)> {
     let view = settings_window::shown()?;
@@ -1475,9 +1526,16 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
             let (x, y) = drive::point(&mut words)?;
             let dy: f64 = words.next()?.parse().ok()?;
             let count: i32 = words.next()?.parse().ok()?;
-            await_settings_focus();
+            let (by, count) = ((0., -dy), count.max(1).unsigned_abs());
+            if settings_window::take_shown_anew() {
+                let since = Instant::now();
+                drive::go_on(Box::new(move |done| {
+                    settings_scroll((x, y), by, count, since, None, done)
+                }));
+                return Some(());
+            }
             let (left, top) = key_origin()?;
-            swipe(left + x, top + y, (0., -dy), count.max(1).unsigned_abs(), 0)
+            swipe(left + x, top + y, by, count, 0)
         })(),
         "swipe" => (|| {
             let (x, y) = in_driven_point(&mut words)?;

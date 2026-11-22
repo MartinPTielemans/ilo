@@ -78,8 +78,10 @@ await '^browser: title [0-9]* call$' || fail "the call page didn't draw"
 a=$(today | cut -d' ' -f1)
 send click $page_point
 if [ "$active" != 1 ]; then
-  exec 3>&- 5>&-
+  # Quits before cdp.py's pipe closes: the browser ends by itself as the pipe goes, and a quit
+  # asked then finds it ending, which the Mac answers with an error (#3870).
   quit
+  exec 5>&-
   rm -rf "$scratch"
   echo "skip: calls. Browser wasn't the active app, so the page ignored the click."
   exit 0
@@ -178,8 +180,8 @@ for kept in "$a using the camera and microphone" "$b holding a WebRTC connection
     fail "the tab ${kept#* } let go of its page"
 done
 ../tools/window-screenshot.sh "$pid" "$out/calls.png" || fail "no window to capture"
-exec 3>&- 5>&-
 quit
+exec 5>&-
 rm -rf "$profile_dir" "$scratch"
 echo "ok: memory short, the tab with a page unseen longest in no call let go of its page, one each" \
   "time, passing over the tab opened behind, and none once only the calls and the tab shown had" \

@@ -8,6 +8,7 @@
 #include "base/functional/callback_forward.h"
 #include "browser_core/platform/system_page.h"
 #include "browser_core/public/browser_core.h"
+#include "browser_core/system_engine_choices.h"
 #include "url/gurl.h"
 
 class PrefRegistrySimple;
@@ -47,9 +48,6 @@ bool Allowed(bc_id tab);
 // Whether |tab| is a link preview's, whose card draws Chromium's page alone, so it never moves.
 bool Previewing(bc_id tab);
 
-// The site of |url| as the profile keeps it: its registrable domain, else its host.
-std::string SiteOf(const GURL& url);
-
 // Whether |profile| opens |url|'s site in the system's engine: a listed service the user didn't
 // turn off, or a site the user kept, with the engine on. Remember turns it on, taking back a listed
 // service's off rather than keeping it, and the site's closed note, and Forget turns it off, which
@@ -61,7 +59,8 @@ void Forget(Profile* profile, const GURL& url);
 
 // Whether the user closed the protected-media note for |url|'s site in |profile|, or turned the
 // site off in Site Controls, which then never shows it there again: Site Controls offer the
-// system's engine for the site instead. Kept as the sites above are, a private window's for its
+// system's engine for the site instead. A listed service turned off counts by its entry alone, and
+// closes no note for the rest of its site. Kept as the sites above are, a private window's for its
 // session.
 bool NoteClosed(Profile* profile, const GURL& url);
 void CloseNote(Profile* profile, const GURL& url);
@@ -119,6 +118,12 @@ void MarkNewDataFolder();
 // there's one to delete, or once per folder to sweep the stores a version before #2664 gave
 // profiles that are gone.
 void SweepStores();
+
+// As a quit goes ahead, which is once every Browser has closed and its system pages with it: holds
+// the quit until the system's engine has written the session's stores to the disk, a second at
+// most, and logs how it went (#3685). A session that made no store waits for nothing and logs
+// nothing.
+void WriteStoresAtQuit();
 
 // For ContentBrowserClient::CreateThrottlesForNavigation: a navigation of a tab's page in
 // Chromium to a site its profile keeps for the system's engine loads there instead, and a tab

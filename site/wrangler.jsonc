@@ -1,0 +1,24 @@
+// ilobrowser.com: a Worker with no script, serving the prerendered pages in dist/client.
+// Deploy with `vp build && wrangler deploy`.
+{
+  "name": "ilo-site",
+  "compatibility_date": "2026-10-29",
+  "assets": {
+    "directory": "./dist/client",
+    // /ilo is served from ilo/index.html, and /ilo/ redirects to /ilo.
+    "html_handling": "drop-trailing-slash",
+    // An address with no file gets 404.html, with a 404 status.
+    "not_found_handling": "404-page",
+  },
+  "routes": [{ "pattern": "ilobrowser.com", "custom_domain": true }],
+  "workers_dev": false,
+  "env": {
+    // A copy on workers.dev alone, to compare with the live site: `wrangler deploy --env
+    // preview` (site.yml by hand), and `wrangler delete --env preview` when it's done with.
+    "preview": {
+      "name": "ilo-site-preview",
+      "routes": [],
+      "workers_dev": true,
+    },
+  },
+}

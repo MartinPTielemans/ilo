@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <optional>
 
+#include "base/containers/circular_deque.h"
 #include "base/time/time.h"
 
 namespace browser_core {
@@ -69,12 +70,15 @@ class DocumentPresses {
   struct Press {
     int64_t document = 0;
     base::TimeTicks at;
+    // A key's event stamp, while the page may still leave it.
+    std::optional<base::TimeTicks> key;
   };
-  Press users_;
+  // The user's last few presses, newest last, the newest the one that counts. More than one, as
+  // keys can be sent before the page has answered the first: ⌘L ⌘L, both left and run, take both
+  // back. One that falls off the front only leaves the user with no press, which never moves a tab.
+  static constexpr size_t kKept = 4;
+  base::circular_deque<Press> users_;
   Press agents_;
-  // While the user's last press is a key the page may still leave: its stamp and the press before.
-  std::optional<base::TimeTicks> key_;
-  Press before_key_;
 };
 
 // Moves only on the user's own press: their input inside kPressLifespan of the ask, and newer than

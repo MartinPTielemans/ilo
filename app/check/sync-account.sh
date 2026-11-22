@@ -479,8 +479,10 @@ if [ "$(uname)" = Linux ]; then
   done
   deleted=", deleted the account, after which the server held nothing of it,"
 fi
-exec 3>&- 5>&-
+# Quits before cdp.py's pipe closes: the browser ends by itself as the pipe goes, and a quit
+# asked then finds it ending, which the Mac answers with an error (#3870).
 quit
+exec 5>&-
 # The runs after start signed out.
 rm -f "$profile_dir/Account"
 # The sign-in window has an off-the-record profile of its own, where uBlock Origin's page never

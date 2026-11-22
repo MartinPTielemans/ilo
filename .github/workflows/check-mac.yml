@@ -511,12 +511,26 @@ jobs:
 
       # The results first, a few hundred bytes, so complete still names each run's result when
       # the check folder's upload fails or doesn't end, as on Windows (#3471, #3720).
-      - if: ${{ always() && steps.engine.outputs.found == 'true' }}
+      - id: results
+        if: ${{ always() && steps.engine.outputs.found == 'true' }}
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: results-mac-${{ matrix.shard }}
           path: ${{ runner.temp }}/results
           if-no-files-found: ignore
+      # A failed first try gets a second, as a name lookup or GitHub's side can fail for a moment
+      # (ENOTFOUND on main's 44965780143). The first's failure alone doesn't fail the job; the
+      # second's does, and complete still fails a shard whose rows never came.
+      - if: ${{ always() && steps.results.outcome == 'failure' }}
+        run: sleep 15
+      - if: ${{ always() && steps.results.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-mac-${{ matrix.shard }}
+          path: ${{ runner.temp }}/results
+          if-no-files-found: ignore
+          overwrite: true
       # Up to 500 MB, which takes 15 to 55 s. Its failure, such as GitHub's side timing out on
       # making the artifact, or a stall ended at the limit, doesn't make the job's result: the
       # Runs step's exit does, so a passed check stays green and a failed one red (#3720).

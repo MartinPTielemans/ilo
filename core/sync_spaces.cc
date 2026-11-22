@@ -19,6 +19,7 @@
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "base/uuid.h"
+#include "browser_core/checked.h"
 #include "browser_core/favorites.h"
 #include "browser_core/profiles.h"
 #include "browser_core/session.h"
@@ -802,8 +803,10 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
     space->RestoreNodes(space->node(), {{row, node}});
     // check.sh waits for this line.
     const Tab* tab = Tab::Get(row);
-    LOG(ERROR) << "browser: synced today " << row << " in space " << space->id() << " at " << at
-               << (tab && tab->web_contents() ? " loaded " : " unloaded ") << url.spec();
+    if (Checked()) {
+      LOG(ERROR) << "browser: synced today " << row << " in space " << space->id() << " at " << at
+                 << (tab && tab->web_contents() ? " loaded " : " unloaded ") << url.spec();
+    }
   }
 
   base::ScopedObservation<Profile, ProfileObserver> profile_observation_{this};

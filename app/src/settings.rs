@@ -1061,6 +1061,9 @@ fn show_now(cx: &mut App) {
                 window.focus(&settings.focus, cx);
             }
             settings.shown = true;
+            // Each show logs where its controls are drawn again, so check.sh can take a place from
+            // this show rather than from one before it, which a hidden window's scroll left (#3841).
+            settings.drawn_logged.borrow_mut().clear();
             if settings.section == Section::Agents {
                 look_for_clients(cx);
             }
@@ -4153,12 +4156,16 @@ impl Settings {
                 .child(add);
             rows.push(adding);
         }
+        // Its last line's foot, where check.sh scrolls it into sight before it captures it whole.
+        let end = div().absolute().left_0().right_0().bottom_0().h(px(1.));
         let foot = div()
+            .relative()
             .px(px(TEXT_X))
             .text_size(px(text::SMALL))
             .line_height(px(DETAIL_LINE))
             .text_color(look.detail)
-            .child(fence::FOOT);
+            .child(fence::FOOT)
+            .child(end.child(self.drawn("fence foot".into())));
         let under = match self.fence_adding {
             true => div().child(foot),
             false => {

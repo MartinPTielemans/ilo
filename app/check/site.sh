@@ -119,7 +119,9 @@ document.title = "seen scheme=" + (q("(prefers-color-scheme: dark)") ? "dark" : 
 # in, and "cleared" when the password filled in is edited. Chrome can fill a saved login before the
 # paint, so the page tells of a fill only after it, or the title would never say "login" (#1069).
 # Chrome's preview of a login its dropdown has highlighted fills it too, but only a fill the user
-# chose gives the page its value, with a change event, and then the title says "chosen".
+# chose gives the page its value, with a change event, and then the title says "chosen". Each time
+# a field takes the caret after the paint, the title says which, "user" or "pass", and a count, so
+# each focus gives a title line of its own (#3846).
 printf '%s' '<title>loading</title><script src="painted.js"></script>
 <form method="post" action="login">
 <input id=user name=username autocomplete=username
@@ -134,6 +136,10 @@ painted(() => {
   shown = true;
   document.title = "login";
 });
+let focuses = 0;
+for (const field of [user, pass]) {
+  field.onfocus = () => { if (shown) document.title = field.id + " " + ++focuses; };
+}
 let filled = false;
 pass.onchange = () => { if (pass.matches(":autofill") && pass.value) document.title = "chosen"; };
 setInterval(() => {
@@ -329,6 +335,19 @@ navigator.requestMediaKeySystemAccess("org.w3.clearkey", [{
   videoCapabilities: [{contentType: `video/webm; codecs="vp8"`}],
 }]).catch(() => 0).then(() => document.title = "clearkey asked");
 </script>' > "$out/site/clearkey.html"
+# A page that asks for Widevine only on a click, on the button covering it, as a player's Play does.
+# Its title says "press ready" once painted, which the click waits for, and "press asked" once its
+# request is answered.
+printf '%s' '<title>loading</title>
+<button id=b style="position:fixed;left:0;top:0;width:100%;height:100%;font:24px system-ui">Play</button>
+<script src="painted.js"></script>
+<script>
+painted(() => document.title = "press ready");
+b.onclick = () => navigator.requestMediaKeySystemAccess("com.widevine.alpha", [{
+  initDataTypes: ["cenc"],
+  videoCapabilities: [{contentType: `video/mp4; codecs="avc1.42E01E"`}],
+}]).catch(() => 0).then(() => document.title = "press asked");
+</script>' > "$out/site/drm-press.html"
 # A page that names the engine showing it: Safari's sends Safari's user agent, without Chrome's name.
 # A text field covers it, so a click anywhere in it lands there, and the field's title says what it
 # did: a press, counted, its value, what ⌘A selected and ⌘C copied, and a committed composition.

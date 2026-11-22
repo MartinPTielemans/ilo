@@ -89,11 +89,21 @@ codes=0
 # Signs in as $email in the sign-in window Sign In opened, with the code the server logs. The
 # account's first sign-in ($1 first or passkey) offers a passkey, with Add a Passkey focused, which
 # Not Now, next, declines, or with passkey is left for the run to add. $2, if given, is where to
-# capture the window with the address typed.
+# capture the window with the address typed. A device on a release, as sync-versions' B, names it
+# in sign_in_release; the run's own build leaves it empty.
 sign_in() {
   sign_in_window=
   focus_logged=
-  if engine_has ../core/sync.cc; then
+  if [ -n "${sign_in_release:-}" ]; then
+    # The core logs the focus from 0.2.0 (a63ef3cfb). A release before it types once the page
+    # loads, as it did, and a later one waits for the line as this build does.
+    case $sign_in_release in
+    0.0.* | 0.1.*)
+      echo "note: ilo $sign_in_release predates the sign-in page's focus line, so its fields are typed into once they load"
+      ;;
+    *) focus_logged=1 ;;
+    esac
+  elif engine_has ../core/sync.cc; then
     focus_logged=1
   else
     echo "note: the engine predates the sign-in page's focus line, so its fields are typed into once they load"

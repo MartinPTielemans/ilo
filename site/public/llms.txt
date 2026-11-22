@@ -1,0 +1,25 @@
+# ilo
+
+> ilo is a free, open-source web browser (GPL-3.0) for Mac, Windows and Linux, built on
+> ungoogled-chromium with an interface of its own in Rust. It keeps each part of your life in its own
+> Space, down a sidebar that tidies itself, with one command bar for addresses, searches, tabs and
+> commands. Chrome's extensions work, uBlock Origin is built in, and it needs no account. It sends
+> one anonymous usage count a day, with no ID, only if the user turns that on. Sync is optional, with an ilo account, end-to-end encrypted. It is in beta on Mac and Linux, and in alpha on Windows.
+
+The name is written lowercase, "ilo", and is Esperanto for "a tool".
+
+## Pages
+
+- [Home](https://ilobrowser.com/): what ilo is, and the download for your computer
+- [ilo for Mac](https://ilobrowser.com/mac): macOS 15 Sequoia or later, on Apple silicon
+- [ilo for Windows](https://ilobrowser.com/windows): 64-bit Windows 10 or later
+- [ilo for Linux](https://ilobrowser.com/linux): a Flatpak, for x64
+- [Help](https://ilobrowser.com/help): how ilo works, and answers to common questions
+- [Changelog](https://ilobrowser.com/changelog): what changed in each version, with clips of the new features
+- [Changelog feed](https://ilobrowser.com/changelog.xml): the changelog as an Atom feed
+- [Privacy](https://ilobrowser.com/privacy): every service ilo talks to, and what it sends
+
+## Source
+
+- [The browser's source](https://github.com/MartinPTielemans/ilo)
+- [Releases](https://github.com/MartinPTielemans/ilo/releases)

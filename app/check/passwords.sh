@@ -52,16 +52,22 @@ eye() {
 # The username field, across the top of the page, and the password field under it.
 send click 600 60
 if [ "$active" != 1 ]; then
-  exec 3>&- 5>&-
+  # Quits before cdp.py's pipe closes: the browser ends by itself as the pipe goes, and a quit
+  # asked then finds it ending, which the Mac answers with an error (#3870).
   quit
+  exec 5>&-
   echo "skip: passwords. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi
-# Logs in on the page shown with password $1: the username field has the keyboard.
+# Logs in on the page shown with password $1, once a click has put the caret in its username field.
+# Each field is typed into only once the page says it has the caret: a click or Tab the page drops
+# would put the password in the username field, and the form would go with none (#3846).
 log_in() {
+  expect "^browser: title $tab user [0-9]*\$" "the click didn't put the caret in the username field"
   send key a cmd
   send type check@example.test
   send key tab
+  expect "^browser: title $tab pass [0-9]*\$" "Tab didn't move the caret to the password field"
   send key a cmd
   send type "$1"
   send key return
@@ -369,8 +375,9 @@ click_in_sight "switch save and fill addresses"
 expect '^browser: save and fill addresses on$' "a second click didn't switch addresses back on"
 # Manage Passwords…, under the box of the login's row, opens Chrome's password manager page in a
 # new tab, where a search for the username finds the login. Its device check guards only Show,
-# Copy, a login's details and Export, which the run never asks for, so no prompt comes. ⌘W closes
-# it, and ⌘2 shows the login page's tab again, under the welcome page's.
+# Copy, a login's details and Export, which the run never asks for, so no prompt comes. It opened
+# over the login page's tab, but the search typed in its address ends the way back, as Chrome's
+# does, so ⌘W shows the top Today tab, the welcome page's, and ⌘2 the login page's under it.
 post clickkey $(drawn "manage passwords")
 expect '^browser: manage passwords [0-9]*$' "a click on Manage Passwords… didn't run it"
 expect '^browser: settings hidden$' "Manage Passwords… didn't hide Settings"
@@ -397,8 +404,12 @@ done
 ../tools/window-screenshot.sh "$pid" "$out/password-manager.png" || fail "no window to capture"
 send key w cmd
 expect "^browser: tab $manager closed\$" "⌘W didn't close Chrome's password manager page"
-send key 2 cmd
-expect "^browser: selected $tab\( in .*\)\{0,1\}\$" "⌘2 didn't show the login's tab again"
+expect '^browser: today ' "closing Chrome's password manager page didn't change Today"
+welcome=$(today | cut -d' ' -f1)
+[ "$welcome" != "$tab" ] || fail "the welcome page's tab isn't above the login's: Today is \"$(today)\""
+expect "^browser: selected $welcome\( in .*\)\{0,1\}\$" \
+  "closing Chrome's password manager page, searched from the bar, didn't show the top Today tab"
+switch "$(($(pinned | wc -w) + 2)) cmd" "$tab"
 # On the Mac, Manage Passkeys… beside it opens Chrome's list of the passkeys the Mac keeps for the
 # profile, in a new tab, where each can be deleted: the one place they're listed, which Chrome's
 # password manager links to only once there's one (#2354). The run's build holds no keychain group
@@ -424,8 +435,12 @@ if [ "$(uname)" = Darwin ]; then
   ../tools/window-screenshot.sh "$pid" "$out/passkeys-list.png" || fail "no window to capture"
   send key w cmd
   expect "^browser: tab $passkeys closed\$" "⌘W didn't close Chrome's list of passkeys"
-  send key 2 cmd
-  expect "^browser: selected $tab\( in .*\)\{0,1\}\$" "⌘2 didn't show the login's tab again"
+  # Nothing typed in it, it goes back to the login page's tab it opened over (#3813), and ⌘1 and
+  # ⌘2 then go to the welcome page's tab above it and back.
+  expect "^browser: selected $tab\( in .*\)\{0,1\}\$" \
+    "closing Chrome's list of passkeys didn't show the login's tab it opened over"
+  switch "$(($(pinned | wc -w) + 1)) cmd" "$welcome"
+  switch "$(($(pinned | wc -w) + 2)) cmd" "$tab"
 fi
 
 # The row's Remove closes the panel and asks in the browser window's dialog, where return removes
@@ -715,7 +730,7 @@ send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar"
 sed -n "/^browser: drive $off: /,\$p" "$log" | grep -q "^browser: offer $tab " &&
   fail "an address or card brought an offer with Save and fill switched off"
-exec 3>&- 5>&-
 quit
+exec 5>&-
 rm -rf "$scratch"
 echo "ok: a submitted login offers to save its password in a card 18 from the page's top right, through a resize; another tab closes it, and the key after the host brings it back; Japanese input composes in its username field and return commits it without saving; return saves the username as left, and the login page fills the saved password in, with a key that opens the Site Controls, which the login page has in a new tab from ⌘T from its first page too, and Chrome's dropdown fills it in again; the eye shows in the password field once one is typed, never for the one filled in, and goes with the field's focus; a changed password offers to update it, which escape declines; and Never answers on another site, whose Site Controls take it off Never; the first site's Site Controls name its login, All Passwords… lists it in Settings, where Remove asks and Cancel keeps it and Manage Passwords… opens Chrome's password manager page listing it, and the row's Remove asks in the dialog and removes it, which Settings hears; a sign-up form offers Chrome's strong password, which Choose Your Own leaves to the user and Use Strong Password fills in and saves, with no offer; and Settings' Offer to save passwords switched off keeps the next login from bringing an offer, and Save and fill addresses switches off and on; a form's address offers to save it in the card, return saves it and Chrome's dropdown then offers it, and a card's offer declines with escape; on the Mac, Edit › AutoFill has ilo's items alone, after Find, whose Contact… and Passwords… open Chrome's dropdown at the focused field, and Credit Card… with none focused opens Settings › Passwords; Settings lists the address, and then a card return saved, and Remove asks first and removes each; and Save and fill addresses and payment methods switched off keep a new address and the card from bringing an offer. Windows: $out/password-offer.png, $out/password-key.png, $out/password-fill.png, $out/password-reveal.png, $out/password-offer-ime.png, $out/password-update.png, $out/site-controls-never.png, $out/site-controls-passwords.png, $out/settings-passwords.png, $out/password-manager.png, $out/password-remove.png, $out/password-generation.png, $out/settings-passwords-off.png, $out/address-offer.png, $out/address-fill.png, $out/card-offer.png, $out/settings-address.png, $out/settings-autofill.png, $out/settings-autofill-off.png, $out/autofill-menu.png (Mac)"

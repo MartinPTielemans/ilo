@@ -84,6 +84,8 @@ impl Proposal {
 /// A use of a saved read waiting its turn: uses of one read go one at a time (#3822).
 struct Use {
     agent: String,
+    /// The connection the use came on: when it closes, its uses waiting go with it.
+    connection: u64,
     name: String,
     site: String,
     address: String,
@@ -242,7 +244,7 @@ impl Agents {
         crate::log!("browser: saved read removed in profile {profile}");
         if let Some(agent) = self.asker(&saved) {
             let host = shown(&saved.read.site);
-            self.note_on(&agent, "remove_read", &host, &saved.read.name, "");
+            self.note_on(&agent, 0, "remove_read", &host, &saved.read.name, "");
         }
         self.reads.removed.push((profile, saved, at));
         cx.notify();
@@ -282,6 +284,7 @@ impl Agents {
     pub(super) fn list_reads(
         &mut self,
         agent: &str,
+        connection: u64,
         reply: mpsc::Sender<ToolResult>,
         cx: &mut Context<Self>,
     ) {
@@ -309,7 +312,7 @@ impl Agents {
                 })
             })
             .collect();
-        self.note(agent, "list_reads", "", "");
+        self.note(agent, connection, "list_reads", "", "");
         cx.notify();
         _ = reply.send(ToolResult::text(json!({ "reads": listed }).to_string()));
     }
@@ -319,18 +322,19 @@ impl Agents {
     pub(super) fn propose_read(
         &mut self,
         agent: &str,
+        connection: u64,
         call: u64,
         arguments: &Value,
         reply: mpsc::Sender<ToolResult>,
         cx: &mut Context<Self>,
     ) {
-        let Some(tab) = self.tab_for(agent, arguments, &reply, cx) else {
+        let Some(tab) = self.tab_for(agent, connection, arguments, &reply, cx) else {
             return;
         };
         let url = self.browser.tab(tab, cx).url.to_string();
         let host = super::site(&url);
         if let Some(why) = self.off_limits(agent, tab, cx) {
-            self.note(agent, "propose_read", &host, why);
+            self.note(agent, connection, "propose_read", &host, why);
             cx.notify();
             _ = reply.send(ToolResult::error(why));
             return;
@@ -351,7 +355,7 @@ impl Agents {
         // for it (#3787), even on a tab the user let stay there.
         if self.fenced_read(&origin) {
             let host = shown(&origin);
-            self.note(agent, "read_not_allowed", &host, "");
+            self.note(agent, connection, "read_not_allowed", &host, "");
             cx.notify();
             _ = reply.send(ToolResult::error(not_allowed(&host)));
             return;
@@ -447,7 +451,7 @@ impl Agents {
                 // The core's answer comes while the Agents are being updated, so after it.
                 cx.spawn(async move |agents, cx| {
                     _ = agents.update(cx, |agents, cx| {
-                        agents.ask_to_save(&agent, call, tab, proposal, reply, cx)
+                        agents.ask_to_save(&agent, connection, call, tab, proposal, reply, cx)
                     });
                 })
                 .detach();
@@ -460,6 +464,7 @@ impl Agents {
     fn ask_to_save(
         &mut self,
         agent: &str,
+        connection: u64,
         call: u64,
         tab: u64,
         proposal: Proposal,
@@ -469,6 +474,7 @@ impl Agents {
         let host = proposal.site();
         let act = Act {
             agent: agent.to_string(),
+            connection,
             call,
             action: "propose_read",
             tab,
@@ -484,6 +490,7 @@ impl Agents {
             requests: Vec::new(),
             did: None,
             fenced: Fenced::No,
+            wait: None,
             reply,
         };
         let question = Question {
@@ -543,7 +550,7 @@ impl Agents {
                     ),
                 ),
             };
-            self.note_on(&act.agent, action, &host, &name, "");
+            self.note_on(&act.agent, act.connection, action, &host, &name, "");
             cx.notify();
             _ = act.reply.send(ToolResult::error(text));
             return;
@@ -563,9 +570,18 @@ impl Agents {
                 match changing {
                     true => {
                         let target = format!("{name}: {}", proposal.changes.join(", "));
-                        self.note_on(&act.agent, "change_read", &host, &target, "");
+                        self.note_on(
+                            &act.agent,
+                            act.connection,
+                            "change_read",
+                            &host,
+                            &target,
+                            "",
+                        );
                     }
-                    false => self.note_on(&act.agent, "save_read", &host, &name, ""),
+                    false => {
+                        self.note_on(&act.agent, act.connection, "save_read", &host, &name, "")
+                    }
                 }
                 Ok(format!(
                     "saved: the user saved \"{name}\". Call use_read with its name to read {host} without a tab."
@@ -593,6 +609,7 @@ impl Agents {
     pub(super) fn use_read(
         &mut self,
         agent: &str,
+        connection: u64,
         arguments: &Value,
         reply: mpsc::Sender<ToolResult>,
         cx: &mut Context<Self>,
@@ -619,7 +636,7 @@ impl Agents {
             .and_then(|store| store.get(name).cloned());
         let Some(saved) = saved else {
             let name = saved_reads::text(name, saved_reads::definition::NAME_MOST);
-            self.note_on(agent, "read_not_found", "", &name, "");
+            self.note_on(agent, connection, "read_not_found", "", &name, "");
             cx.notify();
             _ = reply.send(ToolResult::error(format!(
                 "not_found: no saved read named \"{name}\". Call list_reads to see saved reads, or open the site in a tab and call propose_read."
@@ -630,7 +647,14 @@ impl Agents {
         // the read's own changes.
         if self.fenced_read(&saved.read.site) {
             let site = shown(&saved.read.site);
-            self.note_on(agent, "read_paused", &site, &saved.read.name, "");
+            self.note_on(
+                agent,
+                connection,
+                "read_paused",
+                &site,
+                &saved.read.name,
+                "",
+            );
             cx.notify();
             _ = reply.send(ToolResult::error(paused(&site)));
             return;
@@ -647,6 +671,7 @@ impl Agents {
         let waiting = self.reads.waiting.entry(key.clone()).or_default();
         waiting.push_back(Use {
             agent: agent.to_string(),
+            connection,
             name,
             site: shown(&saved.read.site),
             address: address.to_string(),
@@ -742,6 +767,7 @@ impl Agents {
         // The address it read, which the agent's values filled, never where the site sent it.
         self.note_entry(
             &used.agent,
+            used.connection,
             action,
             &host,
             &used.name,
@@ -753,12 +779,14 @@ impl Agents {
         self.read_next(key);
     }
 
-    /// Forgets the uses an agent that went has waiting, but the one under way, whose answer goes
-    /// nowhere.
-    pub(super) fn forget_reads(&mut self, agent: &str) {
+    /// The agent went, or with `connection`, that connection of its: its uses waiting their turn
+    /// go unanswered. The one under way finishes, as its read was sent.
+    pub(super) fn forget_reads(&mut self, agent: &str, connection: Option<u64>) {
         for waiting in self.reads.waiting.values_mut() {
             let first = waiting.pop_front();
-            waiting.retain(|each| each.agent != agent);
+            waiting.retain(|each| {
+                each.agent != agent || connection.is_some_and(|gone| gone != each.connection)
+            });
             if let Some(first) = first {
                 waiting.push_front(first);
             }

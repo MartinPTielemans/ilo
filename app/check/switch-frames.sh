@@ -38,6 +38,7 @@ height=${content#*x}
 send menu New Space…
 expect "^browser: spaces $first [0-9]*\$" "New Space didn't make a second Space"
 second=$(grep '^browser: spaces' "$log" | tail -1 | cut -d' ' -f4)
+expect '^browser: field Space name has the keyboard$' "New Space's name didn't have the keyboard"
 send type frames
 send key return
 open_from_bar "http://localhost:$port/two.html"
