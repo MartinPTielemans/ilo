@@ -77,8 +77,10 @@ if (location.search == "?platform") {
   send layout
   children=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -c '^browser: layout child' || true)
   if [ "$active" != 1 ]; then
-    exec 3>&- 5>&-
+    # Quits before cdp.py's pipe closes: the browser ends by itself as the pipe goes, and a quit
+    # asked then finds it ending, which the Mac answers with an error (#3870).
     quit
+    exec 5>&-
     echo "skip: passkeys. Browser wasn't the active app, so the page didn't get its keys."
   else
     # Waits up to 10 s for the page to say $1 and cdp.py to log $2, or captures what's over the
@@ -251,8 +253,8 @@ if (location.search == "?platform") {
       [ -z "$group" ] || used=$group
       said="; asked on its own, the Mac's authenticator answered $platform, its keychain group $used"
     fi
-    exec 3>&- 5>&-
     quit
+    exec 5>&-
     echo "ok: a local page registered a passkey on a virtual security key and signed in with it," \
       "and untouched, the key left Chrome's dialog up${dialog:+, a child window at $dialog centred}" \
       "${view:+across the page at $view,} which escape closed$said. Window: $out/passkeys-dialog.png"
