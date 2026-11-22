@@ -484,7 +484,7 @@ struct PageSearch: View {
             if inked, !tab.hasPage { PrivateWords(overField: true).padding(.bottom, PrivateMark.overField) }
           }
       }
-      SearchBar(query: $query, site: $site, focused: $focused, selectsAll: true) {
+      SearchBar(query: $query, site: $site, focused: $focused, open: focused, selectsAll: true) {
         if let destination = Destination(query, on: site, engine: browser.settings.searchEngine) { browser.go(destination) }
       }
     }
