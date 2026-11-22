@@ -132,6 +132,7 @@ grep '^browser: front ' "$log" | tail -1 | grep -q ' key driven,' ||
 send menu New Space…
 expect '^browser: command new-space via ui$' "New Space in the menu didn't run in the new window"
 expect "^browser: window $second shows 0\$" "the new Space showed a page"
+expect '^browser: field Space name has the keyboard$' "New Space's name didn't have the keyboard in the new window"
 send type reading
 send key return
 expect '^browser: create space [0-9]* reading$' "return didn't name the new window's Space"
