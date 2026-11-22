@@ -2293,7 +2293,7 @@ index 5121c41b61..8f35f1ab32 100644
      fn successful_compositor_wait_reports_native_callback() {
          let provider = VSyncProvider {
 diff --git a/crates/gpui_windows/src/window.rs b/crates/gpui_windows/src/window.rs
-index c467101fc8..e04cf46754 100644
+index c467101fc8..a785b9a33f 100644
 --- a/crates/gpui_windows/src/window.rs
 +++ b/crates/gpui_windows/src/window.rs
 @@ -2,6 +2,7 @@
@@ -2432,7 +2432,7 @@ index c467101fc8..e04cf46754 100644
                  None,
                  Some(hinstance.into()),
                  Some(&context as *const _ as *const _),
-@@ -569,6 +619,14 @@ impl WindowsWindow {
+@@ -569,9 +619,18 @@ impl WindowsWindow {
          let hwnd = creation_result?;
          let this = this.unwrap();
  
@@ -2447,7 +2447,11 @@ index c467101fc8..e04cf46754 100644
          register_drag_drop(&this)?;
          set_non_rude_hwnd(hwnd, true);
          configure_dwm_dark_mode(hwnd, appearance);
-@@ -582,6 +640,11 @@ impl WindowsWindow {
++        this.state.border_offset.all_below.set(this.hide_title_bar);
+         this.state.border_offset.update(hwnd)?;
+         let placement =
+             retrieve_window_placement(hwnd, display, params.bounds, &this.state.border_offset)?;
+@@ -582,6 +641,11 @@ impl WindowsWindow {
              }
              unsafe { SetWindowPlacement(hwnd, &placement)? };
          } else {
@@ -2459,7 +2463,7 @@ index c467101fc8..e04cf46754 100644
              this.state.initial_placement.set(Some(WindowOpenStatus {
                  placement,
                  state: WindowOpenState::Windowed,
-@@ -623,7 +686,8 @@ impl Drop for WindowsWindow {
+@@ -623,7 +687,8 @@ impl Drop for WindowsWindow {
                  this.dialog_owner.when_idle().await;
                  let handle = this.hwnd;
                  unsafe {
@@ -2469,7 +2473,7 @@ index c467101fc8..e04cf46754 100644
                      DestroyWindow(handle).log_err();
                  }
              })
-@@ -718,6 +782,10 @@ impl PlatformWindow for WindowsWindow {
+@@ -718,6 +783,10 @@ impl PlatformWindow for WindowsWindow {
          self.state.input_handler.take()
      }
  
@@ -2480,7 +2484,7 @@ index c467101fc8..e04cf46754 100644
      fn prompt(
          &self,
          level: PromptLevel,
-@@ -924,7 +992,12 @@ impl PlatformWindow for WindowsWindow {
+@@ -924,7 +993,12 @@ impl PlatformWindow for WindowsWindow {
                  set_window_composition_attribute(hwnd, None, 0);
              }
              WindowBackgroundAppearance::Transparent => {
@@ -2494,7 +2498,7 @@ index c467101fc8..e04cf46754 100644
              }
              WindowBackgroundAppearance::Blurred => {
                  set_window_composition_attribute(hwnd, Some((0, 0, 0, 0)), 4);
-@@ -968,7 +1041,14 @@ impl PlatformWindow for WindowsWindow {
+@@ -968,7 +1042,14 @@ impl PlatformWindow for WindowsWindow {
          self.state.is_fullscreen()
      }
  
@@ -2510,7 +2514,7 @@ index c467101fc8..e04cf46754 100644
          self.state.callbacks.request_frame.set(Some(callback));
      }
  
-@@ -1041,7 +1121,6 @@ impl PlatformWindow for WindowsWindow {
+@@ -1041,7 +1122,6 @@ impl PlatformWindow for WindowsWindow {
              .log_err();
      }
  
@@ -2518,7 +2522,7 @@ index c467101fc8..e04cf46754 100644
      fn render_to_image(&self, scene: &Scene) -> anyhow::Result<image::RgbaImage> {
          self.state
              .renderer
-@@ -1079,7 +1158,12 @@ impl PlatformWindow for WindowsWindow {
+@@ -1079,7 +1159,12 @@ impl PlatformWindow for WindowsWindow {
  
      fn a11y_init(&self, callbacks: gpui::A11yCallbacks) {
          let action_handler = A11yActionHandler(callbacks.action);
@@ -2532,7 +2536,7 @@ index c467101fc8..e04cf46754 100644
  
          let adapter = accesskit_windows::Adapter::new(
              accesskit_windows::HWND(self.0.hwnd.0),
-@@ -1146,10 +1230,7 @@ struct WindowsDragDropHandler(pub Rc<WindowsWindowInner>);
+@@ -1146,10 +1231,7 @@ struct WindowsDragDropHandler(pub Rc<WindowsWindowInner>);
  
  impl WindowsDragDropHandler {
      fn handle_drag_drop(&self, input: PlatformInput) {
@@ -2544,3 +2548,43 @@ index c467101fc8..e04cf46754 100644
      }
  }
  
+@@ -1386,9 +1468,21 @@ type Color = (u8, u8, u8, u8);
+ pub(crate) struct WindowBorderOffset {
+     pub(crate) width_offset: Cell<i32>,
+     pub(crate) height_offset: Cell<i32>,
++    /// A window without a title bar keeps no border at its top (`handle_calc_client_size`), so
++    /// its whole height offset is at the bottom: split in half, it put the window half its bottom
++    /// border above where it was asked to go.
++    pub(crate) all_below: Cell<bool>,
+ }
+ 
+ impl WindowBorderOffset {
++    fn top(&self) -> i32 {
++        if self.all_below.get() {
++            0
++        } else {
++            self.height_offset.get() / 2
++        }
++    }
++
+     pub(crate) fn update(&self, hwnd: HWND) -> anyhow::Result<()> {
+         let window_rect = unsafe {
+             let mut rect = std::mem::zeroed();
+@@ -1542,7 +1636,7 @@ fn calculate_window_rect(bounds: Bounds<DevicePixels>, border_offset: &WindowBor
+         bottom: bounds.bottom().0,
+     };
+     let left_offset = border_offset.width_offset.get() / 2;
+-    let top_offset = border_offset.height_offset.get() / 2;
++    let top_offset = border_offset.top();
+     let right_offset = border_offset.width_offset.get() - left_offset;
+     let bottom_offset = border_offset.height_offset.get() - top_offset;
+     rect.left -= left_offset;
+@@ -1558,7 +1652,7 @@ fn calculate_client_rect(
+     scale_factor: f32,
+ ) -> Bounds<Pixels> {
+     let left_offset = border_offset.width_offset.get() / 2;
+-    let top_offset = border_offset.height_offset.get() / 2;
++    let top_offset = border_offset.top();
+     let right_offset = border_offset.width_offset.get() - left_offset;
+     let bottom_offset = border_offset.height_offset.get() - top_offset;
+     let left = rect.left + left_offset;
