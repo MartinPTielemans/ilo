@@ -527,9 +527,17 @@ send key e ctrl shift
 expect '^browser: command new-board via ' "⌃⇧E with a Board's page focused didn't run New Board"
 made shed "⌃⇧E with a Board's page focused"
 archive "⌃⇧E with a Board's page focused"
+# The shed opened over the porch's tab, which archiving it shows again (#3813). Its ⌘ digit then
+# shows it from the top Today tab.
+expect "^browser: selected $porch\( in .*\)\{0,1\}\$" \
+  "archiving the Board made over the porch's didn't show the porch's tab $porch again"
 tab=$porch
 n=$(echo $(pinned) $(today) | tr ' ' '\n' | grep -nx "$porch" | cut -d: -f1)
 [ -n "$n" ] || fail "the Board's tab $porch isn't in the sidebar: pinned \"$(pinned)\", Today \"$(today)\""
+top=$(today | cut -d' ' -f1)
+[ -n "$top" ] && [ "$top" != "$porch" ] || fail "no Today tab but the porch's: Today is \"$(today)\""
+m=$(echo $(pinned) $(today) | tr ' ' '\n' | grep -nx "$top" | cut -d: -f1)
+switch "$m cmd" "$top"
 switch "$n cmd" "$porch"
 archive "the sidebar's +"
 
@@ -663,7 +671,7 @@ expect "^browser: tab $tab closed\$" "⌘W didn't close the row's copy's tab"
 for tab in "$copy_tab" "$garden_tab"; do
   n=$(echo $(pinned) $(today) | tr ' ' '\n' | grep -nx "$tab" | cut -d: -f1)
   [ -n "$n" ] || fail "the Board's tab $tab isn't in the sidebar: pinned \"$(pinned)\", Today \"$(today)\""
-  # Closing a tab shows the one under it, which may be this one already.
+  # Closing a tab shows the one it opened over or the one under it, which may be this one already.
   [ "$(grep '^browser: selected ' "$log" | tail -1 | cut -d' ' -f3)" = "$tab" ] || switch "$n cmd" "$tab"
   if [ "$tab" = "$garden_tab" ]; then
     archive "the File menu, for the Board to duplicate"
@@ -857,10 +865,12 @@ send key w cmd
 expect "^browser: tab $first closed\$" "⌘W didn't close the Board's first tab"
 expect "^browser: loaded $second chrome://board/$twice\$" \
   "the Board's second tab didn't load it again once the first closed"
-# Closing a tab shows the one under it, as Arc does, so the second is shown by its key.
+# Closing the first shows a tab it opened, the second, or the one under it (#3813); the second is
+# shown by its key if it isn't already.
+expect "^browser: selected [0-9][0-9]*\( in .*\)\{0,1\}\$" "closing the Board's first tab showed no tab"
 n=$(echo $(pinned) $(today) | tr ' ' '\n' | grep -nx "$second" | cut -d: -f1)
 [ -n "$n" ] || fail "the Board's second tab $second isn't in the sidebar: pinned \"$(pinned)\", Today \"$(today)\""
-switch "$n cmd" "$second"
+[ "$(grep '^browser: selected ' "$log" | tail -1 | cut -d' ' -f3)" = "$second" ] || switch "$n cmd" "$second"
 saves=$(grep -c 'browser: board saved$' "$log" || true)
 send scroll 640 400 40 5
 saved_after "$saves" "a pan in the Board's second tab, once the first had closed, wasn't saved"

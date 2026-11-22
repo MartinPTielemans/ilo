@@ -1285,9 +1285,26 @@ post rightclick 114 114
 expect "^browser: menu shown .*$(cased 'Remove from Favorites, Change Icon…, Close Tab')\$" \
   "a right-click on the favorite's tile didn't show its menu"
 send choose "$(cased 'Close Tab')"
-expect '^browser: favorites $' "Close Tab in the tile's menu didn't close the favorite"
-expect "^browser: selected $x\( in .*\)\{0,1\}\$" \
-  "closing the favorite didn't show the top Today tab"
+# A favorite keeps its tile, and only its page goes, as Arc's does. The app shows the tab shown
+# before it that's still open, the Today tab ⌘T's tab first opened over, as Arc 1.170 does.
+expect "^browser: selected $u\( in .*\)\{0,1\}\$" \
+  "closing the favorite didn't show the tab shown before it"
+expect "^browser: page $fav unloaded 1\$" "Close Tab in the tile's menu didn't unload the favorite"
+none_since '^browser: favorites ' || fail "Close Tab in the tile's menu took the favorite away"
+# Its tile offers no Close Tab, with no page to close. Out of the favorites, it's the top of Today
+# with no tab to go back to, the bar's tab having taken its way back, so ⌘W on it shows the tab
+# under it.
+post rightclick 114 114
+expect "^browser: menu shown .*$(cased 'Remove from Favorites, Change Icon…, Close Tab (disabled)')\$" \
+  "a right-click on the closed favorite's tile didn't show its menu, with Close Tab off"
+send choose "$(cased 'Remove from Favorites')"
+expect '^browser: favorites $' "Remove from Favorites left the closed favorite's tile"
+expect "^browser: today $fav $x $kept\$" \
+  "Remove from Favorites didn't put the closed favorite at the top of Today: Today is \"$(today)\""
+# With no favorite left the rows move off the places row gives, so its ⌘ digit shows it.
+switch "$(($(pinned | wc -w) + 1)) cmd" "$fav"
+send key w cmd
+expect_tabs "$x $kept" "$x" "closing the former favorite didn't show the Today tab under it"
 before=$kept
 # Tabs › Reset all tabs in this Space takes the Space's pinned tabs away from their pinned URLs back
 # there, as Arc's does, but only those loaded: one unloaded stays as it is until it's shown. Edit…
@@ -1303,6 +1320,10 @@ edit_pinned_url() {
   send key return
   expect "^browser: page $2 away 1\$" "the pinned URL typed didn't take tab $2 away from it"
 }
+# The former favorite's close left $x shown, so its row's click starts from the tab under it.
+under=$(echo $kept | cut -d' ' -f1)
+[ -n "$under" ] || fail "no Today tab under $x: Today is \"$(today)\""
+switch "$(($(pinned | wc -w) + 2)) cmd" "$under"
 set -- $(row 0)
 send click $1 $(($2 + 41))
 expect "^browser: selected $x in " "a click on Today's top row didn't show its tab"

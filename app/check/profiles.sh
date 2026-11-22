@@ -343,10 +343,10 @@ if [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 1
   grep -q "^browser: tab $tab icon already kept\$" "$log" &&
     fail "the first profile's icon page found the second profile's icon kept"
   close_icon_page
-  # Its Space showed its favorite at the quit before, which the launch after loads; a closed tab
-  # leaves it showing none.
-  send key 1 cmd
-  expect "^browser: window [0-9]* shows $favorite\$" "⌘1 didn't show the first profile's favorite again"
+  # Its Space showed its favorite at the quit before, which the launch after loads. The icon page
+  # opened over it, so closing the page shows it again (#3813).
+  expect "^browser: window [0-9]* shows $favorite\$" \
+    "closing the icon page didn't show the first profile's favorite it opened over"
   # The Space shown at the quit is the one the launch after shows.
   [ "$shown" = "$first" ] || {
     send key 2 ctrl
@@ -457,6 +457,9 @@ expect '^browser: favorites $' "Remove from Favorites left the tile"
 send key z cmd
 expect '^browser: command undo via \(ui\|page\)$' "⌘Z didn't undo Remove from Favorites"
 expect "^browser: favorites $a\$" "⌘Z didn't put the favorite back"
+# Today's rows slide down under the tile put back, and a press before they stop lands on the
+# Space's name.
+expect '^browser: rows settled$' "the rows didn't settle after ⌘Z put the favorite back"
 # Back to Favorite URL takes each twin to the URL the favorite had, in its own profile.
 post rightclick $tile
 expect "^browser: menu shown $(cased 'Back to Favorite URL, ')" "⌘Z put the favorite back without its URL"
@@ -786,16 +789,22 @@ bar_runs() {
 before=$(today)
 # The note goes first in Today, ahead of what was there; with Today empty it's alone.
 atop="^browser: today [0-9][0-9]*${before:+ $before}\$"
+# The first Space still shows the tab its search and Clear browsing data opened over, which the
+# note opens over too, and closing the note shows it again (#3813), with a page to split.
+opener=$(sed -n 's/^browser: window [0-9]* shows \([0-9]*\)$/\1/p' "$log" | tail -1)
+[ -n "$opener" ] && [ "$opener" != 0 ] || fail "the first Space shows no tab before New Note"
 bar_runs "New Note"
 expect '^browser: new note https://notion\.new$' "the command bar's New Note didn't open a new Notion page"
 expect "$atop" "the bar's note didn't open at the top of Today: Today is \"$(today)\""
 send key w cmd
 expect "^browser: today $before\$" "⌘W didn't close the bar's note"
+expect "^browser: selected $opener\( in .*\)\{0,1\}\$" \
+  "closing the bar's note didn't show tab $opener, which it opened over"
 send layout
 height=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
   sed 's/^browser: layout content [0-9]*x\([0-9]*\),.*/\1/')
 post click 204 $((height - 25))
-expect "^browser: menu shown $(cased 'New Space…, New Folder…, New Split View (disabled), New Board, New Note'), " \
+expect "^browser: menu shown $(cased 'New Space…, New Folder…, New Split View, New Board, New Note'), " \
   "the footer's + didn't offer New Note"
 send choose "$(cased 'New Note')"
 expect '^browser: new note https://notion\.new$' "the footer's New Note didn't open a new Notion page"

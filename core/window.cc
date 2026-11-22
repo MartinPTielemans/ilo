@@ -510,10 +510,12 @@ WEB_CONTENTS_USER_DATA_KEY_IMPL(HeldLoad);
 // tab none, which nothing can picture (#3788).
 constexpr gfx::Size kAgentPageSize(1042, 780);
 
-// Sizes |contents| to kAgentPageSize unless a window shows it, whose page area it then has.
+// Sizes |contents| to kAgentPageSize unless a window shows it, whose page area it then has. Its
+// view saying it shows isn't enough: on the Mac a pop-up its page made starts shown, and a view no
+// window holds is never hidden, so it would keep the size the tab strip gave it, the user's page's.
 void SizeForAgent(content::WebContents* contents) {
   content::RenderWidgetHostView* view = contents ? contents->GetRenderWidgetHostView() : nullptr;
-  if (contents && !(view && view->IsShowing())) {
+  if (contents && !(view && view->IsShowing() && Window::Showing(Tab::IdOf(contents)))) {
     contents->Resize(gfx::Rect(kAgentPageSize));
   }
 }
