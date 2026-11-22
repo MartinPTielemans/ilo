@@ -1602,6 +1602,46 @@ mod read_tests {
         );
     }
 
+    /// In a window too short for the card to end above the sidebar's foot, its buttons are over
+    /// the foot's controls and take the click: Save Read over the + answers it, and no menu opens.
+    #[gpui::test]
+    fn the_buttons_are_over_the_foot_in_a_short_window(cx: &mut TestAppContext) {
+        use crate::tokens::shell::permission::{BUTTON_HEIGHT, PADDING};
+        use gpui::{Modifiers, point};
+        let host = Rc::new(Recorder::default());
+        let browser = host.clone();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+        shell.update(cx, |shell, cx| {
+            // Two Spaces, so the foot has its +, at its right, where Save Read is.
+            let space =
+                |id: u64, name: &str| (id, name.into(), None, 0, "".into(), "".into(), "".into());
+            shell.set_spaces(vec![space(1, "Space 1"), space(2, "Space 2")], cx);
+            shell.set_tabs(1, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
+            shell.set_space(1, cx);
+            shell.set_selected(10, cx);
+            shell.set_agent_question(Some(proposal("Burj Khalifa")), cx)
+        });
+        let top = shell.read_with(cx, |shell, _| shell.plate_at().0);
+        // As short as the card gets, so its foot reaches the window's.
+        cx.simulate_resize(size(px(1100.), px(top + PLATE_INSET + AROUND_READ)));
+        cx.run_until_parked();
+        host.take();
+        let drawn = card(&shell, cx);
+        let save = point(
+            drawn.right() - px(PADDING + 6.),
+            drawn.bottom() - px(PADDING + BUTTON_HEIGHT / 2.),
+        );
+        cx.simulate_click(save, Modifiers::none());
+        cx.run_until_parked();
+        let asked = host.take();
+        assert!(
+            asked
+                .iter()
+                .any(|call| call.contains("answer agent 7 Once")),
+            "a click on Save Read at {save:?} didn't save the read; the host was asked: {asked:?}"
+        );
+    }
+
     /// Lib test 5: the card is an alert named by its head, the read block a group named by the
     /// read's name and columns, each sample row a row read cell by cell under its column, and
     /// each button named by its words.
