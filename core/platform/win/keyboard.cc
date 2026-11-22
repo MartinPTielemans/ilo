@@ -2,8 +2,12 @@
 
 #include <windows.h>
 
+#include "base/no_destructor.h"
+#include "base/strings/string_number_conversions.h"
 #include "components/input/native_web_keyboard_event.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
+#include "ui/events/event.h"
+#include "ui/events/keycodes/dom/dom_keyboard_layout_map.h"
 
 namespace browser_core::platform {
 
@@ -37,5 +41,20 @@ std::string LatinKey(const input::NativeWebKeyboardEvent& event) {
   }
   return std::string();
 }
+
+const SplitLayout& SplitLayoutOf(const input::NativeWebKeyboardEvent& event) {
+  static base::NoDestructor<SplitLayoutCache> layouts;
+  // A layout is a thread's on Windows: the one of the thread whose window has the key, which is
+  // the UI thread this runs on, as GenerateDomKeyboardLayoutMap reads it. A key with no message
+  // behind it, as an agent's, is the UI thread's.
+  const ui::Event* key = event.os_event;
+  const HWND window = key && key->HasNativeEvent() ? key->native_event().hwnd : nullptr;
+  const HKL layout = GetKeyboardLayout(window ? GetWindowThreadProcessId(window, nullptr) : 0);
+  return layouts->For(base::NumberToString(reinterpret_cast<uintptr_t>(layout)),
+                      [] { return ui::GenerateDomKeyboardLayoutMap(); });
+}
+
+// Windows' layouts are compared when a split key asks, as no notice of theirs reaches the core.
+void StopHearingLayouts() {}
 
 }  // namespace browser_core::platform

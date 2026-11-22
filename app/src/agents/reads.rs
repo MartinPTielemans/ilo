@@ -482,6 +482,7 @@ impl Agents {
             field: String::new(),
             download: 0,
             requests: Vec::new(),
+            wait: None,
             did: None,
             fenced: Fenced::No,
             reply,

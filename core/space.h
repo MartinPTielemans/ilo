@@ -177,6 +177,11 @@ class Space {
   // One opened in front makes the Space forget where its other tabs came from, as Chrome's tab
   // strip does, so closing it goes back to its opener rather than to a tab opened earlier.
   void Add(bc_id tab, bc_id opener, bool foreground);
+  // Puts |tab|, one the user opened to show over |shown|, at the top of Today as Add does the
+  // user's, with |shown| as its opener, so closing it shows |shown| again, whether a favorite, a
+  // pinned tab or a Today tab, as Chrome's ⌘T tab goes back to the tab it opened over. The Space
+  // forgets where its other tabs came from, as when Add's opens in front.
+  void AddOpenedOver(bc_id tab, bc_id shown);
   // The user showed |shown| after |was|, either of them perhaps another Space's. Unless one opened
   // the other or one tab opened both, the user went on to something else, and the Space forgets
   // where its tabs came from, as Chrome's tab strip does on a switch the user makes.
@@ -276,9 +281,10 @@ class Space {
   // The lowest pinned tab still |loaded|, else 0: the one to show once no Today tab is left.
   bc_id LastLoadedPinned(base::FunctionRef<bool(bc_id)> loaded) const;
   // The tab to show once |leaving| closes or, pinned, unloads. For a Today tab it's Chrome's order:
-  // a tab it opened, then another tab its opener opened, then its opener, then the tab below it,
-  // then the one above, and after the last Today tab the lowest pinned tab still |loaded|. For a
-  // pinned tab it's the top Today tab, else the nearest pinned tab still |loaded|, below it first.
+  // a tab it opened, then another tab its opener opened, then its opener while it's in the Space or
+  // a favorite the Space shows, then the tab below it, then the one above, and after the last Today
+  // tab the lowest pinned tab still |loaded|. For a pinned tab it's the top Today tab, else the
+  // nearest pinned tab still |loaded|, below it first.
   // In a split it's the tab beside it, the one on its right first. For a tab not in the Space, a
   // favorite, it's the top Today tab, else the lowest pinned tab still |loaded|. 0 if there's none.
   bc_id NextAfterLeaving(bc_id leaving, base::FunctionRef<bool(bc_id)> loaded) const;

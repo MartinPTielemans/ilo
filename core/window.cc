@@ -88,6 +88,7 @@
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "content/public/common/referrer.h"
@@ -502,6 +503,21 @@ class HeldLoad : public content::WebContentsUserData<HeldLoad> {
 
 WEB_CONTENTS_USER_DATA_KEY_IMPL(HeldLoad);
 
+// The page area of a new window at its default size, in CSS pixels: the app's 1280 by 800
+// (window_opening.rs, WINDOW_SIZE) less the sidebar's 228 and the card's inset of 10 at the right
+// and 10 above and below (tokens.toml, [shell]). An agent's tab has it until a window shows it:
+// Chromium's tab strip gives a tab added behind the active one that tab's size, and with no active
+// tab none, which nothing can picture (#3788).
+constexpr gfx::Size kAgentPageSize(1042, 780);
+
+// Sizes |contents| to kAgentPageSize unless a window shows it, whose page area it then has.
+void SizeForAgent(content::WebContents* contents) {
+  content::RenderWidgetHostView* view = contents ? contents->GetRenderWidgetHostView() : nullptr;
+  if (contents && !(view && view->IsShowing())) {
+    contents->Resize(gfx::Rect(kAgentPageSize));
+  }
+}
+
 // Makes the new tab |params| asks for as Chrome's Navigate makes it (CreateTargetContents), for
 // |space| to hold from when its tab strip has it until the window places it, and leaves it to
 // Navigate to insert. Its page starts once inserted (HeldLoad::Start), as Chrome's Navigate starts
@@ -529,10 +545,12 @@ void MakeHeldBy(Space& space, NavigateParams& params) {
 #endif
   std::unique_ptr<content::WebContents> made = content::WebContents::Create(create);
   HeldLoad::CreateForWebContents(made.get(), space.id(), params);
-  // A tab strip no window watches still loads it, once Navigate has inserted it.
+  // A tab strip no window watches still loads it, once Navigate has inserted it. The tab strip
+  // sizes a tab added behind the active one to that tab's page, so it takes its own size back.
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(
                      [](base::WeakPtr<content::WebContents> contents) {
+                       SizeForAgent(contents.get());
                        HeldLoad::Start(contents.get());
                      },
                      made->GetWeakPtr()));
@@ -1046,6 +1064,16 @@ void Window::AdjustNavigate(NavigateParams& params) {
     // Windows, showing a window already on screen gives the window itself the user's keyboard.
     params.window_action = NavigateParams::WindowAction::kNoAction;
     window->agent_opener_ = source_id;
+    // A pop-up content made doesn't pass MakeHeldBy, and Navigate's tab strip sizes it as it does
+    // any tab added behind, so it takes the agent's size the task after (#3788).
+    if (params.contents_to_insert) {
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, base::BindOnce(
+                         [](base::WeakPtr<content::WebContents> contents) {
+                           SizeForAgent(contents.get());
+                         },
+                         params.contents_to_insert->GetWeakPtr()));
+    }
   }
   // ⌥⌘-click on a link opens it in a Little ilo window, as Arc's does in Little Arc (the owner's
   // call over Chrome's split, 2026-10-29). The page asks for a split view, as for ⌥-click, so the
@@ -1849,6 +1877,7 @@ content::WebContents* Window::OpenHeld(Space& space, Profile* profile, const GUR
   // The app hears only of the tabs it didn't open.
   base::AutoReset<bool> opening(&opening_tab_, true);
   Navigate(&params);
+  SizeForAgent(params.navigated_or_inserted_contents);
   HeldLoad::Start(params.navigated_or_inserted_contents);
   return params.navigated_or_inserted_contents;
 }
@@ -3449,7 +3478,10 @@ void Window::GiveKeyboardToPage() {
   // Held by the window, the keyboard is the page's (KeyboardForPage), as when the page shown before
   // left with it, so FocusPage gives it to the page shown. Given now, as a closing command bar
   // leaves it with the page: a key that came first would reach the window, where nothing takes it.
-  // A page still loading has no view to take it yet, and takes it once its view comes.
+  // A page still loading has no view to take it yet, and takes it once its view comes. Asked while
+  // an overlay has the keyboard, the page has it as the overlay lets go, past an ask of the UI's
+  // before, as a press on a tab's row makes (OverlayLend).
+  overlay_lend_.PageAsked();
   platform::ReleaseKeyboard(widget_.get());
   FocusPage();
   FocusPageSoon();
@@ -3475,7 +3507,7 @@ void Window::GiveKeyboardToPageEnd(bool last) {
 
 void Window::OverlayTakesKeyboard(bool takes) {
   if (takes) {
-    selected_under_overlay_ = selected_;
+    overlay_lend_.Take(selected_);
     return;
   }
   // The overlay showed another tab, as the command bar does going to a page: its page takes the
@@ -3483,11 +3515,16 @@ void Window::OverlayTakesKeyboard(bool takes) {
   // the keyboard being the overlay's, and on X11 the window holds it for the page until it's active
   // again. Not when the tab it showed closed, as a Space the dialog deleted did: what shows then
   // comes of that, and the UI keeps the keyboard, as the Mac's does.
-  const bc_id under = std::exchange(selected_under_overlay_, 0);
-  if (under != selected_ && shown_ && (!under || Tab::Get(under))) {
-    page_had_keyboard_ = true;
-    GiveKeyboardToPage();
-    return;
+  switch (overlay_lend_.LetGo(selected_, !!shown_, [](bc_id tab) { return !!Tab::Get(tab); })) {
+    case OverlayLend::Goes::kToUI:
+      // Asked for as the overlay's command ran, as New Board's name field is: it has it already.
+      return;
+    case OverlayLend::Goes::kToPage:
+      page_had_keyboard_ = true;
+      GiveKeyboardToPage();
+      return;
+    case OverlayLend::Goes::kBack:
+      break;
   }
 #if BUILDFLAG(IS_LINUX)
   // Otherwise the page or UI that had it has it back, unless what it was went under the overlay,

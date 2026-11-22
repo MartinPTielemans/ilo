@@ -110,10 +110,18 @@ impl Browser for Core {
         let (Ok(agent), Ok(action)) = (CString::new(agent), CString::new(action)) else {
             return Err("The agent's name can't be used.".into());
         };
-        let mut reason = [0u8; 512];
+        let (mut reason, mut failure) = ([0u8; 512], 0);
+        // The app decides on |failure| in place of the words once #3702's app half lands.
         let may = call(|| unsafe {
             let reason = reason.as_mut_ptr().cast();
-            bc::bc_agent_may_act(agent.as_ptr(), tab, action.as_ptr(), reason, 512)
+            bc::bc_agent_may_act(
+                agent.as_ptr(),
+                tab,
+                action.as_ptr(),
+                reason,
+                512,
+                &mut failure,
+            )
         });
         match may {
             true => Ok(()),
