@@ -3450,6 +3450,7 @@ fn run_command(line: &str) -> Option<()> {
             let what = words.next().unwrap_or("navigate");
             let (agent_c, what_c) = (CString::new(agent).ok()?, CString::new(what).ok()?);
             let mut reason = [0 as std::ffi::c_char; 256];
+            let mut failure = 0;
             let may = unsafe {
                 bc::bc_agent_may_act(
                     agent_c.as_ptr(),
@@ -3457,6 +3458,7 @@ fn run_command(line: &str) -> Option<()> {
                     what_c.as_ptr(),
                     reason.as_mut_ptr(),
                     reason.len(),
+                    &mut failure,
                 )
             };
             log!("browser: agent {agent} may act on {tab}: {}", may as u8);

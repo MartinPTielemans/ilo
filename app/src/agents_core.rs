@@ -110,10 +110,18 @@ impl Browser for Core {
         let (Ok(agent), Ok(action)) = (CString::new(agent), CString::new(action)) else {
             return Err("The agent's name can't be used.".into());
         };
-        let mut reason = [0u8; 512];
+        let (mut reason, mut failure) = ([0u8; 512], 0);
+        // The app decides on |failure| in place of the words once #3702's app half lands.
         let may = call(|| unsafe {
             let reason = reason.as_mut_ptr().cast();
-            bc::bc_agent_may_act(agent.as_ptr(), tab, action.as_ptr(), reason, 512)
+            bc::bc_agent_may_act(
+                agent.as_ptr(),
+                tab,
+                action.as_ptr(),
+                reason,
+                512,
+                &mut failure,
+            )
         });
         match may {
             true => Ok(()),
@@ -351,6 +359,27 @@ impl Browser for Core {
             )
         };
     }
+
+    fn read(&self, profile: u64, read: u64, url: &str, max_bytes: usize, timeout_ms: i64) {
+        let Ok(url) = CString::new(url) else {
+            let answer = agents::saved_read::Answer {
+                error: Some("The address can't hold a NUL character.".to_string()),
+                ..Default::default()
+            };
+            return update(move |agents, cx| agents.read_done(read, answer, cx));
+        };
+        unsafe { bc::bc_profile_read(profile, read, url.as_ptr(), max_bytes, timeout_ms) };
+    }
+}
+
+/// The core's answer to a saved read (bc_profile_read), for what waits on it.
+pub unsafe extern "C" fn profile_read_done(
+    _: *mut std::ffi::c_void,
+    read: u64,
+    answer: *const bc::bc_read_answer,
+) {
+    let answer = unsafe { agents::saved_read::Answer::from_core(&*answer) };
+    update(move |agents, cx| agents.read_done(read, answer, cx));
 }
 
 /// The tabs `copy` copies of `space`, as bc_space_today does.

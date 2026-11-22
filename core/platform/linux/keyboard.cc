@@ -2,9 +2,16 @@
 
 #include <xkbcommon/xkbcommon.h>
 
+#include <map>
 #include <memory>
+#include <utility>
+#include <vector>
 
+#include "base/no_destructor.h"
+#include "base/strings/strcat.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversion_utils.h"
 #include "browser_core/platform/linux/wayland.h"
 #include "components/input/native_web_keyboard_event.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
@@ -12,12 +19,16 @@
 #include "ui/events/event_constants.h"
 #include "ui/events/event_utils.h"
 #include "ui/events/keycodes/dom/dom_code.h"
+#include "ui/events/keycodes/dom/dom_keyboard_layout.h"
 #include "ui/events/keycodes/dom/keycode_converter.h"
 #include "ui/events/keycodes/keyboard_code_conversion.h"
 #include "ui/events/keycodes/scoped_xkb.h"
 #include "ui/events/ozone/layout/keyboard_layout_engine_manager.h"
 #include "ui/events/ozone/layout/xkb/xkb_keyboard_layout_engine.h"
 #include "ui/gfx/x/connection.h"
+#include "ui/gfx/x/event.h"
+#include "ui/gfx/x/event_observer.h"
+#include "ui/gfx/x/xkb.h"
 #include "ui/gfx/x/xproto.h"
 
 namespace browser_core::platform {
@@ -87,7 +98,102 @@ Layouts X11Layouts(const ui::Event* event) {
   return {4, group->second[0], nullptr};
 }
 
+// The keys |layout| types without ⇧, by the web's code for each key's place, as
+// GenerateDomKeyboardLayoutMap gives them elsewhere: on X11 its engine is a stub's, the US layout.
+LayoutKeys KeysOf(const Layouts& layouts, uint32_t layout) {
+  std::vector<std::pair<std::string, std::string>> keys;
+  for (const ui::DomCode code : ui::kWritingSystemKeyDomCodes) {
+    // A dead key types nothing until the next, as GPUI's patch reads a key's level-0 character.
+    const uint32_t typed =
+        layouts.Typed(ui::KeycodeConverter::DomCodeToXkbKeycode(code), layout, false);
+    if (typed > ' ' && typed != 0x7f) {
+      std::string character;
+      base::WriteUnicodeCharacter(typed, &character);
+      keys.emplace_back(ui::KeycodeConverter::DomCodeToCodeString(code), std::move(character));
+    }
+  }
+  return LayoutKeys(std::move(keys));
+}
+
+// The split keys' layouts, made again when the layout changed.
+struct SplitLayouts {
+  // Wayland's, for the engine's keymap, the layout typing on it and that layout's name, as xkb
+  // gives a new keymap a freed one's address. No notice of the compositor's keymap reaches the
+  // core, so they're compared when a split key asks.
+  SplitLayoutCache wayland;
+  // X11's, for each group a key's event carries, until the server says its keymap changed.
+  std::map<uint32_t, SplitLayout> x11;
+  bool hearing = false;
+};
+
+SplitLayouts& Split() {
+  static base::NoDestructor<SplitLayouts> layouts;
+  return *layouts;
+}
+
+// The server's keymap changed: the events after which x11::Connection reads it again.
+struct X11LayoutNotices : x11::EventObserver {
+  void OnEvent(const x11::Event& event) override {
+    const auto* mapping = event.As<x11::MappingNotifyEvent>();
+    if ((mapping && (mapping->request == x11::Mapping::Keyboard ||
+                     mapping->request == x11::Mapping::Modifier)) ||
+        event.As<x11::Xkb::NewKeyboardNotifyEvent>()) {
+      Split().x11.clear();
+    }
+  }
+};
+
+X11LayoutNotices& X11Notices() {
+  static base::NoDestructor<X11LayoutNotices> notices;
+  return *notices;
+}
+
+const SplitLayout& WaylandSplitLayout() {
+  static const SplitLayout kNone;
+  xkb_state* engine = WaylandEngine::State();
+  if (!engine) {
+    return kNone;
+  }
+  xkb_keymap* keymap = xkb_state_get_keymap(engine);
+  const uint32_t layout = xkb_state_serialize_layout(engine, XKB_STATE_LAYOUT_EFFECTIVE);
+  const char* name = xkb_keymap_layout_get_name(keymap, layout);
+  const std::string id = base::StrCat({base::NumberToString(reinterpret_cast<uintptr_t>(keymap)),
+                                       " ", base::NumberToString(layout), " ", name ? name : ""});
+  return Split().wayland.For(id, [&] { return KeysOf(WaylandLayouts(), layout); });
+}
+
+const SplitLayout& X11SplitLayout(const ui::Event* event) {
+  static const SplitLayout kNone;
+  const Layouts layouts = X11Layouts(event);
+  if (!layouts) {
+    return kNone;
+  }
+  SplitLayouts& split = Split();
+  // Heard from the first key that asks, once; the server tells only when its keymap changes.
+  if (!split.hearing) {
+    x11::Connection::Get()->AddEventObserver(&X11Notices());
+    split.hearing = true;
+  }
+  auto made = split.x11.find(layouts.current);
+  if (made == split.x11.end()) {
+    made = split.x11.emplace(layouts.current, SplitLayout(KeysOf(layouts, layouts.current))).first;
+  }
+  return made->second;
+}
+
 }  // namespace
+
+const SplitLayout& SplitLayoutOf(const input::NativeWebKeyboardEvent& event) {
+  return OnWayland() ? WaylandSplitLayout() : X11SplitLayout(event.os_event);
+}
+
+void StopHearingLayouts() {
+  SplitLayouts& split = Split();
+  if (split.hearing) {
+    x11::Connection::Get()->RemoveEventObserver(&X11Notices());
+    split.hearing = false;
+  }
+}
 
 std::string LatinKey(const input::NativeWebKeyboardEvent& event) {
   const auto code = static_cast<ui::DomCode>(event.dom_code);

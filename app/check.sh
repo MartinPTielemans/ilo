@@ -45,7 +45,12 @@ export BROWSER_STACK_TRACES=off
 # The app writes its log lines, many naming what the user browses, only when the checks run it,
 # its driver or this (#3725).
 export BROWSER_CHECK=1
-cd "$(dirname "$0")"
+# Each start-up step that fails says which it was, as a bare command under set -e would end the
+# check before the EXIT trap with no FAIL line, and a result would read as no failure (#3914).
+cd "$(dirname "$0")" || {
+  echo "FAIL: the check couldn't go into $(dirname "$0"), as cd's line above says" >&2
+  exit 1
+}
 # The runs of kind $1, default or named, or of both, from the first line of each run's file, the
 # default ones first, each kind in its numbers' order and a tie in its names'.
 runs_of() {
@@ -115,8 +120,10 @@ for run in "$@"; do
 done
 # A file sourced with a syntax error ends the check where it stands, with the status of the EXIT
 # trap's last command, 0 under the Mac's sh, and the runs after it never start (#1267). So each
-# file the check sources is parsed before any run starts.
-for file in lib site ilo-server webstore ${*:-$runs}; do
+# file the check sources is parsed before any run starts: on Windows, Git Bash's own file too, which
+# only its bash parses.
+case "$(uname)" in MINGW* | MSYS*) git_bash=git-bash ;; *) git_bash= ;; esac
+for file in lib site ilo-server webstore $git_bash ${*:-$runs}; do
   why=$(sh -n "check/$file.sh" 2>&1) || {
     echo "FAIL: check/$file.sh doesn't parse: $why" >&2
     exit 1
@@ -177,7 +184,11 @@ elif [ -n "${CHECK_APP:-}" ]; then
     exit 1
   fi
   app=$CHECK_APP
-  browser="$app/Contents/MacOS/$(plutil -extract CFBundleExecutable raw -o - "$app/Contents/Info.plist")"
+  executable=$(plutil -extract CFBundleExecutable raw -o - "$app/Contents/Info.plist" 2>&1) || {
+    echo "FAIL: CHECK_APP's Info.plist names no executable: $executable" >&2
+    exit 1
+  }
+  browser="$app/Contents/MacOS/$executable"
   procs="$app/Contents"
 else
   app="$PWD/build/Browser.app"
@@ -189,8 +200,8 @@ if pgrep -f "$procs" > /dev/null; then
   echo "FAIL: Browser is already running. Quit it first." >&2
   exit 1
 fi
-rm -rf "$out"
-mkdir -p "$out/downloads"
+said=$(rm -rf "$out" 2>&1) || { echo "FAIL: couldn't empty $out: $said" >&2; exit 1; }
+said=$(mkdir -p "$out/downloads" 2>&1) || { echo "FAIL: couldn't make $out: $said" >&2; exit 1; }
 # Each run starts on a profile no earlier run wrote to, as each hosted job's first run does on a
 # machine of its own: what one run left filled the rows a later one expects, as keys' history of
 # docs.new's sign-in pages did tabs' (#2486). It's the check's own folder, never the dev build's
@@ -204,18 +215,44 @@ saved="$check_profile_dir/Spaces.json"
 launch_frame="$check_profile_dir/launch-frame"
 . check/lib.sh
 trap cleanup EXIT
+# A step of a run's setup, "$2"..., before the run itself starts. One that fails ends the check with
+# a FAIL line naming the run, the step ($1) and what it said; a bare one under set -e would leave
+# only cleanup's line, which can't say which it was (#3914). What a step says when it works still
+# goes to the log.
+setup_failed() {
+  failed=1
+  echo "FAIL: $run didn't start: $1 failed${2:+: $2}" >&2
+  exit 1
+}
+setup_step() {
+  setup_what=$1
+  shift
+  said=$("$@" 2>&1) || setup_failed "$setup_what" "$said"
+  [ -z "$said" ] || printf '%s\n' "$said" >&2
+}
 # The window follows the Mac's appearance and the runs read its dark look, so a check VM runs dark,
 # and cleanup puts back the appearance it had. The owner's Mac keeps its own.
 if [ "$(uname)" = Darwin ] && [ "$(sysctl -n kern.hv_vmm_present)" = 1 ]; then
-  dark_mode=$(osascript -e 'tell application "System Events" to tell appearance preferences to get dark mode') || {
+  # Each step's FAIL line carries what System Events said, as a bare command under set -e would
+  # end the check with no word of which it was (#3889).
+  said=$(dark_mode_now 2>&1) && { [ "$said" = true ] || [ "$said" = false ]; } || {
     failed=1
-    echo "FAIL: System Events didn't say the Mac's appearance: allow the check to control it" >&2
+    echo "FAIL: the check couldn't read the Mac's appearance: $said" >&2
     exit 1
   }
-  appearance true
+  dark_mode=$said
+  said=$(appearance true 2>&1) || {
+    failed=1
+    echo "FAIL: the check couldn't turn the Mac dark: $said" >&2
+    exit 1
+  }
 fi
 # The runs send the app's driver its commands through it.
-mkfifo "$out/drive"
+said=$(mkfifo "$out/drive" 2>&1) || {
+  failed=1
+  echo "FAIL: the check couldn't make the drivers' pipe: $said" >&2
+  exit 1
+}
 for run in ${*:-$runs}; do
   # The last run's app may still be writing its profile as it ends, and Windows doesn't delete a
   # file a process holds.
@@ -226,18 +263,20 @@ for run in ${*:-$runs}; do
   ! pgrep -f "$procs" > /dev/null || fail "the app from the run before $run is still running"
   # And without the pipes a run before made for its servers and devices, such as sync-devices'
   # drive-a, which mkfifo won't make again. The drivers' own pipe stays.
-  find "$out" -maxdepth 1 -type p ! -name drive -exec rm -f {} +
+  setup_step "removing the last run's pipes" \
+    find "$out" -maxdepth 1 -type p ! -name drive -exec rm -f {} +
   profile_dir=$check_profile_dir
-  rm -rf "$profile_dir"
-  mkdir -p "$profile_dir/Default"
-  BROWSER_PROFILE_DIR=$(native_path "$profile_dir")
+  setup_step "emptying its profile" rm -rf "$profile_dir"
+  setup_step "making its profile" mkdir -p "$profile_dir/Default"
+  said=$(native_path "$profile_dir" 2>&1) || setup_failed "naming its profile's path" "$said"
+  BROWSER_PROFILE_DIR=$said
   export BROWSER_PROFILE_DIR
   saved="$profile_dir/Spaces.json"
   launch_frame="$profile_dir/launch-frame"
   prefs="$profile_dir/Default/Preferences"
   # DevTools open docked on the right, as the find run expects, and downloads go in the check's own
   # folder, never the user's Downloads. In UTF-8, which Windows' Python doesn't write by default.
-  python3 -I -c '
+  setup_step "writing its Preferences" python3 -I -c '
 import json, sys
 prefs = {"devtools": {"preferences": {"currentDockState": "\"right\""}},
          "download": {"default_directory": sys.argv[2]}}

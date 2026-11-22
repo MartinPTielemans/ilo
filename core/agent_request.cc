@@ -71,8 +71,11 @@ void Report(uint64_t request, const bc_agent_response& response) {
   }
 }
 
-void Fail(uint64_t request, int status, const std::string& why) {
-  const bc_agent_response response = {status, "", "", 0, false, why.c_str()};
+void Fail(uint64_t request,
+          int status,
+          const std::string& why,
+          bc_agent_failure failure = BC_AGENT_FAILURE_NONE) {
+  const bc_agent_response response = {status, "", "", 0, false, why.c_str(), failure};
   Report(request, response);
 }
 
@@ -108,11 +111,11 @@ void Answered(uint64_t request, std::optional<std::string> body) {
 
 }  // namespace
 
-void RefuseAgentRequest(uint64_t request, std::string why) {
+void RefuseAgentRequest(uint64_t request, std::string why, bc_agent_failure failure) {
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE,
-      base::BindOnce([](uint64_t request, const std::string& why) { Fail(request, 0, why); },
-                     request, std::move(why)));
+      FROM_HERE, base::BindOnce([](uint64_t request, const std::string& why,
+                                   bc_agent_failure failure) { Fail(request, 0, why, failure); },
+                                request, std::move(why), failure));
 }
 
 void SendAgentRequest(content::WebContents& contents,

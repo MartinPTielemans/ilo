@@ -605,12 +605,26 @@ jobs:
 
       # The results first, a few hundred bytes, so complete still names each run's result when
       # the check folder's upload doesn't end (#3471).
-      - if: ${{ always() }}
+      - id: results
+        if: ${{ always() }}
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: results-windows-${{ matrix.shard }}
           path: ${{ runner.temp }}/results
           if-no-files-found: ignore
+      # A failed first try gets a second, as a name lookup or GitHub's side can fail for a moment
+      # (ENOTFOUND on main's 44965780143). The first's failure alone doesn't fail the job; the
+      # second's does, and complete still fails a shard whose rows never came.
+      - if: ${{ always() && steps.results.outcome == 'failure' }}
+        run: sleep 15
+      - if: ${{ always() && steps.results.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-windows-${{ matrix.shard }}
+          path: ${{ runner.temp }}/results
+          if-no-files-found: ignore
+          overwrite: true
       # About 500 MB, which takes 20 to 38 s. A stalled upload ends at the limit, so the job ends
       # and keeps its log, where a hung one took the job's log with it (#3471).
       - if: ${{ always() }}

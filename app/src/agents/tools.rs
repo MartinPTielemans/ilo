@@ -267,6 +267,9 @@ fn shared() -> Value {
         "description": "What the answer gives of the page: its outline (the default), to act on it; its text, as read_page reads it, to read an article or a document; or only which page it is (none)."
     });
     let acts = json!({ "readOnlyHint": false, "destructiveHint": false, "openWorldHint": true });
+    // As a wait step's text, for an app whose content comes after its page has settled (#3658).
+    let wait_for = json!({ "type": "string", "description": "Text to wait for in the page, as an app's content that comes after its page has loaded. The answer says whether it showed." });
+    let wait_seconds = json!({ "type": "number", "exclusiveMinimum": 0, "maximum": MAX_WAIT, "description": "How long wait_for waits, in seconds; 5 if not given." });
     let tabs = json!({ "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false });
     json!([
         {
@@ -279,10 +282,15 @@ fn shared() -> Value {
         {
             "name": "open_tab",
             "title": "Open tab",
-            "description": "Open a URL, or search for words, in a new tab of your own. Answers with the page's outline, or with its text when answer is text: pick text to read a page. Every answer is 12,000 characters at most.",
+            "description": "Open a URL, or search for words, in a new tab of your own. Answers with the page's outline, or with its text when answer is text: pick text to read a page. It answers once the page has settled, or once wait_for's text shows in it. Every answer is 12,000 characters at most.",
             "inputSchema": {
                 "type": "object",
-                "properties": { "url": { "type": "string", "description": "A URL, or words to search for." }, "answer": answer },
+                "properties": {
+                    "url": { "type": "string", "description": "A URL, or words to search for." },
+                    "answer": answer,
+                    "wait_for": wait_for,
+                    "seconds": wait_seconds,
+                },
                 "required": ["url"],
             },
             "annotations": acts,
@@ -354,12 +362,14 @@ fn shared() -> Value {
         {
             "name": "navigate",
             "title": "Navigate",
-            "description": "Go to a URL, or search for words, in a tab. \"back\" and \"forward\" move through its history. Answers with the page's outline, or with its text when answer is text: pick text to read a page.",
+            "description": "Go to a URL, or search for words, in a tab. \"back\" and \"forward\" move through its history. Answers with the page's outline, or with its text when answer is text: pick text to read a page. It answers once the page has settled, or once wait_for's text shows in it.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "url": { "type": "string", "description": "A URL, words to search for, \"back\" or \"forward\"." },
                     "answer": answer,
+                    "wait_for": wait_for,
+                    "seconds": wait_seconds,
                     "tab": tab,
                 },
                 "required": ["url"],
@@ -670,8 +680,11 @@ pub fn tab_id(id: &Value) -> Option<u64> {
     }
 }
 
+/// What a call is told when its `tab` names no tab, or it has to name one.
+pub const NOT_A_TAB: &str = "tab is a tab's id, a number from list_tabs.";
+
 fn not_a_tab() -> String {
-    "tab is a tab's id, a number from list_tabs.".into()
+    NOT_A_TAB.into()
 }
 
 /// A step of an agent's work, as a task's trace, its card and the activity log say it.

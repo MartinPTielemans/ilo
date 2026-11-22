@@ -106,7 +106,7 @@ struct Shared {
     stopped: AtomicBool,
     tokens: Tokens,
     token_wait: Duration,
-    /// The connections open, by a number of their own.
+    /// The connections open, by a number of their own, from 1: the UI takes 0 for no connection's.
     connections: Mutex<HashMap<u64, Connection>>,
     next_connection: AtomicU64,
     events: UnboundedSender<Event>,
@@ -160,7 +160,7 @@ impl Server {
             tokens,
             token_wait,
             connections: Mutex::default(),
-            next_connection: AtomicU64::new(0),
+            next_connection: AtomicU64::new(1),
             events,
         });
         let accepting = shared.clone();
@@ -191,7 +191,7 @@ impl Server {
             tokens,
             token_wait,
             connections: Mutex::default(),
-            next_connection: AtomicU64::new(0),
+            next_connection: AtomicU64::new(1),
             events,
         });
         let accepting = shared.clone();
@@ -412,7 +412,7 @@ fn serve(stream: Stream, number: u64, shared: &Shared) {
     }
     // Its messages are answered on threads of their own, so this one reads on while calls wait on
     // pages or the user, and a client that closes its end then ends its session, which drops what
-    // waits for it (`Event::Bye`). The last answering thread's end closes the connection.
+    // waits for it (`Event::Closed`). The last answering thread's end closes the connection.
     let answering = Answering {
         shared,
         number,
@@ -733,6 +733,7 @@ fn initialize(shared: &Shared, number: u64, agent: &str, params: &Value) -> Valu
     _ = shared.events.unbounded_send(Event::Hello {
         agent: agent.into(),
         client: client.into(),
+        connection: number,
     });
     json!({
         "protocolVersion": version,
@@ -753,13 +754,14 @@ fn call(shared: &Shared, number: u64, agent: &str, tool: &str, arguments: Value)
     let call = Call {
         id,
         agent: agent.into(),
+        connection: number,
         tool: tool.into(),
         arguments,
         reply,
         at: Instant::now(),
     };
     // Sent while the connection is open, under the lock `end` closes it with, so that the UI
-    // hears no call of a session after its agent's bye.
+    // hears no call of a connection after it closed.
     {
         let connections = shared.connections.lock().unwrap();
         match connections.get(&number) {
@@ -786,16 +788,24 @@ fn call(shared: &Shared, number: u64, agent: &str, tool: &str, arguments: Value)
     result
 }
 
-/// The connection closed. The agent's last session ending tells the UI it's gone.
+/// The connection closed, which ends its session. The agent's last session ending tells the UI
+/// it's gone.
 fn end(shared: &Shared, number: u64) {
     let mut connections = shared.connections.lock().unwrap();
     let Some(ended) = connections.remove(&number) else {
         return;
     };
+    if !ended.initialized {
+        return;
+    }
+    _ = shared.events.unbounded_send(Event::Closed {
+        agent: ended.agent.clone(),
+        connection: number,
+    });
     let others = connections
         .values()
         .any(|each| each.agent == ended.agent && each.initialized);
-    if ended.initialized && !others {
+    if !others {
         _ = shared
             .events
             .unbounded_send(Event::Bye { agent: ended.agent });

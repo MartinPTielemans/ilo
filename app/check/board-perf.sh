@@ -244,8 +244,10 @@ for kind in small big; do
   done
 done
 ../tools/window-screenshot.sh "$pid" "$out/board-perf.png" || fail "no window to capture"
-exec 3>&- 5>&-
+# Quits before cdp.py's pipe closes: the browser ends by itself as the pipe goes, and a quit
+# asked then finds it ending, which the Mac answers with an error (#3870).
 quit
+exec 5>&-
 rm -rf "$profile_dir" "$scratch"
 echo "ok: the Board of 2,000 notes' tab switches, memory and picture adds are in the board-perf lines" \
   "above and in $dir. Window: $out/board-perf.png"

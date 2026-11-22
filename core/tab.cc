@@ -562,20 +562,29 @@ bool Tab::AskAppAboutKey(bool (*callback)(void*, bc_id, const bc_key*),
                          bool editing) {
   if (!callback || event.GetType() != blink::WebInputEvent::Type::kRawKeyDown ||
       event.skip_if_unhandled) {
+    dialog_keys::KeyGate(event, !callback                 ? "let go: no callback"
+                                : event.skip_if_unhandled ? "let go: skip_if_unhandled"
+                                                          : "let go: not a key going down");
     return false;
   }
   uint32_t modifiers = 0;
-  const std::string name = KeyName(event, &modifiers);
+  bool split_key = false;
+  const std::string name = KeyName(event, &modifiers, &split_key);
   // ⌘'s shortcuts, which are Ctrl's off the Mac, by the Latin layout's key, chosen by the app. Read
-  // only with it held, as every key the page gets comes here.
+  // only with it held, as every key the page gets comes here. Not for a split key, named by its
+  // layout as the UI names it: Windows' Latin key is the US place's, so Ctrl+Shift and Danish's å
+  // would be ctrl-shift-} there.
   const int command =
       BUILDFLAG(IS_MAC) ? blink::WebInputEvent::kMetaKey : blink::WebInputEvent::kControlKey;
-  const std::string latin =
-      (event.GetModifiers() & command) ? platform::LatinKey(event) : std::string();
+  const std::string latin = (event.GetModifiers() & command) && !split_key
+                                ? platform::LatinKey(event)
+                                : std::string();
   const bc_key key = {name.c_str(), modifiers, editing, latin.c_str()};
   // A shortcut that opens a field of the app's holds the page's keys after it (bc_hold_keys).
   auto asking = held_keys::AskingAbout(tab, event);
   const bool used = callback(Host().context, tab, &key);
+  dialog_keys::KeyGate(event,
+                       used ? "asked the app, which used it" : "asked the app, which didn't");
   // A key the page didn't keep opens a field the keys after it are held for, or nothing does.
   if (callback == Host().tab_key_unhandled) {
     held_keys::Answered(tab, event, used);
@@ -584,15 +593,34 @@ bool Tab::AskAppAboutKey(bool (*callback)(void*, bc_id, const bc_key*),
 }
 
 // static
-std::string Tab::KeyName(const input::NativeWebKeyboardEvent& event, uint32_t* modifiers) {
+std::string Tab::KeyName(const input::NativeWebKeyboardEvent& event,
+                         uint32_t* modifiers,
+                         bool* split_key) {
   const int held = event.GetModifiers();
-  const std::string name = ShortcutKeyName(
-      ui::KeycodeConverter::DomKeyToKeyString(ui::DomKey(event.dom_key)), event.windows_key_code,
-      {.shift = (held & blink::WebInputEvent::kShiftKey) != 0,
-       .control = (held & blink::WebInputEvent::kControlKey) != 0,
-       .alt = (held & blink::WebInputEvent::kAltKey) != 0,
-       .meta = (held & blink::WebInputEvent::kMetaKey) != 0},
-      BUILDFLAG(IS_MAC));
+  const HeldKeys keys = {.shift = (held & blink::WebInputEvent::kShiftKey) != 0,
+                         .control = (held & blink::WebInputEvent::kControlKey) != 0,
+                         .alt = (held & blink::WebInputEvent::kAltKey) != 0,
+                         .meta = (held & blink::WebInputEvent::kMetaKey) != 0};
+#if BUILDFLAG(IS_MAC)
+  constexpr KeysPlatform kPlatform = KeysPlatform::kMac;
+#elif BUILDFLAG(IS_WIN)
+  constexpr KeysPlatform kPlatform = KeysPlatform::kWindows;
+#else
+  constexpr KeysPlatform kPlatform = KeysPlatform::kLinux;
+#endif
+  // The layout is read only while the split keys are held (#3509).
+  const std::string split =
+      SplitKeysHeld(keys, kPlatform)
+          ? SplitKeyName(ui::KeycodeConverter::DomCodeToCodeString(
+                             static_cast<ui::DomCode>(event.dom_code)),
+                         platform::SplitLayoutOf(event))
+          : std::string();
+  if (split_key) {
+    *split_key = !split.empty();
+  }
+  const std::string name =
+      ShortcutKeyName(ui::KeycodeConverter::DomKeyToKeyString(ui::DomKey(event.dom_key)),
+                      event.windows_key_code, split, keys, BUILDFLAG(IS_MAC));
   *modifiers = 0;
   for (auto [web, flag] : {std::pair{blink::WebInputEvent::kShiftKey, BC_MODIFIER_SHIFT},
                            std::pair{blink::WebInputEvent::kControlKey, BC_MODIFIER_CONTROL},
