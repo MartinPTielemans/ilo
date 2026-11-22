@@ -1952,7 +1952,7 @@ impl Shell {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |shell, _, window, cx| {
-                    shell.browser.focus_ui(cx);
+                    shell.take_keyboard(cx);
                     window.focus(&search.focus_handle(cx), cx);
                 }),
             )

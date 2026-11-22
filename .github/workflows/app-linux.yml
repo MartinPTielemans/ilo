@@ -4,12 +4,13 @@
 name: UI on Linux
 
 on:
-  # Branches only: an engine release's tag, pushed with the owner's token, starts nothing here.
+  # Branches only: an engine release's tag, pushed with the owner's token, starts nothing here. The
+  # actions and scripts its jobs run are its own too, so a change to one alone runs it (#3760).
   push:
     branches: ['**']
-    paths: [app/**, core/public/**, tools/headless.sh, tools/parity.sh, .github/workflows/app-linux.yml, '!**/*.md']
+    paths: [app/**, core/public/**, core/split_keys_layouts.txt, tools/headless.sh, tools/parity.sh, .github/workflows/app-linux.yml, .github/actions/apt-install/**, .github/scripts/apt-mirrors.sh, .github/actions/tree-proof/**, .github/scripts/tree-proven.sh, '!**/*.md']
   pull_request:
-    paths: [app/**, core/public/**, tools/headless.sh, tools/parity.sh, .github/workflows/app-linux.yml, '!**/*.md']
+    paths: [app/**, core/public/**, core/split_keys_layouts.txt, tools/headless.sh, tools/parity.sh, .github/workflows/app-linux.yml, .github/actions/apt-install/**, .github/scripts/apt-mirrors.sh, .github/actions/tree-proof/**, .github/scripts/tree-proven.sh, '!**/*.md']
   # A branch's head whose last push skipped this, as a push runs it only when its own diff matched (#1834).
   workflow_dispatch:
 

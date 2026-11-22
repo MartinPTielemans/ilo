@@ -4,6 +4,10 @@
 // 570d4b03eef879bd60be3d74444046858c94dacd, with ilo's jobs in place of its packages.
 const fs = require("node:fs");
 
+// The split keys' table, which the app's tests read (app/src/shell/keys.rs) as well as the core's,
+// so a change to it runs the UI's tests on each OS as well as the core's jobs (#3800).
+const SPLIT_KEYS = /^core\/split_keys_layouts\.txt$/;
+
 // Each job ci.yml can run, and the paths it covers. app_linux and engine_windows are ready for
 // app-linux.yml and engine-windows.yml; ci.yml's comment says how to hook them in. A path two jobs
 // cover, such as core/sync_spaces.proto, starts both.
@@ -18,12 +22,18 @@ const JOBS = {
     /^app\/build\.rs$/,
     /^app\/Cargo\.toml$/,
     /^\.github\/workflows\/app-windows\.yml$/,
+    SPLIT_KEYS,
   ],
   core_linux: [/^core\//, /^engine\//, /^\.github\/workflows\/core-linux\.yml$/],
-  app_linux: [/^app\//, /^core\/public\//, /^\.github\/workflows\/app-linux\.yml$/],
+  app_linux: [/^app\//, /^core\/public\//, SPLIT_KEYS, /^\.github\/workflows\/app-linux\.yml$/],
   // The app's Rust, its patches and the core's header bindgen reads, but not check.sh's runs, which
   // need the engine.
-  app_mac: [/^app\/(?!check\/)/, /^core\/public\//, /^\.github\/workflows\/app-mac\.yml$/],
+  app_mac: [
+    /^app\/(?!check\/)/,
+    /^core\/public\//,
+    SPLIT_KEYS,
+    /^\.github\/workflows\/app-mac\.yml$/,
+  ],
   engine_windows: [
     /^core\//,
     /^engine\//,
@@ -42,6 +52,9 @@ const JOBS = {
     /^app\/ublock\.ini$/,
     /^\.github\/workflows\/mobile-ios\.yml$/,
   ],
+  // The website (site/AGENTS.md), which reads nothing of the browser's and starts nothing of it.
+  // Its demo is a release's, fetched at deploy (site.yml).
+  site: [/^site\//, /^\.github\/workflows\/site\.yml$/],
 };
 
 // The gate itself: a change to it could hide what it skips. core-same.sh takes out the core's

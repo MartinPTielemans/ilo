@@ -6,8 +6,8 @@
 # each make their call on the first click (#818). It comes in and goes out in Dia's motion, which
 # card-motion.mp4 records. The card takes the Space's look, dark and light. Over a hidden sidebar
 # out, the card counts as the sidebar's (#830). Reports how long the switches take, beside the tabs
-# run's. A row of a pinned GitHub tab's pull requests opens shown in a tab of its own, ⌘-click
-# behind and ⌥-click beside the page (#3576), on the run's own GitHub.
+# run's. A row of a pinned GitHub tab's pull requests opens in that tab, shown, ⌘-click behind
+# and ⌥-click beside the page (#3576), on the run's own GitHub.
 
 # A page of colour, so its picture shows in the card.
 page='data:text/html,<title>loading</title>
@@ -216,11 +216,10 @@ app_ms=$(sed -n 's/^browser: selected [0-9]* in \([0-9.]*\) ms$/\1/p' "$log" | s
 echo "ok: resting on a tab's row shows its card beside the rows, with a picture of its page once it's hidden and the switch quiet, and none for the tab shown; the next row swaps in at once, leaving the rows, a scroll or a key typed in the page lets it go, it comes and goes in Dia's motion, the card takes a light Space's look, a hidden sidebar out stays out while the pointer is on a row's card and goes with it once the pointer leaves both, and its Pin, Unpin, Favorite, Remove from Favorites and Split each make their call on the first click."
 echo "  Switch, key to the core's report, with cards pictured: $app_ms. Windows: $out/card-dark.png, $out/card-shown-tab.png, $out/card-light.png, $out/card-reveal.png, $out/card-reveal-away.png, and $out/card-<button>-before.png and -after.png for each button. Motion: $out/card-motion.mp4"
 
-# A row of what's recent on a pinned tab's card opens in a Today tab the pinned tab opened, as
-# another address in a pinned tab does, and that tab is shown with its page focused (#3576),
-# whether the pinned tab hasn't been shown since launch, as most pinned tabs haven't after a
-# relaunch, or has. Closing it shows the pinned tab again. ⌘-click opens the row in a tab behind
-# and ⌥-click beside the page, each keeping the tab shown. GitHub is the run's own server
+# A row of what's recent on a pinned tab's card opens in the pinned tab itself, which leaves its
+# pinned URL and is shown with its page focused (#3576), whether it hasn't been shown since
+# launch, as most pinned tabs haven't after a relaunch, or has. Back to Pinned URL takes it home.
+# ⌘-click opens the row in a tab behind and ⌥-click beside the page, each keeping the tab shown. GitHub is the run's own server
 # over https: its pages, and its search answering signed in with three pull requests asking for
 # review and none of the user's own, in the shape the core reads (core/live_folder_rule.cc).
 MSYS2_ARG_CONV_EXCL=/CN= openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=github.com \
@@ -299,25 +298,28 @@ recent_row() {
   send move $at
   send click $at "$@"
 }
-# opened_from_row <n> <what>: row <n> loaded in a tab the pinned tab opened, which is the tab
-# shown once it has, its page with the keyboard. Then ⌘W closes it, which shows the pinned tab.
-opened_from_row() {
-  local clicked=$step opened shown
+# followed_from_row <n> <what>: row <n> loaded in the pinned tab, which is the tab shown once it
+# has, away from its pinned URL, its page with the keyboard. Then ⌘↩ takes it back to its pinned
+# URL.
+followed_from_row() {
+  local clicked=$step shown
   expect "^browser: command recent-here via hover card\$" "a click on row $1 of $2's card didn't open it"
-  expect "^browser: tab [0-9]* opened by $p in the foreground\$" \
-    "a click on row $1 of $2's card didn't open it in a tab of its own"
-  opened=$(since | sed -n "s/^browser: tab \([0-9]*\) opened by $p in the foreground\$/\1/p" | head -1)
-  expect "^browser: loaded $opened $pull/$(($1 + 7))\$" \
-    "a click on row $1 of $2's card didn't load it in the tab it opened"
-  # The tab selected last since the click, as the core shows the one it opened and the app could
-  # select another after it.
+  expect "^browser: loaded $p $pull/$(($1 + 7))\$" \
+    "a click on row $1 of $2's card didn't load it in the pinned tab"
+  expect "^browser: page $p away 1\$" \
+    "the pinned tab at row $1's address didn't read as away from its pinned URL"
+  none_since "^browser: tab [0-9]* opened by $p" "$clicked" ||
+    fail "a click on row $1 of $2's card opened a tab of its own"
+  # The tab selected last since the click, as the app could select another after it.
   shown=$(since "$clicked" | sed -n 's/^browser: selected \([0-9]*\).*/\1/p' | tail -1)
-  [ "$shown" = "$opened" ] ||
-    fail "a click on row $1 of $2's card opened it in tab $opened, but tab $shown is shown"
+  [ "$shown" = "$p" ] ||
+    fail "a click on row $1 of $2's card loaded it in tab $p, but tab ${shown:-none} is shown"
   send move $page_point
   in_browser RenderWidgetHostViewCocoa "after a click on row $1 of $2's card"
-  send key w cmd
-  expect "^browser: selected $p\( in .*\)\{0,1\}\$" "⌘W on the tab row $1 opened didn't show the pinned tab again"
+  send key return cmd
+  expect '^browser: command back-to-pinned-url via page$' "⌘↩ after row $1 didn't run Back to Pinned URL"
+  expect "^browser: loaded $p https://github.com/\$" "⌘↩ after row $1 didn't load the pinned URL"
+  expect "^browser: page $p away 0\$" "the pinned tab still read as away at its pinned URL"
 }
 # GitHub's page pinned, and another shown: a row of the pinned tab, shown since launch. Then
 # launched again, so the pinned tab comes back unloaded and never shown.
@@ -347,7 +349,7 @@ expect "^browser: pinned $p\$" "⌘D didn't pin GitHub's tab"
 open_from_bar "http://localhost:$port/one.html"
 b=$tab
 recent_row "$p" 1
-opened_from_row 1 "the pinned tab shown since launch"
+followed_from_row 1 "the pinned tab shown since launch"
 switch "2 cmd" "$b"
 quit_by_key
 await '^browser: command quit via ' || fail "⌘Q didn't reach the UI"
@@ -372,7 +374,7 @@ await "^browser: page $p unloaded 1\$" || fail "the pinned tab didn't come back 
 send click $page_point
 
 recent_row "$p" 0
-opened_from_row 0 "the pinned tab never shown since launch"
+followed_from_row 0 "the pinned tab never shown since launch"
 # ⌘-click: a tab behind, with the tab shown kept.
 switch "2 cmd" "$b"
 recent_row "$p" 2 cmd
@@ -394,4 +396,4 @@ exec 3>&-
 quit
 kill "$tls" 2>/dev/null || true
 tls=
-echo "ok: a click on a row of a pinned tab's pull requests opens it shown in a tab of its own with its page focused, whether the pinned tab was shown since launch or not, and closing it shows the pinned tab; ⌘-click opens it behind and ⌥-click beside the page, keeping the tab shown. Windows: $out/card-recent-<row>.png, $out/card-recent-beside.png"
+echo "ok: a click on a row of a pinned tab's pull requests opens it in the pinned tab, shown and away from its pinned URL with its page focused, whether the pinned tab was shown since launch or not, and Back to Pinned URL takes it home; ⌘-click opens it behind and ⌥-click beside the page, keeping the tab shown. Windows: $out/card-recent-<row>.png, $out/card-recent-beside.png"

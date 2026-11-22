@@ -146,5 +146,29 @@ TEST(ProtectedMoveRuleTest, AKeyTheBrowserRanGivesThePageNoPress) {
   EXPECT_EQ(ask.users_input, ask.now - base::Milliseconds(500));
 }
 
+// ⌘L ⌘L, the second sent before the page left the first: each is taken back, and the click before
+// them is the press that counts. Keeping one press before the newest key left the first ⌘L counted.
+TEST(ProtectedMoveRuleTest, KeysSentBeforeThePageLeftTheFirstAreAllTakenBack) {
+  const base::TimeTicks first = base::TimeTicks() + base::Minutes(58);
+  const base::TimeTicks second = base::TimeTicks() + base::Minutes(59);
+  ProtectedAsk ask = Ask();
+  DocumentPresses presses;
+  presses.Users(kPageAfter, ask.now - base::Seconds(3), std::nullopt);
+  presses.Users(kPageAfter, ask.now - base::Seconds(2), first);
+  presses.Users(kPageAfter, ask.now - base::Seconds(1), second);
+  presses.TakenBack(first);
+  presses.TakenBack(second);
+  presses.Fill(kPageAfter, ask);
+  EXPECT_EQ(ask.users_input, ask.now - base::Seconds(3));
+  // With no click before them, nothing is left: the note, not a move.
+  presses = DocumentPresses();
+  presses.Users(kPageAfter, ask.now - base::Seconds(2), first);
+  presses.Users(kPageAfter, ask.now - base::Seconds(1), second);
+  presses.TakenBack(second);
+  presses.TakenBack(first);
+  presses.Fill(kPageAfter, ask);
+  EXPECT_EQ(AnswerProtectedAsk(ask), Answer::kNote);
+}
+
 }  // namespace
 }  // namespace browser_core

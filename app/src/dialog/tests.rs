@@ -12,13 +12,16 @@ use crate::settling::SETTLING;
 struct Recorder(RefCell<Vec<String>>, RefCell<Vec<&'static str>>);
 
 impl Host for Recorder {
-    fn show(&self, window: Option<u64>, over: Option<Bounds<Pixels>>) {
+    fn show(&self, window: Option<u64>, over: Option<Bounds<Pixels>>, keyboard: bool) {
         let mut call = match over {
             Some(over) => format!("show over {}", f32::from(over.origin.x)),
             None => "show".into(),
         };
         if let Some(window) = window {
             call += &format!(" in {window}");
+        }
+        if !keyboard {
+            call += " at rest";
         }
         self.0.borrow_mut().push(call);
     }
@@ -583,10 +586,24 @@ fn ask_from_page(
     host: &Rc<Recorder>,
     cx: &mut App,
 ) {
+    ask_from_pane((tab, id), question, x, false, host, cx);
+}
+
+/// Asks as `ask_from_page` does, at rest if `rests`, where a click that focuses its pane says
+/// "focus pane" on `host`.
+fn ask_from_pane(
+    (tab, id): (u64, u64),
+    question: Question,
+    x: f32,
+    rests: bool,
+    host: &Rc<Recorder>,
+    cx: &mut App,
+) {
     let over = (
         Bounds::new(point(px(x), px(10.)), size(px(600.), px(500.))),
         10.,
     );
+    let focused = host.clone();
     let host = host.clone();
     let answered = Box::new(move |reply: Reply, _: &mut App| {
         let answer = if reply.accept { "accept" } else { "cancel" };
@@ -595,7 +612,8 @@ fn ask_from_page(
             .borrow_mut()
             .push(format!("{answer} {}{checked}", reply.texts.join(" ")));
     });
-    ask_page((tab, id), question, over, answered, cx);
+    let focus_pane = Rc::new(move |_: &mut App| focused.0.borrow_mut().push("focus pane".into()));
+    ask_page((tab, id), question, over, rests, focus_pane, answered, cx);
 }
 
 /// What a page asks: a confirm(), or with `fields` such as a prompt's, and a checkbox.
@@ -656,6 +674,182 @@ fn a_pages_question_is_answered_once_the_page_has_the_keyboard_back(cx: &mut Tes
     let answered = dialog.host.0.borrow().iter().any(|call| call == "cancel ");
     assert_eq!(answered, PAGE_ANSWERED_AS_IT_LEAVES);
     assert_eq!(*dialog.host.1.borrow(), leaving(), "it hid before leaving");
+}
+
+impl Asking {
+    /// The dialog, asking a page's confirm() of tab 1 at rest, over a split view's other pane.
+    fn resting(cx: &mut TestAppContext) -> Self {
+        let (cx, host) = opened(cx);
+        cx.cx.update(crate::text_input::bind_keys);
+        let question = page_question(Vec::new(), None);
+        cx.cx
+            .update(|cx| ask_from_pane((1, 7), question, 100., true, &host, cx));
+        cx.run_until_parked();
+        Asking { cx, host }
+    }
+
+    fn rest(&mut self, rests: bool) {
+        let host = self.host.clone();
+        let question = page_question(Vec::new(), None);
+        self.cx
+            .cx
+            .update(|cx| ask_from_pane((1, 7), question, 100., rests, &host, cx));
+        self.cx.run_until_parked();
+    }
+
+    /// The card's bounds in the dialog's window, as it last drew.
+    fn card(&mut self) -> Bounds<Pixels> {
+        self.cx.cx.update(|cx| {
+            let window = cx.global::<DialogWindow>().0;
+            window
+                .read(cx)
+                .unwrap()
+                .asked
+                .as_ref()
+                .unwrap()
+                .check_drawn
+                .get()
+                .card
+        })
+    }
+
+    /// A point on OK, the card's last button, by its bottom right corner.
+    fn on_ok(&mut self) -> (f32, f32) {
+        let card = self.card();
+        let x = f32::from(card.right()) - BUTTON_INSET - 12.;
+        let y = f32::from(card.bottom()) - BUTTON_INSET - BUTTON_HEIGHT / 2.;
+        (x, y)
+    }
+}
+
+#[gpui::test]
+fn a_pages_question_at_rest_leaves_the_keyboard_and_shortcuts(cx: &mut TestAppContext) {
+    let mut dialog = Asking::resting(cx);
+    let waits = |dialog: &mut Asking| dialog.cx.cx.update(|cx| (asking(cx), awaits_answer(cx)));
+    assert_eq!(dialog.calls(), ["show over 100 at rest"]);
+    // The app's shortcuts wait for no question at rest: they're the page beside's.
+    assert_eq!(
+        waits(&mut dialog),
+        (false, false),
+        "at rest it held the keys"
+    );
+    assert!(dialog.cx.cx.update(|cx| asks_page(cx)));
+    // Its pane focused, it's live with the keyboard, and back at rest when the user leaves it.
+    dialog.rest(false);
+    assert_eq!(dialog.calls(), ["show over 100"]);
+    assert_eq!(
+        waits(&mut dialog),
+        (true, true),
+        "live, it didn't hold the keys"
+    );
+    dialog.rest(true);
+    assert_eq!(dialog.calls(), ["show over 100 at rest"]);
+    assert_eq!(
+        waits(&mut dialog),
+        (false, false),
+        "back at rest it held the keys"
+    );
+}
+
+#[gpui::test]
+fn a_click_on_a_resting_card_focuses_its_pane_without_answering(cx: &mut TestAppContext) {
+    let mut dialog = Asking::resting(cx);
+    dialog.calls();
+    let card = dialog.card();
+    dialog.click(f32::from(card.center().x), f32::from(card.top()) + 20.);
+    assert_eq!(dialog.calls(), ["focus pane"]);
+    // And one on its dim beside the card, which a live one's leaves be.
+    dialog.click(110., 20.);
+    assert_eq!(dialog.calls(), ["focus pane"]);
+}
+
+#[gpui::test]
+fn a_click_on_a_resting_ok_answers_it(cx: &mut TestAppContext) {
+    let mut dialog = Asking::resting(cx);
+    dialog.calls();
+    let (x, y) = dialog.on_ok();
+    dialog.click(x, y);
+    let calls = dialog.calls();
+    assert!(calls.contains(&"accept ".to_string()), "{calls:?}");
+    assert!(calls.contains(&"focus pane".to_string()), "{calls:?}");
+}
+
+/// The click on a resting OK focuses its pane, so the shell asks again, live, while the card leaves
+/// with its answer, before the shell hears it: the answered question never shows again (#3231).
+#[gpui::test]
+fn a_resting_ok_answered_isnt_asked_again_as_its_pane_comes_live(cx: &mut TestAppContext) {
+    let mut dialog = Asking::resting(cx);
+    dialog.calls();
+    let (x, y) = dialog.on_ok();
+    dialog.click(x, y);
+    dialog.rest(false);
+    let calls = dialog.calls();
+    assert!(calls.contains(&"accept ".to_string()), "{calls:?}");
+    let hidden = calls.iter().position(|call| call == "hide");
+    assert!(
+        hidden.is_some(),
+        "the answered card didn't leave: {calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|call| call.starts_with("show")),
+        "the answered question showed again: {calls:?}"
+    );
+    assert!(dialog.calls().is_empty());
+}
+
+/// A page's question taken back, as its tab no longer shows, and asked again while it leaves, as
+/// the tab shows again, comes back once it has gone.
+#[gpui::test]
+fn a_pages_question_taken_back_and_asked_again_as_it_leaves_comes_back(cx: &mut TestAppContext) {
+    let mut dialog = Asking::resting(cx);
+    dialog.calls();
+    dialog.cx.cx.update(withdraw_page);
+    dialog.rest(true);
+    assert_eq!(dialog.calls(), ["hide", "show over 100 at rest"]);
+}
+
+/// A card at rest stays on screen while the user picks View › Appearance, which redraws every
+/// window before the shell gives the new palette, so the card draws again once the palette changes,
+/// where it kept the old tone on the dialogs run under Wayland.
+#[gpui::test]
+fn a_resting_card_draws_in_the_windows_new_tone(cx: &mut TestAppContext) {
+    let mut dialog = Asking::resting(cx);
+    let drawn = |dialog: &mut Asking| {
+        dialog.cx.cx.update(|cx| {
+            let window = cx.global::<DialogWindow>().0;
+            window.read(cx).unwrap().asked.as_ref().unwrap().drawn_tone
+        })
+    };
+    let other = match drawn(&mut dialog) {
+        Some(palette::Tone::Light) => palette::Tone::Dark,
+        _ => palette::Tone::Light,
+    };
+    dialog.cx.cx.update(|cx| {
+        let mut changed = palette::current(cx);
+        changed.tone = other;
+        palette::set_current(changed, cx);
+    });
+    dialog.cx.run_until_parked();
+    assert_eq!(drawn(&mut dialog), Some(other));
+}
+
+#[gpui::test]
+fn a_card_over_a_narrow_pane_takes_its_width(cx: &mut TestAppContext) {
+    let (cx, host) = opened(cx);
+    let mut dialog = Asking { cx, host };
+    dialog.cx.cx.update(|cx| {
+        let over = (
+            Bounds::new(point(px(100.), px(10.)), size(px(300.), px(500.))),
+            10.,
+        );
+        let answered = Box::new(|_: Reply, _: &mut App| {});
+        let question = page_question(Vec::new(), None);
+        ask_page((1, 7), question, over, true, Rc::new(|_| {}), answered, cx);
+    });
+    dialog.cx.run_until_parked();
+    let card = dialog.card();
+    // Inside its border, which the card's width takes in.
+    assert_eq!(f32::from(card.size.width) + 2., 300. - 2. * PANE_MARGIN);
 }
 
 #[gpui::test]

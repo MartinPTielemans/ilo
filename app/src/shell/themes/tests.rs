@@ -459,27 +459,43 @@ fn the_diagonal_is_drawn_where_it_is_taken_for_what_covers_it() {
     }
 }
 
-/// The preview's ground lies under the window's tint: with it the tint is opaque, its white over
-/// black, as the app's light sidebar reads on Windows (#3033). Without it, the tint is the tint
-/// alone, over the window's material.
+/// Where nothing blurs what's behind the window, its ground is opaque, the same look the rows that
+/// cover the window take, in both tones, so nothing behind shows through the tint (#3676). Where
+/// something blurs it, the ground is the tint alone, over the material.
 #[gpui::test]
-fn a_ground_under_the_tint_makes_the_window_opaque(cx: &mut TestAppContext) {
+fn the_window_is_opaque_where_nothing_blurs_what_is_behind_it(cx: &mut TestAppContext) {
     let (shell, cx) = shell(None, None, cx);
-    shell.update(cx, |shell, cx| {
-        shell.force_tone(Some(Tone::Light));
-        cx.notify();
-    });
-    cx.run_until_parked();
-    shell.update(cx, |shell, _| {
-        let tint = shell.palette.tint;
-        assert!(tint.a < 1., "the light tint is see-through: {tint:?}");
-        assert_eq!(shell.window_tint(), tint);
-        shell.set_ground(gpui::black().into());
-        let ground = shell.window_tint();
-        assert_eq!(ground.a, 1.);
-        assert!(
-            (ground.r - tint.r * tint.a).abs() < 1e-4,
-            "{ground:?} over {tint:?}"
-        );
-    });
+    let blurred = shell.update(cx, |shell, _| shell.blurred);
+    assert_eq!(
+        blurred,
+        cfg!(target_os = "macos"),
+        "only the Mac's material blurs"
+    );
+    for tone in [Tone::Dark, Tone::Light] {
+        shell.update(cx, |shell, cx| {
+            shell.force_tone(Some(tone));
+            cx.notify();
+        });
+        cx.run_until_parked();
+        shell.update(cx, |shell, _| {
+            let tint = shell.palette.tint;
+            assert!(tint.a < 1., "the {tone:?} tint is see-through: {tint:?}");
+            shell.blurred = true;
+            assert_eq!(shell.window_tint(), tint, "{tone:?}, blurred");
+            shell.blurred = false;
+            let ground = shell.window_tint();
+            assert_eq!(ground.a, 1., "{tone:?}: {ground:?}");
+            // A Space without a theme has no gradient over the ground.
+            let fill = shell.window_fill_at(0.5).to_rgb();
+            let channels = |c: Rgba| [c.r, c.g, c.b, c.a];
+            let same = channels(ground)
+                .iter()
+                .zip(channels(fill))
+                .all(|(a, b)| (a - b).abs() < 1e-3);
+            assert!(
+                same,
+                "{tone:?}: the window {ground:?}, the rows over it {fill:?}"
+            );
+        });
+    }
 }

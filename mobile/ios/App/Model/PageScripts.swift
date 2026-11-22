@@ -238,14 +238,14 @@ enum PageScripts {
     })();
     """
 
-  /// Holds what's at the top of the page at the top across a turn. Run as the turn starts, it
-  /// marks the text there and puts it back where it was once the page is laid out for its new
-  /// width: WebKit keeps how far the page is scrolled, which after a turn is other text. What
-  /// the page fixes to its head is passed over, since that stays where it is by itself. A turn
-  /// back holds what the turn before it held, so there and back ends where it began.
-  static let keepPlace = """
-    // A turn that starts before the last one is done with takes over from it.
-    const turn = globalThis.iloTurn = (globalThis.iloTurn || 0) + 1;
+  /// Marks what's at the top of the page as a turn starts, for `putPlace` to put back at the top
+  /// once WebKit has placed the page for its new width: WebKit keeps how far the page is
+  /// scrolled, which after a turn is other text. What the page fixes to its head is passed over,
+  /// since that stays where it is by itself. A turn back keeps what the turn before it kept, so
+  /// there and back ends where it began.
+  static let markPlace = """
+    let place = globalThis.iloPlace;
+    globalThis.iloPlace = null;
     if (scrollY <= 0) return;
     const held = element => {
       for (let e = element; e && e !== document.documentElement; e = e.parentElement) {
@@ -254,12 +254,10 @@ enum PageScripts {
       }
       return false;
     };
-    // The width the page is laid out for: `innerWidth` follows it some frames later.
-    const width = () => document.documentElement.clientWidth;
-    const wide = width();
+    // The width the page is laid out for: `innerWidth` can be ahead of it or behind it.
+    const wide = document.documentElement.clientWidth;
     // A page left where the last turn put it keeps that turn's mark: what's at the top on its
     // side may be far from it upright, where the page has one column for its two.
-    let place = globalThis.iloPlace;
     if (!place || Math.abs(scrollY - place.y) >= 2 || !(place.mark.startContainer || place.mark).isConnected) {
       const x = Math.min(wide, innerWidth) / 2;
       let mark = null;
@@ -275,31 +273,26 @@ enum PageScripts {
         }
       }
       if (!mark) return;
-      place = globalThis.iloPlace = { mark, top: mark.getBoundingClientRect().top, y: scrollY };
+      place = { mark, top: mark.getBoundingClientRect().top };
+      // A finger on the page before the text is put back takes the page from the turn.
+      place.touched = () => { place.free = true; };
     }
-    const { mark, top } = place;
-    await new Promise(done => {
-      // The page's height changes by itself, as the bar does: only a new width is the turn.
-      const turned = () => {
-        if (width() === wide) return;
-        removeEventListener('resize', turned);
-        done();
-      };
-      addEventListener('resize', turned);
-      // A width that never changes ends the wait.
-      setTimeout(() => { removeEventListener('resize', turned); done(); }, 1000);
-    });
-    if (width() === wide) return;
-    // WebKit moves the page once more some frames into its new size, so the text is held where
-    // it was while the turn is still on screen, unless a finger or another turn takes the page.
-    let free = false;
-    addEventListener('touchstart', () => { free = true; }, { once: true, passive: true, capture: true });
-    const until = performance.now() + 400;
-    while (!free && turn === globalThis.iloTurn && performance.now() < until) {
-      const off = mark.getBoundingClientRect().top - top;
-      if (Math.abs(off) >= 1) scrollBy(0, off);
-      place.y = scrollY;
-      await new Promise(done => requestAnimationFrame(done));
-    }
+    Object.assign(place, { wide, y: scrollY, free: false });
+    addEventListener('touchstart', place.touched, { once: true, passive: true, capture: true });
+    globalThis.iloPlace = place;
+    """
+
+  /// Puts the text `markPlace` marked back where it was, once. Run when WebKit has placed the
+  /// page for its new width, so nothing WebKit does for the turn moves it again.
+  static let putPlace = """
+    const place = globalThis.iloPlace;
+    const wide = document.documentElement.clientWidth;
+    if (!place || place.free || place.wide === wide || !(place.mark.startContainer || place.mark).isConnected) return;
+    place.wide = wide;
+    // To a place on the page, not by an amount: an amount is added to whatever WebKit has moved
+    // the page to by the time it gets there.
+    const off = place.mark.getBoundingClientRect().top - place.top;
+    if (Math.abs(off) >= 1) scrollTo(scrollX, scrollY + off);
+    place.y = scrollY;
     """
 }

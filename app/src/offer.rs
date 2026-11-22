@@ -318,6 +318,19 @@ fn window_of(browser: u64, cx: &App) -> Option<WindowHandle<OfferPrompt>> {
         .copied()
 }
 
+/// Whether the user types in the offer's username over the browser window `browser`.
+pub fn typing(browser: u64, cx: &mut App) -> bool {
+    let Some(offer) = window_of(browser, cx) else {
+        return false;
+    };
+    (offer.update(cx, |prompt, window, cx| {
+        prompt.offer().is_some()
+            && !prompt.elsewhere
+            && crate::text_input::window_typed_in(window, cx)
+    }))
+    .unwrap_or(false)
+}
+
 /// `tab` closed.
 pub fn forget(tab: u64) {
     OFFERS.with_borrow_mut(|offers| offers.remove(&tab));
@@ -438,7 +451,8 @@ fn field_bottom_left() -> Point<Pixels> {
 }
 
 impl Render for OfferPrompt {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::text_input::drawing(window);
         // The browser's shortcuts work here too, below the offer's own keys.
         let root = div()
             .key_context(shell::KEY_CONTEXT)

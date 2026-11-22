@@ -72,7 +72,7 @@ impl Shell {
         let Some(row) = shown.or_else(|| rows.first().copied()) else {
             return;
         };
-        self.browser.focus_ui(cx);
+        self.take_keyboard(cx);
         self.focus_keys = true;
         self.key_row(row, cx);
     }

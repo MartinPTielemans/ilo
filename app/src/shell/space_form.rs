@@ -90,7 +90,7 @@ impl Shell {
     pub(super) fn focus_form(&mut self, cx: &mut Context<Self>) {
         // The panel never takes the keyboard, and goes when the pointer leaves it.
         self.dock(cx);
-        self.browser.focus_ui(cx);
+        self.take_keyboard(cx);
         self.focus_form = true;
         cx.notify();
     }
@@ -668,10 +668,15 @@ mod tests {
         );
     }
 
-    /// ↩ makes the Space, and puts the form 150 ms into its 280 ms leave.
-    fn mid_leave(shell: &Entity<Shell>, cx: &mut VisualTestContext, host: &Recorder) {
+    /// ↩ makes the Space, and the form starts to leave.
+    fn create(cx: &mut VisualTestContext, host: &Recorder) {
         cx.simulate_keystrokes("enter");
         assert_eq!(host.take_edits(), ["rename space 7 Trips"]);
+    }
+
+    /// ↩ makes the Space, and puts the form 150 ms into its 280 ms leave.
+    fn mid_leave(shell: &Entity<Shell>, cx: &mut VisualTestContext, host: &Recorder) {
+        create(cx, host);
         shell.update(cx, |shell, cx| {
             let (_, left) = shell.leaving_form.as_mut().expect("the form isn't leaving");
             *left = Instant::now() - Duration::from_millis(150);
@@ -711,6 +716,18 @@ mod tests {
         assert_eq!(host.command_bars.take(), [Some(field)]);
     }
 
+    /// Holds the leaving form at its first frame, for as long as the test needs it: a start ahead
+    /// of now reads as no time gone, so the leave can't end under clicks however slow the runner
+    /// is (#3739).
+    fn hold_leave(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
+        shell.update(cx, |shell, cx| {
+            let (_, left) = shell.leaving_form.as_mut().expect("the form isn't leaving");
+            *left = Instant::now() + Duration::from_secs(3600);
+            cx.notify();
+        });
+        cx.run_until_parked();
+    }
+
     /// The menus a right-click at each of `ys`, 60 in, shows.
     fn right_clicks(cx: &mut VisualTestContext, host: &Recorder, ys: &[f32]) -> Vec<Vec<String>> {
         ys.iter()
@@ -728,11 +745,14 @@ mod tests {
     }
 
     /// The leaving form's plates let the mouse through: a right-click on the field's, a row's or
-    /// Create Space's place mid-leave does what it does there once the form has gone.
+    /// Create Space's place mid-leave does what it does there once the form has gone. The leave is
+    /// held at its first frame, where every plate is still drawn, as the four clicks can outlast
+    /// it on a slow runner.
     #[gpui::test]
     fn mid_leave_the_forms_plates_let_the_mouse_through(cx: &mut TestAppContext) {
         let (shell, cx, host) = form(cx);
-        mid_leave(&shell, cx, &host);
+        create(cx, &host);
+        hold_leave(&shell, cx);
         let middle = FORM_PLATE_HEIGHT / 2.;
         let bottom = cx.update(|window, _| f32::from(window.viewport_size().height));
         let ys = [

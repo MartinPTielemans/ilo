@@ -16,6 +16,11 @@ class Window;
 // Sets the hooks that place, move and size it, before Chrome starts.
 void SetUpMiniPlayer();
 
+// Logs where Chrome places a page's floating window, such as a call's, and where it first moves
+// (#3623). Once the browser's process is up and before any page is, as the manager is a Singleton,
+// which needs the AtExitManager ChromeMain makes after SetUpMiniPlayer.
+void WatchFloatingPages();
+
 // Registers where the last one was left, in Local State, app-wide.
 void RegisterMiniPlayerPrefs(PrefRegistrySimple* registry);
 

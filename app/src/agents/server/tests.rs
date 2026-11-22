@@ -1,11 +1,12 @@
 //! The server as an MCP client's bridge reaches it, over a real socket, or on Windows a real named
 //! pipe.
 
-use std::io::{BufReader, Cursor, Write};
+use std::io::{BufReader, Cursor, ErrorKind, Read, Write};
 #[cfg(unix)]
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::sync::atomic::AtomicUsize;
 use std::thread;
+use std::time::Instant;
 
 use futures::StreamExt;
 use futures::channel::mpsc::UnboundedReceiver;
@@ -25,6 +26,11 @@ pub fn socket() -> PathBuf {
 
 /// A server with Claude Code's token.
 fn server() -> (Server, Tokens, UnboundedReceiver<Event>) {
+    server_waiting(TOKEN_WAIT)
+}
+
+/// A server with Claude Code's token that gives a connection `token_wait` to send one.
+fn server_waiting(token_wait: Duration) -> (Server, Tokens, UnboundedReceiver<Event>) {
     let tokens: Tokens = Arc::default();
     tokens
         .lock()
@@ -32,10 +38,26 @@ fn server() -> (Server, Tokens, UnboundedReceiver<Event>) {
         .insert(TOKEN.into(), "claude-code".into());
     let (events, handed) = futures::channel::mpsc::unbounded();
     (
-        Server::start(&socket(), tokens.clone(), events).unwrap(),
+        Server::listen(&socket(), tokens.clone(), events, token_wait).unwrap(),
         tokens,
         handed,
     )
+}
+
+/// How long a bounded client's read waits for the server.
+const BOUND: Duration = Duration::from_secs(10);
+
+/// One byte's read, again when a signal interrupts it, as `read_exact` reads, while BOUND hasn't
+/// passed: the tests run beside others that start and reap processes, whose signals interrupt a
+/// read on Linux (#3734).
+fn read_byte(reader: &mut impl Read) -> std::io::Result<usize> {
+    let start = Instant::now();
+    loop {
+        match reader.read(&mut [0]) {
+            Err(error) if error.kind() == ErrorKind::Interrupted && start.elapsed() < BOUND => {}
+            read => return read,
+        }
+    }
 }
 
 /// A client's connection, as its bridge makes it.
@@ -50,6 +72,29 @@ impl Client {
         Client {
             writer: stream.try_clone().unwrap(),
             reader: BufReader::new(stream),
+        }
+    }
+
+    /// Opens one whose reads give up after BOUND, set as it connects: the Mac refuses a socket's
+    /// timeout once the server has closed the connection (EINVAL).
+    fn open_bounded(server: &Server) -> Client {
+        let client = Client::open(server);
+        client
+            .reader
+            .get_ref()
+            .set_read_timeout(Some(BOUND))
+            .unwrap();
+        client
+    }
+
+    /// Asserts the server has closed this connection, which a bounded client sees within BOUND.
+    fn closed(mut self) {
+        match read_byte(&mut self.reader) {
+            Ok(0) => {}
+            Err(error) if error.kind() == ErrorKind::Interrupted => {
+                panic!("a connection's read was interrupted again and again for {BOUND:?}")
+            }
+            read => panic!("a connection that sent no token was still open {BOUND:?} on: {read:?}"),
         }
     }
 
@@ -170,6 +215,99 @@ fn a_connection_without_a_valid_token_is_refused() {
     );
 }
 
+/// A client that finds every place taken is told so, through its bridge, rather than turned away
+/// without a word (#3700).
+#[test]
+fn a_full_server_says_so() {
+    use super::super::bridge;
+    // Long enough that no connection gives way while the test runs.
+    let (server, _, _handed) = server_waiting(Duration::from_secs(60));
+    let _silent: Vec<Client> = (0..MAX_CONNECTIONS)
+        .map(|_| Client::open(&server))
+        .collect();
+    let refused = bridge::run(
+        server.path(),
+        TOKEN,
+        Cursor::new(Vec::new()),
+        Output::default(),
+    );
+    assert_eq!(refused.unwrap_err(), FULL);
+}
+
+/// Connections that come while the server is full and neither send nor read hold up no one: the
+/// server says it's full to each and goes on, and a client once places are free is served. Each
+/// still reads the line late, after the server closed its end.
+#[test]
+fn connections_that_never_read_hold_up_no_one() {
+    let (server, _, _handed) = server_waiting(Duration::from_secs(1));
+    // Bounded where the server keeps them: its close is what each waits for.
+    let silent: Vec<Client> = (0..MAX_CONNECTIONS)
+        .map(|_| Client::open_bounded(&server))
+        .collect();
+    let deaf: Vec<Client> = (0..8).map(|_| Client::open(&server)).collect();
+    for client in silent {
+        client.closed();
+    }
+    // Were the line to the connections that don't read wait on them, the server would take no
+    // other: the connection would fail, or its answer wouldn't come.
+    let stream = connect(server.path())
+        .expect("no connection once places were free, behind connections that never read");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    let mut client = Client {
+        writer: stream.try_clone().unwrap(),
+        reader: BufReader::new(stream),
+    };
+    client.send(json!({ "token": TOKEN }));
+    let answer = read_line(&mut client.reader)
+        .expect("no answer to the token 10 s on, behind connections that never read");
+    assert_eq!(
+        serde_json::from_str::<Value>(&answer).unwrap(),
+        json!({ "ok": true })
+    );
+    for mut client in deaf {
+        assert_eq!(client.read(), Some(json!({ "error": FULL })));
+        assert_eq!(client.read(), None);
+    }
+}
+
+/// A read a signal interrupts is read again, so a test sees the server's close and not the signal
+/// (#3734).
+#[test]
+fn an_interrupted_read_is_read_again() {
+    struct Interrupted(usize);
+    impl Read for Interrupted {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            match self.0 {
+                0 => Ok(0),
+                _ => {
+                    self.0 -= 1;
+                    Err(ErrorKind::Interrupted.into())
+                }
+            }
+        }
+    }
+    assert_eq!(read_byte(&mut Interrupted(3)).unwrap(), 0);
+}
+
+/// A connection that sends no token is closed once its time is up, so connections that send
+/// nothing can't keep a client out (#3700).
+#[test]
+fn connections_that_send_no_token_give_way() {
+    let (server, _, _handed) = server_waiting(Duration::from_millis(200));
+    // Bounded where the server keeps them: its close is what each waits for.
+    let silent: Vec<Client> = (0..MAX_CONNECTIONS)
+        .map(|_| Client::open_bounded(&server))
+        .collect();
+    for client in silent {
+        client.closed();
+    }
+    let mut client = Client::connect(&server);
+    let answer = client.ask(json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" }));
+    assert_eq!(answer, json!({ "jsonrpc": "2.0", "id": 1, "result": {} }));
+}
+
 /// initialize begins a session, in the version the client asked for, says what the server is and
 /// how to use it, and tells the UI which agent said hello.
 #[test]
@@ -266,6 +404,8 @@ fn the_server_answers_what_needs_no_browser() {
             "unpin_tab",
             "remove_tab",
             "sort_tabs_by_site",
+            "title",
+            "done",
         ]
     );
     assert_eq!(list["id"], "a");
@@ -653,4 +793,29 @@ fn a_stopped_agents_connection_closes_once_it_has_answered() {
         }
     }
     assert!(bye, "the UI didn't hear the stopped agent's bye");
+}
+
+/// done has no tab, so on its connection it waits for the calls before it, as a task's finish does:
+/// sent while a hand_off waits on the user, it's answered once that is, never beside a question
+/// (#3652).
+#[test]
+fn done_waits_for_the_calls_before_it() {
+    let line = |tool: &str, arguments: &str| {
+        format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"{tool}","arguments":{arguments}}}}}"#
+        )
+    };
+    let done = lanes(&line("done", "{}"));
+    for (tool, arguments) in [
+        ("hand_off", r#"{"tab":7,"reason":"Sign in"}"#),
+        ("ask", r#"{"question":"Which one?"}"#),
+        ("click", r#"{"tab":7,"ref":"e1"}"#),
+    ] {
+        let before = lanes(&line(tool, arguments));
+        assert!(
+            done.iter()
+                .any(|lane| before.iter().any(|other| lane.meets(*other))),
+            "done didn't wait for {tool}"
+        );
+    }
 }

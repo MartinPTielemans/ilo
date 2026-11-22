@@ -87,6 +87,14 @@ folder=$(find "$profile_dir" -type d -path "*/Boards/$id" | head -1)
 [ -n "$folder" ] || fail "New Board made no folder for $id in the profile ($profile_dir)"
 boards=$(dirname "$folder")
 
+# Waits for the Board $2's page in tab $1, named $3, to have loaded, failing on its last line.
+board_loaded() {
+  for _ in $(seq 100); do
+    grep "^browser: page $1 " "$log" | tail -1 | grep -q " loading 0 chrome://board/$2\$" && return 0
+    sleep 0.1
+  done
+  fail "$3 didn't finish loading: $(grep "^browser: page $1 " "$log" | tail -1)"
+}
 # The name, kept with ↩, and the page has the keyboard for the first note.
 send type "kitchen"
 send key return
@@ -98,13 +106,10 @@ for _ in $(seq 50); do
 done
 [ "$(cat "$folder/name" 2>/dev/null)" = kitchen ] ||
   fail "the Board's name wasn't kept in its folder: $(cat "$folder/name" 2>/dev/null)"
-# The page has the keyboard before it has loaded, and keys typed then are lost.
-for _ in $(seq 100); do
-  grep "^browser: page $board " "$log" | tail -1 | grep -q " loading 0 chrome://board/$id\$" && break
-  sleep 0.1
-done
-grep "^browser: page $board " "$log" | tail -1 | grep -q " loading 0 chrome://board/$id\$" ||
-  fail "the new Board's page didn't finish loading: $(grep "^browser: page $board " "$log" | tail -1)"
+# The page has the keyboard before it has loaded, and keys typed then are lost. Once it has loaded,
+# the keys typed while the Board opens are held for its first note (#3424), so they're typed
+# straight away, as a user would.
+board_loaded "$board" "$id" "the new Board's page"
 send type "shelves over the sink"
 expect 'browser: board saved$' "the note typed in the new Board wasn't saved"
 grep -q 'shelves over the sink' "$folder/board.json" ||
@@ -396,6 +401,7 @@ made() {
   done
   [ "$(cat "$made_folder/name" 2> /dev/null)" = "$1" ] ||
     fail "the name of the Board made from $2 wasn't kept in its folder: $(cat "$made_folder/name" 2> /dev/null)"
+  board_loaded "$tab" "$made_id" "the page of the Board made from $2"
 }
 # The Board's tab $tab archived, from Today, as ⌘W keeps a pinned tab, so the sidebar's places stay
 # few for the steps after.

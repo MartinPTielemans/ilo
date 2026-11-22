@@ -610,7 +610,7 @@ launch() {
   rm -f "$log"
   if [ -n "$mac" ]; then
     # The first launch's window is captured as it was, $capture.
-    open -a "$app" --env BROWSER_DISPLAY="$BROWSER_DISPLAY" \
+    open -a "$app" --env BROWSER_DISPLAY="$BROWSER_DISPLAY" --env BROWSER_CHECK=1 \
       ${capture:+--env "BROWSER_LAUNCH_CAPTURE=$capture"} --stdout "$log" --stderr "$log" ${2:+"$2"}
     capture=
     pid=
