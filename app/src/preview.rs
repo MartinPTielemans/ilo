@@ -59,6 +59,9 @@ unsafe extern "C" {
     // platform/mac/host.mm: where a window goes, centered on the main display or, with
     // BROWSER_DISPLAY=builtin, on the Mac's own.
     fn host_centered(width: f64, height: f64, x: *mut f64, y: *mut f64);
+    // platform/windows/host.cc: no border round the overlays, which here no host adopts.
+    #[cfg(target_os = "windows")]
+    fn host_preview_frameless();
 }
 
 /// The web opens no window of its own, so the env switches' windows that call this never open.
@@ -2925,6 +2928,10 @@ fn main() {}
 #[cfg(not(target_family = "wasm"))]
 fn main() {
     browser::log_every_line();
+    #[cfg(target_os = "windows")]
+    unsafe {
+        host_preview_frameless()
+    };
     gpui_platform::application()
         .with_assets(shell::Assets)
         .run(|cx| {

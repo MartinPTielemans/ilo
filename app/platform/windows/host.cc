@@ -639,6 +639,30 @@ void Adopt(Floating& floating,
   OwnShadow(floating.hwnd);
 }
 
+LRESULT CALLBACK FramelessProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam, UINT_PTR,
+                               DWORD_PTR) {
+  if (message == WM_NCCALCSIZE && wparam) {
+    return 0;
+  }
+  return DefSubclassProc(hwnd, message, wparam, lparam);
+}
+
+// The preview's windows that can't be resized, its overlays, as each is made: before its first
+// WM_NCCALCSIZE, so GPUI measures no border and puts the window where the preview asked.
+LRESULT CALLBACK PreviewWindowMade(int code, WPARAM wparam, LPARAM lparam) {
+  if (code == HCBT_CREATEWND) {
+    const HWND hwnd = reinterpret_cast<HWND>(wparam);
+    const LONG style = reinterpret_cast<CBT_CREATEWNDW*>(lparam)->lpcs->style;
+    wchar_t name[16] = L"";
+    GetClassNameW(hwnd, name, 16);
+    if (!(style & (WS_THICKFRAME | WS_CHILD)) && wcscmp(name, L"Zed::Window") == 0) {
+      SetWindowSubclass(hwnd, FramelessProc, 1, 0);
+      OwnShadow(hwnd);
+    }
+  }
+  return CallNextHookEx(nullptr, code, wparam, lparam);
+}
+
 // Lets go of |floating|, which is about to be freed while its window lives on: anything still
 // reaching it through its window after that wrote into freed memory, and a quit after a browser
 // window closed under Little ilo crashed in Disown (#1425).
@@ -3403,6 +3427,12 @@ void host_centered(double width, double height, double* x, double* y) {
   const double scale = GetDpiForSystem() / 96.0;
   *x = (work.left + work.right) / 2.0 / scale - width / 2;
   *y = (work.top + work.bottom) / 2.0 / scale - height / 2;
+}
+
+// The preview opens its overlays itself, where the app's host adopts them (Adopt), and the border
+// GPUI leaves round a window without a caption drew a line at their edges (#3927).
+void host_preview_frameless() {
+  SetWindowsHookExW(WH_CBT, PreviewWindowMade, nullptr, GetCurrentThreadId());
 }
 
 void host_show_launch_window(const char* profile_dir, double x, double y, double width,
