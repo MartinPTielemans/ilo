@@ -12,12 +12,15 @@ describe("the changelog's feed", () => {
 
   it("has an entry for each release that's out, and none for one still to come", () => {
     const feed = changelogFeed([
-      { version: "9.9.9", summary: "Soon.", notes: [] },
+      { version: "9.9.9", summary: "Soon.", changes: [] },
       {
         version: "0.0.2",
         date: "2 November 2026",
         summary: "Tabs & <Spaces>.",
-        notes: ["A note.", { text: "A clip's note.", clip: "x" }],
+        changes: [
+          { kind: "fixed", area: "Tabs", text: "A fix.", only: ["linux"] },
+          { kind: "new", area: "Spaces", text: "A clip's change.", clip: "x" },
+        ],
       },
     ]);
     expect(feed).not.toContain("9.9.9");
@@ -25,14 +28,18 @@ describe("the changelog's feed", () => {
     expect(feed).toContain("<updated>2026-11-02T12:00:00Z</updated>");
     expect(feed).toContain("<summary>Tabs &amp; &lt;Spaces&gt;.</summary>");
     // The notes are HTML inside the XML, so they're escaped twice.
-    expect(feed).toContain("&lt;li&gt;A clip's note.&lt;/li&gt;");
     expect(feed).toContain("Tabs &amp;amp; &amp;lt;Spaces&amp;gt;.");
+    // What's new comes before what's fixed, whatever order the release lists them in, and a change
+    // for one platform says which.
+    expect(feed).toContain(
+      "&lt;h3&gt;New&lt;/h3&gt;&lt;ul&gt;&lt;li&gt;A clip's change.&lt;/li&gt;&lt;/ul&gt;&lt;h3&gt;Fixed&lt;/h3&gt;&lt;ul&gt;&lt;li&gt;A fix. (Linux)&lt;/li&gt;",
+    );
   });
 
   it("leaves out a dated release the deploy doesn't list as published", () => {
     const releases = [
-      { version: "0.0.3", date: "3 November 2026", summary: "Tagged.", notes: [] },
-      { version: "0.0.2", date: "2 November 2026", summary: "Out.", notes: [] },
+      { version: "0.0.3", date: "3 November 2026", summary: "Tagged.", changes: [] },
+      { version: "0.0.2", date: "2 November 2026", summary: "Out.", changes: [] },
     ];
     const feed = changelogFeed(releases, "0.0.1 0.0.2");
     expect(feed).not.toContain("0.0.3");
@@ -42,8 +49,7 @@ describe("the changelog's feed", () => {
 
   it("says no release's summary twice", () => {
     for (const release of RELEASES) {
-      const notes = release.notes.map((note) => (typeof note === "string" ? note : note.text));
-      expect(notes).not.toContain(release.summary);
+      expect(release.changes.map((change) => change.text)).not.toContain(release.summary);
     }
   });
 });

@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact from "@vitejs/plugin-react";
 import { defineConfig } from "vite-plus";
@@ -29,8 +28,11 @@ export default defineConfig({
       name: "ilo:changelog-feed",
       generateBundle() {
         if (this.environment.name !== "client") return;
-        const source = changelogFeed(undefined, PUBLISHED);
-        this.emitFile({ type: "asset", fileName: FEED.slice(1), source });
+        this.emitFile({
+          type: "asset",
+          fileName: FEED.slice(1),
+          source: changelogFeed(undefined, PUBLISHED),
+        });
       },
       configureServer(server) {
         server.middlewares.use(FEED, (_, response) => {
@@ -39,8 +41,8 @@ export default defineConfig({
         });
       },
     },
-    // Only the home page runs React in the browser, so only it hears of changes by itself. This
-    // tells the other pages, which reload (src/routes/__root.tsx).
+    // No page runs React in the browser, so none hears of a change by itself. This tells them, and
+    // they reload (src/routes/__root.tsx).
     {
       name: "ilo:reload",
       configureServer(server) {
@@ -52,17 +54,8 @@ export default defineConfig({
   ],
   // ILO_PUBLISHED reaches the pages as import.meta.env.ILO_PUBLISHED, unset when it's unset.
   envPrefix: ["VITE_", "ILO_PUBLISHED"],
-  // The live interface is the browser repo's build in public/demo. Its SOURCE file names the commit
-  // it was built from, and the hero's caption links there, as the GPL asks of a site that serves it.
-  define: {
-    "import.meta.env.ILO_DEMO_SOURCE": JSON.stringify(
-      readFileSync(new URL("./public/demo/SOURCE", import.meta.url), "utf8").match(
-        /https:\/\/\S+/,
-      )?.[0],
-    ),
-  },
-  // The router plugin writes the route tree on every build, and public/demo is the browser repo's
-  // build of the live interface.
+  // The router plugin writes the route tree on every build, and public/demo is a release's build
+  // of the old home page's demo, which a deploy run from a tag before 0.3.1 still unpacks there.
   fmt: { ignorePatterns: ["src/routeTree.gen.ts", "public/demo/**"] },
   lint: {
     ignorePatterns: ["src/routeTree.gen.ts", "public/demo/**"],

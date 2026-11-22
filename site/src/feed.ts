@@ -1,4 +1,5 @@
-import { RELEASES, isOut, type Release } from "./changelog";
+import { KINDS, type Release, published } from "./changelog";
+import { PLATFORMS } from "./downloads";
 import { FEED, SITE } from "./seo";
 
 // The changelog as an Atom feed, for anyone who'd rather be told of a release than come and look.
@@ -30,15 +31,23 @@ export function dayOf(date: string) {
 const escape = (text: string) =>
   text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
-/** A release's notes as the page lists them: the summary, then each change. */
+/** A release's notes as the page lists them: the summary, then its changes by kind, each naming the platforms it's for when it isn't for all. */
 function notes(release: Release) {
-  const items = release.notes.map((note) => (typeof note === "string" ? note : note.text));
-  return `<p>${escape(release.summary)}</p><ul>${items.map((item) => `<li>${escape(item)}</li>`).join("")}</ul>`;
+  const lists = KINDS.flatMap(({ kind, label }) => {
+    const items = release.changes
+      .filter((change) => change.kind === kind)
+      .map((change) => {
+        const only = change.only?.map((id) => PLATFORMS.find((one) => one.id === id)?.name ?? id);
+        return `<li>${escape(change.text)}${only ? ` (${only.join(", ")})` : ""}</li>`;
+      });
+    return items.length ? [`<h3>${label}</h3><ul>${items.join("")}</ul>`] : [];
+  });
+  return `<p>${escape(release.summary)}</p>${lists.join("")}`;
 }
 
 /** The feed: every release that's out, newest first, each linking to its place in the changelog. */
-export function changelogFeed(releases: Release[] = RELEASES, published?: string) {
-  const out = releases.filter((release) => isOut(release, published));
+export function changelogFeed(releases?: Release[], listed?: string) {
+  const out = published(releases, listed);
   const page = `${SITE}/changelog`;
   const entries = out.map((release) => {
     const url = `${page}#${release.version}`;
