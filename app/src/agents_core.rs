@@ -6,7 +6,9 @@ use std::ffi::CString;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use browser::agents::{self, Agents, Browser, GlobalAgents, PageAction, Question, TabInfo};
+use browser::agents::{
+    self, Agents, Browser, Failure, GlobalAgents, PageAction, Question, TabInfo,
+};
 use gpui::{App, AppContext};
 
 use crate::{WINDOWS, bar_picks_host, bc, ids, name};
@@ -106,12 +108,17 @@ impl Browser for Core {
         (spaces.find(|&space| self.space_tab_ids(space, cx).contains(&tab))).unwrap_or(0)
     }
 
-    fn may_act(&self, agent: &str, tab: u64, action: &str, _: &mut App) -> Result<(), String> {
+    fn may_act(
+        &self,
+        agent: &str,
+        tab: u64,
+        action: &str,
+        _: &mut App,
+    ) -> Result<(), (Failure, String)> {
         let (Ok(agent), Ok(action)) = (CString::new(agent), CString::new(action)) else {
-            return Err("The agent's name can't be used.".into());
+            return Err((Failure::Other, "The agent's name can't be used.".into()));
         };
         let (mut reason, mut failure) = ([0u8; 512], 0);
-        // The app decides on |failure| in place of the words once #3702's app half lands.
         let may = call(|| unsafe {
             let reason = reason.as_mut_ptr().cast();
             bc::bc_agent_may_act(
@@ -130,7 +137,8 @@ impl Browser for Core {
                     .iter()
                     .position(|&byte| byte == 0)
                     .unwrap_or(reason.len());
-                Err(String::from_utf8_lossy(&reason[..end]).into_owned())
+                let why = String::from_utf8_lossy(&reason[..end]).into_owned();
+                Err((failure_of(failure), why))
             }
         }
     }
@@ -480,4 +488,22 @@ pub fn update(change: impl FnOnce(&mut Agents, &mut gpui::Context<Agents>) + 'st
             agents.update(cx, change);
         }
     });
+}
+
+/// The core's code for why it didn't do an agent's call (bc_agent_failure), as the app decides on
+/// it.
+pub(crate) fn failure_of(code: std::ffi::c_int) -> Failure {
+    match code as bc::bc_agent_failure {
+        bc::bc_agent_failure_BC_AGENT_FAILURE_ACTION => Failure::Action,
+        bc::bc_agent_failure_BC_AGENT_FAILURE_RESTARTED => Failure::Restarted,
+        bc::bc_agent_failure_BC_AGENT_FAILURE_NOT_ITS_SPACE => Failure::NotItsSpace,
+        bc::bc_agent_failure_BC_AGENT_FAILURE_HELD => Failure::Held,
+        bc::bc_agent_failure_BC_AGENT_FAILURE_POINTING => Failure::Pointing,
+        bc::bc_agent_failure_BC_AGENT_FAILURE_SYSTEM_ENGINE => Failure::SystemEngine,
+        bc::bc_agent_failure_BC_AGENT_FAILURE_NOT_WEB_PAGE => Failure::NotWebPage,
+        bc::bc_agent_failure_BC_AGENT_FAILURE_LOADING => Failure::Loading,
+        bc::bc_agent_failure_BC_AGENT_FAILURE_PASSWORD_FIELD => Failure::PasswordField,
+        bc::bc_agent_failure_BC_AGENT_FAILURE_NO_OPTION => Failure::NoOption,
+        _ => Failure::Other,
+    }
 }

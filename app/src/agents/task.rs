@@ -244,6 +244,8 @@ pub struct Traced {
     pub ended: Option<Instant>,
     /// Why it failed, as its call's answer said.
     pub error: Option<SharedString>,
+    /// The kind of its failure, which its card says in a few words.
+    pub kind: Option<tools::Kind>,
     pub picture: Option<Arc<gpui::Image>>,
     /// How a close ended when its page had a say.
     pub close: Option<tools::Close>,
@@ -1254,6 +1256,7 @@ impl Agents {
                     started: now.checked_sub(took).unwrap_or(now),
                     ended: Some(now),
                     error: None,
+                    kind: None,
                     picture: None,
                     close: None,
                 });
@@ -1782,6 +1785,7 @@ impl Agents {
             started: at,
             ended,
             error: None,
+            kind: None,
             picture: None,
             close: None,
         });
@@ -1886,6 +1890,7 @@ impl Agents {
         call: u64,
         at: Instant,
         error: Option<String>,
+        kind: Option<tools::Kind>,
         image: Option<String>,
         cx: &mut Context<Self>,
     ) {
@@ -1927,6 +1932,7 @@ impl Agents {
         let Some(step) = step else { return };
         step.ended = Some(at);
         // An error's first paragraph: a wait's goes on with the page's outline.
+        step.kind = kind.filter(|_| error.is_some());
         step.error = error.map(|error| {
             page::clip(error.split("\n\n").next().unwrap_or_default().trim(), 300).into()
         });
@@ -3167,7 +3173,7 @@ fn trace_step(steps: &[(usize, &Traced)]) -> TraceStep {
         };
     }
     let description = match (&step.error, took) {
-        (Some(error), _) => tools::reason(error),
+        (Some(_), _) => tools::reason(step.kind),
         // A wait's title says its time.
         (None, Some(took)) if took >= Duration::from_secs(1) && step.did.tool != "wait" => {
             duration(took.as_secs())
