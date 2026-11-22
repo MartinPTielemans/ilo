@@ -404,7 +404,12 @@ class BrowserWindowStandIn : public BrowserWindow,
   views::UnhandledKeyboardEventHandler unhandled_keyboard_event_handler_;
   PageKeyWait page_keys_;
   // The presses waiting, as sent, for the bound to run.
-  std::vector<std::pair<PageKey, input::NativeWebKeyboardEvent>> page_key_presses_;
+  struct PageKeyPress {
+    PageKey key;
+    input::NativeWebKeyboardEvent event;
+    base::TimeTicks sent;
+  };
+  std::vector<PageKeyPress> page_key_presses_;
   std::vector<std::unique_ptr<PageKeyWatch>> page_key_watches_;
   // Runs only while a key waits; going with the window, it stops.
   base::OneShotTimer page_key_timer_;

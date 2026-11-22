@@ -758,7 +758,7 @@ bool BrowserWindowStandIn::HandleKeyboardEvent(const input::NativeWebKeyboardEve
   // The bound or a second press ran it already: this is the page's late answer (#3944).
   if (event.GetType() == blink::WebInputEvent::Type::kRawKeyDown &&
       !page_keys_.RunsUnkept(KeyOf(tab, event))) {
-    dialog_keys::KeyGate(event, "dropped: the page answered after the browser ran it");
+    // PageKeyAnswered said so as the answer came.
     return true;
   }
   const bool ran = RunPageLeftKey(event);
@@ -798,8 +798,9 @@ bool BrowserWindowStandIn::RunPageLeftKey(const input::NativeWebKeyboardEvent& e
 void BrowserWindowStandIn::SentToPage(content::WebContents* contents,
                                       const input::NativeWebKeyboardEvent& event) {
   const PageKey key = KeyOf(Tab::IdOf(contents), event);
-  page_keys_.Sent(key, base::TimeTicks::Now());
-  page_key_presses_.emplace_back(key, event);
+  const base::TimeTicks now = base::TimeTicks::Now();
+  page_keys_.Sent(key, now);
+  page_key_presses_.push_back({key, event, now});
   auto watch = std::find_if(page_key_watches_.begin(), page_key_watches_.end(),
                             [&](const auto& each) { return each->tab() == key.tab; });
   if (watch == page_key_watches_.end()) {
@@ -815,7 +816,12 @@ void BrowserWindowStandIn::PageKeyAnswered(const PageKey& key, bool kept) {
   if (!page_keys_.HasKeysOf(key.tab)) {
     return;
   }
-  page_keys_.Answered(key, kept);
+  if (!page_keys_.Answered(key, kept)) {
+    fprintf(stderr,
+            "browser: tab %llu page answered a key the browser ran, %s, %.1f ms after the press\n",
+            static_cast<unsigned long long>(key.tab), kept ? "kept" : "not kept",
+            (base::TimeTicks::Now() - key.time).InMillisecondsF());
+  }
   PageKeysChanged();
 }
 
@@ -828,11 +834,12 @@ void BrowserWindowStandIn::RunDuePageKeys() {
   base::WeakPtr<BrowserWindowStandIn> self = weak_factory_.GetWeakPtr();
   for (const PageKey& key : page_keys_.Due(base::TimeTicks::Now())) {
     auto press = std::find_if(page_key_presses_.begin(), page_key_presses_.end(),
-                              [&](const auto& each) { return each.first == key; });
+                              [&](const PageKeyPress& each) { return each.key == key; });
     if (press == page_key_presses_.end()) {
       continue;
     }
-    const input::NativeWebKeyboardEvent event = std::move(press->second);
+    const input::NativeWebKeyboardEvent event = std::move(press->event);
+    const base::TimeTicks sent = press->sent;
     page_key_presses_.erase(press);
     // Only in the tab it was pressed in, while it's shown: a key for a tab left behind isn't for
     // the one shown now.
@@ -841,9 +848,12 @@ void BrowserWindowStandIn::RunDuePageKeys() {
     if (!contents || Tab::IdOf(contents) != key.tab) {
       continue;
     }
-    fprintf(stderr, "browser: tab %llu page didn't answer a key in %lld ms\n",
-            static_cast<unsigned long long>(key.tab),
-            static_cast<long long>(kPageKeyBound.InMilliseconds()));
+    const base::TimeTicks now = base::TimeTicks::Now();
+    fprintf(stderr,
+            "browser: tab %llu page didn't answer a key, run %.1f ms after it had it, %.1f ms "
+            "after the press\n",
+            static_cast<unsigned long long>(key.tab), (now - sent).InMillisecondsF(),
+            (now - key.time).InMillisecondsF());
     const bool ran = RunPageLeftKey(event);
     // What it ran can close the window, and this with it.
     if (!self) {
@@ -857,7 +867,8 @@ void BrowserWindowStandIn::RunDuePageKeys() {
 }
 
 void BrowserWindowStandIn::PageKeysChanged() {
-  std::erase_if(page_key_presses_, [&](const auto& each) { return !page_keys_.Waits(each.first); });
+  std::erase_if(page_key_presses_,
+                [&](const PageKeyPress& each) { return !page_keys_.Waits(each.key); });
   // A watch can be the one telling, so it goes after the task running.
   auto done = std::stable_partition(
       page_key_watches_.begin(), page_key_watches_.end(),
