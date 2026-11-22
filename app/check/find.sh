@@ -504,8 +504,21 @@ expect '^browser: command bar hidden$' "escape didn't close the command bar"
 send layout
 width=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
   sed 's/^browser: layout content \([0-9]*\)x.*/\1/')
-send move $((width - 18 - 38)) 41
-send click $((width - 18 - 38)) 41
+if real_pointer; then
+  # The real pointer onto the toast's plate hovers it and off it, onto the page under it, lets it
+  # go: its window hears the window server's enter and exit, which no driver's move brings. Then a
+  # hand's click on Stop from there, with no move onto the plate first: the window server picks
+  # the window it goes to, and Stop takes it, not the page under it (#3611).
+  real move $((width - 18 - 38)) 41
+  expect '^browser: toast hovered true$' "the real pointer on the trace's toast didn't hover it"
+  real move $((width - 18 - 38)) 160
+  expect '^browser: toast hovered false$' \
+    "the real pointer leaving the trace's toast kept it hovered"
+  real click $((width - 18 - 38)) 41
+else
+  send move $((width - 18 - 38)) 41
+  send click $((width - 18 - 38)) 41
+fi
 expect '^browser: toast button stop$' "Stop wasn't pressed at $((width - 18 - 38)) 41"
 expect '^browser: trace stopped$' "Stop didn't stop the trace"
 await '^browser: trace recorded [1-9][0-9]* bytes$' || fail "the core didn't give the trace back"

@@ -584,6 +584,28 @@ post() {
   step=$((step + 1))
   echo "$*" >&3
 }
+# Whether a run may press with the real pointer: on the Mac, in a GitHub Actions job or the check
+# VM, where nobody's work is on the screen (check/pointer.mm).
+real_pointer() {
+  [ "$(uname)" = Darwin ] && { [ "${GITHUB_ACTIONS:-}" = true ] || [ "${ILO_CHECK_VM:-}" = 1 ]; }
+}
+# real <click|move> <x> <y>: the real pointer at (x, y), in points from window 1's top-left as the
+# driver's click takes them, posted as a mouse's events are, so the window server and not the
+# driver picks the window it goes to (#3611). A click has no move before it. Only where
+# real_pointer says.
+real() {
+  [ -x "$out/pointer" ] ||
+    clang++ -fobjc-arc -framework Cocoa -o "$out/pointer" check/pointer.mm 2> "$out/pointer.log" ||
+    fail "check/pointer.mm didn't build: $(cat "$out/pointer.log")"
+  send order
+  local frame
+  frame=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: frame window 1 ' |
+    cut -d' ' -f5-6)
+  [ -n "$frame" ] || fail "the driver's order named no frame for window 1"
+  "$out/pointer" "$1" $((${frame% *} + $2)) $((${frame#* } + $3)) "$pid" \
+    > "$out/pointer.txt" 2>&1 ||
+    fail "check/pointer.mm didn't $1 at $2 $3: $(cat "$out/pointer.txt")"
+}
 # click_placed <send|post> <part>: a click on the Site Controls' <part>, such as "shield",
 # "switch Developer Mode" or "line Location", where they last logged it. They log each part's place
 # whenever it changes while open, so a check needn't know the panel's geometry.

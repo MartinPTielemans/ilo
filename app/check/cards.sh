@@ -167,24 +167,29 @@ card_button() {
     if (i > n) exit 1
     printf "%d %d\n", f[1] + f[3] - 10 - (n - i) * 30 - 14, f[2] + f[4] - 10 - 14 }'
 }
-# Rests on the row at $1 $2 till tab $3's card is at rest with the button $4, then clicks it as a
-# hand would: onto the card, which lets the card's window take the mouse, then on it again.
+# Rests on the row at $1 $2 till tab $3's card is at rest with the button $4, then clicks it. With
+# the real pointer, a hand's click with no move onto the card first: the window server picks the
+# window it goes to, and the button takes it, not the window under the card (#3611). Else the
+# driver's: onto the card, then on it again.
 click_card_button() {
-  # Without it, the browser window keeps the row under the pointer's last place hovered (#3644).
-  ! grep -q '^browser: plate window .* finds no GPUIView' "$log" ||
-    fail "a plate window found no GPUI view to tell the pointer left"
   send move "$1" "$2"
   expect "^browser: hover card shown $3 \(.* \)\{0,1\}$4 " \
     "tab $3's card didn't show with its $4 button"
   expect '^browser: hover card settled$' "tab $3's card didn't come to rest before its $4 button"
   at=$(card_button "$4") || fail "tab $3's card has no $4 button"
   ../tools/window-screenshot.sh "$pid" "$out/card-$4-before.png" || fail "no window to capture"
-  send move $at
-  send move $at
-  send click $at
+  if real_pointer; then
+    real click $at
+  else
+    send move $at
+    send move $at
+    send click $at
+  fi
   expect "^browser: hover card $4 $3\$" "a click on the card's $4 button didn't reach it"
   expect "^browser: command $4 via hover card\$" "the card's $4 button didn't make its call"
   expect '^browser: hover card hidden$' "the card didn't go after its $4 button"
+  # Off the rows, where the driver's pointer goes next, so the real one hovers none.
+  ! real_pointer || real move $page_point
 }
 # Pin moves the row up into the pinned tabs, and its card then offers Unpin, which puts it back.
 click_card_button $(row 1) "$a" pin
