@@ -238,6 +238,10 @@ const SHORTCUTS: &[(&str, &[(&str, Keys)])] = &[
             ("Back to Pinned URL", Keys::Of(Command::BackToPinnedUrl)),
             ("Reveal Tab in Sidebar", Keys::Of(Command::RevealTab)),
             ("Focus Sidebar", Keys::Of(Command::FocusSidebar)),
+            (
+                "Focus Agent Question",
+                Keys::Of(Command::FocusAgentQuestion),
+            ),
             ("Clear Today", Keys::Of(Command::Clear)),
             ("Sort Today Tabs by Site", Keys::Of(Command::SortBySite)),
             (

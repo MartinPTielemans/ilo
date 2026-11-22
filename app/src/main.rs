@@ -265,8 +265,12 @@ fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static st
     if ![c"Shift", c"Control", c"Alt", c"Meta"].contains(&name) {
         update_app(hover_card::close);
     }
-    // The page has the keyboard, so the sidebar's ring of Focus Sidebar has gone stale.
-    update_tab_window(tab, |shell, cx| shell.leave_keys("page", cx));
+    // The page has the keyboard, so the sidebar's ring of Focus Sidebar has gone stale, as has
+    // the agent card's.
+    update_tab_window(tab, |shell, cx| {
+        shell.leave_keys("page", cx);
+        shell.leave_card_keys(cx);
+    });
     if let Some(kept) = link_card_key(tab, unsafe { &*key }) {
         return (kept, "link card");
     }
@@ -283,6 +287,14 @@ fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static st
     if update_tab_window(tab, |shell, cx| shell.run_agent_page_key(&keystroke, cx)).unwrap_or(false)
     {
         return (true, "agent bar");
+    }
+    // Focus Agent Question's key gives an agent's card the keyboard while one shows (#3869).
+    if update_tab_window(tab, |shell, cx| {
+        shell.run_agent_card_page_key(&keystroke, cx)
+    })
+    .unwrap_or(false)
+    {
+        return (true, "agent card");
     }
     // Escape ends Zap or Arrange on the page, which the page doesn't see (shell/boost.rs).
     if keystroke == "escape"

@@ -98,6 +98,16 @@ impl Shell {
         self.agent_question.as_ref().filter(|_| !self.page_asks())
     }
 
+    /// What a card's button does, pressed or by its key: one path, so the activity log and the
+    /// 30-day file record a key's answer as a click's.
+    pub(super) fn press_card(&mut self, does: Does, cx: &mut Context<Self>) {
+        match does {
+            Does::Answer(answer) => self.answer_agent(answer, cx),
+            Does::Show(tab) => self.select(tab, cx),
+            Does::HandBack(tab) => self.browser.hand_back(tab, cx),
+        }
+    }
+
     fn answer_agent(&mut self, answer: Answer, cx: &mut Context<Self>) {
         if let Some(question) = self.agent_question.take() {
             self.browser.answer_agent(question.id, answer, cx);
@@ -128,16 +138,20 @@ impl Shell {
         }
         self.agent_request_see_drawn.set(None);
         let listener = card_listener("agent question", &self.agent_question_drawn, question.id);
-        let buttons = buttons(question).into_iter().map(|button| {
-            let row = button.look == Look::Text;
-            card_button_as(&self.palette, button.id, button.label, button.look)
-                .when(row, |button| button.flex_basis(gpui::relative(1.)))
-                .on_click(cx.listener(move |shell, _, _, cx| match button.does {
-                    Does::Answer(answer) => shell.answer_agent(answer, cx),
-                    Does::Show(tab) => shell.select(tab, cx),
-                    Does::HandBack(tab) => shell.browser.hand_back(tab, cx),
-                }))
-        });
+        let a11y = self.a11y;
+        let buttons = buttons(question)
+            .into_iter()
+            .enumerate()
+            .map(|(at, button)| {
+                let row = button.look == Look::Text;
+                card_button_as(&self.palette, button.id, button.label, button.look)
+                    .when(row, |button| button.flex_basis(gpui::relative(1.)))
+                    .track_focus(&self.agent_card_buttons[at])
+                    .when(a11y, |control| {
+                        crate::settings_rows::named_button(control, button.label)
+                    })
+                    .on_click(cx.listener(move |shell, _, _, cx| shell.press_card(button.does, cx)))
+            });
         let title = match (question.handoff, question.back) {
             (Some(_), true) => format!("{} asks for a tab", question.agent),
             (Some(_), false) => format!("{} needs you", question.agent),
@@ -148,7 +162,7 @@ impl Shell {
                 .on_click(cx.listener(|shell, _, _, cx| shell.answer_agent(Answer::Dismiss, cx)))
         });
         Some(
-            self.plate("agent-question")
+            self.card_keys_on(self.plate("agent-question"), cx)
                 .child(listener)
                 .child(
                     div()
@@ -324,23 +338,24 @@ impl Shell {
                     .aria_expanded(showing)
             })
             .on_click(cx.listener(|shell, _, window, cx| shell.see_whole_request(window, cx)));
-        let buttons = buttons(question).into_iter().map(|button| {
-            card_button_as(&self.palette, button.id, button.label, button.look)
-                .when(a11y, |control| {
-                    crate::settings_rows::named_button(control, button.label)
-                })
-                .on_click(cx.listener(move |shell, _, _, cx| match button.does {
-                    Does::Answer(answer) => shell.answer_agent(answer, cx),
-                    _ => {}
-                }))
-        });
+        let buttons = buttons(question)
+            .into_iter()
+            .enumerate()
+            .map(|(at, button)| {
+                card_button_as(&self.palette, button.id, button.label, button.look)
+                    .track_focus(&self.agent_card_buttons[at])
+                    .when(a11y, |control| {
+                        crate::settings_rows::named_button(control, button.label)
+                    })
+                    .on_click(cx.listener(move |shell, _, _, cx| shell.press_card(button.does, cx)))
+            });
         let close = card_close(&self.palette, "agent-question-close")
             .when(a11y, |close| {
                 crate::settings_rows::named_button(close, "Close")
             })
             .on_click(cx.listener(|shell, _, _, cx| shell.answer_agent(Answer::Dismiss, cx)));
         let named = format!("{agent} asks to {}", question.what);
-        self.plate("agent-question")
+        self.card_keys_on(self.plate("agent-question"), cx)
             .child(listener)
             .when(a11y, |card| card.role(Role::AlertDialog).aria_label(named))
             .child(head)
@@ -431,7 +446,7 @@ pub(super) struct Button {
     pub(super) id: &'static str,
     pub(super) label: &'static str,
     pub(super) look: Look,
-    does: Does,
+    pub(super) does: Does,
 }
 
 /// The card's buttons, in order: the answer that leaves things as they are on the quiet plate, then

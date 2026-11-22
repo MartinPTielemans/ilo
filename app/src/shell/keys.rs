@@ -160,10 +160,11 @@ pub fn reserved(command: Command) -> bool {
 }
 
 /// Chrome's keys on Linux and Windows that the Mac's Chrome and Arc have no key for.
-const OFF_THE_MAC_ONLY: &[&str] = &["shift-escape"];
+/// Focus Agent Question's Alt+Shift+A, Chrome's there, is ⌥⇧⌘A on the Mac, as Chrome's is.
+const OFF_THE_MAC_ONLY: &[&str] = &["shift-escape", "ctrl-shift-a"];
 /// Arc's keys off the Mac would press as another of ours: ⌃⌘N's Blank Window is Ctrl+Alt+N there,
 /// which is ⌥⌘N's Little ilo Window (#669).
-const MAC_ONLY: &[&str] = &["ctrl-cmd-n"];
+const MAC_ONLY: &[&str] = &["ctrl-cmd-n", "alt-shift-cmd-a"];
 
 /// Whether SHORTCUTS' `key` is a key on the Mac, or off it if `off_the_mac`.
 fn applies(key: &str, off_the_mac: bool) -> bool {
@@ -581,7 +582,11 @@ impl UserKeys {
             .find_map(|(before, _)| given(before));
         renamed.or_else(|| given(keystroke)).or_else(|| {
             (SHORTCUTS.iter())
-                .find(|&&(key, command, _)| key == keystroke && !self.is_set(command))
+                // Not a key that's another platform's alone: ⌃⇧A, Alt+Shift+A's way of writing it,
+                // selects to a field's start on the Mac.
+                .find(|&&(key, command, _)| {
+                    key == keystroke && applies(key, OFF_THE_MAC) && !self.is_set(command)
+                })
                 .map(|&(_, command, _)| command)
         })
     }

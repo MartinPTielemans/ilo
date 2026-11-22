@@ -34,6 +34,7 @@ use crate::{
 
 mod access;
 mod agent_bar;
+mod agent_card_keys;
 mod agent_pointer;
 mod agent_question;
 #[cfg(test)]
@@ -1894,6 +1895,11 @@ pub struct Shell {
     /// The request card's "See the whole request", where Escape in the whole request puts the
     /// keyboard back (#3548).
     agent_request_see: FocusHandle,
+    /// The agent card's buttons, in its buttons' order, which Focus Agent Question gives the
+    /// keyboard (#3869).
+    agent_card_buttons: [FocusHandle; agent_card_keys::MOST_BUTTONS],
+    /// The keyboard on the agent card's buttons, while it is.
+    card_keys: Option<agent_card_keys::CardKeys>,
     /// Every Space's agent tasks' cards, newest first, as the Agents last said (Agent task).
     task_cards: Vec<crate::agents::task::Card>,
     /// The window's tasks' plates at the sidebar's foot, and ⌘T's slot among them.
@@ -2366,6 +2372,8 @@ impl Shell {
             agent_question_rows: RefCell::default(),
             agent_request_see_drawn: Rc::default(),
             agent_request_see: cx.focus_handle(),
+            agent_card_buttons: std::array::from_fn(|_| cx.focus_handle()),
+            card_keys: None,
             task_cards: Vec::new(),
             foot: task_cards::Foot::default(),
             closed_task: None,
@@ -4611,6 +4619,7 @@ impl Render for Shell {
             }
         }
         self.see_gone_keyboard(window, cx);
+        self.step_card_keys(window, cx);
         self.lone_header = cx
             .try_global::<LoneSpaceHeader>()
             .is_some_and(|kept| kept.0);

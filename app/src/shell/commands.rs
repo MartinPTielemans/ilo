@@ -79,6 +79,9 @@ pub enum Command {
     RevealTab,
     /// Gives the sidebar the keyboard, its arrows moving over the rows (sidebar_keys.rs).
     FocusSidebar,
+    /// Gives an agent's question card the keyboard, or with the keyboard on it, gives it back
+    /// (agent_card_keys.rs).
+    FocusAgentQuestion,
     /// Loads the selected pinned tab's pinned URL.
     BackToPinnedUrl,
     /// Loads the pinned URL of each pinned tab of the Space shown that's away from it, as Arc's
@@ -397,6 +400,11 @@ pub(super) const SHORTCUTS: &[(&str, Command, bool)] = &[
     // Chrome's key for moving the keyboard out of the page, unreserved as Chrome's is, as Arc's ⌘.
     // is Stop Loading here.
     ("f6", Command::FocusSidebar, false),
+    // Chrome's Focus Inactive Popup, which gives its permission bubbles the keyboard: ⌥⇧⌘A on the
+    // Mac and Alt+Shift+A elsewhere (#3869). Unreserved, and kept from the page only while a card
+    // shows (agent_card_keys.rs).
+    ("alt-shift-cmd-a", Command::FocusAgentQuestion, false),
+    ("ctrl-shift-a", Command::FocusAgentQuestion, false),
     ("shift-cmd-l", Command::ViewLibrary, false),
     ("shift-cmd-j", Command::ViewDownloads, false),
     ("cmd-y", Command::ViewHistory, false),
@@ -531,6 +539,11 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         "Focus Sidebar",
         Command::FocusSidebar,
         &["keyboard", "arrow keys"],
+    ),
+    (
+        "Focus Agent Question",
+        Command::FocusAgentQuestion,
+        &["keyboard", "answer", "allow"],
     ),
     ("New Folder…", Command::NewFolder, &[]),
     (
@@ -1281,6 +1294,7 @@ impl Command {
             Command::ExpandFolders => "expand-folders",
             Command::RevealTab => "reveal-tab",
             Command::FocusSidebar => "focus-sidebar",
+            Command::FocusAgentQuestion => "focus-agent-question",
             Command::BackToPinnedUrl => "back-to-pinned-url",
             Command::ResetSpaceTabs => "reset-space-tabs",
             Command::ToggleMute => "toggle-mute",
@@ -1509,6 +1523,7 @@ pub fn bind_keys(cx: &mut App) {
     translate::bind(cx);
     boost::bind(cx);
     sidebar_keys::bind(cx);
+    super::agent_card_keys::bind(cx);
     super::library::keys::bind(cx);
 }
 
@@ -1749,6 +1764,9 @@ impl Shell {
             Command::ExpandPinned => return self.set_pinned_open(true, cx),
             Command::RevealTab => return self.reveal_tab(cx),
             Command::FocusSidebar => return self.focus_sidebar(cx),
+            Command::FocusAgentQuestion => {
+                return self.focus_agent_question(from == "page", cx);
+            }
             // In an agent's Space ⌘↩ is the bar's Take Over or Hand Back.
             Command::BackToPinnedUrl if self.agent_bar().is_some() => {
                 return self.agent_bar_primary(cx);
@@ -2403,6 +2421,7 @@ impl Shell {
             Command::FocusSidebar => {
                 self.library.is_none() && !self.page_fullscreen && !self.sidebar_rows().is_empty()
             }
+            Command::FocusAgentQuestion => self.agent_question().is_some(),
             Command::ExpandFolders => self.shown_space().is_some_and(|space| {
                 space
                     .folders
