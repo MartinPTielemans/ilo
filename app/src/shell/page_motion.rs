@@ -9,11 +9,11 @@ use super::Shell;
 impl Shell {
     /// Whether something moves the page's size a step at a time: the sidebar hiding, showing or
     /// settling on a width, its edge or a split view's gap or the side panel's edge dragged. The
-    /// Library pushes the card without resizing the page, and the reveal goes over it.
+    /// Library pushes the card without resizing the page, and the reveal goes over it, its width
+    /// too.
     fn page_moving(&self) -> bool {
         self.sidebar_motion.is_some()
-            || self.width_motion.is_some()
-            || self.resize.is_some()
+            || (!self.sidebar_hidden && (self.width_motion.is_some() || self.resize.is_some()))
             || self.pane_resize.is_some()
             || self.side_panel_resize.is_some()
     }
