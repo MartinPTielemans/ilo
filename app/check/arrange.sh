@@ -554,6 +554,10 @@ send release $(slot 3)
 send key escape
 expect "^browser: arrange $tab off\$" "escape didn't end the mode"
 expect "browser: tab $tab arrange off\$" "the core didn't end the mode"
+# The press where Wide is drawn picked it, so the page's title has it floated until the page writes
+# the title again for the mode's end, which can come after the core's line (#3909).
+expect "^browser: title $tab col [^ ]* side .* float - at " \
+  "with the mode ended, the page's title still had a thing floated"
 kept_column=$(said | sed 's/^col \([^ ]*\) .*/\1/')
 
 # Reloaded, the page places the arrangement as it loads. The run measures, and says, whether the
