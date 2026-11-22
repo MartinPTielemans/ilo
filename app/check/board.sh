@@ -865,10 +865,12 @@ send key w cmd
 expect "^browser: tab $first closed\$" "⌘W didn't close the Board's first tab"
 expect "^browser: loaded $second chrome://board/$twice\$" \
   "the Board's second tab didn't load it again once the first closed"
-# Closing a tab shows the one under it, as Arc does, so the second is shown by its key.
+# Closing the first shows a tab it opened, the second, or the one under it (#3813); the second is
+# shown by its key if it isn't already.
+expect "^browser: selected [0-9][0-9]*\( in .*\)\{0,1\}\$" "closing the Board's first tab showed no tab"
 n=$(echo $(pinned) $(today) | tr ' ' '\n' | grep -nx "$second" | cut -d: -f1)
 [ -n "$n" ] || fail "the Board's second tab $second isn't in the sidebar: pinned \"$(pinned)\", Today \"$(today)\""
-switch "$n cmd" "$second"
+[ "$(grep '^browser: selected ' "$log" | tail -1 | cut -d' ' -f3)" = "$second" ] || switch "$n cmd" "$second"
 saves=$(grep -c 'browser: board saved$' "$log" || true)
 send scroll 640 400 40 5
 saved_after "$saves" "a pan in the Board's second tab, once the first had closed, wasn't saved"

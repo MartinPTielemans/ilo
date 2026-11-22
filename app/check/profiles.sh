@@ -457,6 +457,9 @@ expect '^browser: favorites $' "Remove from Favorites left the tile"
 send key z cmd
 expect '^browser: command undo via \(ui\|page\)$' "⌘Z didn't undo Remove from Favorites"
 expect "^browser: favorites $a\$" "⌘Z didn't put the favorite back"
+# Today's rows slide down under the tile put back, and a press before they stop lands on the
+# Space's name.
+expect '^browser: rows settled$' "the rows didn't settle after ⌘Z put the favorite back"
 # Back to Favorite URL takes each twin to the URL the favorite had, in its own profile.
 post rightclick $tile
 expect "^browser: menu shown $(cased 'Back to Favorite URL, ')" "⌘Z put the favorite back without its URL"
