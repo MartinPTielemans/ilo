@@ -508,7 +508,7 @@ pub struct Settings {
     /// The sites with ad blocking off, as Privacy last logged them for check.sh.
     off_sites_logged: Option<String>,
     /// Where each control check.sh clicks has been logged, so it logs only where it moves to.
-    drawn_logged: Rc<RefCell<Vec<String>>>,
+    drawn_logged: browser::settings_rows::Drawn,
     /// Where each pop-up button's text starts, as last drawn, for its menu to put the chosen
     /// item's over.
     popup_texts: Rc<RefCell<Vec<(Popup, gpui::Point<gpui::Pixels>)>>>,
@@ -5997,6 +5997,7 @@ fn save_shortcuts(cx: &App) {
 
 impl Render for Settings {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.drawn_logged.borrow_mut().frame();
         self.a11y = window.is_a11y_active();
         // The app's window, not a Space's, so ilo green rather than a Space's accent (#319).
         let accent = rgb(NO_THEME_ACCENT);
