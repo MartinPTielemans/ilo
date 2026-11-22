@@ -322,9 +322,9 @@ await_load() {
 stage() {
   grep '^browser: quit: ' "$log" | tail -1 | cut -c16- | grep . || echo "none"
 }
-# Every thread's stack of the hung app <pid> on Linux, as text (#3876). gdb attaches for a moment and
-# prints each frame's function and library, with no argument's value, and writes no core. On CI it
-# installs gdb first and attaches through sudo, as Ubuntu lets a process trace only its children.
+# Every thread's stack of the hung app <pid> on Linux, as text (#3876). gdb attaches for a moment
+# and prints each frame's function and library, with no argument's value, and writes no core. On CI
+# it installs gdb first and attaches through sudo, as Ubuntu lets a process trace only its children.
 hang_stacks() {
   local as=
   [ -z "${GITHUB_ACTIONS:-}" ] || as="sudo -n"
@@ -334,13 +334,15 @@ hang_stacks() {
       > /dev/null 2>&1 || true
   echo "The app's threads, with each one's state:"
   for thread in /proc/"$1"/task/*; do
-    echo "${thread##*/} $(cat "$thread/comm" 2>/dev/null) $(sed 's/.*) //' "$thread/stat" 2>/dev/null |
-      cut -d' ' -f1)"
+    # The state follows the name in stat, which may hold spaces and ends at its last ")".
+    echo "${thread##*/} $(cat "$thread/comm" 2>/dev/null)" \
+      "$(sed 's/.*) //' "$thread/stat" 2>/dev/null | cut -d' ' -f1)"
   done
   command -v gdb > /dev/null || { echo "No gdb to read their stacks with."; return 0; }
-  timeout 120 $as gdb -batch -nx -p "$1" -ex 'set print frame-arguments none' \
-    -ex 'set print entry-values no' -ex 'thread apply all bt' 2>&1 |
-    grep -v -e 'during file-backed mapping note processing' -e '^\[New LWP'
+  timeout 120 $as gdb -batch -nx -iex 'set print frame-arguments none' \
+    -iex 'set print entry-values no' -p "$1" -ex 'thread apply all bt' 2>&1 |
+    grep -v -e 'during file-backed mapping note processing' -e '^\[New LWP' \
+      -e ': No such file or directory$'
 }
 # Waits up to $1 seconds (10) for the app to exit and checks that no Chromium process outlives it.
 # On the Mac, sample records the app's last 2 s before the limit in hang.txt, with what it said in
