@@ -516,10 +516,10 @@ in_library "Search History" "⇧Tab twice"
 judging=
 press escape
 # An agent's card (#3869): arriving, it's an alert dialog named by its title, ending in a full stop
-# so the line after it is heard apart, and described by the key that reaches it, in words. Focus
-# Agent Question's key gives the card the keyboard on its first answer, and Escape answers it as
-# its Deny does. What NVDA says on the arrival is noted, as a dialog nobody moved to may go
-# unsaid; what it says on the landing is judged.
+# so the line after it is heard apart, and described by the key that reaches it, in words, which
+# its live region says as it comes, as NVDA reads no dialog nobody moved to. Focus Agent
+# Question's key gives the card the keyboard on its first answer, and Escape answers it as its
+# Deny does.
 await '^browser: agents server on \\\\\.\\pipe\\.*-agents-[0-9a-f]*$' ||
   fail "the saved switch didn't start the agents' server"
 socket=$(grep '^browser: agents server on' "$log" | tail -1 | sed 's/^browser: agents server on //')
@@ -550,9 +550,11 @@ printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\
 expect '^browser: agent mcp-client asks ' "the agent's change didn't ask"
 q=$(grep '^browser: agent mcp-client asks ' "$log" | tail -1 | cut -d' ' -f5 | tr -d :)
 expect "^browser: agent question $q at " "the agent's change drew no card"
+says "$at" "asks to make a change on localhost\..*Press Alt Shift A to answer\." \
+  "NVDA didn't say the agent's card, its title then the key's line, as it arrived"
 spoken "the agent's card arriving"
 arrival=$(tail -n "+$((at + 1))" "$nvda_log" | grep '^Speaking ' | tr '\n' ' ')
-echo "note: NVDA on the agent's card arriving: ${arrival:-nothing}"
+echo "note: NVDA on the agent's card arriving: $arrival"
 at=$(wc -l < "$nvda_log")
 press a ctrl shift
 expect "^browser: agent card keys on $q Allow\$" "Focus Agent Question's key didn't give the agent's card the keyboard on Allow"

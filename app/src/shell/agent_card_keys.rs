@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use web_time::Instant;
 
+use gpui::accesskit::{Live, Role};
 use gpui::{
     App, Context, Div, FocusHandle, FontWeight, Hsla, KeyBinding, Rgba, Stateful, Task, Window,
     actions, canvas, div, prelude::*, px, svg,
@@ -255,6 +256,25 @@ impl Shell {
 
     /// What a card says to an assistive app as it arrives, after its title: the key that moves the
     /// keyboard to it, as it's bound now. None if it's bound to none.
+    /// What a screen reader says as a card arrives, wherever its cursor is: the card's name and
+    /// the key's line. A dialog nobody moved to isn't read, by NVDA at least, so the card says it
+    /// as the command bar and toasts do, through a live region, drawing nothing: the Mac's
+    /// AccessKit announces a region's value, and Windows' and Linux's its name (#3236).
+    pub(super) fn card_announcer(heard: &str, described: Option<&str>) -> impl IntoElement {
+        let said = match described {
+            Some(line) => format!("{heard} {line}"),
+            None => heard.to_owned(),
+        };
+        div()
+            .id("agent-question-said")
+            .absolute()
+            .size_0()
+            .role(Role::Status)
+            .aria_label(said.clone())
+            .aria_value(said)
+            .a11y_synthetic_children(|builder| builder.parent_node().set_live(Live::Polite))
+    }
+
     pub(super) fn agent_card_described(&self, cx: &App) -> Option<String> {
         let keys = user_keys(cx).shown_keys(Command::FocusAgentQuestion);
         let key = keys.first()?.first()?;
@@ -1101,19 +1121,31 @@ mod tests {
     /// no key drops it.
     #[gpui::test]
     fn the_card_says_the_key_bound_now(cx: &mut TestAppContext) {
-        use gpui::accesskit::Role;
+        use gpui::accesskit::{Live, Role};
         let (_, shell, cx) = window_with(cx);
         cx.simulate_a11y_activation();
         ask(&shell, cx, question(7));
+        // The alert's name and description, and that its live region says both as it arrives.
         let heard = |cx: &mut VisualTestContext| {
             let tree = cx.a11y_tree().expect("GPUI built a tree");
-            let (_, alert) = (tree.nodes.into_iter())
+            let (_, alert) = (tree.nodes.iter())
                 .find(|(_, node)| node.role() == Role::AlertDialog)
                 .expect("the card isn't an alert");
-            (
+            let (label, described) = (
                 alert.label().unwrap_or("").to_string(),
                 alert.description().map(str::to_string),
-            )
+            );
+            let said = match &described {
+                Some(line) => format!("{label} {line}"),
+                None => label.clone(),
+            };
+            assert!(
+                (tree.nodes.iter()).any(|(_, node)| node.role() == Role::Status
+                    && node.live() == Some(Live::Polite)
+                    && node.label() == Some(said.as_str())),
+                "no live region says {said:?} as the card arrives"
+            );
+            (label, described)
         };
         let title = "Claude Code wants to click “Send” on mail.example.".to_string();
         let line = |words: &str| Some(format!("Press {words} to answer."));

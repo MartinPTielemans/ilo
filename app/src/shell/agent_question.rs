@@ -160,7 +160,8 @@ impl Shell {
             self.card_keys_on(self.plate("agent-question"), cx)
                 .child(listener)
                 .when(a11y, |card| {
-                    card.role(Role::AlertDialog)
+                    card.child(Self::card_announcer(&heard, described.as_deref()))
+                        .role(Role::AlertDialog)
                         .aria_label(heard)
                         .when_some(described, |card, line| card.aria_description(line))
                 })
@@ -352,7 +353,8 @@ impl Shell {
         self.card_keys_on(self.plate("agent-question"), cx)
             .child(listener)
             .when(a11y, |card| {
-                card.role(Role::AlertDialog)
+                card.child(Self::card_announcer(&named, described.as_deref()))
+                    .role(Role::AlertDialog)
                     .aria_label(named)
                     .when_some(described, |card, line| card.aria_description(line))
             })
