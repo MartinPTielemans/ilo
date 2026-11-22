@@ -52,8 +52,10 @@ eye() {
 # The username field, across the top of the page, and the password field under it.
 send click 600 60
 if [ "$active" != 1 ]; then
-  exec 3>&- 5>&-
+  # Quits before cdp.py's pipe closes: the browser ends by itself as the pipe goes, and a quit
+  # asked then finds it ending, which the Mac answers with an error (#3870).
   quit
+  exec 5>&-
   echo "skip: passwords. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi
@@ -715,7 +717,7 @@ send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar"
 sed -n "/^browser: drive $off: /,\$p" "$log" | grep -q "^browser: offer $tab " &&
   fail "an address or card brought an offer with Save and fill switched off"
-exec 3>&- 5>&-
 quit
+exec 5>&-
 rm -rf "$scratch"
 echo "ok: a submitted login offers to save its password in a card 18 from the page's top right, through a resize; another tab closes it, and the key after the host brings it back; Japanese input composes in its username field and return commits it without saving; return saves the username as left, and the login page fills the saved password in, with a key that opens the Site Controls, which the login page has in a new tab from ⌘T from its first page too, and Chrome's dropdown fills it in again; the eye shows in the password field once one is typed, never for the one filled in, and goes with the field's focus; a changed password offers to update it, which escape declines; and Never answers on another site, whose Site Controls take it off Never; the first site's Site Controls name its login, All Passwords… lists it in Settings, where Remove asks and Cancel keeps it and Manage Passwords… opens Chrome's password manager page listing it, and the row's Remove asks in the dialog and removes it, which Settings hears; a sign-up form offers Chrome's strong password, which Choose Your Own leaves to the user and Use Strong Password fills in and saves, with no offer; and Settings' Offer to save passwords switched off keeps the next login from bringing an offer, and Save and fill addresses switches off and on; a form's address offers to save it in the card, return saves it and Chrome's dropdown then offers it, and a card's offer declines with escape; on the Mac, Edit › AutoFill has ilo's items alone, after Find, whose Contact… and Passwords… open Chrome's dropdown at the focused field, and Credit Card… with none focused opens Settings › Passwords; Settings lists the address, and then a card return saved, and Remove asks first and removes each; and Save and fill addresses and payment methods switched off keep a new address and the card from bringing an offer. Windows: $out/password-offer.png, $out/password-key.png, $out/password-fill.png, $out/password-reveal.png, $out/password-offer-ime.png, $out/password-update.png, $out/site-controls-never.png, $out/site-controls-passwords.png, $out/settings-passwords.png, $out/password-manager.png, $out/password-remove.png, $out/password-generation.png, $out/settings-passwords-off.png, $out/address-offer.png, $out/address-fill.png, $out/card-offer.png, $out/settings-address.png, $out/settings-autofill.png, $out/settings-autofill-off.png, $out/autofill-menu.png (Mac)"

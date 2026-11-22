@@ -1633,8 +1633,10 @@ EOF
     "Safari's engine's request after Delete for all time carried a cookie" "^GET safari 127.0.0.1:$port/session "
 fi
 send key w cmd
-exec 3>&- 5>&-
+# Quits before cdp.py's pipe closes: the browser ends by itself as the pipe goes, and a quit
+# asked then finds it ending, which the Mac answers with an error (#3870).
 quit
+exec 5>&-
 rm -rf "$scratch"
 # A page that asks for Widevine on the user's own click moves to Safari's engine by itself, its
 # note saying so (#3593), where the pages above ask as they load, which only brings the note. At
