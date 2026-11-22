@@ -77,8 +77,9 @@ send battery 18 unplugged
 send battery 18 plugged
 # Its toast shows with the window minimized, there for the 17% that brings it back: nothing of the
 # app's is then on screen for other apps' clicks to land on, the window over the toast's plate that
-# takes its clicks included, and with the window back that window is over the plate again (#3644).
-# The Mac's, where other apps' view of the screen is read.
+# takes its clicks included (#3644). With the window back, the toast's time runs out, as the real
+# pointer is on the page, and that window goes with it. The Mac's, where other apps' view of the
+# screen is read.
 seen_until() {
   for _ in $(seq 100); do
     [ "$(windows_seen | grep -c .)" "$1" 0 ] && return 0
@@ -88,6 +89,7 @@ seen_until() {
   return 1
 }
 if real_pointer; then
+  real move $page_point
   send minimize
   seen_until -eq || fail "the window minimized left on screen: $(windows_seen | tr '\n' ';')"
 fi
@@ -101,19 +103,17 @@ if real_pointer; then
     "the toast didn't say Battery Saver is on, with Turn Off, with the window minimized"
   seen=$(windows_seen)
   [ -z "$seen" ] || fail "with the window minimized, its toast put windows on screen: $seen"
+  expect '^browser: plate window toast at ' \
+    "the toast shown with the window minimized put no window over its plate" "$seventeen"
+  plate=$(sed -n "/^browser: drive $seventeen: /,\$p" "$log" |
+    grep -m1 '^browser: plate window toast at ' | cut -d' ' -f7 | tr -d , | tr x ' ')
   send minimize
   seen_until -gt || fail "the minimized window didn't come back"
-  expect '^browser: toast plate [0-9]* [0-9]* [0-9]* [0-9]* in [0-9]* [0-9]*$' \
-    "the toast didn't tell where its plate is" "$seventeen"
-  set -- $(grep '^browser: toast plate' "$log" | tail -1 | sed 's/^browser: toast plate //; s/ in / /')
-  send layout
-  width=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
-    sed 's/^browser: layout content \([0-9]*\)x[0-9]*,.*/\1/')
-  real move $((width - $5 + $1 + $3 / 2)) $(($2 + $4 / 2))
-  expect '^browser: toast hovered true$' \
-    "with its window back from minimized, the real pointer on the toast's plate didn't hover it"
-  real move $page_point
-  expect '^browser: toast hovered false$' "the real pointer off the toast's plate kept it hovered"
+  expect '^browser: toast hidden$' "with its window back, the toast stayed past its time" \
+    "$seventeen"
+  seen=$(windows_seen)
+  echo "$seen" | grep -q " $plate\$" &&
+    fail "with the toast gone, the window over its plate, $plate, stayed on screen: $seen"
 fi
 
 # Settings' Battery Saver switch: off, it goes at once and stays off lower still; on again, it's
