@@ -1,4 +1,4 @@
-import { PLATFORMS } from "./downloads";
+import { PLATFORMS, STAGE } from "./downloads";
 
 // The questions people ask about ilo, answered in a sentence or two that stands on its own, so a
 // search engine or an AI answer can quote it whole. Help shows them, and gives them to search
@@ -26,7 +26,7 @@ export const FAQ: { question: string; answer: string }[] = [
   },
   {
     question: "Which computers does ilo run on?",
-    answer: `${PLATFORMS.map((platform) => `${platform.name}: ${platform.needs.charAt(0).toLowerCase()}${platform.needs.slice(1)}`).join(". ")}. ilo is in beta on all three.`,
+    answer: `${PLATFORMS.map((platform) => `${platform.name}: ${platform.needs.charAt(0).toLowerCase()}${platform.needs.slice(1)}`).join(". ")}. ilo is ${STAGE} on all three.`,
   },
   {
     question: "Does ilo work with Chrome extensions?",

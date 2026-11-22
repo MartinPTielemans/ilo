@@ -81,10 +81,24 @@ const GLANCE = [
     to: "ilo's sync server, or your own",
   },
 ];
+/** The page's sections, by id, as the index beside them names each. */
+const INDEX: [string, string][] = [
+  ["at-a-glance", "At a glance"],
+  ["pages", "The pages you open"],
+  ["services", "Every service"],
+  ["network", "Names and proxies"],
+  ["never", "Never sent"],
+  ["builds", "Other builds"],
+  ["site", "This site"],
+  ["checked", "How it's checked"],
+  ["questions", "Questions and changes"],
+];
+
 function Privacy() {
   return (
     <TextPage
       title="Privacy"
+      index={INDEX}
       lead={
         <>
           ilo needs no account, has no ads, and sells nothing about you. If you turn it on, it sends
@@ -138,7 +152,7 @@ function Privacy() {
         </p>
       </section>
 
-      <section>
+      <section id="services">
         <h2>Every service ilo talks to</h2>
         <dl className="services">
           <dt id="chrome-web-store">The Chrome Web Store, from Google</dt>
@@ -347,7 +361,7 @@ function Privacy() {
         </p>
       </section>
 
-      <section>
+      <section id="never">
         <h2>What ilo never sends</h2>
         <p>
           Nothing about what you do in ilo, and nothing for advertisers: the daily count above says
@@ -356,7 +370,7 @@ function Privacy() {
         </p>
       </section>
 
-      <section>
+      <section id="builds">
         <h2>Someone else's build of ilo</h2>
         <p>
           ilo is open source, so anyone can build their own. Official builds differ from such a fork
@@ -366,7 +380,7 @@ function Privacy() {
         </p>
       </section>
 
-      <section>
+      <section id="site">
         <h2>This site</h2>
         <p>
           ilobrowser.com sets no cookies and runs no analytics or third-party scripts. Cloudflare
@@ -384,7 +398,7 @@ function Privacy() {
         </p>
       </section>
 
-      <section>
+      <section id="questions">
         <h2>Questions and changes</h2>
         <p>
           Ask on <a href={`${SOURCE}/issues`}>GitHub</a>. Every change to this page is in{" "}

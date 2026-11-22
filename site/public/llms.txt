@@ -18,6 +18,7 @@ The name is written lowercase, "ilo", and is Esperanto for "a tool".
 - [Changelog](https://ilobrowser.com/changelog): what changed in each version, with clips of the new features
 - [Changelog feed](https://ilobrowser.com/changelog.xml): the changelog as an Atom feed
 - [Privacy](https://ilobrowser.com/privacy): every service ilo talks to, and what it sends
+- [What ilo means](https://ilobrowser.com/ilo): the word, and where the name comes from
 
 ## Source
 
