@@ -37,6 +37,7 @@
 #include "browser_core/auto_archive.h"
 #include "browser_core/favorites.h"
 #include "browser_core/host.h"
+#include "browser_core/pinned_url.h"
 #include "browser_core/profiles.h"
 #include "browser_core/sidebar_backups.h"
 #include "browser_core/space.h"
@@ -1500,9 +1501,19 @@ Space* RestoreSpace(Window& window,
       space->AddPinned(tab, in(saved_tab.folder), space->pinned_rows().size(), pinned_url);
       // A pinned tab comes back at the page it was left on; with the setting on, one away from
       // its pinned URL comes back home instead, without loading it, as ⌘↩ leaves a tab unloaded.
+      // The home entry behind the one it was left on gives the page it comes back to its title;
+      // without one in its history, its row names the URL, as Chrome titles a page without one.
       if (UserSettings().restore_pinned_urls) {
         if (Tab* tab_back = Tab::Get(tab); tab_back && !tab_back->At(pinned_url)) {
-          tab_back->Repoint(pinned_url, std::u16string());
+          std::u16string title;
+          for (int i = saved_tab.current; i >= 0; --i) {
+            const sessions::SerializedNavigationEntry& entry = saved_tab.history[i];
+            if (AtPinnedUrl(pinned_url, entry.virtual_url(), entry.original_request_url())) {
+              title = entry.title();
+              break;
+            }
+          }
+          tab_back->Repoint(pinned_url, title);
         }
       }
     }
