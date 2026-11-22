@@ -21,12 +21,14 @@ requestAnimationFrame(() => setTimeout(() => document.title = "ready"));
 let wakes = 0, busies = 0;
 onkeydown = e => {
   if (e.key == "b") {
-    document.title = "busy " + ++busies;
+    // After the key is answered, and titled first, so a key sent once the title shows finds the
+    // page already busy.
     setTimeout(() => {
+      document.title = "busy " + ++busies;
       const end = Date.now() + 20000;
       while (Date.now() < end) {}
       document.title = "idle " + busies;
-    }, 100);
+    });
     return;
   }
   if (e.key != "w") {
