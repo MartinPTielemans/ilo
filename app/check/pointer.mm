@@ -70,8 +70,12 @@ NSString* Refusal(pid_t pid, CGPoint at) {
         [window[(__bridge NSString*)kCGWindowAlpha] doubleValue] == 0) {
       continue;
     }
-    // The Dock's window as big as a screen, over every app's, lets their clicks through.
-    if ([window[(__bridge NSString*)kCGWindowOwnerName] isEqualToString:@"Dock"] &&
+    // The Dock's window as big as a screen, over every app's, lets their clicks through, and so
+    // does Notification Center's, which macOS 26 keeps over a display in the check VM. A smaller
+    // window of Notification Center's is a banner, which still refuses. A banner drawn inside the
+    // screen-wide window can't be told from this list, as it has no window of its own.
+    NSString* name = window[(__bridge NSString*)kCGWindowOwnerName];
+    if (([name isEqualToString:@"Dock"] || [name isEqualToString:@"Notification Center"]) &&
         AsBigAsAScreen(bounds)) {
       continue;
     }
