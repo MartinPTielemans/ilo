@@ -626,6 +626,15 @@ source_set("agent_download_hold") {
   ]
 }
 
+# The tab a Space shows once a tab the user closed there has gone after the window left it, apart so
+# browser_core_unittests tests the rule alone (#3890).
+source_set("closing_way_back") {
+  sources = [
+    "closing_way_back.cc",
+    "closing_way_back.h",
+  ]
+}
+
 # The frame a window the window manager maximized un-maximizes to, apart so browser_core_unittests
 # tests the rule alone.
 source_set("window_frames") {
@@ -955,6 +964,7 @@ source_set("browser_core") {
     ":typed_http",
     ":typing_keys",
     ":window_frames",
+    ":closing_way_back",
     ":withheld_fields",
     "//base",
     "//base:i18n",
@@ -1366,6 +1376,7 @@ test("browser_core_unittests") {
     ":typed_http",
     ":typing_keys",
     ":window_frames",
+    ":closing_way_back",
     ":withheld_fields",
     "//base",
     "//base/test:run_all_unittests",

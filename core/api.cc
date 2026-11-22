@@ -1478,6 +1478,7 @@ bool bc_tab_set_split_stacked(bc_id id, bool stacked) {
 static void ForgetOpenersLeaving(const browser_core::Window& window, bc_id space) {
   browser_core::Space* left = browser_core::Space::FromId(window.space());
   if (left && left->id() != space) {
+    window.KeepWayBack(*left);
     left->ForgetOpeners();
   }
 }

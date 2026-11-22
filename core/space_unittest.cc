@@ -8,6 +8,7 @@
 #include "base/no_destructor.h"
 #include "base/test/task_environment.h"
 #include "browser_core/auto_archive.h"
+#include "browser_core/closing_way_back.h"
 #include "browser_core/favorites.h"
 #include "browser_core/host.h"
 #include "browser_core/session.h"
@@ -378,6 +379,49 @@ TEST_F(SpaceTest, ATabOpenedOverAnotherForgetsItOnceTheUserGoesElsewhere) {
   EXPECT_EQ(work_->today(), (Rows{24, 23, 22, 21, 20}));
   EXPECT_EQ(NextInWork(24), 20);
   EXPECT_EQ(NextInWork(23), 22);
+}
+
+// A tab the user closes over a favorite, the Space's only other tab, as the command bar's search
+// opens it, gives way to the favorite whether its page lets it go before the window leaves the
+// Space or after, as Window::CloseTab, the switch and Window::OnTabClosing call the rule (#3890).
+TEST_F(SpaceTest, AClosedTabGivesWayToTheTabUnderItWhicheverLandsFirst) {
+  ShownFavorites() = {30};
+  ClosingWayBack way_back;
+  // The close lands first: the Space still knows where the tab came from.
+  work_->AddOpenedOver(24, 30);
+  way_back.Closing(24);
+  EXPECT_EQ(way_back.Closed(24, NextInWork(24)), 30);
+  work_->Remove(24);
+  // The switch lands first and forgets that, so the way back is kept as the window leaves.
+  work_->AddOpenedOver(25, 30);
+  way_back.Closing(25);
+  way_back.Left(25, NextInWork(25));
+  work_->ForgetOpeners();
+  EXPECT_EQ(NextInWork(25), 0);
+  EXPECT_EQ(way_back.Closed(25, NextInWork(25)), 30);
+  work_->Remove(25);
+}
+
+// Stay on the tab's beforeunload keeps it, a tab like any other, so a close after, an agent's
+// too, goes where the Space has it then. A second leaving keeps the first's way back.
+TEST_F(SpaceTest, AClosedTabKeptByItsPageForgetsTheWayBack) {
+  ShownFavorites() = {30};
+  ClosingWayBack way_back;
+  work_->AddOpenedOver(24, 30);
+  way_back.Closing(24);
+  way_back.Left(24, NextInWork(24));
+  work_->ForgetOpeners();
+  way_back.Stayed(24);
+  EXPECT_EQ(way_back.Closed(24, NextInWork(24)), 0);
+  work_->AddOpenedOver(25, 30);
+  way_back.Closing(25);
+  way_back.Left(25, NextInWork(25));
+  work_->ForgetOpeners();
+  way_back.Left(25, NextInWork(25));
+  EXPECT_EQ(way_back.Closed(25, 0), 30);
+  // One the user didn't close keeps the Space's pick.
+  way_back.Left(26, 30);
+  EXPECT_EQ(way_back.Closed(26, 21), 21);
 }
 
 }  // namespace
