@@ -8625,6 +8625,26 @@ mod sessions {
         }
     }
 
+    /// The disconnect noted after a session ended stays out of its record, though the Mac's clock,
+    /// in microseconds, can give the two the very same time (#3967).
+    #[gpui::test]
+    fn the_disconnect_after_a_sessions_end_stays_out_of_its_record(cx: &mut TestAppContext) {
+        let (agents, _) = at_work(cx);
+        answered(&agents, 2, cx);
+        bye(&agents, cx);
+        agents.update(cx, |agents, _| {
+            let ended = (agents.tasks.tasks.iter()).find_map(|task| task.ended);
+            let gone = (agents.log.iter_mut()).find(|entry| entry.action == "disconnected");
+            gone.expect("the disconnect, noted").at = ended.expect("the session, ended");
+        });
+        let kept = agents.update(cx, |agents, cx| agents.take_ended(cx));
+        let [(_, past)] = kept.as_slice() else {
+            panic!("one record: {kept:?}");
+        };
+        let actions: Vec<&str> = past.steps.iter().map(|step| step.action.as_str()).collect();
+        assert_eq!(actions, ["read_page"], "{:?}", past.steps);
+    }
+
     /// A question, a handoff and a refusal each show on the card of the connection that asked or
     /// was refused, and never on the other's.
     #[gpui::test]
