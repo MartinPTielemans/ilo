@@ -1898,6 +1898,8 @@ pub struct Shell {
     /// The agent card's buttons, in its buttons' order, which Focus Agent Question gives the
     /// keyboard (#3869).
     agent_card_buttons: [FocusHandle; agent_card_keys::MOST_BUTTONS],
+    /// The room the agent card's key chips have, as last drawn.
+    agent_card_room: Rc<Cell<agent_card_keys::CardRoom>>,
     /// The keyboard on the agent card's buttons, while it is.
     card_keys: Option<agent_card_keys::CardKeys>,
     /// Every Space's agent tasks' cards, newest first, as the Agents last said (Agent task).
@@ -2373,6 +2375,7 @@ impl Shell {
             agent_request_see_drawn: Rc::default(),
             agent_request_see: cx.focus_handle(),
             agent_card_buttons: std::array::from_fn(|_| cx.focus_handle()),
+            agent_card_room: Rc::default(),
             card_keys: None,
             task_cards: Vec::new(),
             foot: task_cards::Foot::default(),

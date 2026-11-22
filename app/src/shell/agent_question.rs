@@ -13,11 +13,10 @@ use std::rc::Rc;
 
 use gpui::{Context, FontWeight, Window, accesskit::Role, div, prelude::*, px};
 
+use super::agent_card_keys::{escape_mark, heard_title};
 use super::{
     Shell, TITLE,
-    permission::{
-        BESIDE_CLOSE, BUTTONS_TOP, Look, card_button_as, card_close, card_listener, part_listener,
-    },
+    permission::{BESIDE_CLOSE, BUTTONS_TOP, Look, card_listener, part_listener},
 };
 use crate::agent_request::{self, Closed};
 use crate::agents::request::{self, Does as Kind, Request};
@@ -139,31 +138,32 @@ impl Shell {
         self.agent_request_see_drawn.set(None);
         let listener = card_listener("agent question", &self.agent_question_drawn, question.id);
         let a11y = self.a11y;
+        let escape = escape_mark(question);
+        let count = buttons(question).len();
         let buttons = buttons(question)
             .into_iter()
             .enumerate()
             .map(|(at, button)| {
                 let row = button.look == Look::Text;
-                card_button_as(&self.palette, button.id, button.label, button.look)
+                self.card_key_button(at, count, button, escape, cx)
                     .when(row, |button| button.flex_basis(gpui::relative(1.)))
-                    .track_focus(&self.agent_card_buttons[at])
-                    .when(a11y, |control| {
-                        crate::settings_rows::named_button(control, button.label)
-                    })
-                    .on_click(cx.listener(move |shell, _, _, cx| shell.press_card(button.does, cx)))
             });
         let title = match (question.handoff, question.back) {
             (Some(_), true) => format!("{} asks for a tab", question.agent),
             (Some(_), false) => format!("{} needs you", question.agent),
             (None, _) => format!("{} wants to {}", question.agent, question.what),
         };
-        let close = question.handoff.is_none().then(|| {
-            card_close(&self.palette, "agent-question-close")
-                .on_click(cx.listener(|shell, _, _, cx| shell.answer_agent(Answer::Dismiss, cx)))
-        });
+        let close = (question.handoff.is_none()).then(|| self.card_key_close(escape, cx));
+        let described = self.agent_card_described(cx);
+        let heard = heard_title(&title);
         Some(
             self.card_keys_on(self.plate("agent-question"), cx)
                 .child(listener)
+                .when(a11y, |card| {
+                    card.role(Role::AlertDialog)
+                        .aria_label(heard)
+                        .when_some(described, |card, line| card.aria_description(line))
+                })
                 .child(
                     div()
                         .when(close.is_some(), |title| title.pr(px(BESIDE_CLOSE)))
@@ -185,6 +185,8 @@ impl Shell {
                         .flex()
                         .flex_wrap()
                         .gap(px(BUTTON_GAP))
+                        .relative()
+                        .child(self.card_room_probe())
                         .children(buttons),
                 )
                 .children(close)
@@ -338,26 +340,22 @@ impl Shell {
                     .aria_expanded(showing)
             })
             .on_click(cx.listener(|shell, _, window, cx| shell.see_whole_request(window, cx)));
+        let escape = escape_mark(question);
+        let count = buttons(question).len();
         let buttons = buttons(question)
             .into_iter()
             .enumerate()
-            .map(|(at, button)| {
-                card_button_as(&self.palette, button.id, button.label, button.look)
-                    .track_focus(&self.agent_card_buttons[at])
-                    .when(a11y, |control| {
-                        crate::settings_rows::named_button(control, button.label)
-                    })
-                    .on_click(cx.listener(move |shell, _, _, cx| shell.press_card(button.does, cx)))
-            });
-        let close = card_close(&self.palette, "agent-question-close")
-            .when(a11y, |close| {
-                crate::settings_rows::named_button(close, "Close")
-            })
-            .on_click(cx.listener(|shell, _, _, cx| shell.answer_agent(Answer::Dismiss, cx)));
-        let named = format!("{agent} asks to {}", question.what);
+            .map(|(at, button)| self.card_key_button(at, count, button, escape, cx));
+        let close = self.card_key_close(escape, cx);
+        let named = heard_title(&format!("{agent} asks to {}", question.what));
+        let described = self.agent_card_described(cx);
         self.card_keys_on(self.plate("agent-question"), cx)
             .child(listener)
-            .when(a11y, |card| card.role(Role::AlertDialog).aria_label(named))
+            .when(a11y, |card| {
+                card.role(Role::AlertDialog)
+                    .aria_label(named)
+                    .when_some(described, |card, line| card.aria_description(line))
+            })
             .child(head)
             .child(changes)
             .child(
@@ -372,6 +370,8 @@ impl Shell {
                     .mt(px(BUTTONS_TOP))
                     .flex()
                     .gap(px(BUTTON_GAP))
+                    .relative()
+                    .child(self.card_room_probe())
                     .children(buttons),
             )
             .child(close)
@@ -834,7 +834,7 @@ mod tests {
         assert_eq!(
             read(cx),
             [
-                "AlertDialog Claude Code asks to make a change on team.example.com".to_string(),
+                "AlertDialog Claude Code asks to make a change on team.example.com.".to_string(),
                 format!(
                     "Group {app} sees: Changes something on team.example.com. Claude Code says: \
                      {whole}."

@@ -543,7 +543,15 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
     (
         "Focus Agent Question",
         Command::FocusAgentQuestion,
-        &["keyboard", "answer", "allow"],
+        &[
+            "answer",
+            "allow",
+            "approve",
+            "deny",
+            "permission",
+            "request",
+            "prompt",
+        ],
     ),
     ("New Folder…", Command::NewFolder, &[]),
     (
