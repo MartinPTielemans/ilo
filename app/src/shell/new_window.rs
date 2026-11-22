@@ -1,6 +1,7 @@
 //! ⌘N's and ⇧⌘N's window opens with ⌘T's command bar, as Arc's does, so typing goes straight to a
 //! page: once the window's first frame is on screen, and with the window it came from full screen,
-//! once it's full screen too (docs/ux-spec.md › Window › New window).
+//! once it's full screen too, and if the user has gone to another window by then, once they come
+//! back (docs/ux-spec.md › Window › New window).
 
 use web_time::Instant;
 
@@ -47,6 +48,17 @@ impl Shell {
         if !window.is_visible() {
             return;
         }
+        if life == Life::Open {
+            // The bar waited for the user to come back to the window. A page shown here by then
+            // is what they came back to, so the bar isn't put over it.
+            if self.window_main {
+                self.opening = None;
+                if self.selected() == 0 {
+                    open_bar(window, cx);
+                }
+            }
+            return;
+        }
         loop {
             let frame = Event::Frame {
                 full_screen: self.full_screen,
@@ -82,10 +94,14 @@ impl Shell {
                 log!("browser: new window went full screen");
             }
             if actions.has(Actions::OPEN_BAR) {
-                // After this frame, as running it updates the shell.
-                cx.defer_in(window, |shell, _, cx| {
-                    shell.run(Command::NewTab, "new window", cx)
-                });
+                if self.window_main {
+                    open_bar(window, cx);
+                } else {
+                    // The user went back to another window before this one came: a bar opened now
+                    // would take their keys from it (#3879), so it waits for them to come back.
+                    self.opening = Some(Opening { asked, life });
+                    log!("browser: new window bar waits for the user to come back");
+                }
             }
             if actions.has(Actions::NEXT_FRAME) {
                 window.request_animation_frame();
@@ -108,6 +124,13 @@ impl Shell {
             cx.notify();
         }
     }
+}
+
+/// ⌘T's bar, after this frame, as running it updates the shell.
+fn open_bar(window: &mut Window, cx: &mut Context<Shell>) {
+    cx.defer_in(window, |shell, _, cx| {
+        shell.run(Command::NewTab, "new window", cx)
+    });
 }
 
 #[cfg(test)]
@@ -171,6 +194,61 @@ mod tests {
         assert!(
             shell.read_with(cx, |shell, _| !shell.new_tab && shell.selected() == 0),
             "closing the bar didn't leave the empty card"
+        );
+    }
+
+    /// A window the user left before its bar opened, as by clicking back into the window ⌘N came
+    /// from while the new one was slow to come on screen, doesn't open the bar over there and take
+    /// their keys (#3879). The bar waits for them, and is there when they come back to the window.
+    #[gpui::test]
+    fn a_new_window_left_before_its_bar_opens_it_on_coming_back(cx: &mut TestAppContext) {
+        let (shell, cx, host) = window(cx);
+        shell.update(cx, |shell, cx| {
+            shell.open_bar_when_shown(Instant::now(), false, false);
+            shell.set_window_main(false, cx);
+        });
+        for _ in 0..2 {
+            cx.update(|window, _| window.refresh());
+            cx.run_until_parked();
+        }
+        assert_eq!(
+            bars(&host),
+            0,
+            "the bar opened in a window the user had left"
+        );
+        shell.update(cx, |shell, cx| shell.set_window_main(true, cx));
+        cx.run_until_parked();
+        assert_eq!(bars(&host), 1, "the bar wasn't there as the user came back");
+        assert!(
+            shell.read_with(cx, |shell, _| shell.new_tab),
+            "the bar opened as ⌘L's, not ⌘T's"
+        );
+        shell.update(cx, |shell, cx| shell.set_window_main(false, cx));
+        cx.run_until_parked();
+        shell.update(cx, |shell, cx| shell.set_window_main(true, cx));
+        cx.run_until_parked();
+        assert_eq!(bars(&host), 1, "the bar opened again on another return");
+    }
+
+    /// A page shown in the window the user left before its bar opened, as one a link from another
+    /// app opens there, is what they come back to: the bar isn't put over it.
+    #[gpui::test]
+    fn a_new_window_left_before_its_bar_keeps_a_page_shown_since(cx: &mut TestAppContext) {
+        let (shell, cx, host) = window(cx);
+        shell.update(cx, |shell, cx| {
+            shell.open_bar_when_shown(Instant::now(), false, false);
+            shell.set_window_main(false, cx);
+        });
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        shell.update(cx, |shell, cx| shell.set_selected(7, cx));
+        cx.run_until_parked();
+        shell.update(cx, |shell, cx| shell.set_window_main(true, cx));
+        cx.run_until_parked();
+        assert_eq!(bars(&host), 0, "the bar opened over the page shown since");
+        assert!(
+            shell.read_with(cx, |shell, _| shell.opening.is_none()),
+            "the window still owes a bar"
         );
     }
 
