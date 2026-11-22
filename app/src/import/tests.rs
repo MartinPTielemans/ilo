@@ -3805,7 +3805,7 @@ fn a_browser_with_no_app_icon_has_the_globe_plate_and_the_names_line_up(cx: &mut
             row("Chrome (Flatpak)", false, "com.google.Chrome")
         ]
     );
-    let lines = view.read_with(cx, |view, _| view.drawn_at.borrow().clone());
+    let lines = view.read_with(cx, |view, _| view.drawn_at.borrow().lines().to_vec());
     let x = |name: &str| {
         let at = format!("browser: settings import-name {name} at ");
         (lines.iter())
@@ -3854,7 +3854,7 @@ fn one_row_of_tiles_is_centred_and_more_keep_their_left_edge(cx: &mut TestAppCon
             cx.notify();
         });
         cx.run_until_parked();
-        let lines = view.read_with(cx, |view, _| view.drawn_at.borrow().clone());
+        let lines = view.read_with(cx, |view, _| view.drawn_at.borrow().lines().to_vec());
         let x = |what: &str| {
             let at = format!("browser: settings {what} at ");
             (lines.iter())
@@ -3931,7 +3931,7 @@ fn favorite_tiles_tick_and_untick_at_a_click_and_the_button_counts_them(cx: &mut
     assert_eq!(title(cx), "Add 3 Favorites");
     // Where each tile was drawn, as check.sh reads it from the log.
     let at = |name: &str, cx: &mut gpui::VisualTestContext| {
-        let lines = view.read_with(cx, |view, _| view.drawn_at.borrow().clone());
+        let lines = view.read_with(cx, |view, _| view.drawn_at.borrow().lines().to_vec());
         let prefix = format!("browser: settings import-favorite {name} at ");
         let line = (lines.iter())
             .find_map(|line| line.strip_prefix(&prefix).map(str::to_string))
@@ -4099,7 +4099,7 @@ fn done_comes_at_the_foot_after_the_extensions_to_add(cx: &mut TestAppContext) {
             more: None,
         })
     );
-    let lines = view.read_with(cx, |view, _| view.drawn_at.borrow().clone());
+    let lines = view.read_with(cx, |view, _| view.drawn_at.borrow().lines().to_vec());
     let y = |what: &str| {
         let at = format!("browser: settings {what} at ");
         (lines.iter())

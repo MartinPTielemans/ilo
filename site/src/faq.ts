@@ -26,7 +26,7 @@ export const FAQ: { question: string; answer: string }[] = [
   },
   {
     question: "Which computers does ilo run on?",
-    answer: `${PLATFORMS.map((platform) => `${platform.name}, ${platform.stage}: ${platform.needs.charAt(0).toLowerCase()}${platform.needs.slice(1)}`).join(". ")}.`,
+    answer: `${PLATFORMS.map((platform) => `${platform.name}: ${platform.needs.charAt(0).toLowerCase()}${platform.needs.slice(1)}`).join(". ")}. ilo is in beta on all three.`,
   },
   {
     question: "Does ilo work with Chrome extensions?",

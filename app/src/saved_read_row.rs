@@ -2,14 +2,13 @@
 //! press opens in place to show what it reads, with Remove Read at its foot. Settings gives what
 //! a press does; the words are agents::reads::rows's.
 
-use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui::{App, ClickEvent, Rgba, Window, div, prelude::*, px, rgba};
 
 use crate::agents::reads::rows::{Ink, REMOVE, Row};
 use crate::settings_rows::{
-    Look, chevron_slot, drawn, frame, glyph_plate, named_button, ring, stop_button,
+    Drawn, Look, chevron_slot, drawn, frame, glyph_plate, named_button, ring, stop_button,
 };
 use crate::tokens::menu::{DARK_DESTRUCTIVE, LIGHT_DESTRUCTIVE};
 use crate::tokens::settings::{
@@ -49,7 +48,7 @@ pub fn row(
     at: usize,
     opened: bool,
     a11y: bool,
-    logged: &Rc<RefCell<Vec<String>>>,
+    logged: &Drawn,
     open: Press,
     remove: Press,
 ) -> gpui::Div {
@@ -144,11 +143,11 @@ mod tests {
 
     use super::row;
     use crate::agents::reads::rows::{Ink, Row};
-    use crate::settings_rows::{Look, group, spoken::pressable};
+    use crate::settings_rows::{Drawn, DrawnLog, Look, group, spoken::pressable};
 
     struct Rows {
         rows: Vec<Row>,
-        logged: Rc<RefCell<Vec<String>>>,
+        logged: Drawn,
         opened: Rc<RefCell<Option<usize>>>,
         removed: Rc<RefCell<Vec<usize>>>,
     }
@@ -215,7 +214,7 @@ mod tests {
                 Some("Sign in to reads.test in any tab so agents can read it again."),
             ),
         ];
-        let logged = Rc::new(RefCell::new(Vec::new()));
+        let logged = Rc::new(RefCell::new(DrawnLog::default()));
         let (_view, cx) = cx.add_window_view({
             let (opened, removed, logged) = (opened.clone(), removed.clone(), logged.clone());
             move |_, _| Rows {
@@ -228,9 +227,9 @@ mod tests {
         // A press where the control `what` was drawn, as check.sh presses it.
         let click = |what: &str, cx: &mut gpui::VisualTestContext| {
             let at = format!("browser: settings saved read {what} at ");
-            let line = (logged.borrow().iter())
+            let line = (logged.borrow().lines().iter())
                 .find_map(|line| line.strip_prefix(&at).map(str::to_string))
-                .unwrap_or_else(|| panic!("{what} isn't drawn: {:?}", logged.borrow()));
+                .unwrap_or_else(|| panic!("{what} isn't drawn: {:?}", logged.borrow().lines()));
             let (x, y) = line.split_once(' ').expect("no place");
             let centre = gpui::point(gpui::px(x.parse().unwrap()), gpui::px(y.parse().unwrap()));
             cx.simulate_click(centre, gpui::Modifiers::none());
