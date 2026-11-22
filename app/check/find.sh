@@ -511,6 +511,13 @@ if real_pointer; then
   # the window it goes to, and Stop takes it, not the page under it (#3611).
   real move $((width - 18 - 38)) 41
   expect '^browser: toast hovered true$' "the real pointer on the trace's toast didn't hover it"
+  # Held there over a second, Stop keeps its hover fill, as the window over the toast's plate
+  # never puts the toast out of sight to AppKit, which would stop it drawing (#3644).
+  held=$step
+  sleep 1.2 # The hold itself, not a wait for the app.
+  ../tools/window-screenshot.sh "$pid" "$out/trace-hovered.png" || fail "no window to capture"
+  none_since '^browser: toast window out of sight$' "$held" ||
+    fail "the trace's toast went out of sight to AppKit with the real pointer held on its Stop"
   real move $((width - 18 - 38)) 160
   expect '^browser: toast hovered false$' \
     "the real pointer leaving the trace's toast kept it hovered"

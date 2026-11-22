@@ -2,7 +2,9 @@
 # View › Clear Cache and Refresh and the command bar's Clear Cookies and Refresh delete the cache
 # and the cookies of the page's site, and load the page again. ⇧⌘C and ⌥⇧⌘C from the page and the UI
 # copy the tab's URL and a Markdown link to it, to a pasteboard of the run's own, without its
-# tracking parameters, and Share on ⇧⌘C's toast shares the page, where there's a share sheet. ⌥⌘V from the UI and the page and the command bar's Paste URL as New Tab open
+# tracking parameters, and Share on ⇧⌘C's toast shares the page, where there's a share sheet. On
+# the Mac, a press on that toast's plate let go on the page leaves it unhovered, to go on time.
+# ⌥⌘V from the UI and the page and the command bar's Paste URL as New Tab open
 # the link copied in a new tab, and a Markdown link nothing. The sidebar shows Clear and the URL
 # field's button only while the pointer is over it, and the button copies the URL. ⇧⌘K from the
 # page and the UI, and Clear on the divider, close the Space's Today tabs but the one shown, with no
@@ -155,11 +157,10 @@ switch "2 cmd" "$c"
 
 # Share on ⇧⌘C's toast, where there's a share sheet, shares the tab's page as Site Controls' Share
 # does; a driven run logs it and shows no sheet. The toast's window is at the page's top left, 228
-# and 10 into the window, and Share is the plate's last chip, 31 wide and 14 in from its right. The
-# window lets the pointer through until a move over its plate, so the first move has it take the
-# pointer and the toast hears the second, as window.sh's new tab's toast does. The toast leaves
-# after 2 s, so the pointer goes on Share at once, which keeps it past its time, and $2, if any, runs
-# before the click, as the window's capture.
+# and 10 into the window, and Share is the plate's last chip, 31 wide and 14 in from its right. It
+# moves there twice, as window.sh's new tab's toast does. The toast leaves after 2 s, so the pointer
+# goes on Share at once, which keeps it past its time, and $2, if any, runs before the click, as the
+# window's capture.
 share_from_url_toast() {
   [ "$(uname)" != Linux ] || return 0
   local what=$1 then=${2:-} share first_move
@@ -211,6 +212,36 @@ none_since '^browser: toast hovered true$' ||
   fail "⌥⇧⌘C's toast, where ⇧⌘C's went from under the pointer, took the pointer on the sidebar as on it"
 clipboard_holds "[Clear two](${site}clear-two.html)" ||
   fail "⌥⇧⌘C left the clipboard holding \"$(WAYLAND_DISPLAY="$BROWSER_HEADLESS" wl-paste -n)\""
+# On the Mac, a press on ⇧⌘C's toast's plate let go on the page leaves the toast unhovered, so it
+# goes on time: the release is the last the plate hears of a drag that left it, and no exit comes
+# after, so the toast takes the pointer's place from the release. The moves between are left out,
+# so it alone does.
+if [ "$(uname)" = Darwin ]; then
+  expect '^browser: toast hidden$' "⌥⇧⌘C's toast stayed past its time"
+  send key c cmd shift
+  expect "$url_toast" "⇧⌘C showed no toast to drag from"
+  expect '^browser: toast plate [0-9]* [0-9]* [0-9]* [0-9]* in [0-9]* [0-9]*$' \
+    "⇧⌘C's toast to drag from didn't tell where its plate is"
+  set -- $(grep '^browser: toast plate' "$log" | tail -1 | sed 's/^browser: toast plate //; s/ in / /')
+  on="$((228 + $1 + 16)) $((10 + $2 + $4 / 2))"
+  off="$((228 + $1 + 16)) $((10 + $2 + $4 + 60))"
+  send move $on
+  first_move=$step
+  send move $on
+  expect '^browser: toast hovered true$' "the pointer at $on wasn't on ⇧⌘C's toast" "$first_move"
+  send press $on
+  send release $off
+  expect '^browser: toast hovered false$' \
+    "a press on ⇧⌘C's toast's plate let go on the page at $off left the toast hovered"
+  expect '^browser: toast hidden$' "⇧⌘C's toast stayed after a press on its plate was let go off it"
+  # That ⇧⌘C put the URL in place of the Markdown link, for which ⌥⌘V below opens nothing, so it's
+  # copied again, as above, from the UI.
+  send click $sidebar_point
+  send key c cmd shift alt
+  expect "^browser: copied \\[Clear two](${site}clear-two.html)\$" \
+    "⌥⇧⌘C didn't copy the Markdown link again after the press on ⇧⌘C's toast"
+  expect '^browser: toast settled$' "⌥⇧⌘C's toast again didn't settle"
+fi
 
 # ⌥⌘V, from the UI and the page, and the command bar's Paste URL as New Tab open the copied link in
 # a new tab at the top of Today, as Arc's do. Text that isn't a web link, a Markdown link here,

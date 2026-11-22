@@ -75,10 +75,46 @@ expect '^browser: battery saver leaf hidden$' "the leaf stayed with Battery Save
 eighteen=$((step + 1))
 send battery 18 unplugged
 send battery 18 plugged
+# Its toast shows with the window minimized, there for the 17% that brings it back: nothing of the
+# app's is then on screen for other apps' clicks to land on, the window over the toast's plate that
+# takes its clicks included, and with the window back that window is over the plate again (#3644).
+# The Mac's, where other apps' view of the screen is read.
+seen_until() {
+  for _ in $(seq 100); do
+    [ "$(windows_seen | grep -c .)" "$1" 0 ] && return 0
+    kill -0 "$pid" 2>/dev/null || gone
+    sleep 0.1
+  done
+  return 1
+}
+if real_pointer; then
+  send minimize
+  seen_until -eq || fail "the window minimized left on screen: $(windows_seen | tr '\n' ';')"
+fi
+seventeen=$((step + 1))
 send battery 17 unplugged
 expect 'browser: battery saver on at 17%$' "plugged in and out again, Battery Saver didn't come back"
 none_since 'browser: battery saver on at 18%' "$eighteen" ||
   fail "Battery Saver came back on, turned off for now"
+if real_pointer; then
+  expect '^browser: toast shown Battery Saver is on at 17% \[turn off battery saver\]$' \
+    "the toast didn't say Battery Saver is on, with Turn Off, with the window minimized"
+  seen=$(windows_seen)
+  [ -z "$seen" ] || fail "with the window minimized, its toast put windows on screen: $seen"
+  send minimize
+  seen_until -gt || fail "the minimized window didn't come back"
+  expect '^browser: toast plate [0-9]* [0-9]* [0-9]* [0-9]* in [0-9]* [0-9]*$' \
+    "the toast didn't tell where its plate is" "$seventeen"
+  set -- $(grep '^browser: toast plate' "$log" | tail -1 | sed 's/^browser: toast plate //; s/ in / /')
+  send layout
+  width=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
+    sed 's/^browser: layout content \([0-9]*\)x[0-9]*,.*/\1/')
+  real move $((width - $5 + $1 + $3 / 2)) $(($2 + $4 / 2))
+  expect '^browser: toast hovered true$' \
+    "with its window back from minimized, the real pointer on the toast's plate didn't hover it"
+  real move $page_point
+  expect '^browser: toast hovered false$' "the real pointer off the toast's plate kept it hovered"
+fi
 
 # Settings' Battery Saver switch: off, it goes at once and stays off lower still; on again, it's
 # back, below 20% on battery.

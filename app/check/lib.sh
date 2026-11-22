@@ -594,9 +594,7 @@ real_pointer() {
 # driver picks the window it goes to (#3611). A click has no move before it. Only where
 # real_pointer says.
 real() {
-  [ -x "$out/pointer" ] ||
-    clang++ -fobjc-arc -framework Cocoa -o "$out/pointer" check/pointer.mm 2> "$out/pointer.log" ||
-    fail "check/pointer.mm didn't build: $(cat "$out/pointer.log")"
+  built_pointer
   send order
   local frame
   frame=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: frame window 1 ' |
@@ -605,6 +603,17 @@ real() {
   "$out/pointer" "$1" $((${frame% *} + $2)) $((${frame#* } + $3)) "$pid" \
     > "$out/pointer.txt" 2>&1 ||
     fail "check/pointer.mm didn't $1 at $2 $3: $(cat "$out/pointer.txt")"
+}
+built_pointer() {
+  [ -x "$out/pointer" ] ||
+    clang++ -fobjc-arc -framework Cocoa -o "$out/pointer" check/pointer.mm 2> "$out/pointer.log" ||
+    fail "check/pointer.mm didn't build: $(cat "$out/pointer.log")"
+}
+# The app's windows on screen that can be seen, front first, as other apps see them: a line each,
+# "window N level L at X Y W H", from the main display's top left. The Mac's alone.
+windows_seen() {
+  built_pointer
+  "$out/pointer" windows "$pid"
 }
 # click_placed <send|post> <part>: a click on the Site Controls' <part>, such as "shield",
 # "switch Developer Mode" or "line Location", where they last logged it. They log each part's place
