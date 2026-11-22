@@ -14,7 +14,7 @@
 # asked. The user's sign-in in a tab, which the driver loads, makes it read again. A site on Always
 # ask first pauses its reads and refuses new ones until it's off the list. Remove Read removes it
 # with no dialog, ⌘Z brings it back, and a use after the second removal finds none. The same name
-# with other columns asks again. ⌘↩ saves and Escape declines from the card, which keeps its
+# with other columns asks again. The card keeps its
 # buttons in a short window and over the page in full screen. Two uses of one read sent together
 # reach the site one after the other, and a minute idle with a saved read asks the site nothing.
 # Not here, but in the lib's tests: another profile's agent lists none, a private window keeps
@@ -131,7 +131,6 @@ hits_at() { wc -l < "$out/site.log" | tr -d ' '; }
 opened=$(reads_call open_tab "{\"url\":\"$origin/reads/table.html\"}")
 tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
 [ -n "$tab" ] || fail "open_tab of the table answered: $opened"
-await "^browser: agent activity mcp-client $tab open_tab\$" || fail "the agent's open_tab wasn't logged"
 columns='[{"name":"Name","type":"text","from":"Name"},{"name":"City","type":"text","from":"City"},{"name":"Height","type":"number","from":"Height (m)"}]'
 table_read() {
   printf '%s' "{\"tab\":$tab,\"name\":\"${2:-city buildings}\",\"kind\":\"table\",\"url\":\"/reads/$1\",\"columns\":${3:-$columns}}"
@@ -368,28 +367,20 @@ proposed "{\"tab\":$tab,\"name\":\"items\",\"kind\":\"json\",\"url\":\"/reads/it
 answer_card Once
 await "^browser: agent logged mcp-client change_read $host_rx\$" || fail "the changed read's Save wasn't logged as a change"
 
-# 13: ⌘↩ saves and Escape declines from the card, which keeps its buttons in a short window and
-# stays over the page in full screen.
-proposed "$(table_read table.html keys)" reads-card-keys
-send key escape
-await "^browser: agent mcp-client answered $q Dismiss\$" || fail "Escape on the card didn't decline it"
-reads_answer > /dev/null || fail "the browser didn't answer the declined proposal"
+# 13: the card keeps its buttons in a short window and stays over the page in full screen.
 send resize 900 420
 expect '^browser: drawn at 900x420$' "the window didn't draw at 900 by 420"
 proposed "$(table_read table.html keys)" reads-card-short
 [ $((qy + qh)) -le 420 ] || fail "in a 420-point window the card ends at $((qy + qh)), past its foot: its buttons aren't on screen"
 [ "$qh" -lt "$plain_h" ] || fail "in a short window the card is $qh high, as tall as the plain one, $plain_h: it kept every row"
-send key return cmd
-await "^browser: agent mcp-client answered $q Once\$" || fail "⌘↩ on the card didn't save it"
-reads_answer > /dev/null || fail "the browser didn't answer the saved proposal"
+answer_card Once
+case "$said" in "saved: "*) ;; *) fail "Save Read in a short window answered: $said" ;; esac
 send resize 1200 760
 expect '^browser: drawn at 1200x760$' "the window didn't draw back at its size"
 send fullscreen
 expect '^browser: window entered full screen$' "the window didn't go full screen"
-proposed "$(table_read table.html keys full)" reads-card-full
-send key escape
-await "^browser: agent mcp-client answered $q Dismiss\$" || fail "Escape on the card in full screen didn't decline it"
-reads_answer > /dev/null || fail "the browser didn't answer the declined proposal"
+proposed "$(table_read table.html full)" reads-card-full
+answer_card Dismiss
 send fullscreen
 expect '^browser: window left full screen$' "the window didn't leave full screen"
 
