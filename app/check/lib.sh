@@ -613,9 +613,11 @@ post() {
   echo "$*" >&3
 }
 # Whether a run may press with the real pointer: on the Mac, in a GitHub Actions job or the check
-# VM, where nobody's work is on the screen (check/pointer.mm).
+# VM, where nobody's work is on the screen, and only in a virtual machine, so a stray variable on
+# someone's Mac leaves the driver's (check/pointer.mm).
 real_pointer() {
-  [ "$(uname)" = Darwin ] && { [ "${GITHUB_ACTIONS:-}" = true ] || [ "${ILO_CHECK_VM:-}" = 1 ]; }
+  [ "$(uname)" = Darwin ] && { [ "${GITHUB_ACTIONS:-}" = true ] || [ "${ILO_CHECK_VM:-}" = 1 ]; } &&
+    [ "$(sysctl -n kern.hv_vmm_present 2> /dev/null)" = 1 ]
 }
 # real <click|move> <x> <y>: the real pointer at (x, y), in points from window 1's top-left as the
 # driver's click takes them, posted as a mouse's events are, so the window server and not the
@@ -623,6 +625,11 @@ real_pointer() {
 # real_pointer says.
 real() {
   built_pointer
+  # Once a run, so its log shows the flag the real pointer's guard reads.
+  [ -n "${real_said:-}" ] || {
+    real_said=1
+    echo "  The real pointer's guard: kern.hv_vmm_present is $(sysctl -n kern.hv_vmm_present 2>&1)."
+  }
   send order
   local frame
   frame=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: frame window 1 ' |

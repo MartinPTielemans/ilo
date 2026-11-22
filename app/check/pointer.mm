@@ -3,7 +3,8 @@
 // moves Chrome's Picture in Picture window is dragged and sized by. It posts mouse events at the
 // HID level, as a mouse would, so it moves the desktop's pointer and presses on whatever is under
 // it: it runs only in a GitHub Actions job (GITHUB_ACTIONS=true) or the check VM (ILO_CHECK_VM=1),
-// never on someone's Mac. Its process needs Accessibility, which check-mac.yml grants to the job's.
+// and only in a virtual machine (kern.hv_vmm_present 1), so a stray variable on someone's Mac posts
+// nothing. Its process needs Accessibility, which check-mac.yml grants to the job's.
 // Usage, in points from the main display's top-left, as drive.mm's place:
 //   pointer drag X Y X2 Y2   presses at (X, Y), drags to (X2, Y2), lets go, and puts the pointer
 //                            back where it found it. It says "dragged X Y to X2 Y2".
@@ -18,9 +19,18 @@
 // Built with clang++ -fobjc-arc -framework Cocoa.
 #import <Cocoa/Cocoa.h>
 
+#include <sys/sysctl.h>
 #include <unistd.h>
 
 namespace {
+
+// Whether macOS runs in a virtual machine, as the hosted runners and the check VM do, and a Mac
+// someone works on doesn't.
+bool InVirtualMachine() {
+  int present = 0;
+  size_t size = sizeof(present);
+  return sysctlbyname("kern.hv_vmm_present", &present, &size, nullptr, 0) == 0 && present == 1;
+}
 
 void Post(CGEventType type, CGPoint at) {
   CGEventRef event = CGEventCreateMouseEvent(NULL, type, at, kCGMouseButtonLeft);
@@ -121,6 +131,12 @@ int main(int argc, char** argv) {
       fprintf(stderr,
               "pointer moves the real pointer, so it runs only in a GitHub Actions job or the "
               "check VM\n");
+      return 2;
+    }
+    if (!InVirtualMachine()) {
+      fprintf(stderr,
+              "pointer moves the real pointer, so it runs only in a virtual machine, and "
+              "kern.hv_vmm_present isn't 1 here\n");
       return 2;
     }
     if (!AXIsProcessTrusted()) {

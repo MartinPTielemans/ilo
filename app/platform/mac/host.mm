@@ -473,7 +473,7 @@ void StripTint(CALayer* layer) {
                                   windowNumber:parent.windowNumber
                                        context:nil
                                    eventNumber:0
-                                     clickCount:0
+                                    clickCount:0
                                       pressure:0]];
 }
 
