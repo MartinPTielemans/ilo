@@ -3712,7 +3712,7 @@ CARD
       ../tools/window-screenshot.sh "$pid" "$out/agent-upload.png" || fail "no window to capture"
     fi
     upload_denied "the field in $what"
-    [ "$denied" = "error: The user said no: you can't add a file to “$name” on $site. Don't try again." ] ||
+    [ "$denied" = "error: The user said no: you can't add a file to “${name}” on $site. Don't try again." ] ||
       fail "Don’t Allow on upload's card for the field in $what answered: $denied"
     await_log "^browser: agent logged mcp-client upload $(printf '%s' "$site" | sed 's/\./\\./g') refused: You said no\\.\$" \
       "the upload refused for the field in $what isn't in the activity log under $site"
