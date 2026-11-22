@@ -43,10 +43,22 @@ none_since "^browser: hover card not pictured $a\$" \
 none_since "^browser: hover card pictured $b\$" || fail "the tab shown was pictured"
 
 # Resting on the hidden tab's row, its card shows with its picture beside the rows, where the UI
-# put it, and is drawn before it's on screen.
+# put it, and is drawn before it's on screen. The system's memory-pressure signal drops every card
+# picture, so one between the picture and the rest shows the favicon until the core pictures the
+# tab again (#3886); without one, the picture taken as the switch went quiet is there at once.
 send move $(row 1)
-expect "^browser: hover card shown $a pin favorite\( split\)\{0,1\} picture\$" \
-  "resting on the hidden tab's row didn't show its card with its picture"
+expect "^browser: hover card shown $a pin favorite\( split\)\{0,1\} \(picture\|favicon\)\$" \
+  "resting on the hidden tab's row didn't show its card"
+dropped=$(awk -v tab="$a" -v move="browser: drive $step: " '
+  $0 == "browser: hover card pictured " tab { dropped = 0 }
+  /^browser: hover card pictures dropped [1-9]/ { dropped = 1 }
+  index($0, move) == 1 { moved = 1 }
+  moved && index($0, "browser: hover card shown " tab " ") == 1 { print dropped + 0, $NF; exit }
+' "$log")
+[ "$dropped" != "0 favicon" ] || fail "the hidden tab's card showed its favicon though no memory \
+pressure dropped the picture taken as the switch went quiet: $(grep -n \
+  -e "^browser: hover card pictured $a\$" -e '^browser: hover card pictures dropped' \
+  -e "^browser: hover card shown $a " "$log" | tail -4 | tr '\n' ' ')"
 expect "^browser: hover card drawn $a picture\$" "the hidden tab's card wasn't drawn with its picture"
 expect '^browser: hover card window shown$' "the hidden tab's card didn't come on screen"
 expect '^browser: hover card settled$' "the hidden tab's card didn't come to rest"
