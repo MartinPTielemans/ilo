@@ -932,7 +932,8 @@ jobs:
           aws s3 rm "$bucket/pending/$TAG" --recursive --endpoint-url "$R2_ENDPOINT" --only-show-errors
           echo "$TAG is live in the Flatpak repository." >> "$GITHUB_STEP_SUMMARY"
 
-  # The owner published a draft: ilobrowser.com shows its changelog entry now (site.yml). `published` never comes for a draft, and a prerelease isn't a release of ilo.
+  # The owner published a draft: ilobrowser.com shows its changelog entry now (site.yml).
+  # `published` never comes for a draft, and a prerelease isn't a release of ilo.
   site:
     if: >-
       ${{ github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v') &&
