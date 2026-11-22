@@ -34,8 +34,8 @@ use browser::window_frames::{self, Frame};
 use browser::{
     account, agent_request, boost_editor, capture, command_bar, dialog, dock_dot, elevation::Level,
     folder_preview, hover_card, icon_picker, launch, launch_picture, link_preview, link_target,
-    log, log_in, menu, offer, passwords, site_controls, tab_switcher, theme_picker, toast, tooltip,
-    updates, zoom_hud,
+    log, log_always, log_in, menu, offer, passwords, site_controls, tab_switcher, theme_picker,
+    toast, tooltip, updates, zoom_hud,
 };
 use gpui::{
     AnyWindowHandle, App, ApplicationHandle, AsyncApp, Bounds, Context, Focusable, Image,
@@ -543,6 +543,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
         browser::face::register(cx);
         // The user's keys, before the shortcuts are bound to them.
         settings::read_shortcuts(cx);
+        shell::follow_layout(cx);
         settings::read_look(cx);
         settings::read_portrait_background(cx);
         settings::read_new_note(cx);
@@ -900,38 +901,9 @@ fn set_reduce_motion(reduce: bool, cx: &mut App) {
     }
 }
 
-/// Where Chromium keeps the profiles, and the app the user's keys. A dev build keeps a profile of
-/// its own, never the owner's, since the checks delete what the last run saved. The prod build
-/// keeps the user's in Application Support, under the product's name, or in Local AppData on
-/// Windows.
+/// Where Chromium keeps the profiles, and the app the user's keys (browser::profile_dir).
 fn profile_dir() -> String {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let name = include_str!("../branding/name").trim();
-    std::env::var("BROWSER_PROFILE_DIR").unwrap_or_else(|_| {
-        if cfg!(target_os = "windows") {
-            let local = std::env::var("LOCALAPPDATA").unwrap_or_default();
-            if cfg!(feature = "prod") {
-                format!(r"{local}\{name}\User Data")
-            } else {
-                format!(r"{local}\browser-app")
-            }
-        } else if cfg!(target_os = "linux") {
-            // A Flatpak points XDG_CONFIG_HOME at its own folder, the only one it may write.
-            if cfg!(feature = "prod") {
-                let config = std::env::var("XDG_CONFIG_HOME")
-                    .ok()
-                    .filter(|dir| !dir.is_empty())
-                    .unwrap_or_else(|| format!("{home}/.config"));
-                format!("{config}/{name}")
-            } else {
-                format!("{home}/.cache/browser-app")
-            }
-        } else if cfg!(feature = "prod") {
-            format!("{home}/Library/Application Support/{name}")
-        } else {
-            format!("{home}/Library/Caches/browser-app")
-        }
-    })
+    browser::profile_dir()
 }
 
 /// What the app gives the core to start with: Chromium's switches, from the arguments the process
@@ -1042,6 +1014,9 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
     // every launch as safe start's is.
     let ad_blocker = ad_block_host::prepare(&given, &profile);
     args.extend(ad_blocker.switches());
+    // Chromium writes no ERROR line off a check, as the app's own log lines aren't (#3731). On
+    // Windows and Linux too, the core adds this before Chromium starts its logging.
+    args.extend(launch::quiet_log_level(browser::checked(), &given));
     let given = given.into_iter().filter(|arg| {
         !arg.starts_with(browser::safe_start::SWITCH)
             && ad_blocker.passes(arg)

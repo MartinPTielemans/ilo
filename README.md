@@ -64,4 +64,4 @@ ilo is in beta on macOS and Linux, and in alpha on Windows. Please report bugs i
 
 ## License
 
-GPL-3.0-or-later. See [LICENSE](LICENSE), and [NOTICE](NOTICE) for the other projects ilo uses and carries; in the app, Settings › About opens both. The name ilo and its icon are the project's trademarks and aren't covered by the license. Forks are welcome under their own name: replace `app/branding/` and recompile the icon with `app/icon.sh`. On Windows the engine carries the name too, so a fork builds its own Windows engine ([engine/README.md](engine/README.md)).
+GPL-3.0-or-later, except the website in `site/`, which is MIT ([site/LICENSE](site/LICENSE)). See [LICENSE](LICENSE), and [NOTICE](NOTICE) for the other projects ilo uses and carries; in the app, Settings › About opens both. The name ilo and its icon are the project's trademarks and aren't covered by the license. Forks are welcome under their own name: replace `app/branding/` and recompile the icon with `app/icon.sh`. On Windows the engine carries the name too, so a fork builds its own Windows engine ([engine/README.md](engine/README.md)).

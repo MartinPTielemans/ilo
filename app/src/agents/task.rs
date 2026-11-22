@@ -1928,8 +1928,19 @@ impl Agents {
     /// unless it would pass for the browser, whose words the cards set beside an agent's.
     pub(super) fn hello(&mut self, agent: &str, client: &str) {
         let given = super::request::plain(client);
+        // Each of the `ilo` command's commands says hello, and its session keeps the name it
+        // started with, as a client's does.
+        let under_way = (self.tasks.tasks.iter()).any(|task| {
+            task.state == State::Working
+                && (task.session.as_ref()).is_some_and(|session| session.agent == agent)
+        });
         let name = match Client::from_id(agent) {
-            Some(Client::Other) if !given.is_empty() && !names_the_browser(&given) => given,
+            Some(Client::Command) if under_way => return,
+            Some(Client::Other | Client::Command)
+                if !given.is_empty() && !names_the_browser(&given) && !names_a_client(client) =>
+            {
+                given
+            }
             Some(known) => known.name().to_string(),
             None => return,
         };
@@ -2314,7 +2325,21 @@ impl Agents {
         }
         // check.sh reads this line.
         log!("browser: session {key} done");
+        let agent = (task.session.as_ref()).map(|session| session.agent.clone());
+        if let Some(agent) = agent {
+            self.command_gone(&agent, cx);
+        }
         cx.notify();
+    }
+
+    /// The `ilo` command's session ended: with no connection of its own left to say so, it's no
+    /// longer live, as a client is once its last connection closes.
+    fn command_gone(&mut self, agent: &str, cx: &mut Context<Self>) {
+        if agent == Client::Command.id() && self.live.remove(agent) {
+            self.forget_waiting(agent, cx);
+            self.browser.disconnected(agent, cx);
+            self.note(agent, "disconnected", "", "");
+        }
     }
 
     /// What a call or a run's step does, as its trace says it: on `tab`, else the tab it names,
@@ -2344,7 +2369,7 @@ impl Agents {
             .and_then(|(name, tab)| self.refs.get(&tab)?.get(name).cloned());
         let named = |element: &page::Element| match element.name.trim().is_empty() {
             true => format!("the {}", element.role),
-            false => format!("“{}”", page::clip(element.name.trim(), 40)),
+            false => page::curly(element.name.trim(), 40),
         };
         let (on, page) = (site(&url), address(&url));
         let mut did = tools::Did {
@@ -2403,8 +2428,8 @@ impl Agents {
                 let (text, gone) = (string("text"), string("gone"));
                 let seconds = arguments.get("seconds").and_then(Value::as_f64);
                 did.target = match (text.is_empty(), gone.is_empty(), seconds) {
-                    (false, _, _) => format!("“{}”", page::clip(&text, 40)),
-                    (true, false, _) => format!("“{}” to go", page::clip(&gone, 40)),
+                    (false, _, _) => page::curly(&text, 40),
+                    (true, false, _) => format!("{} to go", page::curly(&gone, 40)),
                     _ if string("until") == "quiet" => tools::SETTLE.into(),
                     (true, true, Some(seconds)) => duration(seconds.round().max(1.) as u64),
                     (true, true, None) => String::new(),
@@ -2611,7 +2636,8 @@ pub fn first_message(asked: &str, page: Option<&AskedOn>) -> String {
     match page {
         Some(page) => format!(
             "{asked}\n\n(I'm on “{}”, {}. Open it in a tab of your own if you need it.)",
-            page.title, page.url
+            super::request::plain(&page.title),
+            page.url
         ),
         None => asked.to_string(),
     }
@@ -3248,6 +3274,24 @@ pub fn model_menu(
         })
         .collect();
     (all, items)
+}
+
+/// Whether a given name could pass for a client's own, so a card saying "Claude Code" is always
+/// Claude Code's connection: read by its letters and digits alone, one holding an app's name or
+/// being another client's, and any with a character outside printable ASCII, which can look like
+/// a letter of one or hide.
+fn names_a_client(name: &str) -> bool {
+    let skeleton = |name: &str| -> String {
+        let kept = name.chars().filter(char::is_ascii_alphanumeric);
+        kept.collect::<String>().to_ascii_lowercase()
+    };
+    let given = skeleton(name);
+    name.chars().any(|c| !(' '..='~').contains(&c))
+        || (Client::ALL.iter()).any(|&client| {
+            let own = skeleton(client.name());
+            let app = matches!(client, Client::ClaudeCode | Client::Codex);
+            given == own || app && given.contains(&own)
+        })
 }
 
 /// Whether a client's name would pass for the browser's own words: one with the app's name as a

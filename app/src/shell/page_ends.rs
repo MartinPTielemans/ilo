@@ -80,7 +80,7 @@ impl Shell {
             log!("browser: tab {tab} focus left its page with no row to ring");
             return false;
         }
-        self.browser.focus_ui(cx);
+        self.take_keyboard(cx);
         self.focus_keys = true;
         // A page with nothing to focus hands the Tab that went in straight back: the ring stays
         // where it was, so one key never goes page, row, page.
@@ -149,7 +149,7 @@ impl Shell {
         let Some(&Some(stop)) = stop else {
             return false;
         };
-        self.browser.focus_ui(cx);
+        self.take_keyboard(cx);
         self.focus_keys = true;
         self.key_strip(stop, cx);
         true

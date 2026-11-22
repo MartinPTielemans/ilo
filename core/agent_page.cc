@@ -16,6 +16,7 @@
 #include "base/i18n/case_conversion.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
+#include "base/logging.h"
 #include "base/strings/strcat.h"
 #include "base/scoped_multi_source_observation.h"
 #include "base/strings/string_number_conversions.h"
@@ -26,7 +27,9 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
+#include "browser_core/agent_file_field.h"
 #include "browser_core/agent_job_voter.h"
+#include "browser_core/agent_splash_rule.h"
 #include "browser_core/ax_text.h"
 #include "browser_core/host.h"
 #include "browser_core/platform/window_views.h"
@@ -82,6 +85,9 @@ constexpr base::TimeDelta kBusy = base::Seconds(5);
 constexpr base::TimeDelta kQuiet = base::Milliseconds(500);
 // A frame, at the rate pages draw, between the looks that tell whether something holds still.
 constexpr base::TimeDelta kFrame = base::Hertz(60);
+// Between the reads of a splash that holds still: each reads every frame's whole tree in the
+// renderer whose content the job waits for, so not a frame's pace (#3658).
+constexpr base::TimeDelta kSplashLook = base::Milliseconds(100);
 // What the wheel starts, a scroll or nothing to scroll, has started by then (#1627).
 constexpr base::TimeDelta kSettle = base::Milliseconds(400);
 // What an agent hears when the input would reach an extension's control, which the activity log
@@ -363,6 +369,12 @@ std::string ChoiceSelector(std::string_view kind, const std::optional<std::strin
   return selector;
 }
 
+// A Fill's job, the user's, which no agent asks for.
+constexpr int kFill = -1;
+
+// What an agent hears of a field that left before the user's files could go in.
+constexpr char kFieldGone[] = "The element isn't on the page any more. Take a new snapshot.";
+
 void Report(bc_id tab, uint64_t request, std::string text, bool error, bc_agent_failure failure) {
   if (Host().agent_page_done) {
     Host().agent_page_done(Host().context, tab, request, text.c_str(), error, failure);
@@ -613,6 +625,18 @@ void AgentPage::Act(uint64_t request, int action, int64_t element, std::string t
   Next();
 }
 
+void AgentPage::Fill(int64_t element,
+                     std::vector<std::string> files,
+                     Lands lands,
+                     base::OnceCallback<void(bool)> put) {
+  Job job{0, kFill, element, std::string()};
+  job.files = std::move(files);
+  job.lands = std::move(lands);
+  job.put = std::move(put);
+  jobs_.push_back(std::move(job));
+  Next();
+}
+
 // static
 void AgentPage::SessionEnded(bc_id tab) {
   content::WebContents* contents = Tab::FromId(tab);
@@ -731,6 +755,12 @@ void AgentPage::Run() {
       Screenshot();
       return;
     case BC_AGENT_PAGE_QUIET:
+      // Heard since its page committed (DidFinishNavigation), its time to settle from now.
+      if (listening_) {
+        job_->deadline = base::TimeTicks::Now() + kBusy;
+        Settle();
+        return;
+      }
       Listen(base::BindOnce(&AgentPage::Settle, weak_factory_.GetWeakPtr()));
       return;
     case BC_AGENT_PAGE_SELECT:
@@ -741,6 +771,12 @@ void AgentPage::Run() {
       field_ = job_->element;
       choosing_ = Choosing::kOptions;
       Snapshot();
+      return;
+    case BC_AGENT_PAGE_FILE_FIELD:
+      FileField();
+      return;
+    case kFill:
+      FillField();
       return;
   }
   Fail("There's no such action.");
@@ -894,13 +930,13 @@ void AgentPage::Quiet() {
     } else {
       job_->requests = true;
     }
-    Still(base::ListValue());
+    Still({});
     return;
   }
   if (!GetWebContents().IsLoading() && requests_.empty()) {
     if (now >= last_request_ + kQuiet) {
       settling_ = false;
-      Still(base::ListValue());
+      Still({});
       return;
     }
     next = std::min(next, last_request_ + kQuiet);
@@ -909,35 +945,82 @@ void AgentPage::Quiet() {
   wait_.Start(FROM_HERE, next - now, base::BindOnce(&AgentPage::Quiet, base::Unretained(this)));
 }
 
-void AgentPage::Still(base::ListValue last) {
+void AgentPage::Still(std::vector<base::ListValue> last) {
   // After an action, the page may have gone somewhere agents may not.
   if (!IsWebPage()) {
     Fail("The tab's page isn't an http or https page, the only pages agents may use.",
          BC_AGENT_FAILURE_NOT_WEB_PAGE);
     return;
   }
-  Send("Accessibility.getFullAXTree", base::DictValue(),
+  const uint64_t request = job_->request;
+  ReadTrees(
+      request, Frames(), 0, {},
+      base::BindOnce(
+          [](base::WeakPtr<AgentPage> page, uint64_t request, std::vector<base::ListValue> last,
+             std::optional<std::vector<base::ListValue>> trees) {
+            if (!page || !page->job_ || page->job_->request != request) {
+              return;
+            }
+            if (!trees) {
+              page->Fail("The page's tree couldn't be read.");
+              return;
+            }
+            // The first read is always compared with a second, even past the deadline.
+            const bool same = *trees == last;
+            const bool splash = IsSplash(*trees);
+            const bool early = base::TimeTicks::Now() < page->job_->deadline;
+            // A tree that's changing is read again a frame on, and a splash that holds still less
+            // often.
+            if ((!same && (last.empty() || early)) || (splash && early)) {
+              page->wait_.Start(FROM_HERE, same ? kSplashLook : kFrame,
+                                base::BindOnce(&AgentPage::Still, page, std::move(*trees)));
+              return;
+            }
+            page->job_->busy |= !same || splash;
+            page->Read(std::move(trees->front()));
+          },
+          weak_factory_.GetWeakPtr(), request, std::move(last)));
+}
+
+void AgentPage::ReadTrees(
+    uint64_t request,
+    std::vector<Frame> frames,
+    size_t next,
+    std::vector<base::ListValue> trees,
+    base::OnceCallback<void(std::optional<std::vector<base::ListValue>>)> then) {
+  if (next >= frames.size()) {
+    std::move(then).Run(std::move(trees));
+    return;
+  }
+  base::DictValue params;
+  if (next) {
+    params.Set("frameId", frames[next].id);
+  }
+  const int slot = frames[next].slot;
+  Send("Accessibility.getFullAXTree", std::move(params),
        base::BindOnce(
-           [](base::WeakPtr<AgentPage> page, base::ListValue last, const base::DictValue* result) {
-             if (!page || !page->job_) {
+           [](base::WeakPtr<AgentPage> page, uint64_t request, std::vector<Frame> frames,
+              size_t next, std::vector<base::ListValue> trees,
+              base::OnceCallback<void(std::optional<std::vector<base::ListValue>>)> then,
+              const base::DictValue* result) {
+             // A reply owed to a job that ended, as the reply limit or a dialog ends one, stops
+             // here, not in the next job.
+             if (!page || !page->job_ || page->job_->request != request) {
                return;
              }
              const base::ListValue* nodes = result ? result->FindList("nodes") : nullptr;
-             if (!nodes) {
-               page->Fail("The page's tree couldn't be read.");
+             if (!nodes && !next) {
+               std::move(then).Run(std::nullopt);
                return;
              }
-             // The first read is always compared with a second, even past the deadline.
-             const bool same = *nodes == last;
-             if (!same && (last.empty() || base::TimeTicks::Now() < page->job_->deadline)) {
-               page->wait_.Start(FROM_HERE, kFrame,
-                                 base::BindOnce(&AgentPage::Still, page, nodes->Clone()));
-               return;
-             }
-             page->job_->busy |= !same;
-             page->Read(nodes->Clone());
+             // A frame that went meanwhile reads as empty, which the next read may not be.
+             trees.push_back(nodes ? nodes->Clone() : base::ListValue());
+             page->ReadTrees(request, std::move(frames), next + 1, std::move(trees),
+                             std::move(then));
            },
-           weak_factory_.GetWeakPtr(), std::move(last)));
+           weak_factory_.GetWeakPtr(), request, std::move(frames), next, std::move(trees),
+           std::move(then)),
+       slot);
 }
 
 void AgentPage::Click() {
@@ -1802,10 +1885,12 @@ void AgentPage::Copy(std::optional<gfx::Rect> area,
                      Pictured done,
                      std::optional<Boxes> before) {
   content::RenderWidgetHostView* view = GetWebContents().GetRenderWidgetHostView();
+  const gfx::Size page = view ? view->GetViewBounds().size() : gfx::Size();
+  // check.sh reads the size its page has for a picture (#3788); the app quiets this outside them.
+  LOG(ERROR) << "browser: agent picture of tab " << tab_ << " at " << page.width() << "x"
+             << page.height();
   const gfx::Rect source =
-      !view ? gfx::Rect()
-            : gfx::IntersectRects(area.value_or(gfx::Rect(view->GetViewBounds().size())),
-                                  gfx::Rect(view->GetViewBounds().size()));
+      !view ? gfx::Rect() : gfx::IntersectRects(area.value_or(gfx::Rect(page)), gfx::Rect(page));
   if (!before || source.IsEmpty()) {
     std::move(done).Run(base::unexpected(before ? kNoPicture : kPictureChanged));
     return;
@@ -3006,6 +3091,7 @@ void AgentPage::Answer(std::string text, bool error, bc_agent_failure failure) {
   }
   app_name_.clear();
   const uint64_t request = job_->request;
+  base::OnceCallback<void(bool)> put = std::move(job_->put);
   job_.reset();
   limit_.Ended();
   working_.RunAndReset();
@@ -3015,7 +3101,12 @@ void AgentPage::Answer(std::string text, bool error, bc_agent_failure failure) {
   wait_.Stop();
   loaded_.Reset();
   Unlisten();
-  if (std::exchange(taken_, false)) {
+  const bool taken = std::exchange(taken_, false);
+  if (put) {
+    // The user's files, which the core answers for.
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(put), !error));
+  } else if (taken) {
     // The download it started answers it.
   } else if (download_starting_.IsRunning()) {
     // Its page didn't change, or the tab has none, as the navigation became a download.
@@ -3049,11 +3140,19 @@ void AgentPage::EndWaiting(std::string why, std::optional<std::string> unstarted
   // and wait out the limit in turn, so they end now with their own answer, after this one's.
   std::deque<Job> queued = unstarted ? std::exchange(jobs_, {}) : std::deque<Job>();
   Fail(std::move(why));
-  for (const Job& job : queued) {
-    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE,
-        base::BindOnce(&Report, tab_, job.request, *unstarted, true, BC_AGENT_FAILURE_NONE));
+  for (Job& job : queued) {
+    Owe(job, *unstarted);
   }
+}
+
+void AgentPage::Owe(Job& job, const std::string& why) {
+  if (job.put) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(job.put), false));
+    return;
+  }
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(&Report, tab_, job.request, why, true, BC_AGENT_FAILURE_NONE));
 }
 
 // static
@@ -3108,12 +3207,11 @@ void AgentPage::LetGo() {
   working_.RunAndReset();
   download_starting_.Stop();
   AnswerHeld();
-  for (const Job& job : owed) {
-    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(&Report, tab_, job.request,
-                                  std::string("The agent's session with the tab ended."), true,
-                                  BC_AGENT_FAILURE_NONE));
+  for (Job& job : owed) {
+    Owe(job, "The agent's session with the tab ended.");
   }
+  // A file the user is choosing for one of its fields goes nowhere, and its dialog closes.
+  AgentFileField::TabEnded(tab_);
   weak_factory_.InvalidateWeakPtrs();
   // What the agent typed is kept only to compare with while its session lasts.
   typed_.clear();
@@ -3326,6 +3424,13 @@ void AgentPage::DidFinishNavigation(content::NavigationHandle* navigation) {
       !navigation->IsSameDocument()) {
     typed_.clear();
   }
+  // A page a job waits to settle once it has loaded, as navigate's, is heard from its commit on:
+  // the requests an app in a frame makes as it loads are its content still to come, though they
+  // start before the load stops, when the job would listen otherwise (#3658).
+  if (navigation->IsInPrimaryMainFrame() && navigation->HasCommitted() && job_ && loaded_ &&
+      job_->action == BC_AGENT_PAGE_QUIET && !listening_ && IsWebPage()) {
+    Listen(base::DoNothing());
+  }
   if (navigation->IsDownload() && job_) {
     download_starting_.Start(FROM_HERE, kDownloadStart,
                              base::BindOnce(&AgentPage::AnswerHeld, base::Unretained(this)));
@@ -3335,6 +3440,228 @@ void AgentPage::DidFinishNavigation(content::NavigationHandle* navigation) {
 void AgentPage::WebContentsDestroyed() {
   // The tab is closing: what's asked is answered now, as the replies never will be.
   LetGo();
+}
+
+void AgentPage::FileField() {
+  if (!job_->element) {
+    Fail("upload needs a file field element from snapshot.");
+    return;
+  }
+  ReadField(
+      SlotOfElement(job_->element), NodeOfElement(job_->element),
+      base::BindOnce(
+          [](base::WeakPtr<AgentPage> page, std::optional<FileFieldNow> now, std::string label) {
+            if (!page || !page->job_) {
+              return;
+            }
+            if (!now || !now->in_page) {
+              page->Fail(kFieldGone);
+              return;
+            }
+            if (std::optional<std::string> refused = FileFieldRefusal(now->facts)) {
+              page->Fail(*std::move(refused));
+              return;
+            }
+            if (std::optional<std::string> refused = FileFieldPlaceRefusal(now->place)) {
+              page->Fail(*std::move(refused));
+              return;
+            }
+            content::RenderFrameHost* frame = page->FrameById(now->place.frame);
+            if (!frame || !IsWebFrame(frame)) {
+              page->Fail(kFieldGone);
+              return;
+            }
+            // The site that gets the file: the field's frame's, which may be another than the
+            // tab's.
+            std::string site(frame->GetLastCommittedOrigin().host());
+            if (base::StartsWith(site, "www.")) {
+              site.erase(0, 4);
+            }
+            const bool many = FileFieldTakesMany(now->facts);
+            const bc_id field = AgentFileField::Shown(page->tab_, page->job_->element, *frame,
+                                                      now->place, many,
+                                                      FileFieldAccepts(now->facts));
+            if (!field) {
+              page->Fail(kFieldGone);
+              return;
+            }
+            std::optional<std::string> answer = base::WriteJson(
+                base::DictValue()
+                    .Set("field", static_cast<double>(field))
+                    .Set("label", std::move(label))
+                    .Set("site", std::move(site))
+                    .Set("many", many));
+            page->Answer(answer.value_or(std::string()), !answer);
+          },
+          weak_factory_.GetWeakPtr()));
+}
+
+void AgentPage::FillField() {
+  const int slot = SlotOfElement(job_->element);
+  const int node = NodeOfElement(job_->element);
+  ReadField(
+      slot, node,
+      base::BindOnce(
+          [](base::WeakPtr<AgentPage> page, int slot, int node, std::optional<FileFieldNow> now,
+             std::string) {
+            if (!page || !page->job_) {
+              return;
+            }
+            // The page's script may still run between this read and the set, which is another
+            // message to its renderer. What it can do there is bounded: a node gone or no longer
+            // a file input makes the set fail, and one moved into another document went by
+            // script with that document's own origin, so the files reach no other origin.
+            if (!now || !std::move(page->job_->lands).Run(*now)) {
+              page->Fail(kFieldGone);
+              return;
+            }
+            base::ListValue files;
+            for (const std::string& file : page->job_->files) {
+              files.Append(file);
+            }
+            page->Send("DOM.setFileInputFiles",
+                       base::DictValue().Set("files", std::move(files)).Set("backendNodeId", node),
+                       base::BindOnce(
+                           [](base::WeakPtr<AgentPage> page, const base::DictValue* result) {
+                             if (page && page->job_) {
+                               page->Answer(std::string(), /*error=*/!result);
+                             }
+                           },
+                           page),
+                       slot);
+          },
+          weak_factory_.GetWeakPtr(), slot, node));
+}
+
+void AgentPage::ReadField(int slot, int node, FieldRead then) {
+  Send(
+      "DOM.describeNode", base::DictValue().Set("backendNodeId", node),
+      base::BindOnce(
+          [](base::WeakPtr<AgentPage> page, int slot, int node, FieldRead then,
+             const base::DictValue* described) {
+            const base::DictValue* found = described ? described->FindDict("node") : nullptr;
+            if (!page || !found) {
+              std::move(then).Run(std::nullopt, std::string());
+              return;
+            }
+            FileFieldNow now;
+            if (const std::string* name = found->FindString("nodeName")) {
+              now.facts.name = *name;
+            }
+            if (const base::ListValue* attributes = found->FindList("attributes")) {
+              for (const base::Value& each : *attributes) {
+                now.facts.attributes.push_back(each.is_string() ? each.GetString() : "");
+              }
+            }
+            page->Send(
+                "Accessibility.getPartialAXTree",
+                base::DictValue().Set("backendNodeId", node).Set("fetchRelatives", true),
+                base::BindOnce(
+                    [](base::WeakPtr<AgentPage> page, int slot, FileFieldNow now, FieldRead then,
+                       const base::DictValue* tree) {
+                      if (!page) {
+                        std::move(then).Run(std::nullopt, std::string());
+                        return;
+                      }
+                      const base::ListValue* nodes = tree ? tree->FindList("nodes") : nullptr;
+                      const base::DictValue* first =
+                          nodes && !nodes->empty() ? nodes->front().GetIfDict() : nullptr;
+                      const std::string* name =
+                          first ? first->FindStringByDottedPath("name.value") : nullptr;
+                      std::string label = name ? *name : std::string();
+                      // The node comes first, then its children, then its ancestors from the
+                      // nearest up, which one in its document always has, the document's own at
+                      // least. One the page took out of its document has none.
+                      now.in_page = nodes && nodes->size() > 1;
+                      // The nearest root web area above it is its own document, whatever holds
+                      // that: an iframe, an object, an embed, a frameset's frame, or the tab.
+                      std::optional<double> document;
+                      for (size_t i = 1; nodes && i < nodes->size() && !document; ++i) {
+                        const base::DictValue* each = (*nodes)[i].GetIfDict();
+                        const std::string* role =
+                            each ? each->FindStringByDottedPath("role.value") : nullptr;
+                        if (role && *role == "RootWebArea") {
+                          document = each->FindDouble("backendDOMNodeId");
+                        }
+                      }
+                      auto placed = base::BindOnce(
+                          [](base::WeakPtr<AgentPage> page, FileFieldNow now, std::string label,
+                             FieldRead then, std::string frame) {
+                            // A frame that can't be told has no site to name, so it's refused as
+                            // one with none (FileFieldPlaceRefusal), never taken for the top's.
+                            if (frame.empty()) {
+                              std::move(then).Run(std::move(now), std::move(label));
+                              return;
+                            }
+                            content::RenderFrameHost* host =
+                                page ? page->FrameById(frame) : nullptr;
+                            if (!host) {
+                              std::move(then).Run(std::nullopt, std::string());
+                              return;
+                            }
+                            now.place = {std::move(frame),
+                                         host->GetLastCommittedOrigin().Serialize()};
+                            std::move(then).Run(std::move(now), std::move(label));
+                          },
+                          page, std::move(now), std::move(label), std::move(then));
+                      if (!document) {
+                        std::move(placed).Run(std::string());
+                        return;
+                      }
+                      // DevTools names a document's frame on its element child, as <html>, unless
+                      // that child is itself a frame owner (DocumentFrame).
+                      page->Send(
+                          "DOM.describeNode",
+                          base::DictValue()
+                              .Set("backendNodeId", static_cast<int>(*document))
+                              .Set("depth", 1),
+                          base::BindOnce(
+                              [](base::OnceCallback<void(std::string)> placed,
+                                 const base::DictValue* described) {
+                                const base::ListValue* children =
+                                    described ? described->FindListByDottedPath("node.children")
+                                              : nullptr;
+                                std::vector<DocumentChild> each;
+                                for (size_t i = 0; children && i < children->size(); ++i) {
+                                  const base::DictValue* child = (*children)[i].GetIfDict();
+                                  if (!child) {
+                                    continue;
+                                  }
+                                  const std::string* name = child->FindString("nodeName");
+                                  const std::string* local = child->FindString("localName");
+                                  const std::string* id = child->FindString("frameId");
+                                  each.push_back({
+                                      .type = child->FindInt("nodeType").value_or(0),
+                                      .name = name ? *name : std::string(),
+                                      .local_name = local ? *local : std::string(),
+                                      .frame = id ? *id : std::string(),
+                                      .holds_document = child->Find("contentDocument") != nullptr,
+                                  });
+                                }
+                                std::move(placed).Run(DocumentFrame(each));
+                              },
+                              std::move(placed)),
+                          slot);
+                    },
+                    page, slot, std::move(now), std::move(then)),
+                slot);
+          },
+          weak_factory_.GetWeakPtr(), slot, node, std::move(then)),
+      slot);
+}
+
+content::RenderFrameHost* AgentPage::FrameById(const std::string& id) {
+  content::RenderFrameHost* found = nullptr;
+  if (id.empty()) {
+    return found;
+  }
+  GetWebContents().GetPrimaryMainFrame()->ForEachRenderFrameHost(
+      [&found, &id](content::RenderFrameHost* each) {
+        if (each->GetDevToolsFrameToken().ToString() == id) {
+          found = each;
+        }
+      });
+  return found;
 }
 
 WEB_CONTENTS_USER_DATA_KEY_IMPL(AgentPage);

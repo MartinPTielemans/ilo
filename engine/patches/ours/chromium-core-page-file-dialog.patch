@@ -1,0 +1,118 @@
+Gives the core a say over each file dialog a page opens: a file input's chooser, from
+FileSelectHelper, and File System Access' pickers, which content asks Chrome's client for. Each
+builds a ChromeSelectFilePolicy marked with which it is, whose CanOpenSelectFileDialog first asks
+g_browser_core_page_file_dialog, a hook the core sets (//browser_core/hooks.h, #3656). Its false
+keeps the dialog from opening, and SelectFileDialog then gives the page a cancel, as the
+AllowFileSelectionDialogs policy's does, but without Chrome's infobar, as the core records the
+refusal in its own activity log. The core refuses every page's dialog in an agent's tab the user
+doesn't hold, where nobody watches what a dialog would hand the page. The browser's own dialogs,
+as a download's Save As, aren't marked and aren't asked about.
+
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -5260,7 +5260,8 @@ ChromeContentBrowserClient::GetLocalTracesDirectory() {
+ 
+ std::unique_ptr<ui::SelectFilePolicy>
+ ChromeContentBrowserClient::CreateSelectFilePolicy(WebContents* web_contents) {
+-  return std::make_unique<ChromeSelectFilePolicy>(web_contents);
++  return std::make_unique<ChromeSelectFilePolicy>(
++      web_contents, ChromeSelectFilePolicy::kContent);
+ }
+ 
+ void ChromeContentBrowserClient::GetAdditionalAllowedSchemesForFileSystem(
+--- a/chrome/browser/file_select_helper.cc
++++ b/chrome/browser/file_select_helper.cc
+@@ -778,7 +778,8 @@ void FileSelectHelper::RunFileChooserOnUIThread(
+ #endif  // !BUILDFLAG(IS_ANDROID)
+ 
+   select_file_dialog_ = ui::SelectFileDialog::Create(
+-      this, std::make_unique<ChromeSelectFilePolicy>(web_contents_));
++      this, std::make_unique<ChromeSelectFilePolicy>(
++                web_contents_, ChromeSelectFilePolicy::kFileInput));
+   if (!select_file_dialog_)
+     return;
+ 
+--- a/chrome/browser/ui/select_file_policy/chrome_select_file_policy.cc
++++ b/chrome/browser/ui/select_file_policy/chrome_select_file_policy.cc
+@@ -25,13 +25,24 @@
+ #include "components/tabs/public/tab_interface.h"
+ #endif
+ 
++// browser_core: set by the core (//browser_core/hooks.h).
++bool (*g_browser_core_page_file_dialog)(content::WebContents* contents,
++                                        int kind) = nullptr;
++
+ ChromeSelectFilePolicy::ChromeSelectFilePolicy(
+-    content::WebContents* source_contents)
+-    : source_contents_(source_contents) {}
++    content::WebContents* source_contents,
++    PageDialog page)
++    : source_contents_(source_contents), page_(page) {}
+ 
+ ChromeSelectFilePolicy::~ChromeSelectFilePolicy() = default;
+ 
+ bool ChromeSelectFilePolicy::CanOpenSelectFileDialog() {
++  if (page_ != kNotPage && source_contents_ &&
++      g_browser_core_page_file_dialog &&
++      !g_browser_core_page_file_dialog(source_contents_, page_)) {
++    refused_by_core_ = true;
++    return false;
++  }
+   if (source_contents_) {
+     Profile* profile =
+         Profile::FromBrowserContext(source_contents_->GetBrowserContext());
+@@ -48,6 +59,9 @@ bool ChromeSelectFilePolicy::CanOpenSelectFileDialog() {
+ }
+ 
+ void ChromeSelectFilePolicy::SelectFileDenied() {
++  if (refused_by_core_) {
++    return;
++  }
+   // If the WebContents is in a browser window, show a toast / infobar saying
+   // that file selection dialogs are disabled.
+   if (source_contents_) {
+--- a/chrome/browser/ui/select_file_policy/chrome_select_file_policy.h
++++ b/chrome/browser/ui/select_file_policy/chrome_select_file_policy.h
+@@ -12,11 +12,30 @@ namespace content {
+ class WebContents;
+ }
+ 
++// browser_core: whether the page in |contents| may open a file dialog, which
++// the core keeps from an agent's tab (//browser_core/hooks.h). False keeps it
++// from opening, and the page hears a cancel. |kind| is a
++// ChromeSelectFilePolicy::PageDialog.
++extern bool (*g_browser_core_page_file_dialog)(content::WebContents* contents,
++                                               int kind);
++
+ // A chrome specific SelectFilePolicy that checks local_state(), and will
+ // display an infobar on the weakly owned |source_contents|.
+ class ChromeSelectFilePolicy : public ui::SelectFilePolicy {
+  public:
+-  explicit ChromeSelectFilePolicy(content::WebContents* source_contents);
++  // What asked for the dialog, for the browser core's say over a page's
++  // (//browser_core/hooks.h): kNotPage for the browser's own, such as a
++  // download's Save As.
++  enum PageDialog {
++    kNotPage = 0,
++    // A file input's chooser, from FileSelectHelper.
++    kFileInput = 1,
++    // Content's own: File System Access' pickers.
++    kContent = 2,
++  };
++
++  explicit ChromeSelectFilePolicy(content::WebContents* source_contents,
++                                  PageDialog page = kNotPage);
+ 
+   ChromeSelectFilePolicy(const ChromeSelectFilePolicy&) = delete;
+   ChromeSelectFilePolicy& operator=(const ChromeSelectFilePolicy&) = delete;
+@@ -32,6 +51,10 @@ class ChromeSelectFilePolicy : public ui::SelectFilePolicy {
+ 
+  private:
+   raw_ptr<content::WebContents, AcrossTasksDanglingUntriaged> source_contents_;
++  const PageDialog page_;
++  // The core kept the dialog from opening, and records that itself, so
++  // Chrome's infobar doesn't.
++  bool refused_by_core_ = false;
+ };
+ 
+ #endif  // CHROME_BROWSER_UI_SELECT_FILE_POLICY_CHROME_SELECT_FILE_POLICY_H_

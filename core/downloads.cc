@@ -17,12 +17,12 @@
 #include "base/values.h"
 #include "browser_core/agent_download_hold.h"
 #include "browser_core/agent_page.h"
+#include "browser_core/agent_session.h"
 #include "browser_core/auto_archive.h"
 #include "browser_core/host.h"
 #include "browser_core/profiles.h"
 #include "browser_core/space.h"
 #include "browser_core/tab.h"
-#include "browser_core/window.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/download/chrome_download_manager_delegate.h"
 #include "chrome/browser/download/download_crx_util.h"
@@ -224,8 +224,9 @@ class Downloads : public download::AllDownloadItemNotifier::Observer {
 
   // A download a page in an agent's Space starts puts a file on the user's disk, so it waits on
   // them, paused, and the agent hears of it in place of the action it came from, which would
-  // otherwise answer that its tab has no web page (#1446). One the user starts there, in the tab
-  // they're looking at with no action of the agent's in it, is theirs.
+  // otherwise answer that its tab has no web page (#1446). It's the agent's whether or not a call
+  // of its is open (#3655): only one the user starts in a tab they hold, taken over or handed to
+  // them, is theirs.
   void HoldForAgent(download::DownloadItem* item) {
     content::WebContents* contents = content::DownloadItemUtils::GetWebContents(item);
     const bc_id tab = contents ? Tab::IdOf(contents) : 0;
@@ -234,7 +235,7 @@ class Downloads : public download::AllDownloadItemNotifier::Observer {
       return;
     }
     const uint64_t request = AgentPage::TakeJob(contents);
-    if (!request && Window::Showing(tab)) {
+    if (!request && IsHeld(tab)) {
       return;
     }
     // Paused once Chrome has resolved where it goes, it takes nothing more while it asks

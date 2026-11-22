@@ -388,6 +388,22 @@ private struct Turned<Content: View>: View {
   }
 }
 
+/// Counts the frames the screen draws.
+@MainActor private final class DrawnFrames: NSObject {
+  private(set) var count = 0
+  private var link: CADisplayLink?
+
+  override init() {
+    super.init()
+    link = CADisplayLink(target: self, selector: #selector(drew))
+    link?.add(to: .main, forMode: .common)
+  }
+
+  @objc private func drew() { count += 1 }
+
+  func stop() { link?.invalidate() }
+}
+
 /// The Space on a phone on its side.
 @Suite(.serialized, .timeLimit(.minutes(5))) @MainActor struct LandscapeSpaceTests {
   @Test func `the search field is inside the clear edges on its side, and keeps the keyboard through the turn and back`() async throws {
@@ -397,15 +413,21 @@ private struct Turned<Content: View>: View {
     #expect(await eventually { stage.first(UITextField.self)?.isFirstResponder == true })
     let upright = try #require(stage.first(UITextField.self))
     func place() -> CGRect { upright.convert(upright.bounds, to: stage.window) }
-    // Where the field comes to rest: the dock moves as the field takes the keyboard.
+    // Where the field comes to rest: the dock moves as the field takes the keyboard, and the field
+    // opens. Rest is counted in frames drawn, not in time: on the first Space a process shows, the
+    // main thread can be away for a few hundred milliseconds as the field takes the keyboard, and
+    // the field opens only after it, which time alone took as a rest at the closed place (#3838).
+    let frames = DrawnFrames()
+    defer { frames.stop() }
     var last = place()
-    var since = ContinuousClock.now
+    var since = frames.count
     let rested = await eventually {
       if place() != last {
         last = place()
-        since = .now
+        since = frames.count
       }
-      return ContinuousClock.now - since > .milliseconds(300)
+      // The 300 ms it took before, at 60 frames a second.
+      return frames.count - since > 18
     }
     #expect(rested)
     let before = last
@@ -456,15 +478,32 @@ private struct Turned<Content: View>: View {
 /// A page through a turn of the phone.
 @Suite(.serialized, .timeLimit(.minutes(5))) @MainActor struct LandscapePageTests {
   /// A long page of text that reflows with its width, each paragraph marked with its number.
-  private static let article: String = {
+  private static let article = page()
+
+  /// The article, with a script that works for 600 ms each time the page is laid out for a new
+  /// width, as a page that lays out a chart or a feed itself does on a slow phone. WebKit places
+  /// the page for its new size only once that work is done.
+  private static let slowArticle = page(script: """
+    let laid = 0;
+    new ResizeObserver(() => {
+      const width = document.documentElement.clientWidth;
+      if (width === laid) return;
+      const first = laid === 0;
+      laid = width;
+      if (first) return;
+      for (const end = performance.now() + 600; performance.now() < end; ) {}
+    }).observe(document.documentElement);
+    """)
+
+  private static func page(script: String = "") -> String {
     let words = String(repeating: "Tea leaves are withered and rolled before they are dried. ", count: 6)
     let paragraphs = (0..<80).map { "<p id=\"p\($0)\">\(words)</p>" }.joined()
     return """
       <html data-mark="article"><head><meta name="viewport" content="width=device-width, initial-scale=1">
       <style>html { -webkit-text-size-adjust: 100% } body { margin: 16px; font: 17px/1.4 -apple-system } p { margin: 0 0 12px }</style></head>
-      <body>\(paragraphs)</body></html>
+      <body>\(paragraphs)<script>\(script)</script></body></html>
       """
-  }()
+  }
 
   private func top(of id: String, in tab: WebTab) async -> CGFloat? {
     let script = "return document.getElementById(id).getBoundingClientRect().top"
@@ -472,6 +511,14 @@ private struct Turned<Content: View>: View {
   }
 
   @Test func `the paragraph at the top of the page is still there after a turn, and after the turn back`() async throws {
+    try await turns(Self.article)
+  }
+
+  @Test func `the paragraph at the top of a page slow to lay out a new width is still there after a turn, and after the turn back`() async throws {
+    try await turns(Self.slowArticle)
+  }
+
+  private func turns(_ page: String) async throws {
     let tab = WebTab(id: "tab", role: .today, browser: stageBrowser())
     let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
     let window = UIWindow(windowScene: scene)
@@ -482,7 +529,7 @@ private struct Turned<Content: View>: View {
     tab.webView.frame = CGRect(origin: .zero, size: Room.upright)
     controller.view.addSubview(tab.webView)
 
-    tab.webView.loadHTMLString(Self.article, baseURL: URL(string: "https://example.org/"))
+    tab.webView.loadHTMLString(page, baseURL: URL(string: "https://example.org/"))
     #expect(
       await eventually {
         (try? await tab.webView.callAsyncJavaScript("return document.documentElement.dataset.mark || ''", contentWorld: .defaultClient))
@@ -509,19 +556,21 @@ private struct Turned<Content: View>: View {
     // the top there is at the top upright, a line of the upright page at most from it.
     tab.webView.frame = CGRect(origin: .zero, size: Room.side)
     #expect(await eventually { await rests(tab, wide: Room.side.width, within: 2) })
-    // A finger on the page takes it from the turn, which holds its mark for a moment after.
+    // Nothing holds the page once the turn has put its text back: a page scrolled after it stays.
     _ = try await tab.webView.callAsyncJavaScript(
-      "dispatchEvent(new Event('touchstart')); scrollTo(0, document.getElementById('p60').getBoundingClientRect().top + scrollY)",
-      contentWorld: .defaultClient)
+      "scrollTo(0, document.getElementById('p60').getBoundingClientRect().top + scrollY)", contentWorld: .defaultClient)
     #expect(await eventually { await rests(tab, at: "p60", wide: Room.side.width, within: 1) })
     tab.webView.frame = CGRect(origin: .zero, size: Room.upright)
     #expect(await eventually { await rests(tab, at: "p60", wide: Room.upright.width, within: 30) })
   }
 
-  /// Whether the page has the width its web view has, is scrolled to where the web view says,
-  /// and has the paragraph's top within `slack` of the screen's.
+  /// Whether the page is laid out for the width its web view has, is scrolled to where the web
+  /// view says, and has the paragraph's top within `slack` of the screen's. `innerWidth` can't
+  /// say the first: it can have the new width before the page is laid out for it.
   private func rests(_ tab: WebTab, at id: String = "p40", wide: CGFloat, within slack: CGFloat) async -> Bool {
-    let said = try? await tab.webView.callAsyncJavaScript("return [innerWidth, scrollY]", contentWorld: .defaultClient) as? [Double]
+    let said =
+      try? await tab.webView.callAsyncJavaScript("return [document.documentElement.clientWidth, scrollY]", contentWorld: .defaultClient)
+      as? [Double]
     guard let said, said.count == 2, CGFloat(said[0]) == wide else { return false }
     guard abs(CGFloat(said[1]) - tab.webView.scrollView.contentOffset.y) < 1, let top = await top(of: id, in: tab) else { return false }
     return abs(top) < slack

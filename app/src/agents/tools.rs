@@ -267,6 +267,9 @@ fn shared() -> Value {
         "description": "What the answer gives of the page: its outline (the default), to act on it; its text, as read_page reads it, to read an article or a document; or only which page it is (none)."
     });
     let acts = json!({ "readOnlyHint": false, "destructiveHint": false, "openWorldHint": true });
+    // As a wait step's text, for an app whose content comes after its page has settled (#3658).
+    let wait_for = json!({ "type": "string", "description": "Text to wait for in the page, as an app's content that comes after its page has loaded. The answer says whether it showed." });
+    let wait_seconds = json!({ "type": "number", "exclusiveMinimum": 0, "maximum": MAX_WAIT, "description": "How long wait_for waits, in seconds; 5 if not given." });
     let tabs = json!({ "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false });
     json!([
         {
@@ -279,10 +282,15 @@ fn shared() -> Value {
         {
             "name": "open_tab",
             "title": "Open tab",
-            "description": "Open a URL, or search for words, in a new tab of your own. Answers with the page's outline, or with its text when answer is text: pick text to read a page. Every answer is 12,000 characters at most.",
+            "description": "Open a URL, or search for words, in a new tab of your own. Answers with the page's outline, or with its text when answer is text: pick text to read a page. It answers once the page has settled, or once wait_for's text shows in it. Every answer is 12,000 characters at most.",
             "inputSchema": {
                 "type": "object",
-                "properties": { "url": { "type": "string", "description": "A URL, or words to search for." }, "answer": answer },
+                "properties": {
+                    "url": { "type": "string", "description": "A URL, or words to search for." },
+                    "answer": answer,
+                    "wait_for": wait_for,
+                    "seconds": wait_seconds,
+                },
                 "required": ["url"],
             },
             "annotations": acts,
@@ -354,12 +362,14 @@ fn shared() -> Value {
         {
             "name": "navigate",
             "title": "Navigate",
-            "description": "Go to a URL, or search for words, in a tab. \"back\" and \"forward\" move through its history. Answers with the page's outline, or with its text when answer is text: pick text to read a page.",
+            "description": "Go to a URL, or search for words, in a tab. \"back\" and \"forward\" move through its history. Answers with the page's outline, or with its text when answer is text: pick text to read a page. It answers once the page has settled, or once wait_for's text shows in it.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "url": { "type": "string", "description": "A URL, words to search for, \"back\" or \"forward\"." },
                     "answer": answer,
+                    "wait_for": wait_for,
+                    "seconds": wait_seconds,
                     "tab": tab,
                 },
                 "required": ["url"],
@@ -776,9 +786,13 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
             let into = target("a field");
             return match (tense, did.text.is_empty()) {
                 (Tense::Now, true) => format!("Typing in {into}"),
-                (Tense::Now, false) => format!("Typing “{}” in {into}", did.text),
+                (Tense::Now, false) => {
+                    format!("Typing {} in {into}", page::curly(&did.text, TYPED_SHOWN))
+                }
                 (Tense::Done, true) => format!("Typed in {into}"),
-                (Tense::Done, false) => format!("Typed “{}” in {into}", did.text),
+                (Tense::Done, false) => {
+                    format!("Typed {} in {into}", page::curly(&did.text, TYPED_SHOWN))
+                }
                 (Tense::Failed, _) => format!("Couldn't type in {into}"),
             };
         }
@@ -786,11 +800,18 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
             let into = target("a list");
             return match (tense, did.text.is_empty()) {
                 (Tense::Now, true) => format!("Choosing in {into}"),
-                (Tense::Now, false) => format!("Choosing “{}” in {into}", did.text),
+                (Tense::Now, false) => {
+                    format!("Choosing {} in {into}", page::curly(&did.text, TYPED_SHOWN))
+                }
                 (Tense::Done, true) => format!("Chose in {into}"),
-                (Tense::Done, false) => format!("Chose “{}” in {into}", did.text),
+                (Tense::Done, false) => {
+                    format!("Chose {} in {into}", page::curly(&did.text, TYPED_SHOWN))
+                }
                 (Tense::Failed, true) => format!("Couldn't choose in {into}"),
-                (Tense::Failed, false) => format!("Couldn't choose “{}” in {into}", did.text),
+                (Tense::Failed, false) => format!(
+                    "Couldn't choose {} in {into}",
+                    page::curly(&did.text, TYPED_SHOWN)
+                ),
             };
         }
         "press_key" => ("Pressing", "Pressed", "Couldn't press", target("a key")),
@@ -821,6 +842,14 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
             _ => ("Waiting", "Waited", "Couldn't wait", target("")),
         },
         "check" => ("Looking for", "Saw", "Didn't see", target("text")),
+        super::fence::ASKED_ACTION => {
+            let (now, done, failed) = super::fence::ASKED;
+            (now, done, failed, site("a site"))
+        }
+        super::fence::CAME_ACTION => {
+            let (now, done, failed) = super::fence::CAME;
+            (now, done, failed, site("a site"))
+        }
         "list_tabs" => (
             "Looking over",
             "Looked over",
@@ -1025,6 +1054,8 @@ pub fn describe(action: &str) -> &'static str {
         "answered" => "You answered",
         "finish" => "Finished",
         "done" => "Marked the task done",
+        super::fence::ASKED_ACTION => super::fence::ASKED_DONE,
+        super::fence::CAME_ACTION => super::fence::CAME_DONE,
         _ => "Acted",
     }
 }

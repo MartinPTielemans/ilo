@@ -26,10 +26,16 @@ pub const NAME: &str = if cfg!(windows) {
 /// given the bridge's path there broke with each Store update (#1442).
 pub fn store_alias(local_app_data: &str) -> PathBuf {
     format!(
-        r"{local_app_data}\Microsoft\WindowsApps\{}-mcp-bridge.exe",
+        r"{}\{}-mcp-bridge.exe",
+        store_aliases(local_app_data),
         env!("APP_NAME")
     )
     .into()
+}
+
+/// The folder Windows keeps a package's aliases in, which is on the user's PATH.
+pub fn store_aliases(local_app_data: &str) -> String {
+    format!(r"{local_app_data}\Microsoft\WindowsApps")
 }
 
 /// What a client runs to reach the server through the bridge at `bridge`, before the socket. In
@@ -80,7 +86,7 @@ pub fn run(
     use super::server;
     let stream = server::connect(socket).map_err(|_| {
         format!(
-            "{} isn't running with agents on. Turn them on in Settings › Agents.",
+            "{0} isn't running, or agents are off. Open {0} and turn agents on in Settings › Agents.",
             env!("APP_NAME")
         )
     })?;

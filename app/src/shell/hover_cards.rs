@@ -277,9 +277,8 @@ impl Shell {
         self.card_changed(tab, cx);
     }
 
-    /// A row of what's recent on `tab`'s card was clicked: it opens and shows, behind the tab
-    /// shown, or beside its page. A pinned tab keeps its page, so there the row opens in a Today
-    /// tab of its own, which the core shows (#3576).
+    /// A row of what's recent on `tab`'s card was clicked: it opens in the tab, which leaves its
+    /// pinned address and shows its way back, behind it, or beside the page.
     fn open_recent(
         &mut self,
         tab: u64,
@@ -297,19 +296,14 @@ impl Shell {
             Opening::Beside if self.selected != 0 && self.selected != tab => self
                 .browser
                 .open_split_at(&url, self.selected, false, false, cx),
-            _ => self.navigate_shown(tab, &url, cx),
+            _ => self.follow_shown(tab, &url, cx),
         }
     }
 
-    /// Loads `url` in `tab`, and shows it with the page focused, as a click on its row would. A
-    /// pinned tab's other address the core opens in a Today tab and shows, which selecting the
-    /// pinned tab would hide behind it (#3576).
-    fn navigate_shown(&mut self, tab: u64, url: &str, cx: &mut Context<Self>) {
-        let opens_its_own = self.pinned().contains(&tab) && *self.page(tab).url != *url;
-        self.browser.navigate(tab, url, cx);
-        if !opens_its_own {
-            self.select(tab, cx);
-        }
+    /// Loads `url` in `tab`, and shows it with the page focused, as a click on its row would.
+    fn follow_shown(&mut self, tab: u64, url: &str, cx: &mut Context<Self>) {
+        self.browser.follow(tab, url, cx);
+        self.select(tab, cx);
         self.browser.focus_page(cx);
     }
 
@@ -447,7 +441,7 @@ impl Shell {
             Event::Open(row, opening) => self.open_recent(tab, row, opening, cx),
             Event::SignIn => {
                 log!("browser: command recent-sign-in via hover card");
-                self.navigate_shown(tab, "https://github.com/login", cx);
+                self.follow_shown(tab, "https://github.com/login", cx);
             }
         }
     }

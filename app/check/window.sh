@@ -20,7 +20,8 @@
 # double-click there zooms it, and one in the
 # sidebar below the rows opens a new tab. ⌘S, with the page or the UI focused, and the sidebar
 # button hide the sidebar and the window's buttons, and the card takes its place, through a resize;
-# ⌘S brings them back, and the core hears the page moves for each motion and is still after it. The
+# ⌘S brings them back, and the core hears the page moves for each motion and is still after it, or
+# the page goes to its place in one step when the motion is over by its first frame. The
 # pointer kept at the window's edge brings the hidden sidebar out, and one passing it doesn't, from
 # the right edge too with the sidebar put on the right. A tab opened with the sidebar hidden says
 # so in a toast, a second one bumps it, and a click on it brings the sidebar back. The sidebar's
@@ -32,6 +33,7 @@
 # dark and then light, with the Mac's appearance, and View › Appearance turns the light window dark
 # and back. On the Mac, the Dock icon's dot takes the Space's color, and stays green with its switch
 # in Settings › General off; on Windows, the taskbar button's dot does, read off a check VM's screen.
+# On a hosted Windows runner, at Windows' Text size 110 % the page view keeps its margins.
 
 # A long page that times its frames while it scrolls and puts the numbers in its title.
 page=$(base64 << 'HTML' | tr -d '\n'
@@ -930,33 +932,60 @@ toggle() {
     check_layout "after $3"
     check_buttons "after $3"
   fi
+  [ -z "$one_step" ] || one_step_rested
 }
-# moved <what>: the sidebar's motion moved the page's frame every step, so the core heard the page
-# moves before the first and is still after the last (issue #166). A check can't see the jiggle that
-# stops. Not for docking the sidebar out, which takes its place in one frame. Before toggle, whose
-# layout starts a new driver step that both lines precede.
+# moved <what> <hidden|shown>: the sidebar's motion moved the page's frame every step, so the core
+# heard the page moves before the first and is still after the last (issue #166). A check can't see
+# the jiggle that stops. Not for docking the sidebar out, which takes its place in one frame. Before
+# toggle, whose layout starts a new driver step that both lines precede.
+# A motion is over by its first frame when that frame comes later than the motion's length, as a
+# slow runner's can (#3736): the page goes to its place in one step, with none for the core to hear
+# of. Then toggle sees that the page was resized only to where it rests (one_step_rested).
+one_step=
 moved() {
-  expect '^browser: page moving 1$' "$1 didn't tell the core the page moves"
-  expect '^browser: page moving 0$' "$1 didn't tell the core the page is still"
+  motion_from=${view#* }
+  motion_at=$step
+  expect "^browser: \(page moving 1\|sidebar $2\)\$" "$1 didn't move the sidebar"
+  if since "$motion_at" | sed "/^browser: sidebar $2\$/q" | grep -q '^browser: page moving 1$'; then
+    expect '^browser: page moving 0$' "$1 didn't tell the core the page is still"
+  else
+    one_step=$1
+  fi
+}
+# Once toggle has laid out the page at rest: the motion moved, but the core wasn't told it moves,
+# and the page was resized straight to where it rests, from where it was. A size between is #166.
+one_step_rested() {
+  motion_rest=${view#* }
+  expect "^browser: title [0-9]* resized [0-9]* times, to $motion_rest\$" \
+    "$one_step: its motion was over by its first frame, and the page didn't come to $motion_rest" \
+    "$motion_at"
+  motion_between=$(since "$motion_at" | sed -n 's/^browser: title [0-9]* resized [0-9]* times, to //p' |
+    grep -v -e "^$motion_rest\$" -e "^$motion_from\$" || true)
+  [ -z "$motion_between" ] ||
+    fail "$one_step didn't tell the core the page moves, and it was $(echo $motion_between) on its way"
+  echo "window: $one_step was over by its first frame: the page went from $motion_from to $motion_rest"
+  one_step=
 }
 send click $page_point
+# Where the page rests before the first ⌘S, which moved reads.
+check_layout "before ⌘S"
 send key s cmd
-# The capture waits for the line, not a time, so it lands in the motion if the motion outlasts the
+# The capture waits for a line, not a time, so it lands in the motion if the motion outlasts the
 # capture, and just after it if not.
-expect '^browser: page moving 1$' "⌘S with the page focused didn't tell the core the page moves"
+expect '^browser: \(page moving 1\|sidebar hidden\)$' "⌘S with the page focused didn't move the sidebar"
 ../tools/window-screenshot.sh "$pid" "$out/sidebar-moving.png" || fail "no window to capture"
-moved "⌘S with the page focused"
+moved "⌘S with the page focused" hidden
 toggle page hidden "⌘S with the page focused"
 ../tools/window-screenshot.sh "$pid" "$out/sidebar-hidden.png" || fail "no window to capture"
 send key s cmd
-moved "⌘S again with the page focused"
+moved "⌘S again with the page focused" shown
 toggle page shown "⌘S again with the page focused"
 send click 110 400
 send key s cmd
-moved "⌘S with the UI focused"
+moved "⌘S with the UI focused" hidden
 toggle ui hidden "⌘S with the UI focused"
 send key s cmd
-moved "⌘S again with the UI focused"
+moved "⌘S again with the UI focused" shown
 toggle ui shown "⌘S again with the UI focused"
 send click 93 24
 toggle sidebar hidden "a click on the sidebar button"
@@ -1959,5 +1988,68 @@ fi
 }
 exec 3>&-
 quit
+# Windows' Text size goes into Chromium's scale and not into GPUI's, so the page view was the app's
+# frame for it times the text scale, past the window's edge (#3621). At 110 % the page view keeps
+# its margins as at 100 %, and the page is its view's width over the text scale, as Chrome's pages
+# are. It changes a setting of the machine's user, so it runs only on a hosted runner, which is
+# thrown away after the job, and puts the setting back on every way out of the run there.
+text_size=
+if ! windows; then
+  text_size="Text size is Windows'"
+elif [ "${RUNNER_ENVIRONMENT:-}" != github-hosted ]; then
+  echo "skip: window at Windows' Text size 110 %, which changes the user's setting: on a hosted runner only"
+  text_size="skipped off a hosted runner"
+else
+  # window_text_size <percent | none>: Windows' Text size as Settings › Accessibility keeps it, for
+  # apps started after, a percent or none for no value, as a new user has. Prints what it was.
+  window_text_size() {
+    timeout 60 powershell.exe -NoProfile -NonInteractive -Command "
+      \$key = 'HKCU:\Software\Microsoft\Accessibility'
+      \$was = (Get-ItemProperty -Path \$key -Name TextScaleFactor -ErrorAction SilentlyContinue).TextScaleFactor
+      if (\$was -eq \$null) { 'none' } else { \$was }
+      if ('$1' -eq 'none') {
+        Remove-ItemProperty -Path \$key -Name TextScaleFactor -ErrorAction SilentlyContinue
+      } else {
+        if (!(Test-Path \$key)) { New-Item -Path \$key | Out-Null }
+        Set-ItemProperty -Path \$key -Name TextScaleFactor -Value $1 -Type DWord
+      }
+    " | tr -d '\r'
+  }
+  window_text_was=$(window_text_size 110)
+  [ -n "$window_text_was" ] || fail "Windows' Text size didn't say what it was"
+  window_text_back() { window_text_size "$window_text_was" > /dev/null; }
+  # cleanup puts it back on a failure, and a cancelled job's signal goes there too.
+  run_undo=window_text_back
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  trap 'exit 129' HUP
+  printf '%s' '<!doctype html><title>loading</title>
+<script>
+const say = () => document.title = `fit iw ${innerWidth} dpr ${devicePixelRatio}`;
+addEventListener("resize", say);
+requestAnimationFrame(() => setTimeout(say));
+</script>' > "$out/site/text-size.html"
+  log="$out/window-text-size.log"
+  step=0
+  rm -f "$saved" "$launch_frame"
+  BROWSER_DRIVE=1 BROWSER_URL="${site}text-size.html" "$browser" < "$out/drive" > "$log" 2>&1 &
+  pid=$!
+  exec 3> "$out/drive"
+  await_load
+  check_layout "at Windows' Text size 110 %"
+  # Its width over 1.1, as it may round either way.
+  view_width=${view#* }
+  view_width=${view_width%x*}
+  widths=$(awk -v w="$view_width" 'BEGIN { for (i = int(w / 1.1) - 1; i <= int(w / 1.1) + 2; i++) printf "%s\\|", i }')
+  await "^browser: title [0-9]* fit iw \\(${widths%\\|}\\) " ||
+    fail "at Windows' Text size 110 % the page isn't its $view_width-point view's width over 1.1: $(grep '^browser: title [0-9]* fit ' "$log" | tail -1)"
+  ../tools/window-screenshot.sh "$pid" "$out/text-size.png" || fail "no window to capture"
+  exec 3>&-
+  quit
+  window_text_back
+  run_undo=
+  trap - INT TERM HUP
+  text_size="at Windows' Text size 110 % the page view keeps its margins, its page ${view_width} points wide over 1.1 ($out/text-size.png)"
+fi
 echo "edge: $edge"
-echo "ok: the page view keeps its margins and the window's buttons stay at Arc's through a resize and full screen, widened, $gap, full screen says how to leave and a page's doesn't, a full-screen page takes the window with it and escape or the page leaving brings both back, the page resized once each way, the green button takes a full-screen page out with the window and brings back the sidebar and the card, from where the page's full screen takes the window again, ${displays:+$displays, }the command bar opens in full screen and keeps the keyboard when a page commits under it, then gives it to the new page. Drags on the window's background move it and drags on its controls don't. A double-click on the header $zoom, and one on the empty sidebar opens a new tab. ⌘S from the page and the UI, and the sidebar button, hide the sidebar and the window's buttons, the card takes its place through a resize, and ⌘S brings them back. The pointer kept at the window's edge brings the hidden sidebar out over the page, one passing it doesn't, and the pointer past it sends it away, and the sidebar button and ⌘S dock it from there. With the sidebar put on the right in Settings, the pointer at the window's last column brings it out there. ⌥ pressed alone, with the UI or the page focused, brings the hidden sidebar out and sends it away again, and ⌥ held with ⌘ or a key doesn't. A tab opened with the sidebar hidden says so in a toast, a second one bumps it, and a click on it brings the sidebar back. The sidebar's edge drags its width between 164 and 500, hides it dragged on past the narrowest, and a double-click puts it back. A page that hasn't drawn shows black or white as websites are told the appearance is:${unpainted_seen%,}. Page full screen, ms from the page's request, median of 6 going in, 3 leaving by the page, 3 by escape: going in ${enter_ms}leaving ${exit_ms}by escape ${escape_ms%, }. Scrolling: $timing. Material: $material. Dock icon: $dock. Windows: $out/fullscreen-note.png, $out/fullscreen.png, $out/page-fullscreen.png, $out/green-button.png, $out/green-button-again.png, ${display_shots:-}$out/sidebar-hidden.png, $out/sidebar-reveal.png, $out/sidebar-reveal-right.png, $out/sidebar-option.png, $out/new-tab-toast.png, $out/sidebar-wide.png, $out/sidebar-narrow.png, $out/before-paint-light.png, $out/before-paint-dark.png, $out/resize-gap.png${light_shots:-}${dock_shots:-}"
+echo "ok: the page view keeps its margins and the window's buttons stay at Arc's through a resize and full screen, widened, $gap, full screen says how to leave and a page's doesn't, a full-screen page takes the window with it and escape or the page leaving brings both back, the page resized once each way, the green button takes a full-screen page out with the window and brings back the sidebar and the card, from where the page's full screen takes the window again, ${displays:+$displays, }the command bar opens in full screen and keeps the keyboard when a page commits under it, then gives it to the new page. Drags on the window's background move it and drags on its controls don't. A double-click on the header $zoom, and one on the empty sidebar opens a new tab. ⌘S from the page and the UI, and the sidebar button, hide the sidebar and the window's buttons, the card takes its place through a resize, and ⌘S brings them back. The pointer kept at the window's edge brings the hidden sidebar out over the page, one passing it doesn't, and the pointer past it sends it away, and the sidebar button and ⌘S dock it from there. With the sidebar put on the right in Settings, the pointer at the window's last column brings it out there. ⌥ pressed alone, with the UI or the page focused, brings the hidden sidebar out and sends it away again, and ⌥ held with ⌘ or a key doesn't. A tab opened with the sidebar hidden says so in a toast, a second one bumps it, and a click on it brings the sidebar back. The sidebar's edge drags its width between 164 and 500, hides it dragged on past the narrowest, and a double-click puts it back. A page that hasn't drawn shows black or white as websites are told the appearance is:${unpainted_seen%,}. Page full screen, ms from the page's request, median of 6 going in, 3 leaving by the page, 3 by escape: going in ${enter_ms}leaving ${exit_ms}by escape ${escape_ms%, }. Scrolling: $timing. Material: $material. Dock icon: $dock. Windows: $out/fullscreen-note.png, $out/fullscreen.png, $out/page-fullscreen.png, $out/green-button.png, $out/green-button-again.png, ${display_shots:-}$out/sidebar-hidden.png, $out/sidebar-reveal.png, $out/sidebar-reveal-right.png, $out/sidebar-option.png, $out/new-tab-toast.png, $out/sidebar-wide.png, $out/sidebar-narrow.png, $out/before-paint-light.png, $out/before-paint-dark.png, $out/resize-gap.png${light_shots:-}${dock_shots:-}. Text size: $text_size."

@@ -111,7 +111,7 @@ Authorship is human: you sign off and answer for the change, however it was writ
 
 ## Code from other projects
 
-The browser is GPL-3.0-or-later, so code under GPL-3.0-compatible licenses can come in: Chromium (BSD-3-Clause), ungoogled-chromium (BSD-3-Clause), Helium (GPL-3.0), Ardia (Apache-2.0 / GPL-3.0), GPUI (Apache-2.0), Lucide's icons (ISC, some MIT), T3 Code (MIT).
+`site/` is MIT, the rest GPL-3.0-or-later, so code under GPL-3.0-compatible licenses can come in: Chromium and ungoogled-chromium (BSD-3-Clause), Helium (GPL-3.0), Ardia (Apache-2.0 / GPL-3.0), GPUI (Apache-2.0), Lucide's icons (ISC, some MIT), T3 Code (MIT).
 
 When you copy or adapt a patch or file:
 

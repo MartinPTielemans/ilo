@@ -20,6 +20,7 @@
 #include "base/timer/timer.h"
 #include "base/types/expected.h"
 #include "base/values.h"
+#include "browser_core/agent_file_field_rule.h"
 #include "browser_core/agent_reply_limit.h"
 #include "browser_core/public/browser_core.h"
 #include "browser_core/withheld_fields.h"
@@ -57,6 +58,16 @@ class AgentPage : public content::WebContentsObserver,
 
   // See bc_agent_page.
   void Act(uint64_t request, int action, int64_t element, std::string text);
+
+  // The user's |files| for the file field |element| an agent's card named (agent_file_field.h), as
+  // a job of its own after those queued: |lands| hears the field as it is then, and says whether
+  // they go into it, which is DevTools' DOM.setFileInputFiles on that node alone. Then |put| hears,
+  // posted, whether they went in.
+  using Lands = base::OnceCallback<bool(const FileFieldNow& now)>;
+  void Fill(int64_t element,
+            std::vector<std::string> files,
+            Lands lands,
+            base::OnceCallback<void(bool)> put);
 
   // The agent's session with |tab| ended: its page stops drawing while hidden, and DevTools lets
   // it go. What's still asked is answered as an error.
@@ -101,6 +112,11 @@ class AgentPage : public content::WebContentsObserver,
     // Whether requests the page made were still open then, or had only just ended, though it was
     // neither loading nor changing, as a page that polls or sends beacons keeps them (#2355).
     bool requests = false;
+    // A Fill's: the user's files, whether they go in, and who hears whether they did, in place of
+    // the agent.
+    std::vector<std::string> files;
+    Lands lands;
+    base::OnceCallback<void(bool)> put;
   };
   using Reply = base::OnceCallback<void(const base::DictValue* result)>;
   using Then = base::OnceCallback<void(std::optional<gfx::RectF>)>;
@@ -166,8 +182,17 @@ class AgentPage : public content::WebContentsObserver,
   void Settle();
   // Waits until the page has stopped loading and has had no request for a while.
   void Quiet();
-  // Reads the main frame's tree until it's the same twice, a frame apart, then the snapshot.
-  void Still(base::ListValue last);
+  // Reads the page's trees, its frames' too, until they're the same twice, a frame apart, and are
+  // more than a splash, then the snapshot. Past the job's deadline it answers as busy.
+  void Still(std::vector<base::ListValue> last);
+  // The trees of the main frame and of each frame a snapshot reads, in |frames| from |next| on,
+  // added to |trees|: what an app in a frame shows is in its frame's tree alone (#3658). Nothing if
+  // the main frame's couldn't be read. Its replies stop once |request|'s job has ended.
+  void ReadTrees(uint64_t request,
+                 std::vector<Frame> frames,
+                 size_t next,
+                 std::vector<base::ListValue> trees,
+                 base::OnceCallback<void(std::optional<std::vector<base::ListValue>>)> then);
 
   void Click();
   // Presses the job's element once it's ready. One outside the page's view, where scrolling
@@ -298,6 +323,23 @@ class AgentPage : public content::WebContentsObserver,
   // With |error|, |failure| is what agent code decides on, as Report gives it.
   void Answer(std::string text, bool error, bc_agent_failure failure = BC_AGENT_FAILURE_NONE);
   void Fail(std::string why, bc_agent_failure failure = BC_AGENT_FAILURE_NONE);
+  // Answers |job|, which never ran, as the session ended or a dialog keeps its page: the agent with
+  // |why|, a Fill as not put.
+  void Owe(Job& job, const std::string& why);
+
+  // FILE_FIELD: describes the job's element for the user's card, which may ask for a file for it
+  // only if it's a file input that isn't a folder's, in a frame with a site, and keeps where it is
+  // for the user's pick.
+  void FileField();
+  // A Fill's job.
+  void FillField();
+  // The field |node| in the session at |slot| as it is now: what DevTools says of its node, whether
+  // it's in its document, the frame it's in, with that frame's origin, and its accessible name.
+  // None if DevTools knows no such node, and an empty frame if its document's can't be told.
+  using FieldRead = base::OnceCallback<void(std::optional<FileFieldNow> now, std::string label)>;
+  void ReadField(int slot, int node, FieldRead then);
+  // The page's frame with the DevTools id |id|, or null.
+  content::RenderFrameHost* FrameById(const std::string& id);
   // Ends the job, which its page's dialog or the limit stopped waiting on, with |why|, and with
   // |unstarted| the jobs queued behind it.
   void EndWaiting(std::string why, std::optional<std::string> unstarted);

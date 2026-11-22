@@ -74,6 +74,21 @@ source_set("ad_block_off_sites") {
   public_deps = [ "//base" ]
 }
 
+# What a profile chose about sites for the system's engine, with the listed services, over its
+# prefs alone, apart so browser_core_unittests tests them alone (#3593).
+source_set("system_engine_choices") {
+  sources = [
+    "system_engine_choices.cc",
+    "system_engine_choices.h",
+  ]
+  deps = [
+    "//components/prefs",
+    "//net",
+    "//url",
+  ]
+  public_deps = [ "//base" ]
+}
+
 # The site searches a new profile has, and the one a word typed starts (#1397).
 source_set("site_searches") {
   sources = [
@@ -268,6 +283,35 @@ source_set("live_folder_rule") {
   public_deps = [ "//url" ]
 }
 
+# What a saved read (bc_profile_read, #3820) reads and refuses, apart so browser_core_unittests
+# tests the rule alone.
+source_set("saved_read_rule") {
+  sources = [
+    "saved_read_rule.cc",
+    "saved_read_rule.h",
+  ]
+  deps = [ "//url" ]
+}
+
+# A saved read's GET on a session's loader, apart from the profile so browser_core_unittests drives
+# it with a test loader factory or a network context of its own.
+source_set("saved_read") {
+  sources = [
+    "saved_read.cc",
+    "saved_read.h",
+  ]
+  public_deps = [
+    "//base",
+    "//url",
+  ]
+  deps = [
+    ":saved_read_rule",
+    "//net",
+    "//services/network/public/cpp",
+    "//services/network/public/mojom",
+  ]
+}
+
 # What bc_tab_follow and bc_agent_navigate load, apart so browser_core_unittests tests the rule
 # alone (#3576).
 source_set("tab_follow_rule") {
@@ -364,6 +408,31 @@ source_set("link_card_rule") {
   ]
 }
 
+# A shared link's snapshot, sealed and opened under the caps, and the page the core shows for it,
+# apart so browser_core_unittests tests it alone.
+source_set("share_snapshot") {
+  sources = [
+    "share_snapshot.cc",
+    "share_snapshot.h",
+  ]
+  deps = [
+    "//base",
+    "//crypto",
+    "//third_party/zlib",
+    "//url",
+  ]
+}
+
+# Where the keyboard goes as an overlay of the app's lets it go, apart so browser_core_unittests
+# tests the rule alone (#3587).
+source_set("overlay_lend") {
+  sources = [
+    "overlay_lend.cc",
+    "overlay_lend.h",
+  ]
+  deps = [ "//base" ]
+}
+
 # The key a page's key is named by for the app's shortcuts, apart so browser_core_unittests tests it
 # alone.
 source_set("shortcut_key") {
@@ -371,6 +440,7 @@ source_set("shortcut_key") {
     "shortcut_key.cc",
     "shortcut_key.h",
   ]
+  public_deps = [ "//base" ]
 }
 
 # How an agent's typing goes to a page as key events, apart so browser_core_unittests tests it alone.
@@ -494,6 +564,25 @@ source_set("agent_close_rule") {
   ]
 }
 
+# Whether a file the user picks for an agent's file field goes into it, and whether a page may open
+# its own file dialog, apart so browser_core_unittests tests the rule alone (#3656).
+source_set("agent_file_field_rule") {
+  sources = [
+    "agent_file_field_rule.cc",
+    "agent_file_field_rule.h",
+  ]
+}
+
+# Whether a page's trees show only a splash, apart so browser_core_unittests tests the rule alone
+# (#3658).
+source_set("agent_splash_rule") {
+  sources = [
+    "agent_splash_rule.cc",
+    "agent_splash_rule.h",
+  ]
+  deps = [ "//base" ]
+}
+
 # Whether a page refused protected media moves its tab to the system's engine, apart so
 # browser_core_unittests tests the rule alone (#3593).
 source_set("protected_move_rule") {
@@ -510,6 +599,16 @@ source_set("agent_reply_limit") {
   sources = [
     "agent_reply_limit.cc",
     "agent_reply_limit.h",
+  ]
+  deps = [ "//base" ]
+}
+
+# How a quit waits for the system's engine to write its stores (#3685), apart so
+# browser_core_unittests tests the rule alone.
+source_set("quit_stores_wait") {
+  sources = [
+    "quit_stores_wait.cc",
+    "quit_stores_wait.h",
   ]
   deps = [ "//base" ]
 }
@@ -626,6 +725,8 @@ source_set("browser_core") {
     "agent_autofill.h",
     "agent_close.cc",
     "agent_close.h",
+    "agent_file_field.cc",
+    "agent_file_field.h",
     "agent_page.cc",
     "agent_page.h",
     "agent_request.cc",
@@ -661,6 +762,8 @@ source_set("browser_core") {
     "card_video.h",
     "cast_dialog.cc",
     "cast_dialog.h",
+    "checked.cc",
+    "checked.h",
     "clear_site.cc",
     "clear_site.h",
     "crash_reports.cc",
@@ -717,6 +820,8 @@ source_set("browser_core") {
     "mini_player.h",
     "native_ad_block.cc",
     "native_ad_block.h",
+    "network_refuser.cc",
+    "network_refuser.h",
     "notes.cc",
     "notes.h",
     "open_app_dialog.cc",
@@ -748,6 +853,8 @@ source_set("browser_core") {
     "point.h",
     "popular_sites.cc",
     "popular_sites.h",
+    "profile_reads.cc",
+    "profile_reads.h",
     "profiles.cc",
     "profiles.h",
     "public/browser_core.h",
@@ -757,6 +864,8 @@ source_set("browser_core") {
     "search.h",
     "session.cc",
     "session.h",
+    "share.cc",
+    "share.h",
     "side_panel.cc",
     "side_panel.h",
     "sign_in_dialog.cc",
@@ -797,10 +906,14 @@ source_set("browser_core") {
     ":ad_block_list_check",
     ":native_ad_block_lists",
     ":ad_block_off_sites",
+    ":system_engine_choices",
     ":ad_block_page",
+    ":saved_read",
+    ":saved_read_rule",
     ":archive_rule",
     ":arrange_rule",
     ":focus_leaving_rule",
+    ":overlay_lend",
     ":live_folder_rule",
     ":pinned_url",
     ":tab_follow_rule",
@@ -817,9 +930,12 @@ source_set("browser_core") {
     ":mini_player_place",
     ":other_tabs",
     ":agent_close_rule",
+    ":agent_file_field_rule",
+    ":agent_splash_rule",
     ":agent_reply_limit",
     ":popup_hold",
     ":protected_move_rule",
+    ":quit_stores_wait",
     ":search_default",
     ":select_choices",
     ":agent_download_hold",
@@ -834,6 +950,7 @@ source_set("browser_core") {
     ":sync_spaces_newer",
     ":sync_trouble",
     ":link_card_rule",
+    ":share_snapshot",
     ":shortcut_key",
     ":typed_http",
     ":typing_keys",
@@ -1007,6 +1124,7 @@ source_set("browser_core") {
     "//ui/gfx/geometry",
     "//ui/menus",
     "//ui/native_theme",
+    "//ui/shell_dialogs",
     "//ui/strings:ui_strings_grit",
     "//ui/views",
     "//ui/views/controls/webview",
@@ -1030,6 +1148,7 @@ source_set("browser_core") {
     # shows none starts no WebKit process.
     deps += [
       "//chrome/browser:chrome_browser_application_mac",
+      "//ui/events:dom_keyboard_layout",
       "//chrome/browser/webauthn",
       "//components/os_crypt/common:keychain_password_mac",
       "//device/fido",
@@ -1077,6 +1196,7 @@ source_set("browser_core") {
       "//chrome/installer/util:with_no_strings",
       "//components/cdm/common:buildflags",
       "//ui/base/ime",
+      "//ui/events:dom_keyboard_layout",
     ]
     # PowerSettingRegisterNotification, for platform/win/battery.cc.
     libs = [ "powrprof.lib" ]
@@ -1106,6 +1226,7 @@ source_set("browser_core") {
       "//ui/aura",
       "//ui/base/ime",
       "//ui/events",
+      "//ui/events:dom_keyboard_layout",
       "//ui/events/keycodes:xkb",
       "//ui/events/ozone/layout",
       "//ui/gfx/x",
@@ -1127,19 +1248,26 @@ test("browser_core_unittests") {
     "ad_block_carry_unittest.cc",
     "ad_block_list_check_unittest.cc",
     "ad_block_off_sites_unittest.cc",
+    "system_engine_choices_unittest.cc",
     "archive_rule_unittest.cc",
     "arrange_rule_unittest.cc",
     "focus_leaving_rule_unittest.cc",
     "live_folder_rule_unittest.cc",
+    "mojo_once_for_testing.h",
     "native_ad_block_lists_unittest.cc",
     "pinned_url_unittest.cc",
+    "saved_read_rule_unittest.cc",
+    "saved_read_unittest.cc",
     "arrangement_unittest.cc",
     "board_store_unittest.cc",
     "ax_text_unittest.cc",
     "agent_close_rule_unittest.cc",
+    "agent_file_field_rule_unittest.cc",
+    "agent_splash_rule_unittest.cc",
     "agent_download_hold_unittest.cc",
     "agent_reply_limit_unittest.cc",
     "agent_job_voter_unittest.cc",
+    "quit_stores_wait_unittest.cc",
     "boost_colors_unittest.cc",
     "boost_script_unittest.cc",
     "clear_both_engines_unittest.cc",
@@ -1151,11 +1279,13 @@ test("browser_core_unittests") {
     "leveldb_cache_unittest.cc",
     "link_card_rule_unittest.cc",
     "mini_player_place_unittest.cc",
+    "share_snapshot_unittest.cc",
 
     # The engine patch that gives a history match its last visit, which the core's suggestions
     # read.
     "omnibox_last_visit_unittest.cc",
     "other_tabs_unittest.cc",
+    "overlay_lend_unittest.cc",
     "popup_hold_unittest.cc",
     "protected_move_rule_unittest.cc",
     "search_default_unittest.cc",
@@ -1182,25 +1312,34 @@ test("browser_core_unittests") {
     "window_frames_unittest.cc",
     "withheld_fields_unittest.cc",
   ]
+  # Where the split view's keys run on each layout, which the app's tests read too (#3509).
+  data = [ "split_keys_layouts.txt" ]
   deps = [
     ":ad_block_carry",
     ":ad_block_list_check",
     ":ad_block_off_sites",
+    ":system_engine_choices",
     ":archive_rule",
     ":arrange_rule",
     ":focus_leaving_rule",
+    ":overlay_lend",
     ":live_folder_rule",
     ":native_ad_block_lists",
     ":pinned_url",
+    ":saved_read",
+    ":saved_read_rule",
     ":tab_follow_rule",
     ":tab_recent_rule",
     ":arrangement",
     ":board_store",
     ":ax_text",
     ":agent_close_rule",
+    ":agent_file_field_rule",
+    ":agent_splash_rule",
     ":agent_download_hold",
     ":agent_job_voter",
     ":agent_reply_limit",
+    ":quit_stores_wait",
     ":boost_colors",
     ":boost_script",
     ":clear_both_engines",
@@ -1222,6 +1361,7 @@ test("browser_core_unittests") {
     ":sync_spaces_newer",
     ":sync_trouble",
     ":link_card_rule",
+    ":share_snapshot",
     ":shortcut_key",
     ":typed_http",
     ":typing_keys",
@@ -1248,13 +1388,19 @@ test("browser_core_unittests") {
     "//components/sync:test_support",
     "//components/sync_preferences:test_support",
     "//components/variations:test_support",
+    "//crypto",
     "//mojo/core/embedder",
+    "//net",
+    "//net:test_support",
+    "//services/network:network_service",
     "//services/network:test_support",
+    "//services/network/public/mojom",
     "//services/network/public/cpp",
     "//skia",
     "//testing/gmock",
     "//testing/gtest",
     "//third_party/leveldatabase",
+    "//third_party/zlib",
     "//third_party/metrics_proto",
     "//ui/gfx/geometry",
     "//url",

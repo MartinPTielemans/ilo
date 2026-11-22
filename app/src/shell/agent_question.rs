@@ -83,6 +83,16 @@ impl Shell {
         cx.notify();
     }
 
+    /// With the keyboard on "See the whole request" when its card goes (answered, gone or covered),
+    /// the window takes it: no drawn element holds it then, and GPUI matches a key's bindings from
+    /// the focused element, so ⌘T opened nothing (#3715).
+    pub(super) fn see_gone_keyboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let see = self.agent_question().is_some_and(|q| !q.changes.is_empty());
+        if !see && self.agent_request_see.is_focused(window) {
+            window.focus(&self.focus_handle, cx);
+        }
+    }
+
     /// The agent's question the card shows, unless a page's question or chooser has the place.
     pub(super) fn agent_question(&self) -> Option<&Question> {
         self.agent_question.as_ref().filter(|_| !self.page_asks())
@@ -110,11 +120,13 @@ impl Shell {
         let Some(question) = self.agent_question() else {
             // Drawn again, it's logged again.
             self.agent_question_drawn.set(None);
+            self.agent_request_see_drawn.set(None);
             return None;
         };
         if !question.changes.is_empty() {
             return Some(self.request_card(question, cx));
         }
+        self.agent_request_see_drawn.set(None);
         let listener = card_listener("agent question", &self.agent_question_drawn, question.id);
         let buttons = buttons(question).into_iter().map(|button| {
             let row = button.look == Look::Text;
@@ -143,12 +155,13 @@ impl Shell {
                         .when(close.is_some(), |title| title.pr(px(BESIDE_CLOSE)))
                         .text_color(self.palette.text(TITLE))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .child(title),
+                        .child(crate::address_wrap::text(&title)),
                 )
                 .child(
                     div()
                         .text_color(self.palette.on_overlay(DETAIL))
-                        .child(question.why.clone()),
+                        // A handoff's host, such as a sign-in's, breaks between its parts (#3748).
+                        .child(crate::address_wrap::text(&question.why)),
                 )
                 // Three labels don't fit a row of the sidebar at its default width, so the last
                 // takes a row of its own, as wide as the card, rather than running past its edge.
@@ -336,7 +349,7 @@ impl Shell {
                 div()
                     .mt(px(SEE_TOP))
                     .text_color(detail)
-                    .child(question.why.clone()),
+                    .child(crate::address_wrap::text(&question.why)),
             )
             .child(see)
             .child(
@@ -377,7 +390,7 @@ impl Shell {
             _ = handle.update(cx, |_, window, cx| {
                 _ = shell.update(cx, |shell, cx| {
                     // From the page too, if it had the keyboard before the request was opened.
-                    shell.browser.focus_ui(cx);
+                    shell.take_keyboard(cx);
                     window.focus(&shell.agent_request_see, cx);
                     // check.sh reads this line.
                     log!("browser: agent request keyboard back on see");
@@ -461,8 +474,25 @@ pub(super) fn buttons(question: &Question) -> Vec<Button> {
                 Does::Show(tab),
             ),
         ],
-        // A request's changes: Allow sends them alone, so there's no Always.
-        None if !question.changes.is_empty() => vec![
+        // A site the user fenced asks every time it's on (#3724): Never stays, and an Always
+        // would pass nothing.
+        None if question.fenced => vec![
+            button(
+                "agent-question-never",
+                "Never",
+                Look::Quiet,
+                Does::Answer(Answer::Never),
+            ),
+            button(
+                "agent-question-once",
+                "Allow Once",
+                Look::Primary,
+                Does::Answer(Answer::Once),
+            ),
+        ],
+        // A request's changes, and a payment, ask every time: Allow lets them go alone, so there's
+        // no Always.
+        None if !question.changes.is_empty() || question.each_time => vec![
             button(
                 "agent-question-deny",
                 "Deny",
@@ -602,6 +632,40 @@ mod tests {
         );
         cx.run_until_parked();
         assert!(host.take().contains(&"answer agent 9 Never".to_string()));
+    }
+
+    /// A question on a site the user fenced has Never and Allow Once side by side in its last row
+    /// and no Always Allow, as the fence would pass none (#3724).
+    #[gpui::test]
+    fn a_fenced_sites_card_has_no_always(cx: &mut TestAppContext) {
+        let fenced = |id| Question {
+            what: "open mybank.example".into(),
+            why: crate::agents::fence::why("mybank.example").into(),
+            site: "mybank.example".into(),
+            fenced: true,
+            ..question(id)
+        };
+        let labels: Vec<_> = (super::buttons(&fenced(1)).iter())
+            .map(|button| button.label)
+            .collect();
+        assert_eq!(labels, ["Never", "Allow Once"]);
+        let (host, shell, cx) = window_with(cx);
+        for (id, at, answered) in [(11, 0.75, "Once"), (12, 0.25, "Never")] {
+            shell.update(cx, |shell, cx| {
+                shell.set_agent_question(Some(fenced(id)), cx)
+            });
+            cx.run_until_parked();
+            let card = shell.read_with(cx, |shell, _| shell.agent_question_drawn.get());
+            let card = card.expect("the card wasn't drawn");
+            let last = card.bottom() - px(PADDING + BUTTON_HEIGHT / 2.);
+            cx.simulate_click(
+                point(card.left() + card.size.width * at, last),
+                Modifiers::none(),
+            );
+            cx.run_until_parked();
+            let answer = format!("answer agent {id} {answered}");
+            assert!(host.take().contains(&answer), "no {answer}");
+        }
     }
 
     fn change(method: &str, path: &str, what: &str) -> Request {
@@ -969,6 +1033,81 @@ mod tests {
         shell.update(cx, |shell, cx| shell.set_agent_question(None, cx));
         cx.run_until_parked();
         assert_eq!(cx.update(|_, cx| agent_request::showing(cx)), None);
+    }
+
+    /// Deny, after Escape in the whole request gave the keyboard back to "See the whole request",
+    /// takes the card and the button away, and the window's shortcuts still work (#3715).
+    #[gpui::test]
+    fn shortcuts_work_after_deny_from_the_whole_request(cx: &mut TestAppContext) {
+        cx.update(crate::shell::commands::bind_keys);
+        let (host, shell, cx) = window_with(cx);
+        let whole = cx.update(|_, cx| agent_request::open(Rc::new(Shown::default()), cx));
+        let whole = whole.expect("the whole request's window didn't open");
+        shell.update(cx, |shell, cx| {
+            let one = change("PUT", "/api/note", "Replace the note.");
+            shell.set_agent_question(Some(requests(7, vec![one])), cx);
+        });
+        cx.run_until_parked();
+        let see = shell.read_with(cx, |shell, _| shell.agent_question_drawn.get());
+        let card = see.expect("the card wasn't drawn");
+        let row = card.bottom() - px(PADDING + BUTTON_HEIGHT + BUTTONS_TOP + LINE / 2.);
+        cx.simulate_click(
+            point(card.left() + px(PADDING + 8.), row),
+            Modifiers::none(),
+        );
+        cx.run_until_parked();
+        whole
+            .update(cx, |_, window, cx| {
+                window.dispatch_action(Box::new(agent_request::Dismiss), cx)
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let back = shell.read_with(cx, |shell, _| shell.agent_request_see.clone());
+        cx.update(|window, _| assert!(back.is_focused(window), "the keyboard isn't on See"));
+
+        // Deny is the buttons' row's first.
+        let deny = card.bottom() - px(PADDING + BUTTON_HEIGHT / 2.);
+        cx.simulate_click(
+            point(card.left() + px(PADDING + 8.), deny),
+            Modifiers::none(),
+        );
+        cx.run_until_parked();
+        assert!(
+            host.take()
+                .iter()
+                .any(|did| did.starts_with("answer agent")),
+            "the click wasn't on Deny"
+        );
+        let asked = shell.read_with(cx, |shell, _| shell.agent_question().is_some());
+        assert!(!asked, "Deny left the question asked");
+        host.bar_open.set(false);
+        cx.simulate_keystrokes("cmd-t");
+        cx.run_until_parked();
+        assert!(host.bar_open.take(), "⌘T after Deny opened no new tab");
+    }
+
+    /// The next request's "See the whole request", drawn where the last one's was, has its place
+    /// logged again, as a check finds the button by that line (#3715).
+    #[gpui::test]
+    fn see_is_logged_again_for_the_next_request(cx: &mut TestAppContext) {
+        let (_, shell, cx) = window_with(cx);
+        let ask = |id: u64, cx: &mut gpui::VisualTestContext| {
+            shell.update(cx, |shell, cx| {
+                let one = change("PUT", "/api/note", "Replace the note.");
+                shell.set_agent_question(Some(requests(id, vec![one])), cx);
+            });
+            cx.run_until_parked();
+            shell.read_with(cx, |shell, _| shell.agent_request_see_drawn.get())
+        };
+        let first = ask(2, cx).expect("the first request's See wasn't drawn");
+        shell.update(cx, |shell, cx| shell.set_agent_question(None, cx));
+        cx.run_until_parked();
+        let gone = shell.read_with(cx, |shell, _| shell.agent_request_see_drawn.get());
+        assert_eq!(
+            gone, None,
+            "See's place outlived its card, so the next isn't logged"
+        );
+        assert_eq!(ask(3, cx), Some(first));
     }
 
     /// The whole request shows only beside its question's card: it goes when the question is

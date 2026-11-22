@@ -63,7 +63,7 @@ impl Shell {
         });
         // As for the form.
         self.dock(cx);
-        self.browser.focus_ui(cx);
+        self.take_keyboard(cx);
         self.focus_renaming = true;
         cx.notify();
     }
@@ -108,7 +108,7 @@ impl Shell {
             in_library: true,
             _watches: Vec::new(),
         });
-        self.browser.focus_ui(cx);
+        self.take_keyboard(cx);
         self.focus_renaming = true;
         cx.notify();
     }
@@ -139,7 +139,7 @@ impl Shell {
         });
         // As for a Space's name.
         self.dock(cx);
-        self.browser.focus_ui(cx);
+        self.take_keyboard(cx);
         self.focus_renaming = true;
         cx.notify();
     }
@@ -162,7 +162,7 @@ impl Shell {
             _watches: Vec::new(),
         });
         self.dock(cx);
-        self.browser.focus_ui(cx);
+        self.take_keyboard(cx);
         self.focus_renaming = true;
         cx.notify();
     }
@@ -516,7 +516,7 @@ impl Shell {
         });
         // As for a Space's name.
         self.dock(cx);
-        self.browser.focus_ui(cx);
+        self.take_keyboard(cx);
         self.focus_renaming = true;
         cx.notify();
     }
@@ -567,7 +567,7 @@ impl Shell {
         // Boards list or with its key leaves it.
         self.set_library(false, cx);
         self.dock(cx);
-        self.browser.focus_ui(cx);
+        self.take_keyboard(cx);
         self.focus_renaming = true;
         cx.notify();
     }
@@ -592,7 +592,7 @@ impl Shell {
             in_library: false,
             _watches: Vec::new(),
         });
-        self.browser.focus_ui(cx);
+        self.take_keyboard(cx);
         self.focus_renaming = true;
         cx.notify();
     }
@@ -677,7 +677,15 @@ impl Shell {
     /// The window's keyboard went from its UI, to its page or elsewhere, which GPUI's focus doesn't
     /// see. The field's own menu takes it only for a moment, and gives it back to the field.
     /// `opened` is how many fields had opened as the press that gave the page the keyboard came.
-    pub fn keyboard_left(&mut self, opened: u64, window: &mut Window, cx: &mut Context<Self>) {
+    /// `to_page` is false for Windows' word as the app goes to the background, whose keys come
+    /// back to where they were with the app (#3758).
+    pub fn keyboard_left(
+        &mut self,
+        opened: u64,
+        to_page: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let renaming = self.renaming.as_ref();
         if renaming.is_some_and(|renaming| renaming.opened > opened) {
             // For a run's log, where the field would otherwise have closed at once.
@@ -689,6 +697,10 @@ impl Shell {
                 log!("browser: field lost the keyboard to the page");
             }
             self.name_left(window, cx)
+        }
+        // Once the field is left, from where the focus has gone.
+        if to_page {
+            self.page_took_keyboard(window, cx);
         }
     }
 

@@ -374,7 +374,7 @@ shipped_version=$(sed -n 's/^ *"version": "\([^"]*\)",*$/\1/p' "$ublock_js/../ma
   fail "the app ships uBlock Origin $shipped_version, not ublock.ini's $pinned_version"
 # It trusts no site to show its ads, YouTube neither, as Arc's did: by default it trusts only
 # extension pages, and the core's managed settings add none.
-trusted=$(sed -n '/^ *netWhitelistDefault: \[$/,/^ *\],$/p' "$ublock_js/background.js")
+trusted=$(sed -n '/^ *defaultTrustedSiteDirectives: \[$/,/^ *\],$/p' "$ublock_js/background.js")
 [ -n "$trusted" ] || fail "the run found no trusted sites in uBlock Origin's background.js"
 echo "$trusted" | grep -qi youtube && fail "uBlock Origin trusts YouTube by default: $trusted"
 

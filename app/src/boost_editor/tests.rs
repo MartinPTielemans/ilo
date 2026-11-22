@@ -625,3 +625,18 @@ fn both_resets_put_the_sliders_back(cx: &mut TestAppContext) {
     assert_eq!(reset.adjust, [100; 3]);
     assert!(!reset.invert && reset.advanced, "{reset:?}");
 }
+
+/// A page dialog waits while the user types the Boost's name, and not once the field has gone.
+#[gpui::test]
+fn its_name_counts_as_typing_while_it_shows(cx: &mut TestAppContext) {
+    let mut editor = Editor::new(Style::default(), cx);
+    assert!(!editor.cx.cx.update(typing), "no field shows yet");
+    editor.click((NAME_LEFT + 4., HEADER / 2.));
+    editor.click(find(Target::Item(Item::Rename), &Style::default(), true));
+    assert!(editor.cx.cx.update(typing));
+    editor.keys("escape");
+    assert!(
+        !editor.cx.cx.update(typing),
+        "a name field gone still counted"
+    );
+}

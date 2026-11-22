@@ -1,8 +1,10 @@
 #include "browser_core/dialog_keys.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <map>
 #include <memory>
+#include <string>
 
 #include "base/functional/bind.h"
 #include "base/location.h"
@@ -19,6 +21,7 @@
 #include "content/public/browser/keyboard_event_processing_result.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
+#include "third_party/blink/public/common/input/web_input_event.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/events/event.h"
@@ -39,6 +42,23 @@ namespace browser_core::dialog_keys {
 namespace {
 
 class DialogKeys;
+
+// Whether the test driver runs ilo, which KeyGate's lines are for alone, as the Mac's host's.
+bool Driven() {
+  static const bool driven = getenv("BROWSER_DRIVE") != nullptr;
+  return driven;
+}
+
+// The key a tab's dialog is asking the app about, while it asks.
+const input::NativeWebKeyboardEvent* g_asking = nullptr;
+
+// "ctrl-shift-key 0x31": a key held with ⌃ or ⌘ by its code, never what it types.
+std::string Chord(bool control, bool alt, bool shift, bool command, int code) {
+  char text[64];
+  snprintf(text, sizeof(text), "%s%s%s%skey 0x%x", control ? "ctrl-" : "", alt ? "alt-" : "",
+           shift ? "shift-" : "", command ? "cmd-" : "", static_cast<unsigned>(code));
+  return text;
+}
 
 std::map<views::Widget*, std::unique_ptr<DialogKeys>>& Watched() {
   static base::NoDestructor<std::map<views::Widget*, std::unique_ptr<DialogKeys>>> watched;
@@ -76,6 +96,17 @@ class DialogKeys : public ui::EventHandler, public views::WidgetObserver {
 
   // ui::EventHandler:
   void OnKeyEvent(ui::KeyEvent* event) override {
+    // What the handler hears, first: a shortcut it never sees is lost before the dialog's root
+    // view, and one it hears only as a key going up or as text is let go below (#3717).
+    if (Driven() && event->phase() == ui::EP_PRETARGET &&
+        (event->flags() & (ui::EF_CONTROL_DOWN | ui::EF_COMMAND_DOWN))) {
+      fprintf(stderr, "browser: tab dialog's handler heard %s %s%s\n",
+              Chord(event->IsControlDown(), event->IsAltDown(), event->IsShiftDown(),
+                    event->IsCommandDown(), event->key_code())
+                  .c_str(),
+              event->type() == ui::EventType::kKeyPressed ? "going down" : "going up",
+              event->is_char() ? ", as text" : "");
+    }
     if (event->type() != ui::EventType::kKeyPressed) {
       return;
     }
@@ -107,8 +138,16 @@ class DialogKeys : public ui::EventHandler, public views::WidgetObserver {
     }
     const input::NativeWebKeyboardEvent key(down);
     if (before) {
+      g_asking = &key;
       const content::KeyboardEventProcessingResult result =
           page->GetDelegate()->PreHandleKeyboardEvent(page, key);
+      KeyGate(key, result == content::KeyboardEventProcessingResult::HANDLED ? "asked: handled"
+                   : result == content::KeyboardEventProcessingResult::NOT_HANDLED
+                       ? "asked: not handled"
+                   : result == content::KeyboardEventProcessingResult::NOT_HANDLED_IS_SHORTCUT
+                       ? "asked: not handled, a shortcut"
+                       : "asked: another answer");
+      g_asking = nullptr;
       if (result != content::KeyboardEventProcessingResult::NOT_HANDLED &&
           result != content::KeyboardEventProcessingResult::NOT_HANDLED_IS_SHORTCUT) {
         event->StopPropagation();
@@ -221,6 +260,20 @@ class DialogKeys : public ui::EventHandler, public views::WidgetObserver {
 };
 
 }  // namespace
+
+void KeyGate(const input::NativeWebKeyboardEvent& key, const char* why) {
+  const int held = key.GetModifiers();
+  if (!Driven() || &key != g_asking ||
+      !(held & (blink::WebInputEvent::kControlKey | blink::WebInputEvent::kMetaKey))) {
+    return;
+  }
+  fprintf(stderr, "browser: tab dialog's %s, type %d: %s\n",
+          Chord(held & blink::WebInputEvent::kControlKey, held & blink::WebInputEvent::kAltKey,
+                held & blink::WebInputEvent::kShiftKey, held & blink::WebInputEvent::kMetaKey,
+                key.windows_key_code)
+              .c_str(),
+          static_cast<int>(key.GetType()), why);
+}
 
 void PageFocused(content::WebContents* page) {
   for (auto& watched : Watched()) {

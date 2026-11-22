@@ -25,6 +25,7 @@
 #include "base/strings/sys_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
+#include "browser_core/checked.h"
 #include "components/input/native_web_keyboard_event.h"
 #include "media/base/media_switches.h"
 #include "net/base/apple/url_conversions.h"
@@ -804,7 +805,9 @@ class SystemPageMac : public SystemPage {
   // The content process went: crashed, or killed for memory. WebKit shows nothing until a load.
   void Gone() {
     // An error, as Chromium's tab's is.
-    LOG(ERROR) << "browser: system page gone at " << url().spec();
+    if (Checked()) {
+      LOG(ERROR) << "browser: system page gone at " << url().spec();
+    }
     [web_ reload];
   }
 
@@ -1173,7 +1176,9 @@ class SystemPageMac : public SystemPage {
   // No downloads in this engine, nor other apps' schemes, such as mailto: the page goes nowhere.
   if (action.shouldPerformDownload ||
       !(url.SchemeIsHTTPOrHTTPS() || url.SchemeIs("about") || url.SchemeIs("blob"))) {
-    LOG(WARNING) << "browser: system page refused " << url.possibly_invalid_spec();
+    if (browser_core::Checked()) {
+      LOG(WARNING) << "browser: system page refused " << url.possibly_invalid_spec();
+    }
     decide(WKNavigationActionPolicyCancel);
     return;
   }
@@ -1201,8 +1206,10 @@ class SystemPageMac : public SystemPage {
   }
   // What the page can't show would be a download, which this engine doesn't do.
   if (response.forMainFrame && !response.canShowMIMEType) {
-    LOG(WARNING) << "browser: system page refused a download of "
-                 << net::GURLWithNSURL(response.response.URL).possibly_invalid_spec();
+    if (browser_core::Checked()) {
+      LOG(WARNING) << "browser: system page refused a download of "
+                   << net::GURLWithNSURL(response.response.URL).possibly_invalid_spec();
+    }
     decide(WKNavigationResponsePolicyCancel);
     return;
   }
@@ -1385,6 +1392,35 @@ NSSet<NSString*>* WebKitTypes(SiteData what) {
 }
 
 }  // namespace
+
+// static
+void SystemPage::WriteStores(base::OnceCallback<void(StoresWritten)> done) {
+  // A store is made only with WebKit loaded, so with none kept this never loads it.
+  WKWebsiteDataStore* kept = nil;
+  for (WKWebsiteDataStore* each in Stores().objectEnumerator) {
+    if (each.persistent) {
+      kept = each;
+      break;
+    }
+  }
+  if (!kept) {
+    std::move(done).Run(StoresWritten::kNone);
+    return;
+  }
+  // WebKit commits localStorage half a second after a write, and as the app exits its networking
+  // process can exit before it commits (WebKit's XPCServiceMain). Preparing that process to suspend
+  // commits every store's, and flushes their cookies: it's one process for all of them, so any
+  // store asks it. There's no public call for it.
+  SEL prepare = NSSelectorFromString(@"_sendNetworkProcessPrepareToSuspend:");
+  if (![kept respondsToSelector:prepare]) {
+    std::move(done).Run(StoresWritten::kNoWay);
+    return;
+  }
+  __block base::OnceCallback<void(StoresWritten)> then = std::move(done);
+  reinterpret_cast<void (*)(id, SEL, id)>(objc_msgSend)(kept, prepare, ^{
+    std::move(then).Run(StoresWritten::kWritten);
+  });
+}
 
 // static
 void SystemPage::ClearSite(const SystemStore& store,

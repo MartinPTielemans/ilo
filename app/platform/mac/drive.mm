@@ -1947,9 +1947,12 @@ bool Run(const std::string& line, void (^done)(void)) {
     if (!(words >> x >> y >> dx)) {
       return false;
     }
+    // To the window under the point, as a click goes, such as the sidebar out over the page.
+    NSWindow* target = WindowAt(window, x, y);
+    Convert(window, target, &x, &y);
     CGEventRef event =
         CGEventCreateScrollWheelEvent2(nullptr, kCGScrollEventUnitLine, 2, 0, (int32_t)dx, 0);
-    CGEventSetIntegerValueField(event, kWindowNumberField, window.windowNumber);
+    CGEventSetIntegerValueField(event, kWindowNumberField, target.windowNumber);
     CGEventSetWindowLocation(event, CGPointMake(x, y));
     [NSApp postEvent:[NSEvent eventWithCGEvent:event] atStart:NO];
     CFRelease(event);

@@ -25,8 +25,11 @@
 # the left and on the right (#3160), and Library › Boards, light and dark, a Board's row's menu,
 # and the protected-media note, whose card a Board's refused save follows in the page (#3073), the
 # keyboard's ring on New Tab's row in an empty Space, light and dark (#3151), and on Library ›
-# Boards' second row, light and dark (#3238), and an outside agent's card at work, done, and done
-# with a page to open, light and dark (#3652). The preview's Linux host places no window, so sway
+# Boards' second row, light and dark (#3238), an outside agent's card at work, done, and done
+# with a page to open, light and dark (#3652), and Settings › Agents with the ilo command's row not
+# there, there, and in a folder the shell doesn't search, light and dark, and its two longest
+# lines in Settings' narrowest window, and a Flatpak's, not there and there with the line to run
+# on the host, light and dark and in the narrowest window (#3667). The preview's Linux host places no window, so sway
 # puts Site Controls, the icon picker and the tooltip in the middle rather than where the Mac's host
 # would.
 # It reports: a screen that won't capture is a gap in the sheet and a line on stderr, never a
@@ -103,6 +106,18 @@ screens=(
   "session-done-dark|drawn at|PREVIEW_TASKS=1 PREVIEW_SESSION=done PREVIEW_APPEARANCE=dark"
   "session-open-light|drawn at|PREVIEW_TASKS=1 PREVIEW_SESSION=open PREVIEW_APPEARANCE=light"
   "session-open-dark|drawn at|PREVIEW_TASKS=1 PREVIEW_SESSION=open PREVIEW_APPEARANCE=dark"
+  "command-line-off-light|settings ilo-command|PREVIEW_COMMAND_LINE=off PREVIEW_APPEARANCE=light"
+  "command-line-off-dark|settings ilo-command|PREVIEW_COMMAND_LINE=off PREVIEW_APPEARANCE=dark"
+  "command-line-on-light|settings ilo-command|PREVIEW_COMMAND_LINE=on PREVIEW_APPEARANCE=light"
+  "command-line-on-dark|settings ilo-command|PREVIEW_COMMAND_LINE=on PREVIEW_APPEARANCE=dark"
+  "command-line-unsearched-light|settings ilo-command|PREVIEW_COMMAND_LINE=unsearched PREVIEW_APPEARANCE=light"
+  "command-line-unsearched-dark|settings ilo-command|PREVIEW_COMMAND_LINE=unsearched PREVIEW_APPEARANCE=dark"
+  "command-line-off-narrow|settings ilo-command|PREVIEW_COMMAND_LINE=off PREVIEW_APPEARANCE=light PREVIEW_SETTINGS_WIDTH=720"
+  "command-line-unsearched-narrow|settings ilo-command|PREVIEW_COMMAND_LINE=unsearched PREVIEW_APPEARANCE=light PREVIEW_SETTINGS_WIDTH=720"
+  "command-line-flatpak-off-light|settings ilo-command|PREVIEW_COMMAND_LINE=flatpak-off PREVIEW_APPEARANCE=light"
+  "command-line-flatpak-on-light|settings ilo-command|PREVIEW_COMMAND_LINE=flatpak-on PREVIEW_APPEARANCE=light"
+  "command-line-flatpak-on-dark|settings ilo-command|PREVIEW_COMMAND_LINE=flatpak-on PREVIEW_APPEARANCE=dark"
+  "command-line-flatpak-on-narrow|settings ilo-command|PREVIEW_COMMAND_LINE=flatpak-on PREVIEW_APPEARANCE=light PREVIEW_SETTINGS_WIDTH=720"
 )
 case $(uname -s) in
   MINGW* | MSYS*) systems=(windows) drag= ;;
