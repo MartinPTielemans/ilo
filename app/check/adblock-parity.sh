@@ -426,12 +426,16 @@ rm -rf "$scratch"
 [ -s "$requests" ] || fail "DevTools recorded no requests"
 # What's wrong, if anything, as a here-document in a command substitution trips the Mac's bash 3.2.
 result="$dir/result.txt"
-python3 -I - "$requests" "$starts" "$videos" "$hides" "$contents" "$dir/sites.tsv" "${ADBLOCK_PARITY_BASELINE:-}" > "$result" << 'PY' || fail "$(cat "$result")"
+# Whether each site's hidden elements were read: not under ADBLOCK_PARITY_NO_CAPTURE, as
+# adblock-cost's passes skip the look with the pictures (#3928).
+looked=1
+[ -z "${ADBLOCK_PARITY_NO_CAPTURE:-}" ] || looked=
+python3 -I - "$requests" "$starts" "$videos" "$hides" "$contents" "$dir/sites.tsv" "${ADBLOCK_PARITY_BASELINE:-}" "$looked" > "$result" << 'PY' || fail "$(cat "$result")"
 
 import json, os, re, sys
 from urllib.parse import urlsplit
 
-recorded, starts, watched, hides, shown, table, baseline = sys.argv[1:]
+recorded, starts, watched, hides, shown, table, baseline, looked = sys.argv[1:]
 # Each request: its address, when it went, and whether the ad blocker blocked it or answered it
 # with a stand-in, an extension's resource it redirected the request to. Its later events come by
 # its id, which a later request can take again, once a renderer's process id comes back. An id sent
@@ -716,9 +720,10 @@ if len(missed) >= 10 and not site_missed:
                  + ", ".join(f"{m} on {url}" for url, m in missed))
 loaded = [s for s in sites if s["loaded"]]
 # Each blocker hides something on these sites. None hidden, where they loaded, is the telling
-# apart broken, which would leave the gate blind to every element an engine fails to hide.
+# apart broken, which would leave the gate blind to every element an engine fails to hide. A run
+# that didn't read them has nothing to say of it.
 blocker_hid = sum(s["blocker_hid"] for s in sites)
-if loaded and not blocker_hid:
+if looked and loaded and not blocker_hid:
     worse.append("no site had an element the blocker's style sheet hid, by DevTools' matched "
                  "styles: cdp.py's hidden can't tell the blocker's hiding from the page's")
 # A Chromium whose own hiding rules haven't been read would count a new one as the blocker's.
@@ -737,8 +742,9 @@ if worse:
 print(f"{len(loaded)} of {len(sites)} sites loaded, in {median} ms at the median; "
       f"{sum(s['blocked_n'] for s in sites)} requests blocked and "
       f"{sum(s['standin_n'] for s in sites)} given a stand-in, of {sum(s['requests'] for s in sites)}"
-      + f"; {blocker_hid} selectors hidden by the blocker's style sheet and "
-        f"{sum(s['page_hid'] for s in sites)} by the page's own"
+      + (f"; {blocker_hid} selectors hidden by the blocker's style sheet and "
+         f"{sum(s['page_hid'] for s in sites)} by the page's own" if looked
+         else "; hidden elements not read")
       + (f"; {len(missed)} selectors the baseline hid all of showed" if baseline else "")
       + "".join(f"; {s['url']}'s video {video_said(s['video'])}" for s in sites
                 if s["video"] and s["url"] not in unchecked)

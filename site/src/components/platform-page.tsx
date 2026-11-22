@@ -1,8 +1,8 @@
 import type { ReactNode } from "react";
-import { RELEASES, isOut } from "../changelog";
-import { PLATFORMS, type Platform } from "../downloads";
+import { RELEASES, published } from "../changelog";
+import { PLATFORMS, type Platform, STAGE } from "../downloads";
 import { DownloadLink } from "./download";
-import { TextPage } from "./text-page";
+import { Shell } from "./shell";
 
 type Id = Platform["id"];
 
@@ -32,9 +32,8 @@ const COPY: Record<Id, { install: ReactNode; differs: ReactNode; capture?: Captu
   windows: {
     install: (
       <p>
-        Run the installer, which installs ilo for you alone and asks for no administrator. The
-        alpha's installer isn't signed yet, so Windows may say it protected your PC: choose More
-        info, then Run anyway.
+        Run the installer, which installs ilo for you alone and asks for no administrator. It isn't
+        signed yet, so Windows may say it protected your PC: choose More info, then Run anyway.
       </p>
     ),
     differs: (
@@ -66,87 +65,93 @@ const COPY: Record<Id, { install: ReactNode; differs: ReactNode; capture?: Captu
 
 const platform = (id: Id) => PLATFORMS.find((one) => one.id === id)!;
 
-/** A platform's page: what ilo needs there, its download, and how to install and update it. */
+/**
+ * A platform's page: its download, here for that platform whatever the visitor is on, then what ilo
+ * needs there and how to install and update it, listed as the home page lists what ilo is.
+ */
 export function PlatformPage({ id }: { id: Id }) {
   const one = platform(id);
   const copy = COPY[id];
-  // The newest version the changelog has, with the day it came out.
-  const newest = RELEASES.find((release) => isOut(release, import.meta.env.ILO_PUBLISHED));
+  const newest = published(RELEASES, import.meta.env.ILO_PUBLISHED)[0];
   const updates =
     id === "linux"
       ? "Flatpak updates ilo with your other Flatpak apps."
       : "ilo updates itself. To look now, choose Check for Updates… in the ilo menu, or type “update” in the command bar.";
   return (
-    <TextPage
-      title={`ilo for ${one.name}`}
-      lead={
-        <>
-          A free, open-source browser, {one.stage} for {one.name}: every part of your life in its
-          own Space, a sidebar that tidies itself and one bar for every command, on Chromium, so
-          your sites and Chrome's extensions work.
-        </>
-      }
-      fine={copy.capture?.credit}
-    >
-      <p className="fetch">
-        <DownloadLink className="button" platform={one} />
+    <Shell fine={copy.capture?.credit}>
+      <div className="top">
+        <div data-clear="0">
+          <h1>ilo for {one.name}</h1>
+          <p className="lede">
+            A free, open-source browser {STAGE} for {one.name}: every part of your life in its own
+            Space, a sidebar that tidies itself and one bar for every command. Built on Chromium, so
+            your sites and Chrome's extensions work.
+          </p>
+        </div>
+        <DownloadLink className="btn" platform={one} />
         {newest && (
-          <a href="/changelog">
-            ilo {newest.version}, {newest.date}
-          </a>
+          <p className="note" data-clear="0">
+            <a href="/changelog">
+              ilo {newest.version}, {newest.date}
+            </a>
+          </p>
         )}
-      </p>
-
-      {copy.capture && (
-        <figure className="capture">
-          <img
-            src={`/media/${copy.capture.name}-1x.webp`}
-            srcSet={`/media/${copy.capture.name}-1x.webp 1x, /media/${copy.capture.name}.webp 2x`}
-            width={1280}
-            height={800}
-            alt={copy.capture.alt}
-          />
-        </figure>
-      )}
-
-      <section>
-        <h2>What it needs</h2>
-        <p>{one.needs}.</p>
-      </section>
-
-      <section>
-        <h2>Installing</h2>
-        {copy.install}
-        <p>
-          To bring your tabs, bookmarks and history from another browser, choose Import from Other
-          Browsers… in the ilo menu, or type “import” in the command bar.
-        </p>
-      </section>
-
-      <section>
-        <h2>Updates</h2>
-        <p>
-          {updates} What changed is in the <a href="/changelog">changelog</a>.
-        </p>
-      </section>
-
-      <section>
-        <h2>Privacy</h2>
-        <p>
-          ilo blocks ads and trackers with uBlock Origin, built in, and needs no account. It sends
-          one anonymous count a day only if you turn that on, and crash reports only if you say so.{" "}
-          <a href="/privacy">Privacy</a> lists every service it talks to.
-        </p>
-        {copy.differs}
-      </section>
-
-      <section>
-        <h2>Learning it</h2>
-        <p>
-          <a href="/help">Help</a> is the short version of how ilo works: Spaces, tabs, the command
-          bar, split view and extensions.
-        </p>
-      </section>
-    </TextPage>
+      </div>
+      <div className="cols alone">
+        <div>
+          {copy.capture && (
+            <figure className="capture">
+              <img
+                src={`/media/${copy.capture.name}-1x.webp`}
+                srcSet={`/media/${copy.capture.name}-1x.webp 1x, /media/${copy.capture.name}.webp 2x`}
+                width={1280}
+                height={800}
+                alt={copy.capture.alt}
+              />
+            </figure>
+          )}
+          <dl className="list rows">
+            <div>
+              <dt>Needs</dt>
+              <dd>{one.needs}.</dd>
+            </div>
+            <div>
+              <dt>Installing</dt>
+              <dd>
+                {copy.install}
+                <p>
+                  To bring your tabs, bookmarks and history from another browser, choose Import from
+                  Other Browsers… in the ilo menu, or type “import” in the command bar.
+                </p>
+              </dd>
+            </div>
+            <div>
+              <dt>Updates</dt>
+              <dd>
+                {updates} What changed is in the <a href="/changelog">changelog</a>.
+              </dd>
+            </div>
+            <div>
+              <dt>Privacy</dt>
+              <dd>
+                <p>
+                  ilo blocks ads and trackers with uBlock Origin, built in, and needs no account. It
+                  sends one anonymous count a day only if you turn that on, and crash reports only
+                  if you say so. <a href="/privacy">Privacy</a> lists every service it talks to.
+                </p>
+                {copy.differs}
+              </dd>
+            </div>
+            <div>
+              <dt>Learning ilo</dt>
+              <dd>
+                <a href="/help">Help</a> is the short version of how ilo works: Spaces, tabs, the
+                command bar, split view and extensions.
+              </dd>
+            </div>
+          </dl>
+        </div>
+      </div>
+    </Shell>
   );
 }

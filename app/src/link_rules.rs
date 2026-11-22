@@ -405,7 +405,7 @@ pub struct LinkRulesView {
     /// What the last draw showed, which check.sh reads once each time it changes.
     drawn: Option<String>,
     /// Where each control was logged as drawn, for check.sh to click.
-    drawn_at: Rc<RefCell<Vec<String>>>,
+    drawn_at: crate::settings_rows::Drawn,
     /// The rules the trash took, the last at the end, each with its place, which ⌘Z brings back
     /// until Settings closes. A rule with no text goes without one: there's nothing to lose.
     removed: Vec<(usize, Rule)>,

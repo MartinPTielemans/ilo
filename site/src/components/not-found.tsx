@@ -18,9 +18,7 @@ export function NotFound() {
             <a href="/help">Help</a> or <a href="/changelog">Changelog</a>.
           </>
         }
-      >
-        {null}
-      </TextPage>
+      />
     </>
   );
 }

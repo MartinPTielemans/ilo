@@ -23,6 +23,19 @@ if sway_xwayland; then
   echo "skip: sync-devices. It runs on Linux under Xvfb and Wayland, on Windows and on the Mac so far, where the run reaches the clipboard and each copy's windows."
   return 0
 fi
+# How long A's core lets a run of changes settle before it sends them, as core/sync_spaces.cc,
+# which the run's engine is built from, says: read there, not copied, so that the two can't part.
+# Read before the devices start, so that a tree without it fails at once and says so (#3922).
+[ -f ../core/sync_spaces.cc ] || fail "sync-devices reads how long A's core lets changes settle from"\
+" ../core/sync_spaces.cc, which this tree doesn't have beside app/: run it from a whole checkout"
+settle=$(grep -E '^constexpr base::TimeDelta kSettle = base::(Seconds|Milliseconds)\([0-9]+\);$' \
+  ../core/sync_spaces.cc || true)
+case $settle in
+*Milliseconds*) settle_ms=$(echo "$settle" | tr -dc 0-9) ;;
+*Seconds*) settle_ms=$(($(echo "$settle" | tr -dc 0-9) * 1000)) ;;
+*) fail "core/sync_spaces.cc's kSettle, how long A's core lets changes settle, isn't one this reads:"\
+" $(grep -n kSettle ../core/sync_spaces.cc | head -3 || true)" ;;
+esac
 rm -f "$saved" "$launch_frame" "$profile_dir/Account"
 . check/ilo-server.sh
 
@@ -77,6 +90,14 @@ db.commit()
 ' "$logins" || fail "the check's profile kept its logins"
 done
 start a "$profile_dir" 5
+# A yield the driver refuses says why: once macOS didn't find A's running copy by its pid, and the
+# driver said only that it couldn't (#3921). The check's own shell is no app, so it's refused.
+if [ "$(uname)" = Darwin ]; then
+  post yield $$
+  await "^browser: drive $step done" || fail "the driver didn't finish \"yield $$\""
+  logged "^browser: yield to $$ refused: " || fail "the driver refused a yield to the check's \
+shell, $$, without saying why: $(since | grep "^browser: drive $step: \|^browser: yield " | tr '\n' ' ')"
+fi
 open_sign_in
 sign_in first
 await '^browser: account FirstDevice None$' ||
@@ -204,8 +225,10 @@ await_spaces 3 "C, recovered, doesn't have the account's three Spaces"
   fail "the server doesn't know the account's three devices: $(stored "SELECT group_concat(name, '|') FROM devices")"
 
 # A Today tab is the account's, as its Space is (#2098). Each change A makes to one reaches B within
-# 2.5 s, the 2 s aimed for with room for a busy runner: its page and title, without loading it,
-# which B's core says as it puts the tab in its Space.
+# the 2 s sync promises: its page and title, without loading it, which B's core says as it puts the
+# tab in its Space. The time is sync's own, between the times A's and B's cores put on their lines,
+# by the clock the devices share. The check's own clock would count its shell and A's page too, as
+# it's read anywhere from before A's page is in to after (#3922).
 serve
 # The Mac's date has no %N, but its perl has Time::HiRes.
 now_ms() {
@@ -214,21 +237,55 @@ now_ms() {
   *) echo $(($(date +%s%N) / 1000000)) ;;
   esac
 }
-# Waits up to 5 s for B to have more lines matching $1 than the $2 it had, then for them to have
-# come within 2.5 s of $3, A's change, failing with $4 if either doesn't. took is how long it took.
+# The time of day in ms by the clock the cores stamp their lines with, the local one.
+now_of_day_ms() {
+  case $(date +%N) in
+  *N) perl -MTime::HiRes=time -e '$t = time; @l = localtime($t);
+      printf "%d\n", (($l[2] * 60 + $l[1]) * 60 + $l[0]) * 1000 + int(($t - int($t)) * 1000)' ;;
+  *) date '+%H %M %S %N' | awk '{ printf "%d\n", (($1 * 60 + $2) * 60 + $3) * 1000 + int($4 / 1000000) }' ;;
+  esac
+}
+# The time of day in ms on a core's line $1, from Chromium's [pid:tid:MMDD/HHMMSS.fraction: before
+# it, which has microseconds on the Mac and Linux and milliseconds on Windows.
+stamp_ms() {
+  echo "$1" | sed -n 's|^\[[^]/]*/\([0-9][0-9]\)\([0-9][0-9]\)\([0-9][0-9]\)\.\([0-9][0-9][0-9]\).*|\1 \2 \3 \4|p' |
+    awk '{ printf "%d\n", (($1 * 60 + $2) * 60 + $3) * 1000 + $4 }'
+}
+# Waits up to 5 s for B to have more lines matching $1 than the $2 it had, then fails with $5 unless
+# the first of them came within 2 s of A's change, made after A's log had $3 lines. A's change is
+# when its core began to let changes settle: its first send after them, less the settle. A wait an
+# earlier change began makes it read early, so took, how long it took, can only read long. No core
+# line marks the change itself, so a core that begins to settle late, or sends late after it, is
+# caught on A's side: its send must come within the settle and 500 ms of $4, the time of day the
+# check had seen A's last line for the user's action, which is after the change. sent_after is how
+# long after that A sent.
 b_gets() {
+  local b_line a_line
   for _ in $(seq 100); do
     if [ "$(grep -c "$1" "$b_log")" -gt "$2" ]; then
-      took=$(($(now_ms) - $3))
-      [ "$took" -le 2500 ] || fail "$4 in $took ms, past 2.5 s"
+      b_line=$(grep "$1" "$b_log" | sed -n "$(($2 + 1))p")
+      a_line=$(sed -n "$(($3 + 1)),\$p" "$a_log" | grep 'browser: sync spaces sent ' | head -1)
+      [ -n "$a_line" ] || fail "$5: A's core logged no send after the change, whose time is taken from it"
+      [ -n "$(stamp_ms "$a_line")" ] && [ -n "$(stamp_ms "$b_line")" ] ||
+        fail "$5: a core line has no time of day to read: A's \"$a_line\", B's \"$b_line\""
+      sent_after=$(($(stamp_ms "$a_line") - $4))
+      [ "$sent_after" -ge -43200000 ] || sent_after=$((sent_after + 86400000))
+      [ "$sent_after" -le 43200000 ] || sent_after=$((sent_after - 86400000))
+      [ "$sent_after" -le $((settle_ms + 500)) ] || fail "$5: A's core sent the change $sent_after ms"\
+" after the check saw A's last line for it, past the $settle_ms ms settle and 500 ms: \"$a_line\""
+      took=$((($(stamp_ms "$b_line") - $(stamp_ms "$a_line") + settle_ms + 86400000) % 86400000))
+      [ "$took" -le 2000 ] || fail "$5 in $took ms from A's change, past 2 s: A sent it $settle_ms ms"\
+" after the change, \"$a_line\", and B had it at \"$b_line\""
       took_all="$took_all $took"
+      sent_all="$sent_all $sent_after"
       return 0
     fi
     sleep 0.05
   done
-  fail "$4 within 5 s"
+  fail "$5 within 5 s"
 }
 took_all=
+sent_all=
 synced_line="browser: synced today [0-9]* in space [0-9]* at [0-9]* unloaded ${site}login.html?today"
 device a
 forward
@@ -236,21 +293,23 @@ send key t cmd
 expect '^browser: command bar shown$' "⌘T didn't open A's command bar"
 send insert "${site}login.html?today-1"
 had=$(grep -c "$synced_line-1\$" "$b_log" || true)
+a_had=$(wc -l < "$a_log")
 send key return
-changed=$(now_ms)
 expect "^browser: loaded [0-9]* ${site}login.html?today-1\$" "A's Today tab didn't load"
+seen=$(now_of_day_ms)
 a_tab=$(sed -n "s|^browser: loaded \([0-9]*\) ${site}login.html?today-1\$|\1|p" "$log" | tail -1)
-b_gets "$synced_line-1\$" "$had" "$changed" "A's new Today tab didn't reach B"
+b_gets "$synced_line-1\$" "$had" "$a_had" "$seen" "A's new Today tab didn't reach B"
 b_line=$(grep -o "$synced_line-1\$" "$b_log" | tail -1)
 b_tab=$(echo "$b_line" | cut -d' ' -f4)
 b_space=$(echo "$b_line" | cut -d' ' -f7)
 
 navigated="browser: synced today $b_tab in space $b_space at [0-9]* unloaded ${site}login.html?today-2\$"
 had=$(grep -c "$navigated" "$b_log" || true)
+a_had=$(wc -l < "$a_log")
 go_from_bar "${site#http://}login.html?today-2"
-changed=$(now_ms)
 expect "^browser: loaded $a_tab ${site}login.html?today-2\$" "A's Today tab didn't go to its next page"
-b_gets "$navigated" "$had" "$changed" "A's navigation didn't take B's tab, unloaded, to the same page"
+seen=$(now_of_day_ms)
+b_gets "$navigated" "$had" "$a_had" "$seen" "A's navigation didn't take B's tab, unloaded, to the same page"
 
 # Moved to the Space B shows, it shows there, still without its page. Today's rows start at row 0,
 # as "from A" has no pinned tabs.
@@ -259,9 +318,10 @@ expect "^browser: menu shown .*Move to › from B" "A's Today tab's menu didn't 
 # Any Space but the one it was in.
 moved="browser: synced today $b_tab in space [0-9]* at 0 unloaded ${site}login.html?today-2\$"
 had=$(grep -c "$moved" "$b_log" || true)
+a_had=$(wc -l < "$a_log")
 send choose "from B"
-changed=$(now_ms)
-b_gets "$moved" "$had" "$changed" "A's move to \"from B\" didn't move B's tab"
+seen=$(now_of_day_ms)
+b_gets "$moved" "$had" "$a_had" "$seen" "A's move to \"from B\" didn't move B's tab"
 grep "browser: synced today $b_tab in space " "$b_log" | tail -1 | grep -q " in space $b_space " &&
   fail "B's tab stayed in Space $b_space when A moved it"
 for _ in $(seq 50); do
@@ -287,9 +347,10 @@ done
 post rightclick $(row 0)
 expect "^browser: menu shown .*$(cased 'Archive Tab')" "A's Today tab's menu didn't offer Archive Tab"
 archived=$(grep '^browser: archive [0-9]* tabs$' "$b_log" | tail -1 | cut -d' ' -f3)
+a_had=$(wc -l < "$a_log")
 send choose "$(cased 'Archive Tab')"
-changed=$(now_ms)
-b_gets "browser: synced close $b_tab\$" 0 "$changed" "A's archiving its tab didn't close B's"
+seen=$(now_of_day_ms)
+b_gets "browser: synced close $b_tab\$" 0 "$a_had" "$seen" "A's archiving its tab didn't close B's"
 for _ in $(seq 50); do
   [ "$(grep '^browser: archive [0-9]* tabs$' "$b_log" | tail -1 | cut -d' ' -f3)" -gt "${archived:-0}" ] && break
   sleep 0.1
@@ -520,7 +581,7 @@ rm -f "$profile_dir/Account"
 kill "$ilo_server" 2>/dev/null || true
 ilo_server=
 echo "ok: A added B, C recovered with the copied words, which the clipboard let go of after 90 s," \
-  "a Today tab A opened, navigated, moved and archived did the same on B, unloaded, in ms:$took_all;" \
+  "a Today tab A opened, navigated, moved and archived did the same on B, unloaded, by their cores' clocks in ms from A's change:$took_all, A sending each in ms after its last line for it:$sent_all;" \
   "a busy run of 10 opens, 10 navigations and 10 closes on A in $busy_ms ms looked $busy_looks times," \
   "sent $busy_items, and the account's devices made $busy_commits commits of $busy_kept items, none throttled;" \
   "A's Little ilo tab reached B, whose command bar listed and opened it, and its agent's never did," \

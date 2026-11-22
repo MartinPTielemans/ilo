@@ -4,7 +4,7 @@
 > ungoogled-chromium with an interface of its own in Rust. It keeps each part of your life in its own
 > Space, down a sidebar that tidies itself, with one command bar for addresses, searches, tabs and
 > commands. Chrome's extensions work, uBlock Origin is built in, and it needs no account. It sends
-> one anonymous usage count a day, with no ID, only if the user turns that on. Sync is optional, with an ilo account, end-to-end encrypted. It is in beta on Mac and Linux, and in alpha on Windows.
+> one anonymous usage count a day, with no ID, only if the user turns that on. Sync is optional, with an ilo account, end-to-end encrypted. It is in beta on Mac, Windows and Linux.
 
 The name is written lowercase, "ilo", and is Esperanto for "a tool".
 
@@ -18,6 +18,7 @@ The name is written lowercase, "ilo", and is Esperanto for "a tool".
 - [Changelog](https://ilobrowser.com/changelog): what changed in each version, with clips of the new features
 - [Changelog feed](https://ilobrowser.com/changelog.xml): the changelog as an Atom feed
 - [Privacy](https://ilobrowser.com/privacy): every service ilo talks to, and what it sends
+- [What ilo means](https://ilobrowser.com/ilo): the word, and where the name comes from
 
 ## Source
 

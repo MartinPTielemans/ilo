@@ -957,6 +957,10 @@ jobs:
     uses: ./.github/workflows/site.yml
     with:
       deploy: true
+    # Only the ilobrowser.com environment holds them, and only site.yml's deploy job sets it.
+    secrets:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
   # The owner published a draft: the bot that announces releases hears of it now, rather than at its
   # next check-in, and its answer never fails or holds up the release (docs/releasing.md).
