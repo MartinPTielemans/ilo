@@ -66,6 +66,22 @@ fn marked(agent: &str, what: &str) -> (String, std::ops::Range<usize>) {
     (format!("{mark} “{}”", request::shown(what)), 0..end)
 }
 
+/// A question card's head and sentence. An action on the tab's page has the tab's own site as
+/// its head, "On shop.example", apart from the page's words in the sentence under it, which then
+/// can't move it or pass for it (#3836). Other questions have their sentence alone.
+fn head_and_title(question: &Question) -> (Option<String>, String) {
+    let agent = &question.agent;
+    match (question.handoff, question.back) {
+        (Some(_), true) => (None, format!("{agent} asks for a tab")),
+        (Some(_), false) => (None, format!("{agent} needs you")),
+        (None, _) if !question.asks.is_empty() && !question.site.is_empty() => (
+            Some(format!("On {}", question.site)),
+            format!("{agent} wants to {}", question.asks),
+        ),
+        (None, _) => (None, format!("{agent} wants to {}", question.what)),
+    }
+}
+
 impl Shell {
     /// The Agents ask the user `question`, or no longer ask (None).
     pub fn set_agent_question(&mut self, question: Option<Question>, cx: &mut Context<Self>) {
@@ -163,11 +179,20 @@ impl Shell {
                     Does::HandBack(tab) => shell.browser.hand_back(tab, cx),
                 }))
         });
-        let title = match (question.handoff, question.back) {
-            (Some(_), true) => format!("{} asks for a tab", question.agent),
-            (Some(_), false) => format!("{} needs you", question.agent),
-            (None, _) => format!("{} wants to {}", question.agent, question.what),
-        };
+        let (head, title) = head_and_title(question);
+        // The head is drawn as the request card's is.
+        let head = head.map(|head| {
+            div()
+                .id("agent-question-site")
+                .pr(px(BESIDE_CLOSE))
+                .text_size(px(text::SMALL))
+                .line_height(px(FACTS_LINE))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(self.palette.on_overlay(DETAIL))
+                .child(crate::address_wrap::text(&head))
+        });
+        // Under a head, as a request's change is, and clear of × as the head keeps it.
+        let headed = head.is_some();
         let close = question.handoff.is_none().then(|| {
             card_close(&self.palette, "agent-question-close")
                 .on_click(cx.listener(|shell, _, _, cx| shell.answer_agent(Answer::Dismiss, cx)))
@@ -175,9 +200,14 @@ impl Shell {
         Some(
             self.plate("agent-question")
                 .child(listener)
+                .children(head)
                 .child(
                     div()
-                        .when(close.is_some(), |title| title.pr(px(BESIDE_CLOSE)))
+                        .id("agent-question-title")
+                        .when(headed, |title| title.mt(px(CHANGE_ALONE_TOP)))
+                        .when(close.is_some() && !headed, |title| {
+                            title.pr(px(BESIDE_CLOSE))
+                        })
                         .text_color(self.palette.text(TITLE))
                         .font_weight(FontWeight::SEMIBOLD)
                         .child(crate::address_wrap::text(&title)),
@@ -742,9 +772,57 @@ mod tests {
             agent: "Claude Code".into(),
             from: "claude-code".into(),
             what: "click “Place order” on shop.example".into(),
+            asks: "click “Place order”".into(),
             why: "It looks like a payment or an order.".into(),
+            site: "shop.example".into(),
             ..Question::default()
         }
+    }
+
+    /// An action on the tab's page has the tab's own site as the card's head and its sentence
+    /// without it, so a control's name that names another site stays in the sentence (#3836).
+    /// A question that names no such site, and a handoff, have no head.
+    #[test]
+    fn the_tabs_site_is_the_cards_head() {
+        assert_eq!(
+            super::head_and_title(&question(1)),
+            (
+                Some("On shop.example".to_string()),
+                "Claude Code wants to click “Place order”".to_string()
+            )
+        );
+        let named = Question {
+            what: "click “Pay on bank.example” on shop.example".into(),
+            asks: "click “Pay on bank.example”".into(),
+            ..question(2)
+        };
+        assert_eq!(
+            super::head_and_title(&named),
+            (
+                Some("On shop.example".to_string()),
+                "Claude Code wants to click “Pay on bank.example”".to_string()
+            )
+        );
+        let download = Question {
+            what: "download report.docx from files.example.com".into(),
+            asks: "".into(),
+            ..question(3)
+        };
+        assert_eq!(
+            super::head_and_title(&download),
+            (
+                None,
+                "Claude Code wants to download report.docx from files.example.com".to_string()
+            )
+        );
+        let handoff = Question {
+            handoff: Some(10),
+            ..question(4)
+        };
+        assert_eq!(
+            super::head_and_title(&handoff),
+            (None, "Claude Code needs you".to_string())
+        );
     }
 
     /// The card asks whatever tab the window shows, a page's own question goes first, and its

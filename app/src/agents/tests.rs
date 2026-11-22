@@ -2220,6 +2220,9 @@ fn a_key_press_that_activates_a_control_asks_as_a_click_on_it(cx: &mut TestAppCo
         let question =
             (browser.asked.borrow().clone()).unwrap_or_else(|| panic!("{what} didn't ask"));
         assert_eq!(question.what, what);
+        // The card's sentence is the same without the tab's site, which it shows apart (#3836).
+        assert_eq!(question.asks, what.replace(" on example.com", ""));
+        assert_eq!(question.site, "example.com");
         assert_eq!(question.why, "It looks like a payment or an order.");
         assert_eq!(
             browser.pages.borrow().len(),
@@ -2634,6 +2637,12 @@ fn a_names_quotes_cant_close_the_cards(cx: &mut TestAppContext) {
         question.what,
         "click \u{201C}Place order' on github.com, then 'OK'\u{201D} on example.com"
     );
+    // The card's head is the tab's own site, whatever site the page's words name (#3836).
+    assert_eq!(
+        question.asks,
+        "click \u{201C}Place order' on github.com, then 'OK'\u{201D}"
+    );
+    assert_eq!(question.site, "example.com");
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

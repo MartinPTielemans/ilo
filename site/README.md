@@ -14,9 +14,9 @@ vp build    # static files in dist/client
 ```
 
 It's served from Cloudflare at [ilobrowser.com](https://ilobrowser.com). A push to main that
-changes `site/` deploys there, and so does publishing a release of ilo, which brings its live demo
-and changelog entry (`.github/workflows/site.yml`). The secrets and the switch it needs are in
-`docs/releasing.md`. The demo isn't in the repository, so a local build has none.
+changes `site/` deploys there, and so does publishing a release of ilo, which brings its changelog
+entry (`.github/workflows/site.yml`). The secrets and the switch it needs are in
+`docs/releasing.md`.
 
 The site's code is MIT-licensed (see `LICENSE`). The ilo name and logo are trademarks and aren't
 covered by that license.

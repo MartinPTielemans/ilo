@@ -1,46 +1,52 @@
 import type { ReactNode } from "react";
-import { READING } from "../reading";
-import { DownloadLink } from "./download";
-import { Foot } from "./foot";
-import { Wordmark } from "./wordmark";
+import { type Here, Shell } from "./shell";
+import { Side } from "./side";
 
 /**
- * A page of reading, as the app's Help menu and Settings open them: the wordmark home, the other
- * reading pages and the download, then `title`, `lead` under it, and the page's sections, with
- * `fine` as the foot's fine print. No React runs on it in the browser, so nothing here or in its
- * sections can keep state or run an effect: what such a page does is in its script (src/reading.ts).
+ * A page of reading, as the app's Help menu and Settings open them: `title` and `lead` on bare
+ * ground, with `top` under them, then the page's sections as panels on the field. `index` lists the
+ * sections to keep in reach beside them, each by its id and its name.
  */
 export function TextPage({
+  here,
   title,
   lead,
+  top,
+  index,
   fine,
   children,
 }: {
+  here?: Here;
   title: string;
   lead: ReactNode;
+  top?: ReactNode;
+  index?: [id: string, name: string][];
   fine?: ReactNode;
-  children: ReactNode;
+  children?: ReactNode;
 }) {
   return (
-    <>
-      <header className="top">
-        <a className="brand" href="/" aria-label="ilo, home">
-          <Wordmark />
-        </a>
-        <nav className="links" aria-label="Pages">
-          <a href="/help">Help</a>
-          <a href="/changelog">Changelog</a>
-          <a href="/privacy">Privacy</a>
-          <DownloadLink className="button" />
-        </nav>
-      </header>
-      <main className="text">
-        <h1>{title}</h1>
-        <p className="lead">{lead}</p>
-        {children}
-      </main>
-      <Foot>{fine}</Foot>
-      <script dangerouslySetInnerHTML={{ __html: READING }} />
-    </>
+    <Shell here={here} fine={fine}>
+      <div className="top">
+        <div data-clear="0">
+          <h1>{title}</h1>
+          <p className="lede">{lead}</p>
+        </div>
+        {top}
+      </div>
+      {children && (
+        <div className={index ? "cols wide" : "cols alone"}>
+          {index && (
+            <Side label="On this page">
+              {index.map(([id, name]) => (
+                <a key={id} href={`#${id}`}>
+                  {name}
+                </a>
+              ))}
+            </Side>
+          )}
+          <div className="text">{children}</div>
+        </div>
+      )}
+    </Shell>
   );
 }
