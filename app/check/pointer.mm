@@ -31,6 +31,17 @@ void Post(CGEventType type, CGPoint at) {
   CFRelease(event);
 }
 
+// Whether |bounds| spans one of the displays, its menu bar's strip aside.
+bool AsBigAsAScreen(CGRect bounds) {
+  for (NSScreen* screen in NSScreen.screens) {
+    const NSSize size = screen.frame.size;
+    if (bounds.size.width == size.width && bounds.size.height >= size.height - 50) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Why the pointer mustn't go to |at| for |pid|'s app now, or nil: another app is in front, or
 // another app's window is over the point, such as a notification's.
 NSString* Refusal(pid_t pid, CGPoint at) {
@@ -49,13 +60,22 @@ NSString* Refusal(pid_t pid, CGPoint at) {
         [window[(__bridge NSString*)kCGWindowAlpha] doubleValue] == 0) {
       continue;
     }
+    // The Dock's window as big as a screen, over every app's, lets their clicks through.
+    if ([window[(__bridge NSString*)kCGWindowOwnerName] isEqualToString:@"Dock"] &&
+        AsBigAsAScreen(bounds)) {
+      continue;
+    }
     // Front to back: the first window there that's seen decides.
     const pid_t owner = [window[(__bridge NSString*)kCGWindowOwnerPID] intValue];
     if (owner == pid) {
       return nil;
     }
-    return [NSString stringWithFormat:@"%@'s window is over %.0f %.0f",
-                                      window[(__bridge NSString*)kCGWindowOwnerName], at.x, at.y];
+    return [NSString stringWithFormat:@"%@'s window, level %@ at %.0f,%.0f %.0fx%.0f, is over "
+                                      @"%.0f %.0f",
+                                      window[(__bridge NSString*)kCGWindowOwnerName],
+                                      window[(__bridge NSString*)kCGWindowLayer], bounds.origin.x,
+                                      bounds.origin.y, bounds.size.width, bounds.size.height, at.x,
+                                      at.y];
   }
   return [NSString stringWithFormat:@"no window of process %d is at %.0f %.0f", pid, at.x, at.y];
 }
