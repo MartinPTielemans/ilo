@@ -803,10 +803,10 @@ expect "^browser: shortcut new-tab $new_tab_key\$" "⌃⌘T didn't become New Ta
 ../tools/window-screenshot.sh "$pid" "$out/shortcuts.png" || fail "no window to capture"
 # in_sight, until the card shows $1 whole: GPUI on Windows scrolls about two thirds of the points
 # asked, so in_sight's two scrolls can fall short of a row a card's height away. It sets its
-# caller's locals, as in_sight does.
+# caller's locals, as in_sight does. $2, if given, is in_sight's.
 whole_in_sight() {
   for _ in 1 2 3 4; do
-    in_sight "$1" || return 1
+    in_sight "$1" "${2:-}" || return 1
     y=${at#* }
     [ -z "$sight" ] || { [ "$y" -ge "$top" ] && [ "$y" -le "$bottom" ]; } && return 0
   done
@@ -870,10 +870,13 @@ expect '^browser: settings shown Shortcuts$' \
   "Settings… didn't show the Shortcuts tab it showed last"
 settings_drew Shortcuts
 # Where the app drew it: its place depends on how wide the keys' chip beside it is, ⌃⌘T on the Mac
-# and Ctrl+Alt+T elsewhere. Settings comes back scrolled to Go Back, a card's height and more below.
+# and Ctrl+Alt+T elsewhere. Settings comes back scrolled to Go Back, a card's height and more below,
+# and its place is this show's, not the one the last Settings drew it at (#3841). The show starts at
+# the command: on the Mac, "settings shown" comes only after Settings has drawn.
 restore_new_tab() {
   local at sight top bottom y by rest
-  whole_in_sight "restore new-tab" || fail "Settings didn't draw New Tab's ↺"
+  whole_in_sight "restore new-tab" '^browser: command settings via ' ||
+    fail "Settings didn't draw New Tab's ↺ after it showed again"
   send clickkey $at
 }
 restore_new_tab
@@ -1411,6 +1414,7 @@ send key down alt cmd
 expect '^browser: command next-tab via ' "⌥⌘↓ in ⌘L's bar didn't reach the UI"
 expect '^browser: command bar follows the tab shown$' \
   "the command bar didn't follow the tab ⌥⌘↓ showed: $(grep '^browser: selected ' "$log" | tail -1)"
+followed=$(grep '^browser: selected ' "$log" | tail -1 | cut -d' ' -f3)
 ../tools/window-screenshot.sh "$pid" "$out/bar-follows.png" || fail "no window to capture"
 send insert 'data:text/html,<title>typed</title>'
 send key return
@@ -1419,6 +1423,13 @@ typed=$(grep '^browser: loaded [0-9]* data:text/html,<title>typed</title>$' "$lo
 [ "$typed" != "$left" ] || fail "↩ in ⌘L's bar loaded in tab $left, which ⌥⌘↓ had left"
 send key w cmd
 expect "^browser: tab $typed closed\$" "⌘W didn't close the typed page's tab"
+# It opened over the tab the bar followed, which closing it shows again (#3813), and ⌥⌘↑ from
+# there goes back to the tab ⌥⌘↓ left.
+expect "^browser: selected $followed\( in .*\)\{0,1\}\$" \
+  "closing the typed page's tab didn't show tab $followed, the one the bar followed and it opened over"
+send key up alt cmd
+expect '^browser: command previous-tab via ' "⌥⌘↑ after closing the typed page's tab didn't reach the UI"
+expect "^browser: selected $left\( in .*\)\{0,1\}\$" "⌥⌘↑ didn't go back to tab $left, which ⌥⌘↓ left"
 send key w cmd
 expect "^browser: tab $left closed\$" "⌘W didn't close the tab ⌥⌘↓ left"
 expect "^browser: today $before\$" "Today isn't as it was after the steps for #3428"

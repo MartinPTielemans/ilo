@@ -2277,6 +2277,61 @@ mod tests {
         }
     }
 
+    /// On each layout in core/split_keys_layouts.txt, the key a split key runs on runs the same
+    /// command with the page focused as in the UI. The core's tests check that a page's key there
+    /// is named by the split key, with shift and no Latin key (ShortcutKeyName), and each OS's
+    /// GPUI test that the UI names it so, or on Windows that its keyboard mapper binds it there.
+    #[test]
+    fn the_page_and_the_ui_run_the_same_split_command_on_every_layout() {
+        use crate::bc::{BC_MODIFIER_ALT, BC_MODIFIER_CONTROL, BC_MODIFIER_SHIFT};
+        let (held, ui_held) = match OFF_THE_MAC {
+            true => (
+                BC_MODIFIER_ALT | BC_MODIFIER_SHIFT,
+                Modifiers {
+                    alt: true,
+                    shift: true,
+                    ..Modifiers::default()
+                },
+            ),
+            false => (
+                BC_MODIFIER_CONTROL | BC_MODIFIER_SHIFT,
+                Modifiers::control_shift(),
+            ),
+        };
+        for layout in split_layouts() {
+            for (index, key) in gpui::SPLIT_KEYS.into_iter().enumerate() {
+                if layout.runs_on[index].is_none() {
+                    continue;
+                }
+                let page = DEFAULTS.command_for(&page_keystroke(&key.to_string(), "", held), false);
+                let ui = Keystroke {
+                    modifiers: ui_held,
+                    key: key.to_string(),
+                    key_char: None,
+                };
+                let command = SPLIT_COMMANDS[index];
+                assert_eq!(page, Some(command), "{} {key}", layout.name);
+                assert_eq!(
+                    split_commands_run_by(&ui, OFF_THE_MAC),
+                    [command],
+                    "{} {key}",
+                    layout.name
+                );
+            }
+        }
+        // Off the Mac, Ctrl and shift with them are Previous and Next Tab. The core gives such a
+        // key no Latin key, which on Windows is its US place's: with it Ctrl+Shift and Danish's å
+        // would be Next Tab on the page, where it's Previous Tab in the UI.
+        if OFF_THE_MAC {
+            let tab = |latin| {
+                let held = BC_MODIFIER_CONTROL | BC_MODIFIER_SHIFT;
+                DEFAULTS.command_for(&page_keystroke("[", latin, held), true)
+            };
+            assert_eq!(tab(""), Some(Command::PreviousTab));
+            assert_eq!(tab("}"), Some(Command::NextTab));
+        }
+    }
+
     /// Linux's GPUI runs the split keys on the keys the layouts table says, by xkb's own layouts,
     /// with Alt or Ctrl and shift, and no other key of the table's runs one. AltGr's keys are
     /// left to the layout.

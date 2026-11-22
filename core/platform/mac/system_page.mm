@@ -25,6 +25,7 @@
 #include "base/strings/sys_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
+#include "browser_core/checked.h"
 #include "components/input/native_web_keyboard_event.h"
 #include "media/base/media_switches.h"
 #include "net/base/apple/url_conversions.h"
@@ -804,7 +805,9 @@ class SystemPageMac : public SystemPage {
   // The content process went: crashed, or killed for memory. WebKit shows nothing until a load.
   void Gone() {
     // An error, as Chromium's tab's is.
-    LOG(ERROR) << "browser: system page gone at " << url().spec();
+    if (Checked()) {
+      LOG(ERROR) << "browser: system page gone at " << url().spec();
+    }
     [web_ reload];
   }
 
@@ -1173,7 +1176,9 @@ class SystemPageMac : public SystemPage {
   // No downloads in this engine, nor other apps' schemes, such as mailto: the page goes nowhere.
   if (action.shouldPerformDownload ||
       !(url.SchemeIsHTTPOrHTTPS() || url.SchemeIs("about") || url.SchemeIs("blob"))) {
-    LOG(WARNING) << "browser: system page refused " << url.possibly_invalid_spec();
+    if (browser_core::Checked()) {
+      LOG(WARNING) << "browser: system page refused " << url.possibly_invalid_spec();
+    }
     decide(WKNavigationActionPolicyCancel);
     return;
   }
@@ -1201,8 +1206,10 @@ class SystemPageMac : public SystemPage {
   }
   // What the page can't show would be a download, which this engine doesn't do.
   if (response.forMainFrame && !response.canShowMIMEType) {
-    LOG(WARNING) << "browser: system page refused a download of "
-                 << net::GURLWithNSURL(response.response.URL).possibly_invalid_spec();
+    if (browser_core::Checked()) {
+      LOG(WARNING) << "browser: system page refused a download of "
+                   << net::GURLWithNSURL(response.response.URL).possibly_invalid_spec();
+    }
     decide(WKNavigationResponsePolicyCancel);
     return;
   }
