@@ -624,6 +624,9 @@ send type personal
 send key escape
 expect '^browser: rename cancelled$' "escape didn't cancel the renaming"
 none_since '^browser: renamed profile' || fail "escape renamed the profile"
+# The name, which takes the double-click, is back in place of the field only from the next frame.
+drawn_after "profile $work" '^browser: rename cancelled$' > /dev/null ||
+  fail "Settings didn't draw Profile 2's name again after escape"
 click_in_sight "profile $work" doubleclickkey
 expect "^browser: rename profile $work\$" "a double-click on Profile 2 didn't put it in a field"
 send type personal
