@@ -289,6 +289,8 @@ pub struct Settings {
     /// The agents' requests opened in their activity, by entry, to show where each went and what
     /// it sent (#2326), and those of them showing every line.
     requests_opened: HashSet<u64>,
+    /// The saved reads opened in place under Saved reads, by profile and name.
+    reads_opened: HashSet<(u64, String)>,
     requests_all: HashSet<u64>,
 }
 
@@ -1148,6 +1150,7 @@ fn view(cx: &mut App) -> Entity<Settings> {
             autofill: HashMap::new(),
             asked: HashSet::new(),
             requests_opened: HashSet::new(),
+            reads_opened: HashSet::new(),
             requests_all: HashSet::new(),
             import: None,
             _import: None,
@@ -1357,8 +1360,15 @@ impl Settings {
     fn undo(&mut self, cx: &mut Context<Self>) {
         let links = (self.links.as_ref()).filter(|_| self.section == Section::Links);
         let undone = links.is_some_and(|links| links.update(cx, |links, cx| links.undo(cx)));
+        // On Agents, the last saved read Remove Read took comes back where it was.
+        let agents = agents::global(cx).filter(|_| self.section == Section::Agents);
+        let read = !undone
+            && agents
+                .is_some_and(|agents| agents.update(cx, |agents, cx| agents.undo_remove_read(cx)));
         let what = if undone {
             "brought a rule back"
+        } else if read {
+            "brought a saved read back"
         } else {
             "had nothing"
         };
@@ -1369,6 +1379,9 @@ impl Settings {
     fn forget_undo(&mut self, cx: &mut Context<Self>) {
         if let Some(links) = &self.links {
             links.update(cx, |links, _| links.forget_removed());
+        }
+        if let Some(agents) = agents::global(cx) {
+            agents.update(cx, |agents, _| agents.forget_removed_reads());
         }
     }
 
@@ -3725,6 +3738,7 @@ impl Settings {
             blocks.push(Block::Rows(vec![self.command_line(agents, cx)]));
         }
         blocks.extend(self.fenced_sites(agents, cx));
+        blocks.extend(self.saved_reads(agents, cx));
         // AppleScript is the Mac's alone.
         if cfg!(target_os = "macos") {
             blocks.extend(self.scripts(agents, accent, cx));
@@ -3757,7 +3771,11 @@ impl Settings {
                         .find(|refused| !refused.is_empty())
                         .unwrap_or(&entry.refused);
                     let steps = entry.steps.iter().map(title);
-                    let detail: SharedString = if !refused.is_empty() {
+                    let read =
+                        agents::tools::read_detail(&entry.action, &entry.site, &entry.target);
+                    let detail: SharedString = if let Some(read) = read {
+                        read.into()
+                    } else if !refused.is_empty() {
                         format!("Refused: {refused}").into()
                     } else if !entry.steps.is_empty() {
                         steps.collect::<Vec<_>>().join(" · ").into()
@@ -3913,6 +3931,80 @@ impl Settings {
             Block::Heading(fence::HEADING.into()),
             Block::Group(group(look, rows)),
             Block::Under(under),
+        ]
+    }
+
+    /// Saved reads (#3822): each profile's, the first profile's first, each opened in place to
+    /// show what it reads with Remove Read at its foot, which ⌘Z undoes. None while there are
+    /// none, and a profile without a folder, as a private window's, keeps none.
+    fn saved_reads(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> Vec<Block> {
+        use browser::agents::reads::rows;
+        let look = &self.look;
+        let profiles = crate::ids(bc::bc_profiles);
+        let several = profiles.len() > 1;
+        let now = std::time::SystemTime::now();
+        let mut drawn = Vec::new();
+        for profile in profiles {
+            let model = agents.read(cx);
+            let named = several.then(|| crate::name(bc::bc_profile_name, profile));
+            for saved in model.saved_reads(profile) {
+                let mut row = rows::row(&saved, model.fenced_read(&saved.read.site), now);
+                if let Some(named) = &named {
+                    row.site = format!("{} · {named}", row.site);
+                }
+                let at = drawn.len();
+                let key = (profile, saved.read.name.clone());
+                let opened = self.reads_opened.contains(&key);
+                let open: browser::saved_read_row::Press = {
+                    let (view, key) = (cx.entity().downgrade(), key.clone());
+                    Rc::new(move |_, cx| {
+                        _ = view.update(cx, |settings, cx| {
+                            let opened = !settings.reads_opened.remove(&key);
+                            if opened {
+                                settings.reads_opened.insert(key.clone());
+                            }
+                            // check.sh reads this line.
+                            log!("browser: settings saved read {at} opened {opened}");
+                            cx.notify();
+                        });
+                    })
+                };
+                let remove: browser::saved_read_row::Press = {
+                    let (view, agents) = (cx.entity().downgrade(), agents.clone());
+                    Rc::new(move |_, cx| {
+                        let (profile, name) = key.clone();
+                        agents.update(cx, |agents, cx| agents.remove_read(profile, &name, cx));
+                        _ = view.update(cx, |settings, cx| {
+                            settings.reads_opened.remove(&key);
+                            cx.notify();
+                        });
+                    })
+                };
+                drawn.push(browser::saved_read_row::row(
+                    look,
+                    &row,
+                    at,
+                    opened,
+                    self.a11y,
+                    &self.drawn_logged,
+                    open,
+                    remove,
+                ));
+            }
+        }
+        if drawn.is_empty() {
+            return Vec::new();
+        }
+        let foot = div()
+            .px(px(TEXT_X))
+            .text_size(px(text::SMALL))
+            .line_height(px(DETAIL_LINE))
+            .text_color(look.detail)
+            .child(rows::FOOT);
+        vec![
+            Block::Heading(rows::HEADING.into()),
+            Block::Group(group(look, drawn)),
+            Block::Under(div().child(foot)),
         ]
     }
 

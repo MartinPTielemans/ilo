@@ -1,5 +1,5 @@
-//! Where the command bar's picks (browser::shell::bar_usage) and Library › Agents' past tasks
-//! (browser::agent_history) are kept: in each profile's own folder, which the core answers, so a
+//! Where the command bar's picks (browser::shell::bar_usage), Library › Agents' past tasks
+//! (browser::agent_history) and saved reads (browser::saved_reads) are kept: in each profile's own folder, which the core answers, so a
 //! deleted profile's go with it and a renamed one's stay with it.
 
 use std::cell::Cell;
@@ -62,5 +62,23 @@ pub fn set_sessions(profile: u64, text: &str) {
     };
     if let Err(error) = saved {
         log!("couldn't save Library › Agents' past tasks: {error}");
+    }
+}
+
+/// `profile`'s saved reads file, "" for none, or None for a profile with no folder, as a private
+/// window's, which keeps none.
+pub fn saved_reads(profile: u64) -> Option<String> {
+    let folder = folder(profile)?;
+    Some(
+        std::fs::read_to_string(folder.join(browser::saved_reads::store::FILE)).unwrap_or_default(),
+    )
+}
+
+/// Keeps `text` as `profile`'s saved reads, moved into place whole; "" leaves no file.
+pub fn set_saved_reads(profile: u64, text: &str) {
+    let folder = folder(profile);
+    let kept = browser::saved_reads::Store::read(text).keep(folder.as_deref());
+    if let Err(error) = kept {
+        log!("couldn't keep the saved reads: {error}");
     }
 }
