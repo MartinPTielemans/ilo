@@ -1301,10 +1301,8 @@ send choose "$(cased 'Remove from Favorites')"
 expect '^browser: favorites $' "Remove from Favorites left the closed favorite's tile"
 expect "^browser: today $fav $x $kept\$" \
   "Remove from Favorites didn't put the closed favorite at the top of Today: Today is \"$(today)\""
-# The rows slide down under it, and a press before they stop lands on the wrong one.
-expect '^browser: rows settled$' "the rows didn't settle under the closed favorite put in Today"
-send click $(row 0)
-expect "^browser: selected $fav in " "a click on the former favorite's row didn't show it"
+# With no favorite left the rows move off the places row gives, so its ⌘ digit shows it.
+switch "$(($(pinned | wc -w) + 1)) cmd" "$fav"
 send key w cmd
 expect_tabs "$x $kept" "$x" "closing the former favorite didn't show the Today tab under it"
 before=$kept
