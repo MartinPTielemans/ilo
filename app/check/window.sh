@@ -1097,7 +1097,9 @@ check_buttons "with the sidebar out" hidden
 ../tools/window-screenshot.sh "$pid" "$out/sidebar-reveal.png" || fail "no window to capture"
 # The panel's edge drags the width too, inside its own 10 (#3942). Pressed 5 in and held, the panel
 # follows the pointer out over the page, its window with it, and stays out; let go over it, it
-# keeps the width, the docked sidebar's, and the page doesn't move. A double-click puts back 228.
+# keeps the width, the docked sidebar's, and the page doesn't move. Dragged back to 228, the pointer
+# is still on it: a double-click would leave a real pointer (Windows') at 328, over the page once the
+# width is back, and the panel would rightly go.
 send press 228 300
 send dragto 278 300
 send dragto 328 300
@@ -1106,8 +1108,11 @@ send release 328 300
 expect '^browser: sidebar width 328$' "dragging the edge of the sidebar out didn't widen it to 328"
 check_reveal "with the edge of the sidebar out dragged to 328" shown 328
 check_layout "with the edge of the sidebar out dragged" inset
-send doubleclick 328 300
-expect '^browser: sidebar width 228$' "a double-click on the edge of the sidebar out didn't put back 228"
+send press 328 300
+send dragto 278 300
+send dragto 228 300
+send release 228 300
+expect '^browser: sidebar width 228$' "dragging the edge of the sidebar out back didn't put it at 228"
 check_reveal "with the edge of the sidebar out put back" shown
 send move 200 300
 send move 250 300
