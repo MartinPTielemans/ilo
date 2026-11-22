@@ -646,8 +646,10 @@ if [ -n "${CHECK_TRACE_CATEGORIES:-}" ] && [ "$active" = 1 ]; then
   [ ! -s "$perf_dir/traced-unloaded" ] || perf_row traced-unloaded \
     "Tab switch to a tab without its page, traced, key to page shown" \
     "$(perf_stats '%.0f' < "$perf_dir/traced-unloaded") ms" "none of its own"
-  exec 3>&- 5>&-
+  # Quits before cdp.py's pipe closes: the browser ends by itself as the pipe goes, and a quit
+  # asked then finds it ending, which the Mac answers with an error (#3870).
   quit
+  exec 5>&-
   kill "$helper" 2> /dev/null || true
   helper=
   rm -rf "$scratch"
