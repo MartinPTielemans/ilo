@@ -30,6 +30,24 @@ export const CLIPS = "/media/changelog";
 // here, on the note it shows.
 export const RELEASES: Release[] = [
   {
+    version: "0.3.0",
+    date: "22 November 2026",
+    summary:
+      "Agents always ask you first on the sites you list, their request cards lead with what they want, and an agent in a terminal can use ilo through the ilo command. On the Mac, a page that needs protected video moves to Safari's engine.",
+    notes: [
+      "Agents: Settings › Agents › Always ask first holds sites (and their subdomains), such as your bank, where an agent asks you before opening a page, using one it reached, or sending a click, key or form, whatever you answered before. Agents can't see or change the list.",
+      "Agents: Settings › Agents › Command line adds the ilo command, so an agent in a terminal can use ilo. On Windows it's added to your PATH, and in the Flatpak, Add gives you a line to run once.",
+      "Agents: request cards lead with what the agent says it wants under ilo's own line, with See the whole request for details, and agent cards and Library › Agents entries take the task's name. Sign-in pages and file upload fields hand the tab to you, and later downloads ask you first.",
+      "Agents can run several steps in one go, take a screenshot of their tab even when your window isn't showing a page, and get the content of an app inside a frame.",
+      "Agents: security fixes in what agents are shown and in when they must ask you first. Details will follow once most copies of ilo have them.",
+      "On the Mac, when a page needs protected video as you click or press a key in it, its tab moves to Safari's engine, with a note and Move Back, and ilo asks you first while you're typing or using the camera, microphone or screen. Apple Music opens there from its first page, and Clear Browsing Data… also clears what Safari's engine keeps.",
+      "An empty Boards list offers New Board, a Board's picture shows its cards, clicking a row in a pinned tab's or Favorite's hover card opens it in that tab, and Settings › Shortcuts lists every shortcut a command has. With the sidebar revealed, a mouse's back and forward buttons go to the previous and next Space.",
+      "Split views: a page's dialog stays over its own pane, ilo's shortcuts work next to an alert from the same site, and Previous Pane, Next Pane and Close this Split Pane work on Danish, German, French and Japanese layouts, from a page too. When you open a tab from the command bar while on a Favorite, pinned tab or Today tab, closing it returns you to that tab.",
+      "On the Mac, when a dialog closes, the page gets clicks and the keyboard back at once, and a key the page didn't use as an alert closes is no longer typed into the next field. Page alerts and the shortcuts around them are also fixed on Windows and Linux.",
+      "On Windows, a page stays inside the window with a larger Text size. On Windows and Linux, the sidebar and the top of the window are solid when background blur isn't available, so other windows don't show through under Wayland. On Linux, a double-click on a busy machine counts as one.",
+    ],
+  },
+  {
     version: "0.2.5",
     date: "21 November 2026",
     summary: "A privacy fix on Linux, and a newer ad blocker.",
