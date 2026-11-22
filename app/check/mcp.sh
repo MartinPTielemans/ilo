@@ -1042,10 +1042,11 @@ onload = () => setTimeout(() => { location.href = q.get("file"); }, Number(q.get
     # ↩ goes in the driver's queue with the key, as it handles each command once the last is
     # done: waiting for the key's done line first took Windows' shell past the protection.
     post key $card_key
+    chord=$step
     send key return
     expect "^browser: agent card keys on $1 Allow Once\$" \
-      "Focus Agent Question's key didn't give the later download's card the keyboard on Allow Once"
-    expect "^browser: agent card key ignored, " "↩ straight after Focus Agent Question's key wasn't ignored"
+      "Focus Agent Question's key didn't give the later download's card the keyboard on Allow Once" "$chord"
+    expect "^browser: agent card key ignored, " "↩ straight after Focus Agent Question's key wasn't ignored" "$chord"
     send key $card_key
     expect "^browser: agent card keys back by key\$" "Focus Agent Question's key again didn't give the keyboard back"
     ! grep -q "^browser: agent mcp-client answered $1 " "$log" ||
