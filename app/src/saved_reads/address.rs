@@ -29,7 +29,7 @@ pub fn address(read: &Definition, params: &Map<String, Value>) -> Result<Url, Re
         read,
         params,
         Checks {
-            values: true,
+            values: false,
             address: true,
         },
     )
