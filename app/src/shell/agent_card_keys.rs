@@ -31,6 +31,9 @@ const CHIP_GAP: f32 = 6.;
 const ESC_WIDTH: f32 = 36.;
 /// Room a row of buttons keeps spare before taking a chip, against rounding in its layout.
 const ROOM_SLACK: f32 = 0.5;
+/// Each side of a button with a chip, half a card button's, as its label and chip sit centred: at
+/// the sidebar's narrowest, Allow Once has its row to itself and room for ↩ only so.
+const CHIPPED_SIDE: f32 = BUTTON_GAP / 2.;
 
 /// What card_chips reads from the last frame: the width of the card's row of buttons, and each
 /// button's top and its label's width.
@@ -397,13 +400,22 @@ impl Shell {
             Some(EscapeMark::Button(i)) => Some(i),
             _ => None,
         };
+        let mut chipped = [false; MOST_BUTTONS];
         let mut fits = |on: Option<usize>, chip: f32| {
-            let fits = on.is_some_and(|i| row.contains(&i))
-                && used + chip + CHIP_GAP <= room.row - ROOM_SLACK;
+            let Some(i) = on.filter(|i| row.contains(i)) else {
+                return false;
+            };
+            let sides = if chipped[i] {
+                0.
+            } else {
+                2. * (BUTTON_GAP - CHIPPED_SIDE)
+            };
+            let fits = used + chip + CHIP_GAP - sides <= room.row - ROOM_SLACK;
             if fits {
-                used += chip + CHIP_GAP;
+                used += chip + CHIP_GAP - sides;
+                chipped[i] = true;
             }
-            fits && on == Some(at)
+            fits && i == at
         };
         (fits(Some(ringed), RETURN_WIDTH), fits(escaped, ESC_WIDTH))
     }
@@ -504,6 +516,7 @@ impl Shell {
             .children(esc);
         let accent: Rgba = palette.accent.into();
         card_button_as(palette, button.id, label, button.look)
+            .when(chipped, |b| b.px(px(CHIPPED_SIDE)))
             .relative()
             .child(row)
             .when(ringed == Some(at), |mut b| {
@@ -1132,7 +1145,8 @@ mod tests {
     }
 
     /// Where the row has room, as in the widest sidebar, ↩ is on the ringed button and ESC on
-    /// Escape's; where it hasn't, in the narrowest, the ring alone marks the confirmation's.
+    /// Escape's, and in the narrowest neither is ever on another. The test's text runs wider than
+    /// Inter or SF, so whether ↩ fits beside Allow Once there is the captures' to show.
     #[gpui::test]
     fn the_chips_show_where_the_row_has_room(cx: &mut TestAppContext) {
         use super::{EscapeMark, escape_mark};
@@ -1153,16 +1167,18 @@ mod tests {
                         .map(|at| shell.card_chips(at, labels.len(), escape))
                         .collect()
                 });
+                let wanted: Vec<_> = (0..labels.len())
+                    .map(|at| (at == ringed, escape == Some(EscapeMark::Button(at))))
+                    .collect();
                 if width == SIDEBAR_MAX {
-                    let wanted: Vec<_> = (0..labels.len())
-                        .map(|at| (at == ringed, escape == Some(EscapeMark::Button(at))))
-                        .collect();
                     assert_eq!(chips, wanted, "{card} at {width}");
-                } else if card == "confirmation" {
-                    assert!(
-                        chips.iter().all(|&c| c == (false, false)),
-                        "{card}: {chips:?}"
-                    );
+                } else {
+                    for (at, (&chip, &mark)) in chips.iter().zip(&wanted).enumerate() {
+                        assert!(
+                            (!chip.0 || mark.0) && (!chip.1 || mark.1),
+                            "{card} at {width}: a chip on button {at}: {chips:?}"
+                        );
+                    }
                 }
                 from_page(&shell, cx, KEY);
                 shell.update(cx, |shell, cx| shell.set_agent_question(None, cx));
