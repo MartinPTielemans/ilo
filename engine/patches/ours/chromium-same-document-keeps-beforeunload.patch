@@ -1,0 +1,25 @@
+Keeps a page's beforeunload answer awaited across a same-document commit (#3920). A step back or
+forward to a same-document entry, as a page's own history router makes, commits in the current
+frame host, and CommitNavigation reset its waiting state first, so a tab's close or the browser's
+quit waiting on that page stopped its 500 ms timer and dropped the page's answer: the first Quit
+or ⌘W did nothing. A same-document commit now leaves the wait, its timer and the round's dialog
+state alone; a cross-document commit resets them as before. Chromium's main has the same reset
+today.
+
+--- a/content/browser/renderer_host/render_frame_host_impl.cc
++++ b/content/browser/renderer_host/render_frame_host_impl.cc
+@@ -12850,7 +12850,13 @@
+ 
+   // Get back to a clean state, in case we start a new navigation without
+   // completing an unload handler.
+-  ResetWaitingState();
++  // ilo: a same-document commit keeps its document, so a beforeunload it is
++  // still answering, for a tab's close or the browser's quit, stays awaited
++  // and timed. Resetting here dropped that answer, and the close never came
++  // (#3920).
++  if (!is_same_document) {
++    ResetWaitingState();
++  }
+ 
+   // The renderer can exit view source mode when any error or cancellation
+   // happen. When reusing the same renderer, overwrite to recover the mode.
