@@ -653,9 +653,7 @@ impl Agents {
             address: address.to_string(),
             reply,
         });
-        if waiting.len() == 1 {
-            self.read_next(key);
-        }
+        self.read_next(key);
     }
 
     /// Sends the first use waiting on the read `key`.
