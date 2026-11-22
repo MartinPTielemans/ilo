@@ -711,6 +711,9 @@ expect '^browser: command bar go https://duckduckgo\.com/?q=ilo' \
   "the first profile's Space didn't search with DuckDuckGo: $(grep '^browser: command bar go' "$log" | tail -1)"
 search_shown 'https://duckduckgo\.com/?q=ilo'
 send key w cmd
+# A loading page's tab closes some time after ⌘W, and closed once its Space is left it leaves
+# that Space showing none, where New Note below needs the tab the search opened over.
+expect "^browser: tab $searched closed\$" "⌘W didn't close the first Space's search"
 send key 2 ctrl
 expect "^browser: space $second in " "⌃2 after ⌘W closed the first Space's search didn't show the second Space"
 expect "^browser: settled space $second\$" "the second Space's page didn't settle"
