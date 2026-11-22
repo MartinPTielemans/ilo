@@ -942,18 +942,23 @@ function keepFirstNote() {
 // it keeps the first note's field, waits for the host's hello and the Board's file. A key typed
 // before then could be a note's letter or a tool's, so the keys that type are held until the Board
 // is open (#3424): typed into the first note's field, the way typing there goes, or given to the
-// canvas in order on a Board with cards.
+// canvas in order on a Board with cards. Tab and the arrows are held with them, in the order
+// pressed, as the cards they go to and move aren't drawn yet (#3950). ⇧Tab isn't: from nothing
+// focused it goes to the toolbar's last button, open or not.
 let opening = true;
 const early = [];
+const walking = new Set(["Tab", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"]);
 document.addEventListener(
   "keydown",
   (e) => {
     // A key an input method takes (229) goes on to the first note's field, to compose there.
     if (!opening || e.isComposing || e.keyCode === 229) return;
-    if (e.metaKey || e.ctrlKey || e.altKey || [...e.key].length !== 1) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const walks = walking.has(e.key) && !(e.key === "Tab" && e.shiftKey);
+    if (!walks && [...e.key].length !== 1) return;
     e.preventDefault();
     e.stopImmediatePropagation();
-    early.push(e.key);
+    early.push({ key: e.key, shiftKey: e.shiftKey });
   },
   true,
 );
@@ -961,13 +966,25 @@ function opened() {
   opening = false;
   const kept = keepFirstNote();
   const keys = early.splice(0);
-  if (!keys.length) return;
+  // A Board that didn't open has nothing for them to go to.
+  if (!keys.length || !writable) return;
   if (kept) {
+    // Only the keys that type: the first note's field has no card for Tab or an arrow.
+    const text = keys.filter(({ key }) => !walking.has(key)).map(({ key }) => key).join("");
+    if (!text) return;
     editing.appear?.();
-    return document.execCommand("insertText", false, keys.join(""));
+    return document.execCommand("insertText", false, text);
   }
-  for (const key of keys) {
-    for (const type of ["keydown", "keyup"]) document.body.dispatchEvent(new KeyboardEvent(type, { key, bubbles: true }));
+  for (const { key, shiftKey } of keys) {
+    // From nothing focused, Tab goes to the first card in reading order, as the page's own Tab
+    // does on an open Board. Past the last card a held Tab stays on it.
+    if (key === "Tab" && !focusedCard() && cardOf(tabStop)) {
+      focusCard(cardOf(tabStop));
+      continue;
+    }
+    for (const type of ["keydown", "keyup"]) {
+      document.body.dispatchEvent(new KeyboardEvent(type, { key, shiftKey, bubbles: true }));
+    }
   }
 }
 
