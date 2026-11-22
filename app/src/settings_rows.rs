@@ -31,23 +31,60 @@ use crate::tokens::settings::{SENT_CHEVRON, SENT_GAP, SENT_INDENT, SENT_LABEL, S
 use crate::tokens::shell::{KEYED, KEYED_RING};
 use crate::tokens::text::SMALL;
 
+/// The places `drawn` logged, one a control, shared by a view's controls.
+pub type Drawn = Rc<RefCell<DrawnLog>>;
+
+#[derive(Default)]
+pub struct DrawnLog {
+    logged: Vec<String>,
+    /// What the frame being drawn has drawn so far, for `frame`.
+    this_frame: Vec<String>,
+}
+
+impl DrawnLog {
+    /// Starts a frame: what the last one didn't draw logs its place again when it's drawn, even
+    /// where it was, as a press before that frame lands on what was there instead (#3887). A view
+    /// calls it as it renders; one that doesn't logs a control again only where it moves.
+    pub fn frame(&mut self) {
+        self.logged = std::mem::take(&mut self.this_frame);
+    }
+
+    /// Forgets every place, so each is logged again where it's drawn.
+    pub fn clear(&mut self) {
+        self.logged.clear();
+    }
+
+    /// The lines logged, one a control.
+    pub fn lines(&self) -> &[String] {
+        &self.logged
+    }
+
+    /// Whether it logged `line`.
+    fn draw(&mut self, what: &str, line: String) -> bool {
+        // Once a place: forget where it was drawn before.
+        let at = format!("browser: settings {what} at ");
+        self.this_frame.retain(|each| !each.starts_with(&at));
+        self.this_frame.push(line.clone());
+        let new = !self.logged.contains(&line);
+        if new {
+            crate::log!("{line}");
+            self.logged.retain(|each| !each.starts_with(&at));
+            self.logged.push(line);
+        }
+        new
+    }
+}
+
 /// Fills the relative element it's put in and logs where that is drawn, its centre in the window,
-/// as "browser: settings `what` at x y", each time it moves, for check.sh to click it there.
-/// `logged` holds the lines logged, one a control; emptied, each is logged again where it's drawn.
-pub fn drawn(what: String, logged: Rc<RefCell<Vec<String>>>) -> gpui::Canvas<()> {
+/// as "browser: settings `what` at x y", each time it moves, for check.sh to click it there, and
+/// after a frame without it where the view starts each frame (`DrawnLog::frame`).
+pub fn drawn(what: String, logged: Drawn) -> gpui::Canvas<()> {
     canvas(
         |_, _, _| {},
         move |bounds, _, _, _| {
             let (x, y) = (f32::from(bounds.center().x), f32::from(bounds.center().y));
             let line = format!("browser: settings {what} at {x:.0} {y:.0}");
-            let mut logged = logged.borrow_mut();
-            // Once a place: forget where it was drawn before.
-            let at = format!("browser: settings {what} at ");
-            if !logged.contains(&line) {
-                crate::log!("{line}");
-                logged.retain(|each| !each.starts_with(&at));
-                logged.push(line);
-            }
+            logged.borrow_mut().draw(&what, line);
         },
     )
     .absolute()
@@ -863,6 +900,39 @@ pub fn sent_part(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const NAME: &str = "browser: settings profile 2 at 484 210";
+
+    /// A control drawn where it was logs once; gone for a frame, as a profile's name is while
+    /// it's in a field, it logs again where it comes back, for check.sh to click after (#3887).
+    #[test]
+    fn a_control_back_after_a_frame_without_it_logs_its_place_again() {
+        let mut log = DrawnLog::default();
+        log.frame();
+        assert!(log.draw("profile 2", NAME.into()));
+        log.frame();
+        assert!(
+            !log.draw("profile 2", NAME.into()),
+            "drawn again where it was"
+        );
+        log.frame();
+        log.frame();
+        assert!(
+            log.lines().is_empty(),
+            "a frame without it forgot its place"
+        );
+        assert!(log.draw("profile 2", NAME.into()), "back where it was");
+    }
+
+    /// A view that never starts a frame logs a control again only where it moves.
+    #[test]
+    fn without_frames_a_control_logs_only_where_it_moves() {
+        let mut log = DrawnLog::default();
+        assert!(log.draw("profile 2", NAME.into()));
+        assert!(!log.draw("profile 2", NAME.into()));
+        assert!(log.draw("profile 2", "browser: settings profile 2 at 484 260".into()));
+        assert_eq!(log.lines(), ["browser: settings profile 2 at 484 260"]);
+    }
 
     /// A request's opened row shows what it sent in eight lines at most, the eighth "Show all"
     /// when there are more, and every line once the user shows them all.
