@@ -112,6 +112,8 @@ jobs:
         with:
           persist-credentials: false
       - run: python3 -I tools/check-lints.py
+      # adblock-parity's reading of the beacons the app's log alone says it blocked (#3602).
+      - run: tools/adblock-parity-test.sh
 
   quarantine:
     name: quarantine

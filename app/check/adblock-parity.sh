@@ -426,12 +426,17 @@ rm -rf "$scratch"
 [ -s "$requests" ] || fail "DevTools recorded no requests"
 # What's wrong, if anything, as a here-document in a command substitution trips the Mac's bash 3.2.
 result="$dir/result.txt"
-python3 -I - "$requests" "$starts" "$videos" "$hides" "$contents" "$dir/sites.tsv" "${ADBLOCK_PARITY_BASELINE:-}" > "$result" << 'PY' || fail "$(cat "$result")"
+# The beacons the browser's own engine says it blocked, as the app logs them under the driver.
+pings="$dir/pings.txt"
+{ grep '^browser: ad block blocked a ping at ' "$log" || true; } |
+  sed 's/^browser: ad block blocked a ping at //' > "$pings"
+python3 -I - "$requests" "$starts" "$videos" "$hides" "$contents" "$dir/sites.tsv" "$pings" "${ADBLOCK_PARITY_BASELINE:-}" > "$result" << 'PY' || fail "$(cat "$result")"
 
 import json, os, re, sys
+from collections import Counter
 from urllib.parse import urlsplit
 
-recorded, starts, watched, hides, shown, table, baseline = sys.argv[1:]
+recorded, starts, watched, hides, shown, table, pings, baseline = sys.argv[1:]
 # Each request: its address, when it went, and whether the ad blocker blocked it or answered it
 # with a stand-in, an extension's resource it redirected the request to. Its later events come by
 # its id, which a later request can take again, once a renderer's process id comes back. An id sent
@@ -444,7 +449,8 @@ for line in open(recorded, encoding="utf-8"):
     request = live.get(event["id"])
     if event["event"] == "sent" and event["url"].startswith("http") and not event.get("redirect"):
         live[event["id"]] = {"url": event["url"], "at": event["at"], "how": "allowed",
-                             "document": event.get("document", False)}
+                             "document": event.get("document", False),
+                             "ping": event.get("ping", False), "ended": False}
         requests.append(live[event["id"]])
     elif not request:
         continue
@@ -457,12 +463,32 @@ for line in open(recorded, encoding="utf-8"):
         request["to"] = event["url"]
     elif event["event"] == "document":
         request["status"], request["to"] = event["status"], event["url"]
+        request["ended"] = True
     elif event["event"] == "failed":
         request["error"] = event["error"]
+        request["ended"] = True
         if "BLOCKED_BY_CLIENT" in event["error"]:
             request["how"] = "blocked"
-    elif event["event"] == "answered" and request and request["how"] == "allowed":
-        request["how"] = "stand-in"
+    elif event["event"] == "answered":
+        request["ended"] = True
+        if request["how"] == "allowed":
+            request["how"] = "stand-in"
+
+# A beacon DevTools never heard end, as the page that sent it had gone, the app's log may say the
+# engine blocked (#3602). That line is the engine's decision, not the request seen failing on the
+# wire, which is enough as the decision goes the same way, Fail() in core/native_ad_block.cc, as
+# the requests DevTools heard fail with ERR_BLOCKED_BY_CLIENT in the same pass. One line accounts
+# for one beacon to its exact address, those DevTools heard blocked first, so a line can't excuse
+# two, and a beacon with no line stays allowed.
+logged = Counter(line.rstrip("\n") for line in open(pings, encoding="utf-8") if line.strip())
+for request in requests:
+    if request["ping"] and request["how"] == "blocked" and logged[request["url"]]:
+        logged[request["url"]] -= 1
+for request in requests:
+    unended = request["ping"] and not request["ended"] and request["how"] == "allowed"
+    if unended and logged[request["url"]]:
+        logged[request["url"]] -= 1
+        request["how"] = "logged"
 
 sites = []
 for line in open(starts, encoding="utf-8"):
@@ -556,17 +582,20 @@ for i, s in enumerate(sites):
     mine = [r for r in requests if s["at"] <= r["at"] < end]
     host = lambda r: urlsplit(r["url"]).hostname or "?"
     s["requests"] = len(mine)
-    s["blocked"] = sorted({host(r) for r in mine if r["how"] != "allowed"})
+    # Those the app's log alone says it blocked count neither way: no host of theirs is let
+    # through, and none excuses another request to its host.
+    s["blocked"] = sorted({host(r) for r in mine if r["how"] in ("blocked", "stand-in")})
     s["allowed"] = sorted({host(r) for r in mine if r["how"] == "allowed"})
     # Addresses, host and path, as a query changes from load to load.
     address = lambda r: host(r) + urlsplit(r["url"]).path
-    s["blocked_at"] = {address(r) for r in mine if r["how"] != "allowed"}
+    s["blocked_at"] = {address(r) for r in mine if r["how"] in ("blocked", "stand-in")}
     s["allowed_at"] = {address(r) for r in mine if r["how"] == "allowed"}
     # Where the run both blocked and let through a host's requests, those it blocked.
     s["split"] = sorted(a for a in s["blocked_at"] if a.split("/")[0] in s["allowed"])
     s["blocked_n"] = sum(r["how"] == "blocked" for r in mine)
     s["failed"] = "" if s["loaded"] else why_not(mine)
     s["standin_n"] = sum(r["how"] == "stand-in" for r in mine)
+    s["logged_at"] = sorted(address(r) for r in mine if r["how"] == "logged")
     # What the baseline hid all of and this run shows, as cdp.py's hidden says, or None where
     # there's no saying: no baseline's file for the site, or no look at it.
     hid = os.path.join(hides, re.sub("[^A-Za-z0-9]", "_", s["url"]) + ".json")
@@ -610,7 +639,8 @@ def content_cells(content):
 
 with open(table, "w", encoding="utf-8") as out:
     out.write("site\tloaded\tload_ms\trequests\tblocked\tstand_ins\tblocked_hosts\tallowed_hosts"
-              "\tbot_check\tvideo\tmissed\tsplit_blocked\ttext\timages\tcover\tfailed\n")
+              "\tbot_check\tvideo\tmissed\tsplit_blocked\ttext\timages\tcover\tfailed"
+              "\tblocked_by_app_log\n")
     for s in sites:
         out.write("\t".join([s["url"], "1" if s["loaded"] else "0", s["load_ms"], str(s["requests"]),
                              str(s["blocked_n"]), str(s["standin_n"]), ",".join(s["blocked"]),
@@ -618,7 +648,8 @@ with open(table, "w", encoding="utf-8") as out:
                              video_cell(s["video"]),
                              "" if s["missed"] is None else str(len(s["missed"])),
                              " ".join(s["split"])]
-                            + content_cells(contents.get(s["url"])) + [s["failed"]]) + "\n")
+                            + content_cells(contents.get(s["url"]))
+                            + [s["failed"], " ".join(s["logged_at"])]) + "\n")
 
 worse = []
 refused = []
@@ -737,6 +768,8 @@ if worse:
 print(f"{len(loaded)} of {len(sites)} sites loaded, in {median} ms at the median; "
       f"{sum(s['blocked_n'] for s in sites)} requests blocked and "
       f"{sum(s['standin_n'] for s in sites)} given a stand-in, of {sum(s['requests'] for s in sites)}"
+      + "".join(f"; {s['url']}'s beacons blocked by the app's log alone, as DevTools heard no "
+                f"end of them: {' '.join(s['logged_at'])}" for s in sites if s["logged_at"])
       + f"; {blocker_hid} selectors hidden by the blocker's style sheet and "
         f"{sum(s['page_hid'] for s in sites)} by the page's own"
       + (f"; {len(missed)} selectors the baseline hid all of showed" if baseline else "")
