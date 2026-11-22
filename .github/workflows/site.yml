@@ -1,8 +1,9 @@
 # ilobrowser.com, from site/ (site/AGENTS.md). ci.yml calls it for a change to site/, which runs the
 # site's checks and nothing else, and on a push to main deploys once they pass. release.yml calls it
-# when the owner publishes a release, which puts that release's demo and changelog entry on the
-# site. By hand on main, it uploads a preview to the Worker ilo-site-preview on workers.dev
-# (site/wrangler.jsonc's env.preview), which never touches ilobrowser.com, or deploys with live.
+# when the owner publishes a release, which puts that release's changelog entry on the site: it is
+# then this file as it stood at the release's tag, run on main's site/. By hand on main, it uploads
+# a preview to the Worker ilo-site-preview on workers.dev (site/wrangler.jsonc's env.preview),
+# which never touches ilobrowser.com, or deploys with live.
 #
 # Only the deploy job reads the Cloudflare secrets: they're the GitHub environment ilobrowser.com's,
 # which only main and v* tags may use (docs/releasing.md). With either missing, it deploys nothing
@@ -52,7 +53,6 @@ jobs:
           cache: true
           cache-dependency-path: site/pnpm-lock.yaml
 
-      # No demo here: it's the release's, and the site builds and passes without it.
       - working-directory: site
         run: |
           vp check
@@ -104,46 +104,27 @@ jobs:
           persist-credentials: false
           sparse-checkout: site
 
-      # The changelog shows only published releases (site/src/changelog.ts), and the demo is the
-      # newest one's that has it. A list that can't be read, or is empty, fails the deploy, rather
-      # than one that would publish every dated entry.
-      - name: Releases
+      # The changelog shows only published releases (site/src/changelog.ts). A list that can't be
+      # read, or is empty, fails the deploy, rather than one that would publish every dated entry.
+      # The home page's stars and contributors are asked for here too (site/tools/numbers.mjs),
+      # which keeps the committed ones when GitHub doesn't answer.
+      - name: Releases and counts
         if: ${{ steps.switch.outputs.mode != 'none' }}
-        # The only step that calls gh, so Install and Build run with no token, as with the secrets.
+        # The only step that holds the token, so Install and Build run with none, as with the secrets.
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[]
+          published=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[]
             | select((.draft | not) and (.prerelease | not) and (.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")))
-            | [.tag_name, ([.assets[].name] | index("ilo-demo.tar.gz") != null)] | @tsv' > "$RUNNER_TEMP/releases"
-          if [ ! -s "$RUNNER_TEMP/releases" ]; then
+            | .tag_name' | sed 's/^v//' | sort -V | tr '\n' ' ')
+          if [ -z "$published" ]; then
             echo "::error::No published release of ilo listed, so the changelog would show none."
             exit 1
           fi
-          published=$(cut -f1 "$RUNNER_TEMP/releases" | sed 's/^v//' | sort -V | tr '\n' ' ')
           echo "ILO_PUBLISHED=$published" >> "$GITHUB_ENV"
           echo "Published: $published" >> "$GITHUB_STEP_SUMMARY"
-          tag=$(awk -F'\t' '$2 == "true" { print $1 }' "$RUNNER_TEMP/releases" | sort -V | tail -n 1)
-          if [ -z "$tag" ]; then
-            echo "::error::No published release has ilo-demo.tar.gz, so the home page would have no live demo."
-            exit 1
-          fi
-          commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha)
-          gh release download "$tag" -R "$GITHUB_REPOSITORY" -p ilo-demo.tar.gz -D "$RUNNER_TEMP"
-          cd site/public/demo
-          rm -rf ilo_demo.js ilo_demo_bg.wasm snippets
-          tar xzf "$RUNNER_TEMP/ilo-demo.tar.gz"
-          # The home page's fine print links this commit, as the GPL's offer of the demo's source.
-          cat > SOURCE <<EOF
-          ilo_demo.js and ilo_demo_bg.wasm are ilo's interface built for the web from the browser repo,
-          under the GPL in LICENSE, at this commit (release $tag):
-
-          https://github.com/$GITHUB_REPOSITORY/tree/$commit
-
-          The fonts in it are Outfit (OFL.txt) and Inter (Inter-OFL.txt), under the SIL Open Font License.
-          EOF
-          echo "Demo: $tag, $commit" >> "$GITHUB_STEP_SUMMARY"
+          node site/tools/numbers.mjs | tee -a "$GITHUB_STEP_SUMMARY"
 
       # Without the dependency cache, so the job that holds the token runs nothing another run wrote.
       - if: ${{ steps.switch.outputs.mode != 'none' }}
@@ -164,7 +145,7 @@ jobs:
         if: ${{ steps.switch.outputs.mode != 'none' }}
         working-directory: site
         run: |
-          : "${ILO_PUBLISHED:?The Releases step sets it; a build without it would publish every dated entry}"
+          : "${ILO_PUBLISHED:?The Releases and counts step sets it; a build without it would publish every dated entry}"
           vp build
 
       - name: Deploy

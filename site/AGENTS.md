@@ -1,8 +1,8 @@
 # ilobrowser.com
 
-The website for ilo, the open-source Arc-style browser, in `site/` of the browser's repository.
-The repository's `AGENTS.md` is the browser's and doesn't apply here, nothing here is built into
-the browser, and the site is MIT (`LICENSE`) where the browser is GPL. Run every command below in
+The website for ilo, the open-source browser, in `site/` of the browser's repository. The
+repository's `AGENTS.md` is the browser's and doesn't apply here, nothing here is built into the
+browser, and the site is MIT (`LICENSE`) where the browser is GPL. Run every command below in
 `site/`.
 
 The site is [TanStack Start](https://tanstack.com/start) (React) on
@@ -14,39 +14,40 @@ serve.
 ## What we never compromise on
 
 1. **The site is as fast as the browser claims to be.** Every page is prerendered HTML that reads
-   in full before any script runs; script only adds the interactions. Nothing renders on the
-   client alone, nothing joins the client bundle the page can do without, and there are no web
-   fonts it can do without and no third-party scripts: no analytics, trackers or chat widgets.
-   Video is lazy and muted, and loads only when it's on screen.
+   in full before any script runs; script only adds the land behind it and the interactions.
+   Nothing renders on the client alone, no page loads a script of the framework's, and there are
+   no web fonts it can do without and no third-party scripts: no analytics, trackers or chat
+   widgets. Video is lazy and muted, and loads only when it's on screen.
 2. **Native scrolling.** No smooth-scroll libraries and no scroll-jacking. Everything that moves
    can be interrupted: a click during an animation acts at once.
 3. **One goal per page.** The home page exists to get people to download ilo. Every section
    leads there or one layer deeper, and nothing competes with the download button.
-4. **Show the real product.** Real captures of ilo, never mockups passed off as the app, and
-   never Arc's or Dia's icons, fonts, images or names.
+4. **One site, not nine pages.** Every page is the same shell (`src/components/shell.tsx`): the
+   land, the bar, the foot and the two scripts. A page adds only what is its own, in the shapes
+   the others already use (`.top`, `.cols`, `.side`, `.panel`, `.list` in `src/styles.css`), and
+   something new on one page is reachable from the bar, the foot or a page that has it. A feature
+   no other page leads to or follows from isn't finished.
+5. **Show the real product.** Real captures of ilo, never mockups passed off as the app, and
+   never another browser's icons, fonts, images or names.
 
 ## Traps
 
-- A component's first render is the prerendered page, so its starting state is what a visitor
-  sees before hydration, and what React expects to find. Read the window, the scroll or media
-  queries in effects and handlers only.
-- `src/entrances.ts` adds its classes outside React, which keeps them only on elements whose
-  `className` React never changes. Listing one whose class follows state loses its entrance.
-- On a wide screen with a mouse the home page opens inside ilo: its head script (`WILL_LIVE` in
-  `src/live.ts`) marks `<html>` `will-live` before the first paint, the body stops scrolling, ilo's
-  interface draws around the page, and `.pitch` is the scroller. Whatever watches or sets the scroll
-  asks `scroller()` for it (null is the window), and sizes inside `.pitch` are the container's
-  (`cqw`), not the viewport's. `src/live.ts` adds its canvas, its frames, `data-live` and
-  `--px`, `--pw`, `--ph` outside React, so React renders none of them and never sets `style` or
-  those attributes on `.stage` or `.pages`.
-- Only the home page runs React in the browser: a route does when it sets
-  `staticData: { hydrates: true }`. Every other page ships as its HTML and one inline script,
-  `src/reading.ts`, so state, effects and handlers in its components never run, and what such a page
-  does goes in that script. The script reaches the page as its own source: `reading` and the
-  functions handed to it use only their arguments and the browser.
+- No page runs React in the browser. A component renders once, at build time, so state, effects
+  and handlers in it never run. What a page does is in two inline scripts the shell ends it with:
+  `PAGE` (`src/page.ts`: the download for the visitor's computer, the index's mark, the
+  changelog's fold, filter and clip view), then `src/land.js`. `page` reaches the browser as its
+  own source, so it and the functions handed to it use only their arguments and the browser.
+- `src/land.js` draws the fields behind every page on one fixed canvas and runs the bar. It
+  measures the page after `PAGE` has changed the download's words, clears the crop behind every
+  `[data-clear]` element so its text reads, and takes its parts from `main [data-part]`, or slices
+  of `main` on a page that marks none. Text on bare ground without `data-clear` is unreadable, and
+  anything that changes a page's height after load has to leave the land a `resize` to measure by.
+- The index beside a page (`src/components/side.tsx`) scrolls in a list inside its panel. Give a
+  scroller that sits over the land no solid ground of its own: headless Chrome blacked out the land
+  above one.
 - A route file's `component` loads with its page; its `head`, and everything the file imports
-  outside the component, loads with the home page's script. Data as large as the changelog is
-  imported by components only.
+  outside the component, loads with every page's head. Data as large as the changelog is imported
+  by components only.
 - The build's crawler takes every link that starts with `/` as a page to render and list in the
   sitemap, `/help#part` as one of its own. Link to the page alone, and give a file the build writes
   an entry in `pages` in `vite.config.ts` that turns both off, as the feed has.
@@ -62,18 +63,30 @@ serve.
 - `public/llms.txt` is the site's summary for AI answer engines, written by hand: a new page, a new
   platform or a change in what ilo needs goes there too. The answers in `src/faq.ts` reach search
   engines as structured data, so each has to stand alone and say no more than the site does.
-- `public/demo` holds the live interface's licences and `SOURCE`, but not its build: the deploy
-  (`.github/workflows/site.yml`) takes `ilo-demo.tar.gz` from the newest published release, unpacks
-  it there and points `SOURCE` at the tag's commit, which the home page's fine print links to as the
-  GPL's offer of source. Never commit `ilo_demo.js` or `ilo_demo_bg.wasm` (`.gitignore`). Without
-  them, as in the checks and a local build, the site builds and passes, and the home page gives the
-  live interface up (`giveUp` in `src/live.ts`) and shows the hero's clip, as on a phone.
-- A change to `site/` runs the site's checks and nothing of the browser's
-  (`.github/scripts/ci-changes.cjs`). On main it then deploys to Cloudflare (`wrangler.jsonc`), so
-  main is what ilobrowser.com serves. Publishing a release deploys too.
+- `src/changelog.ts` is the changelog. A release is its `changes`, one for each thing a reader
+  would name: its `kind` (security, new, changed or fixed), its `area` (the part of ilo, in a name
+  an earlier release already uses where one fits), its `text`, `only` the platforms it's for when
+  not all (the text then doesn't open with "On the Mac,"), and `clip`, a clip's name when one shows
+  it (`tools/clip.sh` makes the clip's three files, which a test checks are there). The page, the
+  feed, the home page's version line and each platform's page all read it.
 - The changelog shows a release only once it's published: the deploy lists the published versions
   in `ILO_PUBLISHED`, and `isOut` in `src/changelog.ts` reads it. Unset, as in the checks and
   `vp dev`, every dated release shows.
+- The stars and contributors on the home page are `src/github.json` and the faces in
+  `public/media/contributors`, which `tools/numbers.mjs` rewrites at each deploy and nothing
+  commits. What's committed is what shows when GitHub doesn't answer. The site never asks GitHub
+  from a visitor's browser.
+- `tools/walk.mjs` walks every page in headless Chrome at a desk's width and a phone's, fails on
+  what a reader would trip over and leaves pictures of each page. Run it in a check VM or on a
+  Linux runner after a change to the shell, the land or a page's layout, and look at the pictures.
+- A change to `site/` runs the site's checks and nothing of the browser's
+  (`.github/scripts/ci-changes.cjs`). On main it then deploys to Cloudflare
+  (`.github/workflows/site.yml`, `wrangler.jsonc`), so main is what ilobrowser.com serves.
+  Publishing a release deploys too, with the workflow as it stood at the release's tag, so main's
+  `site/` has to build under the last tag's `site.yml` as well as main's.
+- `public/demo` holds the licences of the old home page's live demo and nothing the site uses. The
+  deploy that publishing 0.3.0 starts unpacks that release's demo there, so the folder stays until
+  0.3.0 is out. Never commit `ilo_demo.js` or `ilo_demo_bg.wasm` (`.gitignore`).
 - The download buttons link to `releases/latest/download/<file>` in the browser repo, with each
   platform's fixed file name from `src/downloads.ts`. GitHub serves whichever release is marked
   Latest, so every other release there (the engine builds) has to be made with `--latest=false`,
@@ -81,9 +94,13 @@ serve.
 
 ## Brand
 
-- The name is **ilo**, lowercase everywhere, even at the start of a sentence. The tagline is
-  "a good tool."
-- Palette: Paper `#F3F0E8`, Ink `#16140F`, Signal green `#0E9F55`.
+- The name is **ilo**, lowercase everywhere, even at the start of a sentence. The line under it is
+  "a browser you get to keep."
+- The look is fields of dots in a Space's colour, with dark panels (`--panel` `#0E0E11`) and white
+  text on them. The five Spaces' colours are `SLOT` in `src/land.js`; green, `#07803F`, is the first
+  and the one every page opens on. Type is Figtree, with DM Mono for keys and commands.
+- ilo is never sold on speed, never set against another browser by name, and isn't an AI
+  assistant.
 
 ## Commits and pull requests
 

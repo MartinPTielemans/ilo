@@ -1,1150 +1,908 @@
+/* ilo's site, one sheet for every page: the land, the bar, the panels that stand on it, and what each page adds.
+   Figtree and DM Mono (SIL Open Font Licence, public/fonts/OFL.txt) are served from here, so a page asks no one
+   else for anything. */
 @font-face {
-  font-family: "Outfit";
-  src: url("/fonts/outfit.woff2") format("woff2");
-  font-weight: 100 900;
+  font-family: Figtree;
+  font-style: normal;
+  font-weight: 300 900;
   font-display: swap;
-  unicode-range:
-    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
-    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+  src: url(/fonts/figtree.woff2) format("woff2");
 }
-
+@font-face {
+  font-family: "DM Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url(/fonts/dm-mono-500.woff2) format("woff2");
+}
 :root {
-  --paper: #f3f0e8;
-  --ink: #16140f;
-  /* Steps up from the ink, for a surface that sits on it. */
-  --ink-2: #221f19;
-  --ink-3: #2e2a22;
-  --muted: #5f5a50;
-  --soft: #aaa498;
-  --signal: #0e9f55;
-  --signal-hi: #12b262;
-  /* The wordmark's dot. */
-  --dot: var(--signal);
-
-  --display: "Outfit", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-  /* What ilo's own interface is set in, inside the fragments of it. */
-  --ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
-  --s1: 16px;
-  --s2: 19px;
-  --s3: clamp(24px, 2.2vw, 34px);
-  --s4: clamp(44px, 4.6vw, 76px);
-  --s5: clamp(56px, 6vw, 104px);
-
-  --m: 32px;
-  /* The page's sides: as far in as the hero's window, which is 1280px at most, so every section
-     lines up with it on any screen. */
-  --inset: max(calc(var(--m) + 48px), calc((100% - 1280px) / 2));
+  --ground: #07803f;
+  --shade: #05602f;
+  --mark: #cffa7e;
+  --ink: #04170e;
+  --panel: #0e0e11;
   --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
-  /* The edge macOS gives a window in dark mode, on the fragments of ilo's. */
-  --edge: 0 0 0 1px rgb(255 255 255 / 0.12);
-  color-scheme: dark;
-}
-
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
+  --sans:
+    Figtree, ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial,
+    sans-serif;
+  --mono: "DM Mono", ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
 }
 * {
-  margin: 0;
+  box-sizing: border-box;
 }
 html {
-  -webkit-text-size-adjust: 100%;
-  scroll-padding-top: 24px;
-  background: var(--ink);
+  scroll-behavior: smooth;
 }
-@media (prefers-reduced-motion: no-preference) {
-  html,
-  .pitch {
-    scroll-behavior: smooth;
-  }
-}
+/* Without a canvas the page stands on the Space's own ground, which carries white type as the land does. */
 body {
-  background: var(--ink);
-  color: var(--paper);
-  font: 400 var(--s2)/1.5 var(--display);
+  margin: 0;
+  color: #fff;
+  background: var(--ground);
+  font-family: var(--sans);
+  font-weight: 500;
   -webkit-font-smoothing: antialiased;
-  font-kerning: normal;
+  text-rendering: optimizeLegibility;
 }
-img {
+/* Nothing eases until the page has shown where it is (the script adds .live): a reload part-way down opens with
+   its bar gathered and its colours set, not on its way there from the top of the page. */
+.live body {
+  transition: background-color 0.5s;
+}
+#land {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   display: block;
-  max-width: 100%;
-  height: auto;
+  z-index: 0;
+}
+main {
+  position: relative;
+  z-index: 1;
+}
+.nav,
+.spaces {
+  z-index: 2;
 }
 a {
   color: inherit;
-  text-decoration-thickness: 1.5px;
-  text-underline-offset: 4px;
+}
+:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 3px;
+  border-radius: 8px;
+}
+h1,
+h2,
+h3,
+p,
+figure,
+dl,
+dd,
+ul,
+ol {
+  margin: 0;
+}
+ul,
+ol {
+  padding: 0;
+  list-style: none;
+}
+[hidden] {
+  display: none !important;
+}
+
+/* navigation: open on the land at the top of the page, gathered into one dark pill once the page moves */
+.nav {
+  --bar-w: 1280px;
+  --bar-h: 76px;
+  --bar-pad: 40px; /* the open bar; the land reads these to clear the ground under its words */
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+.nav-in {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  max-width: var(--bar-w);
+  height: var(--bar-h);
+  margin-top: 0;
+  padding: 0 var(--bar-pad);
+  border-radius: 0;
+  background: rgba(14, 14, 17, 0);
+}
+.live .nav-in {
+  transition:
+    max-width 0.62s var(--ease),
+    height 0.62s var(--ease),
+    margin-top 0.62s var(--ease),
+    padding 0.62s var(--ease),
+    border-radius 0.62s var(--ease),
+    background-color 0.4s var(--ease),
+    box-shadow 0.62s var(--ease);
+}
+.nav.compact .nav-in {
+  max-width: min(640px, calc(100% - 24px));
+  height: 54px;
+  margin-top: 14px;
+  padding: 0 8px 0 22px;
+  border-radius: 27px;
+  background: rgba(14, 14, 17, 0.93);
+  box-shadow: 0 20px 44px -18px rgba(0, 0, 0, 0.55);
+}
+.nav-brand {
+  display: flex;
+  align-items: center;
+  height: 44px;
+  margin-right: auto;
+  padding-right: 6px;
+}
+.nav-brand svg {
+  height: 21px;
+  width: auto;
+  display: block;
+  color: #fff;
+  overflow: visible;
+}
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.nav-links a {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 38px;
+  padding: 0 13px;
+  border-radius: 19px;
+  white-space: nowrap;
+  font-size: 15.5px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: background-color 0.18s;
+}
+.nav-links a::after {
+  content: "";
+  position: absolute;
+  inset: -3px 0;
+} /* 44 tall to a finger */
+.nav-links a[aria-current] {
+  background: rgba(255, 255, 255, 0.16);
+} /* the page the visitor is on */
+.nav-links a.nav-cta {
+  margin-left: 8px;
+  padding: 0 18px;
+  background: #fff;
+  color: var(--ink);
+  font-weight: 700;
+  transition: transform 0.2s var(--ease);
+}
+.live .nav-links a.nav-cta {
+  transition:
+    color 0.5s,
+    transform 0.2s var(--ease);
+}
+.nav-links a.nav-cta:active {
+  transform: scale(0.96);
+}
+.stars {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  font-size: 13.5px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.82;
+}
+.stars svg {
+  width: 12px;
+  height: 12px;
+  display: block;
+}
+.dot {
+  fill: var(--mark);
+}
+.live .dot {
+  transition: fill 0.5s;
+}
+
+/* the Space switcher, as at the foot of ilo's sidebar: pick a colour and it crosses the page from the dot you clicked */
+.spaces {
+  position: fixed;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  height: 44px;
+  padding: 0 5px;
+  border-radius: 22px;
+  background: rgba(14, 14, 17, 0.93);
+  box-shadow: 0 18px 40px -16px rgba(0, 0, 0, 0.6);
+}
+.spaces button {
+  width: 36px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 18px;
+  background: none;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.spaces i {
+  width: 14px;
+  height: 14px;
+  border-radius: 7px;
+  display: block;
+  transition:
+    transform 0.25s var(--ease),
+    box-shadow 0.25s;
+}
+.spaces button[aria-pressed="true"] i {
+  transform: scale(1.14);
+  box-shadow:
+    0 0 0 2.5px var(--panel),
+    0 0 0 4.5px #fff;
+}
+.spaces button:active i {
+  transform: scale(0.96);
+}
+
+.home > section {
+  position: relative;
+  min-height: 100vh;
+  min-height: 100svh;
+  display: grid;
+  align-items: center;
+  padding: 124px 0 136px;
 }
 h1,
 h2 {
-  font-weight: 500;
-  letter-spacing: -0.035em;
-  line-height: 0.95;
+  font-weight: 700;
+  letter-spacing: -0.032em;
   text-wrap: balance;
 }
-::selection {
-  background: color-mix(in srgb, var(--dot) 55%, var(--ink));
-  color: var(--paper);
+h1 {
+  font-size: clamp(38px, 5vw, 76px);
+  line-height: 1.02;
 }
-:focus-visible {
-  outline: 2px solid currentColor;
-  outline-offset: 3px;
-  border-radius: 4px;
-}
-.vh {
-  position: absolute;
-  width: 1px;
-  height: 1px; /* taste-skill-ignore: a visually hidden heading, not a rule */
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-}
-
-/* The one action, wherever it is, in the round shape of the wordmark's dot. */
-.button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: 44px;
-  padding: 0 20px;
-  border-radius: 999px;
-  background: var(--signal);
-  color: var(--ink);
-  font-weight: 600;
-  text-decoration: none;
-  white-space: nowrap;
-  transition:
-    transform 0.15s var(--ease),
-    background-color 0.15s;
-}
-.button:hover {
-  background: var(--signal-hi);
-}
-.button:active {
-  transform: scale(0.97);
-}
-.button.big {
-  height: 56px;
-  padding: 0 28px;
-  font-size: var(--s2);
-}
-
-/* Top: the wordmark and the links. */
-.top {
-  position: absolute;
-  inset: 0 0 auto;
-  z-index: 3;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 22px var(--inset);
-  font-size: var(--s1);
-}
-.brand {
-  display: block;
-  padding: 6px 0;
-}
-.wm {
-  display: block;
-  height: 30px;
-  width: auto;
-  overflow: visible;
-}
-.wm .d {
-  fill: var(--dot, var(--signal));
-  transition: fill 0.35s var(--ease);
-}
-.wm .s {
-  fill: currentColor;
-}
-.wm .o {
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 24;
-}
-.links {
-  display: flex;
-  align-items: center;
-  gap: 28px;
-}
-.links a:not(.button) {
-  text-decoration: none;
-  padding: 8px 0;
-  color: var(--soft);
-  transition: color 0.15s;
-}
-.links a:not(.button):hover {
-  color: var(--paper);
-}
-
-/* The home page. It comes as a page; where ilo's interface will run around it (will-live, set
-   before the first paint by the page's one script in the head), the stage is the window, ilo is
-   drawn on the canvas under the pages, and the page is one of them: the tab ilo has open. */
-.will-live,
-.will-live body {
-  height: 100%;
-}
-.will-live body {
-  overflow: hidden;
-}
-.will-live .stage {
-  position: fixed;
-  inset: 0;
-  background: var(--ink);
-}
-.ui {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  width: 100%;
-  height: 100%;
-  opacity: 0;
-  transition: opacity 0.5s;
-}
-.stage[data-live] .ui {
-  opacity: 1;
-}
-.will-live .pages {
-  position: absolute;
-  inset: 0;
-  z-index: 2;
-  overflow: hidden;
-  background: var(--ink);
-}
-/* ilo has drawn: the page, which filled the window, moves to where ilo's page goes. */
-.pages.arriving {
-  transition:
-    left 0.8s cubic-bezier(0.3, 0, 0.1, 1),
-    top 0.8s cubic-bezier(0.3, 0, 0.1, 1),
-    width 0.8s cubic-bezier(0.3, 0, 0.1, 1),
-    height 0.8s cubic-bezier(0.3, 0, 0.1, 1),
-    border-radius 0.8s;
-}
-/* While the bar, a menu or a dialog is drawn over the page, the page shows through the canvas. */
-.stage[data-covered] .pages {
-  z-index: 0;
-}
-.will-live .pages > * {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  border: 0;
-}
-.pages > [hidden] {
-  display: none;
-}
-.pages iframe {
-  background: #fff;
-}
-
-/* The page itself, sized by the room it is given: the screen, or ilo's window. */
-.pitch {
-  --pad: clamp(24px, 6cqw, 84px);
-  --head: 68px;
-  container-type: inline-size;
-  background: var(--ink);
-}
-.will-live .pitch {
-  overflow: auto;
-  overscroll-behavior: contain;
-}
-/* It takes the focus so the keys that scroll a page scroll it, which needs no ring. */
-.pitch:focus {
-  outline: none;
-}
-.pitch section {
-  scroll-margin-top: var(--head);
-}
-.head {
-  position: sticky;
-  top: 0;
-  z-index: 5;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  height: var(--head);
-  padding: 0 var(--pad);
-  font-size: var(--s1);
-  transition: background-color 0.25s;
-}
-.head.stuck {
-  background: var(--ink);
-}
-
-/* 1. The first screen fills the window it is given: the claim as wide as the room, what ilo is and
-   the button under it, and northern lights standing on its foot. */
-.hero {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  gap: clamp(22px, 3.6svh, 44px);
-  min-height: var(--ph, 100svh);
-  margin-top: calc(-1 * var(--head));
-  padding: calc(var(--head) + clamp(4px, 1.6svh, 24px)) var(--pad) clamp(26px, 4svh, 44px);
-  overflow: hidden;
-}
-.sky,
-.grain {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-}
-.grain {
-  opacity: 0.07;
-  mix-blend-mode: screen;
-  pointer-events: none;
-}
-.hero > :not(.sky, .grain) {
-  position: relative;
-}
-.hero h1 {
-  margin-left: -0.035em;
-  font-size: min(12.8cqw, calc(var(--ph, 100svh) * 0.215));
-  font-weight: 600;
-  line-height: 0.9;
-  letter-spacing: -0.055em;
-  text-wrap: wrap;
-}
-.say {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: end;
-  gap: 24px 48px;
+h2 {
+  font-size: clamp(34px, 3.9vw, 58px);
+  line-height: 1.05;
 }
 .lede {
-  max-width: 25em;
-  color: rgb(243 240 232 / 0.92);
-  font-size: clamp(18px, 2cqw, 36px);
-  line-height: 1.35;
-}
-.act {
-  display: grid;
-  justify-items: start;
-  gap: 12px;
-}
-.hero .cta {
-  height: clamp(60px, 4.2cqw, 88px);
-  padding: 0 clamp(32px, 2.6cqw, 54px);
-  background: var(--paper);
-  color: var(--ink);
-  font-size: clamp(19px, 1.45cqw, 28px);
-}
-.hero .cta:hover {
-  background: #fff;
+  font-size: clamp(18px, 1.45vw, 21px);
+  line-height: 1.5;
+  font-weight: 500;
+  max-width: 26em;
+  margin-top: 20px;
+  text-wrap: pretty;
 }
 .note {
-  color: rgb(243 240 232 / 0.78);
-  font-size: clamp(15px, 1.05cqw, 19px);
-}
-/* With ilo running around the page the words keep together at the top, and the lights have the
-   rest of the screen. Without it, the clip closes the screen. */
-.will-live:not(.gave-up) .hero {
-  justify-content: flex-start;
-}
-/* One line says the ilo around the page is real, and what to press. It keeps its place from the
-   start, and shows once ilo has drawn. */
-.hint {
-  display: none;
-  color: rgb(243 240 232 / 0.84);
-  font-size: clamp(16px, 1.25cqw, 24px);
-  line-height: 1.5;
-}
-.will-live:not(.gave-up) .hint {
-  display: block;
-  visibility: hidden;
-}
-.will-live [data-live] .hint {
-  visibility: visible;
-  animation: stand 0.8s 0.85s backwards cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-@keyframes stand {
-  from {
-    opacity: 0;
-    transform: translateY(24px);
-  }
-}
-.hint b {
-  color: var(--paper);
+  font-size: 16px;
+  line-height: 1.4;
   font-weight: 600;
 }
-.hint .key {
-  margin: 0 0.1em;
-  padding: 0.12em 0.5em 0.16em;
-  border: 0;
-  border-radius: 0.5em;
-  background: rgb(243 240 232 / 0.14);
-  box-shadow: inset 0 0 0 1px rgb(243 240 232 / 0.3);
-  color: var(--paper);
-  font: 600 0.95em var(--display);
-  cursor: pointer;
-  transition:
-    background-color 0.15s,
-    color 0.15s;
-}
-.hint .key:hover {
-  background: var(--paper);
-  color: var(--ink);
-}
-.will-live:not(.gave-up) .film {
-  display: none;
-}
-
-/* A clip: the still, and the film over it once it has been fetched. A stopped one says so, with a
-   play mark over a dimmed frame, so it never reads as a clip that hangs. */
-.reel {
-  position: relative;
-  display: block;
-  width: 100%;
-  padding: 0;
-  border: 0;
-  background: none;
-  cursor: pointer;
-}
-.reel img,
-.reel video {
-  width: 100%;
-  height: 100%;
-  transition: filter 0.18s;
-}
-.reel img {
-  height: auto;
-}
-.reel video {
-  position: absolute;
-  inset: 0;
-}
-/* Until script gives the clip its file there is only the still: without script a browser would lay
-   an empty player over it. */
-.reel video:not([src]) {
-  display: none;
-}
-.reel::before,
-.reel::after {
-  content: "";
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  z-index: 1;
-  opacity: 0;
-  pointer-events: none;
-  transition:
-    opacity 0.18s,
-    scale 0.18s;
-}
-.reel::before {
-  width: clamp(56px, 6cqw, 92px);
-  aspect-ratio: 1;
-  border-radius: 50%;
-  background: var(--ink);
-  translate: -50% -50%;
-  scale: 0.85;
-}
-.reel::after {
-  width: clamp(17px, 1.8cqw, 28px);
-  aspect-ratio: 0.88;
-  background: var(--paper);
-  clip-path: polygon(0 0, 100% 50%, 0 100%);
-  translate: -38% -50%;
-}
-.reel[data-stopped]::before,
-.reel[data-stopped]::after {
-  opacity: 1;
-  scale: 1;
-}
-.reel[data-stopped] img,
-.reel[data-stopped] video {
-  filter: brightness(0.8);
-}
-.film .reel {
-  max-width: 1100px;
-}
-.film .reel img,
-.film .reel video {
-  border-radius: 14px;
-}
-.film .reel img {
-  box-shadow: 0 0 0 1px rgb(243 240 232 / 0.14);
-}
-
-/* 2. What the page can't run, in real footage cut down to the action. The clips were filmed on a
-   desk of the site's own Paper, so on a Paper section there is no frame: ilo's windows stand on the
-   page, four of them going at once. */
-.look {
-  padding: clamp(64px, 8.4cqw, 150px) var(--pad) clamp(56px, 7cqw, 130px);
-  background: var(--paper);
-  color: var(--ink);
-}
-.look .lead {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: end;
-  gap: 20px 48px;
-}
-.look h2 {
-  margin-left: -0.035em;
-  font-size: min(10.4cqw, calc(var(--ph, 100svh) * 0.2));
-  font-weight: 600;
-  line-height: 0.92;
-  letter-spacing: -0.055em;
-  text-wrap: wrap;
-}
-.look .lead p {
-  max-width: 15em;
-  padding-bottom: 0.5em;
-  font-size: clamp(18px, 1.7cqw, 28px);
-  font-weight: 500;
-  line-height: 1.3;
-}
-.clips {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-items: start;
-  gap: 0 clamp(24px, 3.6cqw, 76px);
-  margin-top: clamp(36px, 4.6cqw, 90px);
-}
-.clips .col {
-  display: grid;
-  gap: clamp(44px, 6cqw, 120px);
-}
-.clips .col + .col {
-  padding-top: 11cqw;
-}
-/* Each clip is ilo's whole window: the radius is the window's own corner, which trims the desktop
-   behind it. */
-.clips .reel img,
-.clips .reel video {
-  border-radius: 1.4% / 2.24%;
-}
-.clips .reel img {
-  box-shadow: 0 1.6cqw 3.2cqw -1.6cqw rgb(22 20 15 / 0.4);
-}
-.clips figcaption {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+.btn {
+  display: inline-flex;
   align-items: center;
-  gap: 6px 16px;
-  margin-top: clamp(14px, 1.5cqw, 28px);
+  height: 56px;
+  padding: 0 30px;
+  border-radius: 28px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 17.5px;
+  font-weight: 700;
+  text-decoration: none;
+  transition: transform 0.2s var(--ease);
+  box-shadow: 0 16px 34px -14px rgba(0, 0, 0, 0.5);
 }
-.clips h3 {
-  font-size: clamp(34px, 4.8cqw, 96px);
-  font-weight: 600;
-  line-height: 1;
-  letter-spacing: -0.05em;
+.live .btn {
+  transition:
+    color 0.5s,
+    transform 0.2s var(--ease);
 }
-.clips kbd {
-  padding: 0.55em 0.9em;
-  border-radius: 999px;
-  background: var(--ink);
-  color: var(--paper);
-  font: 600 clamp(14px, 1.3cqw, 22px) / 1 var(--display);
+.btn:active {
+  transform: scale(0.96);
+}
+
+.hero {
+  min-height: max(100svh, 720px);
+  place-items: center;
+  text-align: center;
+  padding: 92px 24px 104px;
+}
+.hero-in {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.wordmark {
+  width: clamp(190px, 25vw, 372px);
+  height: auto;
+  display: block;
+  color: #fff;
+  overflow: visible;
+}
+.hero h1 {
+  margin-top: 40px;
+}
+.hero .lede {
+  margin-left: auto;
+  margin-right: auto;
+}
+.hero .btn {
+  margin-top: 32px;
+}
+.hero .note {
+  margin-top: 20px;
+}
+
+.wrap {
+  width: 100%;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 0 40px;
+}
+.two {
+  display: grid;
+  grid-template-columns: 6fr 8fr;
+  gap: 64px;
+  align-items: center;
+}
+.two h2 {
+  font-size: clamp(32px, 3.2vw, 46px);
+}
+.stack {
+  display: grid;
+  gap: 54px;
+  justify-items: center;
+}
+.mid {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* a clip is ilo's own window, whole, standing on the field of its Space: the clip is cut to the window's edge, and
+   the page gives it its corners (the window's 22 of 1600 by 900 points) and its shadow. Its words are under it, on
+   bare ground. Only the lists stand on a solid panel. */
+.list,
+.foot {
+  background: var(--panel);
+  border-radius: 22px;
+  box-shadow: 0 40px 80px -30px rgba(0, 0, 0, 0.6);
+}
+.wrap.broad {
+  max-width: 1400px;
+}
+.win {
+  width: 100%;
+}
+.win.wide {
+  max-width: 1180px;
+}
+.win video {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  border-radius: 1.375% / 2.444%;
+  background: var(--panel);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.16),
+    0 56px 96px -36px rgba(0, 0, 0, 0.66),
+    0 20px 40px -20px rgba(0, 0, 0, 0.5);
+}
+.win figcaption {
+  margin: 22px auto 0;
+  width: fit-content;
+  max-width: 100%;
+  font-size: 18px;
+  line-height: 1.45;
+  color: #fff;
+  text-wrap: pretty;
+}
+.head {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 64px;
+  align-items: end;
+  width: 100%;
+  max-width: 1180px;
+}
+.head .lede {
+  margin-top: 0;
+}
+.parts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 64px 36px;
+  width: 100%;
+}
+.part figcaption {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 8px 14px;
+  margin: 20px 0 0;
+  width: auto;
+}
+.part b {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #fff;
+}
+.part kbd {
+  justify-self: start;
+  font: 500 14px/1 var(--mono);
+  color: #fff;
+  background: rgba(14, 14, 17, 0.62);
+  padding: 7px 10px;
+  border-radius: 8px;
   white-space: nowrap;
 }
-.clips figcaption p {
+.part span {
   grid-column: 1 / -1;
-  max-width: 25em;
-  font-size: clamp(17px, 1.55cqw, 26px);
-  line-height: 1.35;
+  max-width: 27em;
 }
-.look .get {
+
+.list dt {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.list dd {
+  font-size: 18px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.84);
+  text-wrap: pretty;
+}
+.counts {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 12px 20px;
-  font-size: clamp(16px, 1.3cqw, 20px);
-  font-weight: 500;
+  gap: 4px 28px;
+  margin-top: 12px;
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
 }
-.look .get .button {
-  background: var(--ink);
-  color: var(--paper);
-}
-.look .get .button:hover {
-  background: #000;
-}
-
-/* 3. The one thing no other browser does for you, on the brand's own green. */
-.order {
-  padding: clamp(64px, 11svh, 130px) var(--pad);
-  background: var(--signal);
-  color: var(--ink);
-}
-.order h2 {
-  margin-left: -0.03em;
-  font-size: min(15cqw, calc(var(--ph, 100svh) * 0.27));
-  font-weight: 800;
-  line-height: 0.87;
-  letter-spacing: -0.055em;
-  text-wrap: wrap;
-}
-.order ul {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 30px clamp(24px, 4cqw, 64px);
-  margin-top: clamp(40px, 7svh, 80px);
-  padding: 0;
-  list-style: none;
-}
-.order li b {
-  display: block;
-  font-size: clamp(34px, 5cqw, 112px);
-  font-weight: 800;
-  line-height: 1;
-  letter-spacing: -0.045em;
-}
-.order li span {
-  display: block;
-  max-width: 16em;
-  margin-top: 0.5em;
-  font-size: clamp(17px, 1.55cqw, 30px);
-  font-weight: 500;
-  line-height: 1.35;
-}
-
-/* 4. Every reason not to try it, answered in the site's own words. */
-.why {
-  padding: clamp(72px, 12svh, 150px) var(--pad);
-}
-.why h2 {
-  font-size: clamp(44px, 9.4cqw, 210px);
-  font-weight: 600;
-  line-height: 0.95;
-  letter-spacing: -0.05em;
-}
-.why dl {
-  display: grid;
-  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
-  align-items: baseline;
-  gap: clamp(24px, 4svh, 44px) clamp(24px, 4cqw, 64px);
-  margin-top: clamp(40px, 7svh, 80px);
-}
-.why dt {
-  font-size: clamp(30px, 4.6cqw, 100px);
-  font-weight: 600;
-  line-height: 1;
-  letter-spacing: -0.04em;
-}
-.why dd {
-  max-width: 29em;
-  color: rgb(243 240 232 / 0.86);
-  font-size: clamp(18px, 1.6cqw, 32px);
-  line-height: 1.4;
-}
-.why dd a {
-  color: var(--paper);
-}
-
-/* 5. The name, as tall as the room, with the button where its dot is. */
-.end {
-  --w: 92cqw;
-  position: relative;
-  padding-top: 61cqw;
-  overflow: hidden;
-}
-.end .name {
-  position: absolute;
-  top: 5cqw;
-  left: 50%;
-  width: var(--w);
-  margin-left: calc(var(--w) / -2);
-}
-.letters {
-  position: relative;
-  aspect-ratio: 226 / 162;
-}
-.letters svg {
-  display: block;
-  width: 100%;
-  height: 100%;
-  overflow: visible;
-  fill: var(--paper);
-}
-.dot {
-  position: absolute;
-  top: 2.47%;
-  left: 1.77%;
-  display: grid;
-  place-content: center;
-  width: 13.27%;
-  aspect-ratio: 1;
-  border-radius: 50%;
-  background: var(--signal);
-  color: var(--ink);
-  font-size: calc(var(--w) * 0.0165);
-  font-weight: 700;
-  line-height: 1.1;
-  text-align: center;
-  text-decoration: none;
-  transition:
-    scale 0.25s cubic-bezier(0.2, 0.8, 0.2, 1),
-    background-color 0.15s;
-}
-.dot small {
-  display: block;
-  font-size: 0.72em;
-  font-weight: 500;
-}
-.dot:hover {
-  scale: 1.12;
-  background: var(--signal-hi);
-}
-.dot:active {
-  scale: 0.96;
-}
-.dot:focus-visible {
-  border-radius: 50%;
-}
-.dot::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  box-shadow: 0 0 0 2px var(--signal);
-  animation: ring 2.8s ease-out infinite;
-  pointer-events: none;
-}
-@keyframes ring {
-  from {
-    transform: scale(1);
-    opacity: 0.9;
-  }
-  70%,
-  to {
-    transform: scale(1.75);
-    opacity: 0;
-  }
-}
-.words {
-  position: absolute;
-  top: 3.4%;
-  left: 54%;
-  width: 46%;
-}
-.words h2 {
-  font-size: calc(var(--w) * 0.074);
-  font-weight: 600;
-  line-height: 0.95;
-  letter-spacing: -0.05em;
-}
-.words p {
-  max-width: 24em;
-  margin-top: calc(var(--w) * 0.014);
-  color: rgb(243 240 232 / 0.86);
-  font-size: clamp(16px, calc(var(--w) * 0.0155), 30px);
-  line-height: 1.4;
-}
-.words a:not(.button) {
-  color: var(--paper);
-}
-.words .more {
+.counts a {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px 20px;
-  margin-top: calc(var(--w) * 0.014);
-  font-size: clamp(16px, calc(var(--w) * 0.0105), 21px);
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  text-decoration: none;
 }
-.words .more a {
-  color: var(--soft);
+/* contributors' faces, stacked: the newest tucked under the one before; the site lists up to six, then "+N" */
+.faces {
+  display: flex;
+  padding-left: 2px;
 }
-.words .more a:hover {
-  color: var(--paper);
+.faces img,
+.faces i {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2.5px var(--panel);
+  background: #26262c;
 }
-.words .button {
-  display: none;
+.faces > * + * {
+  margin-left: -10px;
 }
-/* Whose source and whose pages, in the page's smallest print, on a line that cuts the name off. */
-.end .fine {
+.faces i {
+  display: grid;
+  place-items: center;
+  font-style: normal;
+  font-size: 12px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.8);
+}
+.counts b {
+  margin-right: 2px;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #fff;
+}
+.three {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  width: 100%;
+  max-width: 1080px;
+}
+.three > div {
+  padding: 34px 32px 38px;
+}
+.three > div + div {
+  border-left: 1px solid rgba(255, 255, 255, 0.11);
+}
+.three dd {
+  margin-top: 10px;
+}
+.menu {
+  white-space: nowrap;
+}
+.rows > div {
+  display: grid;
+  grid-template-columns: 148px 1fr;
+  gap: 24px;
+  padding: 25px 34px 27px;
+  align-items: baseline;
+}
+.rows > div + div {
+  border-top: 1px solid rgba(255, 255, 255, 0.11);
+}
+
+.home > .end {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 150px 24px 0;
+  min-height: 0;
+}
+.end .new {
+  margin-top: 20px;
+}
+.end .lede a,
+.note a {
+  text-underline-offset: 4px;
+  text-decoration-thickness: 1.5px;
+}
+.end .btn {
+  margin-top: 34px;
+}
+/* the home page's last screen is the mark alone, as large as fits between the gathered bar and the switcher, so
+   the page stops on it whole; the foot above it is far enough away to have left the screen by then. A window too
+   narrow for the mark to fill that height has it in the middle of the screen, with the spare height around it.
+   The mark holds the whole gap to the foot, since two margins there would collapse into the larger. */
+.giant {
+  --spare: max(0px, calc((100svh - 246px - 86vw / 1.39) / 2));
   position: relative;
-  padding: 16px var(--pad) 20px;
-  background: var(--ink);
-  color: var(--soft);
-  font-size: clamp(13px, 1cqw, 16px);
-  line-height: 1.45;
+  z-index: 1;
+  display: block;
+  width: min(86vw, max(260px, calc((100svh - 246px) * 1.39)));
+  margin: calc(140px + var(--spare)) auto calc(118px + var(--spare));
 }
-.end .fine a {
-  color: inherit;
+.home + .foot {
+  margin-bottom: 0;
+}
+/* every page ends on the same foot */
+.foot {
+  position: relative;
+  z-index: 1;
+  width: calc(100% - 48px);
+  max-width: 900px;
+  margin: 104px auto 118px;
+  padding: 26px 36px 26px;
+  text-align: center;
+}
+/* its links break into rows of even length, never one alone on the last */
+.foot nav {
+  font-size: 17px;
+  font-weight: 600;
+  text-wrap: balance;
+}
+.foot nav a {
+  display: inline-block;
+  margin: 2px 13px;
+  padding: 5px 0;
+  text-decoration: none;
+}
+.foot p {
+  margin: 14px auto 0;
+  max-width: 34em;
+  font-size: 15.5px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.74);
+  text-wrap: balance;
 }
 
-/* The button follows a visitor who has left the page's own buttons, or the page's tab. It is the
-   site's, laid over ilo's window, not part of ilo. */
-.dock {
-  position: fixed;
-  bottom: 20px;
-  left: calc(var(--px, 0px) + var(--pw, 100vw) / 2);
-  z-index: 6;
-  padding: 8px;
-  border-radius: 999px;
-  background: var(--ink);
-  box-shadow:
-    0 0 0 1px rgb(243 240 232 / 0.18),
-    0 16px 50px rgb(0 0 0 / 0.5);
-  font-size: var(--s1);
-  translate: -50% 160%;
-  transition:
-    translate 0.45s cubic-bezier(0.2, 0.8, 0.2, 1),
-    opacity 0.2s;
-}
-.dock.up {
-  translate: -50% 0;
-}
-.stage[data-covered] .dock {
-  opacity: 0;
-  pointer-events: none;
-}
-
-/* In a narrow room, a phone or a small window of ilo's, each section is one column. */
-@container (max-width: 820px) {
-  .look .lead,
-  .clips {
-    grid-template-columns: 1fr;
+/* a pointer rests on things; a finger doesn't, and would leave them lit */
+@media (hover: hover) {
+  .nav-links a:hover {
+    background: rgba(255, 255, 255, 0.16);
   }
-  .look .lead p {
-    padding-bottom: 0;
+  .nav-links a.nav-cta:hover {
+    background: #fff;
   }
-  .clips {
-    gap: 44px;
+  .spaces button:not([aria-pressed="true"]):hover i {
+    transform: scale(1.2);
   }
-  .clips .col {
-    display: contents;
+  .btn:hover {
+    transform: translateY(-1px);
   }
-  .look .get {
-    order: 1;
-  }
-  .order ul {
-    grid-template-columns: 1fr;
-  }
-  .why dl {
-    grid-template-columns: 1fr;
-    row-gap: 8px;
-  }
-  .why dd {
-    margin-bottom: 24px;
-  }
-  /* The name stands above its words, its dot only a dot, and the button under them. */
-  .end {
-    --w: 100%;
-    height: auto;
-    padding: 56px var(--pad) 110px;
-  }
-  .end .name {
-    position: static;
-    width: auto;
-    margin: 0;
-  }
-  .dot {
-    font-size: 0;
-  }
-  .words {
-    position: static;
-    width: auto;
-    padding-top: 36px;
-  }
-  .words h2 {
-    font-size: 52px;
-  }
-  .words p {
-    margin-top: 14px;
-    font-size: 18px;
-  }
-  .words .more {
-    margin-top: 14px;
-    font-size: 16px;
-  }
-  .words .button {
-    display: flex;
-    margin-top: 24px;
-  }
-  .end .fine {
-    margin-top: 24px;
-    padding: 0;
-    font-size: 14px;
+  .btn:active {
+    transform: scale(0.96);
+  } /* again, after the lift, so a press still wins */
+  .foot nav a:hover,
+  .counts a:hover {
+    text-decoration: underline;
+    text-underline-offset: 5px;
   }
 }
-@container (max-width: 700px) {
-  .say {
+@media (pointer: coarse) {
+  .spaces button {
+    width: 44px;
+  }
+  .foot nav a {
+    margin: 0 13px;
+    padding: 12px 0;
+  }
+}
+@media (max-width: 900px) {
+  .nav {
+    --bar-pad: 20px;
+  }
+  .nav-links a:not(.nav-cta) {
+    display: none;
+  }
+  .nav.compact .nav-in {
+    max-width: 250px;
+  }
+  .home > section {
+    padding: 104px 0 112px;
+  }
+  .wrap {
+    padding: 0 20px;
+  }
+  .two,
+  .parts,
+  .three,
+  .head {
     grid-template-columns: 1fr;
   }
-  .act {
-    justify-items: stretch;
+  .head {
+    gap: 18px;
+  }
+  .parts {
+    gap: 48px;
+  }
+  .two {
+    gap: 40px;
+  }
+  .stack {
+    gap: 40px;
+  }
+  .three > div + div {
+    border-left: 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.11);
+  }
+  .rows > div {
+    grid-template-columns: 1fr;
+    gap: 6px;
+    padding: 22px 24px 24px;
+  }
+  .three > div {
+    padding: 26px 24px 28px;
+  }
+  /* a narrow screen ends on the foot and the mark together */
+  .giant {
+    --spare: 0px;
+    margin-top: 72px;
+  }
+  .foot {
+    width: calc(100% - 24px);
+    margin: 72px auto 96px;
+    padding: 22px 22px;
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .pages.arriving,
-  .dock {
-    transition: none;
+  html {
+    scroll-behavior: auto;
   }
-  .dot::after,
-  .will-live [data-live] .hint {
-    animation: none;
+  body,
+  .nav-in,
+  .dot,
+  .btn,
+  .spaces i,
+  .nav-links a {
+    transition: none !important;
   }
 }
 
-/* A tab whose site won't be framed, as a card a visitor can act on. */
-.refused {
-  display: grid;
-  place-content: center;
-  justify-items: center;
-  gap: 16px;
-  padding: 32px;
-  color: var(--ink);
-  background: var(--paper);
-  font-size: var(--s1);
+/* ---- the pages of reading: the changelog, Help, Privacy, a platform's page. Each has its name on bare ground at
+   the top, as the front page has its own, and then dark panels on the field, as the front page's lists are, beside
+   an index that stays in reach. ---- */
+html {
+  scroll-padding-top: 92px;
+}
+.top {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 188px 24px 84px;
   text-align: center;
 }
-/* The icons are the ones the demo's dark sidebar shows, so they sit on a dark tile here too. */
-.refused img {
-  box-sizing: content-box;
-  padding: 12px;
-  border-radius: 12px;
-  background: var(--ink);
+.top .lede {
+  margin-left: auto;
+  margin-right: auto;
+  max-width: 31em;
 }
-.refused .title {
-  font-family: var(--display);
-  font-size: var(--s3);
-  font-weight: 500;
-  line-height: 1.15;
-  max-width: 18em;
-  color: var(--ink);
+.top a:not(.btn),
+.text a {
+  text-underline-offset: 4px;
+  text-decoration-thickness: 1.5px;
 }
-.refused p {
-  max-width: 30em;
-  color: var(--muted);
+.top .btn {
+  margin-top: 32px;
 }
-.refused .button {
-  margin-top: 8px;
+.top .note {
+  margin-top: 20px;
+}
+.top kbd,
+.text kbd,
+.text code {
+  font: 500 0.86em/1 var(--mono);
+  padding: 0.22em 0.44em;
+  border-radius: 7px;
+  background: rgba(14, 14, 17, 0.62);
+  white-space: nowrap;
+}
+.text kbd,
+.text code {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+/* an address or a command breaks where it must, so a phone never widens for one */
+.text code {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }
 
-/* What ilo means: the word's entry, on paper. */
-html:has(.meaning) {
-  background: var(--paper);
-}
-.meaning {
+.cols {
+  --side: 156px;
   display: grid;
-  background: var(--paper);
-  color: var(--ink);
-  align-content: center;
-  min-height: 100svh;
-  padding: 56px clamp(24px, 7vw, 96px);
+  grid-template-columns: var(--side) minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 0 40px;
 }
-.word {
-  max-width: 860px;
+.cols.wide {
+  --side: 228px;
 }
-.word .wm {
-  height: clamp(88px, 13vw, 140px);
+.cols.alone {
+  grid-template-columns: minmax(0, 820px);
+  justify-content: center;
 }
-.pron {
-  margin-top: 28px;
-  color: var(--muted);
-  font-size: clamp(19px, 2.2vw, 24px);
+.side,
+.panel,
+.text > section,
+.filter {
+  background: var(--panel);
+  box-shadow: 0 40px 80px -30px rgba(0, 0, 0, 0.6);
 }
-.pron span {
-  margin-left: 0.6em;
-  font-style: italic;
+.side {
+  position: sticky;
+  top: 92px;
+  border-radius: 22px;
 }
-.senses {
-  margin-top: 16px;
-  padding: 0;
-  list-style: none;
-  counter-reset: sense;
-  font-size: clamp(22px, 2.9vw, 30px);
+/* the list scrolls inside the panel and has no ground of its own (src/components/side.tsx) */
+.side > div {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 190px);
+  overflow: auto;
+  padding: 12px 20px;
+  border-radius: 22px;
+  scrollbar-width: none;
+}
+.side a {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: 15.5px;
+  font-weight: 600;
   line-height: 1.3;
-  letter-spacing: -0.01em;
+  text-decoration: none;
+  color: rgba(255, 255, 255, 0.58);
+  transition: color 0.15s;
 }
-.senses li {
-  position: relative;
-  padding-left: 1.4em;
-  counter-increment: sense;
-}
-.senses li + li {
-  margin-top: 0.8em;
-}
-.senses li::before {
-  content: counter(sense);
-  position: absolute;
-  left: 0;
-  color: var(--muted);
+.side b {
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
-.senses b {
-  font-weight: 600;
+.side span {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
 }
-.senses .eg {
-  margin-top: 0.3em;
-  color: var(--muted);
-  font-size: 0.78em;
-  font-style: italic;
+.side a.sec b::after {
+  content: "";
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: #ff8a6e;
+  vertical-align: 2px;
 }
-.see {
-  margin-top: 32px;
-  color: var(--muted);
-  font-size: clamp(17px, 2vw, 21px);
-}
-.see a {
-  color: var(--ink);
-}
-
-/* The foot: the wordmark, built large, and the tagline beside it. */
-.foot {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  align-items: end;
-  row-gap: 56px;
-  padding: 96px var(--inset) 32px;
-  color: var(--soft);
-  font-size: var(--s1);
-}
-.mark {
-  grid-column: 1 / -1;
-  display: flex;
-  align-items: flex-end;
-  gap: clamp(20px, 3vw, 48px);
-  color: var(--paper);
-  text-decoration: none;
-}
-.mark .wm {
-  height: clamp(112px, 19vw, 300px);
-}
-.mark span {
-  font-size: var(--s5);
-  font-weight: 500;
-  line-height: 0.8;
-  letter-spacing: -0.04em;
-}
-.foot .where {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 28px;
-}
-.foot a {
-  color: var(--paper);
-}
-.where a {
-  text-decoration: none;
-}
-.where a:hover {
-  text-decoration: underline;
-}
-.foot .when {
-  justify-self: end;
-}
-.foot .fine {
-  grid-column: 1 / -1;
-  max-width: 62ch;
+.side a.here {
+  color: #fff;
 }
 
-/* A page of reading (Help, Changelog, Privacy): one column at a reading width, under the top. */
-.text {
-  max-width: calc(68ch + 2 * var(--inset));
-  padding: 152px var(--inset) 0;
-  font-size: var(--s1);
-  line-height: 1.6;
+.panel,
+.text > section {
+  padding: 36px 40px 40px;
+  border-radius: 22px;
 }
-.text h1 {
-  font-size: var(--s4);
+.panel + .panel,
+.text > section + section,
+.filter + .panel {
+  margin-top: 20px;
 }
-.text .lead {
-  margin-top: 28px;
-  font-size: var(--s2);
-  line-height: 1.5;
-}
-.text section {
-  margin-top: 64px;
-}
-/* A platform's download, and beside it the version it fetches, which leads to what's new in it. */
-.text .fetch {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px 20px;
-  margin-top: 32px;
-}
-.text .fetch a:not(.button) {
-  color: var(--soft);
-  text-decoration-color: rgb(243 240 232 / 0.3);
-}
-.text .fetch a:not(.button):hover {
-  color: var(--paper);
-}
-/* ilo itself on that platform, at the column's width, as the changelog's clips are. */
-.capture {
-  margin-top: 40px;
-}
-.capture img {
-  width: 100%;
-  border-radius: 12px;
-  box-shadow: var(--edge);
-}
+.panel h2,
 .text h2 {
-  font-size: var(--s3);
+  font-size: clamp(28px, 2.6vw, 36px);
   line-height: 1.1;
+}
+
+/* what a panel of reading holds */
+.text p,
+.text li,
+.services dd,
+.text td,
+.text th {
+  font-size: 17.5px;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.84);
+  text-wrap: pretty;
 }
 .text h2 + *,
 .text p + p,
-.text p + ul {
-  margin-top: 16px;
+.text p + dl,
+.text dl + p,
+.text p + table,
+.text table + p {
+  margin-top: 14px;
 }
-.text p,
-.text li,
-.text dd {
-  color: color-mix(in srgb, var(--paper) 86%, var(--ink));
-}
-.text a {
-  color: var(--paper);
-}
-.text code,
-.text kbd {
-  font:
-    0.92em/1 ui-monospace,
-    "SF Mono",
-    Menlo,
-    Consolas,
-    monospace;
-  padding: 2px 6px;
-  border-radius: 6px;
-  background: var(--ink-2);
-  color: var(--paper);
-  overflow-wrap: anywhere;
-}
-.text ul {
-  padding-left: 1.2em;
-}
-.text li + li {
-  margin-top: 8px;
-}
-.toc {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 24px;
-  margin-top: 40px;
-}
-.toc a {
-  color: var(--soft);
-}
-.toc a:hover {
-  color: var(--paper);
+.text b,
+.text dt,
+.text th {
+  color: #fff;
 }
 .services dt {
-  margin-top: 40px;
-  font-weight: 600;
+  margin-top: 26px;
+  padding-top: 24px;
+  border-top: 1px solid rgba(255, 255, 255, 0.11);
+  font-size: 20px;
+  line-height: 1.3;
+  font-weight: 700;
+  letter-spacing: -0.015em;
 }
-.services dd + dt {
-  margin-top: 40px;
+.services > dt:first-child {
+  margin-top: 18px;
 }
-.services dd p {
+.services dd {
   margin-top: 8px;
 }
-.services .hosts {
-  line-height: 2;
+.services dd p + p {
+  margin-top: 10px;
 }
-/* A host is one word, kept whole on its line; only a long address with a path (.path) may wrap. */
-.services .hosts code:not(.path) {
-  white-space: nowrap;
-}
-/* A deep link lands with room above it, under the header. */
-.text [id] {
-  scroll-margin-top: 96px;
+.text .hosts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 8px;
+  font-size: 15.5px;
 }
 .glance {
   width: 100%;
@@ -1154,37 +912,490 @@ html:has(.meaning) {
 .glance th,
 .glance td {
   padding: 12px 16px 12px 0;
-  border-top: 1px solid var(--ink-2);
+  border-top: 1px solid rgba(255, 255, 255, 0.11);
   vertical-align: top;
 }
 .glance thead th {
   border-top: 0;
   padding-top: 0;
-  color: var(--soft);
-  font-weight: 400;
+  font-size: 14.5px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.58);
 }
 .glance tbody th {
+  font-weight: 700;
+}
+/* a platform's page lists what it needs and how it installs as the front page lists what ilo is */
+.rows dd p + p {
+  margin-top: 10px;
+}
+.rows dd a {
+  text-underline-offset: 4px;
+  text-decoration-thickness: 1.5px;
+}
+.rows dd code {
+  font: 500 0.86em/1 var(--mono);
+  padding: 0.22em 0.44em;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  overflow-wrap: anywhere;
+}
+.capture {
+  margin: 0 0 20px;
+}
+.capture img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 1.375% / 2.2%;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.16),
+    0 56px 96px -36px rgba(0, 0, 0, 0.66),
+    0 20px 40px -20px rgba(0, 0, 0, 0.5);
+}
+
+/* the word's entry, as a dictionary gives it */
+.meaning {
+  padding-top: 148px;
+}
+.meaning .cols.alone {
+  grid-template-columns: minmax(0, 660px);
+}
+.word {
+  text-align: left;
+}
+.word h1 svg {
+  height: 64px;
+  width: auto;
+  display: block;
+  color: #fff;
+  overflow: visible;
+}
+.word .pron {
+  margin-top: 18px;
+  font: 500 17px/1.4 var(--mono);
+  color: rgba(255, 255, 255, 0.74);
+}
+.word .pron span {
+  margin-left: 10px;
+  font-family: var(--sans);
+  font-style: italic;
+}
+.word .senses {
+  margin-top: 22px;
+  counter-reset: sense;
+}
+.word .senses li {
+  position: relative;
+  padding: 20px 0 20px 40px;
+  border-top: 1px solid rgba(255, 255, 255, 0.11);
+  counter-increment: sense;
+}
+.word .senses li::before {
+  content: counter(sense);
+  position: absolute;
+  left: 0;
+  top: 20px;
+  font-size: 20px;
+  font-weight: 700;
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+}
+.word .eg {
+  margin-top: 6px;
+  font-style: italic;
+  color: rgba(255, 255, 255, 0.7);
+}
+.word .see {
+  padding-top: 20px;
+  border-top: 1px solid rgba(255, 255, 255, 0.11);
+}
+
+/* ---- the changelog ---- */
+.filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 48px;
+  padding: 0 6px 0 22px;
+  border-radius: 24px;
+}
+.filter span {
+  margin-right: 10px;
+  font-size: 15.5px;
   font-weight: 600;
-  white-space: nowrap;
+  color: rgba(255, 255, 255, 0.74);
 }
-.glance td {
-  color: color-mix(in srgb, var(--paper) 86%, var(--ink));
+.filter button {
+  position: relative;
+  height: 36px;
+  padding: 0 15px;
+  border: 0;
+  border-radius: 18px;
+  background: none;
+  color: rgba(255, 255, 255, 0.74);
+  font: 600 15.5px var(--sans);
+  cursor: pointer;
+  transition:
+    background-color 0.18s,
+    color 0.18s,
+    transform 0.2s var(--ease);
 }
-.glance a {
+.filter button::after {
+  content: "";
+  position: absolute;
+  inset: -4px 0;
+}
+.filter button[aria-pressed="true"] {
+  background: #fff;
+  color: var(--ink);
+}
+.filter button:active {
+  transform: scale(0.96);
+}
+
+.release header {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+}
+.release h2 {
+  font-size: clamp(34px, 3.2vw, 46px);
+}
+.release h2 a {
   text-decoration: none;
 }
-.glance a:hover {
-  text-decoration: underline;
+.release time {
+  font-size: 17px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.62);
+  font-variant-numeric: tabular-nums;
 }
-/* On a phone each row stacks: the service, then when and where under it. */
-@media (max-width: 560px) {
+.tag {
+  align-self: center;
+  padding: 5px 11px;
+  border-radius: 13px;
+  background: rgba(255, 138, 110, 0.16);
+  color: #ffb29f;
+  font-size: 13.5px;
+  font-weight: 700;
+}
+.sum {
+  margin-top: 14px;
+  max-width: 33em;
+  font-size: clamp(18px, 1.45vw, 21px);
+  line-height: 1.5;
+  color: #fff;
+  text-wrap: pretty;
+}
+
+/* a changelog clip is ilo's window, whole, with the window's own corners; a press stands it up at a size to read */
+.clips {
+  display: grid;
+  gap: 28px 24px;
+  margin-top: 30px;
+}
+.clips.pair {
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+}
+.clip {
+  position: relative;
+}
+.clip video,
+.view video {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  border-radius: 1.375% / 2.444%;
+  background: #000;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.16),
+    0 24px 44px -22px rgba(0, 0, 0, 0.7);
+}
+.clip video:not([controls]) {
+  cursor: zoom-in;
+}
+.zoom {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: 18px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  background: rgba(14, 14, 17, 0.82);
+  color: #fff;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.16);
+  transition:
+    background-color 0.18s,
+    transform 0.2s var(--ease);
+}
+.zoom::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+}
+.zoom svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+.zoom:active {
+  transform: scale(0.96);
+}
+.clips figcaption {
+  margin-top: 14px;
+  font-size: 16.5px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.84);
+  text-wrap: pretty;
+}
+.clips figcaption b {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  color: #fff;
+}
+
+.kind {
+  margin-top: 34px;
+}
+.kind h3 {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.kind h3 span {
+  margin-left: 6px;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: rgba(255, 255, 255, 0.5);
+  font-variant-numeric: tabular-nums;
+}
+.kind.security h3 {
+  color: #ffb29f;
+}
+.kind dl {
+  margin-top: 8px;
+}
+.kind dl > div {
+  display: grid;
+  grid-template-columns: 148px minmax(0, 1fr);
+  gap: 0 24px;
+  padding: 14px 0 15px;
+  border-top: 1px solid rgba(255, 255, 255, 0.11);
+}
+.kind dt {
+  font-size: 17px;
+  line-height: 1.5;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.kind li {
+  font-size: 17px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.84);
+  text-wrap: pretty;
+}
+.kind li + li {
+  margin-top: 10px;
+}
+.os {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 8px;
+  border-radius: 10px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.24);
+  font-size: 12.5px;
+  line-height: 20px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.7);
+  vertical-align: 1px;
+  white-space: nowrap;
+}
+.folded [data-more] {
+  display: none;
+}
+.more {
+  margin-top: 26px;
+  height: 44px;
+  padding: 0 20px;
+  border: 0;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font: 700 16px var(--sans);
+  cursor: pointer;
+  transition:
+    background-color 0.18s,
+    transform 0.2s var(--ease);
+}
+.more:active {
+  transform: scale(0.96);
+}
+
+/* a clip, stood up */
+.view {
+  width: min(1180px, calc(100vw - 48px), calc((100vh - 190px) * 16 / 9));
+  max-width: none;
+  max-height: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #fff;
+  overflow: visible;
+  transition:
+    opacity 0.2s,
+    transform 0.24s var(--ease),
+    overlay 0.24s allow-discrete,
+    display 0.24s allow-discrete;
+}
+.view:not([open]) {
+  opacity: 0;
+  transform: scale(0.97);
+}
+@starting-style {
+  .view[open] {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+.view::backdrop {
+  background: rgba(8, 8, 10, 0.8);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition:
+    opacity 0.2s,
+    overlay 0.24s allow-discrete,
+    display 0.24s allow-discrete;
+}
+.view:not([open])::backdrop {
+  opacity: 0;
+}
+@starting-style {
+  .view[open]::backdrop {
+    opacity: 0;
+  }
+}
+.view video {
+  cursor: zoom-out;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.16),
+    0 56px 96px -36px rgba(0, 0, 0, 0.8);
+}
+.view p {
+  margin: 18px auto 0;
+  max-width: 44em;
+  font-size: 17px;
+  line-height: 1.5;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.9);
+  text-wrap: pretty;
+}
+.view p b {
+  color: #fff;
+  margin-right: 8px;
+}
+.shut {
+  position: absolute;
+  top: -52px;
+  right: 0;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: 20px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  transition:
+    background-color 0.18s,
+    transform 0.2s var(--ease);
+}
+.shut::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+}
+.shut svg {
+  width: 14px;
+  height: 14px;
+  display: block;
+}
+.shut:active {
+  transform: scale(0.96);
+}
+
+@media (hover: hover) {
+  .side a:hover {
+    color: #fff;
+  }
+  .filter button:not([aria-pressed="true"]):hover {
+    background: rgba(255, 255, 255, 0.16);
+    color: #fff;
+  }
+  .more:hover,
+  .shut:hover {
+    background: rgba(255, 255, 255, 0.2);
+  }
+  .zoom:hover {
+    background: rgba(14, 14, 17, 1);
+  }
+  .release h2 a:hover {
+    text-decoration: underline;
+    text-underline-offset: 6px;
+    text-decoration-thickness: 2px;
+  }
+}
+@media (max-width: 900px) {
+  .top {
+    padding: 140px 20px 56px;
+  }
+  .cols,
+  .cols.alone {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 0 12px;
+  }
+  .side {
+    display: none;
+  }
+  .filter {
+    max-width: 100%;
+    padding: 0 5px;
+  }
+  .filter span {
+    display: none;
+  }
+  .panel,
+  .text > section {
+    padding: 26px 22px 28px;
+  }
+  .kind dl > div {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .kind dt {
+    font-size: 15px;
+    color: rgba(255, 255, 255, 0.62);
+  }
   .glance thead {
     display: none;
   }
   .glance tr {
     display: block;
     padding: 12px 0;
-    border-top: 1px solid var(--ink-2);
+    border-top: 1px solid rgba(255, 255, 255, 0.11);
   }
   .glance th,
   .glance td {
@@ -1192,132 +1403,21 @@ html:has(.meaning) {
     padding: 0;
     border: 0;
   }
-  .glance td + td {
-    color: var(--soft);
-  }
-}
-.release h2 a {
-  color: inherit;
-  text-decoration: none;
-}
-.release h2 span {
-  margin-left: 0.4em;
-  color: var(--soft);
-  font-size: var(--s1);
-  font-weight: 400;
-  letter-spacing: 0;
-}
-/* A change with a clip: the clip at the column's width, its sentence under it. */
-.release figure {
-  margin-top: 32px;
-}
-.release figure + ul {
-  margin-top: 32px;
-}
-.release figcaption {
-  margin-top: 12px;
-  color: color-mix(in srgb, var(--paper) 86%, var(--ink));
-}
-.clip {
-  display: grid;
-  width: 100%;
-  aspect-ratio: 16 / 9;
-  padding: 0;
-  border: 0;
-  border-radius: 12px;
-  overflow: hidden;
-  background: var(--ink-2);
-  box-shadow: var(--edge);
-  cursor: pointer;
-}
-.clip:focus-visible {
-  outline: 2px solid var(--signal-hi);
-  outline-offset: 3px;
-}
-.clip img,
-.clip video {
-  grid-area: 1 / 1;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-/* The frame that shows the change, until the video first plays, and from then on the video, paused
-   or not. Before the script decides, the visitor's preference does. */
-.clip[data-still="true"] video,
-.clip[data-still="false"] img {
-  display: none;
-}
-@media (prefers-reduced-motion: no-preference) {
-  .clip:not([data-still]) img {
-    display: none;
+  /* a phone's own player shows a clip whole, turned on its side if the visitor turns the phone */
+  .zoom {
+    width: 40px;
+    height: 40px;
+    border-radius: 20px;
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .clip:not([data-still]) video {
-    display: none;
-  }
-}
-
-/* Entrances: the script marks the parts of each section and lifts them in, once. */
-.rise {
-  opacity: 0;
-  transform: translateY(28px);
-  transition:
-    opacity 0.8s var(--ease),
-    transform 0.8s var(--ease);
-  transition-delay: calc(var(--i, 0) * 80ms);
-}
-.in .rise,
-.rise.in {
-  opacity: 1;
-  transform: none;
-}
-@media (prefers-reduced-motion: reduce) {
-  .rise {
-    transform: none;
-    transition: opacity 0.3s;
-    transition-delay: 0s;
-  }
-}
-
-/* Tablets and phones: the reading pages' sizes step down, and the top keeps only its button. */
-@media (max-width: 899px) {
-  .text {
-    padding-top: 120px;
-  }
-  :root {
-    --m: 20px;
-    --s2: 17px;
-    --s3: 22px;
-    --s4: min(10vw, 60px);
-    --s5: min(11vw, 84px);
-    --inset: var(--m);
-  }
-  .links a:not(.button) {
-    display: none;
-  }
-  .foot {
-    grid-template-columns: 1fr;
-    row-gap: 24px;
-    padding-top: 96px;
-  }
-  .foot .when {
-    justify-self: start;
-  }
-}
-
-/* Phones: the first screen's button is as wide as the screen. */
-@media (max-width: 700px) {
-  .act .button {
-    width: 100%;
-  }
-}
-
-/* The narrowest phones: the top's button, at its longest when it sends ilo to a computer, keeps
-   clear of the wordmark. */
-@media (max-width: 359px) {
-  .top .button,
-  .head .button {
-    padding: 0 14px;
+  .view,
+  .view::backdrop,
+  .filter button,
+  .more,
+  .zoom,
+  .shut,
+  .side a {
+    transition: none !important;
   }
 }
