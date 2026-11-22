@@ -33,8 +33,8 @@ const COPY: Record<Id, { install: ReactNode; differs: ReactNode; capture?: Captu
     install: (
       <p>
         Run the installer, which installs ilo for you alone and asks for no administrator. The
-        alpha's installer isn't signed yet, so Windows may say it protected your PC: choose More
-        info, then Run anyway.
+        installer isn't signed yet, so Windows may say it protected your PC: choose More info, then
+        Run anyway.
       </p>
     ),
     differs: (
