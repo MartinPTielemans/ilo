@@ -189,8 +189,8 @@ if pgrep -f "$procs" > /dev/null; then
   echo "FAIL: Browser is already running. Quit it first." >&2
   exit 1
 fi
-rm -rf "$out"
-mkdir -p "$out/downloads"
+said=$(rm -rf "$out" 2>&1) || { echo "FAIL: couldn't empty $out: $said" >&2; exit 1; }
+said=$(mkdir -p "$out/downloads" 2>&1) || { echo "FAIL: couldn't make $out: $said" >&2; exit 1; }
 # Each run starts on a profile no earlier run wrote to, as each hosted job's first run does on a
 # machine of its own: what one run left filled the rows a later one expects, as keys' history of
 # docs.new's sign-in pages did tabs' (#2486). It's the check's own folder, never the dev build's
@@ -207,15 +207,26 @@ trap cleanup EXIT
 # The window follows the Mac's appearance and the runs read its dark look, so a check VM runs dark,
 # and cleanup puts back the appearance it had. The owner's Mac keeps its own.
 if [ "$(uname)" = Darwin ] && [ "$(sysctl -n kern.hv_vmm_present)" = 1 ]; then
-  dark_mode=$(osascript -e 'tell application "System Events" to tell appearance preferences to get dark mode') || {
+  # Each step's FAIL line carries what System Events said, as a bare command under set -e would
+  # end the check with no word of which it was (#3889).
+  said=$(dark_mode_now 2>&1) && { [ "$said" = true ] || [ "$said" = false ]; } || {
     failed=1
-    echo "FAIL: System Events didn't say the Mac's appearance: allow the check to control it" >&2
+    echo "FAIL: the check couldn't read the Mac's appearance: $said" >&2
     exit 1
   }
-  appearance true
+  dark_mode=$said
+  said=$(appearance true 2>&1) || {
+    failed=1
+    echo "FAIL: the check couldn't turn the Mac dark: $said" >&2
+    exit 1
+  }
 fi
 # The runs send the app's driver its commands through it.
-mkfifo "$out/drive"
+said=$(mkfifo "$out/drive" 2>&1) || {
+  failed=1
+  echo "FAIL: the check couldn't make the drivers' pipe: $said" >&2
+  exit 1
+}
 for run in ${*:-$runs}; do
   # The last run's app may still be writing its profile as it ends, and Windows doesn't delete a
   # file a process holds.
