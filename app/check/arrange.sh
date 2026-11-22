@@ -259,6 +259,19 @@ start_arranging
 send click $(slot 0)
 expect "^browser: arrange $tab Selected None selected " "a click in the mode didn't select a thing"
 expect "^browser: mini bar \(window \)\{0,1\}shown\$" "the mini bar wasn't shown over the thing selected"
+# Nothing of the app's stays on screen once it shows nothing. The command bar that ran Edit Boost
+# has gone, and its shadow's window stayed ordered in over the page at alpha 0, round where the
+# mini bar shows (#3871). The window server's list, front first, as other apps read it.
+if [ "$(uname)" = Darwin ]; then
+  ../tools/ax-windows.sh "$pid" > "$out/windows-at-bar.txt" 2>&1 ||
+    fail "tools/ax-windows.sh didn't list the app's windows: $(tail -3 "$out/windows-at-bar.txt")"
+  if grep -q ' alpha 0 at ' "$out/windows-at-bar.txt"; then
+    ours=$(awk '/^window server/ { on = 1; next } /^[^ ]/ { on = 0 } on' \
+      "$out/windows-at-bar.txt" | tr -s ' \n' ' ')
+    fail "a window of the app's stayed on screen at alpha 0, showing nothing, after the command"\
+" bar went and as the mini bar showed; the app's windows, front first:$ours"
+  fi
+fi
 expect '^browser: mini bar drawn over [0-9]*$' "the mini bar didn't draw"
 shows "$own" "a click in the mode reached the page"
 [ "$(said | sed 's/.* at \([0-9-]*,[0-9-]*\) first .*/\1/')" = "${landed% *},${landed#* }" ] ||
