@@ -123,7 +123,9 @@ start b "$PWD/$out/sync-versions-b" 6
 browser=$browser_was
 BROWSER_FLATPAK=1
 open_sign_in
+sign_in_release=$ILO_OLD
 sign_in
+sign_in_release=
 await '^browser: account NeedsSecret None$' || fail "B, signed in, didn't need the account's secret"
 settings_keyboard
 at=$(drawn "sync use-words") || fail "B's Settings › Sync didn't offer the words"

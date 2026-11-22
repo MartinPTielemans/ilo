@@ -14,10 +14,10 @@ index 658b9f24ac..7bd5c521e1 100644
          self.signal.take()
      }
 diff --git a/crates/gpui_macos/src/events.rs b/crates/gpui_macos/src/events.rs
-index 6ca05849a9..1e6c36da8a 100644
+index 6ca05849a9..c503df93ab 100644
 --- a/crates/gpui_macos/src/events.rs
 +++ b/crates/gpui_macos/src/events.rs
-@@ -466,18 +466,15 @@ fn parse_keystroke(native_event: &NSEvent) -> Keystroke {
+@@ -466,18 +466,20 @@ fn parse_keystroke(native_event: &NSEvent) -> Keystroke {
                  key_char = Some(chars_for_modified_key(native_event.keyCode(), mods));
              }
  
@@ -33,19 +33,24 @@ index 6ca05849a9..1e6c36da8a 100644
 -            } else {
 -                chars_ignoring_modifiers
 -            }
++            let by_place = match control && !command && shift {
++                true => split_keys_by_place(),
++                false => Vec::new(),
++            };
 +            let (key, shifted) = layout_key(
 +                native_event.keyCode(),
 +                control && !command,
 +                shift,
 +                chars_ignoring_modifiers,
 +                chars_with_shift,
++                Some(&by_place),
 +            );
 +            shift = shifted;
 +            key
          }
      };
  
-@@ -494,6 +491,51 @@ fn parse_keystroke(native_event: &NSEvent) -> Keystroke {
+@@ -494,6 +496,152 @@ fn parse_keystroke(native_event: &NSEvent) -> Keystroke {
      }
  }
  
@@ -54,19 +59,32 @@ index 6ca05849a9..1e6c36da8a 100644
 +/// names a symbol: ⇧2 is "@" on the US layout. With ⌃ and ⇧ held and no ⌘, which type no text, a
 +/// digit key is named by its place with shift kept, as Chromium names a shortcut's key, so ⌃⇧2 is
 +/// ctrl-shift-2 on every layout, where it was ctrl-@ on the US one and ctrl-" on the Danish and
-+/// German ones.
++/// German ones. A split key, [ ] or -, is named so on the key whose own character it is, where it
++/// was ctrl-{ on the US layout and ctrl-= on JIS's - key, or before a digit, as French's - key is
++/// its 6 key. And it's named so on the key at its US place if it's in `by_place`, the ones the
++/// layout has no key of its own for (gpui::split_keys_by_place): ⌃⇧å is ctrl-shift-[ on Danish.
++/// With no `by_place`, the key is named as before ilo #3509.
 +pub fn layout_key(
 +    key_code: u16,
 +    control: bool,
 +    shift: bool,
 +    unshifted: String,
 +    shifted: String,
++    by_place: Option<&[char]>,
 +) -> (String, bool) {
++    let own = || {
++        let mut chars = unshifted.chars();
++        let own = chars.next().filter(|key| gpui::SPLIT_KEYS.contains(key));
++        own.filter(|_| chars.next().is_none() && by_place.is_some())
++    };
++    let split = || {
++        split_key_at(key_code).filter(|key| by_place.is_some_and(|by| by.contains(key)))
++    };
 +    if control
 +        && shift
-+        && let Some(digit) = digit_of(key_code)
++        && let Some(key) = own().or_else(|| digit_of(key_code)).or_else(split)
 +    {
-+        return (digit.to_string(), true);
++        return (key.to_string(), true);
 +    }
 +    if shift && unshifted.chars().all(|c| c.is_ascii_lowercase()) {
 +        (unshifted, true)
@@ -75,6 +93,94 @@ index 6ca05849a9..1e6c36da8a 100644
 +    } else {
 +        (unshifted, false)
 +    }
++}
++
++/// The split key whose US place is `key_code`.
++fn split_key_at(key_code: u16) -> Option<char> {
++    let place = SPLIT_PLACES.iter().position(|&place| place == key_code)?;
++    Some(gpui::SPLIT_KEYS[place])
++}
++
++thread_local! {
++    /// The current layout's split keys named by their place, asked of the layout once it changes
++    /// (forget_split_keys), never on a key's press.
++    static SPLIT_KEYS_BY_PLACE: std::cell::RefCell<Option<Vec<char>>> =
++        const { std::cell::RefCell::new(None) };
++}
++
++/// The layout changed, so its split keys are asked again.
++pub(crate) fn forget_split_keys() {
++    SPLIT_KEYS_BY_PLACE.with_borrow_mut(|keys| *keys = None);
++}
++
++fn split_keys_by_place() -> Vec<char> {
++    SPLIT_KEYS_BY_PLACE.with_borrow_mut(|keys| {
++        keys.get_or_insert_with(|| {
++            split_keys_on(|code| chars_for_modified_key(code, NO_MOD).chars().next())
++        })
++        .clone()
++    })
++}
++
++/// The split keys a layout names by their place, where `base` is the character the key at a key
++/// code types with no modifier (gpui::split_keys_by_place).
++pub fn split_keys_on(base: impl Fn(u16) -> Option<char>) -> Vec<char> {
++    let own = |key| typing_keys().any(|code| base(code) == Some(key));
++    let at_us_place =
++        |key| base(SPLIT_PLACES[gpui::SPLIT_KEYS.iter().position(|&each| each == key)?]);
++    gpui::split_keys_by_place(own, at_us_place)
++}
++
++/// The keys that type, kVK_ANSI_A to kVK_ANSI_Grave, and JIS's yen and underscore, without the
++/// keypad, whose minus isn't the typing one's.
++fn typing_keys() -> impl Iterator<Item = u16> {
++    (0..=0x32).chain([0x5D, 0x5E])
++}
++
++/// The key codes of the split keys' US places, in gpui::SPLIT_KEYS' order (Carbon's
++/// kVK_ANSI_LeftBracket, RightBracket and Minus).
++const SPLIT_PLACES: [u16; 3] = [0x21, 0x1E, 0x1B];
++
++/// For each key this layout names by its place, what GPUI named it before ilo #3509, and what it
++/// names it now, with ⌃⇧ held and with ⌃⌥⇧, so the keys a user recorded on it still run their
++/// command.
++pub fn split_keys_renamed() -> Vec<(Keystroke, Keystroke)> {
++    let by_place = split_keys_by_place();
++    let mut renamed = Vec::new();
++    for code in typing_keys() {
++        let unshifted = chars_for_modified_key(code, NO_MOD);
++        let shifted = chars_for_modified_key(code, SHIFT_MOD);
++        let (now, _) = layout_key(
++            code,
++            true,
++            true,
++            unshifted.clone(),
++            shifted.clone(),
++            Some(&by_place),
++        );
++        let (before, before_shift) = layout_key(code, true, true, unshifted, shifted, None);
++        if now == before {
++            continue;
++        }
++        for alt in [false, true] {
++            let held = |shift| Modifiers {
++                control: true,
++                alt,
++                shift,
++                ..Default::default()
++            };
++            let keystroke = |modifiers, key: &str| Keystroke {
++                modifiers,
++                key: key.to_string(),
++                key_char: None,
++            };
++            renamed.push((
++                keystroke(held(before_shift), &before),
++                keystroke(held(true), &now),
++            ));
++        }
++    }
++    renamed
 +}
 +
 +/// The digit the key `key_code` has on the US layout, by its place (Carbon's kVK_ANSI_0 to 9).
@@ -98,21 +204,21 @@ index 6ca05849a9..1e6c36da8a 100644
      if chars_for_modified_key(0, NO_MOD).is_ascii() {
          return false;
 diff --git a/crates/gpui_macos/src/gpui_macos.rs b/crates/gpui_macos/src/gpui_macos.rs
-index 8732badd32..8292e8a442 100644
+index 8732badd32..1b86d75ccb 100644
 --- a/crates/gpui_macos/src/gpui_macos.rs
 +++ b/crates/gpui_macos/src/gpui_macos.rs
 @@ -42,7 +42,9 @@ pub(crate) use keyboard::*;
  pub(crate) use platform::*;
  pub(crate) use window::*;
  
-+pub use events::layout_key;
++pub use events::{layout_key, split_keys_on, split_keys_renamed};
  pub use platform::MacPlatform;
 +pub use window::open_next_window_in;
  
  trait BoolExt {
      fn to_objc(self) -> Bool;
 diff --git a/crates/gpui_macos/src/platform.rs b/crates/gpui_macos/src/platform.rs
-index 4b48188131..b9b785975c 100644
+index 4b48188131..66886fff2a 100644
 --- a/crates/gpui_macos/src/platform.rs
 +++ b/crates/gpui_macos/src/platform.rs
 @@ -60,6 +60,12 @@ const MAC_PLATFORM_IVAR: &CStr = c"platform";
@@ -325,6 +431,14 @@ index 4b48188131..b9b785975c 100644
              state.dock_menu = Some(self.create_dock_menu(menu, delegate, actions, keymap));
          }
      }
+@@ -1356,6 +1422,7 @@ extern "C-unwind" fn on_keyboard_layout_change(this: &AnyObject, _: Sel, _: *mut
+     let mut lock = platform.0.lock();
+     let keyboard_layout = MacKeyboardLayout::new();
+     lock.keyboard_mapper = Rc::new(MacKeyboardMapper::new(keyboard_layout.id()));
++    crate::events::forget_split_keys();
+     if let Some(mut callback) = lock.on_keyboard_layout_change.take() {
+         drop(lock);
+         callback();
 diff --git a/crates/gpui_macos/src/window.rs b/crates/gpui_macos/src/window.rs
 index f2208d35ec..87a0757228 100644
 --- a/crates/gpui_macos/src/window.rs

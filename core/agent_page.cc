@@ -16,6 +16,7 @@
 #include "base/i18n/case_conversion.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
+#include "base/logging.h"
 #include "base/strings/strcat.h"
 #include "base/scoped_multi_source_observation.h"
 #include "base/strings/string_number_conversions.h"
@@ -28,6 +29,7 @@
 #include "base/time/time.h"
 #include "browser_core/agent_file_field.h"
 #include "browser_core/agent_job_voter.h"
+#include "browser_core/agent_splash_rule.h"
 #include "browser_core/ax_text.h"
 #include "browser_core/host.h"
 #include "browser_core/platform/window_views.h"
@@ -83,6 +85,9 @@ constexpr base::TimeDelta kBusy = base::Seconds(5);
 constexpr base::TimeDelta kQuiet = base::Milliseconds(500);
 // A frame, at the rate pages draw, between the looks that tell whether something holds still.
 constexpr base::TimeDelta kFrame = base::Hertz(60);
+// Between the reads of a splash that holds still: each reads every frame's whole tree in the
+// renderer whose content the job waits for, so not a frame's pace (#3658).
+constexpr base::TimeDelta kSplashLook = base::Milliseconds(100);
 // What the wheel starts, a scroll or nothing to scroll, has started by then (#1627).
 constexpr base::TimeDelta kSettle = base::Milliseconds(400);
 // What an agent hears when the input would reach an extension's control, which the activity log
@@ -370,9 +375,9 @@ constexpr int kFill = -1;
 // What an agent hears of a field that left before the user's files could go in.
 constexpr char kFieldGone[] = "The element isn't on the page any more. Take a new snapshot.";
 
-void Report(bc_id tab, uint64_t request, std::string text, bool error) {
+void Report(bc_id tab, uint64_t request, std::string text, bool error, bc_agent_failure failure) {
   if (Host().agent_page_done) {
-    Host().agent_page_done(Host().context, tab, request, text.c_str(), error);
+    Host().agent_page_done(Host().context, tab, request, text.c_str(), error, failure);
   }
 }
 
@@ -679,7 +684,7 @@ bool AgentPage::IsWebPage() {
   return GetWebContents().GetLastCommittedURL().SchemeIsHTTPOrHTTPS();
 }
 
-std::string AgentPage::NotWebPage() {
+void AgentPage::FailNotWebPage() {
   content::WebContents& contents = GetWebContents();
   // A tab whose first page hasn't committed is still on its empty start page, which isn't the
   // page's fault: the agent can wait for it (#1461).
@@ -690,18 +695,20 @@ std::string AgentPage::NotWebPage() {
     if (base::StartsWith(site, "www.")) {
       site.remove_prefix(4);
     }
-    return base::StrCat({site, " is still loading after ",
-                         base::NumberToString(kLoadTimeout.InSeconds()),
-                         " s. Wait, or try again."});
+    Fail(base::StrCat({site, " is still loading after ",
+                       base::NumberToString(kLoadTimeout.InSeconds()), " s. Wait, or try again."}),
+         BC_AGENT_FAILURE_LOADING);
+    return;
   }
-  return "The tab's page isn't an http or https page, the only pages agents may use.";
+  Fail("The tab's page isn't an http or https page, the only pages agents may use.",
+       BC_AGENT_FAILURE_NOT_WEB_PAGE);
 }
 
 void AgentPage::Run() {
   const int action = job_->action;
   const bool history = action == BC_AGENT_PAGE_BACK || action == BC_AGENT_PAGE_FORWARD;
   if (!history && !IsWebPage()) {
-    Fail(NotWebPage());
+    FailNotWebPage();
     return;
   }
   // An element in a frame that's gone, or now holds what isn't a web page's, is off limits.
@@ -748,6 +755,12 @@ void AgentPage::Run() {
       Screenshot();
       return;
     case BC_AGENT_PAGE_QUIET:
+      // Heard since its page committed (DidFinishNavigation), its time to settle from now.
+      if (listening_) {
+        job_->deadline = base::TimeTicks::Now() + kBusy;
+        Settle();
+        return;
+      }
       Listen(base::BindOnce(&AgentPage::Settle, weak_factory_.GetWeakPtr()));
       return;
     case BC_AGENT_PAGE_SELECT:
@@ -917,13 +930,13 @@ void AgentPage::Quiet() {
     } else {
       job_->requests = true;
     }
-    Still(base::ListValue());
+    Still({});
     return;
   }
   if (!GetWebContents().IsLoading() && requests_.empty()) {
     if (now >= last_request_ + kQuiet) {
       settling_ = false;
-      Still(base::ListValue());
+      Still({});
       return;
     }
     next = std::min(next, last_request_ + kQuiet);
@@ -932,34 +945,82 @@ void AgentPage::Quiet() {
   wait_.Start(FROM_HERE, next - now, base::BindOnce(&AgentPage::Quiet, base::Unretained(this)));
 }
 
-void AgentPage::Still(base::ListValue last) {
+void AgentPage::Still(std::vector<base::ListValue> last) {
   // After an action, the page may have gone somewhere agents may not.
   if (!IsWebPage()) {
-    Fail("The tab's page isn't an http or https page, the only pages agents may use.");
+    Fail("The tab's page isn't an http or https page, the only pages agents may use.",
+         BC_AGENT_FAILURE_NOT_WEB_PAGE);
     return;
   }
-  Send("Accessibility.getFullAXTree", base::DictValue(),
+  const uint64_t request = job_->request;
+  ReadTrees(
+      request, Frames(), 0, {},
+      base::BindOnce(
+          [](base::WeakPtr<AgentPage> page, uint64_t request, std::vector<base::ListValue> last,
+             std::optional<std::vector<base::ListValue>> trees) {
+            if (!page || !page->job_ || page->job_->request != request) {
+              return;
+            }
+            if (!trees) {
+              page->Fail("The page's tree couldn't be read.");
+              return;
+            }
+            // The first read is always compared with a second, even past the deadline.
+            const bool same = *trees == last;
+            const bool splash = IsSplash(*trees);
+            const bool early = base::TimeTicks::Now() < page->job_->deadline;
+            // A tree that's changing is read again a frame on, and a splash that holds still less
+            // often.
+            if ((!same && (last.empty() || early)) || (splash && early)) {
+              page->wait_.Start(FROM_HERE, same ? kSplashLook : kFrame,
+                                base::BindOnce(&AgentPage::Still, page, std::move(*trees)));
+              return;
+            }
+            page->job_->busy |= !same || splash;
+            page->Read(std::move(trees->front()));
+          },
+          weak_factory_.GetWeakPtr(), request, std::move(last)));
+}
+
+void AgentPage::ReadTrees(
+    uint64_t request,
+    std::vector<Frame> frames,
+    size_t next,
+    std::vector<base::ListValue> trees,
+    base::OnceCallback<void(std::optional<std::vector<base::ListValue>>)> then) {
+  if (next >= frames.size()) {
+    std::move(then).Run(std::move(trees));
+    return;
+  }
+  base::DictValue params;
+  if (next) {
+    params.Set("frameId", frames[next].id);
+  }
+  const int slot = frames[next].slot;
+  Send("Accessibility.getFullAXTree", std::move(params),
        base::BindOnce(
-           [](base::WeakPtr<AgentPage> page, base::ListValue last, const base::DictValue* result) {
-             if (!page || !page->job_) {
+           [](base::WeakPtr<AgentPage> page, uint64_t request, std::vector<Frame> frames,
+              size_t next, std::vector<base::ListValue> trees,
+              base::OnceCallback<void(std::optional<std::vector<base::ListValue>>)> then,
+              const base::DictValue* result) {
+             // A reply owed to a job that ended, as the reply limit or a dialog ends one, stops
+             // here, not in the next job.
+             if (!page || !page->job_ || page->job_->request != request) {
                return;
              }
              const base::ListValue* nodes = result ? result->FindList("nodes") : nullptr;
-             if (!nodes) {
-               page->Fail("The page's tree couldn't be read.");
+             if (!nodes && !next) {
+               std::move(then).Run(std::nullopt);
                return;
              }
-             // The first read is always compared with a second, even past the deadline.
-             const bool same = *nodes == last;
-             if (!same && (last.empty() || base::TimeTicks::Now() < page->job_->deadline)) {
-               page->wait_.Start(FROM_HERE, kFrame,
-                                 base::BindOnce(&AgentPage::Still, page, nodes->Clone()));
-               return;
-             }
-             page->job_->busy |= !same;
-             page->Read(nodes->Clone());
+             // A frame that went meanwhile reads as empty, which the next read may not be.
+             trees.push_back(nodes ? nodes->Clone() : base::ListValue());
+             page->ReadTrees(request, std::move(frames), next + 1, std::move(trees),
+                             std::move(then));
            },
-           weak_factory_.GetWeakPtr(), std::move(last)));
+           weak_factory_.GetWeakPtr(), request, std::move(frames), next, std::move(trees),
+           std::move(then)),
+       slot);
 }
 
 void AgentPage::Click() {
@@ -1224,7 +1285,7 @@ void AgentPage::Choose(const base::ListValue& nodes, const std::vector<std::stri
     if (choosing_ == Choosing::kOpened) {
       why += " Clicking the element showed them, so they may still be open.";
     }
-    Fail(std::move(why));
+    Fail(std::move(why), matches.empty() ? BC_AGENT_FAILURE_NO_OPTION : BC_AGENT_FAILURE_NONE);
     return;
   }
   const Option& option = *matches.front();
@@ -1389,7 +1450,8 @@ void AgentPage::Type(bool submit) {
                    if (*password) {
                      page->Fail(
                          "Password fields are off limits to agents: signing in is the "
-                         "user's to do.");
+                         "user's to do.",
+                         BC_AGENT_FAILURE_PASSWORD_FIELD);
                      return;
                    }
                    // Where it is, for the agent's pointer, then the typing, which focusing
@@ -1679,7 +1741,8 @@ void AgentPage::History(bool forward) {
   }
   content::NavigationEntry* entry = controller.GetEntryAtOffset(forward ? 1 : -1);
   if (!entry || !entry->GetURL().SchemeIsHTTPOrHTTPS()) {
-    Fail("That page isn't an http or https page, the only pages agents may open.");
+    Fail("That page isn't an http or https page, the only pages agents may open.",
+         BC_AGENT_FAILURE_NOT_WEB_PAGE);
     return;
   }
   [[maybe_unused]] auto navigations = forward ? controller.GoForward() : controller.GoBack();
@@ -1822,10 +1885,12 @@ void AgentPage::Copy(std::optional<gfx::Rect> area,
                      Pictured done,
                      std::optional<Boxes> before) {
   content::RenderWidgetHostView* view = GetWebContents().GetRenderWidgetHostView();
+  const gfx::Size page = view ? view->GetViewBounds().size() : gfx::Size();
+  // check.sh reads the size its page has for a picture (#3788); the app quiets this outside them.
+  LOG(ERROR) << "browser: agent picture of tab " << tab_ << " at " << page.width() << "x"
+             << page.height();
   const gfx::Rect source =
-      !view ? gfx::Rect()
-            : gfx::IntersectRects(area.value_or(gfx::Rect(view->GetViewBounds().size())),
-                                  gfx::Rect(view->GetViewBounds().size()));
+      !view ? gfx::Rect() : gfx::IntersectRects(area.value_or(gfx::Rect(page)), gfx::Rect(page));
   if (!before || source.IsEmpty()) {
     std::move(done).Run(base::unexpected(before ? kNoPicture : kPictureChanged));
     return;
@@ -2209,7 +2274,7 @@ void AgentPage::KeepTyped(int64_t element, std::u16string sent) {
 void AgentPage::Snapshot() {
   // After an action, the page may have gone somewhere agents may not.
   if (!IsWebPage()) {
-    Fail(NotWebPage());
+    FailNotWebPage();
     return;
   }
   Send("Accessibility.getFullAXTree", base::DictValue(),
@@ -3010,7 +3075,7 @@ void AgentPage::AppRefused(content::WebContents* contents, const GURL& url) {
           page->weak_factory_.GetWeakPtr(), url));
 }
 
-void AgentPage::Answer(std::string text, bool error) {
+void AgentPage::Answer(std::string text, bool error, bc_agent_failure failure) {
   if (!job_) {
     return;
   }
@@ -3046,11 +3111,11 @@ void AgentPage::Answer(std::string text, bool error) {
   } else if (download_starting_.IsRunning()) {
     // Its page didn't change, or the tab has none, as the navigation became a download.
     AnswerHeld();
-    held_ = Held{request, std::move(text), error};
+    held_ = Held{request, std::move(text), error, failure};
   } else {
     // Posted, so the app never hears inside its own bc_agent_page.
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(&Report, tab_, request, std::move(text), error));
+        FROM_HERE, base::BindOnce(&Report, tab_, request, std::move(text), error, failure));
   }
   Next();
   if (!job_) {
@@ -3062,8 +3127,8 @@ void AgentPage::Answer(std::string text, bool error) {
   }
 }
 
-void AgentPage::Fail(std::string why) {
-  Answer(std::move(why), /*error=*/true);
+void AgentPage::Fail(std::string why, bc_agent_failure failure) {
+  Answer(std::move(why), /*error=*/true, failure);
 }
 
 void AgentPage::EndWaiting(std::string why, std::optional<std::string> unstarted) {
@@ -3087,7 +3152,7 @@ void AgentPage::Owe(Job& job, const std::string& why) {
     return;
   }
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(&Report, tab_, job.request, why, true));
+      FROM_HERE, base::BindOnce(&Report, tab_, job.request, why, true, BC_AGENT_FAILURE_NONE));
 }
 
 // static
@@ -3127,8 +3192,8 @@ void AgentPage::DialogShown(bc_id tab, int kind) {
 void AgentPage::AnswerHeld() {
   if (std::optional<Held> held = std::exchange(held_, std::nullopt)) {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE,
-        base::BindOnce(&Report, tab_, held->request, std::move(held->text), held->error));
+        FROM_HERE, base::BindOnce(&Report, tab_, held->request, std::move(held->text), held->error,
+                                  held->failure));
   }
 }
 
@@ -3358,6 +3423,13 @@ void AgentPage::DidFinishNavigation(content::NavigationHandle* navigation) {
   if (navigation->IsInPrimaryMainFrame() && navigation->HasCommitted() &&
       !navigation->IsSameDocument()) {
     typed_.clear();
+  }
+  // A page a job waits to settle once it has loaded, as navigate's, is heard from its commit on:
+  // the requests an app in a frame makes as it loads are its content still to come, though they
+  // start before the load stops, when the job would listen otherwise (#3658).
+  if (navigation->IsInPrimaryMainFrame() && navigation->HasCommitted() && job_ && loaded_ &&
+      job_->action == BC_AGENT_PAGE_QUIET && !listening_ && IsWebPage()) {
+    Listen(base::DoNothing());
   }
   if (navigation->IsDownload() && job_) {
     download_starting_.Start(FROM_HERE, kDownloadStart,

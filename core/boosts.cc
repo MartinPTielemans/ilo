@@ -15,6 +15,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "browser_core/arrange.h"
 #include "browser_core/boost_colors.h"
+#include "browser_core/checked.h"
 #include "browser_core/host.h"
 #include "browser_core/point.h"
 #include "browser_core/profiles.h"
@@ -366,7 +367,9 @@ bool Boosts::TurnOnScript(bc_id profile, std::string_view site, std::string_view
   }
   // What runs is what the user was shown, even if the file changed while the dialog was open.
   Scripts()[profile].insert_or_assign(std::string(site), std::string(script));
-  LOG(ERROR) << "browser: boost script turned on " << site;
+  if (Checked()) {
+    LOG(ERROR) << "browser: boost script turned on " << site;
+  }
   return true;
 }
 
@@ -374,7 +377,9 @@ bool Boosts::TurnOnScript(bc_id profile, std::string_view site, std::string_view
 void Boosts::ForgetScript(bc_id profile, std::string_view site) {
   if (Profile* loaded = ProfileOrLoad(profile)) {
     boost_script::Forget(*loaded->GetPrefs(), site);
-    LOG(ERROR) << "browser: boost script turned off " << site;
+    if (Checked()) {
+      LOG(ERROR) << "browser: boost script turned off " << site;
+    }
   }
 }
 
@@ -407,7 +412,9 @@ void Boosts::RunScript(content::RenderFrameHost* frame) {
   frame->ExecuteJavaScriptInIsolatedWorld(base::UTF8ToUTF16(script->second),
                                           content::RenderFrameHost::JavaScriptResultCallback(),
                                           ISOLATED_WORLD_ID_BOOST_SCRIPT);
-  LOG(ERROR) << "browser: tab " << tab_ << " boost script ran " << site;
+  if (Checked()) {
+    LOG(ERROR) << "browser: tab " << tab_ << " boost script ran " << site;
+  }
 }
 
 void Boosts::Apply(content::RenderFrameHost* frame) {
@@ -546,7 +553,9 @@ bool Boosts::OnMouse(content::RenderWidgetHost* widget, const blink::WebMouseEve
 
 void Boosts::Zapped(base::Value selector) {
   const std::string* text = selector.GetIfString();
-  LOG(ERROR) << "browser: tab " << tab_ << " zapped " << (text ? *text : "nothing");
+  if (Checked()) {
+    LOG(ERROR) << "browser: tab " << tab_ << " zapped " << (text ? *text : "nothing");
+  }
   if (Host().tab_boost_zapped) {
     Host().tab_boost_zapped(Host().context, tab_, text ? text->c_str() : nullptr);
   }

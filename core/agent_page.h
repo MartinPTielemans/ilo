@@ -161,9 +161,9 @@ class AgentPage : public content::WebContentsObserver,
   // Runs the next job once the one before has answered.
   void Next();
   void Run();
-  // Whether the tab's page is one agents may use, and if not, why, for the agent.
+  // Whether the tab's page is one agents may use, and if not, fails the job with why.
   bool IsWebPage();
-  std::string NotWebPage();
+  void FailNotWebPage();
   // Runs |then| once the page has stopped loading, or after a while.
   void AfterLoad(base::OnceClosure then);
 
@@ -182,8 +182,17 @@ class AgentPage : public content::WebContentsObserver,
   void Settle();
   // Waits until the page has stopped loading and has had no request for a while.
   void Quiet();
-  // Reads the main frame's tree until it's the same twice, a frame apart, then the snapshot.
-  void Still(base::ListValue last);
+  // Reads the page's trees, its frames' too, until they're the same twice, a frame apart, and are
+  // more than a splash, then the snapshot. Past the job's deadline it answers as busy.
+  void Still(std::vector<base::ListValue> last);
+  // The trees of the main frame and of each frame a snapshot reads, in |frames| from |next| on,
+  // added to |trees|: what an app in a frame shows is in its frame's tree alone (#3658). Nothing if
+  // the main frame's couldn't be read. Its replies stop once |request|'s job has ended.
+  void ReadTrees(uint64_t request,
+                 std::vector<Frame> frames,
+                 size_t next,
+                 std::vector<base::ListValue> trees,
+                 base::OnceCallback<void(std::optional<std::vector<base::ListValue>>)> then);
 
   void Click();
   // Presses the job's element once it's ready. One outside the page's view, where scrolling
@@ -311,8 +320,9 @@ class AgentPage : public content::WebContentsObserver,
                     std::set<int64_t> passwords,
                     std::vector<std::pair<int64_t, FieldFacts>> filled,
                     size_t next);
-  void Answer(std::string text, bool error);
-  void Fail(std::string why);
+  // With |error|, |failure| is what agent code decides on, as Report gives it.
+  void Answer(std::string text, bool error, bc_agent_failure failure = BC_AGENT_FAILURE_NONE);
+  void Fail(std::string why, bc_agent_failure failure = BC_AGENT_FAILURE_NONE);
   // Answers |job|, which never ran, as the session ended or a dialog keeps its page: the agent with
   // |why|, a Fill as not put.
   void Owe(Job& job, const std::string& why);
@@ -410,6 +420,7 @@ class AgentPage : public content::WebContentsObserver,
     uint64_t request;
     std::string text;
     bool error;
+    bc_agent_failure failure;
   };
   std::optional<Held> held_;
   base::OneShotTimer download_starting_;

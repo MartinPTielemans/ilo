@@ -1,7 +1,7 @@
 # The site's live demo on ilobrowser.com: the preview built for the web (app/src/preview.rs, `web`),
 # as wasm-bindgen's ilo_demo.js and ilo_demo_bg.wasm, with the licences it ships under, packed as
-# ilo-demo.tar.gz. release.yml adds it to a release, and the site's release workflow
-# (MartinPTielemans/ilo-site) puts it on the site once the release is published. A commit without
+# ilo-demo.tar.gz. release.yml adds it to a release, and the site's deploy (site.yml) puts the
+# newest published release's on the site, which publishing a release starts. A commit without
 # the `web` profile has no demo to build, and says so. By hand, to try a branch's demo:
 # `gh workflow run demo.yml --ref <branch>`.
 name: Site demo

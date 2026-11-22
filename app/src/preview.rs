@@ -1913,6 +1913,14 @@ impl Browser for Fake {
         cfg!(target_family = "wasm") && command_bar::is_open(cx)
     }
 
+    fn field_window_typing(&self, _: &mut App) -> bool {
+        false
+    }
+
+    fn page_has_keyboard(&self, _: &App) -> Option<bool> {
+        None
+    }
+
     fn command_bar_follows(&self, _: Vec<BarTab>, _: Vec<BarTab>, _: &mut App) -> bool {
         false
     }
@@ -2918,6 +2926,7 @@ fn main() {}
 
 #[cfg(not(target_family = "wasm"))]
 fn main() {
+    browser::log_every_line();
     gpui_platform::application()
         .with_assets(shell::Assets)
         .run(|cx| {
@@ -2980,11 +2989,13 @@ fn main() {
             }
             // PREVIEW_COMMAND_LINE=off, on or unsearched shows Settings › Agents' apps that connect
             // and the ilo command's row under them, not there, there, or there in a folder the
-            // shell doesn't search (#3667).
+            // shell doesn't search, and flatpak-off or flatpak-on as a Flatpak's (#3667).
             if let Ok(state) = std::env::var("PREVIEW_COMMAND_LINE") {
                 let state = match state.as_str() {
                     "on" => CommandLine::On,
                     "unsearched" => CommandLine::Unsearched,
+                    "flatpak-off" => CommandLine::FlatpakOff,
+                    "flatpak-on" => CommandLine::FlatpakOn,
                     _ => CommandLine::Off,
                 };
                 preview_pictures(Pictures::CommandLine(state), cx);
@@ -4322,7 +4333,7 @@ impl link_preview::Host for PreviewPeek {
 struct PreviewDialog;
 
 impl dialog::Host for PreviewDialog {
-    fn show(&self, _: Option<u64>, _: Option<Bounds<Pixels>>) {}
+    fn show(&self, _: Option<u64>, _: Option<Bounds<Pixels>>, _: bool) {}
 
     fn hide(&self) {}
 }
@@ -4594,6 +4605,9 @@ enum CommandLine {
     On,
     /// In a folder the user's shell doesn't search.
     Unsearched,
+    /// In a Flatpak, not added, and added with the line to run on the host.
+    FlatpakOff,
+    FlatpakOn,
 }
 
 /// `shown`'s group in a window of Settings' size. PREVIEW_BUTTONS=mac, windows or linux draws that
@@ -4913,22 +4927,31 @@ impl gpui::Render for PicturesPage {
                             )),
                     )
                 };
+                let flatpak = matches!(state, CommandLine::FlatpakOff | CommandLine::FlatpakOn)
+                    .then(|| {
+                        cli::flatpak_line(&browser::agents::bridge::launch(
+                            std::path::Path::new("/app/ilo/mcp-bridge"),
+                            Some("app.ilo.browser"),
+                        ))
+                    })
+                    .flatten();
                 let state = match state {
-                    CommandLine::Off => cli::State::Off,
-                    CommandLine::On => cli::State::On,
+                    CommandLine::Off | CommandLine::FlatpakOff => cli::State::Off,
+                    CommandLine::On | CommandLine::FlatpakOn => cli::State::On,
                     CommandLine::Unsearched => cli::State::Unsearched,
                 };
+                let detail = cli::detail(state, flatpak.as_deref(), None);
                 let mono = browser::face::mono(&cx.text_system().all_font_names());
                 let mut controls = Vec::new();
-                if state == cli::State::Unsearched {
+                if detail.export.is_some() {
                     controls.push(action("Copy Line"));
                 }
                 controls.push(action(match state {
                     cli::State::Off => "Add",
                     _ => "Remove",
                 }));
-                let detail = cli::detail(state);
-                let export = (detail.export).map(|export| command_export(&look, export, mono));
+                let export =
+                    (detail.export.clone()).map(|export| command_export(&look, export, mono));
                 let command = frame()
                     .flex_wrap()
                     .child(glyph_plate(&look, "icons/square-code.svg", true))

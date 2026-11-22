@@ -88,8 +88,9 @@ jobs:
         working-directory: app/windows
         run: |
           cargo build --release --features prod
-          # The bridge an agent's MCP client runs, which package.sh puts beside Browser.dll.
-          cargo build --release --features prod --manifest-path ../Cargo.toml --bin mcp-bridge --target-dir target
+          # The bridge an agent's MCP client runs, which package.sh puts beside Browser.dll, and the
+          # ilo command an agent in a terminal runs, which it puts in bin.
+          cargo build --release --features prod --manifest-path ../Cargo.toml --bin mcp-bridge --bin ilo-command --target-dir target
 
       - if: ${{ steps.cache.outcome == 'success' && steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
         uses: actions/cache/save@v4

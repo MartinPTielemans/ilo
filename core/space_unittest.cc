@@ -1,11 +1,14 @@
 #include "browser_core/space.h"
 
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
+#include "base/no_destructor.h"
 #include "base/test/task_environment.h"
 #include "browser_core/auto_archive.h"
+#include "browser_core/favorites.h"
 #include "browser_core/host.h"
 #include "browser_core/session.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -31,6 +34,16 @@ void ScheduleAutoArchive() {}
 void BoostSpacesChanged() {}
 void BoostSpaceGone(bc_id) {}
 
+// The favorites every Space shows, as the test sets them.
+std::set<bc_id>& ShownFavorites() {
+  static base::NoDestructor<std::set<bc_id>> tabs;
+  return *tabs;
+}
+
+bool Favorites::ShownIn(bc_id tab, const Space&) {
+  return ShownFavorites().contains(tab);
+}
+
 namespace {
 
 using Rows = std::vector<bc_id>;
@@ -45,6 +58,12 @@ class SpaceTest : public testing::Test {
   void TearDown() override {
     Space::Delete(work_->id());
     Space::Delete(home_->id());
+    ShownFavorites().clear();
+  }
+
+  // The tab Work shows once |tab| closes, every tab loaded.
+  bc_id NextInWork(bc_id tab) const {
+    return work_->NextAfterLeaving(tab, [](bc_id) { return true; });
   }
 
   // In Work: a pinned tab, then the folder Docs with a tab, the folder Notes holding a split view,
@@ -317,6 +336,48 @@ TEST_F(SpaceTest, ATodayTabIsANodeOfItsOwnThatKeepsItsIdPinnedAndUnpinned) {
   little->AddAt(30, 0);
   EXPECT_FALSE(little->NodeOf(30));
   Space::Delete(little->id());
+}
+
+// A tab the user opens over another, as the command bar's ⌘T opens it, goes back to that one when
+// it closes, a Today tab, a pinned tab or a favorite the Space shows, not to the tab below (#3813).
+TEST_F(SpaceTest, ATabOpenedOverAnotherClosesBackToIt) {
+  Fill();
+  work_->Add(20, /*opener=*/0, /*foreground=*/false);
+  work_->Add(21, /*opener=*/0, /*foreground=*/false);
+  // Over the Today tab at the bottom, it goes at the top.
+  work_->AddOpenedOver(22, 20);
+  EXPECT_EQ(work_->today(), (Rows{22, 21, 20}));
+  EXPECT_EQ(NextInWork(22), 20);
+  work_->Remove(22);
+  // Over a pinned tab.
+  work_->AddOpenedOver(23, 1);
+  EXPECT_EQ(work_->today(), (Rows{23, 21, 20}));
+  EXPECT_EQ(NextInWork(23), 1);
+  work_->Remove(23);
+  // Over a favorite, while the Space shows it.
+  ShownFavorites() = {30};
+  work_->AddOpenedOver(24, 30);
+  EXPECT_EQ(NextInWork(24), 30);
+  ShownFavorites().clear();
+  EXPECT_EQ(NextInWork(24), 21);
+}
+
+// The tab it opened over is the way back until the user shows an unrelated tab, as Chrome's tab
+// strip has it, and the one opened last over another takes the way back from those before it.
+TEST_F(SpaceTest, ATabOpenedOverAnotherForgetsItOnceTheUserGoesElsewhere) {
+  work_->Add(20, /*opener=*/0, /*foreground=*/false);
+  work_->Add(21, /*opener=*/0, /*foreground=*/false);
+  work_->AddOpenedOver(22, 20);
+  work_->UserShowed(20, 22);
+  EXPECT_EQ(NextInWork(22), 20);
+  work_->UserShowed(22, 21);
+  work_->UserShowed(21, 22);
+  EXPECT_EQ(NextInWork(22), 21);
+  work_->AddOpenedOver(23, 20);
+  work_->AddOpenedOver(24, 20);
+  EXPECT_EQ(work_->today(), (Rows{24, 23, 22, 21, 20}));
+  EXPECT_EQ(NextInWork(24), 20);
+  EXPECT_EQ(NextInWork(23), 22);
 }
 
 }  // namespace

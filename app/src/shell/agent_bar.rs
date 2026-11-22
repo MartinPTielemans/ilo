@@ -218,7 +218,7 @@ impl Shell {
                 // A task's page watched is the agent's again, so the keys the user types next
                 // aren't its.
                 if self.watched_task_page().is_some() {
-                    self.browser.focus_ui(cx);
+                    self.take_keyboard(cx);
                 }
             }
             None => {}

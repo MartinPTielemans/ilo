@@ -296,9 +296,9 @@ impl Browser for Engine {
         unsafe { bc::bc_tab_back_to_pinned_url(tab) };
     }
 
-    fn navigate(&self, tab: u64, url: &str, _: &mut App) {
+    fn follow(&self, tab: u64, url: &str, _: &mut App) {
         let url = CString::new(url).unwrap_or_default();
-        unsafe { bc::bc_tab_navigate(tab, url.as_ptr()) };
+        unsafe { bc::bc_tab_follow(tab, url.as_ptr()) };
     }
 
     fn set_muted(&self, tab: u64, muted: bool, _: &mut App) {
@@ -694,7 +694,7 @@ impl Browser for Engine {
         if self.window != front().0 {
             return;
         }
-        let Some((tab, asked, over)) = shown else {
+        let Some((tab, asked, over, rests)) = shown else {
             dialog::withdraw_page(cx);
             return;
         };
@@ -736,6 +736,20 @@ impl Browser for Engine {
             },
         };
         let window = self.window;
+        let shell_of = move || {
+            WINDOWS.with_borrow(|windows| {
+                windows
+                    .iter()
+                    .find(|w| w.id == window)
+                    .and_then(|w| w.shell.upgrade())
+            })
+        };
+        // A click on the dialog at rest focuses its pane, which brings it live.
+        let focus_pane = Rc::new(move |cx: &mut App| {
+            if let Some(shell) = shell_of() {
+                shell.update(cx, |shell, cx| shell.focus_dialog_pane(tab, cx));
+            }
+        });
         let kind = asked.kind;
         let answered = Box::new(move |reply: dialog::Reply, cx: &mut App| {
             let mut texts = reply.texts.into_iter();
@@ -753,13 +767,7 @@ impl Browser for Engine {
                 password,
                 checked: reply.checked,
             };
-            let shell = WINDOWS.with_borrow(|windows| {
-                windows
-                    .iter()
-                    .find(|w| w.id == window)
-                    .map(|w| w.shell.clone())
-            });
-            match shell.and_then(|shell| shell.upgrade()) {
+            match shell_of() {
                 Some(shell) => shell.update(cx, |shell, cx| {
                     shell.answer_page_dialog(tab, asked.id, reply, cx)
                 }),
@@ -767,7 +775,15 @@ impl Browser for Engine {
                 None => answer_page_dialog(tab, asked.id, reply),
             }
         });
-        dialog::ask_page((tab, asked.id), question, over, answered, cx);
+        dialog::ask_page(
+            (tab, asked.id),
+            question,
+            over,
+            rests,
+            focus_pane,
+            answered,
+            cx,
+        );
     }
 
     fn answer_page_dialog(&self, tab: u64, id: u64, reply: shell::PageReply, _: &mut App) {
@@ -1901,6 +1917,22 @@ impl Browser for Engine {
 
     fn command_bar_open(&self, cx: &App) -> bool {
         command_bar::is_open(cx)
+    }
+
+    fn field_window_typing(&self, cx: &mut App) -> bool {
+        find_bar::typing(self.window, cx)
+            || offer::typing(self.window, cx)
+            || icon_picker::typing(cx)
+            || boost_editor::typing(cx)
+            || folder_preview::typing(cx)
+    }
+
+    fn page_has_keyboard(&self, _: &App) -> Option<bool> {
+        // The core routes every key between page and UI there, X11's by the X server's focus.
+        #[cfg(target_os = "linux")]
+        return Some(unsafe { !bc::bc_window_keyboard_is_ui(self.window) });
+        #[cfg(not(target_os = "linux"))]
+        None
     }
 
     fn command_bar_follows(&self, tabs: Vec<BarTab>, open_tabs: Vec<BarTab>, cx: &mut App) -> bool {

@@ -135,7 +135,7 @@ enum Block {
 struct Row {
     name: SharedString,
     line: Option<SharedString>,
-    /// The keys its chip shows, a shortcut's.
+    /// The keys its chips show, a shortcut's, a line each.
     keys: Option<String>,
     /// A feature's own setting, under it in its group with its text where the feature's name is.
     nested: bool,
@@ -482,8 +482,8 @@ pub struct Settings {
     renaming: Option<Renaming>,
     /// Whether the field takes the keyboard once its row is drawn.
     focus_renaming: bool,
-    /// The command whose next key Shortcuts takes.
-    recording: Option<Command>,
+    /// The command whose next key Shortcuts takes, and which of its chips the key goes in.
+    recording: Option<(Command, usize)>,
     /// Why the key pressed for this command wasn't given to it.
     refused: Option<(Command, SharedString)>,
     /// The search at the column's top, whose rows found replace the section's page while it
@@ -491,6 +491,9 @@ pub struct Settings {
     search: Entity<TextInput>,
     /// Ad Blocking's field that adds a filter to My filters.
     filter: Entity<TextInput>,
+    /// Agents' field that adds a site to Always ask first, and whether it's open.
+    fence_field: Entity<TextInput>,
+    fence_adding: bool,
     /// What the search last logged it found, for check.sh.
     searched: String,
     /// The row a click on a found section's name showed, which flashes once, and when.
@@ -551,7 +554,7 @@ struct InWindow;
 
 #[cfg(target_os = "linux")]
 impl dialog::Host for InWindow {
-    fn show(&self, _: Option<u64>, _: Option<Bounds<gpui::Pixels>>) {}
+    fn show(&self, _: Option<u64>, _: Option<Bounds<gpui::Pixels>>, _: bool) {}
 
     fn hide(&self) {}
 }
@@ -1056,6 +1059,9 @@ fn show_now(cx: &mut App) {
                 window.focus(&settings.focus, cx);
             }
             settings.shown = true;
+            // Each show logs where its controls are drawn again, so check.sh can take a place from
+            // this show rather than from one before it, which a hidden window's scroll left (#3841).
+            settings.drawn_logged.borrow_mut().clear();
             if settings.section == Section::Agents {
                 look_for_clients(cx);
             }
@@ -1348,6 +1354,12 @@ fn view(cx: &mut App) -> Entity<Settings> {
                 .caret_color(look.ink)
                 .spoken("New filter")
         });
+        let fence_field = cx.new(|cx| {
+            TextInput::new(agents::fence::PLACEHOLDER, cx)
+                .placeholder_color(look.detail)
+                .caret_color(look.ink)
+                .spoken(agents::fence::SPOKEN)
+        });
         // ⇥ stops at the field, after the sections.
         let _ = search.read(cx).focus_handle(cx).tab_stop(true);
         Settings {
@@ -1377,6 +1389,8 @@ fn view(cx: &mut App) -> Entity<Settings> {
             refused: None,
             search,
             filter,
+            fence_field,
+            fence_adding: false,
             searched: String::new(),
             flash: None,
             focus_row: None,
@@ -3966,6 +3980,7 @@ impl Settings {
             blocks.push(Block::Heading("Command line".into()));
             blocks.push(Block::Rows(vec![self.command_line(agents, cx)]));
         }
+        blocks.extend(self.fenced_sites(agents, cx));
         // AppleScript is the Mac's alone.
         if cfg!(target_os = "macos") {
             blocks.extend(self.scripts(agents, accent, cx));
@@ -4056,6 +4071,141 @@ impl Settings {
             "Agents never see your passwords, cookies or autofill.",
             blocks,
         )
+    }
+
+    /// Always ask first (#3724): the sites the user fenced, each with Remove, then Add Site…, which
+    /// opens the field that adds one, and what the list does.
+    fn fenced_sites(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> Vec<Block> {
+        use agents::fence;
+        let look = &self.look;
+        let fenced = agents.read(cx).fenced().to_vec();
+        let mut rows: Vec<gpui::Div> = (fenced.iter().enumerate())
+            .map(|(index, host)| {
+                let (agents, gone) = (agents.clone(), host.clone());
+                let remove = self
+                    .button(("agent-fence-remove", index as u64), "Remove")
+                    .relative()
+                    .child(self.drawn(format!("unfence {host}")))
+                    .on_click(move |_, _, cx| {
+                        agents.update(cx, |agents, cx| agents.unfence(&gone, cx))
+                    });
+                line_row(look, host.clone(), None, vec![remove.into_any_element()])
+            })
+            .collect();
+        if fenced.is_empty() && !self.fence_adding {
+            rows.push(line_row(
+                look,
+                fence::NONE,
+                Some(fence::NONE_LINE.into()),
+                Vec::new(),
+            ));
+        }
+        if self.fence_adding {
+            let field =
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_w_0()
+                    .h(px(CONTROL_HEIGHT))
+                    .px(px(FIELD_PADDING))
+                    .flex()
+                    .items_center()
+                    .rounded(px(CONTROL_RADIUS))
+                    .bg(look.control)
+                    .key_context("Naming")
+                    .on_action(cx.listener(|settings, _: &KeepName, window, cx| {
+                        settings.add_fence(window, cx)
+                    }))
+                    .on_action(cx.listener(|settings, _: &CancelName, window, cx| {
+                        settings.close_fence(window, cx)
+                    }))
+                    .child(self.drawn("fence field".into()))
+                    .child(self.fence_field.clone());
+            let cancel = self
+                .button("agent-fence-cancel", "Cancel")
+                .relative()
+                .child(self.drawn("fence cancel".into()))
+                .on_click(cx.listener(|settings, _, window, cx| settings.close_fence(window, cx)));
+            let add = self
+                .button("agent-fence-add", "Add")
+                .relative()
+                .child(self.drawn("fence add".into()))
+                .on_click(cx.listener(|settings, _, window, cx| settings.add_fence(window, cx)));
+            let adding = frame()
+                .gap(px(CONTROL_GAP))
+                .child(field)
+                .child(cancel)
+                .child(add);
+            rows.push(adding);
+        }
+        // Its last line's foot, where check.sh scrolls it into sight before it captures it whole.
+        let end = div().absolute().left_0().right_0().bottom_0().h(px(1.));
+        let foot = div()
+            .relative()
+            .px(px(TEXT_X))
+            .text_size(px(text::SMALL))
+            .line_height(px(DETAIL_LINE))
+            .text_color(look.detail)
+            .child(fence::FOOT)
+            .child(end.child(self.drawn("fence foot".into())));
+        let under = match self.fence_adding {
+            true => div().child(foot),
+            false => {
+                let open = self
+                    .button("agent-fence-open", fence::ADD_SITE)
+                    .relative()
+                    .child(self.drawn("fence open".into()))
+                    .on_click(
+                        cx.listener(|settings, _, window, cx| settings.open_fence(window, cx)),
+                    );
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(div().flex().child(open))
+                    .child(foot.mt(px(BUTTONS_TOP)))
+            }
+        };
+        vec![
+            Block::Heading(fence::HEADING.into()),
+            Block::Group(group(look, rows)),
+            Block::Under(under),
+        ]
+    }
+
+    /// Add Site…: opens Always ask first's field, empty, with the keyboard.
+    fn open_fence(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.fence_adding = true;
+        (self.fence_field).update(cx, |field, cx| field.reset("".into(), window, cx));
+        let field = self.fence_field.focus_handle(cx);
+        window.focus(&field, cx);
+        // check.sh waits for this line.
+        log!("browser: settings fence field open");
+        cx.notify();
+    }
+
+    /// Adds the site typed in Always ask first's field and closes it. A field holding no site
+    /// stays open, as it was.
+    fn add_fence(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let typed = self.fence_field.read(cx).text().to_string();
+        let Some(agents) = agents::global(cx) else {
+            return;
+        };
+        if agents
+            .update(cx, |agents, cx| agents.fence(&typed, cx))
+            .is_none()
+        {
+            log!("browser: settings fence field holds no site");
+            return;
+        }
+        self.close_fence(window, cx);
+    }
+
+    /// Cancel, or Escape in the field: closes it, adding nothing.
+    fn close_fence(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.fence_adding = false;
+        (self.fence_field).update(cx, |field, cx| field.reset("".into(), window, cx));
+        window.focus(&self.focus, cx);
+        cx.notify();
     }
 
     /// Scripts (#704): the switch that lets AppleScript in, off at first, and what each script
@@ -4547,35 +4697,39 @@ impl Settings {
         let state = model.command_state();
         let failure = model.failure(client);
         let mono = browser::face::mono(&cx.text_system().all_font_names());
-        let detail = agents::cli::detail(state);
+        let detail = agents::cli::detail(
+            state,
+            model.command_flatpak_line().as_deref(),
+            model.command_windows_folder().as_deref(),
+        );
         let action = |title: &'static str, id: &'static str| {
             let agents = agents.clone();
             self.button(id, title)
                 .relative()
                 .child(self.drawn(format!("ilo-command {}", title.to_lowercase())))
                 .on_click(move |_, _, cx| {
-                    agents.update(cx, |agents, cx| match agents.is_connected(client) {
-                        true => agents.disconnect(client, cx),
-                        false => {
+                    // Add follows the row, not the agent: on Windows a command whose PATH entry
+                    // was taken off is still connected, and Add puts the entry back (#3783).
+                    agents.update(cx, |agents, cx| match agents.command_state() {
+                        agents::cli::State::Off => {
                             // check.sh reads this line.
                             log!("browser: connect agent {}", client.id());
                             agents.connect(client, cx)
                         }
+                        _ => agents.disconnect(client, cx),
                     })
                 })
                 .into_any_element()
         };
         let mut controls = Vec::new();
-        if state == agents::cli::State::Unsearched {
+        if let Some(export) = detail.export.clone() {
             let copy = self
                 .button("copy-command-line", "Copy Line")
                 .relative()
                 .child(self.drawn("ilo-command copy line".into()))
-                .on_click(|_, _, cx| {
+                .on_click(move |_, _, cx| {
                     log!("browser: ilo command line copied");
-                    cx.write_to_clipboard(ClipboardItem::new_string(
-                        agents::cli::EXPORT.to_string(),
-                    ));
+                    cx.write_to_clipboard(ClipboardItem::new_string(export.clone()));
                 });
             controls.push(copy.into_any_element());
         }
@@ -4584,7 +4738,7 @@ impl Settings {
             _ => action("Remove", "remove-command"),
         });
         let export = (failure.is_none())
-            .then_some(detail.export)
+            .then_some(detail.export.clone())
             .flatten()
             .map(|export| command_export(look, export, mono));
         let text = match &failure {
@@ -4593,7 +4747,7 @@ impl Settings {
         };
         let line: SharedString = match failure {
             Some(why) => why,
-            None => [Some(detail.line.as_str()), detail.export]
+            None => [Some(detail.line.as_str()), detail.export.as_deref()]
                 .into_iter()
                 .flatten()
                 .collect::<Vec<_>>()
@@ -4757,16 +4911,29 @@ impl Settings {
     ) -> AnyElement {
         let look = &self.look;
         let user = shell::user_keys(cx);
-        if !shell::rebindable(command) {
-            let keys = user.label(command).unwrap_or_default();
-            return self.chip(keys.into(), Chip::Fixed).into_any_element();
-        }
-        let recording = self.recording == Some(command);
-        let (keys, kind) = match user.label(command) {
-            _ if recording => ("Type Keys".into(), Chip::Keys),
-            Some(keys) => (keys.into(), Chip::Keys),
-            None => ("None".into(), Chip::None),
+        let shown = user.shown_keys(command);
+        // Chrome's Alt keys that follow a key off the Mac, as Alt+Left does ⌘←, which only change
+        // with it.
+        let twins = |chip: usize| {
+            let key = shown.get(chip).and_then(|keys| keys.first());
+            (key.map(|key| shell::chrome_twins(key))
+                .unwrap_or_default()
+                .into_iter())
+            .map(|twin| self.chip(shell::pressed_label(twin).into(), Chip::Fixed))
+            .map(IntoElement::into_any_element)
         };
+        if !shell::rebindable(command) {
+            let chips = (0..shown.len()).flat_map(|chip| {
+                let keys = shell::keystroke_label(shown[chip][0]).into();
+                std::iter::once(self.chip(keys, Chip::Fixed).into_any_element()).chain(twins(chip))
+            });
+            return div()
+                .flex()
+                .items_center()
+                .gap(px(CHIP_GAP))
+                .children(chips.collect::<Vec<_>>())
+                .into_any_element();
+        }
         let said = |text: SharedString| div().text_color(look.detail).child(text);
         let refused = (self.refused.as_ref())
             .filter(|(refused, _)| *refused == command)
@@ -4781,22 +4948,42 @@ impl Settings {
                 .child(self.drawn(format!("restore {}", command.key_name())))
                 .on_click(cx.listener(move |settings, _, _, cx| settings.restore(command, cx)))
         });
-        let id = SharedString::from(command.key_name());
-        let chip = stop_chip(look, self.base(), id, name, keys, kind, self.a11y)
-            .when(recording, |chip| {
-                chip.text_color(accent).border_1().border_color(accent)
-            })
-            .on_click(cx.listener(move |settings, _, window, cx| {
-                settings.start_recording(command, window, cx)
-            }))
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(move |settings, event: &MouseDownEvent, window, cx| {
-                    settings.choose_preference(command, event.position, window, cx)
-                }),
-            )
-            .relative()
-            .child(self.drawn(format!("shortcut {}", command.key_name())));
+        // A chip each key, None when there's none, each recording only its own key. The first's
+        // names are the command's, as check.sh clicks them.
+        let chips = (0..shown.len().max(1)).flat_map(|chip| {
+            let recording = self.recording == Some((command, chip));
+            let (keys, kind) = match shown.get(chip) {
+                _ if recording => ("Type Keys".into(), Chip::Keys),
+                Some(keys) => (shell::keystroke_label(keys[0]).into(), Chip::Keys),
+                None => ("None".into(), Chip::None),
+            };
+            let (id, drawn) = match chip {
+                0 => (
+                    command.key_name().to_string(),
+                    command.key_name().to_string(),
+                ),
+                _ => (
+                    format!("{}-{}", command.key_name(), chip + 1),
+                    format!("{} {}", command.key_name(), chip + 1),
+                ),
+            };
+            let shown = stop_chip(look, self.base(), id, name, keys, kind, self.a11y)
+                .when(recording, |chip| {
+                    chip.text_color(accent).border_1().border_color(accent)
+                })
+                .on_click(cx.listener(move |settings, _, window, cx| {
+                    settings.start_recording(command, chip, window, cx)
+                }))
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |settings, event: &MouseDownEvent, window, cx| {
+                        settings.choose_preference(command, event.position, window, cx)
+                    }),
+                )
+                .relative()
+                .child(self.drawn(format!("shortcut {drawn}")));
+            std::iter::once(shown.into_any_element()).chain(twins(chip))
+        });
         div()
             .flex()
             .items_center()
@@ -4804,7 +4991,7 @@ impl Settings {
             .children(refused)
             .children(preferred)
             .children(restore)
-            .child(chip)
+            .children(chips.collect::<Vec<_>>())
             .into_any_element()
     }
 
@@ -5013,25 +5200,33 @@ impl Settings {
         );
     }
 
-    /// Takes the next keys pressed for `command`, or stops if it's taking them already.
-    fn start_recording(&mut self, command: Command, window: &mut Window, cx: &mut Context<Self>) {
+    /// Takes the next keys pressed for `command`'s `chip`th chip, or stops if it's taking them
+    /// already.
+    fn start_recording(
+        &mut self,
+        command: Command,
+        chip: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.refused = None;
-        self.recording = match self.recording == Some(command) {
+        self.recording = match self.recording == Some((command, chip)) {
             true => None,
             false => {
                 // check.sh waits for this line.
                 log!("browser: shortcut recording {}", command.key_name());
-                Some(command)
+                Some((command, chip))
             }
         };
         window.focus(&self.focus, cx);
         cx.notify();
     }
 
-    /// Gives the command being recorded `keystroke`, unless it's escape, which leaves its keys,
-    /// or ⌫, which takes them away. Keys that can't be its stay recording, saying why.
+    /// Gives the command being recorded `keystroke` in place of the chip's key, unless it's
+    /// escape, which leaves it, or ⌫, which takes it away. Keys that can't be its stay
+    /// recording, saying why.
     fn record(&mut self, keystroke: &Keystroke, cx: &mut Context<Self>) {
-        let Some(command) = self.recording else {
+        let Some((command, chip)) = self.recording else {
             return;
         };
         cx.stop_propagation();
@@ -5046,7 +5241,8 @@ impl Settings {
             "backspace" if plain => Ok(Vec::new()),
             _ => shell::recorded(keystroke),
         };
-        let set = keys.and_then(|keys| shell::change_keys(cx, |user| user.set(command, keys)));
+        let set =
+            keys.and_then(|keys| shell::change_keys(cx, |user| user.set_key(command, chip, keys)));
         match set {
             Ok(_) => {
                 self.recording = None;
@@ -5663,10 +5859,18 @@ fn command_name(command: Command) -> &'static str {
         .unwrap_or("another command")
 }
 
-/// The keys a Shortcuts row's chip shows, which the search finds it by.
+/// The keys a Shortcuts row's chips show, a line each, which the search finds it by.
 fn keys_label(keys: &Keys, cx: &App) -> Option<String> {
     match keys {
-        Keys::Of(command) => shell::user_keys(cx).label(*command),
+        Keys::Of(command) => {
+            let shown = shell::user_keys(cx).shown_keys(*command);
+            let labels = shown.iter().flat_map(|chip| {
+                let twins = shell::chrome_twins(chip[0]).into_iter();
+                std::iter::once(shell::keystroke_label(chip[0]))
+                    .chain(twins.map(shell::pressed_label))
+            });
+            Some(labels.collect::<Vec<_>>().join("\n")).filter(|labels| !labels.is_empty())
+        }
         Keys::FavoritesNumbered | Keys::LastTabNinth => None,
         _ => keys.fixed(),
     }

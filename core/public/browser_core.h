@@ -520,6 +520,33 @@ typedef struct bc_cast_device {
 } bc_cast_device;
 
 
+// Why the core didn't do an agent's call, for agent code to decide on: the words that come with it
+// are for the agent and the user to read, and may change (#3702). Only what agent code decides or
+// sorts on has a value; a call done, or failed otherwise, is BC_AGENT_FAILURE_NONE.
+typedef enum bc_agent_failure {
+  BC_AGENT_FAILURE_NONE = 0,
+  // An action no agent may do, such as devtools, or one there's none of.
+  BC_AGENT_FAILURE_ACTION = 1,
+  // A tab id from before ilo last started.
+  BC_AGENT_FAILURE_RESTARTED = 2,
+  // The tab isn't in the agent's own Space.
+  BC_AGENT_FAILURE_NOT_ITS_SPACE = 3,
+  // The user has the tab until they hand it back.
+  BC_AGENT_FAILURE_HELD = 4,
+  // The user is pointing at the tab's page.
+  BC_AGENT_FAILURE_POINTING = 5,
+  // The tab shows its page in the system's engine.
+  BC_AGENT_FAILURE_SYSTEM_ENGINE = 6,
+  // The tab's page, or the one it was to go to, isn't an http(s) page.
+  BC_AGENT_FAILURE_NOT_WEB_PAGE = 7,
+  // The tab's first http(s) page was still loading when the action stopped waiting for it.
+  BC_AGENT_FAILURE_LOADING = 8,
+  // The element is a password field, which agents never type in.
+  BC_AGENT_FAILURE_PASSWORD_FIELD = 9,
+  // The select has no option with the text asked for.
+  BC_AGENT_FAILURE_NO_OPTION = 10,
+} bc_agent_failure;
+
 // An agent's call the core checked, for the activity log (bc_agent_may_act).
 typedef struct bc_agent_activity {
   // The agent's id, as its client gives it.
@@ -529,6 +556,8 @@ typedef struct bc_agent_activity {
   const char* action;
   // Why the core refused it, for the user and the agent to read, or empty if the agent may act.
   const char* refused;
+  // A bc_agent_failure value, BC_AGENT_FAILURE_NONE if the agent may act.
+  int failure;
 } bc_agent_activity;
 
 // The answer to an agent's HTTP request (bc_agent_request, agent_request_done).
@@ -543,7 +572,27 @@ typedef struct bc_agent_response {
   bool cut;
   // Why it couldn't be sent, or broke off, for the agent to read, or null.
   const char* error;
+  // With |error|, a bc_agent_failure value, else BC_AGENT_FAILURE_NONE.
+  int failure;
 } bc_agent_response;
+
+// How a saved read ended (bc_profile_read, profile_read_done).
+typedef struct bc_read_answer {
+  // The HTTP status, such as 200 or 401, or 0 if none came.
+  int status;
+  // The address that answered, after redirects on the asked address's own origin, or "".
+  const char* url;
+  // A redirect to another origin, which the read told and didn't follow, or null.
+  const char* redirect;
+  // The body's MIME type, or "".
+  const char* type;
+  // The body, |size| bytes, not NUL-terminated, the first part of it with |cut|.
+  const char* body;
+  size_t size;
+  bool cut;
+  // Why it wasn't sent, or broke off, or null.
+  const char* error;
+} bc_read_answer;
 
 // What fills a Live Folder (bc_folder_live_create, #2979): 0 for a plain folder.
 // The pull requests waiting on the review of the user signed in to GitHub in the Space's profile,
@@ -849,6 +898,73 @@ typedef struct bc_sync_activity {
   int refused;
   int refused_kind;
 } bc_sync_activity;
+
+// A shared link (#680): a folder, a Space's pinned tabs and folders, or chosen tabs, as a list of
+// their pages that anyone with the link can open, in any browser, on the account's ilo server
+// (ilo-server's docs/protocol.md, Shares). The core makes the snapshot and seals it with a key of
+// its own, which goes in the link's fragment. The server gets that key only inside the link's entry
+// in the account's list, sealed under a key derived from the account's secret, which the server
+// doesn't have, so another of the account's devices can list the link and copy it. The server reads
+// neither the snapshot nor the key. A snapshot holds titles, http(s) addresses without their user
+// and password, the folders, a Space's name, colour and icon, and small favicons, and nothing of
+// the profile: no cookie, no history, no other address. All of it is the user's alone: agents get
+// no share calls, an agent's Space can't be shared, and a private window's tabs can't be.
+#define BC_SHARE_FOLDER 0
+#define BC_SHARE_SPACE 1
+#define BC_SHARE_TABS 2
+
+// Why a share, an unshare or the list didn't go as asked, in share_made, unshared and
+// shares_listed.
+#define BC_SHARE_PROBLEM_NONE 0
+// The account isn't syncing (BC_SYNC_ON), which a link needs, as the account owns it.
+#define BC_SHARE_PROBLEM_SIGNED_OUT 1
+// None of its tabs has an http(s) address.
+#define BC_SHARE_PROBLEM_EMPTY 2
+// It holds more than a link takes: over 5,000 tabs and folders together, folders more than 8 deep,
+// or over the server's size even with every favicon left out.
+#define BC_SHARE_PROBLEM_TOO_BIG 3
+// The account has as many links as its server keeps, or shared as many as it takes in an hour.
+#define BC_SHARE_PROBLEM_TOO_MANY 4
+// The server couldn't be reached, didn't answer within 30 seconds, or refused. It can be tried
+// again.
+#define BC_SHARE_PROBLEM_SERVER 5
+
+// One of the account's links, as Settings › Sync lists it. Strings are UTF-8.
+typedef struct bc_share {
+  // The link's id, for bc_unshare.
+  const char* id;
+  // The whole link, its key in its fragment, which Copy Link copies. Nothing of a share goes in a
+  // log line, in any build, the core's or the app's: not its link, key or id, nor a title or an
+  // address in it.
+  const char* link;
+  // A BC_SHARE_ kind.
+  int kind;
+  // The folder's or the Space's name when it was last shared; for chosen tabs, their Space's.
+  const char* title;
+  // The tabs and folders it holds.
+  size_t tabs;
+  size_t folders;
+  // A Space's colour, 0xRRGGBB, if |has_color|, and its icon, an emoji, or "".
+  bool has_color;
+  uint32_t color;
+  const char* icon;
+  // When it was last shared, in milliseconds since the Unix epoch.
+  double shared_at;
+} bc_share;
+
+// A link the user opened, in tab_share_found: what adding it adds. Strings are UTF-8.
+typedef struct bc_share_found {
+  // A BC_SHARE_ kind: a Space adds as a new Space, a folder or chosen tabs as a folder.
+  int kind;
+  const char* title;
+  // The server's host the link is on, such as "sync.example.org", which the card names.
+  const char* host;
+  size_t tabs;
+  size_t folders;
+  bool has_color;
+  uint32_t color;
+  const char* icon;
+} bc_share_found;
 
 // What the app gives the core when it starts Chromium. Any callback may be null, and a string it's
 // passed lasts only for the call.
@@ -1313,7 +1429,13 @@ typedef struct bc_host {
   // FILE_FIELD's is a JSON object of its own: the "field" for bc_file_field_choose, the field's
   // accessible name in "label", "" if it has none, the "site" whose frame it's in, which gets the
   // file and may not be the tab's, without "www.", and "many": true if the user may pick several.
-  void (*agent_page_done)(void* context, bc_id tab, uint64_t request, const char* text, bool error);
+  // With |error|, |failure| is a bc_agent_failure value, else BC_AGENT_FAILURE_NONE.
+  void (*agent_page_done)(void* context,
+                          bc_id tab,
+                          uint64_t request,
+                          const char* text,
+                          bool error,
+                          int failure);
   // The element bc_agent_page's |request| for |tab| is about to click or type in, scrolled into
   // view: its box in points from the top-left of the tab's page view, for the agent's pointer.
   void (*agent_page_element)(void* context, bc_id tab, uint64_t request, bc_rect box);
@@ -1545,9 +1667,38 @@ typedef struct bc_host {
                             const char* mime,
                             const uint8_t* bytes,
                             size_t size);
+  // What bc_share_make came to, |request| its answer, once: |share| the link, which the app puts
+  // on the clipboard, with |problem| BC_SHARE_PROBLEM_NONE, else null. |left_out| tabs weren't put
+  // in, as their addresses aren't http(s). |replaced| when the account had a link for the same
+  // folder or Space, which now shows what it holds, at the same address. The user's alone: agents
+  // hear none. The strings last only for the call.
+  void (*share_made)(void* context,
+                     uint64_t request,
+                     const bc_share* share,
+                     size_t left_out,
+                     bool replaced,
+                     int problem);
+  // The account's links, newest first, |count| of them, after bc_share_list and after each
+  // bc_share_make and bc_unshare that went through, or none with |problem| if the server couldn't
+  // say. The user's alone: agents hear none. The strings last only for the call.
+  void (*shares_listed)(void* context, const bc_share* shares, size_t count, int problem);
+  // The user opened a shared link in |tab|, which the core has opened in place of the server's
+  // page (bc_tab_answer_share): offer to add |found| over the tab's page while the tab shows, and
+  // answer with bc_tab_answer_share. It comes again with null once the offer goes: answered, or
+  // the tab navigated or closed. The app answers no once it shows another tab in the tab's place,
+  // as the offer doesn't come back. Once a load. Never in a private window or an agent's tab. The
+  // user's alone: agents hear none.
+  void (*tab_share_found)(void* context, bc_id tab, const bc_share_found* found);
+  // What bc_unshare |id| came to, once: BC_SHARE_PROBLEM_NONE when the server deleted the link or
+  // had no such link, else why not, and the link still opens for anyone who has it. The user's
+  // alone: agents hear none. |id| lasts only for the call.
+  void (*unshared)(void* context, const char* id, int problem);
   // What came of bc_file_field_choose for |field|: a BC_FILE_FIELD_ |result|, and with PUT the
   // |count| of files that went in, else 0. Never a file's name or path.
   void (*file_field_done)(void* context, bc_id field, int result, int count);
+  // How |read| (bc_profile_read) ended, from a task of its own, once a call, and never once the
+  // app is quitting. |answer| lasts only for the call.
+  void (*profile_read_done)(void* context, uint64_t read, const bc_read_answer* answer);
 } bc_host;
 
 // Runs Chromium in this process with these arguments (Chromium's switches) and returns its exit
@@ -1810,13 +1961,15 @@ BC_EXPORT size_t bc_space_agent_name(bc_id space, char* name, size_t capacity);
 // timing, download folder, offers to save and saved data, and Clear Browsing Data) and any other
 // action are refused. Agent code calls it once for each call an agent makes on a tab, before
 // acting. If refused, copies why into |reason| as bc_space_name does, else an empty string: for a
-// tab id from before ilo last started, that it restarted. Either way, then agent_activity, for the
-// activity log.
+// tab id from before ilo last started, that it restarted. Sets |failure| to a bc_agent_failure
+// value, BC_AGENT_FAILURE_NONE if the agent may act, for agent code to decide on in place of
+// |reason|'s words. Either way, then agent_activity, for the activity log.
 BC_EXPORT bool bc_agent_may_act(const char* agent,
                                 bc_id tab,
                                 const char* action,
                                 char* reason,
-                                size_t capacity);
+                                size_t capacity,
+                                int* failure);
 
 // An agent's session with a tab, which the app shows as the agent at work there, lasts from the
 // first call bc_agent_may_act lets it make in the tab until one of these three ends it, each then
@@ -2084,6 +2237,21 @@ BC_EXPORT bool bc_profile_offers_to_save(bc_id profile, int what, bool* offers);
 // Has the profile offer to save |what|, or not, and returns whether it will: not for a profile
 // that isn't loaded, or one a policy sets.
 BC_EXPORT bool bc_profile_set_offers_to_save(bc_id profile, int what, bool offer);
+// Reads |url|, an http(s) address, with one GET on |profile|'s own session, with no tab, as the
+// site's own page would read it: with the profile's cookies for it and the site as the first
+// party, nothing taken from the HTTP cache or put in it, and no history. Cookies the answer sets
+// are saved. A redirect on |url|'s origin is followed; one to another origin, an http to https one
+// too, is told in the answer and not followed. Then profile_read_done with |read|, from a task of
+// its own, never inside this call, with up to |max_bytes| of the body, at most 4 MiB, after up to
+// |timeout_ms|, at most 30 s; never the headers. Refused, with an error, for a profile the core
+// didn't give, an address with a user name, password or fragment, anything but http(s), or no
+// size or time. A profile that isn't loaded is loaded first. The core sends nothing else: no
+// method, header or body is the caller's.
+BC_EXPORT void bc_profile_read(bc_id profile,
+                               uint64_t read,
+                               const char* url,
+                               size_t max_bytes,
+                               int64_t timeout_ms);
 // Copies the search engines the user picks the profile's default from, each "keyword\tname" on a
 // line of its own, UTF-8, into |engines| as bc_space_name does. Nothing for a profile that isn't
 // loaded, until its engines have, or while a policy or an extension picks its default.
@@ -4115,6 +4283,71 @@ BC_EXPORT void bc_sync_choose(int what, bool on);
 // BC_SYNC_SIGNED_OUT once the server has deleted it, or the status it had and
 // BC_SYNC_PROBLEM_SERVER if it couldn't.
 BC_EXPORT void bc_sync_delete_account(void);
+
+// Shared links (bc_share). Each call is the user's alone, while BC_SYNC_ON for those that reach
+// the server.
+
+// Counts what bc_share_make would put in a link of |kind| for |items|: |tabs|, |folders|, and the
+// tabs it would leave out (|left_out|) as their addresses aren't http(s), as the first share's
+// dialog says them. Returns false, counting nothing, for what can't be shared, as bc_share_make
+// says.
+BC_EXPORT bool bc_share_count(int kind,
+                              const bc_id* items,
+                              size_t count,
+                              size_t* tabs,
+                              size_t* folders,
+                              size_t* left_out);
+
+// Shares as a link, with BC_SHARE_FOLDER, the folder |items| holds alone, with what's in it; with
+// BC_SHARE_SPACE, the Space it holds alone, its pinned tabs and folders, never its Today tabs or
+// the favorites; with BC_SHARE_TABS, |count| tabs of one Space, as a list in their order. A folder
+// or a Space is the same one, by its sync node, on every device of the account and after a restart,
+// so sharing it again seals what it holds now under its link and key, and replaces what the link
+// shows; chosen tabs are a new link each time. A tab's split shares as its pages. A pinned tab
+// shares the address it's pinned at, a Today tab the one it shows. What it puts in a link stays
+// within what the core opens (bc_tab_answer_share), so a link ilo makes opens in ilo: a tab whose
+// address isn't http(s) or is over 8 KiB is left out and counted, a title is cut at 1,024 bytes,
+// and over 5,000 tabs and folders or 8 folders deep it's BC_SHARE_PROBLEM_TOO_BIG. Favicons go in
+// at most 4 KiB each as PNG, and leave first when the link would be too big, for the core or the
+// server. Then share_made with the returned request, from a task of its own, the snapshot sealed
+// off the UI thread. Returns 0, doing nothing, for an agent's Space or anything in it, a window's
+// own Space, as a private window's, a folder or tab that isn't, or tabs in more than one Space.
+BC_EXPORT uint64_t bc_share_make(int kind, const bc_id* items, size_t count);
+
+// Asks the server for the account's links. Then shares_listed.
+BC_EXPORT void bc_share_list(void);
+
+// Deletes the link |id| from the server, so it opens nothing from then on, on any device. What
+// someone already added from it stays theirs. Then unshared, and shares_listed once it went
+// through.
+BC_EXPORT void bc_unshare(const char* id);
+
+// How the core opens a shared link (tab_share_found). A main-frame navigation the user made in a
+// tab of a user's Space or of a Little ilo or Blank window's goes out as any does: typed, pasted, a
+// link clicked, or a link from another app. Not an agent's tab's, a private window's, or one a page
+// started without the user's gesture. Its response is a share's only if it carries Ilo-Share: v1
+// and the address is a link's: a path /s/ and a 22-character id, and a 43-character key in its
+// fragment. Any other navigation costs one look for that header on its response, and nothing on its
+// request. A share's response is stopped before it commits, so none of the server's page or its
+// script runs, and the core asks for /s/<id>/data, as a link card asks (bc_tab_link_card), with no
+// cookie, referrer or sign-in and sharing no cache with the user's browsing, but to whatever
+// address the link names, a server on the machine or the network included.
+// The core takes at most 1 MiB, inflates it to at most 4 MiB, and opens it with the key, off the UI
+// thread; it holds at most 5,000 tabs and folders together, 8 folders deep, each title at most
+// 1,024 bytes and each address at most 8 KiB and http(s), with any other left out, and each favicon
+// a PNG of at most 4 KiB, which only the engine's sandboxed image decoder reads. In the server's
+// page's place the core commits a page of its own at the link's address, as it does a page its ad
+// block blocks: the list, or why it can't be opened, such as it was unshared or its key doesn't
+// match. That page allows no script and has none of the server's origin, its cookies or its
+// storage. The link's address, its key included, is in the profile's history and in the tabs it
+// syncs, which only the user's account reads.
+// The user's answer to tab_share_found: |add| adds the link's folder or chosen tabs as a new folder
+// at the end of |space|'s pinned tabs, a Space of the user's in any profile, or its Space as a new
+// Space after the others, in the tab's profile, with its name, colour, icon, and its tabs pinned.
+// Adding the same link again adds another. Every tab it adds is unloaded and loads only when the
+// user opens it. Returns the folder or Space it added, or 0 for none, as when declined or for a tab
+// with no offer. Then space_changed, or spaces_changed for a new Space.
+BC_EXPORT bc_id bc_tab_answer_share(bc_id tab, bc_id space, bool add);
 
 // On Linux, the title of the window of Chromium's own with the keys in |window|
 // (bc_window_keyboard_in_child), such as a tab's dialog, copied into |title| as bc_space_name does,
