@@ -1604,6 +1604,7 @@ mod read_tests {
 
     /// In a window too short for the card to end above the sidebar's foot, its buttons are over
     /// the foot's controls and take the click: Save Read over the + answers it, and no menu opens.
+    /// Answered, the card goes and the + takes the same click again.
     #[gpui::test]
     fn the_buttons_are_over_the_foot_in_a_short_window(cx: &mut TestAppContext) {
         use crate::tokens::shell::permission::{BUTTON_HEIGHT, PADDING};
@@ -1639,6 +1640,21 @@ mod read_tests {
                 .iter()
                 .any(|call| call.contains("answer agent 7 Once")),
             "a click on Save Read at {save:?} didn't save the read; the host was asked: {asked:?}"
+        );
+        assert!(
+            host.menus.borrow().is_empty(),
+            "the click on Save Read also opened a menu: {:?}",
+            host.menus.borrow()
+        );
+        // Answered, the card goes, and the foot's + under where it was takes the same click.
+        shell.update(cx, |shell, cx| shell.set_agent_question(None, cx));
+        cx.run_until_parked();
+        cx.simulate_click(save, Modifiers::none());
+        cx.run_until_parked();
+        let menu = host.menus.borrow().last().cloned().unwrap_or_default();
+        assert!(
+            menu.iter().any(|(title, _)| title == "New Space…"),
+            "with the card answered, a click at {save:?} didn't open the +'s menu; menus: {menu:?}"
         );
     }
 

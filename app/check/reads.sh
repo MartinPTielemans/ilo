@@ -388,14 +388,41 @@ answer_card Dismiss
 send fullscreen
 expect '^browser: window left full screen$' "the window didn't leave full screen"
 
-# c: two uses of one read sent together reach the site one after the other.
+# c: two uses of one read sent together reach the site one after the other. One connection's
+# calls with no tab wait for each other in the server, so the second comes on a second connection,
+# as a second agent's would.
 proposed "$(data_read slow slow.json)" reads-card-slow
 answer_card Once
 case "$said" in "saved: "*) ;; *) fail "saving the slow read answered: $said" ;; esac
+rm -f "$out/reads2-in" "$out/reads2-out"
+mkfifo "$out/reads2-in" "$out/reads2-out"
+if windows; then
+  BROWSER_AGENT_TOKEN=$token windows_bridge "$bridge" "$socket" "$out/reads2-in" "$out/reads2-out" \
+    2>> "$out/reads-bridge.log" &
+else
+  BROWSER_AGENT_TOKEN=$token "$bridge" "$socket" < "$out/reads2-in" > "$out/reads2-out" \
+    2>> "$out/reads-bridge.log" &
+fi
+exec 6> "$out/reads2-in" 7< "$out/reads2-out"
+reads_second() {
+  perl -e 'alarm shift; my $line = "";
+    while (sysread STDIN, my $byte, 1) { $line .= $byte; last if $byte eq "\n" }
+    print $line; exit($line =~ /\n\z/ ? 0 : 1)' "${1:-30}" <&7
+}
+printf '%s\n' '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"check","version":"1"}}}' >&6
+reads_second > /dev/null || fail "the browser didn't answer the second connection's initialize"
+printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}' >&6
+from=$(wc -l < "$log")
 reads_send use_read '{"name":"slow"}'
-reads_send use_read '{"name":"slow"}'
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"use_read","arguments":{"name":"slow"}}}' >&6
 reads_answer 60 > /dev/null || fail "the first of two uses sent together got no answer"
-reads_answer 60 > /dev/null || fail "the second of two uses sent together got no answer"
+reads_second 60 > /dev/null || fail "the second of two uses sent together, on a second connection, got no answer"
+exec 6>&- 7<&-
+# Both uses reached the browser before the site answered either, or the step shows nothing.
+order=$(tail -n "+$((from + 1))" "$log" | grep -E 'calls use_read$|saved read [0-9]+ answered' | head -2 | tr '\n' '|')
+case "$order" in *"calls use_read|"*"calls use_read|") ;; *)
+  fail "the second use reached the browser after the first was answered, so the two weren't together: $order" ;;
+esac
 most=$(sed -n 's/^READS most //p' "$out/site.log" | tail -1)
 [ "$most" = 1 ] || fail "two uses of one read sent together reached the site $most at once"
 
