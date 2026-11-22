@@ -1039,7 +1039,8 @@ if [ "$(uname)" = Darwin ]; then
     *' HostPlateWindow '*)
       fail "a click on the alert over the toast's plate went to the plate: $went" ;;
   esac
-  ! logged '^browser: toast hidden$' "$toast_up" ||
+  # The press on the alert takes the pointer off the toast, which then goes, its time run out.
+  ! since "$toast_up" | sed '/^browser: drive click went to /q' | grep -q '^browser: toast hidden$' ||
     fail "the toast went before the click on the alert over it, so the step showed nothing"
   over_toast=${went#browser: drive click went to }
   answer return accept alerted

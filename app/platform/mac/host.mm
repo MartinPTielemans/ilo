@@ -416,10 +416,14 @@ void StripTint(CALayer* layer) {
 }
 
 // A press on the plate is the pointer's first word there with the real pointer, which can land
-// with no move first, so the window under it hears it left as from a move.
+// with no move first, so the surface hears it come as from a move, then the window under it that
+// it left. In that order, as a card the pointer isn't on yet goes once its row is left, before the
+// release that makes the click (#3644).
 - (void)mouseDown:(NSEvent*)event {
   self.pressed = YES;
   [self watch];
+  const NSPoint at = [self.window convertPointToScreen:event.locationInWindow];
+  [self.target mouseMoved:[self surfaceEvent:event type:NSEventTypeMouseMoved at:at]];
   [self tellParentLeft:event];
   [self.target mouseDown:[self surfaceEvent:event]];
 }

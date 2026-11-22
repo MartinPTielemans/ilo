@@ -241,7 +241,8 @@ else
       size=$(grep '^browser: plate window toast at ' "$log" | tail -1 | cut -d' ' -f7 | tr -d ,)
       sed -n '/^AXWindows:/,/^hit at /p' "$toast_windows" | grep -q " $size\$" &&
         fail "the toast's plate window, $size, is one of the app's windows to $screen_reader: $toast_windows"
-      grep -q "^hit at .*: $button \"Stop\"\$" "$toast_windows" ||
+      # Its role and name, which VoiceOver reads: the toast's buttons have AXUnknown for subrole.
+      grep -q "^hit at .*: ${button%/*}/[^ ]* \"Stop\"\$" "$toast_windows" ||
         fail "$screen_reader's hit test at the trace's Stop didn't find its button: $toast_windows"
       send click $stop
       expect '^browser: trace stopped$' "Stop didn't stop the trace"
