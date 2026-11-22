@@ -3522,10 +3522,12 @@ impl Agents {
             _ => host,
         };
         let files = if many { "files" } else { "a file" };
-        act.what = match label.is_empty() {
-            true => format!("add {files} to a page on {site}"),
-            false => format!("add {files} to “{label}” on {site}"),
-        };
+        // As on the tab's other actions, its card shows the site apart from the label (#3836):
+        // the browser's, the field frame's that gets the file, never the page's words.
+        act.say(&site, |on| match label.is_empty() {
+            true => format!("add {files} to a page{on}"),
+            false => format!("add {files} to “{label}”{on}"),
+        });
         act.file = Some(FileField { id, label, many });
         let agent = self.agent_name(&act.agent);
         let question = Question {
@@ -3533,6 +3535,7 @@ impl Agents {
             agent: agent.clone(),
             from: act.agent.clone().into(),
             what: act.what.clone().into(),
+            asks: act.asks.clone().into(),
             why: format!("You choose the file. {agent} sees only what the page shows of it.")
                 .into(),
             site: site.clone().into(),

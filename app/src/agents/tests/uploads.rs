@@ -144,6 +144,8 @@ fn the_card_names_the_field_and_how_many_files(cx: &mut TestAppContext) {
     for (described, what, many) in cases {
         let (_answer, question) = asked(&agents, &browser, described.clone(), cx);
         assert_eq!(question.what, what);
+        // The card's sentence is the same without the site, which it shows apart (#3836).
+        assert_eq!(question.asks, what.replace(" on example.com", ""));
         assert_eq!(
             question.why,
             "You choose the file. Claude Code sees only what the page shows of it."
