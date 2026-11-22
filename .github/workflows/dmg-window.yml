@@ -69,8 +69,23 @@ jobs:
             dark=false
             [ "$mode" = dark ] && dark=true
             osascript -e "tell application \"System Events\" to tell appearance preferences to set dark mode to $dark"
+            old=$(pgrep -x Finder || true)
             killall Finder || true
-            until pgrep -x Finder > /dev/null; do sleep 0.5; done
+            # The open waits until the Finder that was has gone and a new one answers an Apple
+            # event: one that only has a process yet turns LaunchServices' open away with -600.
+            deadline=$((SECONDS + 60))
+            for pid in $old; do
+              while kill -0 "$pid" 2> /dev/null; do
+                [ "$SECONDS" -lt "$deadline" ] || { echo "::error::Finder didn't quit in 60 s"; exit 1; }
+                sleep 0.2
+              done
+            done
+            until osascript -e 'with timeout of 5 seconds' \
+              -e 'tell application "Finder" to get name of startup disk' -e 'end timeout' > /dev/null 2>&1; do
+              [ "$SECONDS" -lt "$deadline" ] ||
+                { echo "::error::Finder didn't answer an Apple event in 60 s after its restart"; exit 1; }
+              sleep 0.5
+            done
             open "$volume"
             out=$RUNNER_TEMP/out/window-$mode.png
             last=
