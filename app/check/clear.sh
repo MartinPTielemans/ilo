@@ -1633,8 +1633,10 @@ EOF
     "Safari's engine's request after Delete for all time carried a cookie" "^GET safari 127.0.0.1:$port/session "
 fi
 send key w cmd
-exec 3>&- 5>&-
+# Quits before cdp.py's pipe closes: the browser ends by itself as the pipe goes, and a quit
+# asked then finds it ending, which the Mac answers with an error (#3870).
 quit
+exec 5>&-
 rm -rf "$scratch"
 # A page that asks for Widevine on the user's own click moves to Safari's engine by itself, its
 # note saying so (#3593), where the pages above ask as they load, which only brings the note. At
@@ -1658,6 +1660,9 @@ if [ "$drm_done" = "Safari's engine" ]; then
   expect "^browser: copied [0-9]* cookies and [0-9]* storage items for localhost into the system's engine\$" \
     "the tab moved on the click isn't in Safari's engine"
   expect "^browser: page $tab needs moved" "the note didn't say the tab moved to Safari's engine"
+  # The note says so while Safari's engine is still loading the page, so the capture waits for the
+  # page to say it has painted there, or it pictures the reload.
+  expect "^browser: title $tab press ready\$" "the page moved to Safari's engine didn't say it had painted there"
   ../tools/window-screenshot.sh "$pid" "$out/drm-moved.png" || fail "no window to capture"
   exec 3>&-
   quit

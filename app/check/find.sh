@@ -370,48 +370,61 @@ expect '^browser: command javascript-console via ui$' \
   "the View menu's JavaScript Console didn't reach the UI"
 await_views 2 "after JavaScript Console"
 # In DevTools' console, ⌘A, ⌘C and ⌘V are the console's: ⌘C copies its text to the run's own
-# pasteboard, and ⌘V pastes it, which a second copy reads. The console's prompt takes the keyboard
-# once DevTools have loaded, so the first copy is tried until it has. On a new profile Chromium's
-# guard against pasted scams refuses the first paste until "allow pasting" is typed; where it's
-# off already, ↩ runs those words as a script that fails, and the paste reads the same. $1 says
-# where DevTools are, docked or undocked.
+# pasteboard, and ⌘V pastes it, which a second copy reads. The console copies once its renderer has
+# the keys, after the driver's done with them, so a read straight after ⌘C can come before the
+# copy, and each copy is tried until the pasteboard holds it; the first is also tried until the
+# console's prompt has the keyboard, once DevTools have loaded. On a new profile Chromium's guard
+# against pasted scams refuses the first paste until "allow pasting" is entered as a line of its
+# own; where it's off already, ↩ runs those words as a script that fails, and the paste reads the
+# same. $1 says where DevTools are, docked or undocked.
 console_keys() {
-  local word=$1-copy copied= pasted=
-  for _ in $(seq 50); do
-    send key a cmd
-    send type "$word"
-    send key a cmd
-    send key c cmd
-    holds "$word" && copied=1 && break
-  done
-  [ -n "$copied" ] || fail "⌘C in $1 DevTools didn't copy the console's text"
+  local word=$1-copy
+  console_copies "$word" || fail "⌘C in $1 DevTools didn't copy the console's text"
   send key v cmd
-  send key a cmd
-  send type "allow pasting"
+  console_copies "allow pasting" ||
+    fail "⌘C in $1 DevTools didn't copy \"allow pasting\" typed in the console"
   send key return
-  # The console copies once its renderer has the keys, after the driver's done with them, so a
-  # read straight after ⌘C can come before the copy: the second copy is tried until it holds the
-  # paste too. Where the guard is off, ↩ runs the line only once the console has checked it's
-  # whole, which can be after the keys typed next, so the line it runs and clears can take them:
-  # each try types them again, and copies the word again if the paste's source went with them.
+  # ↩ runs the line only once the console has checked it's whole, which can be after keys typed
+  # next, and the line it runs and clears takes them with it (#3907). So nothing is typed until a
+  # copy shows the prompt has let go of the line.
+  console_ran || {
+    ../tools/window-screenshot.sh "$pid" "$out/devtools-$1-enter.png" all || true
+    fail "↩ in $1 DevTools didn't run \"allow pasting\": the console's prompt still held it,"\
+" see $out/devtools-$1-enter.png"
+  }
+  console_copies "$word" || fail "⌘C in $1 DevTools didn't copy the console's text again"
+  send key a cmd
+  send type pasted-
+  send key v cmd
   for _ in $(seq 50); do
     send key a cmd
-    send type pasted-
-    send key v cmd
+    send key c cmd
+    holds "pasted-$word" && return 0
+  done
+  ../tools/window-screenshot.sh "$pid" "$out/devtools-$1-paste.png" all || true
+  fail "⌘V in $1 DevTools didn't paste in the console, see $out/devtools-$1-paste.png"
+}
+# Types $1 in the console's prompt in place of what it holds, until a copy of it is on the
+# pasteboard.
+console_copies() {
+  for _ in $(seq 50); do
+    send key a cmd
+    send type "$1"
     send key a cmd
     send key c cmd
-    holds "pasted-$word" && pasted=1 && break
-    holds "$word" || {
-      send key a cmd
-      send type "$word"
-      send key a cmd
-      send key c cmd
-    }
+    holds "$1" && return 0
   done
-  [ -n "$pasted" ] || {
-    ../tools/window-screenshot.sh "$pid" "$out/devtools-$1-paste.png" all || true
-    fail "⌘V in $1 DevTools didn't paste in the console, see $out/devtools-$1-paste.png"
-  }
+  return 1
+}
+# The console has run or taken the line "allow pasting", which a copy put on the pasteboard
+# before ↩: a copy of its prompt no longer holds it.
+console_ran() {
+  for _ in $(seq 50); do
+    send key a cmd
+    send key c cmd
+    holds "allow pasting" || return 0
+  done
+  return 1
 }
 # The run's pasteboard holds $1, as the driver reads GPUI's. On Wayland a client hears of the
 # selection only while it has the keyboard, which DevTools' page has here. So there GPUI's reads

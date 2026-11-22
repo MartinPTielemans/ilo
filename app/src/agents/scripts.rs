@@ -86,6 +86,7 @@ impl Agents {
         let entry = Activity {
             at: SystemTime::now(),
             agent: AGENT.into(),
+            connection: 0,
             action: SharedString::from(action.to_string()),
             site: SharedString::from(site.to_string()),
             target: SharedString::default(),

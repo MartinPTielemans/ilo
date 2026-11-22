@@ -1,25 +1,29 @@
-"""The mcp run's agent of ten cases (check/mcp.sh): an MCP client, through a bridge of its own,
-that does what an agent does to move ten cases of a web toolkit to Closed, each the same form on a
+"""The mcp run's agent of ten cases (check/mcp.sh): the check's MCP client, on its own connection,
+which mcp.sh hands it over pipes on stdin and stdout, so the cases are steps of the client's one
+card. Its last message is a ping with the id "cases-done", whose answer tells mcp.sh's relay that
+the answers after it are mcp.sh's again. It does
+what an agent does to move ten cases of a web toolkit to Closed, each the same form on a
 page of its own: it opens the ten pages in one turn, then takes each step on all ten in one turn,
 one call a tab, as the server's instructions tell an agent to, and the server answers a turn's
 calls at once (#1476). The pages are tabs in the agent's Space, which the user isn't looking at.
 
-  python3 -I check/cases.py BRIDGE SOCKET URL
+  python3 -I check/cases.py URL < ANSWERS > REQUESTS
 
-BRIDGE is the bridge's path, SOCKET the server's, URL the case page's address, to which each tab
-adds ?n=1 to ?n=10; the agent's token is in BROWSER_AGENT_TOKEN. A case's status is a scripted
+URL is the case page's address, to which each tab adds ?n=1 to ?n=10. The connection is past its
+initialize already. A case's status is a scripted
 dropdown, as such toolkits draw them: a button whose list opens on the page's next frame and closes
 once focus leaves it. Save saves on a timer, as a request would. A tab that draws no frames, or
 loses focus as the next tab is acted on, fails its step, and a timer a hidden page throttles too
-far fails its wait. It prints a line for each turn, and last:
+far fails its wait. It prints a line for each turn on standard error, as standard output is the connection's, and
+last:
   cases: 10 cases in TURNS turns of CALLS calls, SECONDS s
-It fails with why, on standard error, and exit status 1.
+It fails with why, there too, and exit status 1.
 """
 
+import atexit
 import json
 import os
 import re
-import subprocess
 import sys
 import time
 
@@ -31,24 +35,25 @@ def fail(why):
     sys.exit(1)
 
 
-bridge_path, socket, url = sys.argv[1:4]
-bridge = subprocess.Popen(
-    [bridge_path, socket], stdin=subprocess.PIPE, stdout=subprocess.PIPE, bufsize=0
-)
+url = sys.argv[1]
 pending = b""
 next_id = 10000
 
 
 def send(message):
-    bridge.stdin.write((json.dumps(message) + "\n").encode())
+    os.write(sys.stdout.fileno(), (json.dumps(message) + "\n").encode())
+
+
+# On every way out, failing ones too, so the relay never waits on an answer that isn't coming.
+atexit.register(send, {"jsonrpc": "2.0", "id": "cases-done", "method": "ping"})
 
 
 def read_answer():
     global pending
     while b"\n" not in pending:
-        chunk = os.read(bridge.stdout.fileno(), 65536)
+        chunk = os.read(sys.stdin.fileno(), 65536)
         if not chunk:
-            fail("the bridge closed")
+            fail("the connection closed")
         pending += chunk
     line, pending = pending.split(b"\n", 1)
     return json.loads(line)
@@ -85,14 +90,6 @@ def ref(outline, role, name):
     return found and found.group(1)
 
 
-send({
-    "jsonrpc": "2.0", "id": 1, "method": "initialize",
-    "params": {"protocolVersion": "2025-06-18", "capabilities": {},
-               "clientInfo": {"name": "cases", "version": "1"}},
-})
-read_answer()
-send({"jsonrpc": "2.0", "method": "notifications/initialized"})
-
 started = time.monotonic()
 turns = calls = 0
 
@@ -104,7 +101,7 @@ def timed(name, step, errors=False):
     turns += 1
     calls += len(step)
     print(f"cases: turn {turns} {name}, {len(step)} calls, {time.monotonic() - began:.1f} s",
-          flush=True)
+          file=sys.stderr, flush=True)
     return texts
 
 
@@ -154,7 +151,6 @@ timed("wait for Saved", [
     for tab in tabs
 ])
 took = time.monotonic() - started
-print(f"cases: {CASES} cases in {turns} turns of {calls} calls, {took:.1f} s", flush=True)
 turn([("close_tab", {"tab": tab}) for tab in tabs])
-bridge.stdin.close()
-bridge.wait(timeout=10)
+print(f"cases: {CASES} cases in {turns} turns of {calls} calls, {took:.1f} s", file=sys.stderr,
+      flush=True)

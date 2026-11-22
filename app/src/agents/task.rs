@@ -319,13 +319,17 @@ pub struct Writing {
     pub said: bool,
 }
 
-/// An outside agent's session: a client the user connected at work, on any of its connections,
-/// from its first call that opens or acts on a tab until its last connection closes, the user
-/// stops it, or IDLE passes. Its connections share its client's Space, rules and card.
+/// An outside agent's session: a client the user connected at work on one of its connections,
+/// from its first call there that opens or acts on a tab until that connection closes, the user
+/// stops it, or IDLE passes. A client's sessions share its Space and rules, and each has its own
+/// card; the `ilo` command's one spans its connections (`session_connection`).
 pub struct Session {
-    /// The agent's id, which its calls, its rules, its Space and its activity go by.
+    /// The agent's id, which its rules, its Space and its activity go by.
     pub agent: String,
-    /// Its pages: the tabs it opened or acted in, in that order.
+    /// The server's connection its calls come on, as `session_connection` has it.
+    pub connection: u64,
+    /// Its pages: the tabs it opened or acted in, in that order, but for one another session
+    /// under way has among its own.
     pub tabs: Vec<u64>,
     /// The orders it placed and the messages it sent, each once the user allowed it and it was
     /// done, for its receipt. For this run only, as the session is.
@@ -479,8 +483,9 @@ pub struct Tasks {
     /// The dismissed, newest last, for ⇧⌘T.
     pub(super) dismissed: VecDeque<String>,
     pub(super) next: u64,
-    /// The name each outside agent last gave, by its id, for its session's card.
-    pub(super) names: HashMap<String, SharedString>,
+    /// The name each outside agent gave on each of its connections (`session_connection`), by its
+    /// id and the connection, for that connection's session's card.
+    pub(super) names: HashMap<(String, u64), SharedString>,
     pub found: HashMap<Cli, Found>,
     pub(super) looking: bool,
     /// Whether ⌘T's ask has shown in this run, which learns again once.
@@ -716,7 +721,7 @@ impl Agents {
     fn on(&self, task: &Task) -> Option<u64> {
         match &task.session {
             Some(_) => task.trace.iter().rev().find_map(|step| step.did.tab),
-            None => self.current.get(&task.agent).copied(),
+            None => self.current.get(&(task.agent.clone(), 0)).copied(),
         }
     }
 
@@ -1332,7 +1337,7 @@ impl Agents {
             task.waiting = None;
             task.writing = None;
         }
-        self.forget_waiting(agent, cx);
+        self.forget_waiting(agent, None, cx);
         // What's ready may have changed.
         self.look_for_task_agents(cx);
         cx.notify();
@@ -1378,7 +1383,7 @@ impl Agents {
         task.state = State::Working;
         task.writing = None;
         _ = reply.send(ToolResult::text(format!("The user answered: {answer}")));
-        self.note(agent, "answered", "", "");
+        self.note(agent, 0, "answered", "", "");
         self.wait_for_answer(agent, cx);
         // The agent's next prompt, if one waited its turn.
         self.asked(cx);
@@ -1392,24 +1397,24 @@ impl Agents {
         if !matches!(task.state, State::Working | State::Asking { .. }) {
             return;
         }
-        task.state = State::Stopped;
-        task.ended = Some(SystemTime::now());
         task.asking = None;
         task.writing = None;
         task.waiting = None;
+        // A session's agent is its client's, whose calls under way the user stops, on each of its
+        // connections, as the agent path always has. Its Stop is logged before each of its
+        // sessions ends, this one too, so each one's record has it (session_stopped).
+        if let Some(session) = &task.session {
+            let client = session.agent.clone();
+            self.stop_agent(&client, cx);
+            cx.notify();
+            return;
+        }
+        task.state = State::Stopped;
+        task.ended = Some(SystemTime::now());
         if let Some(process) = task.process.as_mut() {
             process.interrupt();
         }
-        // A session's agent is its client's, whose calls under way the user stops, on each of its
-        // connections, as the agent path always has.
-        let driver = match &mut task.session {
-            Some(session) => {
-                session.idle = None;
-                session.agent.clone()
-            }
-            None => agent.to_string(),
-        };
-        self.stop_agent(&driver, cx);
+        self.stop_agent(agent, cx);
         cx.notify();
     }
 
@@ -1565,7 +1570,7 @@ impl Agents {
             }
             return;
         }
-        self.forget_waiting(agent, cx);
+        self.forget_waiting(agent, None, cx);
         self.doing.remove(agent);
         self.tokens_changed();
         if space && task.space != 0 {
@@ -1696,12 +1701,27 @@ impl Agents {
         if matches!(tool, "title" | "finish" | "run_steps") {
             return;
         }
-        let did = self.did(&call.agent, tool, &call.arguments, None, cx);
+        let did = self.did(
+            &call.agent,
+            call.connection,
+            tool,
+            &call.arguments,
+            None,
+            cx,
+        );
         self.trace(&key, call.id, did, call.at, cx);
     }
 
     /// A step of the run `call` on `tab`, starting now, which ends the step before it.
-    pub(super) fn trace_step(&mut self, agent: &str, call: u64, tab: u64, step: &Value, cx: &App) {
+    pub(super) fn trace_step(
+        &mut self,
+        agent: &str,
+        connection: u64,
+        call: u64,
+        tab: u64,
+        step: &Value,
+        cx: &App,
+    ) {
         let Some(key) = self.tracer(agent, call) else {
             return;
         };
@@ -1709,7 +1729,7 @@ impl Agents {
             .get("action")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        let did = self.did(agent, tool, step, Some(tab), cx);
+        let did = self.did(agent, connection, tool, step, Some(tab), cx);
         let now = Instant::now();
         let Some(task) = self.task_mut(&key) else {
             return;
@@ -1736,7 +1756,17 @@ impl Agents {
                 space != 0 && agents.browser.space_of(tab, cx) == space
             })
         };
-        let page = did.tab.filter(|&tab| in_space(self, tab));
+        // A page of another session under way stays its card's, though this one acts on it.
+        let others = |agents: &Self, tab: u64| {
+            (agents.tasks.tasks.iter()).any(|task| {
+                task.agent != key
+                    && task.state == State::Working
+                    && (task.session.as_ref()).is_some_and(|session| session.tabs.contains(&tab))
+            })
+        };
+        let page = did
+            .tab
+            .filter(|&tab| in_space(self, tab) && !others(self, tab));
         let Some(task) = self.task_mut(key) else {
             return;
         };
@@ -1783,9 +1813,11 @@ impl Agents {
     /// TITLE_KEPT characters, then written out as a request's text is, on one line (#3645);
     /// a different name sooner than RENAMING after the last is refused. It takes no tab and asks
     /// nothing, and stands only where a title does, never in a question (#3690).
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn name_task(
         &mut self,
         agent: &str,
+        connection: u64,
         call: u64,
         arguments: &Value,
         now: Instant,
@@ -1822,14 +1854,14 @@ impl Agents {
         };
         match named {
             Ok(()) => {
-                self.note(agent, "title", "", "");
+                self.note(agent, connection, "title", "", "");
                 _ = reply.send(ToolResult::text(match kept == text {
                     true => "The task has its name.".to_string(),
                     false => format!("The task has its name: “{kept}”."),
                 }));
             }
             Err(why) => {
-                self.note(agent, "title", "", why);
+                self.note(agent, connection, "title", "", why);
                 _ = reply.send(ToolResult::error(why));
             }
         }
@@ -1923,10 +1955,11 @@ impl Agents {
         }
     }
 
-    /// A client said hello: the name its sessions' cards show. One the user connected in
-    /// Settings › Agents by name has that; any other MCP client, the name it gives, as plain text,
-    /// unless it would pass for the browser, whose words the cards set beside an agent's.
-    pub(super) fn hello(&mut self, agent: &str, client: &str) {
+    /// A client said hello on `connection`: the name that connection's session's card shows. One
+    /// the user connected in Settings › Agents by name has that; any other MCP client, the name it
+    /// gives, as plain text, unless it would pass for the browser, whose words the cards set beside
+    /// an agent's.
+    pub(super) fn hello(&mut self, agent: &str, connection: u64, client: &str) {
         let given = super::request::plain(client);
         // Each of the `ilo` command's commands says hello, and its session keeps the name it
         // started with, as a client's does.
@@ -1944,19 +1977,46 @@ impl Agents {
             Some(known) => known.name().to_string(),
             None => return,
         };
-        self.tasks
-            .names
-            .insert(agent.into(), page::clip(&name, 60).into());
+        let name = page::clip(&name, 60).into();
+        self.tasks.names.insert((agent.into(), connection), name);
     }
 
-    /// The session under way of the call's client, on whichever of its connections, or, for a call
-    /// that opens or acts on a tab, a new one: its card shows from then. Its calls are its steps.
+    /// The client's `connection` closed: its name goes, but for the client's last, which shows
+    /// where no session's card has one (`agent_name`).
+    pub(super) fn goodbye(&mut self, agent: &str, connection: u64) {
+        let others = (self.tasks.names.keys()).any(|(each, on)| each == agent && *on != connection);
+        if others {
+            self.tasks.names.remove(&(agent.into(), connection));
+        }
+    }
+
+    /// The name the client gave last, on whichever of its connections.
+    pub(super) fn given_name(&self, agent: &str) -> Option<SharedString> {
+        (self.tasks.names.iter())
+            .filter(|((each, _), _)| each == agent)
+            .max_by_key(|((_, connection), _)| *connection)
+            .map(|(_, name)| name.clone())
+    }
+
+    /// The connection whose session's card has `tab` among its pages, of `agent`'s, for what its
+    /// page does with no call behind it: the newest's, or 0 for none.
+    pub(super) fn holder(&self, agent: &str, tab: u64) -> u64 {
+        (self.tasks.tasks.iter().rev())
+            .filter_map(|task| task.session.as_ref())
+            .find(|session| session.agent == agent && session.tabs.contains(&tab))
+            .map_or(0, |session| session.connection)
+    }
+
+    /// The session under way of the call's client on the call's connection, or, for a call that
+    /// opens or acts on a tab, a new one: its card shows from then. Its calls are its steps.
     fn session_for(&mut self, call: &super::Call, cx: &mut Context<Self>) -> Option<String> {
         // Only a client the user connected has sessions.
         Client::from_id(&call.agent)?;
         let live = (self.tasks.tasks.iter_mut()).find(|task| {
             task.state == State::Working
-                && (task.session.as_ref()).is_some_and(|session| session.agent == call.agent)
+                && (task.session.as_ref()).is_some_and(|session| {
+                    session.agent == call.agent && session.connection == call.connection
+                })
         });
         if let Some(task) = live {
             let session = task.session.as_mut().expect("a session, as found");
@@ -1971,12 +2031,16 @@ impl Agents {
         }
         self.tasks.next += 1;
         let key = format!("session-{}", self.tasks.next);
-        let name = self.agent_name(&call.agent);
+        let named = self.tasks.names.get(&(call.agent.clone(), call.connection));
+        let name = named
+            .cloned()
+            .unwrap_or_else(|| super::name(&call.agent).into());
         let space = self.space(&call.agent, cx);
         // check.sh reads this line.
         log!("browser: session {key} of agent {} as {name}", call.agent);
         let session = Session {
             agent: call.agent.clone(),
+            connection: call.connection,
             tabs: Vec::new(),
             orders: 0,
             messages: 0,
@@ -2087,14 +2151,24 @@ impl Agents {
                 .collect();
             // Its activity log: the entries of its agent, a session's client's or the task's own,
             // from when it started to when it ended, a run's steps each its own.
-            let (logged_as, answers) = match (&task.session, task.cli) {
-                (Some(session), _) => (session.agent.clone(), session.agent.clone()),
-                (None, Some(cli)) => (task.agent.clone(), super::task_answers(cli)),
-                (None, None) => (task.agent.clone(), task.agent.clone()),
+            // A session's, of its own connection's and its client's own, as a Stop's, its client's
+            // other connections being cards of their own.
+            let (logged_as, connection, answers) = match (&task.session, task.cli) {
+                (Some(session), _) => {
+                    let agent = session.agent.clone();
+                    (agent.clone(), session.connection, agent)
+                }
+                (None, Some(cli)) => (task.agent.clone(), 0, super::task_answers(cli)),
+                (None, None) => (task.agent.clone(), 0, task.agent.clone()),
             };
             let (from, to) = (task.started, task.ended.unwrap_or_else(SystemTime::now));
             let entries = (self.log.iter())
-                .filter(|entry| entry.agent == logged_as && entry.at >= from && entry.at <= to)
+                .filter(|entry| {
+                    entry.agent == logged_as
+                        && (entry.connection == connection || entry.connection == 0)
+                        && entry.at >= from
+                        && entry.at <= to
+                })
                 .flat_map(|entry| match entry.steps.is_empty() {
                     true => vec![entry],
                     false => entry.steps.iter().collect(),
@@ -2163,24 +2237,27 @@ impl Agents {
         }
     }
 
-    /// The client's last connection closed: its session under way is done.
-    pub(super) fn end_session(&mut self, agent: &str, cx: &mut Context<Self>) {
+    /// The client's `connection` closed: its session under way there is done.
+    pub(super) fn end_session(&mut self, agent: &str, connection: u64, cx: &mut Context<Self>) {
         let live = (self.tasks.tasks.iter()).find(|task| {
             task.state == State::Working
-                && (task.session.as_ref()).is_some_and(|session| session.agent == agent)
+                && (task.session.as_ref()).is_some_and(|session| {
+                    session.agent == agent && session.connection == connection
+                })
         });
         if let Some(key) = live.map(|task| task.agent.clone()) {
             self.session_done(&key, cx);
         }
     }
 
-    /// The user stopped the outside agent `agent`: its session under way is stopped.
+    /// The user stopped the outside agent `agent`: its sessions under way, on each connection,
+    /// are stopped.
     pub(super) fn session_stopped(&mut self, agent: &str) {
-        let live = (self.tasks.tasks.iter_mut()).find(|task| {
-            task.state == State::Working
+        let live = (self.tasks.tasks.iter_mut()).filter(|task| {
+            matches!(task.state, State::Working | State::Asking { .. })
                 && (task.session.as_ref()).is_some_and(|session| session.agent == agent)
         });
-        if let Some(task) = live {
+        for task in live {
             task.state = State::Stopped;
             task.ended = Some(SystemTime::now());
             if let Some(session) = &mut task.session {
@@ -2336,17 +2413,18 @@ impl Agents {
     /// longer live, as a client is once its last connection closes.
     fn command_gone(&mut self, agent: &str, cx: &mut Context<Self>) {
         if agent == Client::Command.id() && self.live.remove(agent) {
-            self.forget_waiting(agent, cx);
+            self.forget_waiting(agent, None, cx);
             self.browser.disconnected(agent, cx);
-            self.note(agent, "disconnected", "", "");
+            self.note(agent, 0, "disconnected", "", "");
         }
     }
 
     /// What a call or a run's step does, as its trace says it: on `tab`, else the tab it names,
-    /// else the agent's last.
+    /// else the one its connection used last.
     fn did(
         &self,
         agent: &str,
+        connection: u64,
         tool: &str,
         arguments: &Value,
         tab: Option<u64>,
@@ -2361,7 +2439,7 @@ impl Agents {
                 .to_string()
         };
         let tab = (tab.or_else(|| tools::tab_argument(arguments).ok().flatten()))
-            .or_else(|| self.current.get(agent).copied());
+            .or_else(|| self.current.get(&(agent.into(), connection)).copied());
         let url = tab
             .map(|tab| self.browser.tab(tab, cx).url.to_string())
             .unwrap_or_default();
@@ -2539,7 +2617,7 @@ impl Agents {
                     answers: buttons,
                 };
                 task.asking = Some((number, reply));
-                self.note(agent, "ask", "", "");
+                self.note(agent, 0, "ask", "", "");
             }
             "finish" => {
                 let result = text("result");
@@ -2593,7 +2671,7 @@ impl Agents {
                     tabs,
                 };
                 task.ended = Some(SystemTime::now());
-                self.note(agent, "finish", &site, "");
+                self.note(agent, 0, "finish", &site, "");
                 _ = reply.send(ToolResult::text(
                     "Done. The user sees your result. Stop here.",
                 ));

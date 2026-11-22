@@ -3047,6 +3047,14 @@ static CATransform3D ShrunkOverlay(const Overlay& overlay, NSView* container, do
   return CATransform3DTranslate(shrunk, -x, -y, 0);
 }
 
+// Takes |overlay|'s shadow off screen as the overlay goes; its show puts it back. At alpha 0 it
+// showed nothing but stayed ordered in over the page, over the panels that show there later, such
+// as the mini bar (#3871).
+static void TakeOffShadow(Overlay& overlay) {
+  [overlay.shadow.parentWindow removeChildWindow:overlay.shadow];
+  [overlay.shadow orderOut:nil];
+}
+
 // Grows |overlay| in about its growth point, its blur, drawing and shadow together, as NSPopover
 // does, with its shadow fading in alongside.
 static void GrowOverlay(Overlay& overlay) {
@@ -3105,6 +3113,7 @@ static void ShrinkOverlay(Overlay& overlay, NSWindow* parent) {
     [shadow.layer removeAnimationForKey:@"shrink"];
     [parent removeChildWindow:window];
     [window orderOut:nil];
+    TakeOffShadow(*shrinking);
   }];
   CAMediaTimingFunction* timing =
       [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseIn];
@@ -3315,7 +3324,7 @@ void host_hide_overlay(int index) {
   } else {
     [browser->window removeChildWindow:overlay->window];
     [overlay->window orderOut:nil];
-    overlay->shadow.alphaValue = 0;
+    TakeOffShadow(*overlay);
   }
   // Not when another browser window has the keyboard: the user went there, and taking it back
   // would leave that window main with the keys going to this one.
@@ -3487,6 +3496,7 @@ bool host_fold_overlay(int index,
         }
         [window.parentWindow removeChildWindow:window];
         [window orderOut:nil];
+        TakeOffShadow(*folding);
         window.alphaValue = 1;
         window.ignoresMouseEvents = NO;
       }];
@@ -4083,7 +4093,7 @@ void host_hide_site_controls(void) {
   g_site_controls_shown = false;
   [g_site_controls_over->window removeChildWindow:g_site_controls];
   [g_site_controls orderOut:nil];
-  g_site_controls_overlay.shadow.alphaValue = 0;
+  TakeOffShadow(g_site_controls_overlay);
   fprintf(stderr, "browser: site controls hidden\n");
 }
 

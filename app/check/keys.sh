@@ -1107,6 +1107,11 @@ none_since '^browser: command bar hidden$' || fail "escape while composing close
 [ "$marked" = none ] || fail "escape didn't cancel the composition: marked $marked"
 send type nihongo
 send key space
+# The driver ends a step whose timer is 2 s late with the key still queued, so the bar may draw the
+# conversion after the step's line: marked is read once it has.
+expect '^browser: command bar drew "日本語"$' "space didn't convert the composition in the command bar: \
+$(since | grep '^browser: command bar drew \|^browser: drive: ' | tail -4 | tr '\n' ' ')"
+send state
 [ "$marked" = 0,3 ] || fail "the command bar didn't take the conversion: marked $marked"
 ../tools/window-screenshot.sh "$pid" "$out/ime.png" || fail "no window to capture"
 committed=$((step + 1))
@@ -1244,6 +1249,7 @@ expect '^browser: command new-space via ui$' "New Space in the menu didn't run n
 expect "^browser: spaces $first [0-9]*\$" "New Space didn't make a second Space"
 second=$(grep '^browser: spaces' "$log" | tail -1 | cut -d' ' -f4)
 expect "^browser: space $second in " "the window didn't show the new Space"
+expect '^browser: field Space name has the keyboard$' "New Space's name didn't have the keyboard"
 send type two
 send key return
 expect "^browser: create space $second two\$" "return didn't name the new Space"

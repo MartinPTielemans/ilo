@@ -170,8 +170,10 @@ tab=$(today | cut -d' ' -f1)
 await "^browser: title $tab ad script " || fail "the probe didn't say whether the ad script loaded"
 send click $page_point
 if [ "$active" != 1 ]; then
-  exec 3>&- 5>&-
+  # Quits before cdp.py's pipe closes: the browser ends by itself as the pipe goes, and a quit
+  # asked then finds it ending, which the Mac answers with an error (#3870).
   quit
+  exec 5>&-
   echo "skip: adblock-parity. Browser wasn't the active app, so the page didn't get its keys."
   exit 0
 fi
@@ -206,8 +208,8 @@ done
 # would compare uBlock Origin with itself, where live sites alone make it look worse (#2284).
 engine_log='^browser: ad block engine \(loaded\|compiled\) in '
 if [ -n "$engine_switch" ] && ! grep -q "$engine_log" "$log"; then
-  exec 3>&- 5>&-
   quit
+  exec 5>&-
   rm -rf "$scratch"
   echo "skip all: no $engine engine in this build, so it blocked with uBlock Origin, which" \
     "adblock-parity measures"
@@ -418,8 +420,8 @@ if ! [ "$(uname)" = Darwin ]; then
   peak=$(python3 -I check/usage.py peak "$dir/memory.json" extension)
   [ -z "$peak" ] || memory="$memory, $owner at most $peak MiB"
 fi
-exec 3>&- 5>&-
 quit
+exec 5>&-
 rm -rf "$scratch"
 [ -s "$requests" ] || fail "DevTools recorded no requests"
 # What's wrong, if anything, as a here-document in a command substitution trips the Mac's bash 3.2.
