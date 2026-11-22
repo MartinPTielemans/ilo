@@ -322,10 +322,32 @@ await_load() {
 stage() {
   grep '^browser: quit: ' "$log" | tail -1 | cut -c16- | grep . || echo "none"
 }
+# Every thread's stack of the hung app <pid> on Linux, as text (#3876). gdb attaches for a moment
+# and prints each frame's function and library, with no argument's value, and writes no core. On CI
+# it installs gdb first and attaches through sudo, as Ubuntu lets a process trace only its children.
+hang_stacks() {
+  local as=
+  [ -z "${GITHUB_ACTIONS:-}" ] || as="sudo -n"
+  command -v gdb > /dev/null || [ -z "$as" ] ||
+    timeout 240 $as apt-get install -y -qq gdb > /dev/null 2>&1 ||
+    { timeout 120 $as apt-get update -qq && timeout 240 $as apt-get install -y -qq gdb; } \
+      > /dev/null 2>&1 || true
+  echo "The app's threads, with each one's state:"
+  for thread in /proc/"$1"/task/*; do
+    # The state follows the name in stat, which may hold spaces and ends at its last ")".
+    echo "${thread##*/} $(cat "$thread/comm" 2>/dev/null)" \
+      "$(sed 's/.*) //' "$thread/stat" 2>/dev/null | cut -d' ' -f1)"
+  done
+  command -v gdb > /dev/null || { echo "No gdb to read their stacks with."; return 0; }
+  timeout 120 $as gdb -batch -nx -iex 'set print frame-arguments none' \
+    -iex 'set print entry-values no' -p "$1" -ex 'thread apply all bt' 2>&1 |
+    grep -v -e 'during file-backed mapping note processing' -e '^\[New LWP' \
+      -e ': No such file or directory$'
+}
 # Waits up to $1 seconds (10) for the app to exit and checks that no Chromium process outlives it.
 # On the Mac, sample records the app's last 2 s before the limit in hang.txt, with what it said in
 # hang-sample.txt: started after the limit, it found no app to attach to when the app went just
-# then (#960).
+# then (#960). On Linux, hang_stacks writes its threads' stacks there, and the log shows them.
 exited() {
   # The driver's pipe goes with the app, so the next launch's is a new one: under Git Bash a native
   # app opening it while the last writer is still open reads that writer's pipe, which ends as
@@ -362,6 +384,11 @@ exited() {
       # Windows has no sample, but the windows the app has left say what's keeping it.
       ! windows || python3 -I check/app-windows.py list "$(cat "/proc/$pid/winpid")" \
         > "$out/hang.txt" 2>&1 || true
+      # The Flatpak's $pid is flatpak run's, outside the sandbox the app is in.
+      if [ "$(uname)" = Linux ] && [ -z "${BROWSER_FLATPAK:-}" ]; then
+        hang_stacks "$pid" > "$out/hang.txt" 2>&1 || true
+        cat "$out/hang.txt"
+      fi
     fi
     # The stage it stopped at, as the sample shows only where it was once the check gave up (#959).
     if [ -n "$stopping" ]; then
