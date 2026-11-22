@@ -1452,8 +1452,11 @@ elif windows && [ "${BROWSER_DRIVE_REAL:-}" = 1 ]; then
   # shows there, arrow, sizewe or other, read until it's <want> or five reads have passed, as the
   # app sets it as it draws after the move. <name>.png is the 48 by 48 of the screen around it with
   # the cursor drawn in, its hotspot at the middle. It's called in the run's own shell, never in
-  # $(...), where its send would lose its step (#3936).
+  # $(...), where its send would lose its step (#3936). The pointer comes from a point to its right,
+  # as a hand's never stops on its first: GPUI on Windows sets a changed cursor at the next
+  # WM_SETCURSOR, which Windows sends on a move, so the second move shows what the first's frame chose.
   cursor_shown() {
+    send move "$(($1 + 1))" "$2"
     send move "$1" "$2"
     local tries=5
     while [ $tries -gt 0 ]; do
