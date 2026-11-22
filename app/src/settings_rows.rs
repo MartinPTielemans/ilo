@@ -49,9 +49,11 @@ impl DrawnLog {
         self.logged = std::mem::take(&mut self.this_frame);
     }
 
-    /// Forgets every place, so each is logged again where it's drawn.
+    /// Forgets every place, so each is logged again where it's drawn. The frame's too, or the
+    /// next `frame` would bring back what the last one drew (#3841's show, #3894).
     pub fn clear(&mut self) {
         self.logged.clear();
+        self.this_frame.clear();
     }
 
     /// The lines logged, one a control.
@@ -922,6 +924,23 @@ mod tests {
             "a frame without it forgot its place"
         );
         assert!(log.draw("profile 2", NAME.into()), "back where it was");
+    }
+
+    /// Cleared, as Settings' log is at each show, a control logs again where it was, though the
+    /// frame before the clear drew it there.
+    #[test]
+    fn a_cleared_log_logs_a_control_again_where_it_was() {
+        let mut log = DrawnLog::default();
+        log.frame();
+        assert!(log.draw("profile 2", NAME.into()));
+        log.frame();
+        assert!(!log.draw("profile 2", NAME.into()));
+        log.clear();
+        log.frame();
+        assert!(
+            log.draw("profile 2", NAME.into()),
+            "the clear came back with the frame"
+        );
     }
 
     /// A view that never starts a frame logs a control again only where it moves.
