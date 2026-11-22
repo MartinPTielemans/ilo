@@ -185,15 +185,16 @@ async function walk() {
       "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1",
   };
   const PLATFORM = { mac: "MacIntel", windows: "Win32", linux: "Linux x86_64", phone: "iPhone" };
-  /** The visitor: a desk's screen on `who`'s computer, or a phone. */
-  const visitor = async (who) => {
+  /** The visitor: a desk's screen on `who`'s computer, or a phone, held under a finger, of the size given. */
+  const visitor = async (who, width, height) => {
     const phone = who === "phone";
     await send("Emulation.setDeviceMetricsOverride", {
-      width: phone ? 390 : 1440,
-      height: phone ? 844 : 900,
+      width: width ?? (phone ? 390 : 1440),
+      height: height ?? (phone ? 844 : 900),
       deviceScaleFactor: 1,
       mobile: phone,
     });
+    await send("Emulation.setTouchEmulationEnabled", { enabled: phone });
     await send("Emulation.setUserAgentOverride", {
       userAgent: AGENTS[who],
       platform: PLATFORM[who],
@@ -228,7 +229,21 @@ async function walk() {
       nowhere: [...document.querySelectorAll('a[href^="#"]')].map((a) => a.getAttribute("href")).filter((h) => h.length > 1 && !document.getElementById(decodeURIComponent(h.slice(1)))),
       inner: [...new Set([...document.querySelectorAll('a[href^="/"]')].map((a) => a.getAttribute("href")))],
       small: [...document.querySelectorAll("main p, main li, main dd, main td, main figcaption, .foot a, .foot p")].filter((el) => el.offsetParent && parseFloat(getComputedStyle(el).fontSize) < 15).length,
+      first: (() => {
+        // The page's first words as they're set, line by line: how near they come to the bar and to the window's sides.
+        const lines = [...document.querySelectorAll("main h1, main h1 ~ p, .hero .note")].map((el) => { const all = document.createRange(); all.selectNodeContents(el); return all.getBoundingClientRect(); });
+        return [Math.min(...lines.map((b) => b.top)) - document.querySelector(".nav-in").getBoundingClientRect().bottom, Math.min(...lines.map((b) => Math.min(b.left, innerWidth - b.right)))].map(Math.round);
+      })(),
     };
+  })()`;
+  // Where the bar's ink and the hero's mark are, and whether the mark shows.
+  const MARK = `(() => {
+    const at = (el) => el.getBoundingClientRect();
+    const nav = document.getElementById("nav");
+    const ink = nav.classList.contains("compact") ? [at(nav.querySelector(".nav-in"))] : [at(nav.querySelector(".nav-brand")), at(nav.querySelector(".nav-cta"))];
+    const mark = document.querySelector(".hero .wordmark");
+    const m = at(mark);
+    return { shows: parseFloat(getComputedStyle(mark).opacity), under: ink.some((b) => m.left < b.right && m.right > b.left && m.top < b.bottom && m.bottom > b.top) };
   })()`;
   const PAGES = [
     ["home", "/"],
@@ -284,7 +299,52 @@ async function walk() {
       )
         problems.push(`${at}: the bar reads ${page.links.join(" · ")}`);
       if (page.moved && page.pill[2] >= page.bar[2]) problems.push(`${at}: the bar didn't gather`);
+      if (page.first[0] < 0) problems.push(`${at}: the bar lies over the page's first words`);
+      if (page.first[1] < 16)
+        problems.push(
+          `${at}: its first words come within ${page.first[1]} px of the screen's side`,
+        );
     }
+  }
+
+  // Home in a phone's own shapes: a wide phone with its browser's bars showing, and one lying down. The first words
+  // keep off the screen's sides, and nowhere down the first screen does the bar lie over the hero's mark, which
+  // is back at the top of the page.
+  for (const [width, height] of [
+    [440, 760],
+    [852, 340],
+  ]) {
+    const at = `home at ${width} by ${height}`;
+    await visitor("phone", width, height);
+    await visit("/");
+    const page = await js(SHARED);
+    await shot(`home-${width}-rest`);
+    // What eases is looked at where it comes to rest.
+    await js(
+      `document.head.appendChild(Object.assign(document.createElement("style"), { textContent: "* { transition: none !important; }" }))`,
+    );
+    const tall = await js(`document.querySelector(".hero").offsetHeight`);
+    const under = [];
+    for (let y = 0; y <= tall; y += 10) {
+      await js(
+        `scrollTo(0, ${y}); new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))`,
+      );
+      const mark = await js(MARK);
+      if (mark.under && mark.shows > 0) under.push(y);
+      if (y === 150) await shot(`home-${width}-moved`);
+    }
+    await js(`scrollTo(0, 0); new Promise((done) => requestAnimationFrame(done))`);
+    const back = (await js(MARK)).shows;
+    report.pages[at] = { wide: page.wide, first: page.first, under, back };
+    if (page.wide[1] > width) problems.push(`${at}: the page is ${page.wide[1]} wide`);
+    if (page.first[0] < 0) problems.push(`${at}: the bar lies over the page's first words`);
+    if (page.first[1] < 16)
+      problems.push(`${at}: its first words come within ${page.first[1]} px of the screen's side`);
+    if (under.length)
+      problems.push(
+        `${at}: the bar lies over the hero's mark from ${under[0]} to ${under.at(-1)} px down the page`,
+      );
+    if (back !== 1) problems.push(`${at}: the hero's mark isn't back at the top of the page`);
   }
 
   // Every page a link on the site names is there.
