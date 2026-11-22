@@ -1032,11 +1032,13 @@ onload = () => setTimeout(() => { location.href = q.get("file"); }, Number(q.get
 </script>' > "$out/site/later.html"
   later_logged='^browser: agent logged mcp-client download later\.localhost$'
   # Focus Agent Question's key (#3869), ⌥⇧⌘A on the Mac and Alt+Shift+A elsewhere, gives the card
-  # the keyboard and answers nothing; ↩ straight after it is ignored, the key again gives the
-  # keyboard back, and ↩ once the protection's 500 ms have passed presses Allow Once, which the
-  # activity log records as a click's answer.
+  # the keyboard and answers nothing, leaving the conversation's area as it is; ↩ straight after it
+  # is ignored, the key again gives the keyboard back, and ↩ once the app says the protection's
+  # 500 ms have passed presses Allow Once, which the activity log records as a click's answer.
+  # On a third card Escape answers as its × does, allowing nothing.
   if [ "$(uname)" = Darwin ]; then card_key="a alt shift cmd"; else card_key="a ctrl shift"; fi
   answer_by_keys() {
+    closed=$(grep -c '^browser: task area [0-9]* closed$' "$log" || true)
     send key $card_key
     expect "^browser: agent card keys on $1 Allow Once\$" \
       "Focus Agent Question's key didn't give the later download's card the keyboard on Allow Once"
@@ -1046,14 +1048,23 @@ onload = () => setTimeout(() => { location.href = q.get("file"); }, Number(q.get
     expect "^browser: agent card keys back by key\$" "Focus Agent Question's key again didn't give the keyboard back"
     ! grep -q "^browser: agent mcp-client answered $1 " "$log" ||
       fail "Focus Agent Question's key, or ↩ straight after it, answered the later download: $(grep "^browser: agent mcp-client answered $1 " "$log")"
+    [ "$(grep -c '^browser: task area [0-9]* closed$' "$log" || true)" = "$closed" ] ||
+      fail "Focus Agent Question's key closed the conversation's area"
     send key $card_key
     expect "^browser: agent card keys on $1 Allow Once\$" "Focus Agent Question's key didn't give the card the keyboard a second time"
-    # The protection's own interval, which no line marks the end of.
-    sleep 0.6
+    expect "^browser: agent card keys ready on $1\$" "the app never said the protection had passed"
     send key return
     expect "^browser: agent card keys back by card\$" "↩ after the protection didn't answer, giving the keyboard back"
   }
-  for ms in 2000 7000; do
+  answer_by_escape() {
+    send key $card_key
+    expect "^browser: agent card keys on $1 Allow Once\$" \
+      "Focus Agent Question's key didn't give the third later download's card the keyboard"
+    expect "^browser: agent card keys ready on $1\$" "the app never said the protection had passed"
+    send key escape
+    expect '^browser: agent card key escape$' "Escape on the card didn't answer it as its × does"
+  }
+  for ms in 2000 7000 3000; do
     stem=later-${ms%000}
     printf 'later\n' > "$out/site/$stem.docx"
     later_asks="^browser: agent mcp-client asks [0-9]*: download $stem\.docx from later\.localhost\$"
@@ -1070,7 +1081,12 @@ $(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
 CARD
     case $ms in
       2000) send click $((qx + qw * 3 / 4)) $((qy + qh - 26 - 36)) ;;
-      *) answer_by_keys "$q" ;;
+      7000) answer_by_keys "$q" ;;
+      *)
+        answer_by_escape "$q"
+        await_log "^browser: agent mcp-client answered $q Dismiss\$" "Escape didn't dismiss the later download's card"
+        continue
+        ;;
     esac
     await_log "^browser: agent mcp-client answered $q Once\$" "Allow Once didn't answer the later download"
     await_more "$later_logged" "$logged" ||
