@@ -1320,6 +1320,10 @@ edit_pinned_url() {
   send key return
   expect "^browser: page $2 away 1\$" "the pinned URL typed didn't take tab $2 away from it"
 }
+# The former favorite's close left $x shown, so its row's click starts from the tab under it.
+under=$(echo $kept | cut -d' ' -f1)
+[ -n "$under" ] || fail "no Today tab under $x: Today is \"$(today)\""
+switch "$(($(pinned | wc -w) + 2)) cmd" "$under"
 set -- $(row 0)
 send click $1 $(($2 + 41))
 expect "^browser: selected $x in " "a click on Today's top row didn't show its tab"
