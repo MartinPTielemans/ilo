@@ -598,8 +598,98 @@ cmp -s "$arranged" "$out/arrange-kept.json" && fail "the edit outside ilo left t
 send key r cmd
 expect "^browser: loaded $tab $url\$" "⌘R didn't reload the page"
 shows "$own" "the file edited outside ilo was placed"
-send key l cmd
-expect '^browser: command bar shown$' "⌘L didn't open the command bar"
+# Probe for #3871's fix, never to land: the display's frames as the command bar opens again, its
+# shadow taken off screen as it closed, to see whether a frame shows the bar without its shadow.
+if [ "$(uname)" = Darwin ]; then
+  rec="$out/bar-reopen"
+  mkdir -p "$rec"
+  rm -f "$rec.ready" "$rec.go"
+  PID="$pid" DIR="$rec" READY="$rec.ready" GO="$rec.go" swift - > "$rec.log" 2>&1 <<'SWIFT' &
+import CoreImage
+import CoreMedia
+import Foundation
+import ImageIO
+import ScreenCaptureKit
+import UniformTypeIdentifiers
+
+let env = ProcessInfo.processInfo.environment
+let pid = Int32(env["PID"]!)!
+let dir = URL(fileURLWithPath: env["DIR"]!)
+let ready = env["READY"]!, go = env["GO"]!
+let context = CIContext()
+final class Frames: NSObject, SCStreamOutput {
+  let lock = NSLock()
+  var before: CGImage?
+  var going = false
+  var taken: [(Int, CGImage)] = []
+  func stream(_ stream: SCStream, didOutputSampleBuffer buffer: CMSampleBuffer,
+              of type: SCStreamOutputType) {
+    guard type == .screen, buffer.isValid,
+      let infos = CMSampleBufferGetSampleAttachmentsArray(buffer, createIfNecessary: false)
+        as? [[SCStreamFrameInfo: Any]],
+      let raw = infos.first?[.status] as? Int, SCFrameStatus(rawValue: raw) == .complete,
+      let pixels = buffer.imageBuffer else { return }
+    let ms = Int(Date().timeIntervalSince1970 * 1000)
+    let image = CIImage(cvPixelBuffer: pixels)
+    guard let picture = context.createCGImage(image, from: image.extent) else { return }
+    lock.lock()
+    if going { if taken.count < 120 { taken.append((ms, picture)) } } else { before = picture }
+    lock.unlock()
+  }
+}
+func write(_ image: CGImage, _ name: String) {
+  let file = dir.appendingPathComponent(name)
+  let png = CGImageDestinationCreateWithURL(file as CFURL, UTType.png.identifier as CFString, 1, nil)!
+  CGImageDestinationAddImage(png, image, nil)
+  _ = CGImageDestinationFinalize(png)
+}
+let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
+guard let app = content.applications.first(where: { $0.processID == pid }) else {
+  print("no app of pid \(pid)"); exit(1)
+}
+let display = content.displays[0]
+let filter = SCContentFilter(display: display, including: [app], exceptingWindows: [])
+let config = SCStreamConfiguration()
+config.width = Int(display.frame.width * CGFloat(filter.pointPixelScale))
+config.height = Int(display.frame.height * CGFloat(filter.pointPixelScale))
+config.minimumFrameInterval = CMTime(value: 1, timescale: 120)
+config.queueDepth = 8
+config.showsCursor = false
+let frames = Frames()
+let stream = SCStream(filter: filter, configuration: config, delegate: nil)
+try stream.addStreamOutput(frames, type: .screen, sampleHandlerQueue: DispatchQueue(label: "frames"))
+try await stream.startCapture()
+try await Task.sleep(nanoseconds: 300_000_000)
+FileManager.default.createFile(atPath: ready, contents: nil)
+while !FileManager.default.fileExists(atPath: go) { usleep(1000) }
+let start = Int(Date().timeIntervalSince1970 * 1000)
+frames.lock.lock(); frames.going = true; frames.lock.unlock()
+try await Task.sleep(nanoseconds: 1_500_000_000)
+try await stream.stopCapture()
+frames.lock.lock()
+if let before = frames.before { write(before, "before.png") }
+print("go \(start), \(frames.taken.count) frames")
+for (ms, picture) in frames.taken {
+  write(picture, "frame-\(ms - start).png")
+  print("frame +\(ms - start) ms")
+}
+frames.lock.unlock()
+SWIFT
+  recording=$!
+  while [ ! -e "$rec.ready" ] && kill -0 "$recording" 2> /dev/null; do
+    sleep 0.05
+  done
+  [ -e "$rec.ready" ] || echo "probe: the reopen's recording didn't start: $(tail -3 "$rec.log")"
+  : > "$rec.go"
+  send key l cmd
+  expect '^browser: command bar shown$' "⌘L didn't open the command bar"
+  wait "$recording" || echo "probe: the reopen's recording failed"
+  grep "^browser: command bar at " "$log" | tail -1 | sed 's/^/probe: /'
+  sed 's/^/probe: /' "$rec.log"
+else
+  send key l cmd
+  expect '^browser: command bar shown$' "⌘L didn't open the command bar"
+fi
 send type site controls
 expect '^browser: command bar commands "site controls": Site Controls$' \
   "the command bar didn't find Site Controls"
