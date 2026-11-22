@@ -620,7 +620,7 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: results-${{ matrix.session }}-${{ matrix.shard }}
+          name: results-${{ matrix.session }}-${{ matrix.shard }}:probe
           path: ${{ runner.temp }}/results
           if-no-files-found: ignore
       # A failed first try gets a second, as a name lookup or GitHub's side can fail for a moment
