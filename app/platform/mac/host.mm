@@ -295,7 +295,10 @@ void StripTint(CALayer* layer) {
 @interface HostPlateView : NSView
 // Whether the plate had a press that isn't let go yet.
 @property BOOL pressed;
+// Watches the app's other windows' moves and presses while the pointer is on the plate.
+@property(strong) id away;
 - (void)track;
+- (void)stopWatching;
 @end
 
 @implementation HostPlateView
@@ -323,6 +326,45 @@ void StripTint(CALayer* layer) {
                                          (inside ? NSTrackingAssumeInside : 0)
                                    owner:self
                                 userInfo:nil]];
+  if (inside) {
+    [self watch];
+  }
+}
+
+// While the pointer is on the plate, a move or a press the app has in another of its windows
+// means it has left: AppKit's exit didn't always come for a plate just placed under the pointer,
+// before the window server had its frame, and the surface kept the hover (#3644). Only then, so an
+// idle browser is never woken.
+- (void)watch {
+  if (self.away) {
+    return;
+  }
+  __weak HostPlateView* weak = self;
+  self.away = [NSEvent
+      addLocalMonitorForEventsMatchingMask:NSEventMaskMouseMoved | NSEventMaskLeftMouseDown |
+                                           NSEventMaskRightMouseDown | NSEventMaskOtherMouseDown
+                                   handler:^NSEvent*(NSEvent* event) {
+                                     HostPlateView* view = weak;
+                                     if (view && event.window != view.window && !view.pressed) {
+                                       [view left:event];
+                                     }
+                                     return event;
+                                   }];
+}
+
+- (void)stopWatching {
+  if (self.away) {
+    [NSEvent removeMonitor:self.away];
+    self.away = nil;
+  }
+}
+
+// The pointer has left the plate: the surface hears a move outside it, and the window under the
+// plate is told again on the pointer's next visit.
+- (void)left:(NSEvent*)event {
+  [self stopWatching];
+  ((HostPlateWindow*)self.window).parentLeft = NO;
+  [self tellSurfaceLeft:event];
 }
 
 // |event|, a mouse event of the plate window's, as the surface's window would have had it there,
@@ -373,8 +415,12 @@ void StripTint(CALayer* layer) {
                                           at:[surface convertPointToScreen:outside]]];
 }
 
+// A press on the plate is the pointer's first word there with the real pointer, which can land
+// with no move first, so the window under it hears it left as from a move.
 - (void)mouseDown:(NSEvent*)event {
   self.pressed = YES;
+  [self watch];
+  [self tellParentLeft:event];
   [self.target mouseDown:[self surfaceEvent:event]];
 }
 
@@ -392,13 +438,18 @@ void StripTint(CALayer* layer) {
   }
 }
 
+- (void)mouseMoved:(NSEvent*)event {
+  [self.target mouseMoved:[self surfaceEvent:event]];
+  [self watch];
+  [self tellParentLeft:event];
+}
+
 // The pointer is on the plate, which the window under it hears as a move outside it, as GPUI's
 // leave is on Linux and Windows when the pointer goes into the surface's window. A move the driver
 // posts brings it no exit, and its UI kept the row under the pointer's last place hovered, so a
-// row moving there after a click on the card showed its own card (#3644). Told from a move alone,
-// which comes with no button down, as a drag from that window still goes to it.
-- (void)mouseMoved:(NSEvent*)event {
-  [self.target mouseMoved:[self surfaceEvent:event]];
+// row moving there after a click on the card showed its own card (#3644). Told from the plate's
+// own moves and presses, which a drag from that window never brings, as it stays with that window.
+- (void)tellParentLeft:(NSEvent*)event {
   HostPlateWindow* plate = (HostPlateWindow*)self.window;
   NSWindow* parent = plate.parentWindow;
   NSView* view = plate.parentView;
@@ -429,8 +480,7 @@ void StripTint(CALayer* layer) {
   if (self.pressed) {
     return;
   }
-  ((HostPlateWindow*)self.window).parentLeft = NO;
-  [self tellSurfaceLeft:event];
+  [self left:event];
 }
 
 // None of the three scrolls, and a scroll on its plate went to the surface's view, which had
@@ -1002,6 +1052,7 @@ void HidePlateWindow(HostPlateWindow* plate) {
   plate.parentLeft = NO;
   // A press that takes its surface away, such as a toast's button, gets no release here.
   ((HostPlateView*)plate.contentView).pressed = NO;
+  [(HostPlateView*)plate.contentView stopWatching];
   if (Checked()) {
     fprintf(stderr, "browser: plate window %s hidden\n", plate.name.UTF8String);
   }

@@ -7,6 +7,8 @@
 # not on the owner's Mac.
 # With a point, in points from the main display's top left, it also prints what accessibility's hit
 # test finds there, as VoiceOver's does under the pointer: "hit at X Y: <role>/<subrole> "<name>"".
+# It asks every 0.1 s for 2 s, as VoiceOver asks again while the pointer rests, and prints each
+# answer that differs from the last: a GPUI window builds its tree once first asked.
 # Usage: tools/ax-windows.sh <pid> [<x> <y>]
 set -e
 [ $# -eq 1 ] || [ $# -eq 3 ] || { echo "usage: $0 <pid> [<x> <y>]" >&2; exit 2; }
@@ -62,14 +64,21 @@ for window in value(app, kAXWindowsAttribute) as? [AXUIElement] ?? [] {
 }
 let at = ProcessInfo.processInfo.environment["AT"]!.split(separator: " ").compactMap { Float($0) }
 if at.count == 2 {
-  var hit: AXUIElement?
-  var found = "none"
-  if AXUIElementCopyElementAtPosition(app, at[0], at[1], &hit) == .success, let hit {
-    let title = value(hit, kAXTitleAttribute) as? String ?? ""
-    let name = title.isEmpty ? value(hit, kAXDescriptionAttribute) as? String ?? "" : title
-    let role = value(hit, kAXRoleAttribute) as? String ?? "?"
-    found = "\(role)/\(value(hit, kAXSubroleAttribute) as? String ?? "-") \"\(name)\""
+  var last = ""
+  for _ in 0..<20 {
+    var hit: AXUIElement?
+    var found = "none"
+    if AXUIElementCopyElementAtPosition(app, at[0], at[1], &hit) == .success, let hit {
+      let title = value(hit, kAXTitleAttribute) as? String ?? ""
+      let name = title.isEmpty ? value(hit, kAXDescriptionAttribute) as? String ?? "" : title
+      let role = value(hit, kAXRoleAttribute) as? String ?? "?"
+      found = "\(role)/\(value(hit, kAXSubroleAttribute) as? String ?? "-") \"\(name)\""
+    }
+    if found != last {
+      print("hit at \(Int(at[0])) \(Int(at[1])): \(found)")
+      last = found
+    }
+    Thread.sleep(forTimeInterval: 0.1)
   }
-  print("hit at \(Int(at[0])) \(Int(at[1])): \(found)")
 }
 SWIFT
