@@ -11,7 +11,8 @@
 //   pointer click X Y PID    presses and lets go at (X, Y), with no move there first, so the
 //                            window server picks the window the press goes to, and leaves the
 //                            pointer there. It says "clicked X Y".
-//   pointer move X Y PID     moves the pointer to (X, Y), as a mouse's move. It says "moved X Y".
+//   pointer move X Y PID     moves the pointer to (X, Y), as a mouse's move. It says "moved X Y"
+//                            once the pointer is there.
 //   pointer windows PID      lists the windows of process PID on screen that can be seen, front
 //                            first, a line each: "window N level L at X Y W H". It posts nothing.
 // click and move post nothing unless the app of process PID is the frontmost one and no other
@@ -19,6 +20,7 @@
 // Built with clang++ -fobjc-arc -framework Cocoa.
 #import <Cocoa/Cocoa.h>
 
+#include <math.h>
 #include <sys/sysctl.h>
 #include <unistd.h>
 
@@ -39,6 +41,39 @@ void Post(CGEventType type, CGPoint at) {
   }
   CGEventPost(kCGHIDEventTap, event);
   CFRelease(event);
+}
+
+// Where the desktop's pointer is, in points from the main display's top-left.
+CGPoint Now() {
+  CGEventRef now = CGEventCreate(NULL);
+  const CGPoint at = CGEventGetLocation(now);
+  CFRelease(now);
+  return at;
+}
+
+// Waits up to a second for the pointer to be at |at|, as a posted event moves it some time after
+// CGEventPost returns, and one posted as the process exits can be lost. It answers where it is if
+// it never gets there, or nil.
+NSString* Reached(CGPoint at) {
+  CGPoint now = Now();
+  for (int i = 0; i < 100 && (fabs(now.x - at.x) > 0.5 || fabs(now.y - at.y) > 0.5); ++i) {
+    usleep(10000);
+    now = Now();
+  }
+  if (fabs(now.x - at.x) <= 0.5 && fabs(now.y - at.y) <= 0.5) {
+    return nil;
+  }
+  return [NSString stringWithFormat:@"the pointer stayed at %.0f %.0f", now.x, now.y];
+}
+
+// Waits up to a second for the left button to be up, so a let-go posted last isn't lost with the
+// process, which would leave the button held for the next check.
+void Released() {
+  for (int i = 0;
+       i < 100 && CGEventSourceButtonState(kCGEventSourceStateHIDSystemState, kCGMouseButtonLeft);
+       ++i) {
+    usleep(10000);
+  }
 }
 
 // Whether |bounds| spans one of the displays, its menu bar's strip aside.
@@ -157,10 +192,21 @@ int main(int argc, char** argv) {
       }
       if (move) {
         Post(kCGEventMouseMoved, from);
+        if ((refused = Reached(from))) {
+          fprintf(stderr, "pointer moved to %.0f %.0f, but %s\n", from.x, from.y,
+                  refused.UTF8String);
+          return 1;
+        }
         printf("moved %.0f %.0f\n", from.x, from.y);
         return 0;
       }
       Post(kCGEventLeftMouseDown, from);
+      if ((refused = Reached(from))) {
+        Post(kCGEventLeftMouseUp, from);
+        fprintf(stderr, "pointer pressed at %.0f %.0f, but %s\n", from.x, from.y,
+                refused.UTF8String);
+        return 1;
+      }
       // A hand's press and let-go, a few frames apart.
       usleep(80000);
       if ((refused = Refusal(pid, from))) {
@@ -170,13 +216,12 @@ int main(int argc, char** argv) {
         return 1;
       }
       Post(kCGEventLeftMouseUp, from);
+      Released();
       printf("clicked %.0f %.0f\n", from.x, from.y);
       return 0;
     }
     const CGPoint to = CGPointMake(atof(argv[4]), atof(argv[5]));
-    CGEventRef now = CGEventCreate(NULL);
-    const CGPoint was = CGEventGetLocation(now);
-    CFRelease(now);
+    const CGPoint was = Now();
     // Paced as a hand is, a frame apart, so the window server sees a press, a drag and a let-go.
     Post(kCGEventMouseMoved, from);
     usleep(100000);
@@ -193,6 +238,7 @@ int main(int argc, char** argv) {
     Post(kCGEventLeftMouseUp, to);
     usleep(150000);
     Post(kCGEventMouseMoved, was);
+    Reached(was);
     printf("dragged %.0f %.0f to %.0f %.0f\n", from.x, from.y, to.x, to.y);
     return 0;
   }
