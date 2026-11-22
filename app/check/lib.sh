@@ -447,9 +447,37 @@ app_pid() {
 window_pid() {
   awk '/^NSpid:/ { print $NF }' "/proc/$(app_pid)/status"
 }
-# Turns the Mac's appearance dark (true) or light (false), as System Settings › Appearance does.
+# Waits, up to 30 s, until System Events answers an Apple event: one that's starting or quitting
+# turns events away with -600 or -609, and one that's busy lets them time out with -1712 (#3889).
+# Any other refusal, such as the check not being allowed to control it, ends the wait at once. When
+# it doesn't answer, what osascript said goes to stderr.
+system_events_answers() {
+  deadline=$((SECONDS + 30))
+  while ! said=$(osascript -e 'with timeout of 5 seconds' \
+    -e 'tell application "System Events" to get name' -e 'end timeout' 2>&1 > /dev/null); do
+    case $said in
+      *'(-600)'* | *'(-609)'* | *'(-1712)'*)
+        if [ "$SECONDS" -lt "$deadline" ]; then
+          sleep 0.5
+          continue
+        fi
+        echo "System Events didn't answer an Apple event in 30 s: $said" >&2
+        ;;
+      *) echo "System Events turned an Apple event away: ${said:-osascript said nothing}" >&2 ;;
+    esac
+    return 1
+  done
+}
+# The Mac's appearance, true when dark, once System Events answers.
+dark_mode_now() {
+  system_events_answers &&
+    osascript -e 'tell application "System Events" to tell appearance preferences to get dark mode'
+}
+# Turns the Mac's appearance dark (true) or light (false), as System Settings › Appearance does,
+# once System Events answers. When it can't, what osascript said goes to stderr.
 appearance() {
-  osascript -e "tell application \"System Events\" to tell appearance preferences to set dark mode to $1"
+  system_events_answers && osascript -e 'tell application "System Events"' \
+    -e "tell appearance preferences to set dark mode to $1" -e 'end tell' > /dev/null
 }
 # Hides the Dock and, for the apps launched after, the menu bar, as System Settings › Desktop &
 # Dock and Control Center do, keeping what they were in $bars for show_bars.
@@ -687,9 +715,15 @@ drawn_after() {
 # <bottom>"). One drawn past them, as a section with more rows than the window's height puts at its
 # foot, is under the card's edge, where a press lands on nothing, so the card scrolls it into
 # sight first, from its middle, and at is where the frame after that draws it (#1950). Returns 1
-# if it never drew it.
+# if it never drew it. With $2, the place is one drawn after the last line matching it, as
+# drawn_after's: after a show, a place from before it is where an earlier show left the card
+# scrolled, and the scroll from there goes the wrong distance (#3841).
 in_sight() {
-  at=$(drawn "$1") || return 1
+  if [ -n "${2:-}" ]; then
+    at=$(drawn_after "$1" "$2") || return 1
+  else
+    at=$(drawn "$1") || return 1
+  fi
   sight=$(grep '^browser: settings card shows ' "$log" | tail -1 | cut -d' ' -f5-)
   [ -n "$sight" ] || return 0
   top=${sight%% to *}
@@ -986,9 +1020,9 @@ check_layout() {
   send layout
   layout=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout')
   content=$(echo "$layout" | sed 's/^browser: layout content \([0-9]*x[0-9]*\),.*/\1/')
-  view=$(echo "$layout" | sed -n 's/.*WebContentsViewCocoa \([0-9,]* [0-9x]*\).*/\1/p')
-  radius=$(echo "$layout" | sed -n 's/.*WebContentsViewCocoa [0-9,]* [0-9x]* radius \([0-9]*\).*/\1/p')
-  ui=$(echo "$layout" | sed -n 's/.*GPUIView \([0-9,]* [0-9x]*\).*/\1/p')
+  view=$(echo "$layout" | sed -n 's/.*WebContentsViewCocoa \([-0-9,]* [0-9x]*\).*/\1/p')
+  radius=$(echo "$layout" | sed -n 's/.*WebContentsViewCocoa [-0-9,]* [0-9x]* radius \([0-9]*\).*/\1/p')
+  ui=$(echo "$layout" | sed -n 's/.*GPUIView \([-0-9,]* [0-9x]*\).*/\1/p')
   width=${content%x*}
   height=${content#*x}
   # Past the sidebar, 228 wide unless $2 gives its width.

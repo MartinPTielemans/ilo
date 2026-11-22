@@ -65,9 +65,10 @@ jobs:
             // Nobody signs as generated, so any tool's name there will do.
             const generated = /^\W*generated (with|by)\b.*\b(claude|anthropic|openai|codex|copilot|cursor|chatgpt|gpt|gemini|devin)\b/i;
             // The template's types, and check and spike, which main uses; a diag or wip commit
-            // stays on a probe branch.
+            // stays on a probe branch. Revert " and Reapply " are git's own titles for a revert and
+            // for the revert of a revert, which a batch's history keeps (#3857).
             const title =
-              /^((feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert|check|spike)(\([^()]+\))?!?: \S|Revert ")/;
+              /^((feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert|check|spike)(\([^()]+\))?!?: \S|Revert "|Reapply ")/;
             const rules = [
               {
                 breaks: (m) => !signedOff.test(m),

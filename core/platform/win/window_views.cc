@@ -42,6 +42,7 @@
 #include "ui/aura/window.h"
 #include "ui/aura/window_observer.h"
 #include "ui/aura/window_tracker.h"
+#include "ui/aura/window_tree_host.h"
 #include "ui/base/ime/input_method.h"
 #include "ui/base/win/hwnd_subclass.h"
 #include "ui/base/win/shell.h"
@@ -710,19 +711,26 @@ class WindowViews : public views::WidgetObserver,
     }
   }
 
-  // The window's scale: the DPI the last WM_DPICHANGED carried, which Windows sends as the window
-  // moves to a display of another scale, or its display's until one comes. The display's alone
-  // laid the pages out with the old display's scale as the window crossed (#1823).
-  float Scale() const {
-    return dpi_ ? dpi_ / static_cast<float>(USER_DEFAULT_SCREEN_DPI)
-                : display::win::GetScreenWin()->GetScaleFactorForHWND(window());
+  // The app's scale, from its points to the window's pixels: the DPI GPUI draws at, the last
+  // WM_DPICHANGED's, or the window's before one, not its display's, which lagged as the window
+  // crossed to a display of another scale (#1823). Windows' Text size isn't in it, as it isn't in
+  // GPUI's (#3621).
+  float UIScale() const {
+    const UINT dpi = dpi_ ? dpi_ : GetDpiForWindow(window());
+    return dpi ? dpi / static_cast<float>(USER_DEFAULT_SCREEN_DPI) : 1;
   }
 
-  // The window's content, in DIPs.
+  // A slot's scale, from the window's pixels to its pages' DIPs: its host's, which has Windows'
+  // Text size in it, so a page keeps the user's text size as Chrome's do (#3621).
+  static float PageScale(const Slot& slot) {
+    return slot.widget->GetNativeView()->GetHost()->device_scale_factor();
+  }
+
+  // The window's content, in the app's points.
   gfx::Size ContentSize() const {
     RECT client;
     GetClientRect(window(), &client);
-    return gfx::ScaleToFlooredSize(gfx::Size(client.right, client.bottom), 1 / Scale());
+    return gfx::ScaleToFlooredSize(gfx::Size(client.right, client.bottom), 1 / UIScale());
   }
 
   // Sizes the UI to the window's content.
@@ -736,7 +744,7 @@ class WindowViews : public views::WidgetObserver,
   // Sizes the UI to the window's content, and each slot to its insets, over the UI.
   void LayOut() {
     SizeUI();
-    const float scale = Scale();
+    const float scale = UIScale();
     const gfx::Size size = ContentSize();
     for (Slot& slot : panes_) {
       LayOut(slot, size, scale);
@@ -747,6 +755,7 @@ class WindowViews : public views::WidgetObserver,
     ring_.Fit();
   }
 
+  // |window_size| and the slot's insets are in the app's points, which |scale| makes pixels.
   void LayOut(Slot& slot, const gfx::Size& window_size, float scale) {
     if (!slot.widget || !slot.page) {
       return;
@@ -757,10 +766,14 @@ class WindowViews : public views::WidgetObserver,
     HWND hwnd = views::HWNDForWidget(slot.widget.get());
     SetWindowPos(hwnd, HWND_TOP, pixels.x(), pixels.y(), pixels.width(), pixels.height(),
                  SWP_NOACTIVATE | SWP_NOOWNERZORDER);
-    const gfx::Rect bounds(frame.size());
+    // The pages fill the slot in its own DIPs, which Windows' Text size makes fewer than the app's
+    // points: in those the page ran past the window by the text scale (#3621).
+    const float to_page = scale / PageScale(slot);
+    const gfx::Rect bounds =
+        gfx::ScaleToEnclosingRectIgnoringError(gfx::Rect(pixels.size()), 1 / PageScale(slot));
     if (slot.devtools) {
       slot.devtools->SetBounds(bounds);
-      gfx::Rect page = slot.page_in_devtools;
+      gfx::Rect page = gfx::ScaleToEnclosingRectIgnoringError(slot.page_in_devtools, to_page);
       page.Intersect(bounds);
       slot.page->SetBounds(page);
     } else {
@@ -769,7 +782,7 @@ class WindowViews : public views::WidgetObserver,
     double radius = slot.corner_radius.value_or(corner_radius_);
     gfx::Rect shown(pixels.size());
     if (&slot == &preview_) {
-      shown = DrawnIn(frame, scale, shown);
+      shown = DrawnIn(frame, scale, to_page, shown);
       radius *= preview_drawn_.scale;
     }
     // shortcut: a window region's corners are aliased, unlike Core Animation's on the Mac; upgrade
@@ -827,21 +840,22 @@ class WindowViews : public views::WidgetObserver,
       return;
     }
     preview_drawn_ = {scale, about, opacity};
-    LayOut(preview_, ContentSize(), Scale());
+    LayOut(preview_, ContentSize(), UIScale());
   }
 
   // As the preview's slot is laid out at |frame|, |pixels| in its child window: its content's
-  // transform and opacity, and where in the window it shows, in pixels.
-  gfx::Rect DrawnIn(const gfx::Rect& frame, float scale, const gfx::Rect& pixels) {
+  // transform and opacity, and where in the window it shows, in pixels. |frame| is in the app's
+  // points, which |scale| makes pixels and |to_page| the content's DIPs.
+  gfx::Rect DrawnIn(const gfx::Rect& frame, float scale, float to_page, const gfx::Rect& pixels) {
     const Drawn& drawn = preview_drawn_;
     aura::Window* content = preview_.widget->GetNativeView();
     const float in_x = drawn.about.x() - frame.x();
     const float in_y = drawn.about.y() - frame.y();
     gfx::Transform transform;
     if (drawn.scale != 1) {
-      transform.Translate(in_x, in_y);
+      transform.Translate(in_x * to_page, in_y * to_page);
       transform.Scale(drawn.scale, drawn.scale);
-      transform.Translate(-in_x, -in_y);
+      transform.Translate(-in_x * to_page, -in_y * to_page);
     }
     if (content->transform() != transform) {
       content->SetTransform(transform);
@@ -967,9 +981,9 @@ class WindowViews : public views::WidgetObserver,
       }
       SizeChanged(w_param);
     } else if (message == WM_DPICHANGED) {
+      dpi_ = LOWORD(w_param);
       // The pages go again at the new scale once Chromium has taken it and the window's new rect,
       // as the window's size in DIPs may stay the same, which lays nothing out (#1823).
-      dpi_ = LOWORD(w_param);
       base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
           FROM_HERE, base::BindOnce(&WindowViews::ScaleChanged, weak_factory_.GetWeakPtr()));
     }
@@ -1021,7 +1035,7 @@ class WindowViews : public views::WidgetObserver,
   HWND pressed_ = nullptr;
   // Between going to the back and coming forward, while presses::Wait() counts it.
   bool in_back_ = false;
-  // The DPI the last WM_DPICHANGED carried, 0 before one comes (Scale).
+  // The DPI the last WM_DPICHANGED carried, 0 before one comes (UIScale).
   UINT dpi_ = 0;
   bool minimized_ = false;
   // The pages DrawUnseen holds.
@@ -1173,8 +1187,11 @@ void ShowPages(views::Widget* widget,
     hidden ? holder->Hide() : ShowInactive(holder);
   }
   if (panes.size() > 1 && focused < panes.size()) {
-    views->ring().Show(views->WidgetFor(slots[focused])->GetNativeView(), ring_color,
-                       corner_radius);
+    // The ring draws in the pane's DIPs, the radius is in the app's points (LayOut).
+    Slot& ringed = slots[focused];
+    aura::Window* holder = views->WidgetFor(ringed)->GetNativeView();
+    views->ring().Show(holder, ring_color,
+                       corner_radius * views->UIScale() / WindowViews::PageScale(ringed));
   } else {
     views->ring().Hide();
   }
@@ -1203,7 +1220,15 @@ void ShowPages(views::Widget* widget,
 // in it; until then the pages keep their size under a tab dragged over them.
 void ScalePages(views::Widget*, double) {}
 
-gfx::PointF LaidOutPagePoint(gfx::NativeView, const gfx::PointF& point) {
+gfx::PointF LaidOutPagePoint(gfx::NativeView page, const gfx::PointF& point) {
+  // In the page's DIPs, which Windows' Text size makes fewer than the app's points (#3621).
+  aura::WindowTreeHost* host = page ? page->GetHost() : nullptr;
+  const HWND root = host ? GetAncestor(host->GetAcceleratedWidget(), GA_ROOT) : nullptr;
+  for (const auto& each : AllWindowViews()) {
+    if (root && each.second->window() == root) {
+      return gfx::ScalePoint(point, host->device_scale_factor() / each.second->UIScale());
+    }
+  }
   return point;
 }
 
@@ -1273,7 +1298,10 @@ std::optional<std::pair<gfx::Rect, gfx::Rect>> DevToolsFrames(views::Widget* wid
       gfx::Rect frame(views->ContentSize());
       frame.Inset(slot.insets);
       const gfx::Vector2d at = frame.OffsetFromOrigin();
-      return std::pair(slot.devtools->bounds() + at, slot.page->bounds() + at);
+      // In the app's points, from the pane's DIPs (LayOut).
+      const float to_app = WindowViews::PageScale(slot) / views->UIScale();
+      return std::pair(gfx::ScaleToRoundedRect(slot.devtools->bounds(), to_app) + at,
+                       gfx::ScaleToRoundedRect(slot.page->bounds(), to_app) + at);
     }
   }
   return std::nullopt;
@@ -1317,7 +1345,11 @@ std::optional<gfx::Rect> DialogFrame(views::Widget* widget) {
   if (dialog->non_client_view() && dialog->non_client_view()->frame_view()) {
     frame.Inset(dialog->non_client_view()->frame_view()->GetInsets());
   }
-  return frame;
+  // In the app's points, from the window's DIPs, which Windows' Text size makes fewer (#3621).
+  WindowViews* views = ViewsOf(widget);
+  const float to_app =
+      views ? widget->GetNativeView()->GetHost()->device_scale_factor() / views->UIScale() : 1;
+  return gfx::ScaleToRoundedRect(frame, to_app);
 }
 
 bool FocusSettledOnActivation() {

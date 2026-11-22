@@ -17,6 +17,8 @@
 # ⌘W otherwise shows the tab below, or above at the bottom. Tabs opened behind close to their
 # sibling, then their opener; after a switch to an unrelated tab, a tab opened in front closes to
 # the tab below; and a pinned tab's newest tab opened in front closes back to it, past an older one.
+# A tab opened from the command bar closes back to the tab it opened over, pinned, in Today or a
+# favorite.
 # On Linux two quick ⇧⌘T from the page, the second before the first's tab has its page focused,
 # reopen both tabs closed last.
 # Closing the last tab leaves the Space empty, with no pane, its window resizing, and on Windows
@@ -1257,6 +1259,53 @@ expect_tabs "$y $x $before" "$y" "the pinned tab's second link didn't open its t
 send key w cmd
 expect_tabs "$x $before" "$o" \
   "closing the pinned tab's newest link didn't go back to the pinned tab"
+# A tab opened from the command bar goes back, on ⌘W, to the tab it opened over, not to the tab
+# under it (#3813): over the pinned tab, over the second Today tab, and over a favorite, which
+# Favorite Tab makes of a tab from the bar and its menu then closes. open_from_bar sets before.
+kept=$before
+open_from_bar "${site}notes.txt"
+send key w cmd
+expect_tabs "$x $kept" "$o" "closing ⌘T's tab didn't go back to the pinned tab it opened over"
+set -- $(row 1)
+send click $1 $(($2 + 41))
+expect "^browser: selected $u in " "a click on the second Today row didn't show its tab"
+open_from_bar "${site}notes.txt"
+send key w cmd
+expect_tabs "$x $kept" "$u" "closing ⌘T's tab didn't go back to the Today tab it opened over"
+open_from_bar "${site}notes.txt"
+fav=$tab
+bar_command add-to-favorites "Favorite Tab" "add to favorites"
+expect "^browser: favorites $fav\$" "Favorite Tab didn't make ⌘T's tab a favorite"
+expect "^browser: today $x $kept\$" \
+  "Favorite Tab didn't take ⌘T's tab out of Today: Today is \"$(today)\""
+open_from_bar "${site}notes.txt"
+send key w cmd
+expect_tabs "$x $kept" "$fav" "closing ⌘T's tab didn't go back to the favorite it opened over"
+post rightclick 114 114
+expect "^browser: menu shown .*$(cased 'Remove from Favorites, Change Icon…, Close Tab')\$" \
+  "a right-click on the favorite's tile didn't show its menu"
+send choose "$(cased 'Close Tab')"
+# A favorite keeps its tile, and only its page goes, as Arc's does. The app shows the tab shown
+# before it that's still open, the Today tab ⌘T's tab first opened over, as Arc 1.170 does.
+expect "^browser: selected $u\( in .*\)\{0,1\}\$" \
+  "closing the favorite didn't show the tab shown before it"
+expect "^browser: page $fav unloaded 1\$" "Close Tab in the tile's menu didn't unload the favorite"
+none_since '^browser: favorites ' || fail "Close Tab in the tile's menu took the favorite away"
+# Its tile offers no Close Tab, with no page to close. Out of the favorites, it's the top of Today
+# with no tab to go back to, the bar's tab having taken its way back, so ⌘W on it shows the tab
+# under it.
+post rightclick 114 114
+expect "^browser: menu shown .*$(cased 'Remove from Favorites, Change Icon…, Close Tab (disabled)')\$" \
+  "a right-click on the closed favorite's tile didn't show its menu, with Close Tab off"
+send choose "$(cased 'Remove from Favorites')"
+expect '^browser: favorites $' "Remove from Favorites left the closed favorite's tile"
+expect "^browser: today $fav $x $kept\$" \
+  "Remove from Favorites didn't put the closed favorite at the top of Today: Today is \"$(today)\""
+# With no favorite left the rows move off the places row gives, so its ⌘ digit shows it.
+switch "$(($(pinned | wc -w) + 1)) cmd" "$fav"
+send key w cmd
+expect_tabs "$x $kept" "$x" "closing the former favorite didn't show the Today tab under it"
+before=$kept
 # Tabs › Reset all tabs in this Space takes the Space's pinned tabs away from their pinned URLs back
 # there, as Arc's does, but only those loaded: one unloaded stays as it is until it's shown. Edit…
 # gives two pinned tabs a pinned URL their pages aren't at, and ⌘W unloads the second.
@@ -1271,6 +1320,10 @@ edit_pinned_url() {
   send key return
   expect "^browser: page $2 away 1\$" "the pinned URL typed didn't take tab $2 away from it"
 }
+# The former favorite's close left $x shown, so its row's click starts from the tab under it.
+under=$(echo $kept | cut -d' ' -f1)
+[ -n "$under" ] || fail "no Today tab under $x: Today is \"$(today)\""
+switch "$(($(pinned | wc -w) + 2)) cmd" "$under"
 set -- $(row 0)
 send click $1 $(($2 + 41))
 expect "^browser: selected $x in " "a click on Today's top row didn't show its tab"
@@ -2396,7 +2449,7 @@ else
   quit
   sorted="Sort Today Tabs by Site from the command bar puts each site's tabs together at its first tab's place, light and dark, and the Tabs menu dims it then; ⌘Z and ⇧⌘Z undo and redo it, and the order comes back after a quit"
 fi
-echo "ok: new tabs open at the top and show, the command bar lists the Space's other tabs before anything is typed, suggests pages, their tabs and well-known sites and completes what's typed, ⌘L opens it centred and a click on the URL field over the field, ⇧⌘A lists the open tabs alone, typing filters them and ↩ switches, ⌘T and ⌘L close the open bar again, ⌘L's field holds the whole address and ↩ on it reloads, Tab in the empty field or \"/ \" lists only the commands until Esc or ⌫ leaves, keys and clicks switch, ⇧⌦ and a click on a row's trash take a page out of history and ⌥⌘⌫ a search typed before, which Chrome then says left the history, and the button's tooltip names it and its key over the bar, ⌘Z puts the page back and ⇧⌘Z takes it out again, ⇧⌘↩ searches and ⌘↩ opens a tab behind that loads once shown, Tab on a hinted row searches with its engine alone until ⌫ leaves, a space after the keyword is only a space, \"yout\" hints YouTube and Tab searches it, ↩ on a sum's row copies its result, and a right-click in its field shows Paste and Go, ⌃Tab goes back through the tabs shown while ⌃ is held, a page's tab goes under it and closing it, by close and ↩ in the command bar, goes back, tabs opened behind close to their sibling then their opener, a switch to an unrelated tab and a link opened in front forget older openers, so a pinned tab's newest tab closes back to it, ⌘W shows the tab below or above, on Linux two quick ⇧⌘T reopen both tabs closed last, an empty Space shows no pane, its window resizes, and on Windows maximizes and restores, and it still opens tabs, a tab mutes and its speaker unmutes it, a tab unseen 2 hours lets go of its page as another shows unless it plays sound, asks before it's left or shows in a split, and gets it back with its history and its sessionStorage once shown, and Settings' Unload switch turns that off and on, Site Search Settings opens Chromium's search engines page, where a site search added and made the default there shows chosen in Settings' Search engine, ↩ searches with it, and Settings picks DuckDuckGo back, a pick of View Media… lists it above View Archive…, its equal for \"view\", back right-clicked or held lists the pages back, nearest first, with their favicons, and a row picked goes there, back held and reload pressed shrink a little and grow back, and reload let go off it doesn't reload, and ⌘-clicked opens the page back in a tab behind. Reset all tabs in this Space takes the loaded pinned tabs back to their pinned URLs and leaves the unloaded one. ⌘-click and ⇧-click choose three rows, whose menu and ⇧⌘C copy their links in order, and ⌘D pins them, New Folder folders them and ⌘W closes them, each undone by ⌘Z. On Windows the bar, a tooltip and a menu are on screen only while the UI shows them: after Esc, ⌘T again or a click on the page, as the pointer leaves, after Windows shows them again and after their window was minimized${adapter:-}.${desktop:+ On Linux $desktop.}"
+echo "ok: new tabs open at the top and show, the command bar lists the Space's other tabs before anything is typed, suggests pages, their tabs and well-known sites and completes what's typed, ⌘L opens it centred and a click on the URL field over the field, ⇧⌘A lists the open tabs alone, typing filters them and ↩ switches, ⌘T and ⌘L close the open bar again, ⌘L's field holds the whole address and ↩ on it reloads, Tab in the empty field or \"/ \" lists only the commands until Esc or ⌫ leaves, keys and clicks switch, ⇧⌦ and a click on a row's trash take a page out of history and ⌥⌘⌫ a search typed before, which Chrome then says left the history, and the button's tooltip names it and its key over the bar, ⌘Z puts the page back and ⇧⌘Z takes it out again, ⇧⌘↩ searches and ⌘↩ opens a tab behind that loads once shown, Tab on a hinted row searches with its engine alone until ⌫ leaves, a space after the keyword is only a space, \"yout\" hints YouTube and Tab searches it, ↩ on a sum's row copies its result, and a right-click in its field shows Paste and Go, ⌃Tab goes back through the tabs shown while ⌃ is held, a page's tab goes under it and closing it, by close and ↩ in the command bar, goes back, tabs opened behind close to their sibling then their opener, a switch to an unrelated tab and a link opened in front forget older openers, so a pinned tab's newest tab closes back to it, a tab opened from the command bar closes back to the tab it opened over, pinned, in Today or a favorite, ⌘W shows the tab below or above, on Linux two quick ⇧⌘T reopen both tabs closed last, an empty Space shows no pane, its window resizes, and on Windows maximizes and restores, and it still opens tabs, a tab mutes and its speaker unmutes it, a tab unseen 2 hours lets go of its page as another shows unless it plays sound, asks before it's left or shows in a split, and gets it back with its history and its sessionStorage once shown, and Settings' Unload switch turns that off and on, Site Search Settings opens Chromium's search engines page, where a site search added and made the default there shows chosen in Settings' Search engine, ↩ searches with it, and Settings picks DuckDuckGo back, a pick of View Media… lists it above View Archive…, its equal for \"view\", back right-clicked or held lists the pages back, nearest first, with their favicons, and a row picked goes there, back held and reload pressed shrink a little and grow back, and reload let go off it doesn't reload, and ⌘-clicked opens the page back in a tab behind. Reset all tabs in this Space takes the loaded pinned tabs back to their pinned URLs and leaves the unloaded one. ⌘-click and ⇧-click choose three rows, whose menu and ⇧⌘C copy their links in order, and ⌘D pins them, New Folder folders them and ⌘W closes them, each undone by ⌘Z. On Windows the bar, a tooltip and a menu are on screen only while the UI shows them: after Esc, ⌘T again or a click on the page, as the pointer leaves, after Windows shows them again and after their window was minimized${adapter:-}.${desktop:+ On Linux $desktop.}"
 [ -z "${committed:-}" ] || echo "  On Windows Alt+F4 in the bar closes its window and the bar opens" \
   "over the next one, the bar" \
   "moves with its window and the window's menu closes, and the bar stays open over a page that" \

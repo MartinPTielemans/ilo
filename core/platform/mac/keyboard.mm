@@ -6,11 +6,60 @@
 #include "base/apple/foundation_util.h"
 #include "base/apple/owned_objc.h"
 #include "base/apple/scoped_cftyperef.h"
+#include "base/no_destructor.h"
 #include "components/input/native_web_keyboard_event.h"
 #include "ui/events/event.h"
+#include "ui/events/keycodes/dom/dom_keyboard_layout_map.h"
 #include "ui/events/keycodes/keyboard_code_conversion_mac.h"
 
 namespace browser_core::platform {
+
+namespace {
+
+// The split keys' layout, made again after the system says the keyboard's input source changed.
+struct SplitLayouts {
+  SplitLayout layout;
+  bool stale = true;
+  bool hearing = false;
+};
+
+SplitLayouts& Split() {
+  static base::NoDestructor<SplitLayouts> layouts;
+  return *layouts;
+}
+
+void LayoutChanged(CFNotificationCenterRef, void*, CFNotificationName, const void*, CFDictionaryRef) {
+  Split().stale = true;
+}
+
+}  // namespace
+
+const SplitLayout& SplitLayoutOf(const input::NativeWebKeyboardEvent&) {
+  SplitLayouts& split = Split();
+  // Heard from the first key that asks, once; the notice comes only when the user changes layout.
+  if (!split.hearing) {
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDistributedCenter(), &split,
+                                    &LayoutChanged, kTISNotifySelectedKeyboardInputSourceChanged,
+                                    nullptr, CFNotificationSuspensionBehaviorDeliverImmediately);
+    split.hearing = true;
+  }
+  if (split.stale) {
+    // The current Latin layout's keys. GPUI's patch reads the current layout's for the UI, which
+    // on a Latin layout is the same one.
+    split.layout = SplitLayout(ui::GenerateDomKeyboardLayoutMap());
+    split.stale = false;
+  }
+  return split.layout;
+}
+
+void StopHearingLayouts() {
+  SplitLayouts& split = Split();
+  if (split.hearing) {
+    CFNotificationCenterRemoveObserver(CFNotificationCenterGetDistributedCenter(), &split,
+                                       kTISNotifySelectedKeyboardInputSourceChanged, nullptr);
+    split.hearing = false;
+  }
+}
 
 std::string LatinKey(const input::NativeWebKeyboardEvent& event) {
   NSEvent* key = event.os_event.Get();

@@ -183,7 +183,8 @@ impl Clients for System {
 
 /// Where Add puts the `ilo` command: its link in the user's bin folder, to the program beside the
 /// bridge `entry` runs, or on Windows the folder beside the bridge's that holds it, and its agent
-/// file in the profile directory, where the command looks.
+/// file in the profile directory, where the command looks. A Flatpak's sandbox can't write the bin
+/// folder, so there it's the agent file alone.
 fn command_install(entry: &Entry) -> Result<super::cli::Install, String> {
     let bridge = match entry.command.as_str() {
         "" => std::env::current_exe()
@@ -203,6 +204,7 @@ fn command_install(entry: &Entry) -> Result<super::cli::Install, String> {
         folder: super::cli::folder(&home()),
         program: bridge.with_file_name(super::cli::PROGRAM),
         file,
+        linked: super::bridge::flatpak_id().is_none(),
         store: false,
     })
 }
