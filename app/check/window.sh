@@ -1416,10 +1416,79 @@ send click $show
 expect '^browser: toast button show$' "a click on the new tab's toast's Show at $show didn't take"
 expect '^browser: sidebar shown$' "the new tab's toast's Show didn't bring the sidebar back"
 check_layout "after a click on the new tab's toast"
-# The sidebar's edge, the 6 pt right of its rows, drags its width between 164 and 500, Arc's, and
+# Over the edge, 9 in, the cursor is the left-right resize one, and 20 in, over the rows, it isn't
+# (#3942). On Linux the display's pointer is drawn into a capture there and here; on Windows the
+# driver's pointer is real, and the system says which cursor it shows, with a picture of it.
+if [ "$(uname)" = Linux ]; then
+  cursor_crop 219 400 edge-cursor
+  cursor_crop 208 400 rows-cursor
+  send warp
+  differ=$(magick compare -metric AE -fuzz 15% "$out/edge-cursor-crop.png" \
+    "$out/rows-cursor-crop.png" null: 2>&1 | cut -d' ' -f1)
+  [ "${differ%.*}" -gt 20 ] 2> /dev/null ||
+    fail "the cursor 9 in from the sidebar's edge is the one over its rows ($differ pixels apart, edge-cursor.png)"
+elif windows && [ "${BROWSER_DRIVE_REAL:-}" = 1 ]; then
+  # cursor_shown <x> <y> <name> <want>: the pointer to <x> <y>, and sets shown to the cursor Windows
+  # shows there, arrow, sizewe or other, read until it's <want> or five reads have passed, as the
+  # app sets it as it draws after the move. <name>.png is the 48 by 48 of the screen around it with
+  # the cursor drawn in, its hotspot at the middle. It's called in the run's own shell, never in
+  # $(...), where its send would lose its step (#3936).
+  cursor_shown() {
+    send move "$1" "$2"
+    local tries=5
+    while [ $tries -gt 0 ]; do
+      tries=$((tries - 1))
+      shown=$(timeout 60 powershell.exe -NoProfile -NonInteractive -Command "
+        Add-Type -ReferencedAssemblies System.Drawing -TypeDefinition @'
+using System;
+using System.Drawing;
+using System.Runtime.InteropServices;
+public static class Shown {
+  [StructLayout(LayoutKind.Sequential)] struct Point { public int X, Y; }
+  [StructLayout(LayoutKind.Sequential)] struct Info { public int Size, Flags; public IntPtr Cursor; public Point At; }
+  [StructLayout(LayoutKind.Sequential)] struct Icon { public bool IsIcon; public int X, Y; public IntPtr Mask, Color; }
+  [DllImport(\"user32.dll\")] static extern bool GetCursorInfo(ref Info info);
+  [DllImport(\"user32.dll\")] static extern bool GetIconInfo(IntPtr icon, out Icon info);
+  [DllImport(\"user32.dll\")] static extern IntPtr LoadCursor(IntPtr instance, int name);
+  [DllImport(\"user32.dll\")] static extern bool DrawIcon(IntPtr dc, int x, int y, IntPtr icon);
+  [DllImport(\"user32.dll\")] static extern bool SetProcessDPIAware();
+  public static string Read(string png) {
+    SetProcessDPIAware();
+    var info = new Info();
+    info.Size = Marshal.SizeOf(info);
+    if (!GetCursorInfo(ref info) || info.Cursor == IntPtr.Zero) return \"none\";
+    Icon icon;
+    GetIconInfo(info.Cursor, out icon);
+    using (var picture = new Bitmap(48, 48))
+    using (var g = Graphics.FromImage(picture)) {
+      g.CopyFromScreen(info.At.X - 24, info.At.Y - 24, 0, 0, picture.Size);
+      var dc = g.GetHdc();
+      DrawIcon(dc, 24 - icon.X, 24 - icon.Y, info.Cursor);
+      g.ReleaseHdc(dc);
+      picture.Save(png);
+    }
+    if (info.Cursor == LoadCursor(IntPtr.Zero, 32644)) return \"sizewe\";
+    if (info.Cursor == LoadCursor(IntPtr.Zero, 32512)) return \"arrow\";
+    return \"other\";
+  }
+}
+'@
+        [Shown]::Read('$(cygpath -w "$out/$3.png")')" | tr -d '\r')
+      [ "$shown" != "$4" ] || break
+    done
+  }
+  cursor_shown 219 400 edge-cursor sizewe
+  [ "$shown" = sizewe ] ||
+    fail "the cursor 9 in from the sidebar's edge is $shown, not the left-right resize one (edge-cursor.png)"
+  cursor_shown 208 400 rows-cursor arrow
+  [ "$shown" != sizewe ] ||
+    fail "the cursor 20 in from the sidebar's edge, over its rows, is the left-right resize one (rows-cursor.png)"
+fi
+# The sidebar's edge, the 10 pt down its side, drags its width between 164 and 500, Arc's, and
 # stops at them. Dragged on past half the narrowest, it hides the sidebar at once, which keeps the
-# width it had, and ⌘S brings it back. A double-click on the edge puts back 228.
-send drag 225 400 325 400
+# width it had, and ⌘S brings it back. A double-click on the edge puts back 228. The first drag
+# starts 9 in, past the margin right of the rows, which was all the edge was (#3942).
+send drag 219 400 319 400
 expect '^browser: sidebar width 328$' "dragging the sidebar's edge didn't widen the sidebar"
 check_layout "with the sidebar dragged wider" 328
 send drag 325 400 700 400

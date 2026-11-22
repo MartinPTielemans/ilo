@@ -20,6 +20,7 @@ use super::{
     REVEAL_WAIT, ROW_HEIGHT, Row, SIDEBAR_EDGE, SIDEBAR_HIDE, SIDEBAR_MAX, SIDEBAR_MIN,
     SIDEBAR_SHOW, SIDEBAR_WIDTH, Settle, Shell, Slot, Space, settle_progress, spring,
 };
+use crate::tokens::shell::{FOOTER_HEIGHT, NAV_SIZE, NAV_TOP, NAV_TRAIL, PLUS_INSET};
 
 /// What the toast says when a tab opens with the sidebar hidden, Arc's words, and for how long,
 /// counted again each time it's asked for (Arc 1.171, measured by an outside reverse-engineering,
@@ -151,6 +152,8 @@ impl Shell {
     }
 
     /// The docked sidebar's right edge, which drags its width and puts it back on a double-click.
+    /// Buttons keep their plates: beside the header's it's the gap past reload, beside the
+    /// footer's + the gap past that, and down the rows it takes 2 of their plates too.
     pub(super) fn sidebar_edge(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let width = self.width();
         // Toward the page widens it, so the arrows turn with the side.
@@ -165,8 +168,23 @@ impl Shell {
         };
         let resizing = self.resize.is_some();
         let shell = cx.weak_entity();
+        let right = self.right;
+        let part = move |id: &'static str, wide: f32, cx: &mut Context<Self>| {
+            div()
+                .id(id)
+                .absolute()
+                .when(right, |part| part.left_0())
+                .when(!right, |part| part.right_0())
+                .w(px(wide))
+                .cursor(cursor)
+                .block_mouse_except_scroll()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|shell, event: &MouseDownEvent, _, cx| shell.press_edge(event, cx)),
+                )
+        };
+        let head = NAV_TOP + NAV_SIZE;
         div()
-            .id("sidebar-edge")
             .absolute()
             .top_0()
             .bottom_0()
@@ -175,11 +193,16 @@ impl Shell {
                 false => width - SIDEBAR_EDGE,
             }))
             .w(px(SIDEBAR_EDGE))
-            .cursor(cursor)
-            .block_mouse_except_scroll()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|shell, event: &MouseDownEvent, _, cx| shell.press_edge(event, cx)),
+            .child(part("sidebar-edge-head", NAV_TRAIL, cx).top_0().h(px(head)))
+            .child(
+                part("sidebar-edge", SIDEBAR_EDGE, cx)
+                    .top(px(head))
+                    .bottom(px(FOOTER_HEIGHT)),
+            )
+            .child(
+                part("sidebar-edge-foot", PLUS_INSET, cx)
+                    .bottom_0()
+                    .h(px(FOOTER_HEIGHT)),
             )
             // The pointer's moves and release anywhere in the window, while the edge is dragged.
             .child(
@@ -885,8 +908,11 @@ mod tests {
 
     use super::super::{
         Folders, NAME_HEIGHT, PLATE_HEIGHT, ROW_HEIGHT, SIDEBAR_MAX, SIDEBAR_MIN, SIDEBAR_WIDTH,
-        Shell, Slot, drag::detents::shell_with, recorder::Recorder,
+        Shell, SidebarRight, Slot,
+        drag::detents::{row_y, shell_with},
+        recorder::Recorder,
     };
+    use crate::tokens::shell::{FOOTER_HEIGHT, NAV_SIZE, NAV_TOP};
 
     /// A Space made while the sidebar is hidden gets a toast whose Show shows it with the sidebar
     /// back. Spaces made one after another are told of together. None for the window's first
@@ -1666,5 +1692,129 @@ mod tests {
             !shell.read_with(cx, |shell, _| shell.revealed),
             "the pointer gone onto the page brought the sidebar out"
         );
+    }
+
+    /// A window showing Today tabs 11 and 12, 12 selected, drawn.
+    fn edge_window<'a>(
+        cx: &'a mut TestAppContext,
+    ) -> (Entity<Shell>, Rc<Recorder>, &'a mut VisualTestContext) {
+        let host = Rc::new(Recorder::default());
+        let shell_host = host.clone();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(shell_host, cx));
+        cx.simulate_resize(size(px(1000.), px(600.)));
+        shell.update(cx, |shell, cx| {
+            let space = (1, "Space".into(), None, 1, "".into(), "".into(), "".into());
+            shell.set_spaces(vec![space], cx);
+            shell.set_space(1, cx);
+            shell.set_tabs(
+                1,
+                Vec::new(),
+                vec![11, 12],
+                Vec::new(),
+                Folders::default(),
+                cx,
+            );
+            shell.set_selected(12, cx);
+        });
+        draw(&shell, cx);
+        (shell, host, cx)
+    }
+
+    /// Whether a press at `x`, `y` across the window takes the sidebar's edge, let go at once.
+    fn takes_edge(shell: &Entity<Shell>, cx: &mut VisualTestContext, x: f32, y: f32) -> bool {
+        let at = point(px(x), px(y));
+        cx.simulate_mouse_down(at, MouseButton::Left, Modifiers::none());
+        let took = shell.read_with(cx, |shell, _| shell.resize.is_some());
+        cx.simulate_mouse_up(at, MouseButton::Left, Modifiers::none());
+        cx.run_until_parked();
+        took
+    }
+
+    /// The edge is 10 wide down the rows, the margin right of them and 2 of their plates: a press
+    /// 9 in on a row drags it rather than selecting the tab, and one 11 in selects it.
+    #[gpui::test]
+    fn the_edge_takes_10_of_a_rows_side(cx: &mut TestAppContext) {
+        let (shell, host, cx) = edge_window(cx);
+        let y = shell.read_with(cx, |shell, _| row_y(shell, 11));
+        host.take();
+        assert!(
+            takes_edge(&shell, cx, SIDEBAR_WIDTH - 9., y),
+            "a press 9 in from the sidebar's edge didn't take the edge"
+        );
+        assert!(
+            !host.take().contains(&"select 11".to_string()),
+            "a press 9 in from the sidebar's edge selected the row's tab"
+        );
+        assert_eq!(shell.read_with(cx, |shell, _| shell.width()), SIDEBAR_WIDTH);
+        assert!(
+            !takes_edge(&shell, cx, SIDEBAR_WIDTH - 11., y),
+            "a press 11 in from the sidebar's edge took the edge"
+        );
+        assert!(
+            host.take().contains(&"select 11".to_string()),
+            "a click 11 in from the sidebar's edge didn't select the row's tab"
+        );
+    }
+
+    /// The header's buttons and the footer's + keep their plates: beside reload the edge is the 6
+    /// past it, and beside the + the 8 past that.
+    #[gpui::test]
+    fn the_edge_leaves_the_buttons_their_plates(cx: &mut TestAppContext) {
+        let (shell, _, cx) = edge_window(cx);
+        let header = NAV_TOP + NAV_SIZE / 2.;
+        assert!(!takes_edge(&shell, cx, SIDEBAR_WIDTH - 7., header));
+        assert!(takes_edge(&shell, cx, SIDEBAR_WIDTH - 5., header));
+        let foot = 600. - FOOTER_HEIGHT / 2.;
+        assert!(!takes_edge(&shell, cx, SIDEBAR_WIDTH - 9., foot));
+        assert!(takes_edge(&shell, cx, SIDEBAR_WIDTH - 7., foot));
+    }
+
+    /// A drag from the edge that ends over a row's close button, the sidebar stopped at its
+    /// narrowest, closes nothing.
+    #[gpui::test]
+    fn a_drag_from_the_edge_let_go_over_a_close_button_closes_nothing(cx: &mut TestAppContext) {
+        let (shell, host, cx) = edge_window(cx);
+        let y = shell.read_with(cx, |shell, _| row_y(shell, 12));
+        cx.simulate_mouse_down(
+            point(px(SIDEBAR_WIDTH - 5.), px(y)),
+            MouseButton::Left,
+            Modifiers::none(),
+        );
+        // 24 in from the narrowest sidebar's edge, inside the close button, 13 to 39 in.
+        let over_close = point(px(SIDEBAR_MIN - 24.), px(y));
+        cx.simulate_mouse_move(over_close, Some(MouseButton::Left), Modifiers::none());
+        host.take();
+        cx.simulate_mouse_up(over_close, MouseButton::Left, Modifiers::none());
+        cx.run_until_parked();
+        assert!(
+            !host.take().iter().any(|call| call.starts_with("close")),
+            "a drag from the edge let go over a close button closed something"
+        );
+        assert_eq!(
+            shell.read_with(cx, |shell, _| shell.sidebar_width),
+            SIDEBAR_MIN
+        );
+    }
+
+    /// On the right the edge is the sidebar's left 10, mirrored.
+    #[gpui::test]
+    fn on_the_right_the_edge_is_the_sidebars_left_10(cx: &mut TestAppContext) {
+        let (shell, host, cx) = edge_window(cx);
+        cx.update(|_, cx| {
+            cx.set_global(SidebarRight(true));
+            cx.refresh_windows();
+        });
+        draw(&shell, cx);
+        let (x, y) = shell.read_with(cx, |shell, _| (shell.column_x(), row_y(shell, 11)));
+        host.take();
+        assert!(
+            takes_edge(&shell, cx, x + 9., y),
+            "a press 9 in didn't take the edge"
+        );
+        assert!(
+            !takes_edge(&shell, cx, x + 11., y),
+            "a press 11 in took the edge"
+        );
+        assert!(host.take().contains(&"select 11".to_string()));
     }
 }
