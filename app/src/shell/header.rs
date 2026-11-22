@@ -982,8 +982,22 @@ impl Shell {
         } else if self.sidebar_hovered != self.tools_on {
             self.tools_fade = Some((self.clock.now(), self.tools_opacity()));
             self.tools_on = self.sidebar_hovered;
+            // Probe for #3872, never to land.
+            log!(
+                "browser: probe 3872 tools fade to {} a11y {} visible {}",
+                self.tools_on as u8,
+                self.a11y as u8,
+                window.is_visible() as u8
+            );
         }
         if let Some((start, _)) = self.tools_fade {
+            // Probe for #3872, never to land: each frame of the fade.
+            log!(
+                "browser: probe 3872 tools frame at {:.3} opacity {:.2} a11y {}",
+                self.since(start),
+                self.tools_opacity(),
+                self.a11y as u8
+            );
             if self.since(start) < TOOLS_FADE {
                 window.request_animation_frame();
                 return;

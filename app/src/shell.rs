@@ -4592,6 +4592,12 @@ impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::text_input::drawing(window);
         self.a11y = window.is_a11y_active();
+        // Probe for #3872, never to land: says when the main window's a11y or visibility changes.
+        thread_local!(static PROBE: std::cell::Cell<(u8, u8)> = const { std::cell::Cell::new((9, 9)) });
+        let now = (self.a11y as u8, window.is_visible() as u8);
+        if PROBE.with(|p| p.replace(now)) != now {
+            log!("browser: probe 3872 shell a11y {} visible {}", now.0, now.1);
+        }
         self.watch_appearance(window, cx);
         // After the frame, which takes the root's name as it starts and asks for none while it's
         // drawn, so another comes with it.
