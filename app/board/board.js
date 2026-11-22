@@ -836,8 +836,9 @@ function typed(e) {
 function stopEditing() {
   if (!editing) return;
   const { card, before, text: was, first } = editing;
+  // The first note's field is out of byId until the Board is open (offerFirstNote).
+  const el = byId.get(card.id) ?? editing.el;
   editing = null;
-  const el = byId.get(card.id);
   if (first) {
     // The first note's field, left before it took a key: it was never a card.
     el?.remove();
@@ -875,50 +876,81 @@ view.addEventListener("dblclick", (e) => {
 
 // On an empty Board the first note's field holds the keyboard unseen, so the Board takes the
 // first keys, typed or composed (an IME's included), and the note appears with them. The field is
-// the note's own, never moved, so a composition under way carries on in it.
+// the note's own, never moved to another parent, so a composition under way carries on in it.
+// An input method composes only into a field, and held keys can't replay a composition, so the
+// field is offered as the page starts, before the Board's file says whether it's empty (#3793):
+// keepFirstNote, once the Board is open, keeps it or takes it away.
 function offerFirstNote() {
-  if (cards.length || !writable) return;
-  const [x, y] = toWorld(innerWidth / 2 - 120, innerHeight / 2 - 40);
-  const card = { id: newId(), kind: "note", x, y, w: 240, h: 0, z: 1, text: "", fill: style.fill, size: style.size };
+  const card = { id: newId(), kind: "note", x: 0, y: 0, w: 240, h: 0, z: 1, text: "", fill: style.fill, size: style.size };
   make(card);
   const el = byId.get(card.id);
+  // Out of the Board's cards until it's open, so drawing them (renderAll) leaves it be.
+  byId.delete(card.id);
   // Not a card yet, so not Tab's stop: the page's first focus, as when it takes the keyboard
   // before it has loaded, would go to it rather than its field.
   if (tabStop === card.id) tabStop = null;
   el.tabIndex = -1;
   el.classList.add("first", "editing");
+  centre(card, el);
   const field = el.querySelector(".text");
   field.contentEditable = "plaintext-only";
   const appear = () => {
     field.removeEventListener("beforeinput", appear);
     field.removeEventListener("compositionstart", appear);
     if (editing?.card !== card) return;
-    edit(() => cards.push(card));
-    keepTabStop();
-    editing = { card, before: undos.at(-1), text: "" };
     el.classList.remove("first");
+    if (opening) editing.taken = true;
+    else becomeCard(card);
   };
   // The keys held while the Board opened make it appear too (opened, below).
-  editing = { card, before: null, text: "", first: true, appear };
+  editing = { card, before: null, text: "", first: true, appear, el };
   field.addEventListener("beforeinput", appear);
   field.addEventListener("compositionstart", appear);
   field.addEventListener("input", typed);
   field.focus();
 }
+function becomeCard(card) {
+  edit(() => cards.push(card));
+  keepTabStop();
+  editing = { card, before: undos.at(-1), text: "" };
+}
+// The first note's field at the centre of the view, as the camera is now.
+function centre(card, el) {
+  [card.x, card.y] = toWorld(innerWidth / 2 - 120, innerHeight / 2 - 40);
+  place(el, card);
+}
+// Once the Board is open: an empty Board keeps the first note's field, and so does one with
+// cards if something was typed or composed in it while it opened, as a note of its own. Returns
+// whether the field stays.
+function keepFirstNote() {
+  if (!editing?.first) return false;
+  const { card, el, taken } = editing;
+  byId.set(card.id, el);
+  if (!writable || (cards.length && !taken)) {
+    stopEditing();
+    return false;
+  }
+  card.z = top();
+  centre(card, el);
+  if (taken) becomeCard(card);
+  return true;
+}
 
 // --- Keys ---
 
 // The page has the keyboard as soon as it loads, but whether its Board is empty, and so whether
-// it offers the first note's field, waits for the host's hello and the Board's file. A key typed
-// before then would land on the canvas, so the keys that type are held until the Board is open
-// (#3424): typed into the first note's field, the way typing there goes, or given to the canvas
-// in order on a Board with cards.
+// it keeps the first note's field, waits for the host's hello and the Board's file. A key typed
+// before then could be a note's letter or a tool's, so the keys that type are held until the Board
+// is open (#3424): typed into the first note's field, the way typing there goes, or given to the
+// canvas in order on a Board with cards.
 let opening = true;
 const early = [];
 document.addEventListener(
   "keydown",
   (e) => {
-    if (!opening || e.metaKey || e.ctrlKey || e.altKey || [...e.key].length !== 1) return;
+    // A key an input method takes (229) goes on to the first note's field, to compose there.
+    if (!opening || e.isComposing || e.keyCode === 229) return;
+    if (e.metaKey || e.ctrlKey || e.altKey || [...e.key].length !== 1) return;
     e.preventDefault();
     e.stopImmediatePropagation();
     early.push(e.key);
@@ -927,10 +959,11 @@ document.addEventListener(
 );
 function opened() {
   opening = false;
+  const kept = keepFirstNote();
   const keys = early.splice(0);
   if (!keys.length) return;
-  if (editing?.first) {
-    editing.appear();
+  if (kept) {
+    editing.appear?.();
     return document.execCommand("insertText", false, keys.join(""));
   }
   for (const key of keys) {
@@ -1179,7 +1212,6 @@ async function open_() {
   // What came while it was closed lands now, and what comes while it's open lands as it comes.
   listeners.set("board-arrived", land);
   await land();
-  offerFirstNote();
 }
 
 // Opening the bar or the Library takes the keyboard from the page, so what's done there with the
@@ -1191,4 +1223,5 @@ document.addEventListener("visibilitychange", () => {
   else land();
 });
 
+offerFirstNote();
 open_().finally(opened);
