@@ -4508,7 +4508,25 @@ void host_toast_takes_clicks(bool takes) {
   PlaceToastClicks(Pointer());
 }
 
+// Never to land (#3644): what a call takes, then, with |flush|, the commit it leaves.
+struct Probe {
+  const char* name;
+  bool flush;
+  NSTimeInterval began = NSProcessInfo.processInfo.systemUptime;
+  Probe(const char* name, bool flush) : name(name), flush(flush) {}
+  ~Probe() {
+    const NSTimeInterval worked = NSProcessInfo.processInfo.systemUptime;
+    if (flush) {
+      [CATransaction flush];
+    }
+    const NSTimeInterval flushed = NSProcessInfo.processInfo.systemUptime;
+    fprintf(stderr, "browser: probe %s took %.2f ms, then its commit %.2f ms\n", name,
+            (worked - began) * 1000, (flushed - worked) * 1000);
+  }
+};
+
 void host_set_toast_plate(double x, double y, double width, double height) {
+  Probe probe("toast plate", false);
   g_toast_plate = NSMakeRect(x, y, width, height);
   if (g_toast_takes) {
     PlaceToastClicks(Pointer());
@@ -4662,6 +4680,7 @@ void host_show_mini_bar(void* ui_view, double x, double y, double width, double 
     if (change != g_mini_bar_changes) {
       return;
     }
+    Probe probe("mini bar show", true);
     PlaceMiniBar();
     [g_mini_bar_view.layer setNeedsDisplay];
     [g_mini_bar_view.layer displayIfNeeded];
@@ -4969,6 +4988,7 @@ void host_show_hover_card(void* ui_view, double left, double top, double width, 
     if (change != g_card_changes) {
       return;
     }
+    Probe probe("hover card show", true);
     PlaceHoverCard();
     {
       // Where the window really is, for check.sh to compare with where the UI asked.
