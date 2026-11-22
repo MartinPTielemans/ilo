@@ -160,12 +160,18 @@ expect "^browser: loaded $tab ${site}busy.html\$" "the tab behind didn't load on
 none_since "trouble crashed" || fail "the tab behind showed the crash card"
 
 # ⌘L opens the command bar over a page whose own script keeps its renderer busy, as one whose ads
-# do, without waiting on the page, and the page's late answer to it doesn't open the bar again
-# (#3944).
+# do, once the page has had it for the core's bound, kPageKeyBound's 200 ms, and the page's late
+# answer to it doesn't open the bar again (#3944).
 send click $page_point
 send key b
 expect "^browser: title $tab busy 1\$" "the busy page's script didn't start"
 send key l cmd
+unanswered="^browser: tab $tab page didn't answer a key, run "
+expect "$unanswered" "⌘L didn't run over a busy page that didn't answer it (#3944)"
+ran=$(sed -n "s/$unanswered\([0-9.]*\) ms after it had it, .*/\1/p" "$log" | tail -1)
+# The bound, and a 60 Hz frame for the timer's own lateness.
+awk -v ran="$ran" 'BEGIN { exit !(ran + 0 > 0 && ran <= 216.7) }' ||
+  fail "⌘L ran $ran ms after the busy page had it, past the 200 ms bound and a frame (#3944)"
 expect '^browser: command bar shown$' "⌘L didn't open the command bar over a busy page (#3944)"
 send key escape
 expect '^browser: command bar hidden$' "Esc didn't close the command bar over the busy page"
