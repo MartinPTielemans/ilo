@@ -57,11 +57,15 @@ if [ "$active" != 1 ]; then
   echo "skip: passwords. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi
-# Logs in on the page shown with password $1: the username field has the keyboard.
+# Logs in on the page shown with password $1, once a click has put the caret in its username field.
+# Each field is typed into only once the page says it has the caret: a click or Tab the page drops
+# would put the password in the username field, and the form would go with none (#3846).
 log_in() {
+  expect "^browser: title $tab user [0-9]*\$" "the click didn't put the caret in the username field"
   send key a cmd
   send type check@example.test
   send key tab
+  expect "^browser: title $tab pass [0-9]*\$" "Tab didn't move the caret to the password field"
   send key a cmd
   send type "$1"
   send key return
