@@ -425,10 +425,10 @@ none_since '^browser: selected' || fail "Remove from Favorites showed another ta
 expect '^browser: toast shown Removed from Favorites \[undo\]$' "Remove from Favorites didn't offer Undo"
 # Only the toast's plate takes clicks while it offers Undo, and a click just under it, in its
 # window's margin where its shadow falls, reaches the page. The window ends at the content's right
-# edge, and the app logs where the plate is in it and how wide it is. This step has never run: the
-# moves and the click are posted, as the driver's are, to the window the window server would pick,
-# so it stands or falls with the plate alone taking the mouse there, on the Mac through a window
-# over it.
+# edge, and the app logs where the plate is in it and how wide it is. With the real pointer, the
+# window server picks the window each goes to: the pointer onto the plate hovers the toast, and a
+# press just under it, down before the toast hears the pointer leave, lets the hover go as well
+# as reaching the page (#3644).
 expect '^browser: toast plate [0-9]* [0-9]* [0-9]* [0-9]* in [0-9]* [0-9]*$' \
   "the undo toast didn't tell where its plate is"
 set -- $(grep '^browser: toast plate' "$log" | tail -1 | sed 's/^browser: toast plate //; s/ in / /')
@@ -436,31 +436,38 @@ send layout
 toast_content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
   sed 's/^browser: layout content \([0-9]*\)x[0-9]*,.*/\1/')
 under="$((toast_content - $5 + $1 + $3 / 2)) $(($2 + $4 + 12))"
-send move $under
-send click $under
+plate_point="$((toast_content - $5 + $1 + $3 / 2)) $(($2 + $4 / 2))"
+if real_pointer; then
+  real move $plate_point
+  expect '^browser: toast hovered true$' "the real pointer on the undo toast's plate didn't hover it"
+  real click $under
+  expect '^browser: toast hovered false$' \
+    "a press just under the undo toast, as the real pointer left its plate, kept it hovered"
+else
+  send move $under
+  send click $under
+fi
 expect '^browser: title [0-9]* corner$' "a click just under the undo toast's plate didn't reach the page"
 send key z cmd
 expect '^browser: command undo via \(ui\|page\)$' "⌘Z didn't undo Remove from Favorites"
 expect "^browser: favorites $a\$" "⌘Z didn't put the tile back"
 expect "^browser: today $left\$" "⌘Z left the tab in Today: Today is \"$(today)\""
 none_since '^browser: selected' || fail "⌘Z after Remove from Favorites showed another tab"
-# The way out: with the toast gone, its plate's place is the page's again. Its plate window goes
-# off screen with it, so a click where the plate was reaches the page, once typing in the page's
-# text field along its bottom has put another title there. The click leaves the field, so the
-# page keeps no ⇧⌘Z after.
+# The way out: with the toast gone, its plate's place is the page's again, so a click where the
+# plate was reaches the page, once typing in the page's text field along its bottom has put
+# another title there. The click leaves the field, so the page keeps no ⇧⌘Z after.
 expect '^browser: toast hidden$' "the undo toast stayed after ⌘Z"
-if [ "$(uname)" = Darwin ]; then
-  logged '^browser: plate window toast hidden$' ||
-    fail "the undo toast's plate window stayed on screen after the toast"
-fi
 size=$(grep '^browser: layout content' "$log" | tail -1 |
   sed 's/^browser: layout content \([0-9]*\)x\([0-9]*\),.*/\1 \2/')
 send click $((toast_content - 100)) $((${size#* } - 40))
 send type w
 expect '^browser: title [0-9]* value .*w$' "typing in the page's text field didn't reach it"
-plate_point="$((toast_content - $5 + $1 + $3 / 2)) $(($2 + $4 / 2))"
-send move $plate_point
-send click $plate_point
+if real_pointer; then
+  real click $plate_point
+else
+  send move $plate_point
+  send click $plate_point
+fi
 expect '^browser: title [0-9]* corner$' \
   "a click where the undo toast's plate was, after the toast went, didn't reach the page"
 send key z cmd shift

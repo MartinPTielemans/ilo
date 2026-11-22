@@ -547,27 +547,51 @@ expect '^browser: menu closed$' "escape didn't close the +'s menu in full screen
 send click $page_point
 send state
 in_browser RenderWidgetHostViewCocoa "after a click on the page under the closed +'s menu"
-# On the Mac, a toast with buttons in full screen, ⇧⌘C's with Share, has its plate window over its
-# plate, and the window goes with the toast. The toast leaves after 2 s, too soon to ask for the
-# layout in a slow guest, so this reads the host's line with both frames, as it placed the window.
-if [ "$(uname)" = Darwin ]; then
-  send key c cmd shift
-  expect "$url_toast" "⇧⌘C in full screen showed no toast with Share"
+# On the Mac, a toast's button takes a click in full screen, and a toast held as the window leaves
+# full screen takes one after it: the trace's toast, which stays while it records. Going full
+# screen puts the note on how to leave in place of any toast, so none is held into it. Stop is 38 in
+# from the right end of the plate, which the app logs in the toast's window, as wide as the page
+# ending at the content's right edge. The real pointer's click has no move before it (#3611).
+stop_trace() {
   expect '^browser: toast plate [0-9]* [0-9]* [0-9]* [0-9]* in [0-9]* [0-9]*$' \
-    "⇧⌘C's toast in full screen didn't tell where its plate is"
-  logged '^browser: plate window toast at ' ||
-    fail "⇧⌘C's toast in full screen put no plate window over its plate"
-  placed=$(grep '^browser: plate window toast at ' "$log" | tail -1 |
-    sed 's/^browser: plate window toast at //')
-  plate_holds "$placed" ||
-    fail "in full screen, ⇧⌘C's toast's plate window doesn't hold its plate in the whole points" \
-      "round it: $placed"
-  expect '^browser: toast hidden$' "⇧⌘C's toast in full screen stayed past its time"
-  logged '^browser: plate window toast hidden$' ||
-    fail "⇧⌘C's toast's plate window stayed on screen after the toast, in full screen"
+    "$1, the trace's toast didn't tell where its plate is" "$2"
+  local when=$1 content at
+  set -- $(grep '^browser: toast plate' "$log" | tail -1 | sed 's/^browser: toast plate //; s/ in / /')
+  send layout
+  content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
+    sed 's/^browser: layout content \([0-9]*\)x.*/\1/')
+  at="$((content - $5 + $1 + $3 - 38)) $(($2 + $4 / 2))"
+  if real_pointer; then
+    real click $at
+  else
+    send move $at
+    send click $at
+  fi
+  expect '^browser: toast button stop$' "$when, Stop on the trace's toast wasn't pressed at $at"
+  expect '^browser: trace stopped$' "$when, Stop didn't stop the trace"
+  expect_late '^browser: trace save panel shown$' "$when, Stop didn't ask where to save the trace"
+  send savecancel
+  expect '^browser: save panel cancelled$' "$when, the trace's save panel didn't cancel"
+}
+record_trace() {
+  send menu "Record a Trace"
+  recording=$step
+  expect '^browser: trace recording$' "$1, Record a Trace didn't start a trace"
+  expect '^browser: toast shown Recording a trace \[stop\]$' \
+    "$1, no toast said a trace was recording"
+}
+if [ "$(uname)" = Darwin ]; then
+  record_trace "in full screen"
+  stop_trace "in full screen" "$recording"
+  record_trace "in full screen again"
 fi
 send fullscreen
 expect '^browser: window left full screen$' "the window didn't leave full screen"
+if [ "$(uname)" = Darwin ]; then
+  none_since '^browser: toast hidden$' "$recording" ||
+    fail "the trace's toast went as the window left full screen"
+  stop_trace "after leaving full screen" "$recording"
+fi
 check_layout "after full screen"
 check_buttons "after full screen"
 

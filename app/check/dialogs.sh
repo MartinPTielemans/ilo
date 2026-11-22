@@ -844,9 +844,6 @@ SCREEN
     children
     [ "$children" -gt "$before" ] ||
       fail "the card for a row of the window behind isn't a child window of that window"
-    # On the Mac its plate window, where it takes the mouse, is that window's child too (#3611).
-    [ "$(uname)" != Darwin ] || [ "$children" -ge $((before + 2)) ] ||
-      fail "the plate window of the card for a row of the window behind isn't a child window of that window"
   fi
   ../tools/window-screenshot.sh "$pid" "$out/hover-card-window-behind.png" all ||
     fail "no window to capture"
@@ -864,8 +861,6 @@ SCREEN
     children
     [ "$children" -gt "$before" ] ||
       fail "the card for a row of the window in front isn't a child window of it"
-    [ "$(uname)" != Darwin ] || [ "$children" -ge $((before + 2)) ] ||
-      fail "the plate window of the card for a row of the window in front isn't a child window of it"
   fi
   send move $page_point
   expect '^browser: hover card hidden$' "leaving the first window's rows didn't hide its card"

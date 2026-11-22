@@ -11,6 +11,8 @@
 //                            window server picks the window the press goes to, and leaves the
 //                            pointer there. It says "clicked X Y".
 //   pointer move X Y PID     moves the pointer to (X, Y), as a mouse's move. It says "moved X Y".
+//   pointer windows PID      lists the windows of process PID on screen that can be seen, front
+//                            first, a line each: "window N level L at X Y W H". It posts nothing.
 // click and move post nothing unless the app of process PID is the frontmost one and no other
 // app's window is over the point, each checked right before each event they post.
 // Built with clang++ -fobjc-arc -framework Cocoa.
@@ -58,6 +60,25 @@ NSString* Refusal(pid_t pid, CGPoint at) {
   return [NSString stringWithFormat:@"no window of process %d is at %.0f %.0f", pid, at.x, at.y];
 }
 
+// What another app sees of |pid|'s windows: those on screen with any alpha, front first.
+void ListWindows(pid_t pid) {
+  NSArray* windows = CFBridgingRelease(CGWindowListCopyWindowInfo(
+      kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID));
+  for (NSDictionary* window in windows) {
+    CGRect bounds;
+    if ([window[(__bridge NSString*)kCGWindowOwnerPID] intValue] != pid ||
+        [window[(__bridge NSString*)kCGWindowAlpha] doubleValue] == 0 ||
+        !CGRectMakeWithDictionaryRepresentation(
+            (__bridge CFDictionaryRef)window[(__bridge NSString*)kCGWindowBounds], &bounds)) {
+      continue;
+    }
+    printf("window %d level %d at %.0f %.0f %.0f %.0f\n",
+           [window[(__bridge NSString*)kCGWindowNumber] intValue],
+           [window[(__bridge NSString*)kCGWindowLayer] intValue], bounds.origin.x,
+           bounds.origin.y, bounds.size.width, bounds.size.height);
+  }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -65,8 +86,13 @@ int main(int argc, char** argv) {
     const bool drag = argc == 6 && strcmp(argv[1], "drag") == 0;
     const bool click = argc == 5 && strcmp(argv[1], "click") == 0;
     const bool move = argc == 5 && strcmp(argv[1], "move") == 0;
+    if (argc == 3 && strcmp(argv[1], "windows") == 0) {
+      ListWindows(atoi(argv[2]));
+      return 0;
+    }
     if (!drag && !click && !move) {
-      fprintf(stderr, "usage: pointer drag X Y X2 Y2 | click X Y PID | move X Y PID\n");
+      fprintf(stderr,
+              "usage: pointer drag X Y X2 Y2 | click X Y PID | move X Y PID | windows PID\n");
       return 2;
     }
     const char* actions = getenv("GITHUB_ACTIONS");
