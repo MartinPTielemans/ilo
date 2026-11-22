@@ -123,13 +123,15 @@ send move $page_point
 expect '^browser: hover card hidden$' "leaving the rows didn't hide the light card"
 
 # Switches back and forth, each timed, then the one hidden last is pictured and the one shown
-# isn't.
+# isn't asked for. A picture asked for while it was hidden can still come after the last switch:
+# a hidden page draws unseen for it, a few hundred ms on Windows, and switches come faster (#3904).
 for _ in 1 2 3 4 5; do
   switch "2 cmd" "$a"
   switch "1 cmd" "$b"
 done
 expect "^browser: hover card pictured $a\$" "the tab hidden last wasn't pictured after the switches"
-none_since "^browser: hover card pictured $b\$" || fail "the tab shown was pictured after the switches"
+none_since "^browser: tab $b picturing " || fail "the tab shown was asked for its picture after the \
+switches: $(since | grep "^browser: tab [0-9]* picturing \|^browser: hover card pictured " | tr '\n' ' ')"
 
 # With the sidebar hidden, a row's card is the sidebar's own (#830): the pointer going from the row
 # onto it, past the hold zone, leaves the sidebar out, and leaving both sends the sidebar away and
