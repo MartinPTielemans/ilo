@@ -613,6 +613,8 @@ std::optional<std::string> ToJson(const Saved& saved) {
                            .Set("ask_where_to_save", saved.settings.ask_where_to_save)
                            .Set("page_zoom", saved.settings.page_zoom)
                            .Set("notification_prompts", saved.settings.notification_prompts)
+                           .Set("favorite_notification_badges",
+                                saved.settings.favorite_notification_badges)
                            .Set("appearance", saved.settings.appearance)
                            .Set("space_header", saved.settings.space_header));
   base::DictValue lists;
@@ -918,6 +920,8 @@ std::optional<Saved> Read(const base::FilePath& path) {
     saved.settings.page_zoom = page_zoom > 0 ? page_zoom : 1;
     saved.settings.notification_prompts =
         settings->FindBool("notification_prompts").value_or(true);
+    saved.settings.favorite_notification_badges =
+        settings->FindBool("favorite_notification_badges").value_or(true);
     const int appearance = settings->FindInt("appearance").value_or(0);
     saved.settings.appearance = appearance >= 0 && appearance <= 2 ? appearance : 0;
     saved.settings.space_header = settings->FindBool("space_header").value_or(false);
