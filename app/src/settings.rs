@@ -4138,12 +4138,16 @@ impl Settings {
                 .child(add);
             rows.push(adding);
         }
+        // Its last line's foot, where check.sh scrolls it into sight before it captures it whole.
+        let end = div().absolute().left_0().right_0().bottom_0().h(px(1.));
         let foot = div()
+            .relative()
             .px(px(TEXT_X))
             .text_size(px(text::SMALL))
             .line_height(px(DETAIL_LINE))
             .text_color(look.detail)
-            .child(fence::FOOT);
+            .child(fence::FOOT)
+            .child(end.child(self.drawn("fence foot".into())));
         let under = match self.fence_adding {
             true => div().child(foot),
             false => {
