@@ -939,6 +939,7 @@ fi
 third=$(grep '^browser: spaces' "$log" | tail -1 | cut -d' ' -f5)
 expect "^browser: space $third in " "the window didn't show the third Space"
 unnamed=$((step + 1))
+expect '^browser: field Space name has the keyboard$' "New Space's name didn't have the keyboard for the third Space"
 send key return
 show_space "key 1 ctrl" select-space ui "$first" "$a"
 none_since '^browser: create space' "$unnamed" || fail "return with no name named the Space"

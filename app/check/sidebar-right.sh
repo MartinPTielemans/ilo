@@ -144,6 +144,7 @@ expect '^browser: command new-space via ui$' "New Space in the menu didn't run n
 expect "^browser: spaces $first [0-9]*\$" "New Space didn't make a second Space"
 second=$(grep '^browser: spaces' "$log" | tail -1 | cut -d' ' -f4)
 expect "^browser: space $second in " "the window didn't show the new Space"
+expect '^browser: field Space name has the keyboard$' "New Space's name didn't have the keyboard"
 send type second
 send key return
 expect "^browser: create space $second second\$" "return didn't name the second Space"

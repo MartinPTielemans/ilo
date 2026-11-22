@@ -145,6 +145,7 @@ if [ "$(uname)" = Linux ]; then
   send menu New Space…
   expect "^browser: spaces $first [0-9]*\$" "$way: New Space didn't make a second Space"
   second=$(grep '^browser: spaces' "$log" | tail -1 | cut -d' ' -f4)
+  expect '^browser: field Space name has the keyboard$' "$way: New Space's name didn't have the keyboard"
   send type two
   send key return
   expect "^browser: create space $second two\$" "$way: return didn't name the Space"
