@@ -252,6 +252,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <csignal>
 #include <cstdio>
 #include <map>
 #include <sstream>
@@ -1649,6 +1650,16 @@ bool Run(const std::string& line, void (^done)(void)) {
     }
     NSRunningApplication* to = [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
     if (!to) {
+      // Once this didn't find a copy that had been running and active for 25 s (#3921), so a
+      // refusal says whether the process is up and whether macOS lists it among its apps.
+      const bool up = kill(pid, 0) == 0 || errno == EPERM;
+      bool listed = false;
+      for (NSRunningApplication* each in NSWorkspace.sharedWorkspace.runningApplications) {
+        listed = listed || each.processIdentifier == pid;
+      }
+      fprintf(stderr, "browser: yield to %d refused: no app has that pid; the process %s, %s\n",
+              pid, up ? "is up" : "isn't",
+              listed ? "and macOS lists it" : "and macOS lists no app with it");
       return false;
     }
     // Always, as the app needs macOS 15 (build.sh), but mac-syntax.yml compiles for macOS 11.
