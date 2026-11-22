@@ -285,11 +285,12 @@ const SIDEBAR_HIDE: f32 = 0.11;
 const SIDEBAR_SHOW: f32 = 0.1;
 // The sidebar's edge drags its width between Arc's limits, stopping at them, and dragged on past
 // the narrowest it hides the sidebar (docs/ux-spec.md › Sidebar › Width). A double-click on the
-// edge settles it back, as the Space pages settle, at the width it starts at. The edge is the
-// margin right of the rows.
+// edge settles it back, as the Space pages settle, at the width it starts at. The edge is as wide
+// as the split's gap and the side panel's edge (ours: Arc's isn't measured): the margin right of
+// the rows and 2 of their plates, short of a row's close button.
 use crate::tokens::shell::SIDEBAR_MAX;
 use crate::tokens::shell::SIDEBAR_MIN;
-const SIDEBAR_EDGE: f32 = 6.;
+const SIDEBAR_EDGE: f32 = 10.;
 
 // The sidebar reveal (docs/ux-spec.md › Sidebar reveal): the hidden sidebar slides over the page as
 // a panel once the pointer has been at the window's left edge for a moment, and slides away once
@@ -4934,7 +4935,9 @@ impl Render for Shell {
             && !self.sidebar_hidden
             && self.sidebar_motion.is_none()
             && self.library.is_none();
-        let edge = docked.then(|| self.sidebar_edge(cx));
+        // A drag already going, a tab's, a Space's or a swipe's, keeps the pointer as it passes.
+        let dragging = self.drag.is_some() || self.swipe.is_some() || cx.has_active_drag();
+        let edge = (docked && !dragging).then(|| self.sidebar_edge(cx));
         let own_buttons = self
             .draws_own_window_buttons()
             .then(|| self.window_buttons(self.viewport.width, cx));
