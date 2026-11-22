@@ -291,6 +291,8 @@ void StripTint(CALayer* layer) {
 @end
 
 @interface HostPlateView : NSView
+// Whether the plate had a press that isn't let go yet.
+@property BOOL pressed;
 @end
 
 @implementation HostPlateView
@@ -307,27 +309,19 @@ void StripTint(CALayer* layer) {
 }
 
 // |event|, a mouse event of the plate window's, as the surface's window would have had it there,
-// of |type|, at |at| on screen.
+// of |type|, at |at| on screen. Only the left button's: the three take clicks with it alone.
 - (NSEvent*)surfaceEvent:(NSEvent*)event type:(NSEventType)type at:(NSPoint)at {
   HostPlateWindow* plate = (HostPlateWindow*)self.window;
   const bool moved = type == NSEventTypeMouseMoved;
-  NSEvent* handed = [NSEvent mouseEventWithType:type
-                                       location:[plate.surface convertPointFromScreen:at]
-                                  modifierFlags:event.modifierFlags
-                                      timestamp:event.timestamp
-                                   windowNumber:plate.surface.windowNumber
-                                        context:nil
-                                    eventNumber:moved ? 0 : event.eventNumber
-                                     clickCount:moved ? 0 : event.clickCount
-                                       pressure:moved ? 0 : event.pressure];
-  // AppKit gives every event it makes button 0, and GPUI takes the button from the number.
-  if (!moved && event.buttonNumber != 0) {
-    CGEventRef numbered = CGEventCreateCopy(handed.CGEvent);
-    CGEventSetIntegerValueField(numbered, kCGMouseEventButtonNumber, event.buttonNumber);
-    handed = [NSEvent eventWithCGEvent:numbered];
-    CFRelease(numbered);
-  }
-  return handed;
+  return [NSEvent mouseEventWithType:type
+                            location:[plate.surface convertPointFromScreen:at]
+                       modifierFlags:event.modifierFlags
+                           timestamp:event.timestamp
+                        windowNumber:plate.surface.windowNumber
+                             context:nil
+                         eventNumber:moved ? 0 : event.eventNumber
+                          clickCount:moved ? 0 : event.clickCount
+                            pressure:moved ? 0 : event.pressure];
 }
 
 - (NSEvent*)surfaceEvent:(NSEvent*)event {
@@ -352,7 +346,18 @@ void StripTint(CALayer* layer) {
   return NO;
 }
 
+// A move outside the surface's window, as GPUI's leave is on Linux and Windows: the pointer is off
+// the plate, and its margin lets the pointer through.
+- (void)tellSurfaceLeft:(NSEvent*)event {
+  NSWindow* surface = ((HostPlateWindow*)self.window).surface;
+  const NSPoint outside = NSMakePoint(-1, NSHeight(surface.frame) + 1);
+  [self.target mouseMoved:[self surfaceEvent:event
+                                        type:NSEventTypeMouseMoved
+                                          at:[surface convertPointToScreen:outside]]];
+}
+
 - (void)mouseDown:(NSEvent*)event {
+  self.pressed = YES;
   [self.target mouseDown:[self surfaceEvent:event]];
 }
 
@@ -360,49 +365,32 @@ void StripTint(CALayer* layer) {
   [self.target mouseDragged:[self surfaceEvent:event]];
 }
 
+// The surface takes the pointer's place from the release, so one off the plate drops its hover.
+// The pointer is then off the plate, so the window under it is told again on its next visit.
 - (void)mouseUp:(NSEvent*)event {
+  self.pressed = NO;
   [self.target mouseUp:[self surfaceEvent:event]];
-}
-
-- (void)rightMouseDown:(NSEvent*)event {
-  [self.target rightMouseDown:[self surfaceEvent:event]];
-}
-
-- (void)rightMouseDragged:(NSEvent*)event {
-  [self.target rightMouseDragged:[self surfaceEvent:event]];
-}
-
-- (void)rightMouseUp:(NSEvent*)event {
-  [self.target rightMouseUp:[self surfaceEvent:event]];
-}
-
-- (void)otherMouseDown:(NSEvent*)event {
-  [self.target otherMouseDown:[self surfaceEvent:event]];
-}
-
-- (void)otherMouseDragged:(NSEvent*)event {
-  [self.target otherMouseDragged:[self surfaceEvent:event]];
-}
-
-- (void)otherMouseUp:(NSEvent*)event {
-  [self.target otherMouseUp:[self surfaceEvent:event]];
+  if (!NSPointInRect([self convertPoint:event.locationInWindow fromView:nil], self.bounds)) {
+    ((HostPlateWindow*)self.window).parentLeft = NO;
+  }
 }
 
 // The pointer is on the plate, which the window under it hears as a move outside it, as GPUI's
 // leave is on Linux and Windows when the pointer goes into the surface's window. A move the driver
 // posts brings it no exit, and its UI kept the row under the pointer's last place hovered, so a
-// row moving there after a click on the card showed its own card (#3644). Not while a button is
-// down, as that window still has the drag.
-- (void)tellParentLeft:(NSEvent*)event {
+// row moving there after a click on the card showed its own card (#3644). Told from a move alone,
+// which comes with no button down, as a drag from that window still goes to it.
+- (void)mouseMoved:(NSEvent*)event {
+  [self.target mouseMoved:[self surfaceEvent:event]];
   HostPlateWindow* plate = (HostPlateWindow*)self.window;
   NSWindow* parent = plate.parentWindow;
   NSView* view = plate.parentView;
-  if (plate.parentLeft || NSEvent.pressedMouseButtons || !parent || view.window != parent) {
+  if (plate.parentLeft || !parent || view.window != parent) {
     return;
   }
   plate.parentLeft = YES;
   // A check's log can then say whether the window heard it, as its UI's hover lines alone can't.
-  if (getenv("BROWSER_DRIVE")) {
+  if (Checked()) {
     fprintf(stderr, "browser: plate window %s told the window the pointer left\n",
             plate.name.UTF8String);
   }
@@ -413,35 +401,19 @@ void StripTint(CALayer* layer) {
                                   windowNumber:parent.windowNumber
                                        context:nil
                                    eventNumber:0
-                                    clickCount:0
+                                     clickCount:0
                                       pressure:0]];
 }
 
-- (void)mouseMoved:(NSEvent*)event {
-  [self.target mouseMoved:[self surfaceEvent:event]];
-  [self tellParentLeft:event];
-}
-
-- (void)mouseEntered:(NSEvent*)event {
-  const NSPoint at = [self.window convertPointToScreen:event.locationInWindow];
-  [self.target mouseMoved:[self surfaceEvent:event type:NSEventTypeMouseMoved at:at]];
-  [self tellParentLeft:event];
-}
-
-// A move outside the surface's window, as GPUI's leave is on Linux and Windows: the pointer is off
-// the plate, and its margin lets the pointer through. Not while a button is down, as the drags and
-// the release that follow still come here, with the pointer's place: the surface hears the release
-// where it is, off the plate, and drops the hover itself.
+// Not after a press on the plate that isn't let go, as its drags and its release still come here,
+// with the pointer's place. Asked of the presses the plate had, not of the mouse now: a press on
+// the page as the pointer leaves is down before this exit is handled (#3644).
 - (void)mouseExited:(NSEvent*)event {
-  if (NSEvent.pressedMouseButtons) {
+  if (self.pressed) {
     return;
   }
   ((HostPlateWindow*)self.window).parentLeft = NO;
-  NSWindow* surface = ((HostPlateWindow*)self.window).surface;
-  const NSPoint outside = NSMakePoint(-1, NSHeight(surface.frame) + 1);
-  [self.target mouseMoved:[self surfaceEvent:event
-                                        type:NSEventTypeMouseMoved
-                                          at:[surface convertPointToScreen:outside]]];
+  [self tellSurfaceLeft:event];
 }
 
 // None of the three scrolls, and a scroll on its plate went to the surface's view, which had
@@ -1011,6 +983,8 @@ void HidePlateWindow(HostPlateWindow* plate) {
   [plate.parentWindow removeChildWindow:plate];
   [plate orderOut:nil];
   plate.parentLeft = NO;
+  // A press that takes its surface away, such as a toast's button, gets no release here.
+  ((HostPlateView*)plate.contentView).pressed = NO;
   if (Checked()) {
     fprintf(stderr, "browser: plate window %s hidden\n", plate.name.UTF8String);
   }
@@ -1025,6 +999,7 @@ void PlacePlateWindow(HostPlateWindow* plate, NSWindow* parent, NSRect rect) {
     HidePlateWindow(plate);
     return;
   }
+  const NSTimeInterval began = NSProcessInfo.processInfo.systemUptime;
   const NSRect frame = surface.frame;
   const NSRect drawn = NSMakeRect(NSMinX(frame) + NSMinX(rect), NSMaxY(frame) - NSMaxY(rect),
                                   NSWidth(rect), NSHeight(rect));
@@ -1056,8 +1031,15 @@ void PlacePlateWindow(HostPlateWindow* plate, NSWindow* parent, NSRect rect) {
     }
     plate.parentLeft = NO;
     AddOver(parent, plate);
-    [plate orderWindow:NSWindowAbove relativeTo:surface.windowNumber];
+    // Over its surface only while that's on screen: against a window that isn't, as a minimized
+    // or hidden window's child or one on another desktop, AppKit orders it in at the front of its
+    // level, where it would take clicks over whatever is there. As a child, it comes back with its
+    // parent.
+    if (surface.visible && surface.onActiveSpace) {
+      [plate orderWindow:NSWindowAbove relativeTo:surface.windowNumber];
+    }
   }
+  const double took = (NSProcessInfo.processInfo.systemUptime - began) * 1000;
   if ((moved || added) && Checked()) {
     // Where the window is and where its surface drew the plate, unrounded, from the browser
     // window's content's top left, for check.sh to compare.
@@ -1067,6 +1049,8 @@ void PlacePlateWindow(HostPlateWindow* plate, NSWindow* parent, NSRect rect) {
             plate.name.UTF8String, NSMinX(at) - NSMinX(content), NSMaxY(content) - NSMaxY(at),
             NSWidth(at), NSHeight(at), NSMinX(drawn) - NSMinX(content),
             NSMaxY(content) - NSMaxY(drawn), NSWidth(drawn), NSHeight(drawn));
+    // What placing it adds to the frame its surface reports the plate in, at rest.
+    fprintf(stderr, "browser: plate window %s placed in %.2f ms\n", plate.name.UTF8String, took);
   }
 }
 
@@ -4793,6 +4777,18 @@ void host_add_toast(void* toast_view) {
   // Its undo is a click, and the keyboard stays with the browser window, where ⌘Z is.
   NeverKey(g_toast);
   g_toast_plate_window = MakePlateWindow(g_toast, g_toast_view, @"toast");
+  // check.sh reads these lines: the plate window over the toast mustn't put it out of sight to
+  // AppKit, which would stop it drawing its hover.
+  if (Checked()) {
+    [NSNotificationCenter.defaultCenter
+        addObserverForName:NSWindowDidChangeOcclusionStateNotification
+                    object:g_toast
+                     queue:nil
+                usingBlock:^(NSNotification*) {
+                  const bool seen = g_toast.occlusionState & NSWindowOcclusionStateVisible;
+                  fprintf(stderr, "browser: toast window %s\n", seen ? "in sight" : "out of sight");
+                }];
+  }
 }
 
 void host_show_toast(void* ui_view) {
@@ -5147,8 +5143,9 @@ bool OnCardPlate(NSPoint screen) {
 // onto its plate or off it before the window under the pointer has it: on it, or the card would go
 // as the row is left with the pointer on it, and off it, or a hidden sidebar would stay out for it
 // (#830). The reveal's monitor asks it first, so the reveal knows the pointer is on the card, and
-// the card's own then finds nothing changed. A move the driver posts brings no tracking area's
-// exit, so this tells the card the pointer left when the plate window can't.
+// the card's own then finds nothing changed. A move the plate window has, it passes on itself. One
+// off the plate, the card hears from here and, with the real pointer, again from the plate window's
+// exit, as a move outside its window: a move the driver posts brings no exit.
 void CardHearsMove(NSEvent* move) {
   if (!g_card_monitor) {
     return;
@@ -5162,7 +5159,7 @@ void CardHearsMove(NSEvent* move) {
     return;
   }
   g_card_pointer_on = on;
-  if (move.type == NSEventTypeMouseMoved) {
+  if (move.type == NSEventTypeMouseMoved && move.window != g_card_plate_window) {
     [g_card_view mouseMoved:[NSEvent mouseEventWithType:NSEventTypeMouseMoved
                                                location:[g_card convertPointFromScreen:at]
                                           modifierFlags:move.modifierFlags
