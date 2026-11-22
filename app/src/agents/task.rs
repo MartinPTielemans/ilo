@@ -281,6 +281,8 @@ pub struct Task {
     pub state: State,
     /// When it finished, done, stopped or failed, for its conversation and the Archive.
     pub ended: Option<SystemTime>,
+    /// The id the log's next entry took as it ended (`Task::end`).
+    pub(super) end_entry: u64,
     /// When it started, and when it ended as Library › Agents last kept it.
     pub started: SystemTime,
     pub(super) kept: Option<SystemTime>,
@@ -349,6 +351,14 @@ pub struct Session {
 }
 
 impl Task {
+    /// It ended `at`. Its record keeps the log's entries from before then, and none noted after,
+    /// such as its agent's disconnect, which the Mac's clock, in microseconds, can give the very
+    /// time it ended (#3967).
+    fn end(&mut self, at: SystemTime) {
+        self.ended = Some(at);
+        self.end_entry = super::next_entry_id();
+    }
+
     pub(super) fn token(&self) -> &str {
         &self.token
     }
@@ -1056,6 +1066,7 @@ impl Agents {
             model,
             state: State::Working,
             ended: None,
+            end_entry: 0,
             started: SystemTime::now(),
             kept: None,
             orders: 0,
@@ -1276,7 +1287,7 @@ impl Agents {
                         summary: None,
                         tabs: Vec::new(),
                     };
-                    task.ended = Some(SystemTime::now());
+                    task.end(SystemTime::now());
                 }
             }
             // The turn the user stopped ends as an error; their stop is what the card says.
@@ -1333,7 +1344,7 @@ impl Agents {
         }
         if let Some(task) = self.task_mut(agent) {
             task.state = state;
-            task.ended = Some(SystemTime::now());
+            task.end(SystemTime::now());
             task.waiting = None;
             task.writing = None;
         }
@@ -1410,7 +1421,7 @@ impl Agents {
             return;
         }
         task.state = State::Stopped;
-        task.ended = Some(SystemTime::now());
+        task.end(SystemTime::now());
         if let Some(process) = task.process.as_mut() {
             process.interrupt();
         }
@@ -2063,6 +2074,7 @@ impl Agents {
             model: SharedString::default(),
             state: State::Working,
             ended: None,
+            end_entry: 0,
             started: SystemTime::now(),
             kept: None,
             orders: 0,
@@ -2168,6 +2180,7 @@ impl Agents {
                         && (entry.connection == connection || entry.connection == 0)
                         && entry.at >= from
                         && entry.at <= to
+                        && entry.id < task.end_entry
                 })
                 .flat_map(|entry| match entry.steps.is_empty() {
                     true => vec![entry],
@@ -2259,7 +2272,7 @@ impl Agents {
         });
         for task in live {
             task.state = State::Stopped;
-            task.ended = Some(SystemTime::now());
+            task.end(SystemTime::now());
             if let Some(session) = &mut task.session {
                 session.idle = None;
                 session.quiet = None;
@@ -2395,7 +2408,7 @@ impl Agents {
             summary: None,
             tabs,
         };
-        task.ended = Some(SystemTime::now() - since);
+        task.end(SystemTime::now() - since);
         if let Some(session) = &mut task.session {
             session.idle = None;
             session.quiet = None;
@@ -2670,7 +2683,7 @@ impl Agents {
                     summary,
                     tabs,
                 };
-                task.ended = Some(SystemTime::now());
+                task.end(SystemTime::now());
                 self.note(agent, 0, "finish", &site, "");
                 _ = reply.send(ToolResult::text(
                     "Done. The user sees your result. Stop here.",
