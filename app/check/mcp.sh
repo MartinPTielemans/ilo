@@ -1039,10 +1039,12 @@ onload = () => setTimeout(() => { location.href = q.get("file"); }, Number(q.get
   if [ "$(uname)" = Darwin ]; then card_key="a alt shift cmd"; else card_key="a ctrl shift"; fi
   answer_by_keys() {
     closed=$(grep -c '^browser: task area [0-9]* closed$' "$log" || true)
-    send key $card_key
+    # ↩ goes in the driver's queue with the key, as it handles each command once the last is
+    # done: waiting for the key's done line first took Windows' shell past the protection.
+    post key $card_key
+    send key return
     expect "^browser: agent card keys on $1 Allow Once\$" \
       "Focus Agent Question's key didn't give the later download's card the keyboard on Allow Once"
-    send key return
     expect "^browser: agent card key ignored, " "↩ straight after Focus Agent Question's key wasn't ignored"
     send key $card_key
     expect "^browser: agent card keys back by key\$" "Focus Agent Question's key again didn't give the keyboard back"
