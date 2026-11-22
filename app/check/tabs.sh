@@ -1291,15 +1291,18 @@ expect "^browser: selected $u\( in .*\)\{0,1\}\$" \
   "closing the favorite didn't show the tab shown before it"
 expect "^browser: page $fav unloaded 1\$" "Close Tab in the tile's menu didn't unload the favorite"
 none_since '^browser: favorites ' || fail "Close Tab in the tile's menu took the favorite away"
-# Out of the favorites, it's the top of Today with no tab to go back to, the bar's tab having
-# taken its way back, so ⌘W on it shows the tab under it.
+# Its tile offers no Close Tab, with no page to close. Out of the favorites, it's the top of Today
+# with no tab to go back to, the bar's tab having taken its way back, so ⌘W on it shows the tab
+# under it.
 post rightclick 114 114
-expect "^browser: menu shown .*$(cased 'Remove from Favorites, Change Icon…, Close Tab')\$" \
-  "a right-click on the closed favorite's tile didn't show its menu"
+expect "^browser: menu shown .*$(cased 'Remove from Favorites, Change Icon…, Close Tab (disabled)')\$" \
+  "a right-click on the closed favorite's tile didn't show its menu, with Close Tab off"
 send choose "$(cased 'Remove from Favorites')"
 expect '^browser: favorites $' "Remove from Favorites left the closed favorite's tile"
 expect "^browser: today $fav $x $kept\$" \
   "Remove from Favorites didn't put the closed favorite at the top of Today: Today is \"$(today)\""
+# The rows slide down under it, and a press before they stop lands on the wrong one.
+expect '^browser: rows settled$' "the rows didn't settle under the closed favorite put in Today"
 send click $(row 0)
 expect "^browser: selected $fav in " "a click on the former favorite's row didn't show it"
 send key w cmd
