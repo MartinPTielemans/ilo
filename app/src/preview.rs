@@ -4663,7 +4663,7 @@ struct PicturesPage {
     buttons: browser::settings_pictures::Buttons,
     card: Card,
     search: gpui::Entity<browser::text_input::TextInput>,
-    logged: Rc<std::cell::RefCell<Vec<String>>>,
+    logged: browser::settings_rows::Drawn,
 }
 
 impl gpui::Render for PicturesPage {

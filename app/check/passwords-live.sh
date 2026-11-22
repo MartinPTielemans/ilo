@@ -30,8 +30,10 @@ focused() {
 # link home, then tab to the username field, wherever the site lays it out.
 send click 700 130
 if [ "$active" != 1 ]; then
-  exec 3>&- 5>&-
+  # Quits before cdp.py's pipe closes: the browser ends by itself as the pipe goes, and a quit
+  # asked then finds it ending, which the Mac answers with an error (#3870).
   quit
+  exec 5>&-
   echo "skip: passwords-live. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi
@@ -53,8 +55,8 @@ await "^browser: loaded $tab https://the-internet.herokuapp.com/secure\$" ||
 expect "^browser: offer $tab save tomsmith " "the typed sign-in brought no offer to save"
 expect '^browser: offer shown$' "the offer to save wasn't shown"
 ../tools/window-screenshot.sh "$pid" "$out/passwords-live-offer.png" || fail "no window to capture"
-exec 3>&- 5>&-
 quit
+exec 5>&-
 rm -rf "$scratch"
 echo "ok: a sign-in typed on the-internet.herokuapp.com/login reached its secure area and offered" \
   "to save the password. Window: $out/passwords-live-offer.png"

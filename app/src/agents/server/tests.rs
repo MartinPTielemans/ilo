@@ -327,11 +327,16 @@ fn initialize_begins_a_session() {
             .contains("tabs of your own")
     );
     match next(&mut handed) {
-        Some(Event::Hello { agent, client }) => {
+        Some(Event::Hello {
+            agent,
+            client,
+            connection,
+        }) => {
             assert_eq!(
                 (agent.as_str(), client.as_str()),
                 ("claude-code", "claude-code")
-            )
+            );
+            assert_ne!(connection, 0, "0 is the UI's for no connection");
         }
         _ => panic!("the UI didn't hear the agent's hello"),
     }
@@ -363,8 +368,36 @@ fn hello_gives_the_clients_title_else_its_name() {
             _ => panic!("the UI didn't hear the agent's hello"),
         }
         drop(client);
+        assert!(matches!(next(&mut handed), Some(Event::Closed { .. })));
         assert!(matches!(next(&mut handed), Some(Event::Bye { .. })));
     }
+}
+
+/// A connection's hello and its calls carry its number, which tells the UI's sessions apart: two
+/// connections of one agent have two.
+#[test]
+fn hello_and_calls_carry_their_connection() {
+    let (server, _, mut handed) = server();
+    let (mut first, _first_answers) = session(&server, &mut handed);
+    let (mut second, _second_answers) = session(&server, &mut handed);
+    send_call(&mut first, 2, "read_page", json!({ "tab": 1 }));
+    let on_first = next_call(&mut handed).expect("the first connection's call");
+    send_call(&mut second, 2, "read_page", json!({ "tab": 2 }));
+    let on_second = next_call(&mut handed).expect("the second connection's call");
+    assert_ne!(on_first.connection, on_second.connection);
+
+    let mut third = Client::connect(&server);
+    third.initialize();
+    let Some(Event::Hello { connection, .. }) = next(&mut handed) else {
+        panic!("the UI didn't hear the agent's hello");
+    };
+    third.send(json!({
+        "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+        "params": { "name": "read_page", "arguments": { "tab": 3 } },
+    }));
+    let on_third = next_call(&mut handed).expect("the third connection's call");
+    assert_eq!(on_third.connection, connection);
+    assert!(![on_first.connection, on_second.connection].contains(&connection));
 }
 
 /// The tools list says what each takes; a notification is answered with nothing; an unknown
@@ -473,18 +506,41 @@ fn a_dropped_call_is_an_error() {
     assert_eq!(calling.join().unwrap()["result"]["isError"], true);
 }
 
-/// The agent's last connection closing tells the UI it's gone, and not before.
+/// Each connection closing tells the UI which closed, and the agent's last tells it after that
+/// the agent's gone, and not before.
 #[test]
-fn the_agents_last_session_ending_says_bye() {
+fn each_connection_closing_says_so_and_the_last_says_bye() {
     let (server, _, mut handed) = server();
     let mut first = Client::connect(&server);
     first.initialize();
+    let Some(Event::Hello {
+        connection: one, ..
+    }) = next(&mut handed)
+    else {
+        panic!("the UI didn't hear the first hello");
+    };
     let mut second = Client::connect(&server);
     second.initialize();
-    assert!(matches!(next(&mut handed), Some(Event::Hello { .. })));
-    assert!(matches!(next(&mut handed), Some(Event::Hello { .. })));
+    let Some(Event::Hello {
+        connection: two, ..
+    }) = next(&mut handed)
+    else {
+        panic!("the UI didn't hear the second hello");
+    };
     drop(first);
+    match next(&mut handed) {
+        Some(Event::Closed { agent, connection }) => {
+            assert_eq!((agent.as_str(), connection), ("claude-code", one))
+        }
+        _ => panic!("the UI didn't hear the first connection close"),
+    }
     drop(second);
+    match next(&mut handed) {
+        Some(Event::Closed { agent, connection }) => {
+            assert_eq!((agent.as_str(), connection), ("claude-code", two))
+        }
+        _ => panic!("the agent said bye with a connection left"),
+    }
     match next(&mut handed) {
         Some(Event::Bye { agent }) => assert_eq!(agent, "claude-code"),
         _ => panic!("the UI didn't hear the agent go"),
@@ -510,6 +566,7 @@ fn a_client_closing_while_a_call_waits_ends_its_session() {
         panic!("the call didn't reach the UI thread");
     };
     close_write(&mut client.writer).unwrap();
+    assert!(matches!(next(&mut handed), Some(Event::Closed { .. })));
     match next(&mut handed) {
         Some(Event::Bye { agent }) => assert_eq!(agent, "claude-code"),
         _ => panic!("the UI didn't hear the agent go while its call waited"),

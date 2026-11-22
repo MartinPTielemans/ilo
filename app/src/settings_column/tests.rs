@@ -14,7 +14,7 @@ use crate::tokens::shell::library::SEARCH_HEIGHT;
 struct Shown {
     sections: Sections,
     shown: Section,
-    logged: Rc<RefCell<Vec<String>>>,
+    logged: crate::settings_rows::Drawn,
     picked: Rc<RefCell<Vec<Section>>>,
     foot: Rc<Cell<usize>>,
 }
@@ -153,6 +153,7 @@ fn at_the_least_height_the_sections_scroll_above_the_foot(cx: &mut TestAppContex
     let about = view.read_with(cx, |view, _| {
         let logged = view.logged.borrow();
         let line = logged
+            .lines()
             .iter()
             .find(|line| line.contains(" toolbar About at "))
             .cloned();
@@ -499,7 +500,7 @@ gpui::actions!(settings_routes, [RoutedUndo, RoutedClose, RoutedEscape]);
 struct Routes {
     focus: gpui::FocusHandle,
     import: gpui::FocusHandle,
-    logged: Rc<RefCell<Vec<String>>>,
+    logged: crate::settings_rows::Drawn,
     trashed: Rc<Cell<bool>>,
     imported: Rc<Cell<bool>>,
     gone: Rc<Cell<bool>>,
@@ -512,7 +513,7 @@ impl Render for Routes {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let look = crate::settings_rows::Look::settings(true);
         let control =
-            |id: &'static str, flag: &Rc<Cell<bool>>, logged: &Rc<RefCell<Vec<String>>>| {
+            |id: &'static str, flag: &Rc<Cell<bool>>, logged: &crate::settings_rows::Drawn| {
                 let flag = flag.clone();
                 crate::settings_rows::button(&look, id, id)
                     .relative()
@@ -592,6 +593,7 @@ fn press_on(view: &gpui::Entity<Routes>, what: &str, cx: &mut VisualTestContext)
     let at = view.read_with(cx, |view, _| {
         let logged = view.logged.borrow();
         let line = logged
+            .lines()
             .iter()
             .find(|line| line.contains(&format!(" {what} at ")))
             .cloned();

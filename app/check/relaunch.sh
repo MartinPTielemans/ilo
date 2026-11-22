@@ -151,6 +151,7 @@ send window 2
 send place "$(at 320 140 900 640)"
 send menu New Space…
 expect '^browser: command new-space via ui$' "New Space in the menu didn't run in the second window"
+expect '^browser: field Space name has the keyboard$' "New Space's name didn't have the keyboard in the second window"
 send type reading
 send key return
 expect '^browser: create space [0-9]* reading$' "return didn't name the second window's Space"

@@ -18,7 +18,9 @@ check <pack dir> <checkout> [<engine dir>]: runs clang -fsyntax-only on each cor
   compiled, as the branch has it, with the build's own flags, against the runner's SDK. The engine
   dir is the engine/ the packed engine was built from: its series and patches. Given it, the pack's
   headers are first brought to the branch's own patches, as engine/tree.sh brings a tree, so a core
-  change that needs a new engine patch is checked with it (#2747).
+  change that needs a new engine patch is checked with it (#2747). A file whose target's packed
+  flags find no header it includes is checked again with the core's flags, as the branch may have
+  given its target a dependency the pack's build files don't have yet (#3868).
 """
 import concurrent.futures
 import getpass
@@ -402,16 +404,40 @@ def check(pack_dir, checkout, built=None):
         )
         return source, r.returncode, r.stderr
 
-    failed = []
     with concurrent.futures.ThreadPoolExecutor(os.cpu_count()) as pool:
-        for source, code, err in pool.map(run, jobs):
-            if err:
-                print(f"::group::core/{source}{': failed' if code else ''}")
-                print(err, end="")
+        results = list(pool.map(run, jobs))
+        # A file whose target's packed flags find no header it includes may be in a target the
+        # branch gave a new dependency, which the packed engine's build files don't have yet
+        # (#3868). It's checked again with the core's flags, as a file the branch adds is, and fails
+        # only if that fails too: a header the pack doesn't hold still fails.
+        again = [
+            (source, rule, core_flags, "")
+            for (source, code, err), (_, rule, _, target) in zip(results, jobs)
+            if code and target not in ("", "browser_core") and missing_headers_only(err)
+        ]
+        retried = {source: (code, err) for source, code, err in pool.map(run, again)}
+
+    failed, reflagged = [], []
+    for source, code, err in results:
+        if source in retried:
+            first = err
+            code, err = retried[source]
+            if not code:
+                reflagged.append("core/" + source)
+                print(f"::group::core/{source}: its target's packed flags miss a header")
+                print(first, end="")
                 print("::endgroup::")
-            if code:
-                failed.append("core/" + source)
-            for m in re.finditer(r"^(\S+?):(\d+):(\d+): (?:fatal )?error: (.*)$", err, re.M):
+                print(
+                    f"::warning file=core/{source}::Its target's flags in the pack find no header "
+                    "it includes, and the core's flags do, so it's checked with those."
+                )
+        if err:
+            print(f"::group::core/{source}{': failed' if code else ''}")
+            print(err, end="")
+            print("::endgroup::")
+        if code:
+            failed.append("core/" + source)
+            for m in re.finditer(ERROR, err, re.M):
                 path = re.sub(r"^\.\./\.\./browser_core/", "core/", m.group(1))
                 print(f"::error file={path},line={m.group(2)},col={m.group(3)}::{m.group(4)}")
 
@@ -420,6 +446,11 @@ def check(pack_dir, checkout, built=None):
         lines.append("Failed: " + ", ".join(failed) + ".")
     if checked:
         lines.append("Added by this branch, checked with the core's flags: " + ", ".join(checked))
+    if reflagged:
+        lines.append(
+            "Checked with the core's flags, as their targets' flags in the pack find no header they"
+            " include, maybe for a dependency the branch adds (#3868): " + ", ".join(reflagged)
+        )
     skipped = [f for f in added if f not in checked]
     if skipped:
         lines.append("Added in platform/, maybe another OS's, not checked: " + ", ".join(skipped))
@@ -427,6 +458,16 @@ def check(pack_dir, checkout, built=None):
         lines.append("In the engine's build, not in this branch: " + ", ".join(gone) + ".")
     summary("\n\n".join(lines))
     return 1 if failed else 0
+
+
+# A compile error's line, as (file, line, column, message).
+ERROR = r"^(\S+?):(\d+):(\d+): (?:fatal )?error: (.*)$"
+
+
+def missing_headers_only(err):
+    """Whether each of a compile's errors is a header not found."""
+    errors = [m.group(4) for m in re.finditer(ERROR, err, re.M)]
+    return bool(errors) and all(re.fullmatch(r"'[^']+' file not found", e) for e in errors)
 
 
 def summary(text):

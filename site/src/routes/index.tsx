@@ -9,7 +9,7 @@ import { type DemoSpaces, type Tab, WILL_LIVE, scroller, startLive } from "../li
 import { pageHead, structuredData } from "../seo";
 import { grain, startSky } from "../sky";
 
-const description = `ilo is a free, open-source browser: every part of your life in its own Space, a sidebar that tidies itself and one bar for every command, on Chromium. In beta for Mac and Linux, alpha on Windows.`;
+const description = `ilo is a free, open-source browser: every part of your life in its own Space, a sidebar that tidies itself and one bar for every command, on Chromium. In beta for Mac, Windows and Linux.`;
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -286,9 +286,7 @@ function Home() {
                 <div className="act">
                   <Download className="button big cta" />
                   <p className="note">
-                    {runs
-                      ? "In beta for Mac and Linux, alpha on Windows."
-                      : `ilo is for ${PLATFORM_LIST}.`}
+                    {runs ? "In beta for Mac, Windows and Linux." : `ilo is for ${PLATFORM_LIST}.`}
                   </p>
                 </div>
               </div>

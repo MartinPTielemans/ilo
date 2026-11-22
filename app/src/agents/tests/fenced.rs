@@ -496,7 +496,7 @@ fn a_wait_on_a_tab_that_came_to_a_fenced_site_says_the_same_whatever_the_page(
         arrives(&agents, &browser, 20, "https://mybank.example/", cx);
         if let Some(tree) = tree {
             let request = browser.pages.borrow().last().unwrap().1;
-            agents.update(cx, |agents, cx| agents.page_done(request, tree, false, cx));
+            agents.update(cx, |agents, cx| agents.page_done(request, tree, None, cx));
         }
         let looks = browser.pages.borrow().len();
         cx.executor().advance_clock(Duration::from_secs(6));
@@ -820,7 +820,8 @@ fn a_refusal_at_the_fence_tells_the_agent_and_the_log_each_in_its_words(cx: &mut
         let answer = call(&agents, "claude-code", tool, json!({ "tab": 20 }), cx);
         assert_eq!(
             answer.recv().unwrap(),
-            ToolResult::error(
+            ToolResult::failed(
+                tools::Kind::NeedsOk,
                 "Nothing was done. Tab 20 is now on login.mybank.example, where the user wants to \
                  be asked first. Your next call on this tab will ask them."
             ),

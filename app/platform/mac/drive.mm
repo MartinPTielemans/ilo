@@ -252,6 +252,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <csignal>
 #include <cstdio>
 #include <map>
 #include <sstream>
@@ -1648,7 +1649,23 @@ bool Run(const std::string& line, void (^done)(void)) {
       return false;
     }
     NSRunningApplication* to = [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
+    // Once this didn't find a copy that had been running and active for 25 s (#3921): macOS's
+    // list of running apps is its other way to find one, and a line says which found it.
     if (!to) {
+      for (NSRunningApplication* each in NSWorkspace.sharedWorkspace.runningApplications) {
+        if (each.processIdentifier == pid) {
+          to = each;
+          fprintf(stderr, "browser: yield to %d found in the running apps alone\n", pid);
+          break;
+        }
+      }
+    }
+    if (!to) {
+      const bool up = kill(pid, 0) == 0 || errno == EPERM;
+      fprintf(stderr,
+              "browser: yield to %d refused: no app has that pid; the process %s, and macOS lists "
+              "no app with it\n",
+              pid, up ? "is up" : "isn't");
       return false;
     }
     // Always, as the app needs macOS 15 (build.sh), but mac-syntax.yml compiles for macOS 11.

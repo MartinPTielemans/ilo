@@ -71,7 +71,7 @@ pub(crate) unsafe extern "C" fn agent_page_done(
     request: u64,
     text: *const c_char,
     error: bool,
-    _failure: c_int,
+    failure: c_int,
 ) {
     let text = unsafe { CStr::from_ptr(text) }
         .to_string_lossy()
@@ -86,6 +86,7 @@ pub(crate) unsafe extern "C" fn agent_page_done(
         ),
         false => log!("browser: agent page {tab} {request} {}", text.len()),
     }
+    let error = error.then(|| agents_core::failure_of(failure));
     agents_core::update(move |agents, cx| agents.page_done(request, text, error, cx));
 }
 

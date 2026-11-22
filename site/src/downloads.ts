@@ -18,7 +18,7 @@ export const PLATFORMS = [
     file: "ilo-windows-x64-setup.exe",
     note: "64-bit",
     needs: "64-bit Windows 10 or later",
-    stage: "in alpha",
+    stage: "in beta",
   },
   {
     id: "linux",

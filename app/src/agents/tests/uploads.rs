@@ -39,7 +39,7 @@ fn asked(
     let (tab, request, action, element, _) = browser.pages.borrow().last().unwrap().clone();
     assert_eq!((tab, action, element), (20, PageAction::FileField, 61));
     let text = described.to_string();
-    agents.update(cx, |agents, cx| agents.page_done(request, text, false, cx));
+    agents.update(cx, |agents, cx| agents.page_done(request, text, None, cx));
     assert!(answer.try_recv().is_err(), "it answered before the user");
     let question = browser
         .asked
@@ -71,7 +71,10 @@ fn an_upload_in_a_tab_the_agent_may_not_act_in_is_refused_without_a_card(cx: &mu
         json!({ "tab": 20, "ref": "e1" }),
         cx,
     );
-    assert_eq!(held.recv().unwrap(), ToolResult::error(HELD));
+    assert_eq!(
+        held.recv().unwrap(),
+        ToolResult::failed(tools::Kind::Yours, HELD)
+    );
     let users = call(
         &agents,
         "claude-code",
@@ -102,7 +105,7 @@ fn the_cores_refusal_of_a_field_reaches_the_agent_without_a_card(cx: &mut TestAp
     let request = browser.pages.borrow().last().unwrap().1;
     let why = "The element isn't a file field.";
     agents.update(cx, |agents, cx| {
-        agents.page_done(request, why.into(), true, cx)
+        agents.page_done(request, why.into(), Some(Failure::Action), cx)
     });
     assert_eq!(answer.recv().unwrap(), ToolResult::error(why));
     assert_eq!(*browser.asked.borrow(), None);
@@ -167,7 +170,8 @@ fn dont_allow_says_no_and_drops_the_field(cx: &mut TestAppContext) {
     let refused = answer.recv().unwrap();
     assert_eq!(
         refused,
-        ToolResult::error(
+        ToolResult::failed(
+            tools::Kind::SaidNo,
             "The user said no: you can't add a file to “Résumé” on example.com. Don't try again."
         )
     );

@@ -1,8 +1,8 @@
 # Security policy
 
-ilo is in beta on macOS and Linux, and in alpha on Windows. Its releases update themselves, and
-some people run it from source. Report vulnerabilities privately, and don't disclose them until a
-fix has had a fair chance to ship.
+ilo is in beta on macOS, Windows and Linux. Its releases update themselves, and some people run
+it from source. Report vulnerabilities privately, and don't disclose them until a fix has had a
+fair chance to ship.
 
 ## Where to report
 
