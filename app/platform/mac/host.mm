@@ -1011,7 +1011,9 @@ void HidePlateWindow(HostPlateWindow* plate) {
   [plate.parentWindow removeChildWindow:plate];
   [plate orderOut:nil];
   plate.parentLeft = NO;
-  fprintf(stderr, "browser: plate window %s hidden\n", plate.name.UTF8String);
+  if (Checked()) {
+    fprintf(stderr, "browser: plate window %s hidden\n", plate.name.UTF8String);
+  }
 }
 
 // Puts |plate| exactly over |rect|, the plate its surface draws, from the top left of the
@@ -1056,7 +1058,7 @@ void PlacePlateWindow(HostPlateWindow* plate, NSWindow* parent, NSRect rect) {
     AddOver(parent, plate);
     [plate orderWindow:NSWindowAbove relativeTo:surface.windowNumber];
   }
-  if (moved || added) {
+  if ((moved || added) && Checked()) {
     // Where the window is and where its surface drew the plate, unrounded, from the browser
     // window's content's top left, for check.sh to compare.
     const NSRect content = [parent contentRectForFrameRect:parent.frame];
