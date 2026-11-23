@@ -3,6 +3,10 @@
 #include <utility>
 #include <vector>
 
+#include <cstdio>
+#include <string>
+
+#include "base/debug/stack_trace.h"
 #include "base/functional/bind.h"
 #include "base/no_destructor.h"
 #include "base/strings/utf_string_conversions.h"
@@ -41,6 +45,22 @@ javascript_dialogs::AppModalDialogView* Create(
   return new LeaveDialog(std::move(controller));
 }
 
+
+// Never to land (#3946 probe): the stack that got here, a line each, for the relaunch red.
+void ProbeStack(const char* what) {
+  const std::string stack = base::debug::StackTrace().ToString();
+  size_t start = 0;
+  while (start < stack.size()) {
+    size_t end = stack.find('\n', start);
+    if (end == std::string::npos) {
+      end = stack.size();
+    }
+    fprintf(stderr, "browser: probe3946 %s stack %s\n", what,
+            stack.substr(start, end - start).c_str());
+    start = end + 1;
+  }
+}
+
 }  // namespace
 
 // static
@@ -55,12 +75,16 @@ LeaveDialog::LeaveDialog(std::unique_ptr<javascript_dialogs::AppModalDialogContr
     : controller_(std::move(controller)) {}
 
 LeaveDialog::~LeaveDialog() {
+  fprintf(stderr, "browser: probe3946 leave dialog gone, asked id %llu\n",
+          static_cast<unsigned long long>(id_));
   PageDialog::Withdraw(id_);
 }
 
 void LeaveDialog::ShowAppModalDialog() {
   showing_ = true;
   const bc_id tab = Tab::IdOf(controller_->web_contents());
+  fprintf(stderr, "browser: probe3946 leave dialog shown tab %llu beforeunload %d\n",
+          static_cast<unsigned long long>(tab), controller_->is_before_unload_dialog());
   // As Chrome's activates the tab: one no window shows, such as one closed from its row, comes to
   // the front window to be answered, as every other app-wide dialog waits for it.
   if (!Window::Showing(tab)) {
@@ -107,14 +131,17 @@ void LeaveDialog::ShowAppModalDialog() {
 void LeaveDialog::ActivateAppModalDialog() {}
 
 void LeaveDialog::CloseAppModalDialog() {
+  ProbeStack("leave dialog CloseAppModalDialog");
   Finish(Answer::kClose, std::u16string(), false);
 }
 
 void LeaveDialog::AcceptAppModalDialog() {
+  ProbeStack("leave dialog AcceptAppModalDialog");
   Finish(Answer::kAccept, controller_->default_prompt_text(), false);
 }
 
 void LeaveDialog::CancelAppModalDialog() {
+  ProbeStack("leave dialog CancelAppModalDialog");
   Finish(Answer::kCancel, std::u16string(), false);
 }
 
@@ -123,12 +150,16 @@ bool LeaveDialog::IsShowing() const {
 }
 
 void LeaveDialog::Answered(const PageDialog::Reply& reply) {
+  fprintf(stderr, "browser: probe3946 leave dialog the app answered accept %d\n", reply.accept);
   // Answered, so there's nothing to take back.
   id_ = 0;
   Finish(reply.accept ? Answer::kAccept : Answer::kCancel, reply.text, reply.checked);
 }
 
 void LeaveDialog::Finish(Answer answer, const std::u16string& text, bool suppress) {
+  fprintf(stderr, "browser: probe3946 leave dialog finish tab %llu answer %s\n",
+          static_cast<unsigned long long>(Tab::IdOf(controller_->web_contents())),
+          answer == Answer::kAccept ? "accept" : answer == Answer::kCancel ? "cancel" : "close");
   switch (answer) {
     case Answer::kAccept:
       controller_->OnAccept(text, suppress);

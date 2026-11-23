@@ -8,6 +8,7 @@
 
 #include "base/auto_reset.h"
 #include "base/barrier_callback.h"
+#include "base/debug/stack_trace.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/ref_counted_memory.h"
@@ -813,6 +814,20 @@ void Tab::Close() {
 }
 
 void Tab::ReportClosed() {
+  // Never to land (#3946 probe): who closed it, for the relaunch red.
+  {
+    const std::string stack = base::debug::StackTrace().ToString();
+    size_t start = 0;
+    while (start < stack.size()) {
+      size_t end = stack.find('\n', start);
+      if (end == std::string::npos) {
+        end = stack.size();
+      }
+      fprintf(stderr, "browser: probe3946 tab %llu closing stack %s\n",
+              static_cast<unsigned long long>(id_), stack.substr(start, end - start).c_str());
+      start = end + 1;
+    }
+  }
   Window::OnTabClosing(id_);
   if (Host().tab_closed) {
     Host().tab_closed(Host().context, id_);
@@ -2155,6 +2170,8 @@ void Tab::CaptureChanged(content::WebContents* contents) {
 }
 
 void Tab::BeforeUnloadFired(bool proceed) {
+  fprintf(stderr, "browser: probe3946 tab %llu beforeunload fired proceed %d\n",
+          static_cast<unsigned long long>(id_), proceed);
   // Stay: a close the user started stays undone, and the window shows this tab again (#3890).
   if (!proceed) {
     Window::ClosingKept(id_);

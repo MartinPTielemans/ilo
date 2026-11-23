@@ -728,6 +728,9 @@ content::KeyboardEventProcessingResult BrowserWindowStandIn::PreHandleKeyboardEv
     const input::NativeWebKeyboardEvent& event) {
   content::WebContents* contents =
       browser_ ? browser_->GetTabStripModel()->GetActiveWebContents() : nullptr;
+  fprintf(stderr, "browser: probe3946 key %s tab %llu type %d code %d modifiers %d\n", "before page",
+          static_cast<unsigned long long>(contents ? Tab::IdOf(contents) : 0),
+          static_cast<int>(event.GetType()), event.windows_key_code, event.GetModifiers());
   // Typed after a shortcut that opens a field of the app's, for the field.
   if (contents && held_keys::Holds(Tab::IdOf(contents), event)) {
     dialog_keys::KeyGate(event, "kept: held for a field of the app's");
@@ -762,6 +765,9 @@ bool BrowserWindowStandIn::HandleKeyboardEvent(const input::NativeWebKeyboardEve
       browser_ ? browser_->GetTabStripModel()->GetActiveWebContents() : nullptr;
   const bc_id tab = contents ? Tab::IdOf(contents) : 0;
   const base::TimeTicks key = event.TimeStamp();
+  fprintf(stderr, "browser: probe3946 key %s tab %llu type %d code %d modifiers %d\n", "page left",
+          static_cast<unsigned long long>(contents ? Tab::IdOf(contents) : 0),
+          static_cast<int>(event.GetType()), event.windows_key_code, event.GetModifiers());
   if (event.GetType() == blink::WebInputEvent::Type::kRawKeyDown) {
     const bool runs = page_keys_.RunsUnkept(KeyOf(tab, event));
     // A press this settles waits no more, and its timer and watch go with it (#3946).
