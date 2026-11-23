@@ -253,8 +253,10 @@ a { position: absolute; left: 20px; width: 60px; height: 30px }
 const file = location.search.slice(1);
 const things = [...document.querySelectorAll("#col > section, #row > span")];
 let seen = 0;
-document.addEventListener("toggle", (e) => { if (things.includes(e.target)) seen++; }, true);
-new MutationObserver((records) => { for (const r of records) if (things.includes(r.target)) seen++; })
+const times = [];
+const saw = () => { seen++; times.push(Math.round(performance.now())); };
+document.addEventListener("toggle", (e) => { if (things.includes(e.target)) saw(); }, true);
+new MutationObserver((records) => { for (const r of records) if (things.includes(r.target)) saw(); })
   .observe(document.body, { subtree: true, attributes: true, attributeFilter: ["style", "popover"] });
 const lifted = new Promise((done) => {
   const now = () => things.some((t) => t.hasAttribute("popover")) && (done(performance.now()), true);
@@ -314,6 +316,13 @@ const order = () => {
   await until(false);
   const back = await quiet(performance.now() + 1000);
   const [again] = await count(250);
+  // Probe (#3929), never to land: when each change came, in ms from the start of the navigation, as
+  // runs of one ms, with the lift and the load.
+  const nav = performance.getEntriesByType("navigation")[0];
+  const runs = [];
+  for (const t of times) { const r = runs[runs.length - 1]; if (r && t - r[1] <= 20) { r[1] = t; r[2]++; } else runs.push([t, t, 1]); }
+  document.title = "probe " + file + " lift " + Math.round(at) + " load " + Math.round(nav.loadEventEnd) + " shown " + Math.round(at + from) + " changes " + runs.map((r) => r[0] + "-" + r[1] + ":" + r[2]).join(",");
+  await wait(100);
   document.title = said + " again " + again + " quiet " + back;
 })();
 </script>' > "$out/site/arrange-idle.html"
