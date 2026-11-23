@@ -49,12 +49,12 @@ impl Tier {
         match self {
             Tier::Look => "Opens pages and reads them, and does nothing on them.",
             Tier::Work => {
-                "Refuses what it recognises as paying, placing an order, sending a message as you, \
-                 or a bank's site."
+                "Clicks, types and submits forms. ilo stops at paying, ordering, sending messages as \
+                 you and bank sites."
             }
             Tier::Full => {
-                "Nothing but the agent's own judgment stands between a page and a payment. Full \
-                 access lasts for this task only."
+                "Everything you can do on a page, including paying, ordering, messages and bank \
+                 sites."
             }
         }
     }
@@ -92,7 +92,9 @@ pub enum Why {
 struct Row {
     why: Why,
     allowed: [bool; 3],
-    /// What was refused, as the user's line says it, before "isn't part of <tier>".
+    /// The user's line's whole sentence on the refusal, `{level}` standing for the tier: one per
+    /// act, whose first words also name the act in the activity log. Fenced and OtherSite name
+    /// the site instead (`why_line`).
     refused: &'static str,
 }
 
@@ -100,37 +102,37 @@ const ROWS: [Row; 11] = [
     Row {
         why: Why::Act,
         allowed: [false, true, true],
-        refused: "Acting on a page",
+        refused: "Changing a page isn't part of {level}.",
     },
     Row {
         why: Why::Message,
         allowed: [false, false, true],
-        refused: "Sending a message as you",
+        refused: "Sending a message as you isn't part of {level}.",
     },
     Row {
         why: Why::Order,
         allowed: [false, false, true],
-        refused: "Paying or placing an order",
+        refused: "Placing an order isn't part of {level}.",
     },
     Row {
         why: Why::Bank,
         allowed: [false, false, true],
-        refused: "Using a bank's site",
+        refused: "Using a bank site isn't part of {level}.",
     },
     Row {
         why: Why::Download,
         allowed: [false, true, true],
-        refused: "Downloading a file",
+        refused: "Downloading a file isn't part of {level}.",
     },
     Row {
         why: Why::Discard,
         allowed: [false, false, true],
-        refused: "Closing a page you gave it without saving",
+        refused: "Throwing away what you wrote isn't part of {level}.",
     },
     Row {
         why: Why::Request,
         allowed: [false, false, true],
-        refused: "A request that may change something",
+        refused: "Sending changes to a site without its page isn't part of {level}.",
     },
     Row {
         why: Why::Fenced,
@@ -145,12 +147,12 @@ const ROWS: [Row; 11] = [
     Row {
         why: Why::SignIn,
         allowed: [false, true, true],
-        refused: "Signing in",
+        refused: "Signing in with your saved login isn't part of {level}.",
     },
     Row {
         why: Why::SignInBank,
         allowed: [false, false, true],
-        refused: "Signing in to a bank's site",
+        refused: "Signing in to a bank site isn't part of {level}.",
     },
 ];
 
@@ -200,14 +202,15 @@ impl Stop {
     }
 }
 
-/// The user's line's sentence on why ilo stopped an act at `tier` on `site`.
+/// The user's line's sentence on why ilo stopped an act at `tier` on `site`: a closed set of the
+/// app's own sentences, keyed by `why`, with nothing of the agent's or a page's in it but `site`.
 pub fn why_line(why: Why, tier: Tier, site: &str) -> String {
     match why {
         Why::Fenced => format!("{site} is on your Off limits list."),
-        Why::OtherSite => format!("{site} isn't one of the sites this task may use."),
+        Why::OtherSite => format!("{site} isn't one of the sites you added."),
         _ => {
             let row = ROWS.iter().find(|row| row.why == why).unwrap();
-            format!("{} isn't part of {}.", row.refused, tier.label())
+            row.refused.replace("{level}", tier.label())
         }
     }
 }
@@ -341,6 +344,31 @@ mod tests {
                 }
                 assert!(told.contains("Don't try another way"), "{told}");
             }
+        }
+    }
+
+    /// An ilo line's sentence is the app's own: one per reason, whole, naming the tier, with
+    /// nothing in it from the agent or a page but the site it's handed.
+    #[test]
+    fn each_refusal_is_a_whole_sentence_of_the_apps() {
+        let mut seen = std::collections::HashSet::new();
+        for row in &ROWS {
+            for tier in Tier::ALL {
+                let line = why_line(row.why, tier, "shop.example");
+                assert!(line.ends_with('.') && !line.contains('{'), "{line}");
+                match row.why {
+                    Why::Fenced | Why::OtherSite => assert!(line.starts_with("shop.example ")),
+                    _ => assert!(
+                        line.ends_with(&format!(" isn't part of {}.", tier.label())),
+                        "{line}"
+                    ),
+                }
+            }
+            assert!(
+                seen.insert(why_line(row.why, Tier::Look, "")),
+                "{:?}",
+                row.why
+            );
         }
     }
 

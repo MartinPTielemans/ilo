@@ -2828,7 +2828,7 @@ fn an_order_is_refused_until_the_user_gives_full_access(cx: &mut TestAppContext)
     assert!(log(&agents, "claude-code", cx).contains(&(
         "click".into(),
         "example.com".into(),
-        "Paying or placing an order isn't part of Work on pages.".into()
+        "Placing an order isn't part of Work on pages.".into()
     )));
 
     // The same refusal again counts on its line rather than adding one.
@@ -3217,7 +3217,7 @@ fn a_banks_site_opens_only_at_full_access(cx: &mut TestAppContext) {
         (
             "open_tab".into(),
             "chase.com".into(),
-            "Using a bank's site isn't part of Work on pages.".into()
+            "Using a bank site isn't part of Work on pages.".into()
         )
     );
     give(&agents, Tier::Look, cx);
@@ -5520,11 +5520,13 @@ mod requests {
             [
                 (
                     "DELETE /api/items/7".into(),
-                    "A request that may change something isn't part of Work on pages.".into()
+                    "Sending changes to a site without its page isn't part of Work on pages."
+                        .into()
                 ),
                 (
                     "POST /api/items".into(),
-                    "A request that may change something isn't part of Work on pages.".into()
+                    "Sending changes to a site without its page isn't part of Work on pages."
+                        .into()
                 ),
             ]
         );
