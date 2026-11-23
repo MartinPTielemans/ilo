@@ -24,6 +24,10 @@
 #   syllable and start the next: the page's textarea composes 한글, backspace taking a letter off
 #   the syllable composing, and 안녕하세요, a digit committing each; under Wayland the bar composes
 #   안녕하세요; on X11 Settings' search hears 한 committed before ㄱ composes, over XIM.
+# - With an agent's card showing (#3869), the page composes "gh" and Enter commits it into the
+#   page, answering nothing; Focus Agent Question's key (Alt+Shift+A) and Enter at once give the
+#   card the keyboard and are ignored there, the key again gives the page the keyboard back, and
+#   the page composes "kl" again.
 # - no-keyboard: on Wayland with no keyboard on the seat, where activating the input method makes
 #   fcitx5's virtual keyboard the seat's first, with no keymap, the app lives on (#1138), and after
 #   another keyboard comes and goes.
@@ -54,8 +58,8 @@ if [ "${1:-}" = --steps ]; then
       case $(cat "/proc/$p/comm" 2>/dev/null) in chrome*) started "$p" || true ;; esac
     done >> "$out/$mode.pids"
   }
-  hold=
-  trap 'track; [ -z "$hold" ] || kill "$hold" 2>/dev/null || true' EXIT
+  hold= bridge=
+  trap 'track; for p in $hold $bridge; do kill "$p" 2>/dev/null || true; done' EXIT
   track
   fail() {
     echo "FAIL ($mode): $1" | tee -a "$out/$mode.failed" >&2
@@ -139,6 +143,61 @@ if [ "${1:-}" = --steps ]; then
     at=$(mark); key '^a'; key $'\b'; key abc
     await "title [0-9]* value abc$" "$at"
   fi
+
+  # An agent's card while the page composes (#3869): the agent, through its bridge, opens a tab of
+  # its own, in its Space, which no window shows, and asks to change something there.
+  socket=$(sed -n 's/^browser: agents server on //p' "$LOG" | tail -1)
+  [ -n "$socket" ] || fail "the agents' server didn't start for the run's agent"
+  rm -f "$out/$mode-agent-in" "$out/$mode-agent-out"
+  mkfifo "$out/$mode-agent-in" "$out/$mode-agent-out"
+  BROWSER_AGENT_TOKEN=$AGENT_TOKEN build/Browser/mcp-bridge "$socket" < "$out/$mode-agent-in" \
+    > "$out/$mode-agent-out" 2>> "$out/$mode-bridge.log" &
+  bridge=$!
+  exec 4> "$out/$mode-agent-in" 5< "$out/$mode-agent-out"
+  agent_line() {
+    perl -e 'alarm shift; my $line = "";
+      while (sysread STDIN, my $byte, 1) { $line .= $byte; last if $byte eq "\n" }
+      print $line; exit($line =~ /\n\z/ ? 0 : 1)' 30 <&5
+  }
+  printf '%s\n' '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ime","version":"1"}}}' >&4
+  agent_line > /dev/null || fail "the browser didn't answer the agent's initialize"
+  printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}' >&4
+  printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"open_tab\",\"arguments\":{\"url\":\"http://localhost:$AGENT_PORT/\"}}}" >&4
+  opened=$(agent_line) || fail "the browser didn't answer the agent's open_tab"
+  agent_tab=$(printf '%s\n' "$opened" | grep -o 'Opened tab [0-9]*' | head -1 | cut -d' ' -f3)
+  [ -n "$agent_tab" ] || fail "the agent's open_tab answered: $opened"
+  await "loaded $agent_tab http://localhost:$AGENT_PORT/" 0
+  at=$(mark)
+  printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"request\",\"arguments\":{\"tab\":$agent_tab,\"requests\":[{\"method\":\"PUT\",\"path\":\"/note\",\"body\":{},\"what\":\"Replace the note.\"}]}}}" >&4
+  await "agent mcp-client asks " "$at"
+  q=$(tail -n "+$((at + 1))" "$LOG" | grep 'agent mcp-client asks ' | head -1 | cut -d' ' -f5 | tr -d :)
+  await "agent question $q at " "$at"
+  shot agent-card
+  # Enter that commits what the page composes is the page's, and answers nothing.
+  at=$(mark); click 330 40
+  await "title [0-9]* clicked abc$" "$at"
+  at=$(mark); compose gh
+  await "title [0-9]* composing abcgh$" "$at"
+  key $'\n'
+  await "title [0-9]* value abcgh$" "$at"
+  ! tail -n "+$((at + 1))" "$LOG" | grep -E "agent mcp-client answered $q |agent card keys on" ||
+    fail "Enter that committed the page's composition reached the agent's card"
+  # The card's key and Enter at once: the keyboard on the card, Enter ignored there. The key again
+  # gives the page back the keyboard, which composes there as before.
+  at=$(mark); key $'~A\n'
+  await "agent card keys on $q " "$at"
+  await "agent card key ignored, " "$at"
+  key '~A'
+  await "agent card keys back by key" "$at"
+  ! tail -n "+$((at + 1))" "$LOG" | grep "agent mcp-client answered $q " ||
+    fail "Focus Agent Question's key, or Enter straight after it, answered the agent's card"
+  at=$(mark); compose kl
+  await "title [0-9]* composing abcghkl$" "$at"
+  key $'\n'
+  await "title [0-9]* value abcghkl$" "$at"
+  # The steps after take the textarea as it was.
+  at=$(mark); key '^a'; key $'\b'; key abc
+  await "title [0-9]* value abc$" "$at"
 
   # The bar, with the page composing as it opens: the page keeps what it composed.
   at=$(mark); compose de
@@ -265,9 +324,32 @@ out=$PWD/build/check/ime
 rm -rf "$out"
 mkdir -p "$out"
 home=$(mktemp -d)
+# The agent's page, on a server of the run's own, which answers every path with it.
+rm -f "$out/agent.port"
+mkfifo "$out/agent.port"
+python3 -I -u -c '
+import http.server, socketserver, sys
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.end_headers()
+        self.wfile.write(b"<title>agent</title><p>The agent page.</p>")
+    def log_message(self, *_):
+        pass
+server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Handler)
+sys.stdout.buffer.write(b"%d\n" % server.server_address[1])
+sys.stdout.close()
+server.serve_forever()
+' > "$out/agent.port" 2> "$out/agent-server.err" &
+server=$!
+read -r AGENT_PORT < "$out/agent.port" || true
+[ -n "$AGENT_PORT" ] || { echo "FAIL: the agent's server didn't start: $(cat "$out/agent-server.err")" >&2; exit 1; }
+AGENT_TOKEN=$(python3 -I -c 'import secrets; print(secrets.token_hex(32))')
+export AGENT_PORT AGENT_TOKEN
 # A helper Chromium leaves can still be writing the profile as this runs, and under set -e a failed
 # rm would turn the runs' passes into a failure.
-trap 'rm -rf "$home" || true' EXIT
+trap 'kill "$server" 2>/dev/null || true; rm -rf "$home" || true' EXIT
 # fcitx5's own configuration: the US keyboard, quick phrase on Ctrl+;, and on X11 the composition
 # drawn by the app (on-the-spot XIM), not by fcitx5 over it.
 mkdir -p "$home/config/fcitx5/conf"
@@ -345,7 +427,11 @@ url="data:text/html,$(python3 -I -c 'import sys, urllib.parse; print(urllib.pars
 failed=
 for mode in $modes; do
   x11=; [ "$mode" = x11 ] && x11=--x11
-  # Each leg its own profile, as the last one's browser may not be gone yet.
+  # Each leg its own profile, as the last one's browser may not be gone yet, with the run's agent.
+  mkdir -p "$home/profile-$mode"
+  printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}]}' "$AGENT_TOKEN" \
+    > "$home/profile-$mode/Agents"
+  chmod 600 "$home/profile-$mode/Agents"
   dbus-run-session --config-file="$home/bus.conf" -- \
     env BROWSER_PROFILE_DIR="$home/profile-$mode" BROWSER_URL="$url" BROWSER_CHECK=1 \
     ../tools/headless.sh $x11 --then "$PWD/check/ime.sh --steps $mode $out" \

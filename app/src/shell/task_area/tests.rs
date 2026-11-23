@@ -529,13 +529,29 @@ fn a_click_on_the_conversation_while_the_page_goes_back_reaches_it(cx: &mut Test
 }
 
 /// Selecting any of the user's tabs, the one selected too, or another Space leaves the area and
-/// shows it, and so does a quit. The window's own commands, such as ⌘S, leave the area as it is.
+/// shows it, and so does a quit. The window's own commands, such as ⌘S, and Focus Agent Question
+/// leave the area as it is.
 #[gpui::test]
 fn selecting_a_tab_or_a_space_leaves_the_area(cx: &mut TestAppContext) {
     let (shell, host, cx) = shell_with_task(cx);
     watching(&shell, &host, cx);
     shell.update(cx, |shell, cx| shell.run(Command::ToggleSidebar, "ui", cx));
     assert!(shell.read_with(cx, |shell, _| shell.task_shown().is_some()));
+    // Focus Agent Question too, from the page or the UI: the card shows over the area (#3869).
+    shell.update(cx, |shell, cx| {
+        let asked = crate::agents::Question {
+            id: 9,
+            agent: "Claude".into(),
+            what: "download a file".into(),
+            ..Default::default()
+        };
+        shell.set_agent_question(Some(asked), cx);
+        shell.run(Command::FocusAgentQuestion, "page", cx);
+        shell.run(Command::FocusAgentQuestion, "ui", cx);
+        shell.set_agent_question(None, cx);
+    });
+    assert!(shell.read_with(cx, |shell, _| shell.task_shown().is_some()));
+    host.take();
     shell.update(cx, |shell, cx| shell.select(10, cx));
     assert_eq!(shell.read_with(cx, |shell, _| shell.task_shown()), None);
     assert_eq!(

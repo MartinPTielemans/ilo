@@ -66,6 +66,7 @@ impl Command {
             ExpandFolders => &["Expand All Folders"],
             RevealTab => &["Reveal Tab in Sidebar"],
             FocusSidebar => &["Focus Sidebar"],
+            FocusAgentQuestion => &["Focus Agent Question"],
             BackToPinnedUrl => &["Back to Pinned URL"],
             ResetSpaceTabs => &["Reset all tabs in this Space"],
             ToggleMute => &["Mute/Unmute Tab"],

@@ -743,7 +743,9 @@ impl Shell {
             | Command::About
             | Command::CheckForUpdates
             | Command::Appearance(_)
-            | Command::CopyBuildInfo => return false,
+            | Command::CopyBuildInfo
+            // The agent's card shows over the area as over the user's Space.
+            | Command::FocusAgentQuestion => return false,
             // Quit and Close Window too, so the session keeps the user's Space for the window.
             _ => {
                 self.leave_task_area(cx);
