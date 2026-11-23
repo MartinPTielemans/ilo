@@ -68,16 +68,21 @@ impl Transparency {
     /// What it does, in the line under the picker while it's chosen.
     pub fn line(self) -> &'static str {
         match self {
-            Transparency::Less => {
-                "A hint of what’s behind ilo. Every word keeps full contrast, whatever is behind."
-            }
-            Transparency::Standard => {
-                "More of your desktop comes through. Grey text is a little fainter over a bright \
-                 window."
-            }
-            Transparency::More => {
-                "The most comes through. Grey text can be hard to read over a bright window."
-            }
+            Transparency::Less => concat!(
+                "Shows only a hint of what’s behind ",
+                env!("APP_NAME"),
+                ". All text stays easy to read, even over a bright window."
+            ),
+            Transparency::Standard => concat!(
+                "Shows more of what’s behind ",
+                env!("APP_NAME"),
+                ". Gray text is a little fainter over a bright window."
+            ),
+            Transparency::More => concat!(
+                "Shows the most of what’s behind ",
+                env!("APP_NAME"),
+                ". Gray text can be hard to read over a bright window."
+            ),
         }
     }
 
@@ -125,11 +130,22 @@ impl Transparency {
 
 /// The setting's name and what it does, in Settings' row and as its search reads it.
 pub const NAME: &str = "Transparency";
-pub const ABOUT: &str =
-    "How much of what’s behind ilo shows through its window, its menus and the command bar.";
+pub const ABOUT: &str = concat!(
+    "How much of what’s behind ",
+    env!("APP_NAME"),
+    " shows through the window, menus and command bar."
+);
 /// Under Settings' group on the Mac, where the system's setting overrides every level.
-pub const REDUCE_TRANSPARENCY_WINS: &str =
-    "Your Mac’s Reduce Transparency still wins: with it on, ilo is solid at every level.";
+pub const REDUCE_TRANSPARENCY_WINS: &str = concat!(
+    "If Reduce Transparency is on in your Mac’s settings, ",
+    env!("APP_NAME"),
+    " stays solid at every level."
+);
+/// The onboarding step's line over the picker, where the window itself is the preview.
+pub const ONBOARDING_LINE: &str = concat!(
+    env!("APP_NAME"),
+    "’s window is glass. Pick one to see the window change right away."
+);
 
 /// The level the app is at and the folder it's kept in, read the first time it's asked.
 struct Kept {
