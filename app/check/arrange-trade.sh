@@ -292,13 +292,15 @@ const order = () => {
 (async () => {
   const at = await lifted;
   // After the load, whose end the core may lay the page out again for. The window stays off the
-  // passes at the end of the hold, the runtime pass at 1.5 s and the core one just after: a
-  // window that would end past at + 1450, after a late load or late frames, starts from a quiet
-  // frame after them instead, and the title says when it started (#3929). A page with no quiet
+  // passes at the end of the hold, the runtime pass 1.5 s after its load and the core one 1.55 s
+  // after the commit. Both start no earlier than the navigation, 0 on the page clock, and end no
+  // later than 1.55 s after the lift, which may come a second or more after the navigation on a
+  // slow runner (#3929). So a window that would end past 1450 ms on the page clock starts from a
+  // quiet frame after at + 1700 instead, and the title says when it started. A page with no quiet
   // frame by its bound says "quiet none".
   if (document.readyState !== "complete") await new Promise((done) => addEventListener("load", done, { once: true }));
   let settled = await quiet(at + 1200);
-  if (performance.now() + 250 > at + 1450) {
+  if (performance.now() + 250 > 1450) {
     await wait(Math.max(0, at + 1700 - performance.now()));
     settled = await quiet(at + 2200);
   }
