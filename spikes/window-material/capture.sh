@@ -171,7 +171,8 @@ for behind in $behinds; do
   shot hudWindow ffffffa800 light "$behind"
 done
 
-# Each with the tint that brings it nearest its targets, from the untinted grounds.
+# Each with the tint that brings it nearest its targets, from the untinted grounds: in dark, of the
+# brief's colour and of black.
 "$bin" fit "$shots" > "$out/fit.txt" || fail "couldn't fit the tints"
 while read -r material appearance tint off; do
   case $tint in *a000) continue ;; esac
@@ -179,14 +180,29 @@ while read -r material appearance tint off; do
   for behind in $behinds; do shot "$material" "$tint" "$appearance" "$behind"; done
 done < "$out/fit.txt"
 
-# The chosen candidate in each appearance, the public material nearest its targets once tinted, and
-# today's: inactive, and with the Space's glow.
+# The window lane's candidates, beside the fitted ones: the HUD window's material under black in
+# dark, and under white at 0.83 in light.
+named="hudWindow 000000a640 dark
+hudWindow 000000a660 dark
+hudWindow ffffffa830 light"
+while read -r material tint appearance; do
+  for behind in $behinds; do
+    [ -f "$shots/$material-$tint-$appearance-$behind.png" ] ||
+      shot "$material" "$tint" "$appearance" "$behind"
+  done
+done << EOF
+$named
+EOF
+
+# The chosen candidate in each appearance, the public material nearest its targets once tinted, the
+# named ones and today's: inactive, with the Space's glow, and over the ring.
 chosen() { grep -v '^today ' "$out/fit.txt" | awk -v a="$1" '$2 == a' | sort -n -k4 | head -1; }
 dark=$(chosen dark)
 light=$(chosen light)
 note "Chosen in dark: ${dark:-none}; in light: ${light:-none} (material, appearance, tint, off)."
 extras="today 000000a250 dark
-hudWindow ffffffa800 light"
+hudWindow ffffffa800 light
+$named"
 [ -z "$dark" ] || extras="$extras
 $(echo "$dark" | awk '{ print $1, $3, $2 }')"
 [ -z "$light" ] || extras="$extras

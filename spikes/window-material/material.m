@@ -53,7 +53,9 @@ static const NSRect kGlow = {{20, kHeight - 60}, {40, 40}};
 typedef struct {
   double r, g, b;
 } RGB;
-static const RGB kDarkTint = {20, 20, 23}, kLightTint = {255, 255, 255};
+// The tints the fit tries: in dark the brief's colour, and black, as the app tints today; in light,
+// white, as today.
+static const RGB kDarkTints[2] = {{20, 20, 23}, {0, 0, 0}}, kLightTint = {255, 255, 255};
 static const RGB kDarkTarget[3] = {{63, 63, 64}, {36, 36, 38}, {10, 10, 11}};
 static const RGB kLightTarget[3] = {{253, 253, 253}, {-1, -1, -1}, {231, 231, 231}};
 static const RGB kPaper = {243, 240, 232}, kInk = {22, 20, 15};
@@ -715,8 +717,10 @@ static Patch PatchOf(NSValue* value) {
 
 // The alpha a of |tint| over the untinted grounds G nearest the targets T, least squares over
 // the channels and backdrops that have a target: a = Σ(C−G)(T−G) / Σ(C−G)².
-static double Fit(NSDictionary<NSNumber*, NSValue*>* byBehind, BOOL light, double* worst) {
-  RGB tint = light ? kLightTint : kDarkTint;
+static double Fit(NSDictionary<NSNumber*, NSValue*>* byBehind,
+                  RGB tint,
+                  BOOL light,
+                  double* worst) {
   const RGB* targets = light ? kLightTarget : kDarkTarget;
   double top = 0, bottom = 0;
   for (int i = 0; i < 3; ++i) {
@@ -754,13 +758,42 @@ static int FitAll(NSString* dir) {
       continue;
     }
     BOOL light = [parts[2] isEqual:@"light"];
-    double worst = 0;
-    double a = Fit(grounds[key], light, &worst);
-    RGB tint = light ? kLightTint : kDarkTint;
-    printf("%s %s %02x%02x%02xa%03d %.1f\n", parts[0].UTF8String, parts[2].UTF8String, (int)tint.r,
-           (int)tint.g, (int)tint.b, (int)round(a * 1000), worst);
+    for (int t = 0; t < (light ? 1 : 2); ++t) {
+      RGB tint = light ? kLightTint : kDarkTints[t];
+      double worst = 0;
+      double a = Fit(grounds[key], tint, light, &worst);
+      printf("%s %s %02x%02x%02xa%03d %.1f\n", parts[0].UTF8String, parts[2].UTF8String,
+             (int)tint.r, (int)tint.g, (int)tint.b, (int)round(a * 1000), worst);
+    }
   }
   return 0;
+}
+
+// The least alpha of |tint|, in thousandths, at which the text at 0.6 holds 4.5:1 over each
+// untinted ground in |byBehind|, white, grey and black, tinted as the window tints it:
+// a·C + (1−a)·G, as the measured rows are. Gives the predicted grounds there, or -1 if none does.
+static int Least(NSDictionary<NSNumber*, NSValue*>* byBehind,
+                 RGB tint,
+                 BOOL light,
+                 RGB grounds[3]) {
+  for (int t = 0; t <= 1000; ++t) {
+    const double a = t / 1000.0;
+    BOOL holds = YES;
+    for (int i = 0; i < 3; ++i) {
+      if (!byBehind[@(i)]) {
+        grounds[i] = (RGB){-1, -1, -1};
+        continue;
+      }
+      RGB g = PatchOf(byBehind[@(i)]).mean;
+      grounds[i] = (RGB){a * tint.r + (1 - a) * g.r, a * tint.g + (1 - a) * g.g,
+                         a * tint.b + (1 - a) * g.b};
+      holds = holds && Contrast(light ? kInk : kPaper, 0.6, grounds[i]) >= 4.5;
+    }
+    if (holds) {
+      return t;
+    }
+  }
+  return -1;
 }
 
 // The worst channel's distance from the targets, over the backdrops that have one.
@@ -832,8 +865,54 @@ static int Table(NSString* dir) {
     printf("\n");
   }
 
-  // The shots taken once per chosen candidate: inactive, Reduce Transparency, and the glow.
-  printf("### Once per chosen candidate\n\n");
+  // Predicted from the untinted rows, which a tinted row's capture checks: the least tint at
+  // which the text at 0.6 holds 4.5:1 over white, grey and black.
+  printf("### Least tint for 4.5:1 at 0.6 (predicted)\n\n");
+  printf("From each untinted row, tinted as a·C + (1−a)·G, which the captured tinted rows check. "
+         "Over white, grey and black; the picture can't be predicted.\n\n");
+  printf("| material | appearance | tint | least alpha | over white | over grey | over black | "
+         "off |\n|---|---|---|---|---|---|---|---|\n");
+  for (NSString* key in [grounds.allKeys sortedArrayUsingSelector:@selector(compare:)]) {
+    NSArray<NSString*>* parts = [key componentsSeparatedByString:@"-"];
+    if (![parts[1] isEqual:@"none"]) {
+      continue;
+    }
+    BOOL light = [parts[2] isEqual:@"light"];
+    for (int t = 0; t < (light ? 1 : 2); ++t) {
+      RGB tint = light ? kLightTint : kDarkTints[t];
+      RGB at[3];
+      int least = Least(grounds[key], tint, light, at);
+      NSMutableString* row = [NSMutableString
+          stringWithFormat:@"| %@ | %@ | #%02x%02x%02x |", parts[0], parts[2], (int)tint.r,
+                           (int)tint.g, (int)tint.b];
+      if (least < 0) {
+        [row appendString:@" never | – | – | – | – |"];
+        printf("%s\n", row.UTF8String);
+        continue;
+      }
+      [row appendFormat:@" %.3f |", least / 1000.0];
+      const RGB* targets = light ? kLightTarget : kDarkTarget;
+      double off = 0;
+      for (int i = 0; i < 3; ++i) {
+        if (at[i].r < 0) {
+          [row appendString:@" – |"];
+          continue;
+        }
+        RGB rounded = {round(at[i].r), round(at[i].g), round(at[i].b)};
+        [row appendFormat:@" %@ |", Hex(rounded)];
+        if (targets[i].r >= 0) {
+          off = fmax(off, fabs(rounded.r - targets[i].r));
+          off = fmax(off, fmax(fabs(rounded.g - targets[i].g), fabs(rounded.b - targets[i].b)));
+        }
+      }
+      [row appendFormat:@" %.0f |", off];
+      printf("%s\n", row.UTF8String);
+    }
+  }
+  printf("\n");
+
+  // The shots taken once per chosen or named candidate: inactive, Reduce Transparency, the glow.
+  printf("### Once per chosen or named candidate\n\n");
   printf("| shot | ground | glow corner | contrast at 0.6 |\n|---|---|---|---|\n");
   NSArray<NSString*>* files = [[NSFileManager.defaultManager contentsOfDirectoryAtPath:dir
                                                                                  error:nil]
