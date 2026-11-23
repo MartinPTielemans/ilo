@@ -2,8 +2,8 @@
 //! composer's row. One table, so a change of wording after the owner has used a build is an edit
 //! here (#4086). The tiers' names are the tier table's (agents/tier.rs).
 
-use crate::agents::task::ilo::{IloButton, IloKind, SignedInWith, Why};
-use crate::agents::tier::Tier;
+use crate::agents::task::ilo::{IloButton, IloKind, SignedInWith};
+use crate::agents::tier::{Tier, Why};
 
 /// ilo's mark, before each of its lines' words.
 pub const MARK: &str = "ilo";
@@ -55,6 +55,8 @@ fn doing(why: Why) -> &'static str {
         Why::Message => "Sending a message as you",
         Why::Order => "Placing an order",
         Why::Bank => "A bank's site",
+        Why::SignIn => "Signing in with your saved login",
+        Why::SignInBank => "Signing in to a bank's site",
         Why::Download => "Downloading a file",
         Why::Discard => "Throwing away what you wrote",
         Why::Request => "Sending changes straight to a site",
