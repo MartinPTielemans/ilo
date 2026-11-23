@@ -957,6 +957,8 @@ hand_back_pressed() {
   await_more "^browser: agent mcp-client handed back $pressed\$" "$handed" ||
     fail "⌘↩ didn't hand back the page a click took, $pressed"
 }
+# Focus Agent Question's key (#3869).
+if [ "$(uname)" = Darwin ]; then card_key="a alt shift cmd"; else card_key="a ctrl shift"; fi
 # Agent actions never move the user's focus (decision 8): through all the agent did in its own Space
 # since the user clicked into their field, their Space, tab and keyboard stayed, and their next keys
 # go into the field.
@@ -978,6 +980,44 @@ if [ -n "$yours_step" ]; then
       fail "the user's field lost the keyboard while the agent worked"
     send type ok
     expect "^browser: title $user_tab yours typed ok\$" "the user's keys after the agent's work didn't reach their field"
+    # One of the app's own windows taking the keyboard from the agent's card (#3869): with the
+    # card's keys come from the user's field, ⌘T's command bar ends them and keeps the keyboard, a
+    # letter typed reaching the bar and nothing in the field; Escape gives the field the keyboard
+    # again, and the card no ring. Then the key and Escape on the card dismiss the change unsent.
+    asks=$(grep -c '^browser: agent mcp-client asks ' "$log" || true)
+    request request "{\"tab\":$agent_tab,\"requests\":[{\"method\":\"PUT\",\"path\":\"/note\",\"body\":{},\"what\":\"Replace the note.\"}]}" >&4
+    await_more '^browser: agent mcp-client asks ' "$asks" || fail "the agent's change didn't ask"
+    q=$(grep '^browser: agent mcp-client asks ' "$log" | tail -1 | cut -d' ' -f5 | tr -d :)
+    await_log "^browser: agent question $q at " "the change's question wasn't drawn"
+    send key $card_key
+    expect "^browser: agent card keys on $q " "Focus Agent Question's key from the user's field didn't give the card the keyboard"
+    send key t cmd
+    bar_step=$step
+    expect '^browser: command bar shown$' "⌘T from the agent's card didn't open the command bar"
+    send type x
+    expect '^browser: command bar suggestions "x" in ' "x typed with the command bar open over the card didn't reach the bar"
+    sed -n "/^browser: drive $bar_step: /,\$p" "$log" | grep "^browser: title $user_tab yours typed " &&
+      fail "x typed with the command bar open over the card reached the user's field"
+    send key escape
+    expect '^browser: command bar hidden$' "Escape didn't close the command bar opened over the card"
+    send type y
+    expect "^browser: title $user_tab yours typed oky\$" \
+      "the user's field didn't have the keyboard again once the bar opened over the card closed"
+    ended=$(sed -n "/^browser: drive $bar_step: /,\$p" "$log" | grep -E '^browser: agent card keys (back|left) by ' | head -1)
+    [ -n "$ended" ] || fail "the command bar taking the keyboard didn't end the card's keys"
+    sed -n "/^browser: drive $bar_step: /,\$p" "$log" | grep -E "^browser: agent card keys on |^browser: agent card key escape\$|^browser: agent mcp-client answered $q " &&
+      fail "the card had its keys or answered after the command bar opened over it"
+    send key $card_key
+    expect "^browser: agent card keys on $q " "Focus Agent Question's key didn't give the card the keyboard after the bar"
+    expect "^browser: agent card keys ready on $q\$" "the app never said the protection had passed"
+    send key escape
+    expect '^browser: agent card key escape$' "Escape on the card didn't answer it as its × does"
+    await_log "^browser: agent mcp-client answered $q Dismiss\$" "Escape didn't dismiss the change"
+    unsent=$(next_answer) || fail "the browser didn't answer the dismissed change"
+    case "$(printf '%s\n' "$unsent" | answered "the dismissed change")" in
+      "error: The user said no"*) ;;
+      *) fail "the dismissed change answered: $unsent" ;;
+    esac
   fi
 else
   echo "skip: mcp: the user's focus through the agent's work. Browser wasn't the active app."
@@ -1036,7 +1076,6 @@ onload = () => setTimeout(() => { location.href = q.get("file"); }, Number(q.get
   # is ignored, the key again gives the keyboard back, and ↩ once the app says the protection's
   # 500 ms have passed presses Allow Once, which the activity log records as a click's answer.
   # On a third card Escape answers as its × does, allowing nothing.
-  if [ "$(uname)" = Darwin ]; then card_key="a alt shift cmd"; else card_key="a ctrl shift"; fi
   answer_by_keys() {
     closed=$(grep -c '^browser: task area [0-9]* closed$' "$log" || true)
     # ↩ goes in the driver's queue with the key, as it handles each command once the last is
