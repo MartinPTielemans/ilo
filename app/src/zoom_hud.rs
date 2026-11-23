@@ -8,21 +8,19 @@ use std::time::Instant;
 use std::{rc::Rc, time::Duration};
 
 use gpui::{
-    App, Bounds, Context, FontWeight, Global, Hsla, Task, TitlebarOptions, WeakEntity, Window,
-    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions, div,
-    linear_color_stop, linear_gradient, point, prelude::*, px, rgb, size,
+    App, Bounds, Context, FontWeight, Global, Task, TitlebarOptions, WeakEntity, Window,
+    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions, div, point,
+    prelude::*, px, size,
 };
 
-use crate::palette::Palette;
+use crate::palette::{Float, Palette};
 use crate::shell::{CARD_INSET, Shell, cubic_bezier, scaled::scaled_from_top};
 
 use crate::elevation::Level;
-use crate::tokens::zoom_hud::FILL;
 use crate::tokens::zoom_hud::HEIGHT;
 pub use crate::tokens::zoom_hud::MARGIN;
 use crate::tokens::zoom_hud::PADDING;
 use crate::tokens::zoom_hud::RADIUS;
-use crate::tokens::zoom_hud::SHADE;
 use crate::tokens::zoom_hud::TEXT_SIZE;
 pub use crate::tokens::zoom_hud::WINDOW_HEIGHT;
 pub use crate::tokens::zoom_hud::WINDOW_WIDTH;
@@ -286,12 +284,7 @@ impl Render for ZoomHud {
         }
         let pose = shown.pose();
         let shell = shown.shell.upgrade();
-        let look = shell.map(|shell| (shell.read(cx).window_fill(), shell.read(cx).palette()));
-        let (fill, palette) = look.unwrap_or((rgb(FILL).into(), Palette::default()));
-        let bottom = Hsla {
-            l: fill.l * SHADE,
-            ..fill
-        };
+        let palette = shell.map_or(Palette::default(), |shell| shell.read(cx).palette());
         let pill = div()
             .h(px(HEIGHT))
             .px(px(PADDING))
@@ -300,11 +293,7 @@ impl Render for ZoomHud {
             .rounded(px(RADIUS))
             .border(px(0.5))
             .border_color(Level::Popover.rim())
-            .bg(linear_gradient(
-                180.,
-                linear_color_stop(fill, 0.),
-                linear_color_stop(bottom, 1.),
-            ))
+            .bg(Float::ZoomHud.fill(palette.tone))
             .shadow(Level::Popover.shadow())
             .opacity(pose.opacity)
             .text_size(px(TEXT_SIZE))

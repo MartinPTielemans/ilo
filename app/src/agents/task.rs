@@ -530,6 +530,10 @@ pub struct Tasks {
     )>,
     /// Where tasks run: a directory of their own each, under the profile's.
     pub dir: Option<PathBuf>,
+    /// The sign-ins under way and what each row says of its last.
+    pub(super) sign_ins: super::sign_in::SignIns,
+    /// Whether a look asked for while one ran waits for it to end, as after a sign-in.
+    pub(super) look_again: bool,
 }
 
 impl Agents {
@@ -948,6 +952,7 @@ impl Agents {
     /// learning already. Once a show: Settings › Agents and ⌘T's ask call it as they first show.
     pub fn look_for_task_agents(&mut self, cx: &mut Context<Self>) {
         if self.tasks.looking {
+            self.tasks.look_again = true;
             return;
         }
         self.tasks.looking = true;
@@ -977,6 +982,10 @@ impl Agents {
                         .into_iter()
                         .find(|cli| agents.found(*cli) == Ready::SignedIn);
                     agents.tasks.default = ready.or(agents.tasks.default);
+                }
+                // A sign-in that ended while it looked may have changed what it found.
+                if std::mem::take(&mut agents.tasks.look_again) {
+                    agents.look_for_task_agents(cx);
                 }
                 cx.notify();
             });

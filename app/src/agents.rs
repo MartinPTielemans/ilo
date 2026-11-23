@@ -29,6 +29,7 @@ pub mod runner;
 pub mod saved_read;
 pub mod scripts;
 mod server;
+pub mod sign_in;
 pub mod task;
 pub mod tier;
 pub mod tools;
@@ -380,6 +381,12 @@ pub trait Browser {
     /// to `max_bytes` of its body after up to `timeout_ms`. Its answer comes to
     /// `Agents::read_done` with `read`.
     fn read(&self, profile: u64, read: u64, url: &str, max_bytes: usize, timeout_ms: i64);
+    /// Opens a task CLI's sign-in page `url` in a tab of a new private window, of the profile of
+    /// the user's window in front, which keeps nothing of it, and shows it: the tab and the
+    /// window, or None if it couldn't (#4100). The user's alone: no agent opens one.
+    fn open_sign_in(&self, url: &str, cx: &mut App) -> Option<(u64, u64)>;
+    /// Closes the sign-in's `tab` in `window`, and the window with it if the tab is all it has.
+    fn close_sign_in(&self, tab: u64, window: u64, cx: &mut App);
 }
 
 /// What waits on a saved read's answer (Agents::read).
@@ -2791,6 +2798,7 @@ impl Agents {
     /// The core closed `tab` (tabs::tab_closed). A hold on it ends. A session's page that the
     /// agent or the browser didn't close, the user or its own page did.
     pub fn tab_closed(&mut self, tab: u64, cx: &mut Context<Self>) {
+        self.sign_in_tab_closed(tab, cx);
         self.dialogs.remove(&tab);
         self.cleared.remove(&tab);
         self.left(tab, Gone::Closed);

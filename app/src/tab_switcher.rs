@@ -17,7 +17,7 @@ use gpui::{
 
 use crate::elevation::Level;
 use crate::hover_card::Icon;
-use crate::palette::{self, Palette};
+use crate::palette::{self, Float, Palette};
 use crate::shell::KEY_CONTEXT;
 pub use crate::tokens::command_bar::{ABOVE_MIDDLE, RADIUS, WIDTH};
 use crate::tokens::command_bar::{
@@ -474,10 +474,8 @@ impl Render for TabSwitcher {
         let scrolled = -f32::from(self.scroll.offset().y);
         let below = count as f32 * ROW_HEIGHT - shown_rows as f32 * ROW_HEIGHT - scrolled;
         let fade = |top: bool| {
-            let (from, to) = (
-                Hsla::from(palette.overlay),
-                Hsla::from(palette.overlay).opacity(0.),
-            );
+            let panel = Hsla::from(Float::TabSwitcher.fill(palette.tone));
+            let (from, to) = (panel, panel.opacity(0.));
             let (start, end) = if top { (from, to) } else { (to, from) };
             div()
                 .absolute()
@@ -538,7 +536,7 @@ impl Render for TabSwitcher {
                     .h(px(height(count)))
                     .overflow_hidden()
                     .rounded(px(RADIUS))
-                    .bg(palette.overlay)
+                    .bg(Float::TabSwitcher.fill(palette.tone))
                     .font_weight(FontWeight::MEDIUM)
                     .text_size(px(text::BODY))
                     .child(list)

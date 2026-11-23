@@ -24,7 +24,7 @@ use gpui::{
 
 use crate::{
     icon_picker,
-    palette::{self, Palette, STATE_HOVERED, STATE_PRESSED},
+    palette::{self, Float, Palette, STATE_HOVERED, STATE_PRESSED},
     passwords::{self, Login},
     shell::{Command, DeviceKind, MenuEntry, cubic_bezier, scaled::scaled},
     tokens::shell::{KEYED, KEYED_RING},
@@ -2789,7 +2789,10 @@ impl Render for SiteControls {
         let at = layout(&site, open.extensions.len(), open.beak.is_some());
         let shape = corners(open.beak, at.height);
         let palette = palette::current(cx);
-        let (overlay, rim) = (palette.overlay, Level::Popover.rim_in(&palette));
+        let (overlay, rim) = (
+            Float::SiteControls.fill(palette.tone),
+            Level::Popover.rim_in(&palette),
+        );
         let card = canvas(
             |_, _, _| {},
             move |bounds, _, window, _| {

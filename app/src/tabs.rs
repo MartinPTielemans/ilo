@@ -240,7 +240,11 @@ pub(crate) unsafe extern "C" fn window_page_elsewhere(
 // check.sh reads these lines. Test pages report what reached them through their title.
 pub(crate) unsafe extern "C" fn tab_loaded(_: *mut c_void, tab: bc::bc_id, url: *const c_char) {
     let url = unsafe { CStr::from_ptr(url) }.to_string_lossy();
-    log!("browser: loaded {tab} {url}");
+    // A sign-in's page's addresses can hold its code or a token (#4100).
+    match browser::agents::sign_in::quiet(tab) {
+        true => log!("browser: loaded {tab} (a sign-in's page)"),
+        false => log!("browser: loaded {tab} {url}"),
+    }
     let owned = url.to_string();
     update_app_later(move |cx| {
         crate::sign_in_close::tab_loaded(tab, &owned, cx);
