@@ -770,6 +770,20 @@ pub enum Offer {
     SignedIn,
 }
 
+impl Offer {
+    /// Its one button's words, on the assistant's row and a task's card; None where it has none.
+    pub fn label(self, cli: Cli) -> Option<String> {
+        let name = cli.assistant();
+        match self {
+            Offer::Get => Some(format!("Get {name}")),
+            Offer::SignIn => Some(format!("Sign in to {name}")),
+            Offer::TryAgain => Some("Try Again".into()),
+            Offer::Cancel => Some("Cancel".into()),
+            Offer::Nothing | Offer::SignedIn => None,
+        }
+    }
+}
+
 /// An assistant's row, the same in Settings › Agents and first run: its line and what it offers.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Shown {
@@ -834,6 +848,33 @@ impl Agents {
         let found = self.tasks.found.get(&cli);
         let plan = found.and_then(|found| found.plan.as_deref());
         shown(cli, self.found(cli), plan, &self.sign_in_row(cli))
+    }
+
+    /// What the card of a task that failed for want of `cli`'s sign-in or install offers: its
+    /// row's own button, so the two never differ. Try Again reads as Sign in there, as on a card it
+    /// would read as trying the task again.
+    pub(super) fn card_offer(&self, cli: Cli) -> Option<Offer> {
+        match self.assistant_row(cli).offer {
+            Offer::TryAgain => Some(Offer::SignIn),
+            offer @ (Offer::Get | Offer::SignIn | Offer::Cancel) => Some(offer),
+            Offer::Nothing | Offer::SignedIn => None,
+        }
+    }
+
+    /// The Sign in to … on the card of `agent`'s task, which starts its assistant's own sign-in,
+    /// as the row's does. The user's alone: only a card's press sends it.
+    pub(super) fn sign_in_for_task(&mut self, agent: &str, cx: &mut Context<Self>) {
+        if let Some(cli) = self.task(agent).and_then(|task| task.cli) {
+            log!("browser: assistant sign-in from task {agent}");
+            self.sign_in(cli, cx);
+        }
+    }
+
+    /// The Cancel on the card of `agent`'s task while its assistant signs in, as the row's.
+    pub(super) fn cancel_sign_in_for_task(&mut self, agent: &str) {
+        if let Some(cli) = self.task(agent).and_then(|task| task.cli) {
+            self.cancel_sign_in(cli);
+        }
     }
 }
 

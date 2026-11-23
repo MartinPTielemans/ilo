@@ -1219,23 +1219,21 @@ pub fn assistant_row(
             .on_click(move |_, window, cx| act(what, window, cx))
             .into_any_element()
     };
+    let title = |offer: Offer| offer.label(cli).unwrap_or_default().into();
     let controls = match shown.offer {
         Offer::Nothing => Vec::new(),
-        Offer::Get => vec![press(
-            "assistant-get",
-            format!("Get {name}").into(),
-            Act::Get,
-        )],
-        Offer::SignIn => {
-            let title = format!("Sign in to {name}").into();
-            vec![press("assistant-sign-in", title, Act::SignIn)]
-        }
-        Offer::TryAgain => vec![press(
-            "assistant-try-again",
-            "Try Again".into(),
+        Offer::Get => vec![press("assistant-get", title(Offer::Get), Act::Get)],
+        Offer::SignIn => vec![press(
+            "assistant-sign-in",
+            title(Offer::SignIn),
             Act::SignIn,
         )],
-        Offer::Cancel => vec![press("assistant-cancel", "Cancel".into(), Act::Cancel)],
+        Offer::TryAgain => vec![press(
+            "assistant-try-again",
+            title(Offer::TryAgain),
+            Act::SignIn,
+        )],
+        Offer::Cancel => vec![press("assistant-cancel", title(Offer::Cancel), Act::Cancel)],
         Offer::SignedIn => {
             let more = {
                 let act = act.clone();
