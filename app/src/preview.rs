@@ -2637,6 +2637,7 @@ fn task_conversation(agent: SharedString) -> Conversation {
             true => Opens::Text("Another element would get the click: div.cookie-banner".into()),
             false => Opens::Nothing,
         },
+        under: "".into(),
     };
     let (click, read) = ("icons/mouse-pointer-2.svg", "icons/text-align-start.svg");
     let items = vec![
@@ -2722,6 +2723,7 @@ fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
                 running: true,
                 failed: false,
                 opens: Opens::Nothing,
+                under: "".into(),
             })],
         })
     };
@@ -4860,8 +4862,8 @@ impl gpui::Render for PicturesPage {
         use browser::theme::Appearance;
         use browser::tokens::palette::{LIGHT_STAND_IN, STAND_IN};
         use browser::tokens::settings::{
-            CONTROL_GAP, FIRST_GROUP, GROUP_GAP, HEADING_BOTTOM, HEADING_TOP, NAME, POPUP_WIDTH,
-            SHARE_TOP, SIDE_ROOM, TEXT_X,
+            BUTTONS_TOP, CONTROL_GAP, DETAIL_LINE, FIRST_GROUP, GROUP_GAP, HEADING_BOTTOM,
+            HEADING_TOP, NAME, POPUP_WIDTH, SHARE_TOP, SIDE_ROOM, TEXT_X,
         };
         use browser::tokens::text;
         use gpui::{FontWeight, ParentElement, Styled, div, rgb};
@@ -4910,6 +4912,8 @@ impl gpui::Render for PicturesPage {
                 &look, name, name, on, 1., look.on, a11y,
             ))])
         };
+        // A line under the first group, as Settings' Reduce Transparency line is.
+        let mut under: Option<&str> = None;
         let blocks: Vec<(Option<&str>, Vec<gpui::Div>)> = match self.shown {
             Pictures::Appearance { appearance, right } => {
                 let three = appearance_picker(
@@ -4979,26 +4983,39 @@ impl gpui::Render for PicturesPage {
                         ),
                     ))
                     .child(switch("top bar", false));
-                vec![
-                    (
-                        None,
-                        vec![pictured(&look, "Appearance", line.into(), three), zoom],
-                    ),
-                    (
-                        Some("Layout"),
-                        vec![
-                            pictured(
-                                &look,
-                                "Sidebar position",
-                                "The side of the window the sidebar, the Library and the \
+                // Transparency under Appearance, at the level kept, as Settings has it (#4129).
+                let transparency =
+                    browser::transparency::row(&look, browser::transparency::has_glass(), cx);
+                let mut looks = vec![pictured(&look, "Appearance", line.into(), three)];
+                let mut groups = Vec::new();
+                match transparency {
+                    Some(transparency) if cfg!(target_os = "macos") => {
+                        looks.push(transparency);
+                        under = Some(browser::transparency::REDUCE_TRANSPARENCY_WINS);
+                        groups.push((None, looks));
+                        groups.push((None, vec![zoom]));
+                    }
+                    transparency => {
+                        looks.extend(transparency);
+                        looks.push(zoom);
+                        groups.push((None, looks));
+                    }
+                }
+                groups.extend([(
+                    Some("Layout"),
+                    vec![
+                        pictured(
+                            &look,
+                            "Sidebar position",
+                            "The side of the window the sidebar, the Library and the \
                                  window's buttons are on."
-                                    .into(),
-                                pair,
-                            ),
-                            top_bar,
-                        ],
-                    ),
-                ]
+                                .into(),
+                            pair,
+                        ),
+                        top_bar,
+                    ],
+                )]);
+                groups
             }
             Pictures::General => {
                 let button = |id: &'static str, title: &'static str| {
@@ -5306,10 +5323,20 @@ impl gpui::Render for PicturesPage {
                     (_, true) => HEADING_TOP,
                     (_, false) => GROUP_GAP,
                 };
+                let under = under.filter(|_| index == 0).map(|line| {
+                    div()
+                        .mt(px(BUTTONS_TOP))
+                        .px(px(TEXT_X))
+                        .text_size(px(text::SMALL))
+                        .line_height(px(DETAIL_LINE))
+                        .text_color(look.detail)
+                        .child(line)
+                });
                 div()
                     .mt(px(top))
                     .children(heading)
                     .child(group(&look, rows))
+                    .children(under)
             });
         // The page's name, and General's sentence and Make Default, as Settings draws them.
         let title = browser::shell::display_text(

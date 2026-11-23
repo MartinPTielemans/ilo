@@ -84,6 +84,9 @@ pub enum Command {
     RevealTab,
     /// Gives the sidebar the keyboard, its arrows moving over the rows (sidebar_keys.rs).
     FocusSidebar,
+    /// Gives an agent's question card the keyboard, or with the keyboard on it, gives it back
+    /// (agent_card_keys.rs).
+    FocusAgentQuestion,
     /// Off the Mac, rings the footer's menu control, which Return opens, as Chrome's F10 rings its
     /// menu button (menu_keys.rs).
     FocusMenu,
@@ -405,6 +408,11 @@ pub(super) const SHORTCUTS: &[(&str, Command, bool)] = &[
     // Chrome's key for moving the keyboard out of the page, unreserved as Chrome's is, as Arc's ⌘.
     // is Stop Loading here.
     ("f6", Command::FocusSidebar, false),
+    // Chrome's Focus Inactive Popup, which gives its permission bubbles the keyboard: ⌥⇧⌘A on the
+    // Mac and Alt+Shift+A elsewhere (#3869). Unreserved, and kept from the page only while a card
+    // shows (agent_card_keys.rs).
+    ("alt-shift-cmd-a", Command::FocusAgentQuestion, false),
+    ("ctrl-shift-a", Command::FocusAgentQuestion, false),
     // Chrome's key for its menu button, unreserved as Chrome's is, off the Mac alone, whose menu
     // bar has the system's own key.
     ("f10", Command::FocusMenu, false),
@@ -499,6 +507,18 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
     row(Command::ExpandFolders, &[]),
     row(Command::RevealTab, &["locate"]),
     row(Command::FocusSidebar, &["keyboard", "arrow keys"]),
+    row(
+        Command::FocusAgentQuestion,
+        &[
+            "answer",
+            "allow",
+            "approve",
+            "deny",
+            "permission",
+            "request",
+            "prompt",
+        ],
+    ),
     row(Command::FocusMenu, &["keyboard", "open menu"]),
     row(Command::NewFolder, &[]),
     row(Command::BackToPinnedUrl, &["reset tab"]),
@@ -1109,6 +1129,7 @@ impl Command {
             Command::ExpandFolders => "expand-folders",
             Command::RevealTab => "reveal-tab",
             Command::FocusSidebar => "focus-sidebar",
+            Command::FocusAgentQuestion => "focus-agent-question",
             Command::FocusMenu => "focus-menu",
             Command::BackToPinnedUrl => "back-to-pinned-url",
             Command::ResetSpaceTabs => "reset-space-tabs",
@@ -1338,6 +1359,7 @@ pub fn bind_keys(cx: &mut App) {
     translate::bind(cx);
     boost::bind(cx);
     sidebar_keys::bind(cx);
+    super::agent_card_keys::bind(cx);
     super::library::keys::bind(cx);
 }
 
@@ -1578,6 +1600,9 @@ impl Shell {
             Command::ExpandPinned => return self.set_pinned_open(true, cx),
             Command::RevealTab => return self.reveal_tab(cx),
             Command::FocusSidebar => return self.focus_sidebar(cx),
+            Command::FocusAgentQuestion => {
+                return self.focus_agent_question(from, cx);
+            }
             Command::FocusMenu => return self.focus_menu(from == "page", cx),
             // In an agent's Space ⌘↩ is the bar's Take Over or Hand Back.
             Command::BackToPinnedUrl if self.agent_bar().is_some() => {
@@ -2236,6 +2261,7 @@ impl Shell {
             Command::FocusSidebar => {
                 self.library.is_none() && !self.page_fullscreen && !self.sidebar_rows().is_empty()
             }
+            Command::FocusAgentQuestion => self.agent_question().is_some(),
             Command::FocusMenu => self.menu_reaches(),
             Command::ExpandFolders => self.shown_space().is_some_and(|space| {
                 space

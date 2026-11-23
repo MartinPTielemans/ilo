@@ -1931,6 +1931,29 @@ impl Browser for Engine {
             || folder_preview::typing(cx)
     }
 
+    fn key_repeated(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            // The press GPUI numbered for the key held, the same for each of its repeats.
+            thread_local!(static LAST_HELD: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) });
+            let held = gpui_linux::held_key().map(|(_, press)| press);
+            held.is_some() && LAST_HELD.replace(held) == held
+        }
+        #[cfg(not(target_os = "linux"))]
+        unsafe {
+            platform::host_key_repeated()
+        }
+    }
+
+    fn app_active(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        return needs_you::app_active();
+        #[cfg(not(target_os = "linux"))]
+        unsafe {
+            platform::host_app_active()
+        }
+    }
+
     fn page_has_keyboard(&self, _: &App) -> Option<bool> {
         // The core routes every key between page and UI there, X11's by the X server's focus.
         #[cfg(target_os = "linux")]

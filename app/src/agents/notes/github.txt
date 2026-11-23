@@ -1,0 +1,13 @@
+Go straight there
+/notifications is the user's inbox. Its filter box takes is:unread, is:saved, is:done and repo:owner/name.
+/search?q=WORDS&type=issues searches issues and pull requests everywhere. Narrow q with is:pr or is:issue, is:open, is:merged, author:@me, user-review-requested:@me, involves:NAME and repo:owner/name, with + between them.
+
+Keys beat clicks
+On any page: ? lists the page's keys, / puts the cursor in search, g n opens notifications.
+In a repository: g c opens Code, g i Issues, g p Pull requests, g a Actions.
+In code: t finds a file by name, l jumps to a line, w switches branch, b opens blame, and y turns the address into a permanent one, for a line you'll quote.
+In a pull request's Files changed: t filters the changed files.
+
+Know before you start
+The user can turn single-letter keys off. If a key does nothing, click instead.
+Marking a notification done takes it out of the inbox, so read without marking unless the user asked.
