@@ -1158,10 +1158,9 @@ knob-shadow-y = 1.0
 knob-shadow-blur = 2.0
 switch-off = 0.2
 switch-off-light = 0.18
-# Buttons are 28 tall at the control radius, their title 12 in. A pop-up is its value and its
-# chevrons, 5 apart, on no plate until the pointer is over it, where it gets a button's; it keeps
-# the button's height and its width, so its hit area is a button's. Under the pointer, a step
-# toward pressed.
+# Buttons are 28 tall at the control radius, their title 12 in. A pop-up is its value at its start,
+# where its menu puts the chosen item's, and its chevrons at its end, on a button's plate, at a
+# button's height. Under the pointer, a step toward pressed.
 control-height = 28.0
 control-padding = 12.0
 control-radius = 6.0
